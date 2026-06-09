@@ -6,6 +6,37 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [1.30.0] - 2026-06-09
+
+### Added
+- **Native PPRL bloom-filter CLK kernel (opt-in, default OFF).** New
+  `goldenmatch-native` symbol `bloom_clk_batch` (rayon + GIL-release, 256-bit
+  Cryptographic Longterm Key encoding) accelerates the PPRL `bloom_filter`
+  transform. Reachable via `GOLDENMATCH_NATIVE=1`; it ships OUT of the default-on
+  native dispatch set pending parity-on-the-published-wheel + a bench, so
+  pure-Python remains the reproducible default and the graceful fallback when the
+  symbol is absent. Requires `goldenmatch-native` 0.1.5 (republish ships the
+  symbol). (#826)
+
+### Fixed
+- **Probabilistic EM training-pair sampling is now deterministic (#829).**
+  `_sample_blocked_pairs` seeded-shuffled bare block indices, but the blocks
+  themselves arrive in a non-deterministic order (parallel / hash-bucketed
+  construction, varying by machine and core-count), so the seeded shuffle still
+  drew a different EM training sample run-to-run — different m/u weights,
+  different threshold, different precision/recall. On one CI run, three
+  invocations of the identical probabilistic path gave `historical_50k` pairwise
+  F1 of 0.805 / 0.779 / 0.643. The fix sorts blocks by their stable `block_key`
+  (and row_ids within each block) before the seeded shuffle, so the sample is
+  reproducible; post-fix the three bench harnesses agree within 0.002. The
+  committed Splink head-to-head and bake-off numbers are now deterministic; the
+  full bake-off is at `docs/benchmarks/2026-06-09-splink-bakeoff.md`. (The
+  previously published `dblp_acm = 0.879` was a non-deterministic lucky draw; the
+  reproducible value is 0.377 — bibliographic data should use the weighted path,
+  which scores 0.964 on DBLP-ACM, not the probabilistic path.)
+
+## [1.29.0] - 2026-06-09
+
 ### Added
 - **Phase 3c bench harness — FS dedupe at scale (Splink-parity).**
   `scripts/bench_fs_distributed.py` + `.github/workflows/bench-fs-distributed.yml`
@@ -116,21 +147,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   in recall-critical passes; most useful at scale or as an explicit recall/cost knob.
 
 ### Fixed
-- **Probabilistic EM training-pair sampling is now deterministic (#829).**
-  `_sample_blocked_pairs` seeded-shuffled bare block indices, but the blocks
-  themselves arrive in a non-deterministic order (parallel / hash-bucketed
-  construction, varying by machine and core-count), so the seeded shuffle still
-  drew a different EM training sample run-to-run — different m/u weights,
-  different threshold, different precision/recall. On one CI run, three
-  invocations of the identical probabilistic path gave `historical_50k` pairwise
-  F1 of 0.805 / 0.779 / 0.643. The fix sorts blocks by their stable `block_key`
-  (and row_ids within each block) before the seeded shuffle, so the sample is
-  reproducible; post-fix the three bench harnesses agree within 0.002. The
-  committed Splink head-to-head and bake-off numbers are now deterministic; the
-  full bake-off is at `docs/benchmarks/2026-06-09-splink-bakeoff.md`. (The
-  previously published `dblp_acm = 0.879` was a non-deterministic lucky draw; the
-  reproducible value is 0.377 — bibliographic data should use the weighted path,
-  which scores 0.964 on DBLP-ACM, not the probabilistic path.)
 - **FS `posterior` calibration default cut corrected 0.50 → 0.99.** The opt-in
   `GOLDENMATCH_FS_CALIBRATED=posterior` path was mis-tuned: `compute_thresholds`
   returned the 0.5 Bayes boundary, but blocking inflates the within-block prior
@@ -183,10 +199,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   than on a common one. Frequencies are computed over the full column at EM-train time. No measurable
   headroom on the available benchmarks (precision already saturated at 96–99.98%); ships as a
   capability for skewed-frequency categorical fields (names/cities).
-
-## [1.29.0] - 2026-06-09
-
-### Added
 - **Probabilistic (Fellegi-Sunter) auto-config v2 -- comparison-set + blocking
   curation (default ON; kill-switch `GOLDENMATCH_FS_AUTOCONFIG_V2=0` restores
   the legacy field set).** Scoped to the probabilistic path only
