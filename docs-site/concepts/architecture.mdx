@@ -47,6 +47,8 @@ The same engine is implemented across languages so you can run it wherever your 
 | dbt | `dbt-goldencheck` data-quality tests as a dbt package. |
 | GitHub Actions | `goldencheck-action` gates pull requests on data-quality regressions. |
 
+Every surface is exercised in CI: the Python test matrix (3.11 to 3.13), the TypeScript parity suite (scorer outputs matched to four decimals), and the Rust extension crates. The Postgres extension is built and smoke-tested against PostgreSQL 15, 16, and 17, the native acceleration kernels are parity-checked against the pure-Python path, and per-crate Rust line coverage is measured in CI.
+
 ## AI-native surface
 
 Every package ships an MCP server, a REST API, and an agent surface. Across the suite there are 35+ MCP tools. The `AutoConfigController` is visible from every interface: the web `ControllerPanel`, the TUI (`Ctrl+A`), the CLI, REST endpoints, Postgres functions, DuckDB UDFs, and MCP/agent tools.

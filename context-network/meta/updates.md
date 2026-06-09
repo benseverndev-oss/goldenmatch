@@ -2,6 +2,26 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-06-09 — Rust test-coverage arc: make the tests real, then measure (#827/#830/#832)
+- New nodes: [../architecture/rust-test-coverage.md](../architecture/rust-test-coverage.md)
+  (per-crate testing map + the measured baseline) and
+  [../decisions/0009-rust-test-coverage.md](../decisions/0009-rust-test-coverage.md).
+- An audit found the Rust tree's CI claims were partly fictional. Closed the real
+  gaps: standalone `graph-core`/`score-core` tests now run (#827); `native` got 18
+  Rust unit tests behind an `extension-module` feature-gate (#827); the pgrx graph/
+  fingerprint surface is psql-asserted vs a real `CREATE EXTENSION` (#827); the
+  `bridge` went from **6 silent self-skipping no-ops to 42 real marshalling tests**
+  (#830, install goldenmatch into the embedded interpreter + a `REQUIRE_PY` gate);
+  and a `cargo-llvm-cov` `rust_coverage` job posts a per-crate baseline (#832).
+- Two load-bearing facts recorded so they aren't re-litigated: **`cargo pgrx test`
+  is a structural dead-end** for `goldenmatch_pg` (schema-gen broken → psql smoke
+  instead), and **`native`'s 26% measured coverage is an artifact** (it's
+  Python-parity-tested; llvm-cov only sees `cargo test`). Fixed the now-stale
+  `cargo pgrx test`/`pg_test` claim in
+  [../architecture/sql-native-extensions.md](../architecture/sql-native-extensions.md).
+- Verdict: no compelling remaining Rust gap; the structural work is done and now
+  measurable + regression-guardable.
+
 ## 2026-06-09 — FS auto-config v2: GoldenMatch now BEATS Splink on accuracy (#823)
 - Updated the architecture node + decision:
   [../architecture/fellegi-sunter-splink-parity.md](../architecture/fellegi-sunter-splink-parity.md)
