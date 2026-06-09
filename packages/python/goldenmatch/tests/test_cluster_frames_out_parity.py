@@ -1,8 +1,9 @@
 """SP-A: build_cluster_frames(...) -> ClusterFrames, gated
 GOLDENMATCH_CLUSTER_FRAMES_OUT. cluster_frames_to_dict(frames) must round-trip to
-build_clusters gate-ON (the score-free dict): members-as-set, pair_scores stripped
-(both carry {}), EVERYTHING ELSE strict byte-identical. Native reads the Arrow kernel
-metadata; off-native the transient fill. Native leg SKIPS locally, runs in CI.
+the default build_clusters dict: members-as-set, pair_scores stripped (the
+frames-out dict carries {}; _norm() normalizes pair_scores away on both sides),
+EVERYTHING ELSE strict byte-identical. Native reads the Arrow kernel metadata;
+off-native the transient fill. Native leg SKIPS locally, runs in CI.
 """
 from __future__ import annotations
 
@@ -44,7 +45,8 @@ def _skip_if_no_native(native):
 
 
 def _adversarial_pairs():
-    # Mirror tests/test_columnar_drop_pairscores_parity.py::_adversarial_pairs:
+    # Adversarial cascading-split fixture (the canonical SP1-era shape, retained
+    # here as the shared-helper coverage after the SP1 path was removed):
     # singleton id 0, {1,2}, fully-connected {3,4,5}, weak chain {6,7,8}, barbell
     # oversized that splits (10..16 minus 13), score-tied (20,21,22), dup pair,
     # dense clique that can't cleanly split (30..36). PLUS a different-score
@@ -93,9 +95,8 @@ def test_frames_out_roundtrips_to_dict_no_split(monkeypatch, native):
     kw = dict(all_ids=all_ids, max_cluster_size=5,
               weak_cluster_threshold=0.3, auto_split=True)
 
-    monkeypatch.setenv("GOLDENMATCH_COLUMNAR_CLUSTER_BUILD", "1")  # score-free dict
     monkeypatch.delenv("GOLDENMATCH_CLUSTER_FRAMES_OUT", raising=False)
-    ref = build_clusters(pairs, **kw)
+    ref = build_clusters(pairs, **kw)  # default dict path; _norm strips pair_scores
 
     monkeypatch.setenv("GOLDENMATCH_CLUSTER_FRAMES_OUT", "1")
     frames = build_cluster_frames(pairs, **kw)
@@ -115,7 +116,6 @@ def test_frames_out_roundtrips_to_dict_full(monkeypatch, native):
     _skip_if_no_native(native)
     kw = dict(all_ids=all_ids, max_cluster_size=5,
               weak_cluster_threshold=0.3, auto_split=True)
-    monkeypatch.setenv("GOLDENMATCH_COLUMNAR_CLUSTER_BUILD", "1")
     monkeypatch.delenv("GOLDENMATCH_CLUSTER_FRAMES_OUT", raising=False)
     ref = build_clusters(pairs, **kw)
     monkeypatch.setenv("GOLDENMATCH_CLUSTER_FRAMES_OUT", "1")
@@ -135,7 +135,6 @@ def test_budget_break_frames_out_matches_dict(monkeypatch):
     monkeypatch.setenv("GOLDENMATCH_CLUSTER_SPLIT_EDGE_BUDGET", "1")  # exhaust immediately
     kw = dict(all_ids=all_ids, max_cluster_size=5,
               weak_cluster_threshold=0.3, auto_split=True)
-    monkeypatch.setenv("GOLDENMATCH_COLUMNAR_CLUSTER_BUILD", "1")
     monkeypatch.delenv("GOLDENMATCH_CLUSTER_FRAMES_OUT", raising=False)
     ref = build_clusters(pairs, **kw)
     monkeypatch.setenv("GOLDENMATCH_CLUSTER_FRAMES_OUT", "1")
@@ -154,7 +153,7 @@ def test_step3_quality_matches_dict_loop(monkeypatch):
     monkeypatch.setenv("GOLDENMATCH_NATIVE", "0")
     kw = dict(all_ids=all_ids, max_cluster_size=5,
               weak_cluster_threshold=0.3, auto_split=True)
-    monkeypatch.setenv("GOLDENMATCH_COLUMNAR_CLUSTER_BUILD", "1")
+    monkeypatch.delenv("GOLDENMATCH_CLUSTER_FRAMES_OUT", raising=False)
     ref = build_clusters(pairs, **kw)
     monkeypatch.setenv("GOLDENMATCH_CLUSTER_FRAMES_OUT", "1")
     got = cluster_frames_to_dict(build_cluster_frames(pairs, **kw))

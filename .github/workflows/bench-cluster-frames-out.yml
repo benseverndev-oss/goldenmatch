@@ -1,12 +1,11 @@
 name: bench-cluster-frames-out
 
 # SP-A build-stage bench (workflow_dispatch only), RECORDED DATA not a kill gate.
-# Builds the native ext fresh so the columnar build hits the real Arrow kernel,
+# Builds the native ext fresh so the cluster build hits the real Arrow kernel,
 # then benches build_cluster_frames (frames-out, GOLDENMATCH_CLUSTER_FRAMES_OUT=1)
-# vs the score-free dict (build_clusters, GOLDENMATCH_COLUMNAR_CLUSTER_BUILD=1) at
-# scale on the bulk-RSS axis (k=5, no oversized clusters). Parity
-# (cluster_frames_to_dict == score-free dict, except members/pair_scores) is
-# asserted before any perf.
+# vs the default dict (plain build_clusters) at scale on the bulk-RSS axis
+# (k=5, no oversized clusters). Parity (cluster_frames_to_dict == dict, except
+# members/pair_scores) is asserted before any perf.
 on:
   workflow_dispatch:
     inputs:

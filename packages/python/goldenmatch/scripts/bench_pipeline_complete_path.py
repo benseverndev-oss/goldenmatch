@@ -174,7 +174,6 @@ def _run_child(variant: str, n_pairs: int, runs: int, profile: bool = False) -> 
         os.environ["GOLDENMATCH_CLUSTER_FRAMES_OUT"] = "1"
     else:
         os.environ.pop("GOLDENMATCH_CLUSTER_FRAMES_OUT", None)
-        os.environ.pop("GOLDENMATCH_COLUMNAR_CLUSTER_BUILD", None)
 
     def _one_run() -> tuple[float, float, float]:
         """Returns (build_s, golden_s, id_prep_s) for a single stage pass.
@@ -312,7 +311,6 @@ def _membership_sanity(n_pairs: int) -> tuple[bool, int, int]:
     pairs_list = _pairs_list_from_df(pairs_df)
 
     os.environ.pop("GOLDENMATCH_CLUSTER_FRAMES_OUT", None)
-    os.environ.pop("GOLDENMATCH_COLUMNAR_CLUSTER_BUILD", None)
     clusters = build_clusters(
         pairs_list,
         max_cluster_size=100,

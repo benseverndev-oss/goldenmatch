@@ -81,7 +81,6 @@ def _build(monkeypatch, native):
     kw = dict(all_ids=all_ids, max_cluster_size=4,
               weak_cluster_threshold=0.3, auto_split=True)
     monkeypatch.setenv("GOLDENMATCH_CLUSTER_FRAMES_OUT", "1")
-    monkeypatch.setenv("GOLDENMATCH_COLUMNAR_CLUSTER_BUILD", "1")
     frames = build_cluster_frames(pairs, **kw)
     clusters_dict = cluster_frames_to_dict(frames)
     view = ClusterPairScores.from_frames(frames.assignments, pairs)
