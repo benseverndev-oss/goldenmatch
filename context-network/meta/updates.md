@@ -19,20 +19,30 @@ Newest first. One entry per meaningful change to the network.
   when atomic given+family exist; (2b) low-cardinality fuzzy floor;
   (3) `_diversify_probabilistic_blocking` — *additive*, recall-positive blocking
   diversification onto orthogonal stable keys (date-year + postcode/zip);
-  (4) admit description (title) + multi_name (authors) as `token_sort` (fixes the
-  DBLP-ACM venue-only mega-match). #821 built the shared head-to-head evaluator
-  (`scripts/bench_er_headtohead`) the claim rests on.
-- **Measured (pairwise F1, shared evaluator):** historical_50k (Splink's flagship)
-  0.624 → 0.779 vs Splink 0.757; febrl3 0.983 → 0.991 vs 0.965; synthetic_person
-  0.972 → 0.998 vs 0.996; dblp_acm 0.003 → 0.879 (Splink skips it).
+  (4) admit description (title) + multi_name (authors) as `token_sort` (lifts the
+  DBLP-ACM venue-only mega-match — 0.003 → 0.377, still recall-bound). #821 built
+  the shared head-to-head evaluator (`scripts/bench_er_headtohead`) the claim rests
+  on.
+- **Measured (pairwise F1, shared evaluator) — deterministic as of #829:**
+  historical_50k (Splink's flagship) 0.647 → 0.778 vs Splink 0.757; febrl3
+  0.983 → 0.991 vs 0.965; synthetic_person 0.972 → 0.998 vs 0.996; dblp_acm
+  0.003 → 0.377 (Splink skips it). GM also wins historical_50k at the cluster
+  level (B-cubed F1 0.844 vs 0.789). Full bake-off:
+  `docs/benchmarks/2026-06-09-splink-bakeoff.md`.
+- **#829 (determinism fix):** the original #823 numbers rested on a
+  non-deterministic EM training-pair sample — three invocations of the identical
+  GM-prob path gave historical_50k 0.805 / 0.779 / 0.643 on one CI run. #829 sorts
+  blocks by their stable `block_key` before the seeded shuffle; post-fix three
+  harnesses agree within 0.002. The earlier `dblp_acm = 0.879` was a lucky draw
+  that does not reproduce (deterministic 0.377). For bibliographic data use the
+  *weighted* path (0.964 on DBLP-ACM), not probabilistic.
 - **Honest framing preserved:** these are *pairwise* F1 under one shared harness.
   The often-cited ~0.97 Splink historical_50k number is a *cluster*-level metric,
   not exhaustive pairwise; a local diagnostic ran Splink 4.0.16 and it scores
   ~0.75 pairwise here (recall-bound — 5156 clusters, mean size ~10, no field
   exceeds 0.60 recall → ~0.93 pairwise ceiling for any engine). Claim is
-  "matches/beats Splink on the same evaluator," not "0.97 pairwise."
-- Verification: 3925 tests pass (22 in `test_fs_autoconfig_v2.py`); flag=0
-  byte-identical to legacy.
+  "matches/beats Splink on every dataset Splink scores on the same evaluator,"
+  not "0.97 pairwise." Splink is also 3-19x faster on these datasets.
 
 ## 2026-06-08 — Fellegi-Sunter → Splink parity (+ EM perf, scale-out, vendor reposition)
 - New architecture node + decision:

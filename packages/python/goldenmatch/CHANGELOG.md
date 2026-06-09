@@ -116,6 +116,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   in recall-critical passes; most useful at scale or as an explicit recall/cost knob.
 
 ### Fixed
+- **Probabilistic EM training-pair sampling is now deterministic (#829).**
+  `_sample_blocked_pairs` seeded-shuffled bare block indices, but the blocks
+  themselves arrive in a non-deterministic order (parallel / hash-bucketed
+  construction, varying by machine and core-count), so the seeded shuffle still
+  drew a different EM training sample run-to-run — different m/u weights,
+  different threshold, different precision/recall. On one CI run, three
+  invocations of the identical probabilistic path gave `historical_50k` pairwise
+  F1 of 0.805 / 0.779 / 0.643. The fix sorts blocks by their stable `block_key`
+  (and row_ids within each block) before the seeded shuffle, so the sample is
+  reproducible; post-fix the three bench harnesses agree within 0.002. The
+  committed Splink head-to-head and bake-off numbers are now deterministic; the
+  full bake-off is at `docs/benchmarks/2026-06-09-splink-bakeoff.md`. (The
+  previously published `dblp_acm = 0.879` was a non-deterministic lucky draw; the
+  reproducible value is 0.377 — bibliographic data should use the weighted path,
+  which scores 0.964 on DBLP-ACM, not the probabilistic path.)
 - **FS `posterior` calibration default cut corrected 0.50 → 0.99.** The opt-in
   `GOLDENMATCH_FS_CALIBRATED=posterior` path was mis-tuned: `compute_thresholds`
   returned the 0.5 Bayes boundary, but blocking inflates the within-block prior
