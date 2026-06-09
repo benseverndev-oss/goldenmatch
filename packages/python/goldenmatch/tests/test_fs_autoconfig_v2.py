@@ -132,6 +132,48 @@ def test_curated_set_matches_expected(monkeypatch):
     assert fields == {"first_name", "surname", "dob", "postcode", "occupation"}
 
 
+# ── lever #4: bibliographic free-text + multi-name admission ──────────────────
+
+def _biblio_profiles():
+    """DBLP-ACM-shaped: title (description), authors (multi_name), venue (name,
+    low-card), year (year, blocking-only)."""
+    return [
+        _p("title", "description", card=0.95),
+        _p("authors", "multi_name", card=0.92),
+        _p("venue", "name", card=0.010),   # just above the 0.01 floor -> kept
+        _p("year", "year", card=0.010),
+        _p("record_id", "identifier", card=1.0),
+    ]
+
+
+def test_lever4_off_drops_freetext(monkeypatch):
+    monkeypatch.delenv(ON, raising=False)
+    fields = set(_fields(build_probabilistic_matchkeys(_biblio_profiles())))
+    # legacy: title/authors dropped -> only venue survives (the mega-match bug).
+    assert "title" not in fields and "authors" not in fields
+    assert fields == {"venue"}
+
+
+def test_lever4_admits_title_and_authors(monkeypatch):
+    monkeypatch.setenv(ON, "1")
+    mks = build_probabilistic_matchkeys(_biblio_profiles())
+    fields = set(_fields(mks))
+    assert "title" in fields and "authors" in fields
+    assert _scorer_of(mks, "title") == "token_sort"
+    assert _scorer_of(mks, "authors") == "token_sort"
+    # venue (card 0.010) survives the low-card floor; year stays blocking-only.
+    assert "venue" in fields
+    assert "year" not in fields
+
+
+def test_lever4_freetext_not_floored_at_high_cardinality(monkeypatch):
+    monkeypatch.setenv(ON, "1")
+    # A near-unique title (card 0.999) must NOT be floored — high cardinality is
+    # HIGH discrimination for a fuzzy F-S field, not a surrogate-key exclusion.
+    profs = [_p("title", "description", card=0.999)]
+    assert "title" in _fields(build_probabilistic_matchkeys(profs))
+
+
 # ── lever #3: blocking diversification ────────────────────────────────────────
 
 def _base_blocking():

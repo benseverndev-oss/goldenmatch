@@ -549,13 +549,14 @@ def _fs_autoconfig_v2_enabled() -> bool:
     negative evidence). Opt in with ``GOLDENMATCH_FS_AUTOCONFIG_V2=1``.
 
     MEASURED (scripts/bench_er_headtohead, GM probabilistic vs Splink, one
-    evaluator) — v2 beats Splink on every measurable PII set:
+    evaluator) — v2 beats Splink on every PII set AND unbreaks bibliographic:
       historical_50k F1 0.624 -> 0.779 (Splink 0.757)
       febrl3         F1 0.983 -> 0.991 (Splink 0.965)
       synthetic      F1 0.972 -> 0.998 (Splink 0.996)
-    Unverified locally: DBLP-ACM (Leipzig CSVs gitignored). The low-card fuzzy
-    floor could drop a low-cardinality bibliographic `venue` — that risk is why
-    the default stays off pending the sweep.
+      dblp_acm       F1 0.003 -> 0.879 (auto-config was a venue-only mega-match)
+    The `venue` low-card-floor worry did NOT materialize (venue card 0.010 >
+    floor 0.01). Default stays off pending the in-CI DBLP-ACM/NCVR sweep
+    (.github/workflows/bench-probabilistic.yml panel-v1-v2 lane).
     """
     return os.environ.get("GOLDENMATCH_FS_AUTOCONFIG_V2", "0").lower() in (
         "1", "true", "on", "yes", "enabled",
@@ -2964,8 +2965,8 @@ def build_probabilistic_matchkeys(profiles: list[ColumnProfile]) -> list[Matchke
 
     FS-autoconfig v2 (opt-in; ``GOLDENMATCH_FS_AUTOCONFIG_V2=1``, default off
     pending the DBLP-ACM/NCVR sweep) curates a cleaner comparison set — the
-    dominant scoring lever on error-heavy PII data (audit: historical_50k).
-    Three changes vs v1:
+    dominant scoring lever on error-heavy PII data (audit: historical_50k) and
+    the fix for bibliographic data (DBLP-ACM). Four changes vs v1:
       1. **Admit date columns** (e.g. ``dob``) as ``levenshtein`` comparison
          fields. Birth date is the strongest person-identity discriminator;
          Splink leans on it (DamerauLevenshtein). v1 skipped all dates, scoring
@@ -2979,6 +2980,11 @@ def build_probabilistic_matchkeys(profiles: list[ColumnProfile]) -> list[Matchke
          at cardinality ~0.002): negligible identity signal + unstable
          (non-monotonic) EM weights. Exact-scorer identifiers keep the #721
          no-floor admission (FS self-regulates them via u).
+      4. **Admit free-text + multi-name fields** (``description`` /
+         ``multi_name``) as ``token_sort`` comparison fields. v1 dropped both, so
+         on bibliographic data (DBLP-ACM: title=description, authors=multi_name)
+         only a near-constant ``venue`` survived → F-S mega-matched (P~0).
+         DBLP-ACM via auto-config: F1 ~0.003 -> 0.879.
     """
     v2 = _fs_autoconfig_v2_enabled()
 
@@ -3011,6 +3017,24 @@ def build_probabilistic_matchkeys(profiles: list[ColumnProfile]) -> list[Matchke
                 field=p.name,
                 scorer="levenshtein",
                 transforms=["strip"],
+                levels=3,
+                partial_threshold=0.8,
+            ))
+            continue
+
+        # Lever #4 (bibliographic): admit free-text + multi-name comparison
+        # fields. v1 dropped `description` (the skip-list below) and `multi_name`
+        # (absent from _SCORER_MAP), so on bibliographic data (DBLP-ACM:
+        # title=description, authors=multi_name) only a near-constant `venue`
+        # survived → F-S mega-matched (precision ~0). token_sort mirrors the
+        # weighted builder's choice for these col_types. No cardinality gate:
+        # a near-unique fuzzy field is HIGH-discrimination for F-S (agreement is
+        # rare among non-matches → large EM weight), unlike an exact surrogate.
+        if v2 and p.col_type in ("description", "multi_name"):
+            fields.append(MatchkeyField(
+                field=p.name,
+                scorer="token_sort",
+                transforms=["lowercase", "strip"],
                 levels=3,
                 partial_threshold=0.8,
             ))
