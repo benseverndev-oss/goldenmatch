@@ -60,13 +60,10 @@ pub fn score_one(scorer_id: u8, a: &str, b: &str) -> f64 {
             let sb = token_sort_string(b);
             fuzz::ratio(sa.chars(), sb.chars())
         }
-        3 => {
-            if a == b {
-                1.0
-            } else {
-                0.0
-            }
-        }
+        // id=3 = exact match. Guard arm collapses the if/else into the match
+        // (clippy::collapsible-match under CI's stable toolchain); scorer_id==3
+        // with a!=b falls through to the catch-all 0.0, same as every other id.
+        3 if a == b => 1.0,
         _ => 0.0,
     }
 }
