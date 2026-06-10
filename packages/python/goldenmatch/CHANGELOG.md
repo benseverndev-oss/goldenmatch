@@ -6,6 +6,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Added
+- **Distributed randomized-contraction WCC (opt-in, #844 Spec 1).** New
+  `randomized_contraction_wcc` in `goldenmatch.distributed.clustering` implements
+  Bögeholz–Brand–Todor randomized contraction (arXiv:1802.09478) — a relational,
+  chain-robust connected-components algorithm with no driver-side union-find and
+  no O(N) driver dict. Each round's contracted edges are checkpointed to parquet
+  to truncate Ray Data lineage (dodging the streaming-executor deadlock the
+  pointer-jumping `distributed_wcc` hit). Routed via
+  `GOLDENMATCH_DISTRIBUTED_WCC=randomized_contraction` (with
+  `GOLDENMATCH_DISTRIBUTED_WCC_SEED` / `GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH`).
+  Default stays `two_phase`; this is the algorithm building block only — wiring
+  into the Phase-5 e2e pipeline and the at-scale 100M validation are Spec 2.
+
 ### Removed
 - Removed the dominated `GOLDENMATCH_COLUMNAR_CLUSTER_BUILD` opt-in (SP1);
   superseded by `GOLDENMATCH_CLUSTER_FRAMES_OUT`.

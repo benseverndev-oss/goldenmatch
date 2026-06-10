@@ -276,6 +276,7 @@ def build_clusters_distributed(
         _rc_seed_raw = os.environ.get("GOLDENMATCH_DISTRIBUTED_WCC_SEED")
         labels_ds = randomized_contraction_wcc(
             pairs_ds,
+            all_ids,  # honor isolated singletons like the two_phase route
             scratch_dir=os.environ.get("GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH"),
             seed=int(_rc_seed_raw) if _rc_seed_raw else None,
         )
@@ -994,10 +995,16 @@ def _rc_wcc_polars(pairs_pl: Any, *, seed: int | None = None, max_rounds: int = 
         E, rep = _rc_contract_round(E, A, B, p)
         label = _rc_compose_labels(label, rep)
     else:
-        raise RuntimeError(
-            f"randomized_contraction_wcc did not converge in {max_rounds} rounds "
-            f"({E.height} edges remain) — investigate, do not silently truncate."
-        )
+        # The break is checked at the TOP of the loop, so a graph that empties on
+        # the exact final allowed round exhausts the range without re-entering the
+        # check. Only raise if edges genuinely remain -- E.height == 0 here means
+        # it converged on the last round, not a failure.
+        if E.height > 0:
+            raise RuntimeError(
+                f"randomized_contraction_wcc did not converge in {max_rounds} "
+                f"rounds ({E.height} edges remain) — investigate, do not silently "
+                "truncate."
+            )
     return _rc_normalize_to_min_member(label)
 
 
@@ -1139,8 +1146,26 @@ def _rc_normalize_distributed(label: Any, npart: int) -> Any:
     return colocated.map_batches(_nm, batch_format="pyarrow")
 
 
+def _rc_union_isolated(labels_ds: Any, all_ids: list[int], pairs_ds: Any) -> Any:
+    """Seed ids in ``all_ids`` that never appear in a pair as singleton
+    ``{id, label=id}`` rows -- mirrors ``two_phase_wcc``'s isolated-node handling
+    so the two routes agree on the ``build_clusters_distributed`` contract.
+
+    Only reached when a caller passes a concrete ``all_ids`` (the full-universe,
+    smaller-scale regime), so the driver-side touched-set derive is acceptable --
+    the same posture the scipy / label_propagation routes already take.
+    """
+    import ray
+    touched = set(_derive_touched_ids(pairs_ds))
+    isolated = [int(i) for i in all_ids if int(i) not in touched]
+    if not isolated:
+        return labels_ds
+    iso_ds = ray.data.from_items([{"id": i, "label": i} for i in isolated])
+    return labels_ds.union(iso_ds)
+
+
 def randomized_contraction_wcc(
-    pairs_ds: Any, *, scratch_dir: str | None = None,
+    pairs_ds: Any, all_ids: list[int] | None = None, *, scratch_dir: str | None = None,
     max_rounds: int = 80, seed: int | None = None, p: int = _RC_PRIME,
 ) -> Any:  # -> ray.data.Dataset{id,label}
     """Distributed randomized-contraction WCC (#844). Same {id,label} contract as
@@ -1149,6 +1174,10 @@ def randomized_contraction_wcc(
     streaming-executor deadlock fix). See spec
     docs/superpowers/specs/2026-06-10-distributed-wcc-randomized-contraction-design.md
     and arXiv:1802.09478.
+
+    ``all_ids`` mirrors ``two_phase_wcc``: pass ``None`` (default, the golden /
+    scale path) to emit only pair-touched members; pass a concrete id universe to
+    additionally seed isolated singletons (full-universe regime).
 
     NOTE: unlike the pure-Polars reference ``_rc_wcc_polars`` (which RAISES on
     non-convergence), this distributed path logs a WARNING and returns
@@ -1210,7 +1239,17 @@ def randomized_contraction_wcc(
                 "randomized_contraction_wcc: hit max_rounds=%d with %d residual "
                 "edges; returning best-effort labels (investigate).", max_rounds, cnt,
             )
-        return _rc_normalize_distributed(label, npart)
+        result = _rc_normalize_distributed(label, npart)
+        if all_ids is not None:
+            result = _rc_union_isolated(result, all_ids, pairs_ds)
+        # Materialize BEFORE the finally cleans an OWNED scratch dir: the lazy
+        # plan reads scratch/label_*.parquet, which rmtree would delete out from
+        # under a later take_all(). Materializing executes it into the object
+        # store now (shallow plan off a checkpointed parquet -- not the deep
+        # iterative lineage we avoid), so the returned dataset stays consumable
+        # after cleanup. Mirrors two_phase_wcc, which also returns a materialized
+        # dataset (from_arrow of a driver frame).
+        return result.materialize()
     finally:
         if owns_scratch:
             shutil.rmtree(scratch, ignore_errors=True)

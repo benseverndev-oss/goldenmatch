@@ -239,3 +239,51 @@ def test_build_clusters_distributed_routes_to_randomized_contraction(monkeypatch
     rows = {r["member_id"]: (r["cluster_id"], r["cluster_size"]) for r in out.take_all()}
     assert rows[1][0] == rows[2][0] == rows[3][0] and rows[1][1] == 3
     assert rows[5][0] == rows[6][0] and rows[5][1] == 2
+
+
+def test_randomized_contraction_wcc_seeds_isolated_singletons(tmp_path):
+    pytest.importorskip("ray")
+    from goldenmatch.distributed.clustering import (
+        pairs_list_to_dataset,
+        randomized_contraction_wcc,
+    )
+    # 99 appears in no pair; with a concrete all_ids it must come back as its own
+    # singleton (parity with two_phase_wcc's isolated-node handling).
+    ds = pairs_list_to_dataset([(1, 2, 0.9), (2, 3, 0.8)])
+    out = randomized_contraction_wcc(ds, [1, 2, 3, 99], scratch_dir=str(tmp_path), seed=0)
+    labels = {r["id"]: r["label"] for r in out.take_all()}
+    assert labels[1] == labels[2] == labels[3]
+    assert labels[99] == 99  # isolated -> labels itself
+
+
+def test_build_clusters_distributed_rc_isolated_singleton(monkeypatch, tmp_path):
+    pytest.importorskip("ray")
+    from goldenmatch.distributed.clustering import (
+        build_clusters_distributed,
+        pairs_list_to_dataset,
+    )
+    monkeypatch.setenv("GOLDENMATCH_DISTRIBUTED_WCC", "randomized_contraction")
+    monkeypatch.setenv("GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD", "0")
+    monkeypatch.setenv("GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH", str(tmp_path))
+    ds = pairs_list_to_dataset([(1, 2, 0.9), (2, 3, 0.85)])
+    out = build_clusters_distributed(ds, all_ids=[1, 2, 3, 99])
+    rows = {r["member_id"]: (r["cluster_id"], r["cluster_size"]) for r in out.take_all()}
+    # The isolated id is emitted as a size-1 cluster (route parity with two_phase).
+    assert rows[99][1] == 1
+    assert rows[1][1] == 3
+
+
+def test_randomized_contraction_wcc_default_scratch_consumable():
+    pytest.importorskip("ray")
+    from goldenmatch.distributed.clustering import (
+        pairs_list_to_dataset,
+        randomized_contraction_wcc,
+    )
+    # scratch_dir=None -> owns_scratch -> the internal scratch is rmtree'd in the
+    # finally. The returned dataset must still be consumable (materialized before
+    # cleanup), i.e. take_all() must not hit deleted parquet files.
+    ds = pairs_list_to_dataset([(1, 2, 0.9), (2, 3, 0.8)])
+    out = randomized_contraction_wcc(ds, seed=0)  # default scratch
+    labels = {r["id"]: r["label"] for r in out.take_all()}
+    assert set(labels.values()) == {1}
+    assert set(labels.keys()) == {1, 2, 3}
