@@ -13,17 +13,19 @@ Coverage:
     - sanitize_for_log output safety (no newlines, no control chars, length cap)
 
 Exclusions (documented empirically):
-    - dice/jaccard scorers expect same-length hex-encoded bloom filter strings.
-      KNOWN BUG: _dice_score_single / _jaccard_score_single raise ValueError
-      (numpy broadcast error) when the two inputs have DIFFERENT byte lengths
-      (e.g. '0000' vs '000000'). The matrix variants pad to max_len and handle
-      this correctly; the single-pair functions do not. Hypothesis found this:
+    - dice/jaccard scorers expect same-length hex-encoded bloom filter strings
+      (the well-formed PPRL shape -- bloom encodings are fixed-length per config).
+      Hypothesis (#778) originally found that _dice_score_single /
+      _jaccard_score_single raised a numpy broadcast ValueError on DIFFERENT-length
+      inputs (e.g. '0000' vs '000000'):
           Falsifying example: a='0000', b='000000'
           ValueError: operands could not be broadcast together with shapes (2,) (3,)
-      The bounds/symmetry tests use a same-length strategy to verify the invariant
-      on well-formed inputs. test_dice_mismatched_length_bug and
-      test_jaccard_mismatched_length_bug each assert the bug is present and act as
-      regression detectors for when it is fixed.
+      FIXED in #784: the single-pair helpers now zero-pad the shorter filter to
+      max_len, mirroring the matrix variants, so single-vs-matrix parity holds on
+      the same inputs. The bounds/symmetry tests still use a same-length strategy
+      to verify the invariant on the well-formed shape;
+      test_dice_mismatched_length_bug / test_jaccard_mismatched_length_bug are the
+      regression tests pinning the no-crash behaviour.
     - soundex_match is excluded from bounds-with-arbitrary-text because
       jellyfish.soundex is undefined for some surrogate-pair / very unusual
       codepoint sequences in older builds; we use a restricted printable-ASCII
@@ -79,11 +81,11 @@ _nonempty_text = st.text(
 )
 
 # Valid hex strings for bloom-filter scorers (dice/jaccard) -- same length.
-# KNOWN BUG: _dice_score_single / _jaccard_score_single crash with a numpy
-# broadcast error on different-length inputs (see module docstring). The
-# strategy generates SAME-length hex strings so bounds/symmetry/identity tests
-# verify the invariant on well-formed inputs; mismatched-length behaviour is
-# covered by test_dice_jaccard_mismatched_length_bug below.
+# Same-length is the well-formed PPRL shape (bloom encodings are fixed-length
+# per config), so bounds/symmetry/identity tests use it to verify the invariant.
+# Mismatched-length inputs no longer crash (fixed in #784, single helpers
+# zero-pad to max_len); that behaviour is pinned by
+# test_dice_mismatched_length_bug / test_jaccard_mismatched_length_bug below.
 _hex_byte_text = st.binary(min_size=1, max_size=32).map(lambda b: b.hex())
 # Same-length bloom filter pairs
 _hex_pair = st.integers(min_value=1, max_value=32).flatmap(
@@ -233,34 +235,55 @@ def test_jaccard_bounds(pair: tuple) -> None:
     assert 0.0 <= result <= 1.0, f"jaccard a={a!r} b={b!r} -> {result}"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=ValueError,
-    reason="known bug: _dice_score_single numpy broadcast crash on "
-    "different-length bloom hex inputs (matrix variant pads to max_len "
-    "and is unaffected); XPASS means the bug was fixed -- remove marker",
-)
 def test_dice_mismatched_length_bug() -> None:
-    """Different-length hex inputs should score, not crash (found by hypothesis)."""
+    """Different-length hex inputs should score, not crash (found by hypothesis).
+
+    Regression for #784: the single-pair helper now zero-pads the shorter
+    bloom filter to the longer length, matching ``_dice_score_matrix``.
+    """
     from goldenmatch.core.scorer import score_field
 
     result = score_field("0000", "000000", "dice")
     assert result is not None and 0.0 <= result <= 1.0
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=ValueError,
-    reason="known bug: _jaccard_score_single numpy broadcast crash on "
-    "different-length bloom hex inputs (matrix variant pads to max_len "
-    "and is unaffected); XPASS means the bug was fixed -- remove marker",
-)
 def test_jaccard_mismatched_length_bug() -> None:
-    """Different-length hex inputs should score, not crash (found by hypothesis)."""
+    """Different-length hex inputs should score, not crash (found by hypothesis).
+
+    Regression for #784: the single-pair helper now zero-pads the shorter
+    bloom filter to the longer length, matching ``_jaccard_score_matrix``.
+    """
     from goldenmatch.core.scorer import score_field
 
     result = score_field("0000", "000000", "jaccard")
     assert result is not None and 0.0 <= result <= 1.0
+
+
+@pytest.mark.parametrize(
+    "a, b",
+    [
+        ("ff", "ff00"),       # 1 byte vs 2 bytes, set bits in the short one
+        ("ff00", "ff"),       # reversed order (the shorter is the second arg)
+        ("a1b2", "a1b200"),   # partial overlap, mismatched length
+        ("0000", "000000"),   # all-zero, mismatched length (the #778 shrink)
+    ],
+)
+def test_dice_jaccard_single_matches_matrix_on_mismatched_length(a: str, b: str) -> None:
+    """#784: single-pair dice/jaccard agree with the matrix variant on
+    different-length bloom filters (both zero-pad the shorter to max_len)."""
+    from goldenmatch.core.scorer import (
+        _dice_score_matrix,
+        _jaccard_score_matrix,
+        score_field,
+    )
+
+    dice_single = score_field(a, b, "dice")
+    jaccard_single = score_field(a, b, "jaccard")
+    dice_matrix = float(_dice_score_matrix([a, b])[0, 1])
+    jaccard_matrix = float(_jaccard_score_matrix([a, b])[0, 1])
+
+    assert dice_single == pytest.approx(dice_matrix, abs=1e-9)
+    assert jaccard_single == pytest.approx(jaccard_matrix, abs=1e-9)
 
 
 # ---------------------------------------------------------------------------

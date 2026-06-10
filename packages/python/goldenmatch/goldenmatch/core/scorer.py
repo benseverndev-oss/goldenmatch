@@ -566,10 +566,32 @@ def _hex_to_bits(hex_str: str) -> np.ndarray:
     return np.frombuffer(bytes.fromhex(hex_str), dtype=np.uint8)
 
 
+def _pad_to_equal_length(
+    bits_a: np.ndarray, bits_b: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Zero-pad the shorter of two uint8 byte arrays up to the longer length.
+
+    Mirrors the ``max_len`` zero-padding in ``_dice_score_matrix`` /
+    ``_jaccard_score_matrix`` so the single-pair helpers agree with the batch
+    path on the same inputs. Without it, ``np.bitwise_and`` on different-length
+    arrays raises an opaque broadcast ``ValueError`` (issue #784). Padding with
+    zero bytes is bit-identical to bit-level padding (popcount is unchanged by
+    trailing zeros), and AND/OR against an implicit-zero tail is well defined.
+    """
+    len_a, len_b = len(bits_a), len(bits_b)
+    if len_a == len_b:
+        return bits_a, bits_b
+    max_len = max(len_a, len_b)
+    if len_a < max_len:
+        bits_a = np.concatenate([bits_a, np.zeros(max_len - len_a, dtype=np.uint8)])
+    else:
+        bits_b = np.concatenate([bits_b, np.zeros(max_len - len_b, dtype=np.uint8)])
+    return bits_a, bits_b
+
+
 def _dice_score_single(val_a: str, val_b: str) -> float:
     """Dice coefficient on two hex-encoded bloom filters."""
-    bits_a = _hex_to_bits(val_a)
-    bits_b = _hex_to_bits(val_b)
+    bits_a, bits_b = _pad_to_equal_length(_hex_to_bits(val_a), _hex_to_bits(val_b))
     intersection = np.unpackbits(np.bitwise_and(bits_a, bits_b)).sum()
     total = np.unpackbits(bits_a).sum() + np.unpackbits(bits_b).sum()
     return float(2.0 * intersection / total) if total > 0 else 0.0
@@ -577,8 +599,7 @@ def _dice_score_single(val_a: str, val_b: str) -> float:
 
 def _jaccard_score_single(val_a: str, val_b: str) -> float:
     """Jaccard similarity on two hex-encoded bloom filters."""
-    bits_a = _hex_to_bits(val_a)
-    bits_b = _hex_to_bits(val_b)
+    bits_a, bits_b = _pad_to_equal_length(_hex_to_bits(val_a), _hex_to_bits(val_b))
     intersection = np.unpackbits(np.bitwise_and(bits_a, bits_b)).sum()
     union = np.unpackbits(np.bitwise_or(bits_a, bits_b)).sum()
     return float(intersection / union) if union > 0 else 0.0
