@@ -10,6 +10,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 - Removed the dominated `GOLDENMATCH_COLUMNAR_CLUSTER_BUILD` opt-in (SP1);
   superseded by `GOLDENMATCH_CLUSTER_FRAMES_OUT`.
 
+### Fixed
+- **`dice`/`jaccard` single-pair scorers no longer crash on different-length
+  bloom hex inputs (#784).** `score_field(a, b, "dice")` / `"jaccard"` decoded
+  the two hex strings to byte arrays and called `np.bitwise_and` with no length
+  validation, so mismatched lengths (e.g. `"0000"` vs `"000000"`) raised an
+  opaque numpy broadcast `ValueError` — while the matrix variants
+  (`_dice_score_matrix` / `_jaccard_score_matrix`) zero-pad to `max_len` and
+  scored the same inputs fine. The single-pair helpers now zero-pad the shorter
+  filter to `max_len` too, restoring single-vs-matrix parity (and matching the
+  TypeScript twins `diceCoefficient` / `jaccardSimilarity`, which already
+  zero-padded). Found by the hypothesis property suite (#778) on its first run.
+  In-pipeline PPRL pairs are fixed-length per config and were never affected;
+  the gap was reachable only via the public `score_field` API on cross-config or
+  hand-fed inputs.
+
 ## [1.30.0] - 2026-06-09
 
 ### Added
