@@ -1312,6 +1312,14 @@ jobs:
           .venv/bin/python -c "import ray, scipy, polars; print('ray', ray.__version__)"
           .venv/bin/python -m pytest packages/python/goldenmatch/tests/test_distributed_clustering.py \
             --timeout=300 --durations=20 -v
+      # GATE (blocking, #844): the randomized-contraction WCC is new + clean (no
+      # pre-existing fragility), so its ray-gated tests gate here rather than
+      # riding the non-blocking broad-coverage step. Proves the distributed path
+      # matches the scipy-verified pure-Polars driver + the routing contract.
+      - name: Randomized-contraction WCC ray gate (blocking)
+        run: |
+          .venv/bin/python -m pytest packages/python/goldenmatch/tests/test_distributed_randomized_contraction_wcc.py \
+            --timeout=300 --durations=20 -v
       # BROAD COVERAGE (non-blocking): the rest of the ray-gated suite (controller
       # / pipeline / golden / e2e). These exercise real ray execution but several
       # carry pre-existing, ray-independent fragilities surfaced the first time
@@ -1324,6 +1332,7 @@ jobs:
         run: |
           .venv/bin/python -m pytest packages/python/goldenmatch/tests/test_distributed_*.py \
             --ignore=packages/python/goldenmatch/tests/test_distributed_clustering.py \
+            --ignore=packages/python/goldenmatch/tests/test_distributed_randomized_contraction_wcc.py \
             --timeout=300 --durations=20 -v
 
   # Sail tier (distributed, Spark Connect). The Sail tier re-expresses the
