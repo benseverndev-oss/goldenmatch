@@ -1124,6 +1124,7 @@ def build_golden_records_from_frames(
     rules: GoldenRulesConfig,
     quality_scores: dict[tuple[int, str], float] | None = None,
     provenance: bool = False,
+    cluster_pair_scores: dict[int, dict[tuple[int, int], float]] | None = None,
 ) -> tuple[pl.DataFrame | None, list[dict]]:
     """Phase 4 entry point: build golden records from a Phase-2
     ``ClusterFrames`` plus the source DataFrame.
@@ -1142,6 +1143,12 @@ def build_golden_records_from_frames(
             selection ``size > 1 and not oversized``.
         rules: forwarded to the golden builder unchanged.
         quality_scores, provenance: forwarded unchanged.
+        cluster_pair_scores: optional ``{cluster_id: {(row_a, row_b): score}}``
+            forwarded to the slow batch builder so the ``confidence_majority``
+            strategy can weight survivorship by edge confidence. The frames-out
+            cluster dict carries no pair_scores, so the caller sources these from
+            the ``ClusterPairScores`` view. Dropped on the fast path (which never
+            consults pair scores).
 
     Returns:
         A ``(golden_df, golden_records)`` tuple. Exactly one slot is
@@ -1199,6 +1206,7 @@ def build_golden_records_from_frames(
         rules,
         quality_scores=quality_scores,
         provenance=provenance,
+        cluster_pair_scores=cluster_pair_scores,
     )
     return None, golden_records
 
