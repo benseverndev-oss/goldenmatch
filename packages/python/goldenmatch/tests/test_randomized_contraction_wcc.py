@@ -204,3 +204,38 @@ def test_randomized_contraction_wcc_keeps_caller_scratch(tmp_path):
     # checkpointing actually happened -> at least one round file was written.
     assert sub.exists()
     assert any(sub.glob("**/*.parquet")), "expected round checkpoints under scratch"
+
+
+def test_rc_wcc_polars_rejects_oversize_ids():
+    from goldenmatch.distributed.clustering import _RC_PRIME, _rc_wcc_polars
+    df = pl.DataFrame({"id_a": [_RC_PRIME + 1], "id_b": [1]})
+    with pytest.raises(ValueError, match="must be < 2"):
+        _rc_wcc_polars(df)
+
+
+def test_rc_symmetrize_batch_rejects_oversize_ids():
+    import pyarrow as pa
+    from goldenmatch.distributed.clustering import _RC_PRIME, _rc_symmetrize_batch
+    batch = pa.table({"id_a": [_RC_PRIME + 5], "id_b": [1]})
+    with pytest.raises(ValueError, match="must be < 2"):
+        _rc_symmetrize_batch(batch)
+
+
+def test_build_clusters_distributed_routes_to_randomized_contraction(monkeypatch, caplog, tmp_path):
+    pytest.importorskip("ray")
+    import logging
+
+    from goldenmatch.distributed.clustering import (  # noqa: PLC0415
+        build_clusters_distributed,
+        pairs_list_to_dataset,
+    )
+    monkeypatch.setenv("GOLDENMATCH_DISTRIBUTED_WCC", "randomized_contraction")
+    monkeypatch.setenv("GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD", "0")
+    monkeypatch.setenv("GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH", str(tmp_path))
+    ds = pairs_list_to_dataset([(1, 2, 0.9), (2, 3, 0.85), (5, 6, 0.95)])
+    with caplog.at_level(logging.INFO):
+        out = build_clusters_distributed(ds, all_ids=[1, 2, 3, 5, 6])
+    assert any("randomized_contraction" in r.message.lower() for r in caplog.records)
+    rows = {r["member_id"]: (r["cluster_id"], r["cluster_size"]) for r in out.take_all()}
+    assert rows[1][0] == rows[2][0] == rows[3][0] and rows[1][1] == 3
+    assert rows[5][0] == rows[6][0] and rows[5][1] == 2

@@ -149,6 +149,9 @@ def _wcc_algorithm() -> str:
     iterative ``Dataset.join`` loop can deadlock Ray's streaming executor at
     scale, and it's unnecessary because scoring is per-partition (no
     cross-partition components to merge). 'label_propagation' is also available.
+    'randomized_contraction' routes to the relational randomized-contraction WCC
+    (``randomized_contraction_wcc``): no driver collect of the full graph,
+    parquet-checkpointed per round, arXiv:1802.09478.
     """
     import os
     return os.environ.get("GOLDENMATCH_DISTRIBUTED_WCC", "two_phase").lower()
@@ -263,6 +266,19 @@ def build_clusters_distributed(
             pair_count, threshold,
         )
         labels_ds = two_phase_wcc(pairs_ds, all_ids)
+    elif algorithm == "randomized_contraction":
+        logger.info(
+            "build_clusters_distributed: %d pairs >= %d threshold; routing to "
+            "randomized_contraction_wcc (relational contraction, parquet checkpoint).",
+            pair_count, threshold,
+        )
+        import os
+        _rc_seed_raw = os.environ.get("GOLDENMATCH_DISTRIBUTED_WCC_SEED")
+        labels_ds = randomized_contraction_wcc(
+            pairs_ds,
+            scratch_dir=os.environ.get("GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH"),
+            seed=int(_rc_seed_raw) if _rc_seed_raw else None,
+        )
     else:  # pointer_jump (default): fully distributed, no driver collect.
         logger.info(
             "build_clusters_distributed: %d pairs >= %d threshold; "
@@ -1008,7 +1024,13 @@ def _rc_symmetrize_batch(batch: Any) -> Any:  # pa.Table -> pa.Table{v,w}
     df = pl.from_arrow(batch)
     if df.height == 0:
         return pl.DataFrame(schema={"v": pl.Int64, "w": pl.Int64}).to_arrow()
-    return _rc_symmetrize(df).to_arrow()
+    e = _rc_symmetrize(df)
+    if e.height and (e["v"].max() >= _RC_PRIME or e["w"].max() >= _RC_PRIME):
+        raise ValueError(
+            "randomized_contraction_wcc: vertex id >= prime "
+            f"{_RC_PRIME}; ids must be < 2**31-1 (future: 64-bit field)."
+        )
+    return e.to_arrow()
 
 
 def _rc_rep_batch(batch: Any, A: int, B: int, p: int) -> Any:  # pa.Table{v,w} -> {v,rep}
