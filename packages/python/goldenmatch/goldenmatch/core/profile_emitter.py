@@ -72,6 +72,19 @@ def current_emitter() -> ProfileEmitter | _NullEmitter:
     return stack[-1] if stack else _NULL_EMITTER
 
 
+def has_active_emitter() -> bool:
+    """True when a real ``ProfileEmitter`` is on the stack (a capture is open).
+
+    Stages use this to SKIP building a sub-profile entirely when nothing will
+    consume it -- ``current_emitter().set_*`` is a no-op under the null emitter,
+    but the profile *construction* (e.g. the Hartigan dip sort over every scored
+    pair) is not free, and on the full production pass (no ``profile_capture``)
+    that work is computed and immediately discarded. Gate the construction on
+    this predicate to avoid the dead work.
+    """
+    return bool(_emitter_stack.get())
+
+
 @contextmanager
 def profile_capture() -> Generator[ProfileEmitter, None, None]:
     """Push a new ProfileEmitter onto the stack; pop on exit (incl. exception).
