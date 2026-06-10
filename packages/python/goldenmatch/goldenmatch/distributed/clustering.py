@@ -919,6 +919,27 @@ def _rc_contract_round(edges_pl: Any, A: int, B: int, p: int = _RC_PRIME):
     return contracted, rep
 
 
+def _rc_compose_labels(label_pl: Any, rep_pl: Any) -> Any:
+    """Fold one round's rep map into the running orig_id -> current-rep map."""
+    import polars as pl
+    return (
+        label_pl
+        .join(rep_pl, left_on="cur", right_on="v", how="left")
+        .with_columns(cur=pl.coalesce(["rep", "cur"]))
+        .select("orig_id", "cur")
+    )
+
+
+def _rc_normalize_to_min_member(label_pl: Any) -> Any:  # -> pl.DataFrame{id,label}
+    """Relabel each component by its MIN original member id (the cluster_id contract)."""
+    import polars as pl
+    mins = label_pl.group_by("cur").agg(pl.col("orig_id").min().alias("label"))
+    return (
+        label_pl.join(mins, on="cur", how="inner")
+        .select(id=pl.col("orig_id").cast(pl.Int64), label=pl.col("label").cast(pl.Int64))
+    )
+
+
 def materialize_cluster_dict(
     clusters_ds: Dataset,
     pairs_ds: Dataset,

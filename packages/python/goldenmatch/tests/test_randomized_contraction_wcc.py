@@ -28,3 +28,17 @@ def test_rc_contract_round_collapses_triangle_neighbor():
     assert rep_map == {1: 1, 2: 1, 3: 2}
     got = set(zip(contracted["v"].to_list(), contracted["w"].to_list()))
     assert got == {(1, 2), (2, 1)}
+
+
+def test_rc_compose_then_normalize():
+    from goldenmatch.distributed.clustering import (
+        _rc_compose_labels, _rc_normalize_to_min_member,
+    )
+    label = pl.DataFrame({"orig_id": [1, 2, 3], "cur": [1, 2, 3]})
+    rep1 = pl.DataFrame({"v": [1, 2, 3], "rep": [1, 1, 2]})
+    label = _rc_compose_labels(label, rep1)
+    rep2 = pl.DataFrame({"v": [1, 2], "rep": [1, 1]})
+    label = _rc_compose_labels(label, rep2)
+    out = _rc_normalize_to_min_member(label)
+    got = dict(zip(out["id"].to_list(), out["label"].to_list()))
+    assert got == {1: 1, 2: 1, 3: 1}
