@@ -42,3 +42,38 @@ def test_rc_compose_then_normalize():
     out = _rc_normalize_to_min_member(label)
     got = dict(zip(out["id"].to_list(), out["label"].to_list()))
     assert got == {1: 1, 2: 1, 3: 1}
+
+
+def _partitions(out_pl):
+    """Group {id,label} output into a sorted list of member tuples."""
+    by_label = {}
+    for i, lab in zip(out_pl["id"].to_list(), out_pl["label"].to_list()):
+        by_label.setdefault(lab, set()).add(i)
+    return sorted(tuple(sorted(s)) for s in by_label.values())
+
+
+@pytest.mark.parametrize("seed", [0, 1, 7, 42])
+def test_rc_wcc_polars_handtrace_shapes(seed):
+    from goldenmatch.distributed.clustering import _rc_wcc_polars
+    cases = {
+        "chain":   ([(1, 2), (2, 3), (3, 4), (4, 5)], [(1, 2, 3, 4, 5)]),
+        "star":    ([(1, 2), (1, 3), (1, 4)],         [(1, 2, 3, 4)]),
+        "cycle":   ([(1, 2), (2, 3), (3, 1)],         [(1, 2, 3)]),
+        "two_cc":  ([(1, 2), (3, 4)],                 [(1, 2), (3, 4)]),
+        "dup":     ([(1, 2), (1, 2), (2, 1)],         [(1, 2)]),
+    }
+    for name, (pairs, expected) in cases.items():
+        df = pl.DataFrame({"id_a": [a for a, _ in pairs], "id_b": [b for _, b in pairs]})
+        out = _rc_wcc_polars(df, seed=seed)
+        assert _partitions(out) == sorted(expected), f"{name} seed={seed}"
+        for i, lab in zip(out["id"].to_list(), out["label"].to_list()):
+            assert lab <= i
+
+
+def test_rc_wcc_polars_long_chain_min_label():
+    from goldenmatch.distributed.clustering import _rc_wcc_polars
+    pairs = [(i, i + 1) for i in range(1, 200)]
+    df = pl.DataFrame({"id_a": [a for a, _ in pairs], "id_b": [b for _, b in pairs]})
+    out = _rc_wcc_polars(df, seed=3)
+    assert _partitions(out) == [tuple(range(1, 201))]
+    assert set(out["label"].to_list()) == {1}

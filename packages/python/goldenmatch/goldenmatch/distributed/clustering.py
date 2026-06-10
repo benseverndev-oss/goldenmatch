@@ -940,6 +940,42 @@ def _rc_normalize_to_min_member(label_pl: Any) -> Any:  # -> pl.DataFrame{id,lab
     )
 
 
+def _rc_wcc_polars(pairs_pl: Any, *, seed: int | None = None, max_rounds: int = 80,
+                   p: int = _RC_PRIME) -> Any:  # -> pl.DataFrame{id,label}
+    """Pure-Polars randomized-contraction WCC. The reference implementation and
+    the correctness gate; the Ray path mirrors this distributively.
+
+    Raises ValueError if any vertex id is >= p (the affine hash needs ids < p).
+    """
+    import random
+    import polars as pl
+
+    E = _rc_symmetrize(pairs_pl)
+    if E.height == 0:
+        return pl.DataFrame(schema={"id": pl.Int64, "label": pl.Int64})
+    max_id = max(E["v"].max(), E["w"].max())
+    if max_id >= p:
+        raise ValueError(
+            f"randomized_contraction_wcc: vertex id {max_id} >= prime {p}; "
+            "ids must be < 2**31-1 (future: 64-bit field)."
+        )
+    rng = random.Random(seed)
+    label = E.select(orig_id="v").unique().with_columns(cur=pl.col("orig_id"))
+    for _ in range(max_rounds):
+        if E.height == 0:
+            break
+        A = rng.randrange(1, p)
+        B = rng.randrange(0, p)
+        E, rep = _rc_contract_round(E, A, B, p)
+        label = _rc_compose_labels(label, rep)
+    else:
+        raise RuntimeError(
+            f"randomized_contraction_wcc did not converge in {max_rounds} rounds "
+            f"({E.height} edges remain) — investigate, do not silently truncate."
+        )
+    return _rc_normalize_to_min_member(label)
+
+
 def materialize_cluster_dict(
     clusters_ds: Dataset,
     pairs_ds: Dataset,
