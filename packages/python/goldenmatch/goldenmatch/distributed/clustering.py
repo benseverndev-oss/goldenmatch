@@ -131,6 +131,11 @@ def label_propagation(
 # Override via GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD env var (pairs).
 _LABEL_PROP_PAIR_THRESHOLD = 50_000_000
 
+# Mersenne prime for the randomized-contraction affine hash (#844). Vertex ids
+# must be < _RC_PRIME; row ids at 346M are ~2**28, well under 2**31-1 ~= 2.1B.
+# Keeps h(x)=(A*x+B) % p in i64 range: A,x,B < 2**31 => A*x < 2**62 < 2**63.
+_RC_PRIME = 2**31 - 1
+
 
 def _wcc_algorithm() -> str:
     """Read GOLDENMATCH_DISTRIBUTED_WCC env var (default 'two_phase').
