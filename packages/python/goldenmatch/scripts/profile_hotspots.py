@@ -195,6 +195,11 @@ _TARGETS = {
     "full": _profile_full_pipeline,
 }
 
+# Above this row count, the `full` target refuses cProfile (call-graph retention
+# over the whole pipeline OOMs a 64GB host). pyinstrument + the bench stage split
+# cover the same ground safely.
+_FULL_CPROFILE_MAX_N = 200_000
+
 
 # ── Worker (one (shape, target, profiler) at a time, subprocess-isolated) ──
 
@@ -213,6 +218,22 @@ def _worker_main(n: int, target: str, profiler: str, out_dir: Path) -> int:
         print(f"unknown target: {target}", file=sys.stderr, flush=True)
         return 2
     target_fn = _TARGETS[target]
+
+    # Guard: the `full` target under cProfile retains a per-call graph over the
+    # ENTIRE pipeline (input collect + 131M-pair scoring + per-cluster pair_scores
+    # dicts + golden). At 1M that OOM-killed the 64GB runner host (run
+    # 27246143342). The per-stage split comes from bench_capture, which is
+    # profiler-independent, so pyinstrument -- a sampling profiler with a
+    # fixed-size call tree -- yields the same wall breakdown at a fraction of the
+    # memory. Skip the dangerous combo instead of crashing the whole job.
+    if target == "full" and profiler == "cprofile" and n > _FULL_CPROFILE_MAX_N:
+        print(
+            f"  full@{n:,} [cprofile]: SKIPPED -- cProfile call-graph retention "
+            f"OOMs the whole-pipeline target above {_FULL_CPROFILE_MAX_N:,} rows; "
+            f"use pyinstrument (the bench stage split is profiler-independent).",
+            file=sys.stderr, flush=True,
+        )
+        return 0
 
     df = realistic_person_df(n)
     if "__row_id__" not in df.columns:
