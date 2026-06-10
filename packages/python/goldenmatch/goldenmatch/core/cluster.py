@@ -662,14 +662,34 @@ def build_cluster_frames(
                 int(cid): assignments.filter(_pl.col("cluster_id") == cid)["member_id"].to_list()
                 for cid in oversized
             }
+            # Partition the intra-oversized-cluster pairs in ONE pass over the
+            # pair stream. The per-cluster
+            # ``{(a, b): s for a, b, s in pairs_list if a in ms and b in ms}``
+            # this replaces rescanned the FULL pair list once PER oversized
+            # cluster -- O(oversized x |pairs|) -- which made
+            # build_cluster_frames the dominant pipeline stage on inputs with
+            # many oversized clusters (95 rescans = ~10s at 100K, ~125s at 250K
+            # on the realistic_person fixture). Clusters are a disjoint
+            # partition, so a pair is intra-cluster iff BOTH endpoints map to
+            # the same oversized cid; insertion order + (a, b) orientation are
+            # preserved, so each cluster's ``ps`` dict is byte-identical.
+            _mid_to_ov_cid: dict[int, int] = {}
+            for _cid in oversized:
+                _ci = int(_cid)
+                for _m in members_by_cid[_ci]:
+                    _mid_to_ov_cid[_m] = _ci
+            _ps_by_cid: dict[int, dict] = {int(_cid): {} for _cid in oversized}
+            for _a, _b, _s in pairs_list:
+                _ca = _mid_to_ov_cid.get(_a)
+                if _ca is not None and _ca == _mid_to_ov_cid.get(_b):
+                    _ps_by_cid[_ca][(_a, _b)] = _s
             live_cids = set(range(1, metadata.height + 1))
             split_result: dict[int, dict] = {}
             drop_cids = set()                      # ORIGINAL cids that split
             edge_work, edge_budget, budget_tripped = 0, _split_edge_work_budget(len(all_ids), split_edge_budget), False
             for cid in oversized:
                 members = members_by_cid[int(cid)]
-                ms = set(members)
-                ps = {(a, b): s for a, b, s in pairs_list if a in ms and b in ms}
+                ps = _ps_by_cid[int(cid)]
                 edge_work += len(ps)
                 if edge_work > edge_budget:
                     budget_tripped = True
