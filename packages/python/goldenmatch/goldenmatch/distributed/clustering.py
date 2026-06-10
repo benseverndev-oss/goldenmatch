@@ -876,6 +876,49 @@ def distributed_wcc(pairs_ds: Dataset, *, max_iterations: int = 60) -> Dataset:
     return labels
 
 
+# ---------------------------------------------------------------------------
+# Randomized-contraction WCC (#844) — pure-Polars reference implementation
+# ---------------------------------------------------------------------------
+
+def _rc_symmetrize(pairs_pl: Any) -> Any:  # pl.DataFrame{id_a,id_b,...} -> pl.DataFrame{v,w}
+    """Both-directions edge table, self-loops dropped, deduped."""
+    import polars as pl
+    fwd = pairs_pl.select(v=pl.col("id_a").cast(pl.Int64), w=pl.col("id_b").cast(pl.Int64))
+    bwd = pairs_pl.select(v=pl.col("id_b").cast(pl.Int64), w=pl.col("id_a").cast(pl.Int64))
+    return pl.concat([fwd, bwd]).filter(pl.col("v") != pl.col("w")).unique()
+
+
+def _rc_contract_round(edges_pl: Any, A: int, B: int, p: int = _RC_PRIME):
+    """One randomized-contraction round on a symmetrized edge table.
+
+    Returns (contracted_edges_pl{v,w}, rep_pl{v,rep}). ``rep(v)`` is the vertex
+    in v's CLOSED neighbourhood with the minimum affine hash h(u)=(A*u+B) % p.
+    Contracted edges map both endpoints to their rep and drop self-loops.
+    """
+    import polars as pl
+    nbr = edges_pl.select("v", u=pl.col("w"))
+    selfv = edges_pl.select("v").unique().with_columns(u=pl.col("v"))
+    cand = pl.concat([nbr, selfv]).with_columns(
+        hu=((A * pl.col("u") + B) % p),
+    )
+    rep = (
+        cand.sort("hu")
+        .group_by("v", maintain_order=False)
+        .agg(pl.col("u").first().alias("rep"))
+    )
+    rep_v = rep.select(v="v", rv="rep")
+    rep_w = rep.select(w="v", rw="rep")
+    contracted = (
+        edges_pl
+        .join(rep_v, on="v", how="inner")
+        .join(rep_w, on="w", how="inner")
+        .filter(pl.col("rv") != pl.col("rw"))
+        .select(v=pl.col("rv"), w=pl.col("rw"))
+        .unique()
+    )
+    return contracted, rep
+
+
 def materialize_cluster_dict(
     clusters_ds: Dataset,
     pairs_ds: Dataset,
