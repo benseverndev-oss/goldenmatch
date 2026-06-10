@@ -36,6 +36,11 @@ Polyglot monorepo: `packages/{python,rust,typescript,dbt,actions}`. Per-package 
 ## ghcr.io packages
 - `publish-containers.yml` builds 7 images. 6 are new (created by this monorepo's GITHUB_TOKEN, default permissions). `goldenmatch-extensions` pre-existed from the standalone repo — its "Manage Actions access" must explicitly grant `benseverndev-oss/goldenmatch` write role, or pushes fail with `permission_denied: write_package`.
 
+## publish-containers flakes
+- A red `publish-containers` on `main` is almost always a transient registry timeout, NOT a code bug (audited: 11 fails / 30 days, across 6 different packages). Dominant cause: `docker/setup-buildx-action` bootstraps BuildKit by pulling `moby/buildkit:buildx-stable-1` from Docker Hub anonymously; 7 matrix legs pulling in parallel on every main push intermittently time out (`context deadline exceeded`) under Docker Hub's shared-runner-IP throttling. Secondary: transient ghcr 502s and GHA-cache (`actions-cache` blob) copy errors at `Build and push`.
+- Fix (PR #846): a `mirror` job republishes buildkit + binfmt into `ghcr.io/<owner>/{buildkit,binfmt}` once per run (retried), and the legs pull those helper images from ghcr via `setup-qemu` `image:` / `setup-buildx` `driver-opts:` (ghcr login moved AHEAD of the buildx bootstrap so the private mirror is pullable). Native retry-once twins (`continue-on-error` + `outcome == 'failure'` guard, no third-party action) on QEMU / Buildx / Build-and-push absorb the residual ghcr/cache blips.
+- A red leg is cosmetic: images are content-addressed, the prior `:latest` stays valid, the next main push self-heals. Don't chase it as a build break.
+
 ## Performance audit (docs/superpowers/specs/2026-05-02-performance-audit-checklist.md)
 - **Lesson:** the audit ranked items by static counts (boundary crossings, sequential ops). 3 of 3 measured items came in well under the framing. **Always measure wall-clock with the workload of interest before designing.** cProfile cumtime != wall (especially with threading); compare 5-run median wall on real shapes.
 
