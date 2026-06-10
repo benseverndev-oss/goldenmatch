@@ -2,6 +2,27 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-06-10 — publish-containers flake hardening (ghcr buildkit mirror, #846)
+- New decision: [../decisions/0010-publish-containers-ghcr-mirror.md](../decisions/0010-publish-containers-ghcr-mirror.md).
+- **Audit:** `publish-containers` went red ~1 run in 18 over 30 days (11 fails,
+  6 different packages) — every one a transient registry timeout, never a code
+  bug. Dominant: `setup-buildx` pulls `moby/buildkit:buildx-stable-1` from Docker
+  Hub *anonymously*; 7 legs pulling in parallel each main push race into Docker
+  Hub's shared-runner-IP throttle → `context deadline exceeded`. Secondary: ghcr
+  502s + GHA-cache blob copy errors at `Build and push`.
+- **Fix (PR #846, merged):** a prereq `mirror` job republishes buildkit + binfmt
+  into `ghcr.io/<owner>/{buildkit,binfmt}` once per run (retried); the legs pull
+  the helper images from ghcr via `setup-buildx driver-opts:` / `setup-qemu
+  image:` (ghcr login moved ahead of buildx). Docker Hub off the hot path: 7
+  unguarded parallel pulls → 1 retried read. Native retry-once twins
+  (`continue-on-error` + `outcome=='failure'`, no third-party action) backstop
+  the residual ghcr/cache blips; `publish` still runs on a stale ghcr copy if
+  `mirror` flakes.
+- **Verified on `main`:** run `27284102426` — 8/8 jobs green, zero retry twin
+  fired (the mirror eliminated the Docker Hub pulls outright, not just retried
+  them). Operational detail recorded in root `CLAUDE.md` (`## publish-containers
+  flakes`); a red leg is cosmetic (content-addressed, self-heals next push).
+
 ## 2026-06-09 — Rust test-coverage arc: make the tests real, then measure (#827/#830/#832)
 - New nodes: [../architecture/rust-test-coverage.md](../architecture/rust-test-coverage.md)
   (per-crate testing map + the measured baseline) and
@@ -236,4 +257,4 @@ Newest first. One entry per meaningful change to the network.
 - Committed to git on branch `chore/context-network`.
 
 ---
-**Classification:** meta/log • **Last updated:** 2026-06-09
+**Classification:** meta/log • **Last updated:** 2026-06-10
