@@ -191,7 +191,7 @@ def test_randomized_contraction_wcc_chain(tmp_path):
     assert set(labels.keys()) == set(range(1, 51))
 
 
-def test_randomized_contraction_wcc_cleans_scratch(tmp_path):
+def test_randomized_contraction_wcc_keeps_caller_scratch(tmp_path):
     pytest.importorskip("ray")
     from goldenmatch.distributed.clustering import (
         pairs_list_to_dataset,
@@ -200,6 +200,7 @@ def test_randomized_contraction_wcc_cleans_scratch(tmp_path):
     sub = tmp_path / "rc"
     ds = pairs_list_to_dataset([(1, 2, 0.9), (2, 3, 0.8)])
     randomized_contraction_wcc(ds, scratch_dir=str(sub), seed=0).take_all()
-    # caller-provided scratch is NOT auto-removed (owns_scratch=False); the round
-    # files exist but the dir remains. Assert the run completed + wrote rounds.
+    # A caller-provided scratch dir is NOT auto-removed (owns_scratch=False), and
+    # checkpointing actually happened -> at least one round file was written.
     assert sub.exists()
+    assert any(sub.glob("**/*.parquet")), "expected round checkpoints under scratch"

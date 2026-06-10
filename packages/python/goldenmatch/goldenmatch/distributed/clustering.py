@@ -1127,6 +1127,11 @@ def randomized_contraction_wcc(
     streaming-executor deadlock fix). See spec
     docs/superpowers/specs/2026-06-10-distributed-wcc-randomized-contraction-design.md
     and arXiv:1802.09478.
+
+    NOTE: unlike the pure-Polars reference ``_rc_wcc_polars`` (which RAISES on
+    non-convergence), this distributed path logs a WARNING and returns
+    best-effort labels at ``max_rounds`` -- matching ``distributed_wcc``'s posture
+    (raising mid-Ray-pipeline is worse than a logged best-effort result).
     """
     import os
     import random
@@ -1162,9 +1167,21 @@ def randomized_contraction_wcc(
             A, B = rng.randrange(1, p), rng.randrange(0, p)
             rep = _rc_rep_distributed(edges, A, B, p, npart)
             rep = _rc_checkpoint(rep, scratch, f"rep_{i + 1}")
-            edges = _rc_checkpoint(_rc_contract_distributed(edges, rep, npart), scratch, f"edges_{i + 1}")
+            # Compose labels EVERY round (incl. the final one whose contraction
+            # empties the graph -- that round's rep still maps the last vertices).
             label = _rc_checkpoint(_rc_compose_distributed(label, rep, npart), scratch, f"label_{i + 1}")
-            cnt = edges.count()
+            # Materialize the contraction so count() is metadata-cheap and the
+            # result is reused by the checkpoint (one join execution, not two).
+            # Only checkpoint when non-empty: round-tripping an EMPTY dataset
+            # through write_parquet/read_parquet can lose schema / raise on the
+            # empty dir, and the final (empty) round needs no further edges.
+            # TODO(Spec 2 / scale): prune round i-1's parquet trees inside the
+            # loop to bound disk to ~2 rounds at 100M; safe once edges_{i} is
+            # checkpointed (read_parquet roots the next round there, not i-1).
+            contracted = _rc_contract_distributed(edges, rep, npart).materialize()
+            cnt = contracted.count()
+            if cnt > 0:
+                edges = _rc_checkpoint(contracted, scratch, f"edges_{i + 1}")
             i += 1
         if cnt > 0:
             logger.warning(
