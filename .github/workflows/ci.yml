@@ -1372,8 +1372,14 @@ jobs:
       - name: Sail golden parity gate (blocking)
         run: |
           .venv/bin/python -m pytest packages/python/goldenmatch/tests/test_sail_golden_parity.py -v --timeout=300
-      # GATE (blocking): the full Sail pipeline (load->...->golden) runs
-      # end-to-end on Sail (S4).
+      # GATE (blocking): identity create + edge-emit parity vs the one-box
+      # resolve_clusters on a fresh store (S5) -- same_as edge-set + record->
+      # entity partition equivalence + count + determinism.
+      - name: Sail identity parity gate (blocking)
+        run: |
+          .venv/bin/python -m pytest packages/python/goldenmatch/tests/test_sail_identity_parity.py -v --timeout=300
+      # GATE (blocking): the full Sail pipeline (load->...->golden[->identity])
+      # runs end-to-end on Sail (S4 + S5 emit_identity).
       - name: Sail end-to-end pipeline gate (blocking)
         run: |
           .venv/bin/python -m pytest packages/python/goldenmatch/tests/test_sail_pipeline.py -v --timeout=300

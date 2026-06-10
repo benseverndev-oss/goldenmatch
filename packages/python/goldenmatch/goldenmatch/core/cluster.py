@@ -516,17 +516,16 @@ def build_clusters(
     )
 
 
-def _cluster_frames_out_enabled() -> bool:  # pyright: ignore[reportUnusedFunction]
-    """SP-A frames-out path gate. When ``GOLDENMATCH_CLUSTER_FRAMES_OUT`` is set
-    (non-``0``), ``build_cluster_frames`` returns the two-frame ``ClusterFrames``
-    columnar representation directly, WITHOUT materializing the per-cluster
-    ``dict[int, dict]`` for non-oversized clusters. Default OFF. Independent of
-    ``build_clusters`` and all its consumers, which are untouched.
+def _cluster_frames_out_enabled() -> bool:  # pyright: ignore[reportUnusedFunction]  # used cross-module: pipeline.py imports + calls this; pyright's private-symbol unused check misses the call site
+    """Frames-out path gate. When enabled, ``build_cluster_frames`` returns the
+    two-frame ``ClusterFrames`` columnar representation directly, WITHOUT
+    materializing the per-cluster ``dict[int, dict]`` for non-oversized clusters.
 
-    Not consumed in SP-A; the pipeline wires this gate in SP-B to choose
-    build_cluster_frames vs build_clusters. The pyright-ignore drops the
-    reportUnusedFunction false-positive until then."""
-    return os.environ.get("GOLDENMATCH_CLUSTER_FRAMES_OUT", "0").strip() != "0"
+    Default ON; set ``GOLDENMATCH_CLUSTER_FRAMES_OUT=0`` to force the legacy dict
+    path. Independent of ``build_clusters`` and all its consumers, which are
+    untouched. The pipeline wires this gate to choose ``build_cluster_frames``
+    vs ``build_clusters``."""
+    return os.environ.get("GOLDENMATCH_CLUSTER_FRAMES_OUT", "1").strip() != "0"
 
 
 def build_cluster_frames(
@@ -740,16 +739,20 @@ def build_cluster_frames(
         .alias("confidence"),
     )
 
-    _emit_cluster_profile_frames(metadata, assignments)
+    _emit_cluster_profile_frames(metadata, assignments, pairs_list)
     return ClusterFrames(assignments=assignments, metadata=metadata)
 
 
-def _emit_cluster_profile_frames(metadata: Any, assignments: Any) -> None:
+def _emit_cluster_profile_frames(
+    metadata: Any, assignments: Any, pairs: Any = None,
+) -> None:
     """Frames-path twin of ``_emit_cluster_profile``. Telemetry only -- no-op
     when no capture is active. Builds the ``ClusterProfile`` from the metadata +
-    assignments frames as closely as the columnar shape allows (no per-cluster
-    pair_scores on this path, so the transitivity threshold falls back to 0.5,
-    same as ``_emit_cluster_profile`` when ``aggregated_scores`` is empty)."""
+    assignments frames as closely as the columnar shape allows. The within-cluster
+    edge scores (which the frames path doesn't carry on the cluster dict) are
+    reconstructed from ``pairs`` + ``assignments`` so ``transitivity_rate`` matches
+    the dict path's value -- the auto-config controller iterates on this signal,
+    so a frames-path 0.0 would change its behaviour vs the dict path."""
     import math
 
     if not _emitter_stack.get():
@@ -782,10 +785,22 @@ def _emit_cluster_profile_frames(metadata: Any, assignments: Any) -> None:
         ):
             members_by_cluster.setdefault(int(cid), []).append(int(mid))
 
-    # No per-cluster pair_scores on the frames path -> empty aggregate ->
-    # transitivity threshold falls back to 0.5 (same as _emit_cluster_profile).
+    # Reconstruct the within-cluster edge scores from the raw pairs + final
+    # assignments (the frames path keeps no per-cluster pair_scores). Mirrors the
+    # dict path's aggregate: canonical (min,max) keys, last-wins by input order,
+    # restricted to pairs whose endpoints landed in the SAME cluster. Threshold
+    # proxy = min observed within-cluster score, same as _emit_cluster_profile.
+    member_to_cid: dict[int, int] = {}
+    for cid, mids in members_by_cluster.items():
+        for m in mids:
+            member_to_cid[m] = cid
     aggregated_scores: dict[tuple[int, int], float] = {}
-    threshold = 0.5
+    if pairs is not None:
+        for a, b, s in pairs:
+            ca = member_to_cid.get(a)
+            if ca is not None and ca == member_to_cid.get(b):
+                aggregated_scores[(min(a, b), max(a, b))] = s
+    threshold = min(aggregated_scores.values()) if aggregated_scores else 0.5
 
     oversized_count = int(
         metadata.filter(_pl.col("oversized")).height
@@ -1193,8 +1208,16 @@ def compute_cluster_confidence(
         Dict with: min_edge, avg_edge, connectivity, bottleneck_pair, confidence.
     """
     if native_enabled("clustering"):
-        edges = [(k[0], k[1], v) for k, v in pair_scores.items()
-                 if isinstance(k, tuple) and len(k) == 2]
+        # pair_scores keys are ALWAYS canonical (min, max) 2-tuples by
+        # construction -- every writer in this module builds them that way
+        # (_build_clusters_dict_path, add_to_cluster, unmerge, the split/merge
+        # paths) per the project-wide pair-canonicalization invariant. The old
+        # `if isinstance(k, tuple) and len(k) == 2` filter therefore re-confirmed
+        # a guaranteed invariant on EVERY pair and dropped nothing: at 1M / 131M
+        # pairs that was ~132M isinstance + ~132M len calls (~19s, profiled as
+        # 18% of the cluster stage / 5% of the whole-pipeline wall). Build the
+        # edge list directly; output is byte-identical for valid input.
+        edges = [(k[0], k[1], v) for k, v in pair_scores.items()]
         min_e, avg_e, conn, bn, conf = native_module().cluster_confidence(edges, size)
         return {
             "min_edge": min_e,

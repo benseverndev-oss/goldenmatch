@@ -125,8 +125,13 @@ class ClusterPairScores:
             a_col.append(a)
             b_col.append(b)
             s_col.append(s)
+        # Explicit schema so an EMPTY pair list yields Int64 ``a``/``b`` columns
+        # (not null-typed) -- otherwise the join below blows up with a
+        # SchemaError against the i64 ``member_id`` key when a dedupe run
+        # produces no scored pairs (small/degenerate inputs).
         pairs_df = pl.DataFrame(
-            {"a": a_col, "b": b_col, "s": s_col}
+            {"a": a_col, "b": b_col, "s": s_col},
+            schema={"a": pl.Int64, "b": pl.Int64, "s": pl.Float64},
         ).with_row_index("__i__")
         amap_a = assignments.select(
             "member_id", pl.col("cluster_id").alias("cid_a")
