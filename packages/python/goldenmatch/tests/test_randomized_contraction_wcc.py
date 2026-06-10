@@ -77,3 +77,56 @@ def test_rc_wcc_polars_long_chain_min_label():
     out = _rc_wcc_polars(df, seed=3)
     assert _partitions(out) == [tuple(range(1, 201))]
     assert set(out["label"].to_list()) == {1}
+
+
+def _scipy_partitions(n_nodes, pairs):
+    import numpy as np
+    from scipy.sparse import csr_matrix
+    from scipy.sparse.csgraph import connected_components
+    ids = sorted({x for e in pairs for x in e})
+    idx = {v: i for i, v in enumerate(ids)}
+    rows = [idx[a] for a, _ in pairs]
+    cols = [idx[b] for _, b in pairs]
+    data = np.ones(len(rows), dtype=np.int8)
+    g = csr_matrix((data, (rows, cols)), shape=(len(ids), len(ids)))
+    _ncc, labels = connected_components(g, directed=False)
+    by = {}
+    for v, lab in zip(ids, labels):
+        by.setdefault(int(lab), set()).add(v)
+    return sorted(tuple(sorted(s)) for s in by.values())
+
+
+@pytest.mark.parametrize("trial", range(25))
+def test_rc_wcc_polars_matches_scipy_on_random_graphs(trial):
+    import random
+    from goldenmatch.distributed.clustering import _rc_wcc_polars
+    rng = random.Random(1000 + trial)
+    n = rng.randint(2, 60)
+    nodes = list(range(1, n + 1))
+    n_edges = rng.randint(0, n * 2)
+    pairs = []
+    for _ in range(n_edges):
+        a, b = rng.choice(nodes), rng.choice(nodes)
+        if a != b:
+            pairs.append((a, b))
+    if not pairs:
+        pytest.skip("no edges")
+    df = pl.DataFrame({"id_a": [a for a, _ in pairs], "id_b": [b for _, b in pairs]})
+    out = _rc_wcc_polars(df, seed=trial)
+    assert _partitions(out) == _scipy_partitions(n, pairs)
+
+
+def test_rc_wcc_chain_converges_in_log_rounds(monkeypatch):
+    import goldenmatch.distributed.clustering as C
+    rounds = {"n": 0}
+    orig = C._rc_contract_round
+
+    def _counting(edges_pl, A, B, p=C._RC_PRIME):
+        rounds["n"] += 1
+        return orig(edges_pl, A, B, p)
+
+    monkeypatch.setattr(C, "_rc_contract_round", _counting)
+    pairs = [(i, i + 1) for i in range(1, 1024)]
+    df = pl.DataFrame({"id_a": [a for a, _ in pairs], "id_b": [b for _, b in pairs]})
+    C._rc_wcc_polars(df, seed=5)
+    assert rounds["n"] < 60, rounds["n"]
