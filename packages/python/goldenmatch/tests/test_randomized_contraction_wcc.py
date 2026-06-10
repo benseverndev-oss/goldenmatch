@@ -32,7 +32,8 @@ def test_rc_contract_round_collapses_triangle_neighbor():
 
 def test_rc_compose_then_normalize():
     from goldenmatch.distributed.clustering import (
-        _rc_compose_labels, _rc_normalize_to_min_member,
+        _rc_compose_labels,
+        _rc_normalize_to_min_member,
     )
     label = pl.DataFrame({"orig_id": [1, 2, 3], "cur": [1, 2, 3]})
     rep1 = pl.DataFrame({"v": [1, 2, 3], "rep": [1, 1, 2]})
@@ -99,6 +100,7 @@ def _scipy_partitions(n_nodes, pairs):
 @pytest.mark.parametrize("trial", range(25))
 def test_rc_wcc_polars_matches_scipy_on_random_graphs(trial):
     import random
+
     from goldenmatch.distributed.clustering import _rc_wcc_polars
     rng = random.Random(1000 + trial)
     n = rng.randint(2, 60)

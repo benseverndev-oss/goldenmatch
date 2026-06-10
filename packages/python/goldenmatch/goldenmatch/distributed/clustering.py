@@ -948,6 +948,7 @@ def _rc_wcc_polars(pairs_pl: Any, *, seed: int | None = None, max_rounds: int = 
     Raises ValueError if any vertex id is >= p (the affine hash needs ids < p).
     """
     import random
+
     import polars as pl
 
     E = _rc_symmetrize(pairs_pl)
