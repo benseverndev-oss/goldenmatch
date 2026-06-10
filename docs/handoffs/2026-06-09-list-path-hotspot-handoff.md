@@ -70,10 +70,22 @@ With `matched_pairs` removed, the list-path profile re-ranked. Three new top ite
 > `matched_pairs` dead-work pattern, not a measurement artifact. Fix (PR #840): a
 > `has_active_emitter()` predicate + an early `return` at the top of `_emit_scoring_profile`,
 > before the profile is built. Byte-identical when a capture *is* active (the sample-iteration
-> path the controller reads); scored-pair output unchanged on every path. Still owes the 1M
-> `large-new-64GB` wall confirmation via `profile-hotspots` (structural win is guaranteed ≥ 0
-> and free). **Lesson for the next reader: "the consumer is a no-op when X" only kills a hot spot
-> if the *production of the discarded value* is also gated on X — here it wasn't.**
+> path the controller reads); scored-pair output unchanged on every path.
+>
+> **MEASURED (profile-hotspots, `large-new-64GB`, list path, run 27243161141 main vs 27243162275
+> branch):** 1M wall **390.4s → 242.5s = −147.9s / −37.9%** (pyinstrument; cProfile 387.8s →
+> 243.6s, −37.2%), output **byte-identical** (`n_pairs=131,166,381`, `n_clusters=5,407` on both;
+> 100K also identical at `1,303,941` / `5,410`). cProfile attribution: `_emit_scoring_profile`
+> (143.81s cumtime, was the #6 hotspot) **drops off the top-10 entirely**, and
+> `score_blocks_parallel` cumtime falls 247.8s → 103.3s — the ~144s vanished exactly where the
+> emit was, nothing else moved. The predicted ~149s materialized within a second. **Lesson for the
+> next reader: "the consumer is a no-op when X" only kills a hot spot if the *production of the
+> discarded value* is also gated on X — here it wasn't.**
+>
+> **Next target is now empirical:** with candidate #1 gone, `_build_clusters_dict_path`
+> (`cluster.py:813`, ~139.5s cumtime / 39.5s tottime, unchanged across the two runs) is the #1
+> hot spot on the post-fix list path — i.e. candidate #2 below, confirmed, and on the genuine
+> production clustering path (no emitter gate).
 
 Original analysis (kept for context; the blockquote's "artifact ⇒ nothing to optimize" branch is
 the part that was wrong). This was the headline candidate **and the biggest trap.** Read
