@@ -27,6 +27,7 @@ links rather than reading everything.
 - [decisions/0007-goldencheck-goldenmatch-integration.md](decisions/0007-goldencheck-goldenmatch-integration.md) — GoldenCheck→GoldenMatch: fail-open quality bridges, additive, default-OFF + benchmark-gated; hold the DQ↔ER boundary.
 - [decisions/0008-fellegi-sunter-splink-parity.md](decisions/0008-fellegi-sunter-splink-parity.md) — Fellegi-Sunter: close the Splink engine gap in dependency order, reuse the scale substrate, keep defaults reproducible (new power opt-in), measure the scale gate on a real runner.
 - [decisions/0009-rust-test-coverage.md](decisions/0009-rust-test-coverage.md) — Rust coverage: make the tests real (de-skip the bridge, run the standalone crates), route around the `cargo pgrx test` dead-end (psql smoke), then measure — informational baseline, not a hard gate.
+- [decisions/0010-publish-containers-ghcr-mirror.md](decisions/0010-publish-containers-ghcr-mirror.md) — publish-containers flakes were anonymous-Docker-Hub buildkit-pull timeouts; mirror buildkit/binfmt into ghcr (off the hot path) + native retry-once, no new secrets/actions.
 
 ## Processes (how work is done here)
 - [processes/development-workflow.md](processes/development-workflow.md) — spec → plan → execute → review → CI → merge, plus the hard environment constraints.
@@ -41,4 +42,4 @@ links rather than reading everything.
 - [meta/maintenance.md](meta/maintenance.md) — how to keep nodes accurate and small.
 
 ---
-**Classification:** navigation • **Last updated:** 2026-06-09
+**Classification:** navigation • **Last updated:** 2026-06-10
