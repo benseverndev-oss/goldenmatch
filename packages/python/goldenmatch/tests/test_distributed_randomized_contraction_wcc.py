@@ -149,10 +149,11 @@ def test_rc_symmetrize_batch_roundtrip():
 def test_rc_rep_batch_picks_min_hash_neighbor():
     import pyarrow as pa
     from goldenmatch.distributed.clustering import _rc_rep_batch
-    # symmetrized chain 1-2-3, identity hash A=1,B=0 -> rep {1:1,2:1,3:2}
+    # symmetrized chain 1-2-3, identity hash A=1,B=0 -> rep {1:1,2:1,3:2}.
+    # Output key column is named ``node`` (distinct-keyed joins downstream).
     batch = pa.table({"v": [1, 2, 2, 3], "w": [2, 1, 3, 2]})
     out = pl.from_arrow(_rc_rep_batch(batch, 1, 0, 2**31 - 1))
-    assert dict(zip(out["v"].to_list(), out["rep"].to_list())) == {1: 1, 2: 1, 3: 2}
+    assert dict(zip(out["node"].to_list(), out["rep"].to_list())) == {1: 1, 2: 1, 3: 2}
 
 
 # ---------------------------------------------------------------------------

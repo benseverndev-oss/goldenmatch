@@ -1040,16 +1040,22 @@ def _rc_symmetrize_batch(batch: Any) -> Any:  # pa.Table -> pa.Table{v,w}
     return e.to_arrow()
 
 
-def _rc_rep_batch(batch: Any, A: int, B: int, p: int) -> Any:  # pa.Table{v,w} -> {v,rep}
+def _rc_rep_batch(batch: Any, A: int, B: int, p: int) -> Any:  # pa.Table{v,w} -> {node,rep}
+    # Output key column is named ``node`` (not ``v``) so the downstream
+    # contraction/compose joins are ALWAYS distinct-keyed (v/node, w/node,
+    # cur/node). Ray Data's hash-shuffle join over pyarrow raises
+    # "multiple matches for key field reference" when the left and right join
+    # keys share a name -- the working distributed_wcc joins are all distinct-
+    # keyed for the same reason.
     import polars as pl
     df = pl.from_arrow(batch)
     if df.height == 0:
-        return pl.DataFrame(schema={"v": pl.Int64, "rep": pl.Int64}).to_arrow()
+        return pl.DataFrame(schema={"node": pl.Int64, "rep": pl.Int64}).to_arrow()
     nbr = df.select("v", u=pl.col("w"))
     selfv = df.select("v").unique().with_columns(u=pl.col("v"))
     cand = pl.concat([nbr, selfv]).with_columns(hu=((A * pl.col("u") + B) % p))
     rep = cand.group_by("v").agg(pl.col("u").sort_by("hu").first().alias("rep"))
-    return rep.select(pl.col("v").cast(pl.Int64), pl.col("rep").cast(pl.Int64)).to_arrow()
+    return rep.select(node=pl.col("v").cast(pl.Int64), rep=pl.col("rep").cast(pl.Int64)).to_arrow()
 
 
 def _rc_checkpoint(ds: Any, scratch_dir: str, name: str) -> Any:
@@ -1075,28 +1081,28 @@ def _rc_rep_distributed(edges: Any, A: int, B: int, p: int, npart: int) -> Any:
 
 def _rc_contract_distributed(edges: Any, rep: Any, npart: int) -> Any:
     import polars as pl
-    # RISK AREA 1: map v->rep then w->rep via two Ray joins, mirroring
-    # distributed_wcc's join calls. After each join, normalise columns in a
-    # map_batches so names are explicit (don't rely on implicit join suffixes).
+    # Map v->rep then w->rep via two Ray joins. ``rep`` is keyed on ``node`` so
+    # BOTH joins are distinct-keyed (v/node, w/node) -- Ray Data's pyarrow join
+    # raises "multiple matches for key field reference" on same-name keys (the
+    # failure the first CI ray run hit; distributed_wcc avoids it the same way).
     #
-    # Join 1: edges{v,w} ⋈ rep{v,rep} on v==v. Key names match; the right's only
-    # non-key column ``rep`` does not collide, so it survives unsuffixed. _take_rv
-    # references only ``w`` (left) and ``rep`` (right) -- never the key ``v`` --
-    # so it is correct whether Ray merges or duplicates the matched ``v`` column.
-    ev = edges.join(rep, join_type="inner", num_partitions=npart, on=("v",), right_on=("v",))
+    # Join 1: edges{v,w} ⋈ rep{node,rep} on v==node. _take_rv keeps only ``w`` and
+    # ``rep`` (-> rv); the surviving right key ``node`` is unreferenced.
+    ev = edges.join(rep, join_type="inner", num_partitions=npart, on=("v",), right_on=("node",))
 
-    def _take_rv(b):  # {...,v,w,rep} -> {w, rv}
+    def _take_rv(b):  # {...,w,rep,node} -> {w, rv}
         df = pl.from_arrow(b)
         if df.height == 0:
             return pl.DataFrame(schema={"w": pl.Int64, "rv": pl.Int64}).to_arrow()
         return df.select("w", rv=pl.col("rep")).to_arrow()
 
-    evr = ev.map_batches(_take_rv, batch_format="pyarrow")
-    # Join 2: evr{w,rv} ⋈ rep{v,rep} on w==v. Key names DIFFER (w vs v), so the
-    # right key ``v`` survives in the output (per pipeline.py evidence) alongside
-    # ``rep``. _mk references only ``rv`` and ``rep`` and rebuilds ``v``/``w`` by
-    # explicit alias, so the surviving right ``v`` is harmless / unreferenced.
-    ew = evr.join(rep, join_type="inner", num_partitions=npart, on=("w",), right_on=("v",))
+    # Materialize the intermediate so join 2's left input is a clean, independent
+    # dataset (not a join-derived plan that shares ``rep``'s lineage with join 2).
+    evr = ev.map_batches(_take_rv, batch_format="pyarrow").materialize()
+    # Join 2: evr{w,rv} ⋈ rep{node,rep} on w==node. _mk keeps ``rv`` and ``rep``
+    # and rebuilds v/w by explicit alias; the surviving right key ``node`` is
+    # unreferenced.
+    ew = evr.join(rep, join_type="inner", num_partitions=npart, on=("w",), right_on=("node",))
 
     def _mk(b):  # {w, rv, rep=rep(w)} -> {v,w} contracted, self-loops dropped
         df = pl.from_arrow(b)
@@ -1110,12 +1116,11 @@ def _rc_contract_distributed(edges: Any, rep: Any, npart: int) -> Any:
 
 def _rc_compose_distributed(label: Any, rep: Any, npart: int) -> Any:
     import polars as pl
-    # label{orig_id,cur} ⋈ rep{v,rep} on cur==v (LEFT outer; an id whose cur is
-    # no longer a contracted vertex keeps its cur). Key names differ (cur vs v),
-    # so the right key ``v`` survives alongside ``rep``; _co references only
-    # ``orig_id``, ``cur`` (left) and ``rep`` (right, null when unmatched), so the
-    # surviving ``v`` is unreferenced.
-    j = label.join(rep, join_type="left_outer", num_partitions=npart, on=("cur",), right_on=("v",))
+    # label{orig_id,cur} ⋈ rep{node,rep} on cur==node (LEFT outer; an id whose cur
+    # is no longer a contracted vertex keeps its cur). Distinct keys (cur/node);
+    # _co references only ``orig_id``, ``cur`` (left) and ``rep`` (right, null when
+    # unmatched), so the surviving right key ``node`` is unreferenced.
+    j = label.join(rep, join_type="left_outer", num_partitions=npart, on=("cur",), right_on=("node",))
 
     def _co(b):
         df = pl.from_arrow(b)
