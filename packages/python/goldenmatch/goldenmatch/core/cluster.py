@@ -1208,8 +1208,16 @@ def compute_cluster_confidence(
         Dict with: min_edge, avg_edge, connectivity, bottleneck_pair, confidence.
     """
     if native_enabled("clustering"):
-        edges = [(k[0], k[1], v) for k, v in pair_scores.items()
-                 if isinstance(k, tuple) and len(k) == 2]
+        # pair_scores keys are ALWAYS canonical (min, max) 2-tuples by
+        # construction -- every writer in this module builds them that way
+        # (_build_clusters_dict_path, add_to_cluster, unmerge, the split/merge
+        # paths) per the project-wide pair-canonicalization invariant. The old
+        # `if isinstance(k, tuple) and len(k) == 2` filter therefore re-confirmed
+        # a guaranteed invariant on EVERY pair and dropped nothing: at 1M / 131M
+        # pairs that was ~132M isinstance + ~132M len calls (~19s, profiled as
+        # 18% of the cluster stage / 5% of the whole-pipeline wall). Build the
+        # edge list directly; output is byte-identical for valid input.
+        edges = [(k[0], k[1], v) for k, v in pair_scores.items()]
         min_e, avg_e, conn, bn, conf = native_module().cluster_confidence(edges, size)
         return {
             "min_edge": min_e,
