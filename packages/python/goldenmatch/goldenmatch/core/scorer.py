@@ -21,7 +21,7 @@ from goldenmatch.core._profile_helpers import (
     mass_borderline,
 )
 from goldenmatch.core.complexity_profile import ScoringProfile
-from goldenmatch.core.profile_emitter import current_emitter
+from goldenmatch.core.profile_emitter import current_emitter, has_active_emitter
 from goldenmatch.utils.transforms import apply_transforms
 
 logger = logging.getLogger(__name__)
@@ -55,6 +55,18 @@ def _emit_scoring_profile(
             Approximation: sum of n*(n-1)//2 for each block processed.
         per_field_variance: Optional per-field score variance dict.
     """
+    # Build the profile only when a capture is open to consume it. On the full
+    # production pass there is no ``profile_capture`` (all captures live in the
+    # auto-config controller's sample iterations), so ``current_emitter()`` is
+    # the null singleton and ``set_scoring`` is a no-op -- but histogram_20 +
+    # hartigan_dip + the mass_* passes below run over EVERY scored pair (~131M
+    # at 1M rows: the dip is a numpy/diptest sort, the rest are full-list Python
+    # loops). That ~149s of work was computed and immediately discarded. Same
+    # dead-work pattern as #837's matched_pairs; the guard makes the no-op path
+    # actually do no work. When a capture IS active (sample iterations) the
+    # construction is byte-identical to before.
+    if not has_active_emitter():
+        return
     scores = [s for _, _, s in pairs]
     profile = ScoringProfile(
         n_pairs_scored=len(scores),

@@ -138,7 +138,7 @@ def _run(monkeypatch, *, frames_out: str, max_cluster_size: int, provenance: boo
     if frames_out == "1":
         monkeypatch.setenv("GOLDENMATCH_CLUSTER_FRAMES_OUT", "1")
     else:
-        monkeypatch.delenv("GOLDENMATCH_CLUSTER_FRAMES_OUT", raising=False)
+        monkeypatch.setenv("GOLDENMATCH_CLUSTER_FRAMES_OUT", "0")
     cfg = _config(max_cluster_size=max_cluster_size, provenance=provenance)
     return run_dedupe_df(_fixture_df(), cfg, source_name="t")
 
@@ -341,7 +341,7 @@ def test_frames_out_identity_parity(monkeypatch, tmp_path, native):
 
     # Gate OFF: identity off the dict path (real per-cluster pair_scores).
     off_db = str(tmp_path / "identity_off.db")
-    monkeypatch.delenv("GOLDENMATCH_CLUSTER_FRAMES_OUT", raising=False)
+    monkeypatch.setenv("GOLDENMATCH_CLUSTER_FRAMES_OUT", "0")
     off = run_dedupe_df(
         df, _identity_config(off_db, "off"), source_name=source,
     )
@@ -442,7 +442,7 @@ def test_frames_out_identity_consumes_cluster_frames_directly(
     # Gate OFF -> dict path.
     captured["leg"] = "off"
     off_db = str(tmp_path / "sp_c_off.db")
-    monkeypatch.delenv("GOLDENMATCH_CLUSTER_FRAMES_OUT", raising=False)
+    monkeypatch.setenv("GOLDENMATCH_CLUSTER_FRAMES_OUT", "0")
     off = run_dedupe_df(df, _identity_config(off_db, "off"), source_name=source)
 
     # Gate ON -> frames-out path.
@@ -530,7 +530,7 @@ def test_frames_out_output_on_deferred_dict_parity(monkeypatch, tmp_path, native
     off_dir.mkdir()
     on_dir.mkdir()
 
-    monkeypatch.delenv("GOLDENMATCH_CLUSTER_FRAMES_OUT", raising=False)
+    monkeypatch.setenv("GOLDENMATCH_CLUSTER_FRAMES_OUT", "0")
     off = run_dedupe_df(
         _fixture_df(),
         _config_with_output(str(off_dir), max_cluster_size=4),
