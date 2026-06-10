@@ -7,6 +7,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Added
+- **Phase-5 e2e pipeline recall-complete leg (opt-in, #844 Spec 2).** When
+  `GOLDENMATCH_DISTRIBUTED_BLOCK_SHUFFLE=1`, the Phase-5 streaming pipeline now
+  routes clustering to the randomized-contraction WCC
+  (`build_clusters_distributed(algorithm="randomized_contraction")`) instead of
+  per-partition Union-Find. Per-partition Union-Find under-merges when the
+  blocking plan generates pairs across input-partition boundaries; the
+  distributed WCC correctly merges them. Default behavior is unchanged
+  (block-shuffle off, per-partition path). The binding 100M validation run is
+  operator-deferred (requires a multi-node cluster + GCS scratch); the simulated
+  4-worker CI bench runs both legs and asserts the recall-complete leg finds
+  strictly more multi-member clusters. See `docs/distributed-ray-cluster-setup.md`
+  for the operator recipe. (#844 Spec 2)
 - **Distributed randomized-contraction WCC (opt-in, #844 Spec 1).** New
   `randomized_contraction_wcc` in `goldenmatch.distributed.clustering` implements
   Bögeholz–Brand–Todor randomized contraction (arXiv:1802.09478) — a relational,

@@ -67,6 +67,117 @@ uploaded to the `bench-dataset-v1` release before the workflow can
 fire; the job exits fast with `::error::bench_50000000.parquet missing`
 otherwise.
 
+## Recall-complete Phase-5 run (100M)
+
+The default Phase-5 path uses per-partition scoring + per-partition Union-Find
+(`local_cc_assignments`). Pairs are isolated to their input partition; clusters
+never span partition boundaries. This is correct when the blocking plan doesn't
+shuffle records across partitions, but it under-merges when block-shuffle is
+active (pairs generated across partitions are discarded by the per-partition UF).
+
+The recall-complete leg routes clustering to the randomized-contraction WCC
+(`build_clusters_distributed(algorithm="randomized_contraction")`), which
+operates on the full cross-partition pair set. Enable it by setting:
+
+```bash
+export GOLDENMATCH_DISTRIBUTED_PIPELINE=2
+export GOLDENMATCH_DISTRIBUTED_BLOCK_SHUFFLE=1
+export GOLDENMATCH_DISTRIBUTED_WCC=randomized_contraction
+export GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH=gs://<your-bucket>/rc_scratch
+```
+
+Then run the bench driver as normal:
+
+```bash
+python packages/python/goldenmatch/scripts/bench_phase5_end2end.py \
+    --input bench-dataset-v1/bench_100000000.parquet \
+    --output gs://your-bucket/phase5_golden_rc.parquet \
+    --block-shuffle 1
+```
+
+> **GCS scratch is load-bearing.**
+> The randomized-contraction WCC checkpoints each round's contracted edges to
+> parquet so that Ray Data lineage is truncated (preventing the streaming-executor
+> deadlock the pointer-jumping variant hit). On a multi-node cluster, every worker
+> must be able to read every round's checkpoint -- a node-local directory is
+> invisible to other nodes and silently breaks the cross-node parquet reads,
+> causing the WCC to diverge or fail. `GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH` MUST
+> be a `gs://` (or other shared object-storage) path. The bench driver enforces
+> this: passing `--block-shuffle 1` without a `gs://` scratch path exits with a
+> clear error rather than proceeding silently.
+
+Peak scratch disk usage is roughly 4-5x the round-1 edge set (the edge set
+shrinks each contraction round, but all round files coexist until the run
+completes). Pruning per-round scratch is a tracked follow-up; size your GCS
+bucket accordingly and delete the scratch prefix after the run.
+
+### GCP cluster commands for the 100M recall-complete run
+
+These commands are produced for the operator to run manually. Do not
+auto-execute cloud commands.
+
+```bash
+# 1. Provision head node (e2-standard-16, us-central1-a).
+#    e2-standard-16 = 16 vCPU / 64 GB RAM.
+#    Use e2-standard-16 not n2-standard-16 -- n2 stockouts in us-central1
+#    are common and stall allocation indefinitely.
+gcloud compute instances create gm-phase5-head \
+    --zone=us-central1-a \
+    --machine-type=e2-standard-16 \
+    --image-family=debian-12 \
+    --image-project=debian-cloud \
+    --boot-disk-size=100GB
+
+# 2. Provision 4 worker nodes (same type).
+for i in 1 2 3 4; do
+  gcloud compute instances create gm-phase5-worker-$i \
+      --zone=us-central1-a \
+      --machine-type=e2-standard-16 \
+      --image-family=debian-12 \
+      --image-project=debian-cloud \
+      --boot-disk-size=100GB
+done
+
+# 3. SSH to head; install deps and start Ray head.
+#    (run on the head node)
+pip install "goldenmatch[ray]==<current-version>"
+pip install psutil pandas scipy
+ray start --head --port=6379 --num-cpus=16 \
+    --object-store-memory=20000000000
+
+# 4. SSH to each worker; join the cluster.
+#    (run on each worker node -- replace HEAD_IP)
+pip install "goldenmatch[ray]==<current-version>"
+pip install psutil pandas scipy
+ray start --address=HEAD_IP:6379 --num-cpus=16 \
+    --object-store-memory=20000000000
+
+# 5. Verify cluster (from head).
+ray status
+# Expect: 5 nodes, 80 CPU total.
+
+# 6. Run the bench (from your laptop / CI client with RAY_ADDRESS set).
+export RAY_ADDRESS=ray://HEAD_IP:10001
+export GOLDENMATCH_DISTRIBUTED_PIPELINE=2
+export GOLDENMATCH_DISTRIBUTED_BLOCK_SHUFFLE=1
+export GOLDENMATCH_DISTRIBUTED_WCC=randomized_contraction
+export GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH=gs://<your-bucket>/rc_scratch
+
+python packages/python/goldenmatch/scripts/bench_phase5_end2end.py \
+    --input bench-dataset-v1/bench_100000000.parquet \
+    --output gs://<your-bucket>/phase5_golden_rc.parquet \
+    --block-shuffle 1
+
+# 7. Tear down (billing continues while nodes are running).
+for i in 1 2 3 4; do
+  gcloud compute instances delete gm-phase5-worker-$i --zone=us-central1-a --quiet
+done
+gcloud compute instances delete gm-phase5-head --zone=us-central1-a --quiet
+```
+
+Rough cost: 5 x e2-standard-16 at ~$0.54/hr = ~$2.70/hr. A 30-min run
+costs ~$1.35 in cluster time. Tear down immediately after the bench.
+
 ## Recommended cluster shape
 
 Phase 5 kill criterion: **100M-row dedupe in under 30 min**. To hit that:
