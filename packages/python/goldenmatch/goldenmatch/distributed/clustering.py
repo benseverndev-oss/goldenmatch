@@ -192,6 +192,7 @@ def build_clusters_distributed(
     weak_cluster_threshold: float = 0.3,
     convergence_max_iterations: int = 30,
     force_label_propagation: bool = False,
+    algorithm: str | None = None,
 ) -> Dataset:
     """Distributed clustering. Returns a Ray Dataset of cluster assignments.
 
@@ -206,6 +207,11 @@ def build_clusters_distributed(
         on non-convergence.
 
     Override threshold via env var GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD.
+
+    ``algorithm`` (keyword-only) overrides the GOLDENMATCH_DISTRIBUTED_WCC env
+    selector for this call (e.g. "randomized_contraction"); None = env default.
+    Only affects the at/above-threshold WCC path; below the threshold the route
+    is scipy regardless.
 
     ``all_ids`` is the full id universe (incl. isolated singletons). Pass
     ``None`` (default) for the golden scale path: only multi-member clusters
@@ -233,7 +239,11 @@ def build_clusters_distributed(
             already_sized=True,
         )
 
-    algorithm = _wcc_algorithm() if not force_label_propagation else "label_propagation"
+    # Caller-supplied algorithm wins (the pipeline passes "randomized_contraction"
+    # so the at-scale path can't route to two_phase, which head-wedges at 100M);
+    # otherwise the env selector / force_label_propagation default applies.
+    if algorithm is None:
+        algorithm = _wcc_algorithm() if not force_label_propagation else "label_propagation"
 
     if algorithm == "label_propagation":
         logger.info(
