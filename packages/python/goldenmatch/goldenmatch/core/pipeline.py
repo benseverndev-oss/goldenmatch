@@ -1690,13 +1690,41 @@ def _run_dedupe_pipeline(
     # path (stats + dupes) never calls it -- those read the metadata/assignments
     # frames directly -- so golden + stats + dupes stay dict-free.
     _clusters_cache: list[dict[int, dict]] = []
+    _pair_score_view_cache: list[ClusterPairScores | None] = []
+
+    def _pair_score_view() -> ClusterPairScores | None:
+        # The per-cluster pair scores for the frames-out path, sourced from the
+        # raw scored pairs + final assignments. Built AT MOST ONCE and cached.
+        # None on the dict/columnar paths (their `clusters` dict already carries
+        # real pair_scores). Used to (a) restore pair_scores on the rebuilt
+        # results["clusters"] dict and (b) feed the confidence_majority golden
+        # slow path -- both of which the frames-out cluster dict leaves empty.
+        if cluster_frames is None:
+            return None
+        if not _pair_score_view_cache:
+            from goldenmatch.core.cluster_pairscores import ClusterPairScores
+            _pair_score_view_cache.append(
+                ClusterPairScores.from_frames(cluster_frames.assignments, all_pairs)
+            )
+        return _pair_score_view_cache[0]
 
     def _clusters_dict() -> dict[int, dict]:
         if cluster_frames is None:
             # Gate-OFF / columnar paths bound `clusters` eagerly above.
             return clusters
         if not _clusters_cache:
-            _clusters_cache.append(cluster_frames_to_dict(cluster_frames))
+            d = cluster_frames_to_dict(cluster_frames)
+            # cluster_frames_to_dict leaves pair_scores={} on every cluster;
+            # restore the real per-pair scores from the view so the returned
+            # dict matches the legacy path's contract (unmerge, lineage, and
+            # callers that read clusters[cid]["pair_scores"] all depend on it).
+            psv = _pair_score_view()
+            if psv is not None:
+                for cid, edges in psv.iter_clusters():
+                    info = d.get(cid)
+                    if info is not None:
+                        info["pair_scores"] = {(a, b): s for (a, b, s) in edges}
+            _clusters_cache.append(d)
         return _clusters_cache[0]
 
     if cluster_frames is not None:
@@ -1817,12 +1845,29 @@ def _run_dedupe_pipeline(
                     c for c in collected_df.columns
                     if not any(c.startswith(p) for p in _internal_prefixes)
                 ])
+            # Source per-cluster pair scores from the view so the slow builder's
+            # confidence_majority survivorship weights by edge confidence instead
+            # of degrading to count-majority (the frames-out cluster dict carries
+            # pair_scores={}). The fast builder ignores it; only built once here
+            # if the slow path needs it.
+            _frames_pair_scores: dict[int, dict[tuple[int, int], float]] | None = None
+            if not (
+                not _provenance_on
+                and _polars_native_eligible(golden_rules, quality_scores=quality_scores)
+            ):
+                _psv = _pair_score_view()
+                if _psv is not None:
+                    _frames_pair_scores = {
+                        cid: {(a, b): s for (a, b, s) in edges}
+                        for cid, edges in _psv.iter_clusters()
+                    }
             golden_df, golden_records = build_golden_records_from_frames(
                 _golden_source,
                 cluster_frames,
                 golden_rules,
                 quality_scores=quality_scores,
                 provenance=_provenance_on,
+                cluster_pair_scores=_frames_pair_scores,
             )
     else:
         with stage("golden"):
@@ -2092,12 +2137,7 @@ def _run_dedupe_pipeline(
     # input pairs (input-order last-wins) against the final cluster membership.
     # The gate-OFF branch is UNCHANGED: it leaves the view None and passes the
     # real-pair_scores dict.
-    pair_score_view: ClusterPairScores | None = None
-    if cluster_frames is not None:
-        from goldenmatch.core.cluster_pairscores import ClusterPairScores
-        pair_score_view = ClusterPairScores.from_frames(
-            cluster_frames.assignments, all_pairs
-        )
+    pair_score_view: ClusterPairScores | None = _pair_score_view()
     with stage("identity_resolve"):
         identity_summary = _resolve_identities(
             clusters if cluster_frames is None else None,
