@@ -14,6 +14,19 @@ name: publish-containers
 #
 # Multi-arch: linux/amd64 + linux/arm64 (QEMU emulation for arm64 on GH runners).
 # Auth: GITHUB_TOKEN (built-in, no PAT needed for ghcr.io).
+#
+# Flake hardening (the `mirror` job + retry steps):
+#   docker/setup-buildx-action and docker/setup-qemu-action pull their helper
+#   images (moby/buildkit, tonistiigi/binfmt) from Docker Hub. Anonymous Docker
+#   Hub pulls from GitHub's shared runner egress IPs intermittently TIME OUT
+#   under throttling ("context deadline exceeded"). With this 7-leg matrix each
+#   pulling buildkit IN PARALLEL on every main push, a random leg went red ~1
+#   run in 18 over 30 days -- never a code bug, always a registry timeout.
+#   Fix: the `mirror` job does ONE Docker Hub read per run (retried) and
+#   republishes buildkit+binfmt into ghcr; the build legs then pull those
+#   helper images from ghcr (authenticated, not Docker-Hub-rate-limited). The
+#   per-step retry-once twins absorb the residual transient ghcr / GHA-cache
+#   blips (ghcr 502s, actions-cache copy errors) seen in the same audit.
 
 on:
   push:
@@ -32,7 +45,53 @@ permissions:
   contents: read
 
 jobs:
+  # Republish the BuildKit + binfmt helper images into ghcr so the build legs
+  # never pull them from Docker Hub. This is the root-cause fix for the
+  # recurring "Set up Docker Buildx -> registry-1.docker.io timeout" flake:
+  # one retried Docker Hub read here, instead of 7 unguarded parallel pulls.
+  # imagetools copies the full multi-arch manifest registry-to-registry.
+  mirror:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write  # creates/updates ghcr.io/<owner>/{buildkit,binfmt}
+    steps:
+      - name: Log in to ghcr.io
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Mirror buildkit + binfmt into ghcr
+        env:
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          # Copy a multi-arch image source -> dest, retrying the (anonymous)
+          # Docker Hub read a few times to ride out transient throttling.
+          copy() {
+            local src="$1" dst="$2"
+            for attempt in 1 2 3; do
+              if docker buildx imagetools create -t "$dst" "$src"; then
+                echo "mirrored $src -> $dst (attempt $attempt)"
+                return 0
+              fi
+              echo "::warning::imagetools copy of $src failed (attempt $attempt/3), retrying"
+              sleep $(( attempt * 10 ))
+            done
+            echo "::error::failed to mirror $src into ghcr after 3 attempts"
+            return 1
+          }
+          copy moby/buildkit:buildx-stable-1 "ghcr.io/${OWNER}/buildkit:buildx-stable-1"
+          copy tonistiigi/binfmt:latest      "ghcr.io/${OWNER}/binfmt:latest"
+
   publish:
+    needs: mirror
+    # Run even if `mirror` failed: a stale-but-present ghcr copy from a prior
+    # run is still usable, so a transient Docker Hub blip in `mirror` should not
+    # block all 7 images. Only skip when `mirror` was cancelled.
+    if: ${{ needs.mirror.result == 'success' || needs.mirror.result == 'failure' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -98,16 +157,9 @@ jobs:
             echo "build=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Set up QEMU
-        if: steps.gate.outputs.build == 'true'
-        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130  # v3
-        with:
-          platforms: linux/amd64,linux/arm64
-
-      - name: Set up Docker Buildx
-        if: steps.gate.outputs.build == 'true'
-        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd  # v4.0.0
-
+      # ghcr login moved AHEAD of QEMU/Buildx setup: those steps now pull their
+      # helper images from the private ghcr mirror, which needs ghcr creds in
+      # the Docker config before the buildx bootstrap pulls the image.
       - name: Log in to ghcr.io
         if: steps.gate.outputs.build == 'true'
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
@@ -115,6 +167,34 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up QEMU
+        id: qemu
+        if: steps.gate.outputs.build == 'true'
+        continue-on-error: true
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130  # v3
+        with:
+          platforms: linux/amd64,linux/arm64
+          image: ghcr.io/${{ github.repository_owner }}/binfmt:latest
+      - name: Set up QEMU (retry)
+        if: steps.gate.outputs.build == 'true' && steps.qemu.outcome == 'failure'
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130  # v3
+        with:
+          platforms: linux/amd64,linux/arm64
+          image: ghcr.io/${{ github.repository_owner }}/binfmt:latest
+
+      - name: Set up Docker Buildx
+        id: buildx
+        if: steps.gate.outputs.build == 'true'
+        continue-on-error: true
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd  # v4.0.0
+        with:
+          driver-opts: image=ghcr.io/${{ github.repository_owner }}/buildkit:buildx-stable-1
+      - name: Set up Docker Buildx (retry)
+        if: steps.gate.outputs.build == 'true' && steps.buildx.outcome == 'failure'
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd  # v4.0.0
+        with:
+          driver-opts: image=ghcr.io/${{ github.repository_owner }}/buildkit:buildx-stable-1
 
       - name: Compute image tags
         if: steps.gate.outputs.build == 'true'
@@ -133,7 +213,24 @@ jobs:
             org.opencontainers.image.licenses=MIT
 
       - name: Build and push
+        id: build
         if: steps.gate.outputs.build == 'true'
+        continue-on-error: true
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          platforms: ${{ matrix.platforms }}
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          labels: ${{ steps.tags.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,scope=${{ matrix.image }},mode=max
+      # Retry once: absorbs transient ghcr 502s and GHA-cache (actions-cache)
+      # copy errors that flaked this step in the audit. Re-push is idempotent
+      # (content-addressed layers, byte-identical tags).
+      - name: Build and push (retry)
+        if: steps.gate.outputs.build == 'true' && steps.build.outcome == 'failure'
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
         with:
           context: ${{ matrix.context }}

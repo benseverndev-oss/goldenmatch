@@ -516,7 +516,7 @@ def build_clusters(
     )
 
 
-def _cluster_frames_out_enabled() -> bool:
+def _cluster_frames_out_enabled() -> bool:  # pyright: ignore[reportUnusedFunction]  # used cross-module: pipeline.py imports + calls this; pyright's private-symbol unused check misses the call site
     """Frames-out path gate. When enabled, ``build_cluster_frames`` returns the
     two-frame ``ClusterFrames`` columnar representation directly, WITHOUT
     materializing the per-cluster ``dict[int, dict]`` for non-oversized clusters.
