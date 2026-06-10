@@ -97,6 +97,8 @@ Type defs are loaded once and shared between classifier and suppression.
 `apply_fixes(df, findings, mode, *, force=False) -> (DataFrame, FixReport)`. Three modes: safe, moderate, aggressive.
 Aggressive requires `force=True`. Fix functions are pure (Series → Series). FixReport tracks changes per column.
 
+- **Per-cell fixes are vectorize-guarded (perf).** `remove_invisible_chars` / `normalize_unicode` / `fix_smart_quotes` each run a Python `map_elements` over the column, but only AFTER a cheap vectorized `Series.str.contains(<class>).any()` proves there's something to fix; on a clean column they return the SAME Series object and `apply_fixes` skips the full-frame change-comparison (`if fixed is col: continue`). Byte-identical (each op is an identity when its guard misses). This is the safe-fix hot path on big clean frames — it was the scaling term in GoldenMatch's `pipeline_prep_quality_scan` (the scan itself samples to 100K and is bounded; `apply_fixes` runs on the FULL frame). Guard char-classes are built from the actual chars, NOT Python `\uXXXX` escapes (Polars' Rust regex rejects those).
+
 ## differ.py
 
 `diff_files(old_df, new_df, old_findings, new_findings) -> DiffReport`. Compares schema, findings, stats.

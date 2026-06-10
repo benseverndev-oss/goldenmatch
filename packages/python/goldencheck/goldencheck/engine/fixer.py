@@ -43,6 +43,21 @@ _SMART_QUOTES = {
     "\u2026": "...",
 }
 
+# Vectorized short-circuit guards for the per-cell fixes below. Each is a Rust-
+# regex char class built from the ACTUAL characters (not Python `\uXXXX` escapes,
+# which Polars' regex engine doesn't accept) so a single vectorized
+# `Series.str.contains(...).any()` can prove a column has nothing to fix and skip
+# the slow `map_elements` pass. Byte-identical: each per-cell op is an identity
+# when its guard does not match.
+_INVISIBLE_CONTAINS = "[\u200b\u200c\u200d\uFEFF\u00AD\u2060]"
+_SMART_QUOTES_CONTAINS = "[" + "".join(_SMART_QUOTES) + "]"
+_NON_ASCII_CONTAINS = r"[^\x00-\x7f]"
+
+
+def _has_match(s: pl.Series, pattern: str) -> bool:
+    """True if any cell of string Series ``s`` matches ``pattern`` (vectorized)."""
+    return bool(s.str.contains(pattern).fill_null(False).any())
+
 
 def _trim_whitespace(s: pl.Series) -> pl.Series:
     if s.dtype not in (pl.Utf8, pl.String):
@@ -53,6 +68,10 @@ def _trim_whitespace(s: pl.Series) -> pl.Series:
 def _remove_invisible_chars(s: pl.Series) -> pl.Series:
     if s.dtype not in (pl.Utf8, pl.String):
         return s
+    # Skip the per-cell pass when no cell holds an invisible char (`sub` is then
+    # an identity). Returns ``s`` unchanged so the caller can detect the no-op.
+    if not _has_match(s, _INVISIBLE_CONTAINS):
+        return s
     return s.map_elements(
         lambda v: _INVISIBLE_CHARS.sub("", v) if isinstance(v, str) else v,
         return_dtype=pl.String,
@@ -62,6 +81,10 @@ def _remove_invisible_chars(s: pl.Series) -> pl.Series:
 def _normalize_unicode(s: pl.Series) -> pl.Series:
     if s.dtype not in (pl.Utf8, pl.String):
         return s
+    # NFC is the identity on pure-ASCII text, so skip the per-cell pass when the
+    # column has no non-ASCII character at all (the common case).
+    if not _has_match(s, _NON_ASCII_CONTAINS):
+        return s
     return s.map_elements(
         lambda v: unicodedata.normalize("NFC", v) if isinstance(v, str) else v,
         return_dtype=pl.String,
@@ -70,6 +93,9 @@ def _normalize_unicode(s: pl.Series) -> pl.Series:
 
 def _fix_smart_quotes(s: pl.Series) -> pl.Series:
     if s.dtype not in (pl.Utf8, pl.String):
+        return s
+    # Skip the per-cell pass when no cell holds a smart quote/dash/ellipsis.
+    if not _has_match(s, _SMART_QUOTES_CONTAINS):
         return s
 
     def _replace(v):
@@ -167,6 +193,11 @@ def apply_fixes(
         # Safe fixes (always run)
         for fix_name, fix_fn in _SAFE_FIXES:
             fixed = fix_fn(col)
+            # A guarded fix returns the same Series object when it short-circuits
+            # (nothing to fix in this column); skip the full-frame comparison +
+            # report entirely in that case.
+            if fixed is col:
+                continue
             changed = (col.cast(pl.String).fill_null("") != fixed.cast(pl.String).fill_null(""))
             n_changed = int(changed.sum())
             if n_changed > 0:
