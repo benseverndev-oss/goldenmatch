@@ -1079,12 +1079,11 @@ def _rc_rep_distributed(edges: Any, A: int, B: int, p: int, npart: int) -> Any:
     )
 
 
-def _rc_contract_distributed(edges: Any, rep: Any, npart: int) -> Any:
+def _rc_contract_distributed(edges: Any, rep: Any, npart: int,
+                             scratch_dir: str, evr_name: str) -> Any:
     import polars as pl
     # Map v->rep then w->rep via two Ray joins. ``rep`` is keyed on ``node`` so
-    # BOTH joins are distinct-keyed (v/node, w/node) -- Ray Data's pyarrow join
-    # raises "multiple matches for key field reference" on same-name keys (the
-    # failure the first CI ray run hit; distributed_wcc avoids it the same way).
+    # both joins are distinct-keyed (v/node, w/node).
     #
     # Join 1: edges{v,w} ⋈ rep{node,rep} on v==node. _take_rv keeps only ``w`` and
     # ``rep`` (-> rv); the surviving right key ``node`` is unreferenced.
@@ -1096,9 +1095,13 @@ def _rc_contract_distributed(edges: Any, rep: Any, npart: int) -> Any:
             return pl.DataFrame(schema={"w": pl.Int64, "rv": pl.Int64}).to_arrow()
         return df.select("w", rv=pl.col("rep")).to_arrow()
 
-    # Materialize the intermediate so join 2's left input is a clean, independent
-    # dataset (not a join-derived plan that shares ``rep``'s lineage with join 2).
-    evr = ev.map_batches(_take_rv, batch_format="pyarrow").materialize()
+    # CHECKPOINT the intermediate to parquet so join 2's LEFT input is a clean
+    # ReadParquet dataset. Ray Data's hash-shuffle join rejects a map_batches-
+    # derived left input here with "multiple matches for key field reference w"
+    # (the CI ray failure) -- a polars->arrow map_batches output isn't a clean
+    # join input, while the working compose join and join 1 both have ReadParquet
+    # inputs on both sides. The parquet round-trip strips the offending schema.
+    evr = _rc_checkpoint(ev.map_batches(_take_rv, batch_format="pyarrow"), scratch_dir, evr_name)
     # Join 2: evr{w,rv} ⋈ rep{node,rep} on w==node. _mk keeps ``rv`` and ``rep``
     # and rebuilds v/w by explicit alias; the surviving right key ``node`` is
     # unreferenced.
@@ -1234,7 +1237,9 @@ def randomized_contraction_wcc(
             # TODO(Spec 2 / scale): prune round i-1's parquet trees inside the
             # loop to bound disk to ~2 rounds at 100M; safe once edges_{i} is
             # checkpointed (read_parquet roots the next round there, not i-1).
-            contracted = _rc_contract_distributed(edges, rep, npart).materialize()
+            contracted = _rc_contract_distributed(
+                edges, rep, npart, scratch, f"evr_{i + 1}",
+            ).materialize()
             cnt = contracted.count()
             if cnt > 0:
                 edges = _rc_checkpoint(contracted, scratch, f"edges_{i + 1}")
