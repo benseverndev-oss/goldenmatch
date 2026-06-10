@@ -888,7 +888,8 @@ def _rc_symmetrize(pairs_pl: Any) -> Any:  # pl.DataFrame{id_a,id_b,...} -> pl.D
     return pl.concat([fwd, bwd]).filter(pl.col("v") != pl.col("w")).unique()
 
 
-def _rc_contract_round(edges_pl: Any, A: int, B: int, p: int = _RC_PRIME):
+def _rc_contract_round(edges_pl: Any, A: int, B: int,
+                       p: int = _RC_PRIME) -> tuple[Any, Any]:  # ({v,w}, {v,rep})
     """One randomized-contraction round on a symmetrized edge table.
 
     Returns (contracted_edges_pl{v,w}, rep_pl{v,rep}). ``rep(v)`` is the vertex
@@ -901,10 +902,14 @@ def _rc_contract_round(edges_pl: Any, A: int, B: int, p: int = _RC_PRIME):
     cand = pl.concat([nbr, selfv]).with_columns(
         hu=((A * pl.col("u") + B) % p),
     )
+    # argmin over the closed neighbourhood: sort_by INSIDE the agg so the
+    # min-hash u is picked independent of group-by row order (the affine hash is
+    # a bijection for ids < p, so the min is unique). Do NOT rely on a pre-sort +
+    # .first() with maintain_order=False -- that leans on an implicit intra-group
+    # ordering guarantee Polars does not promise.
     rep = (
-        cand.sort("hu")
-        .group_by("v", maintain_order=False)
-        .agg(pl.col("u").first().alias("rep"))
+        cand.group_by("v")
+        .agg(pl.col("u").sort_by("hu").first().alias("rep"))
     )
     rep_v = rep.select(v="v", rv="rep")
     rep_w = rep.select(w="v", rw="rep")
@@ -945,7 +950,10 @@ def _rc_wcc_polars(pairs_pl: Any, *, seed: int | None = None, max_rounds: int = 
     """Pure-Polars randomized-contraction WCC. The reference implementation and
     the correctness gate; the Ray path mirrors this distributively.
 
-    Raises ValueError if any vertex id is >= p (the affine hash needs ids < p).
+    Singletons with no edges are NOT emitted (label is seeded from edge
+    endpoints only) -- same contract as the distributed path; the caller assigns
+    self-labels to isolated ids. Raises ValueError if any vertex id is >= p (the
+    affine hash needs ids < p).
     """
     import random
 
