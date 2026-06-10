@@ -985,6 +985,198 @@ def _rc_wcc_polars(pairs_pl: Any, *, seed: int | None = None, max_rounds: int = 
     return _rc_normalize_to_min_member(label)
 
 
+# ---------------------------------------------------------------------------
+# Randomized-contraction WCC (#844) — Ray-distributed orchestration
+# ---------------------------------------------------------------------------
+# Mirrors the pure-Polars core above on Ray Data. The per-batch helpers below
+# are the closures pushed to workers; the driver only stitches Ray Data ops
+# (map_batches / repartition / join), never collects the full graph.
+#
+# Ray Data join column semantics (verified against the existing distributed
+# joins in this module and goldenmatch/distributed/pipeline.py):
+#   * left columns survive unsuffixed;
+#   * a right non-key column with NO name collision survives unsuffixed;
+#   * a right key column whose name DIFFERS from the left key survives in the
+#     output (pipeline.py defensively drops the surviving ``member_id``).
+# Every projection below references only columns it created or that survive
+# unambiguously, so it does not depend on whether the matched key column is
+# merged or duplicated. See the per-function notes on the two RISK AREAS.
+
+
+def _rc_symmetrize_batch(batch: Any) -> Any:  # pa.Table -> pa.Table{v,w}
+    import polars as pl
+    df = pl.from_arrow(batch)
+    if df.height == 0:
+        return pl.DataFrame(schema={"v": pl.Int64, "w": pl.Int64}).to_arrow()
+    return _rc_symmetrize(df).to_arrow()
+
+
+def _rc_rep_batch(batch: Any, A: int, B: int, p: int) -> Any:  # pa.Table{v,w} -> {v,rep}
+    import polars as pl
+    df = pl.from_arrow(batch)
+    if df.height == 0:
+        return pl.DataFrame(schema={"v": pl.Int64, "rep": pl.Int64}).to_arrow()
+    nbr = df.select("v", u=pl.col("w"))
+    selfv = df.select("v").unique().with_columns(u=pl.col("v"))
+    cand = pl.concat([nbr, selfv]).with_columns(hu=((A * pl.col("u") + B) % p))
+    rep = cand.group_by("v").agg(pl.col("u").sort_by("hu").first().alias("rep"))
+    return rep.select(pl.col("v").cast(pl.Int64), pl.col("rep").cast(pl.Int64)).to_arrow()
+
+
+def _rc_checkpoint(ds: Any, scratch_dir: str, name: str) -> Any:
+    """Write ds to parquet under scratch_dir/name and re-read it. Truncates Ray
+    Data lineage + frees the object store each round (the deadlock fix)."""
+    import os
+
+    import ray
+    path = os.path.join(scratch_dir, name)
+    ds.write_parquet(path)
+    return ray.data.read_parquet(path)
+
+
+def _rc_rep_distributed(edges: Any, A: int, B: int, p: int, npart: int) -> Any:
+    # Co-locate every edge of a vertex v in one partition (keys=["v"]), then the
+    # per-partition closed-nbhd argmin == the global rep(v). batch_size=None so a
+    # vertex's neighbours are never split across sub-batches.
+    return edges.repartition(npart, keys=["v"]).map_batches(
+        _rc_rep_batch, fn_kwargs={"A": A, "B": B, "p": p},
+        batch_format="pyarrow", batch_size=None,
+    )
+
+
+def _rc_contract_distributed(edges: Any, rep: Any, npart: int) -> Any:
+    import polars as pl
+    # RISK AREA 1: map v->rep then w->rep via two Ray joins, mirroring
+    # distributed_wcc's join calls. After each join, normalise columns in a
+    # map_batches so names are explicit (don't rely on implicit join suffixes).
+    #
+    # Join 1: edges{v,w} ⋈ rep{v,rep} on v==v. Key names match; the right's only
+    # non-key column ``rep`` does not collide, so it survives unsuffixed. _take_rv
+    # references only ``w`` (left) and ``rep`` (right) -- never the key ``v`` --
+    # so it is correct whether Ray merges or duplicates the matched ``v`` column.
+    ev = edges.join(rep, join_type="inner", num_partitions=npart, on=("v",), right_on=("v",))
+
+    def _take_rv(b):  # {...,v,w,rep} -> {w, rv}
+        df = pl.from_arrow(b)
+        if df.height == 0:
+            return pl.DataFrame(schema={"w": pl.Int64, "rv": pl.Int64}).to_arrow()
+        return df.select("w", rv=pl.col("rep")).to_arrow()
+
+    evr = ev.map_batches(_take_rv, batch_format="pyarrow")
+    # Join 2: evr{w,rv} ⋈ rep{v,rep} on w==v. Key names DIFFER (w vs v), so the
+    # right key ``v`` survives in the output (per pipeline.py evidence) alongside
+    # ``rep``. _mk references only ``rv`` and ``rep`` and rebuilds ``v``/``w`` by
+    # explicit alias, so the surviving right ``v`` is harmless / unreferenced.
+    ew = evr.join(rep, join_type="inner", num_partitions=npart, on=("w",), right_on=("v",))
+
+    def _mk(b):  # {w, rv, rep=rep(w)} -> {v,w} contracted, self-loops dropped
+        df = pl.from_arrow(b)
+        if df.height == 0:
+            return pl.DataFrame(schema={"v": pl.Int64, "w": pl.Int64}).to_arrow()
+        return (df.filter(pl.col("rv") != pl.col("rep"))
+                  .select(v=pl.col("rv"), w=pl.col("rep")).unique().to_arrow())
+
+    return ew.map_batches(_mk, batch_format="pyarrow")
+
+
+def _rc_compose_distributed(label: Any, rep: Any, npart: int) -> Any:
+    import polars as pl
+    # label{orig_id,cur} ⋈ rep{v,rep} on cur==v (LEFT outer; an id whose cur is
+    # no longer a contracted vertex keeps its cur). Key names differ (cur vs v),
+    # so the right key ``v`` survives alongside ``rep``; _co references only
+    # ``orig_id``, ``cur`` (left) and ``rep`` (right, null when unmatched), so the
+    # surviving ``v`` is unreferenced.
+    j = label.join(rep, join_type="left_outer", num_partitions=npart, on=("cur",), right_on=("v",))
+
+    def _co(b):
+        df = pl.from_arrow(b)
+        if df.height == 0:
+            return pl.DataFrame(schema={"orig_id": pl.Int64, "cur": pl.Int64}).to_arrow()
+        return df.select("orig_id", cur=pl.coalesce(["rep", "cur"])).to_arrow()
+
+    return j.map_batches(_co, batch_format="pyarrow")
+
+
+def _rc_normalize_distributed(label: Any, npart: int) -> Any:
+    import polars as pl
+    # Co-locate by cur so per-partition min(orig_id) == global component min.
+    # RISK AREA 2 (dedup): the label seed is built per-batch, so an id can appear
+    # more than once; both copies share the same cur (compose is deterministic),
+    # hence co-locate here -> unique(subset=["id"]) drops the duplicate safely.
+    colocated = label.repartition(npart, keys=["cur"])
+
+    def _nm(b):
+        df = pl.from_arrow(b)
+        if df.height == 0:
+            return pl.DataFrame(schema={"id": pl.Int64, "label": pl.Int64}).to_arrow()
+        out = df.with_columns(label=pl.col("orig_id").min().over("cur"))
+        return (out.select(id=pl.col("orig_id").cast(pl.Int64),
+                           label=pl.col("label").cast(pl.Int64))
+                   .unique(subset=["id"]).to_arrow())
+
+    return colocated.map_batches(_nm, batch_format="pyarrow")
+
+
+def randomized_contraction_wcc(
+    pairs_ds: Any, *, scratch_dir: str | None = None,
+    max_rounds: int = 80, seed: int | None = None, p: int = _RC_PRIME,
+) -> Any:  # -> ray.data.Dataset{id,label}
+    """Distributed randomized-contraction WCC (#844). Same {id,label} contract as
+    two_phase_wcc. No driver collect of the full graph; each round's contracted
+    edges + labels are checkpointed to parquet (lineage truncation = the Ray
+    streaming-executor deadlock fix). See spec
+    docs/superpowers/specs/2026-06-10-distributed-wcc-randomized-contraction-design.md
+    and arXiv:1802.09478.
+    """
+    import os
+    import random
+    import shutil
+    import tempfile
+
+    import polars as pl
+    import ray
+
+    if not ray.is_initialized():
+        ray.init(ignore_reinit_error=True, log_to_driver=False)
+    owns_scratch = scratch_dir is None
+    scratch = scratch_dir or tempfile.mkdtemp(prefix="gm_rc_wcc_")
+    os.makedirs(scratch, exist_ok=True)
+    npart = min(256, max(4, (os.cpu_count() or 16) * 4))
+    rng = random.Random(seed)
+    try:
+        edges = pairs_ds.map_batches(_rc_symmetrize_batch, batch_format="pyarrow")
+        edges = _rc_checkpoint(edges, scratch, "edges_0")
+
+        def _seed_label(b):
+            df = pl.from_arrow(b)
+            if df.height == 0:
+                return pl.DataFrame(schema={"orig_id": pl.Int64, "cur": pl.Int64}).to_arrow()
+            return df.select(orig_id="v").unique().with_columns(cur=pl.col("orig_id")).to_arrow()
+
+        label = edges.map_batches(_seed_label, batch_format="pyarrow")
+        label = _rc_checkpoint(label, scratch, "label_0")
+
+        cnt = edges.count()
+        i = 0
+        while cnt > 0 and i < max_rounds:
+            A, B = rng.randrange(1, p), rng.randrange(0, p)
+            rep = _rc_rep_distributed(edges, A, B, p, npart)
+            rep = _rc_checkpoint(rep, scratch, f"rep_{i + 1}")
+            edges = _rc_checkpoint(_rc_contract_distributed(edges, rep, npart), scratch, f"edges_{i + 1}")
+            label = _rc_checkpoint(_rc_compose_distributed(label, rep, npart), scratch, f"label_{i + 1}")
+            cnt = edges.count()
+            i += 1
+        if cnt > 0:
+            logger.warning(
+                "randomized_contraction_wcc: hit max_rounds=%d with %d residual "
+                "edges; returning best-effort labels (investigate).", max_rounds, cnt,
+            )
+        return _rc_normalize_distributed(label, npart)
+    finally:
+        if owns_scratch:
+            shutil.rmtree(scratch, ignore_errors=True)
+
+
 def materialize_cluster_dict(
     clusters_ds: Dataset,
     pairs_ds: Dataset,

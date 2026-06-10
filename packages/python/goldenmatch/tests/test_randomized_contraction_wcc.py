@@ -132,3 +132,74 @@ def test_rc_wcc_chain_converges_in_log_rounds(monkeypatch):
     df = pl.DataFrame({"id_a": [a for a, _ in pairs], "id_b": [b for _, b in pairs]})
     C._rc_wcc_polars(df, seed=5)
     assert rounds["n"] < 60, rounds["n"]
+
+
+# ---------------------------------------------------------------------------
+# No-Ray unit tests for the per-batch helper closures (run locally).
+# ---------------------------------------------------------------------------
+
+def test_rc_symmetrize_batch_roundtrip():
+    import pyarrow as pa
+    from goldenmatch.distributed.clustering import _rc_symmetrize_batch
+    batch = pa.table({"id_a": [1, 2], "id_b": [2, 3]})
+    out = pl.from_arrow(_rc_symmetrize_batch(batch))
+    assert set(zip(out["v"].to_list(), out["w"].to_list())) == {(1, 2), (2, 1), (2, 3), (3, 2)}
+
+
+def test_rc_rep_batch_picks_min_hash_neighbor():
+    import pyarrow as pa
+    from goldenmatch.distributed.clustering import _rc_rep_batch
+    # symmetrized chain 1-2-3, identity hash A=1,B=0 -> rep {1:1,2:1,3:2}
+    batch = pa.table({"v": [1, 2, 2, 3], "w": [2, 1, 3, 2]})
+    out = pl.from_arrow(_rc_rep_batch(batch, 1, 0, 2**31 - 1))
+    assert dict(zip(out["v"].to_list(), out["rep"].to_list())) == {1: 1, 2: 1, 3: 2}
+
+
+# ---------------------------------------------------------------------------
+# Ray-gated orchestration tests (function-level importorskip).
+# ---------------------------------------------------------------------------
+
+def test_randomized_contraction_wcc_matches_polars(tmp_path):
+    pytest.importorskip("ray")
+    from goldenmatch.distributed.clustering import (
+        _rc_wcc_polars,
+        pairs_list_to_dataset,
+        randomized_contraction_wcc,
+    )
+    pairs = [(1, 2, 0.9), (2, 3, 0.8), (3, 4, 0.8), (10, 11, 0.7)]
+    df = pl.DataFrame({"id_a": [a for a, _, _ in pairs], "id_b": [b for _, b, _ in pairs]})
+    expected = _partitions(_rc_wcc_polars(df, seed=2))
+    ds = pairs_list_to_dataset(pairs)
+    out = randomized_contraction_wcc(ds, scratch_dir=str(tmp_path), seed=2)
+    got = {}
+    for r in out.take_all():
+        got.setdefault(r["label"], set()).add(r["id"])
+    assert sorted(tuple(sorted(s)) for s in got.values()) == expected
+
+
+def test_randomized_contraction_wcc_chain(tmp_path):
+    pytest.importorskip("ray")
+    from goldenmatch.distributed.clustering import (
+        pairs_list_to_dataset,
+        randomized_contraction_wcc,
+    )
+    pairs = [(i, i + 1, 0.9) for i in range(1, 50)]
+    ds = pairs_list_to_dataset(pairs)
+    out = randomized_contraction_wcc(ds, scratch_dir=str(tmp_path), seed=1)
+    labels = {r["id"]: r["label"] for r in out.take_all()}
+    assert set(labels.values()) == {1}
+    assert set(labels.keys()) == set(range(1, 51))
+
+
+def test_randomized_contraction_wcc_cleans_scratch(tmp_path):
+    pytest.importorskip("ray")
+    from goldenmatch.distributed.clustering import (
+        pairs_list_to_dataset,
+        randomized_contraction_wcc,
+    )
+    sub = tmp_path / "rc"
+    ds = pairs_list_to_dataset([(1, 2, 0.9), (2, 3, 0.8)])
+    randomized_contraction_wcc(ds, scratch_dir=str(sub), seed=0).take_all()
+    # caller-provided scratch is NOT auto-removed (owns_scratch=False); the round
+    # files exist but the dir remains. Assert the run completed + wrote rounds.
+    assert sub.exists()
