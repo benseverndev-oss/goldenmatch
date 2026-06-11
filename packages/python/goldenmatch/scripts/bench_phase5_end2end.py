@@ -8,7 +8,13 @@ Requires:
 Run:
     python scripts/bench_phase5_end2end.py \
         --input bench-dataset-v1/bench_100000000.parquet \
-        --output bench-out/phase5_golden.parquet
+        --output bench-out/phase5_golden.parquet \
+        --config phase5-synth        # explicit config; skips auto-config
+
+Pass ``--config phase5-synth`` (or a config YAML path) to bypass auto-config:
+at 100M, auto-config does ~40 full-dataset sample reads and can commit a
+degenerate RED config that blocks on a low-cardinality field (-> billions of
+pairs). ``--allow-red-config 1`` is the escape hatch if you must auto-config.
 
 Kill criterion: total wall < 30 min.
 
@@ -30,6 +36,46 @@ import psutil
 KILL_WALL_SEC = 30 * 60  # 30 minutes
 
 
+def _build_config(spec: str | None):
+    """Build an explicit GoldenMatchConfig from --config, or None to auto-config.
+
+    ``phase5-synth`` is the built-in config for ``generate_phase5_dataset.py``
+    output (columns ``__row_id__, first_name, last_name, email, zip``; the rows
+    of one synthetic cluster share an identical ``last_name``). Blocking +
+    exact-matching on ``last_name`` gives blocks of exactly ``ROWS_PER_CLUSTER``
+    and a clean cross-partition pair set without the block-size blowup that
+    auto-config's RED config hits on this data. Any other value is a path to a
+    config YAML.
+    """
+    if spec is None:
+        return None
+    if spec == "phase5-synth":
+        from goldenmatch.config.schemas import (
+            BlockingConfig,
+            BlockingKeyConfig,
+            GoldenMatchConfig,
+            MatchkeyConfig,
+            MatchkeyField,
+        )
+
+        return GoldenMatchConfig(
+            matchkeys=[
+                MatchkeyConfig(
+                    name="lastname_exact",
+                    type="exact",
+                    fields=[MatchkeyField(field="last_name")],
+                ),
+            ],
+            blocking=BlockingConfig(
+                strategy="static",
+                keys=[BlockingKeyConfig(fields=["last_name"])],
+            ),
+        )
+    from goldenmatch.config.loader import load_config
+
+    return load_config(spec)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--input", type=str, required=True)
@@ -46,9 +92,34 @@ def main() -> int:
             "(node-local scratch silently breaks cross-node parquet reads)."
         ),
     )
+    ap.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help=(
+            "Explicit config (bypasses auto-config). Either 'phase5-synth' (a "
+            "built-in config for generate_phase5_dataset.py output: block + exact "
+            "match on last_name, which is unique per synthetic cluster -> small "
+            "blocks, no block-size blowup) or a path to a config YAML. Omit to "
+            "auto-configure. Auto-config is slow at 100M (~40 full-dataset sample "
+            "reads) and can commit a degenerate RED config on synthetic data, so "
+            "an explicit config is recommended for the benchmark."
+        ),
+    )
+    ap.add_argument(
+        "--allow-red-config",
+        choices=["0", "1"],
+        default="0",
+        help=(
+            "1 = pass allow_red_config=True (the post-#715 escape hatch): run a "
+            "config the auto-config controller flagged RED instead of raising "
+            "ControllerNotConfidentError. Ignored when --config is set."
+        ),
+    )
     args = ap.parse_args()
 
     block_shuffle = bool(int(args.block_shuffle))
+    allow_red_config = bool(int(args.allow_red_config))
 
     os.environ.setdefault("GOLDENMATCH_ENABLE_DISTRIBUTED_RAY", "1")
     os.environ.setdefault("GOLDENMATCH_DISTRIBUTED_PIPELINE", "2")
@@ -80,6 +151,8 @@ def main() -> int:
     from goldenmatch.distributed import read_partitioned
     from goldenmatch.distributed.pipeline import run_dedupe_pipeline_distributed
 
+    cfg = _build_config(args.config)
+
     proc = psutil.Process()
     baseline = proc.memory_info().rss
 
@@ -90,7 +163,9 @@ def main() -> int:
     t_pipe = time.perf_counter()
     result = run_dedupe_pipeline_distributed(
         ds,
+        config=cfg,
         confidence_required=False,
+        allow_red_config=allow_red_config,
         output_path=args.output,
     )
     pipe_wall = time.perf_counter() - t_pipe
@@ -127,6 +202,8 @@ def main() -> int:
     print(f"client_baseline_rss_gb={baseline / 1024**3:.2f}")
     print(f"clusters={len(result.clusters) if result else 0}")
     print(f"block_shuffle={block_shuffle}")
+    print(f"config_mode={args.config or 'auto'}")
+    print(f"allow_red_config={allow_red_config}")
     print(f"multi_member_cluster_count={multi_member_cluster_count}")
 
     if total >= args.kill_wall_sec:
