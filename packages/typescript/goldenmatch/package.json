@@ -17,7 +17,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "tsc --noEmit",
-    "clean": "rimraf dist"
+    "clean": "rimraf dist",
+    "sync:refdata": "node scripts/sync_ts_refdata.mjs"
   },
   "dependencies": {
     "commander": "^13.0.0"
