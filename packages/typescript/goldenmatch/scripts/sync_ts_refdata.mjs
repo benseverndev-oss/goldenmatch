@@ -1,6 +1,6 @@
 // Regenerates src/core/refdata/givenNameAliases.ts from the Python source of
 // truth. Run from packages/typescript/goldenmatch/. Node >= 18.
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -22,5 +22,6 @@ const body =
   "export const GIVEN_NAME_ALIASES = " +
   JSON.stringify(payload, null, 2) +
   " as const;\n";
+mkdirSync(dirname(OUT), { recursive: true });
 writeFileSync(OUT, body, "utf-8");
 console.log(`wrote ${OUT}`);
