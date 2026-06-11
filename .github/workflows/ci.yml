@@ -10,6 +10,15 @@ on:
 permissions:
   contents: read
 
+# Supersede in-flight runs for the same PR — a new push cancels the prior run
+# so the expensive matrix (pgrx/maturin/native/distributed lanes) isn't burning
+# runners on a commit nobody is waiting on. On `main` the group key falls back to
+# the unique run_id, so pushes to main are NEVER cancelled (each gets its own
+# group) and every main commit is fully verified.
+concurrency:
+  group: ci-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   # Path-filter: compute which areas of the monorepo changed so downstream
   # jobs only run when relevant. Doc-only PRs (README, wiki references,
@@ -17,6 +26,7 @@ jobs:
   # to re-run so the workflow itself stays under test.
   changes:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       # JSON array of changed Python package names (empty if none).
       python_pkgs: ${{ steps.set_python.outputs.pkgs }}
@@ -293,6 +303,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.python_pkgs != '[]'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -463,6 +474,7 @@ jobs:
     # each lane self-reports its prereq state.
     if: contains(needs.changes.outputs.python_pkgs, 'goldenmatch') || needs.changes.outputs.ci_workflow == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -547,6 +559,7 @@ jobs:
       needs.changes.outputs.python_goldenmatch_postgres == 'true' ||
       needs.changes.outputs.ci_workflow == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:16
@@ -596,6 +609,7 @@ jobs:
     needs: changes
     if: contains(needs.changes.outputs.python_pkgs, 'goldenmatch') || needs.changes.outputs.ci_workflow == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
@@ -643,6 +657,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.benchmark_runner == 'true' || needs.changes.outputs.ci_workflow == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     continue-on-error: true
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
@@ -709,6 +724,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.typescript == 'true' || needs.changes.outputs.ci_workflow == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
       - uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093  # v6.0.8
@@ -742,6 +758,7 @@ jobs:
     # tests via turbo — this job adds the Python+browser integration that
     # turbo can't cover.
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
       - uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093  # v6.0.8
@@ -779,6 +796,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci_workflow == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: packages/rust/extensions
@@ -835,6 +853,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci_workflow == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     defaults:
       run:
         working-directory: packages/rust/extensions
@@ -894,6 +913,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.native == 'true' || needs.changes.outputs.ci_workflow == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
@@ -964,6 +984,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.goldencheck_native == 'true' || needs.changes.outputs.ci_workflow == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
@@ -1020,6 +1041,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.analysis_native == 'true' || needs.changes.outputs.ci_workflow == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
@@ -1066,6 +1088,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.native == 'true' || needs.changes.outputs.ci_workflow == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
@@ -1109,6 +1132,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.native_flow == 'true' || needs.changes.outputs.ci_workflow == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
@@ -1155,6 +1179,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.native_flow == 'true' || needs.changes.outputs.ci_workflow == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
@@ -1199,6 +1224,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.goldenembed == 'true' || needs.changes.outputs.ci_workflow == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
@@ -1223,6 +1249,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.embed == 'true' || needs.changes.outputs.ci_workflow == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
@@ -1401,6 +1428,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.action == 'true' || needs.changes.outputs.ci_workflow == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
       - run: test -f packages/actions/goldencheck/action.yml && echo "action.yml present"
@@ -1422,6 +1450,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust_pgrx == 'true' || needs.changes.outputs.ci_workflow == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -1631,6 +1660,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.duckdb_extensions == 'true' || needs.changes.outputs.ci_workflow == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     defaults:
       run:
         working-directory: packages/rust/extensions/duckdb
@@ -1665,6 +1695,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.pyright_slice == 'true' || needs.changes.outputs.ci_workflow == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3

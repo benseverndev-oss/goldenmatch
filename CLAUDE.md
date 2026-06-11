@@ -10,7 +10,7 @@ Polyglot monorepo: `packages/{python,rust,typescript,dbt,actions}`. Per-package 
 
 ## CI (.github/workflows/ci.yml)
 - Pytest step uses `--timeout=120 --timeout-method=thread`. PR #66 hit a goldencheck pytest hang on Linux that didn't reproduce locally — timeout converts hangs into actionable failures.
-- Pytest is `continue-on-error: true` per matrix package. Per-package `--ignore` lists in the case statement mirror each package's pre-fold tuning (see each `packages/python/<pkg>/CLAUDE.md` for the canonical list).
+- Pytest is BLOCKING: the per-package pytest step has no `continue-on-error`, so a failing lane fails the `python` job and the `ci-required` gate (which fails on any upstream `result` that is not `success`/`skipped`). Per-package `--ignore` lists in the case statement mirror each package's pre-fold tuning (see each `packages/python/<pkg>/CLAUDE.md` for the canonical list). (History: pytest was once `continue-on-error: true`; that masked real regressions and was removed — do not reintroduce it.)
 - Single TS job (not matrix) — relies on `pnpm-lock.yaml` being committed. PPRL tests in `packages/typescript/goldenmatch/tests/unit/pprl-protocol.test.ts` need 30s/45s timeouts under the post-fold shared-runner CI (was 5s/15s on dedicated runners).
 
 ## CI path filters (post-2026-05-06, PR #89)
