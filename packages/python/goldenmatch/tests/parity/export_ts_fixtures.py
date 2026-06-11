@@ -88,10 +88,17 @@ def serialize_fixture(name: str, df: pl.DataFrame) -> dict:
 
 
 def main() -> None:
+    # Repo root = parents[5] of
+    # packages/python/goldenmatch/tests/parity/export_ts_fixtures.py.
+    # (Pre-fold this pointed at packages/goldenmatch-js/; the monorepo fold
+    # moved the TS package to packages/typescript/goldenmatch/ and left this
+    # exporter writing to a bogus nested path -- fixed here so the fixture is
+    # regen-able by the parity-freshness gate.)
     out = (
-        Path(__file__).parent.parent.parent
+        Path(__file__).resolve().parents[5]
         / "packages"
-        / "goldenmatch-js"
+        / "typescript"
+        / "goldenmatch"
         / "tests"
         / "parity"
         / "autoconfig-verify-fixtures.json"
