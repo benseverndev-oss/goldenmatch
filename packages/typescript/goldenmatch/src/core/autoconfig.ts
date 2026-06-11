@@ -24,6 +24,46 @@ import {
 import { profileRows, type ColumnProfile, type DatasetProfile } from "./profiler.js";
 import { detectDomain } from "./domain.js";
 import { preflight, ConfigValidationError } from "./autoconfigVerify.js";
+import { isAvailable as givenNamesAvailable } from "./refdata/givenNames.js";
+
+// Port of refdata.autoconfig_hooks._FIRST_NAME_RE (first-name branch only).
+const FIRST_NAME_RE =
+  /(^first.?name|^f.?name|^fname|given.?name|forename|^first$|^given$)/i;
+const STRING_SIM_SCORERS = new Set([
+  "jaro_winkler",
+  "levenshtein",
+  "token_sort",
+  "ensemble",
+  "dice",
+  "jaccard",
+]);
+
+/**
+ * Refdata refine (port of refine_matchkey_field, first-name branch only):
+ * swap a string-similarity scorer to given_name_aliased_jw for first-name-
+ * shaped columns when the alias pack is available and the column shape is a
+ * name. Returns the (possibly refined) scorer name. colType is the Python
+ * col_type key ("name" | "multi_name" | ...).
+ *
+ * Note: Python's gate also passes when col_type is None (`col_type is None or
+ * col_type in _NAME_TYPES`). Both TS call sites pass a concrete colType, so the
+ * None pass-through is intentionally omitted here.
+ */
+function refineFirstNameScorer(
+  columnName: string,
+  scorer: string,
+  colType: string,
+): string {
+  if (
+    STRING_SIM_SCORERS.has(scorer) &&
+    (colType === "name" || colType === "multi_name") &&
+    FIRST_NAME_RE.test(columnName) &&
+    givenNamesAvailable()
+  ) {
+    return "given_name_aliased_jw";
+  }
+  return scorer;
+}
 
 // ---------------------------------------------------------------------------
 // Options
@@ -282,7 +322,7 @@ function buildWeightedMatchkey(
     if (kind === "multi_name") {
       fuzzy.push({
         field: p.name,
-        scorer: "token_sort",
+        scorer: refineFirstNameScorer(p.name, "token_sort", "multi_name"),
         weight: 1.0,
         transforms: ["lowercase", "strip"],
       });
@@ -300,7 +340,7 @@ function buildWeightedMatchkey(
 
     fuzzy.push({
       field: p.name,
-      scorer,
+      scorer: refineFirstNameScorer(p.name, scorer, colType),
       weight,
       transforms: [...transforms],
     });
