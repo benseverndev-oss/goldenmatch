@@ -301,6 +301,23 @@ def _score_blocks_block_shuffle(
     This is the recall-complete candidate generation the legacy path lacks. The
     downstream clustering step must use a real distributed WCC (not
     ``local_cc_assignments``), since pairs now cross input-partition boundaries.
+
+    PERF NOTE (#844, measured on a real 5-node 100M run, 2026-06-11): the
+    ``_explode`` -> ``repartition`` is the e2e wall, not the WCC. ``_explode``
+    emits a copy of the FULL record per co-location key (#passes + #exact
+    matchkeys), so the shuffle moves ``N_keys x N_rows x full_record_width``;
+    at 100M that was ~27 GB and did not drain in the 30-min kill window. The
+    downstream ``_score`` only needs ``__row_id__`` + the config-referenced
+    fields and emits just ``{id_a, id_b, score}`` -- every other column is
+    shuffled for nothing. Recommended fix (deferred: hot path, needs the
+    backend-parity gate + a WIDE-record bench, per the repo's measure-first
+    rule): project ``df`` to ``{__row_id__} U columns referenced by
+    matchkeys/blocking/standardization`` BEFORE ``_attach_colocation_keys``, so
+    the shuffle carries only scoring-relevant fields (big win on wide records;
+    a no-op on the 5-column synthetic bench). Secondary: when an exact
+    matchkey's key duplicates a blocking pass's key (e.g. block + exact-match
+    the same field), the record is exploded twice into identical co-location
+    groups -- dedupe those to halve that record's shuffle copies.
     """
     cpu = os.cpu_count() or 16
     n_parts = min(256, max(4, cpu * 4))
