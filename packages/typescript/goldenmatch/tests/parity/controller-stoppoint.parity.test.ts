@@ -56,12 +56,17 @@ const VALID_STOP_REASONS: ReadonlySet<string> = new Set(Object.values(StopReason
  * here would require replicating a Python-specific import error, which is
  * out of scope for the port — these stay shape-only.
  *
- * ``clean_people`` and ``sparse_people`` rely on the multi-pass blocking
- * fallback whose iteration path also diverges; both keep loose shape parity.
+ * ``clean_people`` promoted to byte-equal in #857 (blocking parity restored:
+ * 0.5 exact gate + secondary-name passes).
+ * ``sparse_people`` still diverges on matchkeys (TS emits empty matchkeys;
+ * Python emits given_name_aliased_jw + name_freq_weighted_jw weighted MK) —
+ * scorer/matchkey divergence outside the scope of this blocking-parity task;
+ * stays loose shape.
  */
 const BYTE_EQUAL_DATASETS: ReadonlySet<string> = new Set<string>([
   "dirty_people",
   "mixed_blocking",
+  "clean_people",
 ]);
 
 function sortObject(obj: unknown): unknown {
