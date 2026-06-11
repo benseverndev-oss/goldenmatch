@@ -317,7 +317,13 @@ function buildWeightedMatchkey(
 
   for (const p of profiles) {
     const kind = classifyColumn(p);
-    if (p.nullRate > 0.5) continue;
+    // Python parity (#860): `build_matchkeys` applies NO null gate to fuzzy
+    // fields. High-null columns are kept here and demoted downstream via the
+    // avg-null threshold adjustment (in `autoConfigureRows`), not dropped. A
+    // `nullRate > 0.5` gate here diverged from Python and silently emptied the
+    // weighted matchkey on sparse name data (sparse_people: ~75% null
+    // first/last produced an empty MK instead of the given_name_aliased_jw +
+    // name_freq_weighted_jw weighted matchkey at threshold 0.75).
     const colType = colTypeFor(kind);
 
     if (kind === "multi_name") {
