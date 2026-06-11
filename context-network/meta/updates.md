@@ -2,6 +2,33 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-06-10 — Distributed WCC for #844: randomized contraction + recall-complete Phase 5 (#851/#852)
+- New nodes: [../architecture/distributed-wcc.md](../architecture/distributed-wcc.md)
+  + [../decisions/0011-distributed-wcc-randomized-contraction.md](../decisions/0011-distributed-wcc-randomized-contraction.md).
+- **Problem (#844):** the Phase-5 distributed pipeline under-merged at scale. PR
+  #845's opt-in block-shuffle co-locates duplicates but makes components cross
+  partitions, which the per-partition `local_cc_assignments` Union-Find
+  under-merges. The two existing distributed WCCs both die at 100M:
+  `two_phase_wcc` driver-collects + runs a cpython-loop UnionFind (head-wedge);
+  `distributed_wcc` deadlocks Ray's streaming executor on iterative joins.
+- **Fix (both specs SHIPPED):** Spec 1 (PR #851) = `randomized_contraction_wcc`
+  (Bögeholz–Brand–Todor 2018, arXiv:1802.09478) — relational, chain-robust,
+  O(log|V|) rounds, no driver UF, per-round parquet checkpoint to dodge the
+  deadlock; pure-Polars reference gated vs `scipy.csgraph`. Spec 2 (PR #852) =
+  wires it into `_run_phase5_pipeline` (block-shuffle on -> distributed WCC, off ->
+  `local_cc`; same predicate the scorer uses) via a new `algorithm` kwarg on
+  `build_clusters_distributed`; join + golden tail unchanged (shared contract).
+  Opt-in (`GOLDENMATCH_DISTRIBUTED_BLOCK_SHUFFLE=1`), **default unchanged**.
+- **Two un-locally-testable Ray Data join rules now recorded** (distinct-named keys
+  + `ReadParquet` inputs — both surfaced as `ArrowInvalid` on the CI ray lane).
+  The `distributed` job `timeout-minutes` went 20 -> 30 to fit the new blocking gate.
+- **Deferred (operator):** the binding multi-node 100M run + the default-flip (need
+  a BYO Ray cluster; `GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH` must be a `gs://` prefix).
+  Parallel to the [Sail tier](../architecture/sail-tier.md) (the Spark-Connect track
+  that retires Ray); whichever binds 100M first is go-forward. Mintlify scale page
+  (`docs-site/goldenmatch/backends-and-scale.mdx`) updated with the recall-complete
+  path.
+
 ## 2026-06-10 — publish-containers flake hardening (ghcr buildkit mirror, #846)
 - New decision: [../decisions/0010-publish-containers-ghcr-mirror.md](../decisions/0010-publish-containers-ghcr-mirror.md).
 - **Audit:** `publish-containers` went red ~1 run in 18 over 30 days (11 fails,
