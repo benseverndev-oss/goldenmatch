@@ -25,8 +25,12 @@ import { profileRows, type ColumnProfile, type DatasetProfile } from "./profiler
 import { detectDomain } from "./domain.js";
 import { preflight, ConfigValidationError } from "./autoconfigVerify.js";
 import { isAvailable as givenNamesAvailable } from "./refdata/givenNames.js";
+import { isAvailable as surnamesAvailable } from "./refdata/surnames.js";
 
-// Port of refdata.autoconfig_hooks._FIRST_NAME_RE (first-name branch only).
+// Port of refdata.autoconfig_hooks._LAST_NAME_RE.
+const LAST_NAME_RE =
+  /(^last.?name|^l.?name|^lname|surname|family.?name|^last$|^surname$|^family$)/i;
+// Port of refdata.autoconfig_hooks._FIRST_NAME_RE.
 const FIRST_NAME_RE =
   /(^first.?name|^f.?name|^fname|given.?name|forename|^first$|^given$)/i;
 const STRING_SIM_SCORERS = new Set([
@@ -39,28 +43,25 @@ const STRING_SIM_SCORERS = new Set([
 ]);
 
 /**
- * Refdata refine (port of refine_matchkey_field, first-name branch only):
- * swap a string-similarity scorer to given_name_aliased_jw for first-name-
- * shaped columns when the alias pack is available and the column shape is a
- * name. Returns the (possibly refined) scorer name. colType is the Python
- * col_type key ("name" | "multi_name" | ...).
+ * Refdata refine (port of refine_matchkey_field): swap a string-similarity
+ * scorer to a refdata-aware name scorer. Last-name is checked BEFORE first-name
+ * (mirrors Python's if/elif order). colType is the Python col_type key.
  *
- * Note: Python's gate also passes when col_type is None (`col_type is None or
- * col_type in _NAME_TYPES`). Both TS call sites pass a concrete colType, so the
- * None pass-through is intentionally omitted here.
+ * Note: Python's gate also passes when col_type is None; both TS call sites pass
+ * a concrete colType, so the None pass-through is intentionally omitted.
  */
-function refineFirstNameScorer(
+function refineNameScorer(
   columnName: string,
   scorer: string,
   colType: string,
 ): string {
-  if (
-    STRING_SIM_SCORERS.has(scorer) &&
-    (colType === "name" || colType === "multi_name") &&
-    FIRST_NAME_RE.test(columnName) &&
-    givenNamesAvailable()
-  ) {
-    return "given_name_aliased_jw";
+  if (STRING_SIM_SCORERS.has(scorer) && (colType === "name" || colType === "multi_name")) {
+    if (LAST_NAME_RE.test(columnName) && surnamesAvailable()) {
+      return "name_freq_weighted_jw";
+    }
+    if (FIRST_NAME_RE.test(columnName) && givenNamesAvailable()) {
+      return "given_name_aliased_jw";
+    }
   }
   return scorer;
 }
@@ -342,7 +343,7 @@ function buildWeightedMatchkey(
 
     fuzzy.push({
       field: p.name,
-      scorer: refineFirstNameScorer(p.name, scorer, colType),
+      scorer: refineNameScorer(p.name, scorer, colType),
       weight,
       transforms: [...transforms],
     });
