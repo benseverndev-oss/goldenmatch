@@ -49,6 +49,7 @@ jobs:
       distributed: ${{ steps.filter.outputs.distributed }}
       sail: ${{ steps.filter.outputs.sail }}
       readme_callouts: ${{ steps.filter.outputs.readme_callouts }}
+      ts_parity: ${{ steps.filter.outputs.ts_parity }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
       - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d  # v4.0.1
@@ -99,6 +100,18 @@ jobs:
               - 'pnpm-lock.yaml'
               - 'pnpm-workspace.yaml'
               - 'turbo.json'
+            ts_parity:
+              # TS parity-fixture staleness gate (#856): a Python behaviour
+              # change that is not mirrored into the committed TS fixtures must
+              # turn the ts_parity_freshness lane red. Trigger on the fixture
+              # producers (goldenmatch + goldenpipe Python), the committed
+              # fixtures, and the gate tooling itself.
+              - 'packages/python/goldenmatch/**'
+              - 'packages/python/goldenpipe/**'
+              - 'packages/typescript/goldenmatch/tests/parity/**'
+              - 'packages/typescript/goldenpipe/tests/fixtures/**'
+              - 'scripts/regen_ts_parity_fixtures.sh'
+              - 'scripts/check_ts_parity_freshness.py'
             web:
               - 'packages/python/goldenmatch/web/**'
               - 'packages/python/goldenmatch/goldenmatch/web/**'
@@ -1717,6 +1730,32 @@ jobs:
       - name: Verify READMEs are in sync with CHANGELOG callouts
         run: python scripts/sync_readme_callouts.py --check
 
+  ts_parity_freshness:
+    needs: changes
+    if: needs.changes.outputs.ts_parity == 'true' || needs.changes.outputs.ci_workflow == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      # Regenerate every committed TS parity fixture from the Python emitters,
+      # then assert the working tree still matches HEAD within a 4-decimal float
+      # tolerance. Closes the silent-drift hole (#856): a pure-Python behaviour
+      # change that is not mirrored into the committed TS fixtures turns this lane
+      # red, instead of the TS parity test staying green against a stale fixture.
+      # Two controller-execution fixtures are allowlisted in the checker
+      # (optional-dependency-sensitive; see scripts/check_ts_parity_freshness.py).
+      - name: Regenerate TS parity fixtures
+        run: PYTHON=.venv/bin/python bash scripts/regen_ts_parity_fixtures.sh
+      - name: Assert TS parity fixtures are fresh (float-tolerant)
+        run: .venv/bin/python scripts/check_ts_parity_freshness.py
+
   # Single required-status-check for branch protection. Branch ruleset
   # references `ci-required` (stable name) instead of the matrix-instance
   # check names (`python (goldenmatch)`, `rust_pgrx (15)`, ...) which
@@ -1754,6 +1793,7 @@ jobs:
       - sail
       - pyright
       - readme_callouts
+      - ts_parity_freshness
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 1
