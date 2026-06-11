@@ -60,6 +60,28 @@ goldenmatch dedupe big.csv --backend ray
 
 The Ray path short-circuits back to local parallel scoring below four large blocks, since the distribution overhead does not pay off for small workloads.
 
+## Distributed Phase 5 (100M+)
+
+At hundreds of millions of rows the pipeline runs fully distributed on a multi-node Ray cluster, keeping every stage as a Ray Dataset so the driver never holds the full graph. Enable it with `GOLDENMATCH_DISTRIBUTED_PIPELINE=2` and `GOLDENMATCH_ENABLE_DISTRIBUTED_RAY=1`, pointing `RAY_ADDRESS` at your cluster.
+
+By default, scoring runs per partition: two records are compared only if they land in the same arbitrary partition, so recall drops as the partition count rises. The **recall-complete path** fixes this. Setting `GOLDENMATCH_DISTRIBUTED_BLOCK_SHUFFLE=1` shuffles records by blocking key before scoring, so every record sharing a key is co-located. Clustering then switches automatically from per-partition Union-Find to a distributed connected-components pass that handles components spanning partitions.
+
+```bash
+export GOLDENMATCH_DISTRIBUTED_PIPELINE=2
+export GOLDENMATCH_ENABLE_DISTRIBUTED_RAY=1
+export GOLDENMATCH_DISTRIBUTED_BLOCK_SHUFFLE=1          # opt-in: recall-complete
+export GOLDENMATCH_DISTRIBUTED_WCC=randomized_contraction
+export GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH=gs://your-bucket/rc_scratch
+```
+
+The distributed connected-components algorithm is a randomized contraction (Bögeholz, Brand and Todor, 2018): relational, chain-robust, with no driver-side union-find and no per-vertex Python dictionary. Each round checkpoints its shrinking edge set to parquet, which keeps the Ray streaming executor from deadlocking on long iterative joins. Below 50M candidate pairs it uses driver-side `scipy` instead, which is correct and bounded at that scale.
+
+<Warning>
+  On a multi-node cluster, `GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH` must be shared storage (a `gs://` prefix). A node-local path is not readable by workers on other nodes, so the per-round parquet checkpoints would fail.
+</Warning>
+
+The recall-complete path is opt-in; the default per-partition path is unchanged. Cluster setup, the full env reference, and the benchmark live in the [distributed Ray cluster guide](https://github.com/benseverndev-oss/goldenmatch/blob/main/docs/distributed-ray-cluster-setup.md).
+
 <Note>
   Debug the prep-versus-kernel split for the bucket backend with `GOLDENMATCH_BUCKET_DEBUG=1`. It prints a per-bucket prep / kernel / post-filter timing breakdown. It is off by default, costs nothing, and does not change output.
 </Note>
