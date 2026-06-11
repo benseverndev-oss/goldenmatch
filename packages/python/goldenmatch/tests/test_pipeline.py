@@ -10,7 +10,42 @@ from goldenmatch.config.schemas import (
     MatchkeyField,
     OutputConfig,
 )
-from goldenmatch.core.pipeline import run_dedupe, run_match
+from goldenmatch.core.pipeline import _add_row_ids, run_dedupe, run_match
+
+
+class TestAddRowIds:
+    """#844: ``_add_row_ids`` must respect a pre-existing ``__row_id__``.
+
+    The auto-config v0 sample pipeline ran ``_add_row_ids`` on a 100M input
+    that already carried a global ``__row_id__`` (load-bearing for distributed
+    scoring — re-synthesizing per partition collides across partitions). The
+    unconditional ``with_row_index("__row_id__")`` raised polars
+    ``DuplicateError``, failing every auto-config iteration -> RED config.
+    """
+
+    def test_reuses_existing_row_id(self):
+        import polars as pl
+
+        lf = pl.LazyFrame({"__row_id__": [10, 20, 30], "name": ["a", "b", "c"]})
+        out = _add_row_ids(lf).collect()
+        # Reused, not re-synthesized to 0..n-1 (would-be DuplicateError before).
+        assert out["__row_id__"].to_list() == [10, 20, 30]
+        assert out["__row_id__"].dtype == pl.Int64
+
+    def test_reuses_existing_row_id_with_offset(self):
+        import polars as pl
+
+        lf = pl.LazyFrame({"__row_id__": [0, 1, 2], "name": ["a", "b", "c"]})
+        out = _add_row_ids(lf, offset=100).collect()
+        assert out["__row_id__"].to_list() == [100, 101, 102]
+
+    def test_synthesizes_when_absent(self):
+        import polars as pl
+
+        lf = pl.LazyFrame({"name": ["a", "b", "c"]})
+        out = _add_row_ids(lf).collect()
+        assert out["__row_id__"].to_list() == [0, 1, 2]
+        assert out["__row_id__"].dtype == pl.Int64
 
 
 class TestRunDedupe:

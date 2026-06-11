@@ -713,8 +713,19 @@ def _run_auto_suggest(df: pl.DataFrame, config: GoldenMatchConfig) -> None:
 
 
 def _add_row_ids(lf: pl.LazyFrame, offset: int = 0) -> pl.LazyFrame:
-    """Add __row_id__ column using with_row_index + offset."""
-    lf = lf.with_row_index("__row_id__")
+    """Add __row_id__ column using with_row_index + offset.
+
+    If the frame already carries ``__row_id__`` (a global id the caller wants
+    respected — e.g. a distributed hash-shuffled input, where re-synthesizing
+    ids per partition would collide across partitions; see #844), reuse it
+    instead of calling ``with_row_index`` again. Re-adding a column that already
+    exists raises polars ``DuplicateError`` — which is exactly what tripped the
+    auto-config v0 sample pipeline on a ``__row_id__``-carrying 100M input. The
+    offset still applies so reference/incremental callers keep their
+    target/reference id spaces disjoint.
+    """
+    if "__row_id__" not in lf.collect_schema().names():
+        lf = lf.with_row_index("__row_id__")
     if offset > 0:
         lf = lf.with_columns((pl.col("__row_id__") + offset).alias("__row_id__"))
     # Cast to Int64 for consistency
