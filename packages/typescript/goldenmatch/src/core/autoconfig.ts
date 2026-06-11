@@ -24,6 +24,47 @@ import {
 import { profileRows, type ColumnProfile, type DatasetProfile } from "./profiler.js";
 import { detectDomain } from "./domain.js";
 import { preflight, ConfigValidationError } from "./autoconfigVerify.js";
+import { isAvailable as givenNamesAvailable } from "./refdata/givenNames.js";
+import { isAvailable as surnamesAvailable } from "./refdata/surnames.js";
+
+// Port of refdata.autoconfig_hooks._LAST_NAME_RE.
+const LAST_NAME_RE =
+  /(^last.?name|^l.?name|^lname|surname|family.?name|^last$|^surname$|^family$)/i;
+// Port of refdata.autoconfig_hooks._FIRST_NAME_RE.
+const FIRST_NAME_RE =
+  /(^first.?name|^f.?name|^fname|given.?name|forename|^first$|^given$)/i;
+const STRING_SIM_SCORERS = new Set([
+  "jaro_winkler",
+  "levenshtein",
+  "token_sort",
+  "ensemble",
+  "dice",
+  "jaccard",
+]);
+
+/**
+ * Refdata refine (port of refine_matchkey_field): swap a string-similarity
+ * scorer to a refdata-aware name scorer. Last-name is checked BEFORE first-name
+ * (mirrors Python's if/elif order). colType is the Python col_type key.
+ *
+ * Note: Python's gate also passes when col_type is None; both TS call sites pass
+ * a concrete colType, so the None pass-through is intentionally omitted.
+ */
+function refineNameScorer(
+  columnName: string,
+  scorer: string,
+  colType: string,
+): string {
+  if (STRING_SIM_SCORERS.has(scorer) && (colType === "name" || colType === "multi_name")) {
+    if (LAST_NAME_RE.test(columnName) && surnamesAvailable()) {
+      return "name_freq_weighted_jw";
+    }
+    if (FIRST_NAME_RE.test(columnName) && givenNamesAvailable()) {
+      return "given_name_aliased_jw";
+    }
+  }
+  return scorer;
+}
 
 // ---------------------------------------------------------------------------
 // Options
@@ -282,6 +323,8 @@ function buildWeightedMatchkey(
     if (kind === "multi_name") {
       fuzzy.push({
         field: p.name,
+        // Python's multi_name branch hardcodes token_sort and does NOT call the
+        // refdata refine (it early-exits before the refine call); keep parity.
         scorer: "token_sort",
         weight: 1.0,
         transforms: ["lowercase", "strip"],
@@ -300,7 +343,7 @@ function buildWeightedMatchkey(
 
     fuzzy.push({
       field: p.name,
-      scorer,
+      scorer: refineNameScorer(p.name, scorer, colType),
       weight,
       transforms: [...transforms],
     });
@@ -334,20 +377,22 @@ function buildWeightedMatchkey(
 }
 
 function buildBlocking(profiles: readonly ColumnProfile[]): BlockingConfig {
-  // Python parity: prefer exact-eligible high-cardinality columns
-  // (email/phone/zip/identifier/year) with null_rate<=0.20, cardinality<0.95.
-  // Otherwise fall back to a name-based multi-pass blocking config.
+  // Python parity (Gap #1): exact-pool gates (null + cardinality) apply ONLY
+  // to exact candidates, NOT to name columns. Python DEFAULT_BLOCKING_MAX_RATIO=0.5.
   const MAX_NULL = 0.2;
+  const MAX_EXACT_CARD = 0.5; // Python DEFAULT_BLOCKING_MAX_RATIO
   const exactEligible: ColumnProfile[] = [];
   const nameCols: ColumnProfile[] = [];
 
   for (const p of profiles) {
-    if (p.nullRate > MAX_NULL) continue;
-    if (p.cardinalityRatio >= 0.95) continue;
     const kind = classifyColumn(p);
     if (kind === "email" || kind === "phone" || kind === "zip" || kind === "id" || kind === "year") {
-      exactEligible.push(p);
+      // exact pool: null + cardinality gated (Python applies BOTH only here)
+      if (p.nullRate <= MAX_NULL && p.cardinalityRatio <= MAX_EXACT_CARD) {
+        exactEligible.push(p);
+      }
     } else if (kind === "name") {
+      // name pool: NO null gate, NO cardinality gate (Python parity — required for sparse_people)
       nameCols.push(p);
     }
   }
@@ -370,17 +415,30 @@ function buildBlocking(profiles: readonly ColumnProfile[]): BlockingConfig {
   }
 
   if (nameCols.length > 0) {
-    const best = nameCols[0]!.name;
-    // Multi-pass mirroring Python's name-cols branch:
-    //   keys=[soundex], passes=[substring:0:5, soundex, token_sort+substring:0:8]
+    // Python parity (Gap #2): secondary-name passes added when >= 2 name columns.
+    // Python prefers a column matching strict _NAME_PATTERNS, else name_cols[0].
+    const bestName = nameCols[0]!.name;
+
+    let secondaryName: string | null = null;
+    if (nameCols.length >= 2) {
+      const sec = nameCols.find((p) => p.name !== bestName);
+      if (sec) secondaryName = sec.name;
+    }
+
+    const passes: BlockingKeyConfig[] = [
+      { fields: [bestName], transforms: ["lowercase", "substring:0:5"] },
+      { fields: [bestName], transforms: ["lowercase", "soundex"] },
+      { fields: [bestName], transforms: ["lowercase", "token_sort", "substring:0:8"] },
+    ];
+    if (secondaryName !== null) {
+      passes.push({ fields: [secondaryName], transforms: ["lowercase", "soundex"] });
+      passes.push({ fields: [secondaryName], transforms: ["lowercase", "substring:0:5"] });
+    }
+
     return makeBlockingConfig({
       strategy: "multi_pass",
-      keys: [{ fields: [best], transforms: ["lowercase", "soundex"] }],
-      passes: [
-        { fields: [best], transforms: ["lowercase", "substring:0:5"] },
-        { fields: [best], transforms: ["lowercase", "soundex"] },
-        { fields: [best], transforms: ["lowercase", "token_sort", "substring:0:8"] },
-      ],
+      keys: [{ fields: [bestName], transforms: ["lowercase", "soundex"] }],
+      passes,
       maxBlockSize: 1000,
       skipOversized: true,
     });
