@@ -41,11 +41,19 @@ def _build_config(spec: str | None):
 
     ``phase5-synth`` is the built-in config for ``generate_phase5_dataset.py``
     output (columns ``__row_id__, first_name, last_name, email, zip``; the rows
-    of one synthetic cluster share an identical ``last_name``). Blocking +
-    exact-matching on ``last_name`` gives blocks of exactly ``ROWS_PER_CLUSTER``
-    and a clean cross-partition pair set without the block-size blowup that
-    auto-config's RED config hits on this data. Any other value is a path to a
-    config YAML.
+    of one synthetic cluster share an identical ``last_name``). It blocks on
+    ``last_name`` (unique per cluster -> blocks of exactly ``ROWS_PER_CLUSTER``,
+    no block-size blowup) and scores with a WEIGHTED ``last_name`` matchkey
+    using the ``exact`` scorer.
+
+    Why weighted-with-exact-scorer rather than an ``exact`` matchkey: the
+    block-shuffle explode (``_attach_colocation_keys``) emits one full-record
+    copy per blocking pass AND per EXACT matchkey. Blocking + exact-matching the
+    same field would explode each record twice (2x the ~27 GB shuffle that is
+    the e2e wall, see the #844 PERF NOTE on ``_score_blocks_block_shuffle``). A
+    weighted matchkey contributes no extra explode key, so this stays 1x while
+    scoring identically (exact-agree on ``last_name`` -> 1.0 >= threshold). Any
+    other --config value is a path to a config YAML.
     """
     if spec is None:
         return None
@@ -61,9 +69,14 @@ def _build_config(spec: str | None):
         return GoldenMatchConfig(
             matchkeys=[
                 MatchkeyConfig(
-                    name="lastname_exact",
-                    type="exact",
-                    fields=[MatchkeyField(field="last_name")],
+                    name="lastname_weighted",
+                    type="weighted",
+                    threshold=0.9,
+                    fields=[
+                        MatchkeyField(
+                            field="last_name", scorer="exact", weight=1.0,
+                        ),
+                    ],
                 ),
             ],
             blocking=BlockingConfig(
