@@ -61,15 +61,34 @@ def _canon(pairs) -> set[tuple[int, int]]:
 # ── env gate ─────────────────────────────────────────────────────────
 
 
-def test_block_shuffle_disabled_by_default(monkeypatch):
+def test_block_shuffle_enabled_by_default(monkeypatch):
+    """#844 finish line: default flipped ON (recall-complete path validated e2e
+    at 100M). Explicit 0/off restores the legacy per-partition path."""
     from goldenmatch.distributed.scoring import _block_shuffle_enabled
 
     monkeypatch.delenv("GOLDENMATCH_DISTRIBUTED_BLOCK_SHUFFLE", raising=False)
-    assert _block_shuffle_enabled() is False
+    assert _block_shuffle_enabled() is True
     monkeypatch.setenv("GOLDENMATCH_DISTRIBUTED_BLOCK_SHUFFLE", "1")
     assert _block_shuffle_enabled() is True
     monkeypatch.setenv("GOLDENMATCH_DISTRIBUTED_BLOCK_SHUFFLE", "0")
     assert _block_shuffle_enabled() is False
+    monkeypatch.setenv("GOLDENMATCH_DISTRIBUTED_BLOCK_SHUFFLE", "off")
+    assert _block_shuffle_enabled() is False
+
+
+def test_wcc_scratch_guard_multinode_local_raises():
+    """#844 default-flip safety: a multi-node WCC run with a node-local scratch
+    path must fail loudly -- the cross-node per-round parquet reads would
+    otherwise silently break. Single-node or a shared (gs://) path is fine."""
+    import pytest
+    from goldenmatch.distributed.clustering import (
+        _assert_scratch_shared_if_multinode,
+    )
+
+    _assert_scratch_shared_if_multinode("/tmp/gm_rc", 1)            # single node ok
+    _assert_scratch_shared_if_multinode("gs://bucket/rc_scratch", 4)  # shared ok
+    with pytest.raises(ValueError, match="SHARED scratch"):
+        _assert_scratch_shared_if_multinode("/tmp/gm_rc", 4)        # multi + local
 
 
 def test_has_colocation_plan():

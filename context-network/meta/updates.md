@@ -2,6 +2,30 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-06-11 — #844 FINISH LINE: 100M validated, per-group scoring fixed, default flipped (#864/#867)
+- Updated [../architecture/distributed-wcc.md](../architecture/distributed-wcc.md)
+  + [../decisions/0011-distributed-wcc-randomized-contraction.md](../decisions/0011-distributed-wcc-randomized-contraction.md)
+  from "specs shipped, operator-deferred" to VALIDATED + default-flipped. **#844 CLOSED.**
+- **The binding 100M run is done.** Self-provisioned 5-node `e2-standard-16` GCP
+  cluster, 100M synthetic phase-5 dataset in GCS: full recall-complete e2e in
+  **554.5 s (9.2 min, under the 30-min kill), 20,000,000 clusters recovered
+  exactly, driver RSS 0.36 GB**, no head-wedge / no Ray deadlock. The WCC alone
+  cleared a 200M-edge graph in 266 s in isolation.
+- **The e2e wall was per-group scoring, NOT the WCC.** `_score_colocated_groups`
+  looped `group_by` + a full per-partition kernel call per ~5-row group (~20M
+  fixed-overhead calls at 100M; 0 of 64 score-tasks finished in 25 min). #864
+  vectorizes it — score the whole partition once (the `bucket` backend already
+  groups by the blocking key); parity-tested. That single change made the e2e viable.
+- **#864 (merged)** also fixed auto-config `DuplicateError: __row_id__` on a
+  `__row_id__`-carrying input (`_add_row_ids` guard) and gave the e2e bench an
+  explicit-config + `allow_red_config` path (it always auto-configured before,
+  which is slow + RED-degenerate at 100M).
+- **#867 (open, reviewable)** flips `GOLDENMATCH_DISTRIBUTED_BLOCK_SHUFFLE` default
+  `0→1` + adds `_assert_scratch_shared_if_multinode` (multi-node + node-local WCC
+  scratch → raises instead of silently diverging).
+- Deferred/optional: (b) project-to-scoring-columns-before-shuffle (a wide-record
+  shuffle win, not needed for viability).
+
 ## 2026-06-11 — TS parity: refdata name scorers + autoconfig blocking (#857, from the #856 audit)
 - Extended the parity workstream node
   [../planning/surface-hardening.md](../planning/surface-hardening.md):
