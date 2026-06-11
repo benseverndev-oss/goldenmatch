@@ -250,19 +250,35 @@ def _attach_colocation_keys(df: Any, config: GoldenMatchConfig) -> Any:
 def _score_colocated_groups(
     df: Any, config: GoldenMatchConfig,
 ) -> list[tuple[int, int, float]]:
-    """Score every co-located ``(__keyid__, __block_key__)`` group in this batch
-    via the narrow per-partition kernel. Returns ``list[(id_a, id_b, score)]``.
+    """Score the co-located records in this batch in a SINGLE vectorized pass.
+    Returns ``list[(id_a, id_b, score)]``.
 
-    The full config runs on each group, so a group co-located by one key may
-    over-emit pairs that "belong" to another key. That is harmless: Union-Find
-    is idempotent on duplicate edges, and every rule is COMPLETE in its own
-    co-located groups, so the union across all groups loses no true pair.
+    #844 (b): the original implementation looped
+    ``df.group_by([__keyid__, __block_key__])`` and ran the full per-partition
+    kernel ONCE PER GROUP -- ~20M fixed-overhead invocations at 100M (standardize
+    / compute_matchkeys / a ``.collect()`` per ~5-row group), which was THE e2e
+    wall (0/64 score-tasks finished in 25 min on the real run). It was also
+    redundant: the kernel's ``bucket`` backend already groups by the blocking key
+    internally. So drop the co-location columns, de-duplicate by ``__row_id__``
+    (a record can appear in this partition via several co-location keys that
+    hashed here), and score the whole partition ONCE.
+
+    Equivalence to the loop (parity-tested):
+      * Exact matchkeys are found by ``_score_partition_with_config``'s
+        whole-partition self-join; all records sharing an exact value are
+        co-located in this partition by construction, so the pair set is
+        identical to scoring each exact group separately.
+      * Weighted matchkeys are bucketed by the blocking config; every record
+        sharing a blocking key is co-located in this partition, so re-blocking
+        re-derives the same groups the loop scored.
+      * Over-emitted duplicate edges (a pair surfaced under more than one key)
+        remain harmless -- Union-Find is idempotent.
     """
     import copy
 
     from goldenmatch.core.pipeline import _score_partition_with_config
 
-    if df.height == 0:
+    if df.height < 2:
         return []
 
     if hasattr(config, "model_copy"):
@@ -271,16 +287,19 @@ def _score_colocated_groups(
         local_cfg = copy.deepcopy(config)
     local_cfg.backend = "bucket"
 
-    pairs: list[tuple[int, int, float]] = []
-    for _key, grp in df.group_by(["__keyid__", "__block_key__"]):
-        if grp.height < 2:
-            continue
-        rec = grp.drop(["__keyid__", "__block_key__"])
-        try:
-            pairs.extend(_score_partition_with_config(rec, local_cfg))
-        except Exception as e:
-            logger.warning("block-shuffle: group scoring failed: %s", e)
-    return pairs
+    rec = df.drop(["__keyid__", "__block_key__"])
+    # A record is exploded once per co-location key; several of its copies can
+    # hash to this partition. Keep one per global __row_id__ so the kernel sees
+    # each logical record once (else the self-join double-counts it in a bucket).
+    if "__row_id__" in rec.columns:
+        rec = rec.unique(subset=["__row_id__"], keep="any")
+    if rec.height < 2:
+        return []
+    try:
+        return _score_partition_with_config(rec, local_cfg)
+    except Exception as e:
+        logger.warning("block-shuffle: partition scoring failed: %s", e)
+        return []
 
 
 def _score_blocks_block_shuffle(
@@ -301,6 +320,28 @@ def _score_blocks_block_shuffle(
     This is the recall-complete candidate generation the legacy path lacks. The
     downstream clustering step must use a real distributed WCC (not
     ``local_cc_assignments``), since pairs now cross input-partition boundaries.
+
+    PERF NOTE (#844, measured on a real 5-node 100M run, 2026-06-11): this path
+    is the e2e wall, NOT the WCC (the WCC clears 200M edges in 266s in
+    isolation). TWO costs:
+
+    1. PER-GROUP SCORING -- FIXED. ``_score_colocated_groups`` used to loop
+       ``df.group_by([__keyid__, __block_key__])`` and run the full kernel ONCE
+       PER GROUP (~20M fixed-overhead invocations at 100M; 0/64 score-tasks
+       finished in 25 min). It now scores the whole partition in one vectorized
+       pass -- the bucket backend already groups by the blocking key internally,
+       so the loop was redundant. See ``_score_colocated_groups``.
+
+    2. FULL-RECORD SHUFFLE -- still open (secondary). ``_explode`` emits a copy
+       of the FULL record per co-location key (#passes + #exact matchkeys), so
+       the shuffle moves ``N_keys x N_rows x full_record_width`` (~13-27 GB at
+       100M). ``_score`` only needs ``__row_id__`` + config-referenced fields.
+       Fix (deferred behind the backend-parity gate + a wide-record bench):
+       project ``df`` to ``{__row_id__} U columns referenced by
+       matchkeys/blocking/standardization`` BEFORE ``_attach_colocation_keys``
+       (big win on wide records). Secondary: dedupe the explode when an exact
+       matchkey's key equals a blocking pass's key (block + exact-match the same
+       field doubles the copies).
     """
     cpu = os.cpu_count() or 16
     n_parts = min(256, max(4, cpu * 4))

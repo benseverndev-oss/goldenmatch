@@ -142,3 +142,67 @@ def test_block_shuffle_recovers_cross_partition_pairs():
     found = _canon(_score_colocated_groups(colocated, cfg))
     assert (0, 1) in found
     assert (2, 3) in found
+
+
+# ── (b) vectorization parity ─────────────────────────────────────────
+
+
+def _old_per_group_score(df, config):
+    """The pre-#844(b) per-(__keyid__,__block_key__)-group loop, inlined so the
+    new single-pass _score_colocated_groups can be proven to emit the identical
+    pair set."""
+    from goldenmatch.core.pipeline import _score_partition_with_config
+
+    local = config.model_copy()
+    local.backend = "bucket"
+    pairs = []
+    for _k, grp in df.group_by(["__keyid__", "__block_key__"]):
+        if grp.height < 2:
+            continue
+        rec = grp.drop(["__keyid__", "__block_key__"])
+        pairs.extend(_score_partition_with_config(rec, local))
+    return pairs
+
+
+def test_score_colocated_groups_parity_with_per_group_loop():
+    """#844 (b): the vectorized single-pass _score_colocated_groups emits the
+    SAME canonical pair set as the old per-group loop, on a config exercising a
+    blocking pass + an EXACT matchkey + a WEIGHTED matchkey, with records that
+    co-locate under more than one key (so the explode puts a record in several
+    co-location groups). Guards the equivalence the rewrite relies on."""
+    from goldenmatch.distributed.scoring import (
+        _attach_colocation_keys,
+        _score_colocated_groups,
+    )
+
+    cfg = GoldenMatchConfig(
+        matchkeys=[
+            MatchkeyConfig(
+                name="email_exact", type="exact",
+                fields=[MatchkeyField(field="email")],
+            ),
+            MatchkeyConfig(
+                name="lastname_fuzzy", type="weighted", threshold=0.5,
+                fields=[MatchkeyField(field="last_name", scorer="jaro_winkler", weight=1.0)],
+            ),
+        ],
+        blocking=BlockingConfig(strategy="static", keys=[BlockingKeyConfig(fields=["last_name"])]),
+        backend="bucket",
+    )
+    # 0,1 share surname Smith + email a@x; 4 also shares email a@x (diff surname
+    # Lee); 2,3 share surname Jones. So records 0/1/4 co-locate by email AND
+    # 0/1 (and 4/5) co-locate by surname -- a record lands in multiple groups.
+    df = pl.DataFrame({
+        "__row_id__": [0, 1, 2, 3, 4, 5],
+        "last_name":  ["Smith", "Smith", "Jones", "Jones", "Lee", "Lee"],
+        "email":      ["a@x", "a@x", "b@y", "c@z", "a@x", "d@w"],
+    })
+    colocated = _attach_colocation_keys(df, cfg)
+
+    new_pairs = _canon(_score_colocated_groups(colocated, cfg))
+    old_pairs = _canon(_old_per_group_score(colocated, cfg))
+
+    assert new_pairs == old_pairs, (new_pairs, old_pairs)
+    # Sanity: both the exact-email and weighted-surname rules contributed.
+    assert {(0, 1), (0, 4), (1, 4)}.issubset(new_pairs)  # exact email a@x
+    assert (2, 3) in new_pairs                            # weighted surname Jones
