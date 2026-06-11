@@ -62,6 +62,7 @@ def _build_config(spec: str | None):
             BlockingConfig,
             BlockingKeyConfig,
             GoldenMatchConfig,
+            GoldenRulesConfig,
             MatchkeyConfig,
             MatchkeyField,
         )
@@ -83,6 +84,9 @@ def _build_config(spec: str | None):
                 strategy="static",
                 keys=[BlockingKeyConfig(fields=["last_name"])],
             ),
+            # golden survivorship: the pipeline builds GoldenRulesConfig() when
+            # this is None, which fails validation (needs default_strategy).
+            golden_rules=GoldenRulesConfig(default_strategy="first_non_null"),
         )
     from goldenmatch.config.loader import load_config
 
