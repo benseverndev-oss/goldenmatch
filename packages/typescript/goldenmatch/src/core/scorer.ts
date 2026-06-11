@@ -20,6 +20,7 @@ import { pairKey } from "./cluster.js";
 import { applyTransforms, soundex } from "./transforms.js";
 import { applyNegativeEvidence } from "./autoconfigNegativeEvidence.js";
 import { areEquivalent } from "./refdata/givenNames.js";
+import { isAvailable as surnamesAvailable, surnameRank, surnameIdf } from "./refdata/surnames.js";
 
 // ---------------------------------------------------------------------------
 // Helper: coerce unknown to string | null
@@ -428,6 +429,22 @@ export function scoreField(
       // Alias-aware exact bonus: known forms of the same name -> 1.0,
       // else plain Jaro-Winkler. Mirrors Python GivenNameAliasedJW.score_pair.
       return areEquivalent(valA, valB) ? 1.0 : jaroWinkler(valA, valB);
+    case "name_freq_weighted_jw": {
+      // Jaro-Winkler modulated by census surname IDF in the borderline zone.
+      // Mirrors Python NameFreqWeightedJW.score_pair.
+      const jw = jaroWinkler(valA, valB);
+      if (jw >= 0.95 || jw < 0.7) return jw;
+      if (!surnamesAvailable()) return jw;
+      // OOV gate: a name absent from the table falls back to plain JW (a typo
+      // of a common name shouldn't get credit-by-rarity).
+      if (surnameRank(valA) === null || surnameRank(valB) === null) return jw;
+      const idfA = surnameIdf(valA);
+      const idfB = surnameIdf(valB);
+      if (idfA === null || idfB === null) return jw;
+      const idf = (idfA + idfB) / 2;
+      const weight = 0.6 + 0.4 * idf;
+      return jw * weight;
+    }
     default:
       throw new Error(`Unknown scorer: ${JSON.stringify(scorer)}`);
   }
