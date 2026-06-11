@@ -157,7 +157,14 @@ def main() -> int:
     # The pipeline does not materialise clusters on the driver (intentionally);
     # a parquet scan is the only way to get a multi_member_cluster_count without
     # introducing a take_all that would wedge the driver.
-    golden_out = str(args.out.parent / "phase5_simulated_golden")
+    #
+    # PER-LEG dir derived from the --out stem: the baseline (--block-shuffle 0)
+    # and recall-complete (--block-shuffle 1) legs use DIFFERENT --out files, so
+    # this keeps their golden in separate dirs. Ray write_parquet appends
+    # UUID-named part files without clearing, so a SHARED dir would let the
+    # recall count include the baseline's golden and inflate the recall-vs-
+    # baseline comparison (the whole point of the two-leg gate).
+    golden_out = str(args.out.parent / f"{args.out.stem}_golden")
 
     # The pipeline auto-configures from the Ray Dataset itself; no
     # explicit config arg accepted. confidence_required=False keeps the

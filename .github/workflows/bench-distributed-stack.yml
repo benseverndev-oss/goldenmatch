@@ -744,8 +744,15 @@ jobs:
           print(f"baseline multi_member_cluster_count : {b}")
           print(f"recall   multi_member_cluster_count : {r}")
           if b is None or r is None:
-              print("WARN: one or both counts are None (golden write may have been skipped)")
-              sys.exit(0)
+              # On the sim leg golden is ALWAYS expected to be written, so a None
+              # count is a count-MECHANISM failure (golden dir missing / scan
+              # raised), not a legitimate "no signal" -- fail the gate rather than
+              # let a broken count pass silently.
+              print(
+                  f"FAIL: a count is None (baseline={b}, recall={r}); the golden "
+                  "write or parquet scan failed -- the recall gate can't run."
+              )
+              sys.exit(1)
           if r <= b:
               print(
                   f"FAIL: recall-complete ({r}) <= baseline ({b}). "
