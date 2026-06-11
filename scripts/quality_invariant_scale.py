@@ -200,20 +200,32 @@ def _generate_realistic(n_rows: int, seed: int = 0, corruption: str = "light"
                         ) -> tuple[pl.DataFrame, np.ndarray]:
     n_rows = (n_rows // ROWS_PER_CLUSTER) * ROWS_PER_CLUSTER
     n_clusters = n_rows // ROWS_PER_CLUSTER
-    rng = np.random.default_rng(seed)
 
-    # Per-cluster canonical fields.
+    # Each random field draws from its OWN independent stream (one draw per
+    # stream) so the first k values of an N-sized draw equal a k-sized draw:
+    # prefix stability. A single shared rng consumed sequentially is NOT
+    # prefix-stable — each later field's start state depends on n_clusters, so
+    # row i's street/city/year/typo would differ between a 1K and a 100M dataset
+    # and the smaller rung would not be an exact prefix of the larger. That
+    # prefix property is what lets the ladder attribute cross-rung F1 deltas to
+    # scale rather than to data shape (#510).
+    def _field_rng(key: int):
+        return np.random.default_rng(np.random.SeedSequence([seed, 0xA11CE, key]))
+
+    # Per-cluster canonical fields. Hash-derived names + zip are already a pure
+    # function of (seed, cid) so they're prefix-stable as-is; the rng-drawn
+    # fields each get a dedicated stream.
     first_canon = [_hash_name("F", seed, c) for c in range(n_clusters)]
     last_canon = [_hash_name("L", seed, c) for c in range(n_clusters)]
-    street_num = rng.integers(1, 9999, n_clusters)
-    street_idx = rng.integers(0, len(_STREETS), n_clusters)
+    street_num = _field_rng(0).integers(1, 9999, n_clusters)
+    street_idx = _field_rng(1).integers(0, len(_STREETS), n_clusters)
     address_canon = [f"{street_num[c]} {_STREETS[street_idx[c]]}" for c in range(n_clusters)]
-    city_canon = [_CITIES[i] for i in rng.integers(0, len(_CITIES), n_clusters)]
+    city_canon = [_CITIES[i] for i in _field_rng(2).integers(0, len(_CITIES), n_clusters)]
     zip_canon = [f"{c % 100000:05d}" for c in range(n_clusters)]
-    year_canon = rng.integers(1940, 2005, n_clusters).astype(str).tolist()
+    year_canon = _field_rng(3).integers(1940, 2005, n_clusters).astype(str).tolist()
 
     cids = np.repeat(np.arange(n_clusters, dtype=np.int64), ROWS_PER_CLUSTER)
-    typo = rng.random(n_rows) < TYPO_RATE
+    typo = _field_rng(4).random(n_rows) < TYPO_RATE
 
     first_rows = [first_canon[c] for c in cids]
     last_rows = [last_canon[c] for c in cids]
