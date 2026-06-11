@@ -19,6 +19,7 @@ import { makeScoredPair } from "./types.js";
 import { pairKey } from "./cluster.js";
 import { applyTransforms, soundex } from "./transforms.js";
 import { applyNegativeEvidence } from "./autoconfigNegativeEvidence.js";
+import { areEquivalent } from "./refdata/givenNames.js";
 
 // ---------------------------------------------------------------------------
 // Helper: coerce unknown to string | null
@@ -423,6 +424,10 @@ export function scoreField(
       // record string; at the field level both behave identically (embed the
       // field value, cosine-compare). See setSyncEmbedder.
       return embeddingScore(valA, valB);
+    case "given_name_aliased_jw":
+      // Alias-aware exact bonus: known forms of the same name -> 1.0,
+      // else plain Jaro-Winkler. Mirrors Python GivenNameAliasedJW.score_pair.
+      return areEquivalent(valA, valB) ? 1.0 : jaroWinkler(valA, valB);
     default:
       throw new Error(`Unknown scorer: ${JSON.stringify(scorer)}`);
   }

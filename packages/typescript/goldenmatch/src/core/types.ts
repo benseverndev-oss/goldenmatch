@@ -423,6 +423,7 @@ export const VALID_SCORERS = new Set([
   "ensemble",
   "dice",
   "jaccard",
+  "given_name_aliased_jw",
 ] as const);
 
 export const VALID_TRANSFORMS = new Set([
