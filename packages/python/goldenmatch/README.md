@@ -7,7 +7,7 @@
 
 *Zero-config entity resolution for Python & TypeScript — with a self-verifying auto-config that tells you when it's unsure.*
 
-**⚡ Scales from a CSV on your laptop to 100M+ rows on a Ray cluster — verified: 100,000,000 records deduped in 213 s with a 0.30 GB driver footprint.** ([how →](#scaling-to-100m))
+**⚡ Scales from a CSV on your laptop to 100M+ rows on a Ray cluster — verified: 100,000,000 records deduped recall-complete (correct across any partitioning) in 9.2 min, with a 0.36 GB driver footprint.** ([how →](#scaling-to-100m))
 
 <br>
 
@@ -1058,17 +1058,27 @@ goldenmatch watch --table customers --connection-string "$DATABASE_URL" --interv
 
 GoldenMatch runs the same matching policy from a CSV on your laptop up to 100M+
 rows on a [Ray](https://www.ray.io/) cluster. **Verified:** a full
-**100,000,000-row** dedupe in **213 s** on a 4-worker `e2-standard-16` cluster
-(64 worker CPU) producing **20,000,000 golden records**, with the driver process
-peaking at **0.30 GB RSS**.
+**100,000,000-row** dedupe in **9.2 min** (554 s) on a 5-node `e2-standard-16`
+cluster (80 CPU) producing **20,000,000 golden records recovered exactly**, with
+the driver process peaking at **0.36 GB RSS**.
 
-The distributed pipeline is **driver-collect-free** — every stage runs on the
-workers and nothing funnels back to a single node, which is what makes it scale:
+The default distributed path is **recall-complete** (#844): a blocking-key shuffle
+co-locates records that should match, then a distributed randomized-contraction
+WCC merges clusters that span input partitions — so the result is correct *no
+matter how the input is partitioned*. The whole pipeline is **driver-collect-free**
+(nothing funnels back to a single node):
 
 ```
-score  ->  per-partition local connected-components  ->  distributed join
-       ->  distributed golden build  ->  distributed write
+block-shuffle scoring  ->  distributed WCC (randomized contraction)
+  ->  distributed join  ->  distributed golden build  ->  distributed write
 ```
+
+> **Faster per-partition path:** set `GOLDENMATCH_DISTRIBUTED_BLOCK_SHUFFLE=0` to
+> use `score -> per-partition local connected-components -> ...` instead. It is
+> faster (a 4-worker run clocked ~213 s, 0.30 GB driver) but only correct when
+> each cluster's duplicates already land in the same input partition (e.g. the
+> input is sorted by a blocking key); it under-merges otherwise — which is why
+> recall-complete is now the default.
 
 **Run it:**
 
@@ -1088,6 +1098,10 @@ score  ->  per-partition local connected-components  ->  distributed join
    export GOLDENMATCH_DISTRIBUTED_PIPELINE=2
    export GOLDENMATCH_ENABLE_DISTRIBUTED_RAY=1
    export RAY_ADDRESS=auto
+   # recall-complete is the default; on a MULTI-NODE cluster the WCC checkpoints
+   # each round to a SHARED path -- a node-local path silently breaks the
+   # cross-node parquet reads (the run now fails loudly if you forget):
+   export GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH=gs://<bucket>/rc_scratch
    ```
 
 - **Config:** [`configs/distributed-100m.yaml`](configs/distributed-100m.yaml) (matching policy + the full recipe).
