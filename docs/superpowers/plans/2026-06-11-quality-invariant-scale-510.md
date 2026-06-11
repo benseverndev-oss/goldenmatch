@@ -329,9 +329,22 @@ def _generate_realistic(n_rows: int, seed: int = 0, corruption: str = "light"
     n_clusters = n_rows // ROWS_PER_CLUSTER
     rng = np.random.default_rng(seed)
 
-    # ... (canonical-field block UNCHANGED: first_canon, last_canon, street_num,
-    #      street_idx, address_canon, city_canon, zip_canon, year_canon, cids,
-    #      typo, first_rows, last_rows, addr_rows, city_rows, zip_rows, year_rows) ...
+    # CORRECTION (applied during impl): the canonical block must ALSO be made
+    # prefix-stable. The original used one shared `rng = default_rng(seed)`
+    # consumed sequentially across street_num/street_idx/city/year/typo, so each
+    # later field's start state depends on n_clusters -> row i differs between a
+    # 1K and a 100M dataset and the prefix-stability test fails. Give each
+    # rng-drawn field its own one-shot stream instead:
+    #   def _field_rng(key): return np.random.default_rng(
+    #       np.random.SeedSequence([seed, 0xA11CE, key]))
+    #   street_num = _field_rng(0).integers(1, 9999, n_clusters)
+    #   street_idx = _field_rng(1).integers(0, len(_STREETS), n_clusters)
+    #   city_canon = [_CITIES[i] for i in _field_rng(2).integers(0, len(_CITIES), n_clusters)]
+    #   year_canon = _field_rng(3).integers(1940, 2005, n_clusters).astype(str).tolist()
+    #   typo       = _field_rng(4).random(n_rows) < TYPO_RATE
+    # first_canon/last_canon/zip_canon/cids are pure functions of (seed, cid) and
+    # stay as-is. (test_generate_light_is_unchanged_baseline still holds: it
+    # compares default-vs-light at the SAME N, both on the new generation.)
 
     # Same 'a' -> '@' typo on first_name (baseline noise, all corruption levels).
     first_with_typo = [f.replace("a", "@") if t else f for f, t in zip(first_rows, typo)]
