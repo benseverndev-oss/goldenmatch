@@ -288,3 +288,26 @@ def test_randomized_contraction_wcc_default_scratch_consumable():
     labels = {r["id"]: r["label"] for r in out.take_all()}
     assert set(labels.values()) == {1}
     assert set(labels.keys()) == {1, 2, 3}
+
+
+def test_build_clusters_distributed_algorithm_kwarg_overrides_env(monkeypatch, caplog, tmp_path):
+    pytest.importorskip("ray")
+    import logging  # noqa: PLC0415
+
+    from goldenmatch.distributed.clustering import (  # noqa: PLC0415
+        build_clusters_distributed,
+        pairs_list_to_dataset,
+    )
+    # Env selector says two_phase; the kwarg must override to randomized_contraction.
+    monkeypatch.setenv("GOLDENMATCH_DISTRIBUTED_WCC", "two_phase")
+    monkeypatch.setenv("GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD", "0")  # force the WCC path
+    monkeypatch.setenv("GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH", str(tmp_path))
+    ds = pairs_list_to_dataset([(1, 2, 0.9), (2, 3, 0.85), (5, 6, 0.95)])
+    with caplog.at_level(logging.INFO):
+        out = build_clusters_distributed(
+            ds, all_ids=[1, 2, 3, 5, 6], algorithm="randomized_contraction",
+        )
+    msgs = [r.message.lower() for r in caplog.records]
+    assert any("randomized_contraction" in m for m in msgs), msgs
+    rows = {r["member_id"]: r["cluster_size"] for r in out.take_all()}
+    assert rows[1] == 3 and rows[5] == 2

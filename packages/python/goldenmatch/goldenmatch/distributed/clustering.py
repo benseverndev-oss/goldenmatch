@@ -140,10 +140,14 @@ _RC_PRIME = 2**31 - 1
 def _wcc_algorithm() -> str:
     """Read GOLDENMATCH_DISTRIBUTED_WCC env var (default 'two_phase').
 
-    NOTE: the at-scale pipeline (``GOLDENMATCH_DISTRIBUTED_PIPELINE=2``) does NOT
-    route through this function -- it uses ``local_cc_assignments`` directly,
-    which has no driver collect and is what scales to 100M. This selector only
-    governs ``build_clusters_distributed``'s own callers, where 'two_phase'
+    NOTE: the at-scale pipeline (``GOLDENMATCH_DISTRIBUTED_PIPELINE=2``) uses
+    ``local_cc_assignments`` directly on the DEFAULT (per-partition) path, which
+    has no driver collect; only when the block-shuffle recall-complete path is
+    active (#844 Spec 2) does it route through ``build_clusters_distributed``, and
+    there it passes the ``algorithm`` kwarg explicitly -- so this env selector is
+    NOT consulted on the pipeline path either way. This selector only governs
+    ``build_clusters_distributed``'s OTHER callers (with no ``algorithm`` kwarg),
+    where 'two_phase'
     stays the default (Sem Sinchenko recommendation; partition-sensitive but
     correct). 'pointer_jump' (``distributed_wcc``) is OPT-IN only -- its
     iterative ``Dataset.join`` loop can deadlock Ray's streaming executor at
@@ -192,6 +196,7 @@ def build_clusters_distributed(
     weak_cluster_threshold: float = 0.3,
     convergence_max_iterations: int = 30,
     force_label_propagation: bool = False,
+    algorithm: str | None = None,
 ) -> Dataset:
     """Distributed clustering. Returns a Ray Dataset of cluster assignments.
 
@@ -206,6 +211,11 @@ def build_clusters_distributed(
         on non-convergence.
 
     Override threshold via env var GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD.
+
+    ``algorithm`` (keyword-only) overrides the GOLDENMATCH_DISTRIBUTED_WCC env
+    selector for this call (e.g. "randomized_contraction"); None = env default.
+    Only affects the at/above-threshold WCC path; below the threshold the route
+    is scipy regardless.
 
     ``all_ids`` is the full id universe (incl. isolated singletons). Pass
     ``None`` (default) for the golden scale path: only multi-member clusters
@@ -233,7 +243,11 @@ def build_clusters_distributed(
             already_sized=True,
         )
 
-    algorithm = _wcc_algorithm() if not force_label_propagation else "label_propagation"
+    # Caller-supplied algorithm wins (the pipeline passes "randomized_contraction"
+    # so the at-scale path can't route to two_phase, which head-wedges at 100M);
+    # otherwise the env selector / force_label_propagation default applies.
+    if algorithm is None:
+        algorithm = _wcc_algorithm() if not force_label_propagation else "label_propagation"
 
     if algorithm == "label_propagation":
         logger.info(

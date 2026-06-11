@@ -461,12 +461,19 @@ jobs:
             --pattern "bench_100000000.parquet" \
             --dir bench-dataset/
           ls -lh bench-dataset/
-      - name: Run Phase 5 100M bench
+      - name: Run Phase 5 100M bench (recall-complete)
+        # recall-complete leg: block-shuffle=1 routes clustering through the
+        # randomized-contraction WCC (cross-partition merge). Requires:
+        #   RAY_ADDRESS secret  -- pre-provisioned multi-node Ray cluster
+        #   GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH secret  -- must be gs://<bucket>/rc_scratch
+        #     (a node-local scratch path silently breaks cross-node parquet reads
+        #      in the WCC per-round checkpoint; GCS is load-bearing here)
         working-directory: packages/python/goldenmatch
         env:
           RAY_ADDRESS: ${{ secrets.RAY_ADDRESS }}
           GOLDENMATCH_ENABLE_DISTRIBUTED_RAY: "1"
           GOLDENMATCH_DISTRIBUTED_PIPELINE: "2"
+          GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH: ${{ secrets.GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH }}
         run: |
           set -o pipefail
           mkdir -p bench-out
@@ -475,6 +482,7 @@ jobs:
           python scripts/bench_phase5_end2end.py \
             --input "$INPUT" \
             --output bench-out/phase5_golden.parquet \
+            --block-shuffle 1 \
             2>&1 | tee bench-out/phase5_end2end.log
           echo '## bench-phase5-end2end results' >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
@@ -691,7 +699,7 @@ jobs:
               --object-store-memory=8000000000
           done
           ray status
-      - name: Run Phase 5 streaming bench
+      - name: Run Phase 5 streaming bench (baseline, block-shuffle=0)
         working-directory: packages/python/goldenmatch
         env:
           GOLDENMATCH_DISTRIBUTED_PIPELINE: "2"
@@ -704,7 +712,57 @@ jobs:
             --parquet bench-dataset/bench_50000000.parquet \
             --rows 50000000 \
             --identity ${{ inputs.run_phase5_simulated_identity }} \
-            --out bench-out/phase5_simulated.json
+            --block-shuffle 0 \
+            --out bench-out/phase5_simulated_baseline.json
+      - name: Run Phase 5 streaming bench (recall-complete, block-shuffle=1)
+        working-directory: packages/python/goldenmatch
+        env:
+          GOLDENMATCH_DISTRIBUTED_PIPELINE: "2"
+          GOLDENMATCH_ENABLE_DISTRIBUTED_RAY: "1"
+          RAY_ADDRESS: "127.0.0.1:6379"
+          POSTGRES_URL: postgresql://postgres:bench@localhost:5432/postgres
+        run: |
+          mkdir -p bench-out
+          python scripts/bench_phase5_simulated.py \
+            --parquet bench-dataset/bench_50000000.parquet \
+            --rows 50000000 \
+            --identity ${{ inputs.run_phase5_simulated_identity }} \
+            --block-shuffle 1 \
+            --out bench-out/phase5_simulated_recall.json
+      - name: Compare baseline vs recall-complete
+        # Assert recall leg found strictly more multi-member clusters than
+        # baseline. Equal or lower means WCC is no better than per-partition
+        # Union-Find -- a clear signal something is wrong with the routing.
+        working-directory: packages/python/goldenmatch
+        run: |
+          python - <<'PYEOF'
+          import json, sys
+          baseline = json.loads(open("bench-out/phase5_simulated_baseline.json").read())
+          recall   = json.loads(open("bench-out/phase5_simulated_recall.json").read())
+          b = baseline.get("multi_member_cluster_count")
+          r = recall.get("multi_member_cluster_count")
+          print(f"baseline multi_member_cluster_count : {b}")
+          print(f"recall   multi_member_cluster_count : {r}")
+          if b is None or r is None:
+              # On the sim leg golden is ALWAYS expected to be written, so a None
+              # count is a count-MECHANISM failure (golden dir missing / scan
+              # raised), not a legitimate "no signal" -- fail the gate rather than
+              # let a broken count pass silently.
+              print(
+                  f"FAIL: a count is None (baseline={b}, recall={r}); the golden "
+                  "write or parquet scan failed -- the recall gate can't run."
+              )
+              sys.exit(1)
+          if r <= b:
+              print(
+                  f"FAIL: recall-complete ({r}) <= baseline ({b}). "
+                  "The randomized-contraction WCC should merge cross-partition "
+                  "clusters that per-partition Union-Find misses. "
+                  "Check GOLDENMATCH_DISTRIBUTED_BLOCK_SHUFFLE + WCC routing."
+              )
+              sys.exit(1)
+          print(f"PASS: recall-complete found {r - b} more multi-member clusters than baseline.")
+          PYEOF
       - name: Tear down Ray
         if: always()
         run: ray stop --force
@@ -714,8 +772,13 @@ jobs:
         run: |
           echo '## bench-phase5-simulated (4-worker Ray, one host @ 50M)' >> "$GITHUB_STEP_SUMMARY"
           echo '**Honest scoping: single NIC, single disk, shared OS page cache. Regression check, NOT a multi-node parity claim.**' >> "$GITHUB_STEP_SUMMARY"
+          echo '### Baseline (block-shuffle=0)' >> "$GITHUB_STEP_SUMMARY"
           echo '```json' >> "$GITHUB_STEP_SUMMARY"
-          cat bench-out/phase5_simulated.json 2>/dev/null || echo '{"error": "bench produced no output"}' >> "$GITHUB_STEP_SUMMARY"
+          cat bench-out/phase5_simulated_baseline.json 2>/dev/null || echo '{"error": "bench produced no output"}' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo '### Recall-complete (block-shuffle=1)' >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          cat bench-out/phase5_simulated_recall.json 2>/dev/null || echo '{"error": "bench produced no output"}' >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
       - name: Upload bench artifacts
         if: always()
