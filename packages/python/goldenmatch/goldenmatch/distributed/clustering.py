@@ -140,10 +140,14 @@ _RC_PRIME = 2**31 - 1
 def _wcc_algorithm() -> str:
     """Read GOLDENMATCH_DISTRIBUTED_WCC env var (default 'two_phase').
 
-    NOTE: the at-scale pipeline (``GOLDENMATCH_DISTRIBUTED_PIPELINE=2``) does NOT
-    route through this function -- it uses ``local_cc_assignments`` directly,
-    which has no driver collect and is what scales to 100M. This selector only
-    governs ``build_clusters_distributed``'s own callers, where 'two_phase'
+    NOTE: the at-scale pipeline (``GOLDENMATCH_DISTRIBUTED_PIPELINE=2``) uses
+    ``local_cc_assignments`` directly on the DEFAULT (per-partition) path, which
+    has no driver collect; only when the block-shuffle recall-complete path is
+    active (#844 Spec 2) does it route through ``build_clusters_distributed``, and
+    there it passes the ``algorithm`` kwarg explicitly -- so this env selector is
+    NOT consulted on the pipeline path either way. This selector only governs
+    ``build_clusters_distributed``'s OTHER callers (with no ``algorithm`` kwarg),
+    where 'two_phase'
     stays the default (Sem Sinchenko recommendation; partition-sensitive but
     correct). 'pointer_jump' (``distributed_wcc``) is OPT-IN only -- its
     iterative ``Dataset.join`` loop can deadlock Ray's streaming executor at
