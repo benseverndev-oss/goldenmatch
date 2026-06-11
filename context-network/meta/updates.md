@@ -2,6 +2,38 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-06-11 — TS parity: refdata name scorers + autoconfig blocking (#857, from the #856 audit)
+- Extended the parity workstream node
+  [../planning/surface-hardening.md](../planning/surface-hardening.md):
+  a new "Fixtures rot silently — the #856/#857 lesson" subsection under the
+  parity-fixture methodology, plus the #857 entry.
+- **The #856 audit found real cross-language drift sitting in `main`:** the
+  TS `typescript` CI lane runs only on TS path changes, so a pure-Python
+  autoconfig change leaves the committed parity vectors stale and the TS
+  test green against a fixture that no longer reflects Python. The
+  controller-stoppoint fixture had drifted (`ensemble` where Python now
+  emits the refdata name scorers + evolved multi-pass blocking).
+- **#857 (merged) closed it by porting, not pinning.** The edge-safe TS core
+  gained `given_name_aliased_jw` (alias-aware JW) and `name_freq_weighted_jw`
+  (Census surname-IDF-weighted JW), the first/last-name auto-config refine
+  (`refineNameScorer`, last-before-first; `multi_name` unrefined), and a
+  faithful port of `build_blocking`'s selection (exact gate at
+  `cardinality_ratio ≤ 0.5` on the exact pool only; secondary-name passes).
+  Scope grew twice (regen forced the 186KB surname table; the residual red
+  was a separate blocking-evolution gap). Both refdata tables are generated
+  TS modules synced from the Python source (`scripts/sync_ts_refdata.mjs`)
+  and drift-guarded; numeric parity is pinned by Python-computed values in
+  `tests/parity/scorer-ground-truth.test.ts` (4dp).
+- **Two durable methodology guards recorded:** generate-and-drift-guard
+  bundled data (never hand-copy), and pin scorer parity to Python ground
+  truth rather than a TS self-mirror (a self-mirror passes even if both
+  sides diverge from Python).
+- Deferred: refdata transform packs + geo/date blocking branches. Follow-up
+  **#860**: TS `buildWeightedMatchkey` still drops `nullRate>0.5` name
+  columns while the blocking path now keeps them (why `sparse_people` stays
+  loose-shape). Docs-site: `goldenmatch/typescript.mdx` (scorer list/table +
+  Python-comparison row) and `goldenmatch/reference-data.mdx` (TS-parity note).
+
 ## 2026-06-10 — Distributed WCC for #844: randomized contraction + recall-complete Phase 5 (#851/#852)
 - New nodes: [../architecture/distributed-wcc.md](../architecture/distributed-wcc.md)
   + [../decisions/0011-distributed-wcc-randomized-contraction.md](../decisions/0011-distributed-wcc-randomized-contraction.md).
@@ -69,7 +101,6 @@ Newest first. One entry per meaningful change to the network.
   [../architecture/sql-native-extensions.md](../architecture/sql-native-extensions.md).
 - Verdict: no compelling remaining Rust gap; the structural work is done and now
   measurable + regression-guardable.
-
 ## 2026-06-09 — FS auto-config v2: GoldenMatch now BEATS Splink on accuracy (#823)
 - Updated the architecture node + decision:
   [../architecture/fellegi-sunter-splink-parity.md](../architecture/fellegi-sunter-splink-parity.md)
@@ -284,4 +315,4 @@ Newest first. One entry per meaningful change to the network.
 - Committed to git on branch `chore/context-network`.
 
 ---
-**Classification:** meta/log • **Last updated:** 2026-06-10
+**Classification:** meta/log • **Last updated:** 2026-06-11

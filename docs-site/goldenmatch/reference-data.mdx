@@ -76,6 +76,10 @@ else:
 
 The scorer never *lowers* a JW score — it only promotes known aliases. Degrades cleanly to plain JW when the bundled alias table is missing.
 
+<Note>
+Both name scorers — `given_name_aliased_jw` and `name_freq_weighted_jw` — are also in the [TypeScript port](/goldenmatch/typescript). The given-name alias corpus and the Census surname table ship inside the npm package as generated modules, synced from these Python source files and drift-guarded in CI, so the edge-safe TS core produces the same scores to four decimals. The transform packs (`legal_form_strip`, `address_normalize`, `naics_normalize`) remain Python-only for now.
+</Note>
+
 ## Transforms
 
 ### `legal_form_strip`
