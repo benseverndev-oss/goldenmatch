@@ -29,6 +29,17 @@ Closes the controller-stoppoint parity drift (#857, from the #856 audit). Numeri
 scorer parity is locked by Python-computed ground truth in
 `tests/parity/scorer-ground-truth.test.ts`.
 
+### Fixed — weighted-matchkey null-gate parity (#860)
+
+- `buildWeightedMatchkey` no longer drops `nullRate > 0.5` columns. Python's
+  `build_matchkeys` applies no null gate to fuzzy fields — high-null name columns
+  are kept and demoted via the downstream avg-null threshold adjustment, not
+  dropped. Surfaced by the #857 whole-branch review: TS emitted an empty weighted
+  matchkey on heavily-null person data (`sparse_people`, ~75% null `first`/`last`)
+  where Python emits a `given_name_aliased_jw` + `name_freq_weighted_jw` weighted
+  matchkey at threshold 0.75. `sparse_people` is now byte-equal in the
+  controller-stoppoint parity suite.
+
 ## [2.0.0] - 2026-05-22
 
 Major version: v1.18.2 plugin parity for the TS port (#208).
