@@ -36,7 +36,7 @@ links rather than reading everything.
 
 ## Planning (where it's going)
 - [planning/roadmap.md](planning/roadmap.md) — the Arrow-native arc and what's next.
-- [planning/surface-hardening.md](planning/surface-hardening.md) — the 2026-06-05 four-surface audit arc: fail-closed HTTP auth, CLI/TUI fixes, Python->TS parity ports (+ the parity-fixture methodology), and the open PR queue.
+- [planning/surface-hardening.md](planning/surface-hardening.md) — the 2026-06-05 four-surface audit arc: fail-closed HTTP auth, CLI/TUI fixes, Python->TS parity ports, and the parity-fixture methodology — now including the #856/#857 "fixtures rot silently" lesson and the merged #857 refdata-name-scorer + autoconfig-blocking TS port (generate-and-drift-guard bundled data; pin parity to Python ground truth).
 - [planning/security-hardening.md](planning/security-hardening.md) — the 2026-06-05 security-hardening arc: 42-alert remediation (Dependabot + code scanning), Scorecard 6.1->7.3 (Token-Permissions/Signed-Releases/Fuzzing), the CodeQL Autofix incident, property-test bug ledger, and open actions.
 
 ## Meta (keeping the network alive)
@@ -44,4 +44,4 @@ links rather than reading everything.
 - [meta/maintenance.md](meta/maintenance.md) — how to keep nodes accurate and small.
 
 ---
-**Classification:** navigation • **Last updated:** 2026-06-10
+**Classification:** navigation • **Last updated:** 2026-06-11
