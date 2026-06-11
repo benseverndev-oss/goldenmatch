@@ -322,7 +322,9 @@ function buildWeightedMatchkey(
     if (kind === "multi_name") {
       fuzzy.push({
         field: p.name,
-        scorer: refineFirstNameScorer(p.name, "token_sort", "multi_name"),
+        // Python's multi_name branch hardcodes token_sort and does NOT call the
+        // refdata refine (it early-exits before the refine call); keep parity.
+        scorer: "token_sort",
         weight: 1.0,
         transforms: ["lowercase", "strip"],
       });
