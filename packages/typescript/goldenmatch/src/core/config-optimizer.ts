@@ -14,8 +14,10 @@
  * (documented), supply `groundTruth` or a `scoreFn` instead. `LLMProposer`
  * is likewise not ported (env-gated LLM territory); pass a custom `Proposer`.
  *
- * Scorer-family note: the TS candidate set omits `qgram` (not a TS scorer);
- * parity fixtures pin the scorer tuple on both sides.
+ * Scorer-family note: the default candidate set now includes `qgram` (a char
+ * q-gram Jaccard scorer, ported to TS), matching Python's default sweep. Parity
+ * fixtures still pin an explicit scorer tuple (without `qgram`) on both sides as
+ * a determinism clamp, so the fixture is unaffected.
  */
 import { dedupe } from "./api.js";
 import {
@@ -173,7 +175,7 @@ export interface CoordinateDescentOptions {
  * the best config so far -- thresholds, per-field scorer, per-field weight
  * (multi-field weighted matchkeys only), matchkey type, blocking strategy,
  * then candidate blocking keys. Skips empty families; returns [] when all are
- * exhausted. Default scorer candidates omit Python's `qgram` (not a TS scorer).
+ * exhausted. Default scorer candidates match Python's sweep (incl. `qgram`).
  */
 export class CoordinateDescentProposer implements Proposer {
   readonly singleRound = false;
@@ -200,6 +202,7 @@ export class CoordinateDescentProposer implements Proposer {
       "ensemble",
       "levenshtein",
       "soundex_match",
+      "qgram",
     ];
     this.weightDeltas = opts.weightDeltas ?? [-0.5, 0.5];
     this.blockingStrategies = opts.blockingStrategies ?? ["multi_pass"];
