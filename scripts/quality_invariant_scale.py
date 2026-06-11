@@ -31,6 +31,7 @@ import os
 import sys
 import time
 import tracemalloc
+from dataclasses import dataclass
 from pathlib import Path
 
 if sys.platform != "win32":
@@ -51,6 +52,75 @@ _STREETS = ["main st", "oak ave", "pine rd", "maple dr", "cedar ln",
             "elm st", "washington ave", "park blvd"]
 _CITIES = ["springfield", "franklin", "clinton", "georgetown",
            "salem", "fairview", "madison", "bristol"]
+
+
+@dataclass(frozen=True)
+class CorruptionConfig:
+    """Per-field corruption rates for the realistic generator. Each value is the
+    probability that a given row's field is corrupted. Per corrupted cell, one of:
+    adjacent-char transpose, single-char delete, whitespace-token drop (multi-token
+    fields), or whole-field null. Field streams are independent and each row's
+    decision is drawn from a fixed (n, 3) block, so corruption for row i depends
+    only on (seed, level, field) — never on n_rows. That makes every smaller rung
+    an EXACT prefix of every larger one, which is the precondition for attributing
+    cross-rung F1 differences to scale rather than to data shape."""
+    first_name: float = 0.0
+    last_name: float = 0.0
+    address: float = 0.0
+    email: float = 0.0
+
+
+# Stream order is FIXED (spawn index = position here) so each field's child RNG
+# is stable regardless of which other fields are corrupted.
+_CORRUPT_FIELDS = ("first_name", "last_name", "address", "email")
+_CORRUPT_LEVEL_INT = {"light": 0, "moderate": 1, "hard": 2}
+
+# Starting rates; Task 3 tunes `moderate` so the 1K oracle lands F1 ~0.90-0.95.
+CORRUPTION_LEVELS: dict[str, CorruptionConfig] = {
+    "light": CorruptionConfig(),  # no extra corruption beyond the 10% a->@ typo
+    "moderate": CorruptionConfig(first_name=0.30, last_name=0.20, address=0.30, email=0.08),
+    "hard": CorruptionConfig(first_name=0.50, last_name=0.40, address=0.50, email=0.20),
+}
+
+
+def _corrupt_cell(s: str, type_sel: float, pos_sel: float) -> str:
+    """One deterministic corruption of a single string from two uniforms in [0,1).
+
+    type_sel partitions the corruption kind; pos_sel picks the position. Falls
+    through to a no-op when the chosen kind can't apply (e.g. token-drop on a
+    single-token string) so the corruption rate is an upper bound on actual edits."""
+    if not s:
+        return s
+    if type_sel < 0.25 and len(s) >= 2:                 # transpose adjacent chars
+        i = min(int(pos_sel * (len(s) - 1)), len(s) - 2)
+        return s[:i] + s[i + 1] + s[i] + s[i + 2:]
+    if type_sel < 0.50 and len(s) >= 2:                 # delete one char
+        i = min(int(pos_sel * len(s)), len(s) - 1)
+        return s[:i] + s[i + 1:]
+    if type_sel < 0.75 and " " in s:                    # drop one whitespace token
+        toks = s.split(" ")
+        if len(toks) >= 2:
+            j = min(int(pos_sel * len(toks)), len(toks) - 1)
+            return " ".join(toks[:j] + toks[j + 1:]) or s
+        return s
+    return ""                                            # whole-field null
+
+
+def _apply_field_corruption(values: list[str], rate: float, field_rng) -> list[str]:
+    """Corrupt a column of strings in place. `field_rng` is this field's own
+    numpy Generator. Draws a (n, 3) block — [apply_mask, type_sel, pos_sel] per
+    row — so row i's three uniforms sit at fixed flat offsets [3i, 3i+1, 3i+2];
+    the first k rows of an n=k draw equal the first k rows of any larger draw
+    from the same stream (prefix stability). Loops only over masked rows."""
+    n = len(values)
+    if rate <= 0.0 or n == 0:
+        return values
+    draws = field_rng.random((n, 3))
+    idx = np.nonzero(draws[:, 0] < rate)[0]
+    for k in idx:
+        i = int(k)
+        values[i] = _corrupt_cell(values[i], float(draws[i, 1]), float(draws[i, 2]))
+    return values
 
 
 def _hash_name(salt: str, seed: int, cid: int, n_syl: int = 5) -> str:
