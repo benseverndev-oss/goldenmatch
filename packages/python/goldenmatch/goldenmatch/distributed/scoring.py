@@ -49,17 +49,25 @@ _SCORE_NUM_CPUS = int(os.environ.get("GOLDENMATCH_DISTRIBUTED_SCORE_NUM_CPUS", "
 
 
 def _block_shuffle_enabled() -> bool:
-    """Opt-in gate for the blocking-key-aware shuffle scoring path (issue #844).
+    """Gate for the blocking-key-aware shuffle scoring path (issue #844).
 
-    Default OFF -> ``score_blocks_distributed`` keeps the byte-identical
-    per-partition behavior. Set ``GOLDENMATCH_DISTRIBUTED_BLOCK_SHUFFLE=1`` to
-    co-locate records that share a blocking key (or exact-matchkey value)
-    before scoring, closing the cross-partition recall hole. Kept opt-in
-    because the shuffle makes scored pairs cross input-partition boundaries,
-    so the clustering step then needs a real distributed WCC instead of
-    ``local_cc_assignments`` -- the WCC-at-scale question gates the default.
+    Default ON as of the #844 finish line: ``score_blocks_distributed``
+    co-locates records that share a blocking key (or exact-matchkey value)
+    before scoring, closing the cross-partition recall hole that the legacy
+    per-partition path left open (it under-merged inversely with partition
+    count). This was gated opt-in until the recall-complete path was validated
+    end-to-end at 100M -- it now is: full e2e in 9.2 min with byte-exact cluster
+    recovery, and the per-group scoring wall that made it non-viable is fixed
+    (``_score_colocated_groups`` scores each partition in one vectorized pass).
+
+    Set ``GOLDENMATCH_DISTRIBUTED_BLOCK_SHUFFLE=0`` to restore the legacy
+    per-partition behavior. NOTE: when on, scored pairs cross input-partition
+    boundaries, so clustering routes through the distributed
+    randomized-contraction WCC (``_phase5_cluster``), which on a MULTI-NODE
+    cluster requires a SHARED ``GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH=gs://...``
+    path (enforced in ``randomized_contraction_wcc``).
     """
-    return os.environ.get("GOLDENMATCH_DISTRIBUTED_BLOCK_SHUFFLE", "0") not in (
+    return os.environ.get("GOLDENMATCH_DISTRIBUTED_BLOCK_SHUFFLE", "1") not in (
         "0", "", "false", "False", "no", "off",
     )
 

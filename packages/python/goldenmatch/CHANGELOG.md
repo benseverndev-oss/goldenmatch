@@ -6,6 +6,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Changed
+- **Phase-5 distributed recall-complete path is now the DEFAULT (#844 finish
+  line).** The blocking-key-aware shuffle scoring + randomized-contraction WCC,
+  previously opt-in via `GOLDENMATCH_DISTRIBUTED_BLOCK_SHUFFLE=1`, is now ON by
+  default — the legacy per-partition path under-merged inversely with partition
+  count (a true-duplicate split across partitions was never compared). Validated
+  end-to-end at 100M on a real 5-node cluster: full dedupe in **9.2 min** with
+  byte-exact cluster recovery (20,000,000 clusters), after fixing the per-group
+  scoring wall (`_score_colocated_groups` now scores each partition in one
+  vectorized pass instead of ~20M per-group calls). Set
+  `GOLDENMATCH_DISTRIBUTED_BLOCK_SHUFFLE=0` to restore the legacy per-partition
+  path. **Multi-node:** the WCC checkpoints each round to
+  `GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH`, which on a multi-node cluster MUST be a
+  shared object-store path (`gs://…`); `randomized_contraction_wcc` now raises a
+  clear error on a multi-node cluster with a node-local scratch path instead of
+  silently diverging.
+
 ### Added
 - **Phase-5 e2e pipeline recall-complete leg (opt-in, #844 Spec 2).** When
   `GOLDENMATCH_DISTRIBUTED_BLOCK_SHUFFLE=1`, the Phase-5 streaming pipeline now
