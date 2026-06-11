@@ -1,5 +1,5 @@
-// Regenerates src/core/refdata/givenNameAliases.ts from the Python source of
-// truth. Run from packages/typescript/goldenmatch/. Node >= 18.
+// Regenerates src/core/refdata/{givenNameAliases,censusSurnames}.ts from the
+// Python source of truth. Run from packages/typescript/goldenmatch/. Node >= 18.
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
