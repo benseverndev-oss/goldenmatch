@@ -4,6 +4,42 @@ All notable changes to goldenmatch-js are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/) (strict after v1.0.0).
 
+## [Unreleased]
+
+### Added — refdata-aware name scorers (parity with Python `refdata`)
+
+- `given_name_aliased_jw` scorer: Jaro-Winkler with an alias-aware exact bonus
+  (William <-> Bill -> 1.0), backed by a bundled given-name alias table.
+- `name_freq_weighted_jw` scorer: Jaro-Winkler modulated by US Census 2010
+  surname IDF in the borderline zone, backed by a bundled top-10k surname table.
+- Auto-config now refines first-name columns to `given_name_aliased_jw` and
+  last-name columns to `name_freq_weighted_jw` (port of `refine_matchkey_field`,
+  last-name checked before first-name; `multi_name` left unrefined for parity).
+- Both refdata tables are generated from the Python source of truth via
+  `scripts/sync_ts_refdata.mjs` and drift-guarded by `tests/unit/refdata-sync.test.ts`.
+
+### Changed — auto-config blocking-selection parity
+
+- `buildBlocking` now matches Python's `build_blocking`: exact-blocking candidates
+  are gated at `cardinality_ratio <= 0.5` (was 0.95), with the null and cardinality
+  gates applied only to the exact pool (name columns are ungated), and the name
+  multi-pass adds secondary-name-column passes when two name columns are present.
+
+Closes the controller-stoppoint parity drift (#857, from the #856 audit). Numeric
+scorer parity is locked by Python-computed ground truth in
+`tests/parity/scorer-ground-truth.test.ts`.
+
+### Fixed — weighted-matchkey null-gate parity (#860)
+
+- `buildWeightedMatchkey` no longer drops `nullRate > 0.5` columns. Python's
+  `build_matchkeys` applies no null gate to fuzzy fields — high-null name columns
+  are kept and demoted via the downstream avg-null threshold adjustment, not
+  dropped. Surfaced by the #857 whole-branch review: TS emitted an empty weighted
+  matchkey on heavily-null person data (`sparse_people`, ~75% null `first`/`last`)
+  where Python emits a `given_name_aliased_jw` + `name_freq_weighted_jw` weighted
+  matchkey at threshold 0.75. `sparse_people` is now byte-equal in the
+  controller-stoppoint parity suite.
+
 ## [2.0.0] - 2026-05-22
 
 Major version: v1.18.2 plugin parity for the TS port (#208).
