@@ -1276,7 +1276,11 @@ jobs:
     needs: changes
     if: needs.changes.outputs.distributed == 'true' || needs.changes.outputs.ci_workflow == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # 30 (was 20): the #844 randomized-contraction WCC ray gate adds a ~3.5 min
+    # blocking step on top of the invariance gate (~5.5 min) + broad coverage
+    # (~9.5 min) + setup, which pushed the total past the old 20 min cap (the job
+    # was cancelled mid-run -> spurious "distributed" failure). 30 gives headroom.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
@@ -1301,7 +1305,7 @@ jobs:
       # each start a ray cluster and race on ports.
       # --timeout=300 (not 120): the label-prop partition-count invariance cases
       # iterate to fixpoint on chains (label-prop's worst case) and sit ~100s on
-      # a 2-core hosted runner; 120s clipped them. Job-level timeout-minutes: 20
+      # a 2-core hosted runner; 120s clipped them. Job-level timeout-minutes: 30
       # is the real backstop.
       #
       # GATE (blocking): the quality-invariance gate is this lane's reason for
