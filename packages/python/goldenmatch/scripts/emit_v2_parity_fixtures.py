@@ -354,7 +354,14 @@ def _planner_case(
             "user_backend": user_backend,
         },
         "expected_plan": {
-            "backend": plan.backend,
+            # TS parity: the edge-safe TS port has no `bucket` backend -- it is
+            # the Polars-only native single-node path (Python v1.16), the same
+            # "deliberately not ported" class as `ray` (see the TS package
+            # CLAUDE.md). Emit its TS-reachable single-node equivalent,
+            # `polars-direct`, so this fixture stays byte-equal with what the TS
+            # planner actually produces. Recorded as a known divergence in
+            # scripts/check_ts_parity_freshness.py.
+            "backend": "polars-direct" if plan.backend == "bucket" else plan.backend,
             "chunk_size": plan.chunk_size,
             "max_workers": plan.max_workers,
             "pair_spill_threshold": plan.pair_spill_threshold,
