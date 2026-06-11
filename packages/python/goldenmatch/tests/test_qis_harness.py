@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pytest  # noqa: F401  # used by slow-marked tests added in later tasks
 
 # Repo root is 4 parents up from this file:
 # packages/python/goldenmatch/tests/<this> -> repo root.
@@ -44,3 +45,43 @@ def test_apply_field_corruption_prefix_stable_across_n():
     # asserted at the generator level in Task 2; the (n,3) block draw is what
     # guarantees it.)
     assert small == big
+
+
+def test_generate_corruption_is_deterministic():
+    df1, c1 = qis.generate_with_gt(1000, seed=0, shape="realistic", corruption="moderate")
+    df2, c2 = qis.generate_with_gt(1000, seed=0, shape="realistic", corruption="moderate")
+    assert df1.equals(df2)
+    assert (c1 == c2).all()
+
+
+def test_generate_corruption_prefix_stable_across_n():
+    # The scale-invariance precondition: row i is byte-identical whether the
+    # dataset is 1000 rows or 5000 rows (same seed, same corruption level).
+    small, cs = qis.generate_with_gt(1000, seed=0, shape="realistic", corruption="moderate")
+    big, cb = qis.generate_with_gt(5000, seed=0, shape="realistic", corruption="moderate")
+    assert small.equals(big.head(1000))
+    assert (cs == cb[:1000]).all()
+
+
+def test_generate_corruption_preserves_oracle():
+    # Corruption never moves a row's ground-truth cluster id; only the displayed
+    # fields change. cids must equal the light-shape cids exactly.
+    _, c_light = qis.generate_with_gt(1000, seed=0, shape="realistic", corruption="light")
+    _, c_mod = qis.generate_with_gt(1000, seed=0, shape="realistic", corruption="moderate")
+    assert (c_light == c_mod).all()
+
+
+def test_generate_light_is_unchanged_baseline():
+    # `light` must equal the pre-#510 default (no extra corruption), so existing
+    # callers and published light-shape numbers are untouched.
+    df_default, _ = qis.generate_with_gt(1000, seed=0, shape="realistic")
+    df_light, _ = qis.generate_with_gt(1000, seed=0, shape="realistic", corruption="light")
+    assert df_default.equals(df_light)
+
+
+def test_moderate_actually_corrupts_some_rows():
+    df_light, _ = qis.generate_with_gt(1000, seed=0, shape="realistic", corruption="light")
+    df_mod, _ = qis.generate_with_gt(1000, seed=0, shape="realistic", corruption="moderate")
+    # At least the first_name column must differ on a meaningful fraction.
+    diff = (df_light["first_name"] != df_mod["first_name"]).sum()
+    assert diff > 50  # rate ~0.3 over 1000 rows; comfortably > 50

@@ -134,7 +134,8 @@ def _hash_name(salt: str, seed: int, cid: int, n_syl: int = 5) -> str:
     return "".join(_SYL[h[i] % len(_SYL)] for i in range(n_syl))
 
 
-def generate_with_gt(n_rows: int, seed: int = 0, shape: str = "realistic"
+def generate_with_gt(n_rows: int, seed: int = 0, shape: str = "realistic",
+                     corruption: str = "light"
                      ) -> tuple[pl.DataFrame, np.ndarray]:
     """Generate a synthetic person dedupe dataset + ground-truth cluster ids.
 
@@ -147,11 +148,23 @@ def generate_with_gt(n_rows: int, seed: int = 0, shape: str = "realistic"
                        inter-cluster name similarity, near-distinct identities).
 
     Both share the 5-rows-per-cluster + 10% typo-on-first_name noise model.
+
+    corruption — one of "light" (default, no extra corruption beyond the 10%
+                 a->@ typo), "moderate", or "hard". Applies only to
+                 shape="realistic"; ignored (with a warning) for shape="phase5".
+                 Oracle cluster ids (cids) are never affected — only displayed
+                 field values change.
     """
+    if corruption not in CORRUPTION_LEVELS:
+        raise ValueError(f"unknown corruption {corruption!r}; expected one of "
+                         f"{sorted(CORRUPTION_LEVELS)}")
     if shape == "phase5":
+        if corruption != "light":
+            print(f"[qis] WARNING: corruption={corruption!r} ignored for shape "
+                  f"'phase5' (corruption knob applies to 'realistic' only)", flush=True)
         return _generate_phase5(n_rows, seed)
     if shape == "realistic":
-        return _generate_realistic(n_rows, seed)
+        return _generate_realistic(n_rows, seed, corruption=corruption)
     raise ValueError(f"unknown shape {shape!r}; expected 'phase5' or 'realistic'")
 
 
@@ -183,7 +196,8 @@ def _generate_phase5(n_rows: int, seed: int = 0) -> tuple[pl.DataFrame, np.ndarr
     return df, cids
 
 
-def _generate_realistic(n_rows: int, seed: int = 0) -> tuple[pl.DataFrame, np.ndarray]:
+def _generate_realistic(n_rows: int, seed: int = 0, corruption: str = "light"
+                        ) -> tuple[pl.DataFrame, np.ndarray]:
     n_rows = (n_rows // ROWS_PER_CLUSTER) * ROWS_PER_CLUSTER
     n_clusters = n_rows // ROWS_PER_CLUSTER
     rng = np.random.default_rng(seed)
@@ -211,7 +225,27 @@ def _generate_realistic(n_rows: int, seed: int = 0) -> tuple[pl.DataFrame, np.nd
     # Same 'a' -> '@' typo on first_name (matches phase5's noise model so the two
     # shapes only differ in vocab, not noise). Carries into email.
     first_with_typo = [f.replace("a", "@") if t else f for f, t in zip(first_rows, typo)]
-    email_rows = [f"{f}.{l}@example.com" for f, l in zip(first_with_typo, last_rows)]
+
+    # #510 corruption knob (realistic only). Applied on a SEPARATE RNG derived
+    # from (seed, level) so the canonical-field draws above are untouched ->
+    # oracle (cids) and the un-corrupted identity are identical across levels.
+    corr = CORRUPTION_LEVELS[corruption]
+    if any(getattr(corr, f) > 0.0 for f in _CORRUPT_FIELDS):
+        ss = np.random.SeedSequence([seed, 0xC0FFEE, _CORRUPT_LEVEL_INT[corruption]])
+        streams = dict(zip(_CORRUPT_FIELDS, ss.spawn(len(_CORRUPT_FIELDS))))
+        first_with_typo = _apply_field_corruption(
+            first_with_typo, corr.first_name, np.random.default_rng(streams["first_name"]))
+        last_rows = _apply_field_corruption(
+            last_rows, corr.last_name, np.random.default_rng(streams["last_name"]))
+        addr_rows = _apply_field_corruption(
+            addr_rows, corr.address, np.random.default_rng(streams["address"]))
+        # Email inherits the corrupted name (realistic), THEN gets its own low-rate
+        # pass — kept low so it stays a strong independent recall path.
+        email_rows = [f"{f}.{l}@example.com" for f, l in zip(first_with_typo, last_rows)]
+        email_rows = _apply_field_corruption(
+            email_rows, corr.email, np.random.default_rng(streams["email"]))
+    else:
+        email_rows = [f"{f}.{l}@example.com" for f, l in zip(first_with_typo, last_rows)]
 
     df = pl.DataFrame({
         "id": [f"r{i}" for i in range(n_rows)],
