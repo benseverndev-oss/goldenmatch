@@ -66,6 +66,18 @@ const CASES: readonly Case[] = [
   ["soundex_match", "Robert", "Rupert", 1.0], // both R163
   ["soundex_match", "Robert", "Smith", 0.0],
   ["soundex_match", "Smith", "Smyth", 1.0], // both S530
+
+  // given_name_aliased_jw — alias->1.0 else plain Jaro-Winkler (Python GivenNameAliasedJW)
+  ["given_name_aliased_jw", "William", "Bill", 1.0],     // alias class -> 1.0
+  ["given_name_aliased_jw", "Robert", "Bob", 1.0],       // alias class -> 1.0
+  ["given_name_aliased_jw", "Andrew", "Andre", 0.9667],  // non-alias -> plain JW
+
+  // name_freq_weighted_jw — JW reweighted by census surname IDF in [0.70,0.95) (Python NameFreqWeightedJW)
+  ["name_freq_weighted_jw", "Smith", "Smith", 1.0],      // jw>=0.95 passthrough
+  ["name_freq_weighted_jw", "Smith", "Xyzqw", 0.0],      // jw<0.70 passthrough
+  ["name_freq_weighted_jw", "Taylor", "Tyler", 0.7111],  // borderline both-known -> reweighted
+  ["name_freq_weighted_jw", "Moore", "More", 0.8484],    // borderline both-known -> reweighted
+  ["name_freq_weighted_jw", "Taylor", "Tailor", 0.9111], // OOV gate (Tailor not in table) -> plain JW
 ];
 
 describe("scorer Python parity (4-decimal tolerance)", () => {
