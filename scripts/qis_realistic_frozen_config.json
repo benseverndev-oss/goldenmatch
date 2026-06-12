@@ -183,15 +183,7 @@
       "rerank": false,
       "rerank_model": "cross-encoder/ms-marco-MiniLM-L-6-v2",
       "rerank_band": 0.1,
-      "negative_evidence": [
-        {
-          "field": "email",
-          "transforms": [],
-          "scorer": "token_sort",
-          "threshold": 0.4,
-          "penalty": 0.3
-        }
-      ],
+      "negative_evidence": null,
       "em_iterations": 20,
       "convergence_threshold": 0.001,
       "link_threshold": null,
@@ -203,16 +195,17 @@
     "keys": [
       {
         "fields": [
-          "zip"
+          "email"
         ],
         "transforms": [
+          "lowercase",
           "strip"
         ]
       }
     ],
     "max_block_size": 5000,
-    "skip_oversized": false,
-    "strategy": "static",
+    "skip_oversized": true,
+    "strategy": "learned",
     "learned_sample_size": 5000,
     "learned_min_recall": 0.95,
     "learned_min_reduction": 0.9,

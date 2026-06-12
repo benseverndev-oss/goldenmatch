@@ -1820,9 +1820,8 @@ def build_blocking(
     # block-size guard. On a sparse-zip5 healthcare shape, zip5 reclassifies
     # to `identifier` and drops out of the compound, leaving single-name
     # passes whose max block projects to ~50K rows at 1M -> ~39.6M candidate
-    # pairs -> an 18-min run. project_max_block_size with full_n == df.height
-    # is the identity (v0 path uses exact block sizes -> correct).
-    from goldenmatch.core.blocking_candidates import project_max_block_size
+    # pairs -> an 18-min run. #876 replaced the legacy ∝N projector with the
+    # type-aware _typed_projected_block (see _projected_block below).
 
     _col_types = {p.name: p.col_type for p in profiles}
 
@@ -2510,6 +2509,7 @@ def auto_configure_df(
     confidence_required: bool = True,
     allow_red_config: bool = False,
     planning_effort: str | None = None,
+    n_rows_full: int | None = None,
 ) -> GoldenMatchConfig:
     """Public auto-configuration entry point (controller-backed).
 
@@ -2646,6 +2646,13 @@ def auto_configure_df(
         "strict": strict,
         "allow_remote_assets": allow_remote_assets,
     }
+    # #876: let a caller configure FOR a larger target population than `df` (e.g.
+    # build a frozen config from a small oracle but FOR 200M rows, so
+    # build_blocking's scale gate projects to the real scale). _initial_config
+    # forwards v0_kwargs["n_rows_full"] to the v0 heuristic (its guard lets the
+    # caller's value win over the controller's df.height default).
+    if n_rows_full is not None:
+        v0_kw["n_rows_full"] = n_rows_full
     config, profile, history = controller.run(
         df,
         reference=reference,

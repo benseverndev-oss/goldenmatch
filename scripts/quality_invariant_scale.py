@@ -545,16 +545,27 @@ def load_frozen_config():
         _FROZEN_CONFIG_PATH.read_text(encoding="utf-8"))
 
 
-def build_frozen_config(seed: int = 0, corruption: str = "moderate", n_rows: int = 1000):
+# The frozen config is built from a small oracle but configured FOR this target
+# population size, so build_blocking's scale gate (#876) projects to the real
+# ladder scale and picks a SCALE-SAFE blocking key (not a bounded key like zip
+# that explodes at 100M). Covers the whole ladder up to 200M.
+_FROZEN_TARGET_N_ROWS = 200_000_000
+
+
+def build_frozen_config(seed: int = 0, corruption: str = "moderate", n_rows: int = 1000,
+                        n_rows_full: int = _FROZEN_TARGET_N_ROWS):
     """Rebuild the frozen config from a fresh auto-config run at the oracle and
     write it to ``_FROZEN_CONFIG_PATH``. Run this ONLY when the fixture or the
     moderate corruption level changes (the committed config is derived from
-    seed=0 / realistic / moderate at 1K). Mirrors run_rung's rerank/NE strip so
-    the saved config is exactly what the ladder applies."""
+    seed=0 / realistic / moderate at 1K). Passes ``n_rows_full`` so the blocking
+    is chosen FOR the target ladder scale (#876), not the 1K build size. Mirrors
+    run_rung's rerank/NE strip so the saved config is exactly what the ladder
+    applies."""
     import goldenmatch
     df, _gt = generate_with_gt(n_rows, seed=seed, shape="realistic", corruption=corruption)
     cfg = goldenmatch.auto_configure_df(
-        df, confidence_required=False, allow_red_config=True, _skip_finalize=True)
+        df, confidence_required=False, allow_red_config=True, _skip_finalize=True,
+        n_rows_full=n_rows_full)
     for mk in (cfg.matchkeys or []):  # type: ignore[attr-defined]
         if getattr(mk, "type", None) == "weighted" and getattr(mk, "rerank", False):
             mk.rerank = False  # type: ignore[attr-defined]
