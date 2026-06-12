@@ -103,7 +103,7 @@ function clusters(values: readonly string[], minSimilarity: number): number[][] 
   }
   if (!linked) return [];
 
-  const groups = new Map<number, number[]>();
+  const groups = new Map<string, number[]>();
   for (let i = 0; i < n; i++) {
     pushBucket(groups, String(find(i)), i);
   }
