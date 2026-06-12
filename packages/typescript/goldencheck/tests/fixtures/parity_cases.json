@@ -152,6 +152,2735 @@
         "sampleSize": 100000,
         "domain": null
       }
+    },
+    {
+      "name": "fuzzy_values",
+      "description": "near-duplicate state encodings (California spellings)",
+      "input": {
+        "kind": "records",
+        "records": [
+          {
+            "state": "California",
+            "region": "apple"
+          },
+          {
+            "state": "Californa",
+            "region": "banana"
+          },
+          {
+            "state": "CALIFORNIA",
+            "region": "cherry"
+          },
+          {
+            "state": "Texas",
+            "region": "apple"
+          },
+          {
+            "state": "New York",
+            "region": "banana"
+          },
+          {
+            "state": "California",
+            "region": "cherry"
+          },
+          {
+            "state": "Californa",
+            "region": "apple"
+          },
+          {
+            "state": "CALIFORNIA",
+            "region": "banana"
+          },
+          {
+            "state": "Texas",
+            "region": "cherry"
+          },
+          {
+            "state": "New York",
+            "region": "apple"
+          },
+          {
+            "state": "California",
+            "region": "banana"
+          },
+          {
+            "state": "Californa",
+            "region": "cherry"
+          },
+          {
+            "state": "CALIFORNIA",
+            "region": "apple"
+          },
+          {
+            "state": "Texas",
+            "region": "banana"
+          },
+          {
+            "state": "New York",
+            "region": "cherry"
+          },
+          {
+            "state": "California",
+            "region": "apple"
+          },
+          {
+            "state": "Californa",
+            "region": "banana"
+          },
+          {
+            "state": "CALIFORNIA",
+            "region": "cherry"
+          },
+          {
+            "state": "Texas",
+            "region": "apple"
+          },
+          {
+            "state": "New York",
+            "region": "banana"
+          },
+          {
+            "state": "California",
+            "region": "cherry"
+          },
+          {
+            "state": "Californa",
+            "region": "apple"
+          },
+          {
+            "state": "CALIFORNIA",
+            "region": "banana"
+          },
+          {
+            "state": "Texas",
+            "region": "cherry"
+          },
+          {
+            "state": "New York",
+            "region": "apple"
+          },
+          {
+            "state": "California",
+            "region": "banana"
+          },
+          {
+            "state": "Californa",
+            "region": "cherry"
+          },
+          {
+            "state": "CALIFORNIA",
+            "region": "apple"
+          },
+          {
+            "state": "Texas",
+            "region": "banana"
+          },
+          {
+            "state": "New York",
+            "region": "cherry"
+          },
+          {
+            "state": "California",
+            "region": "apple"
+          },
+          {
+            "state": "Californa",
+            "region": "banana"
+          },
+          {
+            "state": "CALIFORNIA",
+            "region": "cherry"
+          },
+          {
+            "state": "Texas",
+            "region": "apple"
+          },
+          {
+            "state": "New York",
+            "region": "banana"
+          },
+          {
+            "state": "California",
+            "region": "cherry"
+          },
+          {
+            "state": "Californa",
+            "region": "apple"
+          },
+          {
+            "state": "CALIFORNIA",
+            "region": "banana"
+          },
+          {
+            "state": "Texas",
+            "region": "cherry"
+          },
+          {
+            "state": "New York",
+            "region": "apple"
+          },
+          {
+            "state": "California",
+            "region": "banana"
+          },
+          {
+            "state": "Californa",
+            "region": "cherry"
+          },
+          {
+            "state": "CALIFORNIA",
+            "region": "apple"
+          },
+          {
+            "state": "Texas",
+            "region": "banana"
+          },
+          {
+            "state": "New York",
+            "region": "cherry"
+          },
+          {
+            "state": "California",
+            "region": "apple"
+          },
+          {
+            "state": "Californa",
+            "region": "banana"
+          },
+          {
+            "state": "CALIFORNIA",
+            "region": "cherry"
+          },
+          {
+            "state": "Texas",
+            "region": "apple"
+          },
+          {
+            "state": "New York",
+            "region": "banana"
+          },
+          {
+            "state": "California",
+            "region": "cherry"
+          },
+          {
+            "state": "Californa",
+            "region": "apple"
+          },
+          {
+            "state": "CALIFORNIA",
+            "region": "banana"
+          },
+          {
+            "state": "Texas",
+            "region": "cherry"
+          },
+          {
+            "state": "New York",
+            "region": "apple"
+          },
+          {
+            "state": "California",
+            "region": "banana"
+          },
+          {
+            "state": "Californa",
+            "region": "cherry"
+          },
+          {
+            "state": "CALIFORNIA",
+            "region": "apple"
+          },
+          {
+            "state": "Texas",
+            "region": "banana"
+          },
+          {
+            "state": "New York",
+            "region": "cherry"
+          },
+          {
+            "state": "California",
+            "region": "apple"
+          },
+          {
+            "state": "Californa",
+            "region": "banana"
+          },
+          {
+            "state": "CALIFORNIA",
+            "region": "cherry"
+          },
+          {
+            "state": "Texas",
+            "region": "apple"
+          },
+          {
+            "state": "New York",
+            "region": "banana"
+          },
+          {
+            "state": "California",
+            "region": "cherry"
+          },
+          {
+            "state": "Californa",
+            "region": "apple"
+          },
+          {
+            "state": "CALIFORNIA",
+            "region": "banana"
+          },
+          {
+            "state": "Texas",
+            "region": "cherry"
+          },
+          {
+            "state": "New York",
+            "region": "apple"
+          },
+          {
+            "state": "California",
+            "region": "banana"
+          },
+          {
+            "state": "Californa",
+            "region": "cherry"
+          },
+          {
+            "state": "CALIFORNIA",
+            "region": "apple"
+          },
+          {
+            "state": "Texas",
+            "region": "banana"
+          },
+          {
+            "state": "New York",
+            "region": "cherry"
+          },
+          {
+            "state": "California",
+            "region": "apple"
+          },
+          {
+            "state": "Californa",
+            "region": "banana"
+          },
+          {
+            "state": "CALIFORNIA",
+            "region": "cherry"
+          },
+          {
+            "state": "Texas",
+            "region": "apple"
+          },
+          {
+            "state": "New York",
+            "region": "banana"
+          },
+          {
+            "state": "California",
+            "region": "cherry"
+          },
+          {
+            "state": "Californa",
+            "region": "apple"
+          },
+          {
+            "state": "CALIFORNIA",
+            "region": "banana"
+          },
+          {
+            "state": "Texas",
+            "region": "cherry"
+          },
+          {
+            "state": "New York",
+            "region": "apple"
+          },
+          {
+            "state": "California",
+            "region": "banana"
+          },
+          {
+            "state": "Californa",
+            "region": "cherry"
+          },
+          {
+            "state": "CALIFORNIA",
+            "region": "apple"
+          },
+          {
+            "state": "Texas",
+            "region": "banana"
+          },
+          {
+            "state": "New York",
+            "region": "cherry"
+          },
+          {
+            "state": "California",
+            "region": "apple"
+          },
+          {
+            "state": "Californa",
+            "region": "banana"
+          },
+          {
+            "state": "CALIFORNIA",
+            "region": "cherry"
+          },
+          {
+            "state": "Texas",
+            "region": "apple"
+          },
+          {
+            "state": "New York",
+            "region": "banana"
+          },
+          {
+            "state": "California",
+            "region": "cherry"
+          },
+          {
+            "state": "Californa",
+            "region": "apple"
+          },
+          {
+            "state": "CALIFORNIA",
+            "region": "banana"
+          },
+          {
+            "state": "Texas",
+            "region": "cherry"
+          },
+          {
+            "state": "New York",
+            "region": "apple"
+          },
+          {
+            "state": "California",
+            "region": "banana"
+          },
+          {
+            "state": "Californa",
+            "region": "cherry"
+          },
+          {
+            "state": "CALIFORNIA",
+            "region": "apple"
+          },
+          {
+            "state": "Texas",
+            "region": "banana"
+          },
+          {
+            "state": "New York",
+            "region": "cherry"
+          },
+          {
+            "state": "California",
+            "region": "apple"
+          },
+          {
+            "state": "Californa",
+            "region": "banana"
+          },
+          {
+            "state": "CALIFORNIA",
+            "region": "cherry"
+          },
+          {
+            "state": "Texas",
+            "region": "apple"
+          },
+          {
+            "state": "New York",
+            "region": "banana"
+          },
+          {
+            "state": "California",
+            "region": "cherry"
+          },
+          {
+            "state": "Californa",
+            "region": "apple"
+          },
+          {
+            "state": "CALIFORNIA",
+            "region": "banana"
+          },
+          {
+            "state": "Texas",
+            "region": "cherry"
+          },
+          {
+            "state": "New York",
+            "region": "apple"
+          },
+          {
+            "state": "California",
+            "region": "banana"
+          },
+          {
+            "state": "Californa",
+            "region": "cherry"
+          },
+          {
+            "state": "CALIFORNIA",
+            "region": "apple"
+          },
+          {
+            "state": "Texas",
+            "region": "banana"
+          },
+          {
+            "state": "New York",
+            "region": "cherry"
+          }
+        ]
+      },
+      "options": {
+        "sampleSize": 100000,
+        "domain": null
+      }
+    },
+    {
+      "name": "approx_duplicate",
+      "description": "one exact duplicate row pair (Acme/NYC)",
+      "input": {
+        "kind": "records",
+        "records": [
+          {
+            "company": "Acme",
+            "city": "NYC"
+          },
+          {
+            "company": "Beta",
+            "city": "LA"
+          },
+          {
+            "company": "Gamma",
+            "city": "SF"
+          },
+          {
+            "company": "Delta",
+            "city": "CHI"
+          },
+          {
+            "company": "Epsilon",
+            "city": "BOS"
+          },
+          {
+            "company": "Acme",
+            "city": "NYC"
+          },
+          {
+            "company": "Zeta",
+            "city": "SEA"
+          },
+          {
+            "company": "Eta",
+            "city": "DEN"
+          },
+          {
+            "company": "Theta",
+            "city": "MIA"
+          },
+          {
+            "company": "Iota",
+            "city": "ATL"
+          },
+          {
+            "company": "Kappa",
+            "city": "PHX"
+          },
+          {
+            "company": "Lambda",
+            "city": "DAL"
+          }
+        ]
+      },
+      "options": {
+        "sampleSize": 100000,
+        "domain": null
+      }
+    },
+    {
+      "name": "approx_fd",
+      "description": "near-strict zip->city FD with 3 injected typos",
+      "input": {
+        "kind": "records",
+        "records": [
+          {
+            "zip": 0,
+            "city": "city_0",
+            "amt": 0
+          },
+          {
+            "zip": 1,
+            "city": "city_1",
+            "amt": 13
+          },
+          {
+            "zip": 2,
+            "city": "city_2",
+            "amt": 26
+          },
+          {
+            "zip": 3,
+            "city": "city_3",
+            "amt": 39
+          },
+          {
+            "zip": 4,
+            "city": "city_4",
+            "amt": 52
+          },
+          {
+            "zip": 5,
+            "city": "city_5",
+            "amt": 65
+          },
+          {
+            "zip": 6,
+            "city": "city_6",
+            "amt": 78
+          },
+          {
+            "zip": 7,
+            "city": "WRONGCITY",
+            "amt": 91
+          },
+          {
+            "zip": 8,
+            "city": "city_8",
+            "amt": 7
+          },
+          {
+            "zip": 9,
+            "city": "city_9",
+            "amt": 20
+          },
+          {
+            "zip": 0,
+            "city": "city_0",
+            "amt": 33
+          },
+          {
+            "zip": 1,
+            "city": "city_1",
+            "amt": 46
+          },
+          {
+            "zip": 2,
+            "city": "city_2",
+            "amt": 59
+          },
+          {
+            "zip": 3,
+            "city": "city_3",
+            "amt": 72
+          },
+          {
+            "zip": 4,
+            "city": "city_4",
+            "amt": 85
+          },
+          {
+            "zip": 5,
+            "city": "city_5",
+            "amt": 1
+          },
+          {
+            "zip": 6,
+            "city": "city_6",
+            "amt": 14
+          },
+          {
+            "zip": 7,
+            "city": "city_7",
+            "amt": 27
+          },
+          {
+            "zip": 8,
+            "city": "city_8",
+            "amt": 40
+          },
+          {
+            "zip": 9,
+            "city": "city_9",
+            "amt": 53
+          },
+          {
+            "zip": 0,
+            "city": "city_0",
+            "amt": 66
+          },
+          {
+            "zip": 1,
+            "city": "city_1",
+            "amt": 79
+          },
+          {
+            "zip": 2,
+            "city": "city_2",
+            "amt": 92
+          },
+          {
+            "zip": 3,
+            "city": "city_3",
+            "amt": 8
+          },
+          {
+            "zip": 4,
+            "city": "city_4",
+            "amt": 21
+          },
+          {
+            "zip": 5,
+            "city": "city_5",
+            "amt": 34
+          },
+          {
+            "zip": 6,
+            "city": "city_6",
+            "amt": 47
+          },
+          {
+            "zip": 7,
+            "city": "city_7",
+            "amt": 60
+          },
+          {
+            "zip": 8,
+            "city": "city_8",
+            "amt": 73
+          },
+          {
+            "zip": 9,
+            "city": "city_9",
+            "amt": 86
+          },
+          {
+            "zip": 0,
+            "city": "city_0",
+            "amt": 2
+          },
+          {
+            "zip": 1,
+            "city": "city_1",
+            "amt": 15
+          },
+          {
+            "zip": 2,
+            "city": "city_2",
+            "amt": 28
+          },
+          {
+            "zip": 3,
+            "city": "city_3",
+            "amt": 41
+          },
+          {
+            "zip": 4,
+            "city": "city_4",
+            "amt": 54
+          },
+          {
+            "zip": 5,
+            "city": "city_5",
+            "amt": 67
+          },
+          {
+            "zip": 6,
+            "city": "city_6",
+            "amt": 80
+          },
+          {
+            "zip": 7,
+            "city": "city_7",
+            "amt": 93
+          },
+          {
+            "zip": 8,
+            "city": "city_8",
+            "amt": 9
+          },
+          {
+            "zip": 9,
+            "city": "city_9",
+            "amt": 22
+          },
+          {
+            "zip": 0,
+            "city": "city_0",
+            "amt": 35
+          },
+          {
+            "zip": 1,
+            "city": "city_1",
+            "amt": 48
+          },
+          {
+            "zip": 2,
+            "city": "city_2",
+            "amt": 61
+          },
+          {
+            "zip": 3,
+            "city": "city_3",
+            "amt": 74
+          },
+          {
+            "zip": 4,
+            "city": "city_4",
+            "amt": 87
+          },
+          {
+            "zip": 5,
+            "city": "city_5",
+            "amt": 3
+          },
+          {
+            "zip": 6,
+            "city": "city_6",
+            "amt": 16
+          },
+          {
+            "zip": 7,
+            "city": "city_7",
+            "amt": 29
+          },
+          {
+            "zip": 8,
+            "city": "city_8",
+            "amt": 42
+          },
+          {
+            "zip": 9,
+            "city": "city_9",
+            "amt": 55
+          },
+          {
+            "zip": 0,
+            "city": "WRONGCITY",
+            "amt": 68
+          },
+          {
+            "zip": 1,
+            "city": "city_1",
+            "amt": 81
+          },
+          {
+            "zip": 2,
+            "city": "city_2",
+            "amt": 94
+          },
+          {
+            "zip": 3,
+            "city": "city_3",
+            "amt": 10
+          },
+          {
+            "zip": 4,
+            "city": "city_4",
+            "amt": 23
+          },
+          {
+            "zip": 5,
+            "city": "city_5",
+            "amt": 36
+          },
+          {
+            "zip": 6,
+            "city": "city_6",
+            "amt": 49
+          },
+          {
+            "zip": 7,
+            "city": "city_7",
+            "amt": 62
+          },
+          {
+            "zip": 8,
+            "city": "city_8",
+            "amt": 75
+          },
+          {
+            "zip": 9,
+            "city": "city_9",
+            "amt": 88
+          },
+          {
+            "zip": 0,
+            "city": "city_0",
+            "amt": 4
+          },
+          {
+            "zip": 1,
+            "city": "city_1",
+            "amt": 17
+          },
+          {
+            "zip": 2,
+            "city": "city_2",
+            "amt": 30
+          },
+          {
+            "zip": 3,
+            "city": "city_3",
+            "amt": 43
+          },
+          {
+            "zip": 4,
+            "city": "city_4",
+            "amt": 56
+          },
+          {
+            "zip": 5,
+            "city": "city_5",
+            "amt": 69
+          },
+          {
+            "zip": 6,
+            "city": "city_6",
+            "amt": 82
+          },
+          {
+            "zip": 7,
+            "city": "city_7",
+            "amt": 95
+          },
+          {
+            "zip": 8,
+            "city": "city_8",
+            "amt": 11
+          },
+          {
+            "zip": 9,
+            "city": "city_9",
+            "amt": 24
+          },
+          {
+            "zip": 0,
+            "city": "city_0",
+            "amt": 37
+          },
+          {
+            "zip": 1,
+            "city": "city_1",
+            "amt": 50
+          },
+          {
+            "zip": 2,
+            "city": "city_2",
+            "amt": 63
+          },
+          {
+            "zip": 3,
+            "city": "city_3",
+            "amt": 76
+          },
+          {
+            "zip": 4,
+            "city": "city_4",
+            "amt": 89
+          },
+          {
+            "zip": 5,
+            "city": "city_5",
+            "amt": 5
+          },
+          {
+            "zip": 6,
+            "city": "city_6",
+            "amt": 18
+          },
+          {
+            "zip": 7,
+            "city": "city_7",
+            "amt": 31
+          },
+          {
+            "zip": 8,
+            "city": "city_8",
+            "amt": 44
+          },
+          {
+            "zip": 9,
+            "city": "city_9",
+            "amt": 57
+          },
+          {
+            "zip": 0,
+            "city": "city_0",
+            "amt": 70
+          },
+          {
+            "zip": 1,
+            "city": "city_1",
+            "amt": 83
+          },
+          {
+            "zip": 2,
+            "city": "city_2",
+            "amt": 96
+          },
+          {
+            "zip": 3,
+            "city": "city_3",
+            "amt": 12
+          },
+          {
+            "zip": 4,
+            "city": "city_4",
+            "amt": 25
+          },
+          {
+            "zip": 5,
+            "city": "city_5",
+            "amt": 38
+          },
+          {
+            "zip": 6,
+            "city": "city_6",
+            "amt": 51
+          },
+          {
+            "zip": 7,
+            "city": "city_7",
+            "amt": 64
+          },
+          {
+            "zip": 8,
+            "city": "city_8",
+            "amt": 77
+          },
+          {
+            "zip": 9,
+            "city": "city_9",
+            "amt": 90
+          },
+          {
+            "zip": 0,
+            "city": "city_0",
+            "amt": 6
+          },
+          {
+            "zip": 1,
+            "city": "city_1",
+            "amt": 19
+          },
+          {
+            "zip": 2,
+            "city": "city_2",
+            "amt": 32
+          },
+          {
+            "zip": 3,
+            "city": "city_3",
+            "amt": 45
+          },
+          {
+            "zip": 4,
+            "city": "city_4",
+            "amt": 58
+          },
+          {
+            "zip": 5,
+            "city": "city_5",
+            "amt": 71
+          },
+          {
+            "zip": 6,
+            "city": "city_6",
+            "amt": 84
+          },
+          {
+            "zip": 7,
+            "city": "city_7",
+            "amt": 0
+          },
+          {
+            "zip": 8,
+            "city": "city_8",
+            "amt": 13
+          },
+          {
+            "zip": 9,
+            "city": "city_9",
+            "amt": 26
+          },
+          {
+            "zip": 0,
+            "city": "city_0",
+            "amt": 39
+          },
+          {
+            "zip": 1,
+            "city": "city_1",
+            "amt": 52
+          },
+          {
+            "zip": 2,
+            "city": "city_2",
+            "amt": 65
+          },
+          {
+            "zip": 3,
+            "city": "city_3",
+            "amt": 78
+          },
+          {
+            "zip": 4,
+            "city": "city_4",
+            "amt": 91
+          },
+          {
+            "zip": 5,
+            "city": "city_5",
+            "amt": 7
+          },
+          {
+            "zip": 6,
+            "city": "city_6",
+            "amt": 20
+          },
+          {
+            "zip": 7,
+            "city": "city_7",
+            "amt": 33
+          },
+          {
+            "zip": 8,
+            "city": "city_8",
+            "amt": 46
+          },
+          {
+            "zip": 9,
+            "city": "city_9",
+            "amt": 59
+          },
+          {
+            "zip": 0,
+            "city": "city_0",
+            "amt": 72
+          },
+          {
+            "zip": 1,
+            "city": "city_1",
+            "amt": 85
+          },
+          {
+            "zip": 2,
+            "city": "city_2",
+            "amt": 1
+          },
+          {
+            "zip": 3,
+            "city": "city_3",
+            "amt": 14
+          },
+          {
+            "zip": 4,
+            "city": "city_4",
+            "amt": 27
+          },
+          {
+            "zip": 5,
+            "city": "city_5",
+            "amt": 40
+          },
+          {
+            "zip": 6,
+            "city": "city_6",
+            "amt": 53
+          },
+          {
+            "zip": 7,
+            "city": "city_7",
+            "amt": 66
+          },
+          {
+            "zip": 8,
+            "city": "city_8",
+            "amt": 79
+          },
+          {
+            "zip": 9,
+            "city": "city_9",
+            "amt": 92
+          },
+          {
+            "zip": 0,
+            "city": "city_0",
+            "amt": 8
+          },
+          {
+            "zip": 1,
+            "city": "city_1",
+            "amt": 21
+          },
+          {
+            "zip": 2,
+            "city": "city_2",
+            "amt": 34
+          },
+          {
+            "zip": 3,
+            "city": "WRONGCITY",
+            "amt": 47
+          },
+          {
+            "zip": 4,
+            "city": "city_4",
+            "amt": 60
+          },
+          {
+            "zip": 5,
+            "city": "city_5",
+            "amt": 73
+          },
+          {
+            "zip": 6,
+            "city": "city_6",
+            "amt": 86
+          },
+          {
+            "zip": 7,
+            "city": "city_7",
+            "amt": 2
+          },
+          {
+            "zip": 8,
+            "city": "city_8",
+            "amt": 15
+          },
+          {
+            "zip": 9,
+            "city": "city_9",
+            "amt": 28
+          },
+          {
+            "zip": 0,
+            "city": "city_0",
+            "amt": 41
+          },
+          {
+            "zip": 1,
+            "city": "city_1",
+            "amt": 54
+          },
+          {
+            "zip": 2,
+            "city": "city_2",
+            "amt": 67
+          },
+          {
+            "zip": 3,
+            "city": "city_3",
+            "amt": 80
+          },
+          {
+            "zip": 4,
+            "city": "city_4",
+            "amt": 93
+          },
+          {
+            "zip": 5,
+            "city": "city_5",
+            "amt": 9
+          },
+          {
+            "zip": 6,
+            "city": "city_6",
+            "amt": 22
+          },
+          {
+            "zip": 7,
+            "city": "city_7",
+            "amt": 35
+          },
+          {
+            "zip": 8,
+            "city": "city_8",
+            "amt": 48
+          },
+          {
+            "zip": 9,
+            "city": "city_9",
+            "amt": 61
+          },
+          {
+            "zip": 0,
+            "city": "city_0",
+            "amt": 74
+          },
+          {
+            "zip": 1,
+            "city": "city_1",
+            "amt": 87
+          },
+          {
+            "zip": 2,
+            "city": "city_2",
+            "amt": 3
+          },
+          {
+            "zip": 3,
+            "city": "city_3",
+            "amt": 16
+          },
+          {
+            "zip": 4,
+            "city": "city_4",
+            "amt": 29
+          },
+          {
+            "zip": 5,
+            "city": "city_5",
+            "amt": 42
+          },
+          {
+            "zip": 6,
+            "city": "city_6",
+            "amt": 55
+          },
+          {
+            "zip": 7,
+            "city": "city_7",
+            "amt": 68
+          },
+          {
+            "zip": 8,
+            "city": "city_8",
+            "amt": 81
+          },
+          {
+            "zip": 9,
+            "city": "city_9",
+            "amt": 94
+          },
+          {
+            "zip": 0,
+            "city": "city_0",
+            "amt": 10
+          },
+          {
+            "zip": 1,
+            "city": "city_1",
+            "amt": 23
+          },
+          {
+            "zip": 2,
+            "city": "city_2",
+            "amt": 36
+          },
+          {
+            "zip": 3,
+            "city": "city_3",
+            "amt": 49
+          },
+          {
+            "zip": 4,
+            "city": "city_4",
+            "amt": 62
+          },
+          {
+            "zip": 5,
+            "city": "city_5",
+            "amt": 75
+          },
+          {
+            "zip": 6,
+            "city": "city_6",
+            "amt": 88
+          },
+          {
+            "zip": 7,
+            "city": "city_7",
+            "amt": 4
+          },
+          {
+            "zip": 8,
+            "city": "city_8",
+            "amt": 17
+          },
+          {
+            "zip": 9,
+            "city": "city_9",
+            "amt": 30
+          },
+          {
+            "zip": 0,
+            "city": "city_0",
+            "amt": 43
+          },
+          {
+            "zip": 1,
+            "city": "city_1",
+            "amt": 56
+          },
+          {
+            "zip": 2,
+            "city": "city_2",
+            "amt": 69
+          },
+          {
+            "zip": 3,
+            "city": "city_3",
+            "amt": 82
+          },
+          {
+            "zip": 4,
+            "city": "city_4",
+            "amt": 95
+          },
+          {
+            "zip": 5,
+            "city": "city_5",
+            "amt": 11
+          },
+          {
+            "zip": 6,
+            "city": "city_6",
+            "amt": 24
+          },
+          {
+            "zip": 7,
+            "city": "city_7",
+            "amt": 37
+          },
+          {
+            "zip": 8,
+            "city": "city_8",
+            "amt": 50
+          },
+          {
+            "zip": 9,
+            "city": "city_9",
+            "amt": 63
+          },
+          {
+            "zip": 0,
+            "city": "city_0",
+            "amt": 76
+          },
+          {
+            "zip": 1,
+            "city": "city_1",
+            "amt": 89
+          },
+          {
+            "zip": 2,
+            "city": "city_2",
+            "amt": 5
+          },
+          {
+            "zip": 3,
+            "city": "city_3",
+            "amt": 18
+          },
+          {
+            "zip": 4,
+            "city": "city_4",
+            "amt": 31
+          },
+          {
+            "zip": 5,
+            "city": "city_5",
+            "amt": 44
+          },
+          {
+            "zip": 6,
+            "city": "city_6",
+            "amt": 57
+          },
+          {
+            "zip": 7,
+            "city": "city_7",
+            "amt": 70
+          },
+          {
+            "zip": 8,
+            "city": "city_8",
+            "amt": 83
+          },
+          {
+            "zip": 9,
+            "city": "city_9",
+            "amt": 96
+          },
+          {
+            "zip": 0,
+            "city": "city_0",
+            "amt": 12
+          },
+          {
+            "zip": 1,
+            "city": "city_1",
+            "amt": 25
+          },
+          {
+            "zip": 2,
+            "city": "city_2",
+            "amt": 38
+          },
+          {
+            "zip": 3,
+            "city": "city_3",
+            "amt": 51
+          },
+          {
+            "zip": 4,
+            "city": "city_4",
+            "amt": 64
+          },
+          {
+            "zip": 5,
+            "city": "city_5",
+            "amt": 77
+          },
+          {
+            "zip": 6,
+            "city": "city_6",
+            "amt": 90
+          },
+          {
+            "zip": 7,
+            "city": "city_7",
+            "amt": 6
+          },
+          {
+            "zip": 8,
+            "city": "city_8",
+            "amt": 19
+          },
+          {
+            "zip": 9,
+            "city": "city_9",
+            "amt": 32
+          },
+          {
+            "zip": 0,
+            "city": "city_0",
+            "amt": 45
+          },
+          {
+            "zip": 1,
+            "city": "city_1",
+            "amt": 58
+          },
+          {
+            "zip": 2,
+            "city": "city_2",
+            "amt": 71
+          },
+          {
+            "zip": 3,
+            "city": "city_3",
+            "amt": 84
+          },
+          {
+            "zip": 4,
+            "city": "city_4",
+            "amt": 0
+          },
+          {
+            "zip": 5,
+            "city": "city_5",
+            "amt": 13
+          },
+          {
+            "zip": 6,
+            "city": "city_6",
+            "amt": 26
+          },
+          {
+            "zip": 7,
+            "city": "city_7",
+            "amt": 39
+          },
+          {
+            "zip": 8,
+            "city": "city_8",
+            "amt": 52
+          },
+          {
+            "zip": 9,
+            "city": "city_9",
+            "amt": 65
+          },
+          {
+            "zip": 0,
+            "city": "city_0",
+            "amt": 78
+          },
+          {
+            "zip": 1,
+            "city": "city_1",
+            "amt": 91
+          },
+          {
+            "zip": 2,
+            "city": "city_2",
+            "amt": 7
+          },
+          {
+            "zip": 3,
+            "city": "city_3",
+            "amt": 20
+          },
+          {
+            "zip": 4,
+            "city": "city_4",
+            "amt": 33
+          },
+          {
+            "zip": 5,
+            "city": "city_5",
+            "amt": 46
+          },
+          {
+            "zip": 6,
+            "city": "city_6",
+            "amt": 59
+          },
+          {
+            "zip": 7,
+            "city": "city_7",
+            "amt": 72
+          },
+          {
+            "zip": 8,
+            "city": "city_8",
+            "amt": 85
+          },
+          {
+            "zip": 9,
+            "city": "city_9",
+            "amt": 1
+          },
+          {
+            "zip": 0,
+            "city": "city_0",
+            "amt": 14
+          },
+          {
+            "zip": 1,
+            "city": "city_1",
+            "amt": 27
+          },
+          {
+            "zip": 2,
+            "city": "city_2",
+            "amt": 40
+          },
+          {
+            "zip": 3,
+            "city": "city_3",
+            "amt": 53
+          },
+          {
+            "zip": 4,
+            "city": "city_4",
+            "amt": 66
+          },
+          {
+            "zip": 5,
+            "city": "city_5",
+            "amt": 79
+          },
+          {
+            "zip": 6,
+            "city": "city_6",
+            "amt": 92
+          },
+          {
+            "zip": 7,
+            "city": "city_7",
+            "amt": 8
+          },
+          {
+            "zip": 8,
+            "city": "city_8",
+            "amt": 21
+          },
+          {
+            "zip": 9,
+            "city": "city_9",
+            "amt": 34
+          },
+          {
+            "zip": 0,
+            "city": "city_0",
+            "amt": 47
+          },
+          {
+            "zip": 1,
+            "city": "city_1",
+            "amt": 60
+          },
+          {
+            "zip": 2,
+            "city": "city_2",
+            "amt": 73
+          },
+          {
+            "zip": 3,
+            "city": "city_3",
+            "amt": 86
+          },
+          {
+            "zip": 4,
+            "city": "city_4",
+            "amt": 2
+          },
+          {
+            "zip": 5,
+            "city": "city_5",
+            "amt": 15
+          },
+          {
+            "zip": 6,
+            "city": "city_6",
+            "amt": 28
+          },
+          {
+            "zip": 7,
+            "city": "city_7",
+            "amt": 41
+          },
+          {
+            "zip": 8,
+            "city": "city_8",
+            "amt": 54
+          },
+          {
+            "zip": 9,
+            "city": "city_9",
+            "amt": 67
+          },
+          {
+            "zip": 0,
+            "city": "city_0",
+            "amt": 80
+          },
+          {
+            "zip": 1,
+            "city": "city_1",
+            "amt": 93
+          },
+          {
+            "zip": 2,
+            "city": "city_2",
+            "amt": 9
+          },
+          {
+            "zip": 3,
+            "city": "city_3",
+            "amt": 22
+          },
+          {
+            "zip": 4,
+            "city": "city_4",
+            "amt": 35
+          },
+          {
+            "zip": 5,
+            "city": "city_5",
+            "amt": 48
+          },
+          {
+            "zip": 6,
+            "city": "city_6",
+            "amt": 61
+          },
+          {
+            "zip": 7,
+            "city": "city_7",
+            "amt": 74
+          },
+          {
+            "zip": 8,
+            "city": "city_8",
+            "amt": 87
+          },
+          {
+            "zip": 9,
+            "city": "city_9",
+            "amt": 3
+          },
+          {
+            "zip": 0,
+            "city": "city_0",
+            "amt": 16
+          },
+          {
+            "zip": 1,
+            "city": "city_1",
+            "amt": 29
+          },
+          {
+            "zip": 2,
+            "city": "city_2",
+            "amt": 42
+          },
+          {
+            "zip": 3,
+            "city": "city_3",
+            "amt": 55
+          },
+          {
+            "zip": 4,
+            "city": "city_4",
+            "amt": 68
+          },
+          {
+            "zip": 5,
+            "city": "city_5",
+            "amt": 81
+          },
+          {
+            "zip": 6,
+            "city": "city_6",
+            "amt": 94
+          },
+          {
+            "zip": 7,
+            "city": "city_7",
+            "amt": 10
+          },
+          {
+            "zip": 8,
+            "city": "city_8",
+            "amt": 23
+          },
+          {
+            "zip": 9,
+            "city": "city_9",
+            "amt": 36
+          },
+          {
+            "zip": 0,
+            "city": "city_0",
+            "amt": 49
+          },
+          {
+            "zip": 1,
+            "city": "city_1",
+            "amt": 62
+          },
+          {
+            "zip": 2,
+            "city": "city_2",
+            "amt": 75
+          },
+          {
+            "zip": 3,
+            "city": "city_3",
+            "amt": 88
+          },
+          {
+            "zip": 4,
+            "city": "city_4",
+            "amt": 4
+          },
+          {
+            "zip": 5,
+            "city": "city_5",
+            "amt": 17
+          },
+          {
+            "zip": 6,
+            "city": "city_6",
+            "amt": 30
+          },
+          {
+            "zip": 7,
+            "city": "city_7",
+            "amt": 43
+          },
+          {
+            "zip": 8,
+            "city": "city_8",
+            "amt": 56
+          },
+          {
+            "zip": 9,
+            "city": "city_9",
+            "amt": 69
+          },
+          {
+            "zip": 0,
+            "city": "city_0",
+            "amt": 82
+          },
+          {
+            "zip": 1,
+            "city": "city_1",
+            "amt": 95
+          },
+          {
+            "zip": 2,
+            "city": "city_2",
+            "amt": 11
+          },
+          {
+            "zip": 3,
+            "city": "city_3",
+            "amt": 24
+          },
+          {
+            "zip": 4,
+            "city": "city_4",
+            "amt": 37
+          },
+          {
+            "zip": 5,
+            "city": "city_5",
+            "amt": 50
+          },
+          {
+            "zip": 6,
+            "city": "city_6",
+            "amt": 63
+          },
+          {
+            "zip": 7,
+            "city": "city_7",
+            "amt": 76
+          },
+          {
+            "zip": 8,
+            "city": "city_8",
+            "amt": 89
+          },
+          {
+            "zip": 9,
+            "city": "city_9",
+            "amt": 5
+          },
+          {
+            "zip": 0,
+            "city": "city_0",
+            "amt": 18
+          },
+          {
+            "zip": 1,
+            "city": "city_1",
+            "amt": 31
+          },
+          {
+            "zip": 2,
+            "city": "city_2",
+            "amt": 44
+          },
+          {
+            "zip": 3,
+            "city": "city_3",
+            "amt": 57
+          },
+          {
+            "zip": 4,
+            "city": "city_4",
+            "amt": 70
+          },
+          {
+            "zip": 5,
+            "city": "city_5",
+            "amt": 83
+          },
+          {
+            "zip": 6,
+            "city": "city_6",
+            "amt": 96
+          },
+          {
+            "zip": 7,
+            "city": "city_7",
+            "amt": 12
+          },
+          {
+            "zip": 8,
+            "city": "city_8",
+            "amt": 25
+          },
+          {
+            "zip": 9,
+            "city": "city_9",
+            "amt": 38
+          },
+          {
+            "zip": 0,
+            "city": "city_0",
+            "amt": 51
+          },
+          {
+            "zip": 1,
+            "city": "city_1",
+            "amt": 64
+          },
+          {
+            "zip": 2,
+            "city": "city_2",
+            "amt": 77
+          },
+          {
+            "zip": 3,
+            "city": "city_3",
+            "amt": 90
+          },
+          {
+            "zip": 4,
+            "city": "city_4",
+            "amt": 6
+          },
+          {
+            "zip": 5,
+            "city": "city_5",
+            "amt": 19
+          },
+          {
+            "zip": 6,
+            "city": "city_6",
+            "amt": 32
+          },
+          {
+            "zip": 7,
+            "city": "city_7",
+            "amt": 45
+          },
+          {
+            "zip": 8,
+            "city": "city_8",
+            "amt": 58
+          },
+          {
+            "zip": 9,
+            "city": "city_9",
+            "amt": 71
+          },
+          {
+            "zip": 0,
+            "city": "city_0",
+            "amt": 84
+          },
+          {
+            "zip": 1,
+            "city": "city_1",
+            "amt": 0
+          },
+          {
+            "zip": 2,
+            "city": "city_2",
+            "amt": 13
+          },
+          {
+            "zip": 3,
+            "city": "city_3",
+            "amt": 26
+          },
+          {
+            "zip": 4,
+            "city": "city_4",
+            "amt": 39
+          },
+          {
+            "zip": 5,
+            "city": "city_5",
+            "amt": 52
+          },
+          {
+            "zip": 6,
+            "city": "city_6",
+            "amt": 65
+          },
+          {
+            "zip": 7,
+            "city": "city_7",
+            "amt": 78
+          },
+          {
+            "zip": 8,
+            "city": "city_8",
+            "amt": 91
+          },
+          {
+            "zip": 9,
+            "city": "city_9",
+            "amt": 7
+          }
+        ]
+      },
+      "options": {
+        "sampleSize": 100000,
+        "domain": null
+      }
+    },
+    {
+      "name": "functional_dependency",
+      "description": "strict zip->city functional dependency",
+      "input": {
+        "kind": "records",
+        "records": [
+          {
+            "zip": 0,
+            "city": 0,
+            "amt": 0
+          },
+          {
+            "zip": 1,
+            "city": 0,
+            "amt": 7
+          },
+          {
+            "zip": 2,
+            "city": 1,
+            "amt": 14
+          },
+          {
+            "zip": 3,
+            "city": 2,
+            "amt": 21
+          },
+          {
+            "zip": 4,
+            "city": 3,
+            "amt": 28
+          },
+          {
+            "zip": 5,
+            "city": 4,
+            "amt": 35
+          },
+          {
+            "zip": 0,
+            "city": 0,
+            "amt": 42
+          },
+          {
+            "zip": 1,
+            "city": 0,
+            "amt": 49
+          },
+          {
+            "zip": 2,
+            "city": 1,
+            "amt": 6
+          },
+          {
+            "zip": 3,
+            "city": 2,
+            "amt": 13
+          },
+          {
+            "zip": 4,
+            "city": 3,
+            "amt": 20
+          },
+          {
+            "zip": 5,
+            "city": 4,
+            "amt": 27
+          },
+          {
+            "zip": 0,
+            "city": 0,
+            "amt": 34
+          },
+          {
+            "zip": 1,
+            "city": 0,
+            "amt": 41
+          },
+          {
+            "zip": 2,
+            "city": 1,
+            "amt": 48
+          },
+          {
+            "zip": 3,
+            "city": 2,
+            "amt": 5
+          },
+          {
+            "zip": 4,
+            "city": 3,
+            "amt": 12
+          },
+          {
+            "zip": 5,
+            "city": 4,
+            "amt": 19
+          },
+          {
+            "zip": 0,
+            "city": 0,
+            "amt": 26
+          },
+          {
+            "zip": 1,
+            "city": 0,
+            "amt": 33
+          },
+          {
+            "zip": 2,
+            "city": 1,
+            "amt": 40
+          },
+          {
+            "zip": 3,
+            "city": 2,
+            "amt": 47
+          },
+          {
+            "zip": 4,
+            "city": 3,
+            "amt": 4
+          },
+          {
+            "zip": 5,
+            "city": 4,
+            "amt": 11
+          },
+          {
+            "zip": 0,
+            "city": 0,
+            "amt": 18
+          },
+          {
+            "zip": 1,
+            "city": 0,
+            "amt": 25
+          },
+          {
+            "zip": 2,
+            "city": 1,
+            "amt": 32
+          },
+          {
+            "zip": 3,
+            "city": 2,
+            "amt": 39
+          },
+          {
+            "zip": 4,
+            "city": 3,
+            "amt": 46
+          },
+          {
+            "zip": 5,
+            "city": 4,
+            "amt": 3
+          },
+          {
+            "zip": 0,
+            "city": 0,
+            "amt": 10
+          },
+          {
+            "zip": 1,
+            "city": 0,
+            "amt": 17
+          },
+          {
+            "zip": 2,
+            "city": 1,
+            "amt": 24
+          },
+          {
+            "zip": 3,
+            "city": 2,
+            "amt": 31
+          },
+          {
+            "zip": 4,
+            "city": 3,
+            "amt": 38
+          },
+          {
+            "zip": 5,
+            "city": 4,
+            "amt": 45
+          },
+          {
+            "zip": 0,
+            "city": 0,
+            "amt": 2
+          },
+          {
+            "zip": 1,
+            "city": 0,
+            "amt": 9
+          },
+          {
+            "zip": 2,
+            "city": 1,
+            "amt": 16
+          },
+          {
+            "zip": 3,
+            "city": 2,
+            "amt": 23
+          },
+          {
+            "zip": 4,
+            "city": 3,
+            "amt": 30
+          },
+          {
+            "zip": 5,
+            "city": 4,
+            "amt": 37
+          },
+          {
+            "zip": 0,
+            "city": 0,
+            "amt": 44
+          },
+          {
+            "zip": 1,
+            "city": 0,
+            "amt": 1
+          },
+          {
+            "zip": 2,
+            "city": 1,
+            "amt": 8
+          },
+          {
+            "zip": 3,
+            "city": 2,
+            "amt": 15
+          },
+          {
+            "zip": 4,
+            "city": 3,
+            "amt": 22
+          },
+          {
+            "zip": 5,
+            "city": 4,
+            "amt": 29
+          },
+          {
+            "zip": 0,
+            "city": 0,
+            "amt": 36
+          },
+          {
+            "zip": 1,
+            "city": 0,
+            "amt": 43
+          },
+          {
+            "zip": 2,
+            "city": 1,
+            "amt": 0
+          },
+          {
+            "zip": 3,
+            "city": 2,
+            "amt": 7
+          },
+          {
+            "zip": 4,
+            "city": 3,
+            "amt": 14
+          },
+          {
+            "zip": 5,
+            "city": 4,
+            "amt": 21
+          },
+          {
+            "zip": 0,
+            "city": 0,
+            "amt": 28
+          },
+          {
+            "zip": 1,
+            "city": 0,
+            "amt": 35
+          },
+          {
+            "zip": 2,
+            "city": 1,
+            "amt": 42
+          },
+          {
+            "zip": 3,
+            "city": 2,
+            "amt": 49
+          },
+          {
+            "zip": 4,
+            "city": 3,
+            "amt": 6
+          },
+          {
+            "zip": 5,
+            "city": 4,
+            "amt": 13
+          },
+          {
+            "zip": 0,
+            "city": 0,
+            "amt": 20
+          },
+          {
+            "zip": 1,
+            "city": 0,
+            "amt": 27
+          },
+          {
+            "zip": 2,
+            "city": 1,
+            "amt": 34
+          },
+          {
+            "zip": 3,
+            "city": 2,
+            "amt": 41
+          },
+          {
+            "zip": 4,
+            "city": 3,
+            "amt": 48
+          },
+          {
+            "zip": 5,
+            "city": 4,
+            "amt": 5
+          },
+          {
+            "zip": 0,
+            "city": 0,
+            "amt": 12
+          },
+          {
+            "zip": 1,
+            "city": 0,
+            "amt": 19
+          },
+          {
+            "zip": 2,
+            "city": 1,
+            "amt": 26
+          },
+          {
+            "zip": 3,
+            "city": 2,
+            "amt": 33
+          },
+          {
+            "zip": 4,
+            "city": 3,
+            "amt": 40
+          },
+          {
+            "zip": 5,
+            "city": 4,
+            "amt": 47
+          },
+          {
+            "zip": 0,
+            "city": 0,
+            "amt": 4
+          },
+          {
+            "zip": 1,
+            "city": 0,
+            "amt": 11
+          },
+          {
+            "zip": 2,
+            "city": 1,
+            "amt": 18
+          },
+          {
+            "zip": 3,
+            "city": 2,
+            "amt": 25
+          },
+          {
+            "zip": 4,
+            "city": 3,
+            "amt": 32
+          },
+          {
+            "zip": 5,
+            "city": 4,
+            "amt": 39
+          },
+          {
+            "zip": 0,
+            "city": 0,
+            "amt": 46
+          },
+          {
+            "zip": 1,
+            "city": 0,
+            "amt": 3
+          },
+          {
+            "zip": 2,
+            "city": 1,
+            "amt": 10
+          },
+          {
+            "zip": 3,
+            "city": 2,
+            "amt": 17
+          },
+          {
+            "zip": 4,
+            "city": 3,
+            "amt": 24
+          },
+          {
+            "zip": 5,
+            "city": 4,
+            "amt": 31
+          },
+          {
+            "zip": 0,
+            "city": 0,
+            "amt": 38
+          },
+          {
+            "zip": 1,
+            "city": 0,
+            "amt": 45
+          },
+          {
+            "zip": 2,
+            "city": 1,
+            "amt": 2
+          },
+          {
+            "zip": 3,
+            "city": 2,
+            "amt": 9
+          },
+          {
+            "zip": 4,
+            "city": 3,
+            "amt": 16
+          },
+          {
+            "zip": 5,
+            "city": 4,
+            "amt": 23
+          },
+          {
+            "zip": 0,
+            "city": 0,
+            "amt": 30
+          },
+          {
+            "zip": 1,
+            "city": 0,
+            "amt": 37
+          },
+          {
+            "zip": 2,
+            "city": 1,
+            "amt": 44
+          },
+          {
+            "zip": 3,
+            "city": 2,
+            "amt": 1
+          },
+          {
+            "zip": 4,
+            "city": 3,
+            "amt": 8
+          },
+          {
+            "zip": 5,
+            "city": 4,
+            "amt": 15
+          },
+          {
+            "zip": 0,
+            "city": 0,
+            "amt": 22
+          },
+          {
+            "zip": 1,
+            "city": 0,
+            "amt": 29
+          },
+          {
+            "zip": 2,
+            "city": 1,
+            "amt": 36
+          },
+          {
+            "zip": 3,
+            "city": 2,
+            "amt": 43
+          },
+          {
+            "zip": 4,
+            "city": 3,
+            "amt": 0
+          },
+          {
+            "zip": 5,
+            "city": 4,
+            "amt": 7
+          },
+          {
+            "zip": 0,
+            "city": 0,
+            "amt": 14
+          },
+          {
+            "zip": 1,
+            "city": 0,
+            "amt": 21
+          },
+          {
+            "zip": 2,
+            "city": 1,
+            "amt": 28
+          },
+          {
+            "zip": 3,
+            "city": 2,
+            "amt": 35
+          },
+          {
+            "zip": 4,
+            "city": 3,
+            "amt": 42
+          },
+          {
+            "zip": 5,
+            "city": 4,
+            "amt": 49
+          },
+          {
+            "zip": 0,
+            "city": 0,
+            "amt": 6
+          },
+          {
+            "zip": 1,
+            "city": 0,
+            "amt": 13
+          },
+          {
+            "zip": 2,
+            "city": 1,
+            "amt": 20
+          },
+          {
+            "zip": 3,
+            "city": 2,
+            "amt": 27
+          },
+          {
+            "zip": 4,
+            "city": 3,
+            "amt": 34
+          },
+          {
+            "zip": 5,
+            "city": 4,
+            "amt": 41
+          },
+          {
+            "zip": 0,
+            "city": 0,
+            "amt": 48
+          },
+          {
+            "zip": 1,
+            "city": 0,
+            "amt": 5
+          },
+          {
+            "zip": 2,
+            "city": 1,
+            "amt": 12
+          },
+          {
+            "zip": 3,
+            "city": 2,
+            "amt": 19
+          },
+          {
+            "zip": 4,
+            "city": 3,
+            "amt": 26
+          },
+          {
+            "zip": 5,
+            "city": 4,
+            "amt": 33
+          }
+        ]
+      },
+      "options": {
+        "sampleSize": 100000,
+        "domain": null
+      }
+    },
+    {
+      "name": "composite_key",
+      "description": "(order_id, line_no) composite key; no single-col key",
+      "input": {
+        "kind": "records",
+        "records": [
+          {
+            "order_id": 1,
+            "line_no": 1,
+            "sku": "a",
+            "qty": 2
+          },
+          {
+            "order_id": 1,
+            "line_no": 2,
+            "sku": "b",
+            "qty": 1
+          },
+          {
+            "order_id": 1,
+            "line_no": 3,
+            "sku": "c",
+            "qty": 5
+          },
+          {
+            "order_id": 2,
+            "line_no": 1,
+            "sku": "a",
+            "qty": 1
+          },
+          {
+            "order_id": 2,
+            "line_no": 2,
+            "sku": "d",
+            "qty": 1
+          },
+          {
+            "order_id": 3,
+            "line_no": 1,
+            "sku": "e",
+            "qty": 9
+          }
+        ]
+      },
+      "options": {
+        "sampleSize": 100000,
+        "domain": null
+      }
     }
   ]
 }
