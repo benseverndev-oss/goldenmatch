@@ -10,6 +10,7 @@ export { AgeValidationProfiler } from "./age-validation.js";
 export { IdentitySafePkProfiler } from "./identity-safe-pk.js";
 export { CompositeKeyProfiler } from "./composite-key.js";
 export { ApproxDuplicateProfiler } from "./approx-duplicate.js";
+export { FunctionalDependencyProfiler } from "./functional-dependency.js";
 
 import type { RelationProfiler } from "../profilers/base.js";
 import { TemporalOrderProfiler } from "./temporal.js";
@@ -19,6 +20,7 @@ import { AgeValidationProfiler } from "./age-validation.js";
 import { IdentitySafePkProfiler } from "./identity-safe-pk.js";
 import { CompositeKeyProfiler } from "./composite-key.js";
 import { ApproxDuplicateProfiler } from "./approx-duplicate.js";
+import { FunctionalDependencyProfiler } from "./functional-dependency.js";
 
 /** All relation profilers in execution order. */
 export const RELATION_PROFILERS: readonly RelationProfiler[] = [
@@ -34,4 +36,6 @@ export const RELATION_PROFILERS: readonly RelationProfiler[] = [
   new CompositeKeyProfiler(),
   // Exact + near-duplicate (normalized) row detection.
   new ApproxDuplicateProfiler(),
+  // Discover strict single-column functional dependencies.
+  new FunctionalDependencyProfiler(),
 ];
