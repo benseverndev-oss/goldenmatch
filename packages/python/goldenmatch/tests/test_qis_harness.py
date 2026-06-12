@@ -88,3 +88,16 @@ def test_moderate_actually_corrupts_some_rows():
     # At least the first_name column must differ on a meaningful fraction.
     diff = (df_light["first_name"] != df_mod["first_name"]).sum()
     assert diff > 50  # rate ~0.3 over 1000 rows; comfortably > 50
+
+
+@pytest.mark.slow
+def test_moderate_oracle_f1_in_target_band():
+    # The tuning gate: `moderate` must land the 1K oracle in the drift-sensitive
+    # 0.90-0.95 band (with a small tolerance so CI native/py float jitter and
+    # platform RNG don't flake). If this fails after a deliberate rate change,
+    # re-tune AND update the report.
+    out = qis.run_rung(1000, seed=0, shape="realistic", corruption="moderate")
+    f1 = out["pairwise"]["f1"]
+    assert 0.88 <= f1 <= 0.96, f"moderate 1K pairwise F1 out of band: {f1:.4f}"
+    assert out["cluster"]["f1"] > 0.5, f"cluster F1 degenerate: {out['cluster']['f1']:.4f}"
+    assert out["corruption"] == "moderate"

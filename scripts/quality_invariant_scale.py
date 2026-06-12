@@ -392,14 +392,14 @@ def _peak_rss_mb() -> float | None:
 
 
 def run_rung(n_rows: int, seed: int = 0, shape: str = "realistic",
-             backend: str | None = None) -> dict:
+             backend: str | None = None, corruption: str = "light") -> dict:
     import goldenmatch
     os.environ.setdefault("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
     if sys.platform == "win32":
         tracemalloc.start()
 
     t0 = time.time()
-    df, gt = generate_with_gt(n_rows, seed=seed, shape=shape)
+    df, gt = generate_with_gt(n_rows, seed=seed, shape=shape, corruption=corruption)
     t_gen = time.time() - t0
 
     # Backend handling: zero-config (planner picks) when --backend is omitted;
@@ -595,6 +595,7 @@ def run_rung(n_rows: int, seed: int = 0, shape: str = "realistic",
 
     return {
         "rows": len(df),
+        "corruption": corruption,
         "clusters_gt": int(len(set(gt.tolist()))),
         "wall_s": {"generate": round(t_gen, 2), "dedupe": round(t_dedupe, 2), "total": round(t_gen + t_dedupe, 2)},
         "rss_mb_peak": _peak_rss_mb(),
@@ -621,12 +622,19 @@ def main(argv=None) -> int:
                          "polars <500K, bucket 500K-25M (>=32GB RAM), duckdb 25M-100M "
                          "(out-of-core, no OOM on smaller boxes), ray 50M+ "
                          "(distributed; needs the ray extra installed).")
+    ap.add_argument("--corruption", choices=tuple(("light", "moderate", "hard")),
+                    default="light",
+                    help="realistic-shape corruption level. light = today's baseline "
+                         "(10%% a->@ typo only); moderate ~ F1 0.90-0.95 (drift-sensitive, "
+                         "the published ladder default); hard = stress. Ignored for --shape phase5.")
     ap.add_argument("--out", type=Path, default=None, help="write per-rung JSON here")
     args = ap.parse_args(argv)
 
-    res = run_rung(args.rows, seed=args.seed, shape=args.shape, backend=args.backend)
+    res = run_rung(args.rows, seed=args.seed, shape=args.shape, backend=args.backend,
+                   corruption=args.corruption)
     res["shape"] = args.shape
     res["backend"] = args.backend or "auto"
+    res["corruption"] = args.corruption
     print(json.dumps(res, indent=2, default=str))
     if args.out:
         args.out.write_text(json.dumps(res, indent=2, default=str), encoding="utf-8")
