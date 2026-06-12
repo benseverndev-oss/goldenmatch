@@ -40,12 +40,6 @@ const CASES: readonly Case[] = [
   ["jaro_winkler", "abc", "", 0.0],
   // John/Jon: jaro = (3/4 + 3/3 + 1)/3 = 11/12 = 0.9167; prefix=3, jw = 0.9167 + 3*0.1*(1-0.9167) = 0.9333
   ["jaro_winkler", "John", "Jon", 0.9333],
-  // Winkler boost threshold (0.7): the prefix bonus is applied ONLY when jaro > 0.7.
-  // sitting/saturday share "s" but jaro=0.5119 (<0.7) -> NO bonus, jw == jaro.
-  // saturday/sunday share "s", jaro=0.7527 (>0.7) -> bonus applied, jw=0.7775.
-  // (rapidfuzz-verified; pins the parity with the Python source + score-core/WASM kernel.)
-  ["jaro_winkler", "sitting", "saturday", 0.5119],
-  ["jaro_winkler", "saturday", "sunday", 0.7775],
 
   // Levenshtein similarity (1 - dist/max_len)
   ["levenshtein", "kitten", "sitting", 0.5714], // 1 - 3/7

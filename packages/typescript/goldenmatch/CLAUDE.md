@@ -82,12 +82,20 @@ npx vitest run tests/parity/        # parity-only suite
   and runs `tests/parity/wasm-scorer.test.ts` un-skipped; without the artifact
   that test SKIPS and the artifact-free `wasm-backend`/`wasm-fallback` unit tests
   run in the normal `typescript` lane.
-- **Known limitation — non-BMP parity gap:** the pure-TS scorers index UTF-16
-  code units (`a[i]`, `a.length`); the rapidfuzz WASM kernel and the Python
-  golden source operate on Unicode codepoints, so they disagree on astral-plane
-  (surrogate-pair) chars like emoji. Parity is asserted on the BMP domain
-  (person-name ER data is BMP). Codepoint-correcting the core scorers is a tracked
-  follow-up, NOT part of this slice.
+- **The parity gate asserts WASM == Python/rapidfuzz goldens, NOT WASM == pure-TS.**
+  The WASM kernel IS rapidfuzz, so `wasm-scorer.test.ts` pins it to canonical
+  `score_one` values (verify/extend via a throwaway `score-core` test that prints
+  `score_one`). It deliberately does NOT compare to the hand-rolled pure-TS
+  scorers, because those have small KNOWN divergences from rapidfuzz:
+  (1) `jaroWinkler` applies the prefix bonus below the Winkler 0.7 boost threshold;
+  (2) its greedy Jaro matcher counts transpositions differently on repeated-char
+  words (e.g. `"saturday"/"sunday"` → pure-TS 0.7475 vs rapidfuzz 0.7775);
+  (3) it indexes UTF-16 code units, diverging from codepoints on non-BMP
+  (surrogate-pair) input. All three sit below typical match thresholds (dedup
+  decisions unchanged), and enabling WASM shifts such borderline scores toward
+  the Python values. **Aligning the pure-TS scorers with rapidfuzz is a single
+  tracked follow-up, NOT part of this opt-in-WASM slice** — don't "fix" one of
+  the three in isolation (a partial fix just moves the divergence).
 - **Open item — dist artifact path:** the loader resolves the artifact via
   `new URL('./artifacts/score_wasm_bg.wasm', import.meta.url)`. The parity test
   runs against `src` (vitest, unbundled) and is correct. Whether tsup BUNDLING

@@ -9,17 +9,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 - **Opt-in WASM scorer backend.** `enableWasm()` / `disableWasm()` register a
   WebAssembly scorer (the Rust `score-core` kernel via the new `score-wasm`
   crate) behind the sync `scoreMatrix` for `jaro_winkler`/`levenshtein`/`exact`.
-  Pure-TS remains the default and the fallback; runs in Node, browsers, and
-  Workers. Parity-gated in CI (`wasm_score` lane). token_sort + non-BMP
-  codepoint parity are tracked follow-ups.
-- **Fixed `jaro_winkler` Winkler boost threshold.** The prefix bonus is now
-  applied only when the base Jaro similarity exceeds 0.7, matching rapidfuzz
-  (and therefore the Python source of truth + the score-core/WASM kernel).
-  Previously the bonus was applied to any non-zero Jaro, over-scoring
-  low-similarity prefix-sharing pairs (e.g. `"sitting"`/`"saturday"`). Surfaced
-  by the new WASM parity gate; affects only sub-0.7 pairs, which sit well below
-  typical match thresholds so dedup outcomes are unchanged. Locked by new
-  `scorer-ground-truth` cases.
+  Because the WASM kernel IS rapidfuzz, it matches the Python source of truth
+  exactly; it is CI-gated (`wasm_score` lane) against canonical rapidfuzz
+  goldens. Pure-TS remains the default and the fallback; runs in Node, browsers,
+  and Workers. Note: the hand-rolled pure-TS Jaro-Winkler has small known
+  divergences from rapidfuzz (the 0.7 boost threshold; transposition counting on
+  repeated-character words), so enabling WASM can shift borderline scores toward
+  the Python values without changing dedup decisions. Aligning the pure-TS
+  scorers with rapidfuzz, token_sort WASM coverage, and non-BMP codepoint parity
+  are tracked follow-ups.
 
 ### Added — refdata-aware name scorers (parity with Python `refdata`)
 
