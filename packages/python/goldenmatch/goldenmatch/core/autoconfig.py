@@ -1791,7 +1791,10 @@ def build_blocking(
         return project_max_block_size(sample_mb, df.height, effective_n_full)
 
     def _pass_is_bounded(key: BlockingKeyConfig) -> bool:
-        return _projected_block(key.fields) <= max_safe_block
+        # #876: both gates must hold — per-block OOM guard (max_safe_block, #715)
+        # AND total-pairs budget (K, scale-invariance knob).
+        pb = _projected_block(key.fields)
+        return pb <= max_safe_block and _project_pairs_per_row(pb) <= _blocking_pairs_per_row_budget()
 
     def _gate_passes(
         primary: BlockingKeyConfig,
@@ -1847,8 +1850,17 @@ def build_blocking(
             if (p.cardinality_ratio or 0.0) < 1.0 and _projected_block([p.name]) >= 2
         ]
         candidates = exact_cols_sorted[:5]
-        # Filter out columns that create oversized blocks
-        safe_exact = [p for p in candidates if _max_block_size(p.name) <= max_safe_block]
+        # #876: scale-safe filter — both per-block OOM guard AND total-pairs
+        # budget must hold.  _max_block_size alone is N-dependent; at 100M a
+        # zip key with 100 distinct values has block ~1M >> K pairs/row even
+        # though it passes max_safe_block.  _scale_safe adds the linear guard.
+        K = _blocking_pairs_per_row_budget()
+
+        def _scale_safe(fields: list[str]) -> bool:
+            pb = _projected_block(fields)
+            return pb <= max_safe_block and _project_pairs_per_row(pb) <= K
+
+        safe_exact = [p for p in candidates if _scale_safe([p.name])]
         if safe_exact:
             best = max(safe_exact, key=lambda p: df[p.name].n_unique())
             transforms = ["lowercase", "strip"] if best.col_type == "email" else ["strip"]
