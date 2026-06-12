@@ -34,6 +34,10 @@ on:
         description: "Generator seed"
         required: false
         default: "0"
+      corruption:
+        description: "realistic-shape corruption: light | moderate | hard (default moderate for the #510 ladder)"
+        required: false
+        default: "moderate"
       label:
         description: "Tag for the output artifact (e.g. '10m-bucket', '25m-duckdb')"
         required: false
@@ -173,6 +177,7 @@ jobs:
             --rows ${{ inputs.rows }} \
             --shape ${{ inputs.shape }} \
             --seed ${{ inputs.seed }} \
+            --corruption ${{ inputs.corruption || 'moderate' }} \
             $BACKEND_FLAG \
             --out .profile_tmp/qis/qis_${{ inputs.label }}.json \
             | tee .profile_tmp/qis/qis_${{ inputs.label }}.log
