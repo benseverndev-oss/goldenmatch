@@ -8,6 +8,7 @@ export { NullCorrelationProfiler } from "./null-correlation.js";
 export { NumericCrossColumnProfiler } from "./numeric-cross.js";
 export { AgeValidationProfiler } from "./age-validation.js";
 export { IdentitySafePkProfiler } from "./identity-safe-pk.js";
+export { CompositeKeyProfiler } from "./composite-key.js";
 
 import type { RelationProfiler } from "../profilers/base.js";
 import { TemporalOrderProfiler } from "./temporal.js";
@@ -15,6 +16,7 @@ import { NullCorrelationProfiler } from "./null-correlation.js";
 import { NumericCrossColumnProfiler } from "./numeric-cross.js";
 import { AgeValidationProfiler } from "./age-validation.js";
 import { IdentitySafePkProfiler } from "./identity-safe-pk.js";
+import { CompositeKeyProfiler } from "./composite-key.js";
 
 /** All relation profilers in execution order. */
 export const RELATION_PROFILERS: readonly RelationProfiler[] = [
@@ -26,4 +28,6 @@ export const RELATION_PROFILERS: readonly RelationProfiler[] = [
   // Identity Graph downstreams need source_pk_column to avoid record_id
   // collisions on duplicate raw rows.
   new IdentitySafePkProfiler(),
+  // Discover minimal composite keys when no single-column key exists.
+  new CompositeKeyProfiler(),
 ];
