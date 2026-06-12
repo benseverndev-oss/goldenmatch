@@ -1,0 +1,25 @@
+# Standalone workspace so this wasm-bindgen wrapper can path-depend on the
+# pyo3-free `analysis-core` WITHOUT either crate's workspace claiming it — same
+# isolation rationale as `score-core`/`score-wasm`. NO rust-toolchain.toml:
+# inherits the caller's toolchain. The TS analogue of analysis-core's native
+# path: wraps the SAME `analysis-core`, so histogram/quantile are byte-identical
+# across Python, the native wheel, and TS WASM.
+[workspace]
+
+[package]
+name = "goldenmatch-analysis-wasm"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Ben Severn <benzsevern@gmail.com>"]
+description = "wasm-bindgen wrapper over analysis-core for the goldenanalysis TS opt-in WASM backend"
+
+[lib]
+name = "goldenmatch_analysis_wasm"
+crate-type = ["cdylib", "rlib"]  # cdylib for wasm; rlib so host unit tests link
+
+[dependencies]
+analysis-core = { path = "../analysis-core" }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"

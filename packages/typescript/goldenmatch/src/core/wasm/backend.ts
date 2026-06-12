@@ -36,12 +36,14 @@ export interface ScorerBackend {
   scoreMatrix(values: readonly string[], scorerName: string): Float64Array;
 }
 
-let _backend: ScorerBackend | null = null;
+import { createBackendRegistry } from "goldenmatch-wasm-runtime";
+
+const _registry = createBackendRegistry<ScorerBackend>();
 
 export function setScorerBackend(b: ScorerBackend | null): void {
-  _backend = b;
+  _registry.set(b);
 }
 
 export function getScorerBackend(): ScorerBackend | null {
-  return _backend;
+  return _registry.get();
 }

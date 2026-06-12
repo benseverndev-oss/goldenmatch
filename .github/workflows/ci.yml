@@ -50,6 +50,7 @@ jobs:
       sail: ${{ steps.filter.outputs.sail }}
       readme_callouts: ${{ steps.filter.outputs.readme_callouts }}
       wasm_score: ${{ steps.filter.outputs.wasm_score }}
+      analysis_wasm: ${{ steps.filter.outputs.analysis_wasm }}
       ts_parity: ${{ steps.filter.outputs.ts_parity }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
@@ -107,6 +108,14 @@ jobs:
               - 'packages/typescript/goldenmatch/src/core/wasm/**'
               - 'packages/typescript/goldenmatch/src/core/scorer.ts'
               - 'packages/typescript/goldenmatch/tests/parity/wasm-scorer.test.ts'
+              - 'packages/typescript/goldenmatch-wasm-runtime/**'
+            analysis_wasm:
+              - 'packages/rust/extensions/analysis-wasm/**'
+              - 'packages/rust/extensions/analysis-core/**'
+              - 'packages/typescript/goldenanalysis/src/core/wasm/**'
+              - 'packages/typescript/goldenanalysis/src/core/aggregate.ts'
+              - 'packages/typescript/goldenanalysis/tests/parity/wasm-aggregate.test.ts'
+              - 'packages/typescript/goldenmatch-wasm-runtime/**'
             ts_parity:
               # TS parity-fixture staleness gate (#856): a Python behaviour
               # change that is not mirrored into the committed TS fixtures must
@@ -792,6 +801,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Build WASM artifact (installs the matching wasm-bindgen-cli)
         run: bash packages/rust/extensions/score-wasm/build_wasm.sh
+      - name: Build shared wasm-runtime (the parity test imports goldenmatch-wasm-runtime)
+        run: pnpm --filter goldenmatch-wasm-runtime build
       - name: WASM parity (un-skipped — artifact now present) [THE GATE]
         run: pnpm --filter goldenmatch exec vitest run tests/parity/wasm-scorer.test.ts
       - name: Benchmark (informational; dist artifact-path under tsup bundling TBD on first run)
@@ -799,6 +810,40 @@ jobs:
         run: |
           pnpm --filter goldenmatch build
           node packages/typescript/goldenmatch/scripts/bench_wasm_scorer.mjs 1500
+
+  analysis_wasm:
+    needs: changes
+    if: needs.changes.outputs.analysis_wasm == 'true' || needs.changes.outputs.ci_workflow == 'true'
+    # Opt-in WASM aggregate lane: builds the analysis-wasm artifact, then runs the
+    # parity test UN-skipped (it skips elsewhere with no artifact) + an
+    # informational benchmark. The artifact-free goldenanalysis tests + the
+    # shared goldenmatch-wasm-runtime build run in the `typescript` lane above.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/analysis-wasm
+      - uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093  # v6.0.8
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build WASM artifact (installs the matching wasm-bindgen-cli)
+        run: bash packages/rust/extensions/analysis-wasm/build_wasm.sh
+      - name: Build shared wasm-runtime (the parity test imports goldenmatch-wasm-runtime)
+        run: pnpm --filter goldenmatch-wasm-runtime build
+      - name: WASM aggregate parity (un-skipped — artifact now present) [THE GATE]
+        run: pnpm --filter goldenanalysis exec vitest run tests/parity/wasm-aggregate.test.ts
+      - name: Benchmark (informational; dist artifact-path under tsup bundling TBD on first run)
+        continue-on-error: true
+        run: |
+          pnpm --filter goldenanalysis build
+          node packages/typescript/goldenanalysis/scripts/bench_wasm_aggregate.mjs 1000000
 
   web_ui_e2e:
     needs: changes
