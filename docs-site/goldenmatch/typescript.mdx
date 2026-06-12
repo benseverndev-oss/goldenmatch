@@ -79,7 +79,7 @@ Match target records against a reference dataset. Returns matched pairs with con
 ### scoreStrings(a, b, scorer?)
 
 Score similarity between two strings. Available scorers:
-`exact`, `jaro_winkler`, `levenshtein`, `token_sort`, `soundex_match`, `dice`, `jaccard`, `ensemble`.
+`exact`, `jaro_winkler`, `levenshtein`, `token_sort`, `soundex_match`, `dice`, `jaccard`, `ensemble`, `given_name_aliased_jw`, `name_freq_weighted_jw`.
 
 ```typescript
 import { scoreStrings } from "goldenmatch";
@@ -113,6 +113,10 @@ All scorers implement the same interface as Python `goldenmatch.core.scorer`:
 | **dice**, **jaccard** | Set-based similarity for hex-encoded bloom filters (PPRL) |
 | **embedding** | Cosine similarity of embeddings |
 | **record_embedding** | Cosine similarity across whole records |
+| **given_name_aliased_jw** | First names — alias-aware JW (William/Bill -> 1.0), bundled given-name table |
+| **name_freq_weighted_jw** | Surnames — JW reweighted by US Census surname IDF in the borderline zone |
+
+The two `*_jw` scorers are refdata-aware and edge-safe: their bundled lookup tables (a given-name alias corpus and the US Census 2010 top-10k surname table) ship inside the npm package, generated from the Python source of truth and drift-guarded in CI. Auto-config swaps them in automatically for first-name and last-name columns. See [Reference Data](/goldenmatch/reference-data) for the algorithms.
 
 ## Blocking Strategies
 
@@ -237,6 +241,7 @@ See [`packages/goldenmatch-js/examples/`](https://github.com/benseverndev-oss/go
 | Feature | Python | TypeScript |
 |---|---|---|
 | Core matching | Polars + rapidfuzz | Pure TS |
+| Refdata name scorers | `given_name_aliased_jw` + `name_freq_weighted_jw` | Both (bundled tables, 4-decimal parity) |
 | Fellegi-Sunter | Yes | Yes |
 | PPRL | SHA-256 | SHA-256 (interop verified byte-for-byte) |
 | Graph ER | Yes | Yes |

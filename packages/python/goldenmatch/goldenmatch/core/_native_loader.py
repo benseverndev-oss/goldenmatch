@@ -61,6 +61,17 @@ except Exception:  # noqa: BLE001 - any import/load failure falls back below
 #     and Python -- asserted byte-for-byte (incl. pinned golden vectors) in
 #     tests/test_record_fingerprint.py. Native vs Python produce the same id,
 #     so gating native on/off never changes a record id.
+#
+# NOT yet gated on (ships default-off; reachable via GOLDENMATCH_NATIVE=1):
+#   - pprl_bloom: the CLK bloom-filter hash loop (bloom_clk_batch). Python does
+#     all preprocessing (lower/strip/pad/balanced-salt) and the kernel only
+#     re-slices the prepared string by code point + runs the SHA-256/HMAC double
+#     loop, so output is byte-identical hex. Parity asserted in
+#     tests/test_native_bloom_parity.py. Bit-exact (set bits, no float), so
+#     gating on/off never changes a CLK or a dice/jaccard score. Add "pprl_bloom"
+#     to _GATED_ON only after the parity battery is green on the PUBLISHED wheel
+#     (a republish must ship the new symbol -- see the goldenmatch-native wheel-
+#     skew note in the root CLAUDE.md) and a wall-clock bench confirms the lift.
 _GATED_ON: frozenset[str] = frozenset(
     {"clustering", "block_scoring", "pairs", "featurize", "hashing"}
 )

@@ -190,6 +190,81 @@ from goldenmatch.output.writer import write_output
 logger = logging.getLogger(__name__)
 
 
+def _accumulate_block_candidate_pairs(
+    block_df: pl.DataFrame,
+    candidate_pairs: set[tuple[int, int]],
+) -> None:
+    """Add every within-block canonical ``(min, max)`` ``__row_id__`` pair to
+    ``candidate_pairs`` (the blocking ceiling for the bench pair dump).
+
+    The blocking ceiling is backend-independent — it is defined by the blocks
+    that ``build_blocks`` produced, not by which scorer (per-block vectorized
+    loop vs. the hash-bucket orchestration) actually compares them. Both the
+    polars-direct and the ``backend="bucket"`` probabilistic paths feed their
+    blocks through here so the candidate denominator is identical.
+
+    Caps quadratic blow-up on a pathological huge block (panel data has small
+    blocks; this is just a safety net) by skipping blocks over 20k members.
+    """
+    block_ids = block_df["__row_id__"].to_list()
+    if len(block_ids) > 20000:
+        logger.warning(
+            "GOLDENMATCH_BENCH_DUMP_PAIRS: skipping candidate dump for block "
+            "of size %d (> 20000 members) to avoid quadratic explosion",
+            len(block_ids),
+        )
+        return
+    for i in range(len(block_ids)):
+        id_i = block_ids[i]
+        for j in range(i + 1, len(block_ids)):
+            id_j = block_ids[j]
+            candidate_pairs.add((min(id_i, id_j), max(id_i, id_j)))
+
+
+def _dump_bench_pairs(
+    dump_dir: str,
+    candidate_pairs: set[tuple[int, int]],
+    emitted_pairs: set[tuple[int, int]],
+) -> None:
+    """Write candidate + emitted pair sets to parquet for the bench harness.
+
+    Opt-in, env-gated companion to the ``GOLDENMATCH_BENCH_DUMP_PAIRS`` hook in
+    the probabilistic dedupe branch. Pairs are canonical ``(min, max)`` tuples
+    in internal ``__row_id__`` space (the harness remaps to record_id later).
+
+    Two files land in ``dump_dir``:
+      - ``candidate_pairs.parquet`` (cols ``a``, ``b``): all within-block
+        candidate pairs across every probabilistic matchkey (the blocking
+        ceiling).
+      - ``emitted_pairs.parquet`` (cols ``a``, ``b``): the pairs the
+        probabilistic scorer emitted above threshold.
+
+    Each file is written atomically (``.tmp`` then ``os.replace``) so a reader
+    never sees a partial parquet.
+    """
+    try:
+        os.makedirs(dump_dir, exist_ok=True)
+        for name, pairs in (
+            ("candidate_pairs.parquet", candidate_pairs),
+            ("emitted_pairs.parquet", emitted_pairs),
+        ):
+            a_col = [p[0] for p in pairs]
+            b_col = [p[1] for p in pairs]
+            frame = pl.DataFrame(
+                {"a": a_col, "b": b_col},
+                schema={"a": pl.Int64, "b": pl.Int64},
+            )
+            final_path = os.path.join(dump_dir, name)
+            tmp_path = final_path + ".tmp"
+            frame.write_parquet(tmp_path)
+            os.replace(tmp_path, final_path)
+    except Exception as exc:  # observability must never abort a dedupe run
+        logger.warning(
+            "GOLDENMATCH_BENCH_DUMP_PAIRS: failed to write pair dump to %s: %s",
+            dump_dir, exc,
+        )
+
+
 def _extract_matchkey_columns(config: GoldenMatchConfig) -> list[str]:
     """Extract unique field names from all matchkeys in config."""
     cols = set()
@@ -638,8 +713,19 @@ def _run_auto_suggest(df: pl.DataFrame, config: GoldenMatchConfig) -> None:
 
 
 def _add_row_ids(lf: pl.LazyFrame, offset: int = 0) -> pl.LazyFrame:
-    """Add __row_id__ column using with_row_index + offset."""
-    lf = lf.with_row_index("__row_id__")
+    """Add __row_id__ column using with_row_index + offset.
+
+    If the frame already carries ``__row_id__`` (a global id the caller wants
+    respected — e.g. a distributed hash-shuffled input, where re-synthesizing
+    ids per partition would collide across partitions; see #844), reuse it
+    instead of calling ``with_row_index`` again. Re-adding a column that already
+    exists raises polars ``DuplicateError`` — which is exactly what tripped the
+    auto-config v0 sample pipeline on a ``__row_id__``-carrying 100M input. The
+    offset still applies so reference/incremental callers keep their
+    target/reference id spaces disjoint.
+    """
+    if "__row_id__" not in lf.collect_schema().names():
+        lf = lf.with_row_index("__row_id__")
     if offset > 0:
         lf = lf.with_columns((pl.col("__row_id__") + offset).alias("__row_id__"))
     # Cast to Int64 for consistency
@@ -725,13 +811,24 @@ def run_dedupe(
         offset += len(collected)
         frames.append(collected.lazy())
 
-    combined_lf = pl.concat([f.collect() for f in frames]).lazy()
+    combined_df = pl.concat([f.collect() for f in frames])
+    combined_lf = combined_df.lazy()
 
     return _run_dedupe_pipeline(
         combined_lf, config, matchkeys,
         output_golden, output_clusters,
         output_dupes, output_unique, output_report,
         across_files_only, llm_retrain, llm_provider, llm_max_labels,
+        # Seed the prep cache with (id, height) like the dedupe_df path. The
+        # bare ``id(combined_lf)`` default is unsafe here: ``combined_lf`` is a
+        # fresh object that's GC-eligible the moment this call returns, so
+        # CPython readily recycles its ``id()`` slot for the NEXT run_dedupe
+        # call. Two calls with the same schema + prep signature but different
+        # row counts (e.g. a 1-file 5-row dedupe followed by a 2-file 8-row
+        # across_files_only dedupe) would otherwise collide on the recycled id
+        # and serve the stale prepared frame -- silently dropping the second
+        # input's extra rows. Height disambiguates same-schema/different-rows.
+        _prep_cache_seed=(id(combined_lf), combined_df.height),
     )
 
 
@@ -1133,11 +1230,24 @@ def _run_dedupe_pipeline(
     fuzzy_pair_count = 0
     total_blocks = 0
     block_size_samples: list[int] = []
+    # matched_pairs is the cross-pass exclude set. A weighted pass's additions
+    # are consumed ONLY by a LATER scoring pass (another weighted matchkey, or
+    # any probabilistic matchkey). When nothing later consumes them, the
+    # per-pair min/max/set.add build is pure waste (~100s at 1M / 131M pairs on
+    # the default list path) -- pass track_matched=False to skip it. The exact
+    # loop's prior writes are this pass's EXCLUDE (read at entry), unaffected.
+    _weighted_mks = [m for m in matchkeys if m.type == "weighted"]
+    _last_weighted_mk = _weighted_mks[-1] if _weighted_mks else None
+    _has_probabilistic_pass = any(m.type == "probabilistic" for m in matchkeys)
     with stage("fuzzy_scoring"):
         for mk in matchkeys:
             if mk.type == "weighted":
                 if config.blocking is None:
                     continue
+                # True iff a later scoring pass will read matched_pairs.
+                _mp_consumed_after = (
+                    mk is not _last_weighted_mk
+                ) or _has_probabilistic_pass
                 # Bucket backend: skip build_blocks entirely. The bucket
                 # scorer derives block-key + bucket assignment from
                 # `collected_df` in a single eager pass and partitions
@@ -1283,8 +1393,12 @@ def _run_dedupe_pipeline(
                         # gate can't break an otherwise-eligible run.
                         try:
                             from goldenmatch.core.scorer import score_blocks_columnar
+                            # Eligibility guarantees a single weighted matchkey,
+                            # so matched_pairs is never consumed by a later pass
+                            # -- skip building it (the profiled ~104s of per-pair
+                            # min/max/set.add at 1M / 131M pairs).
                             _columnar_pairs_df = score_blocks_columnar(
-                                blocks, mk, matched_pairs,
+                                blocks, mk, matched_pairs, track_matched=False,
                             )
                             fuzzy_pair_count += _columnar_pairs_df.height
                             continue
@@ -1303,11 +1417,21 @@ def _run_dedupe_pipeline(
                     # narrow the dynamic dispatch and flags every union
                     # arm against the str values -- intentional dynamic
                     # dispatch, suppress.
+                    # Only the parallel scorer accepts track_matched; the
+                    # ray/duckdb/datafusion scorers would reject the kwarg, so
+                    # pass it solely when no later pass consumes matched_pairs
+                    # AND we're on the parallel path (the False-skip win).
+                    # dict[str, object] so the bool value sits alongside the
+                    # str key_mode_kwargs (store_path/signature).
+                    _scorer_kwargs: dict[str, object] = {}
+                    _scorer_kwargs.update(key_mode_kwargs)
+                    if block_scorer is score_blocks_parallel and not _mp_consumed_after:
+                        _scorer_kwargs["track_matched"] = False
                     pairs = block_scorer(
                         blocks, mk, matched_pairs,
                         across_files_only=across_files_only,
                         source_lookup=source_lookup if across_files_only else None,
-                        **key_mode_kwargs,  # pyright: ignore[reportArgumentType]
+                        **_scorer_kwargs,  # pyright: ignore[reportArgumentType]
                     )
                 all_pairs.extend(pairs)
                 fuzzy_pair_count += len(pairs)
@@ -1327,6 +1451,20 @@ def _run_dedupe_pipeline(
         })
 
     # Phase 2b: Probabilistic matchkeys (Fellegi-Sunter with EM)
+    #
+    # Opt-in bench hook: when GOLDENMATCH_BENCH_DUMP_PAIRS names a directory,
+    # accumulate the within-block candidate set (the blocking ceiling) and the
+    # emitted set (above-threshold pairs) across all probabilistic matchkeys,
+    # then dump both as parquet AFTER the loop. Works for BOTH the polars-direct
+    # per-block scorer and the backend="bucket" hash orchestration — the
+    # candidate ceiling is the same blocking-defined within-block set either way.
+    # The env read + two empty-set inits below are unconditional (a dict lookup +
+    # two empty sets, negligible); all ACCUMULATION and I/O is guarded by
+    # `if _bench_dump_dir:`, so the unset path does no per-pair/per-block work
+    # and writes nothing.
+    _bench_dump_dir = os.environ.get("GOLDENMATCH_BENCH_DUMP_PAIRS")
+    _bench_candidate_pairs: set[tuple[int, int]] = set()
+    _bench_emitted_pairs: set[tuple[int, int]] = set()
     for mk in matchkeys:
         if mk.type == "probabilistic":
             if config.blocking is None:
@@ -1370,6 +1508,22 @@ def _run_dedupe_pipeline(
                 fuzzy_pair_count += len(pairs)
                 for a, b, _s in pairs:
                     matched_pairs.add((min(a, b), max(a, b)))
+                if _bench_dump_dir:
+                    # Candidate ceiling: enumerate within-block pairs from the
+                    # SAME blocks score_buckets consumes (blocking is backend-
+                    # independent). score_buckets already applied across-files
+                    # filtering, so `pairs` is the emitted set directly.
+                    for block in blocks:
+                        block_df = (
+                            block.df.collect()
+                            if isinstance(block.df, pl.LazyFrame)
+                            else block.df
+                        )
+                        _accumulate_block_candidate_pairs(
+                            block_df, _bench_candidate_pairs
+                        )
+                    for a, b, _s in pairs:
+                        _bench_emitted_pairs.add((min(a, b), max(a, b)))
                 continue
             # Vectorized NxN-matrix block scorer: one rapidfuzz cdist per field
             # + numpy level/weight/normalize, replacing the per-pair Python
@@ -1377,10 +1531,38 @@ def _run_dedupe_pipeline(
             # blocks no longer have to be skipped for performance — the
             # dominant FS recall lever. Falls back to the scalar path for
             # model-backed scorers or GOLDENMATCH_FS_VECTORIZED=0.
-            block_scorer = probabilistic_block_scorer(mk, em_result)
-            for block in blocks:
-                block_df = block.df.collect() if isinstance(block.df, pl.LazyFrame) else block.df
-                pairs = block_scorer(block_df, matched_pairs)
+            if _bench_dump_dir:
+                # Bench path stays per-block so candidate/emitted pair accounting
+                # is exact (the batched path doesn't expose per-block candidates).
+                block_scorer = probabilistic_block_scorer(mk, em_result)
+                for block in blocks:
+                    block_df = block.df.collect() if isinstance(block.df, pl.LazyFrame) else block.df
+                    _accumulate_block_candidate_pairs(
+                        block_df, _bench_candidate_pairs
+                    )
+                    pairs = block_scorer(block_df, matched_pairs)
+                    if across_files_only:
+                        pairs = [
+                            (a, b, s) for a, b, s in pairs
+                            if source_lookup.get(a) != source_lookup.get(b)
+                        ]
+                    all_pairs.extend(pairs)
+                    for a, b, _s in pairs:
+                        matched_pairs.add((min(a, b), max(a, b)))
+                    for a, b, _s in pairs:
+                        _bench_emitted_pairs.add((min(a, b), max(a, b)))
+            else:
+                # Coalesce small blocks into batched per-field matrices to
+                # amortize the per-call FFI/marshal overhead that dominates FS
+                # scoring on the many tiny blocks multi-pass blocking produces.
+                # Within-block cells are identical to per-block scoring, so the
+                # emitted pair set is unchanged.
+                from goldenmatch.core.probabilistic import (
+                    score_probabilistic_blocks_batched,
+                )
+                pairs = score_probabilistic_blocks_batched(
+                    blocks, mk, em_result, matched_pairs
+                )
                 if across_files_only:
                     pairs = [
                         (a, b, s) for a, b, s in pairs
@@ -1389,6 +1571,11 @@ def _run_dedupe_pipeline(
                 all_pairs.extend(pairs)
                 for a, b, _s in pairs:
                     matched_pairs.add((min(a, b), max(a, b)))
+
+    if _bench_dump_dir:
+        _dump_bench_pairs(
+            _bench_dump_dir, _bench_candidate_pairs, _bench_emitted_pairs
+        )
 
     # ── Step 3.3: CROSS-ENCODER RERANKING (optional) ──
     for mk in matchkeys:
@@ -1535,13 +1722,41 @@ def _run_dedupe_pipeline(
     # path (stats + dupes) never calls it -- those read the metadata/assignments
     # frames directly -- so golden + stats + dupes stay dict-free.
     _clusters_cache: list[dict[int, dict]] = []
+    _pair_score_view_cache: list[ClusterPairScores | None] = []
+
+    def _pair_score_view() -> ClusterPairScores | None:
+        # The per-cluster pair scores for the frames-out path, sourced from the
+        # raw scored pairs + final assignments. Built AT MOST ONCE and cached.
+        # None on the dict/columnar paths (their `clusters` dict already carries
+        # real pair_scores). Used to (a) restore pair_scores on the rebuilt
+        # results["clusters"] dict and (b) feed the confidence_majority golden
+        # slow path -- both of which the frames-out cluster dict leaves empty.
+        if cluster_frames is None:
+            return None
+        if not _pair_score_view_cache:
+            from goldenmatch.core.cluster_pairscores import ClusterPairScores
+            _pair_score_view_cache.append(
+                ClusterPairScores.from_frames(cluster_frames.assignments, all_pairs)
+            )
+        return _pair_score_view_cache[0]
 
     def _clusters_dict() -> dict[int, dict]:
         if cluster_frames is None:
             # Gate-OFF / columnar paths bound `clusters` eagerly above.
             return clusters
         if not _clusters_cache:
-            _clusters_cache.append(cluster_frames_to_dict(cluster_frames))
+            d = cluster_frames_to_dict(cluster_frames)
+            # cluster_frames_to_dict leaves pair_scores={} on every cluster;
+            # restore the real per-pair scores from the view so the returned
+            # dict matches the legacy path's contract (unmerge, lineage, and
+            # callers that read clusters[cid]["pair_scores"] all depend on it).
+            psv = _pair_score_view()
+            if psv is not None:
+                for cid, edges in psv.iter_clusters():
+                    info = d.get(cid)
+                    if info is not None:
+                        info["pair_scores"] = {(a, b): s for (a, b, s) in edges}
+            _clusters_cache.append(d)
         return _clusters_cache[0]
 
     if cluster_frames is not None:
@@ -1662,12 +1877,29 @@ def _run_dedupe_pipeline(
                     c for c in collected_df.columns
                     if not any(c.startswith(p) for p in _internal_prefixes)
                 ])
+            # Source per-cluster pair scores from the view so the slow builder's
+            # confidence_majority survivorship weights by edge confidence instead
+            # of degrading to count-majority (the frames-out cluster dict carries
+            # pair_scores={}). The fast builder ignores it; only built once here
+            # if the slow path needs it.
+            _frames_pair_scores: dict[int, dict[tuple[int, int], float]] | None = None
+            if not (
+                not _provenance_on
+                and _polars_native_eligible(golden_rules, quality_scores=quality_scores)
+            ):
+                _psv = _pair_score_view()
+                if _psv is not None:
+                    _frames_pair_scores = {
+                        cid: {(a, b): s for (a, b, s) in edges}
+                        for cid, edges in _psv.iter_clusters()
+                    }
             golden_df, golden_records = build_golden_records_from_frames(
                 _golden_source,
                 cluster_frames,
                 golden_rules,
                 quality_scores=quality_scores,
                 provenance=_provenance_on,
+                cluster_pair_scores=_frames_pair_scores,
             )
     else:
         with stage("golden"):
@@ -1922,41 +2154,22 @@ def _run_dedupe_pipeline(
     # ── Step 7.6: IDENTITY GRAPH (optional) ──
     # Feed the identity evidence-edge consumer from a ClusterPairScores view
     # (byte-identical to the dict path, built once here) whenever the dict that
-    # reaches identity carries EMPTY per-cluster pair_scores. Two gates produce
-    # such a dict:
-    #   - _columnar_cluster_build_enabled (GOLDENMATCH_COLUMNAR_CLUSTER_BUILD):
-    #     the columnar build returns pair_scores={};
+    # reaches identity carries EMPTY per-cluster pair_scores. The frames-out gate
+    # produces such a dict:
     #   - _cluster_frames_out_enabled (GOLDENMATCH_CLUSTER_FRAMES_OUT, SP-B): the
-    #     lazily-rebuilt dict from cluster_frames_to_dict also has pair_scores={}.
-    # In BOTH cases resolve_clusters' info.get("pair_scores") fallback would yield
-    # ZERO evidence edges, so we MUST supply the view. Gate-OFF (neither env set)
+    #     lazily-rebuilt dict from cluster_frames_to_dict has pair_scores={}.
+    # In that case resolve_clusters' info.get("pair_scores") fallback would yield
+    # ZERO evidence edges, so we MUST supply the view. Gate-OFF (env not set)
     # leaves the dict carrying real pair_scores and pair_score_view stays None --
     # byte-identical to today.
     # SP-C: on the frames-out path build the view from the FRAMES (assignments
     # frame + RAW all_pairs) and feed identity the `cluster_frames` directly --
     # NOT the rebuilt dict -- so the cluster->golden->identity stage never calls
-    # `_clusters_dict()`. `from_frames(assignments, all_pairs)` is byte-identical
-    # to the columnar branch's `from_pairs(all_pairs, clusters)` (same input-order
-    # last-wins bucketing, same final membership). The columnar-build and gate-OFF
-    # branches are UNCHANGED: columnar builds the view from the dict + pairs and
-    # passes the dict; gate-OFF leaves the view None and passes the real-pair_scores
-    # dict. resolve_clusters' exactly-one assertion keeps the two mutually exclusive.
-    pair_score_view: ClusterPairScores | None = None
-    if cluster_frames is not None:
-        from goldenmatch.core.cluster_pairscores import ClusterPairScores
-        pair_score_view = ClusterPairScores.from_frames(
-            cluster_frames.assignments, all_pairs
-        )
-    elif isinstance(clusters, dict):
-        from goldenmatch.core.cluster import _columnar_cluster_build_enabled
-        if _columnar_cluster_build_enabled():
-            from goldenmatch.core.cluster_pairscores import ClusterPairScores
-            # SP4: the columnar-build dict reaching identity has pair_scores={}, so
-            # build the view from the RAW input pairs (input-order, last-wins == the
-            # dict path's per-cluster pair_scores) + final cluster membership. NOT
-            # from results["scored_pairs"] (max-score deduped, differs on
-            # dup-scored pairs).
-            pair_score_view = ClusterPairScores.from_pairs(all_pairs, clusters)
+    # `_clusters_dict()`. `from_frames(assignments, all_pairs)` buckets the raw
+    # input pairs (input-order last-wins) against the final cluster membership.
+    # The gate-OFF branch is UNCHANGED: it leaves the view None and passes the
+    # real-pair_scores dict.
+    pair_score_view: ClusterPairScores | None = _pair_score_view()
     with stage("identity_resolve"):
         identity_summary = _resolve_identities(
             clusters if cluster_frames is None else None,
@@ -2190,13 +2403,20 @@ def _run_match_pipeline(
 
     # ── Step 2.5a': AUTO-CONFIG ON CLEANED DATA (if zero-config) ──
     if auto_config:
-        from goldenmatch.core.autoconfig import auto_configure_df
-        combined_df_tmp = combined_lf.collect()
-        auto_cfg = auto_configure_df(
-            combined_df_tmp,
-            llm_provider=auto_config_llm_provider,
-            llm_auto=config.llm_auto,
+        from goldenmatch.core.autoconfig import (
+            _match_mode_autoconfig,
+            auto_configure_df,
         )
+        combined_df_tmp = combined_lf.collect()
+        # #858: this is match mode -- the 2-value __source__ here is the
+        # target/reference split, and cross-source linking is the goal, not
+        # over-merge. Suppress the multi-source dedupe guard.
+        with _match_mode_autoconfig():
+            auto_cfg = auto_configure_df(
+                combined_df_tmp,
+                llm_provider=auto_config_llm_provider,
+                llm_auto=config.llm_auto,
+            )
         config.matchkeys = auto_cfg.matchkeys
         config.match_settings = auto_cfg.match_settings
         config.blocking = auto_cfg.blocking

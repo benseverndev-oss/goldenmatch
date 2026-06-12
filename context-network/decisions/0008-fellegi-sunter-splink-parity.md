@@ -1,6 +1,6 @@
 # 0008 — Fellegi-Sunter: close the Splink engine gap, measure the scale-out, keep defaults reproducible
 
-**Status:** accepted (2026-06-08, Ben) • **Shipped:** PRs #800 / #802 / #803 • **Architecture:** [../architecture/fellegi-sunter-splink-parity.md](../architecture/fellegi-sunter-splink-parity.md)
+**Status:** accepted (2026-06-08, Ben) • **Shipped:** PRs #800 / #802 / #803; accuracy arc #821 / #823 (2026-06-09) • **Architecture:** [../architecture/fellegi-sunter-splink-parity.md](../architecture/fellegi-sunter-splink-parity.md)
 
 ## Context
 The audit found GoldenMatch's Fellegi-Sunter matchkey accuracy-competitive with
@@ -38,3 +38,38 @@ the framing — and the honest answer was "the algorithm yes, the engine no."
 - A benchmark's *ground truth* is part of the measurement: the 6M F1 read 0.825
   only because the bench scored against a star GT instead of the entity clique.
   The matcher was right; the harness wasn't.
+
+## Update — accuracy arc, beating Splink (2026-06-09, #821 / #823)
+The original decision closed *feature* parity ("the algorithm yes, the engine
+no" → both yes). The accuracy arc extends it to *beat* Splink head-to-head:
+- **#821** built a shared evaluator (`scripts/bench_er_headtohead`, pairwise F1,
+  one harness for both engines) — the panel that turns "on par" into a measured
+  claim instead of ad-hoc per-dataset numbers.
+- **#823 (FS auto-config v2)** makes the probabilistic auto-config outscore
+  Splink on that panel via recall-positive field selection (admit dates as a
+  `levenshtein` discriminator; drop redundant person-name composites; a
+  low-cardinality fuzzy floor; admit title/author as `token_sort`) plus
+  *additive* blocking diversification (`_diversify_probabilistic_blocking` onto
+  orthogonal stable keys — adds passes, never removes the primary).
+- Defaults-reproducible held: scope is the probabilistic auto-config path only;
+  default-ON with kill-switch `GOLDENMATCH_FS_AUTOCONFIG_V2=0` restoring the
+  legacy selection byte-identically (3925 tests pass, 22 in
+  `test_fs_autoconfig_v2.py`, flag=0 byte-identical).
+- Results (pairwise F1, shared evaluator) — **deterministic as of #829**:
+  historical_50k 0.647 → 0.778 vs Splink 0.757; synthetic_person 0.972 → 0.998
+  vs 0.996; febrl3 0.983 → 0.991 vs 0.965; dblp_acm 0.003 → 0.377 (Splink skips
+  it). GM also wins historical_50k at the cluster level (B-cubed F1 0.844 vs
+  0.789). **Honest framing preserved:** these are *pairwise* F1; the cited ~0.97
+  Splink historical_50k number is a *cluster* metric, and Splink scores ~0.75
+  pairwise under the same harness (recall-bound, ~0.93 pairwise ceiling for any
+  engine). Claim is "matches/beats on every dataset Splink scores on the same
+  evaluator," not "0.97 pairwise." Splink retains the distributed-1B+,
+  interactive-charting, and 3-19x-faster edge.
+- **#829 (determinism):** the earlier numbers rested on a non-deterministic EM
+  training-pair sample — three invocations of the identical path gave
+  historical_50k 0.805 / 0.779 / 0.643 on one CI run. #829 sorts blocks by their
+  stable `block_key` before the seeded shuffle; post-fix three harnesses agree
+  within 0.002. The earlier `dblp_acm = 0.879` was a lucky draw that does not
+  reproduce (deterministic value 0.377). For bibliographic data use the *weighted*
+  path (0.964 on DBLP-ACM), not probabilistic. Full bake-off:
+  `docs/benchmarks/2026-06-09-splink-bakeoff.md`.

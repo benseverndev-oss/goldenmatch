@@ -6,7 +6,7 @@
 
 [package]
 name = "goldenmatch-native"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 license = "MIT"
 authors = ["Ben Severn <benzsevern@gmail.com>"]
@@ -18,10 +18,18 @@ description = "Native acceleration kernels for GoldenMatch (PyO3 extension modul
 name = "_native"
 crate-type = ["cdylib"]
 
+[features]
+default = ["extension-module"]
+extension-module = ["pyo3/extension-module"]
+
 [dependencies]
 # abi3-py311: one stable-ABI artifact spans CPython 3.11-3.13.
-# extension-module: don't link libpython (this .so is imported BY CPython).
-pyo3 = { version = ">=0.23.3, <0.25", features = ["extension-module", "abi3-py311"] }
+# extension-module is a DEFAULT feature (not always-on) so `cargo test
+# --no-default-features` can link the test binary against libpython. maturin
+# (native_wheel lane) and scripts/build_native.py both build with default
+# features, so the shipped wheel/.so still gets extension-module. See the
+# pyo3 FAQ "I can't run cargo test".
+pyo3 = { version = ">=0.23.3, <0.25", features = ["abi3-py311"] }
 # BLAKE2b for the char-n-gram feature hashing kernel — must match Python
 # hashlib.blake2b(digest_size=8) byte-for-byte (see featurize.rs).
 blake2 = "0.10"
@@ -38,6 +46,11 @@ goldenmatch-score-core = { path = "../score-core" }
 # this extension module share one behavior-exact path.
 goldenmatch-graph-core = { path = "../graph-core" }
 rayon = "1.12.0"
+# CLK bloom-filter hashing (bloom.rs) -- MUST match Python hashlib.sha256 /
+# hmac.new(..., sha256) byte-for-byte. sha2 is also a transitive dep via
+# fingerprint-core; pinned here explicitly because bloom.rs uses it directly.
+sha2 = "0.10"
+hmac = "0.12"
 # Arrow C Data Interface for zero-copy kernel input (see score.rs
 # score_block_pairs_arrow). `pyarrow` brings the PyArrowType FFI bridge;
 # default features (csv/ipc/json/compute) are off — we only read array buffers.

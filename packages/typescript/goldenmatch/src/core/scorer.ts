@@ -20,6 +20,8 @@ import { pairKey } from "./cluster.js";
 import { applyTransforms, soundex } from "./transforms.js";
 import { applyNegativeEvidence } from "./autoconfigNegativeEvidence.js";
 import { getScorerBackend, WASM_COVERED_SCORERS } from "./wasm/backend.js";
+import { areEquivalent } from "./refdata/givenNames.js";
+import { isAvailable as surnamesAvailable, surnameRank, surnameIdf } from "./refdata/surnames.js";
 
 // ---------------------------------------------------------------------------
 // Helper: coerce unknown to string | null
@@ -370,6 +372,36 @@ export function jaccardSimilarity(a: string, b: string): number {
   return intersection / union;
 }
 
+/**
+ * Padded character q-gram set of a raw string (Python parity:
+ * core/scorer.py::_qgram_set). Lowercases, pads with `n-1` `#` sentinels on
+ * each side, then returns the FULL set of length-`n` substrings.
+ */
+function qgramSet(s: string, n: number): Set<string> {
+  const padded = "#".repeat(n - 1) + s.toLowerCase() + "#".repeat(n - 1);
+  const out = new Set<string>();
+  for (let i = 0; i + n <= padded.length; i++) out.add(padded.slice(i, i + n));
+  return out;
+}
+
+/**
+ * Character q-gram Jaccard similarity (Python parity:
+ * core/scorer.py::_qgram_score_single). Identical strings (incl. both empty)
+ * score 1.0; an empty q-gram union scores 0.0; otherwise `|A∩B| / |A∪B|` over
+ * the padded length-`n` substring sets. Pure set math — byte-identical to the
+ * Python source, no rapidfuzz involved.
+ */
+export function qgramScore(a: string, b: string, n = 3): number {
+  if (a === b) return 1.0;
+  const setA = qgramSet(a, n);
+  const setB = qgramSet(b, n);
+  let inter = 0;
+  for (const g of setA) if (setB.has(g)) inter++;
+  const union = setA.size + setB.size - inter;
+  if (union === 0) return 0.0;
+  return inter / union;
+}
+
 // ---------------------------------------------------------------------------
 // Ensemble scorer
 // ---------------------------------------------------------------------------
@@ -415,6 +447,8 @@ export function scoreField(
       return diceCoefficient(valA, valB);
     case "jaccard":
       return jaccardSimilarity(valA, valB);
+    case "qgram":
+      return qgramScore(valA, valB);
     case "ensemble":
       return ensembleScore(valA, valB);
     case "embedding":
@@ -424,6 +458,26 @@ export function scoreField(
       // record string; at the field level both behave identically (embed the
       // field value, cosine-compare). See setSyncEmbedder.
       return embeddingScore(valA, valB);
+    case "given_name_aliased_jw":
+      // Alias-aware exact bonus: known forms of the same name -> 1.0,
+      // else plain Jaro-Winkler. Mirrors Python GivenNameAliasedJW.score_pair.
+      return areEquivalent(valA, valB) ? 1.0 : jaroWinkler(valA, valB);
+    case "name_freq_weighted_jw": {
+      // Jaro-Winkler modulated by census surname IDF in the borderline zone.
+      // Mirrors Python NameFreqWeightedJW.score_pair.
+      const jw = jaroWinkler(valA, valB);
+      if (jw >= 0.95 || jw < 0.7) return jw;
+      if (!surnamesAvailable()) return jw;
+      // OOV gate: a name absent from the table falls back to plain JW (a typo
+      // of a common name shouldn't get credit-by-rarity).
+      if (surnameRank(valA) === null || surnameRank(valB) === null) return jw;
+      const idfA = surnameIdf(valA);
+      const idfB = surnameIdf(valB);
+      if (idfA === null || idfB === null) return jw;
+      const idf = (idfA + idfB) / 2;
+      const weight = 0.6 + 0.4 * idf;
+      return jw * weight;
+    }
     default:
       throw new Error(`Unknown scorer: ${JSON.stringify(scorer)}`);
   }

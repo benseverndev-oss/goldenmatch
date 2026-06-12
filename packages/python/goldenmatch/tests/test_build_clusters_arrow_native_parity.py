@@ -151,9 +151,15 @@ class TestClusterFramesContract:
         df = pairs_list_to_df([(1, 2, 0.9)])
         rust = build_clusters_arrow_native(df, all_ids=[1, 2])
         assert set(rust.assignments.columns) == {"cluster_id", "member_id"}
+        # min_edge/avg_edge were added to the metadata frame by SP4 (the weak-
+        # quality stats; see cluster.rs build_clusters_arrow) so the vectorized
+        # weak/quality downgrade reads them off the frame without rebuilding
+        # per-cluster pair_scores dicts. Both build paths emit this 9-col schema
+        # identically (verified native=1 vs native=0).
         assert set(rust.metadata.columns) == {
             "cluster_id", "size", "confidence", "quality",
             "oversized", "bottleneck_pair_a", "bottleneck_pair_b",
+            "min_edge", "avg_edge",
         }
 
     def test_empty_input(self):

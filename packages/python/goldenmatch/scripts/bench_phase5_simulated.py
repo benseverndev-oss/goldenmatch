@@ -68,6 +68,16 @@ def main() -> int:
         type=Path,
         default=Path("bench_phase5_simulated.json"),
     )
+    ap.add_argument(
+        "--block-shuffle",
+        choices=["0", "1"],
+        default="0",
+        help=(
+            "1 = recall-complete leg: enables GOLDENMATCH_DISTRIBUTED_BLOCK_SHUFFLE "
+            "and routes clustering to randomized_contraction WCC. Default 0 = "
+            "baseline (per-partition scoring + local_cc_assignments)."
+        ),
+    )
     args = ap.parse_args()
 
     identity_enabled = args.identity.lower() in ("true", "1", "yes")
@@ -129,14 +139,67 @@ def main() -> int:
     os.environ["GOLDENMATCH_DISTRIBUTED_PIPELINE"] = "2"
     os.environ["GOLDENMATCH_ENABLE_DISTRIBUTED_RAY"] = "1"
 
+    block_shuffle = bool(int(args.block_shuffle))
+    if block_shuffle:
+        # HARD-set: these two flags define the recall-complete leg.
+        os.environ["GOLDENMATCH_DISTRIBUTED_BLOCK_SHUFFLE"] = "1"
+        os.environ["GOLDENMATCH_DISTRIBUTED_WCC"] = "randomized_contraction"
+        # Force the WCC path on the few-M-row sim dataset (below the 50M-pair
+        # threshold the route is scipy, which would vacuously validate scipy not
+        # WCC). setdefault so an operator can override.
+        os.environ.setdefault("GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD", "0")
+        os.environ.setdefault(
+            "GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH",
+            str(args.out.parent / "rc_scratch"),
+        )
+
+    # Write golden to a temp output dir so we can count multi-member clusters.
+    # The pipeline does not materialise clusters on the driver (intentionally);
+    # a parquet scan is the only way to get a multi_member_cluster_count without
+    # introducing a take_all that would wedge the driver.
+    #
+    # PER-LEG dir derived from the --out stem: the baseline (--block-shuffle 0)
+    # and recall-complete (--block-shuffle 1) legs use DIFFERENT --out files, so
+    # this keeps their golden in separate dirs. Ray write_parquet appends
+    # UUID-named part files without clearing, so a SHARED dir would let the
+    # recall count include the baseline's golden and inflate the recall-vs-
+    # baseline comparison (the whole point of the two-leg gate).
+    golden_out = str(args.out.parent / f"{args.out.stem}_golden")
+
     # The pipeline auto-configures from the Ray Dataset itself; no
     # explicit config arg accepted. confidence_required=False keeps the
     # bench from raising ControllerNotConfidentError on the synthetic
     # fixture (the controller's gates target real-shape data).
-    result = run_dedupe_pipeline_distributed(ds, confidence_required=False)
+    result = run_dedupe_pipeline_distributed(
+        ds, confidence_required=False, output_path=golden_out,
+    )
 
     wall_total = time.perf_counter() - t0
     rss_end_gb = _peak_rss_gb()
+
+    # Count multi-member clusters from the golden parquet written by the
+    # pipeline (one golden record per multi-member cluster). The pipeline
+    # intentionally does NOT materialise clusters on the driver
+    # (result.clusters == {}), so a parquet scan is the clean path.
+    multi_member_cluster_count: int | None = None
+    try:
+        import os as _os  # noqa: PLC0415
+
+        import polars as pl  # noqa: PLC0415
+
+        golden_parts = [
+            f for f in _os.listdir(golden_out)
+            if f.endswith(".parquet")
+        ] if _os.path.isdir(golden_out) else []
+        if golden_parts:
+            multi_member_cluster_count = (
+                pl.scan_parquet(f"{golden_out}/**/*.parquet")
+                .select(pl.len())
+                .collect()
+                .item()
+            )
+    except Exception as exc:
+        log.warning("could not count multi-member clusters: %s", exc)
 
     summary = {
         "ray_address": ray_address,
@@ -147,10 +210,12 @@ def main() -> int:
         "expected_rows": args.rows,
         "n_partitions": n_partitions,
         "identity_enabled": identity_enabled,
+        "block_shuffle": block_shuffle,
         "wall_total_s": round(wall_total, 2),
         "driver_rss_start_gb": round(rss_start_gb, 3),
         "driver_rss_end_gb": round(rss_end_gb, 3),
         "driver_rss_peak_gb": round(rss_end_gb, 3),  # ru_maxrss is high-water
+        "multi_member_cluster_count": multi_member_cluster_count,
         "identity_summary": (
             getattr(result, "identity_summary", None)
             if identity_enabled

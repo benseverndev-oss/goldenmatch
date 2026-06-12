@@ -6,6 +6,127 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Performance
+- **Fellegi-Sunter block scoring ~3.5x faster on tiny-block / multi-pass shapes
+  (PR #869).** The probabilistic (`type: probabilistic`) numpy scoring path was
+  per-block-fan-out bound, not compute bound — `historical_50k` produces 31,735
+  blocks, 79% of them ≤8 rows, so scoring made ~222k tiny FFI-bound matrix calls.
+  Three output-identical changes: (1) `score_probabilistic_vectorized` now scores
+  the DISTINCT field values per block and gathers via an index map (a constant
+  blocking-key field collapses to 1×1); (2) small blocks are coalesced into shared
+  per-field matrices with diagonal sub-block extraction (`GOLDENMATCH_FS_BATCH_ROWS`,
+  default 256), cutting native matrix calls 222k→4.3k; (3) the batch row-cap tuned
+  to its measured knee. Wall on `historical_50k` probabilistic auto-config dropped
+  86.5s → 24.6s (−72%) locally. Verified output-identical — for a fixed EM model,
+  the emitted scored-pair set is byte-for-byte unchanged (200,058 pairs); the
+  `synthetic_benchmarks` accuracy gate is green. No API or config change; tune via
+  `GOLDENMATCH_FS_BATCH_ROWS` if needed.
+
+### Changed
+- **Zero-config `dedupe_df` no longer over-merges multi-source CRM (#858).** When
+  auto-config detects a source partition at config time (the internal
+  `__source__`, or a user `source`/`lead_source`/`*_source`/`origin`/`src`-named
+  column that genuinely partitions records into disjoint-valued groups), it now
+  (1) excludes the source-indicator column and every column whose values are
+  fully disjoint across sources (per-source surrogate ids) from match features,
+  and (2) demotes `phone` from a standalone exact matchkey to a blocking-only
+  candidate. This removes the source-correlated precision crater (realistic
+  multi-source CRM F1 ~0.35 → ~0.84). **Provable no-op** on single-source data
+  and in match mode (`match_df` / `run_match`; cross-source linking is the goal
+  there, suppressed by an explicit dedupe-mode gate). Default ON; disable with
+  `GOLDENMATCH_MULTISOURCE_AUTOCONFIG=0`; a caller `force_include` (or
+  `exclude_columns`) re-admits any auto-excluded column.
+- **Phase-5 distributed recall-complete path is now the DEFAULT (#844 finish
+  line).** The blocking-key-aware shuffle scoring + randomized-contraction WCC,
+  previously opt-in via `GOLDENMATCH_DISTRIBUTED_BLOCK_SHUFFLE=1`, is now ON by
+  default — the legacy per-partition path under-merged inversely with partition
+  count (a true-duplicate split across partitions was never compared). Validated
+  end-to-end at 100M on a real 5-node cluster: full dedupe in **9.2 min** with
+  byte-exact cluster recovery (20,000,000 clusters), after fixing the per-group
+  scoring wall (`_score_colocated_groups` now scores each partition in one
+  vectorized pass instead of ~20M per-group calls). Set
+  `GOLDENMATCH_DISTRIBUTED_BLOCK_SHUFFLE=0` to restore the legacy per-partition
+  path. **Multi-node:** the WCC checkpoints each round to
+  `GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH`, which on a multi-node cluster MUST be a
+  shared object-store path (`gs://…`); `randomized_contraction_wcc` now raises a
+  clear error on a multi-node cluster with a node-local scratch path instead of
+  silently diverging.
+
+### Added
+- **Phase-5 e2e pipeline recall-complete leg (opt-in, #844 Spec 2).** When
+  `GOLDENMATCH_DISTRIBUTED_BLOCK_SHUFFLE=1`, the Phase-5 streaming pipeline now
+  routes clustering to the randomized-contraction WCC
+  (`build_clusters_distributed(algorithm="randomized_contraction")`) instead of
+  per-partition Union-Find. Per-partition Union-Find under-merges when the
+  blocking plan generates pairs across input-partition boundaries; the
+  distributed WCC correctly merges them. Default behavior is unchanged
+  (block-shuffle off, per-partition path). The binding 100M validation run is
+  operator-deferred (requires a multi-node cluster + GCS scratch); the simulated
+  4-worker CI bench runs both legs and asserts the recall-complete leg finds
+  strictly more multi-member clusters. See `docs/distributed-ray-cluster-setup.md`
+  for the operator recipe. (#844 Spec 2)
+- **Distributed randomized-contraction WCC (opt-in, #844 Spec 1).** New
+  `randomized_contraction_wcc` in `goldenmatch.distributed.clustering` implements
+  Bögeholz–Brand–Todor randomized contraction (arXiv:1802.09478) — a relational,
+  chain-robust connected-components algorithm with no driver-side union-find and
+  no O(N) driver dict. Each round's contracted edges are checkpointed to parquet
+  to truncate Ray Data lineage (dodging the streaming-executor deadlock the
+  pointer-jumping `distributed_wcc` hit). Routed via
+  `GOLDENMATCH_DISTRIBUTED_WCC=randomized_contraction` (with
+  `GOLDENMATCH_DISTRIBUTED_WCC_SEED` / `GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH`).
+  Default stays `two_phase`; this is the algorithm building block only — wiring
+  into the Phase-5 e2e pipeline and the at-scale 100M validation are Spec 2.
+
+### Removed
+- Removed the dominated `GOLDENMATCH_COLUMNAR_CLUSTER_BUILD` opt-in (SP1);
+  superseded by `GOLDENMATCH_CLUSTER_FRAMES_OUT`.
+
+### Fixed
+- **`dice`/`jaccard` single-pair scorers no longer crash on different-length
+  bloom hex inputs (#784).** `score_field(a, b, "dice")` / `"jaccard"` decoded
+  the two hex strings to byte arrays and called `np.bitwise_and` with no length
+  validation, so mismatched lengths (e.g. `"0000"` vs `"000000"`) raised an
+  opaque numpy broadcast `ValueError` — while the matrix variants
+  (`_dice_score_matrix` / `_jaccard_score_matrix`) zero-pad to `max_len` and
+  scored the same inputs fine. The single-pair helpers now zero-pad the shorter
+  filter to `max_len` too, restoring single-vs-matrix parity (and matching the
+  TypeScript twins `diceCoefficient` / `jaccardSimilarity`, which already
+  zero-padded). Found by the hypothesis property suite (#778) on its first run.
+  In-pipeline PPRL pairs are fixed-length per config and were never affected;
+  the gap was reachable only via the public `score_field` API on cross-config or
+  hand-fed inputs.
+
+## [1.30.0] - 2026-06-09
+
+### Added
+- **Native PPRL bloom-filter CLK kernel (opt-in, default OFF).** New
+  `goldenmatch-native` symbol `bloom_clk_batch` (rayon + GIL-release, 256-bit
+  Cryptographic Longterm Key encoding) accelerates the PPRL `bloom_filter`
+  transform. Reachable via `GOLDENMATCH_NATIVE=1`; it ships OUT of the default-on
+  native dispatch set pending parity-on-the-published-wheel + a bench, so
+  pure-Python remains the reproducible default and the graceful fallback when the
+  symbol is absent. Requires `goldenmatch-native` 0.1.5 (republish ships the
+  symbol). (#826)
+
+### Fixed
+- **Probabilistic EM training-pair sampling is now deterministic (#829).**
+  `_sample_blocked_pairs` seeded-shuffled bare block indices, but the blocks
+  themselves arrive in a non-deterministic order (parallel / hash-bucketed
+  construction, varying by machine and core-count), so the seeded shuffle still
+  drew a different EM training sample run-to-run — different m/u weights,
+  different threshold, different precision/recall. On one CI run, three
+  invocations of the identical probabilistic path gave `historical_50k` pairwise
+  F1 of 0.805 / 0.779 / 0.643. The fix sorts blocks by their stable `block_key`
+  (and row_ids within each block) before the seeded shuffle, so the sample is
+  reproducible; post-fix the three bench harnesses agree within 0.002. The
+  committed Splink head-to-head and bake-off numbers are now deterministic; the
+  full bake-off is at `docs/benchmarks/2026-06-09-splink-bakeoff.md`. (The
+  previously published `dblp_acm = 0.879` was a non-deterministic lucky draw; the
+  reproducible value is 0.377 — bibliographic data should use the weighted path,
+  which scores 0.964 on DBLP-ACM, not the probabilistic path.)
+
+## [1.29.0] - 2026-06-09
+
 ### Added
 - **Phase 3c bench harness — FS dedupe at scale (Splink-parity).**
   `scripts/bench_fs_distributed.py` + `.github/workflows/bench-fs-distributed.yml`
@@ -168,6 +289,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   than on a common one. Frequencies are computed over the full column at EM-train time. No measurable
   headroom on the available benchmarks (precision already saturated at 96–99.98%); ships as a
   capability for skewed-frequency categorical fields (names/cities).
+- **Probabilistic (Fellegi-Sunter) auto-config v2 -- comparison-set + blocking
+  curation (default ON; kill-switch `GOLDENMATCH_FS_AUTOCONFIG_V2=0` restores
+  the legacy field set).** Scoped to the probabilistic path only
+  (`build_probabilistic_matchkeys` + `auto_configure_probabilistic_df`); the
+  weighted/DQbench path is untouched. Four levers fix the auto-built
+  Fellegi-Sunter comparison set that under-performed Splink on error-heavy PII
+  and mega-matched on bibliographic data: (1) admit `date`/dob columns as
+  `levenshtein` comparison fields (v1 dropped all dates -- the strongest person
+  discriminator); (2) drop redundant person-name composites (full_name /
+  first_and_surname) when atomic given+family fields are present, and floor fuzzy
+  fields at very low cardinality (exact identifiers keep the no-floor admission);
+  (3) additively diversify blocking onto orthogonal stable keys (date YEAR via
+  substring, plus postcode/zip/identifier passes); (4) admit `description`
+  (titles) and `multi_name` (authors) as `token_sort` comparison fields. With v2
+  the zero-config probabilistic path now matches or beats Splink on the shared
+  `bench_er_headtohead` head-to-head panel (pairwise F1, one evaluator):
+  historical_50k 0.779 vs 0.757, febrl3 0.991 vs 0.965, synthetic_person 0.998
+  vs 0.996, dblp_acm 0.879 (Splink skips). `GOLDENMATCH_FS_AUTOCONFIG_V2=0` is
+  byte-identical to the legacy field set.
 
 ## [1.28.1] - 2026-06-07
 

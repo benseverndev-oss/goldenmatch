@@ -25,7 +25,7 @@ on:
         required: false
         default: "100000 1000000"
       targets:
-        description: "Space-separated paths to profile: list columnar"
+        description: "Space-separated paths to profile: list columnar full"
         required: false
         default: "list columnar"
       profilers:

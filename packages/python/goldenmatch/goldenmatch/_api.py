@@ -31,6 +31,7 @@ from goldenmatch.core.autoconfig_verify import PostflightReport
 
 if TYPE_CHECKING:
     from goldenmatch.core.memory.corrections import CorrectionStats
+    from goldenmatch.core.recall_certificate import RecallEstimate
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +94,11 @@ class DedupeResult:
     # pipeline's direct field assignment pattern. Single source of truth would
     # require refactoring _attach_memory_to_postflight; tracked as follow-up.
     memory_stats: CorrectionStats | None = None
+    # Unsupervised recall estimate (capture-recapture over decorrelated
+    # matchkey/pass systems). Populated only when dedupe_df(..., certify=True);
+    # None otherwise. The audit-calibrated SAFE lower bound stays evaluate-only
+    # (it needs a labelled sample). See goldenmatch.core.recall_certificate.
+    recall_certificate: RecallEstimate | None = None
 
     def to_csv(self, path: str, which: str = "golden") -> Path:
         """Write results to CSV.
@@ -326,6 +332,7 @@ def dedupe_df(
     exclude_columns: list[str] | None = None,
     planning_effort: str | None = None,
     fs_model_path: str | None = None,
+    certify: bool = False,
 ) -> DedupeResult:
     """Deduplicate a Polars DataFrame directly (no file I/O).
 
@@ -346,6 +353,13 @@ def dedupe_df(
             probabilistic matchkey without its own ``model_path`` loads the
             model from here (skipping EM) if it exists, or trains and saves it
             there on first run (Splink-style train-once -> reuse).
+        certify: When True, also compute an unsupervised recall estimate
+            (capture-recapture over the config's decorrelated matchkey/pass
+            systems) and attach it to ``DedupeResult.recall_certificate``.
+            Off by default — it re-runs the pipeline once per system, so it
+            roughly K-times the cost. The audit-calibrated SAFE lower bound is
+            NOT computed here (it needs a labelled sample; use the ``evaluate``
+            CLI / ``audit_calibrated_bound`` for that).
 
     Returns:
         DedupeResult with golden records, clusters, dupes, unique, and stats.
@@ -483,6 +497,21 @@ def dedupe_df(
                 pf = PostflightReport()
             pf.autoconfig_exclusions = list(_exclusions)
 
+    # Unsupervised recall certificate (opt-in). Runs each decorrelated
+    # matchkey/pass system through the pipeline and applies the FP-aware
+    # capture-recapture estimator. Reuses the resolved `config` so it does
+    # NOT re-run auto-config; the per-system dedupe_df calls default
+    # certify=False, so there is no recursion. Fail-open: a certify failure
+    # never breaks the dedupe result it annotates.
+    _recall_cert = None
+    if certify:
+        from goldenmatch.core.recall_certificate import certify_recall_df
+
+        try:
+            _recall_cert = certify_recall_df(df, config=config)
+        except Exception:  # noqa: BLE001 - certify is additive; never break dedupe
+            logger.warning("recall certify failed; returning result without certificate", exc_info=True)
+
     return DedupeResult(
         golden=result.get("golden"),
         clusters=result.get("clusters", {}),
@@ -493,6 +522,7 @@ def dedupe_df(
         config=config,
         postflight_report=pf,
         memory_stats=_mem,
+        recall_certificate=_recall_cert,
     )
 
 
@@ -561,12 +591,16 @@ def match_df(
                 # Pass reference= so auto-config sees both column sets and emits
                 # matchkeys/blocking that apply uniformly across the join.
                 # Access via module attribute so tests can patch goldenmatch._api.auto_configure_df.
-                config = _self_api.auto_configure_df(
-                    target, reference=reference, _skip_finalize=True,
-                    confidence_required=confidence_required,
-                    allow_red_config=allow_red_config,
-                    planning_effort=planning_effort,
-                )
+                from goldenmatch.core.autoconfig import _match_mode_autoconfig
+                # #858: match mode -- suppress the multi-source dedupe guard even
+                # if `target` itself carries a user source-pattern column.
+                with _match_mode_autoconfig():
+                    config = _self_api.auto_configure_df(
+                        target, reference=reference, _skip_finalize=True,
+                        confidence_required=confidence_required,
+                        allow_red_config=allow_red_config,
+                        planning_effort=planning_effort,
+                    )
                 _used_controller = True
 
         assert config is not None, "match_df: config resolution above must bind config"

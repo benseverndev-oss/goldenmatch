@@ -1,0 +1,76 @@
+{
+  "name": "goldenanalysis",
+  "version": "0.1.0",
+  "description": "Read-only cross-cutting analysis, metrics, and reporting for the Golden Suite. TypeScript port of the goldenanalysis Python library.",
+  "keywords": [
+    "analysis",
+    "metrics",
+    "reporting",
+    "data-quality",
+    "entity-resolution",
+    "goldenanalysis",
+    "edge"
+  ],
+  "license": "MIT",
+  "author": "Ben Severn (https://bensevern.dev)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/benseverndev-oss/goldenmatch.git",
+    "directory": "packages/typescript/goldenanalysis"
+  },
+  "homepage": "https://github.com/benseverndev-oss/goldenmatch/tree/main/packages/typescript/goldenanalysis",
+  "bugs": {
+    "url": "https://github.com/benseverndev-oss/goldenmatch/issues"
+  },
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./core": {
+      "types": "./dist/core/index.d.ts",
+      "import": "./dist/core/index.js",
+      "require": "./dist/core/index.cjs"
+    },
+    "./node": {
+      "types": "./dist/node/index.d.ts",
+      "import": "./dist/node/index.js",
+      "require": "./dist/node/index.cjs"
+    }
+  },
+  "bin": {
+    "goldenanalysis-js": "./dist/cli.cjs"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit",
+    "clean": "rimraf dist"
+  },
+  "dependencies": {
+    "commander": "^13.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "rimraf": "^5.0.0",
+    "tsup": "^8.5.1",
+    "typescript": "^5.4.0",
+    "vitest": "^4.1.0"
+  }
+}

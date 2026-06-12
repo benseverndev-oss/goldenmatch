@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "source": {
+    "dataset": "customers",
+    "producer": "frame"
+  },
+  "metrics": [
+    {
+      "key": "frame.row_count",
+      "value": 20,
+      "unit": "rows",
+      "direction": "neutral"
+    },
+    {
+      "key": "frame.column_count",
+      "value": 4,
+      "unit": "columns",
+      "direction": "neutral"
+    },
+    {
+      "key": "frame.null_ratio_mean",
+      "value": 0.275,
+      "unit": "ratio",
+      "direction": "lower_better"
+    },
+    {
+      "key": "frame.duplicate_row_ratio",
+      "value": 0.1,
+      "unit": "ratio",
+      "direction": "lower_better"
+    },
+    {
+      "key": "frame.memory_bytes",
+      "value": 448,
+      "unit": "bytes",
+      "direction": "neutral"
+    }
+  ],
+  "tables": [
+    {
+      "name": "per_column",
+      "columns": [
+        "column",
+        "dtype",
+        "null_ratio",
+        "n_unique"
+      ],
+      "rows": [
+        [
+          "name",
+          "String",
+          0.2,
+          16
+        ],
+        [
+          "email",
+          "String",
+          0.3,
+          14
+        ],
+        [
+          "city",
+          "String",
+          0.1,
+          17
+        ],
+        [
+          "age",
+          "Int64",
+          0.5,
+          10
+        ]
+      ]
+    }
+  ],
+  "narrative": null,
+  "analyzers_run": [
+    "frame.summary"
+  ]
+}

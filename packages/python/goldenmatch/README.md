@@ -7,7 +7,7 @@
 
 *Zero-config entity resolution for Python & TypeScript — with a self-verifying auto-config that tells you when it's unsure.*
 
-**⚡ Scales from a CSV on your laptop to 100M+ rows on a Ray cluster — verified: 100,000,000 records deduped in 213 s with a 0.30 GB driver footprint.** ([how →](#scaling-to-100m))
+**⚡ Scales from a CSV on your laptop to 100M+ rows on a Ray cluster — verified: 100,000,000 records deduped recall-complete (correct across any partitioning) in 9.2 min, with a 0.36 GB driver footprint.** ([how →](#scaling-to-100m))
 
 <br>
 
@@ -972,6 +972,22 @@ Head-to-head against Splink, Dedupe, and RecordLinkage on two datasets. GoldenMa
 
 **Key takeaway:** GoldenMatch is the most consistent performer — top-2 F1 on both datasets with zero training data. Splink dominates structured PII but struggles on non-PII. RecordLinkage wins DBLP-ACM but lags on PII.
 
+### Probabilistic Auto-Config vs Splink (v1.29)
+
+A separate result for the `type: probabilistic` (Fellegi-Sunter) path. With the **probabilistic auto-config v2** comparison-set curation (default-on; `GOLDENMATCH_FS_AUTOCONFIG_V2=0` restores the legacy field set), GoldenMatch's zero-config probabilistic path **matches or beats Splink on every dataset Splink scores** in the shared `bench_er_headtohead` evaluator (pairwise F1, one evaluator for both tools):
+
+| Dataset | GoldenMatch (probabilistic v2) | Splink |
+|---|---|---|
+| historical_50k | **0.778** | 0.757 |
+| febrl3 | **0.991** | 0.965 |
+| synthetic_person | **0.998** | 0.996 |
+
+GoldenMatch also wins at the cluster level on `historical_50k` (B-cubed F1 0.844 vs 0.789). These numbers are **deterministic and reproducible** as of #829, which fixed a non-deterministic EM training-pair sample that previously swung `historical_50k` F1 between 0.64 and 0.80 run-to-run. The full three-engine accuracy + performance bake-off (including wall / peak RSS / throughput, and the `gm_zeroconfig` controller path) is committed at `docs/benchmarks/2026-06-09-splink-bakeoff.md`.
+
+The v2 levers: admit `date`/dob columns as `levenshtein` comparison fields, drop redundant person-name composites, additively diversify blocking onto orthogonal stable keys, and admit `description`/`multi_name` as `token_sort` fields. This is independent of the zero-config/weighted DBLP-ACM and NCVR numbers above.
+
+**On `dblp_acm` (bibliographic), use the weighted path, not probabilistic.** Splink skips `dblp_acm`, and the probabilistic auto-config is weak there (pairwise F1 0.377, recall-bound). The zero-config **weighted** controller is the right tool for bibliographic shape — it scores 0.964 on DBLP-ACM (see the Zero-Config Controller table below).
+
 ### Zero-Config Controller (v1.8)
 
 The introspective auto-config controller iterates on ComplexityProfile signals to reach hand-tuned-or-better accuracy with no user configuration.
@@ -1042,17 +1058,27 @@ goldenmatch watch --table customers --connection-string "$DATABASE_URL" --interv
 
 GoldenMatch runs the same matching policy from a CSV on your laptop up to 100M+
 rows on a [Ray](https://www.ray.io/) cluster. **Verified:** a full
-**100,000,000-row** dedupe in **213 s** on a 4-worker `e2-standard-16` cluster
-(64 worker CPU) producing **20,000,000 golden records**, with the driver process
-peaking at **0.30 GB RSS**.
+**100,000,000-row** dedupe in **9.2 min** (554 s) on a 5-node `e2-standard-16`
+cluster (80 CPU) producing **20,000,000 golden records recovered exactly**, with
+the driver process peaking at **0.36 GB RSS**.
 
-The distributed pipeline is **driver-collect-free** — every stage runs on the
-workers and nothing funnels back to a single node, which is what makes it scale:
+The default distributed path is **recall-complete** (#844): a blocking-key shuffle
+co-locates records that should match, then a distributed randomized-contraction
+WCC merges clusters that span input partitions — so the result is correct *no
+matter how the input is partitioned*. The whole pipeline is **driver-collect-free**
+(nothing funnels back to a single node):
 
 ```
-score  ->  per-partition local connected-components  ->  distributed join
-       ->  distributed golden build  ->  distributed write
+block-shuffle scoring  ->  distributed WCC (randomized contraction)
+  ->  distributed join  ->  distributed golden build  ->  distributed write
 ```
+
+> **Faster per-partition path:** set `GOLDENMATCH_DISTRIBUTED_BLOCK_SHUFFLE=0` to
+> use `score -> per-partition local connected-components -> ...` instead. It is
+> faster (a 4-worker run clocked ~213 s, 0.30 GB driver) but only correct when
+> each cluster's duplicates already land in the same input partition (e.g. the
+> input is sorted by a blocking key); it under-merges otherwise — which is why
+> recall-complete is now the default.
 
 **Run it:**
 
@@ -1072,6 +1098,10 @@ score  ->  per-partition local connected-components  ->  distributed join
    export GOLDENMATCH_DISTRIBUTED_PIPELINE=2
    export GOLDENMATCH_ENABLE_DISTRIBUTED_RAY=1
    export RAY_ADDRESS=auto
+   # recall-complete is the default; on a MULTI-NODE cluster the WCC checkpoints
+   # each round to a SHARED path -- a node-local path silently breaks the
+   # cross-node parquet reads (the run now fails loudly if you forget):
+   export GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH=gs://<bucket>/rc_scratch
    ```
 
 - **Config:** [`configs/distributed-100m.yaml`](configs/distributed-100m.yaml) (matching policy + the full recipe).

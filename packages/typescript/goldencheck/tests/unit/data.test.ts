@@ -208,3 +208,25 @@ describe("TabularData", () => {
     });
   });
 });
+
+describe("nUniqueTuple", () => {
+  it("counts distinct value-tuples across columns (mirrors df.select(cols).n_unique())", () => {
+    const data = new TabularData([
+      { a: 1, b: "x" },
+      { a: 1, b: "x" }, // dup tuple
+      { a: 1, b: "y" },
+      { a: 2, b: "x" },
+    ]);
+    expect(data.nUniqueTuple(["a", "b"])).toBe(3); // (1,x),(1,y),(2,x)
+    expect(data.nUniqueTuple(["a"])).toBe(2);
+  });
+
+  it("treats null consistently as a single group", () => {
+    const data = new TabularData([
+      { a: null, b: "x" },
+      { a: null, b: "x" },
+      { a: 1, b: "x" },
+    ]);
+    expect(data.nUniqueTuple(["a", "b"])).toBe(2); // (null,x),(1,x)
+  });
+});

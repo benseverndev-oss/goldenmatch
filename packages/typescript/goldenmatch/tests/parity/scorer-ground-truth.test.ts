@@ -66,6 +66,30 @@ const CASES: readonly Case[] = [
   ["soundex_match", "Robert", "Rupert", 1.0], // both R163
   ["soundex_match", "Robert", "Smith", 0.0],
   ["soundex_match", "Smith", "Smyth", 1.0], // both S530
+
+  // qgram — padded char-trigram Jaccard (Python core/scorer.py::_qgram_score_single).
+  // Values produced by the exact Python algorithm (lowercase, pad with "##",
+  // |A∩B|/|A∪B| over the length-3 substring sets).
+  ["qgram", "martha", "marhta", 0.3333],
+  ["qgram", "smith", "smyth", 0.4],
+  ["qgram", "Main St", "Main Street", 0.5714], // lowercases before gramming
+  ["qgram", "abc", "abc", 1.0], // identical -> 1.0 short-circuit
+  ["qgram", "", "", 1.0], // both empty -> 1.0
+  ["qgram", "abc", "", 0.0], // empty intersection -> 0.0
+  ["qgram", "kitten", "sitting", 0.0625],
+  ["qgram", "Robert", "Rupert", 0.3333],
+
+  // given_name_aliased_jw — alias->1.0 else plain Jaro-Winkler (Python GivenNameAliasedJW)
+  ["given_name_aliased_jw", "William", "Bill", 1.0],     // alias class -> 1.0
+  ["given_name_aliased_jw", "Robert", "Bob", 1.0],       // alias class -> 1.0
+  ["given_name_aliased_jw", "Andrew", "Andre", 0.9667],  // non-alias -> plain JW
+
+  // name_freq_weighted_jw — JW reweighted by census surname IDF in [0.70,0.95) (Python NameFreqWeightedJW)
+  ["name_freq_weighted_jw", "Smith", "Smith", 1.0],      // jw>=0.95 passthrough
+  ["name_freq_weighted_jw", "Smith", "Xyzqw", 0.0],      // jw<0.70 passthrough
+  ["name_freq_weighted_jw", "Taylor", "Tyler", 0.7111],  // borderline both-known -> reweighted
+  ["name_freq_weighted_jw", "Moore", "More", 0.8484],    // borderline both-known -> reweighted
+  ["name_freq_weighted_jw", "Taylor", "Tailor", 0.9111], // OOV gate (Tailor not in table) -> plain JW
 ];
 
 describe("scorer Python parity (4-decimal tolerance)", () => {

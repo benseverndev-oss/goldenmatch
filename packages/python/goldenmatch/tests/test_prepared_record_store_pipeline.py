@@ -16,6 +16,14 @@ def _force_polars_direct(monkeypatch):
     # path, which only runs under polars-direct. Native-by-default would route
     # to bucket and bypass the machinery under test.
     monkeypatch.setenv("GOLDENMATCH_NATIVE", "0")
+    # Every test in this file uses the SAME _df(); the process-global in-memory
+    # _PREP_CACHE is keyed by df content, so one test's dedupe_df leaves a cache
+    # entry that makes a sibling's "first call must prep" assertion flake under
+    # `pytest -n auto` (worker-order dependent). Reset it before each test so
+    # every test is self-contained (per CLAUDE.md xdist-isolation rule).
+    from goldenmatch.core import pipeline as _pipeline
+
+    _pipeline._prep_cache_clear()
 
 
 def _df() -> pl.DataFrame:

@@ -72,6 +72,8 @@ Zero-config accuracy, quoted from the package README:
 | Febrl4 (PII, PPRL) | 0.924 | Bloom-filter PPRL |
 | DQBench ER composite | 91.04 | No LLM (v1.12.0) |
 
+These are the zero-config (weighted-path) numbers. On the separate **probabilistic (Fellegi-Sunter)** path, auto-config v2 beats Splink head-to-head under the shared `bench_er_headtohead` evaluator on every dataset Splink scores (historical_50k 0.778 vs 0.757, febrl3 0.991 vs 0.965, synthetic_person 0.998 vs 0.996) — deterministic as of #829. See [Scoring → Probabilistic auto-config v2](/goldenmatch/scoring#probabilistic-auto-config-v2-beats-splink-head-to-head) for the full panel and the honest pairwise-vs-cluster caveat.
+
 ## A minimal example
 
 ```python

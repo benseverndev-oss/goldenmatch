@@ -284,4 +284,14 @@ mod tests {
         assert_eq!(comp_of("y"), comp_of("z"));
         assert_ne!(comp_of("x"), comp_of("w"));
     }
+
+    // NOTE: these #[pg_test]s do NOT execute in CI. `cargo pgrx test` requires
+    // pgrx SQL schema generation (it installs each test into a `tests` schema
+    // and calls `SELECT tests.<name>()`), which is broken for this crate -- the
+    // extension SQL is hand-maintained (see the crate CLAUDE.md), so the run
+    // fails with `schema "tests" does not exist`. The graph + fingerprint SQL
+    // surface these wrappers expose is instead asserted end-to-end against a
+    // real CREATE EXTENSION in the `rust_pgrx` psql smoke
+    // (.github/workflows/ci.yml), and the underlying kernels have direct unit
+    // tests in goldenmatch-graph-core / goldenmatch-fingerprint-core.
 }

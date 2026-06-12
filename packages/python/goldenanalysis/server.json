@@ -1,0 +1,23 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.benseverndev-oss/goldenanalysis",
+  "title": "GoldenAnalysis",
+  "description": "Read-only cross-cutting analysis, metrics, and reporting across the Golden Suite.",
+  "websiteUrl": "https://github.com/benseverndev-oss/goldenmatch/tree/main/packages/python/goldenanalysis#readme",
+  "version": "0.1.0",
+  "repository": {
+    "url": "https://github.com/benseverndev-oss/goldenmatch",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "goldenanalysis",
+      "version": "0.1.0",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}

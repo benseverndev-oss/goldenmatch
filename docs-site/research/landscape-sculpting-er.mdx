@@ -1,0 +1,84 @@
+---
+title: "Landscape-sculpting ER (exploratory)"
+description: "A second exploratory arc reframing entity resolution as sculpting a potential/attractor landscape. Honest outcome: the framing is genuinely novel but the mechanism is cosmetic — it gives the same partition as a discrete split/merge loop once the objective is calibrated."
+keywords: ["research", "entity resolution", "topology", "watershed", "correlation clustering", "negative result"]
+---
+
+<Note>
+  This is the **second** exploratory research arc (after
+  [Amortized Bayesian ER](/research/amortized-bayesian-er)), documented for
+  honesty. Outcome: a **negative result**. The topology/landscape framing is
+  novel (a six-angle prior-art scan confirmed it is unoccupied for ER), but under
+  a fair, calibrated comparison the mechanism is **cosmetic** — it produces the
+  same partition as a plain discrete split/merge loop. Source + results in
+  `scripts/research/landscape_er.py` and `RESULTS-landscape-er.md`.
+</Note>
+
+## The idea
+
+Reframe ER as **sculpting a potential landscape**: a profiler sketches a coarse
+terrain of basins ("buckets"); records are "marbles" that roll into basins;
+after each pass, residuals reshape the terrain — stranded marbles carve new
+basins (recall), impure basins get a ridge raised to split them (precision) —
+iterating until every marble settles in a clean basin that represents an entity.
+The appeal was the symmetric two-move loop and a "global re-flow" after each edit.
+
+## White-space scan: genuinely open
+
+A six-angle prior-art scan (iterative watershed/Morse, mode-seeking add/split, ER
+as energy landscape, profiler-driven iterative ER, MDL split-merge, self-growing
+topology) found the **synthesis unoccupied**: ER has never been framed as records
+settling into attractor basins of a sculpted landscape (no Hopfield/energy/attractor
+ER exists), and the add-for-recall / split-for-precision polarity is unattested in
+density-landscape clustering. The one crowded angle was the iterative-refinement
+*loop* itself (Iterative Blocking, Gruenheid incremental RL, the Sayari pipeline),
+so the only defensible novelty was the **mechanism**, not the loop.
+
+## Kill-criterion: does the mechanism beat a discrete loop?
+
+A fair fight: same affinity graph, same correlation-clustering objective, same
+Fiedler 2-cut proposals, same init, symmetric move sets. Only the mechanism
+differed (label-propagation routing + ridge-raising + global re-flow vs. direct
+relabel).
+
+**A near-miss worth recording.** A first run showed the landscape beating the
+discrete loop by +0.10 F1 on DBLP-ACM across seeds — but this was a **θ-calibration
+artifact**: the threshold θ was set to the median affinity, far below the signal
+band, so the objective's optimum was gross over-merge and the landscape merely
+chased a broken objective less aggressively. Fixing the objective (the canonical
+correlation-clustering cost with a calibrated unsupervised θ = mean + 2·std of
+nonzero affinities) erased the win:
+
+| Calibrated comparison | discrete | landscape |
+|---|---:|---:|
+| Febrl3 (clean) | 0.917 | **0.917 — identical** |
+| DBLP-ACM (clean) | 1.000 | **1.000 — identical** |
+| synth multi-source conflict (3 seeds) | 0.757 / 0.911 / 0.855 | **identical each seed** |
+
+In the conflict regime a plain threshold (CC@θ) often *beat* both refinement loops.
+
+## Why it failed
+
+**Proximate:** given the *same* objective and the *same* split proposals, a greedy
+hill-climb reaches the same local optimum whether a move is expressed as "relabel"
+or "raise a ridge and re-flow." The landscape is a different *route* to the same
+destination. By sharing the objective and proposals to make the fight fair, the
+test could only ever measure the optimizer's route, not the representation's power.
+
+**Structural (shared with the first arc):**
+- The benchmarks are **saturated** — a calibrated threshold already hits ≈1.0 on
+  the subsamples, leaving no headroom for a new mechanism to win.
+- It attacked the **clustering mechanism**, the layer that matters least. On clean
+  data the affinity is good enough that almost any sane clustering recovers the
+  truth; the real bottleneck is representation/affinity quality and operational
+  recall, not the partitioner.
+- The topology was **old wine**: basins = connected components (H₀), ridges =
+  graph cuts, rolling = label propagation. The metaphor brought vocabulary, not
+  new machinery.
+
+## Disposition
+
+Closed as a documented negative result. Same shape as the first arc: scan-validated
+novelty, not competitive under a fair test. The recurring lesson — *don't compete on
+accuracy on solved benchmarks; the bottleneck isn't the clustering algorithm* —
+directly motivates the next direction.

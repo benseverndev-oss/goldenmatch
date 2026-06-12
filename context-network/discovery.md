@@ -10,11 +10,13 @@ links rather than reading everything.
 ## Architecture (active technical knowledge)
 - [architecture/datafusion-spine.md](architecture/datafusion-spine.md) — the embedded-DataFusion "scale mode" spine (Stages A-E); current status + entry points.
 - [architecture/sail-tier.md](architecture/sail-tier.md) — the distributed Sail-native tier (Spark Connect) that replaces Ray; specced, build not started.
+- [architecture/distributed-wcc.md](architecture/distributed-wcc.md) — the Ray distributed-WCC solve for #844: randomized-contraction connected components + the recall-complete Phase-5 path (block-shuffle scoring + distributed clustering); specs SHIPPED (#851/#852) + #864 finish-line fixes; VALIDATED at 100M (9.2 min e2e, 20M clusters exact); default flipped ON (#867).
 - [architecture/sql-native-extensions.md](architecture/sql-native-extensions.md) — graph + embedding UDFs on DuckDB/Postgres/DataFusion, native-direct (shared `graph-core` + `goldenembed-rs`); SHIPPED (#509).
 - [architecture/goldenflow-native-kernel.md](architecture/goldenflow-native-kernel.md) — GoldenFlow date/phone vectorized fast paths + the optional `goldenflow-native` phone kernel (NANP-only gated); SHIPPED (2026-06-07).
 - [architecture/goldencheck-native-kernel.md](architecture/goldencheck-native-kernel.md) — GoldenCheck's Arrow-native runtime (`goldencheck-native`) + deep-profiling expansion (Benford / composite-key / FD / fuzzy / approx-FD kernels, `--deep`, `refs`, freshness) + the `cell_quality` / `functional_dependencies` bridge APIs; SHIPPED (#793, 2026-06-07).
 - [architecture/goldencheck-goldenmatch-integration.md](architecture/goldencheck-goldenmatch-integration.md) — data quality feeds entity resolution: four fail-open, default-OFF doors (survivorship, blocking, FD negative-evidence, quality-gated review); #794/#795/#798 shipped, #797 open.
-- [architecture/fellegi-sunter-splink-parity.md](architecture/fellegi-sunter-splink-parity.md) — the `type: probabilistic` matchkey from scorer to Splink-class engine: model lifecycle, supervised m, match-weight waterfall, calibration, accuracy analysis, bucket/native scale-out + the EM-sampling perf fix it exposed; SHIPPED (#800/#802/#803, 2026-06-08).
+- [architecture/fellegi-sunter-splink-parity.md](architecture/fellegi-sunter-splink-parity.md) — the `type: probabilistic` matchkey from scorer to Splink-class engine: model lifecycle, supervised m, match-weight waterfall, calibration, accuracy analysis, bucket/native scale-out. FS auto-config v2 (#823, v1.29.0) now beats hand-rolled Splink on every dataset Splink scores (pairwise F1, shared evaluator), made reproducible by the #829 EM-sampling determinism fix; the deterministic three-engine bake-off is at [`docs/benchmarks/2026-06-09-splink-bakeoff.md`](../docs/benchmarks/2026-06-09-splink-bakeoff.md).
+- [architecture/rust-test-coverage.md](architecture/rust-test-coverage.md) — how the `packages/rust/extensions/` crates are tested in CI: per-crate map, the bridge CPython-in-CI dance, the `cargo pgrx test` structural dead-end, and the measured per-crate baseline; SHIPPED (#827/#830/#832, 2026-06-09).
 
 ## Decisions (records with no other home)
 - [decisions/0001-gate-reframe-engine-portability.md](decisions/0001-gate-reframe-engine-portability.md) — retire one-box RSS as the gate; engine portability is the destination.
@@ -25,13 +27,18 @@ links rather than reading everything.
 - [decisions/0006-goldenflow-native-nanp-gating.md](decisions/0006-goldenflow-native-nanp-gating.md) — GoldenFlow: vectorize in Polars first; gate the native phone kernel to NANP-only (parity-safe by construction).
 - [decisions/0007-goldencheck-goldenmatch-integration.md](decisions/0007-goldencheck-goldenmatch-integration.md) — GoldenCheck→GoldenMatch: fail-open quality bridges, additive, default-OFF + benchmark-gated; hold the DQ↔ER boundary.
 - [decisions/0008-fellegi-sunter-splink-parity.md](decisions/0008-fellegi-sunter-splink-parity.md) — Fellegi-Sunter: close the Splink engine gap in dependency order, reuse the scale substrate, keep defaults reproducible (new power opt-in), measure the scale gate on a real runner.
+- [decisions/0009-rust-test-coverage.md](decisions/0009-rust-test-coverage.md) — Rust coverage: make the tests real (de-skip the bridge, run the standalone crates), route around the `cargo pgrx test` dead-end (psql smoke), then measure — informational baseline, not a hard gate.
+- [decisions/0010-publish-containers-ghcr-mirror.md](decisions/0010-publish-containers-ghcr-mirror.md) — publish-containers flakes were anonymous-Docker-Hub buildkit-pull timeouts; mirror buildkit/binfmt into ghcr (off the hot path) + native retry-once, no new secrets/actions.
+- [decisions/0011-distributed-wcc-randomized-contraction.md](decisions/0011-distributed-wcc-randomized-contraction.md) — distributed WCC: randomized contraction (relational, chain-robust) over driver-collect / min-propagation; per-round parquet checkpoint dodges the Ray streaming-executor deadlock; VALIDATED at 100M (9.2 min) + default-flipped (#867); the e2e wall was per-group scoring (vectorized in #864), not the WCC.
+- [decisions/0012-fs-block-scoring-perf.md](decisions/0012-fs-block-scoring-perf.md) — FS block-scoring perf: "Splink 3-19x faster" was a numpy-path red herring (the bake-off never set `GOLDENMATCH_FS_NATIVE`); the wall is per-block fan-out, not scoring math, so the Rust kernel can't move it; three output-identical numpy optimizations took historical_50k −72% local.
+- [decisions/0013-goldencheck-ts-parity-hardening.md](decisions/0013-goldencheck-ts-parity-hardening.md) — goldencheck TS port: finish module parity (2 profilers / 4 relations / `validate`, mirroring the Python fallback) + harden the golden harness (assert confidence + affected_rows, fail-on-missing, regenerate on a CI runner since the box OOMs on Polars); it caught a pre-existing `temporal_order` over-fire on integer columns (#855 closed).
 
 ## Processes (how work is done here)
 - [processes/development-workflow.md](processes/development-workflow.md) — spec → plan → execute → review → CI → merge, plus the hard environment constraints.
 
 ## Planning (where it's going)
 - [planning/roadmap.md](planning/roadmap.md) — the Arrow-native arc and what's next.
-- [planning/surface-hardening.md](planning/surface-hardening.md) — the 2026-06-05 four-surface audit arc: fail-closed HTTP auth, CLI/TUI fixes, Python->TS parity ports (+ the parity-fixture methodology), and the open PR queue.
+- [planning/surface-hardening.md](planning/surface-hardening.md) — the 2026-06-05 four-surface audit arc: fail-closed HTTP auth, CLI/TUI fixes, Python->TS parity ports, and the parity-fixture methodology — now including the #856/#857 "fixtures rot silently" lesson, the merged #857 refdata-name-scorer + autoconfig-blocking TS port, and the merged #855 goldencheck TS port (2 profilers / 4 relations / `validate` + a hardened golden harness that caught a pre-existing temporal_order bug).
 - [planning/security-hardening.md](planning/security-hardening.md) — the 2026-06-05 security-hardening arc: 42-alert remediation (Dependabot + code scanning), Scorecard 6.1->7.3 (Token-Permissions/Signed-Releases/Fuzzing), the CodeQL Autofix incident, property-test bug ledger, and open actions.
 
 ## Meta (keeping the network alive)
@@ -39,4 +46,4 @@ links rather than reading everything.
 - [meta/maintenance.md](meta/maintenance.md) — how to keep nodes accurate and small.
 
 ---
-**Classification:** navigation • **Last updated:** 2026-06-07
+**Classification:** navigation • **Last updated:** 2026-06-11

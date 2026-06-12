@@ -142,6 +142,32 @@ describe("dice / jaccard (bloom filter hex)", () => {
     expect(diceCoefficient(zero, zero)).toBe(0.0);
     expect(jaccardSimilarity(zero, zero)).toBe(0.0);
   });
+
+  // #784: different-length hex inputs must not crash and must zero-pad the
+  // shorter filter to the longer length (parity with the Python single-pair
+  // helpers, which were fixed to match their matrix variants). The fast-check
+  // property suite only exercises same-length pairs, so these pin the
+  // mismatched-length contract explicitly.
+  it("mismatched lengths zero-pad rather than crash", () => {
+    // "ff" (1 byte, 8 set bits) vs "ff00" (2 bytes, 8 set bits): the implicit
+    // zero tail means |A|=|B|=8 and |A&B|=8 -> dice 1.0, jaccard 1.0.
+    expect(diceCoefficient("ff", "ff00")).toBeCloseTo(1.0, 9);
+    expect(jaccardSimilarity("ff", "ff00")).toBeCloseTo(1.0, 9);
+    // Symmetric regardless of which argument is shorter.
+    expect(diceCoefficient("ff00", "ff")).toBeCloseTo(1.0, 9);
+    expect(jaccardSimilarity("ff00", "ff")).toBeCloseTo(1.0, 9);
+  });
+
+  it("mismatched lengths with partial overlap score in [0, 1]", () => {
+    // "ff" = bits 0-7; "ff0f" = bits 0-7 and 12-15. Intersection 8, union 12.
+    expect(diceCoefficient("ff", "ff0f")).toBeCloseTo((2 * 8) / (8 + 12), 9);
+    expect(jaccardSimilarity("ff", "ff0f")).toBeCloseTo(8 / 12, 9);
+  });
+
+  it("mismatched all-zero lengths -> 0 (no crash)", () => {
+    expect(diceCoefficient("0000", "000000")).toBe(0.0);
+    expect(jaccardSimilarity("0000", "000000")).toBe(0.0);
+  });
 });
 
 describe("scoreField", () => {

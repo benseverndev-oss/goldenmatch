@@ -19,7 +19,7 @@ import numpy as np
 import polars as pl
 
 from goldenmatch.core.cluster import build_clusters
-from goldenmatch.utils.transforms import apply_transforms
+from goldenmatch.utils.transforms import bloom_clk_batch
 
 logger = logging.getLogger(__name__)
 
@@ -71,16 +71,16 @@ def compute_bloom_filters(
     if "__row_id__" not in df.columns:
         df = df.with_row_index("__row_id__").with_columns(pl.col("__row_id__").cast(pl.Int64))
 
-    filters = {}
-    for row in df.to_dicts():
-        rid = row["__row_id__"]
-        # Concatenate fields with separator
-        text = " ".join(str(row.get(f, "") or "") for f in fields)
-        bf = apply_transforms(text, [transform])
-        if bf:
-            filters[rid] = bf
+    # Concatenate fields per row, then CLK the whole column in one bulk call
+    # (a single FFI crossing when the native pprl_bloom kernel is gated on,
+    # versus a per-row Python hash loop). bloom_clk_batch is output-identical
+    # to the prior apply_transforms(text, [transform]) per row.
+    rows = df.to_dicts()
+    rids = [row["__row_id__"] for row in rows]
+    texts = [" ".join(str(row.get(f, "") or "") for f in fields) for row in rows]
+    clks = bloom_clk_batch(texts, transform)
 
-    return filters
+    return {rid: bf for rid, bf in zip(rids, clks) if bf}
 
 
 def link_trusted_third_party(

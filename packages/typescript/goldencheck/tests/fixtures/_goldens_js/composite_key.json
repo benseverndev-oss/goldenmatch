@@ -1,0 +1,62 @@
+{
+  "findings": [
+    {
+      "severity": "WARNING",
+      "column": "order_id",
+      "check": "type_inference",
+      "confidence": 0.7,
+      "affected_rows": 0
+    },
+    {
+      "severity": "WARNING",
+      "column": "order_id",
+      "check": "identity_safe_pk",
+      "confidence": 1.0,
+      "affected_rows": 6
+    },
+    {
+      "severity": "INFO",
+      "column": "order_id",
+      "check": "range_distribution",
+      "confidence": 1.0,
+      "affected_rows": 0
+    },
+    {
+      "severity": "INFO",
+      "column": "line_no",
+      "check": "range_distribution",
+      "confidence": 1.0,
+      "affected_rows": 0
+    },
+    {
+      "severity": "INFO",
+      "column": "qty",
+      "check": "range_distribution",
+      "confidence": 1.0,
+      "affected_rows": 0
+    },
+    {
+      "severity": "INFO",
+      "column": "order_id",
+      "check": "composite_key",
+      "confidence": 0.6,
+      "affected_rows": 6
+    },
+    {
+      "severity": "INFO",
+      "column": "sku",
+      "check": "composite_key",
+      "confidence": 0.6,
+      "affected_rows": 6
+    },
+    {
+      "severity": "INFO",
+      "column": "sku",
+      "check": "composite_key",
+      "confidence": 0.6,
+      "affected_rows": 6
+    }
+  ],
+  "health_grade": "A",
+  "health_score": 94
+}

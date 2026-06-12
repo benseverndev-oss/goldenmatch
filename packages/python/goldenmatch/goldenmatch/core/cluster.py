@@ -510,50 +510,22 @@ def build_clusters(
             seen.add(id_b)
         all_ids = list(seen)
 
-    # SP1 (columnar cluster-build core): when enabled, build the same
-    # ``dict[int, dict]`` via the columnar Arrow path. Default OFF; the output
-    # is byte-identical to the dict path (parity gate
-    # tests/test_columnar_cluster_build_parity.py), differing only in member
-    # LIST ORDER (a separate Union-Find -> compared as a set). Gate goes AFTER
-    # the Ray short-circuit, the DataFrame branch, and the all_ids derivation so
-    # it never intercepts Ray and always has a concrete pairs list + all_ids.
-    if _columnar_cluster_build_enabled():
-        return _build_clusters_via_frames(
-            pairs, all_ids, max_cluster_size, weak_cluster_threshold, auto_split,
-            split_edge_budget,
-        )
-
     return _build_clusters_dict_path(
         pairs, all_ids, max_cluster_size, weak_cluster_threshold, auto_split,
         split_edge_budget=split_edge_budget,
     )
 
 
-def _columnar_cluster_build_enabled() -> bool:
-    """Columnar cluster-build core for ``build_clusters`` (SP1): build the
-    ``dict[int, dict]`` via the two-frame columnar path
-    (``_build_clusters_via_frames``) instead of the list/dict Union-Find path.
-    Default OFF -- byte-identical to the dict path on OUTPUT (member list order
-    aside; a separate UF runs so order legitimately differs but membership is
-    identical). Kill-switch ``GOLDENMATCH_COLUMNAR_CLUSTER_BUILD=0`` (the
-    default) restores the dict path. Mirrors the identity
-    ``_batch_fingerprint_enabled`` gate."""
-    return os.environ.get(
-        "GOLDENMATCH_COLUMNAR_CLUSTER_BUILD", "0"
-    ).strip() != "0"
+def _cluster_frames_out_enabled() -> bool:  # pyright: ignore[reportUnusedFunction]  # used cross-module: pipeline.py imports + calls this; pyright's private-symbol unused check misses the call site
+    """Frames-out path gate. When enabled, ``build_cluster_frames`` returns the
+    two-frame ``ClusterFrames`` columnar representation directly, WITHOUT
+    materializing the per-cluster ``dict[int, dict]`` for non-oversized clusters.
 
-
-def _cluster_frames_out_enabled() -> bool:  # pyright: ignore[reportUnusedFunction]
-    """SP-A frames-out path gate. When ``GOLDENMATCH_CLUSTER_FRAMES_OUT`` is set
-    (non-``0``), ``build_cluster_frames`` returns the two-frame ``ClusterFrames``
-    columnar representation directly, WITHOUT materializing the per-cluster
-    ``dict[int, dict]`` for non-oversized clusters. Default OFF. Independent of
-    ``build_clusters`` and all its consumers, which are untouched.
-
-    Not consumed in SP-A; the pipeline wires this gate in SP-B to choose
-    build_cluster_frames vs build_clusters. The pyright-ignore drops the
-    reportUnusedFunction false-positive until then."""
-    return os.environ.get("GOLDENMATCH_CLUSTER_FRAMES_OUT", "0").strip() != "0"
+    Default ON; set ``GOLDENMATCH_CLUSTER_FRAMES_OUT=0`` to force the legacy dict
+    path. Independent of ``build_clusters`` and all its consumers, which are
+    untouched. The pipeline wires this gate to choose ``build_cluster_frames``
+    vs ``build_clusters``."""
+    return os.environ.get("GOLDENMATCH_CLUSTER_FRAMES_OUT", "1").strip() != "0"
 
 
 def build_cluster_frames(
@@ -767,16 +739,20 @@ def build_cluster_frames(
         .alias("confidence"),
     )
 
-    _emit_cluster_profile_frames(metadata, assignments)
+    _emit_cluster_profile_frames(metadata, assignments, pairs_list)
     return ClusterFrames(assignments=assignments, metadata=metadata)
 
 
-def _emit_cluster_profile_frames(metadata: Any, assignments: Any) -> None:
+def _emit_cluster_profile_frames(
+    metadata: Any, assignments: Any, pairs: Any = None,
+) -> None:
     """Frames-path twin of ``_emit_cluster_profile``. Telemetry only -- no-op
     when no capture is active. Builds the ``ClusterProfile`` from the metadata +
-    assignments frames as closely as the columnar shape allows (no per-cluster
-    pair_scores on this path, so the transitivity threshold falls back to 0.5,
-    same as ``_emit_cluster_profile`` when ``aggregated_scores`` is empty)."""
+    assignments frames as closely as the columnar shape allows. The within-cluster
+    edge scores (which the frames path doesn't carry on the cluster dict) are
+    reconstructed from ``pairs`` + ``assignments`` so ``transitivity_rate`` matches
+    the dict path's value -- the auto-config controller iterates on this signal,
+    so a frames-path 0.0 would change its behaviour vs the dict path."""
     import math
 
     if not _emitter_stack.get():
@@ -809,10 +785,22 @@ def _emit_cluster_profile_frames(metadata: Any, assignments: Any) -> None:
         ):
             members_by_cluster.setdefault(int(cid), []).append(int(mid))
 
-    # No per-cluster pair_scores on the frames path -> empty aggregate ->
-    # transitivity threshold falls back to 0.5 (same as _emit_cluster_profile).
+    # Reconstruct the within-cluster edge scores from the raw pairs + final
+    # assignments (the frames path keeps no per-cluster pair_scores). Mirrors the
+    # dict path's aggregate: canonical (min,max) keys, last-wins by input order,
+    # restricted to pairs whose endpoints landed in the SAME cluster. Threshold
+    # proxy = min observed within-cluster score, same as _emit_cluster_profile.
+    member_to_cid: dict[int, int] = {}
+    for cid, mids in members_by_cluster.items():
+        for m in mids:
+            member_to_cid[m] = cid
     aggregated_scores: dict[tuple[int, int], float] = {}
-    threshold = 0.5
+    if pairs is not None:
+        for a, b, s in pairs:
+            ca = member_to_cid.get(a)
+            if ca is not None and ca == member_to_cid.get(b):
+                aggregated_scores[(min(a, b), max(a, b))] = s
+    threshold = min(aggregated_scores.values()) if aggregated_scores else 0.5
 
     oversized_count = int(
         metadata.filter(_pl.col("oversized")).height
@@ -847,8 +835,7 @@ def _build_clusters_dict_path(
 ) -> dict[int, dict]:
     """Legacy list/dict Union-Find cluster build. Verbatim extraction of the
     original ``build_clusters`` body (UF stage -> emit); behavior is unchanged.
-    The columnar path (``_build_clusters_via_frames``) shares the tail via
-    ``_finalize_clusters``."""
+    Shares the emit tail via ``_finalize_clusters``."""
     with stage("cluster_connected_components"):
         if native_enabled("clustering"):
             # Native Union-Find (component membership is identical to the Python
@@ -1041,91 +1028,6 @@ def _finalize_clusters(
     return result
 
 
-def _build_clusters_via_frames(
-    pairs: Any,
-    all_ids: list[int],
-    max_cluster_size: int,
-    weak_cluster_threshold: float,
-    auto_split: bool,
-    split_edge_budget: int | None = None,
-) -> dict[int, dict]:
-    """Columnar cluster-build core. Returns the dict path's shape EXCEPT
-    ``pair_scores`` is ``{}`` on every cluster (SP4: the eager per-cluster dict --
-    the SP1 bench loss -- is dropped; scores are served by a ``ClusterPairScores``
-    view built at the pipeline level from the scored-pair stream). Everything else
-    (members/size/oversized/confidence/bottleneck/cluster_quality/ids) is
-    byte-identical; the shared ``_finalize_clusters`` tail does auto-split/quality/
-    emit.
-
-    Union-Find source differs native vs off-native:
-      * Native + the Arrow kernel present: ``build_clusters_arrow_native`` runs
-        UF in Rust (UF-ONLY, pre-split); member sets come from
-        ``frames.assignments``. Confidence/bottleneck/min_edge/avg_edge are read
-        DIRECTLY from ``frames.metadata`` keyed by ``cluster_id`` (the kernel sorts
-        components by min-member + enumerates start=1, identical to our re-sort, so
-        the cid mapping is direct). NO per-cluster ``pair_scores`` fill.
-      * Off-native (or the Arrow kernel absent): UF membership comes DIRECTLY
-        from ``connected_components`` (when exposed) or the pure-Python
-        ``UnionFind``. Confidence + min/avg come from a TRANSIENT per-cluster fill
-        in PAIRS-INPUT ORDER (matching the dict path's float-sum order exactly)
-        which is then DISCARDED -- the returned dict's ``pair_scores`` stays ``{}``.
-        We do NOT call ``build_clusters_arrow_native`` here (its
-        ``build_clusters_v2_columnar`` fallback re-runs the FULL ``build_clusters``
-        incl. auto-split -> POST-split frames).
-
-    Both states are STRICT byte-identical to the dict path on everything but
-    ``pair_scores`` (the kernel's metadata and the off-native transient fill are
-    both pairs-input order). ``raw_pairs`` + ``weak_stats`` are threaded into
-    ``_finalize_clusters`` for the per-oversized split materialization + the weak
-    test.
-    """
-    import polars as _pl
-
-    from goldenmatch.core.scorer import PAIR_STREAM_SCHEMA
-
-    pairs_list = list(pairs)
-    pairs_df = _pl.DataFrame(
-        {
-            "id_a": [p[0] for p in pairs_list],
-            "id_b": [p[1] for p in pairs_list],
-            "score": [p[2] for p in pairs_list],
-        },
-        schema=PAIR_STREAM_SCHEMA,
-    )
-
-    sorted_clusters, metadata_by_cid, weak_stats = _columnar_presplit(
-        pairs_list, pairs_df, all_ids, max_cluster_size,
-    )
-
-    # --- Build the SAME pre-split result dict as the dict path. ------------
-    # confidence/bottleneck come from metadata_by_cid (native: kernel metadata;
-    # off-native: the discarded transient fill, bit-identical to
-    # compute_cluster_confidence). pair_scores stays {} (SP4: served by the view).
-    with stage("cluster_result_dict_init"):
-        result: dict[int, dict] = {}
-        for cluster_id, members in enumerate(sorted_clusters, start=1):
-            size = len(members)
-            md_c = metadata_by_cid[cluster_id]
-            result[cluster_id] = {
-                "members": list(members),
-                "size": size,
-                "oversized": size > max_cluster_size,
-                "pair_scores": {},
-                "confidence": md_c["confidence"],
-                "bottleneck_pair": md_c["bottleneck_pair"],
-            }
-
-    # --- Steps 5-7: auto-split + cluster_quality + emit (shared tail). -----
-    # raw_pairs lets _finalize materialize per-OVERSIZED pair_scores (input order,
-    # last-wins) for the MST split; weak_stats feeds the weak test. The returned
-    # dict's pair_scores is {} on every cluster.
-    return _finalize_clusters(
-        result, max_cluster_size, weak_cluster_threshold, auto_split,
-        raw_pairs=pairs_list, weak_stats=weak_stats,
-        n_rows=len(all_ids), split_edge_budget=split_edge_budget,
-    )
-
-
 def _columnar_presplit(
     pairs_list: list[tuple[int, int, float]],
     pairs_df: Any,
@@ -1148,8 +1050,9 @@ def _columnar_presplit(
       that HAVE in-cluster edges. Off-native guard ``size>1 and ps``; native
       ``size>1``. Edgeless multi-member cids ABSENT. Carries the RAW (non-
       coalesced) min/avg the dict path uses for the weak test; membership must
-      EXACTLY match the current ``_build_clusters_via_frames`` so SP4 parity
-      (tests/test_columnar_drop_pairscores_parity.py) doesn't regress.
+      EXACTLY match the ``build_cluster_frames`` frames-out path so the
+      frames-out parity gate (tests/test_cluster_frames_out_parity.py) doesn't
+      regress.
     """
     import polars as _pl
 
@@ -1305,8 +1208,16 @@ def compute_cluster_confidence(
         Dict with: min_edge, avg_edge, connectivity, bottleneck_pair, confidence.
     """
     if native_enabled("clustering"):
-        edges = [(k[0], k[1], v) for k, v in pair_scores.items()
-                 if isinstance(k, tuple) and len(k) == 2]
+        # pair_scores keys are ALWAYS canonical (min, max) 2-tuples by
+        # construction -- every writer in this module builds them that way
+        # (_build_clusters_dict_path, add_to_cluster, unmerge, the split/merge
+        # paths) per the project-wide pair-canonicalization invariant. The old
+        # `if isinstance(k, tuple) and len(k) == 2` filter therefore re-confirmed
+        # a guaranteed invariant on EVERY pair and dropped nothing: at 1M / 131M
+        # pairs that was ~132M isinstance + ~132M len calls (~19s, profiled as
+        # 18% of the cluster stage / 5% of the whole-pipeline wall). Build the
+        # edge list directly; output is byte-identical for valid input.
+        edges = [(k[0], k[1], v) for k, v in pair_scores.items()]
         min_e, avg_e, conn, bn, conf = native_module().cluster_confidence(edges, size)
         return {
             "min_edge": min_e,

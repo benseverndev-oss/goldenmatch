@@ -1,14 +1,13 @@
-"""SP-A build-stage bench: build_cluster_frames (frames-out) vs score-free dict.
+"""SP-A build-stage bench: build_cluster_frames (frames-out) vs the dict path.
 
 RECORDED DATA, not a kill gate. This bench measures the build-stage wall + peak
 RSS of the SP-A frames-out entry point ``build_cluster_frames`` (gate
 ``GOLDENMATCH_CLUSTER_FRAMES_OUT=1``, returns the two-frame ``ClusterFrames``
-columnar representation) against the SCORE-FREE reference dict
-(``build_clusters`` with ``GOLDENMATCH_COLUMNAR_CLUSTER_BUILD=1`` -- the gated
-columnar dict path that already drops eager per-cluster pair_scores). The
-baseline here is the score-free dict (gate-ON ``build_clusters``), NOT the
-gate-OFF verbatim dict path -- we're isolating the frames-out delta on top of
-the columnar build, not re-measuring the SP4 drop-pairscores win.
+columnar representation) against the reference dict (plain ``build_clusters`` --
+the default list/dict Union-Find path). The baseline is the default
+``build_clusters`` dict; its eager per-cluster pair_scores are normalized away
+in the parity check (both sides strip pair_scores), so this isolates the
+frames-out build-stage delta.
 
 The k=5 fixture (M clusters of size 5 -> 10 pairs each) has NO oversized
 clusters, so this exercises the bulk-RSS axis (many small clusters) rather than
@@ -106,8 +105,6 @@ def _run_child(variant: str, n_pairs: int, runs: int) -> int:
                 auto_split=True,
             )
     else:
-        os.environ["GOLDENMATCH_COLUMNAR_CLUSTER_BUILD"] = "1"
-
         def _build():
             return build_clusters(
                 pairs_list,
@@ -143,7 +140,6 @@ def _assert_parity(n_pairs: int) -> bool:
     pairs_df = _make_pairs_df(n_pairs)
     pairs_list = _pairs_list_from_df(pairs_df)
 
-    os.environ["GOLDENMATCH_COLUMNAR_CLUSTER_BUILD"] = "1"
     clusters_off = build_clusters(
         pairs_list,
         max_cluster_size=100,

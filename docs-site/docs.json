@@ -104,6 +104,14 @@
             ]
           },
           {
+            "group": "GoldenAnalysis",
+            "pages": [
+              "goldenanalysis/overview",
+              "goldenanalysis/cross-run",
+              "goldenanalysis/native"
+            ]
+          },
+          {
             "group": "InferMap",
             "pages": [
               "infermap/overview"
@@ -119,6 +127,13 @@
             "group": "Reference",
             "pages": [
               "reference/vendor-comparison"
+            ]
+          },
+          {
+            "group": "Research",
+            "pages": [
+              "research/amortized-bayesian-er",
+              "research/landscape-sculpting-er"
             ]
           }
         ]

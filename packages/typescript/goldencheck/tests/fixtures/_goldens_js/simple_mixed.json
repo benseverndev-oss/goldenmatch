@@ -4,97 +4,113 @@
       "severity": "WARNING",
       "column": "id",
       "check": "type_inference",
-      "confidence": 0.6
+      "confidence": 0.6,
+      "affected_rows": 0
     },
     {
       "severity": "WARNING",
       "column": "email",
       "check": "format_detection",
-      "confidence": 0.6
+      "confidence": 0.6,
+      "affected_rows": 2
     },
     {
       "severity": "WARNING",
       "column": "age",
       "check": "range_distribution",
-      "confidence": 0.8
+      "confidence": 0.8,
+      "affected_rows": 1
     },
     {
       "severity": "WARNING",
       "column": "age",
       "check": "sequence_detection",
-      "confidence": 0.8
+      "confidence": 0.8,
+      "affected_rows": 24
     },
     {
       "severity": "INFO",
       "column": "id",
       "check": "nullability",
-      "confidence": 0.5
+      "confidence": 0.5,
+      "affected_rows": 0
     },
     {
       "severity": "INFO",
       "column": "id",
       "check": "uniqueness",
-      "confidence": 0.7
+      "confidence": 0.7,
+      "affected_rows": 0
     },
     {
       "severity": "INFO",
       "column": "id",
       "check": "range_distribution",
-      "confidence": 1.0
+      "confidence": 1.0,
+      "affected_rows": 0
     },
     {
       "severity": "INFO",
       "column": "name",
       "check": "nullability",
-      "confidence": 0.5
+      "confidence": 0.5,
+      "affected_rows": 0
     },
     {
       "severity": "INFO",
       "column": "name",
       "check": "uniqueness",
-      "confidence": 0.7
+      "confidence": 0.7,
+      "affected_rows": 0
     },
     {
       "severity": "INFO",
       "column": "email",
       "check": "nullability",
-      "confidence": 0.5
+      "confidence": 0.5,
+      "affected_rows": 0
     },
     {
       "severity": "INFO",
       "column": "email",
       "check": "format_detection",
-      "confidence": 0.6
+      "confidence": 0.6,
+      "affected_rows": 18
     },
     {
       "severity": "INFO",
       "column": "email",
       "check": "pattern_consistency",
-      "confidence": 0.5
+      "confidence": 0.5,
+      "affected_rows": 2
     },
     {
       "severity": "INFO",
       "column": "age",
       "check": "nullability",
-      "confidence": 0.5
+      "confidence": 0.5,
+      "affected_rows": 0
     },
     {
       "severity": "INFO",
       "column": "age",
       "check": "uniqueness",
-      "confidence": 0.7
+      "confidence": 0.7,
+      "affected_rows": 0
     },
     {
       "severity": "INFO",
       "column": "age",
       "check": "range_distribution",
-      "confidence": 1.0
+      "confidence": 1.0,
+      "affected_rows": 0
     },
     {
       "severity": "INFO",
       "column": "status",
       "check": "nullability",
-      "confidence": 0.5
+      "confidence": 0.5,
+      "affected_rows": 0
     }
   ],
   "health_grade": "B",

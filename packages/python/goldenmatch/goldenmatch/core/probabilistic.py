@@ -452,7 +452,15 @@ def _sample_blocked_pairs(
     block-stratified sample. Deterministic (fixed ``seed``).
     """
     rng = random.Random(seed)
-    order = list(range(len(blocks)))
+    # Determinism: `blocks` can arrive in a non-deterministic order (parallel /
+    # hash-bucketed construction; varies by machine/core-count), so a seeded
+    # shuffle of bare indices still draws a different training sample run-to-run.
+    # Sort by the stable, already-computed block_key FIRST so the seeded shuffle
+    # permutes a canonical order -> reproducible sample (no extra collect; block_key
+    # is a string attribute set at construction). Ties (rare cross-pass key
+    # collisions) fall back to the original index, adjacent same-key blocks being
+    # near-equivalent anyway.
+    order = sorted(range(len(blocks)), key=lambda i: (str(getattr(blocks[i], "block_key", "")), i))
     rng.shuffle(order)
     # Headroom over n_pairs so the post-dedup downsample still has enough to
     # draw from even when blocks overlap or are tiny.
@@ -462,7 +470,7 @@ def _sample_blocked_pairs(
     for bi in order:
         block = blocks[bi]
         block_df = block.df.collect() if hasattr(block.df, 'collect') else block.df
-        row_ids = block_df["__row_id__"].to_list()
+        row_ids = sorted(block_df["__row_id__"].to_list())  # canonical order before the seeded sample
         if len(row_ids) < 2:
             continue
         # Limit per-block pairs for large blocks
@@ -1379,6 +1387,41 @@ def _field_score_matrix(vals: list[str | None], scorer: str) -> np.ndarray:
     return _fuzzy_score_matrix(vals, scorer)
 
 
+def _field_score_matrix_dedup(vals: list[str | None], scorer: str) -> np.ndarray:
+    """``_field_score_matrix`` over the DISTINCT values, expanded back to NxN.
+
+    Field similarity depends only on the ``(value_a, value_b)`` pair, so scoring
+    the unique values once and gathering through an index map is bit-identical
+    to scoring the full list — but it collapses repeated values (and a constant
+    blocking-key field to a 1x1 matrix), shrinking the per-field cdist / native
+    kernel call that dominates FS block scoring. No-op when all values are
+    distinct (returns the full-list matrix directly).
+    """
+    n = len(vals)
+    index = np.empty(n, dtype=np.intp)
+    seen: dict[object, int] = {}
+    uniq: list[str | None] = []
+    for i, v in enumerate(vals):
+        j = seen.get(v)
+        if j is None:
+            j = len(uniq)
+            seen[v] = j
+            uniq.append(v)
+        index[i] = j
+    if len(uniq) == n:
+        return np.asarray(_field_score_matrix(vals, scorer), dtype=np.float64)
+    sub = np.asarray(_field_score_matrix(uniq, scorer), dtype=np.float64)
+    # Two distinct rows sharing a value collapse to the SAME unique index, so
+    # the expansion reads that value's diagonal cell. For multiplicity-based
+    # matrices (exact / soundex) ``_field_score_matrix`` leaves a singleton's
+    # diagonal at 0, which would zero-out equal-value pairs that the full matrix
+    # scores 1.0. The true self-similarity of any non-embedding scorer is 1.0
+    # (an identical string), so pin the diagonal before gathering. No-op for the
+    # cdist scorers (their diagonal is already 1.0).
+    np.fill_diagonal(sub, 1.0)
+    return sub[np.ix_(index, index)]
+
+
 # Max magnitude (bits) of a single term-frequency adjustment, so a unique
 # singleton value can't dominate the whole match weight.
 _TF_CLAMP = 10.0
@@ -1483,7 +1526,7 @@ def score_probabilistic_vectorized(
     for f in mk.fields:
         vals = _field_values_for_block(block_df, f, n)
         weights = np.asarray(em_result.match_weights[f.field], dtype=np.float64)
-        sim = np.asarray(_field_score_matrix(vals, f.scorer), dtype=np.float64)
+        sim = _field_score_matrix_dedup(vals, f.scorer)
         lvl = _levels_from_similarity(sim, int(f.levels), float(f.partial_threshold))
         # Null on either side -> level 0 (disagree), matching comparison_vector.
         null_mask = np.array([v is None for v in vals], dtype=bool)
@@ -1520,6 +1563,185 @@ def score_probabilistic_vectorized(
         if pair_key in exclude_pairs:
             continue
         results.append((a, b, round(float(s), 4)))
+    return results
+
+
+def _fs_batch_rows() -> int:
+    """Row cap for batched FS block scoring (``GOLDENMATCH_FS_BATCH_ROWS``).
+
+    Small blocks are coalesced up to this many rows so one set of per-field
+    matrices covers many blocks, amortizing the per-call FFI/marshal overhead
+    that dominates on the tiny blocks multi-pass blocking produces. Larger caps
+    cut call count further but grow the discarded cross-block compute (the
+    diagonal sub-blocks are kept; off-diagonal cells are computed and ignored),
+    so the dense SxS numpy level/weight ops eventually outweigh the saved calls.
+    256 is the measured sweet spot on historical_50k (a cap sweep put 256 at
+    ~25.3s vs ~27.7s at 512); the cap only changes block grouping, so the
+    emitted pair set is identical at any value.
+    """
+    try:
+        return max(2, int(os.environ.get("GOLDENMATCH_FS_BATCH_ROWS", "256")))
+    except ValueError:
+        return 256
+
+
+def score_probabilistic_vectorized_batch(
+    block_dfs: list,
+    mk: MatchkeyConfig,
+    em_result: EMResult,
+    exclude_pairs: set[tuple[int, int]] | None = None,
+) -> list[tuple[int, int, float]]:
+    """Score several blocks with one set of per-field matrices.
+
+    Concatenates the batch's per-field values into length-S lists, computes one
+    (value-deduped) SxS matrix per field, then slices each block's DIAGONAL
+    sub-matrix to emit pairs. A within-block cell ``[i, j]`` is computed from the
+    same value pair as scoring that block alone, so the emitted ``(a, b, score)``
+    set is IDENTICAL to per-block scoring (``score_probabilistic_vectorized``);
+    the off-diagonal cross-block cells are computed and discarded. Equal-valued
+    rows across blocks collapse under the dedup, so the batch matrix is usually
+    far smaller than SxS. Amortizes the per-call overhead that dominates the FS
+    wall on tiny blocks.
+    """
+    if exclude_pairs is None:
+        exclude_pairs = set()
+
+    spans: list[tuple[int, int]] = []
+    row_ids: list[int] = []
+    start = 0
+    for bdf in block_dfs:
+        rid = bdf["__row_id__"].to_list()
+        spans.append((start, start + len(rid)))
+        row_ids.extend(rid)
+        start += len(rid)
+    S = len(row_ids)
+    if S < 2:
+        return []
+
+    calibrated = _fs_calibration_mode() == "posterior"
+    prior_w = prior_weight(em_result.proportion_matched) if calibrated else 0.0
+    max_weight = sum(max(em_result.match_weights[f.field]) for f in mk.fields)
+    min_weight = sum(min(em_result.match_weights[f.field]) for f in mk.fields)
+    weight_range = max_weight - min_weight
+    if mk.link_threshold is not None:
+        link_threshold = mk.link_threshold
+    else:
+        link_threshold, _ = compute_thresholds(em_result, calibrated=calibrated)
+
+    total_weight = np.zeros((S, S), dtype=np.float64)
+    for f in mk.fields:
+        vals: list[str | None] = []
+        for bdf, (s, e) in zip(block_dfs, spans):
+            vals.extend(_field_values_for_block(bdf, f, e - s))
+        weights = np.asarray(em_result.match_weights[f.field], dtype=np.float64)
+        sim = _field_score_matrix_dedup(vals, f.scorer)
+        lvl = _levels_from_similarity(sim, int(f.levels), float(f.partial_threshold))
+        null_mask = np.array([v is None for v in vals], dtype=bool)
+        if null_mask.any():
+            either_null = null_mask[:, None] | null_mask[None, :]
+            lvl = np.where(either_null, 0, lvl)
+        total_weight += weights[lvl]
+        _apply_tf_adjustment(total_weight, vals, lvl, f, em_result, S)
+
+    if calibrated:
+        logodds = prior_w + total_weight
+        with np.errstate(over="ignore"):
+            normalized = 1.0 / (1.0 + np.power(2.0, -np.clip(logodds, -60.0, 60.0)))
+    elif weight_range > 0:
+        normalized = np.clip((total_weight - min_weight) / weight_range, 0.0, 1.0)
+    else:
+        normalized = np.full((S, S), 0.5, dtype=np.float64)
+
+    ids = np.asarray(row_ids)
+    results: list[tuple[int, int, float]] = []
+    seen: set[tuple[int, int]] = set()
+    for (s, e) in spans:
+        nb = e - s
+        if nb < 2:
+            continue
+        sub = normalized[s:e, s:e]
+        iu, ju = np.triu_indices(nb, k=1)
+        sel = sub[iu, ju] >= link_threshold
+        if not sel.any():
+            continue
+        a_ids = ids[s + iu[sel]]
+        b_ids = ids[s + ju[sel]]
+        sc = sub[iu, ju][sel]
+        for a, b, score in zip(a_ids.tolist(), b_ids.tolist(), sc.tolist()):
+            pair_key = (a, b) if a < b else (b, a)
+            if pair_key in exclude_pairs or pair_key in seen:
+                continue
+            seen.add(pair_key)
+            results.append((a, b, round(float(score), 4)))
+    return results
+
+
+def score_probabilistic_blocks_batched(
+    blocks,
+    mk: MatchkeyConfig,
+    em_result: EMResult,
+    exclude_pairs: set[tuple[int, int]] | None = None,
+    cap: int | None = None,
+):
+    """Collect + score ``blocks`` in row-capped batches via the SxS batch scorer.
+
+    Threads the running exclude set across batches so a pair emitted in an
+    earlier batch is suppressed later — matching the per-block loop's
+    block-by-block ``matched_pairs`` dedup. Falls back to the per-block scorer
+    when the vectorized numpy path isn't active (native FS kernel / scalar /
+    model-backed scorers), since the batching is a numpy-path optimization.
+    Does NOT mutate the caller's ``exclude_pairs``; the caller folds the returned
+    pairs into ``matched_pairs`` as before.
+    """
+    import polars as pl
+
+    if exclude_pairs is None:
+        exclude_pairs = set()
+    if cap is None:
+        cap = _fs_batch_rows()
+
+    use_vec = (
+        not _fs_native_eligible(mk)
+        and _fs_vectorized_enabled()
+        and all(vectorized_scorer_supported(f.scorer) for f in mk.fields)
+    )
+    excl = set(exclude_pairs)
+    results: list[tuple[int, int, float]] = []
+
+    if not use_vec:
+        scorer = probabilistic_block_scorer(mk, em_result)
+        for block in blocks:
+            bdf = block.df.collect() if isinstance(block.df, pl.LazyFrame) else block.df
+            pairs = scorer(bdf, excl)
+            for a, b, _s in pairs:
+                excl.add((min(a, b), max(a, b)))
+            results.extend(pairs)
+        return results
+
+    batch: list = []
+    rows = 0
+
+    def _flush():
+        nonlocal batch, rows
+        if not batch:
+            return
+        pairs = score_probabilistic_vectorized_batch(batch, mk, em_result, excl)
+        for a, b, _s in pairs:
+            excl.add((min(a, b), max(a, b)))
+        results.extend(pairs)
+        batch = []
+        rows = 0
+
+    for block in blocks:
+        bdf = block.df.collect() if isinstance(block.df, pl.LazyFrame) else block.df
+        h = bdf.height
+        if batch and rows + h > cap:
+            _flush()
+        batch.append(bdf)
+        rows += h
+        if rows >= cap:
+            _flush()
+    _flush()
     return results
 
 

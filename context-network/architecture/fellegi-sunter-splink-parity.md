@@ -8,6 +8,8 @@ the suite's Arrow-native / engine-maturity arc.
 
 **Status:** SHIPPED (2026-06-08). Roadmap delivered across PRs #800 (Phases
 0–4 + 3c bench harness), #802 (bench ground-truth fix), #803 (EM sampling perf).
+Accuracy arc shipped 2026-06-09: #821 (head-to-head bench panel) + #823
+(FS auto-config v2) now *beat* Splink on the shared evaluator (see below).
 **Decision:** [../decisions/0008-fellegi-sunter-splink-parity.md](../decisions/0008-fellegi-sunter-splink-parity.md).
 **Code-level notes:** `packages/python/goldenmatch/CLAUDE.md` (Fellegi-Sunter
 section), `docs/scale-envelope.md` (FS-at-scale), `docs-site/goldenmatch/scoring.mdx`.
@@ -65,8 +67,108 @@ The EM fix shaved ~100 s off both paths and halved peak RSS; native is ~10.8×
 on the scoring step (tiny-block regime). Original pre-fix figures (269 s / 0.825)
 were the un-bounded EM + the star-GT bench bug.
 
+## Block-scoring perf — the per-block fan-out fix (2026-06-12, PR #869)
+A follow-up pass on the *numpy* (default) auto-config path, prompted by auditing
+the "Splink 3-19x faster" claim. Two findings reframed it
+([decision 0012](../decisions/0012-fs-block-scoring-perf.md)):
+
+1. **The bake-off measured numpy, not native.** It never set `GOLDENMATCH_FS_NATIVE`,
+   and probabilistic mode doesn't refuse on a missing kernel. A `gm_prob_native`
+   column (native built + symbol-asserted in CI) showed **native ≈ numpy, no wall
+   change** — because the wall is per-block fan-out, not scoring math. historical_50k
+   makes 31,735 blocks, **79% ≤8 rows**, each row in ~6 blocks (multi-pass overlap),
+   so scoring fanned out into ~222k tiny FFI-bound `score_field_matrix` calls.
+2. **Three output-identical optimizations** on `score_probabilistic_vectorized`,
+   each gated by a fixed-`em_result` pair-set diff (200,058 pairs, byte-identical):
+   value-dedup in per-field matrices (−32%), batch small blocks into shared
+   per-field S×S matrices with diagonal sub-block extraction (−48%, native calls
+   222k→4.3k), and a batch row-cap tune 512→256 (−20%).
+
+**Measured (historical_50k, local, probabilistic auto-config):** 86.5s → **24.6s
+(−72%)**, pairs identical at each step. The cluster-count hash is NOT a valid gate
+here — the pipeline is non-deterministic run-to-run (11,542–11,545 clusters, EM
+sample order) — so the pair-set diff is the FS correctness method.
+
+## Accuracy arc — beating Splink (auto-config v2, #821 panel + #823)
+The engine arc closed *feature* parity; the accuracy arc closes the head-to-head.
+A shared evaluator (`scripts/bench_er_headtohead`, pairwise F1, one harness for
+both engines) replaced ad-hoc per-dataset numbers, then **FS auto-config v2**
+(#823) made the probabilistic auto-config *outscore* Splink on it.
+
+**Scope.** v2 touches the probabilistic auto-config path only
+(`auto_configure_probabilistic_df` / `build_probabilistic_matchkeys`); the
+weighted/DQbench path and zero-config `dedupe_df` are untouched. Default-ON;
+kill-switch `GOLDENMATCH_FS_AUTOCONFIG_V2=0` restores the legacy selection
+byte-identically.
+
+**Four levers:**
+1. **Admit dates as a discriminator.** `dob` / date columns enter as a
+   `levenshtein` field (v1 discarded them outright).
+2a. **Drop redundant person-name composites.** When atomic given + family
+   exist, drop `full_name` / `first_and_surname` composites (no new signal,
+   just correlated weight).
+2b. **Low-cardinality fuzzy floor** — give low-distinct fields a fuzzy
+   comparison instead of exact-only.
+3. **`_diversify_probabilistic_blocking`** — *additively* diversify blocking
+   onto orthogonal stable keys (date-year + postcode/zip). Recall-POSITIVE
+   (adds passes, never removes the primary).
+4. **Admit description (title) + multi_name (authors) as `token_sort`** —
+   lifts the DBLP-ACM venue-only mega-match (the 0.003 → 0.377 jump; a large
+   relative gain, but still recall-bound — see the bibliographic note below).
+
+**Head-to-head (pairwise F1, shared `bench_er_headtohead` evaluator) — deterministic as of #829:**
+| Dataset | GM before | GM v2 | Splink |
+|---|---|---|---|
+| historical_50k (Splink's flagship) | 0.647 | **0.778** | 0.757 |
+| febrl3 | 0.983 | **0.991** | 0.965 |
+| synthetic_person | 0.972 | **0.998** | 0.996 |
+| dblp_acm (bibliographic) | 0.003 | 0.377 | (Splink skips) |
+
+GM also wins at the cluster level on historical_50k (B-cubed F1 0.844 vs 0.789).
+The three-engine accuracy + perf bake-off is at
+`docs/benchmarks/2026-06-09-splink-bakeoff.md`.
+
+**Determinism (#829).** Before #829, `_sample_blocked_pairs` seeded-shuffled bare
+block indices whose order was itself non-deterministic (parallel / hash-bucketed
+construction), so the EM training sample — and thus the m/u weights, threshold,
+and P/R — varied run-to-run. On one pre-fix CI run, three invocations of the
+*identical* GM-prob path gave historical_50k F1 of 0.805 / 0.779 / 0.643. #829
+sorts blocks by their stable `block_key` before the shuffle; post-fix the three
+harnesses agree within 0.002 (0.7782 / 0.7783 / 0.7804). The earlier
+`dblp_acm = 0.879` was a non-deterministic lucky draw that does not reproduce; the
+deterministic value is 0.377 (both harnesses agree).
+
+**Honest framing (this is pairwise F1, not the cited cluster metric).** These
+are pairwise F1 under one shared evaluator. The often-cited ~0.97 Splink number
+on historical_50k is a *cluster/entity-level* metric, NOT exhaustive
+within-cluster pairwise F1 — a local diagnostic ran Splink 4.0.16 and it scores
+~0.75 *pairwise* on this dataset under the same harness (recall-bound:
+historical_50k has 5156 clusters, mean size ~10, no single field exceeds 0.60
+recall, so the pairwise blocking ceiling for *any* engine is ~0.93). The claim
+is "GoldenMatch matches/beats Splink head-to-head on the same evaluator," NOT
+"0.97 pairwise." Splink is also 3-19x faster on these datasets.
+
+**Bibliographic (DBLP-ACM): use the weighted path, not probabilistic.** Splink
+skips dblp_acm; the probabilistic auto-config is weak there (0.377 pairwise,
+recall-bound). The zero-config *weighted* controller scores 0.964 on DBLP-ACM and
+is the right tool for that shape. The probabilistic path targets PII / person
+linkage.
+
+**Verification:** 3925 tests pass; 22 in `test_fs_autoconfig_v2.py`; flag=0 is
+byte-identical to legacy.
+
 ## Where Splink still leads
 Distributed Fellegi-Sunter at 1B+ rows on Spark, and the mature interactive
-m/u + comparison-viewer charting UI. GoldenMatch's FS scale-out is measured
-single-node at 6M and inherits the bucket → Ray path; the charting is
-data-export (`fs_model_report`, the waterfall) rather than a hosted dashboard.
+m/u + comparison-viewer charting UI, and raw per-node speed. GoldenMatch's FS
+scale-out is measured single-node at 6M and inherits the bucket → Ray path; the
+charting is data-export (`fs_model_report`, the waterfall) rather than a hosted
+dashboard. On *PII accuracy*, though, Splink no longer leads — the head-to-head
+above flips that on the shared evaluator (historical_50k 0.778 vs 0.757,
+synthetic_person 0.998 vs 0.996).
+
+**The "3-19x faster" figure is pre-optimization and needs a re-bench.** It came
+from a bake-off that measured GM's *numpy* path before PR #869's block-scoring
+fixes (which cut the historical_50k wall −72% locally; see the perf section
+above). The committed bake-off `gm_probabilistic` walls are stale until
+`bench-probabilistic.yml` (`run_bakeoff=true`) is re-run on the optimized branch;
+Splink is still faster per node, but by a smaller and as-yet-unre-measured margin.

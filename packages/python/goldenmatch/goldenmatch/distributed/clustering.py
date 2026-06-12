@@ -131,19 +131,31 @@ def label_propagation(
 # Override via GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD env var (pairs).
 _LABEL_PROP_PAIR_THRESHOLD = 50_000_000
 
+# Mersenne prime for the randomized-contraction affine hash (#844). Vertex ids
+# must be < _RC_PRIME; row ids at 346M are ~2**28, well under 2**31-1 ~= 2.1B.
+# Keeps h(x)=(A*x+B) % p in i64 range: A,x,B < 2**31 => A*x < 2**62 < 2**63.
+_RC_PRIME = 2**31 - 1
+
 
 def _wcc_algorithm() -> str:
     """Read GOLDENMATCH_DISTRIBUTED_WCC env var (default 'two_phase').
 
-    NOTE: the at-scale pipeline (``GOLDENMATCH_DISTRIBUTED_PIPELINE=2``) does NOT
-    route through this function -- it uses ``local_cc_assignments`` directly,
-    which has no driver collect and is what scales to 100M. This selector only
-    governs ``build_clusters_distributed``'s own callers, where 'two_phase'
+    NOTE: the at-scale pipeline (``GOLDENMATCH_DISTRIBUTED_PIPELINE=2``) uses
+    ``local_cc_assignments`` directly on the DEFAULT (per-partition) path, which
+    has no driver collect; only when the block-shuffle recall-complete path is
+    active (#844 Spec 2) does it route through ``build_clusters_distributed``, and
+    there it passes the ``algorithm`` kwarg explicitly -- so this env selector is
+    NOT consulted on the pipeline path either way. This selector only governs
+    ``build_clusters_distributed``'s OTHER callers (with no ``algorithm`` kwarg),
+    where 'two_phase'
     stays the default (Sem Sinchenko recommendation; partition-sensitive but
     correct). 'pointer_jump' (``distributed_wcc``) is OPT-IN only -- its
     iterative ``Dataset.join`` loop can deadlock Ray's streaming executor at
     scale, and it's unnecessary because scoring is per-partition (no
     cross-partition components to merge). 'label_propagation' is also available.
+    'randomized_contraction' routes to the relational randomized-contraction WCC
+    (``randomized_contraction_wcc``): no driver collect of the full graph,
+    parquet-checkpointed per round, arXiv:1802.09478.
     """
     import os
     return os.environ.get("GOLDENMATCH_DISTRIBUTED_WCC", "two_phase").lower()
@@ -184,6 +196,7 @@ def build_clusters_distributed(
     weak_cluster_threshold: float = 0.3,
     convergence_max_iterations: int = 30,
     force_label_propagation: bool = False,
+    algorithm: str | None = None,
 ) -> Dataset:
     """Distributed clustering. Returns a Ray Dataset of cluster assignments.
 
@@ -198,6 +211,11 @@ def build_clusters_distributed(
         on non-convergence.
 
     Override threshold via env var GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD.
+
+    ``algorithm`` (keyword-only) overrides the GOLDENMATCH_DISTRIBUTED_WCC env
+    selector for this call (e.g. "randomized_contraction"); None = env default.
+    Only affects the at/above-threshold WCC path; below the threshold the route
+    is scipy regardless.
 
     ``all_ids`` is the full id universe (incl. isolated singletons). Pass
     ``None`` (default) for the golden scale path: only multi-member clusters
@@ -225,7 +243,11 @@ def build_clusters_distributed(
             already_sized=True,
         )
 
-    algorithm = _wcc_algorithm() if not force_label_propagation else "label_propagation"
+    # Caller-supplied algorithm wins (the pipeline passes "randomized_contraction"
+    # so the at-scale path can't route to two_phase, which head-wedges at 100M);
+    # otherwise the env selector / force_label_propagation default applies.
+    if algorithm is None:
+        algorithm = _wcc_algorithm() if not force_label_propagation else "label_propagation"
 
     if algorithm == "label_propagation":
         logger.info(
@@ -258,6 +280,20 @@ def build_clusters_distributed(
             pair_count, threshold,
         )
         labels_ds = two_phase_wcc(pairs_ds, all_ids)
+    elif algorithm == "randomized_contraction":
+        logger.info(
+            "build_clusters_distributed: %d pairs >= %d threshold; routing to "
+            "randomized_contraction_wcc (relational contraction, parquet checkpoint).",
+            pair_count, threshold,
+        )
+        import os
+        _rc_seed_raw = os.environ.get("GOLDENMATCH_DISTRIBUTED_WCC_SEED")
+        labels_ds = randomized_contraction_wcc(
+            pairs_ds,
+            all_ids,  # honor isolated singletons like the two_phase route
+            scratch_dir=os.environ.get("GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH"),
+            seed=int(_rc_seed_raw) if _rc_seed_raw else None,
+        )
     else:  # pointer_jump (default): fully distributed, no driver collect.
         logger.info(
             "build_clusters_distributed: %d pairs >= %d threshold; "
@@ -869,6 +905,405 @@ def distributed_wcc(pairs_ds: Dataset, *, max_iterations: int = 60) -> Dataset:
         )
 
     return labels
+
+
+# ---------------------------------------------------------------------------
+# Randomized-contraction WCC (#844) — pure-Polars reference implementation
+# ---------------------------------------------------------------------------
+
+def _rc_symmetrize(pairs_pl: Any) -> Any:  # pl.DataFrame{id_a,id_b,...} -> pl.DataFrame{v,w}
+    """Both-directions edge table, self-loops dropped, deduped."""
+    import polars as pl
+    fwd = pairs_pl.select(v=pl.col("id_a").cast(pl.Int64), w=pl.col("id_b").cast(pl.Int64))
+    bwd = pairs_pl.select(v=pl.col("id_b").cast(pl.Int64), w=pl.col("id_a").cast(pl.Int64))
+    return pl.concat([fwd, bwd]).filter(pl.col("v") != pl.col("w")).unique()
+
+
+def _rc_contract_round(edges_pl: Any, A: int, B: int,
+                       p: int = _RC_PRIME) -> tuple[Any, Any]:  # ({v,w}, {v,rep})
+    """One randomized-contraction round on a symmetrized edge table.
+
+    Returns (contracted_edges_pl{v,w}, rep_pl{v,rep}). ``rep(v)`` is the vertex
+    in v's CLOSED neighbourhood with the minimum affine hash h(u)=(A*u+B) % p.
+    Contracted edges map both endpoints to their rep and drop self-loops.
+    """
+    import polars as pl
+    nbr = edges_pl.select("v", u=pl.col("w"))
+    selfv = edges_pl.select("v").unique().with_columns(u=pl.col("v"))
+    cand = pl.concat([nbr, selfv]).with_columns(
+        hu=((A * pl.col("u") + B) % p),
+    )
+    # argmin over the closed neighbourhood: sort_by INSIDE the agg so the
+    # min-hash u is picked independent of group-by row order (the affine hash is
+    # a bijection for ids < p, so the min is unique). Do NOT rely on a pre-sort +
+    # .first() with maintain_order=False -- that leans on an implicit intra-group
+    # ordering guarantee Polars does not promise.
+    rep = (
+        cand.group_by("v")
+        .agg(pl.col("u").sort_by("hu").first().alias("rep"))
+    )
+    rep_v = rep.select(v="v", rv="rep")
+    rep_w = rep.select(w="v", rw="rep")
+    contracted = (
+        edges_pl
+        .join(rep_v, on="v", how="inner")
+        .join(rep_w, on="w", how="inner")
+        .filter(pl.col("rv") != pl.col("rw"))
+        .select(v=pl.col("rv"), w=pl.col("rw"))
+        .unique()
+    )
+    return contracted, rep
+
+
+def _rc_compose_labels(label_pl: Any, rep_pl: Any) -> Any:
+    """Fold one round's rep map into the running orig_id -> current-rep map."""
+    import polars as pl
+    return (
+        label_pl
+        .join(rep_pl, left_on="cur", right_on="v", how="left")
+        .with_columns(cur=pl.coalesce(["rep", "cur"]))
+        .select("orig_id", "cur")
+    )
+
+
+def _rc_normalize_to_min_member(label_pl: Any) -> Any:  # -> pl.DataFrame{id,label}
+    """Relabel each component by its MIN original member id (the cluster_id contract)."""
+    import polars as pl
+    mins = label_pl.group_by("cur").agg(pl.col("orig_id").min().alias("label"))
+    return (
+        label_pl.join(mins, on="cur", how="inner")
+        .select(id=pl.col("orig_id").cast(pl.Int64), label=pl.col("label").cast(pl.Int64))
+    )
+
+
+def _rc_wcc_polars(pairs_pl: Any, *, seed: int | None = None, max_rounds: int = 80,
+                   p: int = _RC_PRIME) -> Any:  # -> pl.DataFrame{id,label}
+    """Pure-Polars randomized-contraction WCC. The reference implementation and
+    the correctness gate; the Ray path mirrors this distributively.
+
+    Singletons with no edges are NOT emitted (label is seeded from edge
+    endpoints only) -- same contract as the distributed path; the caller assigns
+    self-labels to isolated ids. Raises ValueError if any vertex id is >= p (the
+    affine hash needs ids < p).
+    """
+    import random
+
+    import polars as pl
+
+    E = _rc_symmetrize(pairs_pl)
+    if E.height == 0:
+        return pl.DataFrame(schema={"id": pl.Int64, "label": pl.Int64})
+    max_id = max(E["v"].max(), E["w"].max())
+    if max_id >= p:
+        raise ValueError(
+            f"randomized_contraction_wcc: vertex id {max_id} >= prime {p}; "
+            "ids must be < 2**31-1 (future: 64-bit field)."
+        )
+    rng = random.Random(seed)
+    label = E.select(orig_id="v").unique().with_columns(cur=pl.col("orig_id"))
+    for _ in range(max_rounds):
+        if E.height == 0:
+            break
+        A = rng.randrange(1, p)
+        B = rng.randrange(0, p)
+        E, rep = _rc_contract_round(E, A, B, p)
+        label = _rc_compose_labels(label, rep)
+    else:
+        # The break is checked at the TOP of the loop, so a graph that empties on
+        # the exact final allowed round exhausts the range without re-entering the
+        # check. Only raise if edges genuinely remain -- E.height == 0 here means
+        # it converged on the last round, not a failure.
+        if E.height > 0:
+            raise RuntimeError(
+                f"randomized_contraction_wcc did not converge in {max_rounds} "
+                f"rounds ({E.height} edges remain) — investigate, do not silently "
+                "truncate."
+            )
+    return _rc_normalize_to_min_member(label)
+
+
+# ---------------------------------------------------------------------------
+# Randomized-contraction WCC (#844) — Ray-distributed orchestration
+# ---------------------------------------------------------------------------
+# Mirrors the pure-Polars core above on Ray Data. The per-batch helpers below
+# are the closures pushed to workers; the driver only stitches Ray Data ops
+# (map_batches / repartition / join), never collects the full graph.
+#
+# Ray Data join column semantics (verified against the existing distributed
+# joins in this module and goldenmatch/distributed/pipeline.py):
+#   * left columns survive unsuffixed;
+#   * a right non-key column with NO name collision survives unsuffixed;
+#   * a right key column whose name DIFFERS from the left key survives in the
+#     output (pipeline.py defensively drops the surviving ``member_id``).
+# Every projection below references only columns it created or that survive
+# unambiguously, so it does not depend on whether the matched key column is
+# merged or duplicated. See the per-function notes on the two RISK AREAS.
+
+
+def _rc_symmetrize_batch(batch: Any) -> Any:  # pa.Table -> pa.Table{v,w}
+    import polars as pl
+    df = pl.from_arrow(batch)
+    if df.height == 0:
+        return pl.DataFrame(schema={"v": pl.Int64, "w": pl.Int64}).to_arrow()
+    e = _rc_symmetrize(df)
+    if e.height and (e["v"].max() >= _RC_PRIME or e["w"].max() >= _RC_PRIME):
+        raise ValueError(
+            "randomized_contraction_wcc: vertex id >= prime "
+            f"{_RC_PRIME}; ids must be < 2**31-1 (future: 64-bit field)."
+        )
+    return e.to_arrow()
+
+
+def _rc_rep_batch(batch: Any, A: int, B: int, p: int) -> Any:  # pa.Table{v,w} -> {node,rep}
+    # Output key column is named ``node`` (not ``v``) so the downstream
+    # contraction/compose joins are ALWAYS distinct-keyed (v/node, w/node,
+    # cur/node). Ray Data's hash-shuffle join over pyarrow raises
+    # "multiple matches for key field reference" when the left and right join
+    # keys share a name -- the working distributed_wcc joins are all distinct-
+    # keyed for the same reason.
+    import polars as pl
+    df = pl.from_arrow(batch)
+    if df.height == 0:
+        return pl.DataFrame(schema={"node": pl.Int64, "rep": pl.Int64}).to_arrow()
+    nbr = df.select("v", u=pl.col("w"))
+    selfv = df.select("v").unique().with_columns(u=pl.col("v"))
+    cand = pl.concat([nbr, selfv]).with_columns(hu=((A * pl.col("u") + B) % p))
+    rep = cand.group_by("v").agg(pl.col("u").sort_by("hu").first().alias("rep"))
+    return rep.select(node=pl.col("v").cast(pl.Int64), rep=pl.col("rep").cast(pl.Int64)).to_arrow()
+
+
+def _rc_checkpoint(ds: Any, scratch_dir: str, name: str) -> Any:
+    """Write ds to parquet under scratch_dir/name and re-read it. Truncates Ray
+    Data lineage + frees the object store each round (the deadlock fix)."""
+    import os
+
+    import ray
+    path = os.path.join(scratch_dir, name)
+    ds.write_parquet(path)
+    return ray.data.read_parquet(path)
+
+
+def _rc_rep_distributed(edges: Any, A: int, B: int, p: int, npart: int) -> Any:
+    # Co-locate every edge of a vertex v in one partition (keys=["v"]), then the
+    # per-partition closed-nbhd argmin == the global rep(v). batch_size=None so a
+    # vertex's neighbours are never split across sub-batches.
+    return edges.repartition(npart, keys=["v"]).map_batches(
+        _rc_rep_batch, fn_kwargs={"A": A, "B": B, "p": p},
+        batch_format="pyarrow", batch_size=None,
+    )
+
+
+def _rc_contract_distributed(edges: Any, rep: Any, npart: int,
+                             scratch_dir: str, evr_name: str) -> Any:
+    import polars as pl
+    # Map v->rep then w->rep via two Ray joins. ``rep`` is keyed on ``node`` so
+    # both joins are distinct-keyed (v/node, w/node).
+    #
+    # Join 1: edges{v,w} ⋈ rep{node,rep} on v==node. _take_rv keeps only ``w`` and
+    # ``rep`` (-> rv); the surviving right key ``node`` is unreferenced.
+    ev = edges.join(rep, join_type="inner", num_partitions=npart, on=("v",), right_on=("node",))
+
+    def _take_rv(b):  # {...,w,rep,node} -> {w, rv}
+        df = pl.from_arrow(b)
+        if df.height == 0:
+            return pl.DataFrame(schema={"w": pl.Int64, "rv": pl.Int64}).to_arrow()
+        return df.select("w", rv=pl.col("rep")).to_arrow()
+
+    # CHECKPOINT the intermediate to parquet so join 2's LEFT input is a clean
+    # ReadParquet dataset. Ray Data's hash-shuffle join rejects a map_batches-
+    # derived left input here with "multiple matches for key field reference w"
+    # (the CI ray failure) -- a polars->arrow map_batches output isn't a clean
+    # join input, while the working compose join and join 1 both have ReadParquet
+    # inputs on both sides. The parquet round-trip strips the offending schema.
+    evr = _rc_checkpoint(ev.map_batches(_take_rv, batch_format="pyarrow"), scratch_dir, evr_name)
+    # Join 2: evr{w,rv} ⋈ rep{node,rep} on w==node. _mk keeps ``rv`` and ``rep``
+    # and rebuilds v/w by explicit alias; the surviving right key ``node`` is
+    # unreferenced.
+    ew = evr.join(rep, join_type="inner", num_partitions=npart, on=("w",), right_on=("node",))
+
+    def _mk(b):  # {w, rv, rep=rep(w)} -> {v,w} contracted, self-loops dropped
+        df = pl.from_arrow(b)
+        if df.height == 0:
+            return pl.DataFrame(schema={"v": pl.Int64, "w": pl.Int64}).to_arrow()
+        return (df.filter(pl.col("rv") != pl.col("rep"))
+                  .select(v=pl.col("rv"), w=pl.col("rep")).unique().to_arrow())
+
+    return ew.map_batches(_mk, batch_format="pyarrow")
+
+
+def _rc_compose_distributed(label: Any, rep: Any, npart: int) -> Any:
+    import polars as pl
+    # label{orig_id,cur} ⋈ rep{node,rep} on cur==node (LEFT outer; an id whose cur
+    # is no longer a contracted vertex keeps its cur). Distinct keys (cur/node);
+    # _co references only ``orig_id``, ``cur`` (left) and ``rep`` (right, null when
+    # unmatched), so the surviving right key ``node`` is unreferenced.
+    j = label.join(rep, join_type="left_outer", num_partitions=npart, on=("cur",), right_on=("node",))
+
+    def _co(b):
+        df = pl.from_arrow(b)
+        if df.height == 0:
+            return pl.DataFrame(schema={"orig_id": pl.Int64, "cur": pl.Int64}).to_arrow()
+        return df.select("orig_id", cur=pl.coalesce(["rep", "cur"])).to_arrow()
+
+    return j.map_batches(_co, batch_format="pyarrow")
+
+
+def _rc_normalize_distributed(label: Any, npart: int) -> Any:
+    import polars as pl
+    # Co-locate by cur so per-partition min(orig_id) == global component min.
+    # RISK AREA 2 (dedup): the label seed is built per-batch, so an id can appear
+    # more than once; both copies share the same cur (compose is deterministic),
+    # hence co-locate here -> unique(subset=["id"]) drops the duplicate safely.
+    colocated = label.repartition(npart, keys=["cur"])
+
+    def _nm(b):
+        df = pl.from_arrow(b)
+        if df.height == 0:
+            return pl.DataFrame(schema={"id": pl.Int64, "label": pl.Int64}).to_arrow()
+        out = df.with_columns(label=pl.col("orig_id").min().over("cur"))
+        return (out.select(id=pl.col("orig_id").cast(pl.Int64),
+                           label=pl.col("label").cast(pl.Int64))
+                   .unique(subset=["id"]).to_arrow())
+
+    return colocated.map_batches(_nm, batch_format="pyarrow")
+
+
+def _rc_union_isolated(labels_ds: Any, all_ids: list[int], pairs_ds: Any) -> Any:
+    """Seed ids in ``all_ids`` that never appear in a pair as singleton
+    ``{id, label=id}`` rows -- mirrors ``two_phase_wcc``'s isolated-node handling
+    so the two routes agree on the ``build_clusters_distributed`` contract.
+
+    Only reached when a caller passes a concrete ``all_ids`` (the full-universe,
+    smaller-scale regime), so the driver-side touched-set derive is acceptable --
+    the same posture the scipy / label_propagation routes already take.
+    """
+    import ray
+    touched = set(_derive_touched_ids(pairs_ds))
+    isolated = [int(i) for i in all_ids if int(i) not in touched]
+    if not isolated:
+        return labels_ds
+    iso_ds = ray.data.from_items([{"id": i, "label": i} for i in isolated])
+    return labels_ds.union(iso_ds)
+
+
+def _assert_scratch_shared_if_multinode(scratch: str, n_alive_nodes: int) -> None:
+    """Raise if a multi-node run uses a node-local (non-shared) WCC scratch path.
+
+    The randomized-contraction WCC checkpoints each round to ``scratch`` and
+    re-reads it on every worker. A node-local path (no ``://`` scheme) is
+    invisible to other nodes, so the cross-node reads silently return nothing
+    and the WCC diverges. Block-shuffle is default-on now (#844), so this is the
+    common multi-node footgun -- fail loudly with the fix. A shared path
+    (``gs://`` / ``s3://`` / ...) or a single-node cluster is fine.
+    """
+    if n_alive_nodes > 1 and "://" not in scratch:
+        raise ValueError(
+            f"randomized_contraction WCC on a {n_alive_nodes}-node Ray cluster "
+            f"requires a SHARED scratch path -- set "
+            f"GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH=gs://<bucket>/rc_scratch. The "
+            f"node-local path {scratch!r} is invisible to other workers and "
+            f"silently breaks the per-round cross-node parquet reads."
+        )
+
+
+def randomized_contraction_wcc(
+    pairs_ds: Any, all_ids: list[int] | None = None, *, scratch_dir: str | None = None,
+    max_rounds: int = 80, seed: int | None = None, p: int = _RC_PRIME,
+) -> Any:  # -> ray.data.Dataset{id,label}
+    """Distributed randomized-contraction WCC (#844). Same {id,label} contract as
+    two_phase_wcc. No driver collect of the full graph; each round's contracted
+    edges + labels are checkpointed to parquet (lineage truncation = the Ray
+    streaming-executor deadlock fix). See spec
+    docs/superpowers/specs/2026-06-10-distributed-wcc-randomized-contraction-design.md
+    and arXiv:1802.09478.
+
+    ``all_ids`` mirrors ``two_phase_wcc``: pass ``None`` (default, the golden /
+    scale path) to emit only pair-touched members; pass a concrete id universe to
+    additionally seed isolated singletons (full-universe regime).
+
+    NOTE: unlike the pure-Polars reference ``_rc_wcc_polars`` (which RAISES on
+    non-convergence), this distributed path logs a WARNING and returns
+    best-effort labels at ``max_rounds`` -- matching ``distributed_wcc``'s posture
+    (raising mid-Ray-pipeline is worse than a logged best-effort result).
+    """
+    import os
+    import random
+    import shutil
+    import tempfile
+
+    import polars as pl
+    import ray
+
+    if not ray.is_initialized():
+        ray.init(ignore_reinit_error=True, log_to_driver=False)
+    owns_scratch = scratch_dir is None
+    scratch = scratch_dir or tempfile.mkdtemp(prefix="gm_rc_wcc_")
+    # Multi-node safety (#844): each round's contracted edges are checkpointed to
+    # parquet and re-read by every worker, so a node-local scratch path is
+    # invisible to other nodes and the cross-node reads silently return nothing.
+    # Fail loudly on a multi-node cluster instead of corrupting the result.
+    _assert_scratch_shared_if_multinode(
+        scratch, sum(1 for n in ray.nodes() if n.get("Alive")),
+    )
+    os.makedirs(scratch, exist_ok=True)
+    npart = min(256, max(4, (os.cpu_count() or 16) * 4))
+    rng = random.Random(seed)
+    try:
+        edges = pairs_ds.map_batches(_rc_symmetrize_batch, batch_format="pyarrow")
+        edges = _rc_checkpoint(edges, scratch, "edges_0")
+
+        def _seed_label(b):
+            df = pl.from_arrow(b)
+            if df.height == 0:
+                return pl.DataFrame(schema={"orig_id": pl.Int64, "cur": pl.Int64}).to_arrow()
+            return df.select(orig_id="v").unique().with_columns(cur=pl.col("orig_id")).to_arrow()
+
+        label = edges.map_batches(_seed_label, batch_format="pyarrow")
+        label = _rc_checkpoint(label, scratch, "label_0")
+
+        cnt = edges.count()
+        i = 0
+        while cnt > 0 and i < max_rounds:
+            A, B = rng.randrange(1, p), rng.randrange(0, p)
+            rep = _rc_rep_distributed(edges, A, B, p, npart)
+            rep = _rc_checkpoint(rep, scratch, f"rep_{i + 1}")
+            # Compose labels EVERY round (incl. the final one whose contraction
+            # empties the graph -- that round's rep still maps the last vertices).
+            label = _rc_checkpoint(_rc_compose_distributed(label, rep, npart), scratch, f"label_{i + 1}")
+            # Materialize the contraction so count() is metadata-cheap and the
+            # result is reused by the checkpoint (one join execution, not two).
+            # Only checkpoint when non-empty: round-tripping an EMPTY dataset
+            # through write_parquet/read_parquet can lose schema / raise on the
+            # empty dir, and the final (empty) round needs no further edges.
+            # TODO(Spec 2 / scale): prune round i-1's parquet trees inside the
+            # loop to bound disk to ~2 rounds at 100M; safe once edges_{i} is
+            # checkpointed (read_parquet roots the next round there, not i-1).
+            contracted = _rc_contract_distributed(
+                edges, rep, npart, scratch, f"evr_{i + 1}",
+            ).materialize()
+            cnt = contracted.count()
+            if cnt > 0:
+                edges = _rc_checkpoint(contracted, scratch, f"edges_{i + 1}")
+            i += 1
+        if cnt > 0:
+            logger.warning(
+                "randomized_contraction_wcc: hit max_rounds=%d with %d residual "
+                "edges; returning best-effort labels (investigate).", max_rounds, cnt,
+            )
+        result = _rc_normalize_distributed(label, npart)
+        if all_ids is not None:
+            result = _rc_union_isolated(result, all_ids, pairs_ds)
+        # Materialize BEFORE the finally cleans an OWNED scratch dir: the lazy
+        # plan reads scratch/label_*.parquet, which rmtree would delete out from
+        # under a later take_all(). Materializing executes it into the object
+        # store now (shallow plan off a checkpointed parquet -- not the deep
+        # iterative lineage we avoid), so the returned dataset stays consumable
+        # after cleanup. Mirrors two_phase_wcc, which also returns a materialized
+        # dataset (from_arrow of a driver frame).
+        return result.materialize()
+    finally:
+        if owns_scratch:
+            shutil.rmtree(scratch, ignore_errors=True)
 
 
 def materialize_cluster_dict(

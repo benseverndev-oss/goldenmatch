@@ -6,9 +6,13 @@
  */
 
 import { createInterface } from "node:readline";
+import { existsSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { readFile } from "../reader.js";
 import { scanData, type ScanOptions } from "../../core/engine/scanner.js";
 import { applyConfidenceDowngrade } from "../../core/engine/confidence.js";
+import { validateData } from "../../core/engine/validator.js";
+import { validateConfig } from "../../core/config/schema.js";
 import { Severity, type Finding, type DatasetProfile, healthScore } from "../../core/types.js";
 import { listAvailableDomains, getDomainTypes } from "../../core/semantic/domains/index.js";
 import { AGENT_TOOLS, AGENT_TOOL_NAMES, handleAgentTool } from "./agent-tools.js";
@@ -33,6 +37,24 @@ const CORE_TOOL_DEFINITIONS: readonly Tool[] = [
         file_path: { type: "string" as const, description: "Path to the data file" },
         sample_size: { type: "integer" as const, description: "Max rows to sample", default: 100000 },
         domain: { type: "string" as const, description: "Domain pack name" },
+      },
+      required: ["file_path"],
+    },
+  },
+  {
+    name: "validate",
+    description:
+      "Validate a data file against pinned rules in goldencheck.yml. " +
+      "Returns validation findings (existence, required, unique, enum, range checks).",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        file_path: { type: "string" as const, description: "Path to the data file" },
+        config_path: {
+          type: "string" as const,
+          description: "Path to goldencheck.yml (default: ./goldencheck.yml)",
+          default: "goldencheck.yml",
+        },
       },
       required: ["file_path"],
     },
@@ -94,7 +116,7 @@ const CORE_TOOL_DEFINITIONS: readonly Tool[] = [
   },
 ];
 
-// The full surface = 7 core tools + 10 agent tools (parity with the Python
+// The full surface = 8 core tools + 10 agent tools (parity with the Python
 // goldencheck MCP server, which merges agent_tools.py into the core server).
 export const TOOL_DEFINITIONS: readonly Tool[] = [...CORE_TOOL_DEFINITIONS, ...AGENT_TOOLS];
 
@@ -132,6 +154,8 @@ export function handleTool(name: string, args: Record<string, unknown>): object 
   switch (name) {
     case "scan":
       return toolScan(args);
+    case "validate":
+      return toolValidate(args);
     case "profile":
       return toolProfile(args);
     case "health_score":
@@ -169,6 +193,35 @@ function toolScan(args: Record<string, unknown>): object {
     total_findings: findings.length,
     errors: findings.filter((f) => f.severity === Severity.ERROR).length,
     warnings: findings.filter((f) => f.severity === Severity.WARNING).length,
+    findings: serializeFindings(findings),
+  };
+}
+
+function toolValidate(args: Record<string, unknown>): object {
+  const filePath = args["file_path"] as string;
+  const configPath = (args["config_path"] as string) ?? "goldencheck.yml";
+
+  if (!existsSync(filePath)) return { error: `File not found: ${filePath}` };
+  if (!existsSync(configPath)) {
+    return { error: `No config found at ${configPath}. Run scan first.` };
+  }
+
+  // yaml is an optional peer dep — resolve it lazily via createRequire so the
+  // server module loads even when yaml is absent (preserves the optional-peer
+  // contract; ESM has no ambient `require`).
+  const nodeRequire = createRequire(import.meta.url);
+  const yaml = nodeRequire("yaml") as { parse(s: string): unknown };
+  const config = validateConfig(yaml.parse(readFileSync(configPath, "utf-8")));
+  const data = readFile(filePath);
+  const findings = validateData(data, config);
+
+  return {
+    file: filePath,
+    config: configPath,
+    total_findings: findings.length,
+    errors: findings.filter((f) => f.severity === Severity.ERROR).length,
+    warnings: findings.filter((f) => f.severity === Severity.WARNING).length,
+    pass: findings.every((f) => f.severity < Severity.ERROR),
     findings: serializeFindings(findings),
   };
 }
@@ -229,6 +282,14 @@ function toolListChecks(): object {
       { name: "null_correlation", description: "Cross-column: correlated nulls" },
       { name: "cross_column_validation", description: "Cross-column: value > max violations" },
       { name: "cross_column", description: "Cross-column: age vs DOB mismatches" },
+      { name: "fuzzy_duplicate_values", description: "Near-duplicate categorical value encodings" },
+      { name: "future_dated", description: "Date/datetime values in the future" },
+      { name: "stale_data", description: "Update/event timestamp columns gone stale" },
+      { name: "composite_key", description: "Cross-column: minimal composite key discovery" },
+      { name: "duplicate_rows", description: "Cross-column: exact duplicate rows" },
+      { name: "near_duplicate_rows", description: "Cross-column: normalized near-duplicate rows" },
+      { name: "functional_dependency", description: "Cross-column: strict single-column FDs" },
+      { name: "fd_violation", description: "Cross-column: rows breaking a near-strict FD" },
     ],
   };
 }

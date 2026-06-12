@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "goldenmatch"
 
-version = "1.28.1"
+version = "1.30.0"
 description = "Entity resolution toolkit — deduplicate records, match across sources, and maintain golden records"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -160,6 +160,13 @@ web = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
     "httpx>=0.27",  # used by TestClient and tests
+]
+# Head-to-head accuracy panel (probabilistic vs Splink). Loads datasets via
+# splink_datasets (ships with splink) with a vendored-parquet fallback.
+bench = [
+    "splink>=4.0",
+    "duckdb>=0.10",
+    "pyarrow>=15",  # splink 4.x requires pyarrow>=15 (stricter than core >=10)
 ]
 all = [
     "goldenmatch[embeddings,llm,postgres,mcp,quality,transform,web]",

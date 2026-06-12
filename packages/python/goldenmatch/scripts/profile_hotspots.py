@@ -19,7 +19,7 @@ Two profilers, depending on what you want to see:
   cumtime that's authoritative when you want to compare specific
   function-call counts.
 
-Two targets you can profile:
+Three targets you can profile:
 
 - ``list``: legacy ``score_blocks_parallel`` -> ``build_clusters``
   path. The pre-Phase-1c baseline against which the columnar
@@ -27,6 +27,16 @@ Two targets you can profile:
 - ``columnar``: Phase 1c-real ``score_blocks_columnar`` ->
   ``build_clusters_columnar`` path. The post-#639 winner that
   measured 22.7% faster at 1M.
+- ``full``: the whole ``run_dedupe`` engine via ``dedupe_df`` under
+  ``bench_capture``, emitting the per-stage wall split (collect /
+  exact / fuzzy build+score / cluster / golden / identity). This is
+  the stage breakdown the ``list``/``columnar`` micro-targets don't
+  surface -- golden, the input collect, etc. Uses the explicit
+  single-matchkey config (NOT zero-config) so it stays offline-safe
+  and deterministic; the auto-config controller is a separate,
+  sample-based cost already measured by
+  ``scripts/bench_phase2_controller.py`` (``bench-phase2-controller``
+  workflow), so it is deliberately out of scope here.
 
 Run via the ``profile-hotspots`` workflow on ``large-new-64GB``.
 Don't run locally past 100K -- memory/feedback_avoid_full_suite_oom
@@ -100,31 +110,95 @@ def _prepare_blocks(df: pl.DataFrame, cfg: GoldenMatchConfig) -> tuple[list, lis
 # ── Profile targets ─────────────────────────────────────────────────
 
 
-def _profile_list_path(blocks: list, cfg: GoldenMatchConfig, all_ids: list[int]) -> tuple[int, int, float]:
-    """Returns (n_pairs, n_clusters, wall_s)."""
+# Each target returns (n_pairs, n_clusters, wall_s, extra) where ``extra`` is a
+# JSON-serializable dict merged into the per-combo summary (empty for the micro-
+# targets; the per-stage bench split for ``full``). ``df`` is the prepared
+# fixture frame; the micro-targets ignore it (they consume pre-built ``blocks``).
+
+
+def _profile_list_path(
+    df: pl.DataFrame, blocks: list, cfg: GoldenMatchConfig, all_ids: list[int],
+) -> tuple[int, int, float, dict]:
+    """Returns (n_pairs, n_clusters, wall_s, extra)."""
     mk = cfg.matchkeys[0]
     matched: set[tuple[int, int]] = set()
     t0 = time.perf_counter()
-    pairs = score_blocks_parallel(blocks, mk, matched)
+    # Single matchkey -> the pipeline passes track_matched=False (matched_pairs
+    # is never consumed by a later pass). Mirror that so the profile reflects
+    # the production single-matchkey default path, not the dead-set build.
+    pairs = score_blocks_parallel(blocks, mk, matched, track_matched=False)
     clusters = build_clusters(pairs, all_ids=all_ids)
     wall = time.perf_counter() - t0
-    return len(pairs), len(clusters), wall
+    return len(pairs), len(clusters), wall, {}
 
 
-def _profile_columnar_path(blocks: list, cfg: GoldenMatchConfig, all_ids: list[int]) -> tuple[int, int, float]:
+def _profile_columnar_path(
+    df: pl.DataFrame, blocks: list, cfg: GoldenMatchConfig, all_ids: list[int],
+) -> tuple[int, int, float, dict]:
     mk = cfg.matchkeys[0]
     matched: set[tuple[int, int]] = set()
     t0 = time.perf_counter()
-    pairs_df = score_blocks_columnar(blocks, mk, matched)
+    # Mirror the pipeline's columnar caller: eligibility guarantees a single
+    # matchkey, so matched_pairs is never consumed -> track_matched=False
+    # (the guard that eliminates the per-pair min/max/set.add hot spot).
+    pairs_df = score_blocks_columnar(blocks, mk, matched, track_matched=False)
     clusters = build_clusters_columnar(pairs_df, all_ids=all_ids)
     wall = time.perf_counter() - t0
-    return pairs_df.height, len(clusters), wall
+    return pairs_df.height, len(clusters), wall, {}
+
+
+def _profile_full_pipeline(
+    df: pl.DataFrame, blocks: list, cfg: GoldenMatchConfig, all_ids: list[int],
+) -> tuple[int, int, float, dict]:
+    """Whole-``run_dedupe`` engine stage split (offline, explicit-config).
+
+    Runs the real ``_run_dedupe_pipeline`` via ``dedupe_df`` under
+    ``bench_capture`` so the per-stage wall (combined_lf_collect / exact /
+    fuzzy build+score / cluster / golden / identity) is captured -- the stages
+    the ``list``/``columnar`` micro-targets never exercise. Uses the explicit
+    single-matchkey ``cfg`` (NOT zero-config) so it stays offline-safe and
+    deterministic: no controller iterations, no HuggingFace rerank download,
+    no ``ControllerNotConfidentError``. The ``extra`` dict carries the stage
+    timings + bench metrics into the summary JSON.
+    """
+    from goldenmatch import dedupe_df
+    from goldenmatch.core.bench import bench_capture
+
+    # The worker pre-adds the internal ``__row_id__`` (the micro-targets need it
+    # for ``_prepare_blocks``); ``run_dedupe_df`` assigns its own, so a frame that
+    # already carries it triggers a Polars DuplicateError. Hand the full pipeline
+    # a clean frame and let it own the internal columns.
+    clean = df.drop([c for c in ("__row_id__", "__source__") if c in df.columns])
+
+    t0 = time.perf_counter()
+    with bench_capture() as rec:
+        res = dedupe_df(clean, config=cfg)
+    wall = time.perf_counter() - t0
+
+    bench = rec.to_dict()
+    metrics = bench.get("metrics", {})
+    n_pairs = int(metrics.get("scored_pair_count", 0) or 0)
+    n_clusters = int(
+        metrics.get("cluster_count", 0) or len(getattr(res, "clusters", {}) or {}),
+    )
+    extra = {
+        "stage_timings_seconds": bench.get("stage_timings_seconds", {}),
+        "stage_peak_rss_kb": bench.get("stage_peak_rss_kb", {}),
+        "bench_metrics": metrics,
+    }
+    return n_pairs, n_clusters, wall, extra
 
 
 _TARGETS = {
     "list": _profile_list_path,
     "columnar": _profile_columnar_path,
+    "full": _profile_full_pipeline,
 }
+
+# Above this row count, the `full` target refuses cProfile (call-graph retention
+# over the whole pipeline OOMs a 64GB host). pyinstrument + the bench stage split
+# cover the same ground safely.
+_FULL_CPROFILE_MAX_N = 200_000
 
 
 # ── Worker (one (shape, target, profiler) at a time, subprocess-isolated) ──
@@ -145,13 +219,34 @@ def _worker_main(n: int, target: str, profiler: str, out_dir: Path) -> int:
         return 2
     target_fn = _TARGETS[target]
 
+    # Guard: the `full` target under cProfile retains a per-call graph over the
+    # ENTIRE pipeline (input collect + 131M-pair scoring + per-cluster pair_scores
+    # dicts + golden). At 1M that OOM-killed the 64GB runner host (run
+    # 27246143342). The per-stage split comes from bench_capture, which is
+    # profiler-independent, so pyinstrument -- a sampling profiler with a
+    # fixed-size call tree -- yields the same wall breakdown at a fraction of the
+    # memory. Skip the dangerous combo instead of crashing the whole job.
+    if target == "full" and profiler == "cprofile" and n > _FULL_CPROFILE_MAX_N:
+        print(
+            f"  full@{n:,} [cprofile]: SKIPPED -- cProfile call-graph retention "
+            f"OOMs the whole-pipeline target above {_FULL_CPROFILE_MAX_N:,} rows; "
+            f"use pyinstrument (the bench stage split is profiler-independent).",
+            file=sys.stderr, flush=True,
+        )
+        return 0
+
     df = realistic_person_df(n)
     if "__row_id__" not in df.columns:
         df = df.with_row_index(name="__row_id__").with_columns(
             pl.col("__row_id__").cast(pl.Int64),
         )
     cfg = _make_config()
-    blocks, all_ids = _prepare_blocks(df, cfg)
+    # The micro-targets consume pre-built blocks; the `full` target re-runs the
+    # whole pipeline (which blocks internally), so skip the redundant build.
+    if target == "full":
+        blocks, all_ids = [], []
+    else:
+        blocks, all_ids = _prepare_blocks(df, cfg)
 
     out_dir.mkdir(parents=True, exist_ok=True)
     base = out_dir / f"{target}_n{n}_{profiler}"
@@ -175,7 +270,7 @@ def _worker_main(n: int, target: str, profiler: str, out_dir: Path) -> int:
 
         prof = Profiler(interval=0.001)
         prof.start()
-        n_pairs, n_clusters, wall = target_fn(blocks, cfg, all_ids)
+        n_pairs, n_clusters, wall, extra = target_fn(df, blocks, cfg, all_ids)
         prof.stop()
 
         # Console output (human readable) -- shows the top frame chain
@@ -193,11 +288,12 @@ def _worker_main(n: int, target: str, profiler: str, out_dir: Path) -> int:
             "console_path": str(base.with_suffix(".txt").name),
             "html_path": str(base.with_suffix(".html").name),
         })
+        summary.update(extra)
 
     elif profiler == "cprofile":
         prof = cProfile.Profile()
         prof.enable()
-        n_pairs, n_clusters, wall = target_fn(blocks, cfg, all_ids)
+        n_pairs, n_clusters, wall, extra = target_fn(df, blocks, cfg, all_ids)
         prof.disable()
 
         # Dump pstats binary AND a human-readable cumtime-sorted dump.
@@ -236,6 +332,7 @@ def _worker_main(n: int, target: str, profiler: str, out_dir: Path) -> int:
             "text_path": str(base.with_suffix(".txt").name),
             "top_cumtime": top_funcs,
         })
+        summary.update(extra)
 
     else:
         print(f"unknown profiler: {profiler}", file=sys.stderr, flush=True)
@@ -315,6 +412,25 @@ def _summarize(out_dir: Path) -> None:
             f"`{report}` |",
             flush=True,
         )
+
+    # full-target: show the per-stage wall split for the largest shape. This is
+    # the whole-run_dedupe breakdown (collect / exact / fuzzy / cluster / golden
+    # / identity) that the list/columnar micro-targets don't surface.
+    full = [s for s in summaries if s.get("stage_timings_seconds")]
+    if full:
+        biggest = max(full, key=lambda s: s.get("n", 0))
+        stages = biggest.get("stage_timings_seconds", {})
+        if stages:
+            total = sum(stages.values()) or 1.0
+            print(
+                f"\n### Stage wall split (full run_dedupe @ "
+                f"n={biggest['n']:,}, {biggest.get('profiler', '?')})\n",
+                flush=True,
+            )
+            print("| stage | wall_s | % of staged |", flush=True)
+            print("|---|---:|---:|", flush=True)
+            for name, secs in sorted(stages.items(), key=lambda kv: kv[1], reverse=True):
+                print(f"| `{name}` | {secs:.2f} | {100 * secs / total:.1f}% |", flush=True)
 
     # cProfile-only: show top hotspots for the largest shape.
     cprof = [s for s in summaries if s.get("profiler") == "cprofile"]

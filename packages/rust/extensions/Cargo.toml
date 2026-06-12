@@ -12,6 +12,11 @@ exclude = [
     "goldencheck-native",
     "goldencheck-core",
     "native-flow",
+    # analysis-native is a standalone abi3 ext-module workspace (like the above);
+    # analysis-core is its pyo3-free path dependency. GoldenAnalysis's optional
+    # accelerator (goldenanalysis[native]); neither belongs in `bridge`.
+    "analysis-native",
+    "analysis-core",
 ]
 
 [workspace.package]

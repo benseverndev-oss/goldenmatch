@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 def test_bench_script_has_expected_cli_surface() -> None:
-    """--help must list --parquet, --identity, --out, --rows."""
+    """--help must list --parquet, --identity, --out, --rows, --block-shuffle."""
     package_root = Path(__file__).resolve().parent.parent
     script = package_root / "scripts" / "bench_phase5_simulated.py"
     result = subprocess.run(
@@ -22,3 +22,4 @@ def test_bench_script_has_expected_cli_surface() -> None:
     assert "--identity" in result.stdout
     assert "--out" in result.stdout
     assert "--rows" in result.stdout
+    assert "--block-shuffle" in result.stdout

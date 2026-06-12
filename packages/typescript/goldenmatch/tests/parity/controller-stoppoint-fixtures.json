@@ -41,6 +41,24 @@
               "token_sort",
               "substring:0:8"
             ]
+          },
+          {
+            "fields": [
+              "last"
+            ],
+            "transforms": [
+              "lowercase",
+              "soundex"
+            ]
+          },
+          {
+            "fields": [
+              "last"
+            ],
+            "transforms": [
+              "lowercase",
+              "substring:0:5"
+            ]
           }
         ],
         "strategy": "multi_pass"
@@ -50,7 +68,7 @@
           "fields": [
             {
               "field": "first",
-              "scorer": "ensemble",
+              "scorer": "given_name_aliased_jw",
               "transforms": [
                 "lowercase",
                 "strip"
@@ -59,7 +77,7 @@
             },
             {
               "field": "last",
-              "scorer": "ensemble",
+              "scorer": "name_freq_weighted_jw",
               "transforms": [
                 "lowercase",
                 "strip"
@@ -198,10 +216,9 @@
         "keys": [
           {
             "fields": [
-              "email"
+              "zip"
             ],
             "transforms": [
-              "lowercase",
               "strip"
             ]
           }
@@ -228,7 +245,7 @@
           "fields": [
             {
               "field": "first",
-              "scorer": "ensemble",
+              "scorer": "given_name_aliased_jw",
               "transforms": [
                 "lowercase",
                 "strip"
@@ -237,7 +254,7 @@
             },
             {
               "field": "last",
-              "scorer": "ensemble",
+              "scorer": "name_freq_weighted_jw",
               "transforms": [
                 "lowercase",
                 "strip"
@@ -310,26 +327,15 @@
     "expected_run_history": {
       "entries": [
         {
-          "decision_rule": "cross_blocking_disagreement",
+          "decision_rule": "recall_gap_suspected",
           "error": null,
           "health": "red",
           "iteration": 0
         },
         {
-          "decision_rule": "cross_blocking_disagreement",
           "error": null,
           "health": "red",
           "iteration": 1
-        },
-        {
-          "error": "ModuleNotFoundError",
-          "health": "red",
-          "iteration": 2
-        },
-        {
-          "error": "ModuleNotFoundError",
-          "health": "red",
-          "iteration": 3
         },
         {
           "error": null,
@@ -337,10 +343,10 @@
           "iteration": -1
         }
       ],
-      "n_entries": 5,
-      "stop_reason": "budget_iterations"
+      "n_entries": 3,
+      "stop_reason": "policy_satisfied"
     },
-    "expected_stop_reason": "budget_iterations",
+    "expected_stop_reason": "policy_satisfied",
     "input_rows": [
       {
         "email": "alice@example.com",
@@ -399,7 +405,8 @@
         "keys": [
           {
             "fields": [
-              "email"
+              "city",
+              "name"
             ],
             "transforms": [
               "lowercase",
@@ -407,7 +414,38 @@
             ]
           }
         ],
-        "strategy": "static"
+        "passes": [
+          {
+            "fields": [
+              "city",
+              "name"
+            ],
+            "transforms": [
+              "lowercase",
+              "strip"
+            ]
+          },
+          {
+            "fields": [
+              "city",
+              "name"
+            ],
+            "transforms": [
+              "lowercase",
+              "substring:0:5"
+            ]
+          },
+          {
+            "fields": [
+              "name"
+            ],
+            "transforms": [
+              "lowercase",
+              "soundex"
+            ]
+          }
+        ],
+        "strategy": "multi_pass"
       },
       "matchkeys": [
         {
@@ -498,15 +536,22 @@
           "iteration": 0
         },
         {
-          "decision_rule": "no_matches",
+          "decision_rule": "blocking_key_swap",
           "error": null,
           "health": "red",
           "iteration": 1
         },
         {
+          "decision_rule": "no_matches",
           "error": null,
           "health": "red",
           "iteration": 2
+        },
+        {
+          "decision_rule": "no_matches",
+          "error": null,
+          "health": "red",
+          "iteration": 3
         },
         {
           "error": null,
@@ -514,10 +559,10 @@
           "iteration": -1
         }
       ],
-      "n_entries": 4,
-      "stop_reason": "policy_satisfied"
+      "n_entries": 5,
+      "stop_reason": "budget_iterations"
     },
-    "expected_stop_reason": "policy_satisfied",
+    "expected_stop_reason": "budget_iterations",
     "input_rows": [
       {
         "city": "NY",
@@ -558,14 +603,63 @@
         "keys": [
           {
             "fields": [
-              "phone"
+              "first"
             ],
             "transforms": [
-              "strip"
+              "lowercase",
+              "soundex"
             ]
           }
         ],
-        "strategy": "static"
+        "passes": [
+          {
+            "fields": [
+              "first"
+            ],
+            "transforms": [
+              "lowercase",
+              "substring:0:5"
+            ]
+          },
+          {
+            "fields": [
+              "first"
+            ],
+            "transforms": [
+              "lowercase",
+              "soundex"
+            ]
+          },
+          {
+            "fields": [
+              "first"
+            ],
+            "transforms": [
+              "lowercase",
+              "token_sort",
+              "substring:0:8"
+            ]
+          },
+          {
+            "fields": [
+              "last"
+            ],
+            "transforms": [
+              "lowercase",
+              "soundex"
+            ]
+          },
+          {
+            "fields": [
+              "last"
+            ],
+            "transforms": [
+              "lowercase",
+              "substring:0:5"
+            ]
+          }
+        ],
+        "strategy": "multi_pass"
       },
       "matchkeys": [
         {
@@ -586,7 +680,7 @@
           "fields": [
             {
               "field": "first",
-              "scorer": "ensemble",
+              "scorer": "given_name_aliased_jw",
               "transforms": [
                 "lowercase",
                 "strip"
@@ -595,7 +689,7 @@
             },
             {
               "field": "last",
-              "scorer": "ensemble",
+              "scorer": "name_freq_weighted_jw",
               "transforms": [
                 "lowercase",
                 "strip"
@@ -668,24 +762,25 @@
     "expected_run_history": {
       "entries": [
         {
-          "decision_rule": "no_matches",
+          "decision_rule": "low_reduction_ratio",
           "error": null,
           "health": "red",
           "iteration": 0
         },
         {
-          "decision_rule": "no_matches",
+          "decision_rule": "blocking_key_swap",
           "error": null,
           "health": "red",
           "iteration": 1
         },
         {
-          "decision_rule": "no_matches",
+          "decision_rule": "cross_blocking_disagreement",
           "error": null,
           "health": "red",
           "iteration": 2
         },
         {
+          "decision_rule": "no_matches",
           "error": null,
           "health": "red",
           "iteration": 3
@@ -697,9 +792,9 @@
         }
       ],
       "n_entries": 5,
-      "stop_reason": "policy_satisfied"
+      "stop_reason": "budget_iterations"
     },
-    "expected_stop_reason": "policy_satisfied",
+    "expected_stop_reason": "budget_iterations",
     "input_rows": [
       {
         "first": "Alice",
@@ -788,6 +883,24 @@
               "token_sort",
               "substring:0:8"
             ]
+          },
+          {
+            "fields": [
+              "last"
+            ],
+            "transforms": [
+              "lowercase",
+              "soundex"
+            ]
+          },
+          {
+            "fields": [
+              "last"
+            ],
+            "transforms": [
+              "lowercase",
+              "substring:0:5"
+            ]
           }
         ],
         "strategy": "multi_pass"
@@ -797,7 +910,7 @@
           "fields": [
             {
               "field": "first",
-              "scorer": "ensemble",
+              "scorer": "given_name_aliased_jw",
               "transforms": [
                 "lowercase",
                 "strip"
@@ -806,7 +919,7 @@
             },
             {
               "field": "last",
-              "scorer": "ensemble",
+              "scorer": "name_freq_weighted_jw",
               "transforms": [
                 "lowercase",
                 "strip"
@@ -945,14 +1058,47 @@
         "keys": [
           {
             "fields": [
-              "phone"
+              "city",
+              "name"
             ],
             "transforms": [
+              "lowercase",
               "strip"
             ]
           }
         ],
-        "strategy": "static"
+        "passes": [
+          {
+            "fields": [
+              "city",
+              "name"
+            ],
+            "transforms": [
+              "lowercase",
+              "strip"
+            ]
+          },
+          {
+            "fields": [
+              "city",
+              "name"
+            ],
+            "transforms": [
+              "lowercase",
+              "substring:0:5"
+            ]
+          },
+          {
+            "fields": [
+              "name"
+            ],
+            "transforms": [
+              "lowercase",
+              "soundex"
+            ]
+          }
+        ],
+        "strategy": "multi_pass"
       },
       "matchkeys": [
         {
@@ -1036,23 +1182,26 @@
     "expected_run_history": {
       "entries": [
         {
-          "decision_rule": "demote_clustered_identity",
+          "decision_rule": "cross_blocking_disagreement",
           "error": null,
           "health": "red",
           "iteration": 0
         },
         {
-          "error": "ModuleNotFoundError",
+          "decision_rule": "blocking_key_swap",
+          "error": null,
           "health": "red",
           "iteration": 1
         },
         {
-          "error": "ModuleNotFoundError",
+          "decision_rule": "cross_blocking_disagreement",
+          "error": null,
           "health": "red",
           "iteration": 2
         },
         {
-          "error": "ModuleNotFoundError",
+          "decision_rule": "cross_blocking_disagreement",
+          "error": null,
           "health": "red",
           "iteration": 3
         },

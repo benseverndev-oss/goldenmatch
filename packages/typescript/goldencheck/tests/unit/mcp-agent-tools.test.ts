@@ -39,10 +39,11 @@ describe("AGENT_TOOLS metadata", () => {
     expect(AGENT_TOOL_NAMES.size).toBe(10);
   });
 
-  it("are merged into the server's TOOL_DEFINITIONS (7 core + 10 agent = 17)", () => {
-    expect(TOOL_DEFINITIONS.length).toBe(17);
+  it("are merged into the server's TOOL_DEFINITIONS (8 core + 10 agent = 18)", () => {
+    expect(TOOL_DEFINITIONS.length).toBe(18);
     expect(TOOL_DEFINITIONS.map((t) => t.name)).toContain("analyze_data");
     expect(TOOL_DEFINITIONS.map((t) => t.name)).toContain("scan");
+    expect(TOOL_DEFINITIONS.map((t) => t.name)).toContain("validate");
   });
 });
 

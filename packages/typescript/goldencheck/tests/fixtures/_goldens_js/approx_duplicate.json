@@ -1,0 +1,62 @@
+{
+  "findings": [
+    {
+      "severity": "WARNING",
+      "column": "__dataset__",
+      "check": "identity_safe_pk",
+      "confidence": 0.9,
+      "affected_rows": 12
+    },
+    {
+      "severity": "WARNING",
+      "column": "__dataset__",
+      "check": "duplicate_rows",
+      "confidence": 0.8,
+      "affected_rows": 2
+    },
+    {
+      "severity": "INFO",
+      "column": "company",
+      "check": "nullability",
+      "confidence": 0.5,
+      "affected_rows": 0
+    },
+    {
+      "severity": "INFO",
+      "column": "company",
+      "check": "pattern_consistency",
+      "confidence": 0.5,
+      "affected_rows": 1
+    },
+    {
+      "severity": "INFO",
+      "column": "company",
+      "check": "pattern_consistency",
+      "confidence": 0.5,
+      "affected_rows": 1
+    },
+    {
+      "severity": "INFO",
+      "column": "company",
+      "check": "pattern_consistency",
+      "confidence": 0.5,
+      "affected_rows": 1
+    },
+    {
+      "severity": "INFO",
+      "column": "city",
+      "check": "nullability",
+      "confidence": 0.5,
+      "affected_rows": 0
+    },
+    {
+      "severity": "INFO",
+      "column": "city",
+      "check": "pattern_consistency",
+      "confidence": 0.5,
+      "affected_rows": 2
+    }
+  ],
+  "health_grade": "A",
+  "health_score": 94
+}

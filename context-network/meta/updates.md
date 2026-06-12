@@ -2,6 +2,213 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-06-12 — #855 goldencheck TS port: module parity + hardened golden harness (#873/#874)
+- New [../decisions/0013-goldencheck-ts-parity-hardening.md](../decisions/0013-goldencheck-ts-parity-hardening.md);
+  added the `#855` subsection to [../planning/surface-hardening.md](../planning/surface-hardening.md).
+- **#873** ported the goldencheck TS gaps the 2026-06-11 audit found: 2 profilers
+  (`freshness`, `fuzzy_values`), 4 relations (`approx_duplicate`, `approx_fd`,
+  `composite_key`, `functional_dependency`), and the `validate` MCP tool —
+  registries now 12 column profilers / 9 relations / 18 MCP tools, each mirroring
+  the Python **fallback** (native kernels stay Python-only by design).
+- **#874** hardened `tests/parity/parity.test.ts`: it now asserts confidence (4 dp)
+  + affected_rows and FAILS on a missing manifest/golden, where it previously
+  checked only (column, check, severity) and skipped silently. Goldens were
+  regenerated on a clean `ubuntu-latest` runner (`regen-855-parity-goldens.yml`,
+  artifact-download) because the dev box OOMs on Polars.
+- **The hardening immediately caught a pre-existing bug.** TS `TemporalOrderProfiler`
+  used `new Date(s)`, which parses bare integers (`"7"`) as dates, so it fired
+  `temporal_order` on integer column pairs Python never flags. Gated TS
+  `tryParseDate` on `YYYY-MM-DD` to match Python's `str.to_date('%Y-%m-%d')`; all 6
+  parity cases now match Python byte-for-byte. **#855 CLOSED.**
+- **By design:** `freshness` is unit-test-only (the CSV-roundtrip harness reads
+  dates as `Utf8`, so Python's date-gated profiler can't fire through it).
+
+## 2026-06-12 — FS block-scoring perf + the "native is slow" red herring (PR #869)
+- New [../decisions/0012-fs-block-scoring-perf.md](../decisions/0012-fs-block-scoring-perf.md);
+  added a perf section + corrected the "3-19x faster" framing in
+  [../architecture/fellegi-sunter-splink-parity.md](../architecture/fellegi-sunter-splink-parity.md).
+- **The bake-off's "Splink 3-19x faster" measured GM's NUMPY path, not native** —
+  it never set `GOLDENMATCH_FS_NATIVE`, and probabilistic mode doesn't refuse on a
+  missing kernel. Added a `gm_prob_native` bake-off column (native built +
+  `score_block_pairs_fs` asserted in CI): **native ≈ numpy, no wall change.** The
+  wall is per-block fan-out (historical_50k: 31,735 blocks, 79% ≤8 rows, ~222k tiny
+  FFI calls), not scoring math — so the Rust kernel can't move it.
+- **Three output-identical optimizations** on the numpy path, each gated by a
+  fixed-`em_result` pair-set diff (200,058 pairs byte-identical), NOT the cluster
+  hash (pipeline is non-deterministic ±3 clusters run-to-run): value-dedup (−32%),
+  block-batching into shared S×S matrices (−48%, native calls 222k→4.3k), batch
+  row-cap 512→256 (−20%). **historical_50k 86.5s → 24.6s (−72%) local.** All three
+  CI-green on PR #869.
+- Also refreshed [../../docs/er-vendor-comparison.md](../../docs/er-vendor-comparison.md)
+  to v1.30.0 (refdata, identity graph, Splink-parity flip) earlier in the same PR.
+- **Flagged, not fixed:** EM-sampling cluster-count nondeterminism (±3) and the
+  pre-optimization bake-off table (re-bench pending) are recorded in 0012.
+
+## 2026-06-11 — #844 FINISH LINE: 100M validated, per-group scoring fixed, default flipped (#864/#867)
+- Updated [../architecture/distributed-wcc.md](../architecture/distributed-wcc.md)
+  + [../decisions/0011-distributed-wcc-randomized-contraction.md](../decisions/0011-distributed-wcc-randomized-contraction.md)
+  from "specs shipped, operator-deferred" to VALIDATED + default-flipped. **#844 CLOSED.**
+- **The binding 100M run is done.** Self-provisioned 5-node `e2-standard-16` GCP
+  cluster, 100M synthetic phase-5 dataset in GCS: full recall-complete e2e in
+  **554.5 s (9.2 min, under the 30-min kill), 20,000,000 clusters recovered
+  exactly, driver RSS 0.36 GB**, no head-wedge / no Ray deadlock. The WCC alone
+  cleared a 200M-edge graph in 266 s in isolation.
+- **The e2e wall was per-group scoring, NOT the WCC.** `_score_colocated_groups`
+  looped `group_by` + a full per-partition kernel call per ~5-row group (~20M
+  fixed-overhead calls at 100M; 0 of 64 score-tasks finished in 25 min). #864
+  vectorizes it — score the whole partition once (the `bucket` backend already
+  groups by the blocking key); parity-tested. That single change made the e2e viable.
+- **#864 (merged)** also fixed auto-config `DuplicateError: __row_id__` on a
+  `__row_id__`-carrying input (`_add_row_ids` guard) and gave the e2e bench an
+  explicit-config + `allow_red_config` path (it always auto-configured before,
+  which is slow + RED-degenerate at 100M).
+- **#867 (open, reviewable)** flips `GOLDENMATCH_DISTRIBUTED_BLOCK_SHUFFLE` default
+  `0→1` + adds `_assert_scratch_shared_if_multinode` (multi-node + node-local WCC
+  scratch → raises instead of silently diverging).
+- Deferred/optional: (b) project-to-scoring-columns-before-shuffle (a wide-record
+  shuffle win, not needed for viability).
+
+## 2026-06-11 — TS parity: refdata name scorers + autoconfig blocking (#857, from the #856 audit)
+- Extended the parity workstream node
+  [../planning/surface-hardening.md](../planning/surface-hardening.md):
+  a new "Fixtures rot silently — the #856/#857 lesson" subsection under the
+  parity-fixture methodology, plus the #857 entry.
+- **The #856 audit found real cross-language drift sitting in `main`:** the
+  TS `typescript` CI lane runs only on TS path changes, so a pure-Python
+  autoconfig change leaves the committed parity vectors stale and the TS
+  test green against a fixture that no longer reflects Python. The
+  controller-stoppoint fixture had drifted (`ensemble` where Python now
+  emits the refdata name scorers + evolved multi-pass blocking).
+- **#857 (merged) closed it by porting, not pinning.** The edge-safe TS core
+  gained `given_name_aliased_jw` (alias-aware JW) and `name_freq_weighted_jw`
+  (Census surname-IDF-weighted JW), the first/last-name auto-config refine
+  (`refineNameScorer`, last-before-first; `multi_name` unrefined), and a
+  faithful port of `build_blocking`'s selection (exact gate at
+  `cardinality_ratio ≤ 0.5` on the exact pool only; secondary-name passes).
+  Scope grew twice (regen forced the 186KB surname table; the residual red
+  was a separate blocking-evolution gap). Both refdata tables are generated
+  TS modules synced from the Python source (`scripts/sync_ts_refdata.mjs`)
+  and drift-guarded; numeric parity is pinned by Python-computed values in
+  `tests/parity/scorer-ground-truth.test.ts` (4dp).
+- **Two durable methodology guards recorded:** generate-and-drift-guard
+  bundled data (never hand-copy), and pin scorer parity to Python ground
+  truth rather than a TS self-mirror (a self-mirror passes even if both
+  sides diverge from Python).
+- Deferred: refdata transform packs + geo/date blocking branches. Follow-up
+  **#860**: TS `buildWeightedMatchkey` still drops `nullRate>0.5` name
+  columns while the blocking path now keeps them (why `sparse_people` stays
+  loose-shape). Docs-site: `goldenmatch/typescript.mdx` (scorer list/table +
+  Python-comparison row) and `goldenmatch/reference-data.mdx` (TS-parity note).
+
+## 2026-06-10 — Distributed WCC for #844: randomized contraction + recall-complete Phase 5 (#851/#852)
+- New nodes: [../architecture/distributed-wcc.md](../architecture/distributed-wcc.md)
+  + [../decisions/0011-distributed-wcc-randomized-contraction.md](../decisions/0011-distributed-wcc-randomized-contraction.md).
+- **Problem (#844):** the Phase-5 distributed pipeline under-merged at scale. PR
+  #845's opt-in block-shuffle co-locates duplicates but makes components cross
+  partitions, which the per-partition `local_cc_assignments` Union-Find
+  under-merges. The two existing distributed WCCs both die at 100M:
+  `two_phase_wcc` driver-collects + runs a cpython-loop UnionFind (head-wedge);
+  `distributed_wcc` deadlocks Ray's streaming executor on iterative joins.
+- **Fix (both specs SHIPPED):** Spec 1 (PR #851) = `randomized_contraction_wcc`
+  (Bögeholz–Brand–Todor 2018, arXiv:1802.09478) — relational, chain-robust,
+  O(log|V|) rounds, no driver UF, per-round parquet checkpoint to dodge the
+  deadlock; pure-Polars reference gated vs `scipy.csgraph`. Spec 2 (PR #852) =
+  wires it into `_run_phase5_pipeline` (block-shuffle on -> distributed WCC, off ->
+  `local_cc`; same predicate the scorer uses) via a new `algorithm` kwarg on
+  `build_clusters_distributed`; join + golden tail unchanged (shared contract).
+  Opt-in (`GOLDENMATCH_DISTRIBUTED_BLOCK_SHUFFLE=1`), **default unchanged**.
+- **Two un-locally-testable Ray Data join rules now recorded** (distinct-named keys
+  + `ReadParquet` inputs — both surfaced as `ArrowInvalid` on the CI ray lane).
+  The `distributed` job `timeout-minutes` went 20 -> 30 to fit the new blocking gate.
+- **Deferred (operator):** the binding multi-node 100M run + the default-flip (need
+  a BYO Ray cluster; `GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH` must be a `gs://` prefix).
+  Parallel to the [Sail tier](../architecture/sail-tier.md) (the Spark-Connect track
+  that retires Ray); whichever binds 100M first is go-forward. Mintlify scale page
+  (`docs-site/goldenmatch/backends-and-scale.mdx`) updated with the recall-complete
+  path.
+
+## 2026-06-10 — publish-containers flake hardening (ghcr buildkit mirror, #846)
+- New decision: [../decisions/0010-publish-containers-ghcr-mirror.md](../decisions/0010-publish-containers-ghcr-mirror.md).
+- **Audit:** `publish-containers` went red ~1 run in 18 over 30 days (11 fails,
+  6 different packages) — every one a transient registry timeout, never a code
+  bug. Dominant: `setup-buildx` pulls `moby/buildkit:buildx-stable-1` from Docker
+  Hub *anonymously*; 7 legs pulling in parallel each main push race into Docker
+  Hub's shared-runner-IP throttle → `context deadline exceeded`. Secondary: ghcr
+  502s + GHA-cache blob copy errors at `Build and push`.
+- **Fix (PR #846, merged):** a prereq `mirror` job republishes buildkit + binfmt
+  into `ghcr.io/<owner>/{buildkit,binfmt}` once per run (retried); the legs pull
+  the helper images from ghcr via `setup-buildx driver-opts:` / `setup-qemu
+  image:` (ghcr login moved ahead of buildx). Docker Hub off the hot path: 7
+  unguarded parallel pulls → 1 retried read. Native retry-once twins
+  (`continue-on-error` + `outcome=='failure'`, no third-party action) backstop
+  the residual ghcr/cache blips; `publish` still runs on a stale ghcr copy if
+  `mirror` flakes.
+- **Verified on `main`:** run `27284102426` — 8/8 jobs green, zero retry twin
+  fired (the mirror eliminated the Docker Hub pulls outright, not just retried
+  them). Operational detail recorded in root `CLAUDE.md` (`## publish-containers
+  flakes`); a red leg is cosmetic (content-addressed, self-heals next push).
+
+## 2026-06-09 — Rust test-coverage arc: make the tests real, then measure (#827/#830/#832)
+- New nodes: [../architecture/rust-test-coverage.md](../architecture/rust-test-coverage.md)
+  (per-crate testing map + the measured baseline) and
+  [../decisions/0009-rust-test-coverage.md](../decisions/0009-rust-test-coverage.md).
+- An audit found the Rust tree's CI claims were partly fictional. Closed the real
+  gaps: standalone `graph-core`/`score-core` tests now run (#827); `native` got 18
+  Rust unit tests behind an `extension-module` feature-gate (#827); the pgrx graph/
+  fingerprint surface is psql-asserted vs a real `CREATE EXTENSION` (#827); the
+  `bridge` went from **6 silent self-skipping no-ops to 42 real marshalling tests**
+  (#830, install goldenmatch into the embedded interpreter + a `REQUIRE_PY` gate);
+  and a `cargo-llvm-cov` `rust_coverage` job posts a per-crate baseline (#832).
+- Two load-bearing facts recorded so they aren't re-litigated: **`cargo pgrx test`
+  is a structural dead-end** for `goldenmatch_pg` (schema-gen broken → psql smoke
+  instead), and **`native`'s 26% measured coverage is an artifact** (it's
+  Python-parity-tested; llvm-cov only sees `cargo test`). Fixed the now-stale
+  `cargo pgrx test`/`pg_test` claim in
+  [../architecture/sql-native-extensions.md](../architecture/sql-native-extensions.md).
+- Verdict: no compelling remaining Rust gap; the structural work is done and now
+  measurable + regression-guardable.
+## 2026-06-09 — FS auto-config v2: GoldenMatch now BEATS Splink on accuracy (#823)
+- Updated the architecture node + decision:
+  [../architecture/fellegi-sunter-splink-parity.md](../architecture/fellegi-sunter-splink-parity.md)
+  (new "Accuracy arc — beating Splink" section + softened "Where Splink still
+  leads": Splink no longer leads on PII accuracy),
+  [../decisions/0008-fellegi-sunter-splink-parity.md](../decisions/0008-fellegi-sunter-splink-parity.md)
+  (appended an accuracy-arc update; Status line bumped).
+- **The probabilistic (Fellegi-Sunter) auto-config now beats Splink head-to-head**
+  (#823, "FS auto-config v2", default-ON; kill-switch
+  `GOLDENMATCH_FS_AUTOCONFIG_V2=0` restores legacy byte-identically). Scope is the
+  probabilistic auto-config path only (`auto_configure_probabilistic_df` /
+  `build_probabilistic_matchkeys`); weighted/DQbench + zero-config `dedupe_df` are
+  untouched. Four levers: (1) admit `dob`/date columns as a `levenshtein`
+  discriminator (v1 discarded them); (2a) drop redundant person-name composites
+  when atomic given+family exist; (2b) low-cardinality fuzzy floor;
+  (3) `_diversify_probabilistic_blocking` — *additive*, recall-positive blocking
+  diversification onto orthogonal stable keys (date-year + postcode/zip);
+  (4) admit description (title) + multi_name (authors) as `token_sort` (lifts the
+  DBLP-ACM venue-only mega-match — 0.003 → 0.377, still recall-bound). #821 built
+  the shared head-to-head evaluator (`scripts/bench_er_headtohead`) the claim rests
+  on.
+- **Measured (pairwise F1, shared evaluator) — deterministic as of #829:**
+  historical_50k (Splink's flagship) 0.647 → 0.778 vs Splink 0.757; febrl3
+  0.983 → 0.991 vs 0.965; synthetic_person 0.972 → 0.998 vs 0.996; dblp_acm
+  0.003 → 0.377 (Splink skips it). GM also wins historical_50k at the cluster
+  level (B-cubed F1 0.844 vs 0.789). Full bake-off:
+  `docs/benchmarks/2026-06-09-splink-bakeoff.md`.
+- **#829 (determinism fix):** the original #823 numbers rested on a
+  non-deterministic EM training-pair sample — three invocations of the identical
+  GM-prob path gave historical_50k 0.805 / 0.779 / 0.643 on one CI run. #829 sorts
+  blocks by their stable `block_key` before the seeded shuffle; post-fix three
+  harnesses agree within 0.002. The earlier `dblp_acm = 0.879` was a lucky draw
+  that does not reproduce (deterministic 0.377). For bibliographic data use the
+  *weighted* path (0.964 on DBLP-ACM), not probabilistic.
+- **Honest framing preserved:** these are *pairwise* F1 under one shared harness.
+  The often-cited ~0.97 Splink historical_50k number is a *cluster*-level metric,
+  not exhaustive pairwise; a local diagnostic ran Splink 4.0.16 and it scores
+  ~0.75 pairwise here (recall-bound — 5156 clusters, mean size ~10, no field
+  exceeds 0.60 recall → ~0.93 pairwise ceiling for any engine). Claim is
+  "matches/beats Splink on every dataset Splink scores on the same evaluator,"
+  not "0.97 pairwise." Splink is also 3-19x faster on these datasets.
+
 ## 2026-06-08 — Fellegi-Sunter → Splink parity (+ EM perf, scale-out, vendor reposition)
 - New architecture node + decision:
   [../architecture/fellegi-sunter-splink-parity.md](../architecture/fellegi-sunter-splink-parity.md),
@@ -174,4 +381,4 @@ Newest first. One entry per meaningful change to the network.
 - Committed to git on branch `chore/context-network`.
 
 ---
-**Classification:** meta/log • **Last updated:** 2026-06-07
+**Classification:** meta/log • **Last updated:** 2026-06-12

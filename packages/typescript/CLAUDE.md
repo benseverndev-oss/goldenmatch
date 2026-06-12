@@ -1,20 +1,21 @@
 # TypeScript packages — Claude notes
 
-## Not a real npm workspace
+## pnpm workspace (post-2026-05-02 fold)
 
-Each package has its own `package.json` and installs independently. This is intentional — Windows symlinks fail with EISDIR on `file:../sibling` paths.
+These packages are a real pnpm workspace — `pnpm-workspace.yaml` globs
+`packages/typescript/*`, and cross-package deps resolve via the workspace
+protocol (`"goldencheck-types": "workspace:^"`), which pnpm links to the
+sibling source (`link:../goldencheck-types` in `pnpm-lock.yaml`). See the root
+CLAUDE.md "TypeScript: pnpm + Turborepo" section for the toolchain pins.
 
-## Cross-package deps: the `.vendor/` tarball pattern
+### Retired: the `.vendor/` tarball pattern
 
-When package A depends on package B (in this monorepo):
-
-1. In B: `npm run build && npm pack --pack-destination /d/mr/cleanup-staging/.vendor/`
-2. In A: `"dependencies": { "B": "file:../../../.vendor/B-<version>.tgz" }`
-3. `npm install` in A.
-
-Plain `file:../B` will fail on Windows with `EISDIR: illegal operation on a directory, symlink ...`.
-
-Tarballs in `.vendor/` are committed to git (small, deterministic, build-output only).
+Pre-fold, each package installed independently under plain npm and cross-package
+deps were vendored as committed `.tgz` tarballs (`npm pack` into `.vendor/`,
+consumed via `"B": "file:../../../.vendor/B-<version>.tgz"`) because plain
+`file:../B` symlinks fail on Windows with `EISDIR`. The pnpm workspace replaces
+this — `workspace:^` handles the linking cross-platform. The stale
+`.vendor/goldencheck-types-0.1.0.tgz` (unreferenced after the fold) was removed.
 
 ## Style / convention
 

@@ -1,0 +1,111 @@
+{
+  "findings": [
+    {
+      "severity": "WARNING",
+      "column": "zip",
+      "check": "type_inference",
+      "confidence": 0.7,
+      "affected_rows": 0
+    },
+    {
+      "severity": "WARNING",
+      "column": "city",
+      "check": "fuzzy_duplicate_values",
+      "confidence": 0.7,
+      "affected_rows": 297
+    },
+    {
+      "severity": "WARNING",
+      "column": "__dataset__",
+      "check": "identity_safe_pk",
+      "confidence": 0.8,
+      "affected_rows": 300
+    },
+    {
+      "severity": "WARNING",
+      "column": "zip",
+      "check": "fd_violation",
+      "confidence": 0.8,
+      "affected_rows": 2
+    },
+    {
+      "severity": "WARNING",
+      "column": "city",
+      "check": "fd_violation",
+      "confidence": 0.8,
+      "affected_rows": 3
+    },
+    {
+      "severity": "INFO",
+      "column": "zip",
+      "check": "nullability",
+      "confidence": 0.7,
+      "affected_rows": 0
+    },
+    {
+      "severity": "INFO",
+      "column": "zip",
+      "check": "range_distribution",
+      "confidence": 1.0,
+      "affected_rows": 0
+    },
+    {
+      "severity": "INFO",
+      "column": "zip",
+      "check": "cardinality",
+      "confidence": 0.7,
+      "affected_rows": 300
+    },
+    {
+      "severity": "INFO",
+      "column": "city",
+      "check": "nullability",
+      "confidence": 0.7,
+      "affected_rows": 0
+    },
+    {
+      "severity": "INFO",
+      "column": "city",
+      "check": "cardinality",
+      "confidence": 0.7,
+      "affected_rows": 300
+    },
+    {
+      "severity": "INFO",
+      "column": "city",
+      "check": "pattern_consistency",
+      "confidence": 0.8,
+      "affected_rows": 3
+    },
+    {
+      "severity": "INFO",
+      "column": "amt",
+      "check": "nullability",
+      "confidence": 0.7,
+      "affected_rows": 0
+    },
+    {
+      "severity": "INFO",
+      "column": "amt",
+      "check": "range_distribution",
+      "confidence": 1.0,
+      "affected_rows": 0
+    },
+    {
+      "severity": "INFO",
+      "column": "amt",
+      "check": "composite_key",
+      "confidence": 0.6,
+      "affected_rows": 300
+    },
+    {
+      "severity": "INFO",
+      "column": "amt",
+      "check": "composite_key",
+      "confidence": 0.6,
+      "affected_rows": 300
+    }
+  ],
+  "health_grade": "B",
+  "health_score": 85
+}

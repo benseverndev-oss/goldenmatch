@@ -21,7 +21,7 @@ from goldenmatch.core._profile_helpers import (
     mass_borderline,
 )
 from goldenmatch.core.complexity_profile import ScoringProfile
-from goldenmatch.core.profile_emitter import current_emitter
+from goldenmatch.core.profile_emitter import current_emitter, has_active_emitter
 from goldenmatch.utils.transforms import apply_transforms
 
 logger = logging.getLogger(__name__)
@@ -55,6 +55,18 @@ def _emit_scoring_profile(
             Approximation: sum of n*(n-1)//2 for each block processed.
         per_field_variance: Optional per-field score variance dict.
     """
+    # Build the profile only when a capture is open to consume it. On the full
+    # production pass there is no ``profile_capture`` (all captures live in the
+    # auto-config controller's sample iterations), so ``current_emitter()`` is
+    # the null singleton and ``set_scoring`` is a no-op -- but histogram_20 +
+    # hartigan_dip + the mass_* passes below run over EVERY scored pair (~131M
+    # at 1M rows: the dip is a numpy/diptest sort, the rest are full-list Python
+    # loops). That ~149s of work was computed and immediately discarded. Same
+    # dead-work pattern as #837's matched_pairs; the guard makes the no-op path
+    # actually do no work. When a capture IS active (sample iterations) the
+    # construction is byte-identical to before.
+    if not has_active_emitter():
+        return
     scores = [s for _, _, s in pairs]
     profile = ScoringProfile(
         n_pairs_scored=len(scores),
@@ -86,6 +98,25 @@ def score_field(val_a: str | None, val_b: str | None, scorer: str) -> float | No
         return token_sort_ratio(val_a, val_b) / 100.0
     elif scorer == "soundex_match":
         return 1.0 if jellyfish.soundex(val_a) == jellyfish.soundex(val_b) else 0.0
+    elif scorer == "ensemble":
+        # Scalar twin of the NxN `ensemble` branch in `_fuzzy_score_matrix`:
+        # element-wise max of jaro_winkler, token_sort, and soundex*0.8. The
+        # vectorized scoring path already handles `ensemble`, but EM training
+        # routes through this scalar path (comparison_vector ->
+        # _build_comparison_matrix -> score_field). Without this case, a
+        # probabilistic matchkey whose auto-config assigns `ensemble` (any
+        # `name` field — autoconfig.py build_probabilistic_matchkeys) raises
+        # `Unknown scorer` at train time and the Fellegi-Sunter path can't run
+        # at all. Soundex is wrapped defensively (jellyfish.soundex can raise on
+        # non-alpha input) so that component just drops instead of failing the
+        # whole pair.
+        jw = JaroWinkler.similarity(val_a, val_b)
+        ts = token_sort_ratio(val_a, val_b) / 100.0
+        try:
+            sx = 0.8 if jellyfish.soundex(val_a) == jellyfish.soundex(val_b) else 0.0
+        except Exception:
+            sx = 0.0
+        return max(jw, ts, sx)
     elif scorer == "dice":
         return _dice_score_single(val_a, val_b)
     elif scorer == "jaccard":
@@ -535,10 +566,32 @@ def _hex_to_bits(hex_str: str) -> np.ndarray:
     return np.frombuffer(bytes.fromhex(hex_str), dtype=np.uint8)
 
 
+def _pad_to_equal_length(
+    bits_a: np.ndarray, bits_b: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Zero-pad the shorter of two uint8 byte arrays up to the longer length.
+
+    Mirrors the ``max_len`` zero-padding in ``_dice_score_matrix`` /
+    ``_jaccard_score_matrix`` so the single-pair helpers agree with the batch
+    path on the same inputs. Without it, ``np.bitwise_and`` on different-length
+    arrays raises an opaque broadcast ``ValueError`` (issue #784). Padding with
+    zero bytes is bit-identical to bit-level padding (popcount is unchanged by
+    trailing zeros), and AND/OR against an implicit-zero tail is well defined.
+    """
+    len_a, len_b = len(bits_a), len(bits_b)
+    if len_a == len_b:
+        return bits_a, bits_b
+    max_len = max(len_a, len_b)
+    if len_a < max_len:
+        bits_a = np.concatenate([bits_a, np.zeros(max_len - len_a, dtype=np.uint8)])
+    else:
+        bits_b = np.concatenate([bits_b, np.zeros(max_len - len_b, dtype=np.uint8)])
+    return bits_a, bits_b
+
+
 def _dice_score_single(val_a: str, val_b: str) -> float:
     """Dice coefficient on two hex-encoded bloom filters."""
-    bits_a = _hex_to_bits(val_a)
-    bits_b = _hex_to_bits(val_b)
+    bits_a, bits_b = _pad_to_equal_length(_hex_to_bits(val_a), _hex_to_bits(val_b))
     intersection = np.unpackbits(np.bitwise_and(bits_a, bits_b)).sum()
     total = np.unpackbits(bits_a).sum() + np.unpackbits(bits_b).sum()
     return float(2.0 * intersection / total) if total > 0 else 0.0
@@ -546,8 +599,7 @@ def _dice_score_single(val_a: str, val_b: str) -> float:
 
 def _jaccard_score_single(val_a: str, val_b: str) -> float:
     """Jaccard similarity on two hex-encoded bloom filters."""
-    bits_a = _hex_to_bits(val_a)
-    bits_b = _hex_to_bits(val_b)
+    bits_a, bits_b = _pad_to_equal_length(_hex_to_bits(val_a), _hex_to_bits(val_b))
     intersection = np.unpackbits(np.bitwise_and(bits_a, bits_b)).sum()
     union = np.unpackbits(np.bitwise_or(bits_a, bits_b)).sum()
     return float(intersection / union) if union > 0 else 0.0
@@ -1088,6 +1140,7 @@ def score_blocks_parallel(
     across_files_only: bool = False,
     source_lookup: dict[int, str] | None = None,
     target_ids: set[int] | None = None,
+    track_matched: bool = True,
 ) -> list[tuple[int, int, float]]:
     """Score all blocks in parallel using threads.
 
@@ -1104,6 +1157,13 @@ def score_blocks_parallel(
         across_files_only: Filter to cross-source pairs only.
         source_lookup: Row ID to source name mapping.
         target_ids: For match mode — filter to target/ref cross pairs.
+        track_matched: when True (default) the per-pass exclude set is
+            populated as before. When False the ``matched_pairs.add``
+            bookkeeping is skipped -- the caller passes False ONLY when no
+            later matchkey pass consumes the set (single-matchkey configs,
+            or the last consuming pass). At 1M / 131M pairs that per-pair
+            min/max/set.add was ~100s of the default-path wall. The returned
+            pair list is identical either way; only the side effect differs.
 
     Returns:
         All fuzzy pairs found across blocks.
@@ -1132,8 +1192,9 @@ def score_blocks_parallel(
                     if (a in target_ids) != (b in target_ids)
                 ]
             all_pairs.extend(pairs)
-            for a, b, _s in pairs:
-                matched_pairs.add((min(a, b), max(a, b)))
+            if track_matched:
+                for a, b, _s in pairs:
+                    matched_pairs.add((min(a, b), max(a, b)))
         _emit_scoring_profile(all_pairs, mk.fuzzy_threshold, candidates_compared=total_candidates)
         return all_pairs
 
@@ -1203,8 +1264,9 @@ def score_blocks_parallel(
                     if (a in target_ids) != (b in target_ids)
                 ]
             all_pairs.extend(pairs)
-            for a, b, _s in pairs:
-                matched_pairs.add((min(a, b), max(a, b)))
+            if track_matched:
+                for a, b, _s in pairs:
+                    matched_pairs.add((min(a, b), max(a, b)))
             completed += 1
             if completed % log_interval == 0:
                 logger.info(
@@ -1481,6 +1543,7 @@ def score_blocks_columnar(
     across_files_only: bool = False,
     source_lookup: dict[int, str] | None = None,
     target_ids: set[int] | None = None,
+    track_matched: bool = True,
 ) -> pl.DataFrame:
     """Phase 1c-real columnar block scorer. Mirrors
     :func:`score_blocks_parallel`'s thread-pool structure but uses
@@ -1501,6 +1564,13 @@ def score_blocks_columnar(
         source_lookup, target_ids: same semantics as
         ``score_blocks_parallel``. ``matched_pairs`` is mutated in
         place as the contract requires.
+        track_matched: when True (default) the per-pass exclude set is
+            populated as before. When False the ``matched_pairs.add``
+            bookkeeping is skipped entirely -- the pipeline's columnar
+            path is single-matchkey by eligibility, so no later pass
+            ever consumes the set and building it is pure waste (the
+            profiled ~104s at 1M / 131M pairs). The returned pair stream
+            is identical either way; only the side effect differs.
 
     Returns:
         Polars DataFrame with ``PAIR_STREAM_SCHEMA`` shape.
@@ -1525,12 +1595,14 @@ def score_blocks_columnar(
             if not df_pairs.is_empty():
                 # Update matched_pairs side effect (per-block, before
                 # concat so order is consistent with the list path).
-                for a, b in zip(
-                    df_pairs["id_a"].to_list(),
-                    df_pairs["id_b"].to_list(),
-                    strict=True,
-                ):
-                    matched_pairs.add((min(a, b), max(a, b)))
+                # Skipped when track_matched=False (set is never consumed).
+                if track_matched:
+                    for a, b in zip(
+                        df_pairs["id_a"].to_list(),
+                        df_pairs["id_b"].to_list(),
+                        strict=True,
+                    ):
+                        matched_pairs.add((min(a, b), max(a, b)))
                 frames.append(df_pairs)
         if not frames:
             return pl.DataFrame(schema=PAIR_STREAM_SCHEMA)
@@ -1559,12 +1631,13 @@ def score_blocks_columnar(
             if target_ids is not None and not df_pairs.is_empty():
                 df_pairs = _filter_target_ids_df(df_pairs, target_ids)
             if not df_pairs.is_empty():
-                for a, b in zip(
-                    df_pairs["id_a"].to_list(),
-                    df_pairs["id_b"].to_list(),
-                    strict=True,
-                ):
-                    matched_pairs.add((min(a, b), max(a, b)))
+                if track_matched:
+                    for a, b in zip(
+                        df_pairs["id_a"].to_list(),
+                        df_pairs["id_b"].to_list(),
+                        strict=True,
+                    ):
+                        matched_pairs.add((min(a, b), max(a, b)))
                 frames.append(df_pairs)
             completed += 1
             if completed % log_interval == 0:

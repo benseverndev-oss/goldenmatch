@@ -71,6 +71,38 @@ def _run_phase4_pipeline(ds: Dataset, **kwargs: Any):
     return dedupe_df(df, **kwargs)
 
 
+def _phase5_cluster(raw_pairs_ds: Dataset, cfg: Any) -> Dataset:
+    """Choose the Phase-5 clustering step.
+
+    When the block-shuffle recall-complete SCORING path is active (the same
+    detection ``score_blocks_distributed`` uses), pairs cross input-partition
+    boundaries, so per-partition Union-Find would under-merge -> route to the
+    distributed WCC (``build_clusters_distributed`` forced to
+    ``randomized_contraction``; ``two_phase`` head-wedges at 100M). Otherwise
+    scoring is per-partition and ``local_cc_assignments`` (cheap, no driver
+    collect, correct) is used -- the default.
+    """
+    from goldenmatch.distributed.clustering import (
+        build_clusters_distributed,
+        local_cc_assignments,
+    )
+    from goldenmatch.distributed.scoring import (
+        _block_shuffle_enabled,
+        _has_colocation_plan,
+    )
+
+    if _block_shuffle_enabled() and _has_colocation_plan(cfg):
+        logger.info(
+            "phase5 clustering: block-shuffle active -> build_clusters_distributed "
+            "(randomized_contraction; cross-partition pairs need real WCC)",
+        )
+        return build_clusters_distributed(
+            raw_pairs_ds, all_ids=None, algorithm="randomized_contraction",
+        )
+    logger.info("phase5 clustering: per-partition scoring -> local_cc_assignments")
+    return local_cc_assignments(raw_pairs_ds)
+
+
 def _run_phase5_pipeline(
     ds: Dataset,
     *,
@@ -98,7 +130,6 @@ def _run_phase5_pipeline(
     """
     from goldenmatch.config.schemas import GoldenRulesConfig
     from goldenmatch.core.autoconfig import auto_configure_df
-    from goldenmatch.distributed.clustering import local_cc_assignments
     from goldenmatch.distributed.golden import build_golden_records_distributed
     from goldenmatch.distributed.scoring import score_blocks_distributed
 
@@ -121,12 +152,14 @@ def _run_phase5_pipeline(
     #    component's edges are co-located in one block -- required by local_cc).
     raw_pairs_ds = score_blocks_distributed(ds, cfg)
 
-    # 3. Connected components via per-partition local Union-Find: a single
-    #    map_batches over the RAW pairs -> {member_id, cluster_id, cluster_size,
-    #    oversized}. No dedup (Union-Find is idempotent on duplicate edges), no
-    #    distributed-WCC iteration, no joins, no driver collect. Scoring is
-    #    per-partition so components never span partitions.
-    assignments_ds = local_cc_assignments(raw_pairs_ds)
+    # 3. Connected components: branch on whether block-shuffle is active.
+    #    block-shuffle OFF (default): scoring is per-partition, so components
+    #    never span partitions -- local_cc_assignments (single map_batches,
+    #    no driver collect, no distributed-WCC iteration) is correct and cheap.
+    #    block-shuffle ON + co-location plan: pairs cross input-partition
+    #    boundaries, so per-partition Union-Find would under-merge; route to
+    #    build_clusters_distributed(algorithm="randomized_contraction") instead.
+    assignments_ds = _phase5_cluster(raw_pairs_ds, cfg)
 
     # 4. Distributed hash join: annotate rows with __cluster_id__ (multi-member
     #    only). No broadcast member->cid dict.

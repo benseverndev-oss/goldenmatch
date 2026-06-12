@@ -1,0 +1,127 @@
+---
+title: "GoldenAnalysis overview"
+description: "Read-only, cross-cutting analysis, metrics, and reporting across the Golden Suite. Consumes any stage's artifacts and emits one unified report."
+keywords: ["goldenanalysis", "analysis", "metrics", "reporting", "regression detection", "cross-run"]
+---
+
+GoldenAnalysis is the suite's read-only **analysis, metrics, and reporting** layer. It sits *beside* the pipeline rather than inside it: it consumes the typed artifacts any other package produces (a GoldenMatch dedupe result, a GoldenCheck scan, a GoldenFlow manifest, a whole GoldenPipe run) and emits one unified, comparable, exportable `AnalysisReport`. It never transforms data, mutates a store, or makes a pipeline decision.
+
+It answers questions *about* a run that previously meant hand-writing a notebook against each package's bespoke output: "what was the match rate?", "how did the cluster-size distribution shift versus last week?", "did quality-finding counts regress after the GoldenFlow rule change?", "roll all five stage outputs into one report for the data steward."
+
+## Install
+
+```bash
+pip install goldenanalysis              # the generic frame path; zero suite deps
+pip install goldenanalysis[suite]       # + adapters for match/check/flow/pipe
+pip install goldenanalysis[native]      # + the Rust accelerator (histogram/quantile)
+pip install goldenanalysis[mcp]         # + the MCP server
+```
+
+The generic path works on any Polars DataFrame even with no other Golden package installed.
+
+## Quickstart
+
+Analyze a frame directly:
+
+```python
+from goldenanalysis import analyze
+
+report = analyze(df, analyzers=["frame.summary"], dataset="customers")
+print(report.to_markdown())
+report.metrics   # row_count, column_count, null_ratio_mean, duplicate_row_ratio, ...
+```
+
+Or analyze a producer's result and let the right analyzers fan out:
+
+```python
+import goldenanalysis as ga
+
+# A GoldenMatch dedupe result -> match.rates + cluster.distribution
+report = ga.analyze_match(dedupe_result, dataset="customers")
+
+# A whole GoldenPipe run -> every analyzer whose artifacts are present
+report = ga.analyze_pipeline(pipe_result)
+```
+
+On the CLI:
+
+```bash
+goldenanalysis report customers.parquet              # analyze a frame
+goldenanalysis report report.json --format markdown  # re-render a saved report
+```
+
+## Analyzers
+
+Analyzers are a registry (mirroring GoldenPipe's stage entry-points). Each computes a typed `Metric` set plus optional tables, and **degrades gracefully** — it emits what its present artifacts support and records what it could not compute in `report.source`.
+
+| Analyzer | Consumes | Emits |
+|----------|----------|-------|
+| `frame.summary` | a generic frame | row/column counts, null-ratio mean, duplicate-row ratio, a `per_column` table |
+| `match.rates` | `scored_pairs`, `match_stats` (+ a recall certificate) | pair count, match rate, threshold, recall estimate + safe bound, mean score, a score histogram |
+| `cluster.distribution` | `clusters` | cluster count, singleton ratio, size p50/p95/max, reduction ratio, a size histogram |
+| `quality.rollup` | `findings`, `manifest` (+ a profile) | findings total, columns-with-findings, a health score, GoldenFlow rows-changed / rules-fired, a `findings_by_class` table |
+
+The **recall certificate** is a first-class input: `match.rates` emits `recall_safe_bound`, the alerting metric for unsupervised runs. Attach it with `dedupe_df(..., certify=True)`.
+
+## The report
+
+Every analyze entrypoint returns one `AnalysisReport`:
+
+```python
+report.schema_version   # cross-surface contract anchor
+report.run_id
+report.source           # {"dataset": ..., "producer": ..., "unavailable": ...}
+report.metrics          # list[Metric] — key, value, unit, direction
+report.tables           # list[AnalysisTable]
+report.narrative        # one-paragraph NL summary (cross-run)
+report.analyzers_run    # which analyzers actually ran
+report.to_markdown()    # / .to_json()
+```
+
+`AnalysisReport` / `Metric` are **wire types** kept in `snake_case` on every surface, so a report crosses the JSON wire between Python and TypeScript without remapping.
+
+## GoldenCheck vs GoldenAnalysis
+
+They are easy to confuse and deliberately distinct:
+
+| | GoldenCheck | GoldenAnalysis |
+|---|---|---|
+| **Scope** | Profiles a *single input dataset at ingest* | *Cross-cutting* over any stage's outputs |
+| **Direction** | A **producer** of artifacts (scan findings) | A **consumer** of artifacts (including GoldenCheck's) |
+| **Across runs?** | No — one dataset, one scan | Yes — trend / drift / regression over a run history |
+| **Writes data?** | Suggests/applies fixes | **Never** — read-only by construction |
+
+The hard line: **GoldenAnalysis depends on other packages' types; never the reverse.**
+
+## More
+
+<CardGroup cols={2}>
+  <Card title="Cross-run analysis" icon="chart-line" href="/goldenanalysis/cross-run">
+    Trend metrics over a run history and detect regressions vs a baseline.
+  </Card>
+  <Card title="Native accelerator" icon="bolt" href="/goldenanalysis/native">
+    The optional Rust kernel for the heavy aggregation primitives.
+  </Card>
+</CardGroup>
+
+## In a GoldenPipe run
+
+Register the read-only `goldenanalysis.report` terminal stage so one pipeline runs Check → Flow → Match → Identity → **Analysis**:
+
+```bash
+pip install goldenpipe[analysis]
+```
+
+The stage runs `analyze_pipeline` over the run's accumulated artifacts and attaches an `analysis_report`. It writes nothing back to the data.
+
+## TypeScript
+
+`goldenanalysis` ships a TypeScript port (`goldenanalysis` on npm) with the same `AnalysisReport` wire types, the frame analyzer, the suite analyzers, and the cross-run layer. The core is edge-safe (no `node:` imports); file-backed `ReportHistory` lives in the Node entry.
+
+```ts
+import { analyze, analyzeMatch, analyzePipeline, toMarkdown } from "goldenanalysis";
+```
+
+## MCP
+
+`goldenanalysis mcp-serve` exposes four read-only tools — `list_analyzers`, `analyze_frame`, `get_trend`, `detect_regressions` — and they surface transitively through the aggregated `goldensuite-mcp` server.

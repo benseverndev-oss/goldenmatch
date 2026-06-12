@@ -14,9 +14,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import resource
 import time
 from pathlib import Path
+
+try:
+    import resource  # Unix-only; absent on Windows dev boxes (CI/bench runs on Linux)
+except ImportError:  # pragma: no cover - Windows fallback path
+    resource = None
 
 # Must be set BEFORE importing goldenmatch so the native loader + planner see them.
 os.environ.setdefault("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")  # clean, reproducible CI runs
@@ -24,8 +28,10 @@ os.environ.setdefault("GOLDENMATCH_PLANNER_BUCKET", "1")  # prefer bucket scorer
 # GOLDENMATCH_NATIVE is set from --require-native below, before the heavy imports.
 
 
-def _peak_rss_mb() -> float:
+def _peak_rss_mb() -> float | None:
     # Linux ru_maxrss is in KiB; this is the process high-water mark (load + dedupe).
+    if resource is None:  # Windows dev box: no rusage, perf RSS only meaningful on CI.
+        return None
     return round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0, 1)
 
 
@@ -44,6 +50,11 @@ def main() -> None:
     ap.add_argument("--pred-out", type=Path, default=None,
                     help="write {record_id, pred_cluster_id} parquet for accuracy eval")
     ap.add_argument("--threshold", type=float, default=0.85)
+    ap.add_argument("--mode", choices=["hand_built", "zeroconfig", "probabilistic"],
+                    default="hand_built",
+                    help="hand_built = explicit bucket+native config (default); "
+                         "zeroconfig = auto_configure_df controller; "
+                         "probabilistic = Fellegi-Sunter auto-config")
     ap.add_argument("--require-native", action="store_true", default=True)
     ap.add_argument("--allow-pure-python", dest="require_native", action="store_false")
     args = ap.parse_args()
@@ -56,14 +67,11 @@ def main() -> None:
         "rows_requested": args.rows,
         "status": "error",
         "threshold": args.threshold,
+        "mode": args.mode,
     }
     t_start = time.perf_counter()
     try:
         import polars as pl
-
-        from goldenmatch.core._native_loader import native_enabled, native_module
-        from goldenmatch.core.bench import bench_capture
-
         from goldenmatch.config.schemas import (
             BlockingConfig,
             BlockingKeyConfig,
@@ -71,6 +79,8 @@ def main() -> None:
             MatchkeyConfig,
             MatchkeyField,
         )
+        from goldenmatch.core._native_loader import native_enabled, native_module
+        from goldenmatch.core.bench import bench_capture
 
         try:
             from goldenmatch import dedupe_df
@@ -80,7 +90,26 @@ def main() -> None:
         native_loaded = native_module() is not None
         result["native_loaded"] = native_loaded
         result["native_block_scoring"] = bool(native_enabled("block_scoring"))
-        if args.require_native and not (native_loaded and native_enabled("block_scoring")):
+        # FS-native telemetry: was the probabilistic Rust kernel REQUESTED
+        # (GOLDENMATCH_FS_NATIVE) and is the symbol actually present? Lets the
+        # bake-off artifact prove a `gm_prob_native` row really ran the kernel
+        # and didn't silently fall back to numpy (probabilistic mode never
+        # refuses on a missing kernel, unlike hand_built).
+        result["fs_native_requested"] = (
+            os.environ.get("GOLDENMATCH_FS_NATIVE", "").strip().lower()
+            in ("1", "true", "yes", "on")
+        )
+        result["fs_native_symbol_present"] = bool(
+            native_loaded and hasattr(native_module(), "score_block_pairs_fs")
+        )
+        # The native gate only applies to the hand_built optimized-path claim. The
+        # autoconfig modes let the controller pick the backend, so a missing native
+        # runtime is recorded for info but does NOT refuse the run.
+        if (
+            args.mode == "hand_built"
+            and args.require_native
+            and not (native_loaded and native_enabled("block_scoring"))
+        ):
             raise RuntimeError(
                 "Native Arrow block-scorer is NOT active; refusing to report a "
                 "pure-Python number as the optimized backend. Build it with "
@@ -92,70 +121,135 @@ def main() -> None:
         result["rows_loaded"] = df.height
         load_wall = time.perf_counter() - t0
 
-        # GoldenMatch's MOST-OPTIMIZED path: explicit bucket+native config (not the
-        # zero-config controller, which adds 30s+ overhead and can commit a RED
-        # config on off-distribution data). Mirrors Splink's hand-built spec —
-        # compound blocking + native Jaro-Winkler scoring — for a fair head-to-head.
-        # NOTE: the bucket backend does SINGLE-KEY blocking (one eager bucket pass
-        # — it ignores multi_pass `passes`); that's how it stays fast at scale.
-        # So we give it its best single key. On this fixture, blocking on the
-        # stable, rarely-corrupted `postcode` covers ~0.94 of true pairs with small
-        # blocks, vs ~0.48 for surname+dob (surnames get typo'd). Splink, by
-        # contrast, unions 3 blocking rules (~0.99 coverage) — a real engine
-        # difference the benchmark surfaces rather than hides.
-        config = GoldenMatchConfig(
-            backend="bucket",
-            n_buckets=256,
-            blocking=BlockingConfig(
-                max_block_size=5000,
-                skip_oversized=False,  # rely on the bucket scorer's hot-block split
-                keys=[BlockingKeyConfig(fields=["postcode"], transforms=["strip"])],
-            ),
-            matchkeys=[
-                MatchkeyConfig(
-                    name="person",
-                    type="weighted",
-                    threshold=args.threshold,
-                    rerank=False,  # no cross-encoder -> no HuggingFace download
-                    fields=[
-                        MatchkeyField(field="first_name", scorer="jaro_winkler", weight=0.3, transforms=["lowercase"]),
-                        MatchkeyField(field="surname", scorer="jaro_winkler", weight=0.4, transforms=["lowercase"]),
-                        MatchkeyField(field="dob", scorer="jaro_winkler", weight=0.3),
-                    ],
-                )
-            ],
-        )
+        if args.mode == "hand_built":
+            # GoldenMatch's MOST-OPTIMIZED path: explicit bucket+native config (not
+            # the zero-config controller, which adds 30s+ overhead and can commit a
+            # RED config on off-distribution data). Mirrors Splink's hand-built spec
+            # — compound blocking + native Jaro-Winkler scoring — for a fair
+            # head-to-head. NOTE: the bucket backend does SINGLE-KEY blocking (one
+            # eager bucket pass — it ignores multi_pass `passes`); that's how it
+            # stays fast at scale. So we give it its best single key. On this
+            # fixture, blocking on the stable, rarely-corrupted `postcode` covers
+            # ~0.94 of true pairs with small blocks, vs ~0.48 for surname+dob
+            # (surnames get typo'd). Splink, by contrast, unions 3 blocking rules
+            # (~0.99 coverage) — a real engine difference the benchmark surfaces
+            # rather than hides.
+            config = GoldenMatchConfig(
+                backend="bucket",
+                n_buckets=256,
+                blocking=BlockingConfig(
+                    max_block_size=5000,
+                    skip_oversized=False,  # rely on bucket scorer's hot-block split
+                    keys=[BlockingKeyConfig(fields=["postcode"], transforms=["strip"])],
+                ),
+                matchkeys=[
+                    MatchkeyConfig(
+                        name="person",
+                        type="weighted",
+                        threshold=args.threshold,
+                        rerank=False,  # no cross-encoder -> no HuggingFace download
+                        fields=[
+                            MatchkeyField(field="first_name", scorer="jaro_winkler", weight=0.3, transforms=["lowercase"]),
+                            MatchkeyField(field="surname", scorer="jaro_winkler", weight=0.4, transforms=["lowercase"]),
+                            MatchkeyField(field="dob", scorer="jaro_winkler", weight=0.3),
+                        ],
+                    )
+                ],
+            )
 
-        t0 = time.perf_counter()
-        with bench_capture() as bench:
-            ded = dedupe_df(df, config=config)
-        dedupe_wall = time.perf_counter() - t0
+            t0 = time.perf_counter()
+            with bench_capture() as bench:
+                ded = dedupe_df(df, config=config)
+            dedupe_wall = time.perf_counter() - t0
+        elif args.mode == "zeroconfig":
+            # ControllerNotConfidentError lives in autoconfig_controller (NOT
+            # autoconfig); it only fires at df.height >= 100K on a RED commit, so it
+            # won't trigger on the panel datasets — it's a defensive guard.
+            from goldenmatch.core.autoconfig_controller import (
+                ControllerNotConfidentError,
+            )
+
+            t0 = time.perf_counter()
+            try:
+                with bench_capture() as bench:
+                    ded = dedupe_df(df)
+            except ControllerNotConfidentError as e:
+                dedupe_wall = time.perf_counter() - t0
+                result.update(status="refused", error=str(e),
+                              dedupe_wall_seconds=round(dedupe_wall, 2))
+                result["total_wall_seconds"] = round(time.perf_counter() - t_start, 2)
+                result["peak_rss_mb"] = _peak_rss_mb()
+                _atomic_write(args.out, result)
+                print(
+                    f"[goldenmatch] rows={args.rows:,} mode={args.mode} "
+                    f"status=refused error={e}"
+                )
+                return
+            dedupe_wall = time.perf_counter() - t0
+        else:  # probabilistic
+            from goldenmatch.core.autoconfig import auto_configure_probabilistic_df
+
+            cfg = auto_configure_probabilistic_df(df)
+            # Force rerank off so a 3+ field weighted matchkey can't pull a
+            # cross-encoder model down from HuggingFace at dedupe time.
+            for mk in cfg.get_matchkeys():
+                if getattr(mk, "type", None) == "weighted":
+                    mk.rerank = False
+            t0 = time.perf_counter()
+            with bench_capture() as bench:
+                ded = dedupe_df(df, config=cfg)
+            dedupe_wall = time.perf_counter() - t0
 
         # Per-record cluster assignment for accuracy eval. clusters is
-        # {cid: {"members": [__row_id__...]}} over ALL records; the fixture's
-        # record_id IS the input row index, and GoldenMatch preserves it as
-        # __row_id__, so member row-ids are record-ids directly.
+        # {cid: {"members": [__row_id__...]}} over ALL records.
         if args.pred_out is not None:
             import numpy as np
             import pyarrow as pa
             import pyarrow.parquet as pq
 
             clusters = getattr(ded, "clusters", None) or {}
-            rids, cids = [], []
-            for cid, c in clusters.items():
-                members = c["members"] if isinstance(c, dict) else c.members
-                rids.extend(members)
-                cids.extend([cid] * len(members))
-            pq.write_table(
-                pa.table(
-                    {
-                        "record_id": pa.array(np.asarray(rids, dtype=np.int64)),
-                        "pred_cluster_id": pa.array(np.asarray(cids, dtype=np.int64)),
-                    }
-                ),
-                args.pred_out,
-                compression="zstd",
-            )
+            if args.mode == "hand_built":
+                # The optimized-path benchmark's truth join is int64 (orchestrate.py
+                # back-compat): the fixture's record_id IS the input row index, and
+                # GoldenMatch preserves it as __row_id__, so member row-ids are
+                # record-ids directly.
+                rids, cids = [], []
+                for cid, c in clusters.items():
+                    members = c["members"] if isinstance(c, dict) else c.members
+                    rids.extend(members)
+                    cids.extend([cid] * len(members))
+                pq.write_table(
+                    pa.table(
+                        {
+                            "record_id": pa.array(np.asarray(rids, dtype=np.int64)),
+                            "pred_cluster_id": pa.array(np.asarray(cids, dtype=np.int64)),
+                        }
+                    ),
+                    args.pred_out,
+                    compression="zstd",
+                )
+            else:
+                # Autoconfig modes: remap internal __row_id__ back to the input df's
+                # REAL record_id as a STRING column (mirrors run_panel.py:83-108).
+                # The real benchmark datasets carry STRING record_ids (historical_50k
+                # Q-ids, dblp_acm 'dblp:123', febrl3 'rec-123-org').
+                rid = df["record_id"].to_list()
+                rids, cids = [], []
+                for cid, c in clusters.items():
+                    members = c["members"] if isinstance(c, dict) else c.members
+                    for m in members:
+                        rids.append(str(rid[m]))
+                        cids.append(cid)
+                pq.write_table(
+                    pa.table(
+                        {
+                            "record_id": pa.array(rids, pa.string()),
+                            "pred_cluster_id": pa.array(np.asarray(cids, dtype=np.int64)),
+                        }
+                    ),
+                    args.pred_out,
+                    compression="zstd",
+                )
 
         bench_blob = bench.to_dict()
         metrics = bench_blob.get("metrics", {}) if isinstance(bench_blob, dict) else {}
@@ -184,7 +278,8 @@ def main() -> None:
         result["peak_rss_mb"] = _peak_rss_mb()
         _atomic_write(args.out, result)
         print(
-            f"[goldenmatch] rows={args.rows:,} status={result['status']} "
+            f"[goldenmatch] rows={args.rows:,} mode={args.mode} "
+            f"status={result['status']} "
             f"dedupe={result.get('dedupe_wall_seconds')}s "
             f"peak_rss={result['peak_rss_mb']}MB pairs={result.get('scored_pairs')}"
         )

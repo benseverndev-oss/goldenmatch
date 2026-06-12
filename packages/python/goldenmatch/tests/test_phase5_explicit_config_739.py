@@ -35,7 +35,13 @@ def _patch_distributed_stages(monkeypatch):
     monkeypatch.setattr(autoconfig, "auto_configure_df", auto_configure_df)
 
     monkeypatch.setattr(scoring, "score_blocks_distributed", MagicMock(return_value=MagicMock()))
+    # Stub BOTH clustering routes so the config-branch assertions are agnostic to
+    # which one _phase5_cluster dispatches to. Block-shuffle is now default-on
+    # (#867), so the default route is build_clusters_distributed, not
+    # local_cc_assignments; without this stub its real pair_count >= threshold
+    # comparison hits the MagicMock pairs dataset and TypeErrors.
     monkeypatch.setattr(clustering, "local_cc_assignments", MagicMock(return_value=MagicMock()))
+    monkeypatch.setattr(clustering, "build_clusters_distributed", MagicMock(return_value=MagicMock()))
     monkeypatch.setattr(golden, "build_golden_records_distributed", MagicMock(return_value=MagicMock()))
     monkeypatch.setattr(pipeline, "_join_assignments_distributed", MagicMock(return_value=MagicMock()))
     monkeypatch.setattr(pipeline, "_row_columns", MagicMock(return_value=["first_name"]))

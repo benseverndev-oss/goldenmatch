@@ -28,6 +28,7 @@ def test_aggregator_imports():
 def test_each_subpackage_adapter_loads():
     """Each adapter returns (tools, dispatch) without raising."""
     from goldensuite_mcp.server import (
+        _adapt_goldenanalysis,
         _adapt_goldencheck,
         _adapt_goldenflow,
         _adapt_goldenmatch,
@@ -41,12 +42,27 @@ def test_each_subpackage_adapter_loads():
         _adapt_goldenflow,
         _adapt_goldenpipe,
         _adapt_infermap,
+        _adapt_goldenanalysis,
     ):
         tools, dispatch = adapter()
         assert isinstance(tools, list)
         # Tools normalize to mcp.types.Tool; at minimum each adapter ships >=1
         assert len(tools) >= 1, f"{adapter.__name__} returned no tools"
         assert callable(dispatch)
+
+
+def test_goldenanalysis_tools_surface_through_aggregator():
+    """GoldenAnalysis's read-only tools must flow through its adapter."""
+    from goldensuite_mcp.server import _adapt_goldenanalysis
+
+    tools, dispatch = _adapt_goldenanalysis()
+    names = {t.name for t in tools}
+    expected = {"list_analyzers", "analyze_frame", "get_trend", "detect_regressions"}
+    missing = expected - names
+    assert not missing, f"GoldenAnalysis tools missing from aggregator: {missing}"
+    # list_analyzers needs no fixture -> routes cleanly through dispatch.
+    out = dispatch("list_analyzers", {})
+    assert "frame.summary" in out["analyzers"]
 
 
 def test_identity_tools_surface_through_aggregator():

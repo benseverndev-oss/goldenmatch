@@ -7,7 +7,7 @@
 
 *GoldenCheck profiles → GoldenFlow standardizes → GoldenMatch deduplicates → GoldenPipe orchestrates. With InferMap for schema mapping and a Rust extension layer for Postgres / DuckDB.*
 
-**⚡ GoldenMatch scales from a CSV on your laptop to 100M+ rows on a Ray cluster — verified: 100,000,000 records deduped in 213 s with a 0.30 GB driver footprint.**
+**⚡ GoldenMatch scales from a CSV on your laptop to 100M+ rows on a Ray cluster — verified: 100,000,000 records deduped recall-complete (correct across any partitioning) in 9.2 min, with a 0.36 GB driver footprint.**
 
 <br>
 
@@ -369,7 +369,7 @@ Published GoldenMatch numbers (DQbench composite 91.04, DBLP-ACM 0.9641 F1, Febr
 
 "How big can this handle?" is answered in [`docs/scale-envelope.md`](docs/scale-envelope.md): per-backend ranges (Polars in-memory < 500K, DuckDB out-of-core 500K - 50M, Ray distributed >= 50M), block-size failure modes, candidate-pair math, and a single-page decision tree for picking a backend.
 
-**Verified at the top end:** a full **100,000,000-row** GoldenMatch dedupe on a 4-worker Ray cluster (`e2-standard-16`, 64 worker CPU) in **213 s**, 20,000,000 golden records, driver process peak **0.30 GB RSS** — the distributed pipeline is driver-collect-free end to end. Recipe in [`packages/python/goldenmatch/configs/distributed-100m.yaml`](packages/python/goldenmatch/configs/distributed-100m.yaml).
+**Verified at the top end:** a full **100,000,000-row** GoldenMatch dedupe on a 5-node Ray cluster (`e2-standard-16`, 80 CPU) in **9.2 min** (554 s), **20,000,000 golden records recovered exactly**, driver process peak **0.36 GB RSS** — the default distributed path is now **recall-complete** (blocking-key shuffle scoring + a distributed randomized-contraction WCC), so duplicates merge correctly *no matter how the input is partitioned*, and it stays driver-collect-free end to end (#844). A faster **per-partition path** is available via `GOLDENMATCH_DISTRIBUTED_BLOCK_SHUFFLE=0` (driver-collect-free, ~213 s on a 4-worker run) for inputs where duplicates already co-locate within partitions — but it under-merges when a cluster's members land in different input partitions, which is why recall-complete is the default. Recipe in [`packages/python/goldenmatch/configs/distributed-100m.yaml`](packages/python/goldenmatch/configs/distributed-100m.yaml).
 
 ---
 

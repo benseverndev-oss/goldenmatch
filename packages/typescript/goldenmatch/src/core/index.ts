@@ -108,6 +108,7 @@ export {
   soundexMatch,
   diceCoefficient,
   jaccardSimilarity,
+  qgramScore,
   ensembleScore,
   scoreMatrix,
   asString,
