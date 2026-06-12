@@ -1573,12 +1573,16 @@ def _fs_batch_rows() -> int:
     matrices covers many blocks, amortizing the per-call FFI/marshal overhead
     that dominates on the tiny blocks multi-pass blocking produces. Larger caps
     cut call count further but grow the discarded cross-block compute (the
-    diagonal sub-blocks are kept; off-diagonal cells are computed and ignored).
+    diagonal sub-blocks are kept; off-diagonal cells are computed and ignored),
+    so the dense SxS numpy level/weight ops eventually outweigh the saved calls.
+    256 is the measured sweet spot on historical_50k (a cap sweep put 256 at
+    ~25.3s vs ~27.7s at 512); the cap only changes block grouping, so the
+    emitted pair set is identical at any value.
     """
     try:
-        return max(2, int(os.environ.get("GOLDENMATCH_FS_BATCH_ROWS", "512")))
+        return max(2, int(os.environ.get("GOLDENMATCH_FS_BATCH_ROWS", "256")))
     except ValueError:
-        return 512
+        return 256
 
 
 def score_probabilistic_vectorized_batch(
