@@ -7,36 +7,26 @@
  * (browser/Workers/bundler). Any failure throws; index.ts turns that into the
  * pure-TS fallback (or rethrows under { require: true }).
  */
+import {
+  resolveWasmBytes as sharedResolveWasmBytes,
+  type LoadOptions,
+} from "goldenmatch-wasm-runtime";
 import { SCORER_ID } from "./backend.js";
 import type { ScorerBackend } from "./backend.js";
 
-export interface LoadOptions {
-  readonly wasmBytes?: Uint8Array;
-  readonly wasmUrl?: string | URL;
-}
+export type { LoadOptions };
 
-/** Resolve the raw wasm bytes for the current environment. */
-export async function resolveWasmBytes(opts: LoadOptions): Promise<Uint8Array> {
-  if (opts.wasmBytes !== undefined) {
-    if (opts.wasmBytes.byteLength === 0) throw new Error("empty wasmBytes");
-    return opts.wasmBytes;
-  }
-  const url =
-    opts.wasmUrl ?? new URL("./artifacts/score_wasm_bg.wasm", import.meta.url);
-
-  const isNode =
-    typeof process !== "undefined" &&
-    process.versions?.node !== undefined &&
-    (url instanceof URL ? url.protocol === "file:" : String(url).startsWith("file:"));
-
-  if (isNode) {
-    const fs = await import("node:fs/promises" as string);
-    const buf = await fs.readFile(url as URL);
-    return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
-  }
-  const resp = await fetch(url as URL);
-  if (!resp.ok) throw new Error(`fetch wasm failed: ${resp.status}`);
-  return new Uint8Array(await resp.arrayBuffer());
+/**
+ * Resolve the raw wasm bytes, pinning goldenmatch's artifact URL (computed here
+ * so `import.meta.url` resolves to this package's own dist). `enableWasm` now
+ * resolves via `enableWasmBackend`; this thin wrapper is kept for direct
+ * callers/tests.
+ */
+export function resolveWasmBytes(opts: LoadOptions): Promise<Uint8Array> {
+  return sharedResolveWasmBytes(
+    opts,
+    new URL("./artifacts/score_wasm_bg.wasm", import.meta.url),
+  );
 }
 
 /**
