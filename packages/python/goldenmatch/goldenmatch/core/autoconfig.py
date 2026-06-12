@@ -1420,9 +1420,11 @@ def _source_disjoint(df: pl.DataFrame, col: str, partition_col: str) -> bool:
 # Bounded source-indicator name patterns (case-insensitive). NOT a general
 # provenance regex (name-regex was rejected as the primary mechanism, spec §1);
 # this only LOCATES a user source partition when there is no ``__source__``.
+# Deliberately excludes business-attribute-ish names (channel / system / crm)
+# that are plausibly real low-card match signal, not data origin -- they were a
+# false-positive vector flagged in spec review.
 _SOURCE_NAME_RE = re.compile(
-    r"(?i)^(source|origin|channel|system|data_source|record_source"
-    r"|lead_source|src|crm)$|_source$"
+    r"(?i)^(source|origin|src|data_source|record_source|lead_source)$|_source$"
 )
 
 

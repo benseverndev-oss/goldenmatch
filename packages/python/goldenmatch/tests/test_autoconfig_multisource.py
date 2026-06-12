@@ -60,9 +60,11 @@ def test_detect_user_source_column_with_cosignature():
 
 
 def test_detect_none_user_source_without_cosignature():
+    # name matches the pattern, but no other column is disjoint per its value
+    # (email fully shared across both values) -> no co-signature -> not a source.
     df = pl.DataFrame({
-        "channel": ["web", "web", "phone", "phone"],
-        "email": ["x@y", "x@y", "x@y", "x@y"],  # fully shared -> no co-signature
+        "lead_source": ["a", "a", "b", "b"],
+        "email": ["x@y", "x@y", "x@y", "x@y"],  # fully shared -> not disjoint
     })
     assert _detect_source_partition(df, _profiles(df)) is None
 
@@ -230,6 +232,37 @@ def test_match_pipeline_suppresses_858_feature(monkeypatch):
     except Exception:
         pass  # downstream pipeline errors are irrelevant; assert the wrap fired
     assert seen.get("mm") is True
+
+
+# ── Task 9: firewalls / parity (lock the no-ops) ─────────────────────────────
+
+def test_single_source_is_byte_identical_to_killswitch(monkeypatch):
+    monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")  # isolate cross-run
+    df = pl.DataFrame({
+        "first": [f"f{i}" for i in range(20)],
+        "last": [f"l{i}" for i in range(20)],
+        "email": [f"u{i}@ex.com" for i in range(20)],
+        "phone": [f"555{i:07d}" for i in range(20)],
+    })
+    monkeypatch.setenv("GOLDENMATCH_MULTISOURCE_AUTOCONFIG", "1")
+    on = auto_configure_df(df)
+    monkeypatch.setenv("GOLDENMATCH_MULTISOURCE_AUTOCONFIG", "0")
+    off = auto_configure_df(df)
+    assert _mk_names(on) == _mk_names(off)
+    assert _all_match_fields(on) == _all_match_fields(off)
+
+
+def test_business_categorical_not_excluded_single_source():
+    # `channel` is a real low-card business attribute on single-source data:
+    # no source partition -> never excluded.
+    df = pl.DataFrame({
+        "channel": (["web", "phone"] * 10),
+        "first": [f"f{i}" for i in range(20)],
+        "email": [f"u{i}@ex.com" for i in range(20)],
+    })
+    part = _detect_source_partition(df, _profiles(df))
+    assert part is None
+    assert _source_correlated_exclusions(df, _profiles(df), part) == set()
 
 
 # ── Task 1: generalized _check_source_overlap ────────────────────────────────
