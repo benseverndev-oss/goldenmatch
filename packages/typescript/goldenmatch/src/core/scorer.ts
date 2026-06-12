@@ -181,6 +181,8 @@ export function jaroWinkler(a: string, b: string): number {
     else break;
   }
 
+  // rapidfuzz applies the Winkler prefix bonus ONLY when jaro > 0.7 (strict).
+  if (jaroSim <= 0.7) return jaroSim;
   return jaroSim + prefix * 0.1 * (1 - jaroSim);
 }
 
