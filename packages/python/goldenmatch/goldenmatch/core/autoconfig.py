@@ -1579,6 +1579,41 @@ def apply_quality_aware_blocking(
     })
 
 
+# ── #876: scale-invariant blocking helpers ────────────────────────────────────
+# These are module-level (not closures) so they're importable by tests and by
+# any caller that wants to reason about the budget without instantiating a full
+# build_blocking run.
+
+def _blocking_pairs_per_row_budget() -> int:
+    """K: max candidate pairs per row a blocking option may project at full N.
+
+    Constant (does NOT scale with N) — keeps the total pair count linear.  The
+    scale-invariance knob; kept separate from ``max_safe_block`` (per-block OOM)
+    so #715's scorer-matrix protection is untouched.
+
+    Default: 50 (projected avg block ≤ ~101 rows).
+    Override: ``GOLDENMATCH_BLOCKING_PAIRS_PER_ROW`` env var.
+    """
+    import os
+    try:
+        return max(1, int(os.environ.get("GOLDENMATCH_BLOCKING_PAIRS_PER_ROW", "50")))
+    except ValueError:
+        return 50
+
+
+def _project_pairs_per_row(proj_block: int) -> int:
+    """Pairs/row a (near-)uniform key contributes at full N.
+
+    A block of B rows makes C(B, 2) pairs spread over B rows → (B-1)/2 per row.
+    Uses the projected MAX block size (conservative on skew — over-counts rather
+    than under-counts, so the budget gate stays safe).
+    """
+    return max(0, (int(proj_block) - 1) // 2)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+
 def build_blocking(
     profiles: list[ColumnProfile],
     df: pl.DataFrame,

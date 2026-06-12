@@ -1684,3 +1684,59 @@ def test_v0_existing_callers_unaffected():
     })
     cfg = _legacy_auto_configure_v0(df)
     assert cfg.matchkeys
+
+
+# ── #876: scale-invariant blocking tests ─────────────────────────────────────
+
+class TestScaleInvariantBlocking:
+    def test_project_pairs_linear_for_constant_block(self):
+        from goldenmatch.core.autoconfig import _project_pairs_per_row
+        # block size 5 (constant) -> ~2 pairs/row regardless of scale
+        assert _project_pairs_per_row(proj_block=5) == 2  # (5-1)//2
+        assert _project_pairs_per_row(proj_block=101) == 50
+
+    def test_blocking_pairs_budget_default(self):
+        from goldenmatch.core.autoconfig import _blocking_pairs_per_row_budget
+        assert _blocking_pairs_per_row_budget() == 50  # default K
+
+    def test_unique_surrogate_never_blocking_key(self):
+        import polars as pl
+        from goldenmatch.core.autoconfig import ColumnProfile, build_blocking
+        n = 500
+        df = pl.DataFrame({
+            "id": [f"r{i}" for i in range(n)],                 # unique surrogate
+            "first_name": [f"n{i//5}" for i in range(n)],      # 5-row clusters
+            "last_name": [f"s{i//5}" for i in range(n)],
+            "zip": [f"{(i//5)%50:05d}" for i in range(n)],     # 50 distinct
+        })
+        profiles = [
+            ColumnProfile("id", "Utf8", "identifier", 0.9, cardinality_ratio=1.0),
+            ColumnProfile("first_name", "Utf8", "name", 0.9, cardinality_ratio=0.2),
+            ColumnProfile("last_name", "Utf8", "name", 0.9, cardinality_ratio=0.2),
+            ColumnProfile("zip", "Utf8", "zip", 0.9, cardinality_ratio=0.1),
+        ]
+        b = build_blocking(profiles, df, n_rows_full=100_000_000)
+        keys = [tuple(k.fields) for k in (b.keys or [])]
+        assert ("id",) not in keys, f"surrogate id chosen as blocking key: {keys}"
+
+    def test_bounded_cardinality_key_not_sole_at_scale(self):
+        import polars as pl
+        from goldenmatch.core.autoconfig import ColumnProfile, build_blocking
+        n = 1000
+        # zip wraps to 100 distinct -> at 100M, block ~ 100M/100 huge -> >K pairs/row
+        df = pl.DataFrame({
+            "first_name": [f"fn{i//5:06d}" for i in range(n)],
+            "last_name": [f"ln{i//5:06d}" for i in range(n)],
+            "zip": [f"{(i//5)%100:05d}" for i in range(n)],
+        })
+        profiles = [
+            ColumnProfile("first_name", "Utf8", "name", 0.9, cardinality_ratio=0.2),
+            ColumnProfile("last_name", "Utf8", "name", 0.9, cardinality_ratio=0.2),
+            ColumnProfile("zip", "Utf8", "zip", 0.9, cardinality_ratio=0.1),
+        ]
+        b = build_blocking(profiles, df, n_rows_full=100_000_000)
+        keys = [tuple(k.fields) for k in (b.keys or [])]
+        # zip must NOT be the SOLE single-field blocking key at 100M, and the
+        # config must not be degenerate-empty (something must block).
+        assert keys, f"degenerate empty blocking at 100M: {b}"
+        assert not (len(keys) == 1 and keys[0] == ("zip",)), f"sole zip at 100M: {keys}"
