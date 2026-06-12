@@ -566,11 +566,26 @@ def build_frozen_config(seed: int = 0, corruption: str = "moderate", n_rows: int
     cfg = goldenmatch.auto_configure_df(
         df, confidence_required=False, allow_red_config=True, _skip_finalize=True,
         n_rows_full=n_rows_full)
+    # Refdata name scorers (#857) -> native jaro_winkler. Since main merged #857,
+    # auto-config defaults the name fields to `given_name_aliased_jw` /
+    # `name_freq_weighted_jw`. Those are Python-only (goldenmatch/refdata/scorer.py,
+    # no Rust kernel), so the bucket fast-path can't dispatch the weighted matchkey
+    # to native and scores every pair in Python (~50K pairs/s -> 25M took ~9min of
+    # pure scoring). On the SYNTHETIC syllable-name fixture there are no real
+    # aliases or name-frequency signal, so both scorers are byte-identical to
+    # native `jaro_winkler` (verified: 1K pwF1 0.9352 either way) -- they add cost,
+    # not quality. Pin jaro_winkler so the ladder runs on the native Rust path
+    # (the engine at its best, which is what the scale audit should measure).
+    _NON_NATIVE_NAME_SCORERS = {"given_name_aliased_jw", "name_freq_weighted_jw"}
     for mk in (cfg.matchkeys or []):  # type: ignore[attr-defined]
         if getattr(mk, "type", None) == "weighted" and getattr(mk, "rerank", False):
             mk.rerank = False  # type: ignore[attr-defined]
         if getattr(mk, "type", None) == "exact" and getattr(mk, "negative_evidence", None):
             mk.negative_evidence = []  # type: ignore[attr-defined]
+        if getattr(mk, "type", None) == "weighted":
+            for f in mk.fields:  # type: ignore[attr-defined]
+                if getattr(f, "scorer", None) in _NON_NATIVE_NAME_SCORERS:
+                    f.scorer = "jaro_winkler"
     cfg.backend = None  # backend is chosen per-rung at apply time
     _FROZEN_CONFIG_PATH.write_text(cfg.model_dump_json(indent=2), encoding="utf-8")
     return cfg

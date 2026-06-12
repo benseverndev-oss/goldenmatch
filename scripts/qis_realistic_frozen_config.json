@@ -129,7 +129,7 @@
             "lowercase",
             "strip"
           ],
-          "scorer": "given_name_aliased_jw",
+          "scorer": "jaro_winkler",
           "weight": 1.0,
           "model": null,
           "columns": null,
@@ -147,7 +147,7 @@
             "lowercase",
             "strip"
           ],
-          "scorer": "name_freq_weighted_jw",
+          "scorer": "jaro_winkler",
           "weight": 1.0,
           "model": null,
           "columns": null,
