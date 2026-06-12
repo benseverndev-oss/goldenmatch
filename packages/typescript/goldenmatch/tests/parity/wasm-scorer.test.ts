@@ -27,7 +27,7 @@ const d = hasArtifact ? describe : describe.skip;
 const VALUES = [
   "MARTHA", "MARHTA", "DIXON", "DICKSONX", "John", "Jon",
   "kitten", "sitting", "saturday", "sunday", "abc", "abd",
-  "café", "cafe", "", "x",
+  "café", "cafe", "", "", "x",
 ];
 const SCORERS = ["jaro_winkler", "levenshtein", "exact"] as const;
 

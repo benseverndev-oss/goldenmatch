@@ -20,6 +20,11 @@ export default defineConfig({
   loader: { ".wasm": "copy" },
   onSuccess: "node scripts/copy_wasm_artifact.mjs",
   external: [
+    // The opt-in WASM glue is loaded at RUNTIME (dynamic import inside
+    // enableWasm) and is absent in a default checkout. Mark it external so
+    // esbuild never tries to resolve `./artifacts/score_wasm.js` at build time
+    // (that would warn on every normal build); it stays a runtime sibling load.
+    /score_wasm\.js$/,
     "hnswlib-node",
     "@huggingface/transformers",
     "piscina",
