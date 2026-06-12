@@ -15,6 +15,7 @@ export { PatternConsistencyProfiler, generalize } from "./pattern-consistency.js
 export { EncodingDetectionProfiler } from "./encoding-detection.js";
 export { SequenceDetectionProfiler } from "./sequence-detection.js";
 export { DriftDetectionProfiler } from "./drift-detection.js";
+export { FuzzyValuesProfiler } from "./fuzzy-values.js";
 export { FreshnessProfiler } from "./freshness.js";
 
 import type { Profiler } from "./base.js";
@@ -28,6 +29,7 @@ import { PatternConsistencyProfiler } from "./pattern-consistency.js";
 import { EncodingDetectionProfiler } from "./encoding-detection.js";
 import { SequenceDetectionProfiler } from "./sequence-detection.js";
 import { DriftDetectionProfiler } from "./drift-detection.js";
+import { FuzzyValuesProfiler } from "./fuzzy-values.js";
 import { FreshnessProfiler } from "./freshness.js";
 
 /** All column profilers in execution order. */
@@ -42,6 +44,8 @@ export const COLUMN_PROFILERS: readonly Profiler[] = [
   new EncodingDetectionProfiler(),
   new SequenceDetectionProfiler(),
   new DriftDetectionProfiler(),
+  // Fuzzy near-duplicate VALUE detection (inconsistent categorical encodings).
+  new FuzzyValuesProfiler(),
   // Freshness: future-dated values + (name-gated) staleness on date/datetime cols.
   new FreshnessProfiler(),
 ];
