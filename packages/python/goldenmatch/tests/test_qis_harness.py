@@ -101,3 +101,18 @@ def test_moderate_oracle_f1_in_target_band():
     assert 0.88 <= f1 <= 0.96, f"moderate 1K pairwise F1 out of band: {f1:.4f}"
     assert out["cluster"]["f1"] > 0.5, f"cluster F1 degenerate: {out['cluster']['f1']:.4f}"
     assert out["corruption"] == "moderate"
+
+
+@pytest.mark.slow
+def test_qis_run_determinism_and_golden_equivalence():
+    # Same (seed, corruption) -> identical metrics AND byte-identical golden +
+    # cluster membership across two independent runs. This is #510's
+    # "deterministic clustering" + "golden-record equivalence" check.
+    a = qis.run_rung(1000, seed=0, shape="realistic", corruption="moderate")
+    b = qis.run_rung(1000, seed=0, shape="realistic", corruption="moderate")
+    assert a["pairwise"] == b["pairwise"]
+    assert a["b_cubed"] == b["b_cubed"]
+    assert a["cluster"] == b["cluster"]
+    assert a["golden_hash"] is not None
+    assert a["golden_hash"] == b["golden_hash"]
+    assert a["clusters_signature"] == b["clusters_signature"]

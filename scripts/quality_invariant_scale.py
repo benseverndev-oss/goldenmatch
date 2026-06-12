@@ -391,6 +391,26 @@ def _peak_rss_mb() -> float | None:
         return None
 
 
+def _golden_hash(golden) -> str | None:
+    """sha256 of the golden frame sorted by all columns. Byte-identity witness
+    for backend-parity / determinism without pickling the DedupeResult."""
+    if golden is None:
+        return None
+    import hashlib
+    g = golden.sort(by=golden.columns)
+    return hashlib.sha256(g.write_csv().encode("utf-8")).hexdigest()
+
+
+def _clusters_signature(predicted_members: dict[int, list[int]]) -> str:
+    """sha256 over the sorted set of sorted member tuples — label-independent
+    cluster-membership identity (cluster_id values can differ; the partition
+    can't)."""
+    import hashlib
+    canon = sorted(tuple(sorted(int(m) for m in members))
+                   for members in predicted_members.values())
+    return hashlib.sha256(repr(canon).encode("utf-8")).hexdigest()
+
+
 def run_rung(n_rows: int, seed: int = 0, shape: str = "realistic",
              backend: str | None = None, corruption: str = "light") -> dict:
     import goldenmatch
@@ -513,6 +533,9 @@ def run_rung(n_rows: int, seed: int = 0, shape: str = "realistic",
 
     metrics = score_quality(predicted, gt)
 
+    golden_hash = _golden_hash(getattr(result, "golden", None))
+    clusters_sig = _clusters_signature(predicted)
+
     multi = sum(1 for v in predicted.values() if len(v) > 1)
     committed_cfg: dict = {}
     try:
@@ -603,6 +626,8 @@ def run_rung(n_rows: int, seed: int = 0, shape: str = "realistic",
         "predicted_clusters": len(predicted) + (len(df) - sum(len(v) for v in predicted.values())),
         "multi_member_clusters": multi,
         "committed_config": committed_cfg,
+        "golden_hash": golden_hash,
+        "clusters_signature": clusters_sig,
         "bench": bench_dict,
         "native": native_info,
     }
