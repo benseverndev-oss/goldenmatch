@@ -2,6 +2,27 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-06-12 — #855 goldencheck TS port: module parity + hardened golden harness (#873/#874)
+- New [../decisions/0013-goldencheck-ts-parity-hardening.md](../decisions/0013-goldencheck-ts-parity-hardening.md);
+  added the `#855` subsection to [../planning/surface-hardening.md](../planning/surface-hardening.md).
+- **#873** ported the goldencheck TS gaps the 2026-06-11 audit found: 2 profilers
+  (`freshness`, `fuzzy_values`), 4 relations (`approx_duplicate`, `approx_fd`,
+  `composite_key`, `functional_dependency`), and the `validate` MCP tool —
+  registries now 12 column profilers / 9 relations / 18 MCP tools, each mirroring
+  the Python **fallback** (native kernels stay Python-only by design).
+- **#874** hardened `tests/parity/parity.test.ts`: it now asserts confidence (4 dp)
+  + affected_rows and FAILS on a missing manifest/golden, where it previously
+  checked only (column, check, severity) and skipped silently. Goldens were
+  regenerated on a clean `ubuntu-latest` runner (`regen-855-parity-goldens.yml`,
+  artifact-download) because the dev box OOMs on Polars.
+- **The hardening immediately caught a pre-existing bug.** TS `TemporalOrderProfiler`
+  used `new Date(s)`, which parses bare integers (`"7"`) as dates, so it fired
+  `temporal_order` on integer column pairs Python never flags. Gated TS
+  `tryParseDate` on `YYYY-MM-DD` to match Python's `str.to_date('%Y-%m-%d')`; all 6
+  parity cases now match Python byte-for-byte. **#855 CLOSED.**
+- **By design:** `freshness` is unit-test-only (the CSV-roundtrip harness reads
+  dates as `Utf8`, so Python's date-gated profiler can't fire through it).
+
 ## 2026-06-12 — FS block-scoring perf + the "native is slow" red herring (PR #869)
 - New [../decisions/0012-fs-block-scoring-perf.md](../decisions/0012-fs-block-scoring-perf.md);
   added a perf section + corrected the "3-19x faster" framing in
