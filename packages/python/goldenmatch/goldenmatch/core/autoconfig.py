@@ -1380,6 +1380,55 @@ def _check_source_overlap(
     return len(intersection) / len(union)
 
 
+# ── #858: multi-source over-merge guard ──────────────────────────────────────
+
+# Bounded source-indicator name patterns (case-insensitive). NOT a general
+# provenance regex (name-regex was rejected as the primary mechanism, spec §1);
+# this only LOCATES a user source partition when there is no ``__source__``.
+_SOURCE_NAME_RE = re.compile(
+    r"(?i)^(source|origin|channel|system|data_source|record_source"
+    r"|lead_source|src|crm)$|_source$"
+)
+
+
+def _detect_source_partition(
+    df: pl.DataFrame, profiles: list[ColumnProfile]
+) -> str | None:
+    """Return the column that partitions records by origin, or ``None``.
+
+    ``None`` => single-source / match mode / killed => the whole #858 feature is
+    a no-op (the regression firewall). See the design spec §0-§1.
+    """
+    if not _multisource_autoconfig_enabled():
+        return None
+    if _AUTOCONFIG_MATCH_MODE.get():
+        return None
+    # 1) internal __source__ with >= 2 distinct values (multi-file dedupe).
+    if "__source__" in df.columns and df["__source__"].n_unique() >= 2:
+        return "__source__"
+    # 2) a name-pattern user column: low cardinality + >= 2 distinct + a
+    #    disjoint-id co-signature (>= 1 other column 0-overlap vs it). The
+    #    co-signature is the real discriminator; the cardinality cap (absolute
+    #    floor of 20, else 10% of rows) excludes free-text "source"-ish fields
+    #    while staying robust on small frames.
+    other_cols = [p.name for p in profiles if not p.name.startswith("__")]
+    card_cap = max(20, int(0.1 * df.height))
+    for p in profiles:
+        if p.name.startswith("__") or not _SOURCE_NAME_RE.search(p.name):
+            continue
+        n_unique = df[p.name].n_unique()
+        if n_unique < 2 or n_unique > card_cap:
+            continue
+        has_cosig = any(
+            other != p.name
+            and _check_source_overlap(df, other, partition_col=p.name) == 0.0
+            for other in other_cols
+        )
+        if has_cosig:
+            return p.name
+    return None
+
+
 # ── Blocking generation ────────────────────────────────────────────────────
 
 def _make_quality_column_profile(
