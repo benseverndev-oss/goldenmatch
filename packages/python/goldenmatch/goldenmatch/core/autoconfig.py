@@ -1652,6 +1652,38 @@ def _typed_projected_block(
     return max(int(sample_block), -(-int(full_n) // domain))  # ceil(full_n/domain)
 
 
+def _scale_safe_bounded_compound(
+    candidates: list[ColumnProfile],
+    is_scale_safe,
+) -> BlockingKeyConfig | None:
+    """AND bounded-domain exact keys into the smallest scale-safe compound.
+
+    #876: called when no SINGLE exact key is scale-safe. Considers only the
+    BOUNDED candidates (those with a ``_BLOCKING_DOMAIN_CAP`` entry — zip / year /
+    month / boolean); an unbounded key already stays constant-block alone and
+    would have been kept as ``safe_exact``. Adds bounded keys most-selective-first
+    (largest domain cap leads, so the compound is dominated by the discriminating
+    key) until the running compound passes ``is_scale_safe``. Returns the compound
+    ``BlockingKeyConfig`` or None if even the full bounded set doesn't bound the
+    block (caller then falls through to the name path).
+
+    Numeric-ish bounded keys: ``["lowercase", "strip"]`` is a safe transform
+    chain (lowercase is a no-op on digit strings, normalizes a boolean's case).
+    """
+    bounded = [p for p in candidates
+               if _BLOCKING_DOMAIN_CAP.get(p.col_type) is not None]
+    if len(bounded) < 2:
+        return None  # need >=2 bounded keys to form a joint-domain compound
+    # Largest domain cap first → the most-selective bounded key leads.
+    bounded.sort(key=lambda p: _BLOCKING_DOMAIN_CAP[p.col_type], reverse=True)
+    fields: list[str] = []
+    for p in bounded:
+        fields.append(p.name)
+        if len(fields) >= 2 and is_scale_safe(fields):
+            return BlockingKeyConfig(fields=list(fields), transforms=["lowercase", "strip"])
+    return None
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -1953,6 +1985,27 @@ def build_blocking(
             return BlockingConfig(
                 keys=[BlockingKeyConfig(fields=[best.name], transforms=transforms)],
             )
+        # #876: no SINGLE exact key is scale-safe. Before dropping these exact
+        # discriminators for the name path, try to AND the BOUNDED ones into a
+        # compound whose JOINT domain bounds the block under the pairs budget.
+        # Two bounded keys that each explode alone (zip ∝N/100K, year ∝N/300) have
+        # a joint domain of ~100K·300 = 30M, so their compound's block stays
+        # ~constant and the pair count linear. The compound preserves what a sole
+        # `zip` gives but can't scale: it co-locates a cluster's variants (both
+        # components stable within a cluster) AND separates near-duplicate clusters
+        # that share names but differ on the bounded keys (the QIS twin shape;
+        # blocking on names alone collides those twins → over-merge). This is the
+        # bounded-compound of the #876 design, instantiated as a refinement of the
+        # rejected bounded keys rather than a greedy highest-cardinality pick.
+        bounded_compound = _scale_safe_bounded_compound(candidates, _is_scale_safe)
+        if bounded_compound is not None:
+            logger.info(
+                "Scale-safe bounded compound blocking: %s (no single exact key "
+                "is scale-safe at full_n=%d; ANDed bounded exact keys to bound "
+                "the block). See #876.",
+                bounded_compound.fields, effective_n_full,
+            )
+            return BlockingConfig(keys=[bounded_compound], strategy="static")
         # All exact columns create oversized blocks — fall through
         logger.warning(
             "Exact blocking columns all produce oversized blocks (>%d), "

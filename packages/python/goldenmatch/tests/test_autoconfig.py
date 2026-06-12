@@ -1786,3 +1786,43 @@ class TestScaleInvariantBlocking:
         name_fields = {"first_name", "last_name"}
         assert any(name_fields & set(fields) for fields in all_keys + all_passes), \
             f"expected a name-bearing blocking option at scale, got keys={all_keys} passes={all_passes}"
+
+    def test_bounded_keys_combine_into_scale_safe_compound(self):
+        """#876: when no single exact key is scale-safe, AND the BOUNDED exact
+        keys into a compound whose JOINT domain bounds the block under the pairs
+        budget, instead of dropping them.
+
+        zip (domain ~100K) and year (~300) each EXPLODE alone at 100M (block ∝ N).
+        But their compound's joint domain is ~30M, so the block stays ~constant
+        and the pair count linear -> scale-safe. The compound also preserves what
+        a sole `zip` gives but can't scale: it co-locates a cluster's variants
+        (both fields stable within a cluster) AND separates near-duplicate
+        ``twin`` clusters that share names but differ on zip. The QIS audit needs
+        this exact compound ([zip, birth_year]) to hold F1 0.935 to 200M.
+        """
+        import polars as pl
+        from goldenmatch.core.autoconfig import ColumnProfile, build_blocking
+        n = 1000
+        # zip wraps to 100, year to 50 -> each alone explodes at 100M; their
+        # product (5000 cells on the sample, ~5M domain) stays bounded.
+        df = pl.DataFrame({
+            "first_name": [f"fn{i//5:04d}" for i in range(n)],
+            "last_name": [f"ln{i//5:04d}" for i in range(n)],
+            "zip": [f"{(i//5) % 100:05d}" for i in range(n)],        # bounded, wraps
+            "birth_year": [str(1950 + (i//5) % 50) for i in range(n)],  # bounded year
+        })
+        profiles = [
+            ColumnProfile("first_name", "Utf8", "name", 0.9, cardinality_ratio=0.20),
+            ColumnProfile("last_name", "Utf8", "name", 0.9, cardinality_ratio=0.20),
+            ColumnProfile("zip", "Utf8", "zip", 0.9, cardinality_ratio=0.10),
+            ColumnProfile("birth_year", "Utf8", "year", 0.9, cardinality_ratio=0.05),
+        ]
+        b = build_blocking(profiles, df, n_rows_full=100_000_000)
+        keys = [set(k.fields) for k in (b.keys or [])]
+        passes = [set(p.fields) for p in (b.passes or [])]
+        # the primary blocking key co-locates on BOTH bounded discriminators
+        assert any({"zip", "birth_year"} <= s for s in keys + passes), \
+            f"expected a [zip, birth_year] bounded compound at scale, got keys={keys} passes={passes}"
+        # and NOT a sole bounded key that would explode
+        assert not (len(keys) == 1 and keys[0] in ({"zip"}, {"birth_year"}) and not passes), \
+            f"sole bounded key shipped at 100M: keys={keys}"
