@@ -117,6 +117,9 @@ export {
 } from "./scorer.js";
 export type { SyncTextEmbedder } from "./scorer.js";
 
+export { enableWasm, disableWasm, WASM_COVERED_SCORERS } from "./wasm/index.js";
+export type { ScorerBackend, EnableWasmOptions } from "./wasm/index.js";
+
 // ---------------------------------------------------------------------------
 // Matchkey
 // ---------------------------------------------------------------------------
