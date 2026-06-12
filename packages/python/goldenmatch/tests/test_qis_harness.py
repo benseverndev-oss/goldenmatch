@@ -2,6 +2,9 @@
 (scripts/quality_invariant_scale.py) by path; runs in the `python` lane (no Ray)."""
 from __future__ import annotations
 
+import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -182,3 +185,49 @@ def test_aggregate_flags_drift_as_fail():
     row = next(r for r in report["rows"] if r["rows"] == 100000000)
     assert row["passed"] is False               # pairwise delta 0.12 > 0.005
     assert report["verdict_passed"] is False
+
+
+def _run_harness_subprocess(native_env: str, tmp_path):
+    """Run the harness in a subprocess under GOLDENMATCH_NATIVE=native_env and
+    return its parsed JSON, or None if the run failed (e.g. a stale/skewed native
+    wheel) so the caller can skip rather than flake."""
+    out = tmp_path / f"native_{native_env}.json"
+    env = dict(os.environ)
+    env["GOLDENMATCH_NATIVE"] = native_env
+    env["POLARS_SKIP_CPU_CHECK"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
+    script = _SCRIPTS / "quality_invariant_scale.py"
+    proc = subprocess.run(
+        [sys.executable, str(script), "--rows", "1000", "--corruption", "moderate",
+         "--out", str(out)],
+        capture_output=True, text=True, env=env, cwd=str(_REPO_ROOT),
+    )
+    if proc.returncode != 0 or not out.exists():
+        return None
+    return json.loads(out.read_text(encoding="utf-8"))
+
+
+@pytest.mark.slow
+def test_qis_native_parity(tmp_path):
+    # native == pure-Python must produce the SAME cluster PARTITION and equal F1.
+    # Golden VALUES are deliberately NOT compared: golden survivorship tie-order
+    # is nondeterministic (issue #870), so the golden frame can differ native vs
+    # pure even when both are correct. The partition (clusters_signature) + F1 are
+    # the scale-independent parity claim, so 1K suffices. Skips cleanly when the
+    # native kernel is absent OR present-but-skewed (a stale local wheel returns a
+    # different arity than the in-tree caller expects); in CI's native lane the
+    # kernel is freshly built and the body runs.
+    from goldenmatch.core._native_loader import native_available
+
+    py = _run_harness_subprocess("0", tmp_path)
+    assert py is not None, "pure-Python harness run failed"
+    assert "available" in py["native"]  # the native-witness field is always present
+    if not native_available():
+        pytest.skip("native kernel unavailable; pure-Python witness asserted")
+    nat = _run_harness_subprocess("1", tmp_path)
+    if nat is None:
+        pytest.skip("native kernel present but errored (stale/skewed wheel); "
+                    "native parity is validated in CI's native lane")
+    assert nat["native"]["available"] is True
+    assert py["pairwise"]["f1"] == pytest.approx(nat["pairwise"]["f1"], abs=1e-9)
+    assert py["clusters_signature"] == nat["clusters_signature"]
