@@ -1387,6 +1387,41 @@ def _field_score_matrix(vals: list[str | None], scorer: str) -> np.ndarray:
     return _fuzzy_score_matrix(vals, scorer)
 
 
+def _field_score_matrix_dedup(vals: list[str | None], scorer: str) -> np.ndarray:
+    """``_field_score_matrix`` over the DISTINCT values, expanded back to NxN.
+
+    Field similarity depends only on the ``(value_a, value_b)`` pair, so scoring
+    the unique values once and gathering through an index map is bit-identical
+    to scoring the full list — but it collapses repeated values (and a constant
+    blocking-key field to a 1x1 matrix), shrinking the per-field cdist / native
+    kernel call that dominates FS block scoring. No-op when all values are
+    distinct (returns the full-list matrix directly).
+    """
+    n = len(vals)
+    index = np.empty(n, dtype=np.intp)
+    seen: dict[object, int] = {}
+    uniq: list[str | None] = []
+    for i, v in enumerate(vals):
+        j = seen.get(v)
+        if j is None:
+            j = len(uniq)
+            seen[v] = j
+            uniq.append(v)
+        index[i] = j
+    if len(uniq) == n:
+        return np.asarray(_field_score_matrix(vals, scorer), dtype=np.float64)
+    sub = np.asarray(_field_score_matrix(uniq, scorer), dtype=np.float64)
+    # Two distinct rows sharing a value collapse to the SAME unique index, so
+    # the expansion reads that value's diagonal cell. For multiplicity-based
+    # matrices (exact / soundex) ``_field_score_matrix`` leaves a singleton's
+    # diagonal at 0, which would zero-out equal-value pairs that the full matrix
+    # scores 1.0. The true self-similarity of any non-embedding scorer is 1.0
+    # (an identical string), so pin the diagonal before gathering. No-op for the
+    # cdist scorers (their diagonal is already 1.0).
+    np.fill_diagonal(sub, 1.0)
+    return sub[np.ix_(index, index)]
+
+
 # Max magnitude (bits) of a single term-frequency adjustment, so a unique
 # singleton value can't dominate the whole match weight.
 _TF_CLAMP = 10.0
@@ -1491,7 +1526,7 @@ def score_probabilistic_vectorized(
     for f in mk.fields:
         vals = _field_values_for_block(block_df, f, n)
         weights = np.asarray(em_result.match_weights[f.field], dtype=np.float64)
-        sim = np.asarray(_field_score_matrix(vals, f.scorer), dtype=np.float64)
+        sim = _field_score_matrix_dedup(vals, f.scorer)
         lvl = _levels_from_similarity(sim, int(f.levels), float(f.partial_threshold))
         # Null on either side -> level 0 (disagree), matching comparison_vector.
         null_mask = np.array([v is None for v in vals], dtype=bool)
