@@ -9,6 +9,8 @@ export { MatchRatesAnalyzer } from "./analyzers/matchRates.js";
 export { ClusterDistributionAnalyzer } from "./analyzers/clusterDist.js";
 export { QualityRollupAnalyzer } from "./analyzers/qualityRollup.js";
 export * as aggregate from "./aggregate.js";
+export { enableAnalysisWasm, disableAnalysisWasm } from "./wasm/index.js";
+export type { AnalysisBackend, EnableAnalysisWasmOptions } from "./wasm/index.js";
 export { SCHEMA_VERSION } from "./types.js";
 
 // Suite artifact adapters (edge-safe; duck-typed producer normalizers).
