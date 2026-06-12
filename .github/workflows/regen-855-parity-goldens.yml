@@ -1,0 +1,47 @@
+name: regen-855-parity-goldens
+
+# Regenerates the goldencheck TS parity goldens on a clean Linux runner (the
+# local dev box can't run Polars without OOMing). Fires when the #855 fixture
+# generator changes; uploads parity_cases.json + the goldens as an ARTIFACT
+# (does NOT commit back — the author downloads + commits so the push triggers
+# the normal `typescript` parity lane). See the #855 plan for the flow.
+
+on:
+  push:
+    branches: [feat/855-parity-goldens]
+    paths:
+      - "packages/python/goldencheck/scripts/gen_855_parity_fixtures.py"
+      - ".github/workflows/regen-855-parity-goldens.yml"
+  workflow_dispatch:
+
+jobs:
+  regen:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      - name: Generate #855 parity fixtures + goldens
+        working-directory: packages/typescript/goldencheck
+        run: |
+          PY=../../../.venv/bin/python
+          "$PY" ../../python/goldencheck/scripts/gen_855_parity_fixtures.py
+          "$PY" ../../python/goldencheck/scripts/gen_parity_goldens_js.py
+          echo "=== cases ==="
+          "$PY" -c "import json;print([c['name'] for c in json.load(open('tests/fixtures/parity_cases.json'))['cases']])"
+          echo "=== goldens ==="
+          ls -la tests/fixtures/_goldens_js/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: parity-855-goldens
+          path: |
+            packages/typescript/goldencheck/tests/fixtures/parity_cases.json
+            packages/typescript/goldencheck/tests/fixtures/_goldens_js/
+          if-no-files-found: error

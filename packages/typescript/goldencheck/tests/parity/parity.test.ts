@@ -1,6 +1,19 @@
 /**
  * Parity tests — validates TypeScript scan results match Python golden outputs.
- * Run `python scripts/gen_parity_goldens_js.py` to generate/update goldens.
+ * Run `python scripts/gen_parity_goldens_js.py` (from this package dir, with the
+ * goldencheck Python package importable) to (re)generate goldens. The #855
+ * fixtures + goldens are regenerated on CI via `regen-855-parity-goldens.yml`.
+ *
+ * Asserts per-finding identity (column, check, severity) PLUS confidence (to 4
+ * decimals) and affected-row counts, and FAILS (not skips) when the manifest or
+ * a golden is missing — so a newly-ported profiler can't silently regress.
+ *
+ * NOTE: the `freshness` profiler is intentionally NOT covered here. This harness
+ * round-trips each case through a temp CSV, and `pl.read_csv` defaults to
+ * `try_parse_dates=False`, so date columns arrive as Utf8 and Python's
+ * date-dtype-gated FreshnessProfiler never fires — while TS `dtype()` reports
+ * "date" for ISO strings. Freshness parity is covered by
+ * `tests/unit/profilers/freshness.test.ts` instead.
  */
 
 import { describe, it, expect } from "vitest";
@@ -24,21 +37,37 @@ interface ParityCase {
   options?: { sampleSize?: number; domain?: string | null };
 }
 
+interface GoldenFinding {
+  severity: string;
+  column: string;
+  check: string;
+  confidence: number;
+  affected_rows: number;
+}
+
 interface GoldenOutput {
-  findings: Array<{
-    severity: string;
-    column: string;
-    check: string;
-    confidence: number;
-  }>;
+  findings: GoldenFinding[];
   health_grade: string;
   health_score: number;
 }
 
+const round4 = (x: number): number => Math.round(x * 1e4) / 1e4;
+
+interface CmpFinding {
+  column: string;
+  check: string;
+  severity: string;
+  confidence: number;
+  affectedRows: number;
+}
+
+const sortKey = (f: CmpFinding): string => `${f.column}|${f.check}|${f.affectedRows}`;
+
 describe("parity", () => {
-  // Skip if manifest doesn't exist (goldens not yet generated)
   if (!existsSync(MANIFEST_PATH)) {
-    it.skip("parity_cases.json not found — run scripts/gen_parity_goldens_js.py first", () => {});
+    it("parity_cases.json must exist (run scripts/gen_parity_goldens_js.py)", () => {
+      throw new Error(`Missing parity manifest at ${MANIFEST_PATH}`);
+    });
     return;
   }
 
@@ -48,8 +77,9 @@ describe("parity", () => {
     it(`matches Python output for: ${testCase.name}`, () => {
       const goldenPath = join(GOLDENS_DIR, `${testCase.name}.json`);
       if (!existsSync(goldenPath)) {
-        // Skip if golden not generated yet
-        return;
+        throw new Error(
+          `Missing golden for "${testCase.name}" — run scripts/gen_parity_goldens_js.py`,
+        );
       }
 
       const golden: GoldenOutput = JSON.parse(readFileSync(goldenPath, "utf-8"));
@@ -60,20 +90,23 @@ describe("parity", () => {
       });
       const findings = applyConfidenceDowngrade(result.findings, false);
 
-      // Compare finding identity: (column, check) pairs
-      const tsFindings = findings.map((f) => ({
+      const tsFindings: CmpFinding[] = findings.map((f) => ({
         column: f.column,
         check: f.check,
         severity: f.severity === 3 ? "ERROR" : f.severity === 2 ? "WARNING" : "INFO",
+        confidence: round4(f.confidence),
+        affectedRows: f.affectedRows,
       }));
-      const pyFindings = golden.findings.map((f) => ({
+      const pyFindings: CmpFinding[] = golden.findings.map((f) => ({
         column: f.column,
         check: f.check,
         severity: f.severity,
+        confidence: round4(f.confidence),
+        affectedRows: f.affected_rows,
       }));
 
-      // Sort both for comparison
-      const sortKey = (f: { column: string; check: string }) => `${f.column}|${f.check}`;
+      // Sort by a key spanning column+check+rows so multi-finding-per-column
+      // cases (fuzzy, approx-duplicate) compare order-independently.
       tsFindings.sort((a, b) => sortKey(a).localeCompare(sortKey(b)));
       pyFindings.sort((a, b) => sortKey(a).localeCompare(sortKey(b)));
 

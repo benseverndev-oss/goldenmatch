@@ -39,6 +39,16 @@ describe("TemporalOrderProfiler", () => {
     const findings = profiler.profile(data);
     expect(findings.some((f) => f.column.includes("open_date"))).toBe(true);
   });
+
+  it("does NOT fire on integer columns (parity with Python's %Y-%m-%d gate)", () => {
+    // `new Date("7")` is a valid Date in JS; Python only casts strings via
+    // str.to_date(format="%Y-%m-%d"), so integer pairs must NOT be treated as
+    // date columns. Regression guard for the TS<->Python temporal gap.
+    const data = new TabularData(
+      Array.from({ length: 20 }, (_, i) => ({ zip: i % 10, amt: (i * 13) % 7 })),
+    );
+    expect(profiler.profile(data)).toEqual([]);
+  });
 });
 
 describe("NullCorrelationProfiler", () => {
