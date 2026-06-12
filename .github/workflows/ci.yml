@@ -801,6 +801,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Build WASM artifact (installs the matching wasm-bindgen-cli)
         run: bash packages/rust/extensions/score-wasm/build_wasm.sh
+      - name: Build shared wasm-runtime (the parity test imports goldenmatch-wasm-runtime)
+        run: pnpm --filter goldenmatch-wasm-runtime build
       - name: WASM parity (un-skipped — artifact now present) [THE GATE]
         run: pnpm --filter goldenmatch exec vitest run tests/parity/wasm-scorer.test.ts
       - name: Benchmark (informational; dist artifact-path under tsup bundling TBD on first run)
@@ -833,6 +835,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Build WASM artifact (installs the matching wasm-bindgen-cli)
         run: bash packages/rust/extensions/analysis-wasm/build_wasm.sh
+      - name: Build shared wasm-runtime (the parity test imports goldenmatch-wasm-runtime)
+        run: pnpm --filter goldenmatch-wasm-runtime build
       - name: WASM aggregate parity (un-skipped — artifact now present) [THE GATE]
         run: pnpm --filter goldenanalysis exec vitest run tests/parity/wasm-aggregate.test.ts
       - name: Benchmark (informational; dist artifact-path under tsup bundling TBD on first run)
