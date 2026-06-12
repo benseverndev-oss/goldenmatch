@@ -29,6 +29,26 @@ this — `workspace:^` handles the linking cross-platform. The stale
 - Test: `npm test` in each package (vitest). To run a single test file: `npx vitest run tests/<file>.test.ts`.
 - Build: `tsup` (or `tsc` for goldencheck-types). Build artifacts to `dist/`, gitignored.
 
+## Shared opt-in WASM runtime (`goldenmatch-wasm-runtime`)
+
+- `goldenmatch-wasm-runtime` is a tiny zero-dep workspace package holding the
+  shared opt-in WASM plumbing: `resolveWasmBytes(opts, fallbackUrl)` (edge-safe
+  byte loader + env detection), `enableWasmBackend<B>(opts, instantiate, register,
+  fallbackUrl)` (the generic enable skeleton), and `createBackendRegistry<B>()`
+  (the module-singleton). It owns NO domain logic, NO artifact URL, NO glue import.
+- **Each consumer owns its artifact URL + glue import + backend interface.** The
+  `new URL('./artifacts/<name>_bg.wasm', import.meta.url)` and the dynamic glue
+  `import('./artifacts/<name>.js')` MUST live in the consumer's own module so
+  `import.meta.url` resolves to that package's `dist` — passing the URL into the
+  shared package would resolve to the wrong location.
+- Consumers: `goldenmatch` (score-wasm → `scoreMatrix`, `enableWasm`) and
+  `goldenanalysis` (analysis-wasm → `histogram`/`quantile`, `enableAnalysisWasm`).
+  Both depend via `workspace:^`. Pure-TS stays the default + fallback; the `.wasm`
+  is built in CI (`wasm_score` / `analysis_wasm` lanes), never committed.
+- Adding a new accelerated core: new `*-wasm` crate (mirror `score-wasm`), a
+  consumer `src/core/wasm/` (backend + loader + index using the shared runtime),
+  wire the batch boundary, a skip-guarded parity test + bench, and a CI lane.
+
 ## Known pre-existing failures
 
 - `infermap` parity test references `packages/tests/fixtures/parity_cases.json` (path was valid pre-monorepo, now broken). Not introduced by handoff work.

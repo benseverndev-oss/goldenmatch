@@ -1,0 +1,5 @@
+# Built by analysis-wasm/build_wasm.sh (CI) — never committed.
+analysis_wasm_bg.wasm
+analysis_wasm.js
+analysis_wasm.d.ts
+analysis_wasm_bg.wasm.d.ts
