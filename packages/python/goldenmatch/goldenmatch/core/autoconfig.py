@@ -912,23 +912,44 @@ def build_matchkeys(
         # Phonetic sibling (#491 heuristic path): same name+DOB composite but
         # with a `soundex` transform on the name fields, so phonetically-equal
         # spellings (Smith/Smyth, Catherine/Katherine) that the EXACT composite
-        # misses still match — provided the DOB anchor agrees. Reuses the same
-        # DOB gate: name-only soundex keys collide far too much to be an
-        # identity claim, but soundex(name)+DOB stays specific, and adversarial
-        # data without a DOB column (DQbench tier3) gets neither composite.
+        # misses still match — provided the DOB anchor agrees. name-only soundex
+        # keys collide far too much to be an identity claim, but soundex(name)+DOB
+        # stays specific (adversarial data without a DOB gets neither composite).
         # OR'd in, so it only adds candidate pairs.
-        phonetic_fields = [
-            MatchkeyField(field=p.name, transforms=["lowercase", "strip", "soundex"])
-            for p in _name_fields
-        ] + [
-            MatchkeyField(field=p.name, transforms=["lowercase", "strip"])
-            for p in _date_fields
-        ]
-        matchkeys.append(MatchkeyConfig(
-            name="phonetic_identity",
-            type="exact",
-            fields=phonetic_fields,
-        ))
+        #
+        # SCALE GATE (#510): require a SPECIFIC anchor (enough distinct values),
+        # not just a date-typed one. soundex collapses the name's cardinality to a
+        # bounded code space, so anchoring on a low-cardinality YEAR (~65-130
+        # distinct values) leaves soundex(name)+year non-specific. The spurious
+        # cross-cluster matches it manufactures grow like n_rows^2 / selectivity,
+        # so on a year anchor it stays invisible on a small sample but DEGRADES
+        # PRECISION and explodes soundex block sizes (-> OOM) as the dataset grows
+        # (#510 audit: phonetic+year precision fell 0.91->0.82 over 1K->1M and
+        # OOM'd at 25M). A full DOB stays specific. The name classifier labels a
+        # year column "date" too (the column name matches the date pattern), so
+        # col_type alone can't tell year from DOB -- gate on the anchor's distinct
+        # count (via the sample df; cardinality_ratio fallback when df is None).
+        # The EXACT-name composite above is unaffected (real names stay specific);
+        # year-anchored data still gets exact_identity + the fuzzy matchkey, just
+        # not the unscalable soundex identity claim.
+        def _anchor_specific(p: ColumnProfile) -> bool:
+            if df is not None and p.name in df.columns:
+                return int(df[p.name].n_unique()) >= 150
+            return p.cardinality_ratio >= 0.2  # sample year ~0.05, DOB ~0.5+
+        _phonetic_anchor = [p for p in _date_fields if _anchor_specific(p)]
+        if _phonetic_anchor:
+            phonetic_fields = [
+                MatchkeyField(field=p.name, transforms=["lowercase", "strip", "soundex"])
+                for p in _name_fields
+            ] + [
+                MatchkeyField(field=p.name, transforms=["lowercase", "strip"])
+                for p in _phonetic_anchor
+            ]
+            matchkeys.append(MatchkeyConfig(
+                name="phonetic_identity",
+                type="exact",
+                fields=phonetic_fields,
+            ))
 
     # Dual-composite: also emit a name+DOB composite keyed on person-name-PATTERN
     # columns (given_name/surname/first/last) when they exist and differ from the

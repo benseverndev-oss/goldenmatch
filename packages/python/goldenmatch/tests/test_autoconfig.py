@@ -269,12 +269,14 @@ class TestBuildMatchkeys:
     def test_phonetic_identity_matchkey_soundex_on_names(self):
         # #491 heuristic path: alongside the exact name+DOB composite, emit a
         # phonetic sibling that soundex-encodes the name fields so equal-sounding
-        # spellings (Smith/Smyth) sharing a DOB still match. Same DOB gate as the
-        # exact composite (name-only soundex keys collide too much to be identity).
+        # spellings (Smith/Smyth) sharing a DOB still match. Requires a full DATE
+        # anchor (see test_phonetic_identity_requires_date_not_year_anchor).
+        # High sample cardinality_ratio -> a specific DOB anchor (df is None here,
+        # so the gate uses the ratio fallback; a real DOB sample is ~0.5+).
         profiles = [
             ColumnProfile("first_name", "Utf8", "name", 0.9, cardinality_ratio=0.3),
             ColumnProfile("last_name", "Utf8", "name", 0.9, cardinality_ratio=0.3),
-            ColumnProfile("birth_year", "Int64", "year", 0.9, cardinality_ratio=0.02),
+            ColumnProfile("date_of_birth", "Utf8", "date", 0.9, cardinality_ratio=0.6),
         ]
         mks = build_matchkeys(profiles)
         phonetic = [mk for mk in mks if mk.name == "phonetic_identity"]
@@ -283,8 +285,52 @@ class TestBuildMatchkeys:
         # name fields carry the soundex transform; the DOB anchor does not
         name_fields = [f for f in phonetic[0].fields if f.field in ("first_name", "last_name")]
         assert name_fields and all("soundex" in f.transforms for f in name_fields)
-        dob = [f for f in phonetic[0].fields if f.field == "birth_year"]
+        dob = [f for f in phonetic[0].fields if f.field == "date_of_birth"]
         assert dob and "soundex" not in dob[0].transforms
+
+    def test_phonetic_identity_requires_specific_anchor_not_a_year(self):
+        # #510 scale fix: soundex collapses the name's cardinality to a bounded
+        # code space, so anchoring soundex(name) on a low-cardinality YEAR
+        # (~65-130 distinct) leaves the composite non-specific -- at scale it
+        # manufactures cross-cluster false merges (precision degrades) and huge
+        # soundex blocks (OOM). A coarse anchor must therefore NOT emit the
+        # phonetic_identity exact matchkey (the exact-NAME composite is still fine,
+        # since real names stay specific); only a SPECIFIC anchor (a full DOB) does.
+        # The classifier types a year column "date", so the gate is on the anchor's
+        # distinct count (df.n_unique >= 150) with a cardinality_ratio fallback
+        # (>= 0.2) when no df is supplied -- as here.
+        year = [
+            ColumnProfile("first_name", "Utf8", "name", 0.9, cardinality_ratio=0.3),
+            ColumnProfile("last_name", "Utf8", "name", 0.9, cardinality_ratio=0.3),
+            ColumnProfile("birth_year", "Int64", "date", 0.9, cardinality_ratio=0.02),
+        ]
+        mks = build_matchkeys(year)
+        assert [mk for mk in mks if mk.name == "exact_identity"]          # name composite kept
+        assert not [mk for mk in mks if mk.name == "phonetic_identity"]   # soundex+year dropped
+
+        # Same shape but with an explicit sample df where birth_year has only a
+        # handful of distinct values -> still excluded via the n_unique gate.
+        import polars as _pl
+        df_year = _pl.DataFrame({
+            "first_name": [f"n{i}" for i in range(300)],
+            "last_name": [f"s{i}" for i in range(300)],
+            "birth_year": [1950 + (i % 60) for i in range(300)],  # 60 distinct < 150
+        })
+        prof_hi = [
+            ColumnProfile("first_name", "Utf8", "name", 0.9, cardinality_ratio=0.9),
+            ColumnProfile("last_name", "Utf8", "name", 0.9, cardinality_ratio=0.9),
+            ColumnProfile("birth_year", "Int64", "date", 0.9, cardinality_ratio=0.2),
+        ]
+        mks = build_matchkeys(prof_hi, df=df_year)
+        assert not [mk for mk in mks if mk.name == "phonetic_identity"]   # 60 distinct < 150
+
+        date = [
+            ColumnProfile("first_name", "Utf8", "name", 0.9, cardinality_ratio=0.3),
+            ColumnProfile("last_name", "Utf8", "name", 0.9, cardinality_ratio=0.3),
+            ColumnProfile("date_of_birth", "Utf8", "date", 0.9, cardinality_ratio=0.6),
+        ]
+        mks = build_matchkeys(date)
+        assert len([mk for mk in mks if mk.name == "phonetic_identity"]) == 1  # specific anchor kept
 
     def test_description_uses_record_embedding(self):
         profiles = [
