@@ -1,7 +1,8 @@
 # Pure-TS scorer ⇄ rapidfuzz parity (3 divergences, one change)
 
 **Date:** 2026-06-12
-**Status:** Draft (design)
+**Status:** Approved (design). Transposition fix empirically simplified
+post-approval (floor, not bit-parallel pairing — see divergence 2).
 **Author:** Ben Severn (with Claude)
 **Sequencing:** PR A — the anchor that unblocks the opt-in WASM slice
 (`2026-06-12-opt-in-wasm-rust-acceleration-design.md`, PR B) and every
@@ -100,31 +101,24 @@ capture (rapidfuzz is the oracle); the corpus includes a jaro≈0.7 case.
 
 ### Transposition (divergence 2)
 
-**The divergence is in the match-*assignment* phase, not the transposition
-*counting* phase.** The current `jaro` (scorer.ts:120-147) already does the
-"flag matches in-window, then count transpositions by walking the two flagged
-subsequences in order" thing — and that is precisely what yields the wrong
-answer (t=3 / 0.7639 on `'dabaeb'/'dbea'`). The greedy left-to-right matcher
-flags a *different set of pairs* than rapidfuzz: rapidfuzz-cpp's
-`flag_similar_characters` uses a bit-parallel pairing that produces a different
-(and, on repeated chars, fewer-transposition) flag set. Match **count** is the
-same; the *which-b[j]-does-a[i]-claim* assignment differs, which changes the
-transposition count downstream.
+**The fix is one operator: floor the transposition halving.** rapidfuzz uses
+**integer** division `t // 2`; the current `jaro` (scorer.ts:152) uses **float**
+`t / 2`. The greedy left-to-right match *assignment* is already identical to
+rapidfuzz — it is only the half-transposition rounding that differs. So
+`(matches − t/2) / matches` becomes `(matches − Math.floor(t/2)) / matches`.
+(The earlier "match-assignment / bit-parallel pairing" framing was wrong: it was
+a hand-trace conclusion, not tested. **Empirically settled** — replacing the
+existing greedy `jaro` with *only* `floor(t/2)` agrees with rapidfuzz on
+**0/60000** random repeated-char pairs; the full three-fix algorithm agrees to
+4dp on **0/50000** pairs incl. non-BMP. The greedy matcher is not the bug.)
 
-So the fix is NOT to re-derive a greedy matcher (that is the existing bug).
-The plan ports rapidfuzz's actual Jaro pairing. Concretely, in priority order:
-1. **Port a concrete rapidfuzz reference**, not a fresh hand-roll — either
-   rapidfuzz-cpp's `flag_similar_characters` (the bit-parallel `FlaggedChars`
-   pairing in `jaro_impl`) or an existing JS transliteration of it. This gives
-   the exact assignment by construction.
-2. The **regenerated goldens are the binding oracle.** The plan iterates the
-   pairing until 4dp-green across the corpus; a hand proof is not required, but
-   the corpus MUST contain at least one *named, guaranteed-divergent* row —
-   `jaro('dabaeb','dbea')` = **0.8056** (rapidfuzz) — as the explicit red→green
-   target so the fix can't pass by accidentally-absent coverage.
+This is also why the existing ASCII anchors don't shift: a currently-passing
+case must already have an even `t` (rapidfuzz floors, so an odd-`t` case would
+already be failing) — `floor` only moves the odd-`t` cases, which are exactly
+the currently-divergent ones. The corpus still carries a named red→green target:
+`jaro('dabaeb','dbea')` = **0.8056** (rapidfuzz) vs **0.7639** (current).
 
-Levenshtein/Indel are unaffected by this (no transposition concept); they only
-get the codepoint fix.
+Levenshtein/Indel have no transposition term; they only get the codepoint fix.
 
 ### Scope of files
 
