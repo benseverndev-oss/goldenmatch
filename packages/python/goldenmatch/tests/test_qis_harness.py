@@ -203,6 +203,11 @@ def _run_harness_subprocess(native_env: str, tmp_path):
         capture_output=True, text=True, env=env, cwd=str(_REPO_ROOT),
     )
     if proc.returncode != 0 or not out.exists():
+        # Surface a tail of the failure for local triage (e.g. an unexpected
+        # pure-Python failure that trips `assert py is not None`); the None
+        # return still drives the caller's skip on a stale/skewed native wheel.
+        print(f"[qis native subprocess GOLDENMATCH_NATIVE={native_env} rc={proc.returncode}] "
+              f"stderr tail: {(proc.stderr or '')[-500:]}", flush=True)
         return None
     return json.loads(out.read_text(encoding="utf-8"))
 
