@@ -1,0 +1,24 @@
+# Standalone workspace so this wasm-bindgen wrapper can path-depend on the
+# pyo3-free `score-core` WITHOUT either crate's workspace claiming it — same
+# isolation rationale as `score-core`/`native`. NO rust-toolchain.toml: inherits
+# the caller's toolchain. This crate is the TS analogue of `native` (pyo3): it
+# wraps the SAME `score-core`, so scoring is byte-identical by construction.
+[workspace]
+
+[package]
+name = "goldenmatch-score-wasm"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Ben Severn <benzsevern@gmail.com>"]
+description = "wasm-bindgen wrapper over goldenmatch-score-core for the goldenmatch TS opt-in WASM backend"
+
+[lib]
+name = "goldenmatch_score_wasm"
+crate-type = ["cdylib", "rlib"]  # cdylib for wasm; rlib so host unit tests link
+
+[dependencies]
+goldenmatch-score-core = { path = "../score-core" }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
