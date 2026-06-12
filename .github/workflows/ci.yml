@@ -438,19 +438,26 @@ jobs:
           if [ "${{ matrix.pkg }}" = "goldenmatch" ]; then
             COV="--cov=goldenmatch"
             COV_REPORT="--cov-report=xml:packages/python/goldenmatch/coverage.xml --cov-report=term"
-            # test_controller_adaptive_e2e runs the FULL real auto-config
-            # iteration loop -- the suite's heaviest test. Under `-n auto` +
-            # coverage on a 16GB runner its peak OOM-kills an xdist worker
-            # (silent "node down: Not properly terminated", no traceback). Run
-            # it SERIALLY (full runner memory, no worker contention) and combine
-            # coverage via --cov-append so the floor check still sees its lines.
-            SERIAL_HEAVY="packages/python/goldenmatch/tests/test_controller_adaptive_e2e.py"
+            # SERIAL_HEAVY: full-pipeline tests whose peak OOM-kills an xdist
+            # worker under `-n auto` + coverage on a 16GB runner (silent "node
+            # down: Not properly terminated", no traceback). Run them SERIALLY
+            # (full runner memory, no worker contention), 300s timeout, and
+            # combine coverage via --cov-append so the floor check still sees
+            # their lines.
+            #   - test_controller_adaptive_e2e: the FULL real auto-config
+            #     iteration loop on a 100K adversarial fixture (the heaviest).
+            #   - test_qis_harness: #510 slow tests each run a full frozen-rung
+            #     dedupe (the determinism one runs TWO) -- same xdist-OOM/segfault
+            #     pattern ("worker gwN crashed"). See #876.
+            SERIAL_HEAVY="packages/python/goldenmatch/tests/test_controller_adaptive_e2e.py packages/python/goldenmatch/tests/test_qis_harness.py"
           fi
           # --durations=20 surfaces the slowest tests in the CI log (#433).
           if [ -n "$SERIAL_HEAVY" ]; then
-            # Parallel run: everything except the heavy file. Collect coverage
+            # Parallel run: everything except the heavy files. Collect coverage
             # data only; the serial run below appends and writes the xml.
-            uv run pytest packages/python/${{ matrix.pkg }} -n auto --timeout=120 --timeout-method=thread --durations=20 $COV $IGNORE --ignore="$SERIAL_HEAVY"
+            SERIAL_IGNORE=""
+            for f in $SERIAL_HEAVY; do SERIAL_IGNORE="$SERIAL_IGNORE --ignore=$f"; done
+            uv run pytest packages/python/${{ matrix.pkg }} -n auto --timeout=120 --timeout-method=thread --durations=20 $COV $IGNORE $SERIAL_IGNORE
             # Serial run for the heavy file: full runner memory, no xdist.
             # Higher per-test timeout (300s vs 120s): this file's
             # test_gate_fires_via_real_iteration_loop runs the FULL auto-config
@@ -460,7 +467,9 @@ jobs:
             # scoring cost (parity-over-speed, by design), tipping it past the
             # generic 120s. 300s gives ample headroom while still surfacing a
             # genuine hang.
-            uv run pytest "$SERIAL_HEAVY" --timeout=300 --timeout-method=thread --durations=20 $COV --cov-append $COV_REPORT
+            # shellcheck disable=SC2086 -- intentional word-split: SERIAL_HEAVY is
+            # a space-separated list of test files, each a separate pytest arg.
+            uv run pytest $SERIAL_HEAVY --timeout=300 --timeout-method=thread --durations=20 $COV --cov-append $COV_REPORT
           else
             uv run pytest packages/python/${{ matrix.pkg }} -n auto --timeout=120 --timeout-method=thread --durations=20 $COV $COV_REPORT $IGNORE
           fi
