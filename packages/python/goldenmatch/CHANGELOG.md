@@ -7,6 +7,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Changed
+- **Zero-config `dedupe_df` no longer over-merges multi-source CRM (#858).** When
+  auto-config detects a source partition at config time (the internal
+  `__source__`, or a user `source`/`lead_source`/`*_source`/`origin`/`src`-named
+  column that genuinely partitions records into disjoint-valued groups), it now
+  (1) excludes the source-indicator column and every column whose values are
+  fully disjoint across sources (per-source surrogate ids) from match features,
+  and (2) demotes `phone` from a standalone exact matchkey to a blocking-only
+  candidate. This removes the source-correlated precision crater (realistic
+  multi-source CRM F1 ~0.35 → ~0.84). **Provable no-op** on single-source data
+  and in match mode (`match_df` / `run_match`; cross-source linking is the goal
+  there, suppressed by an explicit dedupe-mode gate). Default ON; disable with
+  `GOLDENMATCH_MULTISOURCE_AUTOCONFIG=0`; a caller `force_include` (or
+  `exclude_columns`) re-admits any auto-excluded column.
 - **Phase-5 distributed recall-complete path is now the DEFAULT (#844 finish
   line).** The blocking-key-aware shuffle scoring + randomized-contraction WCC,
   previously opt-in via `GOLDENMATCH_DISTRIBUTED_BLOCK_SHUFFLE=1`, is now ON by
