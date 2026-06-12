@@ -1835,6 +1835,17 @@ def build_blocking(
     if exact_cols:
         # Pre-filter: only evaluate top 5 by cardinality to avoid expensive group_by on all columns
         exact_cols_sorted = sorted(exact_cols, key=lambda p: df[p.name].n_unique(), reverse=True)
+        # #876: drop surrogate / unique-per-row columns before picking the best
+        # exact key.  A unique surrogate (id) creates singleton blocks (block
+        # size 1 → 0 candidate pairs → finds nothing).  Two equivalent guards:
+        #   - cardinality_ratio >= 1.0  (mirrors the exact-matchkey surrogate
+        #     guard at ~line 813)
+        #   - _projected_block([name]) <= 1  (catches it at scale when the
+        #     sample looks near-unique but not quite 1.0)
+        exact_cols_sorted = [
+            p for p in exact_cols_sorted
+            if (p.cardinality_ratio or 0.0) < 1.0 and _projected_block([p.name]) >= 2
+        ]
         candidates = exact_cols_sorted[:5]
         # Filter out columns that create oversized blocks
         safe_exact = [p for p in candidates if _max_block_size(p.name) <= max_safe_block]
