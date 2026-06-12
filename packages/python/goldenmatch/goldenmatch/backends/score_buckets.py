@@ -74,6 +74,105 @@ def _warn_stale_native_wheel_once(n_exclude: int) -> None:
     )
 
 
+# Scorers whose batched NxN matrix form is BYTE-IDENTICAL to the per-pair
+# score_pair callable (asserted scorer-by-scorer in
+# tests/test_score_buckets_vectorized_fallback.py). The vectorized fast-path
+# lane (_score_block_vec) only fires for a field whose scorer is in this set.
+#
+# float64 throughout. _fuzzy_score_matrix casts its matrices to float32 for the
+# 1M-row memory budget, but the per-pair fast-path loop accumulates in float64,
+# so a float32 matrix would flip borderline >= threshold decisions (the exact
+# "per-pair reimpl silently diverges" failure mode the ensemble decline in
+# _resolve_score_pair_callable warns about). The lane is size-capped
+# (GOLDENMATCH_BUCKET_VEC_MAX, default 2000) precisely so the float64 NxN stays
+# cheap and we never have to trade bits for memory.
+# NOTE: dice / jaccard are deliberately EXCLUDED. Their _dice_score_matrix /
+# _jaccard_score_matrix are the PPRL bloom-filter (hex-CLK) scorers -- a
+# different computation from the per-pair _dice_score_single / _jaccard_score_single
+# bigram coefficients, so the matrix is NOT byte-parity (it raises on plain
+# strings). The parity test catches this; do not add them back without a matrix
+# form that matches the per-pair callable bit-for-bit.
+_VEC_SUPPORTED: frozenset[str] = frozenset(
+    {"soundex_match", "jaro_winkler", "levenshtein", "token_sort"}
+)
+
+
+def _vec_field_matrix(values: list, scorer_name: str):
+    """float64 NxN score matrix for ``scorer_name`` over ``values``.
+
+    matrix[i, j] is byte-identical to the per-pair score_pair(values[i],
+    values[j]) -- same rapidfuzz / jellyfish primitive, just batched. Only the
+    scorers in ``_VEC_SUPPORTED`` reach here.
+    """
+    import numpy as np
+    from rapidfuzz.distance import JaroWinkler, Levenshtein
+    from rapidfuzz.fuzz import token_sort_ratio
+    from rapidfuzz.process import cdist
+
+    if scorer_name == "soundex_match":
+        from goldenmatch.core.scorer import _soundex_score_matrix
+        return _soundex_score_matrix(values).astype(np.float64, copy=False)
+    if scorer_name == "dice":
+        from goldenmatch.core.scorer import _dice_score_matrix
+        return _dice_score_matrix(values).astype(np.float64, copy=False)
+    if scorer_name == "jaccard":
+        from goldenmatch.core.scorer import _jaccard_score_matrix
+        return _jaccard_score_matrix(values).astype(np.float64, copy=False)
+    if scorer_name == "jaro_winkler":
+        return np.asarray(cdist(values, values, scorer=JaroWinkler.similarity, dtype=np.float64))
+    if scorer_name == "levenshtein":
+        return np.asarray(
+            cdist(values, values, scorer=Levenshtein.normalized_similarity, dtype=np.float64)
+        )
+    # token_sort: rapidfuzz returns 0-100; per-pair divides by 100.0 (same op order).
+    return np.asarray(cdist(values, values, scorer=token_sort_ratio, dtype=np.float64)) / 100.0
+
+
+def _score_block_vec(
+    row_ids: list,
+    field_arrays: list,
+    scorer_names: list,
+    weights: list,
+    offset: int,
+    end: int,
+    total_weight: float,
+    threshold: float,
+    frozen_exclude: frozenset,
+) -> list:
+    """Score one block via batched matrices instead of the Python per-pair loop.
+
+    Byte-parity with _score_one_bucket_fast's per-pair branch: combines fields
+    in the same order (sum of matrix*weight, divided by total_weight), emits
+    canonical (min, max) pairs >= threshold in row-major (i<j) order with
+    exclusions removed. The O(n**2) work (scoring + threshold scan) is numpy;
+    only the emitted pairs (few, >= threshold) touch Python.
+    """
+    import numpy as np
+
+    n = end - offset
+    num = None
+    for f_idx, name in enumerate(scorer_names):
+        m = _vec_field_matrix(field_arrays[f_idx][offset:end], name)
+        contrib = m * weights[f_idx]
+        num = contrib if num is None else num + contrib
+    combined = num / total_weight
+    iu0, iu1 = np.triu_indices(n, k=1)
+    flat = combined[iu0, iu1]
+    sel = flat >= threshold
+    if not bool(sel.any()):
+        return []
+    ids = row_ids[offset:end]
+    out: list[tuple[int, int, float]] = []
+    for a_idx, b_idx, s in zip(iu0[sel].tolist(), iu1[sel].tolist(), flat[sel].tolist()):
+        ri = ids[a_idx]
+        rj = ids[b_idx]
+        pair_key = (ri, rj) if ri < rj else (rj, ri)
+        if frozen_exclude and pair_key in frozen_exclude:
+            continue
+        out.append((pair_key[0], pair_key[1], s))
+    return out
+
+
 # Scorers the native fast-path kernel (goldenmatch._native.score_block_pairs)
 # implements, with the ids it expects. A field whose scorer isn't here forces
 # the Python per-pair loop for that bucket.
@@ -437,6 +536,22 @@ def score_buckets(
     # rows: (prep_s, kernel_s, postfilter_s, n_blocks, n_pairs_emitted)
     _dbg_rows: list[tuple[float, float, float, int, int]] = []
 
+    # Vectorized fast-path lane band (see _score_block_vec). Blocks with size in
+    # [vec_min, vec_max] route through the batched-matrix scorer instead of the
+    # Python per-pair double loop. vec_min: below it the per-pair loop wins (no
+    # numpy alloc / triu overhead on tiny blocks -- the regime the fast path was
+    # built for). vec_max: caps the float64 NxN so a pathological wide block
+    # can't blow memory; above it the per-pair loop (or oversized-skip) handles
+    # it. Both tunable for the cross-over sweep (scripts/bench_lowscale.py).
+    #
+    # Default vec_min=32 is the measured Pareto-safe floor (scripts/bench_lowscale.py,
+    # 2026-06-12): per-block the lane is ~2.3x at n=50 and ~3.8x at n=1000, but it
+    # REGRESSES on tiny blocks; the end-to-end cross-over sweep on the realistic_person
+    # soundex shape breaks even at vec_min~16 and is net-positive by 32, so 32 never
+    # makes a workload slower while still capturing the win on mid/large blocks.
+    _vec_min = int(os.environ.get("GOLDENMATCH_BUCKET_VEC_MIN", "32"))
+    _vec_max = int(os.environ.get("GOLDENMATCH_BUCKET_VEC_MAX", "2000"))
+
     # Slim projection: drop columns no score-worker reads. The audit
     # (2026-05-29) showed every reader in this module touches only
     # __row_id__ / __source__ / __block_key__ / __xform_*__ plus the
@@ -711,6 +826,16 @@ def score_buckets(
         ne_thresholds = [t for _col, _fn, t, _p in ne_specs]
         ne_penalties = [p for _col, _fn, _t, p in ne_specs]
         n_ne = len(ne_specs)
+        # Vectorized-lane eligibility (decided once per bucket). Engages only
+        # when: no negative evidence (penalty math stays per-pair), every field
+        # scorer has a byte-identical matrix form (_VEC_SUPPORTED), and no nulls
+        # in any field column -- the per-pair loop skips null fields, and
+        # replicating that mask vectorized is extra surface for no low-scale
+        # gain, so a column with nulls falls back to the per-pair loop wholesale.
+        vec_scorer_names: list[str] | None = None
+        if n_ne == 0 and all(name in _VEC_SUPPORTED for _c, _w, _fn, name in field_specs):
+            if all(sorted_df[col].null_count() == 0 for col, _w, _fn, _name in field_specs):
+                vec_scorer_names = [name for _c, _w, _fn, name in field_specs]
         local_pairs: list[tuple[int, int, float]] = []
         local_blocks = 0
         offset = 0
@@ -722,6 +847,20 @@ def score_buckets(
                     offset += size
                     continue
                 end = offset + size
+                # Vectorized lane: batched-matrix scoring for mid-sized blocks
+                # (byte-parity with the per-pair branch below; see
+                # _score_block_vec). Tiny blocks fall through to the per-pair
+                # loop where numpy alloc/triu overhead would dominate.
+                if vec_scorer_names is not None and _vec_min <= size <= _vec_max:
+                    local_pairs.extend(
+                        _score_block_vec(
+                            row_ids, field_arrays, vec_scorer_names, weights,
+                            offset, end, total_weight, threshold, frozen_exclude,
+                        )
+                    )
+                    local_blocks += 1
+                    offset += size
+                    continue
                 for i in range(offset, end - 1):
                     ri = row_ids[i]
                     for j in range(i + 1, end):
