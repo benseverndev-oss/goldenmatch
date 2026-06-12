@@ -152,7 +152,10 @@ export function jaro(a: string, b: string): number {
   }
 
   return (
-    (matches / lenA + matches / lenB + (matches - transpositions / 2) / matches) / 3
+    (matches / lenA +
+      matches / lenB +
+      (matches - Math.floor(transpositions / 2)) / matches) /
+    3
   );
 }
 
