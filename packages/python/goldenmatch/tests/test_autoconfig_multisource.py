@@ -119,6 +119,36 @@ def test_exclusions_empty_when_no_partition():
     assert _source_correlated_exclusions(df, _profiles(df), None) == set()
 
 
+# ── Task 6: phone demotion in build_matchkeys ────────────────────────────────
+
+from goldenmatch.core.autoconfig import build_matchkeys
+
+
+def _phone_df():
+    # 10 distinct 10-digit phones, each repeated -> cardinality 0.5 (a real
+    # exact candidate: not < 0.5, not perfectly-unique >= 1.0).
+    phones = [f"5551{i:06d}" for i in range(10)]
+    return pl.DataFrame({
+        "phone": phones + phones,
+        "name": [f"person {i}" for i in range(20)],
+    })
+
+
+def test_phone_is_exact_matchkey_single_source():
+    df = _phone_df()
+    mks = build_matchkeys(_profiles(df), df=df, multi_source=False)
+    assert any(m.name == "exact_phone" for m in mks)
+
+
+def test_phone_demoted_when_multi_source():
+    df = _phone_df()
+    mks = build_matchkeys(_profiles(df), df=df, multi_source=True)
+    assert not any(m.name == "exact_phone" for m in mks)
+    # phone is not silently turned into a weighted field either
+    for m in mks:
+        assert all(f.field != "phone" for f in (m.fields or []))
+
+
 # ── Task 1: generalized _check_source_overlap ────────────────────────────────
 
 def test_overlap_against_user_partition_column():

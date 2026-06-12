@@ -687,6 +687,7 @@ def _adaptive_threshold(fields: list[MatchkeyField]) -> float:
 
 def build_matchkeys(
     profiles: list[ColumnProfile], df: pl.DataFrame | None = None,
+    *, multi_source: bool = False,
 ) -> list[MatchkeyConfig]:
     """Generate matchkeys from column profiles."""
     # Separate exact and fuzzy columns
@@ -760,6 +761,18 @@ def build_matchkeys(
         # guard already rewrote it; this no-ops on non-token_sort). See
         # _noise_aware_scorer.
         scorer = _noise_aware_scorer(p.col_type, scorer)
+
+        # #858: when multi-source, phone is a blocking signal, not an identity
+        # claim -- an exact match on phone collapses distinct people who share a
+        # work / household phone. Demote to blocking-only (this continue skips
+        # both exact_fields and fuzzy_fields; phone remains a build_blocking
+        # candidate, which is unchanged).
+        if multi_source and scorer == "exact" and p.col_type == "phone":
+            skipped_exact.append((
+                p.name,
+                "multi-source: phone is a blocking signal, not an identity claim",
+            ))
+            continue
 
         # Geo and zip are blocking signals, NOT identity claims. An exact
         # matchkey on a city column asserts "two records sharing a city are
