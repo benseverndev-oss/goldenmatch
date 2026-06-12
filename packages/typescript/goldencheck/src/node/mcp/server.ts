@@ -6,6 +6,8 @@
  */
 
 import { createInterface } from "node:readline";
+import { existsSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { readFile } from "../reader.js";
 import { scanData, type ScanOptions } from "../../core/engine/scanner.js";
 import { applyConfidenceDowngrade } from "../../core/engine/confidence.js";
@@ -199,14 +201,16 @@ function toolValidate(args: Record<string, unknown>): object {
   const filePath = args["file_path"] as string;
   const configPath = (args["config_path"] as string) ?? "goldencheck.yml";
 
-  // node:fs + yaml loaded lazily (yaml is an optional peer) — matches cli.ts/a2a.
-  const { existsSync, readFileSync } = require("node:fs") as typeof import("node:fs");
   if (!existsSync(filePath)) return { error: `File not found: ${filePath}` };
   if (!existsSync(configPath)) {
     return { error: `No config found at ${configPath}. Run scan first.` };
   }
 
-  const yaml = require("yaml") as { parse(s: string): unknown };
+  // yaml is an optional peer dep — resolve it lazily via createRequire so the
+  // server module loads even when yaml is absent (preserves the optional-peer
+  // contract; ESM has no ambient `require`).
+  const nodeRequire = createRequire(import.meta.url);
+  const yaml = nodeRequire("yaml") as { parse(s: string): unknown };
   const config = validateConfig(yaml.parse(readFileSync(configPath, "utf-8")));
   const data = readFile(filePath);
   const findings = validateData(data, config);
