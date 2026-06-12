@@ -481,9 +481,20 @@ def run_rung(n_rows: int, seed: int = 0, shape: str = "realistic",
             # detect sample-vs-full divergence). For production users this
             # matters; for measurement it doesn't.
             with stage("qis_autoconfig"):
+                # allow_red_config=True is the post-#715 escape hatch (NOT
+                # confidence_required=False, which no longer suffices >=100K):
+                # the corrupted realistic shape legitimately commits a RED config
+                # at scale because the scoring sub-profile's confidence heuristic
+                # dislikes corruption-lowered match scores. The config still
+                # produces ~0.93 F1 -- RED is a CONFIDENCE flag, not actual
+                # quality -- and measuring that config's quality invariance
+                # across scale is exactly the #510 test. Without this, rungs
+                # >=100K raise ControllerNotConfidentError. committed_config
+                # captures the RED health so the report can state it honestly.
                 cfg = goldenmatch.auto_configure_df(
                     df,
                     confidence_required=False,
+                    allow_red_config=True,
                     _skip_finalize=True,
                 )
                 # CLAUDE.md harness pattern + #510 diagnosis (10M-v11):
