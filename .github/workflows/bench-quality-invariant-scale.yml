@@ -38,6 +38,10 @@ on:
         description: "realistic-shape corruption: light | moderate | hard (default moderate for the #510 ladder)"
         required: false
         default: "moderate"
+      frozen:
+        description: "Apply the committed frozen config (the #510 published-ladder methodology). 'true' (default) = frozen; 'false' = per-rung auto-config (the slow stability runs)."
+        required: false
+        default: "true"
       label:
         description: "Tag for the output artifact (e.g. '10m-bucket', '25m-duckdb')"
         required: false
@@ -173,11 +177,16 @@ jobs:
           if [ -n "${{ inputs.backend }}" ]; then
             BACKEND_FLAG="--backend ${{ inputs.backend }}"
           fi
+          FROZEN_FLAG=""
+          if [ "${{ inputs.frozen || 'true' }}" = "true" ]; then
+            FROZEN_FLAG="--frozen"
+          fi
           .venv/bin/python scripts/quality_invariant_scale.py \
             --rows ${{ inputs.rows }} \
             --shape ${{ inputs.shape }} \
             --seed ${{ inputs.seed }} \
             --corruption ${{ inputs.corruption || 'moderate' }} \
+            $FROZEN_FLAG \
             $BACKEND_FLAG \
             --out .profile_tmp/qis/qis_${{ inputs.label }}.json \
             | tee .profile_tmp/qis/qis_${{ inputs.label }}.log

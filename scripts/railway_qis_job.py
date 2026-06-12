@@ -27,12 +27,16 @@ def main() -> int:
     seed = os.environ.get("QIS_SEED", "0")
     backend = os.environ.get("QIS_BACKEND", "").strip()
     corruption = os.environ.get("QIS_CORRUPTION", "light").strip() or "light"
+    frozen = os.environ.get("QIS_FROZEN", "1").strip() not in ("0", "false", "")
     os.environ.setdefault("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
     print(f"=== QIS rung: rows={rows} shape={shape} seed={seed} "
-          f"backend={backend or 'auto'} corruption={corruption} ===", flush=True)
+          f"backend={backend or 'auto'} corruption={corruption} "
+          f"frozen={frozen} ===", flush=True)
     cmd = [sys.executable, "scripts/quality_invariant_scale.py",
            "--rows", rows, "--shape", shape, "--seed", seed,
            "--corruption", corruption]
+    if frozen:
+        cmd += ["--frozen"]
     if backend:
         cmd += ["--backend", backend]
     return subprocess.call(cmd)
