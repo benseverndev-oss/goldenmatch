@@ -144,6 +144,14 @@ projected full-N cardinality ≈ full_n (projected block ≤ 1) OR
 
 - [ ] **Step 4: Run — expect PASS. Step 5: Commit.**
 
+**Sequencing note:** after Task 2, the surrogate filter excludes `id`, but the
+downstream `safe_exact` check (line ~1805) still uses the *unscaled*
+`_max_block_size` — so `zip` (sample block ~10 ≤ `max_safe_block` 1000) is still
+accepted and returned as the sole key. That is EXPECTED: Task 2's test only
+asserts `id` is never chosen (it now returns `zip`, not `id`). Task 3 then
+replaces that check with the scale-aware `_scale_safe` and catches `zip`. Don't
+"fix" `safe_exact` in Task 2.
+
 ---
 
 ## Task 3: Total-pairs gate on the exact-cols path (TDD)
@@ -171,10 +179,14 @@ A bounded-cardinality sole key (zip) whose projected pairs/row exceeds K must be
         ]
         b = build_blocking(profiles, df, n_rows_full=100_000_000)
         keys = [tuple(k.fields) for k in (b.keys or [])]
-        # zip must NOT be a SOLE single-field blocking key at 100M
-        assert ["zip"] != [list(k) for k in keys][0] if keys else True
+        # zip must NOT be the SOLE single-field blocking key at 100M, and the
+        # config must not be degenerate-empty (something must block).
+        assert keys, f"degenerate empty blocking at 100M: {b}"
         assert not (len(keys) == 1 and keys[0] == ("zip",)), f"sole zip at 100M: {keys}"
 ```
+(Note: the single broken/ambiguous assertion form `assert ["zip"] != ... if keys
+else True` was intentionally NOT used — the two clear asserts above are the real
+guards.)
 
 - [ ] **Step 2: Run — expect FAIL** (sole zip returned).
 
@@ -246,11 +258,35 @@ not sole-zip and not name-only:
 
 **Files:** `autoconfig.py`, `test_autoconfig.py`
 
-- [ ] **Step 1: Failing test** — a shape where a single compound can't cover recall
-but a capped multi-pass union can (e.g. corruption hits the compound's refining
-token for some rows, but a soundex pass catches them). Assert `b.strategy ==
-"multi_pass"` with ≥2 bounded passes, each within its budget share, and the union
-projected pairs ≤ `K * n_rows_full`.
+- [ ] **Step 1: Failing test** — concrete fixture: a shape where the compound
+builder cannot refine the coarse key (no name column to AND with the bounded
+`zip`), but TWO independent bounded passes exist. Build a df with `zip` (bounded,
+~100 distinct), a `soundex_name` column (bounded, ~few-K distinct at scale, so a
+bounded pass), and NO high-cardinality name column for the compound to use:
+```python
+    def test_multipass_union_when_no_single_or_compound_covers(self):
+        from goldenmatch.core.autoconfig import build_blocking, ColumnProfile
+        import polars as pl
+        n = 1000
+        df = pl.DataFrame({
+            "zip": [f"{(i//5)%100:05d}" for i in range(n)],          # bounded ~100
+            "phon": [f"S{(i//5)%300:03d}" for i in range(n)],        # bounded ~300 (soundex-like)
+        })
+        profiles = [
+            ColumnProfile("zip", "Utf8", "zip", 0.9, cardinality_ratio=0.1),
+            ColumnProfile("phon", "Utf8", "string", 0.9, cardinality_ratio=0.3),
+        ]
+        b = build_blocking(profiles, df, n_rows_full=100_000_000)
+        # Neither single key nor a compound (no refining name col) is scale-safe
+        # alone -> expect a capped multi-pass union of the two bounded passes,
+        # whose summed projected pairs stay within K*n_rows_full.
+        assert b.strategy == "multi_pass"
+        assert len(b.passes or []) >= 2
+        assert b.max_total_comparisons is not None and b.max_total_comparisons <= 50 * 100_000_000
+```
+(If the selector instead legitimately emits the degenerate/refuse config for this
+shape, adjust the fixture so at least one bounded multi-pass union fits the
+budget — the point is to exercise the multi-pass branch, not the refuse branch.)
 
 - [ ] **Step 2: Run — expect FAIL.**
 
@@ -291,9 +327,15 @@ Keep this as one cohesive selector function the existing return points delegate 
 - [ ] **Step 2: Run — expect FAIL** (TypeError: unexpected kwarg `n_rows_full`).
 
 - [ ] **Step 3: Implement.** Add `n_rows_full: int | None = None` to
-`auto_configure_df` (keyword-only, ~2384) and pass it into the controller run
-(the controller → `_initial_config` → `_legacy_auto_configure_v0` → `build_blocking`
-plumbing already accepts it; only the public entry lacks it). Then in
+`auto_configure_df` (keyword-only, ~2384). **Route (use this one):**
+`controller.run` does NOT accept `n_rows_full` — it computes `n_rows = df.height`
+internally. The clean path is to inject the caller's value into the **`v0_kwargs`**
+dict that `auto_configure_df` already passes to the controller, e.g.
+`v0_kw["n_rows_full"] = n_rows_full` (only when not None). `_initial_config`
+already forwards `v0_kwargs["n_rows_full"]` to `_legacy_auto_configure_v0` →
+`build_blocking` via the existing `kw["n_rows_full"]` path
+(autoconfig_controller.py:~1352). Do NOT add `n_rows_full` to `controller.run`'s
+signature (bigger change, unnecessary). Then in
 `scripts/quality_invariant_scale.py::build_frozen_config`, add a `n_rows_full:
 int = 200_000_000` param and pass it to `auto_configure_df`; document why (the
 frozen config must be built FOR the scale it's applied at).
