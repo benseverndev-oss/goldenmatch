@@ -82,9 +82,13 @@ At the top of each string scorer, convert once to a codepoint array
 (`const ca = Array.from(a)` — spread/`Array.from` iterate by codepoint), then
 index `ca`/`ca.length` instead of `a`/`a.length`/`charCodeAt`. This is the
 single mechanical change that fixes non-BMP across jaro, jaroWinkler,
-levenshtein, indel. Compare codepoints by string equality (`ca[i] === cb[j]`),
-dropping `charCodeAt`. Cost: one `Array.from` per call (the matrix path already
-amortizes over NxN; acceptable — the WASM slice is where perf is chased).
+levenshtein, indel. Per-function diff scope: `jaro`/`jaroWinkler` already
+compare with string equality (`a[i] !== b[j]`), so there the change is purely
+the `length`/index swap to the codepoint array; `levenshteinDistance`
+(scorer.ts:191) and `indelDistance` (scorer.ts:235) additionally drop
+`charCodeAt` for `ca[i] === cb[j]`. Cost: one `Array.from` per call (the matrix
+path already amortizes over NxN; acceptable — the WASM slice is where perf is
+chased).
 
 ### Boost threshold (divergence 1)
 
@@ -96,20 +100,43 @@ capture (rapidfuzz is the oracle); the corpus includes a jaro≈0.7 case.
 
 ### Transposition (divergence 2)
 
-Replace the greedy `jaro` matching+transposition with a faithful port of
-rapidfuzz-cpp's `jaro_similarity` flagging algorithm: build per-string match
-flags within the window, then count transpositions by walking the two flagged
-subsequences in order. The match **count** is unchanged from the formal Jaro
-definition; only the assignment/transposition count is corrected. Validate by
-4dp parity over repeated-char inputs — the binding test is the corpus, not a
-hand proof.
+**The divergence is in the match-*assignment* phase, not the transposition
+*counting* phase.** The current `jaro` (scorer.ts:120-147) already does the
+"flag matches in-window, then count transpositions by walking the two flagged
+subsequences in order" thing — and that is precisely what yields the wrong
+answer (t=3 / 0.7639 on `'dabaeb'/'dbea'`). The greedy left-to-right matcher
+flags a *different set of pairs* than rapidfuzz: rapidfuzz-cpp's
+`flag_similar_characters` uses a bit-parallel pairing that produces a different
+(and, on repeated chars, fewer-transposition) flag set. Match **count** is the
+same; the *which-b[j]-does-a[i]-claim* assignment differs, which changes the
+transposition count downstream.
+
+So the fix is NOT to re-derive a greedy matcher (that is the existing bug).
+The plan ports rapidfuzz's actual Jaro pairing. Concretely, in priority order:
+1. **Port a concrete rapidfuzz reference**, not a fresh hand-roll — either
+   rapidfuzz-cpp's `flag_similar_characters` (the bit-parallel `FlaggedChars`
+   pairing in `jaro_impl`) or an existing JS transliteration of it. This gives
+   the exact assignment by construction.
+2. The **regenerated goldens are the binding oracle.** The plan iterates the
+   pairing until 4dp-green across the corpus; a hand proof is not required, but
+   the corpus MUST contain at least one *named, guaranteed-divergent* row —
+   `jaro('dabaeb','dbea')` = **0.8056** (rapidfuzz) — as the explicit red→green
+   target so the fix can't pass by accidentally-absent coverage.
+
+Levenshtein/Indel are unaffected by this (no transposition concept); they only
+get the codepoint fix.
 
 ### Scope of files
 
-Only `scorer.ts`'s metric functions change. `scoreField`'s dispatch, the
-0.95/0.7 short-circuit at scorer.ts:436 (an unrelated **scoreField-level**
-early-exit, not the Winkler boost threshold — keep it), PPRL/bloom, soundex,
-hashing — all untouched.
+Only `scorer.ts`'s metric functions (`jaro`, `jaroWinkler`,
+`levenshteinDistance`/`Similarity`, `indelDistance`/`Similarity`) change.
+`scoreField`'s dispatch (scorer.ts:395-429 on main — a **plain switch**, no
+Winkler short-circuit) is **untouched**; do **not** add any scoreField-level
+threshold gate. PPRL/bloom, soundex, hashing — all untouched. (Note: the
+`feat/857` branch has since added a scoreField-level `jw>=0.95 || jw<0.7`
+early-exit, but that guard is **not present on `main`**, this PR's base — there
+is nothing to preserve here; the boost-threshold change lives entirely inside
+`jaroWinkler`.)
 
 ## Goldens & corpus
 
