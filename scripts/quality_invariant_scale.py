@@ -78,11 +78,18 @@ _CORRUPT_FIELDS = ("first_name", "last_name", "address", "email")
 # _generate_realistic); kept for a complete mapping.
 _CORRUPT_LEVEL_INT = {"light": 0, "moderate": 1, "hard": 2}
 
-# Starting rates; Task 3 tunes `moderate` so the 1K oracle lands F1 ~0.90-0.95.
+# `moderate` is TUNED (#510 Task 3): at the 1K oracle these rates land pairwise
+# F1 = 0.933 (recall 0.875, B-cubed 0.947, cluster 0.720) — centered in the
+# 0.90-0.95 drift-sensitive band with headroom both ways, still a high-recall
+# regime. A 1K rate sweep (seed 0) gave: 0.06->0.950, 0.08->0.933, 0.10->0.924,
+# 0.12->0.904; 0.30 collapsed recall to 0.57 (F1 0.726). `hard` is the stress
+# level (not used by the published ladder). Re-tune AND update the report if you
+# change these — the band regression test (test_moderate_oracle_f1_in_target_band)
+# guards the window.
 CORRUPTION_LEVELS: dict[str, CorruptionConfig] = {
     "light": CorruptionConfig(),  # no extra corruption beyond the 10% a->@ typo
-    "moderate": CorruptionConfig(first_name=0.30, last_name=0.20, address=0.30, email=0.08),
-    "hard": CorruptionConfig(first_name=0.50, last_name=0.40, address=0.50, email=0.20),
+    "moderate": CorruptionConfig(first_name=0.08, last_name=0.05, address=0.08, email=0.02),
+    "hard": CorruptionConfig(first_name=0.20, last_name=0.12, address=0.20, email=0.05),
 }
 
 
@@ -392,13 +399,27 @@ def _peak_rss_mb() -> float | None:
 
 
 def _golden_hash(golden) -> str | None:
-    """sha256 of the golden frame sorted by all columns. Byte-identity witness
-    for backend-parity / determinism without pickling the DedupeResult."""
+    """sha256 of the golden frame sorted by all columns. A per-run CONTENT
+    fingerprint (kept in the artifact for the report), NOT a determinism witness:
+    golden field-survivorship breaks value ties by input row order, which is not
+    stably sorted run-to-run, so this hash can legitimately differ across reruns
+    on heavily-corrupted text fields even when the cluster PARTITION is identical.
+    Determinism is asserted on `clusters_signature` + golden SHAPE instead; the
+    survivorship-ordering gap is tracked as a goldenmatch follow-up. See
+    docs/quality-invariant-scale.md (Methodology) + the tracked issue."""
     if golden is None:
         return None
     import hashlib
     g = golden.sort(by=golden.columns)
     return hashlib.sha256(g.write_csv().encode("utf-8")).hexdigest()
+
+
+def _golden_shape(golden) -> list[int] | None:
+    """(height, width) of the golden frame, or None. Deterministic given the
+    cluster partition (which IS reproducible), unlike the survivorship VALUES."""
+    if golden is None:
+        return None
+    return [int(golden.height), int(golden.width)]
 
 
 def _clusters_signature(predicted_members: dict[int, list[int]]) -> str:
@@ -534,6 +555,7 @@ def run_rung(n_rows: int, seed: int = 0, shape: str = "realistic",
     metrics = score_quality(predicted, gt)
 
     golden_hash = _golden_hash(getattr(result, "golden", None))
+    golden_shape = _golden_shape(getattr(result, "golden", None))
     clusters_sig = _clusters_signature(predicted)
 
     multi = sum(1 for v in predicted.values() if len(v) > 1)
@@ -627,6 +649,7 @@ def run_rung(n_rows: int, seed: int = 0, shape: str = "realistic",
         "multi_member_clusters": multi,
         "committed_config": committed_cfg,
         "golden_hash": golden_hash,
+        "golden_shape": golden_shape,
         "clusters_signature": clusters_sig,
         "bench": bench_dict,
         "native": native_info,
