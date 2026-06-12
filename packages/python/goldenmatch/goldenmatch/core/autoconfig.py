@@ -2383,7 +2383,7 @@ _AUTOCONFIG_MATCH_MODE: ContextVar = ContextVar(
 
 
 @contextlib.contextmanager
-def _match_mode_autoconfig():
+def _match_mode_autoconfig():  # pyright: ignore[reportUnusedFunction]  # used cross-module (pipeline / _api) via local imports
     """Suppress the #858 multi-source guard for the duration (match mode)."""
     token = _AUTOCONFIG_MATCH_MODE.set(True)
     try:
