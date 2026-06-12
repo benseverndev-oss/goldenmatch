@@ -90,6 +90,18 @@ def main() -> None:
         native_loaded = native_module() is not None
         result["native_loaded"] = native_loaded
         result["native_block_scoring"] = bool(native_enabled("block_scoring"))
+        # FS-native telemetry: was the probabilistic Rust kernel REQUESTED
+        # (GOLDENMATCH_FS_NATIVE) and is the symbol actually present? Lets the
+        # bake-off artifact prove a `gm_prob_native` row really ran the kernel
+        # and didn't silently fall back to numpy (probabilistic mode never
+        # refuses on a missing kernel, unlike hand_built).
+        result["fs_native_requested"] = (
+            os.environ.get("GOLDENMATCH_FS_NATIVE", "").strip().lower()
+            in ("1", "true", "yes", "on")
+        )
+        result["fs_native_symbol_present"] = bool(
+            native_loaded and hasattr(native_module(), "score_block_pairs_fs")
+        )
         # The native gate only applies to the hand_built optimized-path claim. The
         # autoconfig modes let the controller pick the backend, so a missing native
         # runtime is recorded for info but does NOT refuse the run.

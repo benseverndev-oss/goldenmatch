@@ -1531,14 +1531,38 @@ def _run_dedupe_pipeline(
             # blocks no longer have to be skipped for performance — the
             # dominant FS recall lever. Falls back to the scalar path for
             # model-backed scorers or GOLDENMATCH_FS_VECTORIZED=0.
-            block_scorer = probabilistic_block_scorer(mk, em_result)
-            for block in blocks:
-                block_df = block.df.collect() if isinstance(block.df, pl.LazyFrame) else block.df
-                if _bench_dump_dir:
+            if _bench_dump_dir:
+                # Bench path stays per-block so candidate/emitted pair accounting
+                # is exact (the batched path doesn't expose per-block candidates).
+                block_scorer = probabilistic_block_scorer(mk, em_result)
+                for block in blocks:
+                    block_df = block.df.collect() if isinstance(block.df, pl.LazyFrame) else block.df
                     _accumulate_block_candidate_pairs(
                         block_df, _bench_candidate_pairs
                     )
-                pairs = block_scorer(block_df, matched_pairs)
+                    pairs = block_scorer(block_df, matched_pairs)
+                    if across_files_only:
+                        pairs = [
+                            (a, b, s) for a, b, s in pairs
+                            if source_lookup.get(a) != source_lookup.get(b)
+                        ]
+                    all_pairs.extend(pairs)
+                    for a, b, _s in pairs:
+                        matched_pairs.add((min(a, b), max(a, b)))
+                    for a, b, _s in pairs:
+                        _bench_emitted_pairs.add((min(a, b), max(a, b)))
+            else:
+                # Coalesce small blocks into batched per-field matrices to
+                # amortize the per-call FFI/marshal overhead that dominates FS
+                # scoring on the many tiny blocks multi-pass blocking produces.
+                # Within-block cells are identical to per-block scoring, so the
+                # emitted pair set is unchanged.
+                from goldenmatch.core.probabilistic import (
+                    score_probabilistic_blocks_batched,
+                )
+                pairs = score_probabilistic_blocks_batched(
+                    blocks, mk, em_result, matched_pairs
+                )
                 if across_files_only:
                     pairs = [
                         (a, b, s) for a, b, s in pairs
@@ -1547,9 +1571,6 @@ def _run_dedupe_pipeline(
                 all_pairs.extend(pairs)
                 for a, b, _s in pairs:
                     matched_pairs.add((min(a, b), max(a, b)))
-                if _bench_dump_dir:
-                    for a, b, _s in pairs:
-                        _bench_emitted_pairs.add((min(a, b), max(a, b)))
 
     if _bench_dump_dir:
         _dump_bench_pairs(

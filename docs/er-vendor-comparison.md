@@ -1,6 +1,6 @@
 # ER vendor comparison — GoldenMatch vs the field
 
-**Last updated:** 2026-05-13
+**Last updated:** 2026-06-12
 **Scope:** entity-resolution **engines**, both OSS and commercial. This is a reference doc, not marketing. Every claim about GoldenMatch is reproducible from this repo; claims about other vendors are sourced from their public docs as of mid-2026 and may lag behind their current release.
 **Sister doc:** `docs/superpowers/specs/2026-05-08-competitive-strategy-review.md` — what we *do* with these comparisons.
 
@@ -22,27 +22,28 @@ A "win" in the matrix below means *materially ahead with evidence*. Ties stay bl
 
 ## GoldenMatch — the baseline of this doc
 
-Before comparing, the column we're comparing *against*. Numbers are as of `goldenmatch` v1.9.0, post PR #189 / Round 5 scale audit (2026-05-12).
+Before comparing, the column we're comparing *against*. Numbers are as of `goldenmatch` v1.30.0 (2026-06-12) — the prior revision of this doc was pinned to v1.9.0; reference data, the identity graph, probabilistic/Splink parity, and distributed throughput have all moved since.
 
 | Axis | GoldenMatch |
 |---|---|
 | **License** | MIT (every package in the suite) |
 | **Languages** | Python (headline) + TypeScript (parity) + Rust (Postgres/DuckDB extension) |
-| **Runtimes** | Polars (≤500K), DuckDB (500K–50M), Ray (≥50M); Postgres via pgrx; DuckDB UDFs; edge JS (Vercel Edge / Cloudflare Workers / Deno) |
-| **Throughput** | 1M dedupe in 12.3 min on 4-core / 16 GB Linux (Round 5, 2026-05-12); 100K fuzzy ~39 s; 7,823 rec/s pipeline at 100K |
+| **Runtimes** | Polars (≤500K), DuckDB (500K–50M), Ray + DataFusion/Sail distributed tier (≥50M); Postgres via pgrx; DuckDB UDFs; edge JS (Vercel Edge / Cloudflare Workers / Deno) |
+| **Throughput** | 1M dedupe in 12.3 min on 4-core / 16 GB Linux (Round 5, 2026-05-12); **100M distributed dedupe in 9.2 min on a 5-node Ray cluster** (block-shuffle scoring + randomized-contraction WCC, byte-exact 20M-cluster recovery, #844); 100K fuzzy ~39 s |
 | **Accuracy, PII (Febrl)** | F1 0.971 (zero-config 0.944 on Febrl3) [^bench] |
 | **Accuracy, bibliographic (DBLP-ACM)** | F1 0.964 zero-config (hand-tuned ceiling 0.918) [^bench] |
 | **Accuracy, product (Abt-Buy)** | F1 0.722 +$0.04 LLM; 0.817 with Vertex AI + GPT-4o-mini [^bench] |
 | **Accuracy, voter records (NCVR)** | F1 0.972 zero-config [^bench] |
+| **Probabilistic (Fellegi-Sunter)** | Zero-tuning FS auto-config matches/beats hand-rolled Splink pairwise F1 on every dataset Splink scores, under one shared evaluator (febrl3 0.991 vs 0.965; historical_50k 0.778 vs 0.757; synthetic_person 0.998 vs 0.996); native FS kernel (2.9x), match-weight waterfall explainability, threshold sweep + m/u model report [^bakeoff] |
 | **Zero-config** | Introspective auto-config controller (v1.8+) with cross-run memory and LLM fallback. **Only OSS engine with a published zero-config benchmark suite.** |
 | **PPRL** | Bloom-filter PPRL with auto-configuration; F1 0.924 on FEBRL4 |
 | **Active learning** | `core/active_sampling.py` + boost tab; Learning Memory persistence; threshold learner triggers at 10+ corrections |
 | **LLM scoring** | Budget-capped LLM scorer; cached votes via Learning Memory; opt-in |
-| **Identity graph** | Cluster-level (post-hoc). No first-class graph output yet. |
-| **Reference data** | None bundled. 7 domain packs (electronics, software, healthcare, financial, real-estate, people, retail) ship rules, not lookups. |
+| **Identity graph** | First-class: persistent entity nodes (active / merged / split / retired lifecycle), typed evidence edges (same_as / possible_same_as / conflicts_with / derived_from), golden records, an event log, incremental resolve, and a pluggable store (Mongo backend); distributed identity-on-Sail (S5, #847). |
+| **Reference data** | Bundled (`goldenmatch.refdata`, strategy dir #8): reference-people (US Census-2010 top-10K surnames + frequency-weighted JW scorer; curated given-name alias table + alias-aware JW), reference-business (legal-form strip, NAICS-2022 normalization), reference-address (USPS Pub-28 normalization) — plus 7 domain rule packs. Still narrower than Senzing/LexisNexis curated data depth. |
 | **Explainability** | Per-pair NL prose explanations; per-field score breakdown; lineage tracking |
-| **AI-native surface** | 35+ MCP tools, A2A agent skills, REST API, Smithery-hosted MCP. **Only OSS ER engine with native MCP/A2A surface.** |
-| **Active dev** | Tracks daily; v1.9.0 shipped May 2026 |
+| **AI-native surface** | 50+ MCP tools (agent + memory + identity-graph + base), A2A agent skills, REST API, Smithery-hosted MCP. **Only OSS ER engine with native MCP/A2A surface.** |
+| **Active dev** | Tracks daily; v1.30.0 (June 2026) |
 
 The rest of this doc is "but what about X?".
 
@@ -57,7 +58,7 @@ Legend: **GM** = GoldenMatch is materially ahead. **V** = vendor is materially a
 | **OSS license** | GM | GM | GM | GM* | GM | GM | GM | GM† | V | V | V | V | V | V | V | V | V | V | V | V | V | V | GM |
 | **Zero-config** | GM | GM | GM | GM | GM | GM | GM | GM | GM | GM | GM | GM | GM | GM | GM | GM | GM | GM | GM | GM | GM | GM | GM |
 | **Polyglot (≥2 lang)** | V | GM | GM | GM | V | GM | GM | V | V | V | V | V | GM | GM | GM | GM | GM | GM | GM | GM | GM | GM | GM |
-| **PII F1 (Febrl)** | V | | | | | | | | | | | | | | | | | | | | | | V |
+| **PII F1 (Febrl)** | GM‡ | | | | | | | | | | | | | | | | | | | | | | V |
 | **Bib F1 (DBLP-ACM)** | GM | GM | | GM | | GM | GM | | | | | | | | | | | | | | | | V |
 | **Product F1 (Abt-Buy)** | GM | GM | GM | GM | GM | GM | GM | GM | | | | | | | | | | | | | | | V |
 | **Throughput ≥10M single node** | V | GM | GM | V | GM | GM | GM | V | V | V | V | V | V | V | V | V | V | V | V | V | V | V | GM |
@@ -73,12 +74,14 @@ Legend: **GM** = GoldenMatch is materially ahead. **V** = vendor is materially a
 
 *\* Zingg core is AGPL — viral copyleft, restrictive for commercial embedding. ZinggAI is closed.*
 *† Senzing CE is Apache 2.0 wrappers around a closed core engine. OSS surface, closed brain — treat the GM tag as "OSS-license surface" not "fully OSS engine".*
+*‡ Flipped V→GM (2026-06-12). The historical "Splink 0.998 on Febrl" was a cluster/entity metric on a Splink-favorable harness. Under one shared **pairwise** evaluator, GM's zero-tuning probabilistic auto-config now scores 0.991 on febrl3 vs Splink's hand-rolled 0.965 (+0.026), and matches/beats Splink on every dataset it scores — deterministic post-#829. See [^bakeoff]. Splink remains 3-19x faster per node.*
 
-Three observations from the matrix:
+Observations from the matrix:
 
 1. **Nobody else publishes zero-config benchmark numbers.** Every "GM" in that row reflects that this is currently uncontested ground.
-2. **Throughput at ≥10M on a single node is the universal "V" against us.** Almost every paid vendor and several OSS engines (Splink/DuckDB, Zingg/Spark, Senzing) win here. The 2026-05-12 Round 5 audit halved the 1M wall to 12.3 min; closing this column is direction #1 of the strategy review.
+2. **Throughput at ≥10M on a *single node* is still the universal "V" against us.** Almost every paid vendor and several OSS engines (Splink/DuckDB, Zingg/Spark, Senzing) win here. Distributed has closed fast — **100M dedupe now runs in 9.2 min on a 5-node Ray cluster** (block-shuffle scoring + randomized-contraction WCC, #844) — but the single-node ≥10M column is unmoved. Closing it remains direction #1 of the strategy review.
 3. **MCP/A2A surface is unique to us.** This is the AI-native wedge — nobody else has it because nobody else built an engine for AI agents to drive end-to-end.
+4. **The Splink "V" on PII F1 has flipped (note ‡).** Zero-tuning probabilistic auto-config now matches/beats hand-rolled Splink pairwise F1 under a shared evaluator — the first time an auto-config engine has done so against an expert-tuned F-S spec.
 
 ---
 
@@ -103,19 +106,20 @@ Three observations from the matrix:
 **AI / active learning.** No LLM integration. Active learning via manual labelling helpers; threshold calibration tools.
 
 **Where Splink beats GoldenMatch:**
-- Throughput: 1B+ rows demonstrated; we're 1M in 12.3 min.
-- PII F1 on Febrl: 0.998 vs our 0.971. Splink is the F-S champion.
+- Raw speed: 3-19x faster per node on the bake-off, 1B+ rows on Spark, plus a mature interactive m/u comparison-viewer UI. (We now match/beat on accuracy and reach 100M in 9.2 min distributed — but Splink stays faster per node.)
 - DuckDB-native by default; we treat it as a backend option.
 
 **Where GoldenMatch beats Splink:**
-- Non-PII (DBLP-ACM zero-config 0.964 vs Splink 0.728 [^splink]). Splink's F-S model assumes the comparison-level distributions hold; on bibliographic data they don't.
-- Zero-config: Splink requires a comparison specification per field; we ship a controller.
+- **Accuracy with zero tuning.** GM's probabilistic auto-config matches/beats hand-rolled Splink pairwise F1 on every dataset Splink scores, under one shared evaluator: febrl3 0.991 vs 0.965, historical_50k 0.778 vs 0.757, synthetic_person 0.998 vs 0.996 [^bakeoff]. Splink requires an expert comparison spec per field; we ship a controller. (The often-cited Splink ~0.97/0.998 Febrl figure is a *cluster* metric, not within-cluster pairwise.)
+- Non-PII (DBLP-ACM zero-config weighted path 0.964 vs Splink 0.728 [^splink]). Splink's F-S model assumes the comparison-level distributions hold; on bibliographic data they don't — its hand-rolled spec skips DBLP-ACM entirely.
+- Reference-data packs bundled (`goldenmatch.refdata`); Splink ships none.
+- Identity graph as a first-class output; Splink emits clusters.
 - Polyglot: Python-only vs our Py + TS + Rust + SQL.
 - AI-native: no MCP, no A2A.
 - LLM-augmented borderline scoring: not in Splink.
 - PPRL: not in Splink.
 
-**Composable?** Yes — MIT, well-architected Python library. Plausible to embed Splink's F-S backend as a `goldenmatch` strategy (we already have `core/probabilistic.py` with Splink-style EM; deeper integration possible).
+**Composable?** Yes — MIT, well-architected Python library. We now ship full F-S parity in-engine (EM-trained m/u, native FS kernel, match-weight waterfall explainability, threshold sweep + m/u model report — `core/probabilistic.py` + `core/evaluate.py`), so the realistic posture is feature parity rather than embedding Splink's backend.
 
 ---
 
@@ -629,7 +633,7 @@ Listed because customers sometimes ask "but what about X?". Short entries.
 
 ### Pattern 1 — the "OSS engines + closed reference data" sandwich
 
-Senzing, LexisNexis, Quantexa, Tilores all sell **data + engine** as one package. OSS engines (Splink, dedupe, Zingg, GoldenMatch) sell engine only. The buyer choice is: build your own reference data on top of OSS, or pay for an integrated bundle. **GoldenMatch's path is to make bundling OSS reference data (libpostal, US Census, OpenCorporates, NAICS) into the engine a one-line install** (strategy direction #8).
+Senzing, LexisNexis, Quantexa, Tilores all sell **data + engine** as one package. OSS engines (Splink, dedupe, Zingg) sell engine only. The buyer choice is: build your own reference data on top of OSS, or pay for an integrated bundle. **GoldenMatch has now shipped the first of this** (`goldenmatch.refdata`, strategy direction #8): bundled US Census-2010 surnames + frequency-weighted JW, given-name aliases, legal-form normalization, NAICS-2022, and USPS address normalization — `import goldenmatch.refdata` registers the scorers/transforms, data ships in the wheel. The remaining gap to Senzing/LexisNexis is curated *depth* (watchlists, 200+ country address formats, ethnic name dictionaries), not the *existence* of bundled data — so this gap is now narrowing on the 80% case, not open.
 
 ### Pattern 2 — the "managed warehouse" wave
 
@@ -641,7 +645,7 @@ Going axis-by-axis across this matrix, **no other vendor publishes zero-config b
 
 ### Pattern 4 — identity-graph engines are the next frontier
 
-Senzing, Quantexa, Tilores all *emit a graph*, not a clusters dict. The mainstream OSS engines (Splink, dedupe, RecLink Toolkit, Zingg, GoldenMatch v1.9) all emit clusters. **Strategy direction #2 (identity graph as first-class engine output) is the bet that this gap will be the defining one of 2027.** Senzing's 25 years of head-start on reference data can't be matched, but their 5-year head-start on the graph output can.
+Senzing, Quantexa, Tilores all *emit a graph*, not a clusters dict. The mainstream OSS engines (Splink, dedupe, RecLink Toolkit, Zingg) still emit clusters. **GoldenMatch no longer does (strategy direction #2 shipped):** it now emits a first-class identity graph — persistent entity nodes with an active/merged/split/retired lifecycle, typed evidence edges (same_as / possible_same_as / conflicts_with / derived_from), golden records, an event log, incremental resolve, a pluggable store, and a distributed identity build on Sail (S5). The remaining gap to Senzing/Quantexa/Tilores is now *real-time match-one latency* and *relationship-context decisioning* (fraud/AML graph reasoning), not the existence of graph output.
 
 ### Pattern 5 — AI-native is uncontested but unproven
 
@@ -658,7 +662,7 @@ Splink (MIT) and dedupe (BSD) have outgrown Zingg (AGPL) and Senzing (closed cor
 1. **Pricing is indicative.** Most enterprise vendors don't publish list prices. Numbers above are 2024–2026 industry estimates based on public case studies, RFP responses, and analyst notes. Treat ranges as orders of magnitude, not quotes.
 2. **Vendor product surfaces change quickly.** AWS ER and Snowflake Cortex shipped major releases between 2023 and 2026; their capabilities matrix may be more competitive than this doc reflects. Last full re-survey: 2026-05.
 3. **Our own numbers are reproducible.** Every GoldenMatch claim in this doc points back to `docs/reproducing-benchmarks.md`, `docs/scale-audit-2026-05.md`, or `packages/python/goldenmatch/CHANGELOG.md`. If you can't reproduce one, it's a bug — file it.
-4. **The "where vendor X beats us" entries are the most likely to age.** Direction #1 of the strategy review (throughput) and direction #2 (identity graph) are explicitly targeting two of the most common columns where we lose. Expect updates.
+4. **The "where vendor X beats us" entries are the most likely to age.** This 2026-06-12 pass already retired two: direction #2 (identity graph) shipped first-class, and reference data (direction #8) is now bundled. Direction #1 (single-node ≥10M throughput) is still the standing universal "V" — expect that one to move next.
 5. **Some vendors we deliberately left out.** Salesforce Data Cloud, SAP Master Data Governance, Talend Data Fabric, IBM InfoSphere QualityStage — all have ER components but are platform plays where the ER engine is a feature, not the product. The Tamr/Reltio/Informatica/Stibo/Ataccama/Profisee entries above cover the same buyer pattern; we'd be repeating ourselves.
 6. **Academic benchmarks ≠ enterprise outcomes.** F1 on DBLP-ACM tells you something. F1 on a customer's product catalog with 2M rows of weird shape tells you something different. The leaderboard direction (#5) is about closing this gap.
 
@@ -667,7 +671,7 @@ Splink (MIT) and dedupe (BSD) have outgrown Zingg (AGPL) and Senzing (closed cor
 ## What to do with this doc
 
 - **Sales / GTM (in golden-showcase repo):** lift the "where GoldenMatch beats X" bullets per vendor. Position relative to whichever competitor a buyer mentioned.
-- **Engine roadmap (in this repo):** the cross-cutting observations are the strategic input to the directions in `docs/superpowers/specs/2026-05-08-competitive-strategy-review.md`. Patterns 3 (zero-config), 4 (identity graph), and 5 (AI-native) are the three moats; patterns 1 (reference data) and 2 (warehouse-native) are the gaps.
+- **Engine roadmap (in this repo):** the cross-cutting observations are the strategic input to the directions in `docs/superpowers/specs/2026-05-08-competitive-strategy-review.md`. Patterns 3 (zero-config) and 5 (AI-native) are the standing moats; pattern 4 (identity graph) shipped first-class this pass and pattern 1 (reference data) is now bundled on the 80% case; pattern 2 (warehouse-native) and single-node ≥10M throughput are the remaining open gaps.
 - **Customer conversations:** if a customer says "we're evaluating GoldenMatch vs X", look up X and lead with the "where they beat us" section. Honesty up front; lead with where you lose, then explain why the engine still wins overall.
 - **PR review:** when a new feature changes a capability cell in the matrix at the top, update the matrix in the same PR. This doc should stay accurate, not aspirational.
 
@@ -675,9 +679,11 @@ Splink (MIT) and dedupe (BSD) have outgrown Zingg (AGPL) and Senzing (closed cor
 
 ## Footnotes
 
-[^bench]: GoldenMatch numbers come from `docs/reproducing-benchmarks.md` (per-dataset runner + expected output) and the entries in `packages/python/goldenmatch/CHANGELOG.md` for v1.8 through v1.15. Verified-stamp dates accompany each row in the reproducing-benchmarks doc.
+[^bench]: GoldenMatch zero-config numbers come from `docs/reproducing-benchmarks.md` (per-dataset runner + expected output) and the entries in `packages/python/goldenmatch/CHANGELOG.md` for v1.8 through v1.30. Verified-stamp dates accompany each row in the reproducing-benchmarks doc (DBLP-ACM 0.9641, Febrl3 0.9443, NCVR 0.9719, all verified 2026-05-11 and flat since).
 
-[^splink]: Splink F1 numbers (0.998 Febrl, 0.728 DBLP-ACM) come from this repo's `D:\show_case\golden-showcase\comparison_bench\` head-to-head runner — see `packages/python/goldenmatch/CLAUDE.md` reference to that directory. Numbers reflect the Splink 4.x release line; rerun if comparing against a newer Splink.
+[^bakeoff]: The autoconfig-vs-hand-rolled bake-off lives at `docs/benchmarks/2026-06-09-splink-bakeoff.md` — three engines (GM zero-config, GM probabilistic auto-config, hand-rolled Splink) per dataset, each self-timed in its own subprocess, all judged by ONE shared `evaluate.evaluate` pairwise evaluator on the same `record_id` key space. Run on `large-new-64GB` at commit `970aab61` (deterministic EM training-pair sampling, #829), reproduces run-to-run within 0.002. Honest framing in that doc: Splink stays 3-19x faster per node, retains 1B-row Spark + the m/u comparison-viewer UI; GM's edge is zero tuning at accuracy parity.
+
+[^splink]: Splink DBLP-ACM F1 0.728 comes from this repo's head-to-head runner (`scripts/bench_er_headtohead/`); see also [^bakeoff]. The older "Splink 0.998 on Febrl" figure was a cluster/entity metric on a Splink-favorable harness, not within-cluster pairwise — under the shared pairwise evaluator Splink scores 0.965 on febrl3 (vs GM 0.991). Numbers reflect the Splink 4.x release line; rerun if comparing against a newer Splink.
 
 [^reclink]: RecordLinkage Toolkit F1 0.923 on DBLP-ACM from the head-to-head runner above (RecLink ~0.18.x). Author publishes example notebooks at https://recordlinkage.readthedocs.io/ with DBLP-ACM in the standard examples corpus.
 

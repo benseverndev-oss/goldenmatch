@@ -67,6 +67,28 @@ The EM fix shaved ~100 s off both paths and halved peak RSS; native is ~10.8×
 on the scoring step (tiny-block regime). Original pre-fix figures (269 s / 0.825)
 were the un-bounded EM + the star-GT bench bug.
 
+## Block-scoring perf — the per-block fan-out fix (2026-06-12, PR #869)
+A follow-up pass on the *numpy* (default) auto-config path, prompted by auditing
+the "Splink 3-19x faster" claim. Two findings reframed it
+([decision 0012](../decisions/0012-fs-block-scoring-perf.md)):
+
+1. **The bake-off measured numpy, not native.** It never set `GOLDENMATCH_FS_NATIVE`,
+   and probabilistic mode doesn't refuse on a missing kernel. A `gm_prob_native`
+   column (native built + symbol-asserted in CI) showed **native ≈ numpy, no wall
+   change** — because the wall is per-block fan-out, not scoring math. historical_50k
+   makes 31,735 blocks, **79% ≤8 rows**, each row in ~6 blocks (multi-pass overlap),
+   so scoring fanned out into ~222k tiny FFI-bound `score_field_matrix` calls.
+2. **Three output-identical optimizations** on `score_probabilistic_vectorized`,
+   each gated by a fixed-`em_result` pair-set diff (200,058 pairs, byte-identical):
+   value-dedup in per-field matrices (−32%), batch small blocks into shared
+   per-field S×S matrices with diagonal sub-block extraction (−48%, native calls
+   222k→4.3k), and a batch row-cap tune 512→256 (−20%).
+
+**Measured (historical_50k, local, probabilistic auto-config):** 86.5s → **24.6s
+(−72%)**, pairs identical at each step. The cluster-count hash is NOT a valid gate
+here — the pipeline is non-deterministic run-to-run (11,542–11,545 clusters, EM
+sample order) — so the pair-set diff is the FS correctness method.
+
 ## Accuracy arc — beating Splink (auto-config v2, #821 panel + #823)
 The engine arc closed *feature* parity; the accuracy arc closes the head-to-head.
 A shared evaluator (`scripts/bench_er_headtohead`, pairwise F1, one harness for
@@ -137,9 +159,16 @@ byte-identical to legacy.
 
 ## Where Splink still leads
 Distributed Fellegi-Sunter at 1B+ rows on Spark, and the mature interactive
-m/u + comparison-viewer charting UI, and raw speed (3-19x faster on these
-datasets). GoldenMatch's FS scale-out is measured single-node at 6M and inherits
-the bucket → Ray path; the charting is data-export (`fs_model_report`, the
-waterfall) rather than a hosted dashboard. On *PII accuracy*, though, Splink no
-longer leads — the head-to-head above flips that on the shared evaluator
-(historical_50k 0.778 vs 0.757, synthetic_person 0.998 vs 0.996).
+m/u + comparison-viewer charting UI, and raw per-node speed. GoldenMatch's FS
+scale-out is measured single-node at 6M and inherits the bucket → Ray path; the
+charting is data-export (`fs_model_report`, the waterfall) rather than a hosted
+dashboard. On *PII accuracy*, though, Splink no longer leads — the head-to-head
+above flips that on the shared evaluator (historical_50k 0.778 vs 0.757,
+synthetic_person 0.998 vs 0.996).
+
+**The "3-19x faster" figure is pre-optimization and needs a re-bench.** It came
+from a bake-off that measured GM's *numpy* path before PR #869's block-scoring
+fixes (which cut the historical_50k wall −72% locally; see the perf section
+above). The committed bake-off `gm_probabilistic` walls are stale until
+`bench-probabilistic.yml` (`run_bakeoff=true`) is re-run on the optimized branch;
+Splink is still faster per node, but by a smaller and as-yet-unre-measured margin.
