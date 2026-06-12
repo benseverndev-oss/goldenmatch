@@ -149,6 +149,57 @@ def test_phone_demoted_when_multi_source():
         assert all(f.field != "phone" for f in (m.fields or []))
 
 
+# ── Task 7: wired into auto_configure_df ─────────────────────────────────────
+
+from goldenmatch.core.autoconfig import auto_configure_df
+
+
+def _crm_df():
+    rows = []
+    srcs = ["hubspot", "salesforce", "cvent"]
+    for i in range(30):
+        s = srcs[i % 3]
+        rows.append({
+            "source": s,
+            "rec_id": f"{s}-{i}",                  # disjoint per source
+            "first": f"first{i // 2}",
+            "last": f"last{i // 2}",
+            "email": f"user{i // 2}@ex.com",       # shared across sources
+            "phone": "5551112222" if i < 6 else f"555{i:07d}",
+        })
+    return pl.DataFrame(rows)
+
+
+def _mk_names(cfg):
+    return {m.name for m in cfg.get_matchkeys()}
+
+
+def _all_match_fields(cfg):
+    return {
+        f.field
+        for m in cfg.get_matchkeys()
+        for f in (m.fields or [])
+        if f.field
+    }
+
+
+def test_zeroconfig_excludes_source_and_demotes_phone():
+    cfg = auto_configure_df(_crm_df())
+    fields = _all_match_fields(cfg)
+    assert "source" not in fields          # source label excluded
+    assert "rec_id" not in fields          # 0-overlap surrogate excluded
+    assert "exact_phone" not in _mk_names(cfg)   # phone demoted
+    assert "email" in fields               # genuine shared identifier kept
+
+
+def test_killswitch_restores_legacy(monkeypatch):
+    monkeypatch.setenv("GOLDENMATCH_MULTISOURCE_AUTOCONFIG", "0")
+    cfg = auto_configure_df(_crm_df())
+    fields = _all_match_fields(cfg)
+    # legacy behaviour: source admitted OR phone exact present
+    assert "source" in fields or "exact_phone" in _mk_names(cfg)
+
+
 # ── Task 1: generalized _check_source_overlap ────────────────────────────────
 
 def test_overlap_against_user_partition_column():

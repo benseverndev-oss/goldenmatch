@@ -1395,6 +1395,28 @@ def _check_source_overlap(
 
 # ── #858: multi-source over-merge guard ──────────────────────────────────────
 
+def _source_disjoint(df: pl.DataFrame, col: str, partition_col: str) -> bool:
+    """True iff no value of ``col`` appears under 2+ distinct partitions.
+
+    The "fully source-specific" signal #858 uses to identify provenance /
+    per-source surrogate columns (the source label, per-source ids). Unlike
+    ``_check_source_overlap`` (all-partition intersection, which is 0 even for a
+    real identifier shared between only SOME of >2 sources), this is a
+    max-pairwise test: a genuine shared identifier (the same person appearing in
+    two sources with the same value) is NOT disjoint, so it is kept.
+    """
+    if partition_col not in df.columns:
+        return False
+    sub = df.select([col, partition_col]).drop_nulls()
+    if sub.height == 0:
+        return False
+    per_value = sub.group_by(col).agg(
+        pl.col(partition_col).n_unique().alias("_np")
+    )
+    max_parts = per_value["_np"].max()
+    return (max_parts or 0) <= 1
+
+
 # Bounded source-indicator name patterns (case-insensitive). NOT a general
 # provenance regex (name-regex was rejected as the primary mechanism, spec §1);
 # this only LOCATES a user source partition when there is no ``__source__``.
@@ -1433,8 +1455,7 @@ def _detect_source_partition(
         if n_unique < 2 or n_unique > card_cap:
             continue
         has_cosig = any(
-            other != p.name
-            and _check_source_overlap(df, other, partition_col=p.name) == 0.0
+            other != p.name and _source_disjoint(df, other, p.name)
             for other in other_cols
         )
         if has_cosig:
@@ -1463,7 +1484,7 @@ def _source_correlated_exclusions(
         col = p.name
         if col.startswith("__") or col == partition:
             continue
-        if _check_source_overlap(df, col, partition_col=partition) == 0.0:
+        if _source_disjoint(df, col, partition):
             exclude.add(col)
     return exclude
 
@@ -2545,6 +2566,7 @@ def auto_configure_df(
     # Skipped when df is a Ray Dataset (distributed path) -- those have
     # their own column-selection story; exclusions land at the per-
     # partition kernel layer separately.
+    _ms_partition: str | None = None  # #858 source partition (None => feature off)
     if not _is_ray_dataset(df) and isinstance(df, pl.DataFrame):
         from goldenmatch.core.quality_exclusions import (
             detect_autoconfig_exclusions,
@@ -2559,6 +2581,17 @@ def auto_configure_df(
         force_exclude_list, force_include_list = (
             _resolve_effective_exclusion_overrides(config=None)
         )
+        # #858: multi-source source-correlated over-merge guard (spec §0-§4).
+        # Detect the source partition on the FULL frame, then exclude the
+        # source-indicator column + every 0-cross-source-overlap column from
+        # match features by folding them into force_exclude (dropped below).
+        _ms_profiles = profile_columns(df)
+        _ms_partition = _detect_source_partition(df, _ms_profiles)
+        _ms_exclude = _source_correlated_exclusions(df, _ms_profiles, _ms_partition)
+        if _ms_exclude:
+            force_exclude_list = list(force_exclude_list) + [
+                c for c in _ms_exclude if c not in force_exclude_list
+            ]
         # Internal bookkeeping columns are invisible to detectors.
         skip = {"__row_id__", "__source__"}
         for col in df.columns:
@@ -2615,6 +2648,9 @@ def auto_configure_df(
         "llm_auto": llm_auto,
         "strict": strict,
         "allow_remote_assets": allow_remote_assets,
+        # #858: full-frame source-partition detection result, threaded to
+        # build_matchkeys via _legacy_auto_configure_v0 for phone demotion.
+        "multi_source": _ms_partition is not None,
     }
     config, profile, history = controller.run(
         df,
@@ -2654,6 +2690,7 @@ def _legacy_auto_configure_v0(  # pyright: ignore[reportUnusedFunction]  # kept 
     strict: bool = False,
     allow_remote_assets: bool = False,
     n_rows_full: int | None = None,
+    multi_source: bool = False,
 ) -> GoldenMatchConfig:
     """Legacy column-profiling + rule-based auto-config heuristic (the v0
     starting point for the controller). Implementation unchanged from the
@@ -2737,7 +2774,7 @@ def _legacy_auto_configure_v0(  # pyright: ignore[reportUnusedFunction]  # kept 
             )
 
     # Build matchkeys
-    matchkeys = build_matchkeys(profiles, df=df)
+    matchkeys = build_matchkeys(profiles, df=df, multi_source=multi_source)
 
     # ── Add domain-extracted fields to matchkeys ──
     if extracted_columns:
