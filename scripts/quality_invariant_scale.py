@@ -73,6 +73,9 @@ class CorruptionConfig:
 # Stream order is FIXED (spawn index = position here) so each field's child RNG
 # is stable regardless of which other fields are corrupted.
 _CORRUPT_FIELDS = ("first_name", "last_name", "address", "email")
+# Seeds the corruption SeedSequence per level. "light" -> 0 is never actually
+# reached (all-zero rates short-circuit the corruption branch in
+# _generate_realistic); kept for a complete mapping.
 _CORRUPT_LEVEL_INT = {"light": 0, "moderate": 1, "hard": 2}
 
 # Starting rates; Task 3 tunes `moderate` so the 1K oracle lands F1 ~0.90-0.95.
@@ -107,11 +110,12 @@ def _corrupt_cell(s: str, type_sel: float, pos_sel: float) -> str:
 
 
 def _apply_field_corruption(values: list[str], rate: float, field_rng) -> list[str]:
-    """Corrupt a column of strings in place. `field_rng` is this field's own
-    numpy Generator. Draws a (n, 3) block — [apply_mask, type_sel, pos_sel] per
-    row — so row i's three uniforms sit at fixed flat offsets [3i, 3i+1, 3i+2];
-    the first k rows of an n=k draw equal the first k rows of any larger draw
-    from the same stream (prefix stability). Loops only over masked rows."""
+    """Corrupt a column of strings in place; returns the SAME list (mutated), so
+    callers must use the return value. `field_rng` is this field's own numpy
+    Generator. Draws a (n, 3) block — [apply_mask, type_sel, pos_sel] per row —
+    so row i's three uniforms sit at fixed flat offsets [3i, 3i+1, 3i+2]; the
+    first k rows of an n=k draw equal the first k rows of any larger draw from
+    the same stream (prefix stability). Loops only over masked rows."""
     n = len(values)
     if rate <= 0.0 or n == 0:
         return values

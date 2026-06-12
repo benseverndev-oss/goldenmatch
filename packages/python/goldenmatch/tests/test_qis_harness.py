@@ -33,18 +33,17 @@ def test_corrupt_cell_types_are_deterministic_and_string_valued():
     assert qis._corrupt_cell("x", 0.10, 0.0) in ("x", "")
 
 
-def test_apply_field_corruption_prefix_stable_across_n():
-    # Row i's corruption depends only on (seed, field stream), NOT on n.
+def test_apply_field_corruption_deterministic_given_same_stream():
+    # Same field stream + same input -> identical corruption. (Cross-n prefix
+    # stability is a separate, stronger property asserted at the generator level
+    # in test_generate_corruption_prefix_stable_across_n; the (n,3) block draw is
+    # what guarantees it. This test only pins the determinism of one column pass.)
     base = [f"value{i:04d}" for i in range(50)]
-    ss = np.random.SeedSequence([0, 1])
-    rng_small = np.random.default_rng(ss.spawn(1)[0])
-    rng_big = np.random.default_rng(np.random.SeedSequence([0, 1]).spawn(1)[0])
-    small = qis._apply_field_corruption(list(base), 0.5, rng_small)
-    big = qis._apply_field_corruption([f"value{i:04d}" for i in range(50)], 0.5, rng_big)
-    # Same stream, same length here -> identical. (Cross-n prefix stability is
-    # asserted at the generator level in Task 2; the (n,3) block draw is what
-    # guarantees it.)
-    assert small == big
+    rng_a = np.random.default_rng(np.random.SeedSequence([0, 1]).spawn(1)[0])
+    rng_b = np.random.default_rng(np.random.SeedSequence([0, 1]).spawn(1)[0])
+    a = qis._apply_field_corruption(list(base), 0.5, rng_a)
+    b = qis._apply_field_corruption([f"value{i:04d}" for i in range(50)], 0.5, rng_b)
+    assert a == b
 
 
 def test_generate_corruption_is_deterministic():
@@ -71,9 +70,13 @@ def test_generate_corruption_preserves_oracle():
     assert (c_light == c_mod).all()
 
 
-def test_generate_light_is_unchanged_baseline():
-    # `light` must equal the pre-#510 default (no extra corruption), so existing
-    # callers and published light-shape numbers are untouched.
+def test_generate_light_is_the_default_no_extra_corruption():
+    # `light` is the INTERNAL default: no extra corruption on top of the existing
+    # 10% a->@ typo. The default-arg call and explicit corruption="light" must
+    # agree at the same N. NOTE: this does NOT claim parity with pre-#510 cached
+    # numbers -- the prefix-stability refactor (per-field RNG streams) deliberately
+    # reset the realistic-shape field VALUES (distribution unchanged). Task 3 must
+    # tune `moderate` against a FRESH 1K oracle run, not a pre-branch JSON.
     df_default, _ = qis.generate_with_gt(1000, seed=0, shape="realistic")
     df_light, _ = qis.generate_with_gt(1000, seed=0, shape="realistic", corruption="light")
     assert df_default.equals(df_light)
