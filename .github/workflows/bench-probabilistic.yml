@@ -162,10 +162,14 @@ jobs:
   # Runs scripts/bench_er_headtohead/run_bakeoff.py: gm_zeroconfig +
   # gm_probabilistic + a hand-rolled Splink spec, scored by the SAME evaluator,
   # across 4 datasets (historical_50k, febrl3, synthetic_person, dblp_acm).
-  # Each engine is a subprocess (run_bakeoff already passes --allow-pure-python
-  # to the GM side, so no native build is needed). Measurement lane only — not a
-  # gate. Toggled by the run_bakeoff input; the toggle takes effect once this
-  # workflow is on the default branch.
+  # Engines are subprocesses: gm_zeroconfig + gm_probabilistic run pure-Python
+  # (numpy FS), while gm_prob_native runs the native Rust FS kernel
+  # (GOLDENMATCH_FS_NATIVE=1) — so this job DOES build the native ext and asserts
+  # the score_block_pairs_fs symbol is present before running (a missing kernel
+  # would silently fall back to numpy in probabilistic mode and mislabel the
+  # native column). Measurement lane only — not a gate. Toggled by the
+  # run_bakeoff input; the toggle takes effect once this workflow is on the
+  # default branch.
   bake-off:
     if: ${{ inputs.run_bakeoff }}
     runs-on: large-new-64GB
@@ -203,6 +207,28 @@ jobs:
           else
             echo "::warning::DBLP-ACM download failed; dblp_acm will be skipped in the bake-off"
           fi
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/native
+
+      - name: Build native ext (for the gm_prob_native FS kernel)
+        run: python scripts/build_native.py
+
+      - name: Assert the native FS kernel symbol is present
+        run: |
+          python - <<'PY'
+          from goldenmatch.core._native_loader import native_module
+          mod = native_module()
+          assert mod is not None, "native ext did not load after build_native.py"
+          assert hasattr(mod, "score_block_pairs_fs"), (
+              "native ext loaded but score_block_pairs_fs is MISSING -- the "
+              "gm_prob_native column would silently fall back to numpy. Rebuild "
+              "the crate / bump goldenmatch-native so the FS kernel symbol ships."
+          )
+          print("OK: score_block_pairs_fs present")
+          PY
 
       - name: Run bake-off
         run: python scripts/bench_er_headtohead/run_bakeoff.py --out-dir bakeoff_out

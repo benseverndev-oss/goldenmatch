@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -35,11 +36,22 @@ _HERE = Path(__file__).resolve().parent
 RUN_GM = _HERE / "run_goldenmatch.py"
 RUN_SPLINK = _HERE / "run_splink.py"
 
-ENGINES = ["gm_zeroconfig", "gm_probabilistic", "splink"]
+ENGINES = ["gm_zeroconfig", "gm_probabilistic", "gm_prob_native", "splink"]
 DATASETS = ["historical_50k", "febrl3", "synthetic_person", "dblp_acm"]
 
 # Maps a GoldenMatch bake-off engine name to run_goldenmatch.py's --mode value.
-_GM_MODE = {"gm_zeroconfig": "zeroconfig", "gm_probabilistic": "probabilistic"}
+# `gm_prob_native` is the SAME probabilistic auto-config as `gm_probabilistic`
+# but run with the native Rust FS kernel on (GOLDENMATCH_FS_NATIVE=1 +
+# --require-native) — the optimized-vs-optimized column. The default-numpy
+# `gm_probabilistic` row stays so both paths are visible side by side.
+_GM_MODE = {
+    "gm_zeroconfig": "zeroconfig",
+    "gm_probabilistic": "probabilistic",
+    "gm_prob_native": "probabilistic",
+}
+
+# Engines that run the native FS kernel (require a built native ext).
+_GM_NATIVE = {"gm_prob_native"}
 
 # Generous per-engine subprocess cap; Splink EM + clustering and the GM
 # zero-config controller can be slow on a shared runner. A timeout records
@@ -247,28 +259,43 @@ def render_md(rows: list[dict]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _run_gm(name, mode, ds_dir, records_parquet, rows_n, truth_path, threshold):
+def _run_gm(
+    name, engine, mode, ds_dir, records_parquet, rows_n, truth_path, threshold,
+    *, native=False,
+):
     """Run run_goldenmatch.py in zeroconfig/probabilistic mode as a subprocess.
 
     Returns (result_dict, metrics|None). status=ok + pred present -> metrics
     from the shared evaluator; refused/error/timeout -> metrics None.
+
+    Files are keyed by ``engine`` (not ``mode``) so two engines sharing a mode
+    (gm_probabilistic + gm_prob_native both run ``probabilistic``) don't clobber
+    each other's result/pred parquet. ``native=True`` flips the GM subprocess to
+    the native Rust FS kernel (GOLDENMATCH_FS_NATIVE=1 + --require-native).
     """
-    res_path = ds_dir / f"gm_{mode}_res.json"
-    pred_path = ds_dir / f"gm_{mode}_pred.parquet"
+    res_path = ds_dir / f"{engine}_res.json"
+    pred_path = ds_dir / f"{engine}_pred.parquet"
     cmd = [
         sys.executable,
         str(RUN_GM),
         "--input", str(records_parquet),
         "--rows", str(rows_n),
         "--mode", mode,
-        "--allow-pure-python",
+        "--require-native" if native else "--allow-pure-python",
         "--pred-out", str(pred_path),
         "--out", str(res_path),
         "--threshold", str(threshold),
     ]
+    env = dict(os.environ)
+    if native:
+        # Optimized FS path: native Rust kernel + loaded native runtime. The
+        # workflow builds the ext and asserts the symbol is present, so a silent
+        # numpy fallback here is impossible (run_goldenmatch stamps
+        # fs_native_symbol_present for a belt-and-suspenders check).
+        env["GOLDENMATCH_FS_NATIVE"] = "1"
     try:
         proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=_ENGINE_TIMEOUT_S
+            cmd, capture_output=True, text=True, timeout=_ENGINE_TIMEOUT_S, env=env
         )
     except subprocess.TimeoutExpired:
         return ({"status": "timeout", "error": f"timed out after {_ENGINE_TIMEOUT_S}s"}, None)
@@ -430,10 +457,10 @@ def main(argv: list[str] | None = None) -> None:
 
         rows_n = records.height
 
-        for eng in ("gm_zeroconfig", "gm_probabilistic"):
+        for eng in ("gm_zeroconfig", "gm_probabilistic", "gm_prob_native"):
             result, metrics = _run_gm(
-                name, _GM_MODE[eng], ds_dir, records_parquet, rows_n,
-                truth_path, args.threshold,
+                name, eng, _GM_MODE[eng], ds_dir, records_parquet, rows_n,
+                truth_path, args.threshold, native=(eng in _GM_NATIVE),
             )
             per_engine_results[name][eng] = (result, metrics)
             _print_progress(name, eng, result, metrics)

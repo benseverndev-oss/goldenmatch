@@ -1186,6 +1186,26 @@ def _rc_union_isolated(labels_ds: Any, all_ids: list[int], pairs_ds: Any) -> Any
     return labels_ds.union(iso_ds)
 
 
+def _assert_scratch_shared_if_multinode(scratch: str, n_alive_nodes: int) -> None:
+    """Raise if a multi-node run uses a node-local (non-shared) WCC scratch path.
+
+    The randomized-contraction WCC checkpoints each round to ``scratch`` and
+    re-reads it on every worker. A node-local path (no ``://`` scheme) is
+    invisible to other nodes, so the cross-node reads silently return nothing
+    and the WCC diverges. Block-shuffle is default-on now (#844), so this is the
+    common multi-node footgun -- fail loudly with the fix. A shared path
+    (``gs://`` / ``s3://`` / ...) or a single-node cluster is fine.
+    """
+    if n_alive_nodes > 1 and "://" not in scratch:
+        raise ValueError(
+            f"randomized_contraction WCC on a {n_alive_nodes}-node Ray cluster "
+            f"requires a SHARED scratch path -- set "
+            f"GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH=gs://<bucket>/rc_scratch. The "
+            f"node-local path {scratch!r} is invisible to other workers and "
+            f"silently breaks the per-round cross-node parquet reads."
+        )
+
+
 def randomized_contraction_wcc(
     pairs_ds: Any, all_ids: list[int] | None = None, *, scratch_dir: str | None = None,
     max_rounds: int = 80, seed: int | None = None, p: int = _RC_PRIME,
@@ -1218,6 +1238,13 @@ def randomized_contraction_wcc(
         ray.init(ignore_reinit_error=True, log_to_driver=False)
     owns_scratch = scratch_dir is None
     scratch = scratch_dir or tempfile.mkdtemp(prefix="gm_rc_wcc_")
+    # Multi-node safety (#844): each round's contracted edges are checkpointed to
+    # parquet and re-read by every worker, so a node-local scratch path is
+    # invisible to other nodes and the cross-node reads silently return nothing.
+    # Fail loudly on a multi-node cluster instead of corrupting the result.
+    _assert_scratch_shared_if_multinode(
+        scratch, sum(1 for n in ray.nodes() if n.get("Alive")),
+    )
     os.makedirs(scratch, exist_ok=True)
     npart = min(256, max(4, (os.cpu_count() or 16) * 4))
     rng = random.Random(seed)

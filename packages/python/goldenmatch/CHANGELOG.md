@@ -6,6 +6,52 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Performance
+- **Fellegi-Sunter block scoring ~3.5x faster on tiny-block / multi-pass shapes
+  (PR #869).** The probabilistic (`type: probabilistic`) numpy scoring path was
+  per-block-fan-out bound, not compute bound — `historical_50k` produces 31,735
+  blocks, 79% of them ≤8 rows, so scoring made ~222k tiny FFI-bound matrix calls.
+  Three output-identical changes: (1) `score_probabilistic_vectorized` now scores
+  the DISTINCT field values per block and gathers via an index map (a constant
+  blocking-key field collapses to 1×1); (2) small blocks are coalesced into shared
+  per-field matrices with diagonal sub-block extraction (`GOLDENMATCH_FS_BATCH_ROWS`,
+  default 256), cutting native matrix calls 222k→4.3k; (3) the batch row-cap tuned
+  to its measured knee. Wall on `historical_50k` probabilistic auto-config dropped
+  86.5s → 24.6s (−72%) locally. Verified output-identical — for a fixed EM model,
+  the emitted scored-pair set is byte-for-byte unchanged (200,058 pairs); the
+  `synthetic_benchmarks` accuracy gate is green. No API or config change; tune via
+  `GOLDENMATCH_FS_BATCH_ROWS` if needed.
+
+### Changed
+- **Zero-config `dedupe_df` no longer over-merges multi-source CRM (#858).** When
+  auto-config detects a source partition at config time (the internal
+  `__source__`, or a user `source`/`lead_source`/`*_source`/`origin`/`src`-named
+  column that genuinely partitions records into disjoint-valued groups), it now
+  (1) excludes the source-indicator column and every column whose values are
+  fully disjoint across sources (per-source surrogate ids) from match features,
+  and (2) demotes `phone` from a standalone exact matchkey to a blocking-only
+  candidate. This removes the source-correlated precision crater (realistic
+  multi-source CRM F1 ~0.35 → ~0.84). **Provable no-op** on single-source data
+  and in match mode (`match_df` / `run_match`; cross-source linking is the goal
+  there, suppressed by an explicit dedupe-mode gate). Default ON; disable with
+  `GOLDENMATCH_MULTISOURCE_AUTOCONFIG=0`; a caller `force_include` (or
+  `exclude_columns`) re-admits any auto-excluded column.
+- **Phase-5 distributed recall-complete path is now the DEFAULT (#844 finish
+  line).** The blocking-key-aware shuffle scoring + randomized-contraction WCC,
+  previously opt-in via `GOLDENMATCH_DISTRIBUTED_BLOCK_SHUFFLE=1`, is now ON by
+  default — the legacy per-partition path under-merged inversely with partition
+  count (a true-duplicate split across partitions was never compared). Validated
+  end-to-end at 100M on a real 5-node cluster: full dedupe in **9.2 min** with
+  byte-exact cluster recovery (20,000,000 clusters), after fixing the per-group
+  scoring wall (`_score_colocated_groups` now scores each partition in one
+  vectorized pass instead of ~20M per-group calls). Set
+  `GOLDENMATCH_DISTRIBUTED_BLOCK_SHUFFLE=0` to restore the legacy per-partition
+  path. **Multi-node:** the WCC checkpoints each round to
+  `GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH`, which on a multi-node cluster MUST be a
+  shared object-store path (`gs://…`); `randomized_contraction_wcc` now raises a
+  clear error on a multi-node cluster with a node-local scratch path instead of
+  silently diverging.
+
 ### Added
 - **Phase-5 e2e pipeline recall-complete leg (opt-in, #844 Spec 2).** When
   `GOLDENMATCH_DISTRIBUTED_BLOCK_SHUFFLE=1`, the Phase-5 streaming pipeline now

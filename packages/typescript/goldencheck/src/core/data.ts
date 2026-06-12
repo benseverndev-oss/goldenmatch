@@ -187,6 +187,24 @@ export class TabularData {
     return seen.size;
   }
 
+  /**
+   * Count distinct value-tuples over a set of columns.
+   * Mirrors Polars `df.select(cols).n_unique()`: null is a single distinct
+   * group, and values are compared by type+value. Uses JSON.stringify of the
+   * per-row tuple as a collision-free key (callers should not pass float
+   * columns where JS/Polars number formatting would diverge).
+   */
+  nUniqueTuple(cols: readonly string[]): number {
+    const colVals = cols.map((c) => this.column(c));
+    const seen = new Set<string>();
+    const n = this.rowCount;
+    for (let i = 0; i < n; i++) {
+      const tuple = colVals.map((cv) => cv[i] ?? null);
+      seen.add(JSON.stringify(tuple));
+    }
+    return seen.size;
+  }
+
   /** Value → count map for non-null values. */
   valueCounts(col: string): Map<ColumnValue, number> {
     const counts = new Map<ColumnValue, number>();

@@ -2,6 +2,72 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-06-12 — #855 goldencheck TS port: module parity + hardened golden harness (#873/#874)
+- New [../decisions/0013-goldencheck-ts-parity-hardening.md](../decisions/0013-goldencheck-ts-parity-hardening.md);
+  added the `#855` subsection to [../planning/surface-hardening.md](../planning/surface-hardening.md).
+- **#873** ported the goldencheck TS gaps the 2026-06-11 audit found: 2 profilers
+  (`freshness`, `fuzzy_values`), 4 relations (`approx_duplicate`, `approx_fd`,
+  `composite_key`, `functional_dependency`), and the `validate` MCP tool —
+  registries now 12 column profilers / 9 relations / 18 MCP tools, each mirroring
+  the Python **fallback** (native kernels stay Python-only by design).
+- **#874** hardened `tests/parity/parity.test.ts`: it now asserts confidence (4 dp)
+  + affected_rows and FAILS on a missing manifest/golden, where it previously
+  checked only (column, check, severity) and skipped silently. Goldens were
+  regenerated on a clean `ubuntu-latest` runner (`regen-855-parity-goldens.yml`,
+  artifact-download) because the dev box OOMs on Polars.
+- **The hardening immediately caught a pre-existing bug.** TS `TemporalOrderProfiler`
+  used `new Date(s)`, which parses bare integers (`"7"`) as dates, so it fired
+  `temporal_order` on integer column pairs Python never flags. Gated TS
+  `tryParseDate` on `YYYY-MM-DD` to match Python's `str.to_date('%Y-%m-%d')`; all 6
+  parity cases now match Python byte-for-byte. **#855 CLOSED.**
+- **By design:** `freshness` is unit-test-only (the CSV-roundtrip harness reads
+  dates as `Utf8`, so Python's date-gated profiler can't fire through it).
+
+## 2026-06-12 — FS block-scoring perf + the "native is slow" red herring (PR #869)
+- New [../decisions/0012-fs-block-scoring-perf.md](../decisions/0012-fs-block-scoring-perf.md);
+  added a perf section + corrected the "3-19x faster" framing in
+  [../architecture/fellegi-sunter-splink-parity.md](../architecture/fellegi-sunter-splink-parity.md).
+- **The bake-off's "Splink 3-19x faster" measured GM's NUMPY path, not native** —
+  it never set `GOLDENMATCH_FS_NATIVE`, and probabilistic mode doesn't refuse on a
+  missing kernel. Added a `gm_prob_native` bake-off column (native built +
+  `score_block_pairs_fs` asserted in CI): **native ≈ numpy, no wall change.** The
+  wall is per-block fan-out (historical_50k: 31,735 blocks, 79% ≤8 rows, ~222k tiny
+  FFI calls), not scoring math — so the Rust kernel can't move it.
+- **Three output-identical optimizations** on the numpy path, each gated by a
+  fixed-`em_result` pair-set diff (200,058 pairs byte-identical), NOT the cluster
+  hash (pipeline is non-deterministic ±3 clusters run-to-run): value-dedup (−32%),
+  block-batching into shared S×S matrices (−48%, native calls 222k→4.3k), batch
+  row-cap 512→256 (−20%). **historical_50k 86.5s → 24.6s (−72%) local.** All three
+  CI-green on PR #869.
+- Also refreshed [../../docs/er-vendor-comparison.md](../../docs/er-vendor-comparison.md)
+  to v1.30.0 (refdata, identity graph, Splink-parity flip) earlier in the same PR.
+- **Flagged, not fixed:** EM-sampling cluster-count nondeterminism (±3) and the
+  pre-optimization bake-off table (re-bench pending) are recorded in 0012.
+
+## 2026-06-11 — #844 FINISH LINE: 100M validated, per-group scoring fixed, default flipped (#864/#867)
+- Updated [../architecture/distributed-wcc.md](../architecture/distributed-wcc.md)
+  + [../decisions/0011-distributed-wcc-randomized-contraction.md](../decisions/0011-distributed-wcc-randomized-contraction.md)
+  from "specs shipped, operator-deferred" to VALIDATED + default-flipped. **#844 CLOSED.**
+- **The binding 100M run is done.** Self-provisioned 5-node `e2-standard-16` GCP
+  cluster, 100M synthetic phase-5 dataset in GCS: full recall-complete e2e in
+  **554.5 s (9.2 min, under the 30-min kill), 20,000,000 clusters recovered
+  exactly, driver RSS 0.36 GB**, no head-wedge / no Ray deadlock. The WCC alone
+  cleared a 200M-edge graph in 266 s in isolation.
+- **The e2e wall was per-group scoring, NOT the WCC.** `_score_colocated_groups`
+  looped `group_by` + a full per-partition kernel call per ~5-row group (~20M
+  fixed-overhead calls at 100M; 0 of 64 score-tasks finished in 25 min). #864
+  vectorizes it — score the whole partition once (the `bucket` backend already
+  groups by the blocking key); parity-tested. That single change made the e2e viable.
+- **#864 (merged)** also fixed auto-config `DuplicateError: __row_id__` on a
+  `__row_id__`-carrying input (`_add_row_ids` guard) and gave the e2e bench an
+  explicit-config + `allow_red_config` path (it always auto-configured before,
+  which is slow + RED-degenerate at 100M).
+- **#867 (open, reviewable)** flips `GOLDENMATCH_DISTRIBUTED_BLOCK_SHUFFLE` default
+  `0→1` + adds `_assert_scratch_shared_if_multinode` (multi-node + node-local WCC
+  scratch → raises instead of silently diverging).
+- Deferred/optional: (b) project-to-scoring-columns-before-shuffle (a wide-record
+  shuffle win, not needed for viability).
+
 ## 2026-06-11 — TS parity: refdata name scorers + autoconfig blocking (#857, from the #856 audit)
 - Extended the parity workstream node
   [../planning/surface-hardening.md](../planning/surface-hardening.md):
@@ -315,4 +381,4 @@ Newest first. One entry per meaningful change to the network.
 - Committed to git on branch `chore/context-network`.
 
 ---
-**Classification:** meta/log • **Last updated:** 2026-06-11
+**Classification:** meta/log • **Last updated:** 2026-06-12

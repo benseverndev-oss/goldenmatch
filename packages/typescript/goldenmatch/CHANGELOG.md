@@ -6,6 +6,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+- **Opt-in WASM scorer backend.** `enableWasm()` / `disableWasm()` register a
+  WebAssembly scorer (the Rust `score-core` kernel via the new `score-wasm`
+  crate) behind the sync `scoreMatrix` for `jaro_winkler`/`levenshtein`/`exact`.
+  Because the WASM kernel IS rapidfuzz, it matches the Python source of truth
+  exactly; it is CI-gated (`wasm_score` lane) against canonical rapidfuzz
+  goldens. Pure-TS remains the default and the fallback; runs in Node, browsers,
+  and Workers. Note: the hand-rolled pure-TS Jaro-Winkler has small known
+  divergences from rapidfuzz (the 0.7 boost threshold; transposition counting on
+  repeated-character words), so enabling WASM can shift borderline scores toward
+  the Python values without changing dedup decisions. Aligning the pure-TS
+  scorers with rapidfuzz, token_sort WASM coverage, and non-BMP codepoint parity
+  are tracked follow-ups.
+
 ### Added — refdata-aware name scorers (parity with Python `refdata`)
 
 - `given_name_aliased_jw` scorer: Jaro-Winkler with an alias-aware exact bonus
