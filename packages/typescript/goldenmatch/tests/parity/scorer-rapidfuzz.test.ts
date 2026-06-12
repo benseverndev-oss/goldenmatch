@@ -11,7 +11,7 @@ import { scoreField, jaro } from "../../src/core/index.js";
 import fixture from "./fixtures/scorer-rapidfuzz.json" with { type: "json" };
 
 type Case = readonly [scorer: string, a: string, b: string, expected: number];
-const CASES = fixture.cases as readonly Case[];
+const CASES = fixture.cases as unknown as readonly Case[];
 
 const score = (scorer: string, a: string, b: string): number =>
   scorer === "jaro" ? jaro(a, b) : (scoreField(a, b, scorer) as number);
