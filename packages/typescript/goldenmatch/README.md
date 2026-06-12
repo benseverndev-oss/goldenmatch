@@ -147,6 +147,24 @@ Zero-dep install works. These unlock advanced paths:
 | `@duckdb/node-api` | DuckDB connector |
 | `snowflake-sdk`, `@google-cloud/bigquery`, `@databricks/sql` | Cloud warehouse connectors |
 
+### Optional WASM acceleration (opt-in)
+
+The scorers run in pure TypeScript by default — zero dependencies, edge-safe.
+For larger workloads you can opt into a WebAssembly backend (the same Rust
+scorer kernel the Python package uses) for `jaro_winkler` / `levenshtein` /
+`exact`:
+
+```ts
+import { enableWasm, dedupe } from "goldenmatch";
+
+await enableWasm();   // loads + instantiates the WASM scorer; returns false (stays pure-TS) if unavailable
+const result = await dedupe(rows, config);
+```
+
+Pure TypeScript stays the default and the automatic fallback — if the WASM
+module can't load, scoring transparently continues in pure TS. Pass
+`enableWasm({ require: true })` to fail hard instead.
+
 ## Servers
 
 ```bash

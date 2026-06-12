@@ -12,6 +12,10 @@ Cargo.lock
 # builds it as a verified wheel, so pin the exact resolved deps. (goldencheck-core
 # is a pyo3-free library dep -- its lock stays ignored, like score-core/graph-core.)
 !goldencheck-native/Cargo.lock
+# Same rationale for score-wasm: build_wasm.sh produces a shipped .wasm artifact
+# and wasm-bindgen-cli MUST match the exact wasm-bindgen crate version resolved
+# here; a floating lock would silently produce broken JS glue at runtime.
+!score-wasm/Cargo.lock
 *.so
 *.dylib
 *.dll
