@@ -86,6 +86,30 @@ blocking branches. Follow-up #860: TS `buildWeightedMatchkey` still drops
 `nullRate>0.5` name columns while the blocking path now keeps them — a
 matchkey-null-gate divergence (the reason `sparse_people` stays loose-shape).
 
+### #855 — goldencheck TS port: profilers/relations + validate + parity hardening (merged)
+Closed the goldencheck side of the audit (the prior items were goldenmatch). The
+TS port was ~77% module-complete; #873 ported the missing 2 profilers
+(`freshness`, `fuzzy_values`) + 4 relations (`approx_duplicate`, `approx_fd`,
+`composite_key`, `functional_dependency`) + the `validate` MCP tool (registries
+now 12 column profilers / 9 relations / 18 MCP tools), each mirroring the Python
+**fallback** path (native kernels stay Python-only). #874 then **hardened the
+golden harness** — it now asserts confidence + affected_rows and FAILS on a
+missing manifest/golden, where before it checked only (column, check, severity)
+and skipped silently. See [../decisions/0013-goldencheck-ts-parity-hardening.md](../decisions/0013-goldencheck-ts-parity-hardening.md).
+
+Two methodology points worth reusing:
+- **Regenerate goldens on a CI runner, not locally.** The dev box OOMs on Polars,
+  so `regen-855-parity-goldens.yml` runs the generator on `ubuntu-latest` and
+  uploads the goldens as an artifact; the author downloads + commits so the
+  *author's* push (not a `GITHUB_TOKEN` commit-back) re-triggers the parity lane.
+- **The hardened harness caught a pre-existing bug the loose one couldn't.** TS
+  `TemporalOrderProfiler` treated integer columns as dates (`new Date("7")` is
+  valid in JS) and fired `temporal_order` on integer pairs Python never flags;
+  gated TS `tryParseDate` on `YYYY-MM-DD` to match Python's `str.to_date('%Y-%m-%d')`.
+- **Freshness is unit-test-only** by construction: the CSV-roundtrip harness reads
+  dates as `Utf8` (`try_parse_dates=False`), so Python's date-gated freshness can't
+  fire through it. Out of scope (unchanged): native kernels, `install_domain`.
+
 ## What remains
 - **AgentSession + 13 agent MCP tools** — the last heavy TS port; own session.
 - Small: `DOMAIN_EXTRACTED_COLS` 3→12, TS sensitivity/compare-clusters CLI,
@@ -93,4 +117,4 @@ matchkey-null-gate divergence (the reason `sparse_people` stays loose-shape).
 - TS `0.14.0` release cut (changelog + wave-history row) once the queue merges.
 
 ---
-**Classification:** planning/workstream • **Last updated:** 2026-06-11
+**Classification:** planning/workstream • **Last updated:** 2026-06-12
