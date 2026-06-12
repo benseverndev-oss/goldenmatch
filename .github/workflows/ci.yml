@@ -456,7 +456,12 @@ jobs:
             #   - test_qis_harness: #510 slow tests each run a full frozen-rung
             #     dedupe (the determinism one runs TWO) -- same xdist-OOM/segfault
             #     pattern ("worker gwN crashed"). See #876.
-            SERIAL_HEAVY="packages/python/goldenmatch/tests/test_controller_adaptive_e2e.py packages/python/goldenmatch/tests/test_qis_harness.py"
+            #   - test_memory_e2e: a full dedupe + sibling-SQLite review-queue
+            #     round-trip whose memory_stats.stale count is timing-sensitive
+            #     under heavy xdist load (passes standalone; flaked once the
+            #     qis_harness move reshuffled the -n auto worker distribution).
+            #     Serial = deterministic. See #876.
+            SERIAL_HEAVY="packages/python/goldenmatch/tests/test_controller_adaptive_e2e.py packages/python/goldenmatch/tests/test_qis_harness.py packages/python/goldenmatch/tests/test_memory_e2e.py"
           fi
           # --durations=20 surfaces the slowest tests in the CI log (#433).
           if [ -n "$SERIAL_HEAVY" ]; then
