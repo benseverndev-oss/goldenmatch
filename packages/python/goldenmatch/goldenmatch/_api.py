@@ -591,12 +591,16 @@ def match_df(
                 # Pass reference= so auto-config sees both column sets and emits
                 # matchkeys/blocking that apply uniformly across the join.
                 # Access via module attribute so tests can patch goldenmatch._api.auto_configure_df.
-                config = _self_api.auto_configure_df(
-                    target, reference=reference, _skip_finalize=True,
-                    confidence_required=confidence_required,
-                    allow_red_config=allow_red_config,
-                    planning_effort=planning_effort,
-                )
+                from goldenmatch.core.autoconfig import _match_mode_autoconfig
+                # #858: match mode -- suppress the multi-source dedupe guard even
+                # if `target` itself carries a user source-pattern column.
+                with _match_mode_autoconfig():
+                    config = _self_api.auto_configure_df(
+                        target, reference=reference, _skip_finalize=True,
+                        confidence_required=confidence_required,
+                        allow_red_config=allow_red_config,
+                        planning_effort=planning_effort,
+                    )
                 _used_controller = True
 
         assert config is not None, "match_df: config resolution above must bind config"

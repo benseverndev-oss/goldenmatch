@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import re
@@ -9,7 +10,7 @@ from collections.abc import Callable
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import polars as pl
 
@@ -686,6 +687,7 @@ def _adaptive_threshold(fields: list[MatchkeyField]) -> float:
 
 def build_matchkeys(
     profiles: list[ColumnProfile], df: pl.DataFrame | None = None,
+    *, multi_source: bool = False,
 ) -> list[MatchkeyConfig]:
     """Generate matchkeys from column profiles."""
     # Separate exact and fuzzy columns
@@ -759,6 +761,18 @@ def build_matchkeys(
         # guard already rewrote it; this no-ops on non-token_sort). See
         # _noise_aware_scorer.
         scorer = _noise_aware_scorer(p.col_type, scorer)
+
+        # #858: when multi-source, phone is a blocking signal, not an identity
+        # claim -- an exact match on phone collapses distinct people who share a
+        # work / household phone. Demote to blocking-only (this continue skips
+        # both exact_fields and fuzzy_fields; phone remains a build_blocking
+        # candidate, which is unchanged).
+        if multi_source and scorer == "exact" and p.col_type == "phone":
+            skipped_exact.append((
+                p.name,
+                "multi-source: phone is a blocking signal, not an identity claim",
+            ))
+            continue
 
         # Geo and zip are blocking signals, NOT identity claims. An exact
         # matchkey on a city column asserts "two records sharing a city are
@@ -1339,23 +1353,28 @@ def _llm_suggest_blocking_keys(
 # ── Cross-source overlap ──────────────────────────────────────────────────
 
 
-def _check_source_overlap(df: pl.DataFrame, col: str) -> float:
-    """Compute value overlap ratio for a column across sources.
+def _check_source_overlap(
+    df: pl.DataFrame, col: str, partition_col: str = "__source__"
+) -> float:
+    """Compute value overlap ratio for a column across source partitions.
 
-    Returns |intersection| / |union| of unique values per source.
-    Returns 1.0 if no __source__ column or only one source (no check needed).
+    Returns |intersection| / |union| of unique values per partition.
+    Returns 1.0 if ``partition_col`` is absent or has only one partition
+    (no check needed). ``partition_col`` defaults to the internal
+    ``__source__`` so existing callers are unchanged; #858 passes a detected
+    user source column when there is no ``__source__``.
     """
-    if "__source__" not in df.columns:
+    if partition_col not in df.columns:
         return 1.0
 
-    sources = df["__source__"].unique().to_list()
+    sources = df[partition_col].unique().to_list()
     if len(sources) < 2:
         return 1.0
 
     value_sets = []
     for src in sources:
         vals = set(
-            df.filter(pl.col("__source__") == src)[col]
+            df.filter(pl.col(partition_col) == src)[col]
             .drop_nulls()
             .cast(pl.Utf8)
             .to_list()
@@ -1372,6 +1391,104 @@ def _check_source_overlap(df: pl.DataFrame, col: str) -> float:
         return 1.0
 
     return len(intersection) / len(union)
+
+
+# ── #858: multi-source over-merge guard ──────────────────────────────────────
+
+def _source_disjoint(df: pl.DataFrame, col: str, partition_col: str) -> bool:
+    """True iff no value of ``col`` appears under 2+ distinct partitions.
+
+    The "fully source-specific" signal #858 uses to identify provenance /
+    per-source surrogate columns (the source label, per-source ids). Unlike
+    ``_check_source_overlap`` (all-partition intersection, which is 0 even for a
+    real identifier shared between only SOME of >2 sources), this is a
+    max-pairwise test: a genuine shared identifier (the same person appearing in
+    two sources with the same value) is NOT disjoint, so it is kept.
+    """
+    if partition_col not in df.columns:
+        return False
+    sub = df.select([col, partition_col]).drop_nulls()
+    if sub.height == 0:
+        return False
+    per_value = sub.group_by(col).agg(
+        pl.col(partition_col).n_unique().alias("_np")
+    )
+    max_parts = cast("int | None", per_value["_np"].max())
+    return max_parts is None or max_parts <= 1
+
+
+# Bounded source-indicator name patterns (case-insensitive). NOT a general
+# provenance regex (name-regex was rejected as the primary mechanism, spec §1);
+# this only LOCATES a user source partition when there is no ``__source__``.
+# Deliberately excludes business-attribute-ish names (channel / system / crm)
+# that are plausibly real low-card match signal, not data origin -- they were a
+# false-positive vector flagged in spec review.
+_SOURCE_NAME_RE = re.compile(
+    r"(?i)^(source|origin|src|data_source|record_source|lead_source)$|_source$"
+)
+
+
+def _detect_source_partition(
+    df: pl.DataFrame, profiles: list[ColumnProfile]
+) -> str | None:
+    """Return the column that partitions records by origin, or ``None``.
+
+    ``None`` => single-source / match mode / killed => the whole #858 feature is
+    a no-op (the regression firewall). See the design spec §0-§1.
+    """
+    if not _multisource_autoconfig_enabled():
+        return None
+    if _AUTOCONFIG_MATCH_MODE.get():
+        return None
+    # 1) internal __source__ with >= 2 distinct values (multi-file dedupe).
+    if "__source__" in df.columns and df["__source__"].n_unique() >= 2:
+        return "__source__"
+    # 2) a name-pattern user column: low cardinality + >= 2 distinct + a
+    #    disjoint-id co-signature (>= 1 other column 0-overlap vs it). The
+    #    co-signature is the real discriminator; the cardinality cap (absolute
+    #    floor of 20, else 10% of rows) excludes free-text "source"-ish fields
+    #    while staying robust on small frames.
+    other_cols = [p.name for p in profiles if not p.name.startswith("__")]
+    card_cap = max(20, int(0.1 * df.height))
+    for p in profiles:
+        if p.name.startswith("__") or not _SOURCE_NAME_RE.search(p.name):
+            continue
+        n_unique = df[p.name].n_unique()
+        if n_unique < 2 or n_unique > card_cap:
+            continue
+        has_cosig = any(
+            other != p.name and _source_disjoint(df, other, p.name)
+            for other in other_cols
+        )
+        if has_cosig:
+            return p.name
+    return None
+
+
+def _source_correlated_exclusions(
+    df: pl.DataFrame,
+    profiles: list[ColumnProfile],
+    partition: str | None,
+) -> set[str]:
+    """Columns to exclude from ALL match features when multi-source (spec §3).
+
+    = {the user source-indicator column} U {columns 0-overlap across sources}.
+    Computed on the FULL frame so ``== 0.0`` is exact. Empty when no partition.
+    ``__source__`` is never added (``profile_columns`` already skips dunder
+    columns, so it never reaches the matchkeys).
+    """
+    if partition is None:
+        return set()
+    exclude: set[str] = set()
+    if not partition.startswith("__"):
+        exclude.add(partition)
+    for p in profiles:
+        col = p.name
+        if col.startswith("__") or col == partition:
+            continue
+        if _source_disjoint(df, col, partition):
+            exclude.add(col)
+    return exclude
 
 
 # ── Blocking generation ────────────────────────────────────────────────────
@@ -2257,6 +2374,31 @@ _RUNTIME_EXCLUDE_COLUMNS: ContextVar = ContextVar(
     "_RUNTIME_EXCLUDE_COLUMNS", default=None,
 )
 
+# #858: set by the match pipeline (`_run_match_pipeline`) and `match_df` around
+# their `auto_configure_df` call so the multi-source guard is suppressed in
+# match mode (cross-source linking is the goal there). Dedupe paths never set it.
+_AUTOCONFIG_MATCH_MODE: ContextVar = ContextVar(
+    "_AUTOCONFIG_MATCH_MODE", default=False,
+)
+
+
+@contextlib.contextmanager
+def _match_mode_autoconfig():  # pyright: ignore[reportUnusedFunction]  # used cross-module (pipeline / _api) via local imports
+    """Suppress the #858 multi-source guard for the duration (match mode)."""
+    token = _AUTOCONFIG_MATCH_MODE.set(True)
+    try:
+        yield
+    finally:
+        _AUTOCONFIG_MATCH_MODE.reset(token)
+
+
+def _multisource_autoconfig_enabled() -> bool:
+    """#858 multi-source zero-config guard. Default ON; disable with
+    ``GOLDENMATCH_MULTISOURCE_AUTOCONFIG=0`` (or false/disabled/off/no)."""
+    return os.environ.get(
+        "GOLDENMATCH_MULTISOURCE_AUTOCONFIG", "1"
+    ).strip().lower() not in {"0", "false", "disabled", "off", "no"}
+
 
 def _env_force_exclude() -> list[str]:
     raw = os.environ.get("GOLDENMATCH_AUTOCONFIG_FORCE_EXCLUDE", "")
@@ -2426,6 +2568,7 @@ def auto_configure_df(
     # Skipped when df is a Ray Dataset (distributed path) -- those have
     # their own column-selection story; exclusions land at the per-
     # partition kernel layer separately.
+    _ms_partition: str | None = None  # #858 source partition (None => feature off)
     if not _is_ray_dataset(df) and isinstance(df, pl.DataFrame):
         from goldenmatch.core.quality_exclusions import (
             detect_autoconfig_exclusions,
@@ -2440,6 +2583,17 @@ def auto_configure_df(
         force_exclude_list, force_include_list = (
             _resolve_effective_exclusion_overrides(config=None)
         )
+        # #858: multi-source source-correlated over-merge guard (spec §0-§4).
+        # Detect the source partition on the FULL frame, then exclude the
+        # source-indicator column + every 0-cross-source-overlap column from
+        # match features by folding them into force_exclude (dropped below).
+        _ms_profiles = profile_columns(df)
+        _ms_partition = _detect_source_partition(df, _ms_profiles)
+        _ms_exclude = _source_correlated_exclusions(df, _ms_profiles, _ms_partition)
+        if _ms_exclude:
+            force_exclude_list = list(force_exclude_list) + [
+                c for c in _ms_exclude if c not in force_exclude_list
+            ]
         # Internal bookkeeping columns are invisible to detectors.
         skip = {"__row_id__", "__source__"}
         for col in df.columns:
@@ -2496,6 +2650,9 @@ def auto_configure_df(
         "llm_auto": llm_auto,
         "strict": strict,
         "allow_remote_assets": allow_remote_assets,
+        # #858: full-frame source-partition detection result, threaded to
+        # build_matchkeys via _legacy_auto_configure_v0 for phone demotion.
+        "multi_source": _ms_partition is not None,
     }
     config, profile, history = controller.run(
         df,
@@ -2535,6 +2692,7 @@ def _legacy_auto_configure_v0(  # pyright: ignore[reportUnusedFunction]  # kept 
     strict: bool = False,
     allow_remote_assets: bool = False,
     n_rows_full: int | None = None,
+    multi_source: bool = False,
 ) -> GoldenMatchConfig:
     """Legacy column-profiling + rule-based auto-config heuristic (the v0
     starting point for the controller). Implementation unchanged from the
@@ -2618,7 +2776,7 @@ def _legacy_auto_configure_v0(  # pyright: ignore[reportUnusedFunction]  # kept 
             )
 
     # Build matchkeys
-    matchkeys = build_matchkeys(profiles, df=df)
+    matchkeys = build_matchkeys(profiles, df=df, multi_source=multi_source)
 
     # ── Add domain-extracted fields to matchkeys ──
     if extracted_columns:

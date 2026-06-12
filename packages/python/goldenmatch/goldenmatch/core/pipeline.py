@@ -2403,13 +2403,20 @@ def _run_match_pipeline(
 
     # ── Step 2.5a': AUTO-CONFIG ON CLEANED DATA (if zero-config) ──
     if auto_config:
-        from goldenmatch.core.autoconfig import auto_configure_df
-        combined_df_tmp = combined_lf.collect()
-        auto_cfg = auto_configure_df(
-            combined_df_tmp,
-            llm_provider=auto_config_llm_provider,
-            llm_auto=config.llm_auto,
+        from goldenmatch.core.autoconfig import (
+            _match_mode_autoconfig,
+            auto_configure_df,
         )
+        combined_df_tmp = combined_lf.collect()
+        # #858: this is match mode -- the 2-value __source__ here is the
+        # target/reference split, and cross-source linking is the goal, not
+        # over-merge. Suppress the multi-source dedupe guard.
+        with _match_mode_autoconfig():
+            auto_cfg = auto_configure_df(
+                combined_df_tmp,
+                llm_provider=auto_config_llm_provider,
+                llm_auto=config.llm_auto,
+            )
         config.matchkeys = auto_cfg.matchkeys
         config.match_settings = auto_cfg.match_settings
         config.blocking = auto_cfg.blocking
