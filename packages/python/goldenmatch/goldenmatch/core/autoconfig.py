@@ -10,7 +10,7 @@ from collections.abc import Callable
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import polars as pl
 
@@ -1413,8 +1413,8 @@ def _source_disjoint(df: pl.DataFrame, col: str, partition_col: str) -> bool:
     per_value = sub.group_by(col).agg(
         pl.col(partition_col).n_unique().alias("_np")
     )
-    max_parts = per_value["_np"].max()
-    return (max_parts or 0) <= 1
+    max_parts = cast("int | None", per_value["_np"].max())
+    return max_parts is None or max_parts <= 1
 
 
 # Bounded source-indicator name patterns (case-insensitive). NOT a general
