@@ -15,6 +15,7 @@ export { PatternConsistencyProfiler, generalize } from "./pattern-consistency.js
 export { EncodingDetectionProfiler } from "./encoding-detection.js";
 export { SequenceDetectionProfiler } from "./sequence-detection.js";
 export { DriftDetectionProfiler } from "./drift-detection.js";
+export { FreshnessProfiler } from "./freshness.js";
 
 import type { Profiler } from "./base.js";
 import { TypeInferenceProfiler } from "./type-inference.js";
@@ -27,6 +28,7 @@ import { PatternConsistencyProfiler } from "./pattern-consistency.js";
 import { EncodingDetectionProfiler } from "./encoding-detection.js";
 import { SequenceDetectionProfiler } from "./sequence-detection.js";
 import { DriftDetectionProfiler } from "./drift-detection.js";
+import { FreshnessProfiler } from "./freshness.js";
 
 /** All column profilers in execution order. */
 export const COLUMN_PROFILERS: readonly Profiler[] = [
@@ -40,4 +42,6 @@ export const COLUMN_PROFILERS: readonly Profiler[] = [
   new EncodingDetectionProfiler(),
   new SequenceDetectionProfiler(),
   new DriftDetectionProfiler(),
+  // Freshness: future-dated values + (name-gated) staleness on date/datetime cols.
+  new FreshnessProfiler(),
 ];

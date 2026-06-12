@@ -258,8 +258,8 @@ describe("DriftDetectionProfiler", () => {
 // --- COLUMN_PROFILERS registry ---
 
 describe("COLUMN_PROFILERS", () => {
-  it("has exactly 10 profilers", () => {
-    expect(COLUMN_PROFILERS.length).toBe(10);
+  it("has exactly 11 profilers", () => {
+    expect(COLUMN_PROFILERS.length).toBe(11);
   });
 
   it("all profilers run without error on simple data", () => {
