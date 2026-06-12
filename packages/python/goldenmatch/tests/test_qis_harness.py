@@ -116,3 +116,48 @@ def test_qis_run_determinism_and_golden_equivalence():
     assert a["golden_hash"] is not None
     assert a["golden_hash"] == b["golden_hash"]
     assert a["clusters_signature"] == b["clusters_signature"]
+
+
+def _load_aggregate():
+    import qis_aggregate  # on sys.path via _SCRIPTS
+    return qis_aggregate
+
+
+def test_aggregate_oracle_deltas_and_verdict():
+    agg = _load_aggregate()
+    rungs = [
+        {"rows": 1000, "corruption": "moderate",
+         "pairwise": {"f1": 0.920}, "b_cubed": {"f1": 0.930}, "cluster": {"f1": 0.700},
+         "wall_s": {"total": 1.0}, "rss_mb_peak": 100.0,
+         "predicted_clusters": 200, "multi_member_clusters": 180,
+         "bench": {"scored_pair_count": 500}},
+        {"rows": 1000000, "corruption": "moderate",
+         "pairwise": {"f1": 0.918}, "b_cubed": {"f1": 0.929}, "cluster": {"f1": 0.695},
+         "wall_s": {"total": 40.0}, "rss_mb_peak": 4000.0,
+         "predicted_clusters": 200000, "multi_member_clusters": 180000,
+         "bench": {"scored_pair_count": 500000}},
+    ]
+    report = agg.build_report(rungs)
+    assert report["oracle_rows"] == 1000
+    # 1M rung deltas vs the 1K oracle, all within targets -> PASS
+    row_1m = next(r for r in report["rows"] if r["rows"] == 1000000)
+    assert abs(row_1m["pairwise_delta"]) == pytest.approx(0.002, abs=1e-9)
+    assert row_1m["passed"] is True
+    assert report["verdict_passed"] is True
+    assert "| rows |" in report["markdown"].lower()
+
+
+def test_aggregate_flags_drift_as_fail():
+    agg = _load_aggregate()
+    rungs = [
+        {"rows": 1000, "pairwise": {"f1": 0.920}, "b_cubed": {"f1": 0.930},
+         "cluster": {"f1": 0.700}, "wall_s": {"total": 1.0}, "rss_mb_peak": 1.0,
+         "predicted_clusters": 1, "multi_member_clusters": 1, "bench": {}},
+        {"rows": 100000000, "pairwise": {"f1": 0.800}, "b_cubed": {"f1": 0.900},
+         "cluster": {"f1": 0.690}, "wall_s": {"total": 500.0}, "rss_mb_peak": 1.0,
+         "predicted_clusters": 1, "multi_member_clusters": 1, "bench": {}},
+    ]
+    report = agg.build_report(rungs)
+    row = next(r for r in report["rows"] if r["rows"] == 100000000)
+    assert row["passed"] is False               # pairwise delta 0.12 > 0.005
+    assert report["verdict_passed"] is False
