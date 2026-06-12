@@ -114,8 +114,10 @@ function embeddingScore(a: string, b: string): number {
  */
 export function jaro(a: string, b: string): number {
   if (a === b) return 1.0;
-  const lenA = a.length;
-  const lenB = b.length;
+  const ca = Array.from(a);
+  const cb = Array.from(b);
+  const lenA = ca.length;
+  const lenB = cb.length;
   if (lenA === 0 || lenB === 0) return 0.0;
 
   const matchWindow = Math.max(Math.floor(Math.max(lenA, lenB) / 2) - 1, 0);
@@ -129,7 +131,7 @@ export function jaro(a: string, b: string): number {
     const lo = Math.max(0, i - matchWindow);
     const hi = Math.min(lenB - 1, i + matchWindow);
     for (let j = lo; j <= hi; j++) {
-      if (bMatched[j] !== 0 || a[i] !== b[j]) continue;
+      if (bMatched[j] !== 0 || ca[i] !== cb[j]) continue;
       aMatched[i] = 1;
       bMatched[j] = 1;
       matches++;
@@ -145,7 +147,7 @@ export function jaro(a: string, b: string): number {
   for (let i = 0; i < lenA; i++) {
     if (aMatched[i] === 0) continue;
     while (bMatched[k] === 0) k++;
-    if (a[i] !== b[k]) transpositions++;
+    if (ca[i] !== cb[k]) transpositions++;
     k++;
   }
 
@@ -169,11 +171,13 @@ export function jaroWinkler(a: string, b: string): number {
   const jaroSim = jaro(a, b);
   if (jaroSim === 0.0) return 0.0;
 
-  // Common prefix up to 4 chars
-  const maxPrefix = Math.min(4, Math.min(a.length, b.length));
+  // Common prefix up to 4 chars (codepoints, not UTF-16 code units)
+  const ca = Array.from(a);
+  const cb = Array.from(b);
+  const maxPrefix = Math.min(4, Math.min(ca.length, cb.length));
   let prefix = 0;
   for (let i = 0; i < maxPrefix; i++) {
-    if (a[i] === b[i]) prefix++;
+    if (ca[i] === cb[i]) prefix++;
     else break;
   }
 
@@ -184,8 +188,10 @@ export function jaroWinkler(a: string, b: string): number {
  * Levenshtein edit distance (classic DP, 2-row optimization).
  */
 export function levenshteinDistance(a: string, b: string): number {
-  const lenA = a.length;
-  const lenB = b.length;
+  const ca = Array.from(a);
+  const cb = Array.from(b);
+  const lenA = ca.length;
+  const lenB = cb.length;
   if (lenA === 0) return lenB;
   if (lenB === 0) return lenA;
 
@@ -198,7 +204,7 @@ export function levenshteinDistance(a: string, b: string): number {
   for (let i = 1; i <= lenA; i++) {
     curr[0] = i;
     for (let j = 1; j <= lenB; j++) {
-      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      const cost = ca[i - 1] === cb[j - 1] ? 0 : 1;
       curr[j] = Math.min(
         prev[j]! + 1,      // deletion
         curr[j - 1]! + 1,  // insertion
@@ -217,7 +223,7 @@ export function levenshteinDistance(a: string, b: string): number {
  */
 export function levenshteinSimilarity(a: string, b: string): number {
   if (a === b) return 1.0;
-  const maxLen = Math.max(a.length, b.length);
+  const maxLen = Math.max(Array.from(a).length, Array.from(b).length);
   if (maxLen === 0) return 1.0;
   return 1 - levenshteinDistance(a, b) / maxLen;
 }
@@ -232,17 +238,19 @@ export function levenshteinSimilarity(a: string, b: string): number {
  */
 export function indelDistance(a: string, b: string): number {
   if (a === b) return 0;
-  if (a.length === 0) return b.length;
-  if (b.length === 0) return a.length;
-  const m = a.length;
-  const n = b.length;
+  const ca = Array.from(a);
+  const cb = Array.from(b);
+  const m = ca.length;
+  const n = cb.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
   let prev = new Uint32Array(n + 1);
   let curr = new Uint32Array(n + 1);
   for (let j = 0; j <= n; j++) prev[j] = j;
   for (let i = 1; i <= m; i++) {
     curr[0] = i;
     for (let j = 1; j <= n; j++) {
-      if (a.charCodeAt(i - 1) === b.charCodeAt(j - 1)) {
+      if (ca[i - 1] === cb[j - 1]) {
         curr[j] = prev[j - 1]!;
       } else {
         // Only insert or delete allowed — cost 1 each. No substitution.
@@ -259,7 +267,7 @@ export function indelDistance(a: string, b: string): number {
  * Matches rapidfuzz's `Indel.normalized_similarity`.
  */
 export function indelSimilarity(a: string, b: string): number {
-  const total = a.length + b.length;
+  const total = Array.from(a).length + Array.from(b).length;
   if (total === 0) return 1.0;
   return 1 - indelDistance(a, b) / total;
 }
