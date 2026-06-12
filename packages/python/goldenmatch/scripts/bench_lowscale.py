@@ -33,7 +33,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests"))
 
 import polars as pl  # noqa: E402
-
 from fixtures.realistic_person import realistic_person_df  # noqa: E402
 from goldenmatch import dedupe_df  # noqa: E402
 from goldenmatch.config.schemas import (  # noqa: E402

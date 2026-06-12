@@ -13,7 +13,6 @@ from __future__ import annotations
 import math
 
 import pytest
-
 from goldenmatch.backends.score_buckets import (
     _VEC_SUPPORTED,
     _resolve_score_pair_callable,
