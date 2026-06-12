@@ -1,7 +1,7 @@
 # Opt-in WASM acceleration — Slice 2: analysis-core → goldenanalysis, with a shared WASM runtime
 
 **Date:** 2026-06-12
-**Status:** Draft (design)
+**Status:** Approved (design; spec-review fixes folded — bins i64, edge-as-optimization, parity primary = WASM-vs-pure-TS).
 **Author:** Ben Severn (with Claude)
 **Parent design:** `2026-06-12-opt-in-wasm-rust-acceleration-design.md` (the rollout).
 **Builds on:** `#878` (slice 1, score-core → goldenmatch, MERGED).
@@ -91,11 +91,18 @@ Exports:
 `goldenmatch-analysis-core`, `wasm-bindgen` gated to `cfg(target_arch="wasm32")`.
 
 `src/lib.rs` — host-testable `*_impl` + wasm shims delegating to analysis-core:
-- `histogram(values: &[f64], bins: u32) -> Vec<f64>` — returns the histogram
-  **flattened** as `[edge0, count0, edge1, count1, ...]` (wasm-bindgen marshals
-  `Vec<f64>` ↔ `Float64Array`; counts are exact integers well within f64). The TS
-  side un-flattens to `[number, number][]`.
+- `histogram(values: &[f64], bins: i32) -> Vec<f64>` — takes `bins` as `i32`
+  (a JS `number` may be 0/negative; **keep it signed** so `bins < 1` still reaches
+  analysis-core's empty-guard rather than wrapping under an unsigned cast), casts
+  to `i64` for the `analysis-core::histogram(&[f64], bins: i64) -> Vec<(f64,i64)>`
+  call, and **flattens** the `Vec<(f64,i64)>` result to `Vec<f64>` as
+  `[edge0, count0, edge1, count1, ...]` (wasm-bindgen marshals `Vec<f64>` ↔
+  `Float64Array`; counts are exact integers well within 2^53). The TS side
+  un-flattens to `[number, number][]`.
 - `quantile(values: &[f64], q: f64) -> f64`.
+
+(analysis-core's real signatures: `histogram(values: &[f64], bins: i64) ->
+Vec<(f64,i64)>`, `quantile(values: &[f64], q: f64) -> f64`.)
 Both delegate to `analysis-core::histogram`/`quantile`, which are already
 **line-for-line ports of `aggregate.ts`** (same `lo + i*width` edges, same
 truncate/`floor` binning with right-edge-inclusive clamp, same linear-interp
@@ -121,7 +128,9 @@ New `packages/typescript/goldenanalysis/src/core/wasm/`:
 pure-TS. Edge cases (empty, `bins < 1`, all-equal, single) are cheap and handled
 **before** the boundary in pure-TS (so the WASM call only ever sees the
 general-case path) — keeps the boundary contract simple and avoids marshaling
-for trivial inputs.
+for trivial inputs. This is an **optimization, not a correctness requirement**:
+analysis-core's `histogram`/`quantile` already handle those cases themselves, so
+a missed pre-filter degrades to one extra marshal, never a wrong answer.
 
 ### Data flow
 
@@ -151,13 +160,17 @@ caller: histogram(values, bins)            (unchanged signature, sync)
 ## Parity gate
 
 `packages/typescript/goldenanalysis/tests/parity/wasm-aggregate.test.ts`:
-- Corpus of `(values, bins)` and `(values, q)` cases — random finite arrays
-  (varied size + range), plus edge cases that exercise the general path
-  (multi-bin, repeated values, negative + positive, large N). Goldens from a
-  Python emitter generating `analysis-core`-equivalent results (or directly from
-  `aggregate.py`/rapidfuzz-free numpy) — but since pure-TS already == Python ==
-  analysis-core by construction, the binding assertion is **WASM ≈ pure-TS** (4dp,
-  expect exact) over the corpus; a few anchors are cross-checked against Python.
+- Primary assertion is **WASM ≈ pure-TS** (4dp, expect exact) over the corpus —
+  **no Python emitter script needed** (pure-TS == Python == analysis-core is
+  structural and already covered by goldenanalysis's existing aggregate parity
+  tests). A handful of Python-computed values are hard-coded literals as a
+  cross-language sanity anchor.
+- Corpus: random finite arrays (varied size + range); a multi-bin case with a
+  **zero-count interior bin** + the **right-edge-inclusive max** case (exercises
+  the flatten/un-flatten against a non-trivial count vector — analysis-core's
+  `histogram_right_edge_inclusive` test is the reference); plus edge inputs
+  (empty / all-equal / single — analysis-core handles them; included for
+  defense-in-depth, expecting no divergence).
 - **NaN/Infinity out of scope** (the Rust contract assumes finite; aggregate.ts
   filters only null/undefined). Corpus stays finite.
 - **Skip-guarded** on the artifact (like #878's `wasm-scorer.test.ts`): skips
