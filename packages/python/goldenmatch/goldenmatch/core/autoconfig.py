@@ -1654,14 +1654,16 @@ def _typed_projected_block(
 
 def _scale_safe_bounded_compound(
     candidates: list[ColumnProfile],
-    is_scale_safe,
+    is_scale_safe: Callable[[list[str]], bool],
 ) -> BlockingKeyConfig | None:
     """AND bounded-domain exact keys into the smallest scale-safe compound.
 
     #876: called when no SINGLE exact key is scale-safe. Considers only the
     BOUNDED candidates (those with a ``_BLOCKING_DOMAIN_CAP`` entry — zip / year /
-    month / boolean); an unbounded key already stays constant-block alone and
-    would have been kept as ``safe_exact``. Adds bounded keys most-selective-first
+    month / boolean); an unbounded key that's scale-safe alone was already kept as
+    ``safe_exact`` (an unbounded key whose sample block already exceeds the OOM
+    guard isn't bounded-compoundable here either — the name path handles it).
+    Adds bounded keys most-selective-first
     (largest domain cap leads, so the compound is dominated by the discriminating
     key) until the running compound passes ``is_scale_safe``. Returns the compound
     ``BlockingKeyConfig`` or None if even the full bounded set doesn't bound the
