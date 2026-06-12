@@ -200,6 +200,38 @@ def test_killswitch_restores_legacy(monkeypatch):
     assert "source" in fields or "exact_phone" in _mk_names(cfg)
 
 
+# ── Task 8: match-mode firewall (the in-pipeline path) ───────────────────────
+
+def test_match_pipeline_suppresses_858_feature(monkeypatch):
+    """run_match_df(auto_config=True) injects a 2-value __source__ BEFORE
+    auto-config; the #858 dedupe guard must stay suppressed there (cross-source
+    linking is the goal). Asserts the match-mode ContextVar is set during the
+    in-pipeline auto-config call."""
+    from goldenmatch.config.schemas import GoldenMatchConfig
+    from goldenmatch.core.pipeline import run_match_df
+
+    seen = {}
+    real = ac.auto_configure_df
+
+    def spy(df, *a, **k):
+        seen["mm"] = ac._AUTOCONFIG_MATCH_MODE.get()
+        return real(df, *a, **k)
+
+    monkeypatch.setattr(ac, "auto_configure_df", spy)
+    target = pl.DataFrame({
+        "source": ["hubspot"] * 6,
+        "rec_id": [f"h{i}" for i in range(6)],
+        "phone": ["5551112222"] * 3 + [f"5550000{i}" for i in range(3)],
+        "email": [f"u{i}@ex.com" for i in range(6)],
+    })
+    reference = target.clone()
+    try:
+        run_match_df(target, reference, GoldenMatchConfig(), auto_config=True)
+    except Exception:
+        pass  # downstream pipeline errors are irrelevant; assert the wrap fired
+    assert seen.get("mm") is True
+
+
 # ── Task 1: generalized _check_source_overlap ────────────────────────────────
 
 def test_overlap_against_user_partition_column():
