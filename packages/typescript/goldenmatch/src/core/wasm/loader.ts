@@ -7,6 +7,7 @@
  * (browser/Workers/bundler). Any failure throws; index.ts turns that into the
  * pure-TS fallback (or rethrows under { require: true }).
  */
+import { SCORER_ID } from "./backend.js";
 import type { ScorerBackend } from "./backend.js";
 
 export interface LoadOptions {
@@ -40,7 +41,8 @@ export async function resolveWasmBytes(opts: LoadOptions): Promise<Uint8Array> {
 
 /**
  * Instantiate the score-wasm module and adapt it to a ScorerBackend. Uses the
- * wasm-bindgen `--target web` glue (default export = init(bytes)).
+ * wasm-bindgen `--target web` glue: the default export is the async `init`,
+ * which accepts `{ module_or_path: <bytes|url|module> }`.
  */
 export async function instantiateBackend(bytes: Uint8Array): Promise<ScorerBackend> {
   // Dynamic import of the generated glue (absent in a default checkout).
@@ -51,10 +53,12 @@ export async function instantiateBackend(bytes: Uint8Array): Promise<ScorerBacke
   await glue.default({ module_or_path: bytes });
 
   const SEP = "\x1e";
-  const idOf: Record<string, number> = { jaro_winkler: 0, levenshtein: 1, exact: 3 };
   return {
     scoreMatrix(values: readonly string[], scorerName: string): Float64Array {
-      const id = idOf[scorerName];
+      // SCORER_ID is the single source of truth (shared with the backend
+      // registry + the Rust score_one discriminant) — never re-literal it here.
+      // Note: id 2 (token_sort) is intentionally absent (deferred, see backend.ts).
+      const id = SCORER_ID[scorerName];
       if (id === undefined) throw new Error(`uncovered scorer: ${scorerName}`);
       return glue.score_matrix(values.join(SEP), SEP, id);
     },

@@ -19,7 +19,9 @@ let _enabled = false;
 /**
  * Load + instantiate the WASM scorer backend and register it. Returns true on
  * success. On failure returns false (pure-TS stays active) unless require:true.
- * Idempotent while a backend is active.
+ * Idempotent while a backend is active — a second call returns true and IGNORES
+ * any new opts (no reinstantiation / backend swap under an in-flight dedupe);
+ * call disableWasm() first to load different bytes.
  */
 export async function enableWasm(opts: EnableWasmOptions = {}): Promise<boolean> {
   if (_enabled) return true;
@@ -33,6 +35,10 @@ export async function enableWasm(opts: EnableWasmOptions = {}): Promise<boolean>
     return true;
   } catch (err) {
     if (opts.require) throw err;
+    // Surface the cause at debug level (invisible at default log levels in
+    // Node/browser/Workers) so a broken-artifact case isn't wholly silent,
+    // without adding noise for the normal "no artifact present" path.
+    console.debug("[goldenmatch] enableWasm fell back to pure-TS:", err);
     return false;
   }
 }
