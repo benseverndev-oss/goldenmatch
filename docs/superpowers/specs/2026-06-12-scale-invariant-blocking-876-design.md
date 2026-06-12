@@ -21,8 +21,16 @@ Two concrete failures in `core/autoconfig.py::build_blocking` (line 1582):
 2. **When a key IS dropped, the fallback is degenerate.** Told the true scale
    (`n_rows_full ≥ 1M`), `build_blocking` drops `zip` and falls through to `id` —
    the unique surrogate key (block size 1 → *zero* candidate pairs → finds
-   nothing). There is no surrogate guard and no compound/multi-pass fallback in
-   this path.
+   nothing). (Empirically verified: `build_blocking(qis_profiles, df,
+   n_rows_full=100M)` returns `[['id']]`.) There is no surrogate guard and no
+   compound/multi-pass fallback in this path.
+
+Both failure modes are live and must be fixed: **(a)** at build-time
+`n_rows_full = 1K` (how the frozen config was built), `zip` passes the block-size
+gate and is returned as the **sole key** → explodes when applied at 100M; **(b)**
+at `n_rows_full ≥ 1M`, `zip` is dropped but the fallback is the degenerate `id`
+surrogate. (a) is fixed by the total-pairs gate + the harness `n_rows_full`
+change; (b) by the surrogate exclusion + compound/multi-pass fallback.
 
 Plus a harness gap: the #510 frozen config is built at the 1K oracle, so
 `build_blocking` runs with `n_rows_full = 1000` and sees `zip` as block-size-5
@@ -50,11 +58,17 @@ budget:
 projected_pairs(option, full_n) <= K * full_n        # K = pairs-per-row budget, a CONSTANT
 ```
 
-- For a (near-)uniform key, `projected_pairs ≈ full_n * (proj_block - 1) / 2`
-  where `proj_block = project_max_block_size(sample_block, df.height, full_n)`.
-  So the budget reduces to `proj_block <= 2K + 1` — an avg-block cap that does
-  NOT scale with N (unlike `max_safe_block`). For a multi-pass union, sum the
-  passes' projected pairs.
+- `_project_pairs` uses the **MAX-block projection** (reusing the existing
+  `project_max_block_size` / `_projected_block` infrastructure), i.e.
+  `projected_pairs ≈ full_n * (proj_block - 1) / 2` with
+  `proj_block = project_max_block_size(sample_max_block, df.height, full_n)`.
+  This is the conservative choice for *skewed* keys (a hot zip like NYC 10001 is
+  far denser than average) — basing the budget on the max block over-counts
+  rather than under-counts, so the gate stays safe. (Summing exact `C(block,2)`
+  over every block would be more accurate but expensive on large samples and
+  unnecessary given the conservative-by-design intent.) So the budget reduces to
+  `proj_block <= 2K + 1` — a block cap that does NOT scale with N (unlike
+  `max_safe_block`). For a multi-pass union, sum the passes' projected pairs.
 - `K` is a constant (default chosen so a productive block stays in a healthy
   range — see "Constants"), exposed as a tunable. This is the scale-invariance
   knob, kept **separate** from `max_safe_block` (which stays the per-block OOM
@@ -100,8 +114,13 @@ sub-blocking are dropped (logged).
 
 Given the productive, surrogate-filtered candidates, build the option set:
 single keys (§1-safe ones), the best bounded compound (§3), and the capped
-multi-pass union (§4). Choose by **maximizing projected recall coverage subject
-to `projected_pairs ≤ K·full_n`**:
+multi-pass union (§4). "Recall coverage" is a **structural heuristic computed
+without running dedupe** (no pairwise estimator): an option covers recall in
+proportion to how many true-cluster rows co-locate under it — operationally, a
+non-surrogate key with a larger projected block covers more (more variants land
+together), a compound covers less than its coarse parent, and a multi-pass union
+covers the union of its passes. Choose by **maximizing this coverage subject to
+`projected_pairs ≤ K·full_n`**:
 
 - Prefer a single scale-safe key if one covers recall (cheapest).
 - Else prefer the bounded compound if it covers recall within budget.
@@ -132,7 +151,14 @@ keys/passes.
   the #510 ladder; expose via env/arg. Rationale: small enough that total pairs
   stay linear at 200M, large enough that a compound block (~42 for
   zip+syllable) and the benchmark blocks (name+DOB, tiny) pass.
-- `max_safe_block`: unchanged (per-block OOM guard).
+- `K`'s default must be **confirmed empirically** against the benchmark recall +
+  the #510 ladder before hardening — the "passes trivially" argument is
+  structural, not measured.
+- `max_safe_block`: unchanged (per-block OOM guard). Note a pre-existing quirk:
+  it's computed from `df.height` (the *sample* height), so on a
+  sample-plus-large-`n_rows_full` call it evaluates to its 1000 floor — *more*
+  conservative, not a regression. The new total-pairs gate is the real
+  scale-invariance mechanism; don't try to "fix" `max_safe_block` here.
 
 ## Components & boundaries
 
