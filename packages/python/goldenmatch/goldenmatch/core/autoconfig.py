@@ -1339,23 +1339,28 @@ def _llm_suggest_blocking_keys(
 # ── Cross-source overlap ──────────────────────────────────────────────────
 
 
-def _check_source_overlap(df: pl.DataFrame, col: str) -> float:
-    """Compute value overlap ratio for a column across sources.
+def _check_source_overlap(
+    df: pl.DataFrame, col: str, partition_col: str = "__source__"
+) -> float:
+    """Compute value overlap ratio for a column across source partitions.
 
-    Returns |intersection| / |union| of unique values per source.
-    Returns 1.0 if no __source__ column or only one source (no check needed).
+    Returns |intersection| / |union| of unique values per partition.
+    Returns 1.0 if ``partition_col`` is absent or has only one partition
+    (no check needed). ``partition_col`` defaults to the internal
+    ``__source__`` so existing callers are unchanged; #858 passes a detected
+    user source column when there is no ``__source__``.
     """
-    if "__source__" not in df.columns:
+    if partition_col not in df.columns:
         return 1.0
 
-    sources = df["__source__"].unique().to_list()
+    sources = df[partition_col].unique().to_list()
     if len(sources) < 2:
         return 1.0
 
     value_sets = []
     for src in sources:
         vals = set(
-            df.filter(pl.col("__source__") == src)[col]
+            df.filter(pl.col(partition_col) == src)[col]
             .drop_nulls()
             .cast(pl.Utf8)
             .to_list()
