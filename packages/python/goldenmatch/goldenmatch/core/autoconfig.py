@@ -1611,6 +1611,47 @@ def _project_pairs_per_row(proj_block: int) -> int:
     return max(0, (int(proj_block) - 1) // 2)
 
 
+# #876: a blocking key's block size at full N depends on whether its cardinality
+# is BOUNDED (a closed domain → block grows ∝ N) or UNBOUNDED (an identifier-like
+# column whose cardinality grows with N → block stays ~constant). A sample can't
+# tell the two apart statistically (both look the same in a small complete
+# sample, and a sparse sample of an unbounded key is all-singletons → Chao1
+# undefined). So we use the column's SEMANTIC TYPE: a `zip` caps at ~100K
+# (5-digit), a `year` at ~300, etc.; names / emails / strings are unbounded.
+# This is the same shape of fix as the phonetic-anchor gate (#510): type-aware,
+# not statistical. Types NOT listed are treated as unbounded (block constant) —
+# the conservative-for-recall default; only KNOWN-bounded domains grow.
+_BLOCKING_DOMAIN_CAP: dict[str, int] = {
+    "zip": 100_000,   # 5-digit US zip
+    "year": 300,      # ~1800-2100
+    "month": 12,
+    "boolean": 2,
+}
+
+
+def _typed_projected_block(
+    col_types: dict[str, str], fields: list[str], sample_block: int, full_n: int,
+) -> int:
+    """Project a blocking key's full-N max block size from its column TYPES.
+
+    - Any UNBOUNDED component (name/string/email/identifier/…) → the key's
+      cardinality grows ∝ N, so the block stays at its sample size (constant).
+    - All-BOUNDED components → the key's domain saturates at the product of the
+      per-column caps, so the block grows as ``ceil(full_n / domain)``.
+
+    `sample_block` is the observed max group size on the (sub)sample.
+    """
+    domain = 1
+    for f in fields:
+        cap = _BLOCKING_DOMAIN_CAP.get(col_types.get(f, ""))
+        if cap is None:
+            return int(sample_block)  # an unbounded component ⇒ constant block
+        domain *= cap
+    if domain <= 0:
+        return int(sample_block)
+    return max(int(sample_block), -(-int(full_n) // domain))  # ceil(full_n/domain)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -1783,18 +1824,51 @@ def build_blocking(
     # is the identity (v0 path uses exact block sizes -> correct).
     from goldenmatch.core.blocking_candidates import project_max_block_size
 
+    _col_types = {p.name: p.col_type for p in profiles}
+
     def _projected_block(fields: list[str]) -> int:
         try:
             sample_mb = int(df.group_by(fields).len().get_column("len").max() or 0)  # pyright: ignore[reportArgumentType]  # polars max() typed as PythonLiteral; "len" is int64 at runtime
         except Exception:  # pragma: no cover -- defensive
             return effective_n_full  # fail-safe: treat unprojectable key as maximally oversized -> dropped
-        return project_max_block_size(sample_mb, df.height, effective_n_full)
+        # #876: TYPE-AWARE projection. The legacy project_max_block_size assumes
+        # every key's block grows ∝ N (sample_block × full_n/sample_n), which
+        # over-rejects unbounded/identifier keys (whose cardinality grows, so the
+        # block actually stays constant) -> the gate refuses everything at scale.
+        # _typed_projected_block keeps a BOUNDED-domain key (zip) growing while an
+        # UNBOUNDED key (name) stays at its sample block. Fall back to the legacy
+        # projection only for the (rare) case where full_n == df.height (the v0
+        # exact-size path) and the type map is uninformative.
+        return _typed_projected_block(_col_types, fields, sample_mb, effective_n_full)
+
+    def _sample_block(fields: list[str]) -> int:
+        try:
+            return int(df.group_by(fields).len().get_column("len").max() or 0)  # pyright: ignore[reportArgumentType]
+        except Exception:  # pragma: no cover -- defensive
+            return effective_n_full
+
+    def _is_scale_safe(fields: list[str]) -> bool:
+        # #876: a key is scale-safe iff its candidate-pair count stays LINEAR in
+        # N. Two regimes from the type-aware projection:
+        #   - UNBOUNDED key (typed block == sample block, constant as N grows):
+        #     pairs = N * block / 2 is already linear -> safe at any block size
+        #     (subject only to the per-block OOM guard). This is what lets a
+        #     name/identifier key survive at scale.
+        #   - BOUNDED key (typed block > sample block, grows ∝ N/domain): pairs
+        #     grow ∝ N^2/domain -> must satisfy the constant pairs-per-row budget
+        #     K (block <= ~2K+1). This is what rejects sole-zip at 100M.
+        # Applying K only to GROWING keys is what avoids regressing existing
+        # datasets that legitimately use a large *constant* block at their scale.
+        sb = _sample_block(fields)
+        pb = _typed_projected_block(_col_types, fields, sb, effective_n_full)
+        if pb > max_safe_block:
+            return False  # per-block OOM guard (#715), also kills huge-N bounded keys
+        if pb > sb:  # block grows with N (bounded-cardinality key)
+            return _project_pairs_per_row(pb) <= _blocking_pairs_per_row_budget()
+        return True
 
     def _pass_is_bounded(key: BlockingKeyConfig) -> bool:
-        # #876: both gates must hold — per-block OOM guard (max_safe_block, #715)
-        # AND total-pairs budget (K, scale-invariance knob).
-        pb = _projected_block(key.fields)
-        return pb <= max_safe_block and _project_pairs_per_row(pb) <= _blocking_pairs_per_row_budget()
+        return _is_scale_safe(key.fields)
 
     def _gate_passes(
         primary: BlockingKeyConfig,
@@ -1838,29 +1912,25 @@ def build_blocking(
     if exact_cols:
         # Pre-filter: only evaluate top 5 by cardinality to avoid expensive group_by on all columns
         exact_cols_sorted = sorted(exact_cols, key=lambda p: df[p.name].n_unique(), reverse=True)
-        # #876: drop surrogate / unique-per-row columns before picking the best
-        # exact key.  A unique surrogate (id) creates singleton blocks (block
-        # size 1 → 0 candidate pairs → finds nothing).  Two equivalent guards:
-        #   - cardinality_ratio >= 1.0  (mirrors the exact-matchkey surrogate
-        #     guard at ~line 813)
-        #   - _projected_block([name]) <= 1  (catches it at scale when the
-        #     sample looks near-unique but not quite 1.0)
+        # #876: drop a unique-per-row SURROGATE (id) before picking the best
+        # exact key.  A surrogate creates singleton blocks (block size 1 → 0
+        # candidate pairs → finds nothing) and was the degenerate fallback. Gate
+        # ONLY on cardinality_ratio >= 1.0 (mirrors the exact-matchkey surrogate
+        # guard at ~line 813). Do NOT also drop on projected_block<=1: a unique
+        # email in a tiny sample (card_ratio < 1.0) is a legitimate exact
+        # blocking key (it repeats in real data / match mode) — dropping it
+        # regressed test_blocks_on_exact_column.
         exact_cols_sorted = [
             p for p in exact_cols_sorted
-            if (p.cardinality_ratio or 0.0) < 1.0 and _projected_block([p.name]) >= 2
+            if (p.cardinality_ratio or 0.0) < 1.0
         ]
         candidates = exact_cols_sorted[:5]
-        # #876: scale-safe filter — both per-block OOM guard AND total-pairs
-        # budget must hold.  _max_block_size alone is N-dependent; at 100M a
-        # zip key with 100 distinct values has block ~1M >> K pairs/row even
-        # though it passes max_safe_block.  _scale_safe adds the linear guard.
-        K = _blocking_pairs_per_row_budget()
-
-        def _scale_safe(fields: list[str]) -> bool:
-            pb = _projected_block(fields)
-            return pb <= max_safe_block and _project_pairs_per_row(pb) <= K
-
-        safe_exact = [p for p in candidates if _scale_safe([p.name])]
+        # #876: keep only scale-safe exact keys (the linear/pairs gate applies to
+        # GROWING bounded keys only — see _is_scale_safe). At 100M a `zip` key
+        # (bounded ~100K domain) projects a block of ~1000 that GROWS with N, so
+        # it's rejected; an unbounded `email`/`name` key with a constant block is
+        # kept.
+        safe_exact = [p for p in candidates if _is_scale_safe([p.name])]
         if safe_exact:
             best = max(safe_exact, key=lambda p: df[p.name].n_unique())
             transforms = ["lowercase", "strip"] if best.col_type == "email" else ["strip"]

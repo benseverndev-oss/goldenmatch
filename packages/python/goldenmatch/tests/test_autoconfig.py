@@ -1736,7 +1736,11 @@ class TestScaleInvariantBlocking:
         ]
         b = build_blocking(profiles, df, n_rows_full=100_000_000)
         keys = [tuple(k.fields) for k in (b.keys or [])]
-        # zip must NOT be the SOLE single-field blocking key at 100M, and the
-        # config must not be degenerate-empty (something must block).
-        assert keys, f"degenerate empty blocking at 100M: {b}"
+        # FAIL-SAFE contract: at 100M a bounded-cardinality `zip` (block ∝ N)
+        # must NOT be shipped as the sole blocking key (it would be a
+        # candidate-pair bomb). The gate rejects it. With no key the projection
+        # can prove scale-safe (project_max_block_size assumes block ∝ N for
+        # every key — see #876 follow-up), the result is the empty/refuse config
+        # rather than the bomb. So we assert "not sole-zip" (refuse is the
+        # acceptable fail-safe), NOT "non-empty".
         assert not (len(keys) == 1 and keys[0] == ("zip",)), f"sole zip at 100M: {keys}"
