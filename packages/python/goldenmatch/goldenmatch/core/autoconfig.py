@@ -1631,25 +1631,54 @@ _BLOCKING_DOMAIN_CAP: dict[str, int] = {
 
 def _typed_projected_block(
     col_types: dict[str, str], fields: list[str], sample_block: int, full_n: int,
+    sample_n: int, sample_distinct: int,
 ) -> int:
-    """Project a blocking key's full-N max block size from its column TYPES.
+    """Project a blocking key's full-N max block size.
 
-    - Any UNBOUNDED component (name/string/email/identifier/…) → the key's
-      cardinality grows ∝ N, so the block stays at its sample size (constant).
-    - All-BOUNDED components → the key's domain saturates at the product of the
-      per-column caps, so the block grows as ``ceil(full_n / domain)``.
+    Three regimes, chosen so the projection is right for BOTH a genuinely
+    high-cardinality key (block stays constant) AND a concentrated / null-heavy
+    key (block grows ∝N) — the two failure modes a type-only rule can't tell apart:
 
-    `sample_block` is the observed max group size on the (sub)sample.
+    - **All-BOUNDED components** (every field a known-bounded domain — zip / year /
+      month / boolean in ``_BLOCKING_DOMAIN_CAP``) → the domain saturates at the
+      *product* of the per-column caps, so the block grows only as
+      ``ceil(full_n / domain)``. The leniency that lets ``[zip, birth_year]``
+      (joint domain ~30M) stay near-constant where a ∝N projector over-rejects it.
+    - **Unbounded component, but the key is NEAR-UNIQUE on the sample** (joint
+      distinct ratio ≥ the blocking-max-ratio, i.e. it spreads rows thin — a strong
+      identifier like ``member_id``, or a unique-per-cluster name): cardinality
+      grows ∝N, so the block stays at its (small) sample size. Constant.
+    - **Unbounded component AND concentrated** (joint distinct ratio < the ratio —
+      a 50-surname ``last_name``, a 50%-null ``zip5`` whose null bucket is a hot
+      partition): the hot/null bucket's MAX block grows ∝N → use the **legacy ∝N
+      projection** (``project_max_block_size``). This is the validated #715 OOM
+      guard. (#876: a type-only rule returned the constant ``sample_block`` for ANY
+      unbounded component, masking a real #715 regression — `[zip5, last_name]`
+      emitted oversized; the cardinality split fixes it without re-breaking the
+      #491 ``member_id``-wins-over-ANN case that ∝N-for-all over-rejected.)
+
+    ``sample_block`` / ``sample_distinct`` are the max group size and the distinct
+    group count on the (sub)sample of ``sample_n`` rows (one group_by yields both).
     """
+    from goldenmatch.core.blocking_candidates import (
+        _blocking_max_ratio,
+        project_max_block_size,
+    )
     domain = 1
+    all_bounded = True
     for f in fields:
         cap = _BLOCKING_DOMAIN_CAP.get(col_types.get(f, ""))
         if cap is None:
-            return int(sample_block)  # an unbounded component ⇒ constant block
+            all_bounded = False
+            break
         domain *= cap
-    if domain <= 0:
-        return int(sample_block)
-    return max(int(sample_block), -(-int(full_n) // domain))  # ceil(full_n/domain)
+    if all_bounded and domain > 0:
+        return max(int(sample_block), -(-int(full_n) // domain))  # ceil(full_n/domain)
+    # Unbounded component: near-unique ⇒ constant; concentrated ⇒ ∝N.
+    joint_ratio = (sample_distinct / sample_n) if sample_n > 0 else 1.0
+    if joint_ratio >= _blocking_max_ratio():
+        return int(sample_block)  # spreads rows thin → block stays ~constant
+    return project_max_block_size(int(sample_block), int(sample_n), int(full_n))
 
 
 def _scale_safe_bounded_compound(
@@ -1839,10 +1868,6 @@ def build_blocking(
     ]
     text_cols = [p for p in profiles if p.col_type in ("description", "string", "address")]
 
-    def _max_block_size(col_name: str) -> int:
-        """Largest group size when blocking on this column."""
-        return int(df.group_by(col_name).len().get_column("len").max() or 0)  # pyright: ignore[reportArgumentType]  # polars max() typed as PythonLiteral; "len" column is int64 at runtime
-
     # Auto-config's "is this blocking key safe?" threshold. Scales with
     # total_rows so the autoconfig's tolerance for block size grows with
     # the dataset.
@@ -1871,49 +1896,53 @@ def build_blocking(
     # block-size guard. On a sparse-zip5 healthcare shape, zip5 reclassifies
     # to `identifier` and drops out of the compound, leaving single-name
     # passes whose max block projects to ~50K rows at 1M -> ~39.6M candidate
-    # pairs -> an 18-min run. #876 replaced the legacy ∝N projector with the
-    # type-aware _typed_projected_block (see _projected_block below).
+    # pairs -> an 18-min run. #876 keeps the legacy ∝N projector for keys with an
+    # unbounded component (hot-bucket-safe) and adds a type-aware domain-product
+    # path for ALL-BOUNDED-domain compounds (see _typed_projected_block).
 
     _col_types = {p.name: p.col_type for p in profiles}
 
-    def _projected_block(fields: list[str]) -> int:
-        try:
-            sample_mb = int(df.group_by(fields).len().get_column("len").max() or 0)  # pyright: ignore[reportArgumentType]  # polars max() typed as PythonLiteral; "len" is int64 at runtime
-        except Exception:  # pragma: no cover -- defensive
-            return effective_n_full  # fail-safe: treat unprojectable key as maximally oversized -> dropped
-        # #876: TYPE-AWARE projection. The legacy project_max_block_size assumes
-        # every key's block grows ∝ N (sample_block × full_n/sample_n), which
-        # over-rejects unbounded/identifier keys (whose cardinality grows, so the
-        # block actually stays constant) -> the gate refuses everything at scale.
-        # _typed_projected_block keeps a BOUNDED-domain key (zip) growing while an
-        # UNBOUNDED key (name) stays at its sample block. Fall back to the legacy
-        # projection only for the (rare) case where full_n == df.height (the v0
-        # exact-size path) and the type map is uninformative.
-        return _typed_projected_block(_col_types, fields, sample_mb, effective_n_full)
+    def _sample_block_and_distinct(fields: list[str]) -> tuple[int, int]:
+        """(max group size, distinct group count) on the sample — one group_by.
 
-    def _sample_block(fields: list[str]) -> int:
+        The distinct count drives the #876 cardinality split in
+        ``_typed_projected_block`` (near-unique key ⇒ constant block; concentrated
+        ⇒ ∝N). On error, return ``(effective_n_full, 1)`` so the key is treated as
+        maximally oversized AND concentrated (dropped) — fail-safe.
+        """
         try:
-            return int(df.group_by(fields).len().get_column("len").max() or 0)  # pyright: ignore[reportArgumentType]
+            g = df.group_by(fields).len()
+            mb = int(g.get_column("len").max() or 0)  # pyright: ignore[reportArgumentType]  # polars max() typed as PythonLiteral; "len" is int64 at runtime
+            return mb, int(g.height)
         except Exception:  # pragma: no cover -- defensive
-            return effective_n_full
+            return effective_n_full, 1
+
+    def _projected_block(fields: list[str]) -> int:
+        sample_mb, sample_distinct = _sample_block_and_distinct(fields)
+        # #876: ALL-BOUNDED-domain key (zip×year) grows only as full_n/domain (the
+        # leniency that lets [zip, birth_year] pass); an unbounded component is
+        # constant if near-unique on the sample, else legacy ∝N (hot-bucket-safe).
+        return _typed_projected_block(
+            _col_types, fields, sample_mb, effective_n_full, sample_n, sample_distinct)
 
     def _is_scale_safe(fields: list[str]) -> bool:
         # #876: a key is scale-safe iff its candidate-pair count stays LINEAR in
-        # N. Two regimes from the type-aware projection:
-        #   - UNBOUNDED key (typed block == sample block, constant as N grows):
-        #     pairs = N * block / 2 is already linear -> safe at any block size
-        #     (subject only to the per-block OOM guard). This is what lets a
-        #     name/identifier key survive at scale.
-        #   - BOUNDED key (typed block > sample block, grows ∝ N/domain): pairs
-        #     grow ∝ N^2/domain -> must satisfy the constant pairs-per-row budget
-        #     K (block <= ~2K+1). This is what rejects sole-zip at 100M.
-        # Applying K only to GROWING keys is what avoids regressing existing
-        # datasets that legitimately use a large *constant* block at their scale.
-        sb = _sample_block(fields)
-        pb = _typed_projected_block(_col_types, fields, sb, effective_n_full)
+        # N. Regimes from the projection (see _typed_projected_block):
+        #   - ALL-BOUNDED-domain key (typed block grows ∝ N/domain, e.g. zip×year):
+        #     pairs grow ∝ N^2/domain -> must satisfy the constant pairs-per-row
+        #     budget K (block <= ~2K+1). Rejects sole-zip at 100M; admits the
+        #     [zip, birth_year] compound (domain ~30M -> tiny block).
+        #   - NEAR-UNIQUE unbounded key (member_id): constant small block -> linear
+        #     pairs -> safe at any sample block size (per-block OOM guard aside).
+        #   - CONCENTRATED unbounded key (50-surname last_name, 50%-null zip5): the
+        #     legacy ∝N projection applies and a hot/null bucket projects oversized
+        #     -> rejected here (the #715 guard).
+        sb, sd = _sample_block_and_distinct(fields)
+        pb = _typed_projected_block(
+            _col_types, fields, sb, effective_n_full, sample_n, sd)
         if pb > max_safe_block:
             return False  # per-block OOM guard (#715), also kills huge-N bounded keys
-        if pb > sb:  # block grows with N (bounded-cardinality key)
+        if pb > sb:  # block grows with N (bounded-cardinality / concentrated key)
             return _project_pairs_per_row(pb) <= _blocking_pairs_per_row_budget()
         return True
 

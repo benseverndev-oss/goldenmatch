@@ -1761,31 +1761,31 @@ class TestScaleInvariantBlocking:
         import polars as pl
         from goldenmatch.core.autoconfig import ColumnProfile, build_blocking
         n = 1000
-        # email is near-unique per row (cluster variants differ); names + a
-        # bounded zip + a low-card geo are the recall-preserving alternatives.
+        # email is near-unique per row (cluster variants differ); a bounded zip +
+        # birth_year are the scale-safe alternative the gate should prefer.
         df = pl.DataFrame({
             "first_name": [f"fn{i//5:04d}" + ("x" if i % 5 == 0 else "") for i in range(n)],
             "last_name": [f"ln{i//5:04d}" for i in range(n)],
-            "city": [f"c{(i//5) % 8}" for i in range(n)],          # geo, 8 distinct
-            "zip": [f"{(i//5) % 100:05d}" for i in range(n)],      # bounded, wraps
-            "email": [f"e{i:05d}@x.com" for i in range(n)],        # UNIQUE per row
+            "zip": [f"{(i//5) % 100:05d}" for i in range(n)],         # bounded, wraps
+            "birth_year": [str(1950 + (i//5) % 50) for i in range(n)],  # bounded year
+            "email": [f"e{i:05d}@x.com" for i in range(n)],           # UNIQUE per row
         })
         profiles = [
             ColumnProfile("first_name", "Utf8", "name", 0.9, cardinality_ratio=0.45),
             ColumnProfile("last_name", "Utf8", "name", 0.9, cardinality_ratio=0.30),
-            ColumnProfile("city", "Utf8", "geo", 0.9, cardinality_ratio=0.008),
             ColumnProfile("zip", "Utf8", "zip", 0.9, cardinality_ratio=0.10),
+            ColumnProfile("birth_year", "Utf8", "year", 0.9, cardinality_ratio=0.05),
             ColumnProfile("email", "Utf8", "email", 0.9, cardinality_ratio=0.56),
         ]
         b = build_blocking(profiles, df, n_rows_full=100_000_000)
-        all_keys = [tuple(k.fields) for k in (b.keys or [])]
-        all_passes = [tuple(p.fields) for p in (b.passes or [])]
-        assert not (len(all_keys) == 1 and all_keys[0] == ("email",) and not all_passes), \
-            f"near-unique email chosen as sole blocking key at 100M: keys={all_keys}"
-        # the recall-preserving fall-through is a name-bearing multipass
-        name_fields = {"first_name", "last_name"}
-        assert any(name_fields & set(fields) for fields in all_keys + all_passes), \
-            f"expected a name-bearing blocking option at scale, got keys={all_keys} passes={all_passes}"
+        all_keys = [set(k.fields) for k in (b.keys or [])]
+        all_passes = [set(p.fields) for p in (b.passes or [])]
+        # the near-unique email must be rejected -- never an emitted key/pass
+        assert all("email" not in s for s in all_keys + all_passes), \
+            f"near-unique email emitted as a blocking key at 100M: keys={all_keys} passes={all_passes}"
+        # and the scale-safe bounded alternative is chosen instead of refusing
+        assert any({"zip", "birth_year"} <= s for s in all_keys + all_passes), \
+            f"expected the [zip, birth_year] scale-safe alternative, got keys={all_keys} passes={all_passes}"
 
     def test_bounded_keys_combine_into_scale_safe_compound(self):
         """#876: when no single exact key is scale-safe, AND the BOUNDED exact
