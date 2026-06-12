@@ -149,12 +149,23 @@ def test_aggregate_oracle_deltas_and_verdict():
     ]
     report = agg.build_report(rungs)
     assert report["oracle_rows"] == 1000
-    # 1M rung deltas vs the 1K oracle, all within targets -> PASS
+    # 1M rung deltas vs the 1K oracle, all within targets -> PASS. Assert all
+    # three delta paths arithmetically (0.918-0.920, 0.929-0.930, 0.695-0.700).
     row_1m = next(r for r in report["rows"] if r["rows"] == 1000000)
-    assert abs(row_1m["pairwise_delta"]) == pytest.approx(0.002, abs=1e-9)
+    assert row_1m["pairwise_delta"] == pytest.approx(-0.002, abs=1e-9)
+    assert row_1m["b_cubed_delta"] == pytest.approx(-0.001, abs=1e-9)
+    assert row_1m["cluster_delta"] == pytest.approx(-0.005, abs=1e-9)
     assert row_1m["passed"] is True
     assert report["verdict_passed"] is True
     assert "| rows |" in report["markdown"].lower()
+
+
+def test_aggregate_empty_rungs_is_a_safe_noop():
+    agg = _load_aggregate()
+    report = agg.build_report([])
+    assert report["oracle_rows"] is None
+    assert report["rows"] == []
+    assert report["verdict_passed"] is True  # vacuous PASS sentinel
 
 
 def test_aggregate_flags_drift_as_fail():

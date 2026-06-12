@@ -26,6 +26,7 @@ one-shot job modelled on `Dockerfile.embprov` that invokes this script per N.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -140,7 +141,6 @@ def _hash_name(salt: str, seed: int, cid: int, n_syl: int = 5) -> str:
     arithmetic), and a (first, last) tuple collision is effectively impossible.
     Independent salts for first/last keep the two pools uncorrelated.
     """
-    import hashlib
     h = hashlib.md5(f"{salt}_{seed}_{cid}".encode()).digest()
     return "".join(_SYL[h[i] % len(_SYL)] for i in range(n_syl))
 
@@ -409,7 +409,6 @@ def _golden_hash(golden) -> str | None:
     docs/quality-invariant-scale.md (Methodology)."""
     if golden is None:
         return None
-    import hashlib
     g = golden.sort(by=golden.columns)
     return hashlib.sha256(g.write_csv().encode("utf-8")).hexdigest()
 
@@ -426,7 +425,6 @@ def _clusters_signature(predicted_members: dict[int, list[int]]) -> str:
     """sha256 over the sorted set of sorted member tuples — label-independent
     cluster-membership identity (cluster_id values can differ; the partition
     can't)."""
-    import hashlib
     canon = sorted(tuple(sorted(int(m) for m in members))
                    for members in predicted_members.values())
     return hashlib.sha256(repr(canon).encode("utf-8")).hexdigest()
@@ -670,7 +668,7 @@ def main(argv=None) -> int:
                          "polars <500K, bucket 500K-25M (>=32GB RAM), duckdb 25M-100M "
                          "(out-of-core, no OOM on smaller boxes), ray 50M+ "
                          "(distributed; needs the ray extra installed).")
-    ap.add_argument("--corruption", choices=tuple(("light", "moderate", "hard")),
+    ap.add_argument("--corruption", choices=("light", "moderate", "hard"),
                     default="light",
                     help="realistic-shape corruption level. light = today's baseline "
                          "(10%% a->@ typo only); moderate ~ F1 0.90-0.95 (drift-sensitive, "
@@ -680,9 +678,11 @@ def main(argv=None) -> int:
 
     res = run_rung(args.rows, seed=args.seed, shape=args.shape, backend=args.backend,
                    corruption=args.corruption)
+    # shape/backend are not in run_rung's return dict, so set them here;
+    # "corruption" is already in the dict (run_rung received it) -- don't
+    # re-write it, that would silently shadow a future rename of the key.
     res["shape"] = args.shape
     res["backend"] = args.backend or "auto"
-    res["corruption"] = args.corruption
     print(json.dumps(res, indent=2, default=str))
     if args.out:
         args.out.write_text(json.dumps(res, indent=2, default=str), encoding="utf-8")

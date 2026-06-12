@@ -68,8 +68,12 @@ def build_report(rungs: list[dict]) -> dict:
 def _fmt(x, nd=4):
     if x is None:
         return ""
+    if isinstance(x, bool):  # bool is an int subclass; render as-is, not "1"/"0"
+        return str(x)
     if isinstance(x, float):
         return f"{x:.{nd}f}"
+    if isinstance(x, int):  # thousands separators, matching the `rows` column
+        return f"{x:,}"
     return str(x)
 
 
