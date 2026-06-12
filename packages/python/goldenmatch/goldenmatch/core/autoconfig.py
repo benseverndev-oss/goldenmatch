@@ -1429,6 +1429,32 @@ def _detect_source_partition(
     return None
 
 
+def _source_correlated_exclusions(
+    df: pl.DataFrame,
+    profiles: list[ColumnProfile],
+    partition: str | None,
+) -> set[str]:
+    """Columns to exclude from ALL match features when multi-source (spec §3).
+
+    = {the user source-indicator column} U {columns 0-overlap across sources}.
+    Computed on the FULL frame so ``== 0.0`` is exact. Empty when no partition.
+    ``__source__`` is never added (``profile_columns`` already skips dunder
+    columns, so it never reaches the matchkeys).
+    """
+    if partition is None:
+        return set()
+    exclude: set[str] = set()
+    if not partition.startswith("__"):
+        exclude.add(partition)
+    for p in profiles:
+        col = p.name
+        if col.startswith("__") or col == partition:
+            continue
+        if _check_source_overlap(df, col, partition_col=partition) == 0.0:
+            exclude.add(col)
+    return exclude
+
+
 # ── Blocking generation ────────────────────────────────────────────────────
 
 def _make_quality_column_profile(

@@ -79,6 +79,46 @@ def test_detect_suppressed_by_killswitch(monkeypatch):
     assert _detect_source_partition(df, _profiles(df)) is None
 
 
+# ── Task 5: _source_correlated_exclusions ────────────────────────────────────
+
+from goldenmatch.core.autoconfig import _source_correlated_exclusions
+
+
+def test_exclusions_dunder_source():
+    df = pl.DataFrame({
+        "__source__": ["a", "a", "b", "b"],
+        "surrogate": ["s1", "s2", "s3", "s4"],   # 0-overlap -> excluded
+        "email": ["x@y", "p@q", "x@y", "z@w"],   # shared -> kept
+        "name": ["A", "B", "A", "C"],
+    })
+    profiles = _profiles(df)
+    part = _detect_source_partition(df, profiles)
+    excl = _source_correlated_exclusions(df, profiles, part)
+    assert "surrogate" in excl
+    assert "email" not in excl
+    assert "name" not in excl
+    assert "__source__" not in excl   # handled by the dunder skip, not added here
+
+
+def test_exclusions_user_source_includes_the_source_column():
+    df = pl.DataFrame({
+        "source": ["hubspot", "hubspot", "salesforce", "salesforce"],
+        "crm_id": ["h1", "h2", "s1", "s2"],
+        "email": ["x@y", "p@q", "x@y", "z@w"],
+    })
+    profiles = _profiles(df)
+    part = _detect_source_partition(df, profiles)   # == "source"
+    excl = _source_correlated_exclusions(df, profiles, part)
+    assert "source" in excl       # the partition label itself
+    assert "crm_id" in excl       # 0-overlap surrogate
+    assert "email" not in excl
+
+
+def test_exclusions_empty_when_no_partition():
+    df = pl.DataFrame({"email": ["x@y"], "name": ["A"]})
+    assert _source_correlated_exclusions(df, _profiles(df), None) == set()
+
+
 # ── Task 1: generalized _check_source_overlap ────────────────────────────────
 
 def test_overlap_against_user_partition_column():
