@@ -66,9 +66,17 @@ function findDatePairs(columns: readonly string[]): Array<[string, string]> {
   });
 }
 
+// Python's temporal profiler only treats a value as a date when it is a real
+// Date/Datetime column OR a string that casts via str.to_date(format="%Y-%m-%d")
+// — so bare integers (zip=7, qty=2) are NOT dates. Mirror that by requiring the
+// ISO `YYYY-MM-DD` shape before parsing; `new Date("7")` would otherwise yield a
+// valid Date and make the fallback fire on numeric columns (TS<->Python gap).
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
 function tryParseDate(v: unknown): Date | null {
   if (isNullish(v)) return null;
   const s = String(v);
+  if (!ISO_DATE_RE.test(s)) return null;
   const d = new Date(s);
   if (isNaN(d.getTime())) return null;
   return d;
