@@ -1744,3 +1744,45 @@ class TestScaleInvariantBlocking:
         # rather than the bomb. So we assert "not sole-zip" (refuse is the
         # acceptable fail-safe), NOT "non-empty".
         assert not (len(keys) == 1 and keys[0] == ("zip",)), f"sole zip at 100M: {keys}"
+
+    def test_unbounded_near_unique_key_not_sole_at_scale(self):
+        """#876: an UNBOUNDED near-unique key (email derived from corrupted names)
+        must NOT be returned as the sole blocking key at scale.
+
+        Chao1 (a CLOSED-domain unseen-species estimator) wrongly projects an
+        unbounded key's cardinality ratio DOWN at scale (e.g. email 0.56 -> ~0.00
+        at 100M), making a near-surrogate look low-cardinality so it passes the
+        #408 gate and is picked as the sole exact key. For dedupe that key blocks
+        into near-singletons (here ~0.39 blocking recall) -> tanks recall. The
+        type-aware projection keeps an unbounded near-unique key near-unique at
+        scale so the #408 gate rejects it and control falls through to the
+        recall-preserving name multipass. Mirrors the QIS shape.
+        """
+        import polars as pl
+        from goldenmatch.core.autoconfig import ColumnProfile, build_blocking
+        n = 1000
+        # email is near-unique per row (cluster variants differ); names + a
+        # bounded zip + a low-card geo are the recall-preserving alternatives.
+        df = pl.DataFrame({
+            "first_name": [f"fn{i//5:04d}" + ("x" if i % 5 == 0 else "") for i in range(n)],
+            "last_name": [f"ln{i//5:04d}" for i in range(n)],
+            "city": [f"c{(i//5) % 8}" for i in range(n)],          # geo, 8 distinct
+            "zip": [f"{(i//5) % 100:05d}" for i in range(n)],      # bounded, wraps
+            "email": [f"e{i:05d}@x.com" for i in range(n)],        # UNIQUE per row
+        })
+        profiles = [
+            ColumnProfile("first_name", "Utf8", "name", 0.9, cardinality_ratio=0.45),
+            ColumnProfile("last_name", "Utf8", "name", 0.9, cardinality_ratio=0.30),
+            ColumnProfile("city", "Utf8", "geo", 0.9, cardinality_ratio=0.008),
+            ColumnProfile("zip", "Utf8", "zip", 0.9, cardinality_ratio=0.10),
+            ColumnProfile("email", "Utf8", "email", 0.9, cardinality_ratio=0.56),
+        ]
+        b = build_blocking(profiles, df, n_rows_full=100_000_000)
+        all_keys = [tuple(k.fields) for k in (b.keys or [])]
+        all_passes = [tuple(p.fields) for p in (b.passes or [])]
+        assert not (len(all_keys) == 1 and all_keys[0] == ("email",) and not all_passes), \
+            f"near-unique email chosen as sole blocking key at 100M: keys={all_keys}"
+        # the recall-preserving fall-through is a name-bearing multipass
+        name_fields = {"first_name", "last_name"}
+        assert any(name_fields & set(fields) for fields in all_keys + all_passes), \
+            f"expected a name-bearing blocking option at scale, got keys={all_keys} passes={all_passes}"

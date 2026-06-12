@@ -1741,9 +1741,26 @@ def build_blocking(
     _ann_eligible = bool(_embedding_cols) and effective_n_full >= ann_min_rows
 
     def _projected_ratio(p: ColumnProfile) -> float:
-        """Sample-corrected cardinality_ratio for the gate."""
+        """Sample-corrected cardinality_ratio for the #408/#410 blocking gate.
+
+        #876: TYPE-AWARE projection (same fix as ``_typed_projected_block`` for
+        block size). ``scale_cardinality_ratio_to_full_population`` is a Chao1
+        unseen-species estimator — it assumes a CLOSED domain and projects the
+        cardinality ratio DOWN as N grows (more rows fill in the fixed domain →
+        proportionally fewer distinct). That's valid only for a BOUNDED-domain
+        key (zip/year/month/boolean). For an UNBOUNDED key (email/name/
+        identifier/string) the domain grows WITH N, so a near-unique key stays
+        near-unique at scale; Chao1 wrongly drives its ratio toward 0 (email
+        0.56 → ~0.00 at 200M), letting a near-surrogate slip past the
+        ``blocking_max_ratio`` gate and get picked as the SOLE blocking key —
+        which blocks into near-singletons and tanks recall (#876: QIS email
+        blocking recall 0.39). Keep an unbounded key at its sample ratio so the
+        gate sees it for what it is. BOUNDED keys still Chao1-project (zip's true
+        ratio really does fall as the 100K domain saturates)."""
         if effective_n_full <= sample_n:
             return p.cardinality_ratio
+        if _BLOCKING_DOMAIN_CAP.get(p.col_type) is None:
+            return p.cardinality_ratio  # unbounded domain: ratio does not fall with N
         sample_distinct = max(int(p.cardinality_ratio * sample_n), 1)
         return scale_cardinality_ratio_to_full_population(
             sample_distinct=sample_distinct,
