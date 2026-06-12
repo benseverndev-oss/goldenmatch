@@ -99,26 +99,43 @@ pass.
 | 100,000 | 0.9365 | +0.0013 | 0.8904 | 0.9876 | 0.9702 | 0.8954 | +0.0031 | ✅ |
 | 1,000,000 | 0.9364 | +0.0013 | 0.8902 | 0.9878 | 0.9702 | 0.8957 | +0.0033 | ✅ |
 | 10,000,000 | 0.9166 | −0.0186 | 0.8547 | 0.9882 | — | 0.8775 | −0.0148 | ❌ (drift, see below) |
-| 25,000,000 | _(cluster tier — pending)_ | | | | | | | |
-| 50,000,000 | _(cluster tier — pending)_ | | | | | | | |
-| 100,000,000 | _(cluster tier — pending)_ | | | | | | | |
 
-(1K–10M on the `large-new-64GB` bench runner; 25M+ on a GCP box. Wall/RSS columns
-omitted here — they are comparable only within one runner class; see the raw
-per-rung JSON.)
+(1K–10M on the `large-new-64GB` bench runner. The ladder is **capped at 10M** —
+25M+ are impractical to run until the blocking issue below is addressed; see
+"Why larger rungs are blocked".)
 
 **Verdict:** quality is scale-invariant **through 1M** (all deltas inside target).
+Beyond that a single auto-config blocking-selection issue (#876) drives both a
+precision drift and a candidate-pair explosion.
 
-## Residual finding: precision drift beyond ~1M (issue #876)
+## Residual finding: blocking on a bounded-cardinality key doesn't scale (#876)
 
-At 10M, precision drifts down (0.890 → 0.855) while recall stays flat (0.988), so
-F1 misses the strict Δ≤0.005 target. It is *not* a clustering or recall failure —
-it's fuzzy false-positives growing with entity count (random name/address
-near-collisions and/or the ambiguous-twin pairs crossing the 0.8 threshold more
-often as clusters multiply). This is partly a fundamental ER-at-scale property
-(more entities → more confusable pairs) and partly a possible auto-config lever
-(a scale-adaptive fuzzy threshold). Tracked as **#876**; the curve above
-documents the magnitude.
+At 10M, precision drifts down (0.890 → 0.855) while recall stays flat (0.988).
+Root cause (pinned): the frozen config blocks on a single key, `zip`. In the
+fixture `zip = cid % 100000` wraps at 100K clusters, so the zip block size grows
+~linearly with N (10 rows/zip at 1M → 100 at 10M → 250 at 25M), and the
+candidate-pair count grows ~`N² / 100000`: ~4.5M pairs at 1M, ~500M at 10M, ~3B
+at 25M. Those bloated blocks are mostly *cross-cluster* pairs, a growing fraction
+of which the fuzzy scorer matches — hence the precision drift — and scoring 3B
+pairs is why 25M is impractical.
+
+This is **real-world-relevant**, not a fixture artifact: real zips are also
+bounded (~40K US zips), so an auto-config that blocks on `zip` alone explodes on
+any large real dataset. The hard part is that the cardinality *cap* is invisible
+from a small sample (a 1K sample shows `zip` as clean/high-cardinality), so
+auto-config can't catch it the way it catches a year's 65 distinct values (the
+phonetic fix). The fix (a known-bounded `col_type=zip/geo` shouldn't be a
+scalable *sole* blocking key for large `n_rows`; require a refining sub-key or
+multi-pass blocking) is a more involved blocking-selection change — tracked as
+**#876**, a follow-up to this PR.
+
+## Why larger rungs are blocked
+
+25M / 50M / 100M / 200M are out of scope for *this* report because of #876 above:
+the zip-block candidate-pair explosion makes them take hours (3B+ scored pairs at
+25M). Once #876 lands (bounded blocks → linear scaling), the cluster tier becomes
+fast and can extend the curve. The 1K→10M curve already decisively shows the two
+findings (invariance through 1M; the blocking-driven drift beyond).
 
 ## Reproduction
 
