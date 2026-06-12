@@ -23,7 +23,16 @@ export const WASM_COVERED_SCORERS: ReadonlySet<string> = new Set(
 
 /** A WASM-backed (or stub) NxN matrix scorer. Null handling is the caller's. */
 export interface ScorerBackend {
-  /** Row-major NxN similarity matrix for `values` under `scorerName`. */
+  /**
+   * Similarity matrix for `values` under `scorerName`.
+   *
+   * CONTRACT: the returned `Float64Array` MUST be a FULL row-major NxN matrix
+   * (length `values.length ** 2`) and symmetric — the caller reads only the
+   * upper triangle (`flat[i * n + j]`, j > i) and mirrors it, so a packed
+   * upper-triangle buffer would silently yield wrong scores for the lower half.
+   * The diagonal is ignored. The caller masks null cells to 0 (this never sees
+   * nulls — `values` is already non-null strings).
+   */
   scoreMatrix(values: readonly string[], scorerName: string): Float64Array;
 }
 
