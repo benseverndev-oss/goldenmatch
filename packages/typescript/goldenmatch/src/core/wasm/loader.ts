@@ -47,7 +47,10 @@ export async function resolveWasmBytes(opts: LoadOptions): Promise<Uint8Array> {
 export async function instantiateBackend(bytes: Uint8Array): Promise<ScorerBackend> {
   // Dynamic import of the generated glue (absent in a default checkout).
   const glue = (await import("./artifacts/score_wasm.js" as string)) as {
-    default: (input: { module_or_path: BufferSource }) => Promise<unknown>;
+    // module_or_path accepts more (URL/Response/Module), but we only ever pass
+    // the resolved bytes; typing it as Uint8Array avoids the DOM `BufferSource`
+    // lib type (this package typechecks without the DOM lib).
+    default: (input: { module_or_path: Uint8Array }) => Promise<unknown>;
     score_matrix: (values: string, sep: string, scorerId: number) => Float64Array;
   };
   await glue.default({ module_or_path: bytes });

@@ -157,10 +157,18 @@ export function jaro(a: string, b: string): number {
 /**
  * Jaro-Winkler similarity.
  * Adds a bonus for a common prefix of up to 4 characters, scaling factor 0.1.
+ *
+ * The prefix bonus is applied ONLY when the Jaro similarity exceeds the Winkler
+ * boost threshold (0.7) — matching rapidfuzz (and therefore the Python source of
+ * truth + the score-core/WASM kernel). Without this gate, low-similarity
+ * prefix-sharing pairs (e.g. "sitting"/"saturday", jaro 0.5119, common "s")
+ * were over-scored vs Python. Verified against rapidfuzz: bonus on
+ * "saturday"/"sunday" (jaro 0.7527) but none on "sitting"/"saturday".
  */
 export function jaroWinkler(a: string, b: string): number {
   const jaroSim = jaro(a, b);
-  if (jaroSim === 0.0) return 0.0;
+  // Boost threshold: below 0.7 (and at jaro 0), return Jaro unmodified.
+  if (jaroSim <= 0.7) return jaroSim;
 
   // Common prefix up to 4 chars
   const maxPrefix = Math.min(4, Math.min(a.length, b.length));

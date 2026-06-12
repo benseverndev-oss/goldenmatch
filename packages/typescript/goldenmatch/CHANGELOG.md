@@ -12,6 +12,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   Pure-TS remains the default and the fallback; runs in Node, browsers, and
   Workers. Parity-gated in CI (`wasm_score` lane). token_sort + non-BMP
   codepoint parity are tracked follow-ups.
+- **Fixed `jaro_winkler` Winkler boost threshold.** The prefix bonus is now
+  applied only when the base Jaro similarity exceeds 0.7, matching rapidfuzz
+  (and therefore the Python source of truth + the score-core/WASM kernel).
+  Previously the bonus was applied to any non-zero Jaro, over-scoring
+  low-similarity prefix-sharing pairs (e.g. `"sitting"`/`"saturday"`). Surfaced
+  by the new WASM parity gate; affects only sub-0.7 pairs, which sit well below
+  typical match thresholds so dedup outcomes are unchanged. Locked by new
+  `scorer-ground-truth` cases.
 
 ### Added — refdata-aware name scorers (parity with Python `refdata`)
 
