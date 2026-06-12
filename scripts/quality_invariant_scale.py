@@ -405,8 +405,8 @@ def _golden_hash(golden) -> str | None:
     stably sorted run-to-run, so this hash can legitimately differ across reruns
     on heavily-corrupted text fields even when the cluster PARTITION is identical.
     Determinism is asserted on `clusters_signature` + golden SHAPE instead; the
-    survivorship-ordering gap is tracked as a goldenmatch follow-up. See
-    docs/quality-invariant-scale.md (Methodology) + the tracked issue."""
+    survivorship-ordering gap is tracked as goldenmatch issue #870. See
+    docs/quality-invariant-scale.md (Methodology)."""
     if golden is None:
         return None
     import hashlib

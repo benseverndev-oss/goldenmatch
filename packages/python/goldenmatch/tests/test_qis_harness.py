@@ -114,8 +114,8 @@ def test_qis_run_determinism_and_golden_shape():
     # survivorship breaks value ties by input row order, which is not stably
     # sorted run-to-run, so heavily-corrupted text fields (first_name, email)
     # can pick different equally-valid survivors across reruns even though the
-    # partition is identical. That survivorship-ordering gap is a tracked
-    # goldenmatch follow-up; clustering reproducibility is what #510 needs and
+    # partition is identical. That survivorship-ordering gap is tracked as
+    # goldenmatch issue #870; clustering reproducibility is what #510 needs and
     # is what's asserted here. (golden_hash stays in the artifact as a per-run
     # content fingerprint, not a cross-run determinism witness.)
     a = qis.run_rung(1000, seed=0, shape="realistic", corruption="moderate")
