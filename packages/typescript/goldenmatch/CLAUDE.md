@@ -64,6 +64,37 @@ npx vitest run tests/parity/        # parity-only suite
 - Optional props: `...(x !== undefined ? { field: x } : {})` — never spread `undefined`.
 - Optional peer deps (sqlite, sentence-transformers): `await import("pkg-name" as string)` — the `as string` cast prevents tsup from resolving at build time.
 
+## Opt-in WASM scorer (score-wasm)
+- `await enableWasm()` swaps a WASM backend (the Rust `score-core` crate compiled
+  via `packages/rust/extensions/score-wasm/`) behind the sync `scoreMatrix` for
+  COVERED scorers only: `jaro_winkler` / `levenshtein` / `exact`. Everything else
+  (incl. `token_sort` — normalization parity unresolved) stays pure-TS even when
+  enabled. `disableWasm()` resets (test isolation, mirrors `setSyncEmbedder(null)`).
+- Pure-TS is the default + fallback. `enableWasm()` returns `false` (pure-TS stays
+  active) on any load failure; `{ require: true }` throws instead. Default users
+  load zero wasm bytes (the loader/glue/bytes are behind a lazy dynamic import).
+- Swap is at the NxN matrix boundary (one JS↔WASM crossing per block), never
+  per-pair (boundary cost would dwarf a single scorer).
+- The `.wasm` is NOT committed. Build locally: `bash packages/rust/extensions/
+  score-wasm/build_wasm.sh` (needs the rustup `wasm32-unknown-unknown` target +
+  `wasm-bindgen-cli`; the script installs the cli at the Cargo.lock-pinned
+  wasm-bindgen version), then `npm run build`. CI's `wasm_score` lane builds it
+  and runs `tests/parity/wasm-scorer.test.ts` un-skipped; without the artifact
+  that test SKIPS and the artifact-free `wasm-backend`/`wasm-fallback` unit tests
+  run in the normal `typescript` lane.
+- **Known limitation — non-BMP parity gap:** the pure-TS scorers index UTF-16
+  code units (`a[i]`, `a.length`); the rapidfuzz WASM kernel and the Python
+  golden source operate on Unicode codepoints, so they disagree on astral-plane
+  (surrogate-pair) chars like emoji. Parity is asserted on the BMP domain
+  (person-name ER data is BMP). Codepoint-correcting the core scorers is a tracked
+  follow-up, NOT part of this slice.
+- **Open item — dist artifact path:** the loader resolves the artifact via
+  `new URL('./artifacts/score_wasm_bg.wasm', import.meta.url)`. The parity test
+  runs against `src` (vitest, unbundled) and is correct. Whether tsup BUNDLING
+  flattens that path in `dist` (so `copy_wasm_artifact.mjs`'s destination must be
+  adjusted to match the bundled loader's resolved location) is to be validated on
+  the first `wasm_score` CI run; the bench step is `continue-on-error` until then.
+
 ## Parity contract
 - **Scorer output:** 4-decimal tolerance vs Python (`tests/parity/scorer-ground-truth.test.ts`).
 - **Hash bytes:** SHA-256 truncated to 16 hex via Web Crypto. UTF-8 mandatory. Hash input = values joined by `|` (NOT `<col>=<val>`). `__row_id__` excluded from `record_hash` so corrections survive row reordering.

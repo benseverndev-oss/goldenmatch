@@ -4,6 +4,15 @@ All notable changes to goldenmatch-js are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/) (strict after v1.0.0).
 
+## [Unreleased]
+
+- **Opt-in WASM scorer backend.** `enableWasm()` / `disableWasm()` register a
+  WebAssembly scorer (the Rust `score-core` kernel via the new `score-wasm`
+  crate) behind the sync `scoreMatrix` for `jaro_winkler`/`levenshtein`/`exact`.
+  Pure-TS remains the default and the fallback; runs in Node, browsers, and
+  Workers. Parity-gated in CI (`wasm_score` lane). token_sort + non-BMP
+  codepoint parity are tracked follow-ups.
+
 ## [2.0.0] - 2026-05-22
 
 Major version: v1.18.2 plugin parity for the TS port (#208).
