@@ -54,6 +54,7 @@ def main() -> None:
                         "column": f.column,
                         "check": f.check,
                         "confidence": round(f.confidence, 4),
+                        "affected_rows": f.affected_rows,
                     }
                     for f in findings
                 ],
