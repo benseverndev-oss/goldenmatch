@@ -89,10 +89,41 @@ score-core (pyo3-free, canonical scorers)
   All scoring logic stays in `score-core`, so WASM, the Python native wheel,
   and the FFI UDFs are byte-identical by construction.
 
-The only genuinely new divergence risk is **WASM (rapidfuzz) vs the
-hand-rolled pure-TS jaro** — `goldenmatch/src/core/scorer.ts` reimplements
-Jaro/Jaro-Winkler/Indel by hand and does **not** use rapidfuzz. The parity
-gate pins these against each other (and against the Python goldens).
+The new divergence risks are bigger than just "WASM vs hand-rolled jaro"
+(`goldenmatch/src/core/scorer.ts` reimplements Jaro/Jaro-Winkler/Indel by hand
+and does **not** use rapidfuzz). Two specific traps the plan must resolve:
+
+- **token_sort preprocessing + scaling.** `score-core::score_one(2, a, b)`
+  returns the **raw `fuzz::ratio` on [0,1]** and `score-core::token_sort_string`
+  only splits/sorts tokens — it does **not** lowercase or strip punctuation.
+  The pure-TS `tokenSortRatio` **does** lowercase + strip non-alphanumerics
+  before the Indel ratio, and the Python goldens depend on that
+  (`"John SMITH"` / `"smith john"` → 1.0). `score-core` also deliberately keeps
+  `score_one(id=2)` **unscaled** vs `token_sort_ratio`'s ×100 form (a pinned,
+  load-bearing asymmetry). So a `score-wasm` shim that naively delegates
+  `score_one(2, …)` will **fail parity** on token_sort. Resolution options for
+  the plan: (a) replicate the TS/Python normalization in the Rust batch entry
+  before the Indel ratio, or (b) **exclude token_sort from the WASM path in
+  slice 1** and let it stay pure-TS — see "WASM-covered scorers" below.
+- **codepoint vs UTF-16 code unit.** rapidfuzz operates on Unicode codepoints
+  (`a.chars()`); the pure-TS impl indexes UTF-16 code units in places. The
+  parity corpus must include non-BMP / combining-character cases.
+
+### WASM-covered scorers (explicit)
+
+`score-core` implements **only** `jaro_winkler` / `levenshtein` / `token_sort` /
+`exact` (`score_one` ids 0–3). But `buildScoreMatrix` in `scorer.ts` also
+dispatches `ensemble`, `dice`, `jaccard`, `soundex_match`,
+`given_name_aliased_jw`, `name_freq_weighted_jw`, and `embedding` — none of
+which exist in `score-core`. So the WASM matrix path can only accelerate the
+scorers `score-core` covers; **every other scorer always routes to pure-TS,
+even when WASM is enabled.** The backend swap in `buildScoreMatrix` must
+therefore be **per-scorer**: route to the WASM backend only for a covered
+scorer id, else fall through to the existing pure-TS branch. For slice 1, the
+covered set is `jaro_winkler` / `levenshtein` / `exact` at minimum
+(`jaro_winkler` is the dominant scorer in practice, so the win is still
+demonstrated); `token_sort` is included only if option (a) above lands cleanly,
+otherwise deferred. The bench MUST exercise a covered scorer (`jaro_winkler`).
 
 ### The batch boundary — the load-bearing perf decision
 
@@ -111,6 +142,11 @@ surface is **batch-first**:
   Rust, and a flat `Float64Array` returns in one crossing. A single-pair
   `score_one(scorer_id, a, b) -> f64` also exists, used by the parity test and
   available for callers, but it is **not** the acceleration path.
+- **Reuse the proven kernel shape:** the Python native crate already has an
+  NxM cdist primitive with a self-cdist upper-triangle optimization
+  (`score_field_matrix` in `packages/rust/extensions/native/src/score.rs`).
+  The `score-wasm` batch entry should mirror that signature/optimization
+  rather than inventing a new one.
 - The backend swap happens at `buildScoreMatrix` / `scoreMatrix` in
   `scorer.ts` (per-block, NxN), **not** at per-pair `scoreField`. One boundary
   crossing per block, not O(n²).
@@ -165,10 +201,15 @@ caller: dedupe(...) / scoreMatrix(...)            (unchanged, sync)
 
 `packages/typescript/goldenmatch/tests/parity/wasm-scorer.test.ts`:
 
-- For a corpus of string pairs (reuse the existing Python-generated scorer
-  goldens under `tests/parity/fixtures/`), assert the `enableWasm()`-backed
-  `scoreMatrix` agrees with the pure-TS `scoreMatrix` to the existing
-  **4-decimal** tolerance, and with the Python goldens.
+- For a corpus of string pairs, assert the `enableWasm()`-backed `scoreMatrix`
+  agrees with the pure-TS `scoreMatrix` to the existing **4-decimal**
+  tolerance, and with the Python goldens. The existing scorer ground-truth
+  corpus is the inline `CASES` array in
+  `tests/parity/scorer-ground-truth.test.ts` (NOT a JSON file under
+  `tests/parity/fixtures/`, which holds aggregation/config/pprl/resolve
+  fixtures only). Reuse that case list (extract to a shared fixture in the
+  plan if convenient), and extend it with non-BMP / combining-character cases
+  per the codepoint-vs-code-unit risk above.
 - **Skipped** when the wasm artifact is absent (opt-in, exactly like Python
   selecting the native path only under `GOLDENMATCH_*` / `GOLDENCHECK_NATIVE`).
   A dedicated CI lane builds the wasm and runs this test **un-skipped**.
@@ -274,7 +315,8 @@ duplication actually hurts, extract a shared TS wasm-runtime then.
   raw `WebAssembly.instantiate`): no single wasm-bindgen `--target` covers
   Node + browser + Workers + bundlers, so the loader owns environment
   detection and feeds bytes to a target-agnostic init. Validate in the plan.
-- **String encoding parity:** rapidfuzz operates on Unicode codepoints
-  (`a.chars()`); the pure-TS impl indexes UTF-16 code units in places. The
-  parity corpus must include non-BMP / combining-character cases to catch any
-  codepoint-vs-code-unit divergence between WASM and pure-TS.
+- **token_sort and string-encoding parity** are the two concrete divergence
+  traps — both detailed under Architecture ("token_sort preprocessing +
+  scaling" and "codepoint vs UTF-16 code unit"). The plan must resolve
+  token_sort (replicate normalization in Rust vs defer to pure-TS for slice 1)
+  and seed the parity corpus with non-BMP / combining-character cases.
