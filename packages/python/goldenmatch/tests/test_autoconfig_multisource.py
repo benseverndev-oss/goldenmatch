@@ -6,10 +6,15 @@ demotion, and the dedupe-only / single-source / match-mode firewalls.
 from __future__ import annotations
 
 import polars as pl
-
 from goldenmatch.core import autoconfig as ac
-from goldenmatch.core.autoconfig import _check_source_overlap
-
+from goldenmatch.core.autoconfig import (
+    _check_source_overlap,
+    _detect_source_partition,
+    _source_correlated_exclusions,
+    auto_configure_df,
+    build_matchkeys,
+    profile_columns,
+)
 
 # ── Task 2: kill-switch ──────────────────────────────────────────────────────
 
@@ -32,9 +37,6 @@ def test_match_mode_contextvar_default_and_scoped():
 
 
 # ── Task 4: _detect_source_partition ─────────────────────────────────────────
-
-from goldenmatch.core.autoconfig import _detect_source_partition, profile_columns
-
 
 def _profiles(df):
     return profile_columns(df)   # returns list[ColumnProfile] directly
@@ -83,9 +85,6 @@ def test_detect_suppressed_by_killswitch(monkeypatch):
 
 # ── Task 5: _source_correlated_exclusions ────────────────────────────────────
 
-from goldenmatch.core.autoconfig import _source_correlated_exclusions
-
-
 def test_exclusions_dunder_source():
     df = pl.DataFrame({
         "__source__": ["a", "a", "b", "b"],
@@ -123,9 +122,6 @@ def test_exclusions_empty_when_no_partition():
 
 # ── Task 6: phone demotion in build_matchkeys ────────────────────────────────
 
-from goldenmatch.core.autoconfig import build_matchkeys
-
-
 def _phone_df():
     # 10 distinct 10-digit phones, each repeated -> cardinality 0.5 (a real
     # exact candidate: not < 0.5, not perfectly-unique >= 1.0).
@@ -152,9 +148,6 @@ def test_phone_demoted_when_multi_source():
 
 
 # ── Task 7: wired into auto_configure_df ─────────────────────────────────────
-
-from goldenmatch.core.autoconfig import auto_configure_df
-
 
 def _crm_df():
     rows = []
