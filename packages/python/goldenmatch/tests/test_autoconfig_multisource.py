@@ -7,7 +7,28 @@ from __future__ import annotations
 
 import polars as pl
 
+from goldenmatch.core import autoconfig as ac
 from goldenmatch.core.autoconfig import _check_source_overlap
+
+
+# ── Task 2: kill-switch ──────────────────────────────────────────────────────
+
+def test_killswitch_default_on_and_off(monkeypatch):
+    monkeypatch.delenv("GOLDENMATCH_MULTISOURCE_AUTOCONFIG", raising=False)
+    assert ac._multisource_autoconfig_enabled() is True
+    monkeypatch.setenv("GOLDENMATCH_MULTISOURCE_AUTOCONFIG", "0")
+    assert ac._multisource_autoconfig_enabled() is False
+    monkeypatch.setenv("GOLDENMATCH_MULTISOURCE_AUTOCONFIG", "false")
+    assert ac._multisource_autoconfig_enabled() is False
+
+
+# ── Task 3: match-mode ContextVar ────────────────────────────────────────────
+
+def test_match_mode_contextvar_default_and_scoped():
+    assert ac._AUTOCONFIG_MATCH_MODE.get() is False
+    with ac._match_mode_autoconfig():
+        assert ac._AUTOCONFIG_MATCH_MODE.get() is True
+    assert ac._AUTOCONFIG_MATCH_MODE.get() is False
 
 
 # ── Task 1: generalized _check_source_overlap ────────────────────────────────

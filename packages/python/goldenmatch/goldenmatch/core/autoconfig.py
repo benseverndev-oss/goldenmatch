@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import re
@@ -2261,6 +2262,31 @@ _LAST_AUTOCONFIG_EXCLUSIONS: ContextVar = ContextVar(
 _RUNTIME_EXCLUDE_COLUMNS: ContextVar = ContextVar(
     "_RUNTIME_EXCLUDE_COLUMNS", default=None,
 )
+
+# #858: set by the match pipeline (`_run_match_pipeline`) and `match_df` around
+# their `auto_configure_df` call so the multi-source guard is suppressed in
+# match mode (cross-source linking is the goal there). Dedupe paths never set it.
+_AUTOCONFIG_MATCH_MODE: ContextVar = ContextVar(
+    "_AUTOCONFIG_MATCH_MODE", default=False,
+)
+
+
+@contextlib.contextmanager
+def _match_mode_autoconfig():
+    """Suppress the #858 multi-source guard for the duration (match mode)."""
+    token = _AUTOCONFIG_MATCH_MODE.set(True)
+    try:
+        yield
+    finally:
+        _AUTOCONFIG_MATCH_MODE.reset(token)
+
+
+def _multisource_autoconfig_enabled() -> bool:
+    """#858 multi-source zero-config guard. Default ON; disable with
+    ``GOLDENMATCH_MULTISOURCE_AUTOCONFIG=0`` (or false/disabled/off/no)."""
+    return os.environ.get(
+        "GOLDENMATCH_MULTISOURCE_AUTOCONFIG", "1"
+    ).strip().lower() not in {"0", "false", "disabled", "off", "no"}
 
 
 def _env_force_exclude() -> list[str]:
