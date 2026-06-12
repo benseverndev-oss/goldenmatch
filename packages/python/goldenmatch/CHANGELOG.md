@@ -6,6 +6,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Performance
+- **Fellegi-Sunter block scoring ~3.5x faster on tiny-block / multi-pass shapes
+  (PR #869).** The probabilistic (`type: probabilistic`) numpy scoring path was
+  per-block-fan-out bound, not compute bound — `historical_50k` produces 31,735
+  blocks, 79% of them ≤8 rows, so scoring made ~222k tiny FFI-bound matrix calls.
+  Three output-identical changes: (1) `score_probabilistic_vectorized` now scores
+  the DISTINCT field values per block and gathers via an index map (a constant
+  blocking-key field collapses to 1×1); (2) small blocks are coalesced into shared
+  per-field matrices with diagonal sub-block extraction (`GOLDENMATCH_FS_BATCH_ROWS`,
+  default 256), cutting native matrix calls 222k→4.3k; (3) the batch row-cap tuned
+  to its measured knee. Wall on `historical_50k` probabilistic auto-config dropped
+  86.5s → 24.6s (−72%) locally. Verified output-identical — for a fixed EM model,
+  the emitted scored-pair set is byte-for-byte unchanged (200,058 pairs); the
+  `synthetic_benchmarks` accuracy gate is green. No API or config change; tune via
+  `GOLDENMATCH_FS_BATCH_ROWS` if needed.
+
 ### Changed
 - **Zero-config `dedupe_df` no longer over-merges multi-source CRM (#858).** When
   auto-config detects a source partition at config time (the internal
