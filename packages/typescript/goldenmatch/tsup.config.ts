@@ -17,6 +17,8 @@ export default defineConfig({
   target: "node20",
   splitting: false,
   treeshake: true,
+  loader: { ".wasm": "copy" },
+  onSuccess: "node scripts/copy_wasm_artifact.mjs",
   external: [
     "hnswlib-node",
     "@huggingface/transformers",

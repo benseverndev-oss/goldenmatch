@@ -1,0 +1,5 @@
+# Built by score-wasm/build_wasm.sh (CI) — never committed.
+score_wasm_bg.wasm
+score_wasm.js
+score_wasm.d.ts
+score_wasm_bg.wasm.d.ts
