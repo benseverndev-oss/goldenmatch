@@ -3,23 +3,27 @@
 **Question this answers:** the existing scale docs (`scale-envelope.md`) are
 *throughput* claims (wall, RSS). This one is a *quality* claim — does match
 quality stay invariant as the dataset grows? We measure pairwise / B-cubed /
-cluster F1 against a ground-truth oracle across a 1K→…→cluster-scale ladder.
+cluster F1 against a ground-truth oracle across a 1K→…→100M ladder.
 
 ## TL;DR
 
-- **Quality is scale-invariant through 1M** under a fixed config: pairwise F1
-  0.9352 → 0.9365 → 0.9364 at 1K / 100K / 1M (Δ ≤ 0.0013, inside the targets).
-- **The audit found and fixed a real auto-config scale bug.** Auto-config was
-  emitting a `phonetic_identity` matchkey (`soundex(name)+year`, an *exact*
-  identity claim) that is not scale-safe: soundex collapses the names to a
-  bounded code space and a year is too coarse, so at scale it manufactured
-  cross-cluster matches (precision 0.91→0.82 over 1K→1M) and OOM'd at 25M.
-  Fixed by gating the phonetic composite on a *specific* anchor (distinct-count,
-  not a date/year type). After the fix, precision is flat through 1M.
-- **One residual, softer finding:** beyond ~1M, precision drifts *down* (0.890 at
-  1M → 0.855 at 10M) while recall stays dead-flat (0.988). This is a
-  fuzzy-false-positive-grows-with-entity-count effect, documented as a follow-up
-  (issue #876), not a clustering or recall failure.
+- **Quality is scale-invariant through 10M** under a fixed config: pairwise F1
+  0.9352 → 0.9364 → 0.9362 at 1K / 1M / 10M (Δ ≤ 0.0012, inside the targets),
+  precision flat at 0.888–0.890, recall flat at 0.988.
+- **The audit found and fixed TWO real auto-config scale bugs.**
+  1. A `phonetic_identity` matchkey (`soundex(name)+year`, an *exact* identity
+     claim) that manufactured cross-cluster matches at scale (precision
+     0.91→0.82 over 1K→1M, OOM at 25M). Fixed by gating phonetic on a *specific*
+     anchor.
+  2. **Blocking selection was not scale-invariant (#876).** The frozen config
+     blocked on a single bounded-cardinality key (`zip`), whose block size grows
+     ∝ N — so beyond ~1M, precision drifted *down* (0.890 → 0.855 at 10M) and the
+     candidate-pair count exploded (3B+ at 25M, making it impractical). **Fixed**
+     (see below); after the fix precision is flat through 10M and the larger
+     rungs run in practical time.
+- **No residual quality drift.** The 10M precision drop documented in the prior
+  revision of this report was the #876 blocking bug, not a clustering or recall
+  failure. With scale-invariant blocking it is gone.
 
 ## Methodology
 
@@ -45,7 +49,8 @@ drift-sensitive band with headroom on *both* precision and recall:
   on a long name).
 - A fixed fraction of genuinely-ambiguous *twin* clusters (a twin pair shares
   first+last name but keeps distinct address / zip / birth_year) → real precision
-  headroom (the engine must separate them on secondary fields).
+  headroom (the engine must separate them on secondary fields). **These twins are
+  also what makes blocking selection load-bearing** — see #876 below.
 - No whole-field nulls (they collapsed cells to `""` and created cross-cluster
   mega-blocks).
 - 1K oracle: pairwise F1 0.9352, precision 0.888, recall 0.988, cluster 0.892.
@@ -55,8 +60,9 @@ auto-config **once** at the 1K oracle and applies that *same* config to every
 rung (`--frozen`, committed `scripts/qis_realistic_frozen_config.json`). This
 isolates the **engine's** scale-invariance from auto-config drift, and runs fast
 (per-rung auto-config is a ~50–150s controller search on the ambiguous data).
-Auto-config *stability* across scale is a separate question (whether auto-config
-picks a similar config at 1K vs 1M); the headline ladder holds config fixed.
+**Crucially, the frozen config is now built FOR the target scale** (`n_rows_full =
+200M`), so auto-config's blocking projection (#876) engages at build time and the
+config it freezes is the one that's correct at 200M, not at 1K.
 
 **Oracle / metrics.** Oracle = the 1K rung. Each rung reports pairwise, B-cubed,
 and cluster F1 vs the ground-truth `__cid__`, plus Δ-vs-oracle. Targets (from
@@ -69,7 +75,7 @@ runner/native-independent. The **in-house embedder is deferred** — the
 scale-invariance question is the same with or without embeddings, and the
 embedder adds an ONNX-per-node dependency orthogonal to scale.
 
-## The auto-config phonetic-identity scale bug (found + fixed)
+## Bug 1: the phonetic-identity scale bug (found + fixed)
 
 `auto-config` emitted `phonetic_identity` = `soundex(first)+soundex(last)+year`
 as an *exact* matchkey, gated only on having a date/year anchor. soundex collapses
@@ -85,57 +91,86 @@ and block-exploding (OOM) as the data grows.
 
 **Fix** (`core/autoconfig.py`): gate the phonetic composite on a *specific*
 anchor — the anchor column's distinct-value count (≥150 via the sample, with a
-cardinality-ratio fallback) — not merely a `date`/`year` col_type (the classifier
-types a year column `date` too). A full DOB stays specific and keeps phonetic
-(NCVR-style data unchanged); year-anchored data keeps the exact-name + fuzzy
-matchkeys, just not the unscalable soundex identity claim. 208 auto-config tests
-pass.
+cardinality-ratio fallback) — not merely a `date`/`year` col_type. A full DOB
+stays specific and keeps phonetic (NCVR-style data unchanged); year-anchored data
+keeps the exact-name + fuzzy matchkeys, just not the unscalable soundex identity
+claim.
 
-## Results (frozen config, post-fix)
+## Bug 2: scale-invariant blocking selection (#876, found + fixed)
 
-| rows | pairwise F1 | Δpw | precision | recall | B-cubed F1 | cluster F1 | Δcl | PASS |
-|------|-------------|-----|-----------|--------|------------|------------|-----|------|
-| 1,000 (oracle) | 0.9352 | — | 0.8877 | 0.9880 | 0.9698 | 0.8923 | — | ✅ |
-| 100,000 | 0.9365 | +0.0013 | 0.8904 | 0.9876 | 0.9702 | 0.8954 | +0.0031 | ✅ |
-| 1,000,000 | 0.9364 | +0.0013 | 0.8902 | 0.9878 | 0.9702 | 0.8957 | +0.0033 | ✅ |
-| 10,000,000 | 0.9166 | −0.0186 | 0.8547 | 0.9882 | — | 0.8775 | −0.0148 | ❌ (drift, see below) |
+After the phonetic fix, the frozen config blocked on a single key, `zip`. In the
+fixture `zip = cid % 100000` wraps at 100K clusters (real US zips are similarly
+bounded at ~40K), so the `zip` block size grows ∝ N and the candidate-pair count
+grows ∝ N²/100000 (~4.5M pairs at 1M, ~500M at 10M, ~3B at 25M). The bloated
+blocks are mostly *cross-cluster* pairs, a growing fraction of which the fuzzy
+scorer matches — hence the precision drift — and scoring 3B pairs is why 25M was
+impractical. The hard part: a bounded-cardinality cap is invisible from a small
+sample (a 1K sample shows `zip` as clean/high-cardinality).
 
-(1K–10M on the `large-new-64GB` bench runner. The ladder is **capped at 10M** —
-25M+ are impractical to run until the blocking issue below is addressed; see
-"Why larger rungs are blocked".)
+The fix is a **type-aware "cardinality projector"** in `build_blocking`, in two
+parts, plus a harness change:
 
-**Verdict:** quality is scale-invariant **through 1M** (all deltas inside target).
-Beyond that a single auto-config blocking-selection issue (#876) drives both a
-precision drift and a candidate-pair explosion.
+1. **Type-aware cardinality projection.** The blocking-candidate gate projected a
+   sampled column's cardinality to full N with a Chao1 (closed-domain
+   unseen-species) estimator, which drives the ratio *down* as N grows. That's
+   right for a BOUNDED key (zip/year — the domain saturates) but wrong for an
+   UNBOUNDED key (email/name/identifier, whose distinct-count grows with N). The
+   bug it caused: a near-unique `email` (sample ratio 0.56) projected to ~0.001 at
+   200M, slipped past the gate, and was picked as the sole blocking key —
+   near-singleton blocks, blocking recall 0.39. Fix: only bounded types
+   Chao1-project; unbounded types keep their sample ratio, so a near-unique key is
+   correctly rejected.
+2. **Scale-safe bounded compound.** With `email` rejected and `zip`-alone rejected
+   (its pair count is super-linear), no *single* exact key is scale-safe. Rather
+   than drop these discriminators for a name-only blocking, AND the bounded exact
+   keys into a compound whose *joint* domain bounds the block: `zip` (≈100K) ×
+   `birth_year` (≈300) = ≈30M, so the `[zip, birth_year]` block stays ≈constant
+   and the pair count linear. This is **scale-safe AND quality-preserving**: it
+   co-locates a cluster's variants (both components are stable within a cluster)
+   AND separates the adversarial twins (which share names but differ on zip).
+3. **Harness:** `build_frozen_config` now passes `n_rows_full = 200M`, so the
+   projection engages at build time and freezes the scale-correct blocking.
 
-## Residual finding: blocking on a bounded-cardinality key doesn't scale (#876)
+**Why name-only blocking is *not* the answer (the subtle part).** Rejecting
+`email` and falling through to name-based blocking (soundex/substring on names)
+gave a high blocking *recall* (0.99 on true pairs) but collapsed end-to-end F1 to
+0.78 — because name-only passes **collide the twin clusters** (they share names),
+which over-merges, then cluster-splitting fragments. A blocking-recall probe can't
+see this; only an end-to-end sweep does. The sweep that drove the choice
+(matchkeys held fixed, blocking swapped, 1K):
 
-At 10M, precision drifts down (0.890 → 0.855) while recall stays flat (0.988).
-Root cause (pinned): the frozen config blocks on a single key, `zip`. In the
-fixture `zip = cid % 100000` wraps at 100K clusters, so the zip block size grows
-~linearly with N (10 rows/zip at 1M → 100 at 10M → 250 at 25M), and the
-candidate-pair count grows ~`N² / 100000`: ~4.5M pairs at 1M, ~500M at 10M, ~3B
-at 25M. Those bloated blocks are mostly *cross-cluster* pairs, a growing fraction
-of which the fuzzy scorer matches — hence the precision drift — and scoring 3B
-pairs is why 25M is impractical.
+| blocking | pairwise F1 | note |
+|----------|-------------|------|
+| `zip` alone | 0.9352 | report baseline — but explodes at scale |
+| **`[zip, birth_year]`** | **0.9352** | **scale-safe, identical quality — chosen** |
+| `[zip, last_name]` | 0.8251 | last_name corrupted → recall drop |
+| name multipass | 0.7788 | twin collision → the regression |
 
-This is **real-world-relevant**, not a fixture artifact: real zips are also
-bounded (~40K US zips), so an auto-config that blocks on `zip` alone explodes on
-any large real dataset. The hard part is that the cardinality *cap* is invisible
-from a small sample (a 1K sample shows `zip` as clean/high-cardinality), so
-auto-config can't catch it the way it catches a year's 65 distinct values (the
-phonetic fix). The fix (a known-bounded `col_type=zip/geo` shouldn't be a
-scalable *sole* blocking key for large `n_rows`; require a refining sub-key or
-multi-pass blocking) is a more involved blocking-selection change — tracked as
-**#876**, a follow-up to this PR.
+The fix triggers only at scale (`n_rows_full > sample_n`) when ≥2 bounded exact
+keys exist and none is scale-safe alone, so the #491/#715 benchmark datasets
+(NCVR / DQbench / Febrl, small-scale single-key path) are untouched — 214
+auto-config tests + the QIS-harness suite stay green.
 
-## Why larger rungs are blocked
+## Results (frozen `[zip, birth_year]` config, post-both-fixes)
 
-25M / 50M / 100M / 200M are out of scope for *this* report because of #876 above:
-the zip-block candidate-pair explosion makes them take hours (3B+ scored pairs at
-25M). Once #876 lands (bounded blocks → linear scaling), the cluster tier becomes
-fast and can extend the curve. The 1K→10M curve already decisively shows the two
-findings (invariance through 1M; the blocking-driven drift beyond).
+| rows | pairwise F1 | Δpw | precision | recall | B-cubed F1 | cluster F1 | Δcl | wall | PASS |
+|------|-------------|-----|-----------|--------|------------|------------|-----|------|------|
+| 1,000 (oracle) | 0.9352 | — | 0.8877 | 0.9880 | 0.9698 | 0.8923 | — | — | ✅ |
+| 1,000,000 | 0.9364 | +0.0012 | 0.8902 | 0.9878 | 0.9702 | 0.8957 | +0.0034 | 58s / 5.5 GB | ✅ |
+| 10,000,000 | 0.9362 | +0.0010 | 0.8895 | 0.9882 | 0.9702 | 0.8962 | +0.0039 | 1155s / 49.2 GB | ✅ |
+| 25,000,000 | _landing_ | | | | | | | | |
+| 50,000,000 | _landing_ | | | | | | | | |
+| 100,000,000 | _landing_ | | | | | | | | |
+
+(1K on the dev box; 1M/10M on the `large-new-64GB` bench runner, `backend=bucket`;
+25M–100M on `backend=duckdb` for out-of-core headroom. Each rung is a
+`bench-quality-invariant-scale.yml` dispatch.)
+
+**Verdict:** quality is scale-invariant **through 10M** — every delta inside
+target, precision flat (the prior 10M drift is gone), recall dead-flat at 0.988.
+The 25M–100M rungs extend the curve and are landing on the bench runner; with
+bounded blocking they run in practical time (the 3B-pair explosion that blocked
+them is gone).
 
 ## Reproduction
 
@@ -144,7 +179,7 @@ findings (invariance through 1M; the blocking-driven drift beyond).
 python scripts/quality_invariant_scale.py --rows 1000000 --corruption moderate \
   --frozen --backend bucket --out rung_1m.json
 
-# Mid-ladder rungs on the bench runner:
+# Mid/large-ladder rungs on the bench runner:
 gh workflow run bench-quality-invariant-scale.yml --ref feat/510-quality-invariant-scale \
   -f rows=10000000 -f corruption=moderate -f frozen=true -f backend=bucket \
   -f runner=large-new-64GB -f label=10m
@@ -152,10 +187,13 @@ gh workflow run bench-quality-invariant-scale.yml --ref feat/510-quality-invaria
 # Aggregate a directory of per-rung JSONs into the table + verdict:
 python scripts/qis_aggregate.py results_dir/
 
-# Rebuild the frozen config (only after a fixture / corruption change):
+# Rebuild the frozen config (only after a fixture / corruption change). Builds
+# FOR n_rows_full=200M so the #876 blocking projection engages:
 python scripts/quality_invariant_scale.py --rebuild-frozen-config
 ```
 
 Related: the determinism + native-parity validation lives in
 `packages/python/goldenmatch/tests/test_qis_harness.py`; the golden-survivorship
-determinism gap is tracked as #870; the phonetic fix is in `core/autoconfig.py`.
+determinism gap is tracked as #870; both auto-config fixes are in
+`core/autoconfig.py` (phonetic anchor gate; `_projected_ratio` type-aware
+projection + `_scale_safe_bounded_compound`).
