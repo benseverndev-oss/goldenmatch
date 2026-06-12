@@ -118,10 +118,10 @@ describe("AgeValidationProfiler", () => {
 });
 
 describe("RELATION_PROFILERS", () => {
-  it("has exactly 6 profilers", () => {
+  it("has exactly 7 profilers", () => {
     // temporal, null-correlation, numeric-cross, age-validation, identity-safe-pk,
-    // composite-key
-    expect(RELATION_PROFILERS.length).toBe(6);
+    // composite-key, approx-duplicate
+    expect(RELATION_PROFILERS.length).toBe(7);
   });
 
   it("all run without error on simple data", () => {
