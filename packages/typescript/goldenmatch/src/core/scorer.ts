@@ -19,6 +19,7 @@ import { makeScoredPair } from "./types.js";
 import { pairKey } from "./cluster.js";
 import { applyTransforms, soundex } from "./transforms.js";
 import { applyNegativeEvidence } from "./autoconfigNegativeEvidence.js";
+import { getScorerBackend, WASM_COVERED_SCORERS } from "./wasm/backend.js";
 
 // ---------------------------------------------------------------------------
 // Helper: coerce unknown to string | null
@@ -468,6 +469,29 @@ export function scoreMatrix(
   scorerName: string,
 ): number[][] {
   const n = values.length;
+  const backend = getScorerBackend();
+
+  // Opt-in WASM fast path: ONE boundary crossing per NxN block, covered
+  // scorers only. Nulls are masked to 0 here (the backend never sees them).
+  if (backend !== null && WASM_COVERED_SCORERS.has(scorerName)) {
+    const SEP = "\x1e"; // record-separator; never appears in scored field data
+    const clean = values.map((v) => (v ?? "").replaceAll(SEP, ""));
+    const flat = backend.scoreMatrix(clean, scorerName);
+    const matrix: number[][] = Array.from({ length: n }, () =>
+      new Array<number>(n).fill(0),
+    );
+    for (let i = 0; i < n; i++) {
+      for (let j = i + 1; j < n; j++) {
+        const masked = values[i] === null || values[j] === null;
+        const s = masked ? 0 : flat[i * n + j]!;
+        matrix[i]![j] = s;
+        matrix[j]![i] = s;
+      }
+    }
+    return matrix;
+  }
+
+  // Pure-TS default (unchanged).
   const matrix: number[][] = Array.from({ length: n }, () => new Array<number>(n).fill(0));
   for (let i = 0; i < n; i++) {
     for (let j = i + 1; j < n; j++) {
