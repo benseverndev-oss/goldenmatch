@@ -2,6 +2,27 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-06-12 — FS block-scoring perf + the "native is slow" red herring (PR #869)
+- New [../decisions/0012-fs-block-scoring-perf.md](../decisions/0012-fs-block-scoring-perf.md);
+  added a perf section + corrected the "3-19x faster" framing in
+  [../architecture/fellegi-sunter-splink-parity.md](../architecture/fellegi-sunter-splink-parity.md).
+- **The bake-off's "Splink 3-19x faster" measured GM's NUMPY path, not native** —
+  it never set `GOLDENMATCH_FS_NATIVE`, and probabilistic mode doesn't refuse on a
+  missing kernel. Added a `gm_prob_native` bake-off column (native built +
+  `score_block_pairs_fs` asserted in CI): **native ≈ numpy, no wall change.** The
+  wall is per-block fan-out (historical_50k: 31,735 blocks, 79% ≤8 rows, ~222k tiny
+  FFI calls), not scoring math — so the Rust kernel can't move it.
+- **Three output-identical optimizations** on the numpy path, each gated by a
+  fixed-`em_result` pair-set diff (200,058 pairs byte-identical), NOT the cluster
+  hash (pipeline is non-deterministic ±3 clusters run-to-run): value-dedup (−32%),
+  block-batching into shared S×S matrices (−48%, native calls 222k→4.3k), batch
+  row-cap 512→256 (−20%). **historical_50k 86.5s → 24.6s (−72%) local.** All three
+  CI-green on PR #869.
+- Also refreshed [../../docs/er-vendor-comparison.md](../../docs/er-vendor-comparison.md)
+  to v1.30.0 (refdata, identity graph, Splink-parity flip) earlier in the same PR.
+- **Flagged, not fixed:** EM-sampling cluster-count nondeterminism (±3) and the
+  pre-optimization bake-off table (re-bench pending) are recorded in 0012.
+
 ## 2026-06-11 — #844 FINISH LINE: 100M validated, per-group scoring fixed, default flipped (#864/#867)
 - Updated [../architecture/distributed-wcc.md](../architecture/distributed-wcc.md)
   + [../decisions/0011-distributed-wcc-randomized-contraction.md](../decisions/0011-distributed-wcc-randomized-contraction.md)
@@ -339,4 +360,4 @@ Newest first. One entry per meaningful change to the network.
 - Committed to git on branch `chore/context-network`.
 
 ---
-**Classification:** meta/log • **Last updated:** 2026-06-11
+**Classification:** meta/log • **Last updated:** 2026-06-12
