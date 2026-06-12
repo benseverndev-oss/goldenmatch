@@ -1,0 +1,371 @@
+{
+  "input": null,
+  "output": {
+    "path": null,
+    "format": null,
+    "directory": null,
+    "run_name": null,
+    "lineage_provenance": false
+  },
+  "match_settings": null,
+  "matchkeys": [
+    {
+      "name": "exact_identity",
+      "type": "exact",
+      "comparison": null,
+      "fields": [
+        {
+          "field": "first_name",
+          "column": null,
+          "transforms": [
+            "lowercase",
+            "strip"
+          ],
+          "scorer": null,
+          "weight": null,
+          "model": null,
+          "columns": null,
+          "column_weights": null,
+          "levels": 2,
+          "partial_threshold": 0.8,
+          "tf_adjustment": false,
+          "type": null,
+          "em_iterations": null
+        },
+        {
+          "field": "last_name",
+          "column": null,
+          "transforms": [
+            "lowercase",
+            "strip"
+          ],
+          "scorer": null,
+          "weight": null,
+          "model": null,
+          "columns": null,
+          "column_weights": null,
+          "levels": 2,
+          "partial_threshold": 0.8,
+          "tf_adjustment": false,
+          "type": null,
+          "em_iterations": null
+        },
+        {
+          "field": "birth_year",
+          "column": null,
+          "transforms": [
+            "lowercase",
+            "strip"
+          ],
+          "scorer": null,
+          "weight": null,
+          "model": null,
+          "columns": null,
+          "column_weights": null,
+          "levels": 2,
+          "partial_threshold": 0.8,
+          "tf_adjustment": false,
+          "type": null,
+          "em_iterations": null
+        }
+      ],
+      "threshold": 0.5,
+      "auto_threshold": false,
+      "rerank": false,
+      "rerank_model": "cross-encoder/ms-marco-MiniLM-L-6-v2",
+      "rerank_band": 0.1,
+      "negative_evidence": [],
+      "em_iterations": 20,
+      "convergence_threshold": 0.001,
+      "link_threshold": null,
+      "review_threshold": null,
+      "model_path": null
+    },
+    {
+      "name": "phonetic_identity",
+      "type": "exact",
+      "comparison": null,
+      "fields": [
+        {
+          "field": "first_name",
+          "column": null,
+          "transforms": [
+            "lowercase",
+            "strip",
+            "soundex"
+          ],
+          "scorer": null,
+          "weight": null,
+          "model": null,
+          "columns": null,
+          "column_weights": null,
+          "levels": 2,
+          "partial_threshold": 0.8,
+          "tf_adjustment": false,
+          "type": null,
+          "em_iterations": null
+        },
+        {
+          "field": "last_name",
+          "column": null,
+          "transforms": [
+            "lowercase",
+            "strip",
+            "soundex"
+          ],
+          "scorer": null,
+          "weight": null,
+          "model": null,
+          "columns": null,
+          "column_weights": null,
+          "levels": 2,
+          "partial_threshold": 0.8,
+          "tf_adjustment": false,
+          "type": null,
+          "em_iterations": null
+        },
+        {
+          "field": "birth_year",
+          "column": null,
+          "transforms": [
+            "lowercase",
+            "strip"
+          ],
+          "scorer": null,
+          "weight": null,
+          "model": null,
+          "columns": null,
+          "column_weights": null,
+          "levels": 2,
+          "partial_threshold": 0.8,
+          "tf_adjustment": false,
+          "type": null,
+          "em_iterations": null
+        }
+      ],
+      "threshold": 0.5,
+      "auto_threshold": false,
+      "rerank": false,
+      "rerank_model": "cross-encoder/ms-marco-MiniLM-L-6-v2",
+      "rerank_band": 0.1,
+      "negative_evidence": [],
+      "em_iterations": 20,
+      "convergence_threshold": 0.001,
+      "link_threshold": null,
+      "review_threshold": null,
+      "model_path": null
+    },
+    {
+      "name": "fuzzy_match",
+      "type": "weighted",
+      "comparison": null,
+      "fields": [
+        {
+          "field": "first_name",
+          "column": null,
+          "transforms": [
+            "lowercase",
+            "strip"
+          ],
+          "scorer": "given_name_aliased_jw",
+          "weight": 1.0,
+          "model": null,
+          "columns": null,
+          "column_weights": null,
+          "levels": 2,
+          "partial_threshold": 0.8,
+          "tf_adjustment": false,
+          "type": null,
+          "em_iterations": null
+        },
+        {
+          "field": "last_name",
+          "column": null,
+          "transforms": [
+            "lowercase",
+            "strip"
+          ],
+          "scorer": "name_freq_weighted_jw",
+          "weight": 1.0,
+          "model": null,
+          "columns": null,
+          "column_weights": null,
+          "levels": 2,
+          "partial_threshold": 0.8,
+          "tf_adjustment": false,
+          "type": null,
+          "em_iterations": null
+        },
+        {
+          "field": "address",
+          "column": null,
+          "transforms": [
+            "address_normalize",
+            "lowercase",
+            "strip"
+          ],
+          "scorer": "token_sort",
+          "weight": 0.8,
+          "model": null,
+          "columns": null,
+          "column_weights": null,
+          "levels": 2,
+          "partial_threshold": 0.8,
+          "tf_adjustment": false,
+          "type": null,
+          "em_iterations": null
+        }
+      ],
+      "threshold": 0.8,
+      "auto_threshold": false,
+      "rerank": false,
+      "rerank_model": "cross-encoder/ms-marco-MiniLM-L-6-v2",
+      "rerank_band": 0.1,
+      "negative_evidence": null,
+      "em_iterations": 20,
+      "convergence_threshold": 0.001,
+      "link_threshold": null,
+      "review_threshold": null,
+      "model_path": null
+    }
+  ],
+  "blocking": {
+    "keys": [
+      {
+        "fields": [
+          "email"
+        ],
+        "transforms": [
+          "lowercase",
+          "strip"
+        ]
+      },
+      {
+        "fields": [
+          "id"
+        ],
+        "transforms": [
+          "lowercase"
+        ]
+      },
+      {
+        "fields": [
+          "first_name"
+        ],
+        "transforms": [
+          "lowercase"
+        ]
+      },
+      {
+        "fields": [
+          "last_name"
+        ],
+        "transforms": [
+          "lowercase"
+        ]
+      }
+    ],
+    "max_block_size": 5000,
+    "skip_oversized": false,
+    "strategy": "multi_pass",
+    "learned_sample_size": 5000,
+    "learned_min_recall": 0.95,
+    "learned_min_reduction": 0.9,
+    "learned_predicate_depth": 2,
+    "learned_cache_path": null,
+    "auto_suggest": false,
+    "auto_select": false,
+    "sub_block_keys": null,
+    "window_size": 20,
+    "sort_key": null,
+    "passes": [
+      {
+        "fields": [
+          "email"
+        ],
+        "transforms": [
+          "lowercase",
+          "strip"
+        ]
+      },
+      {
+        "fields": [
+          "id"
+        ],
+        "transforms": [
+          "lowercase"
+        ]
+      },
+      {
+        "fields": [
+          "first_name"
+        ],
+        "transforms": [
+          "lowercase"
+        ]
+      },
+      {
+        "fields": [
+          "last_name"
+        ],
+        "transforms": [
+          "lowercase"
+        ]
+      }
+    ],
+    "union_mode": true,
+    "max_total_comparisons": null,
+    "ann_column": null,
+    "ann_model": "all-MiniLM-L6-v2",
+    "ann_top_k": 20,
+    "canopy": null
+  },
+  "golden_rules": {
+    "default_strategy": "most_complete",
+    "default": null,
+    "field_rules": {},
+    "max_cluster_size": 100,
+    "auto_split": true,
+    "quality_weighting": true,
+    "weak_cluster_threshold": 0.3,
+    "split_edge_budget": null,
+    "adaptive": false,
+    "use_llm_for_ambiguous": false,
+    "cluster_overrides": null
+  },
+  "standardization": {
+    "rules": {
+      "first_name": [
+        "name_proper"
+      ],
+      "last_name": [
+        "name_proper"
+      ],
+      "address": [
+        "address"
+      ],
+      "zip": [
+        "zip5"
+      ],
+      "email": [
+        "email"
+      ]
+    }
+  },
+  "validation": null,
+  "quality": null,
+  "transform": null,
+  "llm_boost": false,
+  "llm_scorer": null,
+  "llm_auto": false,
+  "domain": null,
+  "backend": null,
+  "mode": "standard",
+  "planning_effort": "normal",
+  "memory": null,
+  "identity": null,
+  "exclude_columns": [],
+  "prepared_record_store": false,
+  "partitioned_block_scoring": false,
+  "n_buckets": null
+}

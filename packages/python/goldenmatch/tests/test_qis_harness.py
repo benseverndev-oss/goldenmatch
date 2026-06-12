@@ -21,19 +21,22 @@ if str(_SCRIPTS) not in sys.path:
 import quality_invariant_scale as qis  # noqa: E402
 
 
-def test_corrupt_cell_types_are_deterministic_and_string_valued():
-    # transpose (type_sel<0.25): "abcd" with pos 0 -> "bacd"
+def test_corrupt_cell_types_are_deterministic_and_never_empty():
+    # transpose (type_sel < 1/3): "abcd" pos 0 -> "bacd"
     assert qis._corrupt_cell("abcd", 0.10, 0.0) == "bacd"
-    # delete (0.25<=type_sel<0.50): "abcd" pos 0 -> "bcd"
-    assert qis._corrupt_cell("abcd", 0.30, 0.0) == "bcd"
-    # token drop (0.50<=type_sel<0.75) on multi-token: "12 main st" drop tok 0
-    out = qis._corrupt_cell("12 main st", 0.60, 0.0)
-    assert out == "main st"
-    # whole-field null (type_sel>=0.75) -> empty
-    assert qis._corrupt_cell("abcd", 0.90, 0.5) == ""
-    # empty / single-char inputs never raise
+    # delete (1/3 <= type_sel < 2/3): "abcd" pos 0 -> "bcd"
+    assert qis._corrupt_cell("abcd", 0.50, 0.0) == "bcd"
+    # token drop (type_sel >= 2/3) on multi-token: "12 main st" drop tok 0
+    assert qis._corrupt_cell("12 main st", 0.80, 0.0) == "main st"
+    # token-drop range on a SINGLE-token string falls back to delete -> never "".
+    out = qis._corrupt_cell("abcd", 0.90, 0.5)
+    assert out and out != "abcd" and len(out) == 3
+    # NO corruption ever returns an empty string (the mega-block hazard).
+    for t in (0.10, 0.50, 0.90):
+        assert qis._corrupt_cell("abcdef", t, 0.5) != ""
+    # <2-char inputs are left unchanged (nothing safe to do; never null).
     assert qis._corrupt_cell("", 0.10, 0.0) == ""
-    assert qis._corrupt_cell("x", 0.10, 0.0) in ("x", "")
+    assert qis._corrupt_cell("x", 0.90, 0.0) == "x"
 
 
 def test_apply_field_corruption_deterministic_given_same_stream():
@@ -96,14 +99,18 @@ def test_moderate_actually_corrupts_some_rows():
 @pytest.mark.slow
 def test_moderate_oracle_f1_in_target_band():
     # The tuning gate: `moderate` must land the 1K oracle in the drift-sensitive
-    # 0.90-0.95 band (with a small tolerance so CI native/py float jitter and
-    # platform RNG don't flake). If this fails after a deliberate rate change,
-    # re-tune AND update the report.
-    out = qis.run_rung(1000, seed=0, shape="realistic", corruption="moderate")
+    # 0.90-0.95 band (with a small tolerance for float/RNG jitter). Uses the
+    # FROZEN config -- the published-ladder methodology -- which is also what
+    # keeps this fast (frozen apply ~25s on Linux vs ~150s for the per-rung
+    # auto-config search on the ambiguous data). If this fails after a deliberate
+    # corruption change, re-tune, rebuild the frozen config
+    # (`--rebuild-frozen-config`), AND update the report.
+    out = qis.run_rung(1000, seed=0, shape="realistic", corruption="moderate", frozen=True)
     f1 = out["pairwise"]["f1"]
     assert 0.88 <= f1 <= 0.96, f"moderate 1K pairwise F1 out of band: {f1:.4f}"
     assert out["cluster"]["f1"] > 0.5, f"cluster F1 degenerate: {out['cluster']['f1']:.4f}"
     assert out["corruption"] == "moderate"
+    assert out["config_mode"] == "frozen"
 
 
 @pytest.mark.slow
@@ -121,8 +128,8 @@ def test_qis_run_determinism_and_golden_shape():
     # goldenmatch issue #870; clustering reproducibility is what #510 needs and
     # is what's asserted here. (golden_hash stays in the artifact as a per-run
     # content fingerprint, not a cross-run determinism witness.)
-    a = qis.run_rung(1000, seed=0, shape="realistic", corruption="moderate")
-    b = qis.run_rung(1000, seed=0, shape="realistic", corruption="moderate")
+    a = qis.run_rung(1000, seed=0, shape="realistic", corruption="moderate", frozen=True)
+    b = qis.run_rung(1000, seed=0, shape="realistic", corruption="moderate", frozen=True)
     assert a["pairwise"] == b["pairwise"]
     assert a["b_cubed"] == b["b_cubed"]
     assert a["cluster"] == b["cluster"]
@@ -199,7 +206,7 @@ def _run_harness_subprocess(native_env: str, tmp_path):
     script = _SCRIPTS / "quality_invariant_scale.py"
     proc = subprocess.run(
         [sys.executable, str(script), "--rows", "1000", "--corruption", "moderate",
-         "--out", str(out)],
+         "--frozen", "--out", str(out)],
         capture_output=True, text=True, env=env, cwd=str(_REPO_ROOT),
     )
     if proc.returncode != 0 or not out.exists():

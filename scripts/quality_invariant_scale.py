@@ -46,6 +46,16 @@ import polars as pl
 ROWS_PER_CLUSTER = 5
 TYPO_RATE = 0.10
 
+# Width (in syllables / decimal digits) of the collision-free identity encoding.
+# A bijection cid -> string of this width keeps per-cluster identity distinctness
+# INVARIANT with N: 24**8 ~= 1.1e11 distinct names and 10**8 = 100M distinct
+# street numbers, both >> any rung's cluster count. The old md5-hash names
+# (24**5 = 8M) and [1,9999]x8 addresses birthday-saturated past ~80K-200K
+# clusters, which made the dataset non-separable at scale (precision collapse)
+# and produced giant collision blocks (-> OOM at 25M). See _bijective_int.
+_NAME_WIDTH = 8
+_ADDR_DIGITS = 8
+
 
 _SYL = ["an", "be", "ca", "da", "el", "fi", "ga", "ha", "in", "jo", "ka", "la",
         "ma", "na", "or", "pa", "ri", "sa", "ta", "va", "wo", "xe", "yu", "ze"]
@@ -57,18 +67,25 @@ _CITIES = ["springfield", "franklin", "clinton", "georgetown",
 
 @dataclass(frozen=True)
 class CorruptionConfig:
-    """Per-field corruption rates for the realistic generator. Each value is the
-    probability that a given row's field is corrupted. Per corrupted cell, one of:
-    adjacent-char transpose, single-char delete, whitespace-token drop (multi-token
-    fields), or whole-field null. Field streams are independent and each row's
-    decision is drawn from a fixed (n, 3) block, so corruption for row i depends
-    only on (seed, level, field) — never on n_rows. That makes every smaller rung
-    an EXACT prefix of every larger one, which is the precondition for attributing
-    cross-rung F1 differences to scale rather than to data shape."""
+    """Corruption knob for the realistic generator. Per-field rates are the
+    probability a given row's field is corrupted; `severity` is how many edits
+    (transpose / delete / token-drop) are applied to a corrupted cell -- 1 edit
+    barely dents a fuzzy score on a long synthetic name, so `moderate` uses
+    several to create real RECALL headroom. `ambiguous_frac` is the fraction of
+    clusters made into genuinely-confusable twins (a twin pair shares first+last
+    name but keeps distinct address/zip/email), creating PRECISION headroom -- the
+    engine must separate them on secondary fields or it over-merges. All of it is
+    a deterministic function of (seed, level, cid/row): the per-row corruption
+    draw is a fixed-width block and the twin selection is a bijective hash of cid,
+    so corruption for row i never depends on n_rows. Every smaller rung is an
+    EXACT prefix of every larger one -- the precondition for attributing cross-rung
+    F1 deltas to scale rather than data shape."""
     first_name: float = 0.0
     last_name: float = 0.0
     address: float = 0.0
     email: float = 0.0
+    severity: int = 1
+    ambiguous_frac: float = 0.0
 
 
 # Stream order is FIXED (spawn index = position here) so each field's child RNG
@@ -79,70 +96,118 @@ _CORRUPT_FIELDS = ("first_name", "last_name", "address", "email")
 # _generate_realistic); kept for a complete mapping.
 _CORRUPT_LEVEL_INT = {"light": 0, "moderate": 1, "hard": 2}
 
-# `moderate` is TUNED (#510 Task 3): at the 1K oracle these rates land pairwise
-# F1 = 0.933 (recall 0.875, B-cubed 0.947, cluster 0.720) — centered in the
-# 0.90-0.95 drift-sensitive band with headroom both ways, still a high-recall
-# regime. A 1K rate sweep (seed 0) gave: 0.06->0.950, 0.08->0.933, 0.10->0.924,
-# 0.12->0.904; 0.30 collapsed recall to 0.57 (F1 0.726). `hard` is the stress
-# level (not used by the published ladder). Re-tune AND update the report if you
-# change these — the band regression test (test_moderate_oracle_f1_in_target_band)
-# guards the window.
+# `moderate` is TUNED (#510) to land the 1K oracle in the 0.90-0.95 drift band on
+# the collision-free fixture. With unique identities the matcher's precision is
+# ~1.0 unless the data is genuinely ambiguous, so `moderate` combines multi-edit
+# corruption (severity>1 -> real recall headroom; 1 edit on a long synthetic name
+# barely moves a fuzzy score) with an ambiguous-twin fraction (-> precision
+# headroom). Re-tune AND update the report + the band regression test
+# (test_moderate_oracle_f1_in_target_band) if you change these.
 CORRUPTION_LEVELS: dict[str, CorruptionConfig] = {
     "light": CorruptionConfig(),  # no extra corruption beyond the 10% a->@ typo
-    "moderate": CorruptionConfig(first_name=0.08, last_name=0.05, address=0.08, email=0.02),
-    "hard": CorruptionConfig(first_name=0.20, last_name=0.12, address=0.20, email=0.05),
+    # TUNED at the 1K oracle (seed 0): pairwise F1 0.9374 (precision 0.910,
+    # recall 0.966, B-cubed 0.967, cluster 0.862) -- centered in the 0.90-0.95
+    # band with headroom on BOTH precision (the ambiguous twins force over-merge
+    # pressure) and recall (severity-2 edits drop match scores). Sweep at 1K:
+    #   (.18,.12,.18,.04,sev2,amb.10) -> 0.9374  [chosen]
+    #   (.25,.18,.25,.06,sev3,amb.15) -> 0.8770 (p .852/r .904)
+    #   (.35,.25,.35,.10,sev3,amb.25) -> 0.8259
+    "moderate": CorruptionConfig(first_name=0.18, last_name=0.12, address=0.18,
+                                 email=0.04, severity=2, ambiguous_frac=0.10),
+    "hard": CorruptionConfig(first_name=0.30, last_name=0.22, address=0.30,
+                             email=0.08, severity=3, ambiguous_frac=0.20),
 }
 
 
 def _corrupt_cell(s: str, type_sel: float, pos_sel: float) -> str:
     """One deterministic corruption of a single string from two uniforms in [0,1).
 
-    type_sel partitions the corruption kind; pos_sel picks the position. Falls
-    through to a no-op when the chosen kind can't apply (e.g. token-drop on a
-    single-token string) so the corruption rate is an upper bound on actual edits."""
-    if not s:
+    Three kinds, partitioned by type_sel: adjacent-char transpose, single-char
+    delete, whitespace-token drop. NEVER returns an empty string -- a whole-field
+    null would collapse many rows to "" and create a cross-cluster mega-block
+    (giant blocking group + spurious matches), which is exactly what broke the
+    scale audit. Corruption always degrades a value WITHIN its cluster while
+    keeping it non-empty and matchable. A kind that can't apply (token-drop on a
+    single token, anything on a <2-char string) falls back to delete or a no-op."""
+    if len(s) < 2:
         return s
-    if type_sel < 0.25 and len(s) >= 2:                 # transpose adjacent chars
+    if type_sel < 1.0 / 3.0:                            # transpose adjacent chars
         i = min(int(pos_sel * (len(s) - 1)), len(s) - 2)
         return s[:i] + s[i + 1] + s[i] + s[i + 2:]
-    if type_sel < 0.50 and len(s) >= 2:                 # delete one char
+    if type_sel < 2.0 / 3.0:                            # delete one char
         i = min(int(pos_sel * len(s)), len(s) - 1)
         return s[:i] + s[i + 1:]
-    if type_sel < 0.75 and " " in s:                    # drop one whitespace token
+    # drop one whitespace token; single-token strings fall back to a char delete
+    # (never null).
+    if " " in s:
         toks = s.split(" ")
         if len(toks) >= 2:
             j = min(int(pos_sel * len(toks)), len(toks) - 1)
-            return " ".join(toks[:j] + toks[j + 1:]) or s
-        return s
-    return ""                                            # whole-field null
+            return " ".join(toks[:j] + toks[j + 1:])
+    i = min(int(pos_sel * len(s)), len(s) - 1)
+    return s[:i] + s[i + 1:]
 
 
-def _apply_field_corruption(values: list[str], rate: float, field_rng) -> list[str]:
+_MAX_SEVERITY = 4  # upper bound on edits/cell; sizes the fixed per-row draw block
+
+
+def _apply_field_corruption(values: list[str], rate: float, field_rng,
+                            severity: int = 1) -> list[str]:
     """Corrupt a column of strings in place; returns the SAME list (mutated), so
     callers must use the return value. `field_rng` is this field's own numpy
-    Generator. Draws a (n, 3) block — [apply_mask, type_sel, pos_sel] per row —
-    so row i's three uniforms sit at fixed flat offsets [3i, 3i+1, 3i+2]; the
-    first k rows of an n=k draw equal the first k rows of any larger draw from
-    the same stream (prefix stability). Loops only over masked rows."""
+    Generator. Draws a fixed (n, 1 + 2*_MAX_SEVERITY) block per row — col 0 is the
+    apply mask, then up to _MAX_SEVERITY (type_sel, pos_sel) pairs — so row i's
+    draws sit at fixed flat offsets and the first k rows of an n=k draw equal the
+    first k rows of any larger draw (prefix stability). Applies `severity` edits
+    to each masked cell (clamped to [1, _MAX_SEVERITY]). Loops only over masked
+    rows."""
     n = len(values)
     if rate <= 0.0 or n == 0:
         return values
-    draws = field_rng.random((n, 3))
+    sev = max(1, min(int(severity), _MAX_SEVERITY))
+    draws = field_rng.random((n, 1 + 2 * _MAX_SEVERITY))
     idx = np.nonzero(draws[:, 0] < rate)[0]
     for k in idx:
         i = int(k)
-        values[i] = _corrupt_cell(values[i], float(draws[i, 1]), float(draws[i, 2]))
+        s = values[i]
+        for e in range(sev):
+            s = _corrupt_cell(s, float(draws[i, 1 + 2 * e]), float(draws[i, 2 + 2 * e]))
+        values[i] = s
     return values
 
 
-def _hash_name(salt: str, seed: int, cid: int, n_syl: int = 5) -> str:
-    """Pseudo-random 5-syllable name from (salt, seed, cid). 24^5 ~= 8M combos
-    so at 100k clusters expected collisions ~= 600 per pool (cheap birthday
-    arithmetic), and a (first, last) tuple collision is effectively impossible.
-    Independent salts for first/last keep the two pools uncorrelated.
-    """
-    h = hashlib.md5(f"{salt}_{seed}_{cid}".encode()).digest()
-    return "".join(_SYL[h[i] % len(_SYL)] for i in range(n_syl))
+def _bijective_int(cid: int, mult: int, off: int, modulus: int) -> int:
+    """(cid*mult + off) mod modulus -- a BIJECTION over [0, modulus) when `mult`
+    is coprime to `modulus`, so distinct cids map to distinct outputs (zero
+    collisions) for any cid < modulus, while `mult` scrambles ordering so
+    neighbouring cids don't share structure. This is what keeps the synthetic
+    identities equally distinct at every N (the scale-invariance precondition)."""
+    return (cid * mult + off) % modulus
+
+
+# Odd multipliers, each coprime to 24 (=2^3*3) and to 10 (=2*5): odd and not
+# divisible by 3 or 5. Distinct per field so first/last/address pools are
+# uncorrelated. Verified coprimality: all are odd, end in 1/3/7/9, digit sums
+# not divisible by 3.
+_MULT_FIRST = 2654435761   # Knuth; odd, digitsum 43, ends in 1
+_MULT_LAST = 2246822519    # odd, digitsum 41, ends in 9
+_MULT_ADDR = 3266489917    # odd, digitsum 58, ends in 7
+
+
+def _hash_name(salt: str, seed: int, cid: int, width: int = _NAME_WIDTH) -> str:
+    """Distinct, low-similarity `width`-syllable name from (salt, seed, cid),
+    COLLISION-FREE by construction: a bijection cid -> base-24 digits (24**width
+    distinct names). Unlike the old md5 hash, distinctness equals the cluster
+    count at every N -- no birthday collisions as clusters grow. Independent
+    multipliers/offsets per salt keep the first/last pools uncorrelated."""
+    mult = _MULT_FIRST if salt == "F" else _MULT_LAST
+    off = (seed * 2654435761 + (0 if salt == "F" else 7)) % (len(_SYL) ** width)
+    m = _bijective_int(cid, mult, off, len(_SYL) ** width)
+    out = []
+    for _ in range(width):
+        out.append(_SYL[m % len(_SYL)])
+        m //= len(_SYL)
+    return "".join(out)
 
 
 def generate_with_gt(n_rows: int, seed: int = 0, shape: str = "realistic",
@@ -228,7 +293,35 @@ def _generate_realistic(n_rows: int, seed: int = 0, corruption: str = "light"
     # fields each get a dedicated stream.
     first_canon = [_hash_name("F", seed, c) for c in range(n_clusters)]
     last_canon = [_hash_name("L", seed, c) for c in range(n_clusters)]
-    street_num = _field_rng(0).integers(1, 9999, n_clusters)
+
+    # #510 ambiguity: a deterministic FIXED FRACTION of clusters become confusable
+    # "twins" -- a twin pair (c, c^1) shares first+last name but keeps its own
+    # address/zip/email, so the matcher must separate them on secondary fields or
+    # it over-merges (precision headroom). The fraction is constant at every N
+    # (selection is a bijective hash of the pair's lower cid -> uniform in [0,1)),
+    # so it's scale-invariant, and both twins stay distinct GT clusters (the
+    # oracle/cids are untouched -- only displayed name values collide).
+    corr = CORRUPTION_LEVELS[corruption]
+    if corr.ambiguous_frac > 0.0:
+        for c in range(n_clusters):
+            twin = c ^ 1
+            if twin >= n_clusters:
+                continue
+            lo = min(c, twin)
+            h = (_bijective_int(lo, _MULT_LAST, 12345, 1_000_000) % 1000) / 1000.0
+            if h < corr.ambiguous_frac:
+                first_canon[c] = first_canon[lo]
+                last_canon[c] = last_canon[lo]
+
+    # street_num is a BIJECTION on cid over [1, 10**_ADDR_DIGITS] (zero address
+    # collisions at any N) -- the old random [1,9999] x 8-street space saturated
+    # past ~80K clusters. street name stays random (it doesn't need to be unique;
+    # the number distinguishes clusters). Both are pure functions of (seed, cid),
+    # so still prefix-stable.
+    _addr_mod = 10 ** _ADDR_DIGITS
+    _addr_off = (seed * _MULT_ADDR + 1) % _addr_mod
+    street_num = [_bijective_int(c, _MULT_ADDR, _addr_off, _addr_mod) + 1
+                  for c in range(n_clusters)]
     street_idx = _field_rng(1).integers(0, len(_STREETS), n_clusters)
     address_canon = [f"{street_num[c]} {_STREETS[street_idx[c]]}" for c in range(n_clusters)]
     city_canon = [_CITIES[i] for i in _field_rng(2).integers(0, len(_CITIES), n_clusters)]
@@ -252,21 +345,25 @@ def _generate_realistic(n_rows: int, seed: int = 0, corruption: str = "light"
     # #510 corruption knob (realistic only). Applied on a SEPARATE RNG derived
     # from (seed, level) so the canonical-field draws above are untouched ->
     # oracle (cids) and the un-corrupted identity are identical across levels.
-    corr = CORRUPTION_LEVELS[corruption]
+    # `corr` was bound above (for the ambiguity pass).
     if any(getattr(corr, f) > 0.0 for f in _CORRUPT_FIELDS):
         ss = np.random.SeedSequence([seed, 0xC0FFEE, _CORRUPT_LEVEL_INT[corruption]])
         streams = dict(zip(_CORRUPT_FIELDS, ss.spawn(len(_CORRUPT_FIELDS))))
         first_with_typo = _apply_field_corruption(
-            first_with_typo, corr.first_name, np.random.default_rng(streams["first_name"]))
+            first_with_typo, corr.first_name, np.random.default_rng(streams["first_name"]),
+            severity=corr.severity)
         last_rows = _apply_field_corruption(
-            last_rows, corr.last_name, np.random.default_rng(streams["last_name"]))
+            last_rows, corr.last_name, np.random.default_rng(streams["last_name"]),
+            severity=corr.severity)
         addr_rows = _apply_field_corruption(
-            addr_rows, corr.address, np.random.default_rng(streams["address"]))
+            addr_rows, corr.address, np.random.default_rng(streams["address"]),
+            severity=corr.severity)
         # Email inherits the corrupted name (realistic), THEN gets its own low-rate
         # pass — kept low so it stays a strong independent recall path.
         email_rows = [f"{f}.{l}@example.com" for f, l in zip(first_with_typo, last_rows)]
         email_rows = _apply_field_corruption(
-            email_rows, corr.email, np.random.default_rng(streams["email"]))
+            email_rows, corr.email, np.random.default_rng(streams["email"]),
+            severity=corr.severity)
     else:
         email_rows = [f"{f}.{l}@example.com" for f, l in zip(first_with_typo, last_rows)]
 
@@ -430,8 +527,47 @@ def _clusters_signature(predicted_members: dict[int, list[int]]) -> str:
     return hashlib.sha256(repr(canon).encode("utf-8")).hexdigest()
 
 
+# The FROZEN config (#510 methodology): the published quality ladder builds the
+# auto-config ONCE (at the 1K oracle, realistic+moderate) and applies that SAME
+# config to every rung, so cross-rung F1 deltas isolate the ENGINE's
+# scale-invariance from auto-config drift -- and it runs fast (auto-config on the
+# ambiguous data is a ~50-150s controller search per call; a pre-built config
+# skips it). The committed artifact is checked in next to this script. Auto-config
+# STABILITY across scale is reported separately (see autoconfig_stability()).
+_FROZEN_CONFIG_PATH = Path(__file__).resolve().parent / "qis_realistic_frozen_config.json"
+
+
+def load_frozen_config():
+    """Load the committed frozen GoldenMatchConfig (the realistic-shape ladder
+    config). Cheap: just JSON deserialization, no controller search."""
+    from goldenmatch.config.schemas import GoldenMatchConfig
+    return GoldenMatchConfig.model_validate_json(
+        _FROZEN_CONFIG_PATH.read_text(encoding="utf-8"))
+
+
+def build_frozen_config(seed: int = 0, corruption: str = "moderate", n_rows: int = 1000):
+    """Rebuild the frozen config from a fresh auto-config run at the oracle and
+    write it to ``_FROZEN_CONFIG_PATH``. Run this ONLY when the fixture or the
+    moderate corruption level changes (the committed config is derived from
+    seed=0 / realistic / moderate at 1K). Mirrors run_rung's rerank/NE strip so
+    the saved config is exactly what the ladder applies."""
+    import goldenmatch
+    df, _gt = generate_with_gt(n_rows, seed=seed, shape="realistic", corruption=corruption)
+    cfg = goldenmatch.auto_configure_df(
+        df, confidence_required=False, allow_red_config=True, _skip_finalize=True)
+    for mk in (cfg.matchkeys or []):  # type: ignore[attr-defined]
+        if getattr(mk, "type", None) == "weighted" and getattr(mk, "rerank", False):
+            mk.rerank = False  # type: ignore[attr-defined]
+        if getattr(mk, "type", None) == "exact" and getattr(mk, "negative_evidence", None):
+            mk.negative_evidence = []  # type: ignore[attr-defined]
+    cfg.backend = None  # backend is chosen per-rung at apply time
+    _FROZEN_CONFIG_PATH.write_text(cfg.model_dump_json(indent=2), encoding="utf-8")
+    return cfg
+
+
 def run_rung(n_rows: int, seed: int = 0, shape: str = "realistic",
-             backend: str | None = None, corruption: str = "light") -> dict:
+             backend: str | None = None, corruption: str = "light",
+             frozen: bool = False) -> dict:
     import goldenmatch
     os.environ.setdefault("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
     if sys.platform == "win32":
@@ -465,7 +601,17 @@ def run_rung(n_rows: int, seed: int = 0, shape: str = "realistic",
         # fuzzy_*) are interleaved with the same-named stages from the full-df
         # pipeline run later, so attribution between "controller used X GB" and
         # "dedupe used Y GB" is invisible in last-write-wins dict semantics.
-        if backend:
+        if frozen:
+            # FROZEN MODE (#510 published ladder): apply the pre-built committed
+            # config -- no per-rung auto-config search, so this is just the
+            # engine (score -> cluster -> golden) on a fixed config. Isolates
+            # engine scale-invariance and runs fast at every N.
+            with stage("qis_dedupe"):
+                cfg = load_frozen_config()
+                if backend:
+                    cfg.backend = backend  # type: ignore[attr-defined]
+                result = goldenmatch.dedupe_df(df, config=cfg)
+        elif backend:
             # confidence_required=False because passing --backend explicitly
             # is "measurement mode" -- accept whatever config the controller
             # commits even if RED. Zero-config path still keeps the guard.
@@ -569,9 +715,13 @@ def run_rung(n_rows: int, seed: int = 0, shape: str = "realistic",
 
     multi = sum(1 for v in predicted.values() if len(v) > 1)
     committed_cfg: dict = {}
+    # Frozen mode has no per-rung controller run; record a marker and skip the
+    # controller-telemetry capture entirely (it would read a stale ContextVar).
+    if frozen:
+        committed_cfg = {"mode": "frozen", "source": _FROZEN_CONFIG_PATH.name}
     try:
         from goldenmatch.core.autoconfig import _LAST_CONTROLLER_RUN
-        state = _LAST_CONTROLLER_RUN.get()
+        state = None if frozen else _LAST_CONTROLLER_RUN.get()
         if state is not None:
             profile, history = state
             # Per-iteration controller telemetry (v23 expansion).
@@ -631,7 +781,8 @@ def run_rung(n_rows: int, seed: int = 0, shape: str = "realistic",
                 "full_vs_sample_drift": history.full_vs_sample_drift,
             }
     except Exception as e:
-        committed_cfg = {"_capture_error": repr(e)[:120]}
+        if not frozen:  # don't clobber the frozen marker on an import hiccup
+            committed_cfg = {"_capture_error": repr(e)[:120]}
 
     # Native acceleration status: surface whether goldenmatch._native is loaded
     # and which env gate we're under, so the bench artifact carries an explicit
@@ -650,6 +801,7 @@ def run_rung(n_rows: int, seed: int = 0, shape: str = "realistic",
     return {
         "rows": len(df),
         "corruption": corruption,
+        "config_mode": "frozen" if frozen else "autoconfig",
         "clusters_gt": int(len(set(gt.tolist()))),
         "wall_s": {"generate": round(t_gen, 2), "dedupe": round(t_dedupe, 2), "total": round(t_gen + t_dedupe, 2)},
         "rss_mb_peak": _peak_rss_mb(),
@@ -684,11 +836,24 @@ def main(argv=None) -> int:
                     help="realistic-shape corruption level. light = today's baseline "
                          "(10%% a->@ typo only); moderate ~ F1 0.90-0.95 (drift-sensitive, "
                          "the published ladder default); hard = stress. Ignored for --shape phase5.")
+    ap.add_argument("--frozen", action="store_true",
+                    help="apply the committed frozen config (the #510 published-ladder "
+                         "default methodology) instead of running per-rung auto-config. "
+                         "Isolates engine scale-invariance and runs fast at every N.")
+    ap.add_argument("--rebuild-frozen-config", action="store_true",
+                    help="rebuild + save the frozen config from a fresh 1K auto-config "
+                         "run (do this only when the fixture/moderate level changes), "
+                         "then exit.")
     ap.add_argument("--out", type=Path, default=None, help="write per-rung JSON here")
     args = ap.parse_args(argv)
 
+    if args.rebuild_frozen_config:
+        build_frozen_config(seed=args.seed, corruption="moderate")
+        print(f"rebuilt frozen config -> {_FROZEN_CONFIG_PATH}")
+        return 0
+
     res = run_rung(args.rows, seed=args.seed, shape=args.shape, backend=args.backend,
-                   corruption=args.corruption)
+                   corruption=args.corruption, frozen=args.frozen)
     # shape/backend are not in run_rung's return dict, so set them here;
     # "corruption" is already in the dict (run_rung received it) -- don't
     # re-write it, that would silently shadow a future rename of the key.
