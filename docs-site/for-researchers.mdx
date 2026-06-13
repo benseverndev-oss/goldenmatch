@@ -1,0 +1,112 @@
+---
+title: "For researchers"
+description: "Reproduce the benchmarks, read the evaluation methodology and honest framing, cite the project, and find the comparison against other entity-resolution tools."
+keywords: ["research", "benchmark", "reproducibility", "citation", "entity resolution", "record linkage", "methodology", "splink", "evaluation"]
+---
+
+A start-here for academic and benchmarking use: how to reproduce every published
+number, the evaluation methodology behind the headline claims (including the honest
+caveats), how to cite the project, and where the academic comparisons live.
+
+## Cite it
+
+The repository carries a [`CITATION.cff`](https://github.com/benseverndev-oss/goldenmatch/blob/main/CITATION.cff),
+so GitHub shows a **"Cite this repository"** button (sidebar → *Cite this
+repository*) that exports BibTeX / APA. Cite the headline package as **GoldenMatch
+(Golden Suite)**, author Ben Severn, MIT-licensed, at
+`github.com/benseverndev-oss/goldenmatch`.
+
+## Reproduce the benchmarks
+
+Every published headline number maps back to a committed runner
+(`scripts/run_benchmarks.py`) with a pinned environment and a stated tolerance. The
+canonical guide is
+[`docs/reproducing-benchmarks.md`](https://github.com/benseverndev-oss/goldenmatch/blob/main/docs/reproducing-benchmarks.md)
+— it gives the dataset source, drop location, and expected output per number.
+
+```bash
+pip install -e packages/python/goldenmatch
+pip install recordlinkage dqbench        # dataset deps (Febrl3, DQbench)
+
+export GOLDENMATCH_AUTOCONFIG_MEMORY=0   # disable the cross-run config cache
+unset OPENAI_API_KEY                      # no-LLM = deterministic
+
+python scripts/run_benchmarks.py --datasets all --output results.json
+```
+
+| Number | Value | Dataset | Notes |
+|---|---|---|---|
+| DQbench composite | **91.04** | DQbench ER T1+T2+T3 (no-LLM) | ±1.5 pp run-to-run |
+| DBLP-ACM F1 | **0.9641** | Leipzig DBLP-ACM (cross-source `match_df`) | deterministic; P 0.969 / R 0.959 |
+| Febrl3 F1 | **0.9443** | `recordlinkage.load_febrl3` (synthetic) | deterministic; P 0.987 / R 0.906 |
+| NCVR F1 | **0.9719** | NC voter 10k sample (seeded corruption GT) | deterministic given `seed=42` |
+
+<Note>
+  No-LLM numbers are deterministic given fixed seeds and a fixed dataset (allow
+  sub-0.1 pp drift from `rapidfuzz` reduction order). `--with-llm` runs are **not**
+  re-runnable targets — treat them as single observations.
+</Note>
+
+## The Splink head-to-head (and its honest framing)
+
+GoldenMatch's zero-tuning probabilistic (Fellegi-Sunter) auto-config is benchmarked
+against an expert hand-rolled Splink config on **one shared evaluator** across every
+dataset Splink scores. Full writeup, including per-dataset P/R and performance:
+[`docs/benchmarks/2026-06-09-splink-bakeoff.md`](https://github.com/benseverndev-oss/goldenmatch/blob/main/docs/benchmarks/2026-06-09-splink-bakeoff.md).
+
+| Dataset | GM-prob F1 | Splink F1 | ΔF1 |
+|---|---|---|---|
+| historical_50k | **0.778** | 0.757 | +0.021 (cluster B³: 0.844 vs 0.789) |
+| febrl3 | **0.991** | 0.965 | +0.026 |
+| synthetic_person | **0.998** | 0.996 | +0.001 |
+
+Read the caveats before quoting these:
+
+- **These are *pairwise* F1 under one shared evaluator** (`evaluate.evaluate`), so all
+  engines are judged by identical code. The often-cited ~0.97 Splink number on
+  `historical_50k` is a *cluster/entity* metric, not exhaustive within-cluster
+  pairwise F1 — under this harness Splink scores ~0.757 *pairwise* (recall-bound; no
+  single field exceeds 0.60 recall → ~0.93 pairwise ceiling for any engine). The
+  honest claim is "matches/beats Splink on the same evaluator," not "0.97 pairwise."
+- **Reproducible as of the determinism fix (#829).** The earlier figures rested on a
+  non-deterministic EM training-pair sample (one CI run gave 0.805 / 0.779 / 0.643
+  for the identical path); sorting blocks by a stable key before the seeded shuffle
+  made it reproduce within 0.002.
+- **Splink is faster** (3–19× on these datasets) and retains distributed F-S at 1B+
+  rows on Spark plus the mature m/u comparison-viewer UI. GoldenMatch's edge is zero
+  tuning and accuracy parity.
+- **Bibliographic data:** the probabilistic path is weak on `dblp_acm` (F1 0.377,
+  recall-bound); use the **weighted** path there (0.964), not probabilistic.
+
+## Evaluation methodology
+
+The same primitives are available to you for your own measurements — pairwise
+precision / recall / F1 against a ground-truth pair set, cluster-level B³, and
+ground-truth-free run comparison (CCMS / Talburt-Wang Index). See the
+[Evaluation guide](/goldenmatch/evaluation) for the `evaluate`, `evaluate_clusters`,
+`compare_clusters`, and `goldenmatch evaluate --threshold-sweep` APIs.
+
+## Research arcs (documented negative results)
+
+Two exploratory ER designs are written up honestly, including where they *didn't*
+pan out — useful as prior art:
+
+<CardGroup cols={2}>
+  <Card title="Amortized Bayesian ER" icon="brain" href="/research/amortized-bayesian-er">
+    A calibrated neural posterior over the partition with EIG-driven active labelling. Mechanisms validated, not accuracy-competitive.
+  </Card>
+  <Card title="Landscape-sculpting ER" icon="mountain" href="/research/landscape-sculpting-er">
+    ER reframed as sculpting an attractor landscape. Novel framing, but cosmetic — same partition as a calibrated discrete split/merge loop.
+  </Card>
+</CardGroup>
+
+## Compare against other tools
+
+<CardGroup cols={2}>
+  <Card title="Vendor & tool comparison" icon="table-columns" href="/reference/vendor-comparison">
+    GoldenMatch vs Splink, Dedupe, Senzing, and others — feature and accuracy axes.
+  </Card>
+  <Card title="Entity resolution concepts" icon="diagram-project" href="/concepts/entity-resolution">
+    Blocking, scoring, clustering, survivorship — the model the benchmarks exercise.
+  </Card>
+</CardGroup>

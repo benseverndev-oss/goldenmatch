@@ -1,0 +1,78 @@
+---
+title: "Web workbench (no code)"
+description: "The point-and-click way to use GoldenMatch: edit rules, preview matches, label pairs, and compare runs in a browser — no code after the first install."
+keywords: ["web ui", "workbench", "no-code", "browser", "non-technical", "serve-ui", "review"]
+---
+
+If you would rather not write code, GoldenMatch ships a browser workbench. You (or
+a teammate) run one command to start it; after that, everything happens
+point-and-click in your browser. It is the right starting point for analysts,
+data stewards, and anyone reviewing matches rather than building a pipeline.
+
+## Start it
+
+<Steps>
+  <Step title="Install the web extra">
+    ```bash
+    pip install 'goldenmatch[web]'
+    ```
+    One-time, and the only command line you need. If someone technical set this up
+    for you, skip to the browser.
+  </Step>
+  <Step title="Open the workbench">
+    ```bash
+    goldenmatch serve-ui my-project
+    ```
+    This opens **http://localhost:5050** in your browser. Point it at a folder of
+    CSVs or an existing project; it picks a free port automatically if 5050 is taken.
+  </Step>
+  <Step title="No data yet? Try the demo">
+    ```bash
+    goldenmatch demo
+    ```
+    Generates a small sample dataset and runs it, so you can click around before
+    bringing your own file.
+  </Step>
+</Steps>
+
+<Tip>
+  Drop a CSV in and run it with zero configuration — GoldenMatch detects the column
+  types, picks the scorers and blocking, and shows you the matches. You only touch
+  the rules if you want to.
+</Tip>
+
+## What you can do in the browser
+
+No code required for any of this:
+
+- **See your duplicates.** Browse clusters of records GoldenMatch thinks are the
+  same entity, with a field-by-field diff and a plain-English reason for each pair.
+- **Tune without YAML.** Edit match rules and thresholds with live validation and
+  preview the effect against a sampled slice before committing to a full run.
+- **Label pairs.** Mark borderline pairs as match / not-a-match. Your decisions are
+  saved to Learning Memory automatically and re-applied on the next run, so the
+  system stops asking you the same question twice.
+- **Compare two runs.** See what merged, split, or stayed the same between runs
+  (the CCMS view), so you can tell whether a change helped.
+- **Sweep a setting.** Move the threshold and watch the cluster count update live.
+- **Browse corrections.** Review and manage every label you have stored.
+
+## When you outgrow it
+
+The workbench writes the same config and corrections the code paths use, so nothing
+is locked in. When you are ready for automation or scale:
+
+<CardGroup cols={2}>
+  <Card title="Command line" icon="terminal" href="/goldenmatch/cli">
+    Run the same matching from a script or a scheduled job.
+  </Card>
+  <Card title="Quickstart (developers)" icon="rocket" href="/quickstart">
+    The Python / TypeScript / CLI path, install to deduped file in minutes.
+  </Card>
+</CardGroup>
+
+<Note>
+  The workbench is a single-process localhost app — your data never leaves your
+  machine. More screenshots and a full tour are on the
+  [Web UI wiki page](https://github.com/benseverndev-oss/goldenmatch/wiki/Web-UI).
+</Note>
