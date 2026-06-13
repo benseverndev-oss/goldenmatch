@@ -24,6 +24,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   (runs in the normal lane, no Spark). Unblocks downstream consumers that depend
   on a released identity-graph contract.
 
+### Deprecated
+- **The `GOLDENMATCH_CLUSTER_FRAMES_OUT=0` escape hatch + the legacy `dict[int,dict]`
+  cluster pipeline path.** The Arrow frames-out path is the default and only supported
+  clustering path; setting the variable to `0` now emits a once-per-process
+  `DeprecationWarning`. The escape hatch and the legacy pipeline branch are removed in
+  2.0 (public `build_clusters` is preserved as a frames-backed adapter).
+
 ### Performance
 - **Fellegi-Sunter block scoring ~3.5x faster on tiny-block / multi-pass shapes
   (PR #869).** The probabilistic (`type: probabilistic`) numpy scoring path was
