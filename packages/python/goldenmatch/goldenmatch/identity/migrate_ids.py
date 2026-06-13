@@ -63,7 +63,7 @@ def _count_edges_touching(store, rid: str) -> int:
     row = store._fetchone(
         "SELECT COUNT(*) AS n FROM evidence_edges "
         "WHERE record_a_id = ? OR record_b_id = ?", (rid, rid))
-    return int(row["n"] if isinstance(row, dict) else row[0])
+    return int(row["n"])
 
 
 def _rename_record(store, old_id: str, new_id: str, source: str) -> int:

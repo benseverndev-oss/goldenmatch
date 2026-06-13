@@ -36,3 +36,15 @@ def test_silent_when_no_legacy(tmp_path, caplog, monkeypatch):
         resolve_clusters(df=df, clusters={1: {"members": [0], "size": 1}},
                          store=store, run_name="r1", scored_pairs=[], emit_singletons=True)
     assert not any("migrate-ids" in r.message for r in caplog.records)
+
+
+def test_kill_switch_warns_once(tmp_path, caplog, monkeypatch):
+    monkeypatch.setattr(R, "_LEGACY_SCHEME_WARNED", False)
+    monkeypatch.setenv("GOLDENMATCH_IDENTITY_ID_SCHEME", "hash")
+    store = IdentityStore(backend="sqlite", path=str(tmp_path / "id.db"))
+    df = _df([{"__row_id__": 0, "__source__": "acme", "name": "Zoe"}])
+    with caplog.at_level(logging.WARNING):
+        resolve_clusters(df=df, clusters={1: {"members": [0], "size": 1}},
+                         store=store, run_name="r1", scored_pairs=[], emit_singletons=True)
+    msgs = [r.message for r in caplog.records if "migrate-ids" in r.message]
+    assert len(msgs) == 1 and "Unset it" in msgs[0]
