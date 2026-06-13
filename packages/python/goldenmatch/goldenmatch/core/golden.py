@@ -396,7 +396,7 @@ def _stable_value_expr(
         # ``(len, -__row_id__)`` sorted descending == (len desc, __row_id__ asc),
         # and is a single filtered expression aligned with ``nn``.
         key = (
-            pl.struct([pl.col(len_alias), -pl.col("__row_id__")]).filter(mask)
+            pl.struct([pl.col(len_alias), -pl.col("__row_id__").cast(pl.Int64)]).filter(mask)
             if has_row_id
             else pl.col(len_alias).filter(mask)
         )
@@ -423,7 +423,7 @@ def _stable_rid_expr(
         # wins both (row-aligned provenance). See that helper for why one struct
         # key, not a list of filtered keys.
         key = (
-            pl.struct([pl.col(len_alias), -pl.col("__row_id__")]).filter(mask)
+            pl.struct([pl.col(len_alias), -pl.col("__row_id__").cast(pl.Int64)]).filter(mask)
             if has_row_id
             else pl.col(len_alias).filter(mask)
         )
