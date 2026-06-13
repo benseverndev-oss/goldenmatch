@@ -2,6 +2,32 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-06-13 — Opt-in WASM acceleration arc (TypeScript) — #878/#879/#880/#881
+- New [../architecture/wasm-acceleration.md](../architecture/wasm-acceleration.md)
+  and [../decisions/0014-opt-in-wasm-acceleration.md](../decisions/0014-opt-in-wasm-acceleration.md);
+  linked both from [../discovery.md](../discovery.md).
+- The TS packages now optionally reach the same pyo3-free `*-core` Rust kernels
+  via WebAssembly — opt-in, pure-TS stays the default + fallback, edge-safe,
+  `.wasm` built in CI (never committed). Two cores shipped:
+  - **#878** `score-core` → goldenmatch `scoreMatrix` (`enableWasm()`; jaro_winkler/
+    levenshtein/exact at first).
+  - **#880** `analysis-core` → goldenanalysis `histogram`/`quantile`
+    (`enableAnalysisWasm()`) **+** extracted the shared `goldenmatch-wasm-runtime`
+    workspace package (byte loader + generic enable skeleton + registry) that both
+    consumers ride.
+  - **#879** aligned the hand-rolled pure-TS scorers with rapidfuzz (the parity
+    prerequisite): codepoint iteration, Winkler `>0.7` boost, floored transposition
+    `t//2` — empirically settled as integer-vs-float halving, not bit-parallel
+    matching (0/50000 vs rapidfuzz incl. non-BMP).
+  - **#881** added `token_sort` WASM coverage (new `score-core::token_sort_normalized_ratio`,
+    distinct from the pinned un-normalized `score_one(2)`) + validated the bundled
+    dist artifact path (defensive multi-location copy; flipped the benches to a
+    dist-path gate, which caught a real 1M-element `histogram` `Math.min(...vals)`
+    stack overflow).
+- **Measure-first parked `graph-core`** without building it (UnionFind is one O(N)
+  step among several in `buildClusters`, marshaling N pairs is O(N) →
+  boundary-bound); `fingerprint-core` / `goldencheck-core` stay parked by design.
+
 ## 2026-06-12 — #855 goldencheck TS port: module parity + hardened golden harness (#873/#874)
 - New [../decisions/0013-goldencheck-ts-parity-hardening.md](../decisions/0013-goldencheck-ts-parity-hardening.md);
   added the `#855` subsection to [../planning/surface-hardening.md](../planning/surface-hardening.md).
@@ -381,4 +407,4 @@ Newest first. One entry per meaningful change to the network.
 - Committed to git on branch `chore/context-network`.
 
 ---
-**Classification:** meta/log • **Last updated:** 2026-06-12
+**Classification:** meta/log • **Last updated:** 2026-06-13

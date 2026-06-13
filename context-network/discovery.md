@@ -17,6 +17,7 @@ links rather than reading everything.
 - [architecture/goldencheck-goldenmatch-integration.md](architecture/goldencheck-goldenmatch-integration.md) — data quality feeds entity resolution: four fail-open, default-OFF doors (survivorship, blocking, FD negative-evidence, quality-gated review); #794/#795/#798 shipped, #797 open.
 - [architecture/fellegi-sunter-splink-parity.md](architecture/fellegi-sunter-splink-parity.md) — the `type: probabilistic` matchkey from scorer to Splink-class engine: model lifecycle, supervised m, match-weight waterfall, calibration, accuracy analysis, bucket/native scale-out. FS auto-config v2 (#823, v1.29.0) now beats hand-rolled Splink on every dataset Splink scores (pairwise F1, shared evaluator), made reproducible by the #829 EM-sampling determinism fix; the deterministic three-engine bake-off is at [`docs/benchmarks/2026-06-09-splink-bakeoff.md`](../docs/benchmarks/2026-06-09-splink-bakeoff.md).
 - [architecture/rust-test-coverage.md](architecture/rust-test-coverage.md) — how the `packages/rust/extensions/` crates are tested in CI: per-crate map, the bridge CPython-in-CI dance, the `cargo pgrx test` structural dead-end, and the measured per-crate baseline; SHIPPED (#827/#830/#832, 2026-06-09).
+- [architecture/wasm-acceleration.md](architecture/wasm-acceleration.md) — opt-in WASM acceleration for the pyo3-free `*-core` crates → TypeScript: the shared `goldenmatch-wasm-runtime`, `score-core`→goldenmatch (jaro_winkler/levenshtein/token_sort/exact) + `analysis-core`→goldenanalysis (histogram/quantile), parity+bench gates, the rapidfuzz-alignment prerequisite; SHIPPED #878/#879/#880/#881; graph/fingerprint/goldencheck parked.
 
 ## Decisions (records with no other home)
 - [decisions/0001-gate-reframe-engine-portability.md](decisions/0001-gate-reframe-engine-portability.md) — retire one-box RSS as the gate; engine portability is the destination.
@@ -32,6 +33,7 @@ links rather than reading everything.
 - [decisions/0011-distributed-wcc-randomized-contraction.md](decisions/0011-distributed-wcc-randomized-contraction.md) — distributed WCC: randomized contraction (relational, chain-robust) over driver-collect / min-propagation; per-round parquet checkpoint dodges the Ray streaming-executor deadlock; VALIDATED at 100M (9.2 min) + default-flipped (#867); the e2e wall was per-group scoring (vectorized in #864), not the WCC.
 - [decisions/0012-fs-block-scoring-perf.md](decisions/0012-fs-block-scoring-perf.md) — FS block-scoring perf: "Splink 3-19x faster" was a numpy-path red herring (the bake-off never set `GOLDENMATCH_FS_NATIVE`); the wall is per-block fan-out, not scoring math, so the Rust kernel can't move it; three output-identical numpy optimizations took historical_50k −72% local.
 - [decisions/0013-goldencheck-ts-parity-hardening.md](decisions/0013-goldencheck-ts-parity-hardening.md) — goldencheck TS port: finish module parity (2 profilers / 4 relations / `validate`, mirroring the Python fallback) + harden the golden harness (assert confidence + affected_rows, fail-on-missing, regenerate on a CI runner since the box OOMs on Polars); it caught a pre-existing `temporal_order` over-fire on integer columns (#855 closed).
+- [decisions/0014-opt-in-wasm-acceleration.md](decisions/0014-opt-in-wasm-acceleration.md) — opt-in WASM for the TS packages: pure-TS stays the default + fallback, one shared runtime (extracted not duplicated), batch-first per-scorer swap, ship a core only on a measured parity+bench win (parked graph-core on the verdict, not a crate); the bench-as-dist-validation gate caught a real 1M-element histogram overflow.
 
 ## Processes (how work is done here)
 - [processes/development-workflow.md](processes/development-workflow.md) — spec → plan → execute → review → CI → merge, plus the hard environment constraints.
@@ -46,4 +48,4 @@ links rather than reading everything.
 - [meta/maintenance.md](meta/maintenance.md) — how to keep nodes accurate and small.
 
 ---
-**Classification:** navigation • **Last updated:** 2026-06-11
+**Classification:** navigation • **Last updated:** 2026-06-13

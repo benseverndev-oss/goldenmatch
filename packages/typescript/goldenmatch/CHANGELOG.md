@@ -53,6 +53,18 @@ scorer parity is locked by Python-computed ground truth in
   matchkey at threshold 0.75. `sparse_people` is now byte-equal in the
   controller-stoppoint parity suite.
 
+### Fixed — scorer rapidfuzz parity
+- `jaro` / `jaroWinkler` / `levenshtein` / `indel` now match rapidfuzz to 4
+  decimals on non-BMP (codepoint iteration via `Array.from` instead of UTF-16
+  code units), sub-0.7-prefix (Winkler prefix boost gated on `jaro > 0.7`), and
+  repeated-char (floored transposition count `t // 2`) inputs. Existing canonical
+  anchors (MARTHA, DIXON, JELLYFISH, …) are unchanged. New parity gate:
+  `tests/parity/scorer-rapidfuzz.test.ts`, goldens from `rapidfuzz` 3.14.5 via
+  `packages/python/goldenmatch/scripts/emit_scorer_parity_fixtures.py`. Closes
+  two of the three pure-TS-vs-rapidfuzz divergences the WASM slice flagged (the
+  0.7 boost threshold and non-BMP codepoints) plus the repeated-char
+  transposition count; token_sort WASM coverage remains the open follow-up.
+
 ## [2.0.0] - 2026-05-22
 
 Major version: v1.18.2 plugin parity for the TS port (#208).

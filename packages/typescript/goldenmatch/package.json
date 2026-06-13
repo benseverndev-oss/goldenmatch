@@ -21,7 +21,8 @@
     "sync:refdata": "node scripts/sync_ts_refdata.mjs"
   },
   "dependencies": {
-    "commander": "^13.0.0"
+    "commander": "^13.0.0",
+    "goldenmatch-wasm-runtime": "workspace:^"
   },
   "peerDependencies": {
     "yaml": "*",

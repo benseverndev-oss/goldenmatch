@@ -10,12 +10,15 @@
 export const SCORER_ID: Readonly<Record<string, number>> = {
   jaro_winkler: 0,
   levenshtein: 1,
+  token_sort: 2,
   exact: 3,
 };
 
 /**
- * Scorers the WASM matrix path accelerates in slice 1. token_sort (id 2) is
- * deferred — its normalization parity is unresolved (see the design spec).
+ * Scorers the WASM matrix path accelerates. token_sort (id 2) routes through
+ * score-core's `token_sort_normalized_ratio` (the TS-parity lowercase + strip +
+ * token-sort normalize), so the WASM result matches the pure-TS `tokenSortRatio`
+ * (NOT score-core's un-normalized `score_one(2)`).
  */
 export const WASM_COVERED_SCORERS: ReadonlySet<string> = new Set(
   Object.keys(SCORER_ID),
@@ -36,12 +39,14 @@ export interface ScorerBackend {
   scoreMatrix(values: readonly string[], scorerName: string): Float64Array;
 }
 
-let _backend: ScorerBackend | null = null;
+import { createBackendRegistry } from "goldenmatch-wasm-runtime";
+
+const _registry = createBackendRegistry<ScorerBackend>();
 
 export function setScorerBackend(b: ScorerBackend | null): void {
-  _backend = b;
+  _registry.set(b);
 }
 
 export function getScorerBackend(): ScorerBackend | null {
-  return _backend;
+  return _registry.get();
 }

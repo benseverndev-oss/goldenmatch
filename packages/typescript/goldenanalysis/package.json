@@ -64,7 +64,8 @@
     "clean": "rimraf dist"
   },
   "dependencies": {
-    "commander": "^13.0.0"
+    "commander": "^13.0.0",
+    "goldenmatch-wasm-runtime": "workspace:^"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

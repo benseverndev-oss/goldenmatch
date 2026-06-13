@@ -25,9 +25,9 @@ describe("ScorerBackend singleton", () => {
     expect(getScorerBackend()).toBeNull();
   });
 
-  it("covers exactly jaro_winkler / levenshtein / exact in slice 1", () => {
+  it("covers jaro_winkler / levenshtein / token_sort / exact", () => {
     expect([...WASM_COVERED_SCORERS].sort()).toEqual(
-      ["exact", "jaro_winkler", "levenshtein"],
+      ["exact", "jaro_winkler", "levenshtein", "token_sort"],
     );
   });
 });
@@ -48,7 +48,7 @@ describe("scoreMatrix backend swap", () => {
     expect(m[0]![1]).toBe(0); // came from the stub, not pure-TS (~0.9)
   });
 
-  it("ignores the backend for an UNCOVERED scorer (token_sort stays pure-TS)", () => {
+  it("ignores the backend for an UNCOVERED scorer (soundex_match stays pure-TS)", () => {
     let called = false;
     setScorerBackend({
       scoreMatrix: (values) => {
@@ -56,9 +56,11 @@ describe("scoreMatrix backend swap", () => {
         return new Float64Array(values.length * values.length);
       },
     });
-    const m = scoreMatrix(["a b", "b a"], "token_sort");
+    // soundex_match is NOT WASM-covered -> pure-TS scoreField (Robert/Rupert
+    // share soundex R163 -> 1.0), so the backend stub must not be called.
+    const m = scoreMatrix(["Robert", "Rupert"], "soundex_match");
     expect(called).toBe(false);
-    expect(m[0]![1]).toBeGreaterThan(0.99); // pure-TS token_sort ~1.0
+    expect(m[0]![1]).toBe(1.0);
   });
 
   it("zeros out null cells after a backend call", () => {

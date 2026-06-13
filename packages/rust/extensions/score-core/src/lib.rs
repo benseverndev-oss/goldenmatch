@@ -42,6 +42,35 @@ pub fn token_sort_ratio(a: &str, b: &str) -> f64 {
     fuzz::ratio(sa.chars(), sb.chars()) * 100.0
 }
 
+/// TS/Python `token_sort_ratio` preprocessing for the **WASM TS-parity path**:
+/// lowercase, replace every non-`[a-z0-9 + whitespace]` char with a space, then
+/// split / sort / join (matching goldenmatch TS `tokenSortRatio`'s
+/// `.toLowerCase().replace(/[^a-z0-9\s]/g," ")` normalize), then `fuzz::ratio`
+/// (== rapidfuzz `Indel.normalized_similarity`) on `[0, 1]`.
+///
+/// DISTINCT from `score_one(2)` / `token_sort_string`, which do NOT normalize
+/// (the pinned native asymmetry the FFI/native path depends on) — do not merge.
+/// Used only by `score-wasm` to give the TS opt-in backend token_sort coverage.
+pub fn token_sort_normalized_ratio(a: &str, b: &str) -> f64 {
+    fn normalize(s: &str) -> String {
+        let cleaned: String = s
+            .to_lowercase()
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c.is_whitespace() {
+                    c
+                } else {
+                    ' '
+                }
+            })
+            .collect();
+        let mut toks: Vec<&str> = cleaned.split_whitespace().collect();
+        toks.sort_unstable();
+        toks.join(" ")
+    }
+    fuzz::ratio(normalize(a).chars(), normalize(b).chars())
+}
+
 /// Scorer dispatch matching `score_buckets._resolve_score_pair_callable`'s
 /// fast-path scale, all on [0, 1]. ids: 0=jaro_winkler, 1=levenshtein,
 /// 2=token_sort, 3=exact.

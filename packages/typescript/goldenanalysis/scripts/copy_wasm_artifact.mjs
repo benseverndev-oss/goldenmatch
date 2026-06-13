@@ -1,20 +1,18 @@
 // Copy the built WASM artifact from src into the dist locations the bundled
-// loader might resolve `new URL('./artifacts/score_wasm_bg.wasm', import.meta.url)`
+// loader might resolve `new URL('./artifacts/analysis_wasm_bg.wasm', import.meta.url)`
 // to. tsup bundling can land the loader code at dist/core/index.js, a
 // dist/core/wasm/ module, or a hoisted chunk — and `import.meta.url` then points
 // at whichever, so `./artifacts/` resolves to a DIFFERENT parent in each case.
 // Copying to every plausible `./artifacts/` parent (a few KB, harmless) makes
-// enableWasm() resolve the artifact in the published package regardless of how
-// tsup bundles. No-op (warns) when the artifact is absent (default checkout).
+// enableAnalysisWasm() resolve the artifact in the published package regardless
+// of how tsup bundles. No-op (warns) when the artifact is absent.
 import { cp, mkdir, access } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const src = join(here, "..", "src", "core", "wasm", "artifacts");
-const files = ["score_wasm_bg.wasm", "score_wasm.js"];
-// Candidate `./artifacts/` parents (loader at dist/core/index.js -> dist/core/;
-// dist/core/wasm/loader.js -> dist/core/wasm/; hoisted chunk -> dist/).
+const files = ["analysis_wasm_bg.wasm", "analysis_wasm.js"];
 const dsts = [
   join(here, "..", "dist", "core", "wasm", "artifacts"),
   join(here, "..", "dist", "core", "artifacts"),
