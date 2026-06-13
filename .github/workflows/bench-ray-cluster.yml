@@ -63,6 +63,10 @@ on:
         description: "Ray Dataset partition count for the distributed run"
         required: false
         default: "64"
+      head_machine:
+        description: "Head node machine type (the driver generates the full frame in memory; highmem for distributed runs). 100M: n2-highmem-32 (256 GB); 200M: n2-highmem-64 (512 GB)."
+        required: false
+        default: "n2-highmem-32"
 
 permissions:
   contents: read
@@ -158,8 +162,9 @@ jobs:
           sed -i "s|GOLDENMATCH_GIT_SHA_PLACEHOLDER|${{ github.sha }}|g" .ray/cluster-gce.yaml
           sed -i "s|cluster_name: goldenmatch-bench$|cluster_name: ${{ env.CLUSTER_NAME }}|" .ray/cluster-gce.yaml
           sed -i "s|max_workers: 3$|max_workers: ${{ inputs.max_workers }}|" .ray/cluster-gce.yaml
+          sed -i "s|GOLDENMATCH_HEAD_MACHINE_PLACEHOLDER|${{ inputs.head_machine }}|g" .ray/cluster-gce.yaml
           echo "----- Rendered cluster.yaml -----"
-          head -40 .ray/cluster-gce.yaml
+          head -50 .ray/cluster-gce.yaml
 
       - name: Ray up
         # Provisions head + workers, installs goldenmatch on each via

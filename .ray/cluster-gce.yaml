@@ -81,7 +81,12 @@ available_node_types:
   ray_head_default:
     resources: {}
     node_config:
-      machineType: n2-standard-16
+      # The driver (data generation) runs ON the head: the QIS realistic gen
+      # materializes the full frame in memory (~100 GB at 100M, ~200 GB at 200M
+      # even vectorized) before from_arrow streams it to the workers' object
+      # store. So the HEAD is highmem; the WORKERS (which run the distributed
+      # dedup) stay n2-standard-16. Rendered from the `head_machine` workflow input.
+      machineType: GOLDENMATCH_HEAD_MACHINE_PLACEHOLDER
       # cloud-platform scope so the node's default compute SA can read+write the
       # gs:// WCC scratch + assignments in the distributed (PIPELINE=2) run. The
       # SA still needs Storage IAM on the bucket; default scopes omit storage,

@@ -210,6 +210,138 @@ def _hash_name(salt: str, seed: int, cid: int, width: int = _NAME_WIDTH) -> str:
     return "".join(out)
 
 
+def _bijective_int_vec(cids: np.ndarray, mult: int, off: int, modulus: int) -> np.ndarray:
+    """Vectorized ``_bijective_int`` over an int64 array of cids. int64-safe to
+    n_clusters=40M (200M rows): max cid*mult ~ 40M*3.3e9 ~ 1.3e17 < 9.2e18."""
+    return (cids.astype(np.int64) * np.int64(mult) + np.int64(off)) % np.int64(modulus)
+
+
+def _hash_names_vec(salt: str, seed: int, cids: np.ndarray,
+                    width: int = _NAME_WIDTH) -> np.ndarray:
+    """Vectorized ``_hash_name`` over an int64 array of cids -> '<U' name array.
+    Bit-identical to the scalar version: same bijection, same base-24 digit order
+    (digit 0 first), same syllable table."""
+    base = len(_SYL)
+    mult = _MULT_FIRST if salt == "F" else _MULT_LAST
+    modulus = base ** width
+    off = (seed * 2654435761 + (0 if salt == "F" else 7)) % modulus
+    m = _bijective_int_vec(cids, mult, off, modulus)
+    syl = np.array(_SYL)
+    out: np.ndarray | None = None
+    for _ in range(width):
+        part = syl[(m % base).astype(np.int64)]
+        out = part if out is None else np.char.add(out, part)
+        m = m // base
+    assert out is not None  # width >= 1
+    return out
+
+
+def _generate_realistic(n_rows: int, seed: int = 0, corruption: str = "light"
+                        ) -> tuple[pl.DataFrame, np.ndarray]:
+    """Vectorized realistic-shape generator. Bit-identical to the prior per-row
+    implementation (pinned-hash regression test) but builds every column with
+    numpy/`np.char` instead of Python list comprehensions over n_rows. The only
+    remaining per-element work is ``_apply_field_corruption``, which already loops
+    over the masked subset only and is fed Python lists so the masked-cell edits
+    stay exactly the scalar path. ~10-50x faster at scale (the single-threaded
+    per-row expansion was the QIS gen wall; see project_scale_driver_bottleneck)."""
+    n_rows = (n_rows // ROWS_PER_CLUSTER) * ROWS_PER_CLUSTER
+    n_clusters = n_rows // ROWS_PER_CLUSTER
+
+    # Each random field draws from its OWN independent stream (one draw per
+    # stream) so the first k values of an N-sized draw equal a k-sized draw:
+    # prefix stability. (See the long note in the prior implementation; the draw
+    # streams are byte-for-byte unchanged here -- only the string assembly moved
+    # from Python loops to numpy.)
+    def _field_rng(key: int):
+        return np.random.default_rng(np.random.SeedSequence([seed, 0xA11CE, key]))
+
+    cl = np.arange(n_clusters, dtype=np.int64)
+
+    # Per-cluster canonical names (vectorized _hash_name).
+    first_canon = _hash_names_vec("F", seed, cl)
+    last_canon = _hash_names_vec("L", seed, cl)
+
+    # #510 twin pass: a deterministic fraction of clusters become confusable twins
+    # (share first+last name, keep their own address/zip/email). In the scalar
+    # loop only ODD c copy their even partner (c-1); even c self-copy (no-op). The
+    # vectorized assignment reads the ORIGINAL canon (RHS evaluated first), and the
+    # even partner is never modified, so it matches the sequential result exactly.
+    corr = CORRUPTION_LEVELS[corruption]
+    if corr.ambiguous_frac > 0.0:
+        twin = cl ^ 1
+        lo = cl & ~np.int64(1)
+        h = (_bijective_int_vec(lo, _MULT_LAST, 12345, 1_000_000) % 1000) / 1000.0
+        mask = (twin < n_clusters) & (h < corr.ambiguous_frac)
+        first_canon[mask] = first_canon[lo[mask]]
+        last_canon[mask] = last_canon[lo[mask]]
+
+    _addr_mod = 10 ** _ADDR_DIGITS
+    _addr_off = (seed * _MULT_ADDR + 1) % _addr_mod
+    street_num = _bijective_int_vec(cl, _MULT_ADDR, _addr_off, _addr_mod) + 1
+    street_idx = _field_rng(1).integers(0, len(_STREETS), n_clusters)
+    address_canon = np.char.add(
+        np.char.add(street_num.astype(str), " "), np.array(_STREETS)[street_idx])
+    city_canon = np.array(_CITIES)[_field_rng(2).integers(0, len(_CITIES), n_clusters)]
+    zip_canon = np.char.rjust((cl % 100000).astype(str), 5, "0")
+    year_canon = _field_rng(3).integers(1940, 2005, n_clusters).astype(str)
+
+    cids = np.repeat(cl, ROWS_PER_CLUSTER)
+    typo = _field_rng(4).random(n_rows) < TYPO_RATE
+
+    # Per-row expansion: repeat each canonical 5x (== [canon[c] for c in cids]
+    # since cids = repeat(arange, 5)).
+    first_rows = np.repeat(first_canon, ROWS_PER_CLUSTER)
+    last_rows = np.repeat(last_canon, ROWS_PER_CLUSTER)
+    addr_rows = np.repeat(address_canon, ROWS_PER_CLUSTER)
+    city_rows = np.repeat(city_canon, ROWS_PER_CLUSTER)
+    zip_rows = np.repeat(zip_canon, ROWS_PER_CLUSTER)
+    year_rows = np.repeat(year_canon, ROWS_PER_CLUSTER)
+
+    # Same 'a' -> '@' typo on first_name (np.char.replace == str.replace: all
+    # occurrences; length-preserving so no '<U' truncation). Carries into email.
+    first_with_typo = np.where(typo, np.char.replace(first_rows, "a", "@"), first_rows)
+
+    if any(getattr(corr, f) > 0.0 for f in _CORRUPT_FIELDS):
+        ss = np.random.SeedSequence([seed, 0xC0FFEE, _CORRUPT_LEVEL_INT[corruption]])
+        streams = dict(zip(_CORRUPT_FIELDS, ss.spawn(len(_CORRUPT_FIELDS))))
+        # Feed Python lists so _apply_field_corruption's masked-cell assignment is
+        # byte-identical to the scalar path (a '<U' array would risk truncating a
+        # longer edit and stores numpy str_ not str).
+        first_out = _apply_field_corruption(
+            first_with_typo.tolist(), corr.first_name,
+            np.random.default_rng(streams["first_name"]), severity=corr.severity)
+        last_out = _apply_field_corruption(
+            last_rows.tolist(), corr.last_name,
+            np.random.default_rng(streams["last_name"]), severity=corr.severity)
+        addr_out = _apply_field_corruption(
+            addr_rows.tolist(), corr.address,
+            np.random.default_rng(streams["address"]), severity=corr.severity)
+        # Email inherits the CORRUPTED name (realistic), then its own low-rate pass.
+        email_out = [f"{f}.{l}@example.com" for f, l in zip(first_out, last_out)]
+        email_out = _apply_field_corruption(
+            email_out, corr.email,
+            np.random.default_rng(streams["email"]), severity=corr.severity)
+    else:
+        first_out = first_with_typo
+        last_out = last_rows
+        addr_out = addr_rows
+        email_out = np.char.add(np.char.add(
+            np.char.add(first_with_typo, "."), last_rows), "@example.com")
+
+    df = pl.DataFrame({
+        "id": np.char.add("r", np.arange(n_rows).astype(str)),
+        "first_name": first_out,
+        "last_name": last_out,
+        "address": addr_out,
+        "city": city_rows,
+        "zip": zip_rows,
+        "birth_year": year_rows,
+        "email": email_out,
+    })
+    return df, cids
+
+
 def generate_with_gt(n_rows: int, seed: int = 0, shape: str = "realistic",
                      corruption: str = "light"
                      ) -> tuple[pl.DataFrame, np.ndarray]:
