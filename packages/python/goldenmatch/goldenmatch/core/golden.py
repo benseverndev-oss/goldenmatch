@@ -387,17 +387,23 @@ def _stable_value_expr(
     reproducible regardless of upstream ordering. Falls back to the legacy
     order-dependent pick when the frame carries no ``__row_id__``.
     """
-    nn = pl.col(col).filter(pl.col(col).is_not_null())
+    mask = pl.col(col).is_not_null()
+    nn = pl.col(col).filter(mask)
     if strategy == "most_complete":
-        by: list[pl.Expr] = [pl.col(len_alias).filter(pl.col(col).is_not_null())]
-        desc = [True]
-        if has_row_id:
-            by.append(pl.col("__row_id__").filter(pl.col(col).is_not_null()))
-            desc.append(False)
-        return nn.sort_by(by, descending=desc).first()
+        # ONE composite sort key, not two separately-filtered keys: a list of
+        # filtered keys trips Polars' "expressions in 'sort_by' must have matching
+        # group lengths" inside group_by().agg() on some shapes. The struct
+        # ``(len, -__row_id__)`` sorted descending == (len desc, __row_id__ asc),
+        # and is a single filtered expression aligned with ``nn``.
+        key = (
+            pl.struct([pl.col(len_alias), -pl.col("__row_id__")]).filter(mask)
+            if has_row_id
+            else pl.col(len_alias).filter(mask)
+        )
+        return nn.sort_by(key, descending=True).first()
     # first_non_null: "first" becomes the lowest-__row_id__ non-null value.
     if has_row_id:
-        return nn.sort_by(pl.col("__row_id__").filter(pl.col(col).is_not_null())).first()
+        return nn.sort_by(pl.col("__row_id__").filter(mask)).first()
     return pl.col(col).drop_nulls().first()
 
 
@@ -410,14 +416,18 @@ def _stable_rid_expr(
     row wins both and ``source_row_id`` provenance stays aligned. Only invoked
     on the ``provenance=True`` branch, where ``__row_id__`` is guaranteed.
     """
-    rid = pl.col("__row_id__").filter(pl.col(col).is_not_null())
+    mask = pl.col(col).is_not_null()
+    rid = pl.col("__row_id__").filter(mask)
     if strategy == "most_complete":
-        by: list[pl.Expr] = [pl.col(len_alias).filter(pl.col(col).is_not_null())]
-        desc = [True]
-        if has_row_id:
-            by.append(rid)
-            desc.append(False)
-        return rid.sort_by(by, descending=desc).first()
+        # IDENTICAL single composite key as _stable_value_expr, so the same row
+        # wins both (row-aligned provenance). See that helper for why one struct
+        # key, not a list of filtered keys.
+        key = (
+            pl.struct([pl.col(len_alias), -pl.col("__row_id__")]).filter(mask)
+            if has_row_id
+            else pl.col(len_alias).filter(mask)
+        )
+        return rid.sort_by(key, descending=True).first()
     # first_non_null
     if has_row_id:
         return rid.sort_by(rid).first()
