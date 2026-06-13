@@ -229,3 +229,55 @@ def test_backward_compat_no_quality_scores():
     result_none = build_golden_record(df, rules, quality_scores=None)
     assert result_default["name"]["value"] == result_none["name"]["value"]
     assert abs(result_default["name"]["confidence"] - result_none["name"]["confidence"]) < 0.0001
+
+
+class TestGoldenTieBreakDeterminism:
+    """#870: survivorship value ties resolve by the stable __row_id__, so the
+    golden frame is byte-reproducible regardless of upstream multi_df row order.
+    """
+
+    @staticmethod
+    def _tied_multi_df(order: list[int]) -> pl.DataFrame:
+        # One multi-member cluster with a same-length tie ("abcd" vs "wxyz")
+        # carried on distinct __row_id__s. Lowest __row_id__ (2) must win.
+        rows = [
+            {"__row_id__": 5, "__cluster_id__": 0, "name": "wxyz"},
+            {"__row_id__": 2, "__cluster_id__": 0, "name": "abcd"},
+        ]
+        return pl.DataFrame([rows[i] for i in order])
+
+    def test_most_complete_tie_breaks_by_lowest_row_id_columnar(self):
+        from goldenmatch.core.golden import build_golden_records_df
+
+        rules = GoldenRulesConfig(default_strategy="most_complete")
+        out_a = build_golden_records_df(self._tied_multi_df([0, 1]), rules)
+        out_b = build_golden_records_df(self._tied_multi_df([1, 0]), rules)
+        # Deterministic across input row order.
+        assert out_a.sort("__cluster_id__").to_dicts() == out_b.sort("__cluster_id__").to_dicts()
+        # Tie resolves to the lowest-__row_id__ value.
+        assert out_a.filter(pl.col("__cluster_id__") == 0)["name"].item() == "abcd"
+
+    def test_first_non_null_picks_lowest_row_id_columnar(self):
+        from goldenmatch.core.golden import build_golden_records_df
+
+        rules = GoldenRulesConfig(default_strategy="first_non_null")
+        out_a = build_golden_records_df(self._tied_multi_df([0, 1]), rules)
+        out_b = build_golden_records_df(self._tied_multi_df([1, 0]), rules)
+        assert out_a.sort("__cluster_id__").to_dicts() == out_b.sort("__cluster_id__").to_dicts()
+        assert out_a.filter(pl.col("__cluster_id__") == 0)["name"].item() == "abcd"
+
+    def test_polars_native_path_deterministic_with_provenance(self):
+        from goldenmatch.core.golden import _build_golden_records_polars_native
+
+        rules = GoldenRulesConfig(default_strategy="most_complete")
+        recs_a = _build_golden_records_polars_native(
+            self._tied_multi_df([0, 1]), rules, ["name"], provenance=True
+        )
+        recs_b = _build_golden_records_polars_native(
+            self._tied_multi_df([1, 0]), rules, ["name"], provenance=True
+        )
+        assert recs_a == recs_b
+        rec0 = next(r for r in recs_a if r["__cluster_id__"] == 0)
+        # Value AND source_row_id both come from the lowest-__row_id__ tied row.
+        assert rec0["name"]["value"] == "abcd"
+        assert rec0["name"]["source_row_id"] == 2
