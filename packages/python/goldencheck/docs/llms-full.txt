@@ -234,5 +234,5 @@ read_file -> maybe_sample -> run profilers -> classify semantic types
 
 ## Links
 
-- [GitHub](https://github.com/benseverndev-oss/goldencheck)
+- [GitHub](https://github.com/benseverndev-oss/goldenmatch/tree/main/packages/python/goldencheck)
 - [Concise overview](llms.txt)

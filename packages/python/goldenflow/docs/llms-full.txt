@@ -276,5 +276,5 @@ goldenflow mcp-serve                               # MCP server
 
 ## Links
 
-- [GitHub](https://github.com/benseverndev-oss/goldenflow)
+- [GitHub](https://github.com/benseverndev-oss/goldenmatch/tree/main/packages/python/goldenflow)
 - [Concise overview](llms.txt)

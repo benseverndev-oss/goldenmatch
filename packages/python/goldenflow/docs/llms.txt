@@ -26,5 +26,5 @@
 
 ## Docs
 - [Architecture](CLAUDE.md): Full codebase guide with transform registry, domain packs, engine pipeline
-- [GitHub](https://github.com/benseverndev-oss/goldenflow): Source
+- [GitHub](https://github.com/benseverndev-oss/goldenmatch/tree/main/packages/python/goldenflow): Source
 - [Full API Reference](llms-full.txt): Extended documentation with all function signatures and usage patterns
