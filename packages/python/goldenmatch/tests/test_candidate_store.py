@@ -10,6 +10,7 @@ from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
 from goldenmatch.core import candidate_store as cs
 from goldenmatch.core.candidate_store import (
     FrameCandidateStore,
+    build_base_store,
     resolve_base_store_kind,
 )
 from goldenmatch.core.match_one import match_one
@@ -145,6 +146,31 @@ def test_resolve_auto_threshold(monkeypatch):
 def test_resolve_env_override(monkeypatch):
     monkeypatch.setenv("GOLDENMATCH_BASE_STORE", "memory")
     assert resolve_base_store_kind(10**9) == "memory"
+
+
+# ---- build_base_store factory -------------------------------------------------
+
+def test_build_base_store_defaults_to_frame(monkeypatch):
+    monkeypatch.delenv("GOLDENMATCH_BASE_STORE", raising=False)
+    store = build_base_store(_df(10))  # small, no path -> in-memory
+    assert isinstance(store, FrameCandidateStore)
+
+
+def test_build_base_store_frame_when_lance_requested_but_no_path(monkeypatch):
+    monkeypatch.setenv("GOLDENMATCH_BASE_STORE", "lance")
+    monkeypatch.setattr(cs, "lance_available", lambda: True)
+    store = build_base_store(_df(10), path=None)  # lance asked but no path
+    assert isinstance(store, FrameCandidateStore)
+
+
+@pytest.mark.skipif(not _HAS_LANCE, reason="lance not installed")
+def test_build_base_store_lance_when_configured(monkeypatch, tmp_path):
+    monkeypatch.setenv("GOLDENMATCH_BASE_STORE", "lance")
+    from goldenmatch.core.candidate_store import LanceCandidateStore
+
+    store = build_base_store(_df(10), path=str(tmp_path / "base.lance"))
+    assert isinstance(store, LanceCandidateStore)
+    assert len(store) == 10
 
 
 # ---- LanceCandidateStore parity ----------------------------------------------

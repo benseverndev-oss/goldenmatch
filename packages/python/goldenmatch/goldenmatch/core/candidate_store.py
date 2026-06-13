@@ -128,6 +128,28 @@ def lance_available() -> bool:
     return importlib.util.find_spec("lance") is not None
 
 
+def build_base_store(
+    df,
+    *,
+    path: str | None = None,
+    configured: str | None = None,
+    threshold_rows: int = 2_000_000,
+    block_column: str = _BLOCK_COL_DEFAULT,
+) -> CandidateStore:
+    """Build the candidate store for a base frame, honoring the opt-in.
+
+    Returns a ``FrameCandidateStore`` (default, in-RAM) or a
+    ``LanceCandidateStore`` (out-of-core) per :func:`resolve_base_store_kind`
+    (env ``GOLDENMATCH_BASE_STORE`` / ``configured`` / size threshold). Lance
+    requires a ``path`` to write the dataset to; without one it falls back to the
+    in-memory store. A plain install (no lance) always returns the frame store.
+    """
+    kind = resolve_base_store_kind(int(df.height), configured=configured, threshold_rows=threshold_rows)
+    if kind == "lance" and path is not None:
+        return LanceCandidateStore.from_frame(df, path, block_column=block_column)
+    return FrameCandidateStore(df)
+
+
 def resolve_base_store_kind(n_rows: int, *, configured: str | None = None, threshold_rows: int = 2_000_000) -> str:
     """Decide which base store to use: ``"memory"`` or ``"lance"``.
 
