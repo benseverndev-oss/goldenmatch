@@ -17,6 +17,14 @@ on:
 permissions:
   contents: read
 
+# Supersede in-flight scans for the same PR — an iterative re-push cancels the
+# prior CodeQL run instead of running a duplicate multi-minute scan to
+# completion. On `main` and scheduled sweeps `head_ref` is empty, so the key
+# falls back to the unique run_id and those runs are NEVER cancelled.
+concurrency:
+  group: codeql-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   analyze:
     name: "Analyze (${{ matrix.language }})"
