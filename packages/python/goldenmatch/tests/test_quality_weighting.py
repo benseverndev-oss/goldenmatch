@@ -54,12 +54,24 @@ def test_missing_row_id_col_returns_none() -> None:
 
 def test_quality_weighting_flips_survivorship() -> None:
     """The computed scores, fed to the real golden builder, make the canonical
-    spelling win a cluster where the typo would otherwise survive."""
-    scores = compute_quality_scores(_df_with_typo())
-    # A 2-member dup cluster: the typo row (56) is FIRST, so first_non_null would
-    # otherwise keep 'Californa'.
+    spelling win a cluster where the typo would otherwise survive.
+
+    Survivorship now breaks ties deterministically by lowest ``__row_id__`` (#870),
+    so the typo is placed at the LOW row_id: without quality weighting the
+    deterministic pick keeps the typo, and quality weighting flips it to canonical.
+    """
+    # Typo 'Californa' at the LOWEST row_id (0) so the unweighted first_non_null
+    # pick (lowest __row_id__) would keep it; canonical 'California' is frequent
+    # and clean, so quality weighting penalizes only the typo cell.
+    typo_df = pl.DataFrame({
+        "__row_id__": list(range(60)),
+        "name": [f"p{i}" for i in range(60)],
+        "state": ["Californa"] + ["California"] * 28 + ["Texas"] * 28 + ["Florida"] * 3,
+    })
+    scores = compute_quality_scores(typo_df)
+    assert scores is not None and (0, "state") in scores  # the typo cell is penalized
     cluster = pl.DataFrame({
-        "__row_id__": [56, 0],
+        "__row_id__": [0, 1],
         "__cluster_id__": [1, 1],
         "name": ["dup", "dup"],
         "state": ["Californa", "California"],
@@ -69,7 +81,7 @@ def test_quality_weighting_flips_survivorship() -> None:
     without = build_golden_records_batch(cluster, rules, quality_scores=None)
     with_weights = build_golden_records_batch(cluster, rules, quality_scores=scores)
 
-    assert without[0]["state"]["value"] == "Californa"        # typo survives
+    assert without[0]["state"]["value"] == "Californa"        # lowest-row_id typo survives
     assert with_weights[0]["state"]["value"] == "California"  # quality flips it
 
 
