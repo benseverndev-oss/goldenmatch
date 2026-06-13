@@ -66,9 +66,9 @@ mod tests {
         // punctuation-insensitive. "John SMITH" vs "smith john" -> 1.0.
         let vals = ["John SMITH", "smith john"];
         let m = score_matrix_impl(&vals, 2);
-        assert!((m[1] - 1.0).abs() < 1e-9); // (0,1) normalized-equal
-        // Distinct from the UN-normalized score_one(2), which would NOT be 1.0
-        // here (case + token-order differ before normalization):
+        assert!((m[1] - 1.0).abs() < 1e-9);
+        // The UN-normalized score_one(2) would NOT be 1.0 here (case +
+        // token-order differ before normalization).
         let raw = goldenmatch_score_core::score_one(2, "John SMITH", "smith john");
         assert!(raw < 1.0);
     }
