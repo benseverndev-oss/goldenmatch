@@ -17,8 +17,11 @@ Spec: ``docs/design/2026-05-25-rust-acceleration-spec.md`` §0.3.
 """
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 # The kernel is reachable two ways, tried in order:
 #   1. ``goldenmatch._native`` — the in-tree build dropped by
@@ -77,6 +80,40 @@ _GATED_ON: frozenset[str] = frozenset(
 )
 
 
+# Per-process record of which components actually dispatched to the native
+# kernel vs fell back to Python, so telemetry can report THIS run's reality
+# (#884) instead of just "the wheel is importable + the static allowlist".
+# ``native_available()`` being true does NOT mean your workload's hot loop ran
+# native -- the component may be off the ``_GATED_ON`` allowlist under ``auto``,
+# or (for backend=bucket) the numpy fast-path may have handled the block instead
+# of the kernel. This counter answers "did stage X go native on THIS run?".
+_DISPATCH_LOG: dict[str, dict[str, int]] = {}
+_AUTO_HINT_LOGGED = False
+
+
+def _record_dispatch(component: str, native: bool) -> None:
+    slot = _DISPATCH_LOG.setdefault(component, {"native": 0, "fallback": 0})
+    slot["native" if native else "fallback"] += 1
+
+
+def native_dispatch_report() -> dict[str, dict[str, int]]:
+    """Per-component ``{native, fallback}`` dispatch counts for this process.
+
+    Empty until the first ``native_enabled()`` query. Telemetry reads this to
+    report which stages ACTUALLY ran native on this run rather than the static
+    ``available`` + allowlist (#884). A component with ``native > 0`` dispatched
+    to the kernel at least once; ``fallback > 0`` means it ran the Python path
+    at least once (off the allowlist, ``GOLDENMATCH_NATIVE=0``, or the wheel
+    isn't importable).
+    """
+    return {k: dict(v) for k, v in _DISPATCH_LOG.items()}
+
+
+def reset_native_dispatch_log() -> None:
+    """Clear the per-process dispatch counters (test isolation / per-run capture)."""
+    _DISPATCH_LOG.clear()
+
+
 def native_module() -> Any:
     """The imported ``goldenmatch._native`` module (typed ``Any`` — its kernels
     are dynamically loaded), or ``None`` if unavailable. Call sites must guard
@@ -89,14 +126,34 @@ def native_available() -> bool:
 
 
 def native_enabled(component: str) -> bool:
-    """Whether to use the native kernel for ``component`` on this call."""
+    """Whether to use the native kernel for ``component`` on this call.
+
+    Records the decision (see :func:`native_dispatch_report`) and, the first
+    time it runs under ``auto`` with the kernel importable, logs a one-line hint
+    that the gated-only allowlist is in effect (set ``GOLDENMATCH_NATIVE=1`` for
+    full native acceleration on large / benchmark runs).
+    """
+    global _AUTO_HINT_LOGGED
     mode = os.environ.get("GOLDENMATCH_NATIVE", "auto").lower()
     if mode == "0":
+        _record_dispatch(component, False)
         return False
     if mode == "1":
         if _native is None:
             raise RuntimeError(
                 "GOLDENMATCH_NATIVE=1 but goldenmatch._native is not built/importable"
             )
+        _record_dispatch(component, True)
         return True
-    return _native is not None and component in _GATED_ON
+    # auto / unset: native iff importable AND signed off (in _GATED_ON).
+    if _native is not None and not _AUTO_HINT_LOGGED:
+        _AUTO_HINT_LOGGED = True
+        logger.info(
+            "goldenmatch native kernel available; running under GOLDENMATCH_NATIVE=auto "
+            "(gated set only: %s). Set GOLDENMATCH_NATIVE=1 for full native "
+            "acceleration on large / benchmark runs.",
+            sorted(_GATED_ON),
+        )
+    result = _native is not None and component in _GATED_ON
+    _record_dispatch(component, result)
+    return result

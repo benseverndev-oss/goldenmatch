@@ -66,3 +66,38 @@ def test_string_similarity_fallback_matches_native(monkeypatch):
     monkeypatch.setenv("GOLDENMATCH_NATIVE", "0")
     forced_python = native.string_similarity("Margaret Chen", "Maggie Chen", "jaro_winkler")
     assert forced_python == pytest.approx(default, abs=1e-9)
+
+
+class TestNativeDispatchReport:
+    """#884: per-run dispatch telemetry — which components ACTUALLY ran native
+    vs fell back, so `available: true` no longer misleads.
+    """
+
+    def test_records_fallback_and_resets(self, monkeypatch):
+        from goldenmatch.core import _native_loader as nl
+
+        nl.reset_native_dispatch_log()
+        assert nl.native_dispatch_report() == {}
+
+        # Force pure-Python so the decision is deterministic regardless of
+        # whether the kernel is built in this environment.
+        monkeypatch.setenv("GOLDENMATCH_NATIVE", "0")
+        assert nl.native_enabled("block_scoring") is False
+        report = nl.native_dispatch_report()
+        assert report["block_scoring"] == {"native": 0, "fallback": 1}
+
+        nl.reset_native_dispatch_log()
+        assert nl.native_dispatch_report() == {}
+
+    def test_force_native_records_native_when_available(self, monkeypatch):
+        from goldenmatch.core import _native_loader as nl
+
+        nl.reset_native_dispatch_log()
+        monkeypatch.setenv("GOLDENMATCH_NATIVE", "1")
+        if not nl.native_available():
+            # =1 requires the wheel; absent it, raise (and record nothing).
+            with pytest.raises(RuntimeError):
+                nl.native_enabled("block_scoring")
+            return
+        assert nl.native_enabled("block_scoring") is True
+        assert nl.native_dispatch_report()["block_scoring"]["native"] >= 1

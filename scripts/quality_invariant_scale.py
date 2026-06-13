@@ -815,11 +815,26 @@ def run_rung(n_rows: int, seed: int = 0, shape: str = "realistic",
     # native-on/off witness. Prior runs silently fell back to pure-Python; this
     # ends that ambiguity.
     try:
-        from goldenmatch.core._native_loader import _GATED_ON, native_available
+        from goldenmatch.core._native_loader import (
+            _GATED_ON,
+            native_available,
+            native_dispatch_report,
+        )
+        # #884: report which stages ACTUALLY ran native on this run, not just
+        # that the wheel is importable. `available: true` does not mean your
+        # hot loop dispatched to the kernel (off-allowlist under `auto`, or the
+        # bucket numpy fast-path handled the block instead).
+        dispatched = native_dispatch_report()
+        ran_native = sorted(c for c, d in dispatched.items() if d.get("native", 0) > 0)
+        ran_fallback = sorted(c for c, d in dispatched.items() if d.get("fallback", 0) > 0)
         native_info = {
             "available": bool(native_available()),
             "env_gate": os.environ.get("GOLDENMATCH_NATIVE", "auto"),
             "gated_on_components": sorted(_GATED_ON),
+            "dispatched": dispatched,
+            "ran_native": ran_native,
+            "ran_fallback": ran_fallback,
+            "hot_path_native": ("block_scoring" in ran_native) or ("clustering" in ran_native),
         }
     except Exception as e:
         native_info = {"_capture_error": repr(e)[:120]}
