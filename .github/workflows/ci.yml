@@ -425,7 +425,17 @@ jobs:
                       --ignore=packages/python/goldenmatch/tests/test_mcp_and_watch.py \
                       --ignore=packages/python/goldenmatch/tests/test_embedder.py \
                       --ignore=packages/python/goldenmatch/tests/test_llm_boost.py \
-                      --ignore=packages/python/goldenmatch/tests/test_autoconfig_benchmarks.py"
+                      --ignore=packages/python/goldenmatch/tests/test_autoconfig_benchmarks.py \
+                      --deselect=packages/python/goldenmatch/tests/test_qis_harness.py::test_moderate_oracle_f1_in_target_band \
+                      --deselect=packages/python/goldenmatch/tests/test_qis_harness.py::test_qis_run_determinism_and_golden_shape \
+                      --deselect=packages/python/goldenmatch/tests/test_qis_harness.py::test_qis_native_parity"
+              # The 3 heavy test_qis_harness frozen-rung tests each run a full
+              # dedupe (the determinism one runs TWO) -- bench-style #510
+              # validation, NOT unit tests. Under -n auto they OOM-kill xdist
+              # workers; in the serial lane they blow the 300s timeout. They're
+              # covered by the bench-quality-invariant-scale workflow + locally.
+              # The FAST harness tests (corruption logic, aggregator) still run
+              # here. Mirrors the test_autoconfig_benchmarks ignore above. (#876)
               ;;
             infermap)
               IGNORE="--ignore=packages/python/infermap/benchmark"
@@ -453,15 +463,15 @@ jobs:
             # their lines.
             #   - test_controller_adaptive_e2e: the FULL real auto-config
             #     iteration loop on a 100K adversarial fixture (the heaviest).
-            #   - test_qis_harness: #510 slow tests each run a full frozen-rung
-            #     dedupe (the determinism one runs TWO) -- same xdist-OOM/segfault
-            #     pattern ("worker gwN crashed"). See #876.
             #   - test_memory_e2e: a full dedupe + sibling-SQLite review-queue
             #     round-trip whose memory_stats.stale count is timing-sensitive
             #     under heavy xdist load (passes standalone; flaked once the
             #     qis_harness move reshuffled the -n auto worker distribution).
             #     Serial = deterministic. See #876.
-            SERIAL_HEAVY="packages/python/goldenmatch/tests/test_controller_adaptive_e2e.py packages/python/goldenmatch/tests/test_qis_harness.py packages/python/goldenmatch/tests/test_memory_e2e.py"
+            # (test_qis_harness's 3 frozen-rung tests are NOT here -- they're
+            #  --deselect'd above as bench-style validation; the file's FAST unit
+            #  tests run in the normal -n auto pass.)
+            SERIAL_HEAVY="packages/python/goldenmatch/tests/test_controller_adaptive_e2e.py packages/python/goldenmatch/tests/test_memory_e2e.py"
           fi
           # --durations=20 surfaces the slowest tests in the CI log (#433).
           if [ -n "$SERIAL_HEAVY" ]; then
