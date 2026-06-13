@@ -5,6 +5,7 @@ See ``docs/superpowers/specs/2026-05-12-identity-graph-design.md``.
 """
 from __future__ import annotations
 
+from goldenmatch.identity.migrate_ids import MigrationReport, migrate_record_ids
 from goldenmatch.identity.model import (
     EdgeKind,
     EventKind,
@@ -30,6 +31,7 @@ from goldenmatch.identity.store import IdentityStore, new_entity_id
 
 __all__ = [
     "IdentityView",
+    "MigrationReport",
     "ResolveSummary",
     "find_by_record",
     "find_conflicts",
@@ -38,6 +40,7 @@ __all__ = [
     "list_entities",
     "manual_merge",
     "manual_split",
+    "migrate_record_ids",
     "resolve_clusters",
     "EdgeKind",
     "EventKind",
