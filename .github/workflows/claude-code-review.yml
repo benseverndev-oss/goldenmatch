@@ -3,15 +3,27 @@ name: Claude Code Review
 on:
   pull_request:
     types: [opened, synchronize, ready_for_review, reopened]
-    # Optional: Only run on specific file changes
-    # paths:
-    #   - "src/**/*.ts"
-    #   - "src/**/*.tsx"
-    #   - "src/**/*.js"
-    #   - "src/**/*.jsx"
+    # Skip the paid LLM review on docs-only PRs. paths-ignore (a denylist) is
+    # used instead of a `paths:` allowlist so the review still runs on any code
+    # change without having to enumerate every package dir in this polyglot
+    # monorepo — the review is suppressed only when ALL changed files are docs.
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'docs-site/**'
+      - 'context-network/**'
+      - '**/*.png'
+      - '**/*.svg'
+      - 'LICENSE'
 
 permissions:
   contents: read
+
+# Supersede in-flight reviews for the same PR — an iterative re-push cancels the
+# prior (paid) LLM review instead of running the superseded one to completion.
+concurrency:
+  group: claude-review-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
 
 jobs:
   claude-review:
