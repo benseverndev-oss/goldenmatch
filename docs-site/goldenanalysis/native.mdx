@@ -36,3 +36,20 @@ In-tree dev build (no maturin needed):
 ```bash
 uv run python scripts/build_analysis_native.py
 ```
+
+## TypeScript: opt-in WASM (browser / edge / Node)
+
+The TypeScript port (`goldenanalysis` on npm) reaches the **same `analysis-core` crate** via WebAssembly — the TS analogue of the Python native wheel. Same posture: pure-TS is the default and the byte-identical fallback; WASM is an explicit upgrade for large columns.
+
+```ts
+import { aggregate, enableAnalysisWasm, disableAnalysisWasm } from "goldenanalysis";
+
+await enableAnalysisWasm();                  // async: loads the .wasm once
+const h = aggregate.histogram(values, 256);  // now runs in WASM (Float64 array crosses zero-copy)
+const q = aggregate.quantile(values, 0.9);   // the sort runs in Rust
+disableAnalysisWasm();                        // back to pure-TS
+```
+
+- **Covered ops:** `histogram` / `quantile` — the numeric reductions where the win lives (a `Float64Array` crosses the boundary zero-copy and the quantile sort runs in Rust). Everything else in `aggregate` stays pure-TS.
+- **Opt-in, edge-safe, parity-gated** exactly like the scorer WASM backend in `goldenmatch`: pure-TS is the default + fallback, the `.wasm` is built in CI (never committed), and a CI lane asserts WASM ≈ pure-TS to 4 decimals. The plumbing is shared with `goldenmatch` via the `goldenmatch-wasm-runtime` package.
+- **Build locally:** `bash packages/rust/extensions/analysis-wasm/build_wasm.sh` (needs the rustup `wasm32-unknown-unknown` target + `wasm-bindgen-cli`).

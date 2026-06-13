@@ -118,6 +118,25 @@ All scorers implement the same interface as Python `goldenmatch.core.scorer`:
 
 The two `*_jw` scorers are refdata-aware and edge-safe: their bundled lookup tables (a given-name alias corpus and the US Census 2010 top-10k surname table) ship inside the npm package, generated from the Python source of truth and drift-guarded in CI. Auto-config swaps them in automatically for first-name and last-name columns. See [Reference Data](/goldenmatch/reference-data) for the algorithms.
 
+## Optional WASM acceleration
+
+The pure-TS scorers run everywhere (browser, Workers, edge, Node) with zero dependencies — that's the default. For workloads that score large blocks you can **optionally** swap in a WebAssembly backend that wraps the same Rust `score-core` kernel the Python package and the SQL UDFs use:
+
+```ts
+import { dedupe, enableWasm, disableWasm } from "goldenmatch";
+
+await enableWasm();        // async: loads + instantiates the .wasm once
+const result = await dedupe(rows, { /* ... */ }); // covered scorers now run in WASM
+disableWasm();             // back to pure-TS (e.g. for test isolation)
+```
+
+- **Opt-in; pure-TS stays the default and the fallback.** Default users download and parse **zero** wasm bytes (the loader/glue/bytes load only on `enableWasm()`). It returns `false` (pure-TS stays active) on any load failure; pass `{ require: true }` to throw instead.
+- **Covered scorers:** `jaro_winkler` / `levenshtein` / `token_sort` / `exact` — the ops `score-core` implements. Every other scorer always stays pure-TS, even when WASM is enabled. The swap is at the NxN block boundary (one JS↔WASM crossing per block, never per pair).
+- **Edge-safe + portable:** Node, browsers, and Workers. The `.wasm` ships inside the npm package; the loader resolves it at runtime.
+- **Parity-guaranteed:** the WASM kernel *is* rapidfuzz, and the pure-TS scorers are aligned with rapidfuzz to 4 decimals — so enabling WASM does not change results, it just runs them faster.
+
+`goldenanalysis` exposes the same opt-in pattern for its aggregation primitives via `enableAnalysisWasm()` — see [GoldenAnalysis › Native accelerator](/goldenanalysis/native).
+
 ## Blocking Strategies
 
 - `static` — single blocking key with transforms
