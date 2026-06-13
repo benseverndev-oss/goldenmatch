@@ -13,10 +13,13 @@ The third bridge (quality-gated review) is deliberately NOT swept: it downgrades
 borderline auto-merges to a HUMAN review queue, so in a fully-automated benchmark
 it is recall-negative by construction. It stays opt-in for review workflows.
 
-Datasets: Febrl3 (synthetic PII corruption) + NCVR (voter corruption) are the
-proving ground -- these bridges target person-data typos/variants. DQbench is the
-non-regression guard (composite must hold >= ~91.04). DBLP-ACM is bibliographic
-(non-regression only -- the bridges should not move it).
+Datasets: Febrl3 (synthetic PII corruption) + NCVR (voter corruption; the
+committed synthetic NCVR-shaped fixture in CI) are the proving ground -- these
+bridges target person-data typos/variants. DQbench (~41 min/run) and DBLP-ACM
+(bibliographic; the bridges should not move it) are deliberately dropped from
+the iterative A/B: a 3-config sweep over them blew the CI 90-min cap for zero
+signal on these gates. If a DQbench ``composite`` result is ever present in the
+run, the verdict still guards it as a non-regression floor (see ``_gate_report``).
 
 Benchmarks OOM the dev box; run this in CI (``bench-quality-bridges.yml``). Each
 run honours ``run_benchmarks.py``'s dataset auto-pull / graceful-skip.
@@ -39,13 +42,20 @@ GATES = {
     "fd_negative_evidence": "GOLDENMATCH_FD_NEGATIVE_EVIDENCE",
 }
 # datasets the gate's stated criterion is judged on (person-data corruption).
-TARGET_DATASETS = {"Febrl3", "NCVR"}
-DQBENCH_FLOOR = 91.04  # v1.12 committed composite; the non-regression guard.
+# "NCVR-synthetic" is the CI fallback label when the real (gitignored) NCVR
+# sample is absent -- run_benchmarks.py labels it distinctly, so include both.
+TARGET_DATASETS = {"Febrl3", "NCVR", "NCVR-synthetic"}
+# Datasets swept per config. DQbench (~41 min) and DBLP-ACM are dropped -- see
+# the module docstring. NCVR still imports dqbench_adapters, so the workflow's
+# dqbench install stays even though "dqbench" is no longer a swept dataset.
+SWEEP_DATASETS = ("febrl3", "ncvr")
+DQBENCH_FLOOR = 91.04  # v1.12 committed composite; guarded only if present.
 
 
 def _run(gate_env: dict[str, str], out_path: Path, datasets_dir: Path | None) -> dict:
-    """Run the full benchmark suite once with ``gate_env`` applied; return the
-    parsed ``{name: result}`` map. Missing datasets are silently absent."""
+    """Run each ``SWEEP_DATASETS`` benchmark once with ``gate_env`` applied and
+    return the merged ``{name: result}`` map. One JSON artifact is written per
+    dataset (``<stem>-<dataset>.json``). Missing datasets are silently absent."""
     env = dict(os.environ)
     env["GOLDENMATCH_AUTOCONFIG_MEMORY"] = "0"  # clean numbers, no cross-run cache
     # Reset both gates off, then apply the requested overrides, so each run is
@@ -53,13 +63,18 @@ def _run(gate_env: dict[str, str], out_path: Path, datasets_dir: Path | None) ->
     for var in GATES.values():
         env[var] = "0"
     env.update(gate_env)
-    cmd = [sys.executable, str(RUNNER), "--datasets", "all", "--output", str(out_path)]
-    if datasets_dir is not None:
-        cmd += ["--datasets-dir", str(datasets_dir)]
-    print(f"[ab] running: {' '.join(f'{k}={v}' for k, v in gate_env.items()) or 'baseline'}", flush=True)
-    subprocess.run(cmd, check=True, env=env, cwd=str(REPO_ROOT))
-    data = json.loads(out_path.read_text())
-    return {r["name"]: r for r in data.get("results", [])}
+    label = " ".join(f"{k}={v}" for k, v in gate_env.items()) or "baseline"
+    merged: dict = {}
+    for ds in SWEEP_DATASETS:
+        ds_path = out_path.with_name(f"{out_path.stem}-{ds}.json")
+        cmd = [sys.executable, str(RUNNER), "--datasets", ds, "--output", str(ds_path)]
+        if datasets_dir is not None:
+            cmd += ["--datasets-dir", str(datasets_dir)]
+        print(f"[ab] running {ds}: {label}", flush=True)
+        subprocess.run(cmd, check=True, env=env, cwd=str(REPO_ROOT))
+        data = json.loads(ds_path.read_text())
+        merged.update({r["name"]: r for r in data.get("results", [])})
+    return merged
 
 
 def _fmt(x) -> str:
@@ -101,15 +116,18 @@ def _gate_report(label: str, base: dict, on: dict) -> tuple[str, bool | None]:
                     target_f1_up = True
                 if m == "precision" and d <= -0.005:
                     target_precision_drop = True
-    # Advisory verdict against each gate's STATED criterion.
+    # Advisory verdict against each gate's STATED criterion. dqbench_ok is True
+    # by default and only tightens if a DQbench composite happens to be present
+    # (it isn't in the default Febrl3+NCVR sweep), so the guard is a no-op floor.
+    guard = "" if dqbench_ok else ", DQbench REGRESSED"
     if label == "quality_aware_blocking":
-        # recall-up / no precision regression / DQbench non-regression
+        # recall-up / no precision regression / (DQbench non-regression if swept)
         passed = target_recall_up and not target_precision_drop and dqbench_ok
-        crit = "recall up on a corruption set, precision flat, DQbench non-regression"
+        crit = "recall up on a corruption set, precision flat" + guard
     else:  # fd_negative_evidence
-        # F1/precision up / no recall loss / DQbench non-regression
+        # F1/precision up / no recall loss / (DQbench non-regression if swept)
         passed = target_f1_up and not target_recall_drop and dqbench_ok
-        crit = "F1 up on a corruption set, no recall loss, DQbench non-regression"
+        crit = "F1 up on a corruption set, no recall loss" + guard
     verdict = "✅ CLEARS" if passed else "❌ does not clear"
     lines += ["", f"**Advisory verdict: {verdict}** — criterion: {crit}.", ""]
     return "\n".join(lines), passed

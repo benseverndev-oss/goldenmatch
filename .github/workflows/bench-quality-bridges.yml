@@ -16,7 +16,9 @@ permissions:
 jobs:
   ab-sweep:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    # Febrl3 + NCVR-synthetic only (DQbench's ~41 min/run is dropped from the
+    # iterative A/B); 3 configs x 2 fast datasets + install fits comfortably.
+    timeout-minutes: 45
     permissions:
       contents: read
     steps:
@@ -55,9 +57,9 @@ jobs:
         shell: bash
         env:
           GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
-          # DBLP-ACM auto-pulls from Leipzig (override if it 404s); NCVR points
-          # at a hosted 10k sample if available, else the runner skips it.
-          GOLDENMATCH_DBLP_ACM_URL: ${{ vars.DBLP_ACM_URL }}
+          # NCVR points at a hosted 10k sample if the repo var is set; otherwise
+          # run_benchmarks.py falls back to the committed synthetic NCVR-shaped
+          # fixture (labelled "NCVR-synthetic"). DBLP-ACM is no longer swept.
           GOLDENMATCH_NCVR_SAMPLE_URL: ${{ vars.NCVR_SAMPLE_URL }}
         run: |
           set -euo pipefail
