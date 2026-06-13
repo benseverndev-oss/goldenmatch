@@ -858,6 +858,116 @@ def run_rung(n_rows: int, seed: int = 0, shape: str = "realistic",
     }
 
 
+def _run_phase5_and_collect(
+    df: pl.DataFrame, n_partitions: int = 64,
+) -> tuple[dict[int, list[int]], float]:
+    """Run the REAL Phase-5 distributed engine; return (predicted_members,
+    dedup_wall_s) by reading the cluster assignments it wrote.
+
+    This is the distributed counterpart to the in-memory ``dedupe_df`` path. It
+    drives ``run_dedupe_pipeline_distributed`` under
+    ``GOLDENMATCH_DISTRIBUTED_PIPELINE=2`` (block-shuffle scoring +
+    randomized-contraction WCC) -- NOT ``dedupe_df(backend="ray")``, which is the
+    in-memory Phase-2 cheat-line and never exercises the distributed engine. The
+    ``assignments_output_path`` hook persists the membership the engine produced
+    so it can be oracle-scored (golden records are one row per cluster and can't be).
+    """
+    import ray  # lazy: the [ray] extra is cluster-only
+
+    from goldenmatch.distributed.pipeline import run_dedupe_pipeline_distributed
+
+    # Phase-5 contract: a GLOBAL __row_id__. Member ids ARE the row index, so the
+    # oracle ``cids[member]`` aligns (row i's identity is gt cids[i]).
+    if "__row_id__" not in df.columns:
+        df = df.with_row_index("__row_id__")
+
+    # Recall-complete distributed path. block-shuffle is default-on (#867); set it
+    # explicitly and force the distributed WCC (threshold=0) so the run can't fall
+    # to the driver-collect scipy path at the 50M-pair boundary. The WCC scratch
+    # MUST be a shared gs:// path on a multi-node cluster -- a node-local path
+    # silently breaks the cross-node parquet reads in the per-round checkpoint
+    # (the #867 guard raises instead of under-merging).
+    os.environ.setdefault("GOLDENMATCH_ENABLE_DISTRIBUTED_RAY", "1")
+    os.environ["GOLDENMATCH_DISTRIBUTED_PIPELINE"] = "2"
+    os.environ["GOLDENMATCH_DISTRIBUTED_BLOCK_SHUFFLE"] = "1"
+    os.environ.setdefault("GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD", "0")
+    scratch = os.environ.get("GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH", "")
+    if not scratch.startswith("gs://"):
+        raise SystemExit(
+            "distributed QIS requires GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH=gs://<bucket>/... "
+            "(a shared scratch the randomized-contraction WCC checkpoints to; a "
+            "node-local path breaks cross-node reads)."
+        )
+    assignments_path = f"{scratch.rstrip('/')}/qis_assignments_{df.height}"
+
+    cfg = load_frozen_config()
+
+    ds = ray.data.from_arrow(df.to_arrow()).repartition(n_partitions)
+    t0 = time.time()
+    run_dedupe_pipeline_distributed(
+        ds,
+        config=cfg,
+        confidence_required=False,
+        allow_red_config=True,
+        output_path=None,  # skip the golden WRITE; golden is still built (real path)
+        assignments_output_path=assignments_path,
+    )
+    dedup_wall = time.time() - t0
+
+    # Read the assignments the engine wrote ({member_id, cluster_id, ...}) and
+    # build predicted multi-member clusters. Driver-side group_by: scoring is
+    # driver-side by design and score_quality is O(N) (~3 GB at 200M).
+    assign_pdf = ray.data.read_parquet(assignments_path).to_pandas()
+    grouped = (
+        pl.from_pandas(assign_pdf[["member_id", "cluster_id"]])
+        .group_by("cluster_id")
+        .agg(pl.col("member_id"))
+    )
+    predicted: dict[int, list[int]] = {}
+    for cid, members in zip(
+        grouped["cluster_id"].to_list(), grouped["member_id"].to_list(),
+    ):
+        if members is not None and len(members) > 1:
+            predicted[int(cid)] = [int(m) for m in members]
+    return predicted, dedup_wall
+
+
+def run_distributed_rung(
+    n_rows: int, seed: int = 0, shape: str = "realistic",
+    corruption: str = "moderate", n_partitions: int = 64,
+) -> dict:
+    """A QIS rung run through the REAL Phase-5 distributed engine, oracle-scored.
+
+    Same fixture + frozen config + oracle scoring as the single-box ladder, so the
+    output dict is directly comparable to ``run_rung``'s -- only the engine differs
+    (distributed Phase-5 vs in-memory bucket). Extends the published 1K->100M curve
+    to the distributed 100M (cross-check vs single-box) + 200M (new) rungs.
+    """
+    os.environ.setdefault("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
+    t0 = time.time()
+    df, cids = generate_with_gt(n_rows, seed=seed, shape=shape, corruption=corruption)
+    t_gen = time.time() - t0
+
+    predicted, t_dedupe = _run_phase5_and_collect(df, n_partitions=n_partitions)
+    metrics = score_quality(predicted, cids)
+    multi = sum(1 for v in predicted.values() if len(v) > 1)
+
+    return {
+        "rows": int(n_rows),
+        "corruption": corruption,
+        "config_mode": "frozen",
+        "engine": "distributed-phase5",
+        "backend": "ray-phase5",
+        "n_partitions": n_partitions,
+        "clusters_gt": int(np.unique(cids).size),
+        "wall_s": {"generate": round(t_gen, 2), "dedupe": round(t_dedupe, 2),
+                   "total": round(t_gen + t_dedupe, 2)},
+        "rss_mb_peak": _peak_rss_mb(),
+        **metrics,
+        "multi_member_clusters": multi,
+    }
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--rows", type=int, default=1000)
@@ -885,12 +995,41 @@ def main(argv=None) -> int:
                     help="rebuild + save the frozen config from a fresh 1K auto-config "
                          "run (do this only when the fixture/moderate level changes), "
                          "then exit.")
+    ap.add_argument("--distributed", action="store_true",
+                    help="run the rung through the REAL Phase-5 distributed engine "
+                         "(GOLDENMATCH_DISTRIBUTED_PIPELINE=2: block-shuffle + "
+                         "randomized-contraction WCC) on a Ray cluster, then oracle-score "
+                         "the cluster assignments. Always uses the frozen config. Needs the "
+                         "[ray] extra + a multi-node cluster + a shared gs:// "
+                         "GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH. This is the distributed "
+                         "counterpart to --backend ray, which is only the in-memory cheat-line.")
+    ap.add_argument("--partitions", type=int, default=64,
+                    help="Ray Dataset partition count for --distributed (default 64).")
+    ap.add_argument("--wcc-scratch", type=str, default=None,
+                    help="shared gs:// scratch dir for the distributed WCC + assignments "
+                         "(--distributed only). Sets GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH so "
+                         "the head process has it (env vars don't propagate through ray submit). "
+                         "MUST be gs:// on multi-node.")
     ap.add_argument("--out", type=Path, default=None, help="write per-rung JSON here")
     args = ap.parse_args(argv)
+
+    if args.wcc_scratch:
+        os.environ["GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH"] = args.wcc_scratch
 
     if args.rebuild_frozen_config:
         build_frozen_config(seed=args.seed, corruption="moderate")
         print(f"rebuilt frozen config -> {_FROZEN_CONFIG_PATH}")
+        return 0
+
+    if args.distributed:
+        res = run_distributed_rung(
+            args.rows, seed=args.seed, shape=args.shape,
+            corruption=args.corruption, n_partitions=args.partitions,
+        )
+        res["shape"] = args.shape
+        print(json.dumps(res, indent=2, default=str))
+        if args.out:
+            args.out.write_text(json.dumps(res, indent=2, default=str), encoding="utf-8")
         return 0
 
     res = run_rung(args.rows, seed=args.seed, shape=args.shape, backend=args.backend,

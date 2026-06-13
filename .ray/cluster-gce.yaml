@@ -82,6 +82,14 @@ available_node_types:
     resources: {}
     node_config:
       machineType: n2-standard-16
+      # cloud-platform scope so the node's default compute SA can read+write the
+      # gs:// WCC scratch + assignments in the distributed (PIPELINE=2) run. The
+      # SA still needs Storage IAM on the bucket; default scopes omit storage,
+      # which silently breaks the cross-node parquet checkpoints.
+      serviceAccounts:
+        - email: default
+          scopes:
+            - https://www.googleapis.com/auth/cloud-platform
       disks:
         - boot: true
           autoDelete: true
@@ -97,6 +105,11 @@ available_node_types:
     resources: {}
     node_config:
       machineType: n2-standard-16
+      # See ray_head_default: storage scope for the distributed gs:// scratch.
+      serviceAccounts:
+        - email: default
+          scopes:
+            - https://www.googleapis.com/auth/cloud-platform
       disks:
         - boot: true
           autoDelete: true

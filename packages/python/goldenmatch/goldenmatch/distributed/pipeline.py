@@ -110,6 +110,7 @@ def _run_phase5_pipeline(
     confidence_required: bool = True,
     config: Any | None = None,
     allow_red_config: bool = False,
+    assignments_output_path: str | None = None,
     **kwargs: Any,
 ):
     """Phase 5 streaming: score -> cluster -> golden -> write, no driver take-alls.
@@ -160,6 +161,19 @@ def _run_phase5_pipeline(
     #    boundaries, so per-partition Union-Find would under-merge; route to
     #    build_clusters_distributed(algorithm="randomized_contraction") instead.
     assignments_ds = _phase5_cluster(raw_pairs_ds, cfg)
+
+    # 3b. Optional observability hook: persist the distributed-WCC clustering
+    #     ({member_id, cluster_id, cluster_size, oversized}) before it's consumed
+    #     by golden. Opt-in (default None = no behavior change); used by the QIS
+    #     distributed-quality harness to oracle-score the membership the engine
+    #     actually produced (golden alone can't be scored -- it's one row per
+    #     cluster). On multi-node this MUST be a shared path (gs://...) for the
+    #     same reason the WCC scratch must be.
+    if assignments_output_path is not None:
+        logger.info(
+            "phase5: writing cluster assignments to %s", assignments_output_path,
+        )
+        assignments_ds.write_parquet(assignments_output_path)
 
     # 4. Distributed hash join: annotate rows with __cluster_id__ (multi-member
     #    only). No broadcast member->cid dict.
