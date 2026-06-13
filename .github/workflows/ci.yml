@@ -844,8 +844,12 @@ jobs:
       - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
         with:
           path: .turbo
-          key: turbo-${{ github.sha }}
-          restore-keys: turbo-
+          # Lockfile-keyed (NOT github.sha — that's unique per commit, so the
+          # cache cold-started every push). restore-keys lets a new lockfile
+          # still warm-start from the latest prior turbo cache; turbo
+          # integrity-checks its own entries, so a stale hit self-corrects.
+          key: turbo-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: turbo-${{ runner.os }}-
       # `lint` is omitted: every TS package's lint script is currently identical
       # to its typecheck script (`tsc --noEmit`), so running both wastes a turbo
       # task per package on cold runs. Re-add `lint` here when ESLint lands and
@@ -860,6 +864,7 @@ jobs:
     # informational benchmark. The artifact-free wasm-backend/wasm-fallback unit
     # tests already run in the `typescript` lane above.
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
@@ -898,6 +903,7 @@ jobs:
     # informational benchmark. The artifact-free goldenanalysis tests + the
     # shared goldenmatch-wasm-runtime build run in the `typescript` lane above.
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
