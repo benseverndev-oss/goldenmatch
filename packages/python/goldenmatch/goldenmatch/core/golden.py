@@ -373,6 +373,57 @@ def _dispatch_custom_strategy(
     return _most_complete(non_null, quality_weights)
 
 
+def _stable_value_expr(
+    col: str, len_alias: str | None, strategy: str, has_row_id: bool
+) -> pl.Expr:
+    """Survivor-value expr for ``col`` with a deterministic tie-break (#870).
+
+    Survivorship resolved value ties by input row order (``sort_by(len).first()``
+    / ``drop_nulls().first()``), but the ``multi_df`` row order is not itself
+    stable run-to-run, so equally-valid tied survivors (e.g. same-length
+    ``name`` vs ``n@me``) were picked arbitrarily and the golden frame came out
+    byte-different across reruns of an identical input + config. Break ties by
+    the lowest ``__row_id__`` (the stable per-input-row id) so the pick is
+    reproducible regardless of upstream ordering. Falls back to the legacy
+    order-dependent pick when the frame carries no ``__row_id__``.
+    """
+    nn = pl.col(col).filter(pl.col(col).is_not_null())
+    if strategy == "most_complete":
+        by: list[pl.Expr] = [pl.col(len_alias).filter(pl.col(col).is_not_null())]
+        desc = [True]
+        if has_row_id:
+            by.append(pl.col("__row_id__").filter(pl.col(col).is_not_null()))
+            desc.append(False)
+        return nn.sort_by(by, descending=desc).first()
+    # first_non_null: "first" becomes the lowest-__row_id__ non-null value.
+    if has_row_id:
+        return nn.sort_by(pl.col("__row_id__").filter(pl.col(col).is_not_null())).first()
+    return pl.col(col).drop_nulls().first()
+
+
+def _stable_rid_expr(
+    col: str, len_alias: str | None, strategy: str, has_row_id: bool
+) -> pl.Expr:
+    """``__row_id__`` of the survivor chosen by :func:`_stable_value_expr`.
+
+    Uses the IDENTICAL filter + sort key as the value expr so the same physical
+    row wins both and ``source_row_id`` provenance stays aligned. Only invoked
+    on the ``provenance=True`` branch, where ``__row_id__`` is guaranteed.
+    """
+    rid = pl.col("__row_id__").filter(pl.col(col).is_not_null())
+    if strategy == "most_complete":
+        by: list[pl.Expr] = [pl.col(len_alias).filter(pl.col(col).is_not_null())]
+        desc = [True]
+        if has_row_id:
+            by.append(rid)
+            desc.append(False)
+        return rid.sort_by(by, descending=desc).first()
+    # first_non_null
+    if has_row_id:
+        return rid.sort_by(rid).first()
+    return rid.first()
+
+
 def _build_golden_records_polars_native(
     multi_df: pl.DataFrame,
     rules: GoldenRulesConfig,
@@ -400,10 +451,13 @@ def _build_golden_records_polars_native(
       - all values null: skipped (matches merge_field)
     """
     strategy = rules.default_strategy
+    # #870: break survivorship value ties by the stable __row_id__ so the
+    # golden frame is reproducible regardless of upstream multi_df row order.
+    has_row_id = "__row_id__" in multi_df.columns
     if strategy == "most_complete":
         # For each user col compute (winner_value, all_same_flag) per cluster.
         # winner is the non-null value with the longest string length;
-        # ties broken by row order (Polars stable sort).
+        # ties broken by lowest __row_id__ (was: by row order).
         len_col_aliases = {col: f"__len_{col}__" for col in user_cols}
         prepped = multi_df.with_columns([
             pl.col(col).cast(pl.Utf8).str.len_chars().alias(alias)
@@ -411,35 +465,19 @@ def _build_golden_records_polars_native(
         ])
         agg_exprs: list = []
         for col in user_cols:
-            # sort_by(descending=True).first() picks the longest non-null
-            # value, matching the prior top_k_by(by=..., k=1, reverse=False)
-            # intent. top_k_by mis-binds args on newer Polars where
-            # 'reverse' is no longer a kwarg; sort_by is stable across
-            # Polars 0.20+. See #362.
             agg_exprs.append(
-                pl.col(col).filter(pl.col(col).is_not_null())
-                .sort_by(
-                    pl.col(len_col_aliases[col]).filter(pl.col(col).is_not_null()),
-                    descending=True,
-                )
-                .first().alias(f"__val_{col}__")
+                _stable_value_expr(col, len_col_aliases[col], "most_complete", has_row_id)
+                .alias(f"__val_{col}__")
             )
             agg_exprs.append(
                 pl.col(col).drop_nulls().n_unique().alias(f"__nuniq_{col}__")
             )
             if provenance:
-                # Pick __row_id__ with the IDENTICAL filter + sort key as the
-                # value above, so the same physical row wins both (Polars
-                # stable sort guarantees alignment). All three exprs filter on
-                # the same ``col.is_not_null()`` predicate, so they stay
-                # row-aligned. All-null column -> empty filter -> first() None.
+                # __row_id__ of the winning value -- IDENTICAL sort key, so the
+                # same physical row wins both (row-aligned provenance).
                 agg_exprs.append(
-                    pl.col("__row_id__").filter(pl.col(col).is_not_null())
-                    .sort_by(
-                        pl.col(len_col_aliases[col]).filter(pl.col(col).is_not_null()),
-                        descending=True,
-                    )
-                    .first().alias(f"__rid_{col}__")
+                    _stable_rid_expr(col, len_col_aliases[col], "most_complete", has_row_id)
+                    .alias(f"__rid_{col}__")
                 )
         agg = (
             prepped.group_by("__cluster_id__", maintain_order=True)
@@ -449,16 +487,17 @@ def _build_golden_records_polars_native(
         agg_exprs = []
         for col in user_cols:
             agg_exprs.append(
-                pl.col(col).drop_nulls().first().alias(f"__val_{col}__")
+                _stable_value_expr(col, None, "first_non_null", has_row_id)
+                .alias(f"__val_{col}__")
             )
             agg_exprs.append(
                 pl.col(col).drop_nulls().n_unique().alias(f"__nuniq_{col}__")
             )
             if provenance:
-                # row_id of the first non-null value (same filter + first()).
+                # __row_id__ of the chosen (lowest-__row_id__) non-null value.
                 agg_exprs.append(
-                    pl.col("__row_id__").filter(pl.col(col).is_not_null())
-                    .first().alias(f"__rid_{col}__")
+                    _stable_rid_expr(col, None, "first_non_null", has_row_id)
+                    .alias(f"__rid_{col}__")
                 )
         agg = (
             multi_df.group_by("__cluster_id__", maintain_order=True)
@@ -551,6 +590,8 @@ def build_golden_records_df(
             "call build_golden_records_batch for slow-path strategies."
         )
     user_cols = [c for c in multi_df.columns if not c.startswith("__")]
+    # #870: deterministic tie-break by stable __row_id__ (see _stable_value_expr).
+    has_row_id = "__row_id__" in multi_df.columns
 
     same_strategy_conf = 1.0
     diff_strategy_conf = 0.7 if strategy == "most_complete" else 0.6
@@ -564,9 +605,12 @@ def build_golden_records_df(
 
     # Aggregation. Two strategies, matching the existing
     # _build_golden_records_polars_native semantics exactly:
-    #   - most_complete: pick the LONGEST non-null value (sort_by len DESC).
-    #     "Caroline" wins over "Carol" because it's more complete.
-    #   - first_non_null: pick the FIRST non-null value (drop_nulls().first()).
+    #   - most_complete: pick the LONGEST non-null value, ties broken by lowest
+    #     __row_id__ (#870). "Caroline" wins over "Carol" because it's more
+    #     complete; "name" vs "n@me" (same length) deterministically picks the
+    #     lower-__row_id__ row instead of input order.
+    #   - first_non_null: pick the lowest-__row_id__ non-null value (was: first
+    #     in input row order, which is not stable run-to-run).
     # Both record n_unique so the confidence assignment can branch on whether
     # the cluster agreed.
     agg_exprs: list[pl.Expr] = []
@@ -580,12 +624,8 @@ def build_golden_records_df(
         ])
         for col in user_cols:
             agg_exprs.append(
-                pl.col(col).filter(pl.col(col).is_not_null())
-                .sort_by(
-                    pl.col(len_col_aliases[col]).filter(pl.col(col).is_not_null()),
-                    descending=True,
-                )
-                .first().alias(col)
+                _stable_value_expr(col, len_col_aliases[col], "most_complete", has_row_id)
+                .alias(col)
             )
             agg_exprs.append(
                 pl.col(col).drop_nulls().n_unique().alias(f"__nuniq_{col}__")
@@ -593,7 +633,9 @@ def build_golden_records_df(
     else:  # first_non_null
         agg_input = multi_df
         for col in user_cols:
-            agg_exprs.append(pl.col(col).drop_nulls().first().alias(col))
+            agg_exprs.append(
+                _stable_value_expr(col, None, "first_non_null", has_row_id).alias(col)
+            )
             agg_exprs.append(
                 pl.col(col).drop_nulls().n_unique().alias(f"__nuniq_{col}__")
             )
