@@ -201,6 +201,34 @@ def split_cmd(
     console.print(f"[green]Split[/green] {len(out['moved'])} records -> new id {out['new_entity_id'][:8]}...")
 
 
+@identity_app.command("migrate-ids")
+def migrate_ids_cmd(
+    path: str = typer.Option(DEFAULT_PATH, "--path"),
+    dsn: str | None = typer.Option(None, "--dsn", envvar="GOLDENMATCH_IDENTITY_DSN"),
+    dry_run: bool = typer.Option(False, "--dry-run",
+        help="Report what would change; mutate nothing."),
+) -> None:
+    """Migrate persisted record ids from the legacy \":hash:\" scheme to \":h1:\"."""
+    from goldenmatch.identity import migrate_record_ids
+    if dsn:
+        store = IdentityStore(backend="postgres", connection=dsn)
+    else:
+        store = _open(path)  # reuses the existing not-found guard
+    try:
+        rpt = migrate_record_ids(store, dry_run=dry_run)
+    except NotImplementedError as e:
+        err_console.print(f"[red]{e}[/red]")
+        raise typer.Exit(code=2)
+    finally:
+        store.close()
+    tag = "[dry-run] " if rpt.dry_run else ""
+    console.print(
+        f"{tag}scanned={rpt.scanned} rewritten={rpt.rewritten} merged={rpt.merged} "
+        f"clashed_distinct_entity={rpt.clashed_distinct_entity} "
+        f"kept_unfingerprintable={rpt.kept_unfingerprintable} "
+        f"edges_repointed={rpt.edges_repointed}")
+
+
 @identity_app.command("migrate")
 def migrate_cmd(
     dsn: str = typer.Option(

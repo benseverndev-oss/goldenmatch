@@ -46,6 +46,26 @@ from goldenmatch.identity.store import IdentityStore, new_entity_id
 
 log = logging.getLogger("goldenmatch.identity.resolve")
 
+_LEGACY_SCHEME_WARNED = False
+
+
+def _warn_legacy_scheme_once(n: int, *, kill_switch: bool = False) -> None:
+    global _LEGACY_SCHEME_WARNED
+    if _LEGACY_SCHEME_WARNED:
+        return
+    _LEGACY_SCHEME_WARNED = True
+    if kill_switch:
+        msg = ('GOLDENMATCH_IDENTITY_ID_SCHEME=hash forces the legacy ":hash:" id '
+               'scheme, removed in GoldenMatch 2.0. Unset it and run '
+               '`goldenmatch identity migrate-ids`.')
+    else:
+        msg = (f'{n} record(s) resolved via the legacy ":hash:" identity-id scheme, '
+               'removed in GoldenMatch 2.0. Run `goldenmatch identity migrate-ids` '
+               'to rewrite persisted ids to the canonical ":h1:" scheme.')
+    log.warning(msg)
+    import warnings
+    warnings.warn(msg, DeprecationWarning, stacklevel=2)
+
 
 @dataclass
 class ResolveSummary:
@@ -399,6 +419,16 @@ def resolve_clusters(
         )
         if chosen in _existing_by_id:
             preflight_existing[chosen] = _existing_by_id[chosen]
+
+    _legacy_resolved = sum(
+        1 for irid, candidates in _rowid_candidates.items()
+        if (ch := rowid_to_recid[irid]) != _rowid_primary[irid]
+        and ch in _existing_by_id and ":hash:" in ch
+    )
+    if _id_scheme() == "hash":
+        _warn_legacy_scheme_once(_legacy_resolved, kill_switch=True)
+    elif _legacy_resolved:
+        _warn_legacy_scheme_once(_legacy_resolved)
 
     # 2. Scored pair lookup canonicalized by record_id pair.
     pair_score_by_recpair: dict[tuple[str, str], float] = {}
