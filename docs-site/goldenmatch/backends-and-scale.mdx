@@ -86,6 +86,34 @@ The recall-complete path is opt-in; the default per-partition path is unchanged.
   Debug the prep-versus-kernel split for the bucket backend with `GOLDENMATCH_BUCKET_DEBUG=1`. It prints a per-bucket prep / kernel / post-filter timing breakdown. It is off by default, costs nothing, and does not change output.
 </Note>
 
+## Native acceleration
+
+`pip install goldenmatch` ships the optional Rust kernel (`goldenmatch-native`) on common platforms, and the pure-Python paths run unchanged when it is absent. The `GOLDENMATCH_NATIVE` environment variable has **three** modes:
+
+| `GOLDENMATCH_NATIVE` | Behaviour |
+|---|---|
+| unset / `auto` (default) | Use the kernel **only** for the signed-off components: `clustering`, `block_scoring`, `pairs`, `featurize`, `hashing`. Everything else runs pure-Python. |
+| `1` | Use the kernel for **every** component that has one; raise if the wheel is not importable. |
+| `0` | Force the pure-Python path everywhere. |
+
+<Warning>
+  **For at-scale and benchmark runs, set `GOLDENMATCH_NATIVE=1`.** Under the default `auto`, only the allowlisted components dispatch to the kernel; a heavy stage that is not yet on the allowlist silently runs pure-Python. `1` turns the kernel on everywhere it exists.
+</Warning>
+
+**"Available" does not mean "your hot loop ran native."** The wheel being importable makes the native telemetry report `available: true` regardless of whether the stage that dominates *your* wall actually dispatched to the kernel — for example, the `bucket` backend's vectorized **numpy** fast-path handles many blocks instead of the native scoring kernel. Result telemetry therefore reports the per-run dispatch reality, not just availability:
+
+```json
+"native": {
+  "available": true,
+  "env_gate": "1",
+  "ran_native": ["block_scoring", "clustering", "hashing"],
+  "ran_fallback": [],
+  "hot_path_native": true
+}
+```
+
+`ran_native` / `ran_fallback` list the components that actually dispatched to the kernel vs fell back on this run; `hot_path_native` is true when the scoring or clustering stage went native. When the kernel is importable but `GOLDENMATCH_NATIVE` is unset, a one-line `INFO` log notes that `auto` is in effect and that `=1` enables full acceleration.
+
 <Card title="Scale envelope" icon="gauge-high" href="/concepts/scale-envelope">
   The block-size failure modes that matter more than the backend choice.
 </Card>
