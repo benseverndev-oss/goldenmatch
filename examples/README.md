@@ -19,6 +19,10 @@ Runnable demos for the Golden Suite, organized by host.
 - **TypeScript / edge runtime?** → [`typescript/01-quickstart.ts`](typescript/01-quickstart.ts), [`typescript/02-edge-runtime.ts`](typescript/02-edge-runtime.ts). Orchestrating the whole suite? → [`typescript/04-goldenpipe-orchestration.ts`](typescript/04-goldenpipe-orchestration.ts).
 - **Working in SQL / a warehouse?** → [`sql/duckdb_core_apis.sql`](sql/duckdb_core_apis.sql) or [`sql/postgres_core_apis.sql`](sql/postgres_core_apis.sql) for the SQL-native core API + GoldenFlow transforms.
 
+## Running at scale
+
+These scripts use toy data. Before you point one at millions of rows, read the **[Tuning & opt-ins reference](https://docs.bensevern.dev/goldenmatch/tuning)** — it lists every runtime flag (native acceleration, backend selection, the distributed pipeline) with defaults and when-to-use guidance. The two that most often catch people: `GOLDENMATCH_NATIVE=1` (so a missing native wheel fails loudly instead of running 100x slower in pure Python) and the fact that `backend="ray"` alone does *not* distribute (you need `GOLDENMATCH_DISTRIBUTED_PIPELINE=2`).
+
 ## Convention
 
 Every example is **standalone and small** — pick one, copy it, adapt it. The Airflow DAGs are production-shaped (idempotent, observable, fail-loud); the Python and TypeScript scripts are notebook-shaped (toy data inline, no I/O assumptions). Don't deploy the scripts as-is — promote them into a real pipeline shape (see Airflow examples for the reference target).
