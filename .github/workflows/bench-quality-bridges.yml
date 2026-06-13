@@ -1,0 +1,74 @@
+name: bench-quality-bridges
+
+# A/B proving sweep for the GoldenCheck->GoldenMatch quality bridges
+# (FD-driven negative evidence + quality-aware blocking), both env-gated
+# default-OFF. Runs the real-dataset benchmark with each gate OFF (baseline)
+# then ON in isolation and posts a per-gate delta table + advisory verdict to
+# the step summary, so the maintainer can decide the default flip from evidence.
+# Manual only -- the datasets are large / license-restricted, same posture as
+# benchmarks.yml.
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  ab-sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+
+      - name: Check prereqs
+        id: prereqs
+        shell: bash
+        run: |
+          # Same gating as benchmarks.yml: forks without dataset access exit 0
+          # with a notice rather than failing.
+          if [ "${{ vars.RUN_BENCHMARKS }}" != "true" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Benchmarks not configured::Set repo var RUN_BENCHMARKS=true and provide dataset access to enable. See docs/ci-lanes.md"
+            exit 0
+          fi
+          echo "configured=true" >> "$GITHUB_OUTPUT"
+
+      - name: Install
+        if: steps.prereqs.outputs.configured == 'true'
+        run: |
+          uv sync --all-packages
+          # recordlinkage powers Febrl3; dqbench's ER adapter is the git version
+          # (PyPI 1.0.0 is detection-only) -- same as benchmarks.yml.
+          uv pip install recordlinkage || true
+          uv pip install "git+https://github.com/benseverndev-oss/dqbench" || true
+
+      - name: Run A/B quality-bridge sweep
+        if: steps.prereqs.outputs.configured == 'true'
+        shell: bash
+        env:
+          GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+          # DBLP-ACM auto-pulls from Leipzig (override if it 404s); NCVR points
+          # at a hosted 10k sample if available, else the runner skips it.
+          GOLDENMATCH_DBLP_ACM_URL: ${{ vars.DBLP_ACM_URL }}
+          GOLDENMATCH_NCVR_SAMPLE_URL: ${{ vars.NCVR_SAMPLE_URL }}
+        run: |
+          set -euo pipefail
+          uv run python scripts/bench_quality_bridges.py \
+            --summary-md "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload A/B artifacts
+        if: always() && steps.prereqs.outputs.configured == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: quality-bridges-ab-${{ github.run_id }}
+          path: .ab_quality_bridges/*.json
+          retention-days: 90
+          if-no-files-found: warn
