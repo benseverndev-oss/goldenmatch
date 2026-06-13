@@ -118,7 +118,16 @@ def test_most_complete_strategy_uses_sort_by_not_top_k_by():
 
     from goldenmatch.core import golden
 
-    src = inspect.getsource(golden._build_golden_records_polars_native)
+    # The sort_by-based survivor pick lives in the shared _stable_value_expr /
+    # _stable_rid_expr helpers (#870), which the native builder delegates to.
+    src = "\n".join(
+        inspect.getsource(fn)
+        for fn in (
+            golden._build_golden_records_polars_native,
+            golden._stable_value_expr,
+            golden._stable_rid_expr,
+        )
+    )
     # Strip comment lines so the historical-context comment can stay.
     code_lines = [
         ln for ln in src.splitlines()
