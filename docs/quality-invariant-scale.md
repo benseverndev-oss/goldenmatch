@@ -7,23 +7,25 @@ cluster F1 against a ground-truth oracle across a 1K→…→100M ladder.
 
 ## TL;DR
 
-- **Quality is scale-invariant through 10M** under a fixed config: pairwise F1
-  0.9352 → 0.9364 → 0.9362 at 1K / 1M / 10M (Δ ≤ 0.0012, inside the targets),
-  precision flat at 0.888–0.890, recall flat at 0.988.
+- **Recall is scale-invariant to 100M** (dead-flat 0.988 across 1K→100M), and
+  **B-cubed + cluster F1 stay inside target to 100M** — under a single fixed
+  config, validated on a 503 GB box. The #876 recall-preserving blocking holds
+  perfectly where the old config OOM'd by 10M.
+- **Pairwise F1**: 0.9352 → 0.9364 → 0.9362 → 0.9342 through 1K/1M/10M/25M (inside
+  ±0.005), then a gentle precision-driven drift to 0.9314 at 50M (−0.0038, still
+  in) and 0.9266 at 100M (−0.0086, just out). It's a **scoring-side
+  fuzzy-FP-grows-with-N effect, not a blocking/recall failure** — and ~milder than
+  the pre-#876 drift at 10× less scale.
 - **The audit found and fixed TWO real auto-config scale bugs.**
   1. A `phonetic_identity` matchkey (`soundex(name)+year`, an *exact* identity
      claim) that manufactured cross-cluster matches at scale (precision
      0.91→0.82 over 1K→1M, OOM at 25M). Fixed by gating phonetic on a *specific*
      anchor.
   2. **Blocking selection was not scale-invariant (#876).** The frozen config
-     blocked on a single bounded-cardinality key (`zip`), whose block size grows
-     ∝ N — so beyond ~1M, precision drifted *down* (0.890 → 0.855 at 10M) and the
-     candidate-pair count exploded (3B+ at 25M, making it impractical). **Fixed**
-     (see below); after the fix precision is flat through 10M and the larger
-     rungs run in practical time.
-- **No residual quality drift.** The 10M precision drop documented in the prior
-  revision of this report was the #876 blocking bug, not a clustering or recall
-  failure. With scale-invariant blocking it is gone.
+     blocked on a single bounded-cardinality key (`zip`), whose block grows ∝ N —
+     a candidate-pair explosion (3B+ at 25M) that drifted precision and OOM'd.
+     Fixed with a type-aware cardinality projector + a scale-safe
+     `[zip, birth_year]` bounded compound — recall now flat to 100M.
 
 ## Methodology
 
@@ -153,36 +155,70 @@ auto-config tests + the QIS-harness suite stay green.
 
 ## Results (frozen `[zip, birth_year]` config, post-both-fixes)
 
-| rows | pairwise F1 | Δpw | precision | recall | B-cubed F1 | cluster F1 | Δcl | wall | PASS |
-|------|-------------|-----|-----------|--------|------------|------------|-----|------|------|
-| 1,000 (oracle) | 0.9352 | — | 0.8877 | 0.9880 | 0.9698 | 0.8923 | — | — | ✅ |
-| 1,000,000 | 0.9364 | +0.0012 | 0.8902 | 0.9878 | 0.9702 | 0.8957 | +0.0034 | 58s / 5.5 GB | ✅ |
-| 10,000,000 | 0.9362 | +0.0010 | 0.8895 | 0.9882 | 0.9702 | 0.8962 | +0.0039 | 1155s / 49.2 GB | ✅ |
-| 25,000,000 | _landing_ | | | | | | | | |
-| 50,000,000 | _landing_ | | | | | | | | |
-| 100,000,000 | _landing_ | | | | | | | | |
+| rows | pairwise F1 | Δpw | precision | recall | B-cubed F1 | Δb³ | cluster F1 | Δcl | peak RSS |
+|------|-------------|-----|-----------|--------|------------|-----|------------|-----|----------|
+| 1,000 (oracle) | 0.9352 | — | 0.888 | 0.988 | 0.9698 | — | 0.892 | — | — |
+| 1,000,000 | 0.9364 | +0.0012 | 0.890 | 0.988 | 0.9702 | +0.0004 | 0.896 | +0.003 | 6 GB |
+| 10,000,000 | 0.9362 | +0.0010 | 0.890 | 0.988 | 0.9702 | +0.0004 | 0.896 | +0.004 | 49 GB |
+| 25,000,000 | 0.9342 | −0.0010 | 0.886 | 0.988 | 0.9695 | −0.0003 | 0.894 | +0.002 | 69 GB |
+| 50,000,000 | 0.9314 | −0.0038 | 0.881 | 0.988 | 0.9685 | −0.0013 | 0.892 | ~0 | 138 GB |
+| 100,000,000 | 0.9266 | −0.0086 | 0.872 | 0.988 | 0.9667 | −0.0031 | 0.887 | −0.005 | 276 GB |
 
-(1K on the dev box; 1M/10M on the `large-new-64GB` bench runner, `backend=bucket`;
-25M–100M on `backend=duckdb` for out-of-core headroom. Each rung is a
-`bench-quality-invariant-scale.yml` dispatch.)
+Targets: Δpairwise ≤ 0.005, Δb-cubed ≤ 0.005, Δcluster ≤ 0.01. (1K on the dev box;
+1M/10M on the `large-new-64GB` bench runner; 25M–100M on a single `n2-highmem-64`
+GCP box, 503 GB — the 64 GB runners cap this shape at ~10M. All `backend=bucket`,
+native kernel on, `GOLDENMATCH_NATIVE_ADDRESS_NORMALIZE=1` + slim-projection flags.)
 
-**Verdict:** quality is scale-invariant **through 10M** — every delta inside
-target, precision flat (the prior 10M drift is gone), recall dead-flat at 0.988.
-The 25M–100M rungs extend the curve and are landing on the bench runner; with
-bounded blocking they run in practical time (the 3B-pair explosion that blocked
-them is gone).
+**Verdict — two clean results and one honest residual:**
+
+1. **Recall is dead-flat at 0.988 across the entire 1K→100M range.** This is the
+   load-bearing #876 result: the recall-preserving `[zip, birth_year]` blocking
+   holds perfectly to 100M (no candidate-pair explosion, no recall loss). The
+   pre-#876 zip-only config drifted and OOM'd by 10M; this runs clean to 100M.
+
+2. **By the cluster-level metrics (B-cubed, cluster F1), quality is scale-invariant
+   to 100M** — both stay inside target (Δb³ −0.0031, Δcl −0.005 at 100M).
+
+3. **Residual precision drift (scoring-side, gentle).** Precision eases from 0.890
+   (1M) to 0.872 (100M), pulling the most-sensitive metric — *pairwise* F1 — inside
+   target through ~50M (−0.0038) and just outside at 100M (−0.0086). Cause: the
+   `[zip, birth_year]` joint domain is ~6.5M cells (100K zips × ~65 years); at 100M
+   rows ≈ 20M clusters that's ~3 clusters per cell, so the densest cells carry
+   cross-cluster pairs and a growing fraction trip the fuzzy threshold. It is a
+   **fuzzy-false-positive-grows-with-entity-count effect, not a blocking or recall
+   failure** — and it is *milder* than the pre-#876 zip-only drift (−0.02 at 10M)
+   at 10× the scale. Tightening it further is a scoring-threshold / blocking-key
+   question (a finer compound, or a TF-adjusted fuzzy threshold), tracked as a
+   #876 follow-up; it does not affect the recall/cluster invariance claim.
+
+**Memory + practicality.** Peak RSS is ~sublinear-to-linear: 49 GB at 10M → 276 GB
+at 100M. 200M projects to ~550 GB, over a single 503 GB box, so it needs a bigger
+single box (m1/m2 ultramem) or the distributed (`backend=ray`) path. Wall is
+dominated by the bucket fuzzy-scoring loop (~100K pairs/s; the native kernel does
+not change it for this scorer config) and the pure-Python prep, not blocking.
+
+**Distributed-engine check (in progress).** A `backend=ray` 100M run validates
+whether the distributed pipeline (partitioned scoring + distributed WCC) holds the
+same quality as the 0.9266 single-box baseline or under-merges (the #844
+driver-materialization risk). Result to be folded in here.
 
 ## Reproduction
 
 ```bash
-# One rung (frozen config = the published methodology):
-python scripts/quality_invariant_scale.py --rows 1000000 --corruption moderate \
-  --frozen --backend bucket --out rung_1m.json
+# One rung (frozen config = the published methodology). The env flags are NOT
+# optional at scale: GOLDENMATCH_NATIVE=1 engages the native kernel for the gated
+# components, and NATIVE_ADDRESS_NORMALIZE=1 keeps the matchkey-transform precompute
+# off the per-row Python path (otherwise it dominates the wall at 25M+). This is
+# exactly the env block in bench-quality-invariant-scale.yml.
+GOLDENMATCH_NATIVE=1 GOLDENMATCH_NATIVE_ADDRESS_NORMALIZE=1 \
+GOLDENMATCH_BUCKET_SLIM_PROJECTION=1 GOLDENMATCH_GOLDEN_SLIM_MULTIDF=1 \
+GOLDENMATCH_AUTOCONFIG_MEMORY=0 POLARS_SKIP_CPU_CHECK=1 \
+python scripts/quality_invariant_scale.py --rows 100000000 --corruption moderate \
+  --frozen --backend bucket --out rung_100m.json
 
-# Mid/large-ladder rungs on the bench runner:
-gh workflow run bench-quality-invariant-scale.yml --ref feat/510-quality-invariant-scale \
-  -f rows=10000000 -f corruption=moderate -f frozen=true -f backend=bucket \
-  -f runner=large-new-64GB -f label=10m
+# 1M/10M fit the large-new-64GB bench runner; 25M-100M need a big-mem box (this
+# curve used a single n2-highmem-64 / 503 GB GCP box). 200M (~550 GB RSS) needs
+# m1/m2-ultramem or the distributed backend=ray path.
 
 # Aggregate a directory of per-rung JSONs into the table + verdict:
 python scripts/qis_aggregate.py results_dir/

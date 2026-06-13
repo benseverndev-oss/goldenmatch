@@ -1133,10 +1133,12 @@ GoldenMatch includes a gold-themed interactive terminal UI:
 
 ## Environment Variables
 
-Key environment variables for tuning and hardening GoldenMatch:
+Key environment variables for tuning and hardening GoldenMatch. This is a curated subset — for **every** `GOLDENMATCH_*` variable with verified defaults and when-to-use guidance, see the [Tuning & opt-ins reference](https://docs.bensevern.dev/goldenmatch/tuning).
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `GOLDENMATCH_NATIVE` | `auto` | Native Rust kernel gate. `auto` uses it for signed-off components when the wheel is importable; **`1` requires it and fails loud** (use on scale/bench runs so a missing wheel can't silently fall back to 100x-slower pure Python); `0` forces Python. |
+| `GOLDENMATCH_NATIVE_ADDRESS_NORMALIZE` | *(off)* | Set to `1` for the Polars-native address-normalize fast path (skips the per-row Python plugin slog on address-heavy data at scale). |
 | `GOLDENMATCH_ALLOWED_ROOT` | *(unset)* | Opt-in path sandbox. When set, every user-supplied file path (MCP tools, ingest, rollback, lineage, domain registry) must resolve under this directory. Raises `PathOutsideAllowedRootError` on escape. Recommended for network-exposed deployments (e.g. the Railway MCP server sets it to the `/data` volume). |
 | `GOLDENMATCH_AUTOCONFIG_MEMORY` | `1` | Set to `0` to disable cross-run auto-config memory (`~/.goldenmatch/autoconfig_memory.db`). Useful in CI. |
 | `GOLDENMATCH_AUTOCONFIG_LLM` | `0` | Set to `1` to enable LLM policy fallback when heuristic auto-config rules are exhausted. Requires `OPENAI_API_KEY`. |

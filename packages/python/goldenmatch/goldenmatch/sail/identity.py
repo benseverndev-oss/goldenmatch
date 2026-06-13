@@ -21,6 +21,23 @@ from typing import Any
 _ENT_PREFIX = "ent:h1:"
 _ENT_HASH_LEN = 16  # 64 bits of hex; collision-safe for entity populations.
 
+# --- frozen wire schema (the public contract, #859) ----------------------------
+# The column order/names of each produced frame. A downstream store persists these
+# verbatim, so they are the stable contract; the contract test pins them, and a
+# consumer (e.g. the golden-showcase IdentityGraph seam) maps onto them. The edge
+# frame carries full provenance: endpoints (record_a_id, record_b_id), the pair
+# ``score``, the ``matchkey_name`` that fired, and the ``run_name`` (run id).
+NODE_COLUMNS = (
+    "entity_id", "status", "merged_into", "golden_record",
+    "confidence", "dataset", "created_at", "updated_at",
+)
+RECORD_COLUMNS = ("record_id", "entity_id", "dataset", "first_seen_at", "last_seen_at")
+EDGE_COLUMNS = (
+    "entity_id", "record_a_id", "record_b_id", "kind",
+    "score", "matchkey_name", "run_name", "dataset", "recorded_at",
+)
+EVENT_COLUMNS = ("entity_id", "kind", "run_name", "dataset", "recorded_at")
+
 
 # --- pure helpers (no pyspark; locally testable, parity-by-construction) ---
 
@@ -270,11 +287,44 @@ def build_source_records(
     )
 
 
+def build_identity_events(
+    entity_ids: Any,
+    *,
+    run_meta: dict[str, Any],
+) -> Any:
+    """One ``CREATED`` event per entity (store-parity bookkeeping).
+
+    The optional ``events`` frame mirrors the one-box append-only event log's
+    create rows, so a downstream store can replay them. Columns: ``EVENT_COLUMNS``.
+    """
+    from pyspark.sql import functions as F
+
+    return entity_ids.select(
+        "entity_id",
+        F.lit("CREATED").alias("kind"),
+        F.lit(run_meta["run_name"]).alias("run_name"),
+        F.lit(run_meta.get("dataset")).alias("dataset"),
+        F.lit(run_meta["recorded_at"]).alias("recorded_at"),
+    )
+
+
 @dataclass
 class IdentityGraphFrames:
+    """The distributed identity graph as four Spark frames (S5 create path).
+
+    The stable public contract (#859): ``nodes`` (one per entity, ``NODE_COLUMNS``),
+    ``records`` (record->entity assignment, ``RECORD_COLUMNS``), ``edges``
+    (``same_as`` evidence with full provenance, ``EDGE_COLUMNS``), and an optional
+    ``events`` frame (one ``CREATED`` row per entity, ``EVENT_COLUMNS``). Each frame
+    is a distributed Spark DataFrame, written as parquet, never collected to the
+    driver. Incremental absorb/merge is the deferred Layer 2 (honest-null): on a
+    fresh store every cluster is a create, which is the common case.
+    """
+
     nodes: Any
     records: Any
     edges: Any
+    events: Any = None
 
 
 def build_identity_graph(
@@ -287,10 +337,15 @@ def build_identity_graph(
     source_col: str = "__source__",
     source_pk_col: str | None = None,
     id_col: str = "__row_id__",
+    with_events: bool = True,
 ) -> IdentityGraphFrames:
     """Produce the create-path identity graph as distributed Spark frames.
-    Layer 1 only (create + same_as edges); incremental absorb/merge is the
-    deferred Layer 2 (honest-null).
+
+    Layer 1 only (create + ``same_as`` edges + ``CREATED`` events); incremental
+    absorb/merge against an existing store is the deferred Layer 2 (honest-null,
+    driver-side as the Ray path left it). ``run_meta`` carries ``run_name`` (the
+    run id stamped onto edges/events), ``recorded_at``, and optional ``dataset`` /
+    ``matchkey_name``. Set ``with_events=False`` to skip the bookkeeping frame.
     """
     from pyspark.sql import functions as F
 
@@ -313,4 +368,5 @@ def build_identity_graph(
     records = build_source_records(
         assignments, recid_map, entity_ids, run_meta=run_meta
     )
-    return IdentityGraphFrames(nodes=nodes, records=records, edges=edges)
+    events = build_identity_events(entity_ids, run_meta=run_meta) if with_events else None
+    return IdentityGraphFrames(nodes=nodes, records=records, edges=edges, events=events)

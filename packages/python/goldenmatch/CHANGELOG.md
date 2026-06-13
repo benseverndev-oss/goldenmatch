@@ -6,6 +6,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Added
+- **Stable Python IdentityGraph API for the Sail tier (#859).** The S5
+  identity-on-Sail create path now ships a frozen, documented, contract-testable
+  public surface: `from goldenmatch.sail import IdentityGraphFrames,
+  build_identity_graph` (imports without the `[sail]` extra — pyspark is lazy
+  inside the builders, so a consumer can pin the signature with `inspect` and no
+  Spark runtime). `IdentityGraphFrames` gains the optional `events` frame
+  (`IdentityGraphFrames(nodes, records, edges, events?)`, completing the S5
+  shape); `build_identity_graph(..., with_events=True)` emits one `CREATED` row
+  per entity. The frozen per-frame wire schema is exported as `NODE_COLUMNS` /
+  `RECORD_COLUMNS` / `EDGE_COLUMNS` / `EVENT_COLUMNS` — the edge frame carries
+  full provenance (`record_a_id`, `record_b_id`, `score`, `matchkey_name`,
+  `run_name`). **Incremental resolution (absorb/merge against an existing store)
+  remains the deferred Layer 2, honest-null:** on a fresh store every cluster is
+  a create, which is the common case. Pinned by `tests/test_sail_identity_contract.py`
+  (runs in the normal lane, no Spark). Unblocks downstream consumers that depend
+  on a released identity-graph contract.
+
 ### Performance
 - **Fellegi-Sunter block scoring ~3.5x faster on tiny-block / multi-pass shapes
   (PR #869).** The probabilistic (`type: probabilistic`) numpy scoring path was
