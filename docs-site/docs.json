@@ -77,6 +77,7 @@
                 "group": "API reference",
                 "pages": [
                   "goldenmatch/configuration",
+                  "goldenmatch/tuning",
                   "goldenmatch/api-quick-reference"
                 ]
               }
