@@ -1,0 +1,85 @@
+# GoldenAnalysis
+
+> Read-only, cross-cutting analysis & reporting for the Golden Suite. Consumes any stage's typed artifacts (or a raw polars DataFrame) and emits one unified, exportable AnalysisReport — plus trend and regression detection across runs, no ground truth required.
+
+## Interfaces
+- Python API: `import goldenanalysis as ga` — `analyze()`, `analyze_match()`, `analyze_pipeline()`, `AnalysisReport`, `Metric`, `ReportHistory`, `RegressionPolicy`
+- CLI: `goldenanalysis report <file>`, `goldenanalysis trend`, `goldenanalysis regressions` (CI gate via `--fail-on-regression`), `goldenanalysis mcp-serve`
+- MCP Server: `goldenanalysis mcp-serve` (4 read-only tools: `list_analyzers`, `analyze_frame`, `get_trend`, `detect_regressions`). Also aggregated through `goldensuite-mcp`.
+- TypeScript / Edge: `npm install goldenanalysis` — edge-safe core; optional WASM via `await enableAnalysisWasm()` swaps in the Rust `analysis-core` histogram/quantile kernels
+
+## Install
+- `pip install goldenanalysis` — generic frame path, zero suite dependencies (works on any polars DataFrame)
+- `pip install goldenanalysis[match,check,flow,pipe]` — suite adapters (report over GoldenMatch / GoldenCheck / GoldenFlow / GoldenPipe outputs)
+- `pip install goldenanalysis[native]` — optional Rust accelerator (histogram / quantile, 5.8-9.9x on Linux)
+- TypeScript: `npm install goldenanalysis`
+
+## Quick Examples
+
+### Analyze any DataFrame (zero suite deps)
+```python
+import polars as pl
+import goldenanalysis as ga
+
+df = pl.read_parquet("customers.parquet")
+report = ga.analyze(df, analyzers=["frame.summary"])
+print(report.to_markdown())
+report.to_json("report.json")
+report.to_parquet("report.parquet")   # long-form metric frame + table sidecars
+```
+
+### Report over a suite stage
+```python
+report = ga.analyze_match(dedupe_result)     # -> match.rates + cluster.distribution
+report = ga.analyze_pipeline(pipe_result)    # every analyzer whose artifacts are present
+```
+
+### Trend + regression detection across runs (no ground truth)
+```python
+hist = ga.ReportHistory(backend="jsonl", path=".golden/analysis.jsonl")  # or backend="sqlite"
+hist.append(report)                                  # keyed by (dataset, run_id)
+hist.trend("cluster.singleton_ratio", "customers")   # -> TrendSeries
+
+policy = ga.RegressionPolicy(default_pct=10.0, per_metric={"match.recall_safe_bound": 2.0})
+regs = hist.detect_regressions("customers", baseline="rolling_median", policy=policy)
+print(report.to_markdown(regs))                      # callout + Δ-vs-baseline column
+```
+
+CLI CI gate:
+```bash
+goldenanalysis report customers.parquet --analyzers frame.summary --format markdown
+goldenanalysis regressions --dataset customers --history .golden/analysis.jsonl \
+  --policy "match.recall_safe_bound=2" --fail-on-regression   # exit 1 on a flagged regression
+```
+
+## Analyzers (metric namespaces)
+- `frame.*` — row_count, column_count, null_ratio_mean, duplicate_row_ratio, memory_bytes, summary
+- `match.*` — match_rate, pair_count, mean_pair_score, threshold, rates; `recall_estimate` (when GoldenMatch ran `dedupe_df(..., certify=True)`), `recall_safe_bound` (with an audit-calibrated certificate)
+- `cluster.*` — count, record_count, distribution, singleton_ratio, reduction_ratio, size_max
+- `flow.*` — rows_changed, rules_fired
+
+Each metric carries a `direction` (higher_better / lower_better); regression thresholds respect it (a higher_better metric only flags on a drop).
+
+## Key Types
+- `AnalysisReport` — `.to_markdown()`, `.to_json()`, `.to_parquet()`; `.metrics` (list of `Metric`)
+- `Metric` — name, value, direction, unit, optional table sidecar
+- `ReportHistory` — append + query saved runs (`backend="jsonl"` or `"sqlite"`), keyed by (dataset, run_id)
+- `RegressionPolicy` — per-metric thresholds + default; `Baseline` strategy = `rolling_median` (default, immune to one noisy night) / `previous` / `last_known_good`
+
+## GoldenCheck vs GoldenAnalysis
+GoldenCheck profiles a single input dataset at ingest (a producer of findings). GoldenAnalysis is read-only and cross-cutting: it consumes any stage's outputs (including GoldenCheck's), trends across runs, and NEVER writes data. The hard line: GoldenAnalysis depends on other packages' types; never the reverse.
+
+## Native accelerator (optional)
+`pip install goldenanalysis[native]` pulls the separate `goldenanalysis-native` wheel (`analysis-core` pyo3-free + `analysis-native` abi3). `histogram` and `quantile` dispatch to the Rust kernel — byte-identical to the pure-Python reference and 5.8-9.9x faster on Linux x86_64 at 1M-10M rows (including the list→Arrow conversion). Pure Python stays the default + reference; `GOLDENANALYSIS_NATIVE=0` forces pure. The same `analysis-core` kernels back the optional TypeScript WASM path.
+
+## Docs
+- [PyPI](https://pypi.org/project/goldenanalysis/)
+- [npm](https://www.npmjs.com/package/goldenanalysis)
+- [GitHub](https://github.com/benseverndev-oss/goldenmatch/tree/main/packages/python/goldenanalysis)
+
+## Part of the Golden Suite
+GoldenCheck (profile) → GoldenFlow (standardize) → GoldenMatch (dedupe) → GoldenAnalysis (report), orchestrated by GoldenPipe, with InferMap for schema mapping. GoldenAnalysis is the terminal, read-only reporting stage.
+- [GoldenMatch](https://github.com/benseverndev-oss/goldenmatch) — Deduplicate & match (headline package)
+- [GoldenCheck](https://github.com/benseverndev-oss/goldencheck) — Validate & profile
+- [GoldenFlow](https://github.com/benseverndev-oss/goldenflow) — Transform & standardize
+- [GoldenPipe](https://github.com/benseverndev-oss/goldenpipe) — Orchestrate the pipeline
