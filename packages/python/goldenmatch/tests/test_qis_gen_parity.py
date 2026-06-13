@@ -54,3 +54,18 @@ def test_vectorized_realistic_gen_is_bit_identical(n_rows: int, corruption: str)
         f"ground-truth cluster ids changed for {n_rows} rows; the oracle must be "
         f"corruption-invariant and stable across the gen rewrite."
     )
+
+
+def test_embedded_frozen_config_matches_file():
+    """The frozen config is embedded in the script (so it travels under
+    `ray submit`, which ships only the .py). The committed JSON is the source of
+    truth; this guards the embedded copy from silently drifting from it."""
+    from goldenmatch.config.schemas import GoldenMatchConfig
+
+    from_file = GoldenMatchConfig.model_validate_json(
+        qis._FROZEN_CONFIG_PATH.read_text(encoding="utf-8"))
+    from_embed = GoldenMatchConfig.model_validate_json(qis._FROZEN_CONFIG_JSON)
+    assert from_file.model_dump() == from_embed.model_dump(), (
+        "_FROZEN_CONFIG_JSON drifted from qis_realistic_frozen_config.json; "
+        "re-run the embed (json.dumps(json.load(open(file)), separators=(',',':')))."
+    )
