@@ -192,6 +192,7 @@ testpaths = ["tests"]
 markers = [
     "benchmark: integration tests against real benchmark datasets (skipped by default; run with `pytest -m benchmark`)",
     "keep_real_refuse_at_n: opt out of the test_controller_confidence_gate autouse REFUSE_AT_N monkeypatch (#433)",
+    "slow: longer in-process dedupe / subprocess runs (the #510 QIS harness band/determinism/native-parity tests)",
 ]
 
 [tool.coverage.run]

@@ -269,12 +269,14 @@ class TestBuildMatchkeys:
     def test_phonetic_identity_matchkey_soundex_on_names(self):
         # #491 heuristic path: alongside the exact name+DOB composite, emit a
         # phonetic sibling that soundex-encodes the name fields so equal-sounding
-        # spellings (Smith/Smyth) sharing a DOB still match. Same DOB gate as the
-        # exact composite (name-only soundex keys collide too much to be identity).
+        # spellings (Smith/Smyth) sharing a DOB still match. Requires a full DATE
+        # anchor (see test_phonetic_identity_requires_date_not_year_anchor).
+        # High sample cardinality_ratio -> a specific DOB anchor (df is None here,
+        # so the gate uses the ratio fallback; a real DOB sample is ~0.5+).
         profiles = [
             ColumnProfile("first_name", "Utf8", "name", 0.9, cardinality_ratio=0.3),
             ColumnProfile("last_name", "Utf8", "name", 0.9, cardinality_ratio=0.3),
-            ColumnProfile("birth_year", "Int64", "year", 0.9, cardinality_ratio=0.02),
+            ColumnProfile("date_of_birth", "Utf8", "date", 0.9, cardinality_ratio=0.6),
         ]
         mks = build_matchkeys(profiles)
         phonetic = [mk for mk in mks if mk.name == "phonetic_identity"]
@@ -283,8 +285,52 @@ class TestBuildMatchkeys:
         # name fields carry the soundex transform; the DOB anchor does not
         name_fields = [f for f in phonetic[0].fields if f.field in ("first_name", "last_name")]
         assert name_fields and all("soundex" in f.transforms for f in name_fields)
-        dob = [f for f in phonetic[0].fields if f.field == "birth_year"]
+        dob = [f for f in phonetic[0].fields if f.field == "date_of_birth"]
         assert dob and "soundex" not in dob[0].transforms
+
+    def test_phonetic_identity_requires_specific_anchor_not_a_year(self):
+        # #510 scale fix: soundex collapses the name's cardinality to a bounded
+        # code space, so anchoring soundex(name) on a low-cardinality YEAR
+        # (~65-130 distinct) leaves the composite non-specific -- at scale it
+        # manufactures cross-cluster false merges (precision degrades) and huge
+        # soundex blocks (OOM). A coarse anchor must therefore NOT emit the
+        # phonetic_identity exact matchkey (the exact-NAME composite is still fine,
+        # since real names stay specific); only a SPECIFIC anchor (a full DOB) does.
+        # The classifier types a year column "date", so the gate is on the anchor's
+        # distinct count (df.n_unique >= 150) with a cardinality_ratio fallback
+        # (>= 0.2) when no df is supplied -- as here.
+        year = [
+            ColumnProfile("first_name", "Utf8", "name", 0.9, cardinality_ratio=0.3),
+            ColumnProfile("last_name", "Utf8", "name", 0.9, cardinality_ratio=0.3),
+            ColumnProfile("birth_year", "Int64", "date", 0.9, cardinality_ratio=0.02),
+        ]
+        mks = build_matchkeys(year)
+        assert [mk for mk in mks if mk.name == "exact_identity"]          # name composite kept
+        assert not [mk for mk in mks if mk.name == "phonetic_identity"]   # soundex+year dropped
+
+        # Same shape but with an explicit sample df where birth_year has only a
+        # handful of distinct values -> still excluded via the n_unique gate.
+        import polars as _pl
+        df_year = _pl.DataFrame({
+            "first_name": [f"n{i}" for i in range(300)],
+            "last_name": [f"s{i}" for i in range(300)],
+            "birth_year": [1950 + (i % 60) for i in range(300)],  # 60 distinct < 150
+        })
+        prof_hi = [
+            ColumnProfile("first_name", "Utf8", "name", 0.9, cardinality_ratio=0.9),
+            ColumnProfile("last_name", "Utf8", "name", 0.9, cardinality_ratio=0.9),
+            ColumnProfile("birth_year", "Int64", "date", 0.9, cardinality_ratio=0.2),
+        ]
+        mks = build_matchkeys(prof_hi, df=df_year)
+        assert not [mk for mk in mks if mk.name == "phonetic_identity"]   # 60 distinct < 150
+
+        date = [
+            ColumnProfile("first_name", "Utf8", "name", 0.9, cardinality_ratio=0.3),
+            ColumnProfile("last_name", "Utf8", "name", 0.9, cardinality_ratio=0.3),
+            ColumnProfile("date_of_birth", "Utf8", "date", 0.9, cardinality_ratio=0.6),
+        ]
+        mks = build_matchkeys(date)
+        assert len([mk for mk in mks if mk.name == "phonetic_identity"]) == 1  # specific anchor kept
 
     def test_description_uses_record_embedding(self):
         profiles = [
@@ -1638,3 +1684,145 @@ def test_v0_existing_callers_unaffected():
     })
     cfg = _legacy_auto_configure_v0(df)
     assert cfg.matchkeys
+
+
+# ── #876: scale-invariant blocking tests ─────────────────────────────────────
+
+class TestScaleInvariantBlocking:
+    def test_project_pairs_linear_for_constant_block(self):
+        from goldenmatch.core.autoconfig import _project_pairs_per_row
+        # block size 5 (constant) -> ~2 pairs/row regardless of scale
+        assert _project_pairs_per_row(proj_block=5) == 2  # (5-1)//2
+        assert _project_pairs_per_row(proj_block=101) == 50
+
+    def test_blocking_pairs_budget_default(self):
+        from goldenmatch.core.autoconfig import _blocking_pairs_per_row_budget
+        assert _blocking_pairs_per_row_budget() == 50  # default K
+
+    def test_unique_surrogate_never_blocking_key(self):
+        import polars as pl
+        from goldenmatch.core.autoconfig import ColumnProfile, build_blocking
+        n = 500
+        df = pl.DataFrame({
+            "id": [f"r{i}" for i in range(n)],                 # unique surrogate
+            "first_name": [f"n{i//5}" for i in range(n)],      # 5-row clusters
+            "last_name": [f"s{i//5}" for i in range(n)],
+            "zip": [f"{(i//5)%50:05d}" for i in range(n)],     # 50 distinct
+        })
+        profiles = [
+            ColumnProfile("id", "Utf8", "identifier", 0.9, cardinality_ratio=1.0),
+            ColumnProfile("first_name", "Utf8", "name", 0.9, cardinality_ratio=0.2),
+            ColumnProfile("last_name", "Utf8", "name", 0.9, cardinality_ratio=0.2),
+            ColumnProfile("zip", "Utf8", "zip", 0.9, cardinality_ratio=0.1),
+        ]
+        b = build_blocking(profiles, df, n_rows_full=100_000_000)
+        keys = [tuple(k.fields) for k in (b.keys or [])]
+        assert ("id",) not in keys, f"surrogate id chosen as blocking key: {keys}"
+
+    def test_bounded_cardinality_key_not_sole_at_scale(self):
+        import polars as pl
+        from goldenmatch.core.autoconfig import ColumnProfile, build_blocking
+        n = 1000
+        # zip wraps to 100 distinct -> at 100M, block ~ 100M/100 huge -> >K pairs/row
+        df = pl.DataFrame({
+            "first_name": [f"fn{i//5:06d}" for i in range(n)],
+            "last_name": [f"ln{i//5:06d}" for i in range(n)],
+            "zip": [f"{(i//5)%100:05d}" for i in range(n)],
+        })
+        profiles = [
+            ColumnProfile("first_name", "Utf8", "name", 0.9, cardinality_ratio=0.2),
+            ColumnProfile("last_name", "Utf8", "name", 0.9, cardinality_ratio=0.2),
+            ColumnProfile("zip", "Utf8", "zip", 0.9, cardinality_ratio=0.1),
+        ]
+        b = build_blocking(profiles, df, n_rows_full=100_000_000)
+        keys = [tuple(k.fields) for k in (b.keys or [])]
+        # FAIL-SAFE contract: at 100M a bounded-cardinality `zip` (block ∝ N)
+        # must NOT be shipped as the sole blocking key (it would be a
+        # candidate-pair bomb). The gate rejects it. With no key the projection
+        # can prove scale-safe (project_max_block_size assumes block ∝ N for
+        # every key — see #876 follow-up), the result is the empty/refuse config
+        # rather than the bomb. So we assert "not sole-zip" (refuse is the
+        # acceptable fail-safe), NOT "non-empty".
+        assert not (len(keys) == 1 and keys[0] == ("zip",)), f"sole zip at 100M: {keys}"
+
+    def test_unbounded_near_unique_key_not_sole_at_scale(self):
+        """#876: an UNBOUNDED near-unique key (email derived from corrupted names)
+        must NOT be returned as the sole blocking key at scale.
+
+        Chao1 (a CLOSED-domain unseen-species estimator) wrongly projects an
+        unbounded key's cardinality ratio DOWN at scale (e.g. email 0.56 -> ~0.00
+        at 100M), making a near-surrogate look low-cardinality so it passes the
+        #408 gate and is picked as the sole exact key. For dedupe that key blocks
+        into near-singletons (here ~0.39 blocking recall) -> tanks recall. The
+        type-aware projection keeps an unbounded near-unique key near-unique at
+        scale so the #408 gate rejects it and control falls through to the
+        recall-preserving name multipass. Mirrors the QIS shape.
+        """
+        import polars as pl
+        from goldenmatch.core.autoconfig import ColumnProfile, build_blocking
+        n = 1000
+        # email is near-unique per row (cluster variants differ); a bounded zip +
+        # birth_year are the scale-safe alternative the gate should prefer.
+        df = pl.DataFrame({
+            "first_name": [f"fn{i//5:04d}" + ("x" if i % 5 == 0 else "") for i in range(n)],
+            "last_name": [f"ln{i//5:04d}" for i in range(n)],
+            "zip": [f"{(i//5) % 100:05d}" for i in range(n)],         # bounded, wraps
+            "birth_year": [str(1950 + (i//5) % 50) for i in range(n)],  # bounded year
+            "email": [f"e{i:05d}@x.com" for i in range(n)],           # UNIQUE per row
+        })
+        profiles = [
+            ColumnProfile("first_name", "Utf8", "name", 0.9, cardinality_ratio=0.45),
+            ColumnProfile("last_name", "Utf8", "name", 0.9, cardinality_ratio=0.30),
+            ColumnProfile("zip", "Utf8", "zip", 0.9, cardinality_ratio=0.10),
+            ColumnProfile("birth_year", "Utf8", "year", 0.9, cardinality_ratio=0.05),
+            ColumnProfile("email", "Utf8", "email", 0.9, cardinality_ratio=0.56),
+        ]
+        b = build_blocking(profiles, df, n_rows_full=100_000_000)
+        all_keys = [set(k.fields) for k in (b.keys or [])]
+        all_passes = [set(p.fields) for p in (b.passes or [])]
+        # the near-unique email must be rejected -- never an emitted key/pass
+        assert all("email" not in s for s in all_keys + all_passes), \
+            f"near-unique email emitted as a blocking key at 100M: keys={all_keys} passes={all_passes}"
+        # and the scale-safe bounded alternative is chosen instead of refusing
+        assert any({"zip", "birth_year"} <= s for s in all_keys + all_passes), \
+            f"expected the [zip, birth_year] scale-safe alternative, got keys={all_keys} passes={all_passes}"
+
+    def test_bounded_keys_combine_into_scale_safe_compound(self):
+        """#876: when no single exact key is scale-safe, AND the BOUNDED exact
+        keys into a compound whose JOINT domain bounds the block under the pairs
+        budget, instead of dropping them.
+
+        zip (domain ~100K) and year (~300) each EXPLODE alone at 100M (block ∝ N).
+        But their compound's joint domain is ~30M, so the block stays ~constant
+        and the pair count linear -> scale-safe. The compound also preserves what
+        a sole `zip` gives but can't scale: it co-locates a cluster's variants
+        (both fields stable within a cluster) AND separates near-duplicate
+        ``twin`` clusters that share names but differ on zip. The QIS audit needs
+        this exact compound ([zip, birth_year]) to hold F1 0.935 to 200M.
+        """
+        import polars as pl
+        from goldenmatch.core.autoconfig import ColumnProfile, build_blocking
+        n = 1000
+        # zip wraps to 100, year to 50 -> each alone explodes at 100M; their
+        # product (5000 cells on the sample, ~5M domain) stays bounded.
+        df = pl.DataFrame({
+            "first_name": [f"fn{i//5:04d}" for i in range(n)],
+            "last_name": [f"ln{i//5:04d}" for i in range(n)],
+            "zip": [f"{(i//5) % 100:05d}" for i in range(n)],        # bounded, wraps
+            "birth_year": [str(1950 + (i//5) % 50) for i in range(n)],  # bounded year
+        })
+        profiles = [
+            ColumnProfile("first_name", "Utf8", "name", 0.9, cardinality_ratio=0.20),
+            ColumnProfile("last_name", "Utf8", "name", 0.9, cardinality_ratio=0.20),
+            ColumnProfile("zip", "Utf8", "zip", 0.9, cardinality_ratio=0.10),
+            ColumnProfile("birth_year", "Utf8", "year", 0.9, cardinality_ratio=0.05),
+        ]
+        b = build_blocking(profiles, df, n_rows_full=100_000_000)
+        keys = [set(k.fields) for k in (b.keys or [])]
+        passes = [set(p.fields) for p in (b.passes or [])]
+        # the primary blocking key co-locates on BOTH bounded discriminators
+        assert any({"zip", "birth_year"} <= s for s in keys + passes), \
+            f"expected a [zip, birth_year] bounded compound at scale, got keys={keys} passes={passes}"
+        # and NOT a sole bounded key that would explode
+        assert not (len(keys) == 1 and keys[0] in ({"zip"}, {"birth_year"}) and not passes), \
+            f"sole bounded key shipped at 100M: keys={keys}"
