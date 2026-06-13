@@ -96,8 +96,16 @@ jobs:
         # one place instead of accumulating GH-Actions copies.
         run: |
           pip install --upgrade pip
-          pip install "ray[default]==${{ env.RAY_RELEASE }}" "google-api-python-client"
+          # Install the LATEST Ray (matches CI's `ray[default]>=2.0`), then render
+          # the cluster's docker image to the SAME version so launcher==cluster and
+          # both carry the Ray Data API the distributed pipeline needs
+          # (`repartition(num_partitions, keys=[...])`, added after 2.43 -- the old
+          # pin made the golden/WCC steps TypeError on `keys`).
+          pip install "ray[default]" "google-api-python-client"
           pip install pyyaml
+          RAY_VER=$(python -c "import ray; print(ray.__version__)")
+          echo "RAY_VER=$RAY_VER" >> "$GITHUB_ENV"
+          echo "Resolved Ray version: $RAY_VER (launcher + cluster docker image)"
           # Infisical CLI: official apt repo. The 0.43.x series ships
           # `infisical login --method=universal-auth` and
           # `infisical secrets get --plain` which we both use.
@@ -163,6 +171,9 @@ jobs:
           sed -i "s|cluster_name: goldenmatch-bench$|cluster_name: ${{ env.CLUSTER_NAME }}|" .ray/cluster-gce.yaml
           sed -i "s|max_workers: 3$|max_workers: ${{ inputs.max_workers }}|" .ray/cluster-gce.yaml
           sed -i "s|GOLDENMATCH_HEAD_MACHINE_PLACEHOLDER|${{ inputs.head_machine }}|g" .ray/cluster-gce.yaml
+          # Pin the cluster docker image to the launcher's resolved Ray version so
+          # the cluster has the same Ray Data API (repartition keys=) as the code.
+          sed -i "s|GOLDENMATCH_RAY_VERSION_PLACEHOLDER|${RAY_VER}|g" .ray/cluster-gce.yaml
           echo "----- Rendered cluster.yaml -----"
           head -50 .ray/cluster-gce.yaml
 

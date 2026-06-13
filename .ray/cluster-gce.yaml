@@ -42,7 +42,11 @@ rsync_exclude:
 # series; the bench container layer installs goldenmatch on top via
 # pip.
 docker:
-  image: "rayproject/ray:2.43.0-py312"
+  # Rendered to the launcher's resolved Ray version at dispatch time (see the
+  # bench-ray-cluster workflow) so the cluster has the same Ray Data API as the
+  # distributed pipeline code (`repartition(num_partitions, keys=[...])`). The
+  # old hard pin to 2.43.0 predated that API and TypeError'd on `keys`.
+  image: "rayproject/ray:GOLDENMATCH_RAY_VERSION_PLACEHOLDER-py312"
   container_name: "ray_container"
   pull_before_run: true
 
