@@ -67,9 +67,11 @@ npx vitest run tests/parity/        # parity-only suite
 ## Opt-in WASM scorer (score-wasm)
 - `await enableWasm()` swaps a WASM backend (the Rust `score-core` crate compiled
   via `packages/rust/extensions/score-wasm/`) behind the sync `scoreMatrix` for
-  COVERED scorers only: `jaro_winkler` / `levenshtein` / `exact`. Everything else
-  (incl. `token_sort` — normalization parity unresolved) stays pure-TS even when
-  enabled. `disableWasm()` resets (test isolation, mirrors `setSyncEmbedder(null)`).
+  COVERED scorers only: `jaro_winkler` / `levenshtein` / `token_sort` / `exact`.
+  `token_sort` routes through score-core's `token_sort_normalized_ratio` (the
+  TS-parity lowercase+strip normalize), NOT the un-normalized `score_one(2)` (the
+  FFI/native asymmetry). Everything else stays pure-TS even when enabled.
+  `disableWasm()` resets (test isolation, mirrors `setSyncEmbedder(null)`).
 - Pure-TS is the default + fallback. `enableWasm()` returns `false` (pure-TS stays
   active) on any load failure; `{ require: true }` throws instead. Default users
   load zero wasm bytes (the loader/glue/bytes are behind a lazy dynamic import).
@@ -82,26 +84,23 @@ npx vitest run tests/parity/        # parity-only suite
   and runs `tests/parity/wasm-scorer.test.ts` un-skipped; without the artifact
   that test SKIPS and the artifact-free `wasm-backend`/`wasm-fallback` unit tests
   run in the normal `typescript` lane.
-- **The parity gate asserts WASM == Python/rapidfuzz goldens, NOT WASM == pure-TS.**
-  The WASM kernel IS rapidfuzz, so `wasm-scorer.test.ts` pins it to canonical
-  `score_one` values (verify/extend via a throwaway `score-core` test that prints
-  `score_one`). It deliberately does NOT compare to the hand-rolled pure-TS
-  scorers, because those have small KNOWN divergences from rapidfuzz:
-  (1) `jaroWinkler` applies the prefix bonus below the Winkler 0.7 boost threshold;
-  (2) its greedy Jaro matcher counts transpositions differently on repeated-char
-  words (e.g. `"saturday"/"sunday"` → pure-TS 0.7475 vs rapidfuzz 0.7775);
-  (3) it indexes UTF-16 code units, diverging from codepoints on non-BMP
-  (surrogate-pair) input. All three sit below typical match thresholds (dedup
-  decisions unchanged), and enabling WASM shifts such borderline scores toward
-  the Python values. **Aligning the pure-TS scorers with rapidfuzz is a single
-  tracked follow-up, NOT part of this opt-in-WASM slice** — don't "fix" one of
-  the three in isolation (a partial fix just moves the divergence).
-- **Open item — dist artifact path:** the loader resolves the artifact via
-  `new URL('./artifacts/score_wasm_bg.wasm', import.meta.url)`. The parity test
-  runs against `src` (vitest, unbundled) and is correct. Whether tsup BUNDLING
-  flattens that path in `dist` (so `copy_wasm_artifact.mjs`'s destination must be
-  adjusted to match the bundled loader's resolved location) is to be validated on
-  the first `wasm_score` CI run; the bench step is `continue-on-error` until then.
+- **The parity gate pins WASM to canonical rapidfuzz `score_one` goldens.**
+  `wasm-scorer.test.ts` asserts the WASM path reproduces the rapidfuzz values to
+  4dp (verify/extend via a throwaway `score-core` test that prints `score_one`).
+  **As of #879 the pure-TS scorers were ALIGNED with rapidfuzz** (codepoint
+  iteration, the Winkler `>0.7` boost threshold, floored transposition `t//2`), so
+  WASM ≈ pure-TS now holds too — the three prior known divergences are gone (e.g.
+  `"saturday"/"sunday"` pure-TS 0.7475 → 0.7775). The goldens stay rapidfuzz-sourced
+  because the WASM kernel IS rapidfuzz.
+- **Dist artifact path (resolved):** the loader resolves the artifact via
+  `new URL('./artifacts/score_wasm_bg.wasm', import.meta.url)`, which in the
+  BUNDLED `dist` points at whichever location tsup lands the loader code. Rather
+  than predict that, `copy_wasm_artifact.mjs` copies the artifact to EVERY
+  plausible `./artifacts/` parent (`dist/core/wasm/artifacts/`, `dist/core/artifacts/`,
+  `dist/artifacts/`). The `wasm_score` bench step is now a GATE (no longer
+  `continue-on-error`): it builds dist + runs `enableWasm()`, so a broken bundled
+  path reddens the lane (the bench `process.exit(1)`s on a failed enableWasm).
+  Same pattern in the `analysis_wasm` lane / goldenanalysis.
 
 ## Parity contract
 - **Scorer output:** 4-decimal tolerance vs Python (`tests/parity/scorer-ground-truth.test.ts`).

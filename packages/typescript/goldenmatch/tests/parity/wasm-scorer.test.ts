@@ -4,7 +4,7 @@
  * The WASM kernel IS rapidfuzz (it wraps the `score-core` crate, the same crate
  * the Python `native` wheel and the DataFusion UDFs wrap), so this gate asserts
  * the opt-in WASM path reproduces the canonical rapidfuzz values to 4 decimals.
- * That proves the whole boundary chain end-to-end: scorer-id mapping (0/1/3),
+ * That proves the whole boundary chain end-to-end: scorer-id mapping (0/1/2/3),
  * the `\x1e`-joined batch marshalling, the row-major NxN layout, and UTF-8
  * round-tripping (incl. the BMP non-ASCII `café`). A wrong id / layout / encoding
  * would shift these values.
@@ -53,6 +53,13 @@ const GOLDENS: readonly Golden[] = [
   ["levenshtein", "saturday", "sunday", 0.625],
   ["exact", "abc", "abc", 1.0],
   ["exact", "abc", "abd", 0.0],
+  // token_sort (id 2) routes through score-core's token_sort_normalized_ratio:
+  // lowercase + strip non-alnum + token-sort, then Indel — matching the pure-TS
+  // tokenSortRatio. Exercises order-invariance, case + punctuation stripping.
+  ["token_sort", "New York Mets", "Mets New York", 1.0],
+  ["token_sort", "John Smith", "Smith Johnson", 0.8696],
+  ["token_sort", "John SMITH", "smith john", 1.0],
+  ["token_sort", "John, Smith!", "smith john.", 1.0],
 ];
 
 d("WASM scorer matches rapidfuzz/Python goldens", () => {
