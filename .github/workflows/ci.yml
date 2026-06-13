@@ -426,16 +426,15 @@ jobs:
                       --ignore=packages/python/goldenmatch/tests/test_embedder.py \
                       --ignore=packages/python/goldenmatch/tests/test_llm_boost.py \
                       --ignore=packages/python/goldenmatch/tests/test_autoconfig_benchmarks.py \
-                      --deselect=packages/python/goldenmatch/tests/test_qis_harness.py::test_moderate_oracle_f1_in_target_band \
-                      --deselect=packages/python/goldenmatch/tests/test_qis_harness.py::test_qis_run_determinism_and_golden_shape \
-                      --deselect=packages/python/goldenmatch/tests/test_qis_harness.py::test_qis_native_parity"
-              # The 3 heavy test_qis_harness frozen-rung tests each run a full
-              # dedupe (the determinism one runs TWO) -- bench-style #510
-              # validation, NOT unit tests. Under -n auto they OOM-kill xdist
-              # workers; in the serial lane they blow the 300s timeout. They're
-              # covered by the bench-quality-invariant-scale workflow + locally.
-              # The FAST harness tests (corruption logic, aggregator) still run
-              # here. Mirrors the test_autoconfig_benchmarks ignore above. (#876)
+                      --ignore=packages/python/goldenmatch/tests/test_qis_harness.py"
+              # test_qis_harness's 3 frozen-rung tests each run a full dedupe
+              # (determinism runs TWO) -- bench-style #510 validation, NOT unit
+              # tests. Under -n auto they OOM-kill xdist workers; serial they blow
+              # the 300s timeout; and --deselect doesn't reliably exclude them
+              # under xdist (node-id matching). --ignore the whole file (collection
+              # level, bulletproof) -- mirrors test_autoconfig_benchmarks. The
+              # harness's corruption/aggregator logic + the rungs are validated by
+              # the bench-quality-invariant-scale workflow + locally. (#876)
               ;;
             infermap)
               IGNORE="--ignore=packages/python/infermap/benchmark"
