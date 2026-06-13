@@ -110,3 +110,21 @@ def test_clash_distinct_entity_is_not_merged(tmp_path):
     assert rpt.clashed_distinct_entity == 1 and rpt.merged == 0 and rpt.rewritten == 0
     assert store.get_record(legacy) is not None
     assert store.find_entity_by_record(h1) == "ent-2"
+
+
+def test_unfingerprintable_row_kept_legacy(tmp_path, monkeypatch):
+    store = IdentityStore(backend="sqlite", path=str(tmp_path / "id.db"))
+    rid = _seed_legacy_record(store, "acme", {"name": "Ann"}, "ent-1")
+    import goldenmatch.identity.migrate_ids as m
+    monkeypatch.setattr(m, "record_fingerprint", lambda _: (_ for _ in ()).throw(ValueError()))
+    rpt = migrate_record_ids(store)
+    assert rpt.kept_unfingerprintable == 1 and rpt.rewritten == 0
+    assert store.get_record(rid) is not None
+
+
+def test_dry_run_changes_nothing(tmp_path):
+    store = IdentityStore(backend="sqlite", path=str(tmp_path / "id.db"))
+    rid = _seed_legacy_record(store, "acme", {"name": "Ann"}, "ent-1")
+    rpt = migrate_record_ids(store, dry_run=True)
+    assert rpt.dry_run and rpt.rewritten == 1
+    assert store.get_record(rid) is not None
