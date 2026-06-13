@@ -9,7 +9,10 @@
     "data-quality",
     "entity-resolution",
     "goldenanalysis",
-    "edge"
+    "edge",
+    "regression-detection",
+    "drift-detection",
+    "golden-suite"
   ],
   "license": "MIT",
   "author": "Ben Severn (https://bensevern.dev)",

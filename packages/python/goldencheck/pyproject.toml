@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 authors = [{ name = "Ben Severn", email = "ben@bensevern.dev" }]
-keywords = ["data-validation", "data-quality", "profiling", "data-checks", "data-profiling", "llm", "tui", "csv", "parquet", "baseline", "drift-detection", "statistical-profiling"]
+keywords = ["data-validation", "data-quality", "profiling", "data-checks", "data-profiling", "llm", "tui", "csv", "parquet", "baseline", "drift-detection", "statistical-profiling", "great-expectations", "pandera", "data-observability", "golden-suite"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Environment :: Console",

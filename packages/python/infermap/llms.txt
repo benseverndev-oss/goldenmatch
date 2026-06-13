@@ -82,6 +82,6 @@ aliases:
 ## Part of the Golden Suite
 InferMap is the schema-mapping front door of the suite: it auto-aligns columns across heterogeneous sources so the rest of the pipeline can run on a unified schema. GoldenCheck (profile) → GoldenFlow (standardize) → GoldenMatch (dedupe) → GoldenAnalysis (report), orchestrated by GoldenPipe.
 - [GoldenMatch](https://github.com/benseverndev-oss/goldenmatch) — Deduplicate & match (headline package)
-- [GoldenCheck](https://github.com/benseverndev-oss/goldencheck) — Validate & profile
-- [GoldenFlow](https://github.com/benseverndev-oss/goldenflow) — Transform & standardize
-- [GoldenPipe](https://github.com/benseverndev-oss/goldenpipe) — Orchestrate the pipeline
+- [GoldenCheck](https://github.com/benseverndev-oss/goldenmatch/tree/main/packages/python/goldencheck) — Validate & profile
+- [GoldenFlow](https://github.com/benseverndev-oss/goldenmatch/tree/main/packages/python/goldenflow) — Transform & standardize
+- [GoldenPipe](https://github.com/benseverndev-oss/goldenmatch/tree/main/packages/python/goldenpipe) — Orchestrate the pipeline

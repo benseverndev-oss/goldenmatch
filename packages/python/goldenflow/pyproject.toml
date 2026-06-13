@@ -10,7 +10,7 @@ readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
 authors = [{ name = "Ben Severn", email = "ben@bensevern.dev" }]
-keywords = ["data-transformation", "data-quality", "etl", "standardization", "normalization", "data-cleaning", "polars"]
+keywords = ["data-transformation", "data-quality", "etl", "standardization", "normalization", "data-cleaning", "polars", "data-standardization", "golden-suite"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Programming Language :: Python :: 3",

@@ -1,0 +1,29 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using these metadata."
+title: "GoldenMatch (Golden Suite): zero-config entity resolution and data-quality toolkit"
+abstract: >-
+  A polyglot data-quality and entity-resolution toolkit: profile, standardize,
+  deduplicate, and report on tabular data. GoldenMatch is zero-config entity
+  resolution whose zero-tuning Fellegi-Sunter path beats hand-rolled, expert-tuned
+  Splink head-to-head, scales from a laptop CSV to 100M+ rows on a Ray cluster, and
+  ships on both PyPI and npm with SQL-native PostgreSQL/DuckDB extensions. The suite
+  also includes GoldenCheck (validate/profile), GoldenFlow (standardize), GoldenPipe
+  (orchestrate), GoldenAnalysis (report), and InferMap (schema mapping).
+type: software
+authors:
+  - family-names: Severn
+    given-names: Ben
+    website: "https://bensevern.dev"
+repository-code: "https://github.com/benseverndev-oss/goldenmatch"
+url: "https://docs.bensevern.dev/"
+license: MIT
+keywords:
+  - entity-resolution
+  - record-linkage
+  - deduplication
+  - data-quality
+  - fellegi-sunter
+  - fuzzy-matching
+  - privacy-preserving-record-linkage
+  - golden-records
+  - schema-matching
