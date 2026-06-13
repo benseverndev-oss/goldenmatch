@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import argparse
 import multiprocessing as mp
-import os
 import resource
 import statistics
 import sys
@@ -209,8 +208,6 @@ def main() -> int:
     print("generating + writing ...")
     df = generate(args.rows)
     # Pick a real block key (most populous) and candidate index sets up front.
-    import polars as pl
-
     top_key = (
         df.group_by("block_key").len().sort("len", descending=True).select("block_key").head(1).item()
     )
@@ -240,7 +237,7 @@ def main() -> int:
     row("full_scan", res)
     # block_filter
     res = {e: measure(e, "block_filter", paths[e], top_key, args.runs) for e in engines}
-    row(f"block_filter", res)
+    row("block_filter", res)
     # scatter_take across fractions
     for frac, idx in cand_sets.items():
         res = {e: measure(e, "scatter_take", paths[e], idx, args.runs) for e in engines}
