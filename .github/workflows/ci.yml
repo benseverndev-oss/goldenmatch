@@ -36,6 +36,10 @@ jobs:
       action: ${{ steps.filter.outputs.action }}
       ci_workflow: ${{ steps.filter.outputs.ci_workflow }}
       pyright_slice: ${{ steps.filter.outputs.pyright_slice }}
+      # goldenmatch runs as its own sharded jobs (python_goldenmatch / _heavy /
+      # _coverage), NOT in the generic `python` matrix, so expose its filter
+      # directly for those jobs + the lanes that gate on goldenmatch changing.
+      python_goldenmatch: ${{ steps.filter.outputs.python_goldenmatch }}
       python_goldenmatch_postgres: ${{ steps.filter.outputs.python_goldenmatch_postgres }}
       benchmark_runner: ${{ steps.filter.outputs.benchmark_runner }}
       rust_pgrx: ${{ steps.filter.outputs.rust_pgrx }}
@@ -306,11 +310,14 @@ jobs:
           ALL: ${{ steps.filter.outputs.ci_workflow == 'true' || steps.filter.outputs.python_root == 'true' }}
         run: |
           set -euo pipefail
+          # NB: goldenmatch is intentionally absent here — it runs as the
+          # dedicated sharded jobs (python_goldenmatch / _heavy / _coverage)
+          # gated on the `python_goldenmatch` output, so the generic `python`
+          # matrix below never includes it.
           PKGS=()
           if [ "$ALL" = "true" ]; then
-            PKGS=(goldenmatch goldencheck goldencheck-types goldenflow goldenpipe infermap goldensuite-mcp goldenanalysis)
+            PKGS=(goldencheck goldencheck-types goldenflow goldenpipe infermap goldensuite-mcp goldenanalysis)
           else
-            [ "${{ steps.filter.outputs.python_goldenmatch }}" = "true" ]       && PKGS+=(goldenmatch)
             [ "${{ steps.filter.outputs.python_goldencheck }}" = "true" ]       && PKGS+=(goldencheck)
             [ "${{ steps.filter.outputs.python_goldencheck_types }}" = "true" ] && PKGS+=(goldencheck-types)
             [ "${{ steps.filter.outputs.python_goldenflow }}" = "true" ]        && PKGS+=(goldenflow)
@@ -346,14 +353,6 @@ jobs:
             uv.lock
             **/pyproject.toml
       - run: uv sync --all-packages
-      # Scale-mode DataFusion edge stream (cluster_edges_df.py) lives behind the
-      # optional `datafusion` extra, which `uv sync --all-packages` does NOT
-      # install. Install it explicitly for the goldenmatch lane so its parity
-      # tests actually RUN — they `pytest.importorskip("datafusion")` and would
-      # SILENTLY SKIP (a false green) otherwise. test_cluster_edges_df.py also
-      # carries a loud no-importorskip guard that fails if this install is missing.
-      - if: matrix.pkg == 'goldenmatch'
-        run: uv pip install 'datafusion>=53,<54'
       # GoldenAnalysis's suite adapters consume goldenmatch/goldencheck/goldenflow/
       # goldenpipe outputs. uv sync --all-packages installs those workspace members,
       # but install the [match,check,flow,pipe] extras explicitly so the real-producer
@@ -365,58 +364,15 @@ jobs:
       # Ruff config is driven by the root pyproject.toml [tool.ruff.lint] section
       # (F/I/B-narrowed/UP). Drop the --select override so pyproject's select+ignore wins.
       - run: uv run ruff check packages/python/${{ matrix.pkg }}
-      # Arrow-native roadmap Phase 6 (#628): every map_elements call
-      # in prep-stage hot paths must carry a # noqa: GM-MAP-ELEMENTS:
-      # justification comment. Catches accidentally-added per-row
-      # Python before it ships. Lint runs only when goldenmatch is the
-      # matrix package (the gated files are goldenmatch-only).
-      - if: matrix.pkg == 'goldenmatch'
-        run: uv run python scripts/check_map_elements.py
-      # DataFusion FFI ScalarUDF gate (Stage B). Build the standalone
-      # `datafusion-udf` crate into the project venv and install the Python
-      # `datafusion` runtime so tests/test_datafusion_ffi_udf.py can register the
-      # native string-scorer UDFs (jaro_winkler / token_sort / levenshtein) via
-      # the PyCapsule FFI bridge and diff them against the `goldenmatch._native`
-      # per-pair scorers (both delegate to the shared score-core crate). The test
-      # HARD-imports goldenmatch_datafusion_udf (no importorskip), so a build
-      # break here surfaces as a test FAILURE, not a skip — that's the loud guard
-      # for the whole DataFusion spine. goldenmatch-only (the only lane with the
-      # test) and a Rust compile, not a Python import, so it can't trip the box's
-      # import-hang. The in-tree `_native` ext (which the parity test HARD-
-      # asserts) is built in a follow-on step below.
-      - if: matrix.pkg == 'goldenmatch'
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
-        with:
-          components: clippy
-      - if: matrix.pkg == 'goldenmatch'
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
-        with:
-          workspaces: packages/rust/extensions/datafusion-udf
-      - name: Install the datafusion runtime + build the FFI UDF crate (goldenmatch only)
-        if: matrix.pkg == 'goldenmatch'
-        run: |
-          uv pip install 'datafusion>=53,<54'
-          # Build a wheel, then `uv pip install` it into the project .venv (the
-          # env `uv run pytest` uses). `maturin develop` under `uv run --with
-          # maturin` installs into maturin's EPHEMERAL --with overlay env, NOT
-          # .venv -> ModuleNotFound at test time. Mirror the native_wheel lane:
-          # build the abi3 wheel, then install it into .venv.
-          uv run --with maturin maturin build --release \
-            --manifest-path packages/rust/extensions/datafusion-udf/Cargo.toml --out dist-dfudf
-          uv pip install dist-dfudf/*.whl
-      # Stage B: tests/test_datafusion_ffi_udf.py diffs the FFI string scorers
-      # against the Python `rapidfuzz` package (the FFI UDFs delegate to the
-      # shared score-core crate = rapidfuzz 0.5.0; test_native_parity already
-      # proves rust-rapidfuzz == python-rapidfuzz). So this lane does NOT build
-      # `_native` — doing so would pull native-only schema tests into this lane.
+      # (goldenmatch's map_elements lint, datafusion runtime + FFI UDF build, the
+      # DataFusion-spine parity gate, its own --ignore list, and the per-module
+      # coverage floors all moved to the dedicated `python_goldenmatch` sharded
+      # jobs below.)
       # Per-package --ignore lists mirror the pre-fold tuning each repo had
       # (documented in each package's own CLAUDE.md). Without these, packages with
       # known-skip tests would make CI perpetually red and train people to ignore
       # the signal entirely — worse than no step.
-      #   goldenmatch: torch segfaults without GPU; postgres tests need a DB; MCP
-      #               watch tests are flaky on Linux runners; benchmark datasets
-      #               are gitignored (test_autoconfig_benchmarks).
-      #   infermap:    duplicate conftest in benchmark/runners/python/tests/.
+      #   infermap: duplicate conftest in benchmark/runners/python/tests/.
       # Skip mechanism is path-based (not name-based) so adding a tests/ dir to a
       # currently-skipped package auto-enables it with a visible notice.
       - name: pytest
@@ -428,23 +384,6 @@ jobs:
           fi
           IGNORE=""
           case "${{ matrix.pkg }}" in
-            goldenmatch)
-              IGNORE="--ignore=packages/python/goldenmatch/tests/test_db.py \
-                      --ignore=packages/python/goldenmatch/tests/test_reconcile.py \
-                      --ignore=packages/python/goldenmatch/tests/test_mcp_and_watch.py \
-                      --ignore=packages/python/goldenmatch/tests/test_embedder.py \
-                      --ignore=packages/python/goldenmatch/tests/test_llm_boost.py \
-                      --ignore=packages/python/goldenmatch/tests/test_autoconfig_benchmarks.py \
-                      --ignore=packages/python/goldenmatch/tests/test_qis_harness.py"
-              # test_qis_harness's 3 frozen-rung tests each run a full dedupe
-              # (determinism runs TWO) -- bench-style #510 validation, NOT unit
-              # tests. Under -n auto they OOM-kill xdist workers; serial they blow
-              # the 300s timeout; and --deselect doesn't reliably exclude them
-              # under xdist (node-id matching). --ignore the whole file (collection
-              # level, bulletproof) -- mirrors test_autoconfig_benchmarks. The
-              # harness's corruption/aggregator logic + the rungs are validated by
-              # the bench-quality-invariant-scale workflow + locally. (#876)
-              ;;
             infermap)
               IGNORE="--ignore=packages/python/infermap/benchmark"
               ;;
@@ -453,65 +392,178 @@ jobs:
           # trace (vs the whole job timing out at 6h with zero diagnostics).
           # PR #66 hit a goldencheck pytest hang on Linux that didn't
           # reproduce locally — this converts that into actionable signal.
-          #
-          # For goldenmatch only: also produce coverage.xml in this same
-          # pytest run so the floor check (next step) has the artifact
-          # without re-executing the suite.
-          COV=""
-          COV_REPORT=""
-          SERIAL_HEAVY=""
-          if [ "${{ matrix.pkg }}" = "goldenmatch" ]; then
-            COV="--cov=goldenmatch"
-            COV_REPORT="--cov-report=xml:packages/python/goldenmatch/coverage.xml --cov-report=term"
-            # SERIAL_HEAVY: full-pipeline tests whose peak OOM-kills an xdist
-            # worker under `-n auto` + coverage on a 16GB runner (silent "node
-            # down: Not properly terminated", no traceback). Run them SERIALLY
-            # (full runner memory, no worker contention), 300s timeout, and
-            # combine coverage via --cov-append so the floor check still sees
-            # their lines.
-            #   - test_controller_adaptive_e2e: the FULL real auto-config
-            #     iteration loop on a 100K adversarial fixture (the heaviest).
-            #   - test_memory_e2e: a full dedupe + sibling-SQLite review-queue
-            #     round-trip whose memory_stats.stale count is timing-sensitive
-            #     under heavy xdist load (passes standalone; flaked once the
-            #     qis_harness move reshuffled the -n auto worker distribution).
-            #     Serial = deterministic. See #876.
-            # (test_qis_harness's 3 frozen-rung tests are NOT here -- they're
-            #  --deselect'd above as bench-style validation; the file's FAST unit
-            #  tests run in the normal -n auto pass.)
-            SERIAL_HEAVY="packages/python/goldenmatch/tests/test_controller_adaptive_e2e.py packages/python/goldenmatch/tests/test_memory_e2e.py"
-          fi
           # --durations=20 surfaces the slowest tests in the CI log (#433).
-          if [ -n "$SERIAL_HEAVY" ]; then
-            # Parallel run: everything except the heavy files. Collect coverage
-            # data only; the serial run below appends and writes the xml.
-            SERIAL_IGNORE=""
-            for f in $SERIAL_HEAVY; do SERIAL_IGNORE="$SERIAL_IGNORE --ignore=$f"; done
-            uv run pytest packages/python/${{ matrix.pkg }} -n auto --timeout=120 --timeout-method=thread --durations=20 $COV $IGNORE $SERIAL_IGNORE
-            # Serial run for the heavy file: full runner memory, no xdist.
-            # Higher per-test timeout (300s vs 120s): this file's
-            # test_gate_fires_via_real_iteration_loop runs the FULL auto-config
-            # iteration loop on a 100K adversarial fixture (~45s locally; ~2-2.7x
-            # under CI coverage instrumentation). Bucket-native-default + the
-            # multi-pass/oversized parity work legitimately added per-iteration
-            # scoring cost (parity-over-speed, by design), tipping it past the
-            # generic 120s. 300s gives ample headroom while still surfacing a
-            # genuine hang.
-            # shellcheck disable=SC2086 -- intentional word-split: SERIAL_HEAVY is
-            # a space-separated list of test files, each a separate pytest arg.
-            uv run pytest $SERIAL_HEAVY --timeout=300 --timeout-method=thread --durations=20 $COV --cov-append $COV_REPORT
-          else
-            uv run pytest packages/python/${{ matrix.pkg }} -n auto --timeout=120 --timeout-method=thread --durations=20 $COV $COV_REPORT $IGNORE
-          fi
-      # Per-module coverage gate (goldenmatch only — other packages don't yet
-      # have floors defined). Reads the coverage.xml produced by the pytest
-      # step above. Fails CI if any tracked module regresses below its floor
-      # in scripts/check_coverage_floors.py. Ratchet floors upward over
-      # time; never silently drop a module from the dict.
-      - name: Coverage floors (goldenmatch only)
-        if: matrix.pkg == 'goldenmatch'
-        shell: bash
+          uv run pytest packages/python/${{ matrix.pkg }} -n auto --timeout=120 --timeout-method=thread --durations=20 $IGNORE
+
+  # ---------------------------------------------------------------------------
+  # goldenmatch is the CI long pole: a ~12-min pytest suite PLUS a ~6.5-min
+  # --release maturin build of the DataFusion/Arrow/ONNX FFI UDF crate that the
+  # single matrix leg used to rebuild every run. It runs here as dedicated jobs
+  # (NOT in the generic `python` matrix) so the suite shards across runners and
+  # the FFI wheel is cached. Three producers feed one floor gate:
+  #   python_goldenmatch (xN shards) -> coverage_shard<N>.dat
+  #   python_goldenmatch_heavy       -> coverage_heavy.dat  (OOM-prone, serial)
+  #   python_goldenmatch_coverage    -> combine -> per-module floors
+  # ---------------------------------------------------------------------------
+  python_goldenmatch:
+    needs: changes
+    if: needs.changes.outputs.python_goldenmatch == 'true' || needs.changes.outputs.ci_workflow == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    env:
+      GM_SPLITS: 3
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      # Scale-mode DataFusion edge stream (cluster_edges_df.py) lives behind the
+      # optional `datafusion` extra; install it so the parity tests RUN rather
+      # than importorskip-SKIP (a false green). Cheap (wheel download).
+      - run: uv pip install 'datafusion>=53,<54'
+      # Suite-wide lints run once (shard 1), not per shard.
+      - if: matrix.shard == 1
+        run: uv run ruff check packages/python/goldenmatch
+      # Arrow-native roadmap Phase 6 (#628): map_elements in prep-stage hot paths
+      # must carry a justification noqa. goldenmatch-only gate.
+      - if: matrix.shard == 1
+        run: uv run python scripts/check_map_elements.py
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/datafusion-udf
+      # THE BUILD-TIME WIN: cache the built FFI UDF wheel keyed on the Rust
+      # sources it's compiled from (the crate + every path-dep crate). On a hit
+      # (the common case — these change rarely) the ~6.5-min --release maturin
+      # build is skipped entirely; only on a real crate change do the shards
+      # rebuild (in parallel, so no extra wall-clock).
+      - id: dfudf_cache
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+        with:
+          path: dist-dfudf
+          key: dfudf-wheel-${{ runner.os }}-${{ hashFiles('packages/rust/extensions/datafusion-udf/**', 'packages/rust/extensions/score-core/**', 'packages/rust/extensions/graph-core/**', 'packages/rust/extensions/goldenembed/**') }}
+      # DataFusion FFI ScalarUDF gate (Stage B): the FFI string scorers
+      # (jaro_winkler / token_sort / levenshtein) are diffed against the native
+      # per-pair scorers by tests/test_datafusion_ffi_udf.py, which HARD-imports
+      # goldenmatch_datafusion_udf (no importorskip), so every shard installs the
+      # wheel (the test can land in any shard) and a build break surfaces as a
+      # FAILURE, not a skip. Build into the project .venv (NOT maturin's
+      # ephemeral --with overlay) so `uv run pytest` sees it.
+      - name: Build (cache miss only) + install the FFI UDF wheel into .venv
         run: |
+          if [ -z "$(ls -A dist-dfudf/*.whl 2>/dev/null)" ]; then
+            uv run --with maturin maturin build --release \
+              --manifest-path packages/rust/extensions/datafusion-udf/Cargo.toml --out dist-dfudf
+          else
+            echo "::notice::datafusion-udf wheel restored from cache; skipping the maturin build"
+          fi
+          uv pip install dist-dfudf/*.whl
+      # Shard the suite with pytest-split (deterministic collection -> stable,
+      # disjoint groups). The OOM-prone heavy files run in python_goldenmatch_heavy
+      # and are --ignored here so they're neither double-run nor split. The
+      # standing goldenmatch --ignore list (no-DB / no-GPU / flaky-on-Linux /
+      # gitignored-dataset tests) is preserved verbatim. Coverage data only
+      # (combined + floor-checked in python_goldenmatch_coverage).
+      - name: pytest (shard ${{ matrix.shard }} of ${{ env.GM_SPLITS }})
+        env:
+          COVERAGE_FILE: coverage_shard${{ matrix.shard }}.dat
+        run: |
+          uv run --with pytest-split pytest packages/python/goldenmatch \
+            -n auto --splits "${GM_SPLITS}" --group ${{ matrix.shard }} \
+            --timeout=120 --timeout-method=thread --durations=20 \
+            --cov=goldenmatch --cov-report= \
+            --ignore=packages/python/goldenmatch/tests/test_db.py \
+            --ignore=packages/python/goldenmatch/tests/test_reconcile.py \
+            --ignore=packages/python/goldenmatch/tests/test_mcp_and_watch.py \
+            --ignore=packages/python/goldenmatch/tests/test_embedder.py \
+            --ignore=packages/python/goldenmatch/tests/test_llm_boost.py \
+            --ignore=packages/python/goldenmatch/tests/test_autoconfig_benchmarks.py \
+            --ignore=packages/python/goldenmatch/tests/test_qis_harness.py \
+            --ignore=packages/python/goldenmatch/tests/test_controller_adaptive_e2e.py \
+            --ignore=packages/python/goldenmatch/tests/test_memory_e2e.py
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: gm-cov-shard-${{ matrix.shard }}
+          path: coverage_shard${{ matrix.shard }}.dat
+          retention-days: 1
+          if-no-files-found: error
+
+  # The OOM-prone full-pipeline tests, split out of the sharded suite: they
+  # OOM-kill xdist workers under `-n auto` + coverage on a 2-core runner (silent
+  # "node down", no traceback), so they run SERIALLY (full runner memory) with a
+  # 300s timeout. Their coverage folds back in via the combine job. (Was the
+  # "SERIAL_HEAVY" pass inside the old single goldenmatch leg.) Needs no
+  # datafusion runtime (these files don't import it).
+  python_goldenmatch_heavy:
+    needs: changes
+    if: needs.changes.outputs.python_goldenmatch == 'true' || needs.changes.outputs.ci_workflow == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      - name: pytest (heavy, serial)
+        env:
+          COVERAGE_FILE: coverage_heavy.dat
+        run: |
+          uv run pytest \
+            packages/python/goldenmatch/tests/test_controller_adaptive_e2e.py \
+            packages/python/goldenmatch/tests/test_memory_e2e.py \
+            --timeout=300 --timeout-method=thread --durations=20 \
+            --cov=goldenmatch --cov-report=
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: gm-cov-heavy
+          path: coverage_heavy.dat
+          retention-days: 1
+          if-no-files-found: error
+
+  # Combine the per-shard + heavy coverage data into one report and enforce the
+  # per-module floors (the gate the old single goldenmatch leg ran inline). All
+  # producers checked out to the same runner path, so the data files' absolute
+  # paths line up and `source=["goldenmatch"]` relativises the xml filenames to
+  # `goldenmatch/...` exactly as the single-run did. Skips (so the gate no-ops)
+  # when the shards were skipped; fails if any shard failed (needs unsatisfied).
+  python_goldenmatch_coverage:
+    needs: [python_goldenmatch, python_goldenmatch_heavy]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
+        with:
+          pattern: gm-cov-*
+          merge-multiple: true
+          path: .
+      - name: Combine coverage + enforce per-module floors
+        run: |
+          uv run coverage combine --rcfile=packages/python/goldenmatch/pyproject.toml \
+            coverage_shard1.dat coverage_shard2.dat coverage_shard3.dat coverage_heavy.dat
+          uv run coverage xml --rcfile=packages/python/goldenmatch/pyproject.toml \
+            -o packages/python/goldenmatch/coverage.xml
           uv run python scripts/check_coverage_floors.py packages/python/goldenmatch/coverage.xml
 
   # Visibility lanes for tests that the main `python` job currently --ignores.
@@ -524,7 +576,7 @@ jobs:
     # Run when goldenmatch python changed OR the workflow itself changed.
     # Matrix runs all lanes regardless of which prereqs are configured;
     # each lane self-reports its prereq state.
-    if: contains(needs.changes.outputs.python_pkgs, 'goldenmatch') || needs.changes.outputs.ci_workflow == 'true'
+    if: needs.changes.outputs.python_goldenmatch == 'true' || needs.changes.outputs.ci_workflow == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -659,7 +711,7 @@ jobs:
   # benchmarks.yml workflow (schedule + workflow_dispatch).
   synthetic_benchmarks:
     needs: changes
-    if: contains(needs.changes.outputs.python_pkgs, 'goldenmatch') || needs.changes.outputs.ci_workflow == 'true'
+    if: needs.changes.outputs.python_goldenmatch == 'true' || needs.changes.outputs.ci_workflow == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -1888,6 +1940,9 @@ jobs:
     needs:
       - changes
       - python
+      - python_goldenmatch
+      - python_goldenmatch_heavy
+      - python_goldenmatch_coverage
       - python_skipped_lanes
       - python_postgres
       - synthetic_benchmarks
