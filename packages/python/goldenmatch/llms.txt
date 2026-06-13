@@ -1,20 +1,30 @@
 # GoldenMatch
 
-> Entity resolution toolkit — deduplicate records and match across datasets using fuzzy, probabilistic, and LLM-powered scoring.
+> Zero-config entity resolution — deduplicate and match records with fuzzy, exact, probabilistic (Fellegi-Sunter), and LLM scoring. Scales from a laptop CSV to 100M+ rows on Ray; the zero-tuning probabilistic path beats hand-rolled, expert-tuned Splink head-to-head.
 
 ## Interfaces
 - MCP Server: `goldenmatch mcp-serve` (16 agent tools + 24 data tools + 7 memory tools + 7 identity tools = 54 total)
 - Remote MCP: https://goldenmatch-mcp-production.up.railway.app/mcp/ (54 tools, Smithery: https://smithery.ai/servers/benzsevern/goldenmatch)
-- A2A Server: `goldenmatch agent-serve --port 8200` (10 skills)
-- CLI: `goldenmatch dedupe`, `goldenmatch match`, + 18 more commands
+- A2A Server: `goldenmatch agent-serve --port 8200` (31 skills advertised in the agent card)
+- CLI: `goldenmatch dedupe`, `goldenmatch match`, `goldenmatch autoconfig`, `goldenmatch memory ...`, `goldenmatch identity ...`, + more
 - Python API: `import goldenmatch` — `dedupe_df()`, `match_df()`, `score_strings()`, `evaluate()`, ~101 exports
+- TypeScript / Edge: `npm install goldenmatch` — same API in browsers, Cloudflare Workers, Vercel Edge, Deno; optional WASM via `await enableWasm()` swaps in the Rust score-core kernel (pure-TS stays the default + byte-identical fallback)
 - REST API: `goldenmatch serve` on port 8000
+- SQL: Postgres (pgrx extension) + DuckDB UDFs — dedupe / match / score / auto-config + telemetry / identity graph
 
 ## Install
-- `pip install goldenmatch`
+- `pip install goldenmatch` (native acceleration ships by default on common platforms)
+- TypeScript: `npm install goldenmatch`
 - Quality scanning: `pip install goldenmatch[quality]`
 - Data transforms: `pip install goldenmatch[transform]`
 - Embeddings: `pip install goldenmatch[embeddings]`
+- Distributed (50M+): `pip install goldenmatch[ray]`
+
+## Accuracy
+- DBLP-ACM: 96.4% F1 out of the box (zero-config weighted controller path)
+- Beats hand-rolled, expert-tuned Splink head-to-head: the zero-tuning probabilistic (Fellegi-Sunter) auto-config wins on every dataset Splink scores under one shared evaluator — historical_50k F1 0.778 vs 0.757 (cluster B³ 0.844 vs 0.789), febrl3 0.991 vs 0.965, synthetic_person 0.998 vs 0.996. Bake-off: docs/benchmarks/2026-06-09-splink-bakeoff.md
+- DQbench composite: 91.04
+- PPRL: 92.4% F1 on FEBRL4
 
 ## Quick Examples
 
@@ -92,11 +102,11 @@ golden_rules:
 - `MatchResult` — same shape as DedupeResult for cross-file matching
 - `GoldenMatchConfig` — Pydantic model, loadable from YAML via `gm.load_config("config.yaml")`
 
-## Performance Limits
-- In-memory: up to ~500K records. Use DuckDB backend or chunked mode for larger datasets
+## Performance & Scale
+- Backend tiers: Polars in-memory (<500K), DuckDB out-of-core (500K-50M), Ray distributed (>=50M)
+- Verified at 100M: full dedupe in 9.2 min on a 5-node Ray cluster (80 CPU), 20,000,000 clusters recovered exactly, driver peak 0.36 GB RSS — recall-complete (correct across any partitioning) and driver-collect-free end to end
 - 1M exact dedupe: ~7.8s. 100K fuzzy: ~12.8s
 - LLM scorer: ~$0.04 per dataset (budget-capped, opt-in)
-- PPRL auto-config: 92.4% F1 on FEBRL4
 
 ## Scorers
 exact, jaro_winkler, levenshtein, token_sort, ensemble, dice, jaccard, soundex_match, embedding, record_embedding, name_freq_weighted_jw, given_name_aliased_jw
@@ -111,6 +121,9 @@ lowercase, uppercase, strip, soundex, metaphone, digits_only, alpha_only, normal
 - USPS Pub. 28 addresses → prepends `address_normalize` on address/street/addr_line columns
 - NAICS 2022 industries (2,125 codes) → prepends `naics_normalize` on naics/sic/industry_code/business_type columns
 Auto-config only applies these when the profiled `col_type` agrees with the column name (e.g. a `last_name` column holding numeric IDs keeps its plain scorer). See docs/reference-data.
+
+## Golden Suite
+GoldenMatch is the headline package of a 6-package suite that composes into one pipeline: GoldenCheck (profile + validate) → GoldenFlow (standardize) → GoldenMatch (dedupe) → GoldenAnalysis (cross-cutting reporting), orchestrated by GoldenPipe, with InferMap for schema mapping. All ship on both PyPI and npm.
 
 ## Docs
 - [Full docs](https://benseverndev-oss.github.io/goldenmatch/): 22 guides

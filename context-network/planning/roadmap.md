@@ -87,6 +87,16 @@ per-platform wheel publish workflow + two `native_flow` CI lanes. See
 Open follow-up: publish the first `goldenflow-native` wheel, then promote
 `goldenflow[native]` into `[all]` + a marker-guarded default dep.
 
+## Adjacent — discoverability / public-surface audit (2026-06-13)
+Not a code arc, but the surfaces a human or AI crawler hits before installing:
+an accuracy-first, value-forward pass over the root README, the `llms.txt` family
+(now complete — every package + a suite-level root file + the new
+goldenanalysis/infermap), PyPI/npm keywords (+ `splink`/`record-linkage`/`golden-suite`),
+`CITATION.cff`, the GitHub About, and the archived sibling-repo redirects. Governing
+rule: lead value-forward, verify every public number against source. Open: the GitHub
+social-preview image (manual) + external awesome-list PRs (prepared). See
+[discoverability.md](discoverability.md). Mostly PR #883.
+
 ## Adjacent — auto-config search strategy after the engine speedup (v1.28.0, 2026-06-06)
 The mirror image of the scale arc: because execution got ~5x cheaper, the auto-config
 *brain* can now measure instead of extrapolate and use its power tools. v1.28.0 shipped the
@@ -101,4 +111,4 @@ successive-halving + an LLM-judge labeling objective are staged behind the tier 
   `GOLDENMATCH_ENABLE_DISTRIBUTED_RAY=1`.
 
 ---
-**Classification:** planning/active • **Last updated:** 2026-06-07
+**Classification:** planning/active • **Last updated:** 2026-06-13

@@ -2,6 +2,36 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-06-13 — Discoverability / public-surface audit (PR #883)
+- New workstream node [../planning/discoverability.md](../planning/discoverability.md);
+  linked from [../discovery.md](../discovery.md) and promoted in
+  [../planning/roadmap.md](../planning/roadmap.md) as an adjacent arc.
+- An accuracy-first, value-forward pass over every pre-install surface. **README:**
+  fixed DBLP-ACM `97.2→96.4`, dropped the `DQBench 95.30` headline badge (competitor
+  ceiling, not a GM score — keep 91.04 in benchmarks only), `478→~940` tests,
+  `36+→50+` MCP tools, Identity-Graph-v2-is-a-feature-shipped-in-v1.15 (not package
+  v2.0); led the accuracy story with beats-Splink + surfaced GoldenAnalysis/WASM.
+- **`llms.txt` family is now complete:** added the missing **goldenanalysis** +
+  **infermap** files and a **suite-level root `/llms.txt`**; corrected the stale A2A
+  skill count `10`/`12` → **`31`** (the agent card's `_SKILLS` grew via an MCP-parity
+  pass) and the ~500K-cap performance framing → the verified 100M run; retargeted all
+  archived-repo cross-links to the live monorepo paths.
+- **Registry + citation:** PyPI keywords were behind npm (added `splink`,
+  `record-linkage`, `fuzzy-matching`, `pprl`, … across the 6; `golden-suite` on all);
+  new root **`CITATION.cff`**. **GitHub About** description + topics refreshed
+  (`+splink`, `-negative-evidence`).
+- **Archived sibling repos redirected** (their About now points to the monorepo).
+- **Three durable facts recorded in the node:** (1) the homepage "what's new" block is
+  single-sourced from `<!-- README-callout -->` markers in goldenmatch's CHANGELOG via
+  `scripts/sync_readme_callouts.py` (`--check` is a CI gate) — edit the CHANGELOG, not
+  the README; (2) the docs site is **Mintlify**, which auto-serves `/llms.txt` +
+  `/llms-full.txt` at `docs.bensevern.dev` (the repo-root file is the GitHub/raw
+  supplement); (3) an **archived repo is fully API-read-only** (`gh repo edit` → HTTP
+  403), so editing its About needs unarchive → edit → re-archive.
+- **Open / handed off:** the GitHub social-preview image (manual, no API) and external
+  awesome-list PRs (`awesome-mcp-servers` / `Awesome-Entity-Resolution` /
+  `awesome-data-quality` — entries drafted, pending go-ahead).
+
 ## 2026-06-13 — Opt-in WASM acceleration arc (TypeScript) — #878/#879/#880/#881
 - New [../architecture/wasm-acceleration.md](../architecture/wasm-acceleration.md)
   and [../decisions/0014-opt-in-wasm-acceleration.md](../decisions/0014-opt-in-wasm-acceleration.md);

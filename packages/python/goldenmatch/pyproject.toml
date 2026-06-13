@@ -11,7 +11,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 authors = [{ name = "Ben Severn", email = "ben@bensevern.dev" }]
-keywords = ["entity-resolution", "deduplication", "record-matching", "golden-record", "data-quality"]
+keywords = ["entity-resolution", "deduplication", "record-linkage", "record-matching", "fuzzy-matching", "golden-record", "data-quality", "splink", "fellegi-sunter", "pprl", "jaro-winkler", "llm", "golden-suite"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Environment :: Console",

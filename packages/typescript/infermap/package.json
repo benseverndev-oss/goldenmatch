@@ -5,12 +5,16 @@
   "keywords": [
     "schema",
     "mapping",
+    "schema-mapping",
+    "schema-matching",
     "etl",
     "data-integration",
     "field-mapping",
+    "column-mapping",
     "infermap",
     "next.js",
-    "edge"
+    "edge",
+    "golden-suite"
   ],
   "license": "MIT",
   "author": "Ben Severn (https://bensevern.dev)",

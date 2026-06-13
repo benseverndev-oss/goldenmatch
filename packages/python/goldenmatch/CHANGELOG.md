@@ -98,6 +98,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [1.30.0] - 2026-06-09
 
+<!-- README-callout
+**Zero-training Fellegi-Sunter now beats hand-rolled, expert-tuned Splink, head-to-head and reproducibly.** On one shared evaluator across every dataset Splink scores, GoldenMatch's probabilistic auto-config wins on all of them: `historical_50k` pairwise F1 **0.778 vs 0.757** (cluster-level B³ **0.844 vs 0.789**), `febrl3` **0.991 vs 0.965**, `synthetic_person` **0.998 vs 0.996** — made reproducible by an EM training-pair determinism fix (#829). Full bake-off: `docs/benchmarks/2026-06-09-splink-bakeoff.md`.
+-->
+
 ### Added
 - **Native PPRL bloom-filter CLK kernel (opt-in, default OFF).** New
   `goldenmatch-native` symbol `bloom_clk_batch` (rayon + GIL-release, 256-bit

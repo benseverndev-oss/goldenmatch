@@ -41,6 +41,7 @@ links rather than reading everything.
 ## Planning (where it's going)
 - [planning/roadmap.md](planning/roadmap.md) — the Arrow-native arc and what's next.
 - [planning/surface-hardening.md](planning/surface-hardening.md) — the 2026-06-05 four-surface audit arc: fail-closed HTTP auth, CLI/TUI fixes, Python->TS parity ports, and the parity-fixture methodology — now including the #856/#857 "fixtures rot silently" lesson, the merged #857 refdata-name-scorer + autoconfig-blocking TS port, and the merged #855 goldencheck TS port (2 profilers / 4 relations / `validate` + a hardened golden harness that caught a pre-existing temporal_order bug).
+- [planning/discoverability.md](planning/discoverability.md) — the 2026-06-13 public-surface audit arc: accuracy-first, value-forward README + `llms.txt` family (now complete: all packages + root + the new goldenanalysis/infermap), PyPI/npm keyword refresh + `CITATION.cff`, the GitHub About, and the archived-repo redirects. The "verify every public number" rule, the README-callout-from-CHANGELOG single source of truth, the Mintlify-auto-serves-`/llms.txt` fact, and the archived-repo-is-API-read-only gotcha. Open: social-preview image + external awesome-list PRs (PR #883).
 - [planning/security-hardening.md](planning/security-hardening.md) — the 2026-06-05 security-hardening arc: 42-alert remediation (Dependabot + code scanning), Scorecard 6.1->7.3 (Token-Permissions/Signed-Releases/Fuzzing), the CodeQL Autofix incident, property-test bug ledger, and open actions.
 
 ## Meta (keeping the network alive)

@@ -1,0 +1,43 @@
+# Golden Suite
+
+> A polyglot data-quality and entity-resolution toolkit: profile, standardize, deduplicate, and report on tabular data. Six composable packages on PyPI and npm, with SQL-native PostgreSQL/DuckDB extensions, MCP/REST/A2A servers, and edge-safe TypeScript ports (optional WebAssembly). Headline package: GoldenMatch.
+
+## The pipeline
+GoldenCheck (profile + validate) → GoldenFlow (standardize) → GoldenMatch (dedupe + cluster + survivorship) → GoldenAnalysis (cross-cutting reporting), orchestrated by GoldenPipe, with InferMap for schema mapping.
+
+## Packages
+- GoldenMatch — zero-config entity resolution (fuzzy + exact + probabilistic Fellegi-Sunter + LLM). Headline package. `pip install goldenmatch` / `npm i goldenmatch`. Detail: packages/python/goldenmatch/llms.txt
+- GoldenCheck — data-quality scanning (encoding, format, anomaly detection, baseline drift). `pip install goldencheck` / `npm i goldencheck`. Detail: packages/python/goldencheck/llms.txt
+- GoldenFlow — transforms & standardizers (phone, date, address, categorical). `pip install goldenflow` / `npm i goldenflow`. Detail: packages/python/goldenflow/llms.txt
+- GoldenAnalysis — read-only cross-cutting analysis & reporting + cross-run regression detection. `pip install goldenanalysis` / `npm i goldenanalysis`. Detail: packages/python/goldenanalysis/llms.txt
+- GoldenPipe — declarative YAML orchestrator wiring the stages. `pip install goldenpipe` / `npm i goldenpipe`. Detail: packages/python/goldenpipe/llms.txt
+- InferMap — schema mapping; auto-aligns columns across heterogeneous sources. `pip install infermap` / `npm i infermap`.
+- goldenmatch-extensions (Rust) — Postgres (pgrx) extension + DuckDB UDFs: SQL-native dedupe / match / score / auto-config + telemetry / identity graph. Detail: packages/rust/extensions/llms.txt
+
+## Why it stands out (GoldenMatch headline proofs)
+- 96.4% F1 on DBLP-ACM out of the box. The zero-tuning Fellegi-Sunter auto-config beats hand-rolled, expert-tuned Splink head-to-head on every dataset Splink scores: historical_50k pairwise F1 0.778 vs 0.757 (cluster-level B³ 0.844 vs 0.789), febrl3 0.991 vs 0.965, synthetic_person 0.998 vs 0.996 — one shared evaluator. Bake-off: docs/benchmarks/2026-06-09-splink-bakeoff.md
+- Scales from a laptop CSV to a verified 100M-row dedupe in 9.2 min on a 5-node Ray cluster — recall-complete (correct across any partitioning), 20,000,000 clusters recovered exactly, driver peak 0.36 GB RSS
+- DQbench composite 91.04; PPRL 92.4% F1 on FEBRL4; a durable Identity Graph (stable entity_ids that survive across runs)
+
+## AI-native surface
+- Every package ships an MCP server (50+ tools across the suite), a REST API, and most an A2A agent surface
+- One aggregator container exposes the whole suite: `docker run ghcr.io/benseverndev-oss/goldensuite-mcp:latest`
+- Hosted remote MCP on Smithery, plus the official MCP Registry: `io.github.benzsevern/{goldenmatch,goldencheck,goldenflow,goldenpipe,infermap}`
+
+## Polyglot & edge
+- Python (PyPI) + TypeScript (npm), tracked to 4-decimal scorer parity via a cross-language harness
+- TypeScript cores are dependency-free and `node:*`-free, so they run in browsers, Cloudflare Workers, Vercel Edge, and Deno
+- An opt-in WebAssembly backend (`await enableWasm()` / `enableAnalysisWasm()`) swaps in the same pyo3-free Rust kernels (`score-core` / `analysis-core`) the Python wheels and SQL UDFs use; pure-TS stays the default and the byte-identical fallback
+- SQL-native in PostgreSQL (pgrx extension) and DuckDB
+
+## Install (quick start)
+```bash
+pip install goldenmatch && goldenmatch dedupe customers.csv   # dedupe a CSV in 30s
+npm install goldenmatch                                        # TypeScript / Edge
+pip install goldenpipe[full]                                   # Check + Flow + Match together
+```
+
+## Docs
+- [Repository + full README](https://github.com/benseverndev-oss/goldenmatch)
+- [Docs site](https://docs.bensevern.dev/)
+- Per-package `llms.txt` files are listed under "Packages" above; GoldenMatch's is the deepest.

@@ -4,10 +4,12 @@
 analysis / metrics / reporting engine: it consumes any stage's typed artifacts
 (or a raw DataFrame) and emits a unified, exportable `AnalysisReport`.
 
-> **Phase 1 (`0.1.0`)** ships the generic frame path. Suite adapters, the other
-> analyzers, cross-run regression detection, the TypeScript port, and the Rust
-> accelerator land in later phases. See
-> `docs/superpowers/specs/2026-06-08-goldenanalysis-cross-cutting-analysis-engine-design.md`.
+> GoldenAnalysis ships the generic frame path plus suite adapters (GoldenMatch /
+> GoldenCheck / GoldenFlow / GoldenPipe), cross-run trend + regression detection,
+> an edge-safe TypeScript port (optional WASM), and an optional Rust accelerator
+> for the heavy aggregation primitives — all documented below. See
+> `docs/superpowers/specs/2026-06-08-goldenanalysis-cross-cutting-analysis-engine-design.md`
+> for the design rationale.
 
 ## Install
 
@@ -42,7 +44,7 @@ goldenanalysis report report.json --format markdown      # re-render a saved rep
 
 `trend` and `regressions` operate over a saved run history (see **Cross-run** below).
 
-## Over the suite (`0.2.0`)
+## Over the suite
 
 With the relevant extra installed (`pip install goldenanalysis[match,check,flow,pipe]`):
 
@@ -60,7 +62,7 @@ report = ga.analyze_pipeline(pipe_result)
 (`analyze_match(result, certificate=...)`) — the safe bound needs a labelled
 sample, so it can't be computed automatically. Both degrade silently when absent.
 
-## Cross-run — trend + regression detection (`0.2.0`)
+## Cross-run — trend + regression detection
 
 Store reports over time, then trend a metric or detect regressions without ground
 truth:

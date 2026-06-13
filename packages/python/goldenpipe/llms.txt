@@ -83,10 +83,10 @@ Adaptive logic:
 ## Docs
 - [Full API reference](docs/llms-full.txt): 222-line guide with all patterns
 - [PyPI](https://pypi.org/project/goldenpipe/)
-- [GitHub](https://github.com/benseverndev-oss/goldenpipe)
+- [GitHub](https://github.com/benseverndev-oss/goldenmatch/tree/main/packages/python/goldenpipe)
 
 ## Part of the Golden Suite
-- [GoldenCheck](https://github.com/benseverndev-oss/goldencheck) — Validate & profile (DQBench: 88.40)
-- [GoldenFlow](https://github.com/benseverndev-oss/goldenflow) — Transform & standardize (DQBench: 100/100)
+- [GoldenCheck](https://github.com/benseverndev-oss/goldenmatch/tree/main/packages/python/goldencheck) — Validate & profile (DQBench: 88.40)
+- [GoldenFlow](https://github.com/benseverndev-oss/goldenmatch/tree/main/packages/python/goldenflow) — Transform & standardize (DQBench: 100/100)
 - [GoldenMatch](https://github.com/benseverndev-oss/goldenmatch) — Deduplicate & match (DQBench: 95.30)
-- [GoldenPipe](https://github.com/benseverndev-oss/goldenpipe) — Orchestrate the pipeline (DQBench: 88.07)
+- [GoldenPipe](https://github.com/benseverndev-oss/goldenmatch/tree/main/packages/python/goldenpipe) — Orchestrate the pipeline (DQBench: 88.07)

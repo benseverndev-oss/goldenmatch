@@ -1,13 +1,14 @@
 # GoldenMatch
 
-> Entity resolution toolkit — deduplicate records and match across datasets using fuzzy, probabilistic, and LLM-powered scoring.
+> Zero-config entity resolution — deduplicate and match records with fuzzy, exact, probabilistic (Fellegi-Sunter), and LLM scoring. Scales from a laptop CSV to 100M+ rows on Ray; the zero-tuning probabilistic path beats hand-rolled, expert-tuned Splink head-to-head.
 
 ## Interfaces
 - MCP Server: `goldenmatch mcp-serve` (16 agent tools + 24 data tools + 7 memory tools + 7 identity tools = 54 total)
 - Remote MCP: https://goldenmatch-mcp-production.up.railway.app/mcp/ (54 tools, Smithery: https://smithery.ai/servers/benzsevern/goldenmatch)
-- A2A Server: `goldenmatch agent-serve --port 8200` (12 skills)
-- CLI: `goldenmatch dedupe`, `goldenmatch autoconfig`, `goldenmatch match`, `goldenmatch memory ...`, + more
+- A2A Server: `goldenmatch agent-serve --port 8200` (31 skills advertised in the agent card)
+- CLI: `goldenmatch dedupe`, `goldenmatch autoconfig`, `goldenmatch match`, `goldenmatch memory ...`, `goldenmatch identity ...`, + more
 - Python API: `import goldenmatch` -- `dedupe_df()`, `match_df()`, `score_strings()`, `evaluate()`, `AgentSession.autoconfigure()`, `add_correction()`, `learn()`, `memory_stats()`, `get_memory()`, ~106 exports
+- TypeScript / Edge: `npm install goldenmatch` -- same API in browsers, Cloudflare Workers, Vercel Edge, Deno; optional WASM via `await enableWasm()` swaps in the Rust score-core kernel (pure-TS stays the default + byte-identical fallback)
 - REST API: `goldenmatch serve` on port 8000 (incl. `POST /autoconfig`, `GET /controller/telemetry`)
 - SQL: Postgres extension + DuckDB UDFs at `packages/rust/extensions/` (`goldenmatch_autoconfig`, `goldenmatch_dedupe_full`, `gm_telemetry`)
 
@@ -16,10 +17,18 @@
 Every interface above returns the same JSON shape from `goldenmatch.web.controller_telemetry.serialize_telemetry`: `{stop_reason, health, scoring, blocking, cluster, column_priors, decisions, committed_matchkeys, negative_evidence}`. Write one parser, reuse across web / TUI / CLI / SQL / MCP / A2A / REST.
 
 ## Install
-- `pip install goldenmatch`
+- `pip install goldenmatch` (native acceleration ships by default on common platforms)
+- TypeScript: `npm install goldenmatch`
 - Quality scanning: `pip install goldenmatch[quality]`
 - Data transforms: `pip install goldenmatch[transform]`
 - Embeddings: `pip install goldenmatch[embeddings]`
+- Distributed (50M+): `pip install goldenmatch[ray]`
+
+## Accuracy
+- DBLP-ACM: 96.4% F1 out of the box (zero-config weighted controller path)
+- Beats hand-rolled, expert-tuned Splink head-to-head: the zero-tuning probabilistic (Fellegi-Sunter) auto-config wins on every dataset Splink scores under one shared evaluator -- historical_50k F1 0.778 vs 0.757 (cluster B³ 0.844 vs 0.789), febrl3 0.991 vs 0.965, synthetic_person 0.998 vs 0.996. Bake-off: `docs/benchmarks/2026-06-09-splink-bakeoff.md`
+- DQbench composite: 91.04
+- PPRL: 92.4% F1 on FEBRL4
 
 ## Quick Examples
 
@@ -97,11 +106,11 @@ golden_rules:
 - `MatchResult` — same shape as DedupeResult for cross-file matching
 - `GoldenMatchConfig` — Pydantic model, loadable from YAML via `gm.load_config("config.yaml")`
 
-## Performance Limits
-- In-memory: up to ~500K records. Use DuckDB backend or chunked mode for larger datasets
+## Performance & Scale
+- Backend tiers: Polars in-memory (<500K), DuckDB out-of-core (500K-50M), Ray distributed (>=50M)
+- Verified at 100M: full dedupe in 9.2 min on a 5-node Ray cluster (80 CPU), 20,000,000 clusters recovered exactly, driver peak 0.36 GB RSS -- recall-complete (correct across any partitioning) and driver-collect-free end to end. A faster per-partition path (~213 s on a 4-worker run) is available via `GOLDENMATCH_DISTRIBUTED_BLOCK_SHUFFLE=0` for inputs where duplicates co-locate within partitions.
 - 1M exact dedupe: ~7.8s. 100K fuzzy: ~12.8s
 - LLM scorer: ~$0.04 per dataset (budget-capped, opt-in)
-- PPRL auto-config: 92.4% F1 on FEBRL4
 
 ## Scorers
 exact, jaro_winkler, levenshtein, token_sort, ensemble, dice, jaccard, soundex_match, embedding, record_embedding, name_freq_weighted_jw, given_name_aliased_jw
@@ -128,6 +137,9 @@ Persistent corrections + threshold learning. Off by default; enable with `memory
 - Python: `goldenmatch.add_correction(...)`, `learn()`, `memory_stats()`, `get_memory()`. Result objects expose `result.memory_stats`.
 - MCP tools: `list_corrections`, `add_correction`, `learn_thresholds`, `memory_stats`, `memory_export`.
 - Learner runs at `learning.threshold_min_corrections` (default 10) per matchkey via trust-weighted grid search.
+
+## Golden Suite
+GoldenMatch is the headline package of a 6-package suite that composes into one pipeline: GoldenCheck (profile + validate) → GoldenFlow (standardize) → GoldenMatch (dedupe) → GoldenAnalysis (cross-cutting reporting), orchestrated by GoldenPipe, with InferMap for schema mapping. All ship on both PyPI and npm; the TypeScript ports are edge-safe with an optional WASM backend.
 
 ## Docs
 - [Learning Memory](https://benseverndev-oss.github.io/goldenmatch/learning-memory)
