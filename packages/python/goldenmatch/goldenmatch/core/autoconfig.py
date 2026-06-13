@@ -926,23 +926,44 @@ def build_matchkeys(
         # Phonetic sibling (#491 heuristic path): same name+DOB composite but
         # with a `soundex` transform on the name fields, so phonetically-equal
         # spellings (Smith/Smyth, Catherine/Katherine) that the EXACT composite
-        # misses still match — provided the DOB anchor agrees. Reuses the same
-        # DOB gate: name-only soundex keys collide far too much to be an
-        # identity claim, but soundex(name)+DOB stays specific, and adversarial
-        # data without a DOB column (DQbench tier3) gets neither composite.
+        # misses still match — provided the DOB anchor agrees. name-only soundex
+        # keys collide far too much to be an identity claim, but soundex(name)+DOB
+        # stays specific (adversarial data without a DOB gets neither composite).
         # OR'd in, so it only adds candidate pairs.
-        phonetic_fields = [
-            MatchkeyField(field=p.name, transforms=["lowercase", "strip", "soundex"])
-            for p in _name_fields
-        ] + [
-            MatchkeyField(field=p.name, transforms=["lowercase", "strip"])
-            for p in _date_fields
-        ]
-        matchkeys.append(MatchkeyConfig(
-            name="phonetic_identity",
-            type="exact",
-            fields=phonetic_fields,
-        ))
+        #
+        # SCALE GATE (#510): require a SPECIFIC anchor (enough distinct values),
+        # not just a date-typed one. soundex collapses the name's cardinality to a
+        # bounded code space, so anchoring on a low-cardinality YEAR (~65-130
+        # distinct values) leaves soundex(name)+year non-specific. The spurious
+        # cross-cluster matches it manufactures grow like n_rows^2 / selectivity,
+        # so on a year anchor it stays invisible on a small sample but DEGRADES
+        # PRECISION and explodes soundex block sizes (-> OOM) as the dataset grows
+        # (#510 audit: phonetic+year precision fell 0.91->0.82 over 1K->1M and
+        # OOM'd at 25M). A full DOB stays specific. The name classifier labels a
+        # year column "date" too (the column name matches the date pattern), so
+        # col_type alone can't tell year from DOB -- gate on the anchor's distinct
+        # count (via the sample df; cardinality_ratio fallback when df is None).
+        # The EXACT-name composite above is unaffected (real names stay specific);
+        # year-anchored data still gets exact_identity + the fuzzy matchkey, just
+        # not the unscalable soundex identity claim.
+        def _anchor_specific(p: ColumnProfile) -> bool:
+            if df is not None and p.name in df.columns:
+                return int(df[p.name].n_unique()) >= 150
+            return p.cardinality_ratio >= 0.2  # sample year ~0.05, DOB ~0.5+
+        _phonetic_anchor = [p for p in _date_fields if _anchor_specific(p)]
+        if _phonetic_anchor:
+            phonetic_fields = [
+                MatchkeyField(field=p.name, transforms=["lowercase", "strip", "soundex"])
+                for p in _name_fields
+            ] + [
+                MatchkeyField(field=p.name, transforms=["lowercase", "strip"])
+                for p in _phonetic_anchor
+            ]
+            matchkeys.append(MatchkeyConfig(
+                name="phonetic_identity",
+                type="exact",
+                fields=phonetic_fields,
+            ))
 
     # Dual-composite: also emit a name+DOB composite keyed on person-name-PATTERN
     # columns (given_name/surname/first/last) when they exist and differ from the
@@ -1675,6 +1696,145 @@ def apply_quality_aware_blocking(
     })
 
 
+# ── #876: scale-invariant blocking helpers ────────────────────────────────────
+# These are module-level (not closures) so they're importable by tests and by
+# any caller that wants to reason about the budget without instantiating a full
+# build_blocking run.
+
+def _blocking_pairs_per_row_budget() -> int:
+    """K: max candidate pairs per row a blocking option may project at full N.
+
+    Constant (does NOT scale with N) — keeps the total pair count linear.  The
+    scale-invariance knob; kept separate from ``max_safe_block`` (per-block OOM)
+    so #715's scorer-matrix protection is untouched.
+
+    Default: 50 (projected avg block ≤ ~101 rows).
+    Override: ``GOLDENMATCH_BLOCKING_PAIRS_PER_ROW`` env var.
+    """
+    import os
+    try:
+        return max(1, int(os.environ.get("GOLDENMATCH_BLOCKING_PAIRS_PER_ROW", "50")))
+    except ValueError:
+        return 50
+
+
+def _project_pairs_per_row(proj_block: int) -> int:
+    """Pairs/row a (near-)uniform key contributes at full N.
+
+    A block of B rows makes C(B, 2) pairs spread over B rows → (B-1)/2 per row.
+    Uses the projected MAX block size (conservative on skew — over-counts rather
+    than under-counts, so the budget gate stays safe).
+    """
+    return max(0, (int(proj_block) - 1) // 2)
+
+
+# #876: a blocking key's block size at full N depends on whether its cardinality
+# is BOUNDED (a closed domain → block grows ∝ N) or UNBOUNDED (an identifier-like
+# column whose cardinality grows with N → block stays ~constant). A sample can't
+# tell the two apart statistically (both look the same in a small complete
+# sample, and a sparse sample of an unbounded key is all-singletons → Chao1
+# undefined). So we use the column's SEMANTIC TYPE: a `zip` caps at ~100K
+# (5-digit), a `year` at ~300, etc.; names / emails / strings are unbounded.
+# This is the same shape of fix as the phonetic-anchor gate (#510): type-aware,
+# not statistical. Types NOT listed are treated as unbounded (block constant) —
+# the conservative-for-recall default; only KNOWN-bounded domains grow.
+_BLOCKING_DOMAIN_CAP: dict[str, int] = {
+    "zip": 100_000,   # 5-digit US zip
+    "year": 300,      # ~1800-2100
+    "month": 12,
+    "boolean": 2,
+}
+
+
+def _typed_projected_block(
+    col_types: dict[str, str], fields: list[str], sample_block: int, full_n: int,
+    sample_n: int, sample_distinct: int,
+) -> int:
+    """Project a blocking key's full-N max block size.
+
+    Three regimes, chosen so the projection is right for BOTH a genuinely
+    high-cardinality key (block stays constant) AND a concentrated / null-heavy
+    key (block grows ∝N) — the two failure modes a type-only rule can't tell apart:
+
+    - **All-BOUNDED components** (every field a known-bounded domain — zip / year /
+      month / boolean in ``_BLOCKING_DOMAIN_CAP``) → the domain saturates at the
+      *product* of the per-column caps, so the block grows only as
+      ``ceil(full_n / domain)``. The leniency that lets ``[zip, birth_year]``
+      (joint domain ~30M) stay near-constant where a ∝N projector over-rejects it.
+    - **Unbounded component, but the key is NEAR-UNIQUE on the sample** (joint
+      distinct ratio ≥ the blocking-max-ratio, i.e. it spreads rows thin — a strong
+      identifier like ``member_id``, or a unique-per-cluster name): cardinality
+      grows ∝N, so the block stays at its (small) sample size. Constant.
+    - **Unbounded component AND concentrated** (joint distinct ratio < the ratio —
+      a 50-surname ``last_name``, a 50%-null ``zip5`` whose null bucket is a hot
+      partition): the hot/null bucket's MAX block grows ∝N → use the **legacy ∝N
+      projection** (``project_max_block_size``). This is the validated #715 OOM
+      guard. (#876: a type-only rule returned the constant ``sample_block`` for ANY
+      unbounded component, masking a real #715 regression — `[zip5, last_name]`
+      emitted oversized; the cardinality split fixes it without re-breaking the
+      #491 ``member_id``-wins-over-ANN case that ∝N-for-all over-rejected.)
+
+    ``sample_block`` / ``sample_distinct`` are the max group size and the distinct
+    group count on the (sub)sample of ``sample_n`` rows (one group_by yields both).
+    """
+    from goldenmatch.core.blocking_candidates import (
+        _blocking_max_ratio,
+        project_max_block_size,
+    )
+    domain = 1
+    all_bounded = True
+    for f in fields:
+        cap = _BLOCKING_DOMAIN_CAP.get(col_types.get(f, ""))
+        if cap is None:
+            all_bounded = False
+            break
+        domain *= cap
+    if all_bounded and domain > 0:
+        return max(int(sample_block), -(-int(full_n) // domain))  # ceil(full_n/domain)
+    # Unbounded component: near-unique ⇒ constant; concentrated ⇒ ∝N.
+    joint_ratio = (sample_distinct / sample_n) if sample_n > 0 else 1.0
+    if joint_ratio >= _blocking_max_ratio():
+        return int(sample_block)  # spreads rows thin → block stays ~constant
+    return project_max_block_size(int(sample_block), int(sample_n), int(full_n))
+
+
+def _scale_safe_bounded_compound(
+    candidates: list[ColumnProfile],
+    is_scale_safe: Callable[[list[str]], bool],
+) -> BlockingKeyConfig | None:
+    """AND bounded-domain exact keys into the smallest scale-safe compound.
+
+    #876: called when no SINGLE exact key is scale-safe. Considers only the
+    BOUNDED candidates (those with a ``_BLOCKING_DOMAIN_CAP`` entry — zip / year /
+    month / boolean); an unbounded key that's scale-safe alone was already kept as
+    ``safe_exact`` (an unbounded key whose sample block already exceeds the OOM
+    guard isn't bounded-compoundable here either — the name path handles it).
+    Adds bounded keys most-selective-first
+    (largest domain cap leads, so the compound is dominated by the discriminating
+    key) until the running compound passes ``is_scale_safe``. Returns the compound
+    ``BlockingKeyConfig`` or None if even the full bounded set doesn't bound the
+    block (caller then falls through to the name path).
+
+    Numeric-ish bounded keys: ``["lowercase", "strip"]`` is a safe transform
+    chain (lowercase is a no-op on digit strings, normalizes a boolean's case).
+    """
+    bounded = [p for p in candidates
+               if _BLOCKING_DOMAIN_CAP.get(p.col_type) is not None]
+    if len(bounded) < 2:
+        return None  # need >=2 bounded keys to form a joint-domain compound
+    # Largest domain cap first → the most-selective bounded key leads.
+    bounded.sort(key=lambda p: _BLOCKING_DOMAIN_CAP[p.col_type], reverse=True)
+    fields: list[str] = []
+    for p in bounded:
+        fields.append(p.name)
+        if len(fields) >= 2 and is_scale_safe(fields):
+            return BlockingKeyConfig(fields=list(fields), transforms=["lowercase", "strip"])
+    return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+
 def build_blocking(
     profiles: list[ColumnProfile],
     df: pl.DataFrame,
@@ -1761,9 +1921,26 @@ def build_blocking(
     _ann_eligible = bool(_embedding_cols) and effective_n_full >= ann_min_rows
 
     def _projected_ratio(p: ColumnProfile) -> float:
-        """Sample-corrected cardinality_ratio for the gate."""
+        """Sample-corrected cardinality_ratio for the #408/#410 blocking gate.
+
+        #876: TYPE-AWARE projection (same fix as ``_typed_projected_block`` for
+        block size). ``scale_cardinality_ratio_to_full_population`` is a Chao1
+        unseen-species estimator — it assumes a CLOSED domain and projects the
+        cardinality ratio DOWN as N grows (more rows fill in the fixed domain →
+        proportionally fewer distinct). That's valid only for a BOUNDED-domain
+        key (zip/year/month/boolean). For an UNBOUNDED key (email/name/
+        identifier/string) the domain grows WITH N, so a near-unique key stays
+        near-unique at scale; Chao1 wrongly drives its ratio toward 0 (email
+        0.56 → ~0.00 at 200M), letting a near-surrogate slip past the
+        ``blocking_max_ratio`` gate and get picked as the SOLE blocking key —
+        which blocks into near-singletons and tanks recall (#876: QIS email
+        blocking recall 0.39). Keep an unbounded key at its sample ratio so the
+        gate sees it for what it is. BOUNDED keys still Chao1-project (zip's true
+        ratio really does fall as the 100K domain saturates)."""
         if effective_n_full <= sample_n:
             return p.cardinality_ratio
+        if _BLOCKING_DOMAIN_CAP.get(p.col_type) is None:
+            return p.cardinality_ratio  # unbounded domain: ratio does not fall with N
         sample_distinct = max(int(p.cardinality_ratio * sample_n), 1)
         return scale_cardinality_ratio_to_full_population(
             sample_distinct=sample_distinct,
@@ -1808,10 +1985,6 @@ def build_blocking(
     ]
     text_cols = [p for p in profiles if p.col_type in ("description", "string", "address")]
 
-    def _max_block_size(col_name: str) -> int:
-        """Largest group size when blocking on this column."""
-        return int(df.group_by(col_name).len().get_column("len").max() or 0)  # pyright: ignore[reportArgumentType]  # polars max() typed as PythonLiteral; "len" column is int64 at runtime
-
     # Auto-config's "is this blocking key safe?" threshold. Scales with
     # total_rows so the autoconfig's tolerance for block size grows with
     # the dataset.
@@ -1840,19 +2013,58 @@ def build_blocking(
     # block-size guard. On a sparse-zip5 healthcare shape, zip5 reclassifies
     # to `identifier` and drops out of the compound, leaving single-name
     # passes whose max block projects to ~50K rows at 1M -> ~39.6M candidate
-    # pairs -> an 18-min run. project_max_block_size with full_n == df.height
-    # is the identity (v0 path uses exact block sizes -> correct).
-    from goldenmatch.core.blocking_candidates import project_max_block_size
+    # pairs -> an 18-min run. #876 keeps the legacy ∝N projector for keys with an
+    # unbounded component (hot-bucket-safe) and adds a type-aware domain-product
+    # path for ALL-BOUNDED-domain compounds (see _typed_projected_block).
+
+    _col_types = {p.name: p.col_type for p in profiles}
+
+    def _sample_block_and_distinct(fields: list[str]) -> tuple[int, int]:
+        """(max group size, distinct group count) on the sample — one group_by.
+
+        The distinct count drives the #876 cardinality split in
+        ``_typed_projected_block`` (near-unique key ⇒ constant block; concentrated
+        ⇒ ∝N). On error, return ``(effective_n_full, 1)`` so the key is treated as
+        maximally oversized AND concentrated (dropped) — fail-safe.
+        """
+        try:
+            g = df.group_by(fields).len()
+            mb = int(g.get_column("len").max() or 0)  # pyright: ignore[reportArgumentType]  # polars max() typed as PythonLiteral; "len" is int64 at runtime
+            return mb, int(g.height)
+        except Exception:  # pragma: no cover -- defensive
+            return effective_n_full, 1
 
     def _projected_block(fields: list[str]) -> int:
-        try:
-            sample_mb = int(df.group_by(fields).len().get_column("len").max() or 0)  # pyright: ignore[reportArgumentType]  # polars max() typed as PythonLiteral; "len" is int64 at runtime
-        except Exception:  # pragma: no cover -- defensive
-            return effective_n_full  # fail-safe: treat unprojectable key as maximally oversized -> dropped
-        return project_max_block_size(sample_mb, df.height, effective_n_full)
+        sample_mb, sample_distinct = _sample_block_and_distinct(fields)
+        # #876: ALL-BOUNDED-domain key (zip×year) grows only as full_n/domain (the
+        # leniency that lets [zip, birth_year] pass); an unbounded component is
+        # constant if near-unique on the sample, else legacy ∝N (hot-bucket-safe).
+        return _typed_projected_block(
+            _col_types, fields, sample_mb, effective_n_full, sample_n, sample_distinct)
+
+    def _is_scale_safe(fields: list[str]) -> bool:
+        # #876: a key is scale-safe iff its candidate-pair count stays LINEAR in
+        # N. Regimes from the projection (see _typed_projected_block):
+        #   - ALL-BOUNDED-domain key (typed block grows ∝ N/domain, e.g. zip×year):
+        #     pairs grow ∝ N^2/domain -> must satisfy the constant pairs-per-row
+        #     budget K (block <= ~2K+1). Rejects sole-zip at 100M; admits the
+        #     [zip, birth_year] compound (domain ~30M -> tiny block).
+        #   - NEAR-UNIQUE unbounded key (member_id): constant small block -> linear
+        #     pairs -> safe at any sample block size (per-block OOM guard aside).
+        #   - CONCENTRATED unbounded key (50-surname last_name, 50%-null zip5): the
+        #     legacy ∝N projection applies and a hot/null bucket projects oversized
+        #     -> rejected here (the #715 guard).
+        sb, sd = _sample_block_and_distinct(fields)
+        pb = _typed_projected_block(
+            _col_types, fields, sb, effective_n_full, sample_n, sd)
+        if pb > max_safe_block:
+            return False  # per-block OOM guard (#715), also kills huge-N bounded keys
+        if pb > sb:  # block grows with N (bounded-cardinality / concentrated key)
+            return _project_pairs_per_row(pb) <= _blocking_pairs_per_row_budget()
+        return True
 
     def _pass_is_bounded(key: BlockingKeyConfig) -> bool:
-        return _projected_block(key.fields) <= max_safe_block
+        return _is_scale_safe(key.fields)
 
     def _gate_passes(
         primary: BlockingKeyConfig,
@@ -1896,15 +2108,52 @@ def build_blocking(
     if exact_cols:
         # Pre-filter: only evaluate top 5 by cardinality to avoid expensive group_by on all columns
         exact_cols_sorted = sorted(exact_cols, key=lambda p: df[p.name].n_unique(), reverse=True)
+        # #876: drop a unique-per-row SURROGATE (id) before picking the best
+        # exact key.  A surrogate creates singleton blocks (block size 1 → 0
+        # candidate pairs → finds nothing) and was the degenerate fallback. Gate
+        # ONLY on cardinality_ratio >= 1.0 (mirrors the exact-matchkey surrogate
+        # guard at ~line 813). Do NOT also drop on projected_block<=1: a unique
+        # email in a tiny sample (card_ratio < 1.0) is a legitimate exact
+        # blocking key (it repeats in real data / match mode) — dropping it
+        # regressed test_blocks_on_exact_column.
+        exact_cols_sorted = [
+            p for p in exact_cols_sorted
+            if (p.cardinality_ratio or 0.0) < 1.0
+        ]
         candidates = exact_cols_sorted[:5]
-        # Filter out columns that create oversized blocks
-        safe_exact = [p for p in candidates if _max_block_size(p.name) <= max_safe_block]
+        # #876: keep only scale-safe exact keys (the linear/pairs gate applies to
+        # GROWING bounded keys only — see _is_scale_safe). At 100M a `zip` key
+        # (bounded ~100K domain) projects a block of ~1000 that GROWS with N, so
+        # it's rejected; an unbounded `email`/`name` key with a constant block is
+        # kept.
+        safe_exact = [p for p in candidates if _is_scale_safe([p.name])]
         if safe_exact:
             best = max(safe_exact, key=lambda p: df[p.name].n_unique())
             transforms = ["lowercase", "strip"] if best.col_type == "email" else ["strip"]
             return BlockingConfig(
                 keys=[BlockingKeyConfig(fields=[best.name], transforms=transforms)],
             )
+        # #876: no SINGLE exact key is scale-safe. Before dropping these exact
+        # discriminators for the name path, try to AND the BOUNDED ones into a
+        # compound whose JOINT domain bounds the block under the pairs budget.
+        # Two bounded keys that each explode alone (zip ∝N/100K, year ∝N/300) have
+        # a joint domain of ~100K·300 = 30M, so their compound's block stays
+        # ~constant and the pair count linear. The compound preserves what a sole
+        # `zip` gives but can't scale: it co-locates a cluster's variants (both
+        # components stable within a cluster) AND separates near-duplicate clusters
+        # that share names but differ on the bounded keys (the QIS twin shape;
+        # blocking on names alone collides those twins → over-merge). This is the
+        # bounded-compound of the #876 design, instantiated as a refinement of the
+        # rejected bounded keys rather than a greedy highest-cardinality pick.
+        bounded_compound = _scale_safe_bounded_compound(candidates, _is_scale_safe)
+        if bounded_compound is not None:
+            logger.info(
+                "Scale-safe bounded compound blocking: %s (no single exact key "
+                "is scale-safe at full_n=%d; ANDed bounded exact keys to bound "
+                "the block). See #876.",
+                bounded_compound.fields, effective_n_full,
+            )
+            return BlockingConfig(keys=[bounded_compound], strategy="static")
         # All exact columns create oversized blocks — fall through
         logger.warning(
             "Exact blocking columns all produce oversized blocks (>%d), "
@@ -2503,6 +2752,7 @@ def auto_configure_df(
     confidence_required: bool = True,
     allow_red_config: bool = False,
     planning_effort: str | None = None,
+    n_rows_full: int | None = None,
 ) -> GoldenMatchConfig:
     """Public auto-configuration entry point (controller-backed).
 
@@ -2654,6 +2904,13 @@ def auto_configure_df(
         # build_matchkeys via _legacy_auto_configure_v0 for phone demotion.
         "multi_source": _ms_partition is not None,
     }
+    # #876: let a caller configure FOR a larger target population than `df` (e.g.
+    # build a frozen config from a small oracle but FOR 200M rows, so
+    # build_blocking's scale gate projects to the real scale). _initial_config
+    # forwards v0_kwargs["n_rows_full"] to the v0 heuristic (its guard lets the
+    # caller's value win over the controller's df.height default).
+    if n_rows_full is not None:
+        v0_kw["n_rows_full"] = n_rows_full
     config, profile, history = controller.run(
         df,
         reference=reference,
