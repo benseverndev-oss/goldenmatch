@@ -79,3 +79,34 @@ def test_migrate_is_idempotent(tmp_path):
     migrate_record_ids(store)
     rpt2 = migrate_record_ids(store)
     assert rpt2.rewritten == 0 and rpt2.merged == 0
+
+
+def test_clash_same_entity_merges(tmp_path):
+    store = IdentityStore(backend="sqlite", path=str(tmp_path / "id.db"))
+    payload = {"name": "Ann"}
+    legacy = _seed_legacy_record(store, "acme", payload, "ent-1")
+    h1 = _recompute_h1_id("acme", payload)
+    store.upsert_record(SourceRecord(record_id=h1, source="acme",
+        source_pk=h1[len("acme") + 1:], record_hash=_hash_payload(payload),
+        entity_id="ent-1", payload=payload))
+
+    rpt = migrate_record_ids(store)
+    assert rpt.merged == 1 and rpt.rewritten == 0
+    assert store.get_record(legacy) is None
+    assert store.find_entity_by_record(h1) == "ent-1"
+
+
+def test_clash_distinct_entity_is_not_merged(tmp_path):
+    store = IdentityStore(backend="sqlite", path=str(tmp_path / "id.db"))
+    payload = {"name": "Ann"}
+    legacy = _seed_legacy_record(store, "acme", payload, "ent-1")
+    h1 = _recompute_h1_id("acme", payload)
+    store.upsert_identity(IdentityNode(entity_id="ent-2"))
+    store.upsert_record(SourceRecord(record_id=h1, source="acme",
+        source_pk=h1[len("acme") + 1:], record_hash=_hash_payload(payload),
+        entity_id="ent-2", payload=payload))
+
+    rpt = migrate_record_ids(store)
+    assert rpt.clashed_distinct_entity == 1 and rpt.merged == 0 and rpt.rewritten == 0
+    assert store.get_record(legacy) is not None
+    assert store.find_entity_by_record(h1) == "ent-2"

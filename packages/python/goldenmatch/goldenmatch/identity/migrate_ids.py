@@ -8,10 +8,12 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from goldenmatch.core._hashing import record_fingerprint
 from goldenmatch.identity.fingerprint_batch import _canonical_payload
+from goldenmatch.identity.model import EvidenceEdge
 
 # "{source}:hash:{12 hex}" -- source may itself contain ':' so match the SUFFIX.
 _LEGACY_RE = re.compile(r"^(?P<source>.+):hash:[0-9a-f]{12}$")
@@ -82,6 +84,44 @@ def _rename_record(store, old_id: str, new_id: str, source: str) -> int:
     return touched
 
 
+_MISSING = object()
+
+
+def _existing_entity_for(store, rid: str):
+    row = store._fetchone(
+        "SELECT entity_id FROM source_records WHERE record_id = ?", (rid,))
+    if row is None:
+        return _MISSING
+    return row["entity_id"]
+
+
+def _merge_into(store, old_id: str, new_id: str) -> int:
+    """Same-entity merge: repoint legacy edges onto new_id via add_edge (dedup +
+    canonicalize), delete legacy edges, delete the legacy record. Returns edges moved."""
+    rows = store._fetchall(
+        "SELECT entity_id, record_a_id, record_b_id, kind, score, matchkey_name, "
+        "run_name, dataset, recorded_at FROM evidence_edges "
+        "WHERE record_a_id = ? OR record_b_id = ?", (old_id, old_id))
+    moved = 0
+    for r in rows:
+        a = new_id if r["record_a_id"] == old_id else r["record_a_id"]
+        b = new_id if r["record_b_id"] == old_id else r["record_b_id"]
+        if a == b:
+            continue  # self-pair after merge; drop
+        rec = r["recorded_at"]
+        store.add_edge(EvidenceEdge(
+            entity_id=r["entity_id"], record_a_id=a, record_b_id=b,
+            kind=r["kind"], score=r["score"], matchkey_name=r["matchkey_name"],
+            run_name=r["run_name"], dataset=r["dataset"],
+            recorded_at=rec if isinstance(rec, datetime) else datetime.fromisoformat(rec),
+        ))
+        moved += 1
+    store._exec("DELETE FROM evidence_edges WHERE record_a_id = ? OR record_b_id = ?",
+                (old_id, old_id))
+    store._exec("DELETE FROM source_records WHERE record_id = ?", (old_id,))
+    return moved
+
+
 def _do_migrate(store, *, dry_run: bool) -> MigrationReport:
     rpt = MigrationReport(dry_run=dry_run)
     rows = store._fetchall(
@@ -103,13 +143,26 @@ def _do_migrate(store, *, dry_run: bool) -> MigrationReport:
         if new_id is None:
             rpt.kept_unfingerprintable += 1
             continue
-        # NOTE: clash handling is added in Task 3. For Task 2, assume no clash.
-        if dry_run:
-            rpt.rewritten += 1
-            rpt.edges_repointed += _count_edges_touching(store, rid)
-            continue
-        rpt.edges_repointed += _rename_record(store, rid, new_id, source)
-        rpt.rewritten += 1
+        existing = _existing_entity_for(store, new_id)
+        if existing is _MISSING:
+            # no clash -> rename
+            if dry_run:
+                rpt.rewritten += 1
+                rpt.edges_repointed += _count_edges_touching(store, rid)
+            else:
+                rpt.edges_repointed += _rename_record(store, rid, new_id, source)
+                rpt.rewritten += 1
+        elif existing == row["entity_id"]:
+            # clash, same entity -> safe merge
+            if dry_run:
+                rpt.merged += 1
+                rpt.edges_repointed += _count_edges_touching(store, rid)
+            else:
+                rpt.edges_repointed += _merge_into(store, rid, new_id)
+                rpt.merged += 1
+        else:
+            # clash, DIFFERENT entity -> never silently merge
+            rpt.clashed_distinct_entity += 1
     return rpt
 
 
