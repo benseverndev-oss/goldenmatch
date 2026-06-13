@@ -1,0 +1,87 @@
+# InferMap
+
+> Inference-driven schema mapping — map messy source columns to a known target schema, accurately and explainably, with zero config. Seven weighted scorers + Hungarian optimal one-to-one assignment, a confidence score and human-readable reasoning per field. Python (PyPI) + TypeScript (npm), verified bit-for-bit by a shared parity suite.
+
+## Interfaces
+- Python API: `import infermap` — `map()`, `from_config()`, `extract_schema()`, `MapEngine`, `default_scorers`, `@infermap.scorer` (custom scorer), `detect_domain`
+- CLI: `infermap map`, `infermap apply`, `infermap inspect`, `infermap validate`, `infermap mcp-serve`
+- MCP Server: `infermap mcp-serve` (4 tools: `map`, `inspect`, `validate`, `apply`; stdio or `--transport http`). Also aggregated through `goldensuite-mcp`.
+- TypeScript / Edge: `npm install infermap` — `map()`, `MapEngine`, `defineScorer()`; zero runtime deps, runs on Vercel/Next.js Edge Runtime, Cloudflare Workers, Deno, browsers
+
+## Install
+- `pip install infermap`
+- DB extras: `pip install infermap[postgres]` / `[mysql]` / `[duckdb]` / `[all]`
+- TypeScript: `npm install infermap`
+
+## Quick Examples
+
+### Map a source file to a target schema
+```python
+import infermap
+
+result = infermap.map("crm_export.csv", "canonical_customers.csv")
+for m in result.mappings:
+    print(f"{m.source} -> {m.target}  ({m.confidence:.0%})")
+# fname -> first_name (97%), lname -> last_name (95%), email_addr -> email (91%)
+
+import polars as pl
+renamed = result.apply(pl.read_csv("crm_export.csv"))   # rename columns to the target schema
+result.to_config("my_mapping.yaml")                      # save mappings for reuse
+saved = infermap.from_config("my_mapping.yaml")          # reload later, no re-inference
+```
+
+### TypeScript (edge-safe)
+```ts
+import { map } from "infermap";
+
+const result = map({ records: crm }, { records: canonical });
+// result.mappings: [{ source, target, confidence, reasoning }]
+```
+
+Drop into a Next.js Edge route with `export const runtime = "edge"` — zero Node built-ins.
+
+## How it works
+Each source/target field pair runs through 7 scorers (each returns a score in [0,1] or abstains); scores combine via weighted average (>=2 contributors), then the **Hungarian algorithm** picks the optimal one-to-one assignment.
+- ExactScorer (1.0) — case-insensitive exact name match
+- AliasScorer (0.95) — known aliases (`fname` <-> `first_name`) + domain dictionaries
+- InitialismScorer (0.75) — abbreviations (`assay_id` <-> `ASSI`)
+- PatternTypeScorer (0.7) — semantic type from sample values (email, date_iso, phone, uuid, url, zip, currency)
+- ProfileScorer (0.5) — statistical profile (dtype, null rate, unique rate, length, cardinality)
+- FuzzyNameScorer (0.4) — Jaro-Winkler on normalized field names
+- LLMScorer (0.8) — pluggable LLM-backed scorer (stubbed by default)
+
+Plus common-prefix canonicalization (strips schema-wide prefixes like `prospect_` before matching) and optional confidence calibration (Isotonic / Platt; Valentine ECE 0.46 -> 0.005).
+
+## Features
+- Domain dictionaries: generic (default), healthcare, finance, ecommerce — `MapEngine(domains=["healthcare"])`
+- Custom scorers: `@infermap.scorer` (Python) / `defineScorer()` (TypeScript)
+- Providers: CSV / Parquet / XLSX files, in-memory (Polars / Pandas / `list[dict]`), DB (SQLite / Postgres / DuckDB)
+- Saved mapping config: YAML (Python) / JSON (TypeScript), interoperable shape
+- Python <-> TypeScript parity verified by a shared golden-test suite (within 0.0005)
+
+## Accuracy
+- 162-case benchmark F1 0.84; ChEMBL F1 0.819 with the InitialismScorer
+- Confidence calibration: Valentine ECE 0.46 -> 0.005
+
+## Config Template
+```yaml
+domains: [healthcare, finance]
+scorers:
+  LLMScorer: { enabled: false }
+  FuzzyNameScorer: { weight: 0.3 }
+aliases:
+  order_id: [order_num, ord_no]
+```
+
+## Docs
+- [PyPI](https://pypi.org/project/infermap/)
+- [npm](https://www.npmjs.com/package/infermap)
+- [Wiki](https://github.com/benseverndev-oss/infermap/wiki)
+- [GitHub](https://github.com/benseverndev-oss/goldenmatch/tree/main/packages/python/infermap)
+
+## Part of the Golden Suite
+InferMap is the schema-mapping front door of the suite: it auto-aligns columns across heterogeneous sources so the rest of the pipeline can run on a unified schema. GoldenCheck (profile) → GoldenFlow (standardize) → GoldenMatch (dedupe) → GoldenAnalysis (report), orchestrated by GoldenPipe.
+- [GoldenMatch](https://github.com/benseverndev-oss/goldenmatch) — Deduplicate & match (headline package)
+- [GoldenCheck](https://github.com/benseverndev-oss/goldencheck) — Validate & profile
+- [GoldenFlow](https://github.com/benseverndev-oss/goldenflow) — Transform & standardize
+- [GoldenPipe](https://github.com/benseverndev-oss/goldenpipe) — Orchestrate the pipeline
