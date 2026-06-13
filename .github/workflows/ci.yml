@@ -805,8 +805,12 @@ jobs:
         run: pnpm --filter goldenmatch-wasm-runtime build
       - name: WASM parity (un-skipped — artifact now present) [THE GATE]
         run: pnpm --filter goldenmatch exec vitest run tests/parity/wasm-scorer.test.ts
-      - name: Benchmark (informational; dist artifact-path under tsup bundling TBD on first run)
-        continue-on-error: true
+      - name: Benchmark + dist-path validation (enableWasm() must resolve the bundled artifact)
+        # No longer continue-on-error: the bench builds dist + runs enableWasm(),
+        # which resolves `./artifacts/score_wasm_bg.wasm` from the BUNDLED output.
+        # copy_wasm_artifact.mjs now copies to every plausible dist `./artifacts/`
+        # parent, so a broken bundled path reddens the lane (bench exits 1 on a
+        # failed enableWasm) instead of silently passing.
         run: |
           pnpm --filter goldenmatch build
           node packages/typescript/goldenmatch/scripts/bench_wasm_scorer.mjs 1500
@@ -839,8 +843,11 @@ jobs:
         run: pnpm --filter goldenmatch-wasm-runtime build
       - name: WASM aggregate parity (un-skipped — artifact now present) [THE GATE]
         run: pnpm --filter goldenanalysis exec vitest run tests/parity/wasm-aggregate.test.ts
-      - name: Benchmark (informational; dist artifact-path under tsup bundling TBD on first run)
-        continue-on-error: true
+      - name: Benchmark + dist-path validation (enableAnalysisWasm() must resolve the bundled artifact)
+        # No longer continue-on-error: the bench builds dist + runs
+        # enableAnalysisWasm(), resolving `./artifacts/analysis_wasm_bg.wasm` from
+        # the BUNDLED output. copy_wasm_artifact.mjs copies to every plausible dist
+        # `./artifacts/` parent, so a broken bundled path reddens the lane.
         run: |
           pnpm --filter goldenanalysis build
           node packages/typescript/goldenanalysis/scripts/bench_wasm_aggregate.mjs 1000000

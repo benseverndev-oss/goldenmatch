@@ -92,12 +92,15 @@ npx vitest run tests/parity/        # parity-only suite
   WASM ≈ pure-TS now holds too — the three prior known divergences are gone (e.g.
   `"saturday"/"sunday"` pure-TS 0.7475 → 0.7775). The goldens stay rapidfuzz-sourced
   because the WASM kernel IS rapidfuzz.
-- **Open item — dist artifact path:** the loader resolves the artifact via
-  `new URL('./artifacts/score_wasm_bg.wasm', import.meta.url)`. The parity test
-  runs against `src` (vitest, unbundled) and is correct. Whether tsup BUNDLING
-  flattens that path in `dist` (so `copy_wasm_artifact.mjs`'s destination must be
-  adjusted to match the bundled loader's resolved location) is to be validated on
-  the first `wasm_score` CI run; the bench step is `continue-on-error` until then.
+- **Dist artifact path (resolved):** the loader resolves the artifact via
+  `new URL('./artifacts/score_wasm_bg.wasm', import.meta.url)`, which in the
+  BUNDLED `dist` points at whichever location tsup lands the loader code. Rather
+  than predict that, `copy_wasm_artifact.mjs` copies the artifact to EVERY
+  plausible `./artifacts/` parent (`dist/core/wasm/artifacts/`, `dist/core/artifacts/`,
+  `dist/artifacts/`). The `wasm_score` bench step is now a GATE (no longer
+  `continue-on-error`): it builds dist + runs `enableWasm()`, so a broken bundled
+  path reddens the lane (the bench `process.exit(1)`s on a failed enableWasm).
+  Same pattern in the `analysis_wasm` lane / goldenanalysis.
 
 ## Parity contract
 - **Scorer output:** 4-decimal tolerance vs Python (`tests/parity/scorer-ground-truth.test.ts`).
