@@ -25,7 +25,7 @@ jobs:
     uses: ./.github/workflows/_publish-js.yml
     with:
       package: goldenanalysis
-      build_deps: false
+      build_deps: true
       ref: ${{ inputs.ref || '' }}
       dry_run: ${{ inputs.dry_run || 'false' }}
     secrets: inherit
