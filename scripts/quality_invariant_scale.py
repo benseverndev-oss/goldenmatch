@@ -1057,8 +1057,12 @@ def _run_phase5_and_collect(
         config=cfg,
         confidence_required=False,
         allow_red_config=True,
-        output_path=None,  # skip the golden WRITE; golden is still built (real path)
+        output_path=None,
         assignments_output_path=assignments_path,
+        # Quality scoring needs only the cluster assignments; skip the distributed
+        # golden build (quality-weighted most_complete survivorship over every
+        # multi-member row) -- substantial work at 100M and pure waste here.
+        _skip_golden=True,
     )
     dedup_wall = time.time() - t0
 
