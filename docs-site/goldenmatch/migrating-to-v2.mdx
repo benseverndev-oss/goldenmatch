@@ -1,0 +1,68 @@
+---
+title: "Migrating to v2.0"
+description: "Step-by-step guide for upgrading from GoldenMatch 1.x to 2.0."
+---
+
+GoldenMatch 2.0 removes four deprecated items that have had a deprecation
+warning since 1.x. For most users the upgrade is a one-command migration
+followed by a `pip install --upgrade goldenmatch`.
+
+## Before you upgrade: migrate identity DBs
+
+If you use the identity graph (`config.identity.enabled = True`) and your DB
+was populated before v1.25, your records may carry legacy `:hash:`-keyed ids.
+On the first 2.0 run those records will be treated as new entities (SPLIT).
+
+Run the migration tool before upgrading:
+
+```bash
+goldenmatch identity migrate-ids --path .goldenmatch/identity.db
+```
+
+For Postgres:
+
+```bash
+goldenmatch identity migrate-ids --dsn postgresql://user:pass@host/db
+```
+
+Add `--dry-run` to preview counts without making changes. Un-fingerprintable
+rows (e.g. all-null payloads) keep their `:hash:` id and are unaffected.
+
+## Removed items
+
+### `GOLDENMATCH_IDENTITY_ID_SCHEME`
+
+The `hash` scheme and its env-var kill-switch are gone. The canonical
+`h1` scheme is the only scheme. Remove `GOLDENMATCH_IDENTITY_ID_SCHEME=hash`
+from any environment config or startup scripts.
+
+### `GOLDENMATCH_CLUSTER_FRAMES_OUT`
+
+The frames-out clustering path is now the ONLY path. Remove
+`GOLDENMATCH_CLUSTER_FRAMES_OUT=0` from environment config -- the variable
+is silently ignored in 2.0.
+
+### `RunHistory.cheapest_healthy()`
+
+Replace any direct call with `pick_committed()`:
+
+```python
+# before
+entry = history.cheapest_healthy()
+
+# after
+entry = history.pick_committed()
+```
+
+### `_scale_aware_backend` (internal)
+
+This was an internal shim with a `DeprecationWarning` since v1.20. If you
+imported it directly, switch to the public `auto_configure_df` / `dedupe_df`
+API, which routes through the v3 planner automatically.
+
+## Verifying the upgrade
+
+```bash
+python -c "import goldenmatch; print(goldenmatch.__version__)"
+# 2.0.0
+```

@@ -493,7 +493,7 @@ def build_clusters(
     # list[(int, int, float)] the Union-Find / pair_scores path below consumes.
     # The return shape is unchanged (dict[int, dict]); Phase 2 changes it to
     # the two-frame ClusterFrames layout. The list[tuple] branch below stays
-    # for the deprecation window.
+    # as the permanent input shape alongside the columnar path.
     if _is_pairs_dataframe(pairs):
         if all_ids is None and not pairs.is_empty():
             import numpy as _np
