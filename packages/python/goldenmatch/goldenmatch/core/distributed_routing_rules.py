@@ -147,3 +147,39 @@ def apply_distributed_routing(
         golden_distributed=(golden.mode == "distributed"),
         routing_decisions=(scoring, clustering, golden),
     )
+
+
+def _projection_mode(d) -> str:
+    return "distributed" if d.projected_bytes > d.budget_bytes else "in_memory"
+
+
+def slow_path_overrides(plan: ExecutionPlan):
+    """Overridden decisions whose mode contradicts their own projection."""
+    return [d for d in plan.routing_decisions
+            if d.overridden and d.mode != _projection_mode(d)]
+
+
+class SlowPathRefusedError(Exception):
+    """Raised when a slow-path override is present on a large input and the
+    caller has not passed allow_slow_path=True."""
+
+    def __init__(self, *, decisions, n_rows: int) -> None:
+        self.decisions = decisions
+        self.n_rows = n_rows
+        joined = "; ".join(
+            f"{d.stage} forced {d.mode} via {d.override_source} "
+            f"(projection: {_projection_mode(d)})" for d in decisions)
+        super().__init__(
+            f"Refusing slow-path config at n_rows={n_rows:,}: {joined}. "
+            f"Pass allow_slow_path=true to proceed anyway.")
+
+
+def enforce_routing(plan: ExecutionPlan, *, n_rows: int, allow_slow_path: bool) -> None:
+    if allow_slow_path:
+        return
+    from goldenmatch.core.autoconfig_controller import REFUSE_AT_N
+    if n_rows < REFUSE_AT_N:
+        return
+    bad = slow_path_overrides(plan)
+    if bad:
+        raise SlowPathRefusedError(decisions=bad, n_rows=n_rows)
