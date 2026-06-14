@@ -10,7 +10,7 @@ description = "Python bridge for GoldenMatch SQL extensions"
 # Pinned to >=0.24.1 for the GHSA buffer-overflow fix in PyString::from_object
 # (affected range: >=0.23.0, <0.24.1). Upper bound <0.25 keeps us on the same
 # API line as the native crate.
-pyo3 = { version = ">=0.24.1, <0.25", features = ["auto-initialize"] }
+pyo3 = { version = ">=0.24.1, <0.30", features = ["auto-initialize"] }
 thiserror = "2"
 
 [dev-dependencies]
