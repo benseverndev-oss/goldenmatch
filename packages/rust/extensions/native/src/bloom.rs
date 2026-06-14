@@ -15,7 +15,7 @@
 //! removes the `str.lower()`/`str.strip()` parity hazard (Python casing/whitespace
 //! rules != Rust `to_lowercase()`/`trim()`), so the kernel is byte-exact by
 //! construction. See `docs/design/2026-05-25-native-acceleration-decision-matrix.md`.
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use pyo3::prelude::*;
 use rayon::prelude::*;
 use sha2::{Digest, Sha256};
