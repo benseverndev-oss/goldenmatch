@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
@@ -36,6 +37,23 @@ logger = logging.getLogger(__name__)
 # subsequent failures for the same key are silent and short-circuit before
 # re-invoking the failing scorer at all.
 _NE_BROKEN: set[tuple[str, str]] = set()
+# `_NE_BROKEN` is mutated from the ThreadPoolExecutor block-scoring workers
+# (`score_blocks_parallel` / `_columnar`). The GIL keeps the set itself
+# consistent, but it is a PROCESS global: without a reset, a transient or
+# config-specific NE failure in one dedupe would stay "broken" for every later
+# dedupe in the same process -- a real leak in a long-lived MCP/A2A server. The
+# scoring entry points call `reset_ne_broken()` (single-threaded, before
+# fan-out) so each run re-evaluates NE freshly. The lock guards the writes (and
+# matters on free-threaded/no-GIL builds where `set` ops are no longer atomic).
+_NE_BROKEN_LOCK = threading.Lock()
+
+
+def reset_ne_broken() -> None:
+    """Clear the per-process record of NE ``(scorer, field)`` entries that
+    failed once. Called at the start of each scoring run so a broken NE entry
+    from a prior dedupe doesn't silently skip a valid one in the next."""
+    with _NE_BROKEN_LOCK:
+        _NE_BROKEN.clear()
 
 
 def _emit_scoring_profile(
@@ -193,7 +211,8 @@ def _apply_negative_evidence(matchkey: MatchkeyConfig, pair: dict) -> float:
             val_b = apply_transforms(val_b, ne.transforms)
             sim = score_field(val_a, val_b, ne.scorer)
         except (ValueError, KeyError) as exc:
-            _NE_BROKEN.add(ne_key)
+            with _NE_BROKEN_LOCK:
+                _NE_BROKEN.add(ne_key)
             logger.warning(
                 "auto-config: NE scorer '%s' for field '%s' not registered or failed: %s; "
                 "skipping (further pairs with this NE entry will be silently skipped)",
@@ -201,7 +220,8 @@ def _apply_negative_evidence(matchkey: MatchkeyConfig, pair: dict) -> float:
             )
             continue
         except Exception as exc:
-            _NE_BROKEN.add(ne_key)
+            with _NE_BROKEN_LOCK:
+                _NE_BROKEN.add(ne_key)
             logger.warning(
                 "auto-config: NE scoring of field '%s' raised %s; "
                 "skipping (further pairs with this NE entry will be silently skipped)",
@@ -1169,6 +1189,8 @@ def score_blocks_parallel(
     Returns:
         All fuzzy pairs found across blocks.
     """
+    # Fresh per run: don't inherit a prior dedupe's known-broken NE entries.
+    reset_ne_broken()
     if max_workers is None:
         max_workers = _DEFAULT_MAX_WORKERS
     if not blocks:
@@ -1576,6 +1598,8 @@ def score_blocks_columnar(
     Returns:
         Polars DataFrame with ``PAIR_STREAM_SCHEMA`` shape.
     """
+    # Fresh per run: don't inherit a prior dedupe's known-broken NE entries.
+    reset_ne_broken()
     if max_workers is None:
         max_workers = _DEFAULT_MAX_WORKERS
     if not blocks:
