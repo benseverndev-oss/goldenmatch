@@ -1662,6 +1662,11 @@ jobs:
         run: |
           sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
           curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/postgresql.gpg
+          # Drop the runner's pre-provisioned Microsoft/Azure apt repos before
+          # updating: they intermittently 403 ("no longer signed") on the hosted
+          # images and would abort the whole `apt-get update`, yet this lane only
+          # needs pgdg + the Ubuntu base repos for the pgrx build.
+          sudo rm -f /etc/apt/sources.list.d/*microsoft* /etc/apt/sources.list.d/*azure* || true
           sudo apt-get update
           sudo apt-get install -y "postgresql-${PG_VERSION}" "postgresql-server-dev-${PG_VERSION}" libclang-dev
           sudo chmod a+rwx "/usr/share/postgresql/${PG_VERSION}/extension" "/usr/lib/postgresql/${PG_VERSION}/lib"
