@@ -46,7 +46,7 @@ jobs:
 
       - name: Build + install the FFI UDF wheel (spine scorers) + datafusion runtime
         run: |
-          uv pip install 'datafusion>=53,<54'
+          uv pip install 'datafusion>=54,<55'
           uv run --with maturin maturin build --release \
             --manifest-path packages/rust/extensions/datafusion-udf/Cargo.toml --out dist-dfudf
           uv pip install dist-dfudf/*.whl

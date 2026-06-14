@@ -9,7 +9,6 @@
 // DataFusion's parallel batch execution over throughput. The Python caller
 // already parallelizes across queries, and embed batches are coarse, so the
 // per-batch lock is not the bottleneck.
-use std::any::Any;
 use std::sync::{Arc, Mutex};
 
 use arrow_array::builder::{FixedSizeListBuilder, Float32Builder};
@@ -88,10 +87,8 @@ impl EmbedUDF {
 }
 
 impl ScalarUDFImpl for EmbedUDF {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
+    // datafusion 54 removed `as_any` from `ScalarUDFImpl` (Any is now a
+    // supertrait; downcast via the blanket Any impl).
     fn name(&self) -> &str {
         "goldenmatch_embed"
     }

@@ -130,7 +130,7 @@ ray = [
 # config.backend="datafusion". Apache Arrow query engine; pairs with
 # goldenmatch-native for zero-Python-loop scoring.
 datafusion = [
-    "datafusion>=53,<54",
+    "datafusion>=54,<55",
 ]
 # Sail tier (distributed, Spark Connect). Spec: docs/superpowers/specs/
 # 2026-06-03-sail-tier-design.md. Sail is programmed via PySpark/Spark

@@ -22,7 +22,6 @@
 // FFI_ScalarUDF::from(Arc::new(ScalarUDF::from(self.clone()))) chain) mirrors
 // scalar_udf.rs / embed_udf.rs verbatim.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow_array::builder::{Float64Builder, Int64Builder, ListBuilder, StructBuilder};
@@ -136,10 +135,8 @@ impl ConnectedComponentsUDF {
 }
 
 impl ScalarUDFImpl for ConnectedComponentsUDF {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
+    // datafusion 54 removed `as_any` from `ScalarUDFImpl` (Any is now a
+    // supertrait; downcast via the blanket Any impl).
     fn name(&self) -> &str {
         "goldenmatch_connected_components"
     }
@@ -260,10 +257,8 @@ impl PairDedupUDF {
 }
 
 impl ScalarUDFImpl for PairDedupUDF {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
+    // datafusion 54 removed `as_any` from `ScalarUDFImpl` (Any is now a
+    // supertrait; downcast via the blanket Any impl).
     fn name(&self) -> &str {
         "goldenmatch_pair_dedup"
     }

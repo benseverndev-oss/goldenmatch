@@ -20,7 +20,6 @@
 // `token_sort_ratio` 0-100 value divided by 100 — the test accounts for the
 // /100 between the two surfaces.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
@@ -90,10 +89,9 @@ macro_rules! string_scorer_udf {
         }
 
         impl ScalarUDFImpl for $udf {
-            fn as_any(&self) -> &dyn Any {
-                self
-            }
-
+            // datafusion 54 removed `as_any` from `ScalarUDFImpl` (the trait now
+            // has `Any` as a supertrait, so downcasting goes via the blanket
+            // `Any` impl directly).
             fn name(&self) -> &str {
                 $sql_name
             }

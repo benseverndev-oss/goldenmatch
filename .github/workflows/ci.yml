@@ -428,7 +428,7 @@ jobs:
       # Scale-mode DataFusion edge stream (cluster_edges_df.py) lives behind the
       # optional `datafusion` extra; install it so the parity tests RUN rather
       # than importorskip-SKIP (a false green). Cheap (wheel download).
-      - run: uv pip install 'datafusion>=53,<54'
+      - run: uv pip install 'datafusion>=54,<55'
       # Suite-wide lints run once (shard 1), not per shard.
       - if: matrix.shard == 1
         run: uv run ruff check packages/python/goldenmatch

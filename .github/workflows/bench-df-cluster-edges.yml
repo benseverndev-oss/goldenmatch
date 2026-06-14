@@ -47,7 +47,7 @@ jobs:
             **/pyproject.toml
       - run: uv sync --all-packages
       - name: Install datafusion (embedded Arrow query engine)
-        run: uv pip install 'datafusion>=53,<54'
+        run: uv pip install 'datafusion>=54,<55'
       - name: Build native extension
         run: uv run python scripts/build_native.py
       - name: Bench cluster-edge view (legacy dict vs DataFusion stream vs Polars)
