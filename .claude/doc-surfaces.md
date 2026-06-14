@@ -76,6 +76,47 @@ thing to grep for.
   docs, but the place a rollout's hard-won lesson belongs).
 - **GitHub About / topics**, **`CITATION.cff`** — only on a notable capability change.
 
+## Automated gates
+
+Three tiers of automation keep these surfaces in lockstep as the repo advances.
+All scripts are stdlib-only and anchored to the repo root via `Path(__file__)`.
+
+- **Tier 1 - `scripts/check_docs_consistency.py`** (REQUIRED CI gate, `--check`
+  default). The single umbrella entry point for "all doc gates". It (a) runs
+  `check_version_consistency.py` and `sync_readme_callouts.py --check` as
+  subprocesses; (b) **roster matrix** - derives the published-package roster from
+  the `publish-*.yml` workflows (cross-checked against
+  `scripts/suite_download_badges.py`) and asserts each CORE package name appears
+  in the root `README.md` and the `docs-site/docs.json` nav; (c) **docs-nav
+  integrity** - `docs.json` parses, every nav page ref resolves to an `.mdx`, and
+  every `.mdx` under `docs-site/<group>/` is referenced (orphan detection); (d)
+  **changelog<->version** - each `packages/python/<pkg>/CHANGELOG.md` most-recent
+  *released* version heading equals its `pyproject.toml` version (packages whose
+  CHANGELOG has no versioned heading, or only an `unreleased` top entry, are
+  reported, not failed). Wired as the `docs_consistency` job in `ci.yml` (in the
+  `ci-required` needs list), gated on the `docs` path filter. To satisfy it: add
+  the missing README table row / `docs.json` nav entry / fix the broken nav link
+  or orphan page, or bump the lagging CHANGELOG/version.
+
+- **Tier 2 - `scripts/check_docs_staleness.py`** (ADVISORY CI job, `--base`/
+  `--head`, default `origin/main..HEAD`). Diff-aware. The **flag rule** (gating
+  within the job): adding/removing a `GOLDENMATCH_*` env flag in
+  `packages/python/**/*.py` without touching `docs-site/goldenmatch/tuning.mdx`
+  emits `::error::` and exits 1. The **public-symbol rule** (warning only): a
+  package `__init__.py` `__all__`/re-export change with no doc surface touched
+  emits `::warning::`. Wired as the `docs_staleness` job with
+  `continue-on-error: true` (NOT in `ci-required`) - it surfaces annotations,
+  never blocks a clean PR.
+
+- **Tier 3 - `scripts/check_docs_sweep.py`** + `docs/.docs-sweep.json` (RELEASE /
+  manual gate, NOT run on every PR). Asserts `docs/.docs-sweep.json` `.version`
+  equals the current `packages/python/goldenmatch` version. A bump of the
+  headline package since the last recorded sweep reds the gate. **At the END of a
+  docs sweep, bump `docs/.docs-sweep.json`** (`version` to the new goldenmatch
+  version, refresh `commit`/`date`). Run this manually before tagging a release,
+  or wire it into the publish/release workflow. It exists to catch "cut a release
+  but never swept the prose surfaces" that the structural gates can't author.
+
 ## Sweep mechanics for this repo
 
 - Grep the whole repo (minus `_archive/`) for every symbol/flag/endpoint the rollout
