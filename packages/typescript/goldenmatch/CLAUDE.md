@@ -102,6 +102,31 @@ npx vitest run tests/parity/        # parity-only suite
   path reddens the lane (the bench `process.exit(1)`s on a failed enableWasm).
   Same pattern in the `analysis_wasm` lane / goldenanalysis.
 
+## Universal WASM loader + cross-JS-target harnesses (R1 Workstream A)
+- **`enableWasm({ universal: true })`** is an opt-in seam (alongside the default
+  URL/fs/fetch loader) that resolves the artifact from a base64-INLINED module
+  (`artifacts/score_wasm_base64.js`, emitted by `build_wasm.sh`, gitignored like
+  the `.wasm`). No fetch/fs/`import.meta.url` asset resolution — the only path
+  edge-safe across Workers + Deno + every bundler. Cost: base64 ~+33% over the raw
+  `.wasm`. Decode lives in `goldenmatch-wasm-runtime` (`decodeWasmBase64`, `atob`
+  or Buffer). DEFAULT path unchanged; default users load zero wasm bytes. Decision
+  note: `docs/superpowers/notes/2026-06-14-wasm-universal-loader.md`.
+- **Cross-target equivalence harnesses** (`tests/spike/`): the spike's pure-TS-vs-
+  kernel 4dp assertion factored into runtime-agnostic `kernel-equivalence-core.ts`
+  + frozen `fixtures/pure-ts-reference.json`. Per target: `kernel-equivalence.test.ts`
+  (node, default vitest), `deno-kernel-equivalence.ts` (`deno test --no-check`),
+  `browser-kernel-equivalence.test.ts` (`vitest.browser.config.ts`, Playwright
+  chromium), `workers-kernel-equivalence.test.ts` (`vitest.workers.config.ts`,
+  workerd). The browser + workers tests are EXCLUDED from the default `vitest run`
+  (they need their own pools/globals) — run them via their `--config` files. CI:
+  `.github/workflows/r1-kernel-js-targets.yml` (workflow_dispatch only).
+- **Workers caveat (real constraint):** workerd BANS runtime WASM codegen
+  (`WebAssembly.instantiate`/`new WebAssembly.Module` from bytes both throw "Wasm
+  code generation disallowed by embedder"). So Workers does NOT use the base64-bytes
+  universal path — it needs a BUILD-TIME CompiledWasm `.wasm?module` import (the
+  vitest-pool-workers convention). A Workers consumer of `enableWasm` must likewise
+  ship the kernel as a build-time module, not via `{ universal: true }`.
+
 ## Parity contract
 - **Scorer output:** 4-decimal tolerance vs Python (`tests/parity/scorer-ground-truth.test.ts`).
 - **Hash bytes:** SHA-256 truncated to 16 hex via Web Crypto. UTF-8 mandatory. Hash input = values joined by `|` (NOT `<col>=<val>`). `__row_id__` excluded from `record_hash` so corrections survive row reordering.
