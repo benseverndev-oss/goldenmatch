@@ -351,8 +351,16 @@ def _score_blocks_block_shuffle(
        matchkey's key equals a blocking pass's key (block + exact-match the same
        field doubles the copies).
     """
+    # Shuffle partition count. Default derives from the DRIVER cpu count, but the
+    # block-shuffle explodes each record per co-location key (wide records ->
+    # large blocks -> Ray ResourceBudget backpressure that pins _score to ONE
+    # node, killing the distributed parallelism). On wide/at-scale workloads,
+    # raise this via GOLDENMATCH_DISTRIBUTED_SHUFFLE_PARTS so blocks are small
+    # enough to fit the object store and _score fans out across all workers.
     cpu = os.cpu_count() or 16
-    n_parts = min(256, max(4, cpu * 4))
+    _parts_override = os.environ.get("GOLDENMATCH_DISTRIBUTED_SHUFFLE_PARTS")
+    n_parts = (max(1, int(_parts_override)) if _parts_override
+               else min(256, max(4, cpu * 4)))
 
     def _explode(batch: Any) -> Any:  # pa.Table -> pa.Table
         import polars as pl

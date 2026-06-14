@@ -23,9 +23,12 @@ updates:
       python-dev:
         dependency-type: "development"
 
-  # TypeScript — goldenmatch-js package
+  # TypeScript — the pnpm workspace (one root pnpm-lock.yaml covers every
+  # member under packages/typescript/*). The old "/packages/goldenmatch-js"
+  # path did not exist, so Dependabot covered NO TS package; "/" (the lockfile
+  # root) covers the whole workspace.
   - package-ecosystem: "npm"
-    directory: "/packages/goldenmatch-js"
+    directory: "/"
     schedule:
       interval: "weekly"
       day: "monday"
@@ -41,6 +44,27 @@ updates:
           - "patch"
       ts-dev:
         dependency-type: "development"
+
+  # Rust — every crate under packages/rust/extensions/* (15+ crates: native
+  # accelerators, FFI UDFs, score/graph/fingerprint cores, wasm, pgrx, embed).
+  # Previously UNCOVERED, so crate CVE bumps (e.g. pyo3) were hand-planned.
+  - package-ecosystem: "cargo"
+    directories:
+      - "/packages/rust/extensions/*"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "rust"
+    groups:
+      rust-deps:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
 
   # GitHub Actions
   - package-ecosystem: "github-actions"

@@ -85,6 +85,70 @@ config/env flag, feeding only the ANN-gather step. We do **not** replace Parquet
 as the interchange format (Ray, object-storage connectors, and the bench release
 assets all stay Parquet).
 
+## Results (measured 2026-06-13)
+
+Run on a fresh sandbox: polars 1.41, pyarrow 24, lance 7.0, numpy 2.4. Two
+methodology fixes landed before trusting numbers: **(a)** a BTREE scalar index on
+`block_key` for the Lance `block_filter` (the first pass handicapped Lance with no
+index against sorted-Parquet); **(b)** peak RSS via `/proc/self/status` `VmHWM`
+instead of `resource.ru_maxrss` — a spawned child inherits the parent's
+`ru_maxrss` high-water mark, so the first pass reported an identical (bogus)
+3560 MB for every pattern. Both are in `scripts/bench_lance_vs_parquet.py`.
+
+**Bench, N = 10M, 5-run median wall (x = Lance vs Parquet, RSS = VmHWM peak):**
+
+| Pattern | Parquet | Lance | x-factor | Parquet RSS | Lance RSS |
+|---|---:|---:|---|---:|---:|
+| `full_scan` | 267 ms | 674 ms | 0.4x (slower) | 1379 MB | 1497 MB |
+| `block_filter` (no index) | 4.3 ms | 159 ms | 0.03x | 78 MB | 379 MB |
+| `block_filter` (BTREE idx) | 4.3 ms | **8.2 ms** | 0.5x | 78 MB | 190 MB |
+| `scatter_take` K/N=1e-5 (K=100) | 248 ms | **9.1 ms** | **27.3x** | 1381 MB | **178 MB** |
+| `scatter_take` K/N=1e-4 (K=1k) | 239 ms | **41 ms** | **5.8x** | 1362 MB | 192 MB |
+| `scatter_take` K/N=1e-3 (K=10k) | 246 ms | 186 ms | 1.3x | 1375 MB | 321 MB |
+| `scatter_take` K/N=1e-2 (K=100k) | 265 ms | 482 ms | 0.5x | 1374 MB | 686 MB |
+
+Write/disk: Parquet 1.2 s / 183 MB; Lance 1.2 s / 412 MB (**2.3x larger**); BTREE
+index build 1.7 s.
+
+Two findings the fixes surfaced: the scalar index turns `block_filter` from ~37x
+slower into a single-digit-ms near-tie (the earlier "disaster" was the missing
+index); and on sparse gathers Lance uses **~8x less memory** (178 MB vs 1381 MB at
+K/N=1e-5) because Parquet must scan the whole column to gather a handful of rows
+while Lance reads only the covering pages. Lance's `scatter_take` advantage grows
+without bound as the gather gets sparser (1.3x → 5.8x → 27x as K/N → 1e-5).
+
+**Real gather sparsity (`scripts/measure_ann_gather_sparsity.py`, auto-configured
+blocker on `realistic_person_df`):** member-weighted median K/N = **3e-5 at 100K
+rows, 3e-6 at 1M** — both deep in Lance's win zone. At 100K (a coarse `first_name`
+pass creates a tail: p99=70, max=419) the gathered-row split is win 50% /
+marginal 43% / loss 7%; at 1M the synthetic 3-record identities give uniform
+3-row blocks (100% win). Caveat: synthetic identities understate the real
+heavy-tail — production surname/zip skew would push more gathered rows toward the
+loss zone.
+
+### Verdict — the gate splits by access pattern
+
+The original gate (`scatter_take >= 5x at K/N <= 1e-3` **and** `full_scan` /
+`block_filter` within 1.2x) is **not met for the batch dedup pipeline**:
+`full_scan` is 0.4x and Lance writes 2.3x more disk. Crucially, batch dedup
+*eventually gathers every row* (every block is scored), so cumulatively it is a
+full scan — Lance's per-row-address `take` cannot help, and its bigger files +
+slower scan make it a net loss. **Do not put Lance on the batch pipeline.**
+
+But the same numbers make Lance a **strong fit for the sparse one-shot retrieval
+path** — `core/match_one.py`, `core/streaming.py`, the `incremental` CLI, and the
+Postgres ANN-index path — where you hold a large base on disk and fetch only the
+ANN candidate rows per query (K/N ≈ 1e-5..1e-4 in the measured blocking): **6–27x
+faster and ~8x less memory**, with `full_scan` simply never on the critical path
+there. That is a different, smaller, opt-in integration than the spec first
+scoped (a Lance-backed base store for incremental matching, not a Lance writer in
+the batch loader).
+
+**Recommendation:** reject Lance for batch dedup; open a focused follow-up spike
+for a Lance-backed base store behind `match_one`/`streaming`/`incremental`,
+measured on a real skewed dataset (not synthetic 3-record identities) before any
+adoption.
+
 ## Risks / unknowns
 
 - **Format lock-in & ops.** Lance is younger than Parquet; the bench-dataset
