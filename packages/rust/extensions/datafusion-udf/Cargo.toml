@@ -49,6 +49,19 @@ goldenembed = { path = "../goldenembed" }
 # abi3-py311: one stable-ABI artifact spans CPython 3.11-3.13 (matches the
 # sibling `native` crate; the example uses abi3-py310 but we floor at 3.11).
 pyo3 = { version = "0.29", features = ["extension-module", "abi3", "abi3-py311"] }
+# Pin to dodge an upstream brotli 8.0.3 build break (2026-06). brotli 8.0.3 uses
+# alloc-no-stdlib 2.x, but two of its deps bumped to alloc-no-stdlib 3.0.0:
+# alloc-stdlib 0.2.3 and brotli-decompressor 5.0.2. That links two
+# semver-incompatible alloc-no-stdlib versions into brotli (StandardAlloc vs
+# Allocator -> rustc E0277, "could not compile brotli"). Pinning BOTH back to
+# their 2.x-using releases keeps alloc-no-stdlib unified at 2.0.4 so brotli (via
+# parquet -> datafusion) compiles. Neither is used directly; these force the
+# transitive versions. Cargo.lock is gitignored here (CI resolves fresh), so
+# these explicit pins ARE the fix — verified: a fresh `cargo generate-lockfile`
+# resolves a single alloc-no-stdlib 2.0.4 and brotli compiles.
+# Remove once brotli/parquet upstream ships a consistent set.
+alloc-stdlib = "=0.2.2"
+brotli-decompressor = "=5.0.1"
 
 [build-dependencies]
 pyo3-build-config = "0.29"
