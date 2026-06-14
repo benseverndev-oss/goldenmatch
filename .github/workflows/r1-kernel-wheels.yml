@@ -1,0 +1,269 @@
+# R1 Workstream B — all-platform abi3 wheel BUILD + CORRECTNESS + PERF gate.
+#
+# The single-kernel-collapse roadmap's kill-criterion (3) — "all-platform abi3
+# wheels can't be produced without recurring per-release firefighting (the #688
+# class)" — is the dominant no-go risk for the collapse (see
+# context-network/architecture/single-kernel-collapse-R1-plan.md +
+# decisions/0016-single-kernel-collapse-spike.md). This workflow PROBES it:
+#
+#   (a) `wheels`     — build the `goldenmatch-native` abi3 wheel on every platform
+#                      the suite must support, install it on a clean Python 3.11,
+#                      and run the equivalence gate in REQUIRE-KERNEL mode + the
+#                      bench with --assert-not-slower. A leg is green only if the
+#                      JUST-BUILT wheel imports AND is pure==kernel at 4dp AND is
+#                      not slower than pure beyond tolerance.
+#   (b) `perf_cliff` — THE #688 probe: build + run the per-pair bench AND the
+#                      #688 repro harness on the 8-core AMD EPYC shape #688 wedged
+#                      on, asserting the kernel path does NOT regress into a
+#                      multi-minute rayon LockLatch futex park.
+#
+# ADDITIVE + MANUAL ONLY: `workflow_dispatch` (no push / pull_request trigger), so
+# it adds zero load to normal CI. It flips NO default, builds the SAME crate as
+# publish-goldenmatch-native.yml, and modifies no product/Rust source.
+name: r1-kernel-wheels
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Tag or commit to build (default: the triggering ref)"
+        required: false
+        default: ""
+      cliff_runner:
+        # The #688 LockLatch futex park reproduces ONLY on the 8-core x86 AMD EPYC
+        # `ubuntu-latest-xlarge` shape (NOT large-new-64GB/16c, NOT plain
+        # ubuntu-latest) — see root CLAUDE.md `goldenmatch-native`/#688. Kept as an
+        # input so the probe is easy to retarget if that label is unavailable in
+        # this org. NOTE: brand-new GitHub-hosted larger runners can take 30-60 min
+        # to provision and SOMETIMES STALL allocation entirely (sit "Ready" while
+        # jobs queue forever) — a slow/queued perf_cliff job is EXPECTED, not a
+        # failure; retarget via this input or re-dispatch if it stalls.
+        description: "Runner label for the #688 perf-cliff probe (8-core EPYC shape)"
+        required: false
+        default: "ubuntu-latest-xlarge"
+
+permissions:
+  contents: read
+
+env:
+  # One manifest drives every build — the SAME crate publish-goldenmatch-native.yml
+  # ships. abi3 means one wheel per platform (cpython 3.11+).
+  MANIFEST: packages/rust/extensions/native/Cargo.toml
+
+jobs:
+  # (a) Build the abi3 wheel on every supported platform, then on a clean Python
+  # 3.11 install it + the pure package and run the equivalence gate (require-kernel)
+  # + the bench (assert-not-slower). fail-fast: false so one platform's failure
+  # doesn't hide the others — the whole point is to see WHICH platforms clear.
+  wheels:
+    name: wheel ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # linux x86_64 (manylinux 2_28) — the #688 host family.
+          - name: linux-x86_64
+            runner: ubuntu-latest
+            target: x86_64
+            manylinux: "2_28"
+          # linux aarch64 (manylinux 2_28, cross-built via maturin-action's qemu).
+          - name: linux-aarch64
+            runner: ubuntu-latest
+            target: aarch64
+            manylinux: "2_28"
+          # macOS arm64 (native on the Apple Silicon runner).
+          - name: macos-arm64
+            runner: macos-14
+            target: aarch64
+          # macOS x86_64 (cross-compile on macos-14 — macos-13 Intel runners queue
+          # indefinitely in this org; Apple ships the x86_64 SDK slice).
+          - name: macos-x86_64
+            runner: macos-14
+            target: x86_64
+          # windows x64.
+          - name: windows-x64
+            runner: windows-latest
+            target: x64
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      # Build the abi3 wheel with the SAME SHA-pinned action + manifest +
+      # --release/abi3 setup as publish-goldenmatch-native.yml.
+      - name: Build wheel (maturin, abi3)
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b  # v1.51.0
+        with:
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux }}
+          args: --release --out dist -m ${{ env.MANIFEST }}
+
+      # A CLEAN 3.11 interpreter so the gate exercises the just-built abi3 wheel,
+      # not an in-tree `scripts/build_native.py` artifact.
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.11"
+
+      # Install the built wheel + the pure package (the equivalence gate imports
+      # `goldenmatch.core.scorer.score_field`, which pulls polars/jellyfish/numpy/
+      # rapidfuzz). The wheel provides `goldenmatch_native._native`; the loader's
+      # discover order reaches it as the kernel leg.
+      - name: Install built wheel + pure package
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          # The aarch64 wheel is cross-built and not installable on the x86_64
+          # runner; on that leg the gate can't run, so we don't attempt install/run
+          # (the BUILD succeeding is the signal that aarch64 manylinux is producible
+          # without firefighting — the matter kill-criterion (3) probes).
+          if [ "${{ matrix.name }}" = "linux-aarch64" ]; then
+            echo "linux-aarch64 wheel is cross-built (not runnable on this x86 runner) — build-only leg." \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+            ls -la dist
+            exit 0
+          fi
+          python -m pip install dist/*.whl
+          python -m pip install -e packages/python/goldenmatch
+
+      - name: Equivalence gate (REQUIRE-KERNEL) + bench (ASSERT-NOT-SLOWER)
+        if: matrix.name != 'linux-aarch64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "### wheel ${{ matrix.name }}"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # (1) Correctness: pure==kernel at 4dp — FAIL (not skip) if the just-built
+          #     wheel isn't importable, since the whole point is testing it.
+          echo "::group::equivalence gate (--require-kernel)"
+          if python scripts/check_kernel_equivalence.py --require-kernel | tee equiv.log; then
+            EQUIV="PASS"
+          else
+            EQUIV="FAIL"
+          fi
+          echo "::endgroup::"
+
+          # (2) Perf: kernel >= pure (within tolerance) — exit non-zero on a cliff.
+          echo "::group::bench (--require-kernel --assert-not-slower)"
+          if python scripts/bench_kernel_levenshtein.py --require-kernel --assert-not-slower | tee bench.log; then
+            PERF="PASS"
+          else
+            PERF="FAIL"
+          fi
+          echo "::endgroup::"
+
+          RATIO=$(grep -oE 'BENCH_RATIO_PURE_OVER_KERNEL=[0-9.]+' bench.log | tail -1 | cut -d= -f2)
+          echo "| platform | equivalence | perf | wall ratio (pure/kernel) |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| ${{ matrix.name }} | ${EQUIV} | ${PERF} | ${RATIO:-n/a} |" >> "$GITHUB_STEP_SUMMARY"
+
+          # Fail the leg if EITHER gate failed (tee masks the real exit above).
+          if [ "$EQUIV" != "PASS" ] || [ "$PERF" != "PASS" ]; then
+            echo "leg FAILED: equiv=$EQUIV perf=$PERF"
+            exit 1
+          fi
+
+      - name: Upload wheel + logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: r1-wheel-${{ matrix.name }}
+          path: |
+            dist
+            equiv.log
+            bench.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # (b) THE #688 PROBE — the highest-signal test of the dominant no-go risk.
+  #
+  # Runs on the 8-core AMD EPYC `ubuntu-latest-xlarge` shape where #688's rayon
+  # LockLatch futex park reproduced 100% (and ONLY there — not large-new-64GB/16c,
+  # not plain ubuntu-latest). Builds the kernel, runs the per-pair bench AND the
+  # #688 repro harness (scripts/bench_issue_688.py), and asserts the kernel path
+  # does NOT regress into a multi-minute park (kernel >= pure, no wedge).
+  #
+  # CAVEAT (root CLAUDE.md): these larger GitHub-hosted runners can take 30-60 min
+  # to provision and SOMETIMES STALL allocation entirely (job sits queued forever).
+  # A slow-to-start or queued perf_cliff job is EXPECTED — retarget via the
+  # `cliff_runner` input or re-dispatch; do NOT read a stall as a build failure.
+  perf_cliff:
+    name: perf-cliff (#688 probe)
+    runs-on: ${{ inputs.cliff_runner }}
+    timeout-minutes: 60
+    env:
+      # Keep the repro's thread pools small + deterministic, mirroring
+      # bench-issue-688.yml / the #688 report shape.
+      POLARS_MAX_THREADS: "4"
+      RAYON_NUM_THREADS: "4"
+      GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/native
+
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+
+      - name: Sync workspace
+        run: uv sync --all-packages
+
+      # In-tree build (drops goldenmatch._native) — same path bench_issue_688.py
+      # imports, and the fastest way to get a runnable kernel on this runner.
+      - name: Build native extension
+        run: uv run python scripts/build_native.py
+
+      - name: Per-pair bench — kernel must NOT be slower than pure
+        run: |
+          set -euo pipefail
+          echo "::group::bench_kernel_levenshtein (--require-kernel --assert-not-slower)"
+          uv run python scripts/bench_kernel_levenshtein.py \
+            --require-kernel --assert-not-slower --pairs 8000 --runs 5 | tee cliff_bench.log
+          echo "::endgroup::"
+          RATIO=$(grep -oE 'BENCH_RATIO_PURE_OVER_KERNEL=[0-9.]+' cliff_bench.log | tail -1 | cut -d= -f2)
+          {
+            echo "## #688 perf-cliff probe — runner \`${{ inputs.cliff_runner }}\`"
+            echo ""
+            echo "| probe | result |"
+            echo "|---|---|"
+            echo "| per-pair bench (kernel/pure ratio) | ${RATIO:-FAILED} (pass = kernel not slower) |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # The full #688 dedupe repro on the kernel's DEFAULT path (RAYON_MIN_PAIRS
+      # unset = the sequential fix above the 20M-pair threshold). If the rayon park
+      # had regressed, this wall would balloon into the minutes; the 60-min job cap
+      # converts a true wedge into an actionable failure rather than a silent hang.
+      - name: "#688 dedupe repro — kernel default path must not wedge"
+        run: |
+          set -euo pipefail
+          echo "::group::bench_issue_688 (default kernel path)"
+          uv run python scripts/bench_issue_688.py --rows 100000 | tee cliff_688.log
+          echo "::endgroup::"
+          WALL=$(grep -oE 'DEDUPE_WALL_SECONDS=[0-9.]+' cliff_688.log | tail -1 | cut -d= -f2)
+          echo "| #688 dedupe wall (default path) | ${WALL:-FAILED} s (pass = sub-minute, no futex park) |" \
+            >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload perf-cliff logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: r1-perf-cliff-logs
+          path: |
+            cliff_bench.log
+            cliff_688.log
+          if-no-files-found: ignore
+          retention-days: 30

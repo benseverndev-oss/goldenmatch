@@ -2,6 +2,36 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-06-14 — Single-kernel-collapse R1 Workstream B: all-platform wheel + #688 perf-cliff gate
+- New [../architecture/single-kernel-collapse-R1-plan.md](../architecture/single-kernel-collapse-R1-plan.md)
+  (the R1 go/no-go plan of record), linked from [../discovery.md](../discovery.md).
+  Scopes both R1 workstreams — A (WASM across Node/browser/Workers/Deno =
+  kill-criterion 2; scoped, harness pending) and B (all-platform abi3 wheels + the
+  #688 perf cliff = kill-criterion 3; THIS change) — each with goal / verification
+  design / per-target evidence / kill checkpoint, the "one generalized gate run in
+  more places" + `kernel-targets` report idea, the additive/no-default-flip-in-R1
+  rule, and the honestly-PARTIAL expected outcome (kernel-default where the
+  platform reliably supports it + a thin pure fallback elsewhere).
+- **Workstream B shipped as additive, workflow_dispatch-only infra** — flips no
+  default, deletes nothing, touches no product/Rust source. New
+  `.github/workflows/r1-kernel-wheels.yml`: a `wheels` matrix (linux x86_64
+  manylinux 2_28 / linux aarch64 / macOS arm64 / macOS x86_64 cross / windows x64)
+  that builds the abi3 wheel with the same SHA-pinned `maturin-action` + manifest
+  as `publish-goldenmatch-native.yml`, then on a clean Python 3.11 runs the
+  equivalence gate in **REQUIRE-KERNEL** mode (FAIL not skip if the just-built
+  wheel is absent) + the bench with **ASSERT-NOT-SLOWER**; and a `perf_cliff` job
+  on `ubuntu-latest-xlarge` (the 8-core AMD EPYC shape #688 wedged on; parameterized
+  via `cliff_runner`) that runs the per-pair bench AND `scripts/bench_issue_688.py`,
+  asserting no rayon-LockLatch futex-park regression. `fail-fast: false`;
+  per-platform PASS/FAIL + wall-ratio to the step summary.
+- **Two backward-compatible script flags added** (default behavior preserved — both
+  skip-on-absent + exit 0 with neither flag): `--require-kernel` (already present on
+  `check_kernel_equivalence.py`) and a new `--require-kernel`/`--assert-not-slower`
+  pair on `scripts/bench_kernel_levenshtein.py` (exit 1 if the kernel is more than a
+  small tolerance slower than pure — a #688-class cliff). ADR 0016's Go/No-Go
+  evidence section gained an R1 row: kill-criterion #3 + the #688 cliff are now
+  PROBED BY `r1-kernel-wheels.yml`, status PENDING-RUN.
+
 ## 2026-06-14 — Single-kernel-collapse feasibility spike (R0 + levenshtein tracer)
 - New [../decisions/0016-single-kernel-collapse-spike.md](../decisions/0016-single-kernel-collapse-spike.md)
   (ADR, linked from [../discovery.md](../discovery.md)) + two architecture nodes:
