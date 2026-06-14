@@ -238,6 +238,41 @@ Both paths produce identical schemas. The migration script also creates three an
 
 Existing projects without an identity graph don't get retroactive `entity_id` stability. New runs will assign fresh UUIDs from the moment you enable identity. A best-effort backfill command that walks lineage JSONL + cluster snapshots is on the v2.1 roadmap.
 
+## Migrating legacy record ids
+
+When `source_pk_column` is unset, GoldenMatch originally keyed records with a JSON-hash fingerprint: `{source}:hash:{12 hex}`. Starting in v1.26, the canonical scheme is `{source}:h1:{12 hex}` — a stable, cross-surface fingerprint computed by the `goldenmatch-fingerprint-core` kernel (the same hash used in Python, Rust, SQL, and WASM surfaces).
+
+**Back-compat:** the legacy `:hash:` ids still resolve. The store tries the canonical `:h1:` lookup first and falls back to `:hash:` automatically. A deprecation warning is emitted once per process when the fallback fires.
+
+**Removal:** the fallback and the `GOLDENMATCH_IDENTITY_ID_SCHEME=hash` kill-switch are removed in GoldenMatch 2.0. Migrate before upgrading.
+
+### Running the migration
+
+```bash
+# SQLite (default store)
+goldenmatch identity migrate-ids --path .goldenmatch/identity.db
+
+# Postgres
+goldenmatch identity migrate-ids --dsn postgres://user:pass@host/db
+
+# Preview counts without writing (dry run)
+goldenmatch identity migrate-ids --path .goldenmatch/identity.db --dry-run
+```
+
+The command rewrites every `{source}:hash:{12}` record id in `source_records`, `evidence_edges`, `identity_aliases`, and `identity_events` to the canonical `{source}:h1:{12}` form. It reports the number of rows rewritten per table. On a large store, run during a maintenance window — the rewrite takes an exclusive table lock for the duration.
+
+### Python API
+
+```python
+from goldenmatch.identity import migrate_record_ids
+
+with gm.IdentityStore(path=".goldenmatch/identity.db") as store:
+    report = migrate_record_ids(store, dry_run=False)
+    print(report)
+    # {'source_records': 1840, 'evidence_edges': 4120,
+    #  'identity_aliases': 0, 'identity_events': 3680}
+```
+
 ## See also
 
 - `examples/python/08_identity_graph.py` — end-to-end demo (two-run stability + absorb + merge + split + conflict)

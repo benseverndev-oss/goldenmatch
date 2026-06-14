@@ -89,3 +89,46 @@ def test_default_path_passes_allow_red_config_false(monkeypatch):
 
     auto_configure_df.assert_called_once()
     assert auto_configure_df.call_args.kwargs.get("allow_red_config") is False
+
+
+def test_assignments_output_path_writes_the_wcc_output(monkeypatch):
+    """With assignments_output_path set, the distributed-WCC clustering dataset
+    is persisted to it before golden consumes it. The QIS distributed-quality
+    harness needs the membership the engine produced -- golden alone is one row
+    per cluster and can't be oracle-scored."""
+    import goldenmatch.distributed.pipeline as pipeline
+    from goldenmatch.distributed.pipeline import _run_phase5_pipeline
+
+    _patch_distributed_stages(monkeypatch)
+    assignments_ds = MagicMock(name="assignments_ds")
+    monkeypatch.setattr(
+        pipeline, "_phase5_cluster", MagicMock(return_value=assignments_ds),
+    )
+
+    _run_phase5_pipeline(
+        MagicMock(name="ds"),
+        output_path=None,
+        config=MagicMock(name="cfg"),
+        assignments_output_path="gs://bucket/assign.parquet",
+    )
+
+    assignments_ds.write_parquet.assert_called_once_with("gs://bucket/assign.parquet")
+
+
+def test_assignments_output_path_default_none_no_write(monkeypatch):
+    """Default (kwarg absent): assignments are NOT persisted -- zero behavior
+    change for existing callers."""
+    import goldenmatch.distributed.pipeline as pipeline
+    from goldenmatch.distributed.pipeline import _run_phase5_pipeline
+
+    _patch_distributed_stages(monkeypatch)
+    assignments_ds = MagicMock(name="assignments_ds")
+    monkeypatch.setattr(
+        pipeline, "_phase5_cluster", MagicMock(return_value=assignments_ds),
+    )
+
+    _run_phase5_pipeline(
+        MagicMock(name="ds"), output_path=None, config=MagicMock(name="cfg"),
+    )
+
+    assignments_ds.write_parquet.assert_not_called()

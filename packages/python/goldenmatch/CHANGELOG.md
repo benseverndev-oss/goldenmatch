@@ -23,6 +23,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   a create, which is the common case. Pinned by `tests/test_sail_identity_contract.py`
   (runs in the normal lane, no Spark). Unblocks downstream consumers that depend
   on a released identity-graph contract.
+- **`goldenmatch identity migrate-ids`.** Migrates persisted identity record
+  ids from the legacy `{source}:hash:{12}` scheme to the canonical
+  `{source}:h1:{12}` fingerprint scheme (SQLite + Postgres). `--dry-run` reports
+  counts without mutating. Public API: `goldenmatch.identity.migrate_record_ids`.
+
+### Deprecated
+- **The legacy `:hash:` identity record-id scheme + `GOLDENMATCH_IDENTITY_ID_SCHEME=hash`.**
+  Identity resolution now warns once per process when a record resolves via the
+  legacy lookup candidate. The legacy candidate and the kill-switch are removed
+  in 2.0; run `goldenmatch identity migrate-ids` to migrate persisted identity DBs.
+
+### Deprecated
+- **The `GOLDENMATCH_CLUSTER_FRAMES_OUT=0` escape hatch + the legacy `dict[int,dict]`
+  cluster pipeline path.** The Arrow frames-out path is the default and only supported
+  clustering path; setting the variable to `0` now emits a once-per-process
+  `DeprecationWarning`. The escape hatch and the legacy pipeline branch are removed in
+  2.0 (public `build_clusters` is preserved as a frames-backed adapter).
 
 ### Performance
 - **Fellegi-Sunter block scoring ~3.5x faster on tiny-block / multi-pass shapes
