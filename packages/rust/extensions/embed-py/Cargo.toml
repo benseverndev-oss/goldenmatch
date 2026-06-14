@@ -28,7 +28,7 @@ crate-type = ["cdylib"]
 [dependencies]
 # abi3-py311: one stable-ABI artifact spans CPython 3.11-3.13.
 # extension-module: don't link libpython (this .so is imported BY CPython).
-pyo3 = { version = ">=0.23.3, <0.25", features = ["extension-module", "abi3-py311"] }
+pyo3 = { version = ">=0.23.3, <0.30", features = ["extension-module", "abi3-py311"] }
 # The pyo3-free kernel this wheel wraps. Pulls `ort` (onnxruntime) transitively;
 # that dependency is confined to this wheel by construction.
 goldenembed = { path = "../goldenembed" }
