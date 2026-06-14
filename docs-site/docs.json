@@ -41,7 +41,8 @@
                   "goldenmatch/quickstart",
                   "goldenmatch/installation",
                   "goldenmatch/cli",
-                  "goldenmatch/tui"
+                  "goldenmatch/tui",
+                  "goldenmatch/migrating-to-v2"
                 ]
               },
               {

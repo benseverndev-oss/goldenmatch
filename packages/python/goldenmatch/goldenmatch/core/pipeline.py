@@ -119,9 +119,7 @@ def _get_block_scorer(config: GoldenMatchConfig):
     return score_blocks_parallel
 from goldenmatch.core.cluster import (
     ClusterFrames,
-    _cluster_frames_out_enabled,
     build_cluster_frames,
-    build_clusters,
     build_clusters_columnar,
     cluster_frames_to_dict,
 )
@@ -1656,26 +1654,21 @@ def _run_dedupe_pipeline(
         if (_use_columnar and _columnar_pairs_df is not None)
         else len(all_pairs),
     )
-    # SP-B: frames-out path (gate GOLDENMATCH_CLUSTER_FRAMES_OUT, default OFF).
-    # When ON, build the two-frame ClusterFrames representation and consume it
-    # DIRECTLY for GOLDEN + STATS + DUPES + REPORT below (no dict). The legacy
-    # `clusters` dict is rebuilt LAZILY via `_clusters_dict()` -- at most once,
-    # and each remaining dict consumer calls it at its OWN consumption site
-    # (SP-C): adaptive refiner if enabled, output_clusters rows, lineage,
-    # golden_provenance, results["clusters"]. Identity NO LONGER consumes the
-    # dict on this path -- Task 3 feeds it `cluster_frames` + a ClusterPairScores
-    # view built from the frames. So on the hot path (identity ON, output OFF)
-    # the FIRST and ONLY `_clusters_dict()` call is results["clusters"], AFTER
-    # the identity stage: cluster->golden->identity runs fully dict-free, which
-    # is the SP-C RSS win. Keeping golden + stats + dupes dict-free was the SP-B
-    # prerequisite.
-    # The frames-out path is additive -- the dict path (gate OFF) below is
-    # untouched and byte-identical. Mutually exclusive with the columnar
-    # pair-stream branch (frames-out only fires on the non-columnar list build
-    # site).
+    # SP-B/SP-C: frames-out path. Build the two-frame ClusterFrames
+    # representation and consume it DIRECTLY for GOLDEN + STATS + DUPES + REPORT
+    # below (no dict). The legacy `clusters` dict is rebuilt LAZILY via
+    # `_clusters_dict()` -- at most once, and each remaining dict consumer calls
+    # it at its OWN consumption site (adaptive refiner, output_clusters rows,
+    # lineage, golden_provenance, results["clusters"]). Identity consumes the
+    # frames directly (`cluster_frames=` + a ClusterPairScores view), so on the
+    # hot path (identity ON, output OFF) the FIRST and ONLY `_clusters_dict()`
+    # call is results["clusters"], AFTER the identity stage: cluster->golden->
+    # identity runs fully dict-free (the SP-C RSS win). Mutually exclusive with
+    # the columnar pair-stream branch (frames-out only fires on the non-columnar
+    # list build site).
     cluster_frames: ClusterFrames | None = None
-    # `clusters` is bound to the real dict on the gate-OFF and columnar branches;
-    # on the frames-out branch it stays {} until the lazy rebuild at OUTPUT time
+    # `clusters` is bound to the real dict on the columnar branch; on the
+    # frames-out branch it stays {} until the lazy rebuild at OUTPUT time
     # (the {} is never read -- every earlier dict consumer is guarded by
     # `cluster_frames is None`). Explicit init keeps pyright from seeing it as
     # possibly-unbound.
@@ -1691,7 +1684,7 @@ def _run_dedupe_pipeline(
                 auto_split=auto_split,
                 split_edge_budget=split_edge_budget,
             )
-        elif _cluster_frames_out_enabled():
+        else:
             cluster_frames = build_cluster_frames(
                 all_pairs, all_ids,
                 max_cluster_size=max_cluster_size,
@@ -1699,22 +1692,11 @@ def _run_dedupe_pipeline(
                 auto_split=auto_split,
                 split_edge_budget=split_edge_budget,
             )
-            # SP-B: do NOT rebuild the dict eagerly. stats + dupes (always-run
-            # hot path) are computed directly from the frame aggregates below;
-            # the dict is rebuilt LAZILY, only when a remaining dict consumer
-            # (adaptive refiner / lineage / identity / results / output_clusters)
-            # actually needs it, via `_clusters_dict()`. Keeping golden + stats +
-            # dupes dict-free is what lets the SP-C RSS win land once identity
-            # drops its dict use. `clusters` stays the empty-dict init on this
-            # branch until the lazy rebuild at OUTPUT time.
-        else:
-            clusters = build_clusters(
-                all_pairs, all_ids,
-                max_cluster_size=max_cluster_size,
-                weak_cluster_threshold=weak_threshold,
-                auto_split=auto_split,
-                split_edge_budget=split_edge_budget,
-            )
+            # Do NOT rebuild the dict eagerly. stats + dupes (always-run hot path)
+            # are computed directly from the frame aggregates below; the dict is
+            # rebuilt LAZILY, only when a remaining dict consumer actually needs
+            # it, via `_clusters_dict()`. `clusters` stays the empty-dict init on
+            # this branch until the lazy rebuild at OUTPUT time.
     # SP-B lazy dict rebuild. On the frames-out branch `clusters` is unbound;
     # the remaining dict consumers (adaptive refiner, lineage, identity,
     # results["clusters"], output_clusters report/rows) go through this helper,
@@ -2152,23 +2134,13 @@ def _run_dedupe_pipeline(
             logger.warning("Lineage generation failed: %s", e)
 
     # ── Step 7.6: IDENTITY GRAPH (optional) ──
-    # Feed the identity evidence-edge consumer from a ClusterPairScores view
-    # (byte-identical to the dict path, built once here) whenever the dict that
-    # reaches identity carries EMPTY per-cluster pair_scores. The frames-out gate
-    # produces such a dict:
-    #   - _cluster_frames_out_enabled (GOLDENMATCH_CLUSTER_FRAMES_OUT, SP-B): the
-    #     lazily-rebuilt dict from cluster_frames_to_dict has pair_scores={}.
-    # In that case resolve_clusters' info.get("pair_scores") fallback would yield
-    # ZERO evidence edges, so we MUST supply the view. Gate-OFF (env not set)
-    # leaves the dict carrying real pair_scores and pair_score_view stays None --
-    # byte-identical to today.
-    # SP-C: on the frames-out path build the view from the FRAMES (assignments
-    # frame + RAW all_pairs) and feed identity the `cluster_frames` directly --
-    # NOT the rebuilt dict -- so the cluster->golden->identity stage never calls
-    # `_clusters_dict()`. `from_frames(assignments, all_pairs)` buckets the raw
+    # SP-C: feed identity the `cluster_frames` directly (NOT a rebuilt dict) so
+    # the cluster->golden->identity stage never calls `_clusters_dict()`. The
+    # ClusterPairScores view is built from the frames (assignments frame + RAW
+    # all_pairs) via `from_frames(assignments, all_pairs)` -- it buckets the raw
     # input pairs (input-order last-wins) against the final cluster membership.
-    # The gate-OFF branch is UNCHANGED: it leaves the view None and passes the
-    # real-pair_scores dict.
+    # On the columnar branch cluster_frames is None and `_pair_score_view()`
+    # returns None, so identity falls back to the dict's pair_scores.
     pair_score_view: ClusterPairScores | None = _pair_score_view()
     with stage("identity_resolve"):
         identity_summary = _resolve_identities(

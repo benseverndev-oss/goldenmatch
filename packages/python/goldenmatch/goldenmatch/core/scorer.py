@@ -790,9 +790,10 @@ def find_fuzzy_matches(
             per the Phase 1 spec); the non-hot branches build their
             filtered result list then convert once at the boundary via
             ``pairs_list_to_df`` (Task 1.1, #623). Default False keeps
-            the legacy ``list[tuple]`` contract for the one-release
-            deprecation window. The arg is keyword-only via the ``*``
-            marker so legacy callers don't accidentally pass it.
+            the legacy ``list[tuple]`` contract as the default opt-in
+            path alongside the columnar output path. The arg is
+            keyword-only via the ``*`` marker so legacy callers don't
+            accidentally pass it.
 
     Returns:
         ``list[tuple[int, int, float]]`` by default (legacy contract).
@@ -809,8 +810,8 @@ def find_fuzzy_matches(
     # When ``_emit_dataframe`` is True every branch (early-empty,
     # pre_scored_pairs, NE-penalty, exclude_pairs, hot path) returns a
     # ``pl.DataFrame`` with ``PAIR_STREAM_SCHEMA``; otherwise the legacy
-    # ``list[tuple]`` (deprecation window). These two helpers keep the
-    # branch bodies readable and the conversion in one place.
+    # ``list[tuple]`` path (permanent opt-in, default). These two helpers
+    # keep the branch bodies readable and the conversion in one place.
     def _emit_empty() -> list[tuple[int, int, float]] | pl.DataFrame:
         return pl.DataFrame(schema=PAIR_STREAM_SCHEMA) if _emit_dataframe else []
 
@@ -1068,8 +1069,8 @@ def _score_one_block(
     When True the return is a ``pl.DataFrame`` (``PAIR_STREAM_SCHEMA``)
     and the ``across_files_only`` cross-source filter is applied via a
     Polars ``.filter()`` on the frame rather than a Python list
-    comprehension. Default False keeps the legacy list contract for the
-    deprecation window.
+    comprehension. Default False keeps the legacy list contract as the
+    permanent opt-in alongside the default ``list[tuple]`` path.
 
     NOTE (Wave 3 convergence): the ``_emit_dataframe=True`` path duplicates the
     across-files Polars-filter logic in ``_score_one_block_columnar`` below. They
@@ -1112,7 +1113,7 @@ def _score_one_block(
             )
         return pairs
 
-    # Legacy list path (deprecation window).
+    # Legacy list path (permanent opt-in alongside the default ``list[tuple]`` path).
     assert isinstance(pairs, list)
 
     if across_files_only and source_lookup:
