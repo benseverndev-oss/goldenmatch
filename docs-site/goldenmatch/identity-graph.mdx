@@ -200,8 +200,9 @@ identity:
   connection: null         # postgres DSN; required when backend=postgres
   dataset: null            # namespace label that flows into every row
   source_pk_column: null   # column to derive {source}:{source_pk} record_id
-                           # when null, falls back to {source}:hash:{12 hex}
-                           # derived from the row payload SHA-256
+                           # when null, derives {source}:h1:{12 hex} from the
+                           # row fingerprint (un-fingerprintable rows fall back
+                           # to {source}:hash:{12 hex} from the payload SHA-256)
   emit_singletons: true    # whether 1-record clusters become identities
 ```
 
@@ -242,9 +243,9 @@ Existing projects without an identity graph don't get retroactive `entity_id` st
 
 When `source_pk_column` is unset, GoldenMatch originally keyed records with a JSON-hash fingerprint: `{source}:hash:{12 hex}`. Starting in v1.26, the canonical scheme is `{source}:h1:{12 hex}` — a stable, cross-surface fingerprint computed by the `goldenmatch-fingerprint-core` kernel (the same hash used in Python, Rust, SQL, and WASM surfaces).
 
-**Back-compat:** the legacy `:hash:` ids still resolve. The store tries the canonical `:h1:` lookup first and falls back to `:hash:` automatically. A deprecation warning is emitted once per process when the fallback fires.
+**1.x back-compat (removed in 2.0):** through the 1.x series the store resolved legacy `:hash:` ids by trying the canonical `:h1:` lookup first and falling back to `:hash:` automatically, emitting a once-per-process deprecation warning when the fallback fired.
 
-**Removal:** the fallback and the `GOLDENMATCH_IDENTITY_ID_SCHEME=hash` kill-switch are removed in GoldenMatch 2.0. Migrate before upgrading.
+**Removed in GoldenMatch 2.0:** the dual-candidate fallback and the `GOLDENMATCH_IDENTITY_ID_SCHEME=hash` kill-switch are gone. Fingerprintable rows now resolve to a single `:h1:` candidate — a store still holding `:hash:`-keyed records from a fingerprintable source will no longer match them, and those clusters will split on the next run. Un-fingerprintable rows (where no stable fingerprint can be derived) keep their `:hash:` id as their only key. **If you persist an identity DB, run the migration below BEFORE upgrading to 2.0.**
 
 ### Running the migration
 

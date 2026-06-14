@@ -1,0 +1,7 @@
+# ast-grep config — structural lint rules that encode repo invariants that
+# ruff/eslint cannot express. See .ast-grep/rules/*.yml. Run locally with
+# `ast-grep scan` (or `ast-grep test` to check the rules themselves).
+ruleDirs:
+  - .ast-grep/rules
+testConfigs:
+  - testDir: .ast-grep/rule-tests

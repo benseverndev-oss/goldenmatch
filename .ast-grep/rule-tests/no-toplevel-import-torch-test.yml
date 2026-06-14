@@ -1,0 +1,17 @@
+id: no-toplevel-import-torch
+valid:
+  - |
+    def f():
+        import torch
+        return torch
+  - |
+    try:
+        import torch
+    except ImportError:
+        torch = None
+  - |
+    if _HAVE_TORCH:
+        import torch
+invalid:
+  - import torch
+  - import torch as t

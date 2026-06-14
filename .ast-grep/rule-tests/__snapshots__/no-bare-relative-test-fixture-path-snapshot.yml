@@ -1,0 +1,14 @@
+id: no-bare-relative-test-fixture-path
+snapshots:
+  p = Path('tests/data/a.parquet'):
+    labels:
+    - source: Path('tests/data/a.parquet')
+      style: primary
+      start: 4
+      end: 32
+  p = Path('tests/fixtures/simple.csv'):
+    labels:
+    - source: Path('tests/fixtures/simple.csv')
+      style: primary
+      start: 4
+      end: 37
