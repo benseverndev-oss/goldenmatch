@@ -22,7 +22,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 # Versions mirror apache/datafusion-python @ 53.0.0's workspace pins verbatim:
-# datafusion-* = 53, arrow stack = 58, pyo3 = 0.28. These are the exact
+# datafusion-* = 53, arrow stack = 58, pyo3 = 0.29. These are the exact
 # versions the canonical datafusion-ffi-example compiles against, so the
 # FFI_ScalarUDF / ScalarUDFImpl / PyCapsule contract lines up by construction.
 datafusion-common = { version = "53", default-features = false }
@@ -48,10 +48,10 @@ goldenembed = { path = "../goldenembed" }
 # extension-module: don't link libpython (this .so is imported BY CPython).
 # abi3-py311: one stable-ABI artifact spans CPython 3.11-3.13 (matches the
 # sibling `native` crate; the example uses abi3-py310 but we floor at 3.11).
-pyo3 = { version = "0.28", features = ["extension-module", "abi3", "abi3-py311"] }
+pyo3 = { version = "0.29", features = ["extension-module", "abi3", "abi3-py311"] }
 
 [build-dependencies]
-pyo3-build-config = "0.28"
+pyo3-build-config = "0.29"
 
 [profile.release]
 opt-level = 3

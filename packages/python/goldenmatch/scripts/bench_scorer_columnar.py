@@ -2,12 +2,19 @@
 
 Legacy list[tuple] scorer (GOLDENMATCH_COLUMNAR_PIPELINE=0) vs columnar DataFrame
 scorer (=1), on an EXPLICIT single-weighted-fuzzy-matchkey config (auto-config is
-ineligible). Each variant runs in its own subprocess for a clean peak RSS; the
-legacy path is expected to OOM at 5M+ (recorded as a result). Parity (pair-set
-identity) is checked in-process at a capped small scale.
+ineligible). Each variant runs in its own subprocess for a clean peak RSS. The
+verdict is: columnar faster + pair-parity where both run; columnar lower peak RSS
+(the DataFrame pair representation is ~3x more compact than list[tuple], so at high
+pair volume the legacy path OOMs first -- recorded as a result when it happens).
+
+`make_workload` scales surname cardinality with N (bounded block size), so the
+candidate volume is LINEAR in N -- a fixed surname pool makes the scorer O(N^2) and
+wedges the box well before any signal (see make_workload). Target scales are 1M and
+5M; 25M+ fuzzy RECORD-scoring is impractical (hours) and unnecessary -- the columnar
+win is already visible at 1M/5M.
 
 Local smoke: python scripts/bench_scorer_columnar.py --rows 2000 --runs 1
-Workflow: bench-scorer-columnar.yml (large-new-64GB) passes --rows 1000000,5000000 / 25000000.
+Workflow: bench-scorer-columnar.yml (large-new-64GB) passes --rows 1000000,5000000.
 """
 from __future__ import annotations
 
@@ -30,20 +37,32 @@ _FIRST = ["James", "Mary", "Robert", "Patricia", "John", "Jennifer", "Michael",
           "Linda", "David", "Elizabeth", "William", "Susan", "Richard", "Karen"]
 
 
-def make_workload(rows: int, dupe_rate: float = 0.2, seed: int = 7):
+def make_workload(rows: int, dupe_rate: float = 0.2, seed: int = 7, block_target: int = 64):
     """Return a polars DataFrame of `rows` person records, ~dupe_rate of which are
-    lightly-corrupted near-duplicates of an earlier record."""
+    lightly-corrupted near-duplicates of an earlier record.
+
+    Surname CARDINALITY scales with `rows` (~= n_base / block_target distinct
+    surnames) so the exact-surname blocking keeps block size ~constant (~block_target)
+    as N grows -- candidate-pair volume is then LINEAR in N. A FIXED surname pool would
+    make block size = N / pool_size, so the per-block fuzzy cdist is O((N/pool)^2) and
+    the whole scorer O(N^2): at 1M+ that builds multi-GB per-block score matrices and
+    wedges/OOMs the box BEFORE the columnar-vs-legacy signal exists. Surname is the
+    exact block key (always scores 1.0 within a block); given_name carries the fuzzy
+    signal that drives the threshold decisions."""
     import random
 
     import polars as pl
 
     rng = random.Random(seed)
+    n_base = max(1, int(rows * (1 - dupe_rate)))
+    # Distinct, surname-shaped block keys sized to N (suffix keeps them unique).
+    n_surnames = max(len(_SURNAMES), n_base // block_target)
+    surname_pool = [f"{_SURNAMES[i % len(_SURNAMES)]}{i}" for i in range(n_surnames)]
     given: list[str] = []
     surname: list[str] = []
-    n_base = max(1, int(rows * (1 - dupe_rate)))
     for _ in range(n_base):
         given.append(rng.choice(_FIRST))
-        surname.append(rng.choice(_SURNAMES))
+        surname.append(rng.choice(surname_pool))
     while len(given) < rows:
         src = rng.randrange(n_base)
         g = given[src]
