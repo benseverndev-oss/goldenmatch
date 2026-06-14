@@ -79,19 +79,24 @@ def _clustering_env_override(env: Mapping[str, str], pairs: int, projection_dist
 
 
 def _decide(stage, *, projected_bytes, budget_bytes, cluster, override_mode, override_source):
-    if override_mode is not None:
-        return DistributedRoutingDecision(
-            stage=stage, mode=override_mode, rule_name="user_override",
-            reason=f"{stage} pinned to {override_mode} via {override_source}",
-            projected_bytes=projected_bytes, budget_bytes=budget_bytes,
-            overridden=True, override_source=override_source,
-        )
+    # single_box wins FIRST: with no cluster there is nothing to distribute to,
+    # so every stage is in-memory and an override naming a distributed mode is
+    # moot. Crucially the legacy CLUSTERING_THRESHOLD env var is inert off the
+    # Ray path -- if we let it mark a single-box decision overridden, enforce_routing
+    # would refuse an otherwise-working single-box run at scale.
     if not cluster.present:
         return DistributedRoutingDecision(
             stage=stage, mode="in_memory", rule_name="single_box",
             reason=f"{stage} in-memory: no cluster present",
             projected_bytes=projected_bytes, budget_bytes=budget_bytes,
             overridden=False, override_source=None,
+        )
+    if override_mode is not None:
+        return DistributedRoutingDecision(
+            stage=stage, mode=override_mode, rule_name="user_override",
+            reason=f"{stage} pinned to {override_mode} via {override_source}",
+            projected_bytes=projected_bytes, budget_bytes=budget_bytes,
+            overridden=True, override_source=override_source,
         )
     distribute = projected_bytes > budget_bytes
     mode = "distributed" if distribute else "in_memory"

@@ -43,3 +43,18 @@ def test_clean_plan_never_refuses():
         n_rows_full=100_000_000, estimated_pair_count=110_000_000,
     )
     enforce_routing(plan, n_rows=100_000_000, allow_slow_path=False)  # no raise
+
+
+def test_single_box_with_legacy_env_never_refuses_at_scale():
+    """A single-box run with the legacy CLUSTERING_THRESHOLD set (inert off the
+    Ray path) must NOT be refused at scale -- there is nothing to distribute to."""
+    from goldenmatch.core.cluster_profile import capture_cluster_profile
+    plan = apply_distributed_routing(
+        ExecutionPlan(), runtime=RuntimeProfile(48.0, 16, 500.0),
+        cluster=capture_cluster_profile(descriptor=None, ray_module=None),
+        n_rows_full=100_000_000, estimated_pair_count=110_000_000,
+        env={"GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD": "0"},
+    )
+    assert plan.clustering_strategy == "in_memory"
+    assert all(d.rule_name == "single_box" for d in plan.routing_decisions)
+    enforce_routing(plan, n_rows=100_000_000, allow_slow_path=False)  # no raise

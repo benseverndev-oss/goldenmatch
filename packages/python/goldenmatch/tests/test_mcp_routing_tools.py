@@ -39,6 +39,15 @@ def test_lint_threshold_zero_is_advisory_below_scale():
     assert out["would_refuse"] is False
 
 
+def test_lint_single_box_legacy_env_is_not_an_error():
+    # No cluster: the legacy threshold is inert; lint must not flag/refuse it.
+    out = run_lint_routing(
+        n_rows=100_000_000, estimated_pair_count=110_000_000,
+        env={"GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD": "0"})
+    assert out["would_refuse"] is False
+    assert [f for f in out["findings"] if f["severity"] == "ERROR"] == []
+
+
 def test_refuse_constant_mirrors_controller():
     from goldenmatch.core.autoconfig_controller import REFUSE_AT_N
     from goldenmatch.mcp.routing_tools import _REFUSE_AT_N
