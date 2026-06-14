@@ -6,7 +6,6 @@ import logging
 import operator
 import os
 import uuid
-import warnings
 from collections import defaultdict
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
@@ -516,45 +515,6 @@ def build_clusters(
         split_edge_budget=split_edge_budget,
     )
 
-
-# v2.0 removal: delete `_cluster_frames_out_enabled` + `_warn_legacy_cluster_path_once`
-# + `_LEGACY_CLUSTER_PATH_WARNED`, and the pipeline's legacy `else` branch at
-# pipeline.py:~1710 (the `build_clusters(...)` dict path). The frames-out path
-# becomes unconditional. Public `build_clusters` is PRESERVED (it stays a
-# frames-backed adapter; its dict[int,dict] return contract is unchanged).
-_LEGACY_CLUSTER_PATH_WARNED = False
-
-
-def _warn_legacy_cluster_path_once() -> None:
-    """Emit a once-per-process deprecation warning when the legacy dict cluster
-    path is selected via ``GOLDENMATCH_CLUSTER_FRAMES_OUT=0`` (removed in 2.0)."""
-    global _LEGACY_CLUSTER_PATH_WARNED
-    if _LEGACY_CLUSTER_PATH_WARNED:
-        return
-    _LEGACY_CLUSTER_PATH_WARNED = True
-    msg = (
-        "GOLDENMATCH_CLUSTER_FRAMES_OUT=0 selects the legacy dict[int,dict] cluster "
-        "path, which is removed in GoldenMatch 2.0 (the Arrow frames-out path is the "
-        "default and only supported path going forward). Unset the variable to use "
-        "the default."
-    )
-    _clog.warning(msg)
-    warnings.warn(msg, DeprecationWarning, stacklevel=2)
-
-
-def _cluster_frames_out_enabled() -> bool:  # pyright: ignore[reportUnusedFunction]  # used cross-module: pipeline.py imports + calls this; pyright's private-symbol unused check misses the call site
-    """Frames-out path gate. When enabled, ``build_cluster_frames`` returns the
-    two-frame ``ClusterFrames`` columnar representation directly, WITHOUT
-    materializing the per-cluster ``dict[int, dict]`` for non-oversized clusters.
-
-    Default ON; set ``GOLDENMATCH_CLUSTER_FRAMES_OUT=0`` to force the legacy dict
-    path. Independent of ``build_clusters`` and all its consumers, which are
-    untouched. The pipeline wires this gate to choose ``build_cluster_frames``
-    vs ``build_clusters``."""
-    enabled = os.environ.get("GOLDENMATCH_CLUSTER_FRAMES_OUT", "1").strip() != "0"
-    if not enabled:
-        _warn_legacy_cluster_path_once()
-    return enabled
 
 
 def build_cluster_frames(
