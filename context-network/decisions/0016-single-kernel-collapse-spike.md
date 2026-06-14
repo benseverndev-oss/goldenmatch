@@ -126,17 +126,30 @@ Workstream B adds a `workflow_dispatch` CI workflow,
 [`.github/workflows/r1-kernel-wheels.yml`](../../.github/workflows/r1-kernel-wheels.yml),
 that directly probes the two pending platform-reliability items:
 
-- **Kill-criterion (3) — all-platform abi3 wheels:** PROBED BY `r1-kernel-wheels.yml`
-  `wheels` matrix (linux x86_64 manylinux 2_28 / linux aarch64 / macOS arm64 / macOS
-  x86_64 cross / windows x64) — each leg builds the abi3 wheel (same SHA-pinned
-  `maturin-action` + manifest as `publish-goldenmatch-native.yml`) and runs the
-  equivalence gate `--require-kernel` + the bench `--assert-not-slower` on a clean
-  Python 3.11. **Status: PENDING-RUN** (the workflow is committed but not yet
-  dispatched; the parent runs it and collects the per-platform PASS/FAIL).
-- **The #688 perf cliff:** PROBED BY the `perf_cliff` job on `ubuntu-latest-xlarge`
-  (the 8-core AMD EPYC shape #688 wedged on; `cliff_runner`-parameterized) — runs the
-  per-pair bench AND `scripts/bench_issue_688.py`, asserting the kernel does not
-  regress into the rayon `LockLatch` futex park. **Status: PENDING-RUN.**
+- **Kill-criterion (3) — all-platform abi3 wheels:** **RESULT — PASS (GO-with-residual).**
+  Run [#27509949013](https://github.com/benseverndev-oss/goldenmatch/actions/runs/27509949013)
+  + the harness-fixed re-run [#27514052267](https://github.com/benseverndev-oss/goldenmatch/actions/runs/27514052267)
+  (PR #971, which moved aarch64 to the native `ubuntu-24.04-arm` runner and marked
+  macOS-x86_64 build-only): the abi3 wheel **builds on 5/5** platforms, and runtime
+  `pure==kernel` at 4dp + bench `--assert-not-slower` **passed on 4/5** — linux-x86_64,
+  **linux-aarch64 (native arm)**, macOS-arm64, windows-x64. macOS-x86_64 is build-only
+  (no Intel-mac runner in this org; the x86 mac slice is sunsetting) — a documented
+  residual, not a defect. No per-release firefighting was needed to produce any wheel.
+- **The #688 perf cliff:** **RESULT — INFRA-BLOCKED (accepted 2026-06-14).** The
+  `perf_cliff` job on `ubuntu-latest-xlarge` failed to allocate a runner on **both**
+  attempts (queued 66 min, then 34 min, runner never assigned) — exactly the
+  larger-runner stall the root CLAUDE.md documents. The EPYC-specific rayon-`LockLatch`
+  futex scenario therefore **cannot be reproduced in this org's CI**. Per the maintainer
+  decision, this is ACCEPTED as an infra gap (not a code finding): mitigated by the
+  already-shipped `GOLDENMATCH_NATIVE_RAYON_MIN_PAIRS` fix (#692) and by the kernel
+  measuring **not-slower on every platform we could run** (4/5). If a self-hosted 8-core
+  EPYC ever becomes available, re-dispatch with `cliff_runner` set to it.
+
+**R1-B verdict: GO-with-residual.** Kill-criterion (3) is cleared for the four
+mainstream arches; the macOS-x86_64 runtime gap and the un-reproducible #688 EPYC cliff
+are documented *infra* residuals, not code blockers. The remaining R1 gate before any
+default flip is **Workstream A** — cross-JS-target WASM (Node ✅ already; browser /
+Workers / Deno pending), kill-criterion (2).
 
 Two backward-compatible script flags back the gate: `--require-kernel`
 (kernel-absence → exit 1) and `--assert-not-slower` (perf cliff → exit 1); with

@@ -94,3 +94,51 @@ def test_max_iterations_scales_with_dataset_size():
     assert large > small, f"expected more iterations at scale, got small={small} large={large}"
     # base/default unchanged for small data
     assert ControllerBudget.for_dataset(10_000).max_iterations == 3
+
+
+# ── #876: a bounded-cardinality SOLE blocking key must be refused at scale ──
+# #876 reported precision drift at >1M from a sole `zip` block key (zip wraps at
+# ~100K, so block size grows ~N -> bloated cross-cluster blocks the fuzzy scorer
+# false-matches). The #715/#723 scale-safe gate already closes this: a sole
+# bounded key's projected block exceeds the pairs-per-row budget at scale, so it
+# is refused and compounded. These pin that behavior so it can't regress.
+
+def test_sole_zip_exceeds_pairs_budget_at_scale_876():
+    """The mechanism, proven on the real constants: a sole bounded-cardinality
+    `zip` key at 100M projects ceil(N / domain_cap) rows per block, whose
+    pairs-per-row exceeds the budget -> `_is_scale_safe` refuses it (#876)."""
+    from goldenmatch.core.autoconfig import (
+        _BLOCKING_DOMAIN_CAP,
+        _blocking_pairs_per_row_budget,
+        _project_pairs_per_row,
+    )
+
+    cap = _BLOCKING_DOMAIN_CAP["zip"]              # 100_000 (5-digit US zip)
+    full_n = 100_000_000
+    projected_block = -(-full_n // cap)            # ceil(N / cap) = 1_000
+    pairs_per_row = _project_pairs_per_row(projected_block)   # (1000-1)//2 = 499
+    assert pairs_per_row > _blocking_pairs_per_row_budget(), (
+        f"sole-zip at {full_n:,} projects {pairs_per_row} pairs/row; this MUST "
+        f"exceed the budget {_blocking_pairs_per_row_budget()} so the scale-safe "
+        f"gate refuses it (the #876 explosion). If this fails, the gate regressed."
+    )
+
+
+def test_dense_zip_no_sole_bounded_key_at_scale_876():
+    """End-to-end: on a dense-zip shape at 100M, auto-config must NOT emit a SOLE
+    bounded-cardinality key (zip5 alone); zip5 only survives inside a compound
+    (zip5 + a refining field). Non-degenerate blocking is still produced (#876)."""
+    from goldenmatch.core.autoconfig import build_blocking, profile_columns
+    from repro_issue_715 import make_healthcare_df
+
+    df = make_healthcare_df(30_000, zip_present=0.95).drop("matching_id")  # dense zip5
+    profiles = profile_columns(df)
+    blk = build_blocking(profiles, df, n_rows_full=100_000_000)  # #876 scale
+
+    assert (blk.keys or blk.passes), "expected non-degenerate blocking at scale"
+    for k in (blk.keys or []):
+        if "zip5" in k.fields:
+            assert len(k.fields) >= 2, f"sole bounded key admitted at 100M: {k.fields}"
+    for p in (blk.passes or []):
+        if "zip5" in p.fields:
+            assert len(p.fields) >= 2, f"sole bounded pass admitted at 100M: {p.fields}"
