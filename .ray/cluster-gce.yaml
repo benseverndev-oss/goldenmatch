@@ -64,7 +64,8 @@ setup_commands:
   - >-
     pip install --upgrade pip &&
     pip install "polars>=1.0" "pandas>=2,<3" "pyarrow>=10" "psutil>=5.9" "rapidfuzz>=3.0" "jellyfish>=1.0" &&
-    pip install "git+https://github.com/benseverndev-oss/goldenmatch@GOLDENMATCH_GIT_SHA_PLACEHOLDER#subdirectory=packages/python/goldenmatch"
+    pip install "git+https://github.com/benseverndev-oss/goldenmatch@GOLDENMATCH_GIT_SHA_PLACEHOLDER#subdirectory=packages/python/goldenmatch" &&
+    pip install goldenmatch-native scipy
 head_setup_commands: []
 worker_setup_commands: []
 
@@ -75,14 +76,14 @@ worker_setup_commands: []
 head_start_ray_commands:
   - ray stop
   - >-
-    export GOLDENMATCH_NATIVE_ADDRESS_NORMALIZE=1 &&
+    export GOLDENMATCH_NATIVE=1 GOLDENMATCH_NATIVE_ADDRESS_NORMALIZE=1 &&
     ulimit -n 65536 && ray start --head --port=6379
     --object-manager-port=8076 --autoscaling-config=~/ray_bootstrap_config.yaml
 
 worker_start_ray_commands:
   - ray stop
   - >-
-    export GOLDENMATCH_NATIVE_ADDRESS_NORMALIZE=1 &&
+    export GOLDENMATCH_NATIVE=1 GOLDENMATCH_NATIVE_ADDRESS_NORMALIZE=1 &&
     ulimit -n 65536 && ray start --address=$RAY_HEAD_IP:6379
     --object-manager-port=8076
 
