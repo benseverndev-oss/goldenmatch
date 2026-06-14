@@ -132,6 +132,18 @@ def _make_inhouse_embedder(model_name: str) -> _ProviderEmbedder:
     return _ProviderEmbedder(InHouseProvider(path))
 
 
+def _make_llama_embedder(model_name: str) -> _ProviderEmbedder:
+    """Build a `_ProviderEmbedder` backed by a local GGUF model via llama.cpp.
+
+    ``model_name`` is ``"llama:<path-to-gguf>"`` or bare ``"llama"`` (path from
+    ``GOLDENMATCH_LLAMA_GGUF``). Path slicing preserves any ``:`` in the path.
+    """
+    from goldenmatch.embeddings.providers import LlamaGGUFProvider
+
+    path = model_name[len("llama:"):] if model_name.startswith("llama:") else None
+    return _ProviderEmbedder(LlamaGGUFProvider(path))
+
+
 def inhouse_embedding_available() -> bool:
     """Whether the local in-house embedding model is reachable without cloud.
 
@@ -183,6 +195,11 @@ def _build_embedder(model_name: str) -> Embedder | _ProviderEmbedder:
     # In-house embedder: explicit, config-driven (the matchkey field's `model`).
     if model_name == "inhouse" or model_name.startswith("inhouse:"):
         return _make_inhouse_embedder(model_name)
+
+    # Local GGUF embedder via llama.cpp (offline, no cloud/torch). Opt-in via
+    # `model='llama:/path.gguf'` or GOLDENMATCH_LLAMA_GGUF.
+    if model_name == "llama" or model_name.startswith("llama:"):
+        return _make_llama_embedder(model_name)
 
     try:
         from goldenmatch.core.gpu import detect_gpu_mode
