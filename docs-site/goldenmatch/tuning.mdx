@@ -390,6 +390,8 @@ Every `GOLDENMATCH_*` variable the package reads, grouped by who should care. De
 | `GOLDENMATCH_LLM_MODEL` | provider default | Override the LLM scorer model. |
 | `GOLDENMATCH_EMBEDDING_PROVIDER` / `GOLDENMATCH_INHOUSE_MODEL` | unset | Embedding provider / in-house model id. |
 | `GOLDENMATCH_GPU_MODE` / `_GPU_ENDPOINT` / `_GPU_API_KEY` | auto | GPU embedding mode / remote endpoint / key. |
+| `GOLDENMATCH_LLAMA_GGUF` | unset | Path to a local GGUF embedding model for the `model="llama"` / `"llama:/path.gguf"` backend — offline embeddings, no cloud/torch (`pip install goldenmatch[llama]`). Benchmarks: `scripts/bench_llama_embedder.py`, `scripts/bench_llama_product_matching.py`. |
+| `GOLDENMATCH_LLM_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible base URL for the LLM scorer — point at a local llama.cpp / llamafile server for offline, free LLM judging (also honors `OPENAI_BASE_URL`). |
 | `GOLDENMATCH_UDF_IMPORTS` | unset | Snowflake UDF import asset directory. |
 | `GOLDENMATCH_SYNC_STREAMING_THRESHOLD` / `_STREAMING_BLOCK_WORKERS` | `500000` / auto | Postgres streaming-store thresholds. |
 
