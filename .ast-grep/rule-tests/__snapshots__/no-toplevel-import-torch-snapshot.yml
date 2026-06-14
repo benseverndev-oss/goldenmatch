@@ -1,0 +1,14 @@
+id: no-toplevel-import-torch
+snapshots:
+  import torch:
+    labels:
+    - source: import torch
+      style: primary
+      start: 0
+      end: 12
+  import torch as t:
+    labels:
+    - source: import torch as t
+      style: primary
+      start: 0
+      end: 17

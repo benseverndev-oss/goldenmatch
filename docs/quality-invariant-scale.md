@@ -197,10 +197,28 @@ single box (m1/m2 ultramem) or the distributed (`backend=ray`) path. Wall is
 dominated by the bucket fuzzy-scoring loop (~100K pairs/s; the native kernel does
 not change it for this scorer config) and the pure-Python prep, not blocking.
 
-**Distributed-engine check (in progress).** A `backend=ray` 100M run validates
-whether the distributed pipeline (partitioned scoring + distributed WCC) holds the
-same quality as the 0.9266 single-box baseline or under-merges (the #844
-driver-materialization risk). Result to be folded in here.
+**Distributed-engine check — PASS at 100M (quality-parity confirmed).** The Phase-5
+distributed pipeline (block-shuffle scoring across a multi-node Ray cluster +
+connected-components clustering) was run at 100M and oracle-scored against the same
+ground truth. It reproduces the single-box quality **exactly**:
+
+| metric | single-box bucket 100M | distributed Phase-5 100M |
+|--------|------------------------|--------------------------|
+| pairwise F1 | 0.9266 | **0.9266** |
+| B-cubed F1  | 0.9667 | **0.9667** |
+| cluster F1  | 0.8872 | **0.8872** |
+
+Identical to four decimals (18.88M multi-member clusters recovered vs 20M GT; 17.25M
+exact-match). So **the distributed engine holds quality** — the residual precision
+drift above is a property of the *config*, not the engine, and is invariant across
+engines. Two harness lessons worth recording: (1) **only scoring needs
+distribution** — the scored pair set is ~1.76 GB and fits one node, so clustering
+runs in-memory (driver-side `scipy.csgraph` connected-components, ~60s); forcing the
+distributed WCC on it was a multi-hour mistake. (2) The connected-components result
+is independent of the WCC algorithm, so a completed run's cluster *assignments* are
+the result — scoring them on a 64 GB runner recovers the F1 without re-running.
+**200M** (the distributed-only rung beyond the single-box 503 GB ceiling) is the
+open follow-up, gated on a Ray Data scoring-concurrency fix.
 
 ## Reproduction
 
