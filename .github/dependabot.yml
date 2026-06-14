@@ -1,7 +1,12 @@
 # Dependabot configuration — security + version updates per ecosystem.
 # Security alerts fire on every push regardless; this file controls weekly
 # version-bump PR cadence so we don't get drowned in updates.
-
+#
+# POLICY: minor + patch updates are auto-PR'd (grouped); MAJOR bumps are
+# IGNORED here and upgraded DELIBERATELY by hand (breaking APIs need code
+# changes + per-crate testing). Without the semver-major ignore, one major
+# dep used in N standalone crates opens N separate PRs (the sha2/zip/pyo3
+# flood) -- security alerts still fire for vulnerable majors regardless.
 version: 2
 updates:
   # Python — workspace root pyproject.toml
@@ -14,6 +19,9 @@ updates:
     labels:
       - "dependencies"
       - "python"
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
     groups:
       python-prod:
         dependency-type: "production"
@@ -36,6 +44,9 @@ updates:
     labels:
       - "dependencies"
       - "typescript"
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
     groups:
       ts-prod:
         dependency-type: "production"
@@ -58,6 +69,9 @@ updates:
     labels:
       - "dependencies"
       - "rust"
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
     groups:
       rust-deps:
         patterns:
@@ -75,6 +89,9 @@ updates:
     labels:
       - "dependencies"
       - "ci"
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
 
   # Docker — Dockerfile.mcp at repo root + per-package
   - package-ecosystem: "docker"
@@ -84,3 +101,6 @@ updates:
     labels:
       - "dependencies"
       - "docker"
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
