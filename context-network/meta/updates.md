@@ -2,7 +2,26 @@
 
 Newest first. One entry per meaningful change to the network.
 
-## 2026-06-14 — GoldenMatch 2.0.0 deprecation cut shipped (PR #942) + docs sync
+## 2026-06-14 — Single-kernel-collapse feasibility spike (R0 + levenshtein tracer)
+- New [../decisions/0016-single-kernel-collapse-spike.md](../decisions/0016-single-kernel-collapse-spike.md)
+  (ADR, linked from [../discovery.md](../discovery.md)) + two architecture nodes:
+  [../architecture/single-kernel-collapse-inventory.md](../architecture/single-kernel-collapse-inventory.md)
+  (R0 duplication census, ranked) and
+  [../architecture/single-kernel-collapse-roadmap.md](../architecture/single-kernel-collapse-roadmap.md)
+  (R0–R5 stages + the two hard constraints + the four additive/reversible rules).
+- **Fully-additive spike** — changes no default path, deletes nothing, flips no
+  flag. New compare-only artifacts: `scripts/check_kernel_equivalence.py` (a
+  generalizable `pure==kernel` 4dp gate, scorer-name parameterized),
+  `scripts/bench_kernel_levenshtein.py` (measure-first wall-clock), and
+  `packages/typescript/goldenmatch/tests/spike/kernel-equivalence.test.ts`
+  (pure-TS vs WASM, skip-guarded on the artifact). None imported by a default path.
+- **Verbatim 4-item kill criterion** recorded. In-env evidence on the levenshtein
+  tracer: Python `pure==native` bit-identical (max diff 0.0 over 2028 pairs; also
+  jaro_winkler 5.5e-17, token_sort 0.0); TS `pure==WASM` 4dp GREEN (built the WASM
+  artifact in-env, ran un-skipped); kernel 1.44x faster than pure (per-pair, its
+  pessimal shape). PENDING + load-bearing: cross-JS-target WASM (Node-only
+  verified) and all-platform abi3 wheels (the #688 class). Existing scorer/parity
+  tests stay green (TS 63, Python 138); `check_docs_consistency.py` PASS.
 - New [../decisions/0015-goldenmatch-2.0-deprecation-cut.md](../decisions/0015-goldenmatch-2.0-deprecation-cut.md);
   linked from [../discovery.md](../discovery.md). Records the scope decision (cut
   exactly the four prepared items; keep the universal scorer `list[tuple]` path;
