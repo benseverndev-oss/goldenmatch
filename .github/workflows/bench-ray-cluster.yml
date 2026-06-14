@@ -177,16 +177,76 @@ jobs:
           echo "----- Rendered cluster.yaml -----"
           head -50 .ray/cluster-gce.yaml
 
+      - name: Pre-flight - sweep orphaned bench instances
+        # #958 part 1: stale `ray-goldenmatch-bench-*` instances from prior
+        # cancelled runs (the `ray down`-orphaned worker, see teardown) pile up,
+        # cost money, and eat the GCP CPU/SSD/IP quota that then starves THIS
+        # run's autoscaler so workers silently never launch. Delete bench
+        # instances created before the 120-min job cap -- they cannot belong to
+        # a live run, so this never touches a concurrent bench. Also activates
+        # gcloud for the worker-join check below.
+        run: |
+          set -uo pipefail
+          if [ -z "${GCP_PROJECT_ID:-}" ]; then
+            echo "GCP_PROJECT_ID not in env yet; skipping pre-flight sweep."
+            exit 0
+          fi
+          gcloud auth activate-service-account \
+            --key-file="$GOOGLE_APPLICATION_CREDENTIALS" \
+            --project="$GCP_PROJECT_ID" || true
+          CUTOFF=$(date -u -d '2 hours ago' '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null \
+            || python -c "import datetime; print((datetime.datetime.utcnow()-datetime.timedelta(hours=2)).strftime('%Y-%m-%dT%H:%M:%SZ'))")
+          echo "Sweeping orphaned ray-goldenmatch-bench-* instances created before $CUTOFF ..."
+          gcloud compute instances list \
+            --filter="name~^ray-goldenmatch-bench- AND creationTimestamp<'$CUTOFF'" \
+            --project="$GCP_PROJECT_ID" \
+            --format="value(name,zone)" 2>/dev/null | while read name zone; do
+              if [ -n "$name" ]; then
+                echo "  deleting orphan: $name ($zone)"
+                gcloud compute instances delete "$name" \
+                  --zone="$zone" --project="$GCP_PROJECT_ID" --quiet || true
+              fi
+            done
+
       - name: Ray up
         # Provisions head + workers, installs goldenmatch on each via
         # the setup_commands block. Typical wall: ~3-5 min.
         run: |
           ray up -y --no-config-cache .ray/cluster-gce.yaml
 
+      - name: Verify workers joined
+        # #958 part 1: the autoscaler can loop "Adding 1 node -> Resized to N
+        # CPUs" WITHOUT ever launching workers (quota exhausted), and the run
+        # then crawls HEAD-ONLY with no error for the whole job. Fail LOUDLY if
+        # the expected workers don't appear within the deadline instead of
+        # wasting an hour. Counting GCE worker instances is more reliable than
+        # parsing `ray status` across Ray versions.
+        run: |
+          set -uo pipefail
+          if [ -z "${GCP_PROJECT_ID:-}" ]; then
+            echo "GCP_PROJECT_ID not in env; cannot verify workers -- skipping."
+            exit 0
+          fi
+          EXPECTED=${{ inputs.max_workers }}
+          DEADLINE=$(( $(date +%s) + 600 ))   # 10 min for workers to come up
+          while true; do
+            N=$(gcloud compute instances list \
+                  --filter="name~^ray-${{ env.CLUSTER_NAME }}-worker AND status=RUNNING" \
+                  --project="$GCP_PROJECT_ID" --format="value(name)" 2>/dev/null \
+                  | wc -l | tr -d ' ')
+            echo "workers RUNNING: ${N}/${EXPECTED}"
+            if [ "${N:-0}" -ge "$EXPECTED" ]; then echo "all $EXPECTED workers up."; break; fi
+            if [ "$(date +%s)" -ge "$DEADLINE" ]; then
+              echo "::error::Only ${N}/${EXPECTED} workers launched within 10 min. The run would proceed HEAD-ONLY (slow). Most common cause: GCP quota (N2 CPUs / SSD / in-use IPs) exhausted in the zone -- check for leftover ray-goldenmatch-bench-* instances and your quota."
+              exit 1
+            fi
+            sleep 30
+          done
+
       - name: Submit bench
         # `ray submit` ships the script to the head node and runs it.
         # The script writes its JSON output to /tmp on the head; we
-        # rsync it back via `ray rsync_down` after the run.
+        # rsync it back via `ray rsync-down` after the run.
         #
         # We background a `ray status` poller (every 30s) so the GH
         # live log shows head/worker resource use and per-node state
@@ -240,7 +300,10 @@ jobs:
                  --backend ray \
                  --out "$OUT_REMOTE"
           fi
-          ray rsync_down .ray/cluster-gce.yaml \
+          # `rsync-down` (hyphen) -- the latest Ray CLI renamed the underscore
+          # form (`rsync_down`), which silently lost the result JSON even though
+          # the run completed (#958 part 3).
+          ray rsync-down .ray/cluster-gce.yaml \
             "$OUT_REMOTE" ".profile_tmp/qis/qis_${{ inputs.label }}.json"
 
       - name: Upload bench artifact
@@ -275,8 +338,12 @@ jobs:
           gcloud auth activate-service-account \
             --key-file="$GOOGLE_APPLICATION_CREDENTIALS" \
             --project="$GCP_PROJECT_ID" || true
+          # Match BOTH the ray label AND the instance-name prefix. Autoscaler-
+          # launched workers (ray-<cluster>-worker-*) don't always carry the
+          # ray-cluster-name label, so a label-only filter missed exactly the
+          # orphaned worker `ray down` left behind on cancel (#958 part 2).
           gcloud compute instances list \
-            --filter="labels.ray-cluster-name=${{ env.CLUSTER_NAME }}" \
+            --filter="labels.ray-cluster-name=${{ env.CLUSTER_NAME }} OR name~^ray-${{ env.CLUSTER_NAME }}-" \
             --project="$GCP_PROJECT_ID" \
             --format="value(name,zone)" 2>/dev/null | while read name zone; do
               if [ -n "$name" ]; then
