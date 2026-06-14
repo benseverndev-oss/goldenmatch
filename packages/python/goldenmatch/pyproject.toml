@@ -163,6 +163,12 @@ native = [
 lance = [
     "pylance>=0.20",
 ]
+# Local GGUF embeddings + LLM judge via llama.cpp (offline, no cloud/torch).
+# Embeddings: model='llama:/path.gguf'. LLM scoring: point GOLDENMATCH_LLM_BASE_URL
+# at a llama-server / llamafile (OpenAI-compatible). Both lazy-imported.
+llama = [
+    "llama-cpp-python>=0.3",
+]
 web = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",

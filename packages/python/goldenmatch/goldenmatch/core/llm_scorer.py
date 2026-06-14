@@ -389,11 +389,26 @@ def llm_explain_pair(
         return _fallback()
 
 
+def _openai_base_url() -> str:
+    """OpenAI-compatible base URL. Override to point the 'openai' provider at a
+    local llama.cpp / llamafile server (which speaks /v1/chat/completions)."""
+    base = (
+        os.environ.get("GOLDENMATCH_LLM_BASE_URL")
+        or os.environ.get("OPENAI_BASE_URL")
+        or "https://api.openai.com/v1"
+    )
+    return base.rstrip("/")
+
+
 def _detect_provider() -> tuple[str | None, str | None]:
     """Auto-detect LLM provider from environment variables."""
     key = os.environ.get("OPENAI_API_KEY")
     if key:
         return "openai", key
+    # A local OpenAI-compatible server (llama.cpp/llamafile) ignores the API key;
+    # setting a base URL is enough to opt into the 'openai' path with a stub key.
+    if os.environ.get("GOLDENMATCH_LLM_BASE_URL") or os.environ.get("OPENAI_BASE_URL"):
+        return "openai", "sk-local"
     key = os.environ.get("ANTHROPIC_API_KEY")
     if key:
         return "anthropic", key
@@ -773,7 +788,7 @@ def _call_openai(
     }).encode()
 
     req = urllib.request.Request(
-        "https://api.openai.com/v1/chat/completions",
+        f"{_openai_base_url()}/chat/completions",
         data=body,
         headers={
             "Authorization": f"Bearer {api_key}",
