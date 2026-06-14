@@ -51,6 +51,22 @@ on:
         description: "Number of worker nodes (head is always +1)"
         required: false
         default: "3"
+      distributed:
+        description: "1 = run the REAL Phase-5 distributed engine (PIPELINE=2, block-shuffle + randomized-contraction WCC) and oracle-score it; 0 = the in-memory backend=ray path (legacy; does NOT distribute)"
+        required: false
+        default: "0"
+      wcc_scratch:
+        description: "Shared gs:// scratch for the distributed WCC + assignments (required when distributed=1). Cluster nodes need storage access to this bucket."
+        required: false
+        default: "gs://gm-phase5-844-golden490919/qis-dist"
+      partitions:
+        description: "Ray Dataset partition count for the distributed run"
+        required: false
+        default: "64"
+      head_machine:
+        description: "Head node machine type (the driver generates the full frame in memory; highmem for distributed runs). 100M: n2-highmem-32 (256 GB); 200M: n2-highmem-64 (512 GB)."
+        required: false
+        default: "n2-highmem-32"
 
 permissions:
   contents: read
@@ -80,8 +96,16 @@ jobs:
         # one place instead of accumulating GH-Actions copies.
         run: |
           pip install --upgrade pip
-          pip install "ray[default]==${{ env.RAY_RELEASE }}" "google-api-python-client"
+          # Install the LATEST Ray (matches CI's `ray[default]>=2.0`), then render
+          # the cluster's docker image to the SAME version so launcher==cluster and
+          # both carry the Ray Data API the distributed pipeline needs
+          # (`repartition(num_partitions, keys=[...])`, added after 2.43 -- the old
+          # pin made the golden/WCC steps TypeError on `keys`).
+          pip install "ray[default]" "google-api-python-client"
           pip install pyyaml
+          RAY_VER=$(python -c "import ray; print(ray.__version__)")
+          echo "RAY_VER=$RAY_VER" >> "$GITHUB_ENV"
+          echo "Resolved Ray version: $RAY_VER (launcher + cluster docker image)"
           # Infisical CLI: official apt repo. The 0.43.x series ships
           # `infisical login --method=universal-auth` and
           # `infisical secrets get --plain` which we both use.
@@ -146,8 +170,12 @@ jobs:
           sed -i "s|GOLDENMATCH_GIT_SHA_PLACEHOLDER|${{ github.sha }}|g" .ray/cluster-gce.yaml
           sed -i "s|cluster_name: goldenmatch-bench$|cluster_name: ${{ env.CLUSTER_NAME }}|" .ray/cluster-gce.yaml
           sed -i "s|max_workers: 3$|max_workers: ${{ inputs.max_workers }}|" .ray/cluster-gce.yaml
+          sed -i "s|GOLDENMATCH_HEAD_MACHINE_PLACEHOLDER|${{ inputs.head_machine }}|g" .ray/cluster-gce.yaml
+          # Pin the cluster docker image to the launcher's resolved Ray version so
+          # the cluster has the same Ray Data API (repartition keys=) as the code.
+          sed -i "s|GOLDENMATCH_RAY_VERSION_PLACEHOLDER|${RAY_VER}|g" .ray/cluster-gce.yaml
           echo "----- Rendered cluster.yaml -----"
-          head -40 .ray/cluster-gce.yaml
+          head -50 .ray/cluster-gce.yaml
 
       - name: Ray up
         # Provisions head + workers, installs goldenmatch on each via
@@ -187,12 +215,31 @@ jobs:
           # the poller PID and its SSH control-master connections.
           trap "kill $POLLER_PID 2>/dev/null || true" EXIT
 
-          ray submit .ray/cluster-gce.yaml \
-            scripts/quality_invariant_scale.py \
-            -- --rows ${{ inputs.rows }} \
-               --shape ${{ inputs.shape }} \
-               --backend ray \
-               --out "$OUT_REMOTE"
+          if [ "${{ inputs.distributed }}" = "1" ]; then
+            # REAL Phase-5 distributed engine: PIPELINE=2 (block-shuffle +
+            # randomized-contraction WCC), oracle-scored. Always frozen config.
+            # --wcc-scratch sets GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH on the head
+            # (env vars don't propagate through `ray submit`); it MUST be a shared
+            # gs:// path the cluster nodes can read+write.
+            ray submit .ray/cluster-gce.yaml \
+              scripts/quality_invariant_scale.py \
+              -- --rows ${{ inputs.rows }} \
+                 --shape ${{ inputs.shape }} \
+                 --frozen \
+                 --corruption moderate \
+                 --distributed \
+                 --partitions ${{ inputs.partitions }} \
+                 --wcc-scratch "${{ inputs.wcc_scratch }}/${{ github.run_id }}" \
+                 --out "$OUT_REMOTE"
+          else
+            # Legacy: in-memory backend=ray (does NOT distribute; head-only).
+            ray submit .ray/cluster-gce.yaml \
+              scripts/quality_invariant_scale.py \
+              -- --rows ${{ inputs.rows }} \
+                 --shape ${{ inputs.shape }} \
+                 --backend ray \
+                 --out "$OUT_REMOTE"
+          fi
           ray rsync_down .ray/cluster-gce.yaml \
             "$OUT_REMOTE" ".profile_tmp/qis/qis_${{ inputs.label }}.json"
 
