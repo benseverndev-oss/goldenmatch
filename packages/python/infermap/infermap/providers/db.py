@@ -97,10 +97,27 @@ def _parse_connection(uri: str) -> dict:
     raise InferMapError(f"Unsupported database scheme: {scheme!r}")
 
 
+def _quote_ident(name: str) -> str:
+    """Quote a SQL identifier (table/column) by wrapping it in double quotes and
+    doubling any embedded quote -- the standard escaping for SQLite / Postgres /
+    DuckDB. Bound parameters (``?`` / ``%s``) can only bind VALUES, never
+    identifiers, so an interpolated identifier MUST be escaped this way to stay
+    injection-safe."""
+    return '"' + name.replace('"', '""') + '"'
+
+
 class DBProvider:
     """Extracts SchemaInfo from a database table."""
 
     def extract(self, source: Any, *, table: str, sample_size: int = _DEFAULT_SAMPLE_SIZE, **kwargs) -> SchemaInfo:
+        # Injection hardening for untrusted args: the table name is interpolated
+        # as a quoted identifier at each use (params can't bind identifiers), so
+        # it must be a string and is escaped via _quote_ident; sample_size is
+        # bound/interpolated as an int, so coerce it here -- a non-numeric string
+        # raises ValueError instead of reaching a query.
+        if not isinstance(table, str):
+            raise InferMapError(f"table must be a string, got {type(table).__name__}")
+        sample_size = int(sample_size)
         conn_info = _parse_connection(str(source))
         driver = conn_info["driver"]
 
@@ -153,16 +170,20 @@ class DBProvider:
             if cur.fetchone() is None:
                 raise InferMapError(f"Table {table!r} not found in SQLite database: {db_path}")
 
-            # Get column info via PRAGMA
-            pragma = conn.execute(f"PRAGMA table_info({table})").fetchall()
-            # PRAGMA columns: (cid, name, type, notnull, dflt_value, pk)
+            # Get column info via the parameterized pragma table-valued function
+            # (PRAGMA table_info(<ident>) can't bind a param; pragma_table_info(?)
+            # can, removing the only unquoted-identifier interpolation).
+            pragma = conn.execute(
+                "SELECT * FROM pragma_table_info(?)", (table,)
+            ).fetchall()
+            # pragma_table_info columns: (cid, name, type, notnull, dflt_value, pk)
 
             # Total row count
-            total = conn.execute(f"SELECT COUNT(*) FROM \"{table}\"").fetchone()[0]
+            total = conn.execute(f"SELECT COUNT(*) FROM {_quote_ident(table)}").fetchone()[0]
 
-            # Fetch sample rows
+            # Fetch sample rows (sample_size bound as a parameter)
             sample_rows = conn.execute(
-                f"SELECT * FROM \"{table}\" LIMIT {sample_size}"
+                f"SELECT * FROM {_quote_ident(table)} LIMIT ?", (sample_size,)
             ).fetchall()
             col_names = [row[1] for row in pragma]
             col_types = [row[2] for row in pragma]
@@ -171,7 +192,7 @@ class DBProvider:
             for col_idx, (col_name, col_type) in enumerate(zip(col_names, col_types)):
                 # Null count for this column
                 null_count = conn.execute(
-                    f"SELECT COUNT(*) FROM \"{table}\" WHERE \"{col_name}\" IS NULL"
+                    f"SELECT COUNT(*) FROM {_quote_ident(table)} WHERE {_quote_ident(col_name)} IS NULL"
                 ).fetchone()[0]
 
                 null_rate = null_count / total if total > 0 else 0.0
@@ -231,11 +252,11 @@ class DBProvider:
                 raise InferMapError(f"Table '{table}' not found or has no columns")
 
             # Total row count
-            cur.execute(f'SELECT COUNT(*) FROM "{table}"')
+            cur.execute(f'SELECT COUNT(*) FROM {_quote_ident(table)}')
             total = cur.fetchone()[0]
 
             # Sample rows
-            cur.execute(f'SELECT * FROM "{table}" LIMIT %s', (sample_size,))
+            cur.execute(f'SELECT * FROM {_quote_ident(table)} LIMIT %s', (sample_size,))
             sample_rows = cur.fetchall()
 
             fields = []
@@ -288,10 +309,13 @@ class DBProvider:
                 raise InferMapError(f"Table '{table}' not found in DuckDB: {db_path}")
 
             # Total count
-            total = conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
+            total = conn.execute(f'SELECT COUNT(*) FROM {_quote_ident(table)}').fetchone()[0]
 
-            # Sample
-            sample_rows = conn.execute(f'SELECT * FROM "{table}" USING SAMPLE {sample_size}').fetchall()
+            # Sample (sample_size is int-coerced in extract(), so safe to inline --
+            # DuckDB's USING SAMPLE clause does not accept a bound parameter)
+            sample_rows = conn.execute(
+                f'SELECT * FROM {_quote_ident(table)} USING SAMPLE {sample_size}'
+            ).fetchall()
 
             fields = []
             for col_idx, (col_name, data_type) in enumerate(result):
