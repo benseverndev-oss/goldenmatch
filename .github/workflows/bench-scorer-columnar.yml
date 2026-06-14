@@ -1,0 +1,46 @@
+name: bench-scorer-columnar
+
+# Pure-Python A/B bench for the GOLDENMATCH_COLUMNAR_PIPELINE scorer path.
+# Dispatched manually; no native build (this bench exercises the Python
+# scorer, not the Rust kernel).
+on:
+  workflow_dispatch:
+    inputs:
+      rows:
+        description: "Comma-separated row counts (e.g. '1000000,5000000')"
+        default: "1000000,5000000"
+      runs:
+        description: "Repetitions per measurement (median)"
+        default: "3"
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    runs-on: large-new-64GB
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      - name: Run scorer-columnar A/B
+        env:
+          GOLDENMATCH_NATIVE: "0"
+          POLARS_SKIP_CPU_CHECK: "1"
+        run: |
+          set -euo pipefail
+          uv run python packages/python/goldenmatch/scripts/bench_scorer_columnar.py \
+            --rows "${{ inputs.rows }}" --runs "${{ inputs.runs }}" \
+            --output bench_scorer_columnar.json | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        if: always()
+        with:
+          name: scorer-columnar
+          path: bench_scorer_columnar.json
+          retention-days: 30

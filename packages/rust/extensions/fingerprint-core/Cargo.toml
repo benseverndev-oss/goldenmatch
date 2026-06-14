@@ -17,7 +17,7 @@ name = "goldenmatch_fingerprint_core"
 
 [dependencies]
 # Must match Python hashlib.sha256 byte-for-byte (see core/_hashing.py).
-sha2 = "0.10"
+sha2 = "0.11"
 # JSON parsing for non-Python callers (pgrx / DuckDB / C ABI). arbitrary_precision
 # preserves integer literals exactly so big ints match the Python-str() path.
 serde_json = { version = "1", features = ["arbitrary_precision"] }
