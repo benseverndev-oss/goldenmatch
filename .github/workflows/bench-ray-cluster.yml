@@ -240,7 +240,10 @@ jobs:
                  --backend ray \
                  --out "$OUT_REMOTE"
           fi
-          ray rsync_down .ray/cluster-gce.yaml \
+          # `rsync-down` (hyphen) -- the latest Ray CLI renamed the underscore
+          # form (`rsync_down`), which silently lost the result JSON on v8 even
+          # though the run completed.
+          ray rsync-down .ray/cluster-gce.yaml \
             "$OUT_REMOTE" ".profile_tmp/qis/qis_${{ inputs.label }}.json"
 
       - name: Upload bench artifact
