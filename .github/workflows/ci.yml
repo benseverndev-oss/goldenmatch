@@ -4,6 +4,13 @@ on:
   push:
     branches: [main]
   pull_request:
+  merge_group:
+  workflow_dispatch:
+    inputs:
+      run_all:
+        description: "Run the full job matrix (bypass path filters)"
+        type: boolean
+        default: true
 
 # Locked-down by default. Individual jobs escalate as needed.
 # OpenSSF Scorecard / Token-Permissions check requires this top-level scope.
@@ -35,6 +42,12 @@ jobs:
       rust: ${{ steps.filter.outputs.rust }}
       action: ${{ steps.filter.outputs.action }}
       ci_workflow: ${{ steps.filter.outputs.ci_workflow }}
+      # force_all: true on merge_group (the authoritative batched gate) and on a
+      # workflow_dispatch with run_all=true. Drives the full job matrix + the
+      # dynamic python matrix independently of the path filters (which can't diff
+      # on merge_group anyway). Decoupled from ci_workflow so a PR-level ci.yml
+      # edit no longer forces every lane — workflow_lint covers that cheaply.
+      force_all: ${{ steps.flags.outputs.force_all }}
       pyright_slice: ${{ steps.filter.outputs.pyright_slice }}
       # goldenmatch runs as its own sharded jobs (python_goldenmatch / _heavy /
       # _coverage), NOT in the generic `python` matrix, so expose its filter
@@ -60,6 +73,10 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d  # v4.0.1
         id: filter
+        # paths-filter diffs PR head vs base (or push head vs prev). merge_group
+        # and workflow_dispatch have no such diff base, so skip it there and let
+        # the `flags` step below force the full matrix instead.
+        if: github.event_name == 'pull_request' || github.event_name == 'push'
         with:
           # `filters` runs against the diff between the PR head and base
           # (or push head and the previous push for branch builds). Per-path
@@ -301,13 +318,25 @@ jobs:
               - 'packages/python/goldenmatch/goldenmatch/core/complexity_profile.py'
               - 'packages/python/goldenmatch/goldenmatch/core/scorer.py'
               - 'packages/python/goldenmatch/goldenmatch/config/**'
+      # Always-on flag step: force the full matrix on merge_group (the
+      # authoritative batched gate) and on a workflow_dispatch run_all=true.
+      # Runs unconditionally (the `filter` step above is skipped on those
+      # events), so downstream `force_all` gates resolve on every event.
+      - id: flags
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "merge_group" ] || { [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.run_all }}" = "true" ]; }; then
+            echo "force_all=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "force_all=false" >> "$GITHUB_OUTPUT"
+          fi
       # Build the python matrix dynamically: only include packages whose code
       # actually changed. A workflow-file or root-pyproject change expands to
       # all packages so dependency-resolution changes can't slip through.
       - id: set_python
         shell: bash
         env:
-          ALL: ${{ steps.filter.outputs.ci_workflow == 'true' || steps.filter.outputs.python_root == 'true' }}
+          ALL: ${{ steps.flags.outputs.force_all == 'true' || steps.filter.outputs.python_root == 'true' }}
         run: |
           set -euo pipefail
           # NB: goldenmatch is intentionally absent here — it runs as the
@@ -334,6 +363,24 @@ jobs:
             json="${json%,}]"
             echo "pkgs=$json" >> "$GITHUB_OUTPUT"
           fi
+
+  # Fast required check for workflow edits. PR-level ci.yml changes no longer
+  # force the full job matrix (that's now merge_group/dispatch-only via
+  # force_all), so this cheap lane gives `.github/workflows/ci.yml` edits a
+  # required signal at PR time: it parses every workflow file as YAML. The full
+  # matrix still re-validates the filter wiring at merge-queue time (force_all).
+  workflow_lint:
+    needs: changes
+    if: needs.changes.outputs.ci_workflow == 'true' || needs.changes.outputs.force_all == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - name: Validate workflow YAML + lint
+        shell: bash
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 -c "import sys,glob,yaml; [yaml.safe_load(open(f)) for f in glob.glob('.github/workflows/*.yml')]; print('all workflow YAML parses')"
 
   python:
     needs: changes
@@ -407,7 +454,7 @@ jobs:
   # ---------------------------------------------------------------------------
   python_goldenmatch:
     needs: changes
-    if: needs.changes.outputs.python_goldenmatch == 'true' || needs.changes.outputs.ci_workflow == 'true'
+    if: needs.changes.outputs.python_goldenmatch == 'true' || needs.changes.outputs.force_all == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -506,7 +553,7 @@ jobs:
   # datafusion runtime (these files don't import it).
   python_goldenmatch_heavy:
     needs: changes
-    if: needs.changes.outputs.python_goldenmatch == 'true' || needs.changes.outputs.ci_workflow == 'true'
+    if: needs.changes.outputs.python_goldenmatch == 'true' || needs.changes.outputs.force_all == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -576,7 +623,7 @@ jobs:
     # Run when goldenmatch python changed OR the workflow itself changed.
     # Matrix runs all lanes regardless of which prereqs are configured;
     # each lane self-reports its prereq state.
-    if: needs.changes.outputs.python_goldenmatch == 'true' || needs.changes.outputs.ci_workflow == 'true'
+    if: needs.changes.outputs.python_goldenmatch == 'true' || needs.changes.outputs.force_all == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -661,7 +708,7 @@ jobs:
     needs: changes
     if: |
       needs.changes.outputs.python_goldenmatch_postgres == 'true' ||
-      needs.changes.outputs.ci_workflow == 'true'
+      needs.changes.outputs.force_all == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     services:
@@ -711,7 +758,7 @@ jobs:
   # benchmarks.yml workflow (schedule + workflow_dispatch).
   synthetic_benchmarks:
     needs: changes
-    if: needs.changes.outputs.python_goldenmatch == 'true' || needs.changes.outputs.ci_workflow == 'true'
+    if: needs.changes.outputs.python_goldenmatch == 'true' || needs.changes.outputs.force_all == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -759,7 +806,7 @@ jobs:
   # workflow.
   benchmark_runner_smoke:
     needs: changes
-    if: needs.changes.outputs.benchmark_runner == 'true' || needs.changes.outputs.ci_workflow == 'true'
+    if: needs.changes.outputs.benchmark_runner == 'true' || needs.changes.outputs.force_all == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     continue-on-error: true
@@ -826,7 +873,7 @@ jobs:
 
   typescript:
     needs: changes
-    if: needs.changes.outputs.typescript == 'true' || needs.changes.outputs.ci_workflow == 'true'
+    if: needs.changes.outputs.typescript == 'true' || needs.changes.outputs.force_all == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -858,7 +905,7 @@ jobs:
 
   wasm_score:
     needs: changes
-    if: needs.changes.outputs.wasm_score == 'true' || needs.changes.outputs.ci_workflow == 'true'
+    if: needs.changes.outputs.wasm_score == 'true' || needs.changes.outputs.force_all == 'true'
     # Opt-in WASM scorer lane: builds the score-wasm artifact, then runs the
     # parity test UN-skipped (it skips elsewhere with no artifact) + an
     # informational benchmark. The artifact-free wasm-backend/wasm-fallback unit
@@ -897,7 +944,7 @@ jobs:
 
   analysis_wasm:
     needs: changes
-    if: needs.changes.outputs.analysis_wasm == 'true' || needs.changes.outputs.ci_workflow == 'true'
+    if: needs.changes.outputs.analysis_wasm == 'true' || needs.changes.outputs.force_all == 'true'
     # Opt-in WASM aggregate lane: builds the analysis-wasm artifact, then runs the
     # parity test UN-skipped (it skips elsewhere with no artifact) + an
     # informational benchmark. The artifact-free goldenanalysis tests + the
@@ -935,7 +982,7 @@ jobs:
 
   web_ui_e2e:
     needs: changes
-    if: needs.changes.outputs.web_ui_e2e == 'true' || needs.changes.outputs.ci_workflow == 'true'
+    if: needs.changes.outputs.web_ui_e2e == 'true' || needs.changes.outputs.force_all == 'true'
     # End-to-end smoke for the goldenmatch[web] UI: builds the frontend,
     # boots the FastAPI backend against the pytest fixture project, runs
     # one Playwright scenario covering home → run → cluster.
@@ -979,7 +1026,7 @@ jobs:
 
   rust:
     needs: changes
-    if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci_workflow == 'true'
+    if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.force_all == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     defaults:
@@ -1036,7 +1083,7 @@ jobs:
   # tests run under instrumentation (a skipped test would understate coverage).
   rust_coverage:
     needs: changes
-    if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci_workflow == 'true'
+    if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.force_all == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     defaults:
@@ -1096,7 +1143,7 @@ jobs:
   # path matches the pure-Python path bit-for-bit (GOLDENMATCH_NATIVE 0 vs 1).
   native:
     needs: changes
-    if: needs.changes.outputs.native == 'true' || needs.changes.outputs.ci_workflow == 'true'
+    if: needs.changes.outputs.native == 'true' || needs.changes.outputs.force_all == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -1167,7 +1214,7 @@ jobs:
   # integer-exact), incl. a GOLDENCHECK_NATIVE=1 required-mode run.
   goldencheck_native:
     needs: changes
-    if: needs.changes.outputs.goldencheck_native == 'true' || needs.changes.outputs.ci_workflow == 'true'
+    if: needs.changes.outputs.goldencheck_native == 'true' || needs.changes.outputs.force_all == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -1224,7 +1271,7 @@ jobs:
   # not yet wired into the pure path (the wall-verified flip is a follow-up).
   goldenanalysis_native:
     needs: changes
-    if: needs.changes.outputs.analysis_native == 'true' || needs.changes.outputs.ci_workflow == 'true'
+    if: needs.changes.outputs.analysis_native == 'true' || needs.changes.outputs.force_all == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -1271,7 +1318,7 @@ jobs:
   # back to `goldenmatch_native._native` from the installed wheel.
   native_wheel:
     needs: changes
-    if: needs.changes.outputs.native == 'true' || needs.changes.outputs.ci_workflow == 'true'
+    if: needs.changes.outputs.native == 'true' || needs.changes.outputs.force_all == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -1315,7 +1362,7 @@ jobs:
   # asserted byte-identical to the pure phonenumbers reference. Mirrors `native`.
   native_flow:
     needs: changes
-    if: needs.changes.outputs.native_flow == 'true' || needs.changes.outputs.ci_workflow == 'true'
+    if: needs.changes.outputs.native_flow == 'true' || needs.changes.outputs.force_all == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -1362,7 +1409,7 @@ jobs:
   # loader must fall back to `goldenflow_native._native` from the wheel.
   native_flow_wheel:
     needs: changes
-    if: needs.changes.outputs.native_flow == 'true' || needs.changes.outputs.ci_workflow == 'true'
+    if: needs.changes.outputs.native_flow == 'true' || needs.changes.outputs.force_all == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -1407,7 +1454,7 @@ jobs:
   # trained model; the unit tests cover the deterministic featurizer here.
   goldenembed:
     needs: changes
-    if: needs.changes.outputs.goldenembed == 'true' || needs.changes.outputs.ci_workflow == 'true'
+    if: needs.changes.outputs.goldenembed == 'true' || needs.changes.outputs.force_all == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -1432,7 +1479,7 @@ jobs:
   # normalizes the dist name `goldenmatch-embed` -> `goldenmatch_embed`.
   embed_wheel:
     needs: changes
-    if: needs.changes.outputs.embed == 'true' || needs.changes.outputs.ci_workflow == 'true'
+    if: needs.changes.outputs.embed == 'true' || needs.changes.outputs.force_all == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -1486,7 +1533,7 @@ jobs:
   # build_clusters AND are invariant to Ray partition count (1/2/3/7).
   distributed:
     needs: changes
-    if: needs.changes.outputs.distributed == 'true' || needs.changes.outputs.ci_workflow == 'true'
+    if: needs.changes.outputs.distributed == 'true' || needs.changes.outputs.force_all == 'true'
     runs-on: ubuntu-latest
     # 30 (was 20): the #844 randomized-contraction WCC ray gate adds a ~3.5 min
     # blocking step on top of the invariance gate (~5.5 min) + broad coverage
@@ -1559,7 +1606,7 @@ jobs:
   # docs/superpowers/specs/2026-06-03-sail-tier-design.md (Stage S1).
   sail:
     needs: changes
-    if: needs.changes.outputs.sail == 'true' || needs.changes.outputs.ci_workflow == 'true'
+    if: needs.changes.outputs.sail == 'true' || needs.changes.outputs.force_all == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -1611,7 +1658,7 @@ jobs:
 
   action:
     needs: changes
-    if: needs.changes.outputs.action == 'true' || needs.changes.outputs.ci_workflow == 'true'
+    if: needs.changes.outputs.action == 'true' || needs.changes.outputs.force_all == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -1633,7 +1680,7 @@ jobs:
   # postgres/, bridge/, or workspace files actually change.
   rust_pgrx:
     needs: changes
-    if: needs.changes.outputs.rust_pgrx == 'true' || needs.changes.outputs.ci_workflow == 'true'
+    if: needs.changes.outputs.rust_pgrx == 'true' || needs.changes.outputs.force_all == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
@@ -1848,7 +1895,7 @@ jobs:
   # enumerates packages/python/<pkg>). This lane fills that gap.
   duckdb_extensions:
     needs: changes
-    if: needs.changes.outputs.duckdb_extensions == 'true' || needs.changes.outputs.ci_workflow == 'true'
+    if: needs.changes.outputs.duckdb_extensions == 'true' || needs.changes.outputs.force_all == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     defaults:
@@ -1883,7 +1930,7 @@ jobs:
   # `include` and the `pyright_slice` filter above.
   pyright:
     needs: changes
-    if: needs.changes.outputs.pyright_slice == 'true' || needs.changes.outputs.ci_workflow == 'true'
+    if: needs.changes.outputs.pyright_slice == 'true' || needs.changes.outputs.force_all == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -1926,7 +1973,7 @@ jobs:
 
   ts_parity_freshness:
     needs: changes
-    if: needs.changes.outputs.ts_parity == 'true' || needs.changes.outputs.ci_workflow == 'true'
+    if: needs.changes.outputs.ts_parity == 'true' || needs.changes.outputs.force_all == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -1967,6 +2014,7 @@ jobs:
   ci-required:
     needs:
       - changes
+      - workflow_lint
       - python
       - python_goldenmatch
       - python_goldenmatch_heavy
