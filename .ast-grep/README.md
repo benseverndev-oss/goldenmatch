@@ -19,14 +19,35 @@ advisory (reported, non-blocking) so new rules can land gradually.
 
 ## Current rules (`.ast-grep/rules/`)
 
+**Python — repo footguns** (the "bit us in PR #N" lessons):
+
 | Rule | Severity | Invariant |
 |---|---|---|
 | `no-clirunner-mix-stderr` | error | `CliRunner(mix_stderr=...)` raises on click>=8.3 — drop the kwarg |
 | `no-toplevel-import-torch` | warning | unguarded top-level `import torch` hangs/segfaults on GPU-less boxes — import lazily or guard |
 | `no-bare-relative-test-fixture-path` | warning | `Path("tests/...")` resolves off CWD (differs local vs CI) — anchor to `__file__` |
+
+**Polars** (the repo is Polars-native):
+
+| Rule | Severity | Invariant |
+|---|---|---|
 | `polars-read-excel-needs-engine` | warning | `pl.read_excel(path)` with no `engine=` — pass `engine="openpyxl"` (caught a real one in goldencheck) |
-| `ts-no-empty-catch` | error | empty `catch {}` silently swallows errors — log or re-throw (TS ports) |
-| `ts-no-spread-math-min-max` | warning | `Math.min/max(...array)` throws on >65K elements — surfaces **11 real sites** in the TS ports for a follow-up cleanup |
+| `polars-no-deprecated-apply` | warning | `pl.col(x).apply(...)` is deprecated/slow — use `.map_elements(..., return_dtype=...)` or a vectorized expr |
+
+**Python — security** (clean guards, no current call sites):
+
+| Rule | Severity | Invariant |
+|---|---|---|
+| `py-no-eval` | error | `eval(...)` executes arbitrary code — use `ast.literal_eval` / `json.loads` / a dispatch dict |
+| `py-no-exec` | error | `exec(...)` runs arbitrary code strings — use real functions / a dispatch table |
+| `py-no-subprocess-shell-true` | error | `subprocess.*(..., shell=True)` is a shell-injection risk — pass an argv list, `shell=False` |
+
+**TypeScript ports**:
+
+| Rule | Severity | Invariant |
+|---|---|---|
+| `ts-no-empty-catch` | error | empty `catch {}` silently swallows errors — log or re-throw |
+| `ts-no-spread-math-min-max` | warning | `Math.min/max(...array)` throws on >65K elements — surfaces **11 real sites** for a follow-up cleanup |
 
 ## Considered but not added (AST can't express them cleanly)
 
@@ -44,6 +65,13 @@ semantic linter):
   `open(encoding="utf-8")`.
 - **`pl.read_csv(path)` missing `encoding=`** — 17 legit single-arg call sites, so
   a rule would be pure noise.
+- **`node:fs`/`process.env` in `src/core/`** (TS edge-safety) — the invariant is
+  real, but `src/core/engine/{history,scheduler}.ts` are *documented* intentional
+  exceptions (their functions aren't re-exported from `core/index.ts`), and
+  `require()`/`process.env` are deliberate lazy patterns elsewhere — so a rule
+  fires on correct code. Needs a per-file allowlist a flat AST rule can't carry.
+- **`import pandas` in goldencheck** (Polars-native) — the one hit is a *lazy*
+  interop import in `engine/db_scanner.py`, not a violation.
 
 ## Add a rule
 

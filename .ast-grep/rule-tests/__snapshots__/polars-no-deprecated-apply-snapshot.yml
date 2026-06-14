@@ -1,0 +1,14 @@
+id: polars-no-deprecated-apply
+snapshots:
+  df.select(pl.col('x').apply(f)):
+    labels:
+    - source: pl.col('x').apply(f)
+      style: primary
+      start: 10
+      end: 30
+  'pl.col(''name'').apply(lambda s: s.upper())':
+    labels:
+    - source: 'pl.col(''name'').apply(lambda s: s.upper())'
+      style: primary
+      start: 0
+      end: 41
