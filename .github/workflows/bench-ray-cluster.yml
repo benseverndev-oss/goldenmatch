@@ -243,6 +243,18 @@ jobs:
             sleep 30
           done
 
+      - name: Verify native loaded on a worker
+        # The scoring kernel is the dominant distributed stage; if the native
+        # wheel didn't build on the workers, NATIVE=1 (set in cluster-gce.yaml)
+        # would only RAISE at the first score call -- 20+ min into the run.
+        # Catch it here: ship a check via `ray submit` (same mechanism the bench
+        # uses) that schedules tasks across the cluster and asserts a WORKER
+        # actually loaded goldenmatch._native. Fail loud + tear down rather than
+        # burn a full run scoring in pure Python.
+        run: |
+          set -euo pipefail
+          ray submit .ray/cluster-gce.yaml scripts/verify_cluster_native.py
+
       - name: Submit bench
         # `ray submit` ships the script to the head node and runs it.
         # The script writes its JSON output to /tmp on the head; we
