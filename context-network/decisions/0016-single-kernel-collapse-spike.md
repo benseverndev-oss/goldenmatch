@@ -151,6 +151,60 @@ are documented *infra* residuals, not code blockers. The remaining R1 gate befor
 default flip is **Workstream A** — cross-JS-target WASM (Node ✅ already; browser /
 Workers / Deno pending), kill-criterion (2).
 
+### R1 evidence — Workstream A: cross-JS-target WASM (kill-criterion 2), PROBED 2026-06-14
+
+Workstream A adds a second `workflow_dispatch` CI workflow,
+[`.github/workflows/r1-kernel-js-targets.yml`](../../.github/workflows/r1-kernel-js-targets.yml),
+that builds the `score-wasm` kernel once and runs the SAME pure-TS-vs-kernel 4dp
+equivalence assertion (the spike's `tests/spike/kernel-equivalence*` arm, factored
+into a runtime-agnostic `kernel-equivalence-core.ts` + a frozen
+`fixtures/pure-ts-reference.json`) under all four JS runtimes — node (vitest),
+deno (`deno test`), browser (vitest browser-mode / Playwright chromium), and
+workers (`@cloudflare/vitest-pool-workers` / workerd). It is ADDITIVE + dispatch-only;
+flips no default (the TS WASM path stays opt-in via `enableWasm()`; pure-TS stays the
+default + fallback), deletes nothing, and builds the same crate the `wasm_score` lane
+builds.
+
+- **Universal loader (the A1 decision): base64-INLINE (Option i).** Implemented behind
+  the existing opt-in seam as `enableWasm({ universal: true })` — resolves the artifact
+  from a generated `score_wasm_base64.js` module (emitted by `build_wasm.sh`, gitignored
+  like the `.wasm`), decoded via `decodeWasmBase64` in `goldenmatch-wasm-runtime` (`atob`
+  where present, else Node `Buffer`). No fetch/fs/`import.meta.url`-relative asset
+  resolution — the only path that loads edge-safe in Workers + Deno + every bundler. Cost:
+  base64 is ~+33% over the raw `.wasm` (115,155 B → a 153,540-B string). The DEFAULT
+  `enableWasm()` path (URL/fs/fetch) is unchanged; default users load zero wasm bytes.
+  Trade-off note: [`docs/superpowers/notes/2026-06-14-wasm-universal-loader.md`](../../docs/superpowers/notes/2026-06-14-wasm-universal-loader.md).
+
+- **Per-target status — kill-criterion (2):**
+
+  | target | runtime | how it loads the kernel | status |
+  |---|---|---|---|
+  | node | vitest (Node 22) | bytes via fs (default loader) | **PASS** (spike; re-run in-env GREEN) |
+  | deno | `deno test` (Deno 2.8) | universal base64 + `atob` | **PASS (RAN-GREEN in-env)** — 1200 comparisons, max abs diff 4.8e-7 |
+  | browser | vitest browser-mode, chromium (Playwright) | universal base64 + `atob` | **PASS (RAN-GREEN in-env)** — real chromium; fault-injection confirmed it compares |
+  | workers | vitest-pool-workers (workerd) | build-time CompiledWasm `.wasm?module` import | **PENDING-RUN (in-env partial)** — see finding below |
+
+- **Workers FINDING (in-env, load-bearing for the design).** The pool RUNS in real
+  workerd in-env (the test body executed), and surfaced a genuine Workers constraint:
+  **workerd BANS runtime WASM codegen** — both `WebAssembly.instantiate(bytes)` AND the
+  synchronous `new WebAssembly.Module(bytes)` constructor throw *"Wasm code generation
+  disallowed by embedder"*. So the base64-bytes universal path that clears node/browser/deno
+  does NOT work on Workers; the Workers-legal path is a BUILD-TIME CompiledWasm `.wasm`
+  import (the pool compiles the module at deploy time). That is the one supported Workers
+  mechanism (not a per-target *hack* — the same wasm-bindgen glue + the same comparator),
+  but under the in-env vitest 4.1 / pool 0.16 combo vite's host-side import-analysis
+  intercepts the `.wasm?module` specifier before the pool's worker resolver, so the green
+  run is **pending the `workers` CI job** (which pins the pool/vitest versions). The harness
+  + config are written and the runner is proven to execute in workerd. NOTE: this is a real
+  signal for the eventual TS default-flip scope — a Workers consumer must ship the kernel as
+  a build-time CompiledWasm module, not the base64 path.
+
+**R1-A verdict (provisional, in-env):** node/deno/browser CLEAR kill-criterion (2)
+with the universal base64 loader and NO per-target hack; workers is the documented
+edge case — loadable, but only via a build-time CompiledWasm import (confirmed
+constraint), green run pending the dispatched `workers` job. The full go/no-go
+table will be filled from a `workflow_dispatch` run of `r1-kernel-js-targets.yml`.
+
 Two backward-compatible script flags back the gate: `--require-kernel`
 (kernel-absence → exit 1) and `--assert-not-slower` (perf cliff → exit 1); with
 neither flag the scripts keep the spike's skip-on-absent / exit-0 default. NO

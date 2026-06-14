@@ -30,13 +30,21 @@ the gates can be green, not to act on them.
 edge-safety hard constraint. R0 verified Node only (vitest, in-env); the other
 three targets are unverified and are kill-criterion (2).
 
-**Verification design.** Run the existing pure-TS-vs-WASM 4dp equivalence test
-(`tests/spike/kernel-equivalence.test.ts`, the generalized gate's TS arm) un-skipped
-under each runtime: Node (vitest, today), a headless browser (Playwright/wasm),
-a Workers harness (`workerd`/wrangler dev), and Deno (`deno test`). Each target
-loads the SAME `score_wasm_bg.wasm` byte loader through the shared
-`goldenmatch-wasm-runtime` — a per-target shim or polyfill needed anywhere is a
-RED flag (it's exactly the "per-target hacks" the kill-criterion forbids).
+**Verification design.** Run the SAME pure-TS-vs-WASM 4dp equivalence assertion
+(factored from `tests/spike/kernel-equivalence.test.ts` into a runtime-agnostic
+`tests/spike/kernel-equivalence-core.ts` + a frozen `fixtures/pure-ts-reference.json`)
+under each runtime: Node (vitest), a headless browser (vitest browser-mode /
+Playwright chromium), a Workers harness (`@cloudflare/vitest-pool-workers` / workerd),
+and Deno (`deno test`). A per-target shim or polyfill needed anywhere is a RED flag
+(it's exactly the "per-target hacks" the kill-criterion forbids).
+
+**The universal loader (A1 decision): base64-INLINE (Option i)**, behind the
+existing opt-in seam — `enableWasm({ universal: true })` resolves the artifact from
+a generated `score_wasm_base64.js` module (no fetch/fs/`import.meta.url` asset
+resolution), the only path edge-safe across Workers + Deno + every bundler. Cost:
+base64 ~+33% over the raw `.wasm` (measured: 115,155 B → a 153,540-B string). The
+default `enableWasm()` path is unchanged; default users load zero wasm bytes.
+Trade-off note: [`../../docs/superpowers/notes/2026-06-14-wasm-universal-loader.md`](../../docs/superpowers/notes/2026-06-14-wasm-universal-loader.md).
 
 **Per-target evidence.** A pass/fail row per runtime: artifact loaded? gate 4dp
 green? any target-specific code path required? Plus the runtime/version used.
@@ -46,8 +54,15 @@ hack, kill-criterion (2) FAILS → the TS half of the collapse STOPS (pure-TS st
 the permanent default + fallback). Node-only is not sufficient to flip the TS
 default.
 
-> Status: **NOT yet built in this change.** Workstream A is scoped here; the CI
-> harness is the next R1 deliverable. (This change ships Workstream B.)
+> Status: **SHIPPED as additive, workflow_dispatch-only infra** —
+> [`.github/workflows/r1-kernel-js-targets.yml`](../../.github/workflows/r1-kernel-js-targets.yml)
+> (jobs: node / deno / browser / workers; each writes a per-target PASS/FAIL to the
+> step summary). In-env: node/deno/browser RAN-GREEN via the universal base64 loader
+> with no per-target hack; the workers job surfaced a real constraint — **workerd bans
+> runtime WASM codegen**, so Workers needs a BUILD-TIME CompiledWasm `.wasm` import
+> (not the base64 path), green run pending the dispatched `workers` job (pins the
+> pool/vitest versions). See ADR 0016's R1-A evidence section for the full table +
+> the Workers finding. (Workstream B shipped earlier as `r1-kernel-wheels.yml`.)
 
 ## Workstream B — all-platform abi3 wheels + the #688 perf cliff (kill-criterion 3) — THIS CHANGE
 

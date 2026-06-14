@@ -2,6 +2,34 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-06-14 — Single-kernel-collapse R1 Workstream A: cross-JS-target WASM (kill-criterion 2)
+- **Shipped as additive, workflow_dispatch-only infra** — flips no default (the TS
+  WASM path stays opt-in via `enableWasm()`; pure-TS stays default + fallback),
+  deletes nothing, touches no default scoring path. New
+  `.github/workflows/r1-kernel-js-targets.yml`: four jobs (node / deno / browser /
+  workers) that build `score-wasm` once and run the SAME pure-TS-vs-kernel 4dp
+  equivalence assertion under each JS runtime, each writing a per-target PASS/FAIL to
+  `$GITHUB_STEP_SUMMARY`. Mirrors `r1-kernel-wheels.yml` (Workstream B).
+- **Universal loader (the A1 decision): base64-INLINE (Option i)**, implemented behind
+  the existing opt-in seam as `enableWasm({ universal: true })`. `build_wasm.sh` now
+  also emits a gitignored `score_wasm_base64.js`; `goldenmatch-wasm-runtime` gained
+  `decodeWasmBase64` + a `wasmBase64` LoadOption. No fetch/fs/`import.meta.url` asset
+  resolution — the only edge-safe-everywhere path. Cost: base64 ~+33% over the raw
+  `.wasm` (115,155 B → a 153,540-B string). Default `enableWasm()` unchanged; default
+  users load zero wasm bytes. Note:
+  [../../docs/superpowers/notes/2026-06-14-wasm-universal-loader.md](../../docs/superpowers/notes/2026-06-14-wasm-universal-loader.md).
+- **Per-target harnesses** reuse the spike's assertion via a runtime-agnostic
+  `kernel-equivalence-core.ts` + frozen `fixtures/pure-ts-reference.json`. In-env:
+  **node / deno / browser RAN-GREEN** (deno + browser via the universal base64 loader,
+  no per-target hack; browser in real chromium, fault-injection-verified). **workers:
+  PENDING-RUN** — the pool runs in real workerd in-env and surfaced a genuine
+  constraint (**workerd bans runtime WASM codegen** — `instantiate`/`Module`-from-bytes
+  both throw "Wasm code generation disallowed by embedder"), so Workers needs a
+  build-time CompiledWasm `.wasm` import; the green run is pending the dispatched
+  `workers` job (vitest-4 host-transform vs pool-0.16 resolver friction in-env). ADR
+  0016 gained an R1-A evidence section (per-target table + the Workers finding); the R1
+  plan's Workstream A section now points at the workflow.
+
 ## 2026-06-14 — Single-kernel-collapse R1 Workstream B: all-platform wheel + #688 perf-cliff gate
 - New [../architecture/single-kernel-collapse-R1-plan.md](../architecture/single-kernel-collapse-R1-plan.md)
   (the R1 go/no-go plan of record), linked from [../discovery.md](../discovery.md).
