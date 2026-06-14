@@ -96,8 +96,14 @@ def _phase5_cluster(raw_pairs_ds: Dataset, cfg: Any) -> Dataset:
             "phase5 clustering: block-shuffle active -> build_clusters_distributed "
             "(randomized_contraction; cross-partition pairs need real WCC)",
         )
+        # Cutover seam: pass the planner's ExecutionPlan.clustering_strategy
+        # here (in_memory / distributed_wcc) to let the routing decision drive
+        # the WCC path. Left None until the 100M parity gate validates the
+        # planner reproduces today's outcome (spec Rollout step 5); None keeps
+        # the env-threshold default via _resolve_use_label_prop.
         return build_clusters_distributed(
             raw_pairs_ds, all_ids=None, algorithm="randomized_contraction",
+            clustering_strategy=None,
         )
     logger.info("phase5 clustering: per-partition scoring -> local_cc_assignments")
     return local_cc_assignments(raw_pairs_ds)
