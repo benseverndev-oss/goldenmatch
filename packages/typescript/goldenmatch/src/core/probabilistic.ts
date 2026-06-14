@@ -694,8 +694,8 @@ export function scoreProbabilistic(
   for (const f of fields) {
     const w = em.matchWeights[f.field];
     if (!w || w.length === 0) continue;
-    maxWeight += Math.max(...w);
-    minWeight += Math.min(...w);
+    maxWeight += w.reduce((m, v) => (v > m ? v : m), -Infinity);
+    minWeight += w.reduce((m, v) => (v < m ? v : m), Infinity);
   }
   const weightRange = maxWeight - minWeight;
 
@@ -759,8 +759,8 @@ export function scoreProbabilisticPair(
   for (const f of fields) {
     const w = em.matchWeights[f.field];
     if (!w || w.length === 0) continue;
-    maxWeight += Math.max(...w);
-    minWeight += Math.min(...w);
+    maxWeight += w.reduce((m, v) => (v > m ? v : m), -Infinity);
+    minWeight += w.reduce((m, v) => (v < m ? v : m), Infinity);
   }
   const weightRange = maxWeight - minWeight;
   if (weightRange <= 0) return 0.5;

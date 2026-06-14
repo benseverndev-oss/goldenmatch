@@ -100,11 +100,10 @@ export class MemoryLearner {
     rejected: number[],
     all: readonly Correction[],
   ): number {
-    // Math.max/min via spread is fine here: corrections per matchkey is
-    // typically small (<100). For PR 2 row-count paths, the spec bans this
-    // pattern; the learner only sees correction scores.
-    const maxRejected = Math.max(...rejected);
-    const minApproved = Math.min(...approved);
+    // Loop-based min/max — never spread an array into Math.min/max (it throws
+    // RangeError past ~65K elements; banned by ast-grep ts-no-spread-math-min-max).
+    const maxRejected = rejected.reduce((m, v) => (v > m ? v : m), -Infinity);
+    const minApproved = approved.reduce((m, v) => (v < m ? v : m), Infinity);
     if (maxRejected < minApproved) {
       return (maxRejected + minApproved) / 2;
     }
