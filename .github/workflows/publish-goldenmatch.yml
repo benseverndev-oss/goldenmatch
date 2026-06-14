@@ -82,7 +82,7 @@ jobs:
           subject-path: packages/python/goldenmatch/dist/*.whl
       - name: Attach signed artifacts to the release
         if: github.event_name == 'release'
-        uses: softprops/action-gh-release@72f2c25fcb47643c292f7107632f7a47c1df5cd8  # v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2
         with:
           files: |
             packages/python/goldenmatch/dist/*.whl
