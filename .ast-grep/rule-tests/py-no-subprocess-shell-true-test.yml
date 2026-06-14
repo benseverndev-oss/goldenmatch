@@ -1,0 +1,7 @@
+id: py-no-subprocess-shell-true
+valid:
+  - "subprocess.run(['ls', '-l'])"
+  - "subprocess.run(argv, shell=False)"
+invalid:
+  - "subprocess.run(cmd, shell=True)"
+  - "subprocess.Popen(cmd, shell=True)"

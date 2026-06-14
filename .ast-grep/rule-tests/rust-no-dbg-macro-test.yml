@@ -1,0 +1,7 @@
+id: rust-no-dbg-macro
+valid:
+  - "let x = compute(y);"
+  - "tracing::debug!(\"value {}\", y);"
+invalid:
+  - "let x = dbg!(compute(y));"
+  - "dbg!(a, b);"

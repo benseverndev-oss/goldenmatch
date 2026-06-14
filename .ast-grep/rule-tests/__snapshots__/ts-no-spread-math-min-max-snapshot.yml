@@ -1,0 +1,14 @@
+id: ts-no-spread-math-min-max
+snapshots:
+  const m = Math.max(...xs.map((x) => x.n));:
+    labels:
+    - source: Math.max(...xs.map((x) => x.n))
+      style: primary
+      start: 10
+      end: 41
+  const m = Math.min(...arr);:
+    labels:
+    - source: Math.min(...arr)
+      style: primary
+      start: 10
+      end: 26

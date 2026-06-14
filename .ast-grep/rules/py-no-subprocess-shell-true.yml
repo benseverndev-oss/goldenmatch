@@ -1,0 +1,12 @@
+id: py-no-subprocess-shell-true
+language: python
+severity: error
+message: >-
+  subprocess with shell=True is a shell-injection risk on any non-constant
+  argument. Pass an argv list and shell=False (the default).
+rule:
+  any:
+    - pattern: subprocess.run($$$, shell=True)
+    - pattern: subprocess.call($$$, shell=True)
+    - pattern: subprocess.check_output($$$, shell=True)
+    - pattern: subprocess.Popen($$$, shell=True)
