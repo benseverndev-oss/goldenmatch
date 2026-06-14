@@ -19,6 +19,11 @@ export default defineConfig({
   treeshake: true,
   loader: { ".wasm": "copy" },
   onSuccess: "node scripts/copy_wasm_artifact.mjs",
+  // Inline the tiny internal WASM plumbing (loader / enable-skeleton / registry)
+  // so it is NOT a published runtime dep — it is not on npm and consumers never
+  // import it directly. This bundles ONLY the plumbing; the wasm-bindgen glue
+  // (score_wasm.js) and the .wasm artifact stay external (see `external`).
+  noExternal: ["goldenmatch-wasm-runtime"],
   external: [
     // The opt-in WASM glue is loaded at RUNTIME (dynamic import inside
     // enableWasm) and is absent in a default checkout. Mark it external so
