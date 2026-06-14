@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
+from goldenpipe import __version__
 from goldenpipe.engine.registry import StageRegistry
 from goldenpipe.engine.resolver import Resolver, WiringError
 from goldenpipe.models.config import PipelineConfig
@@ -22,11 +23,11 @@ class RunRequest(BaseModel):
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="GoldenPipe", version="1.0.0")
+    app = FastAPI(title="GoldenPipe", version=__version__)
 
     @app.get("/health")
     def health():
-        return {"status": "ok", "version": "1.0.0"}
+        return {"status": "ok", "version": __version__}
 
     @app.get("/stages")
     def list_stages():

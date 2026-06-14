@@ -181,6 +181,7 @@ def _golden_as_setrows(results):
 
 
 @pytest.mark.parametrize("native", ["1", "0"])
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
 def test_frames_out_pipeline_parity(monkeypatch, native):
     """Golden + dupes + stats byte-identical, gate ON vs OFF (fast golden)."""
     monkeypatch.setenv("GOLDENMATCH_NATIVE", native)
@@ -202,6 +203,7 @@ def test_frames_out_pipeline_parity(monkeypatch, native):
 
 
 @pytest.mark.parametrize("native", ["1", "0"])
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
 def test_frames_out_pipeline_parity_provenance_slow(monkeypatch, native):
     """Same parity with provenance=True so the golden SLOW path is covered."""
     monkeypatch.setenv("GOLDENMATCH_NATIVE", native)
@@ -327,6 +329,7 @@ def _record_partition(db_path: str, source: str, ids: list[str]):
 
 
 @pytest.mark.parametrize("native", ["1", "0"])
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
 def test_frames_out_identity_parity(monkeypatch, tmp_path, native):
     """Identity partition + ResolveSummary key counts identical, gate ON vs OFF.
 
@@ -395,6 +398,7 @@ def test_frames_out_identity_parity(monkeypatch, tmp_path, native):
 
 
 @pytest.mark.parametrize("native", ["1", "0"])
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
 def test_frames_out_identity_consumes_cluster_frames_directly(
     monkeypatch, tmp_path, native
 ):
@@ -512,6 +516,7 @@ def _clusters_partition(results):
 
 
 @pytest.mark.parametrize("native", ["1", "0"])
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
 def test_frames_out_output_on_deferred_dict_parity(monkeypatch, tmp_path, native):
     """Deferred output_clusters + lineage consumers: gate-ON dict == gate-OFF.
 
