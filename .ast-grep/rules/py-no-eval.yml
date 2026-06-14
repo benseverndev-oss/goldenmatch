@@ -1,0 +1,9 @@
+id: py-no-eval
+language: python
+severity: error
+message: >-
+  eval() executes arbitrary code — a security/footgun risk. Parse explicitly
+  (ast.literal_eval for literals, json.loads for JSON, a dispatch dict for
+  names). There are no legitimate eval() call sites in this repo.
+rule:
+  pattern: eval($$$)

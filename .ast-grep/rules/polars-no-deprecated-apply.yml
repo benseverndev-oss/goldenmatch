@@ -1,0 +1,9 @@
+id: polars-no-deprecated-apply
+language: python
+severity: warning
+message: >-
+  Polars Expr.apply is deprecated and slow — use .map_elements(..., return_dtype=...)
+  for per-element UDFs, or (better) a native vectorized expression.
+note: Polars deprecation; repo is Polars-native.
+rule:
+  pattern: pl.col($C).apply($$$)

@@ -1,0 +1,14 @@
+id: py-no-eval
+snapshots:
+  v = eval(expr, {}, {}):
+    labels:
+    - source: eval(expr, {}, {})
+      style: primary
+      start: 4
+      end: 22
+  v = eval(s):
+    labels:
+    - source: eval(s)
+      style: primary
+      start: 4
+      end: 11
