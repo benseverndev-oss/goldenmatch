@@ -28,6 +28,15 @@ reports the bench design + that numbers are pending CI / a built wheel.
 Usage:
     python scripts/bench_kernel_levenshtein.py            # 4000 pairs, 5 runs
     python scripts/bench_kernel_levenshtein.py --pairs 20000 --runs 5
+    python scripts/bench_kernel_levenshtein.py --assert-not-slower  # CI gate
+
+The optional ``--assert-not-slower`` flag turns the bench into a hard gate (the
+R1 wheel CI lane uses it): it exits 1 if the native kernel is more than a small
+tolerance slower than pure (the kill-criterion-(4) "at least neutral" contract),
+and — paired with ``--require-kernel`` — also exits 1 if the kernel is absent so
+the just-built wheel is actually exercised. Default behavior is unchanged: with
+neither flag the bench reports numbers and exits 0 (skip-on-absent preserved), so
+the spike's standalone-report use stays intact.
 """
 from __future__ import annotations
 
@@ -109,7 +118,15 @@ def median_wall(fn, pairs, runs: int) -> float:
     return statistics.median(_time_loop(fn, pairs) for _ in range(runs))
 
 
-def run(pairs_n: int, runs: int, seed: int) -> int:
+# How much slower than pure the kernel may be before `--assert-not-slower` fails.
+# 0.85 = the kernel must be at least 85% of pure's throughput (≤ ~18% slower).
+# This is deliberately lenient: the per-pair shape is the kernel's PESSIMAL case
+# (one PyO3 boundary per call), and shared-runner wall is noisy; the gate exists
+# to catch a #688-class CLIFF (multi-x regression), not single-digit-% jitter.
+RATIO_FLOOR = 0.85
+
+
+def run(pairs_n: int, runs: int, seed: int, require_kernel: bool, assert_not_slower: bool) -> int:
     pairs = build_pairs(pairs_n, seed)
     pure = _load_pure()
     kernel, reason = _load_kernel()
@@ -125,6 +142,9 @@ def run(pairs_n: int, runs: int, seed: int) -> int:
 
     if kernel is None:
         print(f"  kernel            : SKIP (kernel unavailable: {reason})")
+        if require_kernel:
+            print("\nFAIL: --require-kernel set but the native kernel is not importable.")
+            return 1
         print("\nKernel numbers PENDING: build with `python scripts/build_native.py` or run in CI.")
         return 0
 
@@ -139,6 +159,15 @@ def run(pairs_n: int, runs: int, seed: int) -> int:
     print("  NOTE per-pair is the kernel's pessimal shape (boundary per call); the shipped")
     print("       path batches per block. Kill-criterion (4) asks only for NEUTRAL-OR-BETTER")
     print("       on the real (batched) workload — this per-pair number is a conservative floor.")
+
+    # Machine-greppable line for CI step summaries (mirrors bench_issue_688.py).
+    print(f"BENCH_RATIO_PURE_OVER_KERNEL={ratio:.4f}")
+
+    if assert_not_slower and ratio < RATIO_FLOOR:
+        print(f"\nFAIL: kernel slower than pure beyond tolerance "
+              f"(ratio {ratio:.2f}x < floor {RATIO_FLOOR:.2f}x). "
+              "A #688-class regression would land here.")
+        return 1
     return 0
 
 
@@ -147,8 +176,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--pairs", type=int, default=4000)
     p.add_argument("--runs", type=int, default=5)
     p.add_argument("--seed", type=int, default=20260614)
+    p.add_argument("--require-kernel", action="store_true",
+                   help="exit 1 if the native kernel is not importable (CI wheel lane)")
+    p.add_argument("--assert-not-slower", action="store_true",
+                   help="exit 1 if the kernel is more than a small tolerance slower than pure")
     args = p.parse_args(argv)
-    return run(args.pairs, args.runs, args.seed)
+    return run(args.pairs, args.runs, args.seed, args.require_kernel, args.assert_not_slower)
 
 
 if __name__ == "__main__":

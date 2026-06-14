@@ -118,6 +118,33 @@ default-on bindings as the formal go/no-go gate) — do NOT yet collapse any
 scorer.** The tracer template is proven end-to-end (Python+TS, equivalent +
 faster); the platform-reliability gates are not.
 
+### R1 evidence — PROBED, pending run (2026-06-14)
+
+R1 stands the equivalence gate up *in more places* without flipping a default (see
+[../architecture/single-kernel-collapse-R1-plan.md](../architecture/single-kernel-collapse-R1-plan.md)).
+Workstream B adds a `workflow_dispatch` CI workflow,
+[`.github/workflows/r1-kernel-wheels.yml`](../../.github/workflows/r1-kernel-wheels.yml),
+that directly probes the two pending platform-reliability items:
+
+- **Kill-criterion (3) — all-platform abi3 wheels:** PROBED BY `r1-kernel-wheels.yml`
+  `wheels` matrix (linux x86_64 manylinux 2_28 / linux aarch64 / macOS arm64 / macOS
+  x86_64 cross / windows x64) — each leg builds the abi3 wheel (same SHA-pinned
+  `maturin-action` + manifest as `publish-goldenmatch-native.yml`) and runs the
+  equivalence gate `--require-kernel` + the bench `--assert-not-slower` on a clean
+  Python 3.11. **Status: PENDING-RUN** (the workflow is committed but not yet
+  dispatched; the parent runs it and collects the per-platform PASS/FAIL).
+- **The #688 perf cliff:** PROBED BY the `perf_cliff` job on `ubuntu-latest-xlarge`
+  (the 8-core AMD EPYC shape #688 wedged on; `cliff_runner`-parameterized) — runs the
+  per-pair bench AND `scripts/bench_issue_688.py`, asserting the kernel does not
+  regress into the rayon `LockLatch` futex park. **Status: PENDING-RUN.**
+
+Two backward-compatible script flags back the gate: `--require-kernel`
+(kernel-absence → exit 1) and `--assert-not-slower` (perf cliff → exit 1); with
+neither flag the scripts keep the spike's skip-on-absent / exit-0 default. NO
+default path or Rust source was touched; the workflow is workflow_dispatch-only.
+Kill-criterion (2) (cross-JS-target WASM) is scoped to R1 Workstream A, harness
+pending.
+
 ### The reversibility commitment
 
 Every step stays additive until R5; one reversible flag per step; the parity
