@@ -492,7 +492,7 @@ def test_auto_configure_df_dblp_acm_does_not_crash():
 
     import pytest
     from goldenmatch._api import dedupe_df
-    d = Path("tests/benchmarks/datasets/DBLP-ACM")
+    d = Path(__file__).parent / "benchmarks" / "datasets" / "DBLP-ACM"
     if not (d / "DBLP2.csv").exists():
         pytest.skip("DBLP-ACM dataset not present (gitignored, local-dev only)")
     dblp = pl.read_csv(d / "DBLP2.csv", encoding="utf8-lossy", ignore_errors=True)

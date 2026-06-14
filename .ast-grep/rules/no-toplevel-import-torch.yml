@@ -1,0 +1,19 @@
+id: no-toplevel-import-torch
+language: python
+severity: warning
+message: >-
+  Unguarded top-level `import torch` hangs or segfaults on GPU-less boxes
+  (documented). Import it lazily inside the function that needs it, or guard it
+  (try/except, or `if _HAVE_TORCH:`), and gate via core.gpu.detect_gpu_mode().
+note: See packages/python/goldenmatch/CLAUDE.md ("Gotchas").
+rule:
+  any:
+    - pattern: import torch
+    - pattern: import torch as $X
+  not:
+    inside:
+      any:
+        - kind: function_definition
+        - kind: try_statement
+        - kind: if_statement
+      stopBy: end

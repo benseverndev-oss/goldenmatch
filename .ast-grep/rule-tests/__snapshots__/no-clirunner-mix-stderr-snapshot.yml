@@ -1,0 +1,14 @@
+id: no-clirunner-mix-stderr
+snapshots:
+  runner = CliRunner(mix_stderr=False):
+    labels:
+    - source: CliRunner(mix_stderr=False)
+      style: primary
+      start: 9
+      end: 36
+  runner = CliRunner(mix_stderr=True):
+    labels:
+    - source: CliRunner(mix_stderr=True)
+      style: primary
+      start: 9
+      end: 35

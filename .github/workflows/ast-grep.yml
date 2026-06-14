@@ -1,0 +1,28 @@
+name: ast-grep
+
+# Structural lint rules that encode repo invariants ruff/eslint can't express
+# (.ast-grep/rules/*.yml). Standalone workflow (not gated by the ci.yml
+# paths-filter) so the rules always run. `ast-grep scan` exits non-zero only on
+# ERROR-severity rules; warnings are advisory and don't block.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  ast-grep:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ast-grep
+        run: pip install ast-grep-cli==0.42.3
+      - name: Validate rules (self-tests)
+        run: ast-grep test
+      - name: Scan (fails only on error-severity findings)
+        run: ast-grep scan

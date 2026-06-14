@@ -1,0 +1,7 @@
+id: no-clirunner-mix-stderr
+valid:
+  - "runner = CliRunner()"
+  - "runner = CliRunner(env={'X': '1'})"
+invalid:
+  - "runner = CliRunner(mix_stderr=False)"
+  - "runner = CliRunner(mix_stderr=True)"
