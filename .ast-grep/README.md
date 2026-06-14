@@ -49,6 +49,19 @@ advisory (reported, non-blocking) so new rules can land gradually.
 | `ts-no-empty-catch` | error | empty `catch {}` silently swallows errors — log or re-throw |
 | `ts-no-spread-math-min-max` | warning | `Math.min/max(...array)` throws on >65K elements — surfaces **11 real sites** for a follow-up cleanup |
 
+**Rust kernels** (`packages/rust/extensions/`):
+
+| Rule | Severity | Invariant |
+|---|---|---|
+| `rust-no-dbg-macro` | error | `dbg!()` is a debug macro — never commit it (and it prints on the kernel hot path) |
+| `rust-no-todo-unimplemented` | warning | `todo!()`/`unimplemented!()` panic at runtime — must not reach a shipped kernel path |
+
+> Dogfood note: scanning Rust + Python found **0 real violations** — the kernels and
+> Python tree already comply (the `panic!`/`println!` hits in Rust are all legit:
+> test assertions + the `goldenembed` CLI binary). These Rust rules are *preventive*
+> guards. The TypeScript `ts-no-spread-math-min-max` rule, by contrast, surfaced 11
+> real latent crash sites — fixed in a separate dogfood PR.
+
 ## Considered but not added (AST can't express them cleanly)
 
 These repo invariants need **dataflow / intent**, not just structure, so a pure
