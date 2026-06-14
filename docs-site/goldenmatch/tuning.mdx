@@ -226,7 +226,6 @@ When you expose any server (MCP, REST, A2A, web UI) on a non-loopback host, it i
 | Variable | Default | Effect |
 |----------|---------|--------|
 | `GOLDENMATCH_DATABASE_URL` / `GOLDENMATCH_IDENTITY_DSN` | unset | Postgres/SQLite connection for the identity graph + review queue / Alembic migrations. |
-| `GOLDENMATCH_IDENTITY_ID_SCHEME` | `h1` | Identity record-id hashing scheme. `hash` forces the legacy `json.dumps` scheme — a migration kill-switch only. |
 | `GOLDENMATCH_PREPARED_RECORD_STORE_DIR` | unset | Directory for the disk-backed prepared-record store. |
 | `GOLDENMATCH_PREPARED_RECORD_STORE_PERSIST` | `0` | `1` keeps the prepared-record store across calls instead of cleaning it up. |
 
@@ -315,7 +314,6 @@ Every `GOLDENMATCH_*` variable the package reads, grouped by who should care. De
 | `GOLDENMATCH_FS_BATCH_ROWS` | `256` | Row cap per batched Fellegi-Sunter block-scoring call. |
 | `GOLDENMATCH_BENCH_DUMP_PAIRS` | unset | Dump per-stage pairs for benchmarking. |
 | `GOLDENMATCH_SKIP_MATCH_LOG` / `GOLDENMATCH_MATCH_LOG_FLUSH_PAIRS` | — | Streaming match-log controls. |
-| `GOLDENMATCH_CLUSTER_FRAMES_OUT` | `0` | Emit per-cluster frames (debug/test). |
 
 ### Auto-config & blocking (advanced)
 
@@ -354,7 +352,7 @@ Every `GOLDENMATCH_*` variable the package reads, grouped by who should care. De
 | `GOLDENMATCH_GOLDEN_STRATEGY_STRICT` | `0` | Strict golden survivorship. |
 | `GOLDENMATCH_GOLDEN_TUNER_MIN_CORRECTIONS` / `GOLDENMATCH_NE_TUNER_MIN_CORRECTIONS` | — | Memory re-tuning floors. |
 | `GOLDENMATCH_CLUSTER_SPLIT_EDGE_BUDGET` | ∝ n_rows | Oversized-cluster auto-split work budget. |
-| `GOLDENMATCH_COLUMNAR_PIPELINE` / `GOLDENMATCH_COLUMNAR_CLUSTER_BUILD` / `GOLDENMATCH_CLUSTER_FRAMES_OUT` | `0` | Columnar pipeline experiments. |
+| `GOLDENMATCH_COLUMNAR_PIPELINE` / `GOLDENMATCH_COLUMNAR_CLUSTER_BUILD` | `0` | Columnar pipeline experiments. |
 
 ### Servers, security, storage, LLM/embedding
 
@@ -364,7 +362,6 @@ Every `GOLDENMATCH_*` variable the package reads, grouped by who should care. De
 | `GOLDENMATCH_API_CORS_ORIGINS` | unset | REST CORS allow-list. |
 | `GOLDENMATCH_ALLOWED_ROOT` | unset | Opt-in path sandbox root. |
 | `GOLDENMATCH_DATABASE_URL` / `GOLDENMATCH_IDENTITY_DSN` | unset | DB connection / migration DSN. |
-| `GOLDENMATCH_IDENTITY_ID_SCHEME` | `h1` | Identity record-id scheme (`hash` = legacy). |
 | `GOLDENMATCH_SAIL_IDENTITY_ID_SCHEME` | `h1` | Identity record-id scheme on the Sail (Spark Connect) tier. |
 | `GOLDENMATCH_PREPARED_RECORD_STORE_DIR` / `_PERSIST` | unset / `0` | Prepared-record store path / persistence. |
 | `GOLDENMATCH_LLM_MODEL` | provider default | Override the LLM scorer model. |

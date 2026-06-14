@@ -2,6 +2,23 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-06-14 — GoldenMatch 2.0.0 deprecation cut shipped (PR #942) + docs sync
+- New [../decisions/0015-goldenmatch-2.0-deprecation-cut.md](../decisions/0015-goldenmatch-2.0-deprecation-cut.md);
+  linked from [../discovery.md](../discovery.md). Records the scope decision (cut
+  exactly the four prepared items; keep the universal scorer `list[tuple]` path;
+  `build_clusters` stays public as a frames-backed adapter; `:hash:` removal is
+  asymmetric — un-fingerprintable rows keep it) and the verification lesson.
+- **2.0.0 is live** on PyPI + the MCP registry (first backwards-incompatible major;
+  `1.30.0 → 2.0.0`, merged `93193ccb`). Removed: the `:hash:` identity bridge +
+  `GOLDENMATCH_IDENTITY_ID_SCHEME`, the `GOLDENMATCH_CLUSTER_FRAMES_OUT` gate +
+  legacy dict cluster path, the `cheapest_healthy` / `_scale_aware_backend` shims.
+- **Docs synced to 2.0 reality** (this follow-up PR): dropped the two removed flags
+  from `docs-site/goldenmatch/tuning.mdx` (kept `GOLDENMATCH_SAIL_IDENTITY_ID_SCHEME`);
+  rewrote the `identity-graph.mdx` back-compat/removal section (the `:h1:`→`:hash:`
+  dual-candidate fallback + once-per-process warning are gone); added a `2.0.0`
+  `<!-- README-callout -->` to the CHANGELOG and regenerated both READMEs via
+  `scripts/sync_readme_callouts.py`. Migration guide: `migrating-to-v2.mdx`.
+
 ## 2026-06-14 — v1.0->2.0 evolution docs + reusable docs-sweep workflow (PR #946)
 - Two new Mintlify Guides pages: `docs-site/goldenmatch/v1-to-v2.mdx` (the full
   1.0->2.0 capability arc) and `v1-vs-v2.mdx` (the at-a-glance comparison tables),
