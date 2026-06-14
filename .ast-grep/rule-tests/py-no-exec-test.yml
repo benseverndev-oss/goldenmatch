@@ -1,0 +1,7 @@
+id: py-no-exec
+valid:
+  - "cursor.execute(sql)"
+  - "con.exec(stmt)"
+invalid:
+  - "exec(code)"
+  - "exec(src, globals())"

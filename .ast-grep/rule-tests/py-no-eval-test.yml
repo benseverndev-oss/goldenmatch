@@ -1,0 +1,7 @@
+id: py-no-eval
+valid:
+  - "import ast; v = ast.literal_eval(s)"
+  - "v = json.loads(s)"
+invalid:
+  - "v = eval(s)"
+  - "v = eval(expr, {}, {})"

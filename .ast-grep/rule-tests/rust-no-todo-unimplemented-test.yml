@@ -1,0 +1,7 @@
+id: rust-no-todo-unimplemented
+valid:
+  - "return Err(Error::NotSupported);"
+  - "fn f() -> i32 { 42 }"
+invalid:
+  - "fn f() -> i32 { todo!() }"
+  - "fn f() { unimplemented!(\"later\") }"

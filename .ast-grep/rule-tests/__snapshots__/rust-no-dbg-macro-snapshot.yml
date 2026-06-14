@@ -1,0 +1,14 @@
+id: rust-no-dbg-macro
+snapshots:
+  dbg!(a, b);:
+    labels:
+    - source: dbg!(a, b)
+      style: primary
+      start: 0
+      end: 10
+  let x = dbg!(compute(y));:
+    labels:
+    - source: dbg!(compute(y))
+      style: primary
+      start: 8
+      end: 24

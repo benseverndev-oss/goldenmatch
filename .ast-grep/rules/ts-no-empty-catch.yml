@@ -1,0 +1,11 @@
+id: ts-no-empty-catch
+language: typescript
+severity: error
+message: >-
+  Empty catch {} silently swallows errors — always log the error or let it
+  propagate. (Bare catch blocks are prohibited in the TS ports.)
+note: See packages/typescript/goldencheck/CLAUDE.md (bare catch prohibited).
+rule:
+  any:
+    - pattern: try { $$$ } catch { }
+    - pattern: try { $$$ } catch ($E) { }

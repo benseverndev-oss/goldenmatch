@@ -1,0 +1,8 @@
+id: py-no-exec
+language: python
+severity: error
+message: >-
+  exec() runs arbitrary code strings — disallowed. Use real functions / a
+  dispatch table instead. (Matches the builtin exec(...), not obj.exec(...).)
+rule:
+  pattern: exec($$$)
