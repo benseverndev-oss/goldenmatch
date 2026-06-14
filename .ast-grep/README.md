@@ -24,6 +24,24 @@ advisory (reported, non-blocking) so new rules can land gradually.
 | `no-clirunner-mix-stderr` | error | `CliRunner(mix_stderr=...)` raises on click>=8.3 — drop the kwarg |
 | `no-toplevel-import-torch` | warning | unguarded top-level `import torch` hangs/segfaults on GPU-less boxes — import lazily or guard |
 | `no-bare-relative-test-fixture-path` | warning | `Path("tests/...")` resolves off CWD (differs local vs CI) — anchor to `__file__` |
+| `polars-read-excel-needs-engine` | warning | `pl.read_excel(path)` with no `engine=` — pass `engine="openpyxl"` (caught a real one in goldencheck) |
+
+## Considered but not added (AST can't express them cleanly)
+
+These repo invariants need **dataflow / intent**, not just structure, so a pure
+AST pattern would be too noisy or impossible — left to review (or a future
+semantic linter):
+
+- **full-frame `df.to_dicts()` in a per-row/hot loop** (the #904 O(N)/probe bug) —
+  "whole frame" + "hot loop" aren't structural; a blanket `.to_dicts()` ban
+  carpet-bombs legit uses.
+- **pair canonicalization `(min(a,b), max(a,b))`** — "this tuple is a stored pair"
+  is intent, not shape.
+- **`encoding="utf-8"` only inside `pl.read_csv`/`scan_csv`** — the kwarg-string
+  match is unreliable in tree-sitter and a broad ban wrongly flags legit stdlib
+  `open(encoding="utf-8")`.
+- **`pl.read_csv(path)` missing `encoding=`** — 17 legit single-arg call sites, so
+  a rule would be pure noise.
 
 ## Add a rule
 

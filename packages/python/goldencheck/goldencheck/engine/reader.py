@@ -40,7 +40,7 @@ def read_file(path: Path) -> pl.DataFrame:
         return pl.read_parquet(path)
     elif ext in (".xlsx", ".xls"):
         try:
-            return pl.read_excel(path)
+            return pl.read_excel(path, engine="openpyxl")
         except Exception as e:
             if "password" in str(e).lower() or "encrypted" in str(e).lower():
                 raise ValueError("File appears to be password-protected. GoldenCheck cannot read encrypted files.") from e

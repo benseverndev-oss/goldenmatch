@@ -1,0 +1,9 @@
+id: polars-read-excel-needs-engine
+language: python
+severity: warning
+message: >-
+  pl.read_excel(...) needs an explicit engine on this stack: pass
+  engine="openpyxl". Without it the read can fail or pick a missing engine.
+note: "See packages/python/goldenmatch/CLAUDE.md (read_excel needs engine=openpyxl)."
+rule:
+  pattern: pl.read_excel($PATH)
