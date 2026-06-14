@@ -83,10 +83,17 @@ def write_formats(df, root: Path) -> dict[str, Path]:
 
     if _have("lance"):
         import lance
+        import pyarrow as pa
 
         lpath = root / "dataset.lance"
+        # Polars exports Utf8 as Arrow `large_string`, which Lance's BTREE scalar
+        # index rejects. Cast block_key (the indexed column) to plain `string`.
+        tbl = df.to_arrow()
+        if pa.types.is_large_string(tbl.schema.field("block_key").type):
+            ci = tbl.schema.get_field_index("block_key")
+            tbl = tbl.set_column(ci, "block_key", tbl.column("block_key").cast(pa.string()))
         t0 = time.perf_counter()
-        lance.write_dataset(df.to_arrow(), str(lpath))
+        lance.write_dataset(tbl, str(lpath))
         size = sum(f.stat().st_size for f in lpath.rglob("*") if f.is_file())
         print(f"  lance   write: {time.perf_counter() - t0:6.2f}s  size={size / 1e6:8.1f} MB")
         paths["lance"] = lpath
@@ -141,14 +148,49 @@ def _lance_take(path: Path, idx):
     return ds.take(list(idx), columns=SCORE_COLS).num_rows
 
 
+# Same scan as _lance_block; the scanner transparently uses a BTREE scalar
+# index on block_key if one was built (the indexed variant).
+_lance_block_idx = _lance_block
+
+
+def build_lance_scalar_index(path: Path, column: str = "block_key") -> float:
+    """Build a BTREE scalar index on `column`; return wall seconds."""
+    import lance
+
+    ds = lance.dataset(str(path))
+    t0 = time.perf_counter()
+    ds.create_scalar_index(column, "BTREE")
+    return time.perf_counter() - t0
+
+
 WORKLOADS = {
     ("parquet", "full_scan"): _parquet_full,
     ("parquet", "block_filter"): _parquet_block,
     ("parquet", "scatter_take"): _parquet_take,
     ("lance", "full_scan"): _lance_full,
     ("lance", "block_filter"): _lance_block,
+    ("lance", "block_filter_idx"): _lance_block_idx,
     ("lance", "scatter_take"): _lance_take,
 }
+
+
+def _peak_rss_mb() -> float:
+    """Peak resident set of THIS process, in MB.
+
+    Use /proc/self/status VmHWM on Linux: a spawned child's
+    ``resource.ru_maxrss`` inherits the PARENT's high-water mark (verified —
+    every child floored at the parent's peak), so it cannot isolate per-read
+    footprint. VmHWM is per-process correct. Fall back to ru_maxrss elsewhere.
+    """
+    try:
+        with open("/proc/self/status") as fh:
+            for line in fh:
+                if line.startswith("VmHWM:"):
+                    return int(line.split()[1]) / 1024.0  # kB -> MB
+    except OSError:
+        pass
+    raw = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return raw / 1024.0 / 1024.0 if sys.platform == "darwin" else raw / 1024.0
 
 
 def _child(q, fn_key, path_str, arg, runs):
@@ -163,9 +205,7 @@ def _child(q, fn_key, path_str, arg, runs):
         else:
             fn(path, arg)
         walls.append(time.perf_counter() - t0)
-    rss_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    rss_mb = rss_kb / 1024.0 if sys.platform != "darwin" else rss_kb / 1024.0 / 1024.0
-    q.put((statistics.median(walls), min(walls), rss_mb))
+    q.put((statistics.median(walls), min(walls), _peak_rss_mb()))
 
 
 def measure(engine, pattern, path: Path, arg, runs: int):
@@ -235,16 +275,25 @@ def main() -> int:
     # full_scan
     res = {e: measure(e, "full_scan", paths[e], None, args.runs) for e in engines}
     row("full_scan", res)
-    # block_filter
+    # block_filter — parquet (sorted) vs lance UN-indexed first (apples-to-apples
+    # on raw scan), then lance WITH a BTREE scalar index built on block_key.
     res = {e: measure(e, "block_filter", paths[e], top_key, args.runs) for e in engines}
     row("block_filter", res)
+    if has_lance:
+        try:
+            idx_build_s = build_lance_scalar_index(paths["lance"])
+            print(f"  (built lance BTREE scalar index on block_key in {idx_build_s:.2f}s)")
+            lance_idx = measure("lance", "block_filter_idx", paths["lance"], top_key, args.runs)
+            row("block_filter (idx)", {"parquet": res["parquet"], "lance": lance_idx})
+        except Exception as e:  # noqa: BLE001 - index API drift shouldn't abort the run
+            print(f"  (lance scalar index step skipped: {type(e).__name__}: {e})")
     # scatter_take across fractions
     for frac, idx in cand_sets.items():
         res = {e: measure(e, "scatter_take", paths[e], idx, args.runs) for e in engines}
         row(f"scatter_take {frac:g} (K={len(idx)})", res)
 
     print("=" * 78)
-    print("cells: median-wall  (lance x-factor vs parquet)  peak-RSS")
+    print("cells: median-wall  (lance x-factor vs parquet)  peak-RSS (VmHWM)")
     print("decision gate (see spec): adopt only if scatter_take >= 5x at frac<=1e-3 on >=10M rows,")
     print("and full_scan/block_filter within ~1.2x of parquet.")
 
