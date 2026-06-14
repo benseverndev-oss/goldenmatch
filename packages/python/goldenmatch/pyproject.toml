@@ -156,6 +156,13 @@ transform = [
 native = [
     "goldenmatch-native>=0.1.0",
 ]
+# Optional Lance-backed base store for out-of-core incremental / match_one
+# candidate retrieval. Spec: docs/superpowers/specs/
+# 2026-06-13-lance-match-one-base-store-design.md. goldenmatch.core.candidate_store
+# imports lance lazily; absent it, the in-memory store runs unchanged.
+lance = [
+    "pylance>=0.20",
+]
 web = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
