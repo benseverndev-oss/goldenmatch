@@ -173,6 +173,53 @@ def _label_prop_threshold() -> int:
         return _LABEL_PROP_PAIR_THRESHOLD
 
 
+# Peak driver bytes per scored pair on the in-memory scipy route: ~24 B for the
+# (id_a, id_b, score) = (int64, int64, f64) triple, times ~4 because the arrow
+# table, the numpy id arrays, the CSR matrix, and the labels array are all live
+# at once. Deliberately conservative -- routing in-memory must not OOM the driver.
+_PAIR_PEAK_BYTES = 96
+
+
+def _route_distributed(pair_count: int) -> bool:
+    """Decide the clustering route: True => distributed WCC, False => in-memory scipy.
+
+    The scored pair set fits one node far more often than the legacy fixed 50M
+    threshold assumed (110M pairs ~= 1.76 GB raw), so the slow distributed WCC
+    was the default well below where it was actually needed (#956).
+
+    Precedence:
+      * ``force_label_propagation`` (handled by the caller) always distributes.
+      * An explicit ``GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD`` wins -- it
+        stays a pair-count threshold, preserving every existing user's behavior
+        and letting power users force the boundary either way.
+      * Unset (the default) is MEMORY-AWARE: distribute only when the estimated
+        peak pair-set bytes won't fit available driver RAM. Distribution is for
+        when the pairs genuinely don't fit, not a round-number guess.
+    """
+    import os
+
+    raw = os.environ.get("GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD")
+    if raw is not None:
+        try:
+            return pair_count >= int(raw)
+        except ValueError:
+            pass  # malformed env -> fall through to the memory-aware default
+    import psutil
+
+    available = psutil.virtual_memory().available
+    est_peak = pair_count * _PAIR_PEAK_BYTES
+    distribute = est_peak > available
+    logger.info(
+        "build_clusters_distributed route: %d pairs, est peak %.2f GB vs "
+        "%.2f GB available -> %s",
+        pair_count,
+        est_peak / (1024 ** 3),
+        available / (1024 ** 3),
+        "distributed WCC" if distribute else "in-memory scipy",
+    )
+    return distribute
+
+
 def _resolve_use_label_prop(
     pair_count: int,
     clustering_strategy: str | None = None,
@@ -182,7 +229,9 @@ def _resolve_use_label_prop(
     """Decide distributed (label-prop) vs in-memory WCC.
 
     An explicit planner strategy ("in_memory" / "distributed_wcc") wins;
-    otherwise fall back to the env-threshold decision (today's path).
+    otherwise fall back to the memory-aware route decision (#956): in-memory
+    scipy whenever the scored pair set fits driver RAM, distributed WCC when it
+    doesn't (or an explicit CLUSTERING_THRESHOLD says so).
     """
     if force_label_propagation:
         return True
@@ -190,7 +239,7 @@ def _resolve_use_label_prop(
         return False
     if clustering_strategy == "distributed_wcc":
         return True
-    return pair_count >= _label_prop_threshold()
+    return _route_distributed(pair_count)
 
 
 def _derive_touched_ids(pairs_ds: Dataset) -> list[int]:
@@ -223,15 +272,17 @@ def build_clusters_distributed(
 
     Row shape: {member_id, cluster_id, cluster_size, oversized}.
 
-    Routing (Splink-Spark style):
-      - Pair count below threshold (default 50M): driver-side scipy.csgraph.
-        Faster than distributed label propagation until the pair list stops
-        fitting in driver memory.
-      - Pair count above threshold OR force_label_propagation=True:
-        distributed label propagation on Ray Datasets. Falls back to scipy
-        on non-convergence.
+    Routing (Splink-Spark style), memory-aware by default (#956):
+      - Pair set fits available driver RAM: driver-side scipy.csgraph. The
+        in-memory connected-components pass is seconds where the distributed
+        WCC is a multi-hour tail, so it is the default whenever the pairs fit.
+      - Pair set does NOT fit driver RAM, OR force_label_propagation=True:
+        distributed WCC / label propagation on Ray Datasets. Falls back to
+        scipy on non-convergence.
 
-    Override threshold via env var GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD.
+    Setting GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD overrides the
+    memory-aware default with an explicit pair-count threshold (see
+    ``_route_distributed``).
 
     ``algorithm`` (keyword-only) overrides the GOLDENMATCH_DISTRIBUTED_WCC env
     selector for this call (e.g. "randomized_contraction"); None = env default.
@@ -247,7 +298,6 @@ def build_clusters_distributed(
     cluster_id is the minimum member_id in the connected component.
     cluster_size is the count of members sharing that label.
     """
-    threshold = _label_prop_threshold()
     pair_count = pairs_ds.count()
     use_label_prop = _resolve_use_label_prop(
         pair_count, clustering_strategy,
@@ -256,9 +306,9 @@ def build_clusters_distributed(
 
     if not use_label_prop:
         logger.info(
-            "build_clusters_distributed: %d pairs < %d threshold; "
-            "routing to scipy.csgraph (driver-side, faster at this scale).",
-            pair_count, threshold,
+            "build_clusters_distributed: %d pairs route to scipy.csgraph "
+            "(driver-side, fits memory -- faster at this scale).",
+            pair_count,
         )
         ids = all_ids if all_ids is not None else _derive_touched_ids(pairs_ds)
         return _annotate_cluster_sizes(
@@ -275,10 +325,9 @@ def build_clusters_distributed(
 
     if algorithm == "label_propagation":
         logger.info(
-            "build_clusters_distributed: %d pairs >= %d threshold; "
-            "routing to distributed label propagation (env override or "
-            "force_label_propagation=True).",
-            pair_count, threshold,
+            "build_clusters_distributed: %d pairs route to distributed label "
+            "propagation (env override or force_label_propagation=True).",
+            pair_count,
         )
         ids = all_ids if all_ids is not None else _derive_touched_ids(pairs_ds)
         try:
@@ -298,17 +347,16 @@ def build_clusters_distributed(
             )
     elif algorithm == "two_phase":
         logger.info(
-            "build_clusters_distributed: %d pairs >= %d threshold; "
-            "routing to two_phase_wcc (driver-side Phase A/B; wedges the head "
-            "at 100M -- kept for comparison).",
-            pair_count, threshold,
+            "build_clusters_distributed: %d pairs route to two_phase_wcc "
+            "(driver-side Phase A/B; wedges the head at 100M -- kept for comparison).",
+            pair_count,
         )
         labels_ds = two_phase_wcc(pairs_ds, all_ids)
     elif algorithm == "randomized_contraction":
         logger.info(
-            "build_clusters_distributed: %d pairs >= %d threshold; routing to "
+            "build_clusters_distributed: %d pairs route to "
             "randomized_contraction_wcc (relational contraction, parquet checkpoint).",
-            pair_count, threshold,
+            pair_count,
         )
         import os
         _rc_seed_raw = os.environ.get("GOLDENMATCH_DISTRIBUTED_WCC_SEED")
@@ -320,9 +368,9 @@ def build_clusters_distributed(
         )
     else:  # pointer_jump (default): fully distributed, no driver collect.
         logger.info(
-            "build_clusters_distributed: %d pairs >= %d threshold; "
-            "routing to distributed_wcc (pointer-jumping, no driver collect).",
-            pair_count, threshold,
+            "build_clusters_distributed: %d pairs route to distributed_wcc "
+            "(pointer-jumping, no driver collect).",
+            pair_count,
         )
         labels_ds = distributed_wcc(pairs_ds)
 
