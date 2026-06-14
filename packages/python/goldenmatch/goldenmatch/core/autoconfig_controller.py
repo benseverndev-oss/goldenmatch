@@ -1190,6 +1190,11 @@ class AutoConfigController:
         # empty rule list (no behavior change); phases 3-6 register rules.
         from goldenmatch.core.autoconfig_planner import apply_planner_rules
         from goldenmatch.core.autoconfig_planner_rules import DEFAULT_RULES
+        from goldenmatch.core.cluster_profile import capture_cluster_profile
+        from goldenmatch.core.distributed_routing_rules import (
+            apply_distributed_routing,
+            enforce_routing,
+        )
         from goldenmatch.core.runtime_profile import capture_runtime_profile
 
         runtime = capture_runtime_profile()
@@ -1249,6 +1254,23 @@ class AutoConfigController:
             n_rows_full=n_rows,
             rules=DEFAULT_RULES,
             context={"user_backend": None},
+        )
+        # Distributed-routing post-pass. Single-box by default (no Ray), so
+        # behavior-preserving; it populates the per-stage routing trace and
+        # refuses a slow-path override at scale unless allow_slow_path is set.
+        cluster = capture_cluster_profile()
+        plan = apply_distributed_routing(
+            plan,
+            runtime=runtime,
+            cluster=cluster,
+            n_rows_full=n_rows,
+            estimated_pair_count=profile_for_planner.blocking.estimated_pair_count,
+            routing_config=getattr(committed_config, "distributed_routing", None),
+        )
+        enforce_routing(
+            plan,
+            n_rows=n_rows,
+            allow_slow_path=getattr(committed_config, "allow_slow_path", False),
         )
         plan.apply_to(committed_config)
         history.execution_plan = plan

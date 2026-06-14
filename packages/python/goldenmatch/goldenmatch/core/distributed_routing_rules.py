@@ -140,10 +140,17 @@ def apply_distributed_routing(
     golden = _decide("golden", projected_bytes=row_bytes, budget_bytes=budget,
                      cluster=cluster, override_mode=g_mode, override_source=g_src)
 
+    # Only OVERRIDE clustering_strategy when we actually distribute the WCC.
+    # When clustering stays in-memory, preserve whatever the backend rules
+    # already chose (in_memory / partitioned_union_find / streaming_cc) -- the
+    # routing trace still records the in-memory decision either way.
+    clustering_strategy = (
+        "distributed_wcc" if clustering.mode == "distributed" else plan.clustering_strategy
+    )
     return replace(
         plan,
         scoring_distributed=(scoring.mode == "distributed"),
-        clustering_strategy=("distributed_wcc" if clustering.mode == "distributed" else "in_memory"),
+        clustering_strategy=clustering_strategy,
         golden_distributed=(golden.mode == "distributed"),
         routing_decisions=(scoring, clustering, golden),
     )
