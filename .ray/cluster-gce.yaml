@@ -68,15 +68,21 @@ setup_commands:
 head_setup_commands: []
 worker_setup_commands: []
 
+# Export GOLDENMATCH_NATIVE_ADDRESS_NORMALIZE=1 BEFORE `ray start` so the raylet
+# and the worker processes it spawns inherit it -- per-partition scoring re-preps
+# the `address` field, and the native (Polars-expression) address-normalize path
+# avoids the per-row Python refdata plugin slog. Pure-Polars, no native wheel.
 head_start_ray_commands:
   - ray stop
   - >-
+    export GOLDENMATCH_NATIVE_ADDRESS_NORMALIZE=1 &&
     ulimit -n 65536 && ray start --head --port=6379
     --object-manager-port=8076 --autoscaling-config=~/ray_bootstrap_config.yaml
 
 worker_start_ray_commands:
   - ray stop
   - >-
+    export GOLDENMATCH_NATIVE_ADDRESS_NORMALIZE=1 &&
     ulimit -n 65536 && ray start --address=$RAY_HEAD_IP:6379
     --object-manager-port=8076
 

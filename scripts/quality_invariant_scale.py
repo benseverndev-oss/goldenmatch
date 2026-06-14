@@ -1034,6 +1034,11 @@ def _run_phase5_and_collect(
     os.environ["GOLDENMATCH_DISTRIBUTED_PIPELINE"] = "2"
     os.environ["GOLDENMATCH_DISTRIBUTED_BLOCK_SHUFFLE"] = "1"
     os.environ.setdefault("GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD", "0")
+    # Many small shuffle partitions so the block-shuffle's wide exploded records
+    # don't form giant blocks that backpressure _score onto a single node (the
+    # default cpu*4 from the driver gave ~540 MiB blocks -> pinned to 16 CPU,
+    # zero distributed speedup). Read on the driver when it builds the Dataset op.
+    os.environ.setdefault("GOLDENMATCH_DISTRIBUTED_SHUFFLE_PARTS", "512")
     scratch = os.environ.get("GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH", "")
     if not scratch.startswith("gs://"):
         raise SystemExit(
