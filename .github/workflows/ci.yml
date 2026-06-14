@@ -66,6 +66,7 @@ jobs:
       distributed: ${{ steps.filter.outputs.distributed }}
       sail: ${{ steps.filter.outputs.sail }}
       readme_callouts: ${{ steps.filter.outputs.readme_callouts }}
+      docs: ${{ steps.filter.outputs.docs }}
       wasm_score: ${{ steps.filter.outputs.wasm_score }}
       analysis_wasm: ${{ steps.filter.outputs.analysis_wasm }}
       ts_parity: ${{ steps.filter.outputs.ts_parity }}
@@ -304,6 +305,24 @@ jobs:
               - 'packages/python/goldenmatch/README.md'
               - 'packages/python/goldenmatch/CHANGELOG.md'
               - 'scripts/sync_readme_callouts.py'
+            docs:
+              # Doc-lockstep gates (scripts/check_docs_*.py). Trigger whenever any
+              # tracked doc surface OR the gate scripts themselves change. The
+              # required `docs_consistency` job and the advisory `docs_staleness`
+              # job both gate on this.
+              - 'docs-site/**'
+              - '**/README.md'
+              - '**/CHANGELOG.md'
+              - 'llms*.txt'
+              - '**/llms*.txt'
+              - '**/server.json'
+              - 'scripts/check_docs_consistency.py'
+              - 'scripts/check_docs_staleness.py'
+              - 'scripts/check_docs_sweep.py'
+              - 'scripts/check_version_consistency.py'
+              - 'scripts/sync_readme_callouts.py'
+              - 'scripts/suite_download_badges.py'
+              - 'packages/*/**/__init__.py'
             pyright_slice:
               - 'pyrightconfig.json'
               - 'packages/python/goldenmatch/goldenmatch/core/autoconfig.py'
@@ -1971,6 +1990,47 @@ jobs:
       - name: Verify READMEs are in sync with CHANGELOG callouts
         run: python scripts/sync_readme_callouts.py --check
 
+  # Tier-1 doc-lockstep umbrella gate (REQUIRED). Single entry point for all
+  # structural doc-consistency checks: runs version_consistency +
+  # readme_callouts --check as subprocesses, then adds roster-matrix,
+  # docs.json nav integrity (broken-link + orphan), and changelog<->version.
+  # stdlib-only (~1s). Gated on the `docs` path filter (or force_all).
+  docs_consistency:
+    needs: changes
+    if: needs.changes.outputs.docs == 'true' || needs.changes.outputs.force_all == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Doc consistency (roster matrix + nav integrity + changelog/version)
+        run: python scripts/check_docs_consistency.py
+
+  # Tier-2 doc-staleness ADVISORY. Diff-aware: flags a GOLDENMATCH_* env-flag
+  # change with no tuning.mdx update (gating), and an __all__/re-export change
+  # with no doc surface touched (warning). continue-on-error => never blocks
+  # ci-required; it surfaces annotations only. NOT in the ci-required needs list.
+  docs_staleness:
+    needs: changes
+    if: needs.changes.outputs.docs == 'true' || needs.changes.outputs.force_all == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+        with:
+          fetch-depth: 0  # need the base ref for `git diff`
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Docs staleness (advisory) vs PR base
+        run: |
+          BASE="${{ github.event.pull_request.base.sha || 'origin/main' }}"
+          git fetch origin main --quiet || true
+          python scripts/check_docs_staleness.py --base "$BASE" --head HEAD
+
   ts_parity_freshness:
     needs: changes
     if: needs.changes.outputs.ts_parity == 'true' || needs.changes.outputs.force_all == 'true'
@@ -2039,6 +2099,7 @@ jobs:
       - pyright
       - version_consistency
       - readme_callouts
+      - docs_consistency
       - ts_parity_freshness
     if: always()
     runs-on: ubuntu-latest
