@@ -111,6 +111,7 @@ def _run_phase5_pipeline(
     config: Any | None = None,
     allow_red_config: bool = False,
     assignments_output_path: str | None = None,
+    _skip_golden: bool = False,
     **kwargs: Any,
 ):
     """Phase 5 streaming: score -> cluster -> golden -> write, no driver take-alls.
@@ -153,6 +154,18 @@ def _run_phase5_pipeline(
     #    component's edges are co-located in one block -- required by local_cc).
     raw_pairs_ds = score_blocks_distributed(ds, cfg)
 
+    # 2b. MATERIALIZE the scored pairs before clustering. The randomized-contraction
+    #     WCC iterates ~O(log N) rounds; each round that touches a lazy `raw_pairs_ds`
+    #     re-executes the WHOLE upstream scoring DAG (explode -> shuffle -> score ->
+    #     _mk) from scratch -- ~log(N) full re-scores of every pair. Invisible with a
+    #     trivial exact-match config (#844), catastrophic with a fuzzy config (the
+    #     QIS jaro_winkler set turned this into an hours-long, mostly-redundant tail).
+    #     `.materialize()` runs scoring ONCE and caches the (small: ~id_a,id_b,score)
+    #     pair set in the object store, so the WCC rounds reuse it. Scoring->WCC is
+    #     already a barrier (WCC needs all pairs), so no pipelining is lost.
+    if hasattr(raw_pairs_ds, "materialize"):
+        raw_pairs_ds = raw_pairs_ds.materialize()
+
     # 3. Connected components: branch on whether block-shuffle is active.
     #    block-shuffle OFF (default): scoring is per-partition, so components
     #    never span partitions -- local_cc_assignments (single map_batches,
@@ -174,6 +187,22 @@ def _run_phase5_pipeline(
             "phase5: writing cluster assignments to %s", assignments_output_path,
         )
         assignments_ds.write_parquet(assignments_output_path)
+
+    # 3c. Callers that only need the clustering (e.g. the QIS distributed-quality
+    #     harness, which oracle-scores the assignments) can skip the golden tail
+    #     entirely. The distributed golden build (repartition by __cluster_id__ +
+    #     a quality-weighted / most_complete survivorship over every multi-member
+    #     row) is substantial work at 100M and is pure waste when the golden
+    #     records are discarded. Requires assignments_output_path (else nothing is
+    #     persisted). Default False = unchanged behavior.
+    if _skip_golden:
+        if assignments_output_path is None:
+            raise ValueError(
+                "_skip_golden=True requires assignments_output_path (else the run "
+                "produces no output)."
+            )
+        from goldenmatch._api import DedupeResult
+        return DedupeResult(clusters={}, golden=None, config=cfg, stats={})
 
     # 4. Distributed hash join: annotate rows with __cluster_id__ (multi-member
     #    only). No broadcast member->cid dict.

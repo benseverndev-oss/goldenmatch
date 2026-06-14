@@ -1033,7 +1033,15 @@ def _run_phase5_and_collect(
     os.environ.setdefault("GOLDENMATCH_ENABLE_DISTRIBUTED_RAY", "1")
     os.environ["GOLDENMATCH_DISTRIBUTED_PIPELINE"] = "2"
     os.environ["GOLDENMATCH_DISTRIBUTED_BLOCK_SHUFFLE"] = "1"
-    os.environ.setdefault("GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD", "0")
+    # Cluster the scored pairs with the FAST in-memory WCC (driver-side
+    # scipy.csgraph), NOT the distributed randomized-contraction. The scored edge
+    # set is small (~110M pairs ~1.76 GB at 100M, ~3.5 GB at 200M) and fits the
+    # highmem head, where connected-components is ~30-60s. The previous value "0"
+    # FORCED the distributed WCC (pair_count >= 0), whose ~log(N) gs://-checkpoint
+    # rounds were the multi-hour tail. Only SCORING needs distribution; the WCC
+    # does not. Setting the threshold above the pair count routes to scipy
+    # (build_clusters_distributed: pair_count < threshold -> scipy.csgraph).
+    os.environ.setdefault("GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD", "2000000000")
     # Many small shuffle partitions so the block-shuffle's wide exploded records
     # don't form giant blocks that backpressure _score onto a single node (the
     # default cpu*4 from the driver gave ~540 MiB blocks -> pinned to 16 CPU,
@@ -1057,8 +1065,12 @@ def _run_phase5_and_collect(
         config=cfg,
         confidence_required=False,
         allow_red_config=True,
-        output_path=None,  # skip the golden WRITE; golden is still built (real path)
+        output_path=None,
         assignments_output_path=assignments_path,
+        # Quality scoring needs only the cluster assignments; skip the distributed
+        # golden build (quality-weighted most_complete survivorship over every
+        # multi-member row) -- substantial work at 100M and pure waste here.
+        _skip_golden=True,
     )
     dedup_wall = time.time() - t0
 
