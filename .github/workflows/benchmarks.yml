@@ -55,7 +55,7 @@ jobs:
       # Python. Scheduled runs (no inputs.native) stay Python.
       NATIVE: ${{ inputs.native && '1' || '0' }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
         with:
           enable-cache: true
