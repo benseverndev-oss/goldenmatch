@@ -47,6 +47,46 @@ logger = logging.getLogger(__name__)
 # Override via GOLDENMATCH_DISTRIBUTED_SCORE_NUM_CPUS for different shapes.
 _SCORE_NUM_CPUS = int(os.environ.get("GOLDENMATCH_DISTRIBUTED_SCORE_NUM_CPUS", "2"))
 
+# #957: project to scoring-relevant columns BEFORE the block-shuffle so the
+# shuffle moves narrow blocks, not full records. The block-shuffle `_explode`
+# copies the FULL record per co-location key; on wide records that inflates the
+# shuffled block size -> Ray object-store backpressure -> `_score` pinned to a
+# few tasks (~6 of 80 CPU at 100M) while workers sit idle. Scoring reads only
+# __row_id__ + config-referenced columns, so dropping unreferenced raw columns
+# is output-invariant (parity-tested). Kill via GOLDENMATCH_DISTRIBUTED_SCORE_PROJECT=0.
+_SCORE_PROJECT = os.environ.get("GOLDENMATCH_DISTRIBUTED_SCORE_PROJECT", "1") != "0"
+
+# #957: optional explicit concurrency for the `_score` map_batches. Ray Data's
+# streaming executor otherwise caps in-flight tasks by object-store budget; the
+# projection above relieves that, and this pins the target task count to
+# saturate worker CPU. Unset (default) = let Ray decide; the optimal value is
+# cluster-shaped, tuned at the 100M re-measure.
+_raw_score_conc = os.environ.get("GOLDENMATCH_DISTRIBUTED_SCORE_CONCURRENCY")
+_SCORE_CONCURRENCY = int(_raw_score_conc) if _raw_score_conc else None
+
+
+def _project_to_scoring_columns(df: Any, config: GoldenMatchConfig) -> Any:
+    """Drop columns scoring never reads, BEFORE the block-shuffle (#957).
+
+    Keeps every config-referenced column (matchkeys + blocking keys/passes, via
+    ``_collect_referenced_columns``) plus all synthetic ``__...__`` columns
+    (``__row_id__``, domain-extracted keys, etc.), and drops only unreferenced
+    RAW user columns (the wide address / description / free-text fields that
+    bloat the shuffle). Output-invariant: ``_score_colocated_groups`` scores via
+    the bucket kernel, which reads only the matchkey/blocking fields -- it
+    already ignores the dropped columns.
+    """
+    from goldenmatch.core.autoconfig_verify import _collect_referenced_columns
+
+    referenced = _collect_referenced_columns(config)
+    keep = [
+        c for c in df.columns
+        if c in referenced or (c.startswith("__") and c.endswith("__"))
+    ]
+    if not keep or len(keep) == len(df.columns):
+        return df  # nothing droppable -> skip a pointless copy
+    return df.select(keep)
+
 
 def _block_shuffle_enabled() -> bool:
     """Gate for the blocking-key-aware shuffle scoring path (issue #844).
@@ -340,16 +380,18 @@ def _score_blocks_block_shuffle(
        pass -- the bucket backend already groups by the blocking key internally,
        so the loop was redundant. See ``_score_colocated_groups``.
 
-    2. FULL-RECORD SHUFFLE -- still open (secondary). ``_explode`` emits a copy
-       of the FULL record per co-location key (#passes + #exact matchkeys), so
-       the shuffle moves ``N_keys x N_rows x full_record_width`` (~13-27 GB at
-       100M). ``_score`` only needs ``__row_id__`` + config-referenced fields.
-       Fix (deferred behind the backend-parity gate + a wide-record bench):
-       project ``df`` to ``{__row_id__} U columns referenced by
-       matchkeys/blocking/standardization`` BEFORE ``_attach_colocation_keys``
-       (big win on wide records). Secondary: dedupe the explode when an exact
-       matchkey's key equals a blocking pass's key (block + exact-match the same
-       field doubles the copies).
+    2. FULL-RECORD SHUFFLE -- FIXED (#957). ``_explode`` used to emit a copy of
+       the FULL record per co-location key (#passes + #exact matchkeys), so the
+       shuffle moved ``N_keys x N_rows x full_record_width`` (~13-27 GB at 100M)
+       -> object-store backpressure pinned ``_score`` to ~6 of 80 CPU. It now
+       projects ``df`` to ``{__row_id__} U config-referenced columns U synthetic
+       __-cols`` via ``_project_to_scoring_columns`` BEFORE
+       ``_attach_colocation_keys`` (output-invariant; the bucket kernel reads
+       only the matchkey/blocking fields). Set
+       ``GOLDENMATCH_DISTRIBUTED_SCORE_PROJECT=0`` to disable. An explicit
+       ``GOLDENMATCH_DISTRIBUTED_SCORE_CONCURRENCY`` further pins the ``_score``
+       task count once blocks are narrow. Secondary (still open): dedupe the
+       explode when an exact matchkey's key equals a blocking pass's key.
     """
     # Shuffle partition count. Default derives from the DRIVER cpu count, but the
     # block-shuffle explodes each record per co-location key (wide records ->
@@ -366,6 +408,8 @@ def _score_blocks_block_shuffle(
         import polars as pl
         df = pl.from_arrow(batch)
         assert isinstance(df, pl.DataFrame)
+        if _SCORE_PROJECT:
+            df = _project_to_scoring_columns(df, config)
         return _attach_colocation_keys(df, config).to_arrow()
 
     def _score(batch: Any) -> Any:  # pa.Table -> pa.Table
@@ -387,12 +431,18 @@ def _score_blocks_block_shuffle(
     logger.info(
         "score_blocks_distributed: BLOCK-SHUFFLE path (opt-in via "
         "GOLDENMATCH_DISTRIBUTED_BLOCK_SHUFFLE); %d shuffle partitions, "
-        "num_cpus=%d per task",
-        n_parts, _SCORE_NUM_CPUS,
+        "num_cpus=%d per task, project=%s, concurrency=%s",
+        n_parts, _SCORE_NUM_CPUS, _SCORE_PROJECT,
+        _SCORE_CONCURRENCY if _SCORE_CONCURRENCY is not None else "auto",
     )
-    return colocated.map_batches(
-        _score, batch_format="pyarrow", batch_size=None, num_cpus=_SCORE_NUM_CPUS,
-    )
+    _mb_kwargs: dict[str, Any] = {
+        "batch_format": "pyarrow",
+        "batch_size": None,
+        "num_cpus": _SCORE_NUM_CPUS,
+    }
+    if _SCORE_CONCURRENCY is not None:
+        _mb_kwargs["concurrency"] = _SCORE_CONCURRENCY
+    return colocated.map_batches(_score, **_mb_kwargs)
 
 
 def _dedup_num_partitions() -> int:
