@@ -18,27 +18,37 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+# Every distribution with a `publish-<pkg>.yml` → PyPI workflow. Deliberately
+# EXCLUDED (no pypistats download API): goldenmatch-pg (GitHub-release tarballs),
+# goldenmatch-datafusion-udf / dbt-goldensuite / infermap-bench (not published).
 PYPI_PACKAGES = [
     "goldenmatch",
     "goldencheck",
     "goldenpipe",
     "goldenflow",
+    "goldenanalysis",
     "infermap",
     "goldencheck-types",
     "goldensuite-mcp",
-    # SQL extensions + the optional compiled/embed runtimes. `goldenmatch-native`
-    # (goldenmatch[native]) and `goldenmatch-embed` (goldenmatch-duckdb[embed]) are
-    # extras, so their downloads partially overlap their parent packages -- counted
-    # here because they are distinct distributions in the suite, same as the rest.
+    # SQL extension + the optional compiled `*-native` / embed runtimes. These
+    # are extras (goldenmatch[native], goldenanalysis[native], ...), so their
+    # downloads partially overlap their parent packages -- counted here because
+    # they are distinct PyPI distributions in the suite, same as the rest.
     "goldenmatch-duckdb",
     "goldenmatch-native",
+    "goldenflow-native",
+    "goldencheck-native",
+    "goldenanalysis-native",
     "goldenmatch-embed",
 ]
+# Every TS package with a `publish-<pkg>-js.yml` → npm workflow. goldenmatch-wasm-runtime
+# is a workspace dep with no publish workflow, so it has no npm download count.
 NPM_PACKAGES = [
     "goldenmatch",
     "goldencheck",
     "goldenpipe",
     "goldenflow",
+    "goldenanalysis",
     "infermap",
     "goldencheck-types",
 ]
@@ -139,12 +149,17 @@ def _parse_prior(prior_path: Path) -> int | None:
 def _safe_total(packages: list[str], fetcher, kind: str, prior_path: Path) -> tuple[int, bool]:
     """Sum downloads across packages with per-package graceful degradation.
 
-    Returns (total, used_fallback). Previous behaviour was all-or-nothing:
-    if any package's fetch threw _Throttled the whole sum was abandoned in
-    favour of the prior badge value. That's brittle — one throttled package
-    out of six shouldn't zero the suite total. Now each package tries
-    independently; throttled packages contribute their prior-individual
-    share (or 0 if we have no per-package prior).
+    Returns (total, used_fallback). Each package is fetched independently; a
+    throttled one contributes 0 to the live sum.
+
+    Crucially, a throttled run NEVER publishes a total below the last good
+    value. pypistats 429s individual packages constantly, so on a partial-
+    throttle run the live sum is an undercount, not a real decline. Whenever
+    anything throttled AND the live sum came out below the prior badge value,
+    we preserve the prior instead — this stops the badge silently dipping
+    (e.g. 21.7k -> 14k -> 21.7k) when only some packages 429. The previous
+    implementation only fell back when EVERY package throttled (total == 0),
+    so a single 429 out of N silently shipped an undercount.
     """
     prior_total = _parse_prior(prior_path)
 
@@ -155,16 +170,19 @@ def _safe_total(packages: list[str], fetcher, kind: str, prior_path: Path) -> tu
             total += fetcher(pkg)
         except _Throttled as exc:
             print(
-                f"warn: {kind}:{pkg} fetch throttled ({exc}); contributing 0",
+                f"::warning::{kind}:{pkg} download fetch throttled ({exc}); contributing 0",
                 file=sys.stderr,
             )
             any_throttled = True
             continue
 
-    # If everything throttled and we have a sane prior, preserve it.
-    if total == 0 and any_throttled and prior_total is not None:
+    # A throttled run must not regress the badge below the last good value —
+    # the drop is the throttle artifact, not a real decline. Preserve the prior.
+    # (Subsumes the old all-throttled total==0 case, since 0 < any positive prior.)
+    if any_throttled and prior_total is not None and total < prior_total:
         print(
-            f"warn: {kind} all-throttled; preserving prior total {prior_total}",
+            f"::warning::{kind} throttled and live sum {total} < prior {prior_total}; "
+            f"preserving prior to avoid a spurious dip",
             file=sys.stderr,
         )
         return prior_total, True
