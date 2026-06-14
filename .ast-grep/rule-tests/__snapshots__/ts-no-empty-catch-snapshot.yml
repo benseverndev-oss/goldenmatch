@@ -1,0 +1,14 @@
+id: ts-no-empty-catch
+snapshots:
+  try { f(); } catch (e) { }:
+    labels:
+    - source: try { f(); } catch (e) { }
+      style: primary
+      start: 0
+      end: 26
+  try { f(); } catch { }:
+    labels:
+    - source: try { f(); } catch { }
+      style: primary
+      start: 0
+      end: 22

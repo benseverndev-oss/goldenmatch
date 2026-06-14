@@ -25,6 +25,8 @@ advisory (reported, non-blocking) so new rules can land gradually.
 | `no-toplevel-import-torch` | warning | unguarded top-level `import torch` hangs/segfaults on GPU-less boxes — import lazily or guard |
 | `no-bare-relative-test-fixture-path` | warning | `Path("tests/...")` resolves off CWD (differs local vs CI) — anchor to `__file__` |
 | `polars-read-excel-needs-engine` | warning | `pl.read_excel(path)` with no `engine=` — pass `engine="openpyxl"` (caught a real one in goldencheck) |
+| `ts-no-empty-catch` | error | empty `catch {}` silently swallows errors — log or re-throw (TS ports) |
+| `ts-no-spread-math-min-max` | warning | `Math.min/max(...array)` throws on >65K elements — surfaces **11 real sites** in the TS ports for a follow-up cleanup |
 
 ## Considered but not added (AST can't express them cleanly)
 
