@@ -8,7 +8,11 @@ export default defineConfig({
     cli: "src/cli.ts",
   },
   format: ["esm", "cjs"],
-  dts: true,
+  // resolve: roll the bundled goldenmatch-wasm-runtime types up INTO our .d.ts
+  // (noExternal inlines the JS, but tsup keeps a bare `import ... from
+  // 'goldenmatch-wasm-runtime'` in the dts otherwise — unresolvable for a
+  // downstream TS consumer now that the package is a devDependency).
+  dts: { resolve: ["goldenmatch-wasm-runtime"] },
   sourcemap: true,
   clean: true,
   target: "node20",
