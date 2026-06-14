@@ -1,0 +1,74 @@
+---
+title: "What changed from 1.0 to 2.0"
+description: "The full arc from GoldenMatch 1.0 (March 2026) to 2.0 (June 2026): the capabilities that landed across the 1.x line, plus the four breaking removals in the 2.0 major."
+keywords: ["upgrade", "v1", "v2", "2.0", "changelog", "identity graph", "distributed", "native", "fellegi-sunter", "splink", "what's new"]
+---
+
+This is the wide-angle view of everything between GoldenMatch **1.0.0** (2026-03-23) and **2.0.0** (2026-06-14). If you just want the upgrade steps, read [Migrating to v2](/goldenmatch/migrating-to-v2). For a one-screen comparison, see [v1 vs v2 at a glance](/goldenmatch/v1-vs-v2).
+
+<Note>
+  The 2.0 **major** is a small, clean break: four removed legacy paths, and the pipeline's output is unchanged. The real difference between a 1.0 install and a 2.0 install is the entire **1.x feature accumulation** below. You are not upgrading into a rewrite; you are upgrading into three months of additive capability with a tidy semver line drawn under it.
+</Note>
+
+## What actually breaks in 2.0
+
+Four items, each with a 1.x deprecation runway. Full steps in [Migrating to v2](/goldenmatch/migrating-to-v2).
+
+- **`GOLDENMATCH_IDENTITY_ID_SCHEME` + the legacy `:hash:` lookup bridge** are gone. Fingerprintable records resolve to a single canonical `:h1:` id. If you persist an identity DB, run `goldenmatch identity migrate-ids --path <db>` **before** upgrading. Un-fingerprintable rows keep their `:hash:` id.
+- **`GOLDENMATCH_CLUSTER_FRAMES_OUT`** is gone. The Arrow frames-out clustering path is the only path now (it has been the default and output-equivalent since 1.x). Public `build_clusters` still works as a frames-backed adapter.
+- **`RunHistory.cheapest_healthy()`** removed. Use `pick_committed()`.
+- **`_scale_aware_backend`** (internal shim) removed. The public `auto_configure_df` / `dedupe_df` API routes through the v3 planner.
+
+That is the whole break surface. Everything else below is what you *gain* by moving off an older 1.x.
+
+## Where 1.0 started (2026-03-23)
+
+GoldenMatch 1.0 was already a complete, production-stable entity-resolution toolkit, not a preview:
+
+- A frozen public API: `gm.dedupe()`, `gm.match()`, `gm.pprl_link()`, `gm.evaluate()` with typed results, 96 public exports, 21 CLI commands, a config YAML schema, a REST API + client, MCP tools, and Jupyter `_repr_html_()` display.
+- Accuracy as a first-class gate: `goldenmatch evaluate --min-f1 0.90` exits non-zero in CI, plus `goldenmatch label` for interactive ground-truth building.
+- A Ray distributed backend for large workloads, LLM-assisted scoring, PPRL (privacy-preserving record linkage), domain packs, and match explanations.
+
+If you are on 1.0 today, dedupe/match/PPRL/evaluate all still work the same way in 2.0. What changed is everything around them.
+
+## What landed across 1.x
+
+### Zero-config and the introspective planner
+
+The headline posture of the suite, "find duplicates in 30 seconds with no config," hardened across 1.x. The **v3 controller/planner** replaced single-threshold heuristics with a rule table over runtime + complexity profiles that picks the execution plan (backend, scale path, confidence handling) for you. At large row counts it refuses to silently guess, raising rather than committing a low-confidence config. You set nothing for correctness; the planner chooses.
+
+### Identity Graph (v1.15)
+
+`dedupe()` returns run-local clusters whose IDs mean nothing across runs. **v1.15 (2026-05-12)** added a durable, queryable **Identity Graph**: stable `entity_id`s (UUIDv7) that survive re-runs, evidence edges that record *why* two records linked, an append-only event log, and the **same JSON view from six surfaces** (Python, CLI, REST, MCP, A2A, SQL, web UI). Off by default; opt in with an `identity:` config block. See [Identity Graph](/goldenmatch/identity-graph).
+
+### Scale: single-box at scale, then distributed 100M
+
+- **Arrow-native groundwork (v1.25, 2026-06-01):** columnar pair-stream and two-frame cluster representations, plus optional Rust/Arrow-C kernels behind the `goldenmatch[native]` wheel, with the pure-Python + Polars pipeline kept as the byte-for-byte reference.
+- **Distributed 100M (v1.26, 2026-06-04):** the Phase-5 streaming pipeline (`GOLDENMATCH_DISTRIBUTED_PIPELINE=2`) ran a full 100,000,000-row dedupe end to end in ~213s with the driver peaking at 0.30 GB RSS, by removing every driver-side collect. Later validated on a real 5-node GCP cluster (100M in ~9.2 min, clusters recovered exactly).
+
+### Native acceleration, signed off
+
+The optional native kernel matured into a **signed-off set** (`clustering`, `block_scoring`, `pairs`, `featurize`, `hashing`) that runs automatically under the default `GOLDENMATCH_NATIVE=auto` when the wheel is installed, each cleared to bit/ULP parity against the Python reference so flipping native on or off never changes output. See [Tuning & opt-ins](/goldenmatch/tuning).
+
+### Probabilistic Fellegi-Sunter that beats Splink
+
+The `type: probabilistic` matchkey grew from a scorer into a **Splink-class Fellegi-Sunter engine**: supervised `m` estimation, a match-weight waterfall, calibration, and accuracy analysis. By **v1.29/1.30 (2026-06-09)**, zero-training FS auto-config beat hand-rolled, expert-tuned Splink on every dataset Splink scores, on one shared evaluator (`historical_50k` pairwise F1 0.778 vs 0.757, `febrl3` 0.991 vs 0.965), made reproducible by an EM training-pair determinism fix.
+
+### New surfaces and engines
+
+- **SQL-native UDFs** for DuckDB, Postgres, and DataFusion (identity resolve/view/history/conflicts/list as in-database functions).
+- An opt-in **Sail (Spark Connect) distributed tier** as a buildable, Sail-native alternative to Ray (`goldenmatch[sail]`).
+- Opt-in **WASM acceleration** for the TypeScript port, so the edge-safe pure-TS packages can optionally reach the same Rust `*-core` kernels.
+
+## Which 1.x are you coming from?
+
+- **From a recent 1.2x (>= 1.25):** the upgrade is essentially just the [migration steps](/goldenmatch/migrating-to-v2). Your identity ids are already `:h1:`; you mostly remove two now-ignored env vars.
+- **From an older 1.x (< 1.25) with a persisted identity DB:** run `goldenmatch identity migrate-ids` first, then upgrade. Your DB may still hold legacy `:hash:` ids that 2.0 will otherwise treat as new entities.
+- **From 1.0 with no identity graph:** there is nothing to migrate. `pip install --upgrade goldenmatch` and you pick up every capability above; dedupe/match/PPRL/evaluate are unchanged.
+
+## See also
+
+- [Migrating to v2](/goldenmatch/migrating-to-v2) — the step-by-step upgrade.
+- [v1 vs v2 at a glance](/goldenmatch/v1-vs-v2) — the one-screen comparison tables.
+- [Tuning & opt-ins](/goldenmatch/tuning) — every `GOLDENMATCH_*` knob in 2.0.
+- The full per-version detail lives in `packages/python/goldenmatch/CHANGELOG.md`.

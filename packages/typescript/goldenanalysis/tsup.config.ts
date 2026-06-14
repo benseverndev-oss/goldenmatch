@@ -8,7 +8,11 @@ export default defineConfig({
     cli: "src/cli.ts",
   },
   format: ["esm", "cjs"],
-  dts: true,
+  // resolve: roll the bundled goldenmatch-wasm-runtime types up INTO our .d.ts
+  // (noExternal inlines the JS, but tsup keeps a bare `import ... from
+  // 'goldenmatch-wasm-runtime'` in the dts otherwise — unresolvable for a
+  // downstream TS consumer now that the package is a devDependency).
+  dts: { resolve: ["goldenmatch-wasm-runtime"] },
   sourcemap: true,
   clean: true,
   target: "node20",
@@ -21,6 +25,11 @@ export default defineConfig({
   loader: { ".wasm": "copy" },
   publicDir: false,
   onSuccess: "node scripts/copy_wasm_artifact.mjs",
+  // Inline the tiny internal WASM plumbing (loader / enable-skeleton / registry)
+  // so it is NOT a published runtime dep — it is not on npm and consumers never
+  // import it directly. This bundles ONLY the plumbing; the wasm-bindgen glue
+  // (analysis_wasm.js) and the .wasm artifact stay external (see `external`).
+  noExternal: ["goldenmatch-wasm-runtime"],
   external: [
     // The wasm-bindgen glue is loaded at RUNTIME (dynamic import inside
     // enableAnalysisWasm) and is absent in a default checkout. Mark it external

@@ -2,6 +2,21 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-06-14 — v1.0->2.0 evolution docs + reusable docs-sweep workflow (PR #946)
+- Two new Mintlify Guides pages: `docs-site/goldenmatch/v1-to-v2.mdx` (the full
+  1.0->2.0 capability arc) and `v1-vs-v2.mdx` (the at-a-glance comparison tables),
+  cross-linked to each other and to the existing `migrating-to-v2.mdx`.
+- New `.claude/doc-surfaces.md` — the repo's documentation-surface inventory (docs
+  site + nav, READMEs + the CHANGELOG-sourced callout sync, version lockstep, this
+  context network, examples, llms.txt/server.json). It is the thin repo-local list
+  the global `rollout-docs-sweep` skill delegates to, so the end-of-rollout doc pass
+  (the one this entry is part of) becomes a repeatable checklist instead of an ad-hoc
+  prompt. The skill greps the repo for every removed/renamed symbol first.
+- **Durable fact:** when a rollout ships, sweep ALL doc surfaces, not just the
+  CHANGELOG/migration guide. The 2.0.0 cut shipped with stale `tuning.mdx` /
+  `identity-graph.mdx` / READMEs until a follow-up caught them; the inventory + skill
+  exist so that does not recur.
+
 ## 2026-06-13 — Discoverability / public-surface audit (PR #883)
 - New workstream node [../planning/discoverability.md](../planning/discoverability.md);
   linked from [../discovery.md](../discovery.md) and promoted in

@@ -42,7 +42,9 @@
                   "goldenmatch/installation",
                   "goldenmatch/cli",
                   "goldenmatch/tui",
-                  "goldenmatch/migrating-to-v2"
+                  "goldenmatch/migrating-to-v2",
+                  "goldenmatch/v1-to-v2",
+                  "goldenmatch/v1-vs-v2"
                 ]
               },
               {
