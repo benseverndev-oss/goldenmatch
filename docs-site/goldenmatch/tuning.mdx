@@ -154,6 +154,10 @@ This is the knob most people get wrong, so read the contract before you run a 10
 
 **Recall-complete clustering at scale (#844, shipped 2026-06-11).** Phase 5's default path now block-shuffles scoring so true duplicates co-locate, then runs a relational **randomized-contraction** weakly-connected-components pass that clusters correctly across input-partition boundaries. This replaced two earlier WCC implementations that died at 100M (a driver head-wedge and a Ray streaming-executor deadlock). It is **default-on** and validated end-to-end at 100M (9.2 min, 20M clusters exact). On a **multi-node** cluster the WCC checkpoints each round to `GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH`, which **must be a shared path** (e.g. `gs://...`) — a node-local scratch breaks the cross-node parquet reads and now raises rather than silently under-merging.
 
+<Note>
+  **Only scoring needs distribution at this scale; clustering usually doesn't.** The scored pair set is small (~`(id_a, id_b, score)` per match), so at 100M rows it's ~1.8 GB — it fits one node. Clustering therefore routes to the in-memory scipy connected-components pass (seconds) automatically whenever the pairs fit driver RAM, and only falls back to the distributed WCC (a multi-hour tail) when they genuinely don't. You don't need to set `GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD` for this — it's the default.
+</Note>
+
 **Distributed sub-knobs** (only relevant on a real Ray cluster):
 
 | Variable | Default | Effect |
@@ -162,7 +166,7 @@ This is the knob most people get wrong, so read the contract before you run a 10
 | `GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH` | unset | Scratch directory the randomized-contraction WCC checkpoints to. **Must be shared (e.g. `gs://...`) on a multi-node cluster** or the run raises. |
 | `GOLDENMATCH_DISTRIBUTED_WCC` | `two_phase` | WCC algorithm for `build_clusters_distributed`'s *own* callers (the at-scale Phase-5 path forces `randomized_contraction` and ignores this). `two_phase` is chain-safe; avoid `pointer_jump` (can deadlock). |
 | `GOLDENMATCH_DISTRIBUTED_WCC_SEED` | unset | Seed for the randomized-contraction affine hash (reproducible cluster IDs across runs). |
-| `GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD` | `50000000` | Pair count above which clustering goes distributed; below, a driver-side scipy.csgraph path. |
+| `GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD` | unset (memory-aware) | Pair count above which clustering goes distributed. **Unset (default): memory-aware** — clustering stays on the fast driver-side scipy.csgraph path whenever the scored pair set fits available driver RAM, and only distributes when it genuinely won't. Set an explicit integer to force a pair-count boundary either way. |
 | `GOLDENMATCH_DISTRIBUTED_GOLDEN_THRESHOLD` | `5000000` | Multi-member row count above which golden-record building goes distributed. |
 | `GOLDENMATCH_DISTRIBUTED_SCORE_NUM_CPUS` | `2` | CPUs requested per Ray scoring worker. |
 
