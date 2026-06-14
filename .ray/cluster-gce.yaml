@@ -110,7 +110,7 @@ available_node_types:
           autoDelete: true
           type: PERSISTENT
           initializeParams:
-            diskSizeGb: 100
+            diskSizeGb: 512
             sourceImage: projects/ubuntu-os-cloud/global/images/family/ubuntu-2204-lts
       scheduling:
         - preemptible: false
@@ -130,7 +130,7 @@ available_node_types:
           autoDelete: true
           type: PERSISTENT
           initializeParams:
-            diskSizeGb: 100
+            diskSizeGb: 512
             sourceImage: projects/ubuntu-os-cloud/global/images/family/ubuntu-2204-lts
       # On-demand workers. We started on preemptible (60-80% cheaper) but
       # n2-standard-16 spot capacity in us-central1-a was intermittent --
