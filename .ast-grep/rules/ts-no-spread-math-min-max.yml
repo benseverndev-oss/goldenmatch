@@ -1,0 +1,12 @@
+id: ts-no-spread-math-min-max
+language: typescript
+severity: error
+message: >-
+  Math.min(...array) / Math.max(...array) throws RangeError (call-stack overflow)
+  on arrays larger than ~65K elements — a real crash on big inputs. Use a
+  loop-based min/max instead (the TS ports have a documented helper pattern).
+note: See packages/typescript/goldencheck/CLAUDE.md (Math.min/max spread footgun).
+rule:
+  any:
+    - pattern: Math.min(...$A)
+    - pattern: Math.max(...$A)

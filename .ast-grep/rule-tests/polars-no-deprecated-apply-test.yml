@@ -1,0 +1,7 @@
+id: polars-no-deprecated-apply
+valid:
+  - "df.select(pl.col('x').map_elements(f, return_dtype=pl.Int64))"
+  - "df.with_columns((pl.col('a') + 1).alias('b'))"
+invalid:
+  - "df.select(pl.col('x').apply(f))"
+  - "pl.col('name').apply(lambda s: s.upper())"

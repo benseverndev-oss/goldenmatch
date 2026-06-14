@@ -1,0 +1,10 @@
+id: rust-no-todo-unimplemented
+language: rust
+severity: warning
+message: >-
+  todo!()/unimplemented!() panic at runtime — they must not reach a shipped
+  kernel path. Implement it, or return a proper Result error instead.
+rule:
+  any:
+    - pattern: todo!($$$)
+    - pattern: unimplemented!($$$)

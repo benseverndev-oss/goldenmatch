@@ -1,0 +1,14 @@
+id: py-no-exec
+snapshots:
+  exec(code):
+    labels:
+    - source: exec(code)
+      style: primary
+      start: 0
+      end: 10
+  exec(src, globals()):
+    labels:
+    - source: exec(src, globals())
+      style: primary
+      start: 0
+      end: 20

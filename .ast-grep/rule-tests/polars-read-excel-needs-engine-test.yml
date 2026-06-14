@@ -1,0 +1,7 @@
+id: polars-read-excel-needs-engine
+valid:
+  - "df = pl.read_excel('x.xlsx', engine='openpyxl')"
+  - "df = pl.read_excel(path, engine='openpyxl', sheet_name='S')"
+invalid:
+  - "df = pl.read_excel('x.xlsx')"
+  - "df = pl.read_excel(path)"

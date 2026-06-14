@@ -31,7 +31,7 @@ export function commonAffixTokens(
   atStart: boolean
 ): string {
   if (names.length < 2) return "";
-  const shortest = Math.min(...names.map((n) => n.length));
+  const shortest = names.map((n) => n.length).reduce((m, v) => (v < m ? v : m), Infinity);
   let i = 0;
   if (atStart) {
     while (i < shortest && names.every((n) => n[i] === names[0]![i])) i++;

@@ -264,8 +264,8 @@ export function explainCluster(
   // Score statistics.
   const scores: number[] = [];
   pairScores.forEach((s) => scores.push(s));
-  const minScore = scores.length > 0 ? Math.min(...scores) : 0;
-  const maxScore = scores.length > 0 ? Math.max(...scores) : 0;
+  const minScore = scores.length > 0 ? scores.reduce((m, v) => (v < m ? v : m), Infinity) : 0;
+  const maxScore = scores.length > 0 ? scores.reduce((m, v) => (v > m ? v : m), -Infinity) : 0;
   const avgScore =
     scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : 0;
 
