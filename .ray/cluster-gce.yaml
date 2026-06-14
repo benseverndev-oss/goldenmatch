@@ -64,17 +64,29 @@ setup_commands:
   - >-
     pip install --upgrade pip &&
     pip install "polars>=1.0" "pandas>=2,<3" "pyarrow>=10" "psutil>=5.9" "rapidfuzz>=3.0" "jellyfish>=1.0" &&
-    pip install "git+https://github.com/benseverndev-oss/goldenmatch@GOLDENMATCH_GIT_SHA_PLACEHOLDER#subdirectory=packages/python/goldenmatch"
+    pip install "git+https://github.com/benseverndev-oss/goldenmatch@GOLDENMATCH_GIT_SHA_PLACEHOLDER#subdirectory=packages/python/goldenmatch" &&
+    curl --proto '=https' --tlsv1.2 --retry 10 --retry-connrefused -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal &&
+    . "$HOME/.cargo/env" &&
+    pip install maturin &&
+    pip install "git+https://github.com/benseverndev-oss/goldenmatch@GOLDENMATCH_GIT_SHA_PLACEHOLDER#subdirectory=packages/rust/extensions/native"
 head_setup_commands: []
 worker_setup_commands: []
 
-# Export GOLDENMATCH_NATIVE_ADDRESS_NORMALIZE=1 BEFORE `ray start` so the raylet
-# and the worker processes it spawns inherit it -- per-partition scoring re-preps
-# the `address` field, and the native (Polars-expression) address-normalize path
-# avoids the per-row Python refdata plugin slog. Pure-Polars, no native wheel.
+# Native acceleration is REQUIRED on the cluster. The scoring kernel is the
+# dominant distributed stage (#688); without the native wheel, NATIVE=auto
+# silently falls back to PURE PYTHON on every worker and the run crawls. We
+# BUILD goldenmatch-native from the SAME git SHA on every node (the maturin
+# crate compiles in place in setup_commands above -- exact-SHA kernel, so no
+# published-wheel symbol skew, see #688) and export GOLDENMATCH_NATIVE=1 BELOW
+# so a missing/broken kernel RAISES at the first score call instead of running
+# 100x+ slower in silence. The bench's "Verify native on a worker" step asserts
+# a worker actually loaded it. GOLDENMATCH_NATIVE_ADDRESS_NORMALIZE=1 keeps the
+# Polars-native address path. Both are exported BEFORE `ray start` so the raylet
+# and the worker processes it spawns inherit them.
 head_start_ray_commands:
   - ray stop
   - >-
+    export GOLDENMATCH_NATIVE=1 &&
     export GOLDENMATCH_NATIVE_ADDRESS_NORMALIZE=1 &&
     ulimit -n 65536 && ray start --head --port=6379
     --object-manager-port=8076 --autoscaling-config=~/ray_bootstrap_config.yaml
@@ -82,6 +94,7 @@ head_start_ray_commands:
 worker_start_ray_commands:
   - ray stop
   - >-
+    export GOLDENMATCH_NATIVE=1 &&
     export GOLDENMATCH_NATIVE_ADDRESS_NORMALIZE=1 &&
     ulimit -n 65536 && ray start --address=$RAY_HEAD_IP:6379
     --object-manager-port=8076
