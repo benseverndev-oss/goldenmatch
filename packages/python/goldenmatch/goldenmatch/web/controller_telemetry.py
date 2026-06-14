@@ -305,6 +305,7 @@ def _execution_plan(history: Any) -> dict[str, Any] | None:
     plan = getattr(history, "execution_plan", None)
     if plan is None:
         return None
+    from dataclasses import asdict
     return {
         "rule_name": plan.rule_name,
         "backend": plan.backend,
@@ -312,4 +313,8 @@ def _execution_plan(history: Any) -> dict[str, Any] | None:
         "max_workers": plan.max_workers,
         "pair_spill_threshold": plan.pair_spill_threshold,
         "clustering_strategy": plan.clustering_strategy,
+        # getattr defaults keep pre-routing plans serializable.
+        "scoring_distributed": getattr(plan, "scoring_distributed", False),
+        "golden_distributed": getattr(plan, "golden_distributed", False),
+        "routing": [asdict(d) for d in getattr(plan, "routing_decisions", ())],
     }
