@@ -1,0 +1,89 @@
+# Oracle-score a distributed Phase-5 run's gs:// cluster assignments against the
+# deterministic QIS ground truth, on a 64 GB runner -- no cluster, no re-run.
+# Used to recover a distributed F1 when the run completed but the result JSON was
+# lost (e.g. the `rsync_down` rename), or to re-score existing assignments.
+name: score-distributed-assignments
+
+on:
+  workflow_dispatch:
+    inputs:
+      assignments_gs:
+        description: "gs:// dir of the assignment parquet files"
+        required: true
+        default: "gs://gm-phase5-844-golden490919/qis-dist/27488902460/qis_assignments_100000000"
+      rows:
+        description: "total rows in the run (N)"
+        required: true
+        default: "100000000"
+      label:
+        description: "artifact tag"
+        required: false
+        default: "dist-100m"
+
+permissions:
+  contents: read
+
+jobs:
+  score:
+    runs-on: large-new-64GB
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12"
+
+      - name: Install scorer deps + Infisical CLI
+        run: |
+          pip install --upgrade pip
+          pip install "polars>=1.25" "numpy>=1.26"
+          curl -1sLf 'https://artifacts-cli.infisical.com/setup.deb.sh' | sudo -E bash
+          sudo apt-get update && sudo apt-get install -y infisical
+
+      - name: Fetch GCP creds from Infisical
+        env:
+          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
+          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+        run: |
+          set -euo pipefail
+          INFISICAL_TOKEN=$(infisical login --silent --plain \
+            --method=universal-auth \
+            --client-id="$INFISICAL_CLIENT_ID" \
+            --client-secret="$INFISICAL_CLIENT_SECRET")
+          echo "::add-mask::$INFISICAL_TOKEN"
+          GCP_PROJECT_ID=$(infisical secrets get GCP_RAY_BENCH_PROJECT_ID \
+            --projectId=a99885f0-c5af-4ae1-9dc8-255cc60aa129 --env=dev --plain --token="$INFISICAL_TOKEN")
+          echo "::add-mask::$GCP_PROJECT_ID"
+          infisical secrets get GCP_SA_KEY_B64 \
+            --projectId=a99885f0-c5af-4ae1-9dc8-255cc60aa129 --env=dev --plain --token="$INFISICAL_TOKEN" \
+            | base64 -d --ignore-garbage > "$HOME/gcp-sa.json"
+          chmod 600 "$HOME/gcp-sa.json"
+          gcloud auth activate-service-account --key-file="$HOME/gcp-sa.json" --project="$GCP_PROJECT_ID"
+
+      - name: Download assignments + score
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/assign
+          gcloud storage cp -r "${{ inputs.assignments_gs }}/*" /tmp/assign/
+          echo "downloaded $(ls /tmp/assign/*.parquet | wc -l) parquet files"
+          python scripts/score_distributed_assignments.py \
+            --dir /tmp/assign --rows ${{ inputs.rows }} \
+            --out "/tmp/score_${{ inputs.label }}.json" | tee /tmp/score_stdout.txt
+
+      - name: Headline to step summary
+        if: always()
+        run: |
+          {
+            echo '## Distributed ${{ inputs.rows }}-row quality'
+            echo '```'
+            grep -E "pairwise:|b_cubed:|cluster:|multi-member" /tmp/score_stdout.txt || cat /tmp/score_stdout.txt || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload result
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: "score-${{ inputs.label }}"
+          path: "/tmp/score_${{ inputs.label }}.json"
+          if-no-files-found: warn

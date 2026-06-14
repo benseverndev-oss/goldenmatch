@@ -67,11 +67,11 @@
     "clean": "rimraf dist"
   },
   "dependencies": {
-    "commander": "^15.0.0",
-    "goldenmatch-wasm-runtime": "workspace:^"
+    "commander": "^15.0.0"
   },
   "devDependencies": {
     "@types/node": "^25.9.3",
+    "goldenmatch-wasm-runtime": "workspace:^",
     "rimraf": "^6.1.3",
     "tsup": "^8.5.1",
     "typescript": "^6.0.3",
