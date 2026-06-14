@@ -122,10 +122,10 @@ class RunHistory:
         lexicographic key, where RED entries are last resort but still
         beat 'no commit at all.'
 
-        Replaces ``cheapest_healthy()`` as of v1.9 — the new behavior
-        commits a best-effort entry whenever any iteration produced a
-        usable profile, even if that profile is RED. The user-visible
-        health verdict on the returned entry tells them what they got.
+        Replaced ``cheapest_healthy()`` in v1.9. Commits a best-effort
+        entry whenever any iteration produced a usable profile, even if
+        that profile is RED. The user-visible health verdict on the
+        returned entry tells them what they got.
 
         Lex key: ``(health_rank, -mass_separation, iteration)`` where
         ``health_rank`` is 0/1/2 for GREEN/YELLOW/RED and
@@ -210,25 +210,3 @@ class RunHistory:
 
         return min(survivors, key=key)
 
-    def cheapest_healthy(self) -> HistoryEntry | None:
-        """**DEPRECATED**: use ``pick_committed()`` instead.
-
-        Behavior change in v1.9: this alias delegates to ``pick_committed()``,
-        which returns RED entries when no GREEN/YELLOW exists (instead of
-        returning None as in v1.8). Update callers that depended on the
-        v1.8 None-on-all-RED behavior to either:
-        * call ``pick_committed()`` and check the returned entry's
-          ``.profile.health()`` to handle RED explicitly, or
-        * inspect ``.health() != HealthVerdict.RED`` on the result.
-
-        Removed in v2.0.
-        """
-        import warnings
-        warnings.warn(
-            "RunHistory.cheapest_healthy() is deprecated; use pick_committed(). "
-            "Behavior change: pick_committed() returns RED entries when no "
-            "GREEN/YELLOW exists (cheapest_healthy() returned None in v1.8).",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return self.pick_committed()  # no precision_collapse_floor — preserve deprecated behavior

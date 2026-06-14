@@ -49,19 +49,19 @@ def test_kernel_returns_pairs_for_simple_fixture():
 
 
 def test_kernel_skips_clustering():
-    """The kernel must NOT call build_clusters; clustering is the driver's
-    job after pair-merge across partitions."""
+    """The kernel must NOT call build_cluster_frames; clustering is the
+    driver's job after pair-merge across partitions."""
     from goldenmatch.core import pipeline
 
     df = _person_fixture()
     cfg = _kernel_committed_config(df)
     cfg.backend = "bucket"
 
-    with patch.object(pipeline, "build_clusters") as mock_clusters:
+    with patch.object(pipeline, "build_cluster_frames") as mock_clusters:
         pipeline._score_partition_with_config(df, cfg)
 
     assert not mock_clusters.called, (
-        "kernel must skip build_clusters -- clustering happens on the "
+        "kernel must skip build_cluster_frames -- clustering happens on the "
         "driver after partition pairs are merged. See #396."
     )
 

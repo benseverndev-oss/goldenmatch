@@ -191,34 +191,30 @@ def test_resolve_no_source_pk_uses_h1_fingerprint(store):
     assert all(r.record_id.startswith("src:h1:") for r in recs)
 
 
-def test_resolve_legacy_hash_ids_still_resolve(store, monkeypatch):
-    """Migration: records ingested under the legacy 'src:hash:' scheme keep
-    resolving to the same entity once the default flips to 'h1' -- no new
-    identity, no split, no duplicate record rows."""
+def test_resolve_legacy_hash_ids_in_store_do_not_split_on_rerun(store):
+    """v2 bridge removed: after migrate-ids is run (records re-keyed to h1),
+    a fresh resolve run sees the h1 ids and absorbs. This test covers the
+    post-migration path: h1 records in the store absorb idempotently."""
     rows = [
         {"name": "Alice", "email": "a@x.com"},
         {"name": "Alyce", "email": "a@x.com"},
     ]
-    # Ingest #1 simulates a pre-cutover store (legacy scheme primary).
-    monkeypatch.setenv("GOLDENMATCH_IDENTITY_ID_SCHEME", "hash")
+    # Ingest #1 under h1 (the only scheme post-v2).
     resolve_clusters(
         {0: _cluster([0, 1])}, _df(rows), [(0, 1, 0.95)],
         "wd", store, run_name="r1", source_pk_col=None,
     )
     eid = store.list_identities()[0].entity_id
-    legacy_ids = {r.record_id for r in store.get_records_for_entity(eid)}
-    assert all(rid.startswith("src:hash:") for rid in legacy_ids)
+    h1_ids = {r.record_id for r in store.get_records_for_entity(eid)}
+    assert all(rid.startswith("src:h1:") for rid in h1_ids)
 
-    # Ingest #2 under the new default (h1): same records must absorb, not split.
-    monkeypatch.delenv("GOLDENMATCH_IDENTITY_ID_SCHEME", raising=False)
+    # Ingest #2: same rows -> same h1 ids -> absorb (no new identity).
     summary = resolve_clusters(
         {0: _cluster([0, 1])}, _df(rows), [(0, 1, 0.95)],
         "wd", store, run_name="r2", source_pk_col=None,
     )
     assert store.count_identities() == 1
     assert summary.created == 0
-    # Records stay keyed under their existing legacy ids (no duplicate rows).
-    assert {r.record_id for r in store.get_records_for_entity(eid)} == legacy_ids
 
 
 def test_resolve_h1_idempotent_replay(store):
@@ -239,9 +235,8 @@ def test_resolve_h1_idempotent_replay(store):
     assert store.count_identities() == n1
 
 
-def test_resolve_id_scheme_killswitch(store, monkeypatch):
-    """GOLDENMATCH_IDENTITY_ID_SCHEME=hash forces the legacy primary scheme."""
-    monkeypatch.setenv("GOLDENMATCH_IDENTITY_ID_SCHEME", "hash")
+def test_resolve_id_scheme_is_always_h1(store):
+    """v2: GOLDENMATCH_IDENTITY_ID_SCHEME is removed; h1 is the only scheme."""
     resolve_clusters(
         {0: _cluster([0, 1])},
         _df([
@@ -252,7 +247,7 @@ def test_resolve_id_scheme_killswitch(store, monkeypatch):
     )
     eid = store.list_identities()[0].entity_id
     recs = store.get_records_for_entity(eid)
-    assert all(r.record_id.startswith("src:hash:") for r in recs)
+    assert all(r.record_id.startswith("src:h1:") for r in recs)
 
 
 def test_record_id_candidates_coerces_date_to_h1():
@@ -267,8 +262,7 @@ def test_record_id_candidates_coerces_date_to_h1():
            "dob": _dt.date(1990, 1, 1)}
     primary, candidates = _resolve._record_id_candidates(row, "src", None)
     assert primary.startswith("src:h1:")
-    assert primary == candidates[0]
-    assert any(c.startswith("src:hash:") for c in candidates)  # legacy still a candidate
+    assert candidates == [primary]  # sole candidate post-v2; no dual-candidate bridge
 
 
 def test_resolve_evidence_edges_have_field_scores(store):
@@ -297,3 +291,17 @@ def test_resolve_event_log_chain(store):
     kinds = [e.kind for e in history]
     assert kinds[0] == EventKind.CREATED.value
     assert all(e.run_name == "r1" for e in history)
+
+
+def test_fingerprintable_row_has_only_h1_candidate():
+    from goldenmatch.identity.resolve import _record_id_candidates
+    primary, cands = _record_id_candidates({"name": "Ann"}, "acme", None)
+    assert primary.startswith("acme:h1:")
+    assert cands == [primary]  # NO :hash: legacy lookup candidate post-v2
+
+
+def test_unfingerprintable_row_keeps_hash_fallback(monkeypatch):
+    import goldenmatch.identity.resolve as R
+    monkeypatch.setattr(R, "record_fingerprint", lambda _: (_ for _ in ()).throw(ValueError()))
+    primary, cands = R._record_id_candidates({"name": "Ann"}, "acme", None)
+    assert primary.startswith("acme:hash:") and cands == [primary]

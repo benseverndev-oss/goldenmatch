@@ -4,7 +4,16 @@ All notable changes to GoldenMatch are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/) (strict after v1.0.0).
 
-## [Unreleased]
+## [2.0.0] - 2026-06-14
+
+### BREAKING CHANGES
+- **Identity `:hash:` scheme removed.** The legacy `:hash:` lookup candidate and
+  `GOLDENMATCH_IDENTITY_ID_SCHEME` are gone. A persisted identity DB still holding
+  `:hash:`-keyed records will SPLIT on the next run. **Run `goldenmatch identity migrate-ids
+  --path <db>` (or `--dsn`) BEFORE upgrading.** Un-fingerprintable rows keep their `:hash:` id.
+- `GOLDENMATCH_CLUSTER_FRAMES_OUT` removed (frames-out is the only, output-equivalent clustering path).
+- `RunHistory.cheapest_healthy()` removed -- use `pick_committed()`.
+- `_scale_aware_backend` (internal) removed -- backend selection is the v3 planner.
 
 ### Added
 - **Stable Python IdentityGraph API for the Sail tier (#859).** The S5
@@ -28,18 +37,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   `{source}:h1:{12}` fingerprint scheme (SQLite + Postgres). `--dry-run` reports
   counts without mutating. Public API: `goldenmatch.identity.migrate_record_ids`.
 
-### Deprecated
+### Removed
 - **The legacy `:hash:` identity record-id scheme + `GOLDENMATCH_IDENTITY_ID_SCHEME=hash`.**
-  Identity resolution now warns once per process when a record resolves via the
-  legacy lookup candidate. The legacy candidate and the kill-switch are removed
-  in 2.0; run `goldenmatch identity migrate-ids` to migrate persisted identity DBs.
-
-### Deprecated
-- **The `GOLDENMATCH_CLUSTER_FRAMES_OUT=0` escape hatch + the legacy `dict[int,dict]`
-  cluster pipeline path.** The Arrow frames-out path is the default and only supported
-  clustering path; setting the variable to `0` now emits a once-per-process
-  `DeprecationWarning`. The escape hatch and the legacy pipeline branch are removed in
-  2.0 (public `build_clusters` is preserved as a frames-backed adapter).
+  The legacy lookup candidate and its kill-switch are gone. Run
+  `goldenmatch identity migrate-ids --path <db>` BEFORE upgrading if you have a
+  persisted identity DB with `:hash:`-keyed records.
+- **`GOLDENMATCH_CLUSTER_FRAMES_OUT=0` escape hatch + legacy `dict[int,dict]` cluster path.**
+  The Arrow frames-out path is the default and only supported clustering path.
+  Public `build_clusters` is preserved as a frames-backed adapter.
+- **`RunHistory.cheapest_healthy()`** -- use `pick_committed()`.
+- **`_scale_aware_backend` (internal shim)** -- backend selection routes through the v3 planner.
 
 ### Performance
 - **Fellegi-Sunter block scoring ~3.5x faster on tiny-block / multi-pass shapes

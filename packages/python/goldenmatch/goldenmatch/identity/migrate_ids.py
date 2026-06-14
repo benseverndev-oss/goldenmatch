@@ -1,7 +1,8 @@
 """Migrate persisted identity record ids from the legacy ``{source}:hash:{12}``
 scheme to the canonical ``{source}:h1:{12}`` scheme (SQLite + Postgres).
 
-Non-breaking 1.x runway for the v2.0 removal of the legacy lookup candidate.
+The 1.x runway is complete; this tool stays available for operators who
+upgrade identity DBs from the legacy ``:hash:`` scheme to ``:h1:``.
 """
 from __future__ import annotations
 
