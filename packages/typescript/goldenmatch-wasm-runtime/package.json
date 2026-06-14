@@ -23,11 +23,11 @@
     "clean": "rimraf dist"
   },
   "devDependencies": {
-    "@types/node": "^20.0.0",
+    "@types/node": "^20.19.43",
     "rimraf": "^5.0.0",
     "tsup": "^8.5.1",
     "typescript": "^5.4.0",
-    "vitest": "^4.1.0"
+    "vitest": "^4.1.8"
   },
   "license": "MIT",
   "author": "Ben Severn (https://bensevern.dev)",

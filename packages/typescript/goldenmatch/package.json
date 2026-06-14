@@ -53,13 +53,13 @@
     "better-sqlite3": { "optional": true }
   },
   "devDependencies": {
-    "@types/node": "^20.0.0",
+    "@types/node": "^20.19.43",
     "fast-check": "^4.8.0",
     "rimraf": "^5.0.0",
     "tsup": "^8.5.1",
     "typescript": "^5.4.0",
-    "vitest": "^4.1.0",
-    "yaml": "^2.7.0",
+    "vitest": "^4.1.8",
+    "yaml": "^2.9.0",
     "better-sqlite3": "^11.0.0"
   },
   "keywords": [
