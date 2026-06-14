@@ -725,6 +725,15 @@ class MatchSettingsConfig(BaseModel):
 # ── GoldenMatchConfig (top-level) ──────────────────────────────────────────
 
 
+class DistributedRoutingConfig(BaseModel):
+    """Per-stage distributed-routing pins. ``auto`` lets the planner decide;
+    an explicit value pins the stage and is surfaced by the linter."""
+
+    scoring: Literal["auto", "distributed", "in_process"] = "auto"
+    clustering: Literal["auto", "distributed_wcc", "in_memory_scipy"] = "auto"
+    golden: Literal["auto", "distributed", "in_process"] = "auto"
+
+
 class GoldenMatchConfig(BaseModel):
     input: InputConfig | None = None
     output: OutputConfig = Field(default_factory=lambda: OutputConfig())
@@ -741,6 +750,8 @@ class GoldenMatchConfig(BaseModel):
     llm_auto: bool = False
     domain: DomainConfig | None = None
     backend: str | None = None  # None (default Polars), "ray", "duckdb"
+    distributed_routing: DistributedRoutingConfig | None = None
+    allow_slow_path: bool = False
     # Execution mode. "standard" (default) = the in-memory/Ray pipeline,
     # bit-identical artifacts. "scale" = the DataFusion spine (out-of-core,
     # deterministic + semantically correct but NOT bit-identical to standard;
