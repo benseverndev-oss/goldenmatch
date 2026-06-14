@@ -405,3 +405,36 @@ Every `GOLDENMATCH_*` variable the package reads, grouped by who should care. De
 <Card title="Scale envelope" icon="gauge-high" href="/concepts/scale-envelope">
   The block-size failure modes that matter more than the backend.
 </Card>
+
+## Distributed routing
+
+The planner decides scoring, clustering, and golden routing per stage, keyed off
+**driver RAM** (not cluster total). The `lint_routing` / `explain_routing` MCP
+tools surface these decisions and flag overrides that force a slow path; a
+slow-path override at scale refuses unless `allow_slow_path=true`.
+
+### Single box {#routing-single-box}
+
+With no Ray cluster connected, every stage runs in-memory / in-process. There is
+nothing to distribute to, so the projections below do not apply.
+
+### Driver-RAM projection {#routing-driver-ram-projection}
+
+When a cluster is present, each materializing stage distributes only when its
+working set exceeds the driver-RAM budget (`available_ram_gb × 0.6`):
+
+- **Clustering / WCC** distributes when the projected edge set
+  (`estimated_pair_count × 16 bytes`) exceeds the budget. At 100M rows the
+  ~1.76 GB edge set fits, so WCC runs in-memory (scipy) — forcing the
+  distributed path there is a multi-hour tail.
+- **Scoring** and **golden** distribute when the row-frame estimate
+  (`n_rows × 512 bytes`) exceeds the budget. The same data therefore distributes
+  scoring on a 48 GB-driver cluster but keeps it in-memory on a 256 GB box.
+
+### Overrides {#routing-overrides}
+
+`distributed_routing.*` config pins and the legacy
+`GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD` env var are honored but linted.
+`CLUSTERING_THRESHOLD=0` forces distributed WCC regardless of the projection; at
+scale the linter flags it ERROR and the runtime refuses unless
+`allow_slow_path=true`.

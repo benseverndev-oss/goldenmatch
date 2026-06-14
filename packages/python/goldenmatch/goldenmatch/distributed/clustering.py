@@ -173,6 +173,26 @@ def _label_prop_threshold() -> int:
         return _LABEL_PROP_PAIR_THRESHOLD
 
 
+def _resolve_use_label_prop(
+    pair_count: int,
+    clustering_strategy: str | None = None,
+    *,
+    force_label_propagation: bool = False,
+) -> bool:
+    """Decide distributed (label-prop) vs in-memory WCC.
+
+    An explicit planner strategy ("in_memory" / "distributed_wcc") wins;
+    otherwise fall back to the env-threshold decision (today's path).
+    """
+    if force_label_propagation:
+        return True
+    if clustering_strategy == "in_memory":
+        return False
+    if clustering_strategy == "distributed_wcc":
+        return True
+    return pair_count >= _label_prop_threshold()
+
+
 def _derive_touched_ids(pairs_ds: Dataset) -> list[int]:
     """Distinct ids appearing in any pair (id_a or id_b), sorted.
 
@@ -197,6 +217,7 @@ def build_clusters_distributed(
     convergence_max_iterations: int = 30,
     force_label_propagation: bool = False,
     algorithm: str | None = None,
+    clustering_strategy: str | None = None,
 ) -> Dataset:
     """Distributed clustering. Returns a Ray Dataset of cluster assignments.
 
@@ -228,7 +249,10 @@ def build_clusters_distributed(
     """
     threshold = _label_prop_threshold()
     pair_count = pairs_ds.count()
-    use_label_prop = force_label_propagation or pair_count >= threshold
+    use_label_prop = _resolve_use_label_prop(
+        pair_count, clustering_strategy,
+        force_label_propagation=force_label_propagation,
+    )
 
     if not use_label_prop:
         logger.info(
