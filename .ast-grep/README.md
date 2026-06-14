@@ -47,7 +47,7 @@ advisory (reported, non-blocking) so new rules can land gradually.
 | Rule | Severity | Invariant |
 |---|---|---|
 | `ts-no-empty-catch` | error | empty `catch {}` silently swallows errors — log or re-throw |
-| `ts-no-spread-math-min-max` | warning | `Math.min/max(...array)` throws on >65K elements — surfaces **11 real sites** for a follow-up cleanup |
+| `ts-no-spread-math-min-max` | error | `Math.min/max(...array)` throws on >65K elements — the 11 real sites were fixed (this PR), so it's now a hard guard against reintroduction |
 
 **Rust kernels** (`packages/rust/extensions/`):
 
@@ -60,7 +60,8 @@ advisory (reported, non-blocking) so new rules can land gradually.
 > Python tree already comply (the `panic!`/`println!` hits in Rust are all legit:
 > test assertions + the `goldenembed` CLI binary). These Rust rules are *preventive*
 > guards. The TypeScript `ts-no-spread-math-min-max` rule, by contrast, surfaced 11
-> real latent crash sites — fixed in a separate dogfood PR.
+> real latent crash sites — fixed in this PR, and the rule promoted to `error` so
+> the pattern can never come back.
 
 ## Considered but not added (AST can't express them cleanly)
 

@@ -1,6 +1,6 @@
 id: ts-no-spread-math-min-max
 language: typescript
-severity: warning
+severity: error
 message: >-
   Math.min(...array) / Math.max(...array) throws RangeError (call-stack overflow)
   on arrays larger than ~65K elements — a real crash on big inputs. Use a
