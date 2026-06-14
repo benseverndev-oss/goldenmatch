@@ -1892,6 +1892,23 @@ jobs:
       - run: uv sync --all-packages
       - run: uv run pyright
 
+  # Enforce per-package version lockstep across every file that declares it
+  # (pyproject / __init__ / server.json / Cargo.toml). The CLAUDE.md gotchas
+  # documented this rule but nothing enforced it -- goldenflow shipped 1.1.x
+  # drifted. No `if:` gate: a drift can be introduced by any change and the
+  # check is stdlib-only (~1s), so it always runs.
+  version_consistency:
+    needs: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12"
+      - name: Enforce per-package version lockstep
+        run: python scripts/check_version_consistency.py
+
   readme_callouts:
     needs: changes
     if: needs.changes.outputs.readme_callouts == 'true'
@@ -1967,6 +1984,7 @@ jobs:
       - distributed
       - sail
       - pyright
+      - version_consistency
       - readme_callouts
       - ts_parity_freshness
     if: always()
