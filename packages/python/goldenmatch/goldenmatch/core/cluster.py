@@ -526,7 +526,7 @@ def build_cluster_frames(
     auto_split: bool,
     split_edge_budget: int | None = None,
 ) -> ClusterFrames:
-    """SP-A frames-out entry point (gated ``GOLDENMATCH_CLUSTER_FRAMES_OUT``).
+    """SP-A frames-out entry point (the default cluster-stage path).
 
     Returns the two-frame ``ClusterFrames`` columnar representation
     (``assignments`` + 9-col ``metadata``) WITHOUT building the per-cluster
