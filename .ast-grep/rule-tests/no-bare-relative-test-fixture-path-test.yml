@@ -1,0 +1,8 @@
+id: no-bare-relative-test-fixture-path
+valid:
+  - "p = Path(__file__).parent / 'fixtures' / 'simple.csv'"
+  - "p = Path('/abs/tests/x.csv')"
+  - "p = Path(some_var)"
+invalid:
+  - "p = Path('tests/fixtures/simple.csv')"
+  - "p = Path('tests/data/a.parquet')"

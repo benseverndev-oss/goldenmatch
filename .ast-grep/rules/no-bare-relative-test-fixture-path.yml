@@ -1,0 +1,15 @@
+id: no-bare-relative-test-fixture-path
+language: python
+severity: warning
+message: >-
+  Bare relative fixture path breaks when CWD differs (local CWD = package dir,
+  CI CWD = repo root): it passes locally and fails in CI. Anchor to __file__,
+  e.g. Path(__file__).parent / "fixtures" / "simple.csv".
+note: See packages/python/goldenmatch/CLAUDE.md (fixture-path CWD gotcha).
+files:
+  - "**/tests/**"
+rule:
+  pattern: Path($S)
+constraints:
+  S:
+    regex: "^[\"']tests/"

@@ -1,0 +1,9 @@
+id: no-clirunner-mix-stderr
+language: python
+severity: error
+message: >-
+  click>=8.3 (currently installed) raises TypeError on CliRunner(mix_stderr=...).
+  Drop the kwarg — stderr already routes separately and result.stderr still works.
+note: See packages/python/goldenmatch/CLAUDE.md ("Testing").
+rule:
+  pattern: CliRunner(mix_stderr=$X)
