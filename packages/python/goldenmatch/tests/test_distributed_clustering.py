@@ -226,6 +226,111 @@ def test_build_clusters_distributed_threshold_env_override(monkeypatch, caplog):
     assert not any("scipy" in m for m in routing_msgs)
 
 
+def test_route_distributed_memory_aware_default(monkeypatch):
+    """#956: with the env var unset, routing is memory-aware -- distribute only
+    when the estimated peak pair-set bytes won't fit available driver RAM."""
+    import types
+
+    import psutil
+    from goldenmatch.distributed.clustering import _PAIR_PEAK_BYTES, _route_distributed
+
+    monkeypatch.delenv("GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD", raising=False)
+
+    # 200 GB available: 110M pairs (the #956 case, ~10 GB peak) FITS -> in-memory.
+    monkeypatch.setattr(
+        psutil, "virtual_memory", lambda: types.SimpleNamespace(available=200 * 1024 ** 3)
+    )
+    assert _route_distributed(110_000_000) is False
+
+    # 1 GB available: even 50M pairs (~4.5 GB peak) does NOT fit -> distributed.
+    monkeypatch.setattr(
+        psutil, "virtual_memory", lambda: types.SimpleNamespace(available=1 * 1024 ** 3)
+    )
+    assert _route_distributed(50_000_000) is True
+
+    # Boundary: just over available -> distribute; just under -> in-memory.
+    avail = 8 * 1024 ** 3
+    monkeypatch.setattr(
+        psutil, "virtual_memory", lambda: types.SimpleNamespace(available=avail)
+    )
+    assert _route_distributed(avail // _PAIR_PEAK_BYTES + 1) is True
+    assert _route_distributed(avail // _PAIR_PEAK_BYTES - 1) is False
+
+
+def test_route_distributed_env_override_wins(monkeypatch):
+    """#956: an explicit GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD overrides
+    the memory heuristic (back-compat); malformed env falls through to it."""
+    import types
+
+    import psutil
+    from goldenmatch.distributed.clustering import _route_distributed
+
+    # Plenty of RAM, but the explicit pair-count threshold still governs.
+    monkeypatch.setattr(
+        psutil, "virtual_memory", lambda: types.SimpleNamespace(available=999 * 1024 ** 3)
+    )
+    monkeypatch.setenv("GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD", "10000000")
+    assert _route_distributed(10_000_000) is True   # >= threshold -> distribute
+    assert _route_distributed(9_999_999) is False   # < threshold -> in-memory
+
+    # Malformed env -> ignored, memory-aware default takes over (999 GB fits).
+    monkeypatch.setenv("GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD", "notanint")
+    assert _route_distributed(50_000_000) is False
+
+
+def test_phase5_materializes_pairs_once_before_clustering(tmp_path, monkeypatch):
+    """#956/#955 regression: the scored pair set is materialized EXACTLY ONCE
+    before clustering, so the WCC rounds reuse it instead of re-executing the
+    whole scoring DAG per round (the fuzzy-config hours-long tail). Stub-based:
+    asserts the materialize-before-cluster wiring without a real cluster. Lives
+    here (not test_phase5_distributed_pipeline.py) so the distributed CI lane
+    actually runs it -- that file matches no CI pytest glob.
+    """
+    from goldenmatch.distributed import pipeline as P
+
+    calls = {"materialize": 0}
+
+    class _FakeMaterialized:
+        """What .materialize() returns -- the dataset clustering must receive."""
+
+    class _FakePairs:
+        def materialize(self):
+            calls["materialize"] += 1
+            return _FakeMaterialized()
+
+    class _FakeAssignments:
+        def write_parquet(self, path):  # the _skip_golden path persists these
+            pass
+
+    received = {}
+
+    # score_blocks_distributed is imported inside _run_phase5_pipeline from its
+    # source module, so patch it there (not on P).
+    monkeypatch.setattr(
+        "goldenmatch.distributed.scoring.score_blocks_distributed",
+        lambda ds, cfg: _FakePairs(),
+    )
+
+    def _fake_cluster(pairs_ds, cfg):
+        received["pairs_ds"] = pairs_ds
+        return _FakeAssignments()
+
+    monkeypatch.setattr(P, "_phase5_cluster", _fake_cluster)
+
+    P._run_phase5_pipeline(
+        object(),                          # ds: only the stubbed scorer touches it
+        config=object(),                   # non-None -> skip auto-config
+        assignments_output_path=str(tmp_path / "asg"),
+        _skip_golden=True,                 # return right after clustering
+    )
+
+    assert calls["materialize"] == 1, "scored pairs must be materialized exactly once"
+    assert isinstance(received["pairs_ds"], _FakeMaterialized), (
+        "_phase5_cluster must receive the MATERIALIZED dataset, not the lazy one "
+        "(else each WCC round re-runs the scoring DAG -- #955)"
+    )
+
+
 # ── Quality-invariant scale validation ──
 #
 # The distributed paths use DIFFERENT algorithms than the in-memory path
