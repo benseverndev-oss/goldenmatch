@@ -186,11 +186,33 @@ def load_real(table_a, table_b, matches, n_neg_per_pos=1):
     return pairs
 
 
+def _ditto_text(serialized: str) -> str:
+    """'COL title VAL x COL manufacturer VAL y ...' -> 'x y ...'."""
+    out = []
+    for chunk in serialized.split("COL "):
+        if " VAL " in chunk:
+            out.append(chunk.split(" VAL ", 1)[1].strip())
+    return " ".join(p for p in out if p).strip()
+
+
+def load_ditto(path):
+    """DeepMatcher/DITTO labeled pairs: 'left \\t right \\t {0,1}' per line."""
+    pairs = []
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            parts = line.rstrip("\n").split("\t")
+            if len(parts) < 3:
+                continue
+            pairs.append((_ditto_text(parts[0]), _ditto_text(parts[1]), parts[2].strip() == "1"))
+    return pairs
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--table-a")
     ap.add_argument("--table-b")
     ap.add_argument("--matches")
+    ap.add_argument("--ditto", help="DeepMatcher/DITTO labeled-pairs file (left\\tright\\tlabel)")
     args = ap.parse_args()
 
     gguf = os.environ.get("GOLDENMATCH_LLAMA_GGUF")
@@ -201,9 +223,12 @@ def main() -> int:
         print("Need llama-cpp-python + numpy.", file=sys.stderr)
         return 2
 
-    if args.table_a and args.table_b and args.matches:
+    if args.ditto:
+        pairs = load_ditto(args.ditto)
+        src = f"DITTO labeled pairs ({args.ditto})"
+    elif args.table_a and args.table_b and args.matches:
         pairs = load_real(args.table_a, args.table_b, args.matches)
-        src = f"real Abt-Buy ({args.table_a})"
+        src = f"real two-table set ({args.table_a})"
     else:
         pairs = _CURATED
         src = "curated Abt-Buy-style electronics set"
