@@ -1,0 +1,42 @@
+# Pre-commit hooks - shift lint + secret checks left so they fail on `git commit`
+# instead of after a CI round-trip. Install once per clone:
+#   uv tool install pre-commit      (or: pipx install pre-commit)
+#   pre-commit install
+# Run against the whole tree on demand: pre-commit run --all-files
+#
+# Scope is deliberately FAST. Slow gates (clippy, tsc, pytest, the full ruff
+# rule set, ruff-format) stay in CI so the commit hook never tempts anyone into
+# `git commit --no-verify`. The `ruff` hook below uses the SAME root
+# pyproject.toml [tool.ruff.lint] config CI enforces, so it can't diverge.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.9.2
+    hooks:
+      # Lint only (mirrors CI's `ruff check`). --fix auto-applies safe fixes.
+      # ruff-format is intentionally NOT wired here: CI does not format today,
+      # so adding it would impose a formatter the codebase hasn't adopted.
+      - id: ruff
+        args: [--fix]
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        # Keep Markdown hard line breaks (two trailing spaces) intact.
+        args: [--markdown-linebreak-ext=md]
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        # The only legitimately-large files are LFS-tracked fixtures
+        # (synthetic_1m.csv). Cap accidental data/binary commits well under that.
+        args: [--maxkb=1024]
+      - id: check-yaml
+        args: [--allow-multiple-documents]
+      - id: check-toml
+      - id: check-json
+      # Security backstop: block committing a private key. gitleaks (CI, see
+      # .github/workflows/secret-scan.yml) covers the broader token surface
+      # such as the .mcpregistry_* bearer tokens.
+      - id: detect-private-key

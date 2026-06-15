@@ -1,0 +1,31 @@
+# EditorConfig - consistent whitespace across editors. https://editorconfig.org
+# Mirrors the conventions ruff (Python) and the TS/JSON/Rust tooling already
+# assume, so editors stop fighting CI over indentation and line endings.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+
+[*.py]
+indent_size = 4
+
+[*.{ts,tsx,js,jsx,mjs,cjs,json,jsonc,yml,yaml,toml}]
+indent_size = 2
+
+[*.rs]
+indent_size = 4
+
+[*.md]
+# Preserve trailing-whitespace hard line breaks in Markdown.
+trim_trailing_whitespace = false
+
+[*.{bat,cmd}]
+# Windows batch scripts require CRLF.
+end_of_line = crlf
+
+[Makefile]
+indent_style = tab

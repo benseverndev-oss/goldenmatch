@@ -1,0 +1,6 @@
+# Code owners - default reviewer for the whole monorepo. Single maintainer
+# today; split this by area (per-package handles or teams) as more land.
+# Note: this only auto-requests review. It enforces review only if branch
+# protection has "Require review from Code Owners" enabled.
+# Docs: https://docs.github.com/articles/about-code-owners
+* @benzsevern

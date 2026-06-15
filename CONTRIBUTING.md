@@ -45,6 +45,14 @@ cargo test --workspace --manifest-path packages/rust/extensions/Cargo.toml
 python scripts/build_native.py
 ```
 
+**Pre-commit hooks** (fast lint + secret checks, shifted left of CI):
+
+```bash
+uv tool install pre-commit   # or: pipx install pre-commit
+pre-commit install           # runs ruff + whitespace + private-key check on commit
+pre-commit run --all-files   # run against the whole tree on demand
+```
+
 ## Branches, commits, and PRs
 
 - Branch off `main`; open a **pull request** back into `main` (draft until ready).
@@ -92,5 +100,11 @@ Cut the version bump (lockstep, above) in a PR first, merge, then tag.
 - Anchor fixture paths to `__file__`, not the CWD (CWD differs between local and
   CI runs).
 - `ruff` (Python) and `tsc --noEmit` (TypeScript) must pass.
+
+## Code of Conduct
+
+This project follows the [Contributor Covenant](CODE_OF_CONDUCT.md). By taking
+part you agree to uphold it. Report unacceptable behavior to `ben@bensevern.dev`
+(subject: `[conduct]`).
 
 Thanks for contributing!

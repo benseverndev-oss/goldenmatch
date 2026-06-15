@@ -1,0 +1,74 @@
+name: Bug report
+description: Report a reproducible problem in a Golden Suite package.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug. Fill in the fields below so it can be reproduced
+        on the first try. Do NOT report security issues here - use a private
+        advisory (see SECURITY.md).
+  - type: dropdown
+    id: package
+    attributes:
+      label: Package
+      description: Which package is affected?
+      options:
+        - goldenmatch (Python)
+        - goldencheck (Python)
+        - goldenflow (Python)
+        - goldenpipe (Python)
+        - infermap (Python)
+        - goldenanalysis (Python)
+        - goldensuite-mcp / MCP server
+        - TypeScript port (*-js)
+        - Rust extension (native / datafusion / pgrx / embed)
+        - Other / not sure
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Installed version, or commit SHA if built from source.
+      placeholder: "goldenmatch==2.0.0"
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What went wrong, and what did you expect instead?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproducer
+      description: >-
+        The smallest command or code snippet that triggers it. Include the input
+        shape if the bug is data-dependent.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Python/Node/Rust version, and install method (pip / npm / source).
+      placeholder: |
+        OS: Windows 11
+        Python: 3.12
+        Installed via: pip
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and this is not a duplicate.
+          required: true
+        - label: This is not a security vulnerability (those go to a private advisory).
+          required: true
