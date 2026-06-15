@@ -2,12 +2,12 @@
 
 **Status:** Draft for review
 **Date:** 2026-06-15
-**Scope:** Full parity (AgentSession + 16 agent MCP tools + A2A skill expansion 10 → full coverage)
+**Scope:** Full parity (AgentSession + 17 agent MCP tools + A2A skill expansion 10 → full coverage)
 
 ## Problem
 
 The TypeScript `goldenmatch` package is at core-ER parity with Python but is missing
-the **agent surface**: the `AgentSession` orchestrator, the 16 agent-level MCP tools,
+the **agent surface**: the `AgentSession` orchestrator, the 17 agent-level MCP tools,
 and full A2A skill coverage. Per the 2026-06-15 versioning-policy analysis this is the
 last *undeclared* parity gap (distributed engine and web UI are declared Python-only;
 the agent surface is not). It blocks any honest "TS at parity / stable" claim.
@@ -22,8 +22,14 @@ Current TS state (verified):
   advertises 28 skills (agent + identity + memory + cross-run) with fail-closed bearer auth.
 
 Python reference: `packages/python/goldenmatch/goldenmatch/core/agent.py` (AgentSession,
-668 LOC), `mcp/agent_tools.py` (16 tools, 828 LOC), `a2a/server.py` + `a2a/skills.py`
+668 LOC), `mcp/agent_tools.py` (17 tools, 828 LOC), `a2a/server.py` + `a2a/skills.py`
 (467 + 442 LOC).
+
+The 17 agent tools (the enumeration is the contract, not the count): `analyze_data`,
+`auto_configure`, `controller_telemetry`, `agent_deduplicate`, `agent_match_sources`,
+`agent_explain_pair`, `agent_explain_cluster`, `agent_review_queue`, `agent_approve_reject`,
+`agent_compare_strategies`, `suggest_pprl`, `scan_quality`, `fix_quality`, `run_transforms`,
+`sensitivity`, `incremental`, `certify_recall`.
 
 ## Goal
 
@@ -127,7 +133,8 @@ identity already exist in TS; agent is the new one):
 
 - **MCP** (`src/node/mcp/server.ts`): import `AGENT_SKILLS`, render each as an MCP `Tool`,
   add to `TOOLS`, route agent tool names through `dispatchSkill` with a node `ctx`
-  (real `loadTable`). Tool count goes 30 -> ~46. Routed through the **json-wrapping
+  (real `loadTable`). Tool count goes 30 -> 47 (all 17 registered; the three
+  optional-dependency tools fail-open at call time, see Section 5). Routed through the **json-wrapping
   base-tool path**, not `_AGENT_TOOL_NAMES`-style pre-wrapping (the TS server's
   `tool_count` is already derived dynamically from `TOOLS.length`, so no hardcoded count
   to update).
@@ -158,9 +165,16 @@ Each MCP tool call and each A2A task instantiates a **fresh** `AgentSession` (st
 per request, exactly like Python). Within one session object, state persists
 (`analyze` -> `deduplicate` reuse `this.data`); across requests it does not. Handlers
 throw on error; the dispatcher catches and returns `{error: message}` (MCP `TextContent`
-JSON) / sets task `state:"failed"` + `error` (A2A). Optional-dependency skills
-(goldencheck/goldenflow analogues, if present in TS) fail-open with a clear "not
-installed" message, matching Python.
+JSON) / sets task `state:"failed"` + `error` (A2A).
+
+**Optional-dependency tools (ruling).** `scan_quality` / `fix_quality` (GoldenCheck) and
+`run_transforms` (GoldenFlow) are **registered like the other 14** but their handlers
+attempt an optional dynamic import of the sibling TS packages
+(`await import("goldencheck" as string)` / `goldenflow` -- the repo's documented
+optional-peer idiom) and **fail-open** with `{error: "goldencheck not installed"}` when the
+peer is absent, faithfully mirroring Python's dynamic-import guard. They are NOT omitted
+(so the count is 47, no silent gap) and NOT a hard dependency of `goldenmatch`. This is the
+concrete disposition for the otherwise-ambiguous "if present in TS" case.
 
 ### Section 6 — Node file-loading layer
 
@@ -183,14 +197,16 @@ representative datasets (sensitive, strong-id, fuzzy, mixed), capturing:
 TS `tests/parity/agent-*.test.ts` assert match -- **structural** for strategy decisions
 and the card (deterministic), **4-decimal** for numeric metrics. Determinism clamps
 (pinned ids/timestamps) follow the existing emitter conventions. The `select_strategy`
-decision table is the keystone parity contract.
+decision table is the keystone parity contract. Wave-1 fixtures also assert the exact
+`last_telemetry.source` string per entry point (`"deduplicate"` from `deduplicate`,
+`"autoconfigure"` from `autoconfigure`) plus `available:false` in the stateless path.
 
 ## Phasing (waves -> npm releases)
 
 Each wave is independently testable and shippable:
 1. **Core**: `AgentSession` + `strategy.ts` + `AGENT_SKILLS` + `dispatchSkill` +
    analyze/select_strategy fixtures. (the heart)
-2. **MCP**: wire the 16 agent tools (30 -> ~46) + dispatch parity.
+2. **MCP**: wire the 17 agent tools (30 -> 47) + dispatch parity (3 fail-open per Section 5).
 3. **A2A**: unified card/dispatcher + bearer auth + full skill coverage + card/task-lifecycle parity.
 4. **Node + docs**: file-loading wrappers, end-to-end dedupe/match/compare skills, declare
    the surface in `packages/typescript/goldenmatch/CLAUDE.md`, flip the versioning-policy
@@ -202,9 +218,10 @@ Each wave is independently testable and shippable:
   divergence from Python's thresholds shows up as a fixture mismatch. Mitigation: the
   keystone fixture set exercises every branch.
 - **A2A skill union scope.** The 28 Python A2A skills span agent + identity + memory +
-  cross-run. Some cross-run skills (e.g. `analyze_blocking`, `compare_clusters`,
-  `schema_match`) may not have TS equivalents yet; the plan must audit each and either
-  port the missing handler or omit it from the card with a note (no silent gap).
+  cross-run. The cross-run skills (`analyze_blocking`, `compare_clusters`, `schema_match`,
+  `list_runs`, `rollback`) may not have TS equivalents yet; the plan must audit each and
+  either port the missing handler or omit it from the card with a documented note (no
+  silent gap). The card advertises exactly what is wired -- never a skill without a handler.
 - **Telemetry shape.** `last_telemetry.available:false` in stateless dispatch must match
   Python exactly so the fixture passes.
 
