@@ -28,6 +28,7 @@ Native SQL extensions for [GoldenMatch](https://github.com/benseverndev-oss/gold
 - Rust workspace (`Cargo.toml`) contains only `bridge/` crate
 - `postgres/` is excluded from workspace (`exclude = ["postgres"]`) -- pgrx 0.12.9 bug with SQL generation in workspace mode
 - `duckdb/` is a standalone Python package (not Rust)
+- `graph-layout/` is a standalone demo **binary** (own `[workspace]`, in the parent `exclude` list so the default rust build skips it): Barnes-Hut + multilevel force-directed layout of ER graphs → PPM frames. One real dep (`rayon`); built-in dependency-free PPM rasterizer (`--features skia` swaps in tiny-skia). `export_graph_layout.py` (stdlib) turns a goldenmatch identity DB / scored-pair CSV into its edge-list input. `cargo test` covers Barnes-Hut-vs-exact, cluster separation, coarsening. See its README.
 
 ### bridge/ (goldenmatch-bridge)
 - Shared crate: embeds CPython via pyo3, calls goldenmatch Python API
