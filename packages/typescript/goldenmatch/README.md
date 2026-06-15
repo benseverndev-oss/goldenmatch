@@ -18,7 +18,28 @@ npm install goldenmatch
 - **Edge-safe core** — the matching engine runs in browsers, Workers, Vercel Edge Runtime, Deno
 - **Pure TypeScript** — no native dependencies required; peer deps unlock performance (hnswlib, ONNX, piscina)
 - **Feature parity with Python goldenmatch** — same scorers, same clustering, same YAML configs
-- **590 tests, strict TypeScript** — `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`
+- **Strict TypeScript** — `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`
+
+## Compatibility with the Python package
+
+`goldenmatch` (npm) and `goldenmatch` (PyPI) are **independent semver lines** for the
+same toolkit — we do not lockstep the version numbers. The TS package is an **edge-safe
+subset**: it deliberately omits a few Python-only surfaces (below) so it can run in
+browsers, Workers, and edge runtimes. Everything else is at **core parity**
+(scoring, blocking, clustering, golden records, auto-config, identity graph, PPRL,
+learning memory, MCP, A2A, CLI), validated by Python-generated parity fixtures.
+
+| npm | ≈ PyPI | What the npm release covers |
+|-----|--------|-----------------------------|
+| **1.0.0** | 2.0.x | Stable API. Core ER + identity graph + MCP (44 tools) + A2A (bearer auth) + the AgentSession agent surface. |
+| 0.4–0.13 | 1.6–1.30 | Pre-1.0 wave line (see `CHANGELOG.md`). |
+
+**Python-only by design (not in the npm package):**
+- Distributed engine (Ray / GPU / Vertex embeddings) — the npm package is single-node / edge.
+- REST API + React web UI — npm ships a thin programmatic server only.
+- Agent tools `sensitivity` / `incremental` / `certify_recall` — no TS core.
+
+Rationale + the full policy: [`docs/versioning-policy.md`](https://github.com/benseverndev-oss/goldenmatch/blob/main/docs/versioning-policy.md).
 
 ## Quick Start
 

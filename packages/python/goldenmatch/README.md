@@ -49,6 +49,11 @@ pip install goldenmatch && goldenmatch dedupe customers.csv
 npm install goldenmatch
 ```
 
+> **Two packages, independent versions.** PyPI `goldenmatch` (2.x) and npm `goldenmatch`
+> (1.x) are the same toolkit on **separate semver lines** — not lockstep. The npm package
+> is an edge-safe subset (no Ray/GPU distributed engine, no web UI); everything else is at
+> core parity. Version map + rationale: [`docs/versioning-policy.md`](docs/versioning-policy.md).
+
 <!-- README-callouts:start  (auto-synced from CHANGELOG.md by scripts/sync_readme_callouts.py — edit the CHANGELOG, not this block) -->
 > **🆕 v2.0.0** — **GoldenMatch 2.0.0: the first backwards-incompatible major.** It removes four deprecation-window items, each shipped with a 1.x runway: the legacy `:hash:` identity lookup bridge + `GOLDENMATCH_IDENTITY_ID_SCHEME` (run `goldenmatch identity migrate-ids` before upgrading; un-fingerprintable rows keep their `:hash:` id), the `GOLDENMATCH_CLUSTER_FRAMES_OUT` gate + legacy dict cluster path (`build_clusters` stays as a frames-backed adapter), and the `cheapest_healthy` / `_scale_aware_backend` shims. Pipeline behavior is output-equivalent. Migration guide: [Migrating to v2](https://docs.bensevern.dev/goldenmatch/migrating-to-v2).
 >
