@@ -29,7 +29,7 @@ extension-module = ["pyo3/extension-module"]
 # (native_wheel lane) and scripts/build_native.py both build with default
 # features, so the shipped wheel/.so still gets extension-module. See the
 # pyo3 FAQ "I can't run cargo test".
-pyo3 = { version = ">=0.25, <0.27", features = ["abi3-py311"] }
+pyo3 = { version = ">=0.28, <0.29", features = ["abi3-py311"] }
 # BLAKE2b for the char-n-gram feature hashing kernel — must match Python
 # hashlib.blake2b(digest_size=8) byte-for-byte (see featurize.rs).
 blake2 = "0.10"
@@ -57,7 +57,7 @@ hmac = "0.13"
 arrow = { version = "59", default-features = false, features = ["pyarrow"] }
 # Return per-field score matrices as PyArray2<f32> for the slow-path field-
 # matrix kernel (score.rs::score_field_matrix). Pinned to the pyo3 0.23 line.
-numpy = ">=0.25, <0.27"
+numpy = ">=0.28, <0.29"
 
 [profile.release]
 opt-level = 3
