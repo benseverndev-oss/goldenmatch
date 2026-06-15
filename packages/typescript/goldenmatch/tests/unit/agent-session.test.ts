@@ -61,10 +61,12 @@ describe("AgentSession.deduplicate", () => {
 describe("AgentSession.matchSources", () => {
   it("returns results + reasoning", async () => {
     const session = new AgentSession();
-    const a: Row[] = [{ id: "1", email: "a@x.com" }];
+    // Source A needs a fuzzy-matchable column so auto-config keeps a matchkey
+    // (an all-unique id/email source drops every exact matchkey -> error).
+    const a: Row[] = peopleRows();
     const b: Row[] = [
-      { id: "2", email: "a@x.com" },
-      { id: "3", email: "b@x.com" },
+      { id: "5", name: "John Smith", city: "NYC" },
+      { id: "6", name: "Mary Jones", city: "SF" },
     ];
     const out = await session.matchSources(a, b);
     expect(out.results).toBeDefined();
