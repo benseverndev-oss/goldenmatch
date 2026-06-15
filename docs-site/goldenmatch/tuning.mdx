@@ -230,6 +230,7 @@ These trade nothing for speed/memory at scale and are safe to leave at their def
 |----------|---------|--------|-------------|
 | `GOLDENMATCH_AUTOCONFIG_MEMORY` | `1` (on) | Read/write cross-run auto-config memory at `~/.goldenmatch/autoconfig_memory.db`. | Set `0` in CI or any run that must be reproducible and not influenced by prior runs. |
 | `GOLDENMATCH_PLANNING_EFFORT` | `normal` | Iteration budget for auto-config: `fast` / `normal` / `thinking` / `einstein`. Higher = more thorough, slower; `thinking`+ measure real full-frame pair counts. | `fast` to speed up config on huge inputs; `thinking` when auto-config picks a poor blocking key. `normal` is byte-identical to the historical default. |
+| `GOLDENMATCH_CONFIG_LINT` | `warn` | Pre-flight [config linter](/goldenmatch/config-linter) on the *resolved* config (zero-config or explicit). `warn` logs data-shape findings and runs; `strict` raises `ConfigLintError` on an error finding before the run; `off` skips. Findings attach to `DedupeResult.lint_findings`. | `strict` in CI/production to fail fast on a degenerate config (e.g. a blocking key that will OOM). `off` to silence. |
 | `GOLDENMATCH_AUTOCONFIG_LLM` | `0` | Let an LLM propose a config when heuristics are exhausted on a RED profile. Needs `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`. | Opt in only when heuristic auto-config can't find a healthy config and you accept the API cost. |
 | `GOLDENMATCH_AUTOCONFIG_INDICATOR_BUDGET` | unset | Set `fast` to skip the expensive complexity indicators. | Speeding up config on very large inputs. |
 | `GOLDENMATCH_AUTOCONFIG_FORCE_INCLUDE` / `_FORCE_EXCLUDE` | unset | Comma-separated columns to force into / out of auto-config analysis. | Rescue a column auto-config drops, or exclude a noisy one, without writing a full explicit config. |
@@ -332,6 +333,7 @@ Every `GOLDENMATCH_*` variable the package reads, grouped by who should care. De
 | `GOLDENMATCH_PLANNER_BUCKET` | `1` | `0`/`1` | Allow the planner to pick `bucket`. |
 | `GOLDENMATCH_DUCKDB_SCORE_DB` | unset | path | DuckDB pair-store spill path. |
 | `GOLDENMATCH_NATIVE_RAYON_MIN_PAIRS` | `20000000` | int | Native kernel sequential-vs-rayon threshold. |
+| `GOLDENMATCH_CONFIG_LINT` | `warn` | `warn`/`strict`/`off` | Pre-flight config linter: warn-and-run, refuse on error, or skip. |
 
 ### Distributed sub-knobs
 
