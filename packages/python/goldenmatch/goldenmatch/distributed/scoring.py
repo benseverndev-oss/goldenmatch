@@ -64,6 +64,50 @@ _SCORE_PROJECT = os.environ.get("GOLDENMATCH_DISTRIBUTED_SCORE_PROJECT", "1") !=
 _raw_score_conc = os.environ.get("GOLDENMATCH_DISTRIBUTED_SCORE_CONCURRENCY")
 _SCORE_CONCURRENCY = int(_raw_score_conc) if _raw_score_conc else None
 
+# #957 (ResourceBudget backpressure follow-up). Ray Data's streaming executor
+# RESERVES a fraction of the cluster object store (default ~0.5, split across
+# ops) so a downstream op can't be starved. On the shuffle -> `_score` handoff
+# that reservation, not CPU, caps the `_score` op's in-flight tasks: the 100M
+# run held `_score` at 30 tasks / 60 CPU with ~20 CPU IDLE while the object
+# store sat at only ~47/66 GiB (`[backpressured:tasks(ResourceBudget)]`).
+# LOWERING the reservation hands the running `_score` op more object-store
+# budget -> more concurrent score tasks -> it uses the idle CPU. Smaller blocks
+# are NOT a safe lever here (`_score` uses batch_size=None to keep each
+# co-located partition whole; splitting a block would split a co-located group
+# and under-score) -- so the safe levers are this reservation and the shuffle
+# partition count (GOLDENMATCH_DISTRIBUTED_SHUFFLE_PARTS). Unset (default) = Ray
+# default, no change. Tune at scale; ~0.2 frees most of the store for the
+# running op. Version-guarded: no-op on a Ray without the attribute.
+_OP_RESERVATION = os.environ.get("GOLDENMATCH_DISTRIBUTED_OP_RESERVATION")
+
+
+def _apply_ray_data_resource_tuning() -> None:
+    """Apply opt-in Ray Data object-store budget tuning for the distributed score
+    path (#957 ResourceBudget backpressure). No-op unless the env knob is set;
+    version-guarded so it never breaks on a Ray that lacks the attribute."""
+    if _OP_RESERVATION is None:
+        return
+    try:
+        from ray.data import DataContext
+
+        ctx = DataContext.get_current()
+        if not hasattr(ctx, "op_resource_reservation_ratio"):
+            logger.warning(
+                "GOLDENMATCH_DISTRIBUTED_OP_RESERVATION set but this Ray lacks "
+                "DataContext.op_resource_reservation_ratio -- ignored."
+            )
+            return
+        ratio = max(0.0, min(1.0, float(_OP_RESERVATION)))
+        ctx.op_resource_reservation_ratio = ratio
+        logger.info(
+            "Ray Data op_resource_reservation_ratio=%.2f "
+            "(GOLDENMATCH_DISTRIBUTED_OP_RESERVATION) -- frees object-store budget "
+            "for the _score op to relieve ResourceBudget backpressure.",
+            ratio,
+        )
+    except Exception as e:  # never let a tuning knob break the run
+        logger.warning("Ray Data resource tuning failed (ignored): %s", e)
+
 
 def _project_to_scoring_columns(df: Any, config: GoldenMatchConfig) -> Any:
     """Drop columns scoring never reads, BEFORE the block-shuffle (#957).
@@ -393,6 +437,8 @@ def _score_blocks_block_shuffle(
        task count once blocks are narrow. Secondary (still open): dedupe the
        explode when an exact matchkey's key equals a blocking pass's key.
     """
+    # Opt-in Ray Data object-store budget tuning (#957 ResourceBudget backpressure).
+    _apply_ray_data_resource_tuning()
     # Shuffle partition count. Default derives from the DRIVER cpu count, but the
     # block-shuffle explodes each record per co-location key (wide records ->
     # large blocks -> Ray ResourceBudget backpressure that pins _score to ONE

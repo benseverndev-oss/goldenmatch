@@ -90,6 +90,14 @@ def _print_banner() -> None:
 def _callback(ctx: typer.Context) -> None:
     if ctx.invoked_subcommand is None:
         _print_banner()
+        return
+    # Anonymous, opt-in usage event: the command name only (static, from our own
+    # command table -- never args/values). No-op unless GOLDENMATCH_ANALYTICS=1.
+    try:
+        from goldenmatch.core.analytics import capture
+        capture("cli_command", {"surface": "cli", "command": ctx.invoked_subcommand})
+    except Exception:  # noqa: BLE001 - analytics is never load-bearing
+        pass
 
 
 app = typer.Typer(
