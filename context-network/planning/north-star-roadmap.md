@@ -50,15 +50,25 @@ The `dedupe file.csv` user should get the ceiling, not the floor.
   goldencheck is installed).
 - **Gate:** N flags moved opt-in -> auto per quarter; time-to-first-success drops.
 
-### W3 — Prove scale-invariant correctness *(commitment #2)*
-"Same input -> same answer, laptop -> 100M" becomes *proven*, not asserted-with-an-asterisk.
-- **Cheap now:** a cross-scale equivalence CI gate — one fixture through standard / `scale`
-  / distributed, assert cluster-equivalence (B^3 or exact). Closes the `decisions/0002`
-  "semantically-correct-not-bit-identical" honesty gap today, no cluster needed.
-- Fix the known `run_spine` empty/all-singleton `SchemaError`.
-- **Long pole (Phase 3):** the Sail binding 100M multi-node run -> collapse the three engine
-  paths into one -> flip `mode` default. Infra-blocked on `SAIL_REMOTE`; must not block W1/W2.
-- **Gate:** cross-scale equivalence test green in CI on every PR.
+### W3 — Scale-invariant correctness *(commitment #2 — largely already met)*
+Correction (2026-06-15): equivalence is **already proven**, not asserted-with-an-asterisk,
+and a new per-PR equivalence gate would be *costly*, not cheap — running standard / `scale` /
+distributed on a meaningful fixture means heavy (and for the binding case, cluster) lanes on
+every PR, which the paths-filter CI discipline deliberately avoids. The existing proof:
+- DataFusion spine Stage C is parity-gated (Rand 1.0 + golden + edges).
+- The Sail tier ships connectivity + pair-set parity gates (S1-S4).
+- The 100M Ray run was validated recall-complete (20M clusters exact, #851/#852/#864).
+
+So the residual is small and *not* a new CI lane:
+- **Discoverability (docs, ~0 cost):** link the existing parity gates + the 100M validation
+  from `decisions/0002` and the scale-mode docs so "scale-invariant" reads as *proven*,
+  retiring the "semantically-correct-not-bit-identical" asterisk in perception.
+- **Fix the known `run_spine` empty/all-singleton `SchemaError`** (small, real).
+- **Long pole (Phase 3):** the real architectural debt is that scale is *three paths, not one
+  engine*; only the Sail binding 100M multi-node run -> collapsing the paths -> flipping the
+  `mode` default closes it. Infra-blocked on `SAIL_REMOTE`; must not block W1/W2.
+- **Gate:** the existing proof is documented + discoverable; `SchemaError` fixed. **No new
+  costly CI lane.**
 
 ### W4 — Surface-parity dashboard *(commitment #3)*
 Stop stranding capabilities on one surface.
@@ -84,8 +94,8 @@ Make it contributable. (Siblings stay active per the 2026-06-15 decision — so 
 
 | Phase | Theme | Ships |
 |---|---|---|
-| **0 (wk 1-2)** | Make the floor honest | Scoreboard live - cross-scale equivalence CI gate (W3) - default-flip ledger (W2) - parity dashboard scaffold (W4) - comparison page draft (W1) |
-| **1 (wk 3-6)** | Make it reachable | Getting-started + asciinema - Abt-Buy case study - awesome-list PRs + social image - `SchemaError` fix - CONTRIBUTING (W5) |
+| **0 (wk 1-2)** | Make the floor honest | Scoreboard live - link existing scale-equivalence proofs (W3 docs, no new CI lane) - default-flip ledger (W2) - parity dashboard scaffold (W4) - comparison page draft (W1) |
+| **1 (wk 3-6)** | Make it reachable | Getting-started + asciinema - Abt-Buy case study - awesome-list PRs + social image - `run_spine` `SchemaError` fix - CONTRIBUTING (W5) |
 | **2 (wk 7-10)** | Make it stick | Flip 2-3 defaults (W2) - burn down top parity reds (W4) - good-first-issues - **read the scoreboard: did wk1 work move it?** |
 | **3 (wk 11+)** | Unify the engine | Sail 100M binding run -> collapse scale paths -> flip `mode` default (W3 long pole, infra-permitting) |
 
