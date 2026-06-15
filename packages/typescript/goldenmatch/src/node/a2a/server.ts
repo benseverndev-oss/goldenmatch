@@ -4,9 +4,18 @@
  * Node-only: uses node:http, node:crypto. NOT edge-safe.
  *
  * Endpoints:
- *   GET  /.well-known/agent.json   - agent card (10+ skills)
+ *   GET  /.well-known/agent.json   - agent card (union of all registries)
+ *   GET  /health                   - liveness probe (public)
  *   POST /tasks                    - create a task (skill + input)
+ *   POST /tasks/send               - alias for POST /tasks (Python parity)
  *   GET  /tasks/{id}               - fetch task status/result
+ *   POST /tasks/{id}/cancel        - cancel a task
+ *
+ * Bearer auth mirrors goldenmatch/a2a/server.py: when
+ * GOLDENMATCH_AGENT_TOKEN is set, every route except /health and
+ * /.well-known/agent.json requires `Authorization: Bearer <token>`.
+ * Binding to a non-loopback host without a token throws at startup
+ * (fail-closed).
  *
  * Ports ideas from goldenmatch/a2a/server.py. This is a simpler
  * synchronous variant (no SSE streaming, no persistent store).
@@ -18,6 +27,7 @@ import {
   type ServerResponse,
 } from "node:http";
 import { randomUUID } from "node:crypto";
+import { env } from "node:process";
 import { dedupe, match, scoreStrings } from "../../core/api.js";
 import { profileRows } from "../../core/profiler.js";
 import { explainPair } from "../../core/explain.js";
@@ -29,6 +39,18 @@ import {
   VALID_TRANSFORMS,
   VALID_STRATEGIES,
 } from "../../core/types.js";
+import { AGENT_SKILLS } from "../../core/agent/index.js";
+import { AGENT_TOOL_NAMES, handleAgentTool } from "../mcp/agent-tools.js";
+import {
+  MEMORY_TOOLS,
+  MEMORY_TOOL_NAMES,
+  handleMemoryTool,
+} from "../mcp/memory-tools.js";
+import {
+  IDENTITY_TOOLS,
+  IDENTITY_TOOL_NAMES,
+  handleIdentityTool,
+} from "../mcp/identity-tools.js";
 
 // ---------------------------------------------------------------------------
 // Agent card
@@ -41,7 +63,7 @@ export interface AgentSkill {
   readonly outputModes: readonly string[];
 }
 
-export const AGENT_CARD: {
+export interface AgentCard {
   readonly name: string;
   readonly description: string;
   readonly version: string;
@@ -51,7 +73,115 @@ export const AGENT_CARD: {
   };
   readonly capabilities: Readonly<Record<string, boolean>>;
   readonly skills: readonly AgentSkill[];
-} = {
+  readonly authentication: {
+    readonly schemes: readonly string[];
+  };
+}
+
+/**
+ * The 10 native A2A skills. These dispatch through the local `dispatchSkill`
+ * switch below (not the MCP registries). Their `name` doubles as the skill id.
+ */
+const BASE_SKILLS: readonly AgentSkill[] = [
+  {
+    name: "dedupe",
+    description: "Deduplicate a list of records and return golden records plus clusters.",
+    inputModes: ["data/json"],
+    outputModes: ["data/json"],
+  },
+  {
+    name: "match",
+    description: "Match target records against reference records.",
+    inputModes: ["data/json"],
+    outputModes: ["data/json"],
+  },
+  {
+    name: "score",
+    description: "Score similarity between two strings.",
+    inputModes: ["text"],
+    outputModes: ["text"],
+  },
+  {
+    name: "profile",
+    description: "Profile a dataset (types, null rates, cardinality).",
+    inputModes: ["data/json"],
+    outputModes: ["data/json"],
+  },
+  {
+    name: "suggest_config",
+    description: "Auto-generate a shorthand dedupe config from a dataset profile.",
+    inputModes: ["data/json"],
+    outputModes: ["data/json"],
+  },
+  {
+    name: "explain_pair",
+    description: "Explain why two records match using weighted field scorers.",
+    inputModes: ["data/json"],
+    outputModes: ["data/json"],
+  },
+  {
+    name: "evaluate",
+    description: "Evaluate predicted pairs vs ground truth (precision/recall/F1).",
+    inputModes: ["data/json"],
+    outputModes: ["data/json"],
+  },
+  {
+    name: "list_scorers",
+    description: "List all available similarity scorers.",
+    inputModes: ["text"],
+    outputModes: ["data/json"],
+  },
+  {
+    name: "list_transforms",
+    description: "List all available field transforms.",
+    inputModes: ["text"],
+    outputModes: ["data/json"],
+  },
+  {
+    name: "list_strategies",
+    description: "List all golden-record survivorship strategies.",
+    inputModes: ["text"],
+    outputModes: ["data/json"],
+  },
+];
+
+/** Map any registry entry (id/name + description) to the `AgentSkill` shape. */
+function toAgentSkill(entry: {
+  readonly name: string;
+  readonly description: string;
+}): AgentSkill {
+  return {
+    name: entry.name,
+    description: entry.description,
+    inputModes: ["application/json"],
+    outputModes: ["application/json"],
+  };
+}
+
+/**
+ * Build the card's skill list from the union of every registry: the 10 base
+ * A2A skills + the 14 `AGENT_SKILLS` + the memory tools + the identity tools.
+ * De-duped by skill id (`name`); first occurrence wins, so a base skill
+ * shadows a same-named registry entry.
+ */
+function buildCardSkills(): readonly AgentSkill[] {
+  const out: AgentSkill[] = [];
+  const seen = new Set<string>();
+  const push = (skill: AgentSkill): void => {
+    if (seen.has(skill.name)) return;
+    seen.add(skill.name);
+    out.push(skill);
+  };
+  for (const skill of BASE_SKILLS) push(skill);
+  for (const def of AGENT_SKILLS) {
+    push(toAgentSkill({ name: def.id, description: def.description }));
+  }
+  for (const tool of MEMORY_TOOLS) push(toAgentSkill(tool));
+  for (const tool of IDENTITY_TOOLS) push(toAgentSkill(tool));
+  return out;
+}
+
+export const AGENT_CARD: AgentCard = {
   name: "goldenmatch-js",
   description:
     "Entity resolution agent -- dedupe, match, profile, score, explain, evaluate.",
@@ -65,68 +195,10 @@ export const AGENT_CARD: {
     pushNotifications: false,
     stateTransitionHistory: false,
   },
-  skills: [
-    {
-      name: "dedupe",
-      description: "Deduplicate a list of records and return golden records plus clusters.",
-      inputModes: ["data/json"],
-      outputModes: ["data/json"],
-    },
-    {
-      name: "match",
-      description: "Match target records against reference records.",
-      inputModes: ["data/json"],
-      outputModes: ["data/json"],
-    },
-    {
-      name: "score",
-      description: "Score similarity between two strings.",
-      inputModes: ["text"],
-      outputModes: ["text"],
-    },
-    {
-      name: "profile",
-      description: "Profile a dataset (types, null rates, cardinality).",
-      inputModes: ["data/json"],
-      outputModes: ["data/json"],
-    },
-    {
-      name: "suggest_config",
-      description: "Auto-generate a shorthand dedupe config from a dataset profile.",
-      inputModes: ["data/json"],
-      outputModes: ["data/json"],
-    },
-    {
-      name: "explain_pair",
-      description: "Explain why two records match using weighted field scorers.",
-      inputModes: ["data/json"],
-      outputModes: ["data/json"],
-    },
-    {
-      name: "evaluate",
-      description: "Evaluate predicted pairs vs ground truth (precision/recall/F1).",
-      inputModes: ["data/json"],
-      outputModes: ["data/json"],
-    },
-    {
-      name: "list_scorers",
-      description: "List all available similarity scorers.",
-      inputModes: ["text"],
-      outputModes: ["data/json"],
-    },
-    {
-      name: "list_transforms",
-      description: "List all available field transforms.",
-      inputModes: ["text"],
-      outputModes: ["data/json"],
-    },
-    {
-      name: "list_strategies",
-      description: "List all golden-record survivorship strategies.",
-      inputModes: ["text"],
-      outputModes: ["data/json"],
-    },
-  ],
+  skills: buildCardSkills(),
+  authentication: {
+    schemes: ["bearer"],
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -136,11 +208,48 @@ export const AGENT_CARD: {
 interface Task {
   readonly id: string;
   readonly skill: string;
-  status: "pending" | "running" | "completed" | "failed";
+  status: "pending" | "running" | "completed" | "failed" | "cancelled";
   readonly createdAt: string;
   completedAt?: string;
   result?: unknown;
   error?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Auth (mirrors goldenmatch/a2a/server.py auth middleware)
+// ---------------------------------------------------------------------------
+
+/** Endpoints reachable without a bearer token (liveness + discovery). */
+const PUBLIC_PATHS: ReadonlySet<string> = new Set([
+  "/health",
+  "/.well-known/agent.json",
+]);
+
+/** Hosts considered loopback for the fail-closed startup guard. */
+const LOOPBACK_HOSTS: ReadonlySet<string> = new Set([
+  "127.0.0.1",
+  "localhost",
+  "::1",
+]);
+
+/**
+ * Decide whether a request is authorized.
+ *
+ * - Public paths (`/health`, `/.well-known/agent.json`) always pass.
+ * - When `token` is unset/empty, every path passes (auth disabled).
+ * - Otherwise a non-public path requires `Authorization: Bearer <token>`.
+ *
+ * Pure + side-effect free so it can be unit-tested without a live server.
+ */
+export function isAuthorized(
+  pathname: string,
+  authHeader: string | undefined,
+  token: string | undefined,
+): boolean {
+  if (PUBLIC_PATHS.has(pathname)) return true;
+  if (!token) return true;
+  const header = authHeader ?? "";
+  return header.startsWith("Bearer ") && header.slice("Bearer ".length) === token;
 }
 
 // ---------------------------------------------------------------------------
@@ -332,6 +441,52 @@ async function dispatchSkill(
   }
 }
 
+/**
+ * Unwrap a memory/identity handler's `TextContent[]` into a plain object.
+ *
+ * Those handlers return `[{ type: "text", text: JSON.stringify(payload) }]`;
+ * we parse the first element's text back into the payload so the A2A task
+ * `result` field carries structured JSON (matching the agent/base skills,
+ * which return plain objects). If the text is missing or unparseable we fall
+ * back to wrapping the raw text.
+ */
+function unwrapTextContent(
+  content: readonly { readonly type: string; readonly text: string }[],
+): unknown {
+  const first = content[0];
+  if (first === undefined) return {};
+  try {
+    return JSON.parse(first.text);
+  } catch {
+    return { text: first.text };
+  }
+}
+
+/**
+ * Route a skill id to the correct registry:
+ *   - `AGENT_TOOL_NAMES` -> `handleAgentTool` (Wave 2 node ctx)
+ *   - memory id          -> `handleMemoryTool` (TextContent -> parsed)
+ *   - identity id        -> `handleIdentityTool` (TextContent -> parsed)
+ *   - else               -> the local base `dispatchSkill` switch
+ *
+ * Unknown ids fall through to `dispatchSkill`, which throws.
+ */
+export async function dispatchAnySkill(
+  skill: string,
+  input: Record<string, unknown>,
+): Promise<unknown> {
+  if (AGENT_TOOL_NAMES.has(skill)) {
+    return handleAgentTool(skill, input);
+  }
+  if (MEMORY_TOOL_NAMES.has(skill)) {
+    return unwrapTextContent(await handleMemoryTool(skill, input));
+  }
+  if (IDENTITY_TOOL_NAMES.has(skill)) {
+    return unwrapTextContent(await handleIdentityTool(skill, input));
+  }
+  return dispatchSkill(skill, input);
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -385,12 +540,86 @@ export function startA2aServer(options: StartA2aOptions = {}): ReturnType<typeof
   const host = options.host ?? "127.0.0.1";
   const tasks = new Map<string, Task>();
 
+  // Fail-closed startup guard (mirrors Python create_app): binding to a
+  // non-loopback host without GOLDENMATCH_AGENT_TOKEN is refused so an exposed
+  // agent server is never unauthenticated by accident.
+  const token = env["GOLDENMATCH_AGENT_TOKEN"];
+  if (!token && !LOOPBACK_HOSTS.has(host)) {
+    throw new Error(
+      `Refusing to start an unauthenticated A2A server on host '${host}'. ` +
+        "Set GOLDENMATCH_AGENT_TOKEN, or bind to 127.0.0.1 for local use.",
+    );
+  }
+
+  // Shared handler for POST /tasks and its POST /tasks/send alias.
+  const handleSendTask = async (
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): Promise<void> => {
+    const body = await readJsonBody(req);
+    const skill = String(body["skill"] ?? "");
+    const input =
+      (body["input"] as Record<string, unknown> | undefined) ??
+      (body["params"] as Record<string, unknown> | undefined) ??
+      {};
+    if (!skill) {
+      sendJson(res, 400, { error: "skill is required" });
+      return;
+    }
+    const id = randomUUID();
+    const createdAt = new Date().toISOString();
+    const task: Task = {
+      id,
+      skill,
+      status: "running",
+      createdAt,
+    };
+    tasks.set(id, task);
+
+    try {
+      const result = await dispatchAnySkill(skill, input);
+      task.status = "completed";
+      task.completedAt = new Date().toISOString();
+      task.result = result;
+      sendJson(res, 200, {
+        id,
+        status: task.status,
+        skill,
+        created_at: createdAt,
+        completed_at: task.completedAt,
+        result,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      task.status = "failed";
+      task.completedAt = new Date().toISOString();
+      task.error = msg;
+      sendJson(res, 200, {
+        id,
+        status: task.status,
+        skill,
+        created_at: createdAt,
+        completed_at: task.completedAt,
+        error: msg,
+      });
+    }
+  };
+
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
     const pathname = url.pathname;
     const methodName = req.method ?? "GET";
 
     try {
+      // Bearer auth (mirrors Python _auth_middleware): public paths always
+      // pass; everything else needs the matching token when one is set.
+      const authHeader = req.headers["authorization"];
+      const headerStr = Array.isArray(authHeader) ? authHeader[0] : authHeader;
+      if (!isAuthorized(pathname, headerStr, token)) {
+        sendJson(res, 401, { error: "Unauthorized" });
+        return;
+      }
+
       if (pathname === "/.well-known/agent.json" && methodName === "GET") {
         sendJson(res, 200, AGENT_CARD);
         return;
@@ -401,54 +630,32 @@ export function startA2aServer(options: StartA2aOptions = {}): ReturnType<typeof
         return;
       }
 
-      if (pathname === "/tasks" && methodName === "POST") {
-        const body = await readJsonBody(req);
-        const skill = String(body["skill"] ?? "");
-        const input =
-          (body["input"] as Record<string, unknown> | undefined) ??
-          (body["params"] as Record<string, unknown> | undefined) ??
-          {};
-        if (!skill) {
-          sendJson(res, 400, { error: "skill is required" });
+      if (
+        (pathname === "/tasks" || pathname === "/tasks/send") &&
+        methodName === "POST"
+      ) {
+        await handleSendTask(req, res);
+        return;
+      }
+
+      if (
+        pathname.startsWith("/tasks/") &&
+        pathname.endsWith("/cancel") &&
+        methodName === "POST"
+      ) {
+        const id = pathname.slice("/tasks/".length, -"/cancel".length);
+        const task = tasks.get(id);
+        if (!task) {
+          sendJson(res, 404, { error: `Task not found: ${id}` });
           return;
         }
-        const id = randomUUID();
-        const createdAt = new Date().toISOString();
-        const task: Task = {
-          id,
-          skill,
-          status: "running",
-          createdAt,
-        };
-        tasks.set(id, task);
-
-        try {
-          const result = await dispatchSkill(skill, input);
-          task.status = "completed";
-          task.completedAt = new Date().toISOString();
-          task.result = result;
-          sendJson(res, 200, {
-            id,
-            status: task.status,
-            skill,
-            created_at: createdAt,
-            completed_at: task.completedAt,
-            result,
-          });
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          task.status = "failed";
-          task.completedAt = new Date().toISOString();
-          task.error = msg;
-          sendJson(res, 200, {
-            id,
-            status: task.status,
-            skill,
-            created_at: createdAt,
-            completed_at: task.completedAt,
-            error: msg,
-          });
-        }
+        task.status = "cancelled";
+        task.completedAt = new Date().toISOString();
+        sendJson(res, 200, {
+          id: task.id,
+          skill: task.skill,
+          status: task.status,
+        });
         return;
       }
 
