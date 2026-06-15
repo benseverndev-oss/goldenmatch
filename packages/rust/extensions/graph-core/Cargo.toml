@@ -18,4 +18,4 @@ name = "goldenmatch_graph_core"
 [dependencies]
 # Arrow columnar helpers for the DuckDB/DataFusion zero-copy path. No pyarrow/pyo3
 # here — callers pass `arrow::array::ArrayData`; the pyo3 bridge lives in `native`.
-arrow = { version = "55", default-features = false }
+arrow = { version = "59", default-features = false }
