@@ -107,7 +107,7 @@ export class AgentSession {
       alternatives,
     };
 
-    this.reasoning = reasoning;
+    this.reasoning = reasoning as unknown as Record<string, unknown>;
     return reasoning;
   }
 

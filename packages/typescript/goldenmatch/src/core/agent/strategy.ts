@@ -89,7 +89,7 @@ export function profileForAgent(rows: readonly Row[]): DataProfile {
     // equivalent — the node-only byte API is intentionally avoided here).
     let avgLength = 0;
     if (type === "string" && nonNull.length > 0) {
-      const total = nonNull.reduce(
+      const total = nonNull.reduce<number>(
         (acc, v) => acc + encoder.encode(String(v)).length,
         0,
       );
