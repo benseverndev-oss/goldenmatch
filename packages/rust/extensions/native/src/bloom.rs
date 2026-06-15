@@ -103,14 +103,40 @@ pub fn bloom_clk_batch(
             "ngram_size must be positive",
         ));
     }
-    // No Python objects touched in the loop -> release the GIL + rayon fan-out,
-    // exactly like score_block_pairs_arrow.
+    // No Python objects touched in the loop -> release the GIL for the hash work.
+    //
+    // RAYON GUARD (mirrors the #692 fix in score.rs::score_block_pairs_arrow).
+    // Unconditional `par_iter().collect()` makes the calling thread wait on rayon's
+    // `LockLatch`; on some Linux runners (ubuntu-latest-xlarge / 8-core EPYC) that
+    // latch wait can futex-park with near-zero progress (issue #688). Bloom's case
+    // is milder than the #688 original -- `bloom_clk_batch` is ONE top-level call
+    // (pprl/protocol.py), not many concurrent ThreadPoolExecutor threads each
+    // re-entering the global rayon pool, which is what starved the workers there --
+    // but the parking risk is untestable in this org's CI (the EPYC runner won't
+    // provision), and for SMALL batches the rayon dispatch is pure overhead over a
+    // sequential loop anyway. So: score in the CALLING thread below a row threshold
+    // (no rayon, no latch), fan out to rayon only above it. `clk_one` is identical
+    // either way, so the emitted CLK sequence is byte-for-byte the same (parity in
+    // tests/test_native_bloom_parity.py). Tune/override via
+    // GOLDENMATCH_NATIVE_RAYON_MIN_BLOOM_ROWS (default 10_000; 0 = always rayon, a
+    // very large value = always sequential).
     let key = hmac_key.as_deref();
+    let rayon_min_rows: usize = std::env::var("GOLDENMATCH_NATIVE_RAYON_MIN_BLOOM_ROWS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(10_000);
     Ok(py.allow_threads(|| {
-        prepared
-            .par_iter()
-            .map(|p| clk_one(p, ngram_size, num_hashes, filter_size, key))
-            .collect()
+        if prepared.len() >= rayon_min_rows {
+            prepared
+                .par_iter()
+                .map(|p| clk_one(p, ngram_size, num_hashes, filter_size, key))
+                .collect()
+        } else {
+            prepared
+                .iter()
+                .map(|p| clk_one(p, ngram_size, num_hashes, filter_size, key))
+                .collect()
+        }
     }))
 }
 
