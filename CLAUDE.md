@@ -2,6 +2,8 @@
 
 Polyglot monorepo: `packages/{python,rust,typescript,dbt,actions}`. Per-package CLAUDE.md files own package-specific context.
 
+**North Star** (the pull that colors every decision): be the tool any developer reaches for *by default* for entity resolution. It is never "done" — defaults are re-earned every release. The full statement + the five decision-test commitments (zero-config, scale-invariant correctness, every-capability-on-every-surface, approach-the-expert, never-black-box) live in `context-network/foundation/project-definition.md`. When two changes compete, take the one that advances it.
+
 ## TypeScript: pnpm + Turborepo (post-2026-05-02 fold)
 - `pnpm@9.15.0` pinned in root `package.json` (exact semver — Corepack rejects `9.x` ranges).
 - Windows: enable Developer Mode for pnpm symlinks. Fallback if `corepack enable` needs admin: `npm i -g pnpm@9.15.0`.
