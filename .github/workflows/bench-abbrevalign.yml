@@ -1,0 +1,76 @@
+# AbbrevAlign vs goldenmatch comparators on the real Leipzig DBLP-ACM corpus.
+# Title ER (held-out CV) + GT-derived venue matching (in-sample + over-merge list).
+# Standalone research artifact (scripts/bench_abbrevalign.py): rapidfuzz + stdlib,
+# no goldenmatch/er-evaluation. workflow_dispatch only.
+#
+# To run: GitHub -> Actions -> "bench-abbrevalign" -> Run workflow.
+name: bench-abbrevalign
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_entities:
+        description: "DBLP-ACM matched entities + singleton negatives to sample (title ER)"
+        required: false
+        default: "200"
+      seed:
+        description: "Sampling seed"
+        required: false
+        default: "7"
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    # Per memory feedback_bench_default_runner.md: benchmark workflows use the
+    # org's larger runner.
+    runs-on: large-new-64GB
+    timeout-minutes: 60
+    env:
+      # DBLP-ACM auto-pulls from Leipzig; override with a mirror if it 404s.
+      GOLDENMATCH_DBLP_ACM_URL: ${{ vars.DBLP_ACM_URL }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Install rapidfuzz
+        run: pip install "rapidfuzz==3.14.5"
+
+      - name: Fetch DBLP-ACM dataset (if needed)
+        run: |
+          set -euo pipefail
+          dst=packages/python/goldenmatch/tests/benchmarks/datasets/DBLP-ACM
+          mkdir -p "$dst"
+          if [ ! -f "$dst/DBLP2.csv" ]; then
+            url="${GOLDENMATCH_DBLP_ACM_URL:-https://dbs.uni-leipzig.de/file/DBLP-ACM.zip}"
+            curl -fSL -o /tmp/dblp-acm.zip "$url"
+            unzip -o /tmp/dblp-acm.zip -d /tmp/dblp-acm-extract
+            cp /tmp/dblp-acm-extract/DBLP2.csv \
+               /tmp/dblp-acm-extract/ACM.csv \
+               /tmp/dblp-acm-extract/DBLP-ACM_perfectMapping.csv \
+               "$dst"/
+          fi
+          ls -lh "$dst"
+
+      - name: Self-test the loader
+        working-directory: packages/python/goldenmatch/scripts
+        run: python bench_abbrevalign.py --dblp-acm --selftest
+
+      - name: Run AbbrevAlign DBLP-ACM benchmark
+        working-directory: packages/python/goldenmatch/scripts
+        run: |
+          python bench_abbrevalign.py --dblp-acm \
+            --max-entities "${{ inputs.max_entities }}" --seed "${{ inputs.seed }}"
+          cat ../examples/forge_runs/abbrevalign_benchmark_dblp_acm.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: abbrevalign-dblp-acm-report
+          path: packages/python/goldenmatch/examples/forge_runs/abbrevalign_benchmark_dblp_acm.md
+          retention-days: 90
