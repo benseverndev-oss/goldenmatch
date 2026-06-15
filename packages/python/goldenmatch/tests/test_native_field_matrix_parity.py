@@ -118,3 +118,38 @@ def test_unknown_scorer_returns_none():
     """Unsupported names fall through to None so the caller stays on rapidfuzz."""
     assert _native_field_matrix(_VALUES, "embedding") is None
     assert _native_field_matrix(_VALUES, "totally_made_up") is None
+
+
+# --- Reversible gate (single-kernel-collapse R2) -----------------------------
+# Field scoring now honors GOLDENMATCH_NATIVE like every other native component.
+# These run only when the wheel is built (module-level importorskip above), which
+# is exactly when there's something to force OFF.
+from goldenmatch.core._native_loader import (  # noqa: E402
+    native_dispatch_report,
+    reset_native_dispatch_log,
+)
+
+
+def test_gate_zero_forces_pure_even_with_kernel_present(monkeypatch):
+    """GOLDENMATCH_NATIVE=0 must force the pure path -- the reversibility the
+    long-standing ungated kernel default lacked. With the wheel importable, the
+    kernel WOULD answer; the gate must still return None so the caller runs
+    rapidfuzz."""
+    monkeypatch.setenv("GOLDENMATCH_NATIVE", "0")
+    assert _native_field_matrix(_VALUES, "levenshtein") is None
+
+
+def test_gate_auto_uses_kernel_and_is_telemetered(monkeypatch):
+    """auto/unset routes field scoring to the kernel (field_scoring is signed off)
+    and records the dispatch so telemetry reflects it."""
+    monkeypatch.setenv("GOLDENMATCH_NATIVE", "auto")
+    reset_native_dispatch_log()
+    mat = _native_field_matrix(_VALUES, "levenshtein")
+    assert mat is not None
+    assert native_dispatch_report().get("field_scoring", {}).get("native", 0) >= 1
+
+
+def test_gate_require_uses_kernel(monkeypatch):
+    """GOLDENMATCH_NATIVE=1 uses the kernel when the wheel is present."""
+    monkeypatch.setenv("GOLDENMATCH_NATIVE", "1")
+    assert _native_field_matrix(_VALUES, "levenshtein") is not None
