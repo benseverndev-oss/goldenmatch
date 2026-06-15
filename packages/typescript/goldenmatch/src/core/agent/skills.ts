@@ -35,9 +35,9 @@ async function resolveTable(
   if (typeof path === "string") {
     return ctx.loadTable(path);
   }
-  // No inline rows and no path: still try loadTable so an injected loader can
+  // No inline rows and no path: still call loadTable so an injected loader can
   // raise the surface-specific "no loader" error (matches the test contract).
-  return ctx.loadTable(typeof path === "string" ? path : "");
+  return ctx.loadTable("");
 }
 
 // ---------------------------------------------------------------------------

@@ -189,8 +189,13 @@ export class AgentSession {
     };
     this.reasoning = reasoning;
 
-    // Stateless dispatch path: telemetry not readable cross-request.
-    this.lastTelemetry = { available: false, source: "deduplicate" };
+    // Explicit config => the controller didn't fire; null the telemetry so a
+    // prior auto-config blob can't leak (Python parity, agent.py:476-481). On
+    // the auto path the TS dedupe() doesn't surface the controller history, so
+    // we keep the documented {available:false} simplification (telemetry is not
+    // asserted by the deduplicate parity fixture).
+    this.lastTelemetry =
+      config !== undefined ? null : { available: false, source: "deduplicate" };
 
     return {
       results: result,
