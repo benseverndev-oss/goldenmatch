@@ -822,6 +822,13 @@ def create_server(file_paths: list[str] | None = None, config_path: str | None =
 
     @server.call_tool()
     async def call_tool(name: str, arguments: dict) -> list[TextContent]:
+        # Anonymous, opt-in usage event: the TOOL NAME only -- never `arguments`
+        # (which can carry user data). No-op unless GOLDENMATCH_ANALYTICS=1.
+        try:
+            from goldenmatch.core.analytics import capture
+            capture("mcp_tool_call", {"surface": "mcp", "tool": name})
+        except Exception:  # noqa: BLE001 - analytics is never load-bearing
+            pass
         # Delegate agent-level tools to the agent handler
         if name in _AGENT_TOOL_NAMES:
             return handle_agent_tool(name, arguments)
