@@ -54,6 +54,22 @@ require a datafusion 53 -> 5x major upgrade (heavy breaking changes in datafusio
 + the young `datafusion-ffi` surface) for zero functional payoff. Explicitly
 declined.
 
+## UPDATE (2026-06-15, CI probe finding): arrow 59 requires a pyo3 upgrade
+
+A CI probe (graph-core + native bumped to arrow 59, pushed as draft PR #1003)
+revealed the real cost is NOT arrow API changes -- it is a **pyo3 version
+coupling**. native failed to build with `error: failed to select a version for
+pyo3-ffi`: arrow 59's `pyarrow` feature requires pyo3 >= 0.25, which collides
+with native's pin `pyo3 = ">=0.23.3, <0.25"`.
+
+Consequence: arrow 59 drags a **pyo3 0.25/0.26 upgrade + numpy-crate bump + a
+pyo3 API migration** (the `Bound<>` API changed across 0.23 -> 0.25/0.26) into
+**every pyarrow crate** (native, analysis-native, goldencheck-native,
+native-flow). graph-core (pyo3-free) bumps arrow cleanly. So the per-crate recipe
+below gains "bump pyo3 + numpy to the arrow-59-compatible line and migrate the
+pyo3 API" for the four pyarrow crates. The exact pyo3 API migration surface is
+being enumerated via CI (the local Rust toolchain is broken on this box).
+
 ## Approach: two phases
 
 ### Phase 1 -- the coupled pair (one PR)
