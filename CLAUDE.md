@@ -49,6 +49,9 @@ Polyglot monorepo: `packages/{python,rust,typescript,dbt,actions}`. Per-package 
 ## CI poll loop pattern
 `gh pr checks <N> | grep -qv pending` is WRONG (returns true on the first non-pending line). Use `while gh pr checks <N> | grep -qE "pending|in_progress"; do sleep 30; done`.
 
+## Merge queue: `main` serializes merges FIFO (since 2026-06-15)
+`main`'s `protect-main` ruleset has a native merge queue (squash, ALLGREEN, max 5 in flight, `min_entries_to_merge=1` so a lone PR forms a group immediately, 5-min batch wait, 60-min check timeout). Strict "branch up to date" is OFF — the queue rebases each entry onto the new `main` itself. To land a PR: `gh pr merge <N> --auto --squash` (or "Merge when ready") then STOP — the queue runs CI on the `merge_group` event and merges FIFO unattended; no manual update-branch cascade. CI wiring landed in PR #943: the `merge_group` trigger plus a `force_all` flag (`ci.yml` `flags` step) that forces the FULL job matrix on every queued entry — so a queued entry is always validated against `main`, never path-skipped. The single gate is still `ci-required`; non-required UNSTABLE lanes don't stall the queue. Rollback (~60s): re-PUT the ruleset dropping the `merge_queue` rule + setting `strict_required_status_checks_policy:true` (`gh api -X PUT repos/benseverndev-oss/goldenmatch/rulesets/16264681`); the `merge_group` wiring is harmless when the queue is off.
+
 ## `gh pr merge` under GitHub 502
 First call may 502; second says "Merge already in progress" while PR state stays `OPEN`. The merge lands asynchronously seconds later. Poll with `until [ "$(gh pr view N --json state -q .state)" != "OPEN" ]; do sleep 10; gh pr merge N --squash --delete-branch 2>/dev/null || true; done` rather than treating the second error as terminal.
 

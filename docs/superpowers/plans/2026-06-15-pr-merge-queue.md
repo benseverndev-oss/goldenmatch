@@ -12,6 +12,23 @@
 
 ---
 
+## Implementation outcome (2026-06-15)
+
+Executed with one major finding: **Task 1 (the `ci.yml` `merge_group` wiring) was
+already shipped on `main` by PR #943** — caught by reading live `main` before
+building, so the planned worktree edit was a no-op. PR #943 took a *safer*
+approach than this plan proposed: rather than teaching `paths-filter` to diff the
+merge-group range, it forces the FULL job matrix on every `merge_group` entry via
+a `force_all` flag (the `ci.yml` `flags` step), so a queued entry is never
+path-skipped (zero under-test risk). The only real remaining work was **Task 3** —
+adding the `merge_queue` rule to the `protect-main` ruleset and flipping
+`strict_required_status_checks_policy` to `false`. Done 2026-06-15 via
+`gh api -X PUT` (rollback artifact = the pre-change ruleset JSON). Tasks 4
+(validation) and 5 (docs) followed. The task bodies below are retained as the
+historical plan of record; Task 1 in particular is moot.
+
+---
+
 ## Critical ordering constraint (read first)
 
 The ruleset flip (Task 3) MUST happen AFTER the `ci.yml` change (Task 1) is merged
