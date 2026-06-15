@@ -1,0 +1,7 @@
+id: ts-no-empty-catch
+valid:
+  - "try { f(); } catch (e) { log(e); }"
+  - "try { f(); } catch { return null; }"
+invalid:
+  - "try { f(); } catch { }"
+  - "try { f(); } catch (e) { }"

@@ -1,0 +1,14 @@
+id: rust-no-todo-unimplemented
+snapshots:
+  fn f() -> i32 { todo!() }:
+    labels:
+    - source: todo!()
+      style: primary
+      start: 16
+      end: 23
+  fn f() { unimplemented!("later") }:
+    labels:
+    - source: unimplemented!("later")
+      style: primary
+      start: 9
+      end: 32

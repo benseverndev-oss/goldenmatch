@@ -24,7 +24,7 @@ serde_json = "1"
 anyhow = "1"
 redb = "2"
 sha2 = "0.10"
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "8", default-features = false, features = ["deflate"] }
 
 [profile.release]
 opt-level = 3

@@ -1,14 +1,9 @@
 """Tests for scale-aware backend selection in auto-config.
 
-Phase 4 of the controller v3 planner promoted ``_scale_aware_backend``'s
-PR-#239 env-var behavior to a first-class planner rule (rule_chunked +
-rule_user_override etc). The original function is now a frozen shim that
-still returns PR-#239's single-threshold answer for external callers
-during the deprecation window; it does NOT delegate to the planner.
+Phase 4 of the controller v3 planner promoted PR-#239's env-var behavior
+to first-class planner rules (rule_chunked, rule_user_override, etc).
 
 Tests split into:
-- ``TestScaleAwareBackendShim`` -- unit tests for the frozen shim. Same
-  spec as PR #239; here to prove the shim still behaves predictably.
 - ``TestPlannerBackendSelection`` -- planner-level tests using
   ``apply_planner_rules`` directly. These are the authoritative
   source of truth for "which backend gets picked at scale X".
@@ -18,14 +13,8 @@ Tests split into:
 """
 from __future__ import annotations
 
-import warnings
-
 import polars as pl
 import pytest
-from goldenmatch.core.autoconfig import (
-    _AUTOCONFIG_BACKEND_DEFAULT_THRESHOLD,
-    _scale_aware_backend,
-)
 from goldenmatch.core.autoconfig_planner import apply_planner_rules
 from goldenmatch.core.autoconfig_planner_rules import DEFAULT_RULES
 from goldenmatch.core.complexity_profile import (
@@ -76,66 +65,6 @@ def _profile(n_rows: int = 1000, total_comparisons: int = 100) -> ComplexityProf
 
 def _runtime(ram_gb: float = 32.0, cpus: int = 8) -> RuntimeProfile:
     return RuntimeProfile(available_ram_gb=ram_gb, cpu_count=cpus, disk_free_gb=100.0)
-
-
-@pytest.fixture(autouse=True)
-def _silence_deprecation_warnings():
-    """Shim emits DeprecationWarning; tests assert behavior, not the warning."""
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        yield
-
-
-class TestScaleAwareBackendShim:
-    """Unit tests for the frozen PR-#239 shim. Same behavior as before
-    Phase 4; the shim is kept exportable for one release as deprecation
-    cushion. The planner is now the source of truth for production paths."""
-
-    def test_small_data_returns_none(self):
-        assert _scale_aware_backend(0) is None
-        assert _scale_aware_backend(100) is None
-        assert _scale_aware_backend(_AUTOCONFIG_BACKEND_DEFAULT_THRESHOLD - 1) is None
-
-    def test_large_data_returns_duckdb(self):
-        assert _scale_aware_backend(_AUTOCONFIG_BACKEND_DEFAULT_THRESHOLD) == "duckdb"
-        assert _scale_aware_backend(5_000_000) == "duckdb"
-        assert _scale_aware_backend(100_000_000) == "duckdb"
-
-    def test_threshold_env_override(self, monkeypatch):
-        monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_BACKEND_THRESHOLD", "10000")
-        assert _scale_aware_backend(9_999) is None
-        assert _scale_aware_backend(10_000) == "duckdb"
-
-    def test_threshold_env_malformed_falls_back(self, monkeypatch):
-        monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_BACKEND_THRESHOLD", "not-a-number")
-        assert _scale_aware_backend(100) is None
-        assert _scale_aware_backend(_AUTOCONFIG_BACKEND_DEFAULT_THRESHOLD) == "duckdb"
-
-    def test_backend_env_disables(self, monkeypatch):
-        for token in ("0", "false", "disabled", ""):
-            monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_BACKEND", token)
-            assert _scale_aware_backend(50_000_000) is None
-
-    def test_backend_env_none_token(self, monkeypatch):
-        monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_BACKEND", "none")
-        assert _scale_aware_backend(50_000_000) is None
-
-    def test_backend_env_forces_explicit(self, monkeypatch):
-        monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_BACKEND", "duckdb")
-        assert _scale_aware_backend(10) == "duckdb"
-
-    def test_backend_env_passes_through_unknown(self, monkeypatch):
-        monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_BACKEND", "ray")
-        assert _scale_aware_backend(10) == "ray"
-
-    def test_shim_emits_deprecation_warning(self):
-        """The shim is deprecated; new code should use apply_planner_rules."""
-        with warnings.catch_warnings(record=True) as recorded:
-            warnings.simplefilter("always")
-            _scale_aware_backend(100)
-        assert any(
-            issubclass(w.category, DeprecationWarning) for w in recorded
-        ), "shim should emit DeprecationWarning"
 
 
 class TestPlannerBackendSelection:

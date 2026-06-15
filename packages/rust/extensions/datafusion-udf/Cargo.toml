@@ -22,7 +22,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 # Versions mirror apache/datafusion-python @ 53.0.0's workspace pins verbatim:
-# datafusion-* = 53, arrow stack = 58, pyo3 = 0.28. These are the exact
+# datafusion-* = 53, arrow stack = 58, pyo3 = 0.29. These are the exact
 # versions the canonical datafusion-ffi-example compiles against, so the
 # FFI_ScalarUDF / ScalarUDFImpl / PyCapsule contract lines up by construction.
 datafusion-common = { version = "53", default-features = false }
@@ -48,10 +48,19 @@ goldenembed = { path = "../goldenembed" }
 # extension-module: don't link libpython (this .so is imported BY CPython).
 # abi3-py311: one stable-ABI artifact spans CPython 3.11-3.13 (matches the
 # sibling `native` crate; the example uses abi3-py310 but we floor at 3.11).
-pyo3 = { version = "0.28", features = ["extension-module", "abi3", "abi3-py311"] }
+pyo3 = { version = "0.29", features = ["extension-module", "abi3", "abi3-py311"] }
+# Pin to dodge an upstream brotli 8.0.3 build break (2026-06): brotli uses
+# alloc-no-stdlib 2.x, but its deps alloc-stdlib 0.2.3 + brotli-decompressor
+# 5.0.2 bumped to alloc-no-stdlib 3.0.0 -- linking two semver-incompatible
+# versions into brotli (rustc E0277, "could not compile brotli"). Pin both back
+# to their 2.x-using releases so alloc-no-stdlib unifies at 2.0.4. Cargo.lock is
+# gitignored for this crate (CI resolves fresh), so these explicit pins ARE the
+# fix. Neither is used directly. Remove once brotli/parquet upstream is consistent.
+alloc-stdlib = "=0.2.2"
+brotli-decompressor = "=5.0.1"
 
 [build-dependencies]
-pyo3-build-config = "0.28"
+pyo3-build-config = "0.29"
 
 [profile.release]
 opt-level = 3

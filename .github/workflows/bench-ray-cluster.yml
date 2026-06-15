@@ -51,6 +51,22 @@ on:
         description: "Number of worker nodes (head is always +1)"
         required: false
         default: "3"
+      distributed:
+        description: "1 = run the REAL Phase-5 distributed engine (PIPELINE=2, block-shuffle + randomized-contraction WCC) and oracle-score it; 0 = the in-memory backend=ray path (legacy; does NOT distribute)"
+        required: false
+        default: "0"
+      wcc_scratch:
+        description: "Shared gs:// scratch for the distributed WCC + assignments (required when distributed=1). Cluster nodes need storage access to this bucket."
+        required: false
+        default: "gs://gm-phase5-844-golden490919/qis-dist"
+      partitions:
+        description: "Ray Dataset partition count for the distributed run"
+        required: false
+        default: "64"
+      head_machine:
+        description: "Head node machine type (the driver generates the full frame in memory; highmem for distributed runs). 100M: n2-highmem-32 (256 GB); 200M: n2-highmem-64 (512 GB)."
+        required: false
+        default: "n2-highmem-32"
 
 permissions:
   contents: read
@@ -67,9 +83,9 @@ jobs:
       CLUSTER_NAME: "goldenmatch-bench-${{ github.run_id }}"
       RAY_RELEASE: "2.43.0"
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
 
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
         with:
           python-version: "3.12"
 
@@ -80,8 +96,16 @@ jobs:
         # one place instead of accumulating GH-Actions copies.
         run: |
           pip install --upgrade pip
-          pip install "ray[default]==${{ env.RAY_RELEASE }}" "google-api-python-client"
+          # Install the LATEST Ray (matches CI's `ray[default]>=2.0`), then render
+          # the cluster's docker image to the SAME version so launcher==cluster and
+          # both carry the Ray Data API the distributed pipeline needs
+          # (`repartition(num_partitions, keys=[...])`, added after 2.43 -- the old
+          # pin made the golden/WCC steps TypeError on `keys`).
+          pip install "ray[default]" "google-api-python-client"
           pip install pyyaml
+          RAY_VER=$(python -c "import ray; print(ray.__version__)")
+          echo "RAY_VER=$RAY_VER" >> "$GITHUB_ENV"
+          echo "Resolved Ray version: $RAY_VER (launcher + cluster docker image)"
           # Infisical CLI: official apt repo. The 0.43.x series ships
           # `infisical login --method=universal-auth` and
           # `infisical secrets get --plain` which we both use.
@@ -146,8 +170,43 @@ jobs:
           sed -i "s|GOLDENMATCH_GIT_SHA_PLACEHOLDER|${{ github.sha }}|g" .ray/cluster-gce.yaml
           sed -i "s|cluster_name: goldenmatch-bench$|cluster_name: ${{ env.CLUSTER_NAME }}|" .ray/cluster-gce.yaml
           sed -i "s|max_workers: 3$|max_workers: ${{ inputs.max_workers }}|" .ray/cluster-gce.yaml
+          sed -i "s|GOLDENMATCH_HEAD_MACHINE_PLACEHOLDER|${{ inputs.head_machine }}|g" .ray/cluster-gce.yaml
+          # Pin the cluster docker image to the launcher's resolved Ray version so
+          # the cluster has the same Ray Data API (repartition keys=) as the code.
+          sed -i "s|GOLDENMATCH_RAY_VERSION_PLACEHOLDER|${RAY_VER}|g" .ray/cluster-gce.yaml
           echo "----- Rendered cluster.yaml -----"
-          head -40 .ray/cluster-gce.yaml
+          head -50 .ray/cluster-gce.yaml
+
+      - name: Pre-flight - sweep orphaned bench instances
+        # #958 part 1: stale `ray-goldenmatch-bench-*` instances from prior
+        # cancelled runs (the `ray down`-orphaned worker, see teardown) pile up,
+        # cost money, and eat the GCP CPU/SSD/IP quota that then starves THIS
+        # run's autoscaler so workers silently never launch. Delete bench
+        # instances created before the 120-min job cap -- they cannot belong to
+        # a live run, so this never touches a concurrent bench. Also activates
+        # gcloud for the worker-join check below.
+        run: |
+          set -uo pipefail
+          if [ -z "${GCP_PROJECT_ID:-}" ]; then
+            echo "GCP_PROJECT_ID not in env yet; skipping pre-flight sweep."
+            exit 0
+          fi
+          gcloud auth activate-service-account \
+            --key-file="$GOOGLE_APPLICATION_CREDENTIALS" \
+            --project="$GCP_PROJECT_ID" || true
+          CUTOFF=$(date -u -d '2 hours ago' '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null \
+            || python -c "import datetime; print((datetime.datetime.utcnow()-datetime.timedelta(hours=2)).strftime('%Y-%m-%dT%H:%M:%SZ'))")
+          echo "Sweeping orphaned ray-goldenmatch-bench-* instances created before $CUTOFF ..."
+          gcloud compute instances list \
+            --filter="name~^ray-goldenmatch-bench- AND creationTimestamp<'$CUTOFF'" \
+            --project="$GCP_PROJECT_ID" \
+            --format="value(name,zone)" 2>/dev/null | while read name zone; do
+              if [ -n "$name" ]; then
+                echo "  deleting orphan: $name ($zone)"
+                gcloud compute instances delete "$name" \
+                  --zone="$zone" --project="$GCP_PROJECT_ID" --quiet || true
+              fi
+            done
 
       - name: Ray up
         # Provisions head + workers, installs goldenmatch on each via
@@ -155,10 +214,51 @@ jobs:
         run: |
           ray up -y --no-config-cache .ray/cluster-gce.yaml
 
+      - name: Verify workers joined
+        # #958 part 1: the autoscaler can loop "Adding 1 node -> Resized to N
+        # CPUs" WITHOUT ever launching workers (quota exhausted), and the run
+        # then crawls HEAD-ONLY with no error for the whole job. Fail LOUDLY if
+        # the expected workers don't appear within the deadline instead of
+        # wasting an hour. Counting GCE worker instances is more reliable than
+        # parsing `ray status` across Ray versions.
+        run: |
+          set -uo pipefail
+          if [ -z "${GCP_PROJECT_ID:-}" ]; then
+            echo "GCP_PROJECT_ID not in env; cannot verify workers -- skipping."
+            exit 0
+          fi
+          EXPECTED=${{ inputs.max_workers }}
+          DEADLINE=$(( $(date +%s) + 600 ))   # 10 min for workers to come up
+          while true; do
+            N=$(gcloud compute instances list \
+                  --filter="name~^ray-${{ env.CLUSTER_NAME }}-worker AND status=RUNNING" \
+                  --project="$GCP_PROJECT_ID" --format="value(name)" 2>/dev/null \
+                  | wc -l | tr -d ' ')
+            echo "workers RUNNING: ${N}/${EXPECTED}"
+            if [ "${N:-0}" -ge "$EXPECTED" ]; then echo "all $EXPECTED workers up."; break; fi
+            if [ "$(date +%s)" -ge "$DEADLINE" ]; then
+              echo "::error::Only ${N}/${EXPECTED} workers launched within 10 min. The run would proceed HEAD-ONLY (slow). Most common cause: GCP quota (N2 CPUs / SSD / in-use IPs) exhausted in the zone -- check for leftover ray-goldenmatch-bench-* instances and your quota."
+              exit 1
+            fi
+            sleep 30
+          done
+
+      - name: Verify native loaded on a worker
+        # The scoring kernel is the dominant distributed stage; if the native
+        # wheel didn't build on the workers, NATIVE=1 (set in cluster-gce.yaml)
+        # would only RAISE at the first score call -- 20+ min into the run.
+        # Catch it here: ship a check via `ray submit` (same mechanism the bench
+        # uses) that schedules tasks across the cluster and asserts a WORKER
+        # actually loaded goldenmatch._native. Fail loud + tear down rather than
+        # burn a full run scoring in pure Python.
+        run: |
+          set -euo pipefail
+          ray submit .ray/cluster-gce.yaml scripts/verify_cluster_native.py
+
       - name: Submit bench
         # `ray submit` ships the script to the head node and runs it.
         # The script writes its JSON output to /tmp on the head; we
-        # rsync it back via `ray rsync_down` after the run.
+        # rsync it back via `ray rsync-down` after the run.
         #
         # We background a `ray status` poller (every 30s) so the GH
         # live log shows head/worker resource use and per-node state
@@ -187,13 +287,35 @@ jobs:
           # the poller PID and its SSH control-master connections.
           trap "kill $POLLER_PID 2>/dev/null || true" EXIT
 
-          ray submit .ray/cluster-gce.yaml \
-            scripts/quality_invariant_scale.py \
-            -- --rows ${{ inputs.rows }} \
-               --shape ${{ inputs.shape }} \
-               --backend ray \
-               --out "$OUT_REMOTE"
-          ray rsync_down .ray/cluster-gce.yaml \
+          if [ "${{ inputs.distributed }}" = "1" ]; then
+            # REAL Phase-5 distributed engine: PIPELINE=2 (block-shuffle +
+            # randomized-contraction WCC), oracle-scored. Always frozen config.
+            # --wcc-scratch sets GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH on the head
+            # (env vars don't propagate through `ray submit`); it MUST be a shared
+            # gs:// path the cluster nodes can read+write.
+            ray submit .ray/cluster-gce.yaml \
+              scripts/quality_invariant_scale.py \
+              -- --rows ${{ inputs.rows }} \
+                 --shape ${{ inputs.shape }} \
+                 --frozen \
+                 --corruption moderate \
+                 --distributed \
+                 --partitions ${{ inputs.partitions }} \
+                 --wcc-scratch "${{ inputs.wcc_scratch }}/${{ github.run_id }}" \
+                 --out "$OUT_REMOTE"
+          else
+            # Legacy: in-memory backend=ray (does NOT distribute; head-only).
+            ray submit .ray/cluster-gce.yaml \
+              scripts/quality_invariant_scale.py \
+              -- --rows ${{ inputs.rows }} \
+                 --shape ${{ inputs.shape }} \
+                 --backend ray \
+                 --out "$OUT_REMOTE"
+          fi
+          # `rsync-down` (hyphen) -- the latest Ray CLI renamed the underscore
+          # form (`rsync_down`), which silently lost the result JSON even though
+          # the run completed (#958 part 3).
+          ray rsync-down .ray/cluster-gce.yaml \
             "$OUT_REMOTE" ".profile_tmp/qis/qis_${{ inputs.label }}.json"
 
       - name: Upload bench artifact
@@ -228,8 +350,12 @@ jobs:
           gcloud auth activate-service-account \
             --key-file="$GOOGLE_APPLICATION_CREDENTIALS" \
             --project="$GCP_PROJECT_ID" || true
+          # Match BOTH the ray label AND the instance-name prefix. Autoscaler-
+          # launched workers (ray-<cluster>-worker-*) don't always carry the
+          # ray-cluster-name label, so a label-only filter missed exactly the
+          # orphaned worker `ray down` left behind on cancel (#958 part 2).
           gcloud compute instances list \
-            --filter="labels.ray-cluster-name=${{ env.CLUSTER_NAME }}" \
+            --filter="labels.ray-cluster-name=${{ env.CLUSTER_NAME }} OR name~^ray-${{ env.CLUSTER_NAME }}-" \
             --project="$GCP_PROJECT_ID" \
             --format="value(name,zone)" 2>/dev/null | while read name zone; do
               if [ -n "$name" ]; then

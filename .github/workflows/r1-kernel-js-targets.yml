@@ -1,0 +1,246 @@
+# R1 Workstream A — cross-JS-target WASM equivalence (kill-criterion 2).
+#
+# The single-kernel-collapse roadmap's kill-criterion (2) — "WASM can't load
+# reliably across all four JS targets (Node/browser/Workers/Deno) without
+# per-target hacks" — is the LAST R1 gate before any TS default could flip (see
+# context-network/architecture/single-kernel-collapse-R1-plan.md +
+# decisions/0016-single-kernel-collapse-spike.md). This workflow PROBES it: it
+# builds the `score-wasm` kernel once and runs the SAME pure-TS-vs-kernel 4dp
+# equivalence assertion (the spike's `tests/spike/kernel-equivalence*` arm) under
+# each JS runtime:
+#
+#   node     — vitest (already proven in the spike; re-run here for one report).
+#   deno     — `deno test` importing the built artifact + the universal base64 loader.
+#   browser  — vitest browser-mode (Playwright/chromium) — real browser WASM.
+#   workers  — @cloudflare/vitest-pool-workers (workerd) — THE edge target the
+#              pure-TS scorer was written for; highest signal.
+#
+# Each job writes a per-target PASS/FAIL row to $GITHUB_STEP_SUMMARY.
+#
+# ADDITIVE + MANUAL ONLY: `workflow_dispatch` (no push / pull_request trigger), so
+# it adds zero load to normal CI. It flips NO default (the TS WASM path stays
+# opt-in via `enableWasm()`; pure-TS stays the default + fallback), modifies no
+# product source, and builds the SAME `score-wasm` crate the `wasm_score` CI lane
+# builds. Mirrors r1-kernel-wheels.yml's structure/comments (Workstream B).
+name: r1-kernel-js-targets
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Tag or commit to run against (default: the triggering ref)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+env:
+  # The goldenmatch TS package dir + the score-wasm build script — one source for
+  # every job, the SAME artifact the `wasm_score` lane in ci.yml builds.
+  GM_DIR: packages/typescript/goldenmatch
+  WASM_BUILD: packages/rust/extensions/score-wasm/build_wasm.sh
+
+jobs:
+  # node — the spike's proven arm, re-run here so the cross-target report has a
+  # Node row alongside the other three. Pure vitest, no extra runtime.
+  node:
+    name: node (vitest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/score-wasm
+      - uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093  # v6.0.8
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build score-wasm artifact (also emits score_wasm_base64.js)
+        run: bash "$WASM_BUILD"
+      - name: Build shared wasm-runtime (the harness imports goldenmatch-wasm-runtime)
+        run: pnpm --filter goldenmatch-wasm-runtime build
+      - name: Node equivalence (pure-TS == kernel @ 4dp, un-skipped)
+        id: run
+        run: |
+          set -euo pipefail
+          echo "::group::node spike"
+          if pnpm --filter goldenmatch exec vitest run tests/spike/kernel-equivalence.test.ts; then
+            RESULT="PASS"
+          else
+            RESULT="FAIL"
+          fi
+          echo "::endgroup::"
+          {
+            echo "## R1-A cross-JS-target WASM — node"
+            echo ""
+            echo "| target | runtime | result |"
+            echo "|---|---|---|"
+            echo "| node | $(node --version) | ${RESULT} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          [ "$RESULT" = "PASS" ]
+
+  # deno — `deno test` over the built artifact + the universal base64 loader. The
+  # base64-inline path is the universal strategy (no fs/fetch/import.meta.url asset
+  # resolution); Deno exercises it natively (atob is a Deno global).
+  deno:
+    name: deno (deno test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/score-wasm
+      - uses: denoland/setup-deno@e95548e56dfa95d4e1a28d6f422fafe75c4c26fb  # v2.0.3
+        with:
+          deno-version: v2.x
+      - name: Build score-wasm artifact (also emits score_wasm_base64.js)
+        run: bash "$WASM_BUILD"
+      - name: Deno equivalence (pure-TS == kernel @ 4dp via universal base64 loader)
+        run: |
+          set -euo pipefail
+          cd "$GM_DIR"
+          # --no-check: the package tsc already typechecks the shared core; Deno's
+          # default lib set doesn't expose the `WebAssembly` namespace type, and this
+          # is a RUNTIME equivalence check, not a Deno type gate.
+          echo "::group::deno test"
+          if deno test --no-check --allow-read tests/spike/deno-kernel-equivalence.ts; then
+            RESULT="PASS"
+          else
+            RESULT="FAIL"
+          fi
+          echo "::endgroup::"
+          {
+            echo "## R1-A cross-JS-target WASM — deno"
+            echo ""
+            echo "| target | runtime | result |"
+            echo "|---|---|---|"
+            echo "| deno | $(deno --version | head -1) | ${RESULT} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          [ "$RESULT" = "PASS" ]
+
+  # browser — vitest browser mode (Playwright/chromium): real-browser WASM
+  # instantiation + the universal base64 loader (atob, no asset fetch). Reuses the
+  # Playwright toolchain the repo's web_ui_e2e lane already runs.
+  browser:
+    name: browser (playwright/chromium)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/score-wasm
+      - uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093  # v6.0.8
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Browser-mode tooling is NOT a committed devDependency (it would bloat every
+      # default install); it's installed ad-hoc here. Pin the provider to the vitest
+      # line (4.1) — vitest 4 moved browser.provider to a factory from
+      # @vitest/browser-playwright (see vitest.browser.config.ts).
+      - name: Install browser-mode tooling
+        run: |
+          pnpm --filter goldenmatch add -D \
+            @vitest/browser@4.1.8 @vitest/browser-playwright@^4.1.8 playwright@^1.60.0
+      - name: Install chromium
+        run: pnpm --filter goldenmatch exec playwright install --with-deps chromium
+      - name: Build score-wasm artifact (also emits score_wasm_base64.js)
+        run: bash "$WASM_BUILD"
+      - name: Build shared wasm-runtime
+        run: pnpm --filter goldenmatch-wasm-runtime build
+      - name: Browser equivalence (pure-TS == kernel @ 4dp in real chromium)
+        run: |
+          set -euo pipefail
+          cd "$GM_DIR"
+          echo "::group::browser spike"
+          if pnpm exec vitest run --config vitest.browser.config.ts; then
+            RESULT="PASS"
+          else
+            RESULT="FAIL"
+          fi
+          echo "::endgroup::"
+          {
+            echo "## R1-A cross-JS-target WASM — browser"
+            echo ""
+            echo "| target | runtime | result |"
+            echo "|---|---|---|"
+            echo "| browser | chromium (playwright) | ${RESULT} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          [ "$RESULT" = "PASS" ]
+
+  # workers — @cloudflare/vitest-pool-workers (workerd) — THE edge target. workerd
+  # BANS runtime WASM codegen (instantiate/Module-from-bytes), so the Workers path
+  # uses a build-time CompiledWasm `.wasm?module` import (the pool's convention),
+  # NOT the base64-bytes universal path the other targets use. This is the
+  # highest-signal probe: if it can't load the kernel without a per-target hack,
+  # kill-criterion (2) is at risk for the edge case pure-TS exists for.
+  workers:
+    name: workers (workerd)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/score-wasm
+      - uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093  # v6.0.8
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # The Workers pool is NOT a committed devDependency; install ad-hoc. Pin to
+      # the vitest-4-compatible 0.16 line (it exposes the cloudflareTest() plugin,
+      # see vitest.workers.config.ts).
+      - name: Install Workers pool (workerd)
+        run: pnpm --filter goldenmatch add -D @cloudflare/vitest-pool-workers@^0.16.15
+      - name: Build score-wasm artifact (also emits score_wasm_base64.js)
+        run: bash "$WASM_BUILD"
+      - name: Build shared wasm-runtime
+        run: pnpm --filter goldenmatch-wasm-runtime build
+      - name: Workers equivalence (pure-TS == kernel @ 4dp in workerd)
+        run: |
+          set -euo pipefail
+          cd "$GM_DIR"
+          echo "::group::workers spike"
+          if pnpm exec vitest run --config vitest.workers.config.ts; then
+            RESULT="PASS"
+          else
+            RESULT="FAIL"
+          fi
+          echo "::endgroup::"
+          {
+            echo "## R1-A cross-JS-target WASM — workers"
+            echo ""
+            echo "| target | runtime | result |"
+            echo "|---|---|---|"
+            echo "| workers | workerd (vitest-pool-workers) | ${RESULT} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          [ "$RESULT" = "PASS" ]

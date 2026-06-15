@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
@@ -36,6 +37,23 @@ logger = logging.getLogger(__name__)
 # subsequent failures for the same key are silent and short-circuit before
 # re-invoking the failing scorer at all.
 _NE_BROKEN: set[tuple[str, str]] = set()
+# `_NE_BROKEN` is mutated from the ThreadPoolExecutor block-scoring workers
+# (`score_blocks_parallel` / `_columnar`). The GIL keeps the set itself
+# consistent, but it is a PROCESS global: without a reset, a transient or
+# config-specific NE failure in one dedupe would stay "broken" for every later
+# dedupe in the same process -- a real leak in a long-lived MCP/A2A server. The
+# scoring entry points call `reset_ne_broken()` (single-threaded, before
+# fan-out) so each run re-evaluates NE freshly. The lock guards the writes (and
+# matters on free-threaded/no-GIL builds where `set` ops are no longer atomic).
+_NE_BROKEN_LOCK = threading.Lock()
+
+
+def reset_ne_broken() -> None:
+    """Clear the per-process record of NE ``(scorer, field)`` entries that
+    failed once. Called at the start of each scoring run so a broken NE entry
+    from a prior dedupe doesn't silently skip a valid one in the next."""
+    with _NE_BROKEN_LOCK:
+        _NE_BROKEN.clear()
 
 
 def _emit_scoring_profile(
@@ -193,7 +211,8 @@ def _apply_negative_evidence(matchkey: MatchkeyConfig, pair: dict) -> float:
             val_b = apply_transforms(val_b, ne.transforms)
             sim = score_field(val_a, val_b, ne.scorer)
         except (ValueError, KeyError) as exc:
-            _NE_BROKEN.add(ne_key)
+            with _NE_BROKEN_LOCK:
+                _NE_BROKEN.add(ne_key)
             logger.warning(
                 "auto-config: NE scorer '%s' for field '%s' not registered or failed: %s; "
                 "skipping (further pairs with this NE entry will be silently skipped)",
@@ -201,7 +220,8 @@ def _apply_negative_evidence(matchkey: MatchkeyConfig, pair: dict) -> float:
             )
             continue
         except Exception as exc:
-            _NE_BROKEN.add(ne_key)
+            with _NE_BROKEN_LOCK:
+                _NE_BROKEN.add(ne_key)
             logger.warning(
                 "auto-config: NE scoring of field '%s' raised %s; "
                 "skipping (further pairs with this NE entry will be silently skipped)",
@@ -770,9 +790,10 @@ def find_fuzzy_matches(
             per the Phase 1 spec); the non-hot branches build their
             filtered result list then convert once at the boundary via
             ``pairs_list_to_df`` (Task 1.1, #623). Default False keeps
-            the legacy ``list[tuple]`` contract for the one-release
-            deprecation window. The arg is keyword-only via the ``*``
-            marker so legacy callers don't accidentally pass it.
+            the legacy ``list[tuple]`` contract as the default opt-in
+            path alongside the columnar output path. The arg is
+            keyword-only via the ``*`` marker so legacy callers don't
+            accidentally pass it.
 
     Returns:
         ``list[tuple[int, int, float]]`` by default (legacy contract).
@@ -789,8 +810,8 @@ def find_fuzzy_matches(
     # When ``_emit_dataframe`` is True every branch (early-empty,
     # pre_scored_pairs, NE-penalty, exclude_pairs, hot path) returns a
     # ``pl.DataFrame`` with ``PAIR_STREAM_SCHEMA``; otherwise the legacy
-    # ``list[tuple]`` (deprecation window). These two helpers keep the
-    # branch bodies readable and the conversion in one place.
+    # ``list[tuple]`` path (permanent opt-in, default). These two helpers
+    # keep the branch bodies readable and the conversion in one place.
     def _emit_empty() -> list[tuple[int, int, float]] | pl.DataFrame:
         return pl.DataFrame(schema=PAIR_STREAM_SCHEMA) if _emit_dataframe else []
 
@@ -1048,8 +1069,8 @@ def _score_one_block(
     When True the return is a ``pl.DataFrame`` (``PAIR_STREAM_SCHEMA``)
     and the ``across_files_only`` cross-source filter is applied via a
     Polars ``.filter()`` on the frame rather than a Python list
-    comprehension. Default False keeps the legacy list contract for the
-    deprecation window.
+    comprehension. Default False keeps the legacy list contract as the
+    permanent opt-in alongside the default ``list[tuple]`` path.
 
     NOTE (Wave 3 convergence): the ``_emit_dataframe=True`` path duplicates the
     across-files Polars-filter logic in ``_score_one_block_columnar`` below. They
@@ -1092,7 +1113,7 @@ def _score_one_block(
             )
         return pairs
 
-    # Legacy list path (deprecation window).
+    # Legacy list path (permanent opt-in alongside the default ``list[tuple]`` path).
     assert isinstance(pairs, list)
 
     if across_files_only and source_lookup:
@@ -1168,6 +1189,8 @@ def score_blocks_parallel(
     Returns:
         All fuzzy pairs found across blocks.
     """
+    # Fresh per run: don't inherit a prior dedupe's known-broken NE entries.
+    reset_ne_broken()
     if max_workers is None:
         max_workers = _DEFAULT_MAX_WORKERS
     if not blocks:
@@ -1575,6 +1598,8 @@ def score_blocks_columnar(
     Returns:
         Polars DataFrame with ``PAIR_STREAM_SCHEMA`` shape.
     """
+    # Fresh per run: don't inherit a prior dedupe's known-broken NE entries.
+    reset_ne_broken()
     if max_workers is None:
         max_workers = _DEFAULT_MAX_WORKERS
     if not blocks:

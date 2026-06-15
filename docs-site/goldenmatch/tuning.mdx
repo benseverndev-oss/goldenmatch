@@ -1,0 +1,444 @@
+---
+title: "Tuning & opt-ins"
+description: "The single reference for every GoldenMatch runtime knob: native acceleration, backend selection, the distributed pipeline, perf opt-ins, and every GOLDENMATCH_* environment variable — what each does, its default, and when to use or avoid it."
+keywords: ["environment variables", "tuning", "opt-in", "native", "GOLDENMATCH_NATIVE", "backend", "ray", "distributed", "scale", "performance", "configuration"]
+---
+
+This is the one place that lists every runtime knob GoldenMatch reads — native acceleration, backend selection, the distributed pipeline, the prep/scoring perf opt-ins, and the full `GOLDENMATCH_*` environment-variable table. For each, you get **what it does, its default, and when to set it (or leave it alone)**.
+
+If you are tuning a large run and just want the answer, jump to [Recommended setups](#recommended-setups). If something ran far slower than you expected, read [Gotchas that cost a day](#gotchas-that-cost-a-day) first — every item there is a real footgun.
+
+<Note>
+  Most GoldenMatch knobs are environment variables, not config fields, because they switch a code path (native vs Python, in-memory vs distributed) rather than describe your data. Data-shape settings — matchkeys, blocking keys, golden rules — live in [Configuration](/goldenmatch/configuration). This page is the operational layer on top of that.
+</Note>
+
+## Recommended setups
+
+You almost never need to set anything for correctness — auto-config and the planner choose sane defaults. These blocks are about **speed at scale** and **reproducibility**, not behavior.
+
+### Local / interactive (up to ~500K rows)
+
+Set nothing. Zero-config is the supported path. If you want the compiled kernels for a measurable speed-up on the scoring/clustering hot loops, install the optional native wheel:
+
+```bash
+pip install goldenmatch[native]
+```
+
+With the wheel present, the default `GOLDENMATCH_NATIVE=auto` already runs the signed-off kernels (clustering, block scoring, pair ops, hashing, featurize) natively. You do not need to set `GOLDENMATCH_NATIVE=1`.
+
+### Single box at scale (1M–200M rows, 16-core / 64 GB class)
+
+```bash
+# Make a missing/broken native wheel a LOUD error instead of a silent slow fallback.
+export GOLDENMATCH_NATIVE=1
+# Turn on the Polars-native address-normalize fast path (skips the per-row Python plugin).
+export GOLDENMATCH_NATIVE_ADDRESS_NORMALIZE=1
+# Reproducible runs: don't read cross-run auto-config memory.
+export GOLDENMATCH_AUTOCONFIG_MEMORY=0
+# These two are already ON by default; set them explicitly in a bench harness for the record.
+export GOLDENMATCH_BUCKET_SLIM_PROJECTION=1
+export GOLDENMATCH_GOLDEN_SLIM_MULTIDF=1
+# Windows only: skip the Polars CPU probe that can hang at import.
+# export POLARS_SKIP_CPU_CHECK=1
+```
+
+The planner picks `backend=bucket` for this lane automatically when the native kernel is enabled. This is the exact env used by the quality-invariant scale ladder (1K → 100M), so it is the validated single-box recipe.
+
+<Warning>
+  **Setting `backend="ray"` does NOT distribute the run.** On its own it falls back to an in-memory path that materializes the whole frame on the driver. Real distribution needs `GOLDENMATCH_DISTRIBUTED_PIPELINE=2` plus a Ray Dataset input — see [Distributed pipeline](#distributed-pipeline) and [Gotchas](#gotchas-that-cost-a-day). At single-box scale, prefer `bucket`.
+</Warning>
+
+### Distributed (Ray cluster, 50M+ rows)
+
+```bash
+pip install goldenmatch[ray]
+export GOLDENMATCH_DISTRIBUTED_PIPELINE=2     # Phase 5 streaming — the real distributed path
+export GOLDENMATCH_ENABLE_DISTRIBUTED_RAY=1   # let the planner pick ray for backend selection
+export GOLDENMATCH_NATIVE=1
+# Multi-node only: a SHARED scratch the WCC checkpoints round-by-round (node-local breaks cross-node reads).
+export GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH=gs://your-bucket/rc_scratch
+```
+
+Phase 5 has a hard contract: a Ray Dataset input with a **global `__row_id__` column**, and it **writes golden records to `output_path`** rather than returning an in-memory clusters dict. The recall-complete path (block-shuffle scoring + randomized-contraction WCC) is **default-on** and was validated end-to-end at **100M rows on a real 5-node GCP cluster (9.2 min, 20M clusters recovered exactly, 0.36 GB driver RSS)**. See [Distributed pipeline](#distributed-pipeline) for the full contract. At single-box scale, prefer `bucket` — only reach for a Ray cluster when the data genuinely won't fit one box.
+
+---
+
+## Native acceleration
+
+GoldenMatch ships an **optional** Rust/PyO3 kernel (`pip install goldenmatch[native]`). When it isn't installed, every path runs in pure Python unchanged. When it is, a central gate decides per-component whether to use it.
+
+`GOLDENMATCH_NATIVE` (`core/_native_loader.py`):
+
+| Value | Behavior |
+|-------|----------|
+| `auto` (default, or unset) | Use the native kernel **iff** it is importable **and** the component has been signed off (in the gated-on set below). Silently falls back to Python otherwise. |
+| `1` | Require native. Raises `RuntimeError` at the first kernel call if the wheel isn't importable. Use this on scale/bench runs so a missing wheel fails loudly instead of running 100x+ slower in Python. |
+| `0` | Force pure Python everywhere. Use for parity debugging or if you suspect a kernel bug. |
+
+**Signed-off components (run native under `auto`):** `clustering`, `block_scoring`, `pairs`, `featurize`, `hashing`. These cleared bit-/ULP-level parity against the Python reference, so flipping native on or off never changes output. `pprl_bloom` is built but **not** gated on — it only runs native under `GOLDENMATCH_NATIVE=1`.
+
+**When to set `=1`:** any large or benchmarked run where a silent Python fallback would be a disaster. The cost of a missing wheel is enormous (the scoring kernel is the dominant stage), and `auto` hides it.
+
+**When to leave it `auto`:** normal local use. If the wheel is installed you already get native; if it isn't, you get working Python.
+
+### `GOLDENMATCH_NATIVE_ADDRESS_NORMALIZE`
+
+**Default off.** When set to `1`, address-normalize transforms run as a Polars-native expression instead of the per-row Python refdata plugin. On address-heavy data at scale the per-row plugin is a real bottleneck in the prep stage; the native path removes it.
+
+- **Set it (`=1`)** when you have `address` columns and are running at scale. Output is parity-tested on representative inputs.
+- **Leave it off** for small runs, or if you hit an address-canonicalization edge case (it is opt-in precisely because one integration-level cluster-count drift hasn't been fully root-caused).
+
+### `GOLDENMATCH_NATIVE_RAYON_MIN_PAIRS`
+
+Default `20000000`. Candidate-pair count per kernel call below which the native block-scorer runs in the calling thread instead of fanning out to rayon. This exists to avoid a futex-park stall observed on some 8-core Linux CPUs (issue #688). The Python caller already parallelizes across buckets, so the sequential path loses nothing on small calls. Leave it at the default unless you are reproducing #688; `0` forces rayon always, a huge value forces sequential always.
+
+---
+
+## Backend selection
+
+Same pipeline, different execution engine. Auto-config picks one from your row count; you can override.
+
+| Backend | Range | How it works |
+|---------|-------|--------------|
+| `polars` (default) | < 500K rows | In-memory Polars. Fastest per record. |
+| `bucket` | 1M–200M, single box | Per-bucket native scoring. The validated single-box path on 16c/64GB. Planner picks it when native is enabled. |
+| `chunked` | 5M+, memory-constrained box | Streaming reader + cross-chunk join + block-keyed index. The 4c/16GB fallback. |
+| `duckdb` | 500K–50M | Out-of-core pair store, spills to disk so RAM isn't the ceiling. |
+| `ray` | ≥ 50M, distributed | Per-block remote tasks. **See the distribution caveat below — `backend="ray"` alone does not stream.** |
+
+Force one in config or on the CLI:
+
+```python
+config = gm.GoldenMatchConfig(backend="duckdb")
+```
+
+```bash
+goldenmatch dedupe big.csv --backend ray
+goldenmatch dedupe big.csv --chunked
+```
+
+**Auto-selection knobs:**
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `GOLDENMATCH_AUTOCONFIG_BACKEND` | unset | Override the picked backend. A name (`duckdb`, `ray`) forces it regardless of size; `0`/`false`/`disabled` disables the override (use the default). |
+| `GOLDENMATCH_AUTOCONFIG_BACKEND_THRESHOLD` | `1000000` | Row count at/above which the legacy shim picks `duckdb`. |
+| `GOLDENMATCH_PLANNER_BUCKET` | `1` | The v3 planner may pick `bucket`. Set `0` to opt the bucket backend out. |
+| `GOLDENMATCH_DUCKDB_SCORE_DB` | unset (in-memory) | Path for the DuckDB pair store to spill to disk. Point it at scratch with room when running DuckDB at 50M+. |
+
+<Note>
+  The single-threshold `GOLDENMATCH_AUTOCONFIG_BACKEND_THRESHOLD` shim is deprecated in favor of the v3 planner, which decides from `(ComplexityProfile, RuntimeProfile)`. It still works and is honored for explicit overrides.
+</Note>
+
+---
+
+## Distributed pipeline
+
+This is the knob most people get wrong, so read the contract before you run a 100M job.
+
+`GOLDENMATCH_DISTRIBUTED_PIPELINE` selects how `run_dedupe_pipeline_distributed` (the Ray Dataset entry point) executes:
+
+| Value | Phase | What actually happens |
+|-------|-------|------------------------|
+| unset (default) | Phase 2 "cheat-line" | Calls `take_all()` on the input and runs `dedupe_df()` **in memory** on the driver. Back-compat default. **Does not distribute scoring.** |
+| `1` | Phase 4 scaffold | Clustering/golden stages are Ray-ready, but auto-config and scoring still materialize on the driver. Kept for compatibility. |
+| `2` | Phase 5 streaming | The real distributed path: scoring → clustering → golden → write all stay Ray Datasets. No `take_all()` on the input. |
+
+**Phase 5 (`=2`) contract — different from in-memory dedupe:**
+
+- **Input must carry a global `__row_id__` column.** Without it, each partition synthesizes local IDs that collide and the weakly-connected-components step merges unrelated clusters.
+- **Output is written to `output_path` as parquet golden records.** It does **not** return an in-memory clusters dict the way `dedupe_df` does.
+- It still materializes two things on the driver: the ~5K-row auto-config sample, and cluster aggregates for golden-field synthesis. These are the last "cheat-lines" being retired.
+
+`GOLDENMATCH_ENABLE_DISTRIBUTED_RAY` (default `0`) is **separate**: it only lets the v3 planner *pick* `ray` during backend selection. It does **not** turn on the streaming pipeline. Explicit `backend="ray"` always works without it. The planner stopped auto-picking ray after the Distributed Plan v1 stack failed the 5M kill criterion against the bucket backend, so ray is opt-in.
+
+**Recall-complete clustering at scale (#844, shipped 2026-06-11).** Phase 5's default path now block-shuffles scoring so true duplicates co-locate, then runs a relational **randomized-contraction** weakly-connected-components pass that clusters correctly across input-partition boundaries. This replaced two earlier WCC implementations that died at 100M (a driver head-wedge and a Ray streaming-executor deadlock). It is **default-on** and validated end-to-end at 100M (9.2 min, 20M clusters exact). On a **multi-node** cluster the WCC checkpoints each round to `GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH`, which **must be a shared path** (e.g. `gs://...`) — a node-local scratch breaks the cross-node parquet reads and now raises rather than silently under-merging.
+
+<Note>
+  **Only scoring needs distribution at this scale; clustering usually doesn't.** The scored pair set is small (~`(id_a, id_b, score)` per match), so at 100M rows it's ~1.8 GB — it fits one node. Clustering therefore routes to the in-memory scipy connected-components pass (seconds) automatically whenever the pairs fit driver RAM, and only falls back to the distributed WCC (a multi-hour tail) when they genuinely don't. You don't need to set `GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD` for this — it's the default.
+</Note>
+
+**Distributed sub-knobs** (only relevant on a real Ray cluster):
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `GOLDENMATCH_DISTRIBUTED_BLOCK_SHUFFLE` | `1` (on) | Block-shuffle scoring so duplicates co-locate before clustering. The recall-complete path. `0` restores the legacy per-partition `local_cc` (under-merges across partitions at scale). |
+| `GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH` | unset | Scratch directory the randomized-contraction WCC checkpoints to. **Must be shared (e.g. `gs://...`) on a multi-node cluster** or the run raises. |
+| `GOLDENMATCH_DISTRIBUTED_WCC` | `two_phase` | WCC algorithm for `build_clusters_distributed`'s *own* callers (the at-scale Phase-5 path forces `randomized_contraction` and ignores this). `two_phase` is chain-safe; avoid `pointer_jump` (can deadlock). |
+| `GOLDENMATCH_DISTRIBUTED_WCC_SEED` | unset | Seed for the randomized-contraction affine hash (reproducible cluster IDs across runs). |
+| `GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD` | unset (memory-aware) | Pair count above which clustering goes distributed. **Unset (default): memory-aware** — clustering stays on the fast driver-side scipy.csgraph path whenever the scored pair set fits available driver RAM, and only distributes when it genuinely won't. Set an explicit integer to force a pair-count boundary either way. |
+| `GOLDENMATCH_DISTRIBUTED_GOLDEN_THRESHOLD` | `5000000` | Multi-member row count above which golden-record building goes distributed. |
+| `GOLDENMATCH_DISTRIBUTED_SCORE_NUM_CPUS` | `2` | CPUs requested per Ray scoring worker. |
+
+<Note>
+  You bring the Ray cluster — GoldenMatch ships the pipeline, not the bootstrap. The GCP recipe is in [`docs/distributed-ray-cluster-setup.md`](https://github.com/benseverndev-oss/goldenmatch/blob/main/docs/distributed-ray-cluster-setup.md). At single-box scale the `bucket` backend is validated through 200M and is simpler — use it unless the data won't fit one box.
+</Note>
+
+### Fast path at scale (distribute only what doesn't fit)
+
+The single most expensive distributed-tuning mistake is distributing a *stage* that fits in memory. **"The job is big" does not mean "every stage must be distributed."** Ask it per stage:
+
+| Stage | Fits one node at 100M? | Fast path | Slow trap |
+|-------|------------------------|-----------|-----------|
+| Scoring | No — 100M rows | **Distributed** across workers, **native kernel on** (`GOLDENMATCH_NATIVE=1` + `goldenmatch-native` installed on every node) | pure-Python (cluster installs plain `goldenmatch`); ~6 of 80 CPU if the shuffle blocks are oversized |
+| Clustering (WCC) | **Yes** — the scored pair set is small (~1.76 GB / 110M edges at 100M) | **In-memory** driver-side `scipy.csgraph` connected-components (~60s) | the distributed randomized-contraction WCC — its O(log N) `gs://`-checkpoint rounds are a multi-hour tail when forced on a pair set that fits |
+| Golden | depends | distributed groupby, or **skip it** if you only need cluster membership | building golden you then discard |
+
+**Concrete: don't force the distributed WCC on a pair set that fits.** `GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD` (default `50000000`) routes pair counts **below** it to the fast in-memory `scipy.csgraph` path. So at 100M (~110M pairs) the default sends clustering to the *distributed* WCC. If your pairs fit the driver (they do up to a few hundred million edges on a 64–256 GB head), **set the threshold above your pair count** so clustering stays in-memory:
+
+```bash
+export GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD=2000000000  # > your pair count -> in-memory WCC
+```
+
+Setting it to `0` does the **opposite** — it forces the slow distributed WCC on everything. (Making this routing memory-aware by default is tracked in [#956](https://github.com/benseverndev-oss/goldenmatch/issues/956).)
+
+**Recover a result without re-running.** The Phase-5 connected-components clustering is independent of the WCC algorithm, so a completed run's cluster *assignments* (written to gs:// via the `assignments_output_path` hook) **are** the result. If a run finishes but the output is lost, or you want to re-score, download the assignments and score them against your ground truth on a 64 GB box — no cluster, no re-run. The 100M `group_by` for that scoring OOMs a 16 GB box, so run it on a large runner, not your laptop.
+
+---
+
+## Prep & scoring perf opt-ins
+
+These trade nothing for speed/memory at scale and are safe to leave at their defaults. Two are already on.
+
+| Variable | Default | Effect | When to change |
+|----------|---------|--------|----------------|
+| `GOLDENMATCH_BUCKET_SLIM_PROJECTION` | `1` (on) | After bucket scoring, drop columns downstream stages don't need (smaller per-bucket frames). Measured −3.8 GB peak RSS at 10M, output invariant. | Set `0` only if a custom downstream consumer needs a column it drops. |
+| `GOLDENMATCH_GOLDEN_SLIM_MULTIDF` | `1` (on) | Slim internal columns before the multi-DataFrame golden build. | Rarely; `0` restores the wider frame. |
+| `GOLDENMATCH_IDENTITY_BATCH_FINGERPRINT` | `1` (on) | Compute no-PK identity hashes in one Arrow batch instead of per row (2.6x on the fingerprint step). | `0` restores per-row, for parity debugging. |
+
+**Diagnostic-only — these can SLOW the run:**
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `GOLDENMATCH_BUCKET_DEBUG` | `0` | Print per-bucket prep / kernel / post-filter timing for `backend=bucket`. Output-invariant, near-zero cost, but it's a debug aid, not a speed-up. |
+| `GOLDENMATCH_PREP_STAGED_COLLECT` | `0` | Collect prepared records in stages (memory-management experiment). Can be slower; leave off unless diagnosing prep RSS. |
+| `GOLDENMATCH_STANDARDIZE_STAGED` | `0` | Staged standardization pipeline (experimental). Same caveat. |
+
+---
+
+## Auto-config & planning
+
+| Variable | Default | Effect | When to set |
+|----------|---------|--------|-------------|
+| `GOLDENMATCH_AUTOCONFIG_MEMORY` | `1` (on) | Read/write cross-run auto-config memory at `~/.goldenmatch/autoconfig_memory.db`. | Set `0` in CI or any run that must be reproducible and not influenced by prior runs. |
+| `GOLDENMATCH_PLANNING_EFFORT` | `normal` | Iteration budget for auto-config: `fast` / `normal` / `thinking` / `einstein`. Higher = more thorough, slower; `thinking`+ measure real full-frame pair counts. | `fast` to speed up config on huge inputs; `thinking` when auto-config picks a poor blocking key. `normal` is byte-identical to the historical default. |
+| `GOLDENMATCH_AUTOCONFIG_LLM` | `0` | Let an LLM propose a config when heuristics are exhausted on a RED profile. Needs `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`. | Opt in only when heuristic auto-config can't find a healthy config and you accept the API cost. |
+| `GOLDENMATCH_AUTOCONFIG_INDICATOR_BUDGET` | unset | Set `fast` to skip the expensive complexity indicators. | Speeding up config on very large inputs. |
+| `GOLDENMATCH_AUTOCONFIG_FORCE_INCLUDE` / `_FORCE_EXCLUDE` | unset | Comma-separated columns to force into / out of auto-config analysis. | Rescue a column auto-config drops, or exclude a noisy one, without writing a full explicit config. |
+
+If auto-config raises `ControllerNotConfidentError`, that's by design at ≥100K rows on a RED profile — it's refusing to run a noise-result dedupe. See [Passing an explicit config](/goldenmatch/configuration) for recovery (the in-repo `docs/explicit-config.md` has the failing-sub-profile table).
+
+There are also a number of experimental blocking and probabilistic knobs (`GOLDENMATCH_BLOCKING_*`, `GOLDENMATCH_FS_*`, `GOLDENMATCH_NOISE_AWARE_*`, `GOLDENMATCH_QUALITY_AWARE_BLOCKING`, `GOLDENMATCH_FD_NEGATIVE_EVIDENCE`). These are research/tuning levers, default-safe, and listed in the [full table](#full-environment-variable-reference) below. Most users never touch them.
+
+---
+
+## Servers, security & storage
+
+When you expose any server (MCP, REST, A2A, web UI) on a non-loopback host, it is **fail-closed**: it refuses to start without the matching bearer token.
+
+| Variable | Used by | Notes |
+|----------|---------|-------|
+| `GOLDENMATCH_MCP_TOKEN` | MCP server | Required on non-loopback binds. `/.well-known/` card stays public. |
+| `GOLDENMATCH_API_TOKEN` | REST API | Required on non-loopback binds (all except `/health`). |
+| `GOLDENMATCH_AGENT_TOKEN` | A2A agent | Required on non-loopback binds (except `/health` + agent card). |
+| `GOLDENMATCH_WEB_TOKEN` | Web UI | Required on non-loopback binds (except `/api/v1/healthz`). |
+| `GOLDENMATCH_API_CORS_ORIGINS` | REST API | Comma-separated allow-list; replaces wildcard CORS. |
+| `GOLDENMATCH_ALLOWED_ROOT` | All file-taking surfaces | Opt-in path sandbox. When set, every user-supplied path must resolve under this root or the call is rejected. Recommended for deployed/shared instances (e.g. the Railway MCP server sets it to `/data`). Unset = no containment (correct local-first default). |
+
+**Storage / persistence:**
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `GOLDENMATCH_DATABASE_URL` / `GOLDENMATCH_IDENTITY_DSN` | unset | Postgres/SQLite connection for the identity graph + review queue / Alembic migrations. |
+| `GOLDENMATCH_PREPARED_RECORD_STORE_DIR` | unset | Directory for the disk-backed prepared-record store. |
+| `GOLDENMATCH_PREPARED_RECORD_STORE_PERSIST` | `0` | `1` keeps the prepared-record store across calls instead of cleaning it up. |
+
+---
+
+## Gotchas that cost a day
+
+Read these before a big run. Each is a real trap that produces a slow or wrong result with no error.
+
+<AccordionGroup>
+  <Accordion title="backend='ray' ran in-memory and never used the cluster">
+    `backend="ray"` (or `dedupe_df(backend="ray")`) **alone runs the Phase 2 cheat-line**: it collects the whole frame to the driver and dedupes in memory. The cluster sits idle. To actually stream across workers you need `GOLDENMATCH_DISTRIBUTED_PIPELINE=2`, a Ray Dataset input with a global `__row_id__`, and you read golden output from `output_path` — not the return value. On a multi-node cluster also set a shared `GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH` (e.g. `gs://...`). For single-box scale, use `bucket`, not `ray`.
+  </Accordion>
+  <Accordion title="It ran 100x slower than the docs because native silently fell back to Python">
+    Under the default `GOLDENMATCH_NATIVE=auto`, if the native wheel isn't importable (not installed, ABI mismatch, stale build) the scoring kernel **silently** runs in Python — orders of magnitude slower. On any run where speed matters, set `GOLDENMATCH_NATIVE=1` so a missing wheel raises instead of crawling. Confirm with `python -c "import goldenmatch_native"` or check `goldenmatch.core._native_loader.native_available()`.
+  </Accordion>
+  <Accordion title="The prep stage dominated wall on address-heavy data">
+    The per-row Python address-normalize plugin is a real bottleneck at scale. Set `GOLDENMATCH_NATIVE_ADDRESS_NORMALIZE=1` to use the Polars-native expression instead. It's off by default, so you have to opt in.
+  </Accordion>
+  <Accordion title="A distributed 100M run took hours instead of minutes">
+    The scored pair set is small (~1.76 GB at 100M) and fits one node, but the default `GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD=50000000` routes 50M+ pairs to the *distributed* WCC, whose `gs://`-checkpoint rounds are a multi-hour tail. Set the threshold **above** your pair count so clustering runs in-memory (`scipy.csgraph`, ~60s) — see [Fast path at scale](#fast-path-at-scale-distribute-only-what-doesnt-fit). Distribute the *scoring* (the rows don't fit), not the *clustering* (the pairs do). And never set the threshold to `0` — that forces the slow path on everything.
+  </Accordion>
+  <Accordion title="Results changed between runs for no reason">
+    Cross-run auto-config memory (`GOLDENMATCH_AUTOCONFIG_MEMORY=1`, the default) lets a prior run influence the next. For reproducible benchmarks set `GOLDENMATCH_AUTOCONFIG_MEMORY=0`.
+  </Accordion>
+  <Accordion title="Python hung at import on Windows">
+    Polars runs a WMI CPU probe at import that can hang on some Windows boxes. Set `POLARS_SKIP_CPU_CHECK=1`. (Add `PYTHONIOENCODING=utf-8` if non-ASCII output mangles the console.)
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Configuration precedence
+
+When the same setting is reachable multiple ways, the more specific wins:
+
+1. **Explicit API / CLI argument** (`dedupe_df(..., backend=...)`, `--backend`) — highest.
+2. **Config field** (`GoldenMatchConfig(backend=...)`, YAML).
+3. **Environment variable** (`GOLDENMATCH_*`).
+4. **Built-in default** (auto-config / planner choice) — lowest.
+
+So an env var sets the default behavior for a process, a config field overrides it for a run, and an explicit call argument overrides it for one call.
+
+---
+
+## Full environment-variable reference
+
+Every `GOLDENMATCH_*` variable the package reads, grouped by who should care. Defaults verified against source. Most users only ever touch the [recommended setups](#recommended-setups).
+
+### Everyday & scale
+
+| Variable | Default | Values | Effect |
+|----------|---------|--------|--------|
+| `GOLDENMATCH_NATIVE` | `auto` | `auto` / `1` / `0` | Native kernel gate. `1` requires native (raises if missing); `0` forces Python. |
+| `GOLDENMATCH_NATIVE_ADDRESS_NORMALIZE` | off | `1` | Polars-native address-normalize fast path. |
+| `GOLDENMATCH_AUTOCONFIG_MEMORY` | `1` | `0`/`1` | Cross-run auto-config memory. `0` for reproducible/CI runs. |
+| `GOLDENMATCH_PLANNING_EFFORT` | `normal` | `fast`/`normal`/`thinking`/`einstein` | Auto-config iteration budget. |
+| `GOLDENMATCH_DISTRIBUTED_PIPELINE` | unset | `1`/`2` | Distributed execution phase. `2` = real streaming (needs `__row_id__`, writes to `output_path`). |
+| `GOLDENMATCH_ENABLE_DISTRIBUTED_RAY` | `0` | `0`/`1` | Let the planner pick `ray`. Does not enable streaming on its own. |
+| `GOLDENMATCH_AUTOCONFIG_BACKEND` | unset | name / `0` | Force/disable the picked backend. |
+| `GOLDENMATCH_AUTOCONFIG_BACKEND_THRESHOLD` | `1000000` | int | Row count where the legacy shim picks `duckdb`. |
+| `GOLDENMATCH_PLANNER_BUCKET` | `1` | `0`/`1` | Allow the planner to pick `bucket`. |
+| `GOLDENMATCH_DUCKDB_SCORE_DB` | unset | path | DuckDB pair-store spill path. |
+| `GOLDENMATCH_NATIVE_RAYON_MIN_PAIRS` | `20000000` | int | Native kernel sequential-vs-rayon threshold. |
+
+### Distributed sub-knobs
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `GOLDENMATCH_DISTRIBUTED_BLOCK_SHUFFLE` | `1` (on) | Block-shuffle scoring (recall-complete path). `0` = legacy `local_cc`. |
+| `GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH` | unset | Randomized-contraction WCC scratch. **Must be shared (`gs://...`) on multi-node.** |
+| `GOLDENMATCH_DISTRIBUTED_WCC` | `two_phase` | WCC for `build_clusters_distributed`'s own callers (Phase-5-at-scale forces `randomized_contraction`). Avoid `pointer_jump`. |
+| `GOLDENMATCH_DISTRIBUTED_WCC_SEED` | unset | Randomized-contraction hash seed (reproducible cluster IDs). |
+| `GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD` | `50000000` | Pair count → distributed clustering. |
+| `GOLDENMATCH_DISTRIBUTED_GOLDEN_THRESHOLD` | `5000000` | Row count → distributed golden. |
+| `GOLDENMATCH_DISTRIBUTED_SCORE_NUM_CPUS` | `2` | CPUs per Ray scoring worker. |
+
+### Perf opt-ins & diagnostics
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `GOLDENMATCH_BUCKET_SLIM_PROJECTION` | `1` (on) | Drop unneeded columns after bucket scoring. |
+| `GOLDENMATCH_GOLDEN_SLIM_MULTIDF` | `1` (on) | Slim internal columns before golden build. |
+| `GOLDENMATCH_IDENTITY_BATCH_FINGERPRINT` | `1` (on) | Batch no-PK identity hashing. |
+| `GOLDENMATCH_BUCKET_DEBUG` | `0` | Per-bucket timing breakdown (diagnostic). |
+| `GOLDENMATCH_PREP_STAGED_COLLECT` | `0` | Staged prep collect (experimental, may slow). |
+| `GOLDENMATCH_STANDARDIZE_STAGED` | `0` | Staged standardization (experimental, may slow). |
+| `GOLDENMATCH_BUCKET_VEC_MIN` / `_MAX` | `32` / `2000` | Block-size band for the vectorized float64 NxN cdist path in bucket scoring. |
+| `GOLDENMATCH_FS_BATCH_ROWS` | `256` | Row cap per batched Fellegi-Sunter block-scoring call. |
+| `GOLDENMATCH_BENCH_DUMP_PAIRS` | unset | Dump per-stage pairs for benchmarking. |
+| `GOLDENMATCH_SKIP_MATCH_LOG` / `GOLDENMATCH_MATCH_LOG_FLUSH_PAIRS` | — | Streaming match-log controls. |
+
+### Auto-config & blocking (advanced)
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `GOLDENMATCH_AUTOCONFIG_LLM` | `0` | LLM config fallback (needs API key). |
+| `GOLDENMATCH_AUTOCONFIG_INDICATOR_BUDGET` | unset | `fast` skips expensive indicators. |
+| `GOLDENMATCH_AUTOCONFIG_FORCE_INCLUDE` / `_FORCE_EXCLUDE` | unset | Force columns into/out of analysis. |
+| `GOLDENMATCH_AUTOCONFIG_SAMPLE_STRATEGY` | stratified | `random` forces random sampling. |
+| `GOLDENMATCH_AUTOCONFIG_ZERO_LABEL_COMMIT` | `1` | Zero-label commit tiebreaker. `0` = legacy. |
+| `GOLDENMATCH_AUTOCONFIG_ZERO_LABEL_STABILITY` | `0` | Perturbation re-runs (slow, experimental). |
+| `GOLDENMATCH_MULTISOURCE_AUTOCONFIG` | `1` (on) | Multi-source-aware auto-config. `0`/`false`/`disabled` = legacy single-source. |
+| `GOLDENMATCH_BLOCKING_PAIRS_PER_ROW` | `50` | Candidate-pairs-per-row budget the blocking selector targets. |
+| `GOLDENMATCH_BLOCKING_MAX_RATIO` | `0.95` | Skip blocking keys above this cardinality ratio. |
+| `GOLDENMATCH_BLOCKING_MIN_RATIO` | `0.01` | Minimum cardinality ratio for a blocking key. |
+| `GOLDENMATCH_BLOCKING_CARDINALITY_SCALER` | Chao1 | `observed` uses sample-observed cardinality. |
+| `GOLDENMATCH_BLOCKING_DEGENERATE_THRESHOLD` / `_MAX_AVG_BLOCK_SIZE` | `0.95` / `10000` | Degenerate-blocking guard. |
+| `GOLDENMATCH_BLOCKING_PRUNE_PASSES` / `_PASS_MIN_WEAKPOS` | `0` / `1` | Weak-positive multi-pass pruning. |
+| `GOLDENMATCH_ANN_MIN_ROWS` | auto | Minimum rows to enable ANN blocking. |
+| `GOLDENMATCH_QUALITY_AWARE_BLOCKING` | `0` | Add fuzzy passes for noisy columns (GoldenCheck door #1). |
+| `GOLDENMATCH_FD_NEGATIVE_EVIDENCE` | `0` | FD-driven negative evidence (GoldenCheck door #3). |
+| `GOLDENMATCH_QUALITY_GATED_REVIEW` | `0` | Downgrade auto-merge on low-quality records. |
+
+### Probabilistic / Fellegi-Sunter (advanced)
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `GOLDENMATCH_FS_AUTOCONFIG_V2` | `1` (on) | FS auto-config v2 comparison-set + blocking curation. `0` = legacy. |
+| `GOLDENMATCH_FS_VECTORIZED` | on | Vectorized FS block scoring (~9x). `0` = scalar. |
+| `GOLDENMATCH_FS_CALIBRATED` | `linear` | `posterior` = true-probability calibration (frontier-neutral). |
+| `GOLDENMATCH_FS_MONOTONIC` | on | Enforce monotonic EM weights. |
+| `GOLDENMATCH_FS_NATIVE` | on | Native FS kernel when available. |
+| `GOLDENMATCH_NE_FS_ESCAPE_MODE` | — | Negative-evidence FS escape mode. |
+| `GOLDENMATCH_NOISE_AWARE_SCORERS` | `1` (on) | Auto-upgrade `token_sort`→`jaro_winkler` on noisy text. `0` = legacy. |
+| `GOLDENMATCH_NOISE_AWARE_TARGET` | `jaro_winkler` | Override the noise-aware target scorer. |
+| `GOLDENMATCH_GOLDEN_STRATEGY_STRICT` | `0` | Strict golden survivorship. |
+| `GOLDENMATCH_GOLDEN_TUNER_MIN_CORRECTIONS` / `GOLDENMATCH_NE_TUNER_MIN_CORRECTIONS` | — | Memory re-tuning floors. |
+| `GOLDENMATCH_CLUSTER_SPLIT_EDGE_BUDGET` | ∝ n_rows | Oversized-cluster auto-split work budget. |
+| `GOLDENMATCH_COLUMNAR_PIPELINE` / `GOLDENMATCH_COLUMNAR_CLUSTER_BUILD` | `0` | Columnar pipeline experiments. |
+
+### Servers, security, storage, LLM/embedding
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `GOLDENMATCH_MCP_TOKEN` / `_API_TOKEN` / `_AGENT_TOKEN` / `_WEB_TOKEN` | unset | Bearer tokens; required on non-loopback binds. |
+| `GOLDENMATCH_API_CORS_ORIGINS` | unset | REST CORS allow-list. |
+| `GOLDENMATCH_ALLOWED_ROOT` | unset | Opt-in path sandbox root. |
+| `GOLDENMATCH_DATABASE_URL` / `GOLDENMATCH_IDENTITY_DSN` | unset | DB connection / migration DSN. |
+| `GOLDENMATCH_SAIL_IDENTITY_ID_SCHEME` | `h1` | Identity record-id scheme on the Sail (Spark Connect) tier. |
+| `GOLDENMATCH_PREPARED_RECORD_STORE_DIR` / `_PERSIST` | unset / `0` | Prepared-record store path / persistence. |
+| `GOLDENMATCH_LLM_MODEL` | provider default | Override the LLM scorer model. |
+| `GOLDENMATCH_EMBEDDING_PROVIDER` / `GOLDENMATCH_INHOUSE_MODEL` | unset | Embedding provider / in-house model id. |
+| `GOLDENMATCH_GPU_MODE` / `_GPU_ENDPOINT` / `_GPU_API_KEY` | auto | GPU embedding mode / remote endpoint / key. |
+| `GOLDENMATCH_LLAMA_GGUF` | unset | Path to a local GGUF embedding model for the `model="llama"` / `"llama:/path.gguf"` backend — offline embeddings, no cloud/torch (`pip install goldenmatch[llama]`). Benchmarks: `scripts/bench_llama_embedder.py`, `scripts/bench_llama_product_matching.py`. |
+| `GOLDENMATCH_LLM_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible base URL for the LLM scorer — point at a local llama.cpp / llamafile server for offline, free LLM judging (also honors `OPENAI_BASE_URL`). |
+| `GOLDENMATCH_UDF_IMPORTS` | unset | Snowflake UDF import asset directory. |
+| `GOLDENMATCH_SYNC_STREAMING_THRESHOLD` / `_STREAMING_BLOCK_WORKERS` | `500000` / auto | Postgres streaming-store thresholds. |
+
+<Note>
+  Not a `GOLDENMATCH_*` var but relevant: set `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` for LLM scoring and the LLM auto-config fallback, and `POLARS_SKIP_CPU_CHECK=1` on Windows to skip the Polars import-time CPU probe.
+</Note>
+
+<Card title="Backends and scale" icon="server" href="/goldenmatch/backends-and-scale">
+  The measured numbers behind each backend choice.
+</Card>
+<Card title="Scale envelope" icon="gauge-high" href="/concepts/scale-envelope">
+  The block-size failure modes that matter more than the backend.
+</Card>
+
+## Distributed routing
+
+The planner decides scoring, clustering, and golden routing per stage, keyed off
+**driver RAM** (not cluster total). The `lint_routing` / `explain_routing` MCP
+tools surface these decisions and flag overrides that force a slow path; a
+slow-path override at scale refuses unless `allow_slow_path=true`.
+
+### Single box {#routing-single-box}
+
+With no Ray cluster connected, every stage runs in-memory / in-process. There is
+nothing to distribute to, so the projections below do not apply.
+
+### Driver-RAM projection {#routing-driver-ram-projection}
+
+When a cluster is present, each materializing stage distributes only when its
+working set exceeds the driver-RAM budget (`available_ram_gb × 0.6`):
+
+- **Clustering / WCC** distributes when the projected edge set
+  (`estimated_pair_count × 16 bytes`) exceeds the budget. At 100M rows the
+  ~1.76 GB edge set fits, so WCC runs in-memory (scipy) — forcing the
+  distributed path there is a multi-hour tail.
+- **Scoring** and **golden** distribute when the row-frame estimate
+  (`n_rows × 512 bytes`) exceeds the budget. The same data therefore distributes
+  scoring on a 48 GB-driver cluster but keeps it in-memory on a 256 GB box.
+
+### Overrides {#routing-overrides}
+
+`distributed_routing.*` config pins and the legacy
+`GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD` env var are honored but linted.
+`CLUSTERING_THRESHOLD=0` forces distributed WCC regardless of the projection; at
+scale the linter flags it ERROR and the runtime refuses unless
+`allow_slow_path=true`.

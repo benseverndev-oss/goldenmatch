@@ -1,0 +1,14 @@
+id: polars-read-excel-needs-engine
+snapshots:
+  df = pl.read_excel('x.xlsx'):
+    labels:
+    - source: pl.read_excel('x.xlsx')
+      style: primary
+      start: 5
+      end: 28
+  df = pl.read_excel(path):
+    labels:
+    - source: pl.read_excel(path)
+      style: primary
+      start: 5
+      end: 24

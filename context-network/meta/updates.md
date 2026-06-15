@@ -2,6 +2,115 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-06-14 — Single-kernel-collapse R1 Workstream A: cross-JS-target WASM (kill-criterion 2)
+- **Shipped as additive, workflow_dispatch-only infra** — flips no default (the TS
+  WASM path stays opt-in via `enableWasm()`; pure-TS stays default + fallback),
+  deletes nothing, touches no default scoring path. New
+  `.github/workflows/r1-kernel-js-targets.yml`: four jobs (node / deno / browser /
+  workers) that build `score-wasm` once and run the SAME pure-TS-vs-kernel 4dp
+  equivalence assertion under each JS runtime, each writing a per-target PASS/FAIL to
+  `$GITHUB_STEP_SUMMARY`. Mirrors `r1-kernel-wheels.yml` (Workstream B).
+- **Universal loader (the A1 decision): base64-INLINE (Option i)**, implemented behind
+  the existing opt-in seam as `enableWasm({ universal: true })`. `build_wasm.sh` now
+  also emits a gitignored `score_wasm_base64.js`; `goldenmatch-wasm-runtime` gained
+  `decodeWasmBase64` + a `wasmBase64` LoadOption. No fetch/fs/`import.meta.url` asset
+  resolution — the only edge-safe-everywhere path. Cost: base64 ~+33% over the raw
+  `.wasm` (115,155 B → a 153,540-B string). Default `enableWasm()` unchanged; default
+  users load zero wasm bytes. Note:
+  [../../docs/superpowers/notes/2026-06-14-wasm-universal-loader.md](../../docs/superpowers/notes/2026-06-14-wasm-universal-loader.md).
+- **Per-target harnesses** reuse the spike's assertion via a runtime-agnostic
+  `kernel-equivalence-core.ts` + frozen `fixtures/pure-ts-reference.json`. In-env:
+  **node / deno / browser RAN-GREEN** (deno + browser via the universal base64 loader,
+  no per-target hack; browser in real chromium, fault-injection-verified). **workers:
+  PENDING-RUN** — the pool runs in real workerd in-env and surfaced a genuine
+  constraint (**workerd bans runtime WASM codegen** — `instantiate`/`Module`-from-bytes
+  both throw "Wasm code generation disallowed by embedder"), so Workers needs a
+  build-time CompiledWasm `.wasm` import; the green run is pending the dispatched
+  `workers` job (vitest-4 host-transform vs pool-0.16 resolver friction in-env). ADR
+  0016 gained an R1-A evidence section (per-target table + the Workers finding); the R1
+  plan's Workstream A section now points at the workflow.
+
+## 2026-06-14 — Single-kernel-collapse R1 Workstream B: all-platform wheel + #688 perf-cliff gate
+- New [../architecture/single-kernel-collapse-R1-plan.md](../architecture/single-kernel-collapse-R1-plan.md)
+  (the R1 go/no-go plan of record), linked from [../discovery.md](../discovery.md).
+  Scopes both R1 workstreams — A (WASM across Node/browser/Workers/Deno =
+  kill-criterion 2; scoped, harness pending) and B (all-platform abi3 wheels + the
+  #688 perf cliff = kill-criterion 3; THIS change) — each with goal / verification
+  design / per-target evidence / kill checkpoint, the "one generalized gate run in
+  more places" + `kernel-targets` report idea, the additive/no-default-flip-in-R1
+  rule, and the honestly-PARTIAL expected outcome (kernel-default where the
+  platform reliably supports it + a thin pure fallback elsewhere).
+- **Workstream B shipped as additive, workflow_dispatch-only infra** — flips no
+  default, deletes nothing, touches no product/Rust source. New
+  `.github/workflows/r1-kernel-wheels.yml`: a `wheels` matrix (linux x86_64
+  manylinux 2_28 / linux aarch64 / macOS arm64 / macOS x86_64 cross / windows x64)
+  that builds the abi3 wheel with the same SHA-pinned `maturin-action` + manifest
+  as `publish-goldenmatch-native.yml`, then on a clean Python 3.11 runs the
+  equivalence gate in **REQUIRE-KERNEL** mode (FAIL not skip if the just-built
+  wheel is absent) + the bench with **ASSERT-NOT-SLOWER**; and a `perf_cliff` job
+  on `ubuntu-latest-xlarge` (the 8-core AMD EPYC shape #688 wedged on; parameterized
+  via `cliff_runner`) that runs the per-pair bench AND `scripts/bench_issue_688.py`,
+  asserting no rayon-LockLatch futex-park regression. `fail-fast: false`;
+  per-platform PASS/FAIL + wall-ratio to the step summary.
+- **Two backward-compatible script flags added** (default behavior preserved — both
+  skip-on-absent + exit 0 with neither flag): `--require-kernel` (already present on
+  `check_kernel_equivalence.py`) and a new `--require-kernel`/`--assert-not-slower`
+  pair on `scripts/bench_kernel_levenshtein.py` (exit 1 if the kernel is more than a
+  small tolerance slower than pure — a #688-class cliff). ADR 0016's Go/No-Go
+  evidence section gained an R1 row: kill-criterion #3 + the #688 cliff are now
+  PROBED BY `r1-kernel-wheels.yml`, status PENDING-RUN.
+
+## 2026-06-14 — Single-kernel-collapse feasibility spike (R0 + levenshtein tracer)
+- New [../decisions/0016-single-kernel-collapse-spike.md](../decisions/0016-single-kernel-collapse-spike.md)
+  (ADR, linked from [../discovery.md](../discovery.md)) + two architecture nodes:
+  [../architecture/single-kernel-collapse-inventory.md](../architecture/single-kernel-collapse-inventory.md)
+  (R0 duplication census, ranked) and
+  [../architecture/single-kernel-collapse-roadmap.md](../architecture/single-kernel-collapse-roadmap.md)
+  (R0–R5 stages + the two hard constraints + the four additive/reversible rules).
+- **Fully-additive spike** — changes no default path, deletes nothing, flips no
+  flag. New compare-only artifacts: `scripts/check_kernel_equivalence.py` (a
+  generalizable `pure==kernel` 4dp gate, scorer-name parameterized),
+  `scripts/bench_kernel_levenshtein.py` (measure-first wall-clock), and
+  `packages/typescript/goldenmatch/tests/spike/kernel-equivalence.test.ts`
+  (pure-TS vs WASM, skip-guarded on the artifact). None imported by a default path.
+- **Verbatim 4-item kill criterion** recorded. In-env evidence on the levenshtein
+  tracer: Python `pure==native` bit-identical (max diff 0.0 over 2028 pairs; also
+  jaro_winkler 5.5e-17, token_sort 0.0); TS `pure==WASM` 4dp GREEN (built the WASM
+  artifact in-env, ran un-skipped); kernel 1.44x faster than pure (per-pair, its
+  pessimal shape). PENDING + load-bearing: cross-JS-target WASM (Node-only
+  verified) and all-platform abi3 wheels (the #688 class). Existing scorer/parity
+  tests stay green (TS 63, Python 138); `check_docs_consistency.py` PASS.
+- New [../decisions/0015-goldenmatch-2.0-deprecation-cut.md](../decisions/0015-goldenmatch-2.0-deprecation-cut.md);
+  linked from [../discovery.md](../discovery.md). Records the scope decision (cut
+  exactly the four prepared items; keep the universal scorer `list[tuple]` path;
+  `build_clusters` stays public as a frames-backed adapter; `:hash:` removal is
+  asymmetric — un-fingerprintable rows keep it) and the verification lesson.
+- **2.0.0 is live** on PyPI + the MCP registry (first backwards-incompatible major;
+  `1.30.0 → 2.0.0`, merged `93193ccb`). Removed: the `:hash:` identity bridge +
+  `GOLDENMATCH_IDENTITY_ID_SCHEME`, the `GOLDENMATCH_CLUSTER_FRAMES_OUT` gate +
+  legacy dict cluster path, the `cheapest_healthy` / `_scale_aware_backend` shims.
+- **Docs synced to 2.0 reality** (this follow-up PR): dropped the two removed flags
+  from `docs-site/goldenmatch/tuning.mdx` (kept `GOLDENMATCH_SAIL_IDENTITY_ID_SCHEME`);
+  rewrote the `identity-graph.mdx` back-compat/removal section (the `:h1:`→`:hash:`
+  dual-candidate fallback + once-per-process warning are gone); added a `2.0.0`
+  `<!-- README-callout -->` to the CHANGELOG and regenerated both READMEs via
+  `scripts/sync_readme_callouts.py`. Migration guide: `migrating-to-v2.mdx`.
+
+## 2026-06-14 — v1.0->2.0 evolution docs + reusable docs-sweep workflow (PR #946)
+- Two new Mintlify Guides pages: `docs-site/goldenmatch/v1-to-v2.mdx` (the full
+  1.0->2.0 capability arc) and `v1-vs-v2.mdx` (the at-a-glance comparison tables),
+  cross-linked to each other and to the existing `migrating-to-v2.mdx`.
+- New `.claude/doc-surfaces.md` — the repo's documentation-surface inventory (docs
+  site + nav, READMEs + the CHANGELOG-sourced callout sync, version lockstep, this
+  context network, examples, llms.txt/server.json). It is the thin repo-local list
+  the global `rollout-docs-sweep` skill delegates to, so the end-of-rollout doc pass
+  (the one this entry is part of) becomes a repeatable checklist instead of an ad-hoc
+  prompt. The skill greps the repo for every removed/renamed symbol first.
+- **Durable fact:** when a rollout ships, sweep ALL doc surfaces, not just the
+  CHANGELOG/migration guide. The 2.0.0 cut shipped with stale `tuning.mdx` /
+  `identity-graph.mdx` / READMEs until a follow-up caught them; the inventory + skill
+  exist so that does not recur.
+
 ## 2026-06-13 — Discoverability / public-surface audit (PR #883)
 - New workstream node [../planning/discoverability.md](../planning/discoverability.md);
   linked from [../discovery.md](../discovery.md) and promoted in

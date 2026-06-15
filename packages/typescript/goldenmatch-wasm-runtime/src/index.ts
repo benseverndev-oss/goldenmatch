@@ -13,6 +13,37 @@
 export interface LoadOptions {
   readonly wasmBytes?: Uint8Array;
   readonly wasmUrl?: string | URL;
+  /**
+   * A standard base64 encoding of the raw `.wasm` bytes. The UNIVERSAL loader
+   * strategy (see `decodeWasmBase64`): a consumer can pass the contents of its
+   * generated `<name>_base64` module here and the bytes resolve with NO fetch /
+   * fs / `import.meta.url` — the one path that works edge-safe in Workers + Deno
+   * + every bundler. Takes precedence over `wasmUrl` (but not explicit
+   * `wasmBytes`). The decode is pure-JS (`atob` where present, else a Node
+   * Buffer fallback), so it stays edge-safe.
+   */
+  readonly wasmBase64?: string;
+}
+
+/**
+ * Decode a standard-base64 string to raw bytes, edge-safe (no `node:*`). Uses
+ * the global `atob` (browser / Workers / Deno / Node 16+) when present, else a
+ * `Buffer` fallback for older Node. Exported so a consumer can decode its
+ * generated base64 module directly if it wants the bytes without `enableWasm`.
+ */
+export function decodeWasmBase64(b64: string): Uint8Array {
+  const g = globalThis as { atob?: (s: string) => string; Buffer?: typeof Buffer };
+  if (typeof g.atob === "function") {
+    const bin = g.atob(b64);
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+  if (typeof g.Buffer !== "undefined") {
+    const buf = g.Buffer.from(b64, "base64");
+    return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+  }
+  throw new Error("no base64 decoder available (atob / Buffer both absent)");
 }
 
 /**
@@ -20,8 +51,13 @@ export interface LoadOptions {
  * consumer's `new URL('./artifacts/<name>_bg.wasm', import.meta.url)` — it MUST
  * be evaluated in the consumer's module, never here.
  *
- * Resolution: explicit bytes -> explicit URL -> fs (Node) -> fetch
- * (browser/Workers/bundler). Any failure throws.
+ * Resolution: explicit bytes -> explicit base64 -> explicit URL -> fs (Node) ->
+ * fetch (browser/Workers/bundler). Any failure throws.
+ *
+ * `wasmBase64` is the UNIVERSAL strategy: a consumer that wires its generated
+ * `<name>_base64` module into `opts.wasmBase64` resolves with no fetch/fs/
+ * import.meta.url, which is the only path that is reliably edge-safe in
+ * Cloudflare Workers + Deno + every bundler.
  */
 export async function resolveWasmBytes(
   opts: LoadOptions,
@@ -30,6 +66,11 @@ export async function resolveWasmBytes(
   if (opts.wasmBytes !== undefined) {
     if (opts.wasmBytes.byteLength === 0) throw new Error("empty wasmBytes");
     return opts.wasmBytes;
+  }
+  if (opts.wasmBase64 !== undefined && opts.wasmBase64.length > 0) {
+    const bytes = decodeWasmBase64(opts.wasmBase64);
+    if (bytes.byteLength === 0) throw new Error("empty wasmBase64");
+    return bytes;
   }
   const url = opts.wasmUrl ?? fallbackUrl;
   const isNode =

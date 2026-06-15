@@ -50,11 +50,11 @@ npm install goldenmatch
 ```
 
 <!-- README-callouts:start  (auto-synced from CHANGELOG.md by scripts/sync_readme_callouts.py — edit the CHANGELOG, not this block) -->
-> **🆕 v1.30.0** — **Zero-training Fellegi-Sunter now beats hand-rolled, expert-tuned Splink, head-to-head and reproducibly.** On one shared evaluator across every dataset Splink scores, GoldenMatch's probabilistic auto-config wins on all of them: `historical_50k` pairwise F1 **0.778 vs 0.757** (cluster-level B³ **0.844 vs 0.789**), `febrl3` **0.991 vs 0.965**, `synthetic_person` **0.998 vs 0.996** — made reproducible by an EM training-pair determinism fix (#829). Full bake-off: `docs/benchmarks/2026-06-09-splink-bakeoff.md`.
+> **🆕 v2.0.0** — **GoldenMatch 2.0.0: the first backwards-incompatible major.** It removes four deprecation-window items, each shipped with a 1.x runway: the legacy `:hash:` identity lookup bridge + `GOLDENMATCH_IDENTITY_ID_SCHEME` (run `goldenmatch identity migrate-ids` before upgrading; un-fingerprintable rows keep their `:hash:` id), the `GOLDENMATCH_CLUSTER_FRAMES_OUT` gate + legacy dict cluster path (`build_clusters` stays as a frames-backed adapter), and the `cheapest_healthy` / `_scale_aware_backend` shims. Pipeline behavior is output-equivalent. Migration guide: [Migrating to v2](https://docs.bensevern.dev/goldenmatch/migrating-to-v2).
+>
+> **v1.30.0** — **Zero-training Fellegi-Sunter now beats hand-rolled, expert-tuned Splink, head-to-head and reproducibly.** On one shared evaluator across every dataset Splink scores, GoldenMatch's probabilistic auto-config wins on all of them: `historical_50k` pairwise F1 **0.778 vs 0.757** (cluster-level B³ **0.844 vs 0.789**), `febrl3` **0.991 vs 0.965**, `synthetic_person` **0.998 vs 0.996** — made reproducible by an EM training-pair determinism fix (#829). Full bake-off: `docs/benchmarks/2026-06-09-splink-bakeoff.md`.
 >
 > **v1.26.0** — **100M records, distributed, on a 4-worker Ray cluster — verified.** The distributed Phase-5 pipeline (`GOLDENMATCH_DISTRIBUTED_PIPELINE=2`) now runs a full 100,000,000-row dedupe end to end in ~213 s with the driver process peaking at 0.30 GB RSS. The unlock was removing every driver-side collect from the pipeline (scoring -> per-partition local connected-components -> distributed join -> distributed golden build + write), so nothing funnels back to a single node.
->
-> **v1.25.0 — Arrow-native groundwork + leaner large-N runs** — columnar pair-stream / two-frame-cluster entry points and optional Rust/Arrow-C kernels (`build_clusters`, `dedup_pairs`, `record_fingerprints`, MST oversized-split) land behind the `goldenmatch._native` extension, purely additive with the pure-Python + Polars pipeline unchanged as the default and byte-for-byte reference. Plus single-node memory wins (golden -2.6 GB, bucket -3.8 GB peak at 10M; standardize ~25-30s off the prep wall) and fixes for a silently-dropped GoldenCheck quality scan and a prep-cache `id()`-recycle flake. PRs #588-#650.
 <!-- README-callouts:end -->
 
 ---
@@ -65,7 +65,7 @@ npm install goldenmatch
 - **96.4% F1 zero-config** on DBLP-ACM (hand-tuned ceiling: 91.8%). [DQBench ER score: 62.87 no-LLM](https://github.com/benseverndev-oss/dqbench)
 - **Learning Memory** — corrections from stewards, unmerges, and LLM votes persist to disk and apply automatically on the next run; survives row reorders via record-hash re-anchoring (v1.6.0)
 - **Privacy-preserving** — match across organizations without sharing raw data (PPRL, 92.4% F1)
-- **54 MCP tools** — use from Claude Desktop, Claude Code, or any AI assistant ([Smithery](https://smithery.ai/servers/benzsevern/goldenmatch))
+- **58 MCP tools** — use from Claude Desktop, Claude Code, or any AI assistant ([Smithery](https://smithery.ai/servers/benzsevern/goldenmatch))
 - **Production-ready** — Postgres sync, daemon mode, lineage tracking, review queues
 
 ### What's new in v1.17
@@ -1133,10 +1133,12 @@ GoldenMatch includes a gold-themed interactive terminal UI:
 
 ## Environment Variables
 
-Key environment variables for tuning and hardening GoldenMatch:
+Key environment variables for tuning and hardening GoldenMatch. This is a curated subset — for **every** `GOLDENMATCH_*` variable with verified defaults and when-to-use guidance, see the [Tuning & opt-ins reference](https://docs.bensevern.dev/goldenmatch/tuning).
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `GOLDENMATCH_NATIVE` | `auto` | Native Rust kernel gate. `auto` uses it for signed-off components when the wheel is importable; **`1` requires it and fails loud** (use on scale/bench runs so a missing wheel can't silently fall back to 100x-slower pure Python); `0` forces Python. |
+| `GOLDENMATCH_NATIVE_ADDRESS_NORMALIZE` | *(off)* | Set to `1` for the Polars-native address-normalize fast path (skips the per-row Python plugin slog on address-heavy data at scale). |
 | `GOLDENMATCH_ALLOWED_ROOT` | *(unset)* | Opt-in path sandbox. When set, every user-supplied file path (MCP tools, ingest, rollback, lineage, domain registry) must resolve under this directory. Raises `PathOutsideAllowedRootError` on escape. Recommended for network-exposed deployments (e.g. the Railway MCP server sets it to the `/data` volume). |
 | `GOLDENMATCH_AUTOCONFIG_MEMORY` | `1` | Set to `0` to disable cross-run auto-config memory (`~/.goldenmatch/autoconfig_memory.db`). Useful in CI. |
 | `GOLDENMATCH_AUTOCONFIG_LLM` | `0` | Set to `1` to enable LLM policy fallback when heuristic auto-config rules are exhausted. Requires `OPENAI_API_KEY`. |

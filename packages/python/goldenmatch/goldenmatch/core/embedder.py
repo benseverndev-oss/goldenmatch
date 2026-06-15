@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from pathlib import Path
 
 import numpy as np
@@ -77,6 +78,9 @@ class Embedder:
 # ---------------------------------------------------------------------------
 
 _embedders: dict[str, Embedder | _ProviderEmbedder] = {}
+# Guards the check-then-set in get_embedder so concurrent first-use from the
+# block-scoring threads can't construct (and load) the same heavy model twice.
+_embedders_lock = threading.Lock()
 
 
 class _ProviderEmbedder:
@@ -128,6 +132,18 @@ def _make_inhouse_embedder(model_name: str) -> _ProviderEmbedder:
     return _ProviderEmbedder(InHouseProvider(path))
 
 
+def _make_llama_embedder(model_name: str) -> _ProviderEmbedder:
+    """Build a `_ProviderEmbedder` backed by a local GGUF model via llama.cpp.
+
+    ``model_name`` is ``"llama:<path-to-gguf>"`` or bare ``"llama"`` (path from
+    ``GOLDENMATCH_LLAMA_GGUF``). Path slicing preserves any ``:`` in the path.
+    """
+    from goldenmatch.embeddings.providers import LlamaGGUFProvider
+
+    path = model_name[len("llama:"):] if model_name.startswith("llama:") else None
+    return _ProviderEmbedder(LlamaGGUFProvider(path))
+
+
 def inhouse_embedding_available() -> bool:
     """Whether the local in-house embedding model is reachable without cloud.
 
@@ -157,36 +173,55 @@ def get_embedder(model_name: str = "all-MiniLM-L6-v2") -> Embedder | _ProviderEm
     A ``model_name`` of ``"inhouse"`` / ``"inhouse:<path>"`` routes to the local,
     in-house ER embedder (`goldenmatch.embeddings.inhouse`) — no cloud or torch.
     """
+    # Fast path: already cached (lock-free).
+    cached = _embedders.get(model_name)
+    if cached is not None:
+        return cached
+    # Double-checked locking: under concurrent first-use from the block-scoring
+    # threads an unguarded check-then-set would construct (and load) the heavy
+    # model twice. Build once under the lock; re-check in case a peer beat us.
+    with _embedders_lock:
+        cached = _embedders.get(model_name)
+        if cached is not None:
+            return cached
+        embedder = _build_embedder(model_name)
+        _embedders[model_name] = embedder
+        return embedder
+
+
+def _build_embedder(model_name: str) -> Embedder | _ProviderEmbedder:
+    """Construct (NOT cache) the embedder for ``model_name``. The caller holds
+    ``_embedders_lock`` and is responsible for caching the result."""
     # In-house embedder: explicit, config-driven (the matchkey field's `model`).
     if model_name == "inhouse" or model_name.startswith("inhouse:"):
-        if model_name not in _embedders:
-            _embedders[model_name] = _make_inhouse_embedder(model_name)
-        return _embedders[model_name]
+        return _make_inhouse_embedder(model_name)
 
-    if model_name not in _embedders:
+    # Local GGUF embedder via llama.cpp (offline, no cloud/torch). Opt-in via
+    # `model='llama:/path.gguf'` or GOLDENMATCH_LLAMA_GGUF.
+    if model_name == "llama" or model_name.startswith("llama:"):
+        return _make_llama_embedder(model_name)
+
+    try:
+        from goldenmatch.core.gpu import detect_gpu_mode
+        mode = detect_gpu_mode()
+    except Exception:
+        logger.warning("GPU detection failed, defaulting to local embedder.", exc_info=True)
+        mode = None
+
+    if mode is not None and mode.value == "vertex":
         try:
-            from goldenmatch.core.gpu import detect_gpu_mode
-            mode = detect_gpu_mode()
-        except Exception:
-            logger.warning("GPU detection failed, defaulting to local embedder.", exc_info=True)
-            mode = None
-
-        if mode is not None and mode.value == "vertex":
-            try:
-                from goldenmatch.core.vertex_embedder import VertexEmbedder
-                logger.info("GPU mode=vertex: using VertexEmbedder (ignoring model_name=%s)", model_name)
-                _embedders[model_name] = VertexEmbedder()
-            except ImportError:
-                logger.error(
-                    "GOLDENMATCH_GPU_MODE=vertex but google-cloud-aiplatform is not installed. "
-                    "Install with: pip install goldenmatch[vertex]. Falling back to local embedder."
-                )
-                _embedders[model_name] = Embedder(model_name)
-            except Exception as e:
-                logger.error(
-                    "VertexEmbedder initialization failed: %s. Falling back to local embedder.", e,
-                )
-                _embedders[model_name] = Embedder(model_name)
-        else:
-            _embedders[model_name] = Embedder(model_name)
-    return _embedders[model_name]
+            from goldenmatch.core.vertex_embedder import VertexEmbedder
+            logger.info("GPU mode=vertex: using VertexEmbedder (ignoring model_name=%s)", model_name)
+            return VertexEmbedder()
+        except ImportError:
+            logger.error(
+                "GOLDENMATCH_GPU_MODE=vertex but google-cloud-aiplatform is not installed. "
+                "Install with: pip install goldenmatch[vertex]. Falling back to local embedder."
+            )
+            return Embedder(model_name)
+        except Exception as e:
+            logger.error(
+                "VertexEmbedder initialization failed: %s. Falling back to local embedder.", e,
+            )
+            return Embedder(model_name)
+    return Embedder(model_name)

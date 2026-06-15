@@ -493,7 +493,7 @@ def build_clusters(
     # list[(int, int, float)] the Union-Find / pair_scores path below consumes.
     # The return shape is unchanged (dict[int, dict]); Phase 2 changes it to
     # the two-frame ClusterFrames layout. The list[tuple] branch below stays
-    # for the deprecation window.
+    # as the permanent input shape alongside the columnar path.
     if _is_pairs_dataframe(pairs):
         if all_ids is None and not pairs.is_empty():
             import numpy as _np
@@ -516,17 +516,6 @@ def build_clusters(
     )
 
 
-def _cluster_frames_out_enabled() -> bool:  # pyright: ignore[reportUnusedFunction]  # used cross-module: pipeline.py imports + calls this; pyright's private-symbol unused check misses the call site
-    """Frames-out path gate. When enabled, ``build_cluster_frames`` returns the
-    two-frame ``ClusterFrames`` columnar representation directly, WITHOUT
-    materializing the per-cluster ``dict[int, dict]`` for non-oversized clusters.
-
-    Default ON; set ``GOLDENMATCH_CLUSTER_FRAMES_OUT=0`` to force the legacy dict
-    path. Independent of ``build_clusters`` and all its consumers, which are
-    untouched. The pipeline wires this gate to choose ``build_cluster_frames``
-    vs ``build_clusters``."""
-    return os.environ.get("GOLDENMATCH_CLUSTER_FRAMES_OUT", "1").strip() != "0"
-
 
 def build_cluster_frames(
     pairs: Any,
@@ -537,7 +526,7 @@ def build_cluster_frames(
     auto_split: bool,
     split_edge_budget: int | None = None,
 ) -> ClusterFrames:
-    """SP-A frames-out entry point (gated ``GOLDENMATCH_CLUSTER_FRAMES_OUT``).
+    """SP-A frames-out entry point (the default cluster-stage path).
 
     Returns the two-frame ``ClusterFrames`` columnar representation
     (``assignments`` + 9-col ``metadata``) WITHOUT building the per-cluster

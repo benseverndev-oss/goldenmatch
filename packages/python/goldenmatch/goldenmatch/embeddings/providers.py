@@ -113,6 +113,51 @@ class OpenAIProvider:
         return np.asarray([r["embedding"] for r in rows], dtype=np.float32)
 
 
+class LlamaGGUFProvider:
+    """Local GGUF embeddings via llama-cpp-python — no cloud, no torch, offline.
+
+    Loads a GGUF embedding model (e.g. bge-small, nomic-embed) in-process and
+    returns L2-normalized vectors. `pip install goldenmatch[llama]`. Model path
+    from ``model='llama:/path/to/model.gguf'`` or ``GOLDENMATCH_LLAMA_GGUF``.
+    """
+
+    def __init__(self, model_path: str | None = None, n_ctx: int = 512, n_threads: int | None = None) -> None:
+        self.model_path = model_path or os.environ.get("GOLDENMATCH_LLAMA_GGUF")
+        if not self.model_path:
+            raise ValueError(
+                "llama embedder requires a GGUF model path: set the matchkey field "
+                "`model` to 'llama:/path/to/model.gguf', or set GOLDENMATCH_LLAMA_GGUF."
+            )
+        self.model_id = f"llama:{os.path.basename(self.model_path)}"
+        self.n_ctx = n_ctx
+        self.n_threads = n_threads
+        self._llm = None
+
+    def _load(self) -> None:
+        try:
+            from llama_cpp import Llama
+        except ImportError as e:
+            raise ImportError(
+                "llama embeddings require llama-cpp-python. "
+                "Install with: pip install goldenmatch[llama]"
+            ) from e
+        self._llm = Llama(
+            model_path=self.model_path, embedding=True,
+            n_ctx=self.n_ctx, n_threads=self.n_threads, verbose=False,
+        )
+
+    def embed(self, texts: list[str]) -> np.ndarray:
+        if not texts:
+            return np.zeros((0, 0), dtype=np.float32)
+        if self._llm is None:
+            self._load()
+        clean = [t if (t is not None and str(t).strip()) else " " for t in texts]
+        arr = np.asarray(self._llm.embed(list(clean)), dtype=np.float32)
+        norms = np.linalg.norm(arr, axis=1, keepdims=True)
+        norms[norms == 0.0] = 1.0
+        return arr / norms
+
+
 class SnowflakeCortexProvider:
     """Snowflake Cortex embeddings via ``SNOWFLAKE.CORTEX.EMBED_TEXT_<dim>``.
 

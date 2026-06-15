@@ -14,7 +14,18 @@ import { setScorerBackend } from "./backend.js";
 export type { ScorerBackend } from "./backend.js";
 export { WASM_COVERED_SCORERS } from "./backend.js";
 
-export type EnableWasmOptions = EnableOptions;
+/**
+ * `universal: true` selects the UNIVERSAL loader (R1 Workstream A): resolve the
+ * artifact from the base64-INLINED `score_wasm_base64.js` module instead of via
+ * `import.meta.url` + fs/fetch. This is the only path that loads edge-safe
+ * across all four JS targets (Node/browser/Workers/Deno) and every bundler with
+ * no per-target hacks (Workers/Deno can't do `import.meta.url`-relative asset
+ * resolution). Costs bundle size (base64 ~= 4/3 of the raw wasm). The DEFAULT
+ * (`universal` unset/false) keeps the URL/fs/fetch loader. Either way pure-TS
+ * stays the default + fallback — `universal` only changes HOW the bytes are
+ * resolved once you opt into WASM.
+ */
+export type EnableWasmOptions = EnableOptions & { readonly universal?: boolean };
 
 let _enabled = false;
 
@@ -32,8 +43,26 @@ export async function enableWasm(opts: EnableWasmOptions = {}): Promise<boolean>
     // instantiateBackend does the wasm-bindgen glue import inside itself; byte
     // resolution + the try/fallback live in enableWasmBackend.
     const { instantiateBackend } = await import("./loader.js");
+
+    // Universal loader (opt-in): resolve bytes from the base64-inlined module so
+    // no fetch/fs/import.meta.url is needed (edge-safe on Workers/Deno/bundlers).
+    // If the generated module is absent (default checkout) we leave opts as-is
+    // and fall through to the URL loader, which then falls back to pure-TS.
+    let resolveOpts: EnableWasmOptions = opts;
+    if (opts.universal && opts.wasmBytes === undefined && opts.wasmBase64 === undefined) {
+      const { loadInlinedWasmBase64 } = await import("./universal-loader.js");
+      const b64 = await loadInlinedWasmBase64();
+      if (b64 !== null) resolveOpts = { ...opts, wasmBase64: b64 };
+      else if (opts.require) {
+        throw new Error(
+          "enableWasm({ universal: true, require: true }): inlined base64 artifact " +
+            "(score_wasm_base64.js) absent — run build_wasm.sh to generate it",
+        );
+      }
+    }
+
     const ok = await enableWasmBackend(
-      opts,
+      resolveOpts,
       instantiateBackend,
       setScorerBackend,
       new URL("./artifacts/score_wasm_bg.wasm", import.meta.url),

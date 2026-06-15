@@ -67,7 +67,7 @@ export class ClusterDistributionAnalyzer implements Analyzer {
       { key: "cluster.singleton_ratio", value: count ? singletons / count : 0, unit: "ratio", direction: "neutral" },
       { key: "cluster.size_p50", value: quantile(sizes, 0.5), unit: "rows", direction: "neutral" },
       { key: "cluster.size_p95", value: quantile(sizes, 0.95), unit: "rows", direction: "neutral" },
-      { key: "cluster.size_max", value: sizes.length ? Math.max(...sizes) : 0, unit: "rows", direction: "neutral" },
+      { key: "cluster.size_max", value: sizes.length ? sizes.reduce((m, v) => (v > m ? v : m), -Infinity) : 0, unit: "rows", direction: "neutral" },
       {
         key: "cluster.reduction_ratio",
         value: recordCount ? 1 - count / recordCount : 0,

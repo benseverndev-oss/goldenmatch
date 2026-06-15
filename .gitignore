@@ -19,6 +19,10 @@ packages/python/goldenmatch/goldenmatch/web/static/*
 packages/python/goldenmatch/web/frontend/test-results/
 packages/python/goldenmatch/web/frontend/playwright-report/
 
+# vitest browser-mode runtime output (R1 cross-JS-target WASM harnesses)
+**/.vitest-attachments/
+packages/typescript/goldenmatch/tests/spike/__screenshots__/
+
 # YAML-edit backups (web UI's POST /api/v1/rules/save writes goldenmatch.yml.bak
 # next to the file before clobbering — local-only safety net, not source).
 *.yml.bak
@@ -79,3 +83,6 @@ packages/python/goldenflow/goldenflow/_native*.so
 # Same, for goldenanalysis (built from packages/rust/extensions/analysis-native
 # via scripts/build_analysis_native.py).
 packages/python/goldenanalysis/goldenanalysis/_native*.so
+
+# codebase-memory-mcp local index/snapshot (rebuilt by the SessionStart hook)
+.codebase-memory/

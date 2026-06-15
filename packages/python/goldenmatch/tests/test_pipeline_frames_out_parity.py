@@ -398,15 +398,16 @@ def test_frames_out_identity_parity(monkeypatch, tmp_path, native):
 def test_frames_out_identity_consumes_cluster_frames_directly(
     monkeypatch, tmp_path, native
 ):
-    """SP-C: on frames-out, resolve_clusters gets cluster_frames= (clusters=None).
+    """SP-C: resolve_clusters always gets cluster_frames= (clusters=None).
 
     Spies on ``goldenmatch.identity.resolve_clusters`` (the symbol
-    ``_resolve_identities`` imports) and asserts the frames-out call passes a
+    ``_resolve_identities`` imports) and asserts every pipeline call passes a
     ``ClusterFrames`` via ``cluster_frames=`` with ``clusters`` None + a
-    non-None ``pair_score_view``, while the gate-OFF call passes a dict via
-    ``clusters`` and no frames. The byte-identical end-to-end partition is
-    already locked by ``test_frames_out_identity_parity``; this leg pins the
-    SP-C wiring so a regression to the dict-rebuild path is caught directly.
+    non-None ``pair_score_view``. The GOLDENMATCH_CLUSTER_FRAMES_OUT env var is
+    now inert (legacy dict branch removed in v2.0); both "off" and "on" runs
+    exercise the same frames-out path. The byte-identical end-to-end partition
+    is locked by ``test_frames_out_identity_parity``; this leg pins the SP-C
+    wiring so a regression to the dict-rebuild path is caught directly.
     """
     monkeypatch.setenv("GOLDENMATCH_NATIVE", native)
     _skip_if_no_native(native)
@@ -460,15 +461,20 @@ def test_frames_out_identity_consumes_cluster_frames_directly(
     off_call = captured["off"]
     on_call = captured["on"]
 
-    # Gate-OFF: dict in, no frames.
-    assert off_call["clusters_is_dict"] is True
-    assert off_call["cluster_frames"] is None
-
-    # Gate-ON (SP-C): frames in, clusters None, view supplied.
-    assert on_call["clusters_is_none"] is True
-    assert on_call["clusters_is_dict"] is False
-    assert isinstance(on_call["cluster_frames"], ClusterFrames)
-    assert on_call["pair_score_view"] is not None
+    # Both paths are now frames-out (the legacy dict branch was removed in v2.0).
+    # GOLDENMATCH_CLUSTER_FRAMES_OUT=0 is inert; the pipeline always uses
+    # build_cluster_frames. Both calls must pass cluster_frames to resolve_clusters.
+    for leg, call in [("off", off_call), ("on", on_call)]:
+        assert call["clusters_is_none"] is True, (
+            f"{leg}: expected clusters=None (frames-out), got dict"
+        )
+        assert call["clusters_is_dict"] is False, leg
+        assert isinstance(call["cluster_frames"], ClusterFrames), (
+            f"{leg}: expected ClusterFrames, got {call['cluster_frames']!r}"
+        )
+        assert call["pair_score_view"] is not None, (
+            f"{leg}: expected pair_score_view, got None"
+        )
 
 
 # ── SP-C Task 3b: deferred dict rebuild past the identity stage ────────────
@@ -512,6 +518,7 @@ def _clusters_partition(results):
 
 
 @pytest.mark.parametrize("native", ["1", "0"])
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
 def test_frames_out_output_on_deferred_dict_parity(monkeypatch, tmp_path, native):
     """Deferred output_clusters + lineage consumers: gate-ON dict == gate-OFF.
 

@@ -132,7 +132,7 @@ jobs:
             platforms: linux/amd64
 
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
 
       # If this is a tag push, skip jobs whose image doesn't match the tag prefix.
       # We do this with an `if:` on the steps below by comparing matrix.image to
@@ -187,12 +187,12 @@ jobs:
         id: buildx
         if: steps.gate.outputs.build == 'true'
         continue-on-error: true
-        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd  # v4.0.0
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5  # v4.1.0
         with:
           driver-opts: image=ghcr.io/${{ github.repository_owner }}/buildkit:buildx-stable-1
       - name: Set up Docker Buildx (retry)
         if: steps.gate.outputs.build == 'true' && steps.buildx.outcome == 'failure'
-        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd  # v4.0.0
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5  # v4.1.0
         with:
           driver-opts: image=ghcr.io/${{ github.repository_owner }}/buildkit:buildx-stable-1
 

@@ -1,0 +1,42 @@
+---
+title: "v1 vs v2 at a glance"
+description: "One-screen comparison of GoldenMatch 1.0 and 2.0: what breaks in the 2.0 major, and the capability deltas that accumulated across the 1.x line."
+keywords: ["v1", "v2", "2.0", "comparison", "breaking changes", "upgrade", "at a glance"]
+---
+
+The scannable version. For the narrative, see [What changed from 1.0 to 2.0](/goldenmatch/v1-to-v2); for the upgrade steps, see [Migrating to v2](/goldenmatch/migrating-to-v2).
+
+<Note>
+  The 2.0 major is a **small, clean break** (four removed legacy paths, output unchanged). The big delta is the 1.x capability accumulation in the second table.
+</Note>
+
+## What breaks in 2.0
+
+| Removed in 2.0 | Replacement | Action needed |
+|---|---|---|
+| `GOLDENMATCH_IDENTITY_ID_SCHEME` + legacy `:hash:` lookup bridge | Canonical `:h1:` scheme (only scheme) | Run `goldenmatch identity migrate-ids` **before** upgrading if you persist an identity DB. Un-fingerprintable rows keep `:hash:`. |
+| `GOLDENMATCH_CLUSTER_FRAMES_OUT` | Arrow frames-out path (the only path now) | Remove the env var; it is silently ignored. Output is unchanged. |
+| `RunHistory.cheapest_healthy()` | `pick_committed()` | Rename the call. |
+| `_scale_aware_backend` (internal shim) | `auto_configure_df` / `dedupe_df` (v3 planner) | Switch to the public API if you imported it directly. |
+
+Nothing else in the public API changed. `dedupe()`, `match()`, `pprl_link()`, `evaluate()` behave identically.
+
+## Capabilities: 1.0 vs 2.0
+
+| Area | GoldenMatch 1.0 (2026-03-23) | GoldenMatch 2.0 (2026-06-14) |
+|---|---|---|
+| Core API | `dedupe` / `match` / `pprl_link` / `evaluate`, 96 exports, 21 CLI commands, REST + MCP | Same surface, unchanged |
+| Config | Zero-config + YAML schema | Zero-config + the **v3 introspective planner** (auto backend/plan, refuses low-confidence at scale) |
+| Identity | Run-local cluster IDs only | **Durable Identity Graph** (v1.15): stable `entity_id`s, evidence edges, event log, 6 surfaces |
+| Single-box scale | Polars in-memory | Planner-selected `bucket` path + signed-off **native Rust kernels** (`GOLDENMATCH_NATIVE=auto`) |
+| Distributed | Ray backend (basic) | **Phase-5 streaming pipeline**: 100M rows end-to-end, ~0.3 GB driver RSS; validated on a real 5-node cluster |
+| Probabilistic matching | Scorer-level | **Splink-class Fellegi-Sunter** that beats hand-rolled Splink on every shared-evaluator dataset (zero training) |
+| Acceleration | Pure Python / Polars | Optional `goldenmatch[native]` Rust/Arrow kernels; bit-parity to the Python reference |
+| SQL | — | **In-database UDFs** for DuckDB / Postgres / DataFusion |
+| Other engines | Ray only | Opt-in **Sail (Spark Connect)** tier; opt-in **WASM** acceleration for the TypeScript port |
+
+## See also
+
+- [What changed from 1.0 to 2.0](/goldenmatch/v1-to-v2) — the full story behind this table.
+- [Migrating to v2](/goldenmatch/migrating-to-v2) — the upgrade steps.
+- [Tuning & opt-ins](/goldenmatch/tuning) — every `GOLDENMATCH_*` knob in 2.0.

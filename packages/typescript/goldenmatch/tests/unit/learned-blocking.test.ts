@@ -61,7 +61,7 @@ describe("learnBlockingRules", () => {
       predicateDepth: 3,
     });
     // At least one predicate should retain some useful recall.
-    const bestRecall = Math.max(...rules.predicates.map((p) => p.recall));
+    const bestRecall = rules.predicates.map((p) => p.recall).reduce((m, v) => (v > m ? v : m), -Infinity);
     expect(bestRecall).toBeGreaterThan(0);
   });
 

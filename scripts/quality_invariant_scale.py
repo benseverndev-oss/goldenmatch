@@ -210,6 +210,138 @@ def _hash_name(salt: str, seed: int, cid: int, width: int = _NAME_WIDTH) -> str:
     return "".join(out)
 
 
+def _bijective_int_vec(cids: np.ndarray, mult: int, off: int, modulus: int) -> np.ndarray:
+    """Vectorized ``_bijective_int`` over an int64 array of cids. int64-safe to
+    n_clusters=40M (200M rows): max cid*mult ~ 40M*3.3e9 ~ 1.3e17 < 9.2e18."""
+    return (cids.astype(np.int64) * np.int64(mult) + np.int64(off)) % np.int64(modulus)
+
+
+def _hash_names_vec(salt: str, seed: int, cids: np.ndarray,
+                    width: int = _NAME_WIDTH) -> np.ndarray:
+    """Vectorized ``_hash_name`` over an int64 array of cids -> '<U' name array.
+    Bit-identical to the scalar version: same bijection, same base-24 digit order
+    (digit 0 first), same syllable table."""
+    base = len(_SYL)
+    mult = _MULT_FIRST if salt == "F" else _MULT_LAST
+    modulus = base ** width
+    off = (seed * 2654435761 + (0 if salt == "F" else 7)) % modulus
+    m = _bijective_int_vec(cids, mult, off, modulus)
+    syl = np.array(_SYL)
+    out: np.ndarray | None = None
+    for _ in range(width):
+        part = syl[(m % base).astype(np.int64)]
+        out = part if out is None else np.char.add(out, part)
+        m = m // base
+    assert out is not None  # width >= 1
+    return out
+
+
+def _generate_realistic(n_rows: int, seed: int = 0, corruption: str = "light"
+                        ) -> tuple[pl.DataFrame, np.ndarray]:
+    """Vectorized realistic-shape generator. Bit-identical to the prior per-row
+    implementation (pinned-hash regression test) but builds every column with
+    numpy/`np.char` instead of Python list comprehensions over n_rows. The only
+    remaining per-element work is ``_apply_field_corruption``, which already loops
+    over the masked subset only and is fed Python lists so the masked-cell edits
+    stay exactly the scalar path. ~10-50x faster at scale (the single-threaded
+    per-row expansion was the QIS gen wall; see project_scale_driver_bottleneck)."""
+    n_rows = (n_rows // ROWS_PER_CLUSTER) * ROWS_PER_CLUSTER
+    n_clusters = n_rows // ROWS_PER_CLUSTER
+
+    # Each random field draws from its OWN independent stream (one draw per
+    # stream) so the first k values of an N-sized draw equal a k-sized draw:
+    # prefix stability. (See the long note in the prior implementation; the draw
+    # streams are byte-for-byte unchanged here -- only the string assembly moved
+    # from Python loops to numpy.)
+    def _field_rng(key: int):
+        return np.random.default_rng(np.random.SeedSequence([seed, 0xA11CE, key]))
+
+    cl = np.arange(n_clusters, dtype=np.int64)
+
+    # Per-cluster canonical names (vectorized _hash_name).
+    first_canon = _hash_names_vec("F", seed, cl)
+    last_canon = _hash_names_vec("L", seed, cl)
+
+    # #510 twin pass: a deterministic fraction of clusters become confusable twins
+    # (share first+last name, keep their own address/zip/email). In the scalar
+    # loop only ODD c copy their even partner (c-1); even c self-copy (no-op). The
+    # vectorized assignment reads the ORIGINAL canon (RHS evaluated first), and the
+    # even partner is never modified, so it matches the sequential result exactly.
+    corr = CORRUPTION_LEVELS[corruption]
+    if corr.ambiguous_frac > 0.0:
+        twin = cl ^ 1
+        lo = cl & ~np.int64(1)
+        h = (_bijective_int_vec(lo, _MULT_LAST, 12345, 1_000_000) % 1000) / 1000.0
+        mask = (twin < n_clusters) & (h < corr.ambiguous_frac)
+        first_canon[mask] = first_canon[lo[mask]]
+        last_canon[mask] = last_canon[lo[mask]]
+
+    _addr_mod = 10 ** _ADDR_DIGITS
+    _addr_off = (seed * _MULT_ADDR + 1) % _addr_mod
+    street_num = _bijective_int_vec(cl, _MULT_ADDR, _addr_off, _addr_mod) + 1
+    street_idx = _field_rng(1).integers(0, len(_STREETS), n_clusters)
+    address_canon = np.char.add(
+        np.char.add(street_num.astype(str), " "), np.array(_STREETS)[street_idx])
+    city_canon = np.array(_CITIES)[_field_rng(2).integers(0, len(_CITIES), n_clusters)]
+    zip_canon = np.char.rjust((cl % 100000).astype(str), 5, "0")
+    year_canon = _field_rng(3).integers(1940, 2005, n_clusters).astype(str)
+
+    cids = np.repeat(cl, ROWS_PER_CLUSTER)
+    typo = _field_rng(4).random(n_rows) < TYPO_RATE
+
+    # Per-row expansion: repeat each canonical 5x (== [canon[c] for c in cids]
+    # since cids = repeat(arange, 5)).
+    first_rows = np.repeat(first_canon, ROWS_PER_CLUSTER)
+    last_rows = np.repeat(last_canon, ROWS_PER_CLUSTER)
+    addr_rows = np.repeat(address_canon, ROWS_PER_CLUSTER)
+    city_rows = np.repeat(city_canon, ROWS_PER_CLUSTER)
+    zip_rows = np.repeat(zip_canon, ROWS_PER_CLUSTER)
+    year_rows = np.repeat(year_canon, ROWS_PER_CLUSTER)
+
+    # Same 'a' -> '@' typo on first_name (np.char.replace == str.replace: all
+    # occurrences; length-preserving so no '<U' truncation). Carries into email.
+    first_with_typo = np.where(typo, np.char.replace(first_rows, "a", "@"), first_rows)
+
+    if any(getattr(corr, f) > 0.0 for f in _CORRUPT_FIELDS):
+        ss = np.random.SeedSequence([seed, 0xC0FFEE, _CORRUPT_LEVEL_INT[corruption]])
+        streams = dict(zip(_CORRUPT_FIELDS, ss.spawn(len(_CORRUPT_FIELDS))))
+        # Feed Python lists so _apply_field_corruption's masked-cell assignment is
+        # byte-identical to the scalar path (a '<U' array would risk truncating a
+        # longer edit and stores numpy str_ not str).
+        first_out = _apply_field_corruption(
+            first_with_typo.tolist(), corr.first_name,
+            np.random.default_rng(streams["first_name"]), severity=corr.severity)
+        last_out = _apply_field_corruption(
+            last_rows.tolist(), corr.last_name,
+            np.random.default_rng(streams["last_name"]), severity=corr.severity)
+        addr_out = _apply_field_corruption(
+            addr_rows.tolist(), corr.address,
+            np.random.default_rng(streams["address"]), severity=corr.severity)
+        # Email inherits the CORRUPTED name (realistic), then its own low-rate pass.
+        email_out = [f"{f}.{l}@example.com" for f, l in zip(first_out, last_out)]
+        email_out = _apply_field_corruption(
+            email_out, corr.email,
+            np.random.default_rng(streams["email"]), severity=corr.severity)
+    else:
+        first_out = first_with_typo
+        last_out = last_rows
+        addr_out = addr_rows
+        email_out = np.char.add(np.char.add(
+            np.char.add(first_with_typo, "."), last_rows), "@example.com")
+
+    df = pl.DataFrame({
+        "id": np.char.add("r", np.arange(n_rows).astype(str)),
+        "first_name": first_out,
+        "last_name": last_out,
+        "address": addr_out,
+        "city": city_rows,
+        "zip": zip_rows,
+        "birth_year": year_rows,
+        "email": email_out,
+    })
+    return df, cids
+
+
 def generate_with_gt(n_rows: int, seed: int = 0, shape: str = "realistic",
                      corruption: str = "light"
                      ) -> tuple[pl.DataFrame, np.ndarray]:
@@ -537,12 +669,23 @@ def _clusters_signature(predicted_members: dict[int, list[int]]) -> str:
 _FROZEN_CONFIG_PATH = Path(__file__).resolve().parent / "qis_realistic_frozen_config.json"
 
 
+# Embedded copy of qis_realistic_frozen_config.json so the config travels with
+# the script under `ray submit` (which ships only this .py file). The committed
+# JSON stays the source of truth; test_qis_gen_parity asserts they match.
+_FROZEN_CONFIG_JSON = (
+    "{\"input\":null,\"output\":{\"path\":null,\"format\":null,\"directory\":null,\"run_name\":null,\"lineage_provenance\":false},\"match_settings\":null,\"matchkeys\":[{\"name\":\"exact_email\",\"type\":\"exact\",\"comparison\":null,\"fields\":[{\"field\":\"email\",\"column\":null,\"transforms\":[\"lowercase\",\"strip\"],\"scorer\":null,\"weight\":null,\"model\":null,\"columns\":null,\"column_weights\":null,\"levels\":2,\"partial_threshold\":0.8,\"tf_adjustment\":false,\"type\":null,\"em_iterations\":null}],\"threshold\":0.5,\"auto_threshold\":false,\"rerank\":false,\"rerank_model\":\"cross-encoder/ms-marco-MiniLM-L-6-v2\",\"rerank_band\":0.1,\"negative_evidence\":[],\"em_iterations\":20,\"convergence_threshold\":0.001,\"link_threshold\":null,\"review_threshold\":null,\"model_path\":null},{\"name\":\"exact_identity\",\"type\":\"exact\",\"comparison\":null,\"fields\":[{\"field\":\"first_name\",\"column\":null,\"transforms\":[\"lowercase\",\"strip\"],\"scorer\":null,\"weight\":null,\"model\":null,\"columns\":null,\"column_weights\":null,\"levels\":2,\"partial_threshold\":0.8,\"tf_adjustment\":false,\"type\":null,\"em_iterations\":null},{\"field\":\"last_name\",\"column\":null,\"transforms\":[\"lowercase\",\"strip\"],\"scorer\":null,\"weight\":null,\"model\":null,\"columns\":null,\"column_weights\":null,\"levels\":2,\"partial_threshold\":0.8,\"tf_adjustment\":false,\"type\":null,\"em_iterations\":null},{\"field\":\"birth_year\",\"column\":null,\"transforms\":[\"lowercase\",\"strip\"],\"scorer\":null,\"weight\":null,\"model\":null,\"columns\":null,\"column_weights\":null,\"levels\":2,\"partial_threshold\":0.8,\"tf_adjustment\":false,\"type\":null,\"em_iterations\":null}],\"threshold\":0.5,\"auto_threshold\":false,\"rerank\":false,\"rerank_model\":\"cross-encoder/ms-marco-MiniLM-L-6-v2\",\"rerank_band\":0.1,\"negative_evidence\":[],\"em_iterations\":20,\"convergence_threshold\":0.001,\"link_threshold\":null,\"review_threshold\":null,\"model_path\":null},{\"name\":\"fuzzy_match\",\"type\":\"weighted\",\"comparison\":null,\"fields\":[{\"field\":\"first_name\",\"column\":null,\"transforms\":[\"lowercase\",\"strip\"],\"scorer\":\"jaro_winkler\",\"weight\":1.0,\"model\":null,\"columns\":null,\"column_weights\":null,\"levels\":2,\"partial_threshold\":0.8,\"tf_adjustment\":false,\"type\":null,\"em_iterations\":null},{\"field\":\"last_name\",\"column\":null,\"transforms\":[\"lowercase\",\"strip\"],\"scorer\":\"jaro_winkler\",\"weight\":1.0,\"model\":null,\"columns\":null,\"column_weights\":null,\"levels\":2,\"partial_threshold\":0.8,\"tf_adjustment\":false,\"type\":null,\"em_iterations\":null},{\"field\":\"address\",\"column\":null,\"transforms\":[\"address_normalize\",\"lowercase\",\"strip\"],\"scorer\":\"jaro_winkler\",\"weight\":0.8,\"model\":null,\"columns\":null,\"column_weights\":null,\"levels\":2,\"partial_threshold\":0.8,\"tf_adjustment\":false,\"type\":null,\"em_iterations\":null}],\"threshold\":0.8,\"auto_threshold\":false,\"rerank\":false,\"rerank_model\":\"cross-encoder/ms-marco-MiniLM-L-6-v2\",\"rerank_band\":0.1,\"negative_evidence\":[{\"field\":\"email\",\"transforms\":[],\"scorer\":\"token_sort\",\"threshold\":0.4,\"penalty\":0.3}],\"em_iterations\":20,\"convergence_threshold\":0.001,\"link_threshold\":null,\"review_threshold\":null,\"model_path\":null}],\"blocking\":{\"keys\":[{\"fields\":[\"zip\",\"birth_year\"],\"transforms\":[\"lowercase\",\"strip\"]}],\"max_block_size\":5000,\"skip_oversized\":true,\"strategy\":\"learned\",\"learned_sample_size\":5000,\"learned_min_recall\":0.95,\"learned_min_reduction\":0.9,\"learned_predicate_depth\":2,\"learned_cache_path\":null,\"auto_suggest\":false,\"auto_select\":false,\"sub_block_keys\":null,\"window_size\":20,\"sort_key\":null,\"passes\":[],\"union_mode\":true,\"max_total_comparisons\":null,\"ann_column\":null,\"ann_model\":\"all-MiniLM-L6-v2\",\"ann_top_k\":20,\"canopy\":null},\"golden_rules\":{\"default_strategy\":\"most_complete\",\"default\":null,\"field_rules\":{},\"max_cluster_size\":100,\"auto_split\":true,\"quality_weighting\":true,\"weak_cluster_threshold\":0.3,\"split_edge_budget\":null,\"adaptive\":false,\"use_llm_for_ambiguous\":false,\"cluster_overrides\":null},\"standardization\":{\"rules\":{\"first_name\":[\"name_proper\"],\"last_name\":[\"name_proper\"],\"address\":[\"address\"],\"zip\":[\"zip5\"],\"email\":[\"email\"]}},\"validation\":null,\"quality\":null,\"transform\":null,\"llm_boost\":false,\"llm_scorer\":null,\"llm_auto\":false,\"domain\":null,\"backend\":null,\"mode\":\"standard\",\"planning_effort\":\"normal\",\"memory\":null,\"identity\":null,\"exclude_columns\":[],\"prepared_record_store\":false,\"partitioned_block_scoring\":false,\"n_buckets\":null}"
+)
+
+
 def load_frozen_config():
     """Load the committed frozen GoldenMatchConfig (the realistic-shape ladder
-    config). Cheap: just JSON deserialization, no controller search."""
+    config). Prefers the committed file (local/dev); falls back to the embedded
+    copy when the file is absent (e.g. on a `ray submit` head, which ships only
+    the .py)."""
     from goldenmatch.config.schemas import GoldenMatchConfig
-    return GoldenMatchConfig.model_validate_json(
-        _FROZEN_CONFIG_PATH.read_text(encoding="utf-8"))
+    text = (_FROZEN_CONFIG_PATH.read_text(encoding="utf-8")
+            if _FROZEN_CONFIG_PATH.exists() else _FROZEN_CONFIG_JSON)
+    return GoldenMatchConfig.model_validate_json(text)
 
 
 # The frozen config is built from a small oracle but configured FOR this target
@@ -858,6 +1001,133 @@ def run_rung(n_rows: int, seed: int = 0, shape: str = "realistic",
     }
 
 
+def _run_phase5_and_collect(
+    df: pl.DataFrame, n_partitions: int = 64,
+) -> tuple[dict[int, list[int]], float]:
+    """Run the REAL Phase-5 distributed engine; return (predicted_members,
+    dedup_wall_s) by reading the cluster assignments it wrote.
+
+    This is the distributed counterpart to the in-memory ``dedupe_df`` path. It
+    drives ``run_dedupe_pipeline_distributed`` under
+    ``GOLDENMATCH_DISTRIBUTED_PIPELINE=2`` (block-shuffle scoring +
+    randomized-contraction WCC) -- NOT ``dedupe_df(backend="ray")``, which is the
+    in-memory Phase-2 cheat-line and never exercises the distributed engine. The
+    ``assignments_output_path`` hook persists the membership the engine produced
+    so it can be oracle-scored (golden records are one row per cluster and can't be).
+    """
+    import ray  # lazy: the [ray] extra is cluster-only
+
+    from goldenmatch.distributed.pipeline import run_dedupe_pipeline_distributed
+
+    # Phase-5 contract: a GLOBAL __row_id__. Member ids ARE the row index, so the
+    # oracle ``cids[member]`` aligns (row i's identity is gt cids[i]).
+    if "__row_id__" not in df.columns:
+        df = df.with_row_index("__row_id__")
+
+    # Recall-complete distributed path. block-shuffle is default-on (#867); set it
+    # explicitly and force the distributed WCC (threshold=0) so the run can't fall
+    # to the driver-collect scipy path at the 50M-pair boundary. The WCC scratch
+    # MUST be a shared gs:// path on a multi-node cluster -- a node-local path
+    # silently breaks the cross-node parquet reads in the per-round checkpoint
+    # (the #867 guard raises instead of under-merging).
+    os.environ.setdefault("GOLDENMATCH_ENABLE_DISTRIBUTED_RAY", "1")
+    os.environ["GOLDENMATCH_DISTRIBUTED_PIPELINE"] = "2"
+    os.environ["GOLDENMATCH_DISTRIBUTED_BLOCK_SHUFFLE"] = "1"
+    # Cluster the scored pairs with the FAST in-memory WCC (driver-side
+    # scipy.csgraph), NOT the distributed randomized-contraction. The scored edge
+    # set is small (~110M pairs ~1.76 GB at 100M, ~3.5 GB at 200M) and fits the
+    # highmem head, where connected-components is ~30-60s. The previous value "0"
+    # FORCED the distributed WCC (pair_count >= 0), whose ~log(N) gs://-checkpoint
+    # rounds were the multi-hour tail. Only SCORING needs distribution; the WCC
+    # does not. Setting the threshold above the pair count routes to scipy
+    # (build_clusters_distributed: pair_count < threshold -> scipy.csgraph).
+    os.environ.setdefault("GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD", "2000000000")
+    # Many small shuffle partitions so the block-shuffle's wide exploded records
+    # don't form giant blocks that backpressure _score onto a single node (the
+    # default cpu*4 from the driver gave ~540 MiB blocks -> pinned to 16 CPU,
+    # zero distributed speedup). Read on the driver when it builds the Dataset op.
+    os.environ.setdefault("GOLDENMATCH_DISTRIBUTED_SHUFFLE_PARTS", "512")
+    scratch = os.environ.get("GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH", "")
+    if not scratch.startswith("gs://"):
+        raise SystemExit(
+            "distributed QIS requires GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH=gs://<bucket>/... "
+            "(a shared scratch the randomized-contraction WCC checkpoints to; a "
+            "node-local path breaks cross-node reads)."
+        )
+    assignments_path = f"{scratch.rstrip('/')}/qis_assignments_{df.height}"
+
+    cfg = load_frozen_config()
+
+    ds = ray.data.from_arrow(df.to_arrow()).repartition(n_partitions)
+    t0 = time.time()
+    run_dedupe_pipeline_distributed(
+        ds,
+        config=cfg,
+        confidence_required=False,
+        allow_red_config=True,
+        output_path=None,
+        assignments_output_path=assignments_path,
+        # Quality scoring needs only the cluster assignments; skip the distributed
+        # golden build (quality-weighted most_complete survivorship over every
+        # multi-member row) -- substantial work at 100M and pure waste here.
+        _skip_golden=True,
+    )
+    dedup_wall = time.time() - t0
+
+    # Read the assignments the engine wrote ({member_id, cluster_id, ...}) and
+    # build predicted multi-member clusters. Driver-side group_by: scoring is
+    # driver-side by design and score_quality is O(N) (~3 GB at 200M).
+    assign_pdf = ray.data.read_parquet(assignments_path).to_pandas()
+    grouped = (
+        pl.from_pandas(assign_pdf[["member_id", "cluster_id"]])
+        .group_by("cluster_id")
+        .agg(pl.col("member_id"))
+    )
+    predicted: dict[int, list[int]] = {}
+    for cid, members in zip(
+        grouped["cluster_id"].to_list(), grouped["member_id"].to_list(),
+    ):
+        if members is not None and len(members) > 1:
+            predicted[int(cid)] = [int(m) for m in members]
+    return predicted, dedup_wall
+
+
+def run_distributed_rung(
+    n_rows: int, seed: int = 0, shape: str = "realistic",
+    corruption: str = "moderate", n_partitions: int = 64,
+) -> dict:
+    """A QIS rung run through the REAL Phase-5 distributed engine, oracle-scored.
+
+    Same fixture + frozen config + oracle scoring as the single-box ladder, so the
+    output dict is directly comparable to ``run_rung``'s -- only the engine differs
+    (distributed Phase-5 vs in-memory bucket). Extends the published 1K->100M curve
+    to the distributed 100M (cross-check vs single-box) + 200M (new) rungs.
+    """
+    os.environ.setdefault("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
+    t0 = time.time()
+    df, cids = generate_with_gt(n_rows, seed=seed, shape=shape, corruption=corruption)
+    t_gen = time.time() - t0
+
+    predicted, t_dedupe = _run_phase5_and_collect(df, n_partitions=n_partitions)
+    metrics = score_quality(predicted, cids)
+    multi = sum(1 for v in predicted.values() if len(v) > 1)
+
+    return {
+        "rows": int(n_rows),
+        "corruption": corruption,
+        "config_mode": "frozen",
+        "engine": "distributed-phase5",
+        "backend": "ray-phase5",
+        "n_partitions": n_partitions,
+        "clusters_gt": int(np.unique(cids).size),
+        "wall_s": {"generate": round(t_gen, 2), "dedupe": round(t_dedupe, 2),
+                   "total": round(t_gen + t_dedupe, 2)},
+        "rss_mb_peak": _peak_rss_mb(),
+        **metrics,
+        "multi_member_clusters": multi,
+    }
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--rows", type=int, default=1000)
@@ -885,12 +1155,41 @@ def main(argv=None) -> int:
                     help="rebuild + save the frozen config from a fresh 1K auto-config "
                          "run (do this only when the fixture/moderate level changes), "
                          "then exit.")
+    ap.add_argument("--distributed", action="store_true",
+                    help="run the rung through the REAL Phase-5 distributed engine "
+                         "(GOLDENMATCH_DISTRIBUTED_PIPELINE=2: block-shuffle + "
+                         "randomized-contraction WCC) on a Ray cluster, then oracle-score "
+                         "the cluster assignments. Always uses the frozen config. Needs the "
+                         "[ray] extra + a multi-node cluster + a shared gs:// "
+                         "GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH. This is the distributed "
+                         "counterpart to --backend ray, which is only the in-memory cheat-line.")
+    ap.add_argument("--partitions", type=int, default=64,
+                    help="Ray Dataset partition count for --distributed (default 64).")
+    ap.add_argument("--wcc-scratch", type=str, default=None,
+                    help="shared gs:// scratch dir for the distributed WCC + assignments "
+                         "(--distributed only). Sets GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH so "
+                         "the head process has it (env vars don't propagate through ray submit). "
+                         "MUST be gs:// on multi-node.")
     ap.add_argument("--out", type=Path, default=None, help="write per-rung JSON here")
     args = ap.parse_args(argv)
+
+    if args.wcc_scratch:
+        os.environ["GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH"] = args.wcc_scratch
 
     if args.rebuild_frozen_config:
         build_frozen_config(seed=args.seed, corruption="moderate")
         print(f"rebuilt frozen config -> {_FROZEN_CONFIG_PATH}")
+        return 0
+
+    if args.distributed:
+        res = run_distributed_rung(
+            args.rows, seed=args.seed, shape=args.shape,
+            corruption=args.corruption, n_partitions=args.partitions,
+        )
+        res["shape"] = args.shape
+        print(json.dumps(res, indent=2, default=str))
+        if args.out:
+            args.out.write_text(json.dumps(res, indent=2, default=str), encoding="utf-8")
         return 0
 
     res = run_rung(args.rows, seed=args.seed, shape=args.shape, backend=args.backend,

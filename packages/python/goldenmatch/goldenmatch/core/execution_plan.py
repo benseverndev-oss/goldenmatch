@@ -12,8 +12,30 @@ if TYPE_CHECKING:
     from goldenmatch.config.schemas import GoldenMatchConfig
 
 BackendName = Literal["polars-direct", "chunked", "duckdb", "ray", "bucket"]
-ClusteringStrategy = Literal["in_memory", "partitioned_union_find", "streaming_cc"]
+ClusteringStrategy = Literal[
+    "in_memory", "partitioned_union_find", "streaming_cc", "distributed_wcc"
+]
 SpillThreshold = Literal["ram", "duckdb", "disk_per_worker"] | None
+
+
+@dataclass(frozen=True)
+class DistributedRoutingDecision:
+    """One per-stage routing decision + the projection that drove it.
+
+    ``mode`` is the normalized vocabulary "distributed" | "in_memory".
+    ``projected_bytes`` is the stage's working-set estimate; ``budget_bytes``
+    is the driver-RAM budget it was compared against. ``overridden`` marks a
+    user/env override that the linter surfaces.
+    """
+
+    stage: str            # "scoring" | "clustering" | "golden"
+    mode: str             # "distributed" | "in_memory"
+    rule_name: str        # "user_override" | "single_box" | "cluster_present"
+    reason: str
+    projected_bytes: int
+    budget_bytes: int
+    overridden: bool
+    override_source: str | None
 
 
 @dataclass(frozen=True)
@@ -30,6 +52,9 @@ class ExecutionPlan:
     pair_spill_threshold: SpillThreshold = None
     clustering_strategy: ClusteringStrategy = "in_memory"
     rule_name: str | None = None
+    scoring_distributed: bool = False
+    golden_distributed: bool = False
+    routing_decisions: tuple[DistributedRoutingDecision, ...] = ()
 
     def apply_to(self, config: GoldenMatchConfig) -> None:
         """Write plan onto a GoldenMatchConfig in place.

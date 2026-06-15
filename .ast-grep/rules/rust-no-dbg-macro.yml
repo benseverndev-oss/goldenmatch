@@ -1,0 +1,8 @@
+id: rust-no-dbg-macro
+language: rust
+severity: error
+message: >-
+  dbg!() is a debug macro — never commit it. In the perf-critical kernels it
+  also prints to stderr on the hot path. Remove it (or use tracing/log).
+rule:
+  pattern: dbg!($$$)

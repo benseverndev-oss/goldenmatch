@@ -51,6 +51,10 @@ result = dedupe_df(df, config=cfg)
 | `matchkey` | Matchkey field is near-100%-unique (every row is its own cluster) | Pick a less-discriminative matchkey or add a fuzzy weight |
 | `cluster` | Cluster output has one giant component | Add a stricter blocking key; the existing blocking is too permissive |
 
+## Runtime knobs (env vars)
+
+This page covers the *config object* you pass for data-shape control. The *runtime* knobs — native acceleration, backend selection, the distributed pipeline, and every `GOLDENMATCH_*` environment variable with its default and when-to-use guidance — live in the [Tuning & opt-ins reference](https://docs.bensevern.dev/goldenmatch/tuning). Reach for that page when a run is slower than expected or you're scaling past a million rows.
+
 ## Opting out
 
 If you understand the controller is committing a noisy config and you want to run it anyway:

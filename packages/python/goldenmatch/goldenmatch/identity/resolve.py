@@ -97,21 +97,10 @@ def _batch_fingerprint_enabled() -> bool:
     is a no-op on OUTPUT, only faster. Bench (run 26793348836, fresh native, 1M/5M
     no-PK): 2.6x on the fingerprinting step (5.54s->2.13s @1M, 27.5s->10.5s @5M).
     Kill-switch ``GOLDENMATCH_IDENTITY_BATCH_FINGERPRINT=0`` restores the per-row
-    path. See ``_id_scheme`` for the sibling content-hash kill-switch."""
+    path."""
     return os.environ.get(
         "GOLDENMATCH_IDENTITY_BATCH_FINGERPRINT", "1"
     ).strip() != "0"
-
-
-def _id_scheme() -> str:
-    """Primary content-hash record-id scheme: ``"h1"`` (canonical
-    cross-surface fingerprint, the default) or ``"hash"`` (legacy json.dumps).
-    ``GOLDENMATCH_IDENTITY_ID_SCHEME=hash`` forces legacy as primary -- a
-    migration kill-switch. See docs/design/2026-05-26-stable-record-hash-cabi
-    -plan.md."""
-    return "hash" if os.environ.get(
-        "GOLDENMATCH_IDENTITY_ID_SCHEME", "h1"
-    ).strip().lower() == "hash" else "h1"
 
 
 def _record_id_candidates(
@@ -125,12 +114,10 @@ def _record_id_candidates(
 
     Natural PK -> ``("{source}:{pk}", ["{source}:{pk}"])`` (unchanged; never
     touches ``precomputed_h1``).
-    No PK -> a content-hash id. The primary is the canonical cross-surface
-    fingerprint (``"{source}:h1:{12}"``); the legacy json.dumps id
-    (``"{source}:hash:{12}"``) is kept as an additional *lookup candidate* so
-    records ingested before the cutover keep resolving to the same entity (no
-    rewrite, no split). Candidates are ordered primary-first. A record whose
-    values the canonical spec can't yet fingerprint stays on the legacy scheme.
+    No PK -> a content-hash id. The primary and sole lookup candidate is the
+    canonical cross-surface fingerprint (``"{source}:h1:{12}"``). A record
+    whose values the canonical spec can't yet fingerprint stays on the legacy
+    ``"{source}:hash:{12}"`` scheme (the sole candidate in that case too).
 
     ``precomputed_h1`` (keyword-only) lets a caller supply the FULL 64-char h1
     hash computed in bulk via ``batch_fingerprints`` (the
@@ -160,9 +147,7 @@ def _record_id_candidates(
     else:
         full_h1 = precomputed_h1  # type: ignore[assignment]
     h1_id = f"{source}:h1:{full_h1[:12]}"
-    if _id_scheme() == "hash":
-        return legacy_id, [legacy_id, h1_id]
-    return h1_id, [h1_id, legacy_id]
+    return h1_id, [h1_id]
 
 
 def derive_record_id(
@@ -171,9 +156,7 @@ def derive_record_id(
     source_pk_col: str | None,
 ) -> tuple[str, str]:
     """Return ``(record_id, source_pk)`` for a record row, using the primary
-    id scheme (see ``_record_id_candidates``). Kept for back-compat;
-    ``resolve_clusters`` uses the candidate-aware path directly so it can apply
-    the legacy-fallback migration."""
+    id scheme (see ``_record_id_candidates``). Kept for back-compat."""
     primary, _ = _record_id_candidates(row, source, source_pk_col)
     pk = primary[len(source) + 1:] if primary.startswith(f"{source}:") else primary
     return primary, pk
@@ -322,13 +305,11 @@ def resolve_clusters(
 
     # 1. Build row_id -> record_id mapping + ensure source_records are upserted.
     #
-    # Record-id migration (docs/design/2026-05-26-stable-record-hash-cabi-plan.md):
-    # rows without a natural source PK get a content-hash id. The default scheme
-    # is now the canonical cross-surface fingerprint ("{source}:h1:{12}"); the
-    # legacy json.dumps scheme ("{source}:hash:{12}") is still derived as a
-    # *lookup candidate*, so records ingested before the cutover keep resolving
-    # to the same entity (no rewrite, no split). Each record is keyed under
-    # whichever candidate already exists in the store, else its primary id.
+    # rows without a natural source PK get a content-hash id: the canonical
+    # cross-surface fingerprint ("{source}:h1:{12}"). Records whose values the
+    # canonical spec can't fingerprint fall back to the legacy json.dumps id
+    # ("{source}:hash:{12}"). Run `goldenmatch identity migrate-ids` to rewrite
+    # any pre-v2 ":hash:" ids in the store to their ":h1:" equivalents.
     rows = df.to_dicts()
     rowid_to_recid: dict[int, str] = {}
     rowid_to_payload: dict[int, dict[str, Any]] = {}

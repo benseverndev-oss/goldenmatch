@@ -4,7 +4,53 @@ All notable changes to GoldenMatch are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/) (strict after v1.0.0).
 
-## [Unreleased]
+## [2.0.0] - 2026-06-14
+
+<!-- README-callout
+**GoldenMatch 2.0.0: the first backwards-incompatible major.** It removes four deprecation-window items, each shipped with a 1.x runway: the legacy `:hash:` identity lookup bridge + `GOLDENMATCH_IDENTITY_ID_SCHEME` (run `goldenmatch identity migrate-ids` before upgrading; un-fingerprintable rows keep their `:hash:` id), the `GOLDENMATCH_CLUSTER_FRAMES_OUT` gate + legacy dict cluster path (`build_clusters` stays as a frames-backed adapter), and the `cheapest_healthy` / `_scale_aware_backend` shims. Pipeline behavior is output-equivalent. Migration guide: [Migrating to v2](https://docs.bensevern.dev/goldenmatch/migrating-to-v2).
+-->
+
+### BREAKING CHANGES
+- **Identity `:hash:` scheme removed.** The legacy `:hash:` lookup candidate and
+  `GOLDENMATCH_IDENTITY_ID_SCHEME` are gone. A persisted identity DB still holding
+  `:hash:`-keyed records will SPLIT on the next run. **Run `goldenmatch identity migrate-ids
+  --path <db>` (or `--dsn`) BEFORE upgrading.** Un-fingerprintable rows keep their `:hash:` id.
+- `GOLDENMATCH_CLUSTER_FRAMES_OUT` removed (frames-out is the only, output-equivalent clustering path).
+- `RunHistory.cheapest_healthy()` removed -- use `pick_committed()`.
+- `_scale_aware_backend` (internal) removed -- backend selection is the v3 planner.
+
+### Added
+- **Stable Python IdentityGraph API for the Sail tier (#859).** The S5
+  identity-on-Sail create path now ships a frozen, documented, contract-testable
+  public surface: `from goldenmatch.sail import IdentityGraphFrames,
+  build_identity_graph` (imports without the `[sail]` extra — pyspark is lazy
+  inside the builders, so a consumer can pin the signature with `inspect` and no
+  Spark runtime). `IdentityGraphFrames` gains the optional `events` frame
+  (`IdentityGraphFrames(nodes, records, edges, events?)`, completing the S5
+  shape); `build_identity_graph(..., with_events=True)` emits one `CREATED` row
+  per entity. The frozen per-frame wire schema is exported as `NODE_COLUMNS` /
+  `RECORD_COLUMNS` / `EDGE_COLUMNS` / `EVENT_COLUMNS` — the edge frame carries
+  full provenance (`record_a_id`, `record_b_id`, `score`, `matchkey_name`,
+  `run_name`). **Incremental resolution (absorb/merge against an existing store)
+  remains the deferred Layer 2, honest-null:** on a fresh store every cluster is
+  a create, which is the common case. Pinned by `tests/test_sail_identity_contract.py`
+  (runs in the normal lane, no Spark). Unblocks downstream consumers that depend
+  on a released identity-graph contract.
+- **`goldenmatch identity migrate-ids`.** Migrates persisted identity record
+  ids from the legacy `{source}:hash:{12}` scheme to the canonical
+  `{source}:h1:{12}` fingerprint scheme (SQLite + Postgres). `--dry-run` reports
+  counts without mutating. Public API: `goldenmatch.identity.migrate_record_ids`.
+
+### Removed
+- **The legacy `:hash:` identity record-id scheme + `GOLDENMATCH_IDENTITY_ID_SCHEME=hash`.**
+  The legacy lookup candidate and its kill-switch are gone. Run
+  `goldenmatch identity migrate-ids --path <db>` BEFORE upgrading if you have a
+  persisted identity DB with `:hash:`-keyed records.
+- **`GOLDENMATCH_CLUSTER_FRAMES_OUT=0` escape hatch + legacy `dict[int,dict]` cluster path.**
+  The Arrow frames-out path is the default and only supported clustering path.
+  Public `build_clusters` is preserved as a frames-backed adapter.
+- **`RunHistory.cheapest_healthy()`** -- use `pick_committed()`.
+- **`_scale_aware_backend` (internal shim)** -- backend selection routes through the v3 planner.
 
 ### Performance
 - **Fellegi-Sunter block scoring ~3.5x faster on tiny-block / multi-pass shapes

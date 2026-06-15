@@ -1,0 +1,7 @@
+id: ts-no-spread-math-min-max
+valid:
+  - "const m = Math.min(a, b);"
+  - "const m = minOf(arr);"
+invalid:
+  - "const m = Math.min(...arr);"
+  - "const m = Math.max(...xs.map((x) => x.n));"

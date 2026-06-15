@@ -43,6 +43,11 @@ from goldenmatch.mcp.memory_tools import (
     MEMORY_TOOLS,
     handle_memory_tool,
 )
+from goldenmatch.mcp.routing_tools import (
+    ROUTING_TOOL_NAMES,
+    ROUTING_TOOLS,
+    handle_routing_tool,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -539,7 +544,7 @@ _BASE_TOOLS = [
 ]
 
 # TOOLS is the union of agent tools + memory tools + base tools, in the same order list_tools returns.
-TOOLS = AGENT_TOOLS + MEMORY_TOOLS + IDENTITY_TOOLS + _BASE_TOOLS
+TOOLS = AGENT_TOOLS + MEMORY_TOOLS + IDENTITY_TOOLS + ROUTING_TOOLS + _BASE_TOOLS
 
 
 def dispatch(name: str, args: dict) -> dict:
@@ -559,6 +564,8 @@ def dispatch(name: str, args: dict) -> dict:
     if name in IDENTITY_TOOL_NAMES:
         from goldenmatch.mcp.identity_tools import _dispatch as _identity_dispatch
         return _identity_dispatch(name, args)
+    if name in ROUTING_TOOL_NAMES:
+        return handle_routing_tool(name, args)
     return _handle_tool(name, args)
 
 
@@ -572,7 +579,7 @@ def create_server(file_paths: list[str] | None = None, config_path: str | None =
 
     @server.list_tools()
     async def list_tools() -> list[Tool]:
-        return AGENT_TOOLS + MEMORY_TOOLS + IDENTITY_TOOLS + _BASE_TOOLS
+        return AGENT_TOOLS + MEMORY_TOOLS + IDENTITY_TOOLS + ROUTING_TOOLS + _BASE_TOOLS
 
     @server.list_resources()
     async def list_resources() -> list[Resource]:
@@ -823,7 +830,10 @@ def create_server(file_paths: list[str] | None = None, config_path: str | None =
         if name in IDENTITY_TOOL_NAMES:
             return await handle_identity_tool(name, arguments)
         try:
-            result = _handle_tool(name, arguments)
+            if name in ROUTING_TOOL_NAMES:
+                result = handle_routing_tool(name, arguments)
+            else:
+                result = _handle_tool(name, arguments)
             return [TextContent(type="text", text=json.dumps(result, default=str, indent=2))]
         except Exception as e:
             return [TextContent(type="text", text=json.dumps({"error": str(e)}))]
@@ -1601,7 +1611,7 @@ async def run_server_http(
     async def server_card(request):
         return JSONResponse({
             "name": "GoldenMatch",
-            "description": "Entity resolution toolkit — deduplicate records, match across datasets, and create golden records using fuzzy, probabilistic, and LLM-powered scoring. Zero-config mode auto-detects your data. 55 MCP tools for matching, explaining, reviewing, evaluating, blocking analysis, lineage, data quality, transforms, identity graph, and privacy-preserving linkage. Built on Polars. 97.2% F1 on DBLP-ACM.",
+            "description": "Entity resolution toolkit — deduplicate records, match across datasets, and create golden records using fuzzy, probabilistic, and LLM-powered scoring. Zero-config mode auto-detects your data. 58 MCP tools for matching, explaining, reviewing, evaluating, blocking analysis, lineage, data quality, transforms, identity graph, distributed-routing config, and privacy-preserving linkage. Built on Polars. 97.2% F1 on DBLP-ACM.",
             "homepage": "https://github.com/benseverndev-oss/goldenmatch",
             "iconUrl": "https://avatars.githubusercontent.com/u/192581748"
         })

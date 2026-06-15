@@ -26,4 +26,21 @@ describe("enableWasm graceful fallback", () => {
     disableWasm();
     expect(getScorerBackend()).toBeNull();
   });
+
+  it("empty wasmBase64 falls back to pure-TS (no throw without require)", async () => {
+    // The universal-loader byte source: an empty/garbage base64 must NOT crash
+    // the default path — it falls back exactly like absent bytes.
+    const ok = await enableWasm({ wasmBase64: "" });
+    expect(typeof ok).toBe("boolean");
+    expect(scoreField("abc", "abc", "levenshtein")).toBe(1.0);
+  });
+
+  it("universal:true returns a boolean and never disturbs pure-TS scoring", async () => {
+    // Whether or not the inlined base64 module is present in THIS checkout, the
+    // opt-in universal path must resolve to true/false (never throw without
+    // require) and leave pure-TS scoring intact.
+    const ok = await enableWasm({ universal: true });
+    expect(typeof ok).toBe("boolean");
+    expect(scoreField("abc", "abc", "exact")).toBe(1.0);
+  });
 });
