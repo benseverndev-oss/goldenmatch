@@ -92,6 +92,40 @@ export interface ConfidenceDistribution {
   readonly total_pairs: number;
 }
 
+export interface AutoconfigResult {
+  readonly config: import("../types.js").GoldenMatchConfig;
+  readonly telemetry: Telemetry;
+}
+
+export interface DeduplicateResult {
+  readonly results: import("../types.js").DedupeResult;
+  readonly reasoning: Record<string, unknown>;
+  readonly confidence_distribution: ConfidenceDistribution;
+  /** Review-queue storage tier. Always "memory" in the edge-safe core. */
+  readonly storage: string;
+}
+
+export interface MatchSourcesResult {
+  readonly results: import("../types.js").MatchResult;
+  readonly reasoning: Record<string, unknown>;
+}
+
+/** Per-strategy proxy metrics in a compareStrategies result. */
+export interface StrategyMetrics {
+  readonly clusters?: number;
+  readonly match_rate?: number;
+  readonly total_pairs?: number;
+  readonly precision?: number;
+  readonly recall?: number;
+  readonly f1?: number;
+  readonly error?: string;
+}
+
+export interface CompareResult {
+  readonly recommended: string;
+  readonly strategies: Record<string, StrategyMetrics>;
+}
+
 // ---------------------------------------------------------------------------
 // Skill registry + I/O seam types
 // ---------------------------------------------------------------------------
