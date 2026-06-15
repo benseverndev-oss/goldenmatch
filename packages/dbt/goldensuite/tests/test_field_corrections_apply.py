@@ -22,7 +22,7 @@ import pytest
 
 # dbt-goldensuite is a sub-directory NOT installed as a Python package
 # in the core goldenmatch pytest lane (lives at
-# packages/python/goldenmatch/dbt-goldensuite/ without its own
+# packages/dbt/goldensuite/ without its own
 # editable install). Skip the whole module up-front so pytest's
 # collection doesn't blow up on `from dbt_goldensuite import ...`.
 try:

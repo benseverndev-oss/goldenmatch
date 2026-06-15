@@ -41,6 +41,7 @@ jobs:
       web_ui_e2e: ${{ steps.filter.outputs.web }}
       rust: ${{ steps.filter.outputs.rust }}
       action: ${{ steps.filter.outputs.action }}
+      dbt: ${{ steps.filter.outputs.dbt }}
       ci_workflow: ${{ steps.filter.outputs.ci_workflow }}
       # force_all: true on merge_group (the authoritative batched gate) and on a
       # workflow_dispatch with run_all=true. Drives the full job matrix + the
@@ -296,6 +297,8 @@ jobs:
               - 'packages/python/goldenmatch/tests/test_sail_*.py'
             action:
               - 'packages/actions/**'
+            dbt:
+              - 'packages/dbt/**'
             readme_callouts:
               # README "what's new" callouts are auto-synced from the
               # goldenmatch CHANGELOG by scripts/sync_readme_callouts.py.
@@ -1675,6 +1678,30 @@ jobs:
         run: |
           .venv/bin/python -m pytest packages/python/goldenmatch/tests/test_sail_pipeline.py -v --timeout=300
 
+  # dbt-goldensuite — restored after #464 dropped the lane that pointed at the
+  # since-deleted packages/dbt/goldencheck and never re-pointed it at the merged
+  # package. Parses the macro package under an in-memory DuckDB profile and runs
+  # its pytest suite (macro-render + correction CRUD) — neither had run in CI
+  # since 2026-05-24.
+  dbt:
+    needs: changes
+    if: needs.changes.outputs.dbt == 'true' || needs.changes.outputs.force_all == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6
+        with:
+          python-version: "3.11"
+          cache: pip
+      # dbt-adapters 1.24.0 raises KeyError: 'javascript' against dbt-core 1.11.x
+      # during macro parsing — pin <1.24 until upstream ships a clean release.
+      - run: pip install 'dbt-core>=1.11,<1.12' 'dbt-adapters<1.24' 'dbt-duckdb>=1.10,<1.11' pytest -e 'packages/dbt/goldensuite[quality]'
+      - name: dbt parse (macro compile smoke)
+        run: cd packages/dbt/goldensuite && dbt parse --no-version-check --profiles-dir .
+      - name: pytest (macro render + correction CRUD)
+        run: python -m pytest packages/dbt/goldensuite/tests -v
+
   action:
     needs: changes
     if: needs.changes.outputs.action == 'true' || needs.changes.outputs.force_all == 'true'
@@ -2087,6 +2114,7 @@ jobs:
       - web_ui_e2e
       - rust
       - action
+      - dbt
       - rust_pgrx
       - duckdb_extensions
       - native

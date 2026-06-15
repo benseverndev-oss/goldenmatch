@@ -100,7 +100,7 @@ GRANT READ, WRITE ON STAGE goldenmatch_data
 From a checkout of this repo:
 
 ```bash
-cd packages/python/goldenmatch/dbt-goldensuite/spcs/
+cd packages/dbt/goldensuite/spcs/
 
 # Build.
 docker build \

@@ -1,0 +1,11 @@
+# Standalone profile for running this package's dbt project directly
+# (e.g. `dbt parse --profiles-dir .` in CI). Consumers installing
+# dbt-goldensuite as a package use their own profile; this file is not
+# shipped into their project. In-memory DuckDB keeps the parse smoke
+# self-contained with no external warehouse.
+dbt_goldensuite:
+  target: ci
+  outputs:
+    ci:
+      type: duckdb
+      path: ":memory:"
