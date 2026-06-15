@@ -147,9 +147,9 @@ that directly probes the two pending platform-reliability items:
 
 **R1-B verdict: GO-with-residual.** Kill-criterion (3) is cleared for the four
 mainstream arches; the macOS-x86_64 runtime gap and the un-reproducible #688 EPYC cliff
-are documented *infra* residuals, not code blockers. The remaining R1 gate before any
-default flip is **Workstream A** — cross-JS-target WASM (Node ✅ already; browser /
-Workers / Deno pending), kill-criterion (2).
+are documented *infra* residuals, not code blockers. The other R1 gate before any
+default flip was **Workstream A** — cross-JS-target WASM, kill-criterion (2) — now
+**PASS (GREEN)** (see the Workstream-A section + the R1 overall verdict below).
 
 ### R1 evidence — Workstream A: cross-JS-target WASM (kill-criterion 2), PROBED 2026-06-14
 
@@ -182,28 +182,48 @@ builds.
   | node | vitest (Node 22) | bytes via fs (default loader) | **PASS** (spike; re-run in-env GREEN) |
   | deno | `deno test` (Deno 2.8) | universal base64 + `atob` | **PASS (RAN-GREEN in-env)** — 1200 comparisons, max abs diff 4.8e-7 |
   | browser | vitest browser-mode, chromium (Playwright) | universal base64 + `atob` | **PASS (RAN-GREEN in-env)** — real chromium; fault-injection confirmed it compares |
-  | workers | vitest-pool-workers (workerd) | build-time CompiledWasm `.wasm?module` import | **PENDING-RUN (in-env partial)** — see finding below |
+  | workers | vitest-pool-workers (workerd) | build-time CompiledWasm `.wasm` import | **PASS (RAN-GREEN in CI)** — workerd, real run; see finding |
 
-- **Workers FINDING (in-env, load-bearing for the design).** The pool RUNS in real
-  workerd in-env (the test body executed), and surfaced a genuine Workers constraint:
-  **workerd BANS runtime WASM codegen** — both `WebAssembly.instantiate(bytes)` AND the
-  synchronous `new WebAssembly.Module(bytes)` constructor throw *"Wasm code generation
-  disallowed by embedder"*. So the base64-bytes universal path that clears node/browser/deno
-  does NOT work on Workers; the Workers-legal path is a BUILD-TIME CompiledWasm `.wasm`
-  import (the pool compiles the module at deploy time). That is the one supported Workers
-  mechanism (not a per-target *hack* — the same wasm-bindgen glue + the same comparator),
-  but under the in-env vitest 4.1 / pool 0.16 combo vite's host-side import-analysis
-  intercepts the `.wasm?module` specifier before the pool's worker resolver, so the green
-  run is **pending the `workers` CI job** (which pins the pool/vitest versions). The harness
-  + config are written and the runner is proven to execute in workerd. NOTE: this is a real
-  signal for the eventual TS default-flip scope — a Workers consumer must ship the kernel as
-  a build-time CompiledWasm module, not the base64 path.
+  All four legs green in CI run
+  [#27518182208](https://github.com/benseverndev-oss/goldenmatch/actions/runs/27518182208)
+  (workflow_dispatch on `main` @ `40fbace2`): node / deno / browser / **workers** each
+  build the `score-wasm` kernel and reproduce the frozen pure-TS reference at 4dp.
 
-**R1-A verdict (provisional, in-env):** node/deno/browser CLEAR kill-criterion (2)
-with the universal base64 loader and NO per-target hack; workers is the documented
-edge case — loadable, but only via a build-time CompiledWasm import (confirmed
-constraint), green run pending the dispatched `workers` job. The full go/no-go
-table will be filled from a `workflow_dispatch` run of `r1-kernel-js-targets.yml`.
+- **Workers FINDING (load-bearing for the design).** The pool RUNS in real workerd and
+  surfaced a genuine Workers constraint: **workerd BANS runtime WASM codegen** — both
+  `WebAssembly.instantiate(bytes)` AND the synchronous `new WebAssembly.Module(bytes)`
+  constructor throw *"Wasm code generation disallowed by embedder"*. So the base64-bytes
+  universal path that clears node/browser/deno does NOT work on Workers; the Workers-legal
+  path is a BUILD-TIME CompiledWasm `.wasm` import (the pool compiles the module at deploy
+  time). That is the one supported Workers mechanism — NOT a per-target *hack*: same
+  wasm-bindgen glue, same `runEquivalence` comparator, only the module hand-off differs.
+  HARNESS NOTE: the first dispatch ([#27515943709](https://github.com/benseverndev-oss/goldenmatch/actions/runs/27515943709))
+  red'd because the static `.wasm?module` import tripped the HOST vite `import-analysis`
+  before the pool resolved it (0 tests collected); fixed in #977 by importing a plain
+  `.wasm` + `assetsInclude: ["**/*.wasm"]` (`server.deps.inline` only covers node_modules).
+  SIGNAL for the eventual TS default-flip scope — a Workers consumer must ship the kernel as
+  a build-time CompiledWasm module, not the `{ universal: true }` base64 path.
+
+**R1-A verdict: PASS (GREEN).** All four JS targets (node / deno / browser / workers)
+load the `score-core` kernel and reproduce pure-TS at 4dp in CI. node/deno/browser clear
+via the ONE universal base64 loader with no per-target hack; **workers clears via the
+build-time CompiledWasm module** — a documented, supported per-target *load mechanism*
+(workerd's codegen ban makes it mandatory), not a per-target hack. Kill-criterion (2) is
+cleared, with that Workers load-form nuance recorded as the single R1-A residual.
+
+### R1 OVERALL VERDICT (2026-06-15): GO to R2, two documented residuals
+
+With **R1-A: PASS (GREEN)** (this section) and **R1-B: GO-with-residual** (the wheels
+section above), all four kill-criteria now have real positive evidence on the levenshtein
+tracer: (1) pure==kernel 4dp across Python + TS/WASM (node/deno/browser/workers) — PASS;
+(2) cross-JS-target WASM — PASS (GREEN); (3) all-platform abi3 wheels — PASS for the four
+mainstream arches; (4) measured wall not-slower — PASS (kernel 1.44× faster + not-slower on
+every platform run). **R1 is GO.** The two carried residuals are both *infra/mechanism*, not
+code blockers: (a) macOS-x86_64 wheel is build-only (no Intel-mac runner in this org;
+sunsetting arch); (b) a Workers kernel consumer must use the build-time CompiledWasm module
+form, not the base64 universal loader. Per the reversibility commitment, R2 (collapse the
+first scorer behind a reversible default-flip flag) may proceed — still additive, parity-gated,
+one reversible flag per step.
 
 Two backward-compatible script flags back the gate: `--require-kernel`
 (kernel-absence → exit 1) and `--assert-not-slower` (perf cliff → exit 1); with
