@@ -87,6 +87,7 @@
                 "pages": [
                   "goldenmatch/configuration",
                   "goldenmatch/tuning",
+                  "goldenmatch/config-linter",
                   "goldenmatch/api-quick-reference"
                 ]
               }

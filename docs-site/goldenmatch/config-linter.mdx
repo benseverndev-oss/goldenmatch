@@ -1,0 +1,43 @@
+---
+title: "Config linter"
+description: "Pre-flight checks the config linter runs against your data shape before a dedupe/match run — what each rule flags, when it fires, and why. Generated from the rule registry; do not edit by hand."
+---
+
+{/* GENERATED FILE — do not edit. Source of truth: goldenmatch/core/config_lint/rules.py. Regenerate: python scripts/gen_lint_docs.py --write */}
+
+The config linter sanity-checks the **resolved** config (zero-config *or* user-submitted) against your data's shape before the pipeline runs, so degenerate configs are caught up front instead of failing slowly. Each finding links back to the rule below; the rule's reason here is the exact reason the linter reports.
+
+Severities: **error** (will OOM or collapse recall), **warn** (likely suboptimal for this data shape), **info** (advisory).
+
+
+## Blocking
+
+### Near-unique blocking key
+
+**`blocking.near_unique`** · severity **warn** · fires when a blocking key column has cardinality_ratio >= 0.95.
+
+A blocking key that is almost unique puts (nearly) every record in its own block, so no candidate pairs are formed and recall collapses. The zero-config path skips such columns as blocking keys for exactly this reason; an explicit config does not, so it must be flagged before the run.
+
+### Candidate-pair explosion
+
+**`blocking.pair_explosion`** · severity **warn** · fires when estimated candidate pairs exceed SIMPLE_PLAN_MAX_PAIRS (50M).
+
+A coarse blocking key produces a few enormous blocks whose intra-block comparison is O(n^2). The planner projects pair counts to choose a backend (chunked/duckdb above 50M); on the explicit path that projection never runs, so a config that will explode candidate pairs on the in-memory backend is flagged with the same 50M threshold.
+
+
+## Scale & backend
+
+### In-memory backend at scale
+
+**`scale.inmemory_backend_at_scale`** · severity **warn** · fires when row_count >= 1M and backend is unset or 'polars-direct'.
+
+The controller never runs on an explicit config, so its backend projection (which picks chunked/duckdb by rows/pairs/RAM) is skipped: an explicit config with no backend defaults to the in-memory polars-direct path, which at 1M+ rows is the documented OOM-risk envelope.
+
+
+## Scoring
+
+### Null-heavy fuzzy field
+
+**`scoring.null_heavy_field`** · severity **warn** · fires when a fuzzy matchkey field has null_rate >= 0.5.
+
+A fuzzy comparison field that is mostly null produces sparse scores: the weight is spent on a column that is absent for most pairs, diluting the combined score. The profiler tracks per-column null rate; this surfaces a heavily-null scoring field the explicit path would otherwise score silently.
