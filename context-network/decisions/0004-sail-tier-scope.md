@@ -1,6 +1,25 @@
-# 0004 — Sail tier scope: full, buildable, Sail-native, replaces Ray
+# 0004 — Sail tier scope: full, buildable, Sail-native, ADDITIVE to Ray (amended 2026-06-15)
 
-**Status:** accepted (2026-06-03, Ben) • **Spec:** `docs/superpowers/specs/2026-06-03-sail-tier-design.md`
+**Status:** accepted (2026-06-03, Ben) • **Amended** 2026-06-15 (Sail is additive, NOT a Ray
+replacement — see Amendment) • **Spec:** `docs/superpowers/specs/2026-06-03-sail-tier-design.md`
+
+## Amendment (2026-06-15, Ben) — Sail is additive; Ray stays
+The original decision framed Sail as **replacing** the Ray distributed stack (a one-release
+deprecation window after S4). **That is revised:** Ray clustering is effective and stays the
+default distributed substrate indefinitely. Sail is an **additive** scale-out option that can
+be *supercharged* (the R1 native Arrow UDF, etc.), not a retirement target. Concretely:
+- **No Ray retirement.** Drop the "replace the Ray distributed stack" / deprecation-window
+  language below. Ray remains a first-class, supported, default path.
+- **R5 reframes** from "Ray retirement + wiring" to "add `backend="sail"` as an *additional*
+  opt-in surface" — Ray is untouched.
+- **S4 still binds**, but its verdict is "Sail proven as an additive multi-node option"
+  (completes where one-box can't, per-node RSS bounded, wall scales with nodes), NOT "Ray is
+  now removable."
+- The `mode` default-flip question is unchanged (still gated on its own evidence; unrelated to
+  Ray's status).
+
+Everything below is the original 2026-06-03 record, kept for the audit trail; read it through
+this amendment.
 
 ## Context
 After the Stage E honest-null ([0003](0003-stage-e-spill-honest-null.md)), the distributed
@@ -31,4 +50,4 @@ option on all three.
 - Minimal binding proof only (declined — chose full spine scope).
 
 ---
-**Classification:** decision/accepted • **Last updated:** 2026-06-03
+**Classification:** decision/accepted • **Last updated:** 2026-06-15 (amended)

@@ -4,9 +4,11 @@
 **Status:** roadmap (planning artifact — sequences remaining work; not a build spec)
 **Parent:** `2026-06-03-sail-tier-design.md` (the S1→S4 stage plan) +
 `2026-06-03-datafusion-spine-design.md` (the one-box spine Stage E hands off here)
-**Lane:** strategic — the distributed substrate that completes where the one-box
+**Lane:** strategic — an *additive* distributed substrate that completes where the one-box
 spine OOMs. This roadmap takes the Sail tier from *scaffolded + one-box-parity-gated*
-to *proven multi-node, Ray-retired, default-eligible*.
+to *proven multi-node, default-eligible*. **Scope amended 2026-06-15: Sail is additive,
+NOT a Ray replacement** ([../../../context-network/decisions/0004-sail-tier-scope.md](../../../context-network/decisions/0004-sail-tier-scope.md)) — Ray clustering stays the default; this roadmap's
+"Ray-retired" framing is superseded throughout.
 
 ---
 
@@ -30,11 +32,11 @@ but **nothing has executed on more than one box.** That single fact is the gap.
 | **S2** | WCC on Sail (the holdout) | `clustering.py` (`connected_components`, `connected_components_scale` pointer-jumping) | built, partition-parity-gated vs reference UF |
 | **S3** | golden + identity | `golden.py`, `identity.py` | built (survivorship + identity-graph builders) |
 | **S5** | identity API freeze → 1.31 | `IdentityGraphFrames` | in flight (#859 / PR #889) |
-| **S4** | multi-node bench + Ray retirement | `pipeline.py::run_sail_pipeline` | **NOT run — THE gate** |
+| **S4** | binding multi-node bench (additive) | `pipeline.py::run_sail_pipeline` | **NOT run — THE gate** |
 
-The tier's own kill criterion (from the parent design) stands: *no Ray retirement,
-no default-flip, until S4 is green.* Everything below is what makes an S4 green both
-*reachable* and *trustworthy*.
+The tier's own kill criterion stands: *no default-flip until S4 is green* (Ray retirement
+dropped per the 2026-06-15 amendment — Ray stays regardless). Everything below is what makes
+an S4 green both *reachable* and *trustworthy*.
 
 ## The roadmap
 
@@ -72,34 +74,42 @@ pipeline measures luck, not the engine.
   same convention as the S1/S2 parity tests). Covers WCC alone (both algorithms) and
   the full score→dedup→WCC path.
 
-### R3 — Coverage / feature-gate honesty.
-`run_sail_pipeline` is single `block_col` + single `value_col` + `most_complete`/
-`first`. Before any default-eligible claim: either widen to multi-field weighted
-matchkeys, or **explicitly error** on unsupported scorers (LLM/rerank/boost/NE/exotic)
-the way scale-mode does — never silently degrade. Pure routing; does not block R4.
+### R3 — Coverage / feature-gate honesty. ✅ landed in this change
+**Done.** `pipeline._validate_sail_pipeline_supported` errors up-front (the scale-mode
+posture) on the two real silent-degrade cases: an unsupported `scorer_name`
+(LLM/rerank/boost/NE/embedding/cross-encoder — `NotImplementedError`) and an unrecognized
+`wcc` (was a *silent* fall-through to label-prop — now `ValueError`). Survivorship
+`strategy` was found to already fail-loud (`core.golden.merge_field` raises on unknown), so
+it is not re-checked. Widening to multi-field weighted matchkeys stays deferred (the
+explicit-error route is the R3 deliverable). Test: `tests/test_sail_r3_feature_gate.py`
+(pure-Python, runs every lane).
 
 ### R4 — S4: the binding multi-node bench (THE gate).
 `workflow_dispatch`, BYO multi-node Sail cluster via a `SAIL_REMOTE` secret, the
 phase5 50M/100M parquet from the bench generator.
 - **Kill criterion:** completes where one-box OOMs/can't, per-node RSS bounded, **wall
-  improves with node count.** Commit the numbers back to this roadmap.
-- **The structural win over the spine:** distributed WCC (S2) removes the ~50M
-  scipy-UF island that capped the spine's Stage E. NOTE the S2 in-code TODO — at 100M,
-  `connected_components_scale` must cache/checkpoint `labels` each round (Spark Connect
-  lineage growth) and the long-chain convergence wants large-star/small-star; verify
-  before the bind, not after a hang.
+  improves with node count.** Commit the numbers back to this roadmap. (Verdict is "Sail
+  proven as an *additive* multi-node option" — NOT a Ray retirement; see the scope
+  amendment 2026-06-15.)
+- **The structural win:** distributed WCC (S2) removes the ~50M scipy-UF island that capped
+  the spine's Stage E. **The S2 100M lineage TODO is now landed:**
+  `connected_components_scale(checkpoint_interval=, checkpoint_dir=)` truncates the
+  pointer-jump lineage via a per-round parquet barrier (default-off, byte-identical; the
+  bench enables it). Large-star/small-star stays deferred — pointer-jumping's O(log n)
+  should suffice; revisit only if a real 100M chain run shows too many rounds.
 - **Dependency:** a live multi-node cluster — a BYO/ops dependency, not code.
 
-### R5 — Ray retirement + wiring (ONLY after R4 is green).
-Add `backend="sail"` to the planner/public surface, flip Ray to legacy, document the
-BYO-cluster deploy recipe. Forbidden before R4 binds (the parent design's rule).
+### R5 — `backend="sail"` opt-in surface (ONLY after R4 is green).
+Add `backend="sail"` to the planner/public surface as an **additional** distributed path +
+document the BYO-cluster deploy recipe. **Ray is untouched** (no retirement, no "legacy"
+flip — amended 2026-06-15). Forbidden before R4 binds (the parent design's rule).
 
 ## Dependency order
 
 ```
 R0 (1.31 release) ───────────────┐
 R1 (native Arrow UDF) ──┐        │
-R2 (determinism gate) ──┼──► R4 (multi-node bench) ──► R5 (Ray retire + wire)
+R2 (determinism gate) ──┼──► R4 (multi-node bench) ──► R5 (backend=sail opt-in)
 R3 (coverage gate) ─────┘        │
                                  └─ R0 stabilizes the S3 contract R4 benches
 ```
