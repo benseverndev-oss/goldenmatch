@@ -91,3 +91,18 @@ def test_empty_and_none_rows():
 def test_invalid_filter_size_raises():
     with pytest.raises(Exception):
         native.bloom_clk_batch(["abc"], 2, 20, 7, None)  # 7 not a multiple of 8
+
+
+def test_rayon_guard_output_identical_across_threshold(monkeypatch):
+    """The #688-style rayon guard (GOLDENMATCH_NATIVE_RAYON_MIN_BLOOM_ROWS) only
+    changes WHICH scheduler runs clk_one -- the emitted CLK hex must be
+    byte-identical whether the batch fans out to rayon (min=0) or runs in the
+    calling thread (min huge). Mirrors the score.rs seq/rayon parity contract."""
+    monkeypatch.setenv("GOLDENMATCH_NATIVE", "1")
+    batch = VALUES * 4  # enough rows to exercise the parallel path under min=0
+    for transform in TRANSFORMS:
+        monkeypatch.setenv("GOLDENMATCH_NATIVE_RAYON_MIN_BLOOM_ROWS", "0")  # always rayon
+        rayon = T.bloom_clk_batch(batch, transform)
+        monkeypatch.setenv("GOLDENMATCH_NATIVE_RAYON_MIN_BLOOM_ROWS", "100000000")  # always sequential
+        sequential = T.bloom_clk_batch(batch, transform)
+        assert rayon == sequential, f"rayon != sequential for {transform!r}"

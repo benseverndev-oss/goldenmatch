@@ -12,7 +12,7 @@
 use arrow::array::{Array, ArrayData, Int64Array, LargeStringArray, StringArray};
 use arrow::datatypes::DataType;
 use arrow::pyarrow::PyArrowType;
-use numpy::{IntoPyArray, PyArray2};
+use numpy::{IntoPyArray, PyArray1, PyArray2};
 use goldenmatch_score_core::score_one;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -660,6 +660,48 @@ pub fn score_field_matrix(
     let arr = numpy::ndarray::Array2::from_shape_vec((n, m), buf)
         .map_err(|e| PyValueError::new_err(format!("score_field_matrix: shape error: {e}")))?;
     Ok(arr.into_pyarray(py).unbind())
+}
+
+/// Elementwise pairwise scorer: `out[i] = score(a[i], b[i])` for two equal-length
+/// Arrow string arrays. The Sail-tier (Spark Connect) vectorized Arrow UDF target --
+/// one FFI crossing per batch, no per-element Python loop, no N*N matrix. Returns a
+/// 1-D float32 numpy array in [0, 1]. Nulls are treated as "" (arrow_to_strings
+/// maps null -> empty), matching the pure-Python rapidfuzz floor. scorer_id mirrors
+/// score_field_matrix ids 0..=3 (jaro_winkler / levenshtein / token_sort / exact);
+/// soundex (4) is excluded -- pairwise has no precompute amortization.
+#[pyfunction]
+#[pyo3(signature = (values_a, values_b, scorer_id))]
+pub fn score_field_pairwise(
+    py: Python<'_>,
+    values_a: PyArrowType<ArrayData>,
+    values_b: PyArrowType<ArrayData>,
+    scorer_id: u8,
+) -> PyResult<Py<PyArray1<f32>>> {
+    let a = arrow_to_strings(values_a.0)?;
+    let b = arrow_to_strings(values_b.0)?;
+    if a.len() != b.len() {
+        return Err(PyValueError::new_err(format!(
+            "score_field_pairwise: length mismatch a={} b={}",
+            a.len(),
+            b.len()
+        )));
+    }
+    if !(0u8..=3u8).contains(&scorer_id) {
+        return Err(PyValueError::new_err(format!(
+            "score_field_pairwise: unknown scorer_id={scorer_id} (valid: 0..=3; \
+             4=soundex is matrix-only)"
+        )));
+    }
+    let n = a.len();
+    // Score under allow_threads, row-parallel (each pair independent).
+    let buf: Vec<f32> = py.allow_threads(|| {
+        let mut out = vec![0.0f32; n];
+        out.par_iter_mut().enumerate().for_each(|(i, slot)| {
+            *slot = score_one(scorer_id, &a[i], &b[i]) as f32;
+        });
+        out
+    });
+    Ok(buf.into_pyarray(py).unbind())
 }
 
 /// Pairwise scorer over raw string slices; `score(a_i, b_j)` per cell.

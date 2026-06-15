@@ -47,7 +47,30 @@ trustworthy test. Sequenced:
 (#859 / #889). Off the critical scale path, but it stabilizes the S3 output contract
 S4 benches against and unblocks the showcase. No new work here — just land it.
 
-### R1 — Native scorer Arrow UDF (the PERF prerequisite).
+### R1 — Native scorer Arrow UDF (the PERF prerequisite). ✅ landed in this change
+**Done.** Added the dedicated vectorized kernel `score::score_field_pairwise`
+(`packages/rust/extensions/native/src/score.rs`): two equal-length Arrow string
+arrays in, a contiguous float32 array out, scored row-parallel via the shared
+`score-core` `score_one` in ONE FFI crossing (no per-element Python loop, no N*N
+matrix). `sail/scorers.py` now routes through it: `score_batch` /
+`_native_scores` prefer the kernel when `native_enabled("sail_scoring")`, falling
+back to the pure rapidfuzz floor per-batch on any FFI/pyarrow hiccup or absent
+wheel. **Default-off** (`sail_scoring` is NOT in the loader's `_GATED_ON`, so
+`auto`/unset = pure floor, `GOLDENMATCH_NATIVE=1` = native) until the parity
+battery is green on the PUBLISHED wheel -- the loader's documented promotion rule.
+- **Measured (this box, `scripts/bench_sail_scorer_native.py`, 200K pairs, len 6-18):**
+  jaro_winkler 1.12x / levenshtein 1.13x / token_sort 1.53x over the pure floor,
+  parity max|native-pure| ~1e-8 (f32 epsilon). The win is a LOWER bound -- the
+  bench builds Arrow arrays from Python lists; a real `pandas_udf` gets a Series,
+  so `pa.array(series)` is cheaper, and the gap grows with string length.
+- **Reuse-of-`score_block_pairs_arrow` was tried first and REJECTED** (measure-first):
+  shoehorning size-2 blocks scored at 0.35-0.51x -- the Python interleave + tuple
+  materialization lost to rapidfuzz's C loop. The dedicated contiguous-array kernel
+  is what clears the gate.
+- **Parity gate:** `tests/test_sail_scorer_native_parity.py` (native == pure floor
+  @ f32 ε across the 3 scorers; flag routing; identical-string 1.0; length-mismatch
+  raises). Gates on the native kernel, skips in pure-only envs.
+
 `sail/scorers.py` ships the *floor*: pure-Python rapidfuzz in a `pandas_udf`. The
 parent design's Decision 2 *target* is the existing `score-core` rapidfuzz kernel
 (already compiled into `_native` / `goldenmatch_native`) rebound as a **vectorized

@@ -36,6 +36,30 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _capture_run(event: str, df: Any, config: Any, *, had_reference: bool) -> None:
+    """Emit an anonymous, PII-free usage event for a library run (opt-in only).
+
+    Derives ONLY coarse scalars (scale band, backend, counts) -- never column
+    names, values, or paths. Wrapped so analytics can never break a real run.
+    """
+    try:
+        from goldenmatch.core._native_loader import native_available
+        from goldenmatch.core.analytics import capture, scale_bucket
+
+        mks = config.get_matchkeys() if hasattr(config, "get_matchkeys") else []
+        capture(event, {
+            "surface": "library",
+            "row_bucket": scale_bucket(df.height),
+            "backend": getattr(config, "backend", None) or "polars-direct",
+            "matchkey_count": len(mks),
+            "native_available": native_available(),
+            "had_reference": had_reference,
+            "planning_effort": getattr(config, "planning_effort", None) or "normal",
+        })
+    except Exception:  # noqa: BLE001 - analytics is never load-bearing
+        pass
+
+
 def _attach_memory_to_postflight(
     postflight_report: PostflightReport | None,
     memory_stats: CorrectionStats | None,
@@ -512,6 +536,8 @@ def dedupe_df(
         except Exception:  # noqa: BLE001 - certify is additive; never break dedupe
             logger.warning("recall certify failed; returning result without certificate", exc_info=True)
 
+    _capture_run("dedupe_run", df, config, had_reference=False)
+
     return DedupeResult(
         golden=result.get("golden"),
         clusters=result.get("clusters", {}),
@@ -656,6 +682,8 @@ def match_df(
             if pf is None:
                 pf = PostflightReport()
             pf.autoconfig_exclusions = list(_exclusions)
+
+    _capture_run("match_run", target, config, had_reference=True)
 
     return MatchResult(
         matched=result.get("matched"),
