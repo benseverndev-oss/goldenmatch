@@ -253,6 +253,16 @@ When you expose any server (MCP, REST, A2A, web UI) on a non-loopback host, it i
 | `GOLDENMATCH_PREPARED_RECORD_STORE_DIR` | unset | Directory for the disk-backed prepared-record store. |
 | `GOLDENMATCH_PREPARED_RECORD_STORE_PERSIST` | `0` | `1` keeps the prepared-record store across calls instead of cleaning it up. |
 
+**Product analytics (opt-in):**
+
+Anonymous usage analytics — **off by default**. Emits only when `GOLDENMATCH_ANALYTICS` is on **and** a `POSTHOG_API_KEY` is set, so a user's machine stays silent unless they opt in (the project's own hosted services set the flag server-side). PII-free by construction: only coarse scalars (scale bands, backend, version) ever leave, never record values, column names, or paths. Full collection list + guarantees in `packages/python/goldenmatch/ANALYTICS.md`.
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `GOLDENMATCH_ANALYTICS` | `0` (off) | `1`/`true`/`on` opts in to anonymous, PII-free usage events. Off = nothing is collected or sent. |
+| `POSTHOG_API_KEY` | unset | Destination PostHog project key. Required for any event to send; absent = silent no-op. |
+| `POSTHOG_HOST` | `https://us.i.posthog.com` | PostHog ingestion host override. |
+
 ---
 
 ## Gotchas that cost a day
@@ -398,6 +408,7 @@ Every `GOLDENMATCH_*` variable the package reads, grouped by who should care. De
 | `GOLDENMATCH_LLM_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible base URL for the LLM scorer — point at a local llama.cpp / llamafile server for offline, free LLM judging (also honors `OPENAI_BASE_URL`). |
 | `GOLDENMATCH_UDF_IMPORTS` | unset | Snowflake UDF import asset directory. |
 | `GOLDENMATCH_SYNC_STREAMING_THRESHOLD` / `_STREAMING_BLOCK_WORKERS` | `500000` / auto | Postgres streaming-store thresholds. |
+| `GOLDENMATCH_ANALYTICS` | `0` (off) | Opt-in anonymous, PII-free usage analytics to PostHog (needs `POSTHOG_API_KEY`). Off = nothing collected. |
 
 <Note>
   Not a `GOLDENMATCH_*` var but relevant: set `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` for LLM scoring and the LLM auto-config fallback, and `POLARS_SKIP_CPU_CHECK=1` on Windows to skip the Polars import-time CPU probe.
