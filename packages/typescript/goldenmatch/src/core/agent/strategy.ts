@@ -16,9 +16,24 @@
  *     AgentSession `autoconfigure`/`deduplicate` methods are async.
  */
 
-import type { Row } from "../types.js";
+import type {
+  Row,
+  GoldenMatchConfig,
+  MatchkeyConfig,
+  BlockingConfig,
+} from "../types.js";
+import {
+  makeMatchkeyConfig,
+  makeMatchkeyField,
+  makeBlockingConfig,
+} from "../types.js";
 import { detectDomain } from "../domain.js";
-import type { DataProfile, FieldProfile, StrategyDecision } from "./types.js";
+import type {
+  DataProfile,
+  FieldProfile,
+  StrategyDecision,
+  Alternative,
+} from "./types.js";
 
 // Column-name patterns that indicate sensitive PII (Python _SENSITIVE_PATTERNS).
 const SENSITIVE_PATTERNS = new Set([
@@ -233,4 +248,130 @@ export function selectStrategy(profile: DataProfile): StrategyDecision {
     backend,
     auto_execute: true,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Alternatives (port of `build_alternatives`)
+// ---------------------------------------------------------------------------
+
+/**
+ * Generate alternative strategies the user might consider (port of
+ * `build_alternatives`). Always offers pprl + fellegi_sunter unless the
+ * decision already IS that strategy.
+ */
+export function buildAlternatives(decision: StrategyDecision): Alternative[] {
+  const alts: Alternative[] = [];
+
+  if (decision.strategy !== "pprl") {
+    alts.push({
+      strategy: "pprl",
+      why_not:
+        "No sensitive fields detected, but PPRL is available if data leaves your network.",
+    });
+  }
+
+  if (decision.strategy !== "fellegi_sunter") {
+    alts.push({
+      strategy: "fellegi_sunter",
+      why_not:
+        "Probabilistic model available for automatic parameter estimation.",
+    });
+  }
+
+  return alts;
+}
+
+// ---------------------------------------------------------------------------
+// Config builder (port of `_decision_to_config`)
+// ---------------------------------------------------------------------------
+
+/**
+ * Translate a StrategyDecision into a GoldenMatchConfig (port of
+ * `_decision_to_config`). Mirrors `buildConfigFromOptions` (api.ts) using the
+ * make* factories:
+ *   - one exact matchkey per strong id (scorer "exact", transforms
+ *     lowercase+strip),
+ *   - one weighted matchkey "fuzzy" from the fuzzy fields (scorer
+ *     jaro_winkler, weight 1.0, threshold 0.85),
+ *   - a placeholder exact "auto" matchkey when neither strong nor fuzzy fields
+ *     exist (Python parity),
+ *   - blocking ONLY when there are fuzzy fields (static, first fuzzy field,
+ *     transforms lowercase+first_token),
+ *   - backend propagated from the decision.
+ */
+export function decisionToConfig(
+  decision: StrategyDecision,
+): GoldenMatchConfig {
+  const matchkeys: MatchkeyConfig[] = [];
+
+  // Exact matchkeys from strong IDs.
+  for (const col of decision.strong_ids) {
+    matchkeys.push(
+      makeMatchkeyConfig({
+        name: `exact_${col}`,
+        type: "exact",
+        fields: [
+          makeMatchkeyField({
+            field: col,
+            transforms: ["lowercase", "strip"],
+            scorer: "exact",
+            weight: 1.0,
+          }),
+        ],
+      }),
+    );
+  }
+
+  // Fuzzy matchkey from fuzzy fields (single weighted matchkey named "fuzzy").
+  if (decision.fuzzy_fields.length > 0) {
+    const fields = decision.fuzzy_fields.map((col) =>
+      makeMatchkeyField({
+        field: col,
+        scorer: "jaro_winkler",
+        weight: 1.0,
+        transforms: ["lowercase", "strip"],
+      }),
+    );
+    matchkeys.push(
+      makeMatchkeyConfig({
+        name: "fuzzy",
+        type: "weighted",
+        threshold: 0.85,
+        fields,
+      }),
+    );
+  }
+
+  // Fallback placeholder (Python parity) when nothing matched.
+  if (matchkeys.length === 0) {
+    matchkeys.push(
+      makeMatchkeyConfig({
+        name: "auto",
+        type: "exact",
+        fields: [makeMatchkeyField({ field: "__placeholder__", scorer: "exact" })],
+      }),
+    );
+  }
+
+  // Blocking from the first fuzzy field (only when fuzzy fields exist).
+  let blocking: BlockingConfig | undefined;
+  if (decision.fuzzy_fields.length > 0) {
+    blocking = makeBlockingConfig({
+      strategy: "static",
+      keys: [
+        {
+          fields: [decision.fuzzy_fields[0]!],
+          transforms: ["lowercase", "first_token"],
+        },
+      ],
+    });
+  }
+
+  // Build config without ever spreading `undefined` (exactOptionalPropertyTypes).
+  const config: GoldenMatchConfig = {
+    matchkeys,
+    ...(blocking !== undefined ? { blocking } : {}),
+    ...(decision.backend !== null ? { backend: decision.backend } : {}),
+  };
+  return config;
 }
