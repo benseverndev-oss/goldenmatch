@@ -12,6 +12,7 @@
 //! ```
 
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 use std::process::exit;
 
@@ -30,6 +31,7 @@ struct Args {
     per: usize,
     p_in: f32,
     p_out: f32,
+    dump: Option<String>,
     params: Params,
 }
 
@@ -45,6 +47,7 @@ impl Default for Args {
             per: 250,
             p_in: 0.06,
             p_out: 0.0,
+            dump: None,
             params: Params::default(),
         }
     }
@@ -73,6 +76,7 @@ fn parse_args() -> Args {
             "--per" => a.per = need(i, &argv).parse().unwrap_or(a.per),
             "--p-in" => a.p_in = need(i, &argv).parse().unwrap_or(a.p_in),
             "--p-out" => a.p_out = need(i, &argv).parse().unwrap_or(a.p_out),
+            "--dump-bin" => a.dump = Some(need(i, &argv)),
             "--k" => a.params.k = need(i, &argv).parse().unwrap_or(a.params.k),
             "--theta" => a.params.theta = need(i, &argv).parse().unwrap_or(a.params.theta),
             "--iters" => {
@@ -231,6 +235,59 @@ fn main() {
         .iter()
         .map(|&c| (base * (comp_size[c as usize] as f32).sqrt()).min(base * 6.0))
         .collect();
+
+    // --dump-bin: stream raw per-frame world positions (+ static colors/radii/edges)
+    // to a little-endian binary file instead of rasterizing. Lets an external HDR
+    // renderer (scripts/glow_render.py) do additive-glow / bloom passes the built-in
+    // PPM rasterizer can't, without recomputing the layout.
+    if let Some(dump_path) = &args.dump {
+        let f = fs::File::create(dump_path).unwrap_or_else(|e| {
+            eprintln!("cannot create {dump_path}: {e}");
+            exit(1);
+        });
+        let mut w = std::io::BufWriter::new(f);
+        let mut hdr = Vec::new();
+        for v in [
+            graph.n as u32,
+            graph.edges.len() as u32,
+            args.width as u32,
+            args.height as u32,
+        ] {
+            hdr.extend_from_slice(&v.to_le_bytes());
+        }
+        for &c in &colors {
+            hdr.extend_from_slice(&c.to_le_bytes());
+        }
+        for &r in &radii {
+            hdr.extend_from_slice(&r.to_le_bytes());
+        }
+        for &(a, b, _) in &graph.edges {
+            hdr.extend_from_slice(&a.to_le_bytes());
+            hdr.extend_from_slice(&b.to_le_bytes());
+        }
+        w.write_all(&hdr).unwrap();
+        let t0 = std::time::Instant::now();
+        let mut frames = 0u32;
+        let mut emit = |fp: &[V2]| {
+            let mut buf = Vec::with_capacity(fp.len() * 8);
+            for p in fp {
+                buf.extend_from_slice(&p.x.to_le_bytes());
+                buf.extend_from_slice(&p.y.to_le_bytes());
+            }
+            w.write_all(&buf).unwrap();
+            frames += 1;
+        };
+        let pos = layout::run(&graph, &args.params, |frame_pos, fidx| {
+            if fidx % args.frame_every == 0 {
+                emit(frame_pos);
+            }
+        });
+        emit(&pos);
+        w.flush().unwrap();
+        let secs = t0.elapsed().as_secs_f32();
+        println!("dumped {frames} frames to {dump_path} in {secs:.2}s");
+        return;
+    }
 
     if let Err(e) = fs::create_dir_all(&args.out) {
         eprintln!("cannot create {}: {e}", args.out);
