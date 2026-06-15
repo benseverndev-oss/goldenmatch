@@ -22,14 +22,14 @@ crate-type = ["cdylib"]
 [dependencies]
 # abi3-py311: one stable-ABI artifact spans CPython 3.11-3.13.
 # extension-module: don't link libpython (this .so is imported BY CPython).
-pyo3 = { version = ">=0.23.3, <0.25", features = ["extension-module", "abi3-py311"] }
+pyo3 = { version = ">=0.28, <0.29", features = ["extension-module", "abi3-py311"] }
 # Pyo3-free histogram/quantile kernels; the #[pyfunction] shims below are thin
 # Arrow-reading wrappers over this crate.
 analysis-core = { path = "../analysis-core" }
 # Arrow C Data Interface for zero-copy kernel input (mirrors goldencheck-native).
 # `pyarrow` brings the PyArrowType FFI bridge; default features (csv/ipc/json/
 # compute) are off -- we only read array buffers.
-arrow = { version = "55", default-features = false, features = ["pyarrow"] }
+arrow = { version = "59", default-features = false, features = ["pyarrow"] }
 
 [profile.release]
 opt-level = 3
