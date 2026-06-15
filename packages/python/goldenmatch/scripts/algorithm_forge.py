@@ -176,17 +176,31 @@ PROPOSAL_SCHEMA = _obj(
      "complexity", "metric_properties", "expected_advantages", "known_risks", "novelty_argument"],
 )
 
+_SCORE = {"type": "integer", "description": "Score from 0 (worst) to 100 (best)."}
+
 VERDICT_SCHEMA = _obj(
     {
         "verdict": {"type": "string", "enum": ["failed", "maybe", "yes"]},
         "reason": _STR,
+        "novelty_score": _SCORE,
+        "performance_score": _SCORE,
+        "accuracy_score": _SCORE,
+        "potential_score": _SCORE,
         "fatal_flaws": _STRS,
         "fixable_concerns": _STRS,
         "novelty_assessment": _STR,
         "suggested_improvements": _STRS,
     },
-    ["verdict", "reason", "fatal_flaws", "fixable_concerns", "novelty_assessment", "suggested_improvements"],
+    ["verdict", "reason", "novelty_score", "performance_score", "accuracy_score",
+     "potential_score", "fatal_flaws", "fixable_concerns", "novelty_assessment", "suggested_improvements"],
 )
+
+SCORE_KEYS = ["novelty_score", "performance_score", "accuracy_score", "potential_score"]
+
+
+def composite(verdict: dict) -> int:
+    """Mean of the four 0-100 axis scores, rounded."""
+    return round(sum(verdict[k] for k in SCORE_KEYS) / len(SCORE_KEYS))
 
 VERDICT_RANK = {"failed": 0, "maybe": 1, "yes": 2}
 
@@ -358,6 +372,15 @@ VALIDATE_SYSTEM = textwrap.dedent(
       - "yes":    well-defined, novel enough, with a plausible and testable advantage.
                   Give the reason. Reserve this for proposals you'd actually prototype.
     Be specific. A one-line "looks good" is a failure of your job.
+
+    Also score the proposal on four independent axes, each an integer 0-100, and be
+    honest (do not cluster everything at 90+; reserve the top decile for the rare best):
+      - novelty_score:      how genuinely new vs the surveyed prior art (penalize
+                            rebadged existing methods hard).
+      - performance_score:  computational efficiency / scalability for large-scale ER
+                            (latency, blocking-friendliness, parallelism).
+      - accuracy_score:     expected matching-quality gain on real, messy entity data.
+      - potential_score:    overall upside if it pans out (impact x tractability).
     """
 )
 
@@ -489,8 +512,9 @@ def forge(args: argparse.Namespace) -> dict:
 
         verdict = run_validation(client, survey, proposal)
         v = verdict["verdict"]
-        log(f"      VERDICT: {v.upper()} — {verdict['reason'][:120]}"
-            f"  (${client.cost.usd:.4f})")
+        log(f"      VERDICT: {v.upper()} — nov {verdict['novelty_score']} / "
+            f"perf {verdict['performance_score']} / acc {verdict['accuracy_score']} / "
+            f"pot {verdict['potential_score']} -> {composite(verdict)}  (${client.cost.usd:.4f})")
 
         history.append({"iteration": i, "proposal": proposal, "verdict": verdict})
         if VERDICT_RANK[v] >= VERDICT_RANK[args.target_verdict]:
@@ -548,6 +572,23 @@ def render_markdown(run: dict) -> str:
         w(f"- **Why still open:** {g['why_unaddressed']}")
         w(f"- **Opportunity:** {g['opportunity']}\n")
 
+    # Leaderboard of accepted proposals, ranked by composite score.
+    accepted = sorted(
+        (h for h in run["iterations"]
+         if VERDICT_RANK[h["verdict"]["verdict"]] >= VERDICT_RANK[cfg["target_verdict"]]),
+        key=lambda h: composite(h["verdict"]),
+        reverse=True,
+    )
+    if accepted:
+        w("## Accepted proposals — leaderboard\n")
+        w("| Rank | Algorithm | Novelty | Performance | Accuracy | Potential | Composite |")
+        w("| ---: | --- | ---: | ---: | ---: | ---: | ---: |")
+        for rank, h in enumerate(accepted, 1):
+            p, v = h["proposal"], h["verdict"]
+            w(f"| {rank} | {p['name']} | {v['novelty_score']} | {v['performance_score']} "
+              f"| {v['accuracy_score']} | {v['potential_score']} | **{composite(v)}** |")
+        w("")
+
     w("## Proposals & verdicts\n")
     badge = {"yes": "✅ YES", "maybe": "🟡 MAYBE", "failed": "❌ FAILED"}
     for h in run["iterations"]:
@@ -557,7 +598,10 @@ def render_markdown(run: dict) -> str:
         w(f"- **Targets gap:** {p['targets_gap']}")
         w(f"- **Builds on:** {', '.join(p['builds_on'])}")
         w(f"- **Complexity:** {p['complexity']}")
-        w(f"- **Mechanism:** {p['mechanism']}\n")
+        w(f"- **Mechanism:** {p['mechanism']}")
+        w(f"- **Scores:** novelty {v['novelty_score']} · performance {v['performance_score']} "
+          f"· accuracy {v['accuracy_score']} · potential {v['potential_score']} "
+          f"· **composite {composite(v)}**\n")
         w("```text")
         w(p["pseudocode"].rstrip())
         w("```\n")
@@ -643,9 +687,12 @@ def _mock_response(schema: dict, label: str) -> dict:
         # Cycle verdicts so a multi-iteration mock run shows all branches.
         _mock_response.n = getattr(_mock_response, "n", 0) + 1  # type: ignore[attr-defined]
         v = ["maybe", "failed", "yes"][(_mock_response.n - 1) % 3]  # type: ignore[attr-defined]
+        base = {"failed": 30, "maybe": 60, "yes": 82}[v]
         return {
             "verdict": v,
             "reason": f"Mock verdict '{v}' for offline testing of the loop and report.",
+            "novelty_score": base, "performance_score": base + 3,
+            "accuracy_score": base - 4, "potential_score": base + 1,
             "fatal_flaws": ["repeated-gram position is ambiguous"] if v == "failed" else [],
             "fixable_concerns": ["define position for repeated grams"] if v == "maybe" else [],
             "novelty_assessment": "Plausibly distinct blend of set + positional decay.",
