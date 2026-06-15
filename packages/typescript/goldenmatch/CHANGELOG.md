@@ -6,6 +6,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [1.0.0] — 2026-06-15
+
+**First stable release.** The API is now stable: breaking changes only at the next
+major (2.0.0). This is a one-time jump from the `0.x` wave line (`0.13.0 → 1.0.0`) —
+a deliberate "this is stable" signal, not a `2.0.0` product-alignment bump (see
+`docs/versioning-policy.md`; npm and PyPI keep independent semver, not lockstep).
+
+- **AgentSession agent surface ported** (the last undeclared parity gap, 2026-06-15):
+  the edge-safe `AgentSession` decision core + shared `AGENT_SKILLS` registry, 14
+  agent-level MCP tools (MCP **30 → 44**), the A2A skill-union agent card + fail-closed
+  bearer auth + unified dispatch (`/tasks/send`, `/tasks/{id}/cancel`), and node
+  file-loaders (`analyzeFile` / `deduplicateFile` / `matchSourcesFile`). Behavior-fixture
+  parity vs Python (`selectStrategy` decision table). The 3 agent tools with no TS core
+  (`sensitivity` / `incremental` / `certify_recall`) are declared Python-only.
 - **Opt-in WASM scorer backend.** `enableWasm()` / `disableWasm()` register a
   WebAssembly scorer (the Rust `score-core` kernel via the new `score-wasm`
   crate) behind the sync `scoreMatrix` for `jaro_winkler`/`levenshtein`/`exact`.

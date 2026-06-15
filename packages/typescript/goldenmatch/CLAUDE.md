@@ -1,8 +1,8 @@
 # goldenmatch (TypeScript)
 
-npm package `goldenmatch`. Parity port of the Python sibling at `packages/python/goldenmatch/`. Currently at **v0.11.0** (core-algorithm parity catch-up + Phase-5 golden-strategy plugin port). Python sibling is at v1.16; v1.13/v1.14/v1.16 are explicitly not-ported (see CHANGELOG.md for the per-version rationale).
+npm package `goldenmatch`. Parity port of the Python sibling at `packages/python/goldenmatch/`. **At `v1.0.0` — first stable release (2026-06-15).** The API is stable; breaking changes only at the next major. See the wave history below for the road here.
 
-> **Versioning note:** `package.json` was briefly set to `2.0.0` by #463 (the "Phase 5 plugin port" milestone label), but that broke the documented 0.x wave line and was never published (npm stayed at 0.10.0). Corrected to `0.11.0` for the release that ships the plugin port + the core-parity gap closure. The package stays intentionally pre-1.0.
+> **Versioning note:** `package.json` was briefly set to `2.0.0` by #463 (the "Phase 5 plugin port" milestone label) and reverted — see `docs/versioning-policy.md` for why 1.0.0 (a "this is stable" signal), NOT 2.0.0 (PyPI-alignment), was the right cut. npm and PyPI keep **independent semver** (not lockstep): PyPI is at 2.0.x; the npm line is its own. The `0.x → 1.0.0` jump is the one-time stability declaration after the AgentSession/A2A port closed the last undeclared parity gap.
 
 ## Wave history
 | npm | Python parity | Headline |
