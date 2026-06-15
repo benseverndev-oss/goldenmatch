@@ -43,7 +43,7 @@ Thresholds (and the learned combiner) are fit on train entities and evaluated on
 | AbbrevAlign | **0.953** | 1.000 | 0.911 | 0.953 |
 | JW∪AbbrevAlign | **0.929** | 1.000 | 0.867 | 1.000 |
 | JaroWinkler* | **0.889** | 1.000 | 0.800 | 0.986 |
-| StackLearned (JW+Abbrev+Nick) | **0.861** | 1.000 | 0.756 | 0.990 |
+| StackLearned (JW+Abbrev+Nick) | **0.861** | 1.000 | 0.756 | 0.989 |
 | PartialRatio* | **0.831** | 1.000 | 0.711 | 0.980 |
 | Levenshtein* | **0.816** | 1.000 | 0.689 | 0.852 |
 | TokenSortRatio* | **0.784** | 1.000 | 0.644 | 0.818 |
@@ -57,7 +57,7 @@ Thresholds (and the learned combiner) are fit on train entities and evaluated on
 
 - **Best held-out F1: `AbbrevAlign` (0.953).**
 - **Learned combiner (JW + AbbrevAlign + NickGraph) trails the JaroWinkler baseline** on held-out F1 (0.861 vs 0.889, Δ -0.028) — the principled fusion, not naive `max()`. AbbrevAlign and NickGraph contribute as features.
-- **AbbrevAlign (nickname- + stopword-acronym-aware) alone:** held-out F1 0.953, precision 1.000, AUC 0.953. Two iterations drove this: v2 folded in nickname equivalence (Bob=Robert), v3 made acronym matching skip stopwords (FBI<-Federal Bureau *of* Investigation). It now beats JaroWinkler on F1 (Δ +0.065). Recall is the discriminator — held-out folds contain few cross-entity hard negatives, so precision saturates near 1.0.
-- **Recommendation:** at this corpus size, use AbbrevAlign v2 directly as an added comparator (it wins held-out); the 6-feature logistic combiner overfits ~36 train positives per fold and underperforms — it is the right path only with more labels.
+- **AbbrevAlign (nickname- + stopword-acronym-aware) alone:** held-out F1 0.953, precision 1.000, AUC 0.953. Two iterations drove this: v2 folded in nickname equivalence (Bob=Robert), v3 made acronym matching skip stopwords (FBI<-Federal Bureau *of* Investigation). It beats JaroWinkler on F1 (Δ +0.065). Recall is the discriminator — these folds carry few cross-entity hard negatives, so precision saturates near 1.0.
+- **Recommendation:** at this corpus size, use AbbrevAlign directly as an added comparator (it wins held-out); the 6-feature logistic combiner overfits the few train positives per fold and underperforms — it is the right path only with more labels.
 
-> Caveat: small curated corpus (45 positives), tiny folds — directional signal, not a production F1; treat deltas as suggestive. The learned combiner is data-starved here. Next: Cora / DBLP-ACM / a company-name set at scale with proper train/test volume.
+> Caveat: small curated corpus (45 positives), tiny folds — directional signal, not a production F1; the learned combiner is data-starved at this size. Next: a larger set (`--synthetic`) or a real one (Cora / DBLP-ACM / company names).
