@@ -1,6 +1,6 @@
 /**
  * session.ts — AgentSession orchestrator (core, edge-safe).
- * Edge-safe: no `node:` imports. Ported from goldenmatch/core/agent.py.
+ * Edge-safe: no Node.js imports. Ported from goldenmatch/core/agent.py.
  *
  * Operates on `Row[]` (Python operates on a Polars DataFrame). Delegates to
  * the existing TS core primitives: dedupe / match / autoConfigureRowsIterate /

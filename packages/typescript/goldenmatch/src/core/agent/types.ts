@@ -1,6 +1,6 @@
 /**
  * types.ts — Agent decision-core types.
- * Edge-safe: no `node:` imports. Ported from goldenmatch/core/agent.py.
+ * Edge-safe: no Node.js imports. Ported from goldenmatch/core/agent.py.
  */
 
 import type { Row } from "../types.js";

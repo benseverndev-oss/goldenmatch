@@ -1,6 +1,6 @@
 /**
  * strategy.ts — Agent decision keystone: profile -> strategy -> config.
- * Edge-safe: no `node:` imports. Ported from goldenmatch/core/agent.py.
+ * Edge-safe: no Node.js imports. Ported from goldenmatch/core/agent.py.
  *
  * Task-0 confirmations (pinned so later tasks don't re-derive them):
  *   - `DedupeOptions.config`: a GoldenMatchConfig is passed as

@@ -1,6 +1,6 @@
 /**
  * skills.ts — AGENT_SKILLS registry + dispatchSkill (the shared dispatcher).
- * Edge-safe: no `node:` imports. The I/O seam is dependency injection
+ * Edge-safe: no Node.js imports. The I/O seam is dependency injection
  * (`ctx.loadTable`), never a file read here.
  *
  * Wave 1 registers only the AgentSession-backed skills. MCP/A2A wiring, file

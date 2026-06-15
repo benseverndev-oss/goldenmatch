@@ -1,6 +1,6 @@
 /**
  * index.ts — Public surface for the edge-safe agent decision core.
- * Edge-safe: no `node:` imports.
+ * Edge-safe: no Node.js imports.
  *
  * Re-exports the AgentSession orchestrator, the pure decision functions, the
  * shared skill registry + dispatcher, and all agent types. Wired into
