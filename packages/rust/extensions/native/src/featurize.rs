@@ -159,7 +159,7 @@ pub fn char_ngram_project<'py>(
         .chunks_exact(4)
         .map(|c| f32::from_ne_bytes([c[0], c[1], c[2], c[3]]))
         .collect();
-    let floats: Vec<f32> = py.allow_threads(|| {
+    let floats: Vec<f32> = py.detach(|| {
         texts
             .par_iter()
             .flat_map_iter(|text| {
@@ -185,7 +185,7 @@ pub fn char_ngram_project<'py>(
 /// Python objects (returning `Vec<f32>` makes pyo3 allocate millions of Python
 /// floats, which is far slower than the pure-Python loop). The buffer is
 /// ephemeral and consumed in-process, so native endianness is fine. Rows are
-/// independent, computed in parallel with `rayon` under `allow_threads`.
+/// independent, computed in parallel with `rayon` under `detach`.
 #[allow(clippy::too_many_arguments)]
 #[pyfunction]
 pub fn char_ngram_features<'py>(
@@ -199,7 +199,7 @@ pub fn char_ngram_features<'py>(
     seed: u64,
 ) -> Bound<'py, PyBytes> {
     let seed_le = seed.to_le_bytes();
-    let floats: Vec<f32> = py.allow_threads(|| {
+    let floats: Vec<f32> = py.detach(|| {
         texts
             .par_iter()
             .flat_map_iter(|text| {

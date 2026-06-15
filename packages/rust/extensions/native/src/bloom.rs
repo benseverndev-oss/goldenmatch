@@ -125,7 +125,7 @@ pub fn bloom_clk_batch(
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(10_000);
-    Ok(py.allow_threads(|| {
+    Ok(py.detach(|| {
         if prepared.len() >= rayon_min_rows {
             prepared
                 .par_iter()
