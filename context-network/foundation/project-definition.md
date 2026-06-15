@@ -21,6 +21,9 @@ Five commitments turn the North Star into a test every change must pass:
 | **Out-of-the-box should approach the hand-tuned expert.** The gap to a specialist's best manual result keeps shrinking. | Does this close the gap to expert-tuned — or widen it? |
 | **Advanced, never black-box.** As the engine gets cleverer, every decision stays traceable and auditable. | Can the user see **why** — even for the newest, smartest path? |
 
+The honest gap-assessment against these five commitments, and the sequenced plan to close
+it, is [../planning/north-star-roadmap.md](../planning/north-star-roadmap.md).
+
 ## What it is
 **Golden Suite** is a polyglot monorepo of data-quality / entity-resolution tooling.
 **goldenmatch** is the flagship: an entity-resolution (ER / dedupe / record-linkage)

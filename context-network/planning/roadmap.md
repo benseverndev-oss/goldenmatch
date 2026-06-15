@@ -1,5 +1,10 @@
 # Roadmap — Arrow-native arc
 
+> **Strategic note:** this is the *engine* roadmap — one workstream (W3) of the broader
+> [north-star-roadmap.md](north-star-roadmap.md), which sequences adoption / zero-config /
+> surface-parity / bus-factor work *ahead* of engine unification. The Arrow-native arc below
+> is a means to the scale-invariant-correctness commitment, not the North Star itself.
+
 The destination is **engine portability** (DataFusion single-box → Sail distributed) —
 see [../decisions/0001-gate-reframe-engine-portability.md](../decisions/0001-gate-reframe-engine-portability.md).
 
