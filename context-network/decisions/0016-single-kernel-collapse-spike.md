@@ -147,9 +147,9 @@ that directly probes the two pending platform-reliability items:
 
 **R1-B verdict: GO-with-residual.** Kill-criterion (3) is cleared for the four
 mainstream arches; the macOS-x86_64 runtime gap and the un-reproducible #688 EPYC cliff
-are documented *infra* residuals, not code blockers. The remaining R1 gate before any
-default flip is **Workstream A** — cross-JS-target WASM (Node ✅ already; browser /
-Workers / Deno pending), kill-criterion (2).
+are documented *infra* residuals, not code blockers. The other R1 gate before any
+default flip was **Workstream A** — cross-JS-target WASM, kill-criterion (2) — now
+**PASS (GREEN)** (see the Workstream-A section + the R1 overall verdict below).
 
 ### R1 evidence — Workstream A: cross-JS-target WASM (kill-criterion 2), PROBED 2026-06-14
 
@@ -182,28 +182,102 @@ builds.
   | node | vitest (Node 22) | bytes via fs (default loader) | **PASS** (spike; re-run in-env GREEN) |
   | deno | `deno test` (Deno 2.8) | universal base64 + `atob` | **PASS (RAN-GREEN in-env)** — 1200 comparisons, max abs diff 4.8e-7 |
   | browser | vitest browser-mode, chromium (Playwright) | universal base64 + `atob` | **PASS (RAN-GREEN in-env)** — real chromium; fault-injection confirmed it compares |
-  | workers | vitest-pool-workers (workerd) | build-time CompiledWasm `.wasm?module` import | **PENDING-RUN (in-env partial)** — see finding below |
+  | workers | vitest-pool-workers (workerd) | build-time CompiledWasm `.wasm` import | **PASS (RAN-GREEN in CI)** — workerd, real run; see finding |
 
-- **Workers FINDING (in-env, load-bearing for the design).** The pool RUNS in real
-  workerd in-env (the test body executed), and surfaced a genuine Workers constraint:
-  **workerd BANS runtime WASM codegen** — both `WebAssembly.instantiate(bytes)` AND the
-  synchronous `new WebAssembly.Module(bytes)` constructor throw *"Wasm code generation
-  disallowed by embedder"*. So the base64-bytes universal path that clears node/browser/deno
-  does NOT work on Workers; the Workers-legal path is a BUILD-TIME CompiledWasm `.wasm`
-  import (the pool compiles the module at deploy time). That is the one supported Workers
-  mechanism (not a per-target *hack* — the same wasm-bindgen glue + the same comparator),
-  but under the in-env vitest 4.1 / pool 0.16 combo vite's host-side import-analysis
-  intercepts the `.wasm?module` specifier before the pool's worker resolver, so the green
-  run is **pending the `workers` CI job** (which pins the pool/vitest versions). The harness
-  + config are written and the runner is proven to execute in workerd. NOTE: this is a real
-  signal for the eventual TS default-flip scope — a Workers consumer must ship the kernel as
-  a build-time CompiledWasm module, not the base64 path.
+  All four legs green in CI run
+  [#27518182208](https://github.com/benseverndev-oss/goldenmatch/actions/runs/27518182208)
+  (workflow_dispatch on `main` @ `40fbace2`): node / deno / browser / **workers** each
+  build the `score-wasm` kernel and reproduce the frozen pure-TS reference at 4dp.
 
-**R1-A verdict (provisional, in-env):** node/deno/browser CLEAR kill-criterion (2)
-with the universal base64 loader and NO per-target hack; workers is the documented
-edge case — loadable, but only via a build-time CompiledWasm import (confirmed
-constraint), green run pending the dispatched `workers` job. The full go/no-go
-table will be filled from a `workflow_dispatch` run of `r1-kernel-js-targets.yml`.
+- **Workers FINDING (load-bearing for the design).** The pool RUNS in real workerd and
+  surfaced a genuine Workers constraint: **workerd BANS runtime WASM codegen** — both
+  `WebAssembly.instantiate(bytes)` AND the synchronous `new WebAssembly.Module(bytes)`
+  constructor throw *"Wasm code generation disallowed by embedder"*. So the base64-bytes
+  universal path that clears node/browser/deno does NOT work on Workers; the Workers-legal
+  path is a BUILD-TIME CompiledWasm `.wasm` import (the pool compiles the module at deploy
+  time). That is the one supported Workers mechanism — NOT a per-target *hack*: same
+  wasm-bindgen glue, same `runEquivalence` comparator, only the module hand-off differs.
+  HARNESS NOTE: the first dispatch ([#27515943709](https://github.com/benseverndev-oss/goldenmatch/actions/runs/27515943709))
+  red'd because the static `.wasm?module` import tripped the HOST vite `import-analysis`
+  before the pool resolved it (0 tests collected); fixed in #977 by importing a plain
+  `.wasm` + `assetsInclude: ["**/*.wasm"]` (`server.deps.inline` only covers node_modules).
+  SIGNAL for the eventual TS default-flip scope — a Workers consumer must ship the kernel as
+  a build-time CompiledWasm module, not the `{ universal: true }` base64 path.
+
+**R1-A verdict: PASS (GREEN).** All four JS targets (node / deno / browser / workers)
+load the `score-core` kernel and reproduce pure-TS at 4dp in CI. node/deno/browser clear
+via the ONE universal base64 loader with no per-target hack; **workers clears via the
+build-time CompiledWasm module** — a documented, supported per-target *load mechanism*
+(workerd's codegen ban makes it mandatory), not a per-target hack. Kill-criterion (2) is
+cleared, with that Workers load-form nuance recorded as the single R1-A residual.
+
+### R1 OVERALL VERDICT (2026-06-15): GO to R2, two documented residuals
+
+With **R1-A: PASS (GREEN)** (this section) and **R1-B: GO-with-residual** (the wheels
+section above), all four kill-criteria now have real positive evidence on the levenshtein
+tracer: (1) pure==kernel 4dp across Python + TS/WASM (node/deno/browser/workers) — PASS;
+(2) cross-JS-target WASM — PASS (GREEN); (3) all-platform abi3 wheels — PASS for the four
+mainstream arches; (4) measured wall not-slower — PASS (kernel 1.44× faster + not-slower on
+every platform run). **R1 is GO.** The two carried residuals are both *infra/mechanism*, not
+code blockers: (a) macOS-x86_64 wheel is build-only (no Intel-mac runner in this org;
+sunsetting arch); (b) a Workers kernel consumer must use the build-time CompiledWasm module
+form, not the base64 universal loader. Per the reversibility commitment, R2 (collapse the
+first scorer behind a reversible default-flip flag) may proceed — still additive, parity-gated,
+one reversible flag per step.
+
+### R2 (2026-06-15): executed first slice + a value RECALIBRATION
+
+Executing R2 on the levenshtein tracer surfaced a material recalibration of the whole
+collapse, and two of the four "pending" items turned out to be already-resolved or
+must-hold. Recorded here so R3+ is scoped to reality, not the original framing.
+
+**The recalibration (the reward is narrower than "delete N reimplementations"):**
+- **Python is already collapsed.** The default polars-direct path
+  (`_fuzzy_score_matrix` → `_native_field_matrix`) already prefers the `score-core`
+  kernel over rapidfuzz for jaro_winkler / levenshtein / token_sort / exact /
+  soundex_match when the wheel is importable; parity is already gated
+  (`test_native_field_matrix_parity.py`). R2 on Python is governance, not a risky flip.
+- **TS cannot flip default.** WASM stays opt-in for edge-safety, so the pure-TS scorer
+  MUST remain the default + fallback. R2 doesn't reduce TS maintenance.
+- **The pure paths are load-bearing fallbacks** (Python no-wheel installs; TS always),
+  so **R5 "decommission" cannot delete the default-path scorers.** Realistic end-state:
+  *kernel = governed canonical fast path; pure = fallback; the parity harnesses stay as
+  kernel-vs-pure equivalence gates* (not cross-language reimplementation gates).
+  **R5 (deletion) is retired.**
+
+**R2 first slice — SHIPPED (#980):** brought field scoring under the reversible
+`GOLDENMATCH_NATIVE` gate. `_native_field_matrix` previously checked only
+`native is not None`, so `GOLDENMATCH_NATIVE=0` did NOT force the pure path — a latent
+reversibility gap. Now it consults `native_enabled("field_scoring")` (`=0` forces pure,
+`=1` requires native, `auto` uses native iff signed off), and `field_scoring` is in
+`_GATED_ON` so the default is unchanged. Output is byte-identical (proven); only WHICH
+path runs is now reversible + telemetered. Verified 138/138 scorer + 11/11 field-matrix
+parity (incl. 3 new gate tests).
+
+**Kill-criterion (1) SQL surface — was NOT pending; it is GATED (correction to the R1
+verdict above).** `tests/test_datafusion_ffi_udf.py::test_ffi_string_scorers_match_rapidfuzz`
+already stands up a real DataFusion `SessionContext`, registers the FFI scalar UDFs, runs
+`SELECT jaro_winkler/token_sort/levenshtein(a,b)` and asserts each == rapidfuzz (the pure
+lib) at 1e-6 (token_sort `/100` accounted). It runs LIVE in CI (`ci.yml` installs
+`datafusion>=53,<54`, builds + installs the `goldenmatch_datafusion_udf` wheel, hard-imports
+it). So **all three bindings — Python, TS/WASM, SQL — have a live runtime `==pure` gate**;
+kill-criterion (1) is fully cleared, not partial.
+
+**`pprl_bloom` — investigated for the R2 governance set, deliberately HELD default-off.**
+Parity battery green (26 tests) and the kernel is **7.08× faster, byte-identical output**
+(measure-first). BUT `native/src/bloom.rs` fans out with an **unconditional
+`prepared.par_iter()`** — no `GOLDENMATCH_NATIVE_RAYON_MIN_*` threshold guard, unlike the
+#692 fix in `score.rs`. That is the exact **#688 rayon-`LockLatch` futex-park class**, and
+it reproduces only on the 8-core EPYC `ubuntu-latest-xlarge` runner that **R1-B confirmed
+won't provision** — so it cannot be cleared in this org's CI. Flipping `pprl_bloom` into
+`_GATED_ON` would ship an unvalidatable #688-class risk; it stays default-off (`=1` opt-in)
+until the kernel gets the #692-style calling-thread-below-threshold guard (a kernel change +
+wheel republish, NOT a cheap follow-up).
+
+**R2 verdict:** the concrete win (governed reversibility on field scoring + the confirmation
+that all three bindings are gated) is banked; the grand R3–R5 program is reframed to
+"govern any remaining ungoverned kernel defaults; keep parity gated" with **deletion (R5)
+retired** and `pprl_bloom`'s flip blocked on the unguarded-rayon fix.
 
 Two backward-compatible script flags back the gate: `--require-kernel`
 (kernel-absence → exit 1) and `--assert-not-slower` (perf cliff → exit 1); with

@@ -64,6 +64,17 @@ except Exception:  # noqa: BLE001 - any import/load failure falls back below
 #     and Python -- asserted byte-for-byte (incl. pinned golden vectors) in
 #     tests/test_record_fingerprint.py. Native vs Python produce the same id,
 #     so gating native on/off never changes a record id.
+#   - field_scoring: the cdist-shaped per-field score matrix (score_field_matrix
+#     -> score-core) behind the default polars-direct path's _fuzzy_score_matrix
+#     for jaro_winkler / levenshtein / token_sort / exact / soundex_match. The
+#     kernel IS rapidfuzz (same as the pure path); parity asserted to 1e-4 in
+#     tests/test_native_field_matrix_parity.py and bit-identical on the
+#     levenshtein tracer in the single-kernel-collapse spike (ADR 0016, max abs
+#     diff 0.0). This path already preferred the kernel when importable; adding it
+#     here (single-kernel-collapse R2) brings that long-standing default UNDER the
+#     reversible GOLDENMATCH_NATIVE flag (=0 now actually forces pure) + the
+#     dispatch telemetry, with no output change. Bench: kernel not-slower
+#     (1.44x faster per-pair) -- the measure-first gate in the spike.
 #
 # NOT yet gated on (ships default-off; reachable via GOLDENMATCH_NATIVE=1):
 #   - pprl_bloom: the CLK bloom-filter hash loop (bloom_clk_batch). Python does
@@ -76,7 +87,7 @@ except Exception:  # noqa: BLE001 - any import/load failure falls back below
 #     (a republish must ship the new symbol -- see the goldenmatch-native wheel-
 #     skew note in the root CLAUDE.md) and a wall-clock bench confirms the lift.
 _GATED_ON: frozenset[str] = frozenset(
-    {"clustering", "block_scoring", "pairs", "featurize", "hashing"}
+    {"clustering", "block_scoring", "pairs", "featurize", "hashing", "field_scoring"}
 )
 
 

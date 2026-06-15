@@ -2,6 +2,43 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-06-15 — Single-kernel-collapse R2: first slice shipped + value recalibration (R5 retired)
+- **R2 first slice SHIPPED (#980, merged):** field scoring brought under the reversible
+  `GOLDENMATCH_NATIVE` gate. `_native_field_matrix` had preferred the `score-core` kernel
+  ungoverned (ignored the flag), so `GOLDENMATCH_NATIVE=0` did not force the pure path — a
+  latent reversibility gap. Now gates on `native_enabled("field_scoring")` + `field_scoring`
+  in `_GATED_ON` (default unchanged, output byte-identical, reversible + telemetered).
+  Verified 138/138 + 11/11 parity in-env.
+- **Recalibration (recorded in ADR 0016):** Python is already kernel-default; TS can't flip
+  (edge-safety keeps pure-TS the default + fallback); the pure paths are load-bearing
+  fallbacks, so **R5 "decommission" is retired** — the realistic end-state is "kernel =
+  governed canonical fast path; pure = fallback; parity harnesses stay as kernel-vs-pure
+  gates." The reward is narrower than the original "delete N reimplementations" framing.
+- **Two cheap follow-ups investigated → no code needed:** (1) the **SQL-binding equivalence
+  gate already EXISTS and runs live in CI** (`test_datafusion_ffi_udf.py` asserts the
+  DataFusion FFI UDFs == rapidfuzz at 1e-6; `ci.yml` installs `datafusion` + builds the
+  wheel + hard-imports) — so kill-criterion (1)'s SQL surface was never pending, a correction
+  to the R1 verdict; all three bindings are gated. (2) **`pprl_bloom` HELD default-off** —
+  26 parity tests green + 7.08× faster byte-identical, BUT `bloom.rs` uses an unguarded
+  `par_iter()` (the #688 futex-park class) on the EPYC runner that won't provision; flipping
+  it default-on is an unvalidatable #688 risk. Needs the #692-style threshold guard first.
+
+## 2026-06-15 — Single-kernel-collapse R1 COMPLETE: GO to R2 (two documented residuals)
+- **Kill-criterion (2) cleared — all four JS targets GREEN in CI.** `r1-kernel-js-targets.yml`
+  run [#27518182208](https://github.com/benseverndev-oss/goldenmatch/actions/runs/27518182208)
+  (workflow_dispatch on `main`): node / deno / browser (chromium) / **workers (workerd)** each
+  build `score-wasm` and reproduce the frozen pure-TS reference at 4dp. node/deno/browser via the
+  ONE universal base64 loader (no per-target hack); **workers via the build-time CompiledWasm
+  module** — mandatory because workerd bans runtime WASM codegen, a supported per-target load
+  *mechanism* not a hack. The first dispatch red'd on a host-vite `import-analysis` parse of the
+  static `.wasm?module` import (0 tests); fixed in #977 (plain `.wasm` import + `assetsInclude`).
+- **R1 overall: GO.** All four kill-criteria now have positive tracer evidence — (1) pure==kernel
+  4dp across Python + TS/WASM, (2) cross-JS-target WASM PASS, (3) all-platform abi3 wheels PASS for
+  the four mainstream arches (R1-B), (4) kernel measured not-slower (1.44×). Two carried residuals,
+  both infra/mechanism not code: macOS-x86_64 wheel build-only; Workers needs the build-time module
+  form. R2 (first scorer collapse behind a reversible default-flip flag) may proceed — additive,
+  parity-gated, one reversible flag per step. ADR 0016 holds the verdict.
+
 ## 2026-06-14 — Single-kernel-collapse R1 Workstream A: cross-JS-target WASM (kill-criterion 2)
 - **Shipped as additive, workflow_dispatch-only infra** — flips no default (the TS
   WASM path stays opt-in via `enableWasm()`; pure-TS stays default + fallback),

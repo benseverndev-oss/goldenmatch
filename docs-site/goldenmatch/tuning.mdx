@@ -168,7 +168,15 @@ This is the knob most people get wrong, so read the contract before you run a 10
 | `GOLDENMATCH_DISTRIBUTED_WCC_SEED` | unset | Seed for the randomized-contraction affine hash (reproducible cluster IDs across runs). |
 | `GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD` | unset (memory-aware) | Pair count above which clustering goes distributed. **Unset (default): memory-aware** — clustering stays on the fast driver-side scipy.csgraph path whenever the scored pair set fits available driver RAM, and only distributes when it genuinely won't. Set an explicit integer to force a pair-count boundary either way. |
 | `GOLDENMATCH_DISTRIBUTED_GOLDEN_THRESHOLD` | `5000000` | Multi-member row count above which golden-record building goes distributed. |
-| `GOLDENMATCH_DISTRIBUTED_SCORE_NUM_CPUS` | `2` | CPUs requested per Ray scoring worker. |
+| `GOLDENMATCH_DISTRIBUTED_SCORE_NUM_CPUS` | `2` | CPUs requested per Ray scoring task. |
+| `GOLDENMATCH_DISTRIBUTED_SCORE_PROJECT` | `1` (on) | Project to scoring-relevant columns before the block-shuffle so it moves narrow blocks, not full records (#957). Output-invariant. `0` disables. |
+| `GOLDENMATCH_DISTRIBUTED_SHUFFLE_PARTS` | `min(256, cpu×4)` | Block-shuffle partition count. **Raise it** to shrink per-partition blocks so more `_score` tasks fit the object-store budget (relieves `_score` `ResourceBudget` backpressure). Co-location stays correct at any value. |
+| `GOLDENMATCH_DISTRIBUTED_OP_RESERVATION` | unset (Ray default ~0.5) | Ray Data per-op object-store reservation ratio. **Lower it** (e.g. `0.2`) to hand the running `_score` op more object-store budget when it's `ResourceBudget`-backpressured below CPU capacity (idle workers, object store not full). Tune at scale. |
+| `GOLDENMATCH_DISTRIBUTED_SCORE_CONCURRENCY` | unset | Explicit `concurrency=` on the `_score` map_batches. Pins the task-pool size once blocks are narrow; the object-store reservation/shuffle-parts knobs above govern the actual `ResourceBudget` cap. |
+
+<Note>
+  **If the distributed score stage leaves workers idle** (`MapBatches(_score): … [backpressured:tasks(ResourceBudget)]` with the object store well under capacity), `_score` is reservation-capped, not CPU-bound. Lower `GOLDENMATCH_DISTRIBUTED_OP_RESERVATION` (→ `0.2`) and/or raise `GOLDENMATCH_DISTRIBUTED_SHUFFLE_PARTS`, then re-measure — the optimal pair is cluster-shaped. (Shrinking Ray Data's `target_max_block_size` is **not** a safe lever: `_score` keeps each co-located partition whole via `batch_size=None`, so a split block would split a group and under-score.)
+</Note>
 
 <Note>
   You bring the Ray cluster — GoldenMatch ships the pipeline, not the bootstrap. The GCP recipe is in [`docs/distributed-ray-cluster-setup.md`](https://github.com/benseverndev-oss/goldenmatch/blob/main/docs/distributed-ray-cluster-setup.md). At single-box scale the `bucket` backend is validated through 200M and is simpler — use it unless the data won't fit one box.
@@ -252,6 +260,16 @@ When you expose any server (MCP, REST, A2A, web UI) on a non-loopback host, it i
 | `GOLDENMATCH_DATABASE_URL` / `GOLDENMATCH_IDENTITY_DSN` | unset | Postgres/SQLite connection for the identity graph + review queue / Alembic migrations. |
 | `GOLDENMATCH_PREPARED_RECORD_STORE_DIR` | unset | Directory for the disk-backed prepared-record store. |
 | `GOLDENMATCH_PREPARED_RECORD_STORE_PERSIST` | `0` | `1` keeps the prepared-record store across calls instead of cleaning it up. |
+
+**Product analytics (opt-in):**
+
+Anonymous usage analytics — **off by default**. Emits only when `GOLDENMATCH_ANALYTICS` is on **and** a `POSTHOG_API_KEY` is set, so a user's machine stays silent unless they opt in (the project's own hosted services set the flag server-side). PII-free by construction: only coarse scalars (scale bands, backend, version) ever leave, never record values, column names, or paths. Full collection list + guarantees in `packages/python/goldenmatch/ANALYTICS.md`.
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `GOLDENMATCH_ANALYTICS` | `0` (off) | `1`/`true`/`on` opts in to anonymous, PII-free usage events. Off = nothing is collected or sent. |
+| `POSTHOG_API_KEY` | unset | Destination PostHog project key. Required for any event to send; absent = silent no-op. |
+| `POSTHOG_HOST` | `https://us.i.posthog.com` | PostHog ingestion host override. |
 
 ---
 
@@ -398,6 +416,7 @@ Every `GOLDENMATCH_*` variable the package reads, grouped by who should care. De
 | `GOLDENMATCH_LLM_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible base URL for the LLM scorer — point at a local llama.cpp / llamafile server for offline, free LLM judging (also honors `OPENAI_BASE_URL`). |
 | `GOLDENMATCH_UDF_IMPORTS` | unset | Snowflake UDF import asset directory. |
 | `GOLDENMATCH_SYNC_STREAMING_THRESHOLD` / `_STREAMING_BLOCK_WORKERS` | `500000` / auto | Postgres streaming-store thresholds. |
+| `GOLDENMATCH_ANALYTICS` | `0` (off) | Opt-in anonymous, PII-free usage analytics to PostHog (needs `POSTHOG_API_KEY`). Off = nothing collected. |
 
 <Note>
   Not a `GOLDENMATCH_*` var but relevant: set `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` for LLM scoring and the LLM auto-config fallback, and `POLARS_SKIP_CPU_CHECK=1` on Windows to skip the Polars import-time CPU probe.
