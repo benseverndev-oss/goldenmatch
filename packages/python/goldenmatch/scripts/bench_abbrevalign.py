@@ -15,8 +15,10 @@ prototypes from forge_prototypes.py.
 """
 from __future__ import annotations
 
+import argparse
 import math
 import os
+import random
 import sys
 from collections import Counter
 
@@ -119,9 +121,97 @@ DATASET: dict[str, list[tuple[str, str]]] = {
 }
 
 
-def build_records() -> list[tuple[str, str, str]]:
+def build_records(dataset: dict[str, list[tuple[str, str]]]) -> list[tuple[str, str, str]]:
     """Flatten to (entity_id, text, variant_type)."""
-    return [(eid, text, vt) for eid, variants in DATASET.items() for text, vt in variants]
+    return [(eid, text, vt) for eid, variants in dataset.items() for text, vt in variants]
+
+
+# --------------------------------------------------------------------------- #
+# Synthetic dataset generator — larger, programmatic, with noise the algorithms
+# do NOT model (random typos, token drops, reorders) and organic hard negatives
+# (shared name/word pools, chance acronym collisions). Tests generalization.
+# --------------------------------------------------------------------------- #
+
+_FIRST_NAMES = ["Robert", "William", "Elizabeth", "James", "Katherine",
+                "Michael", "Thomas", "Richard", "John", "Margaret"]
+_NICK_FOR = {  # canonical first name -> its informal forms
+    "robert": ["bob", "rob", "bobby"], "william": ["bill", "will", "billy"],
+    "elizabeth": ["liz", "beth", "betty"], "james": ["jim", "jimmy"],
+    "katherine": ["kate", "katie", "kathy"], "michael": ["mike", "mick"],
+    "thomas": ["tom", "tommy"], "richard": ["rick", "dick", "rich"],
+    "john": ["jack", "johnny"], "margaret": ["peggy", "meg", "maggie"],
+}
+_SURNAMES = ["Smith", "Brown", "Jones", "Taylor", "Wilson", "Davis", "Clark",
+             "Hall", "Adams", "Baker", "Carter", "Evans", "Green", "Hill",
+             "King", "Lee", "Moore", "Scott", "Turner", "Walker"]
+_DESCRIPTORS = ["International", "Business", "Machines", "General", "Electric",
+                "American", "Telephone", "Telegraph", "Federal", "National",
+                "Pacific", "Atlantic", "Global", "United", "Standard", "Allied",
+                "Premier", "Dynamic", "Systems", "Solutions", "Industries",
+                "Logistics", "Materials", "Networks", "Holdings", "Continental"]
+_SUFFIX_ABBR = {"Corporation": "Corp", "Company": "Co", "Incorporated": "Inc",
+                "Limited": "Ltd", "Enterprise": "Ent", "Group": "Grp"}
+_STREETS = ["Main", "Oak", "Maple", "Cedar", "Pine", "Elm", "Washington",
+            "Lincoln", "Park", "Lake", "Hill", "River"]
+_ST_ABBR = {"Street": "St", "Avenue": "Ave", "Road": "Rd", "Boulevard": "Blvd",
+            "Lane": "Ln", "Drive": "Dr"}
+
+
+def _drop_vowels(word: str) -> str:
+    return word[0] + "".join(c for c in word[1:] if c.lower() not in "aeiou")
+
+
+def _typo(rng: random.Random, s: str) -> str:
+    if len(s) < 4:
+        return s
+    i = rng.randrange(1, len(s) - 1)
+    mode = rng.random()
+    if mode < 0.5:  # transpose adjacent
+        return s[:i] + s[i + 1] + s[i] + s[i + 2:]
+    return s[:i] + rng.choice("abcdefghijklmnopqrstuvwxyz") + s[i + 1:]  # substitute
+
+
+def generate_synthetic(n_people: int, n_companies: int, n_addresses: int,
+                       seed: int = 7) -> dict[str, list[tuple[str, str]]]:
+    rng = random.Random(seed)
+    ds: dict[str, list[tuple[str, str]]] = {}
+
+    for k in range(n_people):
+        first = rng.choice(_FIRST_NAMES)
+        last = rng.choice(_SURNAMES)
+        variants = [(f"{first} {last}", "canonical")]
+        nicks = _NICK_FOR.get(first.lower(), [])
+        if nicks:
+            variants.append((f"{rng.choice(nicks).title()} {last}", "nickname"))
+        variants.append((f"{first[0]}. {last}", "initial"))
+        if rng.random() < 0.5:
+            variants.append((f"{last}, {first}", "order"))
+        else:
+            variants.append((f"{first} {_typo(rng, last)}", "typo"))
+        ds[f"person_{k}"] = variants
+
+    for k in range(n_companies):
+        words = rng.sample(_DESCRIPTORS, rng.choice([2, 3]))
+        suffix = rng.choice(list(_SUFFIX_ABBR))
+        canon = " ".join(words) + " " + suffix
+        variants = [(canon, "canonical"), ("".join(w[0] for w in words).upper(), "acronym")]
+        ab = " ".join(_drop_vowels(w) for w in words) + " " + _SUFFIX_ABBR[suffix]
+        variants.append((ab, "abbrev"))
+        if rng.random() < 0.5:
+            variants.append((" ".join(words), "abbrev"))  # suffix dropped
+        ds[f"company_{k}"] = variants
+
+    for k in range(n_addresses):
+        num = rng.randrange(100, 9999)
+        street = rng.choice(_STREETS)
+        sttype = rng.choice(list(_ST_ABBR))
+        variants = [(f"{num} {street} {sttype}", "canonical"),
+                    (f"{num} {street} {_ST_ABBR[sttype]}", "abbrev")]
+        if rng.random() < 0.5:
+            variants.append((f"{num} {_typo(rng, street)} {_ST_ABBR[sttype]}", "typo"))
+        ds[f"addr_{k}"] = variants
+
+    return ds
 
 
 # --------------------------------------------------------------------------- #
@@ -270,8 +360,8 @@ def positive_slice(vt_a: str, vt_b: str) -> str:
     return "other"
 
 
-def evaluate() -> dict:
-    records = build_records()
+def evaluate(dataset: dict[str, list[tuple[str, str]]]) -> dict:
+    records = build_records(dataset)
     idf = build_idf([text for _, text, _ in records])
     methods = build_methods(idf)
 
@@ -349,12 +439,12 @@ def pair_features(a: str, b: str, idf) -> list[float]:
     ]
 
 
-def evaluate_cv(k: int = 5) -> dict:
+def evaluate_cv(dataset: dict[str, list[tuple[str, str]]], k: int = 5) -> dict:
     """Entity-grouped k-fold CV: every number is held out (no entity in both train and test)."""
-    records = build_records()
+    records = build_records(dataset)
     idf = build_idf([t for _, t, _ in records])
     methods = build_methods(idf)
-    entities = sorted(DATASET)
+    entities = sorted(dataset)
     fold_of = {e: i % k for i, e in enumerate(entities)}
 
     pairs = []  # (a, b, label, fold_a, fold_b)
@@ -407,8 +497,10 @@ def evaluate_cv(k: int = 5) -> dict:
         if not train or not test or sum(lab for _, _, lab in test) == 0:
             continue
         model = LogisticCombiner(len(pair_features("x", "y", idf)))
+        # SGD passes scale down on larger train sets (more pairs => more updates/epoch).
+        iters = max(80, min(600, 120000 // max(len(train), 1)))
         model.fit([fv(a, b) for a, b, _ in train], [lab for _, _, lab in train],
-                  iters=600, lr=0.5)
+                  iters=iters, lr=0.5)
         train_pred = [model.predict(fv(a, b)) for a, b, _ in train]
         _, _, _, thr = best_f1(train_pred, [lab for _, _, lab in train])
         for a, b, lab in test:
@@ -474,14 +566,29 @@ def render_cv(cv: dict) -> str:
     return "\n".join(lines)
 
 
-def main() -> int:
-    report = evaluate()
-    cv = evaluate_cv()
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--synthetic", action="store_true",
+                    help="Run on a larger generated dataset (tests generalization at scale).")
+    ap.add_argument("--seed", type=int, default=7, help="Synthetic generator seed.")
+    ap.add_argument("--people", type=int, default=40)
+    ap.add_argument("--companies", type=int, default=30)
+    ap.add_argument("--addresses", type=int, default=15)
+    args = ap.parse_args(argv)
+
+    if args.synthetic:
+        dataset = generate_synthetic(args.people, args.companies, args.addresses, args.seed)
+        out_name = "abbrevalign_benchmark_synthetic.md"
+    else:
+        dataset = DATASET
+        out_name = "abbrevalign_benchmark.md"
+
+    report = evaluate(dataset)
+    cv = evaluate_cv(dataset)
     md = render(report) + "\n" + render_cv(cv)
     print(md)
-    out = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                       "..", "examples", "forge_runs", "abbrevalign_benchmark.md")
-    out = os.path.normpath(out)
+    out = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                        "..", "examples", "forge_runs", out_name))
     with open(out, "w", encoding="utf-8") as f:
         f.write(md)
     print(f"\nWrote {out}")
