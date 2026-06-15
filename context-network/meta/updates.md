@@ -2,6 +2,22 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-06-15 — Single-kernel-collapse R1 COMPLETE: GO to R2 (two documented residuals)
+- **Kill-criterion (2) cleared — all four JS targets GREEN in CI.** `r1-kernel-js-targets.yml`
+  run [#27518182208](https://github.com/benseverndev-oss/goldenmatch/actions/runs/27518182208)
+  (workflow_dispatch on `main`): node / deno / browser (chromium) / **workers (workerd)** each
+  build `score-wasm` and reproduce the frozen pure-TS reference at 4dp. node/deno/browser via the
+  ONE universal base64 loader (no per-target hack); **workers via the build-time CompiledWasm
+  module** — mandatory because workerd bans runtime WASM codegen, a supported per-target load
+  *mechanism* not a hack. The first dispatch red'd on a host-vite `import-analysis` parse of the
+  static `.wasm?module` import (0 tests); fixed in #977 (plain `.wasm` import + `assetsInclude`).
+- **R1 overall: GO.** All four kill-criteria now have positive tracer evidence — (1) pure==kernel
+  4dp across Python + TS/WASM, (2) cross-JS-target WASM PASS, (3) all-platform abi3 wheels PASS for
+  the four mainstream arches (R1-B), (4) kernel measured not-slower (1.44×). Two carried residuals,
+  both infra/mechanism not code: macOS-x86_64 wheel build-only; Workers needs the build-time module
+  form. R2 (first scorer collapse behind a reversible default-flip flag) may proceed — additive,
+  parity-gated, one reversible flag per step. ADR 0016 holds the verdict.
+
 ## 2026-06-14 — Single-kernel-collapse R1 Workstream A: cross-JS-target WASM (kill-criterion 2)
 - **Shipped as additive, workflow_dispatch-only infra** — flips no default (the TS
   WASM path stays opt-in via `enableWasm()`; pure-TS stays default + fallback),
