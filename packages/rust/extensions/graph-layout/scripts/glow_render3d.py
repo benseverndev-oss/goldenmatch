@@ -23,6 +23,7 @@ RNG = np.random.default_rng(7)
 
 FOC0 = 0.47        # base focal fraction
 D0 = 3.45          # base camera distance
+NODE_GAIN = 1.0    # per-node brightness multiplier (raise for sparse real graphs)
 
 
 def load(path):
@@ -207,7 +208,7 @@ def render_into(hdr, P, colors, radii, pal, edge_t, e_src, e_dst, inter_e,
     # nodes -- soft orbs
     nsx, nsy, nbr = project(R, D, res)
     nb = pal[colors] * (0.6 + 0.5 * (radii / radii.max())[:, None] ** 2)
-    base = nb * (2.0 * nbr[:, None] * weight)
+    base = nb * (2.0 * NODE_GAIN * nbr[:, None] * weight)
     for dy in (-1, 0, 1):
         for dx in (-1, 0, 1):
             wgt = 1.0 if (dx == 0 and dy == 0) else 0.4
@@ -241,6 +242,9 @@ def main():
         if t == "--res": res = int(a[i + 1])
         if t == "--frames": M = int(a[i + 1])
         if t == "--only": only = int(a[i + 1])
+        if t == "--node-gain":                       # brighten sparse real graphs
+            global NODE_GAIN
+            NODE_GAIN = float(a[i + 1])
     n, m, colors, radii, edges = load(path)
     pal = palette(int(colors.max()) + 1)
     C = build_3d(n, colors, edges)
