@@ -37,7 +37,7 @@ arrow-schema = "58"
 goldenmatch-score-core = { path = "../score-core" }
 # Pyo3-free set-consuming graph kernels (connected_components / pair dedup),
 # shared with the DuckDB + Postgres surfaces. We call ONLY its arrow-free SLICE
-# kernels (Vec<(i64,i64,f64)> in / Vec<Vec<i64>> out), so graph-core's arrow-55
+# kernels (Vec<(i64,i64,f64)> in / Vec<Vec<i64>> out), so graph-core's arrow-59
 # pin never meets this crate's arrow-58 stack. See graph_udf.rs ARROW-VERSION
 # NOTE.
 goldenmatch-graph-core = { path = "../graph-core" }
