@@ -76,6 +76,15 @@ fn parse_args() -> Args {
                 a.params.iters_coarse = need(i, &argv).parse().unwrap_or(a.params.iters_coarse)
             }
             "--seed" => a.params.seed = need(i, &argv).parse().unwrap_or(a.params.seed),
+            "--coarsest" => a.params.coarsest = need(i, &argv).parse().unwrap_or(a.params.coarsest),
+            "--single-level" => {
+                // Disable multilevel coarsening → the full single-level condensation
+                // from a random seed (the dramatic "untangling" reel; multilevel
+                // pre-solves so its finest level barely moves). Valueless flag.
+                a.params.coarsest = usize::MAX;
+                i += 1;
+                continue;
+            }
             "-h" | "--help" => {
                 println!("graph-layout — Barnes-Hut + multilevel force layout → PPM frames");
                 println!("  --input/-i FILE     edge list `a b [weight]` (default: synthetic)");
@@ -83,7 +92,8 @@ fn parse_args() -> Args {
                 println!("  --width --height    canvas size (default 1280)");
                 println!("  --frame-every N     render every Nth iteration (default 2)");
                 println!("  --clusters --per    synthetic graph size (default 8 x 250)");
-                println!("  --k --theta --iters --iters-coarse --seed  layout tunables");
+                println!("  --single-level      full condensation reel (no coarsening)");
+                println!("  --k --theta --iters --iters-coarse --coarsest --seed  tunables");
                 exit(0);
             }
             other => {
@@ -122,6 +132,7 @@ fn render_frame(
     pos: &[V2],
     g: &Graph,
     colors: &[u32],
+    radii: &[f32],
     w: usize,
     h: usize,
     path: &Path,
@@ -135,11 +146,11 @@ fn render_frame(
         let (bx, by) = proj(pos[b as usize]);
         canvas.line(ax, ay, bx, by, [120, 140, 200], 0.07);
     }
-    // Nodes, colored by connected component (resolved cluster).
-    let r = (w.min(h) as f32 / 640.0).max(1.2);
+    // Nodes, colored by connected component (resolved entity), sized per node so
+    // a heavily-duplicated entity reads as a big dot.
     for (i, &p) in pos.iter().enumerate() {
         let (x, y) = proj(p);
-        canvas.disc(x, y, r, color_for(colors[i]), 0.95);
+        canvas.disc(x, y, radii[i], color_for(colors[i]), 0.95);
     }
     canvas.save_ppm(path)
 }
@@ -178,6 +189,19 @@ fn main() {
         source
     );
 
+    // Per-node disc radius ∝ sqrt(cluster size) so a disc's AREA tracks the
+    // entity's record count — a 30-record entity reads as a big dot, a singleton
+    // as a small one. Clamped so one giant cluster doesn't swallow the frame.
+    let mut comp_size = vec![0usize; n_components.max(1) as usize];
+    for &c in &colors {
+        comp_size[c as usize] += 1;
+    }
+    let base = (args.width.min(args.height) as f32 / 640.0).max(1.3);
+    let radii: Vec<f32> = colors
+        .iter()
+        .map(|&c| (base * (comp_size[c as usize] as f32).sqrt()).min(base * 6.0))
+        .collect();
+
     if let Err(e) = fs::create_dir_all(&args.out) {
         eprintln!("cannot create {}: {e}", args.out);
         exit(1);
@@ -189,8 +213,15 @@ fn main() {
     let pos = layout::run(&graph, &args.params, |frame_pos, fidx| {
         if fidx % args.frame_every == 0 {
             let path = Path::new(&args.out).join(format!("frame_{:05}.ppm", saved));
-            if let Err(e) = render_frame(frame_pos, &graph, &colors, args.width, args.height, &path)
-            {
+            if let Err(e) = render_frame(
+                frame_pos,
+                &graph,
+                &colors,
+                &radii,
+                args.width,
+                args.height,
+                &path,
+            ) {
                 eprintln!("frame write failed: {e}");
             }
             saved += 1;
@@ -201,7 +232,15 @@ fn main() {
 
     // Always render a clean final frame.
     let final_path = Path::new(&args.out).join(format!("frame_{:05}.ppm", saved));
-    let _ = render_frame(&pos, &graph, &colors, args.width, args.height, &final_path);
+    let _ = render_frame(
+        &pos,
+        &graph,
+        &colors,
+        &radii,
+        args.width,
+        args.height,
+        &final_path,
+    );
     saved += 1;
 
     let secs = t0.elapsed().as_secs_f32();

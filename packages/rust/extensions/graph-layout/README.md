@@ -51,6 +51,27 @@ python export_graph_layout.py from-pairs pairs.csv --a id_a --b id_b --score sco
 Connected components of the thresholded match graph **are** the resolved entities,
 so the colored blobs you see condensing are the clusters goldenmatch produced.
 
+### One-command dogfood + the demo reel
+
+`examples/dogfood_goldenmatch.py` runs the whole chain on the **real engine** —
+generate noisy people → `goldenmatch.dedupe_df` → its scored pairs → edge list:
+
+```bash
+python examples/dogfood_goldenmatch.py                              # -> dogfood_pairs.csv
+python export_graph_layout.py from-pairs dogfood_pairs.csv -o e.tsv # -> edge list
+# --single-level = full condensation reel (no coarsening); node radius ∝ cluster size
+cargo run --release -- --input e.tsv --single-level --iters 240 --frame-every 1 --out frames
+ffmpeg -framerate 30 -i frames/frame_%05d.ppm -pix_fmt yuv420p dogfood.mp4
+```
+
+Node radius scales with record count, so heavily-duplicated entities read as big
+dots and the long tail as small ones. Pure dedup match graphs are unions of
+near-cliques (an entity's noisy records all match each other), which collapse to a
+point under force layout — so real ER renders as a *constellation of resolved
+entities* (size = record count), not big sparse blobs. The synthetic `--clusters`
+demo models sparse *communities* instead (a relationship / graph-ER shape) — both
+honest, different graph structures.
+
 ## Honest scope
 
 Real-time animation of a full 10M-node graph on CPU isn't the goal here — Barnes-Hut
