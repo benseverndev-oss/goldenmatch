@@ -24,6 +24,7 @@ RNG = np.random.default_rng(7)
 FOC0 = 0.47        # base focal fraction
 D0 = 3.45          # base camera distance
 NODE_GAIN = 1.0    # per-node brightness multiplier (raise for sparse real graphs)
+BRIDGE_GAIN = 1.0  # inter-community edge brightness (raise to surface the web)
 
 
 def load(path):
@@ -201,7 +202,7 @@ def render_into(hdr, P, colors, radii, pal, edge_t, e_src, e_dst, inter_e,
     tt = edge_t[None, :, None]
     ec = ca_[:, None, :] * (1 - tt) + cb_[:, None, :] * tt
     ec = ec + inter_e[:, None, None] * 0.6 * (1.0 - ec)      # whiten bridges
-    ei = np.where(inter_e, 0.30, 0.006)[:, None]             # bright web threads
+    ei = np.where(inter_e, 0.30 * BRIDGE_GAIN, 0.006)[:, None]  # bright web threads
     vals = ec * (br * ei)[:, :, None] * weight
     scatter_add(hdr, sy.reshape(-1), sx.reshape(-1), vals.reshape(-1, 3))
 
@@ -245,6 +246,9 @@ def main():
         if t == "--node-gain":                       # brighten sparse real graphs
             global NODE_GAIN
             NODE_GAIN = float(a[i + 1])
+        if t == "--bridge-gain":                      # surface inter-entity web
+            global BRIDGE_GAIN
+            BRIDGE_GAIN = float(a[i + 1])
     n, m, colors, radii, edges = load(path)
     pal = palette(int(colors.max()) + 1)
     C = build_3d(n, colors, edges)
