@@ -1,0 +1,39 @@
+[package]
+name = "goldenmatch-graph-layout"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Barnes-Hut + multilevel force-directed layout of entity-resolution graphs, CPU-only, rendered to frames. A visualizer/demo for goldenmatch cluster + identity-graph output."
+publish = false
+
+# Standalone workspace: this is a heavy demo binary, deliberately NOT a member of
+# the `bridge` extensions workspace (same posture as `native`), so the default CI
+# rust lane doesn't build it. Run it explicitly from this directory.
+[workspace]
+
+[lib]
+name = "goldenmatch_graph_layout"
+path = "src/lib.rs"
+
+[[bin]]
+name = "graph-layout"
+path = "src/main.rs"
+
+[dependencies]
+# The one real dependency: rayon parallelizes the Barnes-Hut force step across
+# cores (each node's tree walk is independent + read-only). Already cached by the
+# `native` crate, so this builds with zero network.
+rayon = "1"
+
+# OPTIONAL nicer output: tiny-skia is the SIMD software rasterizer. Off by default
+# so the crate builds offline (the built-in PPM rasterizer in `raster.rs` needs no
+# deps); enable with `--features skia` for anti-aliased PNG frames.
+tiny-skia = { version = "0.11", optional = true }
+
+[features]
+default = []
+skia = ["dep:tiny-skia"]
+
+[profile.release]
+opt-level = 3
+lto = "thin"

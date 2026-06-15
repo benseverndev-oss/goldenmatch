@@ -17,6 +17,10 @@ exclude = [
     # accelerator (goldenanalysis[native]); neither belongs in `bridge`.
     "analysis-native",
     "analysis-core",
+    # graph-layout is a standalone demo binary (Barnes-Hut + multilevel force
+    # layout → frames). Heavy/optional; its own workspace, kept out of the
+    # default rust build.
+    "graph-layout",
 ]
 
 [workspace.package]
