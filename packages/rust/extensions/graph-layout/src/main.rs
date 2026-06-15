@@ -28,6 +28,8 @@ struct Args {
     frame_every: u32,
     clusters: usize,
     per: usize,
+    p_in: f32,
+    p_out: f32,
     params: Params,
 }
 
@@ -41,6 +43,8 @@ impl Default for Args {
             frame_every: 2,
             clusters: 8,
             per: 250,
+            p_in: 0.06,
+            p_out: 0.0,
             params: Params::default(),
         }
     }
@@ -67,6 +71,8 @@ fn parse_args() -> Args {
             }
             "--clusters" => a.clusters = need(i, &argv).parse().unwrap_or(a.clusters),
             "--per" => a.per = need(i, &argv).parse().unwrap_or(a.per),
+            "--p-in" => a.p_in = need(i, &argv).parse().unwrap_or(a.p_in),
+            "--p-out" => a.p_out = need(i, &argv).parse().unwrap_or(a.p_out),
             "--k" => a.params.k = need(i, &argv).parse().unwrap_or(a.params.k),
             "--theta" => a.params.theta = need(i, &argv).parse().unwrap_or(a.params.theta),
             "--iters" => {
@@ -92,6 +98,7 @@ fn parse_args() -> Args {
                 println!("  --width --height    canvas size (default 1280)");
                 println!("  --frame-every N     render every Nth iteration (default 2)");
                 println!("  --clusters --per    synthetic graph size (default 8 x 250)");
+                println!("  --p-in --p-out      synthetic intra/inter-community edge prob");
                 println!("  --single-level      full condensation reel (no coarsening)");
                 println!("  --k --theta --iters --iters-coarse --coarsest --seed  tunables");
                 exit(0);
@@ -158,6 +165,11 @@ fn render_frame(
 fn main() {
     let args = parse_args();
 
+    // `synthetic` is true when we built the graph ourselves (no --input), so we
+    // know the *planted* community of every node and can color by it even when
+    // --p-out adds inter-community edges (which would otherwise fuse everything
+    // into one connected component).
+    let synthetic = args.input.is_none();
     let (graph, source) = match &args.input {
         Some(path) => match Graph::read_edge_list(path) {
             Ok((g, _labels)) => (g, format!("{path}")),
@@ -167,10 +179,21 @@ fn main() {
             }
         },
         None => (
-            // p_out = 0: clusters are genuine connected components, mirroring an
-            // ER match graph thresholded into resolved entities (distinct colors).
-            Graph::synthetic(args.clusters, args.per, 0.06, 0.0, args.params.seed),
-            format!("synthetic {}x{}", args.clusters, args.per),
+            // --p-out 0 (default): clusters are genuine connected components,
+            // mirroring an ER match graph thresholded into resolved entities.
+            // --p-out > 0: weak inter-community links → one connected web with
+            // community structure (a relationship / graph-ER shape).
+            Graph::synthetic(
+                args.clusters,
+                args.per,
+                args.p_in,
+                args.p_out,
+                args.params.seed,
+            ),
+            format!(
+                "synthetic {}x{} p_out={}",
+                args.clusters, args.per, args.p_out
+            ),
         ),
     };
 
@@ -179,7 +202,14 @@ fn main() {
         exit(1);
     }
 
-    let colors = graph.components();
+    // Color by planted community for synthetic graphs (so inter-community edges
+    // don't collapse the palette to one color); by connected component otherwise
+    // — for a thresholded match graph the components ARE the resolved entities.
+    let colors: Vec<u32> = if synthetic {
+        (0..graph.n).map(|i| (i / args.per) as u32).collect()
+    } else {
+        graph.components()
+    };
     let n_components = colors.iter().copied().max().map(|m| m + 1).unwrap_or(0);
     println!(
         "graph: {} nodes, {} edges, {} components  ({})",
