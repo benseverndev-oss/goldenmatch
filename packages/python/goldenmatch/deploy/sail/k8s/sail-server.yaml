@@ -1,0 +1,120 @@
+# Sail Spark Connect server (cluster mode) for the GoldenMatch S4 100M bench.
+# SCAFFOLD -- authored from the LakeSail K8s deployment guide
+# (https://docs.lakesail.com/sail/latest/guide/deployment/kubernetes.html),
+# NOT yet shaken down on a live GKE cluster. VERIFY the SAIL_* keys + the
+# replicas/RBAC against the current LakeSail docs before applying.
+#
+# Replace REPLACE_IMAGE with your pushed custom image (deploy/sail/Dockerfile),
+# e.g. <region>-docker.pkg.dev/<project>/<repo>/sail-goldenmatch:<tag>. The SAME
+# image is used for the driver pod AND (via SAIL_KUBERNETES__IMAGE) the on-demand
+# worker pods, so the rapidfuzz + R1 native UDFs resolve everywhere.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sail
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sail-user
+  namespace: sail
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: sail-worker-manager
+  namespace: sail
+rules:
+  # The driver launches/terminates worker pods on demand.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["*"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: sail-user-worker-manager
+  namespace: sail
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: sail-worker-manager
+subjects:
+  - kind: ServiceAccount
+    name: sail-user
+    namespace: sail
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sail-spark-server
+  namespace: sail
+  labels:
+    app: sail-spark-server
+spec:
+  # LakeSail: exactly one replica -- each Spark session is tied to a single pod.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sail-spark-server
+  template:
+    metadata:
+      labels:
+        app: sail-spark-server
+    spec:
+      serviceAccountName: sail-user
+      containers:
+        - name: sail
+          image: REPLACE_IMAGE
+          command: ["sail", "spark", "server", "--ip", "0.0.0.0", "--port", "50051"]
+          ports:
+            - name: grpc
+              containerPort: 50051
+          env:
+            - name: SAIL_MODE
+              value: "kubernetes-cluster"
+            - name: SAIL_CLUSTER__DRIVER_LISTEN_HOST
+              value: "0.0.0.0"
+            - name: SAIL_CLUSTER__DRIVER_EXTERNAL_HOST
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            # Workers use the SAME custom image -> goldenmatch[sail]+native present.
+            - name: SAIL_KUBERNETES__IMAGE
+              value: REPLACE_IMAGE
+            - name: SAIL_KUBERNETES__NAMESPACE
+              value: "sail"
+            - name: SAIL_KUBERNETES__DRIVER_POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: SAIL_KUBERNETES__WORKER_SERVICE_ACCOUNT_NAME
+              value: "sail-user"
+            # Turn the R1 native scorer ON cluster-wide (else default-off).
+            - name: GOLDENMATCH_NATIVE
+              value: "1"
+          resources:
+            requests:
+              cpu: "2"
+              memory: "8Gi"
+            limits:
+              cpu: "4"
+              memory: "16Gi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sail-spark-server
+  namespace: sail
+spec:
+  # ClusterIP: reach the driver via `kubectl port-forward` (see the runbook), or
+  # switch type to LoadBalancer with the GKE internal-LB annotation for an
+  # in-VPC `sc://` endpoint (keeps the gRPC port off the public internet).
+  type: ClusterIP
+  selector:
+    app: sail-spark-server
+  ports:
+    - name: grpc
+      protocol: TCP
+      port: 50051
+      targetPort: 50051
