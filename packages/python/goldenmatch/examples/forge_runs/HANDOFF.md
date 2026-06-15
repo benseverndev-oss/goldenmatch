@@ -75,12 +75,18 @@ All changes are in `forge_prototypes.py::abbrev_align` and its helpers
 
 ## Open threads / next steps (in priority order)
 
-1. **Real labeled ER dataset.** Everything benchmarked is curated or synthetic — the
-   transformation distribution is *known*, which flatters structure-aware methods. Wire in
-   Cora / DBLP-ACM / a company-name corpus (e.g. via `py_entitymatching`'s sample sets or a
-   downloaded TSV) and re-run the exact CV harness. This is the one result that would make
-   the conclusion production-credible. (`bench_abbrevalign.py` already takes a `dataset`
-   dict — just add a loader that returns `entity_id -> [(text, variant_type), ...]`.)
+1. ~~**Real labeled ER dataset.**~~ **DONE** (PR #1004 + this report
+   `abbrevalign_benchmark_dblp_acm.md`). Wired the real Leipzig **DBLP-ACM** corpus into the
+   exact CV harness via `bench_abbrevalign.py --dblp-acm` (loader builds title-ER entities
+   from the perfect-mapping + GT-derived venue clusters); runs on the `bench-abbrevalign`
+   GH-runner lane. **Result:** on real labeled data AbbrevAlign holds up - held-out CV
+   F1 0.861 vs JaroWinkler 0.826 on titles (no harm, modest edge; ties the MongeElkan/
+   SoftTFIDF hybrids it generalizes), and on the abbreviation-heavy venue field it separates
+   better (AUC 0.925 vs 0.840) **but at a precision cost** (0.571 - it over-merges conference
+   vs journal, `VLDB` ~ `The VLDB Journal`). Confirms the productionization framing below:
+   ship it as a **gated comparator feature** for abbreviation-heavy fields, not a JW
+   replacement. (Venue can't support held-out CV - only 5 venues - so it's reported
+   in-sample + AUC.)
 2. **Acronym-collision precision** (IBM vs *Indian Bank Mumbai* — both valid acronym
    expansions, fundamentally ambiguous for a pure string metric). Try IDF-gating the
    acronym score (confidence ∝ IDF mass of the matched span) and/or letting the learned
