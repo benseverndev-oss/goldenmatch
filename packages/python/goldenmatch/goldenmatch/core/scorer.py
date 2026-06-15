@@ -399,11 +399,19 @@ def _native_field_matrix(values: list, scorer_name: str) -> np.ndarray | None:
     scorer_id = _NATIVE_FIELD_SCORER_IDS.get(scorer_name)
     if scorer_id is None:
         return None
-    try:
-        from goldenmatch.core._native_loader import native_module
-        native = native_module()
-    except Exception:
+    # Reversible gate (single-kernel-collapse R2): field scoring honors the same
+    # GOLDENMATCH_NATIVE flag every other native component reads -- `0` forces the
+    # pure rapidfuzz path, `1` requires native (raises if absent -- the CI parity
+    # contract, intentionally NOT swallowed here), `auto`/unset uses native iff
+    # importable AND signed off (`field_scoring` in _GATED_ON). Output is identical
+    # either way (pure==kernel is byte/4dp-parity, asserted in
+    # tests/test_native_field_matrix_parity.py); the gate only governs WHICH path
+    # runs, and makes the long-standing kernel default reversible + telemetered.
+    from goldenmatch.core._native_loader import native_enabled, native_module
+
+    if not native_enabled("field_scoring"):
         return None
+    native = native_module()
     if native is None or not hasattr(native, "score_field_matrix"):
         return None
     try:

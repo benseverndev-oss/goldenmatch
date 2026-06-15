@@ -38,6 +38,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(score::score_block_pairs_fs, m)?)?;
     m.add_function(wrap_pyfunction!(score::score_block_pairs_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(score::score_field_matrix, m)?)?;
+    m.add_function(wrap_pyfunction!(score::score_field_pairwise, m)?)?;
     m.add_function(wrap_pyfunction!(score::build_exclude_set, m)?)?;
     m.add_class::<score::ExcludeSet>()?;
     m.add_function(wrap_pyfunction!(hash::record_fingerprint, m)?)?;

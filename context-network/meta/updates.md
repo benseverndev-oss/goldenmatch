@@ -2,6 +2,27 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-06-15 — Single-kernel-collapse R2: first slice shipped + value recalibration (R5 retired)
+- **R2 first slice SHIPPED (#980, merged):** field scoring brought under the reversible
+  `GOLDENMATCH_NATIVE` gate. `_native_field_matrix` had preferred the `score-core` kernel
+  ungoverned (ignored the flag), so `GOLDENMATCH_NATIVE=0` did not force the pure path — a
+  latent reversibility gap. Now gates on `native_enabled("field_scoring")` + `field_scoring`
+  in `_GATED_ON` (default unchanged, output byte-identical, reversible + telemetered).
+  Verified 138/138 + 11/11 parity in-env.
+- **Recalibration (recorded in ADR 0016):** Python is already kernel-default; TS can't flip
+  (edge-safety keeps pure-TS the default + fallback); the pure paths are load-bearing
+  fallbacks, so **R5 "decommission" is retired** — the realistic end-state is "kernel =
+  governed canonical fast path; pure = fallback; parity harnesses stay as kernel-vs-pure
+  gates." The reward is narrower than the original "delete N reimplementations" framing.
+- **Two cheap follow-ups investigated → no code needed:** (1) the **SQL-binding equivalence
+  gate already EXISTS and runs live in CI** (`test_datafusion_ffi_udf.py` asserts the
+  DataFusion FFI UDFs == rapidfuzz at 1e-6; `ci.yml` installs `datafusion` + builds the
+  wheel + hard-imports) — so kill-criterion (1)'s SQL surface was never pending, a correction
+  to the R1 verdict; all three bindings are gated. (2) **`pprl_bloom` HELD default-off** —
+  26 parity tests green + 7.08× faster byte-identical, BUT `bloom.rs` uses an unguarded
+  `par_iter()` (the #688 futex-park class) on the EPYC runner that won't provision; flipping
+  it default-on is an unvalidatable #688 risk. Needs the #692-style threshold guard first.
+
 ## 2026-06-15 — Single-kernel-collapse R1 COMPLETE: GO to R2 (two documented residuals)
 - **Kill-criterion (2) cleared — all four JS targets GREEN in CI.** `r1-kernel-js-targets.yml`
   run [#27518182208](https://github.com/benseverndev-oss/goldenmatch/actions/runs/27518182208)
