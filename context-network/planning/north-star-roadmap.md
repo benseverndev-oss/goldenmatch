@@ -15,6 +15,15 @@ The core diagnosis: **we have largely *built* a tool worthy of being the default
 barely started *making* it the default.** Rigor (accuracy, traceability) is top-decile;
 the shortfall is everything between "it's excellent" and "strangers reach for it."
 
+**Reconciliation note (2026-06-15):** two active *inward* arcs already advance W2/W5 —
+the **single-kernel-collapse** (R0-R5, [../decisions/0016-single-kernel-collapse-spike.md](../decisions/0016-single-kernel-collapse-spike.md),
+[../architecture/single-kernel-collapse-roadmap.md](../architecture/single-kernel-collapse-roadmap.md);
+R0 done, R1 GO #978, R2 in flight #980) and the **config-correctness planner**
+([../../docs/superpowers/specs/2026-06-14-config-correctness-planner-design.md](../../docs/superpowers/specs/2026-06-14-config-correctness-planner-design.md),
+#965). W2/W5 below *credit and ride* these, not duplicate them. That both missed arcs are
+inward only sharpens the thesis: the hours keep flowing inward; the outward gap (W1) is
+where the North Star is starved.
+
 ---
 
 ## The scoreboard (stand up first — without it, "de facto" is unfalsifiable)
@@ -41,13 +50,19 @@ Convert engineering quality into external pull.
 - **Gate:** stars velocity *and* weekly downloads trend up over a 4-week window; >=1 inbound issue from a stranger.
 
 ### W2 — Close the opt-in -> default gap *(commitment #1: zero-config ceiling)*
-The `dedupe file.csv` user should get the ceiling, not the floor.
-- **Default-flip ledger** (`default-flip-ledger.md`): every default-OFF flag
-  (`GOLDENMATCH_NATIVE`, Lance store, llama, `mode=scale`, distributed, quality bridges,
-  WASM, einstein tier) gets a written criterion that would make it auto-on / auto-detected.
-- Retire the first 2-3 (start with the already-safe ones: native-when-wheel-present is
-  effectively default — make it honest + documented; auto-detect quality bridges when
-  goldencheck is installed).
+The `dedupe file.csv` user should get the ceiling, not the floor. **Largely in flight** —
+this workstream is now mostly *coordination*, not greenfield:
+- **Rides the single-kernel-collapse arc** (R1 GO #978, R2 #980): native scorer/kernel
+  paths are being brought under one reversible governed default with parity gates. W2's job
+  is to make sure each collapsed default is the *user-facing* default where edge-safety
+  allows (note: pure-TS stays the permanent fallback — WASM is opt-in for edge-safety, a
+  hard constraint, not a gap to close).
+- **Rides the config-correctness planner** (#965): routing becomes correct-by-construction
+  so the zero-config user lands on the right path (and gets warned off slow overrides).
+- **Net-new W2 piece — the default-flip ledger** (`default-flip-ledger.md`): an *umbrella*
+  list of the remaining default-OFF flags NOT covered by the two arcs (Lance store, llama,
+  `mode=scale`, quality bridges, einstein tier), each with a written auto-on/auto-detect
+  criterion (e.g. auto-detect quality bridges when goldencheck is installed).
 - **Gate:** N flags moved opt-in -> auto per quarter; time-to-first-success drops.
 
 ### W3 — Scale-invariant correctness *(commitment #2 — largely already met)*
@@ -57,7 +72,9 @@ distributed on a meaningful fixture means heavy (and for the binding case, clust
 every PR, which the paths-filter CI discipline deliberately avoids. The existing proof:
 - DataFusion spine Stage C is parity-gated (Rand 1.0 + golden + edges).
 - The Sail tier ships connectivity + pair-set parity gates (S1-S4).
-- The 100M Ray run was validated recall-complete (20M clusters exact, #851/#852/#864).
+- The 100M Ray run was validated recall-complete (20M clusters exact, #851/#852/#864), and
+  a distributed-100M *quality-parity* result is recorded (#955), with distributed-clustering
+  correctness fixes since (#968/#970).
 
 So the residual is small and *not* a new CI lane:
 - **Discoverability (docs, ~0 cost):** link the existing parity gates + the 100M validation
@@ -81,11 +98,14 @@ Stop stranding capabilities on one surface.
 ### W5 — Bus-factor & contributability *(gap: bus-factor of one)*
 Make it contributable. (Siblings stay active per the 2026-06-15 decision — so this is about
 *lowering the contribution barrier*, not freezing scope.)
-- `CONTRIBUTING.md` that externalizes the top ~15 CLAUDE.md lessons into outsider-readable
-  form; `good first issue` labels.
-- Because siblings stay active, the breadth/maintenance tax is *accepted* — so invest in the
-  shared substrate (parity harness, CI patterns, the CLAUDE.md lessons) that keeps the tax
-  bounded as the suite grows.
+- **The duplicated-math half is already in flight:** the single-kernel-collapse arc
+  (R0-R5) is collapsing N-language reimplementations onto shared `*-core` kernels — the
+  biggest structural source of the maintenance/bus-factor tax. W5 does not re-propose this;
+  it tracks it as the substrate win and (at R5) the ast-grep gate that *forbids* algorithm
+  math outside `*-core`.
+- **Net-new W5 piece:** `CONTRIBUTING.md` that externalizes the top ~15 CLAUDE.md lessons
+  into outsider-readable form; `good first issue` labels. (The tribal-knowledge barrier is
+  *not* addressed by the collapse arc — that is the human on-ramp, still missing.)
 - **Gate:** >=1 external contributor merges something.
 
 ---
