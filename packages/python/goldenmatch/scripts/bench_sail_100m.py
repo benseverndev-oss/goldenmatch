@@ -20,6 +20,19 @@ def main() -> int:
     ap.add_argument("--value-col", default="last_name")
     ap.add_argument("--golden-cols", default="first_name,email")
     ap.add_argument("--out", default=".profile_tmp/sail_100m.json")
+    ap.add_argument(
+        "--wcc-checkpoint-interval",
+        type=int,
+        default=2,
+        help="truncate the scale-WCC pointer-jump lineage every N rounds "
+        "(0=off); the 100M lineage-growth guard. Needs --wcc-checkpoint-dir.",
+    )
+    ap.add_argument(
+        "--wcc-checkpoint-dir",
+        default=None,
+        help="writable path/URI reachable by the cluster (e.g. gs://.../wcc-ckpt) "
+        "for the WCC lineage barrier. Defaults to <input dir>/_wcc_ckpt.",
+    )
     args = ap.parse_args()
 
     remote = os.environ.get("SAIL_REMOTE")
@@ -35,6 +48,13 @@ def main() -> int:
 
     spark = connect(remote)
     src = spark.read.parquet(args.input)
+    # Default the WCC checkpoint dir next to the input so the 100M run gets the
+    # lineage barrier without extra flags (override with --wcc-checkpoint-dir).
+    ckpt_dir = args.wcc_checkpoint_dir
+    if args.wcc_checkpoint_interval and not ckpt_dir:
+        import posixpath
+
+        ckpt_dir = posixpath.join(posixpath.dirname(args.input.rstrip("/")), "_wcc_ckpt")
     t0 = time.perf_counter()
     golden = run_sail_pipeline(
         src,
@@ -43,6 +63,8 @@ def main() -> int:
         value_col=args.value_col,
         golden_cols=args.golden_cols.split(","),
         wcc="scale",
+        wcc_checkpoint_interval=args.wcc_checkpoint_interval,
+        wcc_checkpoint_dir=ckpt_dir,
     )
     n_golden = golden.count()  # forces the full pipeline
     wall = time.perf_counter() - t0
@@ -52,6 +74,8 @@ def main() -> int:
         "golden_count": n_golden,
         "remote": remote,
         "input": args.input,
+        "wcc_checkpoint_interval": args.wcc_checkpoint_interval,
+        "wcc_checkpoint_dir": ckpt_dir,
     }
     print(json.dumps(payload, indent=2))
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)

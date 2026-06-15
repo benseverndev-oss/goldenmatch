@@ -1,11 +1,44 @@
 """End-to-end Sail pipeline: load -> block -> score -> dedup -> WCC -> golden,
 all distributed on Sail (Spark Connect). The bench entrypoint (S4). Blocking is
 a single pre-existing column (S1 scope); the scorer is the rapidfuzz pandas UDF;
-WCC defaults to the chain-robust pointer-jumping algorithm (scale)."""
+WCC defaults to the chain-robust pointer-jumping algorithm (scale).
+
+R3 (coverage / feature-gate honesty): unsupported config fails LOUDLY up front
+(``_validate_sail_pipeline_supported``), the scale-mode posture -- never silently
+degrade. Survivorship strategy already fail-louds in ``core.golden.merge_field``."""
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
+
+# WCC algorithms the Sail pipeline routes; anything else used to silently fall
+# through to label-prop (the R3 silent-degrade footgun).
+_SUPPORTED_WCC = ("scale", "label_prop")
+
+
+def _validate_sail_pipeline_supported(*, scorer_name: str, wcc: str) -> None:
+    """Fail loudly on Sail-pipeline config that would otherwise SILENTLY degrade
+    -- the scale-mode feature-gate posture (R3 of the past-one-box roadmap).
+
+    Gates the two real silent-degrade cases: an unsupported ``scorer_name``
+    (otherwise errors deep inside the UDF on a worker) and an unrecognized
+    ``wcc`` (otherwise silently routes to label-prop). Survivorship ``strategy``
+    is NOT re-checked -- ``core.golden.merge_field`` already raises on unknown.
+    """
+    from goldenmatch.sail.scorers import _SUPPORTED as _SUPPORTED_SCORERS
+
+    if scorer_name not in _SUPPORTED_SCORERS:
+        raise NotImplementedError(
+            f"Sail pipeline supports scorers {_SUPPORTED_SCORERS}; got "
+            f"{scorer_name!r}. LLM / rerank / boost / negative-evidence / "
+            f"embedding / cross-encoder scorers do NOT distribute on Sail -- "
+            f"run them on the one-box pipeline."
+        )
+    if wcc not in _SUPPORTED_WCC:
+        raise ValueError(
+            f"Sail pipeline wcc must be one of {_SUPPORTED_WCC}; got {wcc!r}. "
+            f"(An unrecognized value would have silently degraded to label-prop.)"
+        )
 
 
 @dataclass
@@ -29,6 +62,8 @@ def run_sail_pipeline(
     threshold: float = 0.85,
     strategy: str = "most_complete",
     wcc: str = "scale",
+    wcc_checkpoint_interval: int = 0,
+    wcc_checkpoint_dir: str | None = None,
     emit_identity: bool = False,
     source_col: str = "__source__",
     source_pk_col: str | None = None,
@@ -47,7 +82,13 @@ def run_sail_pipeline(
     matchkey_name) is passed in for deterministic output; a default is
     synthesized when omitted. Default ``emit_identity=False`` is byte-for-byte
     the prior behavior.
+
+    ``wcc_checkpoint_interval`` / ``wcc_checkpoint_dir`` (scale WCC only): when
+    set, truncate the pointer-jump lineage every N rounds via a parquet barrier
+    (the 100M lineage-growth fix; default 0 = off, byte-identical).
     """
+    _validate_sail_pipeline_supported(scorer_name=scorer_name, wcc=wcc)
+
     from goldenmatch.sail.clustering import (
         connected_components,
         connected_components_scale,
@@ -64,10 +105,16 @@ def run_sail_pipeline(
         threshold=threshold,
     )
     ids_df = source_df.select(id_col)
-    wcc_fn = (
-        connected_components_scale if wcc == "scale" else connected_components
-    )
-    assignments = wcc_fn(pairs, ids_df, id_col=id_col)
+    if wcc == "scale":
+        assignments = connected_components_scale(
+            pairs,
+            ids_df,
+            id_col=id_col,
+            checkpoint_interval=wcc_checkpoint_interval,
+            checkpoint_dir=wcc_checkpoint_dir,
+        )
+    else:
+        assignments = connected_components(pairs, ids_df, id_col=id_col)
     golden = build_golden(
         assignments,
         source_df,

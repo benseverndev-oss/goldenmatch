@@ -99,12 +99,29 @@ def connected_components(
     )
 
 
+def _truncate_lineage(labels: Any, checkpoint_dir: str, tag: str) -> Any:
+    """Materialize ``labels`` to parquet and read it back -- a hard Spark Connect
+    lineage barrier. Each pointer-jump round joins ``labels`` against derivatives
+    of itself, so the query plan grows unbounded across rounds; at 100M the
+    optimizer chokes / the run hangs. A parquet round-trip resets the plan (the
+    same per-round-checkpoint discipline the Ray distributed WCC uses,
+    decisions/0011). Output is identical; only the lineage is reset.
+    """
+    import posixpath
+
+    path = posixpath.join(checkpoint_dir, f"{tag}.parquet")
+    labels.write.mode("overwrite").parquet(path)
+    return labels.sparkSession.read.parquet(path)
+
+
 def connected_components_scale(
     pairs_df: Any,
     ids_df: Any,
     *,
     id_col: str = "__row_id__",
     max_rounds: int = 40,
+    checkpoint_interval: int = 0,
+    checkpoint_dir: str | None = None,
 ) -> Any:
     """Chain-robust O(log n) weakly-connected components via min-label
     propagation with POINTER-JUMPING (Shiloach-Vishkin shortcutting). Pure
@@ -118,9 +135,14 @@ def connected_components_scale(
 
     Each round: (1) PROPAGATE -- each node adopts min(own label, min neighbor
     label); (2) SHORTCUT -- ``label[v] = label[label[v]]`` (jump to the label's
-    label). Early-exit when labels stop changing. NOTE for the real run:
-    cache/checkpoint ``labels`` each round (Spark Connect lineage grows) + a
-    cheaper change-counter; the gate runs tiny fixtures.
+    label). Early-exit when labels stop changing.
+
+    ``checkpoint_interval`` / ``checkpoint_dir`` (the 100M lineage-growth fix):
+    each round re-joins ``labels`` against itself, so the Spark Connect plan
+    grows unbounded and the optimizer chokes / the run hangs at scale. When
+    ``checkpoint_interval > 0`` (requires ``checkpoint_dir``), truncate the
+    lineage every N rounds via a parquet barrier (``_truncate_lineage``). Default
+    0 = off -- byte-identical, and the tiny-fixture gates need no checkpoint dir.
 
     HAND TRACE (2-node, edges=[(0,1)], seed {0:0,1:1}):
       r1 propagate: node0 min(0,lbl[1]=1)=0; node1 min(1,lbl[0]=0)=0 -> {0:0,1:0}
@@ -132,6 +154,12 @@ def connected_components_scale(
       r2: no change -> CONVERGED all 0.  ONE component. CORRECT.
     """
     from pyspark.sql import functions as F
+
+    if checkpoint_interval and not checkpoint_dir:
+        raise ValueError(
+            "connected_components_scale: checkpoint_interval>0 requires "
+            "checkpoint_dir (a writable path reachable by the cluster)."
+        )
 
     # Symmetric edges (node, nbr) so labels flow both ways.
     fwd = pairs_df.select(F.col("a").alias("node"), F.col("b").alias("nbr"))
@@ -145,7 +173,7 @@ def connected_components_scale(
 
     # Spark Connect discipline: join on a SHARED NAME, other side renamed; no
     # df["col"] cross-handle refs (the S2 AMBIGUOUS_REFERENCE lesson).
-    for _ in range(max_rounds):
+    for round_idx in range(max_rounds):
         # (1) PROPAGATE: each node adopts min(own, min neighbor label).
         lab_for_nbr = labels.select(
             F.col("node").alias("nbr"), F.col("label").alias("nbr_label")
@@ -182,6 +210,9 @@ def connected_components_scale(
         labels = jumped
         if changed == 0:
             break
+        # Truncate the accumulated pointer-jump lineage on continuing rounds.
+        if checkpoint_dir and checkpoint_interval and (round_idx + 1) % checkpoint_interval == 0:
+            labels = _truncate_lineage(labels, checkpoint_dir, f"wcc_round_{round_idx + 1}")
 
     return labels.select(
         F.col("label").alias("cluster_id"), F.col("node").alias("member_id")
