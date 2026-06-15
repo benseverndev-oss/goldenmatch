@@ -9,11 +9,11 @@
 //   connected_components(edges: &[(i64,i64,f64)], all_ids: &[i64]) -> Vec<Vec<i64>>
 //   dedup_pairs_max_score(pairs: &[(i64,i64,f64)])               -> Vec<(i64,i64,f64)>
 //
-// ARROW-VERSION NOTE: graph-core is built against arrow 55; this crate against
+// ARROW-VERSION NOTE: graph-core is built against arrow 59; this crate against
 // arrow 58. We deliberately call ONLY the arrow-free SLICE kernels above (which
 // take/return plain `Vec`s of i64/f64). We extract i64/f64 out of THIS crate's
 // arrow-58 arrays into Vecs, call the slice kernel, and build arrow-58 output.
-// No arrow type crosses the 58<->55 boundary, so the mismatch is irrelevant.
+// No arrow type crosses the 58<->59 boundary, so the mismatch is irrelevant.
 //
 // SCOPE: int64 ids only. String-id (`_str`) variants are a follow-up task — the
 // graph-core first-seen `Dict` exists for an accept-both future.

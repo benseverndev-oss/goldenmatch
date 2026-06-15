@@ -2,6 +2,20 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-06-15 — arrow 55→59 + pyo3 0.28 across the pyarrow crates
+- **Shipped (#1003 Phase 1, #1005 Phase 2):** `graph-core`, `native`, `analysis-native`,
+  `goldencheck-native`, `native-flow` all moved to arrow 59 + pyo3 0.28 (native also numpy
+  0.28). `datafusion-udf` deliberately left on arrow 58 / datafusion 53 — insulated via the
+  arrow-free slice-kernel boundary, so the datafusion 53→5x major bump was declined as
+  disproportionate.
+- **Why it wasn't a one-liner:** arrow 59's `pyarrow` feature pins pyo3 0.28.2, forcing a
+  pyo3 0.23→0.28 bump (+ numpy 0.28, matched to arrow's pyo3 — NOT the latest 0.29, since
+  arrow lags one pyo3 version). The code migration was mechanical: `allow_threads`→`detach`,
+  `downcast`→`cast`.
+- **Architecture node updated:** `architecture/sql-native-extensions.md` now reflects
+  graph-core on arrow 59 (the datafusion-udf insulation boundary is now 58↔59, mechanism
+  unchanged). #999 (the original graph-core-only dependabot bump) closed/superseded.
+
 ## 2026-06-15 — Single-kernel-collapse R2: first slice shipped + value recalibration (R5 retired)
 - **R2 first slice SHIPPED (#980, merged):** field scoring brought under the reversible
   `GOLDENMATCH_NATIVE` gate. `_native_field_matrix` had preferred the `score-core` kernel

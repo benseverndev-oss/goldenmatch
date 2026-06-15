@@ -28,7 +28,7 @@ points. ONE source of truth consumed by all three surfaces:
   `connected_components_arrow`);
 - the pgrx `postgres` ext calls it directly in pure Rust;
 - the `datafusion-udf` FFI crate calls its **arrow-free slice kernels** (it is
-  arrow-58 while graph-core is arrow-55 — passing only `Vec`s sidesteps the mismatch).
+  arrow-58 while graph-core is arrow-59 — passing only `Vec`s sidesteps the mismatch).
 
 ## The embedding kernel: `goldenmatch-embed` wheel
 `goldenmatch_embed_local` runs `goldenembed-rs` (the pyo3-free ONNX embed runtime,

@@ -56,7 +56,7 @@ hmac = "0.13"
 # default features (csv/ipc/json/compute) are off — we only read array buffers.
 arrow = { version = "59", default-features = false, features = ["pyarrow"] }
 # Return per-field score matrices as PyArray2<f32> for the slow-path field-
-# matrix kernel (score.rs::score_field_matrix). Pinned to the pyo3 0.23 line.
+# matrix kernel (score.rs::score_field_matrix). Pinned to the pyo3 0.28 line.
 numpy = ">=0.28, <0.29"
 
 [profile.release]
