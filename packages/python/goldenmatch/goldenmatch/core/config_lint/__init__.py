@@ -11,6 +11,7 @@ import goldenmatch.core.config_lint.rules  # noqa: F401 - registers rules on imp
 from goldenmatch.core.config_lint.profile import build_lint_input
 from goldenmatch.core.config_lint.registry import (
     REGISTRY,
+    ConfigLintError,
     Finding,
     LintInput,
     LintRule,
@@ -23,6 +24,7 @@ from goldenmatch.core.config_lint.registry import (
 
 __all__ = [
     "REGISTRY",
+    "ConfigLintError",
     "Finding",
     "LintInput",
     "LintRule",

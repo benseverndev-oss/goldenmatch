@@ -60,6 +60,36 @@ def _capture_run(event: str, df: Any, config: Any, *, had_reference: bool) -> No
         pass
 
 
+def _run_config_lint(df: Any, config: Any) -> list:
+    """Pre-flight lint of the RESOLVED config against the data shape.
+
+    Default ``warn``: logs each finding (with its doc anchor) and returns them
+    to attach to the result; never blocks. ``GOLDENMATCH_CONFIG_LINT=strict``
+    refuses on error-severity findings; ``off`` skips. Fail-open: a lint error
+    never breaks the run -- only an explicit strict refusal does.
+    """
+    mode = os.environ.get("GOLDENMATCH_CONFIG_LINT", "warn").strip().lower()
+    if mode in ("0", "off", "false", "no", "disabled"):
+        return []
+    try:
+        from goldenmatch.core import config_lint as cl
+        findings = cl.lint(config, cl.build_lint_input(df, config))
+    except Exception:  # noqa: BLE001 - linting must never break a run
+        logger.debug("config-lint skipped (build/run error)", exc_info=True)
+        return []
+    for f in findings:
+        logger.warning(
+            "config-lint [%s] %s (rule=%s; see %s)",
+            f.severity.value, f.message, f.rule_id, f.doc_anchor,
+        )
+    if mode == "strict":
+        from goldenmatch.core.config_lint import ConfigLintError, Severity
+        errors = [f for f in findings if f.severity == Severity.ERROR]
+        if errors:
+            raise ConfigLintError(errors)
+    return findings
+
+
 def _attach_memory_to_postflight(
     postflight_report: PostflightReport | None,
     memory_stats: CorrectionStats | None,
@@ -123,6 +153,10 @@ class DedupeResult:
     # None otherwise. The audit-calibrated SAFE lower bound stays evaluate-only
     # (it needs a labelled sample). See goldenmatch.core.recall_certificate.
     recall_certificate: RecallEstimate | None = None
+    # Pre-flight config-lint findings (data-shape warnings on the resolved
+    # config; goldenmatch.core.config_lint.Finding). Empty unless the linter
+    # flagged something. Advisory in the default warn mode.
+    lint_findings: list = field(default_factory=list)
 
     def to_csv(self, path: str, which: str = "golden") -> Path:
         """Write results to CSV.
@@ -217,6 +251,8 @@ class MatchResult:
     postflight_report: PostflightReport | None = None
     # See DedupeResult.memory_stats note — same intentional duplication.
     memory_stats: CorrectionStats | None = None
+    # Pre-flight config-lint findings (see DedupeResult.lint_findings).
+    lint_findings: list = field(default_factory=list)
 
     def to_csv(self, path: str) -> Path:
         """Write matched results to CSV."""
@@ -484,6 +520,7 @@ def dedupe_df(
         if cfg_excl and _kwarg_token is None:
             _kwarg_token = _RUNTIME_EXCLUDE_COLUMNS.set(list(cfg_excl))
 
+        _lint_findings = _run_config_lint(df, config)
         result = run_dedupe_df(
             df, config, source_name=source_name,
             auto_config=False,
@@ -549,6 +586,7 @@ def dedupe_df(
         postflight_report=pf,
         memory_stats=_mem,
         recall_certificate=_recall_cert,
+        lint_findings=_lint_findings,
     )
 
 
@@ -653,6 +691,7 @@ def match_df(
         if cfg_excl and _kwarg_token is None:
             _kwarg_token = _RUNTIME_EXCLUDE_COLUMNS.set(list(cfg_excl))
 
+        _lint_findings = _run_config_lint(target, config)
         result = run_match_df(target, reference, config, auto_config=False)
     finally:
         if _kwarg_token is not None:
@@ -691,6 +730,7 @@ def match_df(
         stats=_extract_stats(result),
         postflight_report=pf,
         memory_stats=_mem,
+        lint_findings=_lint_findings,
     )
 
 

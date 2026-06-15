@@ -9,6 +9,8 @@ The config linter sanity-checks the **resolved** config (zero-config *or* user-s
 
 Severities: **error** (will OOM or collapse recall), **warn** (likely suboptimal for this data shape), **info** (advisory).
 
+Modes (`GOLDENMATCH_CONFIG_LINT`): `warn` (default — log every finding and run anyway), `strict` (refuse on an **error** finding, raising `ConfigLintError` before the pipeline starts), `off` (skip). Findings are attached to `DedupeResult.lint_findings` / `MatchResult.lint_findings` either way.
+
 
 ## Blocking
 

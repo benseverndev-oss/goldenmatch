@@ -28,6 +28,8 @@ description: "Pre-flight checks the config linter runs against your data shape b
 The config linter sanity-checks the **resolved** config (zero-config *or* user-submitted) against your data's shape before the pipeline runs, so degenerate configs are caught up front instead of failing slowly. Each finding links back to the rule below; the rule's reason here is the exact reason the linter reports.
 
 Severities: **error** (will OOM or collapse recall), **warn** (likely suboptimal for this data shape), **info** (advisory).
+
+Modes (`GOLDENMATCH_CONFIG_LINT`): `warn` (default — log every finding and run anyway), `strict` (refuse on an **error** finding, raising `ConfigLintError` before the pipeline starts), `off` (skip). Findings are attached to `DedupeResult.lint_findings` / `MatchResult.lint_findings` either way.
 """
 
 _CATEGORY_TITLES = {

@@ -32,6 +32,21 @@ class Severity(StrEnum):
     INFO = "info"    # advisory
 
 
+class ConfigLintError(Exception):
+    """Raised (only under GOLDENMATCH_CONFIG_LINT=strict) when the pre-flight
+    linter produces error-severity findings on the resolved config. Carries the
+    findings so callers can surface the doc-anchored reasons. Default mode is
+    warn-and-run, so this never fires unless the operator opts into strict."""
+
+    def __init__(self, findings: list[Finding]) -> None:
+        self.findings = list(findings)
+        detail = "; ".join(f"{f.rule_id}: {f.message}" for f in self.findings)
+        super().__init__(
+            f"config lint refused {len(self.findings)} error finding(s) "
+            f"(GOLDENMATCH_CONFIG_LINT=strict): {detail}"
+        )
+
+
 @dataclass(frozen=True)
 class LintInput:
     """Cheap, data-shape facts a rule may consult. Mirrors the fields the
