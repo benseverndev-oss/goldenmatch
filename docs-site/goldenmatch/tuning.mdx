@@ -168,7 +168,15 @@ This is the knob most people get wrong, so read the contract before you run a 10
 | `GOLDENMATCH_DISTRIBUTED_WCC_SEED` | unset | Seed for the randomized-contraction affine hash (reproducible cluster IDs across runs). |
 | `GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD` | unset (memory-aware) | Pair count above which clustering goes distributed. **Unset (default): memory-aware** — clustering stays on the fast driver-side scipy.csgraph path whenever the scored pair set fits available driver RAM, and only distributes when it genuinely won't. Set an explicit integer to force a pair-count boundary either way. |
 | `GOLDENMATCH_DISTRIBUTED_GOLDEN_THRESHOLD` | `5000000` | Multi-member row count above which golden-record building goes distributed. |
-| `GOLDENMATCH_DISTRIBUTED_SCORE_NUM_CPUS` | `2` | CPUs requested per Ray scoring worker. |
+| `GOLDENMATCH_DISTRIBUTED_SCORE_NUM_CPUS` | `2` | CPUs requested per Ray scoring task. |
+| `GOLDENMATCH_DISTRIBUTED_SCORE_PROJECT` | `1` (on) | Project to scoring-relevant columns before the block-shuffle so it moves narrow blocks, not full records (#957). Output-invariant. `0` disables. |
+| `GOLDENMATCH_DISTRIBUTED_SHUFFLE_PARTS` | `min(256, cpu×4)` | Block-shuffle partition count. **Raise it** to shrink per-partition blocks so more `_score` tasks fit the object-store budget (relieves `_score` `ResourceBudget` backpressure). Co-location stays correct at any value. |
+| `GOLDENMATCH_DISTRIBUTED_OP_RESERVATION` | unset (Ray default ~0.5) | Ray Data per-op object-store reservation ratio. **Lower it** (e.g. `0.2`) to hand the running `_score` op more object-store budget when it's `ResourceBudget`-backpressured below CPU capacity (idle workers, object store not full). Tune at scale. |
+| `GOLDENMATCH_DISTRIBUTED_SCORE_CONCURRENCY` | unset | Explicit `concurrency=` on the `_score` map_batches. Pins the task-pool size once blocks are narrow; the object-store reservation/shuffle-parts knobs above govern the actual `ResourceBudget` cap. |
+
+<Note>
+  **If the distributed score stage leaves workers idle** (`MapBatches(_score): … [backpressured:tasks(ResourceBudget)]` with the object store well under capacity), `_score` is reservation-capped, not CPU-bound. Lower `GOLDENMATCH_DISTRIBUTED_OP_RESERVATION` (→ `0.2`) and/or raise `GOLDENMATCH_DISTRIBUTED_SHUFFLE_PARTS`, then re-measure — the optimal pair is cluster-shaped. (Shrinking Ray Data's `target_max_block_size` is **not** a safe lever: `_score` keeps each co-located partition whole via `batch_size=None`, so a split block would split a group and under-score.)
+</Note>
 
 <Note>
   You bring the Ray cluster — GoldenMatch ships the pipeline, not the bootstrap. The GCP recipe is in [`docs/distributed-ray-cluster-setup.md`](https://github.com/benseverndev-oss/goldenmatch/blob/main/docs/distributed-ray-cluster-setup.md). At single-box scale the `bucket` backend is validated through 200M and is simpler — use it unless the data won't fit one box.
