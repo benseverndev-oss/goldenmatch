@@ -38,7 +38,7 @@ where
 {
     let len = make_array(data.clone()).len();
     let mut builder = StringBuilder::with_capacity(len, len * 12);
-    py.allow_threads(|| -> PyResult<()> {
+    py.detach(|| -> PyResult<()> {
         for_each_str(&data, |_, v| match v {
             Some(s) => match f(s) {
                 Some(out) => builder.append_value(out),
@@ -56,7 +56,7 @@ where
 {
     let len = make_array(data.clone()).len();
     let mut builder = Int64Builder::with_capacity(len);
-    py.allow_threads(|| -> PyResult<()> {
+    py.detach(|| -> PyResult<()> {
         for_each_str(&data, |_, v| match v.and_then(&f) {
             Some(out) => builder.append_value(out),
             None => builder.append_null(),
@@ -71,7 +71,7 @@ where
 {
     let len = make_array(data.clone()).len();
     let mut builder = BooleanBuilder::with_capacity(len);
-    py.allow_threads(|| -> PyResult<()> {
+    py.detach(|| -> PyResult<()> {
         for_each_str(&data, |_, v| match v.and_then(&f) {
             Some(out) => builder.append_value(out),
             None => builder.append_null(),
