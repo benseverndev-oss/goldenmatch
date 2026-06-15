@@ -123,9 +123,17 @@ npx vitest run tests/parity/        # parity-only suite
 - **Workers caveat (real constraint):** workerd BANS runtime WASM codegen
   (`WebAssembly.instantiate`/`new WebAssembly.Module` from bytes both throw "Wasm
   code generation disallowed by embedder"). So Workers does NOT use the base64-bytes
-  universal path — it needs a BUILD-TIME CompiledWasm `.wasm?module` import (the
-  vitest-pool-workers convention). A Workers consumer of `enableWasm` must likewise
-  ship the kernel as a build-time module, not via `{ universal: true }`.
+  universal path — it needs a BUILD-TIME CompiledWasm `.wasm` module import (the
+  vitest-pool-workers convention; `modulesRules: [{ type: "CompiledWasm", include:
+  ["**/*.wasm"] }]`). A Workers consumer of `enableWasm` must likewise ship the
+  kernel as a build-time module, not via `{ universal: true }`.
+- **Workers harness host-config gotcha:** the `workers-kernel-equivalence.test.ts`
+  static `.wasm` import is parsed by the HOST vite `import-analysis` before the pool
+  resolves it. Import the artifact as a **plain `.wasm`** (NOT `.wasm?module` — that
+  suffix makes host import-analysis try to parse the bytes as JS, collecting 0 tests)
+  and list `assetsInclude: ["**/*.wasm"]` in `vitest.workers.config.ts` so the host
+  treats it as an opaque asset. `server.deps.inline` does NOT help — it only covers
+  node_modules, never a local `src/**/*.wasm`.
 
 ## Parity contract
 - **Scorer output:** 4-decimal tolerance vs Python (`tests/parity/scorer-ground-truth.test.ts`).

@@ -39,15 +39,14 @@ export default defineConfig({
       },
     }),
   ],
+  // Treat the built `.wasm` as an opaque static asset on the HOST so vite's
+  // `import-analysis` does NOT try to parse it as JS (that's what made the suite
+  // collect 0 tests). Resolution of the actual CompiledWasm module is left to the
+  // pool's worker module graph (the `modulesRules` above). `server.deps.inline`
+  // only covers node_modules, never a local `src/**/*.wasm`, so the asset rule is
+  // the host-side half of the fix; the plain `.wasm` import is the test-side half.
+  assetsInclude: ["**/*.wasm"],
   test: {
     include: ["tests/spike/workers-kernel-equivalence.test.ts"],
-    server: {
-      deps: {
-        // Inline the artifacts so the pool's worker module graph (not vite's
-        // host transform) resolves the `.wasm?module` import — that's where the
-        // CompiledWasm rule applies.
-        inline: [/score_wasm/],
-      },
-    },
   },
 });

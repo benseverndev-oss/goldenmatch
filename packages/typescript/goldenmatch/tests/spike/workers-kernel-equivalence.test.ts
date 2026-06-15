@@ -35,20 +35,19 @@ import { runEquivalence, type ScoreWasmGlue } from "./kernel-equivalence-core.js
 // Because the import is static, this file requires the built artifact present at
 // transform time. The CI `workers` job builds it first; the absent-artifact skip
 // the other targets keep doesn't apply to a static-import target (a default
-// checkout simply doesn't run this config). The `.wasm?module` specifier + the
-// config's `modulesRules: [{ type: "CompiledWasm", include: ["**\/*.wasm"] }]` is
-// the @cloudflare/vitest-pool-workers convention; its resolver special-cases
-// `*.wasm?module` and externalizes it to a workerd CompiledWasm module.
+// checkout simply doesn't run this config).
 //
-// IN-ENV NOTE (honest): under the in-env vitest 4.1 / pool 0.16 combo, vite's
-// host-side import-analysis intercepts `.wasm?module` before the pool's worker
-// resolver, so this harness is WROTE-pending-CI: the pool RUNS in workerd in-env
-// (verified — the test body executed and surfaced workerd's "Wasm code generation
-// disallowed by embedder" for the runtime-bytes path, which is exactly why a
-// build-time CompiledWasm import is required), but the green run needs the
-// pool/vitest versions the CI `workers` job pins. See the workflow comment.
-// @ts-expect-error — the `*.wasm?module` default-export Module type is the Workers env's, not tsc's.
-import scoreWasmModule from "../../src/core/wasm/artifacts/score_wasm_bg.wasm?module";
+// PLAIN `.wasm` import (no `?module` suffix) — the canonical
+// @cloudflare/vitest-pool-workers form. The pool's plugin resolves a bare `.wasm`
+// import to a precompiled CompiledWasm `WebAssembly.Module` (default export) in
+// the worker module graph. The earlier `.wasm?module` spelling tripped the HOST
+// Vite `import-analysis` plugin (it tried to parse the `.wasm` as JS and the suite
+// collected 0 tests) — `server.deps.inline` does NOT cover local source files, so
+// the suffix had to go and `vitest.workers.config.ts` now lists the artifact dir
+// in `assetsInclude` so the host treats it as an opaque asset, leaving resolution
+// to the pool.
+// @ts-expect-error — the `.wasm` default-export Module type is the Workers env's, not tsc's.
+import scoreWasmModule from "../../src/core/wasm/artifacts/score_wasm_bg.wasm";
 
 describe("workers: pure-TS == score-wasm kernel (4dp)", () => {
   it("kernel instantiates + reproduces the frozen pure-TS reference in workerd", async () => {
