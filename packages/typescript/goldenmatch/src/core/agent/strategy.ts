@@ -17,7 +17,8 @@
  */
 
 import type { Row } from "../types.js";
-import type { DataProfile, FieldProfile } from "./types.js";
+import { detectDomain } from "../domain.js";
+import type { DataProfile, FieldProfile, StrategyDecision } from "./types.js";
 
 // Column-name patterns that indicate sensitive PII (Python _SENSITIVE_PATTERNS).
 const SENSITIVE_PATTERNS = new Set([
@@ -90,4 +91,146 @@ export function profileForAgent(rows: readonly Row[]): DataProfile {
   }
 
   return { row_count: height, fields, has_sensitive: hasSensitive };
+}
+
+// ---------------------------------------------------------------------------
+// Strategy selection (port of `select_strategy`)
+// ---------------------------------------------------------------------------
+
+/**
+ * Choose a matching strategy based on a data profile (port of
+ * `select_strategy`).
+ *
+ * Decision tree (order is load-bearing):
+ *   1. Sensitive fields detected -> pprl (manual review, auto_execute=false).
+ *   2. Strong IDs only -> exact_only.
+ *   3. Strong IDs + fuzzy candidates -> exact_then_fuzzy.
+ *   4. Fuzzy candidates available -> fuzzy.
+ *   5. Domain detected with confidence > 0.5 -> domain_extraction.
+ *   6. Fallback -> fuzzy.
+ *
+ * Thresholds (exact Python parity):
+ *   - strong id: type=string & uniqueness > 0.90 & null_rate < 0.05.
+ *   - fuzzy candidate: type=string & uniqueness < 0.90 & avg_length > 3 &
+ *     null_rate < 0.50.
+ *   - backend: "ray" when row_count > 500_000, else null.
+ *
+ * Domain confidence uses `detectDomain(colNames).confidence` (the ported
+ * DomainProfile.confidence = min(1, score/10)). NOTE: this differs from
+ * Python's `hits/len(signals)` formula, so only clear-cut domain datasets are
+ * guaranteed to agree on the domain branch (documented Wave-1 caveat).
+ */
+export function selectStrategy(profile: DataProfile): StrategyDecision {
+  // 1. Sensitive data -> PPRL.
+  if (profile.has_sensitive) {
+    return {
+      strategy: "pprl",
+      why: "Sensitive fields detected; using privacy-preserving record linkage.",
+      domain: null,
+      strong_ids: [],
+      fuzzy_fields: [],
+      backend: null,
+      auto_execute: false,
+    };
+  }
+
+  // Detect domain (best-effort; never throws out of selection).
+  let domainName: string | null = null;
+  let domainConfidence = 0.0;
+  try {
+    const colNames = profile.fields.map((f) => f.name);
+    const dp = detectDomain(colNames);
+    if (dp.name !== "generic" && dp.confidence > 0) {
+      domainName = dp.name;
+      domainConfidence = dp.confidence;
+    }
+  } catch {
+    /* domain detection is non-fatal */
+  }
+
+  // Identify strong IDs and fuzzy candidates.
+  const strongIds: string[] = [];
+  const fuzzyCandidates: string[] = [];
+  for (const f of profile.fields) {
+    if (f.type === "string") {
+      if (f.uniqueness > 0.9 && f.null_rate < 0.05) {
+        strongIds.push(f.name);
+      } else if (
+        f.uniqueness < 0.9 &&
+        f.avg_length > 3 &&
+        f.null_rate < 0.5
+      ) {
+        fuzzyCandidates.push(f.name);
+      }
+    }
+  }
+
+  // Backend recommendation.
+  const backend = profile.row_count > 500_000 ? "ray" : null;
+
+  // 2. Strong IDs only.
+  if (strongIds.length > 0 && fuzzyCandidates.length === 0) {
+    return {
+      strategy: "exact_only",
+      why: `High-uniqueness fields (${strongIds.join(", ")}) with no fuzzy candidates.`,
+      domain: domainName,
+      strong_ids: strongIds,
+      fuzzy_fields: [],
+      backend,
+      auto_execute: true,
+    };
+  }
+
+  // 3. Strong IDs + fuzzy candidates.
+  if (strongIds.length > 0 && fuzzyCandidates.length > 0) {
+    return {
+      strategy: "exact_then_fuzzy",
+      why: `Exact on ${strongIds.join(", ")}; fuzzy on ${fuzzyCandidates.join(", ")}.`,
+      domain: domainName,
+      strong_ids: strongIds,
+      fuzzy_fields: fuzzyCandidates,
+      backend,
+      auto_execute: true,
+    };
+  }
+
+  // 4. Fuzzy candidates available.
+  if (fuzzyCandidates.length > 0) {
+    return {
+      strategy: "fuzzy",
+      why: `Fuzzy matching on ${fuzzyCandidates.join(", ")}.`,
+      domain: domainName,
+      strong_ids: [],
+      fuzzy_fields: fuzzyCandidates,
+      backend,
+      auto_execute: true,
+    };
+  }
+
+  // 5. Domain detected with confidence.
+  if (domainName !== null && domainConfidence > 0.5) {
+    const pct = Math.round(domainConfidence * 100);
+    return {
+      strategy: "domain_extraction",
+      why: `Domain '${domainName}' detected (confidence ${pct}%).`,
+      domain: domainName,
+      strong_ids: [],
+      fuzzy_fields: [],
+      backend,
+      auto_execute: true,
+    };
+  }
+
+  // 6. Fallback -> fuzzy over all string fields.
+  return {
+    strategy: "fuzzy",
+    why: "No strong identifiers found; defaulting to fuzzy matching.",
+    domain: domainName,
+    strong_ids: [],
+    fuzzy_fields: profile.fields
+      .filter((f) => f.type === "string")
+      .map((f) => f.name),
+    backend,
+    auto_execute: true,
+  };
 }
