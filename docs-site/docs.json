@@ -9,6 +9,12 @@
     "dark": "#b8860b"
   },
   "favicon": "/favicon.svg",
+  "integrations": {
+    "posthog": {
+      "apiKey": "phc_REPLACE_WITH_POSTHOG_PROJECT_KEY",
+      "apiHost": "https://us.i.posthog.com"
+    }
+  },
   "navigation": {
     "tabs": [
       {
