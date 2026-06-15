@@ -73,6 +73,39 @@ def build_3d(n, colors, radii, edges):
     return P
 
 
+def ball_noise(n, radius):
+    """Uniform points in a 3D ball (messy noise that fills the frame)."""
+    d = RNG.standard_normal((n, 3))
+    d /= np.linalg.norm(d, axis=1, keepdims=True) + 1e-9
+    r = radius * RNG.random(n) ** (1.0 / 3.0)
+    return d * r[:, None]
+
+
+def smoothstep(a, b, x):
+    t = np.clip((x - a) / (b - a), 0.0, 1.0)
+    return t * t * (3 - 2 * t)
+
+
+def morph(p, N, Opt, C):
+    """Big-bang loop position at phase p in [0,1): noise -> point -> clusters
+    -> (held while camera orbits) -> back to noise. Smoothstep at every segment
+    so velocity is ~0 at each boundary (incl. the loop seam) => seamless."""
+    sB, sC, sD, sE = 0.07, 0.20, 0.32, 0.86
+    if p < sB:
+        return N
+    if p < sC:                       # implode: noise -> central point
+        s = smoothstep(sB, sC, p)
+        return N * (1 - s) + Opt * s
+    if p < sD:                       # explode: point -> clusters (ease-OUT burst)
+        t = np.clip((p - sC) / (sD - sC), 0.0, 1.0)
+        s = 1.0 - (1.0 - t) ** 1.9   # fast out of the point, decelerate into place
+        return Opt * (1 - s) + C * s
+    if p < sE:                       # hold clusters (camera orbits)
+        return C
+    s = smoothstep(sE, 1.0, p)       # dissolve clusters -> noise (== start)
+    return C * (1 - s) + N * s
+
+
 def box_blur(img, r):
     if r < 1:
         return img
@@ -105,10 +138,9 @@ def aces(x):
 
 
 def frame(P, colors, radii, edges, pal, edge_t, e_src, e_dst, inter,
-          ang, res):
-    # camera: orbit about vertical (Y) axis + fixed downward tilt
-    ca, sa = np.cos(ang), np.sin(ang)
-    tilt = np.radians(16.0)
+          az, tilt, res):
+    # camera: azimuth (horizontal) orbit + tilt (vertical) sweep
+    ca, sa = np.cos(az), np.sin(az)
     ct, st = np.cos(tilt), np.sin(tilt)
     # rotate about Y then tilt about X
     x = P[:, 0] * ca + P[:, 2] * sa
@@ -184,7 +216,9 @@ def main():
         if t == "--only": only = int(a[i + 1])
     n, m, colors, radii, edges = load(path)
     pal = palette(int(colors.max()) + 1)
-    P = build_3d(n, colors, radii, edges)
+    C = build_3d(n, colors, radii, edges)          # assembled 3D galaxy
+    N = ball_noise(n, 0.95).astype(np.float32)     # messy start/end noise
+    Opt = (RNG.standard_normal((n, 3)) * 0.02).astype(np.float32)  # dense point
     S = 6
     edge_t = np.linspace(0, 1, S, dtype=np.float32)
     e_src, e_dst = edges[:, 0], edges[:, 1]
@@ -193,8 +227,12 @@ def main():
     os.makedirs(out, exist_ok=True)
     idxs = [only] if only is not None else range(M)
     for k in idxs:
-        ang = 2 * np.pi * k / M
-        img = frame(P, colors, radii, edges, pal, edge_t, e_src, e_dst, inter, ang, res)
+        p = k / M
+        P = morph(p, N, Opt, C).astype(np.float32)
+        az = 2 * np.pi * p                                   # one horizontal turn
+        tilt = np.radians(6.0 + 24.0 * np.sin(2 * np.pi * p))  # vertical sweep
+        img = frame(P, colors, radii, edges, pal, edge_t, e_src, e_dst, inter,
+                    az, tilt, res)
         write_ppm(os.path.join(out, f"orbit_{k:05d}.ppm"), img)
     print(f"rendered {len(list(idxs)) if only is None else 1} frame(s) -> {out}")
 
