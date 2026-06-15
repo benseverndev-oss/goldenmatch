@@ -38,11 +38,10 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import json
-import os
 import sys
 import textwrap
 import time
-from typing import Any, Optional
+from typing import Any
 
 MODEL = "claude-opus-4-8"
 
@@ -660,7 +659,7 @@ def _mock_response(schema: dict, label: str) -> dict:
 # --------------------------------------------------------------------------- #
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         description="Survey, structure, invent, and sanity-check string-similarity algorithms.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
