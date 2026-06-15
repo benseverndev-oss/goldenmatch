@@ -1,0 +1,329 @@
+{
+  "_meta": {
+    "note": "Python AgentSession goldens for the TS port (Wave 1). No nulls (polars n_unique counts null; TS does not). domain_extraction omitted (Python hits/len(signals) vs TS detectDomain score/10 -- TS-unit-tested only)."
+  },
+  "rows_cases": [
+    {
+      "name": "sensitive",
+      "rows": [
+        {
+          "ssn": "111-22-3333",
+          "name": "Alice"
+        },
+        {
+          "ssn": "444-55-6666",
+          "name": "Bob"
+        },
+        {
+          "ssn": "777-88-9999",
+          "name": "Carol"
+        }
+      ],
+      "analyze": {
+        "profile": {
+          "row_count": 3,
+          "fields": [
+            {
+              "name": "ssn",
+              "type": "string",
+              "uniqueness": 1.0,
+              "null_rate": 0.0,
+              "avg_length": 11.0
+            },
+            {
+              "name": "name",
+              "type": "string",
+              "uniqueness": 1.0,
+              "null_rate": 0.0,
+              "avg_length": 4.3
+            }
+          ],
+          "has_sensitive": true
+        },
+        "strategy": "pprl",
+        "why": "Sensitive fields detected; using privacy-preserving record linkage.",
+        "domain": null,
+        "strong_ids": [],
+        "fuzzy_fields": [],
+        "backend": null,
+        "auto_execute": false,
+        "alternatives": [
+          {
+            "strategy": "fellegi_sunter",
+            "why_not": "Probabilistic model available for automatic parameter estimation."
+          }
+        ]
+      }
+    },
+    {
+      "name": "strong_id_only",
+      "rows": [
+        {
+          "customer_id": "C001",
+          "amount": "100"
+        },
+        {
+          "customer_id": "C002",
+          "amount": "200"
+        },
+        {
+          "customer_id": "C003",
+          "amount": "300"
+        },
+        {
+          "customer_id": "C004",
+          "amount": "400"
+        },
+        {
+          "customer_id": "C005",
+          "amount": "500"
+        }
+      ],
+      "analyze": {
+        "profile": {
+          "row_count": 5,
+          "fields": [
+            {
+              "name": "customer_id",
+              "type": "string",
+              "uniqueness": 1.0,
+              "null_rate": 0.0,
+              "avg_length": 4.0
+            },
+            {
+              "name": "amount",
+              "type": "numeric",
+              "uniqueness": 1.0,
+              "null_rate": 0.0,
+              "avg_length": 0.0
+            }
+          ],
+          "has_sensitive": false
+        },
+        "strategy": "exact_only",
+        "why": "High-uniqueness fields (customer_id) with no fuzzy candidates.",
+        "domain": null,
+        "strong_ids": [
+          "customer_id"
+        ],
+        "fuzzy_fields": [],
+        "backend": null,
+        "auto_execute": true,
+        "alternatives": [
+          {
+            "strategy": "pprl",
+            "why_not": "No sensitive fields detected, but PPRL is available if data leaves your network."
+          },
+          {
+            "strategy": "fellegi_sunter",
+            "why_not": "Probabilistic model available for automatic parameter estimation."
+          }
+        ]
+      }
+    },
+    {
+      "name": "strong_plus_fuzzy",
+      "rows": [
+        {
+          "customer_id": "C001",
+          "full_name": "Alice Smith"
+        },
+        {
+          "customer_id": "C002",
+          "full_name": "Alice Smith"
+        },
+        {
+          "customer_id": "C003",
+          "full_name": "Bob Jones"
+        },
+        {
+          "customer_id": "C004",
+          "full_name": "Carol White"
+        },
+        {
+          "customer_id": "C005",
+          "full_name": "Dave Brown"
+        }
+      ],
+      "analyze": {
+        "profile": {
+          "row_count": 5,
+          "fields": [
+            {
+              "name": "customer_id",
+              "type": "string",
+              "uniqueness": 1.0,
+              "null_rate": 0.0,
+              "avg_length": 4.0
+            },
+            {
+              "name": "full_name",
+              "type": "string",
+              "uniqueness": 0.8,
+              "null_rate": 0.0,
+              "avg_length": 10.4
+            }
+          ],
+          "has_sensitive": false
+        },
+        "strategy": "exact_then_fuzzy",
+        "why": "Exact on customer_id; fuzzy on full_name.",
+        "domain": "people",
+        "strong_ids": [
+          "customer_id"
+        ],
+        "fuzzy_fields": [
+          "full_name"
+        ],
+        "backend": null,
+        "auto_execute": true,
+        "alternatives": [
+          {
+            "strategy": "pprl",
+            "why_not": "No sensitive fields detected, but PPRL is available if data leaves your network."
+          },
+          {
+            "strategy": "fellegi_sunter",
+            "why_not": "Probabilistic model available for automatic parameter estimation."
+          }
+        ]
+      }
+    },
+    {
+      "name": "fuzzy_only",
+      "rows": [
+        {
+          "full_name": "Alice Smith"
+        },
+        {
+          "full_name": "Alice Smith"
+        },
+        {
+          "full_name": "Bob Jones"
+        },
+        {
+          "full_name": "Carol White"
+        }
+      ],
+      "analyze": {
+        "profile": {
+          "row_count": 4,
+          "fields": [
+            {
+              "name": "full_name",
+              "type": "string",
+              "uniqueness": 0.75,
+              "null_rate": 0.0,
+              "avg_length": 10.5
+            }
+          ],
+          "has_sensitive": false
+        },
+        "strategy": "fuzzy",
+        "why": "Fuzzy matching on full_name.",
+        "domain": "people",
+        "strong_ids": [],
+        "fuzzy_fields": [
+          "full_name"
+        ],
+        "backend": null,
+        "auto_execute": true,
+        "alternatives": [
+          {
+            "strategy": "pprl",
+            "why_not": "No sensitive fields detected, but PPRL is available if data leaves your network."
+          },
+          {
+            "strategy": "fellegi_sunter",
+            "why_not": "Probabilistic model available for automatic parameter estimation."
+          }
+        ]
+      }
+    },
+    {
+      "name": "fallback_numeric_only",
+      "rows": [
+        {
+          "v1": "10",
+          "v2": "20"
+        },
+        {
+          "v1": "11",
+          "v2": "21"
+        },
+        {
+          "v1": "12",
+          "v2": "22"
+        }
+      ],
+      "analyze": {
+        "profile": {
+          "row_count": 3,
+          "fields": [
+            {
+              "name": "v1",
+              "type": "numeric",
+              "uniqueness": 1.0,
+              "null_rate": 0.0,
+              "avg_length": 0.0
+            },
+            {
+              "name": "v2",
+              "type": "numeric",
+              "uniqueness": 1.0,
+              "null_rate": 0.0,
+              "avg_length": 0.0
+            }
+          ],
+          "has_sensitive": false
+        },
+        "strategy": "fuzzy",
+        "why": "No strong identifiers found; defaulting to fuzzy matching.",
+        "domain": null,
+        "strong_ids": [],
+        "fuzzy_fields": [],
+        "backend": null,
+        "auto_execute": true,
+        "alternatives": [
+          {
+            "strategy": "pprl",
+            "why_not": "No sensitive fields detected, but PPRL is available if data leaves your network."
+          },
+          {
+            "strategy": "fellegi_sunter",
+            "why_not": "Probabilistic model available for automatic parameter estimation."
+          }
+        ]
+      }
+    }
+  ],
+  "profile_cases": [
+    {
+      "name": "large_ray",
+      "profile": {
+        "row_count": 600000,
+        "fields": [
+          {
+            "name": "customer_id",
+            "type": "string",
+            "uniqueness": 0.99,
+            "null_rate": 0.0,
+            "avg_length": 8.0
+          }
+        ],
+        "has_sensitive": false
+      },
+      "decision": {
+        "strategy": "exact_only",
+        "why": "High-uniqueness fields (customer_id) with no fuzzy candidates.",
+        "domain": null,
+        "strong_ids": [
+          "customer_id"
+        ],
+        "fuzzy_fields": [],
+        "backend": "ray",
+        "auto_execute": true
+      }
+    }
+  ]
+}
