@@ -225,6 +225,60 @@ form, not the base64 universal loader. Per the reversibility commitment, R2 (col
 first scorer behind a reversible default-flip flag) may proceed — still additive, parity-gated,
 one reversible flag per step.
 
+### R2 (2026-06-15): executed first slice + a value RECALIBRATION
+
+Executing R2 on the levenshtein tracer surfaced a material recalibration of the whole
+collapse, and two of the four "pending" items turned out to be already-resolved or
+must-hold. Recorded here so R3+ is scoped to reality, not the original framing.
+
+**The recalibration (the reward is narrower than "delete N reimplementations"):**
+- **Python is already collapsed.** The default polars-direct path
+  (`_fuzzy_score_matrix` → `_native_field_matrix`) already prefers the `score-core`
+  kernel over rapidfuzz for jaro_winkler / levenshtein / token_sort / exact /
+  soundex_match when the wheel is importable; parity is already gated
+  (`test_native_field_matrix_parity.py`). R2 on Python is governance, not a risky flip.
+- **TS cannot flip default.** WASM stays opt-in for edge-safety, so the pure-TS scorer
+  MUST remain the default + fallback. R2 doesn't reduce TS maintenance.
+- **The pure paths are load-bearing fallbacks** (Python no-wheel installs; TS always),
+  so **R5 "decommission" cannot delete the default-path scorers.** Realistic end-state:
+  *kernel = governed canonical fast path; pure = fallback; the parity harnesses stay as
+  kernel-vs-pure equivalence gates* (not cross-language reimplementation gates).
+  **R5 (deletion) is retired.**
+
+**R2 first slice — SHIPPED (#980):** brought field scoring under the reversible
+`GOLDENMATCH_NATIVE` gate. `_native_field_matrix` previously checked only
+`native is not None`, so `GOLDENMATCH_NATIVE=0` did NOT force the pure path — a latent
+reversibility gap. Now it consults `native_enabled("field_scoring")` (`=0` forces pure,
+`=1` requires native, `auto` uses native iff signed off), and `field_scoring` is in
+`_GATED_ON` so the default is unchanged. Output is byte-identical (proven); only WHICH
+path runs is now reversible + telemetered. Verified 138/138 scorer + 11/11 field-matrix
+parity (incl. 3 new gate tests).
+
+**Kill-criterion (1) SQL surface — was NOT pending; it is GATED (correction to the R1
+verdict above).** `tests/test_datafusion_ffi_udf.py::test_ffi_string_scorers_match_rapidfuzz`
+already stands up a real DataFusion `SessionContext`, registers the FFI scalar UDFs, runs
+`SELECT jaro_winkler/token_sort/levenshtein(a,b)` and asserts each == rapidfuzz (the pure
+lib) at 1e-6 (token_sort `/100` accounted). It runs LIVE in CI (`ci.yml` installs
+`datafusion>=53,<54`, builds + installs the `goldenmatch_datafusion_udf` wheel, hard-imports
+it). So **all three bindings — Python, TS/WASM, SQL — have a live runtime `==pure` gate**;
+kill-criterion (1) is fully cleared, not partial.
+
+**`pprl_bloom` — investigated for the R2 governance set, deliberately HELD default-off.**
+Parity battery green (26 tests) and the kernel is **7.08× faster, byte-identical output**
+(measure-first). BUT `native/src/bloom.rs` fans out with an **unconditional
+`prepared.par_iter()`** — no `GOLDENMATCH_NATIVE_RAYON_MIN_*` threshold guard, unlike the
+#692 fix in `score.rs`. That is the exact **#688 rayon-`LockLatch` futex-park class**, and
+it reproduces only on the 8-core EPYC `ubuntu-latest-xlarge` runner that **R1-B confirmed
+won't provision** — so it cannot be cleared in this org's CI. Flipping `pprl_bloom` into
+`_GATED_ON` would ship an unvalidatable #688-class risk; it stays default-off (`=1` opt-in)
+until the kernel gets the #692-style calling-thread-below-threshold guard (a kernel change +
+wheel republish, NOT a cheap follow-up).
+
+**R2 verdict:** the concrete win (governed reversibility on field scoring + the confirmation
+that all three bindings are gated) is banked; the grand R3–R5 program is reframed to
+"govern any remaining ungoverned kernel defaults; keep parity gated" with **deletion (R5)
+retired** and `pprl_bloom`'s flip blocked on the unguarded-rayon fix.
+
 Two backward-compatible script flags back the gate: `--require-kernel`
 (kernel-absence → exit 1) and `--assert-not-slower` (perf cliff → exit 1); with
 neither flag the scripts keep the spike's skip-on-absent / exit-0 default. NO
