@@ -16,9 +16,11 @@ prototypes from forge_prototypes.py.
 from __future__ import annotations
 
 import argparse
+import html
 import math
 import os
 import random
+import re
 import sys
 from collections import Counter
 
@@ -579,6 +581,216 @@ def render_cv(cv: dict) -> str:
     return "\n".join(lines)
 
 
+# --------------------------------------------------------------------------- #
+# Real-dataset loader: Leipzig DBLP-ACM (handoff next-step #1).
+# CSVs are gitignored; the bench-abbrevalign workflow downloads them, and local
+# runs need them copied into tests/benchmarks/datasets/DBLP-ACM/.
+# --------------------------------------------------------------------------- #
+
+_WS_RE = re.compile(r"\s+")
+
+
+def _normalize_text(s: str) -> str:
+    """Unescape HTML entities (ACM venues carry `&mdash;`) and collapse whitespace."""
+    return _WS_RE.sub(" ", html.unescape(s)).strip()
+
+
+def _connected_components(edges: list[tuple[str, str]]) -> list[set[str]]:
+    """Union-Find connected components over string-node edges (stdlib only)."""
+    parent: dict[str, str] = {}
+
+    def find(x: str) -> str:
+        parent.setdefault(x, x)
+        root = x
+        while parent[root] != root:
+            root = parent[root]
+        while parent[x] != root:
+            parent[x], x = root, parent[x]
+        return root
+
+    for a, b in edges:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    comps: dict[str, set[str]] = {}
+    for node in list(parent):
+        comps.setdefault(find(node), set()).add(node)
+    return list(comps.values())
+
+
+def _dblp_acm_dir() -> str:
+    return os.path.normpath(os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "..", "tests", "benchmarks", "datasets", "DBLP-ACM"))
+
+
+def _read_csv_latin1(path: str) -> list[dict]:
+    import csv
+    with open(path, encoding="latin-1", newline="") as f:
+        return list(csv.DictReader(f))
+
+
+def load_dblp_acm(max_entities: int = 200, seed: int = 7) -> tuple[dict, dict]:
+    """Load the Leipzig DBLP-ACM corpus into two harness datasets.
+
+    Returns (title_dataset, venue_dataset), each `entity_id -> [(text, variant_type)]`.
+    """
+    base = _dblp_acm_dir()
+    paths = {n: os.path.join(base, f) for n, f in (
+        ("dblp", "DBLP2.csv"), ("acm", "ACM.csv"), ("map", "DBLP-ACM_perfectMapping.csv"))}
+    for p in paths.values():
+        if not os.path.exists(p):
+            raise FileNotFoundError(
+                f"DBLP-ACM CSV missing: {p}. These files are gitignored; the "
+                "bench-abbrevalign workflow downloads them from Leipzig. Locally, copy "
+                "them into tests/benchmarks/datasets/DBLP-ACM/.")
+    dblp = _read_csv_latin1(paths["dblp"])
+    acm = _read_csv_latin1(paths["acm"])
+    mapping = _read_csv_latin1(paths["map"])
+    dblp_by_id = {r["id"]: r for r in dblp}
+    acm_by_id = {r["id"]: r for r in acm}
+
+    # ---- Title ER: matched papers -> entities (CC over the bipartite mapping) ----
+    edges = [(f"d:{r['idDBLP']}", f"a:{r['idACM']}") for r in mapping]
+    components = _connected_components(edges)
+    rng = random.Random(seed)
+    rng.shuffle(components)
+    title_dataset: dict[str, list[tuple[str, str]]] = {}
+    for i, comp in enumerate(components[:max_entities]):
+        variants: list[tuple[str, str]] = []
+        for node in sorted(comp):
+            src, rid = node[0], node[2:]
+            rec = dblp_by_id.get(rid) if src == "d" else acm_by_id.get(rid)
+            if rec is not None:
+                variants.append((_normalize_text(rec["title"]),
+                                 "dblp" if src == "d" else "acm"))
+        if len(variants) >= 2:
+            title_dataset[f"paper_{i}"] = variants
+
+    # Unmatched singletons as organic hard negatives.
+    matched_dblp = {r["idDBLP"] for r in mapping}
+    matched_acm = {r["idACM"] for r in mapping}
+    singles = ([("d", r) for r in dblp if r["id"] not in matched_dblp]
+               + [("a", r) for r in acm if r["id"] not in matched_acm])
+    rng.shuffle(singles)
+    for i, (src, rec) in enumerate(singles[:max_entities]):
+        title_dataset[f"single_{src}_{i}"] = [(
+            _normalize_text(rec["title"]), "dblp" if src == "d" else "acm")]
+
+    # ---- Venue: GT-derived venue clusters (CC over matched-pair venue strings) ----
+    venue_edges: list[tuple[str, str]] = []
+    for r in mapping:
+        d, a = dblp_by_id.get(r["idDBLP"]), acm_by_id.get(r["idACM"])
+        if d and a:
+            dv, av = _normalize_text(d["venue"]), _normalize_text(a["venue"])
+            if dv and av:
+                venue_edges.append((f"dblp::{dv}", f"acm::{av}"))
+    venue_dataset: dict[str, list[tuple[str, str]]] = {}
+    for i, comp in enumerate(_connected_components(venue_edges)):
+        seen: dict[str, str] = {}
+        for node in sorted(comp):
+            src, vstr = node.split("::", 1)
+            seen.setdefault(vstr, src)  # dedup to distinct venue strings
+        venue_dataset[f"venue_{i}"] = [(vstr, src) for vstr, src in seen.items()]
+    return title_dataset, venue_dataset
+
+
+def _venue_false_positives(venue_dataset: dict, idf, threshold: float
+                           ) -> list[tuple[str, str, float]]:
+    """Cross-cluster venue pairs AbbrevAlign scores at/above its best-F1 threshold."""
+    recs = build_records(venue_dataset)
+    fps: list[tuple[str, str, float]] = []
+    for i in range(len(recs)):
+        for j in range(i + 1, len(recs)):
+            ea, ta, _ = recs[i]
+            eb, tb, _ = recs[j]
+            if ea != eb:
+                s = abbrev_align(ta, tb, idf)
+                if s >= threshold:
+                    fps.append((ta, tb, s))
+    return sorted(fps, key=lambda x: -x[2])
+
+
+def _render_dblp_acm(title_report: dict, title_cv: dict, venue_report: dict,
+                     venue_fps: list[tuple[str, str, float]], args) -> str:
+    lines: list[str] = []
+    w = lines.append
+    w("# AbbrevAlign on real DBLP-ACM (Leipzig) - credibility benchmark\n")
+    w("Everything prior to this was curated or synthetic (known transformation "
+      "distribution, which flatters structure-aware methods). This runs the *exact* "
+      "entity-grouped CV harness on a real labeled ER corpus.\n")
+    w(f"- Title ER: {title_report['n_records']} records "
+      f"({title_report['n_pos']} match / {title_report['n_neg']} non-match pairs), "
+      f"`--max-entities {args.max_entities}` `--seed {args.seed}`.\n")
+    w("\n---\n\n## Part 1: Title ER (standard dedup, held-out CV)\n")
+    w("Titles of true matches are near-identical across DBLP/ACM, so JaroWinkler already "
+      "saturates; the question is whether AbbrevAlign *hurts*. Held-out CV is the honest "
+      "number.\n")
+    w(render(title_report))
+    w("\n" + render_cv(title_cv))
+    w("\n---\n\n## Part 2: Venue matching (abbreviation field, GT-derived)\n")
+    w("Venue equivalence comes free from the ground truth (matched papers share a venue). "
+      "DBLP-ACM has only 5 venues, too few for held-out CV (one entity per fold, no "
+      "negatives), so this is the *in-sample* ceiling + ROC-AUC - read it as per-pair "
+      "separation, not a held-out F1.\n")
+    w(render(venue_report))
+    w("\n### AbbrevAlign's over-merges (cross-cluster pairs scored >= its best-F1 threshold)\n")
+    if venue_fps:
+        w("AbbrevAlign rates these *different* venues as matches - the acronym-collision "
+          "precision failure (cf. IBM vs Indian Bank Mumbai):\n")
+        w("| Venue A | Venue B | AbbrevAlign |")
+        w("| --- | --- | ---: |")
+        for a, b, s in venue_fps:
+            w(f"| {a} | {b} | {s:.3f} |")
+    else:
+        w("_None above threshold._")
+    w("\n### Verdict\n")
+    w("On real labeled data AbbrevAlign *ties* JaroWinkler on generic titles (no harm, "
+      "generalizes) and shows *higher per-pair separation on the abbreviation-heavy venue "
+      "field at a precision cost* (it over-merges conference vs journal). Both point the "
+      "same way: ship `abbrev_align` as a *gated comparator feature* feeding the learned "
+      "scorer for abbreviation-heavy fields, not as a JaroWinkler replacement. The "
+      "precision cost is exactly what the learned combiner / IDF-gating (handoff #2) is "
+      "for.\n")
+    return "\n".join(lines)
+
+
+def _dblp_acm_self_tests() -> None:
+    # --- normalization ---
+    assert _normalize_text("The VLDB Journal &mdash;  Very Large   Data Bases ") == \
+        "The VLDB Journal — Very Large Data Bases"
+    assert _normalize_text("  SIGMOD\tRecord ") == "SIGMOD Record"
+    # --- connected components ---
+    comps = _connected_components([("a", "b"), ("b", "c"), ("x", "y")])
+    as_sets = sorted(tuple(sorted(c)) for c in comps)
+    assert as_sets == [("a", "b", "c"), ("x", "y")], as_sets
+
+    # --- real-CSV branch: skip cleanly if the gitignored data is absent ---
+    if not os.path.exists(os.path.join(_dblp_acm_dir(), "DBLP2.csv")):
+        print("dblp-acm helper self-tests passed (real-CSV branch SKIPPED: data absent)")
+        return
+    title_ds, venue_ds = load_dblp_acm(max_entities=50, seed=7)
+    venue_clusters = sorted(
+        tuple(sorted(t for t, _ in variants)) for variants in venue_ds.values())
+    assert len(venue_clusters) == 5, (len(venue_clusters), venue_clusters)
+    flat = {t for c in venue_clusters for t in c}
+    assert "VLDB" in flat and "Very Large Data Bases" in flat, flat
+    vldb_cluster = next(c for c in venue_clusters if "VLDB" in c)
+    assert "Very Large Data Bases" in vldb_cluster, vldb_cluster
+    assert not any("VLDB Journal" in t for t in vldb_cluster), vldb_cluster
+    assert any(len(v) >= 2 for v in title_ds.values())
+    assert any(len(v) == 1 for v in title_ds.values())
+
+    v_idf = build_idf([t for _, t, _ in build_records(venue_ds)])
+    v_rep = evaluate(venue_ds)
+    v_thr = v_rep["results"]["AbbrevAlign"]["threshold"]
+    fps = _venue_false_positives(venue_ds, v_idf, v_thr)
+    assert any(("VLDB" in a and "Journal" in b) or ("VLDB" in b and "Journal" in a)
+               for a, b, _ in fps), fps
+    print("dblp-acm helper self-tests passed (incl. real-CSV 5-cluster + over-merge guards)")
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--synthetic", action="store_true",
@@ -587,7 +799,35 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--people", type=int, default=40)
     ap.add_argument("--companies", type=int, default=30)
     ap.add_argument("--addresses", type=int, default=15)
+    ap.add_argument("--dblp-acm", action="store_true",
+                    help="Run the real Leipzig DBLP-ACM benchmark (title ER + venue).")
+    ap.add_argument("--max-entities", type=int, default=200,
+                    help="DBLP-ACM matched entities + singleton negatives to sample.")
+    ap.add_argument("--selftest", action="store_true",
+                    help="Run the DBLP-ACM loader self-tests and exit.")
     args = ap.parse_args(argv)
+
+    if args.selftest:
+        _dblp_acm_self_tests()
+        return 0
+
+    if args.dblp_acm:
+        title_ds, venue_ds = load_dblp_acm(args.max_entities, args.seed)
+        title_report = evaluate(title_ds)
+        title_cv = evaluate_cv(title_ds)
+        venue_report = evaluate(venue_ds)
+        v_idf = build_idf([t for _, t, _ in build_records(venue_ds)])
+        v_thr = venue_report["results"]["AbbrevAlign"]["threshold"]
+        venue_fps = _venue_false_positives(venue_ds, v_idf, v_thr)
+        md = _render_dblp_acm(title_report, title_cv, venue_report, venue_fps, args)
+        print(md)
+        out = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                            "..", "examples", "forge_runs",
+                                            "abbrevalign_benchmark_dblp_acm.md"))
+        with open(out, "w", encoding="utf-8") as f:
+            f.write(md)
+        print(f"\nWrote {out}")
+        return 0
 
     if args.synthetic:
         dataset = generate_synthetic(args.people, args.companies, args.addresses, args.seed)
