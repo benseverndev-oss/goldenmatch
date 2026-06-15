@@ -31,10 +31,21 @@ precision work (handoff #2), vectorization (handoff #4). Those are separate foll
 - `DBLP-ACM_perfectMapping.csv` (2224 pairs) — columns `idDBLP,idACM`, the cross-source
   ground-truth same-paper pairs.
 
-Already committed (not gitignored), so the benchmark is **zero-network** — preserving the
-handoff's "runs under any network policy" property. The loader anchors paths to `__file__`
-(`scripts/` is the CWD locally but repo-root in CI — the repo's documented fixture-path
-gotcha). If the files are absent it raises a clear error; there is **no** download fallback.
+**Provisioning (corrected — these files are gitignored, NOT committed).**
+`tests/benchmarks/datasets/` is matched by `packages/python/goldenmatch/.gitignore:17`, so the
+CSVs are absent from a fresh checkout (a GH runner, or this worktree). The repo's established
+pattern — used by `benchmarks.yml` and `eval-benchmarks.yml` — is to **download** DBLP-ACM at
+job time from Leipzig (`https://dbs.uni-leipzig.de/file/DBLP-ACM.zip`), with a mirror override
+via the `GOLDENMATCH_DBLP_ACM_URL` repo variable. So this benchmark is **not** zero-network;
+that was never required (the benchmark already needs network for `pip install rapidfuzz`). The
+new workflow reuses `eval-benchmarks.yml`'s exact `curl`+`unzip`+`cp` "Fetch DBLP-ACM (if
+needed)" step. The loader reads the standard path (anchored to `__file__` — `scripts/` is CWD
+locally but repo-root in CI, the documented fixture-path gotcha) and raises a clear error if
+absent; the workflow's download step guarantees presence on the runner.
+
+> Not used: `packages/python/infermap/benchmark/cases/valentine/magellan/dblp_acm_003/` is a
+> committed but *different* (smaller Valentine/Magellan) DBLP-ACM cut with a different GT
+> format — not the Leipzig 2616/2294-row corpus this benchmark targets.
 
 ## Two GT-derived evaluations
 
@@ -114,26 +125,34 @@ All changes in `packages/python/goldenmatch/scripts/`:
     guard) — **no harness change required**.
 - `.github/workflows/bench-abbrevalign.yml` — new, `workflow_dispatch` only, modeled on the
   existing `bench-*.yml`. `runs-on: large-new-64GB` (repo convention for bench/eval lanes).
-  Steps: checkout → setup Python → `pip install rapidfuzz==3.14.5` → run
-  `python bench_abbrevalign.py --dblp-acm` from `scripts/` → write the report to
-  `$GITHUB_STEP_SUMMARY` → upload it as an artifact. On-demand and isolated; **not** folded
-  into `run_benchmarks.py`/`benchmarks.yml` because this is a standalone research artifact.
+  Steps: checkout → setup Python → `pip install rapidfuzz==3.14.5` → **Fetch DBLP-ACM (if
+  needed)** — the exact `curl https://dbs.uni-leipzig.de/file/DBLP-ACM.zip`+`unzip`+`cp` step
+  copied from `eval-benchmarks.yml`, honoring `GOLDENMATCH_DBLP_ACM_URL` (`vars.DBLP_ACM_URL`)
+  as a mirror override → run `python bench_abbrevalign.py --dblp-acm` from `scripts/` → write
+  the report to `$GITHUB_STEP_SUMMARY` → upload it as an artifact, and commit the report back
+  to the branch. On-demand and isolated; **not** folded into `run_benchmarks.py`/
+  `benchmarks.yml` because this is a standalone research artifact.
 
 ## Testing / gates
 
-- A small in-file self-test for `load_dblp_acm`'s graph logic: hand-built mapping →
-  assert correct connected components, assert normalization (`&mdash;`/whitespace) feeds the
-  distinct-string dedup, and assert the venue clusters from the real CSVs are exactly the
-  five listed above (a regression guard on the construction the deliverable rests on).
-  Runs under `python bench_abbrevalign.py --dblp-acm --selftest` (or a `_selftest()` invoked
+- A small in-file self-test for `load_dblp_acm`'s graph logic, in two parts:
+  - **Always runs** (no data needed): hand-built mapping → assert correct connected
+    components; assert normalization (`&mdash;`/whitespace) feeds the distinct-string dedup.
+  - **Runs only if the real CSVs are present** (else `skip` with a message — they're
+    gitignored, absent on a clean checkout): assert the venue clusters from the real CSVs are
+    exactly the five listed above (a regression guard on the construction the deliverable
+    rests on). On the GH runner the download step makes this branch run.
+  Invoked under `python bench_abbrevalign.py --dblp-acm --selftest` (or a `_selftest()`
   alongside the existing prototype self-tests — match the file's existing convention).
 - `ruff check` clean on the touched script — this is the real `scripts/` gate (`pyright`
   only runs on `pyrightconfig.json` changes; pytest does not import `scripts/`). Watch the
   rules that bit prior forge work: `F401`, `UP045` (`X | None`), `UP035` (`Callable` from
   `collections.abc`), `E401`.
-- Local validation is **loader-only** (build the datasets from the real CSVs, eyeball cluster
-  sizes / a few venue clusters) — fast. The full O(N²) `evaluate_cv` is **only** run on the
-  GH runner, per the "through GH runner" requirement and the memory-starved box.
+- Local validation is **loader-only** (build the datasets, eyeball cluster sizes / the five
+  venue clusters) — fast. Requires copying the cached CSVs from the main working tree into the
+  worktree's gitignored `tests/benchmarks/datasets/DBLP-ACM/` first (they don't materialize in
+  a worktree checkout). The full O(N²) `evaluate_cv` is **only** run on the GH runner, per the
+  "through GH runner" requirement and the memory-starved box.
 - Script stays pure-stdlib + rapidfuzz; no new dependency, no polars/goldenmatch import.
 
 ## Deliverable
