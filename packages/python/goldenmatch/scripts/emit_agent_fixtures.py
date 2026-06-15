@@ -28,10 +28,8 @@ from goldenmatch.core.agent import (
     AgentSession,
     DataProfile,
     FieldProfile,
-    profile_for_agent,
     select_strategy,
 )
-import polars as pl
 
 OUT = (
     Path(__file__).resolve().parents[3]
