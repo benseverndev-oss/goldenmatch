@@ -197,7 +197,14 @@ def _subseq_abbrev(a: str, b: str) -> float:
 def _abbrev_token_sim(a: str, b: str) -> float:
     if a == b:
         return 1.0
-    return max(jaro_winkler(a, b), _subseq_abbrev(a, b))
+    # v2: secondary similarity now also recognizes nickname/alias equivalence
+    # (Bob<->Robert), since abbreviation and nickname variation co-occur in real
+    # entity data and AbbrevAlign was otherwise blind to nicknames.
+    s = max(jaro_winkler(a, b), _subseq_abbrev(a, b))
+    g1, g2 = _NICK_OF.get(a), _NICK_OF.get(b)
+    if g1 is not None and g1 == g2:
+        s = max(s, 0.95)
+    return s
 
 
 def _acronym_of_span(token: str, span: list[str]) -> bool:
@@ -782,6 +789,9 @@ def _self_tests() -> None:
     acro = abbrev_align("International Business Machines", "IBM", idf)
     assert acro > 0.95, acro
     assert acro > jaro_winkler("international business machines", "ibm")
+
+    # AbbrevAlign v2 also recovers nicknames (Bob == Robert) that v1 missed.
+    assert abbrev_align("Bob Smith", "Robert Smith", idf) > 0.9
 
     # NickGraph knows Bob == Robert; Jaro-Winkler does not.
     assert nick_graph_sim("Bob Brown", "Robert Brown") > 0.9

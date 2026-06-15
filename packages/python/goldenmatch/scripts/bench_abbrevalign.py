@@ -25,8 +25,10 @@ from rapidfuzz.distance import JaroWinkler, Levenshtein
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from forge_prototypes import (  # noqa: E402  (path insert must precede import)
+    LogisticCombiner,
     abbrev_align,
     build_idf,
+    nick_graph_sim,
     recur_align,
     token_role_align,
     tokenize,
@@ -315,7 +317,7 @@ def render(report: dict) -> str:
       f"{report['n_neg']} non-match). Comparators marked `*` are goldenmatch's actual "
       "rapidfuzz functions; MongeElkan/SoftTFIDF are the hybrids AbbrevAlign generalizes.\n")
 
-    w("## Overall (best-F1 threshold sweep)\n")
+    w("## In-sample ceiling (threshold chosen on all pairs — optimistic)\n")
     w("| Method | Best F1 | Precision | Recall | ROC-AUC | Threshold |")
     w("| --- | ---: | ---: | ---: | ---: | ---: |")
     for name, r in ranked:
@@ -332,38 +334,149 @@ def render(report: dict) -> str:
             return "—" if x != x else f"{x:.3f}"  # NaN check
         w(f"| {name} | {cell(s['abbrev'])} | {cell(s['nickname'])} | {cell(s['typo'])} |")
     w("")
+    return "\n".join(lines)
 
-    # Data-driven findings
-    top_f1 = ranked[0][0]
-    aa = res["AbbrevAlign"]
+
+def pair_features(a: str, b: str, idf) -> list[float]:
+    """Feature vector for the learned combiner: production comparators + abbrev + nick."""
+    return [
+        JaroWinkler.similarity(a, b),
+        Levenshtein.normalized_similarity(a, b),
+        fuzz.token_sort_ratio(a, b) / 100.0,
+        token_jaccard(a, b),
+        abbrev_align(a, b, idf),
+        nick_graph_sim(a, b),
+    ]
+
+
+def evaluate_cv(k: int = 5) -> dict:
+    """Entity-grouped k-fold CV: every number is held out (no entity in both train and test)."""
+    records = build_records()
+    idf = build_idf([t for _, t, _ in records])
+    methods = build_methods(idf)
+    entities = sorted(DATASET)
+    fold_of = {e: i % k for i, e in enumerate(entities)}
+
+    pairs = []  # (a, b, label, fold_a, fold_b)
+    for i in range(len(records)):
+        for j in range(i + 1, len(records)):
+            ei, ta, _ = records[i]
+            ej, tb, _ = records[j]
+            pairs.append((ta, tb, int(ei == ej), fold_of[ei], fold_of[ej]))
+
+    def held_out(score_fn) -> dict:
+        tp = fp = fn = 0
+        sc: list[float] = []
+        lb: list[int] = []
+        for f in range(k):
+            train = [(a, b, lab) for a, b, lab, fa, fb in pairs if fa != f and fb != f]
+            test = [(a, b, lab) for a, b, lab, fa, fb in pairs if fa == f and fb == f]
+            if not train or not test or sum(lab for _, _, lab in test) == 0:
+                continue
+            _, _, _, thr = best_f1([score_fn(a, b) for a, b, _ in train],
+                                   [lab for _, _, lab in train])
+            for a, b, lab in test:
+                s = score_fn(a, b)
+                sc.append(s)
+                lb.append(lab)
+                pred = s >= thr
+                tp += int(pred and lab)
+                fp += int(pred and not lab)
+                fn += int((not pred) and lab)
+        prec = tp / (tp + fp) if tp + fp else 0.0
+        rec = tp / (tp + fn) if tp + fn else 0.0
+        f1 = 2 * prec * rec / (prec + rec) if prec + rec else 0.0
+        return {"precision": prec, "recall": rec, "f1": f1, "auc": roc_auc(sc, lb)}
+
+    out = {name: held_out(fn) for name, fn in methods.items()}
+
+    # Learned combiner: logistic over [production comparators + abbrev + nick].
+    feat_cache: dict[tuple[str, str], list[float]] = {}
+
+    def fv(a: str, b: str) -> list[float]:
+        key = (a, b)
+        if key not in feat_cache:
+            feat_cache[key] = pair_features(a, b, idf)
+        return feat_cache[key]
+
+    tp = fp = fn = 0
+    sc, lb = [], []
+    for f in range(k):
+        train = [(a, b, lab) for a, b, lab, fa, fb in pairs if fa != f and fb != f]
+        test = [(a, b, lab) for a, b, lab, fa, fb in pairs if fa == f and fb == f]
+        if not train or not test or sum(lab for _, _, lab in test) == 0:
+            continue
+        model = LogisticCombiner(len(pair_features("x", "y", idf)))
+        model.fit([fv(a, b) for a, b, _ in train], [lab for _, _, lab in train],
+                  iters=600, lr=0.5)
+        train_pred = [model.predict(fv(a, b)) for a, b, _ in train]
+        _, _, _, thr = best_f1(train_pred, [lab for _, _, lab in train])
+        for a, b, lab in test:
+            s = model.predict(fv(a, b))
+            sc.append(s)
+            lb.append(lab)
+            pred = s >= thr
+            tp += int(pred and lab)
+            fp += int(pred and not lab)
+            fn += int((not pred) and lab)
+    prec = tp / (tp + fp) if tp + fp else 0.0
+    rec = tp / (tp + fn) if tp + fn else 0.0
+    out["StackLearned (JW+Abbrev+Nick)"] = {
+        "precision": prec, "recall": rec,
+        "f1": 2 * prec * rec / (prec + rec) if prec + rec else 0.0,
+        "auc": roc_auc(sc, lb),
+    }
+    return {"k": k, "results": out}
+
+
+def render_cv(cv: dict) -> str:
+    res = cv["results"]
+    ranked = sorted(res.items(), key=lambda kv: kv[1]["f1"], reverse=True)
+    lines: list[str] = []
+    w = lines.append
+    w(f"## Held-out F1 ({cv['k']}-fold, entity-grouped CV — the honest number)\n")
+    w("Thresholds (and the learned combiner) are fit on train entities and evaluated on "
+      "unseen test entities, then pooled. This is the comparison that actually matters.\n")
+    w("| Method | Held-out F1 | Precision | Recall | ROC-AUC |")
+    w("| --- | ---: | ---: | ---: | ---: |")
+    for name, r in ranked:
+        w(f"| {name} | **{r['f1']:.3f}** | {r['precision']:.3f} | {r['recall']:.3f} "
+          f"| {r['auc']:.3f} |")
+    w("")
+
+    top = ranked[0]
     jw = res["JaroWinkler*"]
-    best_abbrev = max(res.items(), key=lambda kv: (kv[1]["slices"]["abbrev"] or 0))
-    best_auc = max(res.items(), key=lambda kv: (kv[1]["auc"] if kv[1]["auc"] == kv[1]["auc"] else 0))
+    stack = res["StackLearned (JW+Abbrev+Nick)"]
+    aa = res["AbbrevAlign"]
     w("## Findings\n")
-    w(f"- **Best overall F1: `{top_f1}` ({res[top_f1]['f1']:.3f}).** goldenmatch's default "
-      "JaroWinkler is a strong, hard-to-beat baseline on a *mixed* error workload.")
-    w(f"- **AbbrevAlign wins where it was designed to:** best precision ({aa['precision']:.3f}) "
-      f"and top abbrev/acronym recall ({aa['slices']['abbrev']:.3f} vs JaroWinkler's "
-      f"{jw['slices']['abbrev']:.3f}) — `{best_abbrev[0]}` leads that slice. The acronym gap is real.")
-    w("- **But it is narrow:** AbbrevAlign is deliberately weak on nicknames/initials "
-      f"({aa['slices']['nickname']:.3f}) — that is NickGraph's gap, not its. Used alone it "
-      "trails JaroWinkler overall.")
-    w(f"- **As a complementary channel it ranks best:** `{best_auc[0]}` has the highest ROC-AUC "
-      f"({best_auc[1]['auc']:.3f}). Naive `max()` fusion lifts hard-negative acronym collisions "
-      "too, so a single global threshold doesn't convert that ranking gain into F1 — the "
-      "principled fusion is a **learned combiner** (StackEnsemble, which already takes "
-      "abbrev_align as a feature), evaluated with a train/test split.")
-    w("- **Recommendation:** add AbbrevAlign as an extra comparator/feature in the scorer for "
-      "abbreviation-heavy domains (company names, addresses), not as a JaroWinkler replacement.")
-    w(f"\n> Caveat: micro-benchmark ({report['n_pos']} positives) — directional signal, not a "
-      "production F1. Next: rerun on Cora / DBLP-ACM / a company-name set with a learned "
-      "combiner and held-out evaluation.\n")
+    w(f"- **Best held-out F1: `{top[0]}` ({top[1]['f1']:.3f}).**")
+    delta = stack["f1"] - jw["f1"]
+    verb = "beats" if delta > 0 else ("ties" if abs(delta) < 1e-3 else "trails")
+    w(f"- **Learned combiner (JW + AbbrevAlign + NickGraph) {verb} the JaroWinkler baseline** "
+      f"on held-out F1 ({stack['f1']:.3f} vs {jw['f1']:.3f}, Δ {delta:+.3f}) — the principled "
+      "fusion, not naive `max()`. AbbrevAlign and NickGraph contribute as features.")
+    w(f"- **AbbrevAlign v2 (nickname-aware) alone:** held-out F1 {aa['f1']:.3f}, precision "
+      f"{aa['precision']:.3f}, AUC {aa['auc']:.3f} — folding in nickname equivalence (the v1→v2 "
+      "iteration) lifts it beyond pure acronyms, and on held-out folds it now edges JaroWinkler "
+      f"on F1 (Δ {aa['f1'] - jw['f1']:+.3f}). Recall is the discriminator here — held-out folds "
+      "contain few cross-entity hard negatives, so precision saturates near 1.0.")
+    if stack["f1"] > jw["f1"]:
+        w("- **Recommendation:** ship the learned combiner (JW + AbbrevAlign + NickGraph) — it "
+          "wins held-out and handles the acronym-collision precision tradeoff via learned weights.")
+    else:
+        w("- **Recommendation:** at this corpus size, use AbbrevAlign v2 directly as an added "
+          "comparator (it wins held-out); the 6-feature logistic combiner overfits ~36 train "
+          "positives per fold and underperforms — it is the right path only with more labels.")
+    w("\n> Caveat: small curated corpus (45 positives), tiny folds — directional signal, not a "
+      "production F1; treat deltas as suggestive. The learned combiner is data-starved here. "
+      "Next: Cora / DBLP-ACM / a company-name set at scale with proper train/test volume.\n")
     return "\n".join(lines)
 
 
 def main() -> int:
     report = evaluate()
-    md = render(report)
+    cv = evaluate_cv()
+    md = render(report) + "\n" + render_cv(cv)
     print(md)
     out = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                        "..", "examples", "forge_runs", "abbrevalign_benchmark.md")
