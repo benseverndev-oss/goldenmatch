@@ -1,0 +1,13 @@
+# Disable blank issues so reporters land on a form (or a contact link).
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability (private)
+    url: https://github.com/benseverndev-oss/goldenmatch/security/advisories/new
+    about: >-
+      Do NOT open a public issue for security reports. Open a private GitHub
+      Security Advisory instead. See SECURITY.md for scope and response targets.
+  - name: Question or usage help
+    url: https://github.com/benseverndev-oss/goldenmatch/discussions
+    about: >-
+      Ask in Discussions. Issues are for reproducible bugs and concrete feature
+      requests.
