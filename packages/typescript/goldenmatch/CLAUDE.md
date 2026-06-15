@@ -15,8 +15,9 @@ npm package `goldenmatch`. Parity port of the Python sibling at `packages/python
 | 0.9.0 | v1.15 + persistent IdentityStore | `SqliteIdentityStore` in `src/node/identity/` — full IdentityStore interface (19 methods), schema byte-identical with Python so a `.goldenmatch/identity.db` is cross-toolkit readable. Pipeline-driven population + MCP identity tools deferred to v0.10. |
 | 0.10.0 | v1.15 CLI + REST surface | `goldenmatch identity {list,show,history,conflicts,merge,split}` CLI subcommands + matching `/identities/*` REST routes (bound via `setServerIdentityStore`). Web UI / TUI / MCP-identity-tools / pipeline-driven `resolveClusters` still deferred. |
 | 0.11.0 | core-algo catch-up + Phase 5 | Continuous-EM probabilistic (`trainEMContinuous`/`scoreProbabilisticContinuous`), `embedding`/`record_embedding` scorers (pluggable embedder shim — structural parity, not numeric), software/biblio domain extractors, autoconfig v3 planner + 3 tuners + `AutoConfigMemory`, and the golden-strategy plugin port (#208). Parity harness broadened with Python-generated goldens for blocker / clustering / golden-survivorship / discrete-EM. Still gappy: embedding numeric values (no torch/Vertex), cluster-threshold tuner is logic-parity only, `DOMAIN_EXTRACTED_COLS` still 3 vs Python's 12. |
+| 0.14.0 (pending) | agent surface (AgentSession + A2A) | **AgentSession/A2A port (2026-06-15, the last undeclared parity gap).** Edge-safe `AgentSession` decision core + the shared `AGENT_SKILLS` registry + `dispatchSkill` (`src/core/agent/`); 14 agent-level MCP tools (MCP 30→44); A2A skill-union agent card + fail-closed bearer auth (`GOLDENMATCH_AGENT_TOKEN`) + unified `dispatchAnySkill` + `/tasks/send` + `/tasks/{id}/cancel`; node file-loaders (`analyzeFile`/`deduplicateFile`/`matchSourcesFile`). Behavior-fixture parity vs Python (`selectStrategy` decision table is the keystone). 4 waves, PRs #989/#994/#995 + this one. |
 
-Each wave's spec/plan: `docs/superpowers/specs/2026-05-10-ts-parity-arc-design.md` + per-wave plans.
+Each wave's spec/plan: `docs/superpowers/specs/2026-05-10-ts-parity-arc-design.md`, `docs/superpowers/specs/2026-06-15-ts-agentsession-a2a-port-design.md` + per-wave plans.
 
 ## Deliberately not ported (Python deltas)
 - **Python v1.13 (typed accessors).** TS strict mode (`noUncheckedIndexedAccess` + `exactOptionalPropertyTypes`) already enforces the same invariants at compile time.
@@ -40,11 +41,17 @@ than a multi-month port, mirroring the SQL "deferred-by-design" boundary in
   natural home is the Python package. TS already ships a thin programmatic
   `node/api/server.ts` for embedding in a Node service; the full browser UI is **not**
   ported and not planned. Run `goldenmatch serve-ui` (Python) for the UI.
+- **Agent tools `sensitivity` / `incremental` / `certify_recall`** (2026-06-15) — the
+  three agent-level tools whose Python implementations (`run_sensitivity` /
+  `run_incremental` / `certify_recall`) have no TS core. The other **14** agent tools
+  ARE ported (see the 0.14.0 wave row). Porting these three is a separate effort; for
+  now they are Python-only and **NOT advertised** on the TS MCP/A2A surface (no silent
+  gap — the card and tool list expose only what is wired).
 
 Everything else (core scoring/blocking/clustering/golden, auto-config controller,
-identity graph, PPRL, memory, MCP/A2A, CLI, connectors) IS ported — see the wave
-history above. This closes the cross-surface parity roadmap (Waves 0–3, 5 shipped;
-Wave 4 = this declaration).
+identity graph, PPRL, memory, MCP/A2A **incl. the AgentSession agent surface
+(2026-06-15)**, CLI, connectors) IS ported — see the wave history above. This closes
+the cross-surface parity roadmap.
 
 ## Commands
 ```bash

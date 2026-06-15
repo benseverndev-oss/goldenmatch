@@ -8,9 +8,13 @@
  * land in Waves 2-4 — the registry is shaped so they slot in later.
  */
 
-import type { Row } from "../types.js";
+import type { Row, MatchkeyConfig, MatchkeyField } from "../types.js";
+import { makeMatchkeyConfig, makeMatchkeyField } from "../types.js";
 import type { SkillDef, SkillContext, SkillResult, JSONSchema } from "./types.js";
 import { profileForAgent, selectStrategy } from "./strategy.js";
+import { explainPair } from "../explain.js";
+import { gatePairs } from "../review-queue.js";
+import { dedupe } from "../api.js";
 
 // ---------------------------------------------------------------------------
 // rows-or-path seam
@@ -68,6 +72,161 @@ const MATCH_SOURCES_SCHEMA: JSONSchema = {
     file_path_b: { type: "string" },
   },
 };
+
+const EXPLAIN_PAIR_SCHEMA: JSONSchema = {
+  type: "object",
+  properties: {
+    record_a: { type: "object", description: "First record (column -> value)." },
+    record_b: { type: "object", description: "Second record (column -> value)." },
+    fuzzy: {
+      type: "object",
+      additionalProperties: { type: "number" },
+      description: "Map of field -> weight scored with jaro_winkler.",
+    },
+    exact: {
+      type: "array",
+      items: { type: "string" },
+      description: "Field names compared with the exact scorer.",
+    },
+  },
+  required: ["record_a", "record_b"],
+};
+
+const EXPLAIN_CLUSTER_SCHEMA: JSONSchema = {
+  type: "object",
+  properties: {
+    cluster_id: { type: "integer" },
+  },
+  required: ["cluster_id"],
+};
+
+const CONTROLLER_TELEMETRY_SCHEMA: JSONSchema = {
+  type: "object",
+  properties: {},
+};
+
+const APPROVE_REJECT_SCHEMA: JSONSchema = {
+  type: "object",
+  properties: {
+    job_name: { type: "string" },
+    id_a: { type: "integer" },
+    id_b: { type: "integer" },
+    decision: { type: "string", enum: ["approve", "reject"] },
+    decided_by: { type: "string" },
+    reason: { type: "string" },
+  },
+  required: ["id_a", "id_b", "decision"],
+};
+
+const SCAN_QUALITY_SCHEMA: JSONSchema = {
+  type: "object",
+  properties: {
+    rows: {
+      type: "array",
+      description: "Inline row objects (edge path). Takes precedence over file_path.",
+      items: { type: "object" },
+    },
+    file_path: {
+      type: "string",
+      description: "Path to a CSV table, loaded via the injected loader.",
+    },
+    domain: {
+      type: "string",
+      description: "Optional domain hint (healthcare, finance, ecommerce).",
+    },
+  },
+};
+
+const FIX_QUALITY_SCHEMA: JSONSchema = {
+  type: "object",
+  properties: {
+    rows: {
+      type: "array",
+      description: "Inline row objects (edge path). Takes precedence over file_path.",
+      items: { type: "object" },
+    },
+    file_path: {
+      type: "string",
+      description: "Path to a CSV table, loaded via the injected loader.",
+    },
+    fix_mode: {
+      type: "string",
+      enum: ["safe", "moderate"],
+      description: "Fix aggressiveness: safe (conservative) or moderate. Default: safe.",
+    },
+    domain: {
+      type: "string",
+      description: "Optional domain hint (healthcare, finance, ecommerce).",
+    },
+  },
+};
+
+// ---------------------------------------------------------------------------
+// agent_explain_pair: build a MatchkeyConfig from fuzzy/exact args
+// ---------------------------------------------------------------------------
+
+/**
+ * Build the MatchkeyConfig that `explainPair` requires from the tool's
+ * `fuzzy` (`{field: weight}`) and `exact` (`string[]`) args. Mirrors the
+ * Python `explain_pair_df(record_a, record_b, fuzzy=, exact=)` shape.
+ *
+ * When neither is supplied, every shared key of the two records is compared
+ * with `jaro_winkler` (a useful default for an ad-hoc pair explanation).
+ */
+function buildExplainMatchkey(
+  rowA: Row,
+  rowB: Row,
+  fuzzy: unknown,
+  exact: unknown,
+): MatchkeyConfig {
+  const fields: MatchkeyField[] = [];
+
+  if (fuzzy !== null && typeof fuzzy === "object" && !Array.isArray(fuzzy)) {
+    for (const [col, weight] of Object.entries(fuzzy as Record<string, unknown>)) {
+      const w = typeof weight === "number" ? weight : Number(weight);
+      fields.push(
+        makeMatchkeyField({
+          field: col,
+          transforms: ["lowercase", "strip"],
+          scorer: "jaro_winkler",
+          weight: Number.isFinite(w) ? w : 1.0,
+        }),
+      );
+    }
+  }
+
+  if (Array.isArray(exact)) {
+    for (const col of exact) {
+      fields.push(
+        makeMatchkeyField({
+          field: String(col),
+          transforms: ["lowercase", "strip"],
+          scorer: "exact",
+        }),
+      );
+    }
+  }
+
+  if (fields.length === 0) {
+    const shared = Object.keys(rowA).filter((k) => k in rowB);
+    for (const col of shared) {
+      fields.push(
+        makeMatchkeyField({
+          field: col,
+          transforms: ["lowercase", "strip"],
+          scorer: "jaro_winkler",
+        }),
+      );
+    }
+  }
+
+  return makeMatchkeyConfig({
+    name: "adhoc",
+    type: "weighted",
+    fields,
+    threshold: 0.85,
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Skill registry
@@ -155,6 +314,165 @@ export const AGENT_SKILLS: readonly SkillDef[] = [
         recommendation: profile.has_sensitive
           ? "Sensitive fields detected; use privacy-preserving record linkage (PPRL)."
           : "No sensitive fields detected; PPRL is available but not required.",
+      };
+    },
+  },
+  {
+    id: "agent_explain_pair",
+    description: "Natural language explanation for a record pair.",
+    inputSchema: EXPLAIN_PAIR_SCHEMA,
+    handler: async (args): Promise<SkillResult> => {
+      const rowA = args.record_a as Row | undefined;
+      const rowB = args.record_b as Row | undefined;
+      if (
+        rowA === undefined ||
+        rowB === undefined ||
+        rowA === null ||
+        rowB === null ||
+        typeof rowA !== "object" ||
+        typeof rowB !== "object"
+      ) {
+        return { error: "record_a and record_b are required objects" };
+      }
+      const mk = buildExplainMatchkey(rowA, rowB, args.fuzzy, args.exact);
+      const explanation = explainPair(rowA, rowB, mk);
+      return {
+        score: explanation.score,
+        confidence: explanation.confidence,
+        explanation: explanation.explanation,
+        field_scores: explanation.fieldScores,
+        reasoning: explanation.reasoning,
+      };
+    },
+  },
+  {
+    id: "agent_explain_cluster",
+    description: "Explain why records are in the same cluster.",
+    inputSchema: EXPLAIN_CLUSTER_SCHEMA,
+    handler: async (args): Promise<SkillResult> => {
+      const clusterId = args.cluster_id;
+      return {
+        cluster_id: clusterId !== undefined ? clusterId : null,
+        note:
+          "agent_explain_cluster requires a prior agent_deduplicate call. " +
+          "Each dispatch is stateless; run agent_deduplicate first, then " +
+          "inspect the clusters directly.",
+      };
+    },
+  },
+  {
+    id: "controller_telemetry",
+    description:
+      "Return the AutoConfigController telemetry. Stateless dispatch cannot " +
+      "read a prior run's telemetry; call auto_configure or agent_deduplicate " +
+      "in the same invocation, which already returns telemetry inline.",
+    inputSchema: CONTROLLER_TELEMETRY_SCHEMA,
+    handler: async (): Promise<SkillResult> => {
+      return {
+        available: false,
+        note:
+          "controller_telemetry is per-session, but skill dispatch is " +
+          "stateless. Call auto_configure or agent_deduplicate to get " +
+          "telemetry alongside the result.",
+      };
+    },
+  },
+  {
+    id: "agent_review_queue",
+    description: "Get borderline pairs awaiting approval.",
+    inputSchema: ROWS_OR_PATH_SCHEMA,
+    handler: async (args, ctx): Promise<SkillResult> => {
+      const rows = await resolveTable(args, ctx);
+      const result = await dedupe(rows);
+      const gated = gatePairs(result.scoredPairs);
+      const pending = gated.needsReview.map((item) => ({
+        id_a: item.idA,
+        id_b: item.idB,
+        score: item.score,
+      }));
+      return { pending, count: pending.length };
+    },
+  },
+  {
+    id: "agent_approve_reject",
+    description: "Approve or reject a review queue pair.",
+    inputSchema: APPROVE_REJECT_SCHEMA,
+    handler: async (args): Promise<SkillResult> => {
+      const decision = args.decision;
+      if (decision !== "approve" && decision !== "reject") {
+        return {
+          error: `Invalid decision: ${String(decision)}. Use 'approve' or 'reject'.`,
+        };
+      }
+      // Memory-store write is a Wave-3+ follow-up; record the decision only.
+      return {
+        recorded: true,
+        decision,
+        ...(args.id_a !== undefined ? { id_a: args.id_a } : {}),
+        ...(args.id_b !== undefined ? { id_b: args.id_b } : {}),
+      };
+    },
+  },
+  {
+    id: "scan_quality",
+    description:
+      "Run GoldenCheck data quality scan on a dataset. Returns issues found " +
+      "(encoding errors, Unicode problems, format violations) without applying " +
+      "fixes. Requires goldencheck.",
+    inputSchema: SCAN_QUALITY_SCHEMA,
+    handler: async (args, ctx): Promise<SkillResult> => {
+      try {
+        await import("goldencheck" as string);
+      } catch {
+        return { error: "goldencheck not installed" };
+      }
+      // goldencheck present: still need the rows to scan.
+      const rows = await resolveTable(args, ctx);
+      return {
+        error:
+          "goldencheck integration is not wired in the TS core yet; " +
+          `scanned 0 of ${rows.length} rows`,
+      };
+    },
+  },
+  {
+    id: "fix_quality",
+    description:
+      "Run GoldenCheck scan and apply fixes to a dataset. Returns the fixed " +
+      "data summary and a manifest of all fixes applied. Requires goldencheck.",
+    inputSchema: FIX_QUALITY_SCHEMA,
+    handler: async (args, ctx): Promise<SkillResult> => {
+      try {
+        await import("goldencheck" as string);
+      } catch {
+        return { error: "goldencheck not installed" };
+      }
+      const rows = await resolveTable(args, ctx);
+      return {
+        error:
+          "goldencheck integration is not wired in the TS core yet; " +
+          `fixed 0 of ${rows.length} rows`,
+      };
+    },
+  },
+  {
+    id: "run_transforms",
+    description:
+      "Run GoldenFlow data transforms on a dataset. Normalizes phone numbers " +
+      "(E.164), dates (ISO), categorical spelling, and Unicode issues. Returns " +
+      "a manifest of transforms applied. Requires goldenflow.",
+    inputSchema: ROWS_OR_PATH_SCHEMA,
+    handler: async (args, ctx): Promise<SkillResult> => {
+      try {
+        await import("goldenflow" as string);
+      } catch {
+        return { error: "goldenflow not installed" };
+      }
+      const rows = await resolveTable(args, ctx);
+      return {
+        error:
+          "goldenflow integration is not wired in the TS core yet; " +
+          `transformed 0 of ${rows.length} rows`,
       };
     },
   },

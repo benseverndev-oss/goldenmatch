@@ -31,6 +31,13 @@ export type {
 export { dedupeFile, matchFiles } from "./dedupe-file.js";
 export type { FileDedupeOptions, FileSpec } from "./dedupe-file.js";
 
+// Agent surface — file-loading entry points (load CSV/JSON -> AgentSession)
+export {
+  analyzeFile,
+  deduplicateFile,
+  matchSourcesFile,
+} from "./agent/session-file.js";
+
 // YAML config file I/O
 export { loadConfigFile, writeConfigFile } from "./config-file.js";
 
