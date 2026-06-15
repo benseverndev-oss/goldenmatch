@@ -181,3 +181,32 @@ describe("MCP server — handleTool dispatcher", () => {
     expect(result.field_count).toBe(1);
   });
 });
+
+describe("MCP server — agent tools wiring", () => {
+  it("TOOLS exposes 44 tools after the agent wave-2 merge", () => {
+    expect(TOOLS.length).toBe(44);
+  });
+
+  it("TOOLS includes the agent skill names", () => {
+    const names = new Set(TOOLS.map((t) => t.name));
+    for (const expected of [
+      "analyze_data",
+      "agent_explain_pair",
+      "agent_review_queue",
+      "scan_quality",
+      "run_transforms",
+    ]) {
+      expect(names.has(expected)).toBe(true);
+    }
+  });
+
+  it("routes an agent tool through handleTool", async () => {
+    const result = (await handleTool("analyze_data", {
+      rows: [
+        { id: "1", name: "Alice" },
+        { id: "2", name: "Alyce" },
+      ],
+    })) as { strategy?: string };
+    expect(result.strategy).toBeDefined();
+  });
+});
