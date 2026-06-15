@@ -6,8 +6,8 @@ Abbreviation-heavy ER dataset: **50 records**, **1225 candidate pairs** (45 matc
 
 | Method | Best F1 | Precision | Recall | ROC-AUC | Threshold |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| AbbrevAlign | **0.860** | 0.902 | 0.822 | 0.934 | 0.909 |
-| JW∪AbbrevAlign | **0.851** | 0.881 | 0.822 | 0.985 | 0.909 |
+| AbbrevAlign | **0.884** | 0.840 | 0.933 | 0.951 | 0.828 |
+| JW∪AbbrevAlign | **0.870** | 0.851 | 0.889 | 0.996 | 0.855 |
 | JaroWinkler* | **0.779** | 0.740 | 0.822 | 0.979 | 0.692 |
 | PartialRatio* | **0.744** | 0.879 | 0.644 | 0.979 | 0.800 |
 | Levenshtein* | **0.719** | 0.727 | 0.711 | 0.840 | 0.478 |
@@ -22,8 +22,8 @@ Abbreviation-heavy ER dataset: **50 records**, **1225 candidate pairs** (45 matc
 
 | Method | Abbrev/acronym | Nickname/initial | Typo |
 | --- | ---: | ---: | ---: |
-| AbbrevAlign | 0.815 | 0.800 | 1.000 |
-| JW∪AbbrevAlign | 0.815 | 0.800 | 1.000 |
+| AbbrevAlign | 1.000 | 0.800 | 1.000 |
+| JW∪AbbrevAlign | 0.963 | 0.733 | 1.000 |
 | JaroWinkler* | 0.741 | 0.933 | 1.000 |
 | PartialRatio* | 0.519 | 0.800 | 1.000 |
 | Levenshtein* | 0.519 | 1.000 | 1.000 |
@@ -40,12 +40,12 @@ Thresholds (and the learned combiner) are fit on train entities and evaluated on
 
 | Method | Held-out F1 | Precision | Recall | ROC-AUC |
 | --- | ---: | ---: | ---: | ---: |
-| AbbrevAlign | **0.902** | 1.000 | 0.822 | 0.933 |
+| AbbrevAlign | **0.953** | 1.000 | 0.911 | 0.953 |
+| JW∪AbbrevAlign | **0.929** | 1.000 | 0.867 | 1.000 |
 | JaroWinkler* | **0.889** | 1.000 | 0.800 | 0.986 |
-| JW∪AbbrevAlign | **0.875** | 1.000 | 0.778 | 0.987 |
+| StackLearned (JW+Abbrev+Nick) | **0.861** | 1.000 | 0.756 | 0.990 |
 | PartialRatio* | **0.831** | 1.000 | 0.711 | 0.980 |
 | Levenshtein* | **0.816** | 1.000 | 0.689 | 0.852 |
-| StackLearned (JW+Abbrev+Nick) | **0.800** | 1.000 | 0.667 | 0.988 |
 | TokenSortRatio* | **0.784** | 1.000 | 0.644 | 0.818 |
 | SoftTFIDF | **0.784** | 1.000 | 0.644 | 0.854 |
 | TokenJaccard* | **0.767** | 1.000 | 0.622 | 0.820 |
@@ -55,9 +55,9 @@ Thresholds (and the learned combiner) are fit on train entities and evaluated on
 
 ## Findings
 
-- **Best held-out F1: `AbbrevAlign` (0.902).**
-- **Learned combiner (JW + AbbrevAlign + NickGraph) trails the JaroWinkler baseline** on held-out F1 (0.800 vs 0.889, Δ -0.089) — the principled fusion, not naive `max()`. AbbrevAlign and NickGraph contribute as features.
-- **AbbrevAlign v2 (nickname-aware) alone:** held-out F1 0.902, precision 1.000, AUC 0.933 — folding in nickname equivalence (the v1→v2 iteration) lifts it beyond pure acronyms, and on held-out folds it now edges JaroWinkler on F1 (Δ +0.014). Recall is the discriminator here — held-out folds contain few cross-entity hard negatives, so precision saturates near 1.0.
+- **Best held-out F1: `AbbrevAlign` (0.953).**
+- **Learned combiner (JW + AbbrevAlign + NickGraph) trails the JaroWinkler baseline** on held-out F1 (0.861 vs 0.889, Δ -0.028) — the principled fusion, not naive `max()`. AbbrevAlign and NickGraph contribute as features.
+- **AbbrevAlign (nickname- + stopword-acronym-aware) alone:** held-out F1 0.953, precision 1.000, AUC 0.953. Two iterations drove this: v2 folded in nickname equivalence (Bob=Robert), v3 made acronym matching skip stopwords (FBI<-Federal Bureau *of* Investigation). It now beats JaroWinkler on F1 (Δ +0.065). Recall is the discriminator — held-out folds contain few cross-entity hard negatives, so precision saturates near 1.0.
 - **Recommendation:** at this corpus size, use AbbrevAlign v2 directly as an added comparator (it wins held-out); the 6-feature logistic combiner overfits ~36 train positives per fold and underperforms — it is the right path only with more labels.
 
 > Caveat: small curated corpus (45 positives), tiny folds — directional signal, not a production F1; treat deltas as suggestive. The learned combiner is data-starved here. Next: Cora / DBLP-ACM / a company-name set at scale with proper train/test volume.

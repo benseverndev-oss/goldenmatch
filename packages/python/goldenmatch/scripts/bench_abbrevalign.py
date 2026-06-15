@@ -455,11 +455,12 @@ def render_cv(cv: dict) -> str:
     w(f"- **Learned combiner (JW + AbbrevAlign + NickGraph) {verb} the JaroWinkler baseline** "
       f"on held-out F1 ({stack['f1']:.3f} vs {jw['f1']:.3f}, Δ {delta:+.3f}) — the principled "
       "fusion, not naive `max()`. AbbrevAlign and NickGraph contribute as features.")
-    w(f"- **AbbrevAlign v2 (nickname-aware) alone:** held-out F1 {aa['f1']:.3f}, precision "
-      f"{aa['precision']:.3f}, AUC {aa['auc']:.3f} — folding in nickname equivalence (the v1→v2 "
-      "iteration) lifts it beyond pure acronyms, and on held-out folds it now edges JaroWinkler "
-      f"on F1 (Δ {aa['f1'] - jw['f1']:+.3f}). Recall is the discriminator here — held-out folds "
-      "contain few cross-entity hard negatives, so precision saturates near 1.0.")
+    w(f"- **AbbrevAlign (nickname- + stopword-acronym-aware) alone:** held-out F1 {aa['f1']:.3f}, "
+      f"precision {aa['precision']:.3f}, AUC {aa['auc']:.3f}. Two iterations drove this: v2 folded "
+      "in nickname equivalence (Bob=Robert), v3 made acronym matching skip stopwords "
+      f"(FBI<-Federal Bureau *of* Investigation). It now beats JaroWinkler on F1 (Δ {aa['f1'] - jw['f1']:+.3f}). "
+      "Recall is the discriminator — held-out folds contain few cross-entity hard negatives, so "
+      "precision saturates near 1.0.")
     if stack["f1"] > jw["f1"]:
         w("- **Recommendation:** ship the learned combiner (JW + AbbrevAlign + NickGraph) — it "
           "wins held-out and handles the acronym-collision precision tradeoff via learned weights.")

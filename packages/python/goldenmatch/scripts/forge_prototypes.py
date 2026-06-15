@@ -207,11 +207,34 @@ def _abbrev_token_sim(a: str, b: str) -> float:
     return s
 
 
-def _acronym_of_span(token: str, span: list[str]) -> bool:
-    return (
-        len(token) == len(span)
-        and all(part and part[0] == token[k] for k, part in enumerate(span))
-    )
+# Function words an acronym skips: FBI <- Federal Bureau *of* Investigation.
+_ACRONYM_STOP = {"of", "and", "the", "for", "to", "a", "an"}
+
+
+def _acronym_match(acr: str, tokens: list[str]) -> bool:
+    """True if `acr`'s letters are the initials of a run of content tokens (stopwords skipped).
+
+    v3: the run may skip stopwords, but every *content* token it passes through must
+    supply the next letter — so it stays tight (won't match an arbitrary subsequence).
+    """
+    if len(acr) < 2:
+        return False
+    for start in range(len(tokens)):
+        i = start
+        c = 0  # index into acr
+        while c < len(acr) and i < len(tokens):
+            tok = tokens[i]
+            if tok in _ACRONYM_STOP:
+                i += 1
+                continue
+            if tok and tok[0] == acr[c]:
+                c += 1
+                i += 1
+            else:
+                break
+        if c == len(acr):
+            return True
+    return False
 
 
 def _abbrev_direction(A: list[str], B: list[str], idf: Idf) -> float:
@@ -220,11 +243,8 @@ def _abbrev_direction(A: list[str], B: list[str], idf: Idf) -> float:
     num = den = 0.0
     for ta in A:
         best = max((_abbrev_token_sim(ta, tb) for tb in B), default=0.0)
-        k = len(ta)
-        for s in range(0, len(B) - k + 1):  # token -> contiguous span (acronym)
-            if _acronym_of_span(ta, B[s : s + k]):
-                best = 1.0
-                break
+        if _acronym_match(ta, B):  # token -> initials of a content-word run
+            best = 1.0
         num += idf(ta) * best
         den += idf(ta)
     return num / den if den else 0.0
@@ -792,6 +812,12 @@ def _self_tests() -> None:
 
     # AbbrevAlign v2 also recovers nicknames (Bob == Robert) that v1 missed.
     assert abbrev_align("Bob Smith", "Robert Smith", idf) > 0.9
+
+    # AbbrevAlign v3: acronyms that skip stopwords now match (the contiguous-span v1/v2 missed these).
+    assert abbrev_align("Federal Bureau of Investigation", "FBI", idf) > 0.95
+    assert abbrev_align("American Telephone and Telegraph", "ATT", idf) > 0.95
+    # ...but a non-acronym must not collide: "GE" is not "General Motors".
+    assert not _acronym_match("ge", tokenize("General Motors Company"))
 
     # NickGraph knows Bob == Robert; Jaro-Winkler does not.
     assert nick_graph_sim("Bob Brown", "Robert Brown") > 0.9
