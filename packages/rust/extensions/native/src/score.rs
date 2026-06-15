@@ -100,7 +100,7 @@ pub fn token_sort_ratio(a: &str, b: &str) -> f64 {
 /// pairs whose weighted score (sum(score*weight) / total_weight, with None
 /// values skipped) meets `threshold`, excluding `exclude`.
 ///
-/// Blocks are scored in parallel with `rayon` under `allow_threads` (the GIL is
+/// Blocks are scored in parallel with `rayon` under `detach` (the GIL is
 /// released for the whole compute — no Python objects are touched inside), so
 /// the kernel uses every core instead of relying on the caller's per-bucket
 /// thread pool. `par_iter().flat_map(...).collect()` preserves block order, so
@@ -135,7 +135,7 @@ pub fn score_block_pairs(
         offset += size;
     }
 
-    py.allow_threads(|| {
+    py.detach(|| {
         spans
             .par_iter()
             .flat_map_iter(|&(offset, size)| {
@@ -262,7 +262,7 @@ pub fn score_block_pairs_fs(
         }
     };
 
-    py.allow_threads(|| {
+    py.detach(|| {
         spans
             .par_iter()
             .flat_map_iter(|&(offset, size)| {
@@ -305,7 +305,7 @@ pub fn score_block_pairs_fs(
 /// A block-sorted Utf8 column read zero-copy from an Arrow buffer. Polars emits
 /// `LargeUtf8` (i64 offsets) by default; plain pyarrow string arrays are `Utf8`
 /// (i32). Both are owned (Arc-backed -> `Send + Sync`) so the rayon closure can
-/// borrow them across `allow_threads`.
+/// borrow them across `detach`.
 enum StrCol {
     Utf8(StringArray),
     Large(LargeStringArray),
@@ -478,7 +478,7 @@ pub fn score_block_pairs_arrow(
         .and_then(|v| v.parse().ok())
         .unwrap_or(20_000_000);
 
-    Ok(py.allow_threads(|| {
+    Ok(py.detach(|| {
         if total_pairs >= rayon_min_pairs {
             spans
                 .par_iter()
@@ -628,8 +628,8 @@ pub fn score_field_matrix(
         )));
     }
 
-    // Compute under allow_threads; build the flat (n*m) vec there.
-    let buf: Vec<f32> = py.allow_threads(|| match scorer_id {
+    // Compute under detach; build the flat (n*m) vec there.
+    let buf: Vec<f32> = py.detach(|| match scorer_id {
         // score_one returns [0,1] for ids 0-3 already (id=2 calls
         // fuzz::ratio which is [0,1] in rapidfuzz-rs, NOT the *100 scale
         // the PyO3-exposed token_sort_ratio uses).
@@ -693,8 +693,8 @@ pub fn score_field_pairwise(
         )));
     }
     let n = a.len();
-    // Score under allow_threads, row-parallel (each pair independent).
-    let buf: Vec<f32> = py.allow_threads(|| {
+    // Score under detach, row-parallel (each pair independent).
+    let buf: Vec<f32> = py.detach(|| {
         let mut out = vec![0.0f32; n];
         out.par_iter_mut().enumerate().for_each(|(i, slot)| {
             *slot = score_one(scorer_id, &a[i], &b[i]) as f32;

@@ -47,7 +47,7 @@ fn py_to_fpvalue(name: &str, value: &Bound<'_, PyAny>) -> PyResult<FpValue> {
         return Ok(FpValue::Str(value.extract()?));
     }
     if value.is_instance_of::<PyBytes>() {
-        return Ok(FpValue::Bytes(value.downcast::<PyBytes>()?.as_bytes().to_vec()));
+        return Ok(FpValue::Bytes(value.cast::<PyBytes>()?.as_bytes().to_vec()));
     }
     Err(PyTypeError::new_err(format!(
         "field {name:?}: unsupported value type (v1 record fingerprint is \
@@ -117,7 +117,7 @@ pub fn record_fingerprints_batch(
     // ---- Phase 2: par_iter SHA-256 + hex (GIL released). -------------------
     // Errors in fingerprint_fields are theoretically possible (canonicalization
     // edge cases) -- collect into Result<Vec, String> via try_fold-equivalent.
-    py.allow_threads(|| {
+    py.detach(|| {
         extracted
             .into_par_iter()
             .map(|fields| fingerprint_fields(fields).map_err(PyValueError::new_err))
@@ -187,10 +187,10 @@ pub fn record_fingerprints_batch_arrow(
     let n_rows = n_rows.unwrap_or(0);
 
     // Phase 2-equivalent: per-row, materialize the (name, FpValue)
-    // field list and compute SHA-256. par_iter under allow_threads
+    // field list and compute SHA-256. par_iter under detach
     // because rows are independent and Arrow reads release the GIL
     // (the buffers are owned by us at this point).
-    py.allow_threads(|| -> PyResult<PyArrowType<ArrayData>> {
+    py.detach(|| -> PyResult<PyArrowType<ArrayData>> {
         let hexes: PyResult<Vec<String>> = (0..n_rows)
             .into_par_iter()
             .map(|row| -> PyResult<String> {
