@@ -75,3 +75,49 @@
         ) }}
     {%- endif -%}
 {% endmacro %}
+
+
+{#--- Adapter-aware name for the autoconfig (plan) UDF. Snowflake intentionally
+       raises: the goldenmatch_autoconfig(table, mode) overload is DuckDB/Postgres
+       only in this release, so zero-config (which always emits the 2-arg mode
+       call) is unsupported there -- explicit match_config still works on Snowflake
+       because it never calls this macro. ---#}
+{% macro goldenmatch_autoconfig_fn_name(adapter_type) %}
+    {%- if adapter_type == 'postgres' -%}
+        {{ return('goldenmatch.goldenmatch_autoconfig') }}
+    {%- elif adapter_type == 'duckdb' -%}
+        {{ return('goldenmatch_autoconfig') }}
+    {%- elif adapter_type == 'snowflake' -%}
+        {{ exceptions.raise_compiler_error(
+            "Zero-config dedupe (probabilistic=true, or omitting match_config) is "
+            "not yet supported on Snowflake -- the goldenmatch_autoconfig(table, mode) "
+            "UDF is DuckDB/Postgres only in this release. Pass an explicit "
+            "match_config on Snowflake, or use the Python helper."
+        ) }}
+    {%- else -%}
+        {{ exceptions.raise_compiler_error(
+            "goldenmatch_dedupe is only supported on postgres, duckdb, snowflake; got " ~ adapter_type
+        ) }}
+    {%- endif -%}
+{% endmacro %}
+
+
+{#--- The SQL expression for the dedupe config argument:
+       explicit match_config -> a JSON string literal (today's path);
+       no match_config       -> a scalar-subquery plan call (zero-config). ---#}
+{% macro goldenmatch_dedupe_config_expr(match_config, probabilistic, staging_literal, adapter_type) %}
+    {%- if match_config is not none and probabilistic -%}
+        {{ exceptions.raise_compiler_error(
+            "Set either match_config (explicit config) or probabilistic=true "
+            "(zero-config Fellegi-Sunter), not both. To use FS with an explicit "
+            "config, declare type: probabilistic matchkeys in match_config and drop "
+            "the probabilistic flag."
+        ) }}
+    {%- elif match_config is not none -%}
+        {{ return(goldenmatch_dedupe_config_json(match_config)) }}
+    {%- else -%}
+        {%- set mode = 'probabilistic' if probabilistic else 'standard' -%}
+        {%- set fn = goldenmatch_autoconfig_fn_name(adapter_type) -%}
+        {{ return('(SELECT ' ~ fn ~ '(' ~ staging_literal ~ ", '" ~ mode ~ "'))") }}
+    {%- endif -%}
+{% endmacro %}
