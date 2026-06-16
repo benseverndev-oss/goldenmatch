@@ -1,5 +1,6 @@
 """Pairwise precision/recall/F1 over a clustering vs ground truth."""
 from __future__ import annotations
+
 from itertools import combinations
 
 

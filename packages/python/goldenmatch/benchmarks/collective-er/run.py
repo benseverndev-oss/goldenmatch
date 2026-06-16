@@ -42,7 +42,6 @@ os.environ.setdefault("POLARS_SKIP_CPU_CHECK", "1")
 # Imports (after path is set up)
 # ---------------------------------------------------------------------------
 import polars as pl  # noqa: E402
-
 from tests.collective_er.fixture import generate_relational_fixture  # noqa: E402
 from tests.collective_er.metrics import pairwise_prf  # noqa: E402
 
