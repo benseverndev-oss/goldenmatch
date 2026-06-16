@@ -1,0 +1,35 @@
+# Runs the in-cluster smoke (run_smoke.py) against the Sail driver Service.
+# Same image as the driver/workers, so the baked-in /data/smoke is present and
+# goldenmatch is importable. Image substituted at apply time from $SAIL_IMAGE.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: sail-smoke-bench
+  namespace: sail
+spec:
+  backoffLimit: 0
+  completions: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sail
+        app.kubernetes.io/component: smoke-bench
+    spec:
+      restartPolicy: Never
+      serviceAccountName: sail-user
+      containers:
+        - name: bench
+          image: ${SAIL_IMAGE}
+          command: ["python", "/app/run_smoke.py"]
+          imagePullPolicy: IfNotPresent
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+          env:
+            - name: SAIL_REMOTE
+              value: "sc://sail-spark-server.sail.svc.cluster.local:50051"
+            - name: SMOKE_DATA
+              value: "/data/smoke"
+            - name: RUST_LOG
+              value: info

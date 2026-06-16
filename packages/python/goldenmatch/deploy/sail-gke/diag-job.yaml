@@ -1,0 +1,35 @@
+# Diagnostic Job: runs diag.py (from the 'diag' ConfigMap) against the Sail
+# driver to isolate which pipeline stage wedges. Image substituted at apply.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: sail-diag
+  namespace: sail
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: diag
+    spec:
+      restartPolicy: Never
+      serviceAccountName: sail-user
+      volumes:
+        - name: diag
+          configMap:
+            name: diag
+      containers:
+        - name: diag
+          image: ${SAIL_IMAGE}
+          command: ["python", "/diag/diag.py"]
+          imagePullPolicy: IfNotPresent
+          resources:
+            requests:
+              cpu: "300m"
+              memory: "512Mi"
+          volumeMounts:
+            - name: diag
+              mountPath: /diag
+          env:
+            - name: SAIL_REMOTE
+              value: "sc://sail-spark-server.sail.svc.cluster.local:50051"
