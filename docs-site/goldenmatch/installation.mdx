@@ -127,6 +127,15 @@ packages:
 
 then run `dbt deps`. The package provides macros for running entity resolution, quality gates, transforms, and identity-graph reads inside dbt pipelines (DuckDB, Postgres, and Snowflake).
 
+Zero-config Fellegi-Sunter dedupe needs no hand-written config:
+
+```sql
+{{ config(materialized='goldenmatch_dedupe', probabilistic=true) }}
+SELECT * FROM {{ ref('stg_customers') }}
+```
+
+`probabilistic=true` builds the FS model from the data (DuckDB + Postgres). Omit it for standard zero-config dedupe, or pass an explicit `match_config` for full control.
+
 ## Verify installation
 
 ```bash

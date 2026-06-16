@@ -302,19 +302,39 @@ pub fn dedupe_full(rows_json: &str, config_json: &str) -> Result<DedupeResult, B
     })
 }
 
-/// Run AutoConfigController on the input rows and return the committed config
-/// plus telemetry. Does NOT run the dedupe pipeline.
+/// Run auto-config on the input rows and return the committed config plus
+/// telemetry. Does NOT run the dedupe pipeline.
+///
+/// `mode` selects the auto-config strategy:
+/// - `"standard"` -> `auto_configure_df` (the iterative AutoConfigController;
+///   exact + weighted matchkeys, sets `_LAST_CONTROLLER_RUN` telemetry).
+/// - `"probabilistic"` -> `auto_configure_probabilistic_df` (Fellegi-Sunter;
+///   a single `type="probabilistic"` matchkey). Non-iterative: it does NOT run
+///   the controller, so `_LAST_CONTROLLER_RUN` is unset and telemetry reports
+///   `{"available": false}`.
+///
+/// Any other `mode` is an `InvalidConfig` error.
 ///
 /// SQL-surface equivalent of the CLI `goldenmatch autoconfig <files>`.
 /// Callers typically pipe the returned `config_json` into a follow-up
 /// `dedupe_full()` call, or store it on a Postgres `_jobs` row.
-pub fn autoconfig(rows_json: &str) -> Result<AutoConfigResult, BridgeError> {
+pub fn autoconfig(rows_json: &str, mode: &str) -> Result<AutoConfigResult, BridgeError> {
     crate::init()?;
+
+    let fn_name = match mode {
+        "standard" => "auto_configure_df",
+        "probabilistic" => "auto_configure_probabilistic_df",
+        other => {
+            return Err(BridgeError::InvalidConfig(format!(
+                "unknown autoconfig mode '{other}' (expected 'standard' or 'probabilistic')"
+            )))
+        }
+    };
 
     Python::with_gil(|py| {
         let df = convert::json_to_polars_df(py, rows_json)?;
         let autoconfig_mod = py.import("goldenmatch.core.autoconfig")?;
-        let cfg = autoconfig_mod.call_method1("auto_configure_df", (df,))?;
+        let cfg = autoconfig_mod.call_method1(fn_name, (df,))?;
 
         // Read controller telemetry off the ContextVar set by auto_configure_df.
         let ctx_var = autoconfig_mod.getattr("_LAST_CONTROLLER_RUN")?;
@@ -1854,7 +1874,7 @@ mod tests {
 
     #[test]
     fn test_autoconfig_returns_config_and_telemetry() {
-        match autoconfig(two_row_json()) {
+        match autoconfig(two_row_json(), "standard") {
             Ok(result) => {
                 assert!(!result.config_json.is_empty(), "config_json empty");
                 assert!(!result.telemetry_json.is_empty(), "telemetry_json empty");
@@ -1868,6 +1888,33 @@ mod tests {
             }
             Err(e) => require_or_skip(e, "autoconfig_returns_config_and_telemetry"),
         }
+    }
+
+    #[test]
+    fn test_autoconfig_mode_probabilistic_builds_probabilistic_matchkeys() {
+        let rows = r#"[
+            {"name":"John Smith","city":"Austin","dob":"1980-01-01"},
+            {"name":"Jon Smith","city":"Austin","dob":"1980-01-01"},
+            {"name":"Jane Doe","city":"Dallas","dob":"1975-05-05"}
+        ]"#;
+        let res = autoconfig(rows, "probabilistic").expect("probabilistic autoconfig");
+        assert!(
+            res.config_json.contains("\"probabilistic\""),
+            "expected a probabilistic matchkey in config_json, got: {}",
+            res.config_json
+        );
+    }
+
+    #[test]
+    fn test_autoconfig_mode_standard_unchanged() {
+        let rows = r#"[{"name":"A","city":"X"},{"name":"A","city":"X"}]"#;
+        autoconfig(rows, "standard").expect("standard autoconfig");
+    }
+
+    #[test]
+    fn test_autoconfig_unknown_mode_errors() {
+        let rows = r#"[{"name":"A"}]"#;
+        assert!(autoconfig(rows, "bogus").is_err());
     }
 
     // ── match_tables ────────────────────────────────────────────────────────

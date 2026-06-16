@@ -10,7 +10,8 @@
 
       {{ config(
           materialized = 'goldenmatch_dedupe',
-          match_config = 'configs/customers.yaml',  -- file path or inline dict
+          match_config = 'configs/customers.yaml',  -- file path or inline dict; OMIT for zero-config
+          probabilistic = false,                     -- true => zero-config Fellegi-Sunter (Postgres+DuckDB)
           output = 'golden',                         -- golden|clusters|pairs
           memory_db_path = none,                     -- optional MemoryStore path
       ) }}
@@ -20,8 +21,12 @@
   ## Flow
 
   1. Body SQL -> CREATE TEMP TABLE (dbt's standard staging-of-input).
-  2. Resolve match_config: file path (read + JSON-stringify) OR dict
-     literal (JSON-stringify directly).
+  2. Resolve the config argument: an explicit match_config -> a JSON
+     string literal (file path read + JSON-stringify, OR dict
+     JSON-stringify); no match_config -> a scalar-subquery plan call
+     `goldenmatch_autoconfig(<staging>, <mode>)` where mode is
+     'probabilistic' when probabilistic=true else 'standard'
+     (zero-config; Postgres + DuckDB only).
   3. Pick the right warehouse function for the requested output:
      - golden   -> goldenmatch_dedupe_full     (Postgres + DuckDB + Snowflake)
      - clusters -> goldenmatch_dedupe_clusters (Postgres + Snowflake)
@@ -45,8 +50,9 @@
 
 
 {% materialization goldenmatch_dedupe, default %}
-    {#- Required config -#}
-    {%- set match_config = config.require('match_config') -%}
+    {#- Config -#}
+    {%- set match_config = config.get('match_config', none) -%}
+    {%- set probabilistic = config.get('probabilistic', false) -%}
     {%- set output_kind = config.get('output', 'golden') -%}
     {%- set memory_db_path = config.get('memory_db_path', none) -%}
 
@@ -61,7 +67,7 @@
 
     {%- set target_relation = this -%}
     {%- set staging_relation = make_temp_relation(target_relation, '__gm_stage') -%}
-    {%- set config_json_literal = dbt_goldensuite.goldenmatch_dedupe_config_json(match_config) -%}
+    {%- set config_expr = dbt_goldensuite.goldenmatch_dedupe_config_expr(match_config, probabilistic, dbt.string_literal(staging_relation.identifier), target.type) -%}
     {%- set fn_name = dbt_goldensuite.goldenmatch_dedupe_fn_name(output_kind, target.type) -%}
 
     {#- Step 1: stash body SQL into a TEMP table so the goldenmatch
@@ -82,7 +88,7 @@
         CREATE TABLE {{ target_relation }} AS
         SELECT * FROM {{ fn_name }}(
             {{ dbt.string_literal(staging_relation.identifier) }},
-            {{ config_json_literal }}
+            {{ config_expr }}
         );
     {%- endcall -%}
 

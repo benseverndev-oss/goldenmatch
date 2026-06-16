@@ -38,6 +38,30 @@ result = run_goldenmatch_dedupe(
 print(f"Deduped {result['input_rows']} -> {result['clusters']} clusters")
 ```
 
+### Probabilistic (Fellegi-Sunter) entity resolution -- zero config
+
+```sql
+{{ config(materialized='goldenmatch_dedupe', probabilistic=true) }}
+SELECT * FROM {{ ref('stg_customers') }}
+```
+
+`probabilistic=true` builds a Fellegi-Sunter model from your data with no
+hand-written config (omit `match_config`). Setting both `match_config` and
+`probabilistic=true` is a compile-time error. Inspect the derived model
+directly (the m/u weights + comparison levels):
+
+```sql
+SELECT goldenmatch_autoconfig('stg_customers', 'probabilistic');
+```
+
+Omitting both `match_config` and `probabilistic` runs standard zero-config
+dedupe. Fellegi-Sunter needs enough rows with agreeing fields to train EM; a
+too-small table fails the model with a clear error rather than producing empty
+output. DuckDB + Postgres only in this release (Snowflake + `probabilistic`
+raises a clear error; use an explicit `match_config` there). The Python helper
+takes the same flag: `run_goldenmatch_dedupe(..., probabilistic=True)` (no
+`config_path`).
+
 ## Macros
 
 This package ships macros only (no models/seeds/snapshots). The

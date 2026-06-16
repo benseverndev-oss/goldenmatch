@@ -169,5 +169,50 @@ def test_fn_name_unknown_adapter_errors() -> None:
         helpers.goldenmatch_dedupe_fn_name("golden", "bigquery")
 
 
+# ---------------------------------------------------------------------------
+# goldenmatch_dedupe_config_expr (zero-config / probabilistic)
+# ---------------------------------------------------------------------------
+
+
+def test_config_expr_probabilistic_renders_scalar_subquery():
+    helpers = _load_helpers()
+    out = helpers.goldenmatch_dedupe_config_expr(
+        match_config=None, probabilistic=True,
+        staging_literal="'stg__gm_stage'", adapter_type="duckdb")
+    assert out.strip() == "(SELECT goldenmatch_autoconfig('stg__gm_stage', 'probabilistic'))"
+
+
+def test_config_expr_standard_zero_config():
+    helpers = _load_helpers()
+    out = helpers.goldenmatch_dedupe_config_expr(
+        match_config=None, probabilistic=False,
+        staging_literal="'stg__gm_stage'", adapter_type="postgres")
+    assert out.strip() == "(SELECT goldenmatch.goldenmatch_autoconfig('stg__gm_stage', 'standard'))"
+
+
+def test_config_expr_explicit_config_uses_literal():
+    helpers = _load_helpers()
+    out = helpers.goldenmatch_dedupe_config_expr(
+        match_config={"matchkeys": []}, probabilistic=False,
+        staging_literal="'stg'", adapter_type="duckdb")
+    assert out.strip().startswith("'")  # JSON string literal, not a subquery
+
+
+def test_config_expr_probabilistic_plus_config_errors():
+    helpers = _load_helpers()
+    with pytest.raises(RuntimeError):
+        helpers.goldenmatch_dedupe_config_expr(
+            match_config={"matchkeys": []}, probabilistic=True,
+            staging_literal="'stg'", adapter_type="duckdb")
+
+
+def test_config_expr_snowflake_zero_config_errors():
+    helpers = _load_helpers()
+    with pytest.raises(RuntimeError):  # Snowflake has no mode UDF in P1
+        helpers.goldenmatch_dedupe_config_expr(
+            match_config=None, probabilistic=True,
+            staging_literal="'stg'", adapter_type="snowflake")
+
+
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__, "-v"])

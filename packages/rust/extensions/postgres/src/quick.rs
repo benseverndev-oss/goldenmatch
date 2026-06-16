@@ -174,14 +174,19 @@ pub fn goldenmatch_match(
 /// — the two functions share the same telemetry blob; this one returns only
 /// the config payload.
 ///
+/// `mode` selects the auto-config strategy: `'standard'` (the default,
+/// iterative AutoConfigController) or `'probabilistic'` (Fellegi-Sunter
+/// matchkeys). The SQL `DEFAULT 'standard'` keeps the 1-arg call working.
+///
 /// ```sql
 /// SELECT goldenmatch_autoconfig('customers');
+/// SELECT goldenmatch_autoconfig('customers', 'probabilistic');
 /// ```
 #[pg_extern]
-pub fn goldenmatch_autoconfig(table_name: String) -> String {
+pub fn goldenmatch_autoconfig(table_name: String, mode: String) -> String {
     let rows_json =
         spi::read_table_as_json(&table_name).unwrap_or_else(|e| pgrx::error!("goldenmatch: {}", e));
-    match goldenmatch_bridge::api::autoconfig(&rows_json) {
+    match goldenmatch_bridge::api::autoconfig(&rows_json, &mode) {
         Ok(result) => result.config_json,
         Err(e) => pgrx::error!("goldenmatch: {}", e),
     }
@@ -206,7 +211,7 @@ pub fn goldenmatch_autoconfig(table_name: String) -> String {
 pub fn goldenmatch_autoconfig_telemetry(table_name: String) -> String {
     let rows_json =
         spi::read_table_as_json(&table_name).unwrap_or_else(|e| pgrx::error!("goldenmatch: {}", e));
-    match goldenmatch_bridge::api::autoconfig(&rows_json) {
+    match goldenmatch_bridge::api::autoconfig(&rows_json, "standard") {
         Ok(result) => result.telemetry_json,
         Err(e) => pgrx::error!("goldenmatch: {}", e),
     }
