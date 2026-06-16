@@ -514,3 +514,225 @@ def test_flatboost_parity(tmp_path):
     assert largest >= 2, "flat-boost produced no merges (unexpected setup change)"
 
 
+# ---------------------------------------------------------------------------
+# Task 8: the lift gate -- collective resolution beats independent + flat-boost
+#
+# Tuned operating point: alpha=0.65, rel_threshold=0.50, rel_mode="jaccard".
+# Chosen for a STABLE lift with margin in every direction on the alpha/threshold
+# grid (neighbors at alpha 0.60/0.70 and thr 0.45/0.55 all clear indep+0.05 too;
+# this point is NOT adjacent to any collapse cliff -- the cliffs live at thr<=0.40
+# for alpha>=0.70, where rel similarity swamps attr and over-merges to F1~0.05).
+#
+# Measured (indep, flat, coll) F1 per seed via run_graph_er (GOLDENMATCH_NATIVE=0):
+#   seed=7:  indep=0.681  flat=0.059  coll=0.839   (lift over indep +0.159)
+#   seed=8:  indep=0.690  flat=0.050  coll=0.873   (lift over indep +0.184)
+#   seed=9:  indep=0.630  flat=0.052  coll=0.893   (lift over indep +0.263)
+#
+# (This path seeds the collective fixpoint from run_graph_er's own author dedupe
+# clusters -- run_dedupe, not dedupe_df -- so it lands a touch below the
+# direct-call check below at its own peak. The lift is large and stable in every
+# direction on the grid; see the note above. Min lift +0.159 >> the +0.05 bar.)
+# ---------------------------------------------------------------------------
+
+_COLLECTIVE_ALPHA = 0.65
+_COLLECTIVE_REL_THRESHOLD = 0.50
+
+
+def _collective_author_f1(fixture, tmp_path):
+    """Run graph ER with relational (collective) propagation; return (P, R, F1).
+
+    Same entity graph as _flatboost_author_f1 (author + paper entities, paper
+    clusters group authorship rows per paper, FK author_row_id), but
+    propagation_mode="relational" so co-author neighborhood overlap -- not a
+    blind score boost -- drives the merges.
+    """
+    import polars as pl
+    from goldenmatch.config.schemas import (
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
+    )
+    from goldenmatch.core.graph_er import EntityType, Relationship, run_graph_er
+
+    authors_for_csv = fixture.authors.select(["__row_id__", "name"]).with_columns(
+        pl.col("__row_id__").alias("author_row_id")
+    )
+    author_csv = str(tmp_path / "authors.csv")
+    authors_for_csv.write_csv(author_csv)
+
+    authorship_w_pid = (
+        fixture.authorship.join(
+            fixture.papers.rename({"__row_id__": "paper_row_id"}),
+            on="paper_row_id",
+            how="left",
+        )
+        .with_row_index("__row_id__")
+        .with_columns(pl.col("__row_id__").cast(pl.Int64))
+    )
+    paper_csv = str(tmp_path / "paper_authorship.csv")
+    authorship_w_pid.write_csv(paper_csv)
+
+    author_cfg = _author_config()
+    paper_mk = MatchkeyConfig(
+        name="paper_exact",
+        type="exact",
+        fields=[MatchkeyField(field="paper_id", transforms=["strip"])],
+    )
+    paper_blocking = BlockingConfig(
+        keys=[BlockingKeyConfig(fields=["paper_id"], transforms=[])],
+    )
+    paper_cfg = GoldenMatchConfig(matchkeys=[paper_mk], blocking=paper_blocking)
+
+    author_entity = EntityType(name="author", sources=[(author_csv, "authors")], config=author_cfg)
+    paper_entity = EntityType(name="paper", sources=[(paper_csv, "paper_authorship")], config=paper_cfg)
+    rel = Relationship(
+        from_entity="paper", to_entity="author",
+        join_key="author_row_id", evidence_weight=0.4,
+    )
+    result = run_graph_er(
+        entities=[author_entity, paper_entity],
+        relationships=[rel],
+        max_iterations=10,
+        propagation_mode="relational",
+        alpha=_COLLECTIVE_ALPHA,
+        rel_threshold=_COLLECTIVE_REL_THRESHOLD,
+    )
+
+    author_et = result.entities["author"]
+    pred = {}
+    for cid, cinfo in author_et.clusters.items():
+        for mid in cinfo["members"]:
+            pred[mid] = cid
+    all_ids = fixture.authors["__row_id__"].to_list()
+    next_singleton = max(pred.values(), default=-1) + 1
+    for rid in all_ids:
+        if rid not in pred:
+            pred[rid] = next_singleton
+            next_singleton += 1
+
+    return pairwise_prf(pred, fixture.truth)
+
+
+import pytest  # noqa: E402
+
+
+@pytest.mark.parametrize("seed", [7, 8, 9])
+def test_phase1_collective_beats_baselines(seed, tmp_path):
+    fx = generate_relational_fixture(seed=seed, n_entities=40)
+    _, _, f_indep = _independent_author_f1(fx, tmp_path)
+    _, _, f_flat = _flatboost_author_f1(fx, tmp_path)
+    _, _, f_coll = _collective_author_f1(fx, tmp_path)
+    print(
+        f"\n[phase-1 seed={seed}] indep={f_indep:.3f} "
+        f"flat={f_flat:.3f} coll={f_coll:.3f} "
+        f"(lift over indep {f_coll - f_indep:+.3f})"
+    )
+    assert f_coll > f_flat                  # trivially beats the broken naive boost
+    assert f_coll >= f_indep + 0.05         # MEANINGFUL lift over the real baseline
+
+
+# ---------------------------------------------------------------------------
+# Task 8 (direct-algorithm check): collective_resolve called DIRECTLY (bypassing
+# run_graph_er) isolates the algorithm from the wiring. Kept alongside the
+# via-run_graph_er gate below so a regression can be localized to one side.
+#
+# Calibration here: alpha=0.75, threshold=0.50, rel_mode="jaccard" (a sweep peak
+# for the dedupe_df-seeded path). Measured (n_entities=40, NATIVE=0):
+#   seed | independent | flat-boost | collective | lift vs indep
+#     7  |    0.681    |   0.059    |   0.927    |   +0.246
+#     8  |    0.690    |   0.059    |   0.962    |   +0.272
+#     9  |    0.630    |   0.059    |   0.905    |   +0.275
+# ---------------------------------------------------------------------------
+
+# Direct-call calibration constants.
+_COLLECTIVE_ALPHA_DIRECT = 0.75
+_COLLECTIVE_THRESHOLD_DIRECT = 0.50
+
+
+def _collective_author_f1_direct(fixture, tmp_path):
+    """Run neighborhood-similarity collective ER on author names; return (P, R, F1).
+
+    Calls collective_resolve DIRECTLY (not via run_graph_er). Pipeline:
+    1. Attribute-only ER (jaro_winkler on name) yields both the scored pairs
+       (``attr_pairs``, the attribute similarity) and an initial
+       ``{rid -> cid}`` clustering (seeds the first neighbor snapshot).
+    2. Co-authorship neighbor index: group authorship by paper; each paper is a
+       group of ``("author", author_row_id)`` members (self-relational).
+    3. ``collective_resolve`` blends attribute + relational (neighbor-cluster
+       Jaccard) similarity and re-clusters to a fixpoint.
+    """
+    import goldenmatch
+    from goldenmatch.core.collective import (
+        build_neighbor_index,
+        collective_resolve,
+    )
+
+    # --- (1) attribute-only ER: scored pairs + seed clusters ---
+    cfg = _author_config()
+    authors_df = fixture.authors.select(["__row_id__", "name"])
+    result = goldenmatch.dedupe_df(authors_df, config=cfg)
+
+    attr_pairs = list(result.scored_pairs)  # [(min_id, max_id, score)]
+
+    all_ids = authors_df["__row_id__"].to_list()
+    seed_clusters: dict = {}
+    for cid, cinfo in result.clusters.items():
+        for mid in cinfo["members"]:
+            seed_clusters[mid] = cid
+    # Singletons: any author row not placed in a multi-member cluster.
+    next_cid = max(seed_clusters.values(), default=-1) + 1
+    for rid in all_ids:
+        if rid not in seed_clusters:
+            seed_clusters[rid] = next_cid
+            next_cid += 1
+
+    # --- (2) co-authorship neighbor index (paper -> co-member group) ---
+    members_by_paper: dict = {}
+    for row in fixture.authorship.iter_rows(named=True):
+        members_by_paper.setdefault(row["paper_row_id"], []).append(
+            ("author", row["author_row_id"])
+        )
+    neighbor_index = build_neighbor_index(list(members_by_paper.values()))
+
+    # --- (3) collective resolve ---
+    entity_state = {
+        "author": {
+            "attr_pairs": attr_pairs,
+            "ids": all_ids,
+            "clusters": seed_clusters,
+        }
+    }
+    out = collective_resolve(
+        entity_state,
+        neighbor_index,
+        alpha=_COLLECTIVE_ALPHA_DIRECT,
+        rel_mode="jaccard",
+        threshold=_COLLECTIVE_THRESHOLD_DIRECT,
+        max_iterations=10,
+    )
+
+    pred = dict(out["author"])
+    # Defensive: ensure every author id is present (singletons get fresh ids).
+    next_cid = max(pred.values(), default=-1) + 1
+    for rid in all_ids:
+        if rid not in pred:
+            pred[rid] = next_cid
+            next_cid += 1
+
+    return pairwise_prf(pred, fixture.truth)
+
+
+@pytest.mark.parametrize("seed", [7, 8, 9])
+def test_phase1_collective_beats_baselines_direct(seed, tmp_path):
+    """Direct-algorithm lift check (collective_resolve called directly)."""
+    fx = generate_relational_fixture(seed=seed, n_entities=40)
+    _, _, f_indep = _independent_author_f1(fx, tmp_path)
+    _, _, f_flat = _flatboost_author_f1(fx, tmp_path)
+    _, _, f_coll = _collective_author_f1_direct(fx, tmp_path)
+    print(f"\n[phase-1 direct seed={seed}] indep={f_indep:.3f} flat={f_flat:.3f} coll={f_coll:.3f}")
+    assert f_coll > f_flat, f"collective {f_coll:.3f} must beat flat-boost {f_flat:.3f}"
+    assert f_coll >= f_indep + 0.05, (
+        f"collective {f_coll:.3f} must beat independent {f_indep:.3f}+0.05 (real lift)"
+    )
