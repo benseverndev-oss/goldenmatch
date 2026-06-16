@@ -12,21 +12,12 @@ Run from this directory (needs `goldenmatch` + `polars` installed):
     python export_graph_layout.py from-pairs dogfood_pairs.csv \\
         --a a --b b --score score -o dogfood_edges.tsv
 
-  Flat 2D layout video (the force-directed frames):
+  Flat 2D layout video (the force-directed frames; the crate rasterizes PPM
+  directly via raster.rs -- no extra renderer needed):
 
     cargo run --release -- --input dogfood_edges.tsv --single-level \\
         --iters 240 --frame-every 1 --out frames
     ffmpeg -framerate 30 -i frames/frame_%05d.ppm -pix_fmt yuv420p dogfood.mp4
-
-  Or the 3D HDR "big-bang" loop (scripts/glow_render3d.py). The Rust pass only
-  needs to emit the static colors/radii/edges arrays — glow_render3d builds its
-  own 3D layout from them — so a couple of iters is enough:
-
-    cargo run --release -- --input dogfood_edges.tsv --single-level \\
-        --iters 30 --frame-every 30 --dump-bin galaxy.bin
-    # real entities are small + disjoint, so brighten the nodes with --node-gain
-    python scripts/glow_render3d.py galaxy.bin frames3d --frames 360 --node-gain 3
-    ffmpeg -framerate 30 -i frames3d/orbit_%05d.ppm -pix_fmt yuv420p dogfood3d.mp4
 
 The dataset has a deliberately *skewed* cluster-size distribution (a few
 heavily re-entered entities + a long tail), so node-radius-by-cluster-size makes
@@ -35,9 +26,8 @@ pairs ARE the resolved entities — the colored blobs are goldenmatch's output.
 
 NB: dedupe pairs only ever link records *within* one entity, so the resolved
 graph is disjoint clusters — there are no inter-entity bridges (the "cosmic web"
-threads only appear on graphs that have cross-community edges). Each glowing orb
-is one real resolved entity; `--node-gain` compensates for real entities being
-much smaller (a few records each) than the dense synthetic showcase clusters.
+threads only appear on graphs that have cross-community edges). Each connected
+component is one real resolved entity.
 """
 from __future__ import annotations
 
