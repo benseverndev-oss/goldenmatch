@@ -856,10 +856,16 @@ gm.rollback_run(run_id) -> dict
 ## Graph ER
 
 ```python
-gm.run_graph_er(entities, relationships) -> dict
+gm.run_graph_er(entities, relationships, propagation_mode="additive") -> dict
 ```
 
 Multi-table entity resolution with cross-relationship evidence propagation.
+`propagation_mode="relational"` runs **collective ER** (Bhattacharya-Getoor): it
+blends attribute similarity with neighbor-cluster overlap (Jaccard/Adamic-Adar)
+and iterates to a synchronous fixpoint, resolving homonyms that attributes alone
+cannot (measured pairwise F1 ~0.66 -> ~0.87 on a relational fixture where the
+co-author neighborhood is the only disambiguating signal). `"additive"` /
+`"multiplicative"` are the simpler flat-boost modes (the default stays `additive`).
 
 ## Output
 

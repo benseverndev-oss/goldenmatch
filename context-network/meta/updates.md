@@ -2,6 +2,20 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-06-16 — Collective ER via neighborhood similarity (Phase 0+1)
+- New decision [../decisions/0018-collective-er-neighborhood-similarity.md](../decisions/0018-collective-er-neighborhood-similarity.md)
+  (linked from the discovery hub).
+- **`run_graph_er(propagation_mode="relational")`** (new `core/collective.py`) blends
+  attribute similarity with neighbor-cluster overlap (Jaccard/Adamic-Adar) and iterates
+  to a synchronous (Jacobi) fixpoint — the Bhattacharya-Getoor collective-ER algorithm.
+  Candidate set = attribute-blocked ∪ capped co-neighbor pairs. Measured pairwise F1
+  ~0.66 (attribute-only) → ~0.87 (collective) across seeds 7/8/9 on a fixture built so
+  attributes alone can't resolve homonyms; the old flat-boost `additive` mode is shown
+  actively harmful (~0.05). Existing `additive`/`multiplicative` modes unchanged
+  (default still `additive`; output byte-identical). SHIPPED PR #1030 (Phase 0+1);
+  Phase 2 (negative evidence) + Phase 3 (learned weights) deferred to their own plans.
+- Docs: `docs-site/goldenmatch/python-api.mdx` (Graph ER section) + the package CHANGELOG.
+
 ## 2026-06-15 — arrow 55→59 + pyo3 0.28 across the pyarrow crates
 - **Shipped (#1003 Phase 1, #1005 Phase 2):** `graph-core`, `native`, `analysis-native`,
   `goldencheck-native`, `native-flow` all moved to arrow 59 + pyo3 0.28 (native also numpy
