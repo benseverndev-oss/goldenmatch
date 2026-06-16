@@ -29,7 +29,7 @@ def _entity_indices(eids: dict[int, str], entity_id: str) -> list[int]:
     return sorted(i for i, e in eids.items() if e == entity_id)
 
 
-def under_merge_answer(clusters, mentions, eids, entity_id, query):
+def under_merge_answer(clusters: list[list[int]], mentions: dict[int, str], eids: dict[int, str], entity_id: str, query: str) -> dict:
     """What the agent 'knows' about `entity_id` when it queries the string `query`.
 
     distinct_nodes  -- how many clusters the entity's records are spread across
@@ -52,7 +52,7 @@ def under_merge_answer(clusters, mentions, eids, entity_id, query):
     }
 
 
-def pair_merged(clusters, eids, id_a, id_b) -> bool:
+def pair_merged(clusters: list[list[int]], eids: dict[int, str], id_a: str, id_b: str) -> bool:
     """True iff at least one cluster contains records from BOTH entity_ids (over-merge)."""
     for c in clusters:
         es = {eids[i] for i in c}
@@ -61,7 +61,7 @@ def pair_merged(clusters, eids, id_a, id_b) -> bool:
     return False
 
 
-def render_demo_md(mentions, eids, entity_id, query, before, after, exact_family_f1=EXACT_FAMILY_F1) -> str:
+def render_demo_md(mentions: dict[int, str], eids: dict[int, str], entity_id: str, query: str, before: list[list[int]], after: list[list[int]], exact_family_f1: str = EXACT_FAMILY_F1) -> str:
     """Deterministic markdown for the committed Tier-1 (under-merge) artifact.
 
     `exact_family_f1` is the cited exact-match-family F1 string (e.g. "F1 0.066");

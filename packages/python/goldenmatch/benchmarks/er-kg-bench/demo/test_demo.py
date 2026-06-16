@@ -1,4 +1,4 @@
-import demo.narrative as nv   # run from the er-kg-bench/ dir
+import demo.narrative as nv   # pyright: ignore[reportMissingImports]  # namespace pkg, resolves at runtime from bench dir
 
 # index -> (mention, entity_id) for a tiny IBM-only fixture
 RECS = {
