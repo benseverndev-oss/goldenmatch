@@ -226,24 +226,26 @@ def connected_components_scale(
         if checkpoint_dir and checkpoint_interval and (round_idx + 1) % checkpoint_interval == 0:
             labels = _truncate_lineage(labels, checkpoint_dir, f"wcc_round_{round_idx + 1}")
 
-    # The iteration produced final labels for edge-nodes only. Re-attach every
-    # id NOT in any edge as its own singleton component (cluster_id = self) so
-    # the output contract is unchanged: every member id present, exactly the
-    # partition the full-universe seed produced. left_anti finds ids absent from
-    # the edge-node set; the union is a single non-iterative pass (no shuffle
-    # growth), so the lineage barrier discipline above is unaffected.
-    # Cast to long so edge_assign, the left_anti join key, the singleton union,
-    # and the downstream build_golden join (on source row_id, long) all see one
-    # consistent schema. `labels` columns come from `pairs` (uncast); mixing them
-    # with the cast-long singletons left a union whose physical schema diverged
-    # from its logical schema -> Sail errors on the downstream join (the
-    # full-universe seed avoided this by seeding from ids_df.cast("long")).
-    edge_assign = labels.select(
-        F.col("label").cast("long").alias("cluster_id"),
+    # The iteration produced final labels for edge-nodes only. Re-attach every id
+    # NOT in any edge as its own singleton component (cluster_id = self) so the
+    # output contract is unchanged: every member id present, exactly the partition
+    # the full-universe seed produced.
+    #
+    # Done with a single LEFT JOIN + coalesce (NOT a union): left-join the full id
+    # universe to the edge-node labels and coalesce a missing label to the node
+    # itself. A unionByName here tripped a Sail bug -- the union's cluster_id field
+    # carried divergent physical-vs-logical metadata ("SPARK::metadata::json"),
+    # which the parity tests' bare .collect() tolerated but build_golden's
+    # downstream join crashed on. (Candidate upstream Sail report; real Spark
+    # doesn't desync union field metadata.) Cast to long so the join key and
+    # output match build_golden's source row_id; one non-iterative join, so the
+    # lineage-barrier discipline above is unaffected.
+    edge_labels = labels.select(
         F.col("node").cast("long").alias("member_id"),
+        F.col("label").cast("long").alias("edge_label"),
     )
     all_ids = ids_df.select(F.col(id_col).cast("long").alias("member_id"))
-    singletons = all_ids.join(
-        edge_assign.select("member_id"), on="member_id", how="left_anti"
-    ).select(F.col("member_id").alias("cluster_id"), F.col("member_id"))
-    return edge_assign.unionByName(singletons)
+    return all_ids.join(edge_labels, on="member_id", how="left").select(
+        F.coalesce(F.col("edge_label"), F.col("member_id")).alias("cluster_id"),
+        F.col("member_id"),
+    )
