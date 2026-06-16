@@ -112,11 +112,11 @@ def run(embedder_kind: str | None) -> dict:
 
         adapters.append(
             GoldenMatchEmbAnnAdapter(
-                threshold=0.5,  # placeholder; finalized from erkgbench/sweep.py --provider local
+                threshold=0.65,  # from erkgbench/sweep.py --provider local (MiniLM cosine scale)
                 provider="local",
                 name="goldenmatch(emb-st)",
                 defaults=(
-                    "sentence-transformers all-MiniLM-L6-v2 (no key) -> cosine>=0.5 "
+                    "sentence-transformers all-MiniLM-L6-v2 (no key) -> cosine>=0.65 "
                     "candidate pairs (ANN at scale) -> union-find; name only"
                 ),
             )

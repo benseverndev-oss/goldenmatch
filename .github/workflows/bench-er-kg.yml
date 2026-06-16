@@ -67,16 +67,20 @@ jobs:
         working-directory: ${{ env.BENCH_DIR }}
         run: |
           PY="$GITHUB_WORKSPACE/.venv/bin/python"
+          mkdir -p /tmp/diag
+          # tee -> both the run log (gh run view --log) and a file (artifact).
+          "$PY" erkgbench/sweep.py --provider local 2>&1 | tee /tmp/diag/sweep-emb-st.txt || true
+          "$PY" erkgbench/diagnose_controller.py 2>&1 | tee /tmp/diag/controller.txt || true
           {
-            echo '## emb-st (MiniLM) threshold sweep'
-            echo '```'
-            "$PY" erkgbench/sweep.py --provider local || echo "(sweep failed)"
-            echo '```'
-            echo '## Controller effort diagnostic (auto+fields: normal vs thinking vs einstein)'
-            echo '```'
-            "$PY" erkgbench/diagnose_controller.py || echo "(diagnostic failed)"
-            echo '```'
+            echo '## emb-st (MiniLM) threshold sweep'; echo '```'; cat /tmp/diag/sweep-emb-st.txt; echo '```'
+            echo '## Controller effort diagnostic (auto+fields: normal/thinking/einstein)'
+            echo '```'; cat /tmp/diag/controller.txt; echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload diagnostics
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: er-kg-diagnostics
+          path: /tmp/diag/
 
       - name: Run benchmark (keyed -- emb-openai + auto+llm; prose only)
         working-directory: ${{ env.BENCH_DIR }}
