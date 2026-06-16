@@ -270,9 +270,8 @@ def test_phase0_attribute_only_is_weak(tmp_path):
     co-author neighborhood (relational) evidence can break the tie.
 
     Measured at seed=7, n_entities=40, default fixture rates (homonym 0.30,
-    synonym 0.30): independent F1=0.681, and flat-boost F1=0.681 (the current
-    graph_er adds nothing on this co-authorship fixture) -- a ~17pt gap below
-    0.85 for collective ER to close.
+    synonym 0.30): independent F1=0.681 -- a ~17pt gap below 0.85.
+    No calibration was needed.
     """
     fx = generate_relational_fixture(seed=7, n_entities=40)
     p, r, f = _independent_author_f1(fx, tmp_path)
