@@ -188,3 +188,53 @@ def test_repro_union_v3_faithful(spark):
         [(0, "x"), (1, "y"), (2, "z")], ["member_id", "name"]
     )
     u.join(src, on="member_id", how="inner").collect()
+
+
+def test_repro_union_v4_groupby_clusterid_faithful(spark):
+    """v3 + build_golden's actual cluster_id (field 0) ops: groupBy cluster_id
+    for the multi-member filter, then join back on cluster_id. The original
+    error was 'field metadata at index 0' = cluster_id, which the member_id
+    join in v3 never exercised."""
+    from pyspark.sql import functions as F
+
+    lab = spark.createDataFrame([(0, 0), (1, 0)], ["node", "label"])
+    edge_assign = lab.select(
+        F.col("label").cast("long").alias("cluster_id"),
+        F.col("node").cast("long").alias("member_id"),
+    )
+    ids = spark.createDataFrame([(0,), (1,), (2,)], ["__row_id__"])
+    all_ids = ids.select(F.col("__row_id__").cast("long").alias("member_id"))
+    singletons = all_ids.join(
+        edge_assign.select("member_id"), on="member_id", how="left_anti"
+    ).select(F.col("member_id").alias("cluster_id"), F.col("member_id"))
+    assignments = edge_assign.unionByName(singletons)
+    multi = (
+        assignments.groupBy("cluster_id")
+        .agg(F.count("*").alias("n"))
+        .filter(F.col("n") > 1)
+        .select("cluster_id")
+    )
+    assignments.join(multi, on="cluster_id", how="inner").collect()
+
+
+def test_repro_union_v5_groupby_clusterid_no_leftanti(spark):
+    """v4 without the left_anti: union of two cast+select frames, then the
+    cluster_id groupBy + join. Isolates whether left_anti is needed."""
+    from pyspark.sql import functions as F
+
+    a = spark.createDataFrame([(0, 0), (1, 0)], ["node", "label"]).select(
+        F.col("label").cast("long").alias("cluster_id"),
+        F.col("node").cast("long").alias("member_id"),
+    )
+    b = spark.createDataFrame([(2, 2)], ["node", "label"]).select(
+        F.col("label").cast("long").alias("cluster_id"),
+        F.col("node").cast("long").alias("member_id"),
+    )
+    assignments = a.unionByName(b)
+    multi = (
+        assignments.groupBy("cluster_id")
+        .agg(F.count("*").alias("n"))
+        .filter(F.col("n") > 1)
+        .select("cluster_id")
+    )
+    assignments.join(multi, on="cluster_id", how="inner").collect()
