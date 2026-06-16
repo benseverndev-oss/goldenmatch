@@ -333,3 +333,32 @@ def test_neighbor_cluster_set_maps_to_clusters():
     clusters = {"author": {1: 5, 2: 5, 0: 9}}  # records 1,2 both in cluster 5
     out = neighbor_cluster_set(("author", 0), idx, clusters)
     assert out == {("author", 5)}  # both neighbors collapse to the same cluster
+
+
+# ---------------------------------------------------------------------------
+# Task 6: collective_resolve (synchronous blend-and-iterate fixpoint)
+# ---------------------------------------------------------------------------
+
+from goldenmatch.core.collective import collective_resolve  # noqa: E402
+
+
+def test_collective_resolve_disambiguates_homonyms():
+    # r0,r1 are the SAME real author (share co-authors in cluster 0);
+    # r2 is a homonym of a DIFFERENT author (co-authors in cluster 1).
+    # attr_sim says all three look similar (homonym names); relational evidence
+    # must keep r2 apart from r0/r1.
+    entity_state = {
+        "author": {
+            "attr_pairs": [(0, 1, 0.6), (0, 2, 0.6), (1, 2, 0.6)],   # all ambiguous on name
+            "ids": [0, 1, 2],
+            "clusters": {0: 0, 1: 1, 2: 2},                          # start: singletons
+        },
+        "coauthor": {"attr_pairs": [], "ids": [10, 11, 12, 13], "clusters": {10: 0, 11: 0, 12: 1, 13: 1}},
+    }
+    idx = {
+        ("author", 0): [("coauthor", 10)], ("author", 1): [("coauthor", 11)],
+        ("author", 2): [("coauthor", 12)],
+    }
+    out = collective_resolve(entity_state, idx, alpha=0.7, threshold=0.5, max_iterations=5)
+    assert out["author"][0] == out["author"][1]   # same real author -> merged
+    assert out["author"][2] != out["author"][0]   # homonym kept apart
