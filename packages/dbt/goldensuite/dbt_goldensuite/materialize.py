@@ -54,8 +54,12 @@ def run_goldenmatch_dedupe(
     cfg = load_config(config_path)
     result = run_dedupe([(tmp_path, "source")], cfg)
 
-    # Write results to DuckDB
-    output_df = result.get("golden") or result.get("output")
+    # Write results to DuckDB. NB: `a or b` triggers DataFrame.__bool__
+    # ("truth value of a DataFrame is ambiguous") on polars frames — the result
+    # values are DataFrames, so use an explicit None check, not `or`.
+    output_df = result.get("golden")
+    if output_df is None:
+        output_df = result.get("output")
 
     # v1.18.x Phase 3: optional field-level correction overrides from
     # MemoryStore. Iterate field-level corrections for this dataset and
