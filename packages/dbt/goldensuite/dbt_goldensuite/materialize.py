@@ -15,19 +15,26 @@ from goldenmatch.core.pipeline import run_dedupe
 
 def run_goldenmatch_dedupe(
     input_table: str,
-    config_path: str,
-    output_table: str,
+    config_path: str | None = None,
+    output_table: str | None = None,
     database: str = ":memory:",
     memory_db_path: str | None = None,
     dataset: str | None = None,
+    *,
+    probabilistic: bool = False,
 ) -> dict:
     """Run GoldenMatch dedupe on a DuckDB table and write results back.
 
     Args:
         input_table: Source table name in DuckDB
-        config_path: Path to GoldenMatch YAML config
+        config_path: Path to GoldenMatch YAML config. Omit (and pass
+            ``probabilistic=True`` or leave the default deterministic
+            auto-config) to run with zero config file.
         output_table: Destination table name
         database: DuckDB database path
+        probabilistic: When True (and no ``config_path``), build a
+            Fellegi-Sunter config via ``auto_configure_probabilistic_df``
+            with no config file. Mutually exclusive with ``config_path``.
         memory_db_path: Optional MemoryStore SQLite path. When set, any
             field-level corrections (decision='field_correct') matching
             this run's dataset key are applied to the golden output as
@@ -40,6 +47,11 @@ def run_goldenmatch_dedupe(
         Summary dict with record counts, match rate, and (when
         memory_db_path is set) an ``applied_corrections`` count.
     """
+    if output_table is None:
+        raise TypeError("run_goldenmatch_dedupe() requires output_table")
+    if config_path is not None and probabilistic:
+        raise ValueError("pass either config_path or probabilistic=True, not both")
+
     conn = duckdb.connect(database)
 
     # Read input
@@ -51,7 +63,15 @@ def run_goldenmatch_dedupe(
         tmp_path = f.name
         df.write_csv(tmp_path)
 
-    cfg = load_config(config_path)
+    if config_path is not None:
+        cfg = load_config(config_path)
+    else:
+        from goldenmatch.core.autoconfig import (
+            auto_configure_df,
+            auto_configure_probabilistic_df,
+        )
+        cfg = (auto_configure_probabilistic_df(df) if probabilistic
+               else auto_configure_df(df))
     result = run_dedupe([(tmp_path, "source")], cfg)
 
     # Write results to DuckDB. NB: `a or b` triggers DataFrame.__bool__
