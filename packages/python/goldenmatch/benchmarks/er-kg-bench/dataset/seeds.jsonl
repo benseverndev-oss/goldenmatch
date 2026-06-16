@@ -30,3 +30,25 @@
 {"entity_id": "doc_acme_xdoc", "type": "org", "failure_class": "cross_document_exact", "context": "same entity repeated across documents", "mentions": ["Stark Industries", "Stark Industries", "Stark Industries", "Stark Industries"]}
 {"entity_id": "doc_wayne_xdoc", "type": "org", "failure_class": "cross_document_exact", "context": "same entity repeated across ingests", "mentions": ["Wayne Enterprises", "Wayne Enterprises", "Wayne Enterprises"]}
 {"entity_id": "doc_oscorp_xdoc", "type": "org", "failure_class": "cross_document_exact", "context": "identical name multiple chunks", "mentions": ["Oscorp", "Oscorp", "Oscorp"]}
+{"entity_id": "org_who", "type": "org", "failure_class": "abbreviation", "context": "public health agency geneva switzerland", "mentions": ["WHO", "World Health Organization", "W.H.O.", "World Health Organisation"]}
+{"entity_id": "org_fbi", "type": "org", "failure_class": "abbreviation", "context": "law enforcement agency united states", "mentions": ["FBI", "Federal Bureau of Investigation", "F.B.I."]}
+{"entity_id": "org_mit", "type": "org", "failure_class": "abbreviation", "context": "university cambridge massachusetts", "mentions": ["MIT", "Massachusetts Institute of Technology"]}
+{"entity_id": "org_nato", "type": "org", "failure_class": "abbreviation", "context": "military alliance brussels", "mentions": ["NATO", "North Atlantic Treaty Organization", "N.A.T.O."]}
+{"entity_id": "drug_ibuprofen", "type": "drug", "failure_class": "synonym_brand", "context": "nsaid analgesic anti-inflammatory", "mentions": ["ibuprofen", "Advil", "Motrin"]}
+{"entity_id": "drug_sildenafil", "type": "drug", "failure_class": "synonym_brand", "context": "vasodilator pde5 inhibitor", "mentions": ["sildenafil", "Viagra", "Revatio"]}
+{"entity_id": "drug_fluoxetine", "type": "drug", "failure_class": "synonym_brand", "context": "antidepressant ssri", "mentions": ["fluoxetine", "Prozac"]}
+{"entity_id": "drug_metformin", "type": "drug", "failure_class": "synonym_brand", "context": "antidiabetic biguanide blood sugar", "mentions": ["metformin", "Glucophage"]}
+{"entity_id": "per_mjordan_athlete", "type": "person", "failure_class": "same_name_collision", "context": "basketball player chicago bulls", "mentions": ["Michael Jordan", "Michael Jeffrey Jordan", "MJ"]}
+{"entity_id": "per_mjordan_prof", "type": "person", "failure_class": "same_name_collision", "context": "machine learning professor berkeley", "mentions": ["Michael Jordan", "Michael I. Jordan", "M. Jordan"]}
+{"entity_id": "org_apple_tech", "type": "org", "failure_class": "same_name_collision", "context": "technology company cupertino california", "mentions": ["Apple", "Apple Inc", "Apple Computer"]}
+{"entity_id": "org_apple_records", "type": "org", "failure_class": "same_name_collision", "context": "record label the beatles london", "mentions": ["Apple", "Apple Corps", "Apple Records"]}
+{"entity_id": "ev_wc2018", "type": "event", "failure_class": "temporal_version", "context": "association football world cup russia 2018", "mentions": ["FIFA World Cup 2018", "World Cup 2018", "2018 World Cup"]}
+{"entity_id": "ev_wc2022", "type": "event", "failure_class": "temporal_version", "context": "association football world cup qatar 2022", "mentions": ["FIFA World Cup 2022", "World Cup 2022", "2022 World Cup"]}
+{"entity_id": "sw_python2", "type": "event", "failure_class": "temporal_version", "context": "programming language major version legacy", "mentions": ["Python 2", "Python 2.7"]}
+{"entity_id": "sw_python3", "type": "event", "failure_class": "temporal_version", "context": "programming language major version current", "mentions": ["Python 3", "Python 3.12"]}
+{"entity_id": "org_google_typo", "type": "org", "failure_class": "typo", "context": "search engine mountain view california", "mentions": ["Google", "Googel", "Gogle", "Google"]}
+{"entity_id": "per_zuckerberg", "type": "person", "failure_class": "typo", "context": "technology executive menlo park", "mentions": ["Mark Zuckerberg", "Mark Zuckerburg", "Mark Zukerberg"]}
+{"entity_id": "per_kjohnson", "type": "person", "failure_class": "nickname_alias", "context": "mathematician nasa langley", "mentions": ["Katherine Johnson", "Kate Johnson", "Katie Johnson", "Kathy Johnson"]}
+{"entity_id": "city_vienna", "type": "place", "failure_class": "cross_lingual", "context": "capital austria danube", "mentions": ["Vienna", "Wien", "Vienne"]}
+{"entity_id": "org_umbrella", "type": "org", "failure_class": "org_suffix", "context": "pharmaceutical conglomerate raccoon city", "mentions": ["Umbrella", "Umbrella Corp", "Umbrella Corporation", "Umbrella Inc", "Umbrella Co"]}
+{"entity_id": "doc_cyberdyne_xdoc", "type": "org", "failure_class": "cross_document_exact", "context": "same entity repeated across ingests", "mentions": ["Cyberdyne Systems", "Cyberdyne Systems", "Cyberdyne Systems"]}

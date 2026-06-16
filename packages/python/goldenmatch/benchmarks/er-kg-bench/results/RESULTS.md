@@ -1,6 +1,6 @@
 # ER-KG-Bench results
 
-Dataset: **105 records / 32 entities / 9 failure classes**. Embedder: `none (string predicates only)`.
+Dataset: **171 records / 54 entities / 9 failure classes**. Embedder: `none (string predicates only)`.
 
 `*` = precision-critical negative class (distinct entities with colliding surface forms; lower precision = wrong merges).
 
@@ -8,31 +8,31 @@ Dataset: **105 records / 32 entities / 9 failure classes**. Embedder: `none (str
 
 | System | P | R | F1 | coll&nbsp;P* | temp&nbsp;P* | ms | det-floor |
 |---|---|---|---|---|---|---|---|
-| goldenmatch(auto) | 0.74 | 0.291 | **0.418** | 0.333 | 0.0 | 220.6 | yes |
-| goldenmatch(auto+fields) | 0.624 | 0.732 | **0.674** | 0.37 | 0.353 | 970.2 | yes |
-| goldenmatch(emb-ann) | 0.434 | 0.677 | **0.529** | 0.385 | 0.353 | 18.8 | yes |
-| MS-GraphRAG | 0.722 | 0.102 | **0.179** | 0.0 | 1.0 | 0.1 | yes |
-| LightRAG | 0.722 | 0.102 | **0.179** | 0.0 | 1.0 | 0.0 | yes |
-| Cognee | 0.722 | 0.102 | **0.179** | 0.0 | 1.0 | 0.0 | yes |
-| mem0 | 0.812 | 0.102 | **0.182** | 0.0 | 1.0 | 0.1 | yes |
-| Neo4j-KGBuilder | 0.782 | 0.535 | **0.636** | 0.333 | 0.0 | 2.2 | yes |
-| neo4j-graphrag(fuzzy) | 0.444 | 0.717 | **0.548** | 0.389 | 0.381 | 14.7 | yes |
-| LlamaIndex-PGI | 0.374 | 0.693 | **0.486** | 0.357 | 0.286 | 1.8 | yes |
+| goldenmatch(auto) | 0.735 | 0.362 | **0.485** | 0.368 | 0.267 | 866.2 | yes |
+| goldenmatch(auto+fields) | 0.556 | 0.724 | **0.629** | 0.375 | 0.368 | 2654.3 | yes |
+| goldenmatch(emb-ann) | 0.372 | 0.673 | **0.479** | 0.392 | 0.368 | 68.4 | yes |
+| MS-GraphRAG | 0.708 | 0.085 | **0.152** | 0.0 | 1.0 | 0.2 | yes |
+| LightRAG | 0.708 | 0.085 | **0.152** | 0.0 | 1.0 | 0.1 | yes |
+| Cognee | 0.708 | 0.085 | **0.152** | 0.0 | 1.0 | 0.1 | yes |
+| mem0 | 0.773 | 0.085 | **0.154** | 0.0 | 1.0 | 0.3 | yes |
+| Neo4j-KGBuilder | 0.703 | 0.513 | **0.593** | 0.353 | 0.25 | 10.1 | yes |
+| neo4j-graphrag(fuzzy) | 0.248 | 0.698 | **0.366** | 0.393 | 0.381 | 53.0 | yes |
+| LlamaIndex-PGI | 0.144 | 0.673 | **0.237** | 0.293 | 0.3 | 5.5 | yes |
 
 ## Per-class F1
 
 | System | abbr | nick | synm | coll* | xling | typo | suffix | temp* | xdoc |
 |---|---|---|---|---|---|---|---|---|---|
-| goldenmatch(auto) | 0.462 | 0.235 | 0.0 | 0.267 | 0.2 | 0.75 | 0.37 | 0.0 | 1.0 |
-| goldenmatch(auto+fields) | 0.667 | 0.75 | 0.2 | 0.444 | 0.839 | 1.0 | 1.0 | 0.48 | 1.0 |
-| goldenmatch(emb-ann) | 0.182 | 0.929 | 0.0 | 0.455 | 0.56 | 1.0 | 0.688 | 0.48 | 1.0 |
-| MS-GraphRAG | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.125 | 0.0 | 0.0 | 1.0 |
-| LightRAG | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.125 | 0.0 | 0.0 | 1.0 |
-| Cognee | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.125 | 0.0 | 0.0 | 1.0 |
-| mem0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.125 | 0.0 | 0.0 | 1.0 |
-| Neo4j-KGBuilder | 0.182 | 0.421 | 0.0 | 0.333 | 0.615 | 1.0 | 1.0 | 0.0 | 1.0 |
-| neo4j-graphrag(fuzzy) | 0.571 | 0.8 | 0.0 | 0.519 | 0.5 | 1.0 | 1.0 | 0.552 | 1.0 |
-| LlamaIndex-PGI | 0.385 | 0.636 | 0.0 | 0.435 | 0.455 | 1.0 | 1.0 | 0.267 | 1.0 |
+| goldenmatch(auto) | 0.414 | 0.552 | 0.0 | 0.286 | 0.25 | 0.857 | 0.512 | 0.258 | 1.0 |
+| goldenmatch(auto+fields) | 0.409 | 0.833 | 0.105 | 0.462 | 0.865 | 1.0 | 0.762 | 0.519 | 1.0 |
+| goldenmatch(emb-ann) | 0.133 | 0.95 | 0.0 | 0.494 | 0.552 | 1.0 | 0.496 | 0.519 | 1.0 |
+| MS-GraphRAG | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.154 | 0.0 | 0.0 | 1.0 |
+| LightRAG | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.154 | 0.0 | 0.0 | 1.0 |
+| Cognee | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.154 | 0.0 | 0.0 | 1.0 |
+| mem0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.154 | 0.0 | 0.0 | 1.0 |
+| Neo4j-KGBuilder | 0.154 | 0.5 | 0.0 | 0.375 | 0.6 | 0.933 | 1.0 | 0.25 | 1.0 |
+| neo4j-graphrag(fuzzy) | 0.25 | 0.865 | 0.0 | 0.527 | 0.5 | 1.0 | 0.496 | 0.552 | 1.0 |
+| LlamaIndex-PGI | 0.175 | 0.765 | 0.0 | 0.386 | 0.353 | 1.0 | 0.533 | 0.333 | 1.0 |
 
 ## Documented defaults (what each row runs)
 

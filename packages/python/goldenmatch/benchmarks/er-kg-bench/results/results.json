@@ -1,7 +1,7 @@
 {
   "dataset": {
-    "records": 105,
-    "entities": 32,
+    "records": 171,
+    "entities": 54,
     "classes": [
       "abbreviation",
       "nickname_alias",
@@ -24,108 +24,108 @@
       "name": "goldenmatch(auto)",
       "defaults": "zero-config dedupe_df(name) -- auto-config picks the strategy",
       "overall": {
-        "precision": 0.74,
-        "recall": 0.291,
-        "f1": 0.418
+        "precision": 0.735,
+        "recall": 0.362,
+        "f1": 0.485
       },
       "per_class_f1": {
-        "abbreviation": 0.462,
-        "nickname_alias": 0.235,
+        "abbreviation": 0.414,
+        "nickname_alias": 0.552,
         "synonym_brand": 0.0,
-        "same_name_collision": 0.267,
-        "cross_lingual": 0.2,
-        "typo": 0.75,
-        "org_suffix": 0.37,
-        "temporal_version": 0.0,
+        "same_name_collision": 0.286,
+        "cross_lingual": 0.25,
+        "typo": 0.857,
+        "org_suffix": 0.512,
+        "temporal_version": 0.258,
         "cross_document_exact": 1.0
       },
       "per_class_precision": {
         "abbreviation": 1.0,
         "nickname_alias": 1.0,
         "synonym_brand": 1.0,
-        "same_name_collision": 0.333,
+        "same_name_collision": 0.368,
         "cross_lingual": 1.0,
         "typo": 1.0,
         "org_suffix": 1.0,
-        "temporal_version": 0.0,
+        "temporal_version": 0.267,
         "cross_document_exact": 1.0
       },
-      "time_ms": 220.6,
+      "time_ms": 866.2,
       "deterministic_floor": true
     },
     {
       "name": "goldenmatch(auto+fields)",
       "defaults": "zero-config dedupe_df(name+type+context) -- auto-config, multi-field",
       "overall": {
-        "precision": 0.624,
-        "recall": 0.732,
-        "f1": 0.674
+        "precision": 0.556,
+        "recall": 0.724,
+        "f1": 0.629
       },
       "per_class_f1": {
-        "abbreviation": 0.667,
-        "nickname_alias": 0.75,
-        "synonym_brand": 0.2,
-        "same_name_collision": 0.444,
-        "cross_lingual": 0.839,
+        "abbreviation": 0.409,
+        "nickname_alias": 0.833,
+        "synonym_brand": 0.105,
+        "same_name_collision": 0.462,
+        "cross_lingual": 0.865,
         "typo": 1.0,
-        "org_suffix": 1.0,
-        "temporal_version": 0.48,
+        "org_suffix": 0.762,
+        "temporal_version": 0.519,
         "cross_document_exact": 1.0
       },
       "per_class_precision": {
-        "abbreviation": 1.0,
+        "abbreviation": 0.429,
         "nickname_alias": 1.0,
-        "synonym_brand": 1.0,
-        "same_name_collision": 0.37,
+        "synonym_brand": 0.5,
+        "same_name_collision": 0.375,
         "cross_lingual": 1.0,
         "typo": 1.0,
-        "org_suffix": 1.0,
-        "temporal_version": 0.353,
+        "org_suffix": 0.615,
+        "temporal_version": 0.368,
         "cross_document_exact": 1.0
       },
-      "time_ms": 970.2,
+      "time_ms": 2654.3,
       "deterministic_floor": true
     },
     {
       "name": "goldenmatch(emb-ann)",
       "defaults": "inhouse char-ngram embedding (no key/torch) -> cosine>=0.5 candidate pairs (ANN at scale) -> union-find; name only",
       "overall": {
-        "precision": 0.434,
-        "recall": 0.677,
-        "f1": 0.529
+        "precision": 0.372,
+        "recall": 0.673,
+        "f1": 0.479
       },
       "per_class_f1": {
-        "abbreviation": 0.182,
-        "nickname_alias": 0.929,
+        "abbreviation": 0.133,
+        "nickname_alias": 0.95,
         "synonym_brand": 0.0,
-        "same_name_collision": 0.455,
-        "cross_lingual": 0.56,
+        "same_name_collision": 0.494,
+        "cross_lingual": 0.552,
         "typo": 1.0,
-        "org_suffix": 0.688,
-        "temporal_version": 0.48,
+        "org_suffix": 0.496,
+        "temporal_version": 0.519,
         "cross_document_exact": 1.0
       },
       "per_class_precision": {
-        "abbreviation": 1.0,
+        "abbreviation": 0.286,
         "nickname_alias": 1.0,
         "synonym_brand": 1.0,
-        "same_name_collision": 0.385,
+        "same_name_collision": 0.392,
         "cross_lingual": 1.0,
         "typo": 1.0,
-        "org_suffix": 0.524,
-        "temporal_version": 0.353,
+        "org_suffix": 0.33,
+        "temporal_version": 0.368,
         "cross_document_exact": 1.0
       },
-      "time_ms": 18.8,
+      "time_ms": 68.4,
       "deterministic_floor": true
     },
     {
       "name": "MS-GraphRAG",
       "defaults": "exact title match; ER step removed (finalize_entities seen_titles set; discussion #778, data-loss #1718)",
       "overall": {
-        "precision": 0.722,
-        "recall": 0.102,
-        "f1": 0.179
+        "precision": 0.708,
+        "recall": 0.085,
+        "f1": 0.152
       },
       "per_class_f1": {
         "abbreviation": 0.0,
@@ -133,7 +133,7 @@
         "synonym_brand": 0.0,
         "same_name_collision": 0.0,
         "cross_lingual": 0.0,
-        "typo": 0.125,
+        "typo": 0.154,
         "org_suffix": 0.0,
         "temporal_version": 0.0,
         "cross_document_exact": 1.0
@@ -149,16 +149,16 @@
         "temporal_version": 1.0,
         "cross_document_exact": 1.0
       },
-      "time_ms": 0.1,
+      "time_ms": 0.2,
       "deterministic_floor": true
     },
     {
       "name": "LightRAG",
       "defaults": "exact normalized-name dict key, no fuzzy/embedding at merge (operate.py _merge_nodes_then_upsert; #1323, cross-doc #485)",
       "overall": {
-        "precision": 0.722,
-        "recall": 0.102,
-        "f1": 0.179
+        "precision": 0.708,
+        "recall": 0.085,
+        "f1": 0.152
       },
       "per_class_f1": {
         "abbreviation": 0.0,
@@ -166,73 +166,7 @@
         "synonym_brand": 0.0,
         "same_name_collision": 0.0,
         "cross_lingual": 0.0,
-        "typo": 0.125,
-        "org_suffix": 0.0,
-        "temporal_version": 0.0,
-        "cross_document_exact": 1.0
-      },
-      "per_class_precision": {
-        "abbreviation": 1.0,
-        "nickname_alias": 1.0,
-        "synonym_brand": 1.0,
-        "same_name_collision": 0.0,
-        "cross_lingual": 1.0,
-        "typo": 1.0,
-        "org_suffix": 1.0,
-        "temporal_version": 1.0,
-        "cross_document_exact": 1.0
-      },
-      "time_ms": 0.0,
-      "deterministic_floor": true
-    },
-    {
-      "name": "Cognee",
-      "defaults": "content-hash + exact name; difflib cutoff=0.8 only vs a user ontology (empty by default) (matching_strategies.py; #1831)",
-      "overall": {
-        "precision": 0.722,
-        "recall": 0.102,
-        "f1": 0.179
-      },
-      "per_class_f1": {
-        "abbreviation": 0.0,
-        "nickname_alias": 0.0,
-        "synonym_brand": 0.0,
-        "same_name_collision": 0.0,
-        "cross_lingual": 0.0,
-        "typo": 0.125,
-        "org_suffix": 0.0,
-        "temporal_version": 0.0,
-        "cross_document_exact": 1.0
-      },
-      "per_class_precision": {
-        "abbreviation": 1.0,
-        "nickname_alias": 1.0,
-        "synonym_brand": 1.0,
-        "same_name_collision": 0.0,
-        "cross_lingual": 1.0,
-        "typo": 1.0,
-        "org_suffix": 1.0,
-        "temporal_version": 1.0,
-        "cross_document_exact": 1.0
-      },
-      "time_ms": 0.0,
-      "deterministic_floor": true
-    },
-    {
-      "name": "mem0",
-      "defaults": "MD5-exact only as hard dedup; semantic merge is one LLM ADD/UPDATE prompt (main.py md5; contradictions #4896, 37.6% near-dupes #4573)",
-      "overall": {
-        "precision": 0.812,
-        "recall": 0.102,
-        "f1": 0.182
-      },
-      "per_class_f1": {
-        "abbreviation": 0.0,
-        "nickname_alias": 0.0,
-        "synonym_brand": 0.0,
-        "same_name_collision": 0.0,
-        "cross_lingual": 0.0,
-        "typo": 0.125,
+        "typo": 0.154,
         "org_suffix": 0.0,
         "temporal_version": 0.0,
         "cross_document_exact": 1.0
@@ -252,21 +186,21 @@
       "deterministic_floor": true
     },
     {
-      "name": "Neo4j-KGBuilder",
-      "defaults": "same-label gate AND ( substring-contains(len>2) OR Levenshtein<3(len>5) OR cosine>0.97 ); human-review-gated (graphDB_dataAccess.py; over-merge #1133, missed alias #912)",
+      "name": "Cognee",
+      "defaults": "content-hash + exact name; difflib cutoff=0.8 only vs a user ontology (empty by default) (matching_strategies.py; #1831)",
       "overall": {
-        "precision": 0.782,
-        "recall": 0.535,
-        "f1": 0.636
+        "precision": 0.708,
+        "recall": 0.085,
+        "f1": 0.152
       },
       "per_class_f1": {
-        "abbreviation": 0.182,
-        "nickname_alias": 0.421,
+        "abbreviation": 0.0,
+        "nickname_alias": 0.0,
         "synonym_brand": 0.0,
-        "same_name_collision": 0.333,
-        "cross_lingual": 0.615,
-        "typo": 1.0,
-        "org_suffix": 1.0,
+        "same_name_collision": 0.0,
+        "cross_lingual": 0.0,
+        "typo": 0.154,
+        "org_suffix": 0.0,
         "temporal_version": 0.0,
         "cross_document_exact": 1.0
       },
@@ -274,80 +208,146 @@
         "abbreviation": 1.0,
         "nickname_alias": 1.0,
         "synonym_brand": 1.0,
-        "same_name_collision": 0.333,
+        "same_name_collision": 0.0,
         "cross_lingual": 1.0,
         "typo": 1.0,
         "org_suffix": 1.0,
+        "temporal_version": 1.0,
+        "cross_document_exact": 1.0
+      },
+      "time_ms": 0.1,
+      "deterministic_floor": true
+    },
+    {
+      "name": "mem0",
+      "defaults": "MD5-exact only as hard dedup; semantic merge is one LLM ADD/UPDATE prompt (main.py md5; contradictions #4896, 37.6% near-dupes #4573)",
+      "overall": {
+        "precision": 0.773,
+        "recall": 0.085,
+        "f1": 0.154
+      },
+      "per_class_f1": {
+        "abbreviation": 0.0,
+        "nickname_alias": 0.0,
+        "synonym_brand": 0.0,
+        "same_name_collision": 0.0,
+        "cross_lingual": 0.0,
+        "typo": 0.154,
+        "org_suffix": 0.0,
         "temporal_version": 0.0,
         "cross_document_exact": 1.0
       },
-      "time_ms": 2.2,
+      "per_class_precision": {
+        "abbreviation": 1.0,
+        "nickname_alias": 1.0,
+        "synonym_brand": 1.0,
+        "same_name_collision": 0.0,
+        "cross_lingual": 1.0,
+        "typo": 1.0,
+        "org_suffix": 1.0,
+        "temporal_version": 1.0,
+        "cross_document_exact": 1.0
+      },
+      "time_ms": 0.3,
+      "deterministic_floor": true
+    },
+    {
+      "name": "Neo4j-KGBuilder",
+      "defaults": "same-label gate AND ( substring-contains(len>2) OR Levenshtein<3(len>5) OR cosine>0.97 ); human-review-gated (graphDB_dataAccess.py; over-merge #1133, missed alias #912)",
+      "overall": {
+        "precision": 0.703,
+        "recall": 0.513,
+        "f1": 0.593
+      },
+      "per_class_f1": {
+        "abbreviation": 0.154,
+        "nickname_alias": 0.5,
+        "synonym_brand": 0.0,
+        "same_name_collision": 0.375,
+        "cross_lingual": 0.6,
+        "typo": 0.933,
+        "org_suffix": 1.0,
+        "temporal_version": 0.25,
+        "cross_document_exact": 1.0
+      },
+      "per_class_precision": {
+        "abbreviation": 0.667,
+        "nickname_alias": 1.0,
+        "synonym_brand": 1.0,
+        "same_name_collision": 0.353,
+        "cross_lingual": 1.0,
+        "typo": 1.0,
+        "org_suffix": 1.0,
+        "temporal_version": 0.25,
+        "cross_document_exact": 1.0
+      },
+      "time_ms": 10.1,
       "deterministic_floor": true
     },
     {
       "name": "neo4j-graphrag(fuzzy)",
       "defaults": "FuzzyMatchResolver: rapidfuzz WRatio/100 >= 0.8, all-pairs O(n^2) (resolver.py BasePropertySimilarityResolver; rapidfuzz extra #336)",
       "overall": {
-        "precision": 0.444,
-        "recall": 0.717,
-        "f1": 0.548
+        "precision": 0.248,
+        "recall": 0.698,
+        "f1": 0.366
       },
       "per_class_f1": {
-        "abbreviation": 0.571,
-        "nickname_alias": 0.8,
+        "abbreviation": 0.25,
+        "nickname_alias": 0.865,
         "synonym_brand": 0.0,
-        "same_name_collision": 0.519,
+        "same_name_collision": 0.527,
         "cross_lingual": 0.5,
         "typo": 1.0,
-        "org_suffix": 1.0,
+        "org_suffix": 0.496,
         "temporal_version": 0.552,
         "cross_document_exact": 1.0
       },
       "per_class_precision": {
-        "abbreviation": 1.0,
+        "abbreviation": 0.294,
         "nickname_alias": 1.0,
         "synonym_brand": 1.0,
-        "same_name_collision": 0.389,
+        "same_name_collision": 0.393,
         "cross_lingual": 1.0,
         "typo": 1.0,
-        "org_suffix": 1.0,
+        "org_suffix": 0.33,
         "temporal_version": 0.381,
         "cross_document_exact": 1.0
       },
-      "time_ms": 14.7,
+      "time_ms": 53.0,
       "deterministic_floor": true
     },
     {
       "name": "LlamaIndex-PGI",
       "defaults": "same-label gate AND ( contains OR Levenshtein<5 OR cosine>0.9 ), KNN top-10 when embedded (property-graph blog; self-documented over-merges: 1963 AFL/NFL, BTC Halving 2020/2024)",
       "overall": {
-        "precision": 0.374,
-        "recall": 0.693,
-        "f1": 0.486
+        "precision": 0.144,
+        "recall": 0.673,
+        "f1": 0.237
       },
       "per_class_f1": {
-        "abbreviation": 0.385,
-        "nickname_alias": 0.636,
+        "abbreviation": 0.175,
+        "nickname_alias": 0.765,
         "synonym_brand": 0.0,
-        "same_name_collision": 0.435,
-        "cross_lingual": 0.455,
+        "same_name_collision": 0.386,
+        "cross_lingual": 0.353,
         "typo": 1.0,
-        "org_suffix": 1.0,
-        "temporal_version": 0.267,
+        "org_suffix": 0.533,
+        "temporal_version": 0.333,
         "cross_document_exact": 1.0
       },
       "per_class_precision": {
-        "abbreviation": 0.312,
+        "abbreviation": 0.113,
         "nickname_alias": 1.0,
-        "synonym_brand": 1.0,
-        "same_name_collision": 0.357,
-        "cross_lingual": 0.312,
+        "synonym_brand": 0.0,
+        "same_name_collision": 0.293,
+        "cross_lingual": 0.222,
         "typo": 1.0,
-        "org_suffix": 1.0,
-        "temporal_version": 0.286,
+        "org_suffix": 0.364,
+        "temporal_version": 0.3,
         "cross_document_exact": 1.0
       },
-      "time_ms": 1.8,
+      "time_ms": 5.5,
       "deterministic_floor": true
     }
   ]

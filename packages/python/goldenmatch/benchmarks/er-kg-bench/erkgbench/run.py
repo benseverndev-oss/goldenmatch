@@ -241,9 +241,12 @@ def main() -> None:
 
     report = run("st" if args.embedder == "st" else None)
     RESULTS_DIR.mkdir(exist_ok=True)
-    (RESULTS_DIR / "results.json").write_text(json.dumps(report, indent=2))
+    # Explicit utf-8: the markdown carries em dashes / accented exonyms, and
+    # Path.write_text defaults to the locale encoding (cp1252 on Windows), which
+    # would mojibake them and diverge from a Linux/CI regeneration.
+    (RESULTS_DIR / "results.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     md = to_markdown(report)
-    (RESULTS_DIR / "RESULTS.md").write_text(md)
+    (RESULTS_DIR / "RESULTS.md").write_text(md, encoding="utf-8")
     print(md)
 
 
