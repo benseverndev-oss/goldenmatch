@@ -81,6 +81,28 @@ name-only frameworks can't use) honestly, alongside its current gaps
 having it — and the dogfood makes the comparison the one a user would actually
 get, not a hand-picked threshold.
 
+## The LLM experiment (measured, key-dependent — not in the committed table)
+
+It is tempting to assume the semantic classes just need an LLM. We measured it
+(`OPENAI_API_KEY` set, gpt-4o-mini via `llm_scorer=True`). The result is the
+opposite of the intuition, and it is the most useful finding here:
+
+| config | abbr | synm | xling | P | R | overall F1 |
+|---|---|---|---|---|---|---|
+| `goldenmatch(auto+fields)` (no key) | 0.667 | 0.20 | 0.839 | 0.624 | 0.732 | **0.674** |
+| `goldenmatch(auto+llm)` (with key)  | 0.462 | 0.00 | 0.500 | 0.762 | 0.504 | **0.607** |
+
+The LLM made the semantic classes **worse** and lowered overall F1. Reason:
+goldenmatch's `llm_scorer` is a **precision filter on borderline candidate
+pairs (0.75–0.95) that blocking already produced** — it can confirm or reject a
+candidate, never create one. It never saw "IBM" / "International Business
+Machines" as a pair (blocking didn't generate it), so it could not merge them;
+and it *pruned* some context-bridged matches `auto+fields` had kept (precision
+up, recall down). The lever for the semantic classes is therefore semantic
+**candidate generation** (embedding ANN blocking / `emb+ANN`), not an LLM pair
+scorer. The committed table stays the offline, reproducible-by-anyone run; the
+`auto+llm` row only appears when the runner sees a key.
+
 ## Layout
 
 ```
@@ -97,11 +119,12 @@ TAXONOMY.md            the nine failure classes, with framework citations
 * **Add a failure class / more entities:** edit `seeds.jsonl`, re-run
   `generate.py`. Negative classes (distinct entities, colliding strings) are
   the precision tests — keep adding them.
-* **Run the LLM dogfood:** set `OPENAI_API_KEY` and the runner adds
-  `goldenmatch(auto+llm)` — the configuration that attacks abbreviation /
-  synonym / cross-lingual via real semantic knowledge. Capture that run to show
-  the semantic-class lift name+context can't reach. (An embedding-scorer dogfood
-  row is the analogous offline option.)
+* **Attack the semantic classes the way that actually works:** add a
+  `goldenmatch(auto+emb)` row using the embedding scorer + ANN blocking
+  (`emb+ANN`, local/inhouse provider, no external key). The measured LLM
+  experiment above shows the lever is semantic *candidate generation*, not an
+  LLM pair filter — so this is the highest-value next adapter. (`auto+llm`
+  remains available via `OPENAI_API_KEY` for the contrast.)
 * **Add a *live* adapter:** for systems that resolve deterministically without
   an LLM (neo4j-graphrag rapidfuzz/spaCy resolvers, LlamaIndex Cypher), a real
   adapter behind an optional extra can corroborate the model.

@@ -50,7 +50,7 @@
         "temporal_version": 0.0,
         "cross_document_exact": 1.0
       },
-      "time_ms": 216.6,
+      "time_ms": 237.0,
       "deterministic_floor": true
     },
     {
@@ -83,7 +83,7 @@
         "temporal_version": 0.353,
         "cross_document_exact": 1.0
       },
-      "time_ms": 1009.0,
+      "time_ms": 1101.0,
       "deterministic_floor": true
     },
     {
@@ -215,7 +215,7 @@
         "temporal_version": 1.0,
         "cross_document_exact": 1.0
       },
-      "time_ms": 0.1,
+      "time_ms": 0.2,
       "deterministic_floor": true
     },
     {
@@ -281,7 +281,7 @@
         "temporal_version": 0.381,
         "cross_document_exact": 1.0
       },
-      "time_ms": 14.2,
+      "time_ms": 14.9,
       "deterministic_floor": true
     },
     {

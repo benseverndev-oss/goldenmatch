@@ -8,14 +8,14 @@ Dataset: **105 records / 32 entities / 9 failure classes**. Embedder: `none (str
 
 | System | P | R | F1 | coll&nbsp;P* | temp&nbsp;P* | ms | det-floor |
 |---|---|---|---|---|---|---|---|
-| goldenmatch(auto) | 0.74 | 0.291 | **0.418** | 0.333 | 0.0 | 216.6 | yes |
-| goldenmatch(auto+fields) | 0.624 | 0.732 | **0.674** | 0.37 | 0.353 | 1009.0 | yes |
+| goldenmatch(auto) | 0.74 | 0.291 | **0.418** | 0.333 | 0.0 | 237.0 | yes |
+| goldenmatch(auto+fields) | 0.624 | 0.732 | **0.674** | 0.37 | 0.353 | 1101.0 | yes |
 | MS-GraphRAG | 0.722 | 0.102 | **0.179** | 0.0 | 1.0 | 0.1 | yes |
 | LightRAG | 0.722 | 0.102 | **0.179** | 0.0 | 1.0 | 0.0 | yes |
 | Cognee | 0.722 | 0.102 | **0.179** | 0.0 | 1.0 | 0.0 | yes |
-| mem0 | 0.812 | 0.102 | **0.182** | 0.0 | 1.0 | 0.1 | yes |
+| mem0 | 0.812 | 0.102 | **0.182** | 0.0 | 1.0 | 0.2 | yes |
 | Neo4j-KGBuilder | 0.782 | 0.535 | **0.636** | 0.333 | 0.0 | 2.1 | yes |
-| neo4j-graphrag(fuzzy) | 0.444 | 0.717 | **0.548** | 0.389 | 0.381 | 14.2 | yes |
+| neo4j-graphrag(fuzzy) | 0.444 | 0.717 | **0.548** | 0.389 | 0.381 | 14.9 | yes |
 | LlamaIndex-PGI | 0.374 | 0.693 | **0.486** | 0.357 | 0.286 | 1.8 | yes |
 
 ## Per-class F1
