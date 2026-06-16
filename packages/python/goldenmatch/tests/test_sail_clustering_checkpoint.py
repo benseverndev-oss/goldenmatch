@@ -69,3 +69,40 @@ def test_checkpoint_interval_requires_dir(spark):
         connected_components_scale(
             edges, ids, id_col="__row_id__", checkpoint_interval=1
         )
+
+
+def test_label_prop_checkpoint_is_output_invariant(spark, tmp_path):
+    """label-prop ``connected_components`` with a checkpoint_dir gives the SAME
+    partition as no-checkpoint (and the correct answer). The label-prop variant
+    re-joins ``labels`` each round just like the scale path, so it needs the same
+    lineage barrier at scale -- the gap the GKE real-cluster run surfaced."""
+    from goldenmatch.sail.clustering import connected_components
+
+    ids = spark.createDataFrame([(i,) for i in range(7)], ["__row_id__"])
+    edges = spark.createDataFrame(
+        [(0, 1), (1, 2), (2, 3), (3, 4), (4, 5)], ["a", "b"]
+    )
+
+    base = _partition(connected_components(edges, ids, id_col="__row_id__"))
+    ckpt = _partition(
+        connected_components(
+            edges,
+            ids,
+            id_col="__row_id__",
+            checkpoint_interval=1,
+            checkpoint_dir=str(tmp_path / "ckpt_lp"),
+        )
+    )
+
+    assert ckpt == base
+    assert base == {frozenset({0, 1, 2, 3, 4, 5}), frozenset({6})}
+
+
+def test_label_prop_checkpoint_interval_requires_dir(spark):
+    """connected_components: checkpoint_interval>0 with no dir is a loud misconfig."""
+    from goldenmatch.sail.clustering import connected_components
+
+    ids = spark.createDataFrame([(0,), (1,)], ["__row_id__"])
+    edges = spark.createDataFrame([(0, 1)], ["a", "b"])
+    with pytest.raises(ValueError):
+        connected_components(edges, ids, id_col="__row_id__", checkpoint_interval=1)

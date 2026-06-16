@@ -19,6 +19,8 @@ def connected_components(
     ids_df: Any,
     *,
     id_col: str = "__row_id__",
+    checkpoint_interval: int = 0,
+    checkpoint_dir: str | None = None,
 ) -> Any:
     """Distributed weakly-connected components.
 
@@ -35,8 +37,23 @@ def connected_components(
         Spark DataFrame ``(cluster_id, member_id)`` -- one row per node;
         ``cluster_id`` is the component's min member id (a stable, label-
         independent partition). Matches ``build_cluster_frames.assignments``.
+
+    ``checkpoint_interval`` / ``checkpoint_dir`` (the scale lineage fix): each
+    round re-joins ``labels`` against itself, so the Spark Connect plan grows
+    unbounded and the optimizer chokes / the run hangs at scale. When
+    ``checkpoint_interval > 0`` (requires ``checkpoint_dir``), truncate the
+    lineage every N rounds via a parquet barrier (``_truncate_lineage``).
+    Default 0 = off -- byte-identical, and the tiny-fixture gates need no dir.
+    label-prop is still O(diameter); use ``connected_components_scale`` for long
+    chains at 100M.
     """
     from pyspark.sql import functions as F
+
+    if checkpoint_interval and not checkpoint_dir:
+        raise ValueError(
+            "connected_components: checkpoint_interval>0 requires checkpoint_dir "
+            "(a writable path reachable by the cluster)."
+        )
 
     # Symmetric edges so labels flow both ways: (src, dst) for both
     # orientations. Self-loops are harmless (a < b avoids them anyway).
@@ -51,8 +68,10 @@ def connected_components(
 
     # Iterate to fixpoint. Bounded by component diameter; at S2 fixture scale
     # this is 2-3 rounds. The convergence count is a driver scalar (cheap).
-    # NOTE for S4: cache/checkpoint `labels` each round + swap in large-star/
-    # small-star -- label-prop's O(diameter) won't bind at 100M chains.
+    # At scale the per-round joins grow the Spark Connect plan unbounded; pass
+    # checkpoint_interval/checkpoint_dir to truncate the lineage via a parquet
+    # barrier every N rounds (the 100M lineage-growth fix; same discipline the
+    # scale WCC + Ray path use -- decisions/0011).
     #
     # Spark Connect discipline: every join is on a SHARED COLUMN NAME (auto-
     # coalesced, no duplicate-column ambiguity), and the other side is RENAMED
@@ -60,7 +79,7 @@ def connected_components(
     # a column via the ``df["col"]`` handle across a self-similar join (the
     # AMBIGUOUS_REFERENCE / CANNOT_RESOLVE footgun across iterations).
     max_rounds = 100
-    for _ in range(max_rounds):
+    for round_idx in range(max_rounds):
         # Each node's neighbor-min label. Join edges.dst == labels.node by
         # renaming labels -> (dst, dst_label) and joining on the shared "dst".
         lab_for_nbr = labels.select(
@@ -93,6 +112,15 @@ def connected_components(
         labels = new_labels
         if changed == 0:
             break
+        # Truncate the accumulated label-prop lineage on continuing rounds.
+        if (
+            checkpoint_dir
+            and checkpoint_interval
+            and (round_idx + 1) % checkpoint_interval == 0
+        ):
+            labels = _truncate_lineage(
+                labels, checkpoint_dir, f"wcc_lp_round_{round_idx + 1}"
+            )
 
     return labels.select(
         F.col("label").alias("cluster_id"), F.col("node").alias("member_id")

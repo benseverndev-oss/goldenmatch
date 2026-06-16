@@ -83,9 +83,9 @@ def run_sail_pipeline(
     synthesized when omitted. Default ``emit_identity=False`` is byte-for-byte
     the prior behavior.
 
-    ``wcc_checkpoint_interval`` / ``wcc_checkpoint_dir`` (scale WCC only): when
-    set, truncate the pointer-jump lineage every N rounds via a parquet barrier
-    (the 100M lineage-growth fix; default 0 = off, byte-identical).
+    ``wcc_checkpoint_interval`` / ``wcc_checkpoint_dir`` (both WCC algorithms):
+    when set, truncate the per-round lineage every N rounds via a parquet
+    barrier (the 100M lineage-growth fix; default 0 = off, byte-identical).
     """
     _validate_sail_pipeline_supported(scorer_name=scorer_name, wcc=wcc)
 
@@ -114,7 +114,13 @@ def run_sail_pipeline(
             checkpoint_dir=wcc_checkpoint_dir,
         )
     else:
-        assignments = connected_components(pairs, ids_df, id_col=id_col)
+        assignments = connected_components(
+            pairs,
+            ids_df,
+            id_col=id_col,
+            checkpoint_interval=wcc_checkpoint_interval,
+            checkpoint_dir=wcc_checkpoint_dir,
+        )
     golden = build_golden(
         assignments,
         source_df,
