@@ -77,8 +77,8 @@ def run_graph_er(
     convergence_threshold: float = 0.01,
     propagation_mode: str = "additive",
     *,
-    alpha: float = 0.5,
-    rel_threshold: float = 0.5,
+    alpha: float = 0.75,
+    rel_threshold: float = 0.50,
     rel_mode: str = "jaccard",
 ) -> GraphERResult:
     """Run multi-table entity resolution with evidence propagation.

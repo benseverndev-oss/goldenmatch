@@ -736,3 +736,111 @@ def test_phase1_collective_beats_baselines_direct(seed, tmp_path):
     assert f_coll >= f_indep + 0.05, (
         f"collective {f_coll:.3f} must beat independent {f_indep:.3f}+0.05 (real lift)"
     )
+
+
+# ---------------------------------------------------------------------------
+# Task 7: end-to-end relational mode via the PUBLIC run_graph_er API.
+#
+# This is the public-surface lift gate: it exercises the SAME collective core as
+# the direct-call check above, but routed entirely through
+# run_graph_er(propagation_mode="relational") -- i.e. the neighbor_index is built
+# inside run_graph_er from the relationships' FK clusters (not hand-rolled in the
+# test). It uses the Task-8-calibrated operating point (alpha=0.75,
+# rel_threshold=0.50, rel_mode="jaccard"), which are the run_graph_er defaults.
+#
+# The collective fixpoint here seeds from run_graph_er's own author dedupe
+# (run_dedupe, not dedupe_df), so it lands near -- but a touch below -- the
+# direct-call peak (~0.93). It still clears the +0.05 lift bar with wide margin.
+# A materially LOWER number than ~0.90 means the neighbor_index wiring is wrong
+# (e.g. members grouped by author instead of by paper-cluster, or mis-tagged
+# entity names) -- debug the wiring, do NOT lower the bar.
+# ---------------------------------------------------------------------------
+
+_RELATIONAL_ALPHA = 0.75
+_RELATIONAL_THRESHOLD = 0.50
+
+
+def _collective_via_graph_er_f1(fixture, tmp_path):
+    """End-to-end collective ER via run_graph_er(propagation_mode="relational").
+
+    Mirrors _flatboost_author_f1's entity setup (author + paper entities, paper
+    clusters group authorship rows per paper, FK author_row_id) but flips the
+    propagation mode to "relational". run_graph_er internally builds the
+    co-author neighbor_index from the paper clusters' FK-linked author records
+    and runs collective_resolve. Returns (precision, recall, F1) on authors.
+    """
+    import polars as pl
+    from goldenmatch.config.schemas import (
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
+    )
+    from goldenmatch.core.graph_er import EntityType, Relationship, run_graph_er
+
+    authors_for_csv = fixture.authors.select(["__row_id__", "name"]).with_columns(
+        pl.col("__row_id__").alias("author_row_id")
+    )
+    author_csv = str(tmp_path / "authors.csv")
+    authors_for_csv.write_csv(author_csv)
+
+    authorship_w_pid = (
+        fixture.authorship.join(
+            fixture.papers.rename({"__row_id__": "paper_row_id"}),
+            on="paper_row_id",
+            how="left",
+        )
+        .with_row_index("__row_id__")
+        .with_columns(pl.col("__row_id__").cast(pl.Int64))
+    )
+    paper_csv = str(tmp_path / "paper_authorship.csv")
+    authorship_w_pid.write_csv(paper_csv)
+
+    author_cfg = _author_config()
+    paper_mk = MatchkeyConfig(
+        name="paper_exact",
+        type="exact",
+        fields=[MatchkeyField(field="paper_id", transforms=["strip"])],
+    )
+    paper_blocking = BlockingConfig(
+        keys=[BlockingKeyConfig(fields=["paper_id"], transforms=[])],
+    )
+    paper_cfg = GoldenMatchConfig(matchkeys=[paper_mk], blocking=paper_blocking)
+
+    author_entity = EntityType(name="author", sources=[(author_csv, "authors")], config=author_cfg)
+    paper_entity = EntityType(name="paper", sources=[(paper_csv, "paper_authorship")], config=paper_cfg)
+    rel = Relationship(
+        from_entity="paper", to_entity="author",
+        join_key="author_row_id", evidence_weight=0.4,
+    )
+    result = run_graph_er(
+        entities=[author_entity, paper_entity],
+        relationships=[rel],
+        max_iterations=10,
+        propagation_mode="relational",
+        alpha=_RELATIONAL_ALPHA,
+        rel_threshold=_RELATIONAL_THRESHOLD,
+    )
+
+    author_et = result.entities["author"]
+    pred = {}
+    for cid, cinfo in author_et.clusters.items():
+        for mid in cinfo["members"]:
+            pred[mid] = cid
+    all_ids = fixture.authors["__row_id__"].to_list()
+    next_singleton = max(pred.values(), default=-1) + 1
+    for rid in all_ids:
+        if rid not in pred:
+            pred[rid] = next_singleton
+            next_singleton += 1
+
+    return pairwise_prf(pred, fixture.truth)
+
+
+def test_phase1_relational_mode_via_graph_er(tmp_path):
+    fx = generate_relational_fixture(seed=7, n_entities=40)
+    _, _, f_indep = _independent_author_f1(fx, tmp_path)
+    _, _, f_rel   = _collective_via_graph_er_f1(fx, tmp_path)
+    print(f"\n[task7] indep={f_indep:.3f} relational(graph_er)={f_rel:.3f}")
+    assert f_rel >= f_indep + 0.05
