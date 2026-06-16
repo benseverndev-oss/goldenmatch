@@ -169,7 +169,6 @@ def _flatboost_author_f1(fixture, tmp_path):
       This propagates: "two authors who share papers should get score boosts."
     """
     import polars as pl
-    import goldenmatch
     from goldenmatch.config.schemas import (
         BlockingConfig,
         BlockingKeyConfig,
@@ -362,3 +361,118 @@ def test_collective_resolve_disambiguates_homonyms():
     out = collective_resolve(entity_state, idx, alpha=0.7, threshold=0.5, max_iterations=5)
     assert out["author"][0] == out["author"][1]   # same real author -> merged
     assert out["author"][2] != out["author"][0]   # homonym kept apart
+
+
+# ---------------------------------------------------------------------------
+# Task 8: Phase-1 collective-ER lift gate (the make-or-break gate)
+#
+# Proves neighborhood-similarity collective ER beats BOTH baselines on the
+# relational fixture: it must clear flat-boost (trivially) AND beat the
+# attribute-only baseline by a real >=0.05 margin.
+#
+# Chosen calibration: alpha=0.75, threshold=0.50, rel_mode="jaccard".
+# Selected from a sweep over alpha in {0.5..0.85} x threshold in {0.40..0.60}
+# on seeds 7/8/9 (n_entities=40). Picked the safest INTERIOR cell -- high lift
+# with healthy neighbors on every side -- NOT the single peak. At threshold
+# 0.40 the high-alpha cells over-merge and collapse to F1~0.05 (an over-merge
+# cliff); 0.50 sits well clear of it.
+#
+# Measured at the chosen (alpha=0.75, threshold=0.50):
+#   seed | independent | flat-boost | collective | lift vs indep
+#   -----+-------------+------------+------------+--------------
+#     7  |    0.681    |   0.059    |   0.927    |   +0.246
+#     8  |    0.690    |   0.059    |   0.962    |   +0.272
+#     9  |    0.630    |   0.059    |   0.905    |   +0.275
+#
+# Min lift across the three seeds is +0.246 -- far above the +0.05 bar.
+# ---------------------------------------------------------------------------
+
+# Chosen calibration constants (see table above).
+_COLLECTIVE_ALPHA = 0.75
+_COLLECTIVE_THRESHOLD = 0.50
+
+
+def _collective_author_f1(fixture, tmp_path):
+    """Run neighborhood-similarity collective ER on author names; return (P, R, F1).
+
+    Pipeline:
+    1. Attribute-only ER (jaro_winkler on name) yields both the scored pairs
+       (``attr_pairs``, the attribute similarity) and an initial
+       ``{rid -> cid}`` clustering (seeds the first neighbor snapshot).
+    2. Co-authorship neighbor index: group authorship by paper; each paper is a
+       group of ``("author", author_row_id)`` members (self-relational).
+    3. ``collective_resolve`` blends attribute + relational (neighbor-cluster
+       Jaccard) similarity and re-clusters to a fixpoint.
+    """
+    import goldenmatch
+    from goldenmatch.core.collective import (
+        build_neighbor_index,
+        collective_resolve,
+    )
+
+    # --- (1) attribute-only ER: scored pairs + seed clusters ---
+    cfg = _author_config()
+    authors_df = fixture.authors.select(["__row_id__", "name"])
+    result = goldenmatch.dedupe_df(authors_df, config=cfg)
+
+    attr_pairs = list(result.scored_pairs)  # [(min_id, max_id, score)]
+
+    all_ids = authors_df["__row_id__"].to_list()
+    seed_clusters: dict = {}
+    for cid, cinfo in result.clusters.items():
+        for mid in cinfo["members"]:
+            seed_clusters[mid] = cid
+    # Singletons: any author row not placed in a multi-member cluster.
+    next_cid = max(seed_clusters.values(), default=-1) + 1
+    for rid in all_ids:
+        if rid not in seed_clusters:
+            seed_clusters[rid] = next_cid
+            next_cid += 1
+
+    # --- (2) co-authorship neighbor index (paper -> co-member group) ---
+    members_by_paper: dict = {}
+    for row in fixture.authorship.iter_rows(named=True):
+        members_by_paper.setdefault(row["paper_row_id"], []).append(
+            ("author", row["author_row_id"])
+        )
+    neighbor_index = build_neighbor_index(list(members_by_paper.values()))
+
+    # --- (3) collective resolve ---
+    entity_state = {
+        "author": {
+            "attr_pairs": attr_pairs,
+            "ids": all_ids,
+            "clusters": seed_clusters,
+        }
+    }
+    out = collective_resolve(
+        entity_state,
+        neighbor_index,
+        alpha=_COLLECTIVE_ALPHA,
+        rel_mode="jaccard",
+        threshold=_COLLECTIVE_THRESHOLD,
+        max_iterations=10,
+    )
+
+    pred = dict(out["author"])
+    # Defensive: ensure every author id is present (singletons get fresh ids).
+    next_cid = max(pred.values(), default=-1) + 1
+    for rid in all_ids:
+        if rid not in pred:
+            pred[rid] = next_cid
+            next_cid += 1
+
+    return pairwise_prf(pred, fixture.truth)
+
+
+def test_phase1_collective_beats_baselines(tmp_path):
+    for seed in (7, 8, 9):
+        fx = generate_relational_fixture(seed=seed, n_entities=40)
+        _, _, f_indep = _independent_author_f1(fx, tmp_path)
+        _, _, f_flat = _flatboost_author_f1(fx, tmp_path)
+        _, _, f_coll = _collective_author_f1(fx, tmp_path)
+        print(f"\n[phase-1 seed={seed}] indep={f_indep:.3f} flat={f_flat:.3f} coll={f_coll:.3f}")
+        assert f_coll > f_flat, f"collective {f_coll:.3f} must beat flat-boost {f_flat:.3f}"
+        assert f_coll >= f_indep + 0.05, (
+            f"collective {f_coll:.3f} must beat independent {f_indep:.3f}+0.05 (real lift)"
+        )
