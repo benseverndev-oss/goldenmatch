@@ -51,8 +51,10 @@ jobs:
         run: |
           uv sync --all-packages
           uv pip install -e packages/python/goldenmatch
+      - name: Install sentence-transformers (free semantic embedder for emb-st)
+        run: uv pip install sentence-transformers
 
-      - name: Run benchmark (offline -- the committed table)
+      - name: Run benchmark (offline -- the committed table, incl. emb-st)
         working-directory: ${{ env.BENCH_DIR }}
         run: "$GITHUB_WORKSPACE/.venv/bin/python erkgbench/run.py"
       - name: Upload offline results (commit these)
@@ -60,6 +62,21 @@ jobs:
         with:
           name: er-kg-results-offline
           path: ${{ env.BENCH_DIR }}/results/
+
+      - name: Threshold sweep (emb-st) + controller diagnostic
+        working-directory: ${{ env.BENCH_DIR }}
+        run: |
+          PY="$GITHUB_WORKSPACE/.venv/bin/python"
+          {
+            echo '## emb-st (MiniLM) threshold sweep'
+            echo '```'
+            "$PY" erkgbench/sweep.py --provider local || echo "(sweep failed)"
+            echo '```'
+            echo '## Controller effort diagnostic (auto+fields: normal vs thinking vs einstein)'
+            echo '```'
+            "$PY" erkgbench/diagnose_controller.py || echo "(diagnostic failed)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Run benchmark (keyed -- emb-openai + auto+llm; prose only)
         working-directory: ${{ env.BENCH_DIR }}
