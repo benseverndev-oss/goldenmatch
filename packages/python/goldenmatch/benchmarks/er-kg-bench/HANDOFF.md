@@ -41,8 +41,8 @@ Outputs: `results/RESULTS.md` + `results/results.json`. Lint with `ruff check .`
 ## Layout
 
 ```
-seeds.jsonl                       32 ground-truth entities, mentions tagged by failure_class
-dataset/generate.py               seeds -> records.csv (105 records)
+seeds.jsonl                       54 ground-truth entities, mentions tagged by failure_class
+dataset/generate.py               seeds -> records.csv (171 records)
 erkgbench/metrics.py              pairwise P/R/F1 per class + determinism check
 erkgbench/adapters/base.py        Adapter protocol, Record, union-find clustering helpers
 erkgbench/adapters/modeled.py     the 7 framework default-rule models (exact constants + source citations)
@@ -55,13 +55,13 @@ README.md / TAXONOMY.md           the writeup + the 9-class taxonomy with framew
 
 | System | F1 | note |
 |---|---|---|
-| goldenmatch(auto+fields) | **0.674** | leads; only system scoring non-zero on `synonym` (via the context field) |
-| Neo4j-KGBuilder | 0.636 | cosine 0.97 / edit-dist<3 / substring |
-| neo4j-graphrag(fuzzy) | 0.548 | rapidfuzz WRatio≥0.8 |
-| goldenmatch(emb-ann) | 0.529 | offline char-embedding ANN; beats string-only auto (0.418) |
-| LlamaIndex-PGI | 0.486 | KNN-10 + word-dist<5 + cosine>0.9 |
-| goldenmatch(auto) | 0.418 | string-only zero-config |
-| MS-GraphRAG / LightRAG / Cognee / mem0 | ~0.18 | exact-match family; precision **0.0** on `same_name_collision` |
+| goldenmatch(auto+fields) | **0.629** | leads committed rows; only one scoring non-zero on `synonym` (via the context field) |
+| Neo4j-KGBuilder | 0.593 | cosine 0.97 / edit-dist<3 / substring |
+| goldenmatch(auto) | 0.485 | string-only zero-config |
+| goldenmatch(emb-ann) | 0.479 | offline char-embedding ANN; ~level with string-only auto |
+| neo4j-graphrag(fuzzy) | 0.366 | rapidfuzz WRatio≥0.8; precision collapses on the collisions |
+| LlamaIndex-PGI | 0.237 | KNN-10 + word-dist<5 + cosine>0.9 |
+| MS-GraphRAG / LightRAG / Cognee / mem0 | ~0.15 | exact-match family; precision **0.0** on `same_name_collision` |
 
 ## The three load-bearing findings (don't re-derive these)
 
@@ -70,13 +70,14 @@ README.md / TAXONOMY.md           the writeup + the 9-class taxonomy with framew
    constants in `modeled.py` (each cites the source file + GitHub issue).
 2. **The LLM scorer is the WRONG tool for the semantic classes** (measured, key-dependent, kept
    out of the committed table). `goldenmatch(auto+llm)` *lowered* abbr/synonym/cross-lingual
-   (F1 0.674→0.607) because `llm_scorer` is a **precision filter on borderline candidate pairs
-   blocking already produced** — it can confirm/reject a candidate, never create one. It never
-   sees "IBM"↔"International Business Machines" because blocking doesn't pair them.
+   (synonym stays 0.0, abbreviation flat, overall ~flat 0.629→0.632) because `llm_scorer` is a
+   **precision filter on borderline candidate pairs blocking already produced** — it can
+   confirm/reject a candidate, never create one. It never sees "IBM"↔"International Business
+   Machines" because blocking doesn't pair them.
 3. **Embedding-ANN is the RIGHT mechanism, but the offline embedder is char-based.** The shipped
    `goldenmatch(emb-ann)` uses goldenmatch's in-house char-n-gram embedder (pure numpy, no key,
    no torch). It beats string blocking on cross-lingual transliteration / typo / org-suffix, but
-   **abbreviation (~0.18) and synonym (0.0) stay unsolved** — char-n-gram cosine has no world
+   **abbreviation (~0.13) and synonym (0.0) stay unsolved** — char-n-gram cosine has no world
    knowledge (IBM↔IBM-expansion ~0.05; Coumadin↔warfarin ~0.02).
 
 **Net arc:** string blocking → misses semantics; LLM pair-scorer → wrong tool; embedding-ANN →
@@ -85,10 +86,11 @@ embedding does** (4 below).
 
 4. **A semantic embedding closes the last two classes (measured, key-dependent).**
    `goldenmatch(emb-openai)` swaps OpenAI `text-embedding-3-small` (stdlib HTTP, no torch) into the
-   `emb-ann` path at cosine ≥ 0.55: **abbr 0.18→0.95, synonym 0.0→0.88, overall F1 0.742** (beats
-   the prior leader `auto+fields` 0.674). Only the embedder changed vs `emb-ann`, so the gain is
-   the world knowledge in the vectors. Negative-class precision stays low (`coll_P` 0.39 / `temp_P`
-   0.38 — same as every name-only row; name-only embeddings over-merge colliding surface forms).
+   `emb-ann` path at cosine ≥ 0.55: **abbr 0.13→0.98, synonym 0.0→0.73, overall F1 0.721** (beats
+   the committed leader `auto+fields` 0.629). Only the embedder changed vs `emb-ann`, so the gain
+   is the world knowledge in the vectors. Negative-class precision stays low (`coll_P` 0.39 /
+   `temp_P` 0.38 — same as every name-only row; name-only embeddings over-merge colliding surface
+   forms).
    Key-gated → out of the committed table, recorded as prose in README ("The semantic-embedding
    result"). Reproduce: `OPENAI_API_KEY=sk-... python erkgbench/run.py`.
 
@@ -109,9 +111,12 @@ to avoid leaking it.
 
 - **Live-framework adapters** for the deterministic resolvers (neo4j-graphrag rapidfuzz/spaCy,
   LlamaIndex Cypher) behind an optional extra, to corroborate the models in `modeled.py`.
-- **More seed entities** — `seeds.jsonl` is small (32 entities / 105 records). Keep adding the
-  precision-critical negative classes (`same_name_collision`, `temporal_version` — distinct
-  entities with colliding surface forms). Re-run `generate.py` after editing.
+- **More seed entities** — grown to 54 entities / 171 records (was 32 / 105), with extra weight
+  on the precision-critical negatives. Keep adding `same_name_collision` / `temporal_version`
+  (distinct entities, colliding surface forms) and harder `synonym_brand`. Re-run `generate.py`
+  after editing, then regenerate results via the **`bench-er-kg` CI lane** (the goldenmatch
+  rows are too memory-heavy for a laptop; offline artifact = committed table, keyed run = the
+  emb-openai/auto+llm prose via the `OPENAI_API_KEY` Actions secret).
 - **The before/after GraphRAG demo** — build a KG, show the agent answering wrong from
   fragmented/over-merged entities, resolve, show it correct. Draws its numbers from this harness.
   This is the shareable artifact (Show-HN / blog).
