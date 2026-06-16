@@ -119,7 +119,7 @@ flowchart LR
 | **[InferMap](packages/python/infermap/README.md)** | Python · TS | Schema mapping engine — auto-aligns columns across heterogeneous sources. | `pip install infermap` · `npm i infermap` |
 | **[GoldenAnalysis](packages/python/goldenanalysis/README.md)** | Python · TS | Cross-cutting analysis & reporting — consumes any stage's typed artifacts (or a raw DataFrame) and emits a unified, exportable `AnalysisReport`; optional Rust / WASM `histogram`+`quantile` kernels. | `pip install goldenanalysis` · `npm i goldenanalysis` |
 | **[goldenmatch-extensions](packages/rust/extensions/README.md)** | Rust | Postgres extension (pgrx) + DuckDB UDFs. SQL-native fuzzy matching. | source build |
-| **[dbt-goldensuite](packages/dbt/goldensuite/README.md)** | dbt · Python | dbt package — quality-gate tests, correction CRUD macros + GoldenCheck assertions for warehouse models. | `packages.yml` (git subdir) |
+| **[dbt-goldensuite](packages/dbt/goldensuite/README.md)** | dbt · Python | dbt package — dedupe + two-table match materializations (incl. zero-config Fellegi-Sunter), an ER match-quality build gate, quality-gate tests, transforms, and identity-graph reads for warehouse models. | `packages.yml` (git subdir) |
 | **[goldencheck-action](packages/actions/goldencheck/README.md)** | YAML | GitHub Action — fail PRs that introduce data-quality regressions. | Marketplace |
 
 > Headline pitch and the deepest docs live in **[packages/python/goldenmatch/README.md](packages/python/goldenmatch/README.md)** (~1,300 lines, full feature list, CLI, architecture, benchmarks).
@@ -338,7 +338,7 @@ goldenmatch/
 │   ├── rust/
 │   │   └── extensions/       # Postgres pgrx + DuckDB UDFs (own Cargo workspace)
 │   ├── python/goldensuite-mcp/ # aggregator MCP server (one container, all tools)
-│   ├── dbt/goldencheck/      # dbt package
+│   ├── dbt/goldensuite/      # dbt package (materializations, tests, macros)
 │   └── actions/goldencheck/  # GitHub Action
 ├── examples/
 │   ├── python/               # 6 runnable Python scripts (quickstart → MCP)

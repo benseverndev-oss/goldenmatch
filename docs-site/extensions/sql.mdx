@@ -87,7 +87,9 @@ Registered UDFs:
 | `goldenmatch_score_pair(rec_a, rec_b, config)` | Score two JSON records. |
 | `goldenmatch_explain(rec_a, rec_b, config)` | Explain a match. |
 | `goldenmatch_dedupe_table(table, config)` | Deduplicate a table. |
-| `goldenmatch_match_tables(target, ref, config)` | Match two tables. |
+| `goldenmatch_match_tables(target, ref, config)` | Match two tables (JSON output). |
+| `goldenmatch_match_pairs(target, ref, config)` | Match two tables, returns `(target_id, reference_id, score)` rows (Postgres). |
+| `goldenmatch_autoconfig(table, mode)` | Derive a config from a table; `mode` = `'standard'` or `'probabilistic'` (Fellegi-Sunter). |
 | `goldenmatch_dedupe(json, config)` | Deduplicate JSON records directly. |
 | `goldenmatch_match(target_json, ref_json, config)` | Match two JSON record sets. |
 | `goldenmatch_connected_components(...)` | Group a candidate-pair graph into entities. |
