@@ -22,7 +22,12 @@ if str(_BENCH_ROOT) not in sys.path:
     sys.path.insert(0, str(_BENCH_ROOT))
 
 from erkgbench import metrics  # noqa: E402
-from erkgbench.adapters import GoldenMatchAdapter, Record, all_modeled  # noqa: E402
+from erkgbench.adapters import (  # noqa: E402
+    GoldenMatchAdapter,
+    GoldenMatchEmbAnnAdapter,
+    Record,
+    all_modeled,
+)
 
 DATASET = _BENCH_ROOT / "dataset" / "records.csv"
 RESULTS_DIR = _BENCH_ROOT / "results"
@@ -92,6 +97,9 @@ def run(embedder_kind: str | None) -> dict:
     adapters = [
         GoldenMatchAdapter(mode="auto"),
         GoldenMatchAdapter(mode="auto_fields"),
+        # Embedding-ANN candidate generation via goldenmatch's offline (no-key,
+        # no-torch) in-house embedder -- the lever the LLM experiment pointed at.
+        GoldenMatchEmbAnnAdapter(),
     ]
     # The semantic-class attacker only activates with a key (else it is the same
     # as auto+fields with a per-pair LLM step). Skip rather than fake it.
@@ -101,11 +109,16 @@ def run(embedder_kind: str | None) -> dict:
 
     rows = []
     for ad in adapters:
-        t0 = time.perf_counter()
-        clustering = ad.resolve(records)
-        elapsed_ms = (time.perf_counter() - t0) * 1000.0
-        # Determinism: identical partition on a re-run.
-        deterministic = metrics.clusterings_equal(clustering, ad.resolve(records))
+        try:
+            t0 = time.perf_counter()
+            clustering = ad.resolve(records)
+            elapsed_ms = (time.perf_counter() - t0) * 1000.0
+            # Determinism: identical partition on a re-run.
+            deterministic = metrics.clusterings_equal(clustering, ad.resolve(records))
+        except Exception as exc:  # noqa: BLE001 - a flaky adapter must not sink the board
+            rows.append({"name": ad.name, "defaults": ad.defaults, "error": str(exc)[:200]})
+            print(f"  [skip] {ad.name}: {type(exc).__name__}: {str(exc)[:120]}", file=sys.stderr)
+            continue
         by_class = metrics.score_by_class(entity_ids, failure_classes, clustering)
         overall = by_class["__overall__"]
         rows.append(
@@ -174,6 +187,9 @@ def to_markdown(report: dict) -> str:
         "|---|---|---|---|---|---|---|---|",
     ]
     for r in report["results"]:
+        if "error" in r:
+            lines.append(f"| {r['name']} | _error_ | | | | | | {r['error'][:40]} |")
+            continue
         o = r["overall"]
         cp = r["per_class_precision"].get("same_name_collision", "-")
         tp = r["per_class_precision"].get("temporal_version", "-")
@@ -186,6 +202,8 @@ def to_markdown(report: dict) -> str:
         _short(c) for c in CLASS_ORDER
     ) + " |", "|---|" + "---|" * len(CLASS_ORDER)]
     for r in report["results"]:
+        if "error" in r:
+            continue
         cells = " | ".join(
             str(r["per_class_f1"].get(c, "-")) for c in CLASS_ORDER
         )
