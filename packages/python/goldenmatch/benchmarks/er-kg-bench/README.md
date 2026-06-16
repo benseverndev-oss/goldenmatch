@@ -19,14 +19,15 @@ benchmark for how good that built-in dedup actually is. This is one.
 
 ```bash
 cd packages/python/goldenmatch/benchmarks/er-kg-bench
-python dataset/generate.py          # seeds.jsonl -> records.csv (committed; regenerable)
+python dataset/build_real.py         # sources.jsonl -> records.csv (real data; committed, regenerable)
 python erkgbench/run.py              # -> results/RESULTS.md + results/results.json
 python erkgbench/run.py --embedder st   # also activate the cosine OR-terms (MiniLM)
 ```
 
-No API keys, no framework installs. Only deps: `polars`, `rapidfuzz`,
-`goldenmatch` (all already in this repo). `--embedder st` additionally needs
-`sentence-transformers`.
+`records.csv` is committed, so `run.py` works offline with no deps beyond `polars`,
+`rapidfuzz`, `goldenmatch`. Rebuilding it (`build_real.py`) fetches real surface-form
+variants from **Wikidata** (`wbgetentities`) + **RxNorm** (RxNav REST) over HTTP —
+stdlib only, no key. `--embedder st` additionally needs `sentence-transformers`.
 
 ## How it's fair
 
@@ -156,8 +157,9 @@ runner adds the `emb-openai` and `auto+llm` rows only when it sees a key).
 ## Layout
 
 ```
-seeds.jsonl            ground-truth entities + tagged surface-form mentions
-dataset/generate.py    seeds -> records.csv (record_id, mention, type, context, entity_id, failure_class)
+dataset/sources.jsonl  curated real entities (Wikidata QIDs / RxNorm ingredients) tagged by failure class
+dataset/build_real.py  sources.jsonl -> records.csv via Wikidata + RxNorm (QID/RxCUI = ground truth)
+dataset/records.csv    committed corpus (record_id, mention, type, context, entity_id, failure_class, source)
 erkgbench/metrics.py   pairwise P/R/F1, per failure class; determinism check
 erkgbench/adapters/    base contract + goldenmatch adapter + modelled defaults
 erkgbench/run.py       runner -> results/{RESULTS.md,results.json}
@@ -166,9 +168,11 @@ TAXONOMY.md            the nine failure classes, with framework citations
 
 ## Extending
 
-* **Add a failure class / more entities:** edit `seeds.jsonl`, re-run
-  `generate.py`. Negative classes (distinct entities, colliding strings) are
-  the precision tests — keep adding them.
+* **Add a failure class / more entities:** add curated rows to `sources.jsonl`
+  (Wikidata QIDs / RxNorm ingredients), re-run `build_real.py`. Dry-run first
+  (`--dry-run`) to confirm a QID actually carries the surface forms you want.
+  Negative classes (distinct entities, colliding strings) are the precision
+  tests — keep adding them.
 * **Crack abbreviation + synonym (done, key-gated):** the `emb-openai` mode swaps a
   semantic embedder (`text-embedding-3-small`, no torch) into the `emb-ann` path and
   cracks both classes (abbr 0.98, synm 0.73; overall F1 0.721) — see "The
