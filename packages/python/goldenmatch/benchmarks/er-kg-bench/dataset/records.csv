@@ -104,3 +104,69 @@ record_id,mention,entity_type,context,entity_id,failure_class
 102,Oscorp,org,identical name multiple chunks,doc_oscorp_xdoc,cross_document_exact
 103,Oscorp,org,identical name multiple chunks,doc_oscorp_xdoc,cross_document_exact
 104,Oscorp,org,identical name multiple chunks,doc_oscorp_xdoc,cross_document_exact
+105,WHO,org,public health agency geneva switzerland,org_who,abbreviation
+106,World Health Organization,org,public health agency geneva switzerland,org_who,abbreviation
+107,W.H.O.,org,public health agency geneva switzerland,org_who,abbreviation
+108,World Health Organisation,org,public health agency geneva switzerland,org_who,abbreviation
+109,FBI,org,law enforcement agency united states,org_fbi,abbreviation
+110,Federal Bureau of Investigation,org,law enforcement agency united states,org_fbi,abbreviation
+111,F.B.I.,org,law enforcement agency united states,org_fbi,abbreviation
+112,MIT,org,university cambridge massachusetts,org_mit,abbreviation
+113,Massachusetts Institute of Technology,org,university cambridge massachusetts,org_mit,abbreviation
+114,NATO,org,military alliance brussels,org_nato,abbreviation
+115,North Atlantic Treaty Organization,org,military alliance brussels,org_nato,abbreviation
+116,N.A.T.O.,org,military alliance brussels,org_nato,abbreviation
+117,ibuprofen,drug,nsaid analgesic anti-inflammatory,drug_ibuprofen,synonym_brand
+118,Advil,drug,nsaid analgesic anti-inflammatory,drug_ibuprofen,synonym_brand
+119,Motrin,drug,nsaid analgesic anti-inflammatory,drug_ibuprofen,synonym_brand
+120,sildenafil,drug,vasodilator pde5 inhibitor,drug_sildenafil,synonym_brand
+121,Viagra,drug,vasodilator pde5 inhibitor,drug_sildenafil,synonym_brand
+122,Revatio,drug,vasodilator pde5 inhibitor,drug_sildenafil,synonym_brand
+123,fluoxetine,drug,antidepressant ssri,drug_fluoxetine,synonym_brand
+124,Prozac,drug,antidepressant ssri,drug_fluoxetine,synonym_brand
+125,metformin,drug,antidiabetic biguanide blood sugar,drug_metformin,synonym_brand
+126,Glucophage,drug,antidiabetic biguanide blood sugar,drug_metformin,synonym_brand
+127,Michael Jordan,person,basketball player chicago bulls,per_mjordan_athlete,same_name_collision
+128,Michael Jeffrey Jordan,person,basketball player chicago bulls,per_mjordan_athlete,same_name_collision
+129,MJ,person,basketball player chicago bulls,per_mjordan_athlete,same_name_collision
+130,Michael Jordan,person,machine learning professor berkeley,per_mjordan_prof,same_name_collision
+131,Michael I. Jordan,person,machine learning professor berkeley,per_mjordan_prof,same_name_collision
+132,M. Jordan,person,machine learning professor berkeley,per_mjordan_prof,same_name_collision
+133,Apple,org,technology company cupertino california,org_apple_tech,same_name_collision
+134,Apple Inc,org,technology company cupertino california,org_apple_tech,same_name_collision
+135,Apple Computer,org,technology company cupertino california,org_apple_tech,same_name_collision
+136,Apple,org,record label the beatles london,org_apple_records,same_name_collision
+137,Apple Corps,org,record label the beatles london,org_apple_records,same_name_collision
+138,Apple Records,org,record label the beatles london,org_apple_records,same_name_collision
+139,FIFA World Cup 2018,event,association football world cup russia 2018,ev_wc2018,temporal_version
+140,World Cup 2018,event,association football world cup russia 2018,ev_wc2018,temporal_version
+141,2018 World Cup,event,association football world cup russia 2018,ev_wc2018,temporal_version
+142,FIFA World Cup 2022,event,association football world cup qatar 2022,ev_wc2022,temporal_version
+143,World Cup 2022,event,association football world cup qatar 2022,ev_wc2022,temporal_version
+144,2022 World Cup,event,association football world cup qatar 2022,ev_wc2022,temporal_version
+145,Python 2,event,programming language major version legacy,sw_python2,temporal_version
+146,Python 2.7,event,programming language major version legacy,sw_python2,temporal_version
+147,Python 3,event,programming language major version current,sw_python3,temporal_version
+148,Python 3.12,event,programming language major version current,sw_python3,temporal_version
+149,Google,org,search engine mountain view california,org_google_typo,typo
+150,Googel,org,search engine mountain view california,org_google_typo,typo
+151,Gogle,org,search engine mountain view california,org_google_typo,typo
+152,Google,org,search engine mountain view california,org_google_typo,typo
+153,Mark Zuckerberg,person,technology executive menlo park,per_zuckerberg,typo
+154,Mark Zuckerburg,person,technology executive menlo park,per_zuckerberg,typo
+155,Mark Zukerberg,person,technology executive menlo park,per_zuckerberg,typo
+156,Katherine Johnson,person,mathematician nasa langley,per_kjohnson,nickname_alias
+157,Kate Johnson,person,mathematician nasa langley,per_kjohnson,nickname_alias
+158,Katie Johnson,person,mathematician nasa langley,per_kjohnson,nickname_alias
+159,Kathy Johnson,person,mathematician nasa langley,per_kjohnson,nickname_alias
+160,Vienna,place,capital austria danube,city_vienna,cross_lingual
+161,Wien,place,capital austria danube,city_vienna,cross_lingual
+162,Vienne,place,capital austria danube,city_vienna,cross_lingual
+163,Umbrella,org,pharmaceutical conglomerate raccoon city,org_umbrella,org_suffix
+164,Umbrella Corp,org,pharmaceutical conglomerate raccoon city,org_umbrella,org_suffix
+165,Umbrella Corporation,org,pharmaceutical conglomerate raccoon city,org_umbrella,org_suffix
+166,Umbrella Inc,org,pharmaceutical conglomerate raccoon city,org_umbrella,org_suffix
+167,Umbrella Co,org,pharmaceutical conglomerate raccoon city,org_umbrella,org_suffix
+168,Cyberdyne Systems,org,same entity repeated across ingests,doc_cyberdyne_xdoc,cross_document_exact
+169,Cyberdyne Systems,org,same entity repeated across ingests,doc_cyberdyne_xdoc,cross_document_exact
+170,Cyberdyne Systems,org,same entity repeated across ingests,doc_cyberdyne_xdoc,cross_document_exact

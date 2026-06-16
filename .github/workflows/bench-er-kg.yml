@@ -1,0 +1,96 @@
+# ER-KG-Bench runner. Regenerates results/{RESULTS.md,results.json} on a real
+# runner because the goldenmatch auto / auto+fields / auto+llm rows (full
+# dedupe_df + auto-config controller, each run twice for the determinism check)
+# are too memory-heavy for a dev laptop. The benchmark dir sits OUTSIDE the main
+# CI path filters, so this is its only CI lane.
+#
+# Two runs:
+#   * OFFLINE (no key) -> the committed, reproducible-by-anyone table. Uploaded
+#     as artifact `er-kg-results-offline`; download + commit these.
+#   * KEYED (OPENAI_API_KEY pulled from Infisical) -> the emb-openai + auto+llm
+#     rows that stay OUT of the committed table. Printed to the run summary and
+#     uploaded as `er-kg-results-keyed`; use for the README/HANDOFF prose.
+#
+# Triggers on a push touching the benchmark SOURCE (not results/, so committing
+# regenerated results does not loop) and on manual dispatch.
+#
+# To run: push to the er-kg-bench source, or Actions -> "bench-er-kg" -> Run.
+name: bench-er-kg
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "packages/python/goldenmatch/benchmarks/er-kg-bench/dataset/**"
+      - "packages/python/goldenmatch/benchmarks/er-kg-bench/erkgbench/**"
+      - ".github/workflows/bench-er-kg.yml"
+
+permissions:
+  contents: read
+
+env:
+  BENCH_DIR: packages/python/goldenmatch/benchmarks/er-kg-bench
+  GOLDENMATCH_AUTOCONFIG_MEMORY: "0"  # no cross-run memory writes in CI
+
+jobs:
+  bench:
+    # Tiny dataset (~171 records); ubuntu-latest (16 GB) provisions fast and has
+    # ample headroom -- the cost is the controller, not data size.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: pip install uv
+      - name: Sync workspace + editable goldenmatch
+        run: |
+          uv sync --all-packages
+          uv pip install -e packages/python/goldenmatch
+
+      - name: Run benchmark (offline -- the committed table)
+        working-directory: ${{ env.BENCH_DIR }}
+        run: "$GITHUB_WORKSPACE/.venv/bin/python erkgbench/run.py"
+      - name: Upload offline results (commit these)
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: er-kg-results-offline
+          path: ${{ env.BENCH_DIR }}/results/
+
+      - name: Install Infisical CLI
+        run: |
+          curl -1sLf 'https://artifacts-cli.infisical.com/setup.deb.sh' | sudo -E bash
+          sudo apt-get update && sudo apt-get install -y infisical
+      - name: Run benchmark (keyed -- emb-openai + auto+llm; prose only)
+        working-directory: ${{ env.BENCH_DIR }}
+        env:
+          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
+          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+        run: |
+          set -euo pipefail
+          if [ -z "${INFISICAL_CLIENT_ID:-}" ]; then
+            echo "No Infisical creds available; skipping the keyed run." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          TOKEN=$(infisical login --silent --plain --method=universal-auth \
+            --client-id="$INFISICAL_CLIENT_ID" --client-secret="$INFISICAL_CLIENT_SECRET")
+          echo "::add-mask::$TOKEN"
+          OPENAI_API_KEY=$(infisical secrets get OPENAI_API_KEY \
+            --projectId=a99885f0-c5af-4ae1-9dc8-255cc60aa129 --env=dev --path=/ --plain --token="$TOKEN")
+          echo "::add-mask::$OPENAI_API_KEY"
+          export OPENAI_API_KEY
+          "$GITHUB_WORKSPACE/.venv/bin/python" erkgbench/run.py
+          {
+            echo '## ER-KG-Bench (keyed run: emb-openai + auto+llm rows included)'
+            echo '```'
+            cat results/RESULTS.md
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload keyed results (prose source -- do NOT commit)
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: er-kg-results-keyed
+          path: ${{ env.BENCH_DIR }}/results/
