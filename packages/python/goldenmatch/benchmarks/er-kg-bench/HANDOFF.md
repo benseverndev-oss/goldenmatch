@@ -10,10 +10,11 @@ Graphiti, Neo4j LLM-KG-Builder, neo4j-graphrag-python, LlamaIndex) vs **goldenma
 runs each framework's *documented-default* dedup rule over a labelled record set stratified
 by 9 failure classes and reports pairwise P/R/F1 per class.
 
-- **Merged:** PR #1023 (the benchmark) → on `main`.
-- **Merged:** PR #1025 (the LLM experiment + the offline `emb-ann` adapter) → on `main`.
-- **This branch (`claude/er-kg-bench-emb-openai`):** the semantic-embedding follow-up —
-  `emb-openai` (key-gated, cracks abbreviation + synonym). See "DONE: semantic embedding" below.
+- **Merged → `main`:** #1023 (benchmark), #1025 (`emb-ann` + LLM experiment), #1032 (`emb-openai`),
+  #1034 (grow dataset + the `bench-er-kg` CI lane).
+- **This branch (`claude/er-kg-bench-real-corpus`):** the big credibility upgrade — replaced the
+  hand-authored synthetic seeds with a **real corpus** from Wikidata + RxNorm (QID/RxCUI = ground
+  truth). See "Real corpus" below; this is what makes the numbers defensible.
 - Location: `packages/python/goldenmatch/benchmarks/er-kg-bench/`.
 
 ## Why this exists (strategic context)
@@ -31,7 +32,7 @@ This benchmark is the artifact that makes that ceiling concrete and citable.
 
 ```bash
 cd packages/python/goldenmatch/benchmarks/er-kg-bench
-python dataset/generate.py                  # seeds.jsonl -> records.csv (committed; regenerable)
+python dataset/build_real.py                 # sources.jsonl -> records.csv from Wikidata+RxNorm (committed; --dry-run to preview)
 python erkgbench/run.py                      # offline, no deps beyond polars/rapidfuzz/goldenmatch/numpy
 python erkgbench/run.py --embedder st        # activates the modelled cosine OR-terms (needs sentence-transformers)
 OPENAI_API_KEY=sk-... python erkgbench/run.py   # adds the goldenmatch(auto+llm) row
@@ -41,8 +42,8 @@ Outputs: `results/RESULTS.md` + `results/results.json`. Lint with `ruff check .`
 ## Layout
 
 ```
-seeds.jsonl                       54 ground-truth entities, mentions tagged by failure_class
-dataset/generate.py               seeds -> records.csv (171 records)
+dataset/sources.jsonl             33 curated real entities (Wikidata QIDs / RxNorm ingredients) by failure_class
+dataset/build_real.py             sources.jsonl -> records.csv (147 records); QID/RxCUI = ground truth
 erkgbench/metrics.py              pairwise P/R/F1 per class + determinism check
 erkgbench/adapters/base.py        Adapter protocol, Record, union-find clustering helpers
 erkgbench/adapters/modeled.py     the 7 framework default-rule models (exact constants + source citations)
@@ -55,68 +56,69 @@ README.md / TAXONOMY.md           the writeup + the 9-class taxonomy with framew
 
 | System | F1 | note |
 |---|---|---|
-| goldenmatch(auto+fields) | **0.629** | leads committed rows; only one scoring non-zero on `synonym` (via the context field) |
-| Neo4j-KGBuilder | 0.593 | cosine 0.97 / edit-dist<3 / substring |
-| goldenmatch(auto) | 0.485 | string-only zero-config |
-| goldenmatch(emb-ann) | 0.479 | offline char-embedding ANN; ~level with string-only auto |
-| neo4j-graphrag(fuzzy) | 0.366 | rapidfuzz WRatio≥0.8; precision collapses on the collisions |
-| LlamaIndex-PGI | 0.237 | KNN-10 + word-dist<5 + cosine>0.9 |
-| MS-GraphRAG / LightRAG / Cognee / mem0 | ~0.15 | exact-match family; precision **0.0** on `same_name_collision` |
+| goldenmatch(auto+fields) | **0.721** | leads by +16.7pp; zero-config multi-field (name+type+context) |
+| goldenmatch(auto) | 0.617 | string-only zero-config |
+| Neo4j-KGBuilder | 0.554 | cosine 0.97 / edit-dist<3 / substring (best framework default) |
+| goldenmatch(emb-ann) | 0.492 | offline char-embedding ANN, name only |
+| neo4j-graphrag(fuzzy) | 0.448 | rapidfuzz WRatio≥0.8; over-merges (P 0.35) |
+| LlamaIndex-PGI | 0.315 | KNN-10 + word-dist<5 + cosine>0.9 (P 0.22) |
+| MS-GraphRAG / LightRAG / Cognee / mem0 | **0.089** | exact-match family COLLAPSES on real variants (R 0.047); only `cross_document_exact` non-zero |
 
-## The three load-bearing findings (don't re-derive these)
+## The load-bearing findings on REAL data (don't re-derive these)
 
 1. **Every framework's built-in dedup is shallow** — a single similarity threshold or one LLM
-   prompt. None does multi-field probabilistic matching + blocking. Modelled at exact documented
-   constants in `modeled.py` (each cites the source file + GitHub issue).
-2. **The LLM scorer is the WRONG tool for the semantic classes** (measured, key-dependent, kept
-   out of the committed table). `goldenmatch(auto+llm)` *lowered* abbr/synonym/cross-lingual
-   (synonym stays 0.0, abbreviation flat, overall ~flat 0.629→0.632) because `llm_scorer` is a
-   **precision filter on borderline candidate pairs blocking already produced** — it can
-   confirm/reject a candidate, never create one. It never sees "IBM"↔"International Business
-   Machines" because blocking doesn't pair them.
-3. **Embedding-ANN is the RIGHT mechanism, but the offline embedder is char-based.** The shipped
-   `goldenmatch(emb-ann)` uses goldenmatch's in-house char-n-gram embedder (pure numpy, no key,
-   no torch). It beats string blocking on cross-lingual transliteration / typo / org-suffix, but
-   **abbreviation (~0.13) and synonym (0.0) stay unsolved** — char-n-gram cosine has no world
-   knowledge (IBM↔IBM-expansion ~0.05; Coumadin↔warfarin ~0.02).
+   prompt; none does multi-field probabilistic matching + blocking. Modelled at exact documented
+   constants in `modeled.py` (each cites source + issue).
+2. **On real data the exact-match family COLLAPSES** — GraphRAG / LightRAG / Cognee / mem0 →
+   **F1 0.089** (recall 0.047): byte-identical matching can't resolve real surface-form variants
+   (IBM vs International Business Machines, München vs Monaco di Baviera). Fuzzy resolvers buy
+   recall but over-merge: neo4j-graphrag 0.448 (P 0.35), LlamaIndex 0.315 (P 0.22).
+3. **goldenmatch(auto+fields) wins decisively — 0.721, +16.7pp over the best framework default**
+   (Neo4j 0.554), zero-config. Multi-field probabilistic ER is the differentiator (abbr 0.77,
+   xling 0.77, typo/suffix 1.0, nick 0.85). This is goldenmatch's REAL strength; on real data the
+   bench finally shows it (the synthetic set, name-heavy + clean-context, didn't).
+4. **The LLM scorer is a PRECISION tool** (key-gated, prose): `auto+llm` drives same-name-collision
+   precision to **1.0** (correctly refuses Georgia country-vs-state, Michael Jordan
+   athlete-vs-scientist) but still can't crack synonym (0.12) — it filters borderline pairs, never
+   creates them. On the OLD synthetic set (no genuine collisions) this looked useless; real
+   collisions reveal its value. **This finding flipped with the real corpus.**
+5. **Semantic embedding (emb-openai, key-gated) cracks abbreviation but does NOT win** — name-only
+   `text-embedding-3-small` gets abbr 0.90 / xling 0.88 but over-merges (P 0.41, F1 0.52), BELOW
+   multi-field `auto+fields` (0.72). On real multi-field entities context beats a name embedding.
+   **This too flipped** (on synthetic, name-only emb-openai led; on real data multi-field leads).
 
-**Net arc:** string blocking → misses semantics; LLM pair-scorer → wrong tool; embedding-ANN →
-right mechanism, needs a *semantic* embedding to close the last two classes — **and a semantic
-embedding does** (4 below).
+**Net arc (real data):** frameworks collapse (exact) or over-merge (fuzzy); goldenmatch's
+zero-config multi-field probabilistic ER wins; the LLM adds collision precision; semantic
+embedding is a name-only complement. Honest gaps: synonym recall (0.14), collision precision
+(~0.47 without the LLM).
 
-4. **A semantic embedding closes the last two classes (measured, key-dependent).**
-   `goldenmatch(emb-openai)` swaps OpenAI `text-embedding-3-small` (stdlib HTTP, no torch) into the
-   `emb-ann` path at cosine ≥ 0.55: **abbr 0.13→0.98, synonym 0.0→0.73, overall F1 0.721** (beats
-   the committed leader `auto+fields` 0.629). Only the embedder changed vs `emb-ann`, so the gain
-   is the world knowledge in the vectors. Negative-class precision stays low (`coll_P` 0.39 /
-   `temp_P` 0.38 — same as every name-only row; name-only embeddings over-merge colliding surface
-   forms).
-   Key-gated → out of the committed table, recorded as prose in README ("The semantic-embedding
-   result"). Reproduce: `OPENAI_API_KEY=sk-... python erkgbench/run.py`.
+## Real corpus (this branch — the credibility upgrade)
 
-## DONE: semantic embedding (was "the next task")
+**Shipped.** `dataset/build_real.py` (stdlib HTTP, `--dry-run`) reads `dataset/sources.jsonl`
+(curated Wikidata QIDs + RxNorm ingredients) and writes `records.csv` with a `source` provenance
+column. 147 records / 33 entities / 9 classes; **71% from Wikidata + RxNorm with external ground
+truth** (QID/RxCUI), 29% honest synthetic-over-real (typo/org_suffix/cross_document_exact +
+temporal_version editions). Real Wikidata `description` = the `context` field. Old
+`seeds.jsonl`/`generate.py` removed; `run.py` errors with a build hint if `records.csv` is missing
+(no network regen mid-run). Curation note: not every QID carries the surface forms you want —
+`--dry-run` first (e.g. NASA/UNESCO/FBI had no usable aliases and were dropped).
 
-**Shipped.** `GoldenMatchEmbAnnAdapter` is now parametrised by embedder
-(`provider=None` → the byte-identical offline char-n-gram `emb-ann`; `provider="openai"` → the
-semantic `emb-openai` row via `goldenmatch.embeddings.providers.resolve_provider`). The runner
-adds `emb-openai` (threshold 0.55, from a sweep; flat 0.525–0.6 plateau, not overfit) only when
-`OPENAI_API_KEY` is set, exactly like `auto+llm`. Numbers + the honest precision caveat are in
-finding 4 above and the README. `provider="local"` (sentence-transformers, `all-MiniLM-L6-v2`)
-is wired through the same seam but **unvalidated here** — `import torch` hangs in this dev env, so
-it needs a CI / torch-working box. The OpenAI key lives in Infisical (`OPENAI_API_KEY`, project
-`a99885f0-c5af-4ae1-9dc8-255cc60aa129`, env `dev`); inject via `infisical.cmd run ... -- python ...`
-to avoid leaking it.
+`emb-st` (free MiniLM semantic row, `provider="local"`) was prototyped on the prior branch but
+shelved (modest: ~0.6, MiniLM lacks drug-synonym knowledge); not on this branch. The OpenAI key
+lives in Infisical AND as the `OPENAI_API_KEY` Actions secret used by `bench-er-kg`.
 
 ## Other open work (lower priority)
 
 - **Live-framework adapters** for the deterministic resolvers (neo4j-graphrag rapidfuzz/spaCy,
   LlamaIndex Cypher) behind an optional extra, to corroborate the models in `modeled.py`.
-- **More seed entities** — grown to 54 entities / 171 records (was 32 / 105), with extra weight
-  on the precision-critical negatives. Keep adding `same_name_collision` / `temporal_version`
-  (distinct entities, colliding surface forms) and harder `synonym_brand`. Re-run `generate.py`
-  after editing, then regenerate results via the **`bench-er-kg` CI lane** (the goldenmatch
-  rows are too memory-heavy for a laptop; offline artifact = committed table, keyed run = the
-  emb-openai/auto+llm prose via the `OPENAI_API_KEY` Actions secret).
+- **More real entities** — add curated rows to `dataset/sources.jsonl` (Wikidata QIDs / RxNorm
+  ingredients), `--dry-run` to confirm the QID actually carries the surface forms, then re-run
+  `build_real.py`. Synonym recall (0.14) is the biggest headroom — more RxNorm drugs help. Then
+  regenerate results via the **`bench-er-kg` CI lane** (goldenmatch rows are too memory-heavy for
+  a laptop; offline artifact = committed table, keyed run = emb-openai/auto+llm prose via the
+  `OPENAI_API_KEY` Actions secret).
+- **`emb-st` (free MiniLM committed semantic row)** — prototyped + shelved (modest ~0.6); revisit
+  if a stronger free local embedder is worth a no-key semantic row.
 - **The before/after GraphRAG demo** — build a KG, show the agent answering wrong from
   fragmented/over-merged entities, resolve, show it correct. Draws its numbers from this harness.
   This is the shareable artifact (Show-HN / blog).

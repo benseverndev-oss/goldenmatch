@@ -19,17 +19,25 @@ benchmark for how good that built-in dedup actually is. This is one.
 
 ```bash
 cd packages/python/goldenmatch/benchmarks/er-kg-bench
-python dataset/generate.py          # seeds.jsonl -> records.csv (committed; regenerable)
+python dataset/build_real.py         # sources.jsonl -> records.csv (real data; committed, regenerable)
 python erkgbench/run.py              # -> results/RESULTS.md + results/results.json
 python erkgbench/run.py --embedder st   # also activate the cosine OR-terms (MiniLM)
 ```
 
-No API keys, no framework installs. Only deps: `polars`, `rapidfuzz`,
-`goldenmatch` (all already in this repo). `--embedder st` additionally needs
-`sentence-transformers`.
+`records.csv` is committed, so `run.py` works offline with no deps beyond `polars`,
+`rapidfuzz`, `goldenmatch`. Rebuilding it (`build_real.py`) fetches real surface-form
+variants from **Wikidata** (`wbgetentities`) + **RxNorm** (RxNav REST) over HTTP —
+stdlib only, no key. `--embedder st` additionally needs `sentence-transformers`.
 
 ## How it's fair
 
+* **Real data, external ground truth.** Surface-form variants come from
+  **Wikidata** (`altLabel` aliases, multilingual labels, distinct QIDs for
+  same-name collisions) and **RxNorm** (ingredient ↔ brand). Two records match iff
+  they share a **QID / RxCUI** — the ground truth is the public reference, not the
+  author. `dataset/sources.jsonl` lists the curated entities; the three inherently
+  synthetic classes (typo / org-suffix / cross-document-exact) are derived from
+  real base names and marked in a `source` column.
 * **Documented defaults, not strawmen.** Every modelled adapter reproduces the
   framework's real matching rule and constants, with the source file / issue
   cited inline (`adapters/modeled.py`). E.g. Neo4j builder = `cosine>0.97 OR
@@ -52,112 +60,92 @@ No API keys, no framework installs. Only deps: `polars`, `rapidfuzz`,
   in-house embedder (no key/torch); `auto+llm` (runner adds it only with
   `OPENAI_API_KEY`) turns on the per-pair LLM scorer auto-config reaches for.
 
-## What the first run shows (and what it doesn't)
+## What the run shows
 
-The committed `results/RESULTS.md` is an honest baseline, not a victory lap:
+The committed `results/RESULTS.md` runs on the **real corpus** (Wikidata + RxNorm,
+QID/RxCUI ground truth), so the numbers are defensible rather than invented:
 
-* **Exact-match family** (GraphRAG/LightRAG/Cognee/mem0) gets near-zero recall
-  on everything except identical strings, **and precision 0.0 on
-  `same_name_collision`** — it merges the two distinct "First National Bank"s
-  (#1133 reproduced). Its `temporal_version` precision of 1.0 is trivial: it
-  merges so little that it never wrongly merges anything.
-* **Fuzzy resolvers** (neo4j-graphrag / LlamaIndex) trade that for recall but
-  score **0.14–0.25 precision** — they over-merge collisions *and*
-  BTC-2020-vs-2024.
-* **goldenmatch(auto+fields) leads overall F1 among the committed rows and is
-  the only one scoring non-zero on `synonym_brand`**, with the top
-  `cross_lingual` and near-top `abbreviation` — because multi-field auto-config
-  exploits the `context` field
-  the frameworks' name-only dedup ignores. **Read the magnitude as optimistic:**
-  this synthetic dataset's per-entity context is cleanly separable, so context
-  acts almost like a hidden label; real extracted context is noisier. The
-  honest control is `goldenmatch(auto)` name-only, which **also scores 0.0 on
-  synonyms** — name strings alone don't carry "Coumadin = warfarin".
-* **The negative classes are still goldenmatch's weak spot here:** zero-config
-  over-merges collisions/temporal versions (`coll_P` ~0.37). A real probability
-  threshold + the quality-gated review path are the fix.
-* **`goldenmatch(emb-ann)` shows the offline embedding lever** — candidate
-  generation via goldenmatch's in-house char-n-gram embedder (no key, no torch),
-  name only. It lands about level with string-only `auto` (F1 0.479 vs 0.485):
-  it catches the cross-lingual transliteration and typos the string blocker
-  misses, but gives the edge back on the precision-critical surface-form
-  collisions — and **abbreviation (~0.13) and synonym (0.0) stay unsolved**,
-  because a char-n-gram embedding has no world knowledge (IBM↔International
-  Business Machines cosine ~0.05; Coumadin↔warfarin ~0.02). Cracking those two
-  classes needs a *semantic* embedding model (sentence-transformers / cloud),
-  i.e. torch or a key — the bench says so plainly rather than implying the
-  offline path closes the gap. The keyed `emb-openai` row below does exactly
-  this and cracks both (abbr 0.98, synm 0.73) — see "The semantic-embedding
-  result".
+* **The exact-match family collapses.** GraphRAG / LightRAG / Cognee / mem0 score
+  **F1 0.089** — they match only byte-identical strings, so on real surface-form
+  variation (IBM vs International Business Machines, München vs Monaco di Baviera)
+  they recall almost nothing (R 0.047); their one non-zero class is
+  `cross_document_exact` (the same string repeated). Four popular KG/agent-memory
+  stacks effectively **cannot resolve real entity variants** — the "built-in dedup
+  is shallow" thesis made concrete.
+* **Fuzzy resolvers do better but over-merge.** neo4j-graphrag (0.448) and
+  LlamaIndex (0.315) buy recall with a single similarity threshold and pay in
+  precision (0.35 / 0.22) — they wrongly merge the two distinct "Georgia"s and
+  consecutive World-Cup editions. Neo4j's `cosine>0.97 OR edit-dist<3 OR substring`
+  lands at **0.554, the best framework default**.
+* **goldenmatch(auto+fields) leads at F1 0.721** — **+16.7pp over the best framework
+  default** — because zero-config multi-field ER (name + type + context) is a
+  different mechanism from one threshold: abbreviation 0.77, cross-lingual 0.77,
+  typo / org-suffix 1.0, nickname 0.85. `context` is the real Wikidata one-line
+  description — discriminating, but not a hidden label.
+* **The honest gaps are real and visible.** `synonym_brand` stays hard (0.14 — even
+  multi-field, "Coumadin = warfarin" needs world knowledge), and the
+  precision-critical negatives cost everyone (`coll_P` ~0.47): a single score can't
+  separate "Apple"/"Apple Inc" (merge) from the country/state "Georgia" (don't).
+* **`emb-ann` (offline char-n-gram, no key) = 0.492** — catches transliteration /
+  typos the string blocker misses but over-merges short names, and **abbreviation
+  (0.21) / synonym (0.12) stay unsolved** (char overlap has no world knowledge).
+  The keyed semantic + LLM extensions below attack exactly those.
 
-So the bench localises goldenmatch's differentiation (multi-field evidence the
-name-only frameworks can't use) honestly, alongside its current gaps
-(negative-class precision; name-only semantic recall). That's the point of
-having it — and the dogfood makes the comparison the one a user would actually
-get, not a hand-picked threshold.
+So on real data the differentiator is clear and defensible: goldenmatch's
+multi-field probabilistic ER, run zero-config, beats every framework's built-in
+default — while the bench keeps goldenmatch's own weak spots (synonym recall,
+collision precision) in plain view.
 
-## The LLM experiment (measured, key-dependent — not in the committed table)
+## The LLM scorer on real data (measured, key-dependent — not in the committed table)
 
-It is tempting to assume the semantic classes just need an LLM. We measured it
-(`OPENAI_API_KEY` set, gpt-4o-mini via `llm_scorer=True`). The result is the
-opposite of the intuition, and it is the most useful finding here:
+With `OPENAI_API_KEY` set the runner adds `goldenmatch(auto+llm)` (zero-config +
+the per-pair `llm_scorer`, gpt-4o-mini). On real data it **earns its keep — on
+precision:**
 
-| config | abbr | synm | xling | P | R | overall F1 |
-|---|---|---|---|---|---|---|
-| `goldenmatch(auto+fields)` (no key) | 0.409 | 0.105 | 0.865 | 0.556 | 0.724 | **0.629** |
-| `goldenmatch(auto+llm)` (with key)  | 0.414 | 0.000 | 0.500 | 0.704 | 0.573 | **0.632** |
+| config | F1 | coll&nbsp;P* | synm | note |
+|---|---|---|---|---|
+| `goldenmatch(auto+fields)` (committed) | 0.721 | 0.471 | 0.141 | multi-field, no key |
+| `goldenmatch(auto+llm)` (with key) | 0.661 | **1.000** | 0.116 | LLM confirms/rejects borderline pairs |
 
-The LLM **does not move the semantic classes it is supposed to** — synonym stays
-0.0, abbreviation flat, cross-lingual *drops* — even though overall F1 lands
-flat (0.632 vs 0.629; it just trades recall for precision, P 0.70 vs 0.56 / R
-0.57 vs 0.72). Reason: goldenmatch's `llm_scorer` is a **precision filter on
-borderline candidate pairs (0.75–0.95) that blocking already produced** — it can
-confirm or reject a candidate, never create one. It never saw "IBM" /
-"International Business Machines" as a pair (blocking didn't generate it), so it
-could not merge them; it only re-weighted pairs `auto+fields` had already found.
-The lever for the semantic classes is therefore semantic
-**candidate generation** (embedding ANN blocking / `emb+ANN`), not an LLM pair
-scorer. The committed table stays the offline, reproducible-by-anyone run; the
-`auto+llm` row only appears when the runner sees a key.
+The LLM drives **same-name-collision precision to 1.0** — it correctly refuses to
+merge Georgia-the-country with Georgia-the-state, and Michael Jordan the athlete
+with the scientist, which the deterministic scorer over-merges (`coll_P` 0.47). But
+it **still does not crack `synonym` (0.12)**: `llm_scorer` is a precision filter on
+borderline candidate pairs blocking already produced — it confirms or rejects a
+pair, it cannot create the "IBM ↔ International Business Machines" pair blocking
+never generated. So the LLM is a **precision tool, not a recall/semantic one** (the
+synthetic run, with no genuine collisions, missed this). With a key, auto-config
+also auto-enables LLM extraction on low-confidence records, lifting `auto+fields`
+itself to ~0.79 — also key-dependent, also out of the committed table.
 
-## The semantic-embedding result (measured, key-dependent — not in the committed table)
+## Semantic embedding-ANN on real data (measured, key-dependent — not in the committed table)
 
-The LLM experiment named the lever: semantic **candidate generation**, not an LLM
-pair filter. So we swapped a semantic embedder into the `emb-ann` path —
+Swapping a semantic embedder into the `emb-ann` candidate-generation path —
 `goldenmatch(emb-openai)`, OpenAI `text-embedding-3-small` (stdlib HTTP, no torch),
-name only, cosine ≥ 0.55 (a round value from a threshold sweep on a flat
-0.525–0.6 overall-F1 plateau; it transfers cleanly here — peak overall F1 and
-abbreviation 0.98). It is the proof the arc points to:
+name only, cosine ≥ 0.55:
 
-| config | abbr | synm | xling | P | R | overall F1 |
+| config | abbr | synm | xling | P | R | F1 |
 |---|---|---|---|---|---|---|
-| `goldenmatch(emb-ann)` (offline, char-n-gram) | 0.133 | 0.00 | 0.552 | 0.372 | 0.673 | **0.479** |
-| `goldenmatch(auto+fields)` (no key, committed leader) | 0.409 | 0.105 | 0.865 | 0.556 | 0.724 | **0.629** |
-| `goldenmatch(emb-openai)` (with key) | **0.978** | **0.732** | 0.923 | 0.595 | 0.915 | **0.721** |
+| `emb-ann` (offline char-n-gram) | 0.214 | 0.116 | 0.400 | 0.447 | 0.547 | **0.492** |
+| `emb-openai` (with key, name only) | 0.898 | 0.304 | 0.884 | 0.408 | 0.720 | **0.521** |
+| `auto+fields` (committed, multi-field) | 0.773 | 0.141 | 0.769 | 0.869 | 0.617 | **0.721** |
 
-It **cracks the two classes the offline path can't** — abbreviation 0.13 → 0.98,
-synonym 0.0 → 0.73 — and is the only row strong on *both*, lifting overall F1 past
-the committed leader (0.721 vs 0.629). Same embedding-ANN mechanism the offline
-`emb-ann` row demonstrates; only the embedder changed, so the gain is attributable
-to *world knowledge in the vectors* (IBM ↔ its expansion, Coumadin ↔ warfarin),
-exactly what a char-n-gram cosine lacks. It is deterministic on this set
-(`det-floor: yes`).
-
-The honest cost is unchanged from every other name-only row: precision on the
-negative classes stays low (`coll_P` 0.39, `temp_P` 0.38 — comparable to `emb-ann`
-0.39/0.37 and `neo4j-graphrag` 0.39/0.38), because a name-only embedding *over-*
-merges distinct entities that share a surface form. Multi-field evidence
-(`auto+fields`) or a real probability threshold is the lever there, not the
-embedder. Because it needs a key it is **not reproducible by everyone**, so it
-stays out of the committed table and lives here as prose — same posture as the LLM
-experiment. Reproduce with `OPENAI_API_KEY=sk-... python erkgbench/run.py` (the
-runner adds the `emb-openai` and `auto+llm` rows only when it sees a key).
+World knowledge in the vectors **cracks abbreviation** (0.21 → 0.90) and lifts
+cross-lingual to 0.88 — the name-only semantic win the char-n-gram path can't reach.
+But on real multi-field entities it **does not beat `auto+fields`** (0.52 vs 0.72):
+name-only embedding over-merges (precision 0.41), and goldenmatch's multi-field
+context carries more signal than the name embedding alone. So the honest takeaway
+**flips from the synthetic run** — on real data the lever is **multi-field
+probabilistic ER**, with semantic embedding a useful name-only complement (best when
+all you have is a name), not the headline. Reproduce the keyed rows with
+`OPENAI_API_KEY=... python erkgbench/run.py` (they stay out of the committed table).
 
 ## Layout
 
 ```
-seeds.jsonl            ground-truth entities + tagged surface-form mentions
-dataset/generate.py    seeds -> records.csv (record_id, mention, type, context, entity_id, failure_class)
+dataset/sources.jsonl  curated real entities (Wikidata QIDs / RxNorm ingredients) tagged by failure class
+dataset/build_real.py  sources.jsonl -> records.csv via Wikidata + RxNorm (QID/RxCUI = ground truth)
+dataset/records.csv    committed corpus (record_id, mention, type, context, entity_id, failure_class, source)
 erkgbench/metrics.py   pairwise P/R/F1, per failure class; determinism check
 erkgbench/adapters/    base contract + goldenmatch adapter + modelled defaults
 erkgbench/run.py       runner -> results/{RESULTS.md,results.json}
@@ -166,9 +154,11 @@ TAXONOMY.md            the nine failure classes, with framework citations
 
 ## Extending
 
-* **Add a failure class / more entities:** edit `seeds.jsonl`, re-run
-  `generate.py`. Negative classes (distinct entities, colliding strings) are
-  the precision tests — keep adding them.
+* **Add a failure class / more entities:** add curated rows to `sources.jsonl`
+  (Wikidata QIDs / RxNorm ingredients), re-run `build_real.py`. Dry-run first
+  (`--dry-run`) to confirm a QID actually carries the surface forms you want.
+  Negative classes (distinct entities, colliding strings) are the precision
+  tests — keep adding them.
 * **Crack abbreviation + synonym (done, key-gated):** the `emb-openai` mode swaps a
   semantic embedder (`text-embedding-3-small`, no torch) into the `emb-ann` path and
   cracks both classes (abbr 0.98, synm 0.73; overall F1 0.721) — see "The

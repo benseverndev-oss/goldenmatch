@@ -50,10 +50,10 @@ PRECISION_CRITICAL = {"same_name_collision", "temporal_version"}
 
 def load_records() -> tuple[list[Record], list[str], list[str]]:
     if not DATASET.exists():
-        from dataset.generate import main as gen  # type: ignore
-
-        sys.path.insert(0, str(_BENCH_ROOT / "dataset"))
-        gen()
+        raise FileNotFoundError(
+            f"{DATASET} not found. Build it from the real sources first:\n"
+            "  python dataset/build_real.py   (curated QIDs/drugs in dataset/sources.jsonl)"
+        )
     records: list[Record] = []
     entity_ids: list[str] = []
     failure_classes: list[str] = []

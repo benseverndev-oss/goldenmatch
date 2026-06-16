@@ -1,0 +1,37 @@
+{"source": "wikidata", "qid": "Q37156", "failure_class": "abbreviation", "type": "org", "langs": ["en"], "aliases": true}
+{"source": "wikidata", "qid": "Q7184", "failure_class": "abbreviation", "type": "org", "langs": ["en"], "aliases": true}
+{"source": "wikidata", "qid": "Q7817", "failure_class": "abbreviation", "type": "org", "langs": ["en"], "aliases": true}
+{"source": "wikidata", "qid": "Q1065", "failure_class": "abbreviation", "type": "org", "langs": ["en"], "aliases": true}
+{"source": "wikidata", "qid": "Q1124", "failure_class": "nickname_alias", "type": "person", "langs": ["en"], "aliases": true}
+{"source": "wikidata", "qid": "Q22686", "failure_class": "nickname_alias", "type": "person", "langs": ["en"], "aliases": true}
+{"source": "wikidata", "qid": "Q303", "failure_class": "nickname_alias", "type": "person", "langs": ["en"], "aliases": true}
+{"source": "wikidata", "qid": "Q9682", "failure_class": "nickname_alias", "type": "person", "langs": ["en"], "aliases": true}
+{"source": "rxnorm", "ingredient": "warfarin", "failure_class": "synonym_brand", "type": "drug"}
+{"source": "rxnorm", "ingredient": "ibuprofen", "failure_class": "synonym_brand", "type": "drug"}
+{"source": "rxnorm", "ingredient": "acetaminophen", "failure_class": "synonym_brand", "type": "drug"}
+{"source": "rxnorm", "ingredient": "sildenafil", "failure_class": "synonym_brand", "type": "drug"}
+{"source": "rxnorm", "ingredient": "fluoxetine", "failure_class": "synonym_brand", "type": "drug"}
+{"source": "rxnorm", "ingredient": "metformin", "failure_class": "synonym_brand", "type": "drug"}
+{"source": "rxnorm", "ingredient": "atorvastatin", "failure_class": "synonym_brand", "type": "drug"}
+{"source": "wikidata", "qid": "Q41421", "failure_class": "same_name_collision", "type": "person", "langs": ["en"], "aliases": true}
+{"source": "wikidata", "qid": "Q3308285", "failure_class": "same_name_collision", "type": "person", "langs": ["en"], "aliases": true}
+{"source": "wikidata", "qid": "Q230", "failure_class": "same_name_collision", "type": "place", "langs": ["en"], "aliases": true}
+{"source": "wikidata", "qid": "Q1428", "failure_class": "same_name_collision", "type": "place", "langs": ["en"], "aliases": true}
+{"source": "wikidata", "qid": "Q1726", "failure_class": "cross_lingual", "type": "place", "langs": ["en", "de", "fr", "it"], "aliases": false}
+{"source": "wikidata", "qid": "Q1741", "failure_class": "cross_lingual", "type": "place", "langs": ["en", "de", "fr", "it"], "aliases": false}
+{"source": "wikidata", "qid": "Q649", "failure_class": "cross_lingual", "type": "place", "langs": ["en", "de", "fr", "ru"], "aliases": false}
+{"source": "wikidata", "qid": "Q365", "failure_class": "cross_lingual", "type": "place", "langs": ["en", "de", "fr", "it"], "aliases": false}
+{"source": "wikidata", "qid": "Q71", "failure_class": "cross_lingual", "type": "place", "langs": ["en", "de", "fr", "it"], "aliases": false}
+{"source": "wikidata", "qid": "Q1085", "failure_class": "cross_lingual", "type": "place", "langs": ["en", "de", "fr", "it"], "aliases": false}
+{"source": "synth", "qid": "Q2283", "failure_class": "typo", "type": "org"}
+{"source": "synth", "qid": "Q95", "failure_class": "typo", "type": "org"}
+{"source": "synth", "qid": "Q53268", "failure_class": "typo", "type": "org"}
+{"source": "synth", "qid": "Q2283", "failure_class": "org_suffix", "type": "org"}
+{"source": "synth", "qid": "Q53268", "failure_class": "org_suffix", "type": "org"}
+{"source": "synth", "qid": "Q478214", "failure_class": "org_suffix", "type": "org"}
+{"source": "synth", "qid": "Q95", "failure_class": "cross_document_exact", "type": "org", "n": 3}
+{"source": "synth", "qid": "Q37156", "failure_class": "cross_document_exact", "type": "org", "n": 3}
+{"source": "synth", "base": "FIFA World Cup", "year": 2018, "failure_class": "temporal_version", "type": "event"}
+{"source": "synth", "base": "FIFA World Cup", "year": 2022, "failure_class": "temporal_version", "type": "event"}
+{"source": "synth", "base": "Summer Olympics", "year": 2016, "failure_class": "temporal_version", "type": "event"}
+{"source": "synth", "base": "Summer Olympics", "year": 2020, "failure_class": "temporal_version", "type": "event"}

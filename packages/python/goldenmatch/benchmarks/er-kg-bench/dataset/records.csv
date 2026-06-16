@@ -1,172 +1,148 @@
-record_id,mention,entity_type,context,entity_id,failure_class
-0,IBM,org,technology company armonk new york,org_ibm,abbreviation
-1,International Business Machines,org,technology company armonk new york,org_ibm,abbreviation
-2,I.B.M.,org,technology company armonk new york,org_ibm,abbreviation
-3,International Business Machines Corp,org,technology company armonk new york,org_ibm,abbreviation
-4,UN,org,intergovernmental organization new york,org_un,abbreviation
-5,United Nations,org,intergovernmental organization new york,org_un,abbreviation
-6,U.N.,org,intergovernmental organization new york,org_un,abbreviation
-7,NASA,org,space agency united states,org_nasa,abbreviation
-8,National Aeronautics and Space Administration,org,space agency united states,org_nasa,abbreviation
-9,Bucky Barnes,person,fictional character soldier,per_barnes,nickname_alias
-10,James Buchanan Barnes,person,fictional character soldier,per_barnes,nickname_alias
-11,James Bucky Barnes,person,fictional character soldier,per_barnes,nickname_alias
-12,Sergeant Barnes,person,fictional character soldier,per_barnes,nickname_alias
-13,Robert Smith,person,engineer london,per_rsmith,nickname_alias
-14,Bob Smith,person,engineer london,per_rsmith,nickname_alias
-15,Rob Smith,person,engineer london,per_rsmith,nickname_alias
-16,Bobby Smith,person,engineer london,per_rsmith,nickname_alias
-17,William Jefferson Clinton,person,us president arkansas,per_wjc,nickname_alias
-18,Bill Clinton,person,us president arkansas,per_wjc,nickname_alias
-19,President Clinton,person,us president arkansas,per_wjc,nickname_alias
-20,warfarin,drug,anticoagulant blood thinner,drug_warfarin,synonym_brand
-21,Coumadin,drug,anticoagulant blood thinner,drug_warfarin,synonym_brand
-22,Jantoven,drug,anticoagulant blood thinner,drug_warfarin,synonym_brand
-23,acetaminophen,drug,analgesic antipyretic pain fever,drug_apap,synonym_brand
-24,paracetamol,drug,analgesic antipyretic pain fever,drug_apap,synonym_brand
-25,Tylenol,drug,analgesic antipyretic pain fever,drug_apap,synonym_brand
-26,epinephrine,drug,hormone vasoconstrictor allergy,drug_epi,synonym_brand
-27,adrenaline,drug,hormone vasoconstrictor allergy,drug_epi,synonym_brand
-28,EpiPen,drug,hormone vasoconstrictor allergy,drug_epi,synonym_brand
-29,First National Bank,org,bank algiers algeria north africa,bank_dz,same_name_collision
-30,First National Bank of Algeria,org,bank algiers algeria north africa,bank_dz,same_name_collision
-31,FNB Algeria,org,bank algiers algeria north africa,bank_dz,same_name_collision
-32,First National Bank,org,bank omaha nebraska united states,bank_us,same_name_collision
-33,First National Bank Omaha,org,bank omaha nebraska united states,bank_us,same_name_collision
-34,FNB Omaha,org,bank omaha nebraska united states,bank_us,same_name_collision
-35,King's College,org,university the strand london england,col_london,same_name_collision
-36,King's College London,org,university the strand london england,col_london,same_name_collision
-37,KCL,org,university the strand london england,col_london,same_name_collision
-38,King's College,org,college briarcliff manor new york,col_ny,same_name_collision
-39,The King's College New York,org,college briarcliff manor new york,col_ny,same_name_collision
-40,TKC,org,college briarcliff manor new york,col_ny,same_name_collision
-41,John Smith,person,cardiologist boston massachusetts,per_jsmith_a,same_name_collision
-42,Dr John Smith,person,cardiologist boston massachusetts,per_jsmith_a,same_name_collision
-43,J. Smith MD,person,cardiologist boston massachusetts,per_jsmith_a,same_name_collision
-44,John Smith,person,plumber leeds united kingdom,per_jsmith_b,same_name_collision
-45,Johnny Smith,person,plumber leeds united kingdom,per_jsmith_b,same_name_collision
-46,J Smith,person,plumber leeds united kingdom,per_jsmith_b,same_name_collision
-47,Munich,place,city bavaria germany,city_munich,cross_lingual
-48,Munchen,place,city bavaria germany,city_munich,cross_lingual
-49,Munchen Bayern,place,city bavaria germany,city_munich,cross_lingual
-50,Monaco di Baviera,place,city bavaria germany,city_munich,cross_lingual
-51,Moscow,place,capital russia,city_moscow,cross_lingual
-52,Moskva,place,capital russia,city_moscow,cross_lingual
-53,Moskau,place,capital russia,city_moscow,cross_lingual
-54,Geneva,place,city switzerland lake leman,city_geneva,cross_lingual
-55,Geneve,place,city switzerland lake leman,city_geneva,cross_lingual
-56,Genf,place,city switzerland lake leman,city_geneva,cross_lingual
-57,Ginevra,place,city switzerland lake leman,city_geneva,cross_lingual
-58,Beijing,place,capital china,city_beijing,cross_lingual
-59,Peking,place,capital china,city_beijing,cross_lingual
-60,Bejing,place,capital china,city_beijing,cross_lingual
-61,Microsoft,org,software company redmond washington,org_microsoft,typo
-62,Microsft,org,software company redmond washington,org_microsoft,typo
-63,Micrsoft,org,software company redmond washington,org_microsoft,typo
-64,Microsoft Corporation,org,software company redmond washington,org_microsoft,typo
-65,Warfarin,drug,anticoagulant spelling variants,drug_warfarin_typo,typo
-66,Warfrin,drug,anticoagulant spelling variants,drug_warfarin_typo,typo
-67,Warfarin,drug,anticoagulant spelling variants,drug_warfarin_typo,typo
-68,Wafarin,drug,anticoagulant spelling variants,drug_warfarin_typo,typo
-69,Arnold Schwarzenegger,person,actor governor california,per_schwarz,typo
-70,Arnold Schwartzenegger,person,actor governor california,per_schwarz,typo
-71,Arnold Schwarzeneger,person,actor governor california,per_schwarz,typo
-72,Acme,org,manufacturing widgets,org_acme,org_suffix
-73,Acme Inc,org,manufacturing widgets,org_acme,org_suffix
-74,Acme Incorporated,org,manufacturing widgets,org_acme,org_suffix
-75,Acme Corporation,org,manufacturing widgets,org_acme,org_suffix
-76,Acme Co,org,manufacturing widgets,org_acme,org_suffix
-77,Globex,org,conglomerate springfield,org_globex,org_suffix
-78,Globex Corp,org,conglomerate springfield,org_globex,org_suffix
-79,Globex Corporation,org,conglomerate springfield,org_globex,org_suffix
-80,Globex Ltd,org,conglomerate springfield,org_globex,org_suffix
-81,Initech,org,software austin texas,org_initech,org_suffix
-82,Initech LLC,org,software austin texas,org_initech,org_suffix
-83,Initech Inc,org,software austin texas,org_initech,org_suffix
-84,Initech Limited,org,software austin texas,org_initech,org_suffix
-85,BTC Halving 2020,event,bitcoin block reward halving may 2020,ev_btc2020,temporal_version
-86,Bitcoin Halving 2020,event,bitcoin block reward halving may 2020,ev_btc2020,temporal_version
-87,Third Bitcoin Halving,event,bitcoin block reward halving may 2020,ev_btc2020,temporal_version
-88,BTC Halving 2024,event,bitcoin block reward halving april 2024,ev_btc2024,temporal_version
-89,Bitcoin Halving 2024,event,bitcoin block reward halving april 2024,ev_btc2024,temporal_version
-90,Fourth Bitcoin Halving,event,bitcoin block reward halving april 2024,ev_btc2024,temporal_version
-91,1963 AFL Draft,event,american football league player draft 1963,ev_afl1963,temporal_version
-92,American Football League Draft 1963,event,american football league player draft 1963,ev_afl1963,temporal_version
-93,1963 NFL Draft,event,national football league player draft 1963,ev_nfl1963,temporal_version
-94,National Football League Draft 1963,event,national football league player draft 1963,ev_nfl1963,temporal_version
-95,Stark Industries,org,same entity repeated across documents,doc_acme_xdoc,cross_document_exact
-96,Stark Industries,org,same entity repeated across documents,doc_acme_xdoc,cross_document_exact
-97,Stark Industries,org,same entity repeated across documents,doc_acme_xdoc,cross_document_exact
-98,Stark Industries,org,same entity repeated across documents,doc_acme_xdoc,cross_document_exact
-99,Wayne Enterprises,org,same entity repeated across ingests,doc_wayne_xdoc,cross_document_exact
-100,Wayne Enterprises,org,same entity repeated across ingests,doc_wayne_xdoc,cross_document_exact
-101,Wayne Enterprises,org,same entity repeated across ingests,doc_wayne_xdoc,cross_document_exact
-102,Oscorp,org,identical name multiple chunks,doc_oscorp_xdoc,cross_document_exact
-103,Oscorp,org,identical name multiple chunks,doc_oscorp_xdoc,cross_document_exact
-104,Oscorp,org,identical name multiple chunks,doc_oscorp_xdoc,cross_document_exact
-105,WHO,org,public health agency geneva switzerland,org_who,abbreviation
-106,World Health Organization,org,public health agency geneva switzerland,org_who,abbreviation
-107,W.H.O.,org,public health agency geneva switzerland,org_who,abbreviation
-108,World Health Organisation,org,public health agency geneva switzerland,org_who,abbreviation
-109,FBI,org,law enforcement agency united states,org_fbi,abbreviation
-110,Federal Bureau of Investigation,org,law enforcement agency united states,org_fbi,abbreviation
-111,F.B.I.,org,law enforcement agency united states,org_fbi,abbreviation
-112,MIT,org,university cambridge massachusetts,org_mit,abbreviation
-113,Massachusetts Institute of Technology,org,university cambridge massachusetts,org_mit,abbreviation
-114,NATO,org,military alliance brussels,org_nato,abbreviation
-115,North Atlantic Treaty Organization,org,military alliance brussels,org_nato,abbreviation
-116,N.A.T.O.,org,military alliance brussels,org_nato,abbreviation
-117,ibuprofen,drug,nsaid analgesic anti-inflammatory,drug_ibuprofen,synonym_brand
-118,Advil,drug,nsaid analgesic anti-inflammatory,drug_ibuprofen,synonym_brand
-119,Motrin,drug,nsaid analgesic anti-inflammatory,drug_ibuprofen,synonym_brand
-120,sildenafil,drug,vasodilator pde5 inhibitor,drug_sildenafil,synonym_brand
-121,Viagra,drug,vasodilator pde5 inhibitor,drug_sildenafil,synonym_brand
-122,Revatio,drug,vasodilator pde5 inhibitor,drug_sildenafil,synonym_brand
-123,fluoxetine,drug,antidepressant ssri,drug_fluoxetine,synonym_brand
-124,Prozac,drug,antidepressant ssri,drug_fluoxetine,synonym_brand
-125,metformin,drug,antidiabetic biguanide blood sugar,drug_metformin,synonym_brand
-126,Glucophage,drug,antidiabetic biguanide blood sugar,drug_metformin,synonym_brand
-127,Michael Jordan,person,basketball player chicago bulls,per_mjordan_athlete,same_name_collision
-128,Michael Jeffrey Jordan,person,basketball player chicago bulls,per_mjordan_athlete,same_name_collision
-129,MJ,person,basketball player chicago bulls,per_mjordan_athlete,same_name_collision
-130,Michael Jordan,person,machine learning professor berkeley,per_mjordan_prof,same_name_collision
-131,Michael I. Jordan,person,machine learning professor berkeley,per_mjordan_prof,same_name_collision
-132,M. Jordan,person,machine learning professor berkeley,per_mjordan_prof,same_name_collision
-133,Apple,org,technology company cupertino california,org_apple_tech,same_name_collision
-134,Apple Inc,org,technology company cupertino california,org_apple_tech,same_name_collision
-135,Apple Computer,org,technology company cupertino california,org_apple_tech,same_name_collision
-136,Apple,org,record label the beatles london,org_apple_records,same_name_collision
-137,Apple Corps,org,record label the beatles london,org_apple_records,same_name_collision
-138,Apple Records,org,record label the beatles london,org_apple_records,same_name_collision
-139,FIFA World Cup 2018,event,association football world cup russia 2018,ev_wc2018,temporal_version
-140,World Cup 2018,event,association football world cup russia 2018,ev_wc2018,temporal_version
-141,2018 World Cup,event,association football world cup russia 2018,ev_wc2018,temporal_version
-142,FIFA World Cup 2022,event,association football world cup qatar 2022,ev_wc2022,temporal_version
-143,World Cup 2022,event,association football world cup qatar 2022,ev_wc2022,temporal_version
-144,2022 World Cup,event,association football world cup qatar 2022,ev_wc2022,temporal_version
-145,Python 2,event,programming language major version legacy,sw_python2,temporal_version
-146,Python 2.7,event,programming language major version legacy,sw_python2,temporal_version
-147,Python 3,event,programming language major version current,sw_python3,temporal_version
-148,Python 3.12,event,programming language major version current,sw_python3,temporal_version
-149,Google,org,search engine mountain view california,org_google_typo,typo
-150,Googel,org,search engine mountain view california,org_google_typo,typo
-151,Gogle,org,search engine mountain view california,org_google_typo,typo
-152,Google,org,search engine mountain view california,org_google_typo,typo
-153,Mark Zuckerberg,person,technology executive menlo park,per_zuckerberg,typo
-154,Mark Zuckerburg,person,technology executive menlo park,per_zuckerberg,typo
-155,Mark Zukerberg,person,technology executive menlo park,per_zuckerberg,typo
-156,Katherine Johnson,person,mathematician nasa langley,per_kjohnson,nickname_alias
-157,Kate Johnson,person,mathematician nasa langley,per_kjohnson,nickname_alias
-158,Katie Johnson,person,mathematician nasa langley,per_kjohnson,nickname_alias
-159,Kathy Johnson,person,mathematician nasa langley,per_kjohnson,nickname_alias
-160,Vienna,place,capital austria danube,city_vienna,cross_lingual
-161,Wien,place,capital austria danube,city_vienna,cross_lingual
-162,Vienne,place,capital austria danube,city_vienna,cross_lingual
-163,Umbrella,org,pharmaceutical conglomerate raccoon city,org_umbrella,org_suffix
-164,Umbrella Corp,org,pharmaceutical conglomerate raccoon city,org_umbrella,org_suffix
-165,Umbrella Corporation,org,pharmaceutical conglomerate raccoon city,org_umbrella,org_suffix
-166,Umbrella Inc,org,pharmaceutical conglomerate raccoon city,org_umbrella,org_suffix
-167,Umbrella Co,org,pharmaceutical conglomerate raccoon city,org_umbrella,org_suffix
-168,Cyberdyne Systems,org,same entity repeated across ingests,doc_cyberdyne_xdoc,cross_document_exact
-169,Cyberdyne Systems,org,same entity repeated across ingests,doc_cyberdyne_xdoc,cross_document_exact
-170,Cyberdyne Systems,org,same entity repeated across ingests,doc_cyberdyne_xdoc,cross_document_exact
+record_id,mention,entity_type,context,entity_id,failure_class,source
+0,IBM,org,American multinational technology corporation,Q37156,abbreviation,wikidata
+1,"International Business Machines Corporation (Armonk, NY)",org,American multinational technology corporation,Q37156,abbreviation,wikidata
+2,IBM Corp.,org,American multinational technology corporation,Q37156,abbreviation,wikidata
+3,NATO,org,intergovernmental military alliance between 32 member states,Q7184,abbreviation,wikidata
+4,NATO Alliance,org,intergovernmental military alliance between 32 member states,Q7184,abbreviation,wikidata
+5,North Atlantic Treaty Organisation,org,intergovernmental military alliance between 32 member states,Q7184,abbreviation,wikidata
+6,North Atlantic Alliance,org,intergovernmental military alliance between 32 member states,Q7184,abbreviation,wikidata
+7,World Health Organization,org,United Nations agency concerned with international public health,Q7817,abbreviation,wikidata
+8,World Health Organization (WHO),org,United Nations agency concerned with international public health,Q7817,abbreviation,wikidata
+9,World Health Organisation,org,United Nations agency concerned with international public health,Q7817,abbreviation,wikidata
+10,United Nations,org,global international and intergovernmental organization,Q1065,abbreviation,wikidata
+11,United Nations Organization,org,global international and intergovernmental organization,Q1065,abbreviation,wikidata
+12,UNO,org,global international and intergovernmental organization,Q1065,abbreviation,wikidata
+13,UN,org,global international and intergovernmental organization,Q1065,abbreviation,wikidata
+14,the UN,org,global international and intergovernmental organization,Q1065,abbreviation,wikidata
+15,the U.N.,org,global international and intergovernmental organization,Q1065,abbreviation,wikidata
+16,Bill Clinton,person,President of the United States from 1993 to 2001 (born 1946),Q1124,nickname_alias,wikidata
+17,William Jefferson Clinton,person,President of the United States from 1993 to 2001 (born 1946),Q1124,nickname_alias,wikidata
+18,William Jefferson Blythe III,person,President of the United States from 1993 to 2001 (born 1946),Q1124,nickname_alias,wikidata
+19,William Jefferson Blythe,person,President of the United States from 1993 to 2001 (born 1946),Q1124,nickname_alias,wikidata
+20,William J. Clinton,person,President of the United States from 1993 to 2001 (born 1946),Q1124,nickname_alias,wikidata
+21,"William Jefferson ""Bill"" Clinton",person,President of the United States from 1993 to 2001 (born 1946),Q1124,nickname_alias,wikidata
+22,POTUS 45,person,"American businessman and politician (born 1946), President of the United States (2017–2021; since 2025)",Q22686,nickname_alias,wikidata
+23,President Donald Trump,person,"American businessman and politician (born 1946), President of the United States (2017–2021; since 2025)",Q22686,nickname_alias,wikidata
+24,President Trump,person,"American businessman and politician (born 1946), President of the United States (2017–2021; since 2025)",Q22686,nickname_alias,wikidata
+25,President Donald J. Trump,person,"American businessman and politician (born 1946), President of the United States (2017–2021; since 2025)",Q22686,nickname_alias,wikidata
+26,President Donald John Trump,person,"American businessman and politician (born 1946), President of the United States (2017–2021; since 2025)",Q22686,nickname_alias,wikidata
+27,President Donald J Trump,person,"American businessman and politician (born 1946), President of the United States (2017–2021; since 2025)",Q22686,nickname_alias,wikidata
+28,Elvis Presley,person,American singer and actor (1935–1977),Q303,nickname_alias,wikidata
+29,Elvis,person,American singer and actor (1935–1977),Q303,nickname_alias,wikidata
+30,King of Rock'n'Roll,person,American singer and actor (1935–1977),Q303,nickname_alias,wikidata
+31,Elvis A. Presley,person,American singer and actor (1935–1977),Q303,nickname_alias,wikidata
+32,The King of Rock'n'Roll,person,American singer and actor (1935–1977),Q303,nickname_alias,wikidata
+33,Elvis Aaron Presley,person,American singer and actor (1935–1977),Q303,nickname_alias,wikidata
+34,Elizabeth II,person,Queen of the United Kingdom from 1952 to 2022 (1926–2022),Q9682,nickname_alias,wikidata
+35,Elizabeth Alexandra Mary,person,Queen of the United Kingdom from 1952 to 2022 (1926–2022),Q9682,nickname_alias,wikidata
+36,Queen Elizabeth II,person,Queen of the United Kingdom from 1952 to 2022 (1926–2022),Q9682,nickname_alias,wikidata
+37,Elizabeth Alexandra Mary Windsor,person,Queen of the United Kingdom from 1952 to 2022 (1926–2022),Q9682,nickname_alias,wikidata
+38,warfarin,drug,drug ingredient and brand names (warfarin),rxcui:11289,synonym_brand,rxnorm
+39,Coumadin,drug,drug ingredient and brand names (warfarin),rxcui:11289,synonym_brand,rxnorm
+40,Jantoven,drug,drug ingredient and brand names (warfarin),rxcui:11289,synonym_brand,rxnorm
+41,ibuprofen,drug,drug ingredient and brand names (ibuprofen),rxcui:5640,synonym_brand,rxnorm
+42,Duexis,drug,drug ingredient and brand names (ibuprofen),rxcui:5640,synonym_brand,rxnorm
+43,Counteract IB,drug,drug ingredient and brand names (ibuprofen),rxcui:5640,synonym_brand,rxnorm
+44,Proprinal,drug,drug ingredient and brand names (ibuprofen),rxcui:5640,synonym_brand,rxnorm
+45,Ibudone,drug,drug ingredient and brand names (ibuprofen),rxcui:5640,synonym_brand,rxnorm
+46,Advil,drug,drug ingredient and brand names (ibuprofen),rxcui:5640,synonym_brand,rxnorm
+47,acetaminophen,drug,drug ingredient and brand names (acetaminophen),rxcui:161,synonym_brand,rxnorm
+48,Little Fevers,drug,drug ingredient and brand names (acetaminophen),rxcui:161,synonym_brand,rxnorm
+49,Bactimicina,drug,drug ingredient and brand names (acetaminophen),rxcui:161,synonym_brand,rxnorm
+50,Pamprin Max Formula,drug,drug ingredient and brand names (acetaminophen),rxcui:161,synonym_brand,rxnorm
+51,Pamprin Multi-Symptom,drug,drug ingredient and brand names (acetaminophen),rxcui:161,synonym_brand,rxnorm
+52,Pamprin Cramp Formula,drug,drug ingredient and brand names (acetaminophen),rxcui:161,synonym_brand,rxnorm
+53,sildenafil,drug,drug ingredient and brand names (sildenafil),rxcui:136411,synonym_brand,rxnorm
+54,Viagra,drug,drug ingredient and brand names (sildenafil),rxcui:136411,synonym_brand,rxnorm
+55,Liqrev,drug,drug ingredient and brand names (sildenafil),rxcui:136411,synonym_brand,rxnorm
+56,Vybrique,drug,drug ingredient and brand names (sildenafil),rxcui:136411,synonym_brand,rxnorm
+57,Revatio,drug,drug ingredient and brand names (sildenafil),rxcui:136411,synonym_brand,rxnorm
+58,fluoxetine,drug,drug ingredient and brand names (fluoxetine),rxcui:227224,synonym_brand,rxnorm
+59,RECONCILE,drug,drug ingredient and brand names (fluoxetine),rxcui:227224,synonym_brand,rxnorm
+60,metformin,drug,drug ingredient and brand names (metformin),rxcui:235743,synonym_brand,rxnorm
+61,Kazano,drug,drug ingredient and brand names (metformin),rxcui:235743,synonym_brand,rxnorm
+62,Jentadueto,drug,drug ingredient and brand names (metformin),rxcui:235743,synonym_brand,rxnorm
+63,Kombiglyze,drug,drug ingredient and brand names (metformin),rxcui:235743,synonym_brand,rxnorm
+64,Janumet,drug,drug ingredient and brand names (metformin),rxcui:235743,synonym_brand,rxnorm
+65,Glucophage,drug,drug ingredient and brand names (metformin),rxcui:235743,synonym_brand,rxnorm
+66,atorvastatin,drug,drug ingredient and brand names (atorvastatin),rxcui:83367,synonym_brand,rxnorm
+67,Lipitor,drug,drug ingredient and brand names (atorvastatin),rxcui:83367,synonym_brand,rxnorm
+68,Atorvaliq,drug,drug ingredient and brand names (atorvastatin),rxcui:83367,synonym_brand,rxnorm
+69,Caduet,drug,drug ingredient and brand names (atorvastatin),rxcui:83367,synonym_brand,rxnorm
+70,Michael Jordan,person,American basketball player and businessman (born 1963),Q41421,same_name_collision,wikidata
+71,Michael I. Jordan,person,"American computer scientist, University of California, Berkeley",Q3308285,same_name_collision,wikidata
+72,Michael Irwin Jordan,person,"American computer scientist, University of California, Berkeley",Q3308285,same_name_collision,wikidata
+73,Michael Jordan,person,"American computer scientist, University of California, Berkeley",Q3308285,same_name_collision,wikidata
+74,Georgia,place,country in the Caucasus region of Europe and Asia,Q230,same_name_collision,wikidata
+75,Republic of Georgia,place,country in the Caucasus region of Europe and Asia,Q230,same_name_collision,wikidata
+76,Georgia (country),place,country in the Caucasus region of Europe and Asia,Q230,same_name_collision,wikidata
+77,Georgia (Sakartvelo),place,country in the Caucasus region of Europe and Asia,Q230,same_name_collision,wikidata
+78,Sakartvelo,place,country in the Caucasus region of Europe and Asia,Q230,same_name_collision,wikidata
+79,Georgia,place,state of the United States of America,Q1428,same_name_collision,wikidata
+80,State of Georgia,place,state of the United States of America,Q1428,same_name_collision,wikidata
+81,GA,place,state of the United States of America,Q1428,same_name_collision,wikidata
+82,"Georgia, United States",place,state of the United States of America,Q1428,same_name_collision,wikidata
+83,The Peach State,place,state of the United States of America,Q1428,same_name_collision,wikidata
+84,The Goober State,place,state of the United States of America,Q1428,same_name_collision,wikidata
+85,Munich,place,"capital and most populous city of Bavaria, Germany",Q1726,cross_lingual,wikidata
+86,München,place,"capital and most populous city of Bavaria, Germany",Q1726,cross_lingual,wikidata
+87,Monaco di Baviera,place,"capital and most populous city of Bavaria, Germany",Q1726,cross_lingual,wikidata
+88,Vienna,place,capital of and state in Austria,Q1741,cross_lingual,wikidata
+89,Wien,place,capital of and state in Austria,Q1741,cross_lingual,wikidata
+90,Vienne,place,capital of and state in Austria,Q1741,cross_lingual,wikidata
+91,Moscow,place,capital and most populous city of Russia,Q649,cross_lingual,wikidata
+92,Moskau,place,capital and most populous city of Russia,Q649,cross_lingual,wikidata
+93,Moscou,place,capital and most populous city of Russia,Q649,cross_lingual,wikidata
+94,Москва,place,capital and most populous city of Russia,Q649,cross_lingual,wikidata
+95,Cologne,place,"most populous city in North Rhine-Westphalia, Germany",Q365,cross_lingual,wikidata
+96,Köln,place,"most populous city in North Rhine-Westphalia, Germany",Q365,cross_lingual,wikidata
+97,Colonia,place,"most populous city in North Rhine-Westphalia, Germany",Q365,cross_lingual,wikidata
+98,Geneva,place,"capital of the canton of Geneva, Switzerland",Q71,cross_lingual,wikidata
+99,Genf,place,"capital of the canton of Geneva, Switzerland",Q71,cross_lingual,wikidata
+100,Genève,place,"capital of the canton of Geneva, Switzerland",Q71,cross_lingual,wikidata
+101,Ginevra,place,"capital of the canton of Geneva, Switzerland",Q71,cross_lingual,wikidata
+102,Prague,place,capital city of the Czech Republic,Q1085,cross_lingual,wikidata
+103,Prag,place,capital city of the Czech Republic,Q1085,cross_lingual,wikidata
+104,Praga,place,capital city of the Czech Republic,Q1085,cross_lingual,wikidata
+105,Microsoft,org,American multinational technology corporation,Q2283,typo,synth
+106,Micrsoft,org,American multinational technology corporation,Q2283,typo,synth
+107,Micrrosoft,org,American multinational technology corporation,Q2283,typo,synth
+108,Google,org,"American multinational technology company, a subsidiary of Alphabet Inc.",Q95,typo,synth
+109,Goole,org,"American multinational technology company, a subsidiary of Alphabet Inc.",Q95,typo,synth
+110,Gooogle,org,"American multinational technology company, a subsidiary of Alphabet Inc.",Q95,typo,synth
+111,Toyota,org,Japanese multinational automotive manufacturer,Q53268,typo,synth
+112,Toyta,org,Japanese multinational automotive manufacturer,Q53268,typo,synth
+113,Toyyota,org,Japanese multinational automotive manufacturer,Q53268,typo,synth
+114,Microsoft,org,American multinational technology corporation,Q2283,org_suffix,synth
+115,Microsoft Inc,org,American multinational technology corporation,Q2283,org_suffix,synth
+116,Microsoft Corporation,org,American multinational technology corporation,Q2283,org_suffix,synth
+117,Microsoft Ltd,org,American multinational technology corporation,Q2283,org_suffix,synth
+118,Microsoft Co,org,American multinational technology corporation,Q2283,org_suffix,synth
+119,Toyota,org,Japanese multinational automotive manufacturer,Q53268,org_suffix,synth
+120,Toyota Inc,org,Japanese multinational automotive manufacturer,Q53268,org_suffix,synth
+121,Toyota Corporation,org,Japanese multinational automotive manufacturer,Q53268,org_suffix,synth
+122,Toyota Ltd,org,Japanese multinational automotive manufacturer,Q53268,org_suffix,synth
+123,Toyota Co,org,Japanese multinational automotive manufacturer,Q53268,org_suffix,synth
+124,Tesla,org,"American automotive, energy storage and solar power company",Q478214,org_suffix,synth
+125,Tesla Inc,org,"American automotive, energy storage and solar power company",Q478214,org_suffix,synth
+126,Tesla Corporation,org,"American automotive, energy storage and solar power company",Q478214,org_suffix,synth
+127,Tesla Ltd,org,"American automotive, energy storage and solar power company",Q478214,org_suffix,synth
+128,Tesla Co,org,"American automotive, energy storage and solar power company",Q478214,org_suffix,synth
+129,Google,org,"American multinational technology company, a subsidiary of Alphabet Inc.",Q95,cross_document_exact,synth
+130,Google,org,"American multinational technology company, a subsidiary of Alphabet Inc.",Q95,cross_document_exact,synth
+131,Google,org,"American multinational technology company, a subsidiary of Alphabet Inc.",Q95,cross_document_exact,synth
+132,IBM,org,American multinational technology corporation,Q37156,cross_document_exact,synth
+133,IBM,org,American multinational technology corporation,Q37156,cross_document_exact,synth
+134,IBM,org,American multinational technology corporation,Q37156,cross_document_exact,synth
+135,FIFA World Cup 2018,event,"FIFA World Cup, 2018 edition",fifa-world-cup-2018,temporal_version,synth
+136,2018 FIFA World Cup,event,"FIFA World Cup, 2018 edition",fifa-world-cup-2018,temporal_version,synth
+137,FIFA World Cup (2018),event,"FIFA World Cup, 2018 edition",fifa-world-cup-2018,temporal_version,synth
+138,FIFA World Cup 2022,event,"FIFA World Cup, 2022 edition",fifa-world-cup-2022,temporal_version,synth
+139,2022 FIFA World Cup,event,"FIFA World Cup, 2022 edition",fifa-world-cup-2022,temporal_version,synth
+140,FIFA World Cup (2022),event,"FIFA World Cup, 2022 edition",fifa-world-cup-2022,temporal_version,synth
+141,Summer Olympics 2016,event,"Summer Olympics, 2016 edition",summer-olympics-2016,temporal_version,synth
+142,2016 Summer Olympics,event,"Summer Olympics, 2016 edition",summer-olympics-2016,temporal_version,synth
+143,Summer Olympics (2016),event,"Summer Olympics, 2016 edition",summer-olympics-2016,temporal_version,synth
+144,Summer Olympics 2020,event,"Summer Olympics, 2020 edition",summer-olympics-2020,temporal_version,synth
+145,2020 Summer Olympics,event,"Summer Olympics, 2020 edition",summer-olympics-2020,temporal_version,synth
+146,Summer Olympics (2020),event,"Summer Olympics, 2020 edition",summer-olympics-2020,temporal_version,synth
