@@ -77,6 +77,31 @@
 {% endmacro %}
 
 
+{#--- Pick the warehouse SQL function name for the two-table match
+       materialization. Two-table record linkage is Postgres-first: the
+       table-returning `goldenmatch_match_pairs(target, reference, config)`
+       UDF ships on the Postgres + Snowflake surfaces. DuckDB has no
+       table-returning match UDF in this release -- raise and direct the
+       caller to the JSON `goldenmatch_match_tables` UDF instead. ---#}
+{% macro goldenmatch_match_fn_name(adapter_type) %}
+    {%- if adapter_type == 'postgres' -%}
+        {{ return('goldenmatch.goldenmatch_match_pairs') }}
+    {%- elif adapter_type == 'snowflake' -%}
+        {{ return('goldenmatch.goldenmatch_match_pairs') }}
+    {%- elif adapter_type == 'duckdb' -%}
+        {{ exceptions.raise_compiler_error(
+            "two-table match materialization is Postgres-first; on DuckDB "
+            "call the goldenmatch_match_tables JSON UDF directly"
+        ) }}
+    {%- else -%}
+        {{ exceptions.raise_compiler_error(
+            "goldenmatch_match materialization is only supported on postgres "
+            "and snowflake; got adapter=" ~ adapter_type
+        ) }}
+    {%- endif -%}
+{% endmacro %}
+
+
 {#--- Adapter-aware name for the autoconfig (plan) UDF. Snowflake intentionally
        raises: the goldenmatch_autoconfig(table, mode) overload is DuckDB/Postgres
        only in this release, so zero-config (which always emits the 2-arg mode

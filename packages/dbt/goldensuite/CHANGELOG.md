@@ -18,6 +18,12 @@ Suite monorepo and is consumed from there (not published to PyPI).
   (macros) and a `pip install "git+...#subdirectory=..."` for the Python helper.
 
 ### Added
+- **`goldenmatch_match` materialization (two-table record linkage).** Links a target
+  model against a `reference` table and outputs matched pairs `(target_id, reference_id,
+  score)` (best match per target). Backed by a new table-returning `goldenmatch_match_pairs`
+  pgrx UDF (`goldenmatch_pg` 0.8.0 -> 0.9.0). Postgres-first (DuckDB raises a clear error).
+  `match_config` optional (omit for zero-config). `reference_id` is normalized to a 0-based
+  reference-table index.
 - **`goldenmatch_match_quality` dbt test.** A pure-SQL generic test that fails the
   build when a dedupe model's pairwise precision/recall/F1 (vs a ground-truth pairs
   table) drops below configured floors. Handles the `pairs` and `clusters` output

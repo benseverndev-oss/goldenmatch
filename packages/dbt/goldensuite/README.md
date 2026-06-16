@@ -87,6 +87,26 @@ models:
   The test fails (returns the metrics row) when any provided floor is violated;
   an empty/garbage model fails rather than silently passing.
 
+### Two-table match (record linkage)
+
+Link a target model against a reference table (the cross-table ER use case: match
+an incoming list against a master). `goldenmatch_match` is a materialization:
+
+```sql
+{{ config(materialized='goldenmatch_match', reference=ref('master_customers')) }}
+SELECT * FROM {{ ref('incoming_leads') }}
+```
+
+The model body is the **target**; `reference` is the master relation. Output is a
+matched-pairs table `(target_id, reference_id, score)` — best match per target.
+`target_id`/`reference_id` are 0-based row indices into the staged target / reference;
+join back via `ROW_NUMBER() OVER (ORDER BY ...) - 1` on the same inputs.
+
+`match_config` is optional: omit it for zero-config auto-matching (the reliable
+default); pass an explicit config (`match_df`'s `exact`/`fuzzy`/`blocking`/`threshold`
+shape — include blocking so candidates are generated) for control. **Postgres-first**
+(DuckDB raises a clear error; use the `goldenmatch_match_tables` JSON UDF on DuckDB).
+
 ## Macros
 
 This package ships macros only (no models/seeds/snapshots). The
@@ -95,6 +115,7 @@ Postgres, DuckDB, and Snowflake extension function shapes; `infermap_apply`
 is pure SQL (works on every adapter):
 
 - **Dedupe materialization** -- `goldenmatch_dedupe` (`macros/materializations/`)
+- **Match materialization** -- `goldenmatch_match` two-table record linkage (target model + `reference` ref -> matched pairs). Postgres-first. See [above](#two-table-match-record-linkage).
 - **Identity graph** -- `identity_resolve`, `identity_list`, `identity_view`, `identity_history`, `identity_conflicts`
 - **Learning memory** -- `file_field_correction`, `file_pair_correction`
 - **Quality gates (GoldenCheck)** -- `quality_assert`, `quality_health_gate`, `quality_not_empty`

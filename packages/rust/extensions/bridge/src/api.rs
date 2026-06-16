@@ -435,6 +435,97 @@ pub fn match_tables(
     })
 }
 
+/// A matched pair from two-table record linkage: a target row linked to a
+/// reference row with its match score. `target_id` / `reference_id` are
+/// 0-based row indices into the respective input tables.
+pub struct MatchedPair {
+    pub target_id: i64,
+    pub reference_id: i64,
+    pub score: f64,
+}
+
+/// Match `target` against `reference`, returning the
+/// `(target_id, reference_id, score)` linkage for the matched pairs.
+///
+/// `target_id` / `reference_id` are 0-based row indices into the respective
+/// inputs. `match_df` assigns a single combined `__row_id__` space (target
+/// rows `0..T-1`, reference rows `T..T+R-1`), so the matched frame's
+/// `__ref_row_id__` is offset by `len(target)`; `reference_id` is normalized
+/// back to a 0-based reference index by subtracting that offset. `target_id`
+/// (`__target_row_id__`) needs no adjustment.
+///
+/// Mirrors `match_tables`'s `match_df` call shape (config kwargs +
+/// `result.matched`); returns an empty `Vec` when there are no matches
+/// (`result.matched is None`).
+pub fn match_pairs(
+    target_json: &str,
+    reference_json: &str,
+    config_json: &str,
+) -> Result<Vec<MatchedPair>, BridgeError> {
+    crate::init()?;
+
+    Python::with_gil(|py| {
+        let gm = py.import("goldenmatch")?;
+        let json_mod = py.import("json")?;
+
+        let target_df = convert::json_to_polars_df(py, target_json)?;
+        let ref_df = convert::json_to_polars_df(py, reference_json)?;
+
+        // target rows occupy combined __row_id__ space 0..target_len-1; the
+        // reference's __ref_row_id__ is offset by target_len.
+        let target_len: i64 = target_df.getattr(py, "height")?.extract(py)?;
+
+        let config_dict = json_mod.call_method1("loads", (config_json,))?;
+
+        // Mirror match_tables' config-kwarg handling (exact/fuzzy/blocking),
+        // plus threshold/config which match_df also accepts.
+        let kwargs = PyDict::new(py);
+        for key in ["exact", "fuzzy", "blocking", "threshold", "config"] {
+            if let Ok(v) = config_dict.get_item(key) {
+                if !v.is_none() {
+                    kwargs.set_item(key, v)?;
+                }
+            }
+        }
+
+        let result = gm.call_method("match_df", (target_df, ref_df), Some(&kwargs))?;
+        let matched = result.getattr("matched")?;
+        if matched.is_none() {
+            return Ok(vec![]);
+        }
+
+        // Pull the three linkage columns off the matched Polars DataFrame as
+        // Python lists (matched[col].to_list()). The id columns are Int64; the
+        // score column is float. This mirrors the existing pyo3 column-extract
+        // style used elsewhere in the bridge and avoids a serde dependency in
+        // the runtime crate.
+        let t_ids: Vec<i64> = matched
+            .get_item("__target_row_id__")?
+            .call_method0("to_list")?
+            .extract()?;
+        let r_ids: Vec<i64> = matched
+            .get_item("__ref_row_id__")?
+            .call_method0("to_list")?
+            .extract()?;
+        let scores: Vec<f64> = matched
+            .get_item("__match_score__")?
+            .call_method0("to_list")?
+            .extract()?;
+
+        let mut out = Vec::with_capacity(t_ids.len());
+        for ((target_id, ref_row_id), score) in t_ids.into_iter().zip(r_ids).zip(scores) {
+            out.push(MatchedPair {
+                target_id,
+                // NORMALIZE the combined-space ref row id back to a 0-based
+                // index into the reference table.
+                reference_id: ref_row_id - target_len,
+                score,
+            });
+        }
+        Ok(out)
+    })
+}
+
 /// Score two strings using a named similarity scorer.
 ///
 /// Calls `goldenmatch.score_strings()` under the hood.
@@ -1933,6 +2024,47 @@ mod tests {
                 // the call succeeding (Ok) proves the marshalling round-trip works.
             }
             Err(e) => require_or_skip(e, "match_tables_basic"),
+        }
+    }
+
+    // ── match_pairs ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_match_pairs_reference_id_is_zero_based() {
+        // target has 2 rows; reference rows get __row_id__ offset by 2 in the
+        // combined match_df row-id space -> the bridge must normalize back to a
+        // 0-based reference index by subtracting len(target).
+        let target = r#"[{"name":"John Smith"},{"name":"Jane Doe"}]"#;
+        let reference = r#"[{"name":"Jon Smith"},{"name":"Jayne Doe"},{"name":"Bob X"}]"#;
+        // Empty config -> zero-config match_df (auto-config picks a weighted name
+        // matchkey + multi-pass soundex/substring blocking that groups John/Jon
+        // and Jane/Jayne). The slim `fuzzy` kwarg, by contrast, builds an empty
+        // static blocking that yields zero candidate pairs on this single-column
+        // shape, so it never produces a match here. The bridge only forwards
+        // non-None config keys, so `{}` forwards nothing -> the zero-config path.
+        let config = r#"{}"#;
+        match match_pairs(target, reference, config) {
+            Ok(pairs) => {
+                assert!(!pairs.is_empty(), "expected at least one match");
+                for p in &pairs {
+                    assert!(
+                        p.target_id >= 0 && p.target_id < 2,
+                        "target_id 0-based into target: {}",
+                        p.target_id
+                    );
+                    assert!(
+                        p.reference_id >= 0 && p.reference_id < 3,
+                        "reference_id MUST be 0-based into reference (not offset by len(target)): {}",
+                        p.reference_id
+                    );
+                    assert!(
+                        p.score >= 0.0 && p.score <= 1.0,
+                        "score in [0, 1]: {}",
+                        p.score
+                    );
+                }
+            }
+            Err(e) => require_or_skip(e, "match_pairs_reference_id_is_zero_based"),
         }
     }
 

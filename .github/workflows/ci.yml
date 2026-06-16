@@ -1786,9 +1786,11 @@ jobs:
           cargo pgrx install "--pg-config=/usr/lib/postgresql/${PG_VERSION}/bin/pg_config" --release --features "pg${PG_VERSION}" --no-default-features
           # pgrx 0.12.9 doesn't auto-emit the SQL extension file — copy the
           # handwritten ones into PG's extension dir so `CREATE EXTENSION`
-          # (installs default_version, now 0.8.0) and `ALTER EXTENSION ... UPDATE`
+          # (installs default_version, now 0.9.0) and `ALTER EXTENSION ... UPDATE`
           # find them. The schema files are the canonical declaration of public
           # function signatures.
+          cp sql/goldenmatch_pg--0.9.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
+          cp sql/goldenmatch_pg--0.8.0--0.9.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
           cp sql/goldenmatch_pg--0.8.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
           cp sql/goldenmatch_pg--0.7.0--0.8.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
           cp sql/goldenmatch_pg--0.7.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
@@ -1898,6 +1900,14 @@ jobs:
                 RAISE NOTICE 'v1.7-v1.12 autoconfig surface not yet on main (waiting on PR #159)';
               END IF;
             END$$;
+          EOSQL
+          # goldenmatch_match_pairs (0.9.0): two-table linkage RETURNS TABLE.
+          # Zero-config ('{}') routes through match_df's auto-config -- a minimal
+          # explicit fuzzy config yields zero candidate pairs (no blocking).
+          sudo -u postgres psql -p "${PGPORT}" -v ON_ERROR_STOP=1 <<'EOSQL'
+            CREATE TEMP TABLE t AS SELECT * FROM (VALUES ('John Smith'),('Jane Doe')) v(name);
+            CREATE TEMP TABLE r AS SELECT * FROM (VALUES ('Jon Smith'),('Jayne Doe'),('Bob X')) v(name);
+            SELECT * FROM goldenmatch.goldenmatch_match_pairs('t','r','{}') LIMIT 5;
           EOSQL
           # goldenmatch_autoconfig(table, mode) -- 1-arg back-compat (mode DEFAULT
           # 'standard') + the new 2-arg 'probabilistic' path, then pipe the
