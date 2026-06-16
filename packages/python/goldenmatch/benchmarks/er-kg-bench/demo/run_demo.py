@@ -20,9 +20,9 @@ if str(_BENCH_ROOT) not in sys.path:
     sys.path.insert(0, str(_BENCH_ROOT))
 
 from erkgbench.run import load_records  # noqa: E402  (pulls goldenmatch)
-from erkgbench.adapters import GoldenMatchAdapter  # noqa: E402
+from erkgbench.adapters import GoldenMatchAdapter, Record  # noqa: E402
 from erkgbench.adapters.modeled import GraphRAGModeled  # noqa: E402
-from demo import narrative as nv  # noqa: E402
+from demo import narrative as nv  # noqa: E402  # pyright: ignore[reportAttributeAccessIssue]  # namespace pkg, resolves at runtime
 
 DEMO_PATH = _BENCH_ROOT / "demo" / "DEMO.md"
 RESULTS_JSON = _BENCH_ROOT / "results" / "results.json"
@@ -32,7 +32,7 @@ GEORGIA_COUNTRY, GEORGIA_STATE = "Q230", "Q1428"
 MJ_A, MJ_B = "Q41421", "Q3308285"
 
 
-def _maps(records, entity_ids):
+def _maps(records: list[Record], entity_ids: list[str]) -> tuple[dict[int, str], dict[int, str]]:
     mentions = {r.index: r.mention for r in records}
     eids = {r.index: entity_ids[r.index] for r in records}
     return mentions, eids
@@ -62,7 +62,7 @@ def _exact_family_f1() -> str:
     return nv.EXACT_FAMILY_F1
 
 
-def tier1_under_merge(records, entity_ids) -> str:
+def tier1_under_merge(records: list[Record], entity_ids: list[str]) -> str:
     mentions, eids = _maps(records, entity_ids)
     _assert_present(eids, IBM)
     all_idx = [r.index for r in records]
@@ -71,9 +71,9 @@ def tier1_under_merge(records, entity_ids) -> str:
     return nv.render_demo_md(mentions, eids, IBM, "IBM", before, after, exact_family_f1=_exact_family_f1())
 
 
-def tier2_over_merge(records, entity_ids) -> str:
+def tier2_over_merge(records: list[Record], entity_ids: list[str]) -> str:
     """Prose only; never written to DEMO.md. Requires OPENAI_API_KEY."""
-    mentions, eids = _maps(records, entity_ids)
+    _mentions, eids = _maps(records, entity_ids)
     all_idx = [r.index for r in records]
     det = nv.complete_partition(GoldenMatchAdapter("auto_fields").resolve(records), all_idx)
     llm = nv.complete_partition(GoldenMatchAdapter("auto_llm").resolve(records), all_idx)
