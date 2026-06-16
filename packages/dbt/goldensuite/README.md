@@ -144,9 +144,23 @@ pipeline composes the macros above: apply `transforms.sql` in one model, then
 materialize the result with `goldenmatch_dedupe`. Run the adaptive pipeline via
 the `goldenpipe` Python package / CLI / MCP when you need the decisioning.
 
+### GoldenAnalysis stays Python-side
+
+GoldenAnalysis is read-only reporting whose value lives in analyzing *results* and
+across runs: `analyze_match`/`analyze_pipeline` consume in-memory `DedupeResult` /
+`PipeResult` objects (cluster distribution, match rates, recall certificates,
+cross-run regression) that don't exist in the SQL/dbt world. The only frame-level
+entry, `analyze(table)`, computes `frame.summary` plus `quality.rollup`/`quality.score`
+— and those quality analyzers ARE GoldenCheck, already surfaced here as the
+`quality_*` tests. So there is deliberately no `goldenanalysis` dispatch macro: gate
+quality in dbt with the `quality_*` tests + `goldenmatch_match_quality`, and run
+`goldenanalysis.analyze*` (Python / CLI / MCP) for reporting over dedupe/match results
+and run history.
+
 ## Status
 
 Early stage -- API may change. Covers GoldenMatch (dedupe + identity), GoldenCheck
 (quality gates), GoldenFlow (transforms), and InferMap (`infermap_apply`).
-GoldenPipe's adaptive orchestration stays Python-side (compose the macros above
-for the explicit pipeline).
+GoldenMatch also covers two-table match (`goldenmatch_match`) + the
+`goldenmatch_match_quality` test. GoldenPipe's adaptive orchestration and
+GoldenAnalysis's result/cross-run reporting both stay Python-side by design (see above).
