@@ -1,0 +1,106 @@
+record_id,mention,entity_type,context,entity_id,failure_class
+0,IBM,org,technology company armonk new york,org_ibm,abbreviation
+1,International Business Machines,org,technology company armonk new york,org_ibm,abbreviation
+2,I.B.M.,org,technology company armonk new york,org_ibm,abbreviation
+3,International Business Machines Corp,org,technology company armonk new york,org_ibm,abbreviation
+4,UN,org,intergovernmental organization new york,org_un,abbreviation
+5,United Nations,org,intergovernmental organization new york,org_un,abbreviation
+6,U.N.,org,intergovernmental organization new york,org_un,abbreviation
+7,NASA,org,space agency united states,org_nasa,abbreviation
+8,National Aeronautics and Space Administration,org,space agency united states,org_nasa,abbreviation
+9,Bucky Barnes,person,fictional character soldier,per_barnes,nickname_alias
+10,James Buchanan Barnes,person,fictional character soldier,per_barnes,nickname_alias
+11,James Bucky Barnes,person,fictional character soldier,per_barnes,nickname_alias
+12,Sergeant Barnes,person,fictional character soldier,per_barnes,nickname_alias
+13,Robert Smith,person,engineer london,per_rsmith,nickname_alias
+14,Bob Smith,person,engineer london,per_rsmith,nickname_alias
+15,Rob Smith,person,engineer london,per_rsmith,nickname_alias
+16,Bobby Smith,person,engineer london,per_rsmith,nickname_alias
+17,William Jefferson Clinton,person,us president arkansas,per_wjc,nickname_alias
+18,Bill Clinton,person,us president arkansas,per_wjc,nickname_alias
+19,President Clinton,person,us president arkansas,per_wjc,nickname_alias
+20,warfarin,drug,anticoagulant blood thinner,drug_warfarin,synonym_brand
+21,Coumadin,drug,anticoagulant blood thinner,drug_warfarin,synonym_brand
+22,Jantoven,drug,anticoagulant blood thinner,drug_warfarin,synonym_brand
+23,acetaminophen,drug,analgesic antipyretic pain fever,drug_apap,synonym_brand
+24,paracetamol,drug,analgesic antipyretic pain fever,drug_apap,synonym_brand
+25,Tylenol,drug,analgesic antipyretic pain fever,drug_apap,synonym_brand
+26,epinephrine,drug,hormone vasoconstrictor allergy,drug_epi,synonym_brand
+27,adrenaline,drug,hormone vasoconstrictor allergy,drug_epi,synonym_brand
+28,EpiPen,drug,hormone vasoconstrictor allergy,drug_epi,synonym_brand
+29,First National Bank,org,bank algiers algeria north africa,bank_dz,same_name_collision
+30,First National Bank of Algeria,org,bank algiers algeria north africa,bank_dz,same_name_collision
+31,FNB Algeria,org,bank algiers algeria north africa,bank_dz,same_name_collision
+32,First National Bank,org,bank omaha nebraska united states,bank_us,same_name_collision
+33,First National Bank Omaha,org,bank omaha nebraska united states,bank_us,same_name_collision
+34,FNB Omaha,org,bank omaha nebraska united states,bank_us,same_name_collision
+35,King's College,org,university the strand london england,col_london,same_name_collision
+36,King's College London,org,university the strand london england,col_london,same_name_collision
+37,KCL,org,university the strand london england,col_london,same_name_collision
+38,King's College,org,college briarcliff manor new york,col_ny,same_name_collision
+39,The King's College New York,org,college briarcliff manor new york,col_ny,same_name_collision
+40,TKC,org,college briarcliff manor new york,col_ny,same_name_collision
+41,John Smith,person,cardiologist boston massachusetts,per_jsmith_a,same_name_collision
+42,Dr John Smith,person,cardiologist boston massachusetts,per_jsmith_a,same_name_collision
+43,J. Smith MD,person,cardiologist boston massachusetts,per_jsmith_a,same_name_collision
+44,John Smith,person,plumber leeds united kingdom,per_jsmith_b,same_name_collision
+45,Johnny Smith,person,plumber leeds united kingdom,per_jsmith_b,same_name_collision
+46,J Smith,person,plumber leeds united kingdom,per_jsmith_b,same_name_collision
+47,Munich,place,city bavaria germany,city_munich,cross_lingual
+48,Munchen,place,city bavaria germany,city_munich,cross_lingual
+49,Munchen Bayern,place,city bavaria germany,city_munich,cross_lingual
+50,Monaco di Baviera,place,city bavaria germany,city_munich,cross_lingual
+51,Moscow,place,capital russia,city_moscow,cross_lingual
+52,Moskva,place,capital russia,city_moscow,cross_lingual
+53,Moskau,place,capital russia,city_moscow,cross_lingual
+54,Geneva,place,city switzerland lake leman,city_geneva,cross_lingual
+55,Geneve,place,city switzerland lake leman,city_geneva,cross_lingual
+56,Genf,place,city switzerland lake leman,city_geneva,cross_lingual
+57,Ginevra,place,city switzerland lake leman,city_geneva,cross_lingual
+58,Beijing,place,capital china,city_beijing,cross_lingual
+59,Peking,place,capital china,city_beijing,cross_lingual
+60,Bejing,place,capital china,city_beijing,cross_lingual
+61,Microsoft,org,software company redmond washington,org_microsoft,typo
+62,Microsft,org,software company redmond washington,org_microsoft,typo
+63,Micrsoft,org,software company redmond washington,org_microsoft,typo
+64,Microsoft Corporation,org,software company redmond washington,org_microsoft,typo
+65,Warfarin,drug,anticoagulant spelling variants,drug_warfarin_typo,typo
+66,Warfrin,drug,anticoagulant spelling variants,drug_warfarin_typo,typo
+67,Warfarin,drug,anticoagulant spelling variants,drug_warfarin_typo,typo
+68,Wafarin,drug,anticoagulant spelling variants,drug_warfarin_typo,typo
+69,Arnold Schwarzenegger,person,actor governor california,per_schwarz,typo
+70,Arnold Schwartzenegger,person,actor governor california,per_schwarz,typo
+71,Arnold Schwarzeneger,person,actor governor california,per_schwarz,typo
+72,Acme,org,manufacturing widgets,org_acme,org_suffix
+73,Acme Inc,org,manufacturing widgets,org_acme,org_suffix
+74,Acme Incorporated,org,manufacturing widgets,org_acme,org_suffix
+75,Acme Corporation,org,manufacturing widgets,org_acme,org_suffix
+76,Acme Co,org,manufacturing widgets,org_acme,org_suffix
+77,Globex,org,conglomerate springfield,org_globex,org_suffix
+78,Globex Corp,org,conglomerate springfield,org_globex,org_suffix
+79,Globex Corporation,org,conglomerate springfield,org_globex,org_suffix
+80,Globex Ltd,org,conglomerate springfield,org_globex,org_suffix
+81,Initech,org,software austin texas,org_initech,org_suffix
+82,Initech LLC,org,software austin texas,org_initech,org_suffix
+83,Initech Inc,org,software austin texas,org_initech,org_suffix
+84,Initech Limited,org,software austin texas,org_initech,org_suffix
+85,BTC Halving 2020,event,bitcoin block reward halving may 2020,ev_btc2020,temporal_version
+86,Bitcoin Halving 2020,event,bitcoin block reward halving may 2020,ev_btc2020,temporal_version
+87,Third Bitcoin Halving,event,bitcoin block reward halving may 2020,ev_btc2020,temporal_version
+88,BTC Halving 2024,event,bitcoin block reward halving april 2024,ev_btc2024,temporal_version
+89,Bitcoin Halving 2024,event,bitcoin block reward halving april 2024,ev_btc2024,temporal_version
+90,Fourth Bitcoin Halving,event,bitcoin block reward halving april 2024,ev_btc2024,temporal_version
+91,1963 AFL Draft,event,american football league player draft 1963,ev_afl1963,temporal_version
+92,American Football League Draft 1963,event,american football league player draft 1963,ev_afl1963,temporal_version
+93,1963 NFL Draft,event,national football league player draft 1963,ev_nfl1963,temporal_version
+94,National Football League Draft 1963,event,national football league player draft 1963,ev_nfl1963,temporal_version
+95,Stark Industries,org,same entity repeated across documents,doc_acme_xdoc,cross_document_exact
+96,Stark Industries,org,same entity repeated across documents,doc_acme_xdoc,cross_document_exact
+97,Stark Industries,org,same entity repeated across documents,doc_acme_xdoc,cross_document_exact
+98,Stark Industries,org,same entity repeated across documents,doc_acme_xdoc,cross_document_exact
+99,Wayne Enterprises,org,same entity repeated across ingests,doc_wayne_xdoc,cross_document_exact
+100,Wayne Enterprises,org,same entity repeated across ingests,doc_wayne_xdoc,cross_document_exact
+101,Wayne Enterprises,org,same entity repeated across ingests,doc_wayne_xdoc,cross_document_exact
+102,Oscorp,org,identical name multiple chunks,doc_oscorp_xdoc,cross_document_exact
+103,Oscorp,org,identical name multiple chunks,doc_oscorp_xdoc,cross_document_exact
+104,Oscorp,org,identical name multiple chunks,doc_oscorp_xdoc,cross_document_exact
