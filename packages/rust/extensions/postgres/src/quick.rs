@@ -99,6 +99,46 @@ pub fn goldenmatch_dedupe_clusters(
     }
 }
 
+/// Match a target table against a reference table and return the matched
+/// pairs as rows: each target row linked to a reference row with its score.
+///
+/// `target_id` / `reference_id` are 0-based row indices into the respective
+/// input tables (the bridge normalizes match_df's combined `__row_id__`
+/// space back to per-table indices).
+///
+/// ```sql
+/// SELECT * FROM goldenmatch_match_pairs('incoming', 'master', '{}');
+/// ```
+#[pg_extern]
+pub fn goldenmatch_match_pairs(
+    target_table: String,
+    reference_table: String,
+    config_json: String,
+) -> TableIterator<
+    'static,
+    (
+        name!(target_id, i64),
+        name!(reference_id, i64),
+        name!(score, f64),
+    ),
+> {
+    let target_json = spi::read_table_as_json(&target_table)
+        .unwrap_or_else(|e| pgrx::error!("goldenmatch: {}", e));
+    let ref_json = spi::read_table_as_json(&reference_table)
+        .unwrap_or_else(|e| pgrx::error!("goldenmatch: {}", e));
+
+    match goldenmatch_bridge::api::match_pairs(&target_json, &ref_json, &config_json) {
+        Ok(pairs) => {
+            let rows: Vec<(i64, i64, f64)> = pairs
+                .into_iter()
+                .map(|p| (p.target_id, p.reference_id, p.score))
+                .collect();
+            TableIterator::new(rows)
+        }
+        Err(e) => pgrx::error!("goldenmatch: {}", e),
+    }
+}
+
 // ── Scalar functions ───────────────────────────────────────────────────
 
 /// Score two strings using a named similarity algorithm.
