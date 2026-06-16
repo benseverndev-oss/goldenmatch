@@ -13,6 +13,21 @@
 {"source": "rxnorm", "ingredient": "fluoxetine", "failure_class": "synonym_brand", "type": "drug"}
 {"source": "rxnorm", "ingredient": "metformin", "failure_class": "synonym_brand", "type": "drug"}
 {"source": "rxnorm", "ingredient": "atorvastatin", "failure_class": "synonym_brand", "type": "drug"}
+{"source": "rxnorm", "ingredient": "lisinopril", "failure_class": "synonym_brand", "type": "drug"}
+{"source": "rxnorm", "ingredient": "alprazolam", "failure_class": "synonym_brand", "type": "drug"}
+{"source": "rxnorm", "ingredient": "gabapentin", "failure_class": "synonym_brand", "type": "drug"}
+{"source": "rxnorm", "ingredient": "losartan", "failure_class": "synonym_brand", "type": "drug"}
+{"source": "rxnorm", "ingredient": "montelukast", "failure_class": "synonym_brand", "type": "drug"}
+{"source": "rxnorm", "ingredient": "escitalopram", "failure_class": "synonym_brand", "type": "drug"}
+{"source": "rxnorm", "ingredient": "pantoprazole", "failure_class": "synonym_brand", "type": "drug"}
+{"source": "rxnorm", "ingredient": "rosuvastatin", "failure_class": "synonym_brand", "type": "drug"}
+{"source": "rxnorm", "ingredient": "furosemide", "failure_class": "synonym_brand", "type": "drug"}
+{"source": "rxnorm", "ingredient": "tramadol", "failure_class": "synonym_brand", "type": "drug"}
+{"source": "rxnorm", "ingredient": "simvastatin", "failure_class": "synonym_brand", "type": "drug"}
+{"source": "rxnorm", "ingredient": "citalopram", "failure_class": "synonym_brand", "type": "drug"}
+{"source": "rxnorm", "ingredient": "naproxen", "failure_class": "synonym_brand", "type": "drug"}
+{"source": "rxnorm", "ingredient": "tamsulosin", "failure_class": "synonym_brand", "type": "drug"}
+{"source": "rxnorm", "ingredient": "levothyroxine", "failure_class": "synonym_brand", "type": "drug"}
 {"source": "wikidata", "qid": "Q41421", "failure_class": "same_name_collision", "type": "person", "langs": ["en"], "aliases": true}
 {"source": "wikidata", "qid": "Q3308285", "failure_class": "same_name_collision", "type": "person", "langs": ["en"], "aliases": true}
 {"source": "wikidata", "qid": "Q230", "failure_class": "same_name_collision", "type": "place", "langs": ["en"], "aliases": true}
