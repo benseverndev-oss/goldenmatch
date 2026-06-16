@@ -1,0 +1,32 @@
+{"entity_id": "org_ibm", "type": "org", "failure_class": "abbreviation", "context": "technology company armonk new york", "mentions": ["IBM", "International Business Machines", "I.B.M.", "International Business Machines Corp"]}
+{"entity_id": "org_un", "type": "org", "failure_class": "abbreviation", "context": "intergovernmental organization new york", "mentions": ["UN", "United Nations", "U.N."]}
+{"entity_id": "org_nasa", "type": "org", "failure_class": "abbreviation", "context": "space agency united states", "mentions": ["NASA", "National Aeronautics and Space Administration"]}
+{"entity_id": "per_barnes", "type": "person", "failure_class": "nickname_alias", "context": "fictional character soldier", "mentions": ["Bucky Barnes", "James Buchanan Barnes", "James Bucky Barnes", "Sergeant Barnes"]}
+{"entity_id": "per_rsmith", "type": "person", "failure_class": "nickname_alias", "context": "engineer london", "mentions": ["Robert Smith", "Bob Smith", "Rob Smith", "Bobby Smith"]}
+{"entity_id": "per_wjc", "type": "person", "failure_class": "nickname_alias", "context": "us president arkansas", "mentions": ["William Jefferson Clinton", "Bill Clinton", "President Clinton"]}
+{"entity_id": "drug_warfarin", "type": "drug", "failure_class": "synonym_brand", "context": "anticoagulant blood thinner", "mentions": ["warfarin", "Coumadin", "Jantoven"]}
+{"entity_id": "drug_apap", "type": "drug", "failure_class": "synonym_brand", "context": "analgesic antipyretic pain fever", "mentions": ["acetaminophen", "paracetamol", "Tylenol"]}
+{"entity_id": "drug_epi", "type": "drug", "failure_class": "synonym_brand", "context": "hormone vasoconstrictor allergy", "mentions": ["epinephrine", "adrenaline", "EpiPen"]}
+{"entity_id": "bank_dz", "type": "org", "failure_class": "same_name_collision", "context": "bank algiers algeria north africa", "mentions": ["First National Bank", "First National Bank of Algeria", "FNB Algeria"]}
+{"entity_id": "bank_us", "type": "org", "failure_class": "same_name_collision", "context": "bank omaha nebraska united states", "mentions": ["First National Bank", "First National Bank Omaha", "FNB Omaha"]}
+{"entity_id": "col_london", "type": "org", "failure_class": "same_name_collision", "context": "university the strand london england", "mentions": ["King's College", "King's College London", "KCL"]}
+{"entity_id": "col_ny", "type": "org", "failure_class": "same_name_collision", "context": "college briarcliff manor new york", "mentions": ["King's College", "The King's College New York", "TKC"]}
+{"entity_id": "per_jsmith_a", "type": "person", "failure_class": "same_name_collision", "context": "cardiologist boston massachusetts", "mentions": ["John Smith", "Dr John Smith", "J. Smith MD"]}
+{"entity_id": "per_jsmith_b", "type": "person", "failure_class": "same_name_collision", "context": "plumber leeds united kingdom", "mentions": ["John Smith", "Johnny Smith", "J Smith"]}
+{"entity_id": "city_munich", "type": "place", "failure_class": "cross_lingual", "context": "city bavaria germany", "mentions": ["Munich", "Munchen", "Munchen Bayern", "Monaco di Baviera"]}
+{"entity_id": "city_moscow", "type": "place", "failure_class": "cross_lingual", "context": "capital russia", "mentions": ["Moscow", "Moskva", "Moskau"]}
+{"entity_id": "city_geneva", "type": "place", "failure_class": "cross_lingual", "context": "city switzerland lake leman", "mentions": ["Geneva", "Geneve", "Genf", "Ginevra"]}
+{"entity_id": "city_beijing", "type": "place", "failure_class": "cross_lingual", "context": "capital china", "mentions": ["Beijing", "Peking", "Bejing"]}
+{"entity_id": "org_microsoft", "type": "org", "failure_class": "typo", "context": "software company redmond washington", "mentions": ["Microsoft", "Microsft", "Micrsoft", "Microsoft Corporation"]}
+{"entity_id": "drug_warfarin_typo", "type": "drug", "failure_class": "typo", "context": "anticoagulant spelling variants", "mentions": ["Warfarin", "Warfrin", "Warfarin", "Wafarin"]}
+{"entity_id": "per_schwarz", "type": "person", "failure_class": "typo", "context": "actor governor california", "mentions": ["Arnold Schwarzenegger", "Arnold Schwartzenegger", "Arnold Schwarzeneger"]}
+{"entity_id": "org_acme", "type": "org", "failure_class": "org_suffix", "context": "manufacturing widgets", "mentions": ["Acme", "Acme Inc", "Acme Incorporated", "Acme Corporation", "Acme Co"]}
+{"entity_id": "org_globex", "type": "org", "failure_class": "org_suffix", "context": "conglomerate springfield", "mentions": ["Globex", "Globex Corp", "Globex Corporation", "Globex Ltd"]}
+{"entity_id": "org_initech", "type": "org", "failure_class": "org_suffix", "context": "software austin texas", "mentions": ["Initech", "Initech LLC", "Initech Inc", "Initech Limited"]}
+{"entity_id": "ev_btc2020", "type": "event", "failure_class": "temporal_version", "context": "bitcoin block reward halving may 2020", "mentions": ["BTC Halving 2020", "Bitcoin Halving 2020", "Third Bitcoin Halving"]}
+{"entity_id": "ev_btc2024", "type": "event", "failure_class": "temporal_version", "context": "bitcoin block reward halving april 2024", "mentions": ["BTC Halving 2024", "Bitcoin Halving 2024", "Fourth Bitcoin Halving"]}
+{"entity_id": "ev_afl1963", "type": "event", "failure_class": "temporal_version", "context": "american football league player draft 1963", "mentions": ["1963 AFL Draft", "American Football League Draft 1963"]}
+{"entity_id": "ev_nfl1963", "type": "event", "failure_class": "temporal_version", "context": "national football league player draft 1963", "mentions": ["1963 NFL Draft", "National Football League Draft 1963"]}
+{"entity_id": "doc_acme_xdoc", "type": "org", "failure_class": "cross_document_exact", "context": "same entity repeated across documents", "mentions": ["Stark Industries", "Stark Industries", "Stark Industries", "Stark Industries"]}
+{"entity_id": "doc_wayne_xdoc", "type": "org", "failure_class": "cross_document_exact", "context": "same entity repeated across ingests", "mentions": ["Wayne Enterprises", "Wayne Enterprises", "Wayne Enterprises"]}
+{"entity_id": "doc_oscorp_xdoc", "type": "org", "failure_class": "cross_document_exact", "context": "identical name multiple chunks", "mentions": ["Oscorp", "Oscorp", "Oscorp"]}

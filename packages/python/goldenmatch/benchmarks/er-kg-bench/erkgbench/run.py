@@ -1,0 +1,227 @@
+"""Run every adapter over the labelled dataset and emit the scoreboard.
+
+    python -m erkgbench.run                 # from the er-kg-bench/ dir
+    python erkgbench/run.py --embedder st   # activate cosine terms via MiniLM
+
+Outputs ``results/results.json`` and ``results/RESULTS.md``.
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+# Allow running as a loose script (python erkgbench/run.py) as well as -m.
+_BENCH_ROOT = Path(__file__).resolve().parent.parent
+if str(_BENCH_ROOT) not in sys.path:
+    sys.path.insert(0, str(_BENCH_ROOT))
+
+from erkgbench import metrics  # noqa: E402
+from erkgbench.adapters import GoldenMatchAdapter, Record, all_modeled  # noqa: E402
+
+DATASET = _BENCH_ROOT / "dataset" / "records.csv"
+RESULTS_DIR = _BENCH_ROOT / "results"
+
+CLASS_ORDER = [
+    "abbreviation",
+    "nickname_alias",
+    "synonym_brand",
+    "same_name_collision",
+    "cross_lingual",
+    "typo",
+    "org_suffix",
+    "temporal_version",
+    "cross_document_exact",
+]
+# Classes that are NEGATIVE tests: distinct entities with colliding surface
+# forms. The headline metric for these is PRECISION (avoid wrong merges).
+PRECISION_CRITICAL = {"same_name_collision", "temporal_version"}
+
+
+def load_records() -> tuple[list[Record], list[str], list[str]]:
+    if not DATASET.exists():
+        from dataset.generate import main as gen  # type: ignore
+
+        sys.path.insert(0, str(_BENCH_ROOT / "dataset"))
+        gen()
+    records: list[Record] = []
+    entity_ids: list[str] = []
+    failure_classes: list[str] = []
+    with DATASET.open(encoding="utf-8") as fh:
+        for row in csv.DictReader(fh):
+            i = int(row["record_id"])
+            records.append(
+                Record(
+                    index=i,
+                    mention=row["mention"],
+                    entity_type=row["entity_type"],
+                    context=row["context"],
+                )
+            )
+            entity_ids.append(row["entity_id"])
+            failure_classes.append(row["failure_class"])
+    return records, entity_ids, failure_classes
+
+
+def make_embedder(kind: str | None):
+    if not kind:
+        return None
+    # all-MiniLM-L6-v2 is the model Neo4j's builder actually uses for its
+    # cosine term, so it is the faithful choice when activating embeddings.
+    from sentence_transformers import SentenceTransformer  # type: ignore
+
+    model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+
+    def embed(texts: list[str]) -> list[list[float]]:
+        return model.encode(texts, normalize_embeddings=False).tolist()
+
+    return embed
+
+
+def run(embedder_kind: str | None) -> dict:
+    records, entity_ids, failure_classes = load_records()
+    embed_fn = make_embedder(embedder_kind)
+
+    # Dogfood: goldenmatch runs zero-config (auto-config picks the strategy),
+    # the same posture as every framework running at its documented default.
+    adapters = [
+        GoldenMatchAdapter(mode="auto"),
+        GoldenMatchAdapter(mode="auto_fields"),
+    ]
+    # The semantic-class attacker only activates with a key (else it is the same
+    # as auto+fields with a per-pair LLM step). Skip rather than fake it.
+    if os.environ.get("OPENAI_API_KEY"):
+        adapters.append(GoldenMatchAdapter(mode="auto_llm"))
+    adapters += list(all_modeled(embed_fn=embed_fn))
+
+    rows = []
+    for ad in adapters:
+        t0 = time.perf_counter()
+        clustering = ad.resolve(records)
+        elapsed_ms = (time.perf_counter() - t0) * 1000.0
+        # Determinism: identical partition on a re-run.
+        deterministic = metrics.clusterings_equal(clustering, ad.resolve(records))
+        by_class = metrics.score_by_class(entity_ids, failure_classes, clustering)
+        overall = by_class["__overall__"]
+        rows.append(
+            {
+                "name": ad.name,
+                "defaults": ad.defaults,
+                "overall": {
+                    "precision": round(overall.precision, 3),
+                    "recall": round(overall.recall, 3),
+                    "f1": round(overall.f1, 3),
+                },
+                "per_class_f1": {
+                    c: round(by_class[c].f1, 3) for c in CLASS_ORDER if c in by_class
+                },
+                "per_class_precision": {
+                    c: round(by_class[c].precision, 3)
+                    for c in CLASS_ORDER
+                    if c in by_class
+                },
+                "time_ms": round(elapsed_ms, 1),
+                "deterministic_floor": bool(deterministic and ad.deterministic),
+            }
+        )
+
+    return {
+        "dataset": {
+            "records": len(records),
+            "entities": len(set(entity_ids)),
+            "classes": CLASS_ORDER,
+        },
+        "embedder": embedder_kind or "none (string predicates only)",
+        "precision_critical_classes": sorted(PRECISION_CRITICAL),
+        "results": rows,
+    }
+
+
+def _short(c: str) -> str:
+    return {
+        "abbreviation": "abbr",
+        "nickname_alias": "nick",
+        "synonym_brand": "synm",
+        "same_name_collision": "coll*",
+        "cross_lingual": "xling",
+        "typo": "typo",
+        "org_suffix": "suffix",
+        "temporal_version": "temp*",
+        "cross_document_exact": "xdoc",
+    }[c]
+
+
+def to_markdown(report: dict) -> str:
+    ds = report["dataset"]
+    lines = [
+        "# ER-KG-Bench results",
+        "",
+        f"Dataset: **{ds['records']} records / {ds['entities']} entities / "
+        f"{len(ds['classes'])} failure classes**. Embedder: "
+        f"`{report['embedder']}`.",
+        "",
+        "`*` = precision-critical negative class (distinct entities with "
+        "colliding surface forms; lower precision = wrong merges).",
+        "",
+        "## Headline (pairwise, full set)",
+        "",
+        "| System | P | R | F1 | coll&nbsp;P* | temp&nbsp;P* | ms | det-floor |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
+    for r in report["results"]:
+        o = r["overall"]
+        cp = r["per_class_precision"].get("same_name_collision", "-")
+        tp = r["per_class_precision"].get("temporal_version", "-")
+        lines.append(
+            f"| {r['name']} | {o['precision']} | {o['recall']} | **{o['f1']}** | "
+            f"{cp} | {tp} | {r['time_ms']} | {'yes' if r['deterministic_floor'] else 'no'} |"
+        )
+
+    lines += ["", "## Per-class F1", "", "| System | " + " | ".join(
+        _short(c) for c in CLASS_ORDER
+    ) + " |", "|---|" + "---|" * len(CLASS_ORDER)]
+    for r in report["results"]:
+        cells = " | ".join(
+            str(r["per_class_f1"].get(c, "-")) for c in CLASS_ORDER
+        )
+        lines.append(f"| {r['name']} | {cells} |")
+
+    lines += ["", "## Documented defaults (what each row runs)", ""]
+    for r in report["results"]:
+        lines.append(f"- **{r['name']}** — {r['defaults']}")
+    lines += [
+        "",
+        "> Modelled rows reproduce each framework's deterministic default rule "
+        "(exact constants + source in `adapters/modeled.py`). LLM-judge layers "
+        "(Graphiti, mem0) are out of scope: non-deterministic, O(n)-in-LLM-calls, "
+        "and ~$0.80/40-chats — see the module docstring.",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument(
+        "--embedder",
+        choices=["st"],
+        default=None,
+        help="Activate cosine OR-terms via sentence-transformers all-MiniLM-L6-v2.",
+    )
+    args = ap.parse_args()
+
+    report = run("st" if args.embedder == "st" else None)
+    RESULTS_DIR.mkdir(exist_ok=True)
+    (RESULTS_DIR / "results.json").write_text(json.dumps(report, indent=2))
+    md = to_markdown(report)
+    (RESULTS_DIR / "RESULTS.md").write_text(md)
+    print(md)
+
+
+if __name__ == "__main__":
+    main()
