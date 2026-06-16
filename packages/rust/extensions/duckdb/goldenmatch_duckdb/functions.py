@@ -86,10 +86,22 @@ def register(con: duckdb.DuckDBPyConnection) -> None:
     )
 
     # AutoConfig + telemetry (v1.7-v1.12 surface)
+    # DuckDB Python UDFs are fixed-arity (no SQL DEFAULT) and DuckDB 1.x rejects
+    # two scalar functions sharing a name. So register the impl ONCE as a 2-arg
+    # native UDF under an internal name, then expose ``goldenmatch_autoconfig``
+    # as a single multi-arity SQL macro: the 1-arg form (back-compat, always
+    # 'standard') and a 2-arg form taking an explicit mode
+    # ('standard' | 'probabilistic'). The macro overload pair MUST be one
+    # ``CREATE MACRO`` statement -- separate statements collide on the name.
     con.create_function(
-        "goldenmatch_autoconfig",
-        lambda table_name: _autoconfig_table(con, table_name),
-        ["VARCHAR"], "VARCHAR",
+        "_goldenmatch_autoconfig_impl",
+        lambda table_name, mode: _autoconfig_table(con, table_name, mode),
+        ["VARCHAR", "VARCHAR"], "VARCHAR",
+    )
+    con.execute(
+        "CREATE OR REPLACE MACRO goldenmatch_autoconfig(table_name) AS "
+        "_goldenmatch_autoconfig_impl(table_name, 'standard'), "
+        "(table_name, mode) AS _goldenmatch_autoconfig_impl(table_name, mode)"
     )
     con.create_function(
         "goldenmatch_autoconfig_telemetry",
@@ -383,9 +395,11 @@ def _gm_telemetry(con: duckdb.DuckDBPyConnection, job_name: str) -> str:
 # ── AutoConfig + telemetry (v1.7-v1.12) ──────────────────────────────────
 
 
-def _autoconfig_table(con: duckdb.DuckDBPyConnection, table_name: str) -> str:
+def _autoconfig_table(
+    con: duckdb.DuckDBPyConnection, table_name: str, mode: str = "standard",
+) -> str:
     """Run AutoConfigController on a DuckDB table; return committed config JSON."""
-    cfg = _run_autoconfig(con, table_name)
+    cfg = _run_autoconfig(con, table_name, mode)
     return json.dumps(cfg.model_dump(mode="json", exclude_none=True))
 
 
@@ -427,14 +441,32 @@ def _dedupe_full_table(
     return json.dumps(result.stats)
 
 
-def _run_autoconfig(con: duckdb.DuckDBPyConnection, table_name: str):
-    """Shared helper: read table, run auto_configure_df, return the config."""
-    from goldenmatch.core.autoconfig import auto_configure_df
+def _run_autoconfig(
+    con: duckdb.DuckDBPyConnection, table_name: str, mode: str = "standard",
+):
+    """Shared helper: read table, run auto-config (standard or probabilistic).
+
+    ``mode='standard'`` (default) runs ``auto_configure_df``;
+    ``mode='probabilistic'`` runs ``auto_configure_probabilistic_df``
+    (Fellegi-Sunter). DuckDB Python UDFs are fixed-arity, so the SQL
+    surface registers both a 1-arg (always standard) and a 2-arg overload.
+    """
+    from goldenmatch.core.autoconfig import (
+        auto_configure_df,
+        auto_configure_probabilistic_df,
+    )
     _validate_table_name(table_name)
     cursor = con.cursor()
     df = cursor.sql(f"SELECT * FROM {table_name}").pl()
     cursor.close()
-    return auto_configure_df(df)
+    if mode == "standard":
+        return auto_configure_df(df)
+    if mode == "probabilistic":
+        return auto_configure_probabilistic_df(df)
+    raise ValueError(
+        f"unknown autoconfig mode {mode!r} "
+        "(expected 'standard' or 'probabilistic')"
+    )
 
 
 def _capture_telemetry(committed_config) -> str | None:
