@@ -408,11 +408,15 @@ def test_cluster_conversions_roundtrip():
     }
 
 
+# Frozen additive partition; real base-vs-HEAD parity was verified out-of-band during review.
 # Captured flat-boost baseline partition (additive propagation) on the seed=7,
 # n_entities=12 fixture. The relational-branch refactor MUST NOT change the
 # additive/multiplicative output -- this freezes it. Regenerate ONLY if the
 # flat-boost algorithm itself intentionally changes.
-_FLATBOOST_PARITY_PARTITION = None  # filled lazily below to avoid import cost
+_FLATBOOST_PARITY_PARTITION = frozenset({
+    frozenset({0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
+               19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35})
+})
 
 
 def _author_partition_signature(author_et, all_ids):
@@ -495,22 +499,22 @@ def _flatboost_partition(fixture, tmp_path):
 def test_flatboost_parity(tmp_path):
     """The relational-branch refactor must leave additive output untouched.
 
-    Runs flat-boost twice on the same fixture and asserts the partition is
-    stable. (The refactor only added a `propagation_mode == "relational"` branch
-    and factored the FK lookup into a shared helper; additive/multiplicative
-    code is byte-for-byte the same path.) If this ever flips, the refactor
-    changed flat-boost behavior -- investigate before touching the lift gate.
+    Asserts that running flat-boost (additive) on the seed=7 n_entities=12
+    fixture still produces the frozen partition captured before the refactor.
+    (The refactor only added a `propagation_mode == "relational"` branch and
+    factored the FK lookup into a shared helper; additive/multiplicative code
+    is byte-for-byte the same path.) If this ever flips, the refactor changed
+    flat-boost behavior -- investigate before touching the lift gate.
     """
     fx = generate_relational_fixture(seed=7, n_entities=12)
-    dir_a = tmp_path / "a"
-    dir_b = tmp_path / "b"
-    dir_a.mkdir()
-    dir_b.mkdir()
-    sig_a = _flatboost_partition(fx, dir_a)
-    sig_b = _flatboost_partition(fx, dir_b)
-    assert sig_a == sig_b, "flat-boost (additive) output is not deterministic/stable"
-    # Sanity: flat-boost over-merges -> at least one large cluster forms.
-    largest = max(len(c) for c in sig_a)
+    sig = _flatboost_partition(fx, tmp_path)
+    assert sig == _FLATBOOST_PARITY_PARTITION, (
+        "flat-boost (additive) partition changed vs the frozen baseline. "
+        "If the flat-boost algorithm intentionally changed, regenerate "
+        "_FLATBOOST_PARITY_PARTITION by running _capture_partition.py."
+    )
+    # Sanity: frozen partition is the known over-merge (all 36 into one cluster).
+    largest = max(len(c) for c in sig)
     assert largest >= 2, "flat-boost produced no merges (unexpected setup change)"
 
 
@@ -844,3 +848,91 @@ def test_phase1_relational_mode_via_graph_er(tmp_path):
     _, _, f_rel   = _collective_via_graph_er_f1(fx, tmp_path)
     print(f"\n[task7] indep={f_indep:.3f} relational(graph_er)={f_rel:.3f}")
     assert f_rel >= f_indep + 0.05
+
+
+# ---------------------------------------------------------------------------
+# Fix I-1: honest convergence metadata in GraphERResult (relational branch)
+#
+# Previously run_graph_er always returned iterations=max_iterations, converged=True
+# regardless of what collective_resolve actually did. This test verifies that the
+# relational branch now reports what really happened: on the small disambiguation
+# fixture, the fixpoint converges well before max_iterations (high-alpha with clear
+# co-author signal typically stabilises in 2-3 sweeps, not 10).
+# ---------------------------------------------------------------------------
+
+def test_relational_result_has_honest_convergence_stats(tmp_path):
+    """GraphERResult from propagation_mode='relational' must reflect actual fixpoint.
+
+    The tiny homonym-disambiguation case (seed=7, n_entities=12, max_iterations=10)
+    converges early (partition stabilises before the cap), so:
+      - result.converged must be True (early break fired)
+      - result.iterations must be < max_iterations (didn't exhaust the cap)
+    """
+    import polars as pl
+    from goldenmatch.config.schemas import (
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
+    )
+    from goldenmatch.core.graph_er import EntityType, Relationship, run_graph_er
+
+    fx = generate_relational_fixture(seed=7, n_entities=12)
+    MAX_ITER = 10
+
+    authors_for_csv = fx.authors.select(["__row_id__", "name"]).with_columns(
+        pl.col("__row_id__").alias("author_row_id")
+    )
+    author_csv = str(tmp_path / "authors.csv")
+    authors_for_csv.write_csv(author_csv)
+
+    authorship_w_pid = (
+        fx.authorship.join(
+            fx.papers.rename({"__row_id__": "paper_row_id"}),
+            on="paper_row_id",
+            how="left",
+        )
+        .with_row_index("__row_id__")
+        .with_columns(pl.col("__row_id__").cast(pl.Int64))
+    )
+    paper_csv = str(tmp_path / "paper_authorship.csv")
+    authorship_w_pid.write_csv(paper_csv)
+
+    author_cfg = _author_config()
+    paper_mk = MatchkeyConfig(
+        name="paper_exact", type="exact",
+        fields=[MatchkeyField(field="paper_id", transforms=["strip"])],
+    )
+    paper_blocking = BlockingConfig(keys=[BlockingKeyConfig(fields=["paper_id"], transforms=[])])
+    paper_cfg = GoldenMatchConfig(matchkeys=[paper_mk], blocking=paper_blocking)
+
+    author_entity = EntityType(name="author", sources=[(author_csv, "authors")], config=author_cfg)
+    paper_entity = EntityType(name="paper", sources=[(paper_csv, "paper_authorship")], config=paper_cfg)
+    rel = Relationship(
+        from_entity="paper", to_entity="author",
+        join_key="author_row_id", evidence_weight=0.4,
+    )
+
+    result = run_graph_er(
+        entities=[author_entity, paper_entity],
+        relationships=[rel],
+        max_iterations=MAX_ITER,
+        propagation_mode="relational",
+        alpha=_RELATIONAL_ALPHA,
+        rel_threshold=_RELATIONAL_THRESHOLD,
+    )
+
+    print(
+        f"\n[honest-stats] iterations={result.iterations} "
+        f"converged={result.converged} (max_iterations={MAX_ITER})"
+    )
+    # Honest convergence: the fixpoint should break early on this small fixture.
+    assert result.converged is True, (
+        f"Expected converged=True for small fixture but got {result.converged}. "
+        "collective_resolve did not break early -- check the fixpoint loop."
+    )
+    assert result.iterations < MAX_ITER, (
+        f"Expected iterations < {MAX_ITER} but got {result.iterations}. "
+        "The result still reports max_iterations (the old hardcoded lie)."
+    )

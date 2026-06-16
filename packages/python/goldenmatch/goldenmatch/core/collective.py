@@ -120,7 +120,7 @@ def _coneighbor_pairs(
     ``neighbor_cluster_set`` (under the snapshot) contains it, then emit all
     within-bucket pairs. If a bucket would emit more than ``fanout_cap`` pairs,
     cap it: sort the records and take a bounded prefix so the emitted pair count
-    stays under the cap, then print a one-line truncation warning.
+    stays under the cap, then log a one-line truncation warning.
     """
     # rid -> its neighbor-cluster set under the snapshot (computed once each).
     ncs_by_rid: dict = {
@@ -168,6 +168,7 @@ def collective_resolve(
     max_iterations: int = 10,
     max_cluster_size: int = 100,
     fanout_cap: int = 200,
+    stats: dict | None = None,
 ) -> dict:
     """Synchronous (Jacobi) blend-and-iterate collective ER fixpoint.
 
@@ -180,6 +181,13 @@ def collective_resolve(
             "clusters": {rid -> cid}}``. An entity with non-empty ``attr_pairs``
             is *resolvable* (re-clustered each iteration); an entity with empty
             ``attr_pairs`` is a *fixed* reference neighbor (kept unchanged).
+
+            WARNING: the ``"clusters"`` seed MUST be the attribute-ER output
+            (a non-trivial partitioning), NOT all-singletons. With high ``alpha``,
+            singleton seeds give ``rel_sim=0`` for mutual-only neighbors and the
+            fixpoint silently under-merges — all relational signal is lost until
+            at least some records share a non-singleton cluster in the snapshot.
+
         neighbor_index: ``(entity, rid) -> iterable[(related_entity, related_rid)]``
             from :func:`build_neighbor_index`.
         alpha: Weight on relational vs attribute similarity. ``blended =
@@ -191,6 +199,9 @@ def collective_resolve(
         max_cluster_size: Forwarded to :func:`build_clusters`.
         fanout_cap: Max co-neighbor candidate pairs generated per shared
             neighbor-cluster bucket.
+        stats: Optional dict. When provided, populated with ``{"iterations": int,
+            "converged": bool}`` reflecting the actual fixpoint outcome. Callers
+            that do not need this metadata can omit the argument entirely.
 
     Returns:
         ``entity -> {rid -> cluster_id}`` (the final clustering per entity).
@@ -204,7 +215,11 @@ def collective_resolve(
         entity for entity, state in entity_state.items() if state["attr_pairs"]
     ]
 
+    _actual_iterations = 0
+    _converged = False
     for _iteration in range(max_iterations):
+        _actual_iterations = _iteration + 1
+
         # (a) Snapshot: all scoring this sweep reads ONLY this frozen copy.
         snapshot: dict = {
             entity: dict(rid_to_cid)
@@ -258,6 +273,11 @@ def collective_resolve(
                 changed = True
             clusters_by_entity[entity] = new_clusterings[entity]
         if not changed:
+            _converged = True
             break
+
+    if stats is not None:
+        stats["iterations"] = _actual_iterations
+        stats["converged"] = _converged
 
     return clusters_by_entity

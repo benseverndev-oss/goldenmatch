@@ -137,15 +137,15 @@ def run_graph_er(
     # Relational (collective) path: neighborhood-aware resolution instead of the
     # flat boost. Leaves additive/multiplicative untouched (the loop below).
     if propagation_mode == "relational":
-        n_resolved = _run_collective(
+        n_resolved, actual_iterations, did_converge = _run_collective(
             entity_map, relationships,
             alpha=alpha, rel_threshold=rel_threshold,
             rel_mode=rel_mode, max_iterations=max_iterations,
         )
         return GraphERResult(
             entities=entity_map,
-            iterations=max_iterations,
-            converged=True,
+            iterations=actual_iterations,
+            converged=did_converge,
             evidence_propagated=n_resolved,
         )
 
@@ -384,15 +384,21 @@ def _run_collective(
     rel_threshold: float,
     rel_mode: str,
     max_iterations: int,
-) -> int:
+) -> tuple[int, int, bool]:
     """Collective resolution for the resolved (``to``) entity of each relationship.
 
     Builds co-occurrence groups from the relationships, runs
     :func:`collective_resolve`, and writes the result back onto the resolved
     entity's ``.clusters`` in the standard ``{cid -> {members, size}}`` shape.
 
-    Returns the number of resolved records (sum across resolved entities) as a
-    cheap stat for ``GraphERResult.evidence_propagated``.
+    Returns ``(n_resolved, actual_iterations, converged)`` where:
+      * ``n_resolved`` is the sum of resolved records across all resolved entities
+        (used as ``GraphERResult.evidence_propagated``).
+      * ``actual_iterations`` is the number of Jacobi sweeps the last (or only)
+        resolved entity ran (representative when there is one resolved entity per
+        call, which is the common case).
+      * ``converged`` is True iff the last resolved entity's fixpoint broke early
+        (partition unchanged before hitting ``max_iterations``).
     """
     from goldenmatch.core.collective import build_neighbor_index, collective_resolve
 
@@ -414,6 +420,8 @@ def _run_collective(
         )
 
     n_resolved = 0
+    last_iterations = 0
+    last_converged = True
     for resolved_name, groups in groups_by_resolved.items():
         resolved = entity_map[resolved_name]
         neighbor_index = build_neighbor_index(groups)
@@ -435,12 +443,16 @@ def _run_collective(
         if resolved.config.golden_rules:
             max_cluster = resolved.config.golden_rules.max_cluster_size
 
+        collective_stats: dict = {}
         result = collective_resolve(
             entity_state, neighbor_index,
             alpha=alpha, rel_mode=rel_mode, threshold=rel_threshold,
             max_iterations=max_iterations, max_cluster_size=max_cluster,
+            stats=collective_stats,
         )
         resolved.clusters = _clusters_from_rid_to_cid(result[resolved_name])
         n_resolved += len(result[resolved_name])
+        last_iterations = collective_stats.get("iterations", max_iterations)
+        last_converged = collective_stats.get("converged", False)
 
-    return n_resolved
+    return n_resolved, last_iterations, last_converged
