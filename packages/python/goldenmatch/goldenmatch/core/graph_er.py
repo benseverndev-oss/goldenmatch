@@ -76,22 +76,40 @@ def run_graph_er(
     max_iterations: int = 5,
     convergence_threshold: float = 0.01,
     propagation_mode: str = "additive",
+    *,
+    alpha: float = 0.5,
+    rel_threshold: float = 0.5,
+    rel_mode: str = "jaccard",
 ) -> GraphERResult:
     """Run multi-table entity resolution with evidence propagation.
 
-    Algorithm:
+    Algorithm (additive / multiplicative):
     1. Match within each entity type independently
     2. For each relationship, find linked records across entity types
     3. If linked records in entity A are matched, boost scores in entity B
     4. Re-cluster entity B with boosted scores
     5. Repeat until no scores change more than convergence_threshold
 
+    propagation_mode="relational" replaces the flat-boost loop (steps 2-5) with
+    collective resolution: it blends attribute similarity with neighbor-cluster
+    overlap (relational similarity) and iterates to a fixpoint. The flat boost
+    over-merges (it boosts ALL co-author pairs regardless of identity); collective
+    resolution only merges records whose *neighborhoods* agree, which lifts F1
+    well above the independent (attribute-only) baseline.
+
     Args:
         entities: List of EntityType configs.
         relationships: Cross-entity relationships.
-        max_iterations: Max propagation iterations.
-        convergence_threshold: Stop when max score change < this.
-        propagation_mode: "additive" (add weight) or "multiplicative" (multiply).
+        max_iterations: Max propagation iterations (also the collective fixpoint cap).
+        convergence_threshold: Stop when max score change < this (flat-boost only).
+        propagation_mode: "additive" (add weight), "multiplicative" (multiply),
+            or "relational" (collective neighborhood-aware resolution).
+        alpha: Relational vs attribute blend weight for the collective path
+            (``blended = (1 - alpha) * attr + alpha * rel``). Ignored for flat boost.
+        rel_threshold: Keep a blended pair as an edge iff ``blended >= rel_threshold``
+            (collective path only).
+        rel_mode: Relational-similarity mode for the collective path
+            ("jaccard" / "adamic_adar").
 
     Returns:
         GraphERResult with final entity clusters and stats.
@@ -115,6 +133,21 @@ def run_graph_er(
         entity.df = pl.concat(frames) if frames else pl.DataFrame()
         if "__row_id__" not in entity.df.columns:
             entity.df = entity.df.with_row_index("__row_id__")
+
+    # Relational (collective) path: neighborhood-aware resolution instead of the
+    # flat boost. Leaves additive/multiplicative untouched (the loop below).
+    if propagation_mode == "relational":
+        n_resolved = _run_collective(
+            entity_map, relationships,
+            alpha=alpha, rel_threshold=rel_threshold,
+            rel_mode=rel_mode, max_iterations=max_iterations,
+        )
+        return GraphERResult(
+            entities=entity_map,
+            iterations=max_iterations,
+            converged=True,
+            evidence_propagated=n_resolved,
+        )
 
     # Step 2-5: Iterative evidence propagation
     converged = False
@@ -174,6 +207,53 @@ def run_graph_er(
     )
 
 
+def _build_fk_lookup(
+    from_entity: EntityType,
+    to_entity: EntityType,
+    rel: Relationship,
+) -> tuple[dict, dict] | None:
+    """Resolve a relationship's FK into reusable lookup maps.
+
+    Returns ``(from_id_to_key, key_to_to_ids)`` where:
+      * ``from_id_to_key``: ``{from_row_id -> join_key_value}``
+      * ``key_to_to_ids``:  ``{join_key_value -> [to_row_id, ...]}``
+
+    The join key lives on ``from_entity`` (``rel.join_key``); it is matched
+    against the same-named column on ``to_entity`` (falling back to ``id``).
+    Returns ``None`` if the relationship can't be resolved (missing frames or
+    columns), mirroring the early-outs in :func:`_propagate_evidence`.
+    """
+    if from_entity.df is None or to_entity.df is None:
+        return None
+
+    join_key = rel.join_key
+    if join_key not in from_entity.df.columns:
+        logger.warning("Join key '%s' not found in entity '%s'", join_key, from_entity.name)
+        return None
+
+    # from_row_id -> join_key_value
+    from_rows = from_entity.df.select(["__row_id__", join_key]).to_dicts()
+    from_id_to_key = {r["__row_id__"]: r[join_key] for r in from_rows}
+
+    # join_key_value -> to_row_ids (direct key, else via to_entity's `id` column)
+    if join_key in to_entity.df.columns:
+        to_rows = to_entity.df.select(["__row_id__", join_key]).to_dicts()
+        to_key = join_key
+    elif "id" in to_entity.df.columns:
+        to_rows = to_entity.df.select(["__row_id__", "id"]).to_dicts()
+        to_key = "id"
+    else:
+        return None
+
+    key_to_to_ids: dict = {}
+    for r in to_rows:
+        val = r[to_key]
+        if val is not None:
+            key_to_to_ids.setdefault(val, []).append(r["__row_id__"])
+
+    return from_id_to_key, key_to_to_ids
+
+
 def _propagate_evidence(
     from_entity: EntityType,
     to_entity: EntityType,
@@ -188,34 +268,10 @@ def _propagate_evidence(
 
     Returns (max_score_delta, n_boosted_pairs).
     """
-    if from_entity.df is None or to_entity.df is None:
+    lookup = _build_fk_lookup(from_entity, to_entity, rel)
+    if lookup is None:
         return 0.0, 0
-
-    join_key = rel.join_key
-    if join_key not in from_entity.df.columns:
-        logger.warning("Join key '%s' not found in entity '%s'", join_key, from_entity.name)
-        return 0.0, 0
-
-    # Build mapping: from_row_id -> join_key_value
-    from_rows = from_entity.df.select(["__row_id__", join_key]).to_dicts()
-    from_id_to_key = {r["__row_id__"]: r[join_key] for r in from_rows}
-
-    # Build mapping: join_key_value -> to_row_ids
-    if join_key in to_entity.df.columns:
-        # Direct key in to_entity
-        to_rows = to_entity.df.select(["__row_id__", join_key]).to_dicts()
-    elif "id" in to_entity.df.columns:
-        # Map via to_entity's id column
-        to_rows = to_entity.df.select(["__row_id__", "id"]).to_dicts()
-        join_key = "id"
-    else:
-        return 0.0, 0
-
-    key_to_to_ids: dict = {}
-    for r in to_rows:
-        val = r[join_key]
-        if val is not None:
-            key_to_to_ids.setdefault(val, []).append(r["__row_id__"])
+    from_id_to_key, key_to_to_ids = lookup
 
     # For each cluster in from_entity, find linked to_entity pairs
     max_delta = 0.0
@@ -259,3 +315,132 @@ def _propagate_evidence(
     to_entity.scored_pairs = [(a, b, s) for (a, b), s in existing_scores.items()]
 
     return max_delta, n_boosted
+
+
+# ---------------------------------------------------------------------------
+# Collective (relational) path
+# ---------------------------------------------------------------------------
+
+def _invert_clusters(clusters: dict) -> dict:
+    """``{cid -> {"members": [...], ...}}`` -> ``{rid -> cid}``."""
+    rid_to_cid: dict = {}
+    for cid, cinfo in clusters.items():
+        for rid in cinfo["members"]:
+            rid_to_cid[rid] = cid
+    return rid_to_cid
+
+
+def _clusters_from_rid_to_cid(rid_to_cid: dict) -> dict:
+    """``{rid -> cid}`` -> ``{cid -> {"members": [...], "size": ...}}``.
+
+    Inverse of :func:`_invert_clusters`. Members are sorted for determinism;
+    ``members`` / ``size`` match the field names :func:`_propagate_evidence`
+    (and the rest of the pipeline) read off the cluster dict.
+    """
+    members_by_cid: dict = {}
+    for rid, cid in rid_to_cid.items():
+        members_by_cid.setdefault(cid, []).append(rid)
+    return {
+        cid: {"members": sorted(members), "size": len(members)}
+        for cid, members in members_by_cid.items()
+    }
+
+
+def _cooccurrence_groups(
+    from_entity: EntityType,
+    to_entity: EntityType,
+    rel: Relationship,
+) -> list[list[tuple[str, int]]]:
+    """Co-occurrence groups of ``to_entity`` records for collective resolution.
+
+    Two ``to_entity`` records co-occur when they link to the same ``from_entity``
+    cluster (e.g. two authors who share a paper). Reuses the SAME FK resolution
+    as :func:`_propagate_evidence` (:func:`_build_fk_lookup`): for each
+    ``from_entity`` cluster, gather the ``to_entity`` rids linked via the join
+    key -> one group of ``(to_entity.name, rid)`` tuples per cluster.
+    """
+    lookup = _build_fk_lookup(from_entity, to_entity, rel)
+    if lookup is None:
+        return []
+    from_id_to_key, key_to_to_ids = lookup
+
+    groups: list[list[tuple[str, int]]] = []
+    for cinfo in from_entity.clusters.values():
+        linked: set[int] = set()
+        for member_id in cinfo["members"]:
+            fk_value = from_id_to_key.get(member_id)
+            if fk_value is not None:
+                linked.update(key_to_to_ids.get(fk_value, ()))
+        if len(linked) >= 2:
+            groups.append([(to_entity.name, rid) for rid in sorted(linked)])
+    return groups
+
+
+def _run_collective(
+    entity_map: dict,
+    relationships: list[Relationship],
+    *,
+    alpha: float,
+    rel_threshold: float,
+    rel_mode: str,
+    max_iterations: int,
+) -> int:
+    """Collective resolution for the resolved (``to``) entity of each relationship.
+
+    Builds co-occurrence groups from the relationships, runs
+    :func:`collective_resolve`, and writes the result back onto the resolved
+    entity's ``.clusters`` in the standard ``{cid -> {members, size}}`` shape.
+
+    Returns the number of resolved records (sum across resolved entities) as a
+    cheap stat for ``GraphERResult.evidence_propagated``.
+    """
+    from goldenmatch.core.collective import build_neighbor_index, collective_resolve
+
+    # Group co-occurrence edges by the entity being resolved (the rel `to`).
+    groups_by_resolved: dict[str, list] = {}
+    for rel in relationships:
+        from_entity = entity_map.get(rel.from_entity)
+        to_entity = entity_map.get(rel.to_entity)
+        if from_entity is None or to_entity is None:
+            logger.warning(
+                "Relationship references unknown entity: %s -> %s",
+                rel.from_entity, rel.to_entity,
+            )
+            continue
+        if from_entity.df is None or to_entity.df is None:
+            continue
+        groups_by_resolved.setdefault(rel.to_entity, []).extend(
+            _cooccurrence_groups(from_entity, to_entity, rel)
+        )
+
+    n_resolved = 0
+    for resolved_name, groups in groups_by_resolved.items():
+        resolved = entity_map[resolved_name]
+        neighbor_index = build_neighbor_index(groups)
+
+        all_ids = (
+            resolved.df["__row_id__"].to_list()
+            if resolved.df is not None and "__row_id__" in resolved.df.columns
+            else []
+        )
+        entity_state = {
+            resolved_name: {
+                "attr_pairs": resolved.scored_pairs,
+                "ids": all_ids,
+                "clusters": _invert_clusters(resolved.clusters),
+            }
+        }
+
+        max_cluster = 100
+        if resolved.config.golden_rules:
+            max_cluster = resolved.config.golden_rules.max_cluster_size
+
+        result = collective_resolve(
+            entity_state, neighbor_index,
+            alpha=alpha, rel_mode=rel_mode, threshold=rel_threshold,
+            max_iterations=max_iterations, max_cluster_size=max_cluster,
+        )
+        resolved.clusters = _clusters_from_rid_to_cid(result[resolved_name])
+        n_resolved += len(result[resolved_name])
+
+    return n_resolved
