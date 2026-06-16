@@ -1786,9 +1786,11 @@ jobs:
           cargo pgrx install "--pg-config=/usr/lib/postgresql/${PG_VERSION}/bin/pg_config" --release --features "pg${PG_VERSION}" --no-default-features
           # pgrx 0.12.9 doesn't auto-emit the SQL extension file — copy the
           # handwritten ones into PG's extension dir so `CREATE EXTENSION`
-          # (installs default_version, now 0.7.0) and `ALTER EXTENSION ... UPDATE`
+          # (installs default_version, now 0.8.0) and `ALTER EXTENSION ... UPDATE`
           # find them. The schema files are the canonical declaration of public
           # function signatures.
+          cp sql/goldenmatch_pg--0.8.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
+          cp sql/goldenmatch_pg--0.7.0--0.8.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
           cp sql/goldenmatch_pg--0.7.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
           cp sql/goldenmatch_pg--0.6.0--0.7.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
           cp sql/goldenmatch_pg--0.6.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
@@ -1896,6 +1898,15 @@ jobs:
                 RAISE NOTICE 'v1.7-v1.12 autoconfig surface not yet on main (waiting on PR #159)';
               END IF;
             END$$;
+          EOSQL
+          # goldenmatch_autoconfig(table, mode) -- 1-arg back-compat (mode DEFAULT
+          # 'standard') + the new 2-arg 'probabilistic' path, then pipe the
+          # probabilistic config straight into goldenmatch_dedupe_full.
+          sudo -u postgres psql -p "${PGPORT}" -v ON_ERROR_STOP=1 <<'EOSQL'
+            CREATE TEMP TABLE p AS SELECT * FROM (VALUES ('John Smith','Austin'),('Jon Smith','Austin'),('Jane Doe','Dallas')) t(name, city);
+            SELECT goldenmatch.goldenmatch_autoconfig('p');
+            SELECT goldenmatch.goldenmatch_autoconfig('p','probabilistic');
+            SELECT * FROM goldenmatch.goldenmatch_dedupe_full('p', (SELECT goldenmatch.goldenmatch_autoconfig('p','probabilistic'))) LIMIT 1;
           EOSQL
           # In-house embed (#737): proves `ort`/onnxruntime loads inside the
           # Postgres backend process (the new surface vs the proven DataFusion
