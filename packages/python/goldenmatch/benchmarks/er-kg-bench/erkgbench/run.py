@@ -22,7 +22,12 @@ if str(_BENCH_ROOT) not in sys.path:
     sys.path.insert(0, str(_BENCH_ROOT))
 
 from erkgbench import metrics  # noqa: E402
-from erkgbench.adapters import GoldenMatchAdapter, Record, all_modeled  # noqa: E402
+from erkgbench.adapters import (  # noqa: E402
+    GoldenMatchAdapter,
+    GoldenMatchEmbAnnAdapter,
+    Record,
+    all_modeled,
+)
 
 DATASET = _BENCH_ROOT / "dataset" / "records.csv"
 RESULTS_DIR = _BENCH_ROOT / "results"
@@ -92,6 +97,9 @@ def run(embedder_kind: str | None) -> dict:
     adapters = [
         GoldenMatchAdapter(mode="auto"),
         GoldenMatchAdapter(mode="auto_fields"),
+        # Embedding-ANN candidate generation via goldenmatch's offline (no-key,
+        # no-torch) in-house embedder -- the lever the LLM experiment pointed at.
+        GoldenMatchEmbAnnAdapter(),
     ]
     # The semantic-class attacker only activates with a key (else it is the same
     # as auto+fields with a per-pair LLM step). Skip rather than fake it.

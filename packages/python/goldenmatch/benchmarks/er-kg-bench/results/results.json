@@ -50,7 +50,7 @@
         "temporal_version": 0.0,
         "cross_document_exact": 1.0
       },
-      "time_ms": 237.0,
+      "time_ms": 220.6,
       "deterministic_floor": true
     },
     {
@@ -83,7 +83,40 @@
         "temporal_version": 0.353,
         "cross_document_exact": 1.0
       },
-      "time_ms": 1101.0,
+      "time_ms": 970.2,
+      "deterministic_floor": true
+    },
+    {
+      "name": "goldenmatch(emb-ann)",
+      "defaults": "inhouse char-ngram embedding (no key/torch) -> cosine>=0.5 candidate pairs (ANN at scale) -> union-find; name only",
+      "overall": {
+        "precision": 0.434,
+        "recall": 0.677,
+        "f1": 0.529
+      },
+      "per_class_f1": {
+        "abbreviation": 0.182,
+        "nickname_alias": 0.929,
+        "synonym_brand": 0.0,
+        "same_name_collision": 0.455,
+        "cross_lingual": 0.56,
+        "typo": 1.0,
+        "org_suffix": 0.688,
+        "temporal_version": 0.48,
+        "cross_document_exact": 1.0
+      },
+      "per_class_precision": {
+        "abbreviation": 1.0,
+        "nickname_alias": 1.0,
+        "synonym_brand": 1.0,
+        "same_name_collision": 0.385,
+        "cross_lingual": 1.0,
+        "typo": 1.0,
+        "org_suffix": 0.524,
+        "temporal_version": 0.353,
+        "cross_document_exact": 1.0
+      },
+      "time_ms": 18.8,
       "deterministic_floor": true
     },
     {
@@ -215,7 +248,7 @@
         "temporal_version": 1.0,
         "cross_document_exact": 1.0
       },
-      "time_ms": 0.2,
+      "time_ms": 0.1,
       "deterministic_floor": true
     },
     {
@@ -248,7 +281,7 @@
         "temporal_version": 0.0,
         "cross_document_exact": 1.0
       },
-      "time_ms": 2.1,
+      "time_ms": 2.2,
       "deterministic_floor": true
     },
     {
@@ -281,7 +314,7 @@
         "temporal_version": 0.381,
         "cross_document_exact": 1.0
       },
-      "time_ms": 14.9,
+      "time_ms": 14.7,
       "deterministic_floor": true
     },
     {

@@ -48,8 +48,9 @@ No API keys, no framework installs. Only deps: `polars`, `rapidfuzz`,
 * **goldenmatch is dogfooded** — the rows call zero-config `dedupe_df(df)` and
   let auto-config pick the strategy, the same posture as every framework at its
   default. No hand-tuned threshold. `auto` = name only; `auto+fields` = name +
-  type + context; `auto+llm` (runner adds it only with `OPENAI_API_KEY`) turns
-  on the per-pair LLM scorer the product's auto-config already reaches for.
+  type + context; `emb-ann` = candidate generation via goldenmatch's offline
+  in-house embedder (no key/torch); `auto+llm` (runner adds it only with
+  `OPENAI_API_KEY`) turns on the per-pair LLM scorer auto-config reaches for.
 
 ## What the first run shows (and what it doesn't)
 
@@ -72,8 +73,17 @@ The committed `results/RESULTS.md` is an honest baseline, not a victory lap:
   synonyms** — name strings alone don't carry "Coumadin = warfarin".
 * **The negative classes are still goldenmatch's weak spot here:** zero-config
   over-merges collisions/temporal versions (`coll_P` ~0.37). A real probability
-  threshold + the quality-gated review path are the fix; the LLM scorer
-  (`auto+llm`) is the lever for the semantic classes name+context can't reach.
+  threshold + the quality-gated review path are the fix.
+* **`goldenmatch(emb-ann)` shows the offline embedding lever** — candidate
+  generation via goldenmatch's in-house char-n-gram embedder (no key, no torch),
+  name only. It beats the string-only `auto` (F1 0.529 vs 0.418) by catching
+  cross-lingual transliteration, typos and org-suffixes the string blocker
+  misses — but **abbreviation (~0.18) and synonym (0.0) stay unsolved**, because
+  a char-n-gram embedding has no world knowledge (IBM↔International Business
+  Machines cosine ~0.05; Coumadin↔warfarin ~0.02). Cracking those two classes
+  needs a *semantic* embedding model (sentence-transformers / cloud), i.e. torch
+  or a key — the bench says so plainly rather than implying the offline path
+  closes the gap.
 
 So the bench localises goldenmatch's differentiation (multi-field evidence the
 name-only frameworks can't use) honestly, alongside its current gaps
@@ -119,12 +129,13 @@ TAXONOMY.md            the nine failure classes, with framework citations
 * **Add a failure class / more entities:** edit `seeds.jsonl`, re-run
   `generate.py`. Negative classes (distinct entities, colliding strings) are
   the precision tests — keep adding them.
-* **Attack the semantic classes the way that actually works:** add a
-  `goldenmatch(auto+emb)` row using the embedding scorer + ANN blocking
-  (`emb+ANN`, local/inhouse provider, no external key). The measured LLM
-  experiment above shows the lever is semantic *candidate generation*, not an
-  LLM pair filter — so this is the highest-value next adapter. (`auto+llm`
-  remains available via `OPENAI_API_KEY` for the contrast.)
+* **Crack abbreviation + synonym (the last offline gap):** swap a *semantic*
+  embedding into `emb-ann` in place of the char-n-gram in-house model — a
+  sentence-transformers model (needs torch) or a cloud embedding (needs creds).
+  The shipped `emb-ann` proves the candidate-generation *mechanism* offline and
+  isolates exactly the two classes a semantic model is required for; this is the
+  one remaining lever for them. (`auto+llm` via `OPENAI_API_KEY` is the contrast
+  showing an LLM *pair filter* is the wrong tool — it can't generate the pair.)
 * **Add a *live* adapter:** for systems that resolve deterministically without
   an LLM (neo4j-graphrag rapidfuzz/spaCy resolvers, LlamaIndex Cypher), a real
   adapter behind an optional extra can corroborate the model.

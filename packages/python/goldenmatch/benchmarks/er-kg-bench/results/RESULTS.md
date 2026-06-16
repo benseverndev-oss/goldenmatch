@@ -8,14 +8,15 @@ Dataset: **105 records / 32 entities / 9 failure classes**. Embedder: `none (str
 
 | System | P | R | F1 | coll&nbsp;P* | temp&nbsp;P* | ms | det-floor |
 |---|---|---|---|---|---|---|---|
-| goldenmatch(auto) | 0.74 | 0.291 | **0.418** | 0.333 | 0.0 | 237.0 | yes |
-| goldenmatch(auto+fields) | 0.624 | 0.732 | **0.674** | 0.37 | 0.353 | 1101.0 | yes |
+| goldenmatch(auto) | 0.74 | 0.291 | **0.418** | 0.333 | 0.0 | 220.6 | yes |
+| goldenmatch(auto+fields) | 0.624 | 0.732 | **0.674** | 0.37 | 0.353 | 970.2 | yes |
+| goldenmatch(emb-ann) | 0.434 | 0.677 | **0.529** | 0.385 | 0.353 | 18.8 | yes |
 | MS-GraphRAG | 0.722 | 0.102 | **0.179** | 0.0 | 1.0 | 0.1 | yes |
 | LightRAG | 0.722 | 0.102 | **0.179** | 0.0 | 1.0 | 0.0 | yes |
 | Cognee | 0.722 | 0.102 | **0.179** | 0.0 | 1.0 | 0.0 | yes |
-| mem0 | 0.812 | 0.102 | **0.182** | 0.0 | 1.0 | 0.2 | yes |
-| Neo4j-KGBuilder | 0.782 | 0.535 | **0.636** | 0.333 | 0.0 | 2.1 | yes |
-| neo4j-graphrag(fuzzy) | 0.444 | 0.717 | **0.548** | 0.389 | 0.381 | 14.9 | yes |
+| mem0 | 0.812 | 0.102 | **0.182** | 0.0 | 1.0 | 0.1 | yes |
+| Neo4j-KGBuilder | 0.782 | 0.535 | **0.636** | 0.333 | 0.0 | 2.2 | yes |
+| neo4j-graphrag(fuzzy) | 0.444 | 0.717 | **0.548** | 0.389 | 0.381 | 14.7 | yes |
 | LlamaIndex-PGI | 0.374 | 0.693 | **0.486** | 0.357 | 0.286 | 1.8 | yes |
 
 ## Per-class F1
@@ -24,6 +25,7 @@ Dataset: **105 records / 32 entities / 9 failure classes**. Embedder: `none (str
 |---|---|---|---|---|---|---|---|---|---|
 | goldenmatch(auto) | 0.462 | 0.235 | 0.0 | 0.267 | 0.2 | 0.75 | 0.37 | 0.0 | 1.0 |
 | goldenmatch(auto+fields) | 0.667 | 0.75 | 0.2 | 0.444 | 0.839 | 1.0 | 1.0 | 0.48 | 1.0 |
+| goldenmatch(emb-ann) | 0.182 | 0.929 | 0.0 | 0.455 | 0.56 | 1.0 | 0.688 | 0.48 | 1.0 |
 | MS-GraphRAG | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.125 | 0.0 | 0.0 | 1.0 |
 | LightRAG | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.125 | 0.0 | 0.0 | 1.0 |
 | Cognee | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.125 | 0.0 | 0.0 | 1.0 |
@@ -36,6 +38,7 @@ Dataset: **105 records / 32 entities / 9 failure classes**. Embedder: `none (str
 
 - **goldenmatch(auto)** — zero-config dedupe_df(name) -- auto-config picks the strategy
 - **goldenmatch(auto+fields)** — zero-config dedupe_df(name+type+context) -- auto-config, multi-field
+- **goldenmatch(emb-ann)** — inhouse char-ngram embedding (no key/torch) -> cosine>=0.5 candidate pairs (ANN at scale) -> union-find; name only
 - **MS-GraphRAG** — exact title match; ER step removed (finalize_entities seen_titles set; discussion #778, data-loss #1718)
 - **LightRAG** — exact normalized-name dict key, no fuzzy/embedding at merge (operate.py _merge_nodes_then_upsert; #1323, cross-doc #485)
 - **Cognee** — content-hash + exact name; difflib cutoff=0.8 only vs a user ontology (empty by default) (matching_strategies.py; #1831)
