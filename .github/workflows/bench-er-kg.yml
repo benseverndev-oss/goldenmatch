@@ -7,9 +7,10 @@
 # Two runs:
 #   * OFFLINE (no key) -> the committed, reproducible-by-anyone table. Uploaded
 #     as artifact `er-kg-results-offline`; download + commit these.
-#   * KEYED (OPENAI_API_KEY pulled from Infisical) -> the emb-openai + auto+llm
-#     rows that stay OUT of the committed table. Printed to the run summary and
+#   * KEYED (OPENAI_API_KEY Actions secret) -> the emb-openai + auto+llm rows
+#     that stay OUT of the committed table. Printed to the run summary and
 #     uploaded as `er-kg-results-keyed`; use for the README/HANDOFF prose.
+#     (Secret mirrors the Infisical OPENAI_API_KEY; set via `gh secret set`.)
 #
 # Triggers on a push touching the benchmark SOURCE (not results/, so committing
 # regenerated results does not loop) and on manual dispatch.
@@ -60,28 +61,16 @@ jobs:
           name: er-kg-results-offline
           path: ${{ env.BENCH_DIR }}/results/
 
-      - name: Install Infisical CLI
-        run: |
-          curl -1sLf 'https://artifacts-cli.infisical.com/setup.deb.sh' | sudo -E bash
-          sudo apt-get update && sudo apt-get install -y infisical
       - name: Run benchmark (keyed -- emb-openai + auto+llm; prose only)
         working-directory: ${{ env.BENCH_DIR }}
         env:
-          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
-          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           set -euo pipefail
-          if [ -z "${INFISICAL_CLIENT_ID:-}" ]; then
-            echo "No Infisical creds available; skipping the keyed run." >> "$GITHUB_STEP_SUMMARY"
+          if [ -z "${OPENAI_API_KEY:-}" ]; then
+            echo "No OPENAI_API_KEY secret; skipping the keyed run." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          TOKEN=$(infisical login --silent --plain --method=universal-auth \
-            --client-id="$INFISICAL_CLIENT_ID" --client-secret="$INFISICAL_CLIENT_SECRET")
-          echo "::add-mask::$TOKEN"
-          OPENAI_API_KEY=$(infisical secrets get OPENAI_API_KEY \
-            --projectId=a99885f0-c5af-4ae1-9dc8-255cc60aa129 --env=dev --path=/ --plain --token="$TOKEN")
-          echo "::add-mask::$OPENAI_API_KEY"
-          export OPENAI_API_KEY
           "$GITHUB_WORKSPACE/.venv/bin/python" erkgbench/run.py
           {
             echo '## ER-KG-Bench (keyed run: emb-openai + auto+llm rows included)'
