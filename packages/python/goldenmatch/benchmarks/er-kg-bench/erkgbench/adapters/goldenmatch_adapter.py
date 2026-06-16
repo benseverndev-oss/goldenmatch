@@ -98,24 +98,61 @@ class GoldenMatchEmbAnnAdapter:
     At benchmark scale this computes exact cosine; the ANN index is the scale-out
     form of the same candidate-generation step. Name only, to isolate what the
     embedding itself bridges (apples-to-apples with the frameworks' name dedup).
+
+    Swapping the embedder is the lever the LLM experiment pointed at to crack
+    the two classes the offline path leaves open. ``provider`` selects it:
+    ``None`` keeps the offline char-ngram model (the committed ``emb-ann`` row);
+    a name like ``"openai"`` routes through ``goldenmatch.embeddings.providers``
+    to a *semantic* embedder with world knowledge (``IBM`` <-> its expansion,
+    ``Coumadin`` <-> ``warfarin``). Semantic providers cost a key or torch, so
+    the runner gates them on availability and keeps them out of the committed,
+    reproducible-by-anyone table -- recorded as prose, like the LLM experiment.
     """
 
     name = "goldenmatch(emb-ann)"
     deterministic = True
 
-    def __init__(self, threshold: float = 0.5) -> None:
+    def __init__(
+        self,
+        threshold: float = 0.5,
+        *,
+        provider: str | None = None,
+        name: str | None = None,
+        defaults: str | None = None,
+    ) -> None:
         self.threshold = threshold
-        self.defaults = (
-            f"inhouse char-ngram embedding (no key/torch) -> cosine>={threshold} "
-            "candidate pairs (ANN at scale) -> union-find; name only"
-        )
+        self.provider = provider
+        if name is not None:
+            self.name = name
+        elif provider is not None:
+            self.name = f"goldenmatch(emb-{provider})"
+        # else: keep the class-level "goldenmatch(emb-ann)" default.
+        if defaults is not None:
+            self.defaults = defaults
+        elif provider is None:
+            self.defaults = (
+                f"inhouse char-ngram embedding (no key/torch) -> cosine>={threshold} "
+                "candidate pairs (ANN at scale) -> union-find; name only"
+            )
+        else:
+            self.defaults = (
+                f"{provider} semantic embedding -> cosine>={threshold} candidate "
+                "pairs (ANN at scale) -> union-find; name only"
+            )
+
+    def _embed(self, texts: list[str]) -> np.ndarray:
+        if self.provider is None:
+            # fixed-seed random projection -> deterministic; no key, no torch.
+            from goldenmatch.embeddings.inhouse.model import GoldenEmbedModel
+
+            return np.asarray(GoldenEmbedModel().embed(texts), dtype=np.float32)
+        from goldenmatch.embeddings.providers import resolve_provider
+
+        return np.asarray(resolve_provider(self.provider).embed(texts), dtype=np.float32)
 
     def resolve(self, records: list[Record]) -> list[list[int]]:
-        from goldenmatch.embeddings.inhouse.model import GoldenEmbedModel
-
         ordered = sorted(records, key=lambda r: r.index)
-        model = GoldenEmbedModel()  # fixed-seed random projection -> deterministic
-        vecs = np.asarray(model.embed([r.mention for r in ordered]), dtype=np.float32)
+        vecs = self._embed([r.mention for r in ordered])
         norms = np.linalg.norm(vecs, axis=1, keepdims=True)
         vecs = vecs / np.where(norms == 0.0, 1.0, norms)
         sim = vecs @ vecs.T  # cosine; index i == record i (ordered 0..n-1)

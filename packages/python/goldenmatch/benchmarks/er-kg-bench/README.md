@@ -83,7 +83,8 @@ The committed `results/RESULTS.md` is an honest baseline, not a victory lap:
   Machines cosine ~0.05; Coumadin↔warfarin ~0.02). Cracking those two classes
   needs a *semantic* embedding model (sentence-transformers / cloud), i.e. torch
   or a key — the bench says so plainly rather than implying the offline path
-  closes the gap.
+  closes the gap. The keyed `emb-openai` row below does exactly this and cracks
+  both (abbr 0.95, synm 0.88) — see "The semantic-embedding result".
 
 So the bench localises goldenmatch's differentiation (multi-field evidence the
 name-only frameworks can't use) honestly, alongside its current gaps
@@ -113,6 +114,39 @@ up, recall down). The lever for the semantic classes is therefore semantic
 scorer. The committed table stays the offline, reproducible-by-anyone run; the
 `auto+llm` row only appears when the runner sees a key.
 
+## The semantic-embedding result (measured, key-dependent — not in the committed table)
+
+The LLM experiment named the lever: semantic **candidate generation**, not an LLM
+pair filter. So we swapped a semantic embedder into the `emb-ann` path —
+`goldenmatch(emb-openai)`, OpenAI `text-embedding-3-small` (stdlib HTTP, no torch),
+name only, cosine ≥ 0.55 (a small threshold sweep; the overall-F1 peak sits on a
+flat 0.525–0.6 plateau, so 0.55 is a round, non-overfit cut). It is the proof the
+arc points to:
+
+| config | abbr | synm | xling | P | R | overall F1 |
+|---|---|---|---|---|---|---|
+| `goldenmatch(emb-ann)` (offline, char-n-gram) | 0.182 | 0.00 | 0.560 | 0.434 | 0.677 | **0.529** |
+| `goldenmatch(auto+fields)` (no key, prior leader) | 0.667 | 0.20 | 0.839 | 0.624 | 0.732 | **0.674** |
+| `goldenmatch(emb-openai)` (with key) | **0.947** | **0.875** | 0.909 | 0.640 | 0.882 | **0.742** |
+
+It **cracks the two classes the offline path can't** — abbreviation 0.18 → 0.95,
+synonym 0.0 → 0.88 — and is the only row strong on *both*, lifting overall F1 past
+the prior leader (0.742 vs 0.674). Same embedding-ANN mechanism the offline
+`emb-ann` row demonstrates; only the embedder changed, so the gain is attributable
+to *world knowledge in the vectors* (IBM ↔ its expansion, Coumadin ↔ warfarin),
+exactly what a char-n-gram cosine lacks. It is deterministic on this set
+(`det-floor: yes`).
+
+The honest cost is unchanged from every other name-only row: precision on the
+negative classes stays low (`coll_P` 0.39, `temp_P` 0.38 — comparable to `emb-ann`
+0.39/0.35 and `neo4j-graphrag` 0.39/0.38), because a name-only embedding *over-*
+merges distinct entities that share a surface form. Multi-field evidence
+(`auto+fields`) or a real probability threshold is the lever there, not the
+embedder. Because it needs a key it is **not reproducible by everyone**, so it
+stays out of the committed table and lives here as prose — same posture as the LLM
+experiment. Reproduce with `OPENAI_API_KEY=sk-... python erkgbench/run.py` (the
+runner adds the `emb-openai` and `auto+llm` rows only when it sees a key).
+
 ## Layout
 
 ```
@@ -129,13 +163,15 @@ TAXONOMY.md            the nine failure classes, with framework citations
 * **Add a failure class / more entities:** edit `seeds.jsonl`, re-run
   `generate.py`. Negative classes (distinct entities, colliding strings) are
   the precision tests — keep adding them.
-* **Crack abbreviation + synonym (the last offline gap):** swap a *semantic*
-  embedding into `emb-ann` in place of the char-n-gram in-house model — a
-  sentence-transformers model (needs torch) or a cloud embedding (needs creds).
-  The shipped `emb-ann` proves the candidate-generation *mechanism* offline and
-  isolates exactly the two classes a semantic model is required for; this is the
-  one remaining lever for them. (`auto+llm` via `OPENAI_API_KEY` is the contrast
-  showing an LLM *pair filter* is the wrong tool — it can't generate the pair.)
+* **Crack abbreviation + synonym (done, key-gated):** the `emb-openai` mode swaps a
+  semantic embedder (`text-embedding-3-small`, no torch) into the `emb-ann` path and
+  cracks both classes (abbr 0.95, synm 0.88; overall F1 0.742) — see "The
+  semantic-embedding result". `GoldenMatchEmbAnnAdapter(provider=...)` is the seam;
+  pass `provider="local"` for a torch-free-of-cloud sentence-transformers run, or any
+  `goldenmatch.embeddings.providers` name. Reproduce with `OPENAI_API_KEY` set. The
+  offline char-n-gram `emb-ann` still ships as the no-key proof of the *mechanism*.
+  (`auto+llm` via `OPENAI_API_KEY` is the contrast showing an LLM *pair filter* is
+  the wrong tool — it can't generate the pair.)
 * **Add a *live* adapter:** for systems that resolve deterministically without
   an LLM (neo4j-graphrag rapidfuzz/spaCy resolvers, LlamaIndex Cypher), a real
   adapter behind an optional extra can corroborate the model.
