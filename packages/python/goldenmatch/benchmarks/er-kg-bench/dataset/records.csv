@@ -69,80 +69,139 @@ record_id,mention,entity_type,context,entity_id,failure_class,source
 67,Lipitor,drug,drug ingredient and brand names (atorvastatin),rxcui:83367,synonym_brand,rxnorm
 68,Atorvaliq,drug,drug ingredient and brand names (atorvastatin),rxcui:83367,synonym_brand,rxnorm
 69,Caduet,drug,drug ingredient and brand names (atorvastatin),rxcui:83367,synonym_brand,rxnorm
-70,Michael Jordan,person,American basketball player and businessman (born 1963),Q41421,same_name_collision,wikidata
-71,Michael I. Jordan,person,"American computer scientist, University of California, Berkeley",Q3308285,same_name_collision,wikidata
-72,Michael Irwin Jordan,person,"American computer scientist, University of California, Berkeley",Q3308285,same_name_collision,wikidata
-73,Michael Jordan,person,"American computer scientist, University of California, Berkeley",Q3308285,same_name_collision,wikidata
-74,Georgia,place,country in the Caucasus region of Europe and Asia,Q230,same_name_collision,wikidata
-75,Republic of Georgia,place,country in the Caucasus region of Europe and Asia,Q230,same_name_collision,wikidata
-76,Georgia (country),place,country in the Caucasus region of Europe and Asia,Q230,same_name_collision,wikidata
-77,Georgia (Sakartvelo),place,country in the Caucasus region of Europe and Asia,Q230,same_name_collision,wikidata
-78,Sakartvelo,place,country in the Caucasus region of Europe and Asia,Q230,same_name_collision,wikidata
-79,Georgia,place,state of the United States of America,Q1428,same_name_collision,wikidata
-80,State of Georgia,place,state of the United States of America,Q1428,same_name_collision,wikidata
-81,GA,place,state of the United States of America,Q1428,same_name_collision,wikidata
-82,"Georgia, United States",place,state of the United States of America,Q1428,same_name_collision,wikidata
-83,The Peach State,place,state of the United States of America,Q1428,same_name_collision,wikidata
-84,The Goober State,place,state of the United States of America,Q1428,same_name_collision,wikidata
-85,Munich,place,"capital and most populous city of Bavaria, Germany",Q1726,cross_lingual,wikidata
-86,München,place,"capital and most populous city of Bavaria, Germany",Q1726,cross_lingual,wikidata
-87,Monaco di Baviera,place,"capital and most populous city of Bavaria, Germany",Q1726,cross_lingual,wikidata
-88,Vienna,place,capital of and state in Austria,Q1741,cross_lingual,wikidata
-89,Wien,place,capital of and state in Austria,Q1741,cross_lingual,wikidata
-90,Vienne,place,capital of and state in Austria,Q1741,cross_lingual,wikidata
-91,Moscow,place,capital and most populous city of Russia,Q649,cross_lingual,wikidata
-92,Moskau,place,capital and most populous city of Russia,Q649,cross_lingual,wikidata
-93,Moscou,place,capital and most populous city of Russia,Q649,cross_lingual,wikidata
-94,Москва,place,capital and most populous city of Russia,Q649,cross_lingual,wikidata
-95,Cologne,place,"most populous city in North Rhine-Westphalia, Germany",Q365,cross_lingual,wikidata
-96,Köln,place,"most populous city in North Rhine-Westphalia, Germany",Q365,cross_lingual,wikidata
-97,Colonia,place,"most populous city in North Rhine-Westphalia, Germany",Q365,cross_lingual,wikidata
-98,Geneva,place,"capital of the canton of Geneva, Switzerland",Q71,cross_lingual,wikidata
-99,Genf,place,"capital of the canton of Geneva, Switzerland",Q71,cross_lingual,wikidata
-100,Genève,place,"capital of the canton of Geneva, Switzerland",Q71,cross_lingual,wikidata
-101,Ginevra,place,"capital of the canton of Geneva, Switzerland",Q71,cross_lingual,wikidata
-102,Prague,place,capital city of the Czech Republic,Q1085,cross_lingual,wikidata
-103,Prag,place,capital city of the Czech Republic,Q1085,cross_lingual,wikidata
-104,Praga,place,capital city of the Czech Republic,Q1085,cross_lingual,wikidata
-105,Microsoft,org,American multinational technology corporation,Q2283,typo,synth
-106,Micrsoft,org,American multinational technology corporation,Q2283,typo,synth
-107,Micrrosoft,org,American multinational technology corporation,Q2283,typo,synth
-108,Google,org,"American multinational technology company, a subsidiary of Alphabet Inc.",Q95,typo,synth
-109,Goole,org,"American multinational technology company, a subsidiary of Alphabet Inc.",Q95,typo,synth
-110,Gooogle,org,"American multinational technology company, a subsidiary of Alphabet Inc.",Q95,typo,synth
-111,Toyota,org,Japanese multinational automotive manufacturer,Q53268,typo,synth
-112,Toyta,org,Japanese multinational automotive manufacturer,Q53268,typo,synth
-113,Toyyota,org,Japanese multinational automotive manufacturer,Q53268,typo,synth
-114,Microsoft,org,American multinational technology corporation,Q2283,org_suffix,synth
-115,Microsoft Inc,org,American multinational technology corporation,Q2283,org_suffix,synth
-116,Microsoft Corporation,org,American multinational technology corporation,Q2283,org_suffix,synth
-117,Microsoft Ltd,org,American multinational technology corporation,Q2283,org_suffix,synth
-118,Microsoft Co,org,American multinational technology corporation,Q2283,org_suffix,synth
-119,Toyota,org,Japanese multinational automotive manufacturer,Q53268,org_suffix,synth
-120,Toyota Inc,org,Japanese multinational automotive manufacturer,Q53268,org_suffix,synth
-121,Toyota Corporation,org,Japanese multinational automotive manufacturer,Q53268,org_suffix,synth
-122,Toyota Ltd,org,Japanese multinational automotive manufacturer,Q53268,org_suffix,synth
-123,Toyota Co,org,Japanese multinational automotive manufacturer,Q53268,org_suffix,synth
-124,Tesla,org,"American automotive, energy storage and solar power company",Q478214,org_suffix,synth
-125,Tesla Inc,org,"American automotive, energy storage and solar power company",Q478214,org_suffix,synth
-126,Tesla Corporation,org,"American automotive, energy storage and solar power company",Q478214,org_suffix,synth
-127,Tesla Ltd,org,"American automotive, energy storage and solar power company",Q478214,org_suffix,synth
-128,Tesla Co,org,"American automotive, energy storage and solar power company",Q478214,org_suffix,synth
-129,Google,org,"American multinational technology company, a subsidiary of Alphabet Inc.",Q95,cross_document_exact,synth
-130,Google,org,"American multinational technology company, a subsidiary of Alphabet Inc.",Q95,cross_document_exact,synth
-131,Google,org,"American multinational technology company, a subsidiary of Alphabet Inc.",Q95,cross_document_exact,synth
-132,IBM,org,American multinational technology corporation,Q37156,cross_document_exact,synth
-133,IBM,org,American multinational technology corporation,Q37156,cross_document_exact,synth
-134,IBM,org,American multinational technology corporation,Q37156,cross_document_exact,synth
-135,FIFA World Cup 2018,event,"FIFA World Cup, 2018 edition",fifa-world-cup-2018,temporal_version,synth
-136,2018 FIFA World Cup,event,"FIFA World Cup, 2018 edition",fifa-world-cup-2018,temporal_version,synth
-137,FIFA World Cup (2018),event,"FIFA World Cup, 2018 edition",fifa-world-cup-2018,temporal_version,synth
-138,FIFA World Cup 2022,event,"FIFA World Cup, 2022 edition",fifa-world-cup-2022,temporal_version,synth
-139,2022 FIFA World Cup,event,"FIFA World Cup, 2022 edition",fifa-world-cup-2022,temporal_version,synth
-140,FIFA World Cup (2022),event,"FIFA World Cup, 2022 edition",fifa-world-cup-2022,temporal_version,synth
-141,Summer Olympics 2016,event,"Summer Olympics, 2016 edition",summer-olympics-2016,temporal_version,synth
-142,2016 Summer Olympics,event,"Summer Olympics, 2016 edition",summer-olympics-2016,temporal_version,synth
-143,Summer Olympics (2016),event,"Summer Olympics, 2016 edition",summer-olympics-2016,temporal_version,synth
-144,Summer Olympics 2020,event,"Summer Olympics, 2020 edition",summer-olympics-2020,temporal_version,synth
-145,2020 Summer Olympics,event,"Summer Olympics, 2020 edition",summer-olympics-2020,temporal_version,synth
-146,Summer Olympics (2020),event,"Summer Olympics, 2020 edition",summer-olympics-2020,temporal_version,synth
+70,lisinopril,drug,drug ingredient and brand names (lisinopril),rxcui:29046,synonym_brand,rxnorm
+71,Qbrelis,drug,drug ingredient and brand names (lisinopril),rxcui:29046,synonym_brand,rxnorm
+72,Zestril,drug,drug ingredient and brand names (lisinopril),rxcui:29046,synonym_brand,rxnorm
+73,Prinivil,drug,drug ingredient and brand names (lisinopril),rxcui:29046,synonym_brand,rxnorm
+74,Zestoretic,drug,drug ingredient and brand names (lisinopril),rxcui:29046,synonym_brand,rxnorm
+75,alprazolam,drug,drug ingredient and brand names (alprazolam),rxcui:596,synonym_brand,rxnorm
+76,Xanax,drug,drug ingredient and brand names (alprazolam),rxcui:596,synonym_brand,rxnorm
+77,gabapentin,drug,drug ingredient and brand names (gabapentin),rxcui:25480,synonym_brand,rxnorm
+78,Gralise,drug,drug ingredient and brand names (gabapentin),rxcui:25480,synonym_brand,rxnorm
+79,Horizant,drug,drug ingredient and brand names (gabapentin),rxcui:25480,synonym_brand,rxnorm
+80,Neurontin,drug,drug ingredient and brand names (gabapentin),rxcui:25480,synonym_brand,rxnorm
+81,Relgaabi,drug,drug ingredient and brand names (gabapentin),rxcui:25480,synonym_brand,rxnorm
+82,Gabarone,drug,drug ingredient and brand names (gabapentin),rxcui:25480,synonym_brand,rxnorm
+83,losartan,drug,drug ingredient and brand names (losartan),rxcui:52175,synonym_brand,rxnorm
+84,Cozaar,drug,drug ingredient and brand names (losartan),rxcui:52175,synonym_brand,rxnorm
+85,Hyzaar,drug,drug ingredient and brand names (losartan),rxcui:52175,synonym_brand,rxnorm
+86,Arbli,drug,drug ingredient and brand names (losartan),rxcui:52175,synonym_brand,rxnorm
+87,montelukast,drug,drug ingredient and brand names (montelukast),rxcui:88249,synonym_brand,rxnorm
+88,Singulair,drug,drug ingredient and brand names (montelukast),rxcui:88249,synonym_brand,rxnorm
+89,escitalopram,drug,drug ingredient and brand names (escitalopram),rxcui:321988,synonym_brand,rxnorm
+90,Lexapro,drug,drug ingredient and brand names (escitalopram),rxcui:321988,synonym_brand,rxnorm
+91,pantoprazole,drug,drug ingredient and brand names (pantoprazole),rxcui:40790,synonym_brand,rxnorm
+92,Protonix,drug,drug ingredient and brand names (pantoprazole),rxcui:40790,synonym_brand,rxnorm
+93,rosuvastatin,drug,drug ingredient and brand names (rosuvastatin),rxcui:301542,synonym_brand,rxnorm
+94,Ezallor,drug,drug ingredient and brand names (rosuvastatin),rxcui:301542,synonym_brand,rxnorm
+95,Roszet,drug,drug ingredient and brand names (rosuvastatin),rxcui:301542,synonym_brand,rxnorm
+96,Crestor,drug,drug ingredient and brand names (rosuvastatin),rxcui:301542,synonym_brand,rxnorm
+97,furosemide,drug,drug ingredient and brand names (furosemide),rxcui:4603,synonym_brand,rxnorm
+98,Disal,drug,drug ingredient and brand names (furosemide),rxcui:4603,synonym_brand,rxnorm
+99,Lasix,drug,drug ingredient and brand names (furosemide),rxcui:4603,synonym_brand,rxnorm
+100,Furoscix,drug,drug ingredient and brand names (furosemide),rxcui:4603,synonym_brand,rxnorm
+101,Salix - substance,drug,drug ingredient and brand names (furosemide),rxcui:4603,synonym_brand,rxnorm
+102,tramadol,drug,drug ingredient and brand names (tramadol),rxcui:10689,synonym_brand,rxnorm
+103,ConZip,drug,drug ingredient and brand names (tramadol),rxcui:10689,synonym_brand,rxnorm
+104,Ultram,drug,drug ingredient and brand names (tramadol),rxcui:10689,synonym_brand,rxnorm
+105,Qdolo,drug,drug ingredient and brand names (tramadol),rxcui:10689,synonym_brand,rxnorm
+106,Seglentis,drug,drug ingredient and brand names (tramadol),rxcui:10689,synonym_brand,rxnorm
+107,Ultracet,drug,drug ingredient and brand names (tramadol),rxcui:10689,synonym_brand,rxnorm
+108,simvastatin,drug,drug ingredient and brand names (simvastatin),rxcui:36567,synonym_brand,rxnorm
+109,Flolipid,drug,drug ingredient and brand names (simvastatin),rxcui:36567,synonym_brand,rxnorm
+110,Zocor,drug,drug ingredient and brand names (simvastatin),rxcui:36567,synonym_brand,rxnorm
+111,Vytorin,drug,drug ingredient and brand names (simvastatin),rxcui:36567,synonym_brand,rxnorm
+112,citalopram,drug,drug ingredient and brand names (citalopram),rxcui:2556,synonym_brand,rxnorm
+113,Celexa,drug,drug ingredient and brand names (citalopram),rxcui:2556,synonym_brand,rxnorm
+114,naproxen,drug,drug ingredient and brand names (naproxen),rxcui:7258,synonym_brand,rxnorm
+115,Vimovo,drug,drug ingredient and brand names (naproxen),rxcui:7258,synonym_brand,rxnorm
+116,Aleve PM,drug,drug ingredient and brand names (naproxen),rxcui:7258,synonym_brand,rxnorm
+117,Anaprox,drug,drug ingredient and brand names (naproxen),rxcui:7258,synonym_brand,rxnorm
+118,Naprosyn,drug,drug ingredient and brand names (naproxen),rxcui:7258,synonym_brand,rxnorm
+119,Aleve,drug,drug ingredient and brand names (naproxen),rxcui:7258,synonym_brand,rxnorm
+120,tamsulosin,drug,drug ingredient and brand names (tamsulosin),rxcui:236495,synonym_brand,rxnorm
+121,Flomax,drug,drug ingredient and brand names (tamsulosin),rxcui:236495,synonym_brand,rxnorm
+122,Jalyn,drug,drug ingredient and brand names (tamsulosin),rxcui:236495,synonym_brand,rxnorm
+123,levothyroxine,drug,drug ingredient and brand names (levothyroxine),rxcui:10582,synonym_brand,rxnorm
+124,Thyro-Tabs,drug,drug ingredient and brand names (levothyroxine),rxcui:10582,synonym_brand,rxnorm
+125,ThyroKare,drug,drug ingredient and brand names (levothyroxine),rxcui:10582,synonym_brand,rxnorm
+126,Euthyrox,drug,drug ingredient and brand names (levothyroxine),rxcui:10582,synonym_brand,rxnorm
+127,Levo-T,drug,drug ingredient and brand names (levothyroxine),rxcui:10582,synonym_brand,rxnorm
+128,Levoxyl,drug,drug ingredient and brand names (levothyroxine),rxcui:10582,synonym_brand,rxnorm
+129,Michael Jordan,person,American basketball player and businessman (born 1963),Q41421,same_name_collision,wikidata
+130,Michael I. Jordan,person,"American computer scientist, University of California, Berkeley",Q3308285,same_name_collision,wikidata
+131,Michael Irwin Jordan,person,"American computer scientist, University of California, Berkeley",Q3308285,same_name_collision,wikidata
+132,Michael Jordan,person,"American computer scientist, University of California, Berkeley",Q3308285,same_name_collision,wikidata
+133,Georgia,place,country in the Caucasus region of Europe and Asia,Q230,same_name_collision,wikidata
+134,Republic of Georgia,place,country in the Caucasus region of Europe and Asia,Q230,same_name_collision,wikidata
+135,Georgia (country),place,country in the Caucasus region of Europe and Asia,Q230,same_name_collision,wikidata
+136,Georgia (Sakartvelo),place,country in the Caucasus region of Europe and Asia,Q230,same_name_collision,wikidata
+137,Sakartvelo,place,country in the Caucasus region of Europe and Asia,Q230,same_name_collision,wikidata
+138,Georgia,place,state of the United States of America,Q1428,same_name_collision,wikidata
+139,State of Georgia,place,state of the United States of America,Q1428,same_name_collision,wikidata
+140,GA,place,state of the United States of America,Q1428,same_name_collision,wikidata
+141,"Georgia, United States",place,state of the United States of America,Q1428,same_name_collision,wikidata
+142,The Peach State,place,state of the United States of America,Q1428,same_name_collision,wikidata
+143,The Goober State,place,state of the United States of America,Q1428,same_name_collision,wikidata
+144,Munich,place,"capital and most populous city of Bavaria, Germany",Q1726,cross_lingual,wikidata
+145,München,place,"capital and most populous city of Bavaria, Germany",Q1726,cross_lingual,wikidata
+146,Monaco di Baviera,place,"capital and most populous city of Bavaria, Germany",Q1726,cross_lingual,wikidata
+147,Vienna,place,capital of and state in Austria,Q1741,cross_lingual,wikidata
+148,Wien,place,capital of and state in Austria,Q1741,cross_lingual,wikidata
+149,Vienne,place,capital of and state in Austria,Q1741,cross_lingual,wikidata
+150,Moscow,place,capital and most populous city of Russia,Q649,cross_lingual,wikidata
+151,Moskau,place,capital and most populous city of Russia,Q649,cross_lingual,wikidata
+152,Moscou,place,capital and most populous city of Russia,Q649,cross_lingual,wikidata
+153,Москва,place,capital and most populous city of Russia,Q649,cross_lingual,wikidata
+154,Cologne,place,"most populous city in North Rhine-Westphalia, Germany",Q365,cross_lingual,wikidata
+155,Köln,place,"most populous city in North Rhine-Westphalia, Germany",Q365,cross_lingual,wikidata
+156,Colonia,place,"most populous city in North Rhine-Westphalia, Germany",Q365,cross_lingual,wikidata
+157,Geneva,place,"capital of the canton of Geneva, Switzerland",Q71,cross_lingual,wikidata
+158,Genf,place,"capital of the canton of Geneva, Switzerland",Q71,cross_lingual,wikidata
+159,Genève,place,"capital of the canton of Geneva, Switzerland",Q71,cross_lingual,wikidata
+160,Ginevra,place,"capital of the canton of Geneva, Switzerland",Q71,cross_lingual,wikidata
+161,Prague,place,capital city of the Czech Republic,Q1085,cross_lingual,wikidata
+162,Prag,place,capital city of the Czech Republic,Q1085,cross_lingual,wikidata
+163,Praga,place,capital city of the Czech Republic,Q1085,cross_lingual,wikidata
+164,Microsoft,org,American multinational technology corporation,Q2283,typo,synth
+165,Micrsoft,org,American multinational technology corporation,Q2283,typo,synth
+166,Micrrosoft,org,American multinational technology corporation,Q2283,typo,synth
+167,Google,org,"American multinational technology company, a subsidiary of Alphabet Inc.",Q95,typo,synth
+168,Goole,org,"American multinational technology company, a subsidiary of Alphabet Inc.",Q95,typo,synth
+169,Gooogle,org,"American multinational technology company, a subsidiary of Alphabet Inc.",Q95,typo,synth
+170,Toyota,org,Japanese multinational automotive manufacturer,Q53268,typo,synth
+171,Toyta,org,Japanese multinational automotive manufacturer,Q53268,typo,synth
+172,Toyyota,org,Japanese multinational automotive manufacturer,Q53268,typo,synth
+173,Microsoft,org,American multinational technology corporation,Q2283,org_suffix,synth
+174,Microsoft Inc,org,American multinational technology corporation,Q2283,org_suffix,synth
+175,Microsoft Corporation,org,American multinational technology corporation,Q2283,org_suffix,synth
+176,Microsoft Ltd,org,American multinational technology corporation,Q2283,org_suffix,synth
+177,Microsoft Co,org,American multinational technology corporation,Q2283,org_suffix,synth
+178,Toyota,org,Japanese multinational automotive manufacturer,Q53268,org_suffix,synth
+179,Toyota Inc,org,Japanese multinational automotive manufacturer,Q53268,org_suffix,synth
+180,Toyota Corporation,org,Japanese multinational automotive manufacturer,Q53268,org_suffix,synth
+181,Toyota Ltd,org,Japanese multinational automotive manufacturer,Q53268,org_suffix,synth
+182,Toyota Co,org,Japanese multinational automotive manufacturer,Q53268,org_suffix,synth
+183,Tesla,org,"American automotive, energy storage and solar power company",Q478214,org_suffix,synth
+184,Tesla Inc,org,"American automotive, energy storage and solar power company",Q478214,org_suffix,synth
+185,Tesla Corporation,org,"American automotive, energy storage and solar power company",Q478214,org_suffix,synth
+186,Tesla Ltd,org,"American automotive, energy storage and solar power company",Q478214,org_suffix,synth
+187,Tesla Co,org,"American automotive, energy storage and solar power company",Q478214,org_suffix,synth
+188,Google,org,"American multinational technology company, a subsidiary of Alphabet Inc.",Q95,cross_document_exact,synth
+189,Google,org,"American multinational technology company, a subsidiary of Alphabet Inc.",Q95,cross_document_exact,synth
+190,Google,org,"American multinational technology company, a subsidiary of Alphabet Inc.",Q95,cross_document_exact,synth
+191,IBM,org,American multinational technology corporation,Q37156,cross_document_exact,synth
+192,IBM,org,American multinational technology corporation,Q37156,cross_document_exact,synth
+193,IBM,org,American multinational technology corporation,Q37156,cross_document_exact,synth
+194,FIFA World Cup 2018,event,"FIFA World Cup, 2018 edition",fifa-world-cup-2018,temporal_version,synth
+195,2018 FIFA World Cup,event,"FIFA World Cup, 2018 edition",fifa-world-cup-2018,temporal_version,synth
+196,FIFA World Cup (2018),event,"FIFA World Cup, 2018 edition",fifa-world-cup-2018,temporal_version,synth
+197,FIFA World Cup 2022,event,"FIFA World Cup, 2022 edition",fifa-world-cup-2022,temporal_version,synth
+198,2022 FIFA World Cup,event,"FIFA World Cup, 2022 edition",fifa-world-cup-2022,temporal_version,synth
+199,FIFA World Cup (2022),event,"FIFA World Cup, 2022 edition",fifa-world-cup-2022,temporal_version,synth
+200,Summer Olympics 2016,event,"Summer Olympics, 2016 edition",summer-olympics-2016,temporal_version,synth
+201,2016 Summer Olympics,event,"Summer Olympics, 2016 edition",summer-olympics-2016,temporal_version,synth
+202,Summer Olympics (2016),event,"Summer Olympics, 2016 edition",summer-olympics-2016,temporal_version,synth
+203,Summer Olympics 2020,event,"Summer Olympics, 2020 edition",summer-olympics-2020,temporal_version,synth
+204,2020 Summer Olympics,event,"Summer Olympics, 2020 edition",summer-olympics-2020,temporal_version,synth
+205,Summer Olympics (2020),event,"Summer Olympics, 2020 edition",summer-olympics-2020,temporal_version,synth
