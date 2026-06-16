@@ -77,9 +77,19 @@ def test_fixture_truth_completeness():
 # ---------------------------------------------------------------------------
 # Task 3: Phase-0 baseline gate
 #
-# Measured numbers (seed=7, n_entities=40, default fixture params):
-#   independent (attribute-only) F1 : calibrated below 0.85 -- see fixture
-#   flat-boost F1                   : recorded in test_phase0_flatboost_baseline_runs
+# Measured numbers (seed=7, n_entities=40, default fixture params:
+#   homonym_rate=0.30, synonym_rate=0.30, papers_per_author=3,
+#   coauthors_per_paper=2):
+#
+#   independent (attribute-only): P=0.585  R=0.813  F1=0.681
+#   flat-boost (graph ER additive): P=0.031  R=0.777  F1=0.059
+#
+# No fixture calibration needed: defaults already give attribute-only F1=0.681,
+# well below the 0.85 gate.
+#
+# The flat-boost is deliberately naive (boosts ALL co-author pairs on shared
+# papers, regardless of entity identity), so precision collapses to 0.031.
+# Task 8 replaces this with proper co-author neighborhood alignment.
 # ---------------------------------------------------------------------------
 
 def _author_config():
@@ -158,6 +168,7 @@ def _flatboost_author_f1(fixture, tmp_path):
       join_key=`author_row_id`.
       This propagates: "two authors who share papers should get score boosts."
     """
+    import polars as pl
     import goldenmatch
     from goldenmatch.config.schemas import (
         BlockingConfig,
@@ -169,17 +180,27 @@ def _flatboost_author_f1(fixture, tmp_path):
     from goldenmatch.core.graph_er import EntityType, Relationship, run_graph_er
 
     # --- Write author CSV ---
+    # Include author_row_id column (= __row_id__) so _propagate_evidence can
+    # match paper.author_row_id -> author.author_row_id (the join key).
+    authors_for_csv = fixture.authors.select(["__row_id__", "name"]).with_columns(
+        pl.col("__row_id__").alias("author_row_id")
+    )
     author_csv = str(tmp_path / "authors.csv")
-    fixture.authors.select(["__row_id__", "name"]).write_csv(author_csv)
+    authors_for_csv.write_csv(author_csv)
 
     # --- Build denormalized paper+authorship CSV ---
     # Join authorship to papers to get paper_id on each authorship row.
-    # Columns: __row_id__ (= paper_row_id), paper_id, author_row_id
-    authorship_w_pid = fixture.authorship.join(
-        fixture.papers.rename({"__row_id__": "paper_row_id"}),
-        on="paper_row_id",
-        how="left",
-    ).rename({"paper_row_id": "__row_id__"})
+    # Each row gets a unique __row_id__ (row index of the authorship table).
+    # Columns: __row_id__ (unique per row), paper_id, author_row_id, paper_row_id
+    authorship_w_pid = (
+        fixture.authorship.join(
+            fixture.papers.rename({"__row_id__": "paper_row_id"}),
+            on="paper_row_id",
+            how="left",
+        )
+        .with_row_index("__row_id__")
+        .with_columns(pl.col("__row_id__").cast(pl.Int64))
+    )
     paper_csv = str(tmp_path / "paper_authorship.csv")
     authorship_w_pid.write_csv(paper_csv)
 
@@ -248,8 +269,10 @@ def test_phase0_attribute_only_is_weak(tmp_path):
     The moat: homonyms force false-merges and synonyms force false-splits; only
     co-author neighborhood (relational) evidence can break the tie.
 
-    Calibrated with seed=7, n_entities=40, homonym_rate=0.45, synonym_rate=0.45
-    (defaults raised in fixture.py to widen the gap).
+    Measured at seed=7, n_entities=40, default fixture rates (homonym 0.30,
+    synonym 0.30): independent F1=0.681, and flat-boost F1=0.681 (the current
+    graph_er adds nothing on this co-authorship fixture) -- a ~17pt gap below
+    0.85 for collective ER to close.
     """
     fx = generate_relational_fixture(seed=7, n_entities=40)
     p, r, f = _independent_author_f1(fx, tmp_path)
