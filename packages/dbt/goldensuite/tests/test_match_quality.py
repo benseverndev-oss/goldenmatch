@@ -21,6 +21,7 @@ from pathlib import Path
 import pytest
 
 jinja2 = pytest.importorskip("jinja2")
+import jinja2.ext  # noqa: E402
 
 # `none` in the plan's call sites is Jinja's null; in this Python harness
 # the helpers are invoked as plain functions, so map it to Python None.
@@ -30,6 +31,29 @@ _MACROS_PATH = (
     Path(__file__).resolve().parents[1]
     / "macros" / "test_match_quality.sql"
 )
+
+
+class _TestTagExtension(jinja2.ext.Extension):
+    """No-op parser for dbt's custom `{% test ... %}` tag.
+
+    The single `test_match_quality.sql` file holds both the pure-return
+    helper macros (which we render-test) AND the thin
+    `{% test goldenmatch_match_quality(...) %}` wrapper. dbt registers
+    `test` as a custom Jinja tag; plain Jinja2 does not, so the file
+    won't parse without this. The wrapper is intentionally NOT
+    render-tested (it's a one-line delegate to the helper), so we just
+    consume the block body and emit nothing.
+    """
+
+    tags = {"test"}
+
+    def parse(self, parser):  # noqa: ANN001
+        # Consume the rest of the opening `{% test ... %}` tag header.
+        while parser.stream.current.type != "block_end":
+            next(parser.stream)
+        # Drop the body up to and including `{% endtest %}`.
+        parser.parse_statements(["name:endtest"], drop_needle=True)
+        return []
 
 
 class _DbtStub:
@@ -48,7 +72,7 @@ def _load_match_quality_macros():
     env = jinja2.Environment(
         loader=jinja2.FileSystemLoader(str(_MACROS_PATH.parent)),
         autoescape=False,
-        extensions=["jinja2.ext.do"],
+        extensions=["jinja2.ext.do", _TestTagExtension],
     )
     env.globals["dbt"] = _DbtStub()
     env.globals["exceptions"] = _ExceptionsStub()
@@ -85,6 +109,31 @@ def test_predicted_pairs_invalid_input_errors():
     with pytest.raises(RuntimeError):
         h.goldenmatch_predicted_pairs_sql(model="m", input="bogus",
             pairs_a="id_a", pairs_b="id_b", record_id="record_id", cluster_id="cluster_id")
+
+
+# ---------------------------------------------------------------------------
+# Task 2: goldenmatch_match_quality_sql
+# ---------------------------------------------------------------------------
+
+
+def test_match_quality_sql_emits_metrics_and_floor():
+    h = _load_match_quality_macros()
+    sql = h.goldenmatch_match_quality_sql(model="m", ground_truth="gt", input="pairs",
+        pairs_a="id_a", pairs_b="id_b", record_id="record_id", cluster_id="cluster_id",
+        gt_a="id_a", gt_b="id_b", min_f1=0.9, min_precision=none, min_recall=none)
+    assert "COALESCE(SUM(CASE WHEN" in sql      # tp/fp counted as 0 not NULL on empty
+    assert "1.0 *" in sql                        # float division
+    assert "NULLIF(" in sql
+    assert "f1 IS NULL OR f1 < 0.9" in sql       # only the provided floor's clause
+    assert "precision IS NULL" not in sql        # unset floors omitted
+
+
+def test_match_quality_sql_no_floor_errors():
+    h = _load_match_quality_macros()
+    with pytest.raises(RuntimeError):
+        h.goldenmatch_match_quality_sql(model="m", ground_truth="gt", input="pairs",
+            pairs_a="id_a", pairs_b="id_b", record_id="record_id", cluster_id="cluster_id",
+            gt_a="id_a", gt_b="id_b", min_f1=none, min_precision=none, min_recall=none)
 
 
 if __name__ == "__main__":  # pragma: no cover
