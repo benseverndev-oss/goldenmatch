@@ -90,6 +90,7 @@ def run_sail_pipeline(
     _validate_sail_pipeline_supported(scorer_name=scorer_name, wcc=wcc)
 
     from goldenmatch.sail.clustering import (
+        _truncate_lineage,
         connected_components,
         connected_components_scale,
     )
@@ -104,6 +105,18 @@ def run_sail_pipeline(
         scorer_name=scorer_name,
         threshold=threshold,
     )
+    # STAGE-BOUNDARY LINEAGE BARRIERS (Sail stopgap; the proper fix is upstream
+    # `localCheckpoint`/`persist` -- lakehq/sail#482). Spark Connect is lazy, so
+    # without a barrier the first WCC action must plan the ENTIRE upstream DAG
+    # (load -> block -> self-join score -> dedup) in one shot; at 100M that
+    # overwhelms Sail's driver optimizer and the run wedges BEFORE WCC round 1
+    # (observed on the 2026-06-16 GKE run: driver silent 6+ min, no checkpoint
+    # ever written). Materializing `pairs` to parquet and reading it back resets
+    # the plan so the graph stage starts from a small fresh scan. Gated on
+    # wcc_checkpoint_dir (default None = off, byte-identical); when Sail ships a
+    # working localCheckpoint this collapses to `pairs = pairs.localCheckpoint()`.
+    if wcc_checkpoint_dir:
+        pairs = _truncate_lineage(pairs, wcc_checkpoint_dir, "pairs")
     ids_df = source_df.select(id_col)
     if wcc == "scale":
         assignments = connected_components_scale(
@@ -115,6 +128,13 @@ def run_sail_pipeline(
         )
     else:
         assignments = connected_components(pairs, ids_df, id_col=id_col)
+    # Second boundary barrier before survivorship: `assignments` feeds BOTH
+    # build_golden and (S5) build_identity_graph, so materialize once -- truncates
+    # the WCC lineage and avoids recomputing the whole graph stage twice.
+    if wcc_checkpoint_dir:
+        assignments = _truncate_lineage(
+            assignments, wcc_checkpoint_dir, "assignments"
+        )
     golden = build_golden(
         assignments,
         source_df,

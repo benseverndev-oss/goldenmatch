@@ -143,3 +143,37 @@ def test_sail_wcc_scale_junction(spark):
     pairs_df = spark.createDataFrame(edges, ["a", "b"])
     out = connected_components_scale(pairs_df, ids_df, id_col="__row_id__")
     assert _sail_partition(out) == _reference_partition(ids, edges)
+
+
+def test_sail_wcc_scale_edge_node_seeding_singleton_heavy(spark):
+    """Edge-node seeding (the 100M scale fix): the iteration runs only over the
+    edge-endpoint subgraph; the (here vast majority of) singletons are
+    re-attached as their own component after the loop. ids 0..9 with a SINGLE
+    edge between two high ids (7,8) -> one {7,8} component + 8 singletons
+    (incl. ids LOWER than the edge nodes). Asserts the re-attach produces the
+    exact full-universe partition, incl. every singleton's cluster_id = self."""
+    from goldenmatch.sail.clustering import connected_components_scale
+
+    ids = list(range(10))
+    edges = [(7, 8)]
+    ids_df = spark.createDataFrame([(i,) for i in ids], ["__row_id__"])
+    pairs_df = spark.createDataFrame(edges, ["a", "b"])
+    out = connected_components_scale(pairs_df, ids_df, id_col="__row_id__")
+    part = _sail_partition(out)
+    assert part == _reference_partition(ids, edges)
+    # explicit: 8 singletons + one 2-member component, every id present once.
+    assert sum(len(c) for c in part) == 10
+    assert frozenset({7, 8}) in part
+    assert frozenset({0}) in part and frozenset({9}) in part
+
+
+def test_sail_wcc_scale_no_edges_all_singletons(spark):
+    """Degenerate edge case: zero matches -> empty edge-node seed -> every id is
+    re-attached as its own singleton (no rows lost)."""
+    from goldenmatch.sail.clustering import connected_components_scale
+
+    ids = list(range(5))
+    ids_df = spark.createDataFrame([(i,) for i in ids], ["__row_id__"])
+    pairs_df = spark.createDataFrame([], "a long, b long")
+    out = connected_components_scale(pairs_df, ids_df, id_col="__row_id__")
+    assert _sail_partition(out) == {frozenset({i}) for i in ids}

@@ -19,6 +19,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   `benchmarks/collective-er/`. Phase 2 (negative evidence) and Phase 3 (learned
   weights) are planned follow-ups.
 
+### Performance
+- **Sail distributed WCC: edge-node seeding + stage-boundary lineage barriers.**
+  `connected_components_scale` now seeds the pointer-jump iteration from the
+  edge-endpoint subgraph instead of the full id universe, re-attaching singletons
+  after convergence — the partition is byte-identical but every per-round shuffle
+  is proportional to the connected component count, not the row count (avoids
+  dragging isolated nodes through the loop; helps any engine). `run_sail_pipeline`
+  also materializes `pairs` before WCC and `assignments` before survivorship when
+  `wcc_checkpoint_dir` is set, so the lazy plan is truncated at each stage
+  boundary. Motivated by the 2026-06-16 100M GKE run, which wedged the driver
+  building the whole `load→score→dedup→WCC` plan in one action. The boundary
+  barriers are a stopgap for Sail's missing lineage-truncation primitive
+  (lakehq/sail#482); the proper fix is upstream `localCheckpoint`. Default (no
+  checkpoint dir) is byte-identical.
+
 ## [2.0.0] - 2026-06-14
 
 <!-- README-callout
