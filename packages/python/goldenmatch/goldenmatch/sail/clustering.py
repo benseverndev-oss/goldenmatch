@@ -130,8 +130,12 @@ def connected_components_scale(
     root each round -> O(log n)).
 
     Same output as ``connected_components``: ``(cluster_id, member_id)`` where
-    cluster_id is the component's min member id. Isolated nodes (singletons)
-    seeded from the DISTRIBUTED ``ids_df`` (the rehydration-OOM trap).
+    cluster_id is the component's min member id. The iteration is seeded from the
+    EDGE-ENDPOINT subgraph only (not the full ``ids_df`` universe); singletons
+    are re-attached as their own component after convergence, so the partition is
+    identical but every per-round shuffle is proportional to the connected
+    subgraph -- avoids dragging isolated nodes through the loop (the old
+    full-universe seed's "rehydration-OOM trap").
 
     Each round: (1) PROPAGATE -- each node adopts min(own label, min neighbor
     label); (2) SHORTCUT -- ``label[v] = label[label[v]]`` (jump to the label's
@@ -166,10 +170,18 @@ def connected_components_scale(
     rev = pairs_df.select(F.col("b").alias("node"), F.col("a").alias("nbr"))
     edges = fwd.unionByName(rev)
 
-    # Labels seeded from the DISTRIBUTED universe (singletons -> own label).
-    labels = ids_df.select(
-        F.col(id_col).cast("long").alias("node")
-    ).withColumn("label", F.col("node"))
+    # EDGE-NODE SEEDING: only nodes that appear in an edge can ever change
+    # label; the (usually vast majority of) singletons trivially form their own
+    # component. Seeding the iteration from the edge-endpoint subgraph instead of
+    # the full ids_df universe keeps every per-round shuffle proportional to the
+    # CONNECTED subgraph, not |ids| -- this is the literal "rehydration-OOM trap"
+    # the old full-universe seed warned about (at 100M, ~75M singletons were
+    # dragged through every propagate/shortcut join). Singletons are re-attached
+    # after the loop, so the output partition is byte-identical; this is a pure,
+    # engine-agnostic speedup (helps the Ray and one-box WCC paths too).
+    labels = edges.select(F.col("node")).distinct().withColumn(
+        "label", F.col("node")
+    )
 
     # Spark Connect discipline: join on a SHARED NAME, other side renamed; no
     # df["col"] cross-handle refs (the S2 AMBIGUOUS_REFERENCE lesson).
@@ -214,6 +226,17 @@ def connected_components_scale(
         if checkpoint_dir and checkpoint_interval and (round_idx + 1) % checkpoint_interval == 0:
             labels = _truncate_lineage(labels, checkpoint_dir, f"wcc_round_{round_idx + 1}")
 
-    return labels.select(
+    # The iteration produced final labels for edge-nodes only. Re-attach every
+    # id NOT in any edge as its own singleton component (cluster_id = self) so
+    # the output contract is unchanged: every member id present, exactly the
+    # partition the full-universe seed produced. left_anti finds ids absent from
+    # the edge-node set; the union is a single non-iterative pass (no shuffle
+    # growth), so the lineage barrier discipline above is unaffected.
+    edge_assign = labels.select(
         F.col("label").alias("cluster_id"), F.col("node").alias("member_id")
     )
+    all_ids = ids_df.select(F.col(id_col).cast("long").alias("member_id"))
+    singletons = all_ids.join(
+        edge_assign.select("member_id"), on="member_id", how="left_anti"
+    ).select(F.col("member_id").alias("cluster_id"), F.col("member_id"))
+    return edge_assign.unionByName(singletons)
