@@ -4,6 +4,21 @@ All notable changes to GoldenMatch are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/) (strict after v1.0.0).
 
+## [Unreleased]
+
+### Added
+- **Collective entity resolution (neighborhood similarity).** `run_graph_er(...,
+  propagation_mode="relational")` blends attribute similarity with neighbor-cluster
+  overlap (Jaccard/Adamic-Adar) and iterates to a synchronous fixpoint
+  (Bhattacharya-Getoor) — resolving homonyms that attributes alone can't. On a
+  relational fixture where the co-author neighborhood is the only disambiguating
+  signal, it lifts pairwise F1 from ~0.66 (attribute-only) to ~0.87, stable across
+  seeds; the legacy flat-boost `additive` mode over-merges there (~0.05). New module
+  `goldenmatch/core/collective.py`; the existing `additive`/`multiplicative` modes are
+  unchanged (default remains `additive`). Benchmark + results under
+  `benchmarks/collective-er/`. Phase 2 (negative evidence) and Phase 3 (learned
+  weights) are planned follow-ups.
+
 ## [2.0.0] - 2026-06-14
 
 <!-- README-callout
