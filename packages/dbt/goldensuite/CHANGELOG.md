@@ -18,6 +18,13 @@ Suite monorepo and is consumed from there (not published to PyPI).
   (macros) and a `pip install "git+...#subdirectory=..."` for the Python helper.
 
 ### Added
+- **Zero-config Fellegi-Sunter dedupe.** `probabilistic=true` on the
+  `goldenmatch_dedupe` materialization (and `run_goldenmatch_dedupe(probabilistic=True)`)
+  builds an FS model from the data with no hand-written config; `match_config` is
+  now optional (omitting it runs standard zero-config dedupe). Backed by a new
+  `mode` parameter on `goldenmatch_autoconfig` across DuckDB + Postgres
+  (`goldenmatch-duckdb` 0.7.0, `goldenmatch_pg` 0.8.0). Snowflake + `probabilistic`
+  raises a clear error (explicit `match_config` still works there).
 - Restored the CI lane removed in #464: `dbt parse` smoke (in-memory DuckDB
   profile) plus the package's pytest suite now run on changes under `packages/dbt/**`.
 - Standalone `profiles.yml` + `profile:` key so the project parses on its own.
