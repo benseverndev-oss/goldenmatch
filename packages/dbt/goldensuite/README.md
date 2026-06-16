@@ -62,6 +62,31 @@ raises a clear error; use an explicit `match_config` there). The Python helper
 takes the same flag: `run_goldenmatch_dedupe(..., probabilistic=True)` (no
 `config_path`).
 
+### Match-quality test
+
+Gate a dbt build on entity-resolution quality. `goldenmatch_match_quality` is a
+pure-SQL generic test (portable across adapters, no UDF) that compares a dedupe
+model's predicted pairs against a ground-truth pairs table and fails the build
+when precision/recall/F1 drops below the configured floors:
+
+```yaml
+models:
+  - name: deduped_customers
+    tests:
+      - goldenmatch_match_quality:
+          ground_truth: ref('customer_truth')   # table of true matching pairs
+          input: clusters                        # 'clusters' (default) | 'pairs'
+          min_f1: 0.90
+          min_precision: 0.80                    # set any subset; at least one required
+```
+
+- `input: clusters` expands within-cluster pairs (model columns `record_id`,
+  `cluster_id`); `input: pairs` uses the model's `id_a`/`id_b` pairs. Column
+  names are overridable (`record_id`/`cluster_id`/`pairs_a`/`pairs_b`/`gt_a`/`gt_b`).
+- Metrics are pairwise (clusters expanded to pairs, canonicalized `(min,max)`).
+  The test fails (returns the metrics row) when any provided floor is violated;
+  an empty/garbage model fails rather than silently passing.
+
 ## Macros
 
 This package ships macros only (no models/seeds/snapshots). The
@@ -73,6 +98,7 @@ is pure SQL (works on every adapter):
 - **Identity graph** -- `identity_resolve`, `identity_list`, `identity_view`, `identity_history`, `identity_conflicts`
 - **Learning memory** -- `file_field_correction`, `file_pair_correction`
 - **Quality gates (GoldenCheck)** -- `quality_assert`, `quality_health_gate`, `quality_not_empty`
+- **Match-quality test** -- `goldenmatch_match_quality` generic test: gate a dbt build on pairwise precision/recall/F1 vs ground truth. Pure SQL (portable, no UDF). See [below](#match-quality-test).
 - **Transforms (GoldenFlow)** -- `transforms.sql`
 - **Schema mapping (InferMap)** -- `infermap_apply(relation, column_map)` applies a
   Python-computed `infermap` column mapping as a plain projecting SELECT.
