@@ -1,6 +1,6 @@
 # Snowpark Container Services image for goldenmatch.
 #
-# Build context: this directory (`packages/python/goldenmatch/dbt-goldensuite/spcs/`).
+# Build context: this directory (`packages/dbt/goldensuite/spcs/`).
 # The image runs `server.py`, a thin Flask app exposing the same
 # functions the Snowpark Python UDFs would, except backed by the
 # native Rust kernel via `pip install goldenmatch[native]`.

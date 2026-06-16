@@ -5,15 +5,21 @@
 #
 #   packages:
 #     - git: "https://github.com/benseverndev-oss/goldenmatch.git"
-#       subdirectory: "packages/python/goldenmatch/dbt-goldensuite"
+#       subdirectory: "packages/dbt/goldensuite"
 #
 # Macros use `adapter.dispatch()` to route between the Postgres
 # (`goldenmatch.correction_add`) and DuckDB (`goldenmatch_correction_add`)
 # function shapes. Other adapters raise a compile-time error.
 
 name: "dbt_goldensuite"
-version: "0.1.0"
+version: "0.5.0"
 config-version: 2
+
+# Standalone profile (used only when this project is run directly, e.g.
+# `dbt parse` in CI). Consumers who install this as a package via
+# `packages.yml` use their own root project's profile; this key is ignored
+# in that mode. The matching profiles.yml ships an in-memory DuckDB target.
+profile: "dbt_goldensuite"
 
 # This package only ships macros; no models / seeds / snapshots.
 macro-paths: ["macros"]

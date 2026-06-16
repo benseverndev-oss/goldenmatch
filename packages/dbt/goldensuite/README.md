@@ -4,8 +4,22 @@ dbt integration for [GoldenMatch](https://github.com/benseverndev-oss/goldenmatc
 
 ## Installation
 
+`dbt-goldensuite` ships inside the [Golden Suite monorepo](https://github.com/benseverndev-oss/goldenmatch) and is consumed from there (it is not published to PyPI).
+
+**As a dbt package** (the macros + materialization) — add to your `packages.yml`:
+
+```yaml
+packages:
+  - git: "https://github.com/benseverndev-oss/goldenmatch.git"
+    subdirectory: "packages/dbt/goldensuite"
+```
+
+then run `dbt deps`.
+
+**The Python helper** (`run_goldenmatch_dedupe`, correction CRUD) — install the subdirectory directly:
+
 ```bash
-pip install dbt-goldensuite
+pip install "git+https://github.com/benseverndev-oss/goldenmatch.git#subdirectory=packages/dbt/goldensuite"
 ```
 
 ## Usage

@@ -1,6 +1,6 @@
 """Snowflake handler module -- the inside of the goldenmatch UDF surface.
 
-``packages/python/goldenmatch/dbt-goldensuite/macros/`` and
+``packages/dbt/goldensuite/macros/`` and
 ``packages/python/goldenmatch/goldenmatch/cli/snowflake.py`` are the
 *outside* of the Snowflake surface: how Snowflake calls into
 goldenmatch. This subpackage is the *inside*: the Python functions

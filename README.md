@@ -119,7 +119,7 @@ flowchart LR
 | **[InferMap](packages/python/infermap/README.md)** | Python · TS | Schema mapping engine — auto-aligns columns across heterogeneous sources. | `pip install infermap` · `npm i infermap` |
 | **[GoldenAnalysis](packages/python/goldenanalysis/README.md)** | Python · TS | Cross-cutting analysis & reporting — consumes any stage's typed artifacts (or a raw DataFrame) and emits a unified, exportable `AnalysisReport`; optional Rust / WASM `histogram`+`quantile` kernels. | `pip install goldenanalysis` · `npm i goldenanalysis` |
 | **[goldenmatch-extensions](packages/rust/extensions/README.md)** | Rust | Postgres extension (pgrx) + DuckDB UDFs. SQL-native fuzzy matching. | source build |
-| **[dbt-goldensuite](packages/python/goldenmatch/dbt-goldensuite/README.md)** | dbt · Python | dbt package — quality-gate tests, correction CRUD macros + GoldenCheck assertions for warehouse models. | `pip install dbt-goldensuite` |
+| **[dbt-goldensuite](packages/dbt/goldensuite/README.md)** | dbt · Python | dbt package — quality-gate tests, correction CRUD macros + GoldenCheck assertions for warehouse models. | `packages.yml` (git subdir) |
 | **[goldencheck-action](packages/actions/goldencheck/README.md)** | YAML | GitHub Action — fail PRs that introduce data-quality regressions. | Marketplace |
 
 > Headline pitch and the deepest docs live in **[packages/python/goldenmatch/README.md](packages/python/goldenmatch/README.md)** (~1,300 lines, full feature list, CLI, architecture, benchmarks).
@@ -141,7 +141,7 @@ flowchart LR
 | Analyze + report across stages and runs | [`packages/python/goldenanalysis`](packages/python/goldenanalysis/README.md) |
 | Write TypeScript / Node.js / Edge (browser, Workers; optional WASM) | [`packages/typescript/goldenmatch`](packages/typescript/goldenmatch/README.md) |
 | Match in Postgres / DuckDB SQL | [`packages/rust/extensions`](packages/rust/extensions/README.md) |
-| Add data-quality gates to dbt | [`packages/python/goldenmatch/dbt-goldensuite`](packages/python/goldenmatch/dbt-goldensuite/README.md) |
+| Add data-quality gates to dbt | [`packages/dbt/goldensuite`](packages/dbt/goldensuite/README.md) |
 | Block bad data in GitHub PRs | [`packages/actions/goldencheck`](packages/actions/goldencheck/README.md) |
 | Run as Airflow DAGs | [`examples/airflow/`](examples/airflow/README.md) — 12 drop-in DAGs |
 | Run from a single MCP container | [`docker run ghcr.io/benseverndev-oss/goldensuite-mcp:latest`](packages/python/goldensuite-mcp/README.md) |

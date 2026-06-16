@@ -12,7 +12,10 @@ license = "MIT"
 authors = [{ name = "Ben Severn", email = "benzsevern@gmail.com" }]
 classifiers = ["Private :: Do Not Upload"]
 dependencies = [
-    "goldenmatch>=0.5.0",
+    "goldenmatch>=2.0.0",
+    # dbt-adapters 1.24.0 raises KeyError: 'javascript' against dbt-core 1.11.x
+    # during macro parsing; CI pins dbt-core>=1.11,<1.12 + dbt-adapters<1.24 +
+    # dbt-duckdb>=1.10,<1.11 until upstream ships a clean release.
     "dbt-core>=1.7",
     "duckdb>=0.9",
 ]

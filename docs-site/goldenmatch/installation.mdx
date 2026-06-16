@@ -117,11 +117,15 @@ con.sql("SELECT goldenmatch_score('John', 'Jon', 'jaro_winkler')")
 
 ## dbt Integration
 
-```bash
-pip install dbt-goldensuite
+`dbt-goldensuite` ships inside the monorepo (not on PyPI). Add it to your `packages.yml`:
+
+```yaml
+packages:
+  - git: "https://github.com/benseverndev-oss/goldenmatch.git"
+    subdirectory: "packages/dbt/goldensuite"
 ```
 
-The `dbt-goldensuite` package provides macros for running entity resolution inside dbt pipelines using DuckDB.
+then run `dbt deps`. The package provides macros for running entity resolution, quality gates, transforms, and identity-graph reads inside dbt pipelines (DuckDB, Postgres, and Snowflake).
 
 ## Verify installation
 
