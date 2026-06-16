@@ -232,8 +232,15 @@ def connected_components_scale(
     # partition the full-universe seed produced. left_anti finds ids absent from
     # the edge-node set; the union is a single non-iterative pass (no shuffle
     # growth), so the lineage barrier discipline above is unaffected.
+    # Cast to long so edge_assign, the left_anti join key, the singleton union,
+    # and the downstream build_golden join (on source row_id, long) all see one
+    # consistent schema. `labels` columns come from `pairs` (uncast); mixing them
+    # with the cast-long singletons left a union whose physical schema diverged
+    # from its logical schema -> Sail errors on the downstream join (the
+    # full-universe seed avoided this by seeding from ids_df.cast("long")).
     edge_assign = labels.select(
-        F.col("label").alias("cluster_id"), F.col("node").alias("member_id")
+        F.col("label").cast("long").alias("cluster_id"),
+        F.col("node").cast("long").alias("member_id"),
     )
     all_ids = ids_df.select(F.col(id_col).cast("long").alias("member_id"))
     singletons = all_ids.join(
