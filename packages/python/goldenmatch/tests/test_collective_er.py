@@ -293,3 +293,43 @@ def test_phase0_flatboost_baseline_runs(tmp_path):
     p, r, f = _flatboost_author_f1(fx, tmp_path)
     print(f"\n[phase-0] flat-boost: P={p:.3f} R={r:.3f} F1={f:.3f}")
     assert 0.0 <= f <= 1.0, f"Flat-boost F1={f:.3f} is out of [0,1] range (unexpected)"
+
+
+# ---------------------------------------------------------------------------
+# Task 4: relational_similarity (pure)
+# ---------------------------------------------------------------------------
+
+from goldenmatch.core.collective import relational_similarity  # noqa: E402
+
+
+def test_relational_similarity_jaccard():
+    n1 = {("author", 5), ("author", 9)}
+    n2 = {("author", 5), ("author", 12)}
+    assert abs(relational_similarity(n1, n2, mode="jaccard") - (1 / 3)) < 1e-9  # |∩|=1,|∪|=3
+
+
+def test_relational_similarity_empty_is_zero():
+    assert relational_similarity(set(), set(), mode="jaccard") == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Task 5: neighbor index + lookup (pure)
+# ---------------------------------------------------------------------------
+
+from goldenmatch.core.collective import build_neighbor_index, neighbor_cluster_set  # noqa: E402
+
+
+def test_build_neighbor_index_cooccurrence():
+    # paper P1 has authors a0,a1; paper P2 has a1,a2
+    groups = [[("author", 0), ("author", 1)], [("author", 1), ("author", 2)]]
+    idx = build_neighbor_index(groups)
+    assert idx[("author", 1)] == {("author", 0), ("author", 2)}
+    assert idx[("author", 0)] == {("author", 1)}
+    assert ("author", 0) not in idx[("author", 0)]  # no self-loop
+
+
+def test_neighbor_cluster_set_maps_to_clusters():
+    idx = {("author", 0): {("author", 1), ("author", 2)}}
+    clusters = {"author": {1: 5, 2: 5, 0: 9}}  # records 1,2 both in cluster 5
+    out = neighbor_cluster_set(("author", 0), idx, clusters)
+    assert out == {("author", 5)}  # both neighbors collapse to the same cluster
