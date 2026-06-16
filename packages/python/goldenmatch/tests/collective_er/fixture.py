@@ -21,7 +21,7 @@ Dependencies: stdlib ``random`` + ``polars`` only; no goldenmatch imports.
 from __future__ import annotations
 
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import polars as pl
