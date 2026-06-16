@@ -15,6 +15,20 @@ COLL_P_LLM = "1.0"            # goldenmatch auto+llm collision precision
 # exact-family F1 read from the freshly-generated results.json into render_demo_md
 # rather than relying on this constant. (Kept as a documented fallback default.)
 
+_NOUNS = {
+    "org": ("organization", "organizations"),
+    "person": ("person", "people"),
+    "place": ("place", "places"),
+    "drug": ("drug", "drugs"),
+    "event": ("event", "events"),
+}
+
+
+def _noun(entity_type: str, n: int) -> str:
+    """Singular/plural noun for an entity_type (org -> organization/organizations)."""
+    singular, plural = _NOUNS.get(entity_type, ("entity", "entities"))
+    return singular if n == 1 else plural
+
 
 def complete_partition(clusters: list[list[int]], all_indices: list[int]) -> list[list[int]]:
     """Add implied singletons for indices missing from `clusters` (goldenmatch
@@ -61,7 +75,7 @@ def pair_merged(clusters: list[list[int]], eids: dict[int, str], id_a: str, id_b
     return False
 
 
-def render_demo_md(mentions: dict[int, str], eids: dict[int, str], entity_id: str, query: str, before: list[list[int]], after: list[list[int]], exact_family_f1: str = EXACT_FAMILY_F1) -> str:
+def render_demo_md(mentions: dict[int, str], eids: dict[int, str], entity_id: str, query: str, before: list[list[int]], after: list[list[int]], exact_family_f1: str = EXACT_FAMILY_F1, entity_type: str = "org") -> str:
     """Deterministic markdown for the committed Tier-1 (under-merge) artifact.
 
     `exact_family_f1` is the cited exact-match-family F1 string (e.g. "F1 0.066");
@@ -79,16 +93,16 @@ def render_demo_md(mentions: dict[int, str], eids: dict[int, str], entity_id: st
         "",
         "## Under-merge: a fragmented entity gives an incomplete answer",
         "",
-        f"The corpus entity `{entity_id}` has {len(all_names)} real surface forms: "
+        f"The corpus entity `{entity_id}` has {len(all_names)} surface forms: "
         + ", ".join(f"`{n}`" for n in all_names) + ".",
         "",
         "**Before — exact-match KG (GraphRAG / LightRAG / Cognee / mem0 family).** "
         "These resolve only byte-identical names, so each surface form becomes its own "
-        f"node. Agent question: *\"How many organizations are in memory, and what are "
-        f"{query}'s known names?\"*",
+        f"node. Agent question: *\"How many {_noun(entity_type, 2)} are in memory, and "
+        f"what are {query}'s known names?\"*",
         "",
-        f"> {b['distinct_nodes']} organizations (the entity is stored "
-        f"{b['distinct_nodes']} times); names reachable from \"{query}\": "
+        f"> {b['distinct_nodes']} {_noun(entity_type, b['distinct_nodes'])} (the entity "
+        f"is stored {b['distinct_nodes']} times); names reachable from \"{query}\": "
         + ", ".join(f"`{n}`" for n in b["names_reachable"]) + ".",
         "",
         f"That is the failure ER-KG-Bench measures in aggregate: the exact-match family "
@@ -97,7 +111,8 @@ def render_demo_md(mentions: dict[int, str], eids: dict[int, str], entity_id: st
         "**After — zero-config `goldenmatch.dedupe_df` (`auto+fields`).** Multi-field ER "
         "(name + type + context) unifies the surface forms into one entity.",
         "",
-        f"> {a['distinct_nodes']} organization; names reachable from \"{query}\": "
+        f"> {a['distinct_nodes']} {_noun(entity_type, a['distinct_nodes'])}; names "
+        f"reachable from \"{query}\": "
         + ", ".join(f"`{n}`" for n in a["names_reachable"]) + ".",
         "",
         "Same documents, same query. The answer goes from a duplicated, half-blind entity "
