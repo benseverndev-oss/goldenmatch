@@ -101,9 +101,15 @@ def run(embedder_kind: str | None) -> dict:
         # no-torch) in-house embedder -- the lever the LLM experiment pointed at.
         GoldenMatchEmbAnnAdapter(),
     ]
-    # The semantic-class attacker only activates with a key (else it is the same
-    # as auto+fields with a per-pair LLM step). Skip rather than fake it.
+    # The semantic-class attackers only activate with a key. Skip rather than
+    # fake it; both stay out of the committed table (recorded as prose), since
+    # they are not reproducible without a key.
     if os.environ.get("OPENAI_API_KEY"):
+        # Embedding-ANN with a SEMANTIC embedder (world knowledge), the lever
+        # the offline char-ngram path can't pull: it generates the candidate
+        # pairs string blocking misses for abbreviation + synonym. Threshold
+        # 0.55 from a small sweep (peak overall F1; stable 0.525-0.6 plateau).
+        adapters.append(GoldenMatchEmbAnnAdapter(threshold=0.55, provider="openai"))
         adapters.append(GoldenMatchAdapter(mode="auto_llm"))
     adapters += list(all_modeled(embed_fn=embed_fn))
 

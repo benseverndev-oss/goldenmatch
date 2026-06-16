@@ -11,8 +11,9 @@ runs each framework's *documented-default* dedup rule over a labelled record set
 by 9 failure classes and reports pairwise P/R/F1 per class.
 
 - **Merged:** PR #1023 (the benchmark) → on `main`.
-- **Open (draft):** PR #1025, branch `claude/er-kg-bench-llm-experiment` (the LLM experiment
-  + the `emb-ann` adapter). Rebased clean onto `main`; awaiting the user to mark ready/queue.
+- **Merged:** PR #1025 (the LLM experiment + the offline `emb-ann` adapter) → on `main`.
+- **This branch (`claude/er-kg-bench-emb-openai`):** the semantic-embedding follow-up —
+  `emb-openai` (key-gated, cracks abbreviation + synonym). See "DONE: semantic embedding" below.
 - Location: `packages/python/goldenmatch/benchmarks/er-kg-bench/`.
 
 ## Why this exists (strategic context)
@@ -79,29 +80,30 @@ README.md / TAXONOMY.md           the writeup + the 9-class taxonomy with framew
    knowledge (IBM↔IBM-expansion ~0.05; Coumadin↔warfarin ~0.02).
 
 **Net arc:** string blocking → misses semantics; LLM pair-scorer → wrong tool; embedding-ANN →
-right mechanism, needs a *semantic* embedding to close the last two classes.
+right mechanism, needs a *semantic* embedding to close the last two classes — **and a semantic
+embedding does** (4 below).
 
-## The next task (highest value, explicitly requested direction)
+4. **A semantic embedding closes the last two classes (measured, key-dependent).**
+   `goldenmatch(emb-openai)` swaps OpenAI `text-embedding-3-small` (stdlib HTTP, no torch) into the
+   `emb-ann` path at cosine ≥ 0.55: **abbr 0.18→0.95, synonym 0.0→0.88, overall F1 0.742** (beats
+   the prior leader `auto+fields` 0.674). Only the embedder changed vs `emb-ann`, so the gain is
+   the world knowledge in the vectors. Negative-class precision stays low (`coll_P` 0.39 / `temp_P`
+   0.38 — same as every name-only row; name-only embeddings over-merge colliding surface forms).
+   Key-gated → out of the committed table, recorded as prose in README ("The semantic-embedding
+   result"). Reproduce: `OPENAI_API_KEY=sk-... python erkgbench/run.py`.
 
-**Swap a semantic embedding into `emb-ann` to crack abbreviation + synonym.** The adapter
-(`GoldenMatchEmbAnnAdapter` in `goldenmatch_adapter.py`) is already structured for it: it embeds
-mentions, builds a cosine matrix, thresholds candidate pairs, union-finds. Only the embedder
-needs swapping.
+## DONE: semantic embedding (was "the next task")
 
-Options, in order of "offline-ness":
-- **sentence-transformers** (`all-MiniLM-L6-v2`) — local but needs `torch`. **WARNING: `import
-  torch` hangs/segfaults in this dev environment** (documented in the package CLAUDE.md). You
-  may only be able to validate it in CI / a torch-working box, not interactively here.
-- **goldenmatch inhouse with a TRAINED model** — the in-house embedder can be *trained* from
-  labelled pairs (`goldenmatch.embeddings.inhouse.train_embedder`), but a trained char-n-gram
-  projection still won't learn IBM↔expansion (no shared features) — semantic knowledge is the
-  missing ingredient, not training.
-- **cloud embedding** (OpenAI `text-embedding-3-small` / Vertex) — needs a key/creds.
-
-Add it as a new mode/adapter (e.g. `goldenmatch(emb-st)`), gate it on availability (skip
-gracefully if torch/key absent, like `auto_llm` does), keep it **out of the committed table** if
-it's key/torch-dependent (record as prose, matching how the LLM experiment was handled). Pick the
-threshold by a small sweep but **do not overfit** — report a round, defensible value.
+**Shipped.** `GoldenMatchEmbAnnAdapter` is now parametrised by embedder
+(`provider=None` → the byte-identical offline char-n-gram `emb-ann`; `provider="openai"` → the
+semantic `emb-openai` row via `goldenmatch.embeddings.providers.resolve_provider`). The runner
+adds `emb-openai` (threshold 0.55, from a sweep; flat 0.525–0.6 plateau, not overfit) only when
+`OPENAI_API_KEY` is set, exactly like `auto+llm`. Numbers + the honest precision caveat are in
+finding 4 above and the README. `provider="local"` (sentence-transformers, `all-MiniLM-L6-v2`)
+is wired through the same seam but **unvalidated here** — `import torch` hangs in this dev env, so
+it needs a CI / torch-working box. The OpenAI key lives in Infisical (`OPENAI_API_KEY`, project
+`a99885f0-c5af-4ae1-9dc8-255cc60aa129`, env `dev`); inject via `infisical.cmd run ... -- python ...`
+to avoid leaking it.
 
 ## Other open work (lower priority)
 
