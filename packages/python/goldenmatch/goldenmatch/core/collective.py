@@ -5,8 +5,11 @@ Spec: docs/superpowers/specs/2026-06-16-collective-er-deepening-design.md
 """
 from __future__ import annotations
 
+import logging
 import math
 from collections import defaultdict
+
+_log = logging.getLogger("goldenmatch.collective")
 
 
 def relational_similarity(
@@ -143,9 +146,10 @@ def _coneighbor_pairs(
             while (k + 1) * k // 2 <= fanout_cap:
                 k += 1
             recs = recs[:k]
-            print(
-                f"[collective_resolve] co-neighbor bucket {value!r} truncated: "
-                f"{n_pairs} pairs > fanout_cap={fanout_cap}, using {len(recs)} records"
+            _log.warning(
+                "collective_resolve: fan-out cap %d hit for cluster %r "
+                "(%d pairs > cap, using %d records)",
+                fanout_cap, value, n_pairs, len(recs),
             )
         for i in range(len(recs)):
             for j in range(i + 1, len(recs)):
