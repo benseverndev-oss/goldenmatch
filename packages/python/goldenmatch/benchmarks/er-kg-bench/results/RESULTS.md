@@ -8,22 +8,22 @@ Dataset: **105 records / 32 entities / 9 failure classes**. Embedder: `none (str
 
 | System | P | R | F1 | coll&nbsp;P* | temp&nbsp;P* | ms | det-floor |
 |---|---|---|---|---|---|---|---|
-| goldenmatch(name) | 0.786 | 0.346 | **0.481** | 0.3 | 0.0 | 118.4 | yes |
-| goldenmatch(+ctx) | 1.0 | 0.102 | **0.186** | 1.0 | 1.0 | 106.8 | yes |
+| goldenmatch(auto) | 0.74 | 0.291 | **0.418** | 0.333 | 0.0 | 216.6 | yes |
+| goldenmatch(auto+fields) | 0.624 | 0.732 | **0.674** | 0.37 | 0.353 | 1009.0 | yes |
 | MS-GraphRAG | 0.722 | 0.102 | **0.179** | 0.0 | 1.0 | 0.1 | yes |
 | LightRAG | 0.722 | 0.102 | **0.179** | 0.0 | 1.0 | 0.0 | yes |
 | Cognee | 0.722 | 0.102 | **0.179** | 0.0 | 1.0 | 0.0 | yes |
 | mem0 | 0.812 | 0.102 | **0.182** | 0.0 | 1.0 | 0.1 | yes |
 | Neo4j-KGBuilder | 0.782 | 0.535 | **0.636** | 0.333 | 0.0 | 2.1 | yes |
-| neo4j-graphrag(fuzzy) | 0.444 | 0.717 | **0.548** | 0.389 | 0.381 | 13.5 | yes |
+| neo4j-graphrag(fuzzy) | 0.444 | 0.717 | **0.548** | 0.389 | 0.381 | 14.2 | yes |
 | LlamaIndex-PGI | 0.374 | 0.693 | **0.486** | 0.357 | 0.286 | 1.8 | yes |
 
 ## Per-class F1
 
 | System | abbr | nick | synm | coll* | xling | typo | suffix | temp* | xdoc |
 |---|---|---|---|---|---|---|---|---|---|
-| goldenmatch(name) | 0.182 | 0.125 | 0.0 | 0.214 | 0.2 | 0.636 | 0.9 | 0.0 | 1.0 |
-| goldenmatch(+ctx) | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.125 | 0.0 | 0.0 | 1.0 |
+| goldenmatch(auto) | 0.462 | 0.235 | 0.0 | 0.267 | 0.2 | 0.75 | 0.37 | 0.0 | 1.0 |
+| goldenmatch(auto+fields) | 0.667 | 0.75 | 0.2 | 0.444 | 0.839 | 1.0 | 1.0 | 0.48 | 1.0 |
 | MS-GraphRAG | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.125 | 0.0 | 0.0 | 1.0 |
 | LightRAG | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.125 | 0.0 | 0.0 | 1.0 |
 | Cognee | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.125 | 0.0 | 0.0 | 1.0 |
@@ -34,8 +34,8 @@ Dataset: **105 records / 32 entities / 9 failure classes**. Embedder: `none (str
 
 ## Documented defaults (what each row runs)
 
-- **goldenmatch(name)** — dedupe_df fuzzy={name} @ 0.82 (probabilistic multi-field scoring + blocking + clustering)
-- **goldenmatch(+ctx)** — dedupe_df fuzzy={name+context} @ 0.82 (probabilistic multi-field scoring + blocking + clustering)
+- **goldenmatch(auto)** — zero-config dedupe_df(name) -- auto-config picks the strategy
+- **goldenmatch(auto+fields)** — zero-config dedupe_df(name+type+context) -- auto-config, multi-field
 - **MS-GraphRAG** — exact title match; ER step removed (finalize_entities seen_titles set; discussion #778, data-loss #1718)
 - **LightRAG** — exact normalized-name dict key, no fuzzy/embedding at merge (operate.py _merge_nodes_then_upsert; #1323, cross-doc #485)
 - **Cognee** — content-hash + exact name; difflib cutoff=0.8 only vs a user ontology (empty by default) (matching_strategies.py; #1831)

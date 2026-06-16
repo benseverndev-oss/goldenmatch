@@ -21,21 +21,21 @@
   ],
   "results": [
     {
-      "name": "goldenmatch(name)",
-      "defaults": "dedupe_df fuzzy={name} @ 0.82 (probabilistic multi-field scoring + blocking + clustering)",
+      "name": "goldenmatch(auto)",
+      "defaults": "zero-config dedupe_df(name) -- auto-config picks the strategy",
       "overall": {
-        "precision": 0.786,
-        "recall": 0.346,
-        "f1": 0.481
+        "precision": 0.74,
+        "recall": 0.291,
+        "f1": 0.418
       },
       "per_class_f1": {
-        "abbreviation": 0.182,
-        "nickname_alias": 0.125,
+        "abbreviation": 0.462,
+        "nickname_alias": 0.235,
         "synonym_brand": 0.0,
-        "same_name_collision": 0.214,
+        "same_name_collision": 0.267,
         "cross_lingual": 0.2,
-        "typo": 0.636,
-        "org_suffix": 0.9,
+        "typo": 0.75,
+        "org_suffix": 0.37,
         "temporal_version": 0.0,
         "cross_document_exact": 1.0
       },
@@ -43,47 +43,47 @@
         "abbreviation": 1.0,
         "nickname_alias": 1.0,
         "synonym_brand": 1.0,
-        "same_name_collision": 0.3,
+        "same_name_collision": 0.333,
         "cross_lingual": 1.0,
         "typo": 1.0,
         "org_suffix": 1.0,
         "temporal_version": 0.0,
         "cross_document_exact": 1.0
       },
-      "time_ms": 118.4,
+      "time_ms": 216.6,
       "deterministic_floor": true
     },
     {
-      "name": "goldenmatch(+ctx)",
-      "defaults": "dedupe_df fuzzy={name+context} @ 0.82 (probabilistic multi-field scoring + blocking + clustering)",
+      "name": "goldenmatch(auto+fields)",
+      "defaults": "zero-config dedupe_df(name+type+context) -- auto-config, multi-field",
       "overall": {
-        "precision": 1.0,
-        "recall": 0.102,
-        "f1": 0.186
+        "precision": 0.624,
+        "recall": 0.732,
+        "f1": 0.674
       },
       "per_class_f1": {
-        "abbreviation": 0.0,
-        "nickname_alias": 0.0,
-        "synonym_brand": 0.0,
-        "same_name_collision": 0.0,
-        "cross_lingual": 0.0,
-        "typo": 0.125,
-        "org_suffix": 0.0,
-        "temporal_version": 0.0,
+        "abbreviation": 0.667,
+        "nickname_alias": 0.75,
+        "synonym_brand": 0.2,
+        "same_name_collision": 0.444,
+        "cross_lingual": 0.839,
+        "typo": 1.0,
+        "org_suffix": 1.0,
+        "temporal_version": 0.48,
         "cross_document_exact": 1.0
       },
       "per_class_precision": {
         "abbreviation": 1.0,
         "nickname_alias": 1.0,
         "synonym_brand": 1.0,
-        "same_name_collision": 1.0,
+        "same_name_collision": 0.37,
         "cross_lingual": 1.0,
         "typo": 1.0,
         "org_suffix": 1.0,
-        "temporal_version": 1.0,
+        "temporal_version": 0.353,
         "cross_document_exact": 1.0
       },
-      "time_ms": 106.8,
+      "time_ms": 1009.0,
       "deterministic_floor": true
     },
     {
@@ -281,7 +281,7 @@
         "temporal_version": 0.381,
         "cross_document_exact": 1.0
       },
-      "time_ms": 13.5,
+      "time_ms": 14.2,
       "deterministic_floor": true
     },
     {

@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -86,11 +87,17 @@ def run(embedder_kind: str | None) -> dict:
     records, entity_ids, failure_classes = load_records()
     embed_fn = make_embedder(embedder_kind)
 
+    # Dogfood: goldenmatch runs zero-config (auto-config picks the strategy),
+    # the same posture as every framework running at its documented default.
     adapters = [
-        GoldenMatchAdapter(use_context=False),
-        GoldenMatchAdapter(use_context=True),
-        *all_modeled(embed_fn=embed_fn),
+        GoldenMatchAdapter(mode="auto"),
+        GoldenMatchAdapter(mode="auto_fields"),
     ]
+    # The semantic-class attacker only activates with a key (else it is the same
+    # as auto+fields with a per-pair LLM step). Skip rather than fake it.
+    if os.environ.get("OPENAI_API_KEY"):
+        adapters.append(GoldenMatchAdapter(mode="auto_llm"))
+    adapters += list(all_modeled(embed_fn=embed_fn))
 
     rows = []
     for ad in adapters:

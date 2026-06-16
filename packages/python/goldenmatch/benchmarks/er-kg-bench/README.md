@@ -45,9 +45,11 @@ No API keys, no framework installs. Only deps: `polars`, `rapidfuzz`,
   flag the LLM layer's known costs (non-determinism; O(n) LLM calls →
   token-overflow/dropped episodes, Graphiti #1275; ~$0.80/40-chats #467) rather
   than simulate it.
-* **goldenmatch runs at a sensible default too** — name-only for the
-  apples-to-apples string comparison, and name+context to show the multi-field
-  capability. No special-casing.
+* **goldenmatch is dogfooded** — the rows call zero-config `dedupe_df(df)` and
+  let auto-config pick the strategy, the same posture as every framework at its
+  default. No hand-tuned threshold. `auto` = name only; `auto+fields` = name +
+  type + context; `auto+llm` (runner adds it only with `OPENAI_API_KEY`) turns
+  on the per-pair LLM scorer the product's auto-config already reaches for.
 
 ## What the first run shows (and what it doesn't)
 
@@ -56,21 +58,28 @@ The committed `results/RESULTS.md` is an honest baseline, not a victory lap:
 * **Exact-match family** (GraphRAG/LightRAG/Cognee/mem0) gets near-zero recall
   on everything except identical strings, **and precision 0.0 on
   `same_name_collision`** — it merges the two distinct "First National Bank"s
-  (#1133 reproduced).
+  (#1133 reproduced). Its `temporal_version` precision of 1.0 is trivial: it
+  merges so little that it never wrongly merges anything.
 * **Fuzzy resolvers** (neo4j variants) trade that for recall but score **0.37–
   0.44 precision** — they over-merge collisions *and* BTC-2020-vs-2024.
-* **The semantic classes (`abbreviation`, `synonym_brand`, `cross_lingual`)
-  defeat every string method here, including goldenmatch's string-only config**
-  — "IBM"→"International Business Machines" has no string signal. Winning these
-  needs embedding/LLM evidence, which is the next adapter (see below).
-* **goldenmatch(+ctx) is the only row that keeps precision 1.0 on both negative
-  classes** — multi-field disambiguation working exactly where a single score
-  can't. Its recall is conservative at the default threshold; tuning + the
-  semantic scorer are the open work.
+* **goldenmatch(auto+fields) leads overall F1 and is the only system scoring
+  non-zero on `synonym_brand`**, with the top `cross_lingual` and
+  `abbreviation` — because multi-field auto-config exploits the `context` field
+  the frameworks' name-only dedup ignores. **Read the magnitude as optimistic:**
+  this synthetic dataset's per-entity context is cleanly separable, so context
+  acts almost like a hidden label; real extracted context is noisier. The
+  honest control is `goldenmatch(auto)` name-only, which **also scores 0.0 on
+  synonyms** — name strings alone don't carry "Coumadin = warfarin".
+* **The negative classes are still goldenmatch's weak spot here:** zero-config
+  over-merges collisions/temporal versions (`coll_P` ~0.37). A real probability
+  threshold + the quality-gated review path are the fix; the LLM scorer
+  (`auto+llm`) is the lever for the semantic classes name+context can't reach.
 
-In other words, the bench already localises goldenmatch's differentiation
-(multi-field precision; and, once wired, semantic recall) and its current gap
-(string-only recall ties the fuzzy resolvers). That's the point of having it.
+So the bench localises goldenmatch's differentiation (multi-field evidence the
+name-only frameworks can't use) honestly, alongside its current gaps
+(negative-class precision; name-only semantic recall). That's the point of
+having it — and the dogfood makes the comparison the one a user would actually
+get, not a hand-picked threshold.
 
 ## Layout
 
@@ -88,9 +97,11 @@ TAXONOMY.md            the nine failure classes, with framework citations
 * **Add a failure class / more entities:** edit `seeds.jsonl`, re-run
   `generate.py`. Negative classes (distinct entities, colliding strings) are
   the precision tests — keep adding them.
-* **Add the semantic adapter:** a `goldenmatch(embed)` / `goldenmatch(llm)`
-  configuration to attack abbreviation/synonym/cross-lingual — the classes no
-  string default touches. Highest-value next step.
+* **Run the LLM dogfood:** set `OPENAI_API_KEY` and the runner adds
+  `goldenmatch(auto+llm)` — the configuration that attacks abbreviation /
+  synonym / cross-lingual via real semantic knowledge. Capture that run to show
+  the semantic-class lift name+context can't reach. (An embedding-scorer dogfood
+  row is the analogous offline option.)
 * **Add a *live* adapter:** for systems that resolve deterministically without
   an LLM (neo4j-graphrag rapidfuzz/spaCy resolvers, LlamaIndex Cypher), a real
   adapter behind an optional extra can corroborate the model.
