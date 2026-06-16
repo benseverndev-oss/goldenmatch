@@ -49,3 +49,13 @@ Each example is intentionally minimal. For production:
 - **Run as Airflow DAGs** — `examples/airflow/` has 12 production-shaped DAGs that wrap these patterns with retries, idempotency, and observability.
 - **Pin match config** — keep your tuned `GoldenMatchConfig` in YAML and check it in. `goldenpipe` reads YAML directly.
 - **Add review queue + Learning Memory** — see 05 + the `golden_suite_review_worker.py` Airflow DAG for the loop.
+
+## Related: the ER-KG-Bench GraphRAG demo
+
+For a worked before/after showing how entity-resolution quality flips an agent/KG
+answer — a fragmented entity (IBM split across nodes by an exact-match KG) gives an
+incomplete answer; zero-config goldenmatch resolves it and the answer completes —
+see the benchmark companion at
+`packages/python/goldenmatch/benchmarks/er-kg-bench/demo/` (committed narrative:
+`demo/DEMO.md`). Unlike the scripts above it runs in CI rather than as a local
+quickstart, because the goldenmatch rows are memory-heavy.

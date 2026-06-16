@@ -174,6 +174,10 @@ TAXONOMY.md            the nine failure classes, with framework citations
 * **Correct a default:** if you find a modelled constant has drifted from
   source, fix it in `adapters/modeled.py` — the citation is right there.
 
-> Companion artifact: the before/after GraphRAG demo (build a KG → wrong agent
-> answer from fragmented/over-merged entities → resolve → correct answer) draws
-> its numbers from this harness. See the project roadmap.
+> Companion artifact: the before/after GraphRAG demo lives in `demo/`. It shows a
+> wrong agent answer from a fragmented entity (IBM split across nodes by an
+> exact-match KG), resolved with zero-config goldenmatch, then correct. The
+> committed before/after narrative is [`demo/DEMO.md`](demo/DEMO.md); regenerate it
+> with `python demo/run_demo.py` (the key-gated over-merge tier prints when
+> `OPENAI_API_KEY` is set). Its cited exact-match-family F1 is read live from
+> `results/results.json`, so it never drifts from the scoreboard above.
