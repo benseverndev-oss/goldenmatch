@@ -71,14 +71,25 @@ jobs:
         run: "$GITHUB_WORKSPACE/.venv/bin/python demo/run_demo.py"
 
       - name: Upload demo artifact (commit DEMO.md from here on first run)
+        if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
         with:
           name: er-kg-demo
           path: ${{ env.BENCH_DIR }}/demo/DEMO.md
 
-      - name: Check demo drift (no-op until DEMO.md is committed)
-        working-directory: ${{ env.BENCH_DIR }}
-        run: "$GITHUB_WORKSPACE/.venv/bin/python demo/run_demo.py --check"
+      - name: Check demo DEMO.md is committed and current
+        run: |
+          set -euo pipefail
+          DEMO="$BENCH_DIR/demo/DEMO.md"
+          # The regenerate step above just wrote DEMO.md from a fresh run. If that
+          # differs from the committed copy (or it is untracked), the demo is stale.
+          if [ -n "$(git status --porcelain -- "$DEMO")" ]; then
+            echo "::error::$DEMO is uncommitted or stale -- run 'python demo/run_demo.py' and commit the result."
+            git --no-pager diff -- "$DEMO" || true
+            git status --porcelain -- "$DEMO"
+            exit 1
+          fi
+          echo "$DEMO is committed and matches a fresh run."
 
       - name: Run benchmark (keyed -- emb-openai + auto+llm; prose only)
         working-directory: ${{ env.BENCH_DIR }}
