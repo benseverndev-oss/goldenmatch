@@ -136,5 +136,66 @@ def test_match_quality_sql_no_floor_errors():
             gt_a="id_a", gt_b="id_b", min_f1=none, min_precision=none, min_recall=none)
 
 
+# ---------------------------------------------------------------------------
+# Task 3: DuckDB execution tests (the load-bearing correctness check)
+# ---------------------------------------------------------------------------
+
+duckdb = pytest.importorskip("duckdb")
+
+
+def _run(sql_for):
+    con = duckdb.connect()
+    con.execute("CREATE TABLE pred AS SELECT * FROM (VALUES (1,2),(2,3),(4,5)) v(id_a,id_b)")
+    con.execute("CREATE TABLE gt AS SELECT * FROM (VALUES (1,2),(2,3),(6,7)) v(id_a,id_b)")
+    return con.sql(sql_for).fetchall()
+
+
+def test_metrics_fail_below_floor():
+    h = _load_match_quality_macros()
+    sql = h.goldenmatch_match_quality_sql(model="pred", ground_truth="gt", input="pairs",
+        pairs_a="id_a", pairs_b="id_b", record_id="record_id", cluster_id="cluster_id",
+        gt_a="id_a", gt_b="id_b", min_f1=0.9, min_precision=none, min_recall=none)
+    rows = _run(sql)                      # f1 = 2/3 ~= 0.667 < 0.9 -> 1 failing row
+    assert len(rows) == 1
+    tp, fp, fn, precision, recall, f1 = rows[0]
+    assert (tp, fp, fn) == (2, 1, 1)
+    assert abs(f1 - 2/3) < 1e-9
+
+
+def test_metrics_pass_above_floor():
+    h = _load_match_quality_macros()
+    sql = h.goldenmatch_match_quality_sql(model="pred", ground_truth="gt", input="pairs",
+        pairs_a="id_a", pairs_b="id_b", record_id="record_id", cluster_id="cluster_id",
+        gt_a="id_a", gt_b="id_b", min_f1=0.5, min_precision=none, min_recall=none)
+    assert len(_run(sql)) == 0            # f1 0.667 >= 0.5 -> pass (0 rows)
+
+
+def test_clusters_input_expands_pairs():
+    h = _load_match_quality_macros()
+    con = duckdb.connect()
+    # cluster 10 = {1,2,3} -> pairs (1,2)(1,3)(2,3); cluster 20 = {4,5} -> (4,5)
+    con.execute("CREATE TABLE c AS SELECT * FROM (VALUES (10,1),(10,2),(10,3),(20,4),(20,5)) v(cluster_id,record_id)")
+    con.execute("CREATE TABLE gt AS SELECT * FROM (VALUES (1,2),(1,3),(2,3),(4,5)) v(id_a,id_b)")
+    sql = h.goldenmatch_match_quality_sql(model="c", ground_truth="gt", input="clusters",
+        pairs_a="id_a", pairs_b="id_b", record_id="record_id", cluster_id="cluster_id",
+        gt_a="id_a", gt_b="id_b", min_f1=0.99, min_precision=none, min_recall=none)
+    assert len(con.sql(sql).fetchall()) == 0   # perfect match -> f1=1.0 -> pass
+
+
+def test_empty_predictions_fails():
+    h = _load_match_quality_macros()
+    con = duckdb.connect()
+    con.execute("CREATE TABLE pred(id_a BIGINT, id_b BIGINT)")   # empty
+    con.execute("CREATE TABLE gt AS SELECT * FROM (VALUES (1,2),(2,3)) v(id_a,id_b)")
+    sql = h.goldenmatch_match_quality_sql(model="pred", ground_truth="gt", input="pairs",
+        pairs_a="id_a", pairs_b="id_b", record_id="record_id", cluster_id="cluster_id",
+        gt_a="id_a", gt_b="id_b", min_recall=0.01, min_f1=none, min_precision=none)
+    rows = con.sql(sql).fetchall()
+    assert len(rows) == 1                       # recall 0.0 < 0.01 -> fail
+    tp, fp, fn, precision, recall, f1 = rows[0]
+    assert (tp, fp, fn) == (0, 0, 2)
+    assert recall == 0.0 and precision is None and f1 is None   # COALESCE -> tp=0; recall=0.0; P/f1 NULL
+
+
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__, "-v"])
