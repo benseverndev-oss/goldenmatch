@@ -18,6 +18,10 @@ Suite monorepo and is consumed from there (not published to PyPI).
   (macros) and a `pip install "git+...#subdirectory=..."` for the Python helper.
 
 ### Added
+- **`goldenmatch_match_quality` dbt test.** A pure-SQL generic test that fails the
+  build when a dedupe model's pairwise precision/recall/F1 (vs a ground-truth pairs
+  table) drops below configured floors. Handles the `pairs` and `clusters` output
+  shapes; portable (no UDF); `input: clusters|pairs`, `min_f1`/`min_precision`/`min_recall`.
 - **Zero-config Fellegi-Sunter dedupe.** `probabilistic=true` on the
   `goldenmatch_dedupe` materialization (and `run_goldenmatch_dedupe(probabilistic=True)`)
   builds an FS model from the data with no hand-written config; `match_config` is
