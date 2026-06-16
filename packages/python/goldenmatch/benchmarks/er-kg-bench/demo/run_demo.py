@@ -14,15 +14,19 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 _BENCH_ROOT = Path(__file__).resolve().parent.parent
 if str(_BENCH_ROOT) not in sys.path:
     sys.path.insert(0, str(_BENCH_ROOT))
 
 from erkgbench.run import load_records  # noqa: E402  (pulls goldenmatch)
-from erkgbench.adapters import GoldenMatchAdapter, Record  # noqa: E402
+from erkgbench.adapters import GoldenMatchAdapter  # noqa: E402
 from erkgbench.adapters.modeled import GraphRAGModeled  # noqa: E402
 from demo import narrative as nv  # noqa: E402  # pyright: ignore[reportAttributeAccessIssue]  # namespace pkg, resolves at runtime
+
+if TYPE_CHECKING:
+    from erkgbench.adapters import Record
 
 DEMO_PATH = _BENCH_ROOT / "demo" / "DEMO.md"
 RESULTS_JSON = _BENCH_ROOT / "results" / "results.json"
