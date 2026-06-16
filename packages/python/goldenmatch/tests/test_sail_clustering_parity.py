@@ -143,3 +143,48 @@ def test_sail_wcc_scale_junction(spark):
     pairs_df = spark.createDataFrame(edges, ["a", "b"])
     out = connected_components_scale(pairs_df, ids_df, id_col="__row_id__")
     assert _sail_partition(out) == _reference_partition(ids, edges)
+
+
+# --- SCRATCH: minimal repro for the Sail unionByName physical/logical field
+# --- metadata desync (upstream bug report). NOT a permanent test. The union
+# --- collects fine; a downstream JOIN trips "Physical input schema should be
+# --- the same as the one converted from logical input schema. Differences:
+# --- field metadata ... SPARK::metadata::json". Variants bisect the trigger.
+def test_repro_union_v1_minimal(spark):
+    a = spark.createDataFrame([(0,)], ["member_id"])
+    b = spark.createDataFrame([(1,)], ["member_id"])
+    u = a.unionByName(b)
+    src = spark.createDataFrame([(0, "x"), (1, "y")], ["member_id", "name"])
+    u.join(src, on="member_id", how="inner").collect()
+
+
+def test_repro_union_v2_alias_one_side(spark):
+    from pyspark.sql import functions as F
+
+    a = spark.createDataFrame([(0, 9)], ["node", "x"]).select(
+        F.col("node").alias("member_id")
+    )
+    b = spark.createDataFrame([(1,)], ["member_id"])
+    u = a.unionByName(b)
+    src = spark.createDataFrame([(0, "x"), (1, "y")], ["member_id", "name"])
+    u.join(src, on="member_id", how="inner").collect()
+
+
+def test_repro_union_v3_faithful(spark):
+    from pyspark.sql import functions as F
+
+    lab = spark.createDataFrame([(0, 0), (1, 0)], ["node", "label"])
+    edge_assign = lab.select(
+        F.col("label").cast("long").alias("cluster_id"),
+        F.col("node").cast("long").alias("member_id"),
+    )
+    ids = spark.createDataFrame([(0,), (1,), (2,)], ["__row_id__"])
+    all_ids = ids.select(F.col("__row_id__").cast("long").alias("member_id"))
+    singletons = all_ids.join(
+        edge_assign.select("member_id"), on="member_id", how="left_anti"
+    ).select(F.col("member_id").alias("cluster_id"), F.col("member_id"))
+    u = edge_assign.unionByName(singletons)
+    src = spark.createDataFrame(
+        [(0, "x"), (1, "y"), (2, "z")], ["member_id", "name"]
+    )
+    u.join(src, on="member_id", how="inner").collect()
