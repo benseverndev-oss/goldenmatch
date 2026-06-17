@@ -100,9 +100,22 @@ blocking:
 golden_rules:
   default_strategy: most_complete
   max_cluster_size: 100
+  field_group_detection: false   # true enables auto-detection of correlated field groups
+  field_groups:
+    - name: mailing_address
+      columns: [street, city, state, zip]
+      category: address            # optional hint
+      strategy: most_complete      # most_complete | source_priority | most_recent
   field_rules:
     email:
       strategy: majority_vote
+    phone:
+      - when: "state in ['CA', 'NY']"
+        strategy: most_recent
+        date_column: updated_at
+        validate: nanp
+      - strategy: source_priority  # default clause (no when:), must be last
+        source_priority: [crm, billing]
     first_name:
       strategy: source_priority
       source_priority: [crm, marketing]
@@ -277,6 +290,66 @@ golden_rules:
     email: { strategy: majority_vote }
     name: { strategy: source_priority, source_priority: [crm, erp] }
 ```
+
+### Lock-step field groups
+
+By default GoldenMatch picks the best value for each column independently. That can produce "Frankenstein" records where, say, a street address comes from one source while the city and zip come from another. `field_groups` prevents this by pinning a set of columns to a single winning source record.
+
+```yaml
+golden_rules:
+  default_strategy: most_complete
+  field_groups:
+    - name: mailing_address
+      columns: [street, city, state, zip]   # must include >= 2 source columns
+      category: address                      # optional hint (address | person_name | contact)
+      strategy: most_complete                # most_complete | source_priority | most_recent
+      # For strategy: most_recent, also set:
+      # date_column: updated_at
+      # For strategy: source_priority, also set:
+      # source_priority: [crm, billing]
+```
+
+The winner is chosen by the group's `strategy` applied across the group's columns as a unit. All columns in the group then take their values from that one record -- including that record's nulls. There is no column-by-column fallback within a group (strict lock-step).
+
+Two constraints the config loader enforces:
+
+- Columns must be disjoint across groups (a column can belong to at most one group).
+- A column in a `field_groups` entry cannot also have its own `field_rules` entry.
+
+**Auto-detection (optional, default off).** Set `field_group_detection: true` in `golden_rules`, or export `GOLDENMATCH_FIELD_GROUP_SURVIVORSHIP=1`, to let auto-config propose groups. The heuristic is conservative -- it targets well-known correlated patterns (mailing address, person name, contact block) and optionally uses a GoldenCheck domain pack for infermap-fed detection. Explicitly declared `field_groups` are always honored regardless of whether the flag is set.
+
+<Note>
+  Correlated survivorship resolves on the driver (the in-memory golden builder). The Ray Phase-5 streaming pipeline (`GOLDENMATCH_DISTRIBUTED_PIPELINE=2`) and the Sail backend reject configs that include `field_groups` or conditional `field_rules` with a clear error. Run those configs on the in-memory path.
+</Note>
+
+### Conditional and validated field rules
+
+A `field_rules` entry can be a list of clauses instead of a single strategy. The first clause whose `when:` predicate is satisfied wins; the last clause must have no `when:` and acts as the default.
+
+```yaml
+golden_rules:
+  field_rules:
+    phone:
+      - when: "state in ['CA', 'NY']"
+        strategy: most_recent
+        date_column: updated_at
+        validate: nanp
+      - strategy: source_priority   # default clause (no when:), must be last
+        source_priority: [crm, billing]
+```
+
+**`when:` predicate syntax.** The predicate is a safe boolean mini-language, not Python `eval`. Supported operators: `== != < <= > >= in not in and or not`. Names resolve to already-resolved golden fields. Literals: list/tuple, numeric, string, boolean. Unsupported: function calls, attribute access, indexing, arithmetic. If a predicate references a field that is absent or `None` for a given cluster, the predicate is treated as unsatisfied (that clause is skipped) and evaluation continues to the next clause.
+
+**`validate:`.** An optional candidate filter applied before the merge strategy. Candidates that fail the validator are dropped from consideration before the strategy runs (fail-open: an unknown validator name drops nothing). Friendly aliases:
+
+| Alias | GoldenFlow validator |
+|-------|---------------------|
+| `nanp` or `phone` | `phone_validate` |
+| `email` | `email_validate` |
+| `npi` | `npi_validate` |
+| `date` | `date_validate` |
+
+**Lineage.** The audit trail records how each field's value was chosen. For a field group the entry reads like `street, city, state, zip promoted together from record 7 via most_complete (group 'mailing_address')`. For a conditional rule it reads like `phone used most_recent because state in ['CA', 'NY']`.
 
 ## Standardization
 
