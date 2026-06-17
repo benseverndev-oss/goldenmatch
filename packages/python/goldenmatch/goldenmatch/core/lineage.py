@@ -130,6 +130,34 @@ def build_lineage(
     return lineage
 
 
+def golden_provenance_for_run(data_df, clusters, rules) -> list | None:
+    """Build golden ClusterProvenance for a finished run from the source frame +
+    clusters dict (the inputs the standalone lineage/explain surfaces have).
+    Fail-open: returns None on any error. Returns None when there are no
+    multi-member clusters."""
+    try:
+        import polars as pl
+
+        from goldenmatch.core.golden import (
+            build_golden_records_batch,
+            golden_records_to_provenance,
+        )
+        member_rows = [
+            {"__row_id__": rid, "__cluster_id__": cid}
+            for cid, cinfo in clusters.items()
+            if cinfo.get("size", len(cinfo.get("members", []))) > 1
+            for rid in cinfo.get("members", [])
+        ]
+        if not member_rows:
+            return None
+        multi_df = pl.DataFrame(member_rows).join(data_df, on="__row_id__", how="inner")
+        rows = build_golden_records_batch(multi_df, rules, provenance=True)
+        return golden_records_to_provenance(rows, clusters, rules)
+    except Exception:
+        logger.warning("lineage: golden provenance unavailable; skipping")
+        return None
+
+
 def _serialize_provenance(provenance: list) -> list[dict]:
     """Serialize ClusterProvenance dataclasses to dicts."""
     from dataclasses import asdict
