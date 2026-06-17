@@ -90,18 +90,23 @@ def test_combined_group_conditional_validate():
     """A single GoldenRulesConfig with field_group + conditional field_rules + validate.
 
     Setup (3 rows, cluster 1):
-      Row 10 (crm):     street long, state=CA, phone=valid,  dt=2024-01-01, score=valid_short
-      Row 11 (billing): street short, state=CA, phone=valid2, dt=2020-01-01, score=NOT_VALID_VERY_LONG
-      Row 12 (web):     street mid, state=CA, phone=valid3,  dt=2022-01-01, score=valid_medium
+      Row 10 (crm):     street long, city populated, state=CA, zip populated -> 4/4 group cols
+      Row 11 (billing): street short, city populated, state=CA, zip=None     -> 3/4 group cols
+      Row 12 (web):     street mid,   city populated, state=CA, zip=None     -> 3/4 group cols
 
-    field_groups: addr=[street,city,state,zip] -- lock-step, row 10 wins (4 populated vs 3/2)
+    field_groups: addr=[street,city,state,zip] -- lock-step, row 10 wins STRICTLY (4/4 vs 3/4).
     field_rules:
-      phone: [when state in [CA] -> most_recent, else source_priority crm]
+      phone: [when state in [CA] -> most_recent (dt), else source_priority billing-first]
+             conditional branch picks row 10 (dt=2024, most recent).
+             fallback source_priority picks row 11 (billing before crm).
+             The two branches pick DIFFERENT phones, so the assertion isolates the
+             conditional branch.
       score: most_complete + validate (fake validator: must start with 'valid')
 
     Expected:
-      - All addr fields from row 10 (4/4 populated wins over 3/4 and 2/4).
-      - phone: state resolved as CA -> most_recent -> dt=2024 row -> row 10 -> crm phone.
+      - All addr fields from row 10 (4/4 populated wins strictly over 3/4 rows 11 and 12).
+      - phone: state resolved as CA -> most_recent -> dt=2024 row -> row 10 phone (2125550100).
+               NOT row 11's phone (9995550100), which the fallback branch would have picked.
       - score: NOT_VALID_VERY_LONG is the longest but fails validate -> dropped to None ->
                next longest valid candidate wins (valid_medium or valid_short depending on length).
                The key assertion is that NOT_VALID_VERY_LONG is NOT in the result.
@@ -117,7 +122,8 @@ def test_combined_group_conditional_validate():
         ],
         "city": ["Los Angeles", "LA", "Los Angeles"],
         "state": ["CA", "CA", "CA"],
-        "zip": ["90001", "90001", None],
+        # Row 10 (crm) has zip populated; rows 11+12 do not -> 4/4 vs 3/4 (no tie).
+        "zip": ["90001", None, None],
         "phone": ["2125550100", "9995550100", "2125550200"],
         "dt": ["2024-01-01", "2020-01-01", "2022-01-01"],
         "score": ["valid_short", "NOT_VALID_VERY_LONG_INDEED", "valid_medium_ok"],
@@ -147,9 +153,12 @@ def test_combined_group_conditional_validate():
                     date_column="dt",
                     when="state in ['CA', 'NY']",
                 ),
+                # Fallback order is billing-first so it would pick row 11 (phone=9995550100).
+                # The conditional branch picks row 10 (phone=2125550100, dt=2024 most recent).
+                # The two branches diverge, so asserting 2125550100 isolates the conditional path.
                 GoldenFieldRule(
                     strategy="source_priority",
-                    source_priority=["crm", "billing", "web"],
+                    source_priority=["billing", "crm", "web"],
                 ),
             ],
             "score": GoldenFieldRule(
@@ -170,9 +179,18 @@ def test_combined_group_conditional_validate():
     assert len(set(addr_sids)) == 1, f"addr group not lock-stepped: {addr_sids}"
     assert addr_sids[0] == 10
 
-    # Assertion 2: phone picks the conditional branch (state=CA -> most_recent -> row 10).
-    assert rec["phone"]["value"] == "2125550100"
-    assert rec["phone"]["source_row_id"] == 10
+    # Assertion 2: phone picks the CONDITIONAL branch (state=CA -> most_recent -> row 10,
+    # dt=2024-01-01). The fallback source_priority would pick row 11 (billing-first,
+    # phone=9995550100). Asserting 2125550100 AND source_row_id==10 confirms the conditional
+    # branch fired; if it fell through to the fallback, BOTH assertions would fail.
+    assert rec["phone"]["value"] == "2125550100", (
+        f"Expected conditional branch phone 2125550100, got {rec['phone']['value']!r}. "
+        "If fallback fired instead it would have returned 9995550100 (billing row 11)."
+    )
+    assert rec["phone"]["source_row_id"] == 10, (
+        f"Expected source_row_id=10 (crm, most_recent dt=2024), got {rec['phone']['source_row_id']}. "
+        "If fallback fired instead it would have returned source_row_id=11 (billing)."
+    )
 
     # Assertion 3: validate fired -- NOT_VALID_VERY_LONG_INDEED (longest) is not the winner.
     assert rec["score"]["value"] != "NOT_VALID_VERY_LONG_INDEED"
