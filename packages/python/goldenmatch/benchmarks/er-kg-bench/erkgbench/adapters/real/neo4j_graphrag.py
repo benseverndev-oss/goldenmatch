@@ -5,6 +5,7 @@ from erkgbench.adapters.base import Record
 from erkgbench.real_resolvers import (
     neo4j_graphrag_exact_clusters,
     neo4j_graphrag_fuzzy_clusters,
+    neo4j_graphrag_spacy_clusters,
 )
 
 
@@ -39,3 +40,22 @@ class RealNeo4jGraphRAGExact:
     def resolve(self, records: list[Record]) -> list[list[int]]:
         items = [(r.index, r.mention, r.entity_type) for r in records]
         return neo4j_graphrag_exact_clusters(items)
+
+
+class RealNeo4jGraphRAGSpaCy:
+    name = "neo4j-graphrag(spacy)*"
+    defaults = (
+        "REAL SpaCySemanticMatchResolver: spaCy doc-vector cosine >= 0.8 per "
+        "entity-label, _consolidate_sets (library decision code; en_core_web_lg "
+        "vectors; Neo4j+APOC storage stubbed)"
+    )
+    deterministic = True
+    # real-inproc like FuzzyMatchResolver: SpaCySemanticMatchResolver subclasses
+    # BasePropertySimilarityResolver and exposes a callable compute_similarity
+    # (spaCy doc-vector cosine) + _consolidate_sets, so the library's own decision
+    # code runs in-process (only Neo4j+APOC persistence is stubbed).
+    fidelity = "real-inproc"
+
+    def resolve(self, records: list[Record]) -> list[list[int]]:
+        items = [(r.index, r.mention, r.entity_type) for r in records]
+        return neo4j_graphrag_spacy_clusters(items)

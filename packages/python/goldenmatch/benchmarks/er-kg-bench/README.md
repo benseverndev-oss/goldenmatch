@@ -66,34 +66,50 @@ The committed `results/RESULTS.md` runs on the **real corpus** (Wikidata + RxNor
 QID/RxCUI ground truth), so the numbers are defensible rather than invented:
 
 * **The exact-match family collapses.** GraphRAG / LightRAG / Cognee / mem0 score
-  **F1 0.089** — they match only byte-identical strings, so on real surface-form
+  **F1 0.066** — they match only byte-identical strings, so on real surface-form
   variation (IBM vs International Business Machines, München vs Monaco di Baviera)
-  they recall almost nothing (R 0.047); their one non-zero class is
+  they recall almost nothing (R 0.034); their one non-zero class is
   `cross_document_exact` (the same string repeated). Four popular KG/agent-memory
   stacks effectively **cannot resolve real entity variants** — the "built-in dedup
   is shallow" thesis made concrete.
-* **Fuzzy resolvers do better but over-merge.** neo4j-graphrag (0.448) and
-  LlamaIndex (0.315) buy recall with a single similarity threshold and pay in
-  precision (0.35 / 0.22) — they wrongly merge the two distinct "Georgia"s and
-  consecutive World-Cup editions. Neo4j's `cosine>0.97 OR edit-dist<3 OR substring`
-  lands at **0.554, the best framework default**.
-* **goldenmatch(auto+fields) leads at F1 0.721** — **+16.7pp over the best framework
-  default** — because zero-config multi-field ER (name + type + context) is a
-  different mechanism from one threshold: abbreviation 0.77, cross-lingual 0.77,
-  typo / org-suffix 1.0, nickname 0.85. `context` is the real Wikidata one-line
-  description — discriminating, but not a hidden label.
-* **The honest gaps are real and visible.** `synonym_brand` stays hard (0.14 — even
+* **Fuzzy / semantic resolvers do better but over-merge.** neo4j-graphrag fuzzy
+  (model 0.403) and LlamaIndex (0.221) buy recall with a single similarity
+  threshold and pay in precision (0.35 / 0.14) — they wrongly merge the two distinct
+  "Georgia"s and consecutive World-Cup editions. Neo4j's
+  `cosine>0.97 OR edit-dist<3 OR substring` lands at **0.456** (0.471 with the
+  embedder on — see below), the best framework row.
+* **The framework rows are now mostly REAL runs, with a visible fidelity tier.**
+  `neo4j-graphrag(fuzzy)*` (`real-inproc`, the library's own decision code)
+  measures **0.469**, +6.6pp over its model (0.403) — proof the modeled numbers
+  diverge from reality. `neo4j-graphrag(spacy)*` (`real-inproc`, real spaCy
+  doc-vector resolver) measures **0.401**. See `adapters/FIDELITY.md` for the
+  per-row `real` / `real-inproc` / `validated` / `modeled` audit.
+* **goldenmatch(auto+fields) leads at F1 0.602** — **+13.1pp over the best framework
+  row** (Neo4j-KGBuilder(emb) 0.471) — because zero-config multi-field ER (name +
+  type + context) is a different mechanism from one threshold: abbreviation 0.77,
+  cross-lingual 0.77, typo / org-suffix 1.0, nickname 0.85. `context` is the real
+  Wikidata one-line description — discriminating, but not a hidden label.
+* **The honest gaps are real and visible.** `synonym_brand` stays hard (0.17 — even
   multi-field, "Coumadin = warfarin" needs world knowledge), and the
   precision-critical negatives cost everyone (`coll_P` ~0.47): a single score can't
   separate "Apple"/"Apple Inc" (merge) from the country/state "Georgia" (don't).
-* **`emb-ann` (offline char-n-gram, no key) = 0.492** — catches transliteration /
+* **`emb-ann` (offline char-n-gram, no key) = 0.44** — catches transliteration /
   typos the string blocker misses but over-merges short names, and **abbreviation
-  (0.21) / synonym (0.12) stay unsolved** (char overlap has no world knowledge).
+  (0.21) / synonym (0.14) stay unsolved** (char overlap has no world knowledge).
   The keyed semantic + LLM extensions below attack exactly those.
+* **An embedder barely moves the framework rows — measured, not assumed.**
+  `--embedder st` (MiniLM) adds additive `(emb)` rows: Neo4j-KGBuilder 0.456 → 0.471
+  (+1.5pp), LlamaIndex 0.221 → 0.234 (+1.3pp). But the per-class F1 of the dominant
+  classes is **byte-identical** with vs without the embedder (abbreviation, synonym,
+  cross-lingual all flat); the small gain is only `temporal_version` / `nickname`.
+  Those classes sit below a 0.9/0.97 cosine cutoff by construction, so the cosine
+  OR-term can't generate the pairs string blocking misses. Both `(emb)` rows stay
+  `modeled` (see FIDELITY.md).
 
 So on real data the differentiator is clear and defensible: goldenmatch's
 multi-field probabilistic ER, run zero-config, beats every framework's built-in
-default — while the bench keeps goldenmatch's own weak spots (synonym recall,
+default — now measured against the frameworks' REAL resolution code, not just
+models — while the bench keeps goldenmatch's own weak spots (synonym recall,
 collision precision) in plain view.
 
 ## The LLM scorer on real data (measured, key-dependent — not in the committed table)
@@ -104,8 +120,13 @@ precision:**
 
 | config | F1 | coll&nbsp;P* | synm | note |
 |---|---|---|---|---|
-| `goldenmatch(auto+fields)` (committed) | 0.721 | 0.471 | 0.141 | multi-field, no key |
+| `goldenmatch(auto+fields)` (committed) | 0.602 | 0.471 | 0.167 | multi-field, no key |
 | `goldenmatch(auto+llm)` (with key) | 0.661 | **1.000** | 0.116 | LLM confirms/rejects borderline pairs |
+
+> The committed `auto+fields` row is current; the keyed `auto+llm` row is from a
+> keyed run on an earlier corpus snapshot (before the #1039 scaling the committed
+> table reflects), pending a keyed refresh. The qualitative finding (the LLM is a
+> precision tool) holds regardless of the exact F1.
 
 The LLM drives **same-name-collision precision to 1.0** — it correctly refuses to
 merge Georgia-the-country with Georgia-the-state, and Michael Jordan the athlete
@@ -126,13 +147,17 @@ name only, cosine ≥ 0.55:
 
 | config | abbr | synm | xling | P | R | F1 |
 |---|---|---|---|---|---|---|
-| `emb-ann` (offline char-n-gram) | 0.214 | 0.116 | 0.400 | 0.447 | 0.547 | **0.492** |
+| `emb-ann` (offline char-n-gram, committed) | 0.214 | 0.138 | 0.400 | 0.455 | 0.426 | **0.44** |
 | `emb-openai` (with key, name only) | 0.898 | 0.304 | 0.884 | 0.408 | 0.720 | **0.521** |
-| `auto+fields` (committed, multi-field) | 0.773 | 0.141 | 0.769 | 0.869 | 0.617 | **0.721** |
+| `auto+fields` (committed, multi-field) | 0.773 | 0.167 | 0.769 | 0.786 | 0.488 | **0.602** |
+
+> The committed rows (`emb-ann`, `auto+fields`) are current; the keyed `emb-openai`
+> row is from a keyed run on an earlier corpus snapshot (pre-#1039), pending a keyed
+> refresh. The qualitative finding holds regardless of the exact F1.
 
 World knowledge in the vectors **cracks abbreviation** (0.21 → 0.90) and lifts
 cross-lingual to 0.88 — the name-only semantic win the char-n-gram path can't reach.
-But on real multi-field entities it **does not beat `auto+fields`** (0.52 vs 0.72):
+But on real multi-field entities it **does not beat `auto+fields`** (0.52 vs 0.60):
 name-only embedding over-merges (precision 0.41), and goldenmatch's multi-field
 context carries more signal than the name embedding alone. So the honest takeaway
 **flips from the synthetic run** — on real data the lever is **multi-field
@@ -161,8 +186,9 @@ TAXONOMY.md            the nine failure classes, with framework citations
   tests — keep adding them.
 * **Crack abbreviation + synonym (done, key-gated):** the `emb-openai` mode swaps a
   semantic embedder (`text-embedding-3-small`, no torch) into the `emb-ann` path and
-  cracks both classes (abbr 0.98, synm 0.73; overall F1 0.721) — see "The
-  semantic-embedding result". `GoldenMatchEmbAnnAdapter(provider=...)` is the seam;
+  cracks abbreviation (abbr 0.90 keyed) but still does not beat the committed
+  multi-field `auto+fields` (emb-openai 0.52 vs 0.60) — see "Semantic embedding-ANN
+  on real data" (keyed rows pending a corpus refresh). `GoldenMatchEmbAnnAdapter(provider=...)` is the seam;
   pass `provider="local"` for a torch-free-of-cloud sentence-transformers run, or any
   `goldenmatch.embeddings.providers` name. Reproduce with `OPENAI_API_KEY` set. The
   offline char-n-gram `emb-ann` still ships as the no-key proof of the *mechanism*.

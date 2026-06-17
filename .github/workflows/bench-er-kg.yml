@@ -27,6 +27,7 @@ on:
       - "packages/python/goldenmatch/benchmarks/er-kg-bench/demo/**"
       - "packages/python/goldenmatch/benchmarks/er-kg-bench/tests/**"
       - "packages/python/goldenmatch/benchmarks/er-kg-bench/requirements-real.txt"
+      - "packages/python/goldenmatch/benchmarks/er-kg-bench/requirements-embed.txt"
       - ".github/workflows/bench-er-kg.yml"
 
 permissions:
@@ -60,9 +61,31 @@ jobs:
         # `uv pip install -e`); it installs into the project .venv.
         run: uv pip install -r "$BENCH_DIR/requirements-real.txt"
 
+      - name: Install embedder + spaCy model (Phase 2; offline lane, no key)
+        # sentence-transformers (MiniLM, --embedder st cosine terms) + spacy + the
+        # en_core_web_lg vector model (pinned as a wheel URL in requirements-embed.txt
+        # so the pip-less uv venv installs it WITHOUT `spacy download`).
+        run: uv pip install -r "$BENCH_DIR/requirements-embed.txt"
+
+      - name: Pre-fetch MiniLM (retry transient HF 429s)
+        # sentence-transformers downloads all-MiniLM-L6-v2 from HF at first use;
+        # shared CI runners intermittently get 429s (Too Many Requests). Fetch it once
+        # with backoff so the offline + keyed board runs hit the local cache instead of
+        # re-downloading per run -- otherwise the whole lane flakes on a transient 429.
+        run: |
+          set -uo pipefail
+          for i in 1 2 3 4 5; do
+            "$GITHUB_WORKSPACE/.venv/bin/python" -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')" && exit 0
+            echo "HF fetch attempt $i failed; backing off $((i*15))s..." >&2
+            sleep $((i*15))
+          done
+          echo "::error::could not fetch all-MiniLM-L6-v2 from HF after 5 retries"; exit 1
+
       - name: Run benchmark (offline -- the committed table)
         working-directory: ${{ env.BENCH_DIR }}
-        run: "$GITHUB_WORKSPACE/.venv/bin/python erkgbench/run.py"
+        # --embedder st activates the (emb) rows + the spaCy real row on the committed
+        # board (still key-free): the measured embedder effect, visible side-by-side.
+        run: "$GITHUB_WORKSPACE/.venv/bin/python erkgbench/run.py --embedder st"
       - name: Upload offline results (commit these)
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
         with:
@@ -112,7 +135,7 @@ jobs:
             echo "No OPENAI_API_KEY secret; skipping the keyed run." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          "$GITHUB_WORKSPACE/.venv/bin/python" erkgbench/run.py
+          "$GITHUB_WORKSPACE/.venv/bin/python" erkgbench/run.py --embedder st
           "$GITHUB_WORKSPACE/.venv/bin/python" demo/run_demo.py > demo_keyed.txt 2>&1 || true
           {
             echo '## ER-KG demo (Tier 2: over-merge, key-gated prose)'

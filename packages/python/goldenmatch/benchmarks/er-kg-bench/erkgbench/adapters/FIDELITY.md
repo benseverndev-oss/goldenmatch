@@ -1,4 +1,12 @@
-# Adapter fidelity audit (Phase 1)
+# Adapter fidelity audit (Phases 1-2)
+
+> **Phase 2 update (see the dedicated section below the verdict table):** the
+> deferred spaCy resolver shipped as a real row (`neo4j-graphrag(spacy)*`,
+> `real-inproc`, F1 0.401); `--embedder st` adds two additive cosine-activated rows
+> (`Neo4j-KGBuilder(emb)` 0.471, `LlamaIndex-PGI(emb)` 0.234, both `modeled`); the
+> Neo4j-KGBuilder length-guard divergence was VERIFIED at source as `elementId`-sided
+> (irreproducible, NOT a fixable min-vs-max gap); and a `_consolidate_sets` overlap bug
+> was fixed (fuzzy real F1 0.470 -> 0.469).
 
 Every adapter declares a `fidelity` tier so a reader can tell, at a glance, how
 close a row is to the framework it claims to represent:
@@ -29,12 +37,14 @@ collapse, NO quote/apostrophe strip, NO unicode fold).
 | LightRAG | `LightRAGModeled` | [operate.py](https://github.com/HKUDS/LightRAG/blob/main/lightrag/operate.py) + [utils.py `normalize_extracted_info`](https://github.com/HKUDS/LightRAG/blob/main/lightrag/utils.py) | exact `entity_name` dict key; name is `sanitize_and_normalize_extracted_text(.., remove_inner_quotes=True)` -> **case-PRESERVING** (no upper/lower), strips outer quotes, CJK fold, `.strip()` | NO (we lowercase -> case-INSENSITIVE; real is case-SENSITIVE; we don't strip quotes/CJK-fold) | **modeled** |
 | Cognee | `CogneeModeled` | [generate_node_name.py](https://github.com/topoteretes/cognee/blob/main/cognee/modules/engine/utils/generate_node_name.py) + [expand_with_nodes_and_edges.py](https://github.com/topoteretes/cognee/blob/main/cognee/modules/graph/utils/expand_with_nodes_and_edges.py) + [get_default_ontology_resolver.py](https://github.com/topoteretes/cognee/blob/main/cognee/modules/ontology/get_default_ontology_resolver.py) + [matching_strategies.py](https://github.com/topoteretes/cognee/blob/main/cognee/modules/ontology/matching_strategies.py) | entity node key = `generate_node_name(name) = name.lower().replace("'", "")` -> lowercases + strips apostrophes, **no whitespace collapse**. Default ontology empty (`ontology_file=None`) so the difflib cutoff=0.8 never fires | NO (we lowercase too, but we collapse whitespace it doesn't, and it strips apostrophes we don't) | **modeled** |
 | mem0 | `Mem0Modeled` | [memory/main.py](https://github.com/mem0ai/mem0/blob/main/mem0/memory/main.py) | `hashlib.md5(text.encode()).hexdigest()` over RAW memory text, case-sensitive, no normalization (`_add_to_vector_store` + `_create_memory`) | YES (byte-identical to our `md5(r.mention.encode())`) -- MD5 floor only; LLM ADD/UPDATE layer out of scope | **validated** |
-| Neo4j LLM KG Builder | `Neo4jBuilderModeled` | [graphDB_dataAccess.py](https://github.com/neo4j-labs/llm-graph-builder/blob/main/backend/src/graphDB_dataAccess.py) | `labels(n)=labels(other)` AND ( CONTAINS guard `size>2` both dirs, `toLower` OR `apoc.text.distance < 3` guard `size(n.id)>5` OR `vector.similarity.cosine > 0.97` ); `DUPLICATE_TEXT_DISTANCE=3`, `DUPLICATE_SCORE_VALUE=0.97` | string predicates + constants confirmed, but default run is PARTIAL (cosine OR-term needs embedder) + a one-sided length-guard divergence | **modeled** |
-| neo4j-graphrag (fuzzy, model) | `Neo4jGraphRAGFuzzyModeled` | [resolver.py](https://github.com/neo4j/neo4j-graphrag-python/blob/main/src/neo4j_graphrag/experimental/components/resolver.py) | `fuzz.WRatio(a, b, processor=utils.default_process)/100 >= 0.8` | per-pair predicate matches, but MODEL F1 0.403 vs REAL in-proc F1 0.470 (-6.7pp) -> DIVERGENT in clustering | **modeled** |
-| neo4j-graphrag (fuzzy, real) | `RealNeo4jGraphRAGFuzzy` (`*`) | same | real `compute_similarity` + `_consolidate_sets` per entity-label run in-process | runs the library's real decision code | **real-inproc** |
+| Neo4j LLM KG Builder | `Neo4jBuilderModeled` | [graphDB_dataAccess.py](https://github.com/neo4j-labs/llm-graph-builder/blob/main/backend/src/graphDB_dataAccess.py) | `labels(n)=labels(other)` AND ( CONTAINS guard `size>2` both dirs, `toLower` OR `apoc.text.distance < 3` guard `size(n.id)>5` OR `vector.similarity.cosine > 0.97` ); `DUPLICATE_TEXT_DISTANCE=3`, `DUPLICATE_SCORE_VALUE=0.97` | string predicates + constants confirmed, but default run is PARTIAL (cosine OR-term needs embedder) + an `elementId`-sided length guard that is IRREPRODUCIBLE by a commutative predicate (Phase-2 verified) | **modeled** |
+| Neo4j-KGBuilder (emb) | `emb_modeled` (`--embedder st`) | same | adds the real cosine>0.97 OR-term (MiniLM); fires all 3 OR-branches | F1 0.456 -> 0.471 (+1.5pp, only `temporal`/`nick` move; dominant classes flat) but still `modeled` -- the `elementId` length guard remains irreproducible | **modeled** |
+| neo4j-graphrag (fuzzy, model) | `Neo4jGraphRAGFuzzyModeled` | [resolver.py](https://github.com/neo4j/neo4j-graphrag-python/blob/main/src/neo4j_graphrag/experimental/components/resolver.py) | `fuzz.WRatio(a, b, processor=utils.default_process)/100 >= 0.8` | per-pair predicate matches, but MODEL F1 0.403 vs REAL in-proc F1 0.469 (-6.6pp) -> DIVERGENT in clustering | **modeled** |
+| neo4j-graphrag (fuzzy, real) | `RealNeo4jGraphRAGFuzzy` (`*`) | same | real `compute_similarity` + `_consolidate_sets` (+ `_merge_overlapping`) per entity-label run in-process | runs the library's real decision code | **real-inproc** |
+| neo4j-graphrag (spaCy, real) | `RealNeo4jGraphRAGSpaCy` (`*`) | same | real `SpaCySemanticMatchResolver.compute_similarity` (spaCy `en_core_web_lg` doc-vector cosine >= 0.8) + `_consolidate_sets` per entity-label, in-process | runs the library's real decision code; F1 0.401 (P 0.699 / R 0.281) | **real-inproc** |
 | neo4j-graphrag (exact) | `RealNeo4jGraphRAGExact` | same | `SinglePropertyExactMatchResolver`: Cypher exact `name` equality per label, null skipped, NO normalization; no Python decision method | Cypher re-expressed + confirmed | **validated** |
 | LlamaIndex PGI | `LlamaIndexModeled` | [llama_index property_graph](https://github.com/run-llama/llama_index/tree/main/llama-index-core/llama_index/core/indices/property_graph) + Bratanic property-graph blog | model: same-label AND (contains OR Levenshtein<5 OR cosine>0.9), KNN top-10 | constants come from a BLOG, not maintained source; library default is exact name+label upsert (no fuzzy dedup) -> CANNOT confirm | **modeled** |
-| spaCy semantic resolver | (not built) | -- | `SpaCySemanticMatchResolver` needs the `en_core_web_lg` model download | DEFERRED to Phase 2 (model dep) | n/a |
+| LlamaIndex PGI (emb) | `emb_modeled` (`--embedder st`) | same | adds the real cosine>0.9 OR-term (MiniLM) | F1 0.221 -> 0.234 (+1.3pp); tier unchanged -- an embedder does not close the blog-provenance gap | **modeled** |
 
 ## Per-framework detail
 
@@ -185,15 +195,25 @@ so the row stays **`modeled`**:
   reason LlamaIndex stays `modeled`. Pass `--embedder` to activate it (the
   abbreviation/synonym/cross-lingual classes that dominate this corpus sit
   below a 0.97 cutoff anyway, so it barely moves them).
-- **(b) edit-distance length guard is one-sided.** Real Cypher guards on
-  `size(toString(n.id)) > 5` (one side of the pair); our model guards on
-  `min(len(na), len(nb)) > 5` (stricter). They differ on pairs where one name
-  is <=5 chars and the other is >5 -- a predicate divergence, near-edge but
-  real.
+- **(b) edit-distance length guard is `elementId`-sided -> IRREPRODUCIBLE
+  (Phase-2 verified verbatim at
+  [`@4a412f46`](https://github.com/neo4j-labs/llm-graph-builder/blob/4a412f4688cf4096976045c019edc0a7f6ddcb6b/backend/src/graphDB_dataAccess.py#L417-L444)).**
+  The guard is `size(toString(n.id)) > 5`, and each pair is oriented by
+  `WHERE elementId(n) < elementId(other)` -- so the guard tests the
+  *smaller-`elementId`* node, an arbitrary INSERTION-ORDER side unrelated to
+  string length. The effective rule is therefore neither `min(len) > 5`
+  (under-fires) nor `max(len) > 5` (over-fires); it is order-dependent on
+  Neo4j-internal `elementId`, which no commutative pairwise predicate can
+  reproduce and which the benchmark's record order cannot be guaranteed to
+  match. We keep the conservative two-sided `min(len) > 5` and RECORD the
+  divergence rather than trade it for an equally-wrong `max`.
 
 The string predicates and constants ARE source-confirmed (so the row is a
-well-grounded floor), but a partial + divergent default run is not a faithful
-reproduction of the framework's default, which is what `validated` requires.
+well-grounded floor), but a partial + irreproducible default run is not a
+faithful reproduction of the framework's default, which is what `validated`
+requires. Crucially, **(b) means even the `--embedder` variant
+(`Neo4j-KGBuilder(emb)`, which fixes (a) by activating the cosine OR-term) stays
+`modeled`** -- the irreproducible guard is not something an embedder can close.
 
 ### 6. neo4j-graphrag fuzzy -- MODEL `modeled`, REAL `real-inproc`
 
@@ -209,12 +229,23 @@ diverges from a real run on this corpus:**
 
 - `neo4j-graphrag(fuzzy)*` (`RealNeo4jGraphRAGFuzzy`, **`real-inproc`**) runs the
   library's real `compute_similarity` + `_consolidate_sets`, grouped per entity
-  label, with only the Neo4j/APOC I/O stubbed. Measured **F1 0.470**.
+  label, with only the Neo4j/APOC I/O stubbed. Measured **F1 0.469**.
 - `neo4j-graphrag(fuzzy)` (`Neo4jGraphRAGFuzzyModeled`, **`modeled`**) measures
-  **F1 0.403** (-6.7pp).
+  **F1 0.403** (-6.6pp).
 
 The two are kept side by side deliberately for the model-vs-real contrast. The
 divergence is in the consolidation/grouping behavior, not the WRatio predicate.
+
+> **Phase-2 `_consolidate_sets` partition fix (F1 0.470 -> 0.469).** The library's
+> `_consolidate_sets` is a SINGLE PASS: a pair bridging two already-separate
+> consolidated sets merges into only the first, leaving them OVERLAPPING (a record
+> in two clusters). The real resolver's sequential Neo4j merges transitively
+> collapse the shared record into one entity; we reproduce that disjoint end-state
+> with `_merge_overlapping` (a no-op when there is no overlap). Phase-1's fuzzy row
+> had 12 duplicate ids and scored F1 0.470 on that malformed partition; the
+> corrected valid partition scores **0.469** (P 0.491->0.477, R 0.451->0.461). The
+> +6.6pp-over-the-model finding is unchanged. spaCy's denser pair graph hit the
+> overlap hard, which is how the bug surfaced.
 
 ### 7. neo4j-graphrag exact -- `validated`
 
@@ -251,11 +282,49 @@ constants to maintained source, and (b) likely over-states the library's default
 behavior. Because the citation is a blog rather than maintainable source we can
 pin a constant to, it stays **`modeled`** (conservative -- cannot confirm).
 
+### 9. neo4j-graphrag spaCy -- `real-inproc` (Phase 2)
+
+`SpaCySemanticMatchResolver` subclasses the same `BasePropertySimilarityResolver`
+as the fuzzy resolver and exposes a callable `compute_similarity` (spaCy
+doc-vector cosine over the `en_core_web_lg` model) + `_consolidate_sets`. We run
+those real library methods in-process per entity-label (only Neo4j/APOC I/O
+stubbed), so the tier is **`real-inproc`** -- the same posture as the fuzzy row,
+NOT `validated` (the exact resolver's tier, which has no callable decision code).
+
+We construct it with `auto_download_spacy_model=False` so a missing model RAISES
+(degrading the row to "skipped" via the import-guarded registry) rather than
+triggering an implicit ~560MB download; CI installs the model explicitly.
+
+Measured **F1 0.401 (P 0.699 / R 0.281)** -- another framework default goldenmatch
+`auto+fields` (0.602) beats. spaCy's semantic vectors recall org-suffix and
+nickname variants well (`suffix` 0.868, `nick` 0.800) but miss cross-lingual and
+typo classes entirely (`xling` 0.0, `typo` 0.0), a different profile from the
+WRatio fuzzy resolver.
+
+## Phase 2 -- embedding terms (measured, not asserted)
+
+`--embedder st` activates the cosine OR-terms (MiniLM `all-MiniLM-L6-v2`, the
+model Neo4j's builder actually uses) on the additive `(emb)` rows, run ALONGSIDE
+the unchanged string-only rows so the board shows the effect side by side:
+
+| row | string-only F1 | (emb) F1 | delta |
+|---|---|---|---|
+| Neo4j-KGBuilder | 0.456 | 0.471 | +1.5pp |
+| LlamaIndex-PGI  | 0.221 | 0.234 | +1.3pp |
+
+**The measured delta confirms the by-construction prediction: the embedder does
+NOT rescue the classes that dominate this corpus.** The per-class F1 of the
+dominant classes is BYTE-IDENTICAL with vs without the embedder -- KGBuilder
+`abbreviation` 0.412=0.412, `synonym` 0.034=0.034, `cross_lingual` 0.588=0.588
+(same for LlamaIndex). The small net gain comes only from `temporal_version` and
+`nickname`. Abbreviations/synonyms/cross-lingual aliases sit below a 0.9/0.97
+cosine cutoff by construction, so the cosine OR-term cannot generate the pairs
+string blocking misses. Both `(emb)` rows stay **`modeled`** (KGBuilder for the
+irreproducible `elementId` guard above; LlamaIndex for the unconfirmable
+blog-sourced rule -- an embedder closes neither gap).
+
 ## Deferred
 
-- **`SpaCySemanticMatchResolver`** (neo4j-graphrag) is DEFERRED to Phase 2: it
-  needs the `en_core_web_lg` spaCy model download (an embedding/model dep). Not
-  built here.
 - **mem0 LLM ADD/UPDATE merge** is Phase 3 (see mem0 section).
 
 ## Could-not-confirm summary
@@ -265,11 +334,10 @@ Only one adapter stayed `modeled` purely for **lack of confirmable source**
 and the maintained library ships no equivalent default. The exact-match family
 (GraphRAG, LightRAG, Cognee) and the fuzzy model stayed `modeled` because they
 **diverge** from confirmed real source. **Neo4j-KGBuilder** stayed `modeled`
-because, although its string predicates + constants are source-confirmed, our
-default run reproduces only **part** of the real default rule (the cosine
-OR-branch is embedder-gated and off by default) plus a one-sided length-guard
-divergence -- the same partial-default reasoning that keeps LlamaIndex
-`modeled`. Net: of the modeled-family adapters, **only mem0** (a byte-identical,
+because, although its string predicates + constants are source-confirmed, its
+edit-distance length guard is `elementId`-sided and IRREPRODUCIBLE by a
+commutative predicate (Phase-2 verified) -- so even the cosine-activated
+`--embedder` variant stays `modeled`. Net: of the modeled-family adapters, **only mem0** (a byte-identical,
 cleanly-scoped MD5 floor) earned `validated`; every other framework default is
 either divergent, partial, or unconfirmable -- which is itself the headline
 finding (real built-in dedup defaults are shallow and inconsistent).
