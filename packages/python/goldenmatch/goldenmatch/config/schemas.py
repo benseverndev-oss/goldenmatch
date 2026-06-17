@@ -415,13 +415,15 @@ class BlockingConfig(BaseModel):
         return self
 
 
-# ── GoldenFieldRule / GoldenRulesConfig ─────────────────────────────────────
+# ── GoldenFieldRule / GoldenGroupRule / GoldenRulesConfig ────────────────────
 
 
 class GoldenFieldRule(BaseModel):
     strategy: str
     date_column: str | None = None
     source_priority: list[str] | None = None
+    when: str | None = None       # predicate over already-resolved fields
+    validate: str | None = None   # candidate-filter name (goldenflow validator)
 
     @model_validator(mode="after")
     def _validate_strategy(self) -> GoldenFieldRule:
@@ -446,6 +448,32 @@ class GoldenFieldRule(BaseModel):
             raise ValueError("Strategy 'most_recent' requires 'date_column'.")
         if self.strategy == "source_priority" and not self.source_priority:
             raise ValueError("Strategy 'source_priority' requires 'source_priority' list.")
+        return self
+
+
+_GROUP_STRATEGIES = frozenset({"most_complete", "source_priority", "most_recent"})
+
+
+class GoldenGroupRule(BaseModel):
+    name: str
+    columns: list[str]
+    category: str | None = None
+    strategy: str = "most_complete"
+    date_column: str | None = None
+    source_priority: list[str] | None = None
+
+    @model_validator(mode="after")
+    def _validate(self) -> "GoldenGroupRule":
+        if len(self.columns) < 2:
+            raise ValueError(f"GoldenGroupRule '{self.name}' needs >= 2 columns.")
+        if self.strategy not in _GROUP_STRATEGIES:
+            raise ValueError(
+                f"Invalid group strategy '{self.strategy}'. Must be one of {sorted(_GROUP_STRATEGIES)}."
+            )
+        if self.strategy == "most_recent" and not self.date_column:
+            raise ValueError(f"Group '{self.name}' strategy 'most_recent' requires 'date_column'.")
+        if self.strategy == "source_priority" and not self.source_priority:
+            raise ValueError(f"Group '{self.name}' strategy 'source_priority' requires 'source_priority'.")
         return self
 
 
