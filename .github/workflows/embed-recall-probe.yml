@@ -7,9 +7,6 @@ name: embed-recall-probe
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - claude/embed-recall-probe
 
 permissions:
   contents: read
