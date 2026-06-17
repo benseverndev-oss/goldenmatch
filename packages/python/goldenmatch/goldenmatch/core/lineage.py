@@ -336,6 +336,8 @@ def render_field_condition_line(field: str, fp) -> str | None:
         if parts:
             parts[0] = parts[0] + suffix
         else:
+            # Suffix-only (validator dropped candidates but no when: fired):
+            # "{field}: {N} candidate(s) dropped by {validator}"
             parts.append(f"{field}: {fp.dropped_invalid} candidate(s) dropped by {fp.validator}")
     return parts[0] if parts else None
 

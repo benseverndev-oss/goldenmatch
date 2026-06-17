@@ -39,3 +39,14 @@ def test_cluster_nl_combines_group_and_condition():
     text = render_cluster_provenance_nl(cp)
     assert "promoted together from record 7 via most_complete (group 'mailing_address')" in text
     assert "phone used most_recent because state in ['CA','NY']" in text
+
+
+def test_empty_provenance_renders_empty_string():
+    cp = ClusterProvenance(cluster_id=0, cluster_quality="strong", cluster_confidence=0.0)
+    assert render_cluster_provenance_nl(cp) == ""
+
+
+def test_suffix_only_line_exact():
+    fp = FieldProvenance(value="x", source_row_id=1, strategy="most_complete", confidence=1.0,
+                         validator="nanp", dropped_invalid=2)
+    assert render_field_condition_line("phone", fp) == "phone: 2 candidate(s) dropped by nanp"
