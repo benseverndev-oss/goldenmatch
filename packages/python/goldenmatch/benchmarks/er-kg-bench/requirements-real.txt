@@ -4,3 +4,10 @@
 # When installed, available_real_adapters() returns the real framework rows;
 # when absent, those rows are silently skipped (degraded to "missing", not error).
 neo4j-graphrag>=1.17
+# LightRAG real entity-merge key (real-inproc row). Import name `lightrag`; torch-free
+# base install. Pinned <1.6 so the public normalize_extracted_info contract is stable.
+lightrag-hku>=1.5,<1.6
+# Graphiti real deterministic dedup floor (real-inproc row). torch-free; dedup_helpers
+# is stdlib+pydantic. Pinned <0.30 -- the floor uses underscore-prefixed (private) fns,
+# so lock the minor to keep the API contract; the F1 pin catches any drift.
+graphiti-core>=0.29,<0.30

@@ -256,3 +256,82 @@ def cognee_clusters(items: list[tuple[int, str, str]]) -> list[list[int]]:
     for rid, mention, _t in items:
         buckets.setdefault(_cognee_key(mention), []).append(rid)
     return [sorted(v) for v in buckets.values()]
+
+
+# ── LightRAG (real-inproc: runs the library's real normalize_extracted_info) ──
+#
+# LightRAG's entity merge decision is an exact dict group-by on the normalized
+# entity name (`merge_nodes_and_edges` builds `all_nodes[entity_name]` in
+# operate.py; `_merge_nodes_then_upsert` keys on the same name). The name key is
+# derived by the library's real `normalize_extracted_info(name, remove_inner_quotes
+# =True)` (utils.py) -- HTML-strip, CJK full->half-width fold, outer-quote strip,
+# whitespace handling, but NO .lower()/.upper(), so the key is CASE-SENSITIVE. We
+# call that real key fn (verified @v1.5.3 / 41ee354 it has no torch top-level
+# imports) then group GLOBALLY (LightRAG keys nodes by name across the whole graph,
+# not per-label). The LLM only summarizes descriptions (>=8 fragments) and never
+# moves a record between clusters, so the clustering decision needs no LLM/key. The
+# real key fn runs in-process -> real-inproc; only the graph-store upsert is elided
+# (the merge decision IS the normalized-name equality).
+def lightrag_clusters(items: list[tuple[int, str, str]]) -> list[list[int]]:
+    """items: (record_id, mention, entity_type). Real normalize_extracted_info key +
+    exact GLOBAL group-by. lightrag is lazy-imported so this module imports without it."""
+    from lightrag.utils import (  # pyright: ignore[reportMissingImports]
+        normalize_extracted_info,
+    )
+
+    buckets: dict[str, list[int]] = {}
+    singletons: list[list[int]] = []
+    for rid, mention, _t in items:
+        key = normalize_extracted_info(mention, remove_inner_quotes=True)
+        if not key:  # short numeric-only names normalize to "" -> not a node -> singleton
+            singletons.append([rid])
+            continue
+        buckets.setdefault(key, []).append(rid)
+    return [sorted(v) for v in buckets.values()] + singletons
+
+
+# ── Graphiti (real-inproc: runs the library's real deterministic dedup floor) ──
+#
+# Graphiti's deterministic dedup floor is `_resolve_with_similarity` +
+# `_build_candidate_indexes` (dedup_helpers.py @v0.29.2 / ff7e29cc): exact
+# normalized-name (lower + ws-collapse) match, else a MinHash/Jaccard>=0.9 fuzzy
+# match, with a low-entropy / short-name gate. We run that REAL decision code via
+# SEQUENTIAL INGESTION -- each record resolves against the accumulated "existing"
+# set, mirroring Graphiti's real extracted-vs-existing-graph flow (there is no
+# intra-batch dedup in the real code). The module is stdlib+pydantic only (no LLM,
+# DB, embedder, or torch). Honest scoping recorded in FIDELITY.md:
+#   * No LLM/embedder. Unresolved nodes (0 exact + no fuzzy hit, >1 exact ambiguous,
+#     or low-entropy) become NEW entities -- the deterministic-floor end state (the
+#     full default path would escalate those to the LLM).
+#   * We feed the FULL existing set as candidates; the real flow prunes candidates
+#     via an embedder semantic search first, so this is an UPPER BOUND on the floor
+#     (more candidates, not fewer) -- it can only help recall, never hurt it.
+#   * label-agnostic: the floor applies no entity-label gate (verified at source).
+# real-inproc: the library's real resolution DECISION runs in-process; only the
+# embedder candidate-prune, the LLM fallback, and graph persistence are elided.
+def graphiti_clusters(items: list[tuple[int, str, str]]) -> list[list[int]]:
+    """items: (record_id, mention, entity_type). Runs Graphiti's real deterministic
+    floor via sequential ingestion. graphiti_core is lazy-imported."""
+    from graphiti_core.nodes import EntityNode  # pyright: ignore[reportMissingImports]
+    from graphiti_core.utils.maintenance.dedup_helpers import (  # pyright: ignore[reportMissingImports]
+        DedupResolutionState,
+        _build_candidate_indexes,
+        _resolve_with_similarity,
+    )
+
+    existing: list = []  # the growing "graph" of canonical EntityNodes
+    uuid_to_records: dict[str, list[int]] = {}
+    for rid, mention, _t in items:
+        node = EntityNode(name=mention, group_id="")
+        indexes = _build_candidate_indexes(existing)
+        state = DedupResolutionState(
+            resolved_nodes=[None], uuid_map={}, unresolved_indices=[]
+        )
+        _resolve_with_similarity([node], indexes, state)
+        canonical = state.uuid_map.get(node.uuid)
+        if canonical is not None and canonical in uuid_to_records:
+            uuid_to_records[canonical].append(rid)  # resolved to an existing entity
+        else:
+            existing.append(node)  # unresolved/new -> a new entity (floor, no LLM)
+            uuid_to_records[node.uuid] = [rid]
+    return [sorted(v) for v in uuid_to_records.values()]
