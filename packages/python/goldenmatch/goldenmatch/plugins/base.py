@@ -109,6 +109,7 @@ class GoldenStrategyPlugin(Protocol):
         quality_weights: list[float] | None = None,
         pair_scores: dict[tuple[int, int], float] | None = None,
         rule_kwargs: dict | None = None,
+        cluster: "pl.DataFrame | None" = None,
     ) -> Any:
         """Merge cluster member values into one survivor.
 
@@ -120,6 +121,9 @@ class GoldenStrategyPlugin(Protocol):
         configuration (``date_column``, ``source_priority``, or any
         custom keys the plugin defines) so the plugin can read YAML
         settings without sniffing global state.
+
+        ``cluster`` is the per-cluster frame; read sibling columns for
+        cross-field strategies. Optional for back-compat.
 
         Exceptions raised here are caught by the dispatcher and
         fall back to ``most_complete`` with a WARNING log. To opt
