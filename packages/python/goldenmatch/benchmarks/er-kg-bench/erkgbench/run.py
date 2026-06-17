@@ -231,10 +231,12 @@ def to_markdown(report: dict) -> str:
         lines.append(f"- **{r['name']}** — {r['defaults']}")
     lines += [
         "",
-        "> Modelled rows reproduce each framework's deterministic default rule "
-        "(exact constants + source in `adapters/modeled.py`). LLM-judge layers "
-        "(Graphiti, mem0) are out of scope: non-deterministic, O(n)-in-LLM-calls, "
-        "and ~$0.80/40-chats — see the module docstring.",
+        "> Each row carries a `fid` tier (see `adapters/FIDELITY.md`): `real-inproc` "
+        "runs the framework's real decision code; `validated` reproduces its exact "
+        "rule confirmed vs source; `modeled` is an unconfirmed/divergent re-impl. "
+        "mem0's LLM ADD/UPDATE merge layer stays out of scope (non-deterministic, "
+        "per-pair LLM cost; Phase 3) -- this board runs each framework's "
+        "deterministic dedup, including Graphiti's MinHash/Jaccard floor.",
         "",
     ]
     return "\n".join(lines)

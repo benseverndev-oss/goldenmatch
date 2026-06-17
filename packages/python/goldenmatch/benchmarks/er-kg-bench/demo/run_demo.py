@@ -24,7 +24,7 @@ from demo import (
     narrative as nv,  # noqa: E402  # pyright: ignore[reportAttributeAccessIssue]  # namespace pkg, resolves at runtime
 )
 from erkgbench.adapters import GoldenMatchAdapter  # noqa: E402
-from erkgbench.adapters.modeled import GraphRAGModeled  # noqa: E402
+from erkgbench.adapters.real.exact_family import RealGraphRAG  # noqa: E402
 from erkgbench.run import load_records  # noqa: E402  (pulls goldenmatch)
 
 if TYPE_CHECKING:
@@ -112,7 +112,7 @@ def _exact_family_f1() -> str:
 def tier1_under_merge(records: list[Record], entity_ids: list[str], failure_classes: list[str]) -> str:
     mentions, eids = _maps(records, entity_ids)
     all_idx = [r.index for r in records]
-    before = nv.complete_partition(GraphRAGModeled().resolve(records), all_idx)
+    before = nv.complete_partition(RealGraphRAG().resolve(records), all_idx)
     after = nv.complete_partition(GoldenMatchAdapter("auto_fields").resolve(records), all_idx)
     eid, query, etype = _pick_under_merge_entity(records, entity_ids, failure_classes, before, after)
     return nv.render_demo_md(

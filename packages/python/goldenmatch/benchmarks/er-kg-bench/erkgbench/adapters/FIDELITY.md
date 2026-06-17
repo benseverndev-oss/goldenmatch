@@ -25,17 +25,27 @@ close a row is to the framework it claims to represent:
   the real default rule. A documented divergence is a finding, not a failure.
 
 This audit read each framework's real merge/dedup source on GitHub and compared
-it to our model. The exact-match family's shared normalization is
-`_norm(s) = " ".join(s.lower().split())` (lowercase + internal-whitespace
-collapse, NO quote/apostrophe strip, NO unicode fold).
+it to our model.
+
+> **Phase 3a update (real-execution cutover).** GraphRAG, LightRAG, and Cognee were
+> originally modeled with a SHARED `_norm(s) = " ".join(s.lower().split())` that
+> diverged from each framework's real key (each differently). They are now cut over
+> to faithful rows in `adapters/real/`: **GraphRAG** and **Cognee** reproduce their
+> exact key verbatim (`validated`, `exact_family.py`); **LightRAG** runs the
+> library's real `normalize_extracted_info` key fn (`real-inproc`, `lightrag.py`);
+> and **Graphiti** is a NEW `real-inproc` row running its real deterministic dedup
+> floor. The shared `_norm` survives only inside `Neo4jBuilderModeled` /
+> `LlamaIndexModeled`. The "matches our model?" column below is historical (it
+> records WHY each was modeled); the live tier is in the rightmost column.
 
 ## Verdict table
 
 | Framework | adapter | real source checked | exact real rule | matches our model? | tier |
 |---|---|---|---|---|---|
-| Microsoft GraphRAG | `GraphRAGModeled` | [finalize_entities.py](https://github.com/microsoft/graphrag/blob/main/packages/graphrag/graphrag/index/operations/finalize_entities.py) + [graph_extractor.py](https://github.com/microsoft/graphrag/blob/main/packages/graphrag/graphrag/index/operations/extract_graph/graph_extractor.py) + [string.py](https://github.com/microsoft/graphrag/blob/main/packages/graphrag/graphrag/index/utils/string.py) | exact `title in seen_titles`; `title = clean_str(name.upper())` (uppercases + `.strip()` + html-unescape + control-char strip; **no internal-whitespace collapse, no quote strip**) | NO (case dir is clustering-equivalent, but we collapse internal whitespace and it does not) | **modeled** |
-| LightRAG | `LightRAGModeled` | [operate.py](https://github.com/HKUDS/LightRAG/blob/main/lightrag/operate.py) + [utils.py `normalize_extracted_info`](https://github.com/HKUDS/LightRAG/blob/main/lightrag/utils.py) | exact `entity_name` dict key; name is `sanitize_and_normalize_extracted_text(.., remove_inner_quotes=True)` -> **case-PRESERVING** (no upper/lower), strips outer quotes, CJK fold, `.strip()` | NO (we lowercase -> case-INSENSITIVE; real is case-SENSITIVE; we don't strip quotes/CJK-fold) | **modeled** |
-| Cognee | `CogneeModeled` | [generate_node_name.py](https://github.com/topoteretes/cognee/blob/main/cognee/modules/engine/utils/generate_node_name.py) + [expand_with_nodes_and_edges.py](https://github.com/topoteretes/cognee/blob/main/cognee/modules/graph/utils/expand_with_nodes_and_edges.py) + [get_default_ontology_resolver.py](https://github.com/topoteretes/cognee/blob/main/cognee/modules/ontology/get_default_ontology_resolver.py) + [matching_strategies.py](https://github.com/topoteretes/cognee/blob/main/cognee/modules/ontology/matching_strategies.py) | entity node key = `generate_node_name(name) = name.lower().replace("'", "")` -> lowercases + strips apostrophes, **no whitespace collapse**. Default ontology empty (`ontology_file=None`) so the difflib cutoff=0.8 never fires | NO (we lowercase too, but we collapse whitespace it doesn't, and it strips apostrophes we don't) | **modeled** |
+| Microsoft GraphRAG | `RealGraphRAG` | [finalize_entities.py](https://github.com/microsoft/graphrag/blob/main/packages/graphrag/graphrag/index/operations/finalize_entities.py) + [graph_extractor.py](https://github.com/microsoft/graphrag/blob/main/packages/graphrag/graphrag/index/operations/extract_graph/graph_extractor.py) + [string.py](https://github.com/microsoft/graphrag/blob/main/packages/graphrag/graphrag/index/utils/string.py) | exact `title in seen_titles` (GLOBAL); `title = clean_str(name.upper())` (upper + `.strip()` + html-unescape + control-char strip; **no internal-ws collapse, no quote strip**). Standard pipeline has no ER step | reproduced VERBATIM (`real_resolvers._graphrag_key`). No separable resolver decision object exists, so this is the confirmed key, not a library run -> `validated` | **validated** |
+| LightRAG | `RealLightRAG` (`*`) | [operate.py](https://github.com/HKUDS/LightRAG/blob/main/lightrag/operate.py) + [utils.py `normalize_extracted_info`](https://github.com/HKUDS/LightRAG/blob/main/lightrag/utils.py) | exact `entity_name` dict key (GLOBAL); name = real `normalize_extracted_info(.., remove_inner_quotes=True)` -> **case-PRESERVING** (no upper/lower), outer-quote strip, CJK fold, `.strip()`. LLM only summarizes descriptions, never moves a record | runs the library's REAL key fn in-process (only the graph-store upsert is elided; the merge decision IS the normalized-name equality) -> `real-inproc` | **real-inproc** |
+| Cognee | `RealCognee` | [generate_node_id.py](https://github.com/topoteretes/cognee/blob/main/cognee/infrastructure/engine/utils/generate_node_id.py) + [deduplicate_nodes_and_edges.py](https://github.com/topoteretes/cognee/blob/main/cognee/modules/graph/utils/deduplicate_nodes_and_edges.py) + [get_default_ontology_resolver.py](https://github.com/topoteretes/cognee/blob/main/cognee/modules/ontology/get_default_ontology_resolver.py) | exact merge on `generate_node_id = uuid5(NAMESPACE_OID, name.lower().replace(" ","_").replace("'",""))` (GLOBAL). Default ontology empty (`ontology_file=None`) so the difflib cutoff never fires | reproduced VERBATIM (`real_resolvers._cognee_key`). **Fixes the Phase-1 bug**: it cited `generate_node_NAME` (display) + used `_norm`, missing the `" "->"_"` step. Pure stdlib uuid5 -> `validated` | **validated** |
+| Graphiti | `RealGraphiti` (`*`) | [dedup_helpers.py](https://github.com/getzep/graphiti/blob/main/graphiti_core/utils/maintenance/dedup_helpers.py) (`_resolve_with_similarity` + `_build_candidate_indexes`) | DETERMINISTIC FLOOR: exact normalized-name (lower+ws-collapse) OR MinHash/Jaccard>=0.9, with a low-entropy/short-name gate; label-agnostic (no label gate) | runs the library's REAL floor decision code via sequential ingestion. Honest scope: no LLM/embedder (unresolved -> new entity); full existing set fed as candidates (upper bound on the floor). This is the FLOOR, not Graphiti's full LLM-backed default -> `real-inproc` | **real-inproc** |
 | mem0 | `Mem0Modeled` | [memory/main.py](https://github.com/mem0ai/mem0/blob/main/mem0/memory/main.py) | `hashlib.md5(text.encode()).hexdigest()` over RAW memory text, case-sensitive, no normalization (`_add_to_vector_store` + `_create_memory`) | YES (byte-identical to our `md5(r.mention.encode())`) -- MD5 floor only; LLM ADD/UPDATE layer out of scope | **validated** |
 | Neo4j LLM KG Builder | `Neo4jBuilderModeled` | [graphDB_dataAccess.py](https://github.com/neo4j-labs/llm-graph-builder/blob/main/backend/src/graphDB_dataAccess.py) | `labels(n)=labels(other)` AND ( CONTAINS guard `size>2` both dirs, `toLower` OR `apoc.text.distance < 3` guard `size(n.id)>5` OR `vector.similarity.cosine > 0.97` ); `DUPLICATE_TEXT_DISTANCE=3`, `DUPLICATE_SCORE_VALUE=0.97` | string predicates + constants confirmed, but default run is PARTIAL (cosine OR-term needs embedder) + an `elementId`-sided length guard that is IRREPRODUCIBLE by a commutative predicate (Phase-2 verified) | **modeled** |
 | Neo4j-KGBuilder (emb) | `emb_modeled` (`--embedder st`) | same | adds the real cosine>0.97 OR-term (MiniLM); fires all 3 OR-branches | F1 0.456 -> 0.471 (+1.5pp, only `temporal`/`nick` move; dominant classes flat) but still `modeled` -- the `elementId` length guard remains irreproducible | **modeled** |
@@ -48,7 +58,7 @@ collapse, NO quote/apostrophe strip, NO unicode fold).
 
 ## Per-framework detail
 
-### 1. Microsoft GraphRAG -- `modeled`
+### 1. Microsoft GraphRAG -- `validated` (Phase 3a)
 
 `finalize_entities` deduplicates by exact title:
 
@@ -82,9 +92,17 @@ strip.** Our `_norm` lowercases + collapses internal whitespace. The case
 direction (upper vs lower) is clustering-equivalent (both fold every string to a
 single canonical case). The **internal-whitespace collapse is a real divergence**:
 `"New  York"` (two spaces) vs `"New York"` merge under our `_norm` but NOT under
-GraphRAG. -> stays `modeled`.
+GraphRAG.
 
-### 2. LightRAG -- `modeled`
+**Phase 3a:** `RealGraphRAG` (`real_resolvers._graphrag_key` / `graphrag_clusters`)
+reproduces `clean_str(name.upper())` VERBATIM (upper -> edge-strip -> html.unescape
+-> control-char strip; GLOBAL `seen_titles` set, not per-label). GraphRAG has no
+separable resolver decision object to run (the merge is `df.merge(on="title")` +
+the `seen_titles` set inside the LLM-driven Standard pipeline), so the faithful
+tier is **`validated`** -- a confirmed key reproduction, like `neo4j-graphrag(exact)`.
+Observed F1 0.066 (exact-title recalls ~nothing on surface-form variation).
+
+### 2. LightRAG -- `real-inproc` (Phase 3a)
 
 `_merge_nodes_then_upsert` uses `entity_name` as the merge key with no further
 transform; the name was normalized at extraction (`operate.py`):
@@ -99,43 +117,40 @@ entity_name = sanitize_and_normalize_extracted_text(
 quotes), folds CJK full-width chars to half-width, removes spaces between CJK
 chars, and `.strip()`s -- but applies **no `.upper()`/`.lower()`** (only
 `entity_type` gets `.replace(" ", "").lower()`, not the name). So LightRAG's
-merge key is **case-SENSITIVE** (`"Apple"` != `"apple"`). Our `_norm`
-lowercases (case-insensitive) and never strips quotes / CJK-folds. Divergent on
-two axes -> stays `modeled`.
+merge key is **case-SENSITIVE** (`"Apple"` != `"apple"`).
 
-### 3. Cognee -- `modeled`
+**Phase 3a:** `RealLightRAG` (`real_resolvers.lightrag_clusters`) runs the
+library's REAL `normalize_extracted_info(name, remove_inner_quotes=True)` key fn
+(lazy-imported `lightrag.utils`) then groups by the exact key GLOBALLY -- the same
+dict group-by `merge_nodes_and_edges` does. The LLM only summarizes descriptions
+(>=8 fragments) and never moves a record between clusters, so the clustering
+decision runs with NO LLM/key. Tier **`real-inproc`** (the real key fn executes;
+only the graph-store upsert is elided). CI-only (`lightrag-hku`). The low F1 it
+produces is FAITHFUL to LightRAG's case-sensitive key, not a model artifact.
 
-Entity node dedup (`expand_with_nodes_and_edges.py`) keys on
-`generate_node_name(node_name)` and merges when the key is already in
-`added_nodes_map`:
+### 3. Cognee -- `validated` (Phase 3a)
+
+The entity MERGE key is `generate_node_id` (NOT `generate_node_name`, a display
+helper the Phase-1 model wrongly cited):
 
 ```python
-generated_node_name = generate_node_name(node_name)
-...
-if entity_node_key in added_nodes_map or entity_node_key in key_mapping:
-    return added_nodes_map.get(entity_node_key) ...
+# cognee/infrastructure/engine/utils/generate_node_id.py
+def generate_node_id(node_id: str) -> UUID:
+    return uuid5(NAMESPACE_OID, node_id.lower().replace(" ", "_").replace("'", ""))
 ```
 
-```python
-def generate_node_name(name: str) -> str:
-    return name.lower().replace("'", "")      # lowercase + apostrophe strip
-```
+`deduplicate_nodes_and_edges` keeps one node per `str(node.id)` (this UUID), so two
+mentions merge iff their `generate_node_id` matches. The default resolver is
+`RDFLibOntologyResolver(ontology_file=None, ...)`; with no ontology file the
+difflib `cutoff=0.8` strategy has no candidates and never fires.
 
-The default resolver is `RDFLibOntologyResolver(ontology_file=None,
-matching_strategy=FuzzyMatchingStrategy())`; with `ontology_file=None` the
-ontology candidate list is empty, so `FuzzyMatchingStrategy.find_match`
-(difflib `cutoff=0.8`) has no candidates and never merges anything -- confirming
-the model's "exact name, ontology off by default" framing.
-
-Our `_norm` lowercases (matches) but **collapses internal whitespace** (Cognee
-does not) and does **not strip apostrophes** (Cognee does). E.g. `"O'Brien"` vs
-`"OBrien"` merge in Cognee but not our model. Divergent on the key -> stays
-`modeled`.
-
-> All three exact-match subclasses diverge from `_norm`, each differently, so
-> the base `_ExactNormalized.fidelity` stays `"modeled"` (the safe default) and
-> NO subclass got a `validated` override. The clustering algorithm is exact
-> bucketing in all three; only the bucket KEY normalization differs.
+**Phase 3a:** `RealCognee` (`real_resolvers._cognee_key` / `cognee_clusters`)
+reproduces `generate_node_id` VERBATIM (pure stdlib `uuid5`; GLOBAL). This **fixes
+a confirmed Phase-1 bug**: the old model cited `generate_node_name` (= `name.lower()
+.replace("'","")`, no `" "->"_"`) and actually used `_norm` (lower + ws-collapse) --
+neither matched the real key. Reproducing the 1-line pure key + citing source is
+**`validated`** (importing the heavy `cognee` package to call a uuid5 buys zero
+fidelity). Observed F1 0.066.
 
 ### 4. mem0 -- `validated` (MD5 floor)
 
@@ -301,6 +316,35 @@ nickname variants well (`suffix` 0.868, `nick` 0.800) but miss cross-lingual and
 typo classes entirely (`xling` 0.0, `typo` 0.0), a different profile from the
 WRatio fuzzy resolver.
 
+### 10. Graphiti -- `real-inproc` (Phase 3a, NEW row)
+
+Graphiti's deterministic dedup floor is a clean, separable, pure-Python decision
+in `graphiti_core/utils/maintenance/dedup_helpers.py`: `_resolve_with_similarity`
++ `_build_candidate_indexes` resolve each extracted node against existing nodes by
+exact normalized-name (`_normalize_string_exact` = lower + ws-collapse), else a
+MinHash/Jaccard `>= _FUZZY_JACCARD_THRESHOLD (0.9)` fuzzy match, with a
+low-entropy / short-name gate (`_NAME_ENTROPY_THRESHOLD=1.5`, `_MIN_NAME_LENGTH=6`).
+No LLM, DB, or embedder is touched by the floor (stdlib + pydantic only). It is
+**label-agnostic** -- the floor applies no entity-label gate (verified at source).
+
+`RealGraphiti` (`real_resolvers.graphiti_clusters`) runs that real code via
+**sequential ingestion**: each record resolves against the accumulated existing set,
+mirroring Graphiti's real extracted-vs-existing-graph flow (the real code does NO
+intra-batch dedup). Honest scope recorded so a skeptic can't mistake it:
+
+- **No LLM/embedder.** Unresolved nodes (0 exact + no fuzzy hit, >1 exact ambiguous,
+  or low-entropy) become NEW entities -- the deterministic-floor end state. The full
+  default path would escalate those to the LLM; this row is the FLOOR, not that path.
+- **We feed the full existing set as candidates.** The real flow prunes candidates
+  via an embedder semantic search first, so this is an UPPER BOUND on the floor
+  (more candidates, never fewer) -- it can only help recall.
+- The per-label grouping the other framework rows use is NOT applied here (the floor
+  is label-agnostic); this is a harness apples-to-apples choice, not Graphiti behavior.
+
+Tier **`real-inproc`** (the library's real resolution DECISION runs in-process;
+only the embedder candidate-prune, the LLM fallback, and graph persistence are
+elided). CI-only (`graphiti-core`, torch-free, import-guarded).
+
 ## Phase 2 -- embedding terms (measured, not asserted)
 
 `--embedder st` activates the cosine OR-terms (MiniLM `all-MiniLM-L6-v2`, the
@@ -327,17 +371,29 @@ blog-sourced rule -- an embedder closes neither gap).
 
 - **mem0 LLM ADD/UPDATE merge** is Phase 3 (see mem0 section).
 
-## Could-not-confirm summary
+## Still `modeled` after Phase 3a
 
-Only one adapter stayed `modeled` purely for **lack of confirmable source**
-(not measured divergence): **LlamaIndex PGI** -- its constants live in a blog,
-and the maintained library ships no equivalent default. The exact-match family
-(GraphRAG, LightRAG, Cognee) and the fuzzy model stayed `modeled` because they
-**diverge** from confirmed real source. **Neo4j-KGBuilder** stayed `modeled`
-because, although its string predicates + constants are source-confirmed, its
-edit-distance length guard is `elementId`-sided and IRREPRODUCIBLE by a
-commutative predicate (Phase-2 verified) -- so even the cosine-activated
-`--embedder` variant stays `modeled`. Net: of the modeled-family adapters, **only mem0** (a byte-identical,
-cleanly-scoped MD5 floor) earned `validated`; every other framework default is
-either divergent, partial, or unconfirmable -- which is itself the headline
-finding (real built-in dedup defaults are shallow and inconsistent).
+Phase 3a cut the exact-key family (GraphRAG, LightRAG, Cognee) and added Graphiti
+over to faithful rows (see the Phase-3a banner + sections 1-3 + 10). What REMAINS
+`modeled`, and why:
+
+- **LlamaIndex PGI** -- **lack of confirmable source**: its constants live in a
+  Neo4j/Bratanic blog, and maintained `run-llama/llama_index` ships no equivalent
+  fuzzy-dedup default. An embedder does not close a provenance gap -> `(emb)` stays
+  modeled too.
+- **Neo4j-KGBuilder** -- string predicates + constants are source-confirmed, but the
+  default run is PARTIAL (cosine OR-term needs an embedder) AND the edit-distance
+  length guard is `elementId`-sided -> IRREPRODUCIBLE by a commutative predicate
+  (Phase-2 verified). Even the `--embedder` variant stays modeled. The only honest
+  escape is a live-Neo4j run of the real Cypher (Phase 4 / never).
+- **neo4j-graphrag(fuzzy) MODEL** -- kept ALONGSIDE the `real-inproc` `*` row purely
+  for the model-vs-real contrast (model F1 0.403 vs real 0.469, +6.6pp); it is a
+  deliberate teaching row, not an unconfirmed one.
+
+Of the original modeled framework defaults, the Phase 0-3a arc converted every one
+that could be honestly run/confirmed (neo4j-graphrag fuzzy/spaCy `real-inproc`,
+neo4j-graphrag exact + GraphRAG + Cognee `validated`, LightRAG + Graphiti
+`real-inproc`, mem0 MD5 floor `validated`); only LlamaIndex (unconfirmable) and
+Neo4j-KGBuilder (irreproducible guard) remain modeled -- which is itself the
+headline finding: real built-in dedup defaults are shallow, divergent, and
+sometimes irreproducible.
