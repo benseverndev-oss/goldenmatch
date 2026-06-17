@@ -24,7 +24,8 @@ UNMAPPED_TYPE: str = "unknown"
 #:
 #: v2 (2026-05-06): ``FieldSpec`` gained ``name`` so the canonical
 #: identifier travels with the spec instead of only as a dict key.
-SCHEMA_VERSION: int = 2
+#: v3 (2026-06-17): DomainPack gained optional groups (FieldGroupSpec list).
+SCHEMA_VERSION: int = 3
 
 
 @dataclass(frozen=True)
@@ -47,12 +48,29 @@ class FieldSpec:
 
 
 @dataclass(frozen=True)
+class FieldGroupSpec:
+    """A set of canonical fields that survive golden-record merge together.
+
+    ``members`` are canonical field names (matching keys in DomainPack.types).
+    Consumed by goldenmatch survivorship to promote correlated columns
+    (address, person name, contact) from one winning source record.
+    """
+
+    name: str
+    members: list[str]
+    category: str | None = None
+    default_strategy: str = "most_complete"
+    date_hint: str | None = None
+
+
+@dataclass(frozen=True)
 class DomainPack:
     """A named bundle of FieldSpec definitions (e.g., 'finance', 'healthcare')."""
 
     name: str
     description: str
     types: dict[str, FieldSpec]
+    groups: list[FieldGroupSpec] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
