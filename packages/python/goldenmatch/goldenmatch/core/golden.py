@@ -736,6 +736,24 @@ def _survivorship_active(rules: GoldenRulesConfig) -> bool:
     return False
 
 
+def assert_in_memory_survivorship(rules: GoldenRulesConfig | None, where: str) -> None:
+    """Refuse correlated survivorship on a code path that cannot honor it.
+
+    Field-group / conditional / validated survivorship resolves on the driver via
+    the in-memory builder. The distributed streaming pipeline and the Sail backend
+    cannot run the staged per-cluster pass, so they must REFUSE rather than silently
+    apply a plain most_complete merge (which would produce wrong golden records).
+    Spec 4.4. No-op when `rules` is None or survivorship is not active.
+    """
+    if rules is not None and _survivorship_active(rules):
+        raise NotImplementedError(
+            f"Field-group / conditional / validated survivorship is not supported on "
+            f"the {where}. Use the in-memory golden builder (non-distributed pipeline "
+            f"or build_golden_records_smart) for configs with field_groups, conditional "
+            f"field_rules (when:), or validate:."
+        )
+
+
 def _polars_native_eligible(
     rules: GoldenRulesConfig,
     quality_scores: dict[tuple[int, str], float] | None,

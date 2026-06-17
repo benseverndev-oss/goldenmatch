@@ -156,6 +156,18 @@ def _run_phase5_pipeline(
     else:
         cfg = config
 
+    # 1b. Spec 4.4: refuse correlated survivorship (field_groups / conditional /
+    #     validate) on the distributed streaming pipeline. The in-memory builder
+    #     runs a staged per-cluster pass on the driver; this pipeline cannot
+    #     replicate that and would silently produce wrong (plain most_complete)
+    #     golden records. Fail-fast with a clear message pointing to the
+    #     in-memory path.
+    from goldenmatch.core.golden import assert_in_memory_survivorship
+    assert_in_memory_survivorship(
+        getattr(cfg, "golden_rules", None),
+        "distributed streaming pipeline (GOLDENMATCH_DISTRIBUTED_PIPELINE=2)",
+    )
+
     # 2. Distributed scoring -> Ray Dataset of pairs (RAW: per-partition, so each
     #    component's edges are co-located in one block -- required by local_cc).
     raw_pairs_ds = score_blocks_distributed(ds, cfg)
