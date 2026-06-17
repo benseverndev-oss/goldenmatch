@@ -1064,6 +1064,14 @@ def build_golden_record(
     Returns dict of {col: {"value": v, "confidence": c}, ...,
     "__golden_confidence__": mean_of_confidences}.
     """
+    if _survivorship_active(rules):
+        from goldenmatch.core.survivorship.conditions import build_resolution_order
+        from goldenmatch.core.survivorship.resolve import resolve_cluster
+        user_cols = [c for c in cluster_df.columns if not _is_internal(c) and c != "__cluster_id__"]
+        order = build_resolution_order(rules.field_rules, rules.field_groups, user_cols)
+        result, _prov = resolve_cluster(cluster_df, rules, order, quality_scores=quality_scores)
+        return result
+
     result = {}
     confidences = []
     row_ids = cluster_df["__row_id__"].to_list() if "__row_id__" in cluster_df.columns else None
