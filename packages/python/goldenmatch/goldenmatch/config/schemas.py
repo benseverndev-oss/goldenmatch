@@ -480,7 +480,9 @@ class GoldenGroupRule(BaseModel):
 class GoldenRulesConfig(BaseModel):
     default_strategy: str | None = None
     default: GoldenFieldRule | None = None
-    field_rules: dict[str, GoldenFieldRule] = Field(default_factory=dict)
+    field_rules: dict[str, GoldenFieldRule | list[GoldenFieldRule]] = Field(default_factory=dict)
+    field_groups: list[GoldenGroupRule] = Field(default_factory=list)
+    field_group_detection: bool = False
     max_cluster_size: int = 100
     auto_split: bool = True
     quality_weighting: bool = True
@@ -535,6 +537,31 @@ class GoldenRulesConfig(BaseModel):
             raise ValueError(
                 f"Invalid default_strategy '{self.default_strategy}'."
             )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_survivorship(self) -> GoldenRulesConfig:
+        # Detect overlapping field_groups columns.
+        seen: set[str] = set()
+        for g in self.field_groups:
+            for col in g.columns:
+                if col in seen:
+                    raise ValueError(f"Column '{col}' appears in more than one field group.")
+                seen.add(col)
+        group_cols = seen
+        # Validate field_rules: no overlap with group columns; list-form clause ordering.
+        for col, rule in self.field_rules.items():
+            if col in group_cols:
+                raise ValueError(f"Column '{col}' is in a field group and cannot also have a field_rule.")
+            if isinstance(rule, list):
+                defaults = [i for i, r in enumerate(rule) if r.when is None]
+                if len(defaults) != 1:
+                    raise ValueError(f"field_rules['{col}'] needs exactly one default (when-less) clause.")
+                if defaults[0] != len(rule) - 1:
+                    raise ValueError(f"field_rules['{col}'] default clause must be last.")
+        # NOTE: cycle detection over `when:` field references is intentionally
+        # NOT performed here -- it is enforced later in Phase E
+        # `build_resolution_order` which has access to the full column graph.
         return self
 
 
