@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass
 class GroupResult:
     winner_pos: int
-    values: dict           # {column: pinned value (may be None)}
+    values: dict[str, Any]  # {column: pinned value (may be None)}
     confidence: float
     tie: bool
 
@@ -34,6 +35,7 @@ def group_winner(rows, columns, strategy="most_complete", *,
             d = dates[i] if dates and i < len(dates) else None
             return (d is not None, d)
         best = max(range(n), key=keyf)
+        # ties on equal dates are index-stable; no tie penalty (unlike most_complete).
         tie = False
     else:  # most_complete
         counts = [_populated(rows[i], columns) for i in range(n)]

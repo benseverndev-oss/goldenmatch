@@ -57,3 +57,19 @@ def test_tie_applies_0_7_penalty():
     res = group_winner(rows, ["a", "b"], strategy="most_complete")
     assert res.tie is True
     assert res.confidence == 0.7
+
+
+def test_lockstep_winner_null_not_backfilled_from_nonwinner():
+    # Winner (by source_priority) has zip=None; non-winner has zip='90001'.
+    # Anti-Frankenstein: result must be None, not the non-winner's value.
+    rows = [
+        {"__pos__": 0, "__source__": "crm", "name": "Alice", "zip": None},
+        {"__pos__": 1, "__source__": "billing", "name": "Alice Smith", "zip": "90001"},
+    ]
+    res = group_winner(
+        rows, ["name", "zip"],
+        strategy="source_priority",
+        source_priority=["crm", "billing"],
+    )
+    assert res.winner_pos == 0
+    assert res.values["zip"] is None   # winner's null pinned; no back-fill

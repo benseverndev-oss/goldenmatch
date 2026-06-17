@@ -56,4 +56,8 @@ def goldenflow_filter(values: list, name: str) -> list:
     except Exception:
         logger.warning("golden validate: validator %r raised; no filtering applied", name)
         return list(values)
+    if len(mask) != len(values):
+        logger.warning("golden validate: validator %r returned wrong length; no filtering applied", name)
+        return list(values)
+    # A None/false mask entry -> candidate dropped to None; a None input stays None.
     return [v if (v is not None and ok) else None for v, ok in zip(values, mask)]
