@@ -27,6 +27,7 @@ on:
       - "packages/python/goldenmatch/benchmarks/er-kg-bench/demo/**"
       - "packages/python/goldenmatch/benchmarks/er-kg-bench/tests/**"
       - "packages/python/goldenmatch/benchmarks/er-kg-bench/requirements-real.txt"
+      - "packages/python/goldenmatch/benchmarks/er-kg-bench/requirements-embed.txt"
       - ".github/workflows/bench-er-kg.yml"
 
 permissions:
