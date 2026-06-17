@@ -24,6 +24,7 @@ on:
     paths:
       - "packages/python/goldenmatch/benchmarks/er-kg-bench/dataset/**"
       - "packages/python/goldenmatch/benchmarks/er-kg-bench/erkgbench/**"
+      - "packages/python/goldenmatch/benchmarks/er-kg-bench/demo/**"
       - ".github/workflows/bench-er-kg.yml"
 
 permissions:
@@ -61,6 +62,35 @@ jobs:
           name: er-kg-results-offline
           path: ${{ env.BENCH_DIR }}/results/
 
+      - name: Demo unit tests (offline narrative logic)
+        working-directory: ${{ env.BENCH_DIR }}
+        run: "$GITHUB_WORKSPACE/.venv/bin/python -m pytest demo/test_demo.py -v"
+
+      - name: Regenerate demo DEMO.md (Tier 1)
+        working-directory: ${{ env.BENCH_DIR }}
+        run: "$GITHUB_WORKSPACE/.venv/bin/python demo/run_demo.py"
+
+      - name: Upload demo artifact (commit DEMO.md from here on first run)
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: er-kg-demo
+          path: ${{ env.BENCH_DIR }}/demo/DEMO.md
+
+      - name: Check demo DEMO.md is committed and current
+        run: |
+          set -euo pipefail
+          DEMO="$BENCH_DIR/demo/DEMO.md"
+          # The regenerate step above just wrote DEMO.md from a fresh run. If that
+          # differs from the committed copy (or it is untracked), the demo is stale.
+          if [ -n "$(git status --porcelain -- "$DEMO")" ]; then
+            echo "::error::$DEMO is uncommitted or stale -- run 'python demo/run_demo.py' and commit the result."
+            git --no-pager diff -- "$DEMO" || true
+            git status --porcelain -- "$DEMO"
+            exit 1
+          fi
+          echo "$DEMO is committed and matches a fresh run."
+
       - name: Run benchmark (keyed -- emb-openai + auto+llm; prose only)
         working-directory: ${{ env.BENCH_DIR }}
         env:
@@ -72,6 +102,13 @@ jobs:
             exit 0
           fi
           "$GITHUB_WORKSPACE/.venv/bin/python" erkgbench/run.py
+          "$GITHUB_WORKSPACE/.venv/bin/python" demo/run_demo.py > demo_keyed.txt 2>&1 || true
+          {
+            echo '## ER-KG demo (Tier 2: over-merge, key-gated prose)'
+            echo '```'
+            cat demo_keyed.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
           {
             echo '## ER-KG-Bench (keyed run: emb-openai + auto+llm rows included)'
             echo '```'

@@ -551,6 +551,7 @@ jobs:
             -n auto --splits "${GM_SPLITS}" --group ${{ matrix.shard }} \
             --timeout=120 --timeout-method=thread --durations=20 \
             --cov=goldenmatch --cov-report= \
+            --ignore=packages/python/goldenmatch/benchmarks \
             --ignore=packages/python/goldenmatch/tests/test_db.py \
             --ignore=packages/python/goldenmatch/tests/test_reconcile.py \
             --ignore=packages/python/goldenmatch/tests/test_mcp_and_watch.py \
