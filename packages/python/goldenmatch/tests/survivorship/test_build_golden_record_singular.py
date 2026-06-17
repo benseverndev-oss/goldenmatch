@@ -7,8 +7,7 @@ Three cases:
 3. Plain config (no survivorship levers): existing loop unchanged, byte-identical.
 """
 import polars as pl
-
-from goldenmatch.config.schemas import GoldenRulesConfig, GoldenGroupRule, GoldenFieldRule
+from goldenmatch.config.schemas import GoldenFieldRule, GoldenGroupRule, GoldenRulesConfig
 from goldenmatch.core.golden import build_golden_record
 
 

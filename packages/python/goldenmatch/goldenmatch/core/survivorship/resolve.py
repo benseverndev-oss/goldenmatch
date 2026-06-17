@@ -21,7 +21,11 @@ def resolve_cluster(cluster_df, rules, resolution_order, *,
                     quality_scores=None, pair_scores=None, provenance=False):
     # Local import avoids any import cycle (golden imports resolve lazily).
     from goldenmatch.core.golden import (
-        ClusterProvenance, FieldProvenance, GroupProvenance, _is_internal, merge_field,
+        ClusterProvenance,
+        FieldProvenance,
+        GroupProvenance,
+        _is_internal,
+        merge_field,
     )
 
     user_cols = [c for c in cluster_df.columns if not _is_internal(c) and c != "__cluster_id__"]

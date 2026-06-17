@@ -15,11 +15,9 @@ import unittest.mock as mock
 
 import polars as pl
 import pytest
-
 from goldenmatch.config.schemas import GoldenFieldRule, GoldenGroupRule, GoldenRulesConfig
 from goldenmatch.core.golden import _survivorship_active, build_golden_records_batch
 from goldenmatch.core.survivorship.conditions import PredicateError, ResolutionError
-
 
 # ---------------------------------------------------------------------------
 # Test 1: 3-source Frankenstein prevention via lock-step group

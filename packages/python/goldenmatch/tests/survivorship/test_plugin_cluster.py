@@ -2,12 +2,10 @@
 import inspect
 
 import polars as pl
-
 from goldenmatch.config.schemas import GoldenFieldRule
 from goldenmatch.core.golden import merge_field
 from goldenmatch.plugins.base import GoldenStrategyPlugin
 from goldenmatch.plugins.registry import PluginRegistry
-
 
 # ── E1 ────────────────────────────────────────────────────────────────────────
 

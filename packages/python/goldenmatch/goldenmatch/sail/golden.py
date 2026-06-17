@@ -49,7 +49,7 @@ def build_golden(
     value_cols: list[str],
     source_id_col: str = "__row_id__",
     strategy: str = "most_complete",
-    rules: "Any | None" = None,
+    rules: Any | None = None,
 ) -> Any:
     """Build one golden record per multi-member cluster, distributed.
 

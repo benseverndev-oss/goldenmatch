@@ -1,6 +1,6 @@
 import polars as pl
-from goldenmatch.core.survivorship.groups import detect_groups_heuristic, build_field_groups
 from goldenmatch.config.schemas import GoldenGroupRule
+from goldenmatch.core.survivorship.groups import build_field_groups, detect_groups_heuristic
 
 
 def test_heuristic_detects_address():
@@ -58,8 +58,8 @@ def test_infermap_smoke_real(monkeypatch):
     Skipped if infermap or goldencheck_types are not importable in this env.
     """
     pytest = __import__("pytest")
-    goldencheck_types = pytest.importorskip("goldencheck_types")
-    infermap = pytest.importorskip("infermap")
+    pytest.importorskip("goldencheck_types")
+    pytest.importorskip("infermap")
     import goldenmatch.core.survivorship.groups as G
     from goldencheck_types import DomainPack, FieldGroupSpec
     from goldencheck_types.types import FieldSpec

@@ -2669,7 +2669,7 @@ def _get_default_memory() -> AutoConfigMemory | None:
     return _DEFAULT_MEMORY
 
 
-def _field_group_detection_enabled(config) -> bool:
+def _field_group_detection_enabled(config: Any) -> bool:
     """Return True when field-group detection is switched on (default OFF).
 
     Two opt-in paths:
@@ -2684,7 +2684,7 @@ def _field_group_detection_enabled(config) -> bool:
     )
 
 
-def _maybe_active_domain_pack(config):
+def _maybe_active_domain_pack(config: Any):
     """Return a goldencheck-types DomainPack if one is clearly in play, else None.
 
     v1: best-effort -- return None (detection falls back to the heuristic).
@@ -2693,7 +2693,7 @@ def _maybe_active_domain_pack(config):
     return None
 
 
-def _maybe_detect_field_groups(df, config) -> None:
+def _maybe_detect_field_groups(df: Any, config: Any) -> None:
     """Gated, fail-open hook: when enabled, detect field groups and write them
     onto ``config.golden_rules.field_groups``.
 

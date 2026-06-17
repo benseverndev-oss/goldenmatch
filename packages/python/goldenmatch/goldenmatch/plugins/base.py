@@ -109,7 +109,7 @@ class GoldenStrategyPlugin(Protocol):
         quality_weights: list[float] | None = None,
         pair_scores: dict[tuple[int, int], float] | None = None,
         rule_kwargs: dict | None = None,
-        cluster: "pl.DataFrame | None" = None,
+        cluster: pl.DataFrame | None = None,
     ) -> Any:
         """Merge cluster member values into one survivor.
 

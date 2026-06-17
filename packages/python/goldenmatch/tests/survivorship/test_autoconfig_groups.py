@@ -1,7 +1,6 @@
-import polars as pl
-import pytest
-from goldenmatch.config.schemas import GoldenMatchConfig, GoldenRulesConfig
 import goldenmatch.core.autoconfig as AC
+import polars as pl
+from goldenmatch.config.schemas import GoldenMatchConfig, GoldenRulesConfig
 
 
 def _addr_df():

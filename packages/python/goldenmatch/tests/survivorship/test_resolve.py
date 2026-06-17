@@ -1,5 +1,5 @@
 import polars as pl
-from goldenmatch.config.schemas import GoldenRulesConfig, GoldenGroupRule, GoldenFieldRule
+from goldenmatch.config.schemas import GoldenFieldRule, GoldenGroupRule, GoldenRulesConfig
 from goldenmatch.core.golden import build_golden_records_batch
 
 

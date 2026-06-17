@@ -26,8 +26,8 @@ def _resolve_validator(name: str):
     """Return a BATCH validator Callable[[list], list[bool|None]] backed by a
     GoldenFlow series-mode validator transform, or None if unavailable."""
     try:
-        import polars as pl
         import goldenflow  # noqa: F401 — triggers submodule registration side-effects
+        import polars as pl
         from goldenflow.transforms import get_transform
     except Exception:
         return None

@@ -21,6 +21,21 @@ from unittest.mock import MagicMock
 # the config-branch logic with no Ray runtime -- it runs in the default lane.
 
 
+def _no_survivorship_rules():
+    """A truthy golden_rules mock that declares no survivorship features.
+
+    Two constraints the #739 tests must satisfy with their mock configs:
+    - The distributed survivorship guard (assert_in_memory_survivorship) reads
+      ``golden_rules.field_groups`` / ``.field_rules``; a bare MagicMock exposes
+      truthy auto-attributes there and trips the guard. Empty list/dict make it a
+      no-op (these tests configure no field-group/conditional survivorship).
+    - The golden tail does ``rules = cfg.golden_rules or GoldenRulesConfig()``;
+      the mock must stay TRUTHY so it short-circuits -- a bare GoldenRulesConfig()
+      raises (it requires a ``default_strategy``/``default``).
+    """
+    return MagicMock(field_groups=[], field_rules={})
+
+
 def _patch_distributed_stages(monkeypatch):
     """Stub every distributed stage so _run_phase5_pipeline runs end to end
     without touching Ray. Returns the auto_configure_df mock for assertions."""
@@ -30,7 +45,7 @@ def _patch_distributed_stages(monkeypatch):
     import goldenmatch.distributed.pipeline as pipeline
     import goldenmatch.distributed.scoring as scoring
 
-    auto_cfg = MagicMock(name="auto_configured")
+    auto_cfg = MagicMock(name="auto_configured", golden_rules=_no_survivorship_rules())
     auto_configure_df = MagicMock(name="auto_configure_df", return_value=auto_cfg)
     monkeypatch.setattr(autoconfig, "auto_configure_df", auto_configure_df)
 
@@ -55,7 +70,7 @@ def test_explicit_config_bypasses_auto_configure(monkeypatch):
     from goldenmatch.distributed.pipeline import _run_phase5_pipeline
 
     auto_configure_df, scoring = _patch_distributed_stages(monkeypatch)
-    explicit = MagicMock(name="explicit_config")
+    explicit = MagicMock(name="explicit_config", golden_rules=_no_survivorship_rules())
 
     result = _run_phase5_pipeline(MagicMock(name="ds"), output_path=None, config=explicit)
 
@@ -108,7 +123,7 @@ def test_assignments_output_path_writes_the_wcc_output(monkeypatch):
     _run_phase5_pipeline(
         MagicMock(name="ds"),
         output_path=None,
-        config=MagicMock(name="cfg"),
+        config=MagicMock(name="cfg", golden_rules=_no_survivorship_rules()),
         assignments_output_path="gs://bucket/assign.parquet",
     )
 
@@ -128,7 +143,7 @@ def test_assignments_output_path_default_none_no_write(monkeypatch):
     )
 
     _run_phase5_pipeline(
-        MagicMock(name="ds"), output_path=None, config=MagicMock(name="cfg"),
+        MagicMock(name="ds"), output_path=None, config=MagicMock(name="cfg", golden_rules=_no_survivorship_rules()),
     )
 
     assignments_ds.write_parquet.assert_not_called()

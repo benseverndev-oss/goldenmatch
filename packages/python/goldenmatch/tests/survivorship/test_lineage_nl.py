@@ -1,6 +1,8 @@
-from goldenmatch.core.golden import ClusterProvenance, GroupProvenance, FieldProvenance
+from goldenmatch.core.golden import ClusterProvenance, FieldProvenance, GroupProvenance
 from goldenmatch.core.lineage import (
-    render_cluster_provenance_nl, render_group_provenance_line, render_field_condition_line,
+    render_cluster_provenance_nl,
+    render_field_condition_line,
+    render_group_provenance_line,
 )
 
 

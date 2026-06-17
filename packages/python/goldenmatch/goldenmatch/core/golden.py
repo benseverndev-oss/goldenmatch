@@ -65,7 +65,7 @@ def merge_field(
     dates: list | None = None,
     quality_weights: list[float] | None = None,
     pair_scores: dict[tuple[int, int], float] | None = None,
-    cluster: "pl.DataFrame | None" = None,
+    cluster: pl.DataFrame | None = None,
 ) -> tuple[object, float, int | None]:
     """Merge a list of values using the given rule's strategy.
 
@@ -317,7 +317,7 @@ def _dispatch_custom_strategy(
     dates: list | None,
     quality_weights: list[float] | None,
     pair_scores: dict[tuple[int, int], float] | None,
-    cluster: "pl.DataFrame | None" = None,
+    cluster: pl.DataFrame | None = None,
 ) -> tuple:
     """Look up and invoke a custom golden-strategy plugin.
 

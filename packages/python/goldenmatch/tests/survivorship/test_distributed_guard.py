@@ -6,9 +6,8 @@ silently applying a plain most_complete merge that would produce wrong
 golden records.
 """
 import pytest
-from goldenmatch.config.schemas import GoldenRulesConfig, GoldenGroupRule, GoldenFieldRule
+from goldenmatch.config.schemas import GoldenFieldRule, GoldenGroupRule, GoldenRulesConfig
 from goldenmatch.core.golden import assert_in_memory_survivorship
-
 
 # ---------------------------------------------------------------------------
 # Helper tests (shared guard function)

@@ -1,6 +1,6 @@
 import pytest
-from pydantic import ValidationError
 from goldenmatch.config.schemas import GoldenFieldRule, GoldenGroupRule, GoldenRulesConfig
+from pydantic import ValidationError
 
 
 def test_field_rule_when_validate_optional():

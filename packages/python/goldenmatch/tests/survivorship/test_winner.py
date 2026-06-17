@@ -1,4 +1,4 @@
-from goldenmatch.core.survivorship.winner import group_winner, GroupResult
+from goldenmatch.core.survivorship.winner import GroupResult, group_winner
 
 
 def _rows():

@@ -463,7 +463,7 @@ class GoldenGroupRule(BaseModel):
     source_priority: list[str] | None = None
 
     @model_validator(mode="after")
-    def _validate_group(self) -> "GoldenGroupRule":
+    def _validate_group(self) -> GoldenGroupRule:
         if len(self.columns) < 2:
             raise ValueError(f"GoldenGroupRule '{self.name}' needs >= 2 columns.")
         for col in self.columns:

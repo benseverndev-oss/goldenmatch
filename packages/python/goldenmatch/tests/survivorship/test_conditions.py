@@ -1,5 +1,5 @@
 import pytest
-from goldenmatch.core.survivorship.conditions import eval_predicate, PredicateError
+from goldenmatch.core.survivorship.conditions import PredicateError, eval_predicate
 
 
 @pytest.mark.parametrize("expr,resolved,expected", [
@@ -41,7 +41,9 @@ def test_dangerous_expressions_rejected(expr):
 
 from goldenmatch.config.schemas import GoldenFieldRule, GoldenGroupRule
 from goldenmatch.core.survivorship.conditions import (
-    select_conditional_strategy, build_resolution_order, ResolutionError,
+    ResolutionError,
+    build_resolution_order,
+    select_conditional_strategy,
 )
 
 

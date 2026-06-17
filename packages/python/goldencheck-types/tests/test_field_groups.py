@@ -1,4 +1,4 @@
-from goldencheck_types.types import DomainPack, FieldGroupSpec, FieldSpec, SCHEMA_VERSION
+from goldencheck_types.types import SCHEMA_VERSION, DomainPack, FieldGroupSpec, FieldSpec
 
 
 def _spec(name):
