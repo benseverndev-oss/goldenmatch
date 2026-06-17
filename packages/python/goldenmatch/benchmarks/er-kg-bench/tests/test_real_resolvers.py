@@ -9,10 +9,13 @@ _BENCH_ROOT = Path(__file__).resolve().parent.parent
 if str(_BENCH_ROOT) not in sys.path:
     sys.path.insert(0, str(_BENCH_ROOT))
 
+import pytest
 from erkgbench import metrics  # pyright: ignore[reportMissingImports]
 from erkgbench.real_resolvers import (  # pyright: ignore[reportMissingImports]
+    SPACY_MODEL,
     neo4j_graphrag_exact_clusters,
     neo4j_graphrag_fuzzy_clusters,
+    neo4j_graphrag_spacy_clusters,
 )
 
 DATASET = _BENCH_ROOT / "dataset" / "records.csv"
@@ -77,3 +80,50 @@ def test_exact_merges_identical_skips_null_and_no_normalization():
     assert [2] in clustering                            # case differs -> not merged
     assert [3] in clustering                            # empty -> singleton
     assert [4] in clustering                            # different label -> not merged
+
+
+# -- SpaCySemanticMatchResolver (real-inproc; needs the spaCy vector model) -----
+
+# Observed real F1 of the spaCy resolver on the corpus. None until the first CI run
+# (which has the model) reports it; set it to lock the value against silent drift.
+# Read it from the regenerated results/RESULTS.md `neo4j-graphrag(spacy)*` row or the
+# skip message below, then pin here (Task 8).
+_SPACY_F1_PIN: float | None = None
+
+
+def _spacy_model_available() -> bool:
+    """True only when both spaCy and the vector model are importable. Locally the
+    model is usually absent, so the spaCy parity test SKIPS; CI installs the model
+    (`python -m spacy download en_core_web_lg`) and runs it for real."""
+    try:
+        import importlib.util
+        if importlib.util.find_spec("spacy") is None:
+            return False
+        return importlib.util.find_spec(SPACY_MODEL) is not None
+    except Exception:
+        return False
+
+
+def test_spacy_reproduces_observed_f1():
+    if not _spacy_model_available():
+        pytest.skip(f"spaCy model {SPACY_MODEL} not installed (CI-only real row)")
+    items, entity_ids, classes = _load()
+    clustering = neo4j_graphrag_spacy_clusters(items)
+    # Full partition: every record appears exactly once (no dropped/duplicated ids).
+    flat = [i for c in clustering for i in c]
+    assert sorted(flat) == sorted(i for i, _m, _t in items)
+    f1 = metrics.score_by_class(entity_ids, classes, clustering)["__overall__"].f1
+    # OBSERVE-THEN-PIN: until _SPACY_F1_PIN is set, surface the observed F1 (so the
+    # first CI run reports it) without asserting a guessed value.
+    if _SPACY_F1_PIN is None:
+        pytest.skip(f"spaCy F1 observed = {round(f1, 3)} -- set _SPACY_F1_PIN to lock it")
+    assert round(f1, 3) == _SPACY_F1_PIN
+
+
+def test_spacy_is_deterministic():
+    if not _spacy_model_available():
+        pytest.skip(f"spaCy model {SPACY_MODEL} not installed (CI-only real row)")
+    items, _, _ = _load()
+    assert metrics.clusterings_equal(
+        neo4j_graphrag_spacy_clusters(items), neo4j_graphrag_spacy_clusters(items)
+    )
