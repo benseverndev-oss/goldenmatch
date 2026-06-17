@@ -1,0 +1,10 @@
+# Optional embedding/model deps for ER-KG-Bench Phase 2 (offline lane; NO key).
+# Activates `--embedder st` (MiniLM cosine OR-terms for KGBuilder/LlamaIndex) and
+# the real spaCy resolver row. BENCH-ONLY -- never a core goldenmatch dependency.
+# Install with: uv pip install -r requirements-embed.txt
+sentence-transformers>=3,<4
+spacy>=3.8,<3.9
+# spaCy vector model for the real SpaCySemanticMatchResolver, pinned as a wheel URL
+# so the uv venv (which ships NO pip) installs it WITHOUT `spacy download` (which
+# shells out to pip). en_core_web_lg-3.8.0 requires spacy 3.8.x (matched above).
+en_core_web_lg @ https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl

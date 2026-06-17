@@ -60,9 +60,17 @@ jobs:
         # `uv pip install -e`); it installs into the project .venv.
         run: uv pip install -r "$BENCH_DIR/requirements-real.txt"
 
+      - name: Install embedder + spaCy model (Phase 2; offline lane, no key)
+        # sentence-transformers (MiniLM, --embedder st cosine terms) + spacy + the
+        # en_core_web_lg vector model (pinned as a wheel URL in requirements-embed.txt
+        # so the pip-less uv venv installs it WITHOUT `spacy download`).
+        run: uv pip install -r "$BENCH_DIR/requirements-embed.txt"
+
       - name: Run benchmark (offline -- the committed table)
         working-directory: ${{ env.BENCH_DIR }}
-        run: "$GITHUB_WORKSPACE/.venv/bin/python erkgbench/run.py"
+        # --embedder st activates the (emb) rows + the spaCy real row on the committed
+        # board (still key-free): the measured embedder effect, visible side-by-side.
+        run: "$GITHUB_WORKSPACE/.venv/bin/python erkgbench/run.py --embedder st"
       - name: Upload offline results (commit these)
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
         with:
@@ -112,7 +120,7 @@ jobs:
             echo "No OPENAI_API_KEY secret; skipping the keyed run." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          "$GITHUB_WORKSPACE/.venv/bin/python" erkgbench/run.py
+          "$GITHUB_WORKSPACE/.venv/bin/python" erkgbench/run.py --embedder st
           "$GITHUB_WORKSPACE/.venv/bin/python" demo/run_demo.py > demo_keyed.txt 2>&1 || true
           {
             echo '## ER-KG demo (Tier 2: over-merge, key-gated prose)'
