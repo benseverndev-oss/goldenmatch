@@ -37,3 +37,12 @@ def test_auto_configure_df_detects_address_group_when_env_set(monkeypatch):
     cfg = auto_configure_df(_addr_df())
     assert cfg.golden_rules is not None
     assert any(g.category == "address" for g in cfg.golden_rules.field_groups)
+
+
+def test_hook_skips_ray_dataset(monkeypatch):
+    # Even with detection enabled, a Ray Dataset df is skipped (no field_groups written).
+    monkeypatch.setenv("GOLDENMATCH_FIELD_GROUP_SURVIVORSHIP", "1")
+    monkeypatch.setattr("goldenmatch.distributed.is_ray_dataset", lambda d: True)
+    cfg = GoldenMatchConfig(golden_rules=GoldenRulesConfig(default_strategy="most_complete"))
+    AC._maybe_detect_field_groups(_addr_df(), cfg)   # _addr_df() is a polars frame but is_ray_dataset is forced True
+    assert cfg.golden_rules.field_groups == []

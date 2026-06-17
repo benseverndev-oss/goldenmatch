@@ -2709,12 +2709,23 @@ def _maybe_detect_field_groups(df, config) -> None:
     if not enabled and not explicit:
         # Nothing to do; leave config byte-identical.
         return
+    # Field-group detection is column-name-based and needs a Polars frame.
+    # On the distributed path `df` is a Ray Dataset; skip silently (collecting
+    # to detect would be wrong here) rather than letting build_field_groups
+    # fail-open with a misleading warning.
+    try:
+        from goldenmatch.distributed import is_ray_dataset
+        if is_ray_dataset(df):
+            return
+    except Exception:
+        pass  # distributed utils not importable -> proceed; outer try/except still guards
     try:
         from goldenmatch.core.survivorship.groups import build_field_groups
         pack = _maybe_active_domain_pack(config)
         detected = build_field_groups(df, pack=pack, explicit=explicit, enabled=enabled)
-    except Exception:
+    except Exception as exc:
         # Fail-open: never break auto-config over optional detection.
+        logger.debug("field-group detection hook skipped: %s", exc)
         return
     if not detected:
         return
