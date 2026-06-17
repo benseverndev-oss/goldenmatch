@@ -6,6 +6,7 @@ export {
 } from "./loader.js";
 export type {
   FieldSpec,
+  FieldGroupSpec,
   DomainPack,
   FieldMapping,
   InferredSchema,

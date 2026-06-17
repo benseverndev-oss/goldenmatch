@@ -313,3 +313,44 @@ def load_lineage(path: str | Path) -> dict:
     if not path.exists():
         return {"error": f"Lineage file not found: {path}"}
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+# ── Survivorship provenance NL rendering ──────────────────────────────────
+
+
+def render_group_provenance_line(gp) -> str:
+    """One audit line for a lock-step field group. Spec 4.1."""
+    cols = ", ".join(gp.columns)
+    return (f"{cols} promoted together from record {gp.winner_row_id} "
+            f"via {gp.strategy} (group '{gp.name}')")
+
+
+def render_field_condition_line(field: str, fp) -> str | None:
+    """One audit line for a conditioned/validated field, or None if neither applies.
+    Spec 4.1."""
+    parts = []
+    if getattr(fp, "condition", None):
+        parts.append(f"{field} used {fp.strategy} because {fp.condition}")
+    if getattr(fp, "dropped_invalid", 0) and getattr(fp, "validator", None):
+        suffix = f" ({fp.dropped_invalid} candidate(s) dropped by {fp.validator})"
+        if parts:
+            parts[0] = parts[0] + suffix
+        else:
+            # Suffix-only (validator dropped candidates but no when: fired):
+            # "{field}: {N} candidate(s) dropped by {validator}"
+            parts.append(f"{field}: {fp.dropped_invalid} candidate(s) dropped by {fp.validator}")
+    return parts[0] if parts else None
+
+
+def render_cluster_provenance_nl(cp) -> str:
+    """Render a ClusterProvenance's survivorship audit trail (group + condition
+    lines) as newline-joined text. Returns '' when there is nothing survivorship-
+    specific to report. Spec 4.1."""
+    lines = []
+    for gp in getattr(cp, "groups", []) or []:
+        lines.append(render_group_provenance_line(gp))
+    for field, fp in (getattr(cp, "fields", {}) or {}).items():
+        line = render_field_condition_line(field, fp)
+        if line:
+            lines.append(line)
+    return "\n".join(lines)

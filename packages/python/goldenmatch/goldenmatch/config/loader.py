@@ -9,8 +9,16 @@ import yaml
 
 from goldenmatch.config.schemas import GoldenMatchConfig
 
-# Keys in golden_rules that are part of the schema (not field names)
-_GOLDEN_RULES_SPECIAL_KEYS = frozenset({"default_strategy", "field_rules"})
+# Keys in golden_rules that are part of the schema (not field names).
+# NOTE: max_cluster_size / auto_split / quality_weighting / weak_cluster_threshold /
+# split_edge_budget / adaptive / use_llm_for_ambiguous / cluster_overrides are
+# intentionally omitted -- those are set programmatically, not via flat YAML;
+# adding them here is out of scope for this change. The two new keys below
+# (field_groups, field_group_detection) are added so the YAML loader does not
+# sweep them into field_rules where they fail validation.
+_GOLDEN_RULES_SPECIAL_KEYS = frozenset({
+    "default_strategy", "field_rules", "field_groups", "field_group_detection",
+})
 
 
 def _normalize_golden_rules(raw: dict[str, Any]) -> dict[str, Any]:

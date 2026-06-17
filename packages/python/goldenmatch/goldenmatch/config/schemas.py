@@ -415,13 +415,15 @@ class BlockingConfig(BaseModel):
         return self
 
 
-# ── GoldenFieldRule / GoldenRulesConfig ─────────────────────────────────────
+# ── GoldenFieldRule / GoldenGroupRule / GoldenRulesConfig ────────────────────
 
 
 class GoldenFieldRule(BaseModel):
     strategy: str
     date_column: str | None = None
     source_priority: list[str] | None = None
+    when: str | None = None       # predicate over already-resolved fields
+    validate_with: str | None = Field(default=None, alias="validate")  # candidate-filter name (goldenflow validator)
 
     @model_validator(mode="after")
     def _validate_strategy(self) -> GoldenFieldRule:
@@ -449,10 +451,43 @@ class GoldenFieldRule(BaseModel):
         return self
 
 
+_GROUP_STRATEGIES = frozenset({"most_complete", "source_priority", "most_recent"})
+
+
+class GoldenGroupRule(BaseModel):
+    name: str
+    columns: list[str]
+    category: str | None = None
+    strategy: str = "most_complete"
+    date_column: str | None = None
+    source_priority: list[str] | None = None
+
+    @model_validator(mode="after")
+    def _validate_group(self) -> GoldenGroupRule:
+        if len(self.columns) < 2:
+            raise ValueError(f"GoldenGroupRule '{self.name}' needs >= 2 columns.")
+        for col in self.columns:
+            if col.startswith("__"):
+                raise ValueError(
+                    f"Group '{self.name}' column '{col}' is reserved (internal '__' prefix)."
+                )
+        if self.strategy not in _GROUP_STRATEGIES:
+            raise ValueError(
+                f"Invalid group strategy '{self.strategy}'. Must be one of {sorted(_GROUP_STRATEGIES)}."
+            )
+        if self.strategy == "most_recent" and not self.date_column:
+            raise ValueError(f"Group '{self.name}' strategy 'most_recent' requires 'date_column'.")
+        if self.strategy == "source_priority" and not self.source_priority:
+            raise ValueError(f"Group '{self.name}' strategy 'source_priority' requires 'source_priority'.")
+        return self
+
+
 class GoldenRulesConfig(BaseModel):
     default_strategy: str | None = None
     default: GoldenFieldRule | None = None
-    field_rules: dict[str, GoldenFieldRule] = Field(default_factory=dict)
+    field_rules: dict[str, GoldenFieldRule | list[GoldenFieldRule]] = Field(default_factory=dict)
+    field_groups: list[GoldenGroupRule] = Field(default_factory=list)
+    field_group_detection: bool = False
     max_cluster_size: int = 100
     auto_split: bool = True
     quality_weighting: bool = True
@@ -507,6 +542,31 @@ class GoldenRulesConfig(BaseModel):
             raise ValueError(
                 f"Invalid default_strategy '{self.default_strategy}'."
             )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_survivorship(self) -> GoldenRulesConfig:
+        # Detect overlapping field_groups columns.
+        seen: set[str] = set()
+        for g in self.field_groups:
+            for col in g.columns:
+                if col in seen:
+                    raise ValueError(f"Column '{col}' appears in more than one field group.")
+                seen.add(col)
+        group_cols = seen
+        # Validate field_rules: no overlap with group columns; list-form clause ordering.
+        for col, rule in self.field_rules.items():
+            if col in group_cols:
+                raise ValueError(f"Column '{col}' is in a field group and cannot also have a field_rule.")
+            if isinstance(rule, list):
+                defaults = [i for i, r in enumerate(rule) if r.when is None]
+                if len(defaults) != 1:
+                    raise ValueError(f"field_rules['{col}'] needs exactly one default (when-less) clause.")
+                if defaults[0] != len(rule) - 1:
+                    raise ValueError(f"field_rules['{col}'] default clause must be last.")
+        # NOTE: cycle detection over `when:` field references is intentionally
+        # NOT performed here -- it is enforced later in Phase E
+        # `build_resolution_order` which has access to the full column graph.
         return self
 
 

@@ -158,6 +158,10 @@ This is the knob most people get wrong, so read the contract before you run a 10
   **Only scoring needs distribution at this scale; clustering usually doesn't.** The scored pair set is small (~`(id_a, id_b, score)` per match), so at 100M rows it's ~1.8 GB — it fits one node. Clustering therefore routes to the in-memory scipy connected-components pass (seconds) automatically whenever the pairs fit driver RAM, and only falls back to the distributed WCC (a multi-hour tail) when they genuinely don't. You don't need to set `GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD` for this — it's the default.
 </Note>
 
+<Warning>
+  **Correlated survivorship (`field_groups` and conditional `field_rules`) does not run on the distributed or Sail paths.** The golden builder that resolves lock-step groups and conditional predicates runs on the driver. If your config includes `field_groups` or list-form `field_rules`, the Ray Phase-5 streaming pipeline (`GOLDENMATCH_DISTRIBUTED_PIPELINE=2`) and the Sail backend will refuse with a clear error rather than silently mis-merging. Run those configs on the in-memory path.
+</Warning>
+
 **Distributed sub-knobs** (only relevant on a real Ray cluster):
 
 | Variable | Default | Effect |
@@ -234,6 +238,7 @@ These trade nothing for speed/memory at scale and are safe to leave at their def
 | `GOLDENMATCH_AUTOCONFIG_LLM` | `0` | Let an LLM propose a config when heuristics are exhausted on a RED profile. Needs `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`. | Opt in only when heuristic auto-config can't find a healthy config and you accept the API cost. |
 | `GOLDENMATCH_AUTOCONFIG_INDICATOR_BUDGET` | unset | Set `fast` to skip the expensive complexity indicators. | Speeding up config on very large inputs. |
 | `GOLDENMATCH_AUTOCONFIG_FORCE_INCLUDE` / `_FORCE_EXCLUDE` | unset | Comma-separated columns to force into / out of auto-config analysis. | Rescue a column auto-config drops, or exclude a noisy one, without writing a full explicit config. |
+| `GOLDENMATCH_FIELD_GROUP_SURVIVORSHIP` | `0` (off) | `1` enables auto-detection of correlated field groups for survivorship. When on, auto-config proposes lock-step field groups (address, person name, contact) so related columns are always promoted from the same source record. Explicitly declared `field_groups` in YAML are always honored regardless of this flag. Off by default -- output is byte-identical to prior behavior when unset. | Set when you want auto-config to detect field groups without writing explicit `field_groups` YAML. Equivalent to `field_group_detection: true` in the `golden_rules` config block. |
 
 If auto-config raises `ControllerNotConfidentError`, that's by design at ≥100K rows on a RED profile — it's refusing to run a noise-result dedupe. See [Passing an explicit config](/goldenmatch/configuration) for recovery (the in-repo `docs/explicit-config.md` has the failing-sub-profile table).
 
@@ -369,6 +374,7 @@ Every `GOLDENMATCH_*` variable the package reads, grouped by who should care. De
 | `GOLDENMATCH_AUTOCONFIG_LLM` | `0` | LLM config fallback (needs API key). |
 | `GOLDENMATCH_AUTOCONFIG_INDICATOR_BUDGET` | unset | `fast` skips expensive indicators. |
 | `GOLDENMATCH_AUTOCONFIG_FORCE_INCLUDE` / `_FORCE_EXCLUDE` | unset | Force columns into/out of analysis. |
+| `GOLDENMATCH_FIELD_GROUP_SURVIVORSHIP` | `0` (off) | Auto-detect correlated field groups for survivorship. Equivalent to `field_group_detection: true` in `golden_rules`. Off = byte-identical to prior behavior. |
 | `GOLDENMATCH_AUTOCONFIG_SAMPLE_STRATEGY` | stratified | `random` forces random sampling. |
 | `GOLDENMATCH_AUTOCONFIG_ZERO_LABEL_COMMIT` | `1` | Zero-label commit tiebreaker. `0` = legacy. |
 | `GOLDENMATCH_AUTOCONFIG_ZERO_LABEL_STABILITY` | `0` | Perturbation re-runs (slow, experimental). |

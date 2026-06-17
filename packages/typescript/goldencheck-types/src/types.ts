@@ -21,8 +21,9 @@ export const UNMAPPED_TYPE = "unknown" as const;
  *  backwards-incompatible change to the shape.
  *
  *  v2 (2026-05-06): `FieldSpec` gained `name` so the canonical identifier
- *  travels with the spec instead of only as a dict key. */
-export const SCHEMA_VERSION = 2 as const;
+ *  travels with the spec instead of only as a dict key.
+ *  v3 (2026-06-17): DomainPack gained optional groups (FieldGroupSpec list). */
+export const SCHEMA_VERSION = 3 as const;
 
 export interface FieldSpec {
   /** Canonical identifier — matches the key under `DomainPack.types`.
@@ -36,10 +37,25 @@ export interface FieldSpec {
   readonly description?: string;
 }
 
+/** A set of canonical fields that survive golden-record merge together.
+ *
+ *  `members` are canonical field names (matching keys in DomainPack.types).
+ *  Consumed by goldenmatch survivorship to promote correlated columns
+ *  (address, person name, contact) from one winning source record. */
+export interface FieldGroupSpec {
+  readonly name: string;
+  readonly members: string[];
+  readonly category: string | null;
+  /** Survivorship strategy for the group. Defaults to "most_complete" on the Python side. */
+  readonly default_strategy: string;
+  readonly date_hint: string | null;
+}
+
 export interface DomainPack {
   readonly name: string;
   readonly description: string;
   readonly types: Record<string, FieldSpec>;
+  readonly groups: FieldGroupSpec[];
 }
 
 export interface FieldMapping {

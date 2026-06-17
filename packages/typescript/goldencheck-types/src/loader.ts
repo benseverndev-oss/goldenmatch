@@ -3,7 +3,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as url from "url";
 import * as yaml from "js-yaml";
-import type { DomainPack, FieldSpec } from "./types.js";
+import type { DomainPack, FieldGroupSpec, FieldSpec } from "./types.js";
 
 /** A domain-pack YAML file is malformed (wrong shape, type, or value).
  *  Distinct from "file not found" so callers can react differently — a
@@ -160,6 +160,9 @@ export function loadDomain(name: string): DomainPack {
     name,
     description: typeof raw.description === "string" ? raw.description : "",
     types,
+    // Mirror the Python dataclass default (field_groups: default_factory=list):
+    // groups is always present, defaulting to [] when the pack YAML omits it.
+    groups: Array.isArray(raw.groups) ? (raw.groups as FieldGroupSpec[]) : [],
   };
   _packCache.set(cacheKey, pack);
   return pack;

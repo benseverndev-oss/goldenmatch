@@ -19,6 +19,21 @@ class FieldProvenance:
     strategy: str
     confidence: float
     candidates: list[dict] = dataclass_field(default_factory=list)
+    condition: str | None = None
+    validator: str | None = None
+    dropped_invalid: int = 0
+
+
+@dataclass
+class GroupProvenance:
+    name: str
+    columns: list[str]
+    strategy: str
+    winner_row_id: int
+    winner_source: str | None
+    values: dict[str, Any]
+    tie: bool
+    confidence: float
 
 
 @dataclass
@@ -27,6 +42,7 @@ class ClusterProvenance:
     cluster_quality: str
     cluster_confidence: float
     fields: dict[str, FieldProvenance] = dataclass_field(default_factory=dict)
+    groups: list[GroupProvenance] = dataclass_field(default_factory=list)
 
 
 @dataclass
@@ -49,6 +65,7 @@ def merge_field(
     dates: list | None = None,
     quality_weights: list[float] | None = None,
     pair_scores: dict[tuple[int, int], float] | None = None,
+    cluster: pl.DataFrame | None = None,
 ) -> tuple[object, float, int | None]:
     """Merge a list of values using the given rule's strategy.
 
@@ -80,6 +97,7 @@ def merge_field(
             dates=dates,
             quality_weights=quality_weights,
             pair_scores=pair_scores,
+            cluster=cluster,
         )
 
     if strategy == "most_complete":
@@ -299,6 +317,7 @@ def _dispatch_custom_strategy(
     dates: list | None,
     quality_weights: list[float] | None,
     pair_scores: dict[tuple[int, int], float] | None,
+    cluster: pl.DataFrame | None = None,
 ) -> tuple:
     """Look up and invoke a custom golden-strategy plugin.
 
@@ -335,8 +354,13 @@ def _dispatch_custom_strategy(
         return _most_complete(non_null, quality_weights)
 
     # Rich kwargs per spec. Plugins ignore what they don't need.
-    rule_kwargs = rule.model_dump(exclude={"strategy"})
+    # Exclude framework fields that are not plugin config: strategy (routing
+    # key), when (conditional predicate), validate_with (candidate filter).
+    rule_kwargs = rule.model_dump(exclude={"strategy", "when", "validate_with"})
     try:
+        import inspect as _inspect
+        merge_params = _inspect.signature(plugin.merge).parameters  # type: ignore[attr-defined]
+        extra = {"cluster": cluster} if "cluster" in merge_params else {}
         result = plugin.merge(  # type: ignore[attr-defined]
             values,
             sources=sources,
@@ -344,6 +368,7 @@ def _dispatch_custom_strategy(
             quality_weights=quality_weights,
             pair_scores=pair_scores,
             rule_kwargs=rule_kwargs,
+            **extra,
         )
     except Exception as exc:
         msg = (
@@ -689,6 +714,46 @@ def build_golden_records_df(
     )
 
 
+def _survivorship_active(rules: GoldenRulesConfig) -> bool:
+    """Return True when any survivorship feature is enabled on these rules.
+
+    Covers three cases:
+    - ``field_groups`` present (group-based resolution, Phase E5)
+    - A ``field_rules`` entry is a list (conditional branches, Phase B)
+    - A ``field_rules`` entry carries ``when`` or ``validate_with``
+
+    Used by ``_polars_native_eligible`` to force the slow path when any
+    survivorship lever is active, guaranteeing the fast columnar path is
+    only used for plain configs where it is byte-identical.
+    """
+    if getattr(rules, "field_groups", None):
+        return True
+    for rule in rules.field_rules.values():
+        if isinstance(rule, list):
+            return True
+        if getattr(rule, "when", None) or getattr(rule, "validate_with", None):
+            return True
+    return False
+
+
+def assert_in_memory_survivorship(rules: GoldenRulesConfig | None, where: str) -> None:
+    """Refuse correlated survivorship on a code path that cannot honor it.
+
+    Field-group / conditional / validated survivorship resolves on the driver via
+    the in-memory builder. The distributed streaming pipeline and the Sail backend
+    cannot run the staged per-cluster pass, so they must REFUSE rather than silently
+    apply a plain most_complete merge (which would produce wrong golden records).
+    Spec 4.4. No-op when `rules` is None or survivorship is not active.
+    """
+    if rules is not None and _survivorship_active(rules):
+        raise NotImplementedError(
+            f"Field-group / conditional / validated survivorship is not supported on "
+            f"the {where}. Use the in-memory golden builder (non-distributed pipeline "
+            f"or build_golden_records_smart) for configs with field_groups, conditional "
+            f"field_rules (when:), or validate:."
+        )
+
+
 def _polars_native_eligible(
     rules: GoldenRulesConfig,
     quality_scores: dict[tuple[int, str], float] | None,
@@ -707,6 +772,10 @@ def _polars_native_eligible(
     # calls merge_field per cluster. The fast path applies one
     # strategy to all clusters and can't honor overrides.
     if getattr(rules, "cluster_overrides", None):
+        return False
+    # Phase E: survivorship features (field_groups, conditional rules,
+    # validate_with) require the slow path; fast path can't honor them.
+    if _survivorship_active(rules):
         return False
     return True
 
@@ -811,6 +880,22 @@ def build_golden_records_batch(
             return _build_golden_records_polars_native(
                 multi_df, rules, user_cols, provenance=provenance,
             )
+
+    if _survivorship_active(rules):
+        from goldenmatch.core.survivorship.conditions import build_resolution_order
+        from goldenmatch.core.survivorship.resolve import resolve_cluster
+        s_sorted = multi_df.sort("__cluster_id__")
+        s_user_cols = [c for c in s_sorted.columns if not _is_internal(c) and c != "__cluster_id__"]
+        order = build_resolution_order(rules.field_rules, rules.field_groups, s_user_cols)
+        s_results = []
+        for cdf in s_sorted.partition_by("__cluster_id__", maintain_order=True):
+            cid = cdf["__cluster_id__"][0]
+            per_scores = (cluster_pair_scores or {}).get(int(cid))
+            rec, _prov = resolve_cluster(cdf, rules, order, quality_scores=quality_scores,
+                                         pair_scores=per_scores, provenance=provenance)
+            rec["__cluster_id__"] = cid
+            s_results.append(rec)
+        return s_results
 
     sorted_df = multi_df.sort("__cluster_id__")
     sizes = (
@@ -979,6 +1064,14 @@ def build_golden_record(
     Returns dict of {col: {"value": v, "confidence": c}, ...,
     "__golden_confidence__": mean_of_confidences}.
     """
+    if _survivorship_active(rules):
+        from goldenmatch.core.survivorship.conditions import build_resolution_order
+        from goldenmatch.core.survivorship.resolve import resolve_cluster
+        user_cols = [c for c in cluster_df.columns if not _is_internal(c) and c != "__cluster_id__"]
+        order = build_resolution_order(rules.field_rules, rules.field_groups, user_cols)
+        result, _prov = resolve_cluster(cluster_df, rules, order, quality_scores=quality_scores)
+        return result
+
     result = {}
     confidences = []
     row_ids = cluster_df["__row_id__"].to_list() if "__row_id__" in cluster_df.columns else None

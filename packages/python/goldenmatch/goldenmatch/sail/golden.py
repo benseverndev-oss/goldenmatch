@@ -49,6 +49,7 @@ def build_golden(
     value_cols: list[str],
     source_id_col: str = "__row_id__",
     strategy: str = "most_complete",
+    rules: Any | None = None,
 ) -> Any:
     """Build one golden record per multi-member cluster, distributed.
 
@@ -59,11 +60,23 @@ def build_golden(
         source_id_col: the id column in ``source_df`` (joined to ``member_id``).
         strategy: survivorship strategy (S3: order-independent, default
             ``most_complete``).
+        rules: optional ``GoldenRulesConfig`` forwarded by the pipeline. When
+            correlated survivorship is active (field_groups / conditional /
+            validate), this function refuses rather than silently mis-merging
+            (spec 4.4).
 
     Returns:
         Spark DataFrame ``(cluster_id, *value_cols)`` -- one golden row per
         multi-member cluster, each field survivor-merged.
     """
+    # Spec 4.4: refuse correlated survivorship on the Sail distributed backend.
+    # The in-memory builder runs a staged per-cluster pass on the driver that
+    # this Spark-side groupby + scalar-UDF path cannot replicate. Fail-fast
+    # before any Spark work so callers get a clear error rather than a silently
+    # wrong golden record.
+    from goldenmatch.core.golden import assert_in_memory_survivorship
+    assert_in_memory_survivorship(rules, "Sail distributed backend")
+
     from pyspark.sql import functions as F
 
     # Join on a SHARED name (rename source's id col -> member_id); no df["col"]

@@ -2669,6 +2669,74 @@ def _get_default_memory() -> AutoConfigMemory | None:
     return _DEFAULT_MEMORY
 
 
+def _field_group_detection_enabled(config: Any) -> bool:
+    """Return True when field-group detection is switched on (default OFF).
+
+    Two opt-in paths:
+    - ``golden_rules.field_group_detection = True`` on the incoming config
+    - env var ``GOLDENMATCH_FIELD_GROUP_SURVIVORSHIP`` set to 1/true/yes/on
+    """
+    gr = getattr(config, "golden_rules", None)
+    if gr is not None and getattr(gr, "field_group_detection", False):
+        return True
+    return os.environ.get("GOLDENMATCH_FIELD_GROUP_SURVIVORSHIP", "").lower() in (
+        "1", "true", "yes", "on"
+    )
+
+
+def _maybe_active_domain_pack(config: Any):
+    """Return a goldencheck-types DomainPack if one is clearly in play, else None.
+
+    v1: best-effort -- return None (detection falls back to the heuristic).
+    Kept minimal on purpose; infermap-fed detection is opportunistic.
+    """
+    return None
+
+
+def _maybe_detect_field_groups(df: Any, config: Any) -> None:
+    """Gated, fail-open hook: when enabled, detect field groups and write them
+    onto ``config.golden_rules.field_groups``.
+
+    Default OFF; explicit groups always kept. infermap is optional (its import
+    lives inside ``build_field_groups``). Any exception leaves the config
+    untouched so auto-config is never broken by optional detection.
+    """
+    enabled = _field_group_detection_enabled(config)
+    explicit = []
+    gr = getattr(config, "golden_rules", None)
+    if gr is not None:
+        explicit = list(getattr(gr, "field_groups", []) or [])
+    if not enabled and not explicit:
+        # Nothing to do; leave config byte-identical.
+        return
+    # Field-group detection is column-name-based and needs a Polars frame.
+    # On the distributed path `df` is a Ray Dataset; skip silently (collecting
+    # to detect would be wrong here) rather than letting build_field_groups
+    # fail-open with a misleading warning.
+    try:
+        from goldenmatch.distributed import is_ray_dataset
+        if is_ray_dataset(df):
+            return
+    except Exception:
+        pass  # distributed utils not importable -> proceed; outer try/except still guards
+    try:
+        from goldenmatch.core.survivorship.groups import build_field_groups
+        pack = _maybe_active_domain_pack(config)
+        detected = build_field_groups(df, pack=pack, explicit=explicit, enabled=enabled)
+    except Exception as exc:
+        # Fail-open: never break auto-config over optional detection.
+        logger.debug("field-group detection hook skipped: %s", exc)
+        return
+    if not detected:
+        return
+    # Ensure golden_rules exists so we can attach field_groups.
+    if gr is None:
+        from goldenmatch.config.schemas import GoldenRulesConfig as _GRC
+        gr = _GRC(default_strategy="most_complete")
+        config.golden_rules = gr
+    gr.field_groups = detected
+
+
 def auto_configure_df(
     df: pl.DataFrame | pl.LazyFrame,
     llm_provider: str | None = None,
@@ -2863,6 +2931,12 @@ def auto_configure_df(
     # selected backend onto config via ExecutionPlan.apply_to.
 
     _LAST_CONTROLLER_RUN.set((profile, history))
+
+    # F1: optional field-group detection (default OFF, fail-open).
+    # Runs after the controller has committed the config so explicit
+    # golden_rules.field_groups (if any) are already in place.
+    _maybe_detect_field_groups(df, config)
+
     return config
 
 
