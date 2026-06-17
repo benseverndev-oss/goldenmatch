@@ -1,6 +1,6 @@
 [project]
 name = "goldenanalysis"
-version = "0.1.0"
+version = "0.2.0"
 description = "Read-only cross-cutting analysis, metrics, and reporting engine for the Golden Suite"
 readme = "README.md"
 license = {text = "MIT"}
