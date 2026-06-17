@@ -1525,10 +1525,20 @@ def _tool_lineage(
         max_pairs=max_pairs,
         natural_language=natural_language,
     )
+    from goldenmatch.config.schemas import GoldenRulesConfig
+    from goldenmatch.core.lineage import (
+        _serialize_golden_records,
+        golden_provenance_for_run,
+    )
+    golden_rules = getattr(_config, "golden_rules", None) or GoldenRulesConfig(default_strategy="most_complete")
+    gp = golden_provenance_for_run(_engine.data, _result.clusters, golden_rules)
     if output_dir:
-        path = save_lineage(lineage, output_dir, run_name="mcp")
+        path = save_lineage(lineage, output_dir, run_name="mcp", golden_provenance=gp)
         return {"saved_to": str(path), "count": len(lineage)}
-    return {"count": len(lineage), "lineage": lineage}
+    out = {"count": len(lineage), "lineage": lineage}
+    if gp:
+        out["golden_records"] = _serialize_golden_records(gp)
+    return out
 
 
 def _tool_list_runs(output_dir: str = ".") -> dict:
