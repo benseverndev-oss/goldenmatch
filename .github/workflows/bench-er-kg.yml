@@ -67,6 +67,20 @@ jobs:
         # so the pip-less uv venv installs it WITHOUT `spacy download`).
         run: uv pip install -r "$BENCH_DIR/requirements-embed.txt"
 
+      - name: Pre-fetch MiniLM (retry transient HF 429s)
+        # sentence-transformers downloads all-MiniLM-L6-v2 from HF at first use;
+        # shared CI runners intermittently get 429s (Too Many Requests). Fetch it once
+        # with backoff so the offline + keyed board runs hit the local cache instead of
+        # re-downloading per run -- otherwise the whole lane flakes on a transient 429.
+        run: |
+          set -uo pipefail
+          for i in 1 2 3 4 5; do
+            "$GITHUB_WORKSPACE/.venv/bin/python" -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')" && exit 0
+            echo "HF fetch attempt $i failed; backing off $((i*15))s..." >&2
+            sleep $((i*15))
+          done
+          echo "::error::could not fetch all-MiniLM-L6-v2 from HF after 5 retries"; exit 1
+
       - name: Run benchmark (offline -- the committed table)
         working-directory: ${{ env.BENCH_DIR }}
         # --embedder st activates the (emb) rows + the spaCy real row on the committed
