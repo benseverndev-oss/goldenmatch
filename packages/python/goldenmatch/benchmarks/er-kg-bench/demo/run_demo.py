@@ -20,10 +20,12 @@ _BENCH_ROOT = Path(__file__).resolve().parent.parent
 if str(_BENCH_ROOT) not in sys.path:
     sys.path.insert(0, str(_BENCH_ROOT))
 
-from erkgbench.run import load_records  # noqa: E402  (pulls goldenmatch)
+from demo import (
+    narrative as nv,  # noqa: E402  # pyright: ignore[reportAttributeAccessIssue]  # namespace pkg, resolves at runtime
+)
 from erkgbench.adapters import GoldenMatchAdapter  # noqa: E402
 from erkgbench.adapters.modeled import GraphRAGModeled  # noqa: E402
-from demo import narrative as nv  # noqa: E402  # pyright: ignore[reportAttributeAccessIssue]  # namespace pkg, resolves at runtime
+from erkgbench.run import load_records  # noqa: E402  (pulls goldenmatch)
 
 if TYPE_CHECKING:
     from erkgbench.adapters import Record
