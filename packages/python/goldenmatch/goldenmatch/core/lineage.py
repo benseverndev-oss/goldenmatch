@@ -136,6 +136,23 @@ def _serialize_provenance(provenance: list) -> list[dict]:
     return [asdict(p) for p in provenance]
 
 
+def _safe_cluster_audit(cp) -> str:
+    """Fail-open render of a cluster's survivorship audit trail (group +
+    condition + validation lines). '' when nothing survivorship-specific."""
+    try:
+        return render_cluster_provenance_nl(cp)
+    except Exception:
+        logger.warning("lineage: survivorship audit render failed; omitting")
+        return ""
+
+
+def _serialize_golden_records(provenance: list) -> list[dict]:
+    records = _serialize_provenance(provenance)
+    for cp, rec in zip(provenance, records):
+        rec["audit"] = _safe_cluster_audit(cp)
+    return records
+
+
 def _fs_waterfall_dict(row_a: dict, row_b: dict, mk, em_result) -> dict | None:
     """Compute + serialize the FS match-weight waterfall for a pair (or None)."""
     from goldenmatch.core.probabilistic import explain_pair_fs
@@ -193,7 +210,7 @@ def save_lineage(
         "pairs": lineage,
     }
     if golden_provenance:
-        data["golden_records"] = _serialize_provenance(golden_provenance)
+        data["golden_records"] = _serialize_golden_records(golden_provenance)
     path.write_text(json.dumps(data, default=str, indent=2), encoding="utf-8")
     logger.info("Saved lineage for %d pairs to %s", len(lineage), sanitize_for_log(path))
     return path
@@ -300,7 +317,7 @@ def save_lineage_streaming(
         f.write('\n  ]')
         if golden_provenance:
             f.write(',\n  "golden_records": ')
-            f.write(json.dumps(_serialize_provenance(golden_provenance), default=str, indent=2))
+            f.write(json.dumps(_serialize_golden_records(golden_provenance), default=str, indent=2))
         f.write('\n}\n')
 
     logger.info("Streamed lineage for %d pairs to %s", written, path)
