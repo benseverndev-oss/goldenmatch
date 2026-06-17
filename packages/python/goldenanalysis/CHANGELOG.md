@@ -38,6 +38,14 @@ Phase 2b — cross-run. Trend + regression detection over a run history.
 - The `goldenanalysis trend` / `regressions` CLI are now real (no longer stubs),
   with `--policy` and `--fail-on-regression` (CI gate).
 
+### Packaging
+- Added the `mcp-name: io.github.benseverndev-oss/goldenanalysis` marker to the
+  README (line 1). The MCP Registry validates PyPI ownership by requiring this
+  marker in the package's PyPI long-description; without it `mcp-publisher publish`
+  fails with a 400 ownership-validation error (as the 0.1.0 release did). Shipping
+  the marker in the next PyPI release lets `publish-mcp.yml` list GoldenAnalysis
+  alongside the other five suite servers.
+
 ### Notes
 - `match.recall_estimate` flows automatically once `goldenmatch.dedupe_df(...,
   certify=True)` attaches a `RecallEstimate` (goldenmatch PR); `match.recall_safe_bound`
