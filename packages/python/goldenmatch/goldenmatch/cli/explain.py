@@ -82,7 +82,12 @@ def explain_cmd(
     if cinfo is None:
         console.print(f"[yellow]No cluster {cluster}.[/yellow]")
         raise typer.Exit(code=1)
-    summary = explain_cluster_nl(cinfo, df, cfg.get_matchkeys())
+    from goldenmatch.config.schemas import GoldenRulesConfig
+    from goldenmatch.core.lineage import golden_provenance_for_run
+    golden_rules = getattr(cfg, "golden_rules", None) or GoldenRulesConfig(default_strategy="most_complete")
+    provs = golden_provenance_for_run(df, clusters, golden_rules)
+    cp = next((p for p in (provs or []) if p.cluster_id == cluster), None)
+    summary = explain_cluster_nl(cinfo, df, cfg.get_matchkeys(), cluster_provenance=cp)
     console.print(Panel(
         summary,
         title=f"Cluster {cluster} · {cinfo.get('size', '?')} records",
