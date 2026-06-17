@@ -95,3 +95,8 @@ def test_list_form_rejects_two_defaults():
                 {"strategy": "most_complete"},
             ]},  # two when-less default clauses
         )
+
+
+def test_group_rejects_internal_prefixed_column():
+    with pytest.raises(ValidationError):
+        GoldenGroupRule(name="g", columns=["__source__", "city"])

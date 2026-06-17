@@ -4,6 +4,10 @@ Wraps the existing merge_field machinery: walks resolution units (scalar fields
 and lock-step groups) in topological order so a `when:` predicate reads
 already-resolved fields. Output dict shape matches build_golden_records_batch's
 per-record dict so downstream consumers are unchanged.
+
+Note: this path materializes one frame + per-column lists PER CLUSTER by design
+(the opt-in survivorship path). A columnar/array-slice survivorship path that
+avoids per-cluster materialization is a tracked scale follow-up.
 """
 from __future__ import annotations
 
@@ -129,6 +133,7 @@ def resolve_cluster(cluster_df, rules, resolution_order, *,
     for col in user_cols:
         if col in field_dicts:
             result[col] = field_dicts[col]
+    # A group contributes ONE confidence to the mean (one resolution decision for k columns), not one-per-column.
     result["__golden_confidence__"] = sum(confidences) / len(confidences) if confidences else 0.0
 
     prov = None

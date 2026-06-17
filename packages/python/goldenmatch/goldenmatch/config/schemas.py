@@ -466,6 +466,11 @@ class GoldenGroupRule(BaseModel):
     def _validate_group(self) -> "GoldenGroupRule":
         if len(self.columns) < 2:
             raise ValueError(f"GoldenGroupRule '{self.name}' needs >= 2 columns.")
+        for col in self.columns:
+            if col.startswith("__"):
+                raise ValueError(
+                    f"Group '{self.name}' column '{col}' is reserved (internal '__' prefix)."
+                )
         if self.strategy not in _GROUP_STRATEGIES:
             raise ValueError(
                 f"Invalid group strategy '{self.strategy}'. Must be one of {sorted(_GROUP_STRATEGIES)}."

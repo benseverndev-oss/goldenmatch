@@ -46,7 +46,7 @@ def test_validate_drops_invalid_candidate():
     df = pl.DataFrame({
         "__cluster_id__": [1, 1],
         "__row_id__": [10, 11],
-        "phone": ["212-555-0100", "not-a-phone"],
+        "phone": ["212-555-0100", "not-a-phone-number-at-all"],  # invalid is longest -> only validate can drop it
     })
     rules = GoldenRulesConfig(
         default_strategy="most_complete",
