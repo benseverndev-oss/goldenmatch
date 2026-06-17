@@ -863,6 +863,22 @@ def build_golden_records_batch(
                 multi_df, rules, user_cols, provenance=provenance,
             )
 
+    if _survivorship_active(rules):
+        from goldenmatch.core.survivorship.conditions import build_resolution_order
+        from goldenmatch.core.survivorship.resolve import resolve_cluster
+        s_sorted = multi_df.sort("__cluster_id__")
+        s_user_cols = [c for c in s_sorted.columns if not _is_internal(c) and c != "__cluster_id__"]
+        order = build_resolution_order(rules.field_rules, rules.field_groups, s_user_cols)
+        s_results = []
+        for cdf in s_sorted.partition_by("__cluster_id__", maintain_order=True):
+            cid = cdf["__cluster_id__"][0]
+            per_scores = (cluster_pair_scores or {}).get(int(cid))
+            rec, _prov = resolve_cluster(cdf, rules, order, quality_scores=quality_scores,
+                                         pair_scores=per_scores, provenance=provenance)
+            rec["__cluster_id__"] = cid
+            s_results.append(rec)
+        return s_results
+
     sorted_df = multi_df.sort("__cluster_id__")
     sizes = (
         sorted_df.lazy()
