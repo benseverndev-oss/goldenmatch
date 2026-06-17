@@ -9,6 +9,19 @@ from __future__ import annotations
 
 def available_real_adapters() -> list:
     out = []
+    # GraphRAG + Cognee are `validated` reproductions of pure exact-key rules (no
+    # library call, no optional dep), grouped here with the other real rows. Own
+    # try-block each so one import error can't suppress the rest.
+    try:
+        from erkgbench.adapters.real.exact_family import RealGraphRAG
+        out.append(RealGraphRAG())
+    except ImportError:
+        pass
+    try:
+        from erkgbench.adapters.real.exact_family import RealCognee
+        out.append(RealCognee())
+    except ImportError:
+        pass
     try:
         from erkgbench.adapters.real.neo4j_graphrag import RealNeo4jGraphRAGFuzzy
         out.append(RealNeo4jGraphRAGFuzzy())

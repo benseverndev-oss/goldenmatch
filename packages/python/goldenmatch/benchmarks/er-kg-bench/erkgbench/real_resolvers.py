@@ -29,7 +29,10 @@ No normalization is applied — the stored `name` is compared as-is.
 """
 from __future__ import annotations
 
+import html
+import re
 from itertools import combinations
+from uuid import NAMESPACE_OID, uuid5
 
 
 def _merge_overlapping(sets: list[set[int]]) -> list[set[int]]:
@@ -188,3 +191,68 @@ def neo4j_graphrag_spacy_clusters(items: list[tuple[int, str, str]]) -> list[lis
             seen |= s
         clusters.extend([i] for i in ids if i not in seen)  # singletons (incl skipped-empty)
     return clusters
+
+
+# ── Microsoft GraphRAG (validated reproduction; no separable resolver exists) ──
+#
+# GraphRAG's default `Standard` pipeline has NO entity-resolution step (graph
+# pruning is `Fast`-pipeline-only). Its dedup is exact-title-equality, realized as
+# a `seen_titles: set[str]` in `finalize_entities.py` + a `df.merge(on="title")`
+# in `extract_graph.py` -- there is no callable resolver decision object to run
+# (unlike neo4j-graphrag's `FuzzyMatchResolver`), so the faithful tier is
+# `validated`: we reproduce the title KEY verbatim and cite source.
+#
+# The title is built in extraction as `clean_str(record_attributes[1].upper())`
+# (graph_extractor.py), where `clean_str(x) = re.sub(r"[\x00-\x1f\x7f-\x9f]", "",
+# html.unescape(x.strip()))` (index/utils/string.py). So the merge key is:
+#   upper -> strip(edges only) -> html.unescape -> control-char strip.
+# It does NOT collapse internal whitespace and does NOT strip quotes. The merge is
+# GLOBAL (a single `seen_titles` set across all entities), NOT per-label.
+# Source: microsoft/graphrag (Standard pipeline), confirmed for 2.x-3.x.
+_GRAPHRAG_CTRL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+
+
+def _graphrag_key(s: str) -> str:
+    """GraphRAG `clean_str(name.upper())` title key (no internal-ws collapse)."""
+    return _GRAPHRAG_CTRL.sub("", html.unescape(str(s).upper().strip()))
+
+
+def graphrag_clusters(items: list[tuple[int, str, str]]) -> list[list[int]]:
+    """items: (record_id, mention, entity_type). Exact-title set merge, GLOBAL
+    (not per-label), reproducing GraphRAG's `finalize_entities` seen_titles dedup."""
+    buckets: dict[str, list[int]] = {}
+    for rid, mention, _t in items:
+        buckets.setdefault(_graphrag_key(mention), []).append(rid)
+    return [sorted(v) for v in buckets.values()]
+
+
+# ── Cognee (validated reproduction of generate_node_id) ───────────────────────
+#
+# Cognee's default entity resolution is a deterministic uuid5 collision: two
+# mentions merge iff `generate_node_id` produces the same UUID. The function is a
+# pure 1-liner (only stdlib `uuid`), so reproducing it verbatim + citing source is
+# `validated` (importing the heavy `cognee` package -- lancedb + LLM clients -- to
+# call a uuid5 buys zero fidelity). The default ontology resolver is a no-op
+# (`RDFLibOntologyResolver(ontology_file=None)`), so the difflib cutoff never fires.
+#
+# Source (verified verbatim @100044123338de01f72f44b9c528e9fd91fbce59):
+#   cognee/infrastructure/engine/utils/generate_node_id.py
+#     uuid5(NAMESPACE_OID, node_id.lower().replace(" ", "_").replace("'", ""))
+# NOTE this is generate_node_ID (the MERGE key), NOT generate_node_NAME (a display
+# helper, name.lower().replace("'","")) -- they differ in the `" " -> "_"` step.
+# The dedup is GLOBAL (one node per UUID via deduplicate_nodes_and_edges), not
+# per-label.
+
+
+def _cognee_key(s: str) -> str:
+    """Cognee `generate_node_id` merge key: lower -> ' '->'_' -> strip apostrophes."""
+    return str(uuid5(NAMESPACE_OID, str(s).lower().replace(" ", "_").replace("'", "")))
+
+
+def cognee_clusters(items: list[tuple[int, str, str]]) -> list[list[int]]:
+    """items: (record_id, mention, entity_type). Exact merge on the generate_node_id
+    UUID, GLOBAL (not per-label), reproducing Cognee's deduplicate_nodes_and_edges."""
+    buckets: dict[str, list[int]] = {}
+    for rid, mention, _t in items:
+        buckets.setdefault(_cognee_key(mention), []).append(rid)
+    return [sorted(v) for v in buckets.values()]

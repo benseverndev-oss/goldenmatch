@@ -13,12 +13,25 @@ import pytest
 from erkgbench import metrics  # pyright: ignore[reportMissingImports]
 from erkgbench.real_resolvers import (  # pyright: ignore[reportMissingImports]
     SPACY_MODEL,
+    cognee_clusters,
+    graphrag_clusters,
     neo4j_graphrag_exact_clusters,
     neo4j_graphrag_fuzzy_clusters,
     neo4j_graphrag_spacy_clusters,
 )
 
 DATASET = _BENCH_ROOT / "dataset" / "records.csv"
+
+# Observed real F1 on the corpus, pinned from a CI run (Linux) so a local Windows
+# run that gives the same pure-exact-bucket result also passes. Set to None to
+# observe-then-pin (the test SKIPS reporting the value until pinned).
+# Both = 0.066: an exact key (GraphRAG upper-fold / Cognee uuid5) recalls almost
+# nothing on this surface-form-variation corpus -- the variants differ by more than
+# case/whitespace, so the precise normalization doesn't move F1 (same 0.066 as
+# neo4j-graphrag(exact)). Pure deterministic exact-bucket on string keys -> platform-
+# stable, so the observed local Windows value matches Linux CI.
+_GRAPHRAG_F1_PIN: float | None = 0.066
+_COGNEE_F1_PIN: float | None = 0.066
 
 
 def _load():
@@ -98,6 +111,49 @@ def test_exact_merges_identical_skips_null_and_no_normalization():
     assert [2] in clustering                            # case differs -> not merged
     assert [3] in clustering                            # empty -> singleton
     assert [4] in clustering                            # different label -> not merged
+
+
+# -- GraphRAG + Cognee (validated reproductions of exact-key rules) ------------
+
+def test_graphrag_key_is_faithful():
+    from erkgbench.real_resolvers import _graphrag_key
+    # clean_str(name.upper()): upper + edge-strip + html-unescape + control-char
+    # strip, NO internal-whitespace collapse, NO quote strip.
+    assert _graphrag_key("  Acme &amp; Co  ") == "ACME & CO"
+    assert _graphrag_key("New  York") != _graphrag_key("New York")   # 2 spaces NOT collapsed
+    assert _graphrag_key("acme") == _graphrag_key("ACME")            # case-folded (clustering-equiv)
+    assert _graphrag_key('the "best"') == 'THE "BEST"'              # quotes NOT stripped
+
+
+def test_graphrag_reproduces_observed_f1():
+    items, entity_ids, classes = _load()
+    clustering = graphrag_clusters(items)
+    flat = [i for c in clustering for i in c]
+    assert sorted(flat) == sorted(i for i, _m, _t in items)          # full partition
+    f1 = metrics.score_by_class(entity_ids, classes, clustering)["__overall__"].f1
+    if _GRAPHRAG_F1_PIN is None:
+        pytest.skip(f"GraphRAG F1 observed = {round(f1, 3)} -- set _GRAPHRAG_F1_PIN to lock it")
+    assert round(f1, 3) == _GRAPHRAG_F1_PIN
+
+
+def test_cognee_key_fixes_the_modeled_bug():
+    from erkgbench.real_resolvers import _cognee_key
+    # real generate_node_id: lower -> " "->"_" -> strip "'". The old model used
+    # _norm (lower + whitespace-collapse) citing generate_node_NAME -- this is the FIX.
+    assert _cognee_key("O'Brien") == _cognee_key("OBrien")           # apostrophe stripped
+    assert _cognee_key("John  Smith") != _cognee_key("John Smith")   # 2 spaces -> "__" != "_"
+    assert _cognee_key("Acme") == _cognee_key("acme")                # lowercased
+
+
+def test_cognee_reproduces_observed_f1():
+    items, entity_ids, classes = _load()
+    clustering = cognee_clusters(items)
+    flat = [i for c in clustering for i in c]
+    assert sorted(flat) == sorted(i for i, _m, _t in items)          # full partition
+    f1 = metrics.score_by_class(entity_ids, classes, clustering)["__overall__"].f1
+    if _COGNEE_F1_PIN is None:
+        pytest.skip(f"Cognee F1 observed = {round(f1, 3)} -- set _COGNEE_F1_PIN to lock it")
+    assert round(f1, 3) == _COGNEE_F1_PIN
 
 
 # -- SpaCySemanticMatchResolver (real-inproc; needs the spaCy vector model) -----
