@@ -123,3 +123,71 @@ def _cmp(op, left, right) -> bool:
     if isinstance(op, ast.GtE):
         return left >= right
     raise PredicateError(f"comparison {type(op).__name__} not allowed")
+
+
+class ResolutionError(ValueError):
+    """Circular or otherwise unresolvable `when:` dependency graph."""
+
+
+def select_conditional_strategy(rule_or_list, resolved: dict):
+    """Return the GoldenFieldRule whose `when:` is satisfied (first match), else the
+    when-less default. A single (non-list) rule is returned as-is."""
+    if not isinstance(rule_or_list, list):
+        return rule_or_list
+    default = None
+    for r in rule_or_list:
+        if r.when is None:
+            default = r
+            continue
+        if eval_predicate(r.when, resolved):
+            return r
+    return default  # config guarantees exactly one default
+
+
+def build_resolution_order(field_rules, groups, all_columns) -> list[str]:
+    """Topologically order resolution units. Unit ids: a scalar column name, or
+    'group:<name>' for a group. A `when:` reference to a group member becomes a
+    dependency on that group's unit. Raises ResolutionError on a cycle."""
+    owner: dict[str, str] = {}
+    units: list[str] = []
+    for g in groups:
+        uid = f"group:{g.name}"
+        units.append(uid)
+        for c in g.columns:
+            owner[c] = uid
+    for col in field_rules:
+        if col not in owner:
+            owner[col] = col
+            units.append(col)
+    for col in all_columns:
+        if col not in owner:
+            owner[col] = col
+            if col not in units:
+                units.append(col)
+
+    deps: dict[str, set[str]] = {u: set() for u in units}
+    for col, rule in field_rules.items():
+        clauses = rule if isinstance(rule, list) else [rule]
+        unit = owner[col]
+        for r in clauses:
+            if r.when is None:
+                continue
+            for name in referenced_names(r.when):
+                ref_unit = owner.get(name)
+                if ref_unit is not None and ref_unit != unit:
+                    deps[unit].add(ref_unit)
+
+    order: list[str] = []
+    resolved_set: set[str] = set()
+    remaining = list(units)
+    while remaining:
+        progressed = False
+        for u in list(remaining):
+            if deps[u] <= resolved_set:
+                order.append(u)
+                resolved_set.add(u)
+                remaining.remove(u)
+                progressed = True
+        if not progressed:
+            raise ResolutionError(f"circular when: dependency among {remaining}")
+    return order

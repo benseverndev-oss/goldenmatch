@@ -37,3 +37,53 @@ def test_none_operand_is_miss_not_error():
 def test_dangerous_expressions_rejected(expr):
     with pytest.raises(PredicateError):
         eval_predicate(expr, {"a": 1, "b": 1, "y": []})
+
+
+from goldenmatch.config.schemas import GoldenFieldRule, GoldenGroupRule
+from goldenmatch.core.survivorship.conditions import (
+    select_conditional_strategy, build_resolution_order, ResolutionError,
+)
+
+
+def test_select_conditional_first_match_wins():
+    rules = [
+        GoldenFieldRule(strategy="most_recent", date_column="dt", when="state == 'CA'"),
+        GoldenFieldRule(strategy="source_priority", source_priority=["crm"]),
+    ]
+    assert select_conditional_strategy(rules, {"state": "CA"}).strategy == "most_recent"
+    assert select_conditional_strategy(rules, {"state": "TX"}).strategy == "source_priority"
+
+
+def test_resolution_order_respects_when_deps():
+    field_rules = {
+        "state": GoldenFieldRule(strategy="most_complete"),
+        "phone": [
+            GoldenFieldRule(strategy="most_recent", date_column="dt", when="state == 'CA'"),
+            GoldenFieldRule(strategy="source_priority", source_priority=["crm"]),
+        ],
+    }
+    order = build_resolution_order(field_rules, groups=[], all_columns=["state", "phone", "dt"])
+    assert order.index("state") < order.index("phone")
+
+
+def test_resolution_order_when_references_group_member():
+    groups = [GoldenGroupRule(name="addr", columns=["street", "state"])]
+    field_rules = {
+        "phone": [
+            GoldenFieldRule(strategy="most_recent", date_column="dt", when="state == 'CA'"),
+            GoldenFieldRule(strategy="source_priority", source_priority=["crm"]),
+        ],
+    }
+    order = build_resolution_order(field_rules, groups=groups, all_columns=["street", "state", "phone", "dt"])
+    assert order.index("group:addr") < order.index("phone")
+
+
+def test_circular_when_rejected():
+    field_rules = {
+        "a": [GoldenFieldRule(strategy="most_complete", when="b == 1"),
+              GoldenFieldRule(strategy="most_complete")],
+        "b": [GoldenFieldRule(strategy="most_complete", when="a == 1"),
+              GoldenFieldRule(strategy="most_complete")],
+    }
+    with pytest.raises(ResolutionError):
+        build_resolution_order(field_rules, groups=[], all_columns=["a", "b"])
