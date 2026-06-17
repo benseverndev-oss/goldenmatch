@@ -112,7 +112,15 @@ def run(embedder_kind: str | None) -> dict:
         # 0.55 from a small sweep (peak overall F1; stable 0.525-0.6 plateau).
         adapters.append(GoldenMatchEmbAnnAdapter(threshold=0.55, provider="openai"))
         adapters.append(GoldenMatchAdapter(mode="auto_llm"))
-    adapters += list(all_modeled(embed_fn=embed_fn))
+    # String-only rows stay canonical/unchanged (embed_fn=None) regardless of
+    # --embedder, so the committed numbers don't silently shift identity. With an
+    # embedder, the cosine-activated variants are ADDED alongside (Neo4j-KGBuilder(emb)
+    # + LlamaIndex-PGI(emb)) so the board SHOWS the embedder's effect side-by-side.
+    adapters += list(all_modeled(embed_fn=None))
+    if embed_fn is not None:
+        from erkgbench.adapters.modeled import emb_modeled  # noqa: E402
+
+        adapters += emb_modeled(embed_fn)
     adapters += available_real_adapters()
 
     rows = []

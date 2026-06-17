@@ -312,3 +312,30 @@ def all_modeled(embed_fn: EmbedFn | None = None) -> list:
         Neo4jGraphRAGFuzzyModeled(),
         LlamaIndexModeled(embed_fn=embed_fn),
     ]
+
+
+def emb_modeled(embed_fn: EmbedFn) -> list:
+    """The embedding-activated variants, run ALONGSIDE the string-only rows so the
+    board SHOWS the embedder's effect instead of silently replacing committed numbers.
+
+    Both stay `modeled` -- an embedder activates their cosine OR-term but fixes
+    neither row's fidelity gap:
+      * Neo4j-KGBuilder(emb) now fires all 3 OR-branches (contains, edit-distance,
+        AND the cosine>0.97 term the real builder embeds nodes for at ingest), but its
+        edit-distance length guard is IRREPRODUCIBLE (real Cypher guards the
+        smaller-elementId node, an arbitrary insertion-order side; see
+        Neo4jBuilderModeled audit + FIDELITY.md) -> stays modeled, NOT validated.
+      * LlamaIndex-PGI(emb) activates cosine>0.9 + the KNN-style term, but its rule is
+        blog-sourced/unconfirmable against maintained library code -- a provenance gap
+        an embedder does not close -> stays modeled.
+
+    Instance attrs shadow the class `name`/`fidelity` so the board carries distinct
+    rows without subclassing.
+    """
+    kg = Neo4jBuilderModeled(embed_fn=embed_fn)
+    kg.name = "Neo4j-KGBuilder(emb)"
+    kg.fidelity = "modeled"
+    li = LlamaIndexModeled(embed_fn=embed_fn)
+    li.name = "LlamaIndex-PGI(emb)"
+    li.fidelity = "modeled"
+    return [kg, li]
