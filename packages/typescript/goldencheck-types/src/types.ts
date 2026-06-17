@@ -46,6 +46,7 @@ export interface FieldGroupSpec {
   readonly name: string;
   readonly members: string[];
   readonly category: string | null;
+  /** Survivorship strategy for the group. Defaults to "most_complete" on the Python side. */
   readonly default_strategy: string;
   readonly date_hint: string | null;
 }
