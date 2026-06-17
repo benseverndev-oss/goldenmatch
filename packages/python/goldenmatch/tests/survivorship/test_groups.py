@@ -31,3 +31,62 @@ def test_detection_disabled_returns_only_explicit():
     df = pl.DataFrame({"street": ["a"], "city": ["b"], "state": ["c"], "zip": ["d"]})
     out = build_field_groups(df, pack=None, explicit=[], enabled=False)
     assert out == []
+
+
+def test_infermap_fed_maps_pack_groups_to_real_columns(monkeypatch):
+    import goldenmatch.core.survivorship.groups as G
+    fake_map = {"st": "street", "ct": "city"}
+    fake_pack_groups = [("address", ["street", "city", "state", "zip"])]
+    monkeypatch.setattr(G, "_infermap_canonical_map", lambda df, pack: fake_map)
+    monkeypatch.setattr(G, "_pack_groups", lambda pack: fake_pack_groups)
+    df = pl.DataFrame({"st": ["a"], "ct": ["b"]})
+    groups = G.infermap_fed_groups(df, pack="sentinel")
+    assert groups and set(groups[0].columns) == {"st", "ct"}
+
+
+def test_infermap_import_error_is_failopen(monkeypatch):
+    import goldenmatch.core.survivorship.groups as G
+    def boom(df, pack):
+        raise ImportError("infermap not installed")
+    monkeypatch.setattr(G, "_infermap_canonical_map", boom)
+    df = pl.DataFrame({"st": ["a"], "ct": ["b"]})
+    assert G.infermap_fed_groups(df, pack="sentinel") == []
+
+
+def test_infermap_smoke_real(monkeypatch):
+    """Smoke test: infermap_fed_groups does not crash on a real DomainPack.
+    Skipped if infermap or goldencheck_types are not importable in this env.
+    """
+    pytest = __import__("pytest")
+    goldencheck_types = pytest.importorskip("goldencheck_types")
+    infermap = pytest.importorskip("infermap")
+    import goldenmatch.core.survivorship.groups as G
+    from goldencheck_types import DomainPack, FieldGroupSpec
+    from goldencheck_types.types import FieldSpec
+    address_pack = DomainPack(
+        name="address_test",
+        description="smoke test pack",
+        types={
+            "street": FieldSpec(
+                name="street",
+                description="street address",
+                name_hints=frozenset(["street", "addr"]),
+                value_signals={},
+                confidence_threshold=0.5,
+                suppress=frozenset(),
+            ),
+            "city": FieldSpec(
+                name="city",
+                description="city name",
+                name_hints=frozenset(["city", "town"]),
+                value_signals={},
+                confidence_threshold=0.5,
+                suppress=frozenset(),
+            ),
+        },
+        groups=[FieldGroupSpec(name="address", members=["street", "city"])],
+    )
+    df = pl.DataFrame({"street": ["123 Main St"], "city": ["Springfield"]})
+    result = G.infermap_fed_groups(df, pack=address_pack)
+    # Fail-open: must return a list (may be empty if infermap doesn't map columns)
+    assert isinstance(result, list)
