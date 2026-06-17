@@ -1,0 +1,43 @@
+# One-off measurement (workflow_dispatch): does a FREE downloadable semantic model
+# (MiniLM / multilingual-MiniLM) crack the recall-bound ER-KG-Bench classes
+# (abbreviation / cross_lingual) that the in-house char-ngram embedder misses?
+# torch hangs on the dev box, so the free tiers can only be measured here. Results
+# go to the run summary; nothing is committed. See scripts/embed_recall_probe.py.
+name: embed-recall-probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  BENCH: packages/python/goldenmatch/benchmarks/er-kg-bench
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Install probe deps (sentence-transformers pulls CPU torch)
+        run: pip install sentence-transformers numpy
+      - name: Run recall-lever probe (free tiers: MiniLM + multilingual MiniLM)
+        working-directory: ${{ env.BENCH }}
+        run: |
+          set -uo pipefail
+          python scripts/embed_recall_probe.py st st-multi | tee /tmp/probe.out
+          {
+            echo '## Recall-lever probe -- free downloadable embedders'
+            echo ''
+            echo 'Does a free semantic model crack abbreviation / cross_lingual?'
+            echo '(local baselines: in-house char-ngram best F1 0.451; paid OpenAI best F1 0.558,'
+            echo 'abbreviation 0.800 / cross_lingual 0.769)'
+            echo ''
+            echo '```'
+            cat /tmp/probe.out
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
