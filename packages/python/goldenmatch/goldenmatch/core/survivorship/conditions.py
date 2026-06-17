@@ -6,6 +6,7 @@ and walk an explicit allowlist. Spec section 3.4.
 from __future__ import annotations
 
 import ast
+from typing import Any
 
 
 class PredicateError(ValueError):
@@ -58,8 +59,15 @@ def referenced_names(expr: str) -> set[str]:
 
 
 def eval_predicate(expr: str, resolved: dict) -> bool:
-    """Evaluate `expr` against `resolved`. Unknown name or None-operand -> miss (False),
-    never an exception. Disallowed nodes raise PredicateError."""
+    """Evaluate `expr` against `resolved`. Disallowed nodes raise PredicateError.
+
+    Miss semantics: an unknown name, or a None/uncomparable operand in an
+    ordered/`in` comparison or a unary +/-, makes the nearest comparison a
+    "miss". Inside `and`/`or` a missed operand counts as a False arm (so
+    `A or B` can still be satisfied by B when A references an absent field).
+    A miss that reaches the top of the expression yields False (the clause
+    does not fire). `==`/`!=` with None evaluate normally.
+    """
     tree = ast.parse(expr, mode="eval")
     _validate(tree)
 
@@ -70,13 +78,26 @@ def eval_predicate(expr: str, resolved: dict) -> bool:
         if isinstance(node, ast.Expression):
             return ev(node.body)
         if isinstance(node, ast.BoolOp):
-            vals = [ev(v) for v in node.values]
-            return all(vals) if isinstance(node.op, ast.And) else any(vals)
+            # A _Miss in one operand means that arm is unsatisfied (False),
+            # not that the whole expression aborts. This lets `A or B`
+            # succeed on B when A references an absent field.
+            results = []
+            for v in node.values:
+                try:
+                    results.append(bool(ev(v)))
+                except _Miss:
+                    results.append(False)
+            return all(results) if isinstance(node.op, ast.And) else any(results)
         if isinstance(node, ast.UnaryOp):
             if isinstance(node.op, ast.Not):
+                # operand _Miss propagates: an unevaluable `not (...)` clause
+                # does not fire (top-level catch turns it into False).
                 return not ev(node.operand)
             v = ev(node.operand)
-            return -v if isinstance(node.op, ast.USub) else +v
+            try:
+                return -v if isinstance(node.op, ast.USub) else +v
+            except (TypeError, ValueError):
+                raise _Miss()
         if isinstance(node, ast.Compare):
             left = ev(node.left)
             for op, comp_node in zip(node.ops, node.comparators):
@@ -129,7 +150,7 @@ class ResolutionError(ValueError):
     """Circular or otherwise unresolvable `when:` dependency graph."""
 
 
-def select_conditional_strategy(rule_or_list, resolved: dict):
+def select_conditional_strategy(rule_or_list: Any, resolved: dict) -> Any:
     """Return the GoldenFieldRule whose `when:` is satisfied (first match), else the
     when-less default. A single (non-list) rule is returned as-is."""
     if not isinstance(rule_or_list, list):
@@ -144,7 +165,7 @@ def select_conditional_strategy(rule_or_list, resolved: dict):
     return default  # config guarantees exactly one default
 
 
-def build_resolution_order(field_rules, groups, all_columns) -> list[str]:
+def build_resolution_order(field_rules: dict, groups: list, all_columns: list[str]) -> list[str]:
     """Topologically order resolution units. Unit ids: a scalar column name, or
     'group:<name>' for a group. A `when:` reference to a group member becomes a
     dependency on that group's unit. Raises ResolutionError on a cycle."""

@@ -87,3 +87,16 @@ def test_circular_when_rejected():
     }
     with pytest.raises(ResolutionError):
         build_resolution_order(field_rules, groups=[], all_columns=["a", "b"])
+
+
+def test_unary_on_non_numeric_is_miss_not_error():
+    # Previously raised an uncaught TypeError; now a miss -> False.
+    assert eval_predicate("-x > 1", {"x": "hello"}) is False
+
+
+def test_or_succeeds_when_one_arm_references_absent_field():
+    assert eval_predicate("missing == 1 or y == 1", {"y": 1}) is True
+
+
+def test_and_with_missing_arm_is_false():
+    assert eval_predicate("missing == 1 and y == 1", {"y": 1}) is False
