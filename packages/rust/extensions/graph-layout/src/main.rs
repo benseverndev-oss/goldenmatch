@@ -12,6 +12,7 @@
 //! ```
 
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 use std::process::exit;
 
@@ -28,6 +29,9 @@ struct Args {
     frame_every: u32,
     clusters: usize,
     per: usize,
+    p_in: f32,
+    p_out: f32,
+    dump: Option<String>,
     params: Params,
 }
 
@@ -41,6 +45,9 @@ impl Default for Args {
             frame_every: 2,
             clusters: 8,
             per: 250,
+            p_in: 0.06,
+            p_out: 0.0,
+            dump: None,
             params: Params::default(),
         }
     }
@@ -67,6 +74,9 @@ fn parse_args() -> Args {
             }
             "--clusters" => a.clusters = need(i, &argv).parse().unwrap_or(a.clusters),
             "--per" => a.per = need(i, &argv).parse().unwrap_or(a.per),
+            "--p-in" => a.p_in = need(i, &argv).parse().unwrap_or(a.p_in),
+            "--p-out" => a.p_out = need(i, &argv).parse().unwrap_or(a.p_out),
+            "--dump-bin" => a.dump = Some(need(i, &argv)),
             "--k" => a.params.k = need(i, &argv).parse().unwrap_or(a.params.k),
             "--theta" => a.params.theta = need(i, &argv).parse().unwrap_or(a.params.theta),
             "--iters" => {
@@ -76,6 +86,15 @@ fn parse_args() -> Args {
                 a.params.iters_coarse = need(i, &argv).parse().unwrap_or(a.params.iters_coarse)
             }
             "--seed" => a.params.seed = need(i, &argv).parse().unwrap_or(a.params.seed),
+            "--coarsest" => a.params.coarsest = need(i, &argv).parse().unwrap_or(a.params.coarsest),
+            "--single-level" => {
+                // Disable multilevel coarsening → the full single-level condensation
+                // from a random seed (the dramatic "untangling" reel; multilevel
+                // pre-solves so its finest level barely moves). Valueless flag.
+                a.params.coarsest = usize::MAX;
+                i += 1;
+                continue;
+            }
             "-h" | "--help" => {
                 println!("graph-layout — Barnes-Hut + multilevel force layout → PPM frames");
                 println!("  --input/-i FILE     edge list `a b [weight]` (default: synthetic)");
@@ -83,7 +102,9 @@ fn parse_args() -> Args {
                 println!("  --width --height    canvas size (default 1280)");
                 println!("  --frame-every N     render every Nth iteration (default 2)");
                 println!("  --clusters --per    synthetic graph size (default 8 x 250)");
-                println!("  --k --theta --iters --iters-coarse --seed  layout tunables");
+                println!("  --p-in --p-out      synthetic intra/inter-community edge prob");
+                println!("  --single-level      full condensation reel (no coarsening)");
+                println!("  --k --theta --iters --iters-coarse --coarsest --seed  tunables");
                 exit(0);
             }
             other => {
@@ -122,6 +143,7 @@ fn render_frame(
     pos: &[V2],
     g: &Graph,
     colors: &[u32],
+    radii: &[f32],
     w: usize,
     h: usize,
     path: &Path,
@@ -135,11 +157,11 @@ fn render_frame(
         let (bx, by) = proj(pos[b as usize]);
         canvas.line(ax, ay, bx, by, [120, 140, 200], 0.07);
     }
-    // Nodes, colored by connected component (resolved cluster).
-    let r = (w.min(h) as f32 / 640.0).max(1.2);
+    // Nodes, colored by connected component (resolved entity), sized per node so
+    // a heavily-duplicated entity reads as a big dot.
     for (i, &p) in pos.iter().enumerate() {
         let (x, y) = proj(p);
-        canvas.disc(x, y, r, color_for(colors[i]), 0.95);
+        canvas.disc(x, y, radii[i], color_for(colors[i]), 0.95);
     }
     canvas.save_ppm(path)
 }
@@ -147,6 +169,11 @@ fn render_frame(
 fn main() {
     let args = parse_args();
 
+    // `synthetic` is true when we built the graph ourselves (no --input), so we
+    // know the *planted* community of every node and can color by it even when
+    // --p-out adds inter-community edges (which would otherwise fuse everything
+    // into one connected component).
+    let synthetic = args.input.is_none();
     let (graph, source) = match &args.input {
         Some(path) => match Graph::read_edge_list(path) {
             Ok((g, _labels)) => (g, format!("{path}")),
@@ -156,10 +183,21 @@ fn main() {
             }
         },
         None => (
-            // p_out = 0: clusters are genuine connected components, mirroring an
-            // ER match graph thresholded into resolved entities (distinct colors).
-            Graph::synthetic(args.clusters, args.per, 0.06, 0.0, args.params.seed),
-            format!("synthetic {}x{}", args.clusters, args.per),
+            // --p-out 0 (default): clusters are genuine connected components,
+            // mirroring an ER match graph thresholded into resolved entities.
+            // --p-out > 0: weak inter-community links → one connected web with
+            // community structure (a relationship / graph-ER shape).
+            Graph::synthetic(
+                args.clusters,
+                args.per,
+                args.p_in,
+                args.p_out,
+                args.params.seed,
+            ),
+            format!(
+                "synthetic {}x{} p_out={}",
+                args.clusters, args.per, args.p_out
+            ),
         ),
     };
 
@@ -168,7 +206,14 @@ fn main() {
         exit(1);
     }
 
-    let colors = graph.components();
+    // Color by planted community for synthetic graphs (so inter-community edges
+    // don't collapse the palette to one color); by connected component otherwise
+    // — for a thresholded match graph the components ARE the resolved entities.
+    let colors: Vec<u32> = if synthetic {
+        (0..graph.n).map(|i| (i / args.per) as u32).collect()
+    } else {
+        graph.components()
+    };
     let n_components = colors.iter().copied().max().map(|m| m + 1).unwrap_or(0);
     println!(
         "graph: {} nodes, {} edges, {} components  ({})",
@@ -177,6 +222,72 @@ fn main() {
         n_components,
         source
     );
+
+    // Per-node disc radius ∝ sqrt(cluster size) so a disc's AREA tracks the
+    // entity's record count — a 30-record entity reads as a big dot, a singleton
+    // as a small one. Clamped so one giant cluster doesn't swallow the frame.
+    let mut comp_size = vec![0usize; n_components.max(1) as usize];
+    for &c in &colors {
+        comp_size[c as usize] += 1;
+    }
+    let base = (args.width.min(args.height) as f32 / 640.0).max(1.3);
+    let radii: Vec<f32> = colors
+        .iter()
+        .map(|&c| (base * (comp_size[c as usize] as f32).sqrt()).min(base * 6.0))
+        .collect();
+
+    // --dump-bin: stream raw per-frame world positions (+ static colors/radii/edges)
+    // to a little-endian binary file instead of rasterizing. Lets an external HDR
+    // renderer (scripts/glow_render.py) do additive-glow / bloom passes the built-in
+    // PPM rasterizer can't, without recomputing the layout.
+    if let Some(dump_path) = &args.dump {
+        let f = fs::File::create(dump_path).unwrap_or_else(|e| {
+            eprintln!("cannot create {dump_path}: {e}");
+            exit(1);
+        });
+        let mut w = std::io::BufWriter::new(f);
+        let mut hdr = Vec::new();
+        for v in [
+            graph.n as u32,
+            graph.edges.len() as u32,
+            args.width as u32,
+            args.height as u32,
+        ] {
+            hdr.extend_from_slice(&v.to_le_bytes());
+        }
+        for &c in &colors {
+            hdr.extend_from_slice(&c.to_le_bytes());
+        }
+        for &r in &radii {
+            hdr.extend_from_slice(&r.to_le_bytes());
+        }
+        for &(a, b, _) in &graph.edges {
+            hdr.extend_from_slice(&a.to_le_bytes());
+            hdr.extend_from_slice(&b.to_le_bytes());
+        }
+        w.write_all(&hdr).unwrap();
+        let t0 = std::time::Instant::now();
+        let mut frames = 0u32;
+        let mut emit = |fp: &[V2]| {
+            let mut buf = Vec::with_capacity(fp.len() * 8);
+            for p in fp {
+                buf.extend_from_slice(&p.x.to_le_bytes());
+                buf.extend_from_slice(&p.y.to_le_bytes());
+            }
+            w.write_all(&buf).unwrap();
+            frames += 1;
+        };
+        let pos = layout::run(&graph, &args.params, |frame_pos, fidx| {
+            if fidx % args.frame_every == 0 {
+                emit(frame_pos);
+            }
+        });
+        emit(&pos);
+        w.flush().unwrap();
+        let secs = t0.elapsed().as_secs_f32();
+        println!("dumped {frames} frames to {dump_path} in {secs:.2}s");
+        return;
+    }
 
     if let Err(e) = fs::create_dir_all(&args.out) {
         eprintln!("cannot create {}: {e}", args.out);
@@ -189,8 +300,15 @@ fn main() {
     let pos = layout::run(&graph, &args.params, |frame_pos, fidx| {
         if fidx % args.frame_every == 0 {
             let path = Path::new(&args.out).join(format!("frame_{:05}.ppm", saved));
-            if let Err(e) = render_frame(frame_pos, &graph, &colors, args.width, args.height, &path)
-            {
+            if let Err(e) = render_frame(
+                frame_pos,
+                &graph,
+                &colors,
+                &radii,
+                args.width,
+                args.height,
+                &path,
+            ) {
                 eprintln!("frame write failed: {e}");
             }
             saved += 1;
@@ -201,7 +319,15 @@ fn main() {
 
     // Always render a clean final frame.
     let final_path = Path::new(&args.out).join(format!("frame_{:05}.ppm", saved));
-    let _ = render_frame(&pos, &graph, &colors, args.width, args.height, &final_path);
+    let _ = render_frame(
+        &pos,
+        &graph,
+        &colors,
+        &radii,
+        args.width,
+        args.height,
+        &final_path,
+    );
     saved += 1;
 
     let secs = t0.elapsed().as_secs_f32();
