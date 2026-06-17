@@ -7,6 +7,9 @@ name: embed-recall-probe
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - claude/embed-recall-probe
 
 permissions:
   contents: read
@@ -25,7 +28,7 @@ jobs:
           python-version: "3.12"
       - name: Install probe deps (sentence-transformers pulls CPU torch)
         run: pip install sentence-transformers numpy
-      - name: Run recall-lever probe (free tiers: MiniLM + multilingual MiniLM)
+      - name: "Run recall-lever probe (free tiers - MiniLM + multilingual MiniLM)"
         working-directory: ${{ env.BENCH }}
         run: |
           set -uo pipefail
