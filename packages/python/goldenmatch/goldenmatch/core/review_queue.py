@@ -399,7 +399,17 @@ class ReviewQueue:
     def storage_tier(self) -> str:
         return self._backend_name
 
-    def add(self, job_name: str, id_a: int, id_b: int, score: float, explanation: str) -> None:
+    def add(
+        self,
+        job_name: str,
+        id_a: int,
+        id_b: int,
+        score: float,
+        explanation: str,
+        *,
+        cluster_provenance_by_id=None,
+        cluster_of=None,
+    ) -> None:
         item = ReviewItem(job_name=job_name, id_a=id_a, id_b=id_b, score=score, explanation=explanation)
         # Populate `why` when we have enough context. Never raises.
         if self._memory_df is not None and self._memory_matchkey_fields:
@@ -410,6 +420,15 @@ class ReviewQueue:
                 )
             except Exception as e:  # pragma: no cover - defensive
                 log.warning("ReviewQueue why computation failed: %s", e)
+        if cluster_provenance_by_id and cluster_of is not None:
+            try:
+                from goldenmatch.core.lineage import render_cluster_provenance_nl
+                cid = cluster_of.get(id_a)
+                cp = cluster_provenance_by_id.get(cid) if cid is not None else None
+                if cp is not None:
+                    item.golden_composition = render_cluster_provenance_nl(cp) or None
+            except Exception as e:  # pragma: no cover - defensive
+                log.warning("ReviewQueue golden_composition computation failed: %s", e)
         self._backend.add(item)
 
     def list_pending(self, job_name: str) -> list[ReviewItem]:
