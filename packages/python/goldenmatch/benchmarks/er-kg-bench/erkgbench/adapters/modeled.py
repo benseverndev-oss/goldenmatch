@@ -60,6 +60,7 @@ class _ExactNormalized:
     GraphRAG, LightRAG and Cognee (ontology off, the default)."""
 
     deterministic = True
+    fidelity = "modeled"
 
     def resolve(self, records: list[Record]) -> list[list[int]]:
         return cluster_by_key(records, lambda r: _norm(r.mention))
@@ -96,6 +97,7 @@ class Mem0Modeled:
         "prompt (main.py md5; contradictions #4896, 37.6% near-dupes #4573)"
     )
     deterministic = True  # the modelled MD5 floor is; the LLM layer is not
+    fidelity = "modeled"
 
     def resolve(self, records: list[Record]) -> list[list[int]]:
         # MD5 is over the raw text -> case-sensitive exact match.
@@ -115,6 +117,7 @@ class Neo4jBuilderModeled:
         "(graphDB_dataAccess.py; over-merge #1133, missed alias #912)"
     )
     deterministic = True
+    fidelity = "modeled"
 
     # DUPLICATE_TEXT_DISTANCE default = 3 in code (README stale at 5); the
     # edit-distance rule only fires when len(name) > 5. DUPLICATE_SCORE_VALUE = 0.97.
@@ -165,6 +168,7 @@ class Neo4jGraphRAGFuzzyModeled:
         "(resolver.py BasePropertySimilarityResolver; rapidfuzz extra #336)"
     )
     deterministic = True
+    fidelity = "modeled"
     THRESHOLD = 0.8
 
     def _pred(self, a: Record, b: Record) -> bool:
@@ -187,6 +191,7 @@ class LlamaIndexModeled:
         "BTC Halving 2020/2024)"
     )
     deterministic = True
+    fidelity = "modeled"
     TEXT_DISTANCE = 5
     COSINE = 0.9
 

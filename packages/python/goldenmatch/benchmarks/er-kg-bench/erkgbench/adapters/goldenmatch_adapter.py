@@ -50,6 +50,7 @@ class GoldenMatchAdapter:
     # Auto-config has mild EM-order non-determinism; the runner's re-run check
     # reports what actually happened rather than trusting this flag.
     deterministic = True
+    fidelity = "real"
 
     def __init__(self, mode: str = "auto") -> None:
         if mode not in _MODES:
@@ -111,6 +112,7 @@ class GoldenMatchEmbAnnAdapter:
 
     name = "goldenmatch(emb-ann)"
     deterministic = True
+    fidelity = "real"
 
     def __init__(
         self,

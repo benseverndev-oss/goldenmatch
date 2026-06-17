@@ -30,6 +30,10 @@ class Adapter(Protocol):
     #: (Graphiti / mem0) are non-deterministic by construction -- see the note
     #: each adapter carries.
     deterministic: bool
+    #: Fidelity tier of this row: "real" (the actual system, e.g. goldenmatch),
+    #: "real-inproc"/"real-live" (real framework run), "validated" (modeled but
+    #: confirmed vs source), or "modeled" (modeled, unverified).
+    fidelity: str
 
     def resolve(self, records: list[Record]) -> list[list[int]]:
         ...
