@@ -47,7 +47,11 @@ def lineage_cmd(
     )
 
     if output_dir:
-        path = save_lineage(lineage, output_dir, run_name=run_name)
+        from goldenmatch.config.schemas import GoldenRulesConfig
+        from goldenmatch.core.lineage import golden_provenance_for_run
+        golden_rules = getattr(cfg, "golden_rules", None) or GoldenRulesConfig(default_strategy="most_complete")
+        gp = golden_provenance_for_run(engine.data, result.clusters, golden_rules)
+        path = save_lineage(lineage, output_dir, run_name=run_name, golden_provenance=gp)
         console.print(f"[#2ecc71]Wrote {len(lineage)} lineage records[/] to {path}")
         return
 

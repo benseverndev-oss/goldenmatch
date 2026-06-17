@@ -184,6 +184,8 @@ def explain_cluster_nl(
     cluster: dict,
     df,
     matchkeys: list[MatchkeyConfig],
+    *,
+    cluster_provenance=None,
 ) -> str:
     """Generate a template-based cluster summary.
 
@@ -191,6 +193,7 @@ def explain_cluster_nl(
         cluster: Cluster info dict from build_clusters.
         df: DataFrame with record data.
         matchkeys: Matchkey configs used for scoring.
+        cluster_provenance: Optional ClusterProvenance for survivorship audit.
 
     Returns:
         Human-readable cluster summary.
@@ -202,29 +205,40 @@ def explain_cluster_nl(
     pair_scores = cluster.get("pair_scores", {})
 
     if size <= 1:
-        return "Singleton cluster with 1 record."
+        summary = "Singleton cluster with 1 record."
+    else:
+        # Score statistics
+        scores = list(pair_scores.values()) if pair_scores else []
+        min_score = min(scores) if scores else 0
+        avg_score = sum(scores) / len(scores) if scores else 0
+        max_score = max(scores) if scores else 0
 
-    # Score statistics
-    scores = list(pair_scores.values()) if pair_scores else []
-    min_score = min(scores) if scores else 0
-    avg_score = sum(scores) / len(scores) if scores else 0
-    max_score = max(scores) if scores else 0
+        parts = [
+            f"Cluster of {size} records "
+            f"(confidence {confidence:.2f}, "
+            f"scores {min_score:.2f}-{max_score:.2f}, "
+            f"avg {avg_score:.2f})."
+        ]
 
-    parts = [
-        f"Cluster of {size} records "
-        f"(confidence {confidence:.2f}, "
-        f"scores {min_score:.2f}-{max_score:.2f}, "
-        f"avg {avg_score:.2f})."
-    ]
+        if bottleneck:
+            a, b = bottleneck
+            bp_score = pair_scores.get((a, b), pair_scores.get((b, a), 0))
+            parts.append(
+                f"Weakest link: records {a} and {b} (score {bp_score:.2f})."
+            )
 
-    if bottleneck:
-        a, b = bottleneck
-        bp_score = pair_scores.get((a, b), pair_scores.get((b, a), 0))
-        parts.append(
-            f"Weakest link: records {a} and {b} (score {bp_score:.2f})."
-        )
+        if cluster.get("oversized"):
+            parts.append("WARNING: cluster exceeds max size limit.")
 
-    if cluster.get("oversized"):
-        parts.append("WARNING: cluster exceeds max size limit.")
+        summary = " ".join(parts)
 
-    return " ".join(parts)
+    if cluster_provenance is not None:
+        from goldenmatch.core.lineage import render_cluster_provenance_nl
+        try:
+            trail = render_cluster_provenance_nl(cluster_provenance)
+        except Exception:
+            trail = ""
+        if trail:
+            summary = f"{summary}\n\nSurvivorship:\n{trail}"
+
+    return summary

@@ -18,7 +18,8 @@ from goldenmatch.core.survivorship.winner import group_winner
 
 
 def resolve_cluster(cluster_df, rules, resolution_order, *,
-                    quality_scores=None, pair_scores=None, provenance=False):
+                    quality_scores=None, pair_scores=None, provenance=False,
+                    cluster_id=None):
     # Local import avoids any import cycle (golden imports resolve lazily).
     from goldenmatch.core.golden import (
         ClusterProvenance,
@@ -142,6 +143,7 @@ def resolve_cluster(cluster_df, rules, resolution_order, *,
 
     prov = None
     if provenance:
-        prov = ClusterProvenance(cluster_id=-1, cluster_quality="strong",
+        prov = ClusterProvenance(cluster_id=cluster_id if cluster_id is not None else -1,
+                                 cluster_quality="strong",
                                  cluster_confidence=0.0, fields=field_provs, groups=group_provs)
     return result, prov

@@ -130,10 +130,61 @@ def build_lineage(
     return lineage
 
 
+def golden_provenance_for_run(data_df, clusters, rules) -> list | None:
+    """Build golden ClusterProvenance for a finished run from the source frame +
+    clusters dict (the inputs the standalone lineage/explain surfaces have).
+    Fail-open: returns None on any error. Returns None when there are no
+    multi-member clusters. Returns None for non-survivorship configs so plain
+    runs stay byte-identical."""
+    try:
+        import polars as pl
+
+        from goldenmatch.core.golden import (
+            _survivorship_active,
+            build_golden_records_batch,
+            golden_records_to_provenance,
+        )
+        if not _survivorship_active(rules):
+            return None
+        member_rows = [
+            {"__row_id__": rid, "__cluster_id__": cid}
+            for cid, cinfo in clusters.items()
+            if cinfo.get("size", len(cinfo.get("members", []))) > 1
+            for rid in cinfo.get("members", [])
+        ]
+        if not member_rows:
+            return None
+        multi_df = pl.DataFrame(member_rows).join(data_df, on="__row_id__", how="inner")
+        rows = build_golden_records_batch(multi_df, rules, provenance=True)
+        return golden_records_to_provenance(rows, clusters, rules)
+    except Exception:
+        logger.warning("lineage: golden provenance unavailable; skipping")
+        return None
+
+
 def _serialize_provenance(provenance: list) -> list[dict]:
     """Serialize ClusterProvenance dataclasses to dicts."""
     from dataclasses import asdict
     return [asdict(p) for p in provenance]
+
+
+def _safe_cluster_audit(cp) -> str:
+    """Fail-open render of a cluster's survivorship audit trail (group +
+    condition + validation lines). '' when nothing survivorship-specific."""
+    try:
+        return render_cluster_provenance_nl(cp)
+    except Exception:
+        logger.warning("lineage: survivorship audit render failed; omitting")
+        return ""
+
+
+def _serialize_golden_records(provenance: list) -> list[dict]:
+    records = _serialize_provenance(provenance)
+    for cp, rec in zip(provenance, records):
+        audit = _safe_cluster_audit(cp)
+        if audit:
+            rec["audit"] = audit
+    return records
 
 
 def _fs_waterfall_dict(row_a: dict, row_b: dict, mk, em_result) -> dict | None:
@@ -193,7 +244,7 @@ def save_lineage(
         "pairs": lineage,
     }
     if golden_provenance:
-        data["golden_records"] = _serialize_provenance(golden_provenance)
+        data["golden_records"] = _serialize_golden_records(golden_provenance)
     path.write_text(json.dumps(data, default=str, indent=2), encoding="utf-8")
     logger.info("Saved lineage for %d pairs to %s", len(lineage), sanitize_for_log(path))
     return path
@@ -300,7 +351,7 @@ def save_lineage_streaming(
         f.write('\n  ]')
         if golden_provenance:
             f.write(',\n  "golden_records": ')
-            f.write(json.dumps(_serialize_provenance(golden_provenance), default=str, indent=2))
+            f.write(json.dumps(_serialize_golden_records(golden_provenance), default=str, indent=2))
         f.write('\n}\n')
 
     logger.info("Streamed lineage for %d pairs to %s", written, path)
