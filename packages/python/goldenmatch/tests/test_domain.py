@@ -35,6 +35,17 @@ class TestDomainDetection:
         profile = detect_domain(["product_name", "description", "sku", "price"])
         assert "product_name" in profile.text_columns or "description" in profile.text_columns
 
+    def test_generic_name_only_not_product(self):
+        # Regression for #1037: a bare `name` column is domain-ambiguous (a person,
+        # place, org or product all have a `name`), so it must NOT be confidently
+        # classified as 'product'. It used to score product@1.0 because `name` was a
+        # product signal and nothing else matched.
+        assert detect_domain(["name"]).name != "product"
+        # The ER-KG-Bench shape (name + generic fields, no domain signal) -> unknown.
+        ekg = detect_domain(["name", "entity_type", "context"])
+        assert ekg.name == "unknown"
+        assert ekg.confidence == 0.0
+
 
 class TestProductFeatureExtraction:
     def test_extract_model_number(self):

@@ -49,7 +49,12 @@ class DomainProfile:
 
 # Domain detection heuristics
 _PRODUCT_SIGNALS = re.compile(
-    r"(product|title|name|description|brand|manufacturer|mfr|sku|model|price|upc|ean|asin)",
+    # `name` is intentionally NOT a product signal: it is domain-ambiguous (person,
+    # place, org and product all have a `name`), so a name-only schema scored
+    # product@1.0 and ran product feature extraction it shouldn't (#1037). Product
+    # detection relies on the product-specific tokens below; real product data still
+    # matches via title/description/brand/manufacturer/price/etc.
+    r"(product|title|description|brand|manufacturer|mfr|sku|model|price|upc|ean|asin)",
     re.IGNORECASE,
 )
 _PERSON_SIGNALS = re.compile(
