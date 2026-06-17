@@ -271,7 +271,7 @@ Auto-map columns between two files with different schemas (synonym + name simila
 
 ### lineage
 
-Field-level provenance for the loaded run: the per-field score breakdown behind each scored pair, plus cluster id.
+Field-level provenance for the loaded run: the per-field score breakdown behind each scored pair, plus cluster id. When the run's config uses survivorship `field_groups`, the result also includes a top-level `golden_records` section whose entries carry a `groups` array -- recording which columns were promoted together, the winning source record, and the strategy used.
 
 ```text
 "Show me the lineage for the pairs in cluster 14"

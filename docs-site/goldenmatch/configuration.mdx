@@ -322,6 +322,16 @@ Two constraints the config loader enforces:
   Correlated survivorship resolves on the driver (the in-memory golden builder). The Ray Phase-5 streaming pipeline (`GOLDENMATCH_DISTRIBUTED_PIPELINE=2`) and the Sail backend reject configs that include `field_groups` or conditional `field_rules` with a clear error. Run those configs on the in-memory path.
 </Note>
 
+#### Surfacing the group decision
+
+When a config uses `field_groups` (or conditional/validated `field_rules`), GoldenMatch surfaces the survivorship decision in three places:
+
+- **Lineage JSON** (`save_lineage` / `goldenmatch lineage --output-dir ...`): a top-level `golden_records` array, one entry per cluster, each with a `groups` array (name, columns, winner_row_id, winner_source, strategy, tie, confidence) and a human-readable `audit` string. Example: `street, city, zip promoted together from record 7 via most_complete (group 'mailing_address')`.
+- **CLI `goldenmatch explain --cluster <id>`**: the output gains a `Survivorship:` block with the same audit lines (group promotions and any conditional/validated field notes).
+- **MCP `lineage` tool**: the result includes the same `golden_records` section so agents can read which columns were promoted lock-step and from which source.
+
+For plain configs with no `field_groups` and no conditional `field_rules`, output is byte-identical to prior behavior -- none of these surfaces add anything.
+
 ### Conditional and validated field rules
 
 A `field_rules` entry can be a list of clauses instead of a single strategy. The first clause whose `when:` predicate is satisfied wins; the last clause must have no `when:` and acts as the default.
