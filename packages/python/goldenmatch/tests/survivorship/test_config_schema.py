@@ -5,9 +5,9 @@ from goldenmatch.config.schemas import GoldenFieldRule, GoldenGroupRule, GoldenR
 
 def test_field_rule_when_validate_optional():
     r = GoldenFieldRule(strategy="most_complete")
-    assert r.when is None and r.validate is None
+    assert r.when is None and r.validate_with is None
     r2 = GoldenFieldRule(strategy="most_recent", date_column="dt", when="state == 'CA'", validate="nanp")
-    assert r2.when == "state == 'CA'" and r2.validate == "nanp"
+    assert r2.when == "state == 'CA'" and r2.validate_with == "nanp"
 
 
 def test_group_rule_validation():
@@ -72,4 +72,26 @@ def test_default_clause_must_be_last():
                 {"strategy": "source_priority", "source_priority": ["crm"]},
                 {"when": "state == 'CA'", "strategy": "most_recent", "date_column": "dt"},
             ]},
+        )
+
+
+def test_list_form_requires_a_default_clause():
+    with pytest.raises(ValidationError):
+        GoldenRulesConfig(
+            default_strategy="most_complete",
+            field_rules={"phone": [
+                {"when": "state == 'CA'", "strategy": "most_recent", "date_column": "dt"},
+                {"when": "state == 'NY'", "strategy": "most_recent", "date_column": "dt"},
+            ]},  # no when-less default clause
+        )
+
+
+def test_list_form_rejects_two_defaults():
+    with pytest.raises(ValidationError):
+        GoldenRulesConfig(
+            default_strategy="most_complete",
+            field_rules={"phone": [
+                {"strategy": "source_priority", "source_priority": ["crm"]},
+                {"strategy": "most_complete"},
+            ]},  # two when-less default clauses
         )
