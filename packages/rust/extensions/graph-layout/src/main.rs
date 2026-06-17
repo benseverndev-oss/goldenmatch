@@ -176,7 +176,7 @@ fn main() {
     let synthetic = args.input.is_none();
     let (graph, source) = match &args.input {
         Some(path) => match Graph::read_edge_list(path) {
-            Ok((g, _labels)) => (g, format!("{path}")),
+            Ok((g, _labels)) => (g, path.to_string()),
             Err(e) => {
                 eprintln!("failed to read {path}: {e}");
                 exit(1);
