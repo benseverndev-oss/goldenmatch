@@ -8,7 +8,10 @@ reconstructed.
 """
 import polars as pl
 from goldenmatch.config.schemas import GoldenGroupRule, GoldenRulesConfig
-from goldenmatch.core.golden import build_golden_records_batch
+from goldenmatch.core.golden import (
+    build_golden_records_batch,
+    golden_records_to_provenance,
+)
 from goldenmatch.core.survivorship.conditions import build_resolution_order
 from goldenmatch.core.survivorship.resolve import resolve_cluster
 
@@ -49,3 +52,16 @@ def test_batch_survivorship_rows_carry_provenance():
     assert prov.groups[0].columns == ["street", "city", "zip"]
     assert prov.groups[0].winner_row_id == 11   # row 11 is most-complete (3/3)
     assert prov.groups[0].values["zip"] == "90001"
+
+
+def test_adapter_uses_carried_prov_with_groups():
+    df = _cluster_df()
+    rows = build_golden_records_batch(df, _addr_rules(), provenance=True)
+    clusters = {5: {"cluster_quality": "strong", "confidence": 0.9}}
+    provs = golden_records_to_provenance(rows, clusters, _addr_rules())
+    assert len(provs) == 1
+    cp = provs[0]
+    assert cp.cluster_id == 5
+    assert cp.cluster_confidence == 0.9
+    assert len(cp.groups) == 1
+    assert cp.groups[0].name == "addr"

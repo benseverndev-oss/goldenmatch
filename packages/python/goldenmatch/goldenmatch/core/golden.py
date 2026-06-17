@@ -1035,6 +1035,13 @@ def golden_records_to_provenance(
     for rec in golden_records:
         cid = rec["__cluster_id__"]
         cinfo = clusters.get(cid, {})
+        carried = rec.get("__survivorship_prov__")
+        if carried is not None:
+            carried.cluster_id = cid
+            carried.cluster_quality = cinfo.get("cluster_quality", "strong")
+            carried.cluster_confidence = cinfo.get("confidence", 0.0)
+            out.append(carried)
+            continue
         fields: dict[str, FieldProvenance] = {}
         for col, info in rec.items():
             if col in ("__cluster_id__", "__golden_confidence__"):
