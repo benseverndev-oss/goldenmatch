@@ -1141,6 +1141,21 @@ def build_golden_record_with_provenance(
         cluster_ids = sorted(df[cluster_col].unique().to_list())
         cluster_dfs = {cid: df.filter(pl.col(cluster_col) == cid) for cid in cluster_ids}
 
+    if _survivorship_active(rules):
+        rows = build_golden_records_batch(df, rules, provenance=True)
+        provenance_list = golden_records_to_provenance(rows, clusters, rules)
+        golden_rows = []
+        for rec in rows:
+            row = {"__cluster_id__": rec["__cluster_id__"]}
+            for col, val_info in rec.items():
+                if col in ("__cluster_id__", "__golden_confidence__", "__survivorship_prov__"):
+                    continue
+                if isinstance(val_info, dict) and "value" in val_info:
+                    row[col] = val_info["value"]
+            golden_rows.append(row)
+        golden_df = pl.DataFrame(golden_rows) if golden_rows else pl.DataFrame()
+        return GoldenRecordResult(df=golden_df, provenance=provenance_list)
+
     for cid in cluster_ids:
         cluster_df = cluster_dfs[cid]
         cinfo = clusters.get(cid, {})

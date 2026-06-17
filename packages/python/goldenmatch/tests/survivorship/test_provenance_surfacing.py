@@ -9,6 +9,7 @@ reconstructed.
 import polars as pl
 from goldenmatch.config.schemas import GoldenGroupRule, GoldenRulesConfig
 from goldenmatch.core.golden import (
+    build_golden_record_with_provenance,
     build_golden_records_batch,
     golden_records_to_provenance,
 )
@@ -65,3 +66,11 @@ def test_adapter_uses_carried_prov_with_groups():
     assert cp.cluster_confidence == 0.9
     assert len(cp.groups) == 1
     assert cp.groups[0].name == "addr"
+
+
+def test_build_golden_record_with_provenance_surfaces_groups():
+    df = _cluster_df()
+    result = build_golden_record_with_provenance(df, _addr_rules(), {5: {"confidence": 0.9}})
+    cp = result.provenance[0]
+    assert cp.cluster_id == 5
+    assert len(cp.groups) == 1 and cp.groups[0].name == "addr"
