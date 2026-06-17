@@ -1,3 +1,4 @@
+<!-- mcp-name: io.github.benseverndev-oss/goldenanalysis -->
 # GoldenAnalysis
 
 **Measure and report across the Golden Suite.** A read-only, cross-cutting
