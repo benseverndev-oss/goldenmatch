@@ -1,6 +1,6 @@
 # ER-KG-Bench results
 
-Dataset: **206 records / 48 entities / 9 failure classes**. Embedder: `none (string predicates only)`.
+Dataset: **206 records / 48 entities / 9 failure classes**. Embedder: `st`.
 
 `*` = precision-critical negative class (distinct entities with colliding surface forms; lower precision = wrong merges).
 
@@ -8,18 +8,21 @@ Dataset: **206 records / 48 entities / 9 failure classes**. Embedder: `none (str
 
 | System | P | R | F1 | fid | coll&nbsp;P* | temp&nbsp;P* | ms | det-floor |
 |---|---|---|---|---|---|---|---|---|
-| goldenmatch(auto) | 0.849 | 0.374 | **0.52** | real | 0.438 | 0.4 | 639.9 | yes |
-| goldenmatch(auto+fields) | 0.786 | 0.488 | **0.602** | real | 0.471 | 0.4 | 3804.3 | yes |
-| goldenmatch(emb-ann) | 0.455 | 0.426 | **0.44** | real | 0.471 | 0.4 | 41.6 | yes |
-| MS-GraphRAG | 0.875 | 0.034 | **0.066** | modeled | 0.0 | 1.0 | 0.1 | yes |
+| goldenmatch(auto) | 0.849 | 0.374 | **0.52** | real | 0.438 | 0.4 | 984.6 | yes |
+| goldenmatch(auto+fields) | 0.786 | 0.488 | **0.602** | real | 0.471 | 0.4 | 4878.1 | yes |
+| goldenmatch(emb-ann) | 0.455 | 0.426 | **0.44** | real | 0.471 | 0.4 | 65.9 | yes |
+| MS-GraphRAG | 0.875 | 0.034 | **0.066** | modeled | 0.0 | 1.0 | 0.2 | yes |
 | LightRAG | 0.875 | 0.034 | **0.066** | modeled | 0.0 | 1.0 | 0.1 | yes |
 | Cognee | 0.875 | 0.034 | **0.066** | modeled | 0.0 | 1.0 | 0.1 | yes |
-| mem0 | 0.875 | 0.034 | **0.066** | validated | 0.0 | 1.0 | 0.2 | yes |
-| Neo4j-KGBuilder | 0.826 | 0.315 | **0.456** | modeled | 0.448 | 0.286 | 9.3 | yes |
-| neo4j-graphrag(fuzzy) | 0.345 | 0.485 | **0.403** | modeled | 0.451 | 0.4 | 50.7 | yes |
-| LlamaIndex-PGI | 0.141 | 0.51 | **0.221** | modeled | 0.452 | 0.286 | 5.2 | yes |
-| neo4j-graphrag(fuzzy)* | 0.491 | 0.451 | **0.47** | real-inproc | 0.471 | 0.4 | 531.7 | yes |
+| mem0 | 0.875 | 0.034 | **0.066** | validated | 0.0 | 1.0 | 0.3 | yes |
+| Neo4j-KGBuilder | 0.826 | 0.315 | **0.456** | modeled | 0.448 | 0.286 | 12.3 | yes |
+| neo4j-graphrag(fuzzy) | 0.345 | 0.485 | **0.403** | modeled | 0.451 | 0.4 | 63.6 | yes |
+| LlamaIndex-PGI | 0.141 | 0.51 | **0.221** | modeled | 0.452 | 0.286 | 7.0 | yes |
+| Neo4j-KGBuilder(emb) | 0.795 | 0.335 | **0.471** | modeled | 0.448 | 0.4 | 654.2 | yes |
+| LlamaIndex-PGI(emb) | 0.149 | 0.547 | **0.234** | modeled | 0.452 | 0.4 | 671.3 | yes |
+| neo4j-graphrag(fuzzy)* | 0.477 | 0.461 | **0.469** | real-inproc | 0.471 | 0.4 | 12.6 | yes |
 | neo4j-graphrag(exact) | 0.875 | 0.034 | **0.066** | validated | 0.0 | 1.0 | 0.2 | yes |
+| neo4j-graphrag(spacy)* | 0.699 | 0.281 | **0.401** | real-inproc | 0.455 | 0.364 | 1943.2 | yes |
 
 ## Per-class F1
 
@@ -35,8 +38,11 @@ Dataset: **206 records / 48 entities / 9 failure classes**. Embedder: `none (str
 | Neo4j-KGBuilder | 0.412 | 0.406 | 0.034 | 0.456 | 0.588 | 0.714 | 1.0 | 0.308 | 1.0 |
 | neo4j-graphrag(fuzzy) | 0.898 | 0.854 | 0.078 | 0.582 | 0.345 | 0.667 | 0.444 | 0.571 | 1.0 |
 | LlamaIndex-PGI | 0.533 | 0.478 | 0.093 | 0.543 | 0.405 | 0.667 | 0.706 | 0.308 | 0.571 |
-| neo4j-graphrag(fuzzy)* | 0.898 | 0.854 | 0.045 | 0.516 | 0.286 | 0.75 | 0.444 | 0.571 | 1.0 |
+| Neo4j-KGBuilder(emb) | 0.412 | 0.406 | 0.034 | 0.456 | 0.588 | 0.714 | 1.0 | 0.571 | 1.0 |
+| LlamaIndex-PGI(emb) | 0.533 | 0.622 | 0.093 | 0.543 | 0.405 | 0.667 | 0.706 | 0.571 | 0.571 |
+| neo4j-graphrag(fuzzy)* | 0.898 | 0.854 | 0.045 | 0.516 | 0.345 | 0.667 | 0.444 | 0.571 | 1.0 |
 | neo4j-graphrag(exact) | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 1.0 |
+| neo4j-graphrag(spacy)* | 0.457 | 0.8 | 0.104 | 0.256 | 0.0 | 0.0 | 0.868 | 0.471 | 1.0 |
 
 ## Documented defaults (what each row runs)
 
@@ -50,7 +56,10 @@ Dataset: **206 records / 48 entities / 9 failure classes**. Embedder: `none (str
 - **Neo4j-KGBuilder** — same-label gate AND ( substring-contains(len>2) OR Levenshtein<3(len>5) OR cosine>0.97 ); human-review-gated (graphDB_dataAccess.py get_duplicate_nodes Cypher; over-merge #1133, missed alias #912)
 - **neo4j-graphrag(fuzzy)** — FuzzyMatchResolver: rapidfuzz WRatio/100 >= 0.8, all-pairs O(n^2) (resolver.py BasePropertySimilarityResolver; rapidfuzz extra #336)
 - **LlamaIndex-PGI** — same-label gate AND ( contains OR Levenshtein<5 OR cosine>0.9 ), KNN top-10 when embedded (property-graph blog; self-documented over-merges: 1963 AFL/NFL, BTC Halving 2020/2024)
+- **Neo4j-KGBuilder(emb)** — same-label gate AND ( substring-contains(len>2) OR Levenshtein<3(len>5) OR cosine>0.97 ); human-review-gated (graphDB_dataAccess.py get_duplicate_nodes Cypher; over-merge #1133, missed alias #912)
+- **LlamaIndex-PGI(emb)** — same-label gate AND ( contains OR Levenshtein<5 OR cosine>0.9 ), KNN top-10 when embedded (property-graph blog; self-documented over-merges: 1963 AFL/NFL, BTC Halving 2020/2024)
 - **neo4j-graphrag(fuzzy)*** — REAL FuzzyMatchResolver: rapidfuzz WRatio/100>=0.8 per entity-label, _consolidate_sets (library decision code; Neo4j+APOC storage stubbed)
 - **neo4j-graphrag(exact)** — SinglePropertyExactMatchResolver: exact `name` equality per entity-label, null names skipped (logic is a Cypher query in run(); no in-process decision method exists, so this is the Cypher re-expressed + confirmed -> validated)
+- **neo4j-graphrag(spacy)*** — REAL SpaCySemanticMatchResolver: spaCy doc-vector cosine >= 0.8 per entity-label, _consolidate_sets (library decision code; en_core_web_lg vectors; Neo4j+APOC storage stubbed)
 
 > Modelled rows reproduce each framework's deterministic default rule (exact constants + source in `adapters/modeled.py`). LLM-judge layers (Graphiti, mem0) are out of scope: non-deterministic, O(n)-in-LLM-calls, and ~$0.80/40-chats — see the module docstring.

@@ -102,11 +102,9 @@ def test_exact_merges_identical_skips_null_and_no_normalization():
 
 # -- SpaCySemanticMatchResolver (real-inproc; needs the spaCy vector model) -----
 
-# Observed real F1 of the spaCy resolver on the corpus. None until the first CI run
-# (which has the model) reports it; set it to lock the value against silent drift.
-# Read it from the regenerated results/RESULTS.md `neo4j-graphrag(spacy)*` row or the
-# skip message below, then pin here (Task 8).
-_SPACY_F1_PIN: float | None = None
+# Observed real F1 of the spaCy resolver on the corpus, pinned from the CI run
+# (en_core_web_lg installed): P 0.699 / R 0.281 / F1 0.401. Locks against drift.
+_SPACY_F1_PIN: float | None = 0.401
 
 
 def _spacy_model_available() -> bool:
