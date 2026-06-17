@@ -9,11 +9,12 @@ close a row is to the framework it claims to represent:
   `_consolidate_sets`); only the I/O (live Neo4j) is stubbed.
 - **`validated`** -- a MODEL of the framework's rule, confirmed line-by-line
   against the framework's real merge source (predicate + constants +
-  normalization all match). Where the run is only partial (an OR-term is
-  inactive in our default config), that is called out explicitly.
+  normalization all match) AND faithfully reproducing the real DEFAULT rule in
+  full. The bar is deliberately high: a model that only matches part of the
+  default rule (e.g. an OR-term inactive in our config) does NOT earn it.
 - **`modeled`** -- a model that could NOT be confirmed against maintained
-  source, OR that diverges from the real rule. A documented divergence is a
-  finding, not a failure.
+  source, OR that diverges from the real rule, OR that reproduces only part of
+  the real default rule. A documented divergence is a finding, not a failure.
 
 This audit read each framework's real merge/dedup source on GitHub and compared
 it to our model. The exact-match family's shared normalization is
@@ -28,7 +29,7 @@ collapse, NO quote/apostrophe strip, NO unicode fold).
 | LightRAG | `LightRAGModeled` | [operate.py](https://github.com/HKUDS/LightRAG/blob/main/lightrag/operate.py) + [utils.py `normalize_extracted_info`](https://github.com/HKUDS/LightRAG/blob/main/lightrag/utils.py) | exact `entity_name` dict key; name is `sanitize_and_normalize_extracted_text(.., remove_inner_quotes=True)` -> **case-PRESERVING** (no upper/lower), strips outer quotes, CJK fold, `.strip()` | NO (we lowercase -> case-INSENSITIVE; real is case-SENSITIVE; we don't strip quotes/CJK-fold) | **modeled** |
 | Cognee | `CogneeModeled` | [generate_node_name.py](https://github.com/topoteretes/cognee/blob/main/cognee/modules/engine/utils/generate_node_name.py) + [expand_with_nodes_and_edges.py](https://github.com/topoteretes/cognee/blob/main/cognee/modules/graph/utils/expand_with_nodes_and_edges.py) + [get_default_ontology_resolver.py](https://github.com/topoteretes/cognee/blob/main/cognee/modules/ontology/get_default_ontology_resolver.py) + [matching_strategies.py](https://github.com/topoteretes/cognee/blob/main/cognee/modules/ontology/matching_strategies.py) | entity node key = `generate_node_name(name) = name.lower().replace("'", "")` -> lowercases + strips apostrophes, **no whitespace collapse**. Default ontology empty (`ontology_file=None`) so the difflib cutoff=0.8 never fires | NO (we lowercase too, but we collapse whitespace it doesn't, and it strips apostrophes we don't) | **modeled** |
 | mem0 | `Mem0Modeled` | [memory/main.py](https://github.com/mem0ai/mem0/blob/main/mem0/memory/main.py) | `hashlib.md5(text.encode()).hexdigest()` over RAW memory text, case-sensitive, no normalization (`_add_to_vector_store` + `_create_memory`) | YES (byte-identical to our `md5(r.mention.encode())`) -- MD5 floor only; LLM ADD/UPDATE layer out of scope | **validated** |
-| Neo4j LLM KG Builder | `Neo4jBuilderModeled` | [graphDB_dataAccess.py](https://github.com/neo4j-labs/llm-graph-builder/blob/main/backend/src/graphDB_dataAccess.py) | `labels(n)=labels(other)` AND ( CONTAINS guard `size>2` both dirs, `toLower` OR `apoc.text.distance < 3` guard `size(n.id)>5` OR `vector.similarity.cosine > 0.97` ); `DUPLICATE_TEXT_DISTANCE=3`, `DUPLICATE_SCORE_VALUE=0.97` | YES on string predicates + constants (2 caveats below) | **validated** (partial w/o embedder) |
+| Neo4j LLM KG Builder | `Neo4jBuilderModeled` | [graphDB_dataAccess.py](https://github.com/neo4j-labs/llm-graph-builder/blob/main/backend/src/graphDB_dataAccess.py) | `labels(n)=labels(other)` AND ( CONTAINS guard `size>2` both dirs, `toLower` OR `apoc.text.distance < 3` guard `size(n.id)>5` OR `vector.similarity.cosine > 0.97` ); `DUPLICATE_TEXT_DISTANCE=3`, `DUPLICATE_SCORE_VALUE=0.97` | string predicates + constants confirmed, but default run is PARTIAL (cosine OR-term needs embedder) + a one-sided length-guard divergence | **modeled** |
 | neo4j-graphrag (fuzzy, model) | `Neo4jGraphRAGFuzzyModeled` | [resolver.py](https://github.com/neo4j/neo4j-graphrag-python/blob/main/src/neo4j_graphrag/experimental/components/resolver.py) | `fuzz.WRatio(a, b, processor=utils.default_process)/100 >= 0.8` | per-pair predicate matches, but MODEL F1 0.403 vs REAL in-proc F1 0.470 (-6.7pp) -> DIVERGENT in clustering | **modeled** |
 | neo4j-graphrag (fuzzy, real) | `RealNeo4jGraphRAGFuzzy` (`*`) | same | real `compute_similarity` + `_consolidate_sets` per entity-label run in-process | runs the library's real decision code | **real-inproc** |
 | neo4j-graphrag (exact) | `RealNeo4jGraphRAGExact` | same | `SinglePropertyExactMatchResolver`: Cypher exact `name` equality per label, null skipped, NO normalization; no Python decision method | Cypher re-expressed + confirmed | **validated** |
@@ -145,7 +146,7 @@ content-dedup fingerprint -- byte-identical to our model
 > per-pair LLM-costed; it is NOT modeled here. This row represents only the
 > deterministic dedup floor mem0 ships.
 
-### 5. Neo4j LLM Knowledge Graph Builder -- `validated` (partial without embedder)
+### 5. Neo4j LLM Knowledge Graph Builder -- `modeled` (partial default rule)
 
 Real `get_duplicate_nodes` Cypher (`backend/src/graphDB_dataAccess.py`):
 
@@ -170,23 +171,29 @@ score_value   = get_value_from_env("DUPLICATE_SCORE_VALUE", 0.97, "float") # 0.9
 ```
 
 `apoc.text.distance` is Levenshtein. The same-label gate, the bidirectional
-`CONTAINS` with the `size > 2` guard, the `Levenshtein < 3` with a length guard,
-and the `cosine > 0.97` term all match our model, and the constants are exact.
-The string predicates are **`validated`**. Two documented caveats:
+`CONTAINS` with the `size > 2` guard, the `Levenshtein < 3` term, and the
+`cosine > 0.97` term all map to our model, and the constants are exact. But the
+DEFAULT run does not faithfully reproduce the real default rule, on two counts,
+so the row stays **`modeled`**:
 
-- **(a) edit-distance length guard is one-sided.** Real Cypher guards on
-  `size(toString(n.id)) > 5` (one side of the pair), our model guards on
-  `min(len(na), len(nb)) > 5` (stricter). They differ only on pairs where one
-  name is <=5 chars and the other is >5 -- a near-edge divergence, not a
-  structural one.
-- **(b) cosine OR-term is inactive in our default run.** The real query
-  pre-filters `n.embedding is not null`, i.e. it always runs over embedded
-  nodes and the cosine term is part of the real default. Our default run
-  supplies no embedder, so the cosine OR-term is dropped and only the string
-  predicates fire -- a **partial** instantiation of the real rule. Pass
-  `--embedder` to activate it. This understates recall on
-  paraphrase/cosine-similar pairs (but the abbreviation/synonym/cross-lingual
-  classes that dominate this corpus sit below a 0.97 cutoff anyway).
+- **(a) cosine OR-term is inactive in our default run.** The real query
+  pre-filters `n.embedding is not null`, i.e. it runs over embedded nodes and
+  the `cosine > 0.97` term is part of the real default (the builder embeds
+  nodes at ingest). Our default run supplies no embedder, so the cosine
+  OR-term is dropped and only 2 of the 3 OR-branches fire -- a **partial**
+  instantiation of the real default rule. This is the SAME embedder-gating
+  reason LlamaIndex stays `modeled`. Pass `--embedder` to activate it (the
+  abbreviation/synonym/cross-lingual classes that dominate this corpus sit
+  below a 0.97 cutoff anyway, so it barely moves them).
+- **(b) edit-distance length guard is one-sided.** Real Cypher guards on
+  `size(toString(n.id)) > 5` (one side of the pair); our model guards on
+  `min(len(na), len(nb)) > 5` (stricter). They differ on pairs where one name
+  is <=5 chars and the other is >5 -- a predicate divergence, near-edge but
+  real.
+
+The string predicates and constants ARE source-confirmed (so the row is a
+well-grounded floor), but a partial + divergent default run is not a faithful
+reproduction of the framework's default, which is what `validated` requires.
 
 ### 6. neo4j-graphrag fuzzy -- MODEL `modeled`, REAL `real-inproc`
 
@@ -257,4 +264,12 @@ Only one adapter stayed `modeled` purely for **lack of confirmable source**
 (not measured divergence): **LlamaIndex PGI** -- its constants live in a blog,
 and the maintained library ships no equivalent default. The exact-match family
 (GraphRAG, LightRAG, Cognee) and the fuzzy model stayed `modeled` because they
-**diverge** from confirmed real source, which is a recorded finding.
+**diverge** from confirmed real source. **Neo4j-KGBuilder** stayed `modeled`
+because, although its string predicates + constants are source-confirmed, our
+default run reproduces only **part** of the real default rule (the cosine
+OR-branch is embedder-gated and off by default) plus a one-sided length-guard
+divergence -- the same partial-default reasoning that keeps LlamaIndex
+`modeled`. Net: of the modeled-family adapters, **only mem0** (a byte-identical,
+cleanly-scoped MD5 floor) earned `validated`; every other framework default is
+either divergent, partial, or unconfirmable -- which is itself the headline
+finding (real built-in dedup defaults are shallow and inconsistent).

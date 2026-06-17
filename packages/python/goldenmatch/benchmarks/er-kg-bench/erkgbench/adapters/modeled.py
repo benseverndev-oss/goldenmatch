@@ -154,14 +154,20 @@ class Neo4jBuilderModeled:
     #   size(n.id)>5  AND apoc.text.distance(toLower,toLower) < $duplicate_text_distance
     #   vector.similarity.cosine(...) > $duplicate_score_value
     # Defaults: DUPLICATE_TEXT_DISTANCE=3 (README stale at 5), DUPLICATE_SCORE_VALUE=0.97.
-    # apoc.text.distance == Levenshtein. Two documented caveats (see FIDELITY.md):
-    #   (a) the real edit-distance length guard is ONE-SIDED (size(n.id)>5), ours is
-    #       min(len(na),len(nb))>5 -- a near-edge divergence on mixed-length pairs;
-    #   (b) the cosine OR-term needs an embedder (real query pre-filters
-    #       n.embedding IS NOT NULL); our default run supplies none, so the string
-    #       predicates run ALONE -> a PARTIAL match of the real rule.
-    # String predicates `validated`; the run is partial-by-default w/o --embedder.
-    fidelity = "validated"
+    # apoc.text.distance == Levenshtein. BUT our default run does NOT reproduce the
+    # real DEFAULT rule, on two counts (see FIDELITY.md):
+    #   (a) the cosine OR-term needs an embedder; the real query pre-filters
+    #       `n.embedding IS NOT NULL` (the builder embeds nodes at ingest), so the
+    #       cosine branch is part of the real default -- our no-embedder run drops it
+    #       and fires only 2 of the 3 OR-branches -> a PARTIAL rule (same reason
+    #       LlamaIndex stays modeled); and
+    #   (b) the edit-distance length guard is ONE-SIDED in the real Cypher
+    #       (size(n.id)>5), ours is min(len(na),len(nb))>5 -- a predicate divergence
+    #       on mixed-length pairs.
+    # Constants + string-predicates are source-confirmed, but a partial + divergent
+    # default run is not a faithful reproduction -> stays `modeled` (conservative;
+    # only mem0's byte-identical, cleanly-scoped floor earns `validated`).
+    fidelity = "modeled"
 
     # DUPLICATE_TEXT_DISTANCE default = 3 in code (README stale at 5); the
     # edit-distance rule only fires when len(name) > 5. DUPLICATE_SCORE_VALUE = 0.97.
