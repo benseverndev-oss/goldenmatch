@@ -23,6 +23,7 @@
     {
       "name": "goldenmatch(auto)",
       "defaults": "zero-config dedupe_df(name) -- auto-config picks the strategy",
+      "fidelity": "real",
       "overall": {
         "precision": 0.849,
         "recall": 0.374,
@@ -50,12 +51,13 @@
         "temporal_version": 0.4,
         "cross_document_exact": 1.0
       },
-      "time_ms": 814.1,
+      "time_ms": 639.9,
       "deterministic_floor": true
     },
     {
       "name": "goldenmatch(auto+fields)",
       "defaults": "zero-config dedupe_df(name+type+context) -- auto-config, multi-field",
+      "fidelity": "real",
       "overall": {
         "precision": 0.786,
         "recall": 0.488,
@@ -83,12 +85,13 @@
         "temporal_version": 0.4,
         "cross_document_exact": 1.0
       },
-      "time_ms": 4949.8,
+      "time_ms": 3804.3,
       "deterministic_floor": true
     },
     {
       "name": "goldenmatch(emb-ann)",
       "defaults": "inhouse char-ngram embedding (no key/torch) -> cosine>=0.5 candidate pairs (ANN at scale) -> union-find; name only",
+      "fidelity": "real",
       "overall": {
         "precision": 0.455,
         "recall": 0.426,
@@ -116,12 +119,13 @@
         "temporal_version": 0.4,
         "cross_document_exact": 1.0
       },
-      "time_ms": 57.2,
+      "time_ms": 41.6,
       "deterministic_floor": true
     },
     {
       "name": "MS-GraphRAG",
-      "defaults": "exact title match; ER step removed (finalize_entities seen_titles set; discussion #778, data-loss #1718)",
+      "defaults": "exact title match; ER step removed (finalize_entities seen_titles set, title=clean_str(name.upper()); discussion #778, data-loss #1718)",
+      "fidelity": "modeled",
       "overall": {
         "precision": 0.875,
         "recall": 0.034,
@@ -149,12 +153,13 @@
         "temporal_version": 1.0,
         "cross_document_exact": 1.0
       },
-      "time_ms": 0.2,
+      "time_ms": 0.1,
       "deterministic_floor": true
     },
     {
       "name": "LightRAG",
-      "defaults": "exact normalized-name dict key, no fuzzy/embedding at merge (operate.py _merge_nodes_then_upsert; #1323, cross-doc #485)",
+      "defaults": "exact case-SENSITIVE name dict key, outer-quote strip + CJK fold, no fuzzy/embedding at merge (operate.py _merge_nodes_then_upsert + normalize_extracted_info; #1323, cross-doc #485)",
+      "fidelity": "modeled",
       "overall": {
         "precision": 0.875,
         "recall": 0.034,
@@ -187,7 +192,8 @@
     },
     {
       "name": "Cognee",
-      "defaults": "content-hash + exact name; difflib cutoff=0.8 only vs a user ontology (empty by default) (matching_strategies.py; #1831)",
+      "defaults": "exact generate_node_name key = name.lower().replace(\"'\",\"\"); difflib cutoff=0.8 only vs a user ontology (empty by default) (generate_node_name.py / matching_strategies.py; #1831)",
+      "fidelity": "modeled",
       "overall": {
         "precision": 0.875,
         "recall": 0.034,
@@ -220,7 +226,8 @@
     },
     {
       "name": "mem0",
-      "defaults": "MD5-exact only as hard dedup; semantic merge is one LLM ADD/UPDATE prompt (main.py md5; contradictions #4896, 37.6% near-dupes #4573)",
+      "defaults": "MD5-exact only as hard dedup; semantic merge is one LLM ADD/UPDATE prompt (memory/main.py md5 over raw text; contradictions #4896, 37.6% near-dupes #4573)",
+      "fidelity": "validated",
       "overall": {
         "precision": 0.875,
         "recall": 0.034,
@@ -248,12 +255,13 @@
         "temporal_version": 1.0,
         "cross_document_exact": 1.0
       },
-      "time_ms": 0.3,
+      "time_ms": 0.2,
       "deterministic_floor": true
     },
     {
       "name": "Neo4j-KGBuilder",
-      "defaults": "same-label gate AND ( substring-contains(len>2) OR Levenshtein<3(len>5) OR cosine>0.97 ); human-review-gated (graphDB_dataAccess.py; over-merge #1133, missed alias #912)",
+      "defaults": "same-label gate AND ( substring-contains(len>2) OR Levenshtein<3(len>5) OR cosine>0.97 ); human-review-gated (graphDB_dataAccess.py get_duplicate_nodes Cypher; over-merge #1133, missed alias #912)",
+      "fidelity": "modeled",
       "overall": {
         "precision": 0.826,
         "recall": 0.315,
@@ -281,12 +289,13 @@
         "temporal_version": 0.286,
         "cross_document_exact": 1.0
       },
-      "time_ms": 12.1,
+      "time_ms": 9.3,
       "deterministic_floor": true
     },
     {
       "name": "neo4j-graphrag(fuzzy)",
       "defaults": "FuzzyMatchResolver: rapidfuzz WRatio/100 >= 0.8, all-pairs O(n^2) (resolver.py BasePropertySimilarityResolver; rapidfuzz extra #336)",
+      "fidelity": "modeled",
       "overall": {
         "precision": 0.345,
         "recall": 0.485,
@@ -314,12 +323,13 @@
         "temporal_version": 0.4,
         "cross_document_exact": 1.0
       },
-      "time_ms": 64.6,
+      "time_ms": 50.7,
       "deterministic_floor": true
     },
     {
       "name": "LlamaIndex-PGI",
       "defaults": "same-label gate AND ( contains OR Levenshtein<5 OR cosine>0.9 ), KNN top-10 when embedded (property-graph blog; self-documented over-merges: 1963 AFL/NFL, BTC Halving 2020/2024)",
+      "fidelity": "modeled",
       "overall": {
         "precision": 0.141,
         "recall": 0.51,
@@ -347,7 +357,75 @@
         "temporal_version": 0.286,
         "cross_document_exact": 0.4
       },
-      "time_ms": 6.9,
+      "time_ms": 5.2,
+      "deterministic_floor": true
+    },
+    {
+      "name": "neo4j-graphrag(fuzzy)*",
+      "defaults": "REAL FuzzyMatchResolver: rapidfuzz WRatio/100>=0.8 per entity-label, _consolidate_sets (library decision code; Neo4j+APOC storage stubbed)",
+      "fidelity": "real-inproc",
+      "overall": {
+        "precision": 0.491,
+        "recall": 0.451,
+        "f1": 0.47
+      },
+      "per_class_f1": {
+        "abbreviation": 0.898,
+        "nickname_alias": 0.854,
+        "synonym_brand": 0.045,
+        "same_name_collision": 0.516,
+        "cross_lingual": 0.286,
+        "typo": 0.75,
+        "org_suffix": 0.444,
+        "temporal_version": 0.571,
+        "cross_document_exact": 1.0
+      },
+      "per_class_precision": {
+        "abbreviation": 1.0,
+        "nickname_alias": 1.0,
+        "synonym_brand": 0.8,
+        "same_name_collision": 0.471,
+        "cross_lingual": 1.0,
+        "typo": 0.6,
+        "org_suffix": 0.286,
+        "temporal_version": 0.4,
+        "cross_document_exact": 1.0
+      },
+      "time_ms": 531.7,
+      "deterministic_floor": true
+    },
+    {
+      "name": "neo4j-graphrag(exact)",
+      "defaults": "SinglePropertyExactMatchResolver: exact `name` equality per entity-label, null names skipped (logic is a Cypher query in run(); no in-process decision method exists, so this is the Cypher re-expressed + confirmed -> validated)",
+      "fidelity": "validated",
+      "overall": {
+        "precision": 0.875,
+        "recall": 0.034,
+        "f1": 0.066
+      },
+      "per_class_f1": {
+        "abbreviation": 0.0,
+        "nickname_alias": 0.0,
+        "synonym_brand": 0.0,
+        "same_name_collision": 0.0,
+        "cross_lingual": 0.0,
+        "typo": 0.0,
+        "org_suffix": 0.0,
+        "temporal_version": 0.0,
+        "cross_document_exact": 1.0
+      },
+      "per_class_precision": {
+        "abbreviation": 1.0,
+        "nickname_alias": 1.0,
+        "synonym_brand": 1.0,
+        "same_name_collision": 0.0,
+        "cross_lingual": 1.0,
+        "typo": 1.0,
+        "org_suffix": 1.0,
+        "temporal_version": 1.0,
+        "cross_document_exact": 1.0
+      },
+      "time_ms": 0.2,
       "deterministic_floor": true
     }
   ]

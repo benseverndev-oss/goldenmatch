@@ -25,6 +25,8 @@ on:
       - "packages/python/goldenmatch/benchmarks/er-kg-bench/dataset/**"
       - "packages/python/goldenmatch/benchmarks/er-kg-bench/erkgbench/**"
       - "packages/python/goldenmatch/benchmarks/er-kg-bench/demo/**"
+      - "packages/python/goldenmatch/benchmarks/er-kg-bench/tests/**"
+      - "packages/python/goldenmatch/benchmarks/er-kg-bench/requirements-real.txt"
       - ".github/workflows/bench-er-kg.yml"
 
 permissions:
@@ -53,6 +55,11 @@ jobs:
           uv sync --all-packages
           uv pip install -e packages/python/goldenmatch
 
+      - name: Install optional real-framework deps
+        # uv-created venvs ship no `pip`, so use uv's pip (same as the sync step's
+        # `uv pip install -e`); it installs into the project .venv.
+        run: uv pip install -r "$BENCH_DIR/requirements-real.txt"
+
       - name: Run benchmark (offline -- the committed table)
         working-directory: ${{ env.BENCH_DIR }}
         run: "$GITHUB_WORKSPACE/.venv/bin/python erkgbench/run.py"
@@ -65,6 +72,10 @@ jobs:
       - name: Demo unit tests (offline narrative logic)
         working-directory: ${{ env.BENCH_DIR }}
         run: "$GITHUB_WORKSPACE/.venv/bin/python -m pytest demo/test_demo.py -v"
+
+      - name: Real-adapter bench tests (fidelity gate + F1 pin)
+        working-directory: ${{ env.BENCH_DIR }}
+        run: "$GITHUB_WORKSPACE/.venv/bin/python -m pytest tests/test_real_resolvers.py tests/test_fidelity_column.py -v"
 
       - name: Regenerate demo DEMO.md (Tier 1)
         working-directory: ${{ env.BENCH_DIR }}
