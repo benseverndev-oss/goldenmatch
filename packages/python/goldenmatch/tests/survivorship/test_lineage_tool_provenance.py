@@ -95,9 +95,18 @@ def _cfg(tmp_path):
 def test_explain_cluster_shows_survivorship(tmp_path):
     csv = _dataset(tmp_path)
     cfg = _cfg(tmp_path)
-    # Rows 0 and 1 share an email -> cluster id 0 (first multi-member cluster).
+    # Rows 0 and 1 share an email -> one multi-member cluster. Cluster ids are
+    # assigned by the clustering stage (1-based), so discover the id via the
+    # lineage JSON rather than hard-coding it.
+    outdir = tmp_path / "out"
+    outdir.mkdir()
+    lin = runner.invoke(app, ["lineage", str(csv), "-c", str(cfg), "-o", str(outdir)])
+    assert lin.exit_code == 0, lin.stdout
+    data = json.loads(next(iter(outdir.glob("*_lineage.json"))).read_text(encoding="utf-8"))
+    cluster_id = data["golden_records"][0]["cluster_id"]
+
     result = runner.invoke(
-        app, ["explain", str(csv), "-c", str(cfg), "--cluster", "0"]
+        app, ["explain", str(csv), "-c", str(cfg), "--cluster", str(cluster_id)]
     )
     assert result.exit_code == 0, result.stdout
     assert "Survivorship:" in result.stdout
