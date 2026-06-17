@@ -154,19 +154,30 @@ class Neo4jBuilderModeled:
     #   size(n.id)>5  AND apoc.text.distance(toLower,toLower) < $duplicate_text_distance
     #   vector.similarity.cosine(...) > $duplicate_score_value
     # Defaults: DUPLICATE_TEXT_DISTANCE=3 (README stale at 5), DUPLICATE_SCORE_VALUE=0.97.
-    # apoc.text.distance == Levenshtein. BUT our default run does NOT reproduce the
-    # real DEFAULT rule, on two counts (see FIDELITY.md):
+    # apoc.text.distance == Levenshtein. BUT our run does NOT reproduce the real
+    # DEFAULT rule, on two counts (see FIDELITY.md):
     #   (a) the cosine OR-term needs an embedder; the real query pre-filters
     #       `n.embedding IS NOT NULL` (the builder embeds nodes at ingest), so the
-    #       cosine branch is part of the real default -- our no-embedder run drops it
-    #       and fires only 2 of the 3 OR-branches -> a PARTIAL rule (same reason
-    #       LlamaIndex stays modeled); and
-    #   (b) the edit-distance length guard is ONE-SIDED in the real Cypher
-    #       (size(n.id)>5), ours is min(len(na),len(nb))>5 -- a predicate divergence
-    #       on mixed-length pairs.
-    # Constants + string-predicates are source-confirmed, but a partial + divergent
-    # default run is not a faithful reproduction -> stays `modeled` (conservative;
-    # only mem0's byte-identical, cleanly-scoped floor earns `validated`).
+    #       cosine branch is part of the real default -- the no-embedder string-only
+    #       row fires only 2 of the 3 OR-branches -> a PARTIAL rule. Phase 2 adds an
+    #       embedder variant (Neo4j-KGBuilder(emb), emb_modeled()) that DOES fire all
+    #       3 branches -- but it STILL stays modeled, because of (b).
+    #   (b) the edit-distance length guard is IRREPRODUCIBLE by our pairwise model.
+    #       Phase-2 source check (VERIFIED verbatim at
+    #       github.com/neo4j-labs/llm-graph-builder@4a412f46
+    #       backend/src/graphDB_dataAccess.py get_duplicate_nodes_list L417-444): the
+    #       guard is `size(toString(n.id))>5` and each pair is oriented by
+    #       `WHERE elementId(n) < elementId(other)`, so the guard tests the
+    #       SMALLER-elementId node -- an arbitrary INSERTION-ORDER side, unrelated to
+    #       string length. The effective rule is neither min(len)>5 (under-fires) nor
+    #       max(len)>5 (over-fires); it is order-dependent on Neo4j-internal elementId,
+    #       which no commutative pairwise predicate can reproduce and which the
+    #       benchmark's record order cannot be guaranteed to match. We keep our
+    #       conservative two-sided min(len)>5 and record the divergence rather than
+    #       trade it for an equally-wrong max(len)>5.
+    # Constants + string-predicates are source-confirmed, but (a)+(b) mean neither the
+    # string-only NOR the embedder variant is a faithful reproduction -> both stay
+    # `modeled` (only mem0's byte-identical, cleanly-scoped floor earns `validated`).
     fidelity = "modeled"
 
     # DUPLICATE_TEXT_DISTANCE default = 3 in code (README stale at 5); the
