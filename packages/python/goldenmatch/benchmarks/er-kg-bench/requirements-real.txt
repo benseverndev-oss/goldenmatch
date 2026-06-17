@@ -1,0 +1,6 @@
+# Optional real-framework dependencies for ER-KG-Bench.
+# These are BENCH-ONLY deps -- never a core goldenmatch dependency.
+# Install with: pip install -r requirements-real.txt
+# When installed, available_real_adapters() returns the real framework rows;
+# when absent, those rows are silently skipped (degraded to "missing", not error).
+neo4j-graphrag>=1.17
