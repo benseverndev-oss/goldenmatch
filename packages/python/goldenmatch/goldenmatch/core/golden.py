@@ -49,6 +49,7 @@ def merge_field(
     dates: list | None = None,
     quality_weights: list[float] | None = None,
     pair_scores: dict[tuple[int, int], float] | None = None,
+    cluster: "pl.DataFrame | None" = None,
 ) -> tuple[object, float, int | None]:
     """Merge a list of values using the given rule's strategy.
 
@@ -80,6 +81,7 @@ def merge_field(
             dates=dates,
             quality_weights=quality_weights,
             pair_scores=pair_scores,
+            cluster=cluster,
         )
 
     if strategy == "most_complete":
@@ -299,6 +301,7 @@ def _dispatch_custom_strategy(
     dates: list | None,
     quality_weights: list[float] | None,
     pair_scores: dict[tuple[int, int], float] | None,
+    cluster: "pl.DataFrame | None" = None,
 ) -> tuple:
     """Look up and invoke a custom golden-strategy plugin.
 
@@ -335,8 +338,13 @@ def _dispatch_custom_strategy(
         return _most_complete(non_null, quality_weights)
 
     # Rich kwargs per spec. Plugins ignore what they don't need.
-    rule_kwargs = rule.model_dump(exclude={"strategy"})
+    # Exclude framework fields that are not plugin config: strategy (routing
+    # key), when (conditional predicate), validate_with (candidate filter).
+    rule_kwargs = rule.model_dump(exclude={"strategy", "when", "validate_with"})
     try:
+        import inspect as _inspect
+        merge_params = _inspect.signature(plugin.merge).parameters  # type: ignore[attr-defined]
+        extra = {"cluster": cluster} if "cluster" in merge_params else {}
         result = plugin.merge(  # type: ignore[attr-defined]
             values,
             sources=sources,
@@ -344,6 +352,7 @@ def _dispatch_custom_strategy(
             quality_weights=quality_weights,
             pair_scores=pair_scores,
             rule_kwargs=rule_kwargs,
+            **extra,
         )
     except Exception as exc:
         msg = (
