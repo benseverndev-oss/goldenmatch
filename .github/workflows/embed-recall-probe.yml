@@ -7,6 +7,11 @@ name: embed-recall-probe
 
 on:
   workflow_dispatch:
+  # Branch-scoped push trigger so this one-off can run before it lands on the
+  # default branch (workflow_dispatch requires default-branch registration).
+  push:
+    branches:
+      - claude/embed-recall-probe
 
 permissions:
   contents: read
