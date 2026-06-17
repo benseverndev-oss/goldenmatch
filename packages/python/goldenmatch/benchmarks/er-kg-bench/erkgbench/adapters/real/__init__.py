@@ -22,4 +22,16 @@ def available_real_adapters() -> list:
         out.append(RealNeo4jGraphRAGExact())
     except ImportError:
         pass
+    # The spaCy resolver needs both `spacy` AND the vector model (en_core_web_lg).
+    # The adapter module imports fine without them (the helper lazy-imports), so we
+    # PROBE with resolve([]) -- it constructs SpaCySemanticMatchResolver, which loads
+    # the model (auto_download_spacy_model=False -> raises if absent). Catch broadly so
+    # a missing spacy/model degrades to "skipped", never a hard fail or implicit download.
+    try:
+        from erkgbench.adapters.real.neo4j_graphrag import RealNeo4jGraphRAGSpaCy
+        adapter = RealNeo4jGraphRAGSpaCy()
+        adapter.resolve([])  # probe the model loads now, not mid-board
+        out.append(adapter)
+    except Exception:  # noqa: BLE001 - missing spacy/model -> skip this real row
+        pass
     return out
