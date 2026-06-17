@@ -19,6 +19,21 @@ class FieldProvenance:
     strategy: str
     confidence: float
     candidates: list[dict] = dataclass_field(default_factory=list)
+    condition: str | None = None
+    validator: str | None = None
+    dropped_invalid: int = 0
+
+
+@dataclass
+class GroupProvenance:
+    name: str
+    columns: list[str]
+    strategy: str
+    winner_row_id: int
+    winner_source: str | None
+    values: dict[str, Any]
+    tie: bool
+    confidence: float
 
 
 @dataclass
@@ -27,6 +42,7 @@ class ClusterProvenance:
     cluster_quality: str
     cluster_confidence: float
     fields: dict[str, FieldProvenance] = dataclass_field(default_factory=dict)
+    groups: list[GroupProvenance] = dataclass_field(default_factory=list)
 
 
 @dataclass
