@@ -33,6 +33,7 @@ class ReviewItem:
     decided_at: str | None = None
     reason: str | None = None
     why: str | None = None
+    golden_composition: str | None = None
 
     def __post_init__(self) -> None:
         # Normalize empty `why` to None so callers don't have to special-case
