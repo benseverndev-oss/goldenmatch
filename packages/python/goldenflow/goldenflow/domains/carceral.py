@@ -21,9 +21,14 @@ problems this pack solves are:
 3. **State-prison-complex aliases.** Arizona's HIFLD names start with
    ``ASPC-`` while ECHO files them as ``ASP -`` / ``APS-`` (typo).
    Without aliasing, Jaro-Winkler on those names drops below 0.65;
-   with aliasing, real positives clear 0.97. Empirically the dominant
-   pattern in AZ; equivalent state-specific aliases for TX TDCJ, PA
-   SCI, CA CDCR remain TODO and are a natural extension here.
+   with aliasing, real positives clear 0.97. The same HIFLD-vs-ECHO
+   abbreviation split holds for PA (``SCI`` vs ``STATE CORRECTIONAL
+   INSTITUTION``) and CA (``CSP``/``CCI``/``CIM``/``CIW``/``CTF`` vs
+   their CDCR long forms), which are aliased here too. TX (TDCJ) units
+   have no analogous facility abbreviation — they're ``<name> Unit`` on
+   both sides — so the TX win comes from the operator-prefix stripper
+   recognizing the spelled-out ``TEXAS DEPARTMENT OF CRIMINAL JUSTICE``
+   (see ``_OPERATOR_PHRASE_RE``), not from an alias.
 
 The pack does **not** redefine address / ZIP / state / unit
 normalization — it composes the existing ``address_standardize``,
@@ -60,7 +65,10 @@ CARCERAL_OPERATOR_ORGS: frozenset[str] = frozenset({
 _OPERATOR_PHRASE_RE = re.compile(
     r"^(?:"
     r"(?:[A-Z]{2}|TEXAS|CALIFORNIA|FLORIDA|MISSISSIPPI|GEORGIA|INDIANA)"
-    r"\s+DEPT?\s+OF\s+(?:CORR(?:ECTIONS?)?|CRIM(?:INAL)?\s+JUST(?:ICE)?)"
+    # DEP / DEPT / DEPARTMENT — ECHO spells the agency out in full
+    # ("TEXAS DEPARTMENT OF CRIMINAL JUSTICE - ALLRED UNIT") while HIFLD
+    # ships just the unit name; both must strip to the same stem.
+    r"\s+DEP(?:T|ARTMENT)?\s+OF\s+(?:CORR(?:ECTIONS?)?|CRIM(?:INAL)?\s+JUST(?:ICE)?)"
     r")\s*[,\-:/]\s*"
 )
 
@@ -85,10 +93,28 @@ CARCERAL_BOP_ABBREVIATIONS: dict[str, str] = {
 #: uses a different one (sometimes a typo). Both sides are mapped to the
 #: long form so the name scorer sees a common prefix. Add more here as
 #: per-state patterns are discovered.
+#:
+#: Note these are word-bounded global expansions, not state-scoped — a
+#: token that means different things in two states (e.g. CA's Avenal
+#: State Prison is also "ASP") will be expanded to the listed long form
+#: regardless of state. That can mislabel a name but never fuses two
+#: *different* facilities: if both sides genuinely refer to the same
+#: place they expand identically; if they don't, they still differ.
 CARCERAL_STATE_COMPLEX_ALIASES: dict[str, str] = {
+    # Arizona (HIFLD "ASPC-" vs ECHO "ASP -" / "APS-" typo)
     "ASPC": "ARIZONA STATE PRISON COMPLEX",
     "ASP": "ARIZONA STATE PRISON",
     "APS": "ARIZONA STATE PRISON",  # observed ECHO typo for "ASP"
+    # Pennsylvania (HIFLD "SCI <name>" vs ECHO "STATE CORRECTIONAL
+    # INSTITUTION <name>")
+    "SCI": "STATE CORRECTIONAL INSTITUTION",
+    # California CDCR facility-type abbreviations (HIFLD short vs ECHO
+    # long form). Multi-letter, so word-bounded expansion is safe.
+    "CSP": "CALIFORNIA STATE PRISON",
+    "CCI": "CALIFORNIA CORRECTIONAL INSTITUTION",
+    "CIM": "CALIFORNIA INSTITUTION FOR MEN",
+    "CIW": "CALIFORNIA INSTITUTION FOR WOMEN",
+    "CTF": "CORRECTIONAL TRAINING FACILITY",
 }
 
 _OPERATOR_SUFFIX_RE = re.compile(r"\b(LLC|INC|CORP|CO|LTD)\b\.?\s*$")
