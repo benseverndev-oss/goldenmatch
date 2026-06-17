@@ -56,8 +56,9 @@ jobs:
           uv pip install -e packages/python/goldenmatch
 
       - name: Install optional real-framework deps
-        run: |
-          "$GITHUB_WORKSPACE/.venv/bin/pip" install -r "$BENCH_DIR/requirements-real.txt"
+        # uv-created venvs ship no `pip`, so use uv's pip (same as the sync step's
+        # `uv pip install -e`); it installs into the project .venv.
+        run: uv pip install -r "$BENCH_DIR/requirements-real.txt"
 
       - name: Run benchmark (offline -- the committed table)
         working-directory: ${{ env.BENCH_DIR }}
