@@ -74,3 +74,10 @@ def test_build_golden_record_with_provenance_surfaces_groups():
     cp = result.provenance[0]
     assert cp.cluster_id == 5
     assert len(cp.groups) == 1 and cp.groups[0].name == "addr"
+
+
+def test_survivorship_prov_not_in_golden_columns():
+    df = _cluster_df()
+    result = build_golden_record_with_provenance(df, _addr_rules(), {5: {}})
+    assert "__survivorship_prov__" not in result.df.columns
+    assert set(result.df.columns) >= {"street", "city", "zip"}
