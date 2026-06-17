@@ -1,0 +1,13 @@
+name: goldenanalysis
+description: Read-only cross-cutting analysis, metrics, and reporting across the Golden Suite -- trend and regression detection over any stage's outputs.
+icon: "\U0001F4CA"
+startCommand: goldenanalysis mcp-serve
+tools:
+  - name: list_analyzers
+    description: List the discoverable GoldenAnalysis analyzers.
+  - name: analyze_frame
+    description: Analyze a .parquet/.csv frame (or re-render a .json AnalysisReport) into a metrics report.
+  - name: get_trend
+    description: Trend a metric over a run history (.jsonl/.db ReportHistory).
+  - name: detect_regressions
+    description: Detect metric regressions vs a baseline over a run history.

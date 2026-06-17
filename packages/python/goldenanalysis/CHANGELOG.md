@@ -4,7 +4,7 @@ All notable changes to GoldenAnalysis are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic
 versioning.
 
-## [0.2.0] - unreleased
+## [0.2.0] - 2026-06-17
 
 Phase 2a — suite consumption. Produce an `AnalysisReport` from real suite outputs.
 
