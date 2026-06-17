@@ -205,8 +205,11 @@ def test_spacy_is_deterministic():
 
 # -- LightRAG (real-inproc; needs lightrag-hku) ---------------------------------
 
-# Observed real F1 pinned from CI (lightrag-hku installed). Set to None to observe-pin.
-_LIGHTRAG_F1_PIN: float | None = None
+# Observed real F1 pinned from CI (lightrag-hku installed, run 27703432403): P 0.875
+# / R 0.034 / F1 0.066 -- faithful to LightRAG's case-sensitive exact key (same 0.066
+# as the exact family; the key recalls ~nothing on surface-form variation). Pure
+# exact-bucket on the real normalized key -> platform-stable.
+_LIGHTRAG_F1_PIN: float | None = 0.066
 
 
 def _have(mod: str) -> bool:
@@ -250,8 +253,12 @@ def test_lightrag_is_deterministic():
 
 # -- Graphiti (real-inproc deterministic floor; needs graphiti-core) ------------
 
-# Observed real F1 pinned from CI (graphiti-core installed). Set to None to observe-pin.
-_GRAPHITI_F1_PIN: float | None = None
+# Observed real F1 pinned from CI (graphiti-core installed, run 27703432403): P 0.909
+# / R 0.049 / F1 0.093 -- the deterministic MinHash/Jaccard>=0.9 floor recalls a touch
+# more than a pure exact key (abbr 0.071, nick 0.038, temp 0.5) but is still low
+# without the LLM fallback. BLAKE2b MinHash + fixed permutations -> deterministic /
+# platform-stable.
+_GRAPHITI_F1_PIN: float | None = 0.093
 
 
 def test_graphiti_reproduces_observed_f1():
