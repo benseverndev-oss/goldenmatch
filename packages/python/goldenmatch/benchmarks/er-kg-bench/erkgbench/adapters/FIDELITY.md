@@ -367,9 +367,53 @@ string blocking misses. Both `(emb)` rows stay **`modeled`** (KGBuilder for the
 irreproducible `elementId` guard above; LlamaIndex for the unconfirmable
 blog-sourced rule -- an embedder closes neither gap).
 
+## Phase 3 -- mem0 LLM merge layer (measured, not asserted)
+
+mem0's deterministic MD5 floor is the `validated` row (F1 0.066). Phase 3 asked
+whether its LLM ADD/UPDATE semantic-merge layer -- the part scoped out of the floor
+-- adds entity-resolution recall. MEASURED on the full corpus (keyed: real
+`mem0.Memory.add()` per mention, gpt-4o-mini + in-memory qdrant; isolated venv,
+OpenAI key via Infisical):
+
+| layer | P | R | F1 | non-zero classes |
+|---|---|---|---|---|
+| mem0 MD5 floor (`validated`) | 0.875 | 0.034 | 0.066 | cross_document_exact |
+| mem0 LLM add/merge (real) | 0.833 | 0.025 | **0.048** | cross_document_exact only |
+
+**The LLM layer is a NET NEGATIVE for ER -- worse than its own MD5 floor.** Every
+recall-bound class is 0.000 (abbreviation, synonym, cross_lingual, nickname,
+org_suffix, typo, temporal, collision); only cross_document_exact survives, and at
+LOWER recall than the floor. Mechanism (confirmed on controlled inputs): **mem0
+resolves MEMORIES, not ENTITIES.** Its LLM fact-extraction front-end DROPS bare
+non-memorable mentions ("IBM", "I.B.M." -> no fact stored) and REWRITES others into
+dated first-person facts ("User mentioned International Business Machines (IBM) on
+<date>"). Surface-form variants get SEPARATE `ADD` events even when the LLM
+explicitly recognizes them -- "Apple Incorporated" is stored as a distinct memory
+annotated "an alternative name for Apple Inc", never merged; same for Bayer
+AG/Aktiengesellschaft and JPMorgan & Co./and Company. So the layer merges zero
+variants AND loses some exact-duplicate recall the deterministic floor keeps.
+
+This is the THIRD independent confirmation that this corpus's dominant classes are
+recall-bound and immune to precision-side levers: the Phase-2 embedder (cosine
+OR-term) was a measured no-op, the keyed `auto+llm` pair-filter couldn't create
+pairs blocking never generated, and now mem0's LLM merge degrades rather than
+improves. **mem0's ER ceiling is its MD5 floor (0.066); the LLM layer is NOT built
+as a board row** -- it would ship a strictly-worse, token-costed, non-deterministic
+number. Keyed + non-deterministic -> prose-only, OUT of the committed table (same
+posture as the Phase-2 embedder finding).
+
+Method: per-mention `add()` events mapped to clusters (ADD = new memory; empty
+result = floor-merged byte-identical repeat OR dropped-at-extraction singleton).
+One keyed run -- the mechanism is deterministic by design (variants always ADD
+separately; controlled smoke confirmed it independent of the headline F1).
+
 ## Deferred
 
-- **mem0 LLM ADD/UPDATE merge** is Phase 3 (see mem0 section).
+- **mem0 LLM ADD/UPDATE merge** -- Phase 3 PROBE DONE (measured net-negative; see the
+  "Phase 3" section above). Not built as a row; the MD5 floor `validated` row stands.
+- **Live-Neo4j (Phase 4)** -- convert the neo4j-graphrag `*` rows to `real-live` and
+  run Neo4j-KGBuilder's real Cypher against a live store (the only honest escape from
+  its `elementId`-sided guard). Lowest value; do last or never.
 
 ## Still `modeled` after Phase 3a
 
