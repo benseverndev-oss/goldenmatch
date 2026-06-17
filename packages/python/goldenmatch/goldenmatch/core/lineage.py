@@ -181,7 +181,9 @@ def _safe_cluster_audit(cp) -> str:
 def _serialize_golden_records(provenance: list) -> list[dict]:
     records = _serialize_provenance(provenance)
     for cp, rec in zip(provenance, records):
-        rec["audit"] = _safe_cluster_audit(cp)
+        audit = _safe_cluster_audit(cp)
+        if audit:
+            rec["audit"] = audit
     return records
 
 

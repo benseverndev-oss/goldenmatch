@@ -44,4 +44,4 @@ def test_plain_provenance_has_no_audit(tmp_path):
     )]
     path = save_lineage([], tmp_path, "run", golden_provenance=plain)
     rec = json.loads(path.read_text(encoding="utf-8"))["golden_records"][0]
-    assert rec.get("audit", "") == ""                        # nothing survivorship-specific
+    assert "audit" not in rec                                 # nothing survivorship-specific

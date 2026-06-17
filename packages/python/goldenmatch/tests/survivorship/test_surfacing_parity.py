@@ -67,7 +67,7 @@ def test_save_lineage_failopen_on_render_error(tmp_path, monkeypatch):
     path = lin.save_lineage([], tmp_path, "run", golden_provenance=_group_prov())
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["golden_records"][0]["groups"][0]["name"] == "addr"   # structured survives
-    assert data["golden_records"][0]["audit"] == ""                    # NL degraded to empty
+    assert "audit" not in data["golden_records"][0]                    # NL degraded -> key absent
 
 
 def test_explain_cluster_failopen_on_render_error(monkeypatch):
@@ -102,5 +102,5 @@ def test_plain_provenance_lineage_has_no_audit(tmp_path):
     )]
     path = save_lineage([], tmp_path, "run", golden_provenance=plain)
     rec = json.loads(path.read_text(encoding="utf-8"))["golden_records"][0]
-    assert rec.get("audit", "") == ""           # plain cluster -> empty audit (parity)
+    assert "audit" not in rec                   # plain cluster -> no audit key (parity)
     assert rec["groups"] == []
