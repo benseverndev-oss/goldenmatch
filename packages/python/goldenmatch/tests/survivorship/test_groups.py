@@ -40,7 +40,7 @@ def test_infermap_fed_maps_pack_groups_to_real_columns(monkeypatch):
     monkeypatch.setattr(G, "_infermap_canonical_map", lambda df, pack: fake_map)
     monkeypatch.setattr(G, "_pack_groups", lambda pack: fake_pack_groups)
     df = pl.DataFrame({"st": ["a"], "ct": ["b"]})
-    groups = G.infermap_fed_groups(df, pack="sentinel")
+    groups = G._infermap_fed_groups(df, pack="sentinel")
     assert groups and set(groups[0].columns) == {"st", "ct"}
 
 
@@ -50,7 +50,7 @@ def test_infermap_import_error_is_failopen(monkeypatch):
         raise ImportError("infermap not installed")
     monkeypatch.setattr(G, "_infermap_canonical_map", boom)
     df = pl.DataFrame({"st": ["a"], "ct": ["b"]})
-    assert G.infermap_fed_groups(df, pack="sentinel") == []
+    assert G._infermap_fed_groups(df, pack="sentinel") == []
 
 
 def test_infermap_smoke_real(monkeypatch):
@@ -87,6 +87,33 @@ def test_infermap_smoke_real(monkeypatch):
         groups=[FieldGroupSpec(name="address", members=["street", "city"])],
     )
     df = pl.DataFrame({"street": ["123 Main St"], "city": ["Springfield"]})
-    result = G.infermap_fed_groups(df, pack=address_pack)
+    result = G._infermap_fed_groups(df, pack=address_pack)
     # Fail-open: must return a list (may be empty if infermap doesn't map columns)
     assert isinstance(result, list)
+
+
+def test_heuristic_does_not_absorb_email_address_into_address():
+    df = pl.DataFrame({"email_address": ["a@b.com"], "city": ["NY"], "state": ["NY"]})
+    groups = detect_groups_heuristic(df)
+    for g in groups:
+        if g.category == "address":
+            assert "email_address" not in g.columns
+
+
+def test_heuristic_does_not_match_real_estate_as_state():
+    df = pl.DataFrame({"real_estate": ["x"], "city": ["NY"], "zip": ["10001"]})
+    groups = detect_groups_heuristic(df)
+    for g in groups:
+        if g.category == "address":
+            assert "real_estate" not in g.columns
+
+
+def test_email_address_assigned_to_contact_not_address():
+    df = pl.DataFrame({"email_address": ["a@b.com"], "phone": ["555-0001"],
+                       "city": ["NY"], "state": ["NY"]})
+    groups = detect_groups_heuristic(df)
+    contact = [g for g in groups if g.category == "contact"]
+    assert contact and "email_address" in contact[0].columns
+    for g in groups:
+        if g.category == "address":
+            assert "email_address" not in g.columns
