@@ -9,7 +9,7 @@ _BENCH_ROOT = Path(__file__).resolve().parent.parent
 if str(_BENCH_ROOT) not in sys.path:
     sys.path.insert(0, str(_BENCH_ROOT))
 
-from erkgbench import metrics                              # pyright: ignore[reportMissingImports]
+from erkgbench import metrics  # pyright: ignore[reportMissingImports]
 from erkgbench.real_resolvers import (  # pyright: ignore[reportMissingImports]
     neo4j_graphrag_exact_clusters,
     neo4j_graphrag_fuzzy_clusters,
