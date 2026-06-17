@@ -714,6 +714,28 @@ def build_golden_records_df(
     )
 
 
+def _survivorship_active(rules: GoldenRulesConfig) -> bool:
+    """Return True when any survivorship feature is enabled on these rules.
+
+    Covers three cases:
+    - ``field_groups`` present (group-based resolution, Phase E5)
+    - A ``field_rules`` entry is a list (conditional branches, Phase B)
+    - A ``field_rules`` entry carries ``when`` or ``validate_with``
+
+    Used by ``_polars_native_eligible`` to force the slow path when any
+    survivorship lever is active, guaranteeing the fast columnar path is
+    only used for plain configs where it is byte-identical.
+    """
+    if getattr(rules, "field_groups", None):
+        return True
+    for rule in rules.field_rules.values():
+        if isinstance(rule, list):
+            return True
+        if getattr(rule, "when", None) or getattr(rule, "validate_with", None):
+            return True
+    return False
+
+
 def _polars_native_eligible(
     rules: GoldenRulesConfig,
     quality_scores: dict[tuple[int, str], float] | None,
@@ -732,6 +754,10 @@ def _polars_native_eligible(
     # calls merge_field per cluster. The fast path applies one
     # strategy to all clusters and can't honor overrides.
     if getattr(rules, "cluster_overrides", None):
+        return False
+    # Phase E: survivorship features (field_groups, conditional rules,
+    # validate_with) require the slow path; fast path can't honor them.
+    if _survivorship_active(rules):
         return False
     return True
 
