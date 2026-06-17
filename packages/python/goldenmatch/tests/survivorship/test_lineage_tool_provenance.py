@@ -32,6 +32,13 @@ def test_helper_none_when_no_multimember_clusters():
     assert golden_provenance_for_run(data, clusters, rules) is None
 
 
+def test_helper_none_for_plain_config():
+    data = pl.DataFrame({"__row_id__": [10, 11], "name": ["Acme", "Acme Inc"]})
+    clusters = {5: {"members": [10, 11], "size": 2}}  # multi-member, but plain config
+    rules = GoldenRulesConfig(default_strategy="most_complete")  # no field_groups -> not survivorship-active
+    assert golden_provenance_for_run(data, clusters, rules) is None
+
+
 def test_tool_lineage_inline_has_golden_records(monkeypatch):
     from types import SimpleNamespace
 

@@ -134,14 +134,18 @@ def golden_provenance_for_run(data_df, clusters, rules) -> list | None:
     """Build golden ClusterProvenance for a finished run from the source frame +
     clusters dict (the inputs the standalone lineage/explain surfaces have).
     Fail-open: returns None on any error. Returns None when there are no
-    multi-member clusters."""
+    multi-member clusters. Returns None for non-survivorship configs so plain
+    runs stay byte-identical."""
     try:
         import polars as pl
 
         from goldenmatch.core.golden import (
+            _survivorship_active,
             build_golden_records_batch,
             golden_records_to_provenance,
         )
+        if not _survivorship_active(rules):
+            return None
         member_rows = [
             {"__row_id__": rid, "__cluster_id__": cid}
             for cid, cinfo in clusters.items()
