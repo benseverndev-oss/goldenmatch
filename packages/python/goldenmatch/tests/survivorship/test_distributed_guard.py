@@ -161,3 +161,10 @@ def test_phase5_pipeline_refuses_survivorship(monkeypatch):
             None,  # ds -- never reached past the guard
             config=_FakeConfig(),
         )
+
+
+def test_helper_raises_on_validate():
+    rules = GoldenRulesConfig(default_strategy="most_complete",
+                              field_rules={"phone": GoldenFieldRule(strategy="most_complete", validate="nanp")})
+    with pytest.raises(NotImplementedError):
+        assert_in_memory_survivorship(rules, "test path")
