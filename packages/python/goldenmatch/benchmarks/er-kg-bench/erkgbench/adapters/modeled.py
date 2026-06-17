@@ -56,8 +56,14 @@ def _cosine(u: list[float], v: list[float]) -> float:
 
 
 class _ExactNormalized:
-    """Exact match on the normalised name -- the rule shared by Microsoft
-    GraphRAG, LightRAG and Cognee (ontology off, the default)."""
+    """Exact match on the normalised name -- the exact-string-bucketing family
+    (Microsoft GraphRAG, LightRAG, Cognee). ``_norm`` = lowercase +
+    whitespace-collapse. Base stays ``modeled``: the Phase-1 audit found ALL
+    THREE frameworks diverge from ``_norm`` in their REAL normalization (see
+    adapters/FIDELITY.md), each in a different way, so no per-subclass promotion
+    to ``validated`` was warranted. The clustering is still exact-bucket in all
+    three, but the bucket KEY differs (case direction, quote/apostrophe strip,
+    internal-whitespace handling, CJK fold)."""
 
     deterministic = True
     fidelity = "modeled"
@@ -68,36 +74,59 @@ class _ExactNormalized:
 
 class GraphRAGModeled(_ExactNormalized):
     name = "MS-GraphRAG"
+    # AUDIT (FIDELITY.md): real key = clean_str(name.UPPER()) -> uppercases (vs
+    # our lower; clustering-equivalent) BUT does NOT collapse internal whitespace
+    # (our _norm does). Divergent -> stays modeled.
     defaults = (
         "exact title match; ER step removed "
-        "(finalize_entities seen_titles set; discussion #778, data-loss #1718)"
+        "(finalize_entities seen_titles set, title=clean_str(name.upper()); "
+        "discussion #778, data-loss #1718)"
     )
 
 
 class LightRAGModeled(_ExactNormalized):
     name = "LightRAG"
+    # AUDIT (FIDELITY.md): real key is CASE-SENSITIVE (no .upper()/.lower() on
+    # entity_name) and strips OUTER quotes + CJK-folds (normalize_extracted_info).
+    # Our _norm lowercases + collapses whitespace. Divergent -> stays modeled.
     defaults = (
-        "exact normalized-name dict key, no fuzzy/embedding at merge "
-        "(operate.py _merge_nodes_then_upsert; #1323, cross-doc #485)"
+        "exact case-SENSITIVE name dict key, outer-quote strip + CJK fold, no "
+        "fuzzy/embedding at merge "
+        "(operate.py _merge_nodes_then_upsert + normalize_extracted_info; "
+        "#1323, cross-doc #485)"
     )
 
 
 class CogneeModeled(_ExactNormalized):
     name = "Cognee"
+    # AUDIT (FIDELITY.md): real key = generate_node_name(name) = name.lower()
+    # .replace("'", "") -> lowercases (matches ours) AND strips apostrophes (ours
+    # does not), does NOT collapse whitespace (ours does). Default ontology is
+    # empty (RDFLibOntologyResolver(ontology_file=None)) so the difflib cutoff=0.8
+    # never fires. Divergent on the key -> stays modeled.
     defaults = (
-        "content-hash + exact name; difflib cutoff=0.8 only vs a user ontology "
-        "(empty by default) (matching_strategies.py; #1831)"
+        "exact generate_node_name key = name.lower().replace(\"'\",\"\"); "
+        "difflib cutoff=0.8 only vs a user ontology (empty by default) "
+        "(generate_node_name.py / matching_strategies.py; #1831)"
     )
 
 
 class Mem0Modeled:
     name = "mem0"
+    # AUDIT (FIDELITY.md): CONFIRMED line-by-line. memory/main.py computes
+    #   mem_hash = hashlib.md5(text.encode()).hexdigest()        (_add_to_vector_store)
+    #   new_metadata["hash"] = hashlib.md5(data.encode()).hexdigest()  (_create_memory)
+    # over the RAW memory text, case-sensitive, no normalization -- byte-identical
+    # to our model's md5(r.mention.encode()).hexdigest(). The deterministic MD5
+    # FLOOR is `validated`; the LLM ADD/UPDATE semantic-merge layer is OUT OF
+    # SCOPE (Phase 3) and not modeled here.
     defaults = (
         "MD5-exact only as hard dedup; semantic merge is one LLM ADD/UPDATE "
-        "prompt (main.py md5; contradictions #4896, 37.6% near-dupes #4573)"
+        "prompt (memory/main.py md5 over raw text; contradictions #4896, "
+        "37.6% near-dupes #4573)"
     )
     deterministic = True  # the modelled MD5 floor is; the LLM layer is not
-    fidelity = "modeled"
+    fidelity = "validated"  # MD5 floor confirmed vs source; LLM layer out of scope
 
     def resolve(self, records: list[Record]) -> list[list[int]]:
         # MD5 is over the raw text -> case-sensitive exact match.
@@ -114,10 +143,25 @@ class Neo4jBuilderModeled:
     defaults = (
         "same-label gate AND ( substring-contains(len>2) OR Levenshtein<3(len>5) "
         "OR cosine>0.97 ); human-review-gated "
-        "(graphDB_dataAccess.py; over-merge #1133, missed alias #912)"
+        "(graphDB_dataAccess.py get_duplicate_nodes Cypher; over-merge #1133, "
+        "missed alias #912)"
     )
     deterministic = True
-    fidelity = "modeled"
+    # AUDIT (FIDELITY.md): string predicates + constants CONFIRMED vs the real
+    # Cypher WHERE clause:
+    #   labels(n)=labels(other)  (same-label gate)
+    #   size(other.id)>2 AND toLower(n.id) CONTAINS toLower(other.id)  (+reverse)
+    #   size(n.id)>5  AND apoc.text.distance(toLower,toLower) < $duplicate_text_distance
+    #   vector.similarity.cosine(...) > $duplicate_score_value
+    # Defaults: DUPLICATE_TEXT_DISTANCE=3 (README stale at 5), DUPLICATE_SCORE_VALUE=0.97.
+    # apoc.text.distance == Levenshtein. Two documented caveats (see FIDELITY.md):
+    #   (a) the real edit-distance length guard is ONE-SIDED (size(n.id)>5), ours is
+    #       min(len(na),len(nb))>5 -- a near-edge divergence on mixed-length pairs;
+    #   (b) the cosine OR-term needs an embedder (real query pre-filters
+    #       n.embedding IS NOT NULL); our default run supplies none, so the string
+    #       predicates run ALONE -> a PARTIAL match of the real rule.
+    # String predicates `validated`; the run is partial-by-default w/o --embedder.
+    fidelity = "validated"
 
     # DUPLICATE_TEXT_DISTANCE default = 3 in code (README stale at 5); the
     # edit-distance rule only fires when len(name) > 5. DUPLICATE_SCORE_VALUE = 0.97.
@@ -168,6 +212,14 @@ class Neo4jGraphRAGFuzzyModeled:
         "(resolver.py BasePropertySimilarityResolver; rapidfuzz extra #336)"
     )
     deterministic = True
+    # AUDIT (FIDELITY.md): the per-pair predicate here is byte-identical to the
+    # library's real compute_similarity (fuzz.WRatio(.., processor=
+    # utils.default_process)/100.0, threshold 0.8). BUT this model still DIVERGES
+    # from a real in-process run on THIS corpus: real `neo4j-graphrag(fuzzy)*`
+    # (real-inproc, runs compute_similarity + _consolidate_sets grouped per
+    # entity-label) measures F1 0.470, while this MODEL measures F1 0.403
+    # (-6.7pp). Kept as `modeled` (DIVERGENT) for the model-vs-real contrast; the
+    # real run ships as the separate `neo4j-graphrag(fuzzy)*` row.
     fidelity = "modeled"
     THRESHOLD = 0.8
 
@@ -191,6 +243,14 @@ class LlamaIndexModeled:
         "BTC Halving 2020/2024)"
     )
     deterministic = True
+    # AUDIT (FIDELITY.md): COULD NOT CONFIRM against maintained source. The
+    # constants (TEXT_DISTANCE=5, COSINE=0.9) and the (contains OR Levenshtein OR
+    # cosine) Cypher come from a Neo4j/Bratanic *blog*, not pinnable library code.
+    # run-llama/llama_index core ships NO automatic fuzzy entity-dedup default
+    # (no apoc.text.distance / edit_distance in the property_graph code; library
+    # default is exact name+label upsert at the graph store). So this model both
+    # (a) can't pin its constants to maintained source and (b) likely OVER-states
+    # the library default. Stays `modeled` for lack of confirmation.
     fidelity = "modeled"
     TEXT_DISTANCE = 5
     COSINE = 0.9
