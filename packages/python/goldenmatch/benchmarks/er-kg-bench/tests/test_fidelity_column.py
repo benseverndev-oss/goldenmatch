@@ -25,7 +25,7 @@ def test_real_neo4j_row_present_and_real():
     real = [r for r in report["results"] if r["name"] == "neo4j-graphrag(fuzzy)*"]
     assert real, "real neo4j-graphrag row missing"
     assert real[0]["fidelity"] == "real-inproc"
-    assert round(real[0]["overall"]["f1"], 3) == 0.470
+    assert round(real[0]["overall"]["f1"], 3) == 0.469  # Phase-2 _merge_overlapping fix (was 0.470)
 
 
 def test_emb_rows_present_with_correct_tiers():

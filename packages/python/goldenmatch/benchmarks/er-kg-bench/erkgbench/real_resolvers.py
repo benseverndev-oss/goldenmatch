@@ -7,6 +7,15 @@ change which nodes merge. So we call those real methods over the corpus (grouped
 entity_type = label). neo4j-graphrag is imported lazily so this module stays
 importable (and unit-testable) without the dependency.
 
+NOTE on `_consolidate_sets`: it is a SINGLE-PASS consolidation -- a pair bridging two
+already-separate sets merges into only the first, leaving the two OVERLAPPING (sharing
+a record). The real resolver feeds those sets to sequential Neo4j merges that
+transitively collapse the shared record into one entity; we reproduce that disjoint
+end-state with `_merge_overlapping` so the result is a valid PARTITION (a record can't
+belong to two entities). It is a no-op when no overlap exists (the sparse fuzzy graph),
+so it leaves the fuzzy number essentially unchanged while making the denser spaCy graph
+well-formed.
+
 SinglePropertyExactMatchResolver: groups by entity label then merges records whose
 `name` property (= mention in our corpus) is exactly equal AND non-null. The Cypher
 query in the real resolver reads:
@@ -21,6 +30,36 @@ No normalization is applied — the stored `name` is compared as-is.
 from __future__ import annotations
 
 from itertools import combinations
+
+
+def _merge_overlapping(sets: list[set[int]]) -> list[set[int]]:
+    """Union overlapping sets into disjoint sets (union-find over set memberships).
+
+    `_consolidate_sets` is single-pass and can leave overlapping output sets (see the
+    module docstring); merging them here yields the disjoint partition the real
+    resolver's sequential graph-merges produce. No-op when the input is already
+    disjoint.
+    """
+    parent: dict[int, int] = {}
+
+    def find(x: int) -> int:
+        parent.setdefault(x, x)
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for s in sets:
+        members = list(s)
+        for m in members[1:]:
+            ra, rb = find(members[0]), find(m)
+            if ra != rb:
+                parent[rb] = ra
+
+    groups: dict[int, set[int]] = {}
+    for x in list(parent):
+        groups.setdefault(find(x), set()).add(x)
+    return list(groups.values())
 
 
 def neo4j_graphrag_fuzzy_clusters(items: list[tuple[int, str, str]]) -> list[list[int]]:
@@ -48,7 +87,10 @@ def neo4j_graphrag_fuzzy_clusters(items: list[tuple[int, str, str]]) -> list[lis
         for i, j in combinations(usable, 2):
             if resolver.compute_similarity(mention[i], mention[j]) >= threshold:
                 pairs.append({i, j})
-        merged = resolver._consolidate_sets(pairs)  # the library's REAL consolidation
+        # Library's REAL consolidation, then merge its single-pass overlaps into a
+        # valid partition (the real resolver's graph-merges collapse them; see module
+        # docstring + _merge_overlapping).
+        merged = _merge_overlapping(resolver._consolidate_sets(pairs))
         seen: set[int] = set()
         for s in merged:
             clusters.append(sorted(s))
@@ -136,7 +178,10 @@ def neo4j_graphrag_spacy_clusters(items: list[tuple[int, str, str]]) -> list[lis
         for i, j in combinations(usable, 2):
             if resolver.compute_similarity(mention[i], mention[j]) >= threshold:
                 pairs.append({i, j})
-        merged = resolver._consolidate_sets(pairs)  # the library's REAL consolidation
+        # Library's REAL consolidation, then merge its single-pass overlaps into a
+        # valid partition (the real resolver's graph-merges collapse them; see module
+        # docstring + _merge_overlapping).
+        merged = _merge_overlapping(resolver._consolidate_sets(pairs))
         seen: set[int] = set()
         for s in merged:
             clusters.append(sorted(s))

@@ -35,7 +35,25 @@ def test_reproduces_poc_f1():
     items, entity_ids, classes = _load()
     clustering = neo4j_graphrag_fuzzy_clusters(items)
     f1 = metrics.score_by_class(entity_ids, classes, clustering)["__overall__"].f1
-    assert round(f1, 3) == 0.470  # the POC's measured real number, pinned
+    # 0.469 after the Phase-2 _merge_overlapping fix (was 0.470 on the malformed,
+    # duplicate-id partition `_consolidate_sets` produced; the fix is a valid-partition
+    # correctness change, -0.001 F1). The +6.6pp-over-the-model finding is unchanged.
+    assert round(f1, 3) == 0.469
+    # valid partition: every record id appears exactly once (the bug _merge_overlapping
+    # fixes had 12 duplicate ids from _consolidate_sets' single-pass overlap).
+    flat = [i for c in clustering for i in c]
+    assert sorted(flat) == sorted(i for i, _m, _t in items)
+
+
+def test_merge_overlapping_unifies_consolidate_sets_overlap():
+    from erkgbench.real_resolvers import _merge_overlapping  # pyright: ignore[reportMissingImports]
+    # _consolidate_sets' single pass can emit overlapping sets ({3} in both); merging
+    # must unify them into one disjoint cluster (what the real graph-merges produce).
+    out = _merge_overlapping([{1, 2, 3}, {3, 4}])
+    assert len(out) == 1 and out[0] == {1, 2, 3, 4}
+    # already-disjoint input is a no-op (so the sparse fuzzy graph is unaffected).
+    out2 = sorted(sorted(s) for s in _merge_overlapping([{1, 2}, {3, 4}]))
+    assert out2 == [[1, 2], [3, 4]]
 
 def test_no_empty_mentions_in_corpus():
     items, _, _ = _load()
