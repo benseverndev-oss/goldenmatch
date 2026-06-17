@@ -28,6 +28,7 @@ from erkgbench.adapters import (  # noqa: E402
     Record,
     all_modeled,
 )
+from erkgbench.adapters.real import available_real_adapters  # noqa: E402
 
 DATASET = _BENCH_ROOT / "dataset" / "records.csv"
 RESULTS_DIR = _BENCH_ROOT / "results"
@@ -112,6 +113,7 @@ def run(embedder_kind: str | None) -> dict:
         adapters.append(GoldenMatchEmbAnnAdapter(threshold=0.55, provider="openai"))
         adapters.append(GoldenMatchAdapter(mode="auto_llm"))
     adapters += list(all_modeled(embed_fn=embed_fn))
+    adapters += available_real_adapters()
 
     rows = []
     for ad in adapters:
@@ -122,7 +124,7 @@ def run(embedder_kind: str | None) -> dict:
             # Determinism: identical partition on a re-run.
             deterministic = metrics.clusterings_equal(clustering, ad.resolve(records))
         except Exception as exc:  # noqa: BLE001 - a flaky adapter must not sink the board
-            rows.append({"name": ad.name, "defaults": ad.defaults, "error": str(exc)[:200]})
+            rows.append({"name": ad.name, "defaults": ad.defaults, "fidelity": getattr(ad, "fidelity", "modeled"), "error": str(exc)[:200]})
             print(f"  [skip] {ad.name}: {type(exc).__name__}: {str(exc)[:120]}", file=sys.stderr)
             continue
         by_class = metrics.score_by_class(entity_ids, failure_classes, clustering)
@@ -131,6 +133,7 @@ def run(embedder_kind: str | None) -> dict:
             {
                 "name": ad.name,
                 "defaults": ad.defaults,
+                "fidelity": getattr(ad, "fidelity", "modeled"),
                 "overall": {
                     "precision": round(overall.precision, 3),
                     "recall": round(overall.recall, 3),
@@ -189,19 +192,19 @@ def to_markdown(report: dict) -> str:
         "",
         "## Headline (pairwise, full set)",
         "",
-        "| System | P | R | F1 | coll&nbsp;P* | temp&nbsp;P* | ms | det-floor |",
-        "|---|---|---|---|---|---|---|---|",
+        "| System | P | R | F1 | fid | coll&nbsp;P* | temp&nbsp;P* | ms | det-floor |",
+        "|---|---|---|---|---|---|---|---|---|",
     ]
     for r in report["results"]:
         if "error" in r:
-            lines.append(f"| {r['name']} | _error_ | | | | | | {r['error'][:40]} |")
+            lines.append(f"| {r['name']} | _error_ | | | {r.get('fidelity', '-')} | | | | {r['error'][:40]} |")
             continue
         o = r["overall"]
         cp = r["per_class_precision"].get("same_name_collision", "-")
         tp = r["per_class_precision"].get("temporal_version", "-")
         lines.append(
             f"| {r['name']} | {o['precision']} | {o['recall']} | **{o['f1']}** | "
-            f"{cp} | {tp} | {r['time_ms']} | {'yes' if r['deterministic_floor'] else 'no'} |"
+            f"{r.get('fidelity', '-')} | {cp} | {tp} | {r['time_ms']} | {'yes' if r['deterministic_floor'] else 'no'} |"
         )
 
     lines += ["", "## Per-class F1", "", "| System | " + " | ".join(
