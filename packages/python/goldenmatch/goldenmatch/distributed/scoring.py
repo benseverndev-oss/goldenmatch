@@ -109,6 +109,33 @@ def _apply_ray_data_resource_tuning() -> None:
         logger.warning("Ray Data resource tuning failed (ignored): %s", e)
 
 
+def _native_worker_baseline() -> dict[str, dict[str, int]]:
+    """Snapshot the worker process's native-dispatch counters before scoring a
+    partition, so :func:`_warn_worker_slow_path` can summarize just this batch."""
+    try:
+        from goldenmatch.core._native_loader import native_dispatch_report
+        return native_dispatch_report()
+    except Exception:  # telemetry must never break a scoring task
+        return {}
+
+
+def _warn_worker_slow_path(baseline: dict[str, dict[str, int]]) -> None:
+    """#957: each Ray worker self-reports (once) if its scoring hot path fell
+    back to pure Python while the native kernel was importable -- so a silently
+    slow distributed run is visible in worker logs rather than only inferable
+    from a low cluster-CPU utilization curve. Worker-local: each worker process
+    has its own dispatch counters + warn-once guard."""
+    try:
+        from goldenmatch.core._native_loader import (
+            summarize_native_dispatch,
+            warn_if_slow_path,
+        )
+        summary = summarize_native_dispatch(baseline=baseline)
+        warn_if_slow_path(summary, logger, once_key="distributed_score")
+    except Exception:  # telemetry must never break a scoring task
+        pass
+
+
 def _project_to_scoring_columns(df: Any, config: GoldenMatchConfig) -> Any:
     """Drop columns scoring never reads, BEFORE the block-shuffle (#957).
 
@@ -234,11 +261,13 @@ def _score_blocks_legacy(
             local_cfg = copy.deepcopy(config)
         local_cfg.backend = "bucket"
 
+        _native_base = _native_worker_baseline()
         try:
             pairs = _score_partition_with_config(df, local_cfg)
         except Exception as e:
             logger.warning("partition scoring failed: %s", e)
             return pa.table({"id_a": [], "id_b": [], "score": []})
+        _warn_worker_slow_path(_native_base)
 
         if not pairs:
             return pa.table({"id_a": [], "id_b": [], "score": []})
@@ -463,7 +492,9 @@ def _score_blocks_block_shuffle(
         import pyarrow as pa
         df = pl.from_arrow(batch)
         assert isinstance(df, pl.DataFrame)
+        _native_base = _native_worker_baseline()
         pairs = _score_colocated_groups(df, config)
+        _warn_worker_slow_path(_native_base)
         if not pairs:
             return pa.table({"id_a": [], "id_b": [], "score": []})
         return pa.table({

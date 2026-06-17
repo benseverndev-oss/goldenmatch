@@ -30,6 +30,7 @@ except ImportError:  # pragma: no cover
 from goldenmatch.core.autoconfig_verify import PostflightReport
 
 if TYPE_CHECKING:
+    from goldenmatch.core._native_loader import NativeDispatchSummary
     from goldenmatch.core.memory.corrections import CorrectionStats
     from goldenmatch.core.recall_certificate import RecallEstimate
 
@@ -157,6 +158,11 @@ class DedupeResult:
     # config; goldenmatch.core.config_lint.Finding). Empty unless the linter
     # flagged something. Advisory in the default warn mode.
     lint_findings: list = field(default_factory=list)
+    # Native-kernel dispatch summary for THIS run (#1048, #957): did the scoring
+    # hot path dispatch to the Rust kernel, or fall back to pure Python?
+    # `result.native.hot_path_native` confirms dispatch directly instead of
+    # inferring it from wall-clock. None only if telemetry capture was skipped.
+    native: NativeDispatchSummary | None = None
 
     def to_csv(self, path: str, which: str = "golden") -> Path:
         """Write results to CSV.
@@ -253,6 +259,8 @@ class MatchResult:
     memory_stats: CorrectionStats | None = None
     # Pre-flight config-lint findings (see DedupeResult.lint_findings).
     lint_findings: list = field(default_factory=list)
+    # Native-kernel dispatch summary for THIS run (see DedupeResult.native).
+    native: NativeDispatchSummary | None = None
 
     def to_csv(self, path: str) -> Path:
         """Write matched results to CSV."""
@@ -444,6 +452,9 @@ def dedupe_df(
     # OR'd in by the resolver itself; here we only propagate the kwarg
     # so it's visible even when the user passes a hand-written config.
     _kwarg_token = None
+    # Native-dispatch baseline; set just before the full-data pipeline so the
+    # summary reflects the real dedupe scoring, not auto-config sample runs.
+    _native_baseline: dict[str, dict[str, int]] = {}
     if exclude_columns:
         _kwarg_token = _RUNTIME_EXCLUDE_COLUMNS.set(list(exclude_columns))
 
@@ -521,6 +532,8 @@ def dedupe_df(
             _kwarg_token = _RUNTIME_EXCLUDE_COLUMNS.set(list(cfg_excl))
 
         _lint_findings = _run_config_lint(df, config)
+        from goldenmatch.core._native_loader import native_dispatch_report
+        _native_baseline = native_dispatch_report()
         result = run_dedupe_df(
             df, config, source_name=source_name,
             auto_config=False,
@@ -575,6 +588,12 @@ def dedupe_df(
 
     _capture_run("dedupe_run", df, config, had_reference=False)
 
+    # Native-dispatch telemetry (#1048, #957): summarize whether scoring went
+    # native this run and WARN if the kernel was importable but scoring fell back.
+    from goldenmatch.core._native_loader import summarize_native_dispatch, warn_if_slow_path
+    _native = summarize_native_dispatch(baseline=_native_baseline)
+    warn_if_slow_path(_native, logger)
+
     return DedupeResult(
         golden=result.get("golden"),
         clusters=result.get("clusters", {}),
@@ -587,6 +606,7 @@ def dedupe_df(
         memory_stats=_mem,
         recall_certificate=_recall_cert,
         lint_findings=_lint_findings,
+        native=_native,
     )
 
 
@@ -638,6 +658,7 @@ def match_df(
     # Same exclude_columns plumbing as dedupe_df -- ContextVar before any
     # pipeline step so auto-config + GoldenFlow transforms both see it.
     _kwarg_token = None
+    _native_baseline: dict[str, dict[str, int]] = {}
     if exclude_columns:
         _kwarg_token = _RUNTIME_EXCLUDE_COLUMNS.set(list(exclude_columns))
 
@@ -692,6 +713,8 @@ def match_df(
             _kwarg_token = _RUNTIME_EXCLUDE_COLUMNS.set(list(cfg_excl))
 
         _lint_findings = _run_config_lint(target, config)
+        from goldenmatch.core._native_loader import native_dispatch_report
+        _native_baseline = native_dispatch_report()
         result = run_match_df(target, reference, config, auto_config=False)
     finally:
         if _kwarg_token is not None:
@@ -724,6 +747,10 @@ def match_df(
 
     _capture_run("match_run", target, config, had_reference=True)
 
+    from goldenmatch.core._native_loader import summarize_native_dispatch, warn_if_slow_path
+    _native = summarize_native_dispatch(baseline=_native_baseline)
+    warn_if_slow_path(_native, logger)
+
     return MatchResult(
         matched=result.get("matched"),
         unmatched=result.get("unmatched"),
@@ -731,6 +758,7 @@ def match_df(
         postflight_report=pf,
         memory_stats=_mem,
         lint_findings=_lint_findings,
+        native=_native,
     )
 
 
