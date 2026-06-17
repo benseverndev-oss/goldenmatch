@@ -487,7 +487,17 @@ def score_buckets(
     """
     if prepared_df.height == 0:
         return []
-    if not blocking_config.keys:
+    # Resolve the block-key list HONORING multi-pass blocking: a `multi_pass`
+    # config carries its keys in `.passes` with `.keys` empty (the schema
+    # explicitly allows keys-OR-passes), so the empty-config guard must check
+    # the RESOLVED pass list, not `.keys` alone. Guarding on `.keys` made an
+    # explicit multi-pass union config (e.g. soundex(surname) + exact(email))
+    # silently return zero pairs -> 0 clusters, while a single-key static config
+    # worked -- issue #1048. `passes` is None for static/single-key configs, so
+    # fall back to `keys`; only a config with NEITHER (nothing to block on)
+    # returns empty, matching the no-candidate-pairs semantics.
+    pass_keys = blocking_config.passes or blocking_config.keys
+    if not pass_keys:
         return []
 
     # Probabilistic (Fellegi-Sunter) matchkeys ride the same bucket
@@ -500,9 +510,6 @@ def score_buckets(
             "score_buckets: probabilistic matchkey requires a trained em_result."
         )
 
-    # Multi-pass blocking: iterate every pass and accumulate pairs. `passes`
-    # is None for static / single-key configs, so fall back to `keys`.
-    pass_keys = blocking_config.passes or blocking_config.keys
 
     # Oversized-block skip (parity with polars-direct's build_blocks in
     # core/blocker.py). Read once and close over in the nested scoring
