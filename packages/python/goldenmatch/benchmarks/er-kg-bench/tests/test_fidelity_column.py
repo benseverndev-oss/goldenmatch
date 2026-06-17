@@ -28,6 +28,24 @@ def test_real_neo4j_row_present_and_real():
     assert round(real[0]["overall"]["f1"], 3) == 0.469  # Phase-2 _merge_overlapping fix (was 0.470)
 
 
+def test_phase3a_cutover_board_composition():
+    """Phase 3a: GraphRAG + Cognee are now `validated` faithful rows (not modeled),
+    and the three modeled exact-family rows are gone from all_modeled()."""
+    from erkgbench import run  # pyright: ignore[reportMissingImports]
+    from erkgbench.adapters.modeled import all_modeled  # pyright: ignore[reportMissingImports]
+
+    # The shared-_norm modeled rows were retired (cut over to adapters/real/).
+    modeled_names = {a.name for a in all_modeled()}
+    assert "MS-GraphRAG" not in modeled_names
+    assert "LightRAG" not in modeled_names
+    assert "Cognee" not in modeled_names
+
+    by_name = {r["name"]: r.get("fidelity") for r in run.run(None)["results"]}
+    # GraphRAG + Cognee now ship as faithful `validated` reproductions.
+    assert by_name.get("MS-GraphRAG") == "validated"
+    assert by_name.get("Cognee") == "validated"
+
+
 def test_emb_rows_present_with_correct_tiers():
     # Tier-only check via a tiny deterministic fake embedder (no torch needed).
     # Both embedder variants stay `modeled`: KGBuilder(emb) because its real

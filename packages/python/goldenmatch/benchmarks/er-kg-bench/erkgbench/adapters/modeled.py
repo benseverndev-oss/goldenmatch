@@ -53,62 +53,14 @@ def _cosine(u: list[float], v: list[float]) -> float:
 
 
 # ── exact-match family ────────────────────────────────────────────────────
-
-
-class _ExactNormalized:
-    """Exact match on the normalised name -- the exact-string-bucketing family
-    (Microsoft GraphRAG, LightRAG, Cognee). ``_norm`` = lowercase +
-    whitespace-collapse. Base stays ``modeled``: the Phase-1 audit found ALL
-    THREE frameworks diverge from ``_norm`` in their REAL normalization (see
-    adapters/FIDELITY.md), each in a different way, so no per-subclass promotion
-    to ``validated`` was warranted. The clustering is still exact-bucket in all
-    three, but the bucket KEY differs (case direction, quote/apostrophe strip,
-    internal-whitespace handling, CJK fold)."""
-
-    deterministic = True
-    fidelity = "modeled"
-
-    def resolve(self, records: list[Record]) -> list[list[int]]:
-        return cluster_by_key(records, lambda r: _norm(r.mention))
-
-
-class GraphRAGModeled(_ExactNormalized):
-    name = "MS-GraphRAG"
-    # AUDIT (FIDELITY.md): real key = clean_str(name.UPPER()) -> uppercases (vs
-    # our lower; clustering-equivalent) BUT does NOT collapse internal whitespace
-    # (our _norm does). Divergent -> stays modeled.
-    defaults = (
-        "exact title match; ER step removed "
-        "(finalize_entities seen_titles set, title=clean_str(name.upper()); "
-        "discussion #778, data-loss #1718)"
-    )
-
-
-class LightRAGModeled(_ExactNormalized):
-    name = "LightRAG"
-    # AUDIT (FIDELITY.md): real key is CASE-SENSITIVE (no .upper()/.lower() on
-    # entity_name) and strips OUTER quotes + CJK-folds (normalize_extracted_info).
-    # Our _norm lowercases + collapses whitespace. Divergent -> stays modeled.
-    defaults = (
-        "exact case-SENSITIVE name dict key, outer-quote strip + CJK fold, no "
-        "fuzzy/embedding at merge "
-        "(operate.py _merge_nodes_then_upsert + normalize_extracted_info; "
-        "#1323, cross-doc #485)"
-    )
-
-
-class CogneeModeled(_ExactNormalized):
-    name = "Cognee"
-    # AUDIT (FIDELITY.md): real key = generate_node_name(name) = name.lower()
-    # .replace("'", "") -> lowercases (matches ours) AND strips apostrophes (ours
-    # does not), does NOT collapse whitespace (ours does). Default ontology is
-    # empty (RDFLibOntologyResolver(ontology_file=None)) so the difflib cutoff=0.8
-    # never fires. Divergent on the key -> stays modeled.
-    defaults = (
-        "exact generate_node_name key = name.lower().replace(\"'\",\"\"); "
-        "difflib cutoff=0.8 only vs a user ontology (empty by default) "
-        "(generate_node_name.py / matching_strategies.py; #1831)"
-    )
+#
+# GraphRAG, LightRAG, and Cognee were modeled here with a shared `_norm`
+# (lowercase + whitespace-collapse) that DIVERGED from each framework's real key.
+# Phase 3a cut them over to faithful rows in `adapters/real/`: GraphRAG + Cognee
+# reproduce their exact key verbatim (`validated`, exact_family.py); LightRAG runs
+# its real `normalize_extracted_info` key fn (`real-inproc`, lightrag.py). They are
+# no longer modeled here. `_norm` stays -- Neo4jBuilderModeled + LlamaIndexModeled
+# still use it.
 
 
 class Mem0Modeled:
@@ -302,11 +254,14 @@ class LlamaIndexModeled:
 
 
 def all_modeled(embed_fn: EmbedFn | None = None) -> list:
-    """Instantiate every modelled adapter (embedder applied where used)."""
+    """Instantiate every modelled adapter (embedder applied where used).
+
+    GraphRAG/LightRAG/Cognee moved to faithful rows in `adapters/real/` (Phase 3a);
+    they are NOT modeled here anymore. mem0 stays (its MD5 floor is `validated`; the
+    LLM layer is Phase 3). Neo4j-KGBuilder + neo4j-graphrag(fuzzy) MODEL + LlamaIndex
+    stay modeled per FIDELITY.md (irreproducible guard / model-vs-real contrast /
+    blog-sourced rule)."""
     return [
-        GraphRAGModeled(),
-        LightRAGModeled(),
-        CogneeModeled(),
         Mem0Modeled(),
         Neo4jBuilderModeled(embed_fn=embed_fn),
         Neo4jGraphRAGFuzzyModeled(),

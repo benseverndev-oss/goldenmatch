@@ -13,12 +13,27 @@ import pytest
 from erkgbench import metrics  # pyright: ignore[reportMissingImports]
 from erkgbench.real_resolvers import (  # pyright: ignore[reportMissingImports]
     SPACY_MODEL,
+    cognee_clusters,
+    graphiti_clusters,
+    graphrag_clusters,
+    lightrag_clusters,
     neo4j_graphrag_exact_clusters,
     neo4j_graphrag_fuzzy_clusters,
     neo4j_graphrag_spacy_clusters,
 )
 
 DATASET = _BENCH_ROOT / "dataset" / "records.csv"
+
+# Observed real F1 on the corpus, pinned from a CI run (Linux) so a local Windows
+# run that gives the same pure-exact-bucket result also passes. Set to None to
+# observe-then-pin (the test SKIPS reporting the value until pinned).
+# Both = 0.066: an exact key (GraphRAG upper-fold / Cognee uuid5) recalls almost
+# nothing on this surface-form-variation corpus -- the variants differ by more than
+# case/whitespace, so the precise normalization doesn't move F1 (same 0.066 as
+# neo4j-graphrag(exact)). Pure deterministic exact-bucket on string keys -> platform-
+# stable, so the observed local Windows value matches Linux CI.
+_GRAPHRAG_F1_PIN: float | None = 0.066
+_COGNEE_F1_PIN: float | None = 0.066
 
 
 def _load():
@@ -100,6 +115,49 @@ def test_exact_merges_identical_skips_null_and_no_normalization():
     assert [4] in clustering                            # different label -> not merged
 
 
+# -- GraphRAG + Cognee (validated reproductions of exact-key rules) ------------
+
+def test_graphrag_key_is_faithful():
+    from erkgbench.real_resolvers import _graphrag_key
+    # clean_str(name.upper()): upper + edge-strip + html-unescape + control-char
+    # strip, NO internal-whitespace collapse, NO quote strip.
+    assert _graphrag_key("  Acme &amp; Co  ") == "ACME & CO"
+    assert _graphrag_key("New  York") != _graphrag_key("New York")   # 2 spaces NOT collapsed
+    assert _graphrag_key("acme") == _graphrag_key("ACME")            # case-folded (clustering-equiv)
+    assert _graphrag_key('the "best"') == 'THE "BEST"'              # quotes NOT stripped
+
+
+def test_graphrag_reproduces_observed_f1():
+    items, entity_ids, classes = _load()
+    clustering = graphrag_clusters(items)
+    flat = [i for c in clustering for i in c]
+    assert sorted(flat) == sorted(i for i, _m, _t in items)          # full partition
+    f1 = metrics.score_by_class(entity_ids, classes, clustering)["__overall__"].f1
+    if _GRAPHRAG_F1_PIN is None:
+        pytest.skip(f"GraphRAG F1 observed = {round(f1, 3)} -- set _GRAPHRAG_F1_PIN to lock it")
+    assert round(f1, 3) == _GRAPHRAG_F1_PIN
+
+
+def test_cognee_key_fixes_the_modeled_bug():
+    from erkgbench.real_resolvers import _cognee_key
+    # real generate_node_id: lower -> " "->"_" -> strip "'". The old model used
+    # _norm (lower + whitespace-collapse) citing generate_node_NAME -- this is the FIX.
+    assert _cognee_key("O'Brien") == _cognee_key("OBrien")           # apostrophe stripped
+    assert _cognee_key("John  Smith") != _cognee_key("John Smith")   # 2 spaces -> "__" != "_"
+    assert _cognee_key("Acme") == _cognee_key("acme")                # lowercased
+
+
+def test_cognee_reproduces_observed_f1():
+    items, entity_ids, classes = _load()
+    clustering = cognee_clusters(items)
+    flat = [i for c in clustering for i in c]
+    assert sorted(flat) == sorted(i for i, _m, _t in items)          # full partition
+    f1 = metrics.score_by_class(entity_ids, classes, clustering)["__overall__"].f1
+    if _COGNEE_F1_PIN is None:
+        pytest.skip(f"Cognee F1 observed = {round(f1, 3)} -- set _COGNEE_F1_PIN to lock it")
+    assert round(f1, 3) == _COGNEE_F1_PIN
+
+
 # -- SpaCySemanticMatchResolver (real-inproc; needs the spaCy vector model) -----
 
 # Observed real F1 of the spaCy resolver on the corpus, pinned from the CI run
@@ -143,3 +201,97 @@ def test_spacy_is_deterministic():
     assert metrics.clusterings_equal(
         neo4j_graphrag_spacy_clusters(items), neo4j_graphrag_spacy_clusters(items)
     )
+
+
+# -- LightRAG (real-inproc; needs lightrag-hku) ---------------------------------
+
+# Observed real F1 pinned from CI (lightrag-hku installed, run 27703432403): P 0.875
+# / R 0.034 / F1 0.066 -- faithful to LightRAG's case-sensitive exact key (same 0.066
+# as the exact family; the key recalls ~nothing on surface-form variation). Pure
+# exact-bucket on the real normalized key -> platform-stable.
+_LIGHTRAG_F1_PIN: float | None = 0.066
+
+
+def _have(mod: str) -> bool:
+    try:
+        import importlib.util
+        return importlib.util.find_spec(mod) is not None
+    except Exception:
+        return False
+
+
+def test_lightrag_reproduces_observed_f1():
+    if not _have("lightrag"):
+        pytest.skip("lightrag-hku not installed (CI-only real-inproc row)")
+    items, entity_ids, classes = _load()
+    clustering = lightrag_clusters(items)
+    flat = [i for c in clustering for i in c]
+    assert sorted(flat) == sorted(i for i, _m, _t in items)  # full partition
+    f1 = metrics.score_by_class(entity_ids, classes, clustering)["__overall__"].f1
+    if _LIGHTRAG_F1_PIN is None:
+        pytest.skip(f"LightRAG F1 observed = {round(f1, 3)} -- set _LIGHTRAG_F1_PIN to lock it")
+    assert round(f1, 3) == _LIGHTRAG_F1_PIN
+
+
+def test_lightrag_key_is_case_sensitive():
+    # LightRAG's real normalize_extracted_info applies NO lower/upper, so "Apple" and
+    # "apple" are DISTINCT entities (unlike the old _norm model that lowercased).
+    if not _have("lightrag"):
+        pytest.skip("lightrag-hku not installed (CI-only real-inproc row)")
+    items = [(0, "Apple", "org"), (1, "apple", "org"), (2, "Apple", "org")]
+    clustering = lightrag_clusters(items)
+    assert any(set(c) == {0, 2} for c in clustering)  # identical case -> merged
+    assert [1] in clustering                          # different case -> own cluster
+
+
+def test_lightrag_is_deterministic():
+    if not _have("lightrag"):
+        pytest.skip("lightrag-hku not installed (CI-only real-inproc row)")
+    items, _, _ = _load()
+    assert metrics.clusterings_equal(lightrag_clusters(items), lightrag_clusters(items))
+
+
+# -- Graphiti (real-inproc deterministic floor; needs graphiti-core) ------------
+
+# Observed real F1 pinned from CI (graphiti-core installed, run 27703432403): P 0.909
+# / R 0.049 / F1 0.093 -- the deterministic MinHash/Jaccard>=0.9 floor recalls a touch
+# more than a pure exact key (abbr 0.071, nick 0.038, temp 0.5) but is still low
+# without the LLM fallback. BLAKE2b MinHash + fixed permutations -> deterministic /
+# platform-stable.
+_GRAPHITI_F1_PIN: float | None = 0.093
+
+
+def test_graphiti_reproduces_observed_f1():
+    if not _have("graphiti_core"):
+        pytest.skip("graphiti-core not installed (CI-only real-inproc row)")
+    items, entity_ids, classes = _load()
+    clustering = graphiti_clusters(items)
+    flat = [i for c in clustering for i in c]
+    assert sorted(flat) == sorted(i for i, _m, _t in items)  # full partition
+    f1 = metrics.score_by_class(entity_ids, classes, clustering)["__overall__"].f1
+    if _GRAPHITI_F1_PIN is None:
+        pytest.skip(f"Graphiti F1 observed = {round(f1, 3)} -- set _GRAPHITI_F1_PIN to lock it")
+    assert round(f1, 3) == _GRAPHITI_F1_PIN
+
+
+def test_graphiti_floor_merges_exact_and_close_fuzzy():
+    # The deterministic floor merges exact-normalized names and MinHash/Jaccard>=0.9
+    # near-duplicates; unrelated names stay separate (no LLM). Long names so the
+    # entropy/min-length gate (>=6 chars, >=2 tokens) doesn't punt them.
+    if not _have("graphiti_core"):
+        pytest.skip("graphiti-core not installed (CI-only real-inproc row)")
+    items = [
+        (0, "International Business Machines", "org"),
+        (1, "international business machines", "org"),  # case-only -> exact-normalized merge
+        (2, "Completely Unrelated Organization", "org"),
+    ]
+    clustering = graphiti_clusters(items)
+    assert any(set(c) == {0, 1} for c in clustering)
+    assert [2] in clustering
+
+
+def test_graphiti_is_deterministic():
+    if not _have("graphiti_core"):
+        pytest.skip("graphiti-core not installed (CI-only real-inproc row)")
+    items, _, _ = _load()
+    assert metrics.clusterings_equal(graphiti_clusters(items), graphiti_clusters(items))

@@ -9,6 +9,19 @@ from __future__ import annotations
 
 def available_real_adapters() -> list:
     out = []
+    # GraphRAG + Cognee are `validated` reproductions of pure exact-key rules (no
+    # library call, no optional dep), grouped here with the other real rows. Own
+    # try-block each so one import error can't suppress the rest.
+    try:
+        from erkgbench.adapters.real.exact_family import RealGraphRAG
+        out.append(RealGraphRAG())
+    except ImportError:
+        pass
+    try:
+        from erkgbench.adapters.real.exact_family import RealCognee
+        out.append(RealCognee())
+    except ImportError:
+        pass
     try:
         from erkgbench.adapters.real.neo4j_graphrag import RealNeo4jGraphRAGFuzzy
         out.append(RealNeo4jGraphRAGFuzzy())
@@ -33,5 +46,23 @@ def available_real_adapters() -> list:
         adapter.resolve([])  # probe the model loads now, not mid-board
         out.append(adapter)
     except Exception:  # noqa: BLE001 - missing spacy/model -> skip this real row
+        pass
+    # LightRAG + Graphiti run REAL library decision code (real-inproc); each needs its
+    # optional dep (lightrag-hku / graphiti-core, in requirements-real.txt). Probe with
+    # resolve([]) so a missing dep -> "skipped", never a hard fail. Catch broadly: a
+    # transitive-import error from the optional lib is still a skip, not a board crash.
+    try:
+        from erkgbench.adapters.real.lightrag import RealLightRAG
+        adapter = RealLightRAG()
+        adapter.resolve([])  # triggers the lazy lightrag import now
+        out.append(adapter)
+    except Exception:  # noqa: BLE001 - lightrag not installed -> skip this real row
+        pass
+    try:
+        from erkgbench.adapters.real.graphiti import RealGraphiti
+        adapter = RealGraphiti()
+        adapter.resolve([])  # triggers the lazy graphiti_core import now
+        out.append(adapter)
+    except Exception:  # noqa: BLE001 - graphiti-core not installed -> skip this real row
         pass
     return out

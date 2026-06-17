@@ -51,7 +51,7 @@
         "temporal_version": 0.4,
         "cross_document_exact": 1.0
       },
-      "time_ms": 984.6,
+      "time_ms": 605.1,
       "deterministic_floor": true
     },
     {
@@ -85,7 +85,7 @@
         "temporal_version": 0.4,
         "cross_document_exact": 1.0
       },
-      "time_ms": 4878.1,
+      "time_ms": 4869.4,
       "deterministic_floor": true
     },
     {
@@ -119,109 +119,7 @@
         "temporal_version": 0.4,
         "cross_document_exact": 1.0
       },
-      "time_ms": 65.9,
-      "deterministic_floor": true
-    },
-    {
-      "name": "MS-GraphRAG",
-      "defaults": "exact title match; ER step removed (finalize_entities seen_titles set, title=clean_str(name.upper()); discussion #778, data-loss #1718)",
-      "fidelity": "modeled",
-      "overall": {
-        "precision": 0.875,
-        "recall": 0.034,
-        "f1": 0.066
-      },
-      "per_class_f1": {
-        "abbreviation": 0.0,
-        "nickname_alias": 0.0,
-        "synonym_brand": 0.0,
-        "same_name_collision": 0.0,
-        "cross_lingual": 0.0,
-        "typo": 0.0,
-        "org_suffix": 0.0,
-        "temporal_version": 0.0,
-        "cross_document_exact": 1.0
-      },
-      "per_class_precision": {
-        "abbreviation": 1.0,
-        "nickname_alias": 1.0,
-        "synonym_brand": 1.0,
-        "same_name_collision": 0.0,
-        "cross_lingual": 1.0,
-        "typo": 1.0,
-        "org_suffix": 1.0,
-        "temporal_version": 1.0,
-        "cross_document_exact": 1.0
-      },
-      "time_ms": 0.2,
-      "deterministic_floor": true
-    },
-    {
-      "name": "LightRAG",
-      "defaults": "exact case-SENSITIVE name dict key, outer-quote strip + CJK fold, no fuzzy/embedding at merge (operate.py _merge_nodes_then_upsert + normalize_extracted_info; #1323, cross-doc #485)",
-      "fidelity": "modeled",
-      "overall": {
-        "precision": 0.875,
-        "recall": 0.034,
-        "f1": 0.066
-      },
-      "per_class_f1": {
-        "abbreviation": 0.0,
-        "nickname_alias": 0.0,
-        "synonym_brand": 0.0,
-        "same_name_collision": 0.0,
-        "cross_lingual": 0.0,
-        "typo": 0.0,
-        "org_suffix": 0.0,
-        "temporal_version": 0.0,
-        "cross_document_exact": 1.0
-      },
-      "per_class_precision": {
-        "abbreviation": 1.0,
-        "nickname_alias": 1.0,
-        "synonym_brand": 1.0,
-        "same_name_collision": 0.0,
-        "cross_lingual": 1.0,
-        "typo": 1.0,
-        "org_suffix": 1.0,
-        "temporal_version": 1.0,
-        "cross_document_exact": 1.0
-      },
-      "time_ms": 0.1,
-      "deterministic_floor": true
-    },
-    {
-      "name": "Cognee",
-      "defaults": "exact generate_node_name key = name.lower().replace(\"'\",\"\"); difflib cutoff=0.8 only vs a user ontology (empty by default) (generate_node_name.py / matching_strategies.py; #1831)",
-      "fidelity": "modeled",
-      "overall": {
-        "precision": 0.875,
-        "recall": 0.034,
-        "f1": 0.066
-      },
-      "per_class_f1": {
-        "abbreviation": 0.0,
-        "nickname_alias": 0.0,
-        "synonym_brand": 0.0,
-        "same_name_collision": 0.0,
-        "cross_lingual": 0.0,
-        "typo": 0.0,
-        "org_suffix": 0.0,
-        "temporal_version": 0.0,
-        "cross_document_exact": 1.0
-      },
-      "per_class_precision": {
-        "abbreviation": 1.0,
-        "nickname_alias": 1.0,
-        "synonym_brand": 1.0,
-        "same_name_collision": 0.0,
-        "cross_lingual": 1.0,
-        "typo": 1.0,
-        "org_suffix": 1.0,
-        "temporal_version": 1.0,
-        "cross_document_exact": 1.0
-      },
-      "time_ms": 0.1,
+      "time_ms": 38.3,
       "deterministic_floor": true
     },
     {
@@ -289,7 +187,7 @@
         "temporal_version": 0.286,
         "cross_document_exact": 1.0
       },
-      "time_ms": 12.3,
+      "time_ms": 12.2,
       "deterministic_floor": true
     },
     {
@@ -323,7 +221,7 @@
         "temporal_version": 0.4,
         "cross_document_exact": 1.0
       },
-      "time_ms": 63.6,
+      "time_ms": 61.9,
       "deterministic_floor": true
     },
     {
@@ -357,7 +255,7 @@
         "temporal_version": 0.286,
         "cross_document_exact": 0.4
       },
-      "time_ms": 7.0,
+      "time_ms": 6.8,
       "deterministic_floor": true
     },
     {
@@ -391,7 +289,7 @@
         "temporal_version": 0.4,
         "cross_document_exact": 1.0
       },
-      "time_ms": 654.2,
+      "time_ms": 665.2,
       "deterministic_floor": true
     },
     {
@@ -425,7 +323,75 @@
         "temporal_version": 0.4,
         "cross_document_exact": 0.4
       },
-      "time_ms": 671.3,
+      "time_ms": 653.7,
+      "deterministic_floor": true
+    },
+    {
+      "name": "MS-GraphRAG",
+      "defaults": "exact title-set merge, GLOBAL (not per-label): title=clean_str(name.upper()) -> upper + edge-strip + html-unescape + control-char strip, NO internal-ws collapse (finalize_entities seen_titles + graph_extractor + utils/string.py; Standard pipeline has no ER step -> validated reproduction, no separable resolver)",
+      "fidelity": "validated",
+      "overall": {
+        "precision": 0.875,
+        "recall": 0.034,
+        "f1": 0.066
+      },
+      "per_class_f1": {
+        "abbreviation": 0.0,
+        "nickname_alias": 0.0,
+        "synonym_brand": 0.0,
+        "same_name_collision": 0.0,
+        "cross_lingual": 0.0,
+        "typo": 0.0,
+        "org_suffix": 0.0,
+        "temporal_version": 0.0,
+        "cross_document_exact": 1.0
+      },
+      "per_class_precision": {
+        "abbreviation": 1.0,
+        "nickname_alias": 1.0,
+        "synonym_brand": 1.0,
+        "same_name_collision": 0.0,
+        "cross_lingual": 1.0,
+        "typo": 1.0,
+        "org_suffix": 1.0,
+        "temporal_version": 1.0,
+        "cross_document_exact": 1.0
+      },
+      "time_ms": 0.3,
+      "deterministic_floor": true
+    },
+    {
+      "name": "Cognee",
+      "defaults": "exact merge on generate_node_id = uuid5(NAMESPACE_OID, name.lower().replace(' ','_').replace(\"'\",'')), GLOBAL (not per-label); default ontology empty so the difflib cutoff never fires (generate_node_id.py + deduplicate_nodes_and_edges.py -> validated)",
+      "fidelity": "validated",
+      "overall": {
+        "precision": 0.875,
+        "recall": 0.034,
+        "f1": 0.066
+      },
+      "per_class_f1": {
+        "abbreviation": 0.0,
+        "nickname_alias": 0.0,
+        "synonym_brand": 0.0,
+        "same_name_collision": 0.0,
+        "cross_lingual": 0.0,
+        "typo": 0.0,
+        "org_suffix": 0.0,
+        "temporal_version": 0.0,
+        "cross_document_exact": 1.0
+      },
+      "per_class_precision": {
+        "abbreviation": 1.0,
+        "nickname_alias": 1.0,
+        "synonym_brand": 1.0,
+        "same_name_collision": 0.0,
+        "cross_lingual": 1.0,
+        "typo": 1.0,
+        "org_suffix": 1.0,
+        "temporal_version": 1.0,
+        "cross_document_exact": 1.0
+      },
+      "time_ms": 1.1,
       "deterministic_floor": true
     },
     {
@@ -459,7 +425,7 @@
         "temporal_version": 0.4,
         "cross_document_exact": 1.0
       },
-      "time_ms": 12.6,
+      "time_ms": 11.5,
       "deterministic_floor": true
     },
     {
@@ -527,7 +493,75 @@
         "temporal_version": 0.364,
         "cross_document_exact": 1.0
       },
-      "time_ms": 1943.2,
+      "time_ms": 1807.5,
+      "deterministic_floor": true
+    },
+    {
+      "name": "LightRAG*",
+      "defaults": "REAL normalize_extracted_info key (HTML-strip, CJK fold, outer-quote strip, CASE-SENSITIVE -- no lower/upper) + exact name dict group-by, GLOBAL (operate.py merge_nodes_and_edges + utils.py; LLM only summarizes descriptions, never moves a record; graph-store upsert stubbed)",
+      "fidelity": "real-inproc",
+      "overall": {
+        "precision": 0.875,
+        "recall": 0.034,
+        "f1": 0.066
+      },
+      "per_class_f1": {
+        "abbreviation": 0.0,
+        "nickname_alias": 0.0,
+        "synonym_brand": 0.0,
+        "same_name_collision": 0.0,
+        "cross_lingual": 0.0,
+        "typo": 0.0,
+        "org_suffix": 0.0,
+        "temporal_version": 0.0,
+        "cross_document_exact": 1.0
+      },
+      "per_class_precision": {
+        "abbreviation": 1.0,
+        "nickname_alias": 1.0,
+        "synonym_brand": 1.0,
+        "same_name_collision": 0.0,
+        "cross_lingual": 1.0,
+        "typo": 1.0,
+        "org_suffix": 1.0,
+        "temporal_version": 1.0,
+        "cross_document_exact": 1.0
+      },
+      "time_ms": 9.3,
+      "deterministic_floor": true
+    },
+    {
+      "name": "graphiti*",
+      "defaults": "REAL deterministic floor: exact normalized-name (lower+ws-collapse) OR MinHash/Jaccard>=0.9, with a low-entropy/short-name gate (_resolve_with_similarity + _build_candidate_indexes, dedup_helpers.py); sequential ingestion vs the growing existing set. DETERMINISTIC FLOOR ONLY -- the full default path escalates unresolved nodes to an LLM (out of scope)",
+      "fidelity": "real-inproc",
+      "overall": {
+        "precision": 0.909,
+        "recall": 0.049,
+        "f1": 0.093
+      },
+      "per_class_f1": {
+        "abbreviation": 0.071,
+        "nickname_alias": 0.038,
+        "synonym_brand": 0.0,
+        "same_name_collision": 0.0,
+        "cross_lingual": 0.0,
+        "typo": 0.0,
+        "org_suffix": 0.0,
+        "temporal_version": 0.5,
+        "cross_document_exact": 1.0
+      },
+      "per_class_precision": {
+        "abbreviation": 1.0,
+        "nickname_alias": 1.0,
+        "synonym_brand": 1.0,
+        "same_name_collision": 0.0,
+        "cross_lingual": 1.0,
+        "typo": 1.0,
+        "org_suffix": 1.0,
+        "temporal_version": 1.0,
+        "cross_document_exact": 1.0
+      },
+      "time_ms": 7007.5,
       "deterministic_floor": true
     }
   ]

@@ -43,16 +43,21 @@ stdlib only, no key. `--embedder st` additionally needs `sentence-transformers`.
   cited inline (`adapters/modeled.py`). E.g. Neo4j builder = `cosine>0.97 OR
   edit-dist<3 OR substring`; neo4j-graphrag = `rapidfuzz WRatio/100 ≥ 0.8`;
   LlamaIndex = `KNN-10 + word-dist<5 + cosine>0.9`.
-* **Models, on purpose.** Re-implementing the published rule (vs installing 8
-  frameworks + keys + LLMs) keeps the bench reproducible and removes
-  LLM-nondeterminism as a confound. The adapters are small and auditable;
-  correct them against source by PR if a default has moved.
-* **LLM-judge layers are scoped out, not faked.** Graphiti and mem0 add an LLM
-  "same?" prompt over a thin deterministic guard. We model the deterministic
-  *floor* each ships (Graphiti MinHash/Jaccard≥0.9 + exact; mem0 MD5-exact) and
-  flag the LLM layer's known costs (non-determinism; O(n) LLM calls →
-  token-overflow/dropped episodes, Graphiti #1275; ~$0.80/40-chats #467) rather
-  than simulate it.
+* **Real execution where it's honest; models where it isn't.** Each row carries a
+  `fid` tier (see `adapters/FIDELITY.md`). Many framework rows now run the
+  library's REAL decision code in-process (`real-inproc`: neo4j-graphrag
+  fuzzy/spaCy, LightRAG, Graphiti's deterministic floor) or reproduce its exact
+  rule confirmed verbatim vs source (`validated`: neo4j-graphrag exact, GraphRAG,
+  Cognee, mem0's MD5 floor). Only LlamaIndex (blog-sourced rule, unconfirmable) and
+  Neo4j-KGBuilder (an `elementId`-sided guard no commutative predicate can
+  reproduce) remain `modeled`. The optional real-framework deps install behind
+  `requirements-real.txt`; a missing dep degrades the row to "skipped", never an
+  error.
+* **mem0's LLM merge layer is scoped out, not faked.** mem0 adds an LLM ADD/UPDATE
+  "same?" prompt over its MD5-exact floor; we run the deterministic floor and flag
+  the LLM layer's cost/non-determinism (Phase 3) rather than simulate it. Graphiti's
+  floor (MinHash/Jaccard≥0.9 + exact) IS run for real; its LLM fallback is the
+  out-of-scope part.
 * **goldenmatch is dogfooded** — the rows call zero-config `dedupe_df(df)` and
   let auto-config pick the strategy, the same posture as every framework at its
   default. No hand-tuned threshold. `auto` = name only; `auto+fields` = name +
