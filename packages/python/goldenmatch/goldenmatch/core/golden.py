@@ -891,9 +891,12 @@ def build_golden_records_batch(
         for cdf in s_sorted.partition_by("__cluster_id__", maintain_order=True):
             cid = cdf["__cluster_id__"][0]
             per_scores = (cluster_pair_scores or {}).get(int(cid))
-            rec, _prov = resolve_cluster(cdf, rules, order, quality_scores=quality_scores,
-                                         pair_scores=per_scores, provenance=provenance)
+            rec, prov = resolve_cluster(cdf, rules, order, quality_scores=quality_scores,
+                                        pair_scores=per_scores, provenance=provenance,
+                                        cluster_id=int(cid))
             rec["__cluster_id__"] = cid
+            if provenance and prov is not None:
+                rec["__survivorship_prov__"] = prov
             s_results.append(rec)
         return s_results
 
