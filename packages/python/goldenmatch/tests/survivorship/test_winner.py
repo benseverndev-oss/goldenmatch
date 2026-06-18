@@ -73,3 +73,28 @@ def test_lockstep_winner_null_not_backfilled_from_nonwinner():
     )
     assert res.winner_pos == 0
     assert res.values["zip"] is None   # winner's null pinned; no back-fill
+
+
+# B1 ranking-refactor parity guards ------------------------------------------
+
+
+def _rows_pb1(spec):
+    return [{"__pos__": i, **r} for i, r in enumerate(spec)]
+
+
+def test_most_complete_tiebreak_lowest_index():
+    rows = _rows_pb1([{"a": "x", "b": "y"}, {"a": "p", "b": "q"}])
+    res = group_winner(rows, ["a", "b"], strategy="most_complete")
+    assert res.winner_pos == 0 and res.tie is True and res.confidence == 0.7
+
+
+def test_source_priority_winner_and_no_tie():
+    rows = _rows_pb1([{"a": "x", "__source__": "billing"}, {"a": "p", "__source__": "crm"}])
+    res = group_winner(rows, ["a"], strategy="source_priority", source_priority=["crm", "billing"])
+    assert res.winner_pos == 1 and res.tie is False
+
+
+def test_most_recent_tie_lowest_index():
+    rows = _rows_pb1([{"a": "x"}, {"a": "p"}])
+    res = group_winner(rows, ["a"], strategy="most_recent", dates=["2024-01-01", "2024-01-01"])
+    assert res.winner_pos == 0
