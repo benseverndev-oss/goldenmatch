@@ -31,7 +31,7 @@ import goldenmatch as gm
 import numpy as np
 import polars as pl
 
-from .base import Record, cluster_by_pairwise
+from .base import ZERO_COST, AdapterBase, Record, cluster_by_pairwise
 
 _MODES = {
     "auto": ("goldenmatch(auto)", "zero-config dedupe_df(name) -- auto-config picks the strategy"),
@@ -51,7 +51,7 @@ _MODES = {
 }
 
 
-class GoldenMatchAdapter:
+class GoldenMatchAdapter(AdapterBase):
     # Auto-config has mild EM-order non-determinism; the runner's re-run check
     # reports what actually happened rather than trusting this flag.
     deterministic = True
@@ -62,6 +62,8 @@ class GoldenMatchAdapter:
             raise ValueError(f"unknown mode {mode!r}")
         self.mode = mode
         self.name, self.defaults = _MODES[mode]
+        # Cost of the most recent resolve(); zeros until a paid (LLM) run.
+        self._last_cost: dict = dict(ZERO_COST)
 
     def resolve(self, records: list[Record]) -> list[list[int]]:
         # Resolve the full set in index order so __row_id__ == record index.
@@ -73,16 +75,32 @@ class GoldenMatchAdapter:
         df = pl.DataFrame(data)
 
         # Zero-config: no exact/fuzzy kwargs -> dedupe_df calls auto_configure_df.
-        # auto_fields_semantic is identical to auto_fields except it turns on the
-        # opt-in semantic-blocking candidate union (in-house char-ngram ANN +
-        # initialism + refdata alias); deterministic, offline, no key, no faiss
-        # (numpy fallback).
-        kwargs: dict[str, object] = {}
+        # auto_fields_semantic turns on the opt-in semantic-blocking candidate union
+        # (in-house char-ngram ANN + initialism + refdata alias); deterministic,
+        # offline, no key, no faiss (numpy fallback). For auto_llm we DON'T use the
+        # bare `llm_scorer=True` kwarg: that path sets LLMScorerConfig(enabled=True)
+        # with NO budget, so no BudgetTracker is built and DedupeResult.llm_cost is
+        # None even when the LLM ran. Pass an explicit config carrying BudgetConfig()
+        # so the cost is actually measured. The deterministic modes stay untouched.
         if self.mode == "auto_llm":
-            kwargs["llm_scorer"] = True
+            from goldenmatch.config.schemas import (
+                BudgetConfig,
+                GoldenMatchConfig,
+                LLMScorerConfig,
+            )
+
+            config = gm.auto_configure_df(df)
+            config.llm_scorer = LLMScorerConfig(enabled=True, budget=BudgetConfig())
+            assert isinstance(config, GoldenMatchConfig)
+            result = gm.dedupe_df(df, config=config)
+            # Map None (LLM didn't run / no key) -> zeros.
+            self._last_cost = dict(result.llm_cost) if result.llm_cost else dict(ZERO_COST)
         elif self.mode == "auto_fields_semantic":
-            kwargs["semantic_blocking"] = True
-        result = gm.dedupe_df(df, **kwargs)
+            result = gm.dedupe_df(df, semantic_blocking=True)
+            self._last_cost = dict(ZERO_COST)
+        else:
+            result = gm.dedupe_df(df)
+            self._last_cost = dict(ZERO_COST)
 
         return [
             list(info["members"])
@@ -90,8 +108,11 @@ class GoldenMatchAdapter:
             if info.get("size", len(info["members"])) > 1
         ]
 
+    def last_cost(self) -> dict:
+        return dict(self._last_cost)
 
-class GoldenMatchEmbAnnAdapter:
+
+class GoldenMatchEmbAnnAdapter(AdapterBase):
     """Embedding-ANN blocking using goldenmatch's OWN offline embedder.
 
     The lever the LLM experiment pointed at: generate candidate pairs by
@@ -137,6 +158,9 @@ class GoldenMatchEmbAnnAdapter:
     ) -> None:
         self.threshold = threshold
         self.provider = provider
+        # Cost of the most recent resolve(); zeros for the offline (provider=None)
+        # char-ngram path, which makes no API call.
+        self._last_cost: dict = dict(ZERO_COST)
         if name is not None:
             self.name = name
         elif provider is not None:
@@ -168,6 +192,16 @@ class GoldenMatchEmbAnnAdapter:
     def resolve(self, records: list[Record]) -> list[list[int]]:
         ordered = sorted(records, key=lambda r: r.index)
         vecs = self._embed([r.mention for r in ordered])
+        # Cost: the offline char-ngram path (provider=None) hits no API -> zero.
+        # A semantic provider (e.g. "openai") makes ONE batched embedding call
+        # per resolve(). The provider's embed() discards the response usage
+        # block, so tokens/usd aren't readily available here -- record the call
+        # count and leave tokens/usd at 0 (CI's keyed lane is the source of
+        # truth for the paid number).
+        if self.provider is None:
+            self._last_cost = dict(ZERO_COST)
+        else:
+            self._last_cost = {"llm_calls": 1, "llm_tokens": 0, "llm_usd": 0.0}
         norms = np.linalg.norm(vecs, axis=1, keepdims=True)
         vecs = vecs / np.where(norms == 0.0, 1.0, norms)
         sim = vecs @ vecs.T  # cosine; index i == record i (ordered 0..n-1)
@@ -178,3 +212,6 @@ class GoldenMatchEmbAnnAdapter:
             return bool(sim[a.index, b.index] >= thr)
 
         return cluster_by_pairwise(ordered, pred)
+
+    def last_cost(self) -> dict:
+        return dict(self._last_cost)

@@ -11,6 +11,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
+#: The cost a deterministic / string-only adapter reports: it spent nothing on
+#: any paid API. Most adapters in the suite are deterministic, so this is the
+#: default reported by ``last_cost_of`` for any adapter that doesn't override.
+ZERO_COST: dict = {"llm_calls": 0, "llm_tokens": 0, "llm_usd": 0.0}
+
 
 @dataclass(frozen=True)
 class Record:
@@ -37,6 +42,40 @@ class Adapter(Protocol):
 
     def resolve(self, records: list[Record]) -> list[list[int]]:
         ...
+
+
+class AdapterBase:
+    """Default behaviour shared by every adapter.
+
+    The single source of the zero-cost default: a deterministic / string-only
+    adapter makes no paid API calls, so its ``last_cost()`` is all zeros. Only
+    the adapters that actually spend money (goldenmatch's LLM + paid-embedding
+    paths) override ``last_cost``; everyone else inherits this.
+    """
+
+    def last_cost(self) -> dict:
+        """Cost of the most recent ``resolve()`` call.
+
+        ``{'llm_calls': int, 'llm_tokens': int, 'llm_usd': float}``. Zeros for
+        every deterministic adapter.
+        """
+        return dict(ZERO_COST)
+
+
+def last_cost_of(adapter: object) -> dict:
+    """Cost of ``adapter``'s most recent ``resolve()`` call, defaulting to zeros.
+
+    ``last_cost()`` is an OPTIONAL part of the adapter contract: an adapter that
+    never touches a paid API need not implement it. This accessor lets the
+    runner record cost uniformly -- it returns the adapter's ``last_cost()`` if
+    it has one, else :data:`ZERO_COST` -- so adapters that don't subclass
+    :class:`AdapterBase` still report a sane zero cost without each having to
+    spell the method out.
+    """
+    fn = getattr(adapter, "last_cost", None)
+    if callable(fn):
+        return fn()
+    return dict(ZERO_COST)
 
 
 # ── clustering primitives ────────────────────────────────────────────────
