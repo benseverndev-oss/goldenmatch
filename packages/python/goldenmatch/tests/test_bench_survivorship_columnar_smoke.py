@@ -50,7 +50,7 @@ def test_make_clustered_workload_deterministic():
     mod = _load()
     df1 = mod.make_clustered_workload(rows=500, avg_cluster_size=3, seed=42)
     df2 = mod.make_clustered_workload(rows=500, avg_cluster_size=3, seed=42)
-    assert df1.frame_equal(df2)
+    assert df1.equals(df2)
 
 
 # ---------------------------------------------------------------------------
