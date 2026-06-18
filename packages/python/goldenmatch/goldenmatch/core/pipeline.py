@@ -953,11 +953,28 @@ def _semantic_blocking_pairs(
     """Build + score the three semantic-blocking candidate sources.
 
     Returns the union of ``(a, b, score)`` pairs to extend ``all_pairs`` with.
-    Reuses the pipeline's existing block scorer (``_get_block_scorer``) for the
-    acronym/alias blocks; the ANN strategy emits pre-scored pairs directly.
-    Best-effort per source: a failing source logs + is skipped (semantic
-    blocking is purely additive, so a missing source only loses recall, never
-    correctness).
+
+    Each source is scored by its OWN CONFIRMING scorer, so a confirmed pair
+    comes out at score 1.0 and merges at clustering regardless of how low its
+    string similarity is:
+
+    - acronym/initialism candidates -> ``initialism_match`` (1.0 when one name
+      is the other's initialism, e.g. ``IBM`` <-> ``International Business
+      Machines``; raw string similarity is ~0).
+    - alias candidates -> ``alias_match`` (1.0 when both canonicalize to the
+      same business/given-name alias, e.g. ``Acme Inc`` <-> ``Acme
+      Incorporated``).
+    - ANN candidates -> cosine, kept as the pre-scored value the index emits
+      (gated by ``sb.ann_threshold`` so sub-threshold neighbors don't union in
+      a low-score pair that over-merges at clustering).
+
+    Reuses the pipeline's existing block scorer (``_get_block_scorer``). For
+    each acronym/alias source we synthesize a single-field weighted matchkey on
+    the name column whose field scorer IS the confirming scorer, at a 0.5
+    threshold so a 1.0 confirmed pair is emitted (and a 0.0 non-confirmation is
+    dropped). Best-effort per source: a failing source logs + is skipped
+    (semantic blocking is purely additive, so a missing source only loses
+    recall, never correctness).
     """
     sb = config.semantic_blocking
     if sb is None:
@@ -966,6 +983,8 @@ def _semantic_blocking_pairs(
     from goldenmatch.config.schemas import (
         BlockingConfig,
         BlockingKeyConfig,
+        MatchkeyConfig,
+        MatchkeyField,
     )
     from goldenmatch.core.blocker import build_blocks
 
@@ -975,54 +994,58 @@ def _semantic_blocking_pairs(
         return []
 
     out: list[tuple[int, int, float]] = []
+    block_scorer = _get_block_scorer(config)
 
-    # The block scorer needs a weighted matchkey to score on. Reuse the first
-    # weighted matchkey verbatim when present (same scoring the main loop uses);
-    # otherwise synthesize a single-field jaro_winkler matchkey on the name
-    # column at the pipeline's effective threshold so the acronym/alias
-    # candidates are scored by the SAME comparison machinery.
-    score_mk = next(
-        (m for m in matchkeys if getattr(m, "type", None) == "weighted"), None
-    )
-    if score_mk is None:
-        from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
-        score_mk = MatchkeyConfig(
-            name="__semantic_blocking__",
+    def _confirming_mk(name: str, scorer: str) -> MatchkeyConfig:
+        # Single-field weighted matchkey on the name column whose ONLY field
+        # uses the confirming scorer. threshold=0.5 emits a confirmed (1.0)
+        # pair and drops a non-confirmation (0.0); <=1.0 is required so the
+        # confirmed pair is emitted at all.
+        return MatchkeyConfig(
+            name=name,
             type="weighted",
-            fields=[MatchkeyField(field=name_col, scorer="jaro_winkler", weight=1.0)],
+            fields=[MatchkeyField(field=name_col, scorer=scorer, weight=1.0)],
             threshold=0.5,
         )
 
-    block_scorer = _get_block_scorer(config)
-
-    # ── acronym + alias: one multi_pass blocking pass per requested transform ──
-    passes: list[BlockingKeyConfig] = []
-    if "initialism" in sb.keys:
-        passes.append(BlockingKeyConfig(fields=[name_col], transforms=["initialism"]))
-    if "alias" in sb.keys:
-        for table in sb.alias_tables:
-            transform = _SEMANTIC_ALIAS_TRANSFORMS.get(table)
-            if transform is not None:
-                passes.append(
-                    BlockingKeyConfig(fields=[name_col], transforms=[transform])
-                )
-    if passes:
+    def _score_source(passes: list[BlockingKeyConfig], mk: MatchkeyConfig, label: str) -> None:
+        if not passes:
+            return
         try:
-            mp_config = BlockingConfig(strategy="multi_pass", passes=passes)
-            blocks = build_blocks(combined_lf, mp_config)
-            pairs = block_scorer(
-                blocks, score_mk, matched_pairs,
-                across_files_only=across_files_only,
-                source_lookup=source_lookup if across_files_only else None,
+            cfg = BlockingConfig(strategy="multi_pass", passes=passes)
+            blocks = build_blocks(combined_lf, cfg)
+            out.extend(
+                block_scorer(
+                    blocks, mk, matched_pairs,
+                    across_files_only=across_files_only,
+                    source_lookup=source_lookup if across_files_only else None,
+                )
             )
-            out.extend(pairs)
         except Exception:
             logger.warning(
-                "semantic_blocking acronym/alias source failed; skipping",
-                exc_info=True,
+                "semantic_blocking %s source failed; skipping", label, exc_info=True,
             )
 
+    # ── acronym/initialism: scored by initialism_match ──
+    if "initialism" in sb.keys:
+        _score_source(
+            [BlockingKeyConfig(fields=[name_col], transforms=["initialism"])],
+            _confirming_mk("__sem_initialism", "initialism_match"),
+            "initialism",
+        )
+
+    # ── alias: scored by alias_match (one pass per requested alias table) ──
+    if "alias" in sb.keys:
+        alias_passes = [
+            BlockingKeyConfig(fields=[name_col], transforms=[transform])
+            for table in sb.alias_tables
+            if (transform := _SEMANTIC_ALIAS_TRANSFORMS.get(table)) is not None
+        ]
+        _score_source(alias_passes, _confirming_mk("__sem_alias", "alias_match"), "alias")
+
     # ── ann: direct-pair ANN blocking returns pre-scored (a, b, cosine) pairs ──
+    # Kept as cosine; gated by sb.ann_threshold so a low-similarity neighbor
+    # doesn't union in a sub-threshold pair that over-merges at clustering.
     if "ann" in sb.keys:
         try:
             ann_config = BlockingConfig(
@@ -1033,14 +1056,16 @@ def _semantic_blocking_pairs(
             )
             ann_blocks = build_blocks(combined_lf, ann_config)
             for blk in ann_blocks:
-                if blk.pre_scored_pairs:
-                    if across_files_only and source_lookup is not None:
-                        out.extend(
-                            (a, b, s) for a, b, s in blk.pre_scored_pairs
-                            if source_lookup.get(a) != source_lookup.get(b)
-                        )
-                    else:
-                        out.extend(blk.pre_scored_pairs)
+                for a, b, s in blk.pre_scored_pairs or []:
+                    if s < sb.ann_threshold:
+                        continue
+                    if (
+                        across_files_only
+                        and source_lookup is not None
+                        and source_lookup.get(a) == source_lookup.get(b)
+                    ):
+                        continue
+                    out.append((a, b, s))
         except Exception:
             logger.warning(
                 "semantic_blocking ann source failed; skipping", exc_info=True,

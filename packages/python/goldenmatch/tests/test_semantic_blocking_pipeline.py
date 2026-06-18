@@ -50,3 +50,23 @@ def test_semantic_blocking_only_adds_candidates():
         )
 
     assert cluster_of(0) == cluster_of(1)  # IBM <-> Intl Business Machines merged
+
+
+def test_initialism_confirmed_merges_at_auto_threshold():
+    # Name is the ONLY signal: string similarity scores
+    # "International Business Machines" <-> "IBM" ~0.58, BELOW the zero-config
+    # ensemble@0.8 threshold. Only the confirming `initialism_match` scorer
+    # (=1.0) can carry the pair over. (Adding identical helper columns would
+    # let the normal fuzzy path merge it on its own and mask the no-op.)
+    df = pl.DataFrame(
+        {"name": ["International Business Machines", "IBM", "Globex"]}
+    )
+    on = gm.dedupe_df(df, semantic_blocking=True)  # zero-config -> auto picks ensemble@0.8
+
+    def cluster_of(rid):
+        return next(c for c, i in on.clusters.items() if rid in i["members"])
+
+    assert cluster_of(0) == cluster_of(1)  # confirmed by initialism_match=1.0, NOT string sim
+    # ...and Globex (no initialism/alias/string link) is NOT swept in. Guards
+    # against a source emitting raw sub-threshold scores that over-merge.
+    assert cluster_of(2) != cluster_of(0)
