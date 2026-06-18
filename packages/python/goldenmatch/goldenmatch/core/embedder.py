@@ -96,6 +96,10 @@ class _ProviderEmbedder:
         self._cache: dict[str, np.ndarray] = {}
         self.model_name = getattr(provider, "model_id", "provider")
 
+    def embed(self, values: list[str]) -> np.ndarray:
+        """Embed a list of strings (uncached passthrough to the wrapped provider)."""
+        return np.asarray(self._provider.embed(values), dtype=np.float32)  # type: ignore[attr-defined]
+
     def embed_column(self, values: list[str], cache_key: str) -> np.ndarray:
         if cache_key in self._cache:
             return self._cache[cache_key]
@@ -115,8 +119,12 @@ class _ProviderEmbedder:
 def _make_inhouse_embedder(model_name: str) -> _ProviderEmbedder:
     """Build a `_ProviderEmbedder` for the in-house model.
 
-    ``model_name`` is ``"inhouse:<path>"`` (path to a saved GoldenEmbedModel) or
-    bare ``"inhouse"`` (path from ``GOLDENMATCH_INHOUSE_MODEL``).
+    ``model_name`` is ``"inhouse:<path>"`` (path to a saved GoldenEmbedModel),
+    bare ``"inhouse"`` with ``GOLDENMATCH_INHOUSE_MODEL`` set (path to a saved
+    model), or bare ``"inhouse"`` with neither set — the zero-config default,
+    which builds an untrained ``GoldenEmbedModel`` (fixed-seed random projection
+    whose embeddings already approximate char-n-gram overlap; no path, no env,
+    no cloud, no torch).
     """
     from goldenmatch.embeddings.providers import InHouseProvider
 
@@ -124,11 +132,11 @@ def _make_inhouse_embedder(model_name: str) -> _ProviderEmbedder:
         "GOLDENMATCH_INHOUSE_MODEL"
     )
     if not path:
-        raise ValueError(
-            "in-house embedder requires a model path: set the matchkey field "
-            "`model` to 'inhouse:/path/to/model', or set GOLDENMATCH_INHOUSE_MODEL. "
-            "Train one with goldenmatch.embeddings.inhouse.train_embedder(...)."
-        )
+        # Zero-config: a freshly-constructed GoldenEmbedModel is already a usable
+        # embedder (untrained random projection). Provider accepts the instance.
+        from goldenmatch.embeddings.inhouse.model import GoldenEmbedModel
+
+        return _ProviderEmbedder(InHouseProvider(GoldenEmbedModel()))
     return _ProviderEmbedder(InHouseProvider(path))
 
 
