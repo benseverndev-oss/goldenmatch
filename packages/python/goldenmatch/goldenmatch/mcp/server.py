@@ -541,6 +541,32 @@ _BASE_TOOLS = [
             "required": ["run_id"],
         },
     ),
+    Tool(
+        name="config_weaknesses",
+        description=(
+            "Diagnose weaknesses in the loaded run's auto-config: columns admitted "
+            "that shouldn't be (source/provenance labels, per-row IDs), oversized or "
+            "shared-value blocks, null sinks, low-signal matchkeys, and over-merging. "
+            "Returns ranked findings, each with a plain-English explanation + a concrete "
+            "fix, plus a one-paragraph summary."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "max_findings": {
+                    "type": "integer",
+                    "description": "Max findings to return, ranked by severity (default 6).",
+                    "default": 6,
+                },
+                "phrasing": {
+                    "type": "string",
+                    "enum": ["plain", "technical"],
+                    "description": "Wording style for the findings (default plain).",
+                    "default": "plain",
+                },
+            },
+        },
+    ),
 ]
 
 # TOOLS is the union of agent tools + memory tools + base tools, in the same order list_tools returns.
@@ -910,6 +936,10 @@ def _handle_tool(name: str, args: dict) -> dict:
         return _tool_list_runs(args.get("output_dir", "."))
     elif name == "rollback":
         return _tool_rollback(args["run_id"], args.get("output_dir", "."))
+    elif name == "config_weaknesses":
+        return _tool_config_weaknesses(
+            args.get("max_findings", 6), args.get("phrasing", "plain")
+        )
     else:
         return {"error": f"Unknown tool: {name}"}
 
@@ -1557,6 +1587,15 @@ def _tool_rollback(run_id: str, output_dir: str = ".") -> dict:
     return rollback_run(run_id, str(vdir))
 
 
+def _tool_config_weaknesses(max_findings: int = 6, phrasing: str = "plain") -> dict:
+    """Diagnose weaknesses in the loaded run's auto-config (see core.config_critique)."""
+    from goldenmatch.core.config_critique import diagnose_config
+    return diagnose_config(
+        _engine.data, _config, _result,
+        max_findings=max_findings, phrasing=phrasing,
+    )
+
+
 def resolve_http_auth_token(host: str) -> str | None:
     """Return the MCP HTTP bearer token, enforcing the fail-closed bind rule.
 
@@ -1628,7 +1667,7 @@ async def run_server_http(
     async def server_card(request):
         return JSONResponse({
             "name": "GoldenMatch",
-            "description": "Entity resolution toolkit — deduplicate records, match across datasets, and create golden records using fuzzy, probabilistic, and LLM-powered scoring. Zero-config mode auto-detects your data. 58 MCP tools for matching, explaining, reviewing, evaluating, blocking analysis, lineage, data quality, transforms, identity graph, distributed-routing config, and privacy-preserving linkage. Built on Polars. 97.2% F1 on DBLP-ACM.",
+            "description": "Entity resolution toolkit — deduplicate records, match across datasets, and create golden records using fuzzy, probabilistic, and LLM-powered scoring. Zero-config mode auto-detects your data. 59 MCP tools for matching, explaining, reviewing, evaluating, blocking analysis, config critique, lineage, data quality, transforms, identity graph, distributed-routing config, and privacy-preserving linkage. Built on Polars. 97.2% F1 on DBLP-ACM.",
             "homepage": "https://github.com/benseverndev-oss/goldenmatch",
             "iconUrl": "https://avatars.githubusercontent.com/u/192581748"
         })
