@@ -869,6 +869,190 @@ def _prep_cache_clear() -> None:  # pyright: ignore[reportUnusedFunction]
     _PREP_CACHE_LRU.clear()
 
 
+# ── Semantic blocking (recall-lever) candidate-source union ──────────────────
+# When ``config.semantic_blocking`` is set, three additional candidate sources
+# are unioned onto the normal candidate set:
+#   - acronym  -> a multi_pass block on the ``initialism`` transform
+#   - alias    -> multi_pass blocks on the refdata canonicalization transforms
+#                 (refdata_given_name_canonical / refdata_business_canonical)
+#   - ann      -> embedding nearest-neighbor pairs via the ``ann_pairs`` strategy
+# The acronym/alias blocks are scored with the SAME block scorer the main fuzzy
+# loop uses; the ANN strategy returns pre-scored (a, b, cosine) pairs directly.
+# All sources are appended to ``all_pairs`` BEFORE the ``dedup_pairs_max_score``
+# seam, which canonicalizes (min, max) and keeps the max score -> purely
+# additive (never drops an existing pair). Gated entirely behind
+# ``config.semantic_blocking``; None (the default) does nothing.
+_SEMANTIC_ALIAS_TRANSFORMS: dict[str, str] = {
+    "given_names": "refdata_given_name_canonical",
+    "business": "refdata_business_canonical",
+}
+
+
+def _semantic_name_column(
+    config: GoldenMatchConfig, matchkeys: list, columns: list[str],
+) -> str | None:
+    """Pick the ``name``-like column the semantic-blocking sources operate on.
+
+    Preference order:
+      1. A weighted/probabilistic matchkey field whose column name looks
+         name-like (``name``/``company``/``business``/``org``/``title``).
+      2. Any weighted/probabilistic matchkey field (first one).
+      3. A blocking field that looks name-like, then the first blocking field.
+      4. The first user (non-``__``) column.
+
+    Returns None only when there is no user column at all.
+    """
+    name_like = ("name", "company", "business", "org", "title")
+
+    def _looks_name_like(col: str) -> bool:
+        low = col.lower()
+        return any(tok in low for tok in name_like)
+
+    # 1 + 2: matchkey fields (these are the columns the user is matching on).
+    mk_fields: list[str] = []
+    for mk in matchkeys:
+        if getattr(mk, "type", None) in ("weighted", "probabilistic"):
+            for f in getattr(mk, "fields", None) or []:
+                col = getattr(f, "field", None)
+                if col and not col.startswith("__") and col in columns:
+                    mk_fields.append(col)
+    for col in mk_fields:
+        if _looks_name_like(col):
+            return col
+    if mk_fields:
+        return mk_fields[0]
+
+    # 3: blocking fields.
+    block_fields: list[str] = []
+    if config.blocking is not None:
+        from goldenmatch.core.blocker import collect_blocking_fields
+        block_fields = [
+            c for c in collect_blocking_fields(config.blocking)
+            if not c.startswith("__") and c in columns
+        ]
+    for col in block_fields:
+        if _looks_name_like(col):
+            return col
+    if block_fields:
+        return block_fields[0]
+
+    # 4: first user column.
+    user_cols = [c for c in columns if not c.startswith("__")]
+    return user_cols[0] if user_cols else None
+
+
+def _semantic_blocking_pairs(
+    config: GoldenMatchConfig,
+    combined_lf: pl.LazyFrame,
+    collected_df: pl.DataFrame,
+    matchkeys: list,
+    matched_pairs: set[tuple[int, int]],
+    across_files_only: bool,
+    source_lookup: dict[int, str] | None,
+) -> list[tuple[int, int, float]]:
+    """Build + score the three semantic-blocking candidate sources.
+
+    Returns the union of ``(a, b, score)`` pairs to extend ``all_pairs`` with.
+    Reuses the pipeline's existing block scorer (``_get_block_scorer``) for the
+    acronym/alias blocks; the ANN strategy emits pre-scored pairs directly.
+    Best-effort per source: a failing source logs + is skipped (semantic
+    blocking is purely additive, so a missing source only loses recall, never
+    correctness).
+    """
+    sb = config.semantic_blocking
+    if sb is None:
+        return []
+
+    from goldenmatch.config.schemas import (
+        BlockingConfig,
+        BlockingKeyConfig,
+    )
+    from goldenmatch.core.blocker import build_blocks
+
+    name_col = _semantic_name_column(config, matchkeys, list(collected_df.columns))
+    if name_col is None:
+        logger.warning("semantic_blocking: no usable name column found; skipping")
+        return []
+
+    out: list[tuple[int, int, float]] = []
+
+    # The block scorer needs a weighted matchkey to score on. Reuse the first
+    # weighted matchkey verbatim when present (same scoring the main loop uses);
+    # otherwise synthesize a single-field jaro_winkler matchkey on the name
+    # column at the pipeline's effective threshold so the acronym/alias
+    # candidates are scored by the SAME comparison machinery.
+    score_mk = next(
+        (m for m in matchkeys if getattr(m, "type", None) == "weighted"), None
+    )
+    if score_mk is None:
+        from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
+        score_mk = MatchkeyConfig(
+            name="__semantic_blocking__",
+            type="weighted",
+            fields=[MatchkeyField(field=name_col, scorer="jaro_winkler", weight=1.0)],
+            threshold=0.5,
+        )
+
+    block_scorer = _get_block_scorer(config)
+
+    # ── acronym + alias: one multi_pass blocking pass per requested transform ──
+    passes: list[BlockingKeyConfig] = []
+    if "initialism" in sb.keys:
+        passes.append(BlockingKeyConfig(fields=[name_col], transforms=["initialism"]))
+    if "alias" in sb.keys:
+        for table in sb.alias_tables:
+            transform = _SEMANTIC_ALIAS_TRANSFORMS.get(table)
+            if transform is not None:
+                passes.append(
+                    BlockingKeyConfig(fields=[name_col], transforms=[transform])
+                )
+    if passes:
+        try:
+            mp_config = BlockingConfig(strategy="multi_pass", passes=passes)
+            blocks = build_blocks(combined_lf, mp_config)
+            pairs = block_scorer(
+                blocks, score_mk, matched_pairs,
+                across_files_only=across_files_only,
+                source_lookup=source_lookup if across_files_only else None,
+            )
+            out.extend(pairs)
+        except Exception:
+            logger.warning(
+                "semantic_blocking acronym/alias source failed; skipping",
+                exc_info=True,
+            )
+
+    # ── ann: direct-pair ANN blocking returns pre-scored (a, b, cosine) pairs ──
+    if "ann" in sb.keys:
+        try:
+            ann_config = BlockingConfig(
+                strategy="ann_pairs",
+                ann_column=name_col,
+                ann_model=sb.ann_model,
+                ann_top_k=sb.ann_top_k,
+            )
+            ann_blocks = build_blocks(combined_lf, ann_config)
+            for blk in ann_blocks:
+                if blk.pre_scored_pairs:
+                    if across_files_only and source_lookup is not None:
+                        out.extend(
+                            (a, b, s) for a, b, s in blk.pre_scored_pairs
+                            if source_lookup.get(a) != source_lookup.get(b)
+                        )
+                    else:
+                        out.extend(blk.pre_scored_pairs)
+        except Exception:
+            logger.warning(
+                "semantic_blocking ann source failed; skipping", exc_info=True,
+            )
+
+    logger.info(
+        "semantic_blocking: unioned %d candidate pairs on column %r",
+        len(out), name_col,
+    )
+    return out
+
+
 def _run_dedupe_pipeline(
     combined_lf: pl.LazyFrame,
     config: GoldenMatchConfig,
@@ -1574,6 +1758,28 @@ def _run_dedupe_pipeline(
         _dump_bench_pairs(
             _bench_dump_dir, _bench_candidate_pairs, _bench_emitted_pairs
         )
+
+    # ── Step 3.2b: SEMANTIC BLOCKING (recall-lever, opt-in) ──
+    # Union three additional candidate sources (acronym/initialism, alias,
+    # ANN nearest-neighbor) onto the candidate set, scored by the SAME block
+    # scorer the fuzzy loop uses. Purely additive (dedup_pairs_max_score keeps
+    # the max score per canonical pair). Gated entirely behind
+    # config.semantic_blocking; None (the default) does nothing -> byte-identical.
+    if config.semantic_blocking is not None:
+        if _use_columnar:
+            # The columnar fast-path consumes the pair stream as a DataFrame
+            # (_columnar_pairs_df) and never touches all_pairs, so a union into
+            # all_pairs would silently no-op. Refuse rather than drop candidates.
+            raise NotImplementedError(
+                "semantic_blocking is incompatible with COLUMNAR_PIPELINE"
+            )
+        with stage("semantic_blocking"):
+            _semantic_pairs = _semantic_blocking_pairs(
+                config, combined_lf, collected_df, matchkeys,
+                matched_pairs, across_files_only,
+                source_lookup if across_files_only else None,
+            )
+        all_pairs.extend(_semantic_pairs)
 
     # ── Step 3.3: CROSS-ENCODER RERANKING (optional) ──
     for mk in matchkeys:
