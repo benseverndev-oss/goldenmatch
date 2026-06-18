@@ -69,6 +69,11 @@ from goldenmatch.refdata.business import (
 )
 from goldenmatch.refdata.business import register_transforms as _register_business_transforms
 from goldenmatch.refdata.business import strip_legal_form
+from goldenmatch.refdata.business_aliases import canonical_company_form
+from goldenmatch.refdata.business_aliases import is_available as business_aliases_available
+from goldenmatch.refdata.business_aliases import (
+    register_transforms as _register_business_alias_transforms,
+)
 from goldenmatch.refdata.given_names import (
     aliases_of,
     are_equivalent,
@@ -90,6 +95,7 @@ from goldenmatch.refdata.surnames import (
 # Register the bundled scorers + transforms on import. Idempotent.
 register_scorers()
 _register_business_transforms()
+_register_business_alias_transforms()
 _register_address_transforms()
 _register_industry_transforms()
 _register_acronym_transforms()
@@ -99,7 +105,9 @@ __all__ = [
     "addresses_available",
     "aliases_of",
     "are_equivalent",
+    "business_aliases_available",
     "business_available",
+    "canonical_company_form",
     "canonical_form",
     "code_for_title",
     "given_names_available",
