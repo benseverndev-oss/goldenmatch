@@ -275,3 +275,105 @@ def test_b2_anchor_none_present_degrades_to_most_complete():
     }, schema={"__cluster_id__": pl.Int64, "__row_id__": pl.Int64,
                "street": pl.Utf8, "city": pl.Utf8, "zip": pl.Utf8})
     assert_parity(df, _anchor_rules(), compare_confidence=False)
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# B3: allow_fill per-cell back-fill
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def test_b3_most_complete_allow_fill_backfills_winner_null():
+    # cluster 1: winner = row A (most complete, 2/3). zip is null on the winner
+    # but row B has a zip -> allow_fill back-fills zip from row B. street/city
+    # still come from the winner.
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1],
+        "__row_id__": [10, 11],
+        "street": ["1 A St", "2 B Ave"],
+        "city": ["LA", None],
+        "zip": [None, "10001"],
+    })
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_groups=[GoldenGroupRule(name="addr", strategy="most_complete",
+                                      allow_fill=True,
+                                      columns=["street", "city", "zip"])],
+    )
+    assert_parity(df, rules, compare_confidence=False)
+
+
+def test_b3_allow_fill_no_donor_stays_null():
+    # winner is null on zip and NO other row has a zip -> stays null.
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1],
+        "__row_id__": [10, 11],
+        "street": ["1 A St", "2 B Ave"],
+        "city": ["LA", "NY"],
+        "zip": [None, None],
+    }, schema={"__cluster_id__": pl.Int64, "__row_id__": pl.Int64,
+               "street": pl.Utf8, "city": pl.Utf8, "zip": pl.Utf8})
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_groups=[GoldenGroupRule(name="addr", strategy="most_complete",
+                                      allow_fill=True,
+                                      columns=["street", "city", "zip"])],
+    )
+    assert_parity(df, rules, compare_confidence=False)
+
+
+def test_b3_source_priority_allow_fill_walks_ranking():
+    # Winner is the crm row but its city is null; the fill walks the source
+    # ranking (crm -> erp -> web) for the first non-null city.
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1, 1],
+        "__row_id__": [10, 11, 12],
+        "__source__": ["web", "crm", "erp"],
+        "street": ["1 Web St", "2 Crm Ave", "3 Erp Rd"],
+        "city": ["LA", None, "Boston"],   # crm wins, city null -> erp (next in priority) fills "Boston"
+    })
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_groups=[GoldenGroupRule(name="addr", strategy="source_priority",
+                                      source_priority=["crm", "erp", "web"],
+                                      allow_fill=True,
+                                      columns=["street", "city"])],
+    )
+    assert_parity(df, rules, compare_confidence=False)
+
+
+def test_b3_most_recent_allow_fill():
+    # Latest row wins; its city is null -> filled from the next-most-recent
+    # row that has a city.
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1, 1],
+        "__row_id__": [10, 11, 12],
+        "street": ["1 Old St", "2 Mid Ave", "3 New Rd"],
+        "city": ["LA", "NY", None],   # newest (row 12) city null -> next-newest (row 11) "NY"
+        "updated": [date(2020, 1, 1), date(2022, 1, 1), date(2024, 1, 1)],
+    })
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_groups=[GoldenGroupRule(name="addr", strategy="most_recent",
+                                      date_column="updated", allow_fill=True,
+                                      columns=["street", "city", "updated"])],
+    )
+    assert_parity(df, rules, compare_confidence=False)
+
+
+def test_b3_anchor_allow_fill():
+    # anchor-present row wins; one of its non-anchor columns is null and is
+    # back-filled walking the anchor ranking.
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1, 1],
+        "__row_id__": [10, 11, 12],
+        "street": ["1 Full St", None, "3 C Rd"],
+        "city": ["LA", "NY", "SF"],
+        "zip": [None, "10001", None],   # row 11 has anchor -> wins; its street null -> fill
+    })
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_groups=[GoldenGroupRule(name="addr", strategy="anchor",
+                                      anchor="zip", allow_fill=True,
+                                      columns=["street", "city", "zip"])],
+    )
+    assert_parity(df, rules, compare_confidence=False)
