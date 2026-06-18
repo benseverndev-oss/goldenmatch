@@ -1,7 +1,11 @@
 from datetime import date
 
 import polars as pl
-from goldenmatch.config.schemas import GoldenGroupRule, GoldenRulesConfig
+from goldenmatch.config.schemas import (
+    GoldenFieldRule,
+    GoldenGroupRule,
+    GoldenRulesConfig,
+)
 from goldenmatch.core.golden import build_golden_records_batch
 from goldenmatch.core.survivorship.native import survivorship_native_eligible
 
@@ -414,5 +418,261 @@ def test_b3_anchor_allow_fill():
         field_groups=[GoldenGroupRule(name="addr", strategy="anchor",
                                       anchor="zip", allow_fill=True,
                                       columns=["street", "city", "zip"])],
+    )
+    assert_parity(df, rules, compare_confidence=False)
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# C1: scalar field resolution (groups + plain scalar fields)
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def test_c1_default_strategy_scalar_alongside_group():
+    # A group (addr) PLUS a scalar (name) that falls through to default_strategy
+    # (most_complete). name must resolve to the longest non-null value per
+    # cluster (tie -> lowest __row_id__), independent of the group winner.
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1, 2, 2],
+        "__row_id__": [10, 11, 20, 21],
+        "street": ["1 A St", "2 B Ave Longer", None, "9 Z Rd"],
+        "city": ["LA", None, "SF", None],
+        "name": ["Bob", "Robert Smith", None, "Al"],   # longest wins per cluster
+    })
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_groups=[GoldenGroupRule(name="addr", strategy="most_complete",
+                                      columns=["street", "city"])],
+    )
+    assert_parity(df, rules, compare_confidence=False)
+
+
+def test_c1_scalar_first_non_null():
+    # Per-field first_non_null: lowest-__row_id__ non-null wins. Frame order is
+    # scrambled to prove the pick is row_id-stable, not input-order-dependent.
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1, 1, 2, 2],
+        "__row_id__": [12, 10, 11, 21, 20],   # out of order
+        "email": ["c@x.com", None, "b@x.com", None, "z@x.com"],
+    })
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={"email": GoldenFieldRule(strategy="first_non_null")},
+    )
+    assert_parity(df, rules, compare_confidence=False)
+
+
+def test_c1_scalar_most_complete_tie_lowest_row_id():
+    # Two equal-length non-null candidates in a cluster -> tie -> lowest row_id.
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1],
+        "__row_id__": [11, 10],   # swapped
+        "name": ["Abcd", "Wxyz"],   # same length -> tie -> row_id 10 ("Wxyz")
+    })
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={"name": GoldenFieldRule(strategy="most_complete")},
+    )
+    assert_parity(df, rules, compare_confidence=False)
+
+
+def test_c1_scalar_longest_value():
+    # longest_value picks the longest non-null string (same VALUE as
+    # most_complete; confidence differs but Phase C compares values only).
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1, 2, 2],
+        "__row_id__": [10, 11, 20, 21],
+        "title": ["VP", "Vice President of Sales", "Eng", None],
+    })
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={"title": GoldenFieldRule(strategy="longest_value")},
+    )
+    assert_parity(df, rules, compare_confidence=False)
+
+
+def test_c1_scalar_most_recent():
+    # most_recent: value at the max date among rows where BOTH value and date
+    # are non-null. Cluster 2 has the newest row's value null -> falls to the
+    # next-newest with a value.
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1, 2, 2],
+        "__row_id__": [10, 11, 20, 21],
+        "phone": ["111", "222", "333", None],   # cluster2 newest (date 2024) is null
+        "updated": [date(2020, 1, 1), date(2023, 1, 1),
+                    date(2022, 1, 1), date(2024, 1, 1)],
+    })
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={"phone": GoldenFieldRule(strategy="most_recent",
+                                              date_column="updated")},
+        # updated is itself a scalar resolved by default_strategy (most_complete).
+    )
+    assert_parity(df, rules, compare_confidence=False)
+
+
+def test_c1_scalar_most_recent_null_date_excluded():
+    # A row with a value but a NULL date is excluded from most_recent
+    # (merge_field requires both non-null), even if it is the lowest row_id.
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1, 1],
+        "__row_id__": [10, 11, 12],
+        "phone": ["aaa", "bbb", "ccc"],
+        "updated": [None, date(2021, 1, 1), date(2023, 1, 1)],  # row 12 newest
+    }, schema={"__cluster_id__": pl.Int64, "__row_id__": pl.Int64,
+               "phone": pl.Utf8, "updated": pl.Date})
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={"phone": GoldenFieldRule(strategy="most_recent",
+                                              date_column="updated")},
+    )
+    assert_parity(df, rules, compare_confidence=False)
+
+
+def test_c1_scalar_source_priority():
+    # source_priority over [crm, erp, web]: best-ranked source whose
+    # first-occurrence row is non-null wins.
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1, 1, 2, 2],
+        "__row_id__": [10, 11, 12, 20, 21],
+        "__source__": ["web", "erp", "crm", "erp", "web"],
+        "phone": ["1web", "2erp", "3crm", "4erp", "5web"],
+    })
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={"phone": GoldenFieldRule(strategy="source_priority",
+                                              source_priority=["crm", "erp", "web"])},
+    )
+    assert_parity(df, rules, compare_confidence=False)
+
+
+def test_c1_scalar_source_priority_first_occurrence_null_blocks():
+    # crm's FIRST occurrence (lowest row_id) is null. merge_field records the
+    # first occurrence's (null) value and SKIPS crm, even though a later crm row
+    # is populated -> erp wins. A naive "first non-null crm" would diverge.
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1, 1],
+        "__row_id__": [10, 11, 12],
+        "__source__": ["crm", "erp", "crm"],
+        "phone": [None, "2erp", "3crm"],   # crm first occ (row 10) null -> erp wins
+    }, schema={"__cluster_id__": pl.Int64, "__row_id__": pl.Int64,
+               "__source__": pl.Utf8, "phone": pl.Utf8})
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={"phone": GoldenFieldRule(strategy="source_priority",
+                                              source_priority=["crm", "erp", "web"])},
+    )
+    assert_parity(df, rules, compare_confidence=False)
+
+
+def test_c1_scalar_source_priority_unknown_source_no_winner():
+    # Every row is an unknown source -> no priority match -> None
+    # (merge_field._source_priority fallback returns None).
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1],
+        "__row_id__": [10, 11],
+        "__source__": ["legacy", "ghost"],
+        "phone": ["1old", "2spooky"],
+    })
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={"phone": GoldenFieldRule(strategy="source_priority",
+                                              source_priority=["crm", "erp", "web"])},
+    )
+    assert_parity(df, rules, compare_confidence=False)
+
+
+def test_c1_scalar_all_null():
+    # Every value of a scalar is null across the cluster -> resolves to None.
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1, 2, 2],
+        "__row_id__": [10, 11, 20, 21],
+        "name": [None, None, "Has Name", None],
+    }, schema={"__cluster_id__": pl.Int64, "__row_id__": pl.Int64,
+               "name": pl.Utf8})
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={"name": GoldenFieldRule(strategy="most_complete")},
+    )
+    assert_parity(df, rules, compare_confidence=False)
+
+
+def test_c1_scalar_all_agree_short_circuit():
+    # All non-null values identical -> merge_field short-circuits to the value
+    # regardless of strategy. Value parity holds (the value is the same pick).
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1, 1],
+        "__row_id__": [10, 11, 12],
+        "code": ["X1", "X1", None],
+    }, schema={"__cluster_id__": pl.Int64, "__row_id__": pl.Int64,
+               "code": pl.Utf8})
+    rules = GoldenRulesConfig(
+        default_strategy="first_non_null",
+        field_rules={"code": GoldenFieldRule(strategy="most_complete")},
+    )
+    assert_parity(df, rules, compare_confidence=False)
+
+
+def test_c1_scalar_validate_mask_skips_invalid():
+    # email_validate pre-mask: an INVALID email is dropped to null before the
+    # agg, so most_complete must NOT pick the (longer) invalid value -- it picks
+    # the longest VALID email instead. The slow path filters candidates the same
+    # way, so native == oracle.
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1, 1, 2, 2],
+        "__row_id__": [10, 11, 12, 20, 21],
+        # cluster1: "not-an-email-but-very-long" is longest but INVALID ->
+        # dropped; "alice@example.com" is the longest valid one.
+        # cluster2: both invalid -> all masked to null -> resolves to None.
+        "email": ["a@x.io", "not-an-email-but-very-long", "alice@example.com",
+                  "bad", "also bad"],
+    })
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={"email": GoldenFieldRule(strategy="most_complete",
+                                              validate="email_validate")},
+    )
+    assert_parity(df, rules, compare_confidence=False)
+
+
+def test_c1_validate_mask_with_first_non_null():
+    # validate + first_non_null: the lowest-row_id row has an INVALID email
+    # (masked to null) so first_non_null must skip it and take the next valid.
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1, 1],
+        "__row_id__": [10, 11, 12],
+        "email": ["garbage", "bob@example.com", "carol@example.com"],
+    })
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={"email": GoldenFieldRule(strategy="first_non_null",
+                                              validate="email_validate")},
+    )
+    assert_parity(df, rules, compare_confidence=False)
+
+
+def test_c1_groups_and_multiple_scalars_mixed():
+    # The full Phase C surface: a group + several scalars under different
+    # strategies, multiple clusters, ties, and an all-null scalar.
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1, 2, 2, 2],
+        "__row_id__": [10, 11, 20, 21, 22],
+        "__source__": ["crm", "web", "web", "crm", "erp"],
+        # group: lock-step address
+        "street": ["1 A St", "2 B Ave", None, "3 C Rd", "3 C Rd Longer"],
+        "city": ["LA", None, "SF", "SF", None],
+        # scalars
+        "name": ["Bob", "Robert Smith", "Al", None, "Alex"],   # most_complete (default)
+        "phone": ["111", "222", "333", "444", "555"],          # source_priority
+        "note": [None, None, "kept", None, None],              # first_non_null, mostly null
+    })
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_groups=[GoldenGroupRule(name="addr", strategy="most_complete",
+                                      columns=["street", "city"])],
+        field_rules={
+            "phone": GoldenFieldRule(strategy="source_priority",
+                                     source_priority=["crm", "erp", "web"]),
+            "note": GoldenFieldRule(strategy="first_non_null"),
+        },
     )
     assert_parity(df, rules, compare_confidence=False)

@@ -7,6 +7,9 @@ from __future__ import annotations
 
 import polars as pl
 
+from goldenmatch.core.golden import _is_internal, _stable_value_expr
+from goldenmatch.core.survivorship.validate import goldenflow_filter
+
 
 def survivorship_native_eligible(rules, provenance) -> bool:
     """True when the vectorized survivorship path can handle this config.
@@ -137,13 +140,195 @@ def _resolve_group(multi_df: pl.DataFrame, g) -> pl.DataFrame:
     )
 
 
-def build_survivorship_native(multi_df, rules) -> pl.DataFrame:
-    """Vectorized group survivorship (Phase B): one row per cluster carrying
-    ``__cluster_id__`` + the resolved group columns.
+# Strategies a scalar value-expr cannot express as a pure aggregate; the
+# Phase-F eligibility gate routes a config using these to the slow path. Until
+# then a Phase C config must not use them (parity configs don't).
+_SCALAR_NATIVE_INELIGIBLE = ("custom:", "confidence_majority")
 
-    Assumes every user column is a member of some ``field_groups`` group
-    (scalar/conditional resolution is Phase C/E). Each group is resolved
-    independently and joined back on ``__cluster_id__``.
+
+def _scalar_strategy_native_ineligible(strategy: str) -> bool:
+    """True for scalar strategies the native value-expr cannot express
+    (custom plugins / confidence_majority -- both need per-cluster Python)."""
+    return any(
+        strategy == s or strategy.startswith(s)
+        for s in _SCALAR_NATIVE_INELIGIBLE
+    )
+
+
+def _scalar_resolution_rule(col, rules, default_rule):
+    """The single ``GoldenFieldRule`` that governs scalar column ``col``.
+
+    Mirrors ``resolve_cluster``: ``rules.field_rules.get(col, default_rule)``,
+    then (for a non-conditional, non-list rule) the rule itself. List-form
+    ``when:`` conditionals are Phase E and rejected here so a misconfigured
+    Phase C call fails legibly rather than silently mis-resolving.
+    """
+    rule_entry = rules.field_rules.get(col, default_rule)
+    if isinstance(rule_entry, list):
+        raise NotImplementedError(
+            f"survivorship scalar {col!r}: list-form conditional field_rules "
+            "(when:) are Phase E, not handled by the native path"
+        )
+    return rule_entry
+
+
+def _scalar_value_expr(col: str, len_alias: str | None, rule, has_row_id: bool) -> pl.Expr:
+    """Per-cluster survivor VALUE for scalar column ``col`` under ``rule``.
+
+    Byte-identical to ``merge_field``'s winning VALUE (confidence is Phase D):
+
+    * ``most_complete`` / ``longest_value`` -> longest non-null string, ties
+      broken by lowest ``__row_id__``. Both pick the same value (they differ
+      only in tie confidence, which Phase C does not compare), so both reuse
+      ``_stable_value_expr``'s ``most_complete`` branch.
+    * ``first_non_null`` -> lowest-``__row_id__`` non-null. Reuses
+      ``_stable_value_expr``'s ``first_non_null`` branch.
+    * ``most_recent`` -> value at the max ``date_column`` among rows where BOTH
+      the value AND the date are non-null (``merge_field._most_recent`` requires
+      both); ties on the top date broken by lowest ``__row_id__``.
+    * ``source_priority`` -> walking ``rule.source_priority``, the value of the
+      FIRST-occurring (lowest ``__row_id__``) row of the best-ranked source
+      whose first occurrence is non-null. A source whose first occurrence is
+      null is skipped even if a later same-source row is populated, matching
+      ``merge_field._source_priority``'s first-occurrence record.
+
+    The all-non-null-agree short-circuit in ``merge_field`` returns the first
+    non-null index regardless of strategy, but the VALUE there is identical to
+    every per-strategy pick (all candidates equal), so it needs no special case
+    for value parity.
+    """
+    strategy = rule.strategy
+    if strategy in ("most_complete", "longest_value"):
+        # _stable_value_expr keys on the "most_complete" branch (len desc,
+        # __row_id__ asc). longest_value picks the same value (str(v) length),
+        # differing from most_complete only in tie confidence (Phase D).
+        return _stable_value_expr(col, len_alias, "most_complete", has_row_id)
+    if strategy == "first_non_null":
+        return _stable_value_expr(col, None, "first_non_null", has_row_id)
+    if strategy == "most_recent":
+        date_col = rule.date_column
+        # Both value and date must be present (merge_field._most_recent filters
+        # on ``v is not None and d is not None``).
+        mask = pl.col(col).is_not_null() & pl.col(date_col).is_not_null()
+        nn = pl.col(col).filter(mask)
+        if has_row_id:
+            # date DESC, then __row_id__ ASC -> one composite struct key
+            # (date, -__row_id__) sorted descending (same idiom as
+            # _stable_value_expr's most_complete key).
+            key = pl.struct([
+                pl.col(date_col),
+                -pl.col("__row_id__").cast(pl.Int64),
+            ]).filter(mask)
+            return nn.sort_by(key, descending=True).first()
+        # No __row_id__: stable date-desc sort -> ties keep input order.
+        return nn.sort_by(pl.col(date_col).filter(mask), descending=True).first()
+    if strategy == "source_priority":
+        # rank = index in source_priority; unknown/null source -> sentinel.
+        priority = list(rule.source_priority or [])
+        sentinel = len(priority)
+        rank_map = {s: i for i, s in enumerate(priority)}
+        src_rank = pl.col("__source__").replace_strict(
+            rank_map, default=sentinel, return_dtype=pl.Int64
+        )
+        # First occurrence of a source = its lowest-__row_id__ row. A row is
+        # eligible to win only if it is that first occurrence AND its value is
+        # non-null (merge_field records the first occurrence's value -- a null
+        # there blocks the source). Among eligible rows, lowest source rank
+        # wins; sources only appear once among first-occurrences so no further
+        # tiebreak is needed, but rank<sentinel guards against an unknown
+        # source winning (merge_field only returns sources listed in priority).
+        if has_row_id:
+            is_first = (
+                pl.col("__row_id__")
+                == pl.col("__row_id__").min().over("__source__")
+            )
+            eligible = is_first & pl.col(col).is_not_null() & (src_rank < sentinel)
+            nn = pl.col(col).filter(eligible)
+            key = src_rank.filter(eligible)
+            return nn.sort_by(key, descending=False).first()
+        # No __row_id__: fall back to input order for "first occurrence".
+        # cum_count over source == 0 marks the first occurrence in input order.
+        is_first = pl.col("__source__").cum_count().over("__source__") == 1
+        eligible = is_first & pl.col(col).is_not_null() & (src_rank < sentinel)
+        nn = pl.col(col).filter(eligible)
+        key = src_rank.filter(eligible)
+        return nn.sort_by(key, descending=False).first()
+    raise NotImplementedError(
+        f"survivorship scalar strategy {strategy!r} not handled by the native path"
+    )
+
+
+def _resolve_scalars(multi_df: pl.DataFrame, rules, scalar_cols) -> pl.DataFrame:
+    """Resolve every scalar column to one row per cluster (``__cluster_id__`` +
+    ``scalar_cols``). Byte-identical (values only) to ``resolve_cluster``'s
+    per-scalar ``merge_field`` walk for non-conditional field rules.
+    """
+    from goldenmatch.config.schemas import GoldenFieldRule
+
+    default_rule = GoldenFieldRule(strategy=rules.default_strategy)
+    has_row_id = "__row_id__" in multi_df.columns
+
+    rules_by_col: dict = {}
+    for col in scalar_cols:
+        rule = _scalar_resolution_rule(col, rules, default_rule)
+        if _scalar_strategy_native_ineligible(rule.strategy):
+            # Phase F gate routes these to the slow path; refuse loudly for now.
+            raise NotImplementedError(
+                f"survivorship scalar {col!r}: strategy {rule.strategy!r} is "
+                "native-ineligible (custom/confidence_majority); slow path only"
+            )
+        rules_by_col[col] = rule
+
+    # Pass 1: apply every validate: pre-mask. Invalid cells -> null using the
+    # SAME goldenflow validator series the slow path filters with. We replace
+    # the column in place so downstream length/agg exprs read the masked column
+    # (exactly as resolve_cluster filters candidates BEFORE merge_field).
+    mask_exprs: list = []
+    for col in scalar_cols:
+        validator_name = getattr(rules_by_col[col], "validate_with", None)
+        if validator_name:
+            values = multi_df[col].to_list()
+            filtered = goldenflow_filter(values, validator_name)
+            # filtered[i] is None exactly where the candidate was dropped (or
+            # already null); rebuild the column straight from it.
+            mask_exprs.append(
+                pl.Series(name=col, values=filtered, dtype=multi_df[col].dtype)
+            )
+    prepped = multi_df.with_columns(mask_exprs) if mask_exprs else multi_df
+
+    # Pass 2: length helpers for most_complete/longest_value, computed FROM the
+    # already-masked column so a validate-dropped value can't win on length.
+    len_aliases: dict = {}
+    len_exprs: list = []
+    for col in scalar_cols:
+        if rules_by_col[col].strategy in ("most_complete", "longest_value"):
+            alias = f"__len_{col}__"
+            len_aliases[col] = alias
+            len_exprs.append(
+                pl.col(col).cast(pl.Utf8).str.len_chars().alias(alias)
+            )
+    if len_exprs:
+        prepped = prepped.with_columns(len_exprs)
+
+    agg_exprs = [
+        _scalar_value_expr(col, len_aliases.get(col), rules_by_col[col], has_row_id).alias(col)
+        for col in scalar_cols
+    ]
+    return (
+        prepped.group_by("__cluster_id__", maintain_order=True)
+        .agg(agg_exprs)
+    )
+
+
+def build_survivorship_native(multi_df, rules) -> pl.DataFrame:
+    """Vectorized survivorship (Phase B groups + Phase C scalars): one row per
+    cluster carrying ``__cluster_id__`` + every resolved user column.
+
+    Group columns are resolved in lock-step per ``field_groups`` (Phase B).
+    Scalar columns (any user column NOT in a group) are resolved by their
+    per-field ``GoldenFieldRule`` strategy, or ``default_strategy`` (Phase C).
+    Each unit resolves over the same source frame and is joined back on
+    ``__cluster_id__``. List-form ``when:`` conditionals are Phase E.
     """
     result: pl.DataFrame | None = None
     for g in rules.field_groups:
@@ -153,7 +338,21 @@ def build_survivorship_native(multi_df, rules) -> pl.DataFrame:
         else:
             # inner: every group resolves over the same source frame -> identical cluster set
             result = result.join(resolved, on="__cluster_id__", how="inner")
+
+    # Scalar columns = user columns not owned by any group.
+    grouped_cols = {c for g in rules.field_groups for c in g.columns}
+    scalar_cols = [
+        c for c in multi_df.columns
+        if not _is_internal(c) and c != "__cluster_id__" and c not in grouped_cols
+    ]
+    if scalar_cols:
+        scalars = _resolve_scalars(multi_df, rules, scalar_cols)
+        if result is None:
+            result = scalars
+        else:
+            result = result.join(scalars, on="__cluster_id__", how="inner")
+
     if result is None:
-        # No groups: just the distinct cluster ids.
+        # No groups and no scalars: just the distinct cluster ids.
         result = multi_df.select("__cluster_id__").unique(maintain_order=True)
     return result
