@@ -245,16 +245,23 @@ def verdict(slow: dict, floor: dict) -> str:
         (coarse proxy; over-counts the truly-vectorizable portion because
         loop_wall includes the non-vectorizable conditional eval -- makes
         NO-GO robust and GO optimistic; de-risk a coarse GO with py-spy)
-      - RSS delta <= 15% (or either side is None -> treat as pass)
+      - the vectorized direction does not REGRESS RSS (or either side None)
     """
     total = slow["total_wall_s"]
     tax = max(0.0, total - floor["total_wall_s"])
     recoverable = slow.get("partition_wall_s", 0.0) + slow.get("loop_wall_s", 0.0)
     frac = recoverable / total if total else 0.0
+    # RSS gate: a vectorized rewrite must not BLOW UP RSS (the prior columnar
+    # A/B failure mode). The fast-path floor is the vectorized proxy; compare
+    # IT to the slow path -- if the vectorized direction does not use materially
+    # MORE RSS than slow, it is RSS-safe. (The slow path being RSS-HEAVY vs the
+    # floor is a reason TO rewrite, not against -- so we must NOT require
+    # slow <= floor, which would invert the gate and veto exactly the
+    # RSS-heavy slow paths a rewrite fixes.)
     rss_ok = (
         floor.get("peak_rss_mb") is None
         or slow.get("peak_rss_mb") is None
-        or slow["peak_rss_mb"] <= floor["peak_rss_mb"] * 1.15
+        or floor["peak_rss_mb"] <= slow["peak_rss_mb"] * 1.15
     )
     go = (
         (tax / total >= 0.25 if total else False)
