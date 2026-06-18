@@ -1,6 +1,10 @@
+import json
+
 import polars as pl
 import pytest
 from goldenmatch.config.schemas import GoldenGroupRule, GoldenRulesConfig
+from goldenmatch.core.golden import ClusterProvenance, GroupProvenance
+from goldenmatch.core.lineage import render_group_provenance_line, save_lineage
 from goldenmatch.core.survivorship.conditions import build_resolution_order
 from goldenmatch.core.survivorship.resolve import resolve_cluster
 from goldenmatch.core.survivorship.winner import group_winner
@@ -106,3 +110,42 @@ def test_resolve_allow_fill_records_filled_row_id():
     assert gp.filled == {"zip": 11}
     assert rec["zip"]["value"] == "90001"
     assert rec["zip"]["source_row_id"] == 11
+
+
+# D2 back-fill NL line --------------------------------------------------------
+
+
+def test_render_group_line_includes_backfill():
+    gp = GroupProvenance(name="mailing_address", columns=["street", "city", "zip"], strategy="most_complete",
+                         winner_row_id=7, winner_source=None, values={}, tie=False, confidence=1.0, filled={"zip": 12})
+    out = render_group_provenance_line(gp)
+    assert "promoted together from record 7" in out
+    assert "mailing_address: zip back-filled from record 12" in out
+
+
+def test_render_group_line_no_fill_unchanged():
+    gp = GroupProvenance(name="addr", columns=["a", "b"], strategy="most_complete",
+                         winner_row_id=7, winner_source=None, values={}, tie=False, confidence=1.0)
+    out = render_group_provenance_line(gp)
+    assert "back-filled" not in out
+
+
+# D3 omit empty filled in serialization ---------------------------------------
+
+
+def _cp_filled(filled):
+    g = GroupProvenance(name="addr", columns=["street", "zip"], strategy="most_complete",
+                        winner_row_id=7, winner_source=None, values={}, tie=False, confidence=1.0, filled=filled)
+    return [ClusterProvenance(cluster_id=5, cluster_quality="strong", cluster_confidence=0.9, fields={}, groups=[g])]
+
+
+def test_filled_omitted_when_empty(tmp_path):
+    path = save_lineage([], tmp_path, "run", golden_provenance=_cp_filled({}))
+    grp = json.loads(path.read_text(encoding="utf-8"))["golden_records"][0]["groups"][0]
+    assert "filled" not in grp
+
+
+def test_filled_present_when_nonempty(tmp_path):
+    path = save_lineage([], tmp_path, "run", golden_provenance=_cp_filled({"zip": 12}))
+    grp = json.loads(path.read_text(encoding="utf-8"))["golden_records"][0]["groups"][0]
+    assert grp["filled"] == {"zip": 12}

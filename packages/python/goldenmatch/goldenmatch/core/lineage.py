@@ -370,10 +370,19 @@ def load_lineage(path: str | Path) -> dict:
 
 
 def render_group_provenance_line(gp) -> str:
-    """One audit line for a lock-step field group. Spec 4.1."""
+    """One audit line for a lock-step field group. Spec 4.1.
+
+    When allow_fill back-filled any columns, appends one line per filled column:
+    "{group_name}: {col} back-filled from record {rid}"
+    """
     cols = ", ".join(gp.columns)
-    return (f"{cols} promoted together from record {gp.winner_row_id} "
+    line = (f"{cols} promoted together from record {gp.winner_row_id} "
             f"via {gp.strategy} (group '{gp.name}')")
+    fills = [
+        f"{gp.name}: {col} back-filled from record {rid}"
+        for col, rid in (getattr(gp, "filled", {}) or {}).items()
+    ]
+    return "\n".join([line, *fills]) if fills else line
 
 
 def render_field_condition_line(field: str, fp) -> str | None:
