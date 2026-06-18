@@ -15,7 +15,6 @@ the clean-data "no findings" path.
 from __future__ import annotations
 
 import polars as pl
-
 from goldenmatch._api import DedupeResult
 from goldenmatch.config.schemas import (
     BlockingConfig,
@@ -26,7 +25,6 @@ from goldenmatch.config.schemas import (
 )
 from goldenmatch.core.autoconfig_verify import PostflightReport
 from goldenmatch.core.config_critique import diagnose_config
-
 
 # ── Builders ────────────────────────────────────────────────────────────────
 
