@@ -332,6 +332,29 @@ When a config uses `field_groups` (or conditional/validated `field_rules`), Gold
 
 For plain configs with no `field_groups` and no conditional `field_rules`, output is byte-identical to prior behavior -- none of these surfaces add anything.
 
+#### anchor strategy and allow_fill
+
+**`strategy: anchor`** selects the winning record by first restricting candidates to those where the named `anchor` column is non-null, then applying `most_complete` within that subset. If no record has the anchor present, the group falls back to plain `most_complete`. Use this when one column (such as a plan or product ID) anchors the rest of the group's fields.
+
+```yaml
+field_groups:
+  - name: plan_block
+    columns: [plan_id, plan_name, plan_tier]
+    strategy: anchor
+    anchor: plan_id
+```
+
+**`allow_fill: true`** relaxes strict lock-step for the winning record's null cells. After the winner is selected, each null cell in the winner is back-filled from the best other record (chosen by the group's strategy) that has a value for that cell. The lineage audit records a `<group>: <col> back-filled from record N` line for every filled cell, and the `filled` map in the group provenance tracks which row supplied each value. Off by default; when off, the winner's nulls are kept as-is.
+
+```yaml
+field_groups:
+  - name: plan_block
+    columns: [plan_id, plan_name, plan_tier]
+    strategy: anchor
+    anchor: plan_id
+    allow_fill: true
+```
+
 ### Conditional and validated field rules
 
 A `field_rules` entry can be a list of clauses instead of a single strategy. The first clause whose `when:` predicate is satisfied wins; the last clause must have no `when:` and acts as the default.
