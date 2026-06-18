@@ -407,6 +407,10 @@ result = floor-merged byte-identical repeat OR dropped-at-extraction singleton).
 One keyed run -- the mechanism is deterministic by design (variants always ADD
 separately; controlled smoke confirmed it independent of the headline F1).
 
+The **cost** side of this finding -- mem0's ~2 LLM calls/record buying a
+strictly-worse-than-free number, against goldenmatch's deterministic ER at 0 calls /
+$0 -- is tabulated in [`../COST.md`](../COST.md).
+
 ## Deferred
 
 - **mem0 LLM ADD/UPDATE merge** -- Phase 3 PROBE DONE (measured net-negative; see the
