@@ -2,6 +2,23 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-06-18 — goldenmatch 2.1.0 released + immutable-releases publish flow
+- Released **goldenmatch 2.1.0** (PR #1060, tag `v2.1.0`). Shipped since v2.0.0:
+  correlated survivorship — lock-step field groups + `anchor`/`allow_fill` (#1047/#1055),
+  GroupProvenance surfaced end-to-end across lineage/explain/MCP/review-queue (#1053),
+  chunked PPRL trusted-third-party linkage (`PPRLConfig.chunk_size`, ~9-14× lower peak
+  memory, #1054), native-dispatch telemetry on the result object (`result.native`,
+  #1048/#957), plus collective ER (0018) and the Sail WCC perf change. The CHANGELOG
+  `[Unreleased]` section was incomplete (2 of 8 entries) and was finalized to `[2.1.0]`.
+- New decision [../decisions/0019-immutable-releases-publish-flow.md](../decisions/0019-immutable-releases-publish-flow.md):
+  `publish-goldenmatch.yml` now owns the GitHub Release lifecycle (push a `v*` tag → build →
+  PyPI → sign+attest → **draft** release with assets attached → publish). Fixes the v2.1.0
+  `Cannot upload asset ... to an immutable release` red. **New SOP: cut a release by pushing
+  the tag only**, documented in `processes/development-workflow.md` + root `CLAUDE.md`.
+  SHIPPED PR #1063.
+- Docs: Mintlify `goldenmatch/pprl.mdx` + `goldenmatch/python-api.mdx` (chunk_size,
+  `result.native`); `configuration.mdx` already covered the survivorship/provenance surfaces.
+
 ## 2026-06-16 — Collective ER via neighborhood similarity (Phase 0+1)
 - New decision [../decisions/0018-collective-er-neighborhood-similarity.md](../decisions/0018-collective-er-neighborhood-similarity.md)
   (linked from the discovery hub).

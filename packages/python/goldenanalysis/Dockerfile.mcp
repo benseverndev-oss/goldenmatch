@@ -1,0 +1,9 @@
+FROM python:3.12-slim@sha256:090ba77e2958f6af52a5341f788b50b032dd4ca28377d2893dcf1ecbdfdfe203
+# cache-bust: v0.2.0 (suite consumption + cross-run trend/regression tools)
+WORKDIR /app
+COPY . .
+RUN pip install --no-cache-dir ".[mcp]"
+
+# A2A port convention: Analysis = 8300 (matches `goldenanalysis mcp-serve` default).
+EXPOSE 8300
+CMD ["goldenanalysis", "mcp-serve", "--transport", "http", "--port", "8300"]
