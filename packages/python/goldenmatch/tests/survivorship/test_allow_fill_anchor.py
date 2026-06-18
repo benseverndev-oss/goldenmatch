@@ -166,7 +166,10 @@ def test_anchor_plus_allow_fill():
 
 
 def test_no_levers_byte_identical():
-    # strict lock-step (no allow_fill, default strategy) pins the winner's null + empty filled
-    rows = _rows([{"a": "x", "b": None}, {"a": "p", "b": "q"}])
-    res = group_winner(rows, ["a", "b"], strategy="most_complete")
-    assert res.values["b"] is None and res.filled == {}
+    # strict lock-step (allow_fill off): the winner is most-complete but still has a
+    # null cell; that null is PINNED, not back-filled from the other row.
+    rows = _rows([{"a": "x", "b": "y", "c": None},    # winner: 2/3 most-complete
+                  {"a": None, "b": None, "c": "z"}])   # has c, but allow_fill is off
+    res = group_winner(rows, ["a", "b", "c"], strategy="most_complete")
+    assert res.winner_pos == 0
+    assert res.values["c"] is None and res.filled == {}
