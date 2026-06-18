@@ -87,3 +87,108 @@ recall. **Gate on a measurement:** `auto+fields` + semantic blocking must clear
 0.602 to count as a headline move. The synonym/brand class will remain walled
 regardless and should be scoped out (or addressed separately via a domain/knowledge
 source). This is a real product change and gets its own spec + plan before any code.
+
+## Semantic blocking shipped (in-product) -- recall lever working (abbreviation +5.3pp)
+
+Semantic blocking is a real, opt-in capability: `dedupe_df(df,
+semantic_blocking=True)` unions three FREE deterministic candidate sources onto
+the normal candidate set, all offline / no key / no faiss (numpy ANN fallback),
+and -- as of the per-source-confirm change -- scores **each source with its OWN
+confirming scorer** instead of the multi-field name scorer:
+
+- **in-house char-ngram ANN** (the `emb-ann` embedder, as a candidate-gen pass)
+  -> kept at its cosine score, gated by `ann_threshold` (default 0.5);
+- **initialism** (acronym block: `IBM` <- `International Business Machines`)
+  -> confirmed by `initialism_match` (1.0 when one name is the other's
+  initialism; raw string similarity is ~0);
+- **refdata alias** (canonicalization on `given_names` / `business` seed tables)
+  -> confirmed by `alias_match` (1.0 when both canonicalize to the same alias).
+
+The union is **additive by construction** -- new pairs are appended before the
+`dedup_pairs_max_score` seam, which keeps the max score per canonical pair, so it
+can never drop an existing pair. The bench exercises it as a new row,
+`goldenmatch(auto+fields+semantic)`, identical to `auto+fields` except for the
+flag (`adapters/goldenmatch_adapter.py`, mode `auto_fields_semantic`).
+
+### Measured: auto+fields vs auto+fields+semantic (206 records, offline)
+
+Measured with the full lever wired -- per-source confirming scorers, noise-tolerant
++ acronym-aware initialism, AND raw-name keying (`GOLDENMATCH_NATIVE=0`, in-house
+embedder, numpy ANN fallback -- reproducible by anyone, no key):
+
+| metric | auto+fields | auto+fields+semantic | delta |
+|---|---|---|---|
+| **overall F1** | 0.602 | **0.612** | **+0.010** |
+| overall P | 0.786 | 0.790 | +0.004 |
+| overall R | 0.488 | 0.500 | +0.012 |
+| **abbreviation F1** | 0.773 | **0.826** | **+0.053** |
+| abbreviation R | 0.630 | 0.704 | **+0.074** |
+| abbreviation P | 1.000 | 1.000 | +0.000 |
+
+All other classes unchanged. The headline moves on the back of abbreviation recall,
+at **zero precision cost** (abbreviation precision stays 1.000; overall `fp` does
+not rise).
+
+### Acceptance verdict vs 0.602
+
+**MET.** `auto+fields+semantic` = **0.612 > 0.602**, a real recall-positive move
+driven by the abbreviation class (+5.3pp F1, +7.4pp recall). A/B confirms it's
+load-bearing: with the semantic sources keyed off the *standardized* (title-cased)
+name the row is byte-identical to `auto+fields` (the old wall); keyed off the *raw*
+name it adds abbreviation pairs the ANN source alone did not catch.
+
+### Precision cost (measured, not pre-guarded)
+
+**Zero, measured.** The approved stance was "measure, don't pre-guard." abbreviation
+precision stays **1.000** and overall `fp` does not rise -- the confirmed initialism
+pairs are true matches on this corpus (no initialism collision materialized). No
+precision guard (block-size cap, secondary signal) is warranted: it would solve a
+problem the data does not show.
+
+### How it was unstuck: four walls, the last was upstream title-casing
+
+Moving the headline took clearing four walls in sequence, each isolated by
+instrumenting `_semantic_blocking_pairs`, the post-`_apply_postflight` pair set,
+and the `build_cluster_frames` call site:
+
+1. **Per-source confirming scorers.** The union first scored its acronym/alias
+   candidates with the multi-field *name* ensemble, which scores `IBM` <->
+   `International Business Machines` ~0. Fixed by scoring each source with its own
+   confirming scorer (`initialism_match` / `alias_match` at 1.0; ANN keeps cosine).
+2. **Noise-tolerant + acronym-aware initialism.** A 1-token acronym (`IBM`) has no
+   multi-word initialism, and real expansions carry suffix/parenthetical noise
+   (`...Corporation (Armonk, NY)`). Fixed in `derive_initialism`: strip
+   parentheticals + legal-form tokens anywhere, and treat a short all-caps token
+   as its own initialism key -- so `IBM` and its noisy expansion both derive `IBM`.
+3. **(superseded theory)** an earlier postflight-threshold guess (0.8 -> 0.895
+   dropping the 0.83-0.89 ANN-cosine band) -- real on an all-sources run, but NOT
+   the blocker once the initialism confirmer returns 1.0 (a 1.0 pair clears any
+   threshold).
+4. **Upstream standardize title-casing (the actual last wall).** auto-config's
+   standardize step title-cases the name *before* semantic blocking runs, so by
+   the time `derive_initialism` sees it, `IBM` is `Ibm` and the all-caps acronym
+   signal is gone -> no block key -> never co-locates with the expansion. **Fixed
+   by keying the semantic-blocking sources off the RAW, pre-standardize name**
+   (captured into an internal `__raw__<col>` before standardize, gated behind
+   `semantic_blocking`, stripped from output; ANN keeps the standardized column).
+   This is the change that moved abbreviation 0.773 -> 0.826.
+
+### What still does NOT move (honest scope)
+
+- **synonym_brand (e.g. `Coumadin`/`warfarin`): walled, F1 0.167.** Bounded by the
+  small `given_names`/`business` alias seed (0 non-singleton alias blocks on these
+  orgs). Same class the embedder sweep found walled for *every* embedder (max
+  ~0.18) -- a knowledge-base problem, not a scorer/embedder one. Extending the seed
+  table or wiring a domain KB is the lever; out of scope here.
+- **cross_lingual: unchanged.** The free in-house char-ngram ANN can't generate
+  cross-lingual candidates (no shared characters); the multilingual gains the
+  embedder sweep showed (0.35 -> 0.91) need a *semantic* embedder -- the documented
+  opt-in upgrade (`ann_model="local:<st-model>"`), not the free offline default.
+- **typo / org_suffix: already F1 1.000** under `auto+fields` -- no recall left.
+
+### Scoped follow-ups (optional, recall side -- precision side needs nothing)
+
+1. **Extend the alias seed / wire a domain KB** to crack synonym_brand.
+2. **Semantic embedder for the ANN source** (free local multilingual model) for the
+   cross-lingual candidates the char-ngram path can't generate -- already a
+   documented opt-in (`ann_model`), just not the offline default.

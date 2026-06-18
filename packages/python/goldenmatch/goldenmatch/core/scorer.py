@@ -98,6 +98,54 @@ def _emit_scoring_profile(
     current_emitter().set_scoring(profile)
 
 
+def _initialism_match_single(val_a: str, val_b: str) -> float:
+    """1.0 if either string is the other's initialism, or their initialisms
+    are equal; else 0.0.
+
+    "IBM" <-> "International Business Machines" matches because
+    ``derive_initialism("International Business Machines") == "IBM" == val_a``.
+    Empty-guarded: a derived ``""`` (single-token / empty input) never
+    matches, so two distinct single-token names ("Apple"/"Apricot") score 0.0.
+    Symmetric. The initialism collision ("IBM" <-> "Indian Banana Market") is
+    a known false positive — it scores 1.0 by design.
+    """
+    from goldenmatch.core.acronym import derive_initialism
+
+    ia = derive_initialism(val_a) or ""
+    ib = derive_initialism(val_b) or ""
+    if (
+        (ia and ia == val_b)
+        or (ib and val_a == ib)
+        or (ia and ib and ia == ib)
+    ):
+        return 1.0
+    return 0.0
+
+
+def _alias_match_single(val_a: str, val_b: str) -> float:
+    """1.0 if both values canonicalize to the same NON-EMPTY business alias
+    OR the same given-name canonical; else 0.0.
+
+    "Acme Inc" <-> "Acme Incorporated" both map to the business canonical
+    "acme"; "Bob" <-> "Robert" both map to the given-name canonical "robert".
+    Empty-guarded: an empty canonical never matches (both ``""`` -> 0.0).
+    Note canonicalization is an idempotent passthrough for OOV names, so two
+    *different* OOV names ("Acme"/"Globex") yield different canonicals -> 0.0.
+    """
+    from goldenmatch.refdata.business_aliases import canonical_company_form
+    from goldenmatch.refdata.given_names import canonical_form
+
+    cb_a = canonical_company_form(val_a) or ""
+    cb_b = canonical_company_form(val_b) or ""
+    if cb_a and cb_a == cb_b:
+        return 1.0
+    cg_a = canonical_form(val_a) or ""
+    cg_b = canonical_form(val_b) or ""
+    if cg_a and cg_a == cg_b:
+        return 1.0
+    return 0.0
+
+
 def score_field(val_a: str | None, val_b: str | None, scorer: str) -> float | None:
     """Score two field values using the specified scorer.
 
@@ -135,6 +183,10 @@ def score_field(val_a: str | None, val_b: str | None, scorer: str) -> float | No
         except Exception:
             sx = 0.0
         return max(jw, ts, sx)
+    elif scorer == "initialism_match":
+        return _initialism_match_single(val_a, val_b)
+    elif scorer == "alias_match":
+        return _alias_match_single(val_a, val_b)
     elif scorer == "dice":
         return _dice_score_single(val_a, val_b)
     elif scorer == "jaccard":
@@ -485,6 +537,10 @@ def _fuzzy_score_matrix(
             matrix = np.asarray(cdist(clean, clean, scorer=Levenshtein.normalized_similarity), dtype=np.float32)
         else:
             matrix = np.asarray(cdist(clean, clean, scorer=token_sort_ratio), dtype=np.float32) / 100.0
+    elif scorer_name == "initialism_match":
+        return _initialism_score_matrix(values)
+    elif scorer_name == "alias_match":
+        return _alias_score_matrix(values)
     elif scorer_name == "dice":
         return _dice_score_matrix(values)
     elif scorer_name == "jaccard":
@@ -583,6 +639,54 @@ def _soundex_score_matrix(values: list) -> np.ndarray:
         return m
     codes = [jellyfish.soundex(v) if v is not None else None for v in values]
     return _exact_score_matrix(codes)
+
+
+def _initialism_score_matrix(values: list) -> np.ndarray:
+    """NxN initialism-match matrix (no native kernel).
+
+    The match is a CROSS comparison of raw-string vs derived-initialism, not a
+    single canonical key per row, so this can't reduce to a hash-group like
+    ``_soundex_score_matrix``. Blocks reaching this path are small, so a direct
+    double-loop over the pairwise scorer is the safest correct impl — and it is
+    parity-checked against the pairwise ``score_field`` in
+    ``tests/test_semantic_scorers.py``.
+    """
+    n = len(values)
+    scores = np.zeros((n, n))
+    for i in range(n):
+        vi = values[i]
+        if vi is None:
+            continue
+        for j in range(i, n):
+            vj = values[j]
+            if vj is None:
+                continue
+            s = _initialism_match_single(vi, vj)
+            scores[i, j] = scores[j, i] = s
+    return scores
+
+
+def _alias_score_matrix(values: list) -> np.ndarray:
+    """NxN alias-match matrix (no native kernel).
+
+    Each row HAS a single canonical key per alias space, so this groups like
+    ``_soundex_score_matrix``: a pair matches iff it shares a NON-EMPTY
+    business canonical OR a non-empty given-name canonical. Two independent
+    hash-groupings (one per space) unioned together reproduce the pairwise
+    OR — and stay byte-identical to the pairwise ``score_field`` (parity-
+    checked in ``tests/test_semantic_scorers.py``).
+    """
+    from goldenmatch.refdata.business_aliases import canonical_company_form
+    from goldenmatch.refdata.given_names import canonical_form
+
+    # Empty canonicals are dropped (never group) so the empty guard holds.
+    biz = [
+        (canonical_company_form(v) or "") if v is not None else "" for v in values
+    ]
+    given = [(canonical_form(v) or "") if v is not None else "" for v in values]
+    scores = _exact_score_matrix([k or None for k in biz])
+    given_scores = _exact_score_matrix([k or None for k in given])
+    return np.maximum(scores, given_scores)
 
 
 # ---------------------------------------------------------------------------
@@ -847,10 +951,18 @@ def find_fuzzy_matches(
 
     row_ids = block_df["__row_id__"].to_list()
 
-    # Separate exact (cheap), record_embedding, and fuzzy (expensive) fields
-    exact_fields = [f for f in mk.fields if f.scorer == "exact" or f.scorer == "soundex_match"]
+    # Separate exact (cheap), record_embedding, and fuzzy (expensive) fields.
+    # initialism_match / alias_match are equality-style (1.0/0.0) scorers with
+    # no NxN compute cost beyond a key derivation, so they ride the cheap path
+    # alongside exact/soundex (and are excluded from the fuzzy partition for
+    # the early-termination short-circuit).
+    _EQUALITY_SCORERS = ("exact", "soundex_match", "initialism_match", "alias_match")
+    exact_fields = [f for f in mk.fields if f.scorer in _EQUALITY_SCORERS]
     record_emb_fields = [f for f in mk.fields if f.scorer == "record_embedding"]
-    fuzzy_fields = [f for f in mk.fields if f.scorer not in ("exact", "soundex_match", "record_embedding")]
+    fuzzy_fields = [
+        f for f in mk.fields
+        if f.scorer not in _EQUALITY_SCORERS and f.scorer != "record_embedding"
+    ]
 
     # All scoring-path MatchkeyFields are upstream-validated to have weight set;
     # narrow with cast helper so the schema-level Optional doesn't poison every
@@ -887,8 +999,12 @@ def find_fuzzy_matches(
 
         if f.scorer == "exact":
             scores = _exact_score_matrix(values)
-        else:  # soundex_match
+        elif f.scorer == "soundex_match":
             scores = _soundex_score_matrix(values)
+        elif f.scorer == "initialism_match":
+            scores = _initialism_score_matrix(values)
+        else:  # alias_match
+            scores = _alias_score_matrix(values)
 
         cheap_numerator += scores * _w(f) * valid
         cheap_denominator += _w(f) * valid

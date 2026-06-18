@@ -39,6 +39,11 @@ _MODES = {
         "goldenmatch(auto+fields)",
         "zero-config dedupe_df(name+type+context) -- auto-config, multi-field",
     ),
+    "auto_fields_semantic": (
+        "goldenmatch(auto+fields+semantic)",
+        "zero-config dedupe_df(name+type+context) + semantic blocking "
+        "(in-house ANN + initialism + alias) -- additive candidate union, no key",
+    ),
     "auto_llm": (
         "goldenmatch(auto+llm)",
         "zero-config dedupe_df(name+type+context) + llm_scorer -- needs OPENAI_API_KEY",
@@ -62,13 +67,21 @@ class GoldenMatchAdapter:
         # Resolve the full set in index order so __row_id__ == record index.
         ordered = sorted(records, key=lambda r: r.index)
         data: dict[str, list[str]] = {"name": [r.mention for r in ordered]}
-        if self.mode in ("auto_fields", "auto_llm"):
+        if self.mode in ("auto_fields", "auto_fields_semantic", "auto_llm"):
             data["entity_type"] = [r.entity_type for r in ordered]
             data["context"] = [r.context for r in ordered]
         df = pl.DataFrame(data)
 
         # Zero-config: no exact/fuzzy kwargs -> dedupe_df calls auto_configure_df.
-        kwargs = {"llm_scorer": True} if self.mode == "auto_llm" else {}
+        # auto_fields_semantic is identical to auto_fields except it turns on the
+        # opt-in semantic-blocking candidate union (in-house char-ngram ANN +
+        # initialism + refdata alias); deterministic, offline, no key, no faiss
+        # (numpy fallback).
+        kwargs: dict[str, object] = {}
+        if self.mode == "auto_llm":
+            kwargs["llm_scorer"] = True
+        elif self.mode == "auto_fields_semantic":
+            kwargs["semantic_blocking"] = True
         result = gm.dedupe_df(df, **kwargs)
 
         return [

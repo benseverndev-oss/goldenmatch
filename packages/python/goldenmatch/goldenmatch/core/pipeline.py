@@ -869,6 +869,236 @@ def _prep_cache_clear() -> None:  # pyright: ignore[reportUnusedFunction]
     _PREP_CACHE_LRU.clear()
 
 
+# ── Semantic blocking (recall-lever) candidate-source union ──────────────────
+# When ``config.semantic_blocking`` is set, three additional candidate sources
+# are unioned onto the normal candidate set:
+#   - acronym  -> a multi_pass block on the ``initialism`` transform
+#   - alias    -> multi_pass blocks on the refdata canonicalization transforms
+#                 (refdata_given_name_canonical / refdata_business_canonical)
+#   - ann      -> embedding nearest-neighbor pairs via the ``ann_pairs`` strategy
+# The acronym/alias blocks are scored with the SAME block scorer the main fuzzy
+# loop uses; the ANN strategy returns pre-scored (a, b, cosine) pairs directly.
+# All sources are appended to ``all_pairs`` BEFORE the ``dedup_pairs_max_score``
+# seam, which canonicalizes (min, max) and keeps the max score -> purely
+# additive (never drops an existing pair). Gated entirely behind
+# ``config.semantic_blocking``; None (the default) does nothing.
+_SEMANTIC_ALIAS_TRANSFORMS: dict[str, str] = {
+    "given_names": "refdata_given_name_canonical",
+    "business": "refdata_business_canonical",
+}
+
+# Internal column prefix for the pre-standardize snapshot of the name column the
+# semantic-blocking sources key + score off of (see the capture in
+# ``_run_dedupe_pipeline`` just before standardize). ``__``-prefixed so it never
+# leaks into user-facing golden output.
+_SEMANTIC_RAW_COL_PREFIX = "__raw__"
+
+
+def _semantic_name_column(
+    config: GoldenMatchConfig, matchkeys: list, columns: list[str],
+) -> str | None:
+    """Pick the ``name``-like column the semantic-blocking sources operate on.
+
+    Preference order:
+      1. A weighted/probabilistic matchkey field whose column name looks
+         name-like (``name``/``company``/``business``/``org``/``title``).
+      2. Any weighted/probabilistic matchkey field (first one).
+      3. A blocking field that looks name-like, then the first blocking field.
+      4. The first user (non-``__``) column.
+
+    Returns None only when there is no user column at all.
+    """
+    name_like = ("name", "company", "business", "org", "title")
+
+    def _looks_name_like(col: str) -> bool:
+        low = col.lower()
+        return any(tok in low for tok in name_like)
+
+    # 1 + 2: matchkey fields (these are the columns the user is matching on).
+    mk_fields: list[str] = []
+    for mk in matchkeys:
+        if getattr(mk, "type", None) in ("weighted", "probabilistic"):
+            for f in getattr(mk, "fields", None) or []:
+                col = getattr(f, "field", None)
+                if col and not col.startswith("__") and col in columns:
+                    mk_fields.append(col)
+    for col in mk_fields:
+        if _looks_name_like(col):
+            return col
+    if mk_fields:
+        return mk_fields[0]
+
+    # 3: blocking fields.
+    block_fields: list[str] = []
+    if config.blocking is not None:
+        from goldenmatch.core.blocker import collect_blocking_fields
+        block_fields = [
+            c for c in collect_blocking_fields(config.blocking)
+            if not c.startswith("__") and c in columns
+        ]
+    for col in block_fields:
+        if _looks_name_like(col):
+            return col
+    if block_fields:
+        return block_fields[0]
+
+    # 4: first user column.
+    user_cols = [c for c in columns if not c.startswith("__")]
+    return user_cols[0] if user_cols else None
+
+
+def _semantic_blocking_pairs(
+    config: GoldenMatchConfig,
+    combined_lf: pl.LazyFrame,
+    collected_df: pl.DataFrame,
+    matchkeys: list,
+    matched_pairs: set[tuple[int, int]],
+    across_files_only: bool,
+    source_lookup: dict[int, str] | None,
+) -> list[tuple[int, int, float]]:
+    """Build + score the three semantic-blocking candidate sources.
+
+    Returns the union of ``(a, b, score)`` pairs to extend ``all_pairs`` with.
+
+    Each source is scored by its OWN CONFIRMING scorer, so a confirmed pair
+    comes out at score 1.0 and merges at clustering regardless of how low its
+    string similarity is:
+
+    - acronym/initialism candidates -> ``initialism_match`` (1.0 when one name
+      is the other's initialism, e.g. ``IBM`` <-> ``International Business
+      Machines``; raw string similarity is ~0).
+    - alias candidates -> ``alias_match`` (1.0 when both canonicalize to the
+      same business/given-name alias, e.g. ``Acme Inc`` <-> ``Acme
+      Incorporated``).
+    - ANN candidates -> cosine, kept as the pre-scored value the index emits
+      (gated by ``sb.ann_threshold`` so sub-threshold neighbors don't union in
+      a low-score pair that over-merges at clustering).
+
+    Reuses the pipeline's existing block scorer (``_get_block_scorer``). For
+    each acronym/alias source we synthesize a single-field weighted matchkey on
+    the name column whose field scorer IS the confirming scorer, at a 0.5
+    threshold so a 1.0 confirmed pair is emitted (and a 0.0 non-confirmation is
+    dropped). Best-effort per source: a failing source logs + is skipped
+    (semantic blocking is purely additive, so a missing source only loses
+    recall, never correctness).
+    """
+    sb = config.semantic_blocking
+    if sb is None:
+        return []
+
+    from goldenmatch.config.schemas import (
+        BlockingConfig,
+        BlockingKeyConfig,
+        MatchkeyConfig,
+        MatchkeyField,
+    )
+    from goldenmatch.core.blocker import build_blocks
+
+    name_col = _semantic_name_column(config, matchkeys, list(collected_df.columns))
+    if name_col is None:
+        logger.warning("semantic_blocking: no usable name column found; skipping")
+        return []
+
+    # The initialism/alias sources must key + score off the RAW (pre-standardize)
+    # name so an all-caps acronym ("IBM") survives the `name_proper` title-casing
+    # (which would otherwise leave "Ibm", killing `derive_initialism`'s
+    # acronym-as-own-key step). `_run_dedupe_pipeline` snapshots it into
+    # `__raw__<name_col>` before standardize; fall back to `name_col` if absent
+    # (e.g. no standardization configured, or an upstream path that didn't
+    # capture it) -- the fall back is the prior behavior, never worse.
+    key_name_col = f"{_SEMANTIC_RAW_COL_PREFIX}{name_col}"
+    if key_name_col not in collected_df.columns:
+        key_name_col = name_col
+
+    out: list[tuple[int, int, float]] = []
+    block_scorer = _get_block_scorer(config)
+
+    def _confirming_mk(name: str, scorer: str, field_col: str) -> MatchkeyConfig:
+        # Single-field weighted matchkey on the given name column whose ONLY
+        # field uses the confirming scorer. threshold=0.5 emits a confirmed
+        # (1.0) pair and drops a non-confirmation (0.0); <=1.0 is required so
+        # the confirmed pair is emitted at all.
+        return MatchkeyConfig(
+            name=name,
+            type="weighted",
+            fields=[MatchkeyField(field=field_col, scorer=scorer, weight=1.0)],
+            threshold=0.5,
+        )
+
+    def _score_source(passes: list[BlockingKeyConfig], mk: MatchkeyConfig, label: str) -> None:
+        if not passes:
+            return
+        try:
+            cfg = BlockingConfig(strategy="multi_pass", passes=passes)
+            blocks = build_blocks(combined_lf, cfg)
+            out.extend(
+                block_scorer(
+                    blocks, mk, matched_pairs,
+                    across_files_only=across_files_only,
+                    source_lookup=source_lookup if across_files_only else None,
+                )
+            )
+        except Exception:
+            logger.warning(
+                "semantic_blocking %s source failed; skipping", label, exc_info=True,
+            )
+
+    # ── acronym/initialism: scored by initialism_match (off the RAW name) ──
+    if "initialism" in sb.keys:
+        _score_source(
+            [BlockingKeyConfig(fields=[key_name_col], transforms=["initialism"])],
+            _confirming_mk("__sem_initialism", "initialism_match", key_name_col),
+            "initialism",
+        )
+
+    # ── alias: scored by alias_match (off the RAW name; one pass per table) ──
+    if "alias" in sb.keys:
+        alias_passes = [
+            BlockingKeyConfig(fields=[key_name_col], transforms=[transform])
+            for table in sb.alias_tables
+            if (transform := _SEMANTIC_ALIAS_TRANSFORMS.get(table)) is not None
+        ]
+        _score_source(
+            alias_passes,
+            _confirming_mk("__sem_alias", "alias_match", key_name_col),
+            "alias",
+        )
+
+    # ── ann: direct-pair ANN blocking returns pre-scored (a, b, cosine) pairs ──
+    # Kept as cosine; gated by sb.ann_threshold so a low-similarity neighbor
+    # doesn't union in a sub-threshold pair that over-merges at clustering.
+    if "ann" in sb.keys:
+        try:
+            ann_config = BlockingConfig(
+                strategy="ann_pairs",
+                ann_column=name_col,
+                ann_model=sb.ann_model,
+                ann_top_k=sb.ann_top_k,
+            )
+            ann_blocks = build_blocks(combined_lf, ann_config)
+            for blk in ann_blocks:
+                for a, b, s in blk.pre_scored_pairs or []:
+                    if s < sb.ann_threshold:
+                        continue
+                    if (
+                        across_files_only
+                        and source_lookup is not None
+                        and source_lookup.get(a) == source_lookup.get(b)
+                    ):
+                        continue
+                    out.append((a, b, s))
+        except Exception:
+            logger.warning(
+                "semantic_blocking ann source failed; skipping", exc_info=True,
+            )
+
+    logger.info(
+        "semantic_blocking: unioned %d candidate pairs on column %r",
+        len(out), name_col,
+    )
+    return out
+
+
 def _run_dedupe_pipeline(
     combined_lf: pl.LazyFrame,
     config: GoldenMatchConfig,
@@ -1087,6 +1317,24 @@ def _run_dedupe_pipeline(
             return lf
         with stage(f"prep_force_collect_{label}"):
             return lf.collect().lazy()
+
+    # ── Semantic-blocking raw-name capture (recall lever) ──
+    # The semantic-blocking sources (initialism / alias) derive their block keys
+    # and confirming scores from the name column. Standardize (below) title-cases
+    # that column (`name_proper` -> "IBM" becomes "Ibm"), which destroys the
+    # all-caps acronym signal `derive_initialism` keys off of. Snapshot the RAW
+    # (pre-standardize) name value into an internal `__raw__<col>` column so
+    # `_semantic_blocking_pairs` can key + score off the un-standardized text.
+    # Gated entirely behind `config.semantic_blocking`; byte-identical when None.
+    if config.semantic_blocking is not None:
+        _sem_name_col = _semantic_name_column(
+            config, matchkeys, list(combined_lf.collect_schema().names()),
+        )
+        if _sem_name_col is not None:
+            _raw_col = f"{_SEMANTIC_RAW_COL_PREFIX}{_sem_name_col}"
+            combined_lf = combined_lf.with_columns(
+                pl.col(_sem_name_col).alias(_raw_col)
+            )
 
     if config.standardization and config.standardization.rules:
         with stage("standardize"):
@@ -1574,6 +1822,28 @@ def _run_dedupe_pipeline(
         _dump_bench_pairs(
             _bench_dump_dir, _bench_candidate_pairs, _bench_emitted_pairs
         )
+
+    # ── Step 3.2b: SEMANTIC BLOCKING (recall-lever, opt-in) ──
+    # Union three additional candidate sources (acronym/initialism, alias,
+    # ANN nearest-neighbor) onto the candidate set, scored by the SAME block
+    # scorer the fuzzy loop uses. Purely additive (dedup_pairs_max_score keeps
+    # the max score per canonical pair). Gated entirely behind
+    # config.semantic_blocking; None (the default) does nothing -> byte-identical.
+    if config.semantic_blocking is not None:
+        if _use_columnar:
+            # The columnar fast-path consumes the pair stream as a DataFrame
+            # (_columnar_pairs_df) and never touches all_pairs, so a union into
+            # all_pairs would silently no-op. Refuse rather than drop candidates.
+            raise NotImplementedError(
+                "semantic_blocking is incompatible with COLUMNAR_PIPELINE"
+            )
+        with stage("semantic_blocking"):
+            _semantic_pairs = _semantic_blocking_pairs(
+                config, combined_lf, collected_df, matchkeys,
+                matched_pairs, across_files_only,
+                source_lookup if across_files_only else None,
+            )
+        all_pairs.extend(_semantic_pairs)
 
     # ── Step 3.3: CROSS-ENCODER RERANKING (optional) ──
     for mk in matchkeys:

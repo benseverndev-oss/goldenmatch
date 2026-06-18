@@ -1,0 +1,14 @@
+{
+  "_comment": "SEED business alias table. Maps a canonical company key (lowercase, legal-form-stripped) to its known brand/synonym surface variants. NOT a comprehensive KB -- a starter set so canonical-form blocking can land synonym/brand variants in the same candidate set. Keys and values are lowercase; legal-form suffixes (Inc, LLC, Corp, ...) are stripped at lookup time via business.strip_legal_form, so they need not be enumerated here. Extend per deployment.",
+  "aliases": {
+    "acme": ["acme inc", "acme incorporated", "acme corp", "acme corporation", "acme co"],
+    "alphabet": ["google", "google llc", "alphabet inc"],
+    "meta": ["facebook", "meta platforms", "facebook inc"],
+    "international business machines": ["ibm", "ibm corp", "big blue"],
+    "kentucky fried chicken": ["kfc", "kfc corporation"],
+    "minnesota mining and manufacturing": ["3m", "3m company"],
+    "federal express": ["fedex", "fedex corporation"],
+    "general electric": ["ge", "ge company"],
+    "philip morris international": ["pmi", "philip morris"]
+  }
+}
