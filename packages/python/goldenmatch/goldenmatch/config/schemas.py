@@ -451,7 +451,7 @@ class GoldenFieldRule(BaseModel):
         return self
 
 
-_GROUP_STRATEGIES = frozenset({"most_complete", "source_priority", "most_recent"})
+_GROUP_STRATEGIES = frozenset({"most_complete", "source_priority", "most_recent", "anchor"})
 
 
 class GoldenGroupRule(BaseModel):
@@ -461,6 +461,8 @@ class GoldenGroupRule(BaseModel):
     strategy: str = "most_complete"
     date_column: str | None = None
     source_priority: list[str] | None = None
+    anchor: str | None = None
+    allow_fill: bool = False
 
     @model_validator(mode="after")
     def _validate_group(self) -> GoldenGroupRule:
@@ -479,6 +481,16 @@ class GoldenGroupRule(BaseModel):
             raise ValueError(f"Group '{self.name}' strategy 'most_recent' requires 'date_column'.")
         if self.strategy == "source_priority" and not self.source_priority:
             raise ValueError(f"Group '{self.name}' strategy 'source_priority' requires 'source_priority'.")
+        if self.strategy == "anchor":
+            if not self.anchor:
+                raise ValueError(f"Group '{self.name}' strategy 'anchor' requires 'anchor'.")
+            if self.anchor not in self.columns:
+                raise ValueError(f"Group '{self.name}' anchor '{self.anchor}' must be one of its columns.")
+        elif self.anchor is not None:
+            raise ValueError(
+                f"Group '{self.name}' sets 'anchor' but strategy is '{self.strategy}' "
+                "(anchor only valid with strategy 'anchor')."
+            )
         return self
 
 
