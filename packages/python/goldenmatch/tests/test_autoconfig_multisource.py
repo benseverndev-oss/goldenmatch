@@ -275,3 +275,64 @@ def test_overlap_default_partition_is_dunder_source():
     assert _check_source_overlap(df, "rid") == 0.0          # disjoint
     # absent partition -> 1.0 (fail-open)
     assert _check_source_overlap(pl.DataFrame({"rid": ["1"]}), "rid") == 1.0
+
+
+# ── Shared-attribute demotion (company / job_title over-merge driver) ─────────
+
+def test_is_person_name_column():
+    # Real person-name fields -> positive identity feature.
+    for c in ("first_name", "last_name", "surname", "given_name", "maiden_name",
+              "full_name", "nickname", "fname", "lname", "contact_name"):
+        assert ac._is_person_name_column(c), c
+    # Shared workplace / categorical attributes -> NOT a person name.
+    for c in ("company", "job_title", "employer", "department", "organization",
+              "role", "industry", "company_name"):  # org check beats "name"
+        assert not ac._is_person_name_column(c), c
+
+
+def _weighted_fields(mks):
+    return [f.field for mk in mks if mk.type == "weighted" for f in (mk.fields or [])]
+
+
+def test_multisource_demotes_low_card_shared_attributes():
+    """#858 root cause: company + job_title are profiled as col_type='name' and
+    admitted as full-weight weighted-matchkey fields, collapsing distinct people
+    who share an employer / title. Under multi_source they must be demoted to
+    blocking-only; single-source keeps the legacy behavior byte-identical."""
+    df = pl.DataFrame({
+        "source": ["hubspot", "salesforce"] * 10,
+        "crm_id": [f"id{i}" for i in range(20)],
+        "first_name": [f"First{i}" for i in range(20)],
+        "last_name": [f"Last{i}" for i in range(20)],
+        "company": ["Lighthouse Imaging LLC", "Brightline Therapeutics Inc",
+                    "Vertex Oncology Group", "Acme Co"] * 5,
+        "job_title": ["Principal Scientist", "Chief Medical Officer"] * 10,
+    })
+    profs = profile_columns(df)
+    by = {p.name: p for p in profs}
+    # Precondition: the profiler classifies these as low-cardinality "name".
+    assert by["company"].col_type == "name" and by["company"].cardinality_ratio < 0.5
+    assert by["job_title"].col_type == "name" and by["job_title"].cardinality_ratio < 0.5
+
+    ms = _weighted_fields(build_matchkeys(profs, df, multi_source=True))
+    ss = _weighted_fields(build_matchkeys(profs, df, multi_source=False))
+
+    # multi-source: shared attributes demoted, real person names kept.
+    assert "company" not in ms and "job_title" not in ms
+    assert "first_name" in ms and "last_name" in ms
+    # single-source: unchanged legacy behavior (both still admitted).
+    assert "company" in ss and "job_title" in ss
+
+
+def test_multisource_keeps_high_card_name_field():
+    """A high-cardinality name-typed field (e.g. a real surname column) is NOT
+    demoted even under multi_source -- only low-card shared attributes are."""
+    df = pl.DataFrame({
+        "source": ["a", "b"] * 10,
+        "rid": [f"r{i}" for i in range(20)],
+        "first_name": [f"First{i}" for i in range(20)],   # card 1.0
+        "last_name": [f"Last{i}" for i in range(20)],      # card 1.0
+    })
+    profs = profile_columns(df)
+    ms = _weighted_fields(build_matchkeys(profs, df, multi_source=True))
+    assert "first_name" in ms and "last_name" in ms
