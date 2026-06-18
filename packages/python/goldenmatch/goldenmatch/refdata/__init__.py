@@ -56,6 +56,7 @@ Provenance + license for every bundled dataset:
 """
 from __future__ import annotations
 
+from goldenmatch.core.acronym import register_transforms as _register_acronym_transforms
 from goldenmatch.refdata.addresses import is_available as addresses_available
 from goldenmatch.refdata.addresses import (
     known_tokens as address_tokens,
@@ -91,6 +92,7 @@ register_scorers()
 _register_business_transforms()
 _register_address_transforms()
 _register_industry_transforms()
+_register_acronym_transforms()
 
 __all__ = [
     "address_tokens",
