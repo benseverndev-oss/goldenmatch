@@ -1029,3 +1029,218 @@ def test_d1_mixed_units_multi_cluster_mean():
         },
     )
     assert_parity(df, rules)
+
+
+# --------------------------------------------------------------------------
+# E1: CONDITIONAL field resolution (list-form `when:` rules)
+#
+# A conditional field's field_rules entry is a LIST of GoldenFieldRule clauses;
+# each clause has an optional `when:` predicate + strategy (+ optional
+# `validate:`); the last clause is the when-less default. The chosen clause is
+# the first whose predicate holds (over already-resolved group/scalar/earlier-
+# conditional WINNERS), else the default. assert_parity checks value AND
+# __golden_confidence__ (the mean now spans groups + scalars + conditionals).
+# --------------------------------------------------------------------------
+
+
+def test_e1_conditional_when_state_picks_clause():
+    # phone strategy is state-conditional: when state == "NY" use first_non_null,
+    # else most_recent. cluster 1 (NY) -> first_non_null picks lowest-row_id phone;
+    # cluster 2 (CA) -> most_recent picks the latest-date phone.
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1, 2, 2],
+        "__row_id__": [10, 11, 20, 21],
+        "state": ["NY", "NY", "CA", "CA"],
+        "phone": ["111", "222", "333", "444"],
+        "updated": [date(2020, 1, 1), date(2023, 1, 1),
+                    date(2021, 1, 1), date(2024, 1, 1)],
+    })
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={
+            "phone": [
+                GoldenFieldRule(strategy="first_non_null", when="state == 'NY'"),
+                GoldenFieldRule(strategy="most_recent", date_column="updated"),
+            ],
+        },
+        # state + updated are plain scalars (default_strategy).
+    )
+    assert_parity(df, rules)
+
+
+def test_e1_conditional_when_reads_group_member():
+    # The `when:` predicate reads a GROUP MEMBER column (city), so the
+    # conditional unit (phone) depends on the addr group in the toposort.
+    # cluster 1: group winner city == "NY" -> first_non_null phone.
+    # cluster 2: group winner city == "SF" -> source_priority phone.
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1, 2, 2],
+        "__row_id__": [10, 11, 20, 21],
+        "__source__": ["web", "crm", "erp", "crm"],
+        "street": ["1 A St", "2 B Ave", "3 C Rd", "4 D Ln"],
+        "city": ["NY", None, "SF", None],   # group winner: cluster1 NY, cluster2 SF
+        "phone": ["111", "222", "333", "444"],
+    })
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_groups=[GoldenGroupRule(name="addr", strategy="most_complete",
+                                      columns=["street", "city"])],
+        field_rules={
+            "phone": [
+                GoldenFieldRule(strategy="first_non_null", when="city == 'NY'"),
+                GoldenFieldRule(strategy="source_priority",
+                                source_priority=["crm", "erp", "web"]),
+            ],
+        },
+    )
+    assert_parity(df, rules)
+
+
+def test_e1_conditional_when_reads_resolved_scalar():
+    # The `when:` predicate reads a resolved SCALAR winner (kind). kind resolves
+    # FIRST (most_complete) -> "premium" / "basic"; phone's clause depends on it.
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1, 2, 2],
+        "__row_id__": [10, 11, 20, 21],
+        "kind": ["premium", "premium", "basic", "basic"],
+        "phone": ["111", "222", "333", "444"],
+        "updated": [date(2020, 1, 1), date(2023, 1, 1),
+                    date(2021, 1, 1), date(2024, 1, 1)],
+    })
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={
+            "phone": [
+                GoldenFieldRule(strategy="most_recent", date_column="updated",
+                                when="kind == 'premium'"),
+                GoldenFieldRule(strategy="first_non_null"),
+            ],
+        },
+    )
+    assert_parity(df, rules)
+
+
+def test_e1_conditional_clause_with_validate():
+    # The chosen clause carries `validate:`. cluster 1 (corp) uses an
+    # email_validate + most_complete clause: the longest INVALID email is masked
+    # so the longest VALID one wins. cluster 2 (other) falls to the default
+    # first_non_null clause (no validate).
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1, 1, 2, 2],
+        "__row_id__": [10, 11, 12, 20, 21],
+        "kind": ["corp", "corp", "corp", "other", "other"],
+        "email": ["a@x.io", "not-an-email-but-very-long", "alice@example.com",
+                  "first@x.com", "second@x.com"],
+    })
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={
+            "email": [
+                GoldenFieldRule(strategy="most_complete", validate="email_validate",
+                                when="kind == 'corp'"),
+                GoldenFieldRule(strategy="first_non_null"),
+            ],
+        },
+    )
+    assert_parity(df, rules)
+
+
+def test_e1_conditional_default_clause_fallback():
+    # No predicate matches (state is neither NY nor CA) -> the when-less default
+    # clause (most_complete) fires.
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1, 2, 2],
+        "__row_id__": [10, 11, 20, 21],
+        "state": ["TX", "TX", "WA", "WA"],
+        "name": ["Bob", "Robert Smith", "Al", "Alexander"],
+    })
+    rules = GoldenRulesConfig(
+        default_strategy="first_non_null",
+        field_rules={
+            "name": [
+                GoldenFieldRule(strategy="first_non_null", when="state == 'NY'"),
+                GoldenFieldRule(strategy="source_priority",
+                                source_priority=["crm"], when="state == 'CA'"),
+                GoldenFieldRule(strategy="most_complete"),
+            ],
+        },
+    )
+    assert_parity(df, rules)
+
+
+def test_e1_conditional_when_miss_absent_field_falls_through():
+    # The `when:` references a column NOT in the frame -> eval_predicate _Miss ->
+    # False -> the clause does not fire -> default clause fires. Proves the native
+    # path mirrors the slow path's miss semantics via the SAME eval_predicate.
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1],
+        "__row_id__": [10, 11],
+        "phone": ["111", "222"],
+        "updated": [date(2020, 1, 1), date(2024, 1, 1)],
+    })
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={
+            "phone": [
+                GoldenFieldRule(strategy="first_non_null", when="region == 'east'"),
+                GoldenFieldRule(strategy="most_recent", date_column="updated"),
+            ],
+        },
+    )
+    assert_parity(df, rules)
+
+
+def test_e1_conditional_chain_reads_earlier_conditional():
+    # A conditional (b) whose `when:` reads ANOTHER conditional's resolved winner
+    # (a). Toposort must resolve a before b. a is state-conditional; b keys off a.
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1, 2, 2],
+        "__row_id__": [10, 11, 20, 21],
+        "state": ["NY", "NY", "CA", "CA"],
+        "a": ["AX", "AY", "AZ", "AW"],
+        "b": ["B1", "B2", "B3", "B4"],
+    })
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={
+            "a": [
+                GoldenFieldRule(strategy="first_non_null", when="state == 'NY'"),
+                GoldenFieldRule(strategy="most_complete"),
+            ],
+            "b": [
+                GoldenFieldRule(strategy="first_non_null", when="a == 'AX'"),
+                GoldenFieldRule(strategy="most_complete"),
+            ],
+        },
+    )
+    assert_parity(df, rules)
+
+
+def test_e1_conditional_mixed_with_groups_and_scalars():
+    # Full E1 surface: a group + a plain scalar + a conditional field, multiple
+    # clusters, exercising the mean denominator (group + scalar + conditional
+    # = 3 units) alongside the conditional value/confidence.
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1, 2, 2, 2],
+        "__row_id__": [10, 11, 20, 21, 22],
+        "__source__": ["crm", "web", "web", "crm", "erp"],
+        "street": ["1 A St", "2 B Ave", None, "3 C Rd", "3 C Rd Longer"],
+        "city": ["NY", None, "SF", "SF", None],
+        "name": ["Bob", "Robert Smith", "Al", None, "Alex"],     # most_complete
+        "phone": ["111", "222", "333", "444", "555"],             # conditional
+    })
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_groups=[GoldenGroupRule(name="addr", strategy="most_complete",
+                                      columns=["street", "city"])],
+        field_rules={
+            "name": GoldenFieldRule(strategy="most_complete"),
+            "phone": [
+                GoldenFieldRule(strategy="source_priority",
+                                source_priority=["crm", "erp", "web"],
+                                when="city == 'NY'"),
+                GoldenFieldRule(strategy="first_non_null"),
+            ],
+        },
+    )
+    assert_parity(df, rules)

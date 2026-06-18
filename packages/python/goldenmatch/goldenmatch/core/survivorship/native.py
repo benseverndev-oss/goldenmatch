@@ -8,6 +8,7 @@ from __future__ import annotations
 import polars as pl
 
 from goldenmatch.core.golden import _is_internal, _stable_value_expr
+from goldenmatch.core.survivorship.conditions import select_conditional_strategy
 from goldenmatch.core.survivorship.validate import goldenflow_filter
 
 
@@ -245,14 +246,15 @@ def _scalar_resolution_rule(col, rules, default_rule):
 
     Mirrors ``resolve_cluster``: ``rules.field_rules.get(col, default_rule)``,
     then (for a non-conditional, non-list rule) the rule itself. List-form
-    ``when:`` conditionals are Phase E and rejected here so a misconfigured
-    Phase C call fails legibly rather than silently mis-resolving.
+    ``when:`` conditionals are routed to the conditional path
+    (:func:`_resolve_conditionals`) BEFORE this is called, so a list reaching
+    here is a routing bug -- fail legibly rather than silently mis-resolve.
     """
     rule_entry = rules.field_rules.get(col, default_rule)
     if isinstance(rule_entry, list):
         raise NotImplementedError(
             f"survivorship scalar {col!r}: list-form conditional field_rules "
-            "(when:) are Phase E, not handled by the native path"
+            "(when:) must be routed to the conditional path, not the scalar path"
         )
     return rule_entry
 
@@ -517,20 +519,140 @@ def _resolve_scalars(multi_df: pl.DataFrame, rules, scalar_cols) -> pl.DataFrame
     )
 
 
+def _conditional_conf_name(col: str) -> str:
+    """Internal per-cluster confidence column name for conditional ``col``
+    (dropped before the final frame; only the row-wise mean survives)."""
+    return f"__conf_cond_{col}__"
+
+
+def _resolve_conditionals(multi_df, rules, resolved_frame, cond_cols, cond_order):
+    """Resolve every list-form ``when:`` conditional column to one value +
+    one confidence per cluster, byte-identical to ``resolve_cluster``'s
+    conditional branch.
+
+    Mirrors the slow path EXACTLY (the oracle):
+
+    * The ``resolved`` dict a predicate reads holds already-RESOLVED WINNERS
+      (group winners + scalar winners + earlier-resolved conditional winners),
+      NOT raw candidate values -- exactly as ``resolve_cluster`` builds
+      ``resolved[col] = v`` per resolution unit. We seed it from
+      ``resolved_frame`` (the vectorized group + scalar winners, one row per
+      cluster) and extend it as each conditional resolves, in ``cond_order``
+      (the :func:`build_resolution_order` toposort restricted to conditionals).
+    * ``select_conditional_strategy(rule_entry, resolved)`` (REUSED VERBATIM from
+      conditions.py; it calls ``eval_predicate``) picks the first ``when:`` clause
+      whose predicate holds, else the when-less default; ``or default_rule`` matches
+      the slow path's ``... or default_rule`` guard.
+    * The chosen clause's ``validate:`` pre-masks candidates via
+      ``goldenflow_filter`` (the SAME validator the slow path filters with),
+      then ``merge_field(values, chosen, sources=, dates=, ...)`` (the SAME
+      function ``resolve_cluster`` calls) returns ``(value, confidence, idx)``.
+      We use the value + confidence; ``idx`` (provenance) is unused on this
+      provenance=False path.
+
+    Returns ``(values_by_cluster, conf_by_cluster)`` -- two dicts keyed by
+    ``__cluster_id__`` mapping to ``{col: value}`` / ``{col: confidence}`` -- so
+    the caller can join them onto the frame and fold the conditional
+    confidences into the ``__golden_confidence__`` mean.
+    """
+    from goldenmatch.config.schemas import GoldenFieldRule
+    from goldenmatch.core.golden import merge_field
+
+    default_rule = GoldenFieldRule(strategy=rules.default_strategy)
+    has_source = "__source__" in multi_df.columns
+    has_row_id = "__row_id__" in multi_df.columns
+
+    # Sort once so a cluster's rows are in __row_id__ order (matches the slow
+    # path's [__cluster_id__, __row_id__] presort, which makes merge_field's
+    # first-occurrence / lowest-index tiebreaks land on the lowest __row_id__).
+    if has_row_id:
+        ordered = multi_df.sort(["__cluster_id__", "__row_id__"])
+    else:
+        ordered = multi_df
+
+    # Per-conditional source frame: only the candidate columns + the when-/
+    # strategy-referenced columns are needed. Materialize per cluster as Python
+    # lists (the same shape merge_field consumes), partitioned by cluster.
+    cond_clauses = {c: rules.field_rules[c] for c in cond_cols}
+
+    # Columns we must materialize from multi_df: each conditional column's
+    # candidates, plus any date_column a clause might use, plus __source__.
+    needed_cols = set(cond_cols)
+    for clauses in cond_clauses.values():
+        for r in clauses:
+            if r.date_column:
+                needed_cols.add(r.date_column)
+    needed_cols = [c for c in needed_cols if c in ordered.columns]
+
+    # Resolved winners (group + scalar) per cluster, keyed by cluster_id.
+    resolved_seed: dict = {}
+    seed_cols = [c for c in resolved_frame.columns if c != "__cluster_id__"]
+    for row in resolved_frame.iter_rows(named=True):
+        cid = row["__cluster_id__"]
+        resolved_seed[cid] = {c: row[c] for c in seed_cols}
+
+    values_by_cluster: dict = {}
+    conf_by_cluster: dict = {}
+
+    for cid, sub in ordered.group_by("__cluster_id__", maintain_order=True):
+        cluster_id = cid[0] if isinstance(cid, tuple) else cid
+        col_arrays = {c: sub[c].to_list() for c in needed_cols}
+        source_array = sub["__source__"].to_list() if has_source else None
+
+        resolved = dict(resolved_seed.get(cluster_id, {}))
+        cond_values: dict = {}
+        cond_confs: dict = {}
+        for col in cond_order:
+            rule_entry = cond_clauses[col]
+            # REUSED VERBATIM (conditions.py): first satisfied when:-clause, else
+            # the when-less default; eval_predicate drives it. `or default_rule`
+            # mirrors resolve_cluster.
+            chosen = select_conditional_strategy(rule_entry, resolved) or default_rule
+            values = list(col_arrays.get(col, [None] * sub.height))
+            validator_name = getattr(chosen, "validate_with", None)
+            if validator_name:
+                values = goldenflow_filter(values, validator_name)
+            sources = (
+                source_array
+                if (chosen.strategy == "source_priority" and source_array is not None)
+                else None
+            )
+            dates = (
+                col_arrays.get(chosen.date_column)
+                if (chosen.strategy == "most_recent" and chosen.date_column in col_arrays)
+                else None
+            )
+            # No quality_weights / pair_scores on the native provenance=False
+            # path (resolve_cluster only passes them when provided; the native
+            # path never is). merge_field is the SAME function the slow path
+            # calls -- identical (value, confidence) by construction.
+            val, conf, _ = merge_field(values, chosen, sources=sources, dates=dates)
+            resolved[col] = val
+            cond_values[col] = val
+            cond_confs[col] = conf
+        values_by_cluster[cluster_id] = cond_values
+        conf_by_cluster[cluster_id] = cond_confs
+
+    return values_by_cluster, conf_by_cluster
+
+
 def build_survivorship_native(multi_df, rules) -> pl.DataFrame:
     """Vectorized survivorship (Phase B groups + Phase C scalars): one row per
     cluster carrying ``__cluster_id__`` + every resolved user column.
 
     Group columns are resolved in lock-step per ``field_groups`` (Phase B).
-    Scalar columns (any user column NOT in a group) are resolved by their
-    per-field ``GoldenFieldRule`` strategy, or ``default_strategy`` (Phase C).
-    Each unit resolves over the same source frame and is joined back on
-    ``__cluster_id__``. List-form ``when:`` conditionals are Phase E.
+    Scalar columns (any user column NOT in a group, with a non-list rule) are
+    resolved by their per-field ``GoldenFieldRule`` strategy, or
+    ``default_strategy`` (Phase C). List-form ``when:`` conditional columns are
+    resolved last, in a per-cluster pass over the already-resolved group/scalar
+    winners (Phase E). Each unit resolves over the same source frame and is
+    joined back on ``__cluster_id__``.
 
-    Phase D: every unit (each group, each scalar field) also emits ONE internal
-    per-cluster confidence column. ``__golden_confidence__`` is the row-wise mean
-    over those columns -- byte-identical to the slow path's flat mean over the
-    per-unit ``confidences`` list (``resolve_cluster``: ``sum(confidences) /
+    Phase D: every unit (each group, each scalar field, each conditional field)
+    also emits ONE internal per-cluster confidence column.
+    ``__golden_confidence__`` is the row-wise mean over those columns --
+    byte-identical to the slow path's flat mean over the per-unit
+    ``confidences`` list (``resolve_cluster``: ``sum(confidences) /
     len(confidences)``). The internal per-unit columns are dropped so the emitted
     frame carries ONLY ``__cluster_id__`` + resolved value columns +
     ``__golden_confidence__`` (matching the oracle frame's column set).
@@ -551,12 +673,18 @@ def build_survivorship_native(multi_df, rules) -> pl.DataFrame:
             # inner: every group resolves over the same source frame -> identical cluster set
             result = result.join(resolved, on="__cluster_id__", how="inner")
 
-    # Scalar columns = user columns not owned by any group.
+    # User columns not owned by any group split into plain scalars (non-list
+    # rule) and conditional columns (list-form when:-rule, resolved in Phase E).
     grouped_cols = {c for g in rules.field_groups for c in g.columns}
-    scalar_cols = [
+    ungrouped_cols = [
         c for c in multi_df.columns
         if not _is_internal(c) and c != "__cluster_id__" and c not in grouped_cols
     ]
+    cond_cols = [
+        c for c in ungrouped_cols
+        if isinstance(rules.field_rules.get(c), list)
+    ]
+    scalar_cols = [c for c in ungrouped_cols if c not in cond_cols]
     if scalar_cols:
         scalars = _resolve_scalars(multi_df, rules, scalar_cols)
         for c in scalar_cols:
@@ -566,17 +694,14 @@ def build_survivorship_native(multi_df, rules) -> pl.DataFrame:
         else:
             result = result.join(scalars, on="__cluster_id__", how="inner")
 
-    if result is None:
-        # No groups and no scalars: just the distinct cluster ids. No units ->
-        # the slow path emits 0.0 (sum/len of an empty confidences list).
+    if result is None and not cond_cols:
+        # No groups, no scalars, no conditionals: just the distinct cluster ids.
+        # No units -> the slow path emits 0.0 (sum/len of an empty list).
         result = multi_df.select("__cluster_id__").unique(maintain_order=True)
         return result.with_columns(
             pl.lit(0.0, dtype=pl.Float64).alias("__golden_confidence__")
         )
 
-    # __golden_confidence__ = sum(per-unit confidences) / unit_count, summed in
-    # the slow path's resolution order via an explicit LEFT FOLD so the float
-    # arithmetic is bit-identical to Python's sum() (left fold from 0.0).
     from goldenmatch.core.survivorship.conditions import build_resolution_order
 
     user_cols = [
@@ -584,6 +709,47 @@ def build_survivorship_native(multi_df, rules) -> pl.DataFrame:
         if not _is_internal(c) and c != "__cluster_id__"
     ]
     order = build_resolution_order(rules.field_rules, rules.field_groups, user_cols)
+
+    # Phase E: resolve conditional columns in toposort order over the already-
+    # resolved group/scalar (and earlier-conditional) winners. resolved_frame
+    # carries those winners (one row per cluster); when there are no groups and
+    # no scalars it is just the distinct cluster ids (a conditional whose when:
+    # only reads its own candidates needs no seed).
+    if cond_cols:
+        cond_order = [u for u in order if u in cond_cols]
+        resolved_frame = (
+            result if result is not None
+            else multi_df.select("__cluster_id__").unique(maintain_order=True)
+        )
+        values_by_cluster, conf_by_cluster = _resolve_conditionals(
+            multi_df, rules, resolved_frame, cond_cols, cond_order
+        )
+        # Build one row per cluster carrying the conditional values + their
+        # confidences, then join onto result on __cluster_id__.
+        cids = resolved_frame["__cluster_id__"].to_list()
+        cond_frame_data: dict = {"__cluster_id__": cids}
+        for col in cond_cols:
+            cond_frame_data[col] = [values_by_cluster[cid][col] for cid in cids]
+            conf_name = _conditional_conf_name(col)
+            cond_frame_data[conf_name] = [conf_by_cluster[cid][col] for cid in cids]
+            conf_name_by_unit[col] = conf_name
+        # Preserve each value column's source dtype (lists of None would infer
+        # to a null/object column otherwise).
+        schema_overrides = {
+            col: multi_df.schema[col] for col in cond_cols if col in multi_df.schema
+        }
+        cond_frame = pl.DataFrame(
+            cond_frame_data,
+            schema_overrides={**schema_overrides, "__cluster_id__": resolved_frame.schema["__cluster_id__"]},
+        )
+        if result is None:
+            result = cond_frame
+        else:
+            result = result.join(cond_frame, on="__cluster_id__", how="inner")
+
+    # __golden_confidence__ = sum(per-unit confidences) / unit_count, summed in
+    # the slow path's resolution order via an explicit LEFT FOLD so the float
+    # arithmetic is bit-identical to Python's sum() (left fold from 0.0).
     conf_cols = [conf_name_by_unit[u] for u in order if u in conf_name_by_unit]
     total = pl.lit(0.0, dtype=pl.Float64)
     for c in conf_cols:
