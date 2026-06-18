@@ -87,3 +87,98 @@ recall. **Gate on a measurement:** `auto+fields` + semantic blocking must clear
 0.602 to count as a headline move. The synonym/brand class will remain walled
 regardless and should be scoped out (or addressed separately via a domain/knowledge
 source). This is a real product change and gets its own spec + plan before any code.
+
+## Semantic blocking shipped (in-product)
+
+Semantic blocking is now a real, opt-in capability: `dedupe_df(df,
+semantic_blocking=True)` unions three FREE deterministic candidate sources onto
+the normal candidate set, all offline / no key / no faiss (numpy ANN fallback):
+
+- **in-house char-ngram ANN** (the `emb-ann` embedder, as a candidate-gen pass);
+- **initialism** (acronym block: `IBM` <- `International Business Machines`);
+- **refdata alias** (canonicalization on `given_names` / `business` seed tables).
+
+The union is **additive by construction** -- new pairs are appended before the
+`dedup_pairs_max_score` seam, which keeps the max score per canonical pair, so it
+can never drop an existing pair. The bench exercises it as a new row,
+`goldenmatch(auto+fields+semantic)`, identical to `auto+fields` except for the
+flag (`adapters/goldenmatch_adapter.py`, mode `auto_fields_semantic`).
+
+### Measured: auto+fields vs auto+fields+semantic (206 records, offline)
+
+Run with the two goldenmatch rows over `dataset/records.csv`
+(`GOLDENMATCH_NATIVE=0`, in-house embedder, numpy ANN fallback -- reproducible by
+anyone, no key):
+
+| metric | auto+fields | auto+fields+semantic | delta |
+|---|---|---|---|
+| **overall F1** | 0.6018 | 0.6018 | +0.000 |
+| overall P | 0.786 | 0.786 | +0.000 |
+| overall R | 0.488 | 0.488 | +0.000 |
+| abbreviation F1 | 0.773 | 0.773 | +0.000 |
+| nickname_alias F1 | 0.854 | 0.854 | +0.000 |
+| synonym_brand F1 | 0.167 | 0.167 | +0.000 |
+| cross_lingual F1 | 0.769 | 0.769 | +0.000 |
+| typo F1 | 1.000 | 1.000 | +0.000 |
+| org_suffix F1 | 1.000 | 1.000 | +0.000 |
+| temporal_version F1 | 0.571 | 0.571 | +0.000 |
+| cross_document_exact F1 | 1.000 | 1.000 | +0.000 |
+| same_name_collision F1 | 0.356 | 0.356 | +0.000 |
+
+The two rows are **byte-identical** (both `tp=198 fp=54 fn=208`). No class moved.
+
+### Acceptance verdict vs 0.602
+
+**Tied, not cleared.** `auto+fields+semantic` F1 = `auto+fields` F1 = **0.6018**
+(rounds to the documented 0.602 baseline, fractionally below 0.602 as a raw
+float). So:
+
+- **>= baseline: MET (exactly tied)** -- the additive union guarantees recall
+  can't fall, and precision held (`fp` unchanged at 54), so it never regresses.
+- **>= 0.602 (headline move): NOT MET** -- it does not *raise* the headline on
+  this corpus. The capability ships (opt-in, zero precision cost), but it is not
+  a headline mover here.
+
+### Why it's a no-op here: the wall moved from blocking to scoring
+
+Semantic blocking is working -- it generates **3,466 extra candidate pairs**. But
+the committed auto-config matchkey scores them on `name`+`entity_type`+`context`
+(weighted `ensemble`, threshold **0.8**), and only **1,108** of the new pairs
+clear 0.8. Every one of those 1,108 is a pair the **baseline blocking already
+generated and already merged** -- exact duplicates (`IBM`/`IBM`) or word-reordered
+forms (`FIFA World Cup 2018`/`2018 FIFA World Cup`) that string blocking catches
+anyway. The genuinely *new* recall-lever pairs (the abbreviation / synonym /
+cross-lingual cases where the strings do **not** look alike) score well below 0.8
+on the name field and are rejected at scoring. So the candidate set grew, but the
+final clustering didn't change.
+
+This is exactly the wall the earlier embedder sweep predicted for the **offline
+char-ngram** tier: its cosine approximates *character* overlap, not world
+knowledge (`IBM` <-> `International Business Machines` ~0.05). The free in-house
+ANN bridges typo / org-suffix / transliteration (shared characters), but cannot
+generate the abbreviation/synonym pairs at all, and even when initialism/alias
+*do* surface a pair, the name scorer still demands string similarity to confirm
+it. Which classes the sources *can* move, and why they didn't here:
+
+- **initialism -> abbreviation:** surfaces `IBM`/`International Business Machines`
+  as a candidate, but `ensemble`(name) scores it ~0, < 0.8 -> rejected at scoring.
+- **alias -> known synonyms in the seed table only:** bounded by the small
+  `given_names` / `business` refdata seed; a synonym not in the seed (most of the
+  `synonym_brand` class, e.g. `Coumadin`/`warfarin`) is never generated. This is
+  the same class the embedder sweep found walled for *every* embedder (max 0.18).
+- **ANN -> typo / suffix / transliteration:** these classes are *already* at
+  F1 1.0 (`typo`, `org_suffix`) under `auto+fields`, so there's no recall left to
+  add there; the cross-lingual gains the multilingual model showed need a
+  *semantic* embedder, not the char-ngram one this offline path uses.
+
+**Bottom line:** the recall-lever capability is real and now shipped opt-in and
+zero-cost (additive, no precision hit), but on ER-KG-Bench the headline does not
+move because (a) the free offline embedder lacks the world knowledge to *generate*
+the abbreviation/synonym pairs, and (b) the auto-config name scorer's 0.8
+threshold *rejects* the few semantic candidates that do get surfaced. To actually
+move the headline you need both a world-knowledge (semantic) embedder for
+candidate generation **and** a scorer that doesn't require string similarity to
+confirm a semantically-blocked pair (e.g. the LLM scorer, or a semantic
+similarity scoring field) -- the embedder swap alone is necessary but not
+sufficient. synonym/brand stays walled regardless (knowledge-base problem, not an
+embedder problem).
