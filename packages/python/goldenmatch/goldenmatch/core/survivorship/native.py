@@ -410,20 +410,23 @@ def _scalar_value_expr(col: str, len_alias: str | None, rule, has_row_id: bool) 
       null is skipped even if a later same-source row is populated, matching
       ``merge_field._source_priority``'s first-occurrence record.
 
-    The all-non-null-agree short-circuit in ``merge_field`` returns the first
-    non-null index regardless of strategy, but the VALUE there is identical to
-    every per-strategy pick (all candidates equal), so it needs no special case
-    for value parity.
+    ``merge_field`` short-circuits BEFORE strategy dispatch: when all non-null
+    candidates are identical (``nuniq <= 1``) the winner value is that single
+    value regardless of strategy. most_complete / longest_value / first_non_null
+    already pick it, but source_priority (the single value's source absent from
+    the priority list) and most_recent (the single value's date null) would
+    return null without the short-circuit -- so it IS applied to the value here,
+    mirroring the conf path (:func:`_scalar_conf_expr`).
     """
     strategy = rule.strategy
     if strategy in ("most_complete", "longest_value"):
         # _stable_value_expr keys on the "most_complete" branch (len desc,
         # __row_id__ asc). longest_value picks the same value (str(v) length),
         # differing from most_complete only in tie confidence (Phase D).
-        return _stable_value_expr(col, len_alias, "most_complete", has_row_id)
-    if strategy == "first_non_null":
-        return _stable_value_expr(col, None, "first_non_null", has_row_id)
-    if strategy == "most_recent":
+        strategy_value = _stable_value_expr(col, len_alias, "most_complete", has_row_id)
+    elif strategy == "first_non_null":
+        strategy_value = _stable_value_expr(col, None, "first_non_null", has_row_id)
+    elif strategy == "most_recent":
         date_col = rule.date_column
         # Both value and date must be present (merge_field._most_recent filters
         # on ``v is not None and d is not None``).
@@ -439,10 +442,11 @@ def _scalar_value_expr(col: str, len_alias: str | None, rule, has_row_id: bool) 
                 # correctly (date DESC, row_id ASC)
                 -pl.col("__row_id__").cast(pl.Int64),
             ]).filter(mask)
-            return nn.sort_by(key, descending=True).first()
-        # No __row_id__: stable date-desc sort -> ties keep input order.
-        return nn.sort_by(pl.col(date_col).filter(mask), descending=True).first()
-    if strategy == "source_priority":
+            strategy_value = nn.sort_by(key, descending=True).first()
+        else:
+            # No __row_id__: stable date-desc sort -> ties keep input order.
+            strategy_value = nn.sort_by(pl.col(date_col).filter(mask), descending=True).first()
+    elif strategy == "source_priority":
         # First occurrence of a source = its lowest-__row_id__ row. A row is
         # eligible to win only if it is that first occurrence AND its value is
         # non-null (merge_field records the first occurrence's value -- a null
@@ -454,9 +458,21 @@ def _scalar_value_expr(col: str, len_alias: str | None, rule, has_row_id: bool) 
         src_rank, eligible = _source_priority_eligible(col, rule, has_row_id)
         nn = pl.col(col).filter(eligible)
         key = src_rank.filter(eligible)
-        return nn.sort_by(key, descending=False).first()
-    raise NotImplementedError(
-        f"survivorship scalar strategy {strategy!r} not handled by the native path"
+        strategy_value = nn.sort_by(key, descending=False).first()
+    else:
+        raise NotImplementedError(
+            f"survivorship scalar strategy {strategy!r} not handled by the native path"
+        )
+    # All-non-null-agree short-circuit (merge_field, before strategy dispatch):
+    # nuniq(non-null) <= 1 -> the single distinct non-null value (null when all
+    # rows are null). Required because source_priority / most_recent can return
+    # null even when exactly ONE non-null candidate exists (its source/date
+    # fails the strategy's own eligibility); the oracle returns that lone value.
+    all_agree = pl.col(col).drop_nulls().n_unique() <= 1
+    return (
+        pl.when(all_agree)
+        .then(pl.col(col).drop_nulls().first())
+        .otherwise(strategy_value)
     )
 
 
@@ -849,14 +865,24 @@ def build_survivorship_native(multi_df, rules) -> pl.DataFrame:
         else:
             result = result.join(cond_frame, on="__cluster_id__", how="inner")
 
-    # __golden_confidence__ = sum(per-unit confidences) / unit_count, summed in
-    # the slow path's resolution order via an explicit LEFT FOLD so the float
-    # arithmetic is bit-identical to Python's sum() (left fold from 0.0).
+    # __golden_confidence__ = sum(per-unit confidences) / unit_count, in the slow
+    # path's resolution order. Polars columnar float reduction is NOT bit-identical
+    # to Python's builtin sum()/len(): its SIMD addition reassociates the chain and
+    # its scalar division reciprocal-multiplies, so ~60% of non-exact float sets
+    # differ by 1 ULP (measured). The slow oracle computes sum(confidences)/len(...)
+    # with builtin sum (a strict left fold) + true division, so reproduce THAT in
+    # Python over the per-unit confidence columns (selected in resolution order).
+    # Only the small per-cluster confidence floats cross to Python; the heavy
+    # group/scalar/conditional resolution stays fully vectorized.
     conf_cols = [conf_name_by_unit[u] for u in order if u in conf_name_by_unit]
-    total = pl.lit(0.0, dtype=pl.Float64)
-    for c in conf_cols:
-        total = total + pl.col(c)
+    if conf_cols:
+        golden = [
+            sum(row) / len(row)
+            for row in result.select(conf_cols).iter_rows()
+        ]
+    else:
+        golden = [0.0] * result.height
     result = result.with_columns(
-        (total / pl.lit(float(len(conf_cols)))).alias("__golden_confidence__")
+        pl.Series("__golden_confidence__", golden, dtype=pl.Float64)
     )
     return result.drop(list(conf_name_by_unit.values()))
