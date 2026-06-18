@@ -70,7 +70,7 @@ npm install goldenmatch
 - **96.4% F1 zero-config** on DBLP-ACM (hand-tuned ceiling: 91.8%). [DQBench ER score: 62.87 no-LLM](https://github.com/benseverndev-oss/dqbench)
 - **Learning Memory** — corrections from stewards, unmerges, and LLM votes persist to disk and apply automatically on the next run; survives row reorders via record-hash re-anchoring (v1.6.0)
 - **Privacy-preserving** — match across organizations without sharing raw data (PPRL, 92.4% F1)
-- **58 MCP tools** — use from Claude Desktop, Claude Code, or any AI assistant ([Smithery](https://smithery.ai/servers/benzsevern/goldenmatch))
+- **59 MCP tools** — use from Claude Desktop, Claude Code, or any AI assistant ([Smithery](https://smithery.ai/servers/benzsevern/goldenmatch))
 - **Production-ready** — Postgres sync, daemon mode, lineage tracking, review queues
 
 ### What's new in v1.17
