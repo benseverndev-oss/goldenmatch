@@ -1080,6 +1080,7 @@ jobs:
             packages/rust/extensions
             packages/rust/extensions/graph-core
             packages/rust/extensions/score-core
+            packages/rust/extensions/graph-layout
       - run: cargo test --workspace
         # Bridge tests now hard-require goldenmatch (installed above) -- a Python
         # import/marshalling failure fails the lane instead of silently skipping.
@@ -1095,6 +1096,11 @@ jobs:
       - run: cargo clippy --manifest-path graph-core/Cargo.toml -- -D warnings
       - run: cargo test --manifest-path score-core/Cargo.toml
       - run: cargo clippy --manifest-path score-core/Cargo.toml -- -D warnings
+      # graph-layout is its own [workspace] too (demo binary, in the parent
+      # `exclude` list), so `cargo test --workspace` never builds it. The rust
+      # paths-filter already covers it (packages/rust/**). See #1026.
+      - run: cargo test --manifest-path graph-layout/Cargo.toml
+      - run: cargo clippy --manifest-path graph-layout/Cargo.toml -- -D warnings
 
   # Measured Rust line coverage (cargo-llvm-cov). The structural audit's unit
   # tests (graph-core / score-core / fingerprint-core / native / bridge) are now

@@ -70,14 +70,14 @@ impl BarnesHut {
             if leaf && c.body == i as i32 {
                 continue; // never repel a body from itself
             }
-            let d = c.com.sub(pi);
+            let d = c.com - pi;
             let dist2 = d.len2() + EPS;
             let width = 2.0 * c.half;
             // Treat the cell as one body when it's a leaf, or far enough that
             // (width / dist) < theta  <=>  width^2 < theta^2 * dist^2.
             if leaf || width * width < theta2 * dist2 {
                 let mag = kk * c.mass / dist2; // k^2 * mass / d^2, away from com
-                f = f.sub(d.scale(mag));
+                f = f - d.scale(mag);
             } else {
                 for &ch in &c.kids {
                     if ch != NO_CHILD && sp < stack.len() {
@@ -121,7 +121,7 @@ fn build_rec(
         // Coincident-ish cluster: aggregate into a single leaf pseudo-body.
         let mut com = V2::ZERO;
         for &b in idx.iter() {
-            com = com.add(pos[b as usize]);
+            com = com + pos[b as usize];
         }
         let n = idx.len() as f32;
         let cell = &mut cells[me as usize];
@@ -154,7 +154,7 @@ fn build_rec(
         let ci = build_rec(cells, pos, bucket, nc, h, depth + 1);
         kids[k] = ci;
         let kid = &cells[ci as usize];
-        com = com.add(kid.com.scale(kid.mass));
+        com = com + kid.com.scale(kid.mass);
         mass += kid.mass;
     }
 
@@ -203,9 +203,9 @@ mod tests {
                 if j == i {
                     continue;
                 }
-                let d = pj.sub(pos[i]);
+                let d = pj - pos[i];
                 let dist2 = d.len2() + EPS;
-                f = f.sub(d.scale(k * k / dist2));
+                f = f - d.scale(k * k / dist2);
             }
             f
         };

@@ -1,6 +1,8 @@
 //! Minimal 2D vector math (f32). No external dep; kept tiny so the hot loops
 //! inline cleanly.
 
+use std::ops::{Add, Sub};
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct V2 {
     pub x: f32,
@@ -15,14 +17,6 @@ impl V2 {
         V2 { x, y }
     }
     #[inline]
-    pub fn add(self, o: V2) -> V2 {
-        V2::new(self.x + o.x, self.y + o.y)
-    }
-    #[inline]
-    pub fn sub(self, o: V2) -> V2 {
-        V2::new(self.x - o.x, self.y - o.y)
-    }
-    #[inline]
     pub fn scale(self, s: f32) -> V2 {
         V2::new(self.x * s, self.y * s)
     }
@@ -33,5 +27,21 @@ impl V2 {
     #[inline]
     pub fn len(self) -> f32 {
         self.len2().sqrt()
+    }
+}
+
+impl Add for V2 {
+    type Output = V2;
+    #[inline]
+    fn add(self, o: V2) -> V2 {
+        V2::new(self.x + o.x, self.y + o.y)
+    }
+}
+
+impl Sub for V2 {
+    type Output = V2;
+    #[inline]
+    fn sub(self, o: V2) -> V2 {
+        V2::new(self.x - o.x, self.y - o.y)
     }
 }

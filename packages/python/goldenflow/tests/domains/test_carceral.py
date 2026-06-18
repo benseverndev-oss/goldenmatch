@@ -42,6 +42,10 @@ def test_constants_are_frozen():
     assert "GEO" in CARCERAL_OPERATOR_ORGS
     assert "USP" in CARCERAL_BOP_ABBREVIATIONS
     assert "ASPC" in CARCERAL_STATE_COMPLEX_ALIASES
+    # PA + CA aliases (HIFLD short form vs ECHO long form)
+    assert CARCERAL_STATE_COMPLEX_ALIASES["SCI"] == "STATE CORRECTIONAL INSTITUTION"
+    assert CARCERAL_STATE_COMPLEX_ALIASES["CSP"] == "CALIFORNIA STATE PRISON"
+    assert "CIW" in CARCERAL_STATE_COMPLEX_ALIASES
 
 
 # ── carceral_org_strip ─────────────────────────────────────────────────
@@ -188,6 +192,51 @@ def test_name_normalize_arizona_aspc_pattern():
     assert "ARIZONA STATE PRISON" in out[1]
     assert "LEWIS" in out[0]
     assert "LEWIS" in out[1]
+
+
+# ── Per-state HIFLD-vs-ECHO collapse (TX / PA / CA) ─────────────────────
+#
+# One pair per state where the two sources name the same facility
+# differently enough that raw Jaro-Winkler falls below the match
+# threshold, and `carceral_name_normalize` collapses both to an identical
+# string (JW = 1.0). The `raw[0] != raw[1]` asserts capture the
+# "diverges before" half; the normalized equality captures "clears after".
+
+
+def test_name_normalize_pennsylvania_sci_pattern():
+    """PA: HIFLD ``SCI ALBION`` vs ECHO ``STATE CORRECTIONAL INSTITUTION
+    ALBION`` — the ``SCI`` abbreviation is the only difference."""
+    raw = ["SCI ALBION", "STATE CORRECTIONAL INSTITUTION ALBION"]
+    assert raw[0] != raw[1]
+    out = carceral_name_normalize(pl.Series("name", raw))
+    assert out[0] == out[1] == "STATE CORRECTIONAL INSTITUTION ALBION"
+
+
+def test_name_normalize_california_csp_pattern():
+    """CA: HIFLD ``CSP SOLANO`` vs ECHO ``CALIFORNIA STATE PRISON SOLANO``."""
+    raw = ["CSP SOLANO", "CALIFORNIA STATE PRISON SOLANO"]
+    assert raw[0] != raw[1]
+    out = carceral_name_normalize(pl.Series("name", raw))
+    assert out[0] == out[1] == "CALIFORNIA STATE PRISON SOLANO"
+
+
+def test_name_normalize_california_ciw_pattern():
+    """CA, second facility abbreviation: ``CIW`` vs the CDCR long form."""
+    raw = ["CIW CHINO", "CALIFORNIA INSTITUTION FOR WOMEN CHINO"]
+    assert raw[0] != raw[1]
+    out = carceral_name_normalize(pl.Series("name", raw))
+    assert out[0] == out[1] == "CALIFORNIA INSTITUTION FOR WOMEN CHINO"
+
+
+def test_name_normalize_texas_tdcj_full_department_prefix():
+    """TX: TDCJ units have no facility abbreviation, so the win is the
+    operator-prefix stripper recognizing the spelled-out agency name.
+    HIFLD ``ALLRED UNIT`` vs ECHO ``TEXAS DEPARTMENT OF CRIMINAL JUSTICE
+    - ALLRED UNIT`` (full word ``DEPARTMENT``, previously unstripped)."""
+    raw = ["ALLRED UNIT", "TEXAS DEPARTMENT OF CRIMINAL JUSTICE - ALLRED UNIT"]
+    assert raw[0] != raw[1]
+    out = carceral_name_normalize(pl.Series("name", raw))
+    assert out[0] == out[1] == "ALLRED UNIT"
 
 
 # ── latlng_pack ────────────────────────────────────────────────────────

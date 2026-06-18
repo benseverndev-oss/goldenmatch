@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import os
+from dataclasses import dataclass, field
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -168,3 +169,159 @@ def native_enabled(component: str) -> bool:
     result = _native is not None and component in _GATED_ON
     _record_dispatch(component, result)
     return result
+
+
+# Components that constitute the scoring "hot path" -- the per-field / per-block
+# kernels whose dispatch determines throughput. ``field_scoring`` is the
+# polars-direct default's cdist-shaped score matrix; ``block_scoring`` is the
+# bucket backend's per-block kernel. Whether THESE went native is the question
+# #1048 / #957 ask (clustering / hashing / featurize are not throughput-shaped
+# scoring, so they don't gate the slow-path warning).
+_HOT_PATH_COMPONENTS: frozenset[str] = frozenset({"block_scoring", "field_scoring"})
+
+# Process-level "warn once" guard, keyed by call site, so a distributed run
+# doesn't log the slow-path WARNING once per scored batch.
+_SLOW_PATH_WARNED: set[str] = set()
+
+
+@dataclass(frozen=True)
+class NativeDispatchSummary:
+    """Whether THIS run's scoring dispatched to the native kernel.
+
+    Attached to ``DedupeResult.native`` / ``MatchResult.native`` so a caller can
+    *confirm* native dispatch (``hot_path_native``) instead of inferring it from
+    wall-clock (#1048). Built from the per-component dispatch counts via
+    :func:`summarize_native_dispatch`.
+
+    Attributes:
+        available: the native kernel was importable this process.
+        mode: the resolved ``GOLDENMATCH_NATIVE`` mode (``auto`` / ``0`` / ``1``).
+        components: per-component ``{native, fallback}`` counts for this run.
+        ran_native: any component dispatched to the kernel at least once.
+        hot_path_exercised: a scoring hot-path component ran at all this run
+            (False for e.g. a pure exact-match dedupe with no fuzzy scoring).
+        hot_path_native: the scoring hot path ran ENTIRELY on the kernel (every
+            hot-path dispatch went native, none fell back). The signal #1048
+            wanted: ``True`` means scoring really used the kernel.
+    """
+
+    available: bool
+    mode: str
+    components: dict[str, dict[str, int]] = field(default_factory=dict)
+    ran_native: bool = False
+    hot_path_exercised: bool = False
+    hot_path_native: bool = False
+
+    @property
+    def hot_path_native_calls(self) -> int:
+        return sum(
+            self.components.get(c, {}).get("native", 0) for c in _HOT_PATH_COMPONENTS
+        )
+
+    @property
+    def hot_path_fallback_calls(self) -> int:
+        return sum(
+            self.components.get(c, {}).get("fallback", 0) for c in _HOT_PATH_COMPONENTS
+        )
+
+    def slow_path_active(self) -> bool:
+        """The kernel was importable and scoring ran, but the hot path used the
+        pure-Python fallback (wholly or partly). NOT triggered when the user
+        forced Python with ``GOLDENMATCH_NATIVE=0`` (that's an explicit choice,
+        not a silent slow path)."""
+        return (
+            self.available
+            and self.mode != "0"
+            and self.hot_path_exercised
+            and not self.hot_path_native
+        )
+
+    def __str__(self) -> str:
+        comps = ", ".join(
+            f"{c} n={v.get('native', 0)}/f={v.get('fallback', 0)}"
+            for c, v in sorted(self.components.items())
+        )
+        return (
+            f"native(available={self.available}, mode={self.mode}, "
+            f"ran_native={self.ran_native}, hot_path_native={self.hot_path_native}"
+            f"{'; ' + comps if comps else ''})"
+        )
+
+
+def summarize_native_dispatch(
+    baseline: dict[str, dict[str, int]] | None = None,
+) -> NativeDispatchSummary:
+    """Build a :class:`NativeDispatchSummary` from the dispatch counters.
+
+    Pass ``baseline`` (a prior :func:`native_dispatch_report` snapshot) to scope
+    the summary to the dispatches that happened SINCE that snapshot -- the API
+    entry points snapshot just before the full-data pipeline so the summary
+    reflects the real dedupe scoring, not the auto-config sample iterations.
+    Counters only grow, so the delta is always non-negative.
+    """
+    current = native_dispatch_report()
+    if baseline:
+        report: dict[str, dict[str, int]] = {}
+        for comp, counts in current.items():
+            base = baseline.get(comp, {})
+            nat = counts.get("native", 0) - base.get("native", 0)
+            fb = counts.get("fallback", 0) - base.get("fallback", 0)
+            if nat or fb:
+                report[comp] = {"native": nat, "fallback": fb}
+    else:
+        report = current
+
+    ran_native = any(c.get("native", 0) > 0 for c in report.values())
+    hot = {c: report[c] for c in _HOT_PATH_COMPONENTS if c in report}
+    hot_exercised = any(
+        (v.get("native", 0) + v.get("fallback", 0)) > 0 for v in hot.values()
+    )
+    # Fully native iff every hot-path component that ran went native with no
+    # fallback. A single fallback (an ungated/uncompiled scorer) flips this off.
+    hot_native = hot_exercised and all(
+        v.get("fallback", 0) == 0 and v.get("native", 0) > 0 for v in hot.values()
+    )
+    mode = os.environ.get("GOLDENMATCH_NATIVE", "auto").lower()
+    return NativeDispatchSummary(
+        available=native_available(),
+        mode=mode,
+        components=report,
+        ran_native=ran_native,
+        hot_path_exercised=hot_exercised,
+        hot_path_native=hot_native,
+    )
+
+
+def warn_if_slow_path(
+    summary: NativeDispatchSummary,
+    log: logging.Logger | None = None,
+    *,
+    once_key: str | None = None,
+) -> bool:
+    """Log a WARNING when ``summary.slow_path_active()`` -- the kernel is
+    importable but scoring ran on the pure-Python fallback (#957: never silently
+    eat the slow path; #1048: make the slow path diagnosable). Returns whether a
+    warning was emitted. ``once_key`` de-dupes per process (used by the
+    distributed workers so each logs at most once)."""
+    if not summary.slow_path_active():
+        return False
+    if once_key is not None:
+        if once_key in _SLOW_PATH_WARNED:
+            return False
+        _SLOW_PATH_WARNED.add(once_key)
+    (log or logger).warning(
+        "goldenmatch native kernel is importable but the scoring hot path ran "
+        "on the pure-Python fallback this run (hot-path native=%d, fallback=%d). "
+        "Throughput is the slow path. Likely causes: a matchkey scorer with no "
+        "native kernel, or a component off the GOLDENMATCH_NATIVE=auto allowlist "
+        "-- set GOLDENMATCH_NATIVE=1 to require native on every supported "
+        "component. Inspect result.native for the per-component breakdown.",
+        summary.hot_path_native_calls,
+        summary.hot_path_fallback_calls,
+    )
+    return True
+
+
+def reset_slow_path_warned() -> None:
+    """Clear the per-process slow-path warn-once guard (test isolation)."""
+    _SLOW_PATH_WARNED.clear()

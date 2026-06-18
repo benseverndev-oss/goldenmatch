@@ -140,3 +140,30 @@ def test_missing_pass_field_is_skipped():
     )
     bucket = _multi_member_clusters(df, cfg, "bucket")  # must not raise
     assert frozenset({10, 11}) in bucket
+
+
+def test_bucket_honors_multipass_with_empty_keys():
+    """#1048 part 1: a multi_pass config with EMPTY ``keys`` (the keys live in
+    ``.passes`` -- the schema explicitly allows keys-OR-passes) silently
+    returned 0 clusters from the bucket backend, because score_buckets guarded
+    on ``blocking_config.keys`` alone instead of the resolved pass list. Every
+    OTHER parity test in this file sets a non-empty ``keys`` alongside
+    ``passes``, so none exercised this shape -- which is exactly the showcase's
+    config (soundex(surname) + exact(email) union passes, no static key).
+    """
+    df = _fixture_df()
+    from goldenmatch.core.autoconfig import auto_configure_df
+    cfg = auto_configure_df(df)
+    cfg.blocking = BlockingConfig(
+        strategy="multi_pass",
+        keys=[],  # the showcase shape: keys empty, passes carry the blocking
+        passes=[BlockingKeyConfig(fields=["city"]), BlockingKeyConfig(fields=["zip"])],
+    )
+    cfg.matchkeys = [_name_matchkey()]
+    assert not cfg.blocking.keys and cfg.blocking.passes and len(cfg.blocking.passes) == 2
+
+    bucket = _multi_member_clusters(df, cfg, "bucket")
+    polars = _multi_member_clusters(df, cfg, "polars-direct")
+    # Rows 10/11 ("john smith", shared zip 99999) must cluster; was 0 before fix.
+    assert frozenset({10, 11}) in bucket
+    assert bucket == polars

@@ -54,18 +54,18 @@ pub fn step(g: &Graph, pos: &mut [V2], k: f32, theta: f32, temp: f32) {
     // --- attraction along edges: F = (d^2 / k) * weight, toward each other ---
     for &(a, b, w) in &g.edges {
         let (a, b) = (a as usize, b as usize);
-        let d = pos[b].sub(pos[a]);
+        let d = pos[b] - pos[a];
         let dist = d.len() + EPS;
         let mag = (dist / k) * w; // (d^2/k)/d * w, as a unit-vector scale
-        forces[a] = forces[a].add(d.scale(mag));
-        forces[b] = forces[b].sub(d.scale(mag));
+        forces[a] = forces[a] + d.scale(mag);
+        forces[b] = forces[b] - d.scale(mag);
     }
 
     // --- integrate with a temperature cap on displacement (cooling) ---
     for (p, f) in pos.iter_mut().zip(&forces) {
         let len = f.len() + EPS;
         let scale = len.min(temp) / len;
-        *p = p.add(f.scale(scale));
+        *p = *p + f.scale(scale);
     }
 }
 
@@ -122,7 +122,7 @@ pub fn run(g: &Graph, p: &Params, mut on_frame: impl FnMut(&[V2], u32)) -> Vec<V
             pos = (0..lvl.n)
                 .map(|i| {
                     prev[map[i] as usize]
-                        .add(V2::new(rng.unit() * p.k * 0.15, rng.unit() * p.k * 0.15))
+                        + V2::new(rng.unit() * p.k * 0.15, rng.unit() * p.k * 0.15)
                 })
                 .collect();
         }
@@ -165,17 +165,17 @@ mod tests {
         let centroid = |lo: usize, hi: usize| {
             let mut c = V2::ZERO;
             for i in lo..hi {
-                c = c.add(pos[i]);
+                c = c + pos[i];
             }
             c.scale(1.0 / (hi - lo) as f32)
         };
         let c0 = centroid(0, 25);
         let c1 = centroid(25, 50);
-        let inter = c1.sub(c0).len();
+        let inter = (c1 - c0).len();
         // Mean intra-cluster spread of blob 0.
         let mut spread = 0.0;
         for i in 0..25 {
-            spread += pos[i].sub(c0).len();
+            spread += (pos[i] - c0).len();
         }
         spread /= 25.0;
         assert!(
