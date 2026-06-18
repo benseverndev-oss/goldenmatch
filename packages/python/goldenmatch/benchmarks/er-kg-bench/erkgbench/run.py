@@ -28,6 +28,7 @@ from erkgbench.adapters import (  # noqa: E402
     Record,
     all_modeled,
 )
+from erkgbench.adapters.base import last_cost_of  # noqa: E402
 from erkgbench.adapters.real import available_real_adapters  # noqa: E402
 
 DATASET = _BENCH_ROOT / "dataset" / "records.csv"
@@ -129,6 +130,10 @@ def run(embedder_kind: str | None) -> dict:
             t0 = time.perf_counter()
             clustering = ad.resolve(records)
             elapsed_ms = (time.perf_counter() - t0) * 1000.0
+            # Cost of THIS run's resolve() (the timed one). Captured before the
+            # determinism re-run so it reflects a single resolve. last_cost_of
+            # returns zeros for any adapter that doesn't spend (most do not).
+            cost = last_cost_of(ad)
             # Determinism: identical partition on a re-run.
             deterministic = metrics.clusterings_equal(clustering, ad.resolve(records))
         except Exception as exc:  # noqa: BLE001 - a flaky adapter must not sink the board
@@ -157,6 +162,7 @@ def run(embedder_kind: str | None) -> dict:
                 },
                 "time_ms": round(elapsed_ms, 1),
                 "deterministic_floor": bool(deterministic and ad.deterministic),
+                "cost": cost,
             }
         )
 
@@ -186,6 +192,46 @@ def _short(c: str) -> str:
     }[c]
 
 
+def _llm_flag(r: dict) -> str:
+    """`yes` when the row's resolve() spent any LLM call, else `no`.
+
+    Reads the raw ``cost`` dict the runner records (``last_cost_of``). A row
+    missing ``cost`` (e.g. a legacy result) reads as ``no`` -- the same as a
+    deterministic adapter, which is the safe default.
+    """
+    return "yes" if (r.get("cost") or {}).get("llm_calls", 0) > 0 else "no"
+
+
+def _render_headline_table(results: list[dict]) -> list[str]:
+    """Header + separator + one row per result for the headline F1 table.
+
+    Factored out (pure function over the result rows) so the column-count
+    invariant -- header / separator / every data row carry the same number of
+    cells, including the ``LLM?`` column -- is unit-testable without running
+    the full pipeline.
+    """
+    lines = [
+        "| System | P | R | F1 | fid | coll&nbsp;P* | temp&nbsp;P* | ms | det-floor | LLM? |",
+        "|---|---|---|---|---|---|---|---|---|---|",
+    ]
+    for r in results:
+        if "error" in r:
+            lines.append(
+                f"| {r['name']} | _error_ | | | {r.get('fidelity', '-')} | | | | "
+                f"{r['error'][:40]} | {_llm_flag(r)} |"
+            )
+            continue
+        o = r["overall"]
+        cp = r["per_class_precision"].get("same_name_collision", "-")
+        tp = r["per_class_precision"].get("temporal_version", "-")
+        lines.append(
+            f"| {r['name']} | {o['precision']} | {o['recall']} | **{o['f1']}** | "
+            f"{r.get('fidelity', '-')} | {cp} | {tp} | {r['time_ms']} | "
+            f"{'yes' if r['deterministic_floor'] else 'no'} | {_llm_flag(r)} |"
+        )
+    return lines
+
+
 def to_markdown(report: dict) -> str:
     ds = report["dataset"]
     lines = [
@@ -200,20 +246,8 @@ def to_markdown(report: dict) -> str:
         "",
         "## Headline (pairwise, full set)",
         "",
-        "| System | P | R | F1 | fid | coll&nbsp;P* | temp&nbsp;P* | ms | det-floor |",
-        "|---|---|---|---|---|---|---|---|---|",
     ]
-    for r in report["results"]:
-        if "error" in r:
-            lines.append(f"| {r['name']} | _error_ | | | {r.get('fidelity', '-')} | | | | {r['error'][:40]} |")
-            continue
-        o = r["overall"]
-        cp = r["per_class_precision"].get("same_name_collision", "-")
-        tp = r["per_class_precision"].get("temporal_version", "-")
-        lines.append(
-            f"| {r['name']} | {o['precision']} | {o['recall']} | **{o['f1']}** | "
-            f"{r.get('fidelity', '-')} | {cp} | {tp} | {r['time_ms']} | {'yes' if r['deterministic_floor'] else 'no'} |"
-        )
+    lines += _render_headline_table(report["results"])
 
     lines += ["", "## Per-class F1", "", "| System | " + " | ".join(
         _short(c) for c in CLASS_ORDER
