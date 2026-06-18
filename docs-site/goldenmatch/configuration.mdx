@@ -322,6 +322,10 @@ Two constraints the config loader enforces:
   Correlated survivorship resolves on the driver (the in-memory golden builder). The Ray Phase-5 streaming pipeline (`GOLDENMATCH_DISTRIBUTED_PIPELINE=2`) and the Sail backend reject configs that include `field_groups` or conditional `field_rules` with a clear error. Run those configs on the in-memory path.
 </Note>
 
+<Note>
+  **Vectorized resolution (automatic).** The in-memory golden builder resolves `field_groups`, scalar fields, `allow_fill`, `anchor`, and conditional `field_rules` through a vectorized Polars path when building plain golden records (no per-field provenance requested). It is selected automatically when every strategy in the config is one the vectorized path reproduces exactly; any config using a `custom:`, `confidence_majority`, `majority_vote`, or `unanimous_or_null` strategy -- or one requesting per-field provenance -- falls back to the per-cluster path. Output is byte-identical either way (values and confidences); the only difference is speed. No configuration is required. The richer per-field source provenance surfaced by `save_lineage` / `explain --cluster` is built on the per-cluster path.
+</Note>
+
 #### Surfacing the group decision
 
 When a config uses `field_groups` (or conditional/validated `field_rules`), GoldenMatch surfaces the survivorship decision in three places:
