@@ -401,6 +401,7 @@ def dedupe_df(
     planning_effort: str | None = None,
     fs_model_path: str | None = None,
     certify: bool = False,
+    semantic_blocking: bool = False,
 ) -> DedupeResult:
     """Deduplicate a Polars DataFrame directly (no file I/O).
 
@@ -421,6 +422,11 @@ def dedupe_df(
             probabilistic matchkey without its own ``model_path`` loads the
             model from here (skipping EM) if it exists, or trains and saves it
             there on first run (Splink-style train-once -> reuse).
+        semantic_blocking: When True, attach a default ``SemanticBlockingConfig``
+            to the resolved config (opt-in semantic candidate generation /
+            recall lever). An explicit ``config`` that already sets
+            ``semantic_blocking`` wins. Config plumbing only today -- the config
+            is carried but not yet consumed, so the run behaves like ``False``.
         certify: When True, also compute an unsupervised recall estimate
             (capture-recapture over the config's decorrelated matchkey/pass
             systems) and attach it to ``DedupeResult.recall_certificate``.
@@ -500,6 +506,15 @@ def dedupe_df(
             config.llm_scorer = LLMScorerConfig(enabled=True)
         if llm_auto:
             config.llm_auto = llm_auto
+        # Opt-in semantic candidate generation (recall lever). Attach a default
+        # SemanticBlockingConfig when the caller asks for it and the resolved
+        # config doesn't already carry one (an explicit config wins). This is
+        # config plumbing only -- the config is carried into the pipeline but
+        # NOT consumed yet (Task 6 wires the actual candidate union), so
+        # semantic_blocking=True behaves identically to today.
+        if semantic_blocking and getattr(config, "semantic_blocking", None) is None:
+            from goldenmatch.config.schemas import SemanticBlockingConfig
+            config.semantic_blocking = SemanticBlockingConfig()
         # Splink-style train-once: point probabilistic matchkeys at a persisted
         # model file (load-or-train-and-save). Only fills matchkeys that don't
         # already carry their own model_path. No-op when there are none.

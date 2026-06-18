@@ -806,6 +806,40 @@ class DistributedRoutingConfig(BaseModel):
     golden: Literal["auto", "distributed", "in_process"] = "auto"
 
 
+class SemanticBlockingConfig(BaseModel):
+    """Opt-in semantic candidate-generation (recall-lever) config. Carries the
+    knobs for the additional blocking keys that union extra candidate pairs into
+    the blocking stage: ANN nearest-neighbors, initialism expansion, and alias
+    table lookups. This is config plumbing only -- it is attached to
+    ``GoldenMatchConfig.semantic_blocking`` and CONSUMED downstream; constructing
+    it does not change behavior on its own."""
+
+    keys: list[Literal["ann", "initialism", "alias"]] = Field(
+        default_factory=lambda: ["ann", "initialism", "alias"],
+        description=(
+            "Which semantic blocking keys to union into candidate generation: "
+            "'ann' (embedding nearest-neighbors), 'initialism' (initialism "
+            "expansion), 'alias' (alias-table lookups)."
+        ),
+    )
+    ann_model: str = Field(
+        default="inhouse",
+        description="Embedding model id for the ANN key (e.g. 'inhouse').",
+    )
+    ann_top_k: int = Field(
+        default=20,
+        description="Number of ANN neighbors retrieved per record for candidate generation.",
+    )
+    ann_threshold: float = Field(
+        default=0.5,
+        description="Minimum ANN similarity for a neighbor to become a candidate pair.",
+    )
+    alias_tables: list[Literal["given_names", "business"]] = Field(
+        default_factory=lambda: ["given_names", "business"],
+        description="Which alias tables the 'alias' key consults.",
+    )
+
+
 class GoldenMatchConfig(BaseModel):
     input: InputConfig | None = None
     output: OutputConfig = Field(default_factory=lambda: OutputConfig())
@@ -823,6 +857,7 @@ class GoldenMatchConfig(BaseModel):
     domain: DomainConfig | None = None
     backend: str | None = None  # None (default Polars), "ray", "duckdb"
     distributed_routing: DistributedRoutingConfig | None = None
+    semantic_blocking: SemanticBlockingConfig | None = None
     allow_slow_path: bool = False
     # Execution mode. "standard" (default) = the in-memory/Ray pipeline,
     # bit-identical artifacts. "scale" = the DataFusion spine (out-of-core,
