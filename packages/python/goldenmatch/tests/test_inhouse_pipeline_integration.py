@@ -63,10 +63,13 @@ def test_embedding_scorer_uses_inhouse_model(inhouse_model_path):
     assert matrix[0, 1] > matrix[0, 2]
 
 
-def test_inhouse_embedder_requires_a_model_path(monkeypatch):
+def test_inhouse_embedder_zero_config_default(monkeypatch):
+    # Contract change: bare get_embedder("inhouse") (no path, no env) now returns the
+    # untrained fixed-seed default GoldenEmbedModel (zero-config) instead of raising
+    # ValueError. A trained model is still used when "inhouse:<path>"/the env is given.
     from goldenmatch.core.embedder import _embedders, get_embedder
 
     monkeypatch.delenv("GOLDENMATCH_INHOUSE_MODEL", raising=False)
     _embedders.pop("inhouse", None)
-    with pytest.raises(ValueError):
-        get_embedder("inhouse")
+    emb = get_embedder("inhouse")
+    assert emb is not None

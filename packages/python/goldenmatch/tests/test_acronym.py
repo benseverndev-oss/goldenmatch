@@ -31,7 +31,13 @@ def test_initialism_strips_parenthetical_and_legal_noise():
 
 
 def test_initialism_registered_as_plugin():
+    # Self-contained: call register_transforms() (idempotent) so the test does not
+    # depend on import-time registration surviving another xdist-shard test that may
+    # have cleared the PluginRegistry singleton (CLAUDE.md xdist worker-isolation rule).
+    from goldenmatch.core.acronym import register_transforms
     from goldenmatch.plugins.registry import PluginRegistry
+
+    register_transforms()
     reg = PluginRegistry.instance()
     assert reg.has_transform("initialism")
     assert reg.get_transform("initialism").transform("International Business Machines") == "IBM"
