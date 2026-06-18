@@ -120,9 +120,80 @@ def _sorted_for_group(multi_df: pl.DataFrame, g) -> pl.DataFrame:
     return out
 
 
+def _group_conf_name(g) -> str:
+    """Internal per-cluster confidence column name for group ``g`` (dropped
+    before the final frame; only the row-wise mean survives as
+    ``__golden_confidence__``)."""
+    return f"__conf_group_{g.name}__"
+
+
+def _group_tie_expr(g) -> pl.Expr:
+    """Per-cluster tie indicator for group ``g`` (Boolean), matching
+    winner._ranking's ``tie`` flag.
+
+    * ``most_complete``: >=2 rows share the max populated-count.
+    * ``anchor``: >=2 rows share the top composite key ``(anchor_present,
+      populated_count)`` -- i.e. the same (present, count) as the rank-0 winner.
+    * ``source_priority`` / ``most_recent``: winner._ranking returns ``tie=False``
+      unconditionally, so no tie ever applies (confidence is never scaled by 0.7).
+    """
+    pop = _populated_count_expr(g.columns)
+    if g.strategy == "most_complete":
+        return (pop == pop.max()).sum() > 1
+    if g.strategy == "anchor":
+        present = pl.col(g.anchor).is_not_null()
+        # Top key is the rank-0 winner's (present, pop). After _sorted_for_group
+        # the winner is row 0, so the top key == (present.first(), pop ordered by
+        # the winner). Equivalent: count rows whose (present, pop) equals the max
+        # present AND, among those, the max pop -- but the winner is whichever has
+        # the highest (present, pop) lexicographically. Reproduce winner._ranking:
+        #   top_key = (present[w], counts[w]); tie = #rows with that key > 1.
+        # The winning (present, pop) is the lexicographic max over rows.
+        # present True sorts above False; within the chosen present, max pop wins.
+        top_present = present.max()  # True if any row has the anchor
+        # pop restricted to rows at the winning present level:
+        pop_at_top = pop.filter(present == top_present)
+        top_pop = pop_at_top.max()
+        return ((present == top_present) & (pop == top_pop)).sum() > 1
+    # source_priority / most_recent: never tie.
+    return pl.lit(False)
+
+
+def _group_conf_expr(g) -> pl.Expr:
+    """Per-cluster group confidence for ``g`` (Float64), byte-identical to
+    winner.group_winner's ``conf``.
+
+    ``base = (winner_populated + n_filled) / len(g.columns)``; ``x 0.7`` on a tie.
+
+    Operates on the frame already sorted by :func:`_sorted_for_group`, so the
+    rank-0 winner is row 0 of each ``__cluster_id__`` partition:
+
+    * ``winner_populated`` = the winner row's OWN non-null count among
+      ``g.columns`` (PRE-fill) = ``_populated_count_expr(...).first()``.
+    * ``n_filled`` = group cells where the winner is null AND a non-null donor
+      exists in the ranking (``allow_fill`` only; 0 otherwise). Per column the
+      back-fill resolves to ``drop_nulls().first()``, so a cell is "filled" iff
+      ``col.first() is null AND col.drop_nulls().first() is not null``.
+    """
+    n_cols = len(g.columns)
+    winner_populated = _populated_count_expr(g.columns).first().cast(pl.Float64)
+    if g.allow_fill:
+        filled = pl.lit(0, dtype=pl.Float64)
+        for c in g.columns:
+            filled = filled + (
+                pl.col(c).first().is_null() & pl.col(c).drop_nulls().first().is_not_null()
+            ).cast(pl.Float64)
+    else:
+        filled = pl.lit(0.0, dtype=pl.Float64)
+    base = (winner_populated + filled) / pl.lit(float(n_cols)) if n_cols else pl.lit(0.0)
+    tie = _group_tie_expr(g)
+    return pl.when(tie).then(base * 0.7).otherwise(base)
+
+
 def _resolve_group(multi_df: pl.DataFrame, g) -> pl.DataFrame:
     """Resolve one field group to one row per cluster (``__cluster_id__`` +
-    ``g.columns``). Byte-identical to winner.group_winner for provenance=False.
+    ``g.columns`` + the internal per-cluster confidence column). Byte-identical
+    to winner.group_winner for provenance=False (value + confidence).
     """
     ordered = _sorted_for_group(multi_df, g)
     if g.allow_fill:
@@ -134,6 +205,9 @@ def _resolve_group(multi_df: pl.DataFrame, g) -> pl.DataFrame:
     else:
         # lock-step: every column = the winner row's value (nulls included).
         agg_exprs = [pl.col(c).first().alias(c) for c in g.columns]
+    # One confidence per group (the mean denominator counts a group as ONE unit
+    # regardless of column count -- resolve_cluster appends res.confidence once).
+    agg_exprs.append(_group_conf_expr(g).alias(_group_conf_name(g)))
     return (
         ordered.group_by("__cluster_id__", maintain_order=True)
         .agg(agg_exprs)
@@ -258,6 +332,110 @@ def _scalar_value_expr(col: str, len_alias: str | None, rule, has_row_id: bool) 
     )
 
 
+def _scalar_conf_name(col: str) -> str:
+    """Internal per-cluster confidence column name for scalar ``col`` (dropped
+    before the final frame; only the row-wise mean survives)."""
+    return f"__conf_scalar_{col}__"
+
+
+def _scalar_conf_expr(col: str, len_alias: str | None, rule, has_row_id: bool) -> pl.Expr:
+    """Per-cluster scalar confidence for ``col`` under ``rule`` (Float64),
+    byte-identical to ``merge_field``'s returned confidence.
+
+    The ``merge_field`` control flow this reproduces, in order:
+
+    1. ``non_null`` empty -> ``0.0``.
+    2. all non-null values identical (``nuniq <= 1``) -> ``1.0`` for EVERY
+       strategy (the short-circuit BEFORE strategy dispatch).
+    3. otherwise the strategy's own confidence constant:
+       * ``most_complete``: ``1.0`` if the longest ``str(v)`` is unique among
+         non-nulls, else ``0.7`` (length tie).
+       * ``longest_value``: same winner, tie confidence ``0.5``.
+       * ``most_recent``: among rows with value AND date both non-null, ``1.0``
+         for a unique top date, ``0.5`` on a date tie, ``0.0`` if no such row.
+       * ``first_non_null``: ``0.6`` (all-agree already returned ``1.0``).
+       * ``source_priority``: ``max(0.1, 1.0 - idx * 0.1)`` for the chosen
+         source's rank ``idx``; ``0.0`` when no priority source matches.
+
+    No ``quality_weights`` are passed on the native path, so every
+    quality-weighted tie branch in ``merge_field`` is unreachable here -- the
+    order-tie constants (0.7 / 0.5 / etc.) are the live ones.
+
+    Only the strategies ``_scalar_value_expr`` resolves are handled here; any
+    other strategy raises ``NotImplementedError`` so the value expr and the
+    confidence expr stay in lockstep (the Phase F gate routes the rest to the
+    slow path).
+    """
+    strategy = rule.strategy
+    nn = pl.col(col).drop_nulls()
+    n_nn = nn.len()
+    nuniq = nn.n_unique()
+
+    # Strategy-specific confidence assuming we are PAST the all-agree branch
+    # (>= 2 distinct non-null values).
+    if strategy in ("most_complete", "longest_value"):
+        tie_conf = 0.7 if strategy == "most_complete" else 0.5
+        mask = pl.col(col).is_not_null()
+        lengths = pl.col(len_alias).filter(mask)
+        max_len = lengths.max()
+        length_tie = (lengths == max_len).sum() > 1
+        strat_conf = pl.when(length_tie).then(pl.lit(tie_conf)).otherwise(pl.lit(1.0))
+    elif strategy == "first_non_null":
+        strat_conf = pl.lit(0.6)
+    elif strategy == "most_recent":
+        date_col = rule.date_column
+        elig = pl.col(col).is_not_null() & pl.col(date_col).is_not_null()
+        dates = pl.col(date_col).filter(elig)
+        n_elig = dates.len()
+        top_date = dates.max()
+        date_tie = (dates == top_date).sum() > 1
+        strat_conf = (
+            pl.when(n_elig == 0)
+            .then(pl.lit(0.0))
+            .when(date_tie)
+            .then(pl.lit(0.5))
+            .otherwise(pl.lit(1.0))
+        )
+    elif strategy == "source_priority":
+        priority = list(rule.source_priority or [])
+        sentinel = len(priority)
+        rank_map = {s: i for i, s in enumerate(priority)}
+        src_rank = pl.col("__source__").replace_strict(
+            rank_map, default=sentinel, return_dtype=pl.Int64
+        )
+        # The winning source is the lowest-rank source whose FIRST occurrence
+        # (lowest __row_id__, or input order without one) is non-null -- exactly
+        # the eligibility used by the value expr. conf = max(0.1, 1.0 - idx*0.1)
+        # for that idx; 0.0 if no eligible source.
+        if has_row_id:
+            is_first = (
+                pl.col("__row_id__") == pl.col("__row_id__").min().over("__source__")
+            )
+        else:
+            is_first = pl.col("__source__").cum_count().over("__source__") == 1
+        eligible = is_first & pl.col(col).is_not_null() & (src_rank < sentinel)
+        winner_rank = src_rank.filter(eligible).min()
+        n_elig = src_rank.filter(eligible).len()
+        # max(0.1, 1.0 - idx*0.1), with idx = winner_rank.
+        raw = pl.lit(1.0) - winner_rank.cast(pl.Float64) * 0.1
+        floored = pl.max_horizontal(pl.lit(0.1), raw)
+        strat_conf = pl.when(n_elig == 0).then(pl.lit(0.0)).otherwise(floored)
+    else:
+        raise NotImplementedError(
+            f"survivorship scalar strategy {strategy!r} confidence not handled "
+            "by the native path"
+        )
+
+    return (
+        pl.when(n_nn == 0)
+        .then(pl.lit(0.0))
+        .when(nuniq <= 1)
+        .then(pl.lit(1.0))
+        .otherwise(strat_conf)
+        .cast(pl.Float64)
+    )
+
+
 def _resolve_scalars(multi_df: pl.DataFrame, rules, scalar_cols) -> pl.DataFrame:
     """Resolve every scalar column to one row per cluster (``__cluster_id__`` +
     ``scalar_cols``). Byte-identical (values only) to ``resolve_cluster``'s
@@ -314,6 +492,13 @@ def _resolve_scalars(multi_df: pl.DataFrame, rules, scalar_cols) -> pl.DataFrame
         _scalar_value_expr(col, len_aliases.get(col), rules_by_col[col], has_row_id).alias(col)
         for col in scalar_cols
     ]
+    # One confidence per scalar unit (matches resolve_cluster appending `conf`
+    # once per scalar field).
+    agg_exprs.extend(
+        _scalar_conf_expr(col, len_aliases.get(col), rules_by_col[col], has_row_id)
+        .alias(_scalar_conf_name(col))
+        for col in scalar_cols
+    )
     return (
         prepped.group_by("__cluster_id__", maintain_order=True)
         .agg(agg_exprs)
@@ -329,10 +514,25 @@ def build_survivorship_native(multi_df, rules) -> pl.DataFrame:
     per-field ``GoldenFieldRule`` strategy, or ``default_strategy`` (Phase C).
     Each unit resolves over the same source frame and is joined back on
     ``__cluster_id__``. List-form ``when:`` conditionals are Phase E.
+
+    Phase D: every unit (each group, each scalar field) also emits ONE internal
+    per-cluster confidence column. ``__golden_confidence__`` is the row-wise mean
+    over those columns -- byte-identical to the slow path's flat mean over the
+    per-unit ``confidences`` list (``resolve_cluster``: ``sum(confidences) /
+    len(confidences)``). The internal per-unit columns are dropped so the emitted
+    frame carries ONLY ``__cluster_id__`` + resolved value columns +
+    ``__golden_confidence__`` (matching the oracle frame's column set).
     """
     result: pl.DataFrame | None = None
+    # Map each unit to its internal per-cluster confidence column name. Keyed by
+    # the SAME unit ids build_resolution_order uses ("group:<name>" / column) so
+    # we can sum the confidences in the slow path's exact resolution order below
+    # (Python float sum is order-sensitive; matching the order keeps the mean
+    # bit-identical to resolve_cluster's sum(confidences)/len(confidences)).
+    conf_name_by_unit: dict[str, str] = {}
     for g in rules.field_groups:
         resolved = _resolve_group(multi_df, g)
+        conf_name_by_unit[f"group:{g.name}"] = _group_conf_name(g)
         if result is None:
             result = resolved
         else:
@@ -347,12 +547,36 @@ def build_survivorship_native(multi_df, rules) -> pl.DataFrame:
     ]
     if scalar_cols:
         scalars = _resolve_scalars(multi_df, rules, scalar_cols)
+        for c in scalar_cols:
+            conf_name_by_unit[c] = _scalar_conf_name(c)
         if result is None:
             result = scalars
         else:
             result = result.join(scalars, on="__cluster_id__", how="inner")
 
     if result is None:
-        # No groups and no scalars: just the distinct cluster ids.
+        # No groups and no scalars: just the distinct cluster ids. No units ->
+        # the slow path emits 0.0 (sum/len of an empty confidences list).
         result = multi_df.select("__cluster_id__").unique(maintain_order=True)
-    return result
+        return result.with_columns(
+            pl.lit(0.0, dtype=pl.Float64).alias("__golden_confidence__")
+        )
+
+    # __golden_confidence__ = sum(per-unit confidences) / unit_count, summed in
+    # the slow path's resolution order via an explicit LEFT FOLD so the float
+    # arithmetic is bit-identical to Python's sum() (left fold from 0.0).
+    from goldenmatch.core.survivorship.conditions import build_resolution_order
+
+    user_cols = [
+        c for c in multi_df.columns
+        if not _is_internal(c) and c != "__cluster_id__"
+    ]
+    order = build_resolution_order(rules.field_rules, rules.field_groups, user_cols)
+    conf_cols = [conf_name_by_unit[u] for u in order if u in conf_name_by_unit]
+    total = pl.lit(0.0, dtype=pl.Float64)
+    for c in conf_cols:
+        total = total + pl.col(c)
+    result = result.with_columns(
+        (total / pl.lit(float(len(conf_cols)))).alias("__golden_confidence__")
+    )
+    return result.drop(list(conf_name_by_unit.values()))

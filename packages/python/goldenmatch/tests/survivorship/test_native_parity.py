@@ -87,7 +87,7 @@ def test_b1_most_complete_no_frankenstein():
         "city": [None, "New York"],
         "zip": [None, "10001"],
     })
-    assert_parity(df, _most_complete_rules(), compare_confidence=False)
+    assert_parity(df, _most_complete_rules())
 
 
 def test_b1_most_complete_tie_lowest_row_id():
@@ -99,7 +99,7 @@ def test_b1_most_complete_tie_lowest_row_id():
         "city": ["LA", "NY"],
         "zip": [None, None],
     })
-    assert_parity(df, _most_complete_rules(), compare_confidence=False)
+    assert_parity(df, _most_complete_rules())
 
 
 def test_b1_most_complete_all_null_group():
@@ -113,7 +113,7 @@ def test_b1_most_complete_all_null_group():
         "zip": [None, None],
     }, schema={"__cluster_id__": pl.Int64, "__row_id__": pl.Int64,
                "street": pl.Utf8, "city": pl.Utf8, "zip": pl.Utf8})
-    assert_parity(df, _most_complete_rules(), compare_confidence=False)
+    assert_parity(df, _most_complete_rules())
 
 
 def test_b1_most_complete_multi_cluster_mixed():
@@ -125,7 +125,7 @@ def test_b1_most_complete_multi_cluster_mixed():
         "city": ["LA", None, "SF", "SF", None, "DC"],
         "zip": [None, "02139", "94103", None, None, "20001"],
     })
-    assert_parity(df, _most_complete_rules(), compare_confidence=False)
+    assert_parity(df, _most_complete_rules())
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -154,7 +154,7 @@ def test_b2_source_priority_winner_and_lockstep():
         "street": ["1 Erp St", "2 Crm Ave", "3 Web Rd", "4 Crm Ln"],
         "city": ["LA", "NY", "SF", "DC"],
     })
-    assert_parity(df, _source_priority_rules(), compare_confidence=False)
+    assert_parity(df, _source_priority_rules())
 
 
 def test_b2_source_priority_tie_same_source_lowest_row_id():
@@ -166,7 +166,7 @@ def test_b2_source_priority_tie_same_source_lowest_row_id():
         "street": ["1 A St", "2 B Ave"],
         "city": ["LA", "NY"],
     })
-    assert_parity(df, _source_priority_rules(), compare_confidence=False)
+    assert_parity(df, _source_priority_rules())
 
 
 def test_b2_source_priority_unknown_source_ranks_last():
@@ -179,7 +179,7 @@ def test_b2_source_priority_unknown_source_ranks_last():
         "street": ["1 Old St", "2 Web Ave", "3 G St", "4 S Ave"],
         "city": ["LA", "NY", "SF", "DC"],
     })
-    assert_parity(df, _source_priority_rules(), compare_confidence=False)
+    assert_parity(df, _source_priority_rules())
 
 
 def _most_recent_rules():
@@ -203,7 +203,7 @@ def test_b2_most_recent_latest_wins_lockstep():
         "updated": [date(2020, 1, 1), date(2023, 6, 1),
                     date(2024, 1, 1), date(2021, 1, 1)],
     })
-    assert_parity(df, _most_recent_rules(), compare_confidence=False)
+    assert_parity(df, _most_recent_rules())
 
 
 def test_b2_most_recent_null_dates_last():
@@ -217,7 +217,7 @@ def test_b2_most_recent_null_dates_last():
         "updated": [None, date(2022, 1, 1), None, None],
     }, schema={"__cluster_id__": pl.Int64, "__row_id__": pl.Int64,
                "street": pl.Utf8, "city": pl.Utf8, "updated": pl.Date})
-    assert_parity(df, _most_recent_rules(), compare_confidence=False)
+    assert_parity(df, _most_recent_rules())
 
 
 def test_b2_most_recent_tie_same_date_lowest_row_id():
@@ -228,7 +228,7 @@ def test_b2_most_recent_tie_same_date_lowest_row_id():
         "city": ["LA", "NY"],
         "updated": [date(2022, 5, 5), date(2022, 5, 5)],
     })
-    assert_parity(df, _most_recent_rules(), compare_confidence=False)
+    assert_parity(df, _most_recent_rules())
 
 
 def _anchor_rules():
@@ -251,7 +251,7 @@ def test_b2_anchor_present_wins_over_more_complete():
         "city": ["LA", None],
         "zip": [None, "10001"],
     })
-    assert_parity(df, _anchor_rules(), compare_confidence=False)
+    assert_parity(df, _anchor_rules())
 
 
 def test_b2_anchor_both_present_breaks_by_completeness():
@@ -264,7 +264,7 @@ def test_b2_anchor_both_present_breaks_by_completeness():
         "city": [None, "NY", "SF", "DC"],
         "zip": ["10001", "10002", "94103", "20001"],        # cluster2: both full -> row_id 20
     })
-    assert_parity(df, _anchor_rules(), compare_confidence=False)
+    assert_parity(df, _anchor_rules())
 
 
 def test_b2_anchor_none_present_degrades_to_most_complete():
@@ -278,7 +278,7 @@ def test_b2_anchor_none_present_degrades_to_most_complete():
         "zip": [None, None],
     }, schema={"__cluster_id__": pl.Int64, "__row_id__": pl.Int64,
                "street": pl.Utf8, "city": pl.Utf8, "zip": pl.Utf8})
-    assert_parity(df, _anchor_rules(), compare_confidence=False)
+    assert_parity(df, _anchor_rules())
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -303,7 +303,7 @@ def test_b3_most_complete_allow_fill_backfills_winner_null():
                                       allow_fill=True,
                                       columns=["street", "city", "zip"])],
     )
-    assert_parity(df, rules, compare_confidence=False)
+    assert_parity(df, rules)
 
 
 def test_b3_allow_fill_no_donor_stays_null():
@@ -322,7 +322,7 @@ def test_b3_allow_fill_no_donor_stays_null():
                                       allow_fill=True,
                                       columns=["street", "city", "zip"])],
     )
-    assert_parity(df, rules, compare_confidence=False)
+    assert_parity(df, rules)
 
 
 def test_b3_source_priority_allow_fill_walks_ranking():
@@ -342,7 +342,7 @@ def test_b3_source_priority_allow_fill_walks_ranking():
                                       allow_fill=True,
                                       columns=["street", "city"])],
     )
-    assert_parity(df, rules, compare_confidence=False)
+    assert_parity(df, rules)
 
 
 def test_b3_most_recent_allow_fill():
@@ -361,7 +361,7 @@ def test_b3_most_recent_allow_fill():
                                       date_column="updated", allow_fill=True,
                                       columns=["street", "city", "updated"])],
     )
-    assert_parity(df, rules, compare_confidence=False)
+    assert_parity(df, rules)
 
 
 def test_b3_allow_fill_donor_not_lowest_row_id():
@@ -389,7 +389,7 @@ def test_b3_allow_fill_donor_not_lowest_row_id():
                                       allow_fill=True,
                                       columns=["street", "city", "zip"])],
     )
-    assert_parity(df, rules, compare_confidence=False)
+    assert_parity(df, rules)
 
 
 def test_empty_frame_returns_empty():
@@ -419,7 +419,7 @@ def test_b3_anchor_allow_fill():
                                       anchor="zip", allow_fill=True,
                                       columns=["street", "city", "zip"])],
     )
-    assert_parity(df, rules, compare_confidence=False)
+    assert_parity(df, rules)
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -443,7 +443,7 @@ def test_c1_default_strategy_scalar_alongside_group():
         field_groups=[GoldenGroupRule(name="addr", strategy="most_complete",
                                       columns=["street", "city"])],
     )
-    assert_parity(df, rules, compare_confidence=False)
+    assert_parity(df, rules)
 
 
 def test_c1_scalar_first_non_null():
@@ -458,7 +458,7 @@ def test_c1_scalar_first_non_null():
         default_strategy="most_complete",
         field_rules={"email": GoldenFieldRule(strategy="first_non_null")},
     )
-    assert_parity(df, rules, compare_confidence=False)
+    assert_parity(df, rules)
 
 
 def test_c1_scalar_most_complete_tie_lowest_row_id():
@@ -472,7 +472,7 @@ def test_c1_scalar_most_complete_tie_lowest_row_id():
         default_strategy="most_complete",
         field_rules={"name": GoldenFieldRule(strategy="most_complete")},
     )
-    assert_parity(df, rules, compare_confidence=False)
+    assert_parity(df, rules)
 
 
 def test_c1_scalar_longest_value():
@@ -487,7 +487,7 @@ def test_c1_scalar_longest_value():
         default_strategy="most_complete",
         field_rules={"title": GoldenFieldRule(strategy="longest_value")},
     )
-    assert_parity(df, rules, compare_confidence=False)
+    assert_parity(df, rules)
 
 
 def test_c1_scalar_most_recent():
@@ -507,7 +507,7 @@ def test_c1_scalar_most_recent():
                                               date_column="updated")},
         # updated is itself a scalar resolved by default_strategy (most_complete).
     )
-    assert_parity(df, rules, compare_confidence=False)
+    assert_parity(df, rules)
 
 
 def test_c1_scalar_most_recent_null_date_excluded():
@@ -525,7 +525,7 @@ def test_c1_scalar_most_recent_null_date_excluded():
         field_rules={"phone": GoldenFieldRule(strategy="most_recent",
                                               date_column="updated")},
     )
-    assert_parity(df, rules, compare_confidence=False)
+    assert_parity(df, rules)
 
 
 def test_c1_scalar_source_priority():
@@ -542,7 +542,7 @@ def test_c1_scalar_source_priority():
         field_rules={"phone": GoldenFieldRule(strategy="source_priority",
                                               source_priority=["crm", "erp", "web"])},
     )
-    assert_parity(df, rules, compare_confidence=False)
+    assert_parity(df, rules)
 
 
 def test_c1_scalar_source_priority_first_occurrence_null_blocks():
@@ -561,7 +561,7 @@ def test_c1_scalar_source_priority_first_occurrence_null_blocks():
         field_rules={"phone": GoldenFieldRule(strategy="source_priority",
                                               source_priority=["crm", "erp", "web"])},
     )
-    assert_parity(df, rules, compare_confidence=False)
+    assert_parity(df, rules)
 
 
 def test_c1_scalar_source_priority_unknown_source_no_winner():
@@ -578,7 +578,7 @@ def test_c1_scalar_source_priority_unknown_source_no_winner():
         field_rules={"phone": GoldenFieldRule(strategy="source_priority",
                                               source_priority=["crm", "erp", "web"])},
     )
-    assert_parity(df, rules, compare_confidence=False)
+    assert_parity(df, rules)
 
 
 def test_c1_scalar_all_null():
@@ -593,7 +593,7 @@ def test_c1_scalar_all_null():
         default_strategy="most_complete",
         field_rules={"name": GoldenFieldRule(strategy="most_complete")},
     )
-    assert_parity(df, rules, compare_confidence=False)
+    assert_parity(df, rules)
 
 
 def test_c1_scalar_all_agree_short_circuit():
@@ -609,7 +609,7 @@ def test_c1_scalar_all_agree_short_circuit():
         default_strategy="first_non_null",
         field_rules={"code": GoldenFieldRule(strategy="most_complete")},
     )
-    assert_parity(df, rules, compare_confidence=False)
+    assert_parity(df, rules)
 
 
 def test_c1_scalar_validate_mask_skips_invalid():
@@ -631,7 +631,7 @@ def test_c1_scalar_validate_mask_skips_invalid():
         field_rules={"email": GoldenFieldRule(strategy="most_complete",
                                               validate="email_validate")},
     )
-    assert_parity(df, rules, compare_confidence=False)
+    assert_parity(df, rules)
 
 
 def test_c1_validate_mask_with_first_non_null():
@@ -647,7 +647,7 @@ def test_c1_validate_mask_with_first_non_null():
         field_rules={"email": GoldenFieldRule(strategy="first_non_null",
                                               validate="email_validate")},
     )
-    assert_parity(df, rules, compare_confidence=False)
+    assert_parity(df, rules)
 
 
 def test_c1_groups_and_multiple_scalars_mixed():
@@ -675,4 +675,338 @@ def test_c1_groups_and_multiple_scalars_mixed():
             "note": GoldenFieldRule(strategy="first_non_null"),
         },
     )
-    assert_parity(df, rules, compare_confidence=False)
+    assert_parity(df, rules)
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# D1: EXACT __golden_confidence__ parity (groups + scalars + the mean)
+#
+# assert_parity now compares __golden_confidence__ by default, so every test
+# above already guards confidence. These add coverage for each confidence
+# CONSTANT (winner.group_winner + golden.merge_field) and the mean denominator.
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def test_d1_group_no_tie_confidence():
+    # most_complete, clear winner (3/3 vs 1/3) -> no tie. Group confidence =
+    # winner_populated/len(cols) = 3/3 = 1.0 (no 0.7 scaling).
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1],
+        "__row_id__": [10, 11],
+        "street": ["1 Full St", "2 B Ave"],
+        "city": ["LA", None],
+        "zip": ["10001", None],
+    })
+    assert_parity(df, _most_complete_rules())
+
+
+def test_d1_group_tie_scales_by_0_7():
+    # Both rows 2/3 populated -> most_complete TIE -> confidence base*0.7.
+    # base = winner_populated/3 = 2/3; conf = 2/3 * 0.7.
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1],
+        "__row_id__": [10, 11],
+        "street": ["A St", "B St"],
+        "city": ["LA", "NY"],
+        "zip": [None, None],
+    }, schema={"__cluster_id__": pl.Int64, "__row_id__": pl.Int64,
+               "street": pl.Utf8, "city": pl.Utf8, "zip": pl.Utf8})
+    assert_parity(df, _most_complete_rules())
+
+
+def test_d1_group_anchor_tie_scales_by_0_7():
+    # Both rows carry the anchor AND are equally complete -> anchor TIE.
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1],
+        "__row_id__": [10, 11],
+        "street": ["A St", "B St"],
+        "city": ["LA", "NY"],
+        "zip": ["10001", "10002"],   # both present, both 3/3 -> tie
+    })
+    assert_parity(df, _anchor_rules())
+
+
+def test_d1_group_source_priority_never_ties():
+    # source_priority winner; both rows same source -> winner._ranking returns
+    # tie=False, so NO 0.7 scaling even though the rank is shared.
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1],
+        "__row_id__": [11, 10],
+        "__source__": ["crm", "crm"],
+        "street": ["1 A St", "2 B Ave"],
+        "city": ["LA", "NY"],
+    })
+    assert_parity(df, _source_priority_rules())
+
+
+def test_d1_group_allow_fill_raises_confidence():
+    # allow_fill back-fills the winner's null zip from a donor -> n_filled=1, so
+    # base = (winner_populated + 1)/len(cols), strictly higher than without fill.
+    # winner = row A (street+city, 2/3); zip filled from row B -> base = 3/3 = 1.0.
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1],
+        "__row_id__": [10, 11],
+        "street": ["1 A St", "2 B Ave"],
+        "city": ["LA", None],
+        "zip": [None, "10001"],
+    })
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_groups=[GoldenGroupRule(name="addr", strategy="most_complete",
+                                      allow_fill=True,
+                                      columns=["street", "city", "zip"])],
+    )
+    assert_parity(df, rules)
+
+
+def test_d1_group_allow_fill_no_donor_no_raise():
+    # allow_fill but NO donor for the winner's null -> n_filled=0, base unchanged.
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1],
+        "__row_id__": [10, 11],
+        "street": ["1 A St", "2 B Ave"],
+        "city": ["LA", "NY"],
+        "zip": [None, None],
+    }, schema={"__cluster_id__": pl.Int64, "__row_id__": pl.Int64,
+               "street": pl.Utf8, "city": pl.Utf8, "zip": pl.Utf8})
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_groups=[GoldenGroupRule(name="addr", strategy="most_complete",
+                                      allow_fill=True,
+                                      columns=["street", "city", "zip"])],
+    )
+    assert_parity(df, rules)
+
+
+def test_d1_scalar_all_agree_short_circuit_is_1_0():
+    # All non-null values identical -> merge_field short-circuit -> 1.0 for EVERY
+    # strategy, BEFORE the strategy-specific constant. Uses first_non_null (whose
+    # non-agree confidence is 0.6) to prove the short-circuit wins.
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1, 1],
+        "__row_id__": [10, 11, 12],
+        "code": ["X1", "X1", None],
+    }, schema={"__cluster_id__": pl.Int64, "__row_id__": pl.Int64,
+               "code": pl.Utf8})
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={"code": GoldenFieldRule(strategy="first_non_null")},
+    )
+    assert_parity(df, rules)
+
+
+def test_d1_scalar_most_complete_unique_longest_is_1_0():
+    # Distinct values, ONE strictly-longest -> most_complete confidence 1.0.
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1],
+        "__row_id__": [10, 11],
+        "name": ["Bob", "Robert Smith"],   # unique longest -> 1.0
+    })
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={"name": GoldenFieldRule(strategy="most_complete")},
+    )
+    assert_parity(df, rules)
+
+
+def test_d1_scalar_most_complete_length_tie_is_0_7():
+    # Two DIFFERENT values of equal str length -> most_complete length tie -> 0.7.
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1],
+        "__row_id__": [10, 11],
+        "name": ["Abcd", "Wxyz"],   # distinct, same length -> tie 0.7
+    })
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={"name": GoldenFieldRule(strategy="most_complete")},
+    )
+    assert_parity(df, rules)
+
+
+def test_d1_scalar_longest_value_length_tie_is_0_5():
+    # longest_value shares most_complete's winner but its length-tie confidence
+    # is 0.5 (NOT 0.7) -- the constant the two strategies differ on.
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1],
+        "__row_id__": [10, 11],
+        "title": ["Abcd", "Wxyz"],   # distinct, same length -> tie 0.5
+    })
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={"title": GoldenFieldRule(strategy="longest_value")},
+    )
+    assert_parity(df, rules)
+
+
+def test_d1_scalar_longest_value_unique_is_1_0():
+    # longest_value unique-longest -> 1.0 (same as most_complete on the unique
+    # branch; the strategies only diverge on the tie constant).
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1],
+        "__row_id__": [10, 11],
+        "title": ["VP", "Vice President"],   # unique longest -> 1.0
+    })
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={"title": GoldenFieldRule(strategy="longest_value")},
+    )
+    assert_parity(df, rules)
+
+
+def test_d1_scalar_most_recent_unique_top_date_is_1_0():
+    # Distinct values, ONE strictly-newest eligible row -> most_recent conf 1.0.
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1],
+        "__row_id__": [10, 11],
+        "phone": ["111", "222"],
+        "updated": [date(2020, 1, 1), date(2023, 1, 1)],   # unique top date -> 1.0
+    })
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={"phone": GoldenFieldRule(strategy="most_recent",
+                                              date_column="updated")},
+    )
+    assert_parity(df, rules)
+
+
+def test_d1_scalar_most_recent_date_tie_is_0_5():
+    # Distinct values sharing the top date -> most_recent date tie -> 0.5.
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1],
+        "__row_id__": [10, 11],
+        "phone": ["111", "222"],
+        "updated": [date(2023, 5, 5), date(2023, 5, 5)],   # tie on top date -> 0.5
+    })
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={"phone": GoldenFieldRule(strategy="most_recent",
+                                              date_column="updated")},
+    )
+    assert_parity(df, rules)
+
+
+def test_d1_scalar_first_non_null_is_0_6():
+    # >= 2 distinct non-nulls -> first_non_null confidence 0.6 (past the
+    # all-agree short-circuit).
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1],
+        "__row_id__": [10, 11],
+        "email": ["a@x.com", "b@x.com"],   # distinct -> 0.6
+    })
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={"email": GoldenFieldRule(strategy="first_non_null")},
+    )
+    assert_parity(df, rules)
+
+
+def test_d1_scalar_source_priority_idx_confidence():
+    # source_priority confidence = max(0.1, 1.0 - idx*0.1) for the chosen
+    # source's rank. cluster 1: erp wins (idx1) -> 0.9. cluster 2: web (idx2) ->
+    # 0.8. Distinct values so the all-agree short-circuit does NOT fire.
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1, 2, 2],
+        "__row_id__": [10, 11, 20, 21],
+        "__source__": ["erp", "web", "web", "web"],
+        "phone": ["1erp", "2web", "3web", "4web"],
+    })
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={"phone": GoldenFieldRule(strategy="source_priority",
+                                              source_priority=["crm", "erp", "web"])},
+    )
+    assert_parity(df, rules)
+
+
+def test_d1_scalar_source_priority_no_match_is_0_0():
+    # Every source unknown -> no priority match -> (None, 0.0). Distinct values
+    # so the short-circuit does not mask the 0.0.
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1],
+        "__row_id__": [10, 11],
+        "__source__": ["legacy", "ghost"],
+        "phone": ["1old", "2spooky"],
+    })
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={"phone": GoldenFieldRule(strategy="source_priority",
+                                              source_priority=["crm", "erp", "web"])},
+    )
+    assert_parity(df, rules)
+
+
+def test_d1_scalar_all_null_confidence_is_0_0():
+    # Every value null in a cluster -> merge_field returns (None, 0.0). cluster 2
+    # has a value so the frame mixes a 0.0 and a populated confidence.
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1, 2, 2],
+        "__row_id__": [10, 11, 20, 21],
+        "name": [None, None, "Has Name", "Different"],
+    }, schema={"__cluster_id__": pl.Int64, "__row_id__": pl.Int64,
+               "name": pl.Utf8})
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={"name": GoldenFieldRule(strategy="most_complete")},
+    )
+    assert_parity(df, rules)
+
+
+def test_d1_mean_denominator_group_counts_as_one_unit():
+    # MEAN denominator check: a 3-column group + 2 scalars = 3 UNITS (the group
+    # is ONE unit regardless of its 3 columns). __golden_confidence__ must be
+    # (group_conf + name_conf + note_conf) / 3, not / 5. Distinct values across
+    # the board so every unit lands on a NON-1.0 constant, making a wrong
+    # denominator visible.
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1],
+        "__row_id__": [10, 11],
+        # group (3 cols, 1 unit): both rows 2/3 -> tie -> base*0.7
+        "street": ["A St", "B St"],
+        "city": ["LA", "NY"],
+        "zip": [None, None],
+        # scalar units
+        "name": ["Abcd", "Wxyz"],          # most_complete length tie -> 0.7
+        "note": ["first", "second"],       # first_non_null -> 0.6
+    }, schema={"__cluster_id__": pl.Int64, "__row_id__": pl.Int64,
+               "street": pl.Utf8, "city": pl.Utf8, "zip": pl.Utf8,
+               "name": pl.Utf8, "note": pl.Utf8})
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_groups=[GoldenGroupRule(name="addr", strategy="most_complete",
+                                      columns=["street", "city", "zip"])],
+        field_rules={
+            "name": GoldenFieldRule(strategy="most_complete"),
+            "note": GoldenFieldRule(strategy="first_non_null"),
+        },
+    )
+    assert_parity(df, rules)
+
+
+def test_d1_mixed_units_multi_cluster_mean():
+    # Broader mixed-unit mean across multiple clusters, mixing tie/no-tie group
+    # confidence, source_priority idx confidence, most_recent, and an all-null
+    # scalar (0.0) -- exercises the full per-unit -> mean pipeline.
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1, 2, 2, 2],
+        "__row_id__": [10, 11, 20, 21, 22],
+        "__source__": ["crm", "web", "web", "erp", "crm"],
+        # group: cluster1 clear winner (no tie), cluster2 tie on completeness
+        "street": ["1 Full St", "2 B", "3 C Rd", "4 D Rd", None],
+        "city": ["LA", None, "SF", "DC", "NY"],
+        # scalars
+        "name": ["Bob", "Robert Smith", "Al", "Alex", None],   # most_complete
+        "phone": ["111", "222", "333", "444", "555"],          # source_priority
+        "missing": [None, None, None, None, None],             # all-null -> 0.0
+    }, schema={"__cluster_id__": pl.Int64, "__row_id__": pl.Int64,
+               "__source__": pl.Utf8, "street": pl.Utf8, "city": pl.Utf8,
+               "name": pl.Utf8, "phone": pl.Utf8, "missing": pl.Utf8})
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_groups=[GoldenGroupRule(name="addr", strategy="most_complete",
+                                      columns=["street", "city"])],
+        field_rules={
+            "phone": GoldenFieldRule(strategy="source_priority",
+                                     source_priority=["crm", "erp", "web"]),
+        },
+    )
+    assert_parity(df, rules)
