@@ -685,6 +685,40 @@ def _adaptive_threshold(fields: list[MatchkeyField]) -> float:
     return 0.80
 
 
+# #858: distinguish real person-name columns from "name"-typed SHARED ATTRIBUTE
+# columns (company, job_title, department, ...). The profiler's name heuristic
+# classifies an organization/role column as col_type="name", which then enters
+# the weighted matchkey as a full-weight person-name fuzzy field. Under
+# multi-source that collapses distinct people who share an employer / title (the
+# crm_multisource_realistic over-merge: bare F1 0.13 -> 0.77 once company +
+# job_title are demoted). The org/attribute check runs FIRST so a name-bearing
+# org column (e.g. "company_name") is still recognized as a shared attribute.
+_ORG_ATTR_COLUMN_RE = re.compile(
+    r"(?i)(?:^|[^a-z])("
+    r"company|employer|organi[sz]ation|org|firm|business|corp|"
+    r"job|title|role|position|occupation|department|dept|division|team|group|"
+    r"category|segment|industry|sector|brand|product"
+    r")(?:[^a-z]|$)"
+)
+_PERSON_NAME_COLUMN_RE = re.compile(
+    r"(?i)(?:^|[^a-z])("
+    r"first|last|given|family|sur|surname|middle|maiden|forename|fore|"
+    r"nick|nickname|preferred|legal|full|display|fname|lname|mname|name|"
+    r"person|contact|individual|party|customer|client|member|patient|applicant"
+    r")(?:[^a-z]|$)"
+)
+
+
+def _is_person_name_column(column: str) -> bool:
+    """True when a ``col_type='name'`` column is plausibly a PERSON name (so it
+    earns a positive weighted-matchkey feature), False when it's a shared
+    organization/role attribute (company, job_title, department). The org check
+    wins, so ``company_name`` reads as a shared attribute, not a person name."""
+    if _ORG_ATTR_COLUMN_RE.search(column):
+        return False
+    return bool(_PERSON_NAME_COLUMN_RE.search(column))
+
+
 def build_matchkeys(
     profiles: list[ColumnProfile], df: pl.DataFrame | None = None,
     *, multi_source: bool = False,
@@ -833,6 +867,32 @@ def build_matchkeys(
                 "Skipping exact matchkey for '%s' (%s).", p.name, reason,
             )
             skipped_exact.append((p.name, reason))
+            continue
+
+        # #858: under multi-source, a low-cardinality "name"-typed field whose
+        # column is NOT a person name (company, job_title, department, ...) is a
+        # shared workplace/categorical attribute, NOT an identity claim. As a
+        # full-weight positive feature in the weighted matchkey it collapses
+        # distinct people who share an employer / title -- the dominant driver of
+        # the multi-source over-merge (crm_multisource_realistic: bare F1 0.13;
+        # demoting company + job_title -> 0.77). Demote to blocking-only, exactly
+        # like the phone demotion above (real person-name fields and
+        # high-cardinality fields are kept). Gated on the multi_source detection,
+        # so single-source autoconfig is byte-identical.
+        if (
+            multi_source
+            and scorer != "exact"
+            and p.col_type == "name"
+            and 0 < p.cardinality_ratio < 0.5
+            and not _is_person_name_column(p.name)
+        ):
+            logger.info(
+                "Demoting weighted field '%s' to blocking-only "
+                "(multi-source: low-cardinality non-person-name shared attribute, "
+                "cardinality_ratio=%.4f). Avoids collapsing distinct people who "
+                "share this value; column remains a blocking candidate.",
+                p.name, p.cardinality_ratio,
+            )
             continue
 
         mf = MatchkeyField(
