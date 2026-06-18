@@ -35,6 +35,13 @@ class PPRLConfig:
     ngram_size: int = 2
     protocol: str = "trusted_third_party"  # trusted_third_party or smc
     scorer: str = "dice"  # dice or jaccard
+    # #1040: stream Party B in blocks of this many records instead of
+    # materializing the full N_a x N_b score matrix in one allocation (50k x 50k
+    # float32 ~= 10 GB -> OOM). None (default) = single block = byte-identical to
+    # the dense path. When set, peak memory is bounded to mat_a + one block's
+    # (N_a x chunk_size) score slice. Output (clusters / match_count) is
+    # invariant to chunk_size -- only the allocation profile changes.
+    chunk_size: int | None = None
 
 
 @dataclass
@@ -92,6 +99,13 @@ def link_trusted_third_party(
 
     The coordinator receives bloom filters from both parties and computes
     similarity directly. Simple and fast, but requires trusting the coordinator.
+
+    Memory: ``mat_a`` (the Party A bit matrix) stays resident; Party B is
+    streamed in blocks of ``config.chunk_size`` (#1040). The full
+    ``N_a x N_b`` score matrix is never materialized when ``chunk_size`` is set,
+    so two ~50k-row lists link without the ~10 GB dense allocation. With
+    ``chunk_size=None`` (default) the loop runs once over all of Party B, which
+    is byte-for-byte the original dense path.
     """
     from goldenmatch.core.scorer import _hex_to_bits
 
@@ -100,39 +114,46 @@ def link_trusted_third_party(
     ids_b = sorted(party_b.bloom_filters.keys())
     total_comparisons = len(ids_a) * len(ids_b)
 
-    # Build bit matrices (N x filter_bits) as float32 for matrix multiply
+    # Party A bit matrix stays resident across all Party B blocks.
     mat_a = np.array(
         [np.unpackbits(_hex_to_bits(party_a.bloom_filters[rid])) for rid in ids_a],
         dtype=np.float32,
     )
-    mat_b = np.array(
-        [np.unpackbits(_hex_to_bits(party_b.bloom_filters[rid])) for rid in ids_b],
-        dtype=np.float32,
-    )
-
-    # Intersection via matrix multiply: mat_a @ mat_b.T
-    intersection = mat_a @ mat_b.T  # (n_a, n_b)
     pop_a = mat_a.sum(axis=1)  # (n_a,)
-    pop_b = mat_b.sum(axis=1)  # (n_b,)
 
-    if config.scorer == "dice":
-        denom = pop_a[:, None] + pop_b[None, :]
-        with np.errstate(divide="ignore", invalid="ignore"):
-            scores = np.where(denom > 0, 2.0 * intersection / denom, 0.0)
-    else:  # jaccard
-        union = pop_a[:, None] + pop_b[None, :] - intersection
-        with np.errstate(divide="ignore", invalid="ignore"):
-            scores = np.where(union > 0, intersection / union, 0.0)
+    # Block size over Party B. None / <=0 -> one block = the dense path.
+    chunk = config.chunk_size if (config.chunk_size and config.chunk_size > 0) else len(ids_b)
 
-    # Extract pairs above threshold
-    match_indices = np.argwhere(scores >= config.threshold)
     pairs = []
-    for idx_a, idx_b in match_indices:
-        rid_a = ids_a[idx_a]
-        rid_b = ids_b[idx_b]
-        composite_a = rid_a * 1000000
-        composite_b = rid_b * 1000000 + 500000
-        pairs.append((composite_a, composite_b, float(scores[idx_a, idx_b])))
+    for j0 in range(0, len(ids_b), chunk):
+        block_ids = ids_b[j0 : j0 + chunk]
+        if not block_ids:
+            continue
+        mat_b = np.array(
+            [np.unpackbits(_hex_to_bits(party_b.bloom_filters[rid])) for rid in block_ids],
+            dtype=np.float32,
+        )
+        pop_b = mat_b.sum(axis=1)  # (block,)
+        intersection = mat_a @ mat_b.T  # (n_a, block)
+
+        if config.scorer == "dice":
+            denom = pop_a[:, None] + pop_b[None, :]
+            with np.errstate(divide="ignore", invalid="ignore"):
+                scores = np.where(denom > 0, 2.0 * intersection / denom, 0.0)
+        else:  # jaccard
+            union = pop_a[:, None] + pop_b[None, :] - intersection
+            with np.errstate(divide="ignore", invalid="ignore"):
+                scores = np.where(union > 0, intersection / union, 0.0)
+
+        # Extract pairs above threshold within this block. block_ids[idx_b]
+        # maps the local block column back to the global Party B record id, so
+        # the composite encoding is identical regardless of chunk_size.
+        for idx_a, idx_b in np.argwhere(scores >= config.threshold):
+            rid_a = ids_a[idx_a]
+            rid_b = block_ids[idx_b]
+            composite_a = rid_a * 1000000
+            composite_b = rid_b * 1000000 + 500000
+            pairs.append((composite_a, composite_b, float(scores[idx_a, idx_b])))
 
     # Cluster matches
     all_composite_ids = (
