@@ -391,7 +391,7 @@ def _detect_over_merge(
     # Fallback when postflight is absent but raw clusters are present.
     if max_size == 0 and clusters:
         try:
-            for cid, info in clusters.items():
+            for info in clusters.values():
                 members = info.get("members") if isinstance(info, dict) else None
                 size = len(members) if members is not None else 0
                 if size > max_size:
@@ -624,7 +624,7 @@ def diagnose_config(
 
     # Rank high→low by severity (stable: preserves detector order within a tier
     # so output is fully deterministic), then truncate.
-    findings.sort(key=lambda f: _SEVERITY_RANK.get(f.get("severity"), 99))
+    findings.sort(key=lambda f: _SEVERITY_RANK.get(str(f.get("severity", "")), 99))
     if max_findings is not None and max_findings >= 0:
         findings = findings[:max_findings]
 
