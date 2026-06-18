@@ -28,6 +28,13 @@ logger = logging.getLogger(__name__)
 _DATA_FILE = "legal_forms.json"
 
 
+# Categories in legal_forms.json that are DESCRIPTIVE tokens, not entity-type
+# suffixes. "Acme Industries LLC" keeps "Industries" (it makes the name
+# meaningful) but drops "LLC". Per-token strippers that want only the
+# entity-type forms exclude this category — see ``entity_form_variants``.
+_DESCRIPTOR_CATEGORIES = frozenset({"holding_descriptors"})
+
+
 @dataclass(frozen=True)
 class _BusinessState:
     """Loaded state: the compiled regex matching every known trailing
@@ -38,6 +45,7 @@ class _BusinessState:
 
     pattern: re.Pattern[str]
     variants_normalized: frozenset[str]
+    entity_variants_normalized: frozenset[str]
 
 
 _lock = Lock()
@@ -62,11 +70,14 @@ def _build_state_from_file() -> _BusinessState | None:
         payload = json.load(f)
     forms_block = payload.get("legal_forms", {})
     variants: set[str] = set()
-    for variant_list in forms_block.values():
+    entity_variants: set[str] = set()
+    for category, variant_list in forms_block.items():
         for v in variant_list:
             n = _normalize_token(v)
             if n:
                 variants.add(n)
+                if category not in _DESCRIPTOR_CATEGORIES:
+                    entity_variants.add(n)
     if not variants:
         return None
     # Descending length so "Limited Liability Company" beats "Limited" or
@@ -78,7 +89,11 @@ def _build_state_from_file() -> _BusinessState | None:
         r"[\s,\-.]+(?:" + "|".join(escaped) + r")[\s.,]*$",
         re.IGNORECASE,
     )
-    return _BusinessState(pattern=pattern, variants_normalized=frozenset(variants))
+    return _BusinessState(
+        pattern=pattern,
+        variants_normalized=frozenset(variants),
+        entity_variants_normalized=frozenset(entity_variants),
+    )
 
 
 def _load() -> None:
@@ -121,6 +136,21 @@ def known_variants() -> frozenset[str]:
     if _state is None:
         return frozenset()
     return _state.variants_normalized
+
+
+def entity_form_variants() -> frozenset[str]:
+    """Normalized variants of the entity-TYPE legal forms only (Inc, LLC, Corp,
+    Corporation, Ltd, GmbH, ...), EXCLUDING descriptive tokens like "Industries"
+    / "Group" / "Holdings".
+
+    Per-token strippers (e.g. the initialism block-key deriver) use this so they
+    drop "Corporation" from "International Business Machines Corporation" but keep
+    "Industries" in "Acme Industries LLC". Empty frozenset when the pack is
+    unavailable."""
+    _load()
+    if _state is None:
+        return frozenset()
+    return _state.entity_variants_normalized
 
 
 def strip_legal_form(value: str | None) -> str | None:

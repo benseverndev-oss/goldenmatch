@@ -20,57 +20,99 @@ from goldenmatch.plugins.base import TransformPlugin
 
 # First alphabetic character of a token (skips leading digits / punctuation).
 _FIRST_ALPHA = re.compile(r"[A-Za-z]")
+# Any alphabetic character (used for the punctuation-only-token drop).
+_ANY_ALPHA = re.compile(r"[A-Za-z]")
+# A trailing/leading parenthetical group: "(Armonk, NY)", "(WHO)", etc.
+_PARENTHETICAL = re.compile(r"\s*\([^)]*\)")
 
 
-def _strip_trailing_legal_form(text: str) -> str:
-    """Drop a SINGLE trailing corporate-entity suffix (LLC, Inc, GmbH, ...).
+def _legal_form_variants() -> frozenset[str]:
+    """Normalized (lower-case) set of entity-TYPE legal-form variants, e.g.
+    ``{"inc", "incorporated", "corp", "corporation", "llc", ...}`` — EXCLUDING
+    descriptive tokens like "Industries" / "Group" / "Holdings".
 
-    Deliberately NOT ``goldenmatch.refdata.business.strip_legal_form`` — that
-    helper iterates up to 4 passes, so on "Acme Industries LLC" it strips
-    "LLC" *and then* "Industries" (a descriptive token also present in the
-    legal-form variant list), collapsing to "Acme". For an initialism block
-    key we want only the entity-type suffix gone ("Acme Industries"), keeping
-    the descriptive token so the abbreviation stays meaningful ("AI"). One
-    application of the shared compiled pattern does exactly that. Falls back
-    to whitespace-collapse when the refdata pack is unavailable.
+    Sourced from the same refdata pack ``strip_legal_form`` uses, so the
+    per-token drop here stays in lockstep with the trailing-suffix stripper but
+    keeps the descriptive token that makes the abbreviation meaningful
+    ("Acme Industries LLC" -> drop "LLC", keep "Industries" -> "AI"). Empty
+    frozenset when the pack is unavailable (initialism blocking then just keeps
+    the legal-form token, which is harmless — it only changes the key).
     """
-    cleaned = re.sub(r"\s+", " ", text).strip()
-    if not cleaned:
-        return cleaned
     try:
         from goldenmatch.refdata import business
 
-        business._load()
-        state = business._state
+        return business.entity_form_variants()
     except Exception:  # noqa: BLE001 — never let an unhealthy pack break blocking
-        state = None
-    if state is None:
-        return cleaned
-    return state.pattern.sub("", cleaned).strip() or cleaned
+        return frozenset()
+
+
+def _normalize_token_for_legal_check(token: str) -> str:
+    """Lower-case + strip trailing punctuation, matching the refdata pack's
+    ``_normalize_token`` so a token like ``"Corp."`` compares equal to the
+    bundled variant ``"corp"``."""
+    return token.strip().rstrip(".,").lower()
 
 
 def derive_initialism(text: str | None) -> str | None:
-    """Return the upper-cased initials of a multi-token name.
+    """Return an abbreviation block key for a name, noise-tolerant + acronym-aware.
 
-    "International Business Machines" -> "IBM". A single trailing legal-form
-    token is dropped first, so "Acme Industries LLC" -> "AI". A single
-    resulting token yields ``""`` (one letter is too coarse a block key — it
-    would over-merge), as does empty / whitespace-only input.
+    Steps:
+
+    1. Strip parentheticals: ``"... (Armonk, NY)"`` -> ``"..."``.
+    2. Tokenize on whitespace; drop legal-form tokens ANYWHERE (not just
+       trailing) and punctuation-only tokens.
+    3. **Acronym-as-own-key:** if exactly ONE token survives AND it looks like
+       an acronym (all-uppercase in the ORIGINAL, all alphabetic, length 2-6),
+       return it uppercased — so ``"IBM"`` blocks under its own letters and
+       co-locates with its expansion.
+    4. If >= 2 cleaned tokens: return the first-alpha-letter-of-each-token
+       initialism, uppercased (``"International Business Machines"`` -> ``"IBM"``).
+    5. Otherwise (1 non-acronym token like ``"Apple"``, or empty) -> ``""``.
+
+    Examples:
+        ``"IBM"`` -> ``"IBM"``; ``"Apple"`` -> ``""``;
+        ``"International Business Machines Corporation (Armonk, NY)"`` -> ``"IBM"``;
+        ``"International Business Machines"`` -> ``"IBM"``.
 
     ``None`` -> ``None``.
     """
     if text is None:
         return None
 
-    stripped = _strip_trailing_legal_form(text)
+    # 1. Strip parentheticals before tokenizing.
+    stripped = _PARENTHETICAL.sub("", text)
 
-    initials: list[str] = []
+    legal_variants = _legal_form_variants()
+
+    # 2. Tokenize, dropping legal-form tokens (anywhere) and punctuation-only tokens.
+    cleaned_tokens: list[str] = []
     for token in stripped.split():
+        if _ANY_ALPHA.search(token) is None:
+            continue  # punctuation-only / digits-only token
+        if _normalize_token_for_legal_check(token) in legal_variants:
+            continue  # drop legal-form token wherever it appears
+        cleaned_tokens.append(token)
+
+    # 3. Acronym-as-own-key: a lone all-caps alphabetic 2-6 char token blocks
+    #    under its own letters (so the acronym co-locates with its expansion).
+    if len(cleaned_tokens) == 1:
+        tok = cleaned_tokens[0]
+        if tok.isupper() and tok.isalpha() and 2 <= len(tok) <= 6:
+            return tok.upper()
+        # Non-acronym single token (e.g. "Apple") -> too coarse a key.
+        return ""
+
+    # 5. Empty after cleaning.
+    if not cleaned_tokens:
+        return ""
+
+    # 4. Multi-token initialism: first alpha letter of each token, uppercased.
+    initials: list[str] = []
+    for token in cleaned_tokens:
         m = _FIRST_ALPHA.search(token)
         if m is not None:
             initials.append(m.group(0).upper())
 
-    # Fewer than 2 tokens contributes no useful abbreviation block key.
     if len(initials) < 2:
         return ""
     return "".join(initials)

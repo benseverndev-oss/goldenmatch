@@ -18,11 +18,21 @@ from goldenmatch.core.scorer import _fuzzy_score_matrix, score_field
 def test_initialism_match():
     assert score_field("IBM", "International Business Machines", "initialism_match") == 1.0
     assert score_field("International Business Machines", "IBM", "initialism_match") == 1.0
+    # Noise-tolerant: a NOISY real-world expansion (legal form + parenthetical)
+    # still derives "IBM", so the acronym ("IBM" also now derives "IBM") confirms.
+    assert (
+        score_field(
+            "IBM",
+            "International Business Machines Corporation (Armonk, NY)",
+            "initialism_match",
+        )
+        == 1.0
+    )
     # Initialism collision — the documented false-positive risk. Assert it holds.
     assert score_field("IBM", "Indian Banana Market", "initialism_match") == 1.0
     assert score_field("IBM", "Apple", "initialism_match") == 0.0
     assert score_field("", "", "initialism_match") == 0.0
-    # Both single-token -> derive_initialism returns "" -> empty-guarded to 0.0.
+    # Both single-token non-acronym -> derive_initialism returns "" -> 0.0.
     assert score_field("Apple", "Apricot", "initialism_match") == 0.0
 
 
