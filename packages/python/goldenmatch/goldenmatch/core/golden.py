@@ -885,7 +885,11 @@ def build_golden_records_batch(
     if _survivorship_active(rules):
         from goldenmatch.core.survivorship.conditions import build_resolution_order
         from goldenmatch.core.survivorship.resolve import resolve_cluster
-        s_sorted = multi_df.sort("__cluster_id__")
+        s_sorted = (
+            multi_df.sort(["__cluster_id__", "__row_id__"])
+            if "__row_id__" in multi_df.columns
+            else multi_df.sort("__cluster_id__")
+        )
         s_user_cols = [c for c in s_sorted.columns if not _is_internal(c) and c != "__cluster_id__"]
         order = build_resolution_order(rules.field_rules, rules.field_groups, s_user_cols)
         s_results = []
