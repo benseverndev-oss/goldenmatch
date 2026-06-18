@@ -88,15 +88,21 @@ recall. **Gate on a measurement:** `auto+fields` + semantic blocking must clear
 regardless and should be scoped out (or addressed separately via a domain/knowledge
 source). This is a real product change and gets its own spec + plan before any code.
 
-## Semantic blocking shipped (in-product)
+## Semantic blocking shipped (in-product) -- now with per-source confirming scorers
 
-Semantic blocking is now a real, opt-in capability: `dedupe_df(df,
+Semantic blocking is a real, opt-in capability: `dedupe_df(df,
 semantic_blocking=True)` unions three FREE deterministic candidate sources onto
-the normal candidate set, all offline / no key / no faiss (numpy ANN fallback):
+the normal candidate set, all offline / no key / no faiss (numpy ANN fallback),
+and -- as of the per-source-confirm change -- scores **each source with its OWN
+confirming scorer** instead of the multi-field name scorer:
 
-- **in-house char-ngram ANN** (the `emb-ann` embedder, as a candidate-gen pass);
-- **initialism** (acronym block: `IBM` <- `International Business Machines`);
-- **refdata alias** (canonicalization on `given_names` / `business` seed tables).
+- **in-house char-ngram ANN** (the `emb-ann` embedder, as a candidate-gen pass)
+  -> kept at its cosine score, gated by `ann_threshold` (default 0.5);
+- **initialism** (acronym block: `IBM` <- `International Business Machines`)
+  -> confirmed by `initialism_match` (1.0 when one name is the other's
+  initialism; raw string similarity is ~0);
+- **refdata alias** (canonicalization on `given_names` / `business` seed tables)
+  -> confirmed by `alias_match` (1.0 when both canonicalize to the same alias).
 
 The union is **additive by construction** -- new pairs are appended before the
 `dedup_pairs_max_score` seam, which keeps the max score per canonical pair, so it
@@ -106,79 +112,126 @@ flag (`adapters/goldenmatch_adapter.py`, mode `auto_fields_semantic`).
 
 ### Measured: auto+fields vs auto+fields+semantic (206 records, offline)
 
-Run with the two goldenmatch rows over `dataset/records.csv`
-(`GOLDENMATCH_NATIVE=0`, in-house embedder, numpy ANN fallback -- reproducible by
-anyone, no key):
+Re-measured with the confirming scorers wired (`GOLDENMATCH_NATIVE=0`, in-house
+embedder, numpy ANN fallback -- reproducible by anyone, no key):
 
 | metric | auto+fields | auto+fields+semantic | delta |
 |---|---|---|---|
 | **overall F1** | 0.6018 | 0.6018 | +0.000 |
-| overall P | 0.786 | 0.786 | +0.000 |
-| overall R | 0.488 | 0.488 | +0.000 |
-| abbreviation F1 | 0.773 | 0.773 | +0.000 |
-| nickname_alias F1 | 0.854 | 0.854 | +0.000 |
-| synonym_brand F1 | 0.167 | 0.167 | +0.000 |
-| cross_lingual F1 | 0.769 | 0.769 | +0.000 |
-| typo F1 | 1.000 | 1.000 | +0.000 |
-| org_suffix F1 | 1.000 | 1.000 | +0.000 |
-| temporal_version F1 | 0.571 | 0.571 | +0.000 |
-| cross_document_exact F1 | 1.000 | 1.000 | +0.000 |
-| same_name_collision F1 | 0.356 | 0.356 | +0.000 |
+| overall P | 0.7857 | 0.7857 | +0.000 |
+| overall R | 0.4877 | 0.4877 | +0.000 |
+| abbreviation F1 | 0.7727 | 0.7727 | +0.000 |
+| nickname_alias F1 | 0.8539 | 0.8539 | +0.000 |
+| synonym_brand F1 | 0.1667 | 0.1667 | +0.000 |
+| cross_lingual F1 | 0.7692 | 0.7692 | +0.000 |
+| typo F1 | 1.0000 | 1.0000 | +0.000 |
+| org_suffix F1 | 1.0000 | 1.0000 | +0.000 |
+| temporal_version F1 | 0.5714 | 0.5714 | +0.000 |
+| cross_document_exact F1 | 1.0000 | 1.0000 | +0.000 |
+| same_name_collision F1 | 0.3556 | 0.3556 | +0.000 |
 
-The two rows are **byte-identical** (both `tp=198 fp=54 fn=208`). No class moved.
+The two rows are still **byte-identical** (both `tp=198 fp=54 fn=208`). No class
+moved. Wiring the confirming scorers (the prior diagnosis' proposed fix) did
+**not** unstick the headline on this corpus.
 
 ### Acceptance verdict vs 0.602
 
-**Tied, not cleared.** `auto+fields+semantic` F1 = `auto+fields` F1 = **0.6018**
-(rounds to the documented 0.602 baseline, fractionally below 0.602 as a raw
-float). So:
+**NOT MET (headline did not move).** `auto+fields+semantic` F1 = `auto+fields`
+F1 = **0.6018** (rounds to the documented 0.602; fractionally below 0.602 as a
+raw float). The capability still ships opt-in at **zero precision cost** (`fp`
+unchanged at 54 -- the additive union never adds a false merge here), but it is
+not a headline mover on ER-KG-Bench.
 
-- **>= baseline: MET (exactly tied)** -- the additive union guarantees recall
-  can't fall, and precision held (`fp` unchanged at 54), so it never regresses.
-- **>= 0.602 (headline move): NOT MET** -- it does not *raise* the headline on
-  this corpus. The capability ships (opt-in, zero precision cost), but it is not
-  a headline mover here.
+### Precision cost (measured, not pre-guarded)
 
-### Why it's a no-op here: the wall moved from blocking to scoring
+**Zero, measured.** The approved stance was "measure the precision cost, don't
+pre-guard it." On this corpus the cost is nil: `fp` is identical (54) between the
+two rows, and **no** class's precision regressed -- no initialism collision, no
+alias-table error materialized, because the confirming pairs that survive to
+clustering are all pairs the baseline already merged. There is no precision
+finding to report and no scoped follow-up needed on the precision side.
 
-Semantic blocking is working -- it generates **3,466 extra candidate pairs**. But
-the committed auto-config matchkey scores them on `name`+`entity_type`+`context`
-(weighted `ensemble`, threshold **0.8**), and only **1,108** of the new pairs
-clear 0.8. Every one of those 1,108 is a pair the **baseline blocking already
-generated and already merged** -- exact duplicates (`IBM`/`IBM`) or word-reordered
-forms (`FIFA World Cup 2018`/`2018 FIFA World Cup`) that string blocking catches
-anyway. The genuinely *new* recall-lever pairs (the abbreviation / synonym /
-cross-lingual cases where the strings do **not** look alike) score well below 0.8
-on the name field and are rejected at scoring. So the candidate set grew, but the
-final clustering didn't change.
+### Why it's STILL a no-op: two distinct walls, both now isolated
 
-This is exactly the wall the earlier embedder sweep predicted for the **offline
-char-ngram** tier: its cosine approximates *character* overlap, not world
-knowledge (`IBM` <-> `International Business Machines` ~0.05). The free in-house
-ANN bridges typo / org-suffix / transliteration (shared characters), but cannot
-generate the abbreviation/synonym pairs at all, and even when initialism/alias
-*do* surface a pair, the name scorer still demands string similarity to confirm
-it. Which classes the sources *can* move, and why they didn't here:
+Per-source confirming scorers are the right design, but two corpus-specific
+mechanisms keep the headline pinned. Both were isolated by instrumenting the
+pipeline at the `_semantic_blocking_pairs` return, the post-`_apply_postflight`
+pair set, and the `build_cluster_frames` call site:
 
-- **initialism -> abbreviation:** surfaces `IBM`/`International Business Machines`
-  as a candidate, but `ensemble`(name) scores it ~0, < 0.8 -> rejected at scoring.
+1. **The confirming scorers can't confirm the corpus's NOISY surface forms.**
+   `initialism_match` / `alias_match` are correct on clean expansions --
+   measured `initialism_match("IBM", "International Business Machines") = 1.0`,
+   `("NATO", "North Atlantic Treaty Organisation") = 1.0`,
+   `("WHO", "World Health Organization") = 1.0`. But ER-KG-Bench mentions carry
+   real-world suffix/parenthetical noise, and the strict check collapses the
+   moment it appears: `initialism_match("IBM", "International Business Machines
+   Corporation (Armonk, NY)") = 0.0`, `("IBM", "IBM Corp.") = 0.0`. So for the
+   actual gold abbreviation pairs the confirming scorer returns **0.0**, and the
+   only score those pairs carry into `all_pairs` is the **ANN char-ngram cosine**
+   (e.g. `IBM` <-> `International Business Machines Corporation (Armonk, NY)`
+   lands at **0.863**, not 1.0). `alias` adds nothing here (0 non-singleton
+   blocks on this corpus -- the `given_names`/`business` seed doesn't cover
+   these orgs).
+
+2. **Auto-config's postflight raises the threshold to 0.895 and drops exactly
+   those candidates.** The committed config is RED on this corpus
+   (`stop_reason=BUDGET_ITERATIONS`, `failing_subprofile=blocking`: with `name`
+   at cardinality 0.95 most blocks are singletons), and `_apply_postflight`
+   applies a `threshold` adjustment **0.8 -> 0.895**. Measured pre-postflight,
+   `all_pairs` holds 2871 pairs; postflight drops 1873 of them, with the dropped
+   mass concentrated in the **0.8 band (1638 pairs)** and **0.9 band (214)** --
+   i.e. precisely the 0.83-0.89 char-ngram-cosine scores the abbreviation pairs
+   land at. `IBM` <-> `International Business Machines...` (0.863) and three of
+   the four `NATO` variants (0.836, 0.844, 0.835) are dropped here. The few
+   confirmed/near-exact pairs that DO survive postflight (score >= 0.99, e.g.
+   `IBM` <-> `IBM Corp.` at 1.0) are pairs **string blocking already generated
+   and the baseline already merged**, so after `dedup_pairs_max_score` the
+   canonical cluster-input pair set is **219 in both runs, 0 new** -- which is
+   why the clustering output is byte-identical.
+
+Per-class, which sources *can* move what, and why they didn't here:
+
+- **initialism -> abbreviation:** fires at 1.0 on clean expansions, **0.0** on
+  the noisy ones this corpus actually contains; the surviving signal for those
+  pairs is ANN cosine ~0.83-0.86, which postflight's 0.895 threshold rejects.
 - **alias -> known synonyms in the seed table only:** bounded by the small
-  `given_names` / `business` refdata seed; a synonym not in the seed (most of the
-  `synonym_brand` class, e.g. `Coumadin`/`warfarin`) is never generated. This is
-  the same class the embedder sweep found walled for *every* embedder (max 0.18).
+  `given_names` / `business` refdata seed; 0 non-singleton blocks here. The
+  `synonym_brand` class (e.g. `Coumadin`/`warfarin`) is the same class the
+  embedder sweep found walled for *every* embedder (max 0.18) -- a knowledge-base
+  problem, not an embedder/scorer problem.
 - **ANN -> typo / suffix / transliteration:** these classes are *already* at
   F1 1.0 (`typo`, `org_suffix`) under `auto+fields`, so there's no recall left to
-  add there; the cross-lingual gains the multilingual model showed need a
-  *semantic* embedder, not the char-ngram one this offline path uses.
+  add; the cross-lingual gains the multilingual model showed need a *semantic*
+  embedder, not the char-ngram one this offline path uses.
 
-**Bottom line:** the recall-lever capability is real and now shipped opt-in and
-zero-cost (additive, no precision hit), but on ER-KG-Bench the headline does not
-move because (a) the free offline embedder lacks the world knowledge to *generate*
-the abbreviation/synonym pairs, and (b) the auto-config name scorer's 0.8
-threshold *rejects* the few semantic candidates that do get surfaced. To actually
-move the headline you need both a world-knowledge (semantic) embedder for
-candidate generation **and** a scorer that doesn't require string similarity to
-confirm a semantically-blocked pair (e.g. the LLM scorer, or a semantic
-similarity scoring field) -- the embedder swap alone is necessary but not
-sufficient. synonym/brand stays walled regardless (knowledge-base problem, not an
-embedder problem).
+**Bottom line:** the recall-lever capability is real, shipped opt-in, and now
+scores each candidate source with its own confirming scorer at zero precision
+cost. But on ER-KG-Bench the headline does not move, for two independent reasons:
+(a) the strict initialism/alias confirmers return 0.0 on the corpus's noisy
+real-world surface forms, leaving only the char-ngram ANN cosine (~0.83-0.86) for
+the genuine abbreviation pairs; and (b) auto-config's postflight raises the match
+threshold to **0.895** on this RED config and drops exactly that 0.83-0.89 band.
+Moving the headline here needs *both* (i) a noise-tolerant confirmer (strip
+`Corp./Inc./(City, ST)` suffixes + organisation/-zation spelling normalization
+before the initialism/alias check) **so the confirmer returns 1.0 on the noisy
+mentions and the pair clears any threshold**, and (ii) a world-knowledge semantic
+embedder for the candidates the char-ngram path can't generate at all.
+synonym/brand stays walled regardless.
+
+### Scoped follow-ups (recall side -- precision side has none)
+
+1. **Noise-tolerant initialism/alias confirmers.** Normalize the expansion
+   before the initialism check: drop trailing legal suffixes (`Corp.`, `Inc.`,
+   `Corporation`), parentheticals (`(Armonk, NY)`, `(WHO)`), and reconcile
+   `-ization`/`-isation`. This is what turns the measured 0.0 back into 1.0 on
+   the noisy mentions, so the confirmed pair clears the threshold regardless of
+   postflight. (Highest-leverage fix: it is the difference between the
+   abbreviation pairs scoring ~0.86 and scoring 1.0.)
+2. **A world-knowledge semantic embedder for the ANN source** (free multilingual
+   model, or the two-model ensemble) for the candidates the char-ngram cosine
+   cannot generate at all -- the lever the earlier embedder sweep proved
+   (abbreviation 0.21 -> 0.80-0.85, cross-lingual 0.35 -> 0.91).
+
+Neither needs an initialism-block-size cap or any precision guard: the measured
+precision cost on this corpus is zero, so capping is solving a problem the data
+does not show.
