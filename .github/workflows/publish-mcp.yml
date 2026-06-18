@@ -1,7 +1,10 @@
 name: Publish to MCP Registry
 
 # Syncs the suite's server.json files to the official MCP Registry
-# (registry.modelcontextprotocol.io) so the listings stay in lockstep with PyPI.
+# (registry.modelcontextprotocol.io) so the listings stay in lockstep with PyPI,
+# then mirrors server.json's `description` onto the matching Smithery listing
+# (smithery.ai) via its PATCH API so the two catalogs never drift. server.json
+# is the single source of truth for the description on both surfaces.
 #
 # Triggers:
 #   - release: published — fires automatically after a PyPI publish workflow
@@ -236,7 +239,83 @@ jobs:
 
       - name: Publish to MCP Registry
         working-directory: packages/python/${{ matrix.pkg }}
-        run: ../../../mcp-publisher publish
+        shell: bash
+        env:
+          PKG: ${{ matrix.pkg }}
+          V: ${{ steps.ver.outputs.version }}
+        run: |
+          # The registry is IMMUTABLE per version: re-publishing an
+          # already-listed version returns 400 "cannot publish duplicate
+          # version". That's the expected, benign case for a workflow_dispatch
+          # force-refresh (the version is already live; nothing to push) -- so
+          # swallow it as success and let the Smithery sync below still run.
+          # Any other publish error is a real failure and propagates.
+          set +e
+          out=$(../../../mcp-publisher publish 2>&1); code=$?
+          echo "$out"
+          if [ "$code" -eq 0 ]; then
+            exit 0
+          fi
+          if echo "$out" | grep -q "cannot publish duplicate version"; then
+            echo "::notice::${PKG} ${V} already on the registry (duplicate version) -- up to date; continuing."
+            exit 0
+          fi
+          echo "::error::mcp-publisher publish failed for ${PKG} (exit ${code})"
+          exit "$code"
+
+      - name: Sync description to Smithery
+        # Runs even if the publish step failed (e.g. a non-duplicate error) --
+        # the Smithery description sync is INDEPENDENT of the registry, so it
+        # should attempt regardless. Only a job cancellation skips it.
+        if: ${{ !cancelled() }}
+        # Smithery (smithery.ai) is a SEPARATE catalog from the MCP Registry. It
+        # does NOT read server.json or smithery.yaml from the repo, so without
+        # this step its `description` drifts from the registry's. This keeps them
+        # in lockstep via Smithery's PATCH API, with server.json as the single
+        # source of truth (the same field the registry publish above uses).
+        #
+        # Never fails the job:
+        #   - SMITHERY_API_KEY secret absent (forks / PRs)  -> notice + skip.
+        #   - server.json has no description                -> notice + skip.
+        #   - server not listed on Smithery yet (HTTP 404)  -> notice + skip
+        #     (infermap / goldenanalysis until added on the dashboard).
+        #   - any other non-2xx                             -> ::warning:: only.
+        #
+        # SMITHERY_NAMESPACE is the Smithery listing namespace (benzsevern/*),
+        # which is distinct from the registry's io.github.benseverndev-oss/*.
+        env:
+          PKG: ${{ matrix.pkg }}
+          SMITHERY_API_KEY: ${{ secrets.SMITHERY_API_KEY }}
+          SMITHERY_NAMESPACE: benzsevern
+        shell: bash
+        run: |
+          set -uo pipefail
+          if [ -z "${SMITHERY_API_KEY:-}" ]; then
+            echo "::notice::SMITHERY_API_KEY not set; skipping Smithery description sync for ${PKG}"
+            exit 0
+          fi
+          DESC=$(jq -r '.description // empty' "packages/python/${PKG}/server.json")
+          if [ -z "$DESC" ]; then
+            echo "::notice::no description in packages/python/${PKG}/server.json; skipping Smithery sync"
+            exit 0
+          fi
+          QUALIFIED="${SMITHERY_NAMESPACE}/${PKG}"
+          ENCODED="${SMITHERY_NAMESPACE}%2F${PKG}"
+          BODY=$(jq -nc --arg d "$DESC" '{description: $d}')
+          echo "PATCH https://api.smithery.ai/servers/${QUALIFIED}"
+          code=$(curl -sS -o /tmp/smithery_resp -w '%{http_code}' \
+            -X PATCH "https://api.smithery.ai/servers/${ENCODED}" \
+            -H "Authorization: Bearer ${SMITHERY_API_KEY}" \
+            -H "Content-Type: application/json" \
+            -d "$BODY" || echo 000)
+          if [ "$code" = "200" ] || [ "$code" = "204" ]; then
+            echo "::notice::Smithery description synced for ${QUALIFIED} (HTTP ${code})"
+          elif [ "$code" = "404" ]; then
+            echo "::notice::${QUALIFIED} not listed on Smithery yet (HTTP 404); skipping. Add it on the Smithery dashboard to enable sync."
+          else
+            echo "::warning::Smithery description sync for ${QUALIFIED} returned HTTP ${code}; registry publish was unaffected."
+            cat /tmp/smithery_resp || true
+          fi
 
       - name: Summary
         if: always()
@@ -251,5 +330,6 @@ jobs:
             echo ""
             echo "- Synced version: \`${V}\`"
             echo "- Server: \`${NAME}\`"
-            echo "- Listing: https://registry.modelcontextprotocol.io/v0/servers?search=${NAME}"
+            echo "- Registry listing: https://registry.modelcontextprotocol.io/v0/servers?search=${NAME}"
+            echo "- Smithery: description synced from server.json (see the 'Sync description to Smithery' step for status)"
           } >> "$GITHUB_STEP_SUMMARY"
