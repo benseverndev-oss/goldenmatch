@@ -12,11 +12,113 @@ from goldenmatch.core.survivorship.conditions import select_conditional_strategy
 from goldenmatch.core.survivorship.validate import goldenflow_filter
 
 
+# Strategies the native scalar/conditional value+confidence exprs reproduce
+# byte-identically. A positive allowlist (not a denylist) so any strategy the
+# config schema gains later -- majority_vote, unanimous_or_null,
+# confidence_majority, custom:<name>, etc. -- defaults to INELIGIBLE (slow path)
+# until it is explicitly proven native-expressible. See _scalar_value_expr /
+# _scalar_conf_expr for the per-strategy parity.
+_NATIVE_SCALAR_STRATEGIES = frozenset({
+    "most_complete", "first_non_null", "most_recent", "source_priority", "longest_value",
+})
+
+# Group strategies _resolve_group reproduces byte-identically (winner.group_winner).
+_NATIVE_GROUP_STRATEGIES = frozenset({
+    "most_complete", "source_priority", "most_recent", "anchor",
+})
+
+
 def survivorship_native_eligible(rules, provenance) -> bool:
-    """True when the vectorized survivorship path can handle this config.
-    Returns False for now -- flipped on in Phase F when the path is complete."""
-    # rules/provenance inspected in Phase F when the gate is flipped on
-    return False
+    """True ONLY when ``build_survivorship_native`` is byte-identical to the
+    slow per-cluster survivorship path for this config.
+
+    Conservative by construction: any lever the vectorized path cannot
+    reproduce returns False so the call routes to the safe slow oracle. A
+    false-negative just keeps today's slow path; a false-positive would emit a
+    silently-wrong golden record, so this gate errs hard toward False.
+
+    Returns False when ANY of:
+
+    * ``provenance`` is truthy -- the native path emits no per-field
+      ``source_row_id`` provenance.
+    * ``cluster_overrides`` is set -- per-cluster strategy overrides force the
+      slow per-cluster merge_field walk; the native path applies the top-level
+      rules uniformly and would silently ignore them.
+    * a ``field_group`` uses a group strategy outside
+      :data:`_NATIVE_GROUP_STRATEGIES`.
+    * a scalar/conditional field strategy (``default_strategy``, any plain
+      field rule, or ANY clause of a list-form conditional) is outside
+      :data:`_NATIVE_SCALAR_STRATEGIES`. This rejects custom:/confidence_majority/
+      majority_vote/unanimous_or_null and anything new.
+
+    Field-group DETECTION is NOT a refusal condition: detection runs at
+    auto-config time (``autoconfig._maybe_detect_field_groups``) and bakes the
+    detected groups onto ``rules.field_groups`` BEFORE the golden builder ever
+    runs, so the native path already sees them via ``rules.field_groups``. A
+    config whose detection produced no groups simply resolves its columns as
+    scalars (byte-identical to slow); the ``field_group_detection`` flag itself
+    is inert by builder time.
+    """
+    if provenance:
+        return False
+    # Per-cluster overrides: the native path can't honor them (it applies one
+    # rule set to every cluster). Slow path only.
+    if getattr(rules, "cluster_overrides", None):
+        return False
+    # default_strategy is resolved + validated to a VALID_STRATEGIES member by
+    # the config validator; it governs any column without an explicit rule.
+    if getattr(rules, "default_strategy", None) not in _NATIVE_SCALAR_STRATEGIES:
+        return False
+    # Every field group must use a native-expressible group strategy.
+    for g in getattr(rules, "field_groups", None) or []:
+        if g.strategy not in _NATIVE_GROUP_STRATEGIES:
+            return False
+    # Every field rule -- plain scalar OR every clause of a list-form
+    # conditional -- must use a native-expressible scalar strategy.
+    for rule in rules.field_rules.values():
+        clauses = rule if isinstance(rule, list) else (rule,)
+        for clause in clauses:
+            if clause.strategy not in _NATIVE_SCALAR_STRATEGIES:
+                return False
+    return True
+
+
+def _golden_df_to_rows(golden_df: pl.DataFrame) -> list[dict]:
+    """Adapt the per-cluster :func:`build_survivorship_native` frame to the
+    nested row-dict shape ``build_golden_records_batch`` returns for
+    ``provenance=False``.
+
+    The slow path emits one dict per cluster::
+
+        {col: {"value": v, "confidence": c}, ...,
+         "__golden_confidence__": float, "__cluster_id__": cid}
+
+    The native frame carries ``__cluster_id__`` + ``__golden_confidence__`` +
+    one plain-value column per resolved user field, but NO per-column
+    confidence (only the aggregate ``__golden_confidence__``). For the
+    ``provenance=False`` contract this is sufficient: the ONLY consumer of
+    these records (``pipeline.py``'s golden_rows builder) reads exactly
+    ``rec[col]["value"]`` and the top-level ``rec["__golden_confidence__"]`` --
+    it never reads ``rec[col]["confidence"]``. (``golden_records_to_provenance``
+    DOES read per-column confidence, but it is only ever fed records built with
+    ``provenance=True``, which never reach this adapter.) The per-column
+    ``"confidence"`` is therefore set to the cluster's ``__golden_confidence__``
+    -- a value no provenance=False consumer reads -- keeping the dict
+    structurally identical to the slow shape without surfacing a misleading
+    per-column number.
+    """
+    user_cols = [
+        c for c in golden_df.columns
+        if c not in ("__cluster_id__", "__golden_confidence__")
+    ]
+    rows: list[dict] = []
+    for rec in golden_df.iter_rows(named=True):
+        gconf = rec["__golden_confidence__"]
+        out: dict = {col: {"value": rec[col], "confidence": gconf} for col in user_cols}
+        out["__golden_confidence__"] = gconf
+        out["__cluster_id__"] = rec["__cluster_id__"]
+        rows.append(out)
+    return rows
 
 
 def _populated_count_expr(columns) -> pl.Expr:

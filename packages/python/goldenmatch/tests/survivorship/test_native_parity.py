@@ -38,10 +38,241 @@ def assert_parity(multi_df, rules, compare_confidence=True):
     )
 
 
-def test_eligible_false_until_implemented():
+def test_eligible_true_for_supported_groups_config():
     rules = GoldenRulesConfig(default_strategy="most_complete",
         field_groups=[GoldenGroupRule(name="addr", columns=["street", "city"])])
+    assert survivorship_native_eligible(rules, provenance=False) is True
+
+
+def test_eligible_false_when_provenance():
+    rules = GoldenRulesConfig(default_strategy="most_complete",
+        field_groups=[GoldenGroupRule(name="addr", columns=["street", "city"])])
+    assert survivorship_native_eligible(rules, provenance=True) is False
+
+
+def test_eligible_true_for_supported_groups_scalars_conditionals_allow_fill():
+    # Group (allow_fill) + plain scalar + list-form conditional, all clauses on
+    # native-expressible strategies -> eligible.
+    rules = GoldenRulesConfig(
+        default_strategy="first_non_null",
+        field_groups=[GoldenGroupRule(name="addr", strategy="most_complete",
+                                      allow_fill=True, columns=["street", "city"])],
+        field_rules={
+            "name": GoldenFieldRule(strategy="longest_value"),
+            "phone": [
+                GoldenFieldRule(strategy="source_priority",
+                                source_priority=["crm"], when="city == 'NY'"),
+                GoldenFieldRule(strategy="most_recent", date_column="updated"),
+            ],
+        },
+    )
+    assert survivorship_native_eligible(rules, provenance=False) is True
+
+
+def test_eligible_false_for_custom_scalar_strategy():
+    rules = GoldenRulesConfig(default_strategy="most_complete",
+        field_rules={"name": GoldenFieldRule(strategy="custom:my_plugin")})
     assert survivorship_native_eligible(rules, provenance=False) is False
+
+
+def test_eligible_false_for_confidence_majority_scalar():
+    rules = GoldenRulesConfig(default_strategy="most_complete",
+        field_rules={"name": GoldenFieldRule(strategy="confidence_majority")})
+    assert survivorship_native_eligible(rules, provenance=False) is False
+
+
+def test_eligible_false_for_majority_vote_scalar():
+    # majority_vote is aggregate-able in theory but NOT implemented natively ->
+    # must route to slow.
+    rules = GoldenRulesConfig(default_strategy="most_complete",
+        field_rules={"name": GoldenFieldRule(strategy="majority_vote")})
+    assert survivorship_native_eligible(rules, provenance=False) is False
+
+
+def test_eligible_false_for_majority_vote_default_strategy():
+    # default_strategy itself outside the native set -> ineligible (it governs
+    # any unruled column).
+    rules = GoldenRulesConfig(default_strategy="majority_vote",
+        field_groups=[GoldenGroupRule(name="addr", columns=["street", "city"])])
+    assert survivorship_native_eligible(rules, provenance=False) is False
+
+
+def test_eligible_false_for_unsupported_conditional_clause():
+    # ONE clause of a list-form conditional uses majority_vote -> the whole
+    # config is ineligible.
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={
+            "phone": [
+                GoldenFieldRule(strategy="majority_vote", when="city == 'NY'"),
+                GoldenFieldRule(strategy="first_non_null"),
+            ],
+        },
+    )
+    assert survivorship_native_eligible(rules, provenance=False) is False
+
+
+def test_eligible_false_for_cluster_overrides():
+    # Per-cluster overrides force the slow per-cluster merge_field walk; the
+    # native path applies top-level rules uniformly and would ignore them.
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_groups=[GoldenGroupRule(name="addr", columns=["street", "city"])],
+        cluster_overrides={1: {"city": GoldenFieldRule(strategy="first_non_null")}},
+    )
+    assert survivorship_native_eligible(rules, provenance=False) is False
+
+
+def test_eligible_false_for_unsupported_group_strategy():
+    # No GROUP strategy outside the native set exists in the schema today (the
+    # group validator already restricts to the four native ones), so assert the
+    # gate refuses a hand-constructed rule whose group strategy is bypassed past
+    # validation -- proving the group check is a live allowlist, not a no-op.
+    rules = GoldenRulesConfig(default_strategy="most_complete",
+        field_groups=[GoldenGroupRule(name="addr", columns=["street", "city"])])
+    object.__setattr__(rules.field_groups[0], "strategy", "majority_vote")
+    assert survivorship_native_eligible(rules, provenance=False) is False
+
+
+def test_eligible_true_for_detection_flag_with_explicit_groups():
+    # field_group_detection=True is inert by builder time (detection already ran
+    # at auto-config and baked groups onto field_groups). With native-expressible
+    # groups present, the config is still eligible -- the flag is not a refusal.
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_group_detection=True,
+        field_groups=[GoldenGroupRule(name="addr", strategy="most_complete",
+                                      columns=["street", "city"])],
+    )
+    assert survivorship_native_eligible(rules, provenance=False) is True
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# F1: dispatch + adapter -- build_golden_records_batch(provenance=False) on a
+# supported config routes through the native path and returns the EXACT nested
+# row-dict shape the slow path returns (values + per-record __golden_confidence__
+# + __cluster_id__; each field {"value": ..., "confidence": ...}).
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def _adapter_oracle_rows(multi_df, rules):
+    """Slow-path rows with the native gate force-disabled, normalized to the
+    provenance=False contract (drop source_row_id / __survivorship_prov__).
+    Per-column confidence is intentionally NOT compared -- no provenance=False
+    consumer reads it and the native adapter carries the aggregate there."""
+    import goldenmatch.core.survivorship.native as native_mod
+
+    orig = native_mod.survivorship_native_eligible
+    native_mod.survivorship_native_eligible = lambda rules, provenance: False
+    try:
+        rows = build_golden_records_batch(
+            multi_df.sort(["__cluster_id__", "__row_id__"]), rules, provenance=False
+        )
+    finally:
+        native_mod.survivorship_native_eligible = orig
+    norm = []
+    for rec in rows:
+        out = {"__cluster_id__": rec["__cluster_id__"],
+               "__golden_confidence__": rec["__golden_confidence__"]}
+        for col, info in rec.items():
+            if col in ("__cluster_id__", "__golden_confidence__", "__survivorship_prov__"):
+                continue
+            out[col] = info["value"] if isinstance(info, dict) and "value" in info else info
+        norm.append(out)
+    return sorted(norm, key=lambda r: r["__cluster_id__"])
+
+
+def _native_dispatch_rows(multi_df, rules):
+    """build_golden_records_batch through the (now enabled) native dispatch,
+    normalized to the same value-only shape."""
+    rows = build_golden_records_batch(multi_df, rules, provenance=False)
+    norm = []
+    for rec in rows:
+        # Adapter shape contract: every user field is a {"value", "confidence"}
+        # dict; the record carries __golden_confidence__ + __cluster_id__ and
+        # NO __survivorship_prov__ on provenance=False.
+        assert "__survivorship_prov__" not in rec
+        out = {"__cluster_id__": rec["__cluster_id__"],
+               "__golden_confidence__": rec["__golden_confidence__"]}
+        for col, info in rec.items():
+            if col in ("__cluster_id__", "__golden_confidence__"):
+                continue
+            assert isinstance(info, dict) and "value" in info and "confidence" in info
+            out[col] = info["value"]
+        norm.append(out)
+    return sorted(norm, key=lambda r: r["__cluster_id__"])
+
+
+def assert_adapter_parity(multi_df, rules):
+    """The dispatched native records (value-only + __golden_confidence__) equal
+    the force-slow oracle records -- the adapter shape is byte-identical."""
+    assert survivorship_native_eligible(rules, provenance=False) is True
+    native_rows = _native_dispatch_rows(multi_df, rules)
+    oracle_rows = _adapter_oracle_rows(multi_df, rules)
+    assert native_rows == oracle_rows, (
+        f"ADAPTER PARITY MISMATCH\nnative:\n{native_rows}\noracle:\n{oracle_rows}"
+    )
+
+
+def test_f1_adapter_parity_groups_scalars_conditionals():
+    # Full supported surface through build_golden_records_batch: a group, a
+    # plain scalar, and a conditional, multiple clusters.
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1, 2, 2, 2],
+        "__row_id__": [10, 11, 20, 21, 22],
+        "__source__": ["crm", "web", "web", "crm", "erp"],
+        "street": ["1 A St", "2 B Ave", None, "3 C Rd", "3 C Rd Longer"],
+        "city": ["NY", None, "SF", "SF", None],
+        "name": ["Bob", "Robert Smith", "Al", None, "Alex"],
+        "phone": ["111", "222", "333", "444", "555"],
+    })
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_groups=[GoldenGroupRule(name="addr", strategy="most_complete",
+                                      columns=["street", "city"])],
+        field_rules={
+            "name": GoldenFieldRule(strategy="most_complete"),
+            "phone": [
+                GoldenFieldRule(strategy="source_priority",
+                                source_priority=["crm", "erp", "web"],
+                                when="city == 'NY'"),
+                GoldenFieldRule(strategy="first_non_null"),
+            ],
+        },
+    )
+    assert_adapter_parity(df, rules)
+
+
+def test_f1_adapter_parity_group_only():
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1, 2, 2],
+        "__row_id__": [10, 11, 20, 21],
+        "street": ["1 Full St", "2 B Ave", None, "9 Z Rd"],
+        "city": ["LA", None, "SF", None],
+        "zip": ["10001", None, "94103", None],
+    })
+    assert_adapter_parity(df, _most_complete_rules())
+
+
+def test_f1_dispatch_routes_unsupported_to_slow():
+    # A confidence_majority scalar is native-ineligible -> the batch builder must
+    # NOT route through the native path; it returns slow-path records (which carry
+    # a real per-column confidence). Proves the dispatch guard refuses correctly.
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1],
+        "__row_id__": [10, 11],
+        "name": ["Bob", "Robert"],
+    })
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={"name": GoldenFieldRule(strategy="confidence_majority")},
+    )
+    assert survivorship_native_eligible(rules, provenance=False) is False
+    # Should not raise (slow path handles confidence_majority) and returns one
+    # record per cluster with the nested field shape.
+    rows = build_golden_records_batch(df, rules, provenance=False)
+    assert len(rows) == 1
+    assert isinstance(rows[0]["name"], dict) and "value" in rows[0]["name"]
 
 
 def test_slow_path_deterministic_on_ties():
