@@ -34,6 +34,7 @@ class GroupProvenance:
     values: dict[str, Any]
     tie: bool
     confidence: float
+    filled: dict[str, int] = dataclass_field(default_factory=dict)
 
 
 @dataclass
