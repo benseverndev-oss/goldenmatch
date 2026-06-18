@@ -32,6 +32,12 @@
   branch. Merge the workflow first, then dispatch from `main`.
 - Benches are `workflow_dispatch` on `large-new-64GB` (16c/64GB) — billable; smoke-green
   the harness in CI before dispatching the heavy run.
+- **Cut a goldenmatch release by pushing a bare `v*` tag** (`git push origin vX.Y.Z`) —
+  bump version in `pyproject.toml` + `__init__.py` + `server.json` and finalize the
+  CHANGELOG on `main` first. `publish-goldenmatch.yml` owns the GitHub Release (build →
+  PyPI → sign+attest → draft release with assets → publish); do NOT `gh release create`
+  by hand (immutable releases reject the post-publish asset attach). See
+  [../decisions/0019-immutable-releases-publish-flow.md](../decisions/0019-immutable-releases-publish-flow.md).
 
 ## Memory & this network
 - Cross-session agent facts → user-level memory. Committed shared knowledge → this network.
@@ -39,4 +45,4 @@
   relevant architecture/decision node.
 
 ---
-**Classification:** process/stable • **Last updated:** 2026-06-03
+**Classification:** process/stable • **Last updated:** 2026-06-18

@@ -221,6 +221,7 @@ gm.PPRLConfig(
     hash_functions: int = 30,
     bloom_filter_size: int = 1024,
     protocol: str = "trusted_third_party",
+    chunk_size: int | None = None,    # stream Party B in blocks of this size (memory-safe); None = dense single-block path
 )
 ```
 
@@ -449,6 +450,7 @@ class DedupeResult:
     scored_pairs: list[tuple]         # (id_a, id_b, score) tuples
     config: GoldenMatchConfig
     postflight_report: PostflightReport | None  # v1.5.0: signals + advisories + adjustments
+    native: NativeDispatchSummary | None  # v2.1.0: whether the scoring hot path used the Rust kernel or fell back
 
     def to_csv(path, which="golden")  # Write results to CSV
     match_rate: float                 # Property: percentage of dupes
@@ -457,6 +459,8 @@ class DedupeResult:
 ```
 
 Both `DedupeResult` and `MatchResult` have `_repr_html_()` for rich Jupyter display.
+
+**`native` (v2.1.0) — native-dispatch telemetry.** `result.native` is a `NativeDispatchSummary` reporting whether the scoring hot path actually dispatched to the optional Rust kernel (`pip install goldenmatch[native]`) or fell back to pure Python — `ran_native`, `hot_path_native`, and per-component native/fallback counts. It is `None` when the run did no scoring. When the kernel is importable but the hot path still ran on the fallback, GoldenMatch also logs a WARNING (and each Ray worker self-reports once per process), so a silently slow run is visible instead of only inferable from wall-clock.
 
 ### MatchResult
 
