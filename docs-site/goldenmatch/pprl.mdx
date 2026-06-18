@@ -28,6 +28,23 @@ result = gm.pprl_link(
 )
 ```
 
+## Large lists (memory-safe)
+
+The trusted-third-party protocol scores every Party A record against every Party B record. Done densely, that materializes the full `N_a × N_b` similarity matrix in one allocation — a 50k × 50k link is ~10 GB and OOMs. Set `chunk_size` to stream Party B in blocks instead: Party A's bit matrix stays resident while B is processed `chunk_size` records at a time, so peak memory drops to roughly `matrix_a + one block`.
+
+```python
+import goldenmatch as gm
+
+cfg = gm.PPRLConfig(
+    fields=["first_name", "last_name", "dob", "zip"],
+    threshold=0.85,
+    chunk_size=5000,        # process Party B in 5k-record blocks
+)
+result = gm.run_pprl("party_a.csv", "party_b.csv", config=cfg)
+```
+
+`chunk_size=None` (the default) runs the original single-block dense path and is byte-for-byte identical to leaving it unset — the threshold test, the cluster output, and the match count are all invariant to `chunk_size`. On a 4000 × 4000 link, dense peak memory of ~305 MB drops to ~34 MB at `chunk_size=200` (~9×) and ~21 MB at `chunk_size=50` (~14×) for identical output. Smaller chunks trade a little extra Python overhead for lower peak memory.
+
 ## CLI
 
 ```bash
