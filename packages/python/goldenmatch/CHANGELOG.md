@@ -6,7 +6,33 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-06-18
+
 ### Added
+- **Correlated survivorship: lock-step field groups + conditional/validated golden rules (#1047).**
+  New `FieldGroupSpec` + `DomainPack.groups` (domain-pack schema v3, additive and
+  backward-compatible) let golden-record survivorship keep correlated fields (e.g.
+  street/city/postcode) in lock-step from a single winning source instead of mixing
+  best-per-field values across records.
+- **`allow_fill` + `anchor` group-winner strategy (correlated survivorship v2) (#1055).**
+  `GoldenGroupRule` gains `anchor` (designates the authoritative column for the new
+  `"anchor"` strategy, validated to be present in the group) and an orthogonal
+  `allow_fill` flag (fill-forward semantics). Existing strategies are unchanged.
+- **GroupProvenance surfaced end-to-end (#1053).** Per-cluster survivorship provenance
+  now carries a real `cluster_id` and a natural-language audit trail all the way through
+  lineage, `explain`, the MCP tools, and the review queue, so callers can see which source
+  won each field group and why.
+- **Chunked PPRL trusted-third-party linkage (#1054).** New `PPRLConfig.chunk_size` streams
+  Party B in blocks instead of materializing the full `N_a x N_b` score matrix (a 50k x 50k
+  float32 matrix was ~10 GB and OOMed). Peak memory drops ~9-14x (304.9 MB dense ->
+  21-34 MB chunked on a 4000x4000 link) with byte-identical output; `chunk_size=None`
+  (default) is the original dense path.
+- **Native-dispatch telemetry on the result object (#1048, #957).** `result.native`
+  (`NativeDispatchSummary`) reports whether the scoring hot path actually dispatched to the
+  Rust kernel or fell back to pure Python. A WARNING is emitted when the kernel is importable
+  but the hot path ran on the fallback, and each Ray worker self-reports once per process on
+  the distributed path, so a silently-slow run is visible instead of only inferable from
+  wall-clock.
 - **Collective entity resolution (neighborhood similarity).** `run_graph_er(...,
   propagation_mode="relational")` blends attribute similarity with neighbor-cluster
   overlap (Jaccard/Adamic-Adar) and iterates to a synchronous fixpoint
@@ -18,6 +44,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   unchanged (default remains `additive`). Benchmark + results under
   `benchmarks/collective-er/`. Phase 2 (negative evidence) and Phase 3 (learned
   weights) are planned follow-ups.
+
+### Fixed
+- **Zero-config multi-source dedupe no longer over-merges on shared workplace/categorical
+  attributes (#858).** Under the multi-source source-partition path, a low-cardinality
+  name-typed field whose column is NOT a person name (`company`, `job_title`, `department`,
+  ...) is now demoted to blocking-only, exactly like the existing phone demotion -- it is a
+  shared attribute, not an identity claim. Lifts the reporter's `crm_multisource_realistic`
+  fixture from bare F1 0.13 to 0.77; person-name and high-cardinality fields are kept and
+  single-source auto-config is byte-identical.
+- **`backend="bucket"` honors multi-pass UNION blocking (#1048).** `dedupe_df(df,
+  config=, backend="bucket")` with an explicit weighted matchkey + multi-pass config whose
+  keys live in `.passes` (no static key) silently returned 0 clusters. The guard now resolves
+  the pass list (`passes or keys`); single-key/static configs are byte-identical.
+- **Domain detection no longer classifies a bare `name`-only schema as `product` (#1042).**
+  `name` is domain-ambiguous and was removed from the product signals, so people/place/org
+  data no longer triggers product feature extraction (it resolves to `unknown`); real product
+  data still detects via title/description/brand/manufacturer/price.
 
 ### Performance
 - **Sail distributed WCC: edge-node seeding + stage-boundary lineage barriers.**
