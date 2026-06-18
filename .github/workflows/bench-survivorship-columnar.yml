@@ -1,0 +1,46 @@
+name: bench-survivorship-columnar
+
+# Measure-first bench: survivorship slow path vs vectorized floor.
+# Dispatched manually; no native build (this bench exercises the Python
+# survivorship path and the polars-native floor, not the Rust kernel).
+on:
+  workflow_dispatch:
+    inputs:
+      rows:
+        description: "Comma-separated row counts (e.g. '1000000,5000000')"
+        default: "1000000,5000000"
+      runs:
+        description: "Repetitions per measurement (median)"
+        default: "3"
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    runs-on: large-new-64GB
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      - name: Run survivorship-columnar bench
+        env:
+          GOLDENMATCH_NATIVE: "0"
+          POLARS_SKIP_CPU_CHECK: "1"
+        run: |
+          set -euo pipefail
+          uv run python packages/python/goldenmatch/scripts/bench_survivorship_columnar.py \
+            --rows "${{ inputs.rows }}" --runs "${{ inputs.runs }}" \
+            --output bench_survivorship_columnar.json | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        if: always()
+        with:
+          name: survivorship-columnar
+          path: bench_survivorship_columnar.json
+          retention-days: 30
