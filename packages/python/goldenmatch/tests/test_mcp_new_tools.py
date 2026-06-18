@@ -16,7 +16,7 @@ import pytest
 # ── Registration ──────────────────────────────────────────────────────────────
 
 
-def test_total_tool_count_is_58():
+def test_total_tool_count_is_59():
     from goldenmatch.mcp.agent_tools import AGENT_TOOLS
     from goldenmatch.mcp.identity_tools import IDENTITY_TOOLS
     from goldenmatch.mcp.memory_tools import MEMORY_TOOLS
@@ -26,9 +26,9 @@ def test_total_tool_count_is_58():
     assert len(AGENT_TOOLS) == 17   # +1 certify_recall
     assert len(MEMORY_TOOLS) == 7
     assert len(IDENTITY_TOOLS) == 7
-    assert len(_BASE_TOOLS) == 24
+    assert len(_BASE_TOOLS) == 25   # +1 config_weaknesses
     assert len(ROUTING_TOOLS) == 3  # plan_routing / explain_routing / lint_routing
-    assert len(TOOLS) == 58
+    assert len(TOOLS) == 59
     # No duplicate tool names across the whole surface.
     names = [t.name for t in TOOLS]
     assert len(names) == len(set(names))
@@ -41,7 +41,7 @@ def test_new_tool_names_registered():
     for new in (
         "evaluate", "analyze_blocking", "compare_clusters", "schema_match",
         "lineage", "list_runs", "rollback", "sensitivity", "incremental",
-        "identity_show", "memory_import",
+        "identity_show", "memory_import", "config_weaknesses",
     ):
         assert new in names, f"{new} missing from TOOLS"
 
@@ -123,6 +123,17 @@ def test_lineage_to_dir(demo_file, simple_config, tmp_path):
     out.mkdir()
     result = _handle_tool("lineage", {"max_pairs": 10, "output_dir": str(out)})
     assert "saved_to" in result
+
+
+def test_config_weaknesses(demo_file, simple_config):
+    from goldenmatch.mcp.server import TOOLS, _handle_tool, create_server
+
+    create_server([demo_file], simple_config)
+    result = _handle_tool("config_weaknesses", {})
+    # Shape only — demo data may legitimately produce zero findings.
+    assert isinstance(result["findings"], list)
+    assert isinstance(result["summary_plain"], str)
+    assert "config_weaknesses" in {t.name for t in TOOLS}
 
 
 # ── Base tools that are file/store based (no loaded dataset needed) ────────────
