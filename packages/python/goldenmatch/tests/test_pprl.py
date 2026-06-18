@@ -124,6 +124,77 @@ class TestTrustedThirdParty:
                 assert party_id in ("hospital_a", "hospital_b")
 
 
+class TestChunkedTrustedThirdParty:
+    """#1040: chunk_size streams Party B in blocks instead of materializing the
+    full N_a x N_b matrix. Output must be invariant to chunk_size."""
+
+    @staticmethod
+    def _two_party_overlap(n: int = 60):
+        """Party A and Party B each n records; the first ~half overlap (B is a
+        lower-cased / lightly-perturbed copy of A), the rest are disjoint."""
+        names = [
+            f"{first} {last}"
+            for first in ["John", "Jane", "Bob", "Alice", "Carol", "Dave",
+                          "Erin", "Frank", "Grace", "Henry"]
+            for last in ["Smith", "Jones", "Brown", "Davis", "Miller", "Wilson"]
+        ][:n]
+        df_a = pl.DataFrame({"__row_id__": list(range(n)), "name": names})
+        # B: lower-case the first half (still matches), replace the rest.
+        b_names = [s.lower() if i < n // 2 else f"Zztop Person{i}" for i, s in enumerate(names)]
+        df_b = pl.DataFrame({"__row_id__": list(range(n)), "name": b_names})
+        config = PPRLConfig(fields=["name"], threshold=0.7)
+        fa = compute_bloom_filters(df_a, ["name"], config)
+        fb = compute_bloom_filters(df_b, ["name"], config)
+        return (
+            PartyData(party_id="a", bloom_filters=fa, record_count=n),
+            PartyData(party_id="b", bloom_filters=fb, record_count=n),
+        )
+
+    @staticmethod
+    def _membership(result):
+        """Multi-member clusters as a hashable set-of-frozensets of members."""
+        return frozenset(
+            frozenset(members) for members in result.clusters.values() if len(members) >= 2
+        )
+
+    def test_chunked_matches_dense(self):
+        party_a, party_b = self._two_party_overlap()
+        dense = link_trusted_third_party(
+            party_a, party_b, PPRLConfig(fields=["name"], threshold=0.7, chunk_size=None)
+        )
+        # The dense run must actually find the planted overlaps.
+        assert dense.match_count > 0
+        assert self._membership(dense)
+        for cs in (1, 3, 7, 16, 1000):
+            chunked = link_trusted_third_party(
+                party_a, party_b, PPRLConfig(fields=["name"], threshold=0.7, chunk_size=cs)
+            )
+            assert chunked.match_count == dense.match_count, f"match_count drift at chunk_size={cs}"
+            assert chunked.total_comparisons == dense.total_comparisons
+            assert self._membership(chunked) == self._membership(dense), (
+                f"cluster membership drift at chunk_size={cs}"
+            )
+
+    def test_chunk_size_larger_than_party_b(self):
+        """chunk_size >= len(B) is a single block == dense."""
+        party_a, party_b = self._two_party_overlap(n=20)
+        dense = link_trusted_third_party(party_a, party_b, PPRLConfig(fields=["name"], threshold=0.7))
+        big = link_trusted_third_party(
+            party_a, party_b, PPRLConfig(fields=["name"], threshold=0.7, chunk_size=10_000)
+        )
+        assert self._membership(big) == self._membership(dense)
+        assert big.match_count == dense.match_count
+
+    def test_chunk_size_one_is_valid(self):
+        """The pathological chunk_size=1 (one Party B record per block) works."""
+        party_a, party_b = self._two_party_overlap(n=12)
+        dense = link_trusted_third_party(party_a, party_b, PPRLConfig(fields=["name"], threshold=0.7))
+        per_row = link_trusted_third_party(
+            party_a, party_b, PPRLConfig(fields=["name"], threshold=0.7, chunk_size=1)
+        )
+        assert self._membership(per_row) == self._membership(dense)
+
+
 class TestSMC:
     def test_smc_matches_ttp(self):
         """SMC should produce the same match decisions as TTP."""
