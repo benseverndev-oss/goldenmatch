@@ -137,13 +137,28 @@ def test_verdict_go_when_vectorizable_tax_large():
 
 def test_verdict_no_go_when_rss_regresses():
     mod = _load()
-    # slow wall dominates (would be GO on wall alone) but RSS blows out
+    # A REAL rewrite RSS regression = the VECTORIZED direction (floor proxy) uses
+    # materially MORE RSS than slow. THAT vetoes a GO (the prior columnar failure
+    # mode: a columnar path that blew up RSS).
     v = mod.verdict(
         slow={"total_wall_s": 3.0, "sort_wall_s": 0.1, "partition_wall_s": 0.4,
-              "loop_wall_s": 2.5, "peak_rss_mb": 500},
-        floor={"total_wall_s": 1.0, "peak_rss_mb": 100},   # 5x RSS regression
+              "loop_wall_s": 2.5, "peak_rss_mb": 100},
+        floor={"total_wall_s": 1.0, "peak_rss_mb": 500},   # vectorized proxy 5x RSS -> regress
     )
     assert "NO-GO" in v
+
+
+def test_verdict_go_when_slow_rss_heavy():
+    mod = _load()
+    # The MEASURED 1M case: huge wall tax AND the slow path is RSS-heavy vs the
+    # vectorized floor. Slow being RSS-heavy is a reason TO rewrite (the vectorized
+    # direction is LIGHTER), so it must be GO -- the RSS gate must NOT veto it.
+    v = mod.verdict(
+        slow={"total_wall_s": 52.99, "sort_wall_s": 0.02, "partition_wall_s": 1.01,
+              "loop_wall_s": 51.98, "peak_rss_mb": 5076},
+        floor={"total_wall_s": 2.79, "peak_rss_mb": 3080},
+    )
+    assert "GO" in v and "NO-GO" not in v
 
 
 def test_verdict_rss_none_treated_as_pass():
