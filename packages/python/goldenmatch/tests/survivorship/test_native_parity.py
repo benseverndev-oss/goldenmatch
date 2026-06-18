@@ -1,3 +1,5 @@
+from datetime import date
+
 import polars as pl
 from goldenmatch.config.schemas import GoldenGroupRule, GoldenRulesConfig
 from goldenmatch.core.golden import build_golden_records_batch
@@ -120,3 +122,156 @@ def test_b1_most_complete_multi_cluster_mixed():
         "zip": [None, "02139", "94103", None, None, "20001"],
     })
     assert_parity(df, _most_complete_rules(), compare_confidence=False)
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# B2: source_priority / most_recent / anchor group resolution
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def _source_priority_rules():
+    return GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_groups=[
+            GoldenGroupRule(name="addr", strategy="source_priority",
+                            source_priority=["crm", "erp", "web"],
+                            columns=["street", "city"]),
+        ],
+    )
+
+
+def test_b2_source_priority_winner_and_lockstep():
+    # cluster 1: erp(idx1) and crm(idx0) present -> crm wins; lock-step pin.
+    # cluster 2: web(idx2) and crm(idx0) -> crm wins.
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1, 2, 2],
+        "__row_id__": [10, 11, 20, 21],
+        "__source__": ["erp", "crm", "web", "crm"],
+        "street": ["1 Erp St", "2 Crm Ave", "3 Web Rd", "4 Crm Ln"],
+        "city": ["LA", "NY", "SF", "DC"],
+    })
+    assert_parity(df, _source_priority_rules(), compare_confidence=False)
+
+
+def test_b2_source_priority_tie_same_source_lowest_row_id():
+    # Both rows same source ("crm") -> rank tie -> lowest __row_id__ wins.
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1],
+        "__row_id__": [11, 10],   # frame order swapped
+        "__source__": ["crm", "crm"],
+        "street": ["1 A St", "2 B Ave"],
+        "city": ["LA", "NY"],
+    })
+    assert_parity(df, _source_priority_rules(), compare_confidence=False)
+
+
+def test_b2_source_priority_unknown_source_ranks_last():
+    # cluster 1: one row from an unknown source ("legacy", -> sentinel) and one
+    # from "web" (idx2). web outranks the unknown source.
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1, 2, 2],
+        "__row_id__": [10, 11, 20, 21],
+        "__source__": ["legacy", "web", "ghost", "spooky"],  # cluster 2: both unknown -> lowest row_id
+        "street": ["1 Old St", "2 Web Ave", "3 G St", "4 S Ave"],
+        "city": ["LA", "NY", "SF", "DC"],
+    })
+    assert_parity(df, _source_priority_rules(), compare_confidence=False)
+
+
+def _most_recent_rules():
+    # The date column is itself a group member so every user column is grouped.
+    return GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_groups=[
+            GoldenGroupRule(name="addr", strategy="most_recent",
+                            date_column="updated",
+                            columns=["street", "city", "updated"]),
+        ],
+    )
+
+
+def test_b2_most_recent_latest_wins_lockstep():
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1, 2, 2],
+        "__row_id__": [10, 11, 20, 21],
+        "street": ["1 Old St", "2 New Ave", "3 A Rd", "4 B Ln"],
+        "city": ["LA", "NY", "SF", "DC"],
+        "updated": [date(2020, 1, 1), date(2023, 6, 1),
+                    date(2024, 1, 1), date(2021, 1, 1)],
+    })
+    assert_parity(df, _most_recent_rules(), compare_confidence=False)
+
+
+def test_b2_most_recent_null_dates_last():
+    # cluster 1: one null date, one real date -> real date wins (nulls last).
+    # cluster 2: both null -> lowest __row_id__ wins.
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1, 2, 2],
+        "__row_id__": [10, 11, 21, 20],
+        "street": ["1 A St", "2 B Ave", "3 C Rd", "4 D Ln"],
+        "city": ["LA", "NY", "SF", "DC"],
+        "updated": [None, date(2022, 1, 1), None, None],
+    }, schema={"__cluster_id__": pl.Int64, "__row_id__": pl.Int64,
+               "street": pl.Utf8, "city": pl.Utf8, "updated": pl.Date})
+    assert_parity(df, _most_recent_rules(), compare_confidence=False)
+
+
+def test_b2_most_recent_tie_same_date_lowest_row_id():
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1],
+        "__row_id__": [11, 10],   # frame order swapped
+        "street": ["1 A St", "2 B Ave"],
+        "city": ["LA", "NY"],
+        "updated": [date(2022, 5, 5), date(2022, 5, 5)],
+    })
+    assert_parity(df, _most_recent_rules(), compare_confidence=False)
+
+
+def _anchor_rules():
+    return GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_groups=[
+            GoldenGroupRule(name="addr", strategy="anchor", anchor="zip",
+                            columns=["street", "city", "zip"]),
+        ],
+    )
+
+
+def test_b2_anchor_present_wins_over_more_complete():
+    # cluster 1: row A is more complete (street+city, no zip) but lacks the
+    # anchor; row B has the anchor (zip). anchor-present beats completeness.
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1],
+        "__row_id__": [10, 11],
+        "street": ["1 Full St", "2 B Ave"],
+        "city": ["LA", None],
+        "zip": [None, "10001"],
+    })
+    assert_parity(df, _anchor_rules(), compare_confidence=False)
+
+
+def test_b2_anchor_both_present_breaks_by_completeness():
+    # Both rows carry the anchor -> tie on present -> most-complete wins,
+    # then lowest __row_id__ on a full tie.
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1, 2, 2],
+        "__row_id__": [10, 11, 20, 21],
+        "street": [None, "2 B Ave", "3 C Rd", "4 D Ln"],   # cluster1: row B more complete
+        "city": [None, "NY", "SF", "DC"],
+        "zip": ["10001", "10002", "94103", "20001"],        # cluster2: both full -> row_id 20
+    })
+    assert_parity(df, _anchor_rules(), compare_confidence=False)
+
+
+def test_b2_anchor_none_present_degrades_to_most_complete():
+    # No row carries the anchor (zip all null) -> ranking degrades to
+    # most_complete (then lowest __row_id__ on tie).
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1],
+        "__row_id__": [10, 11],
+        "street": ["1 A St", "2 B Ave Longer"],
+        "city": [None, "NY"],   # row B (row_id 11) more complete
+        "zip": [None, None],
+    }, schema={"__cluster_id__": pl.Int64, "__row_id__": pl.Int64,
+               "street": pl.Utf8, "city": pl.Utf8, "zip": pl.Utf8})
+    assert_parity(df, _anchor_rules(), compare_confidence=False)
