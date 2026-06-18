@@ -887,6 +887,12 @@ _SEMANTIC_ALIAS_TRANSFORMS: dict[str, str] = {
     "business": "refdata_business_canonical",
 }
 
+# Internal column prefix for the pre-standardize snapshot of the name column the
+# semantic-blocking sources key + score off of (see the capture in
+# ``_run_dedupe_pipeline`` just before standardize). ``__``-prefixed so it never
+# leaks into user-facing golden output.
+_SEMANTIC_RAW_COL_PREFIX = "__raw__"
+
 
 def _semantic_name_column(
     config: GoldenMatchConfig, matchkeys: list, columns: list[str],
@@ -993,18 +999,29 @@ def _semantic_blocking_pairs(
         logger.warning("semantic_blocking: no usable name column found; skipping")
         return []
 
+    # The initialism/alias sources must key + score off the RAW (pre-standardize)
+    # name so an all-caps acronym ("IBM") survives the `name_proper` title-casing
+    # (which would otherwise leave "Ibm", killing `derive_initialism`'s
+    # acronym-as-own-key step). `_run_dedupe_pipeline` snapshots it into
+    # `__raw__<name_col>` before standardize; fall back to `name_col` if absent
+    # (e.g. no standardization configured, or an upstream path that didn't
+    # capture it) -- the fall back is the prior behavior, never worse.
+    key_name_col = f"{_SEMANTIC_RAW_COL_PREFIX}{name_col}"
+    if key_name_col not in collected_df.columns:
+        key_name_col = name_col
+
     out: list[tuple[int, int, float]] = []
     block_scorer = _get_block_scorer(config)
 
-    def _confirming_mk(name: str, scorer: str) -> MatchkeyConfig:
-        # Single-field weighted matchkey on the name column whose ONLY field
-        # uses the confirming scorer. threshold=0.5 emits a confirmed (1.0)
-        # pair and drops a non-confirmation (0.0); <=1.0 is required so the
-        # confirmed pair is emitted at all.
+    def _confirming_mk(name: str, scorer: str, field_col: str) -> MatchkeyConfig:
+        # Single-field weighted matchkey on the given name column whose ONLY
+        # field uses the confirming scorer. threshold=0.5 emits a confirmed
+        # (1.0) pair and drops a non-confirmation (0.0); <=1.0 is required so
+        # the confirmed pair is emitted at all.
         return MatchkeyConfig(
             name=name,
             type="weighted",
-            fields=[MatchkeyField(field=name_col, scorer=scorer, weight=1.0)],
+            fields=[MatchkeyField(field=field_col, scorer=scorer, weight=1.0)],
             threshold=0.5,
         )
 
@@ -1026,22 +1043,26 @@ def _semantic_blocking_pairs(
                 "semantic_blocking %s source failed; skipping", label, exc_info=True,
             )
 
-    # ── acronym/initialism: scored by initialism_match ──
+    # ── acronym/initialism: scored by initialism_match (off the RAW name) ──
     if "initialism" in sb.keys:
         _score_source(
-            [BlockingKeyConfig(fields=[name_col], transforms=["initialism"])],
-            _confirming_mk("__sem_initialism", "initialism_match"),
+            [BlockingKeyConfig(fields=[key_name_col], transforms=["initialism"])],
+            _confirming_mk("__sem_initialism", "initialism_match", key_name_col),
             "initialism",
         )
 
-    # ── alias: scored by alias_match (one pass per requested alias table) ──
+    # ── alias: scored by alias_match (off the RAW name; one pass per table) ──
     if "alias" in sb.keys:
         alias_passes = [
-            BlockingKeyConfig(fields=[name_col], transforms=[transform])
+            BlockingKeyConfig(fields=[key_name_col], transforms=[transform])
             for table in sb.alias_tables
             if (transform := _SEMANTIC_ALIAS_TRANSFORMS.get(table)) is not None
         ]
-        _score_source(alias_passes, _confirming_mk("__sem_alias", "alias_match"), "alias")
+        _score_source(
+            alias_passes,
+            _confirming_mk("__sem_alias", "alias_match", key_name_col),
+            "alias",
+        )
 
     # ── ann: direct-pair ANN blocking returns pre-scored (a, b, cosine) pairs ──
     # Kept as cosine; gated by sb.ann_threshold so a low-similarity neighbor
@@ -1296,6 +1317,24 @@ def _run_dedupe_pipeline(
             return lf
         with stage(f"prep_force_collect_{label}"):
             return lf.collect().lazy()
+
+    # ── Semantic-blocking raw-name capture (recall lever) ──
+    # The semantic-blocking sources (initialism / alias) derive their block keys
+    # and confirming scores from the name column. Standardize (below) title-cases
+    # that column (`name_proper` -> "IBM" becomes "Ibm"), which destroys the
+    # all-caps acronym signal `derive_initialism` keys off of. Snapshot the RAW
+    # (pre-standardize) name value into an internal `__raw__<col>` column so
+    # `_semantic_blocking_pairs` can key + score off the un-standardized text.
+    # Gated entirely behind `config.semantic_blocking`; byte-identical when None.
+    if config.semantic_blocking is not None:
+        _sem_name_col = _semantic_name_column(
+            config, matchkeys, list(combined_lf.collect_schema().names()),
+        )
+        if _sem_name_col is not None:
+            _raw_col = f"{_SEMANTIC_RAW_COL_PREFIX}{_sem_name_col}"
+            combined_lf = combined_lf.with_columns(
+                pl.col(_sem_name_col).alias(_raw_col)
+            )
 
     if config.standardization and config.standardization.rules:
         with stage("standardize"):

@@ -52,6 +52,83 @@ def test_semantic_blocking_only_adds_candidates():
     assert cluster_of(0) == cluster_of(1)  # IBM <-> Intl Business Machines merged
 
 
+def test_acronym_merges_through_standardize():
+    """The title-case wall: auto-config's standardize step title-cases the name
+    column (``name_proper`` -> ``"IBM"`` becomes ``"Ibm"``) BEFORE semantic
+    blocking runs. ``derive_initialism`` requires an all-caps token to treat a
+    lone acronym as its own block key, so a standardized ``"Ibm"`` derives ``""``
+    and never co-locates with its expansion.
+
+    This test isolates the initialism source ONLY (no ann/alias) so the merge
+    can ONLY come from initialism keying off the RAW name. With ann/alias on,
+    the ANN embedding similarity masks the wall (it merges IBM<->expansion on
+    its own), so a "semantic_blocking=True" test passes regardless of this bug.
+
+    The semantic-blocking path must derive its block keys + confirming scores
+    from the RAW (un-standardized) name so the acronym signal survives.
+    """
+    from goldenmatch.config.schemas import SemanticBlockingConfig
+    from goldenmatch.core.autoconfig import auto_configure_df
+
+    df = pl.DataFrame(
+        {"name": ["International Business Machines", "IBM", "Globex"]}
+    )
+    # auto-config carries the name_proper standardization rule that title-cases
+    # the column; isolate the initialism source so the ANN source can't mask it.
+    cfg = auto_configure_df(df)
+    cfg.semantic_blocking = SemanticBlockingConfig(keys=["initialism"], alias_tables=[])
+    for mk in cfg.get_matchkeys():
+        if mk.type == "weighted":
+            mk.rerank = False  # avoid HF cross-encoder download in CI
+
+    on = gm.dedupe_df(df, config=cfg)
+
+    def cluster_of(rid):
+        return next(c for c, i in on.clusters.items() if rid in i["members"])
+
+    # IBM <-> International Business Machines despite title-casing upstream.
+    assert cluster_of(0) == cluster_of(1)
+    # Globex (no initialism link) is NOT swept in.
+    assert cluster_of(2) != cluster_of(0)
+
+
+def test_acronym_merges_through_standardize_extra_columns():
+    """The prompt's scenario shape (entity_type/context columns present), but
+    isolated to the initialism source so the extra equal-valued columns can't
+    carry the (0,1) merge on their own.
+    """
+    from goldenmatch.config.schemas import SemanticBlockingConfig
+    from goldenmatch.core.autoconfig import auto_configure_df
+
+    df = pl.DataFrame(
+        {
+            "name": [
+                "IBM",
+                "International Business Machines Corporation",
+                "Globex Pharmaceuticals",
+                "Globex Pharma",
+            ],
+            "entity_type": ["org", "org", "org", "org"],
+            "context": ["tech", "tech", "chem", "chem"],
+        }
+    )
+    cfg = auto_configure_df(df)
+    # Initialism source only, and drop the non-name columns from the weighted
+    # matchkey so the equal-valued entity_type/context can't mask the wall.
+    cfg.semantic_blocking = SemanticBlockingConfig(keys=["initialism"], alias_tables=[])
+    for mk in cfg.get_matchkeys():
+        if mk.type == "weighted":
+            mk.rerank = False
+            mk.fields = [f for f in mk.fields if f.field == "name"]
+
+    on = gm.dedupe_df(df, config=cfg)
+
+    def cluster_of(rid):
+        return next(c for c, i in on.clusters.items() if rid in i["members"])
+
+    assert cluster_of(0) == cluster_of(1)  # IBM <-> expansion despite title-casing
+
+
 def test_initialism_confirmed_merges_at_auto_threshold():
     # Name is the ONLY signal: string similarity scores
     # "International Business Machines" <-> "IBM" ~0.58, BELOW the zero-config
