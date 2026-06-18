@@ -184,6 +184,9 @@ def _serialize_golden_records(provenance: list) -> list[dict]:
         audit = _safe_cluster_audit(cp)
         if audit:
             rec["audit"] = audit
+        for grp in rec.get("groups", []):
+            if not grp.get("filled"):
+                grp.pop("filled", None)
     return records
 
 
