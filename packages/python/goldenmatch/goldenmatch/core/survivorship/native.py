@@ -11,6 +11,7 @@ import polars as pl
 def survivorship_native_eligible(rules, provenance) -> bool:
     """True when the vectorized survivorship path can handle this config.
     Returns False for now -- flipped on in Phase F when the path is complete."""
+    # rules/provenance inspected in Phase F when the gate is flipped on
     return False
 
 
@@ -35,7 +36,25 @@ def _sorted_for_group(multi_df: pl.DataFrame, g) -> pl.DataFrame:
     index == ``__row_id__`` ascending).
     """
     strategy = g.strategy
+    # Defensive backstop: the Phase-F eligibility gate pre-checks column
+    # presence and falls back to the slow path for a misconfigured call, so
+    # this guard normally never fires -- it just makes the failure legible if
+    # an absent date_column/anchor ever reaches here (vs a cryptic Polars
+    # ColumnNotFound on the sort).
+    if strategy == "most_recent" and g.date_column not in multi_df.columns:
+        raise ValueError(
+            f"survivorship group {g.name!r}: most_recent date_column "
+            f"{g.date_column!r} not present in frame columns {multi_df.columns}"
+        )
+    if strategy == "anchor" and g.anchor not in multi_df.columns:
+        raise ValueError(
+            f"survivorship group {g.name!r}: anchor column {g.anchor!r} "
+            f"not present in frame columns {multi_df.columns}"
+        )
     helper_cols: list[str] = []
+    # global sort by [cluster_id, <strategy key>, row_id];
+    # group_by(maintain_order=True).first() then yields each cluster's winner
+    # (first row in its partition).
     by: list[str] = ["__cluster_id__"]
     descending: list[bool] = [False]
     nulls_last: list[bool] = [False]
@@ -45,14 +64,12 @@ def _sorted_for_group(multi_df: pl.DataFrame, g) -> pl.DataFrame:
         priority = list(g.source_priority or [])
         sentinel = len(priority)
         rank_map = {s: i for i, s in enumerate(priority)}
-        # Map source -> rank; any source not in the priority list (incl. null)
-        # ranks last (sentinel), matching winner._ranking's
-        # ``rank.get(source, len(rank))``. fill_null guards versions/cases where
-        # a null source survives replace_strict's default.
+        # replace_strict maps any source not in rank_map (incl. null) to the
+        # sentinel, matching winner._ranking's ``rank.get(source, len(rank))``.
         df = multi_df.with_columns(
             pl.col("__source__").replace_strict(
                 rank_map, default=sentinel, return_dtype=pl.Int64
-            ).fill_null(sentinel).alias("__src_rank__")
+            ).alias("__src_rank__")
         )
         helper_cols.append("__src_rank__")
         by.append("__src_rank__")
@@ -106,7 +123,10 @@ def _resolve_group(multi_df: pl.DataFrame, g) -> pl.DataFrame:
     """
     ordered = _sorted_for_group(multi_df, g)
     if g.allow_fill:
-        # allow_fill: each column = first NON-NULL walking the strategy ranking.
+        # allow_fill: first non-null walking the strategy ranking. Relies on
+        # (a) df.sort() being stable and (b) group_by(maintain_order=True).agg()
+        # preserving the sorted within-group row order, so drop_nulls().first()
+        # == first non-null in ranking order (matches winner.group_winner's walk).
         agg_exprs = [pl.col(c).drop_nulls().first().alias(c) for c in g.columns]
     else:
         # lock-step: every column = the winner row's value (nulls included).
@@ -131,7 +151,8 @@ def build_survivorship_native(multi_df, rules) -> pl.DataFrame:
         if result is None:
             result = resolved
         else:
-            result = result.join(resolved, on="__cluster_id__", how="left")
+            # inner: every group resolves over the same source frame -> identical cluster set
+            result = result.join(resolved, on="__cluster_id__", how="inner")
     if result is None:
         # No groups: just the distinct cluster ids.
         result = multi_df.select("__cluster_id__").unique(maintain_order=True)

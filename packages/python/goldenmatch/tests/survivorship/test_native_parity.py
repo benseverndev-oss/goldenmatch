@@ -360,6 +360,45 @@ def test_b3_most_recent_allow_fill():
     assert_parity(df, rules, compare_confidence=False)
 
 
+def test_b3_allow_fill_donor_not_lowest_row_id():
+    # The fill donor is NOT the lowest __row_id__ row that has the column, so a
+    # naive "lowest row_id non-null" fill would diverge from the ranking walk.
+    # One cluster, most_complete + allow_fill, columns street/city/zip:
+    #   row 10 (A): completeness 1/3 (only zip) -- DECOY: lowest row_id, zip set.
+    #   row 11 (B): completeness 2/3 (street+city), zip NULL  -> WINNER.
+    #   row 12 (C): completeness 2/3 (street+zip), city NULL  -> ranking-correct
+    #               donor for zip (ranks above A, BELOW B, higher row_id than A).
+    # Ranking (completeness desc, row_id asc): B(11) -> C(12) -> A(10).
+    # B.zip is null, so the walk fills from C (zip "10001"), NOT from the
+    # lower-row_id decoy A (zip "99999").
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1, 1],
+        "__row_id__": [10, 11, 12],
+        "street": [None, "11 Win St", "12 Don Rd"],
+        "city": [None, "NY", None],
+        "zip": ["99999", None, "10001"],
+    }, schema={"__cluster_id__": pl.Int64, "__row_id__": pl.Int64,
+               "street": pl.Utf8, "city": pl.Utf8, "zip": pl.Utf8})
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_groups=[GoldenGroupRule(name="addr", strategy="most_complete",
+                                      allow_fill=True,
+                                      columns=["street", "city", "zip"])],
+    )
+    assert_parity(df, rules, compare_confidence=False)
+
+
+def test_empty_frame_returns_empty():
+    from goldenmatch.core.survivorship.native import build_survivorship_native
+    df = pl.DataFrame(
+        {"__cluster_id__": [], "__row_id__": [], "street": [], "city": [], "zip": []},
+        schema={"__cluster_id__": pl.Int64, "__row_id__": pl.Int64,
+                "street": pl.Utf8, "city": pl.Utf8, "zip": pl.Utf8},
+    )
+    result = build_survivorship_native(df, _most_complete_rules())
+    assert result.height == 0
+
+
 def test_b3_anchor_allow_fill():
     # anchor-present row wins; one of its non-anchor columns is null and is
     # back-filled walking the anchor ranking.
