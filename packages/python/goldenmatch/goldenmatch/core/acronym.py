@@ -22,8 +22,12 @@ from goldenmatch.plugins.base import TransformPlugin
 _FIRST_ALPHA = re.compile(r"[A-Za-z]")
 # Any alphabetic character (used for the punctuation-only-token drop).
 _ANY_ALPHA = re.compile(r"[A-Za-z]")
-# A trailing/leading parenthetical group: "(Armonk, NY)", "(WHO)", etc.
-_PARENTHETICAL = re.compile(r"\s*\([^)]*\)")
+# A parenthetical group: "(Armonk, NY)", "(WHO)", etc. No leading ``\s*`` on
+# purpose: ``\s*\(`` backtracks polynomially (ReDoS, CodeQL py/polynomial-redos)
+# on long whitespace runs not followed by "(". Dropping it is behavior-identical
+# here because the subsequent ``.split()`` normalizes any leftover whitespace;
+# ``[^)]*`` is linear (no backtracking).
+_PARENTHETICAL = re.compile(r"\([^)]*\)")
 
 
 def _legal_form_variants() -> frozenset[str]:
