@@ -22,6 +22,10 @@ VALID_SCORERS = frozenset({
     "exact", "jaro_winkler", "levenshtein", "token_sort", "soundex_match",
     "embedding", "record_embedding", "ensemble",
     "dice", "jaccard", "qgram",
+    # Free deterministic equality scorers (1.0/0.0): initialism collapse
+    # ("IBM" <-> "International Business Machines") and alias canonicalization
+    # ("Acme Inc" <-> "Acme Incorporated", "Bob" <-> "Robert").
+    "initialism_match", "alias_match",
 })
 
 VALID_STRATEGIES = frozenset({
