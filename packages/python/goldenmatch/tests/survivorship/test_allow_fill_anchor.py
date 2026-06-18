@@ -149,3 +149,24 @@ def test_filled_present_when_nonempty(tmp_path):
     path = save_lineage([], tmp_path, "run", golden_provenance=_cp_filled({"zip": 12}))
     grp = json.loads(path.read_text(encoding="utf-8"))["golden_records"][0]["groups"][0]
     assert grp["filled"] == {"zip": 12}
+
+
+# E1 combined anchor + allow_fill + parity ------------------------------------
+
+
+def test_anchor_plus_allow_fill():
+    rows = _rows([
+        {"plan_id": "P1", "plan_name": "Gold", "plan_tier": None},   # anchor present, 2/3 -> winner
+        {"plan_id": None, "plan_name": "Gold", "plan_tier": "G"},     # has tier
+    ])
+    res = group_winner(rows, ["plan_id", "plan_name", "plan_tier"],
+                       strategy="anchor", anchor="plan_id", allow_fill=True)
+    assert res.winner_pos == 0
+    assert res.values["plan_tier"] == "G" and res.filled == {"plan_tier": 1}
+
+
+def test_no_levers_byte_identical():
+    # strict lock-step (no allow_fill, default strategy) pins the winner's null + empty filled
+    rows = _rows([{"a": "x", "b": None}, {"a": "p", "b": "q"}])
+    res = group_winner(rows, ["a", "b"], strategy="most_complete")
+    assert res.values["b"] is None and res.filled == {}
