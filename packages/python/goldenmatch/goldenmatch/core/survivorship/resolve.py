@@ -77,18 +77,24 @@ def resolve_cluster(cluster_df, rules, resolution_order, *,
                     row["__source__"] = source_array[i]
                 rows.append(row)
             res = group_winner(rows, list(g.columns), strategy=g.strategy,
-                               source_priority=g.source_priority, dates=dates)
+                               source_priority=g.source_priority, dates=dates,
+                               anchor=g.anchor, allow_fill=g.allow_fill)
             wid = (row_id_array[res.winner_pos]
                    if (row_id_array is not None and res.winner_pos is not None and res.winner_pos >= 0)
                    else None)
             wsrc = (source_array[res.winner_pos]
                     if (source_array is not None and res.winner_pos is not None and res.winner_pos >= 0)
                     else None)
+            filled_ids = (
+                {c: row_id_array[p] for c, p in res.filled.items()}
+                if row_id_array is not None
+                else dict(res.filled)
+            )
             for c in g.columns:
                 v = res.values.get(c)
                 fd = {"value": v, "confidence": res.confidence}
                 if provenance:
-                    fd["source_row_id"] = wid
+                    fd["source_row_id"] = filled_ids.get(c, wid)
                 field_dicts[c] = fd
                 resolved[c] = v
             confidences.append(res.confidence)
@@ -97,6 +103,7 @@ def resolve_cluster(cluster_df, rules, resolution_order, *,
                     name=g.name, columns=list(g.columns), strategy=g.strategy,
                     winner_row_id=wid, winner_source=wsrc,
                     values=dict(res.values), tie=res.tie, confidence=res.confidence,
+                    filled=filled_ids,
                 ))
         else:
             col = unit

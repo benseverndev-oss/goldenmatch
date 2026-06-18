@@ -1,5 +1,9 @@
+import polars as pl
 import pytest
-from goldenmatch.config.schemas import GoldenGroupRule
+from goldenmatch.config.schemas import GoldenGroupRule, GoldenRulesConfig
+from goldenmatch.core.survivorship.conditions import build_resolution_order
+from goldenmatch.core.survivorship.resolve import resolve_cluster
+from goldenmatch.core.survivorship.winner import group_winner
 from pydantic import ValidationError
 
 
@@ -34,8 +38,6 @@ def test_anchor_with_non_anchor_strategy_rejected():
 
 
 # B2 anchor group-winner strategy ---------------------------------------------
-
-from goldenmatch.core.survivorship.winner import group_winner  # noqa: E402
 
 
 def _rows(spec):
@@ -84,3 +86,23 @@ def test_allow_fill_nothing_to_fill():
     rows = _rows([{"a": "x", "b": "y"}, {"a": "p", "b": None}])
     res = group_winner(rows, ["a", "b"], strategy="most_complete", allow_fill=True)
     assert res.filled == {}
+
+
+# C1 resolve.py threading + filled remap --------------------------------------
+
+
+def test_resolve_allow_fill_records_filled_row_id():
+    df = pl.DataFrame({
+        "__cluster_id__": [5, 5], "__row_id__": [10, 11],
+        "street": ["1 Main St", "1 Main"], "city": ["LA", None], "zip": [None, "90001"],
+    })
+    rules = GoldenRulesConfig(default_strategy="most_complete", field_groups=[
+        GoldenGroupRule(name="addr", columns=["street", "city", "zip"], allow_fill=True)])
+    order = build_resolution_order(rules.field_rules, rules.field_groups, ["street", "city", "zip"])
+    rec, prov = resolve_cluster(df, rules, order, provenance=True, cluster_id=5)
+    gp = prov.groups[0]
+    # row 0 is most-complete (street+city, 2/3); zip filled from row 1 (row_id 11)
+    assert gp.values["zip"] == "90001"
+    assert gp.filled == {"zip": 11}
+    assert rec["zip"]["value"] == "90001"
+    assert rec["zip"]["source_row_id"] == 11
