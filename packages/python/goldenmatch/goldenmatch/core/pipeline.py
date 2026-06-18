@@ -1852,21 +1852,24 @@ def _run_dedupe_pipeline(
             break  # rerank once with the first rerank-enabled matchkey
 
     # ── Step 3.4: LLM SCORER (optional) ──
+    # Measured pair-scorer cost surfaced on DedupeResult.llm_cost; None unless
+    # the score-mode LLM branch below runs. Cluster-mode cost is left None
+    # (deliberate follow-up — the measured bench lane is the pairwise scorer).
+    llm_budget_summary: dict | None = None
     if config.llm_scorer and config.llm_scorer.enabled and all_pairs:
-        # Both LLM scorers can return (pairs, stats) when return_stats=True; the
-        # pipeline never asks for that path, so the runtime value is always
-        # list[tuple[int, int, float]]. _unwrap_pairs narrows for the type
-        # checker without changing behavior.
         if config.llm_scorer.mode == "cluster":
+            # llm_cluster_pairs also accepts return_budget; left unwired here on
+            # purpose (cluster-mode cost stays None for this task).
             from goldenmatch.core.llm_cluster import llm_cluster_pairs
             all_pairs = _unwrap_llm_pairs(
                 llm_cluster_pairs(all_pairs, collected_df, config=config.llm_scorer)
             )
         else:
             from goldenmatch.core.llm_scorer import llm_score_pairs
-            all_pairs = _unwrap_llm_pairs(
-                llm_score_pairs(all_pairs, collected_df, config=config.llm_scorer)
+            _scored, llm_budget_summary = llm_score_pairs(
+                all_pairs, collected_df, config=config.llm_scorer, return_budget=True
             )
+            all_pairs = _unwrap_llm_pairs(_scored)
         # Filter to scored matches only
         all_pairs = [(a, b, s) for a, b, s in all_pairs if s > 0.5]
 
@@ -2443,6 +2446,7 @@ def _run_dedupe_pipeline(
         "memory_stats": memory_stats,
         "identity_summary": identity_summary,
         "scored_pairs": scored_pairs,
+        "llm_cost": llm_budget_summary,
     }
 
     try:
