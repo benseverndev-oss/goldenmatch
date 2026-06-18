@@ -11,6 +11,7 @@ null_sink), plus id_admitted / low_signal_key / over_merge; the no-LLM
 phrasing="plain" rendering; severity ranking + max_findings truncation; and
 the clean-data "no findings" path.
 """
+
 from __future__ import annotations
 
 import polars as pl
@@ -221,6 +222,29 @@ def test_low_signal_key_fires_on_constant_column():
     finding = next(f for f in out["findings"] if f["id"] == "low_signal_key")
     assert finding["severity"] == "low"
     assert finding["evidence"]["column"] == "country"
+
+
+def test_null_sink_wins_over_low_signal_key_on_same_column():
+    # A mostly-null column also reads as low-cardinality (few distinct non-null
+    # values). The emptiness is the root cause, so a single column must never
+    # produce BOTH null_sink and low_signal_key — null_sink wins.
+    df = pl.DataFrame({
+        "name": [f"n{i}" for i in range(200)],
+        "phone": (["555"] + [None] * 199),  # 99.5% null + 1 distinct value
+    })
+    cfg = _exact_config(fields=["name", "phone"])
+    out = diagnose_config(df, cfg, _result())
+
+    by_col: dict[str, set[str]] = {}
+    for f in out["findings"]:
+        col = f.get("evidence", {}).get("column")
+        if col is not None:
+            by_col.setdefault(col, set()).add(f["id"])
+    for col, ids in by_col.items():
+        assert not ({"null_sink", "low_signal_key"} <= ids), (
+            f"column {col!r} fired both null_sink and low_signal_key"
+        )
+    assert any(f["id"] == "null_sink" for f in out["findings"])
 
 
 # ── over_merge ─────────────────────────────────────────────────────────────────

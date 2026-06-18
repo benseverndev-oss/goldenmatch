@@ -622,6 +622,30 @@ def diagnose_config(
         _detect_low_signal_key, matchkey_cols, profiles_by_name, phrasing
     )
 
+    # A mostly-empty column also reads as "low cardinality" (few distinct
+    # non-null values), so null_sink and low_signal_key can both fire on the
+    # same column. The emptiness is the root cause, so when both fire we keep
+    # null_sink and drop the redundant low_signal_key — one clear finding per
+    # column instead of two slightly-contradictory ones on the "what to watch"
+    # panel.
+    _null_sink_cols = {
+        f["evidence"]["column"]
+        for f in findings
+        if f.get("id") == "null_sink"
+        and isinstance(f.get("evidence"), dict)
+        and "column" in f["evidence"]
+    }
+    if _null_sink_cols:
+        findings = [
+            f
+            for f in findings
+            if not (
+                f.get("id") == "low_signal_key"
+                and isinstance(f.get("evidence"), dict)
+                and f["evidence"].get("column") in _null_sink_cols
+            )
+        ]
+
     # Rank high→low by severity (stable: preserves detector order within a tier
     # so output is fully deterministic), then truncate.
     findings.sort(key=lambda f: _SEVERITY_RANK.get(str(f.get("severity", "")), 99))
