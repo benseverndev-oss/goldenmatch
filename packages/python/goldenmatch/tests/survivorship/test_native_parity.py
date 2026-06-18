@@ -51,3 +51,72 @@ def test_slow_path_deterministic_on_ties():
     a = _slow_oracle(df, rules)
     b = _slow_oracle(df.sample(fraction=1.0, shuffle=True, seed=1), rules)
     assert a.equals(b)   # winner = lowest __row_id__ regardless of input order
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# B1: most_complete group resolution
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def _most_complete_rules():
+    # Every user column is a group member (no scalar resolution in Phase B).
+    return GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_groups=[
+            GoldenGroupRule(name="addr", strategy="most_complete",
+                            columns=["street", "city", "zip"]),
+        ],
+    )
+
+
+def test_b1_most_complete_no_frankenstein():
+    # cluster 1: row A has the LONGEST street but is least complete (1/3);
+    # row B is most-complete (3/3). The group winner is row B and EVERY column
+    # must come from row B in lock-step -- a Frankenstein merge would take A's
+    # long street and B's city/zip.
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1],
+        "__row_id__": [10, 11],
+        "street": ["123 Main Street Apartment 4B Building 7", "5 Oak Rd"],
+        "city": [None, "New York"],
+        "zip": [None, "10001"],
+    })
+    assert_parity(df, _most_complete_rules(), compare_confidence=False)
+
+
+def test_b1_most_complete_tie_lowest_row_id():
+    # cluster 1: both rows 2/3 populated -> tie -> lowest __row_id__ (10) wins.
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1],
+        "__row_id__": [11, 10],   # deliberately out of order in the frame
+        "street": ["A St", "B St"],
+        "city": ["LA", "NY"],
+        "zip": [None, None],
+    })
+    assert_parity(df, _most_complete_rules(), compare_confidence=False)
+
+
+def test_b1_most_complete_all_null_group():
+    # cluster 1: every group column null in both rows -> winner is row 0
+    # (lowest __row_id__) and all pinned values are null.
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1],
+        "__row_id__": [10, 11],
+        "street": [None, None],
+        "city": [None, None],
+        "zip": [None, None],
+    }, schema={"__cluster_id__": pl.Int64, "__row_id__": pl.Int64,
+               "street": pl.Utf8, "city": pl.Utf8, "zip": pl.Utf8})
+    assert_parity(df, _most_complete_rules(), compare_confidence=False)
+
+
+def test_b1_most_complete_multi_cluster_mixed():
+    # Multiple clusters, mixed completeness + a clear winner each.
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1, 2, 2, 2, 3],
+        "__row_id__": [10, 11, 20, 21, 22, 30],
+        "street": ["1 A St", "2 B Ave", None, "9 Z Rd", "9 Z Rd", "solo"],
+        "city": ["LA", None, "SF", "SF", None, "DC"],
+        "zip": [None, "02139", "94103", None, None, "20001"],
+    })
+    assert_parity(df, _most_complete_rules(), compare_confidence=False)
