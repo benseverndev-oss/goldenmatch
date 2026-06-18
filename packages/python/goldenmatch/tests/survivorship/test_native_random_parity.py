@@ -33,7 +33,6 @@ from goldenmatch.config.schemas import (
     GoldenRulesConfig,
 )
 from goldenmatch.core.survivorship.native import survivorship_native_eligible
-
 from test_native_parity import assert_parity  # noqa: E402  (sibling module via pytest prepend path)
 
 # Native-expressible strategy pools. These are the ONLY strategies the

@@ -11,7 +11,6 @@ from goldenmatch.core.golden import _is_internal, _stable_value_expr
 from goldenmatch.core.survivorship.conditions import select_conditional_strategy
 from goldenmatch.core.survivorship.validate import goldenflow_filter
 
-
 # Strategies the native scalar/conditional value+confidence exprs reproduce
 # byte-identically. A positive allowlist (not a denylist) so any strategy the
 # config schema gains later -- majority_vote, unanimous_or_null,
