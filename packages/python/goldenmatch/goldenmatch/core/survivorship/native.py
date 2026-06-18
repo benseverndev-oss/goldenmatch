@@ -127,7 +127,7 @@ def _group_conf_name(g) -> str:
     return f"__conf_group_{g.name}__"
 
 
-def _group_tie_expr(g) -> pl.Expr:
+def _group_tie_expr(g, pop: pl.Expr | None = None) -> pl.Expr:
     """Per-cluster tie indicator for group ``g`` (Boolean), matching
     winner._ranking's ``tie`` flag.
 
@@ -136,8 +136,12 @@ def _group_tie_expr(g) -> pl.Expr:
       populated_count)`` -- i.e. the same (present, count) as the rank-0 winner.
     * ``source_priority`` / ``most_recent``: winner._ranking returns ``tie=False``
       unconditionally, so no tie ever applies (confidence is never scaled by 0.7).
+
+    ``pop`` is the per-row populated-count expr; the caller (:func:`_group_conf_expr`)
+    passes its own already-built expr to avoid constructing the subtree twice.
     """
-    pop = _populated_count_expr(g.columns)
+    if pop is None:
+        pop = _populated_count_expr(g.columns)
     if g.strategy == "most_complete":
         return (pop == pop.max()).sum() > 1
     if g.strategy == "anchor":
@@ -151,7 +155,10 @@ def _group_tie_expr(g) -> pl.Expr:
         # The winning (present, pop) is the lexicographic max over rows.
         # present True sorts above False; within the chosen present, max pop wins.
         top_present = present.max()  # True if any row has the anchor
-        # pop restricted to rows at the winning present level:
+        # pop restricted to rows at the winning present level. When no row has
+        # the anchor, top_present=False selects ALL rows -> degrades to
+        # most_complete (filter is never empty: >=1 row is always at
+        # top_present).
         pop_at_top = pop.filter(present == top_present)
         top_pop = pop_at_top.max()
         return ((present == top_present) & (pop == top_pop)).sum() > 1
@@ -176,7 +183,11 @@ def _group_conf_expr(g) -> pl.Expr:
       ``col.first() is null AND col.drop_nulls().first() is not null``.
     """
     n_cols = len(g.columns)
-    winner_populated = _populated_count_expr(g.columns).first().cast(pl.Float64)
+    # Build the per-row populated-count subtree ONCE and reuse it for both
+    # winner_populated and the tie check (Polars CSE would dedup it either way,
+    # but sharing the expr keeps the intent explicit).
+    pop = _populated_count_expr(g.columns)
+    winner_populated = pop.first().cast(pl.Float64)
     if g.allow_fill:
         filled = pl.lit(0, dtype=pl.Float64)
         for c in g.columns:
@@ -186,7 +197,7 @@ def _group_conf_expr(g) -> pl.Expr:
     else:
         filled = pl.lit(0.0, dtype=pl.Float64)
     base = (winner_populated + filled) / pl.lit(float(n_cols)) if n_cols else pl.lit(0.0)
-    tie = _group_tie_expr(g)
+    tie = _group_tie_expr(g, pop)
     return pl.when(tie).then(base * 0.7).otherwise(base)
 
 
@@ -246,6 +257,35 @@ def _scalar_resolution_rule(col, rules, default_rule):
     return rule_entry
 
 
+def _source_priority_eligible(col: str, rule, has_row_id: bool):
+    """Returns ``(src_rank_expr, eligible_mask_expr)`` for source_priority scalar
+    resolution, shared by BOTH the value path (:func:`_scalar_value_expr`) and the
+    confidence path (:func:`_scalar_conf_expr`) so the eligibility logic stays in
+    one place.
+
+    ``eligible`` = the first-occurrence row per source (lowest ``__row_id__``, or
+    input order without one) AND the value is non-null AND the source is in the
+    priority list. ``src_rank`` is the index in ``rule.source_priority`` (unknown /
+    null source -> ``len(priority)`` sentinel), matching ``merge_field``'s record.
+
+    The ``.over("__source__")`` is evaluated PER-CLUSTER-PARTITION because this expr
+    runs inside ``group_by("__cluster_id__").agg(...)`` -- the window is scoped to
+    each cluster's rows, never the global frame.
+    """
+    priority = list(rule.source_priority or [])
+    sentinel = len(priority)
+    rank_map = {s: i for i, s in enumerate(priority)}
+    src_rank = pl.col("__source__").replace_strict(
+        rank_map, default=sentinel, return_dtype=pl.Int64
+    )
+    if has_row_id:
+        is_first = pl.col("__row_id__") == pl.col("__row_id__").min().over("__source__")
+    else:
+        is_first = pl.col("__source__").cum_count().over("__source__") == 1
+    eligible = is_first & pl.col(col).is_not_null() & (src_rank < sentinel)
+    return src_rank, eligible
+
+
 def _scalar_value_expr(col: str, len_alias: str | None, rule, has_row_id: bool) -> pl.Expr:
     """Per-cluster survivor VALUE for scalar column ``col`` under ``rule``.
 
@@ -291,39 +331,23 @@ def _scalar_value_expr(col: str, len_alias: str | None, rule, has_row_id: bool) 
             # _stable_value_expr's most_complete key).
             key = pl.struct([
                 pl.col(date_col),
+                # cast to signed before negation so an unsigned __row_id__ negates
+                # correctly (date DESC, row_id ASC)
                 -pl.col("__row_id__").cast(pl.Int64),
             ]).filter(mask)
             return nn.sort_by(key, descending=True).first()
         # No __row_id__: stable date-desc sort -> ties keep input order.
         return nn.sort_by(pl.col(date_col).filter(mask), descending=True).first()
     if strategy == "source_priority":
-        # rank = index in source_priority; unknown/null source -> sentinel.
-        priority = list(rule.source_priority or [])
-        sentinel = len(priority)
-        rank_map = {s: i for i, s in enumerate(priority)}
-        src_rank = pl.col("__source__").replace_strict(
-            rank_map, default=sentinel, return_dtype=pl.Int64
-        )
         # First occurrence of a source = its lowest-__row_id__ row. A row is
         # eligible to win only if it is that first occurrence AND its value is
         # non-null (merge_field records the first occurrence's value -- a null
         # there blocks the source). Among eligible rows, lowest source rank
         # wins; sources only appear once among first-occurrences so no further
-        # tiebreak is needed, but rank<sentinel guards against an unknown
-        # source winning (merge_field only returns sources listed in priority).
-        if has_row_id:
-            is_first = (
-                pl.col("__row_id__")
-                == pl.col("__row_id__").min().over("__source__")
-            )
-            eligible = is_first & pl.col(col).is_not_null() & (src_rank < sentinel)
-            nn = pl.col(col).filter(eligible)
-            key = src_rank.filter(eligible)
-            return nn.sort_by(key, descending=False).first()
-        # No __row_id__: fall back to input order for "first occurrence".
-        # cum_count over source == 0 marks the first occurrence in input order.
-        is_first = pl.col("__source__").cum_count().over("__source__") == 1
-        eligible = is_first & pl.col(col).is_not_null() & (src_rank < sentinel)
+        # tiebreak is needed, but rank<sentinel (inside the shared helper)
+        # guards against an unknown source winning (merge_field only returns
+        # sources listed in priority). Eligibility shared with the conf path.
+        src_rank, eligible = _source_priority_eligible(col, rule, has_row_id)
         nn = pl.col(col).filter(eligible)
         key = src_rank.filter(eligible)
         return nn.sort_by(key, descending=False).first()
@@ -397,23 +421,11 @@ def _scalar_conf_expr(col: str, len_alias: str | None, rule, has_row_id: bool) -
             .otherwise(pl.lit(1.0))
         )
     elif strategy == "source_priority":
-        priority = list(rule.source_priority or [])
-        sentinel = len(priority)
-        rank_map = {s: i for i, s in enumerate(priority)}
-        src_rank = pl.col("__source__").replace_strict(
-            rank_map, default=sentinel, return_dtype=pl.Int64
-        )
         # The winning source is the lowest-rank source whose FIRST occurrence
         # (lowest __row_id__, or input order without one) is non-null -- exactly
-        # the eligibility used by the value expr. conf = max(0.1, 1.0 - idx*0.1)
-        # for that idx; 0.0 if no eligible source.
-        if has_row_id:
-            is_first = (
-                pl.col("__row_id__") == pl.col("__row_id__").min().over("__source__")
-            )
-        else:
-            is_first = pl.col("__source__").cum_count().over("__source__") == 1
-        eligible = is_first & pl.col(col).is_not_null() & (src_rank < sentinel)
+        # the eligibility used by the value expr, via the SAME shared helper.
+        # conf = max(0.1, 1.0 - idx*0.1) for that idx; 0.0 if no eligible source.
+        src_rank, eligible = _source_priority_eligible(col, rule, has_row_id)
         winner_rank = src_rank.filter(eligible).min()
         n_elig = src_rank.filter(eligible).len()
         # max(0.1, 1.0 - idx*0.1), with idx = winner_rank.

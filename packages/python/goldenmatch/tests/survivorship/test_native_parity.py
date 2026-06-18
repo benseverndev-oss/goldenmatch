@@ -581,6 +581,25 @@ def test_c1_scalar_source_priority_unknown_source_no_winner():
     assert_parity(df, rules)
 
 
+def test_source_priority_cross_cluster_isolation():
+    # crm appears in BOTH clusters. If .over("__source__") were computed globally
+    # (not per-cluster-partition), crm's global-min row_id (10, cluster 1) would make
+    # crm "not first" in cluster 2 (crm row_id 20), wrongly blocking crm there.
+    # Oracle picks crm in BOTH clusters; native must match.
+    df = pl.DataFrame({
+        "__cluster_id__": [1, 1, 2, 2],
+        "__row_id__":     [10, 11, 20, 21],
+        "__source__":     ["crm", "erp", "crm", "erp"],
+        "phone":          ["A-crm", "B-erp", "C-crm", "D-erp"],
+    })
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={"phone": GoldenFieldRule(
+            strategy="source_priority", source_priority=["crm", "erp", "web"])},
+    )
+    assert_parity(df, rules)
+
+
 def test_c1_scalar_all_null():
     # Every value of a scalar is null across the cluster -> resolves to None.
     df = pl.DataFrame({
