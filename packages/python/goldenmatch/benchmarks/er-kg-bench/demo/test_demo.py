@@ -85,3 +85,42 @@ def test_retrieve_lands_on_query_node_and_bounds_distractors():
     # bounded: matched + at most 1 distractor
     assert len(sub.nodes) <= 2
     assert sub.query == "NATO"
+
+
+import demo.render_html as rh  # pyright: ignore[reportMissingImports]
+
+_SNAPSHOT = {
+    "scaffolding": {
+        "protagonist": {"entity_id": "Q7184", "query": "NATO", "type": "org"},
+        "question": "Are 'NATO', 'NATO Alliance' the same org, and how many distinct orgs?",
+        "before": {"nodes": [
+            {"node_id": 3, "names": ["NATO"], "type": "org", "context": "alliance", "record_indices": [3]},
+            {"node_id": 4, "names": ["NATO Alliance"], "type": "org", "context": "alliance", "record_indices": [4]},
+        ], "retrieved_node_ids": [3, 4]},
+        "after": {"nodes": [
+            {"node_id": 3, "names": ["NATO", "NATO Alliance"], "type": "org", "context": "alliance", "record_indices": [3, 4]},
+        ], "retrieved_node_ids": [3]},
+        "numbers": {"exact_family_f1": "F1 0.066"},
+    },
+    "recorded_llm": {
+        "model": "gpt-4o-mini", "recorded_at": "2026-06-19",
+        "before_answer": "There are two separate organizations.",
+        "after_answer": "One organization with two names.",
+        "cost": {"llm_calls": 2, "llm_tokens": 100, "llm_usd": 0.0001},
+    },
+}
+
+
+def test_render_is_deterministic_and_self_contained():
+    h1 = rh.render(_SNAPSHOT)
+    h2 = rh.render(_SNAPSHOT)
+    assert h1 == h2                              # pure
+    assert h1.lstrip().startswith("<!DOCTYPE html>")
+    assert "<script" not in h1.lower()           # no JS required to read
+    assert "http://" not in h1 and "https://" not in h1.replace("http-equiv", "")  # no external assets
+    # surfaces the real content
+    assert "There are two separate organizations." in h1
+    assert "One organization with two names." in h1
+    assert "F1 0.066" in h1
+    assert "gpt-4o-mini" in h1 and "2026-06-19" in h1
+    assert "NATO Alliance" in h1
