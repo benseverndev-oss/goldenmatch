@@ -59,3 +59,24 @@ CI smoke test.
 - Rejected alternatives: off-the-shelf hashes (xxHash) per language — version
   skew breaks byte-parity; full-Rust grouping + pair emission — bypasses the
   existing blocker contract and duplicates work the distributed plan will own.
+
+## Addendum — #1082 Phase B: semantic SimHash (2026-06-19)
+The same kernel/host split and parity-by-construction contract now also carry a
+*semantic* near-duplicate path, so this is an addendum rather than a new ADR. A
+SimHash (random ±1 hyperplane) LSH kernel over **embedding vectors** is added to
+`sketch-core` and exposed as blocking `strategy="simhash"` (`SimHashKeyConfig` +
+`core.simhash_blocker.SimHashLSHBlocker`): the kernel projects each embedding
+through `num_planes` hyperplanes to a sign-bit signature, bands it into LSH
+buckets, and the host groups `(band, bucket)` into blocks — Approach A unchanged.
+Where MinHash (#1081) buckets **sparse shingle sets** (lexical near-dups), SimHash
+buckets **dense embeddings** (semantic paraphrase). Auto-config routes a text
+corpus to `simhash` when an embedder is reachable (`inhouse_embedding_available()`
+or a configured provider), else falls back to the lexical `lsh` path. The native
+`simhash` component ships available but is NOT gated on (same posture as `sketch`/
+`pprl_bloom`; reachable via `GOLDENMATCH_NATIVE=1`) and shares
+`GOLDENMATCH_NATIVE_SKETCH_RAYON_MIN_ROWS`. The kernel is f64; the semantic blocker
+is Python-primary (the TS port is the kernel functions `simhashSignature`/
+`simhashBandHashes` only — no real embedder in TS). Measured: a synthetic recall
+gate (`num_planes=256`/`num_bands=32` → recall 1.0 / reduction 0.86 on cosine≥0.89
+variants) + a QQP lexical-vs-semantic A/B (`bench-lsh-recall.yml --method
+semantic`).
