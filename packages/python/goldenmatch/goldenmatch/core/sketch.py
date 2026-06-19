@@ -388,14 +388,14 @@ def simhash_band_hashes_batch(
 
     if native_enabled("simhash"):
         try:
-            return native_module().simhash_band_hashes_batch(
+            return native_module().sketch_simhash_band_hashes_batch(
                 vectors, num_planes, num_bands, seed
             )
         except AttributeError:
             # Published wheel predates this symbol (wheel/caller skew, see #688) —
             # legitimate fallback. A real kernel error is NOT swallowed here.
             logger.debug(
-                "native simhash_band_hashes_batch unavailable (wheel skew); "
+                "native sketch_simhash_band_hashes_batch unavailable (wheel skew); "
                 "using Python fallback"
             )
     return _simhash_band_hashes_batch_python(vectors, num_planes, num_bands, seed)

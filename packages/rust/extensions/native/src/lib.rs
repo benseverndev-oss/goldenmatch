@@ -48,5 +48,9 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(bloom::bloom_clk_batch, m)?)?;
     m.add_function(wrap_pyfunction!(sketch::sketch_band_hashes_batch, m)?)?;
     m.add_function(wrap_pyfunction!(sketch::sketch_signature_batch, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        sketch::sketch_simhash_band_hashes_batch,
+        m
+    )?)?;
     Ok(())
 }
