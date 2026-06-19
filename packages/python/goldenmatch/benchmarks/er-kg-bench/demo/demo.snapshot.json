@@ -1,0 +1,222 @@
+{
+  "recorded_llm": {
+    "after_answer": "There are four distinct organizations in my memory:\n\n1. IBM (also known as IBM Corp.)\n2. International Business Machines Corporation (Armonk, NY)\n3. NATO (also known as NATO Alliance, North Atlantic Alliance, North Atlantic Treaty Organisation)\n4. World Health Organisation (also known as World Health Organization, World Health Organization (WHO))",
+    "before_answer": "There are 10 distinct organizations in my memory. They are:\n\n1. IBM\n2. International Business Machines Corporation (Armonk, NY)\n3. IBM Corp.\n4. NATO\n5. NATO Alliance\n6. North Atlantic Treaty Organisation\n7. North Atlantic Alliance\n8. World Health Organization\n9. World Health Organization (WHO)\n10. World Health Organisation",
+    "cost": {
+      "llm_calls": 2,
+      "llm_tokens": 639,
+      "llm_usd": 0.000162
+    },
+    "model": "gpt-4o-mini",
+    "recorded_at": "2026-06-19"
+  },
+  "scaffolding": {
+    "after": {
+      "nodes": [
+        {
+          "context": "American multinational technology corporation",
+          "names": [
+            "IBM",
+            "IBM Corp."
+          ],
+          "node_id": 0,
+          "record_indices": [
+            0,
+            2,
+            191,
+            192,
+            193
+          ],
+          "type": "org"
+        },
+        {
+          "context": "American multinational technology corporation",
+          "names": [
+            "International Business Machines Corporation (Armonk, NY)"
+          ],
+          "node_id": 1,
+          "record_indices": [
+            1
+          ],
+          "type": "org"
+        },
+        {
+          "context": "intergovernmental military alliance between 32 member states",
+          "names": [
+            "NATO",
+            "NATO Alliance",
+            "North Atlantic Alliance",
+            "North Atlantic Treaty Organisation"
+          ],
+          "node_id": 3,
+          "record_indices": [
+            3,
+            4,
+            5,
+            6
+          ],
+          "type": "org"
+        },
+        {
+          "context": "United Nations agency concerned with international public health",
+          "names": [
+            "World Health Organisation",
+            "World Health Organization",
+            "World Health Organization (WHO)"
+          ],
+          "node_id": 7,
+          "record_indices": [
+            7,
+            8,
+            9
+          ],
+          "type": "org"
+        }
+      ],
+      "retrieved_node_ids": [
+        0,
+        1,
+        3,
+        7
+      ]
+    },
+    "before": {
+      "nodes": [
+        {
+          "context": "American multinational technology corporation",
+          "names": [
+            "IBM"
+          ],
+          "node_id": 0,
+          "record_indices": [
+            0,
+            191,
+            192,
+            193
+          ],
+          "type": "org"
+        },
+        {
+          "context": "American multinational technology corporation",
+          "names": [
+            "International Business Machines Corporation (Armonk, NY)"
+          ],
+          "node_id": 1,
+          "record_indices": [
+            1
+          ],
+          "type": "org"
+        },
+        {
+          "context": "American multinational technology corporation",
+          "names": [
+            "IBM Corp."
+          ],
+          "node_id": 2,
+          "record_indices": [
+            2
+          ],
+          "type": "org"
+        },
+        {
+          "context": "intergovernmental military alliance between 32 member states",
+          "names": [
+            "NATO"
+          ],
+          "node_id": 3,
+          "record_indices": [
+            3
+          ],
+          "type": "org"
+        },
+        {
+          "context": "intergovernmental military alliance between 32 member states",
+          "names": [
+            "NATO Alliance"
+          ],
+          "node_id": 4,
+          "record_indices": [
+            4
+          ],
+          "type": "org"
+        },
+        {
+          "context": "intergovernmental military alliance between 32 member states",
+          "names": [
+            "North Atlantic Treaty Organisation"
+          ],
+          "node_id": 5,
+          "record_indices": [
+            5
+          ],
+          "type": "org"
+        },
+        {
+          "context": "intergovernmental military alliance between 32 member states",
+          "names": [
+            "North Atlantic Alliance"
+          ],
+          "node_id": 6,
+          "record_indices": [
+            6
+          ],
+          "type": "org"
+        },
+        {
+          "context": "United Nations agency concerned with international public health",
+          "names": [
+            "World Health Organization"
+          ],
+          "node_id": 7,
+          "record_indices": [
+            7
+          ],
+          "type": "org"
+        },
+        {
+          "context": "United Nations agency concerned with international public health",
+          "names": [
+            "World Health Organization (WHO)"
+          ],
+          "node_id": 8,
+          "record_indices": [
+            8
+          ],
+          "type": "org"
+        },
+        {
+          "context": "United Nations agency concerned with international public health",
+          "names": [
+            "World Health Organisation"
+          ],
+          "node_id": 9,
+          "record_indices": [
+            9
+          ],
+          "type": "org"
+        }
+      ],
+      "retrieved_node_ids": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ]
+    },
+    "numbers": {
+      "exact_family_f1": "F1 0.066"
+    },
+    "protagonist": {
+      "entity_id": "Q7184",
+      "query": "NATO",
+      "type": "org"
+    },
+    "question": "How many distinct organizations are in your memory? List each one."
+  }
+}
