@@ -1,0 +1,54 @@
+# Scale bench that EXERCISES the #2081 fix: a multi-stage iterative-WCC run big
+# enough to scale the worker pool BETWEEN stages, which is exactly where 0.6.4
+# fails tasks with `task scheduling timeout`. The 300k baked smoke (bench-job.yaml)
+# is too small to trigger it -- it stays one-stage / one-worker.
+#
+# Reads the dataset from object store (gs://) so the Sail WORKER pods (separate
+# from this bench pod) can all read it -- see RUN-NOTES-2081.md for generating +
+# uploading the 10M parquet. ${SAIL_IMAGE} and ${SAIL_DATA} are substituted at
+# apply time (envsubst), e.g. SAIL_DATA=gs://<bucket>/sail-bench-10m.
+#
+# SMOKE_WCC=scale forces pointer-jumping WCC (~log2(N) rounds = MORE stages, more
+# inter-stage scale-ups) so the #2081 path is hit hard; label_prop converges in
+# fewer rounds and may not provoke it at 10M.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: sail-bench-2081
+  namespace: sail
+spec:
+  backoffLimit: 0
+  completions: 1
+  # 10M iterative WCC on a freshly-provisioned pool can run long; don't let k8s
+  # reap it. Raise for 100M.
+  activeDeadlineSeconds: 5400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sail
+        app.kubernetes.io/component: bench-2081
+    spec:
+      restartPolicy: Never
+      serviceAccountName: sail-user
+      containers:
+        - name: bench
+          image: ${SAIL_IMAGE}
+          command: ["python", "/app/run_smoke.py"]
+          imagePullPolicy: IfNotPresent
+          resources:
+            requests:
+              cpu: "1"
+              memory: "2Gi"
+          env:
+            - name: SAIL_REMOTE
+              value: "sc://sail-spark-server.sail.svc.cluster.local:50051"
+            # Object-store path the WORKERS read (gs://...); generated + uploaded
+            # per RUN-NOTES-2081.md. NOT the baked /data/smoke.
+            - name: SMOKE_DATA
+              value: "${SAIL_DATA}"
+            # Pointer-jumping WCC -> more stages -> more inter-stage worker
+            # scale-ups -> exercises the #2081 fix.
+            - name: SMOKE_WCC
+              value: "scale"
+            - name: RUST_LOG
+              value: info
