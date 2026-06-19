@@ -101,8 +101,8 @@ def test_assemble_dedups_repeated_surface_within_concept():
 
 
 def test_make_search_fn_empty_returns_callable_and_miss():
-    # make_search_fn with no roots and no repos returns a callable that
-    # returns (False, None) for any surface without raising.
+    # make_search_fn with no local checkouts and no gh repos returns a callable
+    # that returns (False, None) for any surface without raising.
     fn = bg.make_search_fn([], [])
     assert callable(fn)
     found, prov = fn("Fellegi-Sunter")

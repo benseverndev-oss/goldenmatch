@@ -39,23 +39,17 @@ from dataset.concepts_loader import Concept, load_concepts  # pyright: ignore[re
 _HERE = Path(__file__).resolve().parent  # dataset/
 _REPO_ROOT = Path(__file__).resolve().parents[6]  # worktree root
 
-# Suite Python packages to search with ripgrep (relative to repo root).
-_SUITE_PKG_NAMES = [
-    "goldenmatch",
-    "goldencheck",
-    "goldenflow",
-    "goldenpipe",
-    "infermap",
-    "goldenanalysis",
-]
+# Extensions checkout (optional; skip silently when absent).
+_EXTENSIONS_DIR = Path("D:/show_case/goldenmatch-extensions")
 
-# GitHub repos to search for issues/PRs when ripgrep misses.
+# GitHub repos to search for issues/PRs when the local checkouts miss.
 _DEFAULT_REPOS = [
     "benseverndev-oss/goldenmatch",
 ]
 
-# Extensions checkout (optional; skip silently when absent).
-_EXTENSIONS_DIR = Path("D:/show_case/goldenmatch-extensions")
+# The bench's own dir would self-match (concepts.jsonl lists every surface
+# verbatim), so exclude it from git grep via a pathspec.
+_BENCH_EXCLUDE_PATHSPEC = ":(exclude,glob)**/er-kg-bench/**"
 
 FIELDNAMES = [
     "record_id",
@@ -127,74 +121,53 @@ def assemble_records(
 # Search backends
 # ---------------------------------------------------------------------------
 
-_rg_missing_warned = False
-
-
-def _ripgrep_search(
-    surface: str, roots: list[Path]
+def _git_grep_search(
+    surface: str, repo_root: Path, repo_label: str
 ) -> tuple[bool, str | None]:
-    """Search for *surface* as a fixed string across *roots* using ripgrep.
+    """Search COMMITTED content of *repo_root* for *surface* via ``git grep``.
 
-    Returns ``(True, prov)`` on the first match, ``(False, None)`` otherwise.
-    Provenance format: ``gh:<pkg>:<relpath>`` where ``<pkg>`` is the top-level
-    suite directory name and ``<relpath>`` is relative to that directory.
+    Returns ``(True, prov)`` on the first matching tracked file, ``(False, None)``
+    otherwise.  Provenance: ``gh:<repo_label>:<relpath>`` (repo-root-relative).
+
+    ``git grep`` (not ripgrep) by design: only tracked files are searched, so
+    untracked local-only files -- the gitignored docs/superpowers design docs
+    (incl. THIS bench's own design doc), profiling scratch, gitignored datasets
+    -- never match, keeping the drop-absent honesty signal real.  It is also
+    git-aware, so it works inside a linked worktree (where ripgrep cannot detect
+    the ``.git`` file and silently stops honoring ``.gitignore``).  The bench's
+    own dir is excluded via pathspec so a concept cannot self-match concepts.jsonl.
     """
-    global _rg_missing_warned  # noqa: PLW0603
-
-    if not roots:
-        return False, None
-
     cmd = [
-        "rg", "-F", "-l",
-        # Exclude the bench's own dir: a concept surface lives verbatim in
-        # this corpus's concepts.jsonl / records*.csv, so without this glob
-        # every variant would self-match and the drop-absent honesty signal
-        # (a made-up variant must NOT be found) collapses. We want real
-        # mentions in suite code / docs / PRs, not the bench restating itself.
-        "--glob", "!**/er-kg-bench/**",
-        "--", surface, *[str(r) for r in roots],
+        "git", "-C", str(repo_root), "grep",
+        "-I",  # never match binary files
+        "-F",  # fixed string, not regex
+        "-w",  # WHOLE-WORD: "ER" must be a token, not a substring of "Server"
+        "-l",  # list matching filenames only
+        "-e", surface,
+        "--", _BENCH_EXCLUDE_PATHSPEC,
     ]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True)
     except FileNotFoundError:
-        if not _rg_missing_warned:
-            print("  [warn] rg not found on PATH -- skipping ripgrep search", file=sys.stderr)
-            _rg_missing_warned = True
+        print("  [warn] git not found on PATH -- skipping git grep search", file=sys.stderr)
         return False, None
 
     if result.returncode == 1:
-        # rg exit 1 = no match found; not an error.
+        # git grep exit 1 = no match; not an error.
         return False, None
-    if result.returncode >= 2:
+    if result.returncode != 0:
         print(
-            f"  [warn] rg error (rc={result.returncode}): {result.stderr.strip()[:200]}",
+            f"  [warn] git grep error (rc={result.returncode}) in {repo_label}: "
+            f"{result.stderr.strip()[:200]}",
             file=sys.stderr,
         )
         return False, None
 
-    # Pick the first matching file and build a short provenance string.
-    first_file = result.stdout.strip().splitlines()[0]
-    first_path = Path(first_file)
-
-    # Try to express the path relative to a known suite package root.
-    for root in roots:
-        try:
-            rel = first_path.relative_to(root)
-            # root is something like <repo>/packages/python/goldenmatch
-            # Use the directory name of the root as the <pkg> label.
-            pkg = root.name
-            prov = f"gh:{pkg}:{rel.as_posix()}"
-            return True, prov
-        except ValueError:
-            continue
-
-    # Fallback: path relative to repo root.
-    try:
-        rel = first_path.relative_to(_REPO_ROOT)
-        prov = f"gh:repo:{rel.as_posix()}"
-    except ValueError:
-        prov = f"gh:file:{first_path.name}"
-    return True, prov
+    lines = [ln for ln in result.stdout.splitlines() if ln.strip()]
+    if not lines:
+        return False, None
+    rel = lines[0].strip().replace("\\", "/")
+    return True, f"gh:{repo_label}:{rel}"
 
 
 def _gh_issue_search(
@@ -244,18 +217,19 @@ def _gh_issue_search(
 
 
 def make_search_fn(
-    roots: list[Path],
-    repos: list[str],
+    repos: list[tuple[Path, str]],
+    gh_repos: list[str],
 ) -> Callable[[str], tuple[bool, str | None]]:
-    """Return a search callable that tries ripgrep then GitHub issues.
+    """Return a search callable: git grep over local checkouts, then GitHub issues.
 
     The returned function maintains an internal per-surface cache so a repeated
     surface is never re-queried.
 
     Args:
-        roots:  Directories to pass to ripgrep.  Empty list skips ripgrep.
-        repos:  GitHub ``owner/repo`` strings for issue search.  Empty list
-                skips GitHub search.
+        repos:     ``(repo_root, label)`` checkouts searched with ``git grep``
+                   (tracked content only).  Empty list skips local search.
+        gh_repos:  GitHub ``owner/repo`` strings for issue/PR search when the
+                   local checkouts miss.  Empty list skips GitHub search.
 
     Returns:
         A callable ``(surface: str) -> (found: bool, provenance: str | None)``.
@@ -266,15 +240,16 @@ def make_search_fn(
         if surface in cache:
             return cache[surface]
 
-        # 1. Try ripgrep (fast, local, no rate limit).
-        found, prov = _ripgrep_search(surface, roots)
-        if found:
-            cache[surface] = (True, prov)
-            return True, prov
+        # 1. Local committed content (fast, no rate limit).
+        for repo_root, label in repos:
+            found, prov = _git_grep_search(surface, repo_root, label)
+            if found:
+                cache[surface] = (True, prov)
+                return True, prov
 
-        # 2. Try each GitHub repo in order.
-        for repo in repos:
-            found, prov = _gh_issue_search(surface, repo)
+        # 2. GitHub issues/PRs (fallback for mentions not in tracked files).
+        for gh_repo in gh_repos:
+            found, prov = _gh_issue_search(surface, gh_repo)
             if found:
                 cache[surface] = (True, prov)
                 return True, prov
@@ -285,22 +260,12 @@ def make_search_fn(
     return search
 
 
-def _build_roots(repo_root: Path) -> list[Path]:
-    """Collect existing directories to pass to ripgrep."""
-    roots: list[Path] = []
-    pkg_base = repo_root / "packages" / "python"
-    for name in _SUITE_PKG_NAMES:
-        p = pkg_base / name
-        if p.is_dir():
-            roots.append(p)
-    # Also search repo-level docs and markdown.
-    docs_dir = repo_root / "docs"
-    if docs_dir.is_dir():
-        roots.append(docs_dir)
-    # Extensions checkout (optional).
+def _build_repos(repo_root: Path) -> list[tuple[Path, str]]:
+    """Local git checkouts to search (worktree root + optional extensions repo)."""
+    repos: list[tuple[Path, str]] = [(repo_root, "goldenmatch")]
     if _EXTENSIONS_DIR.is_dir():
-        roots.append(_EXTENSIONS_DIR)
-    return roots
+        repos.append((_EXTENSIONS_DIR, "goldenmatch-extensions"))
+    return repos
 
 
 # ---------------------------------------------------------------------------
@@ -328,8 +293,8 @@ def main() -> None:
     args = ap.parse_args()
 
     concepts = load_concepts(args.concepts)
-    roots = _build_roots(_REPO_ROOT)
-    search_fn = make_search_fn(roots, _DEFAULT_REPOS)
+    repos = _build_repos(_REPO_ROOT)
+    search_fn = make_search_fn(repos, _DEFAULT_REPOS)
 
     if args.dry_run:
         # Print a per-variant keep/drop table without writing anything.
