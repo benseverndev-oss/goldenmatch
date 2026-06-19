@@ -124,3 +124,22 @@ def test_render_is_deterministic_and_self_contained():
     assert "F1 0.066" in h1
     assert "gpt-4o-mini" in h1 and "2026-06-19" in h1
     assert "NATO Alliance" in h1
+
+
+import demo.agent as ag  # pyright: ignore[reportMissingImports]
+import demo.kg as kg  # noqa: F811
+
+
+def test_answer_uses_subgraph_and_records_model():
+    g = kg.build_kg([[3, 4, 5]], _MEN, _TYP, _CTX)
+    sub = kg.retrieve(g, "NATO", type_filter="org")
+    seen = {}
+    def stub(prompt: str) -> ag.LLMResponse:
+        seen["prompt"] = prompt
+        return ag.LLMResponse(text="one org", model="stub-model", input_tokens=5, output_tokens=2)
+    ans = ag.answer("how many orgs?", sub, stub)
+    assert ans.text == "one org"
+    assert ans.model == "stub-model"
+    # the serialized subgraph is in the prompt (closed-book grounding)
+    assert "NATO" in seen["prompt"] and "how many orgs?" in seen["prompt"]
+    assert ans.n_nodes_seen == len(sub.nodes)
