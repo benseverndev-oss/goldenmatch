@@ -143,3 +143,59 @@ def test_answer_uses_subgraph_and_records_model():
     # the serialized subgraph is in the prompt (closed-book grounding)
     assert "NATO" in seen["prompt"] and "how many orgs?" in seen["prompt"]
     assert ans.n_nodes_seen == len(sub.nodes)
+
+
+# ---------------------------------------------------------------------------
+# Task 4: build_snapshot / _check tests
+# ---------------------------------------------------------------------------
+
+import demo.run_demo as rd  # pyright: ignore[reportMissingImports]
+from erkgbench.adapters import Record  # type: ignore  # pyright: ignore[reportMissingImports]
+
+
+def _recs():
+    rows = [
+        (3, "NATO", "org", "alliance", "Q7184"),
+        (4, "NATO Alliance", "org", "alliance", "Q7184"),
+        (5, "North Atlantic Treaty Organisation", "org", "alliance", "Q7184"),
+        (9, "WHO", "org", "health", "Q7817"),
+        (10, "World Health Organization", "org", "health", "Q7817"),
+    ]
+    records = [Record(index=i, mention=m, entity_type=t, context=c) for (i, m, t, c, _e) in rows]
+    eids = {i: e for (i, _m, _t, _c, e) in rows}
+    fclass = {i: "abbreviation" for (i, *_) in rows}
+    return records, [eids[r.index] for r in records], [fclass[r.index] for r in records]
+
+
+def test_build_snapshot_flips_answer():
+    records, entity_ids, fclasses = _recs()
+    before = [[3], [4], [5], [9], [10]]            # exact-match fragments
+    after = [[3, 4, 5], [9, 10]]                    # goldenmatch resolves
+    def stub(prompt):
+        n = prompt.count("type=org")
+        return rd.ag.LLMResponse(text=f"{n} organizations", model="stub", input_tokens=1, output_tokens=1)
+    snap = rd.build_snapshot(records, entity_ids, fclasses, before, after, stub, recorded_at="2026-06-19")
+    assert snap["scaffolding"]["protagonist"]["entity_id"] == "Q7184"
+    nb = len(snap["scaffolding"]["before"]["nodes"])
+    na = len(snap["scaffolding"]["after"]["nodes"])
+    assert nb > na                                  # fragmentation inflates the node count
+    assert snap["recorded_llm"]["model"] == "stub"
+    assert "organizations" in snap["recorded_llm"]["before_answer"]
+
+
+def test_render_roundtrips_from_snapshot():
+    records, entity_ids, fclasses = _recs()
+    before, after = [[3], [4], [5]], [[3, 4, 5]]
+    def stub(prompt):
+        return rd.ag.LLMResponse(text="x", model="stub", input_tokens=1, output_tokens=1)
+    snap = rd.build_snapshot(records, entity_ids, fclasses, before, after, stub, recorded_at="2026-06-19")
+    html = rd.rh.render(snap)
+    assert html.lstrip().startswith("<!DOCTYPE html>")
+
+
+def test_check_returns_zero_when_no_committed_snapshot(tmp_path, monkeypatch):
+    # _check tolerates a missing snapshot (bootstrap pending) -> returns 0
+    import demo.run_demo as r
+    # point the snapshot path at a non-existent file
+    monkeypatch.setattr(r, "SNAPSHOT_PATH", tmp_path / "nope.json", raising=False)
+    assert r._check() == 0
