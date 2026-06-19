@@ -41,3 +41,47 @@ def test_render_demo_md_is_deterministic():
     assert md1 == md2
     assert "International Business Machines" in md1
     assert "F1 0.066" in md1   # cites the harness exact-family number (scaled corpus)
+
+
+import demo.kg as kg  # pyright: ignore[reportMissingImports]  # namespace pkg, resolves from bench dir
+
+# index -> (mention, entity_id, type, context)
+_KGRECS = {
+    3: ("NATO", "Q7184", "org", "military alliance"),
+    4: ("NATO Alliance", "Q7184", "org", "military alliance"),
+    5: ("North Atlantic Treaty Organisation", "Q7184", "org", "military alliance"),
+    9: ("WHO", "Q7817", "org", "UN health agency"),
+}
+_MEN = {i: m for i, (m, *_ ) in _KGRECS.items()}
+_TYP = {i: t for i, (_, _, t, _) in _KGRECS.items()}
+_CTX = {i: c for i, (_, _, _, c) in _KGRECS.items()}
+
+
+def test_build_kg_fragmented_one_node_per_form():
+    part = [[3], [4], [5], [9]]
+    g = kg.build_kg(part, _MEN, _TYP, _CTX)
+    assert len(g.nodes) == 4
+    # each NATO form is its own node, single name
+    nato_nodes = [n for n in g.nodes if set(n.record_indices) & {3, 4, 5}]
+    assert len(nato_nodes) == 3
+    assert all(len(n.names) == 1 for n in nato_nodes)
+
+
+def test_build_kg_resolved_one_node_all_names():
+    part = [[3, 4, 5], [9]]
+    g = kg.build_kg(part, _MEN, _TYP, _CTX)
+    nato = next(n for n in g.nodes if set(n.record_indices) & {3, 4, 5})
+    assert set(nato.names) == {"NATO", "NATO Alliance", "North Atlantic Treaty Organisation"}
+    assert nato.type == "org"
+    assert nato.context == "military alliance"
+
+
+def test_retrieve_lands_on_query_node_and_bounds_distractors():
+    part = [[3, 4, 5], [9]]
+    g = kg.build_kg(part, _MEN, _TYP, _CTX)
+    sub = kg.retrieve(g, "NATO", type_filter="org", max_distractors=1)
+    # the matched node is present
+    assert any(set(n.record_indices) & {3, 4, 5} for n in sub.nodes)
+    # bounded: matched + at most 1 distractor
+    assert len(sub.nodes) <= 2
+    assert sub.query == "NATO"
