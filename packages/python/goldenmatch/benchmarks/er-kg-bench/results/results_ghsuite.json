@@ -1,0 +1,552 @@
+{
+  "dataset": {
+    "records": 129,
+    "entities": 45,
+    "classes": [
+      "abbreviation",
+      "nickname_alias",
+      "synonym_brand",
+      "same_name_collision",
+      "cross_lingual",
+      "typo",
+      "org_suffix",
+      "temporal_version",
+      "cross_document_exact"
+    ]
+  },
+  "embedder": "st",
+  "precision_critical_classes": [
+    "same_name_collision",
+    "temporal_version"
+  ],
+  "results": [
+    {
+      "name": "goldenmatch(auto)",
+      "defaults": "zero-config dedupe_df(name) -- auto-config picks the strategy",
+      "fidelity": "real",
+      "overall": {
+        "precision": 0.931,
+        "recall": 0.513,
+        "f1": 0.661
+      },
+      "per_class_f1": {
+        "abbreviation": 0.0,
+        "nickname_alias": 0.88,
+        "synonym_brand": 0.333,
+        "typo": 1.0,
+        "temporal_version": 1.0,
+        "cross_document_exact": 0.0
+      },
+      "per_class_precision": {
+        "abbreviation": 1.0,
+        "nickname_alias": 1.0,
+        "synonym_brand": 1.0,
+        "typo": 1.0,
+        "temporal_version": 1.0,
+        "cross_document_exact": 0.0
+      },
+      "time_ms": 330.1,
+      "deterministic_floor": true,
+      "cost": {
+        "llm_calls": 0,
+        "llm_tokens": 0,
+        "llm_usd": 0.0
+      }
+    },
+    {
+      "name": "goldenmatch(auto+fields)",
+      "defaults": "zero-config dedupe_df(name+type+context) -- auto-config, multi-field",
+      "fidelity": "real",
+      "overall": {
+        "precision": 0.963,
+        "recall": 0.975,
+        "f1": 0.969
+      },
+      "per_class_f1": {
+        "abbreviation": 1.0,
+        "nickname_alias": 0.966,
+        "synonym_brand": 1.0,
+        "typo": 1.0,
+        "temporal_version": 1.0,
+        "cross_document_exact": 0.0
+      },
+      "per_class_precision": {
+        "abbreviation": 1.0,
+        "nickname_alias": 0.933,
+        "synonym_brand": 1.0,
+        "typo": 1.0,
+        "temporal_version": 1.0,
+        "cross_document_exact": 0.0
+      },
+      "time_ms": 3877.9,
+      "deterministic_floor": true,
+      "cost": {
+        "llm_calls": 0,
+        "llm_tokens": 0,
+        "llm_usd": 0.0
+      }
+    },
+    {
+      "name": "goldenmatch(emb-ann)",
+      "defaults": "inhouse char-ngram embedding (no key/torch) -> cosine>=0.5 candidate pairs (ANN at scale) -> union-find; name only",
+      "fidelity": "real",
+      "overall": {
+        "precision": 0.587,
+        "recall": 0.576,
+        "f1": 0.581
+      },
+      "per_class_f1": {
+        "abbreviation": 0.0,
+        "nickname_alias": 0.71,
+        "synonym_brand": 0.0,
+        "typo": 0.8,
+        "temporal_version": 1.0,
+        "cross_document_exact": 0.0
+      },
+      "per_class_precision": {
+        "abbreviation": 1.0,
+        "nickname_alias": 0.647,
+        "synonym_brand": 0.0,
+        "typo": 0.667,
+        "temporal_version": 1.0,
+        "cross_document_exact": 0.0
+      },
+      "time_ms": 12.5,
+      "deterministic_floor": true,
+      "cost": {
+        "llm_calls": 0,
+        "llm_tokens": 0,
+        "llm_usd": 0.0
+      }
+    },
+    {
+      "name": "mem0",
+      "defaults": "MD5-exact only as hard dedup; semantic merge is one LLM ADD/UPDATE prompt (memory/main.py md5 over raw text; contradictions #4896, 37.6% near-dupes #4573)",
+      "fidelity": "validated",
+      "overall": {
+        "precision": 1.0,
+        "recall": 0.0,
+        "f1": 0.0
+      },
+      "per_class_f1": {
+        "abbreviation": 0.0,
+        "nickname_alias": 0.0,
+        "synonym_brand": 0.0,
+        "typo": 0.0,
+        "temporal_version": 0.0,
+        "cross_document_exact": 1.0
+      },
+      "per_class_precision": {
+        "abbreviation": 1.0,
+        "nickname_alias": 1.0,
+        "synonym_brand": 1.0,
+        "typo": 1.0,
+        "temporal_version": 1.0,
+        "cross_document_exact": 1.0
+      },
+      "time_ms": 0.2,
+      "deterministic_floor": true,
+      "cost": {
+        "llm_calls": 0,
+        "llm_tokens": 0,
+        "llm_usd": 0.0
+      }
+    },
+    {
+      "name": "Neo4j-KGBuilder",
+      "defaults": "same-label gate AND ( substring-contains(len>2) OR Levenshtein<3(len>5) OR cosine>0.97 ); human-review-gated (graphDB_dataAccess.py get_duplicate_nodes Cypher; over-merge #1133, missed alias #912)",
+      "fidelity": "modeled",
+      "overall": {
+        "precision": 0.812,
+        "recall": 0.494,
+        "f1": 0.614
+      },
+      "per_class_f1": {
+        "abbreviation": 0.0,
+        "nickname_alias": 0.64,
+        "synonym_brand": 0.0,
+        "typo": 1.0,
+        "temporal_version": 1.0,
+        "cross_document_exact": 0.0
+      },
+      "per_class_precision": {
+        "abbreviation": 1.0,
+        "nickname_alias": 0.727,
+        "synonym_brand": 1.0,
+        "typo": 1.0,
+        "temporal_version": 1.0,
+        "cross_document_exact": 0.0
+      },
+      "time_ms": 15.4,
+      "deterministic_floor": true,
+      "cost": {
+        "llm_calls": 0,
+        "llm_tokens": 0,
+        "llm_usd": 0.0
+      }
+    },
+    {
+      "name": "neo4j-graphrag(fuzzy)",
+      "defaults": "FuzzyMatchResolver: rapidfuzz WRatio/100 >= 0.8, all-pairs O(n^2) (resolver.py BasePropertySimilarityResolver; rapidfuzz extra #336)",
+      "fidelity": "modeled",
+      "overall": {
+        "precision": 0.209,
+        "recall": 0.703,
+        "f1": 0.322
+      },
+      "per_class_f1": {
+        "abbreviation": 0.667,
+        "nickname_alias": 0.364,
+        "synonym_brand": 0.0,
+        "typo": 0.286,
+        "temporal_version": 1.0,
+        "cross_document_exact": 0.0
+      },
+      "per_class_precision": {
+        "abbreviation": 0.5,
+        "nickname_alias": 0.222,
+        "synonym_brand": 0.0,
+        "typo": 0.167,
+        "temporal_version": 1.0,
+        "cross_document_exact": 0.0
+      },
+      "time_ms": 26.1,
+      "deterministic_floor": true,
+      "cost": {
+        "llm_calls": 0,
+        "llm_tokens": 0,
+        "llm_usd": 0.0
+      }
+    },
+    {
+      "name": "LlamaIndex-PGI",
+      "defaults": "same-label gate AND ( contains OR Levenshtein<5 OR cosine>0.9 ), KNN top-10 when embedded (property-graph blog; self-documented over-merges: 1963 AFL/NFL, BTC Halving 2020/2024)",
+      "fidelity": "modeled",
+      "overall": {
+        "precision": 0.051,
+        "recall": 0.81,
+        "f1": 0.095
+      },
+      "per_class_f1": {
+        "abbreviation": 0.036,
+        "nickname_alias": 0.123,
+        "synonym_brand": 0.04,
+        "typo": 0.125,
+        "temporal_version": 0.5,
+        "cross_document_exact": 0.0
+      },
+      "per_class_precision": {
+        "abbreviation": 0.018,
+        "nickname_alias": 0.065,
+        "synonym_brand": 0.022,
+        "typo": 0.067,
+        "temporal_version": 0.333,
+        "cross_document_exact": 0.0
+      },
+      "time_ms": 11.8,
+      "deterministic_floor": true,
+      "cost": {
+        "llm_calls": 0,
+        "llm_tokens": 0,
+        "llm_usd": 0.0
+      }
+    },
+    {
+      "name": "Neo4j-KGBuilder(emb)",
+      "defaults": "same-label gate AND ( substring-contains(len>2) OR Levenshtein<3(len>5) OR cosine>0.97 ); human-review-gated (graphDB_dataAccess.py get_duplicate_nodes Cypher; over-merge #1133, missed alias #912)",
+      "fidelity": "modeled",
+      "overall": {
+        "precision": 0.812,
+        "recall": 0.494,
+        "f1": 0.614
+      },
+      "per_class_f1": {
+        "abbreviation": 0.0,
+        "nickname_alias": 0.64,
+        "synonym_brand": 0.0,
+        "typo": 1.0,
+        "temporal_version": 1.0,
+        "cross_document_exact": 0.0
+      },
+      "per_class_precision": {
+        "abbreviation": 1.0,
+        "nickname_alias": 0.727,
+        "synonym_brand": 1.0,
+        "typo": 1.0,
+        "temporal_version": 1.0,
+        "cross_document_exact": 0.0
+      },
+      "time_ms": 631.9,
+      "deterministic_floor": true,
+      "cost": {
+        "llm_calls": 0,
+        "llm_tokens": 0,
+        "llm_usd": 0.0
+      }
+    },
+    {
+      "name": "LlamaIndex-PGI(emb)",
+      "defaults": "same-label gate AND ( contains OR Levenshtein<5 OR cosine>0.9 ), KNN top-10 when embedded (property-graph blog; self-documented over-merges: 1963 AFL/NFL, BTC Halving 2020/2024)",
+      "fidelity": "modeled",
+      "overall": {
+        "precision": 0.051,
+        "recall": 0.81,
+        "f1": 0.095
+      },
+      "per_class_f1": {
+        "abbreviation": 0.036,
+        "nickname_alias": 0.123,
+        "synonym_brand": 0.04,
+        "typo": 0.125,
+        "temporal_version": 0.5,
+        "cross_document_exact": 0.0
+      },
+      "per_class_precision": {
+        "abbreviation": 0.018,
+        "nickname_alias": 0.065,
+        "synonym_brand": 0.022,
+        "typo": 0.067,
+        "temporal_version": 0.333,
+        "cross_document_exact": 0.0
+      },
+      "time_ms": 624.9,
+      "deterministic_floor": true,
+      "cost": {
+        "llm_calls": 0,
+        "llm_tokens": 0,
+        "llm_usd": 0.0
+      }
+    },
+    {
+      "name": "MS-GraphRAG",
+      "defaults": "exact title-set merge, GLOBAL (not per-label): title=clean_str(name.upper()) -> upper + edge-strip + html-unescape + control-char strip, NO internal-ws collapse (finalize_entities seen_titles + graph_extractor + utils/string.py; Standard pipeline has no ER step -> validated reproduction, no separable resolver)",
+      "fidelity": "validated",
+      "overall": {
+        "precision": 1.0,
+        "recall": 0.063,
+        "f1": 0.119
+      },
+      "per_class_f1": {
+        "abbreviation": 0.0,
+        "nickname_alias": 0.133,
+        "synonym_brand": 0.0,
+        "typo": 0.0,
+        "temporal_version": 0.0,
+        "cross_document_exact": 1.0
+      },
+      "per_class_precision": {
+        "abbreviation": 1.0,
+        "nickname_alias": 1.0,
+        "synonym_brand": 1.0,
+        "typo": 1.0,
+        "temporal_version": 1.0,
+        "cross_document_exact": 1.0
+      },
+      "time_ms": 0.2,
+      "deterministic_floor": true,
+      "cost": {
+        "llm_calls": 0,
+        "llm_tokens": 0,
+        "llm_usd": 0.0
+      }
+    },
+    {
+      "name": "Cognee",
+      "defaults": "exact merge on generate_node_id = uuid5(NAMESPACE_OID, name.lower().replace(' ','_').replace(\"'\",'')), GLOBAL (not per-label); default ontology empty so the difflib cutoff never fires (generate_node_id.py + deduplicate_nodes_and_edges.py -> validated)",
+      "fidelity": "validated",
+      "overall": {
+        "precision": 1.0,
+        "recall": 0.139,
+        "f1": 0.244
+      },
+      "per_class_f1": {
+        "abbreviation": 0.0,
+        "nickname_alias": 0.133,
+        "synonym_brand": 0.0,
+        "typo": 0.0,
+        "temporal_version": 0.0,
+        "cross_document_exact": 1.0
+      },
+      "per_class_precision": {
+        "abbreviation": 1.0,
+        "nickname_alias": 1.0,
+        "synonym_brand": 1.0,
+        "typo": 1.0,
+        "temporal_version": 1.0,
+        "cross_document_exact": 1.0
+      },
+      "time_ms": 0.7,
+      "deterministic_floor": true,
+      "cost": {
+        "llm_calls": 0,
+        "llm_tokens": 0,
+        "llm_usd": 0.0
+      }
+    },
+    {
+      "name": "neo4j-graphrag(fuzzy)*",
+      "defaults": "REAL FuzzyMatchResolver: rapidfuzz WRatio/100>=0.8 per entity-label, _consolidate_sets (library decision code; Neo4j+APOC storage stubbed)",
+      "fidelity": "real-inproc",
+      "overall": {
+        "precision": 0.209,
+        "recall": 0.703,
+        "f1": 0.322
+      },
+      "per_class_f1": {
+        "abbreviation": 0.667,
+        "nickname_alias": 0.364,
+        "synonym_brand": 0.0,
+        "typo": 0.286,
+        "temporal_version": 1.0,
+        "cross_document_exact": 0.0
+      },
+      "per_class_precision": {
+        "abbreviation": 0.5,
+        "nickname_alias": 0.222,
+        "synonym_brand": 0.0,
+        "typo": 0.167,
+        "temporal_version": 1.0,
+        "cross_document_exact": 0.0
+      },
+      "time_ms": 17.7,
+      "deterministic_floor": true,
+      "cost": {
+        "llm_calls": 0,
+        "llm_tokens": 0,
+        "llm_usd": 0.0
+      }
+    },
+    {
+      "name": "neo4j-graphrag(exact)",
+      "defaults": "SinglePropertyExactMatchResolver: exact `name` equality per entity-label, null names skipped (logic is a Cypher query in run(); no in-process decision method exists, so this is the Cypher re-expressed + confirmed -> validated)",
+      "fidelity": "validated",
+      "overall": {
+        "precision": 1.0,
+        "recall": 0.0,
+        "f1": 0.0
+      },
+      "per_class_f1": {
+        "abbreviation": 0.0,
+        "nickname_alias": 0.0,
+        "synonym_brand": 0.0,
+        "typo": 0.0,
+        "temporal_version": 0.0,
+        "cross_document_exact": 1.0
+      },
+      "per_class_precision": {
+        "abbreviation": 1.0,
+        "nickname_alias": 1.0,
+        "synonym_brand": 1.0,
+        "typo": 1.0,
+        "temporal_version": 1.0,
+        "cross_document_exact": 1.0
+      },
+      "time_ms": 0.1,
+      "deterministic_floor": true,
+      "cost": {
+        "llm_calls": 0,
+        "llm_tokens": 0,
+        "llm_usd": 0.0
+      }
+    },
+    {
+      "name": "neo4j-graphrag(spacy)*",
+      "defaults": "REAL SpaCySemanticMatchResolver: spaCy doc-vector cosine >= 0.8 per entity-label, _consolidate_sets (library decision code; en_core_web_lg vectors; Neo4j+APOC storage stubbed)",
+      "fidelity": "real-inproc",
+      "overall": {
+        "precision": 0.917,
+        "recall": 0.139,
+        "f1": 0.242
+      },
+      "per_class_f1": {
+        "abbreviation": 0.0,
+        "nickname_alias": 0.133,
+        "synonym_brand": 0.0,
+        "typo": 0.0,
+        "temporal_version": 0.0,
+        "cross_document_exact": 0.0
+      },
+      "per_class_precision": {
+        "abbreviation": 1.0,
+        "nickname_alias": 1.0,
+        "synonym_brand": 1.0,
+        "typo": 1.0,
+        "temporal_version": 1.0,
+        "cross_document_exact": 0.0
+      },
+      "time_ms": 1580.3,
+      "deterministic_floor": true,
+      "cost": {
+        "llm_calls": 0,
+        "llm_tokens": 0,
+        "llm_usd": 0.0
+      }
+    },
+    {
+      "name": "LightRAG*",
+      "defaults": "REAL normalize_extracted_info key (HTML-strip, CJK fold, outer-quote strip, CASE-SENSITIVE -- no lower/upper) + exact name dict group-by, GLOBAL (operate.py merge_nodes_and_edges + utils.py; LLM only summarizes descriptions, never moves a record; graph-store upsert stubbed)",
+      "fidelity": "real-inproc",
+      "overall": {
+        "precision": 1.0,
+        "recall": 0.0,
+        "f1": 0.0
+      },
+      "per_class_f1": {
+        "abbreviation": 0.0,
+        "nickname_alias": 0.0,
+        "synonym_brand": 0.0,
+        "typo": 0.0,
+        "temporal_version": 0.0,
+        "cross_document_exact": 1.0
+      },
+      "per_class_precision": {
+        "abbreviation": 1.0,
+        "nickname_alias": 1.0,
+        "synonym_brand": 1.0,
+        "typo": 1.0,
+        "temporal_version": 1.0,
+        "cross_document_exact": 1.0
+      },
+      "time_ms": 7.7,
+      "deterministic_floor": true,
+      "cost": {
+        "llm_calls": 0,
+        "llm_tokens": 0,
+        "llm_usd": 0.0
+      }
+    },
+    {
+      "name": "graphiti*",
+      "defaults": "REAL deterministic floor: exact normalized-name (lower+ws-collapse) OR MinHash/Jaccard>=0.9, with a low-entropy/short-name gate (_resolve_with_similarity + _build_candidate_indexes, dedup_helpers.py); sequential ingestion vs the growing existing set. DETERMINISTIC FLOOR ONLY -- the full default path escalates unresolved nodes to an LLM (out of scope)",
+      "fidelity": "real-inproc",
+      "overall": {
+        "precision": 1.0,
+        "recall": 0.234,
+        "f1": 0.379
+      },
+      "per_class_f1": {
+        "abbreviation": 0.0,
+        "nickname_alias": 0.353,
+        "synonym_brand": 0.0,
+        "typo": 0.667,
+        "temporal_version": 1.0,
+        "cross_document_exact": 1.0
+      },
+      "per_class_precision": {
+        "abbreviation": 1.0,
+        "nickname_alias": 1.0,
+        "synonym_brand": 1.0,
+        "typo": 1.0,
+        "temporal_version": 1.0,
+        "cross_document_exact": 1.0
+      },
+      "time_ms": 1904.3,
+      "deterministic_floor": true,
+      "cost": {
+        "llm_calls": 0,
+        "llm_tokens": 0,
+        "llm_usd": 0.0
+      }
+    }
+  ]
+}

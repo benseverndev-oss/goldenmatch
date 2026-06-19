@@ -1,0 +1,130 @@
+record_id,mention,entity_type,context,entity_id,failure_class,source
+0,Soundex,concept,phonetic blocking key that indexes names by sound,Q1502023,cross_document_exact,gh:goldenmatch:docs-site/goldenmatch/configuration.mdx
+1,soundex,concept,phonetic blocking key that indexes names by sound,Q1502023,typo,gh:goldenmatch:.github/workflows/ci.yml
+2,soundex_match,concept,phonetic blocking key that indexes names by sound,Q1502023,nickname_alias,gh:goldenmatch:context-network/decisions/0016-single-kernel-collapse-spike.md
+3,Metaphone,concept,phonetic algorithm for indexing words by pronunciation,Q1925103,cross_document_exact,gh:goldenmatch:docs-site/goldenmatch/configuration.mdx
+4,metaphone,concept,phonetic algorithm for indexing words by pronunciation,Q1925103,typo,gh:goldenmatch:docs-site/goldenmatch/api-quick-reference.mdx
+5,Double Metaphone,concept,phonetic algorithm for indexing words by pronunciation,Q1925103,temporal_version,gh:goldenmatch:packages/python/goldenmatch/scripts/algorithm_forge.py
+6,Levenshtein,concept,edit-distance string similarity metric,Q496939,cross_document_exact,gh:goldenmatch:context-network/architecture/goldencheck-native-kernel.md
+7,levenshtein,concept,edit-distance string similarity metric,Q496939,typo,gh:goldenmatch:.github/workflows/bench-datafusion-vs-bucket.yml
+8,edit distance,concept,edit-distance string similarity metric,Q496939,synonym_brand,gh:goldenmatch:docs-site/goldenmatch/api-quick-reference.mdx
+9,Jaro-Winkler,concept,string similarity that rewards a common prefix,Q3030677,cross_document_exact,gh:goldenmatch:docs-site/goldenmatch/configuration.mdx
+10,jaro_winkler,concept,string similarity that rewards a common prefix,Q3030677,nickname_alias,gh:goldenmatch:.github/workflows/bench-datafusion-vs-bucket.yml
+11,Jaro Winkler,concept,string similarity that rewards a common prefix,Q3030677,typo,gh:benseverndev-oss/goldenmatch#662
+12,Hamming distance,concept,count of differing positions between equal-length strings,Q272172,cross_document_exact,gh:goldenmatch:packages/python/goldenmatch/scripts/algorithm_forge.py
+13,Hamming,concept,count of differing positions between equal-length strings,Q272172,nickname_alias,gh:goldenmatch:packages/python/goldenmatch/scripts/algorithm_forge.py
+14,Jaccard,concept,set-overlap similarity used by the PPRL scorer,Q865360,cross_document_exact,gh:goldenmatch:.github/workflows/bench-lsh-recall.yml
+15,jaccard,concept,set-overlap similarity used by the PPRL scorer,Q865360,typo,gh:goldenmatch:context-network/architecture/single-kernel-collapse-inventory.md
+16,Jaccard similarity,concept,set-overlap similarity used by the PPRL scorer,Q865360,synonym_brand,gh:goldenmatch:docs-site/goldenmatch/configuration.mdx
+17,cosine similarity,concept,vector similarity used for embedding comparison,Q1784941,cross_document_exact,gh:goldenmatch:docs-site/goldenmatch/api-quick-reference.mdx
+18,cosine,concept,vector similarity used for embedding comparison,Q1784941,nickname_alias,gh:goldenmatch:.github/workflows/bench-er-kg.yml
+19,MinHash,concept,locality-sensitive sketch for set similarity,Q11091745,cross_document_exact,gh:goldenmatch:.github/workflows/bench-lsh-recall.yml
+20,minhash,concept,locality-sensitive sketch for set similarity,Q11091745,typo,gh:goldenmatch:context-network/discovery.md
+21,min-hash,concept,locality-sensitive sketch for set similarity,Q11091745,typo,gh:goldenmatch:context-network/architecture/distributed-wcc.md
+22,LSH,concept,hashing scheme that collides near neighbors,Q1625299,abbreviation,gh:goldenmatch:.github/workflows/bench-lsh-recall.yml
+23,n-gram,concept,contiguous character/token sequence used as a fuzzy key,Q94489,cross_document_exact,gh:goldenmatch:.github/workflows/ci.yml
+24,q-gram,concept,contiguous character/token sequence used as a fuzzy key,Q94489,synonym_brand,gh:goldenmatch:docs/superpowers/specs/2026-06-04-autoconfig-491-lever-coverage-design.md
+25,qgram,concept,contiguous character/token sequence used as a fuzzy key,Q94489,nickname_alias,gh:goldenmatch:docs-site/goldenmatch/api-quick-reference.mdx
+26,ngram,concept,contiguous character/token sequence used as a fuzzy key,Q94489,typo,gh:goldenmatch:.github/workflows/embed-recall-probe.yml
+27,tf-idf,concept,term-weighting statistic for text similarity,Q796584,cross_document_exact,gh:benseverndev-oss/goldenmatch#507
+28,TF-IDF,concept,term-weighting statistic for text similarity,Q796584,typo,gh:goldenmatch:docs-site/goldenmatch/blocking.mdx
+29,record linkage,concept,joining records that refer to the same real-world entity,Q1266546,cross_document_exact,gh:goldenmatch:README.md
+30,entity resolution,concept,joining records that refer to the same real-world entity,Q1266546,synonym_brand,gh:goldenmatch:CITATION.cff
+31,deduplication,concept,joining records that refer to the same real-world entity,Q1266546,synonym_brand,gh:goldenmatch:CITATION.cff
+32,data matching,concept,joining records that refer to the same real-world entity,Q1266546,synonym_brand,gh:goldenmatch:packages/typescript/goldenflow/tests/parity/parity.test.ts
+33,ER,concept,joining records that refer to the same real-world entity,Q1266546,abbreviation,gh:goldenmatch:.github/workflows/bench-abbrevalign.yml
+34,dedupe,concept,joining records that refer to the same real-world entity,Q1266546,nickname_alias,gh:goldenmatch:.github/workflows/bench-fs-distributed.yml
+35,bloom filter,concept,probabilistic set-membership structure used for PPRL encoding,Q885373,cross_document_exact,gh:goldenmatch:docs-site/goldenmatch/pprl.mdx
+36,Bloom filter,concept,probabilistic set-membership structure used for PPRL encoding,Q885373,typo,gh:goldenmatch:docs-site/goldenmatch/configuration.mdx
+37,bloom_filter,concept,probabilistic set-membership structure used for PPRL encoding,Q885373,nickname_alias,gh:goldenmatch:context-network/architecture/single-kernel-collapse-inventory.md
+38,CLK,concept,probabilistic set-membership structure used for PPRL encoding,Q885373,synonym_brand,gh:goldenmatch:CLAUDE.md
+39,union-find,concept,union-find structure backing clustering,Q1259393,nickname_alias,gh:goldenmatch:context-network/architecture/distributed-wcc.md
+40,Union-Find,concept,union-find structure backing clustering,Q1259393,nickname_alias,gh:goldenmatch:.github/workflows/bench-distributed-stack.yml
+41,UnionFind,concept,union-find structure backing clustering,Q1259393,nickname_alias,gh:goldenmatch:.github/workflows/ci.yml
+42,union find,concept,union-find structure backing clustering,Q1259393,typo,gh:benseverndev-oss/goldenmatch#844
+43,label propagation,concept,community-detection clustering algorithm,Q25111428,cross_document_exact,gh:goldenmatch:.github/workflows/ci.yml
+44,label_propagation,concept,community-detection clustering algorithm,Q25111428,nickname_alias,gh:goldenmatch:.github/workflows/bench-distributed-stack.yml
+45,minimum spanning tree,concept,tree used to auto-split oversized clusters,Q240464,cross_document_exact,gh:goldenmatch:docs-site/concepts/entity-resolution.mdx
+46,MST,concept,tree used to auto-split oversized clusters,Q240464,abbreviation,gh:goldenmatch:.github/workflows/count-max-vs-last.yml
+47,EM,concept,iterative MLE that trains Fellegi-Sunter weights,Q1275153,abbreviation,gh:goldenmatch:README.md
+48,embedding,concept,dense vector representation of text,Q18395344,nickname_alias,gh:goldenmatch:.github/workflows/bench-embedding-providers.yml
+49,embeddings,concept,dense vector representation of text,Q18395344,typo,gh:goldenmatch:.github/workflows/bench-inhouse-embedder.yml
+50,ANN,concept,ANN retrieval used for embedding blocking,Q608751,abbreviation,gh:goldenmatch:context-network/decisions/0020-minhash-lsh-sketch-tier.md
+51,nearest-neighbor,concept,ANN retrieval used for embedding blocking,Q608751,typo,gh:goldenmatch:docs-site/goldenmatch/blocking.mdx
+52,logistic regression,concept,classifier trained in the active-learning boost tab,Q1132755,cross_document_exact,gh:goldenmatch:docs/er-vendor-comparison.md
+53,LogisticRegression,concept,classifier trained in the active-learning boost tab,Q1132755,nickname_alias,gh:goldenmatch:docs-site/goldenmatch/python-api.mdx
+54,fuzzy matching,concept,fuzzy string comparison,Q1798621,synonym_brand,gh:goldenmatch:README.md
+55,fuzzy match,concept,fuzzy string comparison,Q1798621,nickname_alias,gh:goldenmatch:docs-site/goldenmatch/api-quick-reference.mdx
+56,golden record,concept,master surviving record for a cluster,Q17776582,cross_document_exact,gh:goldenmatch:docs-site/concepts/entity-resolution.mdx
+57,golden_record,concept,master surviving record for a cluster,Q17776582,nickname_alias,gh:goldenmatch:docs/superpowers/plans/2026-06-10-sail-tier-stage-s5-identity.md
+58,functional dependency,concept,column-determines-column constraint used as negative evidence,Q597053,cross_document_exact,gh:goldenmatch:docs-site/goldencheck/native.mdx
+59,FD,concept,column-determines-column constraint used as negative evidence,Q597053,abbreviation,gh:goldenmatch:.github/workflows/bench-quality-bridges.yml
+60,functional dependencies,concept,column-determines-column constraint used as negative evidence,Q597053,typo,gh:goldenmatch:docs-site/goldencheck/native.mdx
+61,clustering,concept,grouping similar records,Q622825,synonym_brand,gh:goldenmatch:.github/workflows/bench-distributed-stack.yml
+62,string metric,concept,function measuring distance between two strings,Q9050568,cross_document_exact,gh:goldenmatch:packages/python/goldenmatch/examples/forge_runs/HANDOFF.md
+63,string similarity,concept,function measuring distance between two strings,Q9050568,synonym_brand,gh:goldenmatch:packages/python/goldenmatch/docs/design/2026-05-25-rust-acceleration-roadmap.md
+64,string distance,concept,function measuring distance between two strings,Q9050568,synonym_brand,gh:goldenmatch:docs/er-vendor-comparison.md
+65,active learning,concept,ML strategy that queries a labeler for borderline pairs,Q4677561,cross_document_exact,gh:goldenmatch:docs-site/goldenmatch/tui.mdx
+66,boost,concept,ML strategy that queries a labeler for borderline pairs,Q4677561,nickname_alias,gh:goldenmatch:.github/workflows/scale-audit.yml
+67,schema matching,concept,aligning columns across differently-shaped sources,Q1408390,cross_document_exact,gh:goldenmatch:packages/python/infermap/benchmark/cases/valentine/magellan/dblp_scholar_004/source.csv
+68,schema_match,concept,aligning columns across differently-shaped sources,Q1408390,nickname_alias,gh:goldenmatch:docs-site/goldenmatch/agent.mdx
+69,schema match,concept,aligning columns across differently-shaped sources,Q1408390,typo,gh:goldenmatch:docs/superpowers/plans/2026-06-05-surface-gap-roadmap.md
+70,transitive closure,concept,closure operation that propagates pairwise links into clusters,Q1501387,cross_document_exact,gh:goldenmatch:docs/scale-envelope.md
+71,precision and recall,concept,evaluation measures for matching quality,Q2359161,cross_document_exact,gh:goldenmatch:docs-site/goldenmatch/evaluation.mdx
+72,precision,concept,evaluation measures for matching quality,Q2359161,nickname_alias,gh:goldenmatch:.github/workflows/bench-embedding-providers.yml
+73,recall,concept,evaluation measures for matching quality,Q2359161,nickname_alias,gh:goldenmatch:.github/workflows/bench-distributed-stack.yml
+74,F1,concept,evaluation measures for matching quality,Q2359161,abbreviation,gh:goldenmatch:.github/workflows/bench-embedding-providers.yml
+75,anomaly detection,concept,flagging rare/suspect records and merges,Q3560506,cross_document_exact,gh:goldenmatch:README.md
+76,anomaly,concept,flagging rare/suspect records and merges,Q3560506,nickname_alias,gh:goldenmatch:README.md
+77,anomalies,concept,flagging rare/suspect records and merges,Q3560506,typo,gh:goldenmatch:context-network/planning/surface-hardening.md
+78,Fellegi-Sunter,concept,probabilistic record-linkage model with m/u weights,gm:fellegi_sunter,cross_document_exact,gh:goldenmatch:.github/workflows/bench-fs-distributed.yml
+79,F-S,concept,probabilistic record-linkage model with m/u weights,gm:fellegi_sunter,abbreviation,gh:goldenmatch:docs-site/for-researchers.mdx
+80,FS,concept,probabilistic record-linkage model with m/u weights,gm:fellegi_sunter,abbreviation,gh:goldenmatch:.github/workflows/bench-fs-distributed.yml
+81,Fellegi Sunter,concept,probabilistic record-linkage model with m/u weights,gm:fellegi_sunter,typo,gh:benseverndev-oss/goldenmatch#1098
+82,probabilistic matching,concept,probabilistic record-linkage model with m/u weights,gm:fellegi_sunter,synonym_brand,gh:goldenmatch:context-network/foundation/project-definition.md
+83,WCC,concept,graph components used to form clusters,gm:weakly_connected_components,abbreviation,gh:goldenmatch:.github/workflows/bench-distributed-stack.yml
+84,connected components,concept,graph components used to form clusters,gm:weakly_connected_components,synonym_brand,gh:goldenmatch:.github/workflows/ci.yml
+85,Two-Phase WCC,concept,graph components used to form clusters,gm:weakly_connected_components,temporal_version,gh:goldenmatch:.github/workflows/bench-distributed-stack.yml
+86,two_phase_wcc,concept,graph components used to form clusters,gm:weakly_connected_components,temporal_version,gh:goldenmatch:.github/workflows/ci.yml
+87,auto-config controller,concept,introspective planner that selects a config from data,gm:auto_config_controller,cross_document_exact,gh:goldenmatch:.github/workflows/bench-er-kg.yml
+88,AutoConfigController,concept,introspective planner that selects a config from data,gm:auto_config_controller,nickname_alias,gh:goldenmatch:README.md
+89,auto-config,concept,introspective planner that selects a config from data,gm:auto_config_controller,nickname_alias,gh:goldenmatch:.claude/doc-surfaces.md
+90,auto_configure,concept,introspective planner that selects a config from data,gm:auto_config_controller,nickname_alias,gh:goldenmatch:README.md
+91,auto_configure_df,concept,introspective planner that selects a config from data,gm:auto_config_controller,nickname_alias,gh:goldenmatch:.github/workflows/scale-audit.yml
+92,zero-config,concept,introspective planner that selects a config from data,gm:auto_config_controller,synonym_brand,gh:goldenmatch:.github/workflows/bench-zero-config.yml
+93,Controller v3,concept,introspective planner that selects a config from data,gm:auto_config_controller,temporal_version,gh:goldenmatch:docs/superpowers/plans/2026-05-16-controller-budget-pathology.md
+94,negative evidence,concept,disagreement penalty subtracted from match score,gm:negative_evidence,cross_document_exact,gh:goldenmatch:.github/workflows/bench-quality-bridges.yml
+95,NegativeEvidenceField,concept,disagreement penalty subtracted from match score,gm:negative_evidence,nickname_alias,gh:goldenmatch:docs/superpowers/plans/2026-05-08-autoconfig-negative-evidence-and-clustered-identity.md
+96,negative_evidence,concept,disagreement penalty subtracted from match score,gm:negative_evidence,typo,gh:goldenmatch:context-network/decisions/0002-scale-mode-contract.md
+97,identity graph,concept,durable entity graph with stable ids above run-local clusters,gm:identity_graph,cross_document_exact,gh:goldenmatch:.gitignore
+98,Identity Graph,concept,durable entity graph with stable ids above run-local clusters,gm:identity_graph,typo,gh:goldenmatch:README.md
+99,identity_graph,concept,durable entity graph with stable ids above run-local clusters,gm:identity_graph,nickname_alias,gh:goldenmatch:docs/superpowers/specs/2026-05-13-golden-suite-package-audit.md
+100,Identity Graph v2.0,concept,durable entity graph with stable ids above run-local clusters,gm:identity_graph,temporal_version,gh:goldenmatch:docs/superpowers/specs/2026-05-13-golden-suite-package-audit.md
+101,learned blocking,concept,data-driven discovery of blocking predicates,gm:learned_blocking,cross_document_exact,gh:goldenmatch:docs-site/goldenmatch/blocking.mdx
+102,learned_blocking,concept,data-driven discovery of blocking predicates,gm:learned_blocking,nickname_alias,gh:goldenmatch:.github/workflows/ci.yml
+103,semantic blocking,concept,embedding-based candidate blocking,gm:semantic_blocking,cross_document_exact,gh:goldenmatch:docs/superpowers/specs/2026-06-19-six-vertical-roadmap.md
+104,semantic_blocking,concept,embedding-based candidate blocking,gm:semantic_blocking,nickname_alias,gh:goldenmatch:packages/python/goldenmatch/CHANGELOG.md
+105,privacy-preserving record linkage,concept,record linkage over encrypted/encoded data,gm:pprl,cross_document_exact,gh:goldenmatch:docs-site/goldenmatch/mcp.mdx
+106,PPRL,concept,record linkage over encrypted/encoded data,gm:pprl,abbreviation,gh:goldenmatch:CLAUDE.md
+107,survivorship,concept,rules that pick surviving values for the golden record,gm:survivorship,cross_document_exact,gh:goldenmatch:.github/workflows/bench-survivorship-columnar.yml
+108,match key,concept,blocking/comparison key derived from fields,gm:match_key,cross_document_exact,gh:goldenmatch:packages/actions/goldenmatch/README.md
+109,matchkey,concept,blocking/comparison key derived from fields,gm:match_key,typo,gh:goldenmatch:.github/workflows/ci.yml
+110,matchkeys,concept,blocking/comparison key derived from fields,gm:match_key,typo,gh:goldenmatch:.github/workflows/repro-issue-715.yml
+111,token sort,concept,word-order-robust fuzzy scorer,gm:token_sort,cross_document_exact,gh:goldenmatch:packages/python/goldenmatch/README.md
+112,token_sort,concept,word-order-robust fuzzy scorer,gm:token_sort,nickname_alias,gh:goldenmatch:.github/workflows/bench-datafusion-vs-bucket.yml
+113,token_sort_ratio,concept,word-order-robust fuzzy scorer,gm:token_sort,nickname_alias,gh:goldenmatch:.github/workflows/bench-datafusion-vs-bucket.yml
+114,Dice coefficient,concept,set-overlap similarity used by the PPRL bloom scorer,gm:dice_coefficient,cross_document_exact,gh:goldenmatch:docs-site/goldenmatch/configuration.mdx
+115,dice,concept,set-overlap similarity used by the PPRL bloom scorer,gm:dice_coefficient,nickname_alias,gh:goldenmatch:context-network/architecture/single-kernel-collapse-inventory.md
+116,Dice,concept,set-overlap similarity used by the PPRL bloom scorer,gm:dice_coefficient,typo,gh:goldenmatch:docs-site/goldenmatch/configuration.mdx
+117,Sorensen-Dice,concept,set-overlap similarity used by the PPRL bloom scorer,gm:dice_coefficient,synonym_brand,gh:goldenmatch:packages/python/goldenmatch/scripts/algorithm_forge.py
+118,reranking,concept,cross-encoder re-scoring of candidate pairs,gm:reranking,cross_document_exact,gh:goldenmatch:docs-site/goldenmatch/configuration.mdx
+119,rerank,concept,cross-encoder re-scoring of candidate pairs,gm:reranking,nickname_alias,gh:goldenmatch:.github/workflows/repro-issue-715.yml
+120,reranker,concept,cross-encoder re-scoring of candidate pairs,gm:reranking,nickname_alias,gh:goldenmatch:packages/python/goldenmatch/docs/design/2026-05-26-stable-record-hash-cabi-plan.md
+121,cross-encoder,concept,cross-encoder re-scoring of candidate pairs,gm:reranking,synonym_brand,gh:goldenmatch:docs-site/goldenmatch/configuration.mdx
+122,cross_encoder,concept,cross-encoder re-scoring of candidate pairs,gm:reranking,nickname_alias,gh:goldenmatch:docs/superpowers/specs/2026-05-08-competitive-strategy-review.md
+123,blocking,concept,candidate-pair generation that avoids the full N^2 comparison,gm:blocking,cross_document_exact,gh:goldenmatch:.ast-grep/README.md
+124,blocking key,concept,candidate-pair generation that avoids the full N^2 comparison,gm:blocking,synonym_brand,gh:goldenmatch:context-network/architecture/distributed-wcc.md
+125,candidate generation,concept,candidate-pair generation that avoids the full N^2 comparison,gm:blocking,synonym_brand,gh:goldenmatch:docs/superpowers/plans/2026-06-08-probabilistic-splink-parity.md
+126,block,concept,candidate-pair generation that avoids the full N^2 comparison,gm:blocking,nickname_alias,gh:goldenmatch:.claude/doc-surfaces.md
+127,ensemble,concept,scorer combining several string metrics,gm:ensemble_scorer,cross_document_exact,gh:goldenmatch:Dockerfile.qis
+128,ensemble scorer,concept,scorer combining several string metrics,gm:ensemble_scorer,synonym_brand,gh:goldenmatch:packages/python/goldenmatch/tests/benchmarks/run_leipzig.py

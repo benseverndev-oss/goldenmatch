@@ -31,8 +31,22 @@ from erkgbench.adapters import (  # noqa: E402
 from erkgbench.adapters.base import last_cost_of  # noqa: E402
 from erkgbench.adapters.real import available_real_adapters  # noqa: E402
 
-DATASET = _BENCH_ROOT / "dataset" / "records.csv"
 RESULTS_DIR = _BENCH_ROOT / "results"
+
+DATASETS = {
+    "wikidata": {
+        "records": _BENCH_ROOT / "dataset" / "records.csv",
+        "results_json": RESULTS_DIR / "results.json",
+        "results_md": RESULTS_DIR / "RESULTS.md",
+        "build_hint": "python dataset/build_real.py   (curated QIDs/drugs in dataset/sources.jsonl)",
+    },
+    "ghsuite": {
+        "records": _BENCH_ROOT / "dataset" / "records_ghsuite.csv",
+        "results_json": RESULTS_DIR / "results_ghsuite.json",
+        "results_md": RESULTS_DIR / "RESULTS_ghsuite.md",
+        "build_hint": "python dataset/build_ghsuite.py   (curated concepts in dataset/concepts.jsonl)",
+    },
+}
 
 CLASS_ORDER = [
     "abbreviation",
@@ -50,16 +64,19 @@ CLASS_ORDER = [
 PRECISION_CRITICAL = {"same_name_collision", "temporal_version"}
 
 
-def load_records() -> tuple[list[Record], list[str], list[str]]:
-    if not DATASET.exists():
+def load_records(
+    records_path: Path = DATASETS["wikidata"]["records"],
+    build_hint: str = DATASETS["wikidata"]["build_hint"],
+) -> tuple[list[Record], list[str], list[str]]:
+    if not records_path.exists():
         raise FileNotFoundError(
-            f"{DATASET} not found. Build it from the real sources first:\n"
-            "  python dataset/build_real.py   (curated QIDs/drugs in dataset/sources.jsonl)"
+            f"{records_path} not found. Build it from the real sources first:\n"
+            f"  {build_hint}"
         )
     records: list[Record] = []
     entity_ids: list[str] = []
     failure_classes: list[str] = []
-    with DATASET.open(encoding="utf-8") as fh:
+    with records_path.open(encoding="utf-8") as fh:
         for row in csv.DictReader(fh):
             i = int(row["record_id"])
             records.append(
@@ -90,8 +107,12 @@ def make_embedder(kind: str | None):
     return embed
 
 
-def run(embedder_kind: str | None) -> dict:
-    records, entity_ids, failure_classes = load_records()
+def run(embedder_kind: str | None, dataset_cfg: dict | None = None) -> dict:
+    if dataset_cfg is None:
+        dataset_cfg = DATASETS["wikidata"]
+    records, entity_ids, failure_classes = load_records(
+        dataset_cfg["records"], dataset_cfg["build_hint"]
+    )
     embed_fn = make_embedder(embedder_kind)
 
     # Dogfood: goldenmatch runs zero-config (auto-config picks the strategy),
@@ -284,16 +305,23 @@ def main() -> None:
         default=None,
         help="Activate cosine OR-terms via sentence-transformers all-MiniLM-L6-v2.",
     )
+    ap.add_argument(
+        "--dataset",
+        choices=["wikidata", "ghsuite"],
+        default="wikidata",
+        help="Which corpus to score (default: wikidata).",
+    )
     args = ap.parse_args()
 
-    report = run("st" if args.embedder == "st" else None)
+    cfg = DATASETS[args.dataset]
+    report = run("st" if args.embedder == "st" else None, dataset_cfg=cfg)
     RESULTS_DIR.mkdir(exist_ok=True)
     # Explicit utf-8: the markdown carries em dashes / accented exonyms, and
     # Path.write_text defaults to the locale encoding (cp1252 on Windows), which
     # would mojibake them and diverge from a Linux/CI regeneration.
-    (RESULTS_DIR / "results.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+    cfg["results_json"].write_text(json.dumps(report, indent=2), encoding="utf-8")
     md = to_markdown(report)
-    (RESULTS_DIR / "RESULTS.md").write_text(md, encoding="utf-8")
+    cfg["results_md"].write_text(md, encoding="utf-8")
     print(md)
 
 

@@ -22,6 +22,7 @@ cd packages/python/goldenmatch/benchmarks/er-kg-bench
 python dataset/build_real.py         # sources.jsonl -> records.csv (real data; committed, regenerable)
 python erkgbench/run.py              # -> results/RESULTS.md + results/results.json
 python erkgbench/run.py --embedder st   # also activate the cosine OR-terms (MiniLM)
+python erkgbench/run.py --dataset ghsuite   # the SECOND corpus: the suite dogfooding itself (see below)
 ```
 
 `records.csv` is committed, so `run.py` works offline with no deps beyond `polars`,
@@ -117,6 +118,51 @@ default — now measured against the frameworks' REAL resolution code, not just
 models — while the bench keeps goldenmatch's own weak spots (synonym recall,
 collision precision) in plain view.
 
+## A second corpus: the suite dogfooding itself (`--dataset ghsuite`)
+
+The bench carries TWO real corpora. The first (everything above) is sourced
+externally from Wikidata + RxNorm. The second is **self-sourced from the Golden
+Suite's own committed GitHub content** and asks a sharper question: the suite's
+own ER concepts appear under many surface forms across its code, docs, and PRs
+(`Fellegi-Sunter`, `F-S`, `FS`, `probabilistic matching`; `union-find`,
+`UnionFind`, `disjoint-set`), so can a resolver re-unify them into one entity?
+
+```bash
+python dataset/build_ghsuite.py            # concepts.jsonl -> records_ghsuite.csv (git grep + gh)
+python erkgbench/run.py --dataset ghsuite  # -> results/RESULTS_ghsuite.md + results_ghsuite.json
+```
+
+How it stays honest (the same external-ground-truth bar as the Wikidata corpus):
+
+* **Curated, externally-anchored ground truth.** `dataset/concepts.jsonl` is a
+  hand-curated dictionary of 45 ER concepts. Each carries a verified **Wikidata
+  QID** (Levenshtein distance `Q496939`, Soundex `Q1502023`, record linkage
+  `Q1266546`) where one exists, or a namespaced `gm:` id
+  (`gm:auto_config_controller`, `gm:negative_evidence`) for suite-coined
+  concepts with no clean Wikidata entry. The identity is the public reference or
+  an explicit suite id, never inferred from the prose.
+* **Real verbatim mentions, never invented.** The builder searches only
+  **committed** suite content (`git grep`, whole-word) across the monorepo and
+  the extensions repo, with a GitHub issue/PR fallback. A curated surface form
+  that does not actually occur is **dropped** (drop-absent): of 143 candidate
+  variants the build kept 129 and dropped 14 that no committed file uses. Each
+  kept record carries its provenance file or PR in the `source` column.
+* **The bench cannot self-match.** The bench's own directory (which lists every
+  surface verbatim in `concepts.jsonl`) is excluded from the search, and only
+  tracked files are searched (so untracked local design docs never leak), so a
+  concept is found via independent suite content, not the corpus restating
+  itself. 40 of the 45 concepts ended up with two or more real surface forms.
+* **Snapshot-dated, selection bias visible.** Built 2026-06-19 against the suite
+  at this branch. The corpus reflects what the suite happens to mention, so
+  coverage is uneven by construction (a heavily-documented concept fragments
+  into more surfaces than a niche one). That bias is the point: it is the real
+  terminology drift a resolver faces, not a flaw to hide.
+
+The board lands in `results/RESULTS_ghsuite.md` (bootstrapped by the
+`bench-er-kg` CI lane, which self-activates once `records_ghsuite.csv` is
+committed). Same adapters, metrics, fidelity tiers, and cost axis as the
+Wikidata board, so the two corpora are directly comparable.
+
 ## The LLM scorer on real data (measured, key-dependent — not in the committed table)
 
 With `OPENAI_API_KEY` set the runner adds `goldenmatch(auto+llm)` (zero-config +
@@ -176,6 +222,9 @@ all you have is a name), not the headline. Reproduce the keyed rows with
 dataset/sources.jsonl  curated real entities (Wikidata QIDs / RxNorm ingredients) tagged by failure class
 dataset/build_real.py  sources.jsonl -> records.csv via Wikidata + RxNorm (QID/RxCUI = ground truth)
 dataset/records.csv    committed corpus (record_id, mention, type, context, entity_id, failure_class, source)
+dataset/concepts.jsonl      curated ER-concept dict (Wikidata QID / gm: id) for the self-sourced corpus
+dataset/build_ghsuite.py    concepts.jsonl -> records_ghsuite.csv via git grep (committed content) + gh fallback
+dataset/records_ghsuite.csv committed self-sourced corpus (same schema as records.csv)
 erkgbench/metrics.py   pairwise P/R/F1, per failure class; determinism check
 erkgbench/adapters/    base contract + goldenmatch adapter + modelled defaults
 erkgbench/run.py       runner -> results/{RESULTS.md,results.json}
