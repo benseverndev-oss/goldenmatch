@@ -68,6 +68,14 @@ def test_shingle_unknown_mode_raises():
         sketch.shingle("x", "bigram", 2)
 
 
+def test_shingle_k_below_one_raises():
+    # Parity guard: all three ports must reject k < 1 identically.
+    with pytest.raises(ValueError):
+        sketch.shingle("hello", "char", 0)
+    with pytest.raises(ValueError):
+        sketch.shingle("hello", "char", -1)
+
+
 # ---- Task 1.3: signature + jaccard ----
 
 

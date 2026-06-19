@@ -98,7 +98,14 @@ def shingle(text: str, mode: str = "char", k: int = 3) -> list[int]:
     over tokens split on the ASCII whitespace set. ``n == 0`` (empty or, in word
     mode, whitespace-only) yields the empty set; ``1 <= n < k`` yields a single
     whole-sequence shingle.
+
+    ``k`` must be >= 1. This is enforced (rather than relied on) so all three
+    language ports reject ``k < 1`` identically — Rust ``windows(0)`` panics
+    where Python would silently produce empty-string shingles, which would be a
+    parity divergence.
     """
+    if k < 1:
+        raise ValueError(f"shingle k must be >= 1, got {k}")
     if mode == "char":
         units: list[str] = list(text)
         sep = ""

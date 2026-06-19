@@ -142,6 +142,10 @@ the sequence length.
   a separator changes the token set and breaks parity. (char mode does not
   tokenize and is unaffected.)
 
+`k` must be `>= 1`; every port MUST reject `k < 1` with an error (do not rely on
+language behavior — Rust `windows(0)` panics while Python would silently emit
+empty-string shingles, a parity divergence).
+
 Windowing, given the unit sequence and `n`:
 
 - **`n >= k`:** for each contiguous window of `k` units, materialize the window's
