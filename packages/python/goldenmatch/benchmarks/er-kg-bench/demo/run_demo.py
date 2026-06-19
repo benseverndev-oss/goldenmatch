@@ -241,41 +241,31 @@ def _build_scaffolding(
     before_kg = kg.build_kg(before_sliced, mentions, types, contexts)
     after_kg = kg.build_kg(after_sliced, mentions, types, contexts)
 
-    before_sub = kg.retrieve(before_kg, query, type_filter=etype, max_distractors=_DISTRACTOR_CAP)
-    after_sub = kg.retrieve(after_kg, query, type_filter=etype, max_distractors=_DISTRACTOR_CAP)
+    # Present the WHOLE bounded KG (the protagonist's nodes + a few distractor
+    # entities) as the agent's memory -- NOT a query-string lookup. In the BEFORE
+    # graph the exact-match family scatters the protagonist across several nodes; a
+    # query-only retrieval would surface just the one node literally named `query`
+    # and hide that fragmentation (making before == after). The slice already bounds
+    # the memory, so the whole slice IS the retrieved subgraph.
+    before_sub = kg.Subgraph(query=query, nodes=tuple(before_kg.nodes))
+    after_sub = kg.Subgraph(query=query, nodes=tuple(after_kg.nodes))
 
-    # Build the question from the protagonist's surface forms in the AFTER subgraph.
-    # The after-resolved node has all names; fall back to the before node if needed.
-    after_protagonist_node = next(
-        (n for n in after_sub.nodes if protagonist_idxs & set(n.record_indices)), None
-    )
-    if after_protagonist_node is None:
-        after_protagonist_node = next(
-            (n for n in after_kg.nodes if protagonist_idxs & set(n.record_indices)), None
-        )
+    noun_plural = {
+        "org": "organizations",
+        "person": "people",
+        "place": "places",
+        "drug": "drugs",
+        "event": "events",
+    }.get(etype, "entities")
 
-    if after_protagonist_node and len(after_protagonist_node.names) > 1:
-        sorted_names = sorted(after_protagonist_node.names)
-        all_but_last = sorted_names[:-1]
-        last = sorted_names[-1]
-        names_phrase = ", ".join(all_but_last) + " and " + last
-    elif after_protagonist_node:
-        names_phrase = after_protagonist_node.names[0]
-    else:
-        names_phrase = query
-
-    noun_singular, noun_plural = {
-        "org": ("organization", "organizations"),
-        "person": ("person", "people"),
-        "place": ("place", "places"),
-        "drug": ("drug", "drugs"),
-        "event": ("event", "events"),
-    }.get(etype, ("entity", "entities"))
-
-    question = (
-        f"In your knowledge base, are {names_phrase} the same {noun_singular} "
-        f"or different ones - and how many distinct {noun_plural} do you have in memory?"
-    )
+    # A COUNT question -- the canonical agent-memory under-merge failure. The
+    # before-agent, seeing the protagonist scattered across distinct nodes, lists each
+    # surface form as a SEPARATE entity and over-counts; the after-agent, seeing one
+    # unified node, returns the true count. The question must NOT enumerate the aliases
+    # (a "what are X's names?" question is defeated -- a capable model reasons the
+    # aliases together from world knowledge even across fragmented nodes; the COUNT is
+    # the robust, honest signal, measured against a real keyed run).
+    question = f"How many distinct {noun_plural} are in your memory? List each one."
 
     scaffolding = {
         "protagonist": {
