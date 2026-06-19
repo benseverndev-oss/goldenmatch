@@ -24,7 +24,8 @@
 | `(128, 0.8)` | `optimal_bands` | `(8, 16)` |
 | `(128, 0.9)` | `optimal_bands` | `(4, 32)` |
 
-`signature("hello world", char, k=3, num_perms=8, seed=42)` =
+With `sh = shingle("hello world", char, k=3)`, `signature(sh, num_perms=8, seed=42)`
+(note: `signature` takes the **shingle list**, not text) =
 `[17041167395646177, 77277049784527919, 186077308732231195, 564709922545612565, 113913446168519210, 82732991858855180, 16713511289126713, 83663724776489692]`
 and `band_hashes(that_sig, num_bands=4)` =
 `[12901963457859849374, 4306753959614852008, 8435817867480225113, 7834504510243305493]`.
@@ -292,8 +293,8 @@ def test_optimal_bands_golden():
 - [ ] **Step 2: fail. Step 3: Implement:**
 
 ```python
-def band_hashes(signature: list[int], num_bands: int) -> list[int]:
-    n = len(signature)
+def band_hashes(sig: list[int], num_bands: int) -> list[int]:  # param 'sig' avoids shadowing signature()
+    n = len(sig)
     if num_bands <= 0 or n % num_bands != 0:
         raise ValueError(f"num_perms {n} not divisible by num_bands {num_bands}")
     r = n // num_bands
@@ -301,7 +302,7 @@ def band_hashes(signature: list[int], num_bands: int) -> list[int]:
     for band in range(num_bands):
         buf = band.to_bytes(8, "little")
         for j in range(r):
-            buf += signature[band * r + j].to_bytes(8, "little")
+            buf += sig[band * r + j].to_bytes(8, "little")
         out.append(base_hash(buf))
     return out
 
@@ -469,7 +470,7 @@ rayon = "1"   # match the version score-core/native already pin (check Cargo.loc
 **Files:** Modify `goldenmatch/config/schemas.py`.
 
 - [ ] **Step 1: Failing test** in `tests/test_lsh_blocker.py`: constructing `BlockingConfig(strategy="lsh", lsh=LSHKeyConfig(column="text", mode="word", k=2, num_perms=128, threshold=0.5))` validates; `strategy="lsh"` without an `lsh` block raises; `lsh` with neither `threshold` nor `num_bands` raises; both set is allowed (explicit `num_bands` wins).
-- [ ] **Step 2:** add `"lsh"` to the `strategy` `Literal`; add `LSHKeyConfig` (fields: `column: str`, `mode: Literal["char","word"]="char"`, `k: int=3`, `num_perms: int=128`, `seed: int=0`, `threshold: float|None=None`, `num_bands: int|None=None`); add an `lsh: LSHKeyConfig|None=None` field; extend `_validate_keys_or_passes` so `"lsh"` requires `lsh` (and not `keys`/`passes`) — same exemption shape `"ann"` has. Validate `num_perms % num_bands == 0` when `num_bands` set.
+- [ ] **Step 2:** add `"lsh"` to the `strategy` `Literal`; add `LSHKeyConfig` (fields: `column: str`, `mode: Literal["char","word"]="char"`, `k: int=3`, `num_perms: int=128`, `seed: int=0`, `threshold: float|None=None`, `num_bands: int|None=None`); add an `lsh: LSHKeyConfig|None=None` field; extend `_validate_keys_or_passes` with a **positive** branch for `"lsh"` that *requires* the `lsh` block to be present and *rejects* `keys`/`passes`. (Note: `"ann"` is handled by mere omission from the `needs_keys`/`needs_passes` sets — it has no validator code. `"lsh"` is the opposite: add an explicit check, don't copy a no-op.) Validate `num_perms % num_bands == 0` when `num_bands` set.
 - [ ] **Step 3:** run config tests → PASS. **Step 4: Commit** `feat(config): LSH blocking config schema (#1081)`.
 
 ### Task 5.2: the blocker
@@ -516,7 +517,7 @@ rayon = "1"   # match the version score-core/native already pin (check Cargo.loc
 **Files:** Create `src/core/sketch.ts`, `tests/unit/sketch.test.ts`.
 
 - [ ] **Step 1:** port the reference to TS using `BigInt` for the 64-bit FNV/splitmix and the `mod (2n**61n - 1n)` multiply; mask with `& 0xFFFFFFFFFFFFFFFFn`; code-point shingling via `Array.from`; the exact 6-char ASCII whitespace set for word mode; `to_le_bytes` via a `DataView`/`BigUint64Array`. Export `baseHash`, `splitmix64`, `shingle`, `signature`, `bandHashes`, `optimalBands`, `sketchBandHashes`. Keep edge-safe (no Node imports). Document the `BigInt` perf caveat in a header comment; WASM speed is a later slice.
-- [ ] **Step 2:** `tests/unit/sketch.test.ts` loads `../../../python/goldenmatch/tests/fixtures/sketch_golden.json` (or a copied fixture under TS test dir — pick one and note it) and asserts every case matches (compare as decimal strings to avoid `BigInt`/number issues). Also assert the headline golden constants directly.
+- [ ] **Step 2:** `tests/unit/sketch.test.ts` loads the golden fixture and asserts every case matches (compare as decimal strings to avoid `BigInt`/number issues); also assert the headline golden constants directly. **Fixture path:** from `packages/typescript/goldenmatch/tests/unit/` the Python fixture is **four** levels up: `../../../../python/goldenmatch/tests/fixtures/sketch_golden.json`. Prefer copying the fixture into the TS test tree (e.g. `tests/fixtures/sketch_golden.json`) in this step and reading the local copy, so the TS package doesn't reach across packages — if you copy, add a one-line note in `gen_sketch_golden.py` that it writes both locations, or a CI check that the two are byte-identical.
 - [ ] **Step 3:** push to CI (local TS build OOMs). Gate on the CI `typecheck` + vitest. **Step 4: Commit** `feat(ts/sketch): pure-TS MinHash/LSH port + golden parity (#1081)`.
 
 ### Task 7.2: TS `MinHashLSHBlocker` + exports
@@ -537,7 +538,7 @@ rayon = "1"   # match the version score-core/native already pin (check Cargo.loc
 
 **Files:** Create `scripts/bench_lsh_recall_qqp.py`; optional `tests/fixtures/qqp_sample.csv` (synthetic stand-in) + a smoke test.
 
-- [ ] **Step 1:** script downloads QQP (HuggingFace `datasets` or the public TSV; guard with retry+backoff), runs the `MinHashLSHBlocker` over the unique questions, and reports recall (fraction of `is_duplicate==1` pairs that share ≥1 bucket), precision proxy, and reduction vs labels; writes a markdown report. Parameterize config; default to the gate config.
+- [ ] **Step 1:** script downloads QQP via **HuggingFace `datasets` (`load_dataset("quora")`)** as the pinned acquisition path (retry+backoff; the bench job installs `datasets`). It runs the `MinHashLSHBlocker` over the unique questions, and reports recall (fraction of `is_duplicate==1` pairs that share ≥1 bucket), precision proxy, and reduction vs labels; writes a markdown report. Parameterize config; default to the gate config.
 - [ ] **Step 2:** add a CI-fast smoke test over the tiny synthetic sample asserting the script's measurement fn runs end-to-end and returns sane (recall in [0,1]) numbers — NOT a recall threshold (the sample is too small to be meaningful).
 - [ ] **Step 3: Commit** `feat(bench): QQP real-corpus LSH recall (#1081)`.
 
