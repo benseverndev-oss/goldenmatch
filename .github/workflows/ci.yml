@@ -1080,6 +1080,7 @@ jobs:
             packages/rust/extensions
             packages/rust/extensions/graph-core
             packages/rust/extensions/score-core
+            packages/rust/extensions/sketch-core
             packages/rust/extensions/graph-layout
       - run: cargo test --workspace
         # Bridge tests now hard-require goldenmatch (installed above) -- a Python
@@ -1096,6 +1097,11 @@ jobs:
       - run: cargo clippy --manifest-path graph-core/Cargo.toml -- -D warnings
       - run: cargo test --manifest-path score-core/Cargo.toml
       - run: cargo clippy --manifest-path score-core/Cargo.toml -- -D warnings
+      # sketch-core (MinHash/LSH, #1081) is its own [workspace] pyo3-free sibling
+      # too; the native binding exercises it indirectly, but its own unit tests +
+      # the golden-vector parity test need an explicit run.
+      - run: cargo test --manifest-path sketch-core/Cargo.toml
+      - run: cargo clippy --manifest-path sketch-core/Cargo.toml --all-targets -- -D warnings
       # graph-layout is its own [workspace] too (demo binary, in the parent
       # `exclude` list), so `cargo test --workspace` never builds it. The rust
       # paths-filter already covers it (packages/rust/**). See #1026.
