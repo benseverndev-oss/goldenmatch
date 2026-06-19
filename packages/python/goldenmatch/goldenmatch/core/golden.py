@@ -883,9 +883,32 @@ def build_golden_records_batch(
             )
 
     if _survivorship_active(rules):
+        # Vectorized survivorship fast path: byte-identical to the slow
+        # per-cluster oracle below for provenance=False, no quality_scores, and
+        # only native-expressible levers (see survivorship_native_eligible).
+        # Anything outside that envelope falls through to the slow branch.
+        from goldenmatch.core.survivorship.native import (
+            survivorship_native_eligible,
+        )
+        if (
+            provenance is False
+            and quality_scores is None
+            and survivorship_native_eligible(rules, provenance)
+        ):
+            from goldenmatch.core.survivorship.native import (
+                _golden_df_to_rows,
+                build_survivorship_native,
+            )
+            golden_df = build_survivorship_native(multi_df, rules)
+            return _golden_df_to_rows(golden_df)
+
         from goldenmatch.core.survivorship.conditions import build_resolution_order
         from goldenmatch.core.survivorship.resolve import resolve_cluster
-        s_sorted = multi_df.sort("__cluster_id__")
+        s_sorted = (
+            multi_df.sort(["__cluster_id__", "__row_id__"])
+            if "__row_id__" in multi_df.columns
+            else multi_df.sort("__cluster_id__")
+        )
         s_user_cols = [c for c in s_sorted.columns if not _is_internal(c) and c != "__cluster_id__"]
         order = build_resolution_order(rules.field_rules, rules.field_groups, s_user_cols)
         s_results = []
