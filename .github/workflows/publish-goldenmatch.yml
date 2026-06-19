@@ -14,8 +14,12 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing tag to build + release (e.g. v2.1.0)"
+        description: "Release tag to build + publish (e.g. v2.2.0). Created at `ref` if it does not exist yet."
         required: true
+      ref:
+        description: "Branch/commit to build from when the tag does not exist yet (default: this branch). The release is still named from `tag`."
+        required: false
+        default: ""
 
 permissions:
   id-token: write       # PyPI OIDC + cosign keyless signing
@@ -36,7 +40,10 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          # On dispatch, build from `ref` (default: the dispatched branch) so a
+          # not-yet-created tag still works; the release step creates the tag at
+          # this commit when it publishes. On a tag push, build from the tag.
+          ref: ${{ github.event_name == 'workflow_dispatch' && (inputs.ref || github.ref) || github.ref }}
       - uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093  # v6.0.8
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0
         with:
@@ -103,6 +110,7 @@ jobs:
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda  # v2
         with:
           tag_name: ${{ env.TAG }}
+          target_commitish: ${{ inputs.ref || github.sha }}
           name: goldenmatch ${{ env.TAG }}
           body_path: ${{ env.NOTES_FILE }}
           draft: true
