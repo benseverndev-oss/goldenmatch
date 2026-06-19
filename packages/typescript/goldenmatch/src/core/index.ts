@@ -457,6 +457,9 @@ export {
 export { MinHashLSHBlocker } from "./lshBlocker.js";
 export type { MinHashLSHConfig } from "./lshBlocker.js";
 
+// SimHash / LSH sketch kernel (#1082) — semantic near-dup over dense embeddings.
+export { simhashSignature, simhashBandHashes } from "./simhash.js";
+
 // ---------------------------------------------------------------------------
 // Memory (learning corrections)
 // ---------------------------------------------------------------------------
