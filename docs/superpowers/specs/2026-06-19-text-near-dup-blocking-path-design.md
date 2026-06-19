@@ -61,18 +61,33 @@ auto-config build_blocking ─┤
 Both strategies emit `BlockResult`s through the existing blocker contract.
 
 **Controller guard (required).** The auto-config controller's refit rules CAN
-swap a committed blocking strategy mid-iteration —
-`autoconfig_rules.py::rule_blocking_key_swap` rewrites `blocking` to
-`strategy="static"` (`first_token` key) on a "candidates compared, nothing
-matched" profile, and `rule_cross_blocking_disagreement` (and the multi-pass
-promotions) rewrite to `strategy="multi_pass"`. A near-dup corpus at the default
-threshold can plausibly hit that "compared, nothing matched" state, so without a
-guard a committed `lsh`/`simhash` config would be silently swapped to
-`static`/`multi_pass`. **Each of those rules must early-return `None` when
-`current.blocking.strategy in {"lsh", "simhash"}`** (the near-dup strategies own
-their candidate generation and must not be re-routed by the structured-record
-refit heuristics). This is a required change, with a regression test that drives
-the controller on a text-corpus shape and asserts the committed strategy survives.
+swap a committed blocking strategy mid-iteration. `lsh`/`simhash` configs carry
+**empty `.keys`** (the validator forbids `keys`/`passes`), so the rules that
+early-return on `not current.blocking.keys` already self-skip them
+(`rule_no_matches`, `rule_low_reduction_ratio`, `rule_blocking_field_null_heavy`,
+`rule_cross_blocking_disagreement`). But several rules gate only on
+`current.blocking is None` and would actively rewrite an `lsh` config — notably
+`rule_blocking_singleton_trap` and `rule_uniform_heavy_blocking` (→ `static`) and
+`rule_blocking_key_swap` (→ `static`/`first_token`). A near-dup corpus plausibly
+hits both the "candidates compared, nothing matched" (`mass_above_threshold==0`)
+and the "nothing compared" (`candidates_compared==0`, the singleton-trap) shapes,
+so without a guard a committed `lsh`/`simhash` config gets silently swapped.
+
+**Required change:** introduce a shared helper `_near_dup_locked(config) -> bool`
+(true when `config.blocking.strategy in {"lsh","simhash"}`) and early-return
+`None` from **every refit rule that emits a `blocking`-strategy/key update** when
+it is true. The complete set in `DEFAULT_RULES` to guard:
+`rule_blocking_singleton_trap`, `rule_blocking_too_coarse`,
+`rule_blocking_key_swap`, `rule_uniform_heavy_blocking`,
+`rule_blocking_field_null_heavy`, `rule_low_reduction_ratio`,
+`rule_recall_gap_suspected`, `rule_cross_blocking_disagreement`,
+`rule_blocking_adaptive_on_p99_outlier`. (Threshold/matchkey rules are NOT
+guarded — the controller may still tune the score threshold on an `lsh` config.)
+Add the guard to each rule body (explicit + greppable; a tenth blocking rule must
+adopt the same first-line check). A **controller-survival** regression test drives
+the controller on a text-corpus shape that trips BOTH `rule_blocking_singleton_trap`
+(`candidates_compared==0`) and `rule_blocking_key_swap` (`mass_above_threshold==0`)
+and asserts the committed `lsh`/`simhash` strategy survives every iteration.
 
 ## Phase A — lexical auto-enable
 
