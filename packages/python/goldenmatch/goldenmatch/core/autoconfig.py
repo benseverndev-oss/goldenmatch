@@ -1914,13 +1914,13 @@ def _is_text_corpus(profiles: list[ColumnProfile]) -> bool:
     return not has_blockable_name
 
 
-def _embedder_available(config=None) -> bool:
+def _embedder_available(config: GoldenMatchConfig | None = None) -> bool:
     """True when a semantic embedder is reachable for text-corpus blocking.
 
-    #1082 Phase A is lexical-only and does not consume this, but the helper is
-    in place for Phase B's semantic (SimHash/embedding) branch: it's True when
-    the in-house embedding model is importable OR the caller configured an
-    embedding provider.
+    Gates the semantic (SimHash/embedding) branch of ``_text_corpus_blocking``:
+    True when the in-house embedding model is importable OR the caller configured
+    an embedding provider. #1082 Phase A routes both the lexical and the
+    embedder-available case to lexical LSH; Phase B fills in the semantic branch.
     """
     from goldenmatch.core.embedder import inhouse_embedding_available
     if inhouse_embedding_available():
@@ -1943,13 +1943,16 @@ def _auto_build_lsh_config(profiles: list[ColumnProfile]) -> BlockingConfig:
 
 
 def _text_corpus_blocking(
-    profiles: list[ColumnProfile], df: pl.DataFrame, config=None
+    profiles: list[ColumnProfile], df: pl.DataFrame, config: GoldenMatchConfig | None = None
 ) -> BlockingConfig:
     """Pick the text-corpus blocking strategy.
 
-    #1082 Phase A is lexical only (MinHash/LSH). Phase B adds a semantic
-    (SimHash / embedding-ANN) branch here, gated on ``_embedder_available``.
+    #1082 Phase A is lexical only (MinHash/LSH). Phase B replaces the
+    embedder-available branch with semantic SimHash; for now both route to the
+    lexical path.
     """
+    if _embedder_available(config):
+        return _auto_build_lsh_config(profiles)
     return _auto_build_lsh_config(profiles)
 
 
