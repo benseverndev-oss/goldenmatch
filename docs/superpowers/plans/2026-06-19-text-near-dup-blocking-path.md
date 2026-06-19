@@ -149,7 +149,7 @@ if _is_text_corpus(profiles):
 
 (Delete the `_ann_eligible` / `ann_min_rows` auto-selection — ANN is no longer auto-picked for description columns; explicit `strategy="ann"` still works. Keep `_embedding_cols` only if used elsewhere; otherwise remove dead code.)
 
-- [ ] **Step 4: run, verify pass.** Also run `tests/test_autoconfig.py -q` to confirm no regression in existing classification/blocking tests.
+- [ ] **Step 4: run, verify pass.** Also run `tests/test_autoconfig.py -q` and `tests/test_autoconfig_regressions.py -q`. **Expected behavior change:** if any existing test asserts `strategy=="ann"` is *auto-selected* for a description-only / large-text df, UPDATE that assertion (to `lsh`, or `simhash` under an embedder) — dropping ANN auto-selection is the intended change per the spec, not a regression to "fix back". A genuine regression is the exact/name/structured paths changing; those must stay identical.
 - [ ] **Step 5: commit** `feat(autoconfig): route text corpora to lsh blocking (#1082)`.
 
 ## Task A3: controller guard — don't swap a near-dup strategy
@@ -169,10 +169,15 @@ def test_blocking_rules_skip_lsh_strategy():
     ctx, profile = _profile(candidates_compared=10, mass_above_threshold=0.0)
     for rule in (R.rule_blocking_key_swap, R.rule_blocking_singleton_trap,
                  R.rule_uniform_heavy_blocking):
-        assert rule(cfg, profile, ctx) is None  # guarded, no swap
+        assert rule(profile, cfg, history) is None  # guarded, no swap
 ```
 
-(Adapt `_config_with_blocking`/`_profile` to the real rule signature — read `autoconfig_rules.py` for the exact `(config, profile, ctx)` shape and `ComplexityProfile` fields.)
+(Adapt `_config_with_blocking`/`_profile` to the real rule signature — **read
+`autoconfig_rules.py` for the exact shape**: it is `(profile, current, history,
+ctx=None)`, NOT `(config, profile, ctx)`. Note `rule_cross_blocking_disagreement`
+also early-returns `None` when `ctx is None` for a separate reason, so to prove
+the *guard* specifically, either pass a non-None `ctx` or just assert the
+end-state "strategy survives" rather than per-rule `None`.)
 
 - [ ] **Step 2: run, verify fail** (rules currently return a swap proposal).
 - [ ] **Step 3: implement.** Add the shared helper and guard every blocking-strategy/key rule:
