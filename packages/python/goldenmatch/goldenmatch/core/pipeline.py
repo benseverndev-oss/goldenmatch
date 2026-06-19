@@ -999,6 +999,24 @@ def _semantic_blocking_pairs(
         logger.warning("semantic_blocking: no usable name column found; skipping")
         return []
 
+    # Register the semantic-blocking transforms at the POINT OF USE. `initialism`
+    # (core.acronym) and the alias `refdata_*` transforms are registered only as an
+    # import side-effect of their modules; the normal dedupe_df flow imports neither,
+    # so without this a fresh process / xdist worker hits "Unknown transform" and the
+    # source either silently fail-opens (no merge) or errors on lazy collect. Register
+    # here so semantic_blocking is order-independent. acronym's register is idempotent
+    # and core (always available); the refdata import (alias only) is guarded.
+    from goldenmatch.core.acronym import register_transforms as _register_initialism
+
+    _register_initialism()
+    if "alias" in sb.keys:
+        try:
+            import goldenmatch.refdata  # noqa: F401  registers the refdata_* alias transforms
+        except Exception:
+            logger.debug(
+                "semantic_blocking: refdata pack unavailable; alias source will be skipped",
+            )
+
     # The initialism/alias sources must key + score off the RAW (pre-standardize)
     # name so an all-caps acronym ("IBM") survives the `name_proper` title-casing
     # (which would otherwise leave "Ibm", killing `derive_initialism`'s

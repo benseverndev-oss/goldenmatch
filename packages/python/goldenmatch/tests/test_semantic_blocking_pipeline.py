@@ -147,3 +147,44 @@ def test_initialism_confirmed_merges_at_auto_threshold():
     # ...and Globex (no initialism/alias/string link) is NOT swept in. Guards
     # against a source emitting raw sub-threshold scores that over-merge.
     assert cluster_of(2) != cluster_of(0)
+
+
+def test_semantic_blocking_registers_initialism_at_point_of_use():
+    """Regression: the initialism source must register its transform at the POINT
+    OF USE. ``initialism`` is registered only as an import side-effect of
+    ``core.acronym``, which the normal ``dedupe_df`` flow never imports -- so on a
+    fresh process / xdist worker that has not imported it, the source raises
+    ``ValueError: Unknown transform: 'initialism'``, fail-opens, and the merge
+    silently never happens (a no-op for users; the cause of the shard-3 xdist
+    flake). Simulate that worker by removing ``initialism`` from the registry
+    before the run, then assert the pipeline re-registers it and the merge fires.
+    """
+    from goldenmatch.config.schemas import SemanticBlockingConfig
+    from goldenmatch.core.autoconfig import auto_configure_df
+    from goldenmatch.plugins.registry import PluginRegistry
+
+    reg = PluginRegistry.instance()
+    saved = reg.get_transform("initialism")
+    reg._transforms.pop("initialism", None)
+    try:
+        assert not reg.has_transform("initialism")  # precondition: unregistered worker
+
+        df = _df()  # row 0 "International Business Machines", row 1 "IBM"
+        cfg = auto_configure_df(df)
+        # Initialism source only (no ann/alias) so the merge can ONLY come from
+        # the initialism transform that the cleared registry is missing.
+        cfg.semantic_blocking = SemanticBlockingConfig(keys=["initialism"], alias_tables=[])
+        for mk in cfg.get_matchkeys():
+            if mk.type == "weighted":
+                mk.rerank = False  # avoid HF cross-encoder download in CI
+
+        on = gm.dedupe_df(df, config=cfg)
+
+        def cluster_of(rid):
+            return next(c for c, i in on.clusters.items() if rid in i["members"])
+
+        assert cluster_of(0) == cluster_of(1)  # IBM <-> expansion, despite cleared registry
+        assert reg.has_transform("initialism")  # pipeline re-registered at point of use
+    finally:
+        if saved is not None and not reg.has_transform("initialism"):
+            reg.register_transform("initialism", saved)
