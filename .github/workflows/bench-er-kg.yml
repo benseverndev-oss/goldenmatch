@@ -92,6 +92,24 @@ jobs:
           name: er-kg-results-offline
           path: ${{ env.BENCH_DIR }}/results/
 
+      - name: Run benchmark (ghsuite corpus -- self-sourced)
+        # Guarded on the corpus CSV existing so this self-activates once
+        # records_ghsuite.csv is committed and is a clean no-op before then.
+        # --embedder st mirrors the wikidata run deliberately (same adapter rows).
+        # The hashFiles path is repo-root-relative, NOT working-directory-relative.
+        if: ${{ hashFiles('packages/python/goldenmatch/benchmarks/er-kg-bench/dataset/records_ghsuite.csv') != '' }}
+        working-directory: ${{ env.BENCH_DIR }}
+        run: "$GITHUB_WORKSPACE/.venv/bin/python erkgbench/run.py --dataset ghsuite --embedder st"
+      - name: Upload ghsuite results (commit these)
+        if: ${{ hashFiles('packages/python/goldenmatch/benchmarks/er-kg-bench/dataset/records_ghsuite.csv') != '' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: er-kg-results-ghsuite
+          path: |
+            ${{ env.BENCH_DIR }}/results/RESULTS_ghsuite.md
+            ${{ env.BENCH_DIR }}/results/results_ghsuite.json
+          if-no-files-found: ignore
+
       - name: Demo unit tests (offline narrative logic)
         working-directory: ${{ env.BENCH_DIR }}
         run: "$GITHUB_WORKSPACE/.venv/bin/python -m pytest demo/test_demo.py -v"
