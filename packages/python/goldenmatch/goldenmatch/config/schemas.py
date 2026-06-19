@@ -381,7 +381,8 @@ class LSHKeyConfig(BaseModel):
 
     Provide either ``threshold`` (the band/row split is then chosen by
     ``optimal_bands``) or an explicit ``num_bands`` (which must divide
-    ``num_perms``). Shingle ``mode`` is char- or word-grams of size ``k``.
+    ``num_perms``). If both are set, ``num_bands`` wins (``threshold`` is
+    ignored). Shingle ``mode`` is char- or word-grams of size ``k``.
     """
 
     column: str
