@@ -85,7 +85,47 @@ def test_build_blocking_routes_text_corpus_to_lsh():
 # ───────────────────────── A3: controller guard ─────────────────────────────
 
 
+def _weighted_matchkey():
+    """A weighted matchkey carrying a text field the blocking-swap rules can
+    re-key onto (``rule_blocking_key_swap`` walks the first weighted matchkey
+    for a text/name field)."""
+    from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
+
+    return MatchkeyConfig(
+        name="primary",
+        type="weighted",
+        threshold=0.85,
+        fields=[
+            MatchkeyField(
+                field="name", transforms=["lowercase"],
+                scorer="ensemble", weight=1.0,
+            ),
+        ],
+    )
+
+
+def _static_config():
+    """Normal static blocking on ``city`` (NOT the matchkey's ``name`` field,
+    so the swap rules propose a genuine change) with a weighted matchkey."""
+    from goldenmatch.config.schemas import (
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+    )
+
+    return GoldenMatchConfig(
+        matchkeys=[_weighted_matchkey()],
+        blocking=BlockingConfig(
+            strategy="static",
+            keys=[BlockingKeyConfig(fields=["city"], transforms=["lowercase"])],
+        ),
+    )
+
+
 def _lsh_config():
+    """Same matchkey, but lsh blocking (the near-dup-locked strategy). An lsh
+    BlockingConfig must NOT carry keys/passes, so blocking is the only
+    difference from ``_static_config``."""
     from goldenmatch.config.schemas import (
         BlockingConfig,
         GoldenMatchConfig,
@@ -93,20 +133,31 @@ def _lsh_config():
     )
 
     return GoldenMatchConfig(
+        matchkeys=[_weighted_matchkey()],
         blocking=BlockingConfig(
             strategy="lsh",
             lsh=LSHKeyConfig(column="body", threshold=0.5),
-        )
+        ),
     )
 
 
 def _swap_prone_profile():
-    """A ComplexityProfile shaped to trip the blocking-rewrite rules:
-    blocks formed, zero candidates compared, oversized p99, low reduction.
+    """A ComplexityProfile shaped to ACTUALLY trip both
+    ``rule_blocking_key_swap`` and ``rule_uniform_heavy_blocking``.
 
-    The controller guard short-circuits each rule before it reads the
-    profile, so the exact values here only matter as "would otherwise fire"
-    bait — they don't need to reflect a real run.
+    Trigger conditions matched precisely against the rule bodies:
+
+    - ``rule_blocking_key_swap``: ``candidates_compared > 0`` AND
+      ``mass_above_threshold == 0.0``; matchkey carries a text field
+      (``name`` typed "text" here). History supplies the prior decision the
+      rule requires (it's the iter-1+ fallback).
+    - ``rule_uniform_heavy_blocking``: ``avg_block = n_rows/n_blocks >= 30``
+      (10_000/100 = 100), ``candidates_compared >= n_rows``,
+      ``mass_above_threshold >= 0.5``, ``mass_in_borderline >= 0.5``, and a
+      high-cardinality identity-bearing column (``name``, type "name",
+      cardinality 0.8, not in blocking) to swap onto.
+
+    Both gates fire on these values, so static-vs-lsh isolates the guard.
     """
     from goldenmatch.core.complexity_profile import (
         BlockingProfile,
@@ -118,28 +169,132 @@ def _swap_prone_profile():
     return ComplexityProfile(
         data=DataProfile(
             n_rows=10_000,
-            n_cols=1,
-            column_types={"body": "text"},
-            null_rate={"body": 0.0},
+            n_cols=2,
+            column_types={"name": "name", "city": "geo"},
+            cardinality_ratio={"name": 0.8, "city": 0.05},
+            null_rate={"name": 0.0, "city": 0.0},
         ),
         blocking=BlockingProfile(
-            n_blocks=5,
-            block_sizes_p50=1,
-            block_sizes_p99=9_000,
-            block_sizes_max=9_000,
-            reduction_ratio=0.05,
+            n_blocks=100,
+            block_sizes_p50=100,
+            block_sizes_p99=120,
+            block_sizes_max=150,
+            reduction_ratio=0.5,
         ),
-        scoring=ScoringProfile(candidates_compared=0),
+        scoring=ScoringProfile(
+            n_pairs_scored=50_000,
+            # >= n_rows so uniform_heavy treats blocking as over-coarse
+            candidates_compared=50_000,
+            # 0.0 so blocking_key_swap fires; >= 0.5 satisfies uniform_heavy
+            mass_above_threshold=0.0,
+            mass_in_borderline=0.6,
+        ),
     )
 
 
-def test_guarded_rules_return_none_when_lsh_locked():
-    from goldenmatch.core import autoconfig_rules as ar
+def _swap_prone_profile_uniform():
+    """Variant for ``rule_uniform_heavy_blocking`` only: it needs
+    ``mass_above_threshold >= 0.5`` (the "everything matches" signature),
+    which is mutually exclusive with ``rule_blocking_key_swap``'s
+    ``mass_above_threshold == 0.0``. Same shape otherwise."""
+    import dataclasses
+
+    base = _swap_prone_profile()
+    return dataclasses.replace(
+        base,
+        scoring=dataclasses.replace(
+            base.scoring, mass_above_threshold=0.6, mass_in_borderline=0.6
+        ),
+    )
+
+
+def _history_with_prior_decision():
+    """A RunHistory with one prior decision — ``rule_blocking_key_swap`` is the
+    iter-1+ fallback and bails when ``history.decisions`` is empty."""
+    from goldenmatch.core.autoconfig_history import (
+        HistoryEntry,
+        PolicyDecision,
+        RunHistory,
+    )
+
+    h = RunHistory()
+    h.entries.append(
+        HistoryEntry(
+            iteration=0,
+            config=_static_config(),
+            profile=_swap_prone_profile(),
+            decision=PolicyDecision(
+                rule_name="rule_blocking_field_null_heavy",
+                rationale="prior",
+                config_diff={},
+            ),
+            error=None,
+            wall_clock_ms=10,
+        )
+    )
+    return h
+
+
+def test_blocking_key_swap_fires_static_but_guard_blocks_lsh():
+    """rule_blocking_key_swap proposes a swap on a static config that trips it,
+    and the near-dup guard suppresses the identical proposal under lsh.
+
+    This is the teeth: removing ``if _near_dup_locked(current): return None``
+    flips the lsh assertion from None to a proposal.
+    """
+    from goldenmatch.core.autoconfig_rules import rule_blocking_key_swap
+
+    profile = _swap_prone_profile()
+    history = _history_with_prior_decision()
+
+    # static: the profile genuinely trips the rule -> non-None proposal.
+    static_out = rule_blocking_key_swap(profile, _static_config(), history)
+    assert static_out is not None, "profile should trip rule_blocking_key_swap on static blocking"
+    new_cfg, _decision = static_out
+    assert new_cfg.blocking is not None
+    assert new_cfg.blocking.strategy == "static"
+    assert new_cfg.blocking.keys[0].fields == ["name"]
+
+    # lsh: same profile + history, only the guard differs -> None.
+    lsh_out = rule_blocking_key_swap(profile, _lsh_config(), history)
+    assert lsh_out is None, "near-dup guard must suppress rule_blocking_key_swap under lsh"
+
+
+def test_uniform_heavy_blocking_fires_static_but_guard_blocks_lsh():
+    """rule_uniform_heavy_blocking proposes a swap on a static config that trips
+    it, and the near-dup guard suppresses the identical proposal under lsh."""
     from goldenmatch.core.autoconfig_history import RunHistory
+    from goldenmatch.core.autoconfig_rules import rule_uniform_heavy_blocking
+
+    profile = _swap_prone_profile_uniform()
+    history = RunHistory()
+
+    # static: the profile genuinely trips the rule -> non-None proposal.
+    static_out = rule_uniform_heavy_blocking(profile, _static_config(), history)
+    assert static_out is not None, "profile should trip rule_uniform_heavy_blocking on static blocking"
+    new_cfg, _decision = static_out
+    assert new_cfg.blocking is not None
+    assert new_cfg.blocking.strategy == "static"
+    assert new_cfg.blocking.keys[0].fields == ["name"]
+
+    # lsh: same profile + history, only the guard differs -> None.
+    lsh_out = rule_uniform_heavy_blocking(profile, _lsh_config(), history)
+    assert lsh_out is None, "near-dup guard must suppress rule_uniform_heavy_blocking under lsh"
+
+
+def test_guarded_rules_return_none_when_lsh_locked():
+    """Breadth check: every guarded rule returns None on an lsh config.
+
+    Kept as a regression net across all nine guarded rules. The per-rule
+    teeth (static fires, lsh blocked) live in the two tests above —
+    several rules here return None for reasons unrelated to the guard on
+    this profile, so this test alone does NOT prove the guard works.
+    """
+    from goldenmatch.core import autoconfig_rules as ar
 
     cfg = _lsh_config()
     profile = _swap_prone_profile()
-    history = RunHistory()
+    history = _history_with_prior_decision()
 
     guarded = [
         ar.rule_blocking_singleton_trap,
