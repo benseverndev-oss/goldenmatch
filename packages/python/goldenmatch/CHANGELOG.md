@@ -6,6 +6,32 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-06-19
+
+### Added
+- **Semantic blocking: an opt-in recall lever for abbreviations and aliases (#1065).**
+  New `SemanticBlockingConfig` plus a `dedupe_df(semantic_blocking=...)` flag union
+  extra candidate sources into the pipeline: an initialism/abbreviation blocking
+  transform, a business-alias canonical-form table, and an embedding ANN pass with a
+  numpy all-pairs fallback (faiss optional, `get_embedder("inhouse")` works zero-config).
+  Off by default. On the abbreviation-heavy benchmark it adds +5.3pp recall at zero
+  precision cost.
+- **`config_weaknesses`: a deterministic config-critique tool (#1064).**
+  New `core/config_critique.py::diagnose_config(df, config, result)` is a pure, offline
+  generator that explains in plain English where an auto-built matching config is risky:
+  a source/provenance column admitted as a matching signal, a per-row identifier admitted
+  as a key, oversized shared-value blocks, null-sink and low-signal matchkeys, and
+  over-merge mega-clusters. Each finding maps to one concrete fix (exclude_column, tighten
+  blocking, demote, raise_threshold) and findings are ranked high-to-low. No engine run
+  required; `phrasing="plain"` (default) and `"technical"` are both deterministic.
+
+### Security
+- **Removed a ReDoS in the initialism parenthetical regex (#1067).**
+  A leading `\s*` in the acronym parser backtracked polynomially on long whitespace runs
+  not followed by `(` (CodeQL py/polynomial-redos, high severity, introduced with the
+  semantic-blocking work in #1065). The fix drops the `\s*`; the subsequent `.split()`
+  normalizes any leftover whitespace, so it is behavior-identical and linear.
+
 ## [2.1.0] - 2026-06-18
 
 ### Added
