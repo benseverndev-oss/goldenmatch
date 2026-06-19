@@ -98,3 +98,17 @@ def test_assemble_dedups_repeated_surface_within_concept():
     # one row per (concept, surface) found -> "LSH" appears once
     assert sum(1 for r in rows if r["mention"] == "LSH") == 1
     assert rows[0]["record_id"] == 5
+
+
+def test_make_search_fn_empty_returns_callable_and_miss():
+    # make_search_fn with no roots and no repos returns a callable that
+    # returns (False, None) for any surface without raising.
+    fn = bg.make_search_fn([], [])
+    assert callable(fn)
+    found, prov = fn("Fellegi-Sunter")
+    assert found is False
+    assert prov is None
+    # Second call uses the cache path -- must not raise either.
+    found2, prov2 = fn("Fellegi-Sunter")
+    assert found2 is False
+    assert prov2 is None
