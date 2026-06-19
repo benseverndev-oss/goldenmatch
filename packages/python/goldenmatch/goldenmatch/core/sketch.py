@@ -24,7 +24,10 @@ Algorithm (all ``u64`` arithmetic is wrapping unless a modulus is given):
 """
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "base_hash",
@@ -238,17 +241,23 @@ def band_hashes_batch(
     seed: int = 0,
 ) -> list[list[int]]:
     """Per-record band hashes for many texts. Uses the native kernel when gated on."""
-    try:
-        from goldenmatch.core._native_loader import native_enabled, native_module
+    texts = list(texts)
+    # native_enabled raises under GOLDENMATCH_NATIVE=1 if the kernel is absent —
+    # let that propagate (the user forced native). Under auto/0 it returns False.
+    from goldenmatch.core._native_loader import native_enabled, native_module
 
-        if native_enabled("sketch"):
+    if native_enabled("sketch"):
+        try:
             return native_module().sketch_band_hashes_batch(
-                list(texts), mode, k, num_perms, num_bands, seed
+                texts, mode, k, num_perms, num_bands, seed
             )
-    except Exception:
-        # Any loader/native problem falls back to the pure-Python reference.
-        pass
-    return _band_hashes_batch_python(list(texts), mode, k, num_perms, num_bands, seed)
+        except AttributeError:
+            # Published wheel predates this symbol (wheel/caller skew, see #688) —
+            # legitimate fallback. A real kernel error is NOT swallowed here.
+            logger.debug(
+                "native sketch_band_hashes_batch unavailable (wheel skew); using Python fallback"
+            )
+    return _band_hashes_batch_python(texts, mode, k, num_perms, num_bands, seed)
 
 
 def signature_batch(
@@ -259,13 +268,14 @@ def signature_batch(
     seed: int = 0,
 ) -> list[list[int]]:
     """Per-record MinHash signatures for many texts. Uses the native kernel when gated on."""
-    try:
-        from goldenmatch.core._native_loader import native_enabled, native_module
+    texts = list(texts)
+    from goldenmatch.core._native_loader import native_enabled, native_module
 
-        if native_enabled("sketch"):
-            return native_module().sketch_signature_batch(
-                list(texts), mode, k, num_perms, seed
+    if native_enabled("sketch"):
+        try:
+            return native_module().sketch_signature_batch(texts, mode, k, num_perms, seed)
+        except AttributeError:
+            logger.debug(
+                "native sketch_signature_batch unavailable (wheel skew); using Python fallback"
             )
-    except Exception:
-        pass
-    return _signature_batch_python(list(texts), mode, k, num_perms, seed)
+    return _signature_batch_python(texts, mode, k, num_perms, seed)

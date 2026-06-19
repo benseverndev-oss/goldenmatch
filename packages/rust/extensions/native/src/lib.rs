@@ -13,6 +13,7 @@ mod featurize;
 mod hash;
 mod pairs;
 mod score;
+mod sketch;
 
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -45,5 +46,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(hash::record_fingerprints_batch, m)?)?;
     m.add_function(wrap_pyfunction!(hash::record_fingerprints_batch_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(bloom::bloom_clk_batch, m)?)?;
+    m.add_function(wrap_pyfunction!(sketch::sketch_band_hashes_batch, m)?)?;
+    m.add_function(wrap_pyfunction!(sketch::sketch_signature_batch, m)?)?;
     Ok(())
 }
