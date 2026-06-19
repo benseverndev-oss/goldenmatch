@@ -144,7 +144,16 @@ def _ripgrep_search(
     if not roots:
         return False, None
 
-    cmd = ["rg", "-F", "-l", "--", surface, *[str(r) for r in roots]]
+    cmd = [
+        "rg", "-F", "-l",
+        # Exclude the bench's own dir: a concept surface lives verbatim in
+        # this corpus's concepts.jsonl / records*.csv, so without this glob
+        # every variant would self-match and the drop-absent honesty signal
+        # (a made-up variant must NOT be found) collapses. We want real
+        # mentions in suite code / docs / PRs, not the bench restating itself.
+        "--glob", "!**/er-kg-bench/**",
+        "--", surface, *[str(r) for r in roots],
+    ]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True)
     except FileNotFoundError:
