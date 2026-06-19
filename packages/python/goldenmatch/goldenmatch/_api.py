@@ -163,6 +163,7 @@ class DedupeResult:
     # `result.native.hot_path_native` confirms dispatch directly instead of
     # inferring it from wall-clock. None only if telemetry capture was skipped.
     native: NativeDispatchSummary | None = None
+    llm_cost: dict | None = None  # {llm_calls, llm_tokens, llm_usd} when the LLM scorer ran; else None
 
     def to_csv(self, path: str, which: str = "golden") -> Path:
         """Write results to CSV.
@@ -622,6 +623,15 @@ def dedupe_df(
         recall_certificate=_recall_cert,
         lint_findings=_lint_findings,
         native=_native,
+        llm_cost=(
+            {
+                "llm_calls": _lc["total_calls"],
+                "llm_tokens": _lc["total_input_tokens"] + _lc["total_output_tokens"],
+                "llm_usd": _lc["total_cost_usd"],
+            }
+            if (_lc := result.get("llm_cost")) is not None
+            else None
+        ),
     )
 
 

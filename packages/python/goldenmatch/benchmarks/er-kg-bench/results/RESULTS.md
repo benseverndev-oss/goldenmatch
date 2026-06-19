@@ -6,24 +6,24 @@ Dataset: **206 records / 48 entities / 9 failure classes**. Embedder: `st`.
 
 ## Headline (pairwise, full set)
 
-| System | P | R | F1 | fid | coll&nbsp;P* | temp&nbsp;P* | ms | det-floor |
-|---|---|---|---|---|---|---|---|---|
-| goldenmatch(auto) | 0.849 | 0.374 | **0.52** | real | 0.438 | 0.4 | 605.1 | yes |
-| goldenmatch(auto+fields) | 0.786 | 0.488 | **0.602** | real | 0.471 | 0.4 | 4869.4 | yes |
-| goldenmatch(emb-ann) | 0.455 | 0.426 | **0.44** | real | 0.471 | 0.4 | 38.3 | yes |
-| mem0 | 0.875 | 0.034 | **0.066** | validated | 0.0 | 1.0 | 0.3 | yes |
-| Neo4j-KGBuilder | 0.826 | 0.315 | **0.456** | modeled | 0.448 | 0.286 | 12.2 | yes |
-| neo4j-graphrag(fuzzy) | 0.345 | 0.485 | **0.403** | modeled | 0.451 | 0.4 | 61.9 | yes |
-| LlamaIndex-PGI | 0.141 | 0.51 | **0.221** | modeled | 0.452 | 0.286 | 6.8 | yes |
-| Neo4j-KGBuilder(emb) | 0.795 | 0.335 | **0.471** | modeled | 0.448 | 0.4 | 665.2 | yes |
-| LlamaIndex-PGI(emb) | 0.149 | 0.547 | **0.234** | modeled | 0.452 | 0.4 | 653.7 | yes |
-| MS-GraphRAG | 0.875 | 0.034 | **0.066** | validated | 0.0 | 1.0 | 0.3 | yes |
-| Cognee | 0.875 | 0.034 | **0.066** | validated | 0.0 | 1.0 | 1.1 | yes |
-| neo4j-graphrag(fuzzy)* | 0.477 | 0.461 | **0.469** | real-inproc | 0.471 | 0.4 | 11.5 | yes |
-| neo4j-graphrag(exact) | 0.875 | 0.034 | **0.066** | validated | 0.0 | 1.0 | 0.2 | yes |
-| neo4j-graphrag(spacy)* | 0.699 | 0.281 | **0.401** | real-inproc | 0.455 | 0.364 | 1807.5 | yes |
-| LightRAG* | 0.875 | 0.034 | **0.066** | real-inproc | 0.0 | 1.0 | 9.3 | yes |
-| graphiti* | 0.909 | 0.049 | **0.093** | real-inproc | 0.0 | 1.0 | 7007.5 | yes |
+| System | P | R | F1 | fid | coll&nbsp;P* | temp&nbsp;P* | ms | det-floor | LLM? |
+|---|---|---|---|---|---|---|---|---|---|
+| goldenmatch(auto) | 0.849 | 0.374 | **0.52** | real | 0.438 | 0.4 | 615.4 | yes | no |
+| goldenmatch(auto+fields) | 0.786 | 0.488 | **0.602** | real | 0.471 | 0.4 | 4906.4 | yes | no |
+| goldenmatch(emb-ann) | 0.455 | 0.426 | **0.44** | real | 0.471 | 0.4 | 53.5 | yes | no |
+| mem0 | 0.875 | 0.034 | **0.066** | validated | 0.0 | 1.0 | 0.3 | yes | no |
+| Neo4j-KGBuilder | 0.826 | 0.315 | **0.456** | modeled | 0.448 | 0.286 | 12.2 | yes | no |
+| neo4j-graphrag(fuzzy) | 0.345 | 0.485 | **0.403** | modeled | 0.451 | 0.4 | 62.2 | yes | no |
+| LlamaIndex-PGI | 0.141 | 0.51 | **0.221** | modeled | 0.452 | 0.286 | 6.9 | yes | no |
+| Neo4j-KGBuilder(emb) | 0.795 | 0.335 | **0.471** | modeled | 0.448 | 0.4 | 658.3 | yes | no |
+| LlamaIndex-PGI(emb) | 0.149 | 0.547 | **0.234** | modeled | 0.452 | 0.4 | 630.8 | yes | no |
+| MS-GraphRAG | 0.875 | 0.034 | **0.066** | validated | 0.0 | 1.0 | 0.3 | yes | no |
+| Cognee | 0.875 | 0.034 | **0.066** | validated | 0.0 | 1.0 | 1.1 | yes | no |
+| neo4j-graphrag(fuzzy)* | 0.477 | 0.461 | **0.469** | real-inproc | 0.471 | 0.4 | 11.5 | yes | no |
+| neo4j-graphrag(exact) | 0.875 | 0.034 | **0.066** | validated | 0.0 | 1.0 | 0.2 | yes | no |
+| neo4j-graphrag(spacy)* | 0.699 | 0.281 | **0.401** | real-inproc | 0.455 | 0.364 | 1796.7 | yes | no |
+| LightRAG* | 0.875 | 0.034 | **0.066** | real-inproc | 0.0 | 1.0 | 9.4 | yes | no |
+| graphiti* | 0.909 | 0.049 | **0.093** | real-inproc | 0.0 | 1.0 | 7054.2 | yes | no |
 
 ## Per-class F1
 
