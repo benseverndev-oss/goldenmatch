@@ -98,24 +98,45 @@ def load_sample(path: Path) -> list[tuple[str, str, bool]]:
     return rows
 
 
-def load_qqp_hf(max_rows: int | None = None) -> list[tuple[str, str, bool]]:
-    """Download QQP via HuggingFace datasets. Used only inside the bench job."""
+def load_qqp_hf(
+    max_rows: int | None = None, dataset: str = "SetFit/qqp"
+) -> list[tuple[str, str, bool]]:
+    """Download a labeled QQP dataset via HuggingFace datasets (bench job only).
+
+    Defaults to ``SetFit/qqp`` — a PARQUET-native QQP (no loading script, no
+    external CDN), so it works on ``datasets`` 3.x (the old ``quora`` dataset
+    carries a ``quora.py`` script that 3.x refuses). Column mapping is flexible:
+    SetFit's ``text1``/``text2``/``label`` and GLUE's ``question1``/``question2``/
+    ``label`` are both handled. Rows with a hidden test label (-1) are skipped.
+    Override ``dataset`` (the ``--dataset`` flag / workflow input) to swap source.
+    """
     from datasets import load_dataset  # imported lazily; only the job installs it
 
-    ds = load_dataset("quora", split="train")
+    ds = load_dataset(dataset, split="train")
+    cols = set(ds.column_names)
+    if {"text1", "text2"} <= cols:
+        c1, c2 = "text1", "text2"
+    elif {"question1", "question2"} <= cols:
+        c1, c2 = "question1", "question2"
+    else:
+        raise ValueError(f"unrecognized QQP schema for {dataset!r}: {sorted(cols)}")
+
     rows: list[tuple[str, str, bool]] = []
-    for i, ex in enumerate(ds):
-        if max_rows is not None and i >= max_rows:
+    for ex in ds:
+        label = ex["label"]
+        if label not in (0, 1):
+            continue  # hidden test label
+        rows.append((str(ex[c1]), str(ex[c2]), label == 1))
+        if max_rows is not None and len(rows) >= max_rows:
             break
-        texts = ex["questions"]["text"]
-        rows.append((texts[0], texts[1], bool(ex["is_duplicate"])))
     return rows
 
 
-def _format_report(m: dict, cfg: dict) -> str:
+def _format_report(m: dict, cfg: dict, dataset: str) -> str:
     prec = "n/a" if m["precision_on_labeled"] is None else f"{m['precision_on_labeled']:.4f}"
     return (
         "# MinHash/LSH recall on Quora Question Pairs (#1081)\n\n"
+        f"- dataset: `{dataset}`\n"
         f"- config: `{cfg}`\n"
         f"- unique questions: {m['num_questions']:,}\n"
         f"- bands x rows: {m['num_bands']} x {cfg['num_perms'] // m['num_bands']}\n"
@@ -137,10 +158,15 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--max-rows", type=int, default=None, help="cap QQP rows (smoke runs)")
     ap.add_argument("--sample", type=Path, default=None, help="use a QQP-shaped CSV instead of HF")
+    ap.add_argument("--dataset", default="SetFit/qqp", help="HuggingFace QQP dataset id")
     ap.add_argument("--out", type=Path, default=Path("lsh_qqp_report.md"))
     args = ap.parse_args()
 
-    pairs = load_sample(args.sample) if args.sample else load_qqp_hf(args.max_rows)
+    pairs = (
+        load_sample(args.sample)
+        if args.sample
+        else load_qqp_hf(args.max_rows, dataset=args.dataset)
+    )
     cfg = {
         "mode": args.mode,
         "k": args.k,
@@ -149,7 +175,7 @@ def main() -> None:
         "seed": args.seed,
     }
     m = measure_qqp_recall(pairs, **cfg)
-    report = _format_report(m, cfg)
+    report = _format_report(m, cfg, "sample" if args.sample else args.dataset)
     args.out.write_text(report, encoding="utf-8")
     print(report)
 

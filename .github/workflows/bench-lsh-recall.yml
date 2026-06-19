@@ -36,6 +36,10 @@ on:
         description: "Cap QQP rows (blank = full corpus)"
         required: false
         default: ""
+      dataset:
+        description: "HuggingFace QQP dataset id (parquet-native; no loading script)"
+        required: false
+        default: "SetFit/qqp"
       runner:
         description: "Runner label"
         required: false
@@ -88,6 +92,7 @@ jobs:
             --k "${{ inputs.k }}" \
             --num-perms "${{ inputs.num_perms }}" \
             --threshold "${{ inputs.threshold }}" \
+            --dataset "${{ inputs.dataset }}" \
             $MAXARG \
             --out lsh_qqp_report.md
           cat lsh_qqp_report.md >> "$GITHUB_STEP_SUMMARY"
