@@ -441,6 +441,23 @@ export { runGraphER } from "./graph-er.js";
 export type { TableSchema, Relationship, GraphERResult } from "./graph-er.js";
 
 // ---------------------------------------------------------------------------
+// MinHash / LSH sketch kernel (#1081) + LSH near-dup blocker
+// ---------------------------------------------------------------------------
+
+export {
+  baseHash,
+  splitmix64,
+  shingle,
+  signature,
+  estimateJaccard,
+  bandHashes,
+  optimalBands,
+  sketchBandHashes,
+} from "./sketch.js";
+export { MinHashLSHBlocker } from "./lshBlocker.js";
+export type { MinHashLSHConfig } from "./lshBlocker.js";
+
+// ---------------------------------------------------------------------------
 // Memory (learning corrections)
 // ---------------------------------------------------------------------------
 

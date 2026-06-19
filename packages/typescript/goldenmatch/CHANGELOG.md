@@ -6,6 +6,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Added
+- **MinHash/LSH sketch kernel (#1081).** `src/core/sketch.ts` is a pure-TS,
+  edge-safe port of the Python/Rust sketch kernel (shingling → MinHash → banded
+  LSH) using `BigInt` for u64/u128 math; it reproduces the shared golden vectors
+  byte-for-byte. `src/core/lshBlocker.ts` adds `MinHashLSHBlocker` (over
+  `string[]`) for near-duplicate candidate generation: `candidatePairs(texts)`
+  returns deduplicated `(min,max)` pairs. WASM acceleration is deferred (pure-TS
+  is the default + fallback). Part of the training-data dedup tier (#1080).
+
 ## [1.0.0] — 2026-06-15
 
 **First stable release.** The API is now stable: breaking changes only at the next

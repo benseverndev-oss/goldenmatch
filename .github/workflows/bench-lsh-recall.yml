@@ -1,0 +1,101 @@
+# MinHash/LSH recall on Quora Question Pairs (#1081) -- workflow_dispatch only.
+#
+# Downloads the full QQP corpus (HuggingFace datasets), runs the LSH blocker, and
+# reports recall / reduction / precision-on-labeled vs the duplicate labels on
+# REAL text. Not a CI gate (the synthetic recall gate in test_lsh_recall.py is).
+#
+# Dispatch:
+#   gh workflow run bench-lsh-recall.yml --ref main \
+#     -f threshold=0.5 -f num_perms=128
+name: bench-lsh-recall
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch/ref to bench (has scripts/bench_lsh_recall_qqp.py)"
+        required: false
+        default: "main"
+      mode:
+        description: "Shingle mode (char|word)"
+        required: false
+        default: "word"
+      k:
+        description: "Shingle size k"
+        required: false
+        default: "2"
+      num_perms:
+        description: "MinHash permutations"
+        required: false
+        default: "128"
+      threshold:
+        description: "Jaccard threshold (drives the band/row split)"
+        required: false
+        default: "0.5"
+      max_rows:
+        description: "Cap QQP rows (blank = full corpus)"
+        required: false
+        default: ""
+      runner:
+        description: "Runner label"
+        required: false
+        default: "large-new-64GB"
+
+permissions:
+  contents: read
+
+jobs:
+  qqp:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 60
+    env:
+      GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+      # Force the native sketch kernel (built below) so full-corpus sketching is
+      # fast; "sketch" is not in the default _GATED_ON allowlist yet.
+      GOLDENMATCH_NATIVE: "1"
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+        with:
+          ref: ${{ inputs.ref }}
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: |
+            packages/rust/extensions/native
+            packages/rust/extensions/sketch-core
+
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+
+      - name: Sync workspace
+        run: uv sync --all-packages
+
+      - name: Build native extension (for sketch_band_hashes_batch)
+        run: uv run python scripts/build_native.py
+
+      - name: Run QQP recall bench
+        run: |
+          MAXARG=""
+          if [ -n "${{ inputs.max_rows }}" ]; then MAXARG="--max-rows ${{ inputs.max_rows }}"; fi
+          uv run --with datasets python scripts/bench_lsh_recall_qqp.py \
+            --mode "${{ inputs.mode }}" \
+            --k "${{ inputs.k }}" \
+            --num-perms "${{ inputs.num_perms }}" \
+            --threshold "${{ inputs.threshold }}" \
+            $MAXARG \
+            --out lsh_qqp_report.md
+          cat lsh_qqp_report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: lsh-qqp-report
+          path: lsh_qqp_report.md
+          retention-days: 30

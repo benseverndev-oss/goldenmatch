@@ -75,7 +75,7 @@ GoldenMatch ships an **optional** Rust/PyO3 kernel (`pip install goldenmatch[nat
 | `1` | Require native. Raises `RuntimeError` at the first kernel call if the wheel isn't importable. Use this on scale/bench runs so a missing wheel fails loudly instead of running 100x+ slower in Python. |
 | `0` | Force pure Python everywhere. Use for parity debugging or if you suspect a kernel bug. |
 
-**Signed-off components (run native under `auto`):** `clustering`, `block_scoring`, `pairs`, `featurize`, `hashing`. These cleared bit-/ULP-level parity against the Python reference, so flipping native on or off never changes output. `pprl_bloom` is built but **not** gated on — it only runs native under `GOLDENMATCH_NATIVE=1`.
+**Signed-off components (run native under `auto`):** `clustering`, `block_scoring`, `pairs`, `featurize`, `hashing`. These cleared bit-/ULP-level parity against the Python reference, so flipping native on or off never changes output. `pprl_bloom` and `sketch` (MinHash/LSH, #1081) are built but **not** gated on — they only run native under `GOLDENMATCH_NATIVE=1`, pending a published-wheel parity pass and a perf bench before the default-on flip. Output is byte-identical either way (golden-vector verified), so the flip is a perf decision.
 
 **When to set `=1`:** any large or benchmarked run where a silent Python fallback would be a disaster. The cost of a missing wheel is enormous (the scoring kernel is the dominant stage), and `auto` hides it.
 
@@ -91,6 +91,10 @@ GoldenMatch ships an **optional** Rust/PyO3 kernel (`pip install goldenmatch[nat
 ### `GOLDENMATCH_NATIVE_RAYON_MIN_PAIRS`
 
 Default `20000000`. Candidate-pair count per kernel call below which the native block-scorer runs in the calling thread instead of fanning out to rayon. This exists to avoid a futex-park stall observed on some 8-core Linux CPUs (issue #688). The Python caller already parallelizes across buckets, so the sequential path loses nothing on small calls. Leave it at the default unless you are reproducing #688; `0` forces rayon always, a huge value forces sequential always.
+
+### `GOLDENMATCH_NATIVE_SKETCH_RAYON_MIN_ROWS`
+
+Default `10000`. Row count below which the native MinHash/LSH batch sketcher (#1081) runs in the calling thread instead of fanning out to rayon — the same #688 calling-thread-vs-fanout guard, applied to the `sketch` kernel. Relevant only with `GOLDENMATCH_NATIVE=1` (the `sketch` component is not gated on under `auto`). `0` forces rayon always, a huge value forces sequential always.
 
 ---
 

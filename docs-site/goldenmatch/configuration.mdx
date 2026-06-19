@@ -96,6 +96,14 @@ blocking:
     loose_threshold: 0.3
     tight_threshold: 0.7
     max_canopy_size: 500
+  # MinHash/LSH (near-duplicate text blocking; set strategy: lsh to use it)
+  lsh:
+    column: description   # the text column to shingle
+    mode: word            # word- or char-grams
+    k: 2                  # shingle size
+    num_perms: 128        # MinHash signature length
+    threshold: 0.5        # similarity threshold (picks the band/row split);
+                          # or set num_bands explicitly (must divide num_perms)
 
 golden_rules:
   default_strategy: most_complete

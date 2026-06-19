@@ -87,6 +87,13 @@ except Exception:  # noqa: BLE001 - any import/load failure falls back below
 #     to _GATED_ON only after the parity battery is green on the PUBLISHED wheel
 #     (a republish must ship the new symbol -- see the goldenmatch-native wheel-
 #     skew note in the root CLAUDE.md) and a wall-clock bench confirms the lift.
+#   - "sketch" (MinHash/LSH batch sketching, #1081) is shipped native-available
+#     but deliberately NOT gated yet, same posture as "pprl_bloom": the published
+#     wheel must carry sketch_band_hashes_batch / sketch_signature_batch and a
+#     bench must confirm the lift before the default-on flip. Reachable now via
+#     GOLDENMATCH_NATIVE=1 (the native<->python parity test forces it). Output is
+#     byte-identical (deterministic, golden-vector verified), so the flip is a
+#     perf/wheel-republish decision, not an accuracy one.
 _GATED_ON: frozenset[str] = frozenset(
     {"clustering", "block_scoring", "pairs", "featurize", "hashing", "field_scoring"}
 )

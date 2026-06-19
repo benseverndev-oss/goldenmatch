@@ -376,11 +376,45 @@ class CanopyConfig(BaseModel):
     max_canopy_size: int = 500
 
 
+class LSHKeyConfig(BaseModel):
+    """MinHash/LSH blocking on a text column (#1081).
+
+    Provide either ``threshold`` (the band/row split is then chosen by
+    ``optimal_bands``) or an explicit ``num_bands`` (which must divide
+    ``num_perms``). If both are set, ``num_bands`` wins (``threshold`` is
+    ignored). Shingle ``mode`` is char- or word-grams of size ``k``.
+    """
+
+    column: str
+    mode: Literal["char", "word"] = "char"
+    k: int = 3
+    num_perms: int = 128
+    seed: int = 0
+    threshold: float | None = None
+    num_bands: int | None = None
+
+    @model_validator(mode="after")
+    def _validate(self) -> LSHKeyConfig:
+        if self.k < 1:
+            raise ValueError("LSHKeyConfig 'k' must be >= 1.")
+        if self.num_perms < 1:
+            raise ValueError("LSHKeyConfig 'num_perms' must be >= 1.")
+        if self.threshold is None and self.num_bands is None:
+            raise ValueError("LSHKeyConfig requires either 'threshold' or 'num_bands'.")
+        if self.threshold is not None and not 0.0 < self.threshold < 1.0:
+            raise ValueError("LSHKeyConfig 'threshold' must be in (0, 1).")
+        if self.num_bands is not None and (
+            self.num_bands < 1 or self.num_perms % self.num_bands != 0
+        ):
+            raise ValueError("LSHKeyConfig 'num_perms' must be divisible by 'num_bands'.")
+        return self
+
+
 class BlockingConfig(BaseModel):
     keys: list[BlockingKeyConfig] = []
     max_block_size: int = 5000
     skip_oversized: bool = False
-    strategy: Literal["static", "adaptive", "sorted_neighborhood", "multi_pass", "ann", "canopy", "ann_pairs", "learned"] = "static"
+    strategy: Literal["static", "adaptive", "sorted_neighborhood", "multi_pass", "ann", "canopy", "ann_pairs", "learned", "lsh"] = "static"
     learned_sample_size: int = 5000
     learned_min_recall: float = 0.95
     learned_min_reduction: float = 0.90
@@ -398,6 +432,7 @@ class BlockingConfig(BaseModel):
     ann_model: str = "all-MiniLM-L6-v2"
     ann_top_k: int = 20
     canopy: CanopyConfig | None = None
+    lsh: LSHKeyConfig | None = None
 
     @model_validator(mode="after")
     def _validate_keys_or_passes(self) -> BlockingConfig:
@@ -405,7 +440,8 @@ class BlockingConfig(BaseModel):
         if self.auto_suggest:
             return self  # auto_suggest discovers keys at runtime
         # Strategies that don't need keys: ann, ann_pairs, canopy, learned,
-        # sorted_neighborhood (uses sort_key instead)
+        # sorted_neighborhood (uses sort_key instead). "lsh" carries its own
+        # LSHKeyConfig and is validated positively below.
         needs_keys = self.strategy in ("static", "adaptive")
         needs_passes = self.strategy == "multi_pass"
         if needs_keys and not self.keys and not self.sub_block_keys:
@@ -416,6 +452,14 @@ class BlockingConfig(BaseModel):
             raise ValueError(
                 "BlockingConfig with strategy='multi_pass' requires 'keys' or 'passes'."
             )
+        if self.strategy == "lsh":
+            if self.lsh is None:
+                raise ValueError("BlockingConfig with strategy='lsh' requires 'lsh'.")
+            if self.keys or self.passes:
+                raise ValueError(
+                    "BlockingConfig with strategy='lsh' must not set 'keys'/'passes' "
+                    "(it uses the 'lsh' config block)."
+                )
         return self
 
 

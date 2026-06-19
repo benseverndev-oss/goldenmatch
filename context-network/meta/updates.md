@@ -2,6 +2,19 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-06-19 — MinHash/LSH sketch tier (#1081)
+- New decision [../decisions/0020-minhash-lsh-sketch-tier.md](../decisions/0020-minhash-lsh-sketch-tier.md):
+  phase 1 of the training-data dedup epic (#1080). A new pyo3-free
+  `goldenmatch-sketch-core` Rust crate (shingling → MinHash → banded LSH) exposed
+  on Python (pyo3 native + pure-Python fallback) and TypeScript, with a
+  `MinHashLSHBlocker` + `BlockingConfig(strategy="lsh")`. Cross-language byte
+  parity via a hand-rolled hash + shared golden vectors. Approach A: the kernel
+  does per-record sketching, the host language groups `(band, bucket)` into blocks.
+  The `sketch` native component ships available but not gated-on (reachable via
+  `GOLDENMATCH_NATIVE=1`), like `pprl_bloom`. Measured recall: an always-on
+  synthetic gate (recall 0.978 / reduction 0.989) plus a Quora-QQP bench job
+  (`bench-lsh-recall.yml`). Tuning docs + CHANGELOGs (py + ts) updated.
+
 ## 2026-06-18 — goldenmatch 2.1.0 released + immutable-releases publish flow
 - Released **goldenmatch 2.1.0** (PR #1060, tag `v2.1.0`). Shipped since v2.0.0:
   correlated survivorship — lock-step field groups + `anchor`/`allow_fill` (#1047/#1055),

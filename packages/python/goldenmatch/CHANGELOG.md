@@ -6,6 +6,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Added
+- **MinHash/LSH sketch tier: a throughput blocking primitive for near-duplicate
+  detection (#1081).** A new pyo3-free `goldenmatch-sketch-core` Rust crate
+  (shingling → MinHash → banded LSH) with a pure-Python reference/fallback
+  (`goldenmatch.core.sketch`) and a native binding, all byte-identical via a shared
+  golden-vector fixture. A new `MinHashLSHBlocker` and `BlockingConfig(strategy="lsh",
+  lsh=LSHKeyConfig(...))` generate near-duplicate candidates by shingling a text
+  column; records sharing ≥1 LSH bucket become candidates. Measured recall: an
+  always-on synthetic gate (recall 0.978 / candidate-reduction 0.989 at the pinned
+  config) plus a Quora Question Pairs bench job (`bench-lsh-recall.yml`). `LSHKeyConfig`
+  is re-exported from the top level. The native `sketch` kernel ships available but is
+  not yet default-on (reachable via `GOLDENMATCH_NATIVE=1`);
+  `GOLDENMATCH_NATIVE_SKETCH_RAYON_MIN_ROWS` tunes the batch rayon fan-out threshold.
+  Foundation for the training-data dedup throughput tier (#1080).
+
 ## [2.2.0] - 2026-06-19
 
 ### Added

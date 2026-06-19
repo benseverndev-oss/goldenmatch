@@ -1070,6 +1070,13 @@ def build_blocks(lf: pl.LazyFrame, config: BlockingConfig) -> list[BlockResult]:
         _emit_blocking_profile(blocks, config, lf)
         return blocks
 
+    if config.strategy == "lsh":
+        from goldenmatch.core.lsh_blocker import build_lsh_blocks
+
+        blocks = build_lsh_blocks(lf, config)
+        _emit_blocking_profile(blocks, config, lf)
+        return blocks
+
     if config.strategy == "static":
         blocks = _build_static_blocks(lf, config)
         _emit_blocking_profile(blocks, config, lf)

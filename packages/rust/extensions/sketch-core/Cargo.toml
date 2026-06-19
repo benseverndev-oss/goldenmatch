@@ -1,0 +1,26 @@
+# Standalone workspace so this pyo3-free core can be a path dependency of the
+# `native` crate (its own workspace, extension-module) without either workspace
+# claiming it. Same isolation rationale as the sibling `score-core` /
+# `fingerprint-core` crates. NO rust-toolchain.toml here on purpose: the crate
+# inherits each parent crate's toolchain when built as a path dep.
+[workspace]
+
+[package]
+name = "goldenmatch-sketch-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Ben Severn <benzsevern@gmail.com>"]
+description = "MinHash + LSH sketching kernels (shingling / signatures / banded LSH, no pyo3) shared across surfaces"
+
+[lib]
+name = "goldenmatch_sketch_core"
+
+[dependencies]
+# Same pin the `native` crate uses, for batch parallelism. The hash family is
+# hand-rolled (no hashing crate) so output is byte-identical across languages.
+rayon = "1.12.0"
+
+[dev-dependencies]
+# Only for the golden-vector integration test (reads the committed fixture).
+serde_json = "1"
