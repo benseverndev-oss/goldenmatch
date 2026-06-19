@@ -34,7 +34,7 @@ RUN apt-get update && \
 
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs > /tmp/rustup-init && \
     chmod a+x /tmp/rustup-init && \
-    /tmp/rustup-init -y --no-modify-path --profile minimal \
+    /tmp/rustup-init -y --no-modify-path --profile default \
         --default-toolchain ${SAIL_RUST_VERSION}
 ENV PATH="/root/.cargo/bin:${PATH}"
 
