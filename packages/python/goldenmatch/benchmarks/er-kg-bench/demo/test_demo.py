@@ -127,7 +127,7 @@ def test_render_is_deterministic_and_self_contained():
 
 
 import demo.agent as ag  # pyright: ignore[reportMissingImports]
-import demo.kg as kg  # noqa: F811
+import demo.kg as kg  # pyright: ignore[reportMissingImports]  # noqa: F811
 
 
 def test_answer_uses_subgraph_and_records_model():

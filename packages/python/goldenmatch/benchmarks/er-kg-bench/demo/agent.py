@@ -5,8 +5,12 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from demo.kg import Subgraph  # pyright: ignore[reportMissingImports]
+
+if TYPE_CHECKING:
+    from goldenmatch.core.llm_budget import BudgetTracker
 
 _SYSTEM = (
     "You are a knowledge-base assistant. Answer ONLY from the entities listed in "
@@ -52,7 +56,7 @@ def answer(question: str, sub: Subgraph, llm_fn: Callable[[str], LLMResponse]) -
     )
 
 
-def make_openai_llm_fn(model: str = "gpt-4o-mini", tracker=None) -> Callable[[str], LLMResponse]:
+def make_openai_llm_fn(model: str = "gpt-4o-mini", tracker: BudgetTracker | None = None) -> Callable[[str], LLMResponse]:
     """Real LLM. Import-guarded; raises if openai/key missing. `tracker` is an
     optional goldenmatch.core.llm_budget.BudgetTracker to record cost."""
     import os
