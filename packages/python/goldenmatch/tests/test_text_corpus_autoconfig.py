@@ -185,7 +185,14 @@ def test_near_dup_locked_helper():
 
 
 def test_zero_config_text_corpus_dedupe_e2e():
+    """End-to-end: a single text column dedupes near-dups with NO config.
+
+    Exercises A1 (text-corpus detection) + A2 (lsh routing) + A3 (the
+    controller leaving lsh in place) through the public ``dedupe_df`` entry
+    point.
+    """
     import goldenmatch
+    from goldenmatch.core.autoconfig import auto_configure_df
 
     base = "the annual budget report shows a significant increase in marketing spend"
     near_dups = [
@@ -201,11 +208,12 @@ def test_zero_config_text_corpus_dedupe_e2e():
         "engineers completed the suspension bridge two months ahead of the planned schedule",
     ]
     rows = near_dups + distinct
-    # Repeat the distinct rows a couple times to give the corpus some bulk;
-    # each repeat is itself an exact near-dup group, but the assertions below
-    # only check the near_dups group and that distinct sentences don't merge
-    # with the near_dups group.
     df = pl.DataFrame({"text": rows})
+
+    # The zero-config path must pick lsh blocking for this corpus.
+    cfg = auto_configure_df(df, confidence_required=False)
+    assert cfg.blocking is not None
+    assert cfg.blocking.strategy == "lsh"
 
     result = goldenmatch.dedupe_df(df, confidence_required=False)
 
