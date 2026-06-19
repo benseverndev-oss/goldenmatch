@@ -1914,6 +1914,45 @@ def _is_text_corpus(profiles: list[ColumnProfile]) -> bool:
     return not has_blockable_name
 
 
+def _embedder_available(config=None) -> bool:
+    """True when a semantic embedder is reachable for text-corpus blocking.
+
+    #1082 Phase A is lexical-only and does not consume this, but the helper is
+    in place for Phase B's semantic (SimHash/embedding) branch: it's True when
+    the in-house embedding model is importable OR the caller configured an
+    embedding provider.
+    """
+    from goldenmatch.core.embedder import inhouse_embedding_available
+    if inhouse_embedding_available():
+        return True
+    return bool(getattr(getattr(config, "embedding", None), "provider", None))
+
+
+def _auto_build_lsh_config(profiles: list[ColumnProfile]) -> BlockingConfig:
+    """Build a MinHash/LSH blocking config over the longest description column.
+
+    #1082 Phase A: word-shingle MinHash/LSH (k=2, 128 perms, Jaccard
+    threshold 0.5) on the description column with the largest average length —
+    the field most likely to carry the near-duplicate lexical signal.
+    """
+    from goldenmatch.config.schemas import LSHKeyConfig
+    descs = [p for p in profiles if p.col_type == "description"]
+    col = max(descs, key=lambda p: p.avg_len).name
+    return BlockingConfig(strategy="lsh", lsh=LSHKeyConfig(
+        column=col, mode="word", k=2, num_perms=128, threshold=0.5, seed=0))
+
+
+def _text_corpus_blocking(
+    profiles: list[ColumnProfile], df: pl.DataFrame, config=None
+) -> BlockingConfig:
+    """Pick the text-corpus blocking strategy.
+
+    #1082 Phase A is lexical only (MinHash/LSH). Phase B adds a semantic
+    (SimHash / embedding-ANN) branch here, gated on ``_embedder_available``.
+    """
+    return _auto_build_lsh_config(profiles)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -1968,39 +2007,13 @@ def build_blocking(
     effective_n_full = n_rows_full if n_rows_full is not None else df.height
     sample_n = max(df.height, 1)
 
-    # #491: ANN blocking is a FALLBACK, not a preempt. ANN is emitted ONLY
-    # when an embedding-bearing column exists, the dataset is at scale, AND no
-    # bounded exact blocking key is available. A strong exact identifier still
-    # wins over ANN when present — we evaluate the exact/safe-exact path first
-    # (below) and only fall through to ANN when that path produced no usable
-    # key, before the name/compound fallback.
-    #
-    # STRICT invariant preserved: ANN is never emitted without an embedding-
-    # bearing column. ANNBlocker needs a vector column (blocker.py raises
-    # ValueError if ``ann_column`` is unset). The embedding signal is a profile
-    # with ``col_type == "description"`` — those columns become
-    # ``record_embedding`` scorers in build_matchkeys (line ~852) and carry the
-    # vectors ANN embeds. No embedding column => never ann.
-    #
-    # ANN_MIN_ROWS default 100_000; env-overridable via
-    # GOLDENMATCH_ANN_MIN_ROWS (mirrors the env-threshold pattern used by
-    # GOLDENMATCH_AUTOCONFIG_BACKEND_THRESHOLD below).
-    _ANN_MIN_ROWS_DEFAULT = 100_000
-    _ann_raw = os.environ.get("GOLDENMATCH_ANN_MIN_ROWS")
-    if _ann_raw is not None:
-        try:
-            ann_min_rows = int(_ann_raw)
-        except ValueError:
-            logger.warning(
-                "GOLDENMATCH_ANN_MIN_ROWS=%r is not an int; ignoring and "
-                "using default %d.", _ann_raw, _ANN_MIN_ROWS_DEFAULT,
-            )
-            ann_min_rows = _ANN_MIN_ROWS_DEFAULT
-    else:
-        ann_min_rows = _ANN_MIN_ROWS_DEFAULT
-
-    _embedding_cols = [p for p in profiles if p.col_type == "description"]
-    _ann_eligible = bool(_embedding_cols) and effective_n_full >= ann_min_rows
+    # #1082: ANN is no longer AUTO-selected for description columns. A free-
+    # text corpus (description column, no blockable structured key) is routed
+    # to MinHash/LSH near-duplicate blocking via ``_is_text_corpus`` /
+    # ``_text_corpus_blocking`` below (after the exact-key path). Explicit
+    # ``ann``/``ann_pairs`` configs still work, and blocker.py's ANN sub-block
+    # fallback inside oversized blocks is unchanged. The old #491 auto-ANN
+    # path (ANN_MIN_ROWS gate + embedding-column detection here) was removed.
 
     def _projected_ratio(p: ColumnProfile) -> float:
         """Sample-corrected cardinality_ratio for the #408/#410 blocking gate.
@@ -2243,19 +2256,25 @@ def build_blocking(
             max_safe_block,
         )
 
-    # #491: ANN fallback. We only reach here when no bounded exact blocking
-    # key was found (the exact path above returns whenever it had a usable
-    # safe_exact key). If embeddings are present at scale, prefer ANN over the
-    # name/compound fallback below.
-    if _ann_eligible:
-        ann_col = _embedding_cols[0].name
+    # #1082: text-corpus fallback. We only reach here when no bounded exact
+    # blocking key was found (the exact path above returns whenever it had a
+    # usable safe_exact key). When the data reads as a free-text corpus (a
+    # description column and no blockable structured key), route to MinHash/LSH
+    # near-duplicate blocking rather than the name/compound fallback below.
+    #
+    # NOTE: this REPLACES the prior #491 ANN auto-selection for description
+    # columns. ANN is no longer auto-picked here -- a text corpus now gets
+    # lexical LSH blocking; explicit ann/ann_pairs configs still work, and the
+    # ANN sub-block fallback inside oversized blocks (blocker.py) is unchanged.
+    if _is_text_corpus(profiles):
+        text_blk = _text_corpus_blocking(profiles, df)
         logger.info(
-            "Auto-selecting ANN blocking (fallback): no bounded exact "
-            "blocking key available, embedding column %r present and "
-            "n_rows=%d >= ANN_MIN_ROWS=%d. See #491.",
-            ann_col, effective_n_full, ann_min_rows,
+            "Auto-selecting %s blocking (text corpus): no bounded exact "
+            "blocking key and no blockable structured column; routing the "
+            "description corpus to near-duplicate blocking. See #1082.",
+            text_blk.strategy,
         )
-        return BlockingConfig(strategy="ann", ann_column=ann_col)
+        return text_blk
 
     # ── Check if name-based fallback would also be oversized ──
     # #715: the name path picks ONE primary name column (pattern_names[0], else

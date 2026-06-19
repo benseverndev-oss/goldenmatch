@@ -384,13 +384,19 @@ class TestBuildBlocking:
         blocking = build_blocking(profiles, df)
         assert blocking.strategy == "multi_pass"
 
-    def test_description_only_uses_canopy(self):
+    def test_description_only_uses_lsh(self):
+        # #1082: a description-only df is a text corpus and now routes to
+        # MinHash/LSH near-duplicate blocking. (Pre-#1082 the description-only
+        # fallback was strategy="canopy"; ANN/canopy auto-selection for a text
+        # corpus was intentionally dropped.)
         profiles = [
             ColumnProfile("desc", "Utf8", "description", 0.7),
         ]
         df = pl.DataFrame({"desc": ["long text here"] * 3})
         blocking = build_blocking(profiles, df)
-        assert blocking.strategy == "canopy"
+        assert blocking.strategy == "lsh"
+        assert blocking.lsh is not None
+        assert blocking.lsh.column == "desc"
 
     def test_name_with_geo_compounds_blocking(self):
         """When geo columns exist, name-based blocking should compound with geo."""
@@ -415,9 +421,16 @@ class TestBuildBlocking:
         assert "facility_name" in primary_fields
 
     def test_name_without_geo_stays_name_only(self):
-        """Without geo columns, name-based blocking should remain name-only."""
+        """Without geo columns, name-based blocking should remain name-only.
+
+        #1082: the `name` column carries a realistic cardinality_ratio (0.8)
+        so it reads as a blockable structured key -- the data is NOT a text
+        corpus and the structured name path is unchanged. (A name column left
+        at the default cardinality_ratio=0.0 would look unblockable to the
+        #1082 text-corpus detector; real profiling never assigns a name 0.0.)
+        """
         profiles = [
-            ColumnProfile("name", "Utf8", "name", 0.9),
+            ColumnProfile("name", "Utf8", "name", 0.9, cardinality_ratio=0.8),
             ColumnProfile("description", "Utf8", "description", 0.7),
         ]
         df = pl.DataFrame({"name": ["John", "Jane", "Bob"], "description": ["a", "b", "c"]})

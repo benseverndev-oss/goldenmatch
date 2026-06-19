@@ -335,15 +335,18 @@ def _ann_df(cols: list[str]):
     return pl.DataFrame({c: ["a", "b", "c", "d"] for c in cols})
 
 
-def test_ann_blocking_when_embeddings_and_scale():
+def test_no_auto_ann_when_embeddings_and_blockable_name():
+    # #1082: ANN is no longer AUTO-selected for a description column. This
+    # profile set carries a blockable `last_name` (card 0.3 >= 0.1), so it is
+    # NOT a text corpus -- it falls through to the name-based blocking path,
+    # not ANN and not LSH. (Pre-#1082 this auto-selected strategy="ann".)
     from goldenmatch.core.autoconfig import build_blocking
 
     profiles = _profiles_with_embeddings()
     df = _ann_df(["bio", "last_name"])
     blk = build_blocking(profiles, df, n_rows_full=200_000)
-    assert blk.strategy == "ann"
-    assert blk.ann_column  # set to the embedding column name
-    assert blk.ann_column == "bio"
+    assert blk.strategy != "ann"
+    assert blk.strategy != "lsh"  # a blockable name => not a pure text corpus
 
 
 def test_no_ann_without_embeddings():
