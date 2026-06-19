@@ -51,8 +51,13 @@
         "temporal_version": 0.4,
         "cross_document_exact": 1.0
       },
-      "time_ms": 605.1,
-      "deterministic_floor": true
+      "time_ms": 615.4,
+      "deterministic_floor": true,
+      "cost": {
+        "llm_calls": 0,
+        "llm_tokens": 0,
+        "llm_usd": 0.0
+      }
     },
     {
       "name": "goldenmatch(auto+fields)",
@@ -85,8 +90,13 @@
         "temporal_version": 0.4,
         "cross_document_exact": 1.0
       },
-      "time_ms": 4869.4,
-      "deterministic_floor": true
+      "time_ms": 4906.4,
+      "deterministic_floor": true,
+      "cost": {
+        "llm_calls": 0,
+        "llm_tokens": 0,
+        "llm_usd": 0.0
+      }
     },
     {
       "name": "goldenmatch(emb-ann)",
@@ -119,8 +129,13 @@
         "temporal_version": 0.4,
         "cross_document_exact": 1.0
       },
-      "time_ms": 38.3,
-      "deterministic_floor": true
+      "time_ms": 53.5,
+      "deterministic_floor": true,
+      "cost": {
+        "llm_calls": 0,
+        "llm_tokens": 0,
+        "llm_usd": 0.0
+      }
     },
     {
       "name": "mem0",
@@ -154,7 +169,12 @@
         "cross_document_exact": 1.0
       },
       "time_ms": 0.3,
-      "deterministic_floor": true
+      "deterministic_floor": true,
+      "cost": {
+        "llm_calls": 0,
+        "llm_tokens": 0,
+        "llm_usd": 0.0
+      }
     },
     {
       "name": "Neo4j-KGBuilder",
@@ -188,7 +208,12 @@
         "cross_document_exact": 1.0
       },
       "time_ms": 12.2,
-      "deterministic_floor": true
+      "deterministic_floor": true,
+      "cost": {
+        "llm_calls": 0,
+        "llm_tokens": 0,
+        "llm_usd": 0.0
+      }
     },
     {
       "name": "neo4j-graphrag(fuzzy)",
@@ -221,8 +246,13 @@
         "temporal_version": 0.4,
         "cross_document_exact": 1.0
       },
-      "time_ms": 61.9,
-      "deterministic_floor": true
+      "time_ms": 62.2,
+      "deterministic_floor": true,
+      "cost": {
+        "llm_calls": 0,
+        "llm_tokens": 0,
+        "llm_usd": 0.0
+      }
     },
     {
       "name": "LlamaIndex-PGI",
@@ -255,8 +285,13 @@
         "temporal_version": 0.286,
         "cross_document_exact": 0.4
       },
-      "time_ms": 6.8,
-      "deterministic_floor": true
+      "time_ms": 6.9,
+      "deterministic_floor": true,
+      "cost": {
+        "llm_calls": 0,
+        "llm_tokens": 0,
+        "llm_usd": 0.0
+      }
     },
     {
       "name": "Neo4j-KGBuilder(emb)",
@@ -289,8 +324,13 @@
         "temporal_version": 0.4,
         "cross_document_exact": 1.0
       },
-      "time_ms": 665.2,
-      "deterministic_floor": true
+      "time_ms": 658.3,
+      "deterministic_floor": true,
+      "cost": {
+        "llm_calls": 0,
+        "llm_tokens": 0,
+        "llm_usd": 0.0
+      }
     },
     {
       "name": "LlamaIndex-PGI(emb)",
@@ -323,8 +363,13 @@
         "temporal_version": 0.4,
         "cross_document_exact": 0.4
       },
-      "time_ms": 653.7,
-      "deterministic_floor": true
+      "time_ms": 630.8,
+      "deterministic_floor": true,
+      "cost": {
+        "llm_calls": 0,
+        "llm_tokens": 0,
+        "llm_usd": 0.0
+      }
     },
     {
       "name": "MS-GraphRAG",
@@ -358,7 +403,12 @@
         "cross_document_exact": 1.0
       },
       "time_ms": 0.3,
-      "deterministic_floor": true
+      "deterministic_floor": true,
+      "cost": {
+        "llm_calls": 0,
+        "llm_tokens": 0,
+        "llm_usd": 0.0
+      }
     },
     {
       "name": "Cognee",
@@ -392,7 +442,12 @@
         "cross_document_exact": 1.0
       },
       "time_ms": 1.1,
-      "deterministic_floor": true
+      "deterministic_floor": true,
+      "cost": {
+        "llm_calls": 0,
+        "llm_tokens": 0,
+        "llm_usd": 0.0
+      }
     },
     {
       "name": "neo4j-graphrag(fuzzy)*",
@@ -426,7 +481,12 @@
         "cross_document_exact": 1.0
       },
       "time_ms": 11.5,
-      "deterministic_floor": true
+      "deterministic_floor": true,
+      "cost": {
+        "llm_calls": 0,
+        "llm_tokens": 0,
+        "llm_usd": 0.0
+      }
     },
     {
       "name": "neo4j-graphrag(exact)",
@@ -460,7 +520,12 @@
         "cross_document_exact": 1.0
       },
       "time_ms": 0.2,
-      "deterministic_floor": true
+      "deterministic_floor": true,
+      "cost": {
+        "llm_calls": 0,
+        "llm_tokens": 0,
+        "llm_usd": 0.0
+      }
     },
     {
       "name": "neo4j-graphrag(spacy)*",
@@ -493,8 +558,13 @@
         "temporal_version": 0.364,
         "cross_document_exact": 1.0
       },
-      "time_ms": 1807.5,
-      "deterministic_floor": true
+      "time_ms": 1796.7,
+      "deterministic_floor": true,
+      "cost": {
+        "llm_calls": 0,
+        "llm_tokens": 0,
+        "llm_usd": 0.0
+      }
     },
     {
       "name": "LightRAG*",
@@ -527,8 +597,13 @@
         "temporal_version": 1.0,
         "cross_document_exact": 1.0
       },
-      "time_ms": 9.3,
-      "deterministic_floor": true
+      "time_ms": 9.4,
+      "deterministic_floor": true,
+      "cost": {
+        "llm_calls": 0,
+        "llm_tokens": 0,
+        "llm_usd": 0.0
+      }
     },
     {
       "name": "graphiti*",
@@ -561,8 +636,13 @@
         "temporal_version": 1.0,
         "cross_document_exact": 1.0
       },
-      "time_ms": 7007.5,
-      "deterministic_floor": true
+      "time_ms": 7054.2,
+      "deterministic_floor": true,
+      "cost": {
+        "llm_calls": 0,
+        "llm_tokens": 0,
+        "llm_usd": 0.0
+      }
     }
   ]
 }
