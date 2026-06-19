@@ -1892,6 +1892,28 @@ def _scale_safe_bounded_compound(
     return None
 
 
+def _is_text_corpus(profiles: list[ColumnProfile]) -> bool:
+    """True when the data reads as a free-text corpus, not structured records.
+
+    #1082 Phase A: a text corpus is a dataset whose identity signal lives in a
+    long free-text (``description``) column with NO usable structured blocking
+    key. A high-cardinality ``name``/``multi_name`` column (cardinality_ratio
+    >= 0.1) is a usable structured blocking key, so its presence means this is
+    structured data that happens to carry a free-text field — NOT a text
+    corpus — and the normal exact/name blocking paths handle it. A low-
+    cardinality name (a label, a category) can't block usefully, so a
+    description-bearing dataset still reads as a corpus.
+    """
+    has_description = any(p.col_type == "description" for p in profiles)
+    if not has_description:
+        return False
+    has_blockable_name = any(
+        p.col_type in ("name", "multi_name") and p.cardinality_ratio >= 0.1
+        for p in profiles
+    )
+    return not has_blockable_name
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 
