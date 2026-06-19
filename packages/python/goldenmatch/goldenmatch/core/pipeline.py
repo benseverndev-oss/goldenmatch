@@ -7,7 +7,7 @@ import os
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from goldenmatch.core.cluster_pairscores import ClusterPairScores
@@ -1866,8 +1866,14 @@ def _run_dedupe_pipeline(
             )
         else:
             from goldenmatch.core.llm_scorer import llm_score_pairs
-            _scored, llm_budget_summary = llm_score_pairs(
-                all_pairs, collected_df, config=config.llm_scorer, return_budget=True
+            # return_budget=True always returns the (pairs, budget) tuple, but
+            # llm_score_pairs' return type is a union (not overloaded on the bool),
+            # so cast to the 2-tuple shape to narrow _scored + llm_budget_summary.
+            _scored, llm_budget_summary = cast(
+                "tuple[list[tuple[int, int, float]], dict | None]",
+                llm_score_pairs(
+                    all_pairs, collected_df, config=config.llm_scorer, return_budget=True
+                ),
             )
             all_pairs = _unwrap_llm_pairs(_scored)
         # Filter to scored matches only
