@@ -1011,7 +1011,12 @@ def _semantic_blocking_pairs(
     _register_initialism()
     if "alias" in sb.keys:
         try:
-            import goldenmatch.refdata  # noqa: F401  registers the refdata_* alias transforms
+            # Side-effect import (registers the refdata_* alias transforms). Use
+            # importlib so neither ruff (F401) nor pyright (reportUnusedImport) flags
+            # an "unused" import -- the value is intentionally discarded.
+            import importlib
+
+            importlib.import_module("goldenmatch.refdata")
         except Exception:
             logger.debug(
                 "semantic_blocking: refdata pack unavailable; alias source will be skipped",
