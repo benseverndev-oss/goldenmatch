@@ -58,9 +58,21 @@ auto-config build_blocking ─┤
                        └─ name / multi-pass fallback               [unchanged, for structured records]
 ```
 
-Both strategies emit `BlockResult`s through the existing blocker contract; the
-controller keeps the chosen strategy across iterations (it never swaps blocking
-strategy), so no controller change is needed.
+Both strategies emit `BlockResult`s through the existing blocker contract.
+
+**Controller guard (required).** The auto-config controller's refit rules CAN
+swap a committed blocking strategy mid-iteration —
+`autoconfig_rules.py::rule_blocking_key_swap` rewrites `blocking` to
+`strategy="static"` (`first_token` key) on a "candidates compared, nothing
+matched" profile, and `rule_cross_blocking_disagreement` (and the multi-pass
+promotions) rewrite to `strategy="multi_pass"`. A near-dup corpus at the default
+threshold can plausibly hit that "compared, nothing matched" state, so without a
+guard a committed `lsh`/`simhash` config would be silently swapped to
+`static`/`multi_pass`. **Each of those rules must early-return `None` when
+`current.blocking.strategy in {"lsh", "simhash"}`** (the near-dup strategies own
+their candidate generation and must not be re-routed by the structured-record
+refit heuristics). This is a required change, with a regression test that drives
+the controller on a text-corpus shape and asserts the committed strategy survives.
 
 ## Phase A — lexical auto-enable
 
@@ -88,13 +100,23 @@ lsh=...)`.
 
 ### Routing hook
 
-In `build_blocking()` (autoconfig.py), replace the current `description → ann`
-fallback branch with: `if _is_text_corpus(profiles): return
-_text_corpus_blocking(profiles, df)`, where `_text_corpus_blocking` picks
-semantic (Phase B) when `_embedder_available()` else lexical. Place it after the
-exact-key + bounded-compound attempts, before the name/multi-pass fallback.
-`_embedder_available()` = `inhouse_embedding_available()` or a configured
-embedding provider on the resolved config.
+In `build_blocking()` (autoconfig.py), insert `if _is_text_corpus(profiles):
+return _text_corpus_blocking(profiles, df)` after the exact-key +
+bounded-compound attempts and **in place of the existing `_ann_eligible` block**
+(autoconfig.py ~2224–2236), before the name/multi-pass fallback.
+`_text_corpus_blocking` picks semantic (Phase B) when `_embedder_available()`,
+else lexical.
+
+**Interaction with the existing ANN auto-selection (pinned):** the current
+`_ann_eligible` branch auto-selects `strategy="ann"` for a `description` column at
+`rows >= GOLDENMATCH_ANN_MIN_ROWS` (default 100K). The text-corpus branch
+**replaces it entirely** — ANN is **no longer auto-selected** for description
+columns at any row count; semantic SimHash is the new auto embedding path
+(`strategy="ann"` remains available via explicit config). This removes the
+double-routing ambiguity (text-corpus and `_ann_eligible` would otherwise both be
+eligible above 100K) and the row-count gate (LSH/SimHash auto-enables for text
+corpora regardless of size). `_embedder_available()` = `inhouse_embedding_available()`
+or a configured embedding provider on the resolved config.
 
 ## Phase B — semantic SimHash
 
@@ -132,8 +154,8 @@ seed)` generates the projection matrix **once** (same seed/dim for the batch) an
 reuses it across rows; rayon fan-out guarded by
 `GOLDENMATCH_NATIVE_SKETCH_RAYON_MIN_ROWS` (shared with #1081).
 
-`optimal_planes_bands(num_planes, threshold)` — the same S-curve helper as MinHash
-(host-side, picks `num_bands`).
+Band selection reuses the existing `optimal_bands(num_planes, threshold)` helper
+(host-side; `num_planes` plays the role of `num_perms`) — no new helper.
 
 ### Python binding + blocker
 
@@ -168,7 +190,11 @@ vectors). No TS semantic blocker (no real embedder) — documented.
 
 - **Phase A:** `_is_text_corpus` / routing unit tests — a text-corpus df →
   `strategy=="lsh"` on the right column; a structured df with a name + a
-  description → still name/multi-pass (guards the false-positive); zero-config
+  description → still name/multi-pass (guards the false-positive); a corpus that
+  also has a low-cardinality (`< 0.1`) name-classified column → still `lsh` (pins
+  the guard threshold); a **controller-survival** test driving the
+  `AutoConfigController` on a text-corpus shape that asserts the committed
+  `lsh`/`simhash` strategy is not swapped to `static`/`multi_pass`; zero-config
   end-to-end `dedupe_df` on a tiny text corpus produces sensible clusters.
 - **Phase B:** SimHash kernel golden + Rust↔Python parity (`test_native_simhash_parity.py`);
   `SimHashLSHBlocker` test with synthetic embeddings (known high-cosine pairs
@@ -191,7 +217,10 @@ example. Swept via the rollout-docs-sweep skill.
 
 **Phase A (new):** `tests/test_text_corpus_autoconfig.py`.
 **Phase A (modified):** `core/autoconfig.py` (`_is_text_corpus`, `_auto_build_lsh_config`,
-`_text_corpus_blocking`, `_embedder_available`, routing in `build_blocking`).
+`_text_corpus_blocking`, `_embedder_available`, routing in `build_blocking` — replacing
+the `_ann_eligible` block); `core/autoconfig_rules.py` (guard `rule_blocking_key_swap`,
+`rule_cross_blocking_disagreement`, and the multi-pass promotion rules to early-return
+`None` when `blocking.strategy in {"lsh","simhash"}`).
 
 **Phase B (new):** `packages/rust/extensions/sketch-core/src/simhash.rs`;
 `native/src/sketch.rs` (+ simhash fns) ; `core/simhash_blocker.py`;
@@ -213,9 +242,12 @@ example. Swept via the rollout-docs-sweep skill.
   semantic path is explicitly out (no embedder).
 - **Projection-matrix cost** → generated once per batch (not per row); rayon
   guard reused.
-- **Embedder availability fl/flapping routing** → routing reads
-  `_embedder_available()` once at config time; the chosen strategy is frozen on
-  the committed config (controller never swaps it).
+- **Embedder availability flapping routing** → routing reads
+  `_embedder_available()` once at config time.
+- **Controller swapping the near-dup strategy** → the refit rules that rewrite
+  `blocking.strategy` (`rule_blocking_key_swap`, `rule_cross_blocking_disagreement`,
+  multi-pass promotions) are guarded to skip `lsh`/`simhash` configs; a
+  controller-survival regression test pins this.
 - **Auto-config regression** → the text-corpus branch only fires on the narrow
   detected shape; the existing exact/name paths are untouched; guard with the
   structured-df test + the standard auto-config suite.
