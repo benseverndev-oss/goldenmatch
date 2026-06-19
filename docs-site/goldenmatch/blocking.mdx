@@ -169,8 +169,8 @@ Cache the learned rules to skip re-training on subsequent runs.
 text column is shingled (char- or word-grams), MinHashed into a signature, and
 the signature is split into LSH bands; records that share at least one band
 bucket become candidates. This is the set-similarity (Jaccard) path — the right
-tool for document/corpus-scale near-duplicate detection, where the other
-strategies (keyed predicates, embeddings) are a poor fit.
+tool for document/corpus-scale near-duplicate detection, where keyed-predicate
+strategies (static/multi-pass) are a poor fit.
 
 ```yaml
 blocking:
@@ -186,9 +186,21 @@ blocking:
 ```
 
 A lower `threshold` yields more bands (higher recall, more candidate pairs); a
-higher one yields fewer (more precision, fewer pairs). Empty / whitespace-only
-text rows have nothing to sketch and are skipped. The underlying kernel
-(`goldenmatch.core.sketch`) is shared byte-for-byte across Python, the optional
+higher one yields fewer (more precision, fewer pairs).
+
+<Note>
+  **LSH measures *lexical* overlap, not *semantic* similarity.** It excels at
+  near-duplicates that share words/characters (boilerplate, reposts, lightly
+  edited copies). It does **not** catch paraphrases that mean the same thing in
+  different words — on the Quora Question Pairs benchmark (semantic duplicates)
+  it recovers only ~21% of labeled pairs at `threshold: 0.5`, versus ~98% on a
+  lexical-near-duplicate set. For semantic matching, use the `ann` strategy
+  (embedding nearest-neighbor).
+</Note>
+
+Empty / whitespace-only text rows have nothing to sketch and are skipped. The
+underlying kernel (`goldenmatch.core.sketch`) is shared byte-for-byte across
+Python, the optional
 native extension, and the TypeScript port. Recall is measured by an always-on
 synthetic gate plus a Quora Question Pairs benchmark (`bench-lsh-recall.yml`).
 
