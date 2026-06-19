@@ -132,6 +132,22 @@ def _orthogonal_key(cfg: GoldenMatchConfig, df_columns: list[str]) -> BlockingKe
     return BlockingKeyConfig(fields=[candidates[0]], transforms=["lowercase"])
 
 
+def _near_dup_locked(config: GoldenMatchConfig) -> bool:
+    """True when blocking is a near-duplicate strategy the controller must not
+    swap away (#1082).
+
+    The text-corpus auto-enable path (``_is_text_corpus`` →
+    ``strategy="lsh"``) and the Phase-B SimHash path both pick a blocking
+    strategy purpose-built for free-text near-duplicate detection. The generic
+    blocking-refit rules reason about structured keys (singleton traps,
+    oversized buckets, key swaps) and would wrongly rewrite these strategies
+    into a name/identifier compound. Every blocking-rewrite rule guards on this
+    first.
+    """
+    b = getattr(config, "blocking", None)
+    return b is not None and b.strategy in ("lsh", "simhash")
+
+
 def rule_blocking_singleton_trap(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
 ) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
@@ -152,6 +168,8 @@ def rule_blocking_singleton_trap(
     first weighted matchkey, producing coarser blocks that are more likely
     to contain matching cross-source pairs.
     """
+    if _near_dup_locked(current):
+        return None
     bp = profile.blocking
     sp = profile.scoring
     # If candidates were actually compared, this is not the singleton trap.
@@ -206,6 +224,8 @@ def rule_blocking_singleton_trap(
 def rule_blocking_too_coarse(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
 ) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
+    if _near_dup_locked(current):
+        return None
     bp = profile.blocking
     n_rows = profile.data.n_rows
     if bp.n_blocks == 0 or n_rows == 0:
@@ -282,6 +302,8 @@ def rule_unimodal_scoring(
 def rule_low_reduction_ratio(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
 ) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
+    if _near_dup_locked(current):
+        return None
     bp = profile.blocking
     if bp.reduction_ratio >= 0.5:
         return None
@@ -405,6 +427,8 @@ def rule_blocking_key_swap(
 
     v1.10: vetoed when identity_score >= 0.8 AND full_pop_matchkey_hits > 0.
     """
+    if _near_dup_locked(current):
+        return None
     sp = profile.scoring
     # Only fire when fuzzy actually compared candidates AND nothing matched
     if sp.candidates_compared == 0:
@@ -522,6 +546,8 @@ def rule_uniform_heavy_blocking(
     (text or id-like, cardinality_ratio in [0.3, 0.95]) not currently
     in blocking — typically a name/email field.
     """
+    if _near_dup_locked(current):
+        return None
     bp = profile.blocking
     sp = profile.scoring
     dp = profile.data
@@ -600,6 +626,8 @@ def rule_blocking_field_null_heavy(
     Action: convert to multi-pass with a second key on a low-null
     high-cardinality field.
     """
+    if _near_dup_locked(current):
+        return None
     if current.blocking is None or not current.blocking.keys:
         return None
     # Only fire on single-pass, single-key blocking
@@ -759,6 +787,8 @@ def rule_recall_gap_suspected(
     second pass on the highest-cardinality non-null user column not already
     in blocking.
     """
+    if _near_dup_locked(current):
+        return None
     sp = profile.scoring
     if current.blocking is None:
         return None
@@ -965,6 +995,8 @@ def rule_cross_blocking_disagreement(
 
     Spec: §Components rule firing conditions.
     """
+    if _near_dup_locked(current):
+        return None
     if ctx is None:
         return None
     if len(history.entries) < 1:
@@ -1145,6 +1177,8 @@ def rule_blocking_adaptive_on_p99_outlier(
     cheap promotion lands first; the key-swap rule still fires on the
     next iteration if adaptive alone doesn't bound the tail.
     """
+    if _near_dup_locked(current):
+        return None
     if current.blocking is None or current.blocking.strategy != "static":
         return None
     if not current.blocking.keys:
