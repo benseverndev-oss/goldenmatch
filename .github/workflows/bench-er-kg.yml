@@ -125,6 +125,16 @@ jobs:
           fi
           echo "$DEMO is committed and matches a fresh run."
 
+      - name: Check demo HTML scaffolding is committed and current
+        working-directory: ${{ env.BENCH_DIR }}
+        # Gates the DETERMINISTIC scaffolding in demo.snapshot.json + demo.html
+        # (graph structure, retrieved subgraph, harness numbers) against a fresh
+        # offline run -- no key, no network. The recorded LLM transcript is NOT
+        # recomputed here; it is regenerated + uploaded by the keyed step below.
+        # Returns 0 (no-op) until demo.snapshot.json is bootstrapped, so this step
+        # is safe to land before the first committed HTML artifact exists.
+        run: "$GITHUB_WORKSPACE/.venv/bin/python demo/run_demo.py --check"
+
       - name: Run benchmark (keyed -- emb-openai + auto+llm; prose only)
         working-directory: ${{ env.BENCH_DIR }}
         env:
@@ -154,3 +164,18 @@ jobs:
         with:
           name: er-kg-results-keyed
           path: ${{ env.BENCH_DIR }}/results/
+
+      - name: Upload demo HTML + snapshot (keyed; download + commit to refresh the recorded transcript)
+        # The keyed `demo/run_demo.py` above writes demo.html + demo.snapshot.json
+        # with a REAL recorded gpt-4o-mini transcript. Bootstrap flow: download this
+        # artifact and commit the two files (mirrors the results/ download+commit).
+        # Upload-only -- never auto-committed, never gated-on-drift (the transcript is
+        # non-deterministic). `if-no-files-found: ignore` so key-less runs don't error.
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: er-kg-demo-html
+          path: |
+            ${{ env.BENCH_DIR }}/demo/demo.html
+            ${{ env.BENCH_DIR }}/demo/demo.snapshot.json
+          if-no-files-found: ignore
