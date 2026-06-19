@@ -115,22 +115,49 @@ z = z XOR (z >> 31)
 return (z, state)
 ```
 
+**Stream timing (normative):** the increment is applied **before** finalization,
+so a stream started at `state = S` produces its first value as
+`finalize(S + SM_GAMMA)` — there is **no** draw that finalizes the raw seed `S`.
+Implement this exact pseudocode; do **not** substitute a stdlib/reference
+splitmix64 that increments *after* producing a value — that variant yields a
+different, still-internally-consistent coefficient stream and silently breaks
+parity. (The golden vectors will catch a mistake, but the contract does not
+rely on them alone.)
+
 ### `shingle(text, mode, k) -> sorted unique Vec<u64>`
 
-- **char mode:** iterate Unicode scalar values (Rust `chars()`, Python `str`
-  iteration, TS `Array.from(string)` — code points, not UTF-16 units). Form each
-  contiguous window of `k` code points, re-encode the window to UTF-8 bytes,
-  `base_hash` it.
-- **word mode:** split on Unicode whitespace into tokens (drop empty); form each
-  window of `k` tokens joined by a single `0x20` space, `base_hash` the joined
-  bytes.
-- **short input:** if the sequence length `< k`, emit a single shingle:
-  `base_hash(utf8(text))` (char) / `base_hash(utf8(tokens.join(" ")))` (word).
-  Empty/whitespace-only text → empty shingle set (its signature is all
-  `u64::MAX`; it shares no LSH bucket with any non-empty record).
-- Output is the **sorted, deduplicated** set of shingle hashes (sort makes the
-  set canonical; MinHash is order-independent, but sorting keeps golden vectors
-  stable).
+Both modes first build an ordered **unit sequence**, then window it. Let `n` be
+the sequence length.
+
+- **char mode:** the unit sequence is the text's Unicode scalar values (Rust
+  `chars()`, Python iteration over `str`, TS `Array.from(string)` — code points,
+  not UTF-16 units).
+- **word mode:** the unit sequence is the text's tokens. Tokenization is
+  **maximal runs split on the exact ASCII whitespace set**
+  `{ U+0009 (tab), U+000A (LF), U+000B (VT), U+000C (FF), U+000D (CR),
+  U+0020 (space) }` — and *only* those six code points. Empty tokens are
+  dropped. **Do not** use a language's default whitespace splitter
+  (Rust `split_whitespace`, Python no-arg `str.split`, JS `\s`): they disagree on
+  Unicode whitespace (U+00A0, the `Zs` category, ZWSP, …) and one disagreement on
+  a separator changes the token set and breaks parity. (char mode does not
+  tokenize and is unaffected.)
+
+Windowing, given the unit sequence and `n`:
+
+- **`n >= k`:** for each contiguous window of `k` units, materialize the window's
+  bytes and `base_hash` them. char-mode bytes = UTF-8 of the `k` code points
+  concatenated; word-mode bytes = UTF-8 of the `k` tokens joined by a single
+  `0x20` space.
+- **`1 <= n < k` (short input):** emit exactly one shingle of the whole sequence
+  (char: UTF-8 of all code points; word: UTF-8 of all tokens joined by `0x20`).
+- **`n == 0` (empty / whitespace-only):** empty shingle set. Its signature is all
+  `u64::MAX`, so it shares no LSH bucket with any non-empty record. This `n == 0`
+  case takes precedence over the short-input branch — a whitespace-only word-mode
+  input has zero tokens and yields the empty set, never a single empty shingle.
+
+Output is the **sorted, deduplicated** set of shingle hashes (sort makes the set
+canonical; MinHash is order-independent, but sorting keeps golden vectors
+stable).
 
 ### `signature(shingles, num_perms, seed) -> Vec<u64>` (length `num_perms`)
 
@@ -142,6 +169,10 @@ for i in 0..num_perms:
     (v, state) = splitmix64(state); a[i] = (v mod (MERSENNE_P - 1)) + 1   # a[i] in [1, P-1]
     (v, state) = splitmix64(state); b[i] = v mod MERSENNE_P               # b[i] in [0, P-1]
 ```
+
+Coefficients are drawn independently and **may repeat**; do not deduplicate or
+reject collisions — a repeated `(a, b)` is valid and expected at large
+`num_perms`.
 
 Then, for each permutation, the min over shingles (compute in `u128`):
 
@@ -163,7 +194,7 @@ Empty shingle set ⇒ every `sig[i] = u64::MAX`.
 `num_perms` must be divisible by `num_bands`; `r = num_perms / num_bands`.
 
 ```
-for band_idx in 0..num_bands:
+for band_idx in 0..num_bands:                          # band_idx is a u64
     buf = le_bytes_u64(band_idx)                       # 8 bytes, little-endian
     for j in 0..r:
         buf ++= le_bytes_u64(signature[band_idx*r + j])  # 8 bytes each, little-endian
@@ -171,16 +202,40 @@ for band_idx in 0..num_bands:
 return bucket
 ```
 
-Mixing `band_idx` into the buffer prevents identical row-tuples in different
-bands from colliding into one global bucket space.
+Both `band_idx` and each signature value are serialized as exactly 8
+little-endian bytes (`u64`), so the hashed buffer is always `8*(r+1)` bytes
+regardless of target word size. Mixing `band_idx` into the buffer prevents
+identical row-tuples in different bands from colliding into one global bucket
+space.
 
-### `optimal_bands(num_perms, threshold) -> (b, r)`
+### `optimal_bands(num_perms, threshold) -> (b, r)` — host-side helper
 
-Scan divisor pairs `(b, r)` of `num_perms`; pick the pair whose S-curve
-`P_collide(s) = 1 - (1 - s^r)^b` best matches `threshold` — minimize the
-integral of false-positive weight below the threshold plus false-negative weight
-above it (the datasketch objective), approximated by a fixed-step numeric
-integral. Deterministic; no floats leak into the kernel's hash path.
+This is a **host-side configuration helper, not part of the byte-exact hash
+path** — its result is an integer `(b, r)` that is then fed to `band_hashes` as
+an explicit `num_bands`. The kernel (`band_hashes`) only ever consumes an
+explicit `num_bands`; it never calls `optimal_bands`. So `optimal_bands` does not
+need to be byte-identical with the hashes — but to keep the *blocker* consistent
+across Python and TS, it is pinned to one deterministic procedure:
+
+```
+best = None
+for b in 1..=num_perms:                  # ascending
+    if num_perms mod b != 0: continue
+    r = num_perms / b
+    fp = integral over s in [0, threshold] of (1 - (1 - s^r)^b)         # false positives
+    fn = integral over s in [threshold, 1] of (1 - (1 - (1 - s^r)^b))   # false negatives
+    err = 0.5*fp + 0.5*fn
+    if best is None or err < best.err - 1e-12: best = (b, r, err)       # strict improvement only
+return (best.b, best.r)
+```
+
+Each integral is a **fixed trapezoidal rule with 1000 equal subintervals over
+its stated range** (so `[0, threshold]` and `[threshold, 1]` each get 1000
+trapezoids). The `err < best.err - 1e-12` guard means ties keep the **smaller
+`b`** found first (the ascending scan); document this so Python and TS agree.
+Floats appear only here, choosing an integer `(b, r)` — they never enter the hash
+path. When the caller supplies an explicit `num_bands`, this helper is not
+invoked at all.
 
 ## Crate structure
 
@@ -245,8 +300,9 @@ packages/rust/extensions/sketch-core/
   — a set of `{text, mode, k, num_perms, num_bands, seed} → {shingles, signature,
   band_hashes}` cases generated from `sketch.py`, including edge cases (empty,
   whitespace-only, len < k, unicode/multibyte, repeated tokens, long text). All
-  three impls assert against this file. A regen script lives alongside; the file
-  is committed and treated as the contract.
+  three impls assert against this file. The regen script (`scripts/gen_sketch_golden.py`)
+  **imports and calls `sketch.py`** — there is exactly one reference source, never
+  a second hand-rolled generator. The file is committed and treated as the contract.
 - **Rust↔Python:** `tests/test_native_sketch_parity.py` toggles
   `GOLDENMATCH_NATIVE=0/1` (the repo's standard kernel-parity pattern) over a
   property-style sweep of random texts/params and asserts identical output.
@@ -310,8 +366,13 @@ Swept at the end via the **rollout-docs-sweep** skill against the repo's
 - `packages/rust/extensions/native/Cargo.toml` (+ path dep)
 - `packages/rust/extensions/native/src/lib.rs` (+ pyfunctions)
 - `packages/python/goldenmatch/goldenmatch/core/_native_loader.py` (+ `"sketch"` component)
-- `packages/python/goldenmatch/goldenmatch/config/schemas.py` (+ `LSHKeyConfig`, `strategy="lsh"`)
-- blocking dispatch (`blocker.py` / wherever strategy is routed)
+- `packages/python/goldenmatch/goldenmatch/config/schemas.py` — add `"lsh"` to the
+  closed `BlockingConfig.strategy` `Literal[...]`, add the `LSHKeyConfig`
+  dataclass, and extend the `_validate_keys_or_passes` validator so `"lsh"`
+  requires neither `keys` nor `passes` (it carries its own `LSHKeyConfig`) — the
+  same exemption `"ann"` already has.
+- blocking dispatch (`blocker.py` / wherever `strategy` is routed) — add the
+  `"lsh"` branch that constructs and runs `MinHashLSHBlocker`.
 - docs surfaces (rollout sweep)
 
 ## Risks & mitigations
