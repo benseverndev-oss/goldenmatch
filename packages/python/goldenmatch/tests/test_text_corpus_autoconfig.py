@@ -82,6 +82,67 @@ def test_build_blocking_routes_text_corpus_to_lsh():
     assert blk.lsh.num_perms == 128
 
 
+# ──────────────── B6: semantic SimHash routing when embedder present ─────────
+
+
+def _text_corpus_df() -> pl.DataFrame:
+    base = "the quick brown fox jumps over the lazy dog near the river bank"
+    variants = [
+        base,
+        base.replace("quick", "fast"),
+        base.replace("lazy", "sleepy"),
+        "a completely different statement about astronomy and distant galaxies far away",
+        "yet another unrelated remark concerning gardening tools and spring planting",
+        "an entirely separate note discussing maritime navigation and old sailing charts",
+    ]
+    return pl.DataFrame({"body": variants * 5})
+
+
+def test_text_corpus_routes_to_simhash_when_embedder_available(monkeypatch):
+    from goldenmatch.core import autoconfig
+    from goldenmatch.core.autoconfig import build_blocking, profile_columns
+
+    monkeypatch.setattr(autoconfig, "_embedder_available", lambda config=None: True)
+
+    df = _text_corpus_df()
+    blk = build_blocking(profile_columns(df), df)
+    assert blk.strategy == "simhash"
+    assert blk.simhash is not None
+    assert blk.simhash.column == "body"  # the (only) description column
+    assert blk.simhash.num_planes == 256
+    assert blk.simhash.num_bands == 32
+    assert blk.simhash.seed == 0
+
+
+def test_text_corpus_picks_longest_description_for_simhash(monkeypatch):
+    from goldenmatch.core import autoconfig
+    from goldenmatch.core.autoconfig import _text_corpus_blocking
+
+    monkeypatch.setattr(autoconfig, "_embedder_available", lambda config=None: True)
+
+    short = _desc("short", avg_len=12.0)
+    long = _desc("long", avg_len=140.0)
+    blk = _text_corpus_blocking([short, long], pl.DataFrame())
+    assert blk.strategy == "simhash"
+    assert blk.simhash is not None
+    assert blk.simhash.column == "long"  # the longest-avg-len description wins
+
+
+def test_text_corpus_routes_to_lsh_when_no_embedder(monkeypatch):
+    # Regression of Phase A: without a reachable embedder, the corpus falls back
+    # to lexical MinHash/LSH.
+    from goldenmatch.core import autoconfig
+    from goldenmatch.core.autoconfig import build_blocking, profile_columns
+
+    monkeypatch.setattr(autoconfig, "_embedder_available", lambda config=None: False)
+
+    df = _text_corpus_df()
+    blk = build_blocking(profile_columns(df), df)
+    assert blk.strategy == "lsh"
+    assert blk.lsh is not None
+    assert blk.lsh.column == "body"
+
+
 # ───────────────────────── A3: controller guard ─────────────────────────────
 
 
