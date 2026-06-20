@@ -19,9 +19,13 @@ on:
         required: false
         default: "fineweb"
       scales:
+        # 10k/50k base (=14k/70k after injected dups) is the validated working
+        # range. 100k+ currently wedges the survivorship/golden stage (O(N)
+        # iter_rows) — push the ceiling up via a throughput-skips-golden follow-up
+        # before raising this default.
         description: "Space-separated doc counts to sweep"
         required: false
-        default: "100000 1000000"
+        default: "10000 50000"
       engines:
         description: "Engines (space-separated): goldenmatch datatrove"
         required: false
