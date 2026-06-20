@@ -23,6 +23,7 @@ if str(_BENCH_ROOT) not in sys.path:
 
 from erkgbench import metrics  # noqa: E402
 from erkgbench.adapters import (  # noqa: E402
+    GoldenGraphAdapter,
     GoldenMatchAdapter,
     GoldenMatchEmbAnnAdapter,
     Record,
@@ -123,6 +124,9 @@ def run(embedder_kind: str | None, dataset_cfg: dict | None = None) -> dict:
         # Embedding-ANN candidate generation via goldenmatch's offline (no-key,
         # no-torch) in-house embedder -- the lever the LLM experiment pointed at.
         GoldenMatchEmbAnnAdapter(),
+        # The goldengraph KG engine's resolution step (Provided mode = goldenmatch
+        # dedupe_df on name+type) -- the native engine in the ER-quality table.
+        GoldenGraphAdapter(),
     ]
     # The semantic-class attackers only activate with a key. Skip rather than
     # fake it; both stay out of the committed table (recorded as prose), since
