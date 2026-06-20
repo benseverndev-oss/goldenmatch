@@ -83,6 +83,14 @@ def test_bad_resolution_raises():
         gg.build_graph(MENTIONS, EDGES, "not-a-valid-resolution")
 
 
+def test_communities_group_connected_entities():
+    # resolved differentiator graph: 0(Apple)->1(Jobs), 0->2(iPhone) all connected
+    g = gg.build_graph(MENTIONS, EDGES, {0: 0, 1: 0, 2: 1, 3: 2})
+    comms = g.communities()
+    assert len(comms) == 1
+    assert sorted(comms[0]["members"]) == [0, 1, 2]
+
+
 # ---- SP4a: PyStore (durable bi-temporal store) ----------------------------
 
 import json

@@ -15,6 +15,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
 use goldengraph_core::build_graph as core_build_graph;
+use goldengraph_core::community::communities as core_communities;
 use goldengraph_core::model::{Edge, EntityId, EntityNode, Graph, Mention, MentionEdge, MentionId};
 use goldengraph_core::resolve::{NativeConfig, ResolutionMode};
 use goldengraph_core::retrieve::{neighborhood, seeds_by_name as core_seeds_by_name};
@@ -45,6 +46,20 @@ impl PyGraph {
     /// not just the canonical the resolver happened to pick).
     fn seeds_by_name(&self, name: &str) -> Vec<EntityId> {
         core_seeds_by_name(&self.inner, name)
+    }
+
+    /// Community partition of this graph (SP3 label propagation), as
+    /// `[{ "id": int, "members": [int] }]`. A "global" query = `communities()`
+    /// then `query(members, hops)` per community.
+    fn communities<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
+        let out = PyList::empty(py);
+        for c in core_communities(&self.inner) {
+            let d = PyDict::new(py);
+            d.set_item("id", c.id)?;
+            d.set_item("members", PyList::new(py, &c.members)?)?;
+            out.append(d)?;
+        }
+        Ok(out)
     }
 }
 
@@ -79,7 +94,9 @@ impl PyStore {
 
     /// Bi-temporal slice as a queryable `PyGraph` (valid time × transaction time).
     fn as_of(&self, valid_t: i64, tx_t: i64) -> PyGraph {
-        PyGraph { inner: self.inner.as_of(valid_t, tx_t) }
+        PyGraph {
+            inner: self.inner.as_of(valid_t, tx_t),
+        }
     }
 
     /// Canonical JSON snapshot (round-trips via the constructor).
