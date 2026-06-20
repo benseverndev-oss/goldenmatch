@@ -71,32 +71,10 @@ class GoldenMatchResolver(BasePropertySimilarityResolver):
         """Stub: goldenmatch replaces the pairwise similarity step entirely.
 
         This method is abstract on the base class and must be implemented, but
-        GoldenMatchResolver's run() calls goldenmatch (via _build_merge_sets) for
+        GoldenMatchResolver's run() calls goldenmatch (via resolve_records) for
         the clustering decision and never calls compute_similarity().
         """
         return 0.0  # never called on the goldenmatch path
-
-    def _build_merge_sets(
-        self, records: list[dict[str, str]]
-    ) -> list[set[str]]:
-        """Convert Neo4j entity records to goldenmatch-backed merge sets.
-
-        Args:
-            records: list of dicts, each with 'id', 'name', and 'label' keys
-                     (matches the shape the base run() builds from the Cypher
-                     query result: {id: elementId(entity), name: entity.name, ...}).
-
-        Returns:
-            list of sets of Neo4j elementIds that goldenmatch decided should merge,
-            in the same shape _consolidate_sets() would return. Only multi-member
-            sets are returned.
-        """
-        items = [
-            (rec["id"], rec.get("name", ""), rec.get("label", ""))
-            for rec in records
-        ]
-        groups = resolve_records(items)
-        return [set(g) for g in groups]
 
     async def run(self) -> ResolutionStats:  # type: ignore[override]
         """Override: replace pairwise similarity with goldenmatch clustering.
@@ -104,7 +82,7 @@ class GoldenMatchResolver(BasePropertySimilarityResolver):
         Replicates the base run() structure (same Cypher to fetch entities, same
         APOC merge Cypher, same ResolutionStats return) but replaces step 2
         (compute_similarity + _consolidate_sets) with goldenmatch's zero-config
-        pipeline (_build_merge_sets -> resolve_records -> core.resolve_entities).
+        pipeline (resolve_records -> core.resolve_entities).
         """
         # Step 1: Query Neo4j for candidate entities (same as base).
         match_query = "MATCH (entity:__Entity__)"
