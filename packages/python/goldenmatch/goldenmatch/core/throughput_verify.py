@@ -137,3 +137,47 @@ def build_posture(*, metric: str, recall_target: float, similarity: float,
         reduction_ratio=candidate_pairs / total,
         candidate_pairs=candidate_pairs, verified_pairs=verified_pairs, notes=notes,
     )
+
+
+# ---------------------------------------------------------------------------
+# Task 6: score_sketch_pairs (sketch-distance verifier)
+# ---------------------------------------------------------------------------
+
+import numpy as np
+from goldenmatch.core import sketch
+
+
+def score_sketch_pairs(candidate_pairs, *, metric, threshold,
+                       texts=None, embeddings=None,
+                       mode="char", k=3, num_perms=128, seed=0):
+    """Confirm candidate pairs by sketch distance. Returns [(id_a, id_b, score)]
+    canonical (a<b), keeping pairs with score >= threshold.
+
+    Lexical (jaccard): MinHash signatures via signature_batch(texts, ...) computed
+    ONCE, then estimate_jaccard per pair. Semantic (cosine): cosine over the
+    supplied ``embeddings`` (reused from the pipeline; never re-embedded here).
+    """
+    out: list[tuple[int, int, float]] = []
+    if metric == "jaccard":
+        if texts is None:
+            raise ValueError("jaccard verify requires texts=")
+        sigs = sketch.signature_batch(texts, mode=mode, k=k, num_perms=num_perms, seed=seed)
+        for a, b in candidate_pairs:
+            a, b = (a, b) if a < b else (b, a)
+            score = sketch.estimate_jaccard(sigs[a], sigs[b])
+            if score >= threshold:
+                out.append((a, b, float(score)))
+    elif metric == "cosine":
+        if embeddings is None:
+            raise ValueError("cosine verify requires embeddings=")
+        emb = np.asarray(embeddings, dtype=np.float64)
+        norms = np.linalg.norm(emb, axis=1)
+        for a, b in candidate_pairs:
+            a, b = (a, b) if a < b else (b, a)
+            denom = norms[a] * norms[b]
+            score = float(emb[a] @ emb[b] / denom) if denom > 0 else 0.0
+            if score >= threshold:
+                out.append((a, b, score))
+    else:
+        raise ValueError(f"unknown metric {metric!r}")
+    return out
