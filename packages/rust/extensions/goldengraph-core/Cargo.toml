@@ -1,0 +1,35 @@
+# goldengraph-core -- pyo3-free knowledge-graph engine (graph model + typed
+# edges + dual-path resolution + 1-2 hop retrieval). The compute core for
+# goldengraph; mirrors the `score-core` / `graph-core` / `goldencheck-core`
+# pyo3-free pattern. All compute over plain slices, no Python, no Arrow, no LLM.
+# The pyo3 binding lives in the sibling `goldengraph-native` crate, which
+# path-depends on this one.
+#
+# Standalone `[workspace]` (empty) so this core can be a path dependency of
+# `goldengraph-native` (its own extension-module workspace) without the parent
+# `bridge` workspace claiming it -- same isolation rationale as score-core /
+# graph-core (its own kernel deps).
+[workspace]
+
+[package]
+name = "goldengraph-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Ben Severn <benzsevern@gmail.com>"]
+description = "Pyo3-free knowledge-graph engine: resolution-merged entity graph + neighborhood retrieval over extracted mentions/relationships"
+
+[lib]
+name = "goldengraph_core"
+
+[dependencies]
+# Canonical string scorers (jaro_winkler / levenshtein / token_sort) reused by
+# the native explicit-config resolver -- the same source of truth the native ext
+# and FFI UDFs link, so resolution scoring is identical across surfaces.
+goldenmatch-score-core = { path = "../score-core" }
+# Connected-components kernel reused to turn scored mention-pairs into clusters.
+goldenmatch-graph-core = { path = "../graph-core" }
+
+[dev-dependencies]
+# JSON golden-vector fixtures (differentiator + cross-binding parity).
+serde_json = "1"
