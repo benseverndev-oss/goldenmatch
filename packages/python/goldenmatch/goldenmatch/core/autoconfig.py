@@ -3072,6 +3072,12 @@ def auto_configure_df(
     # caller's value win over the controller's df.height default).
     if n_rows_full is not None:
         v0_kw["n_rows_full"] = n_rows_full
+    # Resolve throughput config now so the controller can thread it through
+    # the plan-build/apply_to site (Task 9). None when throughput is not requested.
+    _resolved_tp_cfg = None
+    if throughput is not None:
+        from goldenmatch.core.throughput_verify import resolve_throughput_config as _rtc
+        _resolved_tp_cfg = _rtc(throughput, None)
     config, profile, history = controller.run(
         df,
         reference=reference,
@@ -3080,6 +3086,7 @@ def auto_configure_df(
         confidence_required=confidence_required,
         allow_red_config=allow_red_config,
         planning_effort=effort,
+        throughput=_resolved_tp_cfg,
     )
     # Surface the resolved tier on the committed config for observability
     # (telemetry, YAML round-trip). No-op for the default "normal".
@@ -3095,18 +3102,33 @@ def auto_configure_df(
 
     _LAST_CONTROLLER_RUN.set((profile, history))
 
-    # Throughput tier (#1083): when throughput is requested, override blocking
-    # with sketch-based (LSH/SimHash) blocking on the longest text column.
-    # Orthogonal to the controller backend selection.
-    if throughput is not None:
-        from goldenmatch.core.throughput_verify import resolve_throughput_config
-        _tp_cfg = resolve_throughput_config(throughput, config)
-        if _tp_cfg is not None and _tp_cfg.enabled:
-            import polars as _pl
-            _tp_profiles = profile_columns(df) if isinstance(df, _pl.DataFrame) else []
-            _tp_blk = _throughput_blocking(_tp_profiles, config)
-            config.blocking = _tp_blk
-            config.throughput = _tp_cfg
+    # Throughput tier (#1083): ensure blocking + _throughput_plan are set on the
+    # returned config. The controller handles this when it reaches the plan-apply
+    # site; for early-return paths (1-column, 1-row) we do it here.
+    if _resolved_tp_cfg is not None and _resolved_tp_cfg.enabled:
+        import polars as _pl_tp2
+        _tp_profiles2 = profile_columns(df) if isinstance(df, _pl_tp2.DataFrame) else []
+        if _tp_profiles2:
+            try:
+                _tp_blk2 = _throughput_blocking(_tp_profiles2, config)
+                config.blocking = _tp_blk2
+                if hasattr(_tp_blk2, "lsh") and _tp_blk2.lsh is not None:
+                    _tp_metric2, _tp_siglen2 = "jaccard", _tp_blk2.lsh.num_perms
+                elif hasattr(_tp_blk2, "simhash") and _tp_blk2.simhash is not None:
+                    _tp_metric2, _tp_siglen2 = "cosine", _tp_blk2.simhash.num_planes
+                else:
+                    _tp_metric2, _tp_siglen2 = "jaccard", 128
+                from goldenmatch.core.execution_plan import ExecutionPlan as _EP
+                from goldenmatch.core.autoconfig_planner import apply_throughput_overlay as _ato
+                _base_plan2 = config._throughput_plan or _EP()
+                if getattr(_base_plan2, "verify_mode", "full") == "full":
+                    config._throughput_plan = _ato(
+                        _base_plan2, _resolved_tp_cfg,
+                        metric=_tp_metric2, signature_len=_tp_siglen2,
+                    )
+            except Exception:
+                pass
+        config.throughput = _resolved_tp_cfg
 
     # F1: optional field-group detection (default OFF, fail-open).
     # Runs after the controller has committed the config so explicit

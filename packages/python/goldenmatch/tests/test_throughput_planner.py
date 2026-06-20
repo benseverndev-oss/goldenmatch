@@ -39,3 +39,14 @@ def test_apply_to_writes_throughput_plan_onto_config():
     cfg = GoldenMatchConfig(throughput=ThroughputConfig(enabled=True))
     plan.apply_to(cfg)
     assert cfg._throughput_plan is plan and cfg._throughput_plan.verify_mode == "sketch_distance"
+
+def test_controller_emits_sketch_distance_plan_for_throughput(monkeypatch):
+    import polars as pl
+    from goldenmatch.core import autoconfig
+    monkeypatch.setattr(autoconfig, "_embedder_available", lambda config=None: False)
+    df = pl.DataFrame({"body": ["the cat sat", "the cat sat on the mat", "a different sentence"] * 20})
+    cfg = autoconfig.auto_configure_df(df, throughput=0.95)
+    plan = getattr(cfg, "_throughput_plan", None)
+    assert plan is not None and plan.verify_mode == "sketch_distance"
+    assert plan.sketch_similarity == 0.8
+    assert plan.sketch_bands * plan.sketch_rows == cfg.blocking.lsh.num_perms
