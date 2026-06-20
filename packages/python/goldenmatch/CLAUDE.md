@@ -282,7 +282,7 @@ Hosted on Railway, registered on Smithery:
 - **v1.12 ship target**: PRIMARY target met (DQbench composite 91.04 >= 75). T3 F1 85.5% (target >= 70%). T1 89.3% (floor 88.9%), T2 97.5% (floor 69.0%). Benchmark deltas vs v1.11: T1 89.3%→89.3% (flat), T2 97.5% (was 69.0%; +28.5 pp), T3 85.5% (was 53.8%; +31.7 pp). Composite 66.99 → 91.04 (+24.05 pp). Path Y NE on exact matchkeys directly filters adversarial collision pairs at the `exact_email` matchkey level, resolving the v1.11 root cause.
 
 ## Gotchas
-- `docs/superpowers/` is gitignored — specs and plans are local-only; do NOT `git add` them
+- Design specs + implementation plans live at the **repo-root** `docs/superpowers/{specs,plans}/`, which IS git-tracked — commit them with a plain `git add` (no `-f`; 80+ are committed, `git check-ignore` is negative). Only the per-package `packages/python/<pkg>/docs/superpowers/` dirs are gitignored local scratch (each package's `.gitignore`).
 - `tests/benchmarks/datasets/` is gitignored — tests reading those files must `pytest.skip` when absent OR be marked `@pytest.mark.benchmark` and excluded from default CI via `--ignore`
 - `publish-npm.yml` runs the full vitest suite pre-publish — any flake blocks the release; can't retry, must fix + bump patch version + new tag
 - `gh run watch <run-id> --exit-status` blocks until a workflow completes — useful for confirming publish success before moving on

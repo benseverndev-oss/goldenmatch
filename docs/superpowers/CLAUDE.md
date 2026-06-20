@@ -1,8 +1,8 @@
 # superpowers workflow notes
 
-## Path is gitignored
+## Path is tracked (repo-root), gitignored (per-package)
 
-`docs/superpowers/specs/` and `docs/superpowers/plans/` are matched by `.gitignore`. Use `git add -f <file>` to commit them.
+The **repo-root** `docs/superpowers/specs/` and `docs/superpowers/plans/` are git-TRACKED — commit specs and plans here with a plain `git add` (no `-f`; the root `.gitignore` has no rule for them; `git check-ignore` is negative; 80+ specs/plans are committed). Only the per-package `packages/python/<pkg>/docs/superpowers/` dirs are gitignored (each package's own `.gitignore`) and stay local-only scratch.
 
 ## Spec → plan → execute, in order
 
