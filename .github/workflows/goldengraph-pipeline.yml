@@ -1,0 +1,44 @@
+# goldengraph (Python pipeline) build signal — SP4b. The `goldengraph` package
+# is STANDALONE (excluded from the uv workspace, like goldenmatch-kg): it pulls
+# goldenmatch + the goldengraph-native engine wheel (built here via maturin), so
+# it is installed + tested on its own lane, NOT in the ci.yml matrix.
+#
+# Informational lane (NOT ci-required). It is the only real-execution signal for
+# the pipeline, so confirm it green before arming auto-merge. Resolution accuracy
+# is goldenmatch's concern (+ SP6 eval); these tests verify extraction parsing,
+# the resolve->store marshaling (injected resolver), and the goldenmatch-backed
+# resolve on exact duplicates.
+name: goldengraph-pipeline
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "packages/python/goldengraph/**"
+      - "packages/rust/extensions/goldengraph-native/**"
+      - "packages/rust/extensions/goldengraph-core/**"
+      - ".github/workflows/goldengraph-pipeline.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Install goldenmatch + build/install the goldengraph-native engine wheel
+        run: |
+          python -m pip install --upgrade pip maturin pytest goldenmatch
+          maturin build --release \
+            -m packages/rust/extensions/goldengraph-native/Cargo.toml --out dist
+          python -m pip install dist/*.whl
+      - name: Install goldengraph (standalone) + run the pipeline tests
+        run: |
+          python -m pip install --no-deps -e packages/python/goldengraph
+          python -m pytest packages/python/goldengraph/tests -q

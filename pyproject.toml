@@ -11,7 +11,10 @@ members = ["packages/python/*"]
 # trees that would enter the main uv.lock and risk breaking `uv sync --all-packages`
 # repo-wide (the documented goldenmatch[native] footgun). It is a standalone package
 # built + tested by its own lane (.github/workflows/goldenmatch-kg.yml).
-exclude = ["packages/python/goldenmatch-kg"]
+# goldengraph (SP4b) is EXCLUDED for the same reasons: it depends on the
+# goldengraph-native engine wheel (maturin-built) + optional LLM extras, so it is
+# standalone, built + tested by .github/workflows/goldengraph-pipeline.yml.
+exclude = ["packages/python/goldenmatch-kg", "packages/python/goldengraph"]
 
 [tool.uv.sources]
 goldenmatch = { workspace = true }
