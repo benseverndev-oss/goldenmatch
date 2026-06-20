@@ -15,8 +15,8 @@ throughput path the fuzzy/FS scorer is bypassed, so `scored_pair_count` is 0 (sp
 from __future__ import annotations
 
 import argparse
-import json
 import faulthandler
+import json
 import os
 import time
 from pathlib import Path
