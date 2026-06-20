@@ -16,9 +16,12 @@ from .llm import LLMClient
 
 _PROMPT = """You extract a knowledge graph from text. Return STRICT JSON only, \
 no prose, in exactly this shape:
-{{"entities": [{{"name": "<surface name>", "type": "<coarse type>"}}], \
+{{"entities": [{{"name": "<surface name>", "type": "<coarse type>", \
+"description": "<one short factual phrase describing the entity>"}}], \
 "relationships": [{{"subj": <entity index>, "predicate": "<verb phrase>", \
 "obj": <entity index>}}]}}
+The `description` is a brief, source-grounded characterization (e.g. "American \
+technology corporation") that disambiguates the entity for resolution. \
 `subj`/`obj` are 0-based indices into `entities`. Text:
 {text}"""
 
@@ -27,6 +30,7 @@ no prose, in exactly this shape:
 class Mention:
     name: str
     typ: str
+    context: str = ""  # short description; sharpens resolution (optional, default "")
 
 
 @dataclass
@@ -55,7 +59,11 @@ def _strip_fence(raw: str) -> str:
 def parse_extraction(raw: str) -> Extraction:
     data = json.loads(_strip_fence(raw))
     mentions = [
-        Mention(name=str(e["name"]), typ=str(e.get("type", e.get("typ", ""))))
+        Mention(
+            name=str(e["name"]),
+            typ=str(e.get("type", e.get("typ", ""))),
+            context=str(e.get("description", e.get("context", ""))),
+        )
         for e in data.get("entities", [])
     ]
     n = len(mentions)
