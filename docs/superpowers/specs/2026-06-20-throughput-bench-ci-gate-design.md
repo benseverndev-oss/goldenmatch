@@ -66,8 +66,8 @@ scripts/bench_corpus_dedup/
   perf_gate_baseline.json  # committed baseline (snapshot-test style)
   data/offline_corpus.jsonl  # vendored public-domain slice (gate fixture, network-free)
   README.md
-.github/workflows/bench-corpus-dedup.yml   # dispatch headline bench (64 GB)
-.github/workflows/ci.yml                    # + throughput-gate job (ubuntu-latest)
+.github/workflows/bench-corpus-dedup.yml   # dispatch headline bench (64 GB) [new]
+.github/workflows/ci.yml                    # + throughput-gate job (ubuntu-latest) [modified]
 ```
 
 ### 1. Corpus adapters — `corpora.py`
@@ -142,18 +142,26 @@ functions of the input, not of runner speed:
 
 - `candidate_pairs` — pairs the sketch blocking emits to verify (the dominant cost driver).
 - `reduction_ratio` — from the blocking profile.
-- `measured_recall` — pairwise recall on the injected ground-truth dups.
+- `measured_recall` — pairwise recall on the injected ground-truth dups, computed by
+  `evaluate.py` against the truth file. **This is not** `throughput_posture.expected_recall`:
+  the posture is the tier's analytic LSH-theoretic recall, whereas the gate's `measured_recall`
+  is the empirical pairwise recall against known injected dups. Different quantities, different
+  code paths — the gate wires `evaluate.py`, not the posture.
 - (optional) `sketch_ops` — MinHash/sketch computations.
 
-These are read from `DedupeResult` / the controller telemetry `throughput` block / the
-blocking profile. If a counter isn't already surfaced by #1083, the runner adds a thin,
-output-invariant instrumentation hook (env-gated, like `GOLDENMATCH_BUCKET_DEBUG`).
+`candidate_pairs` / `reduction_ratio` are intended to come from `DedupeResult` / the
+blocking profile / the controller telemetry `throughput` block. **On the #1083 branch these
+are not confirmed to be exposed as machine-readable counters** (`throughput_posture` surfaces
+as a `dict`, and the telemetry `throughput` block was not positively confirmed), so the plan
+should budget for the instrumentation path: the runner adds a thin, output-invariant,
+env-gated hook (like `GOLDENMATCH_BUCKET_DEBUG`) that emits the counters — rather than assume
+they are already readable.
 
-Pass/fail vs a committed `perf_gate_baseline.json` with tolerance:
+Pass/fail vs a committed `perf_gate_baseline.json` with tolerance (defaults; the plan may tune):
 
 - `candidate_pairs` ≤ baseline × (1 + 0.15) → a blocking change that blows up the pair count fails.
-- `measured_recall` ≥ baseline − ε → a change that quietly drops recall fails.
-- `reduction_ratio` ≥ baseline − ε.
+- `measured_recall` ≥ baseline − ε, ε = 0.01 → a change that quietly drops recall fails.
+- `reduction_ratio` ≥ baseline − ε, ε = 0.01.
 - A **generous** wall ceiling (e.g. 5× expected) as a coarse backstop only — never the primary signal.
 
 `--update-baseline` regenerates the JSON; intentional changes commit a new baseline, exactly
