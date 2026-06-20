@@ -7,6 +7,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Added
+- **Corpus-dedup throughput benchmark + per-PR perf gate (#1086, epic #1080).**
+  A new `bench-corpus-dedup` harness (`scripts/bench_corpus_dedup/` +
+  `.github/workflows/bench-corpus-dedup.yml`) measures the throughput tier (#1083)
+  end-to-end against a real public corpus (FineWeb), with injected ground-truth
+  near-dups so recall is measurable. Measured: **~1,192 docs/sec · 3.6 MB/sec on a
+  70k-doc FineWeb slice at ~0.43 LSH recall** (end-to-end docs/sec is auto-config-
+  bound at this scale; the raw sketch dedup is ≈7,800 docs/sec). A deterministic
+  **`throughput-gate`** CI job (`scripts/bench_corpus_dedup/throughput_perf_gate.py`)
+  guards regression on candidate-pairs / reduction-ratio / measured-recall vs a
+  committed baseline, on a vendored offline corpus (no network → won't flake on
+  shared runners). datatrove head-to-head and 100k+ scale (a survivorship/golden
+  `iter_rows` ceiling) are tracked follow-ups. Bringing the tier up to real corpus
+  scale also fixed three at-scale bugs the original 10-row unit tests missed: the
+  GoldenCheck O(N²) quality scan running on document text, web text mis-classified
+  as a non-text column (the tier refused), and the ≥100k RED-config refusal.
 - **Opt-in throughput tier: sketch-then-verify corpus dedup (#1083, epic #1080).**
   `dedupe_df(df, throughput=0.95)` (or `True`, or a `ThroughputConfig`) blocks the
   longest text column with MinHash/LSH (`lsh`) or SimHash (`simhash`, when an embedder

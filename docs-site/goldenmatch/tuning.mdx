@@ -389,11 +389,42 @@ honestly report:
 the curve is tighter; for pairs below it, collision probability drops rapidly.
 This is an honest bound, not a precision measurement.
 
+### Measured throughput (benchmark)
+
+The `bench-corpus-dedup` harness (`scripts/bench_corpus_dedup/`,
+`.github/workflows/bench-corpus-dedup.yml`) measures the tier end-to-end against a
+real public corpus, with injected ground-truth near-dups so recall is measurable.
+On a slice of **FineWeb** (web crawl), the zero-config `dedupe_df(df, throughput=…)`
+path measured:
+
+| docs | docs/sec | MB/sec | measured recall |
+|-----:|---------:|-------:|----------------:|
+| 14,000 | 275 | 0.84 | 0.44 |
+| 70,000 | 1,192 | 3.64 | 0.43 |
+
+docs/sec rises with scale because the wall is dominated by a fixed ~50s of
+zero-config auto-config at these sizes; the sketch dedup itself is ~9s at 70k
+(≈7,800 docs/sec raw). **Measured recall ≈ 0.43** is the honest LSH recall over a
+mix of exact / partial-overlap / paraphrase near-dups — the paraphrase and partial
+dups often do not collide in the LSH bands. (Contrast `expected_recall` above: the
+per-pair collision probability *at* the similarity threshold, not a recall over a
+real corpus — which is exactly why the bench measures recall directly.)
+
+A deterministic **per-PR CI perf gate** (`throughput-gate` job, via
+`scripts/bench_corpus_dedup/throughput_perf_gate.py`) guards regression on the
+machine-independent cost — candidate pairs, reduction ratio, and measured recall on
+a vendored offline corpus — against a committed baseline, so a change can't quietly
+blow up the candidate count or drop recall.
+
+> **Scale note:** the published numbers are the validated 14k–70k range. 100k+
+> corpora currently bottleneck on the survivorship/golden stage; lifting that
+> ceiling (and a datatrove head-to-head) are tracked follow-ups.
+
 ### Scope
 
-The throughput tier is **single-node only**. Distributed throughput (#1084),
-product surface (#1085), and the bench gate (#1086) are follow-on issues.
-Default-off (`throughput=None`) is byte-identical to today in every metric.
+The throughput tier is **single-node only**. Distributed throughput (#1084) and the
+product surface (#1085) are follow-on issues. Default-off (`throughput=None`) is
+byte-identical to today in every metric.
 
 ---
 
