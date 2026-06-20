@@ -1,4 +1,4 @@
-"""ExecutionPlan dataclass -- the six knobs the controller-v3 planner picks.
+﻿"""ExecutionPlan dataclass -- the six knobs the controller-v3 planner picks.
 
 Spec §Decision space:
 docs/superpowers/specs/2026-05-15-controller-v3-planner-design.md.
@@ -70,3 +70,5 @@ class ExecutionPlan:
         """
         if self.backend != "polars-direct":
             config.backend = self.backend
+        if self.verify_mode != "full":
+            config._throughput_plan = self
