@@ -8,10 +8,11 @@
 
 use std::collections::HashMap;
 
-use goldengraph_core::model::{EntityId, Mention, MentionEdge, MentionId};
-use goldengraph_core::resolve::apply_resolution;
+use goldengraph_core::build_graph;
+use goldengraph_core::model::{Edge, EntityId, EntityNode, Mention, MentionEdge, MentionId};
+use goldengraph_core::resolve::{apply_resolution, ResolutionMode};
 use goldengraph_core::retrieve::neighborhood;
-use serde_json::Value;
+use serde_json::{json, Value};
 
 fn load() -> Value {
     let raw = std::fs::read_to_string(concat!(
@@ -84,4 +85,88 @@ fn exact_one_hop_finds_only_half_the_facts() {
     let preds: Vec<&str> = sub.edges.iter().map(|e| e.predicate.as_str()).collect();
     // only founded_by Jobs; the `released` fact hangs off the separate "Apple" (entity 1)
     assert_eq!(preds, vec!["founded_by"]);
+}
+
+// ---- Golden vectors (cross-binding parity contract) ------------------------
+
+fn load_golden() -> Value {
+    let raw = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/goldengraph_golden.json"
+    ))
+    .expect("read golden fixture");
+    serde_json::from_str(&raw).expect("parse golden fixture")
+}
+
+/// Canonicalize an entity/edge view to a `serde_json::Value` in the engine's
+/// deterministic shape, so it can be compared byte-for-byte against the fixture.
+fn view_to_value(entities: &[EntityNode], edges: &[Edge]) -> Value {
+    let ents: Vec<Value> = entities
+        .iter()
+        .map(|e| {
+            json!({
+                "entity_id": e.entity_id,
+                "canonical_name": e.canonical_name,
+                "typ": e.typ,
+                "members": e.members,
+            })
+        })
+        .collect();
+    let eds: Vec<Value> = edges
+        .iter()
+        .map(|e| {
+            json!({
+                "subj": e.subj,
+                "predicate": e.predicate,
+                "obj": e.obj,
+                "source_refs": e.source_refs,
+            })
+        })
+        .collect();
+    json!({ "entities": ents, "edges": eds })
+}
+
+/// `serde_json::Value` -> canonical string (default `Value::Object` is a sorted
+/// `BTreeMap`, so object keys serialize in a stable order on both sides).
+fn canonical(v: &Value) -> String {
+    serde_json::to_string(v).unwrap()
+}
+
+#[test]
+fn golden_vectors_match() {
+    let v = load_golden();
+    let map: HashMap<MentionId, EntityId> = v["resolution"]
+        .as_object()
+        .unwrap()
+        .iter()
+        .map(|(k, val)| (k.parse::<MentionId>().unwrap(), val.as_u64().unwrap() as EntityId))
+        .collect();
+    let g = build_graph(&mentions(&v), &edges(&v), ResolutionMode::Provided(map));
+
+    // Full graph: merge (3-way) + edge dedup (accumulated source_refs).
+    let computed = view_to_value(&g.entities, &g.edges);
+    assert_eq!(
+        canonical(&computed),
+        canonical(&v["expected_graph"]),
+        "graph mismatch"
+    );
+
+    // Each query subgraph (1-hop limited, 2-hop expanded).
+    for q in v["queries"].as_array().unwrap() {
+        let seeds: Vec<EntityId> = q["seeds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_u64().unwrap() as EntityId)
+            .collect();
+        let hops = q["hops"].as_u64().unwrap() as u8;
+        let sub = neighborhood(&g, &seeds, hops);
+        let computed = view_to_value(&sub.entities, &sub.edges);
+        assert_eq!(
+            canonical(&computed),
+            canonical(&q["expected"]),
+            "query `{}` mismatch",
+            q["name"].as_str().unwrap()
+        );
+    }
 }

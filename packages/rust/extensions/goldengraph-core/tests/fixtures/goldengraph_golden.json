@@ -1,0 +1,65 @@
+{
+  "_doc": "Cross-binding golden vectors. Canonical (mentions, edges, resolution) -> expected (graph, query subgraphs). Covers a 3-way merge (Acme Corporation/Corp/Acme -> entity 0), an edge dedup (two 'employs' mention-edges collapse, source_refs accumulate), a limited 1-hop query, and an expanded 2-hop query. Arrays are in the engine's deterministic order: entities by entity_id, edges by (subj, predicate, obj), members + source_refs sorted ascending. SP3's WASM/C bindings reuse this fixture for parity.",
+  "mentions": [
+    { "name": "Acme Corporation", "typ": "org" },
+    { "name": "Acme Corp", "typ": "org" },
+    { "name": "Acme", "typ": "org" },
+    { "name": "Wile E. Coyote", "typ": "person" },
+    { "name": "Road Runner", "typ": "person" },
+    { "name": "Rocket Skates", "typ": "product" }
+  ],
+  "edges": [
+    { "subj": 0, "predicate": "employs", "obj": 3, "source_ref": "doc1" },
+    { "subj": 1, "predicate": "employs", "obj": 3, "source_ref": "doc2" },
+    { "subj": 3, "predicate": "chases", "obj": 4, "source_ref": "doc3" },
+    { "subj": 3, "predicate": "uses", "obj": 5, "source_ref": "doc4" }
+  ],
+  "resolution": { "0": 0, "1": 0, "2": 0, "3": 1, "4": 2, "5": 3 },
+  "expected_graph": {
+    "entities": [
+      { "entity_id": 0, "canonical_name": "Acme Corporation", "typ": "org", "members": [0, 1, 2] },
+      { "entity_id": 1, "canonical_name": "Wile E. Coyote", "typ": "person", "members": [3] },
+      { "entity_id": 2, "canonical_name": "Road Runner", "typ": "person", "members": [4] },
+      { "entity_id": 3, "canonical_name": "Rocket Skates", "typ": "product", "members": [5] }
+    ],
+    "edges": [
+      { "subj": 0, "predicate": "employs", "obj": 1, "source_refs": ["doc1", "doc2"] },
+      { "subj": 1, "predicate": "chases", "obj": 2, "source_refs": ["doc3"] },
+      { "subj": 1, "predicate": "uses", "obj": 3, "source_refs": ["doc4"] }
+    ]
+  },
+  "queries": [
+    {
+      "name": "acme_1hop",
+      "seeds": [0],
+      "hops": 1,
+      "expected": {
+        "entities": [
+          { "entity_id": 0, "canonical_name": "Acme Corporation", "typ": "org", "members": [0, 1, 2] },
+          { "entity_id": 1, "canonical_name": "Wile E. Coyote", "typ": "person", "members": [3] }
+        ],
+        "edges": [
+          { "subj": 0, "predicate": "employs", "obj": 1, "source_refs": ["doc1", "doc2"] }
+        ]
+      }
+    },
+    {
+      "name": "acme_2hop",
+      "seeds": [0],
+      "hops": 2,
+      "expected": {
+        "entities": [
+          { "entity_id": 0, "canonical_name": "Acme Corporation", "typ": "org", "members": [0, 1, 2] },
+          { "entity_id": 1, "canonical_name": "Wile E. Coyote", "typ": "person", "members": [3] },
+          { "entity_id": 2, "canonical_name": "Road Runner", "typ": "person", "members": [4] },
+          { "entity_id": 3, "canonical_name": "Rocket Skates", "typ": "product", "members": [5] }
+        ],
+        "edges": [
+          { "subj": 0, "predicate": "employs", "obj": 1, "source_refs": ["doc1", "doc2"] },
+          { "subj": 1, "predicate": "chases", "obj": 2, "source_refs": ["doc3"] },
+          { "subj": 1, "predicate": "uses", "obj": 3, "source_refs": ["doc4"] }
+        ]
+      }
+    }
+  ]
+}
