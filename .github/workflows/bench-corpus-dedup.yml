@@ -1,0 +1,95 @@
+# Corpus near-dup throughput bench — GoldenMatch throughput tier (#1083) vs datatrove.
+#
+# workflow_dispatch only. Runs both engines over a sweep of scales on ONE machine with an
+# identical per-scale corpus (real public text + injected ground-truth near-dups), so
+# docs/sec + MB/sec are comparable. datatrove is installed in-job (not a repo dependency),
+# exactly like Splink in bench-er-headtohead. NeMo-Curator is cited (GPU, not run).
+#
+# Each (corpus, scale, engine) datapoint runs as an isolated subprocess (orchestrate.py),
+# so the OS reclaims its memory on exit and an OOM-killed datapoint is recorded, not fatal.
+#
+# To run: GitHub -> Actions -> "bench-corpus-dedup" -> Run workflow.
+name: bench-corpus-dedup
+
+on:
+  workflow_dispatch:
+    inputs:
+      corpus:
+        description: "Corpus adapter: fineweb | c4 | wikipedia | offline"
+        required: false
+        default: "fineweb"
+      scales:
+        description: "Space-separated doc counts to sweep"
+        required: false
+        default: "100000 1000000"
+      engines:
+        description: "Engines (space-separated): goldenmatch datatrove"
+        required: false
+        default: "goldenmatch datatrove"
+      recall_target:
+        description: "Throughput-tier recall target knob"
+        required: false
+        default: "0.95"
+      runner:
+        description: "Runner label (64 GB recommended for the larger scales)"
+        required: false
+        default: "large-new-64GB"
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 600
+    env:
+      GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+      GOLDENMATCH_NATIVE: "1"
+      POLARS_SKIP_CPU_CHECK: "1"
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/native
+
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+
+      - name: Sync workspace
+        run: uv sync --all-packages
+
+      - name: Build native extension (tier at its best)
+        run: uv run python scripts/build_native.py
+
+      - name: Install datatrove (competitor engine, not a repo dependency)
+        if: contains(inputs.engines, 'datatrove')
+        run: uv pip install datatrove
+
+      - name: Install duckdb (evaluator) + datasets (corpus streaming)
+        run: uv pip install duckdb datasets
+
+      - name: Run corpus-dedup sweep
+        run: |
+          uv run python scripts/bench_corpus_dedup/orchestrate.py \
+            --corpus ${{ inputs.corpus }} \
+            --scales ${{ inputs.scales }} \
+            --engines ${{ inputs.engines }} \
+            --recall-target ${{ inputs.recall_target }} \
+            --workdir .bench_corpus
+
+      - name: Upload results artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: corpus-dedup-results
+          path: |
+            .bench_corpus/summary.md
+            .bench_corpus/bench_results.json
+          retention-days: 90
