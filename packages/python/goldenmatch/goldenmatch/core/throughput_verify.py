@@ -40,3 +40,52 @@ def resolve_throughput_config(arg=None, config=None) -> ThroughputConfig | None:
             similarity_threshold=float(sim) if sim else None,
         )
     return None
+
+
+# ---------------------------------------------------------------------------
+# Task 4: Banding selection + LSH S-curve
+# ---------------------------------------------------------------------------
+
+import math
+
+DEFAULT_SIMILARITY: dict[str, float] = {"jaccard": 0.8, "cosine": 0.85}
+
+
+def _band_match_prob(metric: str, s: float) -> float:
+    """Per-band single-row collision base prob at similarity ``s``.
+
+    Jaccard: a MinHash row matches with prob s. Cosine (SimHash): a single
+    hyperplane bit matches with prob ``1 - arccos(s)/pi``.
+    """
+    if metric == "cosine":
+        return 1.0 - math.acos(max(-1.0, min(1.0, s))) / math.pi
+    return s
+
+
+def expected_recall_lsh(metric: str, s: float, bands: int, rows: int) -> float:
+    """LSH S-curve: probability a pair at similarity ``s`` shares >=1 band.
+
+    ``1 - (1 - x**rows)**bands`` with x the per-row band-match prob for the
+    metric. Ground-truth-free expected recall over pairs at similarity ``s``.
+    """
+    x = _band_match_prob(metric, s)
+    return 1.0 - (1.0 - x**rows) ** bands
+
+
+def select_banding(metric: str, signature_len: int, similarity: float,
+                   recall_target: float) -> tuple[int, int]:
+    """Choose (bands, rows) among divisor splits of ``signature_len``.
+
+    Picks the fewest bands (best precision) whose expected recall still meets
+    ``recall_target`` at ``similarity``; if none meets it, the max-recall split.
+    Divisor invariant: bands * rows == signature_len.
+    """
+    splits = [(b, signature_len // b) for b in range(1, signature_len + 1)
+              if signature_len % b == 0]
+    scored = [(b, r, expected_recall_lsh(metric, similarity, b, r)) for b, r in splits]
+    meeting = [c for c in scored if c[2] >= recall_target]
+    if meeting:
+        b, r, _ = min(meeting, key=lambda c: c[0])
+    else:
+        b, r, _ = max(scored, key=lambda c: c[2])
+    return b, r
