@@ -70,9 +70,11 @@ jobs:
 
       - name: Install datatrove (competitor engine, not a repo dependency)
         if: contains(inputs.engines, 'datatrove')
-        # [processing] pulls the text-processing deps the MinHash pipeline needs
-        # (regex, nltk, tokenizers); bare `datatrove` ModuleNotFoundError'd on regex.
-        run: uv pip install 'datatrove[processing]'
+        # [processing] pulls regex/nltk; datatrove's `en` word tokenizer (used to
+        # build MinHash word n-grams) also needs spacy + its small English model.
+        run: |
+          uv pip install 'datatrove[processing]' spacy
+          uv run python -m spacy download en_core_web_sm
 
       - name: Install duckdb (evaluator) + datasets (corpus streaming)
         run: uv pip install duckdb datasets
