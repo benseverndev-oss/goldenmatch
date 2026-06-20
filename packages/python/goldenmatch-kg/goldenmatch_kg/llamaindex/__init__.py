@@ -1,11 +1,12 @@
 """LlamaIndex GoldenMatchEntityResolver: drops goldenmatch in as the entity-resolution
 stage of LlamaIndex PropertyGraphIndex.
 
-IMPORTING THIS MODULE REQUIRES the `llama-index-core` extra to be installed. The
-base class (TransformComponent) and EntityNode are imported at module top so that
-GoldenMatchEntityResolver can be a real subclass at class-definition time. This is
-intentional and standard: users import `goldenmatch_kg.llamaindex` ONLY after
-`pip install goldenmatch-kg[llamaindex]`.
+This module imports WITHOUT the `llama-index-core` extra installed: the framework
+imports (TransformComponent, EntityNode) are wrapped in try/except. When the extra
+is present, GoldenMatchEntityResolver is a real TransformComponent subclass; when
+absent, it is a stub that raises ImportError on instantiation. The base-free
+decision helper (`_resolve.canonical_names`) is always importable either way.
+Install the extra to use the resolver: `pip install goldenmatch-kg[llamaindex]`.
 
 Seam (confirmed shape, to be pinned against installed version in CI - Task 6):
     LlamaIndex PropertyGraphIndex ships NO built-in fuzzy entity resolver.
