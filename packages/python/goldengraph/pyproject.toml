@@ -1,0 +1,24 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "goldengraph"
+version = "0.1.0"
+description = "Build an own-your-KG knowledge graph from text: LLM extraction -> goldenmatch entity resolution -> a durable bi-temporal store (goldengraph engine)."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Ben Severn", email = "benzsevern@gmail.com" }]
+# goldenmatch provides the zero-config resolution controller (dedupe_df), the
+# :h1: record fingerprint, and the LLM budget tracker. goldengraph-native (the
+# engine: PyStore/build_graph) is installed alongside via maturin (it is not a
+# PyPI dep yet), mirroring how the native binding is provided in CI.
+dependencies = ["goldenmatch>=2.0"]
+
+[project.optional-dependencies]
+openai = ["openai>=1.0"]
+dev = ["pytest", "maturin"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["goldengraph"]
