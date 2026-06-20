@@ -71,6 +71,7 @@ jobs:
       wasm_score: ${{ steps.filter.outputs.wasm_score }}
       analysis_wasm: ${{ steps.filter.outputs.analysis_wasm }}
       ts_parity: ${{ steps.filter.outputs.ts_parity }}
+      throughput: ${{ steps.filter.outputs.throughput }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d  # v4.0.1
@@ -105,6 +106,15 @@ jobs:
               - 'packages/python/goldenmatch/tests/test_reconcile.py'
               - 'packages/python/goldenmatch/tests/_pg_helpers.py'
               - 'packages/python/goldenmatch/goldenmatch/db/**'
+            # #1086 throughput-tier perf gate: re-run when the tier code or the
+            # bench harness changes (so a regression in the sketch-then-verify
+            # cost is caught), and on ci.yml edits (keeps the gate logic tested).
+            throughput:
+              - 'packages/python/goldenmatch/goldenmatch/core/throughput_verify.py'
+              - 'packages/python/goldenmatch/goldenmatch/core/autoconfig_planner.py'
+              - 'packages/python/goldenmatch/goldenmatch/config/schemas.py'
+              - 'scripts/bench_corpus_dedup/**'
+              - '.github/workflows/ci.yml'
             python_goldencheck:
               - 'packages/python/goldencheck/**'
             python_goldenflow:
@@ -2132,10 +2142,51 @@ jobs:
   # `failure` or `cancelled`. `skipped` and `success` both pass. Avoids
   # the trap where `needs:` default behaviour blocks the summary when
   # any upstream was skipped.
+  # #1086 deterministic throughput-tier perf gate. Runs the bench harness unit
+  # tests + the cost gate (machine-independent: candidate_pairs / reduction_ratio /
+  # measured recall vs a committed baseline). Pure-Python, no native build, seconds.
+  throughput-gate:
+    needs: changes
+    if: needs.changes.outputs.throughput == 'true' || needs.changes.outputs.force_all == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GOLDENMATCH_NATIVE: "0"
+      POLARS_SKIP_CPU_CHECK: "1"
+      # Clean, reproducible CI runs (no cross-run memory db).
+      GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+      # The throughput tier's final output is sketch-distance only, but
+      # auto_configure_df first runs the controller's sample pipeline with a
+      # normal config, which for a "description" text column adds an embedding
+      # scorer -> tries to pull all-MiniLM-L6-v2 from HuggingFace and HANGS on a
+      # network-less runner. Force HF offline so any such load fails fast (caught
+      # by the controller) instead of stalling the job. The gate + tests use the
+      # vendored offline corpus only, so no network is needed.
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      - run: uv pip install -e packages/python/goldenmatch
+      - run: uv pip install duckdb
+      - name: Bench harness unit tests
+        # --timeout converts any hang into a per-test traceback (the bench tests
+        # spawn tier subprocesses; a network/model stall must fail actionably).
+        run: uv run python -m pytest scripts/bench_corpus_dedup/ -p no:xdist -v --timeout=180 --timeout-method=thread
+      - name: Throughput perf gate (cost vs committed baseline)
+        run: uv run python scripts/bench_corpus_dedup/throughput_perf_gate.py --check
+
   ci-required:
     needs:
       - changes
       - workflow_lint
+      - throughput-gate
       - python
       - python_goldenmatch
       - python_goldenmatch_heavy

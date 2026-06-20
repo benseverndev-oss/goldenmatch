@@ -665,6 +665,24 @@ class AutoConfigController:
         _diag("promote_negative_evidence done")
         config_n = config_v0
 
+        # Throughput tier (#1083/#1086): the GoldenCheck quality scan does O(N^2)
+        # per-cell fuzzy-value profiling (Levenshtein clustering of column values),
+        # which is pathological on long document text and stalls the sample
+        # pipeline. The sketch-then-verify throughput tier does not consume per-cell
+        # quality findings, so disable the scan on the working config — covering
+        # every sample iteration AND the final committed run (config_n is config_v0).
+        if getattr(throughput, "enabled", False):
+            from goldenmatch.config.schemas import QualityConfig
+            if config_v0.quality is None:
+                config_v0.quality = QualityConfig(mode="disabled")
+            else:
+                config_v0.quality.mode = "disabled"
+            # Quality-weighted survivorship calls the SAME O(N^2) GoldenCheck
+            # cell_quality fuzzy profiler (pipeline.py compute_quality_scores) on
+            # the doc-text column — disable it too on the throughput path.
+            if config_v0.golden_rules is not None:
+                config_v0.golden_rules.quality_weighting = False
+
         exact_columns: list[str] = []
         for mk in config_v0.get_matchkeys():
             if mk.type == "exact":
