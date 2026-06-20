@@ -81,3 +81,93 @@ def test_bad_resolution_raises():
 
     with pytest.raises(ValueError):
         gg.build_graph(MENTIONS, EDGES, "not-a-valid-resolution")
+
+
+# ---- SP4a: PyStore (durable bi-temporal store) ----------------------------
+
+import json
+
+
+def _ent(local, name, keys, typ="org"):
+    return {
+        "local_id": local,
+        "canonical_name": name,
+        "typ": typ,
+        "surface_names": [name],
+        "record_keys": keys,
+    }
+
+
+def _edge(s, o, valid_from, valid_to, refs, predicate="made"):
+    return {
+        "subj_local": s,
+        "predicate": predicate,
+        "obj_local": o,
+        "valid_from": valid_from,
+        "valid_to": valid_to,
+        "source_refs": refs,
+    }
+
+
+def _batch(entities, edges, at):
+    return json.dumps({"entities": entities, "edges": edges, "ingested_at": at})
+
+
+def test_store_round_trip_snapshot_byte_identical():
+    s = gg.PyStore()
+    s.append(_batch([_ent(0, "Acme", ["a"]), _ent(1, "Beta", ["b"])],
+                     [_edge(0, 1, 10, None, ["d1"])], 100))
+    s.append(_batch([_ent(0, "Acme", ["a"])], [], 200))
+    snap = s.snapshot()
+    assert snap == gg.PyStore(snap).snapshot()
+
+
+def test_store_bitemporal_correction():
+    # learn an open edge, then correct it to end at 20 (later tx-time)
+    s = gg.PyStore()
+    s.append(_batch([_ent(0, "X", ["x"]), _ent(1, "Y", ["y"])],
+                    [_edge(0, 1, 10, None, ["d"])], 100))
+    s.append(_batch([_ent(0, "X", ["x"]), _ent(1, "Y", ["y"])],
+                    [_edge(0, 1, 10, 20, ["d"])], 200))
+
+    before = s.as_of(25, 150)  # only the open version known -> edge present
+    assert len(before.query(before.seeds_by_name("X"), 1)["edges"]) == 1
+    after = s.as_of(25, 250)   # correction known -> window ended at 20
+    assert len(after.query(after.seeds_by_name("X"), 1)["edges"]) == 0
+
+
+def test_store_merge_time_travel():
+    # A,B both -> C; later A and B resolve together (share keys a,b) at tx 200
+    s = gg.PyStore()
+    s.append(_batch(
+        [_ent(0, "Acme", ["a"]), _ent(1, "Beta", ["b"]), _ent(2, "Cee", ["c"], "product")],
+        [_edge(0, 2, 0, None, ["e1"]), _edge(1, 2, 0, None, ["e2"])],
+        100,
+    ))
+    s.append(_batch([_ent(0, "Acme", ["a", "b"]), _ent(1, "Cee", ["c"], "product")], [], 200))
+
+    # before the merge: C neighbors A and B -> 2 edges
+    before = s.as_of(50, 150)
+    assert len(before.query(before.seeds_by_name("Cee"), 1)["edges"]) == 2
+    # after: B's edge remaps onto merged A -> collapses to 1 edge
+    after = s.as_of(50, 250)
+    assert len(after.query(after.seeds_by_name("Cee"), 1)["edges"]) == 1
+
+
+def test_store_history_names_both_sides_of_merge():
+    s = gg.PyStore()
+    s.append(_batch([_ent(0, "A", ["a"]), _ent(1, "B", ["b"])], [], 10))
+    s.append(_batch([_ent(0, "AB", ["a", "b"])], [], 20))
+    ev = s.history(0)
+    assert len(ev) == 1 and ev[0]["kind"] == "merge" and ev[0]["kept"] == 0
+    assert s.history(1)[0]["absorbed"] == [1]
+
+
+def test_store_bad_json_raises():
+    import pytest
+
+    with pytest.raises(ValueError):
+        gg.PyStore("{ not valid json")
+    s = gg.PyStore()
+    with pytest.raises(ValueError):
+        s.append("{ also not valid")

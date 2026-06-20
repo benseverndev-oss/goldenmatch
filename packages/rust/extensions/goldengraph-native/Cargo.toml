@@ -30,8 +30,11 @@ crate-type = ["cdylib"]
 # extension-module: don't link libpython (this .so is imported BY CPython).
 pyo3 = { version = ">=0.28, <0.29", features = ["extension-module", "abi3-py311"] }
 # The pyo3-free knowledge-graph engine. The shims below marshal Python <-> these
-# types and call its `build_graph` / `neighborhood` entry points.
+# types and call its `build_graph` / `neighborhood` / store entry points.
 goldengraph-core = { path = "../goldengraph-core" }
+# Parse the `StoreBatch` JSON boundary for `PyStore.append` (the SP2 store types
+# derive serde Deserialize; the JSON string is the marshaling boundary).
+serde_json = "1"
 
 [profile.release]
 opt-level = 3
