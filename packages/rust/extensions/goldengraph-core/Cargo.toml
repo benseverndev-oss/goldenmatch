@@ -29,7 +29,8 @@ name = "goldengraph_core"
 goldenmatch-score-core = { path = "../score-core" }
 # Connected-components kernel reused to turn scored mention-pairs into clusters.
 goldenmatch-graph-core = { path = "../graph-core" }
-
-[dev-dependencies]
-# JSON golden-vector fixtures (differentiator + cross-binding parity).
+# SP2 store: serde model + canonical JSON snapshot (the portable persistence
+# format every binding can read). Pyo3-free + WASM-safe, so the core stays
+# portable for SP5's WASM/C bindings.
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
