@@ -7,9 +7,13 @@
 #             fresh venv, then pytest the Python API tests (the only place the
 #             binding actually executes; the engine itself is self-contained, so
 #             no goldenmatch dependency is needed).
+#   * wasm:   goldengraph-wasm (the wasm-bindgen binding, SP5) -- host rlib parity
+#             tests (WASM impl == core over the JSON boundary) + a wasm32 build
+#             (proves the core compiles to wasm; the build + host parity ARE the
+#             gate -- no wasm execution until a TS consumer exists).
 #
 # Informational lane (NOT part of ci-required). It's the only build signal for
-# the pyo3 binding, so confirm it green before arming auto-merge.
+# the bindings, so confirm it green before arming auto-merge.
 name: goldengraph
 
 on:
@@ -18,6 +22,7 @@ on:
     paths:
       - "packages/rust/extensions/goldengraph-core/**"
       - "packages/rust/extensions/goldengraph-native/**"
+      - "packages/rust/extensions/goldengraph-wasm/**"
       - ".github/workflows/goldengraph.yml"
 
 permissions:
@@ -64,3 +69,24 @@ jobs:
           pip install maturin pytest
           maturin develop
           pytest tests/ -q
+
+  wasm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: packages/rust/extensions/goldengraph-wasm
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          components: clippy
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/goldengraph-wasm
+      # Host rlib parity tests (WASM impl == core over the JSON boundary) + clippy.
+      - run: cargo test
+      - run: cargo clippy --all-targets -- -D warnings
+      # The gate: the core compiles to wasm32 (no wasm execution -- see header).
+      - run: cargo build --target wasm32-unknown-unknown --release

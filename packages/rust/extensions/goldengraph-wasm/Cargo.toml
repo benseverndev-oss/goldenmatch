@@ -1,0 +1,28 @@
+# Standalone workspace so this wasm-bindgen wrapper can path-depend on the
+# pyo3-free `goldengraph-core` WITHOUT either crate's workspace claiming it --
+# same isolation rationale as `score-wasm`/`goldengraph-native`. The TS/WASM
+# analogue of `goldengraph-native` (pyo3): it wraps the SAME core, so the engine
+# is byte-identical across Python, WASM, and (SP5b) C by construction.
+[workspace]
+
+[package]
+name = "goldengraph-wasm"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Ben Severn <benzsevern@gmail.com>"]
+description = "wasm-bindgen wrapper over goldengraph-core: resolve / store / query / communities over a JSON boundary"
+
+[lib]
+name = "goldengraph_wasm"
+crate-type = ["cdylib", "rlib"]  # cdylib for wasm; rlib so host parity tests link
+
+[dependencies]
+# The pyo3-free knowledge-graph engine. The `*_impl` fns below are thin JSON
+# marshaling over this crate; parity with Python/C is structural (one core).
+goldengraph-core = { path = "../goldengraph-core" }
+# Serializes the JSON boundary (the core model + store types derive serde).
+serde_json = "1"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
