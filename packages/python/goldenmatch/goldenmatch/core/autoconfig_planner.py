@@ -123,4 +123,5 @@ def apply_throughput_overlay(plan, cfg, *, metric, signature_len):
     similarity = cfg.similarity_threshold or DEFAULT_SIMILARITY[metric]
     bands, rows = select_banding(metric, signature_len, similarity, cfg.recall_target)
     return dataclasses.replace(plan, verify_mode="sketch_distance",
-                               sketch_bands=bands, sketch_rows=rows, sketch_similarity=similarity)
+                               sketch_bands=bands, sketch_rows=rows, sketch_similarity=similarity,
+                               sketch_metric=metric)

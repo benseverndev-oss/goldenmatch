@@ -249,6 +249,31 @@ def _committed_matchkeys_summary(config: Any) -> list[dict[str, Any]]:
     return out
 
 
+def _throughput_summary(plan: Any) -> dict[str, Any] | None:
+    """Planned throughput posture from a committed ExecutionPlan, or None.
+
+    None when no plan / verify_mode == 'full'. expected_recall is the LSH-theoretic
+    estimate (not a measured F1) -- the same honest caveat as DedupeResult.throughput_posture.
+    """
+    if plan is None or getattr(plan, "verify_mode", "full") != "sketch_distance":
+        return None
+    from goldenmatch.core.throughput_verify import expected_recall_lsh
+    metric = plan.sketch_metric or "jaccard"
+    bands, rows, sim = plan.sketch_bands, plan.sketch_rows, plan.sketch_similarity
+    return {
+        "verify_mode": plan.verify_mode,
+        "metric": metric,
+        "bands": bands,
+        "rows_per_band": rows,
+        "similarity_threshold": sim,
+        "expected_recall": (
+            expected_recall_lsh(metric, sim, bands, rows)
+            if (bands and rows and sim is not None)
+            else None
+        ),
+    }
+
+
 def serialize_telemetry(
     *,
     profile: Any,
@@ -290,6 +315,9 @@ def serialize_telemetry(
         "execution_plan": _execution_plan(history),
         "committed_matchkeys": _committed_matchkeys_summary(committed_config),
         "negative_evidence": _negative_evidence(committed_config),
+        "throughput": _throughput_summary(
+            getattr(committed_config, "_throughput_plan", None)
+        ),
     }
 
 

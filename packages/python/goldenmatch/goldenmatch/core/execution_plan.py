@@ -59,6 +59,7 @@ class ExecutionPlan:
     sketch_bands: Optional[int] = None
     sketch_rows: Optional[int] = None
     sketch_similarity: Optional[float] = None
+    sketch_metric: Optional[str] = None
 
     def apply_to(self, config: GoldenMatchConfig) -> None:
         """Write plan onto a GoldenMatchConfig in place.
