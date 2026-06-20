@@ -677,6 +677,11 @@ class AutoConfigController:
                 config_v0.quality = QualityConfig(mode="disabled")
             else:
                 config_v0.quality.mode = "disabled"
+            # Quality-weighted survivorship calls the SAME O(N^2) GoldenCheck
+            # cell_quality fuzzy profiler (pipeline.py compute_quality_scores) on
+            # the doc-text column — disable it too on the throughput path.
+            if config_v0.golden_rules is not None:
+                config_v0.golden_rules.quality_weighting = False
 
         exact_columns: list[str] = []
         for mk in config_v0.get_matchkeys():
