@@ -515,6 +515,10 @@ def test_goldenmatch_runner_engages_tier(tmp_path):
     assert 0.0 <= r["reduction_ratio"] <= 1.0
     p = pl.read_parquet(pred)
     assert set(p.columns) == {"record_id", "pred_cluster_id"}
+    # ids must JOIN to the corpus doc_ids — guards the __row_id__->doc_id remap.
+    # (A raw-integer pred would make this intersection empty and recall silently 0.)
+    corpus_ids = set(pl.read_parquet(corpus)["doc_id"].to_list())
+    assert set(p["record_id"].to_list()) <= corpus_ids and len(p) > 0
 ```
 
 - [ ] **Step 2: Run it to verify it fails**
@@ -539,7 +543,14 @@ Structure (adapt `bench_er_headtohead/run_goldenmatch.py`):
 - `n = df.height`; `reduction_ratio = 1 - candidate_pairs / (n*(n-1)/2)` (clamp to [0,1]).
 - `bytes_in = int(df["text"].str.len_bytes().sum())`; `docs_per_sec = n / dedupe_wall`;
   `mb_per_sec = bytes_in/1e6 / dedupe_wall`.
-- Write `--pred-out` parquet: map `ded.clusters` members (doc-id strings) -> `{record_id, pred_cluster_id}`.
+- Write `--pred-out` parquet `{record_id, pred_cluster_id}` (`record_id := doc_id` string).
+  **CRITICAL — `ded.clusters` members are internal positional `__row_id__` integers (0..N-1),
+  NOT the `doc_id` strings.** Remap exactly like the reference autoconfig branch
+  (`bench_er_headtohead/run_goldenmatch.py:219-240`): `doc_ids = df["doc_id"].to_list()`, then for
+  each member `m` write `record_id = doc_ids[m]` (a string). Writing the raw integer members makes
+  the evaluator's `p.record_id = t.record_id` join (string-vs-int) match **zero rows** → silent
+  recall=0 / empty accuracy, and the perf gate's `measured_recall` would read 0.0. This is the one
+  place a silent wrong number can slip in — get the remap right.
 - Atomic JSON result with keys: `engine="goldenmatch"`, `status`, `n_docs`, `bytes_in`,
   `dedupe_wall_seconds`, `docs_per_sec`, `mb_per_sec`, `candidate_pairs`, `reduction_ratio`,
   `verify_mode`, `blocking_strategy`, `clusters`, `throughput_posture`, `peak_rss_mb`.
@@ -605,9 +616,13 @@ Expected: SKIP (datatrove not installed locally).
 - Same speed/memory schema as the goldenmatch runner: `n_docs`, `bytes_in`, `dedupe_wall_seconds`,
   `docs_per_sec`, `mb_per_sec`, `candidate_pairs` (datatrove's bucket-matched pairs, if exposed; else
   null with a note), `clusters`, `peak_rss_mb`, `status`. Atomic write; `MemoryError -> OOM`.
-- Match the MinHash config to a comparable similarity threshold (e.g. num_perm/bands tuned to ~0.8
-  Jaccard, documented in a comment) so the head-to-head is fair. Reference datatrove's
-  `minhash` example config.
+- Match the MinHash config to a comparable similarity threshold so the head-to-head is fair, and
+  **record the concrete mapping in code comments + the README** so the "fair comparison" claim is
+  auditable, not asserted: datatrove `MinhashConfig(num_buckets=B, hashes_per_bucket=R, n_grams=G)`
+  vs the tier's effective Jaccard `similarity_threshold` (the LSH S-curve 50%-point of `(B, R)`
+  should sit at roughly the tier's threshold). Pick `(B, R, G)` so both target ~0.8 Jaccard near-dup
+  (datatrove's own `minhash` example defaults are the starting reference) and write the chosen
+  numbers + the resulting S-curve midpoint into `run_datatrove.py` and `README.md`.
 
 - [ ] **Step 4: Confirm SKIP still holds locally; schema is exercised in CI**
 
@@ -927,7 +942,9 @@ git commit -m "chore(bench): commit throughput perf-gate baseline (#1086)"
   `uv run python scripts/bench_corpus_dedup/orchestrate.py --corpus ${{ inputs.corpus }}
   --scales ${{ inputs.scales }} --engines ${{ inputs.engines }}
   --recall-target ${{ inputs.recall_target }} --workdir .bench_corpus`;
-  upload `.bench_corpus/{summary.md,bench_results.json}` artifact (90d).
+  upload `.bench_corpus/{summary.md,bench_results.json}` as an artifact **named exactly
+  `corpus-dedup-results`** (90d) — Task 7.2's `gh run download -n corpus-dedup-results` depends on
+  this name.
 - Pin all action SHAs to match the repo convention (copy the exact pinned versions from
   `bench-er-headtohead.yml`).
 
@@ -969,7 +986,12 @@ throughput:
   - 'scripts/bench_corpus_dedup/**'
   - '.github/workflows/ci.yml'
 ```
-Expose it as a job output alongside the others.
+Expose it as a job output alongside the others. **Verify each tier path matches a real file on the
+post-rebase tree** (`ls` them after the #1129 rebase) — a filter entry that never matches a real
+file silently means the gate never fires on tier changes, defeating its purpose. The first three
+land with #1129; confirm the exact `core/throughput_verify.py` / `core/autoconfig_planner.py` /
+`config/schemas.py` names (the spec's grep confirmed `autoconfig_planner.py:125` and
+`throughput_verify.py`, but re-check at implementation time).
 
 - [ ] **Step 3: Add the `throughput-gate` job**
 
