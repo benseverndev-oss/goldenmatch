@@ -1970,6 +1970,38 @@ def _text_corpus_blocking(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+# Column-DATA types that are structured (not free text) and can't be sketched.
+_NON_SKETCHABLE_COL_TYPES = frozenset({"numeric", "date", "year", "zip", "phone", "geo"})
+
+
+def sketchable_text_cols(profiles: list[ColumnProfile]) -> list[ColumnProfile]:
+    """Columns the throughput tier can sketch on.
+
+    Prefers the semantic text types (description / string / name / multi_name).
+    But heterogeneous corpus text (web crawl) is routinely MIS-classified by the
+    semantic col_type heuristics -- a long FineWeb/C4 document that embeds street
+    names / emails / unique ids lands as "address" / "email" / "identifier", not
+    "description" (measured on real FineWeb: a ~3k-char doc column classified
+    "address"). So when no semantic text column exists, fall back to any column
+    holding substantial free text -- keyed on ``avg_len``, NOT the semantic label
+    -- excluding only columns whose DATA is structured. A short identifier
+    (``doc_id``) is filtered by the length floor; a long mis-labelled text column
+    is not.
+
+    Shared by ``_throughput_blocking`` and ``auto_configure_df``'s early
+    validation so the two cannot diverge.
+    """
+    semantic = [
+        p for p in profiles
+        if p.col_type in ("description", "string", "name", "multi_name")
+    ]
+    if semantic:
+        return semantic
+    return [
+        p for p in profiles
+        if p.col_type not in _NON_SKETCHABLE_COL_TYPES and p.avg_len >= 50
+    ]
+
 
 def _throughput_blocking(
     profiles: list[ColumnProfile], config: GoldenMatchConfig | None = None
@@ -1984,22 +2016,7 @@ def _throughput_blocking(
     the throughput tier cannot operate without a sketch target.
     """
     from goldenmatch.core.throughput_verify import ThroughputNotApplicableError
-    text_cols = [p for p in profiles if p.col_type in ("description", "string", "name", "multi_name")]
-    if not text_cols:
-        # Heterogeneous corpus text (web crawl) is routinely MIS-classified by the
-        # semantic col_type heuristics: a long FineWeb/C4 document that embeds
-        # street names / emails / unique ids lands as "address" / "email" /
-        # "identifier", not "description" (measured on real FineWeb: a ~3k-char doc
-        # column classified "address"). The throughput tier only needs the longest
-        # column holding substantial free text, so fall back to that — keyed on
-        # avg_len, NOT the semantic label — excluding only columns whose DATA is
-        # structured (numeric/date/year/zip/phone/geo). A short identifier (doc_id)
-        # is filtered by the length floor; a long mis-labelled text column is not.
-        _STRUCTURED = {"numeric", "date", "year", "zip", "phone", "geo"}
-        text_cols = [
-            p for p in profiles
-            if p.col_type not in _STRUCTURED and p.avg_len >= 50
-        ]
+    text_cols = sketchable_text_cols(profiles)
     if not text_cols:
         raise ThroughputNotApplicableError(
             "throughput tier requires a text column to sketch on; none found "
@@ -2955,10 +2972,13 @@ def auto_configure_df(
         from goldenmatch.core.throughput_verify import ThroughputNotApplicableError
         if isinstance(df, _pl_tp.DataFrame):
             _early_profiles = profile_columns(df)
-            _text_types = ("description", "string", "name", "multi_name")
-            if not any(p.col_type in _text_types for p in _early_profiles):
+            # Same predicate as _throughput_blocking (shared helper) so the early
+            # gate and the blocking builder cannot diverge — heterogeneous corpus
+            # text mis-classified as "address"/"identifier" must pass here too.
+            if not sketchable_text_cols(_early_profiles):
                 raise ThroughputNotApplicableError(
-                    "throughput tier requires a text column to sketch on; none found"
+                    "throughput tier requires a text column to sketch on; none found "
+                    f"(columns: {[(p.name, p.col_type, round(p.avg_len)) for p in _early_profiles]})"
                 )
 
     # Coerce + validate input types.

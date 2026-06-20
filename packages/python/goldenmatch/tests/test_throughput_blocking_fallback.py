@@ -6,7 +6,11 @@ as "address", not "description". The throughput tier must still sketch on the
 longest text-bearing column rather than raise ThroughputNotApplicableError.
 """
 import pytest
-from goldenmatch.core.autoconfig import ColumnProfile, _throughput_blocking
+from goldenmatch.core.autoconfig import (
+    ColumnProfile,
+    _throughput_blocking,
+    sketchable_text_cols,
+)
 from goldenmatch.core.throughput_verify import ThroughputNotApplicableError
 
 
@@ -49,3 +53,17 @@ def test_refuses_when_only_structured_columns():
     profiles = [_p("id", "identifier", 8), _p("age", "numeric", 2), _p("z", "zip", 5)]
     with pytest.raises(ThroughputNotApplicableError):
         _throughput_blocking(profiles)
+
+
+def test_sketchable_text_cols_shared_predicate():
+    # The shared helper backs BOTH _throughput_blocking and auto_configure_df's
+    # early gate, so they cannot diverge (the early gate was the missed site).
+    assert [p.name for p in sketchable_text_cols(
+        [_p("doc_id", "identifier", 10), _p("text", "address", 2916)])] == ["text"]
+    assert [p.name for p in sketchable_text_cols(
+        [_p("doc_id", "identifier", 11), _p("text", "identifier", 3018)])] == ["text"]
+    # semantic text wins outright
+    assert [p.name for p in sketchable_text_cols(
+        [_p("body", "description", 400)])] == ["body"]
+    # structured-only -> empty (early gate refuses)
+    assert sketchable_text_cols([_p("age", "numeric", 2), _p("z", "zip", 5)]) == []
