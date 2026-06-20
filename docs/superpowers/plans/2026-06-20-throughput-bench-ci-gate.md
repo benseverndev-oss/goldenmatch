@@ -534,13 +534,18 @@ Structure (adapt `bench_er_headtohead/run_goldenmatch.py`):
 - Set `GOLDENMATCH_*` env BEFORE importing goldenmatch.
 - Read parquet `{doc_id, text}` -> Polars df.
 - `with bench_capture() as bench: ded = dedupe_df(df, throughput=args.recall_target)`.
-- **Tier assertion** (after run): resolve the engaged plan/telemetry. Read `verify_mode` and the
-  blocking strategy from `ded` / the controller telemetry `throughput` block / `bench` metrics
-  (use the EXACT field names recorded in Task 0.2). If `verify_mode != "sketch_distance"` ->
-  `raise RuntimeError("throughput tier did not engage")`. (Use the Task 0.2 finding to wire the
-  right source; if posture is a dict, read `ded.throughput_posture["..."]`.)
-- `candidate_pairs = metrics["scored_pair_count"]`.
-- `n = df.height`; `reduction_ratio = 1 - candidate_pairs / (n*(n-1)/2)` (clamp to [0,1]).
+- **Tier assertion + cost metrics come from `ded.throughput_posture` (a dict), NOT `bench_capture`.**
+  Task 0.2 spike proved `bench_capture().scored_pair_count` is `0` on the throughput path (it counts
+  fuzzy/FS-scored pairs; the tier verifies via sketch_distance, bypassing that scorer). The posture
+  dict carries: `candidate_pairs`, `verified_pairs`, `reduction_ratio`, `expected_recall`, `bands`,
+  `rows_per_band`, `metric`, `similarity_threshold`, `notes`.
+  - Tier-engaged check: `post = ded.throughput_posture; if not post or "candidate_pairs" not in post:
+    raise RuntimeError("throughput tier did not engage")`. (Also read the blocking strategy from
+    `ded.config` for the `blocking_strategy` field; `verify_mode` likewise lives on the resolved
+    config — record whatever the config exposes, but the posture presence is the load-bearing gate.)
+  - `candidate_pairs = post["candidate_pairs"]`; `reduction_ratio = post["reduction_ratio"]`
+    (use the posture's value directly — do NOT re-derive from `scored_pair_count`).
+- `n = df.height`.
 - `bytes_in = int(df["text"].str.len_bytes().sum())`; `docs_per_sec = n / dedupe_wall`;
   `mb_per_sec = bytes_in/1e6 / dedupe_wall`.
 - Write `--pred-out` parquet `{record_id, pred_cluster_id}` (`record_id := doc_id` string).
