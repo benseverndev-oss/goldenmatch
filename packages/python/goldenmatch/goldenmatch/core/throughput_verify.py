@@ -2,8 +2,14 @@
 and the honest LSH-theoretic posture. Isolated from the accuracy scorer."""
 from __future__ import annotations
 
+import math
 import os
+from dataclasses import asdict, dataclass
+
+import numpy as np
+
 from goldenmatch.config.schemas import ThroughputConfig
+from goldenmatch.core import sketch
 
 
 class ThroughputNotApplicableError(Exception):
@@ -45,8 +51,6 @@ def resolve_throughput_config(arg=None, config=None) -> ThroughputConfig | None:
 # ---------------------------------------------------------------------------
 # Task 4: Banding selection + LSH S-curve
 # ---------------------------------------------------------------------------
-
-import math
 
 DEFAULT_SIMILARITY: dict[str, float] = {"jaccard": 0.8, "cosine": 0.85}
 
@@ -95,8 +99,6 @@ def select_banding(metric: str, signature_len: int, similarity: float,
 # Task 5: ThroughputPosture + build_posture
 # ---------------------------------------------------------------------------
 
-from dataclasses import dataclass
-
 
 @dataclass(frozen=True)
 class ThroughputPosture:
@@ -112,7 +114,6 @@ class ThroughputPosture:
     notes: str
 
     def to_dict(self) -> dict:
-        from dataclasses import asdict
         return asdict(self)
 
 
@@ -142,9 +143,6 @@ def build_posture(*, metric: str, recall_target: float, similarity: float,
 # ---------------------------------------------------------------------------
 # Task 6: score_sketch_pairs (sketch-distance verifier)
 # ---------------------------------------------------------------------------
-
-import numpy as np
-from goldenmatch.core import sketch
 
 
 def score_sketch_pairs(candidate_pairs, *, metric, threshold,
