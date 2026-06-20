@@ -2153,6 +2153,17 @@ jobs:
     env:
       GOLDENMATCH_NATIVE: "0"
       POLARS_SKIP_CPU_CHECK: "1"
+      # Clean, reproducible CI runs (no cross-run memory db).
+      GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+      # The throughput tier's final output is sketch-distance only, but
+      # auto_configure_df first runs the controller's sample pipeline with a
+      # normal config, which for a "description" text column adds an embedding
+      # scorer -> tries to pull all-MiniLM-L6-v2 from HuggingFace and HANGS on a
+      # network-less runner. Force HF offline so any such load fails fast (caught
+      # by the controller) instead of stalling the job. The gate + tests use the
+      # vendored offline corpus only, so no network is needed.
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
@@ -2165,7 +2176,9 @@ jobs:
       - run: uv pip install -e packages/python/goldenmatch
       - run: uv pip install duckdb
       - name: Bench harness unit tests
-        run: uv run python -m pytest scripts/bench_corpus_dedup/ -p no:xdist -q
+        # --timeout converts any hang into a per-test traceback (the bench tests
+        # spawn tier subprocesses; a network/model stall must fail actionably).
+        run: uv run python -m pytest scripts/bench_corpus_dedup/ -p no:xdist -v --timeout=180 --timeout-method=thread
       - name: Throughput perf gate (cost vs committed baseline)
         run: uv run python scripts/bench_corpus_dedup/throughput_perf_gate.py --check
 
