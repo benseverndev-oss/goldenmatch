@@ -89,3 +89,51 @@ def select_banding(metric: str, signature_len: int, similarity: float,
     else:
         b, r, _ = max(scored, key=lambda c: c[2])
     return b, r
+
+
+# ---------------------------------------------------------------------------
+# Task 5: ThroughputPosture + build_posture
+# ---------------------------------------------------------------------------
+
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class ThroughputPosture:
+    recall_target: float
+    similarity_threshold: float
+    metric: str
+    bands: int
+    rows_per_band: int
+    expected_recall: float
+    reduction_ratio: float
+    candidate_pairs: int
+    verified_pairs: int
+    notes: str
+
+    def to_dict(self) -> dict:
+        from dataclasses import asdict
+        return asdict(self)
+
+
+def build_posture(*, metric: str, recall_target: float, similarity: float,
+                  bands: int, rows: int, n_rows: int, candidate_pairs: int,
+                  verified_pairs: int, semantic_fell_back: bool) -> ThroughputPosture:
+    """Build a ThroughputPosture telemetry record for this sketch-verify run."""
+    total = n_rows * (n_rows - 1) / 2 if n_rows > 1 else 1.0
+    notes = (
+        f"expected_recall is an LSH-theoretic estimate over pairs at/above "
+        f"similarity {similarity} ({metric}); it is not a measured F1. Precision "
+        f"is traded for throughput and is not directly measured here."
+    )
+    if semantic_fell_back:
+        notes += " Semantic embedder unreachable; fell back to lexical lsh."
+    if candidate_pairs / total > 0.5:
+        notes += " WARNING: reduction_ratio > 0.5 - banding is near-degenerate."
+    return ThroughputPosture(
+        recall_target=recall_target, similarity_threshold=similarity, metric=metric,
+        bands=bands, rows_per_band=rows,
+        expected_recall=expected_recall_lsh(metric, similarity, bands, rows),
+        reduction_ratio=candidate_pairs / total,
+        candidate_pairs=candidate_pairs, verified_pairs=verified_pairs, notes=notes,
+    )
