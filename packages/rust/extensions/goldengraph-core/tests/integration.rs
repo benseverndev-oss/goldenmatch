@@ -54,7 +54,12 @@ fn map(v: &Value, name: &str) -> HashMap<MentionId, EntityId> {
         .as_object()
         .unwrap()
         .iter()
-        .map(|(k, val)| (k.parse::<MentionId>().unwrap(), val.as_u64().unwrap() as EntityId))
+        .map(|(k, val)| {
+            (
+                k.parse::<MentionId>().unwrap(),
+                val.as_u64().unwrap() as EntityId,
+            )
+        })
         .collect()
 }
 
@@ -139,7 +144,12 @@ fn golden_vectors_match() {
         .as_object()
         .unwrap()
         .iter()
-        .map(|(k, val)| (k.parse::<MentionId>().unwrap(), val.as_u64().unwrap() as EntityId))
+        .map(|(k, val)| {
+            (
+                k.parse::<MentionId>().unwrap(),
+                val.as_u64().unwrap() as EntityId,
+            )
+        })
         .collect();
     let g = build_graph(&mentions(&v), &edges(&v), ResolutionMode::Provided(map));
 

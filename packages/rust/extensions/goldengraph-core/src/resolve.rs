@@ -60,7 +60,12 @@ pub fn apply_resolution(
         .map(|((subj, predicate, obj), mut refs)| {
             refs.sort();
             refs.dedup();
-            Edge { subj, predicate, obj, source_refs: refs }
+            Edge {
+                subj,
+                predicate,
+                obj,
+                source_refs: refs,
+            }
         })
         .collect();
     Graph { entities, edges }
@@ -137,14 +142,36 @@ mod tests {
     fn fixture() -> (Vec<Mention>, Vec<MentionEdge>) {
         // mentions 0,1 are the same entity ("Apple Inc"/"Apple"); 2 is "Jobs"; 3 is "iPhone"
         let mentions = vec![
-            Mention { name: "Apple Inc".into(), typ: "org".into() }, // 0
-            Mention { name: "Apple".into(), typ: "org".into() },     // 1
-            Mention { name: "Jobs".into(), typ: "person".into() },   // 2
-            Mention { name: "iPhone".into(), typ: "product".into() }, //3
+            Mention {
+                name: "Apple Inc".into(),
+                typ: "org".into(),
+            }, // 0
+            Mention {
+                name: "Apple".into(),
+                typ: "org".into(),
+            }, // 1
+            Mention {
+                name: "Jobs".into(),
+                typ: "person".into(),
+            }, // 2
+            Mention {
+                name: "iPhone".into(),
+                typ: "product".into(),
+            }, //3
         ];
         let edges = vec![
-            MentionEdge { subj: 0, predicate: "founded_by".into(), obj: 2, source_ref: "c1".into() },
-            MentionEdge { subj: 1, predicate: "released".into(), obj: 3, source_ref: "c2".into() },
+            MentionEdge {
+                subj: 0,
+                predicate: "founded_by".into(),
+                obj: 2,
+                source_ref: "c1".into(),
+            },
+            MentionEdge {
+                subj: 1,
+                predicate: "released".into(),
+                obj: 3,
+                source_ref: "c2".into(),
+            },
         ];
         (mentions, edges)
     }
@@ -153,31 +180,61 @@ mod tests {
     fn provided_resolution_merges_nodes_and_keeps_both_edges() {
         let (mentions, edges) = fixture();
         // host says mentions 0 and 1 are entity 0; 2->1; 3->2
-        let map = vec![(0usize, 0u32), (1, 0), (2, 1), (3, 2)].into_iter().collect();
+        let map = vec![(0usize, 0u32), (1, 0), (2, 1), (3, 2)]
+            .into_iter()
+            .collect();
         let g = apply_resolution(&mentions, &edges, &map);
         assert_eq!(g.entities.len(), 3); // 0+1 merged
         let apple = g.entities.iter().find(|e| e.entity_id == 0).unwrap();
         assert_eq!(apple.canonical_name, "Apple Inc"); // longest name
         assert_eq!(g.edges.len(), 2); // both facts attach to entity 0
-        assert!(g.edges.iter().any(|e| e.subj == 0 && e.predicate == "founded_by" && e.obj == 1));
-        assert!(g.edges.iter().any(|e| e.subj == 0 && e.predicate == "released" && e.obj == 2));
+        assert!(g
+            .edges
+            .iter()
+            .any(|e| e.subj == 0 && e.predicate == "founded_by" && e.obj == 1));
+        assert!(g
+            .edges
+            .iter()
+            .any(|e| e.subj == 0 && e.predicate == "released" && e.obj == 2));
     }
 
     #[test]
     fn duplicate_edges_dedup_and_accumulate_sources() {
         let mentions = vec![
-            Mention { name: "A Inc".into(), typ: "org".into() },
-            Mention { name: "A".into(), typ: "org".into() },
-            Mention { name: "B".into(), typ: "org".into() },
+            Mention {
+                name: "A Inc".into(),
+                typ: "org".into(),
+            },
+            Mention {
+                name: "A".into(),
+                typ: "org".into(),
+            },
+            Mention {
+                name: "B".into(),
+                typ: "org".into(),
+            },
         ];
         let edges = vec![
-            MentionEdge { subj: 0, predicate: "rel".into(), obj: 2, source_ref: "c1".into() },
-            MentionEdge { subj: 1, predicate: "rel".into(), obj: 2, source_ref: "c2".into() }, // same after merge
+            MentionEdge {
+                subj: 0,
+                predicate: "rel".into(),
+                obj: 2,
+                source_ref: "c1".into(),
+            },
+            MentionEdge {
+                subj: 1,
+                predicate: "rel".into(),
+                obj: 2,
+                source_ref: "c2".into(),
+            }, // same after merge
         ];
         let map = vec![(0usize, 0u32), (1, 0), (2, 1)].into_iter().collect();
         let g = apply_resolution(&mentions, &edges, &map);
         assert_eq!(g.edges.len(), 1);
-        assert_eq!(g.edges[0].source_refs, vec!["c1".to_string(), "c2".to_string()]);
+        assert_eq!(
+            g.edges[0].source_refs,
+            vec!["c1".to_string(), "c2".to_string()]
+        );
     }
 
     #[test]
@@ -185,7 +242,10 @@ mod tests {
         let (mentions, edges) = fixture();
         // scorer_id 0 = jaro_winkler (score-core `score_one` match arms; jw of
         // "Apple Inc"/"Apple" ~= 0.91, above the 0.85 threshold).
-        let cfg = NativeConfig { scorer_id: 0, threshold: 0.85 };
+        let cfg = NativeConfig {
+            scorer_id: 0,
+            threshold: 0.85,
+        };
         let map = resolve_native(&mentions, &cfg);
         // Apple Inc (0) + Apple (1) cluster; Jobs (2) and iPhone (3) stay singletons.
         assert_eq!(map[&0], map[&1]);

@@ -93,7 +93,10 @@ fn parse_resolution(obj: &Bound<'_, PyAny>) -> PyResult<ResolutionMode> {
     }
     if let Ok((tag, scorer_id, threshold)) = obj.extract::<(String, u8, f64)>() {
         if tag == "native" {
-            return Ok(ResolutionMode::Native(NativeConfig { scorer_id, threshold }));
+            return Ok(ResolutionMode::Native(NativeConfig {
+                scorer_id,
+                threshold,
+            }));
         }
     }
     Err(PyValueError::new_err(

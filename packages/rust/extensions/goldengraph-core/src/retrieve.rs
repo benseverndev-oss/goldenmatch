@@ -49,9 +49,7 @@ pub fn neighborhood(graph: &Graph, seeds: &[EntityId], hops: u8) -> Subgraph {
         .filter(|e| reached.contains(&e.subj) && reached.contains(&e.obj))
         .cloned()
         .collect();
-    edges.sort_by(|a, b| {
-        (a.subj, &a.predicate, a.obj).cmp(&(b.subj, &b.predicate, b.obj))
-    });
+    edges.sort_by(|a, b| (a.subj, &a.predicate, a.obj).cmp(&(b.subj, &b.predicate, b.obj)));
     Subgraph { entities, edges }
 }
 
@@ -60,10 +58,20 @@ mod tests {
     use super::*;
 
     fn node(id: EntityId, name: &str) -> EntityNode {
-        EntityNode { entity_id: id, canonical_name: name.into(), typ: "t".into(), members: vec![] }
+        EntityNode {
+            entity_id: id,
+            canonical_name: name.into(),
+            typ: "t".into(),
+            members: vec![],
+        }
     }
     fn edge(s: EntityId, p: &str, o: EntityId) -> Edge {
-        Edge { subj: s, predicate: p.into(), obj: o, source_refs: vec![] }
+        Edge {
+            subj: s,
+            predicate: p.into(),
+            obj: o,
+            source_refs: vec![],
+        }
     }
 
     // entities 0,1,2,3; edges 0->1, 0->2, 2->3
@@ -110,6 +118,7 @@ mod tests {
         let ids1: Vec<EntityId> = sub1.entities.iter().map(|e| e.entity_id).collect();
         assert_eq!(ids1, vec![0, 1, 2, 3]);
         assert_eq!(sub1.edges.len(), 5); // every edge's endpoints are reached
+
         // idempotent once the graph is fully covered + deterministic ordering
         let sub2 = neighborhood(&g, &[0], 2);
         let ids2: Vec<EntityId> = sub2.entities.iter().map(|e| e.entity_id).collect();
