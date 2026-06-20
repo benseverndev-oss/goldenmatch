@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import json
 import random
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Iterator
 
 HERE = Path(__file__).resolve().parent
 OFFLINE_PATH = HERE / "data" / "offline_corpus.jsonl"
