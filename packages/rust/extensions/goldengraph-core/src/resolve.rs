@@ -66,6 +66,70 @@ pub fn apply_resolution(
     Graph { entities, edges }
 }
 
+/// Config for the native explicit-config resolver.
+///
+/// `scorer_id` indexes `score-core`'s `score_one` dispatch
+/// (0=jaro_winkler, 1=levenshtein, 2=token_sort, 3=exact). `threshold` is on
+/// the [0,1] scale -- every `score_one` scorer_id returns [0,1].
+#[derive(Clone, Debug)]
+pub struct NativeConfig {
+    pub scorer_id: u8,
+    pub threshold: f64,
+}
+
+/// How to obtain the `mention -> entity-id` map feeding `apply_resolution`.
+pub enum ResolutionMode {
+    /// The caller supplies the map directly.
+    Provided(HashMap<MentionId, EntityId>),
+    /// Derive the map natively via score-core + graph-core.
+    Native(NativeConfig),
+}
+
+/// Native resolver: block by `type`, score all within-block pairs with
+/// `score-core`, keep pairs at or above `threshold`, cluster them with
+/// `graph-core`'s WCC, and assign each cluster a stable `EntityId`. Reuses the
+/// kernels wholesale -- no new entity-resolution logic lives here.
+///
+/// Determinism: WCC grouping is independent of edge order, and clusters are
+/// numbered by their minimum mention id, so the returned map is stable across
+/// runs (and across the non-deterministic block-iteration order).
+pub fn resolve_native(mentions: &[Mention], cfg: &NativeConfig) -> HashMap<MentionId, EntityId> {
+    // 1. block by type
+    let mut blocks: HashMap<&str, Vec<MentionId>> = HashMap::new();
+    for (i, m) in mentions.iter().enumerate() {
+        blocks.entry(m.typ.as_str()).or_default().push(i);
+    }
+    // 2. all-pairs score within each block -> edges (i64, i64, f64) at/above threshold
+    let mut pair_edges: Vec<(i64, i64, f64)> = Vec::new();
+    for ids in blocks.values() {
+        for a in 0..ids.len() {
+            for b in (a + 1)..ids.len() {
+                let (i, j) = (ids[a], ids[b]);
+                let s = goldenmatch_score_core::score_one(
+                    cfg.scorer_id,
+                    &mentions[i].name,
+                    &mentions[j].name,
+                );
+                if s >= cfg.threshold {
+                    pair_edges.push((i as i64, j as i64, s));
+                }
+            }
+        }
+    }
+    // 3. WCC over every mention id -> clusters (singletons returned as 1-element)
+    let all_ids: Vec<i64> = (0..mentions.len() as i64).collect();
+    let mut clusters = goldenmatch_graph_core::connected_components(&pair_edges, &all_ids);
+    // 4. number clusters by min mention id -> stable EntityId
+    clusters.sort_by_key(|c| *c.iter().min().unwrap());
+    let mut map = HashMap::new();
+    for (eid, cluster) in clusters.iter().enumerate() {
+        for &mid in cluster {
+            map.insert(mid as MentionId, eid as EntityId);
+        }
+    }
+    map
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -114,5 +178,23 @@ mod tests {
         let g = apply_resolution(&mentions, &edges, &map);
         assert_eq!(g.edges.len(), 1);
         assert_eq!(g.edges[0].source_refs, vec!["c1".to_string(), "c2".to_string()]);
+    }
+
+    #[test]
+    fn native_resolver_merges_apple_via_score_and_wcc() {
+        let (mentions, edges) = fixture();
+        // scorer_id 0 = jaro_winkler (score-core `score_one` match arms; jw of
+        // "Apple Inc"/"Apple" ~= 0.91, above the 0.85 threshold).
+        let cfg = NativeConfig { scorer_id: 0, threshold: 0.85 };
+        let map = resolve_native(&mentions, &cfg);
+        // Apple Inc (0) + Apple (1) cluster; Jobs (2) and iPhone (3) stay singletons.
+        assert_eq!(map[&0], map[&1]);
+        assert_ne!(map[&0], map[&2]);
+        assert_ne!(map[&0], map[&3]);
+        assert_ne!(map[&2], map[&3]);
+        // same end state as the Provided path: 3 entities, both edges.
+        let g = apply_resolution(&mentions, &edges, &map);
+        assert_eq!(g.entities.len(), 3);
+        assert_eq!(g.edges.len(), 2);
     }
 }
