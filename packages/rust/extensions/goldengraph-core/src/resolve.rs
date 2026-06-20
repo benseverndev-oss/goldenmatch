@@ -69,7 +69,6 @@ pub fn apply_resolution(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::*;
 
     fn fixture() -> (Vec<Mention>, Vec<MentionEdge>) {
         // mentions 0,1 are the same entity ("Apple Inc"/"Apple"); 2 is "Jobs"; 3 is "iPhone"
