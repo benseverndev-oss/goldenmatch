@@ -70,7 +70,9 @@ jobs:
 
       - name: Install datatrove (competitor engine, not a repo dependency)
         if: contains(inputs.engines, 'datatrove')
-        run: uv pip install datatrove
+        # [processing] pulls the text-processing deps the MinHash pipeline needs
+        # (regex, nltk, tokenizers); bare `datatrove` ModuleNotFoundError'd on regex.
+        run: uv pip install 'datatrove[processing]'
 
       - name: Install duckdb (evaluator) + datasets (corpus streaming)
         run: uv pip install duckdb datasets

@@ -1986,6 +1986,19 @@ def _throughput_blocking(
     from goldenmatch.core.throughput_verify import ThroughputNotApplicableError
     text_cols = [p for p in profiles if p.col_type in ("description", "string", "name", "multi_name")]
     if not text_cols:
+        # Heterogeneous corpus text (web crawl) is routinely MIS-classified by the
+        # semantic col_type heuristics: a long FineWeb/C4 document that embeds
+        # street names or emails lands as "address"/"email", not "description"
+        # (measured on real FineWeb: a 2.9k-char doc column classified "address").
+        # The throughput tier only needs the longest text-bearing column to sketch
+        # on, so fall back to the longest non-structured string column before
+        # refusing. Structured / short-token types can't be sketched usefully.
+        _NON_SKETCHABLE = {"numeric", "date", "year", "zip", "phone", "geo", "identifier"}
+        text_cols = [
+            p for p in profiles
+            if p.col_type not in _NON_SKETCHABLE and p.avg_len >= 20
+        ]
+    if not text_cols:
         raise ThroughputNotApplicableError(
             "throughput tier requires a text column to sketch on; none found"
         )
