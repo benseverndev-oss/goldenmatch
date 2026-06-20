@@ -6,7 +6,7 @@ docs/superpowers/specs/2026-05-15-controller-v3-planner-design.md.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, Optional
 
 if TYPE_CHECKING:
     from goldenmatch.config.schemas import GoldenMatchConfig
@@ -55,6 +55,10 @@ class ExecutionPlan:
     scoring_distributed: bool = False
     golden_distributed: bool = False
     routing_decisions: tuple[DistributedRoutingDecision, ...] = ()
+    verify_mode: Literal["full", "sketch_distance"] = "full"
+    sketch_bands: Optional[int] = None
+    sketch_rows: Optional[int] = None
+    sketch_similarity: Optional[float] = None
 
     def apply_to(self, config: GoldenMatchConfig) -> None:
         """Write plan onto a GoldenMatchConfig in place.
