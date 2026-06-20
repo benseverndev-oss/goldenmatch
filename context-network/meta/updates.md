@@ -2,6 +2,24 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-06-20 — Corpus-dedup throughput benchmark + perf gate (#1086)
+- Closes the training-data-dedup epic's "defend the throughput claim" item. New ADR
+  [../decisions/0022-corpus-dedup-throughput-benchmark.md](../decisions/0022-corpus-dedup-throughput-benchmark.md):
+  a `scripts/bench_corpus_dedup/` harness (pluggable FineWeb/C4/Wikipedia/offline
+  corpus adapters + injected ground-truth near-dups so recall is measurable on real
+  text) and a **deterministic** per-PR `throughput-gate` (machine-independent cost —
+  candidate-pairs / reduction-ratio / measured-recall — vs a committed baseline, so it
+  can't flake on shared-runner wall-clock).
+- **Published number:** ~1,192 docs/sec · 3.6 MB/sec on a 70k-doc FineWeb slice at
+  ~0.43 measured LSH recall (docs/sec is auto-config-bound at this scale; raw sketch
+  dedup ≈7,800/s). Documented in `docs-site/goldenmatch/tuning.mdx`.
+- **The bench did its job:** it proved the #1083 throughput tier was overstated at
+  scale (validated only on 10-row tests). Walking it up on real FineWeb surfaced+fixed
+  four at-scale bugs — the GoldenCheck O(N²) quality scan on doc text, web-text
+  mis-classification (tier refused), the ≥100k RED-config refusal, and (open) an O(N)
+  survivorship `iter_rows` ceiling above ~70k. datatrove recall-parse + the 100k+
+  ceiling are tracked follow-ups. SHIPPED #1134/#1139/#1142/#1144/#1147.
+
 ## 2026-06-19 — Semantic SimHash near-dup blocking (#1082 Phase B)
 - Extends the sketch tier (ADR [../decisions/0020-minhash-lsh-sketch-tier.md](../decisions/0020-minhash-lsh-sketch-tier.md))
   with a *semantic* near-duplicate path. New pyo3-free SimHash (random ±1
