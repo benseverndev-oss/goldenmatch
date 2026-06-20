@@ -61,6 +61,25 @@ impl PyGraph {
         }
         Ok(out)
     }
+
+    /// All entities in the graph as `[{entity_id, canonical_name, typ, members,
+    /// surface_names}]` (SP4c needs to enumerate entities to embed their names;
+    /// `query`/`seeds_by_name` can't enumerate). Same projection as `query`'s
+    /// entity dicts, over the full entity set.
+    fn entities<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
+        let out = PyList::empty(py);
+        for e in &self.inner.entities {
+            let d = PyDict::new(py);
+            d.set_item("entity_id", e.entity_id)?;
+            d.set_item("canonical_name", e.canonical_name.as_str())?;
+            d.set_item("typ", e.typ.as_str())?;
+            d.set_item("members", PyList::new(py, &e.members)?)?;
+            let names: Vec<&str> = e.surface_names.iter().map(String::as_str).collect();
+            d.set_item("surface_names", PyList::new(py, names)?)?;
+            out.append(d)?;
+        }
+        Ok(out)
+    }
 }
 
 /// A durable, bi-temporal knowledge-graph store (SP2). Wraps the pyo3-free

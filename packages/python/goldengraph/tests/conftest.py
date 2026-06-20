@@ -20,6 +20,37 @@ class StubLLM:
         return self.response
 
 
+class RecordingLLM:
+    """Records every prompt it sees and returns a canned answer — lets a test
+    assert WHAT the synthesizer was given (the subgraph), not free-form text."""
+
+    def __init__(self, response: str = "ANSWER"):
+        self.response = response
+        self.prompts: list[str] = []
+
+    def complete(self, prompt: str) -> str:
+        self.prompts.append(prompt)
+        return self.response
+
+
+class StubEmbedder:
+    """Deterministic one-hot embedder: each known string maps to a basis vector;
+    unknown strings → the zero vector. Makes cosine ranking reproducible."""
+
+    def __init__(self, vocab: dict[str, int]):
+        self.vocab = vocab
+        self.dim = max(vocab.values()) + 1 if vocab else 1
+
+    def embed(self, texts: list[str]):
+        import numpy as np
+
+        m = np.zeros((len(texts), self.dim), dtype=float)
+        for i, t in enumerate(texts):
+            if t in self.vocab:
+                m[i, self.vocab[t]] = 1.0
+        return m
+
+
 @pytest.fixture
 def store():
     from goldengraph_native import _native as gg
