@@ -6,7 +6,6 @@ path, builds clusters, and surfaces a ThroughputPosture on the result.
 from __future__ import annotations
 
 import polars as pl
-import pytest
 
 
 def test_dedupe_df_throughput_finds_near_dups_and_reports_posture(monkeypatch):
@@ -73,12 +72,7 @@ def test_dedupe_df_throughput_float_recall_target(monkeypatch):
 def test_dedupe_df_throughput_posture_fields():
     """All expected posture keys are present."""
     import polars as pl
-    from goldenmatch.core import autoconfig
-    try:
-        import pytest
-        pytest.MonkeyPatch
-    except AttributeError:
-        pass
+    import pytest
 
     rows = ["hello world foo bar"] * 5 + ["hello world foo baz"] * 5
     df = pl.DataFrame({"body": rows})

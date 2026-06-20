@@ -1,7 +1,7 @@
 """Tests for ThroughputConfig schema + resolve_throughput_config (#1083)."""
 import pytest
+from goldenmatch.config.schemas import GoldenMatchConfig, ThroughputConfig
 from pydantic import ValidationError
-from goldenmatch.config.schemas import ThroughputConfig, GoldenMatchConfig
 
 
 def test_defaults():
@@ -38,7 +38,8 @@ def test_config_accepts_runtime_throughput_plan_private_attr():
 # ── Task 2: resolve_throughput_config + error type ──────────────────────────
 
 from goldenmatch.core.throughput_verify import (
-    resolve_throughput_config, ThroughputNotApplicableError,
+    ThroughputNotApplicableError,
+    resolve_throughput_config,
 )
 
 

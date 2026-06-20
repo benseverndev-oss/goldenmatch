@@ -8,15 +8,14 @@ Covers:
 """
 from __future__ import annotations
 
-
 # ---------------------------------------------------------------------------
 # Step 1: sketch_metric field on ExecutionPlan + overlay sets it
 # ---------------------------------------------------------------------------
 
 def test_overlay_sets_sketch_metric():
-    from goldenmatch.core.execution_plan import ExecutionPlan
-    from goldenmatch.core.autoconfig_planner import apply_throughput_overlay
     from goldenmatch.config.schemas import ThroughputConfig
+    from goldenmatch.core.autoconfig_planner import apply_throughput_overlay
+    from goldenmatch.core.execution_plan import ExecutionPlan
     p = apply_throughput_overlay(
         ExecutionPlan(), ThroughputConfig(enabled=True), metric="cosine", signature_len=256
     )
@@ -24,9 +23,9 @@ def test_overlay_sets_sketch_metric():
 
 
 def test_overlay_sets_sketch_metric_jaccard():
-    from goldenmatch.core.execution_plan import ExecutionPlan
-    from goldenmatch.core.autoconfig_planner import apply_throughput_overlay
     from goldenmatch.config.schemas import ThroughputConfig
+    from goldenmatch.core.autoconfig_planner import apply_throughput_overlay
+    from goldenmatch.core.execution_plan import ExecutionPlan
     p = apply_throughput_overlay(
         ExecutionPlan(), ThroughputConfig(enabled=True), metric="jaccard", signature_len=128
     )
@@ -40,8 +39,9 @@ def test_execution_plan_sketch_metric_defaults_none():
 
 
 def test_execution_plan_sketch_metric_set_directly():
-    from goldenmatch.core.execution_plan import ExecutionPlan
     import dataclasses
+
+    from goldenmatch.core.execution_plan import ExecutionPlan
     plan = dataclasses.replace(ExecutionPlan(), sketch_metric="jaccard")
     assert plan.sketch_metric == "jaccard"
 
@@ -194,8 +194,8 @@ def test_serialize_telemetry_throughput_populated_from_config_plan():
 # ---------------------------------------------------------------------------
 
 def test_render_throughput_line():
-    from goldenmatch.core.execution_plan import ExecutionPlan
     from goldenmatch.core.autoconfig_verify import _render_throughput_line
+    from goldenmatch.core.execution_plan import ExecutionPlan
     plan = ExecutionPlan(
         verify_mode="sketch_distance",
         sketch_metric="jaccard",
@@ -216,15 +216,15 @@ def test_render_throughput_line_none():
 
 
 def test_render_throughput_line_full_mode():
-    from goldenmatch.core.execution_plan import ExecutionPlan
     from goldenmatch.core.autoconfig_verify import _render_throughput_line
+    from goldenmatch.core.execution_plan import ExecutionPlan
     # Default plan has verify_mode="full" -> empty
     assert _render_throughput_line(ExecutionPlan()) == ""
 
 
 def test_render_throughput_line_has_expected_recall():
-    from goldenmatch.core.execution_plan import ExecutionPlan
     from goldenmatch.core.autoconfig_verify import _render_throughput_line
+    from goldenmatch.core.execution_plan import ExecutionPlan
     plan = ExecutionPlan(
         verify_mode="sketch_distance",
         sketch_metric="cosine",
@@ -240,8 +240,8 @@ def test_render_throughput_line_has_expected_recall():
 def test_postflight_report_str_includes_throughput_when_plan_is_set():
     """PostflightReport.__str__ emits a throughput line when controller_history
     carries an execution_plan with verify_mode='sketch_distance'."""
-    from goldenmatch.core.execution_plan import ExecutionPlan
     from goldenmatch.core.autoconfig_verify import PostflightReport
+    from goldenmatch.core.execution_plan import ExecutionPlan
 
     class _FakeHistory:
         execution_plan = ExecutionPlan(

@@ -523,7 +523,7 @@ class AutoConfigController:
         confidence_required: bool = True,
         allow_red_config: bool = False,
         planning_effort: str = "normal",
-        throughput=None,
+        throughput: Any | None = None,
     ) -> tuple[GoldenMatchConfig, ComplexityProfile, RunHistory]:
         """Run iterative auto-config.
 

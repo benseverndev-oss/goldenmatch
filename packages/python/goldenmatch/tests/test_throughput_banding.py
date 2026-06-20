@@ -1,8 +1,11 @@
 """Tests for recall-target banding + LSH S-curve (#1083)."""
 import math
+
 import pytest
 from goldenmatch.core.throughput_verify import (
-    expected_recall_lsh, select_banding, DEFAULT_SIMILARITY,
+    DEFAULT_SIMILARITY,
+    expected_recall_lsh,
+    select_banding,
 )
 
 

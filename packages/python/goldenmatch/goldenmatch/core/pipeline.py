@@ -1958,42 +1958,74 @@ def _run_dedupe_pipeline(
         _tp_strategy = getattr(_tp_blocking, "strategy", "lsh") if _tp_blocking else "lsh"
         _tp_posture_built = False
 
+        # Unified posture inputs — initialised up front so the build block below is
+        # statically bound regardless of which branch runs. Each branch overwrites
+        # these with measured values before setting _tp_posture_built=True; they are
+        # only consumed when _tp_posture_built is True.
+        _tp_pos_pairs: set = set()
+        _tp_scored_pos: list = []
+        _tp_metric = "jaccard"
+        _tp_sim = 0.8
+        _tp_eff_bands = 0
+        _tp_eff_rows = 0
+
         if _tp_strategy == "simhash":
-            _tp_sc = _tp_blocking.simhash
-            _tp_col = _tp_sc.column
-            _tp_texts = (
-                collected_df[_tp_col].cast(_pl_tp.Utf8).fill_null("").to_list()
-            )
-            try:
-                from goldenmatch.core.embedder import get_embedder as _get_embedder
-                _tp_emb = _np_tp.asarray(
-                    _get_embedder(_tp_sc.model).embed_column(
-                        _tp_texts, cache_key="throughput"
-                    ),
-                    dtype=_np_tp.float64,
-                )
-                from goldenmatch.core.simhash_blocker import SimHashLSHBlocker as _SimHashLSHBlocker
-                _tp_blocker = _SimHashLSHBlocker(
-                    num_planes=_tp_sc.num_planes,
-                    num_bands=_tp_plan.sketch_bands,
-                    seed=_tp_sc.seed,
-                )
-                _tp_pos_pairs = _tp_blocker.candidate_pairs(_tp_emb)
-                _tp_sim = _tp_plan.sketch_similarity or 0.85
-                _tp_scored_pos = _tv.score_sketch_pairs(
-                    _tp_pos_pairs,
-                    metric="cosine",
-                    threshold=_tp_sim,
-                    embeddings=_tp_emb,
-                )
-                _tp_metric = "cosine"
-                _tp_posture_built = True
-            except Exception as _tp_exc:
-                logger.warning(
-                    "throughput simhash branch failed (%s); falling back to lsh",
-                    _tp_exc, exc_info=False,
-                )
+            _tp_sc = _tp_blocking.simhash if _tp_blocking else None
+            if _tp_sc is None:
+                # Malformed: simhash strategy without a SimHashKeyConfig. Fall back
+                # to the LSH path below rather than crash on a None config.
                 _tp_strategy = "lsh"
+            else:
+                _tp_col = _tp_sc.column or collected_df.columns[0]
+                _tp_texts = (
+                    collected_df[_tp_col].cast(_pl_tp.Utf8).fill_null("").to_list()
+                )
+                try:
+                    from goldenmatch.core.embedder import get_embedder as _get_embedder
+                    # _tp_sc.model is Optional; an unbuildable embedder (e.g. model
+                    # None) raises and is caught below, falling the tier back to LSH.
+                    _tp_emb = _np_tp.asarray(
+                        _get_embedder(_tp_sc.model).embed_column(  # pyright: ignore[reportArgumentType]
+                            _tp_texts, cache_key="throughput"
+                        ),
+                        dtype=_np_tp.float64,
+                    )
+                    from goldenmatch.core.simhash_blocker import (
+                        SimHashLSHBlocker as _SimHashLSHBlocker,
+                    )
+                    _tp_blocker = _SimHashLSHBlocker(
+                        num_planes=_tp_sc.num_planes,
+                        num_bands=_tp_plan.sketch_bands,
+                        seed=_tp_sc.seed,
+                    )
+                    _tp_pos_pairs = _tp_blocker.candidate_pairs(_tp_emb)
+                    _tp_sim = _tp_plan.sketch_similarity or 0.85
+                    _tp_scored_pos = _tv.score_sketch_pairs(
+                        _tp_pos_pairs,
+                        metric="cosine",
+                        threshold=_tp_sim,
+                        embeddings=_tp_emb,
+                    )
+                    _tp_metric = "cosine"
+                    # Effective bands/rows for posture; prefer plan fields (set by
+                    # apply_throughput_overlay) over the blocker/config defaults.
+                    _tp_eff_bands = (
+                        _tp_plan.sketch_bands
+                        if _tp_plan.sketch_bands is not None
+                        else _tp_blocker.num_bands
+                    )
+                    _tp_eff_rows = (
+                        _tp_plan.sketch_rows
+                        if _tp_plan.sketch_rows is not None
+                        else _tp_sc.num_planes // _tp_eff_bands
+                    )
+                    _tp_posture_built = True
+                except Exception as _tp_exc:
+                    logger.warning(
+                        "throughput simhash branch failed (%s); falling back to lsh",
+                        _tp_exc, exc_info=False,
+                    )
+                    _tp_strategy = "lsh"
 
         if _tp_strategy != "simhash" or not _tp_posture_built:
             # LSH (MinHash) path — also the fallback from a simhash failure.
@@ -2041,6 +2073,17 @@ def _run_dedupe_pipeline(
                 seed=_tp_lsh_seed,
             )
             _tp_metric = "jaccard"
+            # Effective bands/rows for posture; prefer plan fields over defaults.
+            _tp_eff_bands = (
+                _tp_plan.sketch_bands
+                if _tp_plan.sketch_bands is not None
+                else _tp_n_bands
+            )
+            _tp_eff_rows = (
+                _tp_plan.sketch_rows
+                if _tp_plan.sketch_rows is not None
+                else _tp_num_perms // _tp_eff_bands
+            )
             _tp_posture_built = True
 
         if _tp_posture_built:
@@ -2055,17 +2098,6 @@ def _run_dedupe_pipeline(
             _tp_recall_target = (
                 _tp_cfg.recall_target if _tp_cfg is not None else 0.95
             )
-            # Resolve effective bands/rows for posture; prefer plan fields
-            # (set by apply_throughput_overlay) over fallback defaults.
-            _tp_eff_bands = _tp_plan.sketch_bands
-            if _tp_eff_bands is None:
-                _tp_eff_bands = _tp_n_bands if _tp_metric == "jaccard" else _tp_blocker.num_bands
-            _tp_eff_rows = _tp_plan.sketch_rows
-            if _tp_eff_rows is None:
-                if _tp_metric == "jaccard":
-                    _tp_eff_rows = _tp_num_perms // _tp_eff_bands
-                else:
-                    _tp_eff_rows = _tp_sc.num_planes // _tp_eff_bands
             _tp_posture_obj = _tv.build_posture(
                 metric=_tp_metric,
                 recall_target=_tp_recall_target,

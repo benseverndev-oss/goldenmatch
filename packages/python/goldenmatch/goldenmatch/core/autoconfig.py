@@ -1943,7 +1943,8 @@ def _auto_build_lsh_config(profiles: list[ColumnProfile]) -> BlockingConfig:
 
 
 def _text_corpus_blocking(
-    profiles: list[ColumnProfile], df: pl.DataFrame, config: GoldenMatchConfig | None = None
+    profiles: list[ColumnProfile], df: pl.DataFrame | None = None,
+    config: GoldenMatchConfig | None = None,
 ) -> BlockingConfig:
     """Pick the text-corpus blocking strategy.
 
@@ -1970,7 +1971,9 @@ def _text_corpus_blocking(
 
 
 
-def _throughput_blocking(profiles, config):
+def _throughput_blocking(
+    profiles: list[ColumnProfile], config: GoldenMatchConfig | None = None
+) -> BlockingConfig:
     """Force sketch-then-verify (LSH or SimHash) blocking on the best text column.
 
     Accepts any text column type (description, string, name, multi_name).
@@ -2897,7 +2900,7 @@ def auto_configure_df(
     allow_red_config: bool = False,
     planning_effort: str | None = None,
     n_rows_full: int | None = None,
-    throughput=None,
+    throughput: Any | None = None,
 ) -> GoldenMatchConfig:
     """Public auto-configuration entry point (controller-backed).
 
@@ -2931,8 +2934,9 @@ def auto_configure_df(
     # Throughput tier (#1083): early validation -- check text column exists BEFORE
     # the expensive controller run to give a clean ThroughputNotApplicableError.
     if throughput is not None:
-        from goldenmatch.core.throughput_verify import ThroughputNotApplicableError
         import polars as _pl_tp
+
+        from goldenmatch.core.throughput_verify import ThroughputNotApplicableError
         if isinstance(df, _pl_tp.DataFrame):
             _early_profiles = profile_columns(df)
             _text_types = ("description", "string", "name", "multi_name")
@@ -3111,8 +3115,8 @@ def auto_configure_df(
                 config.blocking = _tp_blk2
                 from goldenmatch.core.throughput_verify import metric_and_signature_len
                 _tp_metric2, _tp_siglen2 = metric_and_signature_len(_tp_blk2)
-                from goldenmatch.core.execution_plan import ExecutionPlan as _EP
                 from goldenmatch.core.autoconfig_planner import apply_throughput_overlay as _ato
+                from goldenmatch.core.execution_plan import ExecutionPlan as _EP
                 _base_plan2 = config._throughput_plan or _EP()
                 if getattr(_base_plan2, "verify_mode", "full") == "full":
                     config._throughput_plan = _ato(

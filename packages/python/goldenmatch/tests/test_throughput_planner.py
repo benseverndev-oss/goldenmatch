@@ -1,8 +1,9 @@
 ﻿"""Tests for ExecutionPlan throughput telemetry fields (#1083)."""
 import dataclasses
-from goldenmatch.core.execution_plan import ExecutionPlan
+
+from goldenmatch.config.schemas import GoldenMatchConfig, ThroughputConfig
 from goldenmatch.core.autoconfig_planner import apply_throughput_overlay
-from goldenmatch.config.schemas import ThroughputConfig, GoldenMatchConfig
+from goldenmatch.core.execution_plan import ExecutionPlan
 
 
 def test_verify_mode_defaults_to_full():

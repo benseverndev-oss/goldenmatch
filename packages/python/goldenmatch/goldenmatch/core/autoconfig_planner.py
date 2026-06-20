@@ -119,7 +119,7 @@ def apply_throughput_overlay(plan, cfg, *, metric, signature_len):
     """Overlay sketch-then-verify posture onto a base ExecutionPlan (orthogonal to
     backend selection). metric in {"jaccard","cosine"}; signature_len = num_perms
     (lexical) or num_planes (semantic)."""
-    from goldenmatch.core.throughput_verify import select_banding, DEFAULT_SIMILARITY
+    from goldenmatch.core.throughput_verify import DEFAULT_SIMILARITY, select_banding
     similarity = cfg.similarity_threshold or DEFAULT_SIMILARITY[metric]
     bands, rows = select_banding(metric, signature_len, similarity, cfg.recall_target)
     return dataclasses.replace(plan, verify_mode="sketch_distance",
