@@ -310,6 +310,93 @@ Read these before a big run. Each is a real trap that produces a slow or wrong r
 
 ---
 
+## Throughput tier (sketch-then-verify)
+
+*New in #1083, builds on #1080.* An opt-in high-throughput path for large text
+corpora where you care about near-duplicate recall but can trade precision for
+speed. Instead of the full fuzzy/Fellegi-Sunter pipeline, it blocks with
+MinHash/LSH (`lsh`) or SimHash (`simhash`) and confirms candidate pairs by cheap
+sketch distance before any field-level scoring. Think: training data dedup, web
+crawl dedup, paper-corpus cleaning.
+
+### Enabling it
+
+Pass `throughput=` to `dedupe_df`:
+
+```python
+import goldenmatch as gm
+
+# Float: sets recall_target (0 to 1). Adjusts LSH banding.
+result = gm.dedupe_df(df, throughput=0.95)
+
+# True: uses the default recall_target (0.95).
+result = gm.dedupe_df(df, throughput=True)
+
+# None (default): the throughput tier is off. Byte-identical to today.
+result = gm.dedupe_df(df)
+
+# ThroughputConfig: full control.
+from goldenmatch import ThroughputConfig
+result = gm.dedupe_df(df, throughput=ThroughputConfig(
+    recall_target=0.90,
+    similarity_threshold=0.75,
+))
+```
+
+Or via environment variables:
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `GOLDENMATCH_THROUGHPUT` | `0` (off) | `1` enables the throughput tier with default settings. |
+| `GOLDENMATCH_THROUGHPUT_RECALL` | `0.95` | LSH recall target (tunes banding). |
+| `GOLDENMATCH_THROUGHPUT_SIMILARITY` | unset | Override the near-dup similarity threshold (Jaccard default `0.8`; cosine default `0.85`). |
+
+### What it does
+
+1. **Auto-selects blocking strategy.** Picks `simhash` (cosine/semantic) when an
+   embedder is reachable, otherwise falls back to `lsh` (MinHash/Jaccard on
+   shingles). Uses the longest text column in the frame.
+2. **Blocks with sketch buckets.** Records that share at least one LSH band become
+   candidates. The `recall_target` controls the banding split via the LSH
+   probability curve.
+3. **Verifies by sketch distance only.** Pairs that clear `similarity_threshold`
+   are kept; the field-level fuzzy/FS scorer does not run.
+4. **Raises `ThroughputNotApplicableError`** when the frame has no text column.
+   Fix: pass an explicit `BlockingConfig` to direct it to a column.
+
+### Posture and honest reporting
+
+The throughput tier does **not** measure F1 or precision. `DedupeResult.throughput_posture`
+(and the controller telemetry `throughput` block) carry the metrics the tier can
+honestly report:
+
+| Key | Meaning |
+|-----|---------|
+| `metric` | `"jaccard"` (LSH) or `"cosine"` (SimHash) |
+| `recall_target` | The recall target you passed (tunes banding) |
+| `similarity_threshold` | The sketch-distance threshold applied at verify |
+| `bands` | LSH band count selected for the recall target |
+| `rows_per_band` | Rows per band |
+| `expected_recall` | LSH-theoretic recall at the banding: `1 - (1 - t^r)^b` where `t = similarity_threshold`, `r = rows_per_band`, `b = bands`. This is an analytic bound, not measured on your data. |
+| `reduction_ratio` | `1 - candidate_pairs / possible_pairs`. Observed. |
+| `candidate_pairs` | Pairs that passed blocking. |
+| `verified_pairs` | Pairs that passed sketch-distance verification. |
+| `notes` | Human-readable posture string. |
+
+`expected_recall` is the LSH-theoretic probability that a pair at exactly
+`similarity_threshold` Jaccard/cosine collides in at least one band. It is
+**not** a measured F1 or recall against ground truth. For pairs above threshold
+the curve is tighter; for pairs below it, collision probability drops rapidly.
+This is an honest bound, not a precision measurement.
+
+### Scope
+
+The throughput tier is **single-node only**. Distributed throughput (#1084),
+product surface (#1085), and the bench gate (#1086) are follow-on issues.
+Default-off (`throughput=None`) is byte-identical to today in every metric.
+
+---
+
 ## Configuration precedence
 
 When the same setting is reachable multiple ways, the more specific wins:
@@ -343,6 +430,9 @@ Every `GOLDENMATCH_*` variable the package reads, grouped by who should care. De
 | `GOLDENMATCH_DUCKDB_SCORE_DB` | unset | path | DuckDB pair-store spill path. |
 | `GOLDENMATCH_NATIVE_RAYON_MIN_PAIRS` | `20000000` | int | Native kernel sequential-vs-rayon threshold. |
 | `GOLDENMATCH_CONFIG_LINT` | `warn` | `warn`/`strict`/`off` | Pre-flight config linter: warn-and-run, refuse on error, or skip. |
+| `GOLDENMATCH_THROUGHPUT` | `0` (off) | `0`/`1` | Enable the sketch-then-verify throughput tier. Equivalent to `dedupe_df(throughput=True)`. |
+| `GOLDENMATCH_THROUGHPUT_RECALL` | `0.95` | float | LSH recall target; tunes the band/row split. |
+| `GOLDENMATCH_THROUGHPUT_SIMILARITY` | unset | float | Override the near-dup similarity threshold (Jaccard `0.8` / cosine `0.85` when unset). |
 
 ### Distributed sub-knobs
 

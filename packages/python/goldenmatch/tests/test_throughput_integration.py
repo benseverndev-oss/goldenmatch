@@ -95,3 +95,18 @@ def test_dedupe_df_throughput_posture_fields():
     }
     missing = required - set(res.throughput_posture.keys())
     assert not missing, f"posture missing keys: {missing}"
+
+
+def test_throughput_off_is_byte_identical():
+    import polars as pl
+    from goldenmatch import dedupe_df
+    df = pl.DataFrame({"name": ["alice", "alicia", "bob", "bobby", "carol"] * 10,
+                       "zip": ["10001", "10001", "20002", "20002", "30003"] * 10})
+    a = dedupe_df(df)
+    b = dedupe_df(df, throughput=None)
+    assert a.throughput_posture is None and b.throughput_posture is None
+    assert sorted(a.clusters.keys()) == sorted(b.clusters.keys())
+    # same multi-member cluster structure (membership sets), order-independent
+    def _memsets(res):
+        return sorted(tuple(sorted(c.get("members", []))) for c in res.clusters.values())
+    assert _memsets(a) == _memsets(b)

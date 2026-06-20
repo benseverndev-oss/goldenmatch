@@ -147,6 +147,13 @@ Provide either `num_bands` or `threshold` (not both required; `num_bands` wins i
 
 For a **text corpus** (a column of long free text), auto-config picks `simhash` automatically when an embedder is reachable, and falls back to the lexical `lsh` strategy when it is not. So `dedupe_df(corpus)` selects the semantic near-dup path with no config when embeddings are available. SimHash buckets dense embeddings; the lexical `lsh` strategy (MinHash) buckets sparse shingle sets. Use SimHash for semantic paraphrase, `lsh` for lexical near-dups.
 
+<Note>
+  **High-recall corpus dedup without writing a blocking config.** For large text corpora where you want
+  near-duplicate recall at throughput scale, the throughput tier (`dedupe_df(..., throughput=0.95)`) picks
+  `lsh` or `simhash` automatically based on embedder availability, then confirms candidate pairs by sketch
+  distance -- no `BlockingConfig` required. See [Throughput tier](/goldenmatch/tuning#throughput-tier-sketch-then-verify).
+</Note>
+
 ## Canopy blocking
 
 TF-IDF-based canopy clustering with loose and tight thresholds.
