@@ -1,0 +1,27 @@
+# Standalone workspace so this C-ABI wrapper can path-depend on the wasm crate's
+# pyo3-free `*_impl` fns WITHOUT either crate's workspace claiming it -- same
+# isolation rationale as goldengraph-wasm / goldengraph-native. The C analogue of
+# goldengraph-native (pyo3) and goldengraph-wasm (wasm-bindgen): it wraps the SAME
+# `*_impl` fns, so the engine is byte-identical across Python, WASM, and C by
+# construction (no re-implementation).
+[workspace]
+
+[package]
+name = "goldengraph-cabi"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Ben Severn <benzsevern@gmail.com>"]
+description = "C ABI over goldengraph-core: resolve / store / query / communities over a JSON boundary"
+
+[lib]
+name = "goldengraph_cabi"
+# cdylib: the .so/.dll/.dylib a C/other-language caller links or dlopens.
+# staticlib: the .a for static linking. rlib: so the in-crate parity tests link.
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+# Reuse the EXACT JSON-boundary marshaling the WASM binding uses. wasm-bindgen is
+# cfg-gated to wasm32 in that crate, so on a host target this pulls only
+# serde_json + goldengraph-core -- no wasm toolchain needed.
+goldengraph-wasm = { path = "../goldengraph-wasm" }
