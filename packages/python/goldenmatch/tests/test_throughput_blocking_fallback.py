@@ -29,6 +29,15 @@ def test_falls_back_on_misclassified_corpus_text():
     assert _sketch_col(blk) == "text"
 
 
+def test_falls_back_on_long_text_typed_as_identifier():
+    # At scale, a unique long-text column can be classified "identifier" — the
+    # fallback keys on avg_len, not the label, so a long doc column still sketches
+    # while the short doc_id identifier is filtered by the length floor.
+    profiles = [_p("doc_id", "identifier", 11), _p("text", "identifier", 3018)]
+    blk = _throughput_blocking(profiles)
+    assert _sketch_col(blk) == "text"
+
+
 def test_prefers_semantic_text_column_when_present():
     profiles = [_p("doc_id", "identifier", 10), _p("body", "description", 400)]
     blk = _throughput_blocking(profiles)

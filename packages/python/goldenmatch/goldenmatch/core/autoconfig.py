@@ -1988,19 +1988,22 @@ def _throughput_blocking(
     if not text_cols:
         # Heterogeneous corpus text (web crawl) is routinely MIS-classified by the
         # semantic col_type heuristics: a long FineWeb/C4 document that embeds
-        # street names or emails lands as "address"/"email", not "description"
-        # (measured on real FineWeb: a 2.9k-char doc column classified "address").
-        # The throughput tier only needs the longest text-bearing column to sketch
-        # on, so fall back to the longest non-structured string column before
-        # refusing. Structured / short-token types can't be sketched usefully.
-        _NON_SKETCHABLE = {"numeric", "date", "year", "zip", "phone", "geo", "identifier"}
+        # street names / emails / unique ids lands as "address" / "email" /
+        # "identifier", not "description" (measured on real FineWeb: a ~3k-char doc
+        # column classified "address"). The throughput tier only needs the longest
+        # column holding substantial free text, so fall back to that — keyed on
+        # avg_len, NOT the semantic label — excluding only columns whose DATA is
+        # structured (numeric/date/year/zip/phone/geo). A short identifier (doc_id)
+        # is filtered by the length floor; a long mis-labelled text column is not.
+        _STRUCTURED = {"numeric", "date", "year", "zip", "phone", "geo"}
         text_cols = [
             p for p in profiles
-            if p.col_type not in _NON_SKETCHABLE and p.avg_len >= 20
+            if p.col_type not in _STRUCTURED and p.avg_len >= 50
         ]
     if not text_cols:
         raise ThroughputNotApplicableError(
-            "throughput tier requires a text column to sketch on; none found"
+            "throughput tier requires a text column to sketch on; none found "
+            f"(columns: {[(p.name, p.col_type, round(p.avg_len)) for p in profiles]})"
         )
     if any(p.col_type == "description" for p in profiles):
         return _text_corpus_blocking(profiles, None, config)
