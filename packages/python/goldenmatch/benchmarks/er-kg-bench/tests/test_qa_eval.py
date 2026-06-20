@@ -64,6 +64,27 @@ def test_run_qa_eval_ok_and_skip():
     assert by["boom"]["status"] == "skipped"
 
 
+def test_llm_judge_plumbing_stub():
+    # stub judge: 1.0 when ALL gold facts were retrieved, else 0.0 -- asserts the
+    # plumbing (called once per item, correctness threaded through), NOT accuracy.
+    calls = []
+
+    def stub_judge(item, retrieved):
+        calls.append(item.qa_id)
+        return 1.0 if set(item.gold_facts) <= retrieved else 0.0
+
+    res_resolved = qa_eval.engine_completeness(
+        [[0, 1], [2]], [_ITEM], _MEN, _TYP, _CTX, _FACTS, judge=stub_judge
+    )
+    res_split = qa_eval.engine_completeness(
+        [[0], [1], [2]], [_ITEM], _MEN, _TYP, _CTX, _FACTS, judge=stub_judge
+    )
+    assert calls == ["x", "x"]  # one judge call per item per engine
+    assert res_resolved["items"][0]["correctness"] == 1.0
+    assert res_resolved["mean_correctness"] == 1.0
+    assert res_split["items"][0]["correctness"] == 0.0  # f1 stranded -> not all gold
+
+
 def test_real_corpus_resolved_beats_exact_floor():
     items = load_qa()
     facts = load_qa_facts(items)

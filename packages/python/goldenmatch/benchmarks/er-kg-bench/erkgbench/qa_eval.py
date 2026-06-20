@@ -46,6 +46,19 @@ def _landed_facts(graph: "kg.KG", seed_surface: str) -> set[str]:
     return set(node.facts) if node else set()
 
 
+def _item_retrieved(
+    partition: list[list[int]],
+    item: QAItem,
+    mentions: dict[int, str],
+    types: dict[int, str],
+    contexts: dict[int, str],
+    facts_by_record: dict[int, list[str]],
+) -> tuple[set[str], set[str]]:
+    """(gold_facts, retrieved_facts) for one item under one partition."""
+    graph = kg.build_kg(partition, mentions, types, contexts, facts=facts_by_record)
+    return set(item.gold_facts), _landed_facts(graph, item.seed_surface)
+
+
 def item_completeness(
     partition: list[list[int]],
     item: QAItem,
@@ -54,11 +67,11 @@ def item_completeness(
     contexts: dict[int, str],
     facts_by_record: dict[int, list[str]],
 ) -> float:
-    graph = kg.build_kg(partition, mentions, types, contexts, facts=facts_by_record)
-    gold = set(item.gold_facts)
+    gold, retrieved = _item_retrieved(
+        partition, item, mentions, types, contexts, facts_by_record
+    )
     if not gold:
         return 1.0
-    retrieved = _landed_facts(graph, item.seed_surface)
     return len(gold & retrieved) / len(gold)
 
 
@@ -70,24 +83,38 @@ def engine_completeness(
     contexts: dict[int, str],
     facts_by_record: dict[int, list[str]],
     failure_class: dict[int, str] | None = None,
+    judge=None,
 ) -> dict:
     """Mean fact-completeness for one engine's partition, with a per-item +
-    per-failure-class breakdown."""
+    per-failure-class breakdown.
+
+    `judge` (opt-in, non-gated) is `callable(item, retrieved_facts) -> float` in
+    [0,1] (LLM-judged answer correctness). When given, per-item `correctness` +
+    `mean_correctness` are added. Default `None` -> deterministic path only."""
     per_item = []
     for it in items:
-        c = item_completeness(partition, it, mentions, types, contexts, facts_by_record)
+        gold, retrieved = _item_retrieved(
+            partition, it, mentions, types, contexts, facts_by_record
+        )
+        c = 1.0 if not gold else len(gold & retrieved) / len(gold)
         fc = None
         if failure_class:
             rid = next(iter(it.facts))  # the entity's failure class (any member)
             fc = failure_class.get(rid)
-        per_item.append({"qa_id": it.qa_id, "completeness": c, "failure_class": fc})
+        row = {"qa_id": it.qa_id, "completeness": c, "failure_class": fc}
+        if judge is not None:
+            row["correctness"] = float(judge(it, retrieved))
+        per_item.append(row)
     mean = sum(p["completeness"] for p in per_item) / len(per_item) if per_item else 0.0
     by_class: dict[str, list[float]] = {}
     for p in per_item:
         if p["failure_class"]:
             by_class.setdefault(p["failure_class"], []).append(p["completeness"])
     per_class = {k: sum(v) / len(v) for k, v in by_class.items()}
-    return {"mean_completeness": mean, "items": per_item, "per_class": per_class}
+    out = {"mean_completeness": mean, "items": per_item, "per_class": per_class}
+    if judge is not None and per_item:
+        out["mean_correctness"] = sum(p["correctness"] for p in per_item) / len(per_item)
+    return out
 
 
 def run_qa_eval(
@@ -99,10 +126,12 @@ def run_qa_eval(
     types: dict[int, str] | None = None,
     contexts: dict[int, str] | None = None,
     failure_class: dict[int, str] | None = None,
+    judge=None,
 ) -> list[dict]:
     """Run each adapter over `records`, score fact-completeness on the QA layer.
 
-    Adapters that raise (e.g. missing optional dep) yield a `skipped` row."""
+    Adapters that raise (e.g. missing optional dep) yield a `skipped` row.
+    `judge` (opt-in) adds LLM-judged correctness -- see `engine_completeness`."""
     items = items if items is not None else load_qa()
     facts_by_record = facts_by_record if facts_by_record is not None else load_qa_facts(items)
     if mentions is None:
@@ -116,7 +145,8 @@ def run_qa_eval(
             rows.append({"name": name, "status": "skipped", "error": str(exc)[:200]})
             continue
         res = engine_completeness(
-            partition, items, mentions, types, contexts, facts_by_record, failure_class
+            partition, items, mentions, types, contexts, facts_by_record,
+            failure_class, judge=judge,
         )
         rows.append({"name": name, "status": "ok", **res})
     return rows
