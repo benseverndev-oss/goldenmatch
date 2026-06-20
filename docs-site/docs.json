@@ -79,7 +79,8 @@
                   "goldenmatch/typescript",
                   "goldenmatch/rest-api",
                   "goldenmatch/mcp",
-                  "goldenmatch/agent"
+                  "goldenmatch/agent",
+                  "goldenmatch/kg-integrations"
                 ]
               },
               {

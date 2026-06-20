@@ -1,0 +1,87 @@
+---
+title: "Knowledge-graph framework integrations"
+description: "Drop goldenmatch in as the entity-resolution stage of neo4j-graphrag, LlamaIndex PropertyGraphIndex, and Graphiti via the goldenmatch-kg package."
+keywords: ["goldenmatch", "knowledge graph", "GraphRAG", "neo4j-graphrag", "LlamaIndex", "Graphiti", "entity resolution"]
+---
+
+Knowledge-graph pipelines (neo4j-graphrag, LlamaIndex, Graphiti, and friends) ingest
+text, extract entities and relationships, **resolve/dedupe the entities**, and write a
+graph. goldenmatch is the entity-resolution layer, not a KG builder, so the
+[`goldenmatch-kg`](https://pypi.org/project/goldenmatch-kg/) package drops it in as that
+resolve stage wherever a framework exposes a seam.
+
+<Note>
+This is an ER-stage swap, not "goldenmatch builds your graph". You still run the rest
+of your pipeline (extraction, relationship building, graph store). goldenmatch resolves
+the entities, and [ER-KG-Bench](https://github.com/benseverndev-oss/goldenmatch/tree/main/packages/python/goldenmatch/benchmarks/er-kg-bench)
+measures how much better than each framework's built-in default that is.
+</Note>
+
+## Install
+
+```bash
+pip install "goldenmatch-kg[neo4j-graphrag]"   # neo4j-graphrag adapter
+pip install "goldenmatch-kg[llamaindex]"       # LlamaIndex adapter
+pip install "goldenmatch-kg[graphiti]"         # Graphiti adapter
+```
+
+## neo4j-graphrag
+
+A real `GoldenMatchResolver` that subclasses the library's `BasePropertySimilarityResolver`
+and overrides the resolution step, so goldenmatch decides which nodes merge and Neo4j
+persists them. It replaces `FuzzyMatchResolver` as a true in-pipeline plugin.
+
+```python
+from goldenmatch_kg.neo4j_graphrag import GoldenMatchResolver
+
+resolver = GoldenMatchResolver(driver=driver)   # same construction as FuzzyMatchResolver
+# pass `resolver` to your neo4j-graphrag pipeline in the resolver slot
+```
+
+On ER-KG-Bench's ghsuite corpus, neo4j-graphrag's own fuzzy resolver scores **F1 0.322**;
+goldenmatch zero-config scores **F1 0.969** (+64.7pp), at zero LLM calls.
+
+## LlamaIndex PropertyGraphIndex
+
+LlamaIndex ships no fuzzy entity resolver (its default is exact name+label upsert), so
+goldenmatch is additive here: a `GoldenMatchEntityResolver` transform canonicalizes entity
+names before upsert, so variant mentions collapse into one node.
+
+```python
+from goldenmatch_kg.llamaindex import GoldenMatchEntityResolver
+from llama_index.core import PropertyGraphIndex
+
+index = PropertyGraphIndex.from_documents(
+    documents,
+    kg_extractors=[...],
+    transformations=[GoldenMatchEntityResolver()],  # canonicalize entities before upsert
+)
+```
+
+LlamaIndex's exact-upsert default behaves like the exact-match family (F1 0.0 to 0.24 on
+ghsuite); goldenmatch scores **F1 0.969**.
+
+## Graphiti
+
+Graphiti exposes no public resolver seam, so goldenmatch runs as a post-ingestion
+maintenance pass: `propose_entity_merges` re-resolves the graph's existing entity nodes and
+returns the duplicate groups its floor + LLM missed.
+
+```python
+from goldenmatch_kg.graphiti import propose_entity_merges
+
+merge_groups = propose_entity_merges(nodes)   # nodes = EntityNodes you fetched from the graph
+# apply each group: keep one canonical node, re-point edges, delete the duplicates
+```
+
+Graphiti's real deterministic dedup floor scores **F1 0.379** on ghsuite; goldenmatch
+scores **F1 0.969** (+59pp), at zero LLM calls (Graphiti's full path escalates unresolved
+nodes to an LLM).
+
+## How the lift stays honest
+
+The per-framework numbers above are read straight off the ER-KG-Bench board (each
+framework's default ER row versus the goldenmatch row), not re-scored here. Each adapter is
+proven by a parity test against real `dedupe_df` plus an integration test that runs the
+framework's real code with the goldenmatch shim wired in. GraphRAG, mem0, LightRAG, and
+Cognee have no clean resolver seam and are out of scope for v1.
