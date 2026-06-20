@@ -1935,6 +1935,156 @@ def _run_dedupe_pipeline(
         collected_df, config, all_pairs
     )
 
+    # ── Step 3.7: THROUGHPUT TIER (#1083) ──
+    # When auto-config set _throughput_plan with verify_mode="sketch_distance",
+    # the normal weighted-matchkey loop above produced zero pairs (throughput
+    # configs carry no weighted matchkey). Run a self-contained sketch-block +
+    # verify step here and replace all_pairs with the confirmed pairs.
+    # This is a STRICT NO-OP when _throughput_plan is absent or verify_mode is
+    # "full" — the branch does not touch any other pipeline variable.
+    _throughput_posture: dict | None = None
+    _tp_plan = getattr(config, "_throughput_plan", None)
+    if _tp_plan is not None and getattr(_tp_plan, "verify_mode", "full") == "sketch_distance":
+        import numpy as _np_tp
+        import polars as _pl_tp
+
+        from goldenmatch.core import throughput_verify as _tv
+
+        # all_ids is built in Step 4 below but we need it now for the remap.
+        # Derive it early; Step 4 will re-derive from the same collected_df.
+        _tp_all_ids = collected_df["__row_id__"].to_list()
+
+        _tp_blocking = config.blocking
+        _tp_strategy = getattr(_tp_blocking, "strategy", "lsh") if _tp_blocking else "lsh"
+        _tp_posture_built = False
+
+        if _tp_strategy == "simhash":
+            _tp_sc = _tp_blocking.simhash
+            _tp_col = _tp_sc.column
+            _tp_texts = (
+                collected_df[_tp_col].cast(_pl_tp.Utf8).fill_null("").to_list()
+            )
+            try:
+                from goldenmatch.core.embedder import get_embedder as _get_embedder
+                _tp_emb = _np_tp.asarray(
+                    _get_embedder(_tp_sc.model).embed_column(
+                        _tp_texts, cache_key="throughput"
+                    ),
+                    dtype=_np_tp.float64,
+                )
+                from goldenmatch.core.simhash_blocker import SimHashLSHBlocker as _SimHashLSHBlocker
+                _tp_blocker = _SimHashLSHBlocker(
+                    num_planes=_tp_sc.num_planes,
+                    num_bands=_tp_plan.sketch_bands,
+                    seed=_tp_sc.seed,
+                )
+                _tp_pos_pairs = _tp_blocker.candidate_pairs(_tp_emb)
+                _tp_sim = _tp_plan.sketch_similarity or 0.85
+                _tp_scored_pos = _tv.score_sketch_pairs(
+                    _tp_pos_pairs,
+                    metric="cosine",
+                    threshold=_tp_sim,
+                    embeddings=_tp_emb,
+                )
+                _tp_metric = "cosine"
+                _tp_posture_built = True
+            except Exception as _tp_exc:
+                logger.warning(
+                    "throughput simhash branch failed (%s); falling back to lsh",
+                    _tp_exc, exc_info=False,
+                )
+                _tp_strategy = "lsh"
+
+        if _tp_strategy != "simhash" or not _tp_posture_built:
+            # LSH (MinHash) path — also the fallback from a simhash failure.
+            _tp_lsh_cfg = getattr(_tp_blocking, "lsh", None)
+            if _tp_lsh_cfg is not None:
+                _tp_col = _tp_lsh_cfg.column
+                _tp_mode = _tp_lsh_cfg.mode
+                _tp_k = _tp_lsh_cfg.k
+                _tp_num_perms = _tp_lsh_cfg.num_perms
+                _tp_lsh_seed = _tp_lsh_cfg.seed
+            else:
+                # Fallback: pick first string-ish column
+                _tp_str_cols = [
+                    c for c, dt in collected_df.schema.items()
+                    if dt in (_pl_tp.Utf8, _pl_tp.String) and not c.startswith("__")
+                ]
+                _tp_col = _tp_str_cols[0] if _tp_str_cols else collected_df.columns[0]
+                _tp_mode = "char"
+                _tp_k = 3
+                _tp_num_perms = 128
+                _tp_lsh_seed = 0
+
+            _tp_texts = (
+                collected_df[_tp_col].cast(_pl_tp.Utf8).fill_null("").to_list()
+            )
+            from goldenmatch.core.lsh_blocker import MinHashLSHBlocker as _MinHashLSHBlocker
+            _tp_n_bands = _tp_plan.sketch_bands or 20
+            _tp_blocker = _MinHashLSHBlocker(
+                mode=_tp_mode,
+                k=_tp_k,
+                num_perms=_tp_num_perms,
+                num_bands=_tp_n_bands,
+                seed=_tp_lsh_seed,
+            )
+            _tp_pos_pairs = _tp_blocker.candidate_pairs(_tp_texts)
+            _tp_sim = _tp_plan.sketch_similarity or 0.8
+            _tp_scored_pos = _tv.score_sketch_pairs(
+                _tp_pos_pairs,
+                metric="jaccard",
+                threshold=_tp_sim,
+                texts=_tp_texts,
+                mode=_tp_mode,
+                k=_tp_k,
+                num_perms=_tp_num_perms,
+                seed=_tp_lsh_seed,
+            )
+            _tp_metric = "jaccard"
+            _tp_posture_built = True
+
+        if _tp_posture_built:
+            # Remap positional indices (into texts/emb) to __row_id__ values.
+            # For single-source dedupe_df (offset=0) these are identical, but the
+            # remap is the correct contract for all callers.
+            all_pairs = [
+                (_tp_all_ids[a], _tp_all_ids[b], s)
+                for (a, b, s) in _tp_scored_pos
+            ]
+            _tp_cfg = getattr(config, "throughput", None)
+            _tp_recall_target = (
+                _tp_cfg.recall_target if _tp_cfg is not None else 0.95
+            )
+            # Resolve effective bands/rows for posture; prefer plan fields
+            # (set by apply_throughput_overlay) over fallback defaults.
+            _tp_eff_bands = _tp_plan.sketch_bands
+            if _tp_eff_bands is None:
+                _tp_eff_bands = _tp_n_bands if _tp_metric == "jaccard" else _tp_blocker.num_bands
+            _tp_eff_rows = _tp_plan.sketch_rows
+            if _tp_eff_rows is None:
+                if _tp_metric == "jaccard":
+                    _tp_eff_rows = _tp_num_perms // _tp_eff_bands
+                else:
+                    _tp_eff_rows = _tp_sc.num_planes // _tp_eff_bands
+            _tp_posture_obj = _tv.build_posture(
+                metric=_tp_metric,
+                recall_target=_tp_recall_target,
+                similarity=_tp_sim,
+                bands=_tp_eff_bands,
+                rows=_tp_eff_rows,
+                n_rows=collected_df.height,
+                candidate_pairs=len(_tp_pos_pairs),
+                verified_pairs=len(all_pairs),
+                semantic_fell_back=False,
+            )
+            _throughput_posture = _tp_posture_obj.to_dict()
+            logger.info(
+                "throughput tier: %d candidate pairs -> %d verified (metric=%s, "
+                "similarity=%.3f, bands=%d, expected_recall=%.3f)",
+                len(_tp_pos_pairs), len(all_pairs), _tp_metric, _tp_sim,
+                _tp_eff_bands, _tp_posture_obj.expected_recall,
+            )
+
     # ── Step 4: CLUSTER ──
     all_ids = collected_df["__row_id__"].to_list()
     max_cluster_size = 100
@@ -2476,6 +2626,7 @@ def _run_dedupe_pipeline(
         "identity_summary": identity_summary,
         "scored_pairs": scored_pairs,
         "llm_cost": llm_budget_summary,
+        "throughput_posture": _throughput_posture,
     }
 
     try:
