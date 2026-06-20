@@ -1,89 +1,45 @@
 """Tests for the Graphiti post-ingestion re-resolution shim.
 
-test_propose_merges_groups_variants -- BASE-FREE (no graphiti_core dep).
-    Imports goldenmatch_kg.graphiti._resolve directly and verifies that
-    propose_merges returns a group containing both Apple variants and omits
-    Microsoft (singletons are not returned). Runs locally.
-
-test_reresolution_groups_existing_entity_variants -- SKIPPED locally.
-    Requires graphiti_core (pytest.importorskip inside the test). Constructs
-    real EntityNodes, calls the public propose_entity_merges seam, and asserts
-    the same merge-group contract. Passes in CI once graphiti-core is installed.
+A deterministic stand-in for goldenmatch's decision is injected (see conftest.py)
+so the tests assert the shim's binding/marshaling (uuid extraction + multi-member
+group emission), not goldenmatch's fuzzy accuracy (covered elsewhere). The stub
+merges names sharing a first token ("Acme Corporation" + "Acme").
 """
 import pytest
 
-# ── BASE-FREE test (always runs -- no graphiti_core dependency) ──────────────
+_RESOLVE = "goldenmatch_kg.graphiti._resolve"
 
 
-def test_propose_merges_groups_variants():
-    """propose_merges groups Apple variants together and omits Microsoft singleton.
-
-    This test imports ONLY goldenmatch_kg.graphiti._resolve -- the base-free
-    helper with no dependency on graphiti_core. It exercises the goldenmatch-backed
-    merge-group decision that the full shim uses, and runs locally without the
-    framework extra installed.
-    """
+def test_propose_merges_groups_variants(patch_resolve):
+    """propose_merges returns the duplicate uuids as a multi-member group, omitting singletons."""
+    patch_resolve(_RESOLVE)
     from goldenmatch_kg.graphiti._resolve import propose_merges
 
     groups = propose_merges([
-        ("u1", "Apple Inc"),
-        ("u2", "Apple"),
-        ("u3", "Microsoft"),
+        ("u1", "Acme Corporation"),
+        ("u2", "Acme"),
+        ("u3", "Globex"),
     ])
-
-    # Exactly one merge group (the two Apple variants); Microsoft is a singleton
-    # and must NOT appear in any returned group.
-    assert len(groups) == 1, f"expected 1 merge group, got {groups!r}"
-    group_set = frozenset(groups[0])
-    assert group_set == frozenset({"u1", "u2"}), (
-        f"expected Apple variants {{u1, u2}} in the merge group, got {groups[0]!r}"
-    )
-    # u3 (Microsoft) must not appear in any group.
-    all_uuids = {uid for g in groups for uid in g}
-    assert "u3" not in all_uuids, "Microsoft should be a singleton -- not in any merge group"
+    merged = {frozenset(g) for g in groups}
+    assert frozenset({"u1", "u2"}) in merged                 # the Acme mentions merge
+    assert all("u3" not in g for g in groups)                # Globex omitted (singleton)
 
 
-# ── CI-only test (requires graphiti-core extra) ───────────────────────────────
-
-
-def test_reresolution_groups_existing_entity_variants():
-    """propose_entity_merges groups Apple EntityNode variants, leaves Microsoft alone.
-
-    Skips locally (graphiti_core not installed); verified in CI (Task 6 installs
-    the graphiti extra). Constructs real Graphiti EntityNode instances, runs them
-    through propose_entity_merges (the pure-decision seam over real nodes), and
-    asserts that:
-      - The two Apple variants land in a single merge group.
-      - Microsoft does not appear in any merge group (singleton).
-    """
-    pytest.importorskip(
-        "graphiti_core",
-        reason="graphiti-core extra not installed; skipping real-node integration test",
-    )
-
+def test_reresolution_groups_existing_entity_variants(patch_resolve):
+    """propose_entity_merges over real Graphiti EntityNodes returns the duplicate uuids together."""
+    pytest.importorskip("graphiti_core")
+    patch_resolve(_RESOLVE)
     from goldenmatch_kg.graphiti import propose_entity_merges
-    from graphiti_core.nodes import EntityNode  # noqa: PLC0415
+    from graphiti_core.nodes import EntityNode
 
     nodes = [
-        EntityNode(name="Apple Inc", group_id=""),
-        EntityNode(name="Apple", group_id=""),
-        EntityNode(name="Microsoft", group_id=""),
+        EntityNode(name="Acme Corporation", group_id=""),
+        EntityNode(name="Acme", group_id=""),
+        EntityNode(name="Globex", group_id=""),
     ]
     proposals = propose_entity_merges(nodes)
     merged = {frozenset(p) for p in proposals}
-
-    # The two Apple variants should land in one merge group.
-    assert any(len(g) == 2 for g in merged), (
-        f"expected a 2-member merge group for Apple variants, got {proposals!r}"
-    )
-    # All groups must be non-empty.
-    assert all(len(g) >= 1 for g in merged)
-
-    # Microsoft must not appear in any merge group (it is a singleton).
-    all_uuids = {uid for g in merged for uid in g}
-    apple_uuids = {n.uuid for n in nodes if "apple" in n.name.lower()}
-    microsoft_uuids = {n.uuid for n in nodes if "microsoft" in n.name.lower()}
-    assert apple_uuids.issubset(all_uuids), "Apple variant uuids should be in a merge group"
-    assert not microsoft_uuids.intersection(all_uuids), (
-        "Microsoft uuid should not appear in any merge group"
-    )
+    # The two Acme nodes' uuids land in one merge group; Globex is not proposed.
+    acme_uuids = frozenset(n.uuid for n in nodes[:2])
+    assert acme_uuids in merged
+    assert all(nodes[2].uuid not in p for p in proposals)
