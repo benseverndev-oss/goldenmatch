@@ -20,6 +20,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   not yet default-on (reachable via `GOLDENMATCH_NATIVE=1`);
   `GOLDENMATCH_NATIVE_SKETCH_RAYON_MIN_ROWS` tunes the batch rayon fan-out threshold.
   Foundation for the training-data dedup throughput tier (#1080).
+- **Semantic SimHash near-duplicate blocking (#1082 Phase B).** A new pyo3-free
+  SimHash (random ±1 hyperplane) LSH kernel over embedding vectors, exposed as
+  blocking `strategy="simhash"`. `SimHashKeyConfig` (`column`, `num_planes=256`,
+  `seed=0`, `threshold | num_bands`, `model`) is re-exported from the top level;
+  `BlockingConfig(strategy="simhash", simhash=SimHashKeyConfig(...))` embeds a text
+  column and buckets cosine-similar vectors via `goldenmatch.core.simhash_blocker.
+  SimHashLSHBlocker`. Auto-config now routes a **text corpus** to `simhash`
+  (semantic) when an embedder is reachable (`inhouse_embedding_available()` or a
+  configured provider), else to lexical `lsh` (Phase A) — so `dedupe_df(corpus)`
+  picks semantic near-dup automatically when embeddings are available. SimHash
+  catches the semantic paraphrases that lexical MinHash/LSH misses (measured: an
+  always-on synthetic recall gate at `num_planes=256`/`num_bands=32` — recall 1.0,
+  candidate-reduction 0.86 on cosine≥0.89 variants — plus a QQP lexical-vs-semantic
+  A/B bench, `bench-lsh-recall.yml --method semantic`). The kernel ships native via
+  the new `simhash` component — built but not gated on (reachable via
+  `GOLDENMATCH_NATIVE=1`, same posture as `sketch`/`pprl_bloom`), sharing
+  `GOLDENMATCH_NATIVE_SKETCH_RAYON_MIN_ROWS` with the MinHash kernel. Cross-language
+  byte parity via golden vectors (pure-Python reference + Rust `sketch-core` +
+  pure-TS port). Builds on #1081 + #1082 Phase A; part of the dedup epic #1080.
 
 ## [2.2.0] - 2026-06-19
 

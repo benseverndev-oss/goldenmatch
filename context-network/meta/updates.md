@@ -2,6 +2,31 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-06-19 — Semantic SimHash near-dup blocking (#1082 Phase B)
+- Extends the sketch tier (ADR [../decisions/0020-minhash-lsh-sketch-tier.md](../decisions/0020-minhash-lsh-sketch-tier.md))
+  with a *semantic* near-duplicate path. New pyo3-free SimHash (random ±1
+  hyperplane) LSH kernel over embedding vectors, exposed as blocking
+  `strategy="simhash"`: `SimHashKeyConfig` (`column`, `num_planes=256`, `seed=0`,
+  `threshold | num_bands`, `model`, re-exported from the top level) +
+  `core.simhash_blocker.SimHashLSHBlocker`, which embeds a text column and buckets
+  cosine-similar vectors. **Auto-config routes a text corpus to `simhash`** when an
+  embedder is reachable (`inhouse_embedding_available()` or a configured provider),
+  else falls back to lexical `lsh` (#1082 Phase A) — `dedupe_df(corpus)` picks the
+  semantic near-dup path automatically when embeddings are available. SimHash
+  catches the semantic paraphrases that lexical MinHash/LSH (#1081, ~0.21 on QQP)
+  misses. New native component `simhash`: shipped available but NOT in `_GATED_ON`
+  (reachable via `GOLDENMATCH_NATIVE=1`, same posture as `sketch`/`pprl_bloom`),
+  tuned by `GOLDENMATCH_NATIVE_SKETCH_RAYON_MIN_ROWS` (shared with the MinHash
+  kernel). Cross-language byte parity via golden vectors (pure-Python reference +
+  Rust `sketch-core` + pure-TS port; the kernel is f64, the semantic blocker is
+  Python-primary since TS has no real embedder). Measured: a synthetic recall gate
+  (`num_planes=256`/`num_bands=32` → recall 1.0 / reduction 0.86 on cosine≥0.89
+  variants) + a QQP lexical-vs-semantic A/B (`bench-lsh-recall.yml --method
+  semantic`). Treated as an addendum to ADR 0020, not a new decision (it reuses the
+  Approach-A kernel/host split and parity-by-construction contract). Docs
+  (blocking/configuration/tuning Mintlify) + CHANGELOGs (py + ts) updated. Part of
+  the dedup epic #1080.
+
 ## 2026-06-19 — MinHash/LSH sketch tier (#1081)
 - New decision [../decisions/0020-minhash-lsh-sketch-tier.md](../decisions/0020-minhash-lsh-sketch-tier.md):
   phase 1 of the training-data dedup epic (#1080). A new pyo3-free

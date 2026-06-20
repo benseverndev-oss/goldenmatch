@@ -5,7 +5,9 @@
 //! (`core/sketch.py`) and the TS port — the `sketch_golden.json` fixture is the
 //! shared parity oracle. The Python caller (`core/sketch.py`) selects these only
 //! when `native_enabled("sketch")`.
-use goldenmatch_sketch_core::{band_hashes_batch, signature_batch, ShingleMode};
+use goldenmatch_sketch_core::{
+    band_hashes_batch, signature_batch, simhash_band_hashes_batch, ShingleMode,
+};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
@@ -37,6 +39,28 @@ pub fn sketch_band_hashes_batch(
     let mode = parse_mode(mode)?;
     Ok(band_hashes_batch(
         &texts, mode, k, num_perms, num_bands, seed,
+    ))
+}
+
+/// Per-record SimHash banded-LSH bucket hashes for a batch of dense f64 vectors.
+///
+/// SimHash buckets DENSE embedding-style vectors (one bit per random hyperplane),
+/// complementing `sketch_band_hashes_batch`'s bucketing of SPARSE shingle sets.
+/// The projection matrix is built once per `(seed, dim, num_planes)` and reused.
+#[pyfunction]
+pub fn sketch_simhash_band_hashes_batch(
+    vectors: Vec<Vec<f64>>,
+    num_planes: usize,
+    num_bands: usize,
+    seed: u64,
+) -> PyResult<Vec<Vec<u64>>> {
+    if num_bands == 0 || !num_planes.is_multiple_of(num_bands) {
+        return Err(PyValueError::new_err(format!(
+            "num_planes {num_planes} not divisible by num_bands {num_bands}"
+        )));
+    }
+    Ok(simhash_band_hashes_batch(
+        &vectors, num_planes, num_bands, seed,
     ))
 }
 

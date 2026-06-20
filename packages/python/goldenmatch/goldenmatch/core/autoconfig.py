@@ -1947,12 +1947,22 @@ def _text_corpus_blocking(
 ) -> BlockingConfig:
     """Pick the text-corpus blocking strategy.
 
-    #1082 Phase A is lexical only (MinHash/LSH). Phase B replaces the
-    embedder-available branch with semantic SimHash; for now both route to the
-    lexical path.
+    Semantic (SimHash over embeddings) when an embedder is reachable, else
+    lexical (MinHash/LSH). SimHash buckets cosine-near embeddings, catching
+    near-duplicates that share meaning but little surface text — the lexical
+    fallback only catches shared shingles. See #1082.
     """
     if _embedder_available(config):
-        return _auto_build_lsh_config(profiles)
+        from goldenmatch.config.schemas import BlockingConfig, SimHashKeyConfig
+
+        col = max(
+            (p for p in profiles if p.col_type == "description"),
+            key=lambda p: p.avg_len,
+        ).name
+        return BlockingConfig(
+            strategy="simhash",
+            simhash=SimHashKeyConfig(column=col, num_planes=256, num_bands=32, seed=0),
+        )
     return _auto_build_lsh_config(profiles)
 
 

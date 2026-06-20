@@ -12,11 +12,13 @@ pub mod hash;
 pub mod lsh;
 pub mod minhash;
 pub mod shingle;
+pub mod simhash;
 
 pub use hash::{base_hash, splitmix64};
 pub use lsh::{band_hashes, optimal_bands};
 pub use minhash::{estimate_jaccard, signature};
 pub use shingle::{shingle, ShingleMode};
+pub use simhash::*;
 
 use rayon::prelude::*;
 

@@ -14,6 +14,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   `string[]`) for near-duplicate candidate generation: `candidatePairs(texts)`
   returns deduplicated `(min,max)` pairs. WASM acceleration is deferred (pure-TS
   is the default + fallback). Part of the training-data dedup tier (#1080).
+- **SimHash sketch kernel (#1082).** `src/core/simhash.ts` is a pure-TS,
+  edge-safe port of the Python/Rust SimHash kernel (random ±1 hyperplane
+  projection → sign-bit signature → banded LSH) for *semantic* near-duplicate
+  detection over dense embeddings. Exports `simhashSignature` and
+  `simhashBandHashes`; reuses the `sketch.ts` `baseHash`/`splitmix64` bitstream,
+  so the projection matrix and band hashes reproduce the shared golden vectors
+  (`tests/fixtures/sketch_simhash_golden.json`) byte-for-byte. The semantic
+  blocker stays Python-primary (the TS port has no real embedder); this is the
+  cross-language kernel parity surface. Builds on the MinHash sketch above;
+  part of the dedup epic (#1080).
 
 ## [1.0.0] — 2026-06-15
 

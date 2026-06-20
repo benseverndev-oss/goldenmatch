@@ -104,6 +104,14 @@ blocking:
     num_perms: 128        # MinHash signature length
     threshold: 0.5        # similarity threshold (picks the band/row split);
                           # or set num_bands explicitly (must divide num_perms)
+  # SimHash/LSH (semantic near-duplicate text blocking; set strategy: simhash to use it)
+  simhash:
+    column: description   # the text column to embed
+    num_planes: 256       # SimHash signature length (hyperplane count)
+    num_bands: 32         # band count (must divide num_planes)
+    seed: 0               # deterministic plane set
+    # threshold: 0.85     # alternative to num_bands: picks the band/row split
+    # model: inhouse      # embedder; defaults to the in-house ER embedder
 
 golden_rules:
   default_strategy: most_complete

@@ -40,6 +40,9 @@ __all__ = [
     "sketch_band_hashes",
     "band_hashes_batch",
     "signature_batch",
+    "simhash_signature",
+    "simhash_band_hashes",
+    "simhash_band_hashes_batch",
 ]
 
 _MASK64 = (1 << 64) - 1
@@ -279,3 +282,120 @@ def signature_batch(
                 "native sketch_signature_batch unavailable (wheel skew); using Python fallback"
             )
     return _signature_batch_python(texts, mode, k, num_perms, seed)
+
+
+# ---------------------------------------------------------------------------
+# SimHash (random ±1 hyperplane LSH over dense f64 vectors). Byte-identical with
+# the Rust ``goldenmatch-sketch-core::simhash`` kernel and the TS port; see the
+# #1082 design spec. SimHash buckets dense embedding-style vectors, where MinHash
+# above buckets sparse shingle sets — complementary, sharing the hash family.
+# ---------------------------------------------------------------------------
+
+
+def _projection_matrix(num_planes: int, dim: int, seed: int) -> list[list[float]]:
+    """Row-major ``num_planes x dim`` Rademacher (±1) matrix from a splitmix64
+    bitstream seeded at ``seed``.
+
+    One bit per entry, LSB first, refilling a 64-bit buffer from the stream.
+    Draw order is plane 0 col 0..dim, plane 1 col 0..dim, ... — the Rust kernel
+    and TS port draw in the same order, so the matrix is byte-identical.
+    """
+    state = seed
+    buf = 0
+    bits_left = 0
+    planes: list[list[float]] = []
+    for _ in range(num_planes):
+        row: list[float] = []
+        for _ in range(dim):
+            if bits_left == 0:
+                buf, state = splitmix64(state)
+                bits_left = 64
+            row.append(1.0 if (buf & 1) == 1 else -1.0)
+            buf >>= 1
+            bits_left -= 1
+        planes.append(row)
+    return planes
+
+
+def simhash_signature(vector: list[float], num_planes: int, seed: int) -> list[int]:
+    """SimHash signature: one bit (0/1) per random hyperplane.
+
+    ``sig[i] = 1`` iff the dot product of plane ``i`` with ``vector`` is
+    ``>= 0.0`` (tie, including the all-zero vector where every dot is exactly
+    0.0, resolves to 1). All float math is f64; the dot sums ``j`` ascending.
+    """
+    planes = _projection_matrix(num_planes, len(vector), seed)
+    sig: list[int] = []
+    for row in planes:
+        dot = 0.0
+        for j in range(len(vector)):
+            dot += row[j] * vector[j]
+        sig.append(1 if dot >= 0.0 else 0)
+    return sig
+
+
+def simhash_band_hashes(sig: list[int], num_bands: int) -> list[int]:
+    """Banded LSH over the 0/1 SimHash signature bytes.
+
+    ``len(sig)`` must be divisible by ``num_bands``. For band ``b`` the bucket id
+    is ``base_hash(le8(b) ++ bytes(sig[b*r:(b+1)*r]))`` — the band index as 8
+    little-endian bytes, then one byte (0 or 1) per plane-bit in the band. Mirrors
+    the MinHash :func:`band_hashes` byte layout (u64 band-index prefix + per-element
+    bytes).
+    """
+    n = len(sig)
+    if num_bands <= 0 or n % num_bands != 0:
+        raise ValueError(f"num_planes {n} not divisible by num_bands {num_bands}")
+    r = n // num_bands
+    out: list[int] = []
+    for band in range(num_bands):
+        buf = band.to_bytes(8, "little") + bytes(sig[band * r : (band + 1) * r])
+        out.append(base_hash(buf))
+    return out
+
+
+def _simhash_band_hashes_batch_python(
+    vectors: list[list[float]], num_planes: int, num_bands: int, seed: int
+) -> list[list[int]]:
+    # Build the projection matrix ONCE per (seed, dim, num_planes) and reuse it
+    # across every row — the whole point of the batch entry point.
+    if not vectors:
+        return []
+    dim = len(vectors[0])
+    planes = _projection_matrix(num_planes, dim, seed)
+    out: list[list[int]] = []
+    for vector in vectors:
+        sig: list[int] = []
+        for row in planes:
+            dot = 0.0
+            for j in range(len(vector)):
+                dot += row[j] * vector[j]
+            sig.append(1 if dot >= 0.0 else 0)
+        out.append(simhash_band_hashes(sig, num_bands))
+    return out
+
+
+def simhash_band_hashes_batch(
+    vectors: list[list[float]],
+    num_planes: int = 128,
+    num_bands: int = 32,
+    seed: int = 0,
+) -> list[list[int]]:
+    """Per-record SimHash band hashes for many vectors. Uses the native kernel
+    when gated on, building the projection matrix once and reusing it."""
+    vectors = list(vectors)
+    from goldenmatch.core._native_loader import native_enabled, native_module
+
+    if native_enabled("simhash"):
+        try:
+            return native_module().sketch_simhash_band_hashes_batch(
+                vectors, num_planes, num_bands, seed
+            )
+        except AttributeError:
+            # Published wheel predates this symbol (wheel/caller skew, see #688) —
+            # legitimate fallback. A real kernel error is NOT swallowed here.
+            logger.debug(
+                "native sketch_simhash_band_hashes_batch unavailable (wheel skew); "
+                "using Python fallback"
+            )
+    return _simhash_band_hashes_batch_python(vectors, num_planes, num_bands, seed)

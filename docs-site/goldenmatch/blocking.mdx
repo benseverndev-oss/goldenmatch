@@ -1,10 +1,10 @@
 ---
 title: "Blocking Strategies"
-description: "Reduce the O(N²) comparison space with GoldenMatch's 9 blocking strategies: static, adaptive, sorted neighborhood, multi-pass, ANN hybrid, ANN, canopy, learned, and MinHash/LSH."
-keywords: ["blocking", "entity resolution", "deduplication", "ann", "adaptive", "multi-pass", "learned blocking", "sorted neighborhood", "minhash", "lsh", "near-duplicate"]
+description: "Reduce the O(N²) comparison space with GoldenMatch's 10 blocking strategies: static, adaptive, sorted neighborhood, multi-pass, ANN hybrid, ANN, canopy, learned, MinHash/LSH, and SimHash."
+keywords: ["blocking", "entity resolution", "deduplication", "ann", "adaptive", "multi-pass", "learned blocking", "sorted neighborhood", "minhash", "lsh", "simhash", "near-duplicate"]
 ---
 
-Blocking reduces the comparison space from O(N^2) to O(N*B) by grouping records that share a key. GoldenMatch supports 9 strategies.
+Blocking reduces the comparison space from O(N^2) to O(N*B) by grouping records that share a key. GoldenMatch supports 10 strategies.
 
 ## Strategy overview
 
@@ -19,6 +19,7 @@ Blocking reduces the comparison space from O(N^2) to O(N*B) by grouping records 
 | `canopy` | TF-IDF canopy clustering | Text-heavy data |
 | `learned` | Data-driven predicate selection | Auto-discovers rules |
 | `lsh` | MinHash/LSH sketching on a text column | Near-duplicate text / corpus dedup |
+| `simhash` | SimHash LSH over embeddings | Semantic near-duplicate text |
 
 ## Static blocking
 
@@ -125,6 +126,26 @@ blocking:
   ann_column: title
   ann_top_k: 20
 ```
+
+## SimHash (semantic) blocking
+
+*New in #1082.* Bucket records by **semantic** near-duplication. SimHash embeds a text column, projects each embedding through `num_planes` random hyperplanes into a 0/1 signature, then bands the signature into LSH buckets. Records whose embeddings are cosine-near collide in a band and become candidates. This catches paraphrases that share meaning but little surface text, where the lexical `lsh` strategy (word/char-shingle MinHash) only catches shared shingles.
+
+```yaml
+blocking:
+  strategy: simhash
+  simhash:
+    column: description   # the text column to embed
+    num_planes: 256       # hyperplane count = SimHash signature length
+    num_bands: 32         # band count (must divide num_planes)
+    seed: 0               # deterministic plane set
+    # threshold: 0.85     # alternative to num_bands: picks the band/row split
+    # model: inhouse      # embedder; defaults to the in-house ER embedder
+```
+
+Provide either `num_bands` or `threshold` (not both required; `num_bands` wins if you set both). More bands means looser blocking (higher recall, more candidates); fewer bands is tighter. The default embedder is the zero-config in-house model, so SimHash works without external credentials; set `model` to use a configured provider.
+
+For a **text corpus** (a column of long free text), auto-config picks `simhash` automatically when an embedder is reachable, and falls back to the lexical `lsh` strategy when it is not. So `dedupe_df(corpus)` selects the semantic near-dup path with no config when embeddings are available. SimHash buckets dense embeddings; the lexical `lsh` strategy (MinHash) buckets sparse shingle sets. Use SimHash for semantic paraphrase, `lsh` for lexical near-dups.
 
 ## Canopy blocking
 

@@ -410,11 +410,48 @@ class LSHKeyConfig(BaseModel):
         return self
 
 
+class SimHashKeyConfig(BaseModel):
+    """SimHash/LSH blocking on a text column via dense embeddings (#1082).
+
+    The text column is embedded (via ``model``, default the in-house ER
+    embedder), then each embedding is SimHash-projected through ``num_planes``
+    random hyperplanes and banded into LSH buckets. Records whose embeddings are
+    cosine-near collide in a band, so this is the *semantic* near-duplicate
+    blocker (complementing the lexical MinHash/LSH ``LSHKeyConfig``).
+
+    Provide either ``threshold`` (the band/row split is then chosen by
+    ``optimal_bands``) or an explicit ``num_bands`` (which must divide
+    ``num_planes``). If both are set, ``num_bands`` wins (``threshold`` is
+    ignored).
+    """
+
+    column: str
+    num_planes: int = 256
+    seed: int = 0
+    threshold: float | None = None
+    num_bands: int | None = None
+    model: str | None = None
+
+    @model_validator(mode="after")
+    def _validate(self) -> SimHashKeyConfig:
+        if self.num_planes < 1:
+            raise ValueError("SimHashKeyConfig 'num_planes' must be >= 1.")
+        if self.threshold is None and self.num_bands is None:
+            raise ValueError("SimHashKeyConfig requires either 'threshold' or 'num_bands'.")
+        if self.threshold is not None and not 0.0 < self.threshold < 1.0:
+            raise ValueError("SimHashKeyConfig 'threshold' must be in (0, 1).")
+        if self.num_bands is not None and (
+            self.num_bands < 1 or self.num_planes % self.num_bands != 0
+        ):
+            raise ValueError("SimHashKeyConfig 'num_planes' must be divisible by 'num_bands'.")
+        return self
+
+
 class BlockingConfig(BaseModel):
     keys: list[BlockingKeyConfig] = []
     max_block_size: int = 5000
     skip_oversized: bool = False
-    strategy: Literal["static", "adaptive", "sorted_neighborhood", "multi_pass", "ann", "canopy", "ann_pairs", "learned", "lsh"] = "static"
+    strategy: Literal["static", "adaptive", "sorted_neighborhood", "multi_pass", "ann", "canopy", "ann_pairs", "learned", "lsh", "simhash"] = "static"
     learned_sample_size: int = 5000
     learned_min_recall: float = 0.95
     learned_min_reduction: float = 0.90
@@ -433,6 +470,7 @@ class BlockingConfig(BaseModel):
     ann_top_k: int = 20
     canopy: CanopyConfig | None = None
     lsh: LSHKeyConfig | None = None
+    simhash: SimHashKeyConfig | None = None
 
     @model_validator(mode="after")
     def _validate_keys_or_passes(self) -> BlockingConfig:
@@ -459,6 +497,14 @@ class BlockingConfig(BaseModel):
                 raise ValueError(
                     "BlockingConfig with strategy='lsh' must not set 'keys'/'passes' "
                     "(it uses the 'lsh' config block)."
+                )
+        if self.strategy == "simhash":
+            if self.simhash is None:
+                raise ValueError("BlockingConfig with strategy='simhash' requires 'simhash'.")
+            if self.keys or self.passes:
+                raise ValueError(
+                    "BlockingConfig with strategy='simhash' must not set 'keys'/'passes' "
+                    "(it uses the 'simhash' config block)."
                 )
         return self
 

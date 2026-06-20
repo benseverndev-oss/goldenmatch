@@ -16,8 +16,12 @@ on:
         description: "Branch/ref to bench (has scripts/bench_lsh_recall_qqp.py)"
         required: false
         default: "main"
+      method:
+        description: "Blocking method (lexical = MinHash | semantic = embedding + SimHash)"
+        required: false
+        default: "lexical"
       mode:
-        description: "Shingle mode (char|word)"
+        description: "Shingle mode (char|word) — lexical only"
         required: false
         default: "word"
       k:
@@ -87,7 +91,8 @@ jobs:
         run: |
           MAXARG=""
           if [ -n "${{ inputs.max_rows }}" ]; then MAXARG="--max-rows ${{ inputs.max_rows }}"; fi
-          uv run --with datasets python scripts/bench_lsh_recall_qqp.py \
+          uv run --with datasets --with sentence-transformers python scripts/bench_lsh_recall_qqp.py \
+            --method "${{ inputs.method }}" \
             --mode "${{ inputs.mode }}" \
             --k "${{ inputs.k }}" \
             --num-perms "${{ inputs.num_perms }}" \
