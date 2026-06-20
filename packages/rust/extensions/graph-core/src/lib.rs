@@ -77,6 +77,91 @@ pub fn connected_components(edges: &[(i64, i64, f64)], all_ids: &[i64]) -> Vec<V
     groups.into_values().collect()
 }
 
+/// Deterministic label-propagation communities over `all_ids` ∪ edge endpoints.
+///
+/// Each id starts in its own community. Repeatedly, in ASCENDING id order, each
+/// id adopts the most frequent label among its (set) neighbors — ties broken by
+/// the smallest label; a node with no neighbors keeps its own. Updates are
+/// applied in place (asynchronous), so the processed/unprocessed split is fixed
+/// by ascending id, making the result independent of input edge/id order. The
+/// sweep repeats until a full pass makes no change or `max_iters` is hit (the
+/// hard termination backstop). Adjacency is a SET — duplicate edges collapse and
+/// self-loops `(a,a)` are ignored (a node never votes for its own label). Edge
+/// weight is ignored (unweighted LP). Returns communities sorted by minimum id,
+/// each member list sorted ascending; singletons included (parity with
+/// `connected_components`).
+///
+/// Label propagation is intentionally a modest first kernel: on small or densely
+/// connected graphs it tends to merge across bridges (community ≈ connected
+/// component). A modularity-optimal method (Leiden) behind the same return shape
+/// is the future quality upgrade.
+pub fn label_propagation_communities(
+    edges: &[(i64, i64, f64)],
+    all_ids: &[i64],
+    max_iters: u32,
+) -> Vec<Vec<i64>> {
+    use std::collections::BTreeSet;
+
+    // Set adjacency over the id universe ∪ edge endpoints; drop self-loops.
+    let mut adj: BTreeMap<i64, BTreeSet<i64>> = BTreeMap::new();
+    for &id in all_ids {
+        adj.entry(id).or_default();
+    }
+    for &(a, b, _s) in edges {
+        adj.entry(a).or_default();
+        adj.entry(b).or_default();
+        if a != b {
+            adj.get_mut(&a).unwrap().insert(b);
+            adj.get_mut(&b).unwrap().insert(a);
+        }
+    }
+
+    // Each node starts as its own label. BTreeMap keys are ascending.
+    let nodes: Vec<i64> = adj.keys().copied().collect();
+    let mut label: BTreeMap<i64, i64> = nodes.iter().map(|&id| (id, id)).collect();
+
+    for _ in 0..max_iters {
+        let mut changed = false;
+        for &v in &nodes {
+            let neighbors = &adj[&v];
+            if neighbors.is_empty() {
+                continue; // no neighbors → keep own label
+            }
+            // Tally neighbor labels (current/in-place values).
+            let mut freq: BTreeMap<i64, usize> = BTreeMap::new();
+            for &u in neighbors {
+                *freq.entry(label[&u]).or_insert(0) += 1;
+            }
+            // Most frequent; ascending-label iteration + strict `>` keeps the
+            // SMALLEST label among those tied for the max count.
+            let mut best_label = v;
+            let mut best_count = 0usize;
+            for (&lab, &cnt) in &freq {
+                if cnt > best_count {
+                    best_count = cnt;
+                    best_label = lab;
+                }
+            }
+            if best_label != label[&v] {
+                label.insert(v, best_label);
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    // Group by final label; members ascending (nodes iterated ascending).
+    let mut groups: BTreeMap<i64, Vec<i64>> = BTreeMap::new();
+    for &v in &nodes {
+        groups.entry(label[&v]).or_default().push(v);
+    }
+    let mut out: Vec<Vec<i64>> = groups.into_values().collect();
+    out.sort_by_key(|c| c[0]); // c[0] is the min member (ascending push order)
+    out
+}
+
 /// Arrow columnar dedup over int64 id columns + float64 score. Validates types,
 /// reads the columns, runs `dedup_pairs_max_score`, returns three Arrow arrays.
 pub fn dedup_pairs_arrow_data(
@@ -376,6 +461,53 @@ mod tests {
         let mut sorted: Vec<Vec<i64>> = comps.iter().map(|c| { let mut v = c.clone(); v.sort(); v }).collect();
         sorted.sort();
         assert_eq!(sorted, vec![vec![1, 2, 3], vec![4]]);
+    }
+
+    #[test]
+    fn lp_disconnected_components_and_singletons() {
+        // two separate triangles + an isolated node 6
+        let edges = [
+            (0, 1, 1.0), (1, 2, 1.0), (0, 2, 1.0),
+            (3, 4, 1.0), (4, 5, 1.0), (3, 5, 1.0),
+        ];
+        let got = label_propagation_communities(&edges, &[0, 1, 2, 3, 4, 5, 6], 100);
+        assert_eq!(got, vec![vec![0, 1, 2], vec![3, 4, 5], vec![6]]);
+    }
+
+    #[test]
+    fn lp_connected_graph_one_community() {
+        let got = label_propagation_communities(&[(0, 1, 1.0), (1, 2, 1.0)], &[0, 1, 2], 100);
+        assert_eq!(got, vec![vec![0, 1, 2]]);
+    }
+
+    #[test]
+    fn lp_deterministic_under_input_permutation() {
+        let edges_a = [(0, 1, 1.0), (1, 2, 1.0), (3, 4, 1.0)];
+        let edges_b = [(4, 3, 1.0), (2, 1, 1.0), (1, 0, 1.0)]; // shuffled + reversed
+        let a = label_propagation_communities(&edges_a, &[0, 1, 2, 3, 4], 100);
+        let b = label_propagation_communities(&edges_b, &[4, 3, 2, 1, 0], 100);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn lp_dup_edges_and_self_loops_ignored() {
+        let plain = label_propagation_communities(&[(0, 1, 1.0), (1, 2, 1.0)], &[0, 1, 2], 100);
+        let noisy = label_propagation_communities(
+            &[(0, 1, 1.0), (1, 0, 1.0), (1, 2, 1.0), (2, 2, 1.0), (0, 0, 1.0)],
+            &[0, 1, 2],
+            100,
+        );
+        assert_eq!(plain, noisy);
+    }
+
+    #[test]
+    fn lp_max_iters_cutoff_returns_well_formed_partition() {
+        // chain that may need several sweeps; cap at 1 -> still a valid partition
+        let got = label_propagation_communities(&[(0, 1, 1.0), (1, 2, 1.0), (2, 3, 1.0)], &[0, 1, 2, 3], 1);
+        // every id assigned exactly once
+        let mut all: Vec<i64> = got.iter().flatten().copied().collect();
+        all.sort();
+        assert_eq!(all, vec![0, 1, 2, 3]);
     }
 
     use arrow::array::{Array, Float64Array, Int64Array, ListArray, StringArray};

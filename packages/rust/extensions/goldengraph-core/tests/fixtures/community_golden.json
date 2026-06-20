@@ -1,0 +1,27 @@
+{
+  "_doc": "SP3 community-detection golden vectors (cross-binding contract; SP5 WASM/C reuse). Build the resolved `graph`, run communities(), assert it byte-equals `expected_communities` (communities by ascending min member, members sorted, id = positional index). DESCRIPTIVE: freezes the deterministic label-propagation partition, not an optimality claim. Two disconnected triangles + an isolated node -> three communities (here LP == connected components, the documented small-graph behavior).",
+  "graph": {
+    "entities": [
+      { "entity_id": 0, "canonical_name": "Acme", "typ": "org", "surface_names": ["Acme"] },
+      { "entity_id": 1, "canonical_name": "Beta", "typ": "org", "surface_names": ["Beta"] },
+      { "entity_id": 2, "canonical_name": "Gamma", "typ": "org", "surface_names": ["Gamma"] },
+      { "entity_id": 3, "canonical_name": "Delta", "typ": "person", "surface_names": ["Delta"] },
+      { "entity_id": 4, "canonical_name": "Eps", "typ": "person", "surface_names": ["Eps"] },
+      { "entity_id": 5, "canonical_name": "Zeta", "typ": "person", "surface_names": ["Zeta"] },
+      { "entity_id": 6, "canonical_name": "Lone", "typ": "product", "surface_names": ["Lone"] }
+    ],
+    "edges": [
+      { "subj": 0, "predicate": "r", "obj": 1, "source_refs": ["d1"] },
+      { "subj": 1, "predicate": "r", "obj": 2, "source_refs": ["d2"] },
+      { "subj": 0, "predicate": "r", "obj": 2, "source_refs": ["d3"] },
+      { "subj": 3, "predicate": "r", "obj": 4, "source_refs": ["d4"] },
+      { "subj": 4, "predicate": "r", "obj": 5, "source_refs": ["d5"] },
+      { "subj": 3, "predicate": "r", "obj": 5, "source_refs": ["d6"] }
+    ]
+  },
+  "expected_communities": [
+    { "id": 0, "members": [0, 1, 2] },
+    { "id": 1, "members": [3, 4, 5] },
+    { "id": 2, "members": [6] }
+  ]
+}
