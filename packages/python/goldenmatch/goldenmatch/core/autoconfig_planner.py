@@ -1,6 +1,6 @@
-"""Planner-rule dispatcher for controller v3.
+﻿"""Planner-rule dispatcher for controller v3.
 
-Spec §Decision rules:
+Spec Â§Decision rules:
 docs/superpowers/specs/2026-05-15-controller-v3-planner-design.md.
 
 Rules are (name, predicate, action) tuples. ``apply_planner_rules``
@@ -57,7 +57,7 @@ class PlannerRule:
 
     Attributes:
         name: Stable identifier surfaced in ``RunHistory.decisions``.
-        predicate: Returns True when this rule applies. Spec §Rule N
+        predicate: Returns True when this rule applies. Spec Â§Rule N
             tables document each rule's predicate.
         action: Builds the ``ExecutionPlan`` when ``predicate`` is True.
     """
@@ -113,3 +113,15 @@ def apply_planner_rules(
         return plan
 
     return ExecutionPlan(rule_name="no_rule_matched")
+
+
+def apply_throughput_overlay(plan, cfg, *, metric, signature_len):
+    """Overlay sketch-then-verify posture onto a base ExecutionPlan (orthogonal to
+    backend selection). metric in {"jaccard","cosine"}; signature_len = num_perms
+    (lexical) or num_planes (semantic)."""
+    from goldenmatch.core.throughput_verify import DEFAULT_SIMILARITY, select_banding
+    similarity = cfg.similarity_threshold or DEFAULT_SIMILARITY[metric]
+    bands, rows = select_banding(metric, signature_len, similarity, cfg.recall_target)
+    return dataclasses.replace(plan, verify_mode="sketch_distance",
+                               sketch_bands=bands, sketch_rows=rows, sketch_similarity=similarity,
+                               sketch_metric=metric)

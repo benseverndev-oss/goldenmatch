@@ -164,6 +164,11 @@ class DedupeResult:
     # inferring it from wall-clock. None only if telemetry capture was skipped.
     native: NativeDispatchSummary | None = None
     llm_cost: dict | None = None  # {llm_calls, llm_tokens, llm_usd} when the LLM scorer ran; else None
+    # Throughput-tier posture (#1083): populated when dedupe_df(..., throughput=...)
+    # ran the sketch-then-verify branch. Contains the LSH-theoretic expected_recall,
+    # reduction_ratio, candidate/verified pair counts, and the banding params used.
+    # None on all normal (accuracy-tier) runs — the no-op guarantee is tested.
+    throughput_posture: dict | None = None
 
     def to_csv(self, path: str, which: str = "golden") -> Path:
         """Write results to CSV.
@@ -403,6 +408,7 @@ def dedupe_df(
     fs_model_path: str | None = None,
     certify: bool = False,
     semantic_blocking: bool = False,
+    throughput: Any | None = None,
 ) -> DedupeResult:
     """Deduplicate a Polars DataFrame directly (no file I/O).
 
@@ -490,6 +496,7 @@ def dedupe_df(
                         confidence_required=confidence_required,
                         allow_red_config=allow_red_config,
                         planning_effort=planning_effort,
+                        throughput=throughput,
                     )
                 _used_controller = True
 
@@ -632,6 +639,7 @@ def dedupe_df(
             if (_lc := result.get("llm_cost")) is not None
             else None
         ),
+        throughput_posture=result.get("throughput_posture"),
     )
 
 

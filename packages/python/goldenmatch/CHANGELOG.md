@@ -7,6 +7,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Added
+- **Opt-in throughput tier: sketch-then-verify corpus dedup (#1083, epic #1080).**
+  `dedupe_df(df, throughput=0.95)` (or `True`, or a `ThroughputConfig`) blocks the
+  longest text column with MinHash/LSH (`lsh`) or SimHash (`simhash`, when an embedder
+  is reachable), then confirms candidate pairs by cheap sketch distance -- no
+  field-level fuzzy/Fellegi-Sunter scoring. The `recall_target` kwarg (default 0.95)
+  tunes LSH banding; `similarity_threshold` overrides the near-dup cutoff (Jaccard 0.8
+  / cosine 0.85). `DedupeResult.throughput_posture` (and the controller telemetry
+  `throughput` block) carry the honest posture: LSH-theoretic `expected_recall` plus
+  measured `reduction_ratio` -- not a measured F1 or precision. Raises
+  `ThroughputNotApplicableError` when the frame has no text column. Default-off
+  (`throughput=None`) is byte-identical to today across every metric. Single-node only;
+  distributed (#1084), product surface (#1085), and bench gate (#1086) are follow-ons.
 - **MinHash/LSH sketch tier: a throughput blocking primitive for near-duplicate
   detection (#1081).** A new pyo3-free `goldenmatch-sketch-core` Rust crate
   (shingling → MinHash → banded LSH) with a pure-Python reference/fallback

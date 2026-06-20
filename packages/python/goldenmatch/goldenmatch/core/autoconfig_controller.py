@@ -523,6 +523,7 @@ class AutoConfigController:
         confidence_required: bool = True,
         allow_red_config: bool = False,
         planning_effort: str = "normal",
+        throughput: Any | None = None,
     ) -> tuple[GoldenMatchConfig, ComplexityProfile, RunHistory]:
         """Run iterative auto-config.
 
@@ -1272,6 +1273,23 @@ class AutoConfigController:
             n_rows=n_rows,
             allow_slow_path=getattr(committed_config, "allow_slow_path", False),
         )
+        # Throughput overlay (#1083): when throughput tier is enabled, override
+        # committed blocking with sketch-based blocking and wrap the base plan.
+        _throughput_cfg = getattr(throughput, "enabled", False) and throughput or None
+        if _throughput_cfg and getattr(_throughput_cfg, "enabled", False):
+            try:
+                from goldenmatch.core.autoconfig import _throughput_blocking, profile_columns
+                from goldenmatch.core.autoconfig_planner import apply_throughput_overlay
+                from goldenmatch.core.throughput_verify import metric_and_signature_len
+                _tp_profiles = profile_columns(init_sample)
+                _tp_blk = _throughput_blocking(_tp_profiles, committed_config)
+                committed_config.blocking = _tp_blk
+                _tp_metric, _tp_siglen = metric_and_signature_len(_tp_blk)
+                plan = apply_throughput_overlay(
+                    plan, _throughput_cfg, metric=_tp_metric, signature_len=_tp_siglen
+                )
+            except Exception:
+                logger.debug("Throughput overlay failed; skipping.", exc_info=True)
         plan.apply_to(committed_config)
         history.execution_plan = plan
 

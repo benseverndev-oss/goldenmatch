@@ -276,6 +276,12 @@ class PostflightReport:
         plan_line = _render_plan_line(self.controller_history)
         if plan_line:
             parts.append(f"  {plan_line}")
+        throughput_plan = getattr(
+            self.controller_history, "execution_plan", None
+        ) if self.controller_history is not None else None
+        throughput_line = _render_throughput_line(throughput_plan)
+        if throughput_line:
+            parts.append(f"  {throughput_line}")
         blocking_line = _render_blocking_line(self.controller_history)
         if blocking_line:
             parts.append(f"  {blocking_line}")
@@ -332,6 +338,36 @@ def _render_plan_line(history: Any) -> str:
     workers = getattr(plan, "max_workers", None)
     if workers:
         parts.append(f"max_workers={workers}")
+    return ", ".join(parts)
+
+
+def _render_throughput_line(plan: Any) -> str:
+    """Render the planned throughput posture in one line, or '' when absent.
+
+    Reads the ExecutionPlan directly. Returns empty string when plan is None
+    or verify_mode != 'sketch_distance'. ASCII only.
+
+    Note: PostflightReport.__str__ passes history.execution_plan. For the
+    single-column early-return path the overlay lands on config._throughput_plan
+    (not on history.execution_plan), so this line may be absent there -- the
+    telemetry block (controller_telemetry._throughput_summary) is the
+    reliable surface for that path.
+    """
+    if plan is None or getattr(plan, "verify_mode", "full") != "sketch_distance":
+        return ""
+    from goldenmatch.core.throughput_verify import expected_recall_lsh
+    metric = getattr(plan, "sketch_metric", None) or "jaccard"
+    bands = getattr(plan, "sketch_bands", None)
+    rows = getattr(plan, "sketch_rows", None)
+    sim = getattr(plan, "sketch_similarity", None)
+    parts = [f"Throughput: sketch_distance {metric}"]
+    if bands is not None and rows is not None:
+        parts.append(f"{bands}x{rows} bands")
+    if bands is not None and rows is not None and sim is not None:
+        recall = expected_recall_lsh(metric, sim, bands, rows)
+        parts.append(f"expected_recall={recall:.2f}")
+    if sim is not None:
+        parts.append(f"similarity={sim}")
     return ", ".join(parts)
 
 

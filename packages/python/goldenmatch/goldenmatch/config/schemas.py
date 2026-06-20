@@ -447,6 +447,20 @@ class SimHashKeyConfig(BaseModel):
         return self
 
 
+class ThroughputConfig(BaseModel):
+    """Opt-in sketch-then-verify throughput tier (#1083).
+
+    A high-recall, low-cost dedup posture: LSH/sketch blocking + a light
+    sketch-distance verify instead of per-field fuzzy/FS scoring. ``recall_target``
+    is the primary knob; ``similarity_threshold`` overrides the default near-dup
+    similarity (Jaccard 0.8 lexical / cosine 0.85 semantic, chosen by metric).
+    """
+
+    enabled: bool = False
+    recall_target: float = Field(default=0.95, gt=0.0, lt=1.0)
+    similarity_threshold: float | None = Field(default=None, gt=0.0, lt=1.0)
+
+
 class BlockingConfig(BaseModel):
     keys: list[BlockingKeyConfig] = []
     max_block_size: int = 5000
@@ -973,6 +987,7 @@ class GoldenMatchConfig(BaseModel):
             "'normal' is byte-for-byte the prior behavior."
         ),
     )
+    throughput: ThroughputConfig | None = None
     memory: MemoryConfig | None = None
     identity: IdentityConfig | None = None
     exclude_columns: list[str] = Field(
@@ -1034,6 +1049,7 @@ class GoldenMatchConfig(BaseModel):
     _preflight_report: PreflightReport | None = PrivateAttr(default=None)
     _strict_autoconfig: bool = PrivateAttr(default=False)
     _domain_profile: Any = PrivateAttr(default=None)
+    _throughput_plan: Any = PrivateAttr(default=None)
 
     @model_validator(mode="after")
     def _validate_fuzzy_needs_blocking(self) -> GoldenMatchConfig:

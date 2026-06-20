@@ -574,3 +574,27 @@ The optional `memory:` section enables persistent corrections. Once a steward, a
 | `learning.weights_min_corrections` | `50` | Field-weight learning is stubbed in v1.6.0 and returns `null`. |
 
 Full guide: [Learning Memory](/goldenmatch/learning-memory).
+
+## Throughput config
+
+The optional `throughput:` section (or the `throughput=` kwarg on `dedupe_df`) enables the
+sketch-then-verify near-duplicate tier. Off by default; enabling it does not affect any run
+where the kwarg is `None`. Full reference: [Throughput tier](/goldenmatch/tuning#throughput-tier-sketch-then-verify).
+
+```python
+from goldenmatch import ThroughputConfig
+
+result = gm.dedupe_df(df, throughput=ThroughputConfig(
+    recall_target=0.95,       # LSH recall target; tunes banding
+    similarity_threshold=0.8, # sketch-distance cutoff at verify
+))
+```
+
+| Field | Default | Notes |
+|---|---|---|
+| `enabled` | `true` when a `ThroughputConfig` is passed | Normally you pass `throughput=True` or `throughput=0.95` rather than constructing `ThroughputConfig` directly. |
+| `recall_target` | `0.95` | LSH-theoretic recall target (0 to 1). Higher = more LSH bands = more candidate pairs = more wall time. |
+| `similarity_threshold` | `0.8` (Jaccard) / `0.85` (cosine) | Sketch-distance cutoff applied at verify. Pairs below this are dropped without field-level scoring. |
+
+`ThroughputConfig` is re-exported from the top level. The `throughput=` kwarg also accepts `True`
+(uses defaults), a `float` (sets `recall_target`), or `None` (off, byte-identical to today).

@@ -1,4 +1,4 @@
-"""ExecutionPlan dataclass -- the six knobs the controller-v3 planner picks.
+﻿"""ExecutionPlan dataclass -- the six knobs the controller-v3 planner picks.
 
 Spec §Decision space:
 docs/superpowers/specs/2026-05-15-controller-v3-planner-design.md.
@@ -55,6 +55,11 @@ class ExecutionPlan:
     scoring_distributed: bool = False
     golden_distributed: bool = False
     routing_decisions: tuple[DistributedRoutingDecision, ...] = ()
+    verify_mode: Literal["full", "sketch_distance"] = "full"
+    sketch_bands: int | None = None
+    sketch_rows: int | None = None
+    sketch_similarity: float | None = None
+    sketch_metric: str | None = None
 
     def apply_to(self, config: GoldenMatchConfig) -> None:
         """Write plan onto a GoldenMatchConfig in place.
@@ -66,3 +71,5 @@ class ExecutionPlan:
         """
         if self.backend != "polars-direct":
             config.backend = self.backend
+        if self.verify_mode != "full":
+            config._throughput_plan = self
