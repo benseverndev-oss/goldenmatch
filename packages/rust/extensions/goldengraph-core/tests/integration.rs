@@ -114,6 +114,7 @@ fn view_to_value(entities: &[EntityNode], edges: &[Edge]) -> Value {
                 "canonical_name": e.canonical_name,
                 "typ": e.typ,
                 "members": e.members,
+                "surface_names": e.surface_names,
             })
         })
         .collect();

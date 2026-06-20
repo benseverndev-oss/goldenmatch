@@ -36,11 +36,18 @@ pub fn apply_resolution(
                 .iter()
                 .max_by_key(|&&m| (mentions[m].name.len(), usize::MAX - m))
                 .unwrap();
+            // distinct member surface forms (sorted) so the entity is findable
+            // by any of its names, not just the canonical.
+            let mut surface_names: Vec<String> =
+                members.iter().map(|&m| mentions[m].name.clone()).collect();
+            surface_names.sort();
+            surface_names.dedup();
             EntityNode {
                 entity_id: eid,
                 canonical_name: mentions[rep].name.clone(),
                 typ: mentions[rep].typ.clone(),
                 members: members.clone(),
+                surface_names,
             }
         })
         .collect();

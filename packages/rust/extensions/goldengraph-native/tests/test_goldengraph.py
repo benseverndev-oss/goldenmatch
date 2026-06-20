@@ -54,6 +54,26 @@ def test_native_path_merges_apple():
     assert _predicates(view) == ["founded_by", "released"]
     apple = next(e for e in view["entities"] if e["entity_id"] == 0)
     assert sorted(apple["members"]) == [0, 1]  # Apple Inc + Apple merged
+    assert apple["surface_names"] == ["Apple", "Apple Inc"]  # distinct forms, sorted
+
+
+def test_seeds_by_name_finds_entity_by_any_surface_form():
+    # Dogfood-derived: a resolved entity must be findable by ANY name it was
+    # mentioned under, not just the canonical the resolver picked. Here three
+    # org forms merge; the canonical is the longest ("Apple Computer").
+    mentions = [
+        ("Apple Inc.", "org"),
+        ("Apple", "org"),
+        ("Apple Computer", "org"),
+    ]
+    g = gg.build_graph(mentions, [], ("native", 0, 0.85))
+    apple = g.query(g.seeds_by_name("Apple Computer"), 1)["entities"][0]
+    assert apple["canonical_name"] == "Apple Computer"  # longest form wins canonical
+    # ...but all three surface forms resolve to the same entity id
+    assert g.seeds_by_name("Apple Inc.") == [apple["entity_id"]]
+    assert g.seeds_by_name("Apple") == [apple["entity_id"]]
+    assert g.seeds_by_name("Apple Computer") == [apple["entity_id"]]
+    assert g.seeds_by_name("Nonexistent") == []
 
 
 def test_bad_resolution_raises():

@@ -28,14 +28,21 @@ pub struct MentionEdge {
     pub source_ref: String,
 }
 
-/// A resolved entity: its id, a canonical name, a type, and the mention ids
-/// that merged into it.
+/// A resolved entity: its id, a canonical name, a type, the mention ids that
+/// merged into it, and the distinct surface forms those mentions used.
+///
+/// `surface_names` (sorted, deduped) is what makes the entity findable by ANY
+/// of its names, not just the canonical one -- a resolved entity may be queried
+/// by a surface form the resolver did NOT pick as canonical (e.g. "Apple Inc."
+/// when the canonical is the longer "Apple Computer"). `canonical_name` is the
+/// longest member name and is always present in `surface_names`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct EntityNode {
     pub entity_id: EntityId,
     pub canonical_name: String,
     pub typ: String,
     pub members: Vec<MentionId>,
+    pub surface_names: Vec<String>,
 }
 
 /// An entity-space relationship: endpoints rewritten to entity ids, with the

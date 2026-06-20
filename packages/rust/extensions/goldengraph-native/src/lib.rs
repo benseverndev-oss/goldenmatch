@@ -17,7 +17,7 @@ use pyo3::types::{PyDict, PyList};
 use goldengraph_core::build_graph as core_build_graph;
 use goldengraph_core::model::{Edge, EntityId, EntityNode, Graph, Mention, MentionEdge, MentionId};
 use goldengraph_core::resolve::{NativeConfig, ResolutionMode};
-use goldengraph_core::retrieve::neighborhood;
+use goldengraph_core::retrieve::{neighborhood, seeds_by_name as core_seeds_by_name};
 
 /// A resolution-merged knowledge graph, queryable by neighborhood.
 #[pyclass]
@@ -39,15 +39,11 @@ impl PyGraph {
         graph_view_to_dict(py, &sub.entities, &sub.edges)
     }
 
-    /// Entity ids whose canonical name matches `name` exactly (typically used to
-    /// turn a surface name into query seeds).
+    /// Entity ids whose canonical name OR any merged surface form equals `name`
+    /// (so a resolved entity is findable by every name it was mentioned under,
+    /// not just the canonical the resolver happened to pick).
     fn seeds_by_name(&self, name: &str) -> Vec<EntityId> {
-        self.inner
-            .entities
-            .iter()
-            .filter(|e| e.canonical_name == name)
-            .map(|e| e.entity_id)
-            .collect()
+        core_seeds_by_name(&self.inner, name)
     }
 }
 
@@ -66,6 +62,8 @@ fn graph_view_to_dict<'py>(
         d.set_item("canonical_name", e.canonical_name.as_str())?;
         d.set_item("typ", e.typ.as_str())?;
         d.set_item("members", PyList::new(py, &e.members)?)?;
+        let names: Vec<&str> = e.surface_names.iter().map(String::as_str).collect();
+        d.set_item("surface_names", PyList::new(py, names)?)?;
         ent_list.append(d)?;
     }
     let edge_list = PyList::empty(py);

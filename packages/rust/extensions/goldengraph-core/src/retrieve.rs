@@ -53,6 +53,20 @@ pub fn neighborhood(graph: &Graph, seeds: &[EntityId], hops: u8) -> Subgraph {
     Subgraph { entities, edges }
 }
 
+/// Entity ids whose canonical name OR any merged surface form equals `name`
+/// exactly. Resolution may pick a surface form you wouldn't query by as the
+/// canonical (the longest one), so matching members too keeps a resolved entity
+/// findable by every name it was ever mentioned under. Result sorted by
+/// `entity_id`.
+pub fn seeds_by_name(graph: &Graph, name: &str) -> Vec<EntityId> {
+    graph
+        .entities
+        .iter()
+        .filter(|e| e.canonical_name == name || e.surface_names.iter().any(|s| s == name))
+        .map(|e| e.entity_id)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -63,6 +77,7 @@ mod tests {
             canonical_name: name.into(),
             typ: "t".into(),
             members: vec![],
+            surface_names: vec![name.into()],
         }
     }
     fn edge(s: EntityId, p: &str, o: EntityId) -> Edge {
@@ -124,5 +139,27 @@ mod tests {
         let ids2: Vec<EntityId> = sub2.entities.iter().map(|e| e.entity_id).collect();
         assert_eq!(ids1, ids2);
         assert_eq!(sub1.edges, sub2.edges);
+    }
+
+    #[test]
+    fn seeds_by_name_matches_any_surface_form_not_just_canonical() {
+        // Dogfood-derived: a merged entity whose canonical is the LONGEST form
+        // ("Apple Computer"), queried by a non-canonical surface form
+        // ("Apple Inc.") that a user would actually type.
+        let apple = EntityNode {
+            entity_id: 0,
+            canonical_name: "Apple Computer".into(),
+            typ: "org".into(),
+            members: vec![0, 1, 2],
+            surface_names: vec!["Apple".into(), "Apple Computer".into(), "Apple Inc.".into()],
+        };
+        let g = Graph {
+            entities: vec![apple],
+            edges: vec![],
+        };
+        assert_eq!(seeds_by_name(&g, "Apple Computer"), vec![0]); // canonical
+        assert_eq!(seeds_by_name(&g, "Apple Inc."), vec![0]); // non-canonical surface form
+        assert_eq!(seeds_by_name(&g, "Apple"), vec![0]); // another surface form
+        assert!(seeds_by_name(&g, "Microsoft").is_empty()); // absent name
     }
 }
