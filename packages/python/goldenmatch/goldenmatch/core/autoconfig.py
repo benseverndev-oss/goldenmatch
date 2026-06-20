@@ -1969,6 +1969,38 @@ def _text_corpus_blocking(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+
+def _throughput_blocking(profiles, config):
+    """Force sketch-then-verify (LSH or SimHash) blocking on the best text column.
+
+    Accepts any text column type (description, string, name, multi_name).
+    Routes to ``_text_corpus_blocking`` when description columns are present;
+    otherwise builds LSH/SimHash directly on the longest text column.
+
+    Raises ``ThroughputNotApplicableError`` when no text column is found --
+    the throughput tier cannot operate without a sketch target.
+    """
+    from goldenmatch.core.throughput_verify import ThroughputNotApplicableError
+    text_cols = [p for p in profiles if p.col_type in ("description", "string", "name", "multi_name")]
+    if not text_cols:
+        raise ThroughputNotApplicableError(
+            "throughput tier requires a text column to sketch on; none found"
+        )
+    if any(p.col_type == "description" for p in profiles):
+        return _text_corpus_blocking(profiles, None, config)
+    if _embedder_available(config):
+        from goldenmatch.config.schemas import SimHashKeyConfig
+        col = max(text_cols, key=lambda p: p.avg_len).name
+        return BlockingConfig(
+            strategy="simhash",
+            simhash=SimHashKeyConfig(column=col, num_planes=256, num_bands=32, seed=0),
+        )
+    from goldenmatch.config.schemas import LSHKeyConfig
+    col = max(text_cols, key=lambda p: p.avg_len).name
+    return BlockingConfig(strategy="lsh", lsh=LSHKeyConfig(
+        column=col, mode="word", k=2, num_perms=128, threshold=0.5, seed=0))
+
+
 def build_blocking(
     profiles: list[ColumnProfile],
     df: pl.DataFrame,
@@ -2865,6 +2897,7 @@ def auto_configure_df(
     allow_red_config: bool = False,
     planning_effort: str | None = None,
     n_rows_full: int | None = None,
+    throughput=None,
 ) -> GoldenMatchConfig:
     """Public auto-configuration entry point (controller-backed).
 
@@ -2895,6 +2928,22 @@ def auto_configure_df(
         ConfigValidationError: from the controller, when input is unworkable
             (empty, all-null, etc.).
     """
+    # Throughput tier (#1083): early validation -- check text column exists BEFORE
+    # the expensive controller run to give a clean ThroughputNotApplicableError.
+    if throughput is not None:
+        from goldenmatch.core.throughput_verify import (
+            ThroughputNotApplicableError,
+            resolve_throughput_config,
+        )
+        import polars as _pl_tp
+        if isinstance(df, _pl_tp.DataFrame):
+            _early_profiles = profile_columns(df)
+            _text_types = ("description", "string", "name", "multi_name")
+            if not any(p.col_type in _text_types for p in _early_profiles):
+                raise ThroughputNotApplicableError(
+                    "throughput tier requires a text column to sketch on; none found"
+                )
+
     # Coerce + validate input types.
     # Phase 2: also accept ray.data.Dataset on the distributed path.
     from goldenmatch.distributed._utils import is_ray_dataset as _is_ray_dataset
@@ -3045,6 +3094,19 @@ def auto_configure_df(
     # selected backend onto config via ExecutionPlan.apply_to.
 
     _LAST_CONTROLLER_RUN.set((profile, history))
+
+    # Throughput tier (#1083): when throughput is requested, override blocking
+    # with sketch-based (LSH/SimHash) blocking on the longest text column.
+    # Orthogonal to the controller backend selection.
+    if throughput is not None:
+        from goldenmatch.core.throughput_verify import resolve_throughput_config
+        _tp_cfg = resolve_throughput_config(throughput, config)
+        if _tp_cfg is not None and _tp_cfg.enabled:
+            import polars as _pl
+            _tp_profiles = profile_columns(df) if isinstance(df, _pl.DataFrame) else []
+            _tp_blk = _throughput_blocking(_tp_profiles, config)
+            config.blocking = _tp_blk
+            config.throughput = _tp_cfg
 
     # F1: optional field-group detection (default OFF, fail-open).
     # Runs after the controller has committed the config so explicit
