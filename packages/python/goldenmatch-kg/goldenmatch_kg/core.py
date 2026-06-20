@@ -41,11 +41,11 @@ def resolve_entities(
     import goldenmatch as gm
     import polars as pl
 
-    cols: dict[str, list[str]] = {"name": [e.name for e in ents]}
+    cols: dict[str, list[str]] = {_FIELD_TO_COL["name"]: [e.name for e in ents]}
     if "type" in fields and any(e.type for e in ents):
-        cols["entity_type"] = [e.type or "" for e in ents]
+        cols[_FIELD_TO_COL["type"]] = [e.type or "" for e in ents]
     if "description" in fields and any(e.description for e in ents):
-        cols["context"] = [e.description or "" for e in ents]
+        cols[_FIELD_TO_COL["description"]] = [e.description or "" for e in ents]
     df = pl.DataFrame(cols)
 
     result = gm.dedupe_df(df)
