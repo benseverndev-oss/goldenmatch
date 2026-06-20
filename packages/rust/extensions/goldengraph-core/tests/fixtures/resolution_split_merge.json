@@ -1,0 +1,17 @@
+{
+  "_doc": "SP1 differentiator fixture. Same mentions + edges under two resolution maps. 'exact' keeps Apple Inc / Apple split (each its own entity); 'resolved' merges them into entity 0. A 1-hop query from the Apple entity finds BOTH facts under 'resolved' but only ONE under 'exact'.",
+  "mentions": [
+    { "name": "Apple Inc", "typ": "org" },
+    { "name": "Apple", "typ": "org" },
+    { "name": "Jobs", "typ": "person" },
+    { "name": "iPhone", "typ": "product" }
+  ],
+  "edges": [
+    { "subj": 0, "predicate": "founded_by", "obj": 2, "source_ref": "c1" },
+    { "subj": 1, "predicate": "released", "obj": 3, "source_ref": "c2" }
+  ],
+  "maps": {
+    "exact": { "0": 0, "1": 1, "2": 2, "3": 3 },
+    "resolved": { "0": 0, "1": 0, "2": 1, "3": 2 }
+  }
+}

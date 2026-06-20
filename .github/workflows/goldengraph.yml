@@ -1,0 +1,66 @@
+# goldengraph build signal. Two standalone-workspace crates that the main `rust`
+# job's `cargo test --workspace` never touches:
+#   * core:   goldengraph-core (pyo3-free engine) -- cargo test + clippy, run by
+#             --manifest-path (it carries its own [workspace], like score-core /
+#             graph-core).
+#   * native: goldengraph-native (the abi3 pyo3 binding) -- maturin develop into a
+#             fresh venv, then pytest the Python API tests (the only place the
+#             binding actually executes; the engine itself is self-contained, so
+#             no goldenmatch dependency is needed).
+#
+# Informational lane (NOT part of ci-required). It's the only build signal for
+# the pyo3 binding, so confirm it green before arming auto-merge.
+name: goldengraph
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "packages/rust/extensions/goldengraph-core/**"
+      - "packages/rust/extensions/goldengraph-native/**"
+      - ".github/workflows/goldengraph.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: packages/rust/extensions
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/goldengraph-core
+      - run: cargo test --manifest-path goldengraph-core/Cargo.toml
+      - run: cargo clippy --manifest-path goldengraph-core/Cargo.toml --all-targets -- -D warnings
+
+  native:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: packages/rust/extensions/goldengraph-native
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/goldengraph-native
+      - name: maturin develop + pytest (the binding's only real execution)
+        run: |
+          python -m venv .venv
+          . .venv/bin/activate
+          pip install --upgrade pip
+          pip install maturin pytest
+          maturin develop
+          pytest tests/ -q
