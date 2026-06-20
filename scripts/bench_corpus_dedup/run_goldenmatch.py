@@ -85,7 +85,12 @@ def main() -> None:
         result.update(n_docs=n, bytes_in=bytes_in)
 
         t0 = time.perf_counter()
-        ded = dedupe_df(df, throughput=args.recall_target)
+        # allow_red_config: at >=100k rows the controller can commit a RED config
+        # (e.g. BUDGET_TIME on the blocking sub-profile) and would otherwise raise
+        # ControllerNotConfidentError. The throughput overlay REPLACES blocking +
+        # scoring with sketch-then-verify, so that RED verdict is moot here — we
+        # want the tier to run regardless.
+        ded = dedupe_df(df, throughput=args.recall_target, allow_red_config=True)
         dedupe_wall = time.perf_counter() - t0
 
         # --- tier-engaged proof + cost metrics from the posture ---
