@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import faulthandler
 import os
 import time
 from pathlib import Path
@@ -24,6 +25,14 @@ try:
     import resource  # Unix-only; absent on Windows dev boxes (CI/bench runs on Linux)
 except ImportError:  # pragma: no cover - Windows fallback path
     resource = None
+
+# Self-report a hang: if the tier stalls (e.g. a controller pathology on
+# adversarial data), dump every thread's stack and exit non-zero rather than
+# stalling the gate/test until the CI job timeout. Cancelled automatically when
+# the process exits normally first. Tunable for slow boxes via the env var.
+_HANG_DUMP_S = int(os.environ.get("GOLDENMATCH_BENCH_HANG_DUMP_S", "150") or 0)
+if _HANG_DUMP_S > 0:
+    faulthandler.dump_traceback_later(_HANG_DUMP_S, exit=True)
 
 # Must be set BEFORE importing goldenmatch.
 os.environ.setdefault("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")

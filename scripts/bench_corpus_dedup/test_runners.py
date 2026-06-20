@@ -20,8 +20,12 @@ def _load(mod_name: str):
 
 
 def _make_corpus(tmp_path):
+    # Use the real (diverse) offline corpus, like the gate + smoke test. Synthetic
+    # near-identical text collapses into one giant block and wedges the auto-config
+    # controller's sample pipeline — a fixture pathology, not a tier bug.
     inj = _load("inject_dups")
-    base = [(f"b{i}", f"unique-ish doc {i} " + "shared filler clause " * 30) for i in range(60)]
+    corpora = _load("corpora")
+    base = list(corpora.load_corpus("offline", n_docs=60, seed=0))
     return inj.build(base, seed=0, frac=0.4, out_dir=tmp_path)
 
 
