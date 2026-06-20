@@ -1,0 +1,63 @@
+{
+  "_doc": "SP2 store golden vectors (cross-binding contract; SP5 WASM/C reuse). Replay `batches` in order, then each query asserts as_of(valid_t, tx_t) byte-equals `expected` (entities by ascending view-local entity_id, edges by (subj,predicate,obj), source_refs sorted). Covers a merge (Acme Inc + Beta -> entity 0 at tx 200), supersession remap (B's edge collapses onto A after the merge), and the valid-time axis (valid_from 10 excludes valid_t 5). NOTE the SP2 scope line: IDENTITY (which entities are separate vs merged) and EDGE facts are bi-temporal, but entity ATTRIBUTES reflect latest state, so at tx 150 (pre-merge) entity 0 already carries the 'Beta' alias it gained at the tx-200 merge. The time-travel signal is the entity/edge SET (3 entities + 2 edges before -> 2 entities + 1 edge after), not the attribute snapshot; attribute history is a future increment.",
+  "batches": [
+    {
+      "ingested_at": 100,
+      "entities": [
+        { "local_id": 0, "canonical_name": "Acme Inc", "typ": "org", "surface_names": ["Acme Inc"], "record_keys": ["a"] },
+        { "local_id": 1, "canonical_name": "Beta", "typ": "org", "surface_names": ["Beta"], "record_keys": ["b"] },
+        { "local_id": 2, "canonical_name": "Product", "typ": "product", "surface_names": ["Product"], "record_keys": ["p"] }
+      ],
+      "edges": [
+        { "subj_local": 0, "predicate": "made", "obj_local": 2, "valid_from": 10, "valid_to": null, "source_refs": ["doc1"] },
+        { "subj_local": 1, "predicate": "made", "obj_local": 2, "valid_from": 10, "valid_to": null, "source_refs": ["doc2"] }
+      ]
+    },
+    {
+      "ingested_at": 200,
+      "entities": [
+        { "local_id": 0, "canonical_name": "Acme Inc", "typ": "org", "surface_names": ["Acme Inc", "Beta"], "record_keys": ["a", "b"] },
+        { "local_id": 1, "canonical_name": "Product", "typ": "product", "surface_names": ["Product"], "record_keys": ["p"] }
+      ],
+      "edges": []
+    }
+  ],
+  "queries": [
+    {
+      "name": "before_merge",
+      "valid_t": 20,
+      "tx_t": 150,
+      "expected": {
+        "entities": [
+          { "entity_id": 0, "canonical_name": "Acme Inc", "typ": "org", "surface_names": ["Acme Inc", "Beta"] },
+          { "entity_id": 1, "canonical_name": "Beta", "typ": "org", "surface_names": ["Beta"] },
+          { "entity_id": 2, "canonical_name": "Product", "typ": "product", "surface_names": ["Product"] }
+        ],
+        "edges": [
+          { "subj": 0, "predicate": "made", "obj": 2, "source_refs": ["doc1"] },
+          { "subj": 1, "predicate": "made", "obj": 2, "source_refs": ["doc2"] }
+        ]
+      }
+    },
+    {
+      "name": "after_merge",
+      "valid_t": 20,
+      "tx_t": 250,
+      "expected": {
+        "entities": [
+          { "entity_id": 0, "canonical_name": "Acme Inc", "typ": "org", "surface_names": ["Acme Inc", "Beta"] },
+          { "entity_id": 1, "canonical_name": "Product", "typ": "product", "surface_names": ["Product"] }
+        ],
+        "edges": [
+          { "subj": 0, "predicate": "made", "obj": 1, "source_refs": ["doc1", "doc2"] }
+        ]
+      }
+    },
+    {
+      "name": "before_valid_from",
+      "valid_t": 5,
+      "tx_t": 250,
+      "expected": { "entities": [], "edges": [] }
+    }
+  ]
+}

@@ -123,7 +123,7 @@ Extend `.github/workflows/goldengraph.yml` `core` job — new tests run under th
 
 ## Non-goals (SP2)
 
-Compact binary format (later, same trait). Pyo3 binding of the store (SP4). Community structure (SP3). LLM/extraction + `record_key` computation (SP4 / fingerprint-core). Distributed/sharded storage. Concurrent writers (single-writer snapshot model). In-place edge mutation (corrections are append-only versions).
+Compact binary format (later, same trait). Pyo3 binding of the store (SP4). Community structure (SP3). LLM/extraction + `record_key` computation (SP4 / fingerprint-core). Distributed/sharded storage. Concurrent writers (single-writer snapshot model). In-place edge mutation (corrections are append-only versions). **Entity-attribute history** — identity (which entities are separate vs merged) and edge facts are bi-temporal, but an entity's `canonical_name`/`surface_names` reflect the *latest* state, not their value as-of `tx_t` (so a survivor shows post-merge aliases even when queried at a pre-merge `tx_t`). The time-travel signal is the entity/edge set + identity, not the attribute snapshot; attribute versioning is a future increment.
 
 ## Risks / open questions (resolve in the plan)
 
