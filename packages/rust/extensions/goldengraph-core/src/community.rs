@@ -12,6 +12,8 @@
 
 use goldenmatch_graph_core::label_propagation_communities;
 
+use serde::{Deserialize, Serialize};
+
 use crate::model::{EntityId, Graph};
 
 /// Fixed iteration cap for the query path — part of the deterministic contract
@@ -19,7 +21,7 @@ use crate::model::{EntityId, Graph};
 pub const COMMUNITY_MAX_ITERS: u32 = 100;
 
 /// A detected community: a stable positional `id` plus its member entity ids.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Community {
     /// Positional index after sorting communities by their minimum member.
     pub id: u32,
