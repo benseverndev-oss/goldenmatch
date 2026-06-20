@@ -17,6 +17,10 @@ exclude = [
     # accelerator (goldenanalysis[native]); neither belongs in `bridge`.
     "analysis-native",
     "analysis-core",
+    # goldengraph-native is a standalone abi3 ext-module workspace (like the
+    # above); goldengraph-core is its pyo3-free path dependency (and carries its
+    # own empty [workspace], so it self-isolates). Neither belongs in `bridge`.
+    "goldengraph-native",
     # graph-layout is a standalone demo binary (Barnes-Hut + multilevel force
     # layout → frames). Heavy/optional; its own workspace, kept out of the
     # default rust build.

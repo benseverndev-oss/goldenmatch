@@ -1,0 +1,38 @@
+# goldengraph-native -- the PyO3 binding for the goldengraph-core knowledge-graph
+# engine, shipped as a maturin/abi3 extension module (mirrors the
+# goldencheck-native / goldenmatch-native split). The compute lives in the
+# pyo3-free `goldengraph-core` crate; this crate is a thin marshaling layer that
+# converts Python lists/dicts <-> the core types and wraps the result `Graph` in
+# a `#[pyclass]`.
+#
+# Standalone workspace (empty [workspace]) so pyo3's `extension-module` feature
+# here is NOT unified with the bridge crate's embedding features -- the two are
+# mutually incompatible (ext-module must NOT link libpython; embedding must).
+# Same isolation rationale as goldencheck-native / native.
+[workspace]
+
+[package]
+name = "goldengraph-native"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Ben Severn <benzsevern@gmail.com>"]
+description = "PyO3 binding for goldengraph-core: resolution-merged knowledge graph + neighborhood retrieval"
+
+[lib]
+# Produces _native.<abi3>.so/.pyd; maturin ships it as goldengraph_native/_native
+# (pymodule `_native`, so the init symbol is PyInit__native).
+name = "_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+# abi3-py311: one stable-ABI artifact spans CPython 3.11-3.13.
+# extension-module: don't link libpython (this .so is imported BY CPython).
+pyo3 = { version = ">=0.28, <0.29", features = ["extension-module", "abi3-py311"] }
+# The pyo3-free knowledge-graph engine. The shims below marshal Python <-> these
+# types and call its `build_graph` / `neighborhood` entry points.
+goldengraph-core = { path = "../goldengraph-core" }
+
+[profile.release]
+opt-level = 3
+lto = "thin"

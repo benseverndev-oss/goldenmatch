@@ -1,0 +1,33 @@
+# goldengraph-native -- the PyO3 binding for goldengraph-core, shipped as a
+# maturin/abi3 wheel (mirrors goldenmatch's native / goldencheck-native split).
+# The compute is the pure-Rust `goldengraph-core` crate; this wheel is the thin
+# Python surface exposing `build_graph` + the `PyGraph` query API.
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "goldengraph-native"
+version = "0.1.0"
+description = "PyO3 binding for goldengraph-core: resolution-merged knowledge graph + neighborhood retrieval"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Ben Severn", email = "benzsevern@gmail.com" }]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3 :: Only",
+    "License :: OSI Approved :: MIT License",
+    "Intended Audience :: Developers",
+    "Topic :: Scientific/Engineering",
+]
+
+[project.urls]
+Homepage = "https://github.com/benseverndev-oss/goldenmatch"
+
+[tool.maturin]
+# Mixed layout: the thin Python wrapper lives in python/goldengraph_native/; the
+# compiled abi3 ext lands at goldengraph_native/_native (pymodule `_native`, so
+# the last path component matches and no Rust rename is needed).
+python-source = "python"
+module-name = "goldengraph_native._native"
