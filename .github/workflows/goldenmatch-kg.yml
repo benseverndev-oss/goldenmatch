@@ -1,0 +1,84 @@
+# goldenmatch-kg integration tests. The package is a STANDALONE package (excluded
+# from the uv workspace -- see root pyproject.toml) so its heavy, fast-moving
+# framework extras never enter the main uv.lock. This lane is its only CI:
+#   * core: the framework-agnostic resolve_entities (needs only goldenmatch).
+#   * shims: a MATRIX with a FRESH venv per framework -- neo4j-graphrag,
+#     llama-index, and graphiti have conflicting heavy dep trees, so each gets
+#     an isolated environment. Installing the extra un-skips that shim's
+#     real-library integration test (the first real execution of the binding).
+#   fail-fast: false so one red shim doesn't cancel the others.
+#
+# This is an informational lane (not part of ci-required). Confirm it green
+# before arming auto-merge.
+name: goldenmatch-kg
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "packages/python/goldenmatch-kg/**"
+      - ".github/workflows/goldenmatch-kg.yml"
+
+permissions:
+  contents: read
+
+env:
+  GOLDENMATCH_AUTOCONFIG_MEMORY: "0"  # no cross-run memory writes in CI
+  GOLDENMATCH_NATIVE: "0"             # pure-Python path; deterministic for these tiny tests
+
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        run: pip install uv
+      - name: Sync workspace (installs goldenmatch) + goldenmatch-kg core
+        # goldenmatch-kg is excluded from the workspace, so uv sync installs the
+        # engine (goldenmatch) but NOT goldenmatch-kg; add it with --no-deps since
+        # goldenmatch + polars are already present.
+        run: |
+          uv sync --all-packages
+          uv pip install --no-deps -e packages/python/goldenmatch-kg
+      - name: Core test (no framework extras)
+        run: "$GITHUB_WORKSPACE/.venv/bin/python -m pytest packages/python/goldenmatch-kg/tests/test_core.py -p no:cacheprovider -q"
+
+  shims:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - extra: neo4j-graphrag
+            import: neo4j_graphrag
+            test: test_neo4j_graphrag.py
+          - extra: llama-index-core
+            import: llama_index.core
+            test: test_llamaindex.py
+          - extra: graphiti-core
+            import: graphiti_core
+            test: test_graphiti.py
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        run: pip install uv
+      - name: Sync workspace + goldenmatch-kg core
+        run: |
+          uv sync --all-packages
+          uv pip install --no-deps -e packages/python/goldenmatch-kg
+      - name: Install the ${{ matrix.extra }} framework
+        run: uv pip install "${{ matrix.extra }}"
+      - name: Record tested version (for pyproject extra pins)
+        run: |
+          V=$("$GITHUB_WORKSPACE/.venv/bin/python" -c "import ${{ matrix.import }} as m; print(getattr(m, '__version__', 'unknown'))")
+          echo "${{ matrix.extra }} == $V" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the ${{ matrix.extra }} shim test (integration test now un-skipped)
+        run: "$GITHUB_WORKSPACE/.venv/bin/python -m pytest packages/python/goldenmatch-kg/tests/${{ matrix.test }} -p no:cacheprovider -q"

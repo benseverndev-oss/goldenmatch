@@ -27,6 +27,25 @@ Newest first. One entry per meaningful change to the network.
   (blocking/configuration/tuning Mintlify) + CHANGELOGs (py + ts) updated. Part of
   the dedup epic #1080.
 
+## 2026-06-19 — goldenmatch-kg: drop-in ER for KG frameworks (#1127)
+- New decision [../decisions/0021-goldenmatch-kg-integrations.md](../decisions/0021-goldenmatch-kg-integrations.md):
+  a new standalone `goldenmatch-kg` package drops goldenmatch in as the
+  entity-resolution stage of three KG frameworks — neo4j-graphrag (a real
+  `GoldenMatchResolver` subclassing `BasePropertySimilarityResolver`), LlamaIndex
+  PropertyGraphIndex (an additive name-canonicalizing `TransformComponent`), and
+  Graphiti (a post-ingestion `propose_entity_merges` pass; no public seam). A
+  framework-agnostic `resolve_entities` core (zero-config `dedupe_df` → groups +
+  canonical maps) is the only goldenmatch-touching code; base-free decision helpers
+  are locally testable, the framework bindings are import-gated. The package is
+  EXCLUDED from the uv workspace so its three heavy framework extras never enter the
+  main `uv.lock` (the `goldenmatch[native]` sync-break footgun); it ships its own
+  `goldenmatch-kg` CI lane (core + a fresh-venv-per-framework matrix). The
+  per-framework lift is read off ER-KG-Bench (neo4j 0.322→0.969, graphiti
+  0.379→0.969), not re-scored. Shim tests inject a deterministic stub for the
+  goldenmatch decision because a zero-config merge on a ~3-row toy frame is
+  version-flaky (1.30 merged "Apple"/"Apple Inc"; 2.2 did not). Docs site
+  (`goldenmatch/kg-integrations`) + root `CLAUDE.md` updated.
+
 ## 2026-06-19 — MinHash/LSH sketch tier (#1081)
 - New decision [../decisions/0020-minhash-lsh-sketch-tier.md](../decisions/0020-minhash-lsh-sketch-tier.md):
   phase 1 of the training-data dedup epic (#1080). A new pyo3-free
