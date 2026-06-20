@@ -10,6 +10,7 @@
 //! Intentionally pyo3-free: the Python binding is the sibling
 //! `goldengraph-native` crate. No LLM, no embeddings, no persistence (SP2+).
 
+pub mod community;
 pub mod model;
 pub mod resolve;
 pub mod retrieve;
