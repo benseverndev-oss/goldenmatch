@@ -85,6 +85,30 @@ def test_llm_judge_plumbing_stub():
     assert res_split["items"][0]["correctness"] == 0.0  # f1 stranded -> not all gold
 
 
+def test_render_results_qa_has_columns_and_disclaimer():
+    rows = [
+        {"name": "goldengraph", "status": "ok", "mean_completeness": 0.9,
+         "per_class": {"abbreviation": 1.0}, "items": []},
+        {"name": "exact-match-floor", "status": "ok", "mean_completeness": 0.33,
+         "per_class": {"abbreviation": 0.33}, "items": []},
+        {"name": "neo4j-graphrag", "status": "skipped", "error": "no dep"},
+    ]
+    md = qa_eval.render_results_qa(rows)
+    assert "fact-completeness" in md
+    assert "authored" in md and "synthetic" in md  # the disclaimer
+    assert "goldengraph" in md and "exact-match-floor" in md
+    assert "skipped" in md
+    assert "Per-failure-class" in md
+
+
+def test_exact_match_floor_adapter_groups_by_form():
+    from erkgbench.adapters import Record
+
+    recs = [Record(0, "IBM", "org", ""), Record(1, "IBM", "org", ""), Record(2, "Apple", "org", "")]
+    part = qa_eval.ExactMatchFloorAdapter().resolve(recs)
+    assert sorted(sorted(g) for g in part) == [[0, 1], [2]]
+
+
 def test_real_corpus_resolved_beats_exact_floor():
     items = load_qa()
     facts = load_qa_facts(items)
