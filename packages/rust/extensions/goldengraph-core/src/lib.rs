@@ -13,6 +13,7 @@
 pub mod model;
 pub mod resolve;
 pub mod retrieve;
+pub mod store;
 
 use model::{Graph, Mention, MentionEdge};
 use resolve::{apply_resolution, resolve_native, ResolutionMode};
