@@ -6,6 +6,12 @@ requires-python = ">=3.11"
 
 [tool.uv.workspace]
 members = ["packages/python/*"]
+# goldenmatch-kg is EXCLUDED from the workspace on purpose: its optional framework
+# extras (neo4j-graphrag, llama-index-core, graphiti-core) are heavy, fast-moving dep
+# trees that would enter the main uv.lock and risk breaking `uv sync --all-packages`
+# repo-wide (the documented goldenmatch[native] footgun). It is a standalone package
+# built + tested by its own lane (.github/workflows/goldenmatch-kg.yml).
+exclude = ["packages/python/goldenmatch-kg"]
 
 [tool.uv.sources]
 goldenmatch = { workspace = true }
@@ -16,7 +22,6 @@ infermap = { workspace = true }
 goldensuite-mcp = { workspace = true }
 goldencheck-types = { workspace = true }
 goldenanalysis = { workspace = true }
-goldenmatch-kg = { workspace = true }
 # goldenmatch-native is the optional compiled runtime (goldenmatch[native]).
 # It's NOT a workspace member (it's a maturin/Rust crate under packages/rust/),
 # so point uv at the path for dev/CI resolution. uv reads its static PEP 621
