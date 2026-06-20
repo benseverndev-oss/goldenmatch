@@ -55,6 +55,24 @@ def resolve_throughput_config(arg=None, config=None) -> ThroughputConfig | None:
 DEFAULT_SIMILARITY: dict[str, float] = {"jaccard": 0.8, "cosine": 0.85}
 
 
+def metric_and_signature_len(blocking) -> tuple[str, int]:
+    """Derive the sketch metric + signature length from a committed BlockingConfig.
+
+    ``lsh`` -> ``("jaccard", num_perms)``; ``simhash`` -> ``("cosine", num_planes)``.
+    Falls back to ``("jaccard", 128)`` only when neither sub-config is present
+    (should not happen for a throughput-forced blocking config). Shared by the two
+    overlay sites (controller plan-apply + the auto_configure_df early-return path)
+    so the derivation can never drift between them.
+    """
+    lsh = getattr(blocking, "lsh", None)
+    if lsh is not None:
+        return "jaccard", lsh.num_perms
+    simhash = getattr(blocking, "simhash", None)
+    if simhash is not None:
+        return "cosine", simhash.num_planes
+    return "jaccard", 128
+
+
 def _band_match_prob(metric: str, s: float) -> float:
     """Per-band single-row collision base prob at similarity ``s``.
 

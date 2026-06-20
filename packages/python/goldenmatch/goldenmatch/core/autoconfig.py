@@ -2931,10 +2931,7 @@ def auto_configure_df(
     # Throughput tier (#1083): early validation -- check text column exists BEFORE
     # the expensive controller run to give a clean ThroughputNotApplicableError.
     if throughput is not None:
-        from goldenmatch.core.throughput_verify import (
-            ThroughputNotApplicableError,
-            resolve_throughput_config,
-        )
+        from goldenmatch.core.throughput_verify import ThroughputNotApplicableError
         import polars as _pl_tp
         if isinstance(df, _pl_tp.DataFrame):
             _early_profiles = profile_columns(df)
@@ -3112,12 +3109,8 @@ def auto_configure_df(
             try:
                 _tp_blk2 = _throughput_blocking(_tp_profiles2, config)
                 config.blocking = _tp_blk2
-                if hasattr(_tp_blk2, "lsh") and _tp_blk2.lsh is not None:
-                    _tp_metric2, _tp_siglen2 = "jaccard", _tp_blk2.lsh.num_perms
-                elif hasattr(_tp_blk2, "simhash") and _tp_blk2.simhash is not None:
-                    _tp_metric2, _tp_siglen2 = "cosine", _tp_blk2.simhash.num_planes
-                else:
-                    _tp_metric2, _tp_siglen2 = "jaccard", 128
+                from goldenmatch.core.throughput_verify import metric_and_signature_len
+                _tp_metric2, _tp_siglen2 = metric_and_signature_len(_tp_blk2)
                 from goldenmatch.core.execution_plan import ExecutionPlan as _EP
                 from goldenmatch.core.autoconfig_planner import apply_throughput_overlay as _ato
                 _base_plan2 = config._throughput_plan or _EP()

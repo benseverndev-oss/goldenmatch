@@ -1280,15 +1280,11 @@ class AutoConfigController:
             try:
                 from goldenmatch.core.autoconfig import _throughput_blocking, profile_columns
                 from goldenmatch.core.autoconfig_planner import apply_throughput_overlay
+                from goldenmatch.core.throughput_verify import metric_and_signature_len
                 _tp_profiles = profile_columns(init_sample)
                 _tp_blk = _throughput_blocking(_tp_profiles, committed_config)
                 committed_config.blocking = _tp_blk
-                if hasattr(_tp_blk, "lsh") and _tp_blk.lsh is not None:
-                    _tp_metric, _tp_siglen = "jaccard", _tp_blk.lsh.num_perms
-                elif hasattr(_tp_blk, "simhash") and _tp_blk.simhash is not None:
-                    _tp_metric, _tp_siglen = "cosine", _tp_blk.simhash.num_planes
-                else:
-                    _tp_metric, _tp_siglen = "jaccard", 128
+                _tp_metric, _tp_siglen = metric_and_signature_len(_tp_blk)
                 plan = apply_throughput_overlay(
                     plan, _throughput_cfg, metric=_tp_metric, signature_len=_tp_siglen
                 )
