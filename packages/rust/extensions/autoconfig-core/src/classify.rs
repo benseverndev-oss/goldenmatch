@@ -34,26 +34,9 @@ pub enum ColType {
     MultiName,
 }
 
-impl ColType {
-    /// Return the Python-compatible string representation.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            ColType::Email => "email",
-            ColType::Name => "name",
-            ColType::Phone => "phone",
-            ColType::Zip => "zip",
-            ColType::Address => "address",
-            ColType::Geo => "geo",
-            ColType::Identifier => "identifier",
-            ColType::Description => "description",
-            ColType::Numeric => "numeric",
-            ColType::Date => "date",
-            ColType::String => "string",
-            ColType::Year => "year",
-            ColType::MultiName => "multi_name",
-        }
-    }
-}
+// `ColType::as_str()` removed — the cross-surface contract is serde JSON
+// (`#[serde(rename_all = "snake_case")]` on the enum), so a Rust-side string
+// helper was dead code with no callers anywhere in the crate.
 
 // ── Public structs ────────────────────────────────────────────────────────────
 
@@ -267,10 +250,8 @@ pub fn guess_type(values: &[std::string::String]) -> &'static str {
     let state_count = values
         .iter()
         .filter(|v| {
-            v.len() == 2
-                && !v.is_empty()
-                && v.chars().all(|c| c.is_ascii_alphabetic())
-                && v.chars().all(|c| c.is_uppercase())
+            // len==2 implies non-empty; is_ascii_uppercase() == is_ascii_alphabetic() && is_uppercase()
+            v.len() == 2 && v.chars().all(|c| c.is_ascii_uppercase())
         })
         .count();
     if state_count as f64 / n > 0.6 {
@@ -381,7 +362,7 @@ pub fn classify_by_name(col_name: &str) -> Option<ColType> {
 ///   n = int(float(v))   → parse as f64, truncate toward zero to i64
 ///   1900 <= n <= 2100
 ///   str(n) == v.replace(".0","").strip()   (round-trip check)
-pub fn is_year(v: &str) -> bool {
+pub(crate) fn is_year(v: &str) -> bool {
     let trimmed = v.trim();
     let f: f64 = match trimmed.parse() {
         Ok(f) => f,
@@ -445,6 +426,12 @@ pub fn classify_by_data(values: &[std::string::String]) -> (ColType, f64) {
         _ => ColType::String, // "text" and anything else
     };
 
+    // Shared avg_len for the two String sub-checks below.
+    // Uses .max(1) to match Python's max(len(values), 1) in _classify_by_data;
+    // values is non-empty here (guarded above), so this is always identical.
+    let avg_len: f64 =
+        values.iter().map(|v| v.len()).sum::<usize>() as f64 / values.len().max(1) as f64;
+
     // Multi-value name detection (only when col_type == String).
     if col_type == ColType::String {
         let rows_with_delim: usize = values
@@ -462,8 +449,6 @@ pub fn classify_by_data(values: &[std::string::String]) -> (ColType, f64) {
         } else {
             0.0
         };
-        let avg_len: f64 =
-            values.iter().map(|v| v.len()).sum::<usize>() as f64 / values.len().max(1) as f64;
         if avg_len > 30.0 && delim_ratio >= 0.7 && avg_delims_in_delim_rows >= 2.0 {
             return (ColType::MultiName, 0.7);
         }
@@ -471,8 +456,6 @@ pub fn classify_by_data(values: &[std::string::String]) -> (ColType, f64) {
 
     // Description detection: long freetext (only when col_type == String).
     let col_type = if col_type == ColType::String {
-        let avg_len: f64 =
-            values.iter().map(|v| v.len()).sum::<usize>() as f64 / values.len() as f64;
         if avg_len > 50.0 {
             ColType::Description
         } else {
@@ -488,6 +471,11 @@ pub fn classify_by_data(values: &[std::string::String]) -> (ColType, f64) {
 
 // ── Task B4: classify_columns ─────────────────────────────────────────────────
 
+/// Column types where the name heuristic overrides data profiling.
+/// Python: `name_authoritative = {Date, Geo, Identifier, Numeric, Year}`.
+const NAME_AUTHORITATIVE: &[ColType] =
+    &[ColType::Date, ColType::Geo, ColType::Identifier, ColType::Numeric, ColType::Year];
+
 /// Port of `autoconfig.py::profile_columns` merge-precedence logic (lines 350-368).
 ///
 /// Authoritative set: `{Date, Geo, Identifier, Numeric, Year}`.
@@ -501,11 +489,8 @@ pub fn classify_columns(cols: &[ColumnStats]) -> Vec<ColumnProfile> {
             let name_type = classify_by_name(&cs.name);
             let (data_type, data_conf) = classify_by_data(&cs.sample_values);
 
-            let name_authoritative: &[ColType] =
-                &[ColType::Date, ColType::Geo, ColType::Identifier, ColType::Numeric, ColType::Year];
-
             let (col_type, confidence) = if let Some(nt) = name_type {
-                if name_authoritative.contains(&nt) {
+                if NAME_AUTHORITATIVE.contains(&nt) {
                     // Name pattern is authoritative for these types.
                     (nt, 0.9)
                 } else if data_type != ColType::String {
@@ -970,6 +955,44 @@ mod tests {
         let (ct, conf) = classify_by_data(&vals);
         assert_eq!(ct, ColType::Email);
         assert!((conf - 0.7).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_classify_by_data_name_direct() {
+        // "name"-typed sample from guess_type (>60% match NAME_RE) -> ColType::Name, conf=0.7
+        let vals = sv(&[
+            "John Smith", "Jane Doe", "Alice Brown", "Bob Jones", "Carol White",
+            "Dave Green", "Eve Hall",
+        ]);
+        let (ct, conf) = classify_by_data(&vals);
+        assert_eq!(ct, ColType::Name);
+        assert!((conf - 0.7).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_classify_by_data_phone_small_sample_no_cardinality_guard() {
+        // 5 distinct phone numbers — cardinality guard requires >= 10 values, so does NOT fire.
+        // All 5 are valid phone format -> guess_type returns "phone" -> ColType::Phone, conf=0.7.
+        let vals = sv(&["5551234567", "4155556789", "2125559876", "7185554321", "9175551234"]);
+        assert_eq!(vals.len(), 5);
+        let (ct, conf) = classify_by_data(&vals);
+        assert_eq!(ct, ColType::Phone);
+        assert!((conf - 0.7).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_classify_columns_data_wins_when_name_disagrees_both_non_string() {
+        // name="phone_contact" -> classify_by_name returns Some(Phone).
+        // sample_values are all emails -> classify_by_data returns (Email, 0.7).
+        // Both name_type (Phone) and data_type (Email) are non-String and they disagree.
+        // The merge rule: data wins -> col_type=Email, confidence=0.7.
+        let cols = vec![make_col(
+            "phone_contact",
+            &["a@b.com", "c@d.org", "e@f.net", "g@h.io", "i@j.co", "k@l.dev", "m@n.edu"],
+        )];
+        let profiles = classify_columns(&cols);
+        assert_eq!(profiles[0].col_type, ColType::Email);
+        assert!((profiles[0].confidence - 0.7).abs() < 1e-10);
     }
 
     // ── B4: classify_columns (merge precedence) ───────────────────────────────
