@@ -206,9 +206,23 @@ else:                                      col_type = data_type;  confidence = d
 ```
 
 Ports of `_classify_by_name`, `_classify_by_data`, and `_guess_type` (the value
-heuristic, which lives in a separate profiler module — to be located precisely in
-the plan). `cardinality_ratio` denominator is `total_rows` (sample height incl.
-nulls), not `len(values)` — a parity detail to preserve.
+heuristic, in `core/profiler.py` ~line 27).
+
+**Two parity subtleties the port must NOT unify** (golden vectors guard both, but
+flagged so the porter does not "clean them up"):
+
+1. **Two different cardinality denominators.** `ColumnProfile.cardinality_ratio`
+   (autoconfig.py:337) is `len(set(values)) / total_rows` (sample height *incl.*
+   nulls). But the internal cardinality *guard* inside `_classify_by_data`
+   (autoconfig.py:214) is `len(set(values)) / len(values)` (non-null count), and it
+   additionally gates on `len(values) >= 10`. These are deliberately different;
+   keep both.
+2. **Branch evaluation order inside `_classify_by_data` is load-bearing.** Order:
+   numeric-shaped cardinality guard → year detection (`all(_is_year(v))`) →
+   `type_map` lookup → `multi_name` (avg_len > 30, delim_ratio >= 0.7,
+   avg_delims >= 2) → `description` (avg_len > 50). Year is checked *before* the
+   generic `type_map`; `multi_name` is checked *before* `description`. Preserve the
+   short-circuit precedence exactly.
 
 ## Bindings
 
@@ -288,8 +302,8 @@ Matches the #663 Arrow-native posture:
 
 ## Open questions / risks
 
-- **`_guess_type` location + exact body** — must be located and ported precisely
-  (resolve in the plan).
+- **`_guess_type` exact body** — located at `core/profiler.py` ~line 27; a
+  threshold-ratio value heuristic with no hidden deps. Port verbatim in the plan.
 - **WASM packaging in the npm build** — wasm-pack output, edge-runtime load path,
   bundle size; the highest-uncertainty piece.
 - **Float determinism** across Rust/Python/JS for the confidence arithmetic and
