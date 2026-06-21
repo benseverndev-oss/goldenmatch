@@ -41,6 +41,14 @@ def _build_engine(name: str):
         return GoldenGraphQAEngine(
             llm=OpenAIClient(model="gpt-4o-mini"), embedder=GoldenmatchEmbedder()
         )
+    if name == "lightrag":
+        from lightrag.llm.openai import gpt_4o_mini_complete, openai_embed
+
+        from .engines.lightrag import LightRAGQAEngine
+
+        return LightRAGQAEngine(
+            llm_model_func=gpt_4o_mini_complete, embedding_func=openai_embed
+        )
     raise SystemExit(f"unknown engine: {name}")
 
 

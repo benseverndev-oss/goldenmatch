@@ -1,0 +1,34 @@
+# LightRAG adapter smoke (GraphRAG evidence #1 / PR B). Isolated lightrag-hku
+# venv, key-free: validates the QAEngine protocol conformance + the cost-counting
+# llm_model_func seam. LightRAG cannot be stubbed end-to-end (its extraction needs
+# a real LLM's delimited output), so the real e2e run lives in bench-graphrag-qa.
+# Informational lane (NOT ci-required); confirm green before arming auto-merge.
+name: bench-lightrag-smoke
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "packages/python/goldenmatch/benchmarks/er-kg-bench/erkgbench/qa_e2e/engines/lightrag.py"
+      - "packages/python/goldenmatch/benchmarks/er-kg-bench/tests/test_qa_lightrag_smoke.py"
+      - ".github/workflows/bench-lightrag-smoke.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  lightrag-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Install lightrag + goldenmatch (isolated)
+        run: python -m pip install --upgrade pip pytest numpy "lightrag-hku" goldenmatch
+      - name: LightRAG adapter smoke (protocol + cost seam, no LLM)
+        working-directory: packages/python/goldenmatch/benchmarks/er-kg-bench
+        env:
+          POLARS_SKIP_CPU_CHECK: "1"
+        run: python -m pytest tests/test_qa_lightrag_smoke.py -v
