@@ -1,0 +1,33 @@
+# MS-GraphRAG adapter smoke (GraphRAG evidence #1 / PR C). Isolated graphrag venv,
+# no LLM: validates QAEngine protocol conformance + that graphrag imports. The real
+# end-to-end (build_index -> local_search) runs in bench-graphrag-qa (it needs a key
+# and is expensive -- the long pole). Informational lane.
+name: bench-msgraphrag-smoke
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "packages/python/goldenmatch/benchmarks/er-kg-bench/erkgbench/qa_e2e/engines/ms_graphrag.py"
+      - "packages/python/goldenmatch/benchmarks/er-kg-bench/tests/test_qa_ms_graphrag_smoke.py"
+      - ".github/workflows/bench-msgraphrag-smoke.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  msgraphrag-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Install graphrag + goldenmatch (isolated)
+        run: python -m pip install --upgrade pip pytest numpy pandas pyarrow graphrag goldenmatch
+      - name: MS-GraphRAG adapter smoke (protocol + import, no LLM)
+        working-directory: packages/python/goldenmatch/benchmarks/er-kg-bench
+        env:
+          POLARS_SKIP_CPU_CHECK: "1"
+        run: python -m pytest tests/test_qa_ms_graphrag_smoke.py -v
