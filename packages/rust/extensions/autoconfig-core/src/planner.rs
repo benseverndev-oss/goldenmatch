@@ -238,14 +238,29 @@ pub fn decide_plan(input: &PlannerInput) -> ExecutionPlan {
         };
     }
 
-    // Rule 5: duckdb — pairs >= 5B OR RAM < 16 GB.  Catch-all at end of chain.
+    // Rule 5: duckdb — pairs >= 5B OR RAM < 16 GB.  NOT a catch-all; predicate is explicit.
+    if pairs >= DUCKDB_MIN_PAIRS || rt.available_ram_gb < DUCKDB_MAX_RAM_GB {
+        return ExecutionPlan {
+            backend: BackendName::Duckdb,
+            chunk_size: None,
+            max_workers: DUCKDB_MAX_WORKERS.min(rt.cpu_count),
+            pair_spill_threshold: Some(SpillThreshold::Duckdb),
+            clustering_strategy: ClusteringStrategy::PartitionedUnionFind,
+            rule_name: "plan_selected_duckdb".into(),
+        };
+    }
+
+    // no_rule_matched — Python parity: `apply_planner_rules` returns
+    // `ExecutionPlan(rule_name="no_rule_matched")` when no rule fires,
+    // which resolves to the dataclass defaults: polars-direct, max_workers=4
+    // (the literal dataclass default, NOT min(4, cpu_count)), everything else None/in_memory.
     ExecutionPlan {
-        backend: BackendName::Duckdb,
+        backend: BackendName::PolarsDirect,
         chunk_size: None,
-        max_workers: DUCKDB_MAX_WORKERS.min(rt.cpu_count),
-        pair_spill_threshold: Some(SpillThreshold::Duckdb),
-        clustering_strategy: ClusteringStrategy::PartitionedUnionFind,
-        rule_name: "plan_selected_duckdb".into(),
+        max_workers: 4,
+        pair_spill_threshold: None,
+        clustering_strategy: ClusteringStrategy::InMemory,
+        rule_name: "no_rule_matched".into(),
     }
 }
 
@@ -502,6 +517,30 @@ mod tests {
         });
         assert_eq!(p.rule_name, "plan_selected_duckdb");
         assert_eq!(p.max_workers, 8); // min(8, 16)
+    }
+
+    // ── no_rule_matched fallback (Python parity regression) ──────────────────
+    /// Concrete divergence from the spec-compliance review:
+    ///   n_rows=800_000, pairs=5_000_000, ram=20.0 GB, cpu=8, all caps false/None
+    ///   pairs (5M) < 5B AND ram (20) >= 16 → duckdb predicate false.
+    ///   Python → backend=polars-direct, rule_name="no_rule_matched", max_workers=4
+    ///   Old Rust → duckdb (WRONG: treated duckdb as unconditional catch-all).
+    #[test]
+    fn rule_no_match_falls_through_to_polars_direct() {
+        let rt = RuntimeProfile { available_ram_gb: 20.0, cpu_count: 8, disk_free_gb: 300.0 };
+        let p = decide_plan(&PlannerInput {
+            n_rows_full: 800_000,
+            estimated_pair_count: 5_000_000,
+            runtime: rt,
+            caps: caps_plain(),
+        });
+        assert_eq!(p.backend, BackendName::PolarsDirect, "should fall through to no_rule_matched, not duckdb");
+        assert_eq!(p.rule_name, "no_rule_matched");
+        // Python dataclass default is the literal 4, NOT min(4, cpu_count)
+        assert_eq!(p.max_workers, 4);
+        assert_eq!(p.pair_spill_threshold, None);
+        assert_eq!(p.clustering_strategy, ClusteringStrategy::InMemory);
+        assert_eq!(p.chunk_size, None);
     }
 
     // ── Rule 7 (registry position 0): user_override ───────────────────────────
