@@ -10,6 +10,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from erkgbench.qa_e2e.corpora import Document, QACorpus, QAItem, load_musique  # noqa: E402
+from erkgbench.qa_e2e.engineered import generate_engineered  # noqa: E402
 
 _FIX = (
     Path(__file__).resolve().parent.parent
@@ -50,3 +51,29 @@ def test_load_musique_from_fixture():
 def test_load_musique_respects_max_questions():
     corpus = load_musique(path=_FIX, max_questions=1)
     assert len(corpus.questions) == 1
+
+
+def test_engineered_is_deterministic_for_a_seed():
+    a = generate_engineered(seed=7, n_questions=20, ambiguity=0.5)
+    b = generate_engineered(seed=7, n_questions=20, ambiguity=0.5)
+    assert [d.text for d in a.documents] == [d.text for d in b.documents]
+    assert [(q.id, q.question, q.gold_answer) for q in a.questions] == [
+        (q.id, q.question, q.gold_answer) for q in b.questions
+    ]
+
+
+def test_engineered_records_hop_and_ambiguity_and_path():
+    c = generate_engineered(seed=1, n_questions=30, ambiguity=0.5, max_hops=4)
+    assert c.name == "engineered"
+    assert c.questions  # at least some questions were produced
+    assert all(1 <= q.hop_count <= 4 for q in c.questions)
+    assert all(len(q.gold_supporting_fact_ids) == q.hop_count for q in c.questions)
+    assert all(q.ambiguity_level == 0.5 for q in c.questions)
+
+
+def test_engineered_ambiguity_dial_changes_surface_forms():
+    clean = generate_engineered(seed=3, n_questions=40, ambiguity=0.0)
+    noisy = generate_engineered(seed=3, n_questions=40, ambiguity=1.0)
+    clean_text = " ".join(d.text for d in clean.documents)
+    noisy_text = " ".join(d.text for d in noisy.documents)
+    assert clean_text != noisy_text
