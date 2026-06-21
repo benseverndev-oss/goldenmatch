@@ -49,6 +49,7 @@ def run_engine(engine: QAEngine, corpus, *, model: str, budget_usd: float) -> di
     tracker.record_usage(build.input_tokens, build.output_tokens, model)
 
     ems: list[float] = []
+    matches: list[float] = []
     f1s: list[float] = []
     recalls: list[float] = []
     decay_rows: list[tuple[int, float]] = []
@@ -58,13 +59,16 @@ def run_engine(engine: QAEngine, corpus, *, model: str, budget_usd: float) -> di
             break
         ans = engine.answer(build.handle, q.question)
         tracker.record_usage(ans.input_tokens, ans.output_tokens, model)
-        em = metrics.exact_match(ans.text, q.gold_answer)
-        ems.append(em)
+        am = metrics.answer_match(ans.text, q.gold_answer)
+        matches.append(am)
+        ems.append(metrics.exact_match(ans.text, q.gold_answer))
         f1s.append(metrics.token_f1(ans.text, q.gold_answer))
         recalls.append(
             metrics.supporting_fact_recall(ans.retrieved_fact_ids, q.gold_supporting_fact_ids)
         )
-        decay_rows.append((q.hop_count, em))
+        # Decay = correctness by hop count. answer_match (containment) is the
+        # meaningful correctness signal for free-text answers; exact_match reads ~0.
+        decay_rows.append((q.hop_count, am))
         answered += 1
 
     return {
@@ -74,6 +78,7 @@ def run_engine(engine: QAEngine, corpus, *, model: str, budget_usd: float) -> di
         "model": model,
         "n_questions": len(corpus.questions),
         "n_answered": answered,
+        "answer_match": _mean(matches),
         "exact_match": _mean(ems),
         "token_f1": _mean(f1s),
         "support_recall": _mean(recalls),
@@ -96,17 +101,19 @@ def write_results(results: list[dict], *, md_path: str | Path, json_path: str | 
     Path(json_path).write_text(json.dumps(results, indent=2, sort_keys=True), encoding="utf-8")
     lines = ["# ER-KG-Bench -- end-to-end multi-hop QA (evidence program #1)", ""]
     lines.append(
-        "| engine | corpus | EM | token-F1 | support-recall | cost (USD) | answered | budget hit |"
+        "| engine | corpus | answer-match | EM | token-F1 | support-recall | "
+        "cost (USD) | answered | budget hit |"
     )
-    lines.append("|---|---|---|---|---|---|---|---|")
+    lines.append("|---|---|---|---|---|---|---|---|---|")
     for r in results:
         lines.append(
-            f"| {r['engine']} | {r['corpus']} | {r['exact_match']} | {r['token_f1']} | "
-            f"{r['support_recall']} | {r['cost_usd']} | {r['n_answered']}/{r['n_questions']} | "
+            f"| {r['engine']} | {r['corpus']} | {r['answer_match']} | {r['exact_match']} | "
+            f"{r['token_f1']} | {r['support_recall']} | {r['cost_usd']} | "
+            f"{r['n_answered']}/{r['n_questions']} | "
             f"{'yes' if r['budget_exhausted'] else 'no'} |"
         )
     lines.append("")
-    lines.append("## Decay curve (engineered corpus: mean EM by hop count)")
+    lines.append("## Decay curve (engineered corpus: mean answer-match by hop count)")
     for r in results:
         if r["corpus"] == "engineered":
             curve = ", ".join(f"{h}:{v}" for h, v in r["decay_curve"].items())

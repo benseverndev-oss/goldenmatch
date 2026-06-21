@@ -22,6 +22,27 @@ def exact_match(pred: str, gold: str) -> float:
     return 1.0 if _normalize(pred) == _normalize(gold) else 0.0
 
 
+def answer_match(pred: str, gold: str) -> float:
+    """Containment correctness for free-text / generative answers: 1.0 if the
+    normalized gold answer appears as a contiguous token run inside the normalized
+    prediction, else 0.0.
+
+    Generative engines return a sentence ("the final entity is Acme Corp"), so
+    whole-string `exact_match` reads ~0 even when the answer is right; containment
+    captures "the answer names the correct entity" without an LLM judge. Token-level
+    (not raw substring) so a gold "acme" can't spuriously match inside "acmecorp"."""
+    g = _normalize(gold).split()
+    p = _normalize(pred).split()
+    if not g:
+        return 1.0 if not p else 0.0
+    if len(g) > len(p):
+        return 0.0
+    for i in range(len(p) - len(g) + 1):
+        if p[i : i + len(g)] == g:
+            return 1.0
+    return 0.0
+
+
 def token_f1(pred: str, gold: str) -> float:
     p = _normalize(pred).split()
     g = _normalize(gold).split()
