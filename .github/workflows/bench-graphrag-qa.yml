@@ -89,6 +89,38 @@ jobs:
           path: packages/python/goldenmatch/benchmarks/er-kg-bench/results/results_qa_e2e_lightrag*.*
           if-no-files-found: ignore
 
+  ms_graphrag:
+    runs-on: large-new-64GB
+    timeout-minutes: 90  # MS-GraphRAG indexing is the long pole
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Install graphrag + goldenmatch + datasets (isolated)
+        run: python -m pip install --upgrade pip pytest numpy pandas pyarrow "graphrag==3.1.0" goldenmatch datasets openai
+      - name: Run MS-GraphRAG end-to-end (real LLM, budget-capped)
+        working-directory: packages/python/goldenmatch/benchmarks/er-kg-bench
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GRAPHRAG_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          POLARS_SKIP_CPU_CHECK: "1"
+        run: |
+          python -m erkgbench.qa_e2e.run_qa_e2e \
+            --engine ms_graphrag \
+            --corpus "${{ inputs.corpus }}" \
+            --max-questions "${{ inputs.max_questions }}" \
+            --budget-usd "${{ inputs.budget_usd }}" \
+            --out-md results/RESULTS_QA_E2E_ms_graphrag.md \
+            --out-json results/results_qa_e2e_ms_graphrag.json
+      - name: Upload results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: graphrag-qa-results-ms_graphrag
+          path: packages/python/goldenmatch/benchmarks/er-kg-bench/results/results_qa_e2e_ms_graphrag*.*
+          if-no-files-found: ignore
+
   graphiti:
     runs-on: large-new-64GB
     timeout-minutes: 60
