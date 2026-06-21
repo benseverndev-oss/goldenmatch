@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 import types
 
 # ── Force pure-Python path (oracle must never call the thing under test) ───────
@@ -22,13 +21,13 @@ os.environ["GOLDENMATCH_NATIVE"] = "0"
 os.environ["POLARS_SKIP_CPU_CHECK"] = "1"
 
 # ── Imports ────────────────────────────────────────────────────────────────────
-from goldenmatch.core.autoconfig_planner import apply_planner_rules
-from goldenmatch.core.autoconfig_planner_rules import DEFAULT_RULES, _has_ray  # noqa: PLC2701
-import goldenmatch.core.autoconfig_planner_rules as _rules_mod
-from goldenmatch.core.runtime_profile import RuntimeProfile
-import polars as pl
-
 from pathlib import Path
+
+import goldenmatch.core.autoconfig_planner_rules as _rules_mod
+import polars as pl
+from goldenmatch.core.autoconfig_planner import apply_planner_rules
+from goldenmatch.core.autoconfig_planner_rules import DEFAULT_RULES  # noqa: PLC2701
+from goldenmatch.core.runtime_profile import RuntimeProfile
 
 OUT_DIR = Path(__file__).parent.parent / "packages/rust/extensions/autoconfig-core/golden"
 OUT_DIR.mkdir(parents=True, exist_ok=True)

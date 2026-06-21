@@ -26,7 +26,6 @@ os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 
 import numpy as np
 import polars as pl
-
 from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig
 from goldenmatch.core.blocker import measure_blocking_profile
 

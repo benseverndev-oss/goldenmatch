@@ -29,13 +29,10 @@ since the shims were added; the CI ``native`` lane (Linux) runs the full suite.
 from __future__ import annotations
 
 import json
-import os
-from dataclasses import asdict
 from pathlib import Path
 
 import polars as pl
 import pytest
-
 from goldenmatch.core._native_loader import native_available, native_module
 
 # ── Skip guard ──────────────────────────────────────────────────────────────
