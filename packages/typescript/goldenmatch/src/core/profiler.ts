@@ -6,6 +6,11 @@
  */
 
 import type { Row } from "./types.js";
+import { getAutoconfigWasmBackend } from "./autoconfigWasmBackend.js";
+// Type-only (erased — no wasm bytes pulled into the bundle). The value path goes
+// through the lean registry above; the heavy loader is only reached when a caller
+// has imported `goldenmatch/core/autoconfig-wasm` and called enableAutoconfigWasm().
+import type { CoreColumnStats, CoreColumnType } from "./autoconfigWasm.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -234,6 +239,30 @@ function guessTypeAndConfidence(
   return { type: "text", confidence: 0.3 };
 }
 
+/**
+ * Map the shared core's 13-value column vocabulary back onto this profiler's
+ * 11-value `ColumnType`. The core adds `address`/`description` (free-text shapes
+ * the hand-written TS heuristic never emitted) and renames `id`→`identifier` /
+ * `text`→`string`. We collapse `address`/`description` to `text` (the existing
+ * free-text bucket) so every downstream `inferredType` consumer keeps working
+ * unchanged — adopting the full core vocab (and the address/description
+ * distinction) is a follow-up, not required to route through the core.
+ */
+function coreColTypeToTs(core: CoreColumnType): ColumnType {
+  switch (core) {
+    case "identifier":
+      return "id";
+    case "string":
+    case "address":
+    case "description":
+      return "text";
+    default:
+      // email / name / phone / zip / geo / numeric / date / year / multi_name
+      // are shared verbatim between the two vocabularies.
+      return core;
+  }
+}
+
 function profileColumn(name: string, rawValues: readonly unknown[]): ColumnProfile {
   const totalCount = rawValues.length;
   let nullCount = 0;
@@ -266,10 +295,40 @@ function profileColumn(name: string, rawValues: readonly unknown[]): ColumnProfi
 
   // Subsample for type guessing for performance
   const sampleForType = nonNull.length > 500 ? nonNull.slice(0, 500) : nonNull;
-  const { type: inferredType, confidence } = guessTypeAndConfidence(
-    sampleForType,
-    name,
-  );
+
+  // Opt-in: classify via the shared wasm core (= Python's classifier) when the
+  // backend is enabled; otherwise fall back to the pure-TS heuristic. The two
+  // are DIFFERENT implementations (the core adds address/description + slightly
+  // different thresholds), so this can change a column's inferredType when wasm
+  // is on — by design, the wasm path follows Python, the source of truth.
+  let inferredType: ColumnType;
+  let confidence: number;
+  const wasm = getAutoconfigWasmBackend();
+  if (wasm !== null) {
+    const stats: CoreColumnStats = {
+      name,
+      dtype: "String",
+      sampleValues: sampleForType,
+      nullRate,
+      cardinalityRatio,
+      avgLen: avgLength,
+    };
+    const profile = wasm.classifyColumns([stats])[0];
+    if (profile !== undefined) {
+      inferredType = coreColTypeToTs(profile.colType);
+      confidence = profile.confidence;
+    } else {
+      ({ type: inferredType, confidence } = guessTypeAndConfidence(
+        sampleForType,
+        name,
+      ));
+    }
+  } else {
+    ({ type: inferredType, confidence } = guessTypeAndConfidence(
+      sampleForType,
+      name,
+    ));
+  }
 
   return {
     name,
