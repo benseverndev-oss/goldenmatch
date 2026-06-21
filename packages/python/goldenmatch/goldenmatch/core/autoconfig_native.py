@@ -108,7 +108,7 @@ def plan_from_json(s: str) -> ExecutionPlan:
         max_workers=int(data["max_workers"]),
         pair_spill_threshold=data.get("pair_spill_threshold"),  # null -> None
         clustering_strategy=data["clustering_strategy"],
-        rule_name=data.get("rule_name"),
+        rule_name=data["rule_name"],  # Rust always emits a non-null rule_name string
     )
 
 
