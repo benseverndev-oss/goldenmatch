@@ -216,16 +216,15 @@ pub fn guess_type(values: &[std::string::String]) -> &'static str {
     }
     let n = values.len() as f64;
 
-    // email: >60% contain @ and a dot after @
+    // email: >60% contain @ and a dot after the LAST @
+    // Python: "@" in v and "." in v.split("@")[-1]
+    // Use rfind('@') to mirror split("@")[-1] — diverges from find('@') on
+    // values with multiple @ signs (e.g. "user@domain.com@nodot").
     let email_count = values
         .iter()
-        .filter(|v| {
-            if let Some(idx) = v.find('@') {
-                let after = &v[idx + 1..];
-                after.contains('.')
-            } else {
-                false
-            }
+        .filter(|v| match v.rfind('@') {
+            Some(at_idx) => v[at_idx + 1..].contains('.'),
+            None => false,
         })
         .count();
     if email_count as f64 / n > 0.6 {
@@ -585,6 +584,30 @@ mod tests {
         vals.extend((0..4).map(|i| format!("notanemail{}", i)));
         // 0.6 is not > 0.6, so should not be "email"
         assert_ne!(guess_type(&vals), "email");
+    }
+
+    #[test]
+    fn test_guess_type_email_uses_last_at() {
+        // Regression: "user@domain.com@nodot" has a dot after the FIRST @ but NOT
+        // after the LAST @.  Python's `"." in v.split("@")[-1]` evaluates to False
+        // ("nodot" has no dot), so these values must NOT classify as "email".
+        // The old Rust code used find('@') (first @), which would find "domain.com@nodot"
+        // → contains '.' → wrongly counted as email.
+        let vals = sv(&[
+            "user@domain.com@nodot",
+            "alice@foo.org@bar",
+            "bob@x.net@baz",
+            "carol@y.io@qux",
+            "dave@z.co@quux",
+            "eve@a.dev@corge",
+            "frank@b.edu@grault",
+        ]);
+        // 7/7 would be >0.6 if the old (first-@) logic ran — must NOT return "email"
+        assert_ne!(guess_type(&vals), "email");
+        // These values have no digits so not phone/zip, not 2-char uppercase so not
+        // state, contain @ so won't match NAME_RE, no address word, no date pattern
+        // → they fall through to "text".
+        assert_eq!(guess_type(&vals), "text");
     }
 
     #[test]
