@@ -40,14 +40,23 @@ class MSGraphRAGQAEngine:
     fidelity = "real-e2e"
 
     def __init__(
-        self, *, model: str = "gpt-4o-mini", embedding_model: str = "text-embedding-3-small"
+        self, *, model: str = "gpt-4o-mini", embedding_model: str = "text-embedding-3-large"
     ):
+        # text-embedding-3-large (3072-dim) matches graphrag's default
+        # vector_store.vector_size (3072). graphrag decouples the embedding model from
+        # the LanceDB column dimension, so a 1536-dim model (3-small) provisions a
+        # 3072-dim store at index time and then fails local_search at query time with
+        # "query dim(1536) doesn't match the column vector dim(3072)". Aligning the
+        # model to the default vector_size keeps index + query consistent with zero
+        # nested config overrides.
         self._model = model
         self._embedding_model = embedding_model
 
     def _build_config(self, workdir: str):
         """Scaffold graphrag's own canonical config for the installed version, then
-        load it. Self-heals across graphrag's fast-moving settings schema."""
+        load it. Self-heals across graphrag's fast-moving settings schema. NOTE: this
+        os.chdir()s into the project dir (graphrag's load_config does, and relies on
+        it); callers that need a stable CWD must save/restore it themselves."""
         from graphrag.cli.initialize import initialize_project_at
         from graphrag.config.load_config import load_config
 
@@ -56,6 +65,13 @@ class MSGraphRAGQAEngine:
         initialize_project_at(
             root, force=True, model=self._model, embedding_model=self._embedding_model
         )
+        # graphrag's load_config does os.chdir(project_dir) and does NOT restore the
+        # CWD -- and graphrag RELIES on that: its storage base_dirs are relative to the
+        # project dir, so build_index writes output/*.parquet under the chdir'd CWD. We
+        # deliberately let the chdir stand (restoring it makes build_index write the
+        # artifacts to the wrong dir). The harness's results write is made
+        # CWD-independent instead, by resolving --out paths to absolute in
+        # run_qa_e2e.main before the engine runs.
         return load_config(root)
 
     def build_kg(self, corpus) -> BuildResult:

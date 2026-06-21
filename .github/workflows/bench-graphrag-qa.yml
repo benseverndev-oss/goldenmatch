@@ -16,12 +16,16 @@ on:
       budget_usd:
         description: "hard cost cap per run"
         default: "25"
+      engine:
+        description: "all | goldengraph | lightrag | ms_graphrag | graphiti"
+        default: "all"
 
 permissions:
   contents: read
 
 jobs:
   goldengraph:
+    if: ${{ inputs.engine == 'all' || inputs.engine == 'goldengraph' }}
     runs-on: large-new-64GB
     timeout-minutes: 60
     steps:
@@ -59,6 +63,7 @@ jobs:
           if-no-files-found: ignore
 
   lightrag:
+    if: ${{ inputs.engine == 'all' || inputs.engine == 'lightrag' }}
     runs-on: large-new-64GB
     timeout-minutes: 60
     steps:
@@ -90,6 +95,7 @@ jobs:
           if-no-files-found: ignore
 
   ms_graphrag:
+    if: ${{ inputs.engine == 'all' || inputs.engine == 'ms_graphrag' }}
     runs-on: large-new-64GB
     timeout-minutes: 90  # MS-GraphRAG indexing is the long pole
     steps:
@@ -122,6 +128,7 @@ jobs:
           if-no-files-found: ignore
 
   graphiti:
+    if: ${{ inputs.engine == 'all' || inputs.engine == 'graphiti' }}
     runs-on: large-new-64GB
     timeout-minutes: 60
     services:
@@ -135,7 +142,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install graphiti-core + goldenmatch + datasets + openai (isolated)
-        run: python -m pip install --upgrade pip pytest numpy graphiti-core goldenmatch datasets openai
+        run: python -m pip install --upgrade pip pytest numpy "graphiti-core[falkordb]" goldenmatch datasets openai
       - name: Run Graphiti end-to-end (real LLM + FalkorDB, budget-capped)
         working-directory: packages/python/goldenmatch/benchmarks/er-kg-bench
         env:
