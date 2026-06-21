@@ -37,12 +37,21 @@ exposed as the **opt-in subpath** `goldenmatch/core/autoconfig-wasm`.
   fallback — NOT deleted). Equivalence proven in
   `tests/parity/autoconfig-wasm-planner-equivalence.test.ts` (wasm plan ≡ pure-TS plan on
   every Python fixture ⇒ TS rules ≡ wasm ≡ Python).
-- **Classifier reroute STILL pending (E3, classifier half).** `profiler.ts` still uses its
-  hand-written heuristics with the `ColumnType` vocab (`id`/`text`, lacks `address`/`description`).
-  Rerouting it through `backend.classifyColumns` needs a core-13 ↔ TS-11 vocab adapter
-  (`identifier`↔`id`, `string`↔`text`, and a home for `address`/`description`) and updates to
-  every `inferredType` consumer (`autoconfig.ts`, `node/a2a|mcp/server.ts`). Tracked as the
-  next step; the loader + backend registry are the seam it will use.
+- **Classifier reroute DONE (E3, classifier half).** `profiler.ts::profileColumn` routes
+  through `backend.classifyColumns` when the wasm backend is enabled, else the hand-written
+  heuristic (kept as the fallback). `coreColTypeToTs` maps the core's 13-value vocab onto the
+  profiler's 11-value `ColumnType`: `identifier`→`id`, `string`→`text`, and `address`/
+  `description`→`text` (collapsed into the existing free-text bucket so every `inferredType`
+  consumer — `autoconfig.ts`, `node/a2a|mcp/server.ts` — keeps working WITHOUT widening
+  `ColumnType` or touching those consumers). Unlike the planner, wasm ≠ pure-TS here (different
+  classifiers), so there's no equivalence test — the core's correctness is the golden-vector
+  parity; `tests/parity/autoconfig-wasm-classifier.test.ts` guards the wiring + remap (email
+  survives 1:1, `identifier`→`id`, no core-only label leaks, disable reverts). `profiler.ts`
+  `import type`s the loader (erased), value-imports only the lean registry, so `core/index`
+  stays lean (no wasm).
+- **Remaining (optional follow-up):** adopt the full core-13 vocab in `ColumnType` (surface
+  `address`/`description` instead of collapsing to `text`) + the corresponding consumer
+  switches. Not required to route through the core; it's a fidelity upgrade.
 
 ## Wave history
 | npm | Python parity | Headline |
