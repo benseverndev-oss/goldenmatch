@@ -8,6 +8,8 @@ of a circular import (it's imported at goldenmatch package init to register).
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 from rapidfuzz.distance import JaroWinkler
 from rapidfuzz.process import cdist
@@ -15,6 +17,8 @@ from rapidfuzz.process import cdist
 from .model import SynonymModel
 from .providers import resolve_synonym_model
 from .table import SynonymTable
+
+_DATA_DIR = Path(__file__).resolve().parent / "data"
 
 
 class SynonymScorer:
@@ -27,7 +31,14 @@ class SynonymScorer:
         model: SynonymModel | None = None,
     ):
         self.domain = domain
-        self._table = table if table is not None else SynonymTable.empty()
+        # Injected table wins; else auto-load the per-domain knowledge base
+        # data/<domain>_synonyms.json (missing -> empty, graceful). This is the
+        # deterministic production path for arbitrary synonyms (a curated lookup,
+        # like the refdata alias tables) the trained morphological model can't reach.
+        if table is not None:
+            self._table = table
+        else:
+            self._table = SynonymTable.from_json(_DATA_DIR / f"{domain}_synonyms.json")
         # Injected model wins; otherwise resolve LAZILY per call so a model
         # registered AFTER this scorer was registered (at import) is still used.
         self._model = model

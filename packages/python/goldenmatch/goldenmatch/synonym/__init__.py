@@ -38,3 +38,10 @@ def register_synonym_scorer() -> None:
 
 
 register_synonym_scorer()
+
+# GS2: register the trained `drug` SynonymModel for the `drug` domain.
+from .drug import DrugSynonymModel, register_drug_model  # noqa: E402
+
+register_drug_model()
+
+__all__ += ["DrugSynonymModel", "register_drug_model"]
