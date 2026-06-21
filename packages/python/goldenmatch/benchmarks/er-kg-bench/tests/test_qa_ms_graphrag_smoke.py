@@ -28,7 +28,7 @@ def test_ms_graphrag_config_is_valid_for_installed_version(tmp_path):
     """Scaffold + load the config and assert the chat/embedding models are actually
     populated. No LLM, no network. Guards the version-schema drift that silently
     blanked the models when a hand-written 2.x settings.yaml met graphrag 3.x."""
-    eng = MSGraphRAGQAEngine(model="gpt-4o-mini", embedding_model="text-embedding-3-small")
+    eng = MSGraphRAGQAEngine(model="gpt-4o-mini", embedding_model="text-embedding-3-large")
     cfg = eng._build_config(str(tmp_path))
 
     assert cfg.completion_models, "no completion model configured (schema drift?)"
@@ -36,4 +36,7 @@ def test_ms_graphrag_config_is_valid_for_installed_version(tmp_path):
     chat = next(iter(cfg.completion_models.values()))
     assert chat.model == "gpt-4o-mini"
     embed = next(iter(cfg.embedding_models.values()))
-    assert embed.model == "text-embedding-3-small"
+    assert embed.model == "text-embedding-3-large"
+    # The embedding model dim must match the vector store column dim, or local_search
+    # fails on a LanceDB dim mismatch (1536 vs 3072). 3-large == default 3072.
+    assert cfg.vector_store.vector_size == 3072

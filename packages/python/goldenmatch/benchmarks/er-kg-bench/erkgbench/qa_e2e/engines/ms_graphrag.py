@@ -40,8 +40,15 @@ class MSGraphRAGQAEngine:
     fidelity = "real-e2e"
 
     def __init__(
-        self, *, model: str = "gpt-4o-mini", embedding_model: str = "text-embedding-3-small"
+        self, *, model: str = "gpt-4o-mini", embedding_model: str = "text-embedding-3-large"
     ):
+        # text-embedding-3-large (3072-dim) matches graphrag's default
+        # vector_store.vector_size (3072). graphrag decouples the embedding model from
+        # the LanceDB column dimension, so a 1536-dim model (3-small) provisions a
+        # 3072-dim store at index time and then fails local_search at query time with
+        # "query dim(1536) doesn't match the column vector dim(3072)". Aligning the
+        # model to the default vector_size keeps index + query consistent with zero
+        # nested config overrides.
         self._model = model
         self._embedding_model = embedding_model
 

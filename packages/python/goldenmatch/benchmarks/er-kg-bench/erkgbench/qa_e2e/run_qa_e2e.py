@@ -40,7 +40,14 @@ def _build_engine(name: str):
         from .engines.goldengraph import GoldenGraphQAEngine
 
         return GoldenGraphQAEngine(
-            llm=OpenAIClient(model="gpt-4o-mini"), embedder=GoldenmatchEmbedder()
+            llm=OpenAIClient(model="gpt-4o-mini"),
+            # provider="openai" uses goldenmatch's stdlib-only OpenAI embedding
+            # provider (urllib + OPENAI_API_KEY) -- no torch/sentence-transformers
+            # install, and it matches the OpenAI embeddings the other engines use, so
+            # the head-to-head compares KG construction, not embedding backends. The
+            # default "local" provider needs goldenmatch[embeddings] (not installed in
+            # this lane) and raised ImportError at query time.
+            embedder=GoldenmatchEmbedder(provider="openai"),
         )
     if name == "lightrag":
         from lightrag.llm.openai import gpt_4o_mini_complete, openai_embed
@@ -54,7 +61,7 @@ def _build_engine(name: str):
         from .engines.ms_graphrag import MSGraphRAGQAEngine
 
         return MSGraphRAGQAEngine(
-            model="gpt-4o-mini", embedding_model="text-embedding-3-small"
+            model="gpt-4o-mini", embedding_model="text-embedding-3-large"
         )
     if name == "graphiti":
         from .engines.graphiti import GraphitiQAEngine
