@@ -16,12 +16,16 @@ on:
       budget_usd:
         description: "hard cost cap per run"
         default: "25"
+      engine:
+        description: "all | goldengraph | lightrag | ms_graphrag | graphiti"
+        default: "all"
 
 permissions:
   contents: read
 
 jobs:
   goldengraph:
+    if: ${{ inputs.engine == 'all' || inputs.engine == 'goldengraph' }}
     runs-on: large-new-64GB
     timeout-minutes: 60
     steps:
@@ -59,6 +63,7 @@ jobs:
           if-no-files-found: ignore
 
   lightrag:
+    if: ${{ inputs.engine == 'all' || inputs.engine == 'lightrag' }}
     runs-on: large-new-64GB
     timeout-minutes: 60
     steps:
@@ -90,6 +95,7 @@ jobs:
           if-no-files-found: ignore
 
   ms_graphrag:
+    if: ${{ inputs.engine == 'all' || inputs.engine == 'ms_graphrag' }}
     runs-on: large-new-64GB
     timeout-minutes: 90  # MS-GraphRAG indexing is the long pole
     steps:
@@ -122,6 +128,7 @@ jobs:
           if-no-files-found: ignore
 
   graphiti:
+    if: ${{ inputs.engine == 'all' || inputs.engine == 'graphiti' }}
     runs-on: large-new-64GB
     timeout-minutes: 60
     services:
