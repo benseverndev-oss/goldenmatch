@@ -8,7 +8,7 @@ one node; an exact-match KG strands them across surface forms.
 
 | Engine | status | mean fact-completeness | mean correctness (LLM) |
 |---|---|---|---|
-| goldengraph | ok | **0.533** | - |
+| goldengraph | ok | **0.733** | - |
 | exact-match-floor | ok | **0.333** | - |
 
 ## Per-failure-class fact-completeness
@@ -16,4 +16,4 @@ one node; an exact-match KG strands them across surface forms.
 | Engine | abbreviation | nickname_alias | synonym_brand |
 |---|---|---|---|
 | exact-match-floor | 0.33 | 0.33 | 0.33 |
-| goldengraph | 0.58 | 0.67 | 0.33 |
+| goldengraph | 0.92 | 0.89 | 0.33 |
