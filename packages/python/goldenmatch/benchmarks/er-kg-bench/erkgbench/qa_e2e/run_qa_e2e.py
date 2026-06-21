@@ -49,6 +49,10 @@ def _build_engine(name: str):
         return LightRAGQAEngine(
             llm_model_func=gpt_4o_mini_complete, embedding_func=openai_embed
         )
+    if name == "ms_graphrag":
+        from .engines.ms_graphrag import MSGraphRAGQAEngine
+
+        return MSGraphRAGQAEngine(model="gpt-4o-mini")
     raise SystemExit(f"unknown engine: {name}")
 
 
