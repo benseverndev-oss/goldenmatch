@@ -155,6 +155,7 @@ type ClassifiedKind =
   | "name"
   | "multi_name"
   | "id"
+  | "address"
   | "numeric"
   | "text";
 
@@ -212,9 +213,12 @@ function classifyColumn(profile: ColumnProfile): ClassifiedKind {
   if (nameMatches(name, NAME_NAME_PATTERNS) || profile.inferredType === "name") {
     return "name";
   }
-  if (nameMatches(name, ID_NAME_PATTERNS) || profile.inferredType === "id") {
+  if (nameMatches(name, ID_NAME_PATTERNS) || profile.inferredType === "identifier") {
     return "id";
   }
+  // Address routes to its own kind (token_sort @ 0.8) rather than collapsing
+  // into the free-text bucket (token_sort @ 0.5). Description stays free-text.
+  if (profile.inferredType === "address") return "address";
   if (profile.inferredType === "numeric") return "numeric";
   return "text";
 }
@@ -246,6 +250,7 @@ function colTypeFor(kind: ClassifiedKind): string {
   if (kind === "multi_name") return "multi_name"; // handled outside map
   if (kind === "geo") return "geo";
   if (kind === "id") return "identifier";
+  if (kind === "address") return "address";
   if (kind === "text") return "string";
   return "skip"; // numeric, date, year, etc.
 }

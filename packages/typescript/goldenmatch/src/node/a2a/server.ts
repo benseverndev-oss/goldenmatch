@@ -357,7 +357,13 @@ async function dispatchSkill(
         else if (col.inferredType === "phone" && col.cardinalityRatio >= 0.5) exact.push(col.name);
         else if (col.inferredType === "zip" || col.inferredType === "geo") blocking.push(col.name);
         else if (col.inferredType === "name") fuzzy[col.name] = 0.85;
-        else if (col.inferredType === "text" && col.avgLength > 4) fuzzy[col.name] = 0.8;
+        else if (
+          (col.inferredType === "string" ||
+            col.inferredType === "address" ||
+            col.inferredType === "description") &&
+          col.avgLength > 4
+        )
+          fuzzy[col.name] = 0.8;
       }
       return { suggested: { exact, fuzzy, blocking, threshold: 0.85 } };
     }
