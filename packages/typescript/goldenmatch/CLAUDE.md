@@ -4,6 +4,30 @@ npm package `goldenmatch`. Parity port of the Python sibling at `packages/python
 
 > **Versioning note:** `package.json` was briefly set to `2.0.0` by #463 (the "Phase 5 plugin port" milestone label) and reverted — see `docs/versioning-policy.md` for why 1.0.0 (a "this is stable" signal), NOT 2.0.0 (PyPI-alignment), was the right cut. npm and PyPI keep **independent semver** (not lockstep): PyPI is at 2.0.x; the npm line is its own. The `0.x → 1.0.0` jump is the one-time stability declaration after the AgentSession/A2A port closed the last undeclared parity gap.
 
+## Shared autoconfig wasm core (`goldenmatch/core/autoconfig-wasm`)
+The autoconfig **planner (Layer 1)** + **classifier (Layer 2)** decision logic is a
+single Rust crate (`packages/rust/extensions/autoconfig-core`) compiled to wasm and
+shared by both the Python `goldenmatch-native` wheel and this TS package — one source
+of truth, no hand-maintained parallel logic. The TS loader is `src/core/autoconfigWasm.ts`,
+exposed as the **opt-in subpath** `goldenmatch/core/autoconfig-wasm`.
+- **Distinct from the score-wasm runtime pattern below.** score-wasm uses the async
+  `goldenmatch-wasm-runtime` (artifact built in CI, never committed, lazy dynamic import).
+  The autoconfig loader is **synchronous** (`initSync` over an *inlined* base64 wasm) and
+  edge-safe (no `node:*`) because the planner/classifier API must be sync. The wasm IS
+  committed under `src/core/_wasm/` so `tsc`/`vitest`/`tsup` need no rust toolchain.
+- **Regenerate the embed** (after any `autoconfig-core`/`autoconfig-wasm` change):
+  `node scripts/build_autoconfig_wasm.mjs` (needs wasm-pack + the wasm32 target). It
+  rebuilds the wasm, strips the wasm-bindgen async init path (which would drag
+  `import.meta.url`/`fetch` into the CJS build), base64-embeds it, and copies the golden
+  vectors into `tests/parity/fixtures/autoconfig/`.
+- **Cross-surface parity gate:** `tests/parity/autoconfig-core.parity.test.ts` runs the
+  same golden vectors as Rust (`tests/golden.rs`) + Python — 92 tests, byte-identical.
+- **Still divergent (E3, not yet done):** the existing `profiler.ts` (`ColumnType` uses
+  `id`/`text`, lacks `address`/`description`) and `autoconfigPlannerRules.ts` (6 rules vs
+  the core's 8) are NOT yet rerouted through the wasm core. The loader is in place and
+  parity-proven; rerouting the existing planner/classifier internals to call it (and
+  reconciling those vocabularies) is the next step.
+
 ## Wave history
 | npm | Python parity | Headline |
 |-----|---------------|----------|

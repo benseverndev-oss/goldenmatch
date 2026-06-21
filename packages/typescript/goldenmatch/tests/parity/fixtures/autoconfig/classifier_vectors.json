@@ -1,0 +1,1254 @@
+[
+  {
+    "input": {
+      "name": "email_address",
+      "dtype": "String",
+      "sample_values": [
+        "user0@example.com",
+        "user1@example.com",
+        "user2@example.com",
+        "user3@example.com",
+        "user4@example.com",
+        "user5@example.com",
+        "user6@example.com",
+        "user7@example.com",
+        "user8@example.com",
+        "user9@example.com",
+        "user10@example.com",
+        "user11@example.com",
+        "user12@example.com",
+        "user13@example.com",
+        "user14@example.com",
+        "user15@example.com",
+        "user16@example.com",
+        "user17@example.com",
+        "user18@example.com",
+        "user19@example.com"
+      ],
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 17.5
+    },
+    "expected": {
+      "name": "email_address",
+      "dtype": "String",
+      "col_type": "email",
+      "confidence": 0.8999999999999999,
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 17.5,
+      "needs_llm_escalation": false
+    }
+  },
+  {
+    "input": {
+      "name": "contact_email",
+      "dtype": "String",
+      "sample_values": [
+        "a0@b.org",
+        "a1@b.org",
+        "a2@b.org",
+        "a3@b.org",
+        "a4@b.org",
+        "a5@b.org",
+        "a6@b.org",
+        "a7@b.org",
+        "a8@b.org",
+        "a9@b.org",
+        "a10@b.org",
+        "a11@b.org",
+        "a12@b.org",
+        "a13@b.org",
+        "a14@b.org"
+      ],
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 8.333333333333334
+    },
+    "expected": {
+      "name": "contact_email",
+      "dtype": "String",
+      "col_type": "email",
+      "confidence": 0.8999999999999999,
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 8.333333333333334,
+      "needs_llm_escalation": false
+    }
+  },
+  {
+    "input": {
+      "name": "first_name",
+      "dtype": "String",
+      "sample_values": [
+        "Alice",
+        "Bob",
+        "Carol",
+        "Dave",
+        "Eve",
+        "Frank",
+        "Grace",
+        "Hank",
+        "Iris",
+        "Jack"
+      ],
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 4.2
+    },
+    "expected": {
+      "name": "first_name",
+      "dtype": "String",
+      "col_type": "name",
+      "confidence": 0.8999999999999999,
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 4.2,
+      "needs_llm_escalation": false
+    }
+  },
+  {
+    "input": {
+      "name": "last_name",
+      "dtype": "String",
+      "sample_values": [
+        "Smith",
+        "Jones",
+        "Brown",
+        "White",
+        "Green",
+        "Hall",
+        "Lee",
+        "King",
+        "Scott",
+        "Hill"
+      ],
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 4.5
+    },
+    "expected": {
+      "name": "last_name",
+      "dtype": "String",
+      "col_type": "name",
+      "confidence": 0.8999999999999999,
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 4.5,
+      "needs_llm_escalation": false
+    }
+  },
+  {
+    "input": {
+      "name": "foobar_col",
+      "dtype": "String",
+      "sample_values": [
+        "Alice Smith",
+        "Bob Jones",
+        "Carol White",
+        "Dave Brown",
+        "Eve Green",
+        "Frank Hall",
+        "Grace Lee",
+        "Hank King"
+      ],
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 9.75
+    },
+    "expected": {
+      "name": "foobar_col",
+      "dtype": "String",
+      "col_type": "name",
+      "confidence": 0.7,
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 9.75,
+      "needs_llm_escalation": true
+    }
+  },
+  {
+    "input": {
+      "name": "phone_number",
+      "dtype": "String",
+      "sample_values": [
+        "5551234567",
+        "4155556789",
+        "2125559876",
+        "7185554321",
+        "9175551234",
+        "3125558765",
+        "8005553456",
+        "6175559988",
+        "9495554321",
+        "2015551234"
+      ],
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 10.0
+    },
+    "expected": {
+      "name": "phone_number",
+      "dtype": "String",
+      "col_type": "identifier",
+      "confidence": 0.9,
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 10.0,
+      "needs_llm_escalation": false
+    }
+  },
+  {
+    "input": {
+      "name": "mobile",
+      "dtype": "String",
+      "sample_values": [
+        "(555) 123-4567",
+        "(415) 555-6789",
+        "(212) 555-9876",
+        "(718) 555-4321",
+        "(917) 555-1234",
+        "(312) 555-8765",
+        "(800) 555-3456",
+        "(617) 555-9988"
+      ],
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 14.0
+    },
+    "expected": {
+      "name": "mobile",
+      "dtype": "String",
+      "col_type": "phone",
+      "confidence": 0.8999999999999999,
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 14.0,
+      "needs_llm_escalation": false
+    }
+  },
+  {
+    "input": {
+      "name": "zip_code",
+      "dtype": "String",
+      "sample_values": [
+        "12345",
+        "90210",
+        "10001",
+        "60601",
+        "33101",
+        "94105",
+        "20001",
+        "11201",
+        "77001",
+        "30301"
+      ],
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 5.0
+    },
+    "expected": {
+      "name": "zip_code",
+      "dtype": "String",
+      "col_type": "identifier",
+      "confidence": 0.9,
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 5.0,
+      "needs_llm_escalation": false
+    }
+  },
+  {
+    "input": {
+      "name": "postal",
+      "dtype": "String",
+      "sample_values": [
+        "10001",
+        "10002",
+        "10003",
+        "10004",
+        "10005",
+        "10006",
+        "10007",
+        "10008"
+      ],
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 5.0
+    },
+    "expected": {
+      "name": "postal",
+      "dtype": "String",
+      "col_type": "zip",
+      "confidence": 0.8999999999999999,
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 5.0,
+      "needs_llm_escalation": false
+    }
+  },
+  {
+    "input": {
+      "name": "street_address",
+      "dtype": "String",
+      "sample_values": [
+        "123 Main St",
+        "456 Oak Ave",
+        "789 Pine Rd",
+        "321 Elm Dr",
+        "654 Maple Blvd",
+        "987 Cedar Ln",
+        "111 First Ct",
+        "222 Second Way",
+        "333 Third Pl",
+        "444 Fourth Cir"
+      ],
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 12.1
+    },
+    "expected": {
+      "name": "street_address",
+      "dtype": "String",
+      "col_type": "address",
+      "confidence": 0.8999999999999999,
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 12.1,
+      "needs_llm_escalation": false
+    }
+  },
+  {
+    "input": {
+      "name": "address_line_1",
+      "dtype": "String",
+      "sample_values": [
+        "1 Park Ave",
+        "2 Broadway",
+        "3 Fifth Ave",
+        "4 Madison Ave",
+        "5 Lexington Ave",
+        "6 Park St",
+        "7 Main Rd",
+        "8 Oak Blvd"
+      ],
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 10.875
+    },
+    "expected": {
+      "name": "address_line_1",
+      "dtype": "String",
+      "col_type": "address",
+      "confidence": 0.8999999999999999,
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 10.875,
+      "needs_llm_escalation": false
+    }
+  },
+  {
+    "input": {
+      "name": "city",
+      "dtype": "String",
+      "sample_values": [
+        "New York",
+        "New York",
+        "New York",
+        "New York",
+        "New York",
+        "New York",
+        "New York",
+        "New York",
+        "Los Angeles",
+        "Los Angeles",
+        "Los Angeles",
+        "Los Angeles",
+        "Los Angeles",
+        "Los Angeles",
+        "Los Angeles"
+      ],
+      "null_rate": 0.0,
+      "cardinality_ratio": 0.13333333333333333,
+      "avg_len": 9.4
+    },
+    "expected": {
+      "name": "city",
+      "dtype": "String",
+      "col_type": "geo",
+      "confidence": 0.9,
+      "null_rate": 0.0,
+      "cardinality_ratio": 0.13333333333333333,
+      "avg_len": 9.4,
+      "needs_llm_escalation": false
+    }
+  },
+  {
+    "input": {
+      "name": "state",
+      "dtype": "String",
+      "sample_values": [
+        "NY",
+        "CA",
+        "TX",
+        "FL",
+        "WA",
+        "OR",
+        "IL",
+        "GA",
+        "PA",
+        "OH"
+      ],
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 2.0
+    },
+    "expected": {
+      "name": "state",
+      "dtype": "String",
+      "col_type": "geo",
+      "confidence": 0.9,
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 2.0,
+      "needs_llm_escalation": false
+    }
+  },
+  {
+    "input": {
+      "name": "country",
+      "dtype": "String",
+      "sample_values": [
+        "USA",
+        "USA",
+        "USA",
+        "USA",
+        "USA",
+        "USA",
+        "USA",
+        "USA",
+        "Canada",
+        "Canada",
+        "Canada",
+        "Canada",
+        "Canada",
+        "Canada",
+        "Canada"
+      ],
+      "null_rate": 0.0,
+      "cardinality_ratio": 0.13333333333333333,
+      "avg_len": 4.4
+    },
+    "expected": {
+      "name": "country",
+      "dtype": "String",
+      "col_type": "geo",
+      "confidence": 0.9,
+      "null_rate": 0.0,
+      "cardinality_ratio": 0.13333333333333333,
+      "avg_len": 4.4,
+      "needs_llm_escalation": false
+    }
+  },
+  {
+    "input": {
+      "name": "state_cd",
+      "dtype": "String",
+      "sample_values": [
+        "NY",
+        "CA",
+        "TX",
+        "FL",
+        "WA",
+        "OR",
+        "IL",
+        "GA"
+      ],
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 2.0
+    },
+    "expected": {
+      "name": "state_cd",
+      "dtype": "String",
+      "col_type": "geo",
+      "confidence": 0.9,
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 2.0,
+      "needs_llm_escalation": false
+    }
+  },
+  {
+    "input": {
+      "name": "user_id",
+      "dtype": "String",
+      "sample_values": [
+        "10000",
+        "10001",
+        "10002",
+        "10003",
+        "10004",
+        "10005",
+        "10006",
+        "10007",
+        "10008",
+        "10009",
+        "10010",
+        "10011",
+        "10012",
+        "10013",
+        "10014",
+        "10015",
+        "10016",
+        "10017",
+        "10018",
+        "10019"
+      ],
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 5.0
+    },
+    "expected": {
+      "name": "user_id",
+      "dtype": "String",
+      "col_type": "identifier",
+      "confidence": 0.9,
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 5.0,
+      "needs_llm_escalation": false
+    }
+  },
+  {
+    "input": {
+      "name": "account_no",
+      "dtype": "String",
+      "sample_values": [
+        "ACC000000",
+        "ACC000001",
+        "ACC000002",
+        "ACC000003",
+        "ACC000004",
+        "ACC000005",
+        "ACC000006",
+        "ACC000007",
+        "ACC000008",
+        "ACC000009",
+        "ACC000010",
+        "ACC000011",
+        "ACC000012",
+        "ACC000013",
+        "ACC000014",
+        "ACC000015",
+        "ACC000016",
+        "ACC000017",
+        "ACC000018",
+        "ACC000019"
+      ],
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 9.0
+    },
+    "expected": {
+      "name": "account_no",
+      "dtype": "String",
+      "col_type": "identifier",
+      "confidence": 0.9,
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 9.0,
+      "needs_llm_escalation": false
+    }
+  },
+  {
+    "input": {
+      "name": "recordID",
+      "dtype": "String",
+      "sample_values": [
+        "REC00000000",
+        "REC00000001",
+        "REC00000002",
+        "REC00000003",
+        "REC00000004",
+        "REC00000005",
+        "REC00000006",
+        "REC00000007",
+        "REC00000008",
+        "REC00000009",
+        "REC00000010",
+        "REC00000011",
+        "REC00000012",
+        "REC00000013",
+        "REC00000014",
+        "REC00000015",
+        "REC00000016",
+        "REC00000017",
+        "REC00000018",
+        "REC00000019"
+      ],
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 11.0
+    },
+    "expected": {
+      "name": "recordID",
+      "dtype": "String",
+      "col_type": "identifier",
+      "confidence": 0.9,
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 11.0,
+      "needs_llm_escalation": false
+    }
+  },
+  {
+    "input": {
+      "name": "some_numeric_id",
+      "dtype": "String",
+      "sample_values": [
+        "7",
+        "107",
+        "207",
+        "307",
+        "407",
+        "507",
+        "607",
+        "707",
+        "807",
+        "907",
+        "1007",
+        "1107",
+        "1207",
+        "1307",
+        "1407"
+      ],
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 3.2
+    },
+    "expected": {
+      "name": "some_numeric_id",
+      "dtype": "String",
+      "col_type": "identifier",
+      "confidence": 0.9,
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 3.2,
+      "needs_llm_escalation": false
+    }
+  },
+  {
+    "input": {
+      "name": "created_at",
+      "dtype": "String",
+      "sample_values": [
+        "2023-01-15",
+        "2023-01-15",
+        "2023-01-15",
+        "2023-01-15",
+        "2023-01-15",
+        "2023-01-15",
+        "2023-01-15",
+        "2023-01-15",
+        "2023-01-15",
+        "2023-01-15"
+      ],
+      "null_rate": 0.0,
+      "cardinality_ratio": 0.1,
+      "avg_len": 10.0
+    },
+    "expected": {
+      "name": "created_at",
+      "dtype": "String",
+      "col_type": "date",
+      "confidence": 0.9,
+      "null_rate": 0.0,
+      "cardinality_ratio": 0.1,
+      "avg_len": 10.0,
+      "needs_llm_escalation": false
+    }
+  },
+  {
+    "input": {
+      "name": "dob",
+      "dtype": "String",
+      "sample_values": [
+        "1990-05-10",
+        "1985-03-22",
+        "1972-11-01",
+        "2000-07-04",
+        "1988-12-25",
+        "1995-06-15",
+        "1965-09-03",
+        "1978-02-28"
+      ],
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 10.0
+    },
+    "expected": {
+      "name": "dob",
+      "dtype": "String",
+      "col_type": "date",
+      "confidence": 0.9,
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 10.0,
+      "needs_llm_escalation": false
+    }
+  },
+  {
+    "input": {
+      "name": "birth_date",
+      "dtype": "String",
+      "sample_values": [
+        "01/15/1990",
+        "03/22/1985",
+        "11/01/1972",
+        "07/04/2000",
+        "12/25/1988",
+        "06/15/1995",
+        "09/03/1965",
+        "02/28/1978"
+      ],
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 10.0
+    },
+    "expected": {
+      "name": "birth_date",
+      "dtype": "String",
+      "col_type": "date",
+      "confidence": 0.9,
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 10.0,
+      "needs_llm_escalation": false
+    }
+  },
+  {
+    "input": {
+      "name": "registration_date",
+      "dtype": "String",
+      "sample_values": [
+        "01/15/2023",
+        "12/31/2022",
+        "07/04/2021",
+        "03/17/2020",
+        "11/11/2019",
+        "05/05/2018",
+        "08/08/2017",
+        "02/14/2016"
+      ],
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 10.0
+    },
+    "expected": {
+      "name": "registration_date",
+      "dtype": "String",
+      "col_type": "date",
+      "confidence": 0.9,
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 10.0,
+      "needs_llm_escalation": false
+    }
+  },
+  {
+    "input": {
+      "name": "birth_year",
+      "dtype": "String",
+      "sample_values": [
+        "1990",
+        "1985",
+        "1972",
+        "2000",
+        "1988",
+        "1995",
+        "1965",
+        "1978"
+      ],
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 4.0
+    },
+    "expected": {
+      "name": "birth_year",
+      "dtype": "String",
+      "col_type": "year",
+      "confidence": 0.9,
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 4.0,
+      "needs_llm_escalation": false
+    }
+  },
+  {
+    "input": {
+      "name": "publication_year",
+      "dtype": "String",
+      "sample_values": [
+        "2001",
+        "2010",
+        "1999",
+        "2023",
+        "1985",
+        "2015",
+        "2007",
+        "2019"
+      ],
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 4.0
+    },
+    "expected": {
+      "name": "publication_year",
+      "dtype": "String",
+      "col_type": "year",
+      "confidence": 0.9,
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 4.0,
+      "needs_llm_escalation": false
+    }
+  },
+  {
+    "input": {
+      "name": "year_col",
+      "dtype": "String",
+      "sample_values": [
+        "2001.0",
+        "2010.0",
+        "1999.0",
+        "2023.0",
+        "1985.0",
+        "2015.0",
+        "2007.0"
+      ],
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 6.0
+    },
+    "expected": {
+      "name": "year_col",
+      "dtype": "String",
+      "col_type": "year",
+      "confidence": 0.9,
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 6.0,
+      "needs_llm_escalation": false
+    }
+  },
+  {
+    "input": {
+      "name": "price",
+      "dtype": "String",
+      "sample_values": [
+        "10.99",
+        "24.99",
+        "5.49",
+        "199.99",
+        "0.99",
+        "49.99",
+        "12.50",
+        "75.00"
+      ],
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 4.875
+    },
+    "expected": {
+      "name": "price",
+      "dtype": "String",
+      "col_type": "numeric",
+      "confidence": 0.9,
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 4.875,
+      "needs_llm_escalation": true
+    }
+  },
+  {
+    "input": {
+      "name": "total_amount",
+      "dtype": "String",
+      "sample_values": [
+        "1.5",
+        "2.7",
+        "100",
+        "42.0",
+        "0",
+        "999",
+        "-3.14",
+        "50.25"
+      ],
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 3.375
+    },
+    "expected": {
+      "name": "total_amount",
+      "dtype": "String",
+      "col_type": "numeric",
+      "confidence": 0.9,
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 3.375,
+      "needs_llm_escalation": true
+    }
+  },
+  {
+    "input": {
+      "name": "notes",
+      "dtype": "String",
+      "sample_values": [
+        "This is a very long description that exceeds fifty characters easily here, providing context.",
+        "This is a very long description that exceeds fifty characters easily here, providing context.",
+        "This is a very long description that exceeds fifty characters easily here, providing context.",
+        "This is a very long description that exceeds fifty characters easily here, providing context.",
+        "This is a very long description that exceeds fifty characters easily here, providing context.",
+        "This is a very long description that exceeds fifty characters easily here, providing context.",
+        "This is a very long description that exceeds fifty characters easily here, providing context.",
+        "This is a very long description that exceeds fifty characters easily here, providing context."
+      ],
+      "null_rate": 0.0,
+      "cardinality_ratio": 0.125,
+      "avg_len": 93.0
+    },
+    "expected": {
+      "name": "notes",
+      "dtype": "String",
+      "col_type": "description",
+      "confidence": 0.7,
+      "null_rate": 0.0,
+      "cardinality_ratio": 0.125,
+      "avg_len": 93.0,
+      "needs_llm_escalation": true
+    }
+  },
+  {
+    "input": {
+      "name": "abstract",
+      "dtype": "String",
+      "sample_values": [
+        "A very detailed analysis of the molecular structure and behavior of protein complexes in solution.",
+        "A very detailed analysis of the molecular structure and behavior of protein complexes in solution.",
+        "A very detailed analysis of the molecular structure and behavior of protein complexes in solution.",
+        "A very detailed analysis of the molecular structure and behavior of protein complexes in solution.",
+        "A very detailed analysis of the molecular structure and behavior of protein complexes in solution.",
+        "A very detailed analysis of the molecular structure and behavior of protein complexes in solution."
+      ],
+      "null_rate": 0.0,
+      "cardinality_ratio": 0.16666666666666666,
+      "avg_len": 98.0
+    },
+    "expected": {
+      "name": "abstract",
+      "dtype": "String",
+      "col_type": "description",
+      "confidence": 0.7,
+      "null_rate": 0.0,
+      "cardinality_ratio": 0.16666666666666666,
+      "avg_len": 98.0,
+      "needs_llm_escalation": true
+    }
+  },
+  {
+    "input": {
+      "name": "authors",
+      "dtype": "String",
+      "sample_values": [
+        "Smith, John; Doe, Jane; Bloom, Alice; Roberts, Tom; Williams, Bob",
+        "Smith, John; Doe, Jane; Bloom, Alice; Roberts, Tom; Williams, Bob",
+        "Smith, John; Doe, Jane; Bloom, Alice; Roberts, Tom; Williams, Bob",
+        "Smith, John; Doe, Jane; Bloom, Alice; Roberts, Tom; Williams, Bob",
+        "Smith, John; Doe, Jane; Bloom, Alice; Roberts, Tom; Williams, Bob",
+        "Smith, John; Doe, Jane; Bloom, Alice; Roberts, Tom; Williams, Bob",
+        "Smith, John; Doe, Jane; Bloom, Alice; Roberts, Tom; Williams, Bob",
+        "Smith, John; Doe, Jane; Bloom, Alice; Roberts, Tom; Williams, Bob",
+        "Smith, John; Doe, Jane; Bloom, Alice; Roberts, Tom; Williams, Bob",
+        "Smith, John; Doe, Jane; Bloom, Alice; Roberts, Tom; Williams, Bob"
+      ],
+      "null_rate": 0.0,
+      "cardinality_ratio": 0.1,
+      "avg_len": 65.0
+    },
+    "expected": {
+      "name": "authors",
+      "dtype": "String",
+      "col_type": "multi_name",
+      "confidence": 0.7,
+      "null_rate": 0.0,
+      "cardinality_ratio": 0.1,
+      "avg_len": 65.0,
+      "needs_llm_escalation": true
+    }
+  },
+  {
+    "input": {
+      "name": "category",
+      "dtype": "String",
+      "sample_values": [
+        "foo123",
+        "bar456",
+        "baz789",
+        "qux000",
+        "xyz111",
+        "abc222",
+        "def333",
+        "ghi444"
+      ],
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 6.0
+    },
+    "expected": {
+      "name": "category",
+      "dtype": "String",
+      "col_type": "string",
+      "confidence": 0.3,
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 6.0,
+      "needs_llm_escalation": true
+    }
+  },
+  {
+    "input": {
+      "name": "tag",
+      "dtype": "String",
+      "sample_values": [
+        "alpha1",
+        "beta2",
+        "gamma3",
+        "delta4",
+        "epsilon5",
+        "zeta6",
+        "eta7",
+        "theta8"
+      ],
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 5.75
+    },
+    "expected": {
+      "name": "tag",
+      "dtype": "String",
+      "col_type": "string",
+      "confidence": 0.3,
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 5.75,
+      "needs_llm_escalation": true
+    }
+  },
+  {
+    "input": {
+      "name": "city_name",
+      "dtype": "String",
+      "sample_values": [
+        "New York",
+        "New York",
+        "New York",
+        "New York",
+        "New York",
+        "New York",
+        "New York",
+        "New York",
+        "New York",
+        "New York"
+      ],
+      "null_rate": 0.0,
+      "cardinality_ratio": 0.1,
+      "avg_len": 8.0
+    },
+    "expected": {
+      "name": "city_name",
+      "dtype": "String",
+      "col_type": "geo",
+      "confidence": 0.9,
+      "null_rate": 0.0,
+      "cardinality_ratio": 0.1,
+      "avg_len": 8.0,
+      "needs_llm_escalation": false
+    }
+  },
+  {
+    "input": {
+      "name": "record_id",
+      "dtype": "String",
+      "sample_values": [
+        "R000000",
+        "R000001",
+        "R000002",
+        "R000003",
+        "R000004",
+        "R000005",
+        "R000006",
+        "R000007",
+        "R000008",
+        "R000009",
+        "R000010",
+        "R000011",
+        "R000012",
+        "R000013",
+        "R000014"
+      ],
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 7.0
+    },
+    "expected": {
+      "name": "record_id",
+      "dtype": "String",
+      "col_type": "identifier",
+      "confidence": 0.9,
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 7.0,
+      "needs_llm_escalation": false
+    }
+  },
+  {
+    "input": {
+      "name": "guid_col",
+      "dtype": "String",
+      "sample_values": [
+        "00000000-0000-0000-0000-000000000000",
+        "00000001-0001-0001-0001-000000000001",
+        "00000002-0002-0002-0002-000000000002",
+        "00000003-0003-0003-0003-000000000003",
+        "00000004-0004-0004-0004-000000000004",
+        "00000005-0005-0005-0005-000000000005",
+        "00000006-0006-0006-0006-000000000006",
+        "00000007-0007-0007-0007-000000000007",
+        "00000008-0008-0008-0008-000000000008",
+        "00000009-0009-0009-0009-000000000009",
+        "0000000a-000a-000a-000a-00000000000a",
+        "0000000b-000b-000b-000b-00000000000b",
+        "0000000c-000c-000c-000c-00000000000c",
+        "0000000d-000d-000d-000d-00000000000d",
+        "0000000e-000e-000e-000e-00000000000e"
+      ],
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 36.0
+    },
+    "expected": {
+      "name": "guid_col",
+      "dtype": "String",
+      "col_type": "identifier",
+      "confidence": 0.9,
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 36.0,
+      "needs_llm_escalation": false
+    }
+  },
+  {
+    "input": {
+      "name": "uuid",
+      "dtype": "String",
+      "sample_values": [
+        "00000000-0000-0000-0000-000000000000",
+        "00000001-0001-0001-0001-000000000001",
+        "00000002-0002-0002-0002-000000000002",
+        "00000003-0003-0003-0003-000000000003",
+        "00000004-0004-0004-0004-000000000004",
+        "00000005-0005-0005-0005-000000000005",
+        "00000006-0006-0006-0006-000000000006",
+        "00000007-0007-0007-0007-000000000007",
+        "00000008-0008-0008-0008-000000000008",
+        "00000009-0009-0009-0009-000000000009",
+        "0000000a-000a-000a-000a-00000000000a",
+        "0000000b-000b-000b-000b-00000000000b",
+        "0000000c-000c-000c-000c-00000000000c",
+        "0000000d-000d-000d-000d-00000000000d",
+        "0000000e-000e-000e-000e-00000000000e"
+      ],
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 36.0
+    },
+    "expected": {
+      "name": "uuid",
+      "dtype": "String",
+      "col_type": "identifier",
+      "confidence": 0.9,
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 36.0,
+      "needs_llm_escalation": false
+    }
+  },
+  {
+    "input": {
+      "name": "phone_contact",
+      "dtype": "String",
+      "sample_values": [
+        "user0@domain.com",
+        "user1@domain.com",
+        "user2@domain.com",
+        "user3@domain.com",
+        "user4@domain.com",
+        "user5@domain.com",
+        "user6@domain.com",
+        "user7@domain.com",
+        "user8@domain.com",
+        "user9@domain.com",
+        "user10@domain.com",
+        "user11@domain.com",
+        "user12@domain.com",
+        "user13@domain.com",
+        "user14@domain.com"
+      ],
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 16.333333333333332
+    },
+    "expected": {
+      "name": "phone_contact",
+      "dtype": "String",
+      "col_type": "email",
+      "confidence": 0.7,
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 16.333333333333332,
+      "needs_llm_escalation": false
+    }
+  },
+  {
+    "input": {
+      "name": "county",
+      "dtype": "String",
+      "sample_values": [
+        "Bronx",
+        "Queens",
+        "Brooklyn",
+        "Manhattan",
+        "Staten Island",
+        "Nassau",
+        "Suffolk",
+        "Westchester",
+        "Rockland",
+        "Orange"
+      ],
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 7.9
+    },
+    "expected": {
+      "name": "county",
+      "dtype": "String",
+      "col_type": "geo",
+      "confidence": 0.9,
+      "null_rate": 0.0,
+      "cardinality_ratio": 1.0,
+      "avg_len": 7.9,
+      "needs_llm_escalation": false
+    }
+  }
+]

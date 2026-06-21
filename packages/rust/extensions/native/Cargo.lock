@@ -231,6 +231,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
+name = "bit-set"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0700ddab506f33b20a03b13996eccd309a48e5ff77d0d95926aa0210fb4e95f1"
+dependencies = [
+ "bit-vec",
+]
+
+[[package]]
+name = "bit-vec"
+version = "0.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "349f9b6a179ed607305526ca489b34ad0a41aed5f7980fa90eb03160b69598fb"
+
+[[package]]
 name = "bitflags"
 version = "2.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -438,6 +453,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "91622ff5e7162018101f2fea40d6ebf4a78bbe5a49736a2020649edf9693679e"
 
 [[package]]
+name = "fancy-regex"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "531e46835a22af56d1e3b66f04844bed63158bc094a628bec1d321d9b4c44bf2"
+dependencies = [
+ "bit-set",
+ "regex-automata",
+ "regex-syntax",
+]
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -501,6 +527,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "goldenmatch-autoconfig-core"
+version = "0.1.0"
+dependencies = [
+ "fancy-regex",
+ "once_cell",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "goldenmatch-fingerprint-core"
 version = "0.1.0"
 dependencies = [
@@ -521,6 +557,7 @@ version = "0.1.6"
 dependencies = [
  "arrow",
  "blake2",
+ "goldenmatch-autoconfig-core",
  "goldenmatch-fingerprint-core",
  "goldenmatch-graph-core",
  "goldenmatch-score-core",
@@ -529,6 +566,7 @@ dependencies = [
  "numpy",
  "pyo3",
  "rayon",
+ "serde_json",
  "sha2",
 ]
 
@@ -985,6 +1023,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9a8e94ea7f378bd32cbbd37198a4a91436180c5bb472411e48b5ec2e2124ae9e"
 dependencies = [
  "serde_core",
+ "serde_derive",
 ]
 
 [[package]]

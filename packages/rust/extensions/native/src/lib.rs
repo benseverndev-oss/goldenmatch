@@ -7,6 +7,7 @@
 //! `packages/python/goldenmatch/docs/design/2026-05-25-rust-acceleration-spec.md`.
 use pyo3::prelude::*;
 
+mod autoconfig;
 mod bloom;
 mod cluster;
 mod featurize;
@@ -52,5 +53,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
         sketch::sketch_simhash_band_hashes_batch,
         m
     )?)?;
+    m.add_function(wrap_pyfunction!(autoconfig::autoconfig_decide_plan, m)?)?;
+    m.add_function(wrap_pyfunction!(autoconfig::autoconfig_classify_columns, m)?)?;
     Ok(())
 }

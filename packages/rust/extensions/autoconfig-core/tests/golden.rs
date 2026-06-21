@@ -1,0 +1,338 @@
+//! Golden-vector parity harness: Rust `decide_plan` + `classify_columns` vs
+//! the Python oracle (`scripts/gen_autoconfig_golden.py`).
+//!
+//! Each vector is `{input, expected}` in JSON. We deserialize the input,
+//! run the Rust function, re-serialize the Rust output to `serde_json::Value`,
+//! and compare it against the `expected` Value — so any serde rename / Option
+//! modelling mismatch surfaces as a test failure rather than a silent success.
+//!
+//! Key serde contracts verified by these tests:
+//!   - `BackendName` → `"polars-direct"` / `"bucket"` / `"chunked"` / `"ray"` / `"duckdb"`
+//!   - `ClusteringStrategy` → `"in_memory"` / `"partitioned_union_find"` / `"streaming_cc"`
+//!   - `ColType` → `"email"` / `"name"` / `"phone"` / `"zip"` / `"address"` / `"geo"` / `"identifier"` / `"description"` / `"numeric"` / `"date"` / `"string"` / `"year"` / `"multi_name"`
+//!   - `pair_spill_threshold` and `chunk_size` serialize to JSON `null` (NOT `"none"`
+//!     or absent) for rules that leave them as `None` (pathological / simple /
+//!     fast_box / bucket_suggested / user_override).
+//!   - `SpillThreshold` → `"ram"` / `"duckdb"` / `"disk_per_worker"`
+//!
+//! Floating-point comparison:
+//!   `confidence` and other f64 fields are compared with a 1e-9 absolute tolerance
+//!   because Python's float arithmetic (e.g. `0.7 + 0.2 = 0.8999999999999999`) can
+//!   differ from Rust's by ULP. We convert the oracle's `expected.confidence` to f64
+//!   and compare against Rust's before re-encoding to JSON.
+
+use goldenmatch_autoconfig_core::{
+    classify_columns, decide_plan, ColType, ColumnStats, PlannerInput,
+};
+use serde_json::Value;
+
+// ── Embedded golden files (committed alongside this test) ─────────────────────
+const PLANNER_JSON: &str = include_str!("../golden/planner_vectors.json");
+const CLASSIFIER_JSON: &str = include_str!("../golden/classifier_vectors.json");
+
+// ── Planner parity ────────────────────────────────────────────────────────────
+
+#[test]
+fn planner_golden_parity() {
+    let vectors: Vec<Value> =
+        serde_json::from_str(PLANNER_JSON).expect("failed to parse planner_vectors.json");
+
+    assert!(
+        vectors.len() >= 40,
+        "expected >= 40 planner vectors, got {}",
+        vectors.len()
+    );
+
+    let mut failures: Vec<String> = Vec::new();
+
+    for (idx, vec) in vectors.iter().enumerate() {
+        let input_val = &vec["input"];
+        let expected_val = &vec["expected"];
+
+        // Deserialize the input
+        let input: PlannerInput = match serde_json::from_value(input_val.clone()) {
+            Ok(i) => i,
+            Err(e) => {
+                failures.push(format!(
+                    "vector[{idx}]: failed to deserialize PlannerInput: {e}\ninput={input_val}"
+                ));
+                continue;
+            }
+        };
+
+        // Run Rust decide_plan
+        let plan = decide_plan(&input);
+
+        // Re-serialize to JSON Value for field-by-field comparison
+        let got_val: Value = match serde_json::to_value(&plan) {
+            Ok(v) => v,
+            Err(e) => {
+                failures.push(format!(
+                    "vector[{idx}]: failed to serialize ExecutionPlan: {e}"
+                ));
+                continue;
+            }
+        };
+
+        // Compare field by field (avoids f64 precision issues; no f64 in plan)
+        let fields = ["backend", "max_workers", "pair_spill_threshold",
+                      "clustering_strategy", "rule_name", "chunk_size"];
+
+        for field in &fields {
+            let got = &got_val[field];
+            let exp = &expected_val[field];
+            if got != exp {
+                failures.push(format!(
+                    "vector[{idx}] field `{field}` mismatch:\n  got      = {got}\n  expected = {exp}\n  input    = {input_val}\n  rule fired = {}",
+                    got_val["rule_name"]
+                ));
+            }
+        }
+
+        // Explicit null checks for pair_spill_threshold and chunk_size
+        // so any `Option::None` → absent (vs → null) regression is caught.
+        let pst = &got_val["pair_spill_threshold"];
+        if pst.is_null() != expected_val["pair_spill_threshold"].is_null() {
+            failures.push(format!(
+                "vector[{idx}] pair_spill_threshold null mismatch: got={pst} expected={}",
+                expected_val["pair_spill_threshold"]
+            ));
+        }
+        let cs = &got_val["chunk_size"];
+        if cs.is_null() != expected_val["chunk_size"].is_null() {
+            failures.push(format!(
+                "vector[{idx}] chunk_size null mismatch: got={cs} expected={}",
+                expected_val["chunk_size"]
+            ));
+        }
+    }
+
+    if !failures.is_empty() {
+        panic!(
+            "{} planner vector(s) failed:\n{}",
+            failures.len(),
+            failures.join("\n---\n")
+        );
+    }
+}
+
+// ── Classifier parity ─────────────────────────────────────────────────────────
+
+#[test]
+fn classifier_golden_parity() {
+    let vectors: Vec<Value> =
+        serde_json::from_str(CLASSIFIER_JSON).expect("failed to parse classifier_vectors.json");
+
+    assert!(
+        vectors.len() >= 30,
+        "expected >= 30 classifier vectors, got {}",
+        vectors.len()
+    );
+
+    let mut failures: Vec<String> = Vec::new();
+
+    for (idx, vec) in vectors.iter().enumerate() {
+        let input_val = &vec["input"];
+        let expected_val = &vec["expected"];
+
+        // Deserialize the input into ColumnStats
+        let col_stats: ColumnStats = match serde_json::from_value(input_val.clone()) {
+            Ok(c) => c,
+            Err(e) => {
+                failures.push(format!(
+                    "vector[{idx}]: failed to deserialize ColumnStats: {e}\ninput={input_val}"
+                ));
+                continue;
+            }
+        };
+
+        // Run Rust classify_columns (wrap in slice)
+        let profiles = classify_columns(&[col_stats]);
+        if profiles.len() != 1 {
+            failures.push(format!(
+                "vector[{idx}]: classify_columns returned {} profiles, expected 1",
+                profiles.len()
+            ));
+            continue;
+        }
+        let profile = &profiles[0];
+
+        // Re-serialize to JSON Value
+        let got_val: Value = match serde_json::to_value(profile) {
+            Ok(v) => v,
+            Err(e) => {
+                failures.push(format!(
+                    "vector[{idx}]: failed to serialize ColumnProfile: {e}"
+                ));
+                continue;
+            }
+        };
+
+        // Compare string / bool fields exactly
+        let exact_fields = ["name", "dtype", "col_type", "needs_llm_escalation"];
+        for field in &exact_fields {
+            let got = &got_val[field];
+            let exp = &expected_val[field];
+            if got != exp {
+                failures.push(format!(
+                    "vector[{idx}] field `{field}` mismatch:\n  got      = {got}\n  expected = {exp}\n  col_name = {}",
+                    input_val["name"]
+                ));
+            }
+        }
+
+        // Compare float fields with tolerance (Python float arithmetic can differ by ULP)
+        let float_fields = ["confidence", "null_rate", "cardinality_ratio", "avg_len"];
+        for field in &float_fields {
+            let got_f = got_val[field].as_f64().unwrap_or(f64::NAN);
+            let exp_f = expected_val[field].as_f64().unwrap_or(f64::NAN);
+            if (got_f - exp_f).abs() > 1e-9 {
+                failures.push(format!(
+                    "vector[{idx}] field `{field}` mismatch:\n  got      = {got_f}\n  expected = {exp_f}\n  diff     = {}\n  col_name = {}",
+                    (got_f - exp_f).abs(),
+                    input_val["name"]
+                ));
+            }
+        }
+    }
+
+    if !failures.is_empty() {
+        panic!(
+            "{} classifier vector(s) failed:\n{}",
+            failures.len(),
+            failures.join("\n---\n")
+        );
+    }
+}
+
+// ── Explicit serde-shape spot-checks ─────────────────────────────────────────
+//
+// These tests guard the literal string values used in the JSON contract so a
+// typo in a `serde` attribute is caught immediately rather than buried in a
+// failure message.
+
+#[test]
+fn serde_backend_names() {
+    use goldenmatch_autoconfig_core::BackendName;
+    assert_eq!(
+        serde_json::to_string(&BackendName::PolarsDirect).unwrap(),
+        r#""polars-direct""#
+    );
+    assert_eq!(
+        serde_json::to_string(&BackendName::Bucket).unwrap(),
+        r#""bucket""#
+    );
+    assert_eq!(
+        serde_json::to_string(&BackendName::Chunked).unwrap(),
+        r#""chunked""#
+    );
+    assert_eq!(
+        serde_json::to_string(&BackendName::Duckdb).unwrap(),
+        r#""duckdb""#
+    );
+    assert_eq!(
+        serde_json::to_string(&BackendName::Ray).unwrap(),
+        r#""ray""#
+    );
+}
+
+#[test]
+fn serde_clustering_strategy_names() {
+    use goldenmatch_autoconfig_core::ClusteringStrategy;
+    assert_eq!(
+        serde_json::to_string(&ClusteringStrategy::InMemory).unwrap(),
+        r#""in_memory""#
+    );
+    assert_eq!(
+        serde_json::to_string(&ClusteringStrategy::PartitionedUnionFind).unwrap(),
+        r#""partitioned_union_find""#
+    );
+    assert_eq!(
+        serde_json::to_string(&ClusteringStrategy::StreamingCc).unwrap(),
+        r#""streaming_cc""#
+    );
+}
+
+#[test]
+fn serde_spill_threshold_names() {
+    use goldenmatch_autoconfig_core::SpillThreshold;
+    assert_eq!(
+        serde_json::to_string(&SpillThreshold::Ram).unwrap(),
+        r#""ram""#
+    );
+    assert_eq!(
+        serde_json::to_string(&SpillThreshold::Duckdb).unwrap(),
+        r#""duckdb""#
+    );
+    assert_eq!(
+        serde_json::to_string(&SpillThreshold::DiskPerWorker).unwrap(),
+        r#""disk_per_worker""#
+    );
+}
+
+#[test]
+fn serde_col_type_names() {
+    // Verify each ColType serializes to the Python-oracle string
+    let cases: &[(&str, ColType)] = &[
+        ("email", ColType::Email),
+        ("name", ColType::Name),
+        ("phone", ColType::Phone),
+        ("zip", ColType::Zip),
+        ("address", ColType::Address),
+        ("geo", ColType::Geo),
+        ("identifier", ColType::Identifier),
+        ("description", ColType::Description),
+        ("numeric", ColType::Numeric),
+        ("date", ColType::Date),
+        ("string", ColType::String),
+        ("year", ColType::Year),
+        ("multi_name", ColType::MultiName),
+    ];
+    for (expected_str, col_type) in cases {
+        let got = serde_json::to_string(col_type).unwrap();
+        let expected_json = format!(r#""{expected_str}""#);
+        assert_eq!(got, expected_json, "ColType::{col_type:?} serialized wrong");
+    }
+}
+
+#[test]
+fn serde_null_pair_spill_threshold() {
+    // ExecutionPlan with pair_spill_threshold=None must serialize to "null" not absent
+    use goldenmatch_autoconfig_core::{BackendName, ClusteringStrategy, ExecutionPlan};
+    let plan = ExecutionPlan {
+        backend: BackendName::PolarsDirect,
+        chunk_size: None,
+        max_workers: 1,
+        pair_spill_threshold: None,
+        clustering_strategy: ClusteringStrategy::InMemory,
+        rule_name: "test".into(),
+    };
+    let v: Value = serde_json::to_value(&plan).unwrap();
+    assert!(
+        v["pair_spill_threshold"].is_null(),
+        "pair_spill_threshold=None must serialize to JSON null, got: {}",
+        v["pair_spill_threshold"]
+    );
+    assert!(
+        v["chunk_size"].is_null(),
+        "chunk_size=None must serialize to JSON null, got: {}",
+        v["chunk_size"]
+    );
+}
+
+#[test]
+fn serde_non_null_pair_spill_threshold() {
+    // pair_spill_threshold=Some(Ram) must serialize to "ram" (not "Ram" or "RAM")
+    use goldenmatch_autoconfig_core::{BackendName, ClusteringStrategy, ExecutionPlan, SpillThreshold};
+    let plan = ExecutionPlan {
+        backend: BackendName::Chunked,
+        chunk_size: Some(100_000),
+        max_workers: 8,
+        pair_spill_threshold: Some(SpillThreshold::Ram),
+        clustering_strategy: ClusteringStrategy::InMemory,
+        rule_name: "plan_selected_chunked".into(),
+    };
+    let v: Value = serde_json::to_value(&plan).unwrap();
+    assert_eq!(v["pair_spill_threshold"], Value::String("ram".into()));
+    assert_eq!(v["chunk_size"], Value::Number(100_000u64.into()));
+}

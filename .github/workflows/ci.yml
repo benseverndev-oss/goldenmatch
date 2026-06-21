@@ -72,6 +72,7 @@ jobs:
       analysis_wasm: ${{ steps.filter.outputs.analysis_wasm }}
       ts_parity: ${{ steps.filter.outputs.ts_parity }}
       throughput: ${{ steps.filter.outputs.throughput }}
+      autoconfig_wasm: ${{ steps.filter.outputs.autoconfig_wasm }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d  # v4.0.1
@@ -135,6 +136,11 @@ jobs:
               - 'pnpm-lock.yaml'
               - 'pnpm-workspace.yaml'
               - 'turbo.json'
+              # The TS port embeds the autoconfig wasm core; a core/wasm change
+              # must re-run the TS lane so the drift guard rebuilds the embedded
+              # artifacts and fails if they're stale vs the committed copies.
+              - 'packages/rust/extensions/autoconfig-core/**'
+              - 'packages/rust/extensions/autoconfig-wasm/**'
             wasm_score:
               - 'packages/rust/extensions/score-wasm/**'
               - 'packages/rust/extensions/score-core/**'
@@ -161,6 +167,13 @@ jobs:
               - 'packages/typescript/goldenpipe/tests/fixtures/**'
               - 'scripts/regen_ts_parity_fixtures.sh'
               - 'scripts/check_ts_parity_freshness.py'
+            autoconfig_wasm:
+              # Gates the (rust-toolchain-heavy) wasm rebuild + drift guard inside
+              # the typescript lane. Only fires when the shared core, the wasm
+              # wrapper, or the embed script changes.
+              - 'packages/rust/extensions/autoconfig-core/**'
+              - 'packages/rust/extensions/autoconfig-wasm/**'
+              - 'packages/typescript/goldenmatch/scripts/build_autoconfig_wasm.mjs'
             web:
               - 'packages/python/goldenmatch/web/**'
               - 'packages/python/goldenmatch/goldenmatch/web/**'
@@ -230,6 +243,13 @@ jobs:
               - 'packages/python/goldenmatch/tests/test_embeddings.py'
               - 'packages/python/goldenmatch/tests/test_inhouse_embedder.py'
               - 'scripts/build_native.py'
+              # autoconfig-core: the native ext exposes the autoconfig kernel
+              # via PyO3; these paths trigger the native build + parity suite.
+              - 'packages/rust/extensions/autoconfig-core/**'
+              - 'packages/python/goldenmatch/goldenmatch/core/autoconfig_native.py'
+              - 'packages/python/goldenmatch/goldenmatch/core/autoconfig_planner.py'
+              - 'packages/python/goldenmatch/goldenmatch/core/autoconfig.py'
+              - 'packages/python/goldenmatch/tests/test_autoconfig_native_parity.py'
             goldencheck_native:
               # GoldenCheck's native acceleration ext (PyO3), a standalone
               # workspace like goldenmatch's `native`. Builds the .so and runs the
@@ -921,6 +941,31 @@ jobs:
         # cache: pnpm requires (a) pnpm on PATH (handled above) and
         # (b) pnpm-lock.yaml committed at repo root.
       - run: pnpm install --frozen-lockfile
+      # Drift guard: when the shared autoconfig core/wasm (or the embed script)
+      # changes, rebuild the inlined wasm + bindings + parity fixtures from the
+      # live core, then prove the fresh build passes parity. The wasm32 target +
+      # wasm-pack are only provisioned on these PRs (not every TS change) to keep
+      # the common path fast.
+      #
+      # We diff ONLY the golden fixtures (deterministic JSON from the core's
+      # logic) — NOT the .wasm/.js bytes, which vary with the CI rustc/wasm-bindgen
+      # version and would false-positive. Stale committed wasm is instead caught
+      # behaviorally: the parity test (committed wasm vs committed fixtures) fails
+      # if the fixtures moved but the wasm wasn't rebuilt.
+      - name: Rebuild + verify embedded autoconfig wasm
+        if: needs.changes.outputs.autoconfig_wasm == 'true' || needs.changes.outputs.force_all == 'true'
+        working-directory: packages/typescript/goldenmatch
+        run: |
+          rustup target add wasm32-unknown-unknown
+          curl -sSf https://rustwasm.github.io/wasm-pack/installer/init.sh | sh
+          node scripts/build_autoconfig_wasm.mjs
+          if ! git diff --exit-code -- tests/parity/fixtures/autoconfig/; then
+            echo "::error::autoconfig golden fixtures are stale. Run \
+              'node scripts/build_autoconfig_wasm.mjs' in packages/typescript/goldenmatch \
+              (after regenerating the core's golden vectors) and commit the result." >&2
+            exit 1
+          fi
+          npx vitest run tests/parity/autoconfig-core.parity.test.ts
       - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
         with:
           path: .turbo
@@ -1092,6 +1137,7 @@ jobs:
             packages/rust/extensions/score-core
             packages/rust/extensions/sketch-core
             packages/rust/extensions/graph-layout
+            packages/rust/extensions/autoconfig-core
       - run: cargo test --workspace
         # Bridge tests now hard-require goldenmatch (installed above) -- a Python
         # import/marshalling failure fails the lane instead of silently skipping.
@@ -1117,6 +1163,14 @@ jobs:
       # paths-filter already covers it (packages/rust/**). See #1026.
       - run: cargo test --manifest-path graph-layout/Cargo.toml
       - run: cargo clippy --manifest-path graph-layout/Cargo.toml -- -D warnings
+      - run: cargo test --manifest-path autoconfig-core/Cargo.toml
+      - run: cargo clippy --manifest-path autoconfig-core/Cargo.toml --all-targets -- -D warnings
+      # autoconfig-wasm: the wasm-bindgen wrapper over autoconfig-core that the
+      # TS port consumes. Host `cargo check` + clippy validate it compiles against
+      # the core (the actual wasm build + embed is exercised in the typescript
+      # lane's drift guard, which needs the wasm32 target + wasm-pack).
+      - run: cargo check --manifest-path autoconfig-wasm/Cargo.toml
+      - run: cargo clippy --manifest-path autoconfig-wasm/Cargo.toml --all-targets -- -D warnings
 
   # Measured Rust line coverage (cargo-llvm-cov). The structural audit's unit
   # tests (graph-core / score-core / fingerprint-core / native / bridge) are now
@@ -1248,6 +1302,7 @@ jobs:
             packages/python/goldenmatch/tests/test_pairs.py \
             packages/python/goldenmatch/tests/test_embeddings.py \
             packages/python/goldenmatch/tests/test_inhouse_embedder.py \
+            packages/python/goldenmatch/tests/test_autoconfig_native_parity.py \
             -v
 
   # GoldenCheck native parity: the goldencheck-native ext (PyO3, standalone
