@@ -74,3 +74,44 @@ by ~500x.** This is the same family of failure as the at-scale blocking blow-ups
    `measure_blocking_profile` vs the Python path at 1M/10M rows; if affordable,
    propose flipping full-measurement on at lower planning-effort tiers. Gate any
    default change on that measured wall (measure-first; `feedback_verify_perf_not_just_ship`).
+
+## Stage D bench UPDATE (2026-06-21, MEASURED — partly refutes the native premise)
+
+Bench: `scripts/bench_stage_d_full_frame_measure.py` (native ext present). Person
+frame, single exact `last_name` pass (fixed-cardinality — the regime where
+extrapolation breaks). Wall of `measure_blocking_profile` (the current production
+full-frame path) vs a restructured "fast" path (one `group_by().len()` →
+pair-count aggregate):
+
+| N (rows) | `measure_blocking_profile` | fast (1 groupby + native agg) | fast (pure-py agg) |
+|---|---|---|---|
+| 100k | 120 ms | 20 ms | 6 ms |
+| 1M   | 272 ms | 19 ms | 19 ms |
+
+High block-cardinality probe (native vs pure `candidate_pair_count` over the
+block-sizes list, the only step the native kernel touches):
+
+| N | n_blocks | native agg | pure-py agg | speedup |
+|---|---|---|---|---|
+| 1M | 317k | 5.1 ms | 16.2 ms | 3.2× |
+| 5M | 1.58M | 91.4 ms | 79.2 ms | **0.9× (native slower)** |
+
+**Conclusions (honest, measure-first):**
+1. **Full-frame measurement is ALREADY affordable** — 272 ms at 1M with the
+   current implementation. It can be defaulted-on at lower planning-effort tiers
+   TODAY, with NO native acceleration. The finding's framing ("native-fast
+   profiling is what makes full-frame measurement cheap enough to be the default")
+   is **not borne out** — full-frame is already cheap with pure polars.
+2. **The real win is a POLARS refactor, not native.** `measure_blocking_profile`'s
+   per-block `collect()` loop dominates (272 ms@1M); a single `group_by().len()`
+   gets the block-size distribution in ~19 ms (**≈14×**). This restructure applies
+   verbatim to the TS port's profiler too (all surfaces benefit).
+3. **The native `candidate_pair_count` kernel is NOT the lever here.** The
+   size→pairs sum is trivial: 3× at moderate block counts, and a wash-to-LOSS at
+   1.5M+ blocks (marshaling a million-element list to the kernel beats the Python
+   `sum`). Keep it off this path.
+
+**Revised actionable conclusion:** the config-quality fix is *doing full-frame
+measurement at all* (cheap; flip it on at lower tiers) + the ~14× polars
+restructure of `measure_blocking_profile` — NOT native-accelerating it. The native
+core's payoff stays cross-surface parity + planner/classifier correctness.
