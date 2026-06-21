@@ -1,5 +1,5 @@
-// Layer 1 — Planner types (A1 scaffold).
-// Function implementations land in A2 (auto_chunk_size) and A3 (decide_plan).
+//! Layer 1 — Planner: types, constants, and `auto_chunk_size`.
+//! `decide_plan` (the 8-rule table) lands in A3.
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -62,4 +62,61 @@ pub struct ExecutionPlan {
     pub pair_spill_threshold: Option<SpillThreshold>,
     pub clustering_strategy: ClusteringStrategy,
     pub rule_name: String,
+}
+
+// ── Named threshold constants (port from autoconfig_planner_rules.py) ────────
+// Rule 1
+// (no constant; predicate is n_rows <= 1)
+
+// Rule 2: simple plan
+pub const SIMPLE_PLAN_MAX_ROWS: u64 = 100_000;
+pub const SIMPLE_PLAN_MAX_PAIRS: u64 = 50_000_000;
+
+// Rule 3: fast-box plan
+pub const FAST_BOX_MIN_RAM_GB: f64 = 32.0;
+
+// Rule 3b: bucket-suggested band
+pub const BUCKET_SUGGESTED_MAX_ROWS: u64 = 750_000;
+pub const PAIR_SCORE_BYTES: u64 = 64;
+pub const BUCKET_RAM_SAFETY_FRACTION: f64 = 0.5;
+
+// Rule 4: chunked plan
+pub const CHUNKED_MAX_PAIRS: u64 = 5_000_000_000;
+pub const CHUNKED_MIN_RAM_GB: f64 = 16.0;
+pub const CHUNKED_TARGET_RAM_USE_FRACTION: f64 = 0.6;
+pub const CHUNKED_BYTES_PER_ROW: u64 = 1024;
+
+// Rule 6: Ray
+pub const RAY_MIN_ROWS: u64 = 50_000_000;
+
+// Rule 5: DuckDB
+pub const DUCKDB_MIN_PAIRS: u64 = 5_000_000_000;
+pub const DUCKDB_MAX_RAM_GB: f64 = 16.0;
+pub const DUCKDB_MAX_WORKERS: u32 = 8;
+
+/// Port of `auto_chunk_size` from `autoconfig_planner_rules.py:218-232`.
+///
+/// Target ~60 % of available RAM per chunk; clamp result to [10_000, 1_000_000].
+pub fn auto_chunk_size(n_rows_full: u64, available_ram_gb: f64) -> u64 {
+    let estimated_gb = (n_rows_full * CHUNKED_BYTES_PER_ROW) as f64 / (1024_f64.powi(3));
+    let denom = (available_ram_gb * CHUNKED_TARGET_RAM_USE_FRACTION).max(0.001);
+    let target_chunks = (estimated_gb / denom).ceil().max(1.0) as u64;
+    let chunk = n_rows_full / target_chunks;
+    chunk.clamp(10_000, 1_000_000)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chunk_size_clamps() {
+        // 10M rows, 64 GB → estimated_gb = 10M*1024 / 1024^3 ≈ 9.537
+        // denom = 64*0.6 = 38.4 → target_chunks = ceil(9.537/38.4) = 1 → chunk = 10_000_000
+        // clamp to 1_000_000
+        assert_eq!(auto_chunk_size(10_000_000, 64.0), 1_000_000);
+        // 5_000 rows, 64 GB → estimated_gb tiny → target_chunks=1 → chunk=5000 < 10_000
+        // clamp to 10_000
+        assert_eq!(auto_chunk_size(5_000, 64.0), 10_000);
+    }
 }
