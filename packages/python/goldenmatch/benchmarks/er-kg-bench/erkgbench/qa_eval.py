@@ -65,7 +65,7 @@ def load_corpus(path: Path | None = None):
     return mentions, types, contexts, failure_class
 
 
-def _landed_facts(graph: "kg.KG", seed_surface: str) -> set[str]:
+def _landed_facts(graph: kg.KG, seed_surface: str) -> set[str]:
     """Facts the engine co-retrieves for the entity queried by `seed_surface`:
     the facts on the node whose surface forms include the query (the
     under_merge_answer landed-node model). Empty if no node matches."""
