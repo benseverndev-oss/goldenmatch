@@ -31,11 +31,11 @@ class SynonymTable:
                 self._group_of[member] = gid
 
     @classmethod
-    def empty(cls) -> "SynonymTable":
+    def empty(cls) -> SynonymTable:
         return cls(None)
 
     @classmethod
-    def from_json(cls, path: str | Path) -> "SynonymTable":
+    def from_json(cls, path: str | Path) -> SynonymTable:
         p = Path(path)
         if not p.exists():
             return cls.empty()

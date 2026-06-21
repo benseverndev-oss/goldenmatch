@@ -14,7 +14,7 @@ def test_synonym_registered_on_package_import():
         "s=PluginRegistry.instance().get_scorer('synonym');"
         "assert s is not None and type(s).__name__=='SynonymScorer', repr(s)"
     )
-    env = {**os.environ, "POLARS_SKIP_CPU_CHECK": "1", "GOLDENMATCH_ANALYTICS": "0"}
+    env = {**os.environ, "POLARS_SKIP_CPU_CHECK": "1"}
     r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
     assert r.returncode == 0, r.stderr
 
