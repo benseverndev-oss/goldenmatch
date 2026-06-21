@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import os
+from pathlib import Path
 
 from . import engineered
 from .corpora import load_musique
@@ -86,12 +87,20 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--out-json", required=True)
     args = p.parse_args(argv)
 
+    # Resolve output paths to absolute up front: some engines (graphrag's load_config)
+    # os.chdir() during the run, so a relative results/ path would write to the wrong
+    # dir. Anchoring before the run -- and creating the parent -- makes the write
+    # CWD-independent.
+    out_md = Path(args.out_md).resolve()
+    out_json = Path(args.out_json).resolve()
+    out_md.parent.mkdir(parents=True, exist_ok=True)
+
     corpus = _load_corpus(args.corpus, args.max_questions, args.musique_path)
     engine = _MockEngine() if args.self_test else _build_engine(args.engine)
     result = run_engine(engine, corpus, model=args.model, budget_usd=args.budget_usd)
-    write_results([result], md_path=args.out_md, json_path=args.out_json)
+    write_results([result], md_path=out_md, json_path=out_json)
     print(
-        f"wrote {args.out_md} ({result['n_answered']}/{result['n_questions']} answered, "
+        f"wrote {out_md} ({result['n_answered']}/{result['n_questions']} answered, "
         f"${result['cost_usd']})"
     )
     return 0

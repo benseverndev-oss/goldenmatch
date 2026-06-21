@@ -55,6 +55,8 @@ class MSGraphRAGQAEngine:
     def _build_config(self, workdir: str):
         """Scaffold graphrag's own canonical config for the installed version, then
         load it. Self-heals across graphrag's fast-moving settings schema."""
+        import os
+
         from graphrag.cli.initialize import initialize_project_at
         from graphrag.config.load_config import load_config
 
@@ -63,7 +65,14 @@ class MSGraphRAGQAEngine:
         initialize_project_at(
             root, force=True, model=self._model, embedding_model=self._embedding_model
         )
-        return load_config(root)
+        # graphrag's load_config does os.chdir(project_dir) and never restores the CWD
+        # -- which would silently break the harness's later relative `results/` write
+        # (it would land in graphrag's tempdir). Save + restore the CWD ourselves.
+        cwd = os.getcwd()
+        try:
+            return load_config(root)
+        finally:
+            os.chdir(cwd)
 
     def build_kg(self, corpus) -> BuildResult:
         import graphrag.api as api
