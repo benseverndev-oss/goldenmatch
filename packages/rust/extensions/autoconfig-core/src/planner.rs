@@ -39,6 +39,8 @@ pub enum SpillThreshold {
 pub struct RuntimeProfile {
     pub available_ram_gb: f64,
     pub cpu_count: u32,
+    // used by the surface (ray disk_per_worker spill), not by decide_plan
+    #[allow(dead_code)]
     pub disk_free_gb: f64,
 }
 
@@ -72,30 +74,30 @@ pub struct ExecutionPlan {
 // Rule 1: pathological — predicate: n_rows <= 1 (no constant needed)
 
 // Rule 2: simple plan
-pub const SIMPLE_PLAN_MAX_ROWS: u64 = 100_000;
-pub const SIMPLE_PLAN_MAX_PAIRS: u64 = 50_000_000;
+const SIMPLE_PLAN_MAX_ROWS: u64 = 100_000;
+const SIMPLE_PLAN_MAX_PAIRS: u64 = 50_000_000;
 
 // Rule 3: fast-box plan
-pub const FAST_BOX_MIN_RAM_GB: f64 = 32.0;
+const FAST_BOX_MIN_RAM_GB: f64 = 32.0;
 
 // Rule 3b: bucket-suggested band
-pub const BUCKET_SUGGESTED_MAX_ROWS: u64 = 750_000;
-pub const PAIR_SCORE_BYTES: u64 = 64;
-pub const BUCKET_RAM_SAFETY_FRACTION: f64 = 0.5;
+const BUCKET_SUGGESTED_MAX_ROWS: u64 = 750_000;
+const PAIR_SCORE_BYTES: u64 = 64;
+const BUCKET_RAM_SAFETY_FRACTION: f64 = 0.5;
 
 // Rule 4: chunked plan
-pub const CHUNKED_MAX_PAIRS: u64 = 5_000_000_000;
-pub const CHUNKED_MIN_RAM_GB: f64 = 16.0;
-pub const CHUNKED_TARGET_RAM_USE_FRACTION: f64 = 0.6;
-pub const CHUNKED_BYTES_PER_ROW: u64 = 1024;
+const CHUNKED_MAX_PAIRS: u64 = 5_000_000_000;
+const CHUNKED_MIN_RAM_GB: f64 = 16.0;
+const CHUNKED_TARGET_RAM_USE_FRACTION: f64 = 0.6;
+const CHUNKED_BYTES_PER_ROW: u64 = 1024;
 
 // Rule 6: Ray escape hatch
-pub const RAY_MIN_ROWS: u64 = 50_000_000;
+const RAY_MIN_ROWS: u64 = 50_000_000;
 
 // Rule 5: DuckDB out-of-core
-pub const DUCKDB_MIN_PAIRS: u64 = 5_000_000_000;
-pub const DUCKDB_MAX_RAM_GB: f64 = 16.0;
-pub const DUCKDB_MAX_WORKERS: u32 = 8;
+const DUCKDB_MIN_PAIRS: u64 = 5_000_000_000;
+const DUCKDB_MAX_RAM_GB: f64 = 16.0;
+const DUCKDB_MAX_WORKERS: u32 = 8;
 
 // ── Helper ────────────────────────────────────────────────────────────────────
 
@@ -420,6 +422,44 @@ mod tests {
         assert_eq!(p.chunk_size, None);
         assert_eq!(p.pair_spill_threshold, None);
         assert_eq!(p.clustering_strategy, ClusteringStrategy::InMemory);
+    }
+
+    #[test]
+    fn rule_bucket_suggested_upper_bound_excludes_750001() {
+        // n_rows = 750_001 is NOT in the row band (100k..=750k) so bucket_suggested
+        // must NOT fire.  Use mid_rt (16 GB) so fast_box also does not fire
+        // (fast_box requires RAM >= 32 GB).  Small pairs => chunked also misses
+        // (pairs < 50M).  Result must fall through to no_rule_matched.
+        let p = decide_plan(&PlannerInput {
+            n_rows_full: 750_001,
+            estimated_pair_count: 100_000,
+            runtime: mid_rt(), // 16 GB — NOT a fat box
+            caps: caps_bucket(),
+        });
+        assert_ne!(
+            p.rule_name, "plan_selected_bucket_suggested",
+            "750_001 rows is above the bucket_suggested band and must not match it"
+        );
+        assert_eq!(
+            p.rule_name, "no_rule_matched",
+            "with 16 GB RAM, small pairs, and n_rows just above the band, no other rule fires"
+        );
+    }
+
+    // ── Rule 1: pathological (n=1 boundary) ──────────────────────────────────
+    #[test]
+    fn rule_pathological_n_rows_one() {
+        // n_rows = 1 must hit pathological (predicate is n <= 1, not n < 1).
+        // A future edit changing the predicate to `< 1` would miss this case and
+        // must fail this test.
+        let p = decide_plan(&PlannerInput {
+            n_rows_full: 1,
+            estimated_pair_count: 0,
+            runtime: fat_rt(),
+            caps: caps_plain(),
+        });
+        assert_eq!(p.rule_name, "plan_pathological");
+        assert_eq!(p.max_workers, 1);
     }
 
     // ── Rule 4: chunked ───────────────────────────────────────────────────────
