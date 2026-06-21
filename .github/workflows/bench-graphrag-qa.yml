@@ -40,7 +40,7 @@ jobs:
       - name: Run goldengraph end-to-end (real LLM, budget-capped)
         working-directory: packages/python/goldenmatch/benchmarks/er-kg-bench
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.GOLDENGRAPH_OPENAI_API_KEY }}
           POLARS_SKIP_CPU_CHECK: "1"
         run: |
           python -m erkgbench.qa_e2e.run_qa_e2e \
@@ -71,7 +71,7 @@ jobs:
       - name: Run LightRAG end-to-end (real LLM, budget-capped)
         working-directory: packages/python/goldenmatch/benchmarks/er-kg-bench
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.GOLDENGRAPH_OPENAI_API_KEY }}
           POLARS_SKIP_CPU_CHECK: "1"
         run: |
           python -m erkgbench.qa_e2e.run_qa_e2e \
@@ -102,8 +102,8 @@ jobs:
       - name: Run MS-GraphRAG end-to-end (real LLM, budget-capped)
         working-directory: packages/python/goldenmatch/benchmarks/er-kg-bench
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          GRAPHRAG_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.GOLDENGRAPH_OPENAI_API_KEY }}
+          GRAPHRAG_API_KEY: ${{ secrets.GOLDENGRAPH_OPENAI_API_KEY }}
           POLARS_SKIP_CPU_CHECK: "1"
         run: |
           python -m erkgbench.qa_e2e.run_qa_e2e \
@@ -139,7 +139,7 @@ jobs:
       - name: Run Graphiti end-to-end (real LLM + FalkorDB, budget-capped)
         working-directory: packages/python/goldenmatch/benchmarks/er-kg-bench
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.GOLDENGRAPH_OPENAI_API_KEY }}
           FALKORDB_HOST: localhost
           FALKORDB_PORT: "6379"
           POLARS_SKIP_CPU_CHECK: "1"
