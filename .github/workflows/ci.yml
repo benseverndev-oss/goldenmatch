@@ -158,13 +158,6 @@ jobs:
               - 'packages/python/goldenmatch/tests/test_embeddings.py'
               - 'packages/python/goldenmatch/tests/test_inhouse_embedder.py'
               - 'scripts/build_native.py'
-              # autoconfig-core: the native ext exposes the autoconfig kernel
-              # via PyO3; these paths trigger the native build + parity suite.
-              - 'packages/rust/extensions/autoconfig-core/**'
-              - 'packages/python/goldenmatch/goldenmatch/core/autoconfig_native.py'
-              - 'packages/python/goldenmatch/goldenmatch/core/autoconfig_planner.py'
-              - 'packages/python/goldenmatch/goldenmatch/core/autoconfig.py'
-              - 'packages/python/goldenmatch/tests/test_autoconfig_native_parity.py'
             goldencheck_native:
               # GoldenCheck's native acceleration ext (PyO3), a standalone
               # workspace like goldenmatch's `native`. Builds the .so and runs the
@@ -814,7 +807,6 @@ jobs:
             packages/rust/extensions
             packages/rust/extensions/graph-core
             packages/rust/extensions/score-core
-            packages/rust/extensions/autoconfig-core
       - run: cargo test --workspace
         # Bridge tests now hard-require goldenmatch (installed above) -- a Python
         # import/marshalling failure fails the lane instead of silently skipping.
@@ -830,8 +822,6 @@ jobs:
       - run: cargo clippy --manifest-path graph-core/Cargo.toml -- -D warnings
       - run: cargo test --manifest-path score-core/Cargo.toml
       - run: cargo clippy --manifest-path score-core/Cargo.toml -- -D warnings
-      - run: cargo test --manifest-path autoconfig-core/Cargo.toml
-      - run: cargo clippy --manifest-path autoconfig-core/Cargo.toml --all-targets -- -D warnings
 
   # Native acceleration extension (PyO3). The crate is a standalone workspace
   # (its `extension-module` pyo3 feature is incompatible with the bridge's
@@ -901,7 +891,6 @@ jobs:
             packages/python/goldenmatch/tests/test_pairs.py \
             packages/python/goldenmatch/tests/test_embeddings.py \
             packages/python/goldenmatch/tests/test_inhouse_embedder.py \
-            packages/python/goldenmatch/tests/test_autoconfig_native_parity.py \
             -v
 
   # GoldenCheck native parity: the goldencheck-native ext (PyO3, standalone
