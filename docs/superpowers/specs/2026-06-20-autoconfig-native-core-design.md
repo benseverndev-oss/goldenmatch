@@ -124,7 +124,7 @@ struct RuntimeProfile { available_ram_gb: f64, cpu_count: u32, disk_free_gb: f64
 
 enum BackendName { PolarsDirect, Chunked, Duckdb, Ray, Bucket }
 enum ClusteringStrategy { InMemory, PartitionedUnionFind, StreamingCc }
-enum SpillThreshold { None, Ram, Duckdb, DiskPerWorker }
+enum SpillThreshold { Ram, Duckdb, DiskPerWorker }   // absence (Python None) modeled Option-side, NOT a variant
 
 struct Capabilities {
     bucket_available: bool,   // surface folds native_enabled("block_scoring") + GOLDENMATCH_PLANNER_BUCKET opt-out
@@ -144,7 +144,7 @@ struct ExecutionPlan {
     backend: BackendName,
     chunk_size: Option<u64>,
     max_workers: u32,
-    pair_spill_threshold: SpillThreshold,
+    pair_spill_threshold: Option<SpillThreshold>,   // Python None -> JSON null (5 of 8 rules); a None enum variant would serialize "none" and break parity
     clustering_strategy: ClusteringStrategy,
     rule_name: String,
 }
