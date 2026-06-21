@@ -398,3 +398,7 @@ __all__ = [
     "manual_merge", "manual_split",
     "identity_history", "list_identities",
 ]
+
+# GS1: register the opt-in `synonym` scorer at package import (get_scorer does not
+# auto-discover, and this package is not imported elsewhere). Import-light by design.
+from . import synonym as _synonym  # noqa: E402,F401
