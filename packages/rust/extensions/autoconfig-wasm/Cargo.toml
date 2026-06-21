@@ -1,0 +1,25 @@
+# Standalone workspace: a thin wasm-bindgen wrapper over goldenmatch-autoconfig-core,
+# so the JS/TS port consumes the SAME decision core as the Python -native wheel
+# (one source of truth, no hand-maintained parallel planner/classifier). No `arrow`
+# feature -> the wasm build carries no Arrow. Mirrors the native crate's PyO3 shims.
+[workspace]
+
+[package]
+name = "goldenmatch-autoconfig-wasm"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Ben Severn <benzsevern@gmail.com>"]
+description = "wasm-bindgen wrapper over goldenmatch-autoconfig-core for the JS/TS port"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wasm-bindgen = "0.2"
+goldenmatch-autoconfig-core = { path = "../autoconfig-core" }
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"   # optimize for small wasm size
+lto = true
