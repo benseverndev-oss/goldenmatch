@@ -1,6 +1,7 @@
-"""Protocol conformance + that graphrag imports. Does NOT run build_index /
-local_search (version-sensitive config + expensive real LLM) -- those are validated
-in the opt-in bench-graphrag-qa lane. Runs in the graphrag isolated venv."""
+"""Protocol conformance + that graphrag imports + that the scaffolded config is
+valid for the installed graphrag version. Does NOT run build_index / local_search
+(expensive real LLM) -- those are validated in the opt-in bench-graphrag-qa lane.
+Runs in the graphrag isolated venv."""
 from __future__ import annotations
 
 import sys
@@ -21,3 +22,18 @@ def test_ms_graphrag_engine_conforms_to_protocol():
     assert isinstance(eng, QAEngine)
     assert eng.name == "ms_graphrag"
     assert eng.fidelity == "real-e2e"
+
+
+def test_ms_graphrag_config_is_valid_for_installed_version(tmp_path):
+    """Scaffold + load the config and assert the chat/embedding models are actually
+    populated. No LLM, no network. Guards the version-schema drift that silently
+    blanked the models when a hand-written 2.x settings.yaml met graphrag 3.x."""
+    eng = MSGraphRAGQAEngine(model="gpt-4o-mini", embedding_model="text-embedding-3-small")
+    cfg = eng._build_config(str(tmp_path))
+
+    assert cfg.completion_models, "no completion model configured (schema drift?)"
+    assert cfg.embedding_models, "no embedding model configured (schema drift?)"
+    chat = next(iter(cfg.completion_models.values()))
+    assert chat.model == "gpt-4o-mini"
+    embed = next(iter(cfg.embedding_models.values()))
+    assert embed.model == "text-embedding-3-small"

@@ -52,7 +52,9 @@ def _build_engine(name: str):
     if name == "ms_graphrag":
         from .engines.ms_graphrag import MSGraphRAGQAEngine
 
-        return MSGraphRAGQAEngine(model="gpt-4o-mini")
+        return MSGraphRAGQAEngine(
+            model="gpt-4o-mini", embedding_model="text-embedding-3-small"
+        )
     raise SystemExit(f"unknown engine: {name}")
 
 

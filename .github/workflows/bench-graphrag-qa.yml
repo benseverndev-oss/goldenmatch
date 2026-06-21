@@ -98,7 +98,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install graphrag + goldenmatch + datasets (isolated)
-        run: python -m pip install --upgrade pip pytest numpy pandas pyarrow graphrag goldenmatch datasets openai
+        run: python -m pip install --upgrade pip pytest numpy pandas pyarrow "graphrag==3.1.0" goldenmatch datasets openai
       - name: Run MS-GraphRAG end-to-end (real LLM, budget-capped)
         working-directory: packages/python/goldenmatch/benchmarks/er-kg-bench
         env:

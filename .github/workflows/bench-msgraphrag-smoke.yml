@@ -25,7 +25,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install graphrag + goldenmatch (isolated)
-        run: python -m pip install --upgrade pip pytest numpy pandas pyarrow graphrag goldenmatch
+        run: python -m pip install --upgrade pip pytest numpy pandas pyarrow "graphrag==3.1.0" goldenmatch
       - name: MS-GraphRAG adapter smoke (protocol + import, no LLM)
         working-directory: packages/python/goldenmatch/benchmarks/er-kg-bench
         env:

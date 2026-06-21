@@ -2,13 +2,20 @@
 indexes via a multi-workflow pipeline (config + file IO -> parquet artifacts) and
 queries via `api.local_search` over the loaded artifacts.
 
-Honesty notes:
-- The `settings.yaml` schema + the `build_index`/`local_search` API are
-  version-sensitive and could not be validated locally (graphrag is not installable
-  on the dev box). The DB-free CI smoke validates protocol conformance + that
-  graphrag imports; the REAL `bench-graphrag-qa` lane is the execution validator and
-  may need an iteration to nail the version-specific config. CONFIRM items are
-  flagged inline.
+Version note (validated against graphrag 3.1.0):
+- graphrag's `settings.yaml` schema moves fast across releases (2.x used
+  `models:`/`output:`/`chunks:`; 3.x renamed these to
+  `completion_models:`/`embedding_models:`/`output_storage:`/`chunking:` and
+  silently ignores the old keys -- so a hand-written 2.x YAML loads but configures
+  nothing, leaving the models unset). To stay correct across versions we DON'T hand
+  -write the config: we call graphrag's own project scaffolder
+  (`initialize_project_at`, the function behind `graphrag init`) to emit the
+  canonical `settings.yaml` + prompt files for the INSTALLED version, substituting
+  only the shared chat + embedding model. The `build_index`/`local_search` API
+  signatures and the output parquet table names were confirmed against 3.1.0.
+- The API key resolves from `$GRAPHRAG_API_KEY` (graphrag's default key env, set to
+  the OpenAI key in the lane); python-dotenv does not override an env var that is
+  already set, so the scaffolded `.env` placeholder is inert.
 - GraphRAG's LLM is config-driven (no inject-a-counting-func hook), so token usage
   isn't surfaced to the harness -> cost is reported approximate (0). The results doc
   marks MS-GraphRAG's cost approximate.
@@ -23,44 +30,8 @@ from pathlib import Path
 
 from ..harness import AnswerResult, BuildResult
 
-# Best-effort minimal settings.yaml (graphrag ~2.x). CONFIRM the schema against the
-# pinned graphrag version; the real lane is the validator. ${GRAPHRAG_API_KEY} is
-# graphrag's default key env (set = the OpenAI key in the lane).
-_SETTINGS_YAML = """\
-models:
-  default_chat_model:
-    type: openai_chat
-    model: {model}
-    api_key: ${{GRAPHRAG_API_KEY}}
-  default_embedding_model:
-    type: openai_embedding
-    model: text-embedding-3-small
-    api_key: ${{GRAPHRAG_API_KEY}}
-input:
-  type: file
-  file_type: text
-  base_dir: input
-chunks:
-  size: 600
-  overlap: 100
-output:
-  type: file
-  base_dir: output
-cache:
-  type: file
-  base_dir: cache
-reporting:
-  type: file
-  base_dir: logs
-extract_graph:
-  model_id: default_chat_model
-embed_text:
-  model_id: default_embedding_model
-community_reports:
-  model_id: default_chat_model
-"""
-
-# Output parquet tables local_search needs (CONFIRM filenames vs the pinned version).
+# Output parquet tables `local_search` consumes (confirmed against graphrag 3.1.0:
+# the workflows write `<name>.parquet` into output_storage, default base_dir "output").
 _ARTIFACTS = ("entities", "communities", "community_reports", "relationships", "text_units")
 
 
@@ -68,18 +39,22 @@ class MSGraphRAGQAEngine:
     name = "ms_graphrag"
     fidelity = "real-e2e"
 
-    def __init__(self, *, model: str = "gpt-4o-mini"):
+    def __init__(
+        self, *, model: str = "gpt-4o-mini", embedding_model: str = "text-embedding-3-small"
+    ):
         self._model = model
-        self._counter = {"in": 0, "out": 0}
+        self._embedding_model = embedding_model
 
     def _build_config(self, workdir: str):
-        # CONFIRM: load_config import path + that this settings.yaml validates.
+        """Scaffold graphrag's own canonical config for the installed version, then
+        load it. Self-heals across graphrag's fast-moving settings schema."""
+        from graphrag.cli.initialize import initialize_project_at
         from graphrag.config.load_config import load_config
 
         root = Path(workdir)
-        (root / "input").mkdir(parents=True, exist_ok=True)
-        (root / "settings.yaml").write_text(
-            _SETTINGS_YAML.format(model=self._model), encoding="utf-8"
+        # force=True overwrites settings.yaml/prompts; it does not touch input/output.
+        initialize_project_at(
+            root, force=True, model=self._model, embedding_model=self._embedding_model
         )
         return load_config(root)
 
@@ -89,7 +64,9 @@ class MSGraphRAGQAEngine:
         t0 = time.perf_counter()
         workdir = tempfile.mkdtemp(prefix="msgraphrag_")
         cfg = self._build_config(workdir)
+        # Default input config is text files under input_storage base_dir "input".
         in_dir = Path(workdir) / "input"
+        in_dir.mkdir(parents=True, exist_ok=True)
         for doc in corpus.documents:
             (in_dir / f"{doc.id}.txt").write_text(doc.text, encoding="utf-8")
         asyncio.run(api.build_index(config=cfg))  # reads input/, writes output/*.parquet
@@ -106,7 +83,6 @@ class MSGraphRAGQAEngine:
         t0 = time.perf_counter()
         out = handle["output_dir"]
         arts = {name: pd.read_parquet(out / f"{name}.parquet") for name in _ARTIFACTS}
-        # CONFIRM local_search's exact param list against the pinned version.
         resp, _ctx = asyncio.run(
             api.local_search(
                 config=handle["config"],
