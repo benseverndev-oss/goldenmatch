@@ -22,11 +22,27 @@ exposed as the **opt-in subpath** `goldenmatch/core/autoconfig-wasm`.
   vectors into `tests/parity/fixtures/autoconfig/`.
 - **Cross-surface parity gate:** `tests/parity/autoconfig-core.parity.test.ts` runs the
   same golden vectors as Rust (`tests/golden.rs`) + Python — 92 tests, byte-identical.
-- **Still divergent (E3, not yet done):** the existing `profiler.ts` (`ColumnType` uses
-  `id`/`text`, lacks `address`/`description`) and `autoconfigPlannerRules.ts` (6 rules vs
-  the core's 8) are NOT yet rerouted through the wasm core. The loader is in place and
-  parity-proven; rerouting the existing planner/classifier internals to call it (and
-  reconciling those vocabularies) is the next step.
+- **Opt-in backend, pure-TS default + fallback (the E3 posture, mirrors Python's default-OFF
+  native gate).** The always-on planner/classifier reach the wasm through a tiny LEAN
+  registry `src/core/autoconfigWasmBackend.ts` (`get/setAutoconfigWasmBackend`,
+  `isAutoconfigWasmEnabled`) that `import type`s from the heavy loader (erased — zero bundle
+  cost). Importing the heavy `goldenmatch/core/autoconfig-wasm` subpath and calling
+  **`enableAutoconfigWasm()`** registers the backend; until then `applyPlannerRules` runs the
+  pure-TS rules. **Why opt-in, not a hard reroute:** statically importing the loader into the
+  main `core` graph bloats `core/index` 734KB → 2.4MB (the inlined wasm). The registry keeps
+  default bundles lean (no wasm); only subpath importers pay the ~1.7MB. `disableAutoconfigWasm()`
+  reverts (test isolation).
+- **Planner reroute DONE (E3, planner half).** `autoconfigPlanner.ts::applyPlannerRules`
+  prefers the registered wasm backend, else the TS rule table (kept as the faithful-port
+  fallback — NOT deleted). Equivalence proven in
+  `tests/parity/autoconfig-wasm-planner-equivalence.test.ts` (wasm plan ≡ pure-TS plan on
+  every Python fixture ⇒ TS rules ≡ wasm ≡ Python).
+- **Classifier reroute STILL pending (E3, classifier half).** `profiler.ts` still uses its
+  hand-written heuristics with the `ColumnType` vocab (`id`/`text`, lacks `address`/`description`).
+  Rerouting it through `backend.classifyColumns` needs a core-13 ↔ TS-11 vocab adapter
+  (`identifier`↔`id`, `string`↔`text`, and a home for `address`/`description`) and updates to
+  every `inferredType` consumer (`autoconfig.ts`, `node/a2a|mcp/server.ts`). Tracked as the
+  next step; the loader + backend registry are the seam it will use.
 
 ## Wave history
 | npm | Python parity | Headline |

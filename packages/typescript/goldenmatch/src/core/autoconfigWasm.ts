@@ -26,6 +26,10 @@ import type {
   ExecutionPlan,
   SpillThreshold,
 } from "./executionPlan.js";
+import {
+  setAutoconfigWasmBackend,
+  disableAutoconfigWasm,
+} from "./autoconfigWasmBackend.js";
 
 // ---------------------------------------------------------------------------
 // Public types (camelCase mirror of the core's serde shapes)
@@ -259,3 +263,25 @@ export function classifyColumnsRawJson(colsJson: string): string {
   ensureInit();
   return autoconfig_classify_columns(colsJson);
 }
+
+// ---------------------------------------------------------------------------
+// Opt-in enable: register this wasm core as the backend for the always-on
+// planner/classifier. Importing THIS module is what pays the ~1.7 MB wasm cost
+// (it statically embeds the base64); the main `goldenmatch/core` graph only
+// touches the lean registry, so default bundles carry no wasm. Sync because the
+// bytes are inlined + `initSync` is synchronous (no async enable needed, unlike
+// the runtime-loaded score-wasm backend).
+// ---------------------------------------------------------------------------
+
+/**
+ * Enable the shared wasm decision core for `applyPlannerRules` (and, once it's
+ * rerouted, the column classifier). After this call, auto-config planning is
+ * byte-parity with Python/Rust. Pure-TS stays the default until this is called;
+ * `disableAutoconfigWasm()` reverts.
+ */
+export function enableAutoconfigWasm(): void {
+  ensureInit();
+  setAutoconfigWasmBackend({ decidePlan, classifyColumns });
+}
+
+export { disableAutoconfigWasm };
