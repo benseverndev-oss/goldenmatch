@@ -4,4 +4,10 @@ pub mod classify;
 pub mod planner;
 #[cfg(feature = "arrow")]
 pub mod profile;
-// Function re-exports (decide_plan, classify_columns) are ADDED in A3 / B4.
+
+// Layer 1 re-exports (A3)
+pub use planner::{
+    auto_chunk_size, decide_plan, BackendName, Capabilities, ClusteringStrategy,
+    ExecutionPlan, PlannerInput, RuntimeProfile, SpillThreshold,
+};
+// classify_columns re-export is ADDED in Stage B (Layer 2).
