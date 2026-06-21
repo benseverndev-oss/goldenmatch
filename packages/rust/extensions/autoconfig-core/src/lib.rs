@@ -10,4 +10,5 @@ pub use planner::{
     auto_chunk_size, decide_plan, BackendName, Capabilities, ClusteringStrategy,
     ExecutionPlan, PlannerInput, RuntimeProfile, SpillThreshold,
 };
-// classify_columns re-export is ADDED in Stage B (Layer 2).
+// Layer 2 re-exports (B4)
+pub use classify::{classify_columns, ColType, ColumnProfile, ColumnStats};
