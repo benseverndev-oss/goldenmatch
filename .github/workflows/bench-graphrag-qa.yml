@@ -32,7 +32,7 @@ jobs:
           python-version: "3.12"
       - name: Install goldenmatch + native engine wheel + goldengraph + datasets
         run: |
-          python -m pip install --upgrade pip maturin pytest goldenmatch datasets
+          python -m pip install --upgrade pip maturin pytest goldenmatch datasets openai
           maturin build --release \
             -m packages/rust/extensions/goldengraph-native/Cargo.toml --out dist
           python -m pip install dist/*.whl
@@ -67,7 +67,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install lightrag + goldenmatch + datasets (isolated)
-        run: python -m pip install --upgrade pip pytest numpy "lightrag-hku" goldenmatch datasets
+        run: python -m pip install --upgrade pip pytest numpy "lightrag-hku" goldenmatch datasets openai
       - name: Run LightRAG end-to-end (real LLM, budget-capped)
         working-directory: packages/python/goldenmatch/benchmarks/er-kg-bench
         env:
