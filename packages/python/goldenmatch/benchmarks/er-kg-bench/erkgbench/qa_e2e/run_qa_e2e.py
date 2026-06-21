@@ -103,6 +103,14 @@ def main(argv: list[str] | None = None) -> int:
         f"wrote {out_md} ({result['n_answered']}/{result['n_questions']} answered, "
         f"${result['cost_usd']})"
     )
+    # Echo the head-to-head scores so the CI job log carries them without an
+    # artifact download (answer_match is the correctness signal; EM reads ~0 on
+    # free-text generative answers).
+    print(
+        f"  scores[{result['engine']}]: answer_match={result['answer_match']} "
+        f"token_f1={result['token_f1']} exact_match={result['exact_match']} "
+        f"support_recall={result['support_recall']}"
+    )
     return 0
 
 

@@ -57,10 +57,23 @@ def test_run_engine_scores_and_records_cost():
     res = run_engine(_MockEngine(), _toy_corpus(), model="gpt-4o-mini", budget_usd=25.0)
     assert res["engine"] == "mock"
     assert res["n_answered"] == 1
+    assert res["answer_match"] == 1.0
     assert res["exact_match"] == 1.0
     assert res["support_recall"] == 1.0
     assert res["cost_usd"] > 0.0
     assert res["budget_exhausted"] is False
+
+
+def test_run_engine_answer_match_scores_free_text_when_em_misses():
+    # a generative answer that NAMES the gold but isn't string-equal: answer_match
+    # credits it (1.0), exact_match does not (0.0) -- the wiring this PR adds.
+    engine = _MockEngine(answer_text="Following the chain, the answer is Ada.")
+    res = run_engine(engine, _toy_corpus(), model="gpt-4o-mini", budget_usd=25.0)
+    assert res["answer_match"] == 1.0
+    assert res["exact_match"] == 0.0
+    # decay curve is driven by answer_match (correctness by hop), so the 1-hop
+    # question registers as correct.
+    assert res["decay_curve"] == {1: 1.0}
 
 
 def test_run_engine_stops_at_budget_cap():
