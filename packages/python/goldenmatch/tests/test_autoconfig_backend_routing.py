@@ -32,7 +32,15 @@ def _native_off(monkeypatch):
     (bucket when the native block-scorer is enabled, else polars-direct). Pin it
     OFF so these routing assertions are deterministic regardless of whether the
     native ext is built in the test env. Bucket-branch coverage lives in
-    test_autoconfig_planner_rules.py."""
+    test_autoconfig_planner_rules.py.
+
+    ``GOLDENMATCH_NATIVE=0`` forces the pure-Python path globally -- this is the
+    load-bearing pin: it makes ``native_enabled(...)`` return False for EVERY
+    component, so both the pure-Python ``_scoring_backend()`` AND the native
+    ``autoconfig`` dispatch (gated-on since 2026-06-21) resolve to polars-direct.
+    The ``pr.native_enabled`` monkeypatch alone only covered the pure-Python rule
+    path, not the native planner dispatch's capability probe."""
+    monkeypatch.setenv("GOLDENMATCH_NATIVE", "0")
     import goldenmatch.core.autoconfig_planner_rules as pr
     monkeypatch.setattr(pr, "native_enabled", lambda component: False)
 

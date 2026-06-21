@@ -77,6 +77,26 @@ except Exception:  # noqa: BLE001 - any import/load failure falls back below
 #     dispatch telemetry, with no output change. Bench: kernel not-slower
 #     (1.44x faster per-pair) -- the measure-first gate in the spike.
 #
+# Signed off 2026-06-21 (autoconfig native core -- a SOURCE-OF-TRUTH/consistency
+# flip, NOT a perf one; the rest of this list is perf-motivated):
+#   - autoconfig: the Layer-1 planner (autoconfig_decide_plan) + Layer-2 column
+#     classifier (autoconfig_classify_columns) -- the deterministic auto-config
+#     decision logic, ported to the pyo3-free goldenmatch-autoconfig-core crate
+#     and shared verbatim by the Python wheel AND the TS port (via wasm). Output
+#     is BYTE-IDENTICAL to the pure-Python oracle: 88 golden vectors (49 planner
+#     + 39 classifier) generated from pure Python and asserted in
+#     tests/test_autoconfig_native_parity.py (+ the Rust tests/golden.rs and the
+#     TS tests/parity/autoconfig-core.parity.test.ts), so gating native on never
+#     changes a committed config. Distinct rationale from the perf entries above:
+#     autoconfig runs ONCE per auto_configure_df (not a per-row hot loop), so this
+#     is NOT a wall-clock-lift decision -- it makes the compiled core the single
+#     canonical implementation across Python/Rust/TS (repo direction: native is
+#     the source of truth wherever the kernel is byte-identical). Published-wheel
+#     skew is handled gracefully: both dispatch sites guard with
+#     `hasattr(_nm, "autoconfig_decide_plan"/"autoconfig_classify_columns")`, so a
+#     wheel that predates the symbols (PyPI 0.1.6) falls through to pure Python
+#     until goldenmatch-native 0.1.7 (this change bumps it) is published.
+#
 # NOT yet gated on (ships default-off; reachable via GOLDENMATCH_NATIVE=1):
 #   - pprl_bloom: the CLK bloom-filter hash loop (bloom_clk_batch). Python does
 #     all preprocessing (lower/strip/pad/balanced-salt) and the kernel only
@@ -95,7 +115,15 @@ except Exception:  # noqa: BLE001 - any import/load failure falls back below
 #     byte-identical (deterministic, golden-vector verified), so the flip is a
 #     perf/wheel-republish decision, not an accuracy one.
 _GATED_ON: frozenset[str] = frozenset(
-    {"clustering", "block_scoring", "pairs", "featurize", "hashing", "field_scoring"}
+    {
+        "clustering",
+        "block_scoring",
+        "pairs",
+        "featurize",
+        "hashing",
+        "field_scoring",
+        "autoconfig",
+    }
 )
 
 
