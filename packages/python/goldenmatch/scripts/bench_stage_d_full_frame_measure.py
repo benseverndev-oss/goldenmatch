@@ -15,10 +15,9 @@ import os
 import time
 
 import polars as pl
-
-from goldenmatch.core.blocker import build_blocks, measure_blocking_profile
-from goldenmatch.core._native_loader import native_module
 from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig, GoldenMatchConfig
+from goldenmatch.core._native_loader import native_module
+from goldenmatch.core.blocker import measure_blocking_profile
 
 _SURNAMES = [
     "smith", "jones", "brown", "davis", "wilson", "taylor", "thomas", "moore",
