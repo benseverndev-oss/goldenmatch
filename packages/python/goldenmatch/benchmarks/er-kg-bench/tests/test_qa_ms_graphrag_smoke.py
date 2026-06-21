@@ -29,7 +29,15 @@ def test_ms_graphrag_config_is_valid_for_installed_version(tmp_path):
     populated. No LLM, no network. Guards the version-schema drift that silently
     blanked the models when a hand-written 2.x settings.yaml met graphrag 3.x."""
     eng = MSGraphRAGQAEngine(model="gpt-4o-mini", embedding_model="text-embedding-3-large")
-    cfg = eng._build_config(str(tmp_path))
+    # _build_config os.chdir()s into the project dir (graphrag's load_config does);
+    # restore CWD so the chdir doesn't leak into the rest of the test session.
+    import os
+
+    cwd = os.getcwd()
+    try:
+        cfg = eng._build_config(str(tmp_path))
+    finally:
+        os.chdir(cwd)
 
     assert cfg.completion_models, "no completion model configured (schema drift?)"
     assert cfg.embedding_models, "no embedding model configured (schema drift?)"
