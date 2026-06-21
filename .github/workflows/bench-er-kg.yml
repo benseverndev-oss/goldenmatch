@@ -36,6 +36,7 @@ permissions:
 env:
   BENCH_DIR: packages/python/goldenmatch/benchmarks/er-kg-bench
   GOLDENMATCH_AUTOCONFIG_MEMORY: "0"  # no cross-run memory writes in CI
+  GOLDENMATCH_ANALYTICS: "0"
 
 jobs:
   bench:
@@ -55,6 +56,9 @@ jobs:
         run: |
           uv sync --all-packages
           uv pip install -e packages/python/goldenmatch
+          # SP6: the goldengraph engine row in run.py's table (excluded from the
+          # uv workspace like goldenmatch-kg, so install it explicitly).
+          uv pip install -e packages/python/goldengraph
 
       - name: Install optional real-framework deps
         # uv-created venvs ship no `pip`, so use uv's pip (same as the sync step's
@@ -205,4 +209,43 @@ jobs:
           path: |
             ${{ env.BENCH_DIR }}/demo/demo.html
             ${{ env.BENCH_DIR }}/demo/demo.snapshot.json
+          if-no-files-found: ignore
+
+  # SP6 Half 2: the DETERMINISTIC fact-completeness gate. Light + key-free +
+  # embedder-free (so it never flakes on HF 429s like the bench job) -- goldengraph
+  # must beat the exact-match floor by a margin (the (ER_accuracy)^hops cause,
+  # measured). The goldengraph adapter is pure Python, so no maturin/native build.
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        run: pip install uv
+      - name: Sync workspace + editable goldenmatch + goldengraph
+        run: |
+          uv sync --all-packages
+          uv pip install -e packages/python/goldenmatch
+          uv pip install -e packages/python/goldengraph
+      - name: SP6 unit tests (Node.facts, adapter parity, QA loader/eval/frameworks)
+        working-directory: ${{ env.BENCH_DIR }}
+        run: |
+          "$GITHUB_WORKSPACE/.venv/bin/python" -m pytest \
+            demo/test_demo.py \
+            tests/test_goldengraph_adapter.py \
+            tests/test_qa_loader.py \
+            tests/test_qa_eval.py \
+            tests/test_qa_frameworks.py -q
+      - name: Gate -- goldengraph fact-completeness beats the exact-match floor
+        working-directory: ${{ env.BENCH_DIR }}
+        run: "$GITHUB_WORKSPACE/.venv/bin/python -m erkgbench.qa_eval --assert-margin 0.10"
+      - name: Upload RESULTS_QA.md
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: er-kg-results-qa
+          path: ${{ env.BENCH_DIR }}/results/RESULTS_QA.md
           if-no-files-found: ignore

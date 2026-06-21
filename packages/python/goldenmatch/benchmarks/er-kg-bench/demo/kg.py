@@ -17,6 +17,7 @@ class Node:
     type: str
     context: str
     record_indices: tuple[int, ...]
+    facts: tuple[str, ...] = ()       # facts attached to this entity's records (SP6)
 
 
 @dataclass(frozen=True)
@@ -35,15 +36,25 @@ def build_kg(
     mentions: dict[int, str],
     types: dict[int, str],
     contexts: dict[int, str],
+    facts: dict[int, list[str]] | None = None,
 ) -> KG:
     """Turn a (complete) partition into entity nodes. type/context are shared
-    within a real entity; taken deterministically from the min-index record."""
+    within a real entity; taken deterministically from the min-index record.
+
+    ``facts`` (SP6) maps a record index -> facts attached to that record (e.g.
+    learned from the document that surface form came from). Each node unions the
+    facts of its members, so a RESOLVED node carries every surface form's facts
+    while an under-merged split keeps them on separate nodes. ``None`` -> no facts
+    (the demo's prior behaviour, unchanged)."""
     nodes: list[Node] = []
     for cluster in partition:
         idxs = sorted(cluster)
         if not idxs:
             continue
         names = tuple(sorted({mentions[i] for i in idxs}))
+        node_facts: tuple[str, ...] = ()
+        if facts is not None:
+            node_facts = tuple(sorted({f for i in idxs for f in facts.get(i, [])}))
         head = idxs[0]
         nodes.append(
             Node(
@@ -52,6 +63,7 @@ def build_kg(
                 type=types[head],
                 context=contexts[head],
                 record_indices=tuple(idxs),
+                facts=node_facts,
             )
         )
     nodes.sort(key=lambda n: n.node_id)

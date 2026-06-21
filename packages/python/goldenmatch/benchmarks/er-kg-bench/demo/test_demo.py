@@ -76,6 +76,20 @@ def test_build_kg_resolved_one_node_all_names():
     assert nato.context == "military alliance"
 
 
+def test_build_kg_unions_facts_resolved_vs_split():
+    facts = {3: ["founded 1949"], 4: ["HQ Brussels"], 5: ["30 members"]}
+    # resolved: all three NATO forms in one node -> all facts co-located
+    g = kg.build_kg([[3, 4, 5], [9]], _MEN, _TYP, _CTX, facts=facts)
+    nato = next(n for n in g.nodes if set(n.record_indices) & {3, 4, 5})
+    assert set(nato.facts) == {"founded 1949", "HQ Brussels", "30 members"}
+    # split: each form its own node -> facts stranded on separate nodes
+    g2 = kg.build_kg([[3], [4], [5], [9]], _MEN, _TYP, _CTX, facts=facts)
+    n3 = next(n for n in g2.nodes if n.record_indices == (3,))
+    assert set(n3.facts) == {"founded 1949"}
+    # default (no facts arg) -> empty, prior behaviour unchanged
+    assert kg.build_kg([[3, 4, 5]], _MEN, _TYP, _CTX).nodes[0].facts == ()
+
+
 def test_retrieve_lands_on_query_node_and_bounds_distractors():
     part = [[3, 4, 5], [9]]
     g = kg.build_kg(part, _MEN, _TYP, _CTX)
