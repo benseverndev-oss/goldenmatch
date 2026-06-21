@@ -107,11 +107,13 @@ def apply_planner_rules(
         rule's name or a sentinel (``no_rules_registered``,
         ``no_rule_matched``).
     """
-    # Native fast path: only for the production DEFAULT_RULES registry and
-    # when the "autoconfig" component is enabled. Custom rule lists (used in
-    # unit tests) stay on the pure-Python path. "autoconfig" is intentionally
-    # NOT in _GATED_ON yet, so under GOLDENMATCH_NATIVE=auto/unset this block
-    # never fires -- pure Python runs unchanged. Cutover = Task F1.
+    # Native path: only for the production DEFAULT_RULES registry and when the
+    # "autoconfig" component is enabled. Custom rule lists (used in unit tests)
+    # stay on the pure-Python path. As of the source-of-truth cutover (Task F1,
+    # 2026-06-21) "autoconfig" IS in _GATED_ON, so under GOLDENMATCH_NATIVE=auto
+    # this runs whenever the ext carries the symbol -- output is byte-identical
+    # to pure Python (golden-vector parity), and the `hasattr` guard below falls
+    # back to pure Python on a wheel that predates the symbol.
     if native_enabled("autoconfig"):
         _nm = native_module()
         if hasattr(_nm, "autoconfig_decide_plan") and rules is _default_rules():
