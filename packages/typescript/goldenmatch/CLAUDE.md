@@ -39,19 +39,23 @@ exposed as the **opt-in subpath** `goldenmatch/core/autoconfig-wasm`.
   every Python fixture ⇒ TS rules ≡ wasm ≡ Python).
 - **Classifier reroute DONE (E3, classifier half).** `profiler.ts::profileColumn` routes
   through `backend.classifyColumns` when the wasm backend is enabled, else the hand-written
-  heuristic (kept as the fallback). `coreColTypeToTs` maps the core's 13-value vocab onto the
-  profiler's 11-value `ColumnType`: `identifier`→`id`, `string`→`text`, and `address`/
-  `description`→`text` (collapsed into the existing free-text bucket so every `inferredType`
-  consumer — `autoconfig.ts`, `node/a2a|mcp/server.ts` — keeps working WITHOUT widening
-  `ColumnType` or touching those consumers). Unlike the planner, wasm ≠ pure-TS here (different
+  heuristic (kept as the fallback). Unlike the planner, wasm ≠ pure-TS here (different
   classifiers), so there's no equivalence test — the core's correctness is the golden-vector
-  parity; `tests/parity/autoconfig-wasm-classifier.test.ts` guards the wiring + remap (email
-  survives 1:1, `identifier`→`id`, no core-only label leaks, disable reverts). `profiler.ts`
-  `import type`s the loader (erased), value-imports only the lean registry, so `core/index`
-  stays lean (no wasm).
-- **Remaining (optional follow-up):** adopt the full core-13 vocab in `ColumnType` (surface
-  `address`/`description` instead of collapsing to `text`) + the corresponding consumer
-  switches. Not required to route through the core; it's a fidelity upgrade.
+  parity; `tests/parity/autoconfig-wasm-classifier.test.ts` guards the wiring (email survives
+  1:1, `identifier` flows through verbatim, no value outside `ColumnType` leaks, disable
+  reverts). `profiler.ts` `import type`s the loader (erased), value-imports only the lean
+  registry, so `core/index` stays lean (no wasm).
+- **Classifier-vocab lever DONE (E3 follow-up).** `profiler.ts`'s `ColumnType` is now the
+  core's FULL 13-value vocabulary (`email | name | phone | zip | address | geo | identifier |
+  description | numeric | date | string | year | multi_name`) — no `coreColTypeToTs` remap;
+  the wasm path assigns `inferredType = profile.colType` directly. The pure-TS heuristic
+  (`guessTypeByName`/`guessTypeAndConfidence`) gained `address`/`description` name patterns and
+  renamed `id`→`identifier`, `text`→`string` to match. Consumers updated for the new vocab:
+  `autoconfig.ts::classifyColumn` reads `=== "identifier"` and surfaces `address` to its own
+  `token_sort @ 0.8` kind (vs the free-text `@ 0.5`); `node/a2a|mcp/server.ts` fuzzy-suggest
+  matches `string`/`address`/`description` (was `text`). NOTE: `complexityProfile.ts` has a
+  SEPARATE coarser `ColumnType` (`text`/`id-like`/`unknown`, populated from JS `typeof`, used
+  by `autoconfigRules.ts`) — that one is a different layer, untouched by this lever.
 
 ## Wave history
 | npm | Python parity | Headline |
