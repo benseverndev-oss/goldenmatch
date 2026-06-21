@@ -10,24 +10,32 @@ import { getAutoconfigWasmBackend } from "./autoconfigWasmBackend.js";
 // Type-only (erased — no wasm bytes pulled into the bundle). The value path goes
 // through the lean registry above; the heavy loader is only reached when a caller
 // has imported `goldenmatch/core/autoconfig-wasm` and called enableAutoconfigWasm().
-import type { CoreColumnStats, CoreColumnType } from "./autoconfigWasm.js";
+import type { CoreColumnStats } from "./autoconfigWasm.js";
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
+/**
+ * The column vocabulary — now the SAME 13 values as the shared autoconfig core
+ * (`CoreColumnType` in autoconfigWasm.ts), so the wasm classifier path needs no
+ * remap. Renamed from the legacy port (`id`→`identifier`, `text`→`string`) and
+ * widened with `address`/`description` (free-text shapes the core distinguishes).
+ */
 export type ColumnType =
   | "email"
+  | "name"
   | "phone"
   | "zip"
-  | "date"
-  | "year"
-  | "name"
-  | "multi_name"
+  | "address"
   | "geo"
-  | "id"
+  | "identifier"
+  | "description"
   | "numeric"
-  | "text";
+  | "date"
+  | "string"
+  | "year"
+  | "multi_name";
 
 export interface ColumnProfile {
   readonly name: string;
@@ -108,7 +116,10 @@ function guessTypeByName(columnName: string): ColumnType | null {
   if (/date|created|modified|updated|_at$|birth|dob/i.test(lname)) return "date";
   if (/^(city|state|county|country|region|province)/i.test(lname)) return "geo";
   if (/city_desc|state_cd|country_code|state_code/i.test(lname)) return "geo";
-  if (/^id$|_id$|uuid|guid/i.test(lname)) return "id";
+  if (/address|street|^addr|_addr/i.test(lname)) return "address";
+  if (/description|^desc|_desc|notes?|comment|summary|remarks?|bio|about/i.test(lname))
+    return "description";
+  if (/^id$|_id$|uuid|guid/i.test(lname)) return "identifier";
   if (/name|first|last|full_name|surname/i.test(lname)) return "name";
   return null;
 }
@@ -210,7 +221,7 @@ function guessTypeAndConfidence(
   values: readonly string[],
   columnName: string,
 ): { type: ColumnType; confidence: number } {
-  if (values.length === 0) return { type: "text", confidence: 0.3 };
+  if (values.length === 0) return { type: "string", confidence: 0.3 };
 
   const nameType = guessTypeByName(columnName);
   const dataType = guessTypeByData(values);
@@ -219,16 +230,18 @@ function guessTypeAndConfidence(
     if (nameType === dataType) {
       return { type: nameType, confidence: 0.9 };
     }
-    // Disagreement: name heuristics are authoritative for geo/date/id/zip/email/name;
+    // Disagreement: name heuristics are authoritative for the name-derived types;
     // data heuristic wins otherwise. Confidence 0.7 either way (only one "source of truth").
     const nameAuthoritative =
       nameType === "date" ||
       nameType === "year" ||
       nameType === "geo" ||
-      nameType === "id" ||
+      nameType === "identifier" ||
       nameType === "email" ||
       nameType === "zip" ||
-      nameType === "name";
+      nameType === "name" ||
+      nameType === "address" ||
+      nameType === "description";
     return {
       type: nameAuthoritative ? nameType : dataType,
       confidence: 0.7,
@@ -236,31 +249,7 @@ function guessTypeAndConfidence(
   }
   if (nameType !== null) return { type: nameType, confidence: 0.7 };
   if (dataType !== null) return { type: dataType, confidence: 0.7 };
-  return { type: "text", confidence: 0.3 };
-}
-
-/**
- * Map the shared core's 13-value column vocabulary back onto this profiler's
- * 11-value `ColumnType`. The core adds `address`/`description` (free-text shapes
- * the hand-written TS heuristic never emitted) and renames `id`→`identifier` /
- * `text`→`string`. We collapse `address`/`description` to `text` (the existing
- * free-text bucket) so every downstream `inferredType` consumer keeps working
- * unchanged — adopting the full core vocab (and the address/description
- * distinction) is a follow-up, not required to route through the core.
- */
-function coreColTypeToTs(core: CoreColumnType): ColumnType {
-  switch (core) {
-    case "identifier":
-      return "id";
-    case "string":
-    case "address":
-    case "description":
-      return "text";
-    default:
-      // email / name / phone / zip / geo / numeric / date / year / multi_name
-      // are shared verbatim between the two vocabularies.
-      return core;
-  }
+  return { type: "string", confidence: 0.3 };
 }
 
 function profileColumn(name: string, rawValues: readonly unknown[]): ColumnProfile {
@@ -315,7 +304,8 @@ function profileColumn(name: string, rawValues: readonly unknown[]): ColumnProfi
     };
     const profile = wasm.classifyColumns([stats])[0];
     if (profile !== undefined) {
-      inferredType = coreColTypeToTs(profile.colType);
+      // ColumnType is now the SAME 13-value vocab as CoreColumnType — assign directly.
+      inferredType = profile.colType;
       confidence = profile.confidence;
     } else {
       ({ type: inferredType, confidence } = guessTypeAndConfidence(

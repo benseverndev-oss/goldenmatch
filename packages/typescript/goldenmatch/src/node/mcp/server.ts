@@ -704,7 +704,12 @@ export async function handleTool(
             if (col.cardinalityRatio >= 0.5) exact.push(col.name);
           } else if (col.inferredType === "geo") {
             blocking.push(col.name);
-          } else if (col.inferredType === "text" && col.avgLength > 4) {
+          } else if (
+            (col.inferredType === "string" ||
+              col.inferredType === "address" ||
+              col.inferredType === "description") &&
+            col.avgLength > 4
+          ) {
             fuzzy[col.name] = 0.8;
           }
         }

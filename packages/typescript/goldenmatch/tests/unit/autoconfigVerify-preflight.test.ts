@@ -359,7 +359,7 @@ describe("preflight Check 6: weight_confidence", () => {
           totalCount: 1,
           distinctCount: 1,
           cardinalityRatio: 1,
-          inferredType: "text",
+          inferredType: "string",
           avgLength: 1,
           maxLength: 1,
           sampleValues: ["x"],
