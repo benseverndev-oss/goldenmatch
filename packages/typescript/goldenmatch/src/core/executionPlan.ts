@@ -6,7 +6,16 @@
  * polars-direct path so an unset plan preserves current behavior.
  */
 
-export type BackendName = "polars-direct" | "chunked" | "duckdb" | "ray";
+// "bucket" is included for cross-surface completeness with the shared autoconfig
+// core (which can emit it when a native bucket kernel is available). The TS port
+// never sets `bucketAvailable`, so the core never returns "bucket" here, but the
+// type stays a superset of the core's BackendName so wasm output is assignable.
+export type BackendName =
+  | "polars-direct"
+  | "bucket"
+  | "chunked"
+  | "duckdb"
+  | "ray";
 export type ClusteringStrategy =
   | "in_memory"
   | "partitioned_union_find"

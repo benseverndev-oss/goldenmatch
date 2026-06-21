@@ -1,0 +1,1227 @@
+[
+  {
+    "input": {
+      "n_rows_full": 0,
+      "estimated_pair_count": 0,
+      "runtime": {
+        "available_ram_gb": 64.0,
+        "cpu_count": 16,
+        "disk_free_gb": 500.0
+      },
+      "caps": {
+        "bucket_available": false,
+        "ray_available": false,
+        "ray_auto_select": false,
+        "user_backend": null
+      }
+    },
+    "expected": {
+      "backend": "polars-direct",
+      "chunk_size": null,
+      "max_workers": 1,
+      "pair_spill_threshold": null,
+      "clustering_strategy": "in_memory",
+      "rule_name": "plan_pathological"
+    }
+  },
+  {
+    "input": {
+      "n_rows_full": 1,
+      "estimated_pair_count": 0,
+      "runtime": {
+        "available_ram_gb": 64.0,
+        "cpu_count": 16,
+        "disk_free_gb": 500.0
+      },
+      "caps": {
+        "bucket_available": false,
+        "ray_available": false,
+        "ray_auto_select": false,
+        "user_backend": null
+      }
+    },
+    "expected": {
+      "backend": "polars-direct",
+      "chunk_size": null,
+      "max_workers": 1,
+      "pair_spill_threshold": null,
+      "clustering_strategy": "in_memory",
+      "rule_name": "plan_pathological"
+    }
+  },
+  {
+    "input": {
+      "n_rows_full": 1,
+      "estimated_pair_count": 0,
+      "runtime": {
+        "available_ram_gb": 8.0,
+        "cpu_count": 4,
+        "disk_free_gb": 500.0
+      },
+      "caps": {
+        "bucket_available": false,
+        "ray_available": false,
+        "ray_auto_select": false,
+        "user_backend": null
+      }
+    },
+    "expected": {
+      "backend": "polars-direct",
+      "chunk_size": null,
+      "max_workers": 1,
+      "pair_spill_threshold": null,
+      "clustering_strategy": "in_memory",
+      "rule_name": "plan_pathological"
+    }
+  },
+  {
+    "input": {
+      "n_rows_full": 0,
+      "estimated_pair_count": 0,
+      "runtime": {
+        "available_ram_gb": 64.0,
+        "cpu_count": 16,
+        "disk_free_gb": 500.0
+      },
+      "caps": {
+        "bucket_available": true,
+        "ray_available": false,
+        "ray_auto_select": false,
+        "user_backend": null
+      }
+    },
+    "expected": {
+      "backend": "polars-direct",
+      "chunk_size": null,
+      "max_workers": 1,
+      "pair_spill_threshold": null,
+      "clustering_strategy": "in_memory",
+      "rule_name": "plan_pathological"
+    }
+  },
+  {
+    "input": {
+      "n_rows_full": 50000,
+      "estimated_pair_count": 1000000,
+      "runtime": {
+        "available_ram_gb": 64.0,
+        "cpu_count": 16,
+        "disk_free_gb": 500.0
+      },
+      "caps": {
+        "bucket_available": false,
+        "ray_available": false,
+        "ray_auto_select": false,
+        "user_backend": null
+      }
+    },
+    "expected": {
+      "backend": "polars-direct",
+      "chunk_size": null,
+      "max_workers": 4,
+      "pair_spill_threshold": null,
+      "clustering_strategy": "in_memory",
+      "rule_name": "plan_selected_simple"
+    }
+  },
+  {
+    "input": {
+      "n_rows_full": 50000,
+      "estimated_pair_count": 1000000,
+      "runtime": {
+        "available_ram_gb": 64.0,
+        "cpu_count": 16,
+        "disk_free_gb": 500.0
+      },
+      "caps": {
+        "bucket_available": true,
+        "ray_available": false,
+        "ray_auto_select": false,
+        "user_backend": null
+      }
+    },
+    "expected": {
+      "backend": "bucket",
+      "chunk_size": null,
+      "max_workers": 4,
+      "pair_spill_threshold": null,
+      "clustering_strategy": "in_memory",
+      "rule_name": "plan_selected_simple"
+    }
+  },
+  {
+    "input": {
+      "n_rows_full": 99999,
+      "estimated_pair_count": 49999999,
+      "runtime": {
+        "available_ram_gb": 64.0,
+        "cpu_count": 16,
+        "disk_free_gb": 500.0
+      },
+      "caps": {
+        "bucket_available": true,
+        "ray_available": false,
+        "ray_auto_select": false,
+        "user_backend": null
+      }
+    },
+    "expected": {
+      "backend": "bucket",
+      "chunk_size": null,
+      "max_workers": 4,
+      "pair_spill_threshold": null,
+      "clustering_strategy": "in_memory",
+      "rule_name": "plan_selected_simple"
+    }
+  },
+  {
+    "input": {
+      "n_rows_full": 99999,
+      "estimated_pair_count": 49999999,
+      "runtime": {
+        "available_ram_gb": 64.0,
+        "cpu_count": 2,
+        "disk_free_gb": 500.0
+      },
+      "caps": {
+        "bucket_available": false,
+        "ray_available": false,
+        "ray_auto_select": false,
+        "user_backend": null
+      }
+    },
+    "expected": {
+      "backend": "polars-direct",
+      "chunk_size": null,
+      "max_workers": 2,
+      "pair_spill_threshold": null,
+      "clustering_strategy": "in_memory",
+      "rule_name": "plan_selected_simple"
+    }
+  },
+  {
+    "input": {
+      "n_rows_full": 2,
+      "estimated_pair_count": 1,
+      "runtime": {
+        "available_ram_gb": 64.0,
+        "cpu_count": 16,
+        "disk_free_gb": 500.0
+      },
+      "caps": {
+        "bucket_available": false,
+        "ray_available": false,
+        "ray_auto_select": false,
+        "user_backend": null
+      }
+    },
+    "expected": {
+      "backend": "polars-direct",
+      "chunk_size": null,
+      "max_workers": 4,
+      "pair_spill_threshold": null,
+      "clustering_strategy": "in_memory",
+      "rule_name": "plan_selected_simple"
+    }
+  },
+  {
+    "input": {
+      "n_rows_full": 10000,
+      "estimated_pair_count": 500000,
+      "runtime": {
+        "available_ram_gb": 64.0,
+        "cpu_count": 2,
+        "disk_free_gb": 500.0
+      },
+      "caps": {
+        "bucket_available": false,
+        "ray_available": false,
+        "ray_auto_select": false,
+        "user_backend": null
+      }
+    },
+    "expected": {
+      "backend": "polars-direct",
+      "chunk_size": null,
+      "max_workers": 2,
+      "pair_spill_threshold": null,
+      "clustering_strategy": "in_memory",
+      "rule_name": "plan_selected_simple"
+    }
+  },
+  {
+    "input": {
+      "n_rows_full": 10000,
+      "estimated_pair_count": 500000,
+      "runtime": {
+        "available_ram_gb": 64.0,
+        "cpu_count": 4,
+        "disk_free_gb": 500.0
+      },
+      "caps": {
+        "bucket_available": false,
+        "ray_available": false,
+        "ray_auto_select": false,
+        "user_backend": null
+      }
+    },
+    "expected": {
+      "backend": "polars-direct",
+      "chunk_size": null,
+      "max_workers": 4,
+      "pair_spill_threshold": null,
+      "clustering_strategy": "in_memory",
+      "rule_name": "plan_selected_simple"
+    }
+  },
+  {
+    "input": {
+      "n_rows_full": 100000,
+      "estimated_pair_count": 1000000,
+      "runtime": {
+        "available_ram_gb": 64.0,
+        "cpu_count": 16,
+        "disk_free_gb": 500.0
+      },
+      "caps": {
+        "bucket_available": false,
+        "ray_available": false,
+        "ray_auto_select": false,
+        "user_backend": null
+      }
+    },
+    "expected": {
+      "backend": "polars-direct",
+      "chunk_size": null,
+      "max_workers": 16,
+      "pair_spill_threshold": null,
+      "clustering_strategy": "in_memory",
+      "rule_name": "plan_selected_fast_box"
+    }
+  },
+  {
+    "input": {
+      "n_rows_full": 100000,
+      "estimated_pair_count": 1000000,
+      "runtime": {
+        "available_ram_gb": 64.0,
+        "cpu_count": 16,
+        "disk_free_gb": 500.0
+      },
+      "caps": {
+        "bucket_available": true,
+        "ray_available": false,
+        "ray_auto_select": false,
+        "user_backend": null
+      }
+    },
+    "expected": {
+      "backend": "bucket",
+      "chunk_size": null,
+      "max_workers": 16,
+      "pair_spill_threshold": null,
+      "clustering_strategy": "in_memory",
+      "rule_name": "plan_selected_fast_box"
+    }
+  },
+  {
+    "input": {
+      "n_rows_full": 200000,
+      "estimated_pair_count": 10000000,
+      "runtime": {
+        "available_ram_gb": 32.0,
+        "cpu_count": 8,
+        "disk_free_gb": 500.0
+      },
+      "caps": {
+        "bucket_available": false,
+        "ray_available": false,
+        "ray_auto_select": false,
+        "user_backend": null
+      }
+    },
+    "expected": {
+      "backend": "polars-direct",
+      "chunk_size": null,
+      "max_workers": 8,
+      "pair_spill_threshold": null,
+      "clustering_strategy": "in_memory",
+      "rule_name": "plan_selected_fast_box"
+    }
+  },
+  {
+    "input": {
+      "n_rows_full": 500000,
+      "estimated_pair_count": 40000000,
+      "runtime": {
+        "available_ram_gb": 48.0,
+        "cpu_count": 8,
+        "disk_free_gb": 500.0
+      },
+      "caps": {
+        "bucket_available": false,
+        "ray_available": false,
+        "ray_auto_select": false,
+        "user_backend": null
+      }
+    },
+    "expected": {
+      "backend": "polars-direct",
+      "chunk_size": null,
+      "max_workers": 8,
+      "pair_spill_threshold": null,
+      "clustering_strategy": "in_memory",
+      "rule_name": "plan_selected_fast_box"
+    }
+  },
+  {
+    "input": {
+      "n_rows_full": 100000,
+      "estimated_pair_count": 1000000,
+      "runtime": {
+        "available_ram_gb": 48.0,
+        "cpu_count": 4,
+        "disk_free_gb": 500.0
+      },
+      "caps": {
+        "bucket_available": false,
+        "ray_available": false,
+        "ray_auto_select": false,
+        "user_backend": null
+      }
+    },
+    "expected": {
+      "backend": "polars-direct",
+      "chunk_size": null,
+      "max_workers": 4,
+      "pair_spill_threshold": null,
+      "clustering_strategy": "in_memory",
+      "rule_name": "plan_selected_fast_box"
+    }
+  },
+  {
+    "input": {
+      "n_rows_full": 200000,
+      "estimated_pair_count": 100000,
+      "runtime": {
+        "available_ram_gb": 16.0,
+        "cpu_count": 8,
+        "disk_free_gb": 500.0
+      },
+      "caps": {
+        "bucket_available": true,
+        "ray_available": false,
+        "ray_auto_select": false,
+        "user_backend": null
+      }
+    },
+    "expected": {
+      "backend": "bucket",
+      "chunk_size": null,
+      "max_workers": 8,
+      "pair_spill_threshold": null,
+      "clustering_strategy": "in_memory",
+      "rule_name": "plan_selected_bucket_suggested"
+    }
+  },
+  {
+    "input": {
+      "n_rows_full": 750000,
+      "estimated_pair_count": 100000,
+      "runtime": {
+        "available_ram_gb": 16.0,
+        "cpu_count": 8,
+        "disk_free_gb": 500.0
+      },
+      "caps": {
+        "bucket_available": true,
+        "ray_available": false,
+        "ray_auto_select": false,
+        "user_backend": null
+      }
+    },
+    "expected": {
+      "backend": "bucket",
+      "chunk_size": null,
+      "max_workers": 8,
+      "pair_spill_threshold": null,
+      "clustering_strategy": "in_memory",
+      "rule_name": "plan_selected_bucket_suggested"
+    }
+  },
+  {
+    "input": {
+      "n_rows_full": 100000,
+      "estimated_pair_count": 5000000,
+      "runtime": {
+        "available_ram_gb": 20.0,
+        "cpu_count": 4,
+        "disk_free_gb": 500.0
+      },
+      "caps": {
+        "bucket_available": true,
+        "ray_available": false,
+        "ray_auto_select": false,
+        "user_backend": null
+      }
+    },
+    "expected": {
+      "backend": "bucket",
+      "chunk_size": null,
+      "max_workers": 4,
+      "pair_spill_threshold": null,
+      "clustering_strategy": "in_memory",
+      "rule_name": "plan_selected_bucket_suggested"
+    }
+  },
+  {
+    "input": {
+      "n_rows_full": 750001,
+      "estimated_pair_count": 100000,
+      "runtime": {
+        "available_ram_gb": 16.0,
+        "cpu_count": 8,
+        "disk_free_gb": 500.0
+      },
+      "caps": {
+        "bucket_available": false,
+        "ray_available": false,
+        "ray_auto_select": false,
+        "user_backend": null
+      }
+    },
+    "expected": {
+      "backend": "polars-direct",
+      "chunk_size": null,
+      "max_workers": 4,
+      "pair_spill_threshold": null,
+      "clustering_strategy": "in_memory",
+      "rule_name": "no_rule_matched"
+    }
+  },
+  {
+    "input": {
+      "n_rows_full": 5000000,
+      "estimated_pair_count": 100000000,
+      "runtime": {
+        "available_ram_gb": 32.0,
+        "cpu_count": 16,
+        "disk_free_gb": 500.0
+      },
+      "caps": {
+        "bucket_available": false,
+        "ray_available": false,
+        "ray_auto_select": false,
+        "user_backend": null
+      }
+    },
+    "expected": {
+      "backend": "chunked",
+      "chunk_size": 1000000,
+      "max_workers": 16,
+      "pair_spill_threshold": "ram",
+      "clustering_strategy": "in_memory",
+      "rule_name": "plan_selected_chunked"
+    }
+  },
+  {
+    "input": {
+      "n_rows_full": 5000000,
+      "estimated_pair_count": 50000000,
+      "runtime": {
+        "available_ram_gb": 16.0,
+        "cpu_count": 8,
+        "disk_free_gb": 500.0
+      },
+      "caps": {
+        "bucket_available": false,
+        "ray_available": false,
+        "ray_auto_select": false,
+        "user_backend": null
+      }
+    },
+    "expected": {
+      "backend": "chunked",
+      "chunk_size": 1000000,
+      "max_workers": 8,
+      "pair_spill_threshold": "ram",
+      "clustering_strategy": "in_memory",
+      "rule_name": "plan_selected_chunked"
+    }
+  },
+  {
+    "input": {
+      "n_rows_full": 10000000,
+      "estimated_pair_count": 4999999999,
+      "runtime": {
+        "available_ram_gb": 64.0,
+        "cpu_count": 16,
+        "disk_free_gb": 500.0
+      },
+      "caps": {
+        "bucket_available": false,
+        "ray_available": false,
+        "ray_auto_select": false,
+        "user_backend": null
+      }
+    },
+    "expected": {
+      "backend": "chunked",
+      "chunk_size": 1000000,
+      "max_workers": 16,
+      "pair_spill_threshold": "ram",
+      "clustering_strategy": "in_memory",
+      "rule_name": "plan_selected_chunked"
+    }
+  },
+  {
+    "input": {
+      "n_rows_full": 5000000,
+      "estimated_pair_count": 200000000,
+      "runtime": {
+        "available_ram_gb": 32.0,
+        "cpu_count": 4,
+        "disk_free_gb": 500.0
+      },
+      "caps": {
+        "bucket_available": false,
+        "ray_available": false,
+        "ray_auto_select": false,
+        "user_backend": null
+      }
+    },
+    "expected": {
+      "backend": "chunked",
+      "chunk_size": 1000000,
+      "max_workers": 4,
+      "pair_spill_threshold": "ram",
+      "clustering_strategy": "in_memory",
+      "rule_name": "plan_selected_chunked"
+    }
+  },
+  {
+    "input": {
+      "n_rows_full": 50000,
+      "estimated_pair_count": 50000000,
+      "runtime": {
+        "available_ram_gb": 32.0,
+        "cpu_count": 8,
+        "disk_free_gb": 500.0
+      },
+      "caps": {
+        "bucket_available": false,
+        "ray_available": false,
+        "ray_auto_select": false,
+        "user_backend": null
+      }
+    },
+    "expected": {
+      "backend": "chunked",
+      "chunk_size": 50000,
+      "max_workers": 8,
+      "pair_spill_threshold": "ram",
+      "clustering_strategy": "in_memory",
+      "rule_name": "plan_selected_chunked"
+    }
+  },
+  {
+    "input": {
+      "n_rows_full": 50000000,
+      "estimated_pair_count": 6000000000,
+      "runtime": {
+        "available_ram_gb": 64.0,
+        "cpu_count": 16,
+        "disk_free_gb": 500.0
+      },
+      "caps": {
+        "bucket_available": false,
+        "ray_available": true,
+        "ray_auto_select": true,
+        "user_backend": null
+      }
+    },
+    "expected": {
+      "backend": "ray",
+      "chunk_size": null,
+      "max_workers": 16,
+      "pair_spill_threshold": "disk_per_worker",
+      "clustering_strategy": "streaming_cc",
+      "rule_name": "plan_selected_ray"
+    }
+  },
+  {
+    "input": {
+      "n_rows_full": 100000000,
+      "estimated_pair_count": 10000000000,
+      "runtime": {
+        "available_ram_gb": 64.0,
+        "cpu_count": 32,
+        "disk_free_gb": 500.0
+      },
+      "caps": {
+        "bucket_available": false,
+        "ray_available": true,
+        "ray_auto_select": true,
+        "user_backend": null
+      }
+    },
+    "expected": {
+      "backend": "ray",
+      "chunk_size": null,
+      "max_workers": 32,
+      "pair_spill_threshold": "disk_per_worker",
+      "clustering_strategy": "streaming_cc",
+      "rule_name": "plan_selected_ray"
+    }
+  },
+  {
+    "input": {
+      "n_rows_full": 50000000,
+      "estimated_pair_count": 6000000000,
+      "runtime": {
+        "available_ram_gb": 64.0,
+        "cpu_count": 16,
+        "disk_free_gb": 500.0
+      },
+      "caps": {
+        "bucket_available": false,
+        "ray_available": true,
+        "ray_auto_select": false,
+        "user_backend": null
+      }
+    },
+    "expected": {
+      "backend": "duckdb",
+      "chunk_size": null,
+      "max_workers": 8,
+      "pair_spill_threshold": "duckdb",
+      "clustering_strategy": "partitioned_union_find",
+      "rule_name": "plan_selected_duckdb"
+    }
+  },
+  {
+    "input": {
+      "n_rows_full": 50000000,
+      "estimated_pair_count": 6000000000,
+      "runtime": {
+        "available_ram_gb": 64.0,
+        "cpu_count": 16,
+        "disk_free_gb": 500.0
+      },
+      "caps": {
+        "bucket_available": false,
+        "ray_available": false,
+        "ray_auto_select": true,
+        "user_backend": null
+      }
+    },
+    "expected": {
+      "backend": "duckdb",
+      "chunk_size": null,
+      "max_workers": 8,
+      "pair_spill_threshold": "duckdb",
+      "clustering_strategy": "partitioned_union_find",
+      "rule_name": "plan_selected_duckdb"
+    }
+  },
+  {
+    "input": {
+      "n_rows_full": 10000000,
+      "estimated_pair_count": 5000000000,
+      "runtime": {
+        "available_ram_gb": 64.0,
+        "cpu_count": 16,
+        "disk_free_gb": 500.0
+      },
+      "caps": {
+        "bucket_available": false,
+        "ray_available": false,
+        "ray_auto_select": false,
+        "user_backend": null
+      }
+    },
+    "expected": {
+      "backend": "duckdb",
+      "chunk_size": null,
+      "max_workers": 8,
+      "pair_spill_threshold": "duckdb",
+      "clustering_strategy": "partitioned_union_find",
+      "rule_name": "plan_selected_duckdb"
+    }
+  },
+  {
+    "input": {
+      "n_rows_full": 1000000,
+      "estimated_pair_count": 1000000,
+      "runtime": {
+        "available_ram_gb": 14.0,
+        "cpu_count": 4,
+        "disk_free_gb": 500.0
+      },
+      "caps": {
+        "bucket_available": false,
+        "ray_available": false,
+        "ray_auto_select": false,
+        "user_backend": null
+      }
+    },
+    "expected": {
+      "backend": "duckdb",
+      "chunk_size": null,
+      "max_workers": 4,
+      "pair_spill_threshold": "duckdb",
+      "clustering_strategy": "partitioned_union_find",
+      "rule_name": "plan_selected_duckdb"
+    }
+  },
+  {
+    "input": {
+      "n_rows_full": 1000000,
+      "estimated_pair_count": 5000000000,
+      "runtime": {
+        "available_ram_gb": 8.0,
+        "cpu_count": 8,
+        "disk_free_gb": 500.0
+      },
+      "caps": {
+        "bucket_available": false,
+        "ray_available": false,
+        "ray_auto_select": false,
+        "user_backend": null
+      }
+    },
+    "expected": {
+      "backend": "duckdb",
+      "chunk_size": null,
+      "max_workers": 8,
+      "pair_spill_threshold": "duckdb",
+      "clustering_strategy": "partitioned_union_find",
+      "rule_name": "plan_selected_duckdb"
+    }
+  },
+  {
+    "input": {
+      "n_rows_full": 1000000,
+      "estimated_pair_count": 5000000000,
+      "runtime": {
+        "available_ram_gb": 64.0,
+        "cpu_count": 4,
+        "disk_free_gb": 500.0
+      },
+      "caps": {
+        "bucket_available": false,
+        "ray_available": false,
+        "ray_auto_select": false,
+        "user_backend": null
+      }
+    },
+    "expected": {
+      "backend": "duckdb",
+      "chunk_size": null,
+      "max_workers": 4,
+      "pair_spill_threshold": "duckdb",
+      "clustering_strategy": "partitioned_union_find",
+      "rule_name": "plan_selected_duckdb"
+    }
+  },
+  {
+    "input": {
+      "n_rows_full": 1000000,
+      "estimated_pair_count": 5000000000,
+      "runtime": {
+        "available_ram_gb": 64.0,
+        "cpu_count": 16,
+        "disk_free_gb": 500.0
+      },
+      "caps": {
+        "bucket_available": false,
+        "ray_available": false,
+        "ray_auto_select": false,
+        "user_backend": null
+      }
+    },
+    "expected": {
+      "backend": "duckdb",
+      "chunk_size": null,
+      "max_workers": 8,
+      "pair_spill_threshold": "duckdb",
+      "clustering_strategy": "partitioned_union_find",
+      "rule_name": "plan_selected_duckdb"
+    }
+  },
+  {
+    "input": {
+      "n_rows_full": 800000,
+      "estimated_pair_count": 5000000,
+      "runtime": {
+        "available_ram_gb": 20.0,
+        "cpu_count": 8,
+        "disk_free_gb": 500.0
+      },
+      "caps": {
+        "bucket_available": false,
+        "ray_available": false,
+        "ray_auto_select": false,
+        "user_backend": null
+      }
+    },
+    "expected": {
+      "backend": "polars-direct",
+      "chunk_size": null,
+      "max_workers": 4,
+      "pair_spill_threshold": null,
+      "clustering_strategy": "in_memory",
+      "rule_name": "no_rule_matched"
+    }
+  },
+  {
+    "input": {
+      "n_rows_full": 760000,
+      "estimated_pair_count": 10000000,
+      "runtime": {
+        "available_ram_gb": 20.0,
+        "cpu_count": 8,
+        "disk_free_gb": 500.0
+      },
+      "caps": {
+        "bucket_available": false,
+        "ray_available": false,
+        "ray_auto_select": false,
+        "user_backend": null
+      }
+    },
+    "expected": {
+      "backend": "polars-direct",
+      "chunk_size": null,
+      "max_workers": 4,
+      "pair_spill_threshold": null,
+      "clustering_strategy": "in_memory",
+      "rule_name": "no_rule_matched"
+    }
+  },
+  {
+    "input": {
+      "n_rows_full": 50000,
+      "estimated_pair_count": 1000,
+      "runtime": {
+        "available_ram_gb": 64.0,
+        "cpu_count": 16,
+        "disk_free_gb": 500.0
+      },
+      "caps": {
+        "bucket_available": false,
+        "ray_available": false,
+        "ray_auto_select": false,
+        "user_backend": "polars-direct"
+      }
+    },
+    "expected": {
+      "backend": "polars-direct",
+      "chunk_size": null,
+      "max_workers": 16,
+      "pair_spill_threshold": null,
+      "clustering_strategy": "in_memory",
+      "rule_name": "plan_user_override"
+    }
+  },
+  {
+    "input": {
+      "n_rows_full": 50000,
+      "estimated_pair_count": 1000,
+      "runtime": {
+        "available_ram_gb": 64.0,
+        "cpu_count": 16,
+        "disk_free_gb": 500.0
+      },
+      "caps": {
+        "bucket_available": true,
+        "ray_available": false,
+        "ray_auto_select": false,
+        "user_backend": "bucket"
+      }
+    },
+    "expected": {
+      "backend": "bucket",
+      "chunk_size": null,
+      "max_workers": 16,
+      "pair_spill_threshold": null,
+      "clustering_strategy": "in_memory",
+      "rule_name": "plan_user_override"
+    }
+  },
+  {
+    "input": {
+      "n_rows_full": 50000,
+      "estimated_pair_count": 1000,
+      "runtime": {
+        "available_ram_gb": 64.0,
+        "cpu_count": 16,
+        "disk_free_gb": 500.0
+      },
+      "caps": {
+        "bucket_available": false,
+        "ray_available": false,
+        "ray_auto_select": false,
+        "user_backend": "duckdb"
+      }
+    },
+    "expected": {
+      "backend": "duckdb",
+      "chunk_size": null,
+      "max_workers": 16,
+      "pair_spill_threshold": null,
+      "clustering_strategy": "in_memory",
+      "rule_name": "plan_user_override"
+    }
+  },
+  {
+    "input": {
+      "n_rows_full": 50000,
+      "estimated_pair_count": 1000,
+      "runtime": {
+        "available_ram_gb": 64.0,
+        "cpu_count": 16,
+        "disk_free_gb": 500.0
+      },
+      "caps": {
+        "bucket_available": false,
+        "ray_available": true,
+        "ray_auto_select": true,
+        "user_backend": "ray"
+      }
+    },
+    "expected": {
+      "backend": "ray",
+      "chunk_size": null,
+      "max_workers": 16,
+      "pair_spill_threshold": null,
+      "clustering_strategy": "in_memory",
+      "rule_name": "plan_user_override"
+    }
+  },
+  {
+    "input": {
+      "n_rows_full": 500000,
+      "estimated_pair_count": 1000000,
+      "runtime": {
+        "available_ram_gb": 64.0,
+        "cpu_count": 16,
+        "disk_free_gb": 500.0
+      },
+      "caps": {
+        "bucket_available": false,
+        "ray_available": false,
+        "ray_auto_select": false,
+        "user_backend": "chunked"
+      }
+    },
+    "expected": {
+      "backend": "chunked",
+      "chunk_size": 500000,
+      "max_workers": 16,
+      "pair_spill_threshold": null,
+      "clustering_strategy": "in_memory",
+      "rule_name": "plan_user_override"
+    }
+  },
+  {
+    "input": {
+      "n_rows_full": 500000,
+      "estimated_pair_count": 1000000,
+      "runtime": {
+        "available_ram_gb": 16.0,
+        "cpu_count": 4,
+        "disk_free_gb": 500.0
+      },
+      "caps": {
+        "bucket_available": false,
+        "ray_available": false,
+        "ray_auto_select": false,
+        "user_backend": "chunked"
+      }
+    },
+    "expected": {
+      "backend": "chunked",
+      "chunk_size": 500000,
+      "max_workers": 4,
+      "pair_spill_threshold": null,
+      "clustering_strategy": "in_memory",
+      "rule_name": "plan_user_override"
+    }
+  },
+  {
+    "input": {
+      "n_rows_full": 0,
+      "estimated_pair_count": 0,
+      "runtime": {
+        "available_ram_gb": 64.0,
+        "cpu_count": 16,
+        "disk_free_gb": 500.0
+      },
+      "caps": {
+        "bucket_available": false,
+        "ray_available": false,
+        "ray_auto_select": false,
+        "user_backend": "ray"
+      }
+    },
+    "expected": {
+      "backend": "ray",
+      "chunk_size": null,
+      "max_workers": 16,
+      "pair_spill_threshold": null,
+      "clustering_strategy": "in_memory",
+      "rule_name": "plan_user_override"
+    }
+  },
+  {
+    "input": {
+      "n_rows_full": 50000,
+      "estimated_pair_count": 1000,
+      "runtime": {
+        "available_ram_gb": 64.0,
+        "cpu_count": 4,
+        "disk_free_gb": 500.0
+      },
+      "caps": {
+        "bucket_available": false,
+        "ray_available": false,
+        "ray_auto_select": false,
+        "user_backend": "polars-direct"
+      }
+    },
+    "expected": {
+      "backend": "polars-direct",
+      "chunk_size": null,
+      "max_workers": 4,
+      "pair_spill_threshold": null,
+      "clustering_strategy": "in_memory",
+      "rule_name": "plan_user_override"
+    }
+  },
+  {
+    "input": {
+      "n_rows_full": 10000,
+      "estimated_pair_count": 100000,
+      "runtime": {
+        "available_ram_gb": 64.0,
+        "cpu_count": 1,
+        "disk_free_gb": 500.0
+      },
+      "caps": {
+        "bucket_available": false,
+        "ray_available": false,
+        "ray_auto_select": false,
+        "user_backend": null
+      }
+    },
+    "expected": {
+      "backend": "polars-direct",
+      "chunk_size": null,
+      "max_workers": 1,
+      "pair_spill_threshold": null,
+      "clustering_strategy": "in_memory",
+      "rule_name": "plan_selected_simple"
+    }
+  },
+  {
+    "input": {
+      "n_rows_full": 200000,
+      "estimated_pair_count": 5000000,
+      "runtime": {
+        "available_ram_gb": 31.9,
+        "cpu_count": 8,
+        "disk_free_gb": 500.0
+      },
+      "caps": {
+        "bucket_available": true,
+        "ray_available": false,
+        "ray_auto_select": false,
+        "user_backend": null
+      }
+    },
+    "expected": {
+      "backend": "bucket",
+      "chunk_size": null,
+      "max_workers": 8,
+      "pair_spill_threshold": null,
+      "clustering_strategy": "in_memory",
+      "rule_name": "plan_selected_bucket_suggested"
+    }
+  },
+  {
+    "input": {
+      "n_rows_full": 200000,
+      "estimated_pair_count": 5000000,
+      "runtime": {
+        "available_ram_gb": 32.0,
+        "cpu_count": 8,
+        "disk_free_gb": 500.0
+      },
+      "caps": {
+        "bucket_available": true,
+        "ray_available": false,
+        "ray_auto_select": false,
+        "user_backend": null
+      }
+    },
+    "expected": {
+      "backend": "bucket",
+      "chunk_size": null,
+      "max_workers": 8,
+      "pair_spill_threshold": null,
+      "clustering_strategy": "in_memory",
+      "rule_name": "plan_selected_fast_box"
+    }
+  },
+  {
+    "input": {
+      "n_rows_full": 100000,
+      "estimated_pair_count": 50000000,
+      "runtime": {
+        "available_ram_gb": 32.0,
+        "cpu_count": 8,
+        "disk_free_gb": 500.0
+      },
+      "caps": {
+        "bucket_available": false,
+        "ray_available": false,
+        "ray_auto_select": false,
+        "user_backend": null
+      }
+    },
+    "expected": {
+      "backend": "chunked",
+      "chunk_size": 100000,
+      "max_workers": 8,
+      "pair_spill_threshold": "ram",
+      "clustering_strategy": "in_memory",
+      "rule_name": "plan_selected_chunked"
+    }
+  },
+  {
+    "input": {
+      "n_rows_full": 5000000,
+      "estimated_pair_count": 5000000000,
+      "runtime": {
+        "available_ram_gb": 64.0,
+        "cpu_count": 16,
+        "disk_free_gb": 500.0
+      },
+      "caps": {
+        "bucket_available": false,
+        "ray_available": false,
+        "ray_auto_select": false,
+        "user_backend": null
+      }
+    },
+    "expected": {
+      "backend": "duckdb",
+      "chunk_size": null,
+      "max_workers": 8,
+      "pair_spill_threshold": "duckdb",
+      "clustering_strategy": "partitioned_union_find",
+      "rule_name": "plan_selected_duckdb"
+    }
+  }
+]

@@ -316,15 +316,15 @@ def profile_columns(
             len(df.columns), len(columns), len(priority), remaining_slots,
         )
 
-    profiles = []
+    # Collect per-column stats using Polars (shared by both the native and
+    # pure-Python paths — the native path delegates ONLY the classify step).
+    col_stats: list[tuple[str, str, list[str], float, float, float]] = []
     for col_name in columns:
-        # Skip internal columns
         if col_name.startswith("__"):
             continue
 
         dtype = str(df[col_name].dtype)
 
-        # Get non-null string values for profiling
         col_series = sample[col_name]
         total_rows = col_series.len()
         null_count = col_series.null_count()
@@ -338,48 +338,90 @@ def profile_columns(
         cardinality_ratio = len(set(values)) / total_rows if total_rows > 0 else 0.0
         avg_len = sum(len(v) for v in values) / len(values) if values else 0.0
 
-        # Phase 1: name heuristics
-        name_type = _classify_by_name(col_name)
+        col_stats.append((col_name, dtype, values, null_rate, cardinality_ratio, avg_len))
 
-        # Phase 2: data profiling
-        data_type, data_confidence = _classify_by_data(values)
+    from goldenmatch.core._native_loader import native_enabled, native_module  # noqa: PLC0415
 
-        # Combine: name heuristics are authoritative for structural types
-        # (date, geo) because data profiling frequently misclassifies them
-        # (e.g., ISO dates look like phone numbers, city names look like person names).
-        # For other types, Phase 2 (data) wins when it contradicts Phase 1 (name).
-        _name_authoritative = {"date", "geo", "identifier", "numeric", "year"}
-        if name_type and name_type in _name_authoritative:
-            # Name pattern is authoritative for date/geo — trust it
-            col_type = name_type
-            confidence = 0.9
-        elif name_type and data_type != "string":
-            # Both have opinions — Phase 2 wins if types differ
-            if name_type == data_type:
+    _use_native = native_enabled("autoconfig")
+    _nm = native_module() if _use_native else None
+    _native_classify_available = (
+        _use_native and _nm is not None and hasattr(_nm, "autoconfig_classify_columns")
+    )
+
+    if _native_classify_available:
+        # Native batch path: send all column stats to Rust, reconstruct profiles.
+        from goldenmatch.core.autoconfig_native import (  # noqa: PLC0415
+            column_profiles_from_json,
+            column_stats_to_json,
+        )
+        stats_dicts = [
+            {
+                "name": col_name,
+                "dtype": dtype,
+                "sample_values": values,  # FULL non-null list
+                "null_rate": null_rate,
+                "cardinality_ratio": cardinality_ratio,
+                "avg_len": avg_len,
+            }
+            for col_name, dtype, values, null_rate, cardinality_ratio, avg_len in col_stats
+        ]
+        names_to_sample_values = {
+            col_name: values
+            for col_name, _dtype, values, _nr, _cr, _al in col_stats
+        }
+        native_json = _nm.autoconfig_classify_columns(  # type: ignore[union-attr]
+            column_stats_to_json(stats_dicts)
+        )
+        profiles: list[ColumnProfile] = column_profiles_from_json(
+            native_json, names_to_sample_values
+        )
+    else:
+        # Pure-Python classification path (unchanged).
+        profiles = []
+        for col_name, dtype, values, null_rate, cardinality_ratio, avg_len in col_stats:
+            # Phase 1: name heuristics
+            name_type = _classify_by_name(col_name)
+
+            # Phase 2: data profiling
+            data_type, data_confidence = _classify_by_data(values)
+
+            # Combine: name heuristics are authoritative for structural types
+            # (date, geo) because data profiling frequently misclassifies them
+            # (e.g., ISO dates look like phone numbers, city names look like person names).
+            # For other types, Phase 2 (data) wins when it contradicts Phase 1 (name).
+            _name_authoritative = {"date", "geo", "identifier", "numeric", "year"}
+            if name_type and name_type in _name_authoritative:
+                # Name pattern is authoritative for date/geo — trust it
                 col_type = name_type
-                confidence = min(data_confidence + 0.2, 1.0)
+                confidence = 0.9
+            elif name_type and data_type != "string":
+                # Both have opinions — Phase 2 wins if types differ
+                if name_type == data_type:
+                    col_type = name_type
+                    confidence = min(data_confidence + 0.2, 1.0)
+                else:
+                    col_type = data_type
+                    confidence = data_confidence
+            elif name_type:
+                col_type = name_type
+                confidence = 0.6
             else:
                 col_type = data_type
                 confidence = data_confidence
-        elif name_type:
-            col_type = name_type
-            confidence = 0.6
-        else:
-            col_type = data_type
-            confidence = data_confidence
 
-        profiles.append(ColumnProfile(
-            name=col_name,
-            dtype=dtype,
-            col_type=col_type,
-            confidence=confidence,
-            sample_values=values[:5],
-            null_rate=null_rate,
-            cardinality_ratio=cardinality_ratio,
-            avg_len=avg_len,
-        ))
+            profiles.append(ColumnProfile(
+                name=col_name,
+                dtype=dtype,
+                col_type=col_type,
+                confidence=confidence,
+                sample_values=values[:5],
+                null_rate=null_rate,
+                cardinality_ratio=cardinality_ratio,
+                avg_len=avg_len,
+            ))
 
-    # LLM correction pass for ambiguous columns
+    # LLM correction pass for ambiguous columns (runs AFTER native classify,
+    # on the same filtered set the Python path uses — unchanged).
     if llm_provider and profiles:
         profiles = _llm_classify_columns(profiles, llm_provider)
 

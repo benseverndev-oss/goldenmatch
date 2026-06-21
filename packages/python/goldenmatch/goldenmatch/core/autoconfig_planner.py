@@ -19,9 +19,22 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from goldenmatch.core._native_loader import native_enabled, native_module
 from goldenmatch.core.complexity_profile import ComplexityProfile
 from goldenmatch.core.execution_plan import ExecutionPlan
 from goldenmatch.core.runtime_profile import RuntimeProfile
+
+
+def _default_rules() -> list[PlannerRule]:
+    """Lazily return DEFAULT_RULES from autoconfig_planner_rules.
+
+    Imported here (not at module top) to break the potential import cycle:
+    autoconfig_planner_rules imports PlannerRule from this module, so a
+    top-level ``from autoconfig_planner_rules import DEFAULT_RULES`` here
+    would create a cycle.
+    """
+    from goldenmatch.core.autoconfig_planner_rules import DEFAULT_RULES  # noqa: PLC0415
+    return DEFAULT_RULES
 
 # Variadic so both 3-arg (profile, runtime, n_rows_full) and 4-arg
 # (..., context) callables type-check. The dispatcher introspects each
@@ -94,6 +107,25 @@ def apply_planner_rules(
         rule's name or a sentinel (``no_rules_registered``,
         ``no_rule_matched``).
     """
+    # Native fast path: only for the production DEFAULT_RULES registry and
+    # when the "autoconfig" component is enabled. Custom rule lists (used in
+    # unit tests) stay on the pure-Python path. "autoconfig" is intentionally
+    # NOT in _GATED_ON yet, so under GOLDENMATCH_NATIVE=auto/unset this block
+    # never fires -- pure Python runs unchanged. Cutover = Task F1.
+    if native_enabled("autoconfig"):
+        _nm = native_module()
+        if hasattr(_nm, "autoconfig_decide_plan") and rules is _default_rules():
+            from goldenmatch.core.autoconfig_native import (  # noqa: PLC0415
+                build_planner_capabilities,
+                plan_from_json,
+                plan_input_to_json,
+            )
+            caps = build_planner_capabilities(context)
+            out = _nm.autoconfig_decide_plan(
+                plan_input_to_json(profile, runtime, n_rows_full, caps)
+            )
+            return plan_from_json(out)
+
     if not rules:
         return ExecutionPlan(rule_name="no_rules_registered")
 

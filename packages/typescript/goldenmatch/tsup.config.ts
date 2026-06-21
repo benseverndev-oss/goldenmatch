@@ -4,6 +4,10 @@ export default defineConfig({
   entry: {
     index: "src/index.ts",
     "core/index": "src/core/index.ts",
+    // Opt-in entry: the shared autoconfig wasm core. Carries the inlined wasm
+    // (~1.7 MB base64), so it's a separate subpath — consumers pay that cost
+    // only when they import `goldenmatch/core/autoconfig-wasm`.
+    "core/autoconfigWasm": "src/core/autoconfigWasm.ts",
     "node/index": "src/node/index.ts",
     "node/mcp/server": "src/node/mcp/server.ts",
     cli: "src/cli.ts",
