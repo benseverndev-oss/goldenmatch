@@ -88,3 +88,41 @@ jobs:
           name: graphrag-qa-results-lightrag
           path: packages/python/goldenmatch/benchmarks/er-kg-bench/results/results_qa_e2e_lightrag*.*
           if-no-files-found: ignore
+
+  graphiti:
+    runs-on: large-new-64GB
+    timeout-minutes: 60
+    services:
+      falkordb:
+        image: falkordb/falkordb:latest
+        ports:
+          - 6379:6379
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Install graphiti-core + goldenmatch + datasets + openai (isolated)
+        run: python -m pip install --upgrade pip pytest numpy graphiti-core goldenmatch datasets openai
+      - name: Run Graphiti end-to-end (real LLM + FalkorDB, budget-capped)
+        working-directory: packages/python/goldenmatch/benchmarks/er-kg-bench
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          FALKORDB_HOST: localhost
+          FALKORDB_PORT: "6379"
+          POLARS_SKIP_CPU_CHECK: "1"
+        run: |
+          python -m erkgbench.qa_e2e.run_qa_e2e \
+            --engine graphiti \
+            --corpus "${{ inputs.corpus }}" \
+            --max-questions "${{ inputs.max_questions }}" \
+            --budget-usd "${{ inputs.budget_usd }}" \
+            --out-md results/RESULTS_QA_E2E_graphiti.md \
+            --out-json results/results_qa_e2e_graphiti.json
+      - name: Upload results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: graphrag-qa-results-graphiti
+          path: packages/python/goldenmatch/benchmarks/er-kg-bench/results/results_qa_e2e_graphiti*.*
+          if-no-files-found: ignore
