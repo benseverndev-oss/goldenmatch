@@ -69,3 +69,26 @@ def test_run_engine_stops_at_budget_cap():
     res = run_engine(big, _toy_corpus(), model="gpt-4o", budget_usd=0.001)
     assert res["budget_exhausted"] is True
     assert res["n_answered"] == 0  # partial result, not a crash
+
+
+def test_cli_self_test_writes_results(tmp_path):
+    from erkgbench.qa_e2e.run_qa_e2e import main
+
+    md = tmp_path / "RESULTS_QA_E2E.md"
+    js = tmp_path / "results_qa_e2e.json"
+    rc = main(
+        [
+            "--self-test",
+            "--corpus",
+            "engineered",
+            "--max-questions",
+            "5",
+            "--out-md",
+            str(md),
+            "--out-json",
+            str(js),
+        ]
+    )
+    assert rc == 0
+    assert md.exists() and js.exists()
+    assert "end-to-end multi-hop QA" in md.read_text(encoding="utf-8")
