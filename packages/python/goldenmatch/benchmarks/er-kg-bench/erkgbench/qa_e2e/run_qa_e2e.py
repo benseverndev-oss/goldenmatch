@@ -111,6 +111,16 @@ def main(argv: list[str] | None = None) -> int:
         f"token_f1={result['token_f1']} exact_match={result['exact_match']} "
         f"support_recall={result['support_recall']}"
     )
+    # A few example Q->A records so the log shows WHAT the engine answered (wrong
+    # vs. async-corrupted vs. phrasing) -- the full set rides in the JSON artifact.
+    for rec in result.get("per_question", [])[:3]:
+        pred = " ".join(rec["prediction"].split())
+        if len(pred) > 160:
+            pred = pred[:160] + "..."
+        print(
+            f"    {rec['id']} hop{rec['hop_count']} am={rec['answer_match']} "
+            f"gold={rec['gold_answer']!r} pred={pred!r}"
+        )
     return 0
 
 
