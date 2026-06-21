@@ -1,0 +1,52 @@
+{"_meta": "PUBLIC general-knowledge brand<->generic drug names (NOT RxNorm; no license). The 4 ER-KG-Bench eval families (ibuprofen/acetaminophen/sildenafil/warfarin + all their brands) are EXCLUDED so GS3's re-measure is a true held-out generalization test. `morph:true` groups carry morphological (spelling/salt) variants the model CAN learn; arbitrary brand<->generic groups have no morphological signal (the measured ceiling)."}
+{"generic": "metformin", "brands": ["Glucophage", "Fortamet"]}
+{"generic": "atorvastatin", "brands": ["Lipitor"]}
+{"generic": "rosuvastatin", "brands": ["Crestor"]}
+{"generic": "simvastatin", "brands": ["Zocor"]}
+{"generic": "omeprazole", "brands": ["Prilosec"]}
+{"generic": "esomeprazole", "brands": ["Nexium"]}
+{"generic": "pantoprazole", "brands": ["Protonix"]}
+{"generic": "amoxicillin", "brands": ["Amoxil"]}
+{"generic": "azithromycin", "brands": ["Zithromax", "Z-Pak"]}
+{"generic": "ciprofloxacin", "brands": ["Cipro"]}
+{"generic": "sertraline", "brands": ["Zoloft"]}
+{"generic": "fluoxetine", "brands": ["Prozac"]}
+{"generic": "escitalopram", "brands": ["Lexapro"]}
+{"generic": "citalopram", "brands": ["Celexa"]}
+{"generic": "duloxetine", "brands": ["Cymbalta"]}
+{"generic": "venlafaxine", "brands": ["Effexor"]}
+{"generic": "lisinopril", "brands": ["Prinivil", "Zestril"]}
+{"generic": "amlodipine", "brands": ["Norvasc"]}
+{"generic": "metoprolol", "brands": ["Lopressor", "Toprol"]}
+{"generic": "losartan", "brands": ["Cozaar"]}
+{"generic": "valsartan", "brands": ["Diovan"]}
+{"generic": "hydrochlorothiazide", "brands": ["Microzide"]}
+{"generic": "furosemide", "brands": ["Lasix"]}
+{"generic": "gabapentin", "brands": ["Neurontin"]}
+{"generic": "pregabalin", "brands": ["Lyrica"]}
+{"generic": "montelukast", "brands": ["Singulair"]}
+{"generic": "levothyroxine", "brands": ["Synthroid", "Levoxyl"]}
+{"generic": "alprazolam", "brands": ["Xanax"]}
+{"generic": "diazepam", "brands": ["Valium"]}
+{"generic": "lorazepam", "brands": ["Ativan"]}
+{"generic": "clopidogrel", "brands": ["Plavix"]}
+{"generic": "tramadol", "brands": ["Ultram"]}
+{"generic": "celecoxib", "brands": ["Celebrex"]}
+{"generic": "naproxen", "brands": ["Aleve", "Naprosyn"]}
+{"generic": "cetirizine", "brands": ["Zyrtec"]}
+{"generic": "loratadine", "brands": ["Claritin"]}
+{"generic": "fexofenadine", "brands": ["Allegra"]}
+{"generic": "diphenhydramine", "brands": ["Benadryl"]}
+{"generic": "famotidine", "brands": ["Pepcid"]}
+{"generic": "ondansetron", "brands": ["Zofran"]}
+{"generic": "prednisone", "brands": ["Deltasone"]}
+{"generic": "albuterol", "brands": ["Ventolin", "Proventil"]}
+{"generic": "fluticasone", "brands": ["Flonase"]}
+{"generic": "insulin glargine", "brands": ["Lantus"]}
+{"generic": "amoxicillin", "brands": ["amoxycillin"], "morph": true}
+{"generic": "cefalexin", "brands": ["cephalexin"], "morph": true}
+{"generic": "sulfasalazine", "brands": ["sulphasalazine"], "morph": true}
+{"generic": "amphetamine", "brands": ["amfetamine"], "morph": true}
+{"generic": "oestrogen", "brands": ["estrogen"], "morph": true}
+{"generic": "tetracycline", "brands": ["tetracyclin"], "morph": true}
+{"generic": "ceftazidime", "brands": ["ceftazidim"], "morph": true}

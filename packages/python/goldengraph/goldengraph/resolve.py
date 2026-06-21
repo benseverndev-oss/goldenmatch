@@ -43,9 +43,14 @@ def resolve(mentions: list[Mention]) -> list[ResolvedEntity]:
     import goldenmatch as gm
     import polars as pl
 
-    df = pl.DataFrame(
-        {"name": [m.name for m in mentions], "type": [m.typ for m in mentions]}
-    )
+    # Resolve on name+type, and on `context` (the per-mention description) when
+    # any mention carries one -- the extra evidence sharpens resolution (the field
+    # that takes goldenmatch from name-only to its best on ER-KG-Bench). Falls back
+    # to name+type when extraction produced no descriptions (backward compatible).
+    cols = {"name": [m.name for m in mentions], "type": [m.typ for m in mentions]}
+    if any(m.context for m in mentions):
+        cols["context"] = [m.context for m in mentions]
+    df = pl.DataFrame(cols)
     result = gm.dedupe_df(df)
 
     n = len(mentions)

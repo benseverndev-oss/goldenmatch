@@ -1,0 +1,33 @@
+# Graphiti adapter smoke (GraphRAG evidence #1 / PR D). Isolated graphiti-core
+# venv, DB-free + key-free: validates QAEngine protocol conformance + the
+# fact-synthesis cost seam. Graphiti needs a graph DB for the real e2e (that runs
+# in bench-graphrag-qa with a FalkorDB service). Informational lane.
+name: bench-graphiti-smoke
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "packages/python/goldenmatch/benchmarks/er-kg-bench/erkgbench/qa_e2e/engines/graphiti.py"
+      - "packages/python/goldenmatch/benchmarks/er-kg-bench/tests/test_qa_graphiti_smoke.py"
+      - ".github/workflows/bench-graphiti-smoke.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  graphiti-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Install graphiti-core + goldenmatch (isolated)
+        run: python -m pip install --upgrade pip pytest numpy graphiti-core goldenmatch
+      - name: Graphiti adapter smoke (protocol + synthesis cost seam, DB-free)
+        working-directory: packages/python/goldenmatch/benchmarks/er-kg-bench
+        env:
+          POLARS_SKIP_CPU_CHECK: "1"
+        run: python -m pytest tests/test_qa_graphiti_smoke.py -v

@@ -34,7 +34,11 @@ class GoldenGraphAdapter(AdapterBase):
         from goldengraph.resolve import resolve as gg_resolve
 
         ordered = sorted(records, key=lambda r: r.index)
-        mentions = [Mention(name=r.mention, typ=r.entity_type) for r in ordered]
+        # Pass `context` (the entity description) so resolution uses name+type+context
+        # -- the field that lifts goldenmatch from name-only to its best on this corpus.
+        mentions = [
+            Mention(name=r.mention, typ=r.entity_type, context=r.context) for r in ordered
+        ]
         entities = gg_resolve(mentions)
         # ResolvedEntity.member_idx are positions in `ordered`; map back to the
         # caller's record indices (identity when records are 0..n-1 in order).

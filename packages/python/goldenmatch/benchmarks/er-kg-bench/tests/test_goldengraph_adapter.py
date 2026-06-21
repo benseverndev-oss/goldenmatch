@@ -48,9 +48,15 @@ def test_goldengraph_partition_parity(monkeypatch):
     ]
     adapter_part = _multi(GoldenGraphAdapter().resolve(recs))
 
-    # Direct dedupe_df on the SAME fields goldengraph.resolve feeds it (name+type).
+    # Direct dedupe_df on the SAME fields goldengraph.resolve feeds it now:
+    # name+type+context (the adapter passes Record.context, and resolve adds the
+    # context column whenever any mention carries one).
     df = pl.DataFrame(
-        {"name": [r.mention for r in recs], "type": [r.entity_type for r in recs]}
+        {
+            "name": [r.mention for r in recs],
+            "type": [r.entity_type for r in recs],
+            "context": [r.context for r in recs],
+        }
     )
     res = gm.dedupe_df(df)
     gm_part = _multi(

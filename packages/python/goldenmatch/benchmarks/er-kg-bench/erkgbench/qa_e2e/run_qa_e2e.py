@@ -4,6 +4,7 @@ goldengraph run is selected with `--engine goldengraph` in the opt-in lane."""
 from __future__ import annotations
 
 import argparse
+import os
 
 from . import engineered
 from .corpora import load_musique
@@ -54,6 +55,13 @@ def _build_engine(name: str):
 
         return MSGraphRAGQAEngine(
             model="gpt-4o-mini", embedding_model="text-embedding-3-small"
+        )
+    if name == "graphiti":
+        from .engines.graphiti import GraphitiQAEngine
+
+        return GraphitiQAEngine(
+            falkordb_host=os.environ.get("FALKORDB_HOST", "localhost"),
+            falkordb_port=int(os.environ.get("FALKORDB_PORT", "6379")),
         )
     raise SystemExit(f"unknown engine: {name}")
 

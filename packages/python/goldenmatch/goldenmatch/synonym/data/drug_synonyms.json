@@ -1,0 +1,22 @@
+{
+  "_meta": "Drug brand<->generic KNOWLEDGE BASE (public general-knowledge facts). This is a deterministic LOOKUP, NOT model generalization: it RESOLVES arbitrary brand synonyms (Advil<->ibuprofen) the morphological model provably cannot. Unlike the trained-model held-out split, this table legitimately INCLUDES the eval drugs -- it is a curated reference, like the refdata given-name/business-alias tables. RESULTS must label any eval lift from this table as lookup-driven, not learned.",
+  "aliases": {
+    "ibuprofen": ["Advil", "Motrin", "Nurofen", "Brufen", "Duexis", "Counteract IB", "Proprinal", "Ibudone"],
+    "acetaminophen": ["Tylenol", "Panadol", "paracetamol", "Little Fevers", "Bactimicina", "Pamprin Max Formula", "Pamprin Multi-Symptom", "Pamprin Cramp Formula"],
+    "sildenafil": ["Viagra", "Revatio", "Liqrev", "Vybrique"],
+    "warfarin": ["Coumadin", "Jantoven"],
+    "metformin": ["Glucophage", "Fortamet"],
+    "atorvastatin": ["Lipitor"],
+    "omeprazole": ["Prilosec"],
+    "esomeprazole": ["Nexium"],
+    "sertraline": ["Zoloft"],
+    "amoxicillin": ["Amoxil", "amoxycillin"],
+    "azithromycin": ["Zithromax", "Z-Pak"],
+    "lisinopril": ["Prinivil", "Zestril"],
+    "gabapentin": ["Neurontin"],
+    "naproxen": ["Aleve", "Naprosyn"],
+    "cetirizine": ["Zyrtec"],
+    "loratadine": ["Claritin"],
+    "albuterol": ["Ventolin", "Proventil"]
+  }
+}
