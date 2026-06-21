@@ -53,6 +53,7 @@ def run_engine(engine: QAEngine, corpus, *, model: str, budget_usd: float) -> di
     f1s: list[float] = []
     recalls: list[float] = []
     decay_rows: list[tuple[int, float]] = []
+    records: list[dict] = []
     answered = 0
     for q in corpus.questions:
         if tracker.budget_exhausted or not tracker.can_send(_estimate_tokens(q.question)):
@@ -60,15 +61,32 @@ def run_engine(engine: QAEngine, corpus, *, model: str, budget_usd: float) -> di
         ans = engine.answer(build.handle, q.question)
         tracker.record_usage(ans.input_tokens, ans.output_tokens, model)
         am = metrics.answer_match(ans.text, q.gold_answer)
+        em = metrics.exact_match(ans.text, q.gold_answer)
+        f1 = metrics.token_f1(ans.text, q.gold_answer)
+        rec = metrics.supporting_fact_recall(ans.retrieved_fact_ids, q.gold_supporting_fact_ids)
         matches.append(am)
-        ems.append(metrics.exact_match(ans.text, q.gold_answer))
-        f1s.append(metrics.token_f1(ans.text, q.gold_answer))
-        recalls.append(
-            metrics.supporting_fact_recall(ans.retrieved_fact_ids, q.gold_supporting_fact_ids)
-        )
+        ems.append(em)
+        f1s.append(f1)
+        recalls.append(rec)
         # Decay = correctness by hop count. answer_match (containment) is the
         # meaningful correctness signal for free-text answers; exact_match reads ~0.
         decay_rows.append((q.hop_count, am))
+        # Persist the per-question record so a near-zero aggregate is debuggable
+        # post-hoc (wrong reasoning vs. async-corrupted output vs. phrasing the
+        # matcher misses) -- the aggregate alone made the bench a black box. The
+        # prediction is truncated so a verbose engine can't bloat the artifact.
+        records.append(
+            {
+                "id": q.id,
+                "question": q.question,
+                "gold_answer": q.gold_answer,
+                "prediction": _truncate(ans.text),
+                "hop_count": q.hop_count,
+                "answer_match": am,
+                "exact_match": em,
+                "token_f1": round(f1, 4),
+            }
+        )
         answered += 1
 
     return {
@@ -85,7 +103,16 @@ def run_engine(engine: QAEngine, corpus, *, model: str, budget_usd: float) -> di
         "decay_curve": metrics.decay_curve(decay_rows),
         "cost_usd": round(tracker.total_cost_usd, 6),
         "budget_exhausted": tracker.budget_exhausted,
+        "per_question": records,
     }
+
+
+def _truncate(text: str, limit: int = 2000) -> str:
+    """Cap a stored prediction so a verbose engine (LightRAG essays) can't bloat
+    the results artifact; the head is what the answer_match check reads anyway."""
+    if len(text) <= limit:
+        return text
+    return text[:limit] + " ...[truncated]"
 
 
 def _estimate_tokens(text: str) -> int:

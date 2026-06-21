@@ -76,6 +76,34 @@ def test_run_engine_answer_match_scores_free_text_when_em_misses():
     assert res["decay_curve"] == {1: 1.0}
 
 
+def test_run_engine_persists_per_question_records():
+    # the harness keeps a per-question record so a near-zero aggregate is
+    # debuggable post-hoc -- this is what was missing (artifacts were aggregate-only).
+    engine = _MockEngine(answer_text="the final entity is Ada")
+    res = run_engine(engine, _toy_corpus(), model="gpt-4o-mini", budget_usd=25.0)
+    recs = res["per_question"]
+    assert len(recs) == res["n_answered"] == 1
+    r = recs[0]
+    assert r["id"] == "q1"
+    assert r["question"] == "Who founded Acme?"
+    assert r["gold_answer"] == "Ada"
+    assert r["prediction"] == "the final entity is Ada"  # the actual answer is kept
+    assert r["hop_count"] == 1
+    assert r["answer_match"] == 1.0  # containment credits the naming sentence
+    assert r["exact_match"] == 0.0
+
+
+def test_run_engine_truncates_long_prediction():
+    from erkgbench.qa_e2e.harness import _truncate
+
+    engine = _MockEngine(answer_text="x" * 5000)
+    res = run_engine(engine, _toy_corpus(), model="gpt-4o-mini", budget_usd=25.0)
+    pred = res["per_question"][0]["prediction"]
+    assert pred.endswith("...[truncated]")
+    assert len(pred) < 5000
+    assert _truncate("short") == "short"
+
+
 def test_run_engine_stops_at_budget_cap():
     # a tiny cap so the FIRST answer call is refused after build cost
     big = _MockEngine(in_tokens=10_000_000, out_tokens=10_000_000)
