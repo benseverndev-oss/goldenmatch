@@ -17,6 +17,8 @@ on:
       - "packages/python/goldengraph/**"
       - "packages/rust/extensions/goldengraph-native/**"
       - "packages/rust/extensions/goldengraph-core/**"
+      - "packages/python/goldenmatch/benchmarks/er-kg-bench/erkgbench/qa_e2e/**"
+      - "packages/python/goldenmatch/benchmarks/er-kg-bench/tests/test_qa_goldengraph_smoke.py"
       - ".github/workflows/goldengraph-pipeline.yml"
 
 permissions:
@@ -42,3 +44,12 @@ jobs:
         run: |
           python -m pip install --no-deps -e packages/python/goldengraph
           python -m pytest packages/python/goldengraph/tests -q
+
+      - name: QA-e2e goldengraph smoke (real PyStore, stub LLM/embedder/resolver)
+        # The GraphRAG evidence harness (#1) adapter exercised end-to-end against the
+        # real native engine -- no network, no goldenmatch dedupe. importorskip's
+        # goldengraph_native, so it only runs where the wheel built (here).
+        working-directory: packages/python/goldenmatch/benchmarks/er-kg-bench
+        env:
+          POLARS_SKIP_CPU_CHECK: "1"
+        run: python -m pytest tests/test_qa_goldengraph_smoke.py -v

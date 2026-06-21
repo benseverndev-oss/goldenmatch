@@ -118,6 +118,15 @@ jobs:
         working-directory: ${{ env.BENCH_DIR }}
         run: "$GITHUB_WORKSPACE/.venv/bin/python -m pytest tests/test_real_resolvers.py tests/test_fidelity_column.py -v"
 
+      - name: QA-e2e pure-Python tests (metrics, corpora, harness)
+        # Native-free + key-free slice of the GraphRAG evidence harness (#1). The
+        # goldengraph smoke test (needs the native PyStore wheel) runs in
+        # goldengraph-pipeline.yml; the real-LLM head-to-head is bench-graphrag-qa.yml.
+        working-directory: ${{ env.BENCH_DIR }}
+        env:
+          POLARS_SKIP_CPU_CHECK: "1"
+        run: "$GITHUB_WORKSPACE/.venv/bin/python -m pytest tests/test_qa_metrics.py tests/test_qa_corpora.py tests/test_qa_harness.py -v"
+
       - name: Regenerate demo DEMO.md (Tier 1)
         working-directory: ${{ env.BENCH_DIR }}
         run: "$GITHUB_WORKSPACE/.venv/bin/python demo/run_demo.py"
