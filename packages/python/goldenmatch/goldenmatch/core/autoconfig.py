@@ -1798,6 +1798,112 @@ def apply_quality_aware_blocking(
     })
 
 
+# ── Auto-enabled semantic blocking (door: GOLDENMATCH_AUTO_SEMANTIC_BLOCKING) ──
+#
+# #1090: when the data is text-heavy (a long free-text column the lexical /
+# structured blocking keys under-cover) AND a semantic embedder is reachable,
+# route blocking to SimHash over embeddings -- ANN-style candidate generation
+# that co-blocks records that mean the same thing but share little surface text.
+# Honest fallback: when no embedder is reachable this is a NO-OP (the lexical /
+# structured scheme stands), never a silent degrade to a broken semantic path.
+# Additive + env-gated, OFF unless GOLDENMATCH_AUTO_SEMANTIC_BLOCKING=1, so the
+# default auto-config output is byte-identical until a Febrl / DBLP-ACM / product
+# recall sweep proves it on.
+
+# A column must average at least this many characters to count as "text-heavy"
+# (free-text / description-like, where embeddings beat lexical keys). Short
+# identity fields (name / email / zip) never qualify.
+_SEMANTIC_TEXT_MIN_AVG_LEN = 40.0
+
+# Strategies that ARE already a semantic / near-dup candidate generator -- never
+# override these (they were chosen deliberately upstream).
+_ALREADY_SEMANTIC_STRATEGIES = frozenset({"simhash", "ann", "ann_pairs", "lsh"})
+
+
+@dataclass
+class SemanticBlockingDecision:
+    """Why auto semantic blocking did (not) fire -- surfaced for telemetry."""
+
+    enabled: bool
+    column: str | None
+    reason: str
+    embeddings_available: bool
+
+
+def _text_heavy_columns(profiles: list[ColumnProfile]) -> list[ColumnProfile]:
+    """Free-text columns long enough that semantic blocking helps."""
+    return [
+        p
+        for p in profiles
+        if p.col_type in ("description", "string", "multi_name")
+        and p.avg_len >= _SEMANTIC_TEXT_MIN_AVG_LEN
+    ]
+
+
+def _auto_semantic_blocking_enabled() -> bool:
+    return os.environ.get(
+        "GOLDENMATCH_AUTO_SEMANTIC_BLOCKING", ""
+    ).strip().lower() in ("1", "true", "yes", "on")
+
+
+def decide_semantic_blocking(
+    profiles: list[ColumnProfile],
+    config: GoldenMatchConfig | None = None,
+    *,
+    enabled: bool | None = None,
+) -> SemanticBlockingDecision:
+    """Decide whether to auto-enable semantic (ANN / SimHash) blocking.
+
+    Returns a decision carrying an honest ``reason``. ``enabled`` is the door
+    gate (defaults to the ``GOLDENMATCH_AUTO_SEMANTIC_BLOCKING`` env flag); the
+    embedder-availability check is the honest fallback -- text-heavy data with no
+    reachable embedder yields ``enabled=False, reason="embeddings_unavailable"``
+    rather than committing a semantic plan that can't run.
+    """
+    if enabled is None:
+        enabled = _auto_semantic_blocking_enabled()
+    available = _embedder_available(config)
+    if not enabled:
+        return SemanticBlockingDecision(False, None, "disabled", available)
+    text_cols = _text_heavy_columns(profiles)
+    if not text_cols:
+        return SemanticBlockingDecision(False, None, "not_text_heavy", available)
+    col = max(text_cols, key=lambda p: p.avg_len).name
+    if not available:
+        return SemanticBlockingDecision(False, col, "embeddings_unavailable", False)
+    return SemanticBlockingDecision(True, col, "text_heavy_with_embeddings", True)
+
+
+def apply_auto_semantic_blocking(
+    blocking: BlockingConfig | None,
+    profiles: list[ColumnProfile],
+    df: pl.DataFrame | None = None,
+    config: GoldenMatchConfig | None = None,
+    *,
+    enabled: bool | None = None,
+) -> BlockingConfig | None:
+    """Route blocking to SimHash over embeddings when the data is text-heavy and
+    an embedder is reachable; otherwise return ``blocking`` unchanged.
+
+    Default OFF (``GOLDENMATCH_AUTO_SEMANTIC_BLOCKING``) -- a no-op then, so the
+    auto-config output is byte-identical. Never overrides a scheme that is
+    already a semantic / near-dup generator (simhash / ann / lsh).
+    """
+    decision = decide_semantic_blocking(profiles, config, enabled=enabled)
+    if not decision.enabled or decision.column is None:
+        return blocking
+    if blocking is not None and blocking.strategy in _ALREADY_SEMANTIC_STRATEGIES:
+        return blocking
+    from goldenmatch.config.schemas import SimHashKeyConfig
+
+    return BlockingConfig(
+        strategy="simhash",
+        simhash=SimHashKeyConfig(
+            column=decision.column, num_planes=256, num_bands=32, seed=0
+        ),
+    )
+
+
 # ── #876: scale-invariant blocking helpers ────────────────────────────────────
 # These are module-level (not closures) so they're importable by tests and by
 # any caller that wants to reason about the budget without instantiating a full
@@ -3397,6 +3503,10 @@ def _legacy_auto_configure_v0(  # pyright: ignore[reportUnusedFunction]  # kept 
     # GoldenCheck flags as edit-distance-fuzzy. Fail-open + additive; OFF unless
     # GOLDENMATCH_QUALITY_AWARE_BLOCKING=1. Runs before adaptive promotion.
     blocking = apply_quality_aware_blocking(blocking, profiles, df)
+    # Auto-enabled semantic blocking (door, #1090): route text-heavy data to
+    # SimHash-over-embeddings; honest no-op when embeddings are unavailable. OFF
+    # unless GOLDENMATCH_AUTO_SEMANTIC_BLOCKING=1, so default output is identical.
+    blocking = apply_auto_semantic_blocking(blocking, profiles, df)
     # At 1M+ rows, swap static blocking for adaptive so blocker.py's
     # _sub_block / _auto_split_block paths bound oversized buckets at
     # runtime. No-op for multi_pass / canopy / ann / learned / sorted_neighborhood.
