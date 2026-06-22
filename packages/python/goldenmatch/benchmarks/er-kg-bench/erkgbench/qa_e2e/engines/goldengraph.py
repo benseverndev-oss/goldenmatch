@@ -132,11 +132,46 @@ class GoldenGraphQAEngine:
         retr_ents = subgraph.get("entities", [])
         wide_ents = wide.get("entities", [])
         id_to_name = {e["entity_id"]: e["canonical_name"] for e in all_ents}
+
+        # Connected components of the WHOLE graph: query 1-hop from every node to get
+        # the full edge set, then union-find. This makes the wide==ball symptom
+        # concrete -- if the answer and the question's seeds land in DIFFERENT
+        # components, the multi-hop chain is severed (a bridge entity that should
+        # connect adjacent paragraphs was never resolved into one node).
+        all_ids = [e["entity_id"] for e in all_ents]
+        full = slice_graph.query(all_ids, 1) if all_ids else {"edges": []}
+        parent = {e["entity_id"]: e["entity_id"] for e in all_ents}
+
+        def _find(x):
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        for ed in full.get("edges", ()):
+            a, b = ed.get("subj"), ed.get("obj")
+            if a in parent and b in parent:
+                parent[_find(a)] = _find(b)
+        comp_members: dict[int, list] = {}
+        for e in all_ents:
+            comp_members.setdefault(_find(e["entity_id"]), []).append(e)
+        components = sorted(comp_members.values(), key=len, reverse=True)
+        seed_set = set(seeds)
+        seed_component_idx = next(
+            (i for i, c in enumerate(components)
+             if any(e["entity_id"] in seed_set for e in c)),
+            -1,
+        )
+
         return {
             "seed_names": [id_to_name.get(s, str(s)) for s in seeds],
             "graph_names": _names(all_ents),
             "retrieved_names": _names(retr_ents),
             "wide_names": _names(wide_ents),
+            "component_names": [_names(c) for c in components],
+            "component_sizes": [len(c) for c in components],
+            "seed_component_idx": seed_component_idx,
+            "n_components": len(components),
             "n_graph_entities": len(all_ents),
             "n_retrieved_entities": len(retr_ents),
             "n_wide_entities": len(wide_ents),

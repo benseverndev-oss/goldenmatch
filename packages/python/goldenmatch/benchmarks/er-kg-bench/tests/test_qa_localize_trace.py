@@ -98,3 +98,50 @@ def test_trace_off_by_default(monkeypatch, capsys):
     monkeypatch.delenv("GOLDENGRAPH_QA_TRACE", raising=False)
     run_engine(_FakeEngine({}), _corpus(), model="gpt-4o-mini", budget_usd=5.0)
     assert "localize trace" not in capsys.readouterr().out
+
+
+class _ComponentEngine:
+    """Engine whose localize returns explicit connected components, to lock the
+    harness's seed-vs-answer component comparison (the broken-chain confirmation)."""
+
+    name = "comp"
+    fidelity = "test"
+
+    def build_kg(self, corpus) -> BuildResult:
+        return BuildResult(handle={})
+
+    def answer(self, handle, question: str) -> AnswerResult:
+        return AnswerResult(text="wrong")
+
+    def localize(self, handle, question: str) -> dict:
+        # seeds live in component 0 ('Scipio' island); the gold answer 'Exeter
+        # College' lives in a DIFFERENT component -> severed chain.
+        components = [["Hannibal and Scipio", "Scipio"], ["Exeter College", "Oxford"], ["x"]]
+        return {
+            "seed_names": ["Scipio"],
+            "graph_names": [n for c in components for n in c],
+            "wide_names": ["Hannibal and Scipio", "Scipio"],
+            "retrieved_names": ["Hannibal and Scipio", "Scipio"],
+            "component_names": components,
+            "component_sizes": [len(c) for c in components],
+            "seed_component_idx": 0,
+            "n_components": len(components),
+            "n_graph_entities": 5,
+            "n_retrieved_entities": 2,
+            "n_wide_entities": 2,
+            "n_retrieved_edges": 1,
+        }
+
+
+def test_trace_reports_severed_component(monkeypatch, capsys):
+    monkeypatch.setenv("GOLDENGRAPH_QA_TRACE", "1")
+    corpus = QACorpus(
+        name="musique",
+        documents=(Document(id="d", text="x"),),
+        questions=(_q("q1", "Exeter College"),),
+    )
+    run_engine(_ComponentEngine(), corpus, model="gpt-4o-mini", budget_usd=5.0)
+    out = capsys.readouterr().out
+    assert "components: 3 total" in out
+    # seed component (2ent) != answer component (2ent), different islands
+    assert "seed_comp=2ent answer_comp=2ent same_component=False" in out

@@ -77,6 +77,24 @@ def _localize_trace(engine, handle, corpus, *, limit: int = 10) -> None:
             f"ball={loc['n_retrieved_entities']}ent/{loc['n_retrieved_edges']}edges",
             flush=True,
         )
+        comps = loc.get("component_names")
+        if comps is not None:
+            seed_idx = loc.get("seed_component_idx", -1)
+            ans_idx = next(
+                (i for i, names in enumerate(comps)
+                 if metrics.answer_match(" ".join(names), q.gold_answer)),
+                -1,
+            )
+            same = ans_idx == seed_idx and ans_idx >= 0
+            seed_sz = len(comps[seed_idx]) if seed_idx >= 0 else 0
+            ans_sz = len(comps[ans_idx]) if ans_idx >= 0 else 0
+            sizes = loc.get("component_sizes", [])
+            print(
+                f"      components: {loc.get('n_components', '?')} total "
+                f"(top sizes {sizes[:6]}); seed_comp={seed_sz}ent "
+                f"answer_comp={ans_sz}ent same_component={same}",
+                flush=True,
+            )
 
 
 def run_engine(engine: QAEngine, corpus, *, model: str, budget_usd: float) -> dict:
