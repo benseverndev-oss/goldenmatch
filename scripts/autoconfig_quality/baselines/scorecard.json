@@ -1,0 +1,119 @@
+{
+  "datasets": {
+    "anchor_person_match": {
+      "f1": {
+        "attribution": {
+          "blocking_recall": 1.0,
+          "final_recall": 1.0,
+          "threshold_loss": 0.0
+        },
+        "f1": 0.9896,
+        "precision": 0.9793,
+        "recall": 1.0
+      },
+      "kind": "anchor",
+      "signals": {
+        "blocking_cost": {
+          "candidate_pairs": 1712,
+          "max_block": 13,
+          "n_blocks": 149,
+          "p99": 13,
+          "reduction_ratio": 0.9931
+        },
+        "blocking_fields": [
+          "zip"
+        ],
+        "classification": {
+          "email": "email",
+          "first_name": "name",
+          "last_name": "name",
+          "zip": "zip"
+        },
+        "exact_matchkeys": [
+          "email"
+        ],
+        "planner_rung": {
+          "backend": "polars-direct",
+          "rule_name": "plan_selected_simple"
+        }
+      }
+    },
+    "anchor_shared_email": {
+      "kind": "anchor",
+      "signals": {
+        "blocking_cost": {
+          "candidate_pairs": 15,
+          "max_block": 2,
+          "n_blocks": 15,
+          "p99": 2,
+          "reduction_ratio": 0.9655
+        },
+        "blocking_fields": [
+          "email"
+        ],
+        "classification": {
+          "email": "email",
+          "first": "string",
+          "last": "string",
+          "phone": "phone",
+          "rec_id": "identifier",
+          "source": "name"
+        },
+        "exact_matchkeys": [
+          "email",
+          "phone"
+        ],
+        "planner_rung": {
+          "backend": "polars-direct",
+          "rule_name": "plan_selected_simple"
+        }
+      }
+    },
+    "anchor_sparse_zip": {
+      "kind": "anchor",
+      "signals": {
+        "blocking_cost": {
+          "candidate_pairs": 1529,
+          "max_block": 4,
+          "n_blocks": 1411,
+          "p99": 3,
+          "reduction_ratio": 1.0
+        },
+        "blocking_fields": [
+          "first_name",
+          "last_name",
+          "zip5"
+        ],
+        "classification": {
+          "email": "email",
+          "first_name": "name",
+          "last_name": "name",
+          "npi": "identifier",
+          "phone_number": "identifier",
+          "source": "string",
+          "zip5": "zip"
+        },
+        "exact_matchkeys": [
+          "email",
+          "npi"
+        ],
+        "planner_rung": {
+          "backend": "polars-direct",
+          "rule_name": "plan_selected_simple"
+        }
+      }
+    }
+  },
+  "meta": {
+    "datasets_run": [
+      "anchor_person_match",
+      "anchor_shared_email",
+      "anchor_sparse_zip"
+    ],
+    "datasets_skipped": {
+      "dblp_acm": "absent"
+    },
+    "git_sha": "d7ce338a565d01ba062dbaa5a1eb343eea4bd982",
+    "native_version": "0.1.11"
+  }
+}
