@@ -172,6 +172,7 @@ from goldenmatch.core.learned_blocking import apply_learned_blocks, learn_blocki
 # ── Lineage ──────────────────────────────────────────────────────────────
 from goldenmatch.core.lineage import build_lineage, save_lineage
 from goldenmatch.core.llm_budget import BudgetTracker
+from goldenmatch.core.llm_canonicalize import CanonicalRecord, canonicalize_cluster
 from goldenmatch.core.llm_cluster import llm_cluster_pairs
 from goldenmatch.core.llm_extract import llm_extract_features
 from goldenmatch.core.llm_labeler import label_pairs as llm_label_pairs
@@ -351,6 +352,7 @@ __all__ = [
     # LLM
     "llm_score_pairs", "llm_cluster_pairs", "BudgetTracker",
     "llm_label_pairs", "llm_extract_features",
+    "canonicalize_cluster", "CanonicalRecord",
     # PPRL
     "PPRLConfig", "run_pprl", "compute_bloom_filters",
     "link_trusted_third_party", "link_smc",
