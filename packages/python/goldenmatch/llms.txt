@@ -126,8 +126,8 @@ Auto-config only applies these when the profiled `col_type` agrees with the colu
 GoldenMatch is the headline package of a 6-package suite that composes into one pipeline: GoldenCheck (profile + validate) → GoldenFlow (standardize) → GoldenMatch (dedupe) → GoldenAnalysis (cross-cutting reporting), orchestrated by GoldenPipe, with InferMap for schema mapping. All ship on both PyPI and npm.
 
 ## Knowledge Graphs (entity resolution as the resolve stage)
-- `goldenmatch-kg` (PyPI) — drop-in GoldenMatch resolution for KG frameworks: neo4j-graphrag (`GoldenMatchResolver`), LlamaIndex PropertyGraphIndex (`GoldenMatchEntityResolver`), Graphiti (`propose_entity_merges`). One framework-agnostic `resolve_entities` core; the ER-stage lift is measured by ER-KG-Bench, not asserted.
-- `goldengraph` (PyPI) — build-your-own-KG from text: `text → LLM extraction → GoldenMatch resolution → durable bi-temporal store`. pyo3-free Rust engine (store / query / community detection); ER is the differentiator. Early evidence program with head-to-head QA bench vs LightRAG / MS-GraphRAG / Graphiti.
+- `goldenmatch-kg` (in-repo, first PyPI release pending) — drop-in GoldenMatch resolution for KG frameworks: neo4j-graphrag (`GoldenMatchResolver`), LlamaIndex PropertyGraphIndex (`GoldenMatchEntityResolver`), Graphiti (`propose_entity_merges`). One framework-agnostic `resolve_entities` core; the ER-stage lift is measured by ER-KG-Bench, not asserted.
+- `goldengraph` (in-repo, first PyPI release pending) — build-your-own-KG from text: `text → LLM extraction → GoldenMatch resolution → durable bi-temporal store`. pyo3-free Rust engine (store / query / community detection); ER is the differentiator. Early evidence program with head-to-head QA bench vs LightRAG / MS-GraphRAG / Graphiti.
 
 ## Recent (v2.1–v2.2)
 - Semantic blocking (#1065, v2.2.0, opt-in): `dedupe_df(semantic_blocking=...)` unions abbreviation/initialism blocking, a business-alias canonical-form table, and an embedding ANN pass. +5.3pp recall at zero precision cost on the abbreviation-heavy benchmark.

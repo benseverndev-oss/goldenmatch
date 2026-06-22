@@ -5,7 +5,7 @@ This is the umbrella entry point for "are all the structural doc surfaces in
 lockstep with the published-package roster?". It is deterministic, stdlib-only,
 and exits non-zero on any FAIL so it can gate CI without flaking on clean PRs.
 
-It does FOUR things (see ``.claude/doc-surfaces.md`` for the surface inventory):
+It does SIX things (see ``.claude/doc-surfaces.md`` for the surface inventory):
 
 1. Runs the two existing doc gates as subprocesses so there is one command for
    "all doc gates": ``check_version_consistency.py`` and
@@ -33,6 +33,20 @@ It does FOUR things (see ``.claude/doc-surfaces.md`` for the surface inventory):
    bare ``## X.Y.Z (date)`` variant; ``unreleased`` headings are skipped) and
    assert it equals the package's ``pyproject.toml`` version. Packages whose
    CHANGELOG has no versioned heading are REPORTED, not failed.
+
+5. install-claims-resolve: scan the flagship/aggregate surfaces (root
+   ``README.md``, the goldenmatch package README + ``llms.txt``) for first-party
+   ``pip install <pkg>`` / ``npm i <pkg>`` commands and assert each names a
+   PUBLISHED distribution (``PYPI_PACKAGES`` / ``NPM_PACKAGES`` from
+   ``suite_download_badges.py``, plus an explicit unpublished allowlist). This is
+   the guard for the ``pip install goldenmatch-kg`` 404 class of bug -- a homepage
+   install line for a not-yet-published package.
+
+6. aggregate-badge roster: every ``publish-<pkg>.yml`` PyPI publisher (minus
+   documented exceptions) is in ``PYPI_PACKAGES`` and vice versa; same for
+   ``publish-<pkg>-js.yml`` <-> ``NPM_PACKAGES``; and the README pepy.tech
+   ``?q=`` download-badge link lists exactly ``PYPI_PACKAGES`` so the clicked-
+   through total matches the linked packages.
 
 ``--check`` (the default) only reports + exits 1 on drift. ``--fix`` performs the
 narrow MECHANICAL reconciliations that are safe to automate (adding a missing
@@ -369,6 +383,159 @@ def check_changelog_versions(res: Result) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# 5/6 shared: the authoritative published-package rosters
+# --------------------------------------------------------------------------- #
+def _badge_package_lists() -> tuple[list[str], list[str]] | None:
+    """Import (PYPI_PACKAGES, NPM_PACKAGES) from the badge script.
+
+    Those lists are the documented single source of truth for the suite download
+    totals; the install-claim and aggregate-link gates check the docs against
+    them. The badge script is stdlib-only with all execution under ``__main__``,
+    so importing it has no side effects. Returns None if it can't be imported
+    (treated as a skip, never a hard failure).
+    """
+    if str(SCRIPTS) not in sys.path:
+        sys.path.insert(0, str(SCRIPTS))
+    try:
+        from suite_download_badges import NPM_PACKAGES, PYPI_PACKAGES
+    except Exception:
+        return None
+    return list(PYPI_PACKAGES), list(NPM_PACKAGES)
+
+
+# --------------------------------------------------------------------------- #
+# 5. install-claims-resolve
+# --------------------------------------------------------------------------- #
+# Flagship/aggregate surfaces whose FIRST-PARTY install commands must name a
+# PUBLISHED distribution. Scoped deliberately: a not-yet-released package's OWN
+# README may carry an aspirational `pip install <self>` line, so per-package
+# READMEs are out of scope -- this gates the homepage + the AI-facing llms.txt,
+# where a broken cross-package install claim actively misleads.
+_INSTALL_CLAIM_SURFACES = (
+    "README.md",
+    "packages/python/goldenmatch/README.md",
+    "packages/python/goldenmatch/llms.txt",
+)
+# First-party distributions documented but intentionally NOT yet published. Add a
+# name here (with review) to keep an install line for a pre-release package;
+# empty by default so a stray claim fails loudly.
+_UNPUBLISHED_INSTALL_ALLOWLIST: set[str] = set()
+
+_PIP_INSTALL_RE = re.compile(r"pip install\s+(?P<args>[^\n`]+)")
+_NPM_INSTALL_RE = re.compile(r"(?:npm (?:install|i)|pnpm (?:add|install))\s+(?P<args>[^\n`]+)")
+_SHELL_SPLIT_RE = re.compile(r"&&|\|\||[;|]")
+
+
+def _is_first_party(pkg: str) -> bool:
+    return pkg.startswith("golden") or pkg.startswith("infermap")
+
+
+def _install_pkgs(args: str) -> list[str]:
+    """Bare distribution names from the FIRST shell segment of an install command.
+
+    Stops at the first shell operator (so ``pip install goldenmatch && goldenmatch
+    dedupe ...`` yields only ``goldenmatch``), skips flags / paths / VCS / URLs,
+    and strips quotes, ``[extras]``, and version specifiers.
+    """
+    segment = _SHELL_SPLIT_RE.split(args, maxsplit=1)[0]
+    segment = segment.split("#", 1)[0]  # drop a trailing inline `# comment`
+    pkgs: list[str] = []
+    for raw in segment.split():
+        tok = raw.strip("'\"")
+        if not tok or tok.startswith("-"):
+            continue
+        if "/" in tok or tok.startswith((".", "git+", "http")):
+            continue  # editable path / VCS / URL install
+        tok = re.split(r"[\[<>=!~ ]", tok, maxsplit=1)[0]  # drop [extras] + version pin
+        if tok:
+            pkgs.append(tok.lower())
+    return pkgs
+
+
+def check_install_claims(res: Result) -> None:
+    lists = _badge_package_lists()
+    if lists is None:
+        res.record("install claims resolve to a published dist", True,
+                   "(badge script not importable -- skipped)")
+        return
+    pypi = set(lists[0]) | _UNPUBLISHED_INSTALL_ALLOWLIST
+    npm = set(lists[1]) | _UNPUBLISHED_INSTALL_ALLOWLIST
+    bad: list[str] = []
+    for rel in _INSTALL_CLAIM_SURFACES:
+        path = ROOT / rel
+        if not path.exists():
+            continue
+        text = path.read_text(encoding="utf-8")
+        for m in _PIP_INSTALL_RE.finditer(text):
+            for pkg in _install_pkgs(m.group("args")):
+                if _is_first_party(pkg) and pkg not in pypi:
+                    bad.append(f"{rel}: `pip install {pkg}` (not a published PyPI dist)")
+        for m in _NPM_INSTALL_RE.finditer(text):
+            for pkg in _install_pkgs(m.group("args")):
+                if _is_first_party(pkg) and pkg not in npm:
+                    bad.append(f"{rel}: `npm install {pkg}` (not a published npm dist)")
+    res.record(
+        "install claims resolve to a published dist",
+        not bad,
+        "; ".join(sorted(set(bad))) if bad else "",
+    )
+
+
+# --------------------------------------------------------------------------- #
+# 6. aggregate-badge roster
+# --------------------------------------------------------------------------- #
+_PEPY_RE = re.compile(r"pepy\.tech/projects\?q=(?P<q>[A-Za-z0-9+._-]+)")
+# Published distributions deliberately NOT counted in the suite download totals.
+# goldenmatch-pg ships as GitHub-release tarballs (no pypistats download API),
+# so it has a publish workflow but is excluded from PYPI_PACKAGES on purpose.
+_PYPI_PUBLISH_BADGE_EXCEPTIONS = {"goldenmatch-pg"}
+
+
+def check_aggregate_badges(res: Result) -> None:
+    lists = _badge_package_lists()
+    if lists is None:
+        res.record("aggregate badge roster", True, "(badge script not importable -- skipped)")
+        return
+    pypi_set, npm_set = set(lists[0]), set(lists[1])
+
+    # (a) Bidirectional publisher <-> badge-roster coverage. A new publish-*.yml
+    #     added without updating the badge totals (or vice versa) is real drift.
+    pypi_pub = {s for s in _publish_stems()
+                if s not in _NON_DIST_STEMS and not s.endswith("-js")}
+    npm_pub = {s[: -len("-js")] for s in _publish_stems() if s.endswith("-js")}
+    pypi_drift = (pypi_pub - _PYPI_PUBLISH_BADGE_EXCEPTIONS) ^ pypi_set
+    res.record(
+        "PyPI publishers <-> badge PYPI_PACKAGES",
+        not pypi_drift,
+        f"symmetric-diff (add to PYPI_PACKAGES, add a publish-*.yml, or to "
+        f"EXCEPTIONS): {sorted(pypi_drift)}" if pypi_drift else "",
+    )
+    npm_drift = npm_pub ^ npm_set
+    res.record(
+        "npm publishers <-> badge NPM_PACKAGES",
+        not npm_drift,
+        f"symmetric-diff: {sorted(npm_drift)}" if npm_drift else "",
+    )
+
+    # (b) The README aggregate-download badge LINK (pepy.tech ?q=) must list
+    #     exactly PYPI_PACKAGES so the clicked-through page matches the total.
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    m = _PEPY_RE.search(readme)
+    if m is None:
+        res.record("README pepy.tech ?q= link == PYPI_PACKAGES", False,
+                   "no pepy.tech/projects?q= link found in README.md")
+        return
+    link_set = {p for p in m.group("q").split("+") if p}
+    link_drift = link_set ^ pypi_set
+    res.record(
+        "README pepy.tech ?q= link == PYPI_PACKAGES",
+        not link_drift,
+        f"link/roster symmetric-diff (update the README ?q= list): {sorted(link_drift)}"
+        if link_drift else "",
+    )
+
+
+# --------------------------------------------------------------------------- #
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true", default=True,
@@ -386,6 +553,8 @@ def main(argv: list[str] | None = None) -> int:
     check_roster_matrix(res)
     check_docs_nav_integrity(res)
     check_changelog_versions(res)
+    check_install_claims(res)
+    check_aggregate_badges(res)
 
     if args.fix:
         print("--fix: no auto-fixable mechanical reconciliations pending; "
