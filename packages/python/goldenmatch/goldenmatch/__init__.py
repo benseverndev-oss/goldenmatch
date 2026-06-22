@@ -247,6 +247,7 @@ from goldenmatch.core.standardize import apply_standardization
 from goldenmatch.core.streaming import StreamProcessor, run_stream
 from goldenmatch.core.threshold import suggest_threshold
 from goldenmatch.core.validate import validate_dataframe
+from goldenmatch.core.vector_index import VectorIndex
 
 # ── Identity Graph ───────────────────────────────────────────────────────
 from goldenmatch.identity import (
@@ -342,6 +343,7 @@ __all__ = [
     "ScreeningResult", "ScreeningHit", "FieldReason",
     "retrieve_similar_records", "RetrievedRecord",
     "entity_aware_retrieve", "Entity", "EntityRetrievalResult",
+    "VectorIndex",
     # Evaluation
     "evaluate_pairs", "evaluate_clusters", "load_ground_truth_csv", "EvalResult",
     "RecallEstimate", "RecallCertificate", "estimate_recall", "certify_recall_df",
