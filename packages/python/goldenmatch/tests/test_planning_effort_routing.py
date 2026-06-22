@@ -68,7 +68,13 @@ def test_skewed_pair_counts_straddle_the_threshold():
 
 
 def test_measurement_flips_the_backend_decision():
-    """normal (extrapolate) -> simple plan; thinking (measure) -> chunked plan."""
+    """Extrapolated signal -> simple plan; measured signal -> chunked plan.
+
+    (Post-F2 the controller measures at all non-distributed tiers including
+    `normal`; the extrapolation path this guards is now reached only on the
+    distributed / above-ceiling / measurement-failure fallbacks. The mechanism —
+    that the linear under-count flips the rung — is what's pinned here.)
+    """
     df = _skewed_df()
     cfg = _cfg()
     extrap = measure_blocking_profile(df.sample(_SAMPLE, seed=0), cfg).extrapolate_to(
@@ -78,3 +84,36 @@ def test_measurement_flips_the_backend_decision():
 
     assert _plan_rule(extrap) == "plan_selected_simple"
     assert _plan_rule(measured) == "plan_selected_chunked"
+
+
+# --------------------------------------------------------------------------- #
+# F2 gate (spec 2026-06-22): which tiers measure full-frame blocking.
+# --------------------------------------------------------------------------- #
+from goldenmatch.core.autoconfig_controller import (  # noqa: E402
+    _MEASURE_BLOCKING_MAX_ROWS_LOWER_TIER as _CEIL,
+)
+from goldenmatch.core.autoconfig_controller import (
+    _should_measure_blocking as _gate,
+)
+
+
+def test_f2_normal_tier_now_measures_static_under_ceiling():
+    # The common default tier measures (pre-F2 it extrapolated -> under-counted).
+    assert _gate(planning_effort="normal", distributed=False, is_static=True, n_rows=1_000_000)
+    assert _gate(planning_effort="fast", distributed=False, is_static=True, n_rows=_CEIL)
+
+
+def test_f2_thinking_einstein_always_measure_even_non_static():
+    for eff in ("thinking", "einstein"):
+        assert _gate(planning_effort=eff, distributed=False, is_static=False, n_rows=10**9)
+
+
+def test_f2_lower_tiers_extrapolate_when_fast_path_wont_apply():
+    # Non-static at a lower tier would hit the slow build_blocks fallback -> skip.
+    assert not _gate(planning_effort="normal", distributed=False, is_static=False, n_rows=1_000)
+    # Above the ceiling, even static extrapolates on lower tiers (budget backstop).
+    assert not _gate(planning_effort="normal", distributed=False, is_static=True, n_rows=_CEIL + 1)
+
+
+def test_f2_distributed_never_measures():
+    assert not _gate(planning_effort="einstein", distributed=True, is_static=True, n_rows=10)

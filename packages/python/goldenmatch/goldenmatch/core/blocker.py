@@ -85,6 +85,72 @@ def _emit_blocking_profile(
     current_emitter().set_blocking(profile)
 
 
+def _fast_static_block_sizes(
+    lf: pl.LazyFrame, config: Any
+) -> list[int] | None:
+    """Vectorized block-size distribution for the ``static`` strategy.
+
+    Stage-D speed lever (spec 2026-06-22): ``measure_blocking_profile`` only
+    needs the block-SIZE distribution, but the general path builds every block
+    via ``build_blocks`` (materializing one DataFrame per block) then re-collects
+    each one — O(n_blocks) Polars round-trips that dominate the wall (measured
+    329 ms vs ~9 ms at 1M rows / fixed-cardinality blocking). When the config is
+    plain ``static`` blocking, the same sizes fall out of a single per-key
+    ``group_by(...).agg(pl.len())`` with no per-block materialization.
+
+    Returns ``None`` — caller falls back to the exact ``build_blocks`` loop —
+    whenever the vectorized result would NOT be byte-identical to
+    ``_build_static_blocks``: a non-static strategy, or oversized blocks that
+    ``_build_static_blocks`` would ANN/auto-split (``skip_oversized=True``).
+    With ``skip_oversized=False`` oversized blocks are kept whole, so the raw
+    group-by sizes still match. Singletons (size < 2) are dropped to mirror the
+    ``if size < 2: continue`` skip in ``_build_static_blocks``.
+    """
+    if getattr(config, "strategy", "static") != "static":
+        return None
+    keys = config.keys
+    # Mirror build_blocks' auto_select reduction to a single key.
+    if config.auto_select and keys and len(keys) > 1:
+        best_key = select_best_blocking_key(lf, keys, config.max_block_size)
+        keys = [best_key]
+    if not keys:
+        return None
+
+    max_block_size = config.max_block_size
+    skip_oversized = config.skip_oversized
+    all_sizes: list[int] = []
+    for key_config in keys:
+        block_key_expr = _build_block_key_expr(key_config)
+        # Aggregate sizes per key in one lazy group_by, then drop null/sentinel
+        # keys EAGERLY on the collected per-key table. The drop must run after
+        # collect: applied as a lazy .filter() it references a group key, so
+        # Polars' predicate pushdown moves it AHEAD of the group_by and the
+        # strip/lowercase/is_in string ops run over all n_rows instead of the
+        # n_blocks keys (measured 74 ms vs 6 ms at 1M). Dropping a sentinel/null
+        # group is identical to dropping its rows — every row in the group shares
+        # the key. Singletons (size < 2) are dropped to mirror _build_static_blocks.
+        agg = (
+            lf
+            .group_by(block_key_expr)
+            .agg(pl.len().alias("__sz__"))
+            .collect()
+        )
+        agg = agg.filter(
+            pl.col("__block_key__").is_not_null()
+            & ~pl.col("__block_key__")
+                .str.strip_chars()
+                .str.to_lowercase()
+                .is_in(["nan", "null", "none"])
+        )
+        sizes = [s for s in agg.get_column("__sz__").to_list() if s >= 2]
+        # If _build_static_blocks WOULD sub-split/skip an oversized block, the
+        # vectorized sizes diverge — bail to the exact path.
+        if skip_oversized and any(s > max_block_size for s in sizes):
+            return None
+        all_sizes.extend(sizes)
+    return all_sizes
+
+
 def measure_blocking_profile(
     df: pl.DataFrame | pl.LazyFrame,
     config: Any,
@@ -97,13 +163,18 @@ def measure_blocking_profile(
     bottleneck; scoring was, and that is now ~5x faster). Returns ``None`` on
     ANY failure or when the config has no blocking, so the caller can fall back
     to linear extrapolation without risk.
+
+    Fast path (Stage-D, spec 2026-06-22): plain ``static`` blocking computes the
+    block-size distribution with a single vectorized ``group_by`` per key
+    (``_fast_static_block_sizes``), ~36x faster than building + re-collecting
+    every block; non-static configs and oversized-split cases fall back to the
+    exact ``build_blocks`` loop. Both paths feed the identical aggregation below.
     """
     try:
         blocking_cfg = getattr(config, "blocking", None)
         if blocking_cfg is None:
             return None
         lf = df.lazy() if isinstance(df, pl.DataFrame) else df
-        blocks = build_blocks(lf, blocking_cfg)
         n_rows: int = lf.select(pl.len()).collect().item()
 
         if blocking_cfg.passes:
@@ -113,12 +184,15 @@ def measure_blocking_profile(
         else:
             keys_used = []
 
-        sizes: list[int] = []
-        for b in blocks:
-            try:
-                sizes.append(b.df.select(pl.len()).collect().item())
-            except Exception:
-                sizes.append(0)
+        sizes = _fast_static_block_sizes(lf, blocking_cfg)
+        if sizes is None:
+            # Exact fallback: build every block and collect its length.
+            sizes = []
+            for b in build_blocks(lf, blocking_cfg):
+                try:
+                    sizes.append(b.df.select(pl.len()).collect().item())
+                except Exception:
+                    sizes.append(0)
         sizes_sorted = sorted(sizes)
         n_blocks = len(sizes_sorted)
         total_comparisons = sum(s * (s - 1) // 2 for s in sizes_sorted)
