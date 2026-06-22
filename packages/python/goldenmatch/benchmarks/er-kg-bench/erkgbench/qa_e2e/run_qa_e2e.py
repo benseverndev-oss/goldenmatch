@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 
 from . import engineered
-from .corpora import load_musique
+from .corpora import MUSIQUE_HF_DATASET, MUSIQUE_HF_SPLIT, MUSIQUE_SUBSET_SEED, fetch_musique, load_musique
 from .harness import AnswerResult, BuildResult, run_engine, write_results
 
 
@@ -23,15 +23,33 @@ class _MockEngine:
         return AnswerResult(text="?", input_tokens=1, output_tokens=1)
 
 
-def _load_corpus(name: str, max_questions: int, musique_path: str | None, ambiguity: float):
+def _load_corpus(
+    name: str,
+    max_questions: int,
+    musique_path: str | None,
+    ambiguity: float,
+    *,
+    musique_dataset: str = MUSIQUE_HF_DATASET,
+    musique_split: str = MUSIQUE_HF_SPLIT,
+    musique_seed: int = MUSIQUE_SUBSET_SEED,
+):
     if name == "engineered":
         return engineered.generate_engineered(
             seed=20260620, n_questions=max_questions, ambiguity=ambiguity
         )
     if name == "musique":
         # MuSiQue has no ambiguity dial (entities are already canonical); the flag is
-        # ignored here so a sweep over it just re-runs the same corpus.
-        return load_musique(path=musique_path, max_questions=max_questions)
+        # ignored here so a sweep over it just re-runs the same corpus. With an
+        # explicit --musique-path, read that JSONL; otherwise fetch a seeded subset
+        # from the Hub on demand (the corpus is never committed to the repo).
+        if musique_path:
+            return load_musique(path=musique_path, max_questions=max_questions)
+        return fetch_musique(
+            dataset=musique_dataset,
+            split=musique_split,
+            max_questions=max_questions,
+            seed=musique_seed,
+        )
     raise SystemExit(f"unknown corpus: {name}")
 
 
@@ -89,7 +107,15 @@ def main(argv: list[str] | None = None) -> int:
         help="engineered-corpus variant-mention fraction (0.0-1.0); the decay-curve "
         "sweep dial. Ignored for musique.",
     )
-    p.add_argument("--musique-path", default=None)
+    p.add_argument(
+        "--musique-path",
+        default=None,
+        help="JSONL file of MuSiQue-Ans rows. If omitted, --corpus musique fetches a "
+        "seeded subset from the HuggingFace Hub on demand.",
+    )
+    p.add_argument("--musique-dataset", default=MUSIQUE_HF_DATASET)
+    p.add_argument("--musique-split", default=MUSIQUE_HF_SPLIT)
+    p.add_argument("--musique-seed", type=int, default=MUSIQUE_SUBSET_SEED)
     p.add_argument("--model", default="gpt-4o-mini")
     p.add_argument("--budget-usd", type=float, default=25.0)
     p.add_argument("--out-md", required=True)
@@ -104,7 +130,15 @@ def main(argv: list[str] | None = None) -> int:
     out_json = Path(args.out_json).resolve()
     out_md.parent.mkdir(parents=True, exist_ok=True)
 
-    corpus = _load_corpus(args.corpus, args.max_questions, args.musique_path, args.ambiguity)
+    corpus = _load_corpus(
+        args.corpus,
+        args.max_questions,
+        args.musique_path,
+        args.ambiguity,
+        musique_dataset=args.musique_dataset,
+        musique_split=args.musique_split,
+        musique_seed=args.musique_seed,
+    )
     engine = _MockEngine() if args.self_test else _build_engine(args.engine)
     result = run_engine(engine, corpus, model=args.model, budget_usd=args.budget_usd)
     write_results([result], md_path=out_md, json_path=out_json)
