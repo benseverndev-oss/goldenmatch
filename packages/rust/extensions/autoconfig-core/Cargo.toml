@@ -34,5 +34,5 @@ version = "0.10"
 optional = true
 
 [dependencies.rand_chacha]
-version = "0.3"
+version = "0.10"
 optional = true
