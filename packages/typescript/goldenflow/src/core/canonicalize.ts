@@ -50,19 +50,36 @@ function asciiUpper(s: string): string {
 }
 
 // The ASCII whitespace set we collapse/trim on: " \t\n\r\f\v". Deliberately NOT
-// the Unicode-aware `\s`.
-const ASCII_WS = /[ \t\n\r\f\v]+/g;
-const ASCII_WS_LEADING = /^[ \t\n\r\f\v]+/;
-const ASCII_WS_TRAILING = /[ \t\n\r\f\v]+$/;
+// the Unicode-aware `\s` — and handled WITHOUT regex (a Set membership scan), so
+// there is no polynomial-backtracking (ReDoS) surface on long whitespace runs.
+// The token scan also mirrors Python's `_ascii_ws_split` one-for-one.
+const ASCII_WS_CHARS = new Set([" ", "\t", "\n", "\r", "\f", "\v"]);
 
-/** Trim runs of the ASCII whitespace set from both ends. */
+/** Trim runs of the ASCII whitespace set from both ends (linear, no regex). */
 function trimAsciiWs(s: string): string {
-  return s.replace(ASCII_WS_LEADING, "").replace(ASCII_WS_TRAILING, "");
+  let start = 0;
+  let end = s.length;
+  while (start < end && ASCII_WS_CHARS.has(s[start]!)) start++;
+  while (end > start && ASCII_WS_CHARS.has(s[end - 1]!)) end--;
+  return s.slice(start, end);
 }
 
 /** Collapse runs of ASCII whitespace to a single space and trim the ends. */
 function collapseWs(s: string): string {
-  return s.split(ASCII_WS).filter((t) => t.length > 0).join(" ");
+  const tokens: string[] = [];
+  let current = "";
+  for (const ch of s) {
+    if (ASCII_WS_CHARS.has(ch)) {
+      if (current.length > 0) {
+        tokens.push(current);
+        current = "";
+      }
+    } else {
+      current += ch;
+    }
+  }
+  if (current.length > 0) tokens.push(current);
+  return tokens.join(" ");
 }
 
 // ASCII punctuation == Python string.punctuation. A Set keeps deletion
