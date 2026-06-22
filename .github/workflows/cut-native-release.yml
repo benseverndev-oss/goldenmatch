@@ -28,6 +28,10 @@ permissions:
 jobs:
   cut:
     runs-on: ubuntu-latest
+    # Route the dispatch input through env so it is a shell variable, never
+    # interpolated into a run script (avoids actionlint expression-injection).
+    env:
+      VERSION: ${{ inputs.version }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
         with:
@@ -37,15 +41,14 @@ jobs:
       - name: Guard - input version matches the tree and tag is new
         run: |
           set -euo pipefail
-          want='${{ inputs.version }}'
           py=$(grep -m1 -E '^version' packages/rust/extensions/native/pyproject.toml | sed -E 's/.*"([^"]+)".*/\1/')
           rs=$(grep -m1 -E '^version' packages/rust/extensions/native/Cargo.toml      | sed -E 's/.*"([^"]+)".*/\1/')
-          echo "requested=$want  pyproject=$py  cargo=$rs"
-          if [ "$py" != "$want" ] || [ "$rs" != "$want" ]; then
-            echo "::error::version mismatch -- bump pyproject.toml + Cargo.toml to $want on main first"
+          echo "requested=$VERSION  pyproject=$py  cargo=$rs"
+          if [ "$py" != "$VERSION" ] || [ "$rs" != "$VERSION" ]; then
+            echo "::error::version mismatch -- bump pyproject.toml + Cargo.toml to $VERSION on main first"
             exit 1
           fi
-          tag="goldenmatch-native-v$want"
+          tag="goldenmatch-native-v$VERSION"
           if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
             echo "::error::tag $tag already exists on origin"
             exit 1
@@ -72,12 +75,14 @@ jobs:
           fi
 
       - name: Create + push the tag
+        env:
+          FLAG: ${{ steps.sign.outputs.flag }}
         run: |
           set -euo pipefail
           git config --global user.name  "goldenmatch release"
           git config --global user.email "actions@github.com"
-          tag="goldenmatch-native-v${{ inputs.version }}"
-          git tag ${{ steps.sign.outputs.flag }} "$tag" -m "goldenmatch-native ${{ inputs.version }}"
+          tag="goldenmatch-native-v$VERSION"
+          git tag "$FLAG" "$tag" -m "goldenmatch-native $VERSION"
           git push origin "refs/tags/$tag"
 
       - name: Publish GitHub Release for the tag
@@ -85,17 +90,15 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          tag="goldenmatch-native-v${{ inputs.version }}"
+          tag="goldenmatch-native-v$VERSION"
           gh release create "$tag" --title "$tag" --verify-tag \
-            --notes "goldenmatch-native ${{ inputs.version }} -- compiled polars runtime. Wheels built + uploaded to PyPI by publish-goldenmatch-native.yml."
+            --notes "goldenmatch-native $VERSION -- compiled polars runtime. Wheels built + uploaded to PyPI by publish-goldenmatch-native.yml."
 
       - name: Dispatch the PyPI publish (build every wheel + upload)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          gh workflow run publish-goldenmatch-native.yml \
-            --ref main \
-            -f ref="goldenmatch-native-v${{ inputs.version }}" \
-            -f publish=true
-          echo "Dispatched publish-goldenmatch-native.yml for goldenmatch-native-v${{ inputs.version }}."
+          tag="goldenmatch-native-v$VERSION"
+          gh workflow run publish-goldenmatch-native.yml --ref main -f ref="$tag" -f publish=true
+          echo "Dispatched publish-goldenmatch-native.yml for $tag."
