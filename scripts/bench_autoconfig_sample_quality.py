@@ -86,6 +86,7 @@ def main() -> int:
         ),
     }
 
+    all_results: list[tuple[str, int, float]] = []  # (scheme, sample_n, med_ratio)
     for name, blocking_cfg in schemes.items():
         cfg = SimpleNamespace(blocking=blocking_cfg)
         gt_profile = measure_blocking_profile(full, cfg)
@@ -115,21 +116,31 @@ def main() -> int:
                 continue
             med_ratio = statistics.median(ratios)
             rows.append((n, med_ratio))
+            all_results.append((name, n, med_ratio))
             print(
                 f"{n:>8,} {n / N_FULL:>6.2%} {int(statistics.median(extraps)):>14,} "
                 f"{med_ratio:>12.3f} {max(ratios) - min(ratios):>9.3f}"
             )
 
-    print("\n--- INTERPRETATION ---")
-    print("extrap/true < 1.0 = the sample-then-extrapolate path UNDER-estimates the")
-    print("true candidate pair count. The ratio tracks the sampling fraction because")
-    print("within-block pairs grow quadratically with block size but extrapolate_to")
-    print("scales them only linearly. A bigger sample (or full-frame measurement,")
-    print("which native speed makes affordable) closes the gap.\n")
-    print("Planner consequence (boundary = 50M pairs, simple -> chunked):")
-    print("a controller sampling ~20k of a 10M-row dataset (frac 0.2%) would read a")
-    print("true-60M-pair dataset as ~0.12M pairs -> picks 'simple/bucket' (WRONG RUNG),")
-    print("under-provisioning the backend by ~500x.")
+    print("\n--- INTERPRETATION (post-S1) ---")
+    print("extrap/true ~= 1.0 across all sample fractions: the corrected ratio**2")
+    print("extrapolation (spec 2026-06-22-autoconfig-smarter-faster-s1-s3) tracks the")
+    print("true candidate pair count to within a few percent. The OLD linear scaling")
+    print("under-counted by ~the sampling fraction (a 1% sample read ~100x low),")
+    print("flipping a true chunked-rung dataset to 'simple/bucket' and under-")
+    print("provisioning the backend. ratio**2 restores scale-invariance.\n")
+
+    # ── Gate: the under-count must be fixed across every sample fraction. ──────
+    # Observed post-S1: 0.95-0.99. The band would fail hard if linear scaling
+    # regressed (a 1% sample would read ~0.01 << 0.6).
+    LOW, HIGH = 0.6, 1.6
+    bad = [(s, n, r) for (s, n, r) in all_results if not (LOW <= r <= HIGH)]
+    if bad:
+        print(f"GATE FAILED: {len(bad)} (scheme, sample) ratios outside [{LOW}, {HIGH}]:")
+        for s, n, r in bad:
+            print(f"  {s} sample={n:,}: extrap/true={r:.3f}")
+        return 1
+    print(f"GATE PASSED: all {len(all_results)} median extrap/true ratios in [{LOW}, {HIGH}].")
     return 0
 
 

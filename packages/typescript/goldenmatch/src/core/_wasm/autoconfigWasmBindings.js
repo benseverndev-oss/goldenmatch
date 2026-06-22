@@ -53,6 +53,32 @@ export function autoconfig_decide_plan(input_json) {
         wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
     }
 }
+
+/**
+ * S1 extrapolation: a JSON `ExtrapolationInput` -> a JSON `ExtrapolationOutput`.
+ * @param {string} input_json
+ * @returns {string}
+ */
+export function autoconfig_extrapolate_pair_count(input_json) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const ptr0 = passStringToWasm0(input_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.autoconfig_extrapolate_pair_count(ptr0, len0);
+        var ptr2 = ret[0];
+        var len2 = ret[1];
+        if (ret[3]) {
+            ptr2 = 0; len2 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred3_0 = ptr2;
+        deferred3_1 = len2;
+        return getStringFromWasm0(ptr2, len2);
+    } finally {
+        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+    }
+}
 function __wbg_get_imports() {
     const import0 = {
         __proto__: null,

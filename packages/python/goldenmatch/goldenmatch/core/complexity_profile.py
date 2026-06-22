@@ -263,6 +263,12 @@ class BlockingProfile:
     block_sizes_max: int = 0
     singleton_block_count: int = 0
     oversized_block_count: int = 0
+    # Chao1 mark-recapture inputs for n_blocks richness extrapolation (S1,
+    # spec 2026-06-22). Optional: None => not measured (extrapolate_to uses the
+    # linear n_blocks fallback); a present value (incl. 0) => measured (Chao1
+    # richness). Populated only by the fast static measurement path (blocker.py).
+    chao1_f1: int | None = None  # blocks with exactly 1 sampled row (singletons)
+    chao1_f2: int | None = None  # blocks with exactly 2 sampled rows (doubletons)
 
     @property
     def estimated_pair_count(self) -> int:
@@ -275,24 +281,68 @@ class BlockingProfile:
         return self.total_comparisons
 
     def extrapolate_to(self, n_rows_sample: int, n_rows_full: int) -> BlockingProfile:
-        """Project sample's pair-count signal to a full-data row count.
+        """Project the sample's pair-count signal to a full-data row count (S1,
+        spec 2026-06-22-autoconfig-smarter-faster-s1-s3-design).
 
-        Spec §Pipeline integration: pair count scales linearly with the
-        row-count ratio. Over-estimation just pushes toward a heavier
-        plan, which is safer than under-estimating. Block-size percentiles
-        are not scaled -- distribution shape is roughly invariant to N
-        when blocking is well-behaved (spec §Open questions #1).
+        Within-block candidate pairs grow QUADRATICALLY with the row-count
+        ratio, so the pair count scales by ratio**2 (not the old linear ratio,
+        which systematically UNDER-counted at scale). Derived: under uniform row
+        sampling at fraction f = n_sample/n_full, a full block of size S yields
+        expected sample pairs f**2 * S(S-1)/2, so E[sample pairs] = f**2 *
+        (full pairs) and the unbiased full count is sample_pairs / f**2 =
+        sample_pairs * ratio**2. Computed integer-exact (// not float) so the
+        Rust core kernel matches bit-for-bit. Capped at the all-pairs maximum
+        n(n-1)/2 (a defensive rail: structurally inert for a legitimate measured
+        total_comparisons <= C(n_sample, 2); only clamps pathological input).
+
+        n_blocks uses a Chao1 richness estimate when F1/F2 were measured (the
+        fast static path); else a linear fallback. Block-size percentiles are not
+        scaled (distribution shape ~invariant to N when blocking is well-behaved).
         """
         import dataclasses
 
         if n_rows_sample <= 0 or n_rows_full <= 0:
             return self
-        ratio = n_rows_full / n_rows_sample
+
+        # Native fast path (S1): the shared core kernel is the source of truth
+        # when the "autoconfig" component is enabled AND the wheel carries the
+        # symbol. Output is byte-identical to the pure-Python body below
+        # (golden-vector parity); the hasattr guard falls back to pure Python on
+        # a wheel predating goldenmatch-native 0.1.8.
+        from goldenmatch.core._native_loader import native_enabled, native_module
+
+        if native_enabled("autoconfig"):
+            _nm = native_module()
+            if hasattr(_nm, "autoconfig_extrapolate_pair_count"):
+                from goldenmatch.core.autoconfig_native import (
+                    extrapolation_from_json,
+                    extrapolation_input_to_json,
+                )
+
+                out = _nm.autoconfig_extrapolate_pair_count(
+                    extrapolation_input_to_json(self, n_rows_sample, n_rows_full)
+                )
+                return dataclasses.replace(self, **extrapolation_from_json(out))
+
+        pairs = (
+            self.total_comparisons * n_rows_full * n_rows_full
+            // (n_rows_sample * n_rows_sample)
+        )
+        pairs = min(pairs, n_rows_full * (n_rows_full - 1) // 2)
+
+        if self.chao1_f1 is None or self.chao1_f2 is None:
+            blocks = self.n_blocks * n_rows_full // n_rows_sample
+        else:
+            # observed distinct blocks = measured size>=2 blocks + singletons (F1).
+            observed = self.n_blocks + self.chao1_f1
+            blocks = observed + self.chao1_f1 * self.chao1_f1 // (2 * (self.chao1_f2 + 1))
+        blocks = min(blocks, n_rows_full)
+
         return dataclasses.replace(
             self,
-            n_blocks=int(self.n_blocks * ratio),
-            total_comparisons=int(self.total_comparisons * ratio),
-            singleton_block_count=int(self.singleton_block_count * ratio),
+            n_blocks=blocks,
+            total_comparisons=pairs,
+            singleton_block_count=self.singleton_block_count * n_rows_full // n_rows_sample,
         )
 
     def health(self, n_rows: int) -> HealthVerdict:

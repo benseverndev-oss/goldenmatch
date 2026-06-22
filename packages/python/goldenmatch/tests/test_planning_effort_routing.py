@@ -53,27 +53,33 @@ def _plan_rule(blocking_profile) -> str:
     return plan.rule_name
 
 
-def test_skewed_pair_counts_straddle_the_threshold():
-    """The fixture must actually cross the 50M line: extrapolate < 50M <= measure."""
+def test_corrected_extrapolation_no_longer_undercounts_below_threshold():
+    """S1 (spec 2026-06-22): the corrected ratio**2 extrapolation no longer
+    systematically under-counts. On this skewed chunked-rung fixture the full
+    measurement is >= 50M, and the corrected sample extrapolation now ALSO lands
+    >= 50M -- where the old linear scaling produced an order-of-magnitude
+    under-count below the threshold (the bug S1 fixes)."""
     df = _skewed_df()
     cfg = _cfg()
     extrap = measure_blocking_profile(df.sample(_SAMPLE, seed=0), cfg).extrapolate_to(
         n_rows_sample=_SAMPLE, n_rows_full=_N_ROWS
     )
     measured = measure_blocking_profile(df, cfg)
-    assert extrap.estimated_pair_count < SIMPLE_PLAN_MAX_PAIRS
     assert measured.estimated_pair_count >= SIMPLE_PLAN_MAX_PAIRS
-    # The under-count is large (quadratic-in-block-size), not marginal.
-    assert measured.estimated_pair_count > 10 * extrap.estimated_pair_count
+    # Corrected extrapolation tracks the measured truth instead of under-counting
+    # below it; the old linear path asserted `extrap < 50M <= measured` here.
+    assert extrap.estimated_pair_count >= SIMPLE_PLAN_MAX_PAIRS
 
 
-def test_measurement_flips_the_backend_decision():
-    """Extrapolated signal -> simple plan; measured signal -> chunked plan.
+def test_corrected_extrapolation_routes_to_same_rung_as_measurement():
+    """S1 regression (spec 2026-06-22): the corrected fallback extrapolation
+    routes a chunked-rung dataset to `chunked`, MATCHING the full-frame
+    measurement -- the under-provisioning is fixed at the extrapolation source.
 
-    (Post-F2 the controller measures at all non-distributed tiers including
-    `normal`; the extrapolation path this guards is now reached only on the
-    distributed / above-ceiling / measurement-failure fallbacks. The mechanism —
-    that the linear under-count flips the rung — is what's pinned here.)
+    Pre-S1 the linear under-count routed the same extrapolated signal to
+    `simple` (under-provisioned), and only the F2 measurement gate overrode it;
+    this pins that the extrapolation path itself no longer mis-routes. (The F2
+    gate's tier logic is covered separately below.)
     """
     df = _skewed_df()
     cfg = _cfg()
@@ -82,7 +88,7 @@ def test_measurement_flips_the_backend_decision():
     )
     measured = measure_blocking_profile(df, cfg)
 
-    assert _plan_rule(extrap) == "plan_selected_simple"
+    assert _plan_rule(extrap) == "plan_selected_chunked"
     assert _plan_rule(measured) == "plan_selected_chunked"
 
 

@@ -60,6 +60,18 @@ def _measure_via_fallback(df: pl.DataFrame, cfg: GoldenMatchConfig):
         blocker._fast_static_block_sizes = orig
 
 
+def _asdict_no_chao1(profile) -> dict:
+    """asdict() minus the Chao1 fields. The fast static path measures
+    chao1_f1/chao1_f2 (S1); the exact build_blocks fallback can't recover the
+    pre-singleton-drop counts and leaves them None. Every OTHER field must stay
+    byte-identical between the two paths, which is what these parity tests pin."""
+    return {
+        k: v
+        for k, v in dataclasses.asdict(profile).items()
+        if k not in ("chao1_f1", "chao1_f2")
+    }
+
+
 # ---- configs where the fast path MUST fire and match the fallback exactly ----
 
 _PARITY_CONFIGS = {
@@ -115,9 +127,11 @@ def test_fast_path_byte_identical_to_fallback(name: str) -> None:
     fast = measure_blocking_profile(df, cfg)
     slow = _measure_via_fallback(df, cfg)
     assert fast is not None and slow is not None
-    assert dataclasses.asdict(fast) == dataclasses.asdict(slow), (
+    assert _asdict_no_chao1(fast) == _asdict_no_chao1(slow), (
         f"{name}: fast/fallback BlockingProfile diverged"
     )
+    # The fast path additionally measures Chao1 inputs; the fallback leaves None.
+    assert slow.chao1_f1 is None and slow.chao1_f2 is None
 
 
 # ---- configs where the fast path MUST bail (return None) to stay correct ----
@@ -163,12 +177,16 @@ def test_drops_singletons_like_build_blocks() -> None:
         max_block_size=1_000_000,
         skip_oversized=False,
     )
-    sizes = _fast_static_block_sizes(df.lazy(), cfg.blocking)
+    sizes, f1, f2 = _fast_static_block_sizes(df.lazy(), cfg.blocking)
     assert sizes == []
+    assert f1 == 200  # every key unique -> 200 singleton blocks (S1 Chao1 F1)
+    assert f2 == 0
     prof = measure_blocking_profile(df, cfg)
     assert prof is not None
     assert prof.n_blocks == 0
     assert prof.total_comparisons == 0
+    assert prof.chao1_f1 == 200
+    assert prof.chao1_f2 == 0
 
 
 def test_null_and_sentinel_keys_dropped() -> None:
@@ -191,5 +209,5 @@ def test_null_and_sentinel_keys_dropped() -> None:
     )
     fast = measure_blocking_profile(df, cfg)
     slow = _measure_via_fallback(df, cfg)
-    assert dataclasses.asdict(fast) == dataclasses.asdict(slow)
+    assert _asdict_no_chao1(fast) == _asdict_no_chao1(slow)
     assert fast.total_comparisons == 3  # C(3,2)

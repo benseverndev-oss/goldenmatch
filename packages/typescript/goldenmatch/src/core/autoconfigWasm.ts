@@ -18,6 +18,7 @@ import {
   initSync,
   autoconfig_decide_plan,
   autoconfig_classify_columns,
+  autoconfig_extrapolate_pair_count,
 } from "./_wasm/autoconfigWasmBindings.js";
 import { AUTOCONFIG_WASM_BASE64 } from "./_wasm/autoconfigWasmBytes.js";
 import type {
@@ -101,6 +102,31 @@ export interface CoreColumnProfile {
   readonly cardinalityRatio: number;
   readonly avgLen: number;
   readonly needsLlmEscalation: boolean;
+}
+
+/**
+ * S1 pair-count extrapolation input — a blocking-profile summary measured on a
+ * sample, plus the sample/full row counts. `chao1F1`/`chao1F2` are null when the
+ * surface's measurement didn't count them (then n_blocks uses a linear fallback).
+ * The TS profiler doesn't yet measure them, so it passes null and inherits the
+ * ratio**2 pair-count fix immediately; the n_blocks Chao1 refinement lands when
+ * the TS profiler gains the counts.
+ */
+export interface ExtrapolationInput {
+  readonly totalComparisons: number;
+  readonly nBlocks: number;
+  readonly singletonBlockCount: number;
+  readonly chao1F1: number | null;
+  readonly chao1F2: number | null;
+  readonly nRowsSample: number;
+  readonly nRowsFull: number;
+}
+
+/** S1 extrapolation output — the corrected full-data blocking signal. */
+export interface ExtrapolationOutput {
+  readonly nBlocks: number;
+  readonly totalComparisons: number;
+  readonly singletonBlockCount: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -222,6 +248,44 @@ function columnProfileFromJson(j: ColumnProfileJson): CoreColumnProfile {
   };
 }
 
+interface ExtrapolationInputJson {
+  total_comparisons: number;
+  n_blocks: number;
+  singleton_block_count: number;
+  chao1_f1: number | null;
+  chao1_f2: number | null;
+  n_rows_sample: number;
+  n_rows_full: number;
+}
+
+interface ExtrapolationOutputJson {
+  n_blocks: number;
+  total_comparisons: number;
+  singleton_block_count: number;
+}
+
+function extrapolationInputToJson(i: ExtrapolationInput): ExtrapolationInputJson {
+  return {
+    total_comparisons: i.totalComparisons,
+    n_blocks: i.nBlocks,
+    singleton_block_count: i.singletonBlockCount,
+    chao1_f1: i.chao1F1,
+    chao1_f2: i.chao1F2,
+    n_rows_sample: i.nRowsSample,
+    n_rows_full: i.nRowsFull,
+  };
+}
+
+function extrapolationOutputFromJson(
+  j: ExtrapolationOutputJson,
+): ExtrapolationOutput {
+  return {
+    nBlocks: j.n_blocks,
+    totalComparisons: j.total_comparisons,
+    singletonBlockCount: j.singleton_block_count,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -250,6 +314,21 @@ export function classifyColumns(
 }
 
 /**
+ * S1 — project a sample's blocking signal to full-data scale. Pairs scale by
+ * ratio**2 (the corrected, scale-invariant estimate); routes through the shared
+ * wasm core (byte-parity with Python/Rust).
+ */
+export function extrapolatePairCount(
+  input: ExtrapolationInput,
+): ExtrapolationOutput {
+  ensureInit();
+  const out = autoconfig_extrapolate_pair_count(
+    JSON.stringify(extrapolationInputToJson(input)),
+  );
+  return extrapolationOutputFromJson(JSON.parse(out) as ExtrapolationOutputJson);
+}
+
+/**
  * Escape hatches for the parity harness: call the core with the raw serde JSON
  * string (snake_case in, snake_case out), bypassing the camelCase adapters so
  * the test compares wasm output against the golden vectors verbatim.
@@ -262,6 +341,11 @@ export function decidePlanRawJson(inputJson: string): string {
 export function classifyColumnsRawJson(colsJson: string): string {
   ensureInit();
   return autoconfig_classify_columns(colsJson);
+}
+
+export function extrapolatePairCountRawJson(inputJson: string): string {
+  ensureInit();
+  return autoconfig_extrapolate_pair_count(inputJson);
 }
 
 // ---------------------------------------------------------------------------

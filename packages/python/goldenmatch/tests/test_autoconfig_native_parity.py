@@ -124,6 +124,36 @@ def test_classifier_golden_vectors(monkeypatch: pytest.MonkeyPatch) -> None:
                 )
 
 
+# ── Test 2b: extrapolation golden vectors (S1) ───────────────────────────────
+
+def test_extrapolation_golden_vectors(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every vector in extrapolation_vectors.json must round-trip through the
+    native autoconfig_extrapolate_pair_count shim == the oracle expected dict.
+
+    Per-test skip: the module-level guard only checks for the OLD
+    autoconfig_decide_plan symbol, so a wheel that predates the 0.1.8
+    extrapolation shim reaches here -- skip rather than AttributeError."""
+    _nm = native_module()
+    if not hasattr(_nm, "autoconfig_extrapolate_pair_count"):
+        pytest.skip("native ext predates 0.1.8 (no autoconfig_extrapolate_pair_count)")
+    monkeypatch.setenv("GOLDENMATCH_NATIVE", "1")
+
+    vectors_path = GOLDEN_DIR / "extrapolation_vectors.json"
+    assert vectors_path.exists(), f"golden vectors not found at {vectors_path}"
+    vectors = json.loads(vectors_path.read_text(encoding="utf-8"))
+    assert len(vectors) >= 1, "extrapolation_vectors.json is empty"
+
+    for i, v in enumerate(vectors):
+        got_str = _nm.autoconfig_extrapolate_pair_count(json.dumps(v["input"]))  # type: ignore[union-attr]
+        got = json.loads(got_str)
+        assert got == v["expected"], (
+            f"extrapolation vector #{i} mismatch.\n"
+            f"  input:    {v['input']}\n"
+            f"  expected: {v['expected']}\n"
+            f"  got:      {got}"
+        )
+
+
 # ── Test 3: wiring equivalence ───────────────────────────────────────────────
 
 def _make_person_df() -> pl.DataFrame:
