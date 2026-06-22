@@ -2,6 +2,29 @@
 //! Pure, deterministic kernels that replace fixed magic numbers with data-shape-
 //! aware ones, shared across every surface (Python / native / wasm / TS).
 
+/// S3: per-type exact-matchkey cardinality floor (closes the standing TODO at
+/// `autoconfig.py:875`, issue #715).
+///
+/// An exact matchkey asserts identity equivalence, so the backing column must be
+/// plausibly unique. A single blanket floor of 0.5 for every type is crude:
+/// emails are near-unique (demand a high floor), phones are legitimately shared
+/// across household/business lines (a lower floor is fine). Returns the per-type
+/// floor; anything outside the calibrated set (incl. unknown / drifted vocab)
+/// gets the historical default of 0.5, so behavior only changes for the
+/// explicitly-tuned types.
+///
+/// Matches on the `col_type` string (the serde name of the core `ColType`) so it
+/// is robust to vocabulary drift. zip/geo are skipped entirely upstream (a
+/// separate guard) and never reach this floor.
+pub fn exact_matchkey_floor(col_type: &str) -> f64 {
+    match col_type {
+        "email" => 0.70,
+        "phone" => 0.30,
+        // name / string / and every other type keep the historical 0.5 floor.
+        _ => 0.50,
+    }
+}
+
 /// S2b: adaptive sparse-match floor.
 ///
 /// The sparse-match indicator flags a sample as "sparse" when its exact-matchkey
@@ -42,5 +65,21 @@ mod tests {
         assert_eq!(sparse_match_floor(5_000), 50);
         // 4999/100 = 49 (integer floor), below the cap
         assert_eq!(sparse_match_floor(4_999), 49);
+    }
+
+    #[test]
+    fn exact_matchkey_floor_per_type() {
+        assert_eq!(exact_matchkey_floor("email"), 0.70);
+        assert_eq!(exact_matchkey_floor("phone"), 0.30);
+        assert_eq!(exact_matchkey_floor("name"), 0.50);
+        assert_eq!(exact_matchkey_floor("string"), 0.50);
+    }
+
+    #[test]
+    fn exact_matchkey_floor_unknown_defaults_to_half() {
+        assert_eq!(exact_matchkey_floor("identifier"), 0.50);
+        assert_eq!(exact_matchkey_floor("multi_name"), 0.50);
+        assert_eq!(exact_matchkey_floor("totally_unknown_type"), 0.50);
+        assert_eq!(exact_matchkey_floor(""), 0.50);
     }
 }

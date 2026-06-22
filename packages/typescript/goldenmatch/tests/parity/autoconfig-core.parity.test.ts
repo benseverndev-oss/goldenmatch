@@ -17,15 +17,18 @@ import plannerVectors from "./fixtures/autoconfig/planner_vectors.json" with { t
 import classifierVectors from "./fixtures/autoconfig/classifier_vectors.json" with { type: "json" };
 import extrapolationVectors from "./fixtures/autoconfig/extrapolation_vectors.json" with { type: "json" };
 import sparseMatchFloorVectors from "./fixtures/autoconfig/sparse_match_floor_vectors.json" with { type: "json" };
+import exactMatchkeyFloorVectors from "./fixtures/autoconfig/exact_matchkey_floor_vectors.json" with { type: "json" };
 import {
   decidePlan,
   classifyColumns,
   extrapolatePairCount,
   sparseMatchFloor,
+  exactMatchkeyFloor,
   decidePlanRawJson,
   classifyColumnsRawJson,
   extrapolatePairCountRawJson,
   sparseMatchFloorRawJson,
+  exactMatchkeyFloorRawJson,
   type PlannerInput,
   type CoreColumnStats,
   type ExtrapolationInput,
@@ -47,6 +50,10 @@ interface ExtrapolationVector {
 }
 interface SparseMatchFloorVector {
   input: { estimated_pairs: number };
+  expected: { floor: number };
+}
+interface ExactMatchkeyFloorVector {
+  input: { col_type: string };
   expected: { floor: number };
 }
 
@@ -114,6 +121,21 @@ describe("autoconfig core parity — sparse-match floor (raw JSON)", () => {
     it(`vector ${i} (estimated_pairs=${v.input.estimated_pairs})`, () => {
       const out = JSON.parse(
         sparseMatchFloorRawJson(JSON.stringify(v.input)),
+      );
+      expect(out).toEqual(v.expected);
+    });
+  }
+});
+
+describe("autoconfig core parity — exact-matchkey floor (raw JSON)", () => {
+  const vectors = exactMatchkeyFloorVectors as ExactMatchkeyFloorVector[];
+  it("has the expected vector count", () => {
+    expect(vectors.length).toBeGreaterThanOrEqual(13);
+  });
+  for (const [i, v] of vectors.entries()) {
+    it(`vector ${i} (col_type=${v.input.col_type || "<empty>"})`, () => {
+      const out = JSON.parse(
+        exactMatchkeyFloorRawJson(JSON.stringify(v.input)),
       );
       expect(out).toEqual(v.expected);
     });
@@ -198,6 +220,13 @@ describe("autoconfig core parity — camelCase adapter round-trips", () => {
     const vectors = sparseMatchFloorVectors as SparseMatchFloorVector[];
     for (const v of vectors) {
       expect(sparseMatchFloor(v.input.estimated_pairs)).toBe(v.expected.floor);
+    }
+  });
+
+  it("exactMatchkeyFloor matches the golden", () => {
+    const vectors = exactMatchkeyFloorVectors as ExactMatchkeyFloorVector[];
+    for (const v of vectors) {
+      expect(exactMatchkeyFloor(v.input.col_type)).toBe(v.expected.floor);
     }
   });
 

@@ -761,6 +761,40 @@ def _is_person_name_column(column: str) -> bool:
     return bool(_PERSON_NAME_COLUMN_RE.search(column))
 
 
+def _exact_matchkey_floor_py(col_type: str) -> float:
+    """Pure-Python oracle for the S3 per-type exact-matchkey cardinality floor.
+
+    email 0.70, phone 0.30, everything else (incl. unknown vocab) 0.50 -- the
+    historical blanket default. Mirrors the Rust `exact_matchkey_floor` kernel
+    (golden-vector parity). Closes the TODO at issue #715.
+    """
+    if col_type == "email":
+        return 0.70
+    if col_type == "phone":
+        return 0.30
+    return 0.50
+
+
+def exact_matchkey_floor(col_type: str) -> float:
+    """S3 per-type exact-matchkey floor. Dispatches to the shared native core
+    when enabled (byte-identical to the pure-Python oracle), else pure Python."""
+    from goldenmatch.core._native_loader import (  # noqa: PLC0415
+        native_enabled,
+        native_module,
+    )
+
+    if native_enabled("autoconfig"):
+        _nm = native_module()
+        if hasattr(_nm, "autoconfig_exact_matchkey_floor"):
+            import json  # noqa: PLC0415
+
+            out = _nm.autoconfig_exact_matchkey_floor(
+                json.dumps({"col_type": col_type})
+            )
+            return float(json.loads(out)["floor"])
+    return _exact_matchkey_floor_py(col_type)
+
+
 def build_matchkeys(
     profiles: list[ColumnProfile], df: pl.DataFrame | None = None,
     *, multi_source: bool = False,
@@ -866,18 +900,18 @@ def build_matchkeys(
             continue
 
         # Exact matchkeys assert identity equivalence, so the backing column
-        # must be plausibly unique. Requiring cardinality_ratio >= 0.5 ensures
-        # at least half the values are distinct before the column can back an
-        # exact matchkey. This catches low-cardinality numeric columns that
-        # get misclassified by upstream transforms — e.g. a 4-digit year
-        # reshaped into an ISO date can look phone-shaped to the phone
-        # classifier, collapsing every row sharing that year into one cluster.
-        # TODO(autoconfig): replace this blanket threshold with per-type
-        # cardinality thresholds once we have empirical data for each col_type.
-        if scorer == "exact" and p.cardinality_ratio > 0 and p.cardinality_ratio < 0.5:
+        # must be plausibly unique. S3 (spec 2026-06-22, issue #715): the floor
+        # is per-type via the shared exact_matchkey_floor kernel -- emails are
+        # near-unique (0.70), phones are legitimately shared (0.30), everything
+        # else keeps the historical 0.50. This catches low-cardinality numeric
+        # columns misclassified by upstream transforms (e.g. a 4-digit year
+        # reshaped into an ISO date looking phone-shaped) that would collapse
+        # every row sharing that value into one mega-cluster.
+        _exact_floor = exact_matchkey_floor(p.col_type)
+        if scorer == "exact" and p.cardinality_ratio > 0 and p.cardinality_ratio < _exact_floor:
             reason = (
-                f"cardinality_ratio={p.cardinality_ratio:.4f} < 0.5 "
-                f"-- lacks identifier-level uniqueness"
+                f"cardinality_ratio={p.cardinality_ratio:.4f} < {_exact_floor:.2f} "
+                f"(col_type={p.col_type}) -- lacks identifier-level uniqueness"
             )
             logger.warning(
                 "Skipping exact matchkey for '%s' (%s). "

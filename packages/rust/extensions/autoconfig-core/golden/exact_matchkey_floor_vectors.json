@@ -1,0 +1,122 @@
+[
+  {
+    "input": {
+      "col_type": "email"
+    },
+    "expected": {
+      "floor": 0.7
+    }
+  },
+  {
+    "input": {
+      "col_type": "name"
+    },
+    "expected": {
+      "floor": 0.5
+    }
+  },
+  {
+    "input": {
+      "col_type": "phone"
+    },
+    "expected": {
+      "floor": 0.3
+    }
+  },
+  {
+    "input": {
+      "col_type": "zip"
+    },
+    "expected": {
+      "floor": 0.5
+    }
+  },
+  {
+    "input": {
+      "col_type": "address"
+    },
+    "expected": {
+      "floor": 0.5
+    }
+  },
+  {
+    "input": {
+      "col_type": "geo"
+    },
+    "expected": {
+      "floor": 0.5
+    }
+  },
+  {
+    "input": {
+      "col_type": "identifier"
+    },
+    "expected": {
+      "floor": 0.5
+    }
+  },
+  {
+    "input": {
+      "col_type": "description"
+    },
+    "expected": {
+      "floor": 0.5
+    }
+  },
+  {
+    "input": {
+      "col_type": "numeric"
+    },
+    "expected": {
+      "floor": 0.5
+    }
+  },
+  {
+    "input": {
+      "col_type": "date"
+    },
+    "expected": {
+      "floor": 0.5
+    }
+  },
+  {
+    "input": {
+      "col_type": "string"
+    },
+    "expected": {
+      "floor": 0.5
+    }
+  },
+  {
+    "input": {
+      "col_type": "year"
+    },
+    "expected": {
+      "floor": 0.5
+    }
+  },
+  {
+    "input": {
+      "col_type": "multi_name"
+    },
+    "expected": {
+      "floor": 0.5
+    }
+  },
+  {
+    "input": {
+      "col_type": "totally_unknown_type"
+    },
+    "expected": {
+      "floor": 0.5
+    }
+  },
+  {
+    "input": {
+      "col_type": ""
+    },
+    "expected": {
+      "floor": 0.5
+    }
+  }
+]

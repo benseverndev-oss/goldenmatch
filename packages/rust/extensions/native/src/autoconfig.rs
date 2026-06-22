@@ -4,8 +4,8 @@
 use pyo3::prelude::*;
 use pyo3::exceptions::PyValueError;
 use goldenmatch_autoconfig_core::{
-    classify_columns, decide_plan, extrapolate_pair_count, sparse_match_floor, ColumnStats,
-    ExtrapolationInput, PlannerInput,
+    classify_columns, decide_plan, exact_matchkey_floor, extrapolate_pair_count,
+    sparse_match_floor, ColumnStats, ExtrapolationInput, PlannerInput,
 };
 
 #[pyfunction]
@@ -42,5 +42,18 @@ pub fn autoconfig_sparse_match_floor(input_json: &str) -> PyResult<String> {
         .and_then(|x| x.as_u64())
         .ok_or_else(|| PyValueError::new_err("missing/invalid estimated_pairs"))?;
     let floor = sparse_match_floor(estimated_pairs);
+    Ok(serde_json::json!({ "floor": floor }).to_string())
+}
+
+/// S3: JSON `{"col_type": "email"}` -> JSON `{"floor": 0.7}`.
+#[pyfunction]
+pub fn autoconfig_exact_matchkey_floor(input_json: &str) -> PyResult<String> {
+    let v: serde_json::Value = serde_json::from_str(input_json)
+        .map_err(|e| PyValueError::new_err(format!("bad exact_matchkey_floor json: {e}")))?;
+    let col_type = v
+        .get("col_type")
+        .and_then(|x| x.as_str())
+        .ok_or_else(|| PyValueError::new_err("missing/invalid col_type"))?;
+    let floor = exact_matchkey_floor(col_type);
     Ok(serde_json::json!({ "floor": floor }).to_string())
 }

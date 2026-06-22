@@ -22,8 +22,8 @@
 //!   and compare against Rust's before re-encoding to JSON.
 
 use goldenmatch_autoconfig_core::{
-    classify_columns, decide_plan, extrapolate_pair_count, sparse_match_floor, ColType,
-    ColumnStats, ExtrapolationInput, PlannerInput,
+    classify_columns, decide_plan, exact_matchkey_floor, extrapolate_pair_count,
+    sparse_match_floor, ColType, ColumnStats, ExtrapolationInput, PlannerInput,
 };
 use serde_json::Value;
 
@@ -32,6 +32,8 @@ const PLANNER_JSON: &str = include_str!("../golden/planner_vectors.json");
 const CLASSIFIER_JSON: &str = include_str!("../golden/classifier_vectors.json");
 const EXTRAPOLATION_JSON: &str = include_str!("../golden/extrapolation_vectors.json");
 const SPARSE_MATCH_FLOOR_JSON: &str = include_str!("../golden/sparse_match_floor_vectors.json");
+const EXACT_MATCHKEY_FLOOR_JSON: &str =
+    include_str!("../golden/exact_matchkey_floor_vectors.json");
 
 // ── Planner parity ────────────────────────────────────────────────────────────
 
@@ -192,6 +194,40 @@ fn sparse_match_floor_golden_parity() {
     assert!(
         failures.is_empty(),
         "{} sparse-match-floor mismatches:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+// ── Exact-matchkey floor parity (S3) ──────────────────────────────────────────
+
+#[test]
+fn exact_matchkey_floor_golden_parity() {
+    let vectors: Vec<Value> = serde_json::from_str(EXACT_MATCHKEY_FLOOR_JSON)
+        .expect("failed to parse exact_matchkey_floor_vectors.json");
+
+    assert!(
+        vectors.len() >= 13,
+        "expected >= 13 exact-matchkey-floor vectors, got {}",
+        vectors.len()
+    );
+
+    let mut failures: Vec<String> = Vec::new();
+    for (idx, vec) in vectors.iter().enumerate() {
+        let col_type = vec["input"]["col_type"]
+            .as_str()
+            .expect("col_type must be a string");
+        let got = exact_matchkey_floor(col_type);
+        let exp = vec["expected"]["floor"]
+            .as_f64()
+            .expect("floor must be f64");
+        if (got - exp).abs() >= 1e-9 {
+            failures.push(format!("vec {idx}: col_type={col_type} got {got} exp {exp}"));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} exact-matchkey-floor mismatches:\n{}",
         failures.len(),
         failures.join("\n")
     );

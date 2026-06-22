@@ -539,6 +539,29 @@ def gen_sparse_match_floor_vectors() -> list[dict]:
     return vectors
 
 
+# ── S3 exact-matchkey floor vectors ────────────────────────────────────────────────
+
+def gen_exact_matchkey_floor_vectors() -> list[dict]:
+    """S3 (spec 2026-06-22): drive the REAL pure-Python exact_matchkey_floor oracle.
+    The Rust `exact_matchkey_floor` kernel must reproduce these byte-for-byte."""
+    from goldenmatch.core.autoconfig import _exact_matchkey_floor_py
+
+    # All 13 core ColType serde names + a couple of unknown/edge strings.
+    col_types = [
+        "email", "name", "phone", "zip", "address", "geo", "identifier",
+        "description", "numeric", "date", "string", "year", "multi_name",
+        "totally_unknown_type", "",
+    ]
+    vectors: list[dict] = []
+    for ct in col_types:
+        floor = _exact_matchkey_floor_py(ct)
+        vec = {"input": {"col_type": ct}, "expected": {"floor": floor}}
+        round_tripped = json.loads(json.dumps(vec))
+        assert round_tripped == vec, f"Round-trip mismatch for vector: {vec}"
+        vectors.append(vec)
+    return vectors
+
+
 # ── Main ────────────────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -566,6 +589,13 @@ def main() -> None:
         f"Expected >= 15 sparse-match-floor vectors, got {len(sparse_floor_vectors)}"
     )
 
+    print("Generating exact-matchkey-floor vectors...")
+    matchkey_floor_vectors = gen_exact_matchkey_floor_vectors()
+    print(f"  Generated {len(matchkey_floor_vectors)} exact-matchkey-floor vectors")
+    assert len(matchkey_floor_vectors) >= 13, (
+        f"Expected >= 13 exact-matchkey-floor vectors, got {len(matchkey_floor_vectors)}"
+    )
+
     # Write planner vectors
     planner_path = OUT_DIR / "planner_vectors.json"
     with open(planner_path, "w", encoding="utf-8") as f:
@@ -590,11 +620,17 @@ def main() -> None:
         json.dump(sparse_floor_vectors, f, indent=2)
     print(f"Wrote {sparse_floor_path}")
 
+    # Write exact-matchkey-floor vectors
+    matchkey_floor_path = OUT_DIR / "exact_matchkey_floor_vectors.json"
+    with open(matchkey_floor_path, "w", encoding="utf-8") as f:
+        json.dump(matchkey_floor_vectors, f, indent=2)
+    print(f"Wrote {matchkey_floor_path}")
+
     # Final summary
     print(
         f"\nDone. {len(planner_vectors)} planner + {len(classifier_vectors)} classifier "
         f"+ {len(extrapolation_vectors)} extrapolation + {len(sparse_floor_vectors)} "
-        f"sparse-match-floor vectors."
+        f"sparse-match-floor + {len(matchkey_floor_vectors)} exact-matchkey-floor vectors."
     )
 
 
