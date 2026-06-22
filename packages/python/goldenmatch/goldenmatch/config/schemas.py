@@ -942,6 +942,17 @@ class StabilizationConfig(BaseModel):
         return v
 
 
+class MediationConfig(BaseModel):
+    """Conflict mediation workflow -- Identity v3 (#1113, epic #1108).
+
+    Drives ``goldenmatch.identity.mediation``. ``auto_apply`` is the default for
+    whether a ``distinct`` verdict actually splits the record out (vs. only
+    recording the verdict). Config plumbing only.
+    """
+
+    auto_apply: bool = True
+
+
 class IdentityConfig(BaseModel):
     """Identity Graph configuration.
 
@@ -969,6 +980,8 @@ class IdentityConfig(BaseModel):
     # #1112: cross-run entity stabilization (Identity v3). None -> no stabilize
     # pass configured (the default).
     stabilization: StabilizationConfig | None = None
+    # #1113: conflict mediation workflow. None -> not configured (default).
+    mediation: MediationConfig | None = None
 
     @field_validator("dataset")
     @classmethod

@@ -5,6 +5,15 @@ See ``docs/superpowers/specs/2026-05-12-identity-graph-design.md``.
 """
 from __future__ import annotations
 
+from goldenmatch.identity.mediation import (
+    ConflictItem,
+    ConflictResolution,
+    MediationVerdict,
+    mediate_conflict,
+    mediation_summary,
+    open_conflicts,
+    pair_verdict,
+)
 from goldenmatch.identity.migrate_ids import MigrationReport, migrate_record_ids
 from goldenmatch.identity.model import (
     EdgeKind,
@@ -69,6 +78,13 @@ __all__ = [
     "entity_version",
     "find_persistent_overlaps",
     "stabilize_identities",
+    "ConflictItem",
+    "ConflictResolution",
+    "MediationVerdict",
+    "mediate_conflict",
+    "mediation_summary",
+    "open_conflicts",
+    "pair_verdict",
     "IdentityView",
     "MigrationReport",
     "ResolveSummary",

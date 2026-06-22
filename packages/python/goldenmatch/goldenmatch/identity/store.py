@@ -745,6 +745,28 @@ class IdentityStore:
         )
         return [self._row_to_edge(r) for r in rows]
 
+    def edges_by_kind(
+        self, kind: str, dataset: str | None = None
+    ) -> list[EvidenceEdge]:
+        """All evidence edges of a given ``kind`` (most-recent first). Generic
+        counterpart to ``find_conflicts`` (which is ``edges_by_kind('conflicts_with')``)
+        -- used by the mediation workflow to list steward verdict edges."""
+        if self._backend == "mongo":
+            return self._mongo.edges_by_kind(kind, dataset=dataset)
+        if dataset is None:
+            rows = self._fetchall(
+                "SELECT * FROM evidence_edges WHERE kind = ? "
+                "ORDER BY recorded_at DESC",
+                (kind,),
+            )
+        else:
+            rows = self._fetchall(
+                "SELECT * FROM evidence_edges WHERE kind = ? AND dataset = ? "
+                "ORDER BY recorded_at DESC",
+                (kind, dataset),
+            )
+        return [self._row_to_edge(r) for r in rows]
+
     def find_conflicts(self, dataset: str | None = None) -> list[EvidenceEdge]:
         if self._backend == "mongo":
             return self._mongo.find_conflicts(dataset=dataset)
