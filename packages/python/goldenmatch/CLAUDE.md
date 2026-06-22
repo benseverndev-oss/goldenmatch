@@ -231,6 +231,11 @@ Root CLAUDE.md owns: branch/merge SOP, GitHub auth dance, Rust + pgrx, PostgreSQ
 - **A2A skill count went 12 -> 18**. Update `test_agent_card_has_18_skills` if you add a skill.
 - **`pipeline.run_dedupe_df` result** now has `identity_summary: dict | None` (None when identity disabled).
 
+### CDP/MDM epic (#1108)
+Maturing Identity Graph v2 into a streaming, cross-channel, stewarded identity spine. Phases tracked under epic #1108 (label `cdp-mdm`, milestone "CDP / MDM Identity Resolution"). Each phase = one additive, opt-in PR; byte-identical / no-op when unused; no DB migration unless a phase needs one.
+- **#1109 streaming/micro-batch incremental resolution (DONE, PR #1186):** `identity.resolve_record_incremental()` / `match_record_to_entity()` resolve ONE record at a time by delegating create/absorb/merge to `resolve_clusters` over a mini-frame (matched rows + the new row) — zero duplicated resolution logic. Wired into `core.streaming.StreamProcessor.resolve_to_entity`. `match_one` returns `[]` for exact matchkeys, so an exact-only incremental path is a follow-up.
+- **#1110 cross-device / channel stitching (`identity/stitching.py`):** pure primitive in front of resolution, no DB migration. `classify_channel` (explicit `channel` col → `channel_map` source override → `__source__` substring hints → `unknown`) + `channel_trust` (crm 1.0 … web 0.5, unknown 0.6). `deterministic_stitch_pairs(df, device_keys)` STAR-links (not O(n²)) records sharing a non-null device key (`DEFAULT_DEVICE_KEYS`: cookie_id/device_id/login_id/…). `stitch_frame(df, scored_pairs=…, …)` unions the deterministic layer with the *caller-supplied probabilistic pairs* (it does NOT re-score) into channel-aware `StitchGroup`s; probabilistic edges are scaled by `cross_channel_factor` = geometric mean of the two channels' trust (deterministic device links are NOT downweighted), group `confidence` = weakest holding edge. Config: `IdentityConfig.stitching` (`ChannelStitchConfig`, default None/off); explicit kwargs to `stitch_frame` beat config fields. Tests: `tests/identity/test_stitching.py`.
+
 ## Remote MCP Server
 
 Hosted on Railway, registered on Smithery:
