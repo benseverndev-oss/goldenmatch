@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::Result;
-use redb::{Database, TableDefinition};
+use redb::{Database, ReadableDatabase, TableDefinition};
 use sha2::{Digest, Sha256};
 
 const TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("embeddings");
