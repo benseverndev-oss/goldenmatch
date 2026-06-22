@@ -73,6 +73,7 @@ jobs:
       ts_parity: ${{ steps.filter.outputs.ts_parity }}
       throughput: ${{ steps.filter.outputs.throughput }}
       autoconfig_wasm: ${{ steps.filter.outputs.autoconfig_wasm }}
+      quality_gate: ${{ steps.filter.outputs.quality_gate }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d  # v4.0.1
@@ -198,6 +199,20 @@ jobs:
               - 'packages/python/goldenmatch/goldenmatch/core/golden*.py'
               - 'packages/python/goldenmatch/goldenmatch/core/probabilistic.py'
               - 'packages/python/goldenmatch/goldenmatch/core/learned_blocking.py'
+            # Auto-config quality gate (scripts/autoconfig_quality): the
+            # committed scorecard pins host-independent decision-kernel signals
+            # (classification, matchkeys, blocking fields/cost) + the
+            # anchor_person_match F1 floor. Re-run whenever the decision kernel
+            # (rust core or Python autoconfig/blocking surfaces) or the harness
+            # itself changes, and on ci.yml edits (keeps the gate under test).
+            quality_gate:
+              - 'scripts/autoconfig_quality/**'
+              - 'packages/rust/extensions/autoconfig-core/**'
+              - 'packages/python/goldenmatch/goldenmatch/core/autoconfig*.py'
+              - 'packages/python/goldenmatch/goldenmatch/core/blocker.py'
+              - 'packages/python/goldenmatch/goldenmatch/core/blocking_candidates.py'
+              - 'packages/python/goldenmatch/goldenmatch/core/matchkey.py'
+              - '.github/workflows/ci.yml'
             rust:
               - 'packages/rust/**'
             rust_pgrx:
@@ -922,6 +937,59 @@ jobs:
             echo ""
             echo "Imports + \`--help\` + a real Febrl3 run (the only published dataset that ships via pip)."
             echo "DBLP-ACM / NCVR / DQbench composite reproduce against gitignored datasets in \`benchmarks.yml\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Auto-config quality gate. Runs the harness over the committed anchors (always
+  # present) and diffs the resulting decision-kernel signals against the committed
+  # baseline (scripts/autoconfig_quality/baselines/scorecard.json). A FAIL means a
+  # kernel change moved a host-independent decision (classification / matchkeys /
+  # blocking fields+cost) or dropped the anchor_person_match F1 below its floor.
+  # planner_rung drift (native availability / box size) is informational WARN, so
+  # this normal-runner job (no native wheel) doesn't flap the native-on dev
+  # baseline. Real datasets (DBLP-ACM) skip-when-absent. Iterate loop + how to
+  # re-bless: scripts/autoconfig_quality/README.md.
+  quality_gate:
+    needs: changes
+    if: needs.changes.outputs.quality_gate == 'true' || needs.changes.outputs.force_all == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      - name: Run auto-config quality gate
+        shell: bash
+        env:
+          # Determinism: pin auto-config memory off so the gate measures the
+          # static decision kernel, not learned per-run adjustments.
+          GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+        run: |
+          # Repo-root cwd so `python -m scripts.autoconfig_quality` resolves the
+          # harness package; the harness adds the goldenmatch package `scripts/`
+          # and bench-attribution paths to sys.path internally. No --fast-only:
+          # the anchors' fast signals AND the anchor_person_match F1 floor are
+          # both gated (anchor_person_match is 400 entities, F1 is seconds).
+          uv run python -m scripts.autoconfig_quality gate
+      - name: Quality scorecard summary
+        if: always()
+        shell: bash
+        env:
+          GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+        run: |
+          {
+            echo "## Auto-config quality scorecard"
+            echo ""
+            echo "Diff of the current decision-kernel signals vs the committed baseline."
+            echo "FAIL = a host-independent kernel decision moved (or the anchor F1 floor dropped); WARN = host-coupled planner routing drift (informational)."
+            echo ""
+            echo '```'
+            uv run python -m scripts.autoconfig_quality report 2>/dev/null || true
+            echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
   typescript:
