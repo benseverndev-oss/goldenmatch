@@ -59,10 +59,10 @@ PYTHONPATH="D:/show_case/gm-autoconfig-core;D:/show_case/gm-autoconfig-core/pack
 
 **Files:**
 - Create: `scripts/autoconfig_quality/__init__.py` (empty), `scripts/autoconfig_quality/anchors.py`
-- Modify: `packages/python/goldenmatch/tests/test_quality_gate.py` (import `gen_labeled` from the shared module), `packages/python/goldenmatch/tests/test_autoconfig_multisource.py` (import `_crm_df` from the shared module)
+- Modify: `packages/python/goldenmatch/tests/test_quality_gate.py` (import `gen_labeled` from the shared module), `packages/python/goldenmatch/tests/test_autoconfig_multisource.py` (import `_crm_df` from the shared module), `packages/python/goldenmatch/tests/test_autoconfig_benchmarks.py` (it has a SECOND independent copy of `gen_labeled` at line ~64 — redirect it to the shared module too, to honor the "one definition" goal)
 - Test: `scripts/autoconfig_quality/tests/test_anchors.py`
 
-The spec requires ONE definition of each anchor shape. `gen_labeled` and `_crm_df` currently live inside test modules; extract them so both tests and the harness import them. `make_healthcare_df` already lives in an importable script — re-export it.
+The spec requires ONE definition of each anchor shape. `gen_labeled` lives in BOTH `test_quality_gate.py` and `test_autoconfig_benchmarks.py`; `_crm_df` lives in `test_autoconfig_multisource.py`. Extract to the shared module and point all three test files at it (no copies). `make_healthcare_df` already lives in an importable script — re-export it.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -114,10 +114,10 @@ def gen_labeled(n_entities: int = 400, seed: int = 7) -> tuple[pl.DataFrame, set
 def crm_df() -> pl.DataFrame:
     ...   # body verbatim from test_autoconfig_multisource._crm_df
 ```
-Then update `test_quality_gate.py` to `from autoconfig_quality.anchors import gen_labeled` (the package-conftest sys.path doesn't include repo-root scripts, so add at the top of those test files: `sys.path.insert(0, <repo-root>)` then `from scripts.autoconfig_quality.anchors import ...`) and delete the local copies. Same for `test_autoconfig_multisource.py` (`crm_df` → use as `_crm_df = crm_df` alias to minimize churn).
+Then point all three donor tests at the shared module (the package-conftest sys.path doesn't include repo-root scripts, so add at the top of those test files: `import sys; sys.path.insert(0, <repo-root>)` then `from scripts.autoconfig_quality.anchors import ...`) and delete the local copies: `test_quality_gate.py` → `from scripts.autoconfig_quality.anchors import gen_labeled`; `test_autoconfig_benchmarks.py` → same (delete its line-64 copy); `test_autoconfig_multisource.py` → `from scripts.autoconfig_quality.anchors import crm_df as _crm_df` (alias to minimize churn). In Step 4 re-run all three donor tests to confirm the extraction is behavior-preserving.
 
-- [ ] **Step 4: Run to verify it passes** — the anchors test passes; AND re-run the two donor tests to confirm the extraction didn't break them:
-`cd packages/python/goldenmatch && PYTHONPATH="$(pwd);D:/show_case/gm-autoconfig-core" GOLDENMATCH_NATIVE=0 POLARS_SKIP_CPU_CHECK=1 $PY -m pytest tests/test_quality_gate.py tests/test_autoconfig_multisource.py -q` → PASS.
+- [ ] **Step 4: Run to verify it passes** — the anchors test passes; AND re-run all three donor tests to confirm the extraction didn't break them:
+`cd packages/python/goldenmatch && PYTHONPATH="$(pwd);D:/show_case/gm-autoconfig-core" GOLDENMATCH_NATIVE=0 POLARS_SKIP_CPU_CHECK=1 $PY -m pytest tests/test_quality_gate.py tests/test_autoconfig_multisource.py tests/test_autoconfig_benchmarks.py -q -m "benchmark or not benchmark"` → PASS (the benchmarks file is `-m benchmark`-gated, so include the marker; its data-absent cases skip cleanly).
 
 - [ ] **Step 5: Commit** — `git add scripts/autoconfig_quality/ packages/python/goldenmatch/tests/test_quality_gate.py packages/python/goldenmatch/tests/test_autoconfig_multisource.py && git commit -m "feat(quality): shared anchor generators (extract gen_labeled + crm_df)"`
 
@@ -231,15 +231,24 @@ def test_evaluate_f1_on_gen_labeled():
 ```python
 """SLOW tier: full dedupe -> F1/P/R + blocking-recall/threshold-loss attribution."""
 from __future__ import annotations
+import importlib.util
 from itertools import combinations
-from types import SimpleNamespace
+from pathlib import Path
 from typing import Any
 import polars as pl
 import goldenmatch
 from goldenmatch.core.evaluate import evaluate_clusters
 from goldenmatch.core.autoconfig import profile_columns, build_blocking
 from goldenmatch.core.blocker import build_blocks
-from scripts.bench_er_headtohead.attribution import attribution
+
+# attribution.py lives in scripts/bench_er_headtohead/, which is NOT a real
+# package (no __init__.py). Load it by file path -- the same precedent as
+# packages/python/goldenmatch/tests/bench/test_attribution.py -- so this does
+# NOT depend on the repo root being on sys.path / on PEP 420 namespace packages.
+_ATTR_PATH = Path(__file__).resolve().parents[2] / "scripts/bench_er_headtohead/attribution.py"
+_spec = importlib.util.spec_from_file_location("_qh_attribution", _ATTR_PATH)
+_attr_mod = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(_attr_mod)
+attribution = _attr_mod.attribution
 
 def _candidate_pairs(df: pl.DataFrame) -> set[tuple[int, int]]:
     """Regenerate the post-blocking candidate set in row-index space.
