@@ -179,19 +179,27 @@ sit at 0.95 and be wrongly promoted to identifier; at tiny `n` a genuine identif
 
 ### The kernel
 
-Replace the constant with `cardinality_ratio >= (1 − 1/√n)`, where `n` is the number of values
-examined (`len(values)`):
+Replace the constant with `cardinality_ratio >= max(0.95, 1 − 1/√n)`, where `n` is the number of
+values examined (`len(values)`):
 
 | n | floor |
 |---|---|
-| 10 | 0.684 |
-| 100 | 0.900 |
+| 10 | 0.95 |
+| 100 | 0.95 |
+| 400 | 0.95 |
 | 1,000 | 0.968 |
 | 10,000 | 0.990 |
 | 1,000,000 | 0.999 |
 
-Stricter as `n` grows (a 10k-row 0.95 column is a name, not an ID); looser on small samples. The
-gate (`data_type in {phone, zip, numeric}` and `len(values) >= 10`) is unchanged.
+**The floor only ever RISES above 0.95 (at scale, n > ~400); it never drops below it.** This is the
+spec's one behavioral correction during implementation: the initial `1 − 1/√n` (without the
+`max(0.95, …)` cap) was *looser* than 0.95 at small/medium n, which reclassified moderately-unique
+phone/numeric columns (e.g. a 30-row phone column at 0.83 cardinality) as identifiers and broke
+established matchkey behavior (`test_autoconfig_multisource`'s deliberate phone demotion). S2a's
+actual goal was only ever the **stricter-at-scale** direction — "a 10k-row 0.95-cardinality column
+is a high-entropy name, not an ID" — so capping at the historical 0.95 preserves all small-n
+behavior while still tightening at scale. The gate (`data_type in {phone, zip, numeric}` and
+`len(values) >= 10`) is unchanged.
 
 This edits the core classifier directly, so it is a **core change → golden re-gen + Python/TS
 byte-parity re-proof + DQbench/F1 gate**. It is the only S1–S3 lever that touches the classifier

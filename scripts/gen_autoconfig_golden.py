@@ -380,16 +380,11 @@ def gen_classifier_vectors() -> list[dict]:
     add_col("recordID", [f"REC{i:08d}" for i in range(20)])
     # cardinality guard: near-unique numeric values -> identifier
     add_col("some_numeric_id", [str(i * 100 + 7) for i in range(15)])
-    # S2a adaptive floor (1 - 1/sqrt(n)) boundary cases. Neutral names so the
-    # data-profiling path (not name classification) decides. At small n the
-    # floor is looser than the old fixed 0.95, so a moderately-unique numeric
-    # column now reads as an identifier:
-    #   n=10, 8 unique -> card 0.80 >= floor(10)=0.684 -> identifier (was numeric)
-    add_col("reading_alpha",
-            ["1000", "1001", "1002", "1003", "1004", "1005", "1006", "1007", "1007", "1007"])
-    #   n=16, 14 unique -> card 0.875 >= floor(16)=0.75 -> identifier (was numeric)
-    add_col("reading_beta",
-            [str(2000 + i) for i in range(14)] + ["2000", "2001"])
+    # S2a's identifier floor max(0.95, 1 - 1/sqrt(n)) only changes behavior at
+    # SCALE (n > ~400, where the floor rises above 0.95); small-n behavior is
+    # unchanged. The stricter-at-scale direction is covered by the Rust + Python
+    # unit tests (large n would bloat these committed golden vectors), so no
+    # S2a-specific classifier vectors are added here.
 
     # ── date ──────────────────────────────────────────────────────────────────
     add_col("created_at", ["2023-01-15"] * 10)  # name authoritative

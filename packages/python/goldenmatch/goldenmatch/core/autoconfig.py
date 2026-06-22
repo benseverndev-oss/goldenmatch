@@ -214,12 +214,14 @@ def _classify_by_data(values: list[str]) -> tuple[str, float]:
     # so a handful of genuinely-unique zip/phone rows don't trip the guard.
     if data_type in ("phone", "zip", "numeric") and len(values) >= 10:
         cardinality_ratio = len(set(values)) / len(values)
-        # S2a (spec 2026-06-22): adaptive floor 1 - 1/sqrt(n) replaces the fixed
-        # 0.95. Stricter at scale (a 10k-row 0.95-cardinality column is a
-        # high-entropy name, not an ID) and looser on tiny samples. math.sqrt is
-        # correctly-rounded IEEE 754 so it is bit-identical to Rust's .sqrt()
-        # (do NOT use n ** 0.5 -- pow is not guaranteed correctly-rounded).
-        floor = 1.0 - 1.0 / math.sqrt(len(values))
+        # S2a (spec 2026-06-22): identifier floor max(0.95, 1 - 1/sqrt(n)). At
+        # scale the floor RISES above the old fixed 0.95 (a 10k-row 0.95-card
+        # column is a high-entropy name, not an ID), and never drops below 0.95
+        # so small-n behavior is unchanged (a looser small-n floor reclassified
+        # moderately-unique phone/numeric columns and broke established matchkey
+        # behavior). math.sqrt is correctly-rounded IEEE 754 -> bit-identical to
+        # Rust's .sqrt() (do NOT use n ** 0.5 -- pow isn't correctly-rounded).
+        floor = max(0.95, 1.0 - 1.0 / math.sqrt(len(values)))
         if cardinality_ratio >= floor:
             return "identifier", 0.9
 
