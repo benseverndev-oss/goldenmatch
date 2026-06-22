@@ -1,0 +1,35 @@
+# goldenprofile-native -- the PyO3 binding for the pyo3-free
+# `goldenprofile-core` Virtual Fingerprint engine, shipped as a maturin/abi3
+# extension module (mirrors goldengraph-native / goldenmatch-native). The
+# compute lives in the core crate; this crate is a thin marshaling layer over
+# the ONE JSON boundary (`goldenprofile_core::resolve_json`) so Python gets
+# byte-identical results to the WASM / C surfaces by construction.
+#
+# Standalone workspace (empty [workspace]) so pyo3's `extension-module` feature
+# here is NOT unified with the bridge crate's embedding features -- the two are
+# mutually incompatible. Same isolation rationale as goldengraph-native.
+[workspace]
+
+[package]
+name = "goldenprofile-native"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Ben Severn <benzsevern@gmail.com>"]
+description = "PyO3 binding for goldenprofile-core: cross-document entity resolution over Virtual Fingerprints"
+
+[lib]
+# Produces _native.<abi3>.so/.pyd; maturin ships it as goldenprofile_native/_native
+# (pymodule `_native`, so the init symbol is PyInit__native).
+name = "_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+# abi3-py311: one stable-ABI artifact spans CPython 3.11-3.13.
+pyo3 = { version = ">=0.28, <0.30", features = ["extension-module", "abi3-py311"] }
+# The pyo3-free engine. This crate marshals str <-> str over its resolve_json.
+goldenprofile-core = { path = "../goldenprofile-core" }
+
+[profile.release]
+opt-level = 3
+lto = "thin"

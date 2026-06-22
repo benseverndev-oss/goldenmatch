@@ -10,6 +10,12 @@ from .embed import Embedder, GoldenmatchEmbedder, seed_by_query
 from .extract import Extraction, Mention, Relationship, extract, parse_extraction
 from .ingest import build_batch, ingest
 from .llm import LLMClient, OpenAIClient
+from .profile import (
+    Fingerprint,
+    ProfileResolution,
+    resolve_profiles,
+    synthesize_profiles,
+)
 from .resolve import ResolvedEntity, resolve
 from .synthesize import synthesize_global, synthesize_local
 
@@ -33,4 +39,9 @@ __all__ = [
     "synthesize_global",
     "ask",
     "to_cypher",
+    # Semantic Signature engine — Virtual Fingerprint resolution
+    "Fingerprint",
+    "ProfileResolution",
+    "synthesize_profiles",
+    "resolve_profiles",
 ]

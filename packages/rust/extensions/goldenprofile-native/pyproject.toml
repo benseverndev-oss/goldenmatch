@@ -1,0 +1,23 @@
+# maturin build for the goldenprofile-native wheel. Mirrors goldengraph-native:
+# the compiled `_native` extension module (PyInit__native) is shipped inside the
+# `goldenprofile_native` package, alongside the thin Python `__init__` that
+# re-exports `resolve_json`.
+[build-system]
+requires = ["maturin>=1.5,<2"]
+build-backend = "maturin"
+
+[project]
+name = "goldenprofile-native"
+version = "0.1.0"
+description = "PyO3 binding for goldenprofile-core: cross-document entity resolution over Virtual Fingerprints (the Semantic Signature engine)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Ben Severn", email = "benzsevern@gmail.com" }]
+
+[tool.maturin]
+# The Rust cdylib is `_native`; ship it inside the `goldenprofile_native`
+# package so `from goldenprofile_native import resolve_json` works.
+module-name = "goldenprofile_native._native"
+python-source = "python"
+features = ["pyo3/extension-module"]
