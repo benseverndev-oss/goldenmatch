@@ -1,8 +1,12 @@
 """Scorecard diff + gate verdict.
 
 Verdict rules (from the spec):
-- anchor: ANY pinned signal that changed from baseline = FAIL; an error on an
-  anchor = FAIL (anchors must always run).
+- anchor: any host-INDEPENDENT pinned signal that changed from baseline = FAIL;
+  an error on an anchor = FAIL (anchors must always run). Host-COUPLED routing
+  signals (planner_rung) drift with native availability / box RAM+cores, not
+  with the auto-config decision kernel, so they are informational (WARN, never
+  fail) -- otherwise a CI runner with no native wheel flaps against a dev box
+  baseline blessed with native on.
 - real: F1 below (baseline_f1 - tolerance) = FAIL; signal drift is informational
   (WARN, never fails); an error on a real dataset = NEUTRAL.
 - a dataset present in baseline but skipped/absent in current = NEUTRAL.
@@ -16,6 +20,15 @@ _STATUS_FAIL = "FAIL"
 _STATUS_OK = "OK"
 _STATUS_WARN = "WARN"
 _STATUS_NEUTRAL = "NEUTRAL"
+
+# Flattened anchor-signal fields under these prefixes are host-coupled (native
+# availability, box RAM/cores) rather than pure auto-config decisions. They are
+# recorded as drift but never fail the gate.
+_INFORMATIONAL_PREFIXES = ("planner_rung",)
+
+
+def _is_informational(field: str) -> bool:
+    return any(field == p or field.startswith(p + ".") for p in _INFORMATIONAL_PREFIXES)
 
 
 def _flatten(obj: Any, prefix: str = "") -> dict[str, Any]:
@@ -51,13 +64,22 @@ def diff_scorecards(
             if "error" in c.get("signals", {}):
                 rows.append(_row(name, "signals", None, c["signals"]["error"], _STATUS_FAIL))
                 continue
-            # Any pinned signal that changed from baseline = FAIL.
+            # Host-independent pinned signals that changed from baseline = FAIL;
+            # host-coupled routing (planner_rung) = WARN (informational drift).
             cur_sig = _flatten(c.get("signals", {}))
             base_sig = _flatten(b.get("signals", {})) if b else {}
             for field in sorted(set(cur_sig) | set(base_sig)):
                 before, after = base_sig.get(field), cur_sig.get(field)
                 if before != after:
-                    rows.append(_row(name, field, before, after, _STATUS_FAIL))
+                    status = _STATUS_WARN if _is_informational(field) else _STATUS_FAIL
+                    rows.append(_row(name, field, before, after, status))
+            # An anchor that also carries an F1 floor (e.g. the person-match
+            # anchor) is gated on F1 too, floor+tolerance like a real dataset.
+            cur_f1 = c.get("f1", {}).get("f1")
+            base_f1 = b.get("f1", {}).get("f1") if b else None
+            if cur_f1 is not None and base_f1 is not None:
+                status = _STATUS_FAIL if cur_f1 < base_f1 - tolerance else _STATUS_OK
+                rows.append(_row(name, "f1", base_f1, cur_f1, status))
         else:  # real
             if "error" in c:
                 rows.append(_row(name, "f1", None, c["error"], _STATUS_NEUTRAL))

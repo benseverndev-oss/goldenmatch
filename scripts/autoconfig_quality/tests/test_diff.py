@@ -50,6 +50,42 @@ def test_absent_dataset_is_neutral():
     assert any(r["dataset"] == "febrl3" and r["status"] == "NEUTRAL" for r in rows)
 
 
+def test_anchor_with_f1_floor_is_gated():
+    base = {"datasets": {"anchor_person": {"kind": "anchor", "signals": {"x": 1},
+                                           "f1": {"f1": 0.95}}}}
+    # F1 drop beyond tol on an anchor that carries an F1 floor -> FAIL
+    cur = {"datasets": {"anchor_person": {"kind": "anchor", "signals": {"x": 1},
+                                          "f1": {"f1": 0.90}}}}
+    _, verdict = diff_scorecards(cur, base, tolerance=0.01)
+    assert verdict == "FAIL"
+    # within tol -> PASS
+    cur2 = {"datasets": {"anchor_person": {"kind": "anchor", "signals": {"x": 1},
+                                           "f1": {"f1": 0.945}}}}
+    _, verdict2 = diff_scorecards(cur2, base, tolerance=0.01)
+    assert verdict2 == "PASS"
+
+
+def test_planner_rung_drift_is_warn_not_fail():
+    # planner_rung is host-coupled (native availability / box size) -> WARN, never
+    # FAIL, so a CI runner without the native wheel doesn't flap a native-on baseline.
+    base = {"datasets": {"anchor_x": {"kind": "anchor",
+        "signals": {"classification": {"zip5": "zip"},
+                    "planner_rung": {"backend": "polars-direct", "rule_name": "small"}}}}}
+    cur = {"datasets": {"anchor_x": {"kind": "anchor",
+        "signals": {"classification": {"zip5": "zip"},
+                    "planner_rung": {"backend": "bucket", "rule_name": "small_fast_box"}}}}}
+    rows, verdict = diff_scorecards(cur, base, tolerance=0.01)
+    assert verdict == "PASS"
+    planner_rows = [r for r in rows if r["field"].startswith("planner_rung")]
+    assert planner_rows and all(r["status"] == "WARN" for r in planner_rows)
+    # a real kernel-signal change alongside planner drift still FAILs
+    cur2 = {"datasets": {"anchor_x": {"kind": "anchor",
+        "signals": {"classification": {"zip5": "identifier"},
+                    "planner_rung": {"backend": "bucket", "rule_name": "small"}}}}}
+    _, verdict2 = diff_scorecards(cur2, base, tolerance=0.01)
+    assert verdict2 == "FAIL"
+
+
 def test_render_table_smoke():
     rows, _ = diff_scorecards(BASE, BASE)
     assert isinstance(render_table(rows), str)
