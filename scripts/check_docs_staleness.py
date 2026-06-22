@@ -16,6 +16,12 @@ Rules
    ``::error::`` annotation + exit 1. (Per .claude/doc-surfaces.md, tuning.mdx is
    the authoritative GOLDENMATCH_* reference; an added/removed flag is the single
    highest-signal doc drift.)
+   To stay false-positive-free, two classes of non-drift are excluded before
+   gating: (a) test files (``**/tests/**``, ``test_*.py``, ``*_test.py``,
+   ``conftest.py``) -- a flag *mention* in a test exercises an existing flag,
+   it does not declare one; (b) flags already in sync with tuning.mdx -- an
+   added flag already documented there, or a removed flag already absent from
+   it, has nothing left to update.
 
 2. public-symbol rule (ADVISORY):
    If the diff changes a package ``__init__.py`` ``__all__`` / re-export and NO
@@ -50,6 +56,32 @@ def _git(*args: str) -> str:
     return proc.stdout
 
 
+def _is_test_file(path: str) -> bool:
+    """A flag *mention* in a test (``monkeypatch.setenv``, ``os.environ[...]``)
+    is exercising an existing flag, not declaring a new one. Test files are
+    therefore excluded from the flag-drift scan -- only non-test source can
+    introduce/remove the canonical flag surface."""
+    name = path.rsplit("/", 1)[-1]
+    return (
+        "/tests/" in path
+        or name.startswith("test_")
+        or name.endswith("_test.py")
+        or name == "conftest.py"
+    )
+
+
+def _documented_flags(head: str) -> set[str]:
+    """GOLDENMATCH_* flags already present in tuning.mdx at ``head``.
+
+    Used to suppress false positives: a flag that is *already documented* has no
+    drift to fix, even if a non-test source line happens to reference it."""
+    try:
+        content = _git("show", f"{head}:{TUNING_MDX}")
+    except RuntimeError:
+        return set()  # tuning.mdx absent at head -> nothing documented yet
+    return set(_FLAG_RE.findall(content))
+
+
 def changed_files(base: str, head: str) -> list[str]:
     out = _git("diff", "--name-only", f"{base}...{head}")
     return [ln for ln in out.splitlines() if ln.strip()]
@@ -81,15 +113,32 @@ def _added_removed_flags(diff_text: str) -> tuple[set[str], set[str]]:
 
 def check_flag_rule(base: str, head: str, files: list[str]) -> tuple[bool, list[str]]:
     """Return (ok, messages). ok=False means gate failure."""
-    py_files = [f for f in files if f.startswith("packages/python/") and f.endswith(".py")]
+    py_files = [
+        f
+        for f in files
+        if f.startswith("packages/python/")
+        and f.endswith(".py")
+        and not _is_test_file(f)
+    ]
     if not py_files:
-        return True, ["flag rule: no packages/python/**/*.py changes -- skipped"]
+        return True, ["flag rule: no non-test packages/python/**/*.py changes -- skipped"]
 
     diff_text = diff_for(base, head, py_files)
     net_added, net_removed = _added_removed_flags(diff_text)
-    touched_flags = sorted(net_added | net_removed)
+
+    # Suppress flags that have no actual doc drift:
+    #  - an *added* flag already present in tuning.mdx is already documented;
+    #  - a *removed* flag absent from tuning.mdx is already undocumented.
+    # Only the complement is real drift the canonical reference must track.
+    documented = _documented_flags(head)
+    drift_added = net_added - documented
+    drift_removed = net_removed & documented
+    touched_flags = sorted(drift_added | drift_removed)
     if not touched_flags:
-        return True, ["flag rule: no GOLDENMATCH_* flag added/removed -- OK"]
+        return True, [
+            "flag rule: no GOLDENMATCH_* flag drift "
+            "(changes are tests, or flags already in sync with tuning.mdx) -- OK"
+        ]
 
     tuning_touched = TUNING_MDX in files
     if tuning_touched:
