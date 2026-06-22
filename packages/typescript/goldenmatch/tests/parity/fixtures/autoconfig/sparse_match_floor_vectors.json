@@ -1,0 +1,170 @@
+[
+  {
+    "input": {
+      "estimated_pairs": 0
+    },
+    "expected": {
+      "floor": 0
+    }
+  },
+  {
+    "input": {
+      "estimated_pairs": 1
+    },
+    "expected": {
+      "floor": 0
+    }
+  },
+  {
+    "input": {
+      "estimated_pairs": 50
+    },
+    "expected": {
+      "floor": 0
+    }
+  },
+  {
+    "input": {
+      "estimated_pairs": 99
+    },
+    "expected": {
+      "floor": 0
+    }
+  },
+  {
+    "input": {
+      "estimated_pairs": 100
+    },
+    "expected": {
+      "floor": 1
+    }
+  },
+  {
+    "input": {
+      "estimated_pairs": 101
+    },
+    "expected": {
+      "floor": 1
+    }
+  },
+  {
+    "input": {
+      "estimated_pairs": 499
+    },
+    "expected": {
+      "floor": 4
+    }
+  },
+  {
+    "input": {
+      "estimated_pairs": 500
+    },
+    "expected": {
+      "floor": 5
+    }
+  },
+  {
+    "input": {
+      "estimated_pairs": 999
+    },
+    "expected": {
+      "floor": 9
+    }
+  },
+  {
+    "input": {
+      "estimated_pairs": 1000
+    },
+    "expected": {
+      "floor": 10
+    }
+  },
+  {
+    "input": {
+      "estimated_pairs": 1001
+    },
+    "expected": {
+      "floor": 10
+    }
+  },
+  {
+    "input": {
+      "estimated_pairs": 4899
+    },
+    "expected": {
+      "floor": 48
+    }
+  },
+  {
+    "input": {
+      "estimated_pairs": 4900
+    },
+    "expected": {
+      "floor": 49
+    }
+  },
+  {
+    "input": {
+      "estimated_pairs": 4999
+    },
+    "expected": {
+      "floor": 49
+    }
+  },
+  {
+    "input": {
+      "estimated_pairs": 5000
+    },
+    "expected": {
+      "floor": 50
+    }
+  },
+  {
+    "input": {
+      "estimated_pairs": 5001
+    },
+    "expected": {
+      "floor": 50
+    }
+  },
+  {
+    "input": {
+      "estimated_pairs": 10000
+    },
+    "expected": {
+      "floor": 50
+    }
+  },
+  {
+    "input": {
+      "estimated_pairs": 50000
+    },
+    "expected": {
+      "floor": 50
+    }
+  },
+  {
+    "input": {
+      "estimated_pairs": 1000000
+    },
+    "expected": {
+      "floor": 50
+    }
+  },
+  {
+    "input": {
+      "estimated_pairs": 100000000
+    },
+    "expected": {
+      "floor": 50
+    }
+  },
+  {
+    "input": {
+      "estimated_pairs": 9007199254740991
+    },
+    "expected": {
+      "floor": 50
+    }
+  }
+]

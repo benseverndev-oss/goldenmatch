@@ -87,6 +87,7 @@ writeFileSync(
 export function autoconfig_classify_columns(cols_json: string): string;
 export function autoconfig_decide_plan(input_json: string): string;
 export function autoconfig_extrapolate_pair_count(input_json: string): string;
+export function autoconfig_sparse_match_floor(input_json: string): string;
 export type SyncInitInput = BufferSource | WebAssembly.Module;
 export function initSync(
   module: { module: SyncInitInput } | SyncInitInput,
@@ -114,6 +115,7 @@ for (const name of [
   "planner_vectors.json",
   "classifier_vectors.json",
   "extrapolation_vectors.json",
+  "sparse_match_floor_vectors.json",
 ]) {
   copyFileSync(
     resolve(coreCrate, "golden", name),

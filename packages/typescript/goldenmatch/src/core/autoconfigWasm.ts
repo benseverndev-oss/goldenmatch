@@ -19,6 +19,7 @@ import {
   autoconfig_decide_plan,
   autoconfig_classify_columns,
   autoconfig_extrapolate_pair_count,
+  autoconfig_sparse_match_floor,
 } from "./_wasm/autoconfigWasmBindings.js";
 import { AUTOCONFIG_WASM_BASE64 } from "./_wasm/autoconfigWasmBytes.js";
 import type {
@@ -346,6 +347,23 @@ export function classifyColumnsRawJson(colsJson: string): string {
 export function extrapolatePairCountRawJson(inputJson: string): string {
   ensureInit();
   return autoconfig_extrapolate_pair_count(inputJson);
+}
+
+/**
+ * S2b — adaptive sparse-match floor: `min(50, estimatedPairs / 100)`. Routes
+ * through the shared wasm core (byte-parity with Python/Rust).
+ */
+export function sparseMatchFloor(estimatedPairs: number): number {
+  ensureInit();
+  const out = autoconfig_sparse_match_floor(
+    JSON.stringify({ estimated_pairs: estimatedPairs }),
+  );
+  return (JSON.parse(out) as { floor: number }).floor;
+}
+
+export function sparseMatchFloorRawJson(inputJson: string): string {
+  ensureInit();
+  return autoconfig_sparse_match_floor(inputJson);
 }
 
 // ---------------------------------------------------------------------------

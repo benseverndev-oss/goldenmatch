@@ -4,8 +4,8 @@
 use pyo3::prelude::*;
 use pyo3::exceptions::PyValueError;
 use goldenmatch_autoconfig_core::{
-    classify_columns, decide_plan, extrapolate_pair_count, ColumnStats, ExtrapolationInput,
-    PlannerInput,
+    classify_columns, decide_plan, extrapolate_pair_count, sparse_match_floor, ColumnStats,
+    ExtrapolationInput, PlannerInput,
 };
 
 #[pyfunction]
@@ -30,4 +30,17 @@ pub fn autoconfig_extrapolate_pair_count(input_json: &str) -> PyResult<String> {
         .map_err(|e| PyValueError::new_err(format!("bad ExtrapolationInput json: {e}")))?;
     let out = extrapolate_pair_count(&input);
     serde_json::to_string(&out).map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
+/// S2b: JSON `{"estimated_pairs": N}` -> JSON `{"floor": M}`.
+#[pyfunction]
+pub fn autoconfig_sparse_match_floor(input_json: &str) -> PyResult<String> {
+    let v: serde_json::Value = serde_json::from_str(input_json)
+        .map_err(|e| PyValueError::new_err(format!("bad sparse_match_floor json: {e}")))?;
+    let estimated_pairs = v
+        .get("estimated_pairs")
+        .and_then(|x| x.as_u64())
+        .ok_or_else(|| PyValueError::new_err("missing/invalid estimated_pairs"))?;
+    let floor = sparse_match_floor(estimated_pairs);
+    Ok(serde_json::json!({ "floor": floor }).to_string())
 }

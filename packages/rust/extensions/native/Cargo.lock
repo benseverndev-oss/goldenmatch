@@ -553,7 +553,7 @@ dependencies = [
 
 [[package]]
 name = "goldenmatch-native"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "arrow",
  "blake2",
