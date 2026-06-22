@@ -83,7 +83,7 @@
     "goldencheck-types": "workspace:^"
   },
   "devDependencies": {
-    "@types/node": "^25.9.3",
+    "@types/node": "^25.9.4",
     "goldenmatch": "workspace:*",
     "rimraf": "^6.1.3",
     "tsup": "^8.5.1",
