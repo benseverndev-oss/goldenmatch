@@ -40,6 +40,9 @@ PYPI_PACKAGES = [
     "goldencheck-native",
     "goldenanalysis-native",
     "goldenmatch-embed",
+    # PENDING FIRST PYPI RELEASE -- add once published (pypistats 404s until then):
+    # "goldenmatch-kg", "goldengraph", "goldengraph-native". Their pepy.tech link
+    # in the root README aggregate badge must be extended in lockstep.
 ]
 # Every TS package with a `publish-<pkg>-js.yml` → npm workflow. goldenmatch-wasm-runtime
 # is a workspace dep with no publish workflow, so it has no npm download count.

@@ -128,10 +128,10 @@ flowchart LR
 
 Entity resolution is the stage most GraphRAG pipelines do badly — duplicate surface forms of the same entity scatter across documents. Two new packages put GoldenMatch's resolution there:
 
-| Package | What it does | Install |
+| Package | What it does | Status |
 |---|---|---|
-| **[goldenmatch-kg](packages/python/goldenmatch-kg/README.md)** | Drop-in GoldenMatch resolution as the entity-resolution stage of existing KG frameworks (neo4j-graphrag, LlamaIndex PropertyGraphIndex, Graphiti). One framework-agnostic `resolve_entities` core + per-framework adapters. The ER-stage lift is measured by [ER-KG-Bench](packages/python/goldenmatch/benchmarks/er-kg-bench), not asserted. | `pip install goldenmatch-kg` |
-| **[goldengraph](packages/python/goldengraph/README.md)** | Build-your-own-KG from text — `text → LLM extraction → GoldenMatch resolution → a durable bi-temporal store`. The engine (store / query / community detection) is pyo3-free Rust; ER is the differentiator. Early evidence program. | `pip install goldengraph` |
+| **[goldenmatch-kg](packages/python/goldenmatch-kg/README.md)** | Drop-in GoldenMatch resolution as the entity-resolution stage of existing KG frameworks (neo4j-graphrag, LlamaIndex PropertyGraphIndex, Graphiti). One framework-agnostic `resolve_entities` core + per-framework adapters. The ER-stage lift is measured by [ER-KG-Bench](packages/python/goldenmatch/benchmarks/er-kg-bench), not asserted. | in-repo · first PyPI release pending |
+| **[goldengraph](packages/python/goldengraph/README.md)** | Build-your-own-KG from text — `text → LLM extraction → GoldenMatch resolution → a durable bi-temporal store`. The engine (store / query / community detection) is pyo3-free Rust; ER is the differentiator. Early evidence program. | in-repo · first PyPI release pending |
 
 ---
 
