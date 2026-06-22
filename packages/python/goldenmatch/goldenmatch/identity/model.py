@@ -29,6 +29,9 @@ class EventKind(StrEnum):
     RETIRED = "retired"
     MANUAL_MERGE = "manual_merge"
     MANUAL_SPLIT = "manual_split"
+    # v3 (#1112): auto-consolidation of persistently-overlapping entities
+    # across runs. Distinct from MANUAL_MERGE -- no human in the loop.
+    CONSOLIDATED = "consolidated"
 
 
 @dataclass

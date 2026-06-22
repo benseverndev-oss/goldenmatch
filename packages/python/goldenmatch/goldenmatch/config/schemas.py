@@ -916,6 +916,32 @@ class SurvivorshipConfig(BaseModel):
     learn_from_corrections: bool = False
 
 
+class StabilizationConfig(BaseModel):
+    """Cross-run entity stabilization -- Identity v3 (#1112, epic #1108).
+
+    Drives ``goldenmatch.identity.stabilize.stabilize_identities``: how many
+    distinct runs of cross-entity overlap trigger an auto-consolidation, which
+    survivor wins, and a minimum edge score. Config plumbing only.
+    """
+
+    # Distinct runs of cross-entity overlap evidence before a pair consolidates.
+    min_runs: int = 3
+    # Survivor selection: most_records | oldest | newest | lowest_id.
+    winner_strategy: str = "most_records"
+    # Minimum max-edge score for a pair to count as overlap.
+    min_score: float = 0.0
+
+    @field_validator("winner_strategy")
+    @classmethod
+    def _check_winner_strategy(cls, v: str) -> str:
+        allowed = {"most_records", "oldest", "newest", "lowest_id"}
+        if v not in allowed:
+            raise ValueError(
+                f"winner_strategy must be one of {sorted(allowed)}"
+            )
+        return v
+
+
 class IdentityConfig(BaseModel):
     """Identity Graph configuration.
 
@@ -940,6 +966,9 @@ class IdentityConfig(BaseModel):
     # #1111: golden-record survivorship (strategies + per-cell provenance).
     # None -> default flat golden record (unchanged).
     survivorship: SurvivorshipConfig | None = None
+    # #1112: cross-run entity stabilization (Identity v3). None -> no stabilize
+    # pass configured (the default).
+    stabilization: StabilizationConfig | None = None
 
     @field_validator("dataset")
     @classmethod
