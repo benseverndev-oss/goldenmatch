@@ -206,6 +206,11 @@ from goldenmatch.core.probabilistic import score_probabilistic, train_em
 
 # ── Profiling ────────────────────────────────────────────────────────────
 from goldenmatch.core.profiler import profile_dataframe
+from goldenmatch.core.rag_surface import (
+    Entity,
+    EntityRetrievalResult,
+    entity_aware_retrieve,
+)
 
 # ── Recall certificate (unsupervised) ────────────────────────────────────
 from goldenmatch.core.recall_certificate import (
@@ -336,6 +341,7 @@ __all__ = [
     "screen_record", "screen_records",
     "ScreeningResult", "ScreeningHit", "FieldReason",
     "retrieve_similar_records", "RetrievedRecord",
+    "entity_aware_retrieve", "Entity", "EntityRetrievalResult",
     # Evaluation
     "evaluate_pairs", "evaluate_clusters", "load_ground_truth_csv", "EvalResult",
     "RecallEstimate", "RecallCertificate", "estimate_recall", "certify_recall_df",
