@@ -1255,14 +1255,23 @@ def _build_compound_blocking(
     # COMPONENT, a high-null column is fine: the multi_pass config's other
     # passes cover the null rows. So:
     #   - keep `numeric`/`date` excluded;
-    #   - admit `identifier` (and the high-cardinality `email`/`phone` types)
-    #     ONLY when the column genuinely GROUPS records: non-singleton blocks
-    #     (`_max_block_size > 1`), `cardinality_ratio < 1.0`, and a non-null
-    #     distinct ratio below the blocking gate (rejects surrogate keys like
-    #     npi/phone/email whose non-null values are ~unique per record and
+    #   - admit `identifier`, `zip`, and the high-cardinality `email`/`phone`
+    #     types ONLY when the column genuinely GROUPS records: non-singleton
+    #     blocks (`_max_block_size > 1`), `cardinality_ratio < 1.0`, and a
+    #     non-null distinct ratio below the blocking gate (rejects surrogate keys
+    #     like npi/phone/email whose non-null values are ~unique per record and
     #     whose only large block is the null bucket);
     #   - relax the single-key null ceiling to 0.6 for the component role so a
     #     ~50%-null zip5 qualifies.
+    # `zip` is admitted here (not just `identifier`) so the choice doesn't depend
+    # on whether the sampling artifact promoted the column to `identifier`: the
+    # MEASURED guards decide. A moderate-cardinality zip (true distinct ratio
+    # ~0.3) that pairs with a name to bound the block is a strong compound
+    # component regardless of its type label; a near-unique surrogate zip is
+    # still rejected by the non-null-ratio guard. This decouples blocking-key
+    # selection from the over-eager identifier classification (S2a corrected the
+    # latter; this aligns blocking with the comment's stated intent: judge by
+    # whether a component GROUPS records, NOT by col_type).
     # NOTE: `_nonnull_ratio` / `_max_block_size` are computed on `df` directly.
     # On the v0 non-distributed path `df` IS the full dataset (controller passes
     # the full frame to `_initial_config`), so these are exact. If a SAMPLED df
@@ -1273,7 +1282,7 @@ def _build_compound_blocking(
     from goldenmatch.core.blocking_candidates import _blocking_max_ratio
     _grouping_ratio_max = _blocking_max_ratio()
     _component_null_ceiling = max(max_null_rate, 0.6)
-    _high_card_types = ("identifier", "email", "phone")
+    _high_card_types = ("identifier", "zip", "email", "phone")
 
     def _is_admissible(p: ColumnProfile) -> bool:
         if p.col_type in ("numeric", "date"):
