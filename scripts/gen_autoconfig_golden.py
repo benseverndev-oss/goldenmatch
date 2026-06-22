@@ -517,6 +517,28 @@ def gen_extrapolation_vectors() -> list[dict]:
     return vectors
 
 
+# ── S2b sparse-match floor vectors ────────────────────────────────────────────────
+
+def gen_sparse_match_floor_vectors() -> list[dict]:
+    """S2b (spec 2026-06-22): drive the REAL pure-Python sparse_match_floor oracle.
+    The Rust `sparse_match_floor` kernel must reproduce these byte-for-byte."""
+    from goldenmatch.core.indicators import _sparse_match_floor_py
+
+    estimated = [
+        0, 1, 50, 99, 100, 101, 499, 500, 999, 1_000, 1_001,
+        4_899, 4_900, 4_999, 5_000, 5_001, 10_000, 50_000,
+        1_000_000, 100_000_000, 9_007_199_254_740_991,  # JS MAX_SAFE_INTEGER
+    ]
+    vectors: list[dict] = []
+    for ep in estimated:
+        floor = _sparse_match_floor_py(ep)
+        vec = {"input": {"estimated_pairs": ep}, "expected": {"floor": floor}}
+        round_tripped = json.loads(json.dumps(vec))
+        assert round_tripped == vec, f"Round-trip mismatch for vector: {vec}"
+        vectors.append(vec)
+    return vectors
+
+
 # ── Main ────────────────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -537,6 +559,13 @@ def main() -> None:
         f"Expected >= 30 extrapolation vectors, got {len(extrapolation_vectors)}"
     )
 
+    print("Generating sparse-match-floor vectors...")
+    sparse_floor_vectors = gen_sparse_match_floor_vectors()
+    print(f"  Generated {len(sparse_floor_vectors)} sparse-match-floor vectors")
+    assert len(sparse_floor_vectors) >= 15, (
+        f"Expected >= 15 sparse-match-floor vectors, got {len(sparse_floor_vectors)}"
+    )
+
     # Write planner vectors
     planner_path = OUT_DIR / "planner_vectors.json"
     with open(planner_path, "w", encoding="utf-8") as f:
@@ -555,10 +584,17 @@ def main() -> None:
         json.dump(extrapolation_vectors, f, indent=2)
     print(f"Wrote {extrapolation_path}")
 
+    # Write sparse-match-floor vectors
+    sparse_floor_path = OUT_DIR / "sparse_match_floor_vectors.json"
+    with open(sparse_floor_path, "w", encoding="utf-8") as f:
+        json.dump(sparse_floor_vectors, f, indent=2)
+    print(f"Wrote {sparse_floor_path}")
+
     # Final summary
     print(
         f"\nDone. {len(planner_vectors)} planner + {len(classifier_vectors)} classifier "
-        f"+ {len(extrapolation_vectors)} extrapolation vectors."
+        f"+ {len(extrapolation_vectors)} extrapolation + {len(sparse_floor_vectors)} "
+        f"sparse-match-floor vectors."
     )
 
 

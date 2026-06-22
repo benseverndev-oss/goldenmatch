@@ -718,8 +718,23 @@ class AutoConfigController:
                 for f in mk.fields:
                     if f.field is not None:
                         exact_columns.append(f.field)
+        # S2b: make the sparse-match floor pair-count-aware. The corrected
+        # blocking pair count isn't assembled until finalize, so measure it
+        # cheaply here from v0's blocking (post-F1 fast static path ~6ms@1M).
+        # None on the distributed path / non-static / failure -> fixed-50 floor.
+        sparse_estimated_pairs: int | None = None
+        if not distributed:
+            try:
+                from goldenmatch.core.blocker import measure_blocking_profile
+                _smp = measure_blocking_profile(df, config_v0)
+                if _smp is not None:
+                    sparse_estimated_pairs = _smp.estimated_pair_count
+            except Exception:
+                sparse_estimated_pairs = None
         with stage("controller_pre_estimate_sparse_match_signal"):
-            sparsity_verdict = dispatch_estimate_sparse_match_signal(df, exact_columns=exact_columns)
+            sparsity_verdict = dispatch_estimate_sparse_match_signal(
+                df, exact_columns=exact_columns, estimated_pairs=sparse_estimated_pairs
+            )
         _diag(f"estimate_sparse_match_signal done (exact_cols={len(exact_columns)})")
         # IndicatorContext requires a Polars DataFrame for lazy indicator calls.
         # On the distributed path we supply the init_sample (already materialized).

@@ -22,8 +22,8 @@
 //!   and compare against Rust's before re-encoding to JSON.
 
 use goldenmatch_autoconfig_core::{
-    classify_columns, decide_plan, extrapolate_pair_count, ColType, ColumnStats,
-    ExtrapolationInput, PlannerInput,
+    classify_columns, decide_plan, extrapolate_pair_count, sparse_match_floor, ColType,
+    ColumnStats, ExtrapolationInput, PlannerInput,
 };
 use serde_json::Value;
 
@@ -31,6 +31,7 @@ use serde_json::Value;
 const PLANNER_JSON: &str = include_str!("../golden/planner_vectors.json");
 const CLASSIFIER_JSON: &str = include_str!("../golden/classifier_vectors.json");
 const EXTRAPOLATION_JSON: &str = include_str!("../golden/extrapolation_vectors.json");
+const SPARSE_MATCH_FLOOR_JSON: &str = include_str!("../golden/sparse_match_floor_vectors.json");
 
 // ── Planner parity ────────────────────────────────────────────────────────────
 
@@ -159,6 +160,38 @@ fn extrapolation_golden_parity() {
     assert!(
         failures.is_empty(),
         "{} extrapolation mismatches:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+// ── Sparse-match floor parity (S2b) ───────────────────────────────────────────
+
+#[test]
+fn sparse_match_floor_golden_parity() {
+    let vectors: Vec<Value> = serde_json::from_str(SPARSE_MATCH_FLOOR_JSON)
+        .expect("failed to parse sparse_match_floor_vectors.json");
+
+    assert!(
+        vectors.len() >= 15,
+        "expected >= 15 sparse-match-floor vectors, got {}",
+        vectors.len()
+    );
+
+    let mut failures: Vec<String> = Vec::new();
+    for (idx, vec) in vectors.iter().enumerate() {
+        let estimated_pairs = vec["input"]["estimated_pairs"]
+            .as_u64()
+            .expect("estimated_pairs must be u64");
+        let got = sparse_match_floor(estimated_pairs);
+        let exp = vec["expected"]["floor"].as_u64().expect("floor must be u64");
+        if got != exp {
+            failures.push(format!("vec {idx}: estimated_pairs={estimated_pairs} got {got} exp {exp}"));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} sparse-match-floor mismatches:\n{}",
         failures.len(),
         failures.join("\n")
     );

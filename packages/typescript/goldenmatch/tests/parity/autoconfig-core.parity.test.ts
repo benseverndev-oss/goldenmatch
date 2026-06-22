@@ -16,13 +16,16 @@ import { describe, it, expect } from "vitest";
 import plannerVectors from "./fixtures/autoconfig/planner_vectors.json" with { type: "json" };
 import classifierVectors from "./fixtures/autoconfig/classifier_vectors.json" with { type: "json" };
 import extrapolationVectors from "./fixtures/autoconfig/extrapolation_vectors.json" with { type: "json" };
+import sparseMatchFloorVectors from "./fixtures/autoconfig/sparse_match_floor_vectors.json" with { type: "json" };
 import {
   decidePlan,
   classifyColumns,
   extrapolatePairCount,
+  sparseMatchFloor,
   decidePlanRawJson,
   classifyColumnsRawJson,
   extrapolatePairCountRawJson,
+  sparseMatchFloorRawJson,
   type PlannerInput,
   type CoreColumnStats,
   type ExtrapolationInput,
@@ -41,6 +44,10 @@ interface ClassifierVector {
 interface ExtrapolationVector {
   input: Record<string, unknown>;
   expected: Record<string, unknown>;
+}
+interface SparseMatchFloorVector {
+  input: { estimated_pairs: number };
+  expected: { floor: number };
 }
 
 /** Exact deep-equal except `confidence`, compared with an abs tolerance. */
@@ -92,6 +99,21 @@ describe("autoconfig core parity — extrapolation (raw JSON)", () => {
     it(`vector ${i}`, () => {
       const out = JSON.parse(
         extrapolatePairCountRawJson(JSON.stringify(v.input)),
+      );
+      expect(out).toEqual(v.expected);
+    });
+  }
+});
+
+describe("autoconfig core parity — sparse-match floor (raw JSON)", () => {
+  const vectors = sparseMatchFloorVectors as SparseMatchFloorVector[];
+  it("has the expected vector count", () => {
+    expect(vectors.length).toBeGreaterThanOrEqual(15);
+  });
+  for (const [i, v] of vectors.entries()) {
+    it(`vector ${i} (estimated_pairs=${v.input.estimated_pairs})`, () => {
+      const out = JSON.parse(
+        sparseMatchFloorRawJson(JSON.stringify(v.input)),
       );
       expect(out).toEqual(v.expected);
     });
@@ -169,6 +191,13 @@ describe("autoconfig core parity — camelCase adapter round-trips", () => {
       expect(out.nBlocks).toBe(exp.n_blocks);
       expect(out.totalComparisons).toBe(exp.total_comparisons);
       expect(out.singletonBlockCount).toBe(exp.singleton_block_count);
+    }
+  });
+
+  it("sparseMatchFloor matches the golden", () => {
+    const vectors = sparseMatchFloorVectors as SparseMatchFloorVector[];
+    for (const v of vectors) {
+      expect(sparseMatchFloor(v.input.estimated_pairs)).toBe(v.expected.floor);
     }
   });
 

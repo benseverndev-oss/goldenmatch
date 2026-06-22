@@ -3,6 +3,7 @@
 pub mod classify;
 pub mod extrapolate;
 pub mod planner;
+pub mod thresholds;
 #[cfg(feature = "arrow")]
 pub mod profile;
 
@@ -15,3 +16,5 @@ pub use planner::{
 pub use classify::{classify_columns, ColType, ColumnProfile, ColumnStats};
 // S1 extrapolation kernel re-exports
 pub use extrapolate::{extrapolate_pair_count, ExtrapolationInput, ExtrapolationOutput};
+// S2b/S3 threshold kernel re-exports
+pub use thresholds::sparse_match_floor;

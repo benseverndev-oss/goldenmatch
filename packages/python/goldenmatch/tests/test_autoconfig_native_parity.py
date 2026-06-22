@@ -154,6 +154,36 @@ def test_extrapolation_golden_vectors(monkeypatch: pytest.MonkeyPatch) -> None:
         )
 
 
+# ── Test 2c: sparse-match floor golden vectors (S2b) ─────────────────────────
+
+def test_sparse_match_floor_golden_vectors(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every vector in sparse_match_floor_vectors.json must round-trip through
+    the native autoconfig_sparse_match_floor shim == the oracle expected.
+
+    Per-test skip: the module guard only checks the OLD autoconfig_decide_plan
+    symbol, so a wheel predating the S2b shim reaches here -- skip rather than
+    AttributeError."""
+    _nm = native_module()
+    if not hasattr(_nm, "autoconfig_sparse_match_floor"):
+        pytest.skip("native ext predates S2b (no autoconfig_sparse_match_floor)")
+    monkeypatch.setenv("GOLDENMATCH_NATIVE", "1")
+
+    vectors_path = GOLDEN_DIR / "sparse_match_floor_vectors.json"
+    assert vectors_path.exists(), f"golden vectors not found at {vectors_path}"
+    vectors = json.loads(vectors_path.read_text(encoding="utf-8"))
+    assert len(vectors) >= 1, "sparse_match_floor_vectors.json is empty"
+
+    for i, v in enumerate(vectors):
+        got_str = _nm.autoconfig_sparse_match_floor(json.dumps(v["input"]))  # type: ignore[union-attr]
+        got = json.loads(got_str)
+        assert got == v["expected"], (
+            f"sparse-match-floor vector #{i} mismatch.\n"
+            f"  input:    {v['input']}\n"
+            f"  expected: {v['expected']}\n"
+            f"  got:      {got}"
+        )
+
+
 # ── Test 3: wiring equivalence ───────────────────────────────────────────────
 
 def _make_person_df() -> pl.DataFrame:

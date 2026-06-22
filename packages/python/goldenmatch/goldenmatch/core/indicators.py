@@ -136,19 +136,61 @@ def _compute_corruption_score_inline(sample: pl.DataFrame, col: str) -> float:
     return max(0.0, min(1.0, 1.0 - ratio_clean))
 
 
+def _sparse_match_floor_py(estimated_pairs: int) -> int:
+    """Pure-Python oracle for the S2b adaptive sparse-match floor.
+
+    `min(50, estimated_pairs // 100)` -- the floor stays 50 for datasets
+    expected to yield >= 5000 candidate pairs, and scales down for small-yield
+    data so sparse-match expansion is not over-triggered. Mirrors the Rust
+    `sparse_match_floor` kernel (golden-vector parity).
+    """
+    return min(50, estimated_pairs // 100)
+
+
+def sparse_match_floor(estimated_pairs: int) -> int:
+    """S2b adaptive sparse-match floor. Dispatches to the shared native core
+    when enabled (byte-identical to the pure-Python oracle), else pure Python."""
+    from goldenmatch.core._native_loader import native_enabled, native_module
+
+    if estimated_pairs < 0:
+        estimated_pairs = 0
+    if native_enabled("autoconfig"):
+        _nm = native_module()
+        if hasattr(_nm, "autoconfig_sparse_match_floor"):
+            import json
+
+            out = _nm.autoconfig_sparse_match_floor(
+                json.dumps({"estimated_pairs": int(estimated_pairs)})
+            )
+            return int(json.loads(out)["floor"])
+    return _sparse_match_floor_py(estimated_pairs)
+
+
 def estimate_sparse_match_signal(
     df: pl.DataFrame,
     exact_columns: list[str] | None = None,
     sample_size: int = 1000,
     sparse_threshold: int = 50,
+    estimated_pairs: int | None = None,
 ) -> SparsityVerdict:
     """Count exact-matchkey collisions in a sample.
 
     If `exact_columns` is empty (caller has no exact matchkeys), treat as
     sparse -- controller can't sanity-check otherwise.
+
+    When `estimated_pairs` (the S1-corrected candidate pair count for the full
+    dataset) is provided, the sparse floor becomes adaptive via
+    `sparse_match_floor` (S2b): small-yield datasets get a lower bar so
+    sparse-match expansion is not over-triggered. When None, the fixed
+    `sparse_threshold` is used (backward-compatible default).
     """
     if not exact_columns or df.is_empty():
         return SparsityVerdict(is_sparse=True, estimated_n_true_pairs=0)
+    threshold = (
+        sparse_match_floor(estimated_pairs)
+        if estimated_pairs is not None
+        else sparse_threshold
+    )
     sample = df.head(sample_size) if df.height > sample_size else df
     n_pairs = 0
     for col in exact_columns:
@@ -168,7 +210,7 @@ def estimate_sparse_match_signal(
             )
         except Exception:
             continue
-    is_sparse = n_pairs < sparse_threshold
+    is_sparse = n_pairs < threshold
     return SparsityVerdict(is_sparse=is_sparse, estimated_n_true_pairs=n_pairs)
 
 
@@ -299,10 +341,14 @@ def dispatch_compute_column_priors(df_or_ds: Any) -> dict[str, ColumnPrior]:
 
 
 def dispatch_estimate_sparse_match_signal(
-    df_or_ds: Any, *, exact_columns: list[str]
+    df_or_ds: Any, *, exact_columns: list[str], estimated_pairs: int | None = None
 ) -> SparsityVerdict:
     from goldenmatch.distributed import is_ray_dataset
     if is_ray_dataset(df_or_ds):
         from goldenmatch.distributed.indicators import estimate_sparse_match_signal_distributed
+        # Distributed path keeps the fixed floor (no cheap full-frame pair count
+        # available driver-side); estimated_pairs applies on the local path only.
         return estimate_sparse_match_signal_distributed(df_or_ds, exact_columns=exact_columns)
-    return estimate_sparse_match_signal(df_or_ds, exact_columns=exact_columns)
+    return estimate_sparse_match_signal(
+        df_or_ds, exact_columns=exact_columns, estimated_pairs=estimated_pairs
+    )
