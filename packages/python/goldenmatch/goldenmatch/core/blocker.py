@@ -87,7 +87,7 @@ def _emit_blocking_profile(
 
 def _fast_static_block_sizes(
     lf: pl.LazyFrame, config: Any
-) -> list[int] | None:
+) -> tuple[list[int], int, int] | None:
     """Vectorized block-size distribution for the ``static`` strategy.
 
     Stage-D speed lever (spec 2026-06-22): ``measure_blocking_profile`` only
@@ -119,6 +119,10 @@ def _fast_static_block_sizes(
     max_block_size = config.max_block_size
     skip_oversized = config.skip_oversized
     all_sizes: list[int] = []
+    # Chao1 inputs for n_blocks richness extrapolation (S1): counted from the
+    # raw per-key sizes BEFORE the size<2 drop (singletons feed F1).
+    f1 = 0
+    f2 = 0
     for key_config in keys:
         block_key_expr = _build_block_key_expr(key_config)
         # Aggregate sizes per key in one lazy group_by, then drop null/sentinel
@@ -142,13 +146,18 @@ def _fast_static_block_sizes(
                 .str.to_lowercase()
                 .is_in(["nan", "null", "none"])
         )
-        sizes = [s for s in agg.get_column("__sz__").to_list() if s >= 2]
+        # Count F1/F2 from the filtered (null/sentinel-dropped) per-key sizes,
+        # BEFORE the size>=2 drop, so null-key groups don't inflate F1.
+        all_key_sizes = agg.get_column("__sz__").to_list()
+        f1 += sum(1 for s in all_key_sizes if s == 1)
+        f2 += sum(1 for s in all_key_sizes if s == 2)
+        sizes = [s for s in all_key_sizes if s >= 2]
         # If _build_static_blocks WOULD sub-split/skip an oversized block, the
         # vectorized sizes diverge — bail to the exact path.
         if skip_oversized and any(s > max_block_size for s in sizes):
             return None
         all_sizes.extend(sizes)
-    return all_sizes
+    return all_sizes, f1, f2
 
 
 def measure_blocking_profile(
@@ -184,15 +193,21 @@ def measure_blocking_profile(
         else:
             keys_used = []
 
-        sizes = _fast_static_block_sizes(lf, blocking_cfg)
-        if sizes is None:
-            # Exact fallback: build every block and collect its length.
+        fast = _fast_static_block_sizes(lf, blocking_cfg)
+        if fast is None:
+            # Exact fallback: build every block and collect its length. This path
+            # cannot recover the pre-drop singleton/doubleton counts, so the Chao1
+            # inputs stay None and extrapolate_to uses the linear n_blocks fallback.
             sizes = []
             for b in build_blocks(lf, blocking_cfg):
                 try:
                     sizes.append(b.df.select(pl.len()).collect().item())
                 except Exception:
                     sizes.append(0)
+            chao1_f1: int | None = None
+            chao1_f2: int | None = None
+        else:
+            sizes, chao1_f1, chao1_f2 = fast
         sizes_sorted = sorted(sizes)
         n_blocks = len(sizes_sorted)
         total_comparisons = sum(s * (s - 1) // 2 for s in sizes_sorted)
@@ -213,6 +228,8 @@ def measure_blocking_profile(
             block_sizes_max=max(sizes_sorted) if sizes_sorted else 0,
             singleton_block_count=singleton_block_count,
             oversized_block_count=oversized_block_count,
+            chao1_f1=chao1_f1,
+            chao1_f2=chao1_f2,
         )
     except Exception:
         logger.debug(
