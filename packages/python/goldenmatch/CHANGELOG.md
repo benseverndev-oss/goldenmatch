@@ -69,6 +69,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [2.2.0] - 2026-06-19
 
+<!-- README-callout
+**Semantic blocking** — an opt-in recall lever for abbreviations and aliases. `dedupe_df(semantic_blocking=...)` unions extra candidate sources (initialism/abbreviation blocking, a business-alias canonical-form table, and an embedding ANN pass) into the pipeline. Off by default; on the abbreviation-heavy benchmark it adds **+5.3pp recall at zero precision cost**.
+-->
+
 ### Added
 - **Semantic blocking: an opt-in recall lever for abbreviations and aliases (#1065).**
   New `SemanticBlockingConfig` plus a `dedupe_df(semantic_blocking=...)` flag union
@@ -94,6 +98,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   normalizes any leftover whitespace, so it is behavior-identical and linear.
 
 ## [2.1.0] - 2026-06-18
+
+<!-- README-callout
+**Correlated survivorship** — golden-record survivorship can now keep correlated fields (street/city/postcode) in lock-step from a single winning source instead of mixing best-per-field values across records. New `FieldGroupSpec` + `DomainPack.groups` (domain-pack schema v3, additive), an `anchor`/`allow_fill` group-winner strategy, and per-cluster provenance surfaced through lineage, `explain`, the MCP tools, and the review queue. Plus chunked PPRL linkage (peak memory ~9-14x lower, byte-identical) and `result.native` dispatch telemetry that flags a silently-slow Python fallback.
+-->
 
 ### Added
 - **Correlated survivorship: lock-step field groups + conditional/validated golden rules (#1047).**

@@ -125,6 +125,17 @@ Auto-config only applies these when the profiled `col_type` agrees with the colu
 ## Golden Suite
 GoldenMatch is the headline package of a 6-package suite that composes into one pipeline: GoldenCheck (profile + validate) → GoldenFlow (standardize) → GoldenMatch (dedupe) → GoldenAnalysis (cross-cutting reporting), orchestrated by GoldenPipe, with InferMap for schema mapping. All ship on both PyPI and npm.
 
+## Knowledge Graphs (entity resolution as the resolve stage)
+- `goldenmatch-kg` (in-repo, first PyPI release pending) — drop-in GoldenMatch resolution for KG frameworks: neo4j-graphrag (`GoldenMatchResolver`), LlamaIndex PropertyGraphIndex (`GoldenMatchEntityResolver`), Graphiti (`propose_entity_merges`). One framework-agnostic `resolve_entities` core; the ER-stage lift is measured by ER-KG-Bench, not asserted.
+- `goldengraph` (in-repo, first PyPI release pending) — build-your-own-KG from text: `text → LLM extraction → GoldenMatch resolution → durable bi-temporal store`. pyo3-free Rust engine (store / query / community detection); ER is the differentiator. Early evidence program with head-to-head QA bench vs LightRAG / MS-GraphRAG / Graphiti.
+
+## Recent (v2.1–v2.2)
+- Semantic blocking (#1065, v2.2.0, opt-in): `dedupe_df(semantic_blocking=...)` unions abbreviation/initialism blocking, a business-alias canonical-form table, and an embedding ANN pass. +5.3pp recall at zero precision cost on the abbreviation-heavy benchmark.
+- `config_weaknesses` (#1064, v2.2.0): deterministic, offline config-critique tool — explains where an auto-built config is risky and maps each finding to one concrete fix.
+- Correlated survivorship (#1047/#1055, v2.1.0): `FieldGroupSpec` + `DomainPack.groups` keep correlated fields (street/city/postcode) in lock-step from one winning source; `anchor`/`allow_fill` group-winner strategy; provenance surfaced through lineage, explain, MCP, review queue.
+- Chunked PPRL linkage (#1054, v2.1.0): streams Party B in blocks; peak memory ~9-14x lower, byte-identical output.
+- Native-dispatch telemetry (#1048, v2.1.0): `result.native` reports whether the scoring hot path used the Rust kernel; warns on a silently-slow Python fallback.
+
 ## Docs
 - [Full docs](https://benseverndev-oss.github.io/goldenmatch/): 22 guides
 - [Full API reference](https://benseverndev-oss.github.io/goldenmatch/python-api): 101 exports

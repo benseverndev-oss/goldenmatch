@@ -26,7 +26,7 @@
 [![DBLP-ACM F1](https://img.shields.io/badge/DBLP--ACM%20F1-96.4%25-d4a017)](packages/python/goldenmatch/README.md#benchmarks)
 
 <!-- Reach -->
-[![PyPI downloads (suite)](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fbenseverndev-oss%2Fgoldenmatch%2Fbadges%2Fpypi-downloads.json)](https://pepy.tech/projects?q=goldenmatch+goldencheck+goldenpipe+goldenflow+infermap+goldencheck-types+goldensuite-mcp+goldenmatch-duckdb+goldenmatch-native+goldenmatch-embed)
+[![PyPI downloads (suite)](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fbenseverndev-oss%2Fgoldenmatch%2Fbadges%2Fpypi-downloads.json)](https://pepy.tech/projects?q=goldenmatch+goldencheck+goldenpipe+goldenflow+goldenanalysis+infermap+goldencheck-types+goldensuite-mcp+goldenmatch-duckdb+goldenmatch-native+goldenflow-native+goldencheck-native+goldenanalysis-native+goldenmatch-embed)
 [![npm downloads (suite)](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fbenseverndev-oss%2Fgoldenmatch%2Fbadges%2Fnpm-downloads.json)](https://www.npmjs.com/~benzsevern)
 [![GitHub stars](https://img.shields.io/github/stars/benseverndev-oss/goldenmatch?style=flat&color=d4a017&logo=github)](https://github.com/benseverndev-oss/goldenmatch/stargazers)
 
@@ -54,11 +54,11 @@ npm install goldenmatch
 ```
 
 <!-- README-callouts:start  (auto-synced from packages/python/goldenmatch/CHANGELOG.md by scripts/sync_readme_callouts.py — edit the CHANGELOG, not this block) -->
-> **🆕 v2.0.0** — **GoldenMatch 2.0.0: the first backwards-incompatible major.** It removes four deprecation-window items, each shipped with a 1.x runway: the legacy `:hash:` identity lookup bridge + `GOLDENMATCH_IDENTITY_ID_SCHEME` (run `goldenmatch identity migrate-ids` before upgrading; un-fingerprintable rows keep their `:hash:` id), the `GOLDENMATCH_CLUSTER_FRAMES_OUT` gate + legacy dict cluster path (`build_clusters` stays as a frames-backed adapter), and the `cheapest_healthy` / `_scale_aware_backend` shims. Pipeline behavior is output-equivalent. Migration guide: [Migrating to v2](https://docs.bensevern.dev/goldenmatch/migrating-to-v2).
+> **🆕 v2.2.0 — Semantic blocking** — an opt-in recall lever for abbreviations and aliases. `dedupe_df(semantic_blocking=...)` unions extra candidate sources (initialism/abbreviation blocking, a business-alias canonical-form table, and an embedding ANN pass) into the pipeline. Off by default; on the abbreviation-heavy benchmark it adds **+5.3pp recall at zero precision cost**.
 >
-> **v1.30.0** — **Zero-training Fellegi-Sunter now beats hand-rolled, expert-tuned Splink, head-to-head and reproducibly.** On one shared evaluator across every dataset Splink scores, GoldenMatch's probabilistic auto-config wins on all of them: `historical_50k` pairwise F1 **0.778 vs 0.757** (cluster-level B³ **0.844 vs 0.789**), `febrl3` **0.991 vs 0.965**, `synthetic_person` **0.998 vs 0.996** — made reproducible by an EM training-pair determinism fix (#829). Full bake-off: `docs/benchmarks/2026-06-09-splink-bakeoff.md`.
+> **v2.1.0 — Correlated survivorship** — golden-record survivorship can now keep correlated fields (street/city/postcode) in lock-step from a single winning source instead of mixing best-per-field values across records. New `FieldGroupSpec` + `DomainPack.groups` (domain-pack schema v3, additive), an `anchor`/`allow_fill` group-winner strategy, and per-cluster provenance surfaced through lineage, `explain`, the MCP tools, and the review queue. Plus chunked PPRL linkage (peak memory ~9-14x lower, byte-identical) and `result.native` dispatch telemetry that flags a silently-slow Python fallback.
 >
-> **v1.26.0** — **100M records, distributed, on a 4-worker Ray cluster — verified.** The distributed Phase-5 pipeline (`GOLDENMATCH_DISTRIBUTED_PIPELINE=2`) now runs a full 100,000,000-row dedupe end to end in ~213 s with the driver process peaking at 0.30 GB RSS. The unlock was removing every driver-side collect from the pipeline (scoring -> per-partition local connected-components -> distributed join -> distributed golden build + write), so nothing funnels back to a single node.
+> **v2.0.0** — **GoldenMatch 2.0.0: the first backwards-incompatible major.** It removes four deprecation-window items, each shipped with a 1.x runway: the legacy `:hash:` identity lookup bridge + `GOLDENMATCH_IDENTITY_ID_SCHEME` (run `goldenmatch identity migrate-ids` before upgrading; un-fingerprintable rows keep their `:hash:` id), the `GOLDENMATCH_CLUSTER_FRAMES_OUT` gate + legacy dict cluster path (`build_clusters` stays as a frames-backed adapter), and the `cheapest_healthy` / `_scale_aware_backend` shims. Pipeline behavior is output-equivalent. Migration guide: [Migrating to v2](https://docs.bensevern.dev/goldenmatch/migrating-to-v2).
 <!-- README-callouts:end -->
 
 ---
@@ -123,6 +123,15 @@ flowchart LR
 | **[goldencheck-action](packages/actions/goldencheck/README.md)** | YAML | GitHub Action — fail PRs that introduce data-quality regressions. | Marketplace |
 
 > Headline pitch and the deepest docs live in **[packages/python/goldenmatch/README.md](packages/python/goldenmatch/README.md)** (~1,300 lines, full feature list, CLI, architecture, benchmarks).
+
+### Knowledge graphs
+
+Entity resolution is the stage most GraphRAG pipelines do badly — duplicate surface forms of the same entity scatter across documents. Two new packages put GoldenMatch's resolution there:
+
+| Package | What it does | Status |
+|---|---|---|
+| **[goldenmatch-kg](packages/python/goldenmatch-kg/README.md)** | Drop-in GoldenMatch resolution as the entity-resolution stage of existing KG frameworks (neo4j-graphrag, LlamaIndex PropertyGraphIndex, Graphiti). One framework-agnostic `resolve_entities` core + per-framework adapters. The ER-stage lift is measured by [ER-KG-Bench](packages/python/goldenmatch/benchmarks/er-kg-bench), not asserted. | in-repo · first PyPI release pending |
+| **[goldengraph](packages/python/goldengraph/README.md)** | Build-your-own-KG from text — `text → LLM extraction → GoldenMatch resolution → a durable bi-temporal store`. The engine (store / query / community detection) is pyo3-free Rust; ER is the differentiator. Early evidence program. | in-repo · first PyPI release pending |
 
 ---
 
