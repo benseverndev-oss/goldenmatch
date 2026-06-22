@@ -15,13 +15,17 @@
 import { describe, it, expect } from "vitest";
 import plannerVectors from "./fixtures/autoconfig/planner_vectors.json" with { type: "json" };
 import classifierVectors from "./fixtures/autoconfig/classifier_vectors.json" with { type: "json" };
+import extrapolationVectors from "./fixtures/autoconfig/extrapolation_vectors.json" with { type: "json" };
 import {
   decidePlan,
   classifyColumns,
+  extrapolatePairCount,
   decidePlanRawJson,
   classifyColumnsRawJson,
+  extrapolatePairCountRawJson,
   type PlannerInput,
   type CoreColumnStats,
+  type ExtrapolationInput,
 } from "../../src/core/autoconfigWasm.js";
 
 const CONF_TOL = 1e-9;
@@ -33,6 +37,10 @@ interface PlannerVector {
 interface ClassifierVector {
   input: Record<string, unknown>;
   expected: Record<string, unknown> & { confidence: number };
+}
+interface ExtrapolationVector {
+  input: Record<string, unknown>;
+  expected: Record<string, unknown>;
 }
 
 /** Exact deep-equal except `confidence`, compared with an abs tolerance. */
@@ -71,6 +79,21 @@ describe("autoconfig core parity — classifier (raw JSON)", () => {
       const out = JSON.parse(classifyColumnsRawJson(JSON.stringify([v.input])));
       expect(Array.isArray(out)).toBe(true);
       expectProfileEqual(out[0], v.expected);
+    });
+  }
+});
+
+describe("autoconfig core parity — extrapolation (raw JSON)", () => {
+  const vectors = extrapolationVectors as ExtrapolationVector[];
+  it("has the expected vector count", () => {
+    expect(vectors.length).toBeGreaterThanOrEqual(30);
+  });
+  for (const [i, v] of vectors.entries()) {
+    it(`vector ${i}`, () => {
+      const out = JSON.parse(
+        extrapolatePairCountRawJson(JSON.stringify(v.input)),
+      );
+      expect(out).toEqual(v.expected);
     });
   }
 });
@@ -117,6 +140,35 @@ describe("autoconfig core parity — camelCase adapter round-trips", () => {
       expect(plan.pairSpillThreshold).toBe(exp.pair_spill_threshold);
       expect(plan.clusteringStrategy).toBe(exp.clustering_strategy);
       expect(plan.ruleName).toBe(exp.rule_name);
+    }
+  });
+
+  it("extrapolatePairCount adapts snake<->camel and matches the golden", () => {
+    const vectors = extrapolationVectors as ExtrapolationVector[];
+    for (const v of vectors) {
+      const inp = v.input as {
+        total_comparisons: number;
+        n_blocks: number;
+        singleton_block_count: number;
+        chao1_f1: number | null;
+        chao1_f2: number | null;
+        n_rows_sample: number;
+        n_rows_full: number;
+      };
+      const camelIn: ExtrapolationInput = {
+        totalComparisons: inp.total_comparisons,
+        nBlocks: inp.n_blocks,
+        singletonBlockCount: inp.singleton_block_count,
+        chao1F1: inp.chao1_f1,
+        chao1F2: inp.chao1_f2,
+        nRowsSample: inp.n_rows_sample,
+        nRowsFull: inp.n_rows_full,
+      };
+      const out = extrapolatePairCount(camelIn);
+      const exp = v.expected as Record<string, unknown>;
+      expect(out.nBlocks).toBe(exp.n_blocks);
+      expect(out.totalComparisons).toBe(exp.total_comparisons);
+      expect(out.singletonBlockCount).toBe(exp.singleton_block_count);
     }
   });
 
