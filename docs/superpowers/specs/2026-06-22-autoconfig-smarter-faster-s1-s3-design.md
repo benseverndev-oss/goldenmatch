@@ -105,13 +105,20 @@ summary stats + sample/full row counts and returns the corrected `BlockingProfil
 
 - **Pairs:** `total_comparisons × ratio²`.
 - **n_blocks:** Chao1 richness estimate `n_blocks_sample + F1² / (2·(F2 + 1))`, where
-  `F1 = singleton_block_count` (blocks with exactly 1 sampled row — already measured) and
-  `F2 = doubleton_block_count` (blocks with exactly 2 sampled rows — **new measurement field**,
-  see below). This reuses the existing Chao1 pattern already proven in
-  `FieldStats.estimated_full_cardinality` (`complexity_profile.py`, added 2026-05-29) — same
-  estimator, applied to block richness instead of value richness.
-- **singleton_block_count:** scaled consistently with the Chao1 model (the residual singleton
-  mass after richness extrapolation); falls back to linear when `F2` is absent.
+  `F1` = count of size-1 (singleton) blocks and `F2` = count of size-2 (doubleton) blocks in the
+  sample. This reuses the Chao1 *formula* already proven in `FieldStats.estimated_full_cardinality`
+  (`complexity_profile.py`, added 2026-05-29) — applied to block richness instead of value
+  richness. **Load-bearing caveat the implementer must heed:** `F1`/`F2` are **not available
+  today**. The existing `BlockingProfile.singleton_block_count` is structurally **0** — both
+  blocking paths drop blocks of size < 2 *before* the size list is counted
+  (`_fast_static_block_sizes` filters `s >= 2` at `blocker.py:145`; `build_blocks` /
+  `_build_static_blocks` skip `if size < 2: continue` at `blocker.py:366,621`), because singletons
+  contribute zero within-block pairs and the pair-count accounting rightly ignores them. The
+  richness estimator needs them, so the measurement change below must count `F1` and `F2` from the
+  raw per-key aggregate *before* the size-<2 drop. (This is why "reuse the existing Chao1 pattern"
+  holds for the formula but not the input plumbing: in `FieldStats`, `singleton_count`/
+  `doubleton_count` are passed as independent fields, not derived from a list that already dropped
+  singletons.)
 - **Cap (safety rail):** clamp the extrapolated pair count at `n_full·(n_full−1)/2` (the all-pairs
   maximum — blocking can never produce more) and `n_blocks` at `n_full`. Guards against a
   pathological lucky-large-block sample over-shooting. Over-estimation is the *safe* direction
@@ -120,14 +127,28 @@ summary stats + sample/full row counts and returns the corrected `BlockingProfil
 
 ### Measurement change
 
-`BlockingProfile` gains an **optional** `doubleton_block_count: int = 0` field (it already carries
-`singleton_block_count`). The Polars `measure_blocking_profile` fast path
-(`_fast_static_block_sizes`, shipped in #1180) already computes the per-key block-size
-distribution, so counting size-2 keys is a trivial addition to that aggregate. The field is
-optional and the kernel falls back to **linear n_blocks scaling when `F2` is absent**, so the TS
-profiler keeps working unchanged until its profiler is next touched (graceful cross-surface
-degradation; the pair-count `ratio²` fix needs no new measurement and so reaches TS immediately
-via the core).
+The Chao1 richness term needs `F1` (count of size-1 blocks) and `F2` (count of size-2 blocks) in
+the sample, and **neither is available today** (see the caveat above: `singleton_block_count` is
+structurally 0). So `BlockingProfile` gains **two new optional fields** `chao1_f1: int = 0` and
+`chao1_f2: int = 0`, counted from the raw per-key `group_by(<key>).agg(pl.len())` aggregate
+**before** the size-<2 drop. These are deliberately *separate* fields from the existing
+`singleton_block_count` so its current (inert) semantics and `health()`'s singleton branch are not
+perturbed by this change.
+
+This is a **real measurement restructure touching both blocking paths**, not a one-field add:
+
+- `_fast_static_block_sizes` (the #1180 fast path) already materializes the per-key aggregate, so
+  `F1 = (counts == 1).sum()` / `F2 = (counts == 2).sum()` are a cheap addition there. Count them
+  *after* the same null/nan/none key filter the fast path already applies (`blocker.py:138-144`)
+  but *before* the size-<2 drop — otherwise null-key groups inflate `F1`.
+- The exact `build_blocks` / `_build_static_blocks` fallback needs the same two counts added at the
+  point it has per-key sizes, before it filters singletons out.
+
+The kernel **falls back to linear `n_blocks` scaling when `chao1_f1`/`chao1_f2` are absent** (the TS
+profiler before it gains the fields; non-static blocking that doesn't populate them). Crucially,
+the pair-count `ratio²` fix needs **no** new measurement — `total_comparisons` is already emitted —
+so it reaches every surface immediately via the core, while the `n_blocks` Chao1 refinement lands
+per-surface as each profiler gains the two fields (graceful cross-surface degradation).
 
 ### Scope of effect
 
@@ -236,8 +257,9 @@ nothing else in the loop changes. Gate: DQbench/F1 + golden.
 `goldenmatch-autoconfig-core` gains three public entry points and one edit:
 
 - `extrapolate_pair_count(...)` — S1. Input: block summary stats (`total_comparisons`, `n_blocks`,
-  `singleton_block_count`, optional `doubleton_block_count`) + `n_rows_sample` + `n_rows_full`.
-  Output: the corrected fields. Models the `ratio²` + Chao1 + cap logic.
+  optional `chao1_f1`, optional `chao1_f2`) + `n_rows_sample` + `n_rows_full`. Output: the corrected
+  fields. Models the `ratio²` + Chao1 + cap logic, with linear `n_blocks` fallback when the Chao1
+  counts are absent.
 - `sparse_match_floor(estimated_pairs: u64) -> u64` — S2b.
 - `exact_matchkey_floor(col_type: ColType) -> f64` — S3.
 - edit to `classify_by_data` in `classify.rs` — S2a (the adaptive floor).
