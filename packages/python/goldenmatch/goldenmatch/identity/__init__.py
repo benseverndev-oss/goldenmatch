@@ -26,7 +26,12 @@ from goldenmatch.identity.query import (
     manual_merge,
     manual_split,
 )
-from goldenmatch.identity.resolve import ResolveSummary, resolve_clusters
+from goldenmatch.identity.resolve import (
+    ResolveSummary,
+    match_record_to_entity,
+    resolve_clusters,
+    resolve_record_incremental,
+)
 from goldenmatch.identity.store import IdentityStore, new_entity_id
 
 __all__ = [
@@ -40,8 +45,10 @@ __all__ = [
     "list_entities",
     "manual_merge",
     "manual_split",
+    "match_record_to_entity",
     "migrate_record_ids",
     "resolve_clusters",
+    "resolve_record_incremental",
     "EdgeKind",
     "EventKind",
     "EvidenceEdge",
