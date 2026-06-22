@@ -4,8 +4,8 @@
 //! serializes its input to JSON, this deserializes -> calls the core -> serializes
 //! back. Parity is structural (one crate), not asserted after the fact.
 use goldenmatch_autoconfig_core::{
-    classify_columns, decide_plan, extrapolate_pair_count, sparse_match_floor, ColumnStats,
-    ExtrapolationInput, PlannerInput,
+    classify_columns, decide_plan, exact_matchkey_floor, extrapolate_pair_count,
+    sparse_match_floor, ColumnStats, ExtrapolationInput, PlannerInput,
 };
 use wasm_bindgen::prelude::*;
 
@@ -46,5 +46,18 @@ pub fn autoconfig_sparse_match_floor(input_json: &str) -> Result<String, JsError
         .and_then(|x| x.as_u64())
         .ok_or_else(|| JsError::new("missing/invalid estimated_pairs"))?;
     let floor = sparse_match_floor(estimated_pairs);
+    Ok(serde_json::json!({ "floor": floor }).to_string())
+}
+
+/// S3: JSON `{"col_type": "email"}` -> JSON `{"floor": 0.7}`.
+#[wasm_bindgen]
+pub fn autoconfig_exact_matchkey_floor(input_json: &str) -> Result<String, JsError> {
+    let v: serde_json::Value = serde_json::from_str(input_json)
+        .map_err(|e| JsError::new(&format!("bad exact_matchkey_floor json: {e}")))?;
+    let col_type = v
+        .get("col_type")
+        .and_then(|x| x.as_str())
+        .ok_or_else(|| JsError::new("missing/invalid col_type"))?;
+    let floor = exact_matchkey_floor(col_type);
     Ok(serde_json::json!({ "floor": floor }).to_string())
 }

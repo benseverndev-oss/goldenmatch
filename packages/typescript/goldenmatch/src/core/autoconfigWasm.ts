@@ -20,6 +20,7 @@ import {
   autoconfig_classify_columns,
   autoconfig_extrapolate_pair_count,
   autoconfig_sparse_match_floor,
+  autoconfig_exact_matchkey_floor,
 } from "./_wasm/autoconfigWasmBindings.js";
 import { AUTOCONFIG_WASM_BASE64 } from "./_wasm/autoconfigWasmBytes.js";
 import type {
@@ -364,6 +365,23 @@ export function sparseMatchFloor(estimatedPairs: number): number {
 export function sparseMatchFloorRawJson(inputJson: string): string {
   ensureInit();
   return autoconfig_sparse_match_floor(inputJson);
+}
+
+/**
+ * S3 — per-type exact-matchkey cardinality floor (email 0.70, phone 0.30, else
+ * 0.50). Routes through the shared wasm core (byte-parity with Python/Rust).
+ */
+export function exactMatchkeyFloor(colType: string): number {
+  ensureInit();
+  const out = autoconfig_exact_matchkey_floor(
+    JSON.stringify({ col_type: colType }),
+  );
+  return (JSON.parse(out) as { floor: number }).floor;
+}
+
+export function exactMatchkeyFloorRawJson(inputJson: string): string {
+  ensureInit();
+  return autoconfig_exact_matchkey_floor(inputJson);
 }
 
 // ---------------------------------------------------------------------------

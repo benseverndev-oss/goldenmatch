@@ -184,6 +184,34 @@ def test_sparse_match_floor_golden_vectors(monkeypatch: pytest.MonkeyPatch) -> N
         )
 
 
+# ── Test 2d: exact-matchkey floor golden vectors (S3) ────────────────────────
+
+def test_exact_matchkey_floor_golden_vectors(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every vector in exact_matchkey_floor_vectors.json must round-trip through
+    the native autoconfig_exact_matchkey_floor shim == the oracle expected.
+
+    Per-test skip for wheels predating the S3 shim."""
+    _nm = native_module()
+    if not hasattr(_nm, "autoconfig_exact_matchkey_floor"):
+        pytest.skip("native ext predates S3 (no autoconfig_exact_matchkey_floor)")
+    monkeypatch.setenv("GOLDENMATCH_NATIVE", "1")
+
+    vectors_path = GOLDEN_DIR / "exact_matchkey_floor_vectors.json"
+    assert vectors_path.exists(), f"golden vectors not found at {vectors_path}"
+    vectors = json.loads(vectors_path.read_text(encoding="utf-8"))
+    assert len(vectors) >= 1, "exact_matchkey_floor_vectors.json is empty"
+
+    for i, v in enumerate(vectors):
+        got_str = _nm.autoconfig_exact_matchkey_floor(json.dumps(v["input"]))  # type: ignore[union-attr]
+        got = json.loads(got_str)
+        assert got == v["expected"], (
+            f"exact-matchkey-floor vector #{i} mismatch.\n"
+            f"  input:    {v['input']}\n"
+            f"  expected: {v['expected']}\n"
+            f"  got:      {got}"
+        )
+
+
 # ── Test 3: wiring equivalence ───────────────────────────────────────────────
 
 def _make_person_df() -> pl.DataFrame:
