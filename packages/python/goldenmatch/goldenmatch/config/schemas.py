@@ -869,6 +869,32 @@ class MemoryConfig(BaseModel):
 # ── MatchSettingsConfig ─────────────────────────────────────────────────────
 
 
+class ChannelStitchConfig(BaseModel):
+    """Cross-device / channel stitching configuration (#1110, epic #1108).
+
+    Drives ``goldenmatch.identity.stitching.stitch_frame``: which columns are
+    deterministic device keys, how records map to channels, and the per-channel
+    trust weights used to downweight cross-channel probabilistic matches. Config
+    plumbing only -- attaching it does not change resolution on its own; a caller
+    (or a future pipeline hook) passes it to ``stitch_frame``.
+    """
+
+    enabled: bool = False
+    # Columns whose shared non-null value is a near-certain same-person signal.
+    # Empty -> stitching.DEFAULT_DEVICE_KEYS.
+    device_keys: list[str] = Field(default_factory=list)
+    # Column carrying an explicit channel label per record.
+    channel_column: str = "channel"
+    # Exact ``__source__`` -> channel overrides (beats the substring hints).
+    channel_map: dict[str, str] = Field(default_factory=dict)
+    # Per-channel trust weight in (0, 1]. Empty -> stitching.DEFAULT_CHANNEL_TRUST.
+    channel_trust: dict[str, float] = Field(default_factory=dict)
+    # Scale probabilistic match scores by the channels' trust factor.
+    adjust_cross_channel: bool = True
+    # Drop probabilistic stitch edges below this (post-adjustment) weight.
+    prob_threshold: float = 0.0
+
+
 class IdentityConfig(BaseModel):
     """Identity Graph configuration.
 
@@ -886,6 +912,10 @@ class IdentityConfig(BaseModel):
     # review. 0.6 mirrors the existing ``weak_cluster_threshold`` family. Set
     # to 0 to disable auto-detection.
     weak_confidence_threshold: float = 0.6
+    # #1110: cross-device / channel stitching (CDP/MDM epic #1108). None ->
+    # stitching is not configured (the default; identity resolution is
+    # unchanged).
+    stitching: ChannelStitchConfig | None = None
 
     @field_validator("dataset")
     @classmethod

@@ -32,6 +32,18 @@ from goldenmatch.identity.resolve import (
     resolve_clusters,
     resolve_record_incremental,
 )
+from goldenmatch.identity.stitching import (
+    DEFAULT_CHANNEL_TRUST,
+    DEFAULT_DEVICE_KEYS,
+    StitchGroup,
+    StitchResult,
+    adjust_score,
+    channel_trust,
+    classify_channel,
+    cross_channel_factor,
+    deterministic_stitch_pairs,
+    stitch_frame,
+)
 from goldenmatch.identity.store import IdentityStore, new_entity_id
 
 __all__ = [
@@ -49,6 +61,16 @@ __all__ = [
     "migrate_record_ids",
     "resolve_clusters",
     "resolve_record_incremental",
+    "DEFAULT_CHANNEL_TRUST",
+    "DEFAULT_DEVICE_KEYS",
+    "StitchGroup",
+    "StitchResult",
+    "adjust_score",
+    "channel_trust",
+    "classify_channel",
+    "cross_channel_factor",
+    "deterministic_stitch_pairs",
+    "stitch_frame",
     "EdgeKind",
     "EventKind",
     "EvidenceEdge",
