@@ -214,6 +214,7 @@ from goldenmatch.core.recall_certificate import (
     certify_recall_df,
     estimate_recall,
 )
+from goldenmatch.core.retrieval import RetrievedRecord, retrieve_similar_records
 from goldenmatch.core.review_queue import ReviewQueue, gate_pairs
 from goldenmatch.core.rollback import rollback_run
 
@@ -333,6 +334,7 @@ __all__ = [
     "match_one", "StreamProcessor", "run_stream",
     "screen_record", "screen_records",
     "ScreeningResult", "ScreeningHit", "FieldReason",
+    "retrieve_similar_records", "RetrievedRecord",
     # Evaluation
     "evaluate_pairs", "evaluate_clusters", "load_ground_truth_csv", "EvalResult",
     "RecallEstimate", "RecallCertificate", "estimate_recall", "certify_recall_df",
