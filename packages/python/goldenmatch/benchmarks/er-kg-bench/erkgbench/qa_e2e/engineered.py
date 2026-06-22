@@ -58,6 +58,27 @@ def _render_mention(ent: _Entity, rng: random.Random, ambiguity: float) -> str:
     return ent.canonical
 
 
+def _edge_doc_id(src_id: str, rel: str, dst_id: str) -> str:
+    """Stable document id that ENCODES the edge structure (canonical ids, never
+    variant surfaces), so a pure-Python oracle can rebuild the graph from the
+    corpus. `::` separates the three parts; entity ids use a single `:` at most
+    (`gm:foo`), so the split is unambiguous."""
+    return f"{src_id}::{rel}::{dst_id}"
+
+
+def _question_text(start_mention: str, relation_chain: tuple[str, ...]) -> str:
+    """Phrase a question that STATES the relation chain to follow -- the fix for the
+    old "follow the chain" phrasing, which was unanswerable (a start node has several
+    outgoing edges of different relations, so neither the path nor the hop count was
+    determined). With the chain stated AND one edge per (entity, relation), the answer
+    is unique."""
+    steps = ", then ".join(rel.replace("_", " ") for rel in relation_chain)
+    return (
+        f"Starting from {start_mention}, follow the relation {steps}. "
+        "What entity do you reach? Give its canonical name."
+    )
+
+
 def generate_engineered(
     *, seed: int, n_questions: int, ambiguity: float, max_hops: int = 4
 ) -> QACorpus:
@@ -66,58 +87,74 @@ def generate_engineered(
     by_id = {e.id: e for e in entities}
     ids = [e.id for e in entities]
 
-    # Deterministic typed-edge graph: each entity gets 2-4 outgoing edges.
-    edges: dict[str, list[tuple[str, str]]] = {e.id: [] for e in entities}
+    # Deterministic typed-edge graph with AT MOST ONE edge per (entity, relation):
+    # a relation sequence then determines a unique walk, which is what makes a
+    # multi-hop question answerable. Each entity gets 2-4 DISTINCT relations.
+    edges: dict[str, dict[str, str]] = {e.id: {} for e in entities}
     for e in entities:
-        for _ in range(rng.randint(2, 4)):
-            rel = rng.choice(RELATION_SCHEMA)
+        n = rng.randint(2, 4)
+        rels = rng.sample(RELATION_SCHEMA, min(n, len(RELATION_SCHEMA)))
+        for rel in rels:
             dst = rng.choice(ids)
             if dst != e.id:
-                edges[e.id].append((rel, dst))
+                edges[e.id][rel] = dst
 
     # One document per edge stating the relation, with ambiguity-dialed mentions.
+    # Iterate the (src, rel) map in a fixed order so the corpus is seed-deterministic.
     documents: list[Document] = []
-    for src_id, outs in edges.items():
-        for j, (rel, dst_id) in enumerate(outs):
+    for src_id in ids:
+        for rel, dst_id in edges[src_id].items():
             s = _render_mention(by_id[src_id], rng, ambiguity)
             o = _render_mention(by_id[dst_id], rng, ambiguity)
             documents.append(
                 Document(
-                    id=f"{src_id}-{rel}-{dst_id}-{j}",
+                    id=_edge_doc_id(src_id, rel, dst_id),
                     text=f"{s} {rel.replace('_', ' ')} {o}.",
                 )
             )
 
-    # Sample k-hop questions by walking the edge graph; the answer is the terminal
-    # entity's canonical name; the gold path is the entity-id chain (length k).
+    # Sample k-hop questions by walking the edge graph and RECORDING the relation
+    # sequence taken; the question states that sequence, the answer is the terminal
+    # entity's canonical name, and the gold supporting facts are the traversed edges.
     questions: list[QAItem] = []
+    seen: set[tuple[str, tuple[str, ...]]] = set()
     for qi in range(n_questions):
         k = rng.randint(1, max_hops)
         start = rng.choice(ids)
-        path = [start]
         cur = start
+        chain: list[str] = []
+        support: list[str] = []
         ok = True
         for _ in range(k):
             if not edges[cur]:
                 ok = False
                 break
-            _, nxt = rng.choice(edges[cur])
-            path.append(nxt)
+            rel = rng.choice(list(edges[cur]))
+            nxt = edges[cur][rel]
+            chain.append(rel)
+            support.append(_edge_doc_id(cur, rel, nxt))
             cur = nxt
-        if not ok or len(path) != k + 1:
+        if not ok or len(chain) != k:
             continue
-        answer_ent = by_id[path[-1]]
+        # Skip duplicate (start, chain) walks: they ask the identical question, which
+        # wastes LLM budget and skews the per-engine mean.
+        dedup_key = (start, tuple(chain))
+        if dedup_key in seen:
+            continue
+        seen.add(dedup_key)
+        answer_ent = by_id[cur]
         start_mention = _render_mention(by_id[start], rng, ambiguity)
+        relation_chain = tuple(chain)
         questions.append(
             QAItem(
                 id=f"eng-q{qi}",
-                question=(
-                    f"Following the chain from {start_mention}, what is the final entity?"
-                ),
+                question=_question_text(start_mention, relation_chain),
                 gold_answer=answer_ent.canonical,
-                gold_supporting_fact_ids=tuple(path[1:]),
+                gold_supporting_fact_ids=tuple(support),
                 hop_count=k,
                 ambiguity_level=ambiguity,
+                start_entity_id=start,
+                relation_chain=relation_chain,
             )
         )
     return QACorpus(

@@ -1,7 +1,7 @@
 # GraphRAG evidence program #1 -- end-to-end multi-hop QA head-to-head.
 # Opt-in (workflow_dispatch only): real LLM, hard cost cap. NOT ci-required.
-# PR A ships the goldengraph engine only; LightRAG / MS-GraphRAG / Graphiti
-# arrive as PRs B/C/D against the same harness.
+# Each engine x ambiguity is its own budget-capped, independently-timed job (matrix);
+# the `aggregate` job merges every run into the RESULTS_QA_E2E.md headline + decay curve.
 name: bench-graphrag-qa
 
 on:
@@ -12,9 +12,12 @@ on:
         default: "engineered"
       max_questions:
         description: "questions to run"
-        default: "20"
+        default: "300"
+      ambiguity:
+        description: "comma-separated engineered ambiguity sweep (the decay curve)"
+        default: "0.0,0.25,0.5,0.75,1.0"
       budget_usd:
-        description: "hard cost cap per run"
+        description: "hard cost cap per (engine, ambiguity) run"
         default: "25"
       engine:
         description: "all | goldengraph | lightrag | ms_graphrag | graphiti"
@@ -24,10 +27,30 @@ permissions:
   contents: read
 
 jobs:
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      ambiguities: ${{ steps.mk.outputs.ambiguities }}
+    steps:
+      - id: mk
+        env:
+          AMB: ${{ inputs.ambiguity }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os
+          vals = [v.strip() for v in os.environ["AMB"].split(",") if v.strip()]
+          print("ambiguities=" + json.dumps(vals))
+          PY
+
   goldengraph:
+    needs: setup
     if: ${{ inputs.engine == 'all' || inputs.engine == 'goldengraph' }}
     runs-on: large-new-64GB
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        ambiguity: ${{ fromJSON(needs.setup.outputs.ambiguities) }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
@@ -51,21 +74,27 @@ jobs:
             --engine goldengraph \
             --corpus "${{ inputs.corpus }}" \
             --max-questions "${{ inputs.max_questions }}" \
+            --ambiguity "${{ matrix.ambiguity }}" \
             --budget-usd "${{ inputs.budget_usd }}" \
-            --out-md results/RESULTS_QA_E2E_goldengraph.md \
-            --out-json results/results_qa_e2e_goldengraph.json
+            --out-md "results/RESULTS_QA_E2E_goldengraph_amb${{ matrix.ambiguity }}.md" \
+            --out-json "results/results_qa_e2e_goldengraph_amb${{ matrix.ambiguity }}.json"
       - name: Upload results
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
         with:
-          name: graphrag-qa-results-goldengraph
-          path: packages/python/goldenmatch/benchmarks/er-kg-bench/results/results_qa_e2e_goldengraph*.*
+          name: graphrag-qa-results-goldengraph-amb${{ matrix.ambiguity }}
+          path: packages/python/goldenmatch/benchmarks/er-kg-bench/results/results_qa_e2e_goldengraph_amb${{ matrix.ambiguity }}*.*
           if-no-files-found: ignore
 
   lightrag:
+    needs: setup
     if: ${{ inputs.engine == 'all' || inputs.engine == 'lightrag' }}
     runs-on: large-new-64GB
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        ambiguity: ${{ fromJSON(needs.setup.outputs.ambiguities) }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
@@ -83,21 +112,27 @@ jobs:
             --engine lightrag \
             --corpus "${{ inputs.corpus }}" \
             --max-questions "${{ inputs.max_questions }}" \
+            --ambiguity "${{ matrix.ambiguity }}" \
             --budget-usd "${{ inputs.budget_usd }}" \
-            --out-md results/RESULTS_QA_E2E_lightrag.md \
-            --out-json results/results_qa_e2e_lightrag.json
+            --out-md "results/RESULTS_QA_E2E_lightrag_amb${{ matrix.ambiguity }}.md" \
+            --out-json "results/results_qa_e2e_lightrag_amb${{ matrix.ambiguity }}.json"
       - name: Upload results
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
         with:
-          name: graphrag-qa-results-lightrag
-          path: packages/python/goldenmatch/benchmarks/er-kg-bench/results/results_qa_e2e_lightrag*.*
+          name: graphrag-qa-results-lightrag-amb${{ matrix.ambiguity }}
+          path: packages/python/goldenmatch/benchmarks/er-kg-bench/results/results_qa_e2e_lightrag_amb${{ matrix.ambiguity }}*.*
           if-no-files-found: ignore
 
   ms_graphrag:
+    needs: setup
     if: ${{ inputs.engine == 'all' || inputs.engine == 'ms_graphrag' }}
     runs-on: large-new-64GB
     timeout-minutes: 90  # MS-GraphRAG indexing is the long pole
+    strategy:
+      fail-fast: false
+      matrix:
+        ambiguity: ${{ fromJSON(needs.setup.outputs.ambiguities) }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
@@ -116,21 +151,27 @@ jobs:
             --engine ms_graphrag \
             --corpus "${{ inputs.corpus }}" \
             --max-questions "${{ inputs.max_questions }}" \
+            --ambiguity "${{ matrix.ambiguity }}" \
             --budget-usd "${{ inputs.budget_usd }}" \
-            --out-md results/RESULTS_QA_E2E_ms_graphrag.md \
-            --out-json results/results_qa_e2e_ms_graphrag.json
+            --out-md "results/RESULTS_QA_E2E_ms_graphrag_amb${{ matrix.ambiguity }}.md" \
+            --out-json "results/results_qa_e2e_ms_graphrag_amb${{ matrix.ambiguity }}.json"
       - name: Upload results
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
         with:
-          name: graphrag-qa-results-ms_graphrag
-          path: packages/python/goldenmatch/benchmarks/er-kg-bench/results/results_qa_e2e_ms_graphrag*.*
+          name: graphrag-qa-results-ms_graphrag-amb${{ matrix.ambiguity }}
+          path: packages/python/goldenmatch/benchmarks/er-kg-bench/results/results_qa_e2e_ms_graphrag_amb${{ matrix.ambiguity }}*.*
           if-no-files-found: ignore
 
   graphiti:
+    needs: setup
     if: ${{ inputs.engine == 'all' || inputs.engine == 'graphiti' }}
     runs-on: large-new-64GB
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        ambiguity: ${{ fromJSON(needs.setup.outputs.ambiguities) }}
     services:
       falkordb:
         image: falkordb/falkordb:latest
@@ -155,13 +196,50 @@ jobs:
             --engine graphiti \
             --corpus "${{ inputs.corpus }}" \
             --max-questions "${{ inputs.max_questions }}" \
+            --ambiguity "${{ matrix.ambiguity }}" \
             --budget-usd "${{ inputs.budget_usd }}" \
-            --out-md results/RESULTS_QA_E2E_graphiti.md \
-            --out-json results/results_qa_e2e_graphiti.json
+            --out-md "results/RESULTS_QA_E2E_graphiti_amb${{ matrix.ambiguity }}.md" \
+            --out-json "results/results_qa_e2e_graphiti_amb${{ matrix.ambiguity }}.json"
       - name: Upload results
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
         with:
-          name: graphrag-qa-results-graphiti
-          path: packages/python/goldenmatch/benchmarks/er-kg-bench/results/results_qa_e2e_graphiti*.*
+          name: graphrag-qa-results-graphiti-amb${{ matrix.ambiguity }}
+          path: packages/python/goldenmatch/benchmarks/er-kg-bench/results/results_qa_e2e_graphiti_amb${{ matrix.ambiguity }}*.*
+          if-no-files-found: ignore
+
+  aggregate:
+    needs: [goldengraph, lightrag, ms_graphrag, graphiti]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Download every engine x ambiguity result
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
+        with:
+          pattern: graphrag-qa-results-*
+          path: dl
+          merge-multiple: true
+      - name: Aggregate into the RESULTS_QA_E2E headline + decay curve
+        working-directory: packages/python/goldenmatch/benchmarks/er-kg-bench
+        run: |
+          mkdir -p results
+          find "$GITHUB_WORKSPACE/dl" -name 'results_qa_e2e_*.json' -exec cp {} results/ \; || true
+          if ls results/results_qa_e2e_*.json >/dev/null 2>&1; then
+            python -m erkgbench.qa_e2e.aggregate_qa_e2e \
+              --results-dir results --out results/RESULTS_QA_E2E.md
+            echo "----- RESULTS_QA_E2E.md -----"
+            cat results/RESULTS_QA_E2E.md
+          else
+            echo "::warning::no result JSONs to aggregate (all engine jobs skipped or failed)"
+          fi
+      - name: Upload aggregated headline
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: graphrag-qa-results-AGGREGATE
+          path: packages/python/goldenmatch/benchmarks/er-kg-bench/results/RESULTS_QA_E2E.md
           if-no-files-found: ignore

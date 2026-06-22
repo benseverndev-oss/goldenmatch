@@ -23,12 +23,14 @@ class _MockEngine:
         return AnswerResult(text="?", input_tokens=1, output_tokens=1)
 
 
-def _load_corpus(name: str, max_questions: int, musique_path: str | None):
+def _load_corpus(name: str, max_questions: int, musique_path: str | None, ambiguity: float):
     if name == "engineered":
         return engineered.generate_engineered(
-            seed=20260620, n_questions=max_questions, ambiguity=0.5
+            seed=20260620, n_questions=max_questions, ambiguity=ambiguity
         )
     if name == "musique":
+        # MuSiQue has no ambiguity dial (entities are already canonical); the flag is
+        # ignored here so a sweep over it just re-runs the same corpus.
         return load_musique(path=musique_path, max_questions=max_questions)
     raise SystemExit(f"unknown corpus: {name}")
 
@@ -80,6 +82,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--self-test", action="store_true")
     p.add_argument("--corpus", choices=("engineered", "musique"), required=True)
     p.add_argument("--max-questions", type=int, default=300)
+    p.add_argument(
+        "--ambiguity",
+        type=float,
+        default=0.5,
+        help="engineered-corpus variant-mention fraction (0.0-1.0); the decay-curve "
+        "sweep dial. Ignored for musique.",
+    )
     p.add_argument("--musique-path", default=None)
     p.add_argument("--model", default="gpt-4o-mini")
     p.add_argument("--budget-usd", type=float, default=25.0)
@@ -95,7 +104,7 @@ def main(argv: list[str] | None = None) -> int:
     out_json = Path(args.out_json).resolve()
     out_md.parent.mkdir(parents=True, exist_ok=True)
 
-    corpus = _load_corpus(args.corpus, args.max_questions, args.musique_path)
+    corpus = _load_corpus(args.corpus, args.max_questions, args.musique_path, args.ambiguity)
     engine = _MockEngine() if args.self_test else _build_engine(args.engine)
     result = run_engine(engine, corpus, model=args.model, budget_usd=args.budget_usd)
     write_results([result], md_path=out_md, json_path=out_json)

@@ -11,7 +11,16 @@ small, and the results note Graphiti's cost as synthesis-only. Graphiti is also
 nondeterministic by construction.
 
 Graphiti + the FalkorDB driver are imported lazily so importing this module for the
-registry never requires a DB or the heavy dep."""
+registry never requires a DB or the heavy dep.
+
+Loop discipline (the 2026-06-22 teardown noise): the adapter ran build and each
+answer under its own `asyncio.run`, which closes the loop after every call. Graphiti's
+internal httpx/OpenAI client schedules a fire-and-forget `aclose()` during GC that
+then lands on the already-closed loop -> a `RuntimeError: Event loop is closed`
+traceback floods the log (non-fatal, but noise). Fix: one persistent loop per engine
+for build + every answer, so those deferred client teardowns always have a live loop.
+A fresh Graphiti client per call is still fine (and still needed for FalkorDB's
+loop-bound connection) -- they now all share one long-lived loop."""
 from __future__ import annotations
 
 import asyncio
@@ -47,10 +56,12 @@ async def _default_openai_complete(prompt: str) -> str:
 
 
 def _new_graphiti(host: str, port: int):
-    """A fresh Graphiti client over FalkorDB. Created INSIDE the asyncio.run loop that
-    uses it -- Graphiti's FalkorDB connection is bound to the running loop, so a client
-    shared across the build loop and the per-answer loops raises 'Event loop is
-    closed'. Each call gets its own client; the graph persists in FalkorDB."""
+    """A fresh Graphiti client over FalkorDB, created INSIDE the running coroutine.
+    Graphiti's FalkorDB connection binds to the running loop; the engine now runs build
+    and every answer on ONE persistent loop (see `GraphitiQAEngine._run`), so a fresh
+    client per call is no longer strictly required for correctness -- it's kept because
+    the build handle deliberately carries no live client (the graph persists in
+    FalkorDB and `answer` reconnects)."""
     from graphiti_core import Graphiti
     from graphiti_core.driver.falkordb_driver import FalkorDriver
 
@@ -84,6 +95,15 @@ class GraphitiQAEngine:
         self._counter = {"in": 0, "out": 0}
         # synthesis LLM (the only call the adapter makes directly); injectable for tests
         self._synth = llm_callable or _default_openai_complete
+        self._loop: asyncio.AbstractEventLoop | None = None
+
+    def _run(self, coro):
+        """Run `coro` on this engine's single persistent loop, created lazily and
+        reused across build + every answer so Graphiti's deferred client teardowns
+        never fire on a closed loop."""
+        if self._loop is None:
+            self._loop = asyncio.new_event_loop()
+        return self._loop.run_until_complete(coro)
 
     def build_kg(self, corpus) -> BuildResult:
         from graphiti_core.nodes import EpisodeType
@@ -107,7 +127,7 @@ class GraphitiQAEngine:
             finally:
                 await _close_quietly(graphiti)
 
-        asyncio.run(_build())
+        self._run(_build())
         # No live client in the handle: it would be bound to the loop above and break
         # the per-answer loops. The graph lives in FalkorDB; answer reconnects.
         # Graphiti-internal extraction cost is not counted (see module docstring).
@@ -130,7 +150,7 @@ class GraphitiQAEngine:
             finally:
                 await _close_quietly(graphiti)
 
-        text = asyncio.run(_answer())
+        text = self._run(_answer())
         return AnswerResult(
             text=text,
             retrieved_fact_ids=(),  # fact uuids exist but don't align to corpus ids
