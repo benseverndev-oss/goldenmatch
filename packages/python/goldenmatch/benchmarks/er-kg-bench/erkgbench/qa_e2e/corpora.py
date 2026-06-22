@@ -19,11 +19,18 @@ class QAItem:
     id: str
     question: str
     gold_answer: str
-    #: Document ids (MuSiQue) OR entity-path ids (engineered) that contain the answer chain.
+    #: Document ids that contain the answer chain (MuSiQue supporting paragraphs;
+    #: engineered traversed-edge documents).
     gold_supporting_fact_ids: tuple[str, ...]
     hop_count: int
     #: 0.0 when not applicable (MuSiQue); the dial value for the engineered corpus.
     ambiguity_level: float
+    #: Engineered-corpus gold metadata that makes the question answerable + lets a
+    #: pure-Python oracle verify it without parsing English (empty for MuSiQue). The
+    #: question is "start at `start_entity_id`, follow `relation_chain` in order";
+    #: because each (entity, relation) has a unique edge, this determines one answer.
+    start_entity_id: str = ""
+    relation_chain: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

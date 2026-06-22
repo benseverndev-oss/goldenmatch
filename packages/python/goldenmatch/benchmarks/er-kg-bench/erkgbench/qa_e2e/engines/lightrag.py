@@ -1,6 +1,16 @@
 """LightRAG QA engine adapter over the real async API (ainsert/aquery), driven
-from the sync QAEngine protocol via asyncio.run. LightRAG owns its LLM calls, so
-the cost seam is an injected counting llm_model_func."""
+from the sync QAEngine protocol on a SINGLE persistent event loop. LightRAG owns
+its LLM calls, so the cost seam is an injected counting llm_model_func.
+
+Loop discipline (the 2026-06-21 "Query failed: ... bound to a different event
+loop" bug): `initialize_storages` binds LightRAG's internal asyncio locks +
+priority queues to the running loop. The old adapter ran each call under its own
+`asyncio.run`, so the storages built under the build loop were bound to a loop
+that was already closed by query time -> every query crashed and the engine scored
+0. The fix is one loop for the engine's lifetime: build + all queries run on it, so
+the storages stay bound to a live loop. (Graphiti dodges this by reconnecting a
+fresh client per call; LightRAG holds the index in-process, so a shared loop is the
+cleaner fit.)"""
 from __future__ import annotations
 
 import asyncio
@@ -40,6 +50,15 @@ class LightRAGQAEngine:
         self._llm_func = make_counting_llm_func(llm_model_func, self._counter)
         self._embedding_func = embedding_func
         self._work_root = work_root
+        self._loop: asyncio.AbstractEventLoop | None = None
+
+    def _run(self, coro):
+        """Run `coro` on this engine's single persistent loop. The loop is created
+        lazily and reused across build + every query so LightRAG's loop-bound
+        storages never outlive their loop."""
+        if self._loop is None:
+            self._loop = asyncio.new_event_loop()
+        return self._loop.run_until_complete(coro)
 
     def _new_rag(self, working_dir: str):
         from lightrag import LightRAG
@@ -61,7 +80,7 @@ class LightRAGQAEngine:
             for doc in corpus.documents:
                 await rag.ainsert(doc.text)
 
-        asyncio.run(_build())
+        self._run(_build())
         handle = {"rag": rag, "workdir": workdir}
         return BuildResult(
             handle=handle,
@@ -76,7 +95,7 @@ class LightRAGQAEngine:
         t0 = time.perf_counter()
         before = dict(self._counter)
         rag = handle["rag"]
-        text = asyncio.run(rag.aquery(question, param=QueryParam(mode="hybrid")))
+        text = self._run(rag.aquery(question, param=QueryParam(mode="hybrid")))
         return AnswerResult(
             text=text or "",
             retrieved_fact_ids=(),  # LightRAG doesn't surface retrieved ids; see spec note
