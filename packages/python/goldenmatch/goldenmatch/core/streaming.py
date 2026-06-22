@@ -162,6 +162,32 @@ class StreamProcessor:
 
         return matches
 
+    def resolve_to_entity(self, record: dict, store, run_name: str = "") -> str | None:
+        """Match + cluster a record AND resolve it to a durable identity (#1109).
+
+        Resolves ``record`` against the CURRENT frame into the identity graph
+        (create / absorb / merge via ``resolve_record_incremental``) BEFORE
+        accumulating it, so it never matches itself; then runs the normal
+        ``process_record`` so later records can match it and run-local clusters /
+        stats stay updated. Returns the ``entity_id`` the record resolved to.
+
+        ``store`` is an ``IdentityStore``; ``source_pk_column`` / ``dataset``
+        come from ``config.identity`` when set. (The identity match and
+        ``process_record``'s match are run separately for v1 simplicity -- a
+        single fused pass is a follow-up.)
+        """
+        from goldenmatch.identity.resolve import resolve_record_incremental
+
+        identity = getattr(self._config, "identity", None)
+        src_pk = getattr(identity, "source_pk_column", None)
+        dataset = getattr(identity, "dataset", None)
+        entity_id = resolve_record_incremental(
+            dict(record), self._df, self._matchkeys, store,
+            run_name=run_name, source_pk_col=src_pk, dataset=dataset,
+        )
+        self.process_record(record)
+        return entity_id
+
     def process_batch(self, records: list[dict]) -> list[list[tuple[int, float]]]:
         """Process a batch of records. Returns matches per record."""
         results = []

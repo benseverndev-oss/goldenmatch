@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 import polars as pl
 
 if TYPE_CHECKING:
+    from goldenmatch.config.schemas import MatchkeyConfig
     from goldenmatch.core.cluster import ClusterFrames
     from goldenmatch.core.cluster_pairscores import ClusterPairScores
 
@@ -819,3 +820,233 @@ def resolve_clusters(
 def _node_age(store: IdentityStore, entity_id: str):
     node = store.get_identity(entity_id)
     return node.created_at if node else datetime.now()
+
+
+# ── Streaming / micro-batch incremental resolution (#1109) ───────────────────
+#
+# resolve_clusters runs after a batch dedupe. The two helpers below resolve ONE
+# new record at a time -- the streaming primitive -- without re-running the
+# pipeline. resolve_record_incremental matches the record against the existing
+# frame (match_one) and then DELEGATES the create / absorb / merge decision to
+# resolve_clusters over a mini frame (the new record + only its matched rows),
+# so edges, golden records, events, idempotency, and multi-entity merge behave
+# identically to a batch run -- none of that logic is re-implemented here.
+
+
+def _match_record_rows(
+    record: dict[str, Any],
+    df: pl.DataFrame,
+    matchkeys: list[MatchkeyConfig],
+    *,
+    ann_blocker: Any = None,
+    embedder: Any = None,
+    ann_column: str | None = None,
+    top_k: int = 20,
+    base_store: Any = None,
+) -> dict[int, float]:
+    """Best score per existing ``__row_id__`` the record matches, across all
+    matchkeys.
+
+    Uses ``match_one`` per matchkey, so it covers the threshold-bearing matchkey
+    types (weighted / probabilistic / fuzzy). Exact matchkeys (``threshold is
+    None``) contribute nothing -- ``match_one`` returns ``[]`` for them; an
+    exact-only incremental path is a follow-up. A failing matchkey is skipped
+    (logged), never fatal.
+    """
+    from goldenmatch.core.match_one import match_one
+
+    best: dict[int, float] = {}
+    for mk in matchkeys or []:
+        try:
+            hits = match_one(
+                record, df, mk,
+                ann_blocker=ann_blocker, embedder=embedder,
+                ann_column=ann_column, top_k=top_k, store=base_store,
+            )
+        except Exception:
+            log.warning(
+                "match_one failed for matchkey %r; skipping",
+                getattr(mk, "name", "?"),
+            )
+            continue
+        for row_id, score in hits:
+            irid = int(row_id)
+            if score > best.get(irid, float("-inf")):
+                best[irid] = float(score)
+    return best
+
+
+def match_record_to_entity(
+    record: dict[str, Any],
+    df: pl.DataFrame,
+    matchkeys: list[MatchkeyConfig],
+    store: IdentityStore,
+    *,
+    source_pk_col: str | None = None,
+    ann_blocker: Any = None,
+    embedder: Any = None,
+    ann_column: str | None = None,
+    top_k: int = 20,
+    base_store: Any = None,
+) -> dict[str, float]:
+    """Return ``{entity_id: best_score}`` for existing identities a single record
+    matches -- READ-ONLY (never writes to the store).
+
+    Runs ``match_one`` for each matchkey to find similar existing rows, maps the
+    matched rows to their durable ``record_id``s (the SAME scheme
+    ``resolve_clusters`` uses), and looks those up in the store. The score per
+    entity is the best matching-row score. Returns ``{}`` when nothing matches
+    (or no matched row is yet tracked in the identity store).
+    """
+    matches = _match_record_rows(
+        record, df, matchkeys,
+        ann_blocker=ann_blocker, embedder=embedder,
+        ann_column=ann_column, top_k=top_k, base_store=base_store,
+    )
+    if not matches:
+        return {}
+    matched_rows = df.filter(pl.col("__row_id__").is_in(list(matches.keys())))
+    rowid_to_candidates: dict[int, list[str]] = {}
+    for row in matched_rows.to_dicts():
+        rid = row.get("__row_id__")
+        if rid is None:
+            continue
+        src = str(row.get("__source__", "dataframe"))
+        _, candidates = _record_id_candidates(row, src, source_pk_col)
+        rowid_to_candidates[int(rid)] = candidates
+    all_candidates = sorted(
+        {c for cs in rowid_to_candidates.values() for c in cs}
+    )
+    existing_by_id = (
+        store.lookup_entity_ids(all_candidates) if all_candidates else {}
+    )
+    out: dict[str, float] = {}
+    for rid, score in matches.items():
+        candidates = rowid_to_candidates.get(rid, [])
+        chosen = next((c for c in candidates if c in existing_by_id), None)
+        if chosen is None:
+            continue
+        eid = existing_by_id[chosen]
+        if score > out.get(eid, float("-inf")):
+            out[eid] = score
+    return out
+
+
+def resolve_record_incremental(
+    record: dict[str, Any],
+    df: pl.DataFrame,
+    matchkeys: list[MatchkeyConfig],
+    store: IdentityStore,
+    run_name: str = "",
+    *,
+    source: str | None = None,
+    source_pk_col: str | None = None,
+    dataset: str | None = None,
+    ann_blocker: Any = None,
+    embedder: Any = None,
+    ann_column: str | None = None,
+    top_k: int = 20,
+    base_store: Any = None,
+) -> str | None:
+    """Resolve a single new record to an existing entity or create one.
+
+    The streaming counterpart of :func:`resolve_clusters`: it matches ``record``
+    against ``df`` via ``match_one``, then delegates the create / absorb / merge
+    decision to ``resolve_clusters`` over a MINI frame (the new record + ONLY the
+    matched rows). Reusing the batch resolver means evidence edges, golden
+    records, events, idempotency, and multi-entity merge all behave identically
+    to a batch run -- no resolution logic is re-implemented here.
+
+    Args:
+        record: the new record (field -> value); the same shape as ``df`` rows.
+        df: the existing frame, with a ``__row_id__`` column.
+        matchkeys: the resolved matchkeys to match on (threshold-bearing types).
+        store: the ``IdentityStore`` to read/write.
+        run_name: batch/run name for event idempotency.
+        source: source label for the new record's ``record_id``
+            (default: the record's ``__source__`` or ``"dataframe"``).
+        source_pk_col: natural-PK column name (else a content hash id is used).
+        dataset: optional dataset tag.
+        ann_blocker / embedder / ann_column / top_k / base_store: forwarded to
+            ``match_one`` for ANN-accelerated candidate retrieval.
+
+    Returns:
+        The ``entity_id`` the record resolved to (existing or newly created), or
+        ``None`` if it could not be read back. Never raises on a valid input.
+    """
+    source = source or str(record.get("__source__", "dataframe"))
+    matches = _match_record_rows(
+        record, df, matchkeys,
+        ann_blocker=ann_blocker, embedder=embedder,
+        ann_column=ann_column, top_k=top_k, base_store=base_store,
+    )
+
+    matched_ids = list(matches.keys())
+    if matched_ids:
+        mini = df.filter(pl.col("__row_id__").is_in(matched_ids))
+        existing_rowids = [int(r) for r in mini["__row_id__"].to_list()]
+    else:
+        mini = None
+        existing_rowids = []
+
+    # New record row id: unique within the mini frame (the matched rows keep
+    # their original ids so their record_ids -- and thus their entities -- are
+    # rederived identically).
+    new_rid = (max(existing_rowids) + 1) if existing_rowids else 0
+
+    # Build the new row aligned to df's columns AND dtypes, so the vertical
+    # concat below never up-casts a matched column's dtype -- a dtype shift would
+    # change a no-PK row's payload hash and break its record_id lookup.
+    new_row: dict[str, Any] = {}
+    for col in df.columns:
+        if col == "__row_id__":
+            new_row[col] = new_rid
+        elif col == "__source__":
+            new_row[col] = source
+        elif col.startswith("__"):
+            new_row[col] = None
+        else:
+            new_row[col] = record.get(col)
+    schema = {c: df.schema[c] for c in df.columns}
+    new_row_df = pl.DataFrame([new_row], schema=schema)
+    mini_plus = (
+        pl.concat([mini, new_row_df])
+        if mini is not None and not mini.is_empty()
+        else new_row_df
+    )
+
+    members = [new_rid, *existing_rowids]
+    pair_scores = {
+        (min(new_rid, m), max(new_rid, m)): float(s) for m, s in matches.items()
+    }
+    confidence = min(matches.values()) if matches else None
+    clusters = {
+        0: {
+            "members": members,
+            "size": len(members),
+            "pair_scores": pair_scores,
+            "confidence": confidence,
+        }
+    }
+    scored_pairs = [(new_rid, m, float(s)) for m, s in matches.items()]
+    mk_name = getattr(matchkeys[0], "name", None) if matchkeys else None
+
+    resolve_clusters(
+        clusters=clusters,
+        df=mini_plus,
+        scored_pairs=scored_pairs,
+        matchkey_name=mk_name,
+        store=store,
+        run_name=run_name,
+        dataset=dataset,
+        source_pk_col=source_pk_col,
+        emit_singletons=True,
+        # No weak-conflict edges on a single ingest (there's no bottleneck pair).
+        weak_confidence_threshold=0.0,
+    )
+
+    # Derive the new record's id from the SAME df-aligned row resolve_clusters
+    # saw (record fields absent from df are dropped on both sides), so the
+    # lookup matches what was just written.
+    primary_id, _ = _record_id_candidates(new_row, source, source_pk_col)
+    return store.find_entity_by_record(primary_id)
