@@ -12,6 +12,26 @@ from .llm import LLMClient
 from .synthesize import synthesize_global, synthesize_local
 
 
+def _retrieve_local(slice_graph, seeds, *, max_hops: int, node_budget: int) -> dict:
+    """Expand the seed neighborhood depth-by-depth up to ``max_hops``, stopping early
+    once the subgraph reaches ``node_budget`` entities.
+
+    A single fixed-depth ball (the old ``query(seeds, 1)``) cannot contain the answer
+    to a k-hop question -- the answer edge sits at distance k, so for k>=2 it is simply
+    absent and synthesis correctly reports "insufficient". Growing the radius keeps
+    multi-hop answers reachable; the node budget bounds context + cost so a large graph
+    doesn't blow up the prompt. On a small graph this walks out to the whole connected
+    component (well under budget), which is the intended behavior for local QA."""
+    if not seeds:
+        return slice_graph.query(seeds, max_hops)
+    sub = slice_graph.query(seeds, 1)
+    for h in range(2, max(max_hops, 1) + 1):
+        if len(sub.get("entities", ())) >= node_budget:
+            break
+        sub = slice_graph.query(seeds, h)
+    return sub
+
+
 def ask(
     query: str,
     store,
@@ -22,24 +42,27 @@ def ask(
     tx_t: int,
     mode: str = "local",
     k: int = 5,
-    hops: int = 1,
+    hops: int = 4,
     max_communities: int = 10,
+    node_budget: int = 64,
 ) -> str:
     """Answer `query` against `store` as-of `(valid_t, tx_t)`.
 
-    `mode="local"`: embedding-seeded neighborhood → synthesize. `mode="global"`:
-    community map-reduce (capped at `max_communities` — the pre-emptive guard on
-    the N+1 LLM fan-out; per-call budget is the `LLMClient`'s job).
+    `mode="local"`: embedding-seeded neighborhood, expanded adaptively up to `hops`
+    (bounded by `node_budget` entities) so multi-hop answers are reachable, then
+    synthesized. `mode="global"`: community map-reduce (capped at `max_communities` --
+    the pre-emptive guard on the N+1 LLM fan-out; per-call budget is the `LLMClient`'s
+    job). Each community is contextualized with its immediate (1-hop) neighborhood.
     """
     slice_graph = store.as_of(valid_t, tx_t)
     if mode == "global":
         communities = slice_graph.communities()[:max_communities]
-        views = [slice_graph.query(c["members"], hops) for c in communities]
+        views = [slice_graph.query(c["members"], 1) for c in communities]
         return synthesize_global(query, views, llm)
     if mode != "local":
         raise ValueError(f"mode must be 'local' or 'global', got {mode!r}")
     seeds = seed_by_query(slice_graph, query, embedder, k=k)
-    subgraph = slice_graph.query(seeds, hops)
+    subgraph = _retrieve_local(slice_graph, seeds, max_hops=hops, node_budget=node_budget)
     return synthesize_local(query, subgraph, llm)
 
 

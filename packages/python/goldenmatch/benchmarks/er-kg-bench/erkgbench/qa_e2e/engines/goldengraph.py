@@ -5,6 +5,7 @@ opt-in lane). goldengraph + its native PyStore are imported lazily so importing
 this module for the registry never drags the wheel."""
 from __future__ import annotations
 
+import os
 import time
 from typing import Any
 
@@ -12,6 +13,11 @@ from ..harness import AnswerResult, BuildResult
 
 #: as-of coordinates large enough to see every appended batch (ingest uses at=i+1).
 _AS_OF = 10**12
+
+#: Local-retrieval expansion depth. The default-1 ball couldn't reach k-hop answers
+#: (the 1->2 hop accuracy cliff in the 2026-06-22 headline); 4 covers the engineered
+#: corpus's 1-4 hop range. Overridable for tuning sweeps.
+_RETRIEVAL_HOPS = int(os.environ.get("GOLDENGRAPH_QA_RETRIEVAL_HOPS", "4"))
 
 
 class _CountingLLM:
@@ -34,10 +40,18 @@ class GoldenGraphQAEngine:
     name = "goldengraph"
     fidelity = "real-e2e"
 
-    def __init__(self, *, llm: Any, embedder: Any, resolver: Any | None = None):
+    def __init__(
+        self,
+        *,
+        llm: Any,
+        embedder: Any,
+        resolver: Any | None = None,
+        retrieval_hops: int = _RETRIEVAL_HOPS,
+    ):
         self._llm = _CountingLLM(llm)
         self._embedder = embedder
         self._resolver = resolver  # None -> ingest uses the goldenmatch-backed default
+        self._retrieval_hops = retrieval_hops
 
     def build_kg(self, corpus) -> BuildResult:
         from goldengraph import ingest
@@ -69,6 +83,7 @@ class GoldenGraphQAEngine:
             valid_t=handle["valid_t"],
             tx_t=handle["tx_t"],
             mode="local",
+            hops=self._retrieval_hops,
         )
         return AnswerResult(
             text=text,
