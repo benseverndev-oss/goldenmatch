@@ -8,7 +8,6 @@ floor stays 50 for high-yield datasets and scales down for small-yield ones so
 from __future__ import annotations
 
 import polars as pl
-
 from goldenmatch.core.indicators import (
     _sparse_match_floor_py,
     estimate_sparse_match_signal,
