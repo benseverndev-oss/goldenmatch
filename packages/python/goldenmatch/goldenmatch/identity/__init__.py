@@ -45,6 +45,14 @@ from goldenmatch.identity.stitching import (
     stitch_frame,
 )
 from goldenmatch.identity.store import IdentityStore, new_entity_id
+from goldenmatch.identity.survivorship import (
+    CellProvenance,
+    FieldStrategyRecommendation,
+    GoldenRecordWithProvenance,
+    build_golden_with_provenance,
+    learn_field_survivorship,
+    learned_field_strategies,
+)
 
 __all__ = [
     "IdentityView",
@@ -71,6 +79,12 @@ __all__ = [
     "cross_channel_factor",
     "deterministic_stitch_pairs",
     "stitch_frame",
+    "CellProvenance",
+    "FieldStrategyRecommendation",
+    "GoldenRecordWithProvenance",
+    "build_golden_with_provenance",
+    "learn_field_survivorship",
+    "learned_field_strategies",
     "EdgeKind",
     "EventKind",
     "EvidenceEdge",
