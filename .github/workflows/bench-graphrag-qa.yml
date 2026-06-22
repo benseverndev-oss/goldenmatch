@@ -22,6 +22,9 @@ on:
       engine:
         description: "all | goldengraph | lightrag | ms_graphrag | graphiti"
         default: "all"
+      trace:
+        description: "goldengraph only: localize where each answer is lost (extraction/retrieval/synthesis)"
+        default: "false"
 
 permissions:
   contents: read
@@ -69,6 +72,7 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.GOLDENGRAPH_OPENAI_API_KEY }}
           POLARS_SKIP_CPU_CHECK: "1"
+          GOLDENGRAPH_QA_TRACE: ${{ inputs.trace }}
         run: |
           python -m erkgbench.qa_e2e.run_qa_e2e \
             --engine goldengraph \

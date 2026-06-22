@@ -92,3 +92,38 @@ class GoldenGraphQAEngine:
             output_tokens=self._llm.output_tokens - before_out,
             latency_s=time.perf_counter() - t0,
         )
+
+    def localize(self, handle, question: str) -> dict:
+        """Diagnostic for the harness trace: replay the retrieval half of `ask`
+        (seed -> adaptive ball) and surface the raw material to localize a miss --
+        the seed entities, EVERY entity name in the graph, and the entity names in
+        the retrieved ball. The harness checks gold-answer containment against the
+        graph set (extraction) vs the ball set (retrieval). NO LLM call -- only the
+        embedding-based seeding runs, so a trace costs ~nothing beyond the build."""
+        from goldengraph.answer import _retrieve_local
+        from goldengraph.embed import seed_by_query
+
+        slice_graph = handle["store"].as_of(handle["valid_t"], handle["tx_t"])
+        seeds = seed_by_query(slice_graph, question, self._embedder, k=5)
+        subgraph = _retrieve_local(
+            slice_graph, seeds, max_hops=self._retrieval_hops, node_budget=64
+        )
+
+        def _names(ents) -> list[str]:
+            out: list[str] = []
+            for e in ents:
+                out.append(e["canonical_name"])
+                out.extend(e.get("surface_names", ()))
+            return out
+
+        all_ents = slice_graph.entities()
+        retr_ents = subgraph.get("entities", [])
+        id_to_name = {e["entity_id"]: e["canonical_name"] for e in all_ents}
+        return {
+            "seed_names": [id_to_name.get(s, str(s)) for s in seeds],
+            "graph_names": _names(all_ents),
+            "retrieved_names": _names(retr_ents),
+            "n_graph_entities": len(all_ents),
+            "n_retrieved_entities": len(retr_ents),
+            "n_retrieved_edges": len(subgraph.get("edges", ())),
+        }

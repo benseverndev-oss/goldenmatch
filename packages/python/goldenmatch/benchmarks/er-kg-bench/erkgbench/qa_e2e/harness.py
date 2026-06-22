@@ -4,6 +4,7 @@ enforces a hard USD cap via goldenmatch's BudgetTracker."""
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
@@ -40,6 +41,40 @@ class QAEngine(Protocol):
     def answer(self, handle, question: str) -> AnswerResult: ...
 
 
+def _localize_trace(engine, handle, corpus, *, limit: int = 10) -> None:
+    """Diagnostic: for each question, classify WHERE the gold answer is lost --
+    extraction (gold entity never made it into the graph), retrieval (it's in the
+    graph but the seed-walk didn't surface it), or synthesis (it was retrieved but
+    the LLM wrote a wrong answer). Opt-in via GOLDENGRAPH_QA_TRACE; only engines
+    exposing `localize` (goldengraph) participate. Uses the same token-containment
+    as answer_match so "in graph/ball" lines up with the headline scoring."""
+    print(f"== localize trace (first {limit}; where is the answer lost?) ==", flush=True)
+    for q in corpus.questions[:limit]:
+        try:
+            loc = engine.localize(handle, q.question)
+        except Exception as exc:  # diagnostic must never break the scored run
+            print(f"  [{q.id}] localize failed: {exc!r}", flush=True)
+            continue
+        in_graph = bool(metrics.answer_match(" ".join(loc["graph_names"]), q.gold_answer))
+        in_ball = bool(metrics.answer_match(" ".join(loc["retrieved_names"]), q.gold_answer))
+        if not in_graph:
+            stage = "EXTRACTION (gold entity absent from the graph)"
+        elif not in_ball:
+            stage = "RETRIEVAL (in graph, missed by the seed-walk)"
+        else:
+            stage = "SYNTHESIS (retrieved, wrong answer written)"
+        print(
+            f"  [{q.id}] hop{q.hop_count} gold={q.gold_answer!r} "
+            f"in_graph={in_graph} in_ball={in_ball} -> {stage}",
+            flush=True,
+        )
+        print(
+            f"      seeds={loc['seed_names']} graph={loc['n_graph_entities']}ent "
+            f"ball={loc['n_retrieved_entities']}ent/{loc['n_retrieved_edges']}edges",
+            flush=True,
+        )
+
+
 def run_engine(engine: QAEngine, corpus, *, model: str, budget_usd: float) -> dict:
     """Build the KG, answer every question under a hard cost cap, score, return a
     result dict. Stops cleanly (partial result) when the budget is exhausted."""
@@ -47,6 +82,11 @@ def run_engine(engine: QAEngine, corpus, *, model: str, budget_usd: float) -> di
 
     build = engine.build_kg(corpus)
     tracker.record_usage(build.input_tokens, build.output_tokens, model)
+
+    if os.environ.get("GOLDENGRAPH_QA_TRACE", "") not in ("", "0", "false") and hasattr(
+        engine, "localize"
+    ):
+        _localize_trace(engine, build.handle, corpus)
 
     ems: list[float] = []
     matches: list[float] = []
