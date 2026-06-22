@@ -22,13 +22,15 @@
 //!   and compare against Rust's before re-encoding to JSON.
 
 use goldenmatch_autoconfig_core::{
-    classify_columns, decide_plan, ColType, ColumnStats, PlannerInput,
+    classify_columns, decide_plan, extrapolate_pair_count, ColType, ColumnStats,
+    ExtrapolationInput, PlannerInput,
 };
 use serde_json::Value;
 
 // ── Embedded golden files (committed alongside this test) ─────────────────────
 const PLANNER_JSON: &str = include_str!("../golden/planner_vectors.json");
 const CLASSIFIER_JSON: &str = include_str!("../golden/classifier_vectors.json");
+const EXTRAPOLATION_JSON: &str = include_str!("../golden/extrapolation_vectors.json");
 
 // ── Planner parity ────────────────────────────────────────────────────────────
 
@@ -114,6 +116,52 @@ fn planner_golden_parity() {
             failures.join("\n---\n")
         );
     }
+}
+
+// ── Extrapolation parity (S1) ─────────────────────────────────────────────────
+
+#[test]
+fn extrapolation_golden_parity() {
+    let vectors: Vec<Value> = serde_json::from_str(EXTRAPOLATION_JSON)
+        .expect("failed to parse extrapolation_vectors.json");
+
+    assert!(
+        vectors.len() >= 30,
+        "expected >= 30 extrapolation vectors, got {}",
+        vectors.len()
+    );
+
+    let mut failures: Vec<String> = Vec::new();
+    for (idx, vec) in vectors.iter().enumerate() {
+        let input: ExtrapolationInput = match serde_json::from_value(vec["input"].clone()) {
+            Ok(v) => v,
+            Err(e) => {
+                failures.push(format!("vec {idx}: bad input json: {e}"));
+                continue;
+            }
+        };
+        let got: Value = match serde_json::to_value(extrapolate_pair_count(&input)) {
+            Ok(v) => v,
+            Err(e) => {
+                failures.push(format!("vec {idx}: serialize failed: {e}"));
+                continue;
+            }
+        };
+        for field in ["n_blocks", "total_comparisons", "singleton_block_count"] {
+            if got[field] != vec["expected"][field] {
+                failures.push(format!(
+                    "vec {idx} field {field}: got {} exp {}",
+                    got[field], vec["expected"][field]
+                ));
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} extrapolation mismatches:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
 }
 
 // ── Classifier parity ─────────────────────────────────────────────────────────

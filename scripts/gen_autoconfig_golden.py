@@ -437,6 +437,86 @@ def gen_classifier_vectors() -> list[dict]:
     return vectors
 
 
+# ── S1 extrapolation vectors ─────────────────────────────────────────────────────
+
+def gen_extrapolation_vectors() -> list[dict]:
+    """S1 (spec 2026-06-22): drive the REAL BlockingProfile.extrapolate_to oracle
+    across a grid covering every branch (linear fallback, Chao1 richness, pairs
+    cap, n_blocks cap, noop, identity). The Rust extrapolate_pair_count kernel
+    must reproduce these byte-for-byte."""
+    from goldenmatch.core.complexity_profile import BlockingProfile
+
+    # (total_comparisons, n_blocks, singleton_block_count, chao1_f1, chao1_f2,
+    #  n_rows_sample, n_rows_full)
+    cases: list[tuple] = [
+        # linear fallback (chao1 None) + realistic quadratic (cap inert)
+        (100, 10, 0, None, None, 1_000, 100_000),
+        (5_000, 50, 2, None, None, 2_000, 200_000),
+        (50, 5, 1, None, None, 1_000, 10_000),
+        (0, 0, 0, None, None, 1_000, 100_000),
+        (2_000_000, 500, 10, None, None, 20_000, 1_000_000),
+        # identity (ns == nf)
+        (5_000, 10, 2, None, None, 2_000, 2_000),
+        (5_000, 10, 2, 3, 1, 2_000, 2_000),  # Chao1 still adds richness at ratio 1
+        # all-pairs PAIRS cap: pathological tc > C(ns,2)=45
+        (50, 2, 0, None, None, 10, 20),
+        (100, 2, 0, None, None, 10, 20),
+        (45, 2, 0, None, None, 10, 20),  # exactly C(10,2): still inert (raw=180<190)
+        # Chao1 present (various)
+        (100, 50, 0, 10, 5, 1_000, 100_000),
+        (100, 50, 0, 0, 0, 1_000, 100_000),  # measured-zero saturation
+        (1_000, 100, 0, 20, 3, 5_000, 1_000_000),
+        (500, 30, 0, 5, 2, 1_000, 50_000),
+        (2_000_000, 500, 10, 50, 10, 20_000, 1_000_000),
+        # Chao1 n_blocks cap (richness exceeds n_full)
+        (10, 10, 0, 1_000, 0, 2_000, 50),
+        (10, 5, 0, 500, 1, 1_000, 100),
+        # singleton scaling
+        (5_000, 50, 7, None, None, 2_000, 200_000),
+        (5_000, 50, 7, 4, 2, 2_000, 200_000),
+        # noop (bad args)
+        (10, 5, 0, None, None, 0, 100),
+        (10, 5, 0, None, None, 100, 0),
+        (10, 5, 0, 3, 1, 0, 0),
+    ]
+    # Grid top-up for extra variety (keeps the count comfortably above 30).
+    for tc in (250, 7_500):
+        for f1, f2 in ((None, None), (8, 3)):
+            for ns, nf in ((1_000, 50_000), (4_000, 800_000), (2_000, 2_000)):
+                cases.append((tc, 40, 3, f1, f2, ns, nf))
+
+    vectors: list[dict] = []
+    for tc, nb, sbc, f1, f2, ns, nf in cases:
+        bp = BlockingProfile(
+            n_blocks=nb,
+            total_comparisons=tc,
+            singleton_block_count=sbc,
+            chao1_f1=f1,
+            chao1_f2=f2,
+        )
+        out = bp.extrapolate_to(ns, nf)
+        vec = {
+            "input": {
+                "total_comparisons": tc,
+                "n_blocks": nb,
+                "singleton_block_count": sbc,
+                "chao1_f1": f1,  # None -> JSON null
+                "chao1_f2": f2,
+                "n_rows_sample": ns,
+                "n_rows_full": nf,
+            },
+            "expected": {
+                "n_blocks": out.n_blocks,
+                "total_comparisons": out.total_comparisons,
+                "singleton_block_count": out.singleton_block_count,
+            },
+        }
+        round_tripped = json.loads(json.dumps(vec))
+        assert round_tripped == vec, f"Round-trip mismatch for vector: {vec}"
+        vectors.append(vec)
+    return vectors
+
+
 # ── Main ────────────────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -450,6 +530,13 @@ def main() -> None:
     print(f"  Generated {len(classifier_vectors)} classifier vectors")
     assert len(classifier_vectors) >= 30, f"Expected >= 30 classifier vectors, got {len(classifier_vectors)}"
 
+    print("Generating extrapolation vectors...")
+    extrapolation_vectors = gen_extrapolation_vectors()
+    print(f"  Generated {len(extrapolation_vectors)} extrapolation vectors")
+    assert len(extrapolation_vectors) >= 30, (
+        f"Expected >= 30 extrapolation vectors, got {len(extrapolation_vectors)}"
+    )
+
     # Write planner vectors
     planner_path = OUT_DIR / "planner_vectors.json"
     with open(planner_path, "w", encoding="utf-8") as f:
@@ -462,8 +549,17 @@ def main() -> None:
         json.dump(classifier_vectors, f, indent=2)
     print(f"Wrote {classifier_path}")
 
+    # Write extrapolation vectors
+    extrapolation_path = OUT_DIR / "extrapolation_vectors.json"
+    with open(extrapolation_path, "w", encoding="utf-8") as f:
+        json.dump(extrapolation_vectors, f, indent=2)
+    print(f"Wrote {extrapolation_path}")
+
     # Final summary
-    print(f"\nDone. {len(planner_vectors)} planner + {len(classifier_vectors)} classifier vectors.")
+    print(
+        f"\nDone. {len(planner_vectors)} planner + {len(classifier_vectors)} classifier "
+        f"+ {len(extrapolation_vectors)} extrapolation vectors."
+    )
 
 
 if __name__ == "__main__":
