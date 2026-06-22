@@ -319,7 +319,12 @@ class MongoIdentityStore:
         return [_to_edge(d) for d in cur]
 
     def find_conflicts(self, dataset: str | None = None) -> list[EvidenceEdge]:
-        q: dict[str, Any] = {"kind": "conflicts_with"}
+        return self.edges_by_kind("conflicts_with", dataset=dataset)
+
+    def edges_by_kind(
+        self, kind: str, dataset: str | None = None
+    ) -> list[EvidenceEdge]:
+        q: dict[str, Any] = {"kind": kind}
         if dataset is not None:
             q["dataset"] = dataset
         cur = self._db[_EDGES].find(q).sort("recorded_at", -1)

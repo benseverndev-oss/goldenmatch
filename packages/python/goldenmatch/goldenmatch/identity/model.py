@@ -19,6 +19,9 @@ class EdgeKind(StrEnum):
     POSSIBLE_SAME_AS = "possible_same_as"
     CONFLICTS_WITH = "conflicts_with"
     DERIVED_FROM = "derived_from"
+    # v3 (#1113): a steward's mediation verdict on a conflict. The resolution
+    # (same / distinct / defer) rides in ``negative_evidence``.
+    MEDIATION_VERDICT = "mediation_verdict"
 
 
 class EventKind(StrEnum):
@@ -32,6 +35,8 @@ class EventKind(StrEnum):
     # v3 (#1112): auto-consolidation of persistently-overlapping entities
     # across runs. Distinct from MANUAL_MERGE -- no human in the loop.
     CONSOLIDATED = "consolidated"
+    # v3 (#1113): a steward mediated a conflict (same / distinct / defer).
+    CONFLICT_MEDIATED = "conflict_mediated"
 
 
 @dataclass
