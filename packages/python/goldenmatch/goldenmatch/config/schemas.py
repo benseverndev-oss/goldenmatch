@@ -895,6 +895,27 @@ class ChannelStitchConfig(BaseModel):
     prob_threshold: float = 0.0
 
 
+class SurvivorshipConfig(BaseModel):
+    """Golden-record survivorship configuration (#1111, epic #1108).
+
+    Drives ``goldenmatch.identity.survivorship.build_golden_with_provenance``:
+    which merge strategy wins each field, the column carrying a per-record
+    timestamp (for ``most_recent`` + provenance), and whether to learn per-field
+    strategies from steward ``FIELD_CORRECT`` corrections. Config plumbing only.
+    """
+
+    # Per-field merge strategy overrides (column -> strategy name). Unlisted
+    # columns use ``default_strategy``.
+    field_strategies: dict[str, str] = Field(default_factory=dict)
+    default_strategy: str = "most_complete"
+    # Column carrying a per-record timestamp (enables most_recent + per-cell
+    # timestamp provenance).
+    timestamp_column: str | None = None
+    # Fold learned per-field strategies (from FIELD_CORRECT corrections) into
+    # ``field_strategies``. Consumed by a caller/learning pass, not on its own.
+    learn_from_corrections: bool = False
+
+
 class IdentityConfig(BaseModel):
     """Identity Graph configuration.
 
@@ -916,6 +937,9 @@ class IdentityConfig(BaseModel):
     # stitching is not configured (the default; identity resolution is
     # unchanged).
     stitching: ChannelStitchConfig | None = None
+    # #1111: golden-record survivorship (strategies + per-cell provenance).
+    # None -> default flat golden record (unchanged).
+    survivorship: SurvivorshipConfig | None = None
 
     @field_validator("dataset")
     @classmethod
