@@ -48,6 +48,35 @@ _RED_PROFILE: ComplexityProfile = ComplexityProfile(data=DataProfile(n_rows=0))
 # the pipeline still completes in a tolerable wall-clock window.
 REFUSE_AT_N: int = 100_000
 
+# F2 (spec 2026-06-22): row-count ceiling under which the lower planning-effort
+# tiers (fast/normal) measure blocking on the full frame instead of extrapolating.
+# The vectorized static fast path makes measurement ~6 ms @ 1M / ~49 ms @ 10M, so
+# this ceiling is a budget backstop for the rare config that falls through to the
+# slow build_blocks path, NOT a cost limit on the fast path itself. thinking/
+# einstein ignore the ceiling (their wall budget absorbs a slow measurement).
+_MEASURE_BLOCKING_MAX_ROWS_LOWER_TIER: int = 20_000_000
+
+
+def _should_measure_blocking(
+    *, planning_effort: str, distributed: bool, is_static: bool, n_rows: int
+) -> bool:
+    """F2 gate (spec 2026-06-22): should the planner reason over a FULL-frame
+    measured blocking profile instead of the linearly-extrapolated sample one?
+
+    - Distributed always extrapolates (a full-frame pass defeats its
+      no-materialization invariant).
+    - thinking/einstein always measure — their wall budget absorbs the slow
+      ``build_blocks`` fallback for non-static / oversized-split configs.
+    - fast/normal measure only when F1's cheap vectorized fast path applies
+      (``strategy="static"``) AND the frame is under the budget-backstop ceiling,
+      so a huge frame that would hit the slow fallback can't blow the tight wall.
+    """
+    if distributed:
+        return False
+    if planning_effort in ("thinking", "einstein"):
+        return True
+    return is_static and n_rows <= _MEASURE_BLOCKING_MAX_ROWS_LOWER_TIER
+
 # ContextVar populated at every exit path of AutoConfigController.run()
 # (including KeyboardInterrupt) so callers can inspect RunHistory after
 # either normal return or exception.  Stores RunHistory directly
@@ -1227,7 +1256,28 @@ class AutoConfigController:
         # extrapolation. Any measurement failure falls back to extrapolation.
         committed_profile = best_entry.profile
         measured_blocking = None
-        if planning_effort in ("thinking", "einstein") and not distributed:
+        # F2 (spec 2026-06-22): full-frame measurement is now cheap (F1's
+        # vectorized static fast path: ~6 ms @ 1M, ~49 ms @ 10M), so default it on
+        # for the common `normal` tier too — not just thinking/einstein. Previously
+        # normal/fast fell back to linear extrapolation, which under-counts pairs by
+        # the sampling fraction (up to ~500x at 10M) and under-provisions the
+        # backend. Lower tiers measure only when the cheap fast path applies
+        # (strategy="static") and the frame is under the budget-backstop ceiling;
+        # thinking/einstein always measure (their wall budget absorbs the slow
+        # build_blocks fallback for non-static / oversized-split configs).
+        # Distributed always extrapolates (a full-frame pass would defeat its
+        # no-materialization invariant). Any measurement failure falls back too.
+        _blocking_cfg = getattr(committed_config, "blocking", None)
+        _is_static = (
+            _blocking_cfg is not None
+            and getattr(_blocking_cfg, "strategy", "static") == "static"
+        )
+        if _should_measure_blocking(
+            planning_effort=planning_effort,
+            distributed=distributed,
+            is_static=_is_static,
+            n_rows=n_rows,
+        ):
             try:
                 from goldenmatch.core.blocker import measure_blocking_profile
                 measured_blocking = measure_blocking_profile(df, committed_config)

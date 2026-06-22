@@ -14,6 +14,28 @@
   the Stage-D lesson). Sourced from three exploration passes (decision surface,
   perf surface, prior-art survey) — see "Prior art" below; do not re-derive those.
 
+## Implementation status (this branch)
+
+- **F1 — DONE.** `measure_blocking_profile` now computes the block-size
+  distribution via a single vectorized `group_by` (`_fast_static_block_sizes`)
+  for plain `static` blocking, falling back to the exact `build_blocks` loop for
+  non-static / oversized-split configs. **Measured 329 ms → 6 ms median @ 1M
+  (~55×); 49 ms @ 10M.** Byte-identical to the old path (10 parity tests). Gotcha
+  found + fixed: a lazy post-`group_by` `.filter()` on the key is shoved back to
+  n_rows by Polars **predicate pushdown** (74 ms); collecting the per-key agg
+  first and filtering **eagerly** keeps it at ~6 ms.
+- **F2 — DONE.** Full-frame measurement is now the default at the `normal`/`fast`
+  tiers too (not just `thinking`/`einstein`), gated by `_should_measure_blocking`:
+  lower tiers measure only when the cheap static fast path applies and the frame
+  is under a 20M-row budget backstop; distributed still extrapolates. This kills
+  the under-provisioning bug for the common `normal` tier. 10M measured at 49 ms,
+  so the flip is affordable.
+- **S1 — STAGED (next PR).** With F2, the biased linear `extrapolate_to` is now
+  reached only on the residual fallbacks (distributed, >20M-row lower tiers,
+  measurement failure). A Chao1-corrected pair-count estimate there changes
+  numeric outputs and must be gated on the sample-quality bench + DQbench/F1 —
+  deliberately not shipped unvalidated (measurement discipline).
+
 ## The North Star test (gating frame)
 
 Every lever below is scored against the five commitments
