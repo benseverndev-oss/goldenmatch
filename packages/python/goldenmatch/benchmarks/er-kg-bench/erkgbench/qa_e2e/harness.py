@@ -56,20 +56,24 @@ def _localize_trace(engine, handle, corpus, *, limit: int = 10) -> None:
             print(f"  [{q.id}] localize failed: {exc!r}", flush=True)
             continue
         in_graph = bool(metrics.answer_match(" ".join(loc["graph_names"]), q.gold_answer))
+        in_wide = bool(metrics.answer_match(" ".join(loc.get("wide_names", [])), q.gold_answer))
         in_ball = bool(metrics.answer_match(" ".join(loc["retrieved_names"]), q.gold_answer))
         if not in_graph:
-            stage = "EXTRACTION (gold entity absent from the graph)"
+            stage = "EXTRACTION (gold not a graph node: never extracted, or a non-entity answer)"
+        elif not in_wide:
+            stage = "RETRIEVAL-BROKEN-CHAIN (in graph but unreachable from the seeds)"
         elif not in_ball:
-            stage = "RETRIEVAL (in graph, missed by the seed-walk)"
+            stage = "RETRIEVAL-BUDGET (reachable from seeds but outside the budget-capped ball)"
         else:
             stage = "SYNTHESIS (retrieved, wrong answer written)"
         print(
             f"  [{q.id}] hop{q.hop_count} gold={q.gold_answer!r} "
-            f"in_graph={in_graph} in_ball={in_ball} -> {stage}",
+            f"in_graph={in_graph} in_wide={in_wide} in_ball={in_ball} -> {stage}",
             flush=True,
         )
         print(
             f"      seeds={loc['seed_names']} graph={loc['n_graph_entities']}ent "
+            f"wide={loc.get('n_wide_entities', '?')}ent "
             f"ball={loc['n_retrieved_entities']}ent/{loc['n_retrieved_edges']}edges",
             flush=True,
         )
