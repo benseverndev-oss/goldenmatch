@@ -5,6 +5,9 @@ demotion, and the dedupe-only / single-source / match-mode firewalls.
 """
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 import polars as pl
 from goldenmatch.core import autoconfig as ac
 from goldenmatch.core.autoconfig import (
@@ -15,6 +18,12 @@ from goldenmatch.core.autoconfig import (
     build_matchkeys,
     profile_columns,
 )
+
+# Shared CRM anchor (one definition for tests + the quality harness).
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+from scripts.autoconfig_quality.anchors import crm_df as _crm_df  # noqa: E402
 
 # ── Task 2: kill-switch ──────────────────────────────────────────────────────
 
@@ -148,21 +157,7 @@ def test_phone_demoted_when_multi_source():
 
 
 # ── Task 7: wired into auto_configure_df ─────────────────────────────────────
-
-def _crm_df():
-    rows = []
-    srcs = ["hubspot", "salesforce", "cvent"]
-    for i in range(30):
-        s = srcs[i % 3]
-        rows.append({
-            "source": s,
-            "rec_id": f"{s}-{i}",                  # disjoint per source
-            "first": f"first{i // 2}",
-            "last": f"last{i // 2}",
-            "email": f"user{i // 2}@ex.com",       # shared across sources
-            "phone": "5551112222" if i < 6 else f"555{i:07d}",
-        })
-    return pl.DataFrame(rows)
+# _crm_df is imported from the shared anchors module (see top of file).
 
 
 def _mk_names(cfg):
