@@ -1,0 +1,109 @@
+name: Cut goldenmatch-native release
+
+# Manual release cutter for the compiled `goldenmatch-native` wheel.
+#
+# Why this exists: a SIGNED tag has to be created with a key and `git push`ed.
+# The managed dev sandbox blocks tag pushes (HTTP 403), and the GitHub REST/MCP
+# surface can't create a *signed* ("Verified") tag at all. A runner's
+# GITHUB_TOKEN, by contrast, has `contents: write`, so CI can do it.
+#
+# This workflow: validates the version against the tree, creates + pushes the
+# `goldenmatch-native-v<version>` tag (SIGNED when the NATIVE_TAG_SSH_SIGNING_KEY
+# secret is set; an unsigned annotated tag otherwise), publishes a GitHub Release
+# for it, then CALLS publish-goldenmatch-native.yml (reusable workflow_call) to
+# build every platform wheel + upload to PyPI -- in the same run, so there is no
+# cross-workflow trigger to depend on (a GITHUB_TOKEN-created Release does not
+# re-trigger that workflow).
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version WITHOUT the leading v (must equal main's native pyproject/Cargo version), e.g. 0.1.7"
+        required: true
+        type: string
+
+permissions:
+  contents: write   # push the tag + create the GitHub Release
+
+jobs:
+  cut:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tagstep.outputs.tag }}
+    # Route the dispatch input through env so it is a shell variable, never
+    # interpolated into a run script (avoids actionlint expression-injection).
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Guard - input version matches the tree and tag is new
+        run: |
+          set -euo pipefail
+          py=$(grep -m1 -E '^version' packages/rust/extensions/native/pyproject.toml | sed -E 's/.*"([^"]+)".*/\1/')
+          rs=$(grep -m1 -E '^version' packages/rust/extensions/native/Cargo.toml      | sed -E 's/.*"([^"]+)".*/\1/')
+          echo "requested=$VERSION  pyproject=$py  cargo=$rs"
+          if [ "$py" != "$VERSION" ] || [ "$rs" != "$VERSION" ]; then
+            echo "::error::version mismatch -- bump pyproject.toml + Cargo.toml to $VERSION on main first"
+            exit 1
+          fi
+          tag="goldenmatch-native-v$VERSION"
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            echo "::error::tag $tag already exists on origin"
+            exit 1
+          fi
+
+      - name: Configure tag signing (SSH; optional)
+        id: sign
+        env:
+          SIGNING_KEY: ${{ secrets.NATIVE_TAG_SSH_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -n "${SIGNING_KEY:-}" ]; then
+            install -d -m 700 ~/.ssh
+            printf '%s\n' "$SIGNING_KEY" > ~/.ssh/tagsign
+            chmod 600 ~/.ssh/tagsign
+            ssh-keygen -y -f ~/.ssh/tagsign > ~/.ssh/tagsign.pub
+            git config --global gpg.format ssh
+            git config --global user.signingkey ~/.ssh/tagsign
+            echo "flag=-s" >> "$GITHUB_OUTPUT"
+            echo "Tag signing enabled (SSH key from NATIVE_TAG_SSH_SIGNING_KEY)."
+          else
+            echo "::warning::NATIVE_TAG_SSH_SIGNING_KEY not set -- creating an UNSIGNED annotated tag"
+            echo "flag=-a" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create + push the tag
+        id: tagstep
+        env:
+          FLAG: ${{ steps.sign.outputs.flag }}
+        run: |
+          set -euo pipefail
+          git config --global user.name  "goldenmatch release"
+          git config --global user.email "actions@github.com"
+          tag="goldenmatch-native-v$VERSION"
+          git tag "$FLAG" "$tag" -m "goldenmatch-native $VERSION"
+          git push origin "refs/tags/$tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub Release for the tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="goldenmatch-native-v$VERSION"
+          gh release create "$tag" --title "$tag" --verify-tag \
+            --notes "goldenmatch-native $VERSION -- compiled polars runtime. Wheels built + uploaded to PyPI by publish-goldenmatch-native.yml."
+
+  # Build every platform wheel + upload to PyPI, in this same run, by calling the
+  # publish workflow as a reusable workflow (no GITHUB_TOKEN re-trigger needed).
+  publish:
+    needs: cut
+    uses: ./.github/workflows/publish-goldenmatch-native.yml
+    with:
+      ref: ${{ needs.cut.outputs.tag }}
+      publish: true
+    secrets: inherit

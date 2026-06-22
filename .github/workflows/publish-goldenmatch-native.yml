@@ -21,6 +21,19 @@ on:
         type: boolean
         required: false
         default: true
+  # Callable by cut-native-release.yml so one dispatch can cut the tag AND
+  # publish in the same run -- no cross-workflow trigger (GITHUB_TOKEN can't
+  # re-trigger a workflow) to depend on.
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        required: false
+        default: ""
+      publish:
+        type: boolean
+        required: false
+        default: true
 
 permissions:
   contents: read
@@ -31,7 +44,7 @@ env:
 
 jobs:
   linux:
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'goldenmatch-native-v')
+    if: github.event_name != 'release' || startsWith(github.event.release.tag_name, 'goldenmatch-native-v')
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -56,7 +69,7 @@ jobs:
           path: dist
 
   windows:
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'goldenmatch-native-v')
+    if: github.event_name != 'release' || startsWith(github.event.release.tag_name, 'goldenmatch-native-v')
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
@@ -76,7 +89,7 @@ jobs:
           path: dist
 
   macos:
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'goldenmatch-native-v')
+    if: github.event_name != 'release' || startsWith(github.event.release.tag_name, 'goldenmatch-native-v')
     # Both arches build on the Apple Silicon runner; x86_64 is a cross-compile
     # (Apple ships the x86_64 SDK slice). macos-13 (Intel) runners queue
     # indefinitely in this org, so we don't depend on them.
@@ -103,7 +116,7 @@ jobs:
           path: dist
 
   sdist:
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'goldenmatch-native-v')
+    if: github.event_name != 'release' || startsWith(github.event.release.tag_name, 'goldenmatch-native-v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
@@ -123,7 +136,7 @@ jobs:
     needs: [linux, windows, macos, sdist]
     # Release events always publish; a workflow_dispatch publishes only when the
     # `publish` box is checked (unchecked = build-matrix dry run, no upload).
-    if: github.event_name != 'workflow_dispatch' || inputs.publish
+    if: github.event_name == 'release' || inputs.publish
     runs-on: ubuntu-latest
     environment: pypi
     steps:
