@@ -9,11 +9,11 @@ lower bar.
 from __future__ import annotations
 
 from goldenmatch.core.autoconfig import (
+    ColumnProfile,
     _exact_matchkey_floor_py,
     build_matchkeys,
     exact_matchkey_floor,
 )
-from goldenmatch.core.autoconfig import ColumnProfile
 
 
 def test_floor_per_type():
