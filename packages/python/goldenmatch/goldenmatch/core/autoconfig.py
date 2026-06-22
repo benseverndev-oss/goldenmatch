@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import math
 import os
 import re
 from collections.abc import Callable
@@ -213,7 +214,13 @@ def _classify_by_data(values: list[str]) -> tuple[str, float]:
     # so a handful of genuinely-unique zip/phone rows don't trip the guard.
     if data_type in ("phone", "zip", "numeric") and len(values) >= 10:
         cardinality_ratio = len(set(values)) / len(values)
-        if cardinality_ratio >= 0.95:
+        # S2a (spec 2026-06-22): adaptive floor 1 - 1/sqrt(n) replaces the fixed
+        # 0.95. Stricter at scale (a 10k-row 0.95-cardinality column is a
+        # high-entropy name, not an ID) and looser on tiny samples. math.sqrt is
+        # correctly-rounded IEEE 754 so it is bit-identical to Rust's .sqrt()
+        # (do NOT use n ** 0.5 -- pow is not guaranteed correctly-rounded).
+        floor = 1.0 - 1.0 / math.sqrt(len(values))
+        if cardinality_ratio >= floor:
             return "identifier", 0.9
 
     # Year detection: 4-digit integers in 1900..2100. Cheap blocking signal

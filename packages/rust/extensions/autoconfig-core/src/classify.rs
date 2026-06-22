@@ -403,7 +403,11 @@ pub fn classify_by_data(values: &[std::string::String]) -> (ColType, f64) {
         let unique: std::collections::HashSet<&str> =
             values.iter().map(|s| s.as_str()).collect();
         let cardinality_ratio = unique.len() as f64 / values.len() as f64;
-        if cardinality_ratio >= 0.95 {
+        // S2a: adaptive identifier floor 1 - 1/sqrt(n) (was a fixed 0.95).
+        // Stricter at scale, looser on tiny samples. `.sqrt()` is correctly-
+        // rounded IEEE 754, bit-identical to Python's math.sqrt (oracle parity).
+        let floor = 1.0 - 1.0 / (values.len() as f64).sqrt();
+        if cardinality_ratio >= floor {
             return (ColType::Identifier, 0.9);
         }
     }
@@ -897,6 +901,31 @@ mod tests {
         // Should NOT return Identifier via the guard
         let (ct, _) = classify_by_data(&vals);
         assert_ne!(ct, ColType::Identifier);
+    }
+
+    #[test]
+    fn test_classify_by_data_s2a_adaptive_floor() {
+        // S2a: floor = 1 - 1/sqrt(n). Small n is looser than the old 0.95.
+        // n=10, 8 unique -> card 0.80 >= floor(10)=0.684 -> Identifier
+        let mut vals: Vec<std::string::String> = (1000..1008).map(|i| i.to_string()).collect();
+        vals.push("1007".into());
+        vals.push("1007".into());
+        assert_eq!(vals.len(), 10);
+        assert_eq!(classify_by_data(&vals).0, ColType::Identifier);
+
+        // Stricter at scale: n=900, card ~0.955 is BELOW floor(900)=0.9667 ->
+        // NOT an identifier (the old fixed 0.95 would have promoted it).
+        // Build 900 numeric values with 860 distinct (40 duplicated).
+        let mut big: Vec<std::string::String> = (0..860).map(|i| (100_000 + i).to_string()).collect();
+        for i in 0..40 {
+            big.push((100_000 + i).to_string());
+        }
+        assert_eq!(big.len(), 900);
+        let unique: std::collections::HashSet<&std::string::String> = big.iter().collect();
+        let card = unique.len() as f64 / big.len() as f64; // 860/900 ~= 0.9556
+        let floor = 1.0 - 1.0 / 900_f64.sqrt(); // ~= 0.9667
+        assert!(card < floor, "card {card} should be below floor {floor}");
+        assert_ne!(classify_by_data(&big).0, ColType::Identifier);
     }
 
     #[test]

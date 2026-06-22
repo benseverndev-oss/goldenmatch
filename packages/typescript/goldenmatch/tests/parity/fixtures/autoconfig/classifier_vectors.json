@@ -640,6 +640,74 @@
   },
   {
     "input": {
+      "name": "reading_alpha",
+      "dtype": "String",
+      "sample_values": [
+        "1000",
+        "1001",
+        "1002",
+        "1003",
+        "1004",
+        "1005",
+        "1006",
+        "1007",
+        "1007",
+        "1007"
+      ],
+      "null_rate": 0.0,
+      "cardinality_ratio": 0.8,
+      "avg_len": 4.0
+    },
+    "expected": {
+      "name": "reading_alpha",
+      "dtype": "String",
+      "col_type": "identifier",
+      "confidence": 0.9,
+      "null_rate": 0.0,
+      "cardinality_ratio": 0.8,
+      "avg_len": 4.0,
+      "needs_llm_escalation": false
+    }
+  },
+  {
+    "input": {
+      "name": "reading_beta",
+      "dtype": "String",
+      "sample_values": [
+        "2000",
+        "2001",
+        "2002",
+        "2003",
+        "2004",
+        "2005",
+        "2006",
+        "2007",
+        "2008",
+        "2009",
+        "2010",
+        "2011",
+        "2012",
+        "2013",
+        "2000",
+        "2001"
+      ],
+      "null_rate": 0.0,
+      "cardinality_ratio": 0.875,
+      "avg_len": 4.0
+    },
+    "expected": {
+      "name": "reading_beta",
+      "dtype": "String",
+      "col_type": "identifier",
+      "confidence": 0.9,
+      "null_rate": 0.0,
+      "cardinality_ratio": 0.875,
+      "avg_len": 4.0,
+      "needs_llm_escalation": false
+    }
+  },
+  {
+    "input": {
       "name": "created_at",
       "dtype": "String",
       "sample_values": [
