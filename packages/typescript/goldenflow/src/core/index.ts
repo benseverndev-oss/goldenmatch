@@ -41,6 +41,10 @@ export {
 // Data layer
 export { TabularData, isNullish, toColumnValue } from "./data.js";
 
+// Pure scalar canonicalizers (PPRL / clean-room match keys; #1128)
+export { canonicalize } from "./canonicalize.js";
+export type { CanonicalizeKind } from "./canonicalize.js";
+
 // Transform registry (imports all transform modules for side-effect registration)
 export {
   registerTransform,
