@@ -173,11 +173,16 @@ diff.
 Joins current vs `baselines/scorecard.json` and prints a human delta table:
 
 ```
-anchor_sparse_zip   candidate_pairs  1,529 → 8,931,083  ✗ (anchor-pinned)
-                    zip5 col_type    identifier → zip   ⚠ changed
-febrl3              f1               0.991 → 0.991      ·
-dblp_acm            f1               0.879 → 0.864      ✗ (below floor−tol)
+anchor_sparse_zip   candidate_pairs  1,529 → 8,931,083   ✗ (anchor-pinned)
+                    zip5 col_type    identifier → zip    ✗ (anchor-pinned)
+febrl3              blocking_fields  [..,zip] → [..]     ⚠ changed (real → informational)
+febrl3              f1               0.991 → 0.991       ·
+dblp_acm            f1               0.879 → 0.864       ✗ (below floor−tol)
 ```
+
+Every signal on an **anchor** is pinned, so any change renders `✗` (hard FAIL). The `⚠ changed`
+marker is reserved for **real-dataset** signal drift (informational — real datasets have no single
+"correct" config to pin, only the F1 floor gates them).
 
 ### Gate verdict (two rules)
 
