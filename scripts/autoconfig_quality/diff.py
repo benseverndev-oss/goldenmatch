@@ -7,6 +7,10 @@ Verdict rules (from the spec):
   with the auto-config decision kernel, so they are informational (WARN, never
   fail) -- otherwise a CI runner with no native wheel flaps against a dev box
   baseline blessed with native on.
+  An anchor that pins an F1 floor is gated on F1 too: below (floor - tolerance)
+  = FAIL; if the run produced no F1 at all, a crash (top-level "error") = FAIL
+  (anchors must run cleanly) while an intentional fast-only skip = WARN (visible,
+  never silent, but doesn't fail a config-only run -- the CI gate runs full).
 - real: F1 below (baseline_f1 - tolerance) = FAIL; signal drift is informational
   (WARN, never fails); an error on a real dataset = NEUTRAL.
 - a dataset present in baseline but skipped/absent in current = NEUTRAL.
@@ -75,9 +79,20 @@ def diff_scorecards(
                     rows.append(_row(name, field, before, after, status))
             # An anchor that also carries an F1 floor (e.g. the person-match
             # anchor) is gated on F1 too, floor+tolerance like a real dataset.
+            # The floor must never be silently dropped: if the baseline pins an
+            # F1 but the current run produced none, distinguish a crash (the F1
+            # tier was attempted and raised -> top-level "error" -> FAIL, anchors
+            # must run cleanly) from an intentional fast-only skip (no f1, no
+            # error -> WARN so it's visible, but doesn't fail a config-only run;
+            # the CI gate runs the full tier, so the floor is enforced there).
             cur_f1 = c.get("f1", {}).get("f1")
             base_f1 = b.get("f1", {}).get("f1") if b else None
-            if cur_f1 is not None and base_f1 is not None:
+            if base_f1 is not None and cur_f1 is None:
+                if "error" in c:
+                    rows.append(_row(name, "f1", base_f1, c["error"], _STATUS_FAIL))
+                else:
+                    rows.append(_row(name, "f1", base_f1, "not measured", _STATUS_WARN))
+            elif cur_f1 is not None and base_f1 is not None:
                 status = _STATUS_FAIL if cur_f1 < base_f1 - tolerance else _STATUS_OK
                 rows.append(_row(name, "f1", base_f1, cur_f1, status))
         else:  # real

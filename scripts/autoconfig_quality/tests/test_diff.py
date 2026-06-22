@@ -86,6 +86,30 @@ def test_planner_rung_drift_is_warn_not_fail():
     assert verdict2 == "FAIL"
 
 
+def test_anchor_f1_crash_fails_not_silently_dropped():
+    # The floor must never be silently dropped. If the F1 tier was attempted and
+    # crashed (top-level "error"), the floored anchor FAILs -- not pass-by-omission.
+    base = {"datasets": {"anchor_person": {"kind": "anchor", "signals": {"x": 1},
+                                           "f1": {"f1": 0.99}}}}
+    cur = {"datasets": {"anchor_person": {"kind": "anchor", "signals": {"x": 1},
+                                          "error": "boom in evaluate_f1"}}}
+    rows, verdict = diff_scorecards(cur, base, tolerance=0.01)
+    assert verdict == "FAIL"
+    assert any(r["field"] == "f1" and r["status"] == "FAIL" for r in rows)
+
+
+def test_anchor_f1_fastonly_skip_is_warn_not_fail():
+    # An intentional fast-only run produces no f1 and no error: the floor isn't
+    # measured, but that's surfaced as WARN (visible), never a silent pass and
+    # never a FAIL (config-only runs are legitimate; CI runs the full tier).
+    base = {"datasets": {"anchor_person": {"kind": "anchor", "signals": {"x": 1},
+                                           "f1": {"f1": 0.99}}}}
+    cur = {"datasets": {"anchor_person": {"kind": "anchor", "signals": {"x": 1}}}}
+    rows, verdict = diff_scorecards(cur, base, tolerance=0.01)
+    assert verdict == "PASS"
+    assert any(r["field"] == "f1" and r["status"] == "WARN" for r in rows)
+
+
 def test_render_table_smoke():
     rows, _ = diff_scorecards(BASE, BASE)
     assert isinstance(render_table(rows), str)
