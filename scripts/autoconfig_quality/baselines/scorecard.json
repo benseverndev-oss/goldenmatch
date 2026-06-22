@@ -4,12 +4,12 @@
       "f1": {
         "attribution": {
           "blocking_recall": 1.0,
-          "final_recall": 0.8839,
-          "threshold_loss": 0.1161
+          "final_recall": 1.0,
+          "threshold_loss": 0.0
         },
-        "f1": 0.9384,
-        "precision": 1.0,
-        "recall": 0.8839
+        "f1": 0.9896,
+        "precision": 0.9793,
+        "recall": 1.0
       },
       "kind": "anchor",
       "signals": {
@@ -110,8 +110,10 @@
       "anchor_shared_email",
       "anchor_sparse_zip"
     ],
-    "datasets_skipped": {},
-    "git_sha": "ffe28c8f92ee58c7e1552ea45e9f993f9a4d577c",
+    "datasets_skipped": {
+      "dblp_acm": "absent"
+    },
+    "git_sha": "d7ce338a565d01ba062dbaa5a1eb343eea4bd982",
     "native_version": "0.1.11"
   }
 }
