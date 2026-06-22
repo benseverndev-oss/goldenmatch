@@ -94,6 +94,9 @@ def run_engine(engine: QAEngine, corpus, *, model: str, budget_usd: float) -> di
         "fidelity": engine.fidelity,
         "corpus": corpus.name,
         "model": model,
+        # The corpus is single-ambiguity per run; record it so an ambiguity sweep can be
+        # aggregated into the decay curve (0.0 for MuSiQue / empty corpora).
+        "ambiguity": corpus.questions[0].ambiguity_level if corpus.questions else 0.0,
         "n_questions": len(corpus.questions),
         "n_answered": answered,
         "answer_match": _mean(matches),
