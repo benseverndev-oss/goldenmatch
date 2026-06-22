@@ -8,7 +8,13 @@ import os
 from pathlib import Path
 
 from . import engineered
-from .corpora import MUSIQUE_HF_DATASET, MUSIQUE_HF_SPLIT, MUSIQUE_SUBSET_SEED, fetch_musique, load_musique
+from .corpora import (
+    MUSIQUE_HF_DATASET,
+    MUSIQUE_HF_SPLIT,
+    MUSIQUE_SUBSET_SEED,
+    fetch_musique,
+    load_musique,
+)
 from .harness import AnswerResult, BuildResult, run_engine, write_results
 
 
