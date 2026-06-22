@@ -58,20 +58,24 @@ extrapolate_pair_count(total_comparisons, n_blocks, singleton_block_count,
     pairs = min(pairs, pairs_cap)
 
     # n_blocks: Chao1 richness when F1/F2 measured, else linear fallback.
+    # Integer-floor (// not float) so Python and Rust agree bit-for-bit.
     if chao1_f1 is None or chao1_f2 is None:
-        blocks = int(n_blocks * n_rows_full / n_rows_sample)          # linear
+        blocks = n_blocks * n_rows_full // n_rows_sample              # linear
     else:
         observed = n_blocks + chao1_f1                               # re-add dropped singletons
         blocks = observed + chao1_f1 * chao1_f1 // (2 * (chao1_f2 + 1))   # Chao1
-    blocks = min(blocks, n_rows_full)                                # cap
+    blocks = min(blocks, n_rows_full)                                # cap (REACHABLE via Chao1)
 
-    # singleton_block_count: unchanged linear behavior (not load-bearing; feeds health()).
-    singletons = int(singleton_block_count * n_rows_full / n_rows_sample)
+    # singleton_block_count: linear (not load-bearing; feeds health()). Integer-floor.
+    singletons = singleton_block_count * n_rows_full // n_rows_sample
 
     return (blocks, pairs, singletons)
 ```
 
-Note `n_blocks` as measured counts only size≥2 blocks (singletons dropped), so `observed = n_blocks + chao1_f1` reconstructs the true observed distinct-block count before applying Chao1. The linear-blocks fallback keeps the float `* ratio` form the current code uses (matched in Rust via the same `as f64` cast → `as u64` truncation) — see Task 3 for the exact cast to keep parity.
+Notes that matter for parity and tests:
+- `n_blocks` as measured counts only size≥2 blocks (singletons dropped), so `observed = n_blocks + chao1_f1` reconstructs the true observed distinct-block count before applying Chao1.
+- **Every arithmetic path is integer-floor (`//`), not float** — the linear and singleton paths use `x * n_full // n_sample`, not the old `int(x * (n_full/n_sample))`. This removes float entirely so the Python oracle and the Rust kernel are bit-identical (Rust uses `u128` intermediates to avoid `u64` overflow on `x * n_full`). Behaviorally identical to the old float form for all realistic N; only differs at ULP-extreme N that never occurs.
+- **The all-pairs *pairs* cap is a defensive rail, structurally inert for legitimate inputs.** A measured `total_comparisons ≤ C(n_sample, 2)`, which makes `raw_pairs = tc·n_full²//n_sample² ≤ cap` always (`raw/cap ≤ (n_sample−1)/n_sample < 1`). It only clamps pathological inputs where `tc` exceeds the sample's all-pairs maximum. Keep it (cheap hard invariant: estimate never exceeds physical max), but the cap-trigger test must use a deliberately out-of-range `tc`. The **n_blocks cap IS reachable** (Chao1 with many singletons can exceed `n_full`).
 
 ---
 
@@ -173,7 +177,7 @@ Expected: FAIL — `AttributeError`/`AssertionError` (`chao1_f1` is `None`, not 
 
 - [ ] **Step 3: Implement F1/F2 counting**
 
-Change `_fast_static_block_sizes` to return `tuple[list[int], int, int] | None` = `(sizes, f1, f2)`. After the eager null/sentinel-key `.filter(...)` and before the `s >= 2` comprehension, compute from the full per-key size column:
+Change `_fast_static_block_sizes` to return `tuple[list[int], int, int] | None` = `(sizes, f1, f2)`. Count F1/F2 from the **reassigned (filtered) `agg`** — i.e. AFTER the eager null/sentinel-key `agg = agg.filter(...)` reassignment (so null/sentinel groups don't inflate F1, per spec design lines 142-143) and BEFORE the `s >= 2` comprehension:
 
 ```python
         all_key_sizes = agg.get_column("__sz__").to_list()
@@ -240,13 +244,23 @@ def test_extrapolate_pairs_quadratic():
                          chao1_f1=None, chao1_f2=None)
     out = bp.extrapolate_to(1_000, 100_000)
     assert out.total_comparisons == 100 * 100_000 * 100_000 // (1_000 * 1_000)  # 1_000_000
-    assert out.n_blocks == int(10 * 100_000 / 1_000)   # linear fallback: 1000
+    assert out.n_blocks == 10 * 100_000 // 1_000   # linear fallback (integer-floor): 1000
 
-def test_extrapolate_pairs_capped_at_all_pairs():
-    # Tiny full N: ratio^2 would overshoot the all-pairs maximum -> cap.
+def test_extrapolate_pairs_cap_inert_for_legit_input():
+    # All-pairs cap does NOT trigger for legitimate measured inputs
+    # (total_comparisons <= C(n_sample,2)): raw stays below the cap.
+    # tc=10, ns=10, nf=20 -> raw = 10*20*20//(10*10) = 40; cap = 20*19//2 = 190.
     bp = BlockingProfile(n_blocks=2, total_comparisons=10, chao1_f1=None, chao1_f2=None)
     out = bp.extrapolate_to(10, 20)
-    assert out.total_comparisons == 20 * 19 // 2   # 190, the cap (raw would be 40)
+    assert out.total_comparisons == 40   # min(40, 190) -> 40, cap inert
+
+def test_extrapolate_pairs_cap_clamps_pathological_input():
+    # Defensive rail: a tc that EXCEEDS the sample's all-pairs max (C(10,2)=45)
+    # is pathological; the cap clamps it to the physical maximum.
+    # tc=50, ns=10, nf=20 -> raw = 50*400//100 = 200 > cap 190 -> clamp to 190.
+    bp = BlockingProfile(n_blocks=2, total_comparisons=50, chao1_f1=None, chao1_f2=None)
+    out = bp.extrapolate_to(10, 20)
+    assert out.total_comparisons == 20 * 19 // 2   # 190, the all-pairs cap
 
 def test_extrapolate_nblocks_chao1():
     # F1/F2 present -> Chao1 richness: observed=(n_blocks+F1), + F1^2//(2*(F2+1)).
@@ -290,7 +304,7 @@ Expected: FAIL (current `extrapolate_to` scales linearly → `total_comparisons 
         pairs = min(pairs, n_rows_full * (n_rows_full - 1) // 2)
 
         if self.chao1_f1 is None or self.chao1_f2 is None:
-            blocks = int(self.n_blocks * n_rows_full / n_rows_sample)
+            blocks = self.n_blocks * n_rows_full // n_rows_sample
         else:
             observed = self.n_blocks + self.chao1_f1
             blocks = observed + self.chao1_f1 * self.chao1_f1 // (2 * (self.chao1_f2 + 1))
@@ -300,7 +314,7 @@ Expected: FAIL (current `extrapolate_to` scales linearly → `total_comparisons 
             self,
             n_blocks=blocks,
             total_comparisons=pairs,
-            singleton_block_count=int(self.singleton_block_count * n_rows_full / n_rows_sample),
+            singleton_block_count=self.singleton_block_count * n_rows_full // n_rows_sample,
         )
 ```
 
@@ -347,9 +361,17 @@ mod tests {
     }
 
     #[test]
-    fn pairs_capped() {
+    fn pairs_cap_inert_for_legit_input() {
+        // legit tc (<= C(10,2)=45): raw=10*400/100=40 < cap 190 -> 40
         let o = extrapolate_pair_count(&input(10, 2, None, None, 10, 20));
-        assert_eq!(o.total_comparisons, 190); // 20*19/2 cap
+        assert_eq!(o.total_comparisons, 40);
+    }
+
+    #[test]
+    fn pairs_cap_clamps_pathological() {
+        // pathological tc (> C(10,2)): raw=50*400/100=200 > cap 190 -> 190
+        let o = extrapolate_pair_count(&input(50, 2, None, None, 10, 20));
+        assert_eq!(o.total_comparisons, 190);
     }
 
     #[test]
@@ -423,12 +445,14 @@ pub fn extrapolate_pair_count(input: &ExtrapolationInput) -> ExtrapolationOutput
             (observed + f1 * f1 / (2 * (f2 + 1))).min(nf)
         }
         _ => {
-            let linear = (input.n_blocks as f64 * nf as f64 / ns as f64) as u64;
+            // linear fallback, integer-floor via u128 (avoids u64 overflow on n_blocks*nf)
+            let linear = ((input.n_blocks as u128) * (nf as u128) / (ns as u128)) as u64;
             linear.min(nf)
         }
     };
 
-    let singletons = (input.singleton_block_count as f64 * nf as f64 / ns as f64) as u64;
+    let singletons =
+        ((input.singleton_block_count as u128) * (nf as u128) / (ns as u128)) as u64;
 
     ExtrapolationOutput { n_blocks: blocks, total_comparisons: pairs, singleton_block_count: singletons }
 }
@@ -460,7 +484,7 @@ git commit -m "feat(autoconfig-core): extrapolate_pair_count kernel (S1)"
 
 - [ ] **Step 1: Add the generator** (drives the REAL pure-Python `extrapolate_to` oracle)
 
-In `gen_autoconfig_golden.py`, add a function that builds `BlockingProfile`s across a grid (vary `total_comparisons`, `n_blocks`, `chao1_f1`/`f2` ∈ {None, 0, small, large}, `n_rows_sample`, `n_rows_full` including the cap-triggering and noop `<=0` cases), calls `bp.extrapolate_to(ns, nf)`, and emits `{"input": {...}, "expected": {"n_blocks":..., "total_comparisons":..., "singleton_block_count":...}}`. Include ≥ 30 vectors. `None` for `chao1_f1`/`f2` serializes to JSON `null` (matches the `Option<u64>` deserialize). Add `gen_extrapolation_vectors()` to `main()` with a `>= 30` count assert and write `OUT_DIR / "extrapolation_vectors.json"`.
+In `gen_autoconfig_golden.py`, add a function that builds `BlockingProfile`s across a grid (vary `total_comparisons`, `n_blocks`, `chao1_f1`/`f2` ∈ {None, 0, small, large}, `n_rows_sample`, `n_rows_full`), calls `bp.extrapolate_to(ns, nf)`, and emits `{"input": {...}, "expected": {"n_blocks":..., "total_comparisons":..., "singleton_block_count":...}}`. Include ≥ 30 vectors and make sure the grid explicitly hits all five branches: (a) realistic quadratic (cap inert), (b) **pathological** `total_comparisons > C(n_sample,2)` that triggers the *pairs* cap, (c) Chao1-saturation (`chao1_f1` large, `chao1_f2` small) that triggers the *n_blocks* `min(n_full)` cap, (d) linear fallback (`chao1_f1`/`f2 = None`), (e) noop `n_sample<=0` / `n_full<=0`. `None` for `chao1_f1`/`f2` serializes to JSON `null` (matches the `Option<u64>` deserialize). All kernel arithmetic is integer-floor (incl. `u128` Rust intermediates), so no magnitude-bounding is required for parity — vectors reproduce bit-for-bit at any N. Add `gen_extrapolation_vectors()` to `main()` with a `>= 30` count assert and write `OUT_DIR / "extrapolation_vectors.json"`.
 
 - [ ] **Step 2: Generate the fixture**
 
