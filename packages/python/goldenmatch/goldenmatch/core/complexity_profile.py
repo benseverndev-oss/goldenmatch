@@ -304,6 +304,26 @@ class BlockingProfile:
         if n_rows_sample <= 0 or n_rows_full <= 0:
             return self
 
+        # Native fast path (S1): the shared core kernel is the source of truth
+        # when the "autoconfig" component is enabled AND the wheel carries the
+        # symbol. Output is byte-identical to the pure-Python body below
+        # (golden-vector parity); the hasattr guard falls back to pure Python on
+        # a wheel predating goldenmatch-native 0.1.8.
+        from goldenmatch.core._native_loader import native_enabled, native_module
+
+        if native_enabled("autoconfig"):
+            _nm = native_module()
+            if hasattr(_nm, "autoconfig_extrapolate_pair_count"):
+                from goldenmatch.core.autoconfig_native import (
+                    extrapolation_from_json,
+                    extrapolation_input_to_json,
+                )
+
+                out = _nm.autoconfig_extrapolate_pair_count(
+                    extrapolation_input_to_json(self, n_rows_sample, n_rows_full)
+                )
+                return dataclasses.replace(self, **extrapolation_from_json(out))
+
         pairs = (
             self.total_comparisons * n_rows_full * n_rows_full
             // (n_rows_sample * n_rows_sample)

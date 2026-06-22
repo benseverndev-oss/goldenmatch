@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from goldenmatch.core.autoconfig import ColumnProfile
-    from goldenmatch.core.complexity_profile import ComplexityProfile
+    from goldenmatch.core.complexity_profile import BlockingProfile, ComplexityProfile
     from goldenmatch.core.execution_plan import ExecutionPlan
     from goldenmatch.core.runtime_profile import RuntimeProfile
 
@@ -164,3 +164,35 @@ def column_profiles_from_json(
             avg_len=float(item["avg_len"]),
         ))
     return profiles
+
+
+# ── S1: pair-count extrapolation ───────────────────────────────────────────
+
+def extrapolation_input_to_json(
+    bp: BlockingProfile, n_rows_sample: int, n_rows_full: int
+) -> str:
+    """Serialize a ``BlockingProfile`` + sample/full row counts to the
+    ``ExtrapolationInput`` JSON the Rust ``autoconfig_extrapolate_pair_count``
+    shim expects. ``chao1_f1``/``chao1_f2`` of ``None`` serialize to JSON
+    ``null`` (the linear n_blocks fallback)."""
+    payload: dict[str, Any] = {
+        "total_comparisons": int(bp.total_comparisons),
+        "n_blocks": int(bp.n_blocks),
+        "singleton_block_count": int(bp.singleton_block_count),
+        "chao1_f1": bp.chao1_f1,  # None -> null
+        "chao1_f2": bp.chao1_f2,  # None -> null
+        "n_rows_sample": int(n_rows_sample),
+        "n_rows_full": int(n_rows_full),
+    }
+    return json.dumps(payload)
+
+
+def extrapolation_from_json(s: str) -> dict[str, int]:
+    """Parse the Rust ``ExtrapolationOutput`` JSON into the kwargs the Python
+    caller passes to ``dataclasses.replace`` on the source ``BlockingProfile``."""
+    data = json.loads(s)
+    return {
+        "n_blocks": int(data["n_blocks"]),
+        "total_comparisons": int(data["total_comparisons"]),
+        "singleton_block_count": int(data["singleton_block_count"]),
+    }
