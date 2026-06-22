@@ -205,6 +205,25 @@ This edits the core classifier directly, so it is a **core change → golden re-
 byte-parity re-proof + DQbench/F1 gate**. It is the only S1–S3 lever that touches the classifier
 vocabulary path.
 
+### Exposed (and fixed) coupling: blocking selection depended on the identifier mislabel
+
+S2a's more-correct classification surfaced a **latent coupling bug** worth recording. A sparse
+`zip5` (~5k distinct, ~50% null) has a true full-data cardinality of ~0.32, but the classifier
+samples the column, and 5k distinct values look near-unique in a sample (~0.96). The old 0.95
+floor was *fooled* by that artifact into promoting zip5 to `identifier`; S2a correctly keeps it
+`zip`. The problem: `build_blocking._build_compound_blocking` admitted compound *components* by
+`col_type in ("identifier", "email", "phone")`, so the `zip`-typed zip5 was dropped from the
+`[zip5, last_name]` compound — collapsing sparse-zip blocking from **1,529 candidate pairs to
+8.9M (~5,800×)**. The selector was conflating "typed identifier" with "good blocking column."
+
+The fix decouples them: add `zip` to the admissible high-card component types and let the
+*measured* guards (non-singleton blocks, `cardinality_ratio < 1.0`, non-null distinct ratio below
+the blocking gate, relaxed null ceiling) decide — exactly the function's stated intent ("judge a
+component by whether it GROUPS records, NOT by col_type"). The compound is still sized by
+`_typed_projected_block`, so the #715 OOM guard and #876 scale-safety hold. Net: zip5 stays
+correctly typed `zip` **and** bounds the compound (blocking back to 1,529 pairs / max_block 4).
+This is a Python-only blocking change (not the shared core kernel).
+
 ### Non-goal
 
 Wiring the Chao1 *cardinality* estimate (`estimated_full_cardinality`) into classification — i.e.
