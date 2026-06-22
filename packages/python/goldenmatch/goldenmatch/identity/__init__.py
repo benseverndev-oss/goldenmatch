@@ -32,6 +32,14 @@ from goldenmatch.identity.resolve import (
     resolve_clusters,
     resolve_record_incremental,
 )
+from goldenmatch.identity.stabilize import (
+    ConsolidationGroup,
+    OverlapCandidate,
+    StabilizeReport,
+    entity_version,
+    find_persistent_overlaps,
+    stabilize_identities,
+)
 from goldenmatch.identity.stitching import (
     DEFAULT_CHANNEL_TRUST,
     DEFAULT_DEVICE_KEYS,
@@ -55,6 +63,12 @@ from goldenmatch.identity.survivorship import (
 )
 
 __all__ = [
+    "ConsolidationGroup",
+    "OverlapCandidate",
+    "StabilizeReport",
+    "entity_version",
+    "find_persistent_overlaps",
+    "stabilize_identities",
     "IdentityView",
     "MigrationReport",
     "ResolveSummary",
