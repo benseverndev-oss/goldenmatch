@@ -16,7 +16,7 @@ import pytest
 # ── Registration ──────────────────────────────────────────────────────────────
 
 
-def test_total_tool_count_is_59():
+def test_total_tool_count_is_62():
     from goldenmatch.mcp.agent_tools import AGENT_TOOLS
     from goldenmatch.mcp.identity_tools import IDENTITY_TOOLS
     from goldenmatch.mcp.memory_tools import MEMORY_TOOLS
@@ -25,10 +25,10 @@ def test_total_tool_count_is_59():
 
     assert len(AGENT_TOOLS) == 17   # +1 certify_recall
     assert len(MEMORY_TOOLS) == 7
-    assert len(IDENTITY_TOOLS) == 7
+    assert len(IDENTITY_TOOLS) == 10  # +3 MDM ops (#1114)
     assert len(_BASE_TOOLS) == 25   # +1 config_weaknesses
     assert len(ROUTING_TOOLS) == 3  # plan_routing / explain_routing / lint_routing
-    assert len(TOOLS) == 59
+    assert len(TOOLS) == 62
     # No duplicate tool names across the whole surface.
     names = [t.name for t in TOOLS]
     assert len(names) == len(set(names))

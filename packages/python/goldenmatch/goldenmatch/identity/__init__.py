@@ -25,6 +25,14 @@ from goldenmatch.identity.model import (
     IdentityStatus,
     SourceRecord,
 )
+from goldenmatch.identity.profile import (
+    EntityProfile,
+    IdentitySummary,
+    WorklistItem,
+    entity_profile,
+    identity_summary_stats,
+    steward_worklist,
+)
 from goldenmatch.identity.query import (
     IdentityView,
     find_by_record,
@@ -115,6 +123,12 @@ __all__ = [
     "build_golden_with_provenance",
     "learn_field_survivorship",
     "learned_field_strategies",
+    "EntityProfile",
+    "IdentitySummary",
+    "WorklistItem",
+    "entity_profile",
+    "identity_summary_stats",
+    "steward_worklist",
     "EdgeKind",
     "EventKind",
     "EvidenceEdge",

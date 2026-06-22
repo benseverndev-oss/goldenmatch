@@ -1,12 +1,15 @@
 """MCP tools for the Identity Graph.
 
-Five tools:
-
 - ``identity_resolve``   -> look up an identity by record_id
+- ``identity_list``      -> list identities
 - ``identity_history``   -> event log for an entity
 - ``identity_conflicts`` -> conflicting evidence edges
 - ``identity_merge``     -> manually merge two identities
 - ``identity_split``     -> split records into a new identity
+- ``identity_show``      -> full detail of one identity
+- ``identity_profile``   -> MDM profile of one entity (sources, conflicts, version)
+- ``identity_stats``     -> graph-level summary / health stats
+- ``identity_worklist``  -> prioritized steward worklist
 """
 from __future__ import annotations
 
@@ -18,13 +21,16 @@ from mcp.types import TextContent, Tool
 
 from goldenmatch.identity import (
     IdentityStore,
+    entity_profile,
     find_by_record,
     find_conflicts,
     get_entity,
     history,
+    identity_summary_stats,
     list_entities,
     manual_merge,
     manual_split,
+    steward_worklist,
 )
 
 logger = logging.getLogger(__name__)
@@ -141,6 +147,55 @@ IDENTITY_TOOLS: list[Tool] = [
             "required": ["entity_id"],
         },
     ),
+    Tool(
+        name="identity_profile",
+        description=(
+            "MDM profile of one entity: record count + per-source breakdown, "
+            "golden record, confidence, conflict count, canonical version "
+            "(structural-event count), and first/last activity. "
+            "Returns {found: false} when no such entity exists."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "entity_id": {"type": "string"},
+                "path": {"type": "string", "description": "Identity DB path"},
+            },
+            "required": ["entity_id"],
+        },
+    ),
+    Tool(
+        name="identity_stats",
+        description=(
+            "Graph-level summary / health stats: entities by status, total "
+            "records, records-per-entity distribution, conflict total, source "
+            "mix, and the largest entities. Optionally scoped to a dataset."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "dataset": {"type": "string"},
+                "path": {"type": "string", "description": "Identity DB path"},
+            },
+        },
+    ),
+    Tool(
+        name="identity_worklist",
+        description=(
+            "Prioritized steward worklist: active entities needing attention "
+            "(open conflicts and/or confidence below weak_confidence), highest "
+            "conflict count first."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "dataset": {"type": "string"},
+                "weak_confidence": {"type": "number", "default": 0.6},
+                "limit": {"type": "integer", "default": 50},
+                "path": {"type": "string", "description": "Identity DB path"},
+            },
+        },
+    ),
 ]
 
 
@@ -202,6 +257,25 @@ def _dispatch(name: str, args: dict) -> dict[str, Any]:
         with _open(args) as s:
             view = get_entity(s, args["entity_id"], event_limit=int(args.get("event_limit", 100)))
         return view.to_dict() if view else {"found": False}
+
+    if name == "identity_profile":
+        with _open(args) as s:
+            prof = entity_profile(s, args["entity_id"])
+        return prof.as_dict() if prof else {"found": False}
+
+    if name == "identity_stats":
+        with _open(args) as s:
+            return identity_summary_stats(s, dataset=args.get("dataset")).as_dict()
+
+    if name == "identity_worklist":
+        with _open(args) as s:
+            items = steward_worklist(
+                s,
+                dataset=args.get("dataset"),
+                weak_confidence=float(args.get("weak_confidence", 0.6)),
+                limit=int(args.get("limit", 50)),
+            )
+        return {"items": [it.as_dict() for it in items]}
 
     raise ValueError(f"unknown identity tool: {name}")
 
