@@ -24,7 +24,7 @@ from goldenmatch.config.schemas import (
     MatchkeyField,
 )
 from goldenmatch.core.autoconfig_verify import PostflightReport
-from goldenmatch.core.config_critique import diagnose_config
+from goldenmatch.core.config_critique import apply_hint, diagnose_config
 
 # ── Builders ────────────────────────────────────────────────────────────────
 
@@ -368,3 +368,136 @@ def test_empty_dataframe_does_not_raise():
     cfg = _exact_config(fields=["name"])
     out = diagnose_config(df, cfg, _result())
     assert isinstance(out["findings"], list)
+
+
+# ── apply_hint: the inverse of diagnose_config's fix_config_hint ─────────────
+
+
+def _mk_field_names(cfg):
+    """Flat set of every column referenced by any matchkey field."""
+    names: set[str] = set()
+    for mk in cfg.get_matchkeys():
+        for f in mk.fields:
+            if f.field and f.field != "__record__":
+                names.add(f.field)
+            if f.column:
+                names.add(f.column)
+            if f.columns:
+                names.update(f.columns)
+    return names
+
+
+def test_apply_exclude_column_strips_field_and_adds_to_exclude():
+    cfg = _exact_config(fields=["name", "source"])
+    new, applied = apply_hint(cfg, {"action": "exclude_column", "column": "source"})
+    assert applied
+    assert "source" not in _mk_field_names(new)
+    assert "name" in _mk_field_names(new)
+    assert "source" in new.exclude_columns
+    # input is never mutated
+    assert "source" in _mk_field_names(cfg)
+    assert "source" not in cfg.exclude_columns
+
+
+def test_apply_exclude_column_also_strips_blocking_keys():
+    # 'source' rides both a matchkey field and a multi-field blocking key.
+    cfg = _exact_config(fields=["name", "source"], blocking_fields=["zip", "source"])
+    new, applied = apply_hint(cfg, {"action": "exclude_column", "column": "source"})
+    assert applied
+    block_fields = [f for kc in (new.blocking.keys or []) for f in kc.fields]
+    assert "source" not in block_fields
+    assert "zip" in block_fields
+
+
+def test_apply_exclude_column_roundtrips_a_real_diagnose_hint():
+    # Emit a hint from diagnose_config, feed it straight back to apply_hint.
+    df = pl.DataFrame({
+        "name": ["a", "b", "c"],
+        "source": ["crm", "events", "crm"],
+    })
+    cfg = _exact_config(fields=["name", "source"])
+    out = diagnose_config(df, cfg, _result())
+    hint = next(f["fix_config_hint"] for f in out["findings"] if f["id"] == "source_admitted")
+
+    new, applied = apply_hint(cfg, hint)
+    assert applied
+    assert "source" not in _mk_field_names(new)
+    assert "source" in new.exclude_columns
+    # Re-diagnosing the fixed config no longer raises source_admitted.
+    out2 = diagnose_config(df, new, _result())
+    assert all(f["id"] != "source_admitted" for f in out2["findings"])
+
+
+def test_apply_demote_to_blocking_creates_multipass_when_no_blocking():
+    cfg = _exact_config(fields=["name", "phone"])
+    new, applied = apply_hint(cfg, {"action": "demote_to_blocking", "column": "phone"})
+    assert applied
+    assert "phone" not in _mk_field_names(new)
+    assert new.blocking is not None
+    assert new.blocking.strategy == "multi_pass"
+    assert any(kc.fields == ["phone"] for kc in (new.blocking.passes or []))
+
+
+def test_apply_demote_to_blocking_migrates_static_to_multipass():
+    cfg = _exact_config(fields=["name", "phone"], blocking_fields=["zip"])
+    new, applied = apply_hint(cfg, {"action": "demote_to_blocking", "column": "phone"})
+    assert applied
+    assert new.blocking.strategy == "multi_pass"
+    pass_fields = [tuple(kc.fields) for kc in (new.blocking.passes or [])]
+    assert ("zip",) in pass_fields  # original key preserved as a pass
+    assert ("phone",) in pass_fields  # demoted column added as a pass
+
+
+def test_apply_raise_threshold_bumps_weighted_matchkey():
+    cfg = _weighted_config(
+        fields_weights=[("name", 1.0)], blocking_fields=["zip"], threshold=0.7
+    )
+    new, applied = apply_hint(cfg, {"action": "raise_threshold"})
+    assert applied
+    assert new.get_matchkeys()[0].threshold == 0.75
+    # input untouched
+    assert cfg.get_matchkeys()[0].threshold == 0.7
+
+
+def test_apply_unknown_action_is_a_noop():
+    cfg = _exact_config(fields=["name", "source"])
+    new, applied = apply_hint(cfg, {"action": "does_not_exist", "column": "source"})
+    assert applied is False
+    assert "source" in _mk_field_names(new)  # unchanged
+
+
+def test_apply_structural_blocking_hints_not_auto_applicable():
+    # tighten_blocking / compound_blocking need to know WHICH fields to combine,
+    # so they can't be applied from the hint alone.
+    cfg = _exact_config(fields=["name"], blocking_fields=["name"])
+    for action in ("tighten_blocking", "compound_blocking"):
+        new, applied = apply_hint(cfg, {"action": action})
+        assert applied is False, action
+
+
+def test_apply_malformed_hint_returns_unchanged_copy():
+    cfg = _exact_config(fields=["name"])
+    for bad in (None, "exclude_column", {}, {"action": "exclude_column"}):
+        new, applied = apply_hint(cfg, bad)
+        assert applied is False
+        assert _mk_field_names(new) == {"name"}
+
+
+def test_apply_accepts_a_whole_finding_dict():
+    # A caller may pass the finding instead of just its fix_config_hint.
+    cfg = _exact_config(fields=["name", "source"])
+    finding = {
+        "id": "source_admitted",
+        "severity": "high",
+        "fix_config_hint": {"action": "exclude_column", "column": "source"},
+    }
+    new, applied = apply_hint(cfg, finding)
+    assert applied
+    assert "source" not in _mk_field_names(new)
+
+
+def test_apply_exclude_already_excluded_column_is_noop():
+    cfg = _exact_config(fields=["name"], exclude=["country"])
+    new, applied = apply_hint(cfg, {"action": "exclude_column", "column": "country"})
+    # 'country' isn't in any matchkey/blocking and is already excluded -> nothing to do.
+    assert applied is False
