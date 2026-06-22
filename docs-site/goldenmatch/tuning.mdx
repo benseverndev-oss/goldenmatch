@@ -270,6 +270,7 @@ When you expose any server (MCP, REST, A2A, web UI) on a non-loopback host, it i
 | `GOLDENMATCH_DATABASE_URL` / `GOLDENMATCH_IDENTITY_DSN` | unset | Postgres/SQLite connection for the identity graph + review queue / Alembic migrations. |
 | `GOLDENMATCH_PREPARED_RECORD_STORE_DIR` | unset | Directory for the disk-backed prepared-record store. |
 | `GOLDENMATCH_PREPARED_RECORD_STORE_PERSIST` | `0` | `1` keeps the prepared-record store across calls instead of cleaning it up. |
+| `GOLDENMATCH_VECTOR_INDEX_DIR` | `.goldenmatch_vectors` | Default on-disk directory for the persistent semantic `VectorIndex` (embeddings + records + manifest) when a path isn't passed explicitly. The index survives across runs/processes so embeddings aren't rebuilt every run. |
 
 **Product analytics (opt-in):**
 
