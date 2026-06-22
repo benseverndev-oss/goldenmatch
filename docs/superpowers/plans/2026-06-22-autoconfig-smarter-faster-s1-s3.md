@@ -437,10 +437,12 @@ pub fn extrapolate_pair_count(input: &ExtrapolationInput) -> ExtrapolationOutput
     let cap = (nf as u128) * ((nf - 1) as u128) / 2;
     let pairs = pairs_raw.min(cap) as u64;
 
-    // n_blocks: Chao1 richness when F1/F2 measured, else linear (float * ratio,
-    // truncating cast — matches Python int(n_blocks * nf / ns)).
+    // n_blocks: Chao1 richness when F1/F2 measured, else integer-floor linear.
     let blocks = match (input.chao1_f1, input.chao1_f2) {
         (Some(f1), Some(f2)) => {
+            // u64 is intentional here (NOT u128): f1 is bounded by the sample row
+            // count, so f1*f1 cannot overflow u64 at any sample size the fallback
+            // produces; matches Python's arbitrary-precision result exactly.
             let observed = input.n_blocks + f1;
             (observed + f1 * f1 / (2 * (f2 + 1))).min(nf)
         }
