@@ -228,6 +228,13 @@ from goldenmatch.core.scorer import (
     score_blocks_parallel,
     score_pair,
 )
+from goldenmatch.core.screening import (
+    FieldReason,
+    ScreeningHit,
+    ScreeningResult,
+    screen_record,
+    screen_records,
+)
 from goldenmatch.core.sensitivity import SensitivityResult, SweepParam, run_sensitivity
 from goldenmatch.core.standardize import apply_standardization
 from goldenmatch.core.streaming import StreamProcessor, run_stream
@@ -324,6 +331,8 @@ __all__ = [
     "apply_standardization", "compute_matchkeys",
     # Streaming
     "match_one", "StreamProcessor", "run_stream",
+    "screen_record", "screen_records",
+    "ScreeningResult", "ScreeningHit", "FieldReason",
     # Evaluation
     "evaluate_pairs", "evaluate_clusters", "load_ground_truth_csv", "EvalResult",
     "RecallEstimate", "RecallCertificate", "estimate_recall", "certify_recall_df",
