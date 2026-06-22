@@ -151,6 +151,15 @@ from goldenmatch.core.domain_registry import (
 )
 
 # ── Evaluation ───────────────────────────────────────────────────────────
+from goldenmatch.core.embedding_ops import (
+    CanonicalizationEval,
+    EmbeddingDriftReport,
+    FieldModelChoice,
+    embedding_drift,
+    evaluate_canonicalization,
+    select_field_model,
+    select_field_models,
+)
 from goldenmatch.core.evaluate import (
     EvalResult,
     evaluate_clusters,
@@ -346,6 +355,10 @@ __all__ = [
     "VectorIndex",
     # Evaluation
     "evaluate_pairs", "evaluate_clusters", "load_ground_truth_csv", "EvalResult",
+    # Embedding ops (drift, per-field models, canonicalization eval)
+    "embedding_drift", "EmbeddingDriftReport",
+    "select_field_model", "select_field_models", "FieldModelChoice",
+    "evaluate_canonicalization", "CanonicalizationEval",
     "RecallEstimate", "RecallCertificate", "estimate_recall", "certify_recall_df",
     "audit_calibrated_bound",
     # Explain
