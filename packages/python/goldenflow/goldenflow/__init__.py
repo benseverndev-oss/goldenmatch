@@ -14,6 +14,9 @@ import goldenflow.transforms.phone  # noqa: F401
 # Import transform modules so they register with the registry
 import goldenflow.transforms.text  # noqa: F401
 import goldenflow.transforms.url  # noqa: F401
+
+# Pure scalar canonicalizers (PPRL / clean-room match keys; #1128)
+from goldenflow.canonicalize import canonicalize
 from goldenflow.config.learner import learn_config
 
 # Config
@@ -81,6 +84,8 @@ __all__ = [
     # Convenience functions
     "transform_file",
     "transform_df",
+    # Pure scalar canonicalizers
+    "canonicalize",
     # Engine — manifest
     "Manifest",
     "TransformRecord",
