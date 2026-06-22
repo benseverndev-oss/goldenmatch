@@ -11,6 +11,43 @@ Related: `2026-06-20-goldengraph-evidence-program-design.md` (the program spec),
 
 ---
 
+## UPDATE 2026-06-22 (later same day): two quality fixes -> goldengraph co-leader
+
+The "second, not first" framing below was the FIRST full headline. It then drove
+two measured-against-the-bench quality fixes that reversed the result. **Committed
+headline: `packages/python/goldenmatch/benchmarks/er-kg-bench/results/RESULTS_QA_E2E.md`**
+(bench-graphrag-qa run 27958804649). Trajectory of goldengraph mean answer-match:
+
+| version | change | mean | 2-hop |
+|---|---|---|---|
+| v1 | as merged in PR #1184 (`hops=1`) | 0.101 | 0.030 |
+| v2 | adaptive retrieval depth (`hops=4` + node budget) | 0.127 | 0.115 |
+| v3 | + relation-aware focus | 0.112 | 0.085 | (REVERTED -- regressed) |
+| **v4** | **+ synthesis path-tracing (name-keyed edges, step-by-step prompt)** | **0.174** | **0.197** |
+
+- **goldengraph went from clearly-behind to co-leader at ~1/10th the cost.** v4 mean
+  **0.174 vs LightRAG 0.173** (tie within noise), $0.31 vs $3.22 for the sweep.
+- **Two diagnoses, both right, both from the bench:** (1) the multi-hop answer wasn't
+  *retrieved* (a fixed-depth-1 ball can't contain a k-hop answer) -> adaptive depth;
+  (2) the answer was retrieved but not *read* (id-keyed flat edge dump) -> name-keyed
+  edges + explicit step-by-step relation tracing in `goldengraph/synthesize.py`.
+- **A measured negative result (v3):** relation-aware focus (prune the ball to the
+  predicates the query named) REGRESSED -- real LLM-extracted predicates rarely match
+  the query's relation words verbatim, so literal-phrase focus dropped the true chain.
+  Reverted; lesson in `goldengraph/answer.py::_retrieve_local`.
+- **Honest caveat -- the thesis still does NOT hold.** The program predicted ER makes
+  goldengraph decay *slower* under ambiguity. It decays *faster* (0.416 -> 0.040) than
+  LightRAG (0.285 -> 0.094). goldengraph wins on clean-data + multi-hop + cost, not
+  ambiguity-resilience. **Citable claim: "matches the best GraphRAG engine at 1/10th
+  the cost," not "ER moat beats them under noise."**
+- These fixes are in `goldengraph/{answer,synthesize}.py` (merged with PR #1184 at
+  commit 9c1fdc7), each guarded by a native-free, LLM-free unit test
+  (`tests/test_retrieval_depth.py`, `tests/test_synthesize_format.py`).
+
+The original first-headline analysis is retained verbatim below for the trail.
+
+---
+
 ## TL;DR
 
 The 2026-06-21 head-to-head was green-but-degenerate (every engine ~0
