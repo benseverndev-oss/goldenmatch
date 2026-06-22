@@ -6,21 +6,26 @@
 /// `autoconfig.py:875`, issue #715).
 ///
 /// An exact matchkey asserts identity equivalence, so the backing column must be
-/// plausibly unique. A single blanket floor of 0.5 for every type is crude:
-/// emails are near-unique (demand a high floor), phones are legitimately shared
-/// across household/business lines (a lower floor is fine). Returns the per-type
-/// floor; anything outside the calibrated set (incl. unknown / drifted vocab)
-/// gets the historical default of 0.5, so behavior only changes for the
-/// explicitly-tuned types.
+/// plausibly unique. The blanket 0.5 floor is crude for one type in particular:
+/// **phones are legitimately shared** across household/business lines, so a
+/// moderately-shared phone is still a useful candidate-generation signal (the
+/// scorer weights it; the floor only guards against mega-clusters from very low
+/// cardinality). Phones get a more permissive `0.30`.
 ///
-/// Matches on the `col_type` string (the serde name of the core `ColType`) so it
-/// is robust to vocabulary drift. zip/geo are skipped entirely upstream (a
-/// separate guard) and never reach this floor.
+/// **email stays at the default 0.50** — a shared email (e.g. a 0.5-cardinality
+/// household/account email) is a genuine identity signal this codebase keeps as
+/// an exact matchkey; the existing matchkey-guard tests pin email's floor to 0.50
+/// (0.5 included, 0.4999 excluded). The spec's initial email=0.70 demoted those
+/// legitimate shared emails and was corrected here.
+///
+/// Anything outside the tuned set (incl. unknown / drifted vocab) gets the
+/// historical default 0.5. Matches on the `col_type` string (the serde name of
+/// the core `ColType`) so it is robust to vocabulary drift. zip/geo are skipped
+/// entirely upstream (a separate guard) and never reach this floor.
 pub fn exact_matchkey_floor(col_type: &str) -> f64 {
     match col_type {
-        "email" => 0.70,
         "phone" => 0.30,
-        // name / string / and every other type keep the historical 0.5 floor.
+        // email / name / string / and every other type keep the 0.5 default.
         _ => 0.50,
     }
 }
@@ -69,8 +74,8 @@ mod tests {
 
     #[test]
     fn exact_matchkey_floor_per_type() {
-        assert_eq!(exact_matchkey_floor("email"), 0.70);
-        assert_eq!(exact_matchkey_floor("phone"), 0.30);
+        assert_eq!(exact_matchkey_floor("phone"), 0.30); // permissive: shared phones
+        assert_eq!(exact_matchkey_floor("email"), 0.50); // default: shared emails kept
         assert_eq!(exact_matchkey_floor("name"), 0.50);
         assert_eq!(exact_matchkey_floor("string"), 0.50);
     }

@@ -242,15 +242,17 @@ Core `exact_matchkey_floor(col_type) -> f64` returning a per-type floor:
 
 | col_type | floor | rationale |
 |---|---|---|
-| email | 0.70 | emails are near-unique; demand high cardinality |
-| phone | 0.30 | legitimately shared (household/business lines) |
+| phone | 0.30 | legitimately shared (household/business lines); a moderately-shared phone is still a useful candidate-generation signal, and the floor only guards against mega-clusters from very low cardinality |
+| email | 0.50 | **(corrected from an initial 0.70)** a shared email (e.g. household/account, cardinality 0.5) is a genuine identity signal this codebase deliberately keeps as a matchkey; the existing matchkey-guard tests pin email's floor to exactly 0.50 (0.5 included, 0.4999 excluded). 0.70 demoted those legitimate shared emails |
 | name / string | 0.50 | default behavior preserved |
 | (default / other) | 0.50 | default behavior preserved |
 
 These are **starting values, calibrated on DQbench/F1**, not gospel — a per-type floor that helps
-one dataset can regress another, so the values are tuned behind the benchmark delta, not reasoned
-from first principles alone. The selection loop calls the core for the floor by `p.col_type`;
-nothing else in the loop changes. Gate: DQbench/F1 + golden.
+one dataset can regress another. The spec's initial email=0.70 was caught by the existing
+matchkey-guard + multisource tests (which encode "shared email kept") and corrected to 0.50 during
+implementation: phone (0.30, permissive) is S3's one behavioral change; email and all other types
+keep the 0.50 default. The selection loop calls the core for the floor by `p.col_type`; nothing
+else in the loop changes. Gate: DQbench/F1 + golden + the matchkey-guard regression tests.
 
 ## Core API additions
 

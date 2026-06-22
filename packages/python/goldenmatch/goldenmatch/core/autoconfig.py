@@ -764,12 +764,13 @@ def _is_person_name_column(column: str) -> bool:
 def _exact_matchkey_floor_py(col_type: str) -> float:
     """Pure-Python oracle for the S3 per-type exact-matchkey cardinality floor.
 
-    email 0.70, phone 0.30, everything else (incl. unknown vocab) 0.50 -- the
-    historical blanket default. Mirrors the Rust `exact_matchkey_floor` kernel
-    (golden-vector parity). Closes the TODO at issue #715.
+    phone 0.30 (legitimately shared -> permissive); everything else, INCLUDING
+    email, keeps the historical 0.50 default. A shared email (cardinality 0.5) is
+    a genuine identity signal this codebase keeps as an exact matchkey, and the
+    matchkey-guard tests pin email's floor to 0.50; the spec's initial email=0.70
+    demoted those and was corrected. Mirrors the Rust `exact_matchkey_floor`
+    kernel (golden-vector parity). Closes the TODO at issue #715.
     """
-    if col_type == "email":
-        return 0.70
     if col_type == "phone":
         return 0.30
     return 0.50

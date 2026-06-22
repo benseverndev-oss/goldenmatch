@@ -4,7 +4,7 @@
       "col_type": "email"
     },
     "expected": {
-      "floor": 0.7
+      "floor": 0.5
     }
   },
   {
