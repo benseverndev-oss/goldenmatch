@@ -403,7 +403,15 @@ pub fn classify_by_data(values: &[std::string::String]) -> (ColType, f64) {
         let unique: std::collections::HashSet<&str> =
             values.iter().map(|s| s.as_str()).collect();
         let cardinality_ratio = unique.len() as f64 / values.len() as f64;
-        if cardinality_ratio >= 0.95 {
+        // S2a: identifier floor max(0.95, 1 - 1/sqrt(n)). At scale the floor
+        // RISES above the old fixed 0.95 (a 10k-row 0.95-cardinality column is a
+        // high-entropy name, not an ID, and is no longer promoted); it never
+        // drops below 0.95, so small-n behavior is unchanged (a looser small-n
+        // floor reclassified moderately-unique phone/numeric columns and broke
+        // established matchkey behavior). `.sqrt()` is correctly-rounded IEEE
+        // 754, bit-identical to Python's math.sqrt (oracle parity).
+        let floor = (1.0 - 1.0 / (values.len() as f64).sqrt()).max(0.95);
+        if cardinality_ratio >= floor {
             return (ColType::Identifier, 0.9);
         }
     }
@@ -897,6 +905,33 @@ mod tests {
         // Should NOT return Identifier via the guard
         let (ct, _) = classify_by_data(&vals);
         assert_ne!(ct, ColType::Identifier);
+    }
+
+    #[test]
+    fn test_classify_by_data_s2a_adaptive_floor() {
+        // S2a: floor = max(0.95, 1 - 1/sqrt(n)). Small-n behavior is UNCHANGED
+        // (floor stays 0.95), so a 0.80-cardinality n=10 column is still numeric
+        // (not promoted) -- the same as the old fixed 0.95.
+        let mut small: Vec<std::string::String> = (1000..1008).map(|i| i.to_string()).collect();
+        small.push("1007".into());
+        small.push("1007".into());
+        assert_eq!(small.len(), 10);
+        assert_ne!(classify_by_data(&small).0, ColType::Identifier);
+
+        // Stricter at scale: n=900, card ~0.955 is BELOW floor(900)=max(0.95,
+        // 0.9667)=0.9667 -> NOT an identifier (the old fixed 0.95 WOULD have
+        // promoted it -- this is S2a's behavioral change). 860 distinct of 900.
+        let mut big: Vec<std::string::String> = (0..860).map(|i| (100_000 + i).to_string()).collect();
+        for i in 0..40 {
+            big.push((100_000 + i).to_string());
+        }
+        assert_eq!(big.len(), 900);
+        let unique: std::collections::HashSet<&std::string::String> = big.iter().collect();
+        let card = unique.len() as f64 / big.len() as f64; // 860/900 ~= 0.9556
+        let floor = (1.0 - 1.0 / 900_f64.sqrt()).max(0.95); // ~= 0.9667
+        assert!(card < floor, "card {card} should be below floor {floor}");
+        assert!(card > 0.95, "card {card} would have been promoted under the old 0.95");
+        assert_ne!(classify_by_data(&big).0, ColType::Identifier);
     }
 
     #[test]

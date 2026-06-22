@@ -179,23 +179,50 @@ sit at 0.95 and be wrongly promoted to identifier; at tiny `n` a genuine identif
 
 ### The kernel
 
-Replace the constant with `cardinality_ratio >= (1 − 1/√n)`, where `n` is the number of values
-examined (`len(values)`):
+Replace the constant with `cardinality_ratio >= max(0.95, 1 − 1/√n)`, where `n` is the number of
+values examined (`len(values)`):
 
 | n | floor |
 |---|---|
-| 10 | 0.684 |
-| 100 | 0.900 |
+| 10 | 0.95 |
+| 100 | 0.95 |
+| 400 | 0.95 |
 | 1,000 | 0.968 |
 | 10,000 | 0.990 |
 | 1,000,000 | 0.999 |
 
-Stricter as `n` grows (a 10k-row 0.95 column is a name, not an ID); looser on small samples. The
-gate (`data_type in {phone, zip, numeric}` and `len(values) >= 10`) is unchanged.
+**The floor only ever RISES above 0.95 (at scale, n > ~400); it never drops below it.** This is the
+spec's one behavioral correction during implementation: the initial `1 − 1/√n` (without the
+`max(0.95, …)` cap) was *looser* than 0.95 at small/medium n, which reclassified moderately-unique
+phone/numeric columns (e.g. a 30-row phone column at 0.83 cardinality) as identifiers and broke
+established matchkey behavior (`test_autoconfig_multisource`'s deliberate phone demotion). S2a's
+actual goal was only ever the **stricter-at-scale** direction — "a 10k-row 0.95-cardinality column
+is a high-entropy name, not an ID" — so capping at the historical 0.95 preserves all small-n
+behavior while still tightening at scale. The gate (`data_type in {phone, zip, numeric}` and
+`len(values) >= 10`) is unchanged.
 
 This edits the core classifier directly, so it is a **core change → golden re-gen + Python/TS
 byte-parity re-proof + DQbench/F1 gate**. It is the only S1–S3 lever that touches the classifier
 vocabulary path.
+
+### Exposed (and fixed) coupling: blocking selection depended on the identifier mislabel
+
+S2a's more-correct classification surfaced a **latent coupling bug** worth recording. A sparse
+`zip5` (~5k distinct, ~50% null) has a true full-data cardinality of ~0.32, but the classifier
+samples the column, and 5k distinct values look near-unique in a sample (~0.96). The old 0.95
+floor was *fooled* by that artifact into promoting zip5 to `identifier`; S2a correctly keeps it
+`zip`. The problem: `build_blocking._build_compound_blocking` admitted compound *components* by
+`col_type in ("identifier", "email", "phone")`, so the `zip`-typed zip5 was dropped from the
+`[zip5, last_name]` compound — collapsing sparse-zip blocking from **1,529 candidate pairs to
+8.9M (~5,800×)**. The selector was conflating "typed identifier" with "good blocking column."
+
+The fix decouples them: add `zip` to the admissible high-card component types and let the
+*measured* guards (non-singleton blocks, `cardinality_ratio < 1.0`, non-null distinct ratio below
+the blocking gate, relaxed null ceiling) decide — exactly the function's stated intent ("judge a
+component by whether it GROUPS records, NOT by col_type"). The compound is still sized by
+`_typed_projected_block`, so the #715 OOM guard and #876 scale-safety hold. Net: zip5 stays
+correctly typed `zip` **and** bounds the compound (blocking back to 1,529 pairs / max_block 4).
+This is a Python-only blocking change (not the shared core kernel).
 
 ### Non-goal
 

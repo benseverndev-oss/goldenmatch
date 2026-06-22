@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import math
 import os
 import re
 from collections.abc import Callable
@@ -213,7 +214,15 @@ def _classify_by_data(values: list[str]) -> tuple[str, float]:
     # so a handful of genuinely-unique zip/phone rows don't trip the guard.
     if data_type in ("phone", "zip", "numeric") and len(values) >= 10:
         cardinality_ratio = len(set(values)) / len(values)
-        if cardinality_ratio >= 0.95:
+        # S2a (spec 2026-06-22): identifier floor max(0.95, 1 - 1/sqrt(n)). At
+        # scale the floor RISES above the old fixed 0.95 (a 10k-row 0.95-card
+        # column is a high-entropy name, not an ID), and never drops below 0.95
+        # so small-n behavior is unchanged (a looser small-n floor reclassified
+        # moderately-unique phone/numeric columns and broke established matchkey
+        # behavior). math.sqrt is correctly-rounded IEEE 754 -> bit-identical to
+        # Rust's .sqrt() (do NOT use n ** 0.5 -- pow isn't correctly-rounded).
+        floor = max(0.95, 1.0 - 1.0 / math.sqrt(len(values)))
+        if cardinality_ratio >= floor:
             return "identifier", 0.9
 
     # Year detection: 4-digit integers in 1900..2100. Cheap blocking signal
@@ -1246,14 +1255,23 @@ def _build_compound_blocking(
     # COMPONENT, a high-null column is fine: the multi_pass config's other
     # passes cover the null rows. So:
     #   - keep `numeric`/`date` excluded;
-    #   - admit `identifier` (and the high-cardinality `email`/`phone` types)
-    #     ONLY when the column genuinely GROUPS records: non-singleton blocks
-    #     (`_max_block_size > 1`), `cardinality_ratio < 1.0`, and a non-null
-    #     distinct ratio below the blocking gate (rejects surrogate keys like
-    #     npi/phone/email whose non-null values are ~unique per record and
+    #   - admit `identifier`, `zip`, and the high-cardinality `email`/`phone`
+    #     types ONLY when the column genuinely GROUPS records: non-singleton
+    #     blocks (`_max_block_size > 1`), `cardinality_ratio < 1.0`, and a
+    #     non-null distinct ratio below the blocking gate (rejects surrogate keys
+    #     like npi/phone/email whose non-null values are ~unique per record and
     #     whose only large block is the null bucket);
     #   - relax the single-key null ceiling to 0.6 for the component role so a
     #     ~50%-null zip5 qualifies.
+    # `zip` is admitted here (not just `identifier`) so the choice doesn't depend
+    # on whether the sampling artifact promoted the column to `identifier`: the
+    # MEASURED guards decide. A moderate-cardinality zip (true distinct ratio
+    # ~0.3) that pairs with a name to bound the block is a strong compound
+    # component regardless of its type label; a near-unique surrogate zip is
+    # still rejected by the non-null-ratio guard. This decouples blocking-key
+    # selection from the over-eager identifier classification (S2a corrected the
+    # latter; this aligns blocking with the comment's stated intent: judge by
+    # whether a component GROUPS records, NOT by col_type).
     # NOTE: `_nonnull_ratio` / `_max_block_size` are computed on `df` directly.
     # On the v0 non-distributed path `df` IS the full dataset (controller passes
     # the full frame to `_initial_config`), so these are exact. If a SAMPLED df
@@ -1264,7 +1282,7 @@ def _build_compound_blocking(
     from goldenmatch.core.blocking_candidates import _blocking_max_ratio
     _grouping_ratio_max = _blocking_max_ratio()
     _component_null_ceiling = max(max_null_rate, 0.6)
-    _high_card_types = ("identifier", "email", "phone")
+    _high_card_types = ("identifier", "zip", "email", "phone")
 
     def _is_admissible(p: ColumnProfile) -> bool:
         if p.col_type in ("numeric", "date"):
