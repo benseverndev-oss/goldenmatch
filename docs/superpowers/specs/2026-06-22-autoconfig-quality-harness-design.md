@@ -32,7 +32,18 @@ cross-surface byte-parity (the golden vectors), and **not** an engine comparison
 
 ## Architecture
 
-A focused package `scripts/autoconfig_quality/` — six small single-purpose units behind one CLI:
+A focused package at **repo-root `scripts/autoconfig_quality/`** — the same `scripts/` tree as the
+existing autoconfig tooling (`gen_autoconfig_golden.py`, `bench_autoconfig_sample_quality.py`,
+`bench_er_headtohead/`), NOT the package-level `packages/python/goldenmatch/scripts/`. It imports
+the `goldenmatch` package via the installed dist / `PYTHONPATH` (as the other repo-root scripts
+do). Two anchor generators live in *other* trees and are imported explicitly: `make_healthcare_df`
+is at `packages/python/goldenmatch/scripts/repro_issue_715.py` (add that dir to `sys.path`, as
+`test_autoconfig_blocking_cost_715.py` already does); the shared-email `_crm_df` and the
+`gen_labeled` person-match generator currently live inside test modules and must be **extracted to
+an importable location** (a small refactor — one definition, no copy) so both the tests and this
+harness share them.
+
+Six small single-purpose units behind one CLI:
 
 ```
 scripts/autoconfig_quality/
@@ -92,17 +103,35 @@ Runs the decision path on a sample (no full pipeline) and records, per dataset:
 | `blocking_cost` — candidate pairs, max block, p99, reduction ratio | `measure_blocking_profile` | the 1,529→8.9M candidate-pair explosion |
 | `planner_rung` — backend + rule_name | `apply_planner_rules` | S1 under-provisioning (simple vs chunked) |
 
-Deterministic and fast (seconds per dataset). For **anchors**, each signal is checked against its
-pinned `expected` (exact). For **real datasets**, signals are recorded and diffed informationally.
+`apply_planner_rules(profile, runtime, n_rows_full, rules, context=None)` takes an assembled
+`ComplexityProfile` + `RuntimeProfile`, not a bare df — so the `planner_rung` signal assembles
+them the same way the controller does: a `BlockingProfile` from `measure_blocking_profile`, a
+`RuntimeProfile` from `capture_runtime_profile()`, wrapped in a minimal `ComplexityProfile`. The
+plan pins this assembly.
+
+Deterministic and fast (seconds per dataset — no full pipeline, only profiling + blocking +
+matchkey selection, NOT the controller's iterative sample-dedupes). For **anchors**, each signal
+is checked against its pinned `expected` (exact). For **real datasets**, signals are recorded and
+diffed informationally.
 
 ### Slow tier — ground-truth accuracy, full dedupe (`f1.py`)
 
 Per **real** dataset (row-capped for tractability): `dedupe_df(df)` → cluster assignments →
-`evaluate_clusters(clusters, ground_truth_pairs)` → **F1 / precision / recall**, plus the
-**blocking-recall vs threshold-loss attribution** the head-to-head bench already computes, so an
-F1 drop is localized to "blocking lost candidates" vs "scoring threshold too strict." Anchors may
-optionally carry an F1 floor too (the `gen_labeled` person-match anchor has labels). `--fast-only`
-skips this tier for the tight iterate loop.
+`evaluate_clusters(clusters, ground_truth)` → an `EvalResult`; the scorecard reads
+`.summary()` (or `.f1` / `.precision` / `.recall`) for **F1 / precision / recall**. Note
+`ground_truth` is a `set[tuple]` of matching record pairs, not a dict.
+
+Plus the **blocking-recall vs threshold-loss attribution** so an F1 drop is localized to
+"blocking lost candidates" vs "scoring threshold too strict." This reuses
+`scripts/bench_er_headtohead/attribution.py::attribution(gt_pairs, candidate_pairs,
+emitted_pairs)` — note it takes **pair sets**, not clusters: `emitted_pairs` comes from the
+dedupe result (`scored_pairs` above threshold), but **`candidate_pairs` (post-blocking,
+pre-scoring) is NOT on `DedupeResult`** — the harness must source it separately from the blocking
+output (run `build_blocks` / `measure_blocking_profile`'s key on the capped df to materialize the
+candidate set). The plan must budget that wiring.
+
+Anchors may optionally carry an F1 floor too (the `gen_labeled` person-match anchor has labels).
+`--fast-only` skips this tier for the tight iterate loop.
 
 **The split:** the fast tier is the always-on, deterministic, anchor-pinned **regression net**;
 the F1 tier is the slower, real-data **ground-truth confirmation**. You iterate against fast,
@@ -155,8 +184,13 @@ dblp_acm            f1               0.879 → 0.864      ✗ (below floor−tol
 - **Anchors → exact.** Any pinned signal that changed = hard FAIL (an anchor encodes known-correct
   config; a change is a regression or an intended redesign that must be blessed).
 - **Real datasets → floor + tolerance.** F1 must stay ≥ `baseline_f1 − tolerance` (default 0.01);
-  within-band moves pass. **Skipped** datasets are neutral (CI without the licensed data still
-  runs the anchor gate); an **error** on an *anchor* is FAIL (anchors must always run).
+  within-band moves pass.
+- **Skipped** datasets (loader returned `None`) are **neutral** — CI without the licensed data
+  still runs the anchor gate.
+- **Error** verdicts: an error on an **anchor** (signal extraction threw) is **FAIL** — anchors
+  must always run. An error on a **real** dataset's signal or F1 extraction is **neutral** (a
+  real-data flake or shape the harness can't profile must not block a kernel PR) — it's recorded
+  as `error: <msg>` and reported, but does not fail the gate.
 
 ### Bless
 
@@ -215,14 +249,14 @@ into a legible behavioral diff.
 
 ## Reuse inventory (nothing reinvented)
 
-| Need | Existing primitive |
-|---|---|
-| F1 / P/R | `evaluate_clusters(clusters, ground_truth_pairs)` |
-| blocking cost | `measure_blocking_profile(df, cfg)` |
-| decision path | `profile_columns`, `build_blocking`, `build_matchkeys`, `apply_planner_rules` |
-| full dedupe | `dedupe_df` |
-| F1 attribution | the blocking-recall / threshold-loss split from `bench_er_headtohead/evaluate.py` |
-| sparse-zip anchor | `scripts/repro_issue_715.py::make_healthcare_df` |
-| shared-email anchor | the multisource CRM fixture (`test_autoconfig_multisource._crm_df`) |
-| person-match anchor | `gen_labeled` (from `test_quality_gate`) |
-| real dataset loaders | partly in `test_autoconfig_benchmarks.py` + the DQbench tests |
+| Need | Existing primitive | Notes |
+|---|---|---|
+| F1 / P/R | `evaluate_clusters(clusters, ground_truth)` | `ground_truth` is `set[tuple]`; returns `EvalResult`, read `.summary()` / `.f1` |
+| blocking cost | `measure_blocking_profile(df, cfg)` | returns a `BlockingProfile` |
+| decision path | `profile_columns`, `build_blocking`, `build_matchkeys`, `apply_planner_rules` | planner needs assembled `ComplexityProfile`+`RuntimeProfile` (see fast tier) |
+| full dedupe | `dedupe_df` | `DedupeResult` has `clusters` + `scored_pairs`; NO raw candidate set |
+| F1 attribution | `scripts/bench_er_headtohead/attribution.py::attribution(gt_pairs, candidate_pairs, emitted_pairs)` | takes pair sets; candidate_pairs sourced from blocking separately |
+| sparse-zip anchor | `packages/python/goldenmatch/scripts/repro_issue_715.py::make_healthcare_df` | `(n, seed=715, zip_present=…, rich_surnames=…)`; import via sys.path |
+| shared-email anchor | `_crm_df` in `tests/test_autoconfig_multisource.py` | module-level fn — **extract to an importable shared location** |
+| person-match anchor | `gen_labeled(n_entities=400, seed=7) -> (df, gt_pairs)` in `tests/test_quality_gate.py` | also **extract to a shared location** |
+| real dataset loaders | partly in `test_autoconfig_benchmarks.py` + the DQbench tests | |
