@@ -656,3 +656,265 @@ def diagnose_config(
     summary = _maybe_llm_summary(findings, summary)
 
     return {"findings": findings, "summary_plain": summary}
+
+
+# ── Applying a fix hint (the inverse of diagnose_config) ─────────────────────
+#
+# Every finding ``diagnose_config`` emits carries a ``fix_config_hint``
+# (``{"action": ..., "column": ...}``). ``apply_hint`` is the companion that
+# turns ONE of those hints back into a changed config, so the emit and apply
+# halves can't drift — the same hint vocabulary that's produced here is
+# consumed here, against the same ``GoldenMatchConfig`` schema. Pure: it
+# deep-copies, never mutates the input, re-validates the result, and
+# fail-closes — an unknown/malformed hint, an action that needs information the
+# hint doesn't carry, or a change that would produce an invalid config all
+# return ``(unchanged_copy, False)`` rather than raising or emitting garbage.
+
+# How much ``raise_threshold`` nudges each weighted matchkey's threshold, and
+# the ceiling it will not cross (1.0 would never match anything).
+_THRESHOLD_BUMP = 0.05
+_THRESHOLD_CEILING = 0.99
+
+# Blocking strategies whose blocks are simple field passes we can safely extend
+# with a demoted column. Mirrors ``apply_quality_aware_blocking``'s guard.
+_PASS_EXTENDABLE_STRATEGIES = frozenset({"static", "adaptive", "multi_pass"})
+
+
+def _safe_copy(config: Any) -> Any:
+    """Deep-copy a config, degrading to the original if it isn't copyable."""
+    try:
+        return config.model_copy(deep=True)
+    except Exception:
+        return config
+
+
+def _strip_column_from_matchkeys(matchkeys: list, column: str) -> tuple[list, bool]:
+    """Drop ``column`` from every matchkey's fields.
+
+    A field referencing only ``column`` is removed; a multi-column
+    ``record_embedding`` field keeps its other columns. A matchkey left with no
+    fields is dropped entirely. Returns ``(new_matchkeys, changed)``.
+    """
+    changed = False
+    out: list = []
+    for mk in matchkeys:
+        new_fields: list = []
+        for f in mk.fields:
+            if f.columns and column in f.columns:
+                remaining = [c for c in f.columns if c != column]
+                changed = True
+                if remaining:
+                    new_fields.append(f.model_copy(update={"columns": remaining}))
+                continue  # else: multi-column field emptied -> drop it
+            if f.field == column or f.column == column:
+                changed = True
+                continue
+            new_fields.append(f)
+        if new_fields:
+            out.append(mk.model_copy(update={"fields": new_fields}))
+        elif mk.fields:
+            changed = True  # matchkey emptied by the strip -> drop it
+        else:
+            out.append(mk)  # was already empty -> leave untouched
+    return out, changed
+
+
+def _set_matchkeys(config: Any, matchkeys: list) -> None:
+    """Write matchkeys back where ``get_matchkeys`` reads them from."""
+    if config.matchkeys:
+        config.matchkeys = matchkeys
+    elif config.match_settings is not None:
+        config.match_settings.matchkeys = matchkeys
+    else:
+        config.matchkeys = matchkeys
+
+
+def _strip_column_from_blocking(blocking: Any, column: str) -> bool:
+    """Remove ``column`` from blocking keys/passes/sub_block_keys (in place).
+
+    A key/pass whose only field was ``column`` is dropped. Returns whether
+    anything changed.
+    """
+    if blocking is None:
+        return False
+    changed = False
+    for attr in ("keys", "passes", "sub_block_keys"):
+        kcs = getattr(blocking, attr, None)
+        if not kcs:
+            continue
+        new_kcs: list = []
+        for kc in kcs:
+            if column in kc.fields:
+                remaining = [f for f in kc.fields if f != column]
+                changed = True
+                if remaining:
+                    new_kcs.append(kc.model_copy(update={"fields": remaining}))
+                # else: single-field block on the column -> drop it
+            else:
+                new_kcs.append(kc)
+        setattr(blocking, attr, new_kcs)
+    return changed
+
+
+def _add_blocking_pass(config: Any, column: str) -> bool:
+    """Ensure a single-field blocking pass on ``column``. Returns whether
+    anything changed.
+
+    Mirrors ``apply_quality_aware_blocking``'s static->multi_pass migration so a
+    demoted column actually serves as a blocking key. For strategies whose
+    blocks aren't simple field passes (ann/lsh/simhash/sorted_neighborhood/
+    canopy/learned), adding a pass would be a silent no-op, so this reports no
+    change — the matchkey strip already removed the column from scoring, which
+    is the substance of the demotion.
+    """
+    from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig
+
+    new_pass = BlockingKeyConfig(fields=[column])
+    b = config.blocking
+    if b is None:
+        config.blocking = BlockingConfig(strategy="multi_pass", passes=[new_pass])
+        return True
+    if b.strategy not in _PASS_EXTENDABLE_STRATEGIES:
+        return False
+
+    def _covered(kcs: list | None) -> bool:
+        return any(kc.fields == [column] for kc in (kcs or []))
+
+    if b.strategy == "multi_pass":
+        if _covered(b.passes) or _covered(b.keys):
+            return False
+        config.blocking = b.model_copy(
+            update={"passes": list(b.passes or []) + [new_pass]}
+        )
+        return True
+    # static / adaptive -> convert to an explicit multi_pass union, preserving
+    # the existing keys/passes as passes (so auto_select can't drop them).
+    existing = list(b.passes or []) + list(b.keys or [])
+    if _covered(existing):
+        return False  # already a single-field block on this column
+    config.blocking = b.model_copy(
+        update={"strategy": "multi_pass", "passes": existing + [new_pass], "keys": []}
+    )
+    return True
+
+
+def _revalidated(original: Any, mutated: Any) -> tuple[Any, bool]:
+    """Re-validate ``mutated``; fail closed to an unchanged copy of ``original``
+    if the change produced a config the schema rejects."""
+    from goldenmatch.config.schemas import GoldenMatchConfig
+
+    try:
+        return GoldenMatchConfig.model_validate(mutated.model_dump()), True
+    except Exception:
+        return _safe_copy(original), False
+
+
+def _apply_exclude_column(config: Any, hint: dict) -> tuple[Any, bool]:
+    column = hint.get("column")
+    if not isinstance(column, str) or not column:
+        return _safe_copy(config), False
+    new = config.model_copy(deep=True)
+    mks, mk_changed = _strip_column_from_matchkeys(new.get_matchkeys(), column)
+    if mk_changed:
+        _set_matchkeys(new, mks)
+    block_changed = _strip_column_from_blocking(new.blocking, column)
+    excl = list(new.exclude_columns or [])
+    excl_changed = column not in excl
+    if excl_changed:
+        new.exclude_columns = excl + [column]
+    if not (mk_changed or block_changed or excl_changed):
+        return new, False
+    return _revalidated(config, new)
+
+
+def _apply_demote_to_blocking(config: Any, hint: dict) -> tuple[Any, bool]:
+    column = hint.get("column")
+    if not isinstance(column, str) or not column:
+        return _safe_copy(config), False
+    new = config.model_copy(deep=True)
+    mks, mk_changed = _strip_column_from_matchkeys(new.get_matchkeys(), column)
+    if mk_changed:
+        _set_matchkeys(new, mks)
+    block_changed = _add_blocking_pass(new, column)
+    if not (mk_changed or block_changed):
+        return new, False
+    return _revalidated(config, new)
+
+
+def _apply_raise_threshold(config: Any, hint: dict) -> tuple[Any, bool]:
+    new = config.model_copy(deep=True)
+    changed = False
+    out: list = []
+    for mk in new.get_matchkeys():
+        if (
+            mk.type == "weighted"
+            and mk.threshold is not None
+            and mk.threshold < _THRESHOLD_CEILING
+        ):
+            bumped = min(_THRESHOLD_CEILING, round(mk.threshold + _THRESHOLD_BUMP, 6))
+            if bumped > mk.threshold:
+                out.append(mk.model_copy(update={"threshold": bumped}))
+                changed = True
+                continue
+        out.append(mk)
+    if not changed:
+        return new, False
+    _set_matchkeys(new, out)
+    return _revalidated(config, new)
+
+
+# Hint actions that map to a deterministic, data-free config edit. The
+# remaining vocabulary diagnose_config emits — ``tighten_blocking`` /
+# ``compound_blocking`` — needs to know WHICH fields to combine (a data + intent
+# question), so it has no safe auto-application and falls through to
+# ``(unchanged, False)``.
+_HINT_HANDLERS = {
+    "exclude_column": _apply_exclude_column,
+    "demote_to_blocking": _apply_demote_to_blocking,
+    "raise_threshold": _apply_raise_threshold,
+}
+
+
+def apply_hint(config: GoldenMatchConfig, fix_config_hint: dict) -> tuple[Any, bool]:
+    """Apply one ``diagnose_config`` ``fix_config_hint`` to a config.
+
+    The inverse of the ``fix_config_hint`` that each :func:`diagnose_config`
+    finding carries: it turns ``{"action": ..., "column": ...}`` back into a
+    changed :class:`~goldenmatch.config.schemas.GoldenMatchConfig`, so callers
+    stop re-implementing the translation (and it can't drift from the emit
+    side). Supported actions:
+
+    - ``exclude_column``: strip the column from every matchkey field and every
+      blocking key/pass, and add it to ``exclude_columns``.
+    - ``demote_to_blocking``: strip the column from every matchkey field and add
+      a single-field blocking pass on it (converting ``static``/``adaptive``
+      blocking to an explicit ``multi_pass`` union when needed).
+    - ``raise_threshold``: nudge every weighted matchkey's threshold up by
+      ``0.05`` (capped at ``0.99``).
+
+    Args:
+        config: the resolved ``GoldenMatchConfig`` to edit (never mutated).
+        fix_config_hint: a hint dict as produced by ``diagnose_config``. A whole
+            finding dict (carrying a nested ``fix_config_hint``) is tolerated.
+
+    Returns:
+        ``(new_config, applied)``. ``new_config`` is always a deep copy.
+        ``applied`` is ``True`` only when the hint changed the config and the
+        result re-validates. An unknown/malformed hint, an action that needs
+        information the hint doesn't carry (``tighten_blocking`` /
+        ``compound_blocking``), or a change that would produce an invalid config
+        all return ``(unchanged_copy, False)``. Never raises on a valid config.
+    """
+    hint = fix_config_hint
+    if not isinstance(hint, dict):
+        return _safe_copy(config), False
+    # Tolerate being handed a whole finding dict instead of just its hint.
+    if "action" not in hint and isinstance(hint.get("fix_config_hint"), dict):
+        hint = hint["fix_config_hint"]
+    handler = _HINT_HANDLERS.get(hint.get("action"))
+    if handler is None:
+        return _safe_copy(config), False
+    try:
+        return handler(config, hint)
+    except Exception:
+        return _safe_copy(config), False
