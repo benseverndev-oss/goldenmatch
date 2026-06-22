@@ -30,7 +30,7 @@ default-features = false
 optional = true
 
 [dependencies.rand]
-version = "0.8"
+version = "0.10"
 optional = true
 
 [dependencies.rand_chacha]
