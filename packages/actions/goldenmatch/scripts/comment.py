@@ -2,6 +2,7 @@
 import glob
 import json
 import os
+import shlex
 import subprocess
 
 RESULTS_DIR = "/tmp/goldenmatch-results"
@@ -47,6 +48,8 @@ def find_existing_comment() -> int | None:
     pr = os.environ.get("PR_NUMBER", "")
     if not repo or not pr:
         return None
+    if not pr.isdigit():
+        return None
     try:
         result = subprocess.run(
             ["gh", "api", f"repos/{repo}/issues/{pr}/comments", "--jq",
@@ -65,18 +68,21 @@ def post_comment(body: str) -> None:
     if not repo or not pr:
         print("Not a PR context — skipping comment.")
         return
+    if not pr.isdigit():
+        print("Not a PR context — skipping comment.")
+        return
     existing = find_existing_comment()
     if existing:
         subprocess.run(
             ["gh", "api", f"repos/{repo}/issues/comments/{existing}",
-             "-X", "PATCH", "-f", f"body={body}"],
+             "-X", "PATCH", "-f", f"body={shlex.quote(body)}"],
             check=True, capture_output=True,
         )
         print(f"Updated existing comment #{existing}")
     else:
         subprocess.run(
             ["gh", "api", f"repos/{repo}/issues/{pr}/comments",
-             "-f", f"body={body}"],
+             "-f", f"body={shlex.quote(body)}"],
             check=True, capture_output=True,
         )
         print("Posted new comment")
