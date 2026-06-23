@@ -54,16 +54,24 @@ pub fn radial_variance(grid: &[Vec<f64>]) -> Vec<f64> {
             profile.push(0.0);
             continue;
         }
-        let mean = vals.iter().sum::<f64>() / vals.len() as f64;
-        // Faithful translation of CPython's `sum((v-mean)*(v-mean) for v in vals)`:
-        // each squared deviation is a distinct rounded float, then summed left to
-        // right. Materialising the squares (rather than `.map().sum()`) keeps the
-        // multiply and the accumulating add from ever contracting into one fused
-        // mul-add, so the result is bit-identical to the reference (the golden
-        // fixture is the bit-exact check).
-        let squares: Vec<f64> = vals.iter().map(|&v| (v - mean) * (v - mean)).collect();
-        let var = squares.iter().sum::<f64>() / vals.len() as f64;
-        profile.push(var);
+        // Explicit scalar accumulation loops (NOT `.iter().sum()` / `.map().sum()`):
+        // the iterator-combinator reductions drift by a ULP under the wheel's
+        // cross-crate thin-LTO (LLVM reassociates the contiguous-slice sum), while
+        // this is the exact ordered-accumulation shape `phash.rs`'s DCT uses, which
+        // is parity-stable in the same release+LTO wheel. Matches CPython's strict
+        // left-to-right `sum(...)`. The golden fixture is the bit-exact check.
+        let count = vals.len() as f64;
+        let mut sum = 0.0;
+        for &v in &vals {
+            sum += v;
+        }
+        let mean = sum / count;
+        let mut sq_sum = 0.0;
+        for &v in &vals {
+            let d = v - mean;
+            sq_sum += d * d;
+        }
+        profile.push(sq_sum / count);
     }
     profile
 }
