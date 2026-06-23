@@ -79,6 +79,12 @@ class EvidenceEdge:
     controller_snapshot: dict[str, Any] | None = None
     run_name: str | None = None
     dataset: str | None = None
+    # Provenance spine (#1075/#1078): WHO created this write and their trust.
+    # ``actor`` is a free-form principal id ("pipeline", "agent:<name>",
+    # "steward:<user>"); ``trust`` in [0, 1]. Both nullable -- pre-provenance rows
+    # and callers that don't supply them read back as None.
+    actor: str | None = None
+    trust: float | None = None
     recorded_at: datetime = field(default_factory=datetime.now)
     edge_id: int | None = None
 
@@ -90,6 +96,10 @@ class IdentityEvent:
     payload: dict[str, Any] | None = None
     run_name: str | None = None
     dataset: str | None = None
+    # Provenance spine (#1075/#1078): WHO made this change and their trust.
+    # See EvidenceEdge for the contract. The "why" rides in ``payload['reason']``.
+    actor: str | None = None
+    trust: float | None = None
     recorded_at: datetime = field(default_factory=datetime.now)
     event_id: int | None = None
 

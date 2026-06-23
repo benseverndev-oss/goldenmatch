@@ -27,7 +27,7 @@ from goldenmatch.identity.model import (
 
 log = logging.getLogger("goldenmatch.identity")
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS identity_nodes (
@@ -72,6 +72,8 @@ CREATE TABLE IF NOT EXISTS evidence_edges (
     controller_snapshot  TEXT,
     run_name             TEXT,
     dataset              TEXT,
+    actor                TEXT,
+    trust                REAL,
     recorded_at          TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     -- v2 schema: ``kind`` is part of the unique key so a single run can record
     -- both a ``same_as`` edge and a ``conflicts_with`` edge for the same
@@ -89,6 +91,8 @@ CREATE TABLE IF NOT EXISTS identity_events (
     payload      TEXT,
     run_name     TEXT,
     dataset      TEXT,
+    actor        TEXT,
+    trust        REAL,
     recorded_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_events_entity ON identity_events(entity_id);
@@ -248,8 +252,28 @@ class IdentityStore:
                 COMMIT;
                 """
             )
+        if version < 3:
+            # v2 -> v3: provenance spine (#1075/#1078). Add actor/trust to the
+            # event + edge logs. Idempotent (PRAGMA-guarded) so it's safe on a
+            # fresh DB whose tables already carry the columns from ``_SCHEMA`` and
+            # on the rebuilt-evidence_edges path above (which drops them).
+            self._ensure_provenance_columns()
         if version < SCHEMA_VERSION:
             self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+
+    def _ensure_provenance_columns(self) -> None:
+        """Add the nullable ``actor``/``trust`` columns to the event + edge tables
+        if absent. SQLite has no ``ADD COLUMN IF NOT EXISTS``, so we probe
+        ``PRAGMA table_info`` first -- making the op idempotent across fresh,
+        v1-rebuilt, and v2 databases."""
+        for table in ("identity_events", "evidence_edges"):
+            cols = {
+                r[1] for r in self._conn.execute(f"PRAGMA table_info({table})")
+            }
+            if "actor" not in cols:
+                self._conn.execute(f"ALTER TABLE {table} ADD COLUMN actor TEXT")
+            if "trust" not in cols:
+                self._conn.execute(f"ALTER TABLE {table} ADD COLUMN trust REAL")
 
     def _pg_init_schema(self) -> None:
         ddl = """
@@ -292,9 +316,16 @@ class IdentityStore:
             controller_snapshot JSONB,
             run_name TEXT,
             dataset TEXT,
+            actor TEXT,
+            trust DOUBLE PRECISION,
             recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             UNIQUE(entity_id, record_a_id, record_b_id, kind, run_name)
         );
+        -- Provenance spine (#1075/#1078): add to pre-existing tables too (the
+        -- CREATE above only covers fresh DBs). ADD COLUMN IF NOT EXISTS is
+        -- idempotent on Postgres, so this runs safely on every store open.
+        ALTER TABLE evidence_edges ADD COLUMN IF NOT EXISTS actor TEXT;
+        ALTER TABLE evidence_edges ADD COLUMN IF NOT EXISTS trust DOUBLE PRECISION;
         CREATE INDEX IF NOT EXISTS idx_edges_entity ON evidence_edges(entity_id);
         CREATE INDEX IF NOT EXISTS idx_edges_pair   ON evidence_edges(record_a_id, record_b_id);
         CREATE INDEX IF NOT EXISTS idx_edges_run    ON evidence_edges(run_name);
@@ -305,8 +336,12 @@ class IdentityStore:
             payload JSONB,
             run_name TEXT,
             dataset TEXT,
+            actor TEXT,
+            trust DOUBLE PRECISION,
             recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
+        ALTER TABLE identity_events ADD COLUMN IF NOT EXISTS actor TEXT;
+        ALTER TABLE identity_events ADD COLUMN IF NOT EXISTS trust DOUBLE PRECISION;
         CREATE INDEX IF NOT EXISTS idx_events_entity ON identity_events(entity_id);
         CREATE INDEX IF NOT EXISTS idx_events_kind   ON identity_events(kind);
         CREATE INDEX IF NOT EXISTS idx_events_run    ON identity_events(run_name);
@@ -704,12 +739,13 @@ class IdentityStore:
                 "INSERT OR IGNORE INTO evidence_edges "
                 "(entity_id, record_a_id, record_b_id, kind, score, "
                 "matchkey_name, field_scores, negative_evidence, "
-                "controller_snapshot, run_name, dataset, recorded_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "controller_snapshot, run_name, dataset, actor, trust, recorded_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     edge.entity_id, a, b, edge.kind, edge.score,
                     edge.matchkey_name, fs, ne, cs, edge.run_name,
-                    edge.dataset, edge.recorded_at.isoformat(),
+                    edge.dataset, edge.actor, edge.trust,
+                    edge.recorded_at.isoformat(),
                 ),
             )
         else:
@@ -719,14 +755,15 @@ class IdentityStore:
                     "INSERT INTO evidence_edges "
                     "(entity_id, record_a_id, record_b_id, kind, score, "
                     "matchkey_name, field_scores, negative_evidence, "
-                    "controller_snapshot, run_name, dataset, recorded_at) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                    "controller_snapshot, run_name, dataset, actor, trust, recorded_at) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
                     "ON CONFLICT (entity_id, record_a_id, record_b_id, "
                     "kind, run_name) DO NOTHING",
                     (
                         edge.entity_id, a, b, edge.kind, edge.score,
                         edge.matchkey_name, fs, ne, cs, edge.run_name,
-                        edge.dataset, edge.recorded_at.isoformat(),
+                        edge.dataset, edge.actor, edge.trust,
+                        edge.recorded_at.isoformat(),
                     ),
                 )
         row = self._fetchone(
@@ -790,11 +827,12 @@ class IdentityStore:
         payload = json.dumps(event.payload) if event.payload is not None else None
         self._exec(
             "INSERT INTO identity_events "
-            "(entity_id, kind, payload, run_name, dataset, recorded_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "(entity_id, kind, payload, run_name, dataset, actor, trust, recorded_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 event.entity_id, event.kind, payload, event.run_name,
-                event.dataset, event.recorded_at.isoformat(),
+                event.dataset, event.actor, event.trust,
+                event.recorded_at.isoformat(),
             ),
         )
         row = self._fetchone(
@@ -819,6 +857,38 @@ class IdentityStore:
                 "SELECT * FROM identity_events WHERE entity_id = ? ORDER BY event_id",
                 (entity_id,),
             )
+        return [self._row_to_event(r) for r in rows]
+
+    def export_audit_log(
+        self, *, dataset: str | None = None, actor: str | None = None,
+        since: datetime | None = None,
+    ) -> list[IdentityEvent]:
+        """The full append-only event log in commit order (event_id ASC), for
+        compliance review/export (#1078). Optional ``dataset`` / ``actor`` /
+        ``since`` filters. Each event carries who (``actor``), trust, when
+        (``recorded_at``), why (``payload['reason']``) -- so a reviewer can
+        reconstruct exactly which actor changed what, when, and on what basis.
+        Callers serialize to JSONL/CSV as needed."""
+        if self._backend == "mongo":
+            return self._mongo.export_audit_log(
+                dataset=dataset, actor=actor, since=since
+            )
+        clauses: list[str] = []
+        params: list[Any] = []
+        if dataset is not None:
+            clauses.append("dataset = ?")
+            params.append(dataset)
+        if actor is not None:
+            clauses.append("actor = ?")
+            params.append(actor)
+        if since is not None:
+            clauses.append("recorded_at >= ?")
+            params.append(since.isoformat())
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        rows = self._fetchall(
+            f"SELECT * FROM identity_events{where} ORDER BY event_id",
+            tuple(params),
+        )
         return [self._row_to_event(r) for r in rows]
 
     def has_run_event(self, entity_id: str, run_name: str, kind: str) -> bool:
@@ -935,6 +1005,8 @@ class IdentityStore:
             controller_snapshot=_maybe_json(row["controller_snapshot"]),
             run_name=row["run_name"],
             dataset=row["dataset"],
+            actor=_row_get(row, "actor"),
+            trust=_row_get(row, "trust"),
             recorded_at=_to_dt(row["recorded_at"]),
             edge_id=row["edge_id"],
         )
@@ -950,6 +1022,8 @@ class IdentityStore:
             payload=payload,
             run_name=row["run_name"],
             dataset=row["dataset"],
+            actor=_row_get(row, "actor"),
+            trust=_row_get(row, "trust"),
             recorded_at=_to_dt(row["recorded_at"]),
             event_id=row["event_id"],
         )
@@ -964,3 +1038,15 @@ def _to_dt(v: Any) -> datetime:
         except ValueError:
             return datetime.strptime(v, "%Y-%m-%d %H:%M:%S")
     return datetime.now()
+
+
+def _row_get(row: Any, key: str) -> Any:
+    """Column value or None if the column is absent -- tolerates rows from a
+    pre-provenance schema (sqlite3.Row raises IndexError, dict raises KeyError on
+    a missing key) so reads never break before the migration runs."""
+    try:
+        if hasattr(row, "keys") and key not in row.keys():
+            return None
+        return row[key]
+    except (KeyError, IndexError):
+        return None

@@ -167,11 +167,15 @@ def manual_merge(
     absorb_entity_id: str,
     reason: str | None = None,
     run_name: str = "manual",
+    actor: str | None = None,
+    trust: float | None = None,
 ) -> dict[str, Any]:
     """Manually merge ``absorb_entity_id`` into ``keep_entity_id``.
 
     Reassigns every record of the absorbed entity to the kept entity and
-    retires the loser. Emits ``manual_merge`` events on both sides.
+    retires the loser. Emits ``manual_merge`` events on both sides, stamped with
+    ``actor``/``trust`` provenance (#1075) so the audit log records WHO merged
+    these and on what authority.
     """
     winner = store.get_identity(keep_entity_id)
     loser = store.get_identity(absorb_entity_id)
@@ -189,13 +193,13 @@ def manual_merge(
         entity_id=keep_entity_id,
         kind=EventKind.MANUAL_MERGE.value,
         payload={"absorbed": absorb_entity_id, "reason": reason},
-        run_name=run_name, recorded_at=now,
+        run_name=run_name, actor=actor, trust=trust, recorded_at=now,
     ))
     store.emit_event(IdentityEvent(
         entity_id=absorb_entity_id,
         kind=EventKind.MANUAL_MERGE.value,
         payload={"merged_into": keep_entity_id, "reason": reason},
-        run_name=run_name, recorded_at=now,
+        run_name=run_name, actor=actor, trust=trust, recorded_at=now,
     ))
     return {"keep": keep_entity_id, "absorbed": absorb_entity_id, "at": now.isoformat()}
 
@@ -206,12 +210,15 @@ def manual_split(
     record_ids: list[str],
     reason: str | None = None,
     run_name: str = "manual",
+    actor: str | None = None,
+    trust: float | None = None,
 ) -> dict[str, Any]:
     """Detach ``record_ids`` from ``entity_id`` into a brand-new identity.
 
     The original identity keeps its remaining records. The new identity is
     created with no rolled-up golden record (caller can refresh by re-running
-    dedupe or via a steward UI).
+    dedupe or via a steward UI). The ``manual_split`` events carry ``actor``/
+    ``trust`` provenance (#1075).
     """
     from goldenmatch.identity.store import new_entity_id
 
@@ -242,13 +249,13 @@ def manual_split(
         entity_id=entity_id,
         kind=EventKind.MANUAL_SPLIT.value,
         payload={"split_to": new_eid, "records": moved, "reason": reason},
-        run_name=run_name, recorded_at=now,
+        run_name=run_name, actor=actor, trust=trust, recorded_at=now,
     ))
     store.emit_event(IdentityEvent(
         entity_id=new_eid,
         kind=EventKind.MANUAL_SPLIT.value,
         payload={"split_from": entity_id, "records": moved, "reason": reason},
-        run_name=run_name, recorded_at=now,
+        run_name=run_name, actor=actor, trust=trust, recorded_at=now,
     ))
     return {"new_entity_id": new_eid, "moved": moved, "at": now.isoformat()}
 

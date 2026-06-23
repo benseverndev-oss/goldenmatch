@@ -259,6 +259,7 @@ def resolve_clusters(
     weak_confidence_threshold: float = 0.6,
     pair_score_view: ClusterPairScores | None = None,
     cluster_frames: ClusterFrames | None = None,
+    actor: str = "pipeline",
 ) -> ResolveSummary:
     """Resolve run-local clusters to durable identities.
 
@@ -529,6 +530,7 @@ def resolve_clusters(
                         "record_ids": record_ids,
                     },
                     run_name=run_name, dataset=dataset, recorded_at=now,
+                    actor=actor, trust=_cluster_confidence(info),
                 ))
                 summary.events_emitted += 1
             summary.created += 1
@@ -554,6 +556,7 @@ def resolve_clusters(
                     kind=EventKind.ABSORBED_RECORD.value,
                     payload={"record_id": rid, "cluster_id": cluster_id},
                     run_name=run_name, dataset=dataset, recorded_at=now,
+                    actor=actor, trust=_cluster_confidence(info),
                 ))
                 summary.events_emitted += 1
                 summary.absorbed_records += 1
@@ -588,6 +591,7 @@ def resolve_clusters(
                     "member_count": size,
                 },
                 run_name=run_name, dataset=dataset, recorded_at=now,
+                actor=actor, trust=_cluster_confidence(info),
             ))
             summary.events_emitted += 1
             for loser in losers:
@@ -597,6 +601,7 @@ def resolve_clusters(
                     kind=EventKind.MERGED_WITH.value,
                     payload={"merged_into": winner},
                     run_name=run_name, dataset=dataset, recorded_at=now,
+                    actor=actor, trust=_cluster_confidence(info),
                 ))
                 summary.events_emitted += 1
             entity_id = winner
@@ -658,6 +663,7 @@ def resolve_clusters(
                 controller_snapshot=controller_snapshot,
                 run_name=run_name,
                 dataset=dataset,
+                actor=actor, trust=float(score),
             ))
             summary.edges_added += 1
 
@@ -701,6 +707,8 @@ def resolve_clusters(
                     controller_snapshot=controller_snapshot,
                     run_name=run_name,
                     dataset=dataset,
+                    actor=actor,
+                    trust=float(bottleneck_score) if bottleneck_score is not None else None,
                 ))
                 summary.conflicts_flagged += 1
 
@@ -733,6 +741,8 @@ def resolve_clusters(
                         controller_snapshot=controller_snapshot,
                         run_name=run_name,
                         dataset=dataset,
+                        actor=actor,
+                        trust=prior_edge.score,
                     ))
                     summary.conflicts_flagged += 1
 
