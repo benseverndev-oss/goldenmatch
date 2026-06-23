@@ -162,7 +162,7 @@ export type ClusterDetail = {
 
 export const SCORERS = [
   "exact", "jaro_winkler", "levenshtein", "token_sort", "soundex_match",
-  "embedding", "record_embedding", "ensemble", "dice", "jaccard",
+  "embedding", "record_embedding", "ensemble", "dice", "jaccard", "phash",
 ] as const;
 
 export const TRANSFORMS = [

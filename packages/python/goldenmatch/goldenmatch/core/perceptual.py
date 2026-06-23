@@ -46,6 +46,7 @@ __all__ = [
     "HASH_SIZE",
     "phash_image",
     "phash_image_batch",
+    "phash_hex",
     # audio
     "AUDIO_FRAME",
     "AUDIO_HOP",
@@ -229,6 +230,15 @@ def phash_image(luma) -> int:
                 "native perceptual_phash_image unavailable (wheel skew); using Python fallback"
             )
     return _phash_image_python(grid)
+
+
+def phash_hex(h: int) -> str:
+    """Canonical fixed-width (16 hex char / 64-bit) string form of an image pHash.
+
+    The format the ``perceptual`` blocking strategy and the ``phash`` scorer
+    consume in a match column (``f"{h:016x}"``).
+    """
+    return format(h, "016x")
 
 
 def phash_image_batch(images: Sequence) -> list[int]:

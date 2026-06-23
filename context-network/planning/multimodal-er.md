@@ -176,9 +176,22 @@ existing embedding+ANN+score+explain spine via the optional encoder extras.
       `tests/test_native_perceptual_parity.py` asserts native↔python byte-identity
       over a randomized sweep + the fixture + validation (wired into the `native`
       CI lane). The default-on flip stays a perf/published-wheel decision.
-- [ ] Slice 3 — `BlockingConfig` strategy seam + scorer comparator seam (read
-      `core/blocker.py`, `core/scorer.py`), auto-config media-column rule, recall gate.
-- [ ] Decode adapters wired to the optional `[vision]`/`[audio]` extras.
+- [x] **Slice 3 — image pHash as a pipeline match feature.** A `phash` scorer
+      (hamming similarity over a hex perceptual hash; `core/scorer.py`, single +
+      NxN matrix, provenance via `explain._SCORER_NAMES`) and a `perceptual`
+      banded-hamming-LSH blocking strategy (`core/perceptual_blocker.py` +
+      `PerceptualKeyConfig` + `BlockingConfig.strategy="perceptual"` + dispatch).
+      `core/perceptual.phash_hex` produces the canonical 16-char column form. A
+      media column is now a first-class block + score feature ("modality as
+      evidence"). Verified end-to-end on real pHashes of image variants
+      (`tests/test_perceptual_feature.py`). Frontend dropdown const updated; TS
+      port of `phash`/`perceptual` is a follow-up.
+- [ ] Slice 3b (fast-follow) — **audio fingerprint as a feature** (variable-length
+      Haitsma-Kalker sequence → BER comparator + offset alignment; a distinct
+      shape from the fixed-width image case), an **auto-config media-column rule**
+      (detect an image/audio/hash column and wire the perceptual feature
+      zero-config), a **recall gate** on real image variants, and **decode
+      adapters** wired to the optional `[vision]`/`[audio]` extras.
 
 ---
 **Classification:** planning/active • **Last updated:** 2026-06-23
