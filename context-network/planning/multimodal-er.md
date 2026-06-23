@@ -160,8 +160,14 @@ existing embedding+ANN+score+explain spine via the optional encoder extras.
       `tests/fixtures/perceptual_golden.json`, `tests/test_perceptual_reference.py`
       (golden parity + invariance + validation). The algorithm params are now
       pinned by the fixture; the spec is the module docstring + this note.
-- [ ] Slice 2 — Rust `goldenmatch-perceptual-core` crate reproducing the fixture
-      byte-for-byte; native gating + `GOLDENMATCH_NATIVE=0/1` parity sweep.
+- [x] **Slice 2 — Rust `goldenmatch-perceptual-core` crate** (pyo3-free, standalone
+      `[workspace]`, mirrors `sketch-core`). `phash.rs` + `audio_fp.rs` reproduce
+      the committed fixture **byte-for-byte** (`tests/golden.rs`); wired into the
+      rust CI lane (cache workspace + explicit `cargo test`/`clippy`). Parity holds
+      because the transforms are direct (no FFT) and mirror the Python op order, so
+      on a shared libm the transcendental results are bit-identical. **Still TODO
+      for slice 2b:** the pyo3 `native` wrapper + `_native_loader` gating +
+      `GOLDENMATCH_NATIVE=0/1` Python↔native parity sweep.
 - [ ] Slice 3 — `BlockingConfig` strategy seam + scorer comparator seam (read
       `core/blocker.py`, `core/scorer.py`), auto-config media-column rule, recall gate.
 - [ ] Decode adapters wired to the optional `[vision]`/`[audio]` extras.
