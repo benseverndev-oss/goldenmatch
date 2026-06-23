@@ -11,8 +11,8 @@ forward. These pure (no native, no LLM) tests pin the new contract: edges read a
 
 from __future__ import annotations
 
-from goldengraph.synthesize import _format_subgraph, synthesize_local
-from conftest import RecordingLLM
+from goldengraph.synthesize import _extract_answer, _format_subgraph, synthesize_local
+from conftest import RecordingLLM, StubLLM
 
 _SUB = {
     "entities": [
@@ -58,3 +58,35 @@ def test_local_prompt_seed_names_optional():
     llm = RecordingLLM()
     synthesize_local("q?", _SUB, llm)
     assert "Anchor entities:" in llm.prompts[-1]  # falls back to a placeholder line
+
+
+# --- output parsing: the prediction is the Answer: line, not the scaffold ---
+
+
+def test_extract_answer_pulls_the_answer_line_off_the_chain_of_thought():
+    cot = (
+        "1. What system did Knight Rider come out on? -> Sega Genesis\n"
+        "2. What advantages did it have? -> 16-bit graphics\n"
+        "Answer: Sega Genesis"
+    )
+    assert _extract_answer(cot) == "Sega Genesis"
+
+
+def test_extract_answer_falls_back_to_last_nonempty_line_without_marker():
+    assert _extract_answer("hop one\nhop two\nExeter College\n") == "Exeter College"
+
+
+def test_extract_answer_is_case_insensitive_and_strips():
+    assert _extract_answer("reasoning...\nanswer:   the Politburo  ") == "the Politburo"
+
+
+def test_extract_answer_handles_empty():
+    assert _extract_answer("") == ""
+    assert _extract_answer("   ") == "   "
+
+
+def test_synthesize_local_returns_parsed_answer_not_full_completion():
+    # The whole point of the 2026-06-23 fix: the bench must see "Sega Genesis",
+    # not the "1. ... 2. ..." decomposition scaffold that capped answer_match at 0.
+    llm = StubLLM("1. sub-q one\n2. sub-q two\nAnswer: Sega Genesis")
+    assert synthesize_local("q?", _SUB, llm) == "Sega Genesis"
