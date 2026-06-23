@@ -153,10 +153,18 @@ existing embedding+ANN+score+explain spine via the optional encoder extras.
 ## Next steps
 
 - [x] Lock v1 scope.
-- [ ] Confirm the `BlockingConfig` strategy seam + scorer comparator seam are the
-      right insertion points (read `core/blocker.py`, `core/scorer.py`).
-- [ ] Draft ADR 0022 — Multimodal ER (modality-as-evidence, perceptual crawl tier).
-- [ ] Spec the kernel algorithms + parity contract (`docs/superpowers/specs/`).
+- [x] Draft ADR 0022 — Multimodal ER (modality-as-evidence, perceptual crawl tier).
+- [x] **Slice 1 — authoritative Python reference + golden vectors.**
+      `core/perceptual.py` (stdlib-only DCT pHash + Haitsma-Kalker audio
+      fingerprint, decoded-input contract), `scripts/gen_perceptual_golden.py`,
+      `tests/fixtures/perceptual_golden.json`, `tests/test_perceptual_reference.py`
+      (golden parity + invariance + validation). The algorithm params are now
+      pinned by the fixture; the spec is the module docstring + this note.
+- [ ] Slice 2 — Rust `goldenmatch-perceptual-core` crate reproducing the fixture
+      byte-for-byte; native gating + `GOLDENMATCH_NATIVE=0/1` parity sweep.
+- [ ] Slice 3 — `BlockingConfig` strategy seam + scorer comparator seam (read
+      `core/blocker.py`, `core/scorer.py`), auto-config media-column rule, recall gate.
+- [ ] Decode adapters wired to the optional `[vision]`/`[audio]` extras.
 
 ---
 **Classification:** planning/active • **Last updated:** 2026-06-23
