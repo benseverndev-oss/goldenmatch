@@ -25,6 +25,8 @@ VALID_SCORERS = frozenset({
     # Hamming similarity over a hex perceptual hash (image pHash) -- the
     # multimodal-ER crawl-tier media-as-evidence comparator (ADR 0022).
     "phash",
+    # Offset-aligned bit-error-rate over a hex audio fingerprint (ADR 0022).
+    "audio_fp",
     # Free deterministic equality scorers (1.0/0.0): initialism collapse
     # ("IBM" <-> "International Business Machines") and alias canonicalization
     # ("Acme Inc" <-> "Acme Incorporated", "Bob" <-> "Robert").

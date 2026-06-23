@@ -186,12 +186,27 @@ existing embedding+ANN+score+explain spine via the optional encoder extras.
       evidence"). Verified end-to-end on real pHashes of image variants
       (`tests/test_perceptual_feature.py`). Frontend dropdown const updated; TS
       port of `phash`/`perceptual` is a follow-up.
-- [ ] Slice 3b (fast-follow) — **audio fingerprint as a feature** (variable-length
-      Haitsma-Kalker sequence → BER comparator + offset alignment; a distinct
-      shape from the fixed-width image case), an **auto-config media-column rule**
-      (detect an image/audio/hash column and wire the perceptual feature
-      zero-config), a **recall gate** on real image variants, and **decode
-      adapters** wired to the optional `[vision]`/`[audio]` extras.
+- [x] **Slice 3b — audio-fp feature + auto-config rule + recall gate + extras.**
+      (1) `audio_fp` scorer (`core/scorer.py`, single + matrix) over the
+      offset-aligned BER (`perceptual.audio_ber_aligned` + `audio_fp_hex` column
+      form) — the variable-length counterpart to image pHash. (2)
+      `core/perceptual_autoconfig.py` detects fixed-width-hex media-hash columns
+      and appends a `phash`/`audio_fp` matchkey (+ perceptual blocking for an image
+      column when nothing else blocks); wired into `auto_configure_df` behind
+      `GOLDENMATCH_PERCEPTUAL_AUTOCONFIG=1` (default OFF, fail-open,
+      byte-identical when off). (3) Always-on recall gate over 5 image-variant
+      pairs (`test_perceptual_feature.py`). (4) `[vision]`/`[audio]` pyproject
+      extras backing the `decode_image_to_luma`/`decode_audio_to_mono` adapters.
+      TS port of the `phash`/`perceptual`/`audio_fp` surfaces remains a follow-up.
+
+## Status (crawl tier)
+
+The image-and-audio perceptual crawl tier is **complete end-to-end**: reference
+(slice 1) → byte-parity Rust kernel (2) → PyO3 binding (2b) → pipeline match
+feature (3) → audio feature + zero-config auto-wiring + recall gate + extras (3b).
+The wedge (#3 modality-as-evidence) is real. Remaining frontier per the priority
+table: within-modality ER (#1) and cross-modal (#2); plus the biometric
+template-protection / PPRL privacy guardrail and the BYO-vector "walk" tier.
 
 ---
 **Classification:** planning/active • **Last updated:** 2026-06-23

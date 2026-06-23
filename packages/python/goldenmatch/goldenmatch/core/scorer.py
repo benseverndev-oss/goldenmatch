@@ -195,6 +195,8 @@ def score_field(val_a: str | None, val_b: str | None, scorer: str) -> float | No
         return _qgram_score_single(val_a, val_b)
     elif scorer == "phash":
         return _phash_score_single(val_a, val_b)
+    elif scorer == "audio_fp":
+        return _audio_fp_score_single(val_a, val_b)
     else:
         # Check plugin registry
         from goldenmatch.plugins.registry import PluginRegistry
@@ -549,6 +551,8 @@ def _fuzzy_score_matrix(
         return _jaccard_score_matrix(values)
     elif scorer_name == "phash":
         return _phash_score_matrix(values)
+    elif scorer_name == "audio_fp":
+        return _audio_fp_score_matrix(values)
     elif scorer_name == "qgram":
         return _qgram_score_matrix(values)
     else:
@@ -864,6 +868,34 @@ def _phash_score_matrix(values: list) -> np.ndarray:
     sim = 1.0 - hamming / max_len
     sim = np.where(valid[:, None] & valid[None, :], sim, 0.0)
     return sim.astype(np.float64)
+
+
+def _audio_fp_score_single(val_a: str, val_b: str) -> float:
+    """Offset-aligned similarity (``1 - best BER``) of two hex audio fingerprints."""
+    from goldenmatch.core.perceptual import audio_ber_aligned, audio_fp_from_hex
+
+    return 1.0 - audio_ber_aligned(audio_fp_from_hex(val_a), audio_fp_from_hex(val_b))
+
+
+def _audio_fp_score_matrix(values: list) -> np.ndarray:
+    """NxN offset-aligned audio-fingerprint similarity. Audio fingerprints are
+    variable-length with an alignment search, so this is a symmetric pairwise loop
+    (block-sized N); None values score 0 against everything."""
+    from goldenmatch.core.perceptual import audio_ber_aligned, audio_fp_from_hex
+
+    n = len(values)
+    parsed = [audio_fp_from_hex(v) if v is not None else None for v in values]
+    out = np.zeros((n, n), dtype=np.float64)
+    for i in range(n):
+        if parsed[i] is None:
+            continue
+        out[i, i] = 1.0
+        for j in range(i + 1, n):
+            if parsed[j] is None:
+                continue
+            sim = 1.0 - audio_ber_aligned(parsed[i], parsed[j])
+            out[i, j] = out[j, i] = sim
+    return out
 
 
 def _qgram_set(s: str, n: int = 3) -> set[str]:

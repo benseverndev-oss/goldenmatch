@@ -127,3 +127,68 @@ def test_perceptual_feature_blocks_and_scores_image_variants():
     assert any({0, 1} <= s for s in member_sets)
     # and the scorer ranks the variant above the distinct image (the evidence)
     assert score_field(h0, hb, "phash") > score_field(h0, hd, "phash")
+
+
+# --------------------------------------------------------------------------- #
+# recall gate — every image variant must block with its source                #
+# --------------------------------------------------------------------------- #
+def _pattern(fx: float, fy: float, fd: float) -> list[list[int]]:
+    return [
+        [
+            max(0, min(255, int(128 + 45 * math.sin(x / fx) + 40 * math.sin(y / fy)
+                                + 30 * math.sin((x + y) / fd))))
+            for x in range(44)
+        ]
+        for y in range(44)
+    ]
+
+
+def test_perceptual_blocking_recall_gate():
+    bases = [
+        _pattern(2.0, 3.0, 2.5),
+        _pattern(1.5, 4.0, 3.5),
+        _pattern(3.0, 2.0, 2.0),
+        _pattern(2.5, 2.5, 4.5),
+        _pattern(1.8, 3.3, 2.8),
+    ]
+    ids: list[int] = []
+    hashes: list[str] = []
+    for i, b in enumerate(bases):
+        ids += [2 * i, 2 * i + 1]
+        hashes += [
+            perceptual.phash_hex(perceptual.phash_image(b)),
+            perceptual.phash_hex(perceptual.phash_image(_blur(b))),
+        ]
+    df = pl.DataFrame({"__row_id__": ids, "ph": hashes})
+    cfg = BlockingConfig(strategy="perceptual", perceptual=PerceptualKeyConfig(column="ph"))
+    member_sets = [set(b.df.collect()["__row_id__"].to_list()) for b in build_blocks(df.lazy(), cfg)]
+    for i in range(len(bases)):  # recall: each variant pair co-occurs in a block
+        assert any({2 * i, 2 * i + 1} <= s for s in member_sets), f"variant {i} not blocked"
+
+
+# --------------------------------------------------------------------------- #
+# audio fingerprint scorer (offset-aligned BER)                               #
+# --------------------------------------------------------------------------- #
+def _sines(length: int, sample_rate: int, freqs: list[float]) -> list[float]:
+    return [
+        sum(math.sin(2.0 * math.pi * f * n / sample_rate) for f in freqs) / len(freqs)
+        for n in range(length)
+    ]
+
+
+def test_audio_fp_hex_roundtrip():
+    fp = [0x0A004AC4, 0xFFFB53BF, 0x00000001]
+    assert perceptual.audio_fp_from_hex(perceptual.audio_fp_hex(fp)) == fp
+
+
+def test_audio_fp_scorer_aligned_and_discriminating():
+    sr = 44100
+    sig = _sines(20000, sr, [440.0, 660.0, 880.0])
+    ha = perceptual.audio_fp_hex(perceptual.fingerprint_audio(sig, sr))
+    assert score_field(ha, ha, "audio_fp") == 1.0
+    # a recording that starts ~2 frames later still aligns to a high score
+    shifted = perceptual.audio_fp_hex(perceptual.fingerprint_audio(sig[4096:], sr))
+    aligned = score_field(ha, shifted, "audio_fp")
+    other = perceptual.audio_fp_hex(perceptual.fingerprint_audio(_sines(20000, sr, [1200.0, 1700.0]), sr))
+    assert aligned > 0.8
+    assert score_field(ha, other, "audio_fp") < aligned

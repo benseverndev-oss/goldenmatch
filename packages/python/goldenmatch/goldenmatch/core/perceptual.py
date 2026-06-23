@@ -58,6 +58,9 @@ __all__ = [
     "popcount",
     "hamming",
     "audio_ber",
+    "audio_ber_aligned",
+    "audio_fp_hex",
+    "audio_fp_from_hex",
     # optional decode adapters (lazy heavy imports)
     "decode_image_to_luma",
     "decode_audio_to_mono",
@@ -399,6 +402,58 @@ def audio_ber(fp_a: Sequence[int], fp_b: Sequence[int]) -> float:
     for i in range(n):
         bits += (fp_a[i] ^ fp_b[i]).bit_count()
     return bits / (n * (AUDIO_BANDS - 1))
+
+
+def audio_ber_aligned(
+    fp_a: Sequence[int], fp_b: Sequence[int], min_overlap: int = 8
+) -> float:
+    """Best (minimum) bit-error-rate over all frame offsets of one fingerprint
+    against the other — robust to recordings that start at different points.
+
+    Slides ``fp_b`` across ``fp_a`` and returns the smallest BER over any overlap
+    of at least ``min_overlap`` frames (capped at the shorter length, so short
+    inputs still align). 0.0 == a perfectly-aligned identical stretch; ~0.5 ==
+    unrelated. Empty inputs -> 1.0. This is the offset-search ADR 0022 flagged as
+    the scoring-side counterpart to the frame-aligned :func:`audio_ber`.
+    """
+    a = list(fp_a)
+    b = list(fp_b)
+    la, lb = len(a), len(b)
+    if la == 0 or lb == 0:
+        return 1.0
+    need = min(min_overlap, la, lb)
+    nb = AUDIO_BANDS - 1
+    best = 1.0
+    # offset = index in `a` that `b[0]` aligns to (negative = b starts earlier)
+    for off in range(-(lb - 1), la):
+        lo = max(0, off)
+        hi = min(la, off + lb)
+        overlap = hi - lo
+        if overlap < need:
+            continue
+        bits = 0
+        for i in range(lo, hi):
+            bits += (a[i] ^ b[i - off]).bit_count()
+        ber = bits / (overlap * nb)
+        if ber < best:
+            best = ber
+    return best
+
+
+def audio_fp_hex(fp: Sequence[int]) -> str:
+    """Canonical column form of an audio fingerprint: each 32-bit sub-fingerprint
+    as 8 fixed-width hex chars, concatenated (the form the ``audio_fp`` scorer
+    consumes)."""
+    return "".join(format(int(w) & 0xFFFFFFFF, "08x") for w in fp)
+
+
+def audio_fp_from_hex(s: str) -> list[int]:
+    """Inverse of :func:`audio_fp_hex` — parse a concatenated 8-hex-char-per-word
+    fingerprint string (``0x`` prefix tolerated) back to a list of ints."""
+    if s[:2] in ("0x", "0X"):
+        s = s[2:]
+    usable = len(s) - (len(s) % 8)
+    return [int(s[i : i + 8], 16) for i in range(0, usable, 8)]
 
 
 # ===================== optional decode adapters (upstream) ===================

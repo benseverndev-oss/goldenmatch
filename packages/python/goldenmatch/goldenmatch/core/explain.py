@@ -32,6 +32,7 @@ _SCORER_NAMES = {
     "dice": "Dice coefficient",
     "jaccard": "Jaccard similarity",
     "phash": "perceptual-hash hamming similarity",
+    "audio_fp": "audio-fingerprint alignment",
     "embedding": "semantic similarity",
     "record_embedding": "record similarity",
 }

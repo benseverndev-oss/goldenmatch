@@ -67,6 +67,16 @@ embeddings = [
     "sentence-transformers>=2.2",
     "faiss-cpu>=1.7",
 ]
+# Decode adapters for the multimodal-ER crawl tier (ADR 0022). The perceptual
+# kernel itself is dependency-free (operates on decoded luma grids / PCM); these
+# only back core.perceptual.decode_image_to_luma / decode_audio_to_mono so an
+# image-path / audio-path column can be hashed without a manual decode step.
+vision = [
+    "Pillow>=10.0",
+]
+audio = [
+    "soundfile>=0.12",
+]
 # In-house trainable embedder: ONNX export + onnxruntime inference. The numpy
 # forward pass works without these; they're needed only for .onnx export and the
 # onnxruntime-backed inference path.
@@ -182,7 +192,7 @@ bench = [
     "pyarrow>=15",  # splink 4.x requires pyarrow>=15 (stricter than core >=10)
 ]
 all = [
-    "goldenmatch[embeddings,llm,postgres,mcp,quality,transform,web]",
+    "goldenmatch[embeddings,llm,postgres,mcp,quality,transform,web,vision,audio]",
 ]
 
 [tool.hatch.build.targets.wheel]
