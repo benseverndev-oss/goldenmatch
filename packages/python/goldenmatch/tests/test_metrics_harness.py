@@ -128,6 +128,23 @@ def test_accuracy_probe_is_deterministic():
     assert a == b
 
 
+def test_semantic_blocking_probe_shows_recall_lift():
+    out = harness.probe_semantic_blocking()
+    assert out.group == "accuracy" and out.error is None
+    m = out.metrics
+    # the ANN semantic source must reach pairs the structured keys miss --
+    # candidate-generation recall strictly above the structured baseline.
+    assert 0.0 <= m["blocking_recall_baseline"] < m["blocking_recall_semantic"] <= 1.0
+    assert m["recall_lift"] > 0.0
+    assert m["ann_pairs_recovered"] >= 1
+    assert m["ann_candidate_pairs"] >= m["ann_pairs_recovered"]
+
+
+def test_semantic_blocking_probe_is_deterministic():
+    # offline zero-config in-house embedder + ANN must be byte-stable run-to-run.
+    assert harness.probe_semantic_blocking().metrics == harness.probe_semantic_blocking().metrics
+
+
 def test_perf_probe_records_wall_and_counts():
     out = harness.probe_perf(n_entities=120)
     assert out.group == "perf" and out.error is None

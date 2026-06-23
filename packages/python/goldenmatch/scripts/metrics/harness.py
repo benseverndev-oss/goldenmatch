@@ -1,10 +1,11 @@
 """Unified metrics harness -- one command for the metrics that matter.
 
 Runs a suite of offline, deterministic **probes** (accuracy: F1 / precision /
-recall on labeled synthetic data; performance: wall, peak RSS, throughput, stage
-timings) and writes a single structured report. Diffs the report against a
-committed baseline (``baseline.json``) with per-metric tolerances so you can see,
-in one command, whether a code change moved a metric.
+recall on labeled synthetic data; semantic blocking: candidate-generation recall
+lift from the ANN source; performance: wall, peak RSS, throughput, stage timings)
+and writes a single structured report. Diffs the report against a committed
+baseline (``baseline.json``) with per-metric tolerances so you can see, in one
+command, whether a code change moved a metric.
 
 Why this exists: the repo's metrics machinery is sophisticated but fragmented
 (``run_benchmarks.py``, ``scale_audit*.py``, ``core/bench.py``, the FS panel) --
@@ -156,6 +157,62 @@ def _dedupe(rows: list[dict[str, Any]]):
     )
 
 
+def _recovered_pairs(result) -> set[tuple[int, int]]:
+    """The within-cluster (min, max) position pairs a dedupe result merged.
+
+    Cluster members are row positions (== ``__row_id__`` after the generator's
+    shuffle), so this is directly comparable to the ground-truth pair set.
+    """
+    pred: set[tuple[int, int]] = set()
+    for c in (result.clusters or {}).values():
+        m = sorted(c["members"])
+        for i in range(len(m)):
+            for j in range(i + 1, len(m)):
+                pred.add((m[i], m[j]))
+    return pred
+
+
+# ANN semantic-blocking operating point (offline zero-config in-house embedder).
+# threshold 0.7 / top_k 20: the recall-leaning candidate-generation knob whose
+# job is to REACH true pairs the structured/fuzzy keys miss. Scoring precision is
+# a separate concern (the scorer's), so we measure candidate completeness, not F1.
+_ANN_THRESHOLD = 0.7
+_ANN_TOP_K = 20
+
+
+def _ann_candidate_pairs(rows: list[dict[str, Any]]) -> set[tuple[int, int]]:
+    """Candidate pairs the ANN semantic-blocking source emits over the full name,
+    using the zero-config in-house embedder (deterministic, offline -- a fixed-seed
+    random projection approximating char-n-gram overlap; no model file, env, cloud
+    or torch). Gated at :data:`_ANN_THRESHOLD`."""
+    import polars as pl
+    from goldenmatch.config.schemas import BlockingConfig
+    from goldenmatch.core.blocker import build_blocks
+
+    df = (
+        pl.DataFrame(rows)
+        .with_row_index("__row_id__")
+        .with_columns(
+            (pl.col("first_name") + pl.lit(" ") + pl.col("last_name")).alias("__full_name__")
+        )
+    )
+    blocks = build_blocks(
+        df.lazy(),
+        BlockingConfig(
+            strategy="ann_pairs",
+            ann_column="__full_name__",
+            ann_model="inhouse",
+            ann_top_k=_ANN_TOP_K,
+        ),
+    )
+    cand: set[tuple[int, int]] = set()
+    for blk in blocks:
+        for a, b, s in (blk.pre_scored_pairs or []):
+            if s >= _ANN_THRESHOLD:
+                cand.add((min(a, b), max(a, b)))
+    return cand
+
+
 # ── probes ───────────────────────────────────────────────────────────────────
 
 
@@ -218,8 +275,49 @@ def probe_perf(n_entities: int = 1500) -> ProbeOutcome:
     )
 
 
+def probe_semantic_blocking() -> ProbeOutcome:
+    """Blocking-recall (pair completeness) lift from the ANN semantic-blocking source.
+
+    Measures the thing semantic blocking (epic #1087) is actually responsible for:
+    candidate-generation recall. On the same labeled set as ``accuracy_synthetic``,
+    the structured exact-email + fuzzy-name keys plateau at a fixed recall -- the
+    pairs they miss are missed at BLOCKING (verified: that recall is insensitive to
+    the fuzzy threshold), not at scoring. The ANN source embeds the name with the
+    zero-config in-house embedder and unions nearest-neighbor candidates, reaching
+    pairs the lexical keys never co-locate.
+
+    Reported as candidate completeness, NOT end-to-end F1: turning ANN candidates
+    into merges is the scorer's job, and the untrained offline embedder over short
+    names is deliberately not asked to also carry precision (a trained embedder
+    would shrink ``ann_candidate_pairs`` for the same recall -- which this probe
+    would then show). Fully offline + deterministic.
+    """
+    rows, gt = make_labeled(n_entities=400, seed=7)
+    base = _recovered_pairs(_dedupe(rows))
+    missed = gt - base
+    cand = _ann_candidate_pairs(rows)
+    recovered = missed & cand
+
+    n_gt = len(gt) or 1
+    base_recall = len(gt & base) / n_gt
+    sem_recall = (len(gt & base) + len(recovered)) / n_gt
+    return ProbeOutcome(
+        group="accuracy",
+        metrics={
+            "blocking_recall_baseline": round(base_recall, 4),
+            "blocking_recall_semantic": round(sem_recall, 4),
+            "recall_lift": round(sem_recall - base_recall, 4),
+            "ann_pairs_recovered": len(recovered),
+            "ann_candidate_pairs": len(cand),
+        },
+        meta={"gt_pairs": len(gt), "missed_by_structured": len(missed),
+              "ann_threshold": _ANN_THRESHOLD, "ann_top_k": _ANN_TOP_K},
+    )
+
+
 PROBES: dict[str, Callable[[], ProbeOutcome]] = {
     "accuracy_synthetic": probe_accuracy,
+    "accuracy_synthetic_semantic": probe_semantic_blocking,
     "perf_synthetic": probe_perf,
 }
 
@@ -311,19 +409,25 @@ def _flatten(report: dict[str, Any]) -> dict[str, float]:
 # Which metrics are GATED (a regression past tolerance is a real failure) vs
 # informational. Wall/RSS/throughput are machine-dependent -> informational.
 # Accuracy + deterministic counts are gated.
-_GATED_SUFFIXES = ("f1", "precision", "recall", "scored_pairs", "multi_member_clusters")
-_INFO_SUFFIXES = ("wall_s", "peak_rss_mb", "records_per_s")
+_GATED_SUFFIXES = ("f1", "precision", "recall", "scored_pairs", "multi_member_clusters",
+                   "blocking_recall_baseline", "blocking_recall_semantic",
+                   "ann_pairs_recovered", "ann_candidate_pairs")
+_INFO_SUFFIXES = ("wall_s", "peak_rss_mb", "records_per_s", "recall_lift")
 # direction: True = higher is better (regression = drop); False = lower is better.
-_HIGHER_BETTER = ("f1", "precision", "recall", "records_per_s")
+_HIGHER_BETTER = ("f1", "precision", "recall", "records_per_s",
+                  "blocking_recall_baseline", "blocking_recall_semantic")
 # Deterministic counts have no "better" direction -- they're env-independent
 # fingerprints of the pipeline, so ANY drift (up OR down) past tolerance is a
 # regression. A drop here is exactly the signal we want (e.g. blocking losing
 # candidate pairs); the one-sided higher/lower gate would miss it.
-_TWO_SIDED = ("scored_pairs", "multi_member_clusters")
+_TWO_SIDED = ("scored_pairs", "multi_member_clusters",
+              "ann_pairs_recovered", "ann_candidate_pairs")
 # default per-metric tolerance bands.
 _TOL = {"f1": 0.02, "precision": 0.02, "recall": 0.02,
         "scored_pairs": 0.0, "multi_member_clusters": 0.0,
-        "wall_s": 9e9, "peak_rss_mb": 9e9, "records_per_s": 9e9}
+        "blocking_recall_baseline": 0.02, "blocking_recall_semantic": 0.02,
+        "ann_pairs_recovered": 0.0, "ann_candidate_pairs": 0.0,
+        "wall_s": 9e9, "peak_rss_mb": 9e9, "records_per_s": 9e9, "recall_lift": 9e9}
 
 
 def _suffix(key: str) -> str:
