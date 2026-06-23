@@ -92,11 +92,37 @@ def test_decide_honest_fallback_without_embeddings(embedder_off):
 # ── apply_auto_semantic_blocking ────────────────────────────────────────────
 
 
-def test_apply_default_off_is_noop(embedder_on, monkeypatch):
+def test_apply_default_on_routes_to_simhash(embedder_on, monkeypatch):
+    # #1090: default ON. Text-heavy data + a reachable embedder -> simhash with
+    # no env flag set.
+    monkeypatch.delenv("GOLDENMATCH_AUTO_SEMANTIC_BLOCKING", raising=False)
+    out = apply_auto_semantic_blocking(_static(), _text_heavy_profiles())
+    assert out.strategy == "simhash"
+    assert out.simhash.column == "description"
+
+
+def test_apply_default_on_noop_without_embedder(embedder_off, monkeypatch):
+    # Default ON is still a no-op when no embedder is reachable -> a user without
+    # the in-house model / a provider sees byte-identical output.
     monkeypatch.delenv("GOLDENMATCH_AUTO_SEMANTIC_BLOCKING", raising=False)
     cfg = _static()
-    out = apply_auto_semantic_blocking(cfg, _text_heavy_profiles())
-    assert out is cfg  # unchanged object -> byte-identical default behaviour
+    assert apply_auto_semantic_blocking(cfg, _text_heavy_profiles()) is cfg
+
+
+def test_apply_env_zero_disables(embedder_on, monkeypatch):
+    monkeypatch.setenv("GOLDENMATCH_AUTO_SEMANTIC_BLOCKING", "0")
+    cfg = _static()
+    assert apply_auto_semantic_blocking(cfg, _text_heavy_profiles()) is cfg
+
+
+def test_recall_threshold_drives_band_split(embedder_on, monkeypatch):
+    # #1090: the recall threshold (not a hardcoded num_bands) shapes the simhash
+    # config; the env override is honored and reaches the committed config.
+    monkeypatch.delenv("GOLDENMATCH_AUTO_SEMANTIC_BLOCKING", raising=False)
+    monkeypatch.setenv("GOLDENMATCH_SEMANTIC_BLOCKING_THRESHOLD", "0.8")
+    out = apply_auto_semantic_blocking(_static(), _text_heavy_profiles())
+    assert out.simhash.threshold == 0.8
+    assert out.simhash.num_bands is None  # threshold-driven, not hardcoded bands
 
 
 def test_apply_routes_to_simhash_when_enabled(embedder_on):
@@ -137,3 +163,39 @@ def test_apply_handles_none_blocking(embedder_on):
 
 def test_apply_disabled_returns_none_blocking_unchanged(embedder_on):
     assert apply_auto_semantic_blocking(None, _text_heavy_profiles(), enabled=False) is None
+
+
+# ── native = source of truth: the SimHash kernel runs native by default (#1090) ─
+
+
+def test_sketch_kernel_is_default_on_native():
+    """The SimHash band-hashing kernel (sketch-core) is the runtime source of
+    truth: ``"sketch"`` is in the default-on native allowlist, so semantic
+    blocking dispatches to Rust by default wherever the wheel is present."""
+    from goldenmatch.core import _native_loader as nl
+
+    assert "sketch" in nl._GATED_ON
+
+
+def test_sketch_native_byte_identical_to_python():
+    """The native kernel and the pure-Python reference produce identical band
+    hashes -- the parity the default-on flip rests on. Skips when the native
+    wheel isn't built (CI's default lane falls back to Python, still correct)."""
+    import numpy as np
+    from goldenmatch.core import sketch
+    from goldenmatch.core._native_loader import native_available
+
+    if not native_available():
+        pytest.skip("goldenmatch._native not built in this lane (Python fallback path)")
+
+    rng = np.random.default_rng(7)
+    vecs = [rng.standard_normal(128).tolist() for _ in range(256)]
+    monkey = pytest.MonkeyPatch()
+    try:
+        monkey.setenv("GOLDENMATCH_NATIVE", "0")
+        py = sketch.simhash_band_hashes_batch(vecs, 128, 16, 42)
+        monkey.setenv("GOLDENMATCH_NATIVE", "1")
+        nat = sketch.simhash_band_hashes_batch(vecs, 128, 16, 42)
+    finally:
+        monkey.undo()
+    assert py == nat

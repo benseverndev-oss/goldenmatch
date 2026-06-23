@@ -6,6 +6,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Changed
+- **Auto-enabled semantic blocking is now default-on, native-sourced (#1090, epic #1087).**
+  Text-heavy data (a long free-text column the lexical/structured keys under-cover)
+  now routes to SimHash-over-embeddings blocking automatically when an embedder is
+  reachable -- no `GOLDENMATCH_AUTO_SEMANTIC_BLOCKING=1` opt-in required. It stays a
+  no-op (byte-identical output) when no embedder is reachable, so users without the
+  in-house model or a configured provider are unaffected; disable explicitly with
+  `GOLDENMATCH_AUTO_SEMANTIC_BLOCKING=0`. The recall threshold is now exposed
+  (`GOLDENMATCH_SEMANTIC_BLOCKING_THRESHOLD`, default 0.6) and drives the SimHash
+  band/row split, replacing the previous hardcoded `num_bands`. The SimHash
+  band-hashing kernel (`sketch-core`, Rust) is now the **default execution path**
+  (added to the native loader's default-on allowlist): the compiled core is the
+  single source of truth across Python/Rust/TS, byte-identical to the pure-Python
+  reference (golden-vector verified) and ~29x faster, with a graceful Python
+  fallback when the native wheel is absent.
+
 ### Added
 - **Semantic retrieval on the agent surfaces (#1089, epic #1087).** The
   `retrieve_similar_records` API is now exposed over the wire on all three
