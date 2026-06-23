@@ -39,7 +39,12 @@ on:
         default: "0.72"
       build_workers:
         description: "goldengraph only: concurrent per-doc LLM workers at build (rate-limit-bounded; retry/backoff absorbs 429s)"
-        default: "8"
+        # 12, not 8: the N=50 build-debug showed wall/summed-extract ~= 8x at 8
+        # workers (near-linear, not saturated), so more concurrency still buys
+        # overlap; the adapter's exp-backoff retry absorbs the extra 429 pressure.
+        # The library default stays 8 for arbitrary users on tight RPM tiers; this
+        # only raises it for the bench account, which tolerates it.
+        default: "12"
       build_debug:
         description: "goldengraph only: print the per-sub-step build timing breakdown (extract/resolve/fingerprint/link/append) for hotspot analysis"
         default: "false"
