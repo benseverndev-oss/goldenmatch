@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated_at": "2026-06-23T15:36:21Z",
+  "updated_at": "2026-06-23T16:55:10Z",
   "metrics": {
     "accuracy_synthetic.f1": {
       "value": 0.8456,
@@ -58,22 +58,64 @@
       "two_sided": true,
       "gated": true
     },
+    "accuracy_trained_embedder.alias_recall_untrained": {
+      "value": 0.0056,
+      "tol": 0.02,
+      "higher_better": true,
+      "two_sided": false,
+      "gated": true
+    },
+    "accuracy_trained_embedder.alias_recall_trained": {
+      "value": 1.0,
+      "tol": 0.02,
+      "higher_better": true,
+      "two_sided": false,
+      "gated": true
+    },
+    "accuracy_trained_embedder.recall_gain": {
+      "value": 0.9944,
+      "tol": 9000000000.0,
+      "higher_better": false,
+      "two_sided": false,
+      "gated": false
+    },
+    "accuracy_trained_embedder.train_separation": {
+      "value": 0.798,
+      "tol": 9000000000.0,
+      "higher_better": false,
+      "two_sided": false,
+      "gated": false
+    },
+    "accuracy_trained_embedder.untrained_candidates": {
+      "value": 200.0,
+      "tol": 0.0,
+      "higher_better": false,
+      "two_sided": true,
+      "gated": true
+    },
+    "accuracy_trained_embedder.trained_candidates": {
+      "value": 491.0,
+      "tol": 0.0,
+      "higher_better": false,
+      "two_sided": true,
+      "gated": true
+    },
     "perf_synthetic.wall_s": {
-      "value": 2.8723,
+      "value": 3.0731,
       "tol": 9000000000.0,
       "higher_better": false,
       "two_sided": false,
       "gated": false
     },
     "perf_synthetic.peak_rss_mb": {
-      "value": 215.6,
+      "value": 195.1,
       "tol": 9000000000.0,
       "higher_better": false,
       "two_sided": false,
       "gated": false
     },
     "perf_synthetic.records_per_s": {
-      "value": 910.1,
+      "value": 850.6,
       "tol": 9000000000.0,
       "higher_better": true,
       "two_sided": false,

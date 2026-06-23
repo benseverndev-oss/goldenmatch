@@ -23,6 +23,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   fallback when the native wheel is absent.
 
 ### Added
+- **`accuracy_trained_embedder` metrics probe — trained-embedder recall lift.**
+  A new probe in the metrics harness that isolates the value a *trained* in-house
+  embedder adds over the untrained char-n-gram projection, measured on the signal
+  training can actually capture: nickname-alias equivalence (robert↔bob) with
+  near-zero character overlap. The untrained projection is structurally blind to
+  it (alias blocking recall ~0.01); a model trained offline (seeded, numpy-only —
+  no torch/cloud) on alias pairs over a *disjoint* surname vocabulary recovers
+  ~1.0 on unseen surnames — generalization, not memorization. Turns "we trained a
+  better embedder" into a tracked, gated number. (Note: on pure surface-noise
+  typos the untrained projection is already near-ceiling, so training is ~a no-op
+  there — this probe deliberately targets the equivalence-beyond-surface case.)
 - **Unified offline metrics harness (`scripts/metrics/harness.py`).** One entry
   point that runs the accuracy + semantic-blocking + perf probes in a single pass
   and diffs them against a committed baseline (`scripts/metrics/baseline.json`):
