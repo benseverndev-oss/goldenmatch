@@ -84,17 +84,58 @@ def build_batch(
             }
         )
 
-    return {
-        "entities": [
+    out_entities = [
+        {
+            "local_id": e.local_id,
+            "canonical_name": e.canonical_name,
+            "typ": e.typ,
+            "surface_names": e.surface_names,
+            "record_keys": e.record_keys,
+        }
+        for e in entities
+    ]
+
+    # Literal attributes -> typed leaf nodes + edges (entity -[predicate]-> literal).
+    # Represented as ordinary nodes (no store schema change) typed 'literal:<kind>';
+    # the same-type + name gate in the cross-doc matcher isolates them (a literal
+    # only ever clusters with an identical-value literal, which is harmless), and
+    # they carry NO record_keys so they never anchor a cross-doc merge. Deduped by
+    # (kind, value) within the doc so one date mentioned twice is one node.
+    next_local = max((e.local_id for e in entities), default=-1) + 1
+    lit_ids: dict[tuple[str, str], int] = {}
+    for a in getattr(extraction, "attributes", ()):  # back-compat: absent -> no-op
+        subj_local = mention_to_local.get(a.subj)
+        val = (a.value or "").strip()
+        if subj_local is None or not val:
+            continue
+        key = (a.typ, val)
+        lid = lit_ids.get(key)
+        if lid is None:
+            lid = next_local
+            next_local += 1
+            lit_ids[key] = lid
+            out_entities.append(
+                {
+                    "local_id": lid,
+                    "canonical_name": val,
+                    "typ": f"literal:{a.typ}",
+                    "surface_names": [val],
+                    "record_keys": [],
+                }
+            )
+        edges.append(
             {
-                "local_id": e.local_id,
-                "canonical_name": e.canonical_name,
-                "typ": e.typ,
-                "surface_names": e.surface_names,
-                "record_keys": e.record_keys,
+                "subj_local": subj_local,
+                "predicate": a.predicate,
+                "obj_local": lid,
+                "valid_from": vf,
+                "valid_to": None,
+                "source_refs": [],
             }
-            for e in entities
-        ],
+        )
+
+    return {
+        "entities": out_entities,
         "edges": edges,
         "ingested_at": at,
     }
@@ -564,6 +605,8 @@ def _prepare_doc(
     critical path; pre-embedding moves that network cost off the serial path."""
     try:
         t0 = time.perf_counter()
+        # `_extract` honors GOLDENGRAPH_LITERAL_ATTRS internally, so this call stays
+        # 2-arg (custom rebel/gliner extractors and test stubs keep that shape).
         extraction = (extractor or _extract)(text, llm)
         if timers:
             timers.add("extract", time.perf_counter() - t0)
