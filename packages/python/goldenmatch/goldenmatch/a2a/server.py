@@ -140,6 +140,36 @@ _SKILLS = [
         "outputModes": ["application/json"],
     },
     {
+        "id": "identity_claim",
+        "name": "Identity Claim",
+        "description": (
+            "Claim a record into an identity, moving it out of any prior entity. "
+            "Emits a provenance-stamped `claimed` event."
+        ),
+        "inputModes": ["application/json"],
+        "outputModes": ["application/json"],
+    },
+    {
+        "id": "identity_resolve_conflict",
+        "name": "Identity Resolve Conflict",
+        "description": (
+            "Adjudicate a `conflicts_with` pair (same / distinct / defer); "
+            "records a durable mediation verdict with actor/trust provenance."
+        ),
+        "inputModes": ["application/json"],
+        "outputModes": ["application/json"],
+    },
+    {
+        "id": "identity_audit",
+        "name": "Identity Audit Log",
+        "description": (
+            "Export the append-only identity audit log in commit order -- every "
+            "event with actor / trust / timestamp / reason."
+        ),
+        "inputModes": ["application/json"],
+        "outputModes": ["application/json"],
+    },
+    {
         "id": "controller_telemetry",
         "name": "Controller Telemetry",
         "description": (

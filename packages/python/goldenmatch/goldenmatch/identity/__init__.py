@@ -35,6 +35,7 @@ from goldenmatch.identity.profile import (
 )
 from goldenmatch.identity.query import (
     IdentityView,
+    claim_record,
     find_by_record,
     find_conflicts,
     get_entity,
@@ -103,6 +104,7 @@ __all__ = [
     "list_entities",
     "manual_merge",
     "manual_split",
+    "claim_record",
     "match_record_to_entity",
     "migrate_record_ids",
     "resolve_clusters",

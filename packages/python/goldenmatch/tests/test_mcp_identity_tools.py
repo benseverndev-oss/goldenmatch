@@ -19,13 +19,15 @@ from goldenmatch.mcp.identity_tools import (
 
 
 def test_identity_tool_count_and_names():
-    assert len(IDENTITY_TOOLS) == 10
+    assert len(IDENTITY_TOOLS) == 13
     assert IDENTITY_TOOL_NAMES == {
         "identity_resolve", "identity_list", "identity_history",
         "identity_conflicts", "identity_merge", "identity_split",
         "identity_show",
         # #1114 MDM ops
         "identity_profile", "identity_stats", "identity_worklist",
+        # Agent Memory #1075/#1078: agent-writable ops + audit export
+        "identity_claim", "identity_resolve_conflict", "identity_audit",
     }
 
 

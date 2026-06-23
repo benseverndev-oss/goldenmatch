@@ -6,6 +6,9 @@
 - ``identity_conflicts`` -> conflicting evidence edges
 - ``identity_merge``     -> manually merge two identities
 - ``identity_split``     -> split records into a new identity
+- ``identity_claim``     -> claim a record into an identity (move it)
+- ``identity_resolve_conflict`` -> adjudicate a conflicts_with pair
+- ``identity_audit``     -> export the append-only audit log (who/when/why)
 - ``identity_show``      -> full detail of one identity
 - ``identity_profile``   -> MDM profile of one entity (sources, conflicts, version)
 - ``identity_stats``     -> graph-level summary / health stats
@@ -21,6 +24,7 @@ from mcp.types import TextContent, Tool
 
 from goldenmatch.identity import (
     IdentityStore,
+    claim_record,
     entity_profile,
     find_by_record,
     find_conflicts,
@@ -30,6 +34,7 @@ from goldenmatch.identity import (
     list_entities,
     manual_merge,
     manual_split,
+    mediate_conflict,
     steward_worklist,
 )
 
@@ -156,6 +161,83 @@ IDENTITY_TOOLS: list[Tool] = [
                 "path": {"type": "string"},
             },
             "required": ["entity_id", "record_ids"],
+        },
+    ),
+    Tool(
+        name="identity_claim",
+        description=(
+            "Claim a record into an identity, moving it out of any prior "
+            "entity ('this record belongs to that identity'). Emits a "
+            "provenance-stamped `claimed` event on both the gaining and losing "
+            "entities."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "entity_id": {"type": "string", "description": "Entity to claim the record into"},
+                "record_id": {"type": "string", "description": "record id in `{source}:{source_pk}` form"},
+                "reason": {"type": "string"},
+                "actor": {
+                    "type": "string",
+                    "description": "Principal, e.g. 'agent:claude'. Defaults to 'agent'.",
+                },
+                "trust": {"type": "number", "description": "Trust in [0,1]. Default by actor prefix."},
+                "path": {"type": "string"},
+            },
+            "required": ["entity_id", "record_id"],
+        },
+    ),
+    Tool(
+        name="identity_resolve_conflict",
+        description=(
+            "Adjudicate a `conflicts_with` pair: 'same' keeps the entity "
+            "intact, 'distinct' splits the second record out into a new "
+            "identity, 'defer' only logs. Records a durable mediation verdict "
+            "+ event with actor/trust provenance, and stops the conflict "
+            "re-surfacing in the open-conflicts queue."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "record_a_id": {"type": "string"},
+                "record_b_id": {"type": "string"},
+                "resolution": {
+                    "type": "string",
+                    "enum": ["same", "distinct", "defer"],
+                },
+                "reason": {"type": "string"},
+                "dataset": {"type": "string"},
+                "apply": {
+                    "type": "boolean",
+                    "default": True,
+                    "description": "Act on the verdict (split on 'distinct'); false = log only.",
+                },
+                "actor": {
+                    "type": "string",
+                    "description": "Principal, e.g. 'steward:alice'. Defaults to 'agent'.",
+                },
+                "trust": {"type": "number", "description": "Trust in [0,1]. Default by actor prefix."},
+                "path": {"type": "string"},
+            },
+            "required": ["record_a_id", "record_b_id", "resolution"],
+        },
+    ),
+    Tool(
+        name="identity_audit",
+        description=(
+            "Export the append-only identity audit log in commit order: every "
+            "event with actor / trust / timestamp / reason, so a reviewer can "
+            "reconstruct exactly which actor changed what, when, and why. "
+            "Optionally filtered by dataset / actor."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "dataset": {"type": "string"},
+                "actor": {"type": "string"},
+                "limit": {"type": "integer", "default": 500},
+                "path": {"type": "string"},
+            },
         },
     ),
     Tool(
@@ -304,6 +386,51 @@ def _dispatch(name: str, args: dict) -> dict[str, Any]:
                 actor=actor,
                 trust=trust,
             )
+
+    if name == "identity_claim":
+        actor, trust = _actor_trust(args)
+        with _open(args) as s:
+            return claim_record(
+                s,
+                entity_id=args["entity_id"],
+                record_id=args["record_id"],
+                reason=args.get("reason"),
+                run_name="mcp",
+                actor=actor,
+                trust=trust,
+            )
+
+    if name == "identity_resolve_conflict":
+        actor, trust = _actor_trust(args)
+        with _open(args) as s:
+            return mediate_conflict(
+                s,
+                args["record_a_id"],
+                args["record_b_id"],
+                args["resolution"],
+                reason=args.get("reason"),
+                dataset=args.get("dataset"),
+                apply=bool(args.get("apply", True)),
+                actor=actor,
+                trust=trust,
+            )
+
+    if name == "identity_audit":
+        limit = int(args.get("limit", 500))
+        with _open(args) as s:
+            events = s.export_audit_log(
+                dataset=args.get("dataset"), actor=args.get("actor")
+            )
+        items = [
+            {
+                "event_id": e.event_id, "entity_id": e.entity_id, "kind": e.kind,
+                "actor": e.actor, "trust": e.trust,
+                "recorded_at": e.recorded_at.isoformat() if e.recorded_at else None,
+                "run_name": e.run_name, "dataset": e.dataset, "payload": e.payload,
+            }
+            for e in events[:limit]
+        ]
+        return {"items": items, "total": len(events)}
 
     if name == "identity_show":
         with _open(args) as s:

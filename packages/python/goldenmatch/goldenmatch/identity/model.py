@@ -37,6 +37,9 @@ class EventKind(StrEnum):
     CONSOLIDATED = "consolidated"
     # v3 (#1113): a steward mediated a conflict (same / distinct / defer).
     CONFLICT_MEDIATED = "conflict_mediated"
+    # Agent Memory (#1075): a record was manually claimed into an entity (moved
+    # from any prior entity). Distinct from ABSORBED_RECORD (pipeline-driven).
+    CLAIMED = "claimed"
 
 
 @dataclass
