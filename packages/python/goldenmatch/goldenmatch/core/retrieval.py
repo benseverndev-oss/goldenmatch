@@ -12,9 +12,11 @@ with a byte-identical numpy fallback) -- so it adds no new dependency and has
 zero impact on the dedupe/blocking pipeline.
 
 Scope: this is the in-memory retrieval API (embed-then-ANN over the supplied
-frame). A PERSISTENT vector index that survives across runs (#1088) and the
-MCP / A2A / REST surfaces (#1089's exposure half) are follow-ups -- they will
-call this same function / result shape.
+frame). It is exposed over the wire as the MCP ``retrieve_similar`` tool, the
+A2A ``retrieve_similar`` skill, and the REST ``POST /retrieve`` endpoint -- all
+of which call this same function and return its ``RetrievedRecord`` shape. A
+PERSISTENT vector index that survives across runs (#1088) shares the result type
+so a persistent backend is a drop-in for the in-memory path here.
 """
 from __future__ import annotations
 
