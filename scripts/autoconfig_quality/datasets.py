@@ -81,6 +81,27 @@ def _febrl3() -> tuple[pl.DataFrame, set] | None:
     return df, _pairs_to_row_index(df, "id", rec_pairs)
 
 
+_NCVR_REAL_PATH = _DATASETS_ROOT / "NCVR" / "ncvoter_sample_10k.txt"
+
+
+def _ncvr_synthetic() -> tuple[pl.DataFrame, set]:
+    """PII-free NCVR-shaped corpus (seed 42, committable, runs in CI). Its F1 is its
+    OWN baseline, never the real-data number."""
+    from scripts.dqbench_adapters.ncvr import build_ncvr_synthetic_df_and_gt
+    df, ncid_pairs = build_ncvr_synthetic_df_and_gt(seed=42)
+    return df, _pairs_to_row_index(df, "ncid", ncid_pairs)
+
+
+def _ncvr_real() -> tuple[pl.DataFrame, set] | None:
+    """Real NCVR sample (gitignored PII, local-only). None when the file is absent."""
+    from scripts.dqbench_adapters.ncvr import build_ncvr_df_and_gt
+    loaded = build_ncvr_df_and_gt(_NCVR_REAL_PATH, seed=42)
+    if loaded is None:
+        return None
+    df, ncid_pairs = loaded
+    return df, _pairs_to_row_index(df, "ncid", ncid_pairs)
+
+
 def _dblp_acm() -> tuple[pl.DataFrame, set] | None:
     """DBLP-ACM bibliographic record-linkage. Concatenate the two tables, build
     row-index GT from the perfect mapping. Returns None when the data is absent."""
@@ -112,6 +133,8 @@ REGISTRY: list[Dataset] = [
     Dataset("anchor_person_match", "anchor", _person),
     Dataset("dblp_acm", "real", _dblp_acm),
     Dataset("febrl3", "real", _febrl3),
-    # NCVR / historical_50k / DQbench tiers: add with the same skip-when-absent
+    Dataset("ncvr_synthetic", "real", _ncvr_synthetic),
+    Dataset("ncvr_real", "real", _ncvr_real),
+    # historical_50k / DQbench tiers: add with the same skip-when-absent
     # loader pattern as their data lands.
 ]
