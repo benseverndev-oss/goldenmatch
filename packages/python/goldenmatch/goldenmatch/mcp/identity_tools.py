@@ -100,7 +100,9 @@ IDENTITY_TOOLS: list[Tool] = [
         name="identity_merge",
         description=(
             "Manually merge two identities. All records from "
-            "`absorb_entity_id` are reassigned to `keep_entity_id`."
+            "`absorb_entity_id` are reassigned to `keep_entity_id`. The merge "
+            "events are stamped with `actor`/`trust` provenance so the audit "
+            "log records who merged these and on what authority."
         ),
         inputSchema={
             "type": "object",
@@ -108,6 +110,20 @@ IDENTITY_TOOLS: list[Tool] = [
                 "keep_entity_id": {"type": "string"},
                 "absorb_entity_id": {"type": "string"},
                 "reason": {"type": "string"},
+                "actor": {
+                    "type": "string",
+                    "description": (
+                        "Principal making the change, e.g. 'agent:claude' or "
+                        "'steward:alice'. Defaults to 'agent'."
+                    ),
+                },
+                "trust": {
+                    "type": "number",
+                    "description": (
+                        "Trust of the actor in [0,1]. Defaults by actor prefix "
+                        "(steward 1.0, agent 0.5)."
+                    ),
+                },
                 "path": {"type": "string"},
             },
             "required": ["keep_entity_id", "absorb_entity_id"],
@@ -117,7 +133,8 @@ IDENTITY_TOOLS: list[Tool] = [
         name="identity_split",
         description=(
             "Split a subset of records off an identity into a brand-new "
-            "identity. The original keeps the remaining records."
+            "identity. The original keeps the remaining records. The split "
+            "events carry `actor`/`trust` provenance."
         ),
         inputSchema={
             "type": "object",
@@ -125,6 +142,17 @@ IDENTITY_TOOLS: list[Tool] = [
                 "entity_id": {"type": "string"},
                 "record_ids": {"type": "array", "items": {"type": "string"}},
                 "reason": {"type": "string"},
+                "actor": {
+                    "type": "string",
+                    "description": (
+                        "Principal making the change, e.g. 'agent:claude'. "
+                        "Defaults to 'agent'."
+                    ),
+                },
+                "trust": {
+                    "type": "number",
+                    "description": "Trust of the actor in [0,1]. Default by actor prefix.",
+                },
                 "path": {"type": "string"},
             },
             "required": ["entity_id", "record_ids"],
@@ -206,6 +234,24 @@ def _open(args: dict) -> IdentityStore:
     return IdentityStore(path=args.get("path") or _DEFAULT_PATH)
 
 
+def _actor_trust(args: dict) -> tuple[str, float | None]:
+    """Resolve the (actor, trust) provenance for an agent-driven mutation.
+
+    ``actor`` defaults to ``"agent"`` (MCP is the agent surface). When ``trust``
+    is not supplied, it's derived from the actor's prefix
+    (``steward:`` -> 1.0, else 0.5) via the shared trust map, so an agent write
+    is recorded at lower authority than a steward's."""
+    actor = str(args.get("actor") or "agent")
+    trust = args.get("trust")
+    if trust is None:
+        try:
+            from goldenmatch.core.memory.store import trust_for_source
+            trust = trust_for_source(actor.split(":", 1)[0])
+        except Exception:
+            trust = None
+    return actor, (float(trust) if trust is not None else None)
+
+
 def _dispatch(name: str, args: dict) -> dict[str, Any]:
     if name == "identity_resolve":
         with _open(args) as s:
@@ -234,6 +280,7 @@ def _dispatch(name: str, args: dict) -> dict[str, Any]:
         return {"items": edges}
 
     if name == "identity_merge":
+        actor, trust = _actor_trust(args)
         with _open(args) as s:
             return manual_merge(
                 s,
@@ -241,9 +288,12 @@ def _dispatch(name: str, args: dict) -> dict[str, Any]:
                 absorb_entity_id=args["absorb_entity_id"],
                 reason=args.get("reason"),
                 run_name="mcp",
+                actor=actor,
+                trust=trust,
             )
 
     if name == "identity_split":
+        actor, trust = _actor_trust(args)
         with _open(args) as s:
             return manual_split(
                 s,
@@ -251,6 +301,8 @@ def _dispatch(name: str, args: dict) -> dict[str, Any]:
                 record_ids=list(args["record_ids"]),
                 reason=args.get("reason"),
                 run_name="mcp",
+                actor=actor,
+                trust=trust,
             )
 
     if name == "identity_show":

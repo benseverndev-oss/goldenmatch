@@ -23,6 +23,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   fallback when the native wheel is absent.
 
 ### Added
+- **Identity-write provenance spine: `actor` + `trust` on every event/edge
+  (#1075 / #1078, epic Agent Memory #1073).** `IdentityEvent` and `EvidenceEdge`
+  now record WHO made each write (`actor`, e.g. `pipeline` / `agent:claude` /
+  `steward:alice`) and their `trust` (0–1) — so the append-only event log is a
+  real audit trail a reviewer can use to reconstruct exactly which actor changed
+  what, when, and why (`payload['reason']`). Pipeline-driven writes are stamped
+  `actor="pipeline"` (override via `resolve_clusters(actor=...)`); the
+  agent-facing `manual_merge` / `manual_split` and their MCP tools take `actor` /
+  `trust` (trust defaults by actor prefix — steward 1.0, agent 0.5). New
+  `IdentityStore.export_audit_log(dataset=/actor=/since=)` returns the full log in
+  commit order for compliance export. Backward-compatible: nullable columns added
+  to both tables via an idempotent migration (SQLite `PRAGMA`-guarded `ADD COLUMN`;
+  Postgres `ADD COLUMN IF NOT EXISTS`); pre-provenance rows read back as `None`.
+  (Tamper-evident hash-chaining, claim-entity / resolve-conflict tools, and the
+  Postgres bulk-COPY path's provenance are tracked follow-ups.)
 - **`accuracy_febrl3` real-dataset metrics probe (opt-in).** The metrics harness
   gains its first *real* ER-benchmark probe — Febrl3 (5000-record person dedup
   with published ground truth) via `recordlinkage`'s bundled data, so it's still

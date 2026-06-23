@@ -298,6 +298,8 @@ class MongoIdentityStore:
             "controller_snapshot": edge.controller_snapshot,
             "run_name": edge.run_name,
             "dataset": edge.dataset,
+            "actor": edge.actor,
+            "trust": edge.trust,
             "recorded_at": edge.recorded_at,
         }
         result = self._db[_EDGES].update_one(
@@ -339,10 +341,26 @@ class MongoIdentityStore:
             "payload": event.payload,
             "run_name": event.run_name,
             "dataset": event.dataset,
+            "actor": event.actor,
+            "trust": event.trust,
             "recorded_at": event.recorded_at,
         }
         result = self._db[_EVENTS].insert_one(doc)
         return _objectid_to_int(result.inserted_id)
+
+    def export_audit_log(
+        self, *, dataset: str | None = None, actor: str | None = None,
+        since: datetime | None = None,
+    ) -> list[IdentityEvent]:
+        query: dict[str, Any] = {}
+        if dataset is not None:
+            query["dataset"] = dataset
+        if actor is not None:
+            query["actor"] = actor
+        if since is not None:
+            query["recorded_at"] = {"$gte": since}
+        cur = self._db[_EVENTS].find(query).sort("recorded_at", 1)
+        return [_to_event(d) for d in cur]
 
     def history(
         self, entity_id: str, limit: int | None = None,
@@ -432,6 +450,8 @@ def _to_edge(d: dict[str, Any]) -> EvidenceEdge:
         controller_snapshot=d.get("controller_snapshot"),
         run_name=d.get("run_name"),
         dataset=d.get("dataset"),
+        actor=d.get("actor"),
+        trust=d.get("trust"),
         recorded_at=d.get("recorded_at") or datetime.now(),
         edge_id=_objectid_to_int(d.get("_id")) if d.get("_id") else None,
     )
@@ -444,6 +464,8 @@ def _to_event(d: dict[str, Any]) -> IdentityEvent:
         payload=d.get("payload"),
         run_name=d.get("run_name"),
         dataset=d.get("dataset"),
+        actor=d.get("actor"),
+        trust=d.get("trust"),
         recorded_at=d.get("recorded_at") or datetime.now(),
         event_id=_objectid_to_int(d.get("_id")) if d.get("_id") else None,
     )
