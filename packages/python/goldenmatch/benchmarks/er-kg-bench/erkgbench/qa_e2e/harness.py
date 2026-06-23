@@ -126,15 +126,25 @@ class QAEngine(Protocol):
     def answer(self, handle, question: str) -> AnswerResult: ...
 
 
-def _localize_trace(engine, handle, corpus, *, limit: int = 10) -> None:
+#: How many questions the localize trace inspects. `localize` is LLM-free (cached
+#: embeddings), so probing every question is nearly free -- the cap only bounds log
+#: volume. Raise it (GOLDENGRAPH_QA_TRACE_LIMIT=0 -> all) to get a real SCORING-vs-
+#: RECALL distribution from the shatter-probe instead of a first-10 sample.
+_TRACE_LIMIT = int(os.environ.get("GOLDENGRAPH_QA_TRACE_LIMIT") or "10")
+
+
+def _localize_trace(engine, handle, corpus, *, limit: int = _TRACE_LIMIT) -> None:
     """Diagnostic: for each question, classify WHERE the gold answer is lost --
     extraction (gold entity never made it into the graph), retrieval (it's in the
     graph but the seed-walk didn't surface it), or synthesis (it was retrieved but
     the LLM wrote a wrong answer). Opt-in via GOLDENGRAPH_QA_TRACE; only engines
     exposing `localize` (goldengraph) participate. Uses the same token-containment
     as answer_match so "in graph/ball" lines up with the headline scoring."""
-    print(f"== localize trace (first {limit}; where is the answer lost?) ==", flush=True)
-    for q in corpus.questions[:limit]:
+    qs = corpus.questions if limit <= 0 else corpus.questions[:limit]
+    print(f"== localize trace (n={len(qs)}; where is the answer lost?) ==", flush=True)
+    stage_counts: dict[str, int] = {}
+    verdict_counts: dict[str, int] = {}
+    for q in qs:
         try:
             loc = engine.localize(handle, q.question)
         except Exception as exc:  # diagnostic must never break the scored run
@@ -151,6 +161,7 @@ def _localize_trace(engine, handle, corpus, *, limit: int = 10) -> None:
             stage = "RETRIEVAL-BUDGET (reachable from seeds but outside the budget-capped ball)"
         else:
             stage = "SYNTHESIS (retrieved, wrong answer written)"
+        stage_counts[stage.split(" ", 1)[0]] = stage_counts.get(stage.split(" ", 1)[0], 0) + 1
         print(
             f"  [{q.id}] hop{q.hop_count} gold={q.gold_answer!r} "
             f"in_graph={in_graph} in_wide={in_wide} in_ball={in_ball} -> {stage}",
@@ -217,12 +228,22 @@ def _localize_trace(engine, handle, corpus, *, limit: int = 10) -> None:
                 if probe is not None:
                     verdict, fscore, cosine, sname, iname, shared = probe
                     cos_s = f"{cosine:.3f}" if cosine is not None else "n/a"
+                    verdict_counts[verdict.split(" ", 1)[0]] = (
+                        verdict_counts.get(verdict.split(" ", 1)[0], 0) + 1
+                    )
                     print(
                         f"      shatter-probe: {verdict} "
                         f"(cosine={cos_s} fuzzy={fscore:.0f} shared_token={shared} "
                         f"seed={sname!r} island={iname!r})",
                         flush=True,
                     )
+    # Roll-up so the SCORING-vs-RECALL split (the #1090 gate) and the loss-stage mix
+    # are one glance, not a grep across every per-question line.
+    stage_mix = ", ".join(f"{k}:{v}" for k, v in sorted(stage_counts.items()))
+    print(f"== trace summary: stages {{{stage_mix}}} ==", flush=True)
+    if verdict_counts:
+        verdict_mix = ", ".join(f"{k}:{v}" for k, v in sorted(verdict_counts.items()))
+        print(f"== shatter-probe verdicts {{{verdict_mix}}} ==", flush=True)
 
 
 def run_engine(engine: QAEngine, corpus, *, model: str, budget_usd: float) -> dict:

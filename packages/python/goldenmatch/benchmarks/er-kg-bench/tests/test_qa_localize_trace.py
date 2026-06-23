@@ -245,3 +245,6 @@ def test_trace_emits_shatter_probe_on_broken_chain(monkeypatch, capsys):
     run_engine(_RecallShatterEngine(), corpus, model="gpt-4o-mini", budget_usd=5.0)
     out = capsys.readouterr().out
     assert "shatter-probe: RECALL-miss" in out
+    # The roll-up summary tallies the stage mix + the SCORING/RECALL verdict split.
+    assert "trace summary: stages" in out
+    assert "shatter-probe verdicts {RECALL-miss:1}" in out

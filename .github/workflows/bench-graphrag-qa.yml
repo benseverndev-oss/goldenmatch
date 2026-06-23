@@ -25,6 +25,9 @@ on:
       trace:
         description: "goldengraph only: localize where each answer is lost (extraction/retrieval/synthesis)"
         default: "false"
+      trace_limit:
+        description: "goldengraph only: how many questions the localize trace inspects (0 = all; bigger = real SCORING-vs-RECALL shatter distribution)"
+        default: "10"
       cross_doc_link:
         description: "goldengraph only: enable cross-document entity linking (merge bridge entities across paragraphs)"
         default: "false"
@@ -113,6 +116,7 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.GOLDENGRAPH_OPENAI_API_KEY }}
           POLARS_SKIP_CPU_CHECK: "1"
           GOLDENGRAPH_QA_TRACE: ${{ inputs.trace }}
+          GOLDENGRAPH_QA_TRACE_LIMIT: ${{ inputs.trace_limit }}
           GOLDENGRAPH_CROSS_DOC_LINK: ${{ inputs.cross_doc_link }}
           GOLDENGRAPH_LINK_THRESHOLD: ${{ inputs.link_threshold }}
           GOLDENGRAPH_PROFILE_LINK: ${{ inputs.profile_link }}
