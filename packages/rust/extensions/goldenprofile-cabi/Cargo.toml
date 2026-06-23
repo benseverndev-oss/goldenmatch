@@ -1,0 +1,27 @@
+# goldenprofile-cabi -- the C ABI over the Virtual Fingerprint engine. The C
+# analogue of goldenprofile-native (pyo3) and goldenprofile-wasm (wasm-bindgen):
+# it wraps the SAME pyo3-free `resolve_json_impl` the WASM crate exposes, so the
+# engine is byte-identical across Python, WASM, and C by construction (no
+# re-implementation). wasm-bindgen is cfg-gated to wasm32 in that crate, so on a
+# host target this pulls only goldenprofile-core (+ its kernels) -- no wasm
+# toolchain needed.
+#
+# Standalone workspace -- same isolation rationale as goldengraph-cabi.
+[workspace]
+
+[package]
+name = "goldenprofile-cabi"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Ben Severn <benzsevern@gmail.com>"]
+description = "C ABI over goldenprofile-core: cross-document Virtual Fingerprint resolution over a JSON boundary"
+
+[lib]
+name = "goldenprofile_cabi"
+# cdylib/staticlib: the artifacts a C caller links or dlopens. rlib: in-crate tests.
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+# Reuse the EXACT pyo3-free marshaling shim the WASM binding exposes.
+goldenprofile-wasm = { path = "../goldenprofile-wasm" }

@@ -1,0 +1,55 @@
+# goldenprofile-core -- pyo3-free "Virtual Fingerprint" / entity-profiling
+# engine. Turns a rigid, LLM-synthesized profile per graph element (node OR
+# edge) into a cross-document resolution: structured block-key + semantic
+# (SimHash) band blocking, a Row-3/Row-4 anti-shatter fusion scorer, and WCC
+# clustering. The compute core for the Semantic Signature engine; mirrors the
+# `goldengraph-core` / `score-core` pyo3-free pattern. All compute over plain
+# slices -- no Python, no Arrow, no LLM, no embedding model (the host supplies
+# precomputed fingerprint embeddings).
+#
+# The novel layer is the orchestration + the anti-shatter scorer. The signature
+# primitives are REUSED, not reinvented: SimHash band hashing from sketch-core,
+# field scorers from score-core, canonical hashing from fingerprint-core, and
+# connected-components from graph-core -- so every signal is byte-identical with
+# the surfaces that already ship those kernels.
+#
+# Standalone `[workspace]` (empty) so this core can be a path dependency of the
+# `goldenprofile-native` (pyo3 extension-module) and `goldenprofile-wasm`
+# (wasm-bindgen) crates without either workspace claiming it -- same isolation
+# rationale as goldengraph-core / score-core.
+[workspace]
+
+[package]
+name = "goldenprofile-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Ben Severn <benzsevern@gmail.com>"]
+description = "Pyo3-free entity-profiling (Virtual Fingerprint) engine: structured + semantic signature blocking, anti-shatter scoring, WCC clustering"
+
+[lib]
+name = "goldenprofile_core"
+
+[dependencies]
+# Canonical field scorers (jaro_winkler / token_sort) -- the SAME source of
+# truth every other surface links, so the profile field comparison is identical
+# across Python/WASM/C/pgrx.
+goldenmatch-score-core = { path = "../score-core" }
+# Connected-components (WCC) kernel: turns kept scored profile-pairs into the
+# final cross-document entity clusters.
+goldenmatch-graph-core = { path = "../graph-core" }
+# SimHash (sign random-projection / cosine-LSH) band hashing over dense
+# fingerprint embeddings -- the "semantic signature" blocker. Byte-identical
+# with the Python/TS sketch tier.
+goldenmatch-sketch-core = { path = "../sketch-core" }
+# Canonical, cross-language-stable hash of the rigid identifying fields -- the
+# structured signature / exact block key (same canonicalizer as the :h1: record
+# fingerprint).
+goldenmatch-fingerprint-core = { path = "../fingerprint-core" }
+# serde model is the portable JSON boundary every binding (wasm/cabi) marshals.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
