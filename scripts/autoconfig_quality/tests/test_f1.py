@@ -11,3 +11,11 @@ def test_evaluate_f1_on_gen_labeled():
     attr = out["attribution"]
     assert {"blocking_recall", "final_recall", "threshold_loss"} <= set(attr)
     assert attr["blocking_recall"] >= attr["final_recall"]  # blocking is the ceiling
+
+
+def test_attribution_skips_at_scale(monkeypatch):
+    monkeypatch.setenv("GOLDENMATCH_QH_ATTR_MAX_PAIRS", "1")  # force the guard
+    df, gt = gen_labeled(n_entities=40, seed=7)
+    out = evaluate_f1(df, gt)
+    assert "f1" in out and "precision" in out and "recall" in out  # floor intact
+    assert out["attribution"] == {"skipped": "scale"}  # explicit, not blocking_recall=0
