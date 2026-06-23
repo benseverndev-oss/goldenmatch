@@ -59,3 +59,18 @@ def test_ncvr_real_skips_when_absent(monkeypatch):
     import scripts.autoconfig_quality.datasets as ds
     monkeypatch.setattr(ds, "_NCVR_REAL_PATH", ds.Path("does/not/exist.txt"))
     assert ds._ncvr_real() is None
+
+
+def test_historical_50k_loads_drops_truth_and_has_row_index_gt():
+    from scripts.autoconfig_quality.datasets import _historical_50k
+    loaded = _historical_50k()
+    assert loaded is not None  # parquet is committed
+    df, gt = loaded
+    assert "cluster" not in df.columns and "unique_id" not in df.columns
+    assert gt and all(0 <= a < b < df.height for a, b in gt)
+
+
+def test_historical_50k_registered_full_scan():
+    from scripts.autoconfig_quality.datasets import REGISTRY
+    h = next(d for d in REGISTRY if d.name == "historical_50k")
+    assert h.full_scan is True

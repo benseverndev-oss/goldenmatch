@@ -102,6 +102,31 @@ def _ncvr_real() -> tuple[pl.DataFrame, set] | None:
     return df, _pairs_to_row_index(df, "ncid", ncid_pairs)
 
 
+_VENDORED = Path(__file__).resolve().parent / "vendored"
+
+
+def _historical_50k() -> tuple[pl.DataFrame, set] | None:
+    """Splink historical_50k from the committed parquet. The `cluster` column is the
+    truth (grouped into within-cluster row-index pairs) and is dropped -- along with
+    the `unique_id` surrogate -- from the df fed to dedupe so the kernel can't see the
+    answer. None when the parquet is absent."""
+    p = _VENDORED / "historical_50k.parquet"
+    if not p.exists():
+        return None
+    df = pl.read_parquet(p)
+    clusters = df["cluster"].to_list()
+    by_cluster: dict[object, list[int]] = {}
+    for row, cid in enumerate(clusters):
+        by_cluster.setdefault(cid, []).append(row)
+    gt: set[tuple[int, int]] = set()
+    for members in by_cluster.values():
+        for i in range(len(members)):
+            for j in range(i + 1, len(members)):
+                gt.add((members[i], members[j]))
+    match_df = df.drop([c for c in ("cluster", "unique_id") if c in df.columns])
+    return match_df, gt
+
+
 def _dblp_acm() -> tuple[pl.DataFrame, set] | None:
     """DBLP-ACM bibliographic record-linkage. Concatenate the two tables, build
     row-index GT from the perfect mapping. Returns None when the data is absent."""
@@ -135,6 +160,6 @@ REGISTRY: list[Dataset] = [
     Dataset("febrl3", "real", _febrl3),
     Dataset("ncvr_synthetic", "real", _ncvr_synthetic),
     Dataset("ncvr_real", "real", _ncvr_real),
-    # historical_50k / DQbench tiers: add with the same skip-when-absent
-    # loader pattern as their data lands.
+    Dataset("historical_50k", "real", _historical_50k, full_scan=True),
+    # DQbench tier: add with the same skip-when-absent loader pattern when it lands.
 ]
