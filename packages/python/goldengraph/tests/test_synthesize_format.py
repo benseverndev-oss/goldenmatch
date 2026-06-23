@@ -1,10 +1,12 @@
-"""Synthesis formatting: name-keyed edges + step-by-step path-tracing prompt.
+"""Synthesis formatting: name-keyed edges + multi-hop decomposition prompt.
 
 The 2026-06-22 probes showed goldengraph's multi-hop answer was IN the retrieved
 subgraph but went unread -- the old `subj_id -pred-> obj_id` dump made the LLM join
-ids to names to trace a chain. These pure (no native, no LLM) tests pin the new
-contract: edges read as `Name -[rel]-> Name`, and the prompt instructs step-by-step
-relation following.
+ids to names to trace a chain. After the hop-clamp fix isolated the Politburo miss to
+SYNTHESIS (answer retrieved, chain unwalked), the prompt was upgraded to instruct
+explicit multi-hop decomposition into sub-questions with bridge entities carried
+forward. These pure (no native, no LLM) tests pin the new contract: edges read as
+`Name -[rel]-> Name`, and the prompt instructs multi-hop sub-question chaining.
 """
 
 from __future__ import annotations
@@ -28,10 +30,14 @@ def test_edges_are_name_keyed_not_id_keyed():
     assert "0 -made-> 1" not in text
 
 
-def test_local_prompt_instructs_step_by_step_tracing():
+def test_local_prompt_instructs_multihop_decomposition():
     llm = RecordingLLM()
     synthesize_local("Following made from Acme, what is reached?", _SUB, llm)
     prompt = llm.prompts[-1]
-    assert "step by step" in prompt.lower()
+    # The prompt must steer the model to decompose a multi-hop question into a
+    # chain of sub-questions and carry bridge entities forward (the Politburo
+    # SYNTHESIS miss: answer retrieved, chain unwalked).
+    assert "multi-hop" in prompt.lower()
+    assert "sub-question" in prompt.lower()
     assert "Acme -[made]-> Rocket" in prompt
     assert "Answer:" in prompt
