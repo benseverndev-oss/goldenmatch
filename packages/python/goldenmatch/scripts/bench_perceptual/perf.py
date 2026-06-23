@@ -54,3 +54,13 @@ def bench_audio_hash(signals: list[tuple[list, int]], repeats: int = 2) -> dict:
             perceptual.fingerprint_audio(samples, sr)
 
     return _both_paths(work, len(signals), repeats)
+
+
+def bench_radial_hash(grids: list, repeats: int = 3) -> dict:
+    """Throughput of the rotation/crop-aware radial-variance profile over a batch of
+    luma grids (the geometric image feature; no batch kernel, so one call per grid)."""
+    def work():
+        for g in grids:
+            perceptual.radial_variance(g)
+
+    return _both_paths(work, len(grids), repeats)
