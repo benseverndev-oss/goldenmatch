@@ -1,0 +1,62 @@
+{
+  "schema": 1,
+  "updated_at": "2026-06-23T15:21:30Z",
+  "metrics": {
+    "accuracy_synthetic.f1": {
+      "value": 0.8456,
+      "tol": 0.02,
+      "higher_better": true,
+      "two_sided": false,
+      "gated": true
+    },
+    "accuracy_synthetic.precision": {
+      "value": 1.0,
+      "tol": 0.02,
+      "higher_better": true,
+      "two_sided": false,
+      "gated": true
+    },
+    "accuracy_synthetic.recall": {
+      "value": 0.7326,
+      "tol": 0.02,
+      "higher_better": true,
+      "two_sided": false,
+      "gated": true
+    },
+    "perf_synthetic.wall_s": {
+      "value": 2.8687,
+      "tol": 9000000000.0,
+      "higher_better": false,
+      "two_sided": false,
+      "gated": false
+    },
+    "perf_synthetic.peak_rss_mb": {
+      "value": 206.5,
+      "tol": 9000000000.0,
+      "higher_better": false,
+      "two_sided": false,
+      "gated": false
+    },
+    "perf_synthetic.records_per_s": {
+      "value": 911.2,
+      "tol": 9000000000.0,
+      "higher_better": true,
+      "two_sided": false,
+      "gated": false
+    },
+    "perf_synthetic.scored_pairs": {
+      "value": 1011.0,
+      "tol": 0.0,
+      "higher_better": false,
+      "two_sided": true,
+      "gated": true
+    },
+    "perf_synthetic.multi_member_clusters": {
+      "value": 713.0,
+      "tol": 0.0,
+      "higher_better": false,
+      "two_sided": true,
+      "gated": true
+    }
+  }
+}

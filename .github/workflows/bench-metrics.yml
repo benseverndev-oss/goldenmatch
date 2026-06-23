@@ -1,0 +1,66 @@
+name: bench-metrics
+
+# Unified metrics harness (scripts/metrics/harness.py): the offline core --
+# synthetic accuracy (F1 / precision / recall) + perf (wall, peak RSS,
+# throughput, deterministic counts) in one run, diffed against the committed
+# baseline (scripts/metrics/baseline.json).
+#
+# Posture (v1): local-iteration tool + dispatch/scheduled run. NOT a blocking
+# per-PR gate -- the report is informational by default and posted to the job
+# summary. Opt into a hard regression check with the `check` input. Fully
+# offline (no datasets, no Postgres, no API keys), so it runs on forks too.
+on:
+  schedule:
+    # Weekly, so trend data accrues. Tuesdays 06:00 UTC (offset from the heavy
+    # `benchmarks` workflow on Mondays).
+    - cron: "0 6 * * 2"
+  workflow_dispatch:
+    inputs:
+      check:
+        description: "Fail the run on a gated metric regression vs the committed baseline"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  metrics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: packages/python/goldenmatch
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+
+      - name: Install
+        run: uv sync --all-packages
+
+      - name: Run metrics harness
+        env:
+          # Reproducible: explicit-config probes don't use auto-config memory,
+          # but pin it off for good measure.
+          GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+          CHECK: ${{ inputs.check && '--check' || '' }}
+        run: |
+          uv run python scripts/metrics/harness.py \
+            --out metrics_report.json \
+            --md "$GITHUB_STEP_SUMMARY" \
+            $CHECK
+
+      - name: Upload metrics report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: metrics-report
+          path: packages/python/goldenmatch/metrics_report.json
+          retention-days: 90
