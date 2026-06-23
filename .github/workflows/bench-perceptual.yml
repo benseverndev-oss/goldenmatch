@@ -1,0 +1,59 @@
+name: bench-perceptual
+
+# Dispatch-only benchmark for the multimodal-ER perceptual crawl tier (ADR 0022):
+# accuracy (operating point, per-transform recall, blocker band sweep,
+# discrimination), performance (native-vs-python throughput), and
+# robustness/determinism. NOT a per-PR gate -- run it when iterating on the
+# perceptual metrics. Writes a markdown summary to the run and uploads the JSON.
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: "Which suite to run"
+        type: choice
+        default: all
+        options: [all, accuracy, perf, robustness]
+      n_image_bases:
+        description: "Image base entities (each yields 7 variants)"
+        type: string
+        default: "30"
+      n_audio_bases:
+        description: "Audio base entities (each yields 3 variants)"
+        type: string
+        default: "12"
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: packages/python/goldenmatch
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      - name: Build the native kernel (enables the native perf/parity path)
+        run: uv run python ../../../scripts/build_native.py
+      - name: Run the perceptual bench
+        run: |
+          uv run python scripts/bench_perceptual/run.py \
+            --suite "${{ inputs.suite }}" \
+            --n-image-bases "${{ inputs.n_image_bases }}" \
+            --n-audio-bases "${{ inputs.n_audio_bases }}" \
+            --out perceptual_bench.json | tee bench_summary.md
+      - name: Publish summary
+        if: ${{ !cancelled() }}
+        run: cat bench_summary.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        if: ${{ !cancelled() }}
+        with:
+          name: perceptual-bench-report
+          path: packages/python/goldenmatch/perceptual_bench.json

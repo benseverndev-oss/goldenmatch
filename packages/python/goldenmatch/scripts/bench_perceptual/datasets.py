@@ -1,0 +1,230 @@
+"""Deterministic synthetic media-variant datasets (stdlib-only, no committed assets).
+
+Each *base* is one entity; from it we derive labelled *variants* under named
+perturbations (the transforms a real media dedup faces). Two items derived from
+the same base are a positive pair; cross-base pairs are negatives. The harness
+then hashes every item and measures whether the blocker/scorer keeps the
+positives together and the negatives apart — per transform, so we see exactly
+which perturbations the hash survives.
+
+No numpy / no goldenmatch import: payloads are plain ``list[list[int]]`` (image
+luma) and ``list[float]`` (audio PCM), the decoded-input contract the perceptual
+kernel consumes.
+"""
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass
+
+Grid = list[list[int]]
+
+
+@dataclass
+class Item:
+    item_id: int
+    base_id: int
+    transform: str
+    payload: object  # Grid for image; (samples, sample_rate) for audio
+
+
+@dataclass
+class Suite:
+    kind: str  # "image" | "audio"
+    items: list[Item]
+    gt_pairs: set[tuple[int, int]]  # canonical (min,max) positives (same base)
+    transform_pairs: dict[str, set[tuple[int, int]]]  # (orig, variant) by transform
+
+
+def _canon(a: int, b: int) -> tuple[int, int]:
+    return (a, b) if a < b else (b, a)
+
+
+class _LCG:
+    """Tiny deterministic PRNG (no `random` import for full reproducibility)."""
+
+    def __init__(self, seed: int) -> None:
+        self.s = (seed * 2862933555777941757 + 3037000493) & ((1 << 64) - 1)
+
+    def signed(self, amp: int) -> int:
+        self.s = (self.s * 6364136223846793005 + 1442695040888963407) & ((1 << 64) - 1)
+        return (self.s >> 33) % (2 * amp + 1) - amp
+
+
+# ----------------------------- image ---------------------------------------- #
+def _base_image(seed: int, h: int = 48, w: int = 48) -> Grid:
+    """A frequency-rich procedural pattern (stable mid-band pHash), distinct per seed."""
+    fx = 1.5 + (seed % 5) * 0.4
+    fy = 2.0 + (seed % 7) * 0.3
+    fd = 2.2 + (seed % 3) * 0.6
+    ph = seed * 0.7
+    out: Grid = []
+    for y in range(h):
+        row = []
+        for x in range(w):
+            v = (
+                128
+                + 45 * math.sin(x / fx + ph)
+                + 40 * math.sin(y / fy)
+                + 30 * math.sin((x + y) / fd)
+            )
+            row.append(max(0, min(255, int(round(v)))))
+        out.append(row)
+    return out
+
+
+def _clamp(v: float) -> int:
+    return max(0, min(255, int(round(v))))
+
+
+def _img_brightness(g: Grid) -> Grid:
+    return [[_clamp(v * 0.9 + 22) for v in row] for row in g]
+
+
+def _img_contrast(g: Grid) -> Grid:
+    return [[_clamp((v - 128) * 1.25 + 128) for v in row] for row in g]
+
+
+def _img_blur(g: Grid) -> Grid:
+    h, w = len(g), len(g[0])
+    out = [[0] * w for _ in range(h)]
+    for y in range(h):
+        for x in range(w):
+            acc = cnt = 0
+            for dy in (-1, 0, 1):
+                for dx in (-1, 0, 1):
+                    yy, xx = y + dy, x + dx
+                    if 0 <= yy < h and 0 <= xx < w:
+                        acc += g[yy][xx]
+                        cnt += 1
+            out[y][x] = acc // cnt
+    return out
+
+
+def _img_noise(g: Grid, base_id: int) -> Grid:
+    rng = _LCG(base_id * 101 + 7)
+    return [[_clamp(v + rng.signed(10)) for v in row] for row in g]
+
+
+def _img_recompress(g: Grid) -> Grid:
+    """Downscale by 2 (area average) then nearest-up — a lossy re-encode proxy."""
+    h, w = len(g), len(g[0])
+    hh, ww = h // 2, w // 2
+    small = [
+        [(g[2 * y][2 * x] + g[2 * y][2 * x + 1] + g[2 * y + 1][2 * x] + g[2 * y + 1][2 * x + 1]) // 4
+         for x in range(ww)]
+        for y in range(hh)
+    ]
+    return [[small[y // 2][x // 2] for x in range(w)] for y in range(h)]
+
+
+def _img_crop(g: Grid) -> Grid:
+    """Center-crop ~88% (the pHash resize re-normalizes the smaller grid)."""
+    h, w = len(g), len(g[0])
+    my, mx = h // 16, w // 16
+    return [row[mx : w - mx] for row in g[my : h - my]]
+
+
+def _img_rotate(g: Grid, deg: float = 8.0) -> Grid:
+    """Small nearest-neighbour rotation about the center — a HARD case (pHash is
+    not rotation-invariant); included to measure where the hash breaks down."""
+    h, w = len(g), len(g[0])
+    cy, cx = (h - 1) / 2, (w - 1) / 2
+    rad = math.radians(deg)
+    cos, sin = math.cos(rad), math.sin(rad)
+    out = [[0] * w for _ in range(h)]
+    for y in range(h):
+        for x in range(w):
+            sx = cx + (x - cx) * cos - (y - cy) * sin
+            sy = cy + (x - cx) * sin + (y - cy) * cos
+            ix, iy = int(round(sx)), int(round(sy))
+            out[y][x] = g[iy][ix] if 0 <= iy < h and 0 <= ix < w else 128
+    return out
+
+
+_IMAGE_TRANSFORMS = ("brightness", "contrast", "blur", "noise", "recompress", "crop", "rotate")
+
+
+def build_image_suite(n_bases: int = 30) -> Suite:
+    items: list[Item] = []
+    gt: set[tuple[int, int]] = set()
+    tpairs: dict[str, set[tuple[int, int]]] = {t: set() for t in _IMAGE_TRANSFORMS}
+    nid = 0
+    for b in range(n_bases):
+        base = _base_image(b)
+        orig_id = nid
+        items.append(Item(nid, b, "orig", base))
+        nid += 1
+        group = [orig_id]
+        for t in _IMAGE_TRANSFORMS:
+            if t == "brightness":
+                payload = _img_brightness(base)
+            elif t == "contrast":
+                payload = _img_contrast(base)
+            elif t == "blur":
+                payload = _img_blur(base)
+            elif t == "noise":
+                payload = _img_noise(base, b)
+            elif t == "recompress":
+                payload = _img_recompress(base)
+            elif t == "crop":
+                payload = _img_crop(base)
+            else:
+                payload = _img_rotate(base)
+            items.append(Item(nid, b, t, payload))
+            tpairs[t].add(_canon(orig_id, nid))
+            group.append(nid)
+            nid += 1
+        for i in range(len(group)):
+            for j in range(i + 1, len(group)):
+                gt.add(_canon(group[i], group[j]))
+    return Suite("image", items, gt, tpairs)
+
+
+# ----------------------------- audio ---------------------------------------- #
+def _base_audio(seed: int, length: int = 16000, sr: int = 44100) -> list[float]:
+    freqs = [300 + (seed % 6) * 130, 700 + (seed % 4) * 170, 1300 + (seed % 5) * 90]
+    return [sum(math.sin(2 * math.pi * f * n / sr) for f in freqs) / len(freqs) for n in range(length)]
+
+
+def _aud_amplitude(s: list[float]) -> list[float]:
+    return [0.5 * v for v in s]
+
+
+def _aud_noise(s: list[float], base_id: int) -> list[float]:
+    rng = _LCG(base_id * 211 + 13)
+    return [v + rng.signed(50) / 1000.0 for v in s]
+
+
+def _aud_trim(s: list[float]) -> list[float]:
+    return s[4096:]  # drop ~2 frames -> time offset, exercises the alignment search
+
+
+_AUDIO_TRANSFORMS = ("amplitude", "noise", "trim")
+
+
+def build_audio_suite(n_bases: int = 12, sr: int = 44100) -> Suite:
+    items: list[Item] = []
+    gt: set[tuple[int, int]] = set()
+    tpairs: dict[str, set[tuple[int, int]]] = {t: set() for t in _AUDIO_TRANSFORMS}
+    nid = 0
+    for b in range(n_bases):
+        base = _base_audio(b, sr=sr)
+        orig_id = nid
+        items.append(Item(nid, b, "orig", (base, sr)))
+        nid += 1
+        group = [orig_id]
+        for t in _AUDIO_TRANSFORMS:
+            if t == "amplitude":
+                payload = _aud_amplitude(base)
+            elif t == "noise":
+                payload = _aud_noise(base, b)
+            else:
+                payload = _aud_trim(base)
+            items.append(Item(nid, b, t, (payload, sr)))
+            tpairs[t].add(_canon(orig_id, nid))
+            group.append(nid)
+            nid += 1
+        for i in range(len(group)):
+            for j in range(i + 1, len(group)):
+                gt.add(_canon(group[i], group[j]))
+    return Suite("audio", items, gt, tpairs)
