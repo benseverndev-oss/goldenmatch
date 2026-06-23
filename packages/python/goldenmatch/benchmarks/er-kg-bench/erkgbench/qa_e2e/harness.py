@@ -15,6 +15,91 @@ from goldenmatch.core.llm_budget import BudgetTracker
 from . import metrics
 
 
+def _name_tokens(name: str) -> set[str]:
+    """Word-ish tokens of an entity name (len>1, lowercased) -- approximates the
+    token rule goldengraph's cross-doc `_LinkIndex` blocks on, so a shared token
+    here means the pair would already be a token-overlap candidate."""
+    return {t for t in "".join(c if c.isalnum() else " " for c in name.lower()).split() if len(t) > 1}
+
+
+#: Cosine threshold the #1090 ANN/semantic blocker uses to PROPOSE a candidate pair
+#: (GOLDENMATCH_SEMANTIC_BLOCKING_THRESHOLD default). A cross-component pair at or
+#: above this is one semantic blocking WOULD surface; below it, it would not -- so
+#: the probe reports the verdict against the same bar the real integration applies.
+_SEMANTIC_BLOCKING_COSINE = float(os.environ.get("GOLDENMATCH_SEMANTIC_BLOCKING_THRESHOLD", "0.6"))
+
+
+def _shatter_probe(seed_names, island_names, *, embedder=None, cap: int = 1500):
+    """Recall-vs-scoring fork for a broken-chain (shattered) miss. The bridge entity
+    that should join the seed component to the answer component was never merged --
+    this decides WHY, and therefore whether #1090 semantic blocking is the fix.
+
+    Two signals across the seed x island name pairs:
+      - fuzzy: best rapidfuzz token_sort_ratio pair + whether it shares a name token
+        (a shared token means token blocking ALREADY proposes the pair).
+      - semantic (when an embedder is given): best cosine pair -- exactly what the
+        #1090 ANN blocker would surface, scored against the SAME 0.6 bar it uses.
+
+    Verdict:
+      - SCORING-miss: the best bridge pair shares a token (token blocking already
+        proposed it) -> goldenprofile under-merged. Semantic blocking does NOT help.
+      - RECALL-miss: the bridge is token-disjoint AND a semantic/string near-duplicate
+        (cosine >= the blocking bar, or fuzzy>=85 when no embedder) -> token blocking
+        never proposes it but ANN blocking WOULD. This is what #1090 fixes.
+      - NO-BRIDGE: no token-disjoint pair clears the semantic/fuzzy bar -> the split
+        is not a blocking miss (genuinely distinct mentions, or an upstream
+        extraction/normalization gap). Semantic blocking won't reconnect it.
+
+    Returns (verdict, fuzzy_score, cosine, seed_name, island_name, shared_token) or
+    None when either component is empty. cosine is None when no embedder is given.
+    Fail-soft: the caller wraps this in try/except."""
+    from rapidfuzz import fuzz, process
+
+    seeds = list(dict.fromkeys(seed_names))[:cap]
+    islands = list(dict.fromkeys(island_names))[:cap]
+    if not seeds or not islands:
+        return None
+    # Best fuzzy pair across the split.
+    best = None  # (score, seed_name, island_name)
+    for iname in islands:
+        m = process.extractOne(iname, seeds, scorer=fuzz.token_sort_ratio)
+        if m is not None and (best is None or m[1] > best[0]):
+            best = (m[1], m[0], iname)
+    if best is None:
+        return None
+    fscore, sname, iname = best
+    shared = bool(_name_tokens(sname) & _name_tokens(iname))
+
+    # Best cosine pair across the split -- the ANN blocker's actual candidate signal.
+    # Entity names were already embedded at build time, so this is a cache hit.
+    cosine = None
+    if embedder is not None:
+        try:
+            import numpy as np
+
+            sv = np.asarray(embedder.embed(seeds), dtype=float)
+            iv = np.asarray(embedder.embed(islands), dtype=float)
+            sv /= np.linalg.norm(sv, axis=1, keepdims=True) + 1e-12
+            iv /= np.linalg.norm(iv, axis=1, keepdims=True) + 1e-12
+            sims = sv @ iv.T  # (len(seeds), len(islands))
+            si, ii = np.unravel_index(int(np.argmax(sims)), sims.shape)
+            cosine = float(sims[si, ii])
+            # Report the actual best-cosine pair (the bridge ANN blocking would pick).
+            sname, iname = seeds[si], islands[ii]
+            shared = bool(_name_tokens(sname) & _name_tokens(iname))
+        except Exception:
+            cosine = None  # fall back to fuzzy-only verdict
+
+    near_dup = cosine >= _SEMANTIC_BLOCKING_COSINE if cosine is not None else fscore >= 85
+    if shared:
+        verdict = "SCORING-miss (candidate exists, under-merged)"
+    elif near_dup:
+        verdict = "RECALL-miss (token-disjoint near-dup; semantic blocking fixes)"
+    else:
+        verdict = "NO-BRIDGE (no token-disjoint pair clears the blocking bar)"
+    return verdict, fscore, cosine, sname, iname, shared
+
+
 @dataclass(frozen=True)
 class BuildResult:
     handle: Any
@@ -41,15 +126,25 @@ class QAEngine(Protocol):
     def answer(self, handle, question: str) -> AnswerResult: ...
 
 
-def _localize_trace(engine, handle, corpus, *, limit: int = 10) -> None:
+#: How many questions the localize trace inspects. `localize` is LLM-free (cached
+#: embeddings), so probing every question is nearly free -- the cap only bounds log
+#: volume. Raise it (GOLDENGRAPH_QA_TRACE_LIMIT=0 -> all) to get a real SCORING-vs-
+#: RECALL distribution from the shatter-probe instead of a first-10 sample.
+_TRACE_LIMIT = int(os.environ.get("GOLDENGRAPH_QA_TRACE_LIMIT") or "10")
+
+
+def _localize_trace(engine, handle, corpus, *, limit: int = _TRACE_LIMIT) -> None:
     """Diagnostic: for each question, classify WHERE the gold answer is lost --
     extraction (gold entity never made it into the graph), retrieval (it's in the
     graph but the seed-walk didn't surface it), or synthesis (it was retrieved but
     the LLM wrote a wrong answer). Opt-in via GOLDENGRAPH_QA_TRACE; only engines
     exposing `localize` (goldengraph) participate. Uses the same token-containment
     as answer_match so "in graph/ball" lines up with the headline scoring."""
-    print(f"== localize trace (first {limit}; where is the answer lost?) ==", flush=True)
-    for q in corpus.questions[:limit]:
+    qs = corpus.questions if limit <= 0 else corpus.questions[:limit]
+    print(f"== localize trace (n={len(qs)}; where is the answer lost?) ==", flush=True)
+    stage_counts: dict[str, int] = {}
+    verdict_counts: dict[str, int] = {}
+    for q in qs:
         try:
             loc = engine.localize(handle, q.question)
         except Exception as exc:  # diagnostic must never break the scored run
@@ -66,6 +161,7 @@ def _localize_trace(engine, handle, corpus, *, limit: int = 10) -> None:
             stage = "RETRIEVAL-BUDGET (reachable from seeds but outside the budget-capped ball)"
         else:
             stage = "SYNTHESIS (retrieved, wrong answer written)"
+        stage_counts[stage.split(" ", 1)[0]] = stage_counts.get(stage.split(" ", 1)[0], 0) + 1
         print(
             f"  [{q.id}] hop{q.hop_count} gold={q.gold_answer!r} "
             f"in_graph={in_graph} in_wide={in_wide} in_ball={in_ball} -> {stage}",
@@ -114,6 +210,40 @@ def _localize_trace(engine, handle, corpus, *, limit: int = 10) -> None:
                 f"answer_comp={ans_sz}ent same_component={same}",
                 flush=True,
             )
+            # Recall-vs-scoring probe: for a SHATTERED broken-chain miss (answer sits
+            # in a DIFFERENT component than the seeds), decide whether a near-duplicate
+            # bridge entity is stranded in the island that token blocking would miss
+            # (RECALL -> semantic blocking fixes it) vs one that IS already a candidate
+            # but goldenprofile under-merged (SCORING -> semantic blocking won't help).
+            # This is the single signal that gates the #1090 cross-doc integration.
+            if stage.startswith("RETRIEVAL-BROKEN-CHAIN") and not same and ans_idx >= 0 and seed_idx >= 0:
+                # The engine's embedder (cached) lets the probe score the bridge pair
+                # against the real #1090 cosine bar; absent it, the probe is fuzzy-only.
+                embedder = getattr(engine, "_embedder", None)
+                try:
+                    probe = _shatter_probe(comps[seed_idx], comps[ans_idx], embedder=embedder)
+                except Exception as exc:  # diagnostic must never break the scored run
+                    probe = None
+                    print(f"      shatter-probe failed: {exc!r}", flush=True)
+                if probe is not None:
+                    verdict, fscore, cosine, sname, iname, shared = probe
+                    cos_s = f"{cosine:.3f}" if cosine is not None else "n/a"
+                    verdict_counts[verdict.split(" ", 1)[0]] = (
+                        verdict_counts.get(verdict.split(" ", 1)[0], 0) + 1
+                    )
+                    print(
+                        f"      shatter-probe: {verdict} "
+                        f"(cosine={cos_s} fuzzy={fscore:.0f} shared_token={shared} "
+                        f"seed={sname!r} island={iname!r})",
+                        flush=True,
+                    )
+    # Roll-up so the SCORING-vs-RECALL split (the #1090 gate) and the loss-stage mix
+    # are one glance, not a grep across every per-question line.
+    stage_mix = ", ".join(f"{k}:{v}" for k, v in sorted(stage_counts.items()))
+    print(f"== trace summary: stages {{{stage_mix}}} ==", flush=True)
+    if verdict_counts:
+        verdict_mix = ", ".join(f"{k}:{v}" for k, v in sorted(verdict_counts.items()))
+        print(f"== shatter-probe verdicts {{{verdict_mix}}} ==", flush=True)
 
 
 def run_engine(engine: QAEngine, corpus, *, model: str, budget_usd: float) -> dict:
