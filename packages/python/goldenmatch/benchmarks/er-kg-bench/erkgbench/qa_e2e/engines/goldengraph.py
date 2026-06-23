@@ -43,9 +43,17 @@ def _with_retry(fn, *, attempts: int = 6, base: float = 2.0, cap: float = 45.0):
 _AS_OF = 10**12
 
 #: Local-retrieval expansion depth. The default-1 ball couldn't reach k-hop answers
-#: (the 1->2 hop accuracy cliff in the 2026-06-22 headline); 4 covers the engineered
-#: corpus's 1-4 hop range. Overridable for tuning sweeps.
-_RETRIEVAL_HOPS = int(os.environ.get("GOLDENGRAPH_QA_RETRIEVAL_HOPS", "4"))
+#: (the 1->2 hop accuracy cliff in the 2026-06-22 headline). Raised 4->6 (2026-06-23):
+#: the N=50 trace showed connected answers (same_component=True) sitting JUST outside
+#: the hops=4 ball -- RETRIEVAL-BUDGET misses. Env-tunable for sweeps.
+_RETRIEVAL_HOPS = int(os.environ.get("GOLDENGRAPH_QA_RETRIEVAL_HOPS", "6"))
+
+#: Max entities in the budget-capped answer ball (the `ask` node_budget). 256, not
+#: the library default 64: the N=50 RETRIEVAL-BUDGET misses had balls of ~64-171
+#: entities while the connected answer sat out in the 1300+ "wide" ball -- 64 was
+#: starving multi-hop answers. The budget still BOUNDS the synthesis prompt; this
+#: trades a bigger (costlier) ball for reach. Env-tunable for the sweep.
+_NODE_BUDGET = int(os.environ.get("GOLDENGRAPH_QA_NODE_BUDGET", "256"))
 
 #: Deep, unbudgeted hop count for the localize trace's "wide ball" -- approximates
 #: "everything reachable from the seeds" to split a retrieval miss (answer in the
@@ -113,7 +121,8 @@ class GoldenGraphQAEngine:
         llm: Any,
         embedder: Any,
         resolver: Any | None = None,
-        retrieval_hops: int = _RETRIEVAL_HOPS,
+        retrieval_hops: int | None = None,
+        node_budget: int | None = None,
     ):
         self._llm = _CountingLLM(llm)
         # Cache embeddings across the whole run: the build's cross-doc linking and
@@ -121,7 +130,16 @@ class GoldenGraphQAEngine:
         # is the O(N^2) network wall at large N.
         self._embedder = _CachingEmbedder(embedder)
         self._resolver = resolver  # None -> ingest uses the goldenmatch-backed default
-        self._retrieval_hops = retrieval_hops
+        # Retrieval budget read at construction (None -> env/default) so a sweep can
+        # set GOLDENGRAPH_QA_RETRIEVAL_HOPS / _NODE_BUDGET per run.
+        self._retrieval_hops = (
+            retrieval_hops if retrieval_hops is not None
+            else int(os.environ.get("GOLDENGRAPH_QA_RETRIEVAL_HOPS", "6"))
+        )
+        self._node_budget = (
+            node_budget if node_budget is not None
+            else int(os.environ.get("GOLDENGRAPH_QA_NODE_BUDGET", "256"))
+        )
 
     def build_kg(self, corpus) -> BuildResult:
         from goldengraph.ingest import ingest_corpus
@@ -164,6 +182,7 @@ class GoldenGraphQAEngine:
             tx_t=handle["tx_t"],
             mode="local",
             hops=self._retrieval_hops,
+            node_budget=self._node_budget,
         )
         return AnswerResult(
             text=text,
@@ -197,7 +216,7 @@ class GoldenGraphQAEngine:
         slice_graph = handle["store"].as_of(handle["valid_t"], handle["tx_t"])
         seeds = seed_by_query(slice_graph, question, self._embedder, k=5)
         subgraph = _retrieve_local(
-            slice_graph, seeds, max_hops=self._retrieval_hops, node_budget=64
+            slice_graph, seeds, max_hops=self._retrieval_hops, node_budget=self._node_budget
         )
         # Wide ball: deep neighborhood, no node budget -- "is the answer reachable
         # from the seeds at ALL?" Splits a retrieval miss into budget-too-small

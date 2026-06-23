@@ -54,6 +54,12 @@ on:
       extractor:
         description: "goldengraph only: document extractor -- api (LLM) | rebel | gliner (in-house local model prototype-eval)"
         default: "api"
+      retrieval_hops:
+        description: "goldengraph only: answer-time ball hop depth (RETRIEVAL-BUDGET sweep)"
+        default: "6"
+      retrieval_node_budget:
+        description: "goldengraph only: max entities in the answer ball (RETRIEVAL-BUDGET sweep; bigger = more reach + cost)"
+        default: "256"
       distill_log:
         description: "goldengraph only: capture (text->extraction)+(entity->fingerprint) pairs to a JSONL artifact for in-house distillation"
         default: "false"
@@ -128,6 +134,8 @@ jobs:
           GOLDENGRAPH_BUILD_DEBUG: ${{ inputs.build_debug }}
           GOLDENGRAPH_EXTRACTOR: ${{ inputs.extractor }}
           GOLDENGRAPH_LITERAL_ATTRS: ${{ inputs.literal_attrs }}
+          GOLDENGRAPH_QA_RETRIEVAL_HOPS: ${{ inputs.retrieval_hops }}
+          GOLDENGRAPH_QA_NODE_BUDGET: ${{ inputs.retrieval_node_budget }}
           GOLDENGRAPH_DISTILL_LOG: ${{ inputs.distill_log == 'true' && format('results/distill_goldengraph_amb{0}.jsonl', matrix.ambiguity) || '' }}
         run: |
           mkdir -p results
