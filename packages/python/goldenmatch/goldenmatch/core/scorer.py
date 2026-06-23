@@ -887,13 +887,15 @@ def _audio_fp_score_matrix(values: list) -> np.ndarray:
     parsed = [audio_fp_from_hex(v) if v is not None else None for v in values]
     out = np.zeros((n, n), dtype=np.float64)
     for i in range(n):
-        if parsed[i] is None:
+        fp_i = parsed[i]
+        if fp_i is None:
             continue
         out[i, i] = 1.0
         for j in range(i + 1, n):
-            if parsed[j] is None:
+            fp_j = parsed[j]
+            if fp_j is None:
                 continue
-            sim = 1.0 - audio_ber_aligned(parsed[i], parsed[j])
+            sim = 1.0 - audio_ber_aligned(fp_i, fp_j)
             out[i, j] = out[j, i] = sim
     return out
 
