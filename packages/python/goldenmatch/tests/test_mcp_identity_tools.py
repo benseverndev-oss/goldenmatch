@@ -19,7 +19,7 @@ from goldenmatch.mcp.identity_tools import (
 
 
 def test_identity_tool_count_and_names():
-    assert len(IDENTITY_TOOLS) == 13
+    assert len(IDENTITY_TOOLS) == 15
     assert IDENTITY_TOOL_NAMES == {
         "identity_resolve", "identity_list", "identity_history",
         "identity_conflicts", "identity_merge", "identity_split",
@@ -28,6 +28,8 @@ def test_identity_tool_count_and_names():
         "identity_profile", "identity_stats", "identity_worklist",
         # Agent Memory #1075/#1078: agent-writable ops + audit export
         "identity_claim", "identity_resolve_conflict", "identity_audit",
+        # Agent Memory #1078: tamper-evident audit seal chain
+        "identity_audit_seal", "identity_audit_verify",
     }
 
 
@@ -100,6 +102,29 @@ def test_identity_split_via_mcp(seeded_db):
     # Verify split worked end-to-end
     with IdentityStore(path=path) as s:
         assert s.find_entity_by_record("src:2") == new_eid
+
+
+def test_identity_audit_seal_and_verify_via_mcp(seeded_db):
+    path, ids = seeded_db
+    # emit a couple of events so there's something to seal
+    _dispatch("identity_merge", {
+        "keep_entity_id": ids["eid1"], "absorb_entity_id": ids["eid2"],
+        "reason": "test", "path": path,
+    })
+    sealed = _dispatch("identity_audit_seal", {"path": path, "actor": "steward:alice"})
+    assert sealed["sealed"] is True
+    assert sealed["root_hash"]
+    assert sealed["event_count"] >= 1
+
+    # re-seal with nothing new is a no-op
+    again = _dispatch("identity_audit_seal", {"path": path})
+    assert again["sealed"] is False
+
+    verified = _dispatch("identity_audit_verify", {"path": path})
+    assert verified["ok"] is True
+    assert verified["content_mismatches"] == []
+    assert verified["seal_mismatches"] == []
+    assert verified["missing_sealed_events"] == []
 
 
 def test_identity_tools_in_aggregate_dispatch():

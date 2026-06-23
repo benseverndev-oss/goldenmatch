@@ -23,6 +23,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   fallback when the native wheel is absent.
 
 ### Added
+- **Tamper-evident audit log: per-event hash + on-demand seal chain (#1078,
+  epic Agent Memory #1073).** The append-only identity event log is now
+  cryptographically tamper-evident in two contention-free layers. (1) Every
+  event is stamped at insert with an `entry_hash` — a sha256 over its own
+  immutable fields (`audit.event_content_hash`); a *pure* function, so it adds
+  no insert-time serialization point and works uniformly with the Postgres
+  bulk-COPY write path. (2) `seal_audit_log()` folds the per-event hashes (in
+  `event_id` order) into a single chained root stored in the new `audit_seals`
+  table; each seal chains to its predecessor. `verify_audit_chain()` replays
+  both layers to detect content edits, deletion, reordering, and insertion of
+  any sealed event, returning `{ok, events_checked, seals_checked}` plus the
+  ids of any failures. Sealing is an explicit, infrequent op (never on the
+  write hot path), so streaming/bulk ingest is untouched; pre-hash-chain rows
+  (`entry_hash` NULL) are hashed on the fly so an existing log can be sealed
+  retroactively. Surfaced via two new MCP/A2A tools `identity_audit_seal` /
+  `identity_audit_verify` (MCP identity tools 13 → 15, total 66 → 68; A2A skills
+  35 → 37). Schema v3 → v4 (idempotent SQLite migration + Postgres
+  `ADD COLUMN IF NOT EXISTS` + Alembic `0003`). This closes the last #1078
+  follow-up; the mongo backend stamps `entry_hash` but the seal chain is
+  SQLite/Postgres-only.
 - **Agent-writable identity ops completed + audit-log export (#1075 / #1078,
   epic Agent Memory #1073).** Building on the provenance spine, all four identity
   mutations are now reachable over MCP **and** A2A with `actor`/`trust`
@@ -34,9 +54,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   tool exports the append-only event log in commit order (who / trust / when /
   why), optionally filtered by dataset / actor — the compliance-export surface for
   #1078. MCP identity tools 10 → 13 (total 63 → 66); A2A skills 32 → 35. No
-  migration (`claimed` is a value in the existing `kind` column). Follow-ups:
-  tamper-evident hash-chaining of the log, and CLI front doors for claim /
-  resolve-conflict.
+  migration (`claimed` is a value in the existing `kind` column). Follow-up
+  (tamper-evident hash-chaining of the log) shipped in the entry above; CLI
+  front doors for claim / resolve-conflict remain open.
 - **Identity-write provenance spine: `actor` + `trust` on every event/edge
   (#1075 / #1078, epic Agent Memory #1073).** `IdentityEvent` and `EvidenceEdge`
   now record WHO made each write (`actor`, e.g. `pipeline` / `agent:claude` /

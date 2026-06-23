@@ -16,6 +16,7 @@ from datetime import datetime
 from typing import Any
 
 from goldenmatch.identity.model import (
+    AuditSeal,
     EvidenceEdge,
     IdentityAlias,
     IdentityEvent,
@@ -27,7 +28,7 @@ from goldenmatch.identity.model import (
 
 log = logging.getLogger("goldenmatch.identity")
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS identity_nodes (
@@ -93,11 +94,27 @@ CREATE TABLE IF NOT EXISTS identity_events (
     dataset      TEXT,
     actor        TEXT,
     trust        REAL,
+    entry_hash   TEXT,
     recorded_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_events_entity ON identity_events(entity_id);
 CREATE INDEX IF NOT EXISTS idx_events_kind   ON identity_events(kind);
 CREATE INDEX IF NOT EXISTS idx_events_run    ON identity_events(run_name);
+
+-- Tamper-evidence seal chain (#1078): periodic anchors over identity_events.
+-- One row per ``seal_audit_log`` call; chained via prev_seal_id/prev_root.
+CREATE TABLE IF NOT EXISTS audit_seals (
+    seal_id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    dataset       TEXT,
+    root_hash     TEXT NOT NULL,
+    event_count   INTEGER NOT NULL,
+    last_event_id INTEGER,
+    prev_seal_id  INTEGER,
+    prev_root     TEXT,
+    actor         TEXT,
+    created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_audit_seals_dataset ON audit_seals(dataset);
 
 CREATE TABLE IF NOT EXISTS identity_aliases (
     alias        TEXT NOT NULL,
@@ -258,6 +275,14 @@ class IdentityStore:
             # fresh DB whose tables already carry the columns from ``_SCHEMA`` and
             # on the rebuilt-evidence_edges path above (which drops them).
             self._ensure_provenance_columns()
+        if version < 4:
+            # v3 -> v4: tamper-evidence (#1078). Add the per-event ``entry_hash``
+            # column and the ``audit_seals`` chain table. PRAGMA-guarded ADD
+            # COLUMN + CREATE TABLE IF NOT EXISTS, so it's idempotent on a fresh
+            # DB (already carries them from ``_SCHEMA``) and on a migrated v2/v3
+            # DB. Old rows keep entry_hash=NULL and are hashed on the fly by the
+            # seal/verify path.
+            self._ensure_audit_columns()
         if version < SCHEMA_VERSION:
             self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
@@ -274,6 +299,33 @@ class IdentityStore:
                 self._conn.execute(f"ALTER TABLE {table} ADD COLUMN actor TEXT")
             if "trust" not in cols:
                 self._conn.execute(f"ALTER TABLE {table} ADD COLUMN trust REAL")
+
+    def _ensure_audit_columns(self) -> None:
+        """Add the ``entry_hash`` column to identity_events and create the
+        ``audit_seals`` table if absent (#1078). PRAGMA-guarded ADD COLUMN +
+        CREATE TABLE IF NOT EXISTS make this idempotent across fresh and
+        migrated databases."""
+        cols = {r[1] for r in self._conn.execute("PRAGMA table_info(identity_events)")}
+        if "entry_hash" not in cols:
+            self._conn.execute(
+                "ALTER TABLE identity_events ADD COLUMN entry_hash TEXT"
+            )
+        self._conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS audit_seals (
+                seal_id       INTEGER PRIMARY KEY AUTOINCREMENT,
+                dataset       TEXT,
+                root_hash     TEXT NOT NULL,
+                event_count   INTEGER NOT NULL,
+                last_event_id INTEGER,
+                prev_seal_id  INTEGER,
+                prev_root     TEXT,
+                actor         TEXT,
+                created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_audit_seals_dataset ON audit_seals(dataset);
+            """
+        )
 
     def _pg_init_schema(self) -> None:
         ddl = """
@@ -342,9 +394,23 @@ class IdentityStore:
         );
         ALTER TABLE identity_events ADD COLUMN IF NOT EXISTS actor TEXT;
         ALTER TABLE identity_events ADD COLUMN IF NOT EXISTS trust DOUBLE PRECISION;
+        -- Tamper-evidence (#1078): per-event content hash + seal chain table.
+        ALTER TABLE identity_events ADD COLUMN IF NOT EXISTS entry_hash TEXT;
         CREATE INDEX IF NOT EXISTS idx_events_entity ON identity_events(entity_id);
         CREATE INDEX IF NOT EXISTS idx_events_kind   ON identity_events(kind);
         CREATE INDEX IF NOT EXISTS idx_events_run    ON identity_events(run_name);
+        CREATE TABLE IF NOT EXISTS audit_seals (
+            seal_id BIGSERIAL PRIMARY KEY,
+            dataset TEXT,
+            root_hash TEXT NOT NULL,
+            event_count BIGINT NOT NULL,
+            last_event_id BIGINT,
+            prev_seal_id BIGINT,
+            prev_root TEXT,
+            actor TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        CREATE INDEX IF NOT EXISTS idx_audit_seals_dataset ON audit_seals(dataset);
         CREATE TABLE IF NOT EXISTS identity_aliases (
             alias TEXT NOT NULL,
             entity_id TEXT NOT NULL,
@@ -825,13 +891,21 @@ class IdentityStore:
         if self._backend == "mongo":
             return self._mongo.emit_event(event)
         payload = json.dumps(event.payload) if event.payload is not None else None
+        # Tamper-evidence (#1078): stamp a per-event content hash at insert. Pure
+        # function of the event's own fields -- no DB read, no contention -- so it
+        # imposes no serialization point on the write path. Set it on the object
+        # too so an in-memory caller sees the same value the row carries.
+        from goldenmatch.identity.audit import event_content_hash  # noqa: PLC0415
+        if event.entry_hash is None:
+            event.entry_hash = event_content_hash(event)
         self._exec(
             "INSERT INTO identity_events "
-            "(entity_id, kind, payload, run_name, dataset, actor, trust, recorded_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "(entity_id, kind, payload, run_name, dataset, actor, trust, "
+            "entry_hash, recorded_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 event.entity_id, event.kind, payload, event.run_name,
-                event.dataset, event.actor, event.trust,
+                event.dataset, event.actor, event.trust, event.entry_hash,
                 event.recorded_at.isoformat(),
             ),
         )
@@ -890,6 +964,68 @@ class IdentityStore:
             tuple(params),
         )
         return [self._row_to_event(r) for r in rows]
+
+    # ----- Audit seal chain (#1078) -----
+
+    def add_seal(self, seal: AuditSeal) -> int | None:
+        """Persist a tamper-evidence seal and return its id. Used by
+        ``audit.seal_audit_log``; the chain logic lives there, not here."""
+        if self._backend == "mongo":
+            raise NotImplementedError(
+                "audit seals are not supported on the mongo backend"
+            )
+        self._exec(
+            "INSERT INTO audit_seals "
+            "(dataset, root_hash, event_count, last_event_id, prev_seal_id, "
+            "prev_root, actor, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                seal.dataset, seal.root_hash, seal.event_count,
+                seal.last_event_id, seal.prev_seal_id, seal.prev_root,
+                seal.actor, seal.created_at.isoformat(),
+            ),
+        )
+        row = self._fetchone("SELECT MAX(seal_id) AS seal_id FROM audit_seals", ())
+        return int(row["seal_id"]) if row and row["seal_id"] is not None else None
+
+    def latest_seal(self, *, dataset: str | None = None) -> AuditSeal | None:
+        """The most recent seal for the given ``dataset`` scope (``None`` =
+        global chain), or ``None`` if the chain is empty."""
+        if self._backend == "mongo":
+            raise NotImplementedError(
+                "audit seals are not supported on the mongo backend"
+            )
+        if dataset is None:
+            row = self._fetchone(
+                "SELECT * FROM audit_seals WHERE dataset IS NULL "
+                "ORDER BY seal_id DESC LIMIT 1",
+                (),
+            )
+        else:
+            row = self._fetchone(
+                "SELECT * FROM audit_seals WHERE dataset = ? "
+                "ORDER BY seal_id DESC LIMIT 1",
+                (dataset,),
+            )
+        return self._row_to_seal(row) if row else None
+
+    def list_seals(self, *, dataset: str | None = None) -> list[AuditSeal]:
+        """Every seal for the given ``dataset`` scope in creation order."""
+        if self._backend == "mongo":
+            raise NotImplementedError(
+                "audit seals are not supported on the mongo backend"
+            )
+        if dataset is None:
+            rows = self._fetchall(
+                "SELECT * FROM audit_seals WHERE dataset IS NULL ORDER BY seal_id",
+                (),
+            )
+        else:
+            rows = self._fetchall(
+                "SELECT * FROM audit_seals WHERE dataset = ? ORDER BY seal_id",
+                (dataset,),
+            )
+        return [self._row_to_seal(r) for r in rows]
 
     def has_run_event(self, entity_id: str, run_name: str, kind: str) -> bool:
         if self._backend == "mongo":
@@ -1024,8 +1160,31 @@ class IdentityStore:
             dataset=row["dataset"],
             actor=_row_get(row, "actor"),
             trust=_row_get(row, "trust"),
+            entry_hash=_row_get(row, "entry_hash"),
             recorded_at=_to_dt(row["recorded_at"]),
             event_id=row["event_id"],
+        )
+
+    @staticmethod
+    def _row_to_seal(row: Any) -> AuditSeal:
+        return AuditSeal(
+            root_hash=row["root_hash"],
+            event_count=int(row["event_count"]),
+            last_event_id=(
+                int(row["last_event_id"])
+                if row["last_event_id"] is not None
+                else None
+            ),
+            dataset=row["dataset"],
+            prev_seal_id=(
+                int(row["prev_seal_id"])
+                if row["prev_seal_id"] is not None
+                else None
+            ),
+            prev_root=row["prev_root"],
+            actor=_row_get(row, "actor"),
+            created_at=_to_dt(row["created_at"]),
+            seal_id=int(row["seal_id"]),
         )
 
 

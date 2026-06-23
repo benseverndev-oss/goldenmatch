@@ -5,6 +5,12 @@ See ``docs/superpowers/specs/2026-05-12-identity-graph-design.md``.
 """
 from __future__ import annotations
 
+from goldenmatch.identity.audit import (
+    AuditVerification,
+    event_content_hash,
+    seal_audit_log,
+    verify_audit_chain,
+)
 from goldenmatch.identity.mediation import (
     ConflictItem,
     ConflictResolution,
@@ -16,6 +22,7 @@ from goldenmatch.identity.mediation import (
 )
 from goldenmatch.identity.migrate_ids import MigrationReport, migrate_record_ids
 from goldenmatch.identity.model import (
+    AuditSeal,
     EdgeKind,
     EventKind,
     EvidenceEdge,
@@ -131,6 +138,11 @@ __all__ = [
     "entity_profile",
     "identity_summary_stats",
     "steward_worklist",
+    "AuditSeal",
+    "AuditVerification",
+    "event_content_hash",
+    "seal_audit_log",
+    "verify_audit_chain",
     "EdgeKind",
     "EventKind",
     "EvidenceEdge",

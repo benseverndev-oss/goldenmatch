@@ -103,8 +103,39 @@ class IdentityEvent:
     # See EvidenceEdge for the contract. The "why" rides in ``payload['reason']``.
     actor: str | None = None
     trust: float | None = None
+    # Tamper-evidence (#1078): per-event content hash (sha256 over the event's
+    # own immutable fields), computed at insert by ``audit.event_content_hash``.
+    # A pure function -- no prior-state read, so it imposes no insert-time
+    # serialization point and works uniformly with the Postgres bulk-COPY path.
+    # The chain/seal anchor lives in ``audit_seals`` (see ``AuditSeal``). Nullable:
+    # pre-hash-chain rows read back as None and are hashed on the fly at seal/verify.
+    entry_hash: str | None = None
     recorded_at: datetime = field(default_factory=datetime.now)
     event_id: int | None = None
+
+
+@dataclass
+class AuditSeal:
+    """A periodic tamper-evidence anchor over the append-only event log (#1078).
+
+    Each seal records the chained root hash of every event (in ``event_id``
+    order) up to ``last_event_id`` for a given ``dataset`` scope (``None`` =
+    global chain). Seals chain to their predecessor via ``prev_seal_id`` /
+    ``prev_root`` so the whole history is one verifiable ledger -- detecting
+    deletion, reordering, insertion, and content edits of any sealed event.
+    Created on demand by ``audit.seal_audit_log``; checked by
+    ``audit.verify_audit_chain``.
+    """
+
+    root_hash: str
+    event_count: int
+    last_event_id: int | None = None
+    dataset: str | None = None
+    prev_seal_id: int | None = None
+    prev_root: str | None = None
+    actor: str | None = None
+    created_at: datetime = field(default_factory=datetime.now)
+    seal_id: int | None = None
 
 
 @dataclass
