@@ -1,5 +1,6 @@
 name: Publish goldencheck to PyPI
 
+# Thin caller -> .github/workflows/_publish-pypi.yml (the shared template).
 on:
   release:
     types: [published]
@@ -9,6 +10,10 @@ on:
         description: "Tag or commit to build (default: HEAD of main)"
         required: false
         default: ""
+      dry_run:
+        description: "Build + validate without publishing"
+        required: false
+        default: "false"
 
 permissions:
   id-token: write
@@ -19,22 +24,9 @@ jobs:
     # Only run for goldencheck-v* tags. Skip goldencheck-types-v*
     # (handled by publish-goldencheck-types.yml) and other package tags.
     if: github.event_name == 'workflow_dispatch' || (startsWith(github.event.release.tag_name, 'goldencheck-v') && !startsWith(github.event.release.tag_name, 'goldencheck-types-v'))
-    runs-on: ubuntu-latest
-    environment: pypi
-    defaults:
-      run:
-        working-directory: packages/python/goldencheck
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
-        with:
-          ref: ${{ inputs.ref || github.ref }}
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
-        with:
-          python-version: "3.12"
-      - run: pip install build
-      - run: python -m build
-      - uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b  # release/v1
-        with:
-          packages-dir: packages/python/goldencheck/dist
-          password: ${{ secrets.PYPI_TOKEN }}
-          skip-existing: true
+    uses: ./.github/workflows/_publish-pypi.yml
+    with:
+      package: goldencheck
+      ref: ${{ inputs.ref || '' }}
+      dry_run: ${{ inputs.dry_run || 'false' }}
+    secrets: inherit
