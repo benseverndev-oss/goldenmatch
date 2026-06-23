@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import math
 import random
+import struct
 from pathlib import Path
 
 import pytest
@@ -41,6 +42,22 @@ def _sines(length: int, sample_rate: int, freqs: list[float]) -> list[float]:
         sum(math.sin(2.0 * math.pi * f * n / sample_rate) for f in freqs) / len(freqs)
         for n in range(length)
     ]
+
+
+def _radial_close(got: list[float], want: list[float]) -> bool:
+    """Numerical (not bit-identical) parity for the radial-variance profile.
+
+    Unlike the bit-packed phash/audio hashes -- where a single flipped bit changes
+    the hamming/BER distance and bit-exactness is the contract -- the radial profile
+    is a continuous float vector consumed by a Pearson comparison. The abi3 wheel
+    (native crate, thin-LTO + opt-level 3) may emit a ~1-ULP-different float via an
+    FMA/reassociated reduction; that shifts a similarity score by ~1e-15, never a
+    match decision. The bit-exact algorithm check lives in the core `golden.rs`
+    test; here we assert the two profiles are numerically interchangeable.
+    """
+    return len(got) == len(want) and all(
+        math.isclose(a, b, rel_tol=1e-9, abs_tol=1e-9) for a, b in zip(got, want)
+    )
 
 
 def test_native_phash_matches_python_reference():
@@ -73,12 +90,26 @@ def test_native_fingerprint_audio_matches_python_reference():
         )
 
 
+def test_native_radial_matches_python_reference():
+    nat = native_module()
+    rng = random.Random(515)
+    for _ in range(60):
+        grid = _rand_grid(rng)
+        assert _radial_close(
+            nat.perceptual_radial_variance(grid), perceptual._radial_variance_python(grid)
+        )
+
+
 def test_native_reproduces_golden_fixture():
     nat = native_module()
     fx = json.loads(_FIXTURE.read_text(encoding="utf-8"))
     for img in fx["images"]:
         grid = [[float(v) for v in row] for row in img["pixels"]]
         assert hex(nat.perceptual_phash_image(grid)) == img["phash"], img["name"]
+        # radial profile is stored as hex f64 bit patterns; the wheel agrees
+        # numerically (see _radial_close -- continuous float feature, not a hash)
+        want = [struct.unpack("<d", struct.pack("<Q", int(h, 16)))[0] for h in img["radial"]]
+        assert _radial_close(nat.perceptual_radial_variance(grid), want), img["name"]
     scale = fx["pcm_scale"]
     for aud in fx["audio"]:
         samples = [s / scale for s in aud["pcm16"]]
@@ -102,6 +133,7 @@ def test_dispatch_uses_native_under_force(monkeypatch):
     nat = native_module()
     grid = _rand_grid(random.Random(99))
     assert perceptual.phash_image(grid) == nat.perceptual_phash_image(grid)
+    assert _radial_close(perceptual.radial_variance(grid), nat.perceptual_radial_variance(grid))
     sig = _sines(8192, 44100, [440.0, 660.0])
     assert perceptual.fingerprint_audio(sig, 44100) == nat.perceptual_fingerprint_audio(
         sig, 44100

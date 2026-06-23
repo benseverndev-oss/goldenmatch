@@ -54,16 +54,26 @@ pub fn radial_variance(grid: &[Vec<f64>]) -> Vec<f64> {
             profile.push(0.0);
             continue;
         }
-        let mean = vals.iter().sum::<f64>() / vals.len() as f64;
-        // Faithful translation of CPython's `sum((v-mean)*(v-mean) for v in vals)`:
-        // each squared deviation is a distinct rounded float, then summed left to
-        // right. Materialising the squares (rather than `.map().sum()`) keeps the
-        // multiply and the accumulating add from ever contracting into one fused
-        // mul-add, so the result is bit-identical to the reference (the golden
-        // fixture is the bit-exact check).
-        let squares: Vec<f64> = vals.iter().map(|&v| (v - mean) * (v - mean)).collect();
-        let var = squares.iter().sum::<f64>() / vals.len() as f64;
-        profile.push(var);
+        // Explicit ordered scalar accumulation (mirrors `phash.rs`'s DCT loops),
+        // strict left-to-right like CPython's `sum(...)`. The non-LTO core matches
+        // the Python reference bit-for-bit (the `golden.rs` fixture is that exact
+        // check). NOTE the abi3 *wheel* (native crate, thin-LTO + opt-level 3) may
+        // emit a ~1-ULP-different float here via an FMA/reassociated reduction --
+        // harmless for a continuous profile compared by Pearson (unlike the
+        // bit-packed phash/audio hashes), so the native<->python parity test asserts
+        // numerical, not bit-identical, agreement on the profile.
+        let count = vals.len() as f64;
+        let mut sum = 0.0;
+        for &v in &vals {
+            sum += v;
+        }
+        let mean = sum / count;
+        let mut sq_sum = 0.0;
+        for &v in &vals {
+            let d = v - mean;
+            sq_sum += d * d;
+        }
+        profile.push(sq_sum / count);
     }
     profile
 }

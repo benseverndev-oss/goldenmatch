@@ -197,6 +197,8 @@ def score_field(val_a: str | None, val_b: str | None, scorer: str) -> float | No
         return _phash_score_single(val_a, val_b)
     elif scorer == "audio_fp":
         return _audio_fp_score_single(val_a, val_b)
+    elif scorer == "radial":
+        return _radial_score_single(val_a, val_b)
     else:
         # Check plugin registry
         from goldenmatch.plugins.registry import PluginRegistry
@@ -553,6 +555,8 @@ def _fuzzy_score_matrix(
         return _phash_score_matrix(values)
     elif scorer_name == "audio_fp":
         return _audio_fp_score_matrix(values)
+    elif scorer_name == "radial":
+        return _radial_score_matrix(values)
     elif scorer_name == "qgram":
         return _qgram_score_matrix(values)
     else:
@@ -896,6 +900,44 @@ def _audio_fp_score_matrix(values: list) -> np.ndarray:
             if fp_j is None:
                 continue
             sim = 1.0 - audio_ber_aligned(fp_i, fp_j)
+            out[i, j] = out[j, i] = sim
+    return out
+
+
+def _radial_score_single(val_a: str, val_b: str) -> float:
+    """Rotation-aligned similarity of two radial-variance profiles (ADR 0022,
+    finding 1). Parses the hex column form and runs the best-cyclic-shift Pearson
+    -- the geometric counterpart to ``phash`` (which is photometric-only)."""
+    from goldenmatch.core.perceptual import radial_align_similarity, radial_from_hex
+
+    return radial_align_similarity(radial_from_hex(val_a), radial_from_hex(val_b))
+
+
+def _radial_score_matrix(values: list) -> np.ndarray:
+    """NxN rotation-aligned radial-variance similarity. The compare is an angular
+    alignment search (not vectorizable like a bit-hamming), so this is a symmetric
+    pairwise loop (block-sized N); None / unparseable values score 0 everywhere."""
+    from goldenmatch.core.perceptual import radial_align_similarity, radial_from_hex
+
+    n = len(values)
+    parsed: list[list[int] | None] = []
+    for v in values:
+        if v is None:
+            parsed.append(None)
+            continue
+        prof = radial_from_hex(v)
+        parsed.append(prof if prof else None)
+    out = np.zeros((n, n), dtype=np.float64)
+    for i in range(n):
+        prof_i = parsed[i]
+        if prof_i is None:
+            continue
+        out[i, i] = 1.0
+        for j in range(i + 1, n):
+            prof_j = parsed[j]
+            if prof_j is None:
+                continue
+            sim = radial_align_similarity(prof_i, prof_j)
             out[i, j] = out[j, i] = sim
     return out
 

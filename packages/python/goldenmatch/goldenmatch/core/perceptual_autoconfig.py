@@ -28,12 +28,18 @@ from goldenmatch.core.perceptual_blocker import recommend_num_bands
 # A 16-char (64-bit) image pHash. An audio fingerprint is two or more 8-char
 # (32-bit) words concatenated -- a 16-char string is ambiguous, so it is read as
 # an image pHash (the common fixed-width case) and audio requires >= 3 words.
+# A radial-variance profile is exactly 96 hex chars (RADIAL_ANGLES=48 int8 bins,
+# ADR 0022 finding 1). 96 is also a valid audio length (12 words), so a column of
+# values that are ALL exactly 96 chars is read as radial (audio fingerprints vary
+# in length across records; a uniform-96 column is the geometric profile).
 _IMAGE_RE = re.compile(r"^[0-9a-f]{16}$")
+_RADIAL_RE = re.compile(r"^[0-9a-f]{96}$")
 _AUDIO_RE = re.compile(r"^(?:[0-9a-f]{8}){3,}$")
 
 _SAMPLE = 200
 _IMAGE_THRESHOLD = 0.85  # hamming <= ~10/64
 _AUDIO_THRESHOLD = 0.80
+_RADIAL_THRESHOLD = 0.85  # bench operating point (P=1.0, R=0.99 at 0.85)
 # Blocking must recall the same near-duplicate radius the scorer accepts, so the
 # band count is derived from the image threshold rather than hardcoded (the old
 # default of 8 under-recalled at 0.72; the recall-target rule picks 16 at 0.97).
@@ -42,17 +48,25 @@ _HASH_BITS = 64
 
 
 def _classify(values: list[str]) -> str | None:
-    """``"image"`` / ``"audio"`` if every value is that fixed-width hex hash, else None."""
-    img = aud = True
+    """``"image"`` / ``"radial"`` / ``"audio"`` if every value is that hex form, else None.
+
+    A uniform-96-char column is read as ``radial`` even though 96 chars is also a
+    valid audio length -- audio fingerprints vary in length across records, so a
+    column that is *always* exactly 96 is the geometric profile, not audio."""
+    img = rad = aud = True
     for v in values:
         if not _IMAGE_RE.match(v):
             img = False
+        if not _RADIAL_RE.match(v):
+            rad = False
         if not _AUDIO_RE.match(v):
             aud = False
-        if not img and not aud:
+        if not img and not rad and not aud:
             return None
     if img:
         return "image"
+    if rad:
+        return "radial"
     if aud:
         return "audio"
     return None
@@ -61,8 +75,8 @@ def _classify(values: list[str]) -> str | None:
 def detect_perceptual_hash_columns(
     df: pl.DataFrame, sample: int = _SAMPLE
 ) -> list[tuple[str, str]]:
-    """Return ``(column, kind)`` (kind in ``{"image", "audio"}``) for each column
-    whose non-null string values are all fixed-width hex perceptual hashes."""
+    """Return ``(column, kind)`` (kind in ``{"image", "radial", "audio"}``) for each
+    column whose non-null string values are all fixed-width hex perceptual hashes."""
     out: list[tuple[str, str]] = []
     for col in df.columns:
         if col.startswith("__"):
@@ -80,10 +94,18 @@ def detect_perceptual_hash_columns(
     return out
 
 
+_SCORER_BY_KIND = {"image": "phash", "audio": "audio_fp", "radial": "radial"}
+_THRESHOLD_BY_KIND = {
+    "image": _IMAGE_THRESHOLD,
+    "audio": _AUDIO_THRESHOLD,
+    "radial": _RADIAL_THRESHOLD,
+}
+
+
 def build_perceptual_matchkey(column: str, kind: str) -> MatchkeyConfig:
     """A single-field weighted matchkey scoring ``column`` with the media comparator."""
-    scorer = "phash" if kind == "image" else "audio_fp"
-    threshold = _IMAGE_THRESHOLD if kind == "image" else _AUDIO_THRESHOLD
+    scorer = _SCORER_BY_KIND[kind]
+    threshold = _THRESHOLD_BY_KIND[kind]
     return MatchkeyConfig(
         name=f"perceptual_{kind}_{column}",
         type="weighted",

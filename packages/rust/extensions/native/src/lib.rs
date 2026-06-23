@@ -57,6 +57,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(perceptual::perceptual_phash_image, m)?)?;
     m.add_function(wrap_pyfunction!(perceptual::perceptual_phash_batch, m)?)?;
     m.add_function(wrap_pyfunction!(perceptual::perceptual_fingerprint_audio, m)?)?;
+    m.add_function(wrap_pyfunction!(perceptual::perceptual_radial_variance, m)?)?;
     m.add_function(wrap_pyfunction!(autoconfig::autoconfig_decide_plan, m)?)?;
     m.add_function(wrap_pyfunction!(autoconfig::autoconfig_classify_columns, m)?)?;
     m.add_function(wrap_pyfunction!(autoconfig::autoconfig_extrapolate_pair_count, m)?)?;
