@@ -47,6 +47,12 @@ _LOCAL_PROMPT = (
     "have phrased the relation differently). Follow edges in EITHER direction.\n"
     "3. Carry the resolved bridge entity forward to the next sub-question until you "
     "reach the final entity.\n"
+    "4. MIND THE ARROW DIRECTION. An edge 'A -[relation]-> B' means the relation runs "
+    "FROM A TO B (e.g. 'Mao -[reported to]-> Politburo' means Mao reported to the "
+    "Politburo, so 'who did Mao report to?' is the Politburo, NOT Mao). When the final "
+    "hop resolves, the answer is the NEW entity that hop reaches -- the one on the far "
+    "end of the answering edge from the entity you carried in. Never answer with the "
+    "entity you already held going into the final hop.\n"
     "Anchor entities: {seeds}\n"
     "Your final answer is ALWAYS a single entity that appears in the Entities list -- "
     "output its EXACT name, nothing else, on the last line prefixed 'Answer: '. Commit "
@@ -81,6 +87,9 @@ def _extract_answer(text: str) -> str:
         first = tail.splitlines()[0].strip() if tail else ""
         if first:
             return first
+        # Marker present but empty (model emitted a bare "Answer:") -> a non-answer,
+        # not the literal string "Answer:". Return empty rather than the marker.
+        return ""
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     return lines[-1] if lines else text.strip()
 

@@ -43,6 +43,19 @@ def test_local_prompt_instructs_multihop_decomposition():
     assert "Answer:" in prompt
 
 
+def test_local_prompt_warns_on_arrow_direction():
+    # The Politburo SYNTHESIS miss: edge 'Mao -[reported to]-> Politburo' was
+    # retrieved but the model answered the subject (Mao) it already held instead
+    # of the object (Politburo) the final hop reaches. The prompt must steer on
+    # edge direction and "answer the NEW entity, not the one you carried in".
+    llm = RecordingLLM()
+    synthesize_local("q?", _SUB, llm)
+    prompt = llm.prompts[-1].lower()
+    assert "direction" in prompt
+    assert "reported to" in prompt  # the worked directionality example
+    assert "new entity" in prompt
+
+
 def test_local_prompt_anchors_on_seed_names():
     llm = RecordingLLM()
     synthesize_local("q?", _SUB, llm, seed_names=["Acme", "Acme", "Rocket"])
@@ -83,6 +96,13 @@ def test_extract_answer_is_case_insensitive_and_strips():
 def test_extract_answer_handles_empty():
     assert _extract_answer("") == ""
     assert _extract_answer("   ") == "   "
+
+
+def test_extract_answer_bare_marker_is_empty_not_the_literal_marker():
+    # When the model emits the marker with nothing after it, return "" (a
+    # non-answer) rather than the literal string "Answer:" (the N=3 wart).
+    assert _extract_answer("hop one\nhop two\nAnswer:") == ""
+    assert _extract_answer("reasoning...\nAnswer:   ") == ""
 
 
 def test_synthesize_local_returns_parsed_answer_not_full_completion():
