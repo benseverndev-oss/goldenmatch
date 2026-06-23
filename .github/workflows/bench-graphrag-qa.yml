@@ -31,6 +31,24 @@ on:
       link_threshold:
         description: "goldengraph only: embedding cosine cutoff for cross-doc linking (lower = more merging)"
         default: "0.82"
+      profile_link:
+        description: "goldengraph only: use the goldenprofile anti-shatter engine as the cross-doc matcher (needs cross_doc_link=true)"
+        default: "false"
+      profile_merge_threshold:
+        description: "goldengraph only: goldenprofile merge threshold (engine ScoreConfig default 0.72)"
+        default: "0.72"
+      build_workers:
+        description: "goldengraph only: concurrent per-doc LLM workers at build (rate-limit-bounded; retry/backoff absorbs 429s)"
+        default: "8"
+      build_debug:
+        description: "goldengraph only: print the per-sub-step build timing breakdown (extract/resolve/fingerprint/link/append) for hotspot analysis"
+        default: "false"
+      extractor:
+        description: "goldengraph only: document extractor -- api (LLM) | rebel | gliner (in-house local model prototype-eval)"
+        default: "api"
+      distill_log:
+        description: "goldengraph only: capture (text->extraction)+(entity->fingerprint) pairs to a JSONL artifact for in-house distillation"
+        default: "false"
 
 permissions:
   contents: read
@@ -55,7 +73,10 @@ jobs:
     needs: setup
     if: ${{ inputs.engine == 'all' || inputs.engine == 'goldengraph' }}
     runs-on: large-new-64GB
-    timeout-minutes: 60
+    # Large-N MuSiQue builds a graph from ~20 docs/question sequentially (per-doc LLM
+    # extraction + fingerprint synthesis), so N=200 (~4000 docs) needs hours, not the
+    # 60 min that fit the small-N runs. Raised under the hosted 360-min job ceiling.
+    timeout-minutes: 330
     strategy:
       fail-fast: false
       matrix:
@@ -71,8 +92,16 @@ jobs:
           python -m pip install --upgrade pip maturin pytest goldenmatch datasets openai
           maturin build --release \
             -m packages/rust/extensions/goldengraph-native/Cargo.toml --out dist
+          # goldenprofile-native: the anti-shatter cross-doc matcher (GOLDENGRAPH_PROFILE_LINK)
+          maturin build --release \
+            -m packages/rust/extensions/goldenprofile-native/Cargo.toml --out dist
           python -m pip install dist/*.whl
           python -m pip install --no-deps -e packages/python/goldengraph
+          # In-house local-extractor prototype-eval deps (only when selected).
+          if [ "${{ inputs.extractor }}" != "api" ]; then
+            python -m pip install transformers torch
+            if [ "${{ inputs.extractor }}" = "gliner" ]; then python -m pip install gliner; fi
+          fi
       - name: Run goldengraph end-to-end (real LLM, budget-capped)
         working-directory: packages/python/goldenmatch/benchmarks/er-kg-bench
         env:
@@ -81,7 +110,14 @@ jobs:
           GOLDENGRAPH_QA_TRACE: ${{ inputs.trace }}
           GOLDENGRAPH_CROSS_DOC_LINK: ${{ inputs.cross_doc_link }}
           GOLDENGRAPH_LINK_THRESHOLD: ${{ inputs.link_threshold }}
+          GOLDENGRAPH_PROFILE_LINK: ${{ inputs.profile_link }}
+          GOLDENGRAPH_PROFILE_MERGE_THRESHOLD: ${{ inputs.profile_merge_threshold }}
+          GOLDENGRAPH_BUILD_WORKERS: ${{ inputs.build_workers }}
+          GOLDENGRAPH_BUILD_DEBUG: ${{ inputs.build_debug }}
+          GOLDENGRAPH_EXTRACTOR: ${{ inputs.extractor }}
+          GOLDENGRAPH_DISTILL_LOG: ${{ inputs.distill_log == 'true' && format('results/distill_goldengraph_amb{0}.jsonl', matrix.ambiguity) || '' }}
         run: |
+          mkdir -p results
           python -m erkgbench.qa_e2e.run_qa_e2e \
             --engine goldengraph \
             --corpus "${{ inputs.corpus }}" \
@@ -96,6 +132,13 @@ jobs:
         with:
           name: graphrag-qa-results-goldengraph-amb${{ matrix.ambiguity }}
           path: packages/python/goldenmatch/benchmarks/er-kg-bench/results/results_qa_e2e_goldengraph_amb${{ matrix.ambiguity }}*.*
+          if-no-files-found: ignore
+      - name: Upload distillation pairs
+        if: ${{ always() && inputs.distill_log == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: graphrag-distill-goldengraph-amb${{ matrix.ambiguity }}
+          path: packages/python/goldenmatch/benchmarks/er-kg-bench/results/distill_goldengraph_amb${{ matrix.ambiguity }}.jsonl
           if-no-files-found: ignore
 
   lightrag:

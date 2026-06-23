@@ -6,10 +6,38 @@ this module for the registry never drags the wheel."""
 from __future__ import annotations
 
 import os
+import random
+import threading
 import time
 from typing import Any
+from urllib.error import HTTPError, URLError
 
 from ..harness import AnswerResult, BuildResult
+
+#: Provider responses worth retrying: rate limit (429) + transient 5xx. A 400 (bad
+#: request) is a real error and is re-raised immediately.
+_RETRY_CODES = {429, 500, 502, 503, 504}
+
+
+def _with_retry(fn, *, attempts: int = 6, base: float = 2.0, cap: float = 45.0):
+    """Run `fn`, retrying rate-limit/transient provider errors with exponential
+    backoff + jitter. This is what lets the build crank concurrency: when the
+    OpenAI account's RPM/TPM is hit, callers back off and re-issue instead of the
+    fail-soft path silently dropping a document's extraction (which would quietly
+    degrade the graph)."""
+    for i in range(attempts):
+        try:
+            return fn()
+        except HTTPError as e:
+            if getattr(e, "code", None) in _RETRY_CODES and i < attempts - 1:
+                time.sleep(min(cap, base**i) + random.random())
+                continue
+            raise
+        except (URLError, TimeoutError):
+            if i < attempts - 1:
+                time.sleep(min(cap, base**i) + random.random())
+                continue
+            raise
 
 #: as-of coordinates large enough to see every appended batch (ingest uses at=i+1).
 _AS_OF = 10**12
@@ -26,6 +54,34 @@ _RETRIEVAL_HOPS = int(os.environ.get("GOLDENGRAPH_QA_RETRIEVAL_HOPS", "4"))
 _WIDE_HOPS = 8
 
 
+class _CachingEmbedder:
+    """Memoizes embeddings by text across the WHOLE run. Two callers re-embed the
+    same texts repeatedly: cross-document linking re-embeds the growing entity set
+    on every document (O(N^2) at build), and `seed_by_query` re-embeds every entity
+    NAME on every question (O(questions x entities) at answer-time). Text -> vector
+    is deterministic, so each distinct text embeds exactly once; later docs/queries
+    hit the cache. Thread-safe so the parallel build can share one instance."""
+
+    def __init__(self, inner: Any):
+        self._inner = inner
+        self._cache: dict[str, Any] = {}
+        self._lock = threading.Lock()
+
+    def embed(self, texts):
+        import numpy as np
+
+        texts = list(texts)
+        with self._lock:
+            missing = list(dict.fromkeys(t for t in texts if t not in self._cache))
+        if missing:
+            vecs = np.asarray(_with_retry(lambda: self._inner.embed(missing)), dtype=float)
+            with self._lock:
+                for t, v in zip(missing, vecs):
+                    self._cache[t] = v
+        with self._lock:
+            return np.asarray([self._cache[t] for t in texts], dtype=float)
+
+
 class _CountingLLM:
     """Wraps any goldengraph LLMClient and estimates token usage per .complete
     call (len//4), so the bench owns cost accounting regardless of the client."""
@@ -34,11 +90,16 @@ class _CountingLLM:
         self._inner = inner
         self.input_tokens = 0
         self.output_tokens = 0
+        self._lock = threading.Lock()
 
     def complete(self, prompt: str) -> str:
-        self.input_tokens += max(1, len(prompt) // 4)
-        out = self._inner.complete(prompt)
-        self.output_tokens += max(1, len(out) // 4)
+        # Concurrent build calls share this wrapper; guard the counters (the inner
+        # OpenAI client is itself thread-safe for concurrent requests). Retry
+        # rate-limit/transient errors so high concurrency doesn't drop documents.
+        out = _with_retry(lambda: self._inner.complete(prompt))
+        with self._lock:
+            self.input_tokens += max(1, len(prompt) // 4)
+            self.output_tokens += max(1, len(out) // 4)
         return out
 
 
@@ -55,24 +116,32 @@ class GoldenGraphQAEngine:
         retrieval_hops: int = _RETRIEVAL_HOPS,
     ):
         self._llm = _CountingLLM(llm)
-        self._embedder = embedder
+        # Cache embeddings across the whole run: the build's cross-doc linking and
+        # answer-time seeding both re-embed the same entity texts many times, which
+        # is the O(N^2) network wall at large N.
+        self._embedder = _CachingEmbedder(embedder)
         self._resolver = resolver  # None -> ingest uses the goldenmatch-backed default
         self._retrieval_hops = retrieval_hops
 
     def build_kg(self, corpus) -> BuildResult:
-        from goldengraph import ingest
+        from goldengraph.ingest import ingest_corpus
         from goldengraph_native import _native as ggn
 
         t0 = time.perf_counter()
         before_in, before_out = self._llm.input_tokens, self._llm.output_tokens
         store = ggn.PyStore()
-        for i, doc in enumerate(corpus.documents):
-            # Pass the embedder so opt-in cross-document linking
-            # (GOLDENGRAPH_CROSS_DOC_LINK=1) uses the name-invariant embedding matcher.
-            ingest(
-                doc.text, store, at=i + 1, llm=self._llm,
-                resolver=self._resolver, embedder=self._embedder,
-            )
+        # Persistent record_key -> LLM-fingerprint map for GOLDENGRAPH_PROFILE_LINK:
+        # carries each entity's fingerprint across documents (the store doesn't), so
+        # a bridge's later appearance can be matched against its earlier fingerprint.
+        fp_index: dict[str, str] = {}
+        # ingest_corpus parallelizes the per-doc LLM work (extraction + fingerprint
+        # synthesis -- the build's dominant, network-bound cost) across documents,
+        # committing to the store serially in document order (identical result). The
+        # shared caching embedder (self._embedder) embeds each entity text once.
+        ingest_corpus(
+            [doc.text for doc in corpus.documents], store, llm=self._llm,
+            resolver=self._resolver, embedder=self._embedder, fp_index=fp_index,
+        )
         handle = {"store": store, "valid_t": _AS_OF, "tx_t": _AS_OF}
         return BuildResult(
             handle=handle,

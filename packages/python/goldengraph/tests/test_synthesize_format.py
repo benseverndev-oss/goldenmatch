@@ -41,3 +41,20 @@ def test_local_prompt_instructs_multihop_decomposition():
     assert "sub-question" in prompt.lower()
     assert "Acme -[made]-> Rocket" in prompt
     assert "Answer:" in prompt
+
+
+def test_local_prompt_anchors_on_seed_names():
+    llm = RecordingLLM()
+    synthesize_local("q?", _SUB, llm, seed_names=["Acme", "Acme", "Rocket"])
+    prompt = llm.prompts[-1]
+    # Seeds are surfaced as anchor entities (deduped) so the walk starts at the
+    # query-relevant nodes rather than guessing among the whole ball.
+    assert "Anchor entities: Acme, Rocket" in prompt
+    # And the model is forced to commit to a named entity, not a description.
+    assert "EXACT name" in prompt
+
+
+def test_local_prompt_seed_names_optional():
+    llm = RecordingLLM()
+    synthesize_local("q?", _SUB, llm)
+    assert "Anchor entities:" in llm.prompts[-1]  # falls back to a placeholder line

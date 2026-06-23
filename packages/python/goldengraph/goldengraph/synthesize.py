@@ -40,16 +40,19 @@ _LOCAL_PROMPT = (
     "question. Work it out like this:\n"
     "1. Decompose the question into an ordered chain of sub-questions, where each "
     "sub-question's answer is the subject of the next.\n"
-    "2. Resolve each sub-question against the subgraph in turn. Treat the relationship "
-    "labels as hints, not exact keys -- if no edge matches a sub-question's wording, "
-    "pick the edge whose meaning is closest (the extraction may have phrased the "
-    "relation differently). Follow edges in EITHER direction.\n"
+    "2. START from the anchor entities below (they were retrieved as the most relevant "
+    "to the question), then resolve each sub-question against the subgraph in turn. "
+    "Treat the relationship labels as hints, not exact keys -- if no edge matches a "
+    "sub-question's wording, pick the edge whose meaning is closest (the extraction may "
+    "have phrased the relation differently). Follow edges in EITHER direction.\n"
     "3. Carry the resolved bridge entity forward to the next sub-question until you "
     "reach the final entity.\n"
-    "Show each hop briefly, then end with the final answer entity's name on the last "
-    "line, prefixed 'Answer: '. Give your single best answer even if the chain is "
-    "partly inferred; only say you cannot answer if the relevant entities are entirely "
-    "absent.\n"
+    "Anchor entities: {seeds}\n"
+    "Your final answer is ALWAYS a single entity that appears in the Entities list -- "
+    "output its EXACT name, nothing else, on the last line prefixed 'Answer: '. Commit "
+    "to the single most plausible entity even if an intermediate hop is uncertain; do "
+    "NOT answer with a description, a phrase, or 'cannot answer' unless NOTHING in the "
+    "Entities list is even loosely related. Show each hop briefly first.\n"
     "Question: {q}\n{sub}"
 )
 _MAP_PROMPT = "Summarize this community as it bears on the question.\nQuestion: {q}\n{sub}"
@@ -59,8 +62,20 @@ _REDUCE_PROMPT = (
 )
 
 
-def synthesize_local(query: str, subgraph: dict, llm: LLMClient) -> str:
-    return llm.complete(_LOCAL_PROMPT.format(q=query, sub=_format_subgraph(subgraph)))
+def synthesize_local(
+    query: str, subgraph: dict, llm: LLMClient, *, seed_names: list[str] | None = None
+) -> str:
+    """Synthesize an answer over the retrieved subgraph. `seed_names` are the
+    embedding-retrieved anchor entities most relevant to the query -- handed to the
+    model so it starts the multi-hop walk at the right place instead of guessing
+    among every entity in the ball (the measured SYNTHESIS miss: the answer edge was
+    present but the chain went unwalked)."""
+    seeds = ", ".join(dict.fromkeys(s for s in (seed_names or []) if s)) or (
+        "(none identified -- choose the most relevant entities yourself)"
+    )
+    return llm.complete(
+        _LOCAL_PROMPT.format(q=query, seeds=seeds, sub=_format_subgraph(subgraph))
+    )
 
 
 def synthesize_global(query: str, community_views: list[dict], llm: LLMClient) -> str:

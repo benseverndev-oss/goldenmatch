@@ -57,6 +57,36 @@ statistically robust score). `answer_match` is 0.0 in every row so far; the
 | 3 | goldenmatch on compound key + **graph neighborhood** | 372 | 56 | 77 | **0.036** | **under-merge** (barely links) |
 | 4 | embedding-threshold (cosine ≥ **0.82**) | 368 | 64 | 52 | 0.006 | **under-merge** — threshold too high |
 | 5 | embedding-threshold (cosine ≥ **0.60**) | *sweeping* | | | | finding the Goldilocks cutoff |
+| 6 | **goldenprofile anti-shatter engine** (PR #1217) | *measuring* | | | | structured fingerprint breaks the threshold tension |
+
+### #6 — the goldenprofile Semantic Signature engine (the real fix)
+
+Every matcher #1–#5 rides a SINGLE similarity number, which is why each one sat on
+one side or the other of the under/over-merge line — there is no scalar threshold
+that both merges a bridge's disjoint appearances AND keeps two same-category
+entities apart. PR #1217's **anti-shatter scorer** escapes the tension by
+STRUCTURING the evidence into a rigid `name | category | anchor | attribute`
+fingerprint:
+
+- the **defining attribute** (the per-document neighborhood — exactly what
+  DIVERGES across a bridge's mentions) is a **positive-only bonus**: it can add
+  confidence but never veto. That kills the Row-3 under-merge that sank #3.
+- a **hard name + category gate** must pass before any merge is considered,
+  regardless of embedding proximity. That kills the Row-4 over-merge that sank
+  #1/#2.
+
+Integration (this branch): `ingest._profile_cluster` maps each compound feature
+row to a deterministic fingerprint (name→name, type→category, `rel`+`nbr`→the
+non-vetoing attribute) and routes the merge decision through the engine's
+`resolve_profiles` (SimHash-band blocking + the fusion scorer + WCC), reusing the
+existing record_key-injection merge. Selected by `GOLDENGRAPH_PROFILE_LINK=1`
+(precedence above the embedding matcher); merge threshold tunable via
+`GOLDENGRAPH_PROFILE_MERGE_THRESHOLD` (engine default 0.72). The contract is
+locked offline against the built wheel in
+`tests/test_ingest_cross_doc_link.py::test_profile_cluster_repairs_shatter_but_gates_distinct_names`
+(disjoint-neighborhood Nabbes reunite; Shakespeare stays apart). **Deterministic-
+fingerprint cut** — LLM-synthesized node fingerprints (a real temporal/spatial
+anchor + defining attribute, the full PR #1217 design) are the next slice.
 
 ### Why each failed — the through-line
 
@@ -112,13 +142,63 @@ stays moderate (no 140-blob). The threshold is one env knob from a re-sweep.
 
 ---
 
+## Measured results — the goldenprofile engine + synthesis pivot (2026-06-23)
+
+The goldenprofile anti-shatter engine (#6) was wired in (`GOLDENGRAPH_PROFILE_LINK=1`),
+first with deterministic fingerprints, then the full **LLM-synthesized** `name |
+category | anchor | attribute` fingerprints (`_entity_fps` + `fp_index` persistence).
+In parallel, two non-linking levers landed: the **hop-clamp fix** (retrieve.rs
+`clamp(1,2)`→`clamp(1,8)`) and the **synthesis pivot** (seed-anchored prompt that
+forces a named-entity answer).
+
+| run | N (questions) | docs | graph ent | components | **answer_match** | notes |
+|---|---|---|---|---|---|---|
+| profile (det fp) | 3 | ~60 | 357 | 57 | 0.0 | Politburo chain re-joined (`same_component` F→T) |
+| profile (LLM fp) | 3 | ~60 | 354 | 55 | 0.0 | merges more; 2/3 Qs are non-linking gaps |
+| profile (LLM fp) | **30** | ~600 | 3042 | 342 | **0.2** (6/30) | first real signal off the floor |
+| profile (LLM fp, incr index) | 30 | ~600 | ~3000 | 332 | 0.167 (5/30) | ±1 Q is N=30 noise; perf-validated |
+
+**Where the loss lives at N=30 (traced):** ~6/10 **EXTRACTION** — the gold answer is a
+*non-entity* (a date, money, a descriptive phrase, or a person never extracted), which
+`answer_match` structurally cannot score (a metric ceiling); 2/10 **SYNTHESIS** (answer
+retrieved with its edge in the ball — e.g. `Mozilla Foundation -[developed]-> Firefox`
+— but the LLM still doesn't name it); 1 **RETRIEVAL-BUDGET** (the Politburo: linking
+worked, `same_component=True`, but `node_budget=64` is too small for the now-8×-bigger
+graph); 1 **BROKEN-CHAIN**. The binding constraint has **shifted off cross-doc linking**.
+
+## Scaling the build (the wall that gated N≥30)
+
+Raising N exposed three scaling walls, each fixed measure-first:
+
+1. **Sequential per-doc LLM (~11s/doc)** — N=200 would be ~12 h. Fix: `ingest_corpus`
+   runs the per-doc LLM work (extraction + fingerprint synthesis) CONCURRENTLY, commits
+   to the store serially in document order (identical graph). ~10 min prepare for 600
+   docs.
+2. **`seed_by_query` embeds every entity name in ONE request** — >2048 inputs at N≥30
+   → HTTP 400. Fix: `GoldenmatchEmbedder.embed` chunks under the provider cap; the engine
+   wraps its embedder in a run-wide `_CachingEmbedder` so each entity text embeds once
+   (build AND every query).
+3. **`_cross_doc_link` O(N²·dim)** — it re-fed EVERY existing fingerprint + embedding to
+   `resolve_profiles` per doc (JSON-serializing all embeddings each call) → ~9 min commit
+   at N=30, ~400 min at N=200. Fix: `_LinkIndex` blocks committed entities by name token;
+   a doc matches its new entities only against the candidate set sharing a token (where
+   bridges live). Commit collapsed; N=30 step 26→15.7 min, `answer_match` held.
+
+Net: N=200 projects to ~85 min (≈67 prepare + cheap O(N) commit + ~13 answer), under the
+330-min job cap.
+
+---
+
 ## Artifacts
 
 - Instrument: `erkgbench/qa_e2e/engines/goldengraph.py::localize` + `harness.py`
-  `_localize_trace` (4-way classification + component membership); `trace` /
-  `cross_doc_link` workflow inputs on `bench-graphrag-qa.yml`.
-- Linker: `goldengraph/ingest.py::_cross_doc_link` (+ `_embed_cluster`,
-  `_existing_features`, `_new_features`); offline tests in
-  `goldengraph/tests/test_ingest_cross_doc_link.py` (stub embedder/matcher — no
-  native, no goldenmatch).
+  `_localize_trace` (4-way classification + component membership + answer-edge dump);
+  `trace` / `cross_doc_link` / `profile_link` / `profile_merge_threshold` workflow
+  inputs on `bench-graphrag-qa.yml`.
+- Linker: `goldengraph/ingest.py` — `_cross_doc_link` (store path) + the goldenprofile
+  path (`_profile_cluster`, `_entity_fps`, `_assemble_fp_texts`) + the scaling layer
+  (`ingest_corpus`/`_prepare_doc`/`_commit_doc`, `_LinkIndex`/`_cross_doc_link_incremental`);
+  embedder batching in `embed.py`. Offline tests in
+  `goldengraph/tests/test_ingest_cross_doc_link.py` + `test_embed_batching.py`.
+- Engine: PR #1217 `goldenprofile-{core,native,wasm,cabi}` + `goldengraph/profile.py`.
 - Diagnosis trail: `docs/superpowers/specs/2026-06-22-goldengraph-qa-e2e-first-headline-handoff.md`.
