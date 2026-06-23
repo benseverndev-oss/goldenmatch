@@ -7,8 +7,10 @@ name: bench-metrics
 #
 # Posture (v1): local-iteration tool + dispatch/scheduled run. NOT a blocking
 # per-PR gate -- the report is informational by default and posted to the job
-# summary. Opt into a hard regression check with the `check` input. Fully
-# offline (no datasets, no Postgres, no API keys), so it runs on forks too.
+# summary. Opt into a hard regression check with the `check` input. The synthetic
+# core is fully offline (no datasets, Postgres, or API keys) and runs on forks;
+# the opt-in real-dataset probe (accuracy_febrl3) installs `recordlinkage` (bundled
+# Febrl data -- still no download) and runs by default on schedule/dispatch.
 on:
   schedule:
     # Weekly, so trend data accrues. Tuesdays 06:00 UTC (offset from the heavy
@@ -20,6 +22,10 @@ on:
         description: "Fail the run on a gated metric regression vs the committed baseline"
         type: boolean
         default: false
+      real_datasets:
+        description: "Run the opt-in real-dataset probe (Febrl3 via recordlinkage)"
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -45,12 +51,21 @@ jobs:
       - name: Install
         run: uv sync --all-packages
 
+      # Opt-in real-dataset probe: schedule always runs it; dispatch honors the
+      # `real_datasets` input (default true). recordlinkage is NOT a goldenmatch
+      # dep -- installed here only for the bench, so the default offline core is
+      # untouched.
+      - name: Install real-dataset deps
+        if: ${{ github.event_name == 'schedule' || inputs.real_datasets }}
+        run: uv pip install recordlinkage
+
       - name: Run metrics harness
         env:
           # Reproducible: explicit-config probes don't use auto-config memory,
           # but pin it off for good measure.
           GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
           CHECK: ${{ inputs.check && '--check' || '' }}
+          METRICS_REAL_DATASETS: ${{ (github.event_name == 'schedule' || inputs.real_datasets) && '1' || '' }}
         run: |
           uv run python scripts/metrics/harness.py \
             --out metrics_report.json \

@@ -23,6 +23,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   fallback when the native wheel is absent.
 
 ### Added
+- **`accuracy_febrl3` real-dataset metrics probe (opt-in).** The metrics harness
+  gains its first *real* ER-benchmark probe — Febrl3 (5000-record person dedup
+  with published ground truth) via `recordlinkage`'s bundled data, so it's still
+  offline (no download) and deterministic. Gated opt-in (`METRICS_REAL_DATASETS=1`
+  + `recordlinkage` installed): it skips cleanly — contributing **no** metrics,
+  never an error — when the flag is off or the dep is absent, so the default run
+  and the committed baseline stay dependency-free. F1/precision/recall are gated
+  (±0.02, env-tolerant); the raw tp/fp/fn counts ride as informational diagnostics
+  (real-data fuzzy scoring can wobble a pair or two across environments). Committed
+  baseline: **F1 0.90 / P 0.87 / R 0.94**. The `bench-metrics` workflow runs it on
+  schedule + dispatch (installs `recordlinkage`, sets the flag). Adds a `skipped`
+  status to the probe protocol — the seam for further download/key-gated sets
+  (DBLP-ACM, NCVR) to plug in behind the same opt-in skip pattern.
 - **`accuracy_trained_embedder` metrics probe — trained-embedder recall lift.**
   A new probe in the metrics harness that isolates the value a *trained* in-house
   embedder adds over the untrained char-n-gram projection, measured on the signal
