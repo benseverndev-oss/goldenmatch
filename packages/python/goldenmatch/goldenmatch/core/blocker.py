@@ -1175,6 +1175,13 @@ def build_blocks(lf: pl.LazyFrame, config: BlockingConfig) -> list[BlockResult]:
         _emit_blocking_profile(blocks, config, lf)
         return blocks
 
+    if config.strategy == "perceptual":
+        from goldenmatch.core.perceptual_blocker import build_perceptual_blocks
+
+        blocks = build_perceptual_blocks(lf, config)
+        _emit_blocking_profile(blocks, config, lf)
+        return blocks
+
     if config.strategy == "static":
         blocks = _build_static_blocks(lf, config)
         _emit_blocking_profile(blocks, config, lf)

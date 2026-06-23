@@ -22,6 +22,11 @@ VALID_SCORERS = frozenset({
     "exact", "jaro_winkler", "levenshtein", "token_sort", "soundex_match",
     "embedding", "record_embedding", "ensemble",
     "dice", "jaccard", "qgram",
+    # Hamming similarity over a hex perceptual hash (image pHash) -- the
+    # multimodal-ER crawl-tier media-as-evidence comparator (ADR 0022).
+    "phash",
+    # Offset-aligned bit-error-rate over a hex audio fingerprint (ADR 0022).
+    "audio_fp",
     # Free deterministic equality scorers (1.0/0.0): initialism collapse
     # ("IBM" <-> "International Business Machines") and alias canonicalization
     # ("Acme Inc" <-> "Acme Incorporated", "Bob" <-> "Robert").
@@ -447,6 +452,31 @@ class SimHashKeyConfig(BaseModel):
         return self
 
 
+class PerceptualKeyConfig(BaseModel):
+    """Banded hamming-LSH blocking over a column of perceptual hashes (ADR 0022).
+
+    The ``column`` holds fixed-width hex perceptual hashes (e.g. a 16-char / 64-bit
+    image pHash, produced upstream by ``core.perceptual.phash_image``). The
+    ``hash_bits`` are split into ``num_bands`` contiguous bit-bands; two hashes
+    within a small hamming distance share at least one identical band with high
+    probability, so they collide into a candidate block. More bands -> higher
+    recall and more candidate pairs. This is the *media* near-duplicate blocker,
+    complementing the lexical (``lsh``) and semantic (``simhash``) paths.
+    """
+
+    column: str
+    num_bands: int = 8
+    hash_bits: int = 64
+
+    @model_validator(mode="after")
+    def _validate(self) -> PerceptualKeyConfig:
+        if self.num_bands < 1 or self.hash_bits < 1 or self.hash_bits % self.num_bands != 0:
+            raise ValueError(
+                "PerceptualKeyConfig 'hash_bits' must be a positive multiple of 'num_bands'."
+            )
+        return self
+
+
 class ThroughputConfig(BaseModel):
     """Opt-in sketch-then-verify throughput tier (#1083).
 
@@ -465,7 +495,7 @@ class BlockingConfig(BaseModel):
     keys: list[BlockingKeyConfig] = []
     max_block_size: int = 5000
     skip_oversized: bool = False
-    strategy: Literal["static", "adaptive", "sorted_neighborhood", "multi_pass", "ann", "canopy", "ann_pairs", "learned", "lsh", "simhash"] = "static"
+    strategy: Literal["static", "adaptive", "sorted_neighborhood", "multi_pass", "ann", "canopy", "ann_pairs", "learned", "lsh", "simhash", "perceptual"] = "static"
     learned_sample_size: int = 5000
     learned_min_recall: float = 0.95
     learned_min_reduction: float = 0.90
@@ -485,6 +515,7 @@ class BlockingConfig(BaseModel):
     canopy: CanopyConfig | None = None
     lsh: LSHKeyConfig | None = None
     simhash: SimHashKeyConfig | None = None
+    perceptual: PerceptualKeyConfig | None = None
 
     @model_validator(mode="after")
     def _validate_keys_or_passes(self) -> BlockingConfig:

@@ -560,6 +560,7 @@ dependencies = [
  "goldenmatch-autoconfig-core",
  "goldenmatch-fingerprint-core",
  "goldenmatch-graph-core",
+ "goldenmatch-perceptual-core",
  "goldenmatch-score-core",
  "goldenmatch-sketch-core",
  "hmac",
@@ -569,6 +570,10 @@ dependencies = [
  "serde_json",
  "sha2",
 ]
+
+[[package]]
+name = "goldenmatch-perceptual-core"
+version = "0.1.0"
 
 [[package]]
 name = "goldenmatch-score-core"

@@ -73,6 +73,7 @@ from goldenmatch.config.schemas import (
     MatchkeyConfig,
     MatchkeyField,
     OutputConfig,
+    PerceptualKeyConfig,
     SimHashKeyConfig,
     StandardizationConfig,
     ValidationConfig,
@@ -340,7 +341,7 @@ __all__ = [
     "AgentSession", "ReviewQueue", "gate_pairs",
     # Config
     "GoldenMatchConfig", "MatchkeyConfig", "MatchkeyField",
-    "BlockingConfig", "BlockingKeyConfig", "LSHKeyConfig", "SimHashKeyConfig",
+    "BlockingConfig", "BlockingKeyConfig", "LSHKeyConfig", "SimHashKeyConfig", "PerceptualKeyConfig",
     "GoldenRulesConfig", "GoldenFieldRule",
     "LLMScorerConfig", "BudgetConfig",
     "DomainConfig", "StandardizationConfig", "ValidationConfig", "OutputConfig",

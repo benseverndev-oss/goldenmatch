@@ -3411,6 +3411,24 @@ def auto_configure_df(
     # golden_rules.field_groups (if any) are already in place.
     _maybe_detect_field_groups(df, config)
 
+    # Perceptual media-as-evidence wiring (ADR 0022, default OFF, fail-open).
+    # When enabled, detect fixed-width-hex perceptual-hash columns (image pHash /
+    # audio fingerprint) and append a phash/audio_fp matchkey (+ perceptual
+    # blocking for an image column when nothing else blocks). Byte-identical when
+    # the flag is off.
+    if os.environ.get("GOLDENMATCH_PERCEPTUAL_AUTOCONFIG", "0") == "1" and isinstance(
+        df, pl.DataFrame
+    ):
+        try:
+            from goldenmatch.core.perceptual_autoconfig import apply_perceptual_autoconfig
+
+            config = apply_perceptual_autoconfig(config, df)
+        except Exception:  # noqa: BLE001 - additive + fail-open, never break auto-config
+            logger.debug(
+                "perceptual auto-config hook failed; leaving config unchanged",
+                exc_info=True,
+            )
+
     return config
 
 

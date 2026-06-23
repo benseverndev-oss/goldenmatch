@@ -193,6 +193,10 @@ def score_field(val_a: str | None, val_b: str | None, scorer: str) -> float | No
         return _jaccard_score_single(val_a, val_b)
     elif scorer == "qgram":
         return _qgram_score_single(val_a, val_b)
+    elif scorer == "phash":
+        return _phash_score_single(val_a, val_b)
+    elif scorer == "audio_fp":
+        return _audio_fp_score_single(val_a, val_b)
     else:
         # Check plugin registry
         from goldenmatch.plugins.registry import PluginRegistry
@@ -545,6 +549,10 @@ def _fuzzy_score_matrix(
         return _dice_score_matrix(values)
     elif scorer_name == "jaccard":
         return _jaccard_score_matrix(values)
+    elif scorer_name == "phash":
+        return _phash_score_matrix(values)
+    elif scorer_name == "audio_fp":
+        return _audio_fp_score_matrix(values)
     elif scorer_name == "qgram":
         return _qgram_score_matrix(values)
     else:
@@ -803,6 +811,93 @@ def _jaccard_score_matrix(values: list) -> np.ndarray:
         jaccard = np.where(union > 0, intersection / union, 0.0)
 
     return jaccard.astype(np.float64)
+
+
+def _norm_phash_hex(s: str) -> str:
+    """Strip an optional ``0x`` prefix and left-pad to an even number of hex
+    digits so ``bytes.fromhex`` accepts it (image pHash is 16 hex chars = 64 bits;
+    ``hex(h)`` output is tolerated)."""
+    if s[:2] in ("0x", "0X"):
+        s = s[2:]
+    return ("0" + s) if len(s) % 2 else s
+
+
+def _phash_score_single(val_a: str, val_b: str) -> float:
+    """Hamming similarity of two hex perceptual hashes: ``1 - dist / bits``."""
+    bits_a, bits_b = _pad_to_equal_length(
+        _hex_to_bits(_norm_phash_hex(val_a)), _hex_to_bits(_norm_phash_hex(val_b))
+    )
+    nbits = bits_a.size * 8
+    if nbits == 0:
+        return 0.0
+    dist = int(np.unpackbits(np.bitwise_xor(bits_a, bits_b)).sum())
+    return 1.0 - dist / nbits
+
+
+def _phash_score_matrix(values: list) -> np.ndarray:
+    """NxN hamming-similarity matrix on hex perceptual hashes.
+
+    ``hamming = |A| + |B| - 2*|A&B|`` over the unpacked bits; similarity is
+    ``1 - hamming / bits``. None / unparseable values score 0 against everything.
+    """
+    n = len(values)
+    bit_arrays: list[np.ndarray] = []
+    valid = np.zeros(n, dtype=bool)
+    for i, v in enumerate(values):
+        if v is not None:
+            try:
+                bit_arrays.append(np.unpackbits(_hex_to_bits(_norm_phash_hex(v))))
+                valid[i] = True
+                continue
+            except ValueError:
+                pass
+        bit_arrays.append(np.zeros(0, dtype=np.uint8))
+
+    if not valid.any():
+        return np.zeros((n, n))
+
+    max_len = max(len(b) for b in bit_arrays)
+    bit_matrix = np.zeros((n, max_len), dtype=np.float32)
+    for i, b in enumerate(bit_arrays):
+        if len(b) > 0:
+            bit_matrix[i, : len(b)] = b
+
+    intersection = bit_matrix @ bit_matrix.T
+    popcounts = bit_matrix.sum(axis=1)
+    hamming = popcounts[:, None] + popcounts[None, :] - 2.0 * intersection
+    sim = 1.0 - hamming / max_len
+    sim = np.where(valid[:, None] & valid[None, :], sim, 0.0)
+    return sim.astype(np.float64)
+
+
+def _audio_fp_score_single(val_a: str, val_b: str) -> float:
+    """Offset-aligned similarity (``1 - best BER``) of two hex audio fingerprints."""
+    from goldenmatch.core.perceptual import audio_ber_aligned, audio_fp_from_hex
+
+    return 1.0 - audio_ber_aligned(audio_fp_from_hex(val_a), audio_fp_from_hex(val_b))
+
+
+def _audio_fp_score_matrix(values: list) -> np.ndarray:
+    """NxN offset-aligned audio-fingerprint similarity. Audio fingerprints are
+    variable-length with an alignment search, so this is a symmetric pairwise loop
+    (block-sized N); None values score 0 against everything."""
+    from goldenmatch.core.perceptual import audio_ber_aligned, audio_fp_from_hex
+
+    n = len(values)
+    parsed = [audio_fp_from_hex(v) if v is not None else None for v in values]
+    out = np.zeros((n, n), dtype=np.float64)
+    for i in range(n):
+        fp_i = parsed[i]
+        if fp_i is None:
+            continue
+        out[i, i] = 1.0
+        for j in range(i + 1, n):
+            fp_j = parsed[j]
+            if fp_j is None:
+                continue
+            sim = 1.0 - audio_ber_aligned(fp_i, fp_j)
+            out[i, j] = out[j, i] = sim
+    return out
 
 
 def _qgram_set(s: str, n: int = 3) -> set[str]:

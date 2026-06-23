@@ -13,6 +13,7 @@ mod cluster;
 mod featurize;
 mod hash;
 mod pairs;
+mod perceptual;
 mod score;
 mod sketch;
 
@@ -53,6 +54,9 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
         sketch::sketch_simhash_band_hashes_batch,
         m
     )?)?;
+    m.add_function(wrap_pyfunction!(perceptual::perceptual_phash_image, m)?)?;
+    m.add_function(wrap_pyfunction!(perceptual::perceptual_phash_batch, m)?)?;
+    m.add_function(wrap_pyfunction!(perceptual::perceptual_fingerprint_audio, m)?)?;
     m.add_function(wrap_pyfunction!(autoconfig::autoconfig_decide_plan, m)?)?;
     m.add_function(wrap_pyfunction!(autoconfig::autoconfig_classify_columns, m)?)?;
     m.add_function(wrap_pyfunction!(autoconfig::autoconfig_extrapolate_pair_count, m)?)?;

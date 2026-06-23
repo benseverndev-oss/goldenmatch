@@ -48,6 +48,10 @@ goldenmatch-graph-core = { path = "../graph-core" }
 # Pyo3-free MinHash/LSH sketch kernels (#1081). The sketch.rs shims delegate
 # here; byte-identical with core/sketch.py and the TS port (shared golden vectors).
 goldenmatch-sketch-core = { path = "../sketch-core" }
+# Pyo3-free perceptual media-hash kernels (DCT image pHash + Haitsma-Kalker audio
+# fingerprint, multimodal-ER crawl tier, ADR 0022). The perceptual.rs shims
+# delegate here; byte-identical with core/perceptual.py (shared golden vectors).
+goldenmatch-perceptual-core = { path = "../perceptual-core" }
 # Autoconfig planner + column classifier — deterministic decisions shared
 # across surfaces. Thin PyO3 shims in autoconfig.rs expose these via JSON
 # in / JSON out so Python can call the same deterministic logic.

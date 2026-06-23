@@ -153,10 +153,60 @@ existing embedding+ANN+score+explain spine via the optional encoder extras.
 ## Next steps
 
 - [x] Lock v1 scope.
-- [ ] Confirm the `BlockingConfig` strategy seam + scorer comparator seam are the
-      right insertion points (read `core/blocker.py`, `core/scorer.py`).
-- [ ] Draft ADR 0022 — Multimodal ER (modality-as-evidence, perceptual crawl tier).
-- [ ] Spec the kernel algorithms + parity contract (`docs/superpowers/specs/`).
+- [x] Draft ADR 0022 — Multimodal ER (modality-as-evidence, perceptual crawl tier).
+- [x] **Slice 1 — authoritative Python reference + golden vectors.**
+      `core/perceptual.py` (stdlib-only DCT pHash + Haitsma-Kalker audio
+      fingerprint, decoded-input contract), `scripts/gen_perceptual_golden.py`,
+      `tests/fixtures/perceptual_golden.json`, `tests/test_perceptual_reference.py`
+      (golden parity + invariance + validation). The algorithm params are now
+      pinned by the fixture; the spec is the module docstring + this note.
+- [x] **Slice 2 — Rust `goldenmatch-perceptual-core` crate** (pyo3-free, standalone
+      `[workspace]`, mirrors `sketch-core`). `phash.rs` + `audio_fp.rs` reproduce
+      the committed fixture **byte-for-byte** (`tests/golden.rs`); wired into the
+      rust CI lane (cache workspace + explicit `cargo test`/`clippy`). Parity holds
+      because the transforms are direct (no FFT) and mirror the Python op order, so
+      on a shared libm the transcendental results are bit-identical.
+- [x] **Slice 2b — pyo3 `native` wrapper + loader gating + parity sweep.**
+      `native/src/perceptual.rs` exposes `perceptual_phash_image` /
+      `perceptual_phash_batch` / `perceptual_fingerprint_audio`; `core/perceptual.py`
+      dispatches to them via `native_enabled("perceptual")` (AttributeError →
+      Python fallback for wheel skew). `"perceptual"` ships native-available but is
+      NOT in `_native_loader._GATED_ON` (conservative, like `sketch`/`pprl_bloom`):
+      reachable via `GOLDENMATCH_NATIVE=1`, default pure-Python under `auto`.
+      `tests/test_native_perceptual_parity.py` asserts native↔python byte-identity
+      over a randomized sweep + the fixture + validation (wired into the `native`
+      CI lane). The default-on flip stays a perf/published-wheel decision.
+- [x] **Slice 3 — image pHash as a pipeline match feature.** A `phash` scorer
+      (hamming similarity over a hex perceptual hash; `core/scorer.py`, single +
+      NxN matrix, provenance via `explain._SCORER_NAMES`) and a `perceptual`
+      banded-hamming-LSH blocking strategy (`core/perceptual_blocker.py` +
+      `PerceptualKeyConfig` + `BlockingConfig.strategy="perceptual"` + dispatch).
+      `core/perceptual.phash_hex` produces the canonical 16-char column form. A
+      media column is now a first-class block + score feature ("modality as
+      evidence"). Verified end-to-end on real pHashes of image variants
+      (`tests/test_perceptual_feature.py`). Frontend dropdown const updated; TS
+      port of `phash`/`perceptual` is a follow-up.
+- [x] **Slice 3b — audio-fp feature + auto-config rule + recall gate + extras.**
+      (1) `audio_fp` scorer (`core/scorer.py`, single + matrix) over the
+      offset-aligned BER (`perceptual.audio_ber_aligned` + `audio_fp_hex` column
+      form) — the variable-length counterpart to image pHash. (2)
+      `core/perceptual_autoconfig.py` detects fixed-width-hex media-hash columns
+      and appends a `phash`/`audio_fp` matchkey (+ perceptual blocking for an image
+      column when nothing else blocks); wired into `auto_configure_df` behind
+      `GOLDENMATCH_PERCEPTUAL_AUTOCONFIG=1` (default OFF, fail-open,
+      byte-identical when off). (3) Always-on recall gate over 5 image-variant
+      pairs (`test_perceptual_feature.py`). (4) `[vision]`/`[audio]` pyproject
+      extras backing the `decode_image_to_luma`/`decode_audio_to_mono` adapters.
+      TS port of the `phash`/`perceptual`/`audio_fp` surfaces remains a follow-up.
+
+## Status (crawl tier)
+
+The image-and-audio perceptual crawl tier is **complete end-to-end**: reference
+(slice 1) → byte-parity Rust kernel (2) → PyO3 binding (2b) → pipeline match
+feature (3) → audio feature + zero-config auto-wiring + recall gate + extras (3b).
+The wedge (#3 modality-as-evidence) is real. Remaining frontier per the priority
+table: within-modality ER (#1) and cross-modal (#2); plus the biometric
+template-protection / PPRL privacy guardrail and the BYO-vector "walk" tier.
 
 ---
 **Classification:** planning/active • **Last updated:** 2026-06-23
