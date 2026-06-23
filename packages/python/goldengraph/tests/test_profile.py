@@ -115,3 +115,61 @@ def test_resolve_profiles_reunites_disjoint_mentions():
     nabbes = next(c for c in res.clusters if 0 in c)
     assert sorted(nabbes) == [0, 1]
     assert any(c == [2] for c in res.clusters)
+
+
+class _CatStubEmbedder:
+    """Returns a fixed-dim vector per text; unknown -> zeros. Lets us assert the
+    request shape without the wheel."""
+
+    def embed(self, texts):
+        import numpy as np
+
+        return np.ones((len(texts), 3), dtype=float)
+
+
+def test_resolve_profiles_marshals_category_embeddings(monkeypatch):
+    """With an embedder, the request carries a category-only embedding per profile
+    (the gate's synonym escape-hatch signal) -- wheel-free: we capture the JSON the
+    engine boundary receives instead of running the engine."""
+    import json
+
+    from goldengraph import profile as prof
+
+    captured: dict = {}
+
+    def _fake_resolve_json(req_str: str) -> str:
+        captured["req"] = json.loads(req_str)
+        return json.dumps({"clusters": [[0], [1]], "edges": []})
+
+    monkeypatch.setattr(prof, "_engine", lambda: _fake_resolve_json)
+    fps = [
+        Fingerprint("node", 0, "Australia | Country | UNKNOWN | Federal monarchy"),
+        Fingerprint("node", 1, "Australia | Nation | UNKNOWN | Smallest continent"),
+    ]
+    prof.resolve_profiles(fps, embedder=_CatStubEmbedder())
+    req = captured["req"]
+    assert "category_embeddings" in req
+    # One category embedding per profile, aligned with the fingerprint order.
+    assert len(req["category_embeddings"]) == len(fps)
+    assert all(len(row) == 3 for row in req["category_embeddings"])
+    # The whole-fingerprint embeddings are still sent (blocking + soft term).
+    assert len(req["embeddings"]) == len(fps)
+
+
+def test_resolve_profiles_no_embedder_omits_embeddings(monkeypatch):
+    """Without an embedder, neither embedding array is sent (legacy structured-only
+    path) -- the back-compat contract the Rust core's empty-slice fallback relies on."""
+    import json
+
+    from goldengraph import profile as prof
+
+    captured: dict = {}
+
+    def _fake_resolve_json(req_str: str) -> str:
+        captured["req"] = json.loads(req_str)
+        return json.dumps({"clusters": [[0]], "edges": []})
+
+    monkeypatch.setattr(prof, "_engine", lambda: _fake_resolve_json)
+    prof.resolve_profiles([Fingerprint("node", 0, "A | C | UNKNOWN | UNKNOWN")])
+    assert "embeddings" not in captured["req"]
+    assert "category_embeddings" not in captured["req"]

@@ -210,9 +210,13 @@ def resolve_profiles(
 
     When `embedder` is given, each fingerprint string is embedded and passed as
     the semantic signature (enabling SimHash-band blocking + the embedding-cosine
-    gate that bridges synonym categories). `config` is an optional partial
-    override of the engine's `ResolveConfig` (e.g.
-    `{"scoring": {"merge_threshold": 0.75}}`).
+    gate that bridges synonym categories). The CATEGORY field is ALSO embedded
+    separately and passed as `category_embeddings`: the category gate's synonym
+    escape hatch needs a category-specific signal -- the whole-fingerprint cosine
+    is polluted by the (by-design divergent) defining attribute, so an exact-name
+    bridge whose category label drifted ("Country" vs "Nation") would otherwise
+    never bridge. `config` is an optional partial override of the engine's
+    `ResolveConfig` (e.g. `{"scoring": {"merge_threshold": 0.75}}`).
     """
     resolve_json = _engine()
     profiles = []
@@ -233,6 +237,10 @@ def resolve_profiles(
     if embedder is not None and fingerprints:
         vecs = embedder.embed([fp.text for fp in fingerprints])
         request["embeddings"] = [[float(x) for x in row] for row in vecs]
+        # Category-only embeddings for the gate's synonym escape hatch. Embedding
+        # the (few distinct) category strings is cheap and cache-friendly.
+        cat_vecs = embedder.embed([p["category"] for p in profiles])
+        request["category_embeddings"] = [[float(x) for x in row] for row in cat_vecs]
     if config:
         request["config"] = config
 

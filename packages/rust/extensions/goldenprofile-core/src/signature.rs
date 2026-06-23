@@ -48,7 +48,8 @@ pub fn structured_block_keys(p: &Profile) -> Vec<String> {
         crate::model::ElementKind::Edge => "edge",
     };
     let cat = Profile::norm(&p.category);
-    p.name_tokens()
+    let mut keys: Vec<String> = p
+        .name_tokens()
         .into_iter()
         .map(|tok| {
             // Canonical, type-tagged hash -- identical bytes on every surface.
@@ -60,7 +61,29 @@ pub fn structured_block_keys(p: &Profile) -> Vec<String> {
             ])
             .expect("string fields never fail fingerprinting")
         })
-        .collect()
+        .collect();
+    // Category-AGNOSTIC exact-name key: two mentions of the SAME proper name block
+    // together even when the LLM labeled their category with divergent synonyms
+    // ("Australia | Country" vs "Australia | Nation"). The per-token keys above are
+    // category-scoped (Row-4 guard at the blocking layer), so a same-name pair whose
+    // category label drifted is otherwise NEVER compared and its multi-hop chain
+    // stays shattered. This key is keyed on the WHOLE normalized name (not per
+    // token), so it groups only genuine same-name mentions -- it does not broaden
+    // recall to everything sharing a common token -- and the scorer (name + category
+    // gate) remains the precision stage that keeps cross-sense same-name entities
+    // ("Apple" company vs fruit) apart.
+    let full = Profile::norm(&p.name);
+    if !full.is_empty() {
+        keys.push(
+            fingerprint_fields(vec![
+                ("kind".to_string(), FpValue::Str(kind.to_string())),
+                ("scope".to_string(), FpValue::Str("fullname".to_string())),
+                ("name".to_string(), FpValue::Str(full)),
+            ])
+            .expect("string fields never fail fingerprinting"),
+        );
+    }
+    keys
 }
 
 /// Semantic band keys for a batch of profiles from their host-supplied
@@ -127,7 +150,10 @@ mod tests {
 
     #[test]
     fn shared_name_token_same_category_blocks_together() {
-        let a = Profile::parse(ElementKind::Node, "Thomas Nabbes | Playwright | 17th c | wrote X");
+        let a = Profile::parse(
+            ElementKind::Node,
+            "Thomas Nabbes | Playwright | 17th c | wrote X",
+        );
         let b = Profile::parse(ElementKind::Node, "Nabbes | Playwright | 1605 | UNKNOWN");
         let ka = structured_block_keys(&a);
         let kb = structured_block_keys(&b);
@@ -136,9 +162,46 @@ mod tests {
     }
 
     #[test]
+    fn same_name_divergent_category_blocks_on_fullname_key() {
+        // The exact-name shatter at the blocking layer: identical proper name, the
+        // LLM drifted the category label. The category-scoped per-token keys differ,
+        // so only the category-agnostic full-name key can recall the pair.
+        let a = Profile::parse(
+            ElementKind::Node,
+            "Australia | Country | UNKNOWN | Federal monarchy",
+        );
+        let b = Profile::parse(
+            ElementKind::Node,
+            "Australia | Nation | UNKNOWN | Smallest continent",
+        );
+        let ka = structured_block_keys(&a);
+        let kb = structured_block_keys(&b);
+        assert!(
+            ka.iter().any(|k| kb.contains(k)),
+            "same name must block despite category drift"
+        );
+        // A genuinely different name must NOT share the full-name key.
+        let c = Profile::parse(
+            ElementKind::Node,
+            "Austria | Country | UNKNOWN | Alpine republic",
+        );
+        let kc = structured_block_keys(&c);
+        assert!(
+            !ka.iter().any(|k| kc.contains(k)),
+            "different name must not block"
+        );
+    }
+
+    #[test]
     fn different_name_same_category_does_not_block() {
-        let nabbes = Profile::parse(ElementKind::Node, "Thomas Nabbes | Playwright | UNKNOWN | UNKNOWN");
-        let shakes = Profile::parse(ElementKind::Node, "William Shakespeare | Playwright | UNKNOWN | UNKNOWN");
+        let nabbes = Profile::parse(
+            ElementKind::Node,
+            "Thomas Nabbes | Playwright | UNKNOWN | UNKNOWN",
+        );
+        let shakes = Profile::parse(
+            ElementKind::Node,
+            "William Shakespeare | Playwright | UNKNOWN | UNKNOWN",
+        );
         let ka = structured_block_keys(&nabbes);
         let kb = structured_block_keys(&shakes);
         assert!(!ka.iter().any(|k| kb.contains(k)));
