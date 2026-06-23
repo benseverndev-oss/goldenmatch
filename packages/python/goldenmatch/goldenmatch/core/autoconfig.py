@@ -1859,9 +1859,13 @@ def apply_quality_aware_blocking(
 # that co-blocks records that mean the same thing but share little surface text.
 # Honest fallback: when no embedder is reachable this is a NO-OP (the lexical /
 # structured scheme stands), never a silent degrade to a broken semantic path.
-# Additive + env-gated, OFF unless GOLDENMATCH_AUTO_SEMANTIC_BLOCKING=1, so the
-# default auto-config output is byte-identical until a Febrl / DBLP-ACM / product
-# recall sweep proves it on.
+# DEFAULT ON (#1090): it fires for text-heavy data WHEN an embedder is reachable;
+# absent an embedder the no-op fallback means a user without the in-house model /
+# a configured provider still sees byte-identical output. Disable with
+# GOLDENMATCH_AUTO_SEMANTIC_BLOCKING=0; tune recall with
+# GOLDENMATCH_SEMANTIC_BLOCKING_THRESHOLD (the SimHash band/row split is derived
+# from it). The SimHash band-hashing itself runs on the native Rust sketch kernel
+# (the source of truth) by default -- see core/sketch.py + _native_loader.
 
 # A column must average at least this many characters to count as "text-heavy"
 # (free-text / description-like, where embeddings beat lexical keys). Short
@@ -1894,9 +1898,44 @@ def _text_heavy_columns(profiles: list[ColumnProfile]) -> list[ColumnProfile]:
 
 
 def _auto_semantic_blocking_enabled() -> bool:
-    return os.environ.get(
-        "GOLDENMATCH_AUTO_SEMANTIC_BLOCKING", ""
-    ).strip().lower() in ("1", "true", "yes", "on")
+    """Default ON (#1090): text-heavy data routes to SimHash-over-embeddings
+    blocking unless explicitly disabled via ``GOLDENMATCH_AUTO_SEMANTIC_BLOCKING``
+    in ``{0, false, no, off, disabled}``.
+
+    Default-on is safe because the decision still no-ops whenever no embedder is
+    reachable (``decide_semantic_blocking`` -> ``embeddings_unavailable``), so a
+    user without the in-house model or a configured provider sees byte-identical
+    auto-config output -- the flip only fires when an embedder genuinely exists
+    AND the data is text-heavy, which is exactly when semantic blocking helps.
+    """
+    val = os.environ.get("GOLDENMATCH_AUTO_SEMANTIC_BLOCKING", "").strip().lower()
+    return val not in ("0", "false", "no", "off", "disabled")
+
+
+# Default SimHash recall threshold for auto-enabled semantic blocking (#1090).
+# A LOWER threshold -> more bands -> more candidate pairs -> higher recall (more
+# permissive co-blocking of records that mean the same thing); HIGHER -> fewer,
+# tighter candidates. 0.6 is the recall-leaning default for free-text near-dup
+# blocking. The (bands, rows) split is derived from it by SimHashKeyConfig +
+# sketch.optimal_bands -- so this is the user-facing recall knob #1090 exposes,
+# replacing the old hardcoded num_bands.
+_SEMANTIC_BLOCKING_THRESHOLD = 0.6
+
+
+def _semantic_blocking_threshold() -> float:
+    """Recall threshold (in ``(0, 1)``) for auto semantic blocking.
+
+    Env override ``GOLDENMATCH_SEMANTIC_BLOCKING_THRESHOLD``; an absent, malformed
+    or out-of-range value falls back to :data:`_SEMANTIC_BLOCKING_THRESHOLD`.
+    """
+    raw = os.environ.get("GOLDENMATCH_SEMANTIC_BLOCKING_THRESHOLD")
+    if raw is None:
+        return _SEMANTIC_BLOCKING_THRESHOLD
+    try:
+        val = float(raw)
+    except ValueError:
+        return _SEMANTIC_BLOCKING_THRESHOLD
+    return val if 0.0 < val < 1.0 else _SEMANTIC_BLOCKING_THRESHOLD
 
 
 def decide_semantic_blocking(
@@ -1952,7 +1991,10 @@ def apply_auto_semantic_blocking(
     return BlockingConfig(
         strategy="simhash",
         simhash=SimHashKeyConfig(
-            column=decision.column, num_planes=256, num_bands=32, seed=0
+            column=decision.column,
+            num_planes=256,
+            threshold=_semantic_blocking_threshold(),
+            seed=0,
         ),
     )
 

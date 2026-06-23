@@ -35,10 +35,24 @@ def _format_subgraph(view: dict) -> str:
 _LOCAL_PROMPT = (
     "Answer the question using ONLY the knowledge subgraph below (entities joined by "
     "directed, labelled relationships).\n"
-    "Reason step by step: find the entity the question starts from, then follow the "
-    "named relationship(s) one hop at a time to the entity they lead to. End with the "
-    "answer as that target entity's canonical name on the final line, prefixed "
-    "'Answer: '. If the subgraph cannot answer the question, say so.\n"
+    "These questions are usually MULTI-HOP: the answer is reached by chaining several "
+    "relationships, and the bridge entities in the middle are often NOT named in the "
+    "question. Work it out like this:\n"
+    "1. Decompose the question into an ordered chain of sub-questions, where each "
+    "sub-question's answer is the subject of the next.\n"
+    "2. START from the anchor entities below (they were retrieved as the most relevant "
+    "to the question), then resolve each sub-question against the subgraph in turn. "
+    "Treat the relationship labels as hints, not exact keys -- if no edge matches a "
+    "sub-question's wording, pick the edge whose meaning is closest (the extraction may "
+    "have phrased the relation differently). Follow edges in EITHER direction.\n"
+    "3. Carry the resolved bridge entity forward to the next sub-question until you "
+    "reach the final entity.\n"
+    "Anchor entities: {seeds}\n"
+    "Your final answer is ALWAYS a single entity that appears in the Entities list -- "
+    "output its EXACT name, nothing else, on the last line prefixed 'Answer: '. Commit "
+    "to the single most plausible entity even if an intermediate hop is uncertain; do "
+    "NOT answer with a description, a phrase, or 'cannot answer' unless NOTHING in the "
+    "Entities list is even loosely related. Show each hop briefly first.\n"
     "Question: {q}\n{sub}"
 )
 _MAP_PROMPT = "Summarize this community as it bears on the question.\nQuestion: {q}\n{sub}"
@@ -48,8 +62,48 @@ _REDUCE_PROMPT = (
 )
 
 
-def synthesize_local(query: str, subgraph: dict, llm: LLMClient) -> str:
-    return llm.complete(_LOCAL_PROMPT.format(q=query, sub=_format_subgraph(subgraph)))
+def _extract_answer(text: str) -> str:
+    """Pull the final answer out of a chain-of-thought completion.
+
+    `_LOCAL_PROMPT` tells the model to show each hop first, then put the final
+    answer on the last line prefixed ``Answer: ``. Returning the raw completion
+    therefore led with the decomposition scaffold, so the bench scored the gold
+    answer against the reasoning text instead of the answer (2026-06-23 MuSiQue
+    trace: ``pred='1. What system did Knight Rider come out on? 2. ...'``).
+
+    Take the text after the last ``Answer:`` marker (first line of it); fall back
+    to the last non-empty line, then to the stripped completion."""
+    if not text or not text.strip():
+        return text
+    idx = text.lower().rfind("answer:")
+    if idx != -1:
+        tail = text[idx + len("answer:"):].lstrip()
+        first = tail.splitlines()[0].strip() if tail else ""
+        if first:
+            return first
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    return lines[-1] if lines else text.strip()
+
+
+def synthesize_local(
+    query: str, subgraph: dict, llm: LLMClient, *, seed_names: list[str] | None = None
+) -> str:
+    """Synthesize an answer over the retrieved subgraph. `seed_names` are the
+    embedding-retrieved anchor entities most relevant to the query -- handed to the
+    model so it starts the multi-hop walk at the right place instead of guessing
+    among every entity in the ball (the measured SYNTHESIS miss: the answer edge was
+    present but the chain went unwalked).
+
+    Returns the parsed final answer (the ``Answer:`` line), NOT the model's full
+    chain-of-thought -- see `_extract_answer`."""
+    seeds = ", ".join(dict.fromkeys(s for s in (seed_names or []) if s)) or (
+        "(none identified -- choose the most relevant entities yourself)"
+    )
+    return _extract_answer(
+        llm.complete(
+            _LOCAL_PROMPT.format(q=query, seeds=seeds, sub=_format_subgraph(subgraph))
+        )
+    )
 
 
 def synthesize_global(query: str, community_views: list[dict], llm: LLMClient) -> str:

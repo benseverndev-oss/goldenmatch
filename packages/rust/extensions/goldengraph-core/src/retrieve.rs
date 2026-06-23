@@ -14,7 +14,14 @@ use std::collections::BTreeSet;
 /// terminate (the reached set only grows; expansion stops when a hop adds
 /// nothing).
 pub fn neighborhood(graph: &Graph, seeds: &[EntityId], hops: u8) -> Subgraph {
-    let hops = hops.clamp(1, 2);
+    // Multi-hop retrieval must reach k-hop answers (MuSiQue is 2-4 hop; the
+    // engineered corpus 1-4). A hard clamp at 2 silently truncated EVERY walk --
+    // `ask(hops=4)` and the diagnostic wide ball both collapsed to the 2-hop ball,
+    // so 3+ hop answers were unreachable even when present and connected (measured:
+    // the engineered 1->2 hop accuracy cliff, and MuSiQue answers sitting in the
+    // SAME component as the seeds but outside the retrieved ball). Cap raised to 8;
+    // the caller's node_budget bounds subgraph size + prompt cost.
+    let hops = hops.clamp(1, 8);
     let mut reached: BTreeSet<EntityId> = seeds.iter().copied().collect();
     for _ in 0..hops {
         // Collect this level's new neighbors before inserting, so each pass is a
@@ -113,6 +120,39 @@ mod tests {
         assert_eq!(ids, vec![0, 1, 2, 3]);
         assert_eq!(sub.edges.len(), 3);
         assert!(sub.edges.iter().any(|e| e.subj == 2 && e.obj == 3));
+    }
+
+    // straight chain 0->1->2->3->4 (a 4-hop path)
+    fn line5() -> Graph {
+        Graph {
+            entities: vec![
+                node(0, "E0"),
+                node(1, "E1"),
+                node(2, "E2"),
+                node(3, "E3"),
+                node(4, "E4"),
+            ],
+            edges: vec![
+                edge(0, "r", 1),
+                edge(1, "r", 2),
+                edge(2, "r", 3),
+                edge(3, "r", 4),
+            ],
+        }
+    }
+
+    #[test]
+    fn reaches_beyond_two_hops() {
+        // Regression for the hop clamp: a 3-hop answer (entity 3) and 4-hop (entity
+        // 4) must be reachable -- the old clamp(1,2) made them permanently absent.
+        let g = line5();
+        let three = neighborhood(&g, &[0], 3);
+        assert!(three.entities.iter().any(|e| e.entity_id == 3), "3 hops");
+        let four = neighborhood(&g, &[0], 4);
+        assert!(four.entities.iter().any(|e| e.entity_id == 4), "4 hops");
+        // and 2 hops still stops short (no over-reach)
+        let two = neighborhood(&g, &[0], 2);
+        assert!(!two.entities.iter().any(|e| e.entity_id == 3));
     }
 
     #[test]

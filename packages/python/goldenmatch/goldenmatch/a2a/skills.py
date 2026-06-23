@@ -359,7 +359,7 @@ def dispatch_skill(skill_id: str, params: dict) -> dict:
         from goldenmatch.mcp.server import _handle_tool
         return _handle_tool(skill_id, params)
 
-    if skill_id in {"sensitivity", "incremental"}:
+    if skill_id in {"sensitivity", "incremental", "retrieve_similar"}:
         from goldenmatch.mcp.agent_tools import _dispatch as _agent_dispatch
         return _agent_dispatch(skill_id, params, AgentSession)
 

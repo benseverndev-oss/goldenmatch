@@ -48,6 +48,45 @@ The original first-headline analysis is retained verbatim below for the trail.
 
 ---
 
+## UPDATE 2026-06-22 (evening): real MuSiQue anchor + the loss localized to a SHATTERED GRAPH
+
+PR #1209 made the real-world MuSiQue anchor runnable (on-demand HuggingFace fetch,
+seeded subset, never redistributed) AND added a reusable **localize trace**
+(`GOLDENGRAPH_QA_TRACE=1`, `trace` workflow input) that classifies *where* each
+question's answer is lost: extraction / retrieval-budget / retrieval-broken-chain /
+synthesis. The trace is native-free, LLM-free guarded
+(`tests/test_qa_localize_trace.py`) and is the built-in validator for the fix below.
+
+**First real MuSiQue numbers (goldengraph, gpt-4o-mini): answer_match 0.0.** That is
+NOT a measurement artifact -- the localize trace nails the cause to the graph:
+
+- The 375-378 entity MuSiQue graph **fragments into ~60 disconnected components**
+  (top sizes ~[55,26,16,15,12,10]). For every answerable question, the gold answer
+  sits in a **different component than the question's seeds** (`same_component=False`;
+  e.g. *Exeter College* in an 8-node island, its "Hannibal and Scipio" seeds in a
+  separate 31-node one). The answer entity *is* extracted -- it's the BRIDGE between
+  paragraph-islands that's missing.
+- Ruled out by the trace: **retrieval budget** (wide 8-hop unbudgeted ball ==
+  budget-capped ball -- the island is fully explored, bumping `node_budget`/`hops`
+  does nothing) and **synthesis** (the answer never reaches the synthesizer).
+- **Root cause (code-confirmed):** `goldengraph/resolve.py` runs goldenmatch fuzzy
+  resolution only *within a single document's* mentions; the durable store
+  (`goldengraph-core/src/store.rs::append`) reconciles entities across documents
+  **only by exact `record_key`** (`record_fingerprint({name, typ})`, a hash of the
+  exact surface string). So an entity mentioned as "Thomas Nabbes" in one paragraph
+  and "Nabbes" in another never merges -> each paragraph becomes its own island ->
+  the multi-hop chain is physically severed. This is exactly the cross-document
+  entity resolution goldengraph claims as its moat, failing on real text. It's
+  invisible on the engineered corpus (atomic one-sentence facts, no cross-paragraph
+  bridge to resolve), which is why goldengraph wins there and scores ~0 here.
+
+**The fix is cross-document entity linking** (merge bridge entities across paragraphs
+so the islands join), NOT retrieval or synthesis tuning. Validation is built in: a
+working fix collapses the ~60 components and flips `same_component` to True on the
+localize trace. Tracked on the follow-up branch off #1209.
+
+---
+
 ## TL;DR
 
 The 2026-06-21 head-to-head was green-but-degenerate (every engine ~0

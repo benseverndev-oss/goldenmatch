@@ -75,7 +75,7 @@ GoldenMatch ships an **optional** Rust/PyO3 kernel (`pip install goldenmatch[nat
 | `1` | Require native. Raises `RuntimeError` at the first kernel call if the wheel isn't importable. Use this on scale/bench runs so a missing wheel fails loudly instead of running 100x+ slower in Python. |
 | `0` | Force pure Python everywhere. Use for parity debugging or if you suspect a kernel bug. |
 
-**Signed-off components (run native under `auto`):** `clustering`, `block_scoring`, `pairs`, `featurize`, `hashing`, `autoconfig`. These cleared bit-/ULP-level parity against the Python reference, so flipping native on or off never changes output. `pprl_bloom`, `sketch` (MinHash/LSH, #1081), and `simhash` (SimHash over embeddings, #1082) are built but **not** gated on — they only run native under `GOLDENMATCH_NATIVE=1`, pending a published-wheel parity pass and a perf bench before the default-on flip. Output is byte-identical either way (golden-vector verified), so the flip is a perf decision.
+**Signed-off components (run native under `auto`):** `clustering`, `block_scoring`, `pairs`, `featurize`, `hashing`, `autoconfig`, `sketch`. These cleared bit-/ULP-level parity against the Python reference, so flipping native on or off never changes output. The `sketch` component covers both the MinHash/LSH (#1081) and the SimHash-over-embeddings (#1090) band hashing; it is **default-on as of #1090** — byte-identical to the Python reference (golden-vector verified) and ~29x faster — so semantic blocking runs on the Rust `sketch-core` kernel by default (the single source of truth across Python/Rust/TS), with a graceful Python fallback when the wheel is absent. `pprl_bloom` is built but **not** gated on — it only runs native under `GOLDENMATCH_NATIVE=1`, pending a published-wheel parity pass and a perf bench before the default-on flip. Output is byte-identical either way (golden-vector verified), so that flip is a perf decision.
 
 The `autoconfig` component is the shared, pyo3-free decision core (`goldenmatch-autoconfig-core`) behind auto-config — the planner, column classifier (with the adaptive `1 − 1/√n` identifier-cardinality floor), the sample→full pair-count extrapolation (the corrected `ratio²` + Chao1 estimate), and the adaptive decision thresholds (the sparse-match floor and the per-type exact-matchkey floor). It runs native under `auto` and is byte-identical to the pure-Python oracle (golden-vector parity across Python / native / wasm-TS). The same crate compiles to WebAssembly so the TypeScript surface consumes the identical decision logic — one source of truth, zero cross-surface drift.
 
@@ -96,7 +96,7 @@ Default `20000000`. Candidate-pair count per kernel call below which the native 
 
 ### `GOLDENMATCH_NATIVE_SKETCH_RAYON_MIN_ROWS`
 
-Default `10000`. Row count below which the native MinHash/LSH batch sketcher (#1081) runs in the calling thread instead of fanning out to rayon — the same #688 calling-thread-vs-fanout guard, applied to the `sketch` kernel. The SimHash batch sketcher (#1082) shares this threshold. Relevant only with `GOLDENMATCH_NATIVE=1` (neither `sketch` nor `simhash` is gated on under `auto`). `0` forces rayon always, a huge value forces sequential always.
+Default `10000`. Row count below which the native MinHash/LSH batch sketcher (#1081) runs in the calling thread instead of fanning out to rayon — the same #688 calling-thread-vs-fanout guard, applied to the `sketch` kernel. The SimHash batch sketcher (#1090) shares this threshold. Relevant whenever the `sketch` kernel runs native — which is the default under `auto` since #1090 (set `GOLDENMATCH_NATIVE=0` to force the Python path), or under `GOLDENMATCH_NATIVE=1`. `0` forces rayon always, a huge value forces sequential always.
 
 ---
 
@@ -468,6 +468,8 @@ Every `GOLDENMATCH_*` variable the package reads, grouped by who should care. De
 | `GOLDENMATCH_THROUGHPUT` | `0` (off) | `0`/`1` | Enable the sketch-then-verify throughput tier. Equivalent to `dedupe_df(throughput=True)`. |
 | `GOLDENMATCH_THROUGHPUT_RECALL` | `0.95` | float | LSH recall target; tunes the band/row split. |
 | `GOLDENMATCH_THROUGHPUT_SIMILARITY` | unset | float | Override the near-dup similarity threshold (Jaccard `0.8` / cosine `0.85` when unset). |
+| `GOLDENMATCH_AUTO_SEMANTIC_BLOCKING` | on | `0`/`1` | Auto-enable SimHash-over-embeddings blocking for text-heavy data (#1090). Default-on; a no-op when no embedder is reachable. `0` disables. |
+| `GOLDENMATCH_SEMANTIC_BLOCKING_THRESHOLD` | `0.6` | float (0,1) | Recall threshold for auto semantic blocking; lower = more bands = higher recall. Drives the SimHash band/row split. |
 
 ### Distributed sub-knobs
 

@@ -6,7 +6,43 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Changed
+- **Auto-enabled semantic blocking is now default-on, native-sourced (#1090, epic #1087).**
+  Text-heavy data (a long free-text column the lexical/structured keys under-cover)
+  now routes to SimHash-over-embeddings blocking automatically when an embedder is
+  reachable -- no `GOLDENMATCH_AUTO_SEMANTIC_BLOCKING=1` opt-in required. It stays a
+  no-op (byte-identical output) when no embedder is reachable, so users without the
+  in-house model or a configured provider are unaffected; disable explicitly with
+  `GOLDENMATCH_AUTO_SEMANTIC_BLOCKING=0`. The recall threshold is now exposed
+  (`GOLDENMATCH_SEMANTIC_BLOCKING_THRESHOLD`, default 0.6) and drives the SimHash
+  band/row split, replacing the previous hardcoded `num_bands`. The SimHash
+  band-hashing kernel (`sketch-core`, Rust) is now the **default execution path**
+  (added to the native loader's default-on allowlist): the compiled core is the
+  single source of truth across Python/Rust/TS, byte-identical to the pure-Python
+  reference (golden-vector verified) and ~29x faster, with a graceful Python
+  fallback when the native wheel is absent.
+
 ### Added
+- **Pluggable vector-index backends: pgvector + DuckDB-HNSW (#1088, epic #1087).**
+  The persistent vector index gained two storage backends behind the existing
+  `VectorIndex` surface (`build` / `add` / `query` / `save` / `load` / `open`,
+  returning `RetrievedRecord`): `DuckDBVectorIndex` (a DuckDB database file,
+  ranked with core `array_cosine_similarity` and accelerated by a `vss` HNSW
+  index when available) and `PgVectorIndex` (Postgres + pgvector, HNSW over the
+  `<=>` cosine operator). A new `open_vector_index(location, backend="auto"|...)`
+  factory picks local-file / duckdb / pgvector uniformly (auto-inferred from the
+  location). The local on-disk backend is unchanged. DuckDB ships in-tree;
+  pgvector is the new optional `goldenmatch[pgvector]` extra. Both embed with the
+  zero-config in-house model by default (no cloud/torch) and share the
+  re-embed-never text cache.
+- **Semantic retrieval on the agent surfaces (#1089, epic #1087).** The
+  `retrieve_similar_records` API is now exposed over the wire on all three
+  surfaces: the MCP `retrieve_similar` tool, the A2A `retrieve_similar` skill,
+  and the REST `POST /retrieve` endpoint. Each embeds a column + a free-text
+  query with the zero-config in-house embedder (no cloud/torch by default) and
+  returns the most similar records ranked by cosine similarity, routing through
+  the same core function and `RetrievedRecord` shape. (MCP tool count 59 -> 60;
+  A2A skill count 31 -> 32.)
 - **Corpus-dedup throughput benchmark + per-PR perf gate (#1086, epic #1080).**
   A new `bench-corpus-dedup` harness (`scripts/bench_corpus_dedup/` +
   `.github/workflows/bench-corpus-dedup.yml`) measures the throughput tier (#1083)

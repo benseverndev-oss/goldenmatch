@@ -258,6 +258,12 @@ from goldenmatch.core.streaming import StreamProcessor, run_stream
 from goldenmatch.core.threshold import suggest_threshold
 from goldenmatch.core.validate import validate_dataframe
 from goldenmatch.core.vector_index import VectorIndex
+from goldenmatch.core.vector_store import (
+    DuckDBVectorIndex,
+    PgVectorIndex,
+    VectorStore,
+    open_vector_index,
+)
 
 # ── Identity Graph ───────────────────────────────────────────────────────
 from goldenmatch.identity import (
@@ -353,7 +359,7 @@ __all__ = [
     "ScreeningResult", "ScreeningHit", "FieldReason",
     "retrieve_similar_records", "RetrievedRecord",
     "entity_aware_retrieve", "Entity", "EntityRetrievalResult",
-    "VectorIndex",
+    "VectorIndex", "DuckDBVectorIndex", "PgVectorIndex", "VectorStore", "open_vector_index",
     # Evaluation
     "evaluate_pairs", "evaluate_clusters", "load_ground_truth_csv", "EvalResult",
     # Embedding ops (drift, per-field models, canonicalization eval)
