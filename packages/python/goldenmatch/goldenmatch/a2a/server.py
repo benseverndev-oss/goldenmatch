@@ -170,6 +170,27 @@ _SKILLS = [
         "outputModes": ["application/json"],
     },
     {
+        "id": "identity_audit_seal",
+        "name": "Identity Audit Seal",
+        "description": (
+            "Anchor the audit log with a tamper-evidence seal (chained sha256 "
+            "root over events since the last seal). Idempotent; no-op when "
+            "nothing new is logged."
+        ),
+        "inputModes": ["application/json"],
+        "outputModes": ["application/json"],
+    },
+    {
+        "id": "identity_audit_verify",
+        "name": "Identity Audit Verify",
+        "description": (
+            "Verify the audit log against its seal chain -- detects content "
+            "edits, deletion, reordering, and insertion of any sealed event."
+        ),
+        "inputModes": ["application/json"],
+        "outputModes": ["application/json"],
+    },
+    {
         "id": "controller_telemetry",
         "name": "Controller Telemetry",
         "description": (

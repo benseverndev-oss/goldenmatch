@@ -25,10 +25,10 @@ def test_total_tool_count_is_66():
 
     assert len(AGENT_TOOLS) == 18   # +1 retrieve_similar (#1089)
     assert len(MEMORY_TOOLS) == 7
-    assert len(IDENTITY_TOOLS) == 13  # +3 MDM ops (#1114) +3 agent-memory ops (#1075/#1078)
+    assert len(IDENTITY_TOOLS) == 15  # +3 MDM ops (#1114) +5 agent-memory ops (#1075/#1078)
     assert len(_BASE_TOOLS) == 25   # +1 config_weaknesses
     assert len(ROUTING_TOOLS) == 3  # plan_routing / explain_routing / lint_routing
-    assert len(TOOLS) == 66
+    assert len(TOOLS) == 68
     # No duplicate tool names across the whole surface.
     names = [t.name for t in TOOLS]
     assert len(names) == len(set(names))

@@ -249,8 +249,9 @@ def dispatch_skill(skill_id: str, params: dict) -> dict:
         "identity_resolve", "identity_list", "identity_history",
         "identity_conflicts", "identity_merge", "identity_split",
         "identity_show",
-        # Agent Memory #1075/#1078: agent-writable ops + audit export
+        # Agent Memory #1075/#1078: agent-writable ops + audit export + seal/verify
         "identity_claim", "identity_resolve_conflict", "identity_audit",
+        "identity_audit_seal", "identity_audit_verify",
     }:
         from goldenmatch.mcp.identity_tools import _dispatch as _identity_dispatch
         # Reuse MCP dispatch since the contract is identical (JSON in/out).
