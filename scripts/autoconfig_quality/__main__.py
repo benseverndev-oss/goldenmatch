@@ -11,6 +11,7 @@ Flags: --fast-only (skip the F1 tier), --datasets a,b (filter), --row-cap N
 from __future__ import annotations
 
 import argparse
+import gc
 import os
 import sys
 from pathlib import Path
@@ -54,6 +55,12 @@ def run(dataset_names: set[str] | None, fast_only: bool, row_cap: int | None):
             except Exception as e:
                 rec["error"] = str(e)  # real F1 error -> neutral (per diff)
         results[d.name] = rec
+        # Release each dataset's frame + dedupe intermediates before the next one.
+        # The corpus runs in ONE process; without this, a big dataset's dedupe
+        # (e.g. historical_50k at 50k rows) can fail to allocate on a memory-tight
+        # runner because earlier datasets' frames are still held.
+        del loaded, df, gt
+        gc.collect()
     return results, skipped
 
 
