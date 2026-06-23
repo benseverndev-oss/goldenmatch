@@ -62,6 +62,29 @@ _REDUCE_PROMPT = (
 )
 
 
+def _extract_answer(text: str) -> str:
+    """Pull the final answer out of a chain-of-thought completion.
+
+    `_LOCAL_PROMPT` tells the model to show each hop first, then put the final
+    answer on the last line prefixed ``Answer: ``. Returning the raw completion
+    therefore led with the decomposition scaffold, so the bench scored the gold
+    answer against the reasoning text instead of the answer (2026-06-23 MuSiQue
+    trace: ``pred='1. What system did Knight Rider come out on? 2. ...'``).
+
+    Take the text after the last ``Answer:`` marker (first line of it); fall back
+    to the last non-empty line, then to the stripped completion."""
+    if not text or not text.strip():
+        return text
+    idx = text.lower().rfind("answer:")
+    if idx != -1:
+        tail = text[idx + len("answer:"):].lstrip()
+        first = tail.splitlines()[0].strip() if tail else ""
+        if first:
+            return first
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    return lines[-1] if lines else text.strip()
+
+
 def synthesize_local(
     query: str, subgraph: dict, llm: LLMClient, *, seed_names: list[str] | None = None
 ) -> str:
@@ -69,12 +92,17 @@ def synthesize_local(
     embedding-retrieved anchor entities most relevant to the query -- handed to the
     model so it starts the multi-hop walk at the right place instead of guessing
     among every entity in the ball (the measured SYNTHESIS miss: the answer edge was
-    present but the chain went unwalked)."""
+    present but the chain went unwalked).
+
+    Returns the parsed final answer (the ``Answer:`` line), NOT the model's full
+    chain-of-thought -- see `_extract_answer`."""
     seeds = ", ".join(dict.fromkeys(s for s in (seed_names or []) if s)) or (
         "(none identified -- choose the most relevant entities yourself)"
     )
-    return llm.complete(
-        _LOCAL_PROMPT.format(q=query, seeds=seeds, sub=_format_subgraph(subgraph))
+    return _extract_answer(
+        llm.complete(
+            _LOCAL_PROMPT.format(q=query, seeds=seeds, sub=_format_subgraph(subgraph))
+        )
     )
 
 
