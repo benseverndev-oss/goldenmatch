@@ -56,6 +56,31 @@ def _person() -> tuple[pl.DataFrame, set]:
 _DATASETS_ROOT = Path(__file__).resolve().parents[2] / "packages/python/goldenmatch/tests/benchmarks/datasets"
 
 
+def _pairs_to_row_index(
+    df: pl.DataFrame, id_col: str, str_pairs: set[tuple[str, str]]
+) -> set[tuple[int, int]]:
+    """Map id-string pairs to canonical (min,max) row-index pairs; drop pairs whose
+    endpoints are missing from the frame or identical."""
+    pos = {str(v): i for i, v in enumerate(df[id_col].to_list())}
+    out: set[tuple[int, int]] = set()
+    for a, b in str_pairs:
+        ia, ib = pos.get(str(a)), pos.get(str(b))
+        if ia is not None and ib is not None and ia != ib:
+            out.add((min(ia, ib), max(ia, ib)))
+    return out
+
+
+def _febrl3() -> tuple[pl.DataFrame, set] | None:
+    """FEBRL3 (recordlinkage-bundled). rec_id-pair truth -> row-index via df['id'].
+    Returns None when recordlinkage isn't installed (skip-when-absent)."""
+    from scripts.dqbench_adapters.febrl3 import load_febrl3_df_and_gt
+    loaded = load_febrl3_df_and_gt()
+    if loaded is None:
+        return None
+    df, rec_pairs = loaded
+    return df, _pairs_to_row_index(df, "id", rec_pairs)
+
+
 def _dblp_acm() -> tuple[pl.DataFrame, set] | None:
     """DBLP-ACM bibliographic record-linkage. Concatenate the two tables, build
     row-index GT from the perfect mapping. Returns None when the data is absent."""
@@ -69,16 +94,14 @@ def _dblp_acm() -> tuple[pl.DataFrame, set] | None:
         acm = pl.read_csv(acm_p, encoding="utf8-lossy", ignore_errors=True)
         mapping = pl.read_csv(map_p, encoding="utf8-lossy", ignore_errors=True)
         df = pl.concat([dblp, acm], how="diagonal_relaxed")
-        # row-index lookup keyed by the source 'id' column (present in both tables)
-        pos = {str(v): i for i, v in enumerate(df["id"].to_list())}
-        gt: set[tuple[int, int]] = set()
+        # row-index GT keyed by the source 'id' column (present in both tables)
         cols = mapping.columns  # standard headers: idDBLP, idACM
         a_col, b_col = cols[0], cols[1]
-        for a, b in zip(mapping[a_col].to_list(), mapping[b_col].to_list()):
-            ia, ib = pos.get(str(a)), pos.get(str(b))
-            if ia is not None and ib is not None and ia != ib:
-                gt.add((min(ia, ib), max(ia, ib)))
-        return df, gt
+        str_pairs = {
+            (str(a), str(b))
+            for a, b in zip(mapping[a_col].to_list(), mapping[b_col].to_list())
+        }
+        return df, _pairs_to_row_index(df, "id", str_pairs)
     except Exception:
         return None  # any malformed piece -> skip, never crash the run
 
@@ -88,6 +111,7 @@ REGISTRY: list[Dataset] = [
     Dataset("anchor_shared_email", "anchor", _shared_email),
     Dataset("anchor_person_match", "anchor", _person),
     Dataset("dblp_acm", "real", _dblp_acm),
-    # FEBRL3 / NCVR / historical_50k / DQbench tiers: add with the same
-    # skip-when-absent loader pattern as their data lands.
+    Dataset("febrl3", "real", _febrl3),
+    # NCVR / historical_50k / DQbench tiers: add with the same skip-when-absent
+    # loader pattern as their data lands.
 ]
