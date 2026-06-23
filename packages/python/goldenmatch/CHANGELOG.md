@@ -23,6 +23,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   fallback when the native wheel is absent.
 
 ### Added
+- **Unified offline metrics harness (`scripts/metrics/harness.py`).** One entry
+  point that runs the accuracy + perf probes in a single pass and diffs them
+  against a committed baseline (`scripts/metrics/baseline.json`): synthetic
+  labeled-data accuracy (F1 / precision / recall via `evaluate_clusters`) plus
+  perf (wall, peak RSS, throughput, deterministic scored-pair / cluster counts
+  via `bench_capture`). Accuracy metrics and deterministic counts are *gated*
+  (a regression past tolerance fails `--check`); wall/RSS/throughput are
+  environment-dependent and reported *informationally*. Fully offline (no
+  datasets, Postgres, or API keys) so it runs on forks. Driven locally
+  (`--check` / `--update-baseline`) and by the new `bench-metrics` workflow
+  (weekly + `workflow_dispatch`, informational by default). First rung of the
+  metrics-iteration infra for accuracy/perf work.
 - **Pluggable vector-index backends: pgvector + DuckDB-HNSW (#1088, epic #1087).**
   The persistent vector index gained two storage backends behind the existing
   `VectorIndex` surface (`build` / `add` / `query` / `save` / `load` / `open`,
