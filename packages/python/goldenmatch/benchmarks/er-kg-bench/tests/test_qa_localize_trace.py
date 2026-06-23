@@ -11,7 +11,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from erkgbench.qa_e2e.corpora import Document, QACorpus, QAItem  # noqa: E402
-from erkgbench.qa_e2e.harness import AnswerResult, BuildResult, run_engine  # noqa: E402
+from erkgbench.qa_e2e.harness import (  # noqa: E402
+    AnswerResult,
+    BuildResult,
+    _shatter_probe,
+    run_engine,
+)
 
 
 class _FakeEngine:
@@ -145,3 +150,98 @@ def test_trace_reports_severed_component(monkeypatch, capsys):
     assert "components: 3 total" in out
     # seed component (2ent) != answer component (2ent), different islands
     assert "seed_comp=2ent answer_comp=2ent same_component=False" in out
+
+
+def test_shatter_probe_scoring_miss():
+    # A near-duplicate sharing a token across the split -> the pair is ALREADY a
+    # token-overlap candidate; goldenprofile under-merged. Semantic blocking won't help.
+    res = _shatter_probe(["Barack Obama", "White House"], ["Barack H Obama", "Senate"])
+    verdict, fscore, cosine, sname, iname, shared = res
+    assert verdict.startswith("SCORING-miss")
+    assert shared is True and fscore >= 85 and cosine is None
+
+
+def test_shatter_probe_no_bridge():
+    # Nothing string-similar across the split (no embedder) -> not a blocking miss.
+    res = _shatter_probe(["Apple Inc", "Cupertino"], ["Joseph Stalin", "Politburo"])
+    verdict, fscore, cosine, *_ = res
+    assert verdict.startswith("NO-BRIDGE") and fscore < 85
+
+
+def test_shatter_probe_empty_component_returns_none():
+    assert _shatter_probe([], ["x"]) is None
+    assert _shatter_probe(["x"], []) is None
+
+
+class _FakeEmbedder:
+    """Deterministic toy embedder: 'twin' tokens map near-identical vectors so a
+    token-disjoint pair can still score a high cosine (the semantic-bridge case)."""
+
+    _VECS = {
+        "morgan": [1.0, 0.0, 0.0],
+        "jpmorgan": [0.98, 0.0, 0.2],  # near 'morgan' but no shared TOKEN with 'J P Morgan'
+        "wall": [0.0, 1.0, 0.0],
+        "dimon": [0.0, 0.0, 1.0],
+    }
+
+    def embed(self, texts):
+        import numpy as np
+
+        out = []
+        for t in texts:
+            key = next((k for k in self._VECS if k in t.lower().replace(".", "").replace(" ", "")), None)
+            out.append(self._VECS.get(key, [0.1, 0.1, 0.1]))
+        return np.asarray(out, dtype=float)
+
+
+def test_shatter_probe_recall_miss_via_cosine():
+    # 'JPMorgan Chase' vs 'J P Morgan': token-disjoint (no shared word token) but a
+    # high-cosine semantic near-duplicate -> RECALL-miss the ANN blocker WOULD surface.
+    res = _shatter_probe(
+        ["JPMorgan Chase", "Jamie Dimon"],
+        ["J P Morgan", "Wall Street"],
+        embedder=_FakeEmbedder(),
+    )
+    verdict, fscore, cosine, sname, iname, shared = res
+    assert verdict.startswith("RECALL-miss")
+    assert shared is False and cosine is not None and cosine >= 0.6
+
+
+class _RecallShatterEngine(_ComponentEngine):
+    """Seed island and answer island hold a token-DISJOINT near-duplicate of the
+    same real-world entity -> token blocking never proposes the pair (RECALL miss).
+    Carries the toy embedder so the trace exercises the real cosine verdict path."""
+
+    _embedder = _FakeEmbedder()
+
+    def localize(self, handle, question: str) -> dict:
+        # 'JPMorgan Chase' (seed island) vs 'J.P. Morgan' (answer island): a true
+        # near-duplicate bridge, but the answer gold 'J.P. Morgan' lives in a
+        # different component than the seeds.
+        components = [["JPMorgan Chase", "Jamie Dimon"], ["J P Morgan", "Wall Street"], ["x"]]
+        return {
+            "seed_names": ["Jamie Dimon"],
+            "graph_names": [n for c in components for n in c],
+            "wide_names": ["JPMorgan Chase", "Jamie Dimon"],
+            "retrieved_names": ["JPMorgan Chase", "Jamie Dimon"],
+            "component_names": components,
+            "component_sizes": [len(c) for c in components],
+            "seed_component_idx": 0,
+            "n_components": len(components),
+            "n_graph_entities": 5,
+            "n_retrieved_entities": 2,
+            "n_wide_entities": 2,
+            "n_retrieved_edges": 1,
+        }
+
+
+def test_trace_emits_shatter_probe_on_broken_chain(monkeypatch, capsys):
+    monkeypatch.setenv("GOLDENGRAPH_QA_TRACE", "1")
+    corpus = QACorpus(
+        name="musique",
+        documents=(Document(id="d", text="x"),),
+        questions=(_q("q1", "J P Morgan"),),
+    )
+    run_engine(_RecallShatterEngine(), corpus, model="gpt-4o-mini", budget_usd=5.0)
+    out = capsys.readouterr().out
+    assert "shatter-probe: RECALL-miss" in out
