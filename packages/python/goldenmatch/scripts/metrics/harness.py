@@ -13,8 +13,14 @@ Why this exists: the repo's metrics machinery is sophisticated but fragmented
 there was no single "run the numbers and tell me if I regressed" entry point and
 no committed accuracy baseline. This is the offline core: synthetic accuracy +
 perf that runs anywhere (no downloads, no Postgres, no API keys), so it's a
-local-iteration tool today and a CI regression gate tomorrow. The download/key-
-gated real datasets (DBLP-ACM, NCVR, DQbench) plug in as additional probes.
+local-iteration tool today and a CI regression gate tomorrow.
+
+Real-dataset probes plug in opt-in (``METRICS_REAL_DATASETS=1``): ``accuracy_febrl3``
+runs the real Febrl3 ER benchmark via ``recordlinkage`` (bundled data, still
+offline). They skip cleanly -- contributing NO metrics, never an error -- when the
+flag is off or the dep is absent, so the default run and committed baseline stay
+dependency-free. Further download/key-gated sets (DBLP-ACM, NCVR, DQbench) follow
+the same opt-in skip pattern.
 
 Usage::
 
@@ -224,6 +230,14 @@ class ProbeOutcome:
     meta: dict[str, Any] = field(default_factory=dict)
     elapsed_s: float = 0.0
     error: str | None = None
+    # A skipped probe ran no work (opt-in not enabled, or an optional dataset/dep
+    # is absent). It contributes NO metrics, so it never enters the baseline or the
+    # diff -- distinct from ``error`` (a probe that should have run but failed).
+    skipped: str | None = None
+
+
+def _skipped(group: str, reason: str) -> ProbeOutcome:
+    return ProbeOutcome(group=group, metrics={}, skipped=reason)
 
 
 def probe_accuracy() -> ProbeOutcome:
@@ -454,10 +468,84 @@ def probe_trained_embedder() -> ProbeOutcome:
     )
 
 
+# ── real-dataset probe (opt-in) ───────────────────────────────────────────────
+# The synthetic probes run everywhere with no deps; a REAL standard ER benchmark
+# is the counterpart that catches accuracy regressions a hand-built generator
+# can't model. Febrl3 (recordlinkage) is a 5000-record person-dedup benchmark
+# WITH ground truth, bundled in the library -- so it's still fully offline (no
+# download) and deterministic, but gated opt-in so the default run (and the
+# committed baseline) stay dependency-free.
+
+
+def _real_datasets_enabled() -> bool:
+    """Opt-in gate for the real-dataset probes. NOT a ``GOLDENMATCH_*`` runtime
+    flag (those are the user tuning surface) -- this is a dev-harness toggle, so it
+    carries no such prefix and stays out of the tuning-doc reference."""
+    return os.environ.get("METRICS_REAL_DATASETS", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+# Deterministic explicit config for Febrl3 (avoids zero-config nondeterminism):
+# exact soc_sec_id OR fuzzy given_name+surname+date_of_birth. F1 ~0.90.
+def probe_febrl3() -> ProbeOutcome:
+    """F1 / precision / recall on the real Febrl3 ER benchmark (recordlinkage).
+
+    Opt-in (``METRICS_REAL_DATASETS=1`` + ``recordlinkage`` installed): a 5000-row
+    person-dedup set with published ground truth, run through an EXPLICIT config so
+    the numbers are deterministic. Skips cleanly (NO metrics, never an error) when
+    the flag is off or the dep is absent, so the default offline run and the
+    committed baseline are unaffected. This is the real-data counterpart to the
+    synthetic accuracy probe -- the regression net for changes that move accuracy
+    on real corruption the synthetic generator doesn't model.
+    """
+    if not _real_datasets_enabled():
+        return _skipped("accuracy", "set METRICS_REAL_DATASETS=1 to enable real-dataset probes")
+    try:
+        from recordlinkage.datasets import load_febrl3
+    except ImportError:
+        return _skipped("accuracy", "recordlinkage not installed (pip install recordlinkage)")
+
+    import polars as pl
+    from goldenmatch import dedupe_df, evaluate_clusters
+
+    df_pd, links = load_febrl3(return_links=True)
+    df_pd = df_pd.sort_index()  # fixed row order -> deterministic positions
+    pos = {rec: i for i, rec in enumerate(df_pd.index)}
+    rows = df_pd.reset_index(drop=True).fillna("").astype(str).to_dict("records")
+    gt = {(min(pos[a], pos[b]), max(pos[a], pos[b])) for a, b in links if a in pos and b in pos}
+
+    res = dedupe_df(
+        pl.DataFrame(rows),
+        exact=["soc_sec_id"],
+        fuzzy={"given_name": 0.85, "surname": 0.85, "date_of_birth": 0.85},
+        confidence_required=False,
+    )
+    ev = evaluate_clusters(res.clusters or {}, gt)
+    n_multi = sum(1 for c in (res.clusters or {}).values() if c.get("size", 0) > 1)
+    return ProbeOutcome(
+        group="accuracy",
+        # F1/precision/recall are GATED (+/-0.02 absorbs the few boundary pairs that
+        # cross-env fuzzy scoring can flip out of 6538); the raw tp/fp/fn counts ride
+        # as informational diagnostics rather than strict env-independent fingerprints
+        # (real-data scoring is likelier to wobble by a pair or two than the synthetic
+        # path that the strict-count gate was validated on).
+        metrics={
+            "f1": round(ev.f1, 4),
+            "precision": round(ev.precision, 4),
+            "recall": round(ev.recall, 4),
+            "tp": ev.tp,
+            "fp": ev.fp,
+            "fn": ev.fn,
+        },
+        meta={"n_rows": len(rows), "gt_pairs": len(gt), "dataset": "febrl3",
+              "multi_member_clusters": n_multi},
+    )
+
+
 PROBES: dict[str, Callable[[], ProbeOutcome]] = {
     "accuracy_synthetic": probe_accuracy,
     "accuracy_synthetic_semantic": probe_semantic_blocking,
     "accuracy_trained_embedder": probe_trained_embedder,
+    "accuracy_febrl3": probe_febrl3,
     "perf_synthetic": probe_perf,
 }
 
@@ -518,10 +606,13 @@ def run_report(selected: list[str] | None = None) -> dict[str, Any]:
         try:
             outcome = fn()
             outcome.elapsed_s = round(time.perf_counter() - t0, 3)
-            probes_out[name] = {
-                "group": outcome.group, "metrics": outcome.metrics,
-                "meta": outcome.meta, "elapsed_s": outcome.elapsed_s,
-            }
+            if outcome.skipped:
+                probes_out[name] = {"skipped": outcome.skipped, "elapsed_s": outcome.elapsed_s}
+            else:
+                probes_out[name] = {
+                    "group": outcome.group, "metrics": outcome.metrics,
+                    "meta": outcome.meta, "elapsed_s": outcome.elapsed_s,
+                }
         except Exception as exc:  # one probe failing must not kill the report
             probes_out[name] = {"error": f"{type(exc).__name__}: {exc}",
                                 "elapsed_s": round(time.perf_counter() - t0, 3)}
@@ -554,8 +645,11 @@ _GATED_SUFFIXES = ("f1", "precision", "recall", "scored_pairs", "multi_member_cl
                    "ann_pairs_recovered", "ann_candidate_pairs",
                    "alias_recall_untrained", "alias_recall_trained",
                    "untrained_candidates", "trained_candidates")
+# tp/fp/fn are informational: real-data confusion counts can wobble by a pair or
+# two across fuzzy-scoring environments, so the F1/P/R gate (+/-0.02) is the
+# regression signal, not the raw counts.
 _INFO_SUFFIXES = ("wall_s", "peak_rss_mb", "records_per_s", "recall_lift",
-                  "recall_gain", "train_separation")
+                  "recall_gain", "train_separation", "tp", "fp", "fn")
 # direction: True = higher is better (regression = drop); False = lower is better.
 _HIGHER_BETTER = ("f1", "precision", "recall", "records_per_s",
                   "blocking_recall_baseline", "blocking_recall_semantic",
@@ -574,6 +668,7 @@ _TOL = {"f1": 0.02, "precision": 0.02, "recall": 0.02,
         "ann_pairs_recovered": 0.0, "ann_candidate_pairs": 0.0,
         "alias_recall_untrained": 0.02, "alias_recall_trained": 0.02,
         "untrained_candidates": 0.0, "trained_candidates": 0.0,
+        "tp": 9e9, "fp": 9e9, "fn": 9e9,
         "wall_s": 9e9, "peak_rss_mb": 9e9, "records_per_s": 9e9,
         "recall_lift": 9e9, "recall_gain": 9e9, "train_separation": 9e9}
 
@@ -659,6 +754,9 @@ def to_markdown(report: dict[str, Any], diff: dict[str, Any] | None = None) -> s
     for pname, p in report.get("probes", {}).items():
         if p.get("error"):
             lines.append(f"### {pname} — ERROR: {p['error']}")
+            continue
+        if p.get("skipped"):
+            lines.append(f"### {pname} — skipped: {p['skipped']}")
             continue
         lines.append(f"### {pname} ({p.get('group','')}, {p.get('elapsed_s','?')}s)")
         lines.append("")

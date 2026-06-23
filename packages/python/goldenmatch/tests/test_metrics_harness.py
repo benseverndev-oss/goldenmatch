@@ -187,3 +187,43 @@ def test_run_report_shape_and_resilience():
     # an unknown probe is recorded as an error, not a crash
     bad = harness.run_report(["nope"])
     assert "error" in bad["probes"]["nope"]
+
+
+# ── real-dataset probe (opt-in) + skip mechanism ─────────────────────────────
+
+
+def test_febrl3_probe_skips_without_optin(monkeypatch):
+    monkeypatch.delenv("METRICS_REAL_DATASETS", raising=False)
+    out = harness.probe_febrl3()
+    # skipped is distinct from error: no metrics, no failure.
+    assert out.skipped and out.metrics == {} and out.error is None
+
+
+def test_skipped_probe_contributes_no_metrics_and_never_regresses(monkeypatch):
+    monkeypatch.delenv("METRICS_REAL_DATASETS", raising=False)
+    report = harness.run_report(["accuracy_febrl3"])
+    assert report["probes"]["accuracy_febrl3"]["skipped"]
+    # a skipped probe flattens to nothing, so it can't enter the baseline...
+    assert harness._flatten(report) == {}
+    # ...and its (committed, gated) baseline metrics show MISSING, never a regression.
+    base = harness.load_baseline()
+    diff = harness.diff_against_baseline(report, base)
+    assert diff["regressions"] == []
+
+
+def test_febrl3_probe_runs_when_enabled(monkeypatch):
+    pytest.importorskip("recordlinkage")
+    monkeypatch.setenv("METRICS_REAL_DATASETS", "1")
+    out = harness.probe_febrl3()
+    assert out.group == "accuracy" and out.error is None and out.skipped is None
+    assert set(out.metrics) >= {"f1", "precision", "recall", "tp", "fp", "fn"}
+    assert out.metrics["f1"] > 0.8  # explicit config recovers most of the real benchmark
+    assert out.metrics["tp"] > out.metrics["fn"]
+
+
+def test_committed_baseline_records_real_febrl3_numbers():
+    # the real-benchmark numbers are committed (gated f1/p/r), so opt-in runs diff
+    # against a known reference -- and they're documented in-repo.
+    base = harness.load_baseline()
+    assert base["metrics"]["accuracy_febrl3.f1"]["gated"] is True
+    assert base["metrics"]["accuracy_febrl3.tp"]["gated"] is False  # counts informational

@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated_at": "2026-06-23T16:55:10Z",
+  "updated_at": "2026-06-23T17:53:01Z",
   "metrics": {
     "accuracy_synthetic.f1": {
       "value": 0.8456,
@@ -100,22 +100,64 @@
       "two_sided": true,
       "gated": true
     },
+    "accuracy_febrl3.f1": {
+      "value": 0.9017,
+      "tol": 0.02,
+      "higher_better": true,
+      "two_sided": false,
+      "gated": true
+    },
+    "accuracy_febrl3.precision": {
+      "value": 0.8691,
+      "tol": 0.02,
+      "higher_better": true,
+      "two_sided": false,
+      "gated": true
+    },
+    "accuracy_febrl3.recall": {
+      "value": 0.937,
+      "tol": 0.02,
+      "higher_better": true,
+      "two_sided": false,
+      "gated": true
+    },
+    "accuracy_febrl3.tp": {
+      "value": 6126.0,
+      "tol": 9000000000.0,
+      "higher_better": false,
+      "two_sided": false,
+      "gated": false
+    },
+    "accuracy_febrl3.fp": {
+      "value": 923.0,
+      "tol": 9000000000.0,
+      "higher_better": false,
+      "two_sided": false,
+      "gated": false
+    },
+    "accuracy_febrl3.fn": {
+      "value": 412.0,
+      "tol": 9000000000.0,
+      "higher_better": false,
+      "two_sided": false,
+      "gated": false
+    },
     "perf_synthetic.wall_s": {
-      "value": 3.0731,
+      "value": 3.713,
       "tol": 9000000000.0,
       "higher_better": false,
       "two_sided": false,
       "gated": false
     },
     "perf_synthetic.peak_rss_mb": {
-      "value": 195.1,
+      "value": 329.4,
       "tol": 9000000000.0,
       "higher_better": false,
       "two_sided": false,
       "gated": false
     },
     "perf_synthetic.records_per_s": {
-      "value": 850.6,
+      "value": 704.0,
       "tol": 9000000000.0,
       "higher_better": true,
       "two_sided": false,
