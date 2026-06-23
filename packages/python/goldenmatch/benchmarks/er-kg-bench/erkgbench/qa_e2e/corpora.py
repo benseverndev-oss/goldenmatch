@@ -3,9 +3,20 @@ ingests, so the harness and metrics never special-case a source."""
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+import random
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+
+#: Default real-world MuSiQue-Ans source on the HuggingFace Hub. The canonical
+#: MuSiQue release ships as a Google-Drive zip; this mirror is the same
+#: MuSiQue-Ans rows in the official schema (id / question / answer / paragraphs /
+#: question_decomposition), loadable with `datasets.load_dataset` and no config.
+MUSIQUE_HF_DATASET = "dgslibisey/MuSiQue"
+MUSIQUE_HF_SPLIT = "validation"
+#: Deterministic-subset seed -- shared with the engineered generator so a "seed
+#: 20260620" run is reproducible across both corpora.
+MUSIQUE_SUBSET_SEED = 20260620
 
 
 @dataclass(frozen=True)
@@ -43,16 +54,61 @@ class QACorpus:
 def load_musique(
     *, path: str | Path, max_questions: int, hf_split: str | None = None
 ) -> QACorpus:
-    """Load MuSiQue-Ans into the normalized QACorpus shape.
+    """Load MuSiQue-Ans from a JSONL file into the normalized QACorpus shape.
 
-    ``path`` points at a JSONL file (the committed fixture, or a downloaded
-    subset). Each *supporting* paragraph becomes a Document keyed
-    ``"<question_id>::p<idx>"``; ``hop_count`` = ``len(question_decomposition)``
-    (falling back to 2 when absent)."""
+    ``path`` points at a JSONL file (the committed fixture, or a previously
+    downloaded subset). For an on-demand HuggingFace fetch (no committed file),
+    use :func:`fetch_musique`."""
     rows = _read_jsonl(Path(path))
+    return _musique_corpus_from_rows(rows, max_questions=max_questions)
+
+
+def fetch_musique(
+    *,
+    dataset: str = MUSIQUE_HF_DATASET,
+    split: str = MUSIQUE_HF_SPLIT,
+    max_questions: int,
+    seed: int = MUSIQUE_SUBSET_SEED,
+) -> QACorpus:
+    """Fetch MuSiQue-Ans on demand from the HuggingFace Hub and normalize it.
+
+    The full validation split is ~2.4k multi-hop questions (CC-BY-4.0). We fetch
+    it on demand -- the corpus is never redistributed in-repo -- and take a
+    *seeded* id-sorted subset of ``max_questions`` so a run is deterministic
+    without committing a question list. ``datasets`` is an opt-in dependency of
+    the bench lane (the engineered corpus needs no network), so the import is
+    local and its absence raises a pointed error."""
+    try:
+        from datasets import load_dataset
+    except ImportError as exc:  # pragma: no cover - exercised in CI install, not unit
+        raise RuntimeError(
+            "fetch_musique needs the `datasets` package (pip install datasets). "
+            "The engineered corpus has no such dependency; only the real-world "
+            "MuSiQue anchor fetches from the Hub."
+        ) from exc
+
+    ds = load_dataset(dataset, split=split)
+    # Sort by id first so the seeded sample is independent of the Hub's row order,
+    # then sample without replacement for a stable, shuffled subset.
+    rows = sorted((dict(r) for r in ds), key=lambda r: str(r["id"]))
+    k = min(max_questions, len(rows))
+    subset = random.Random(seed).sample(rows, k=k)
+    return _musique_corpus_from_rows(subset, max_questions=k)
+
+
+def _musique_corpus_from_rows(
+    rows: Iterable[dict], *, max_questions: int
+) -> QACorpus:
+    """Normalize MuSiQue-Ans rows (from JSONL or the Hub) into a QACorpus.
+
+    Each paragraph (supporting *and* distractor) becomes a Document keyed
+    ``"<question_id>::p<idx>"`` so the graph ingests the realistic noise; only
+    *supporting* paragraphs are recorded as gold support. ``hop_count`` =
+    ``len(question_decomposition)`` (falling back to 2 when absent). MuSiQue has
+    no ambiguity dial, so ``ambiguity_level`` is fixed at 0.0."""
     documents: list[Document] = []
     questions: list[QAItem] = []
-    for row in rows[:max_questions]:
+    for row in list(rows)[:max_questions]:
         qid = str(row["id"])
         support_ids: list[str] = []
         for para in row.get("paragraphs", []):
