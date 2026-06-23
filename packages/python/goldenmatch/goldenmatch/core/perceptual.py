@@ -34,14 +34,18 @@ and parity-clean, and so bring-your-own-decoded-input is a first-class entrypoin
 """
 from __future__ import annotations
 
+import logging
 import math
 from collections.abc import Sequence
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     # image
     "IMG_RESIZE",
     "HASH_SIZE",
     "phash_image",
+    "phash_image_batch",
     # audio
     "AUDIO_FRAME",
     "AUDIO_HOP",
@@ -184,17 +188,8 @@ def _dct2_topleft(block: list[list[float]], size: int, keep: int) -> list[list[f
     return out
 
 
-def phash_image(luma) -> int:
-    """64-bit DCT perceptual hash of a decoded luma grid.
-
-    Pipeline: coerce -> align-corners bilinear resize to 32x32 -> 2D DCT-II ->
-    take the 8x8 low-frequency block -> threshold each coefficient against the
-    median of the 64 coefficients. Bit ``i = row*8 + col`` is set (LSB-first) when
-    the coefficient strictly exceeds the median; exact ties resolve to 0.
-
-    Returns an int in ``[0, 2**64)``. Compare two hashes with :func:`hamming`.
-    """
-    grid = _as_grid(luma)
+def _phash_image_python(grid: list[list[float]]) -> int:
+    """The pure-Python pHash over an already-coerced luma grid (parity reference)."""
     small = _bilinear_resize(grid, IMG_RESIZE)
     block = _dct2_topleft(small, IMG_RESIZE, HASH_SIZE)
     coeffs = [block[r][c] for r in range(HASH_SIZE) for c in range(HASH_SIZE)]
@@ -207,6 +202,52 @@ def phash_image(luma) -> int:
         if v > median:
             h |= 1 << i
     return h
+
+
+def phash_image(luma) -> int:
+    """64-bit DCT perceptual hash of a decoded luma grid.
+
+    Pipeline: coerce -> align-corners bilinear resize to 32x32 -> 2D DCT-II ->
+    take the 8x8 low-frequency block -> threshold each coefficient against the
+    median of the 64 coefficients. Bit ``i = row*8 + col`` is set (LSB-first) when
+    the coefficient strictly exceeds the median; exact ties resolve to 0.
+
+    Returns an int in ``[0, 2**64)``. Compare two hashes with :func:`hamming`.
+    Uses the native kernel when gated on (``native_enabled("perceptual")``).
+    """
+    grid = _as_grid(luma)
+    # Lazy import: keep this module's top level dependency-light (stdlib only).
+    from goldenmatch.core._native_loader import native_enabled, native_module
+
+    if native_enabled("perceptual"):
+        try:
+            return native_module().perceptual_phash_image(grid)
+        except AttributeError:
+            # Published wheel predates this symbol (wheel/caller skew, see #688) —
+            # legitimate fallback. A real kernel error is NOT swallowed here.
+            logger.debug(
+                "native perceptual_phash_image unavailable (wheel skew); using Python fallback"
+            )
+    return _phash_image_python(grid)
+
+
+def phash_image_batch(images: Sequence) -> list[int]:
+    """Per-image 64-bit pHash for many decoded luma grids (the column path).
+
+    Uses the native batch kernel when gated on; otherwise hashes each grid with
+    the pure-Python path. Output is identical to mapping :func:`phash_image`.
+    """
+    grids = [_as_grid(im) for im in images]
+    from goldenmatch.core._native_loader import native_enabled, native_module
+
+    if native_enabled("perceptual"):
+        try:
+            return native_module().perceptual_phash_batch(grids)
+        except AttributeError:
+            logger.debug(
+                "native perceptual_phash_batch unavailable (wheel skew); using Python fallback"
+            )
+    return [_phash_image_python(g) for g in grids]
 
 
 # ============================== audio fingerprint ============================
@@ -300,6 +341,20 @@ def fingerprint_audio(samples: Sequence[float], sample_rate: int) -> list[int]:
     if sample_rate <= 0:
         raise ValueError("sample_rate must be positive")
     data = [float(v) for v in samples]
+    from goldenmatch.core._native_loader import native_enabled, native_module
+
+    if native_enabled("perceptual"):
+        try:
+            return native_module().perceptual_fingerprint_audio(data, sample_rate)
+        except AttributeError:
+            logger.debug(
+                "native perceptual_fingerprint_audio unavailable (wheel skew); using Python fallback"
+            )
+    return _fingerprint_audio_python(data, sample_rate)
+
+
+def _fingerprint_audio_python(data: list[float], sample_rate: int) -> list[int]:
+    """The pure-Python audio fingerprint over already-float samples (parity reference)."""
     min_len = AUDIO_FRAME + AUDIO_HOP  # guarantees >= 2 frames
     if len(data) < min_len:
         data = data + [0.0] * (min_len - len(data))

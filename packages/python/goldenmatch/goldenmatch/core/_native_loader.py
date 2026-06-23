@@ -114,6 +114,14 @@ except Exception:  # noqa: BLE001 - any import/load failure falls back below
 #     GOLDENMATCH_NATIVE=1 (the native<->python parity test forces it). Output is
 #     byte-identical (deterministic, golden-vector verified), so the flip is a
 #     perf/wheel-republish decision, not an accuracy one.
+#   - "perceptual" (multimodal-ER crawl-tier media hashes, ADR 0022) is shipped
+#     native-available but deliberately NOT gated yet, same posture as "sketch":
+#     the published wheel must carry perceptual_phash_image / perceptual_phash_batch
+#     / perceptual_fingerprint_audio and a bench must confirm the lift before the
+#     default-on flip. Reachable now via GOLDENMATCH_NATIVE=1 (the native<->python
+#     parity test forces it). Output is byte-identical (deterministic DCT pHash +
+#     Haitsma-Kalker fingerprint, golden-vector verified), so the flip is a
+#     perf/wheel-republish decision, not an accuracy one.
 _GATED_ON: frozenset[str] = frozenset(
     {
         "clustering",

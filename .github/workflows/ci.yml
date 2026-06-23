@@ -247,6 +247,12 @@ jobs:
               # score-core crate. A score-core change alters native behavior, so
               # re-run the native build + parity suite.
               - 'packages/rust/extensions/score-core/**'
+              # perceptual-core: the native ext exposes the multimodal-ER crawl-tier
+              # media hashes via PyO3 (ADR 0022); a core change alters native
+              # behavior, so re-run the native build + parity suite.
+              - 'packages/rust/extensions/perceptual-core/**'
+              - 'packages/python/goldenmatch/goldenmatch/core/perceptual.py'
+              - 'packages/python/goldenmatch/tests/test_native_perceptual_parity.py'
               - 'packages/python/goldenmatch/goldenmatch/core/_native_loader.py'
               - 'packages/python/goldenmatch/goldenmatch/core/_hashing.py'
               - 'packages/python/goldenmatch/goldenmatch/core/cluster.py'
@@ -1377,6 +1383,7 @@ jobs:
             packages/python/goldenmatch/tests/test_embeddings.py \
             packages/python/goldenmatch/tests/test_inhouse_embedder.py \
             packages/python/goldenmatch/tests/test_autoconfig_native_parity.py \
+            packages/python/goldenmatch/tests/test_native_perceptual_parity.py \
             -v
 
   # GoldenCheck native parity: the goldencheck-native ext (PyO3, standalone
