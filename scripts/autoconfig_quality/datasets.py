@@ -27,6 +27,12 @@ class Dataset:
     name: str
     kind: Literal["anchor", "real"]
     loader: Callable[[], tuple[pl.DataFrame, set] | None]
+    full_scan: bool = False  # True -> F1 tier ignores --row-cap, runs the whole df
+
+
+def effective_row_cap(dataset: Dataset, cli_row_cap: int | None) -> int | None:
+    """A full_scan dataset ignores the CLI cap (None = no truncation in evaluate_f1)."""
+    return None if dataset.full_scan else cli_row_cap
 
 
 # ── anchors (always available, deterministic) ──────────────────────────────────
