@@ -72,7 +72,7 @@ def test_apply_preserves_existing_blocking():
         matchkeys=[
             MatchkeyConfig(name="exact_name", type="exact", fields=[MatchkeyField(field="name")])
         ],
-        blocking=BlockingConfig(strategy="static", keys=[BlockingKeyConfig(field="name")]),
+        blocking=BlockingConfig(strategy="static", keys=[BlockingKeyConfig(fields=["name"])]),
     )
     out = apply_perceptual_autoconfig(cfg, df)
     assert "perceptual_image_ph" in [mk.name for mk in out.get_matchkeys()]
