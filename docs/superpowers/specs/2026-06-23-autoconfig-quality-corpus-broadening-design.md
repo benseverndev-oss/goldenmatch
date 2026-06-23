@@ -160,8 +160,10 @@ to pin the new F1 floors.
 
 All loaders are seeded; the vendored parquet is fixed; native 0 vs 1 is
 F1-parity-identical. The pinned F1s are the harness's deterministic *memory-off*
-numbers (regression floors), not the published headline numbers — e.g. FEBRL3
-lands ~0.91 memory-off vs ~0.944 published, which is correct as a floor. Each
+numbers (regression floors), not the published headline numbers — as measured on
+first bless: FEBRL3 0.9665, ncvr_synthetic 0.9828, historical_50k 0.4663 (the low
+one is the lever-nomination finding: recall-bound, `postcode_fake` excluded as a
+matchkey), correct as floors regardless of the headline. Each
 dataset is blessed to whatever it deterministically measures, gated as
 `current >= floor - tolerance` like the existing anchors. Signal drift on real
 datasets stays informational (only F1 floors them); `planner_rung` stays WARN.
