@@ -1,0 +1,133 @@
+# Consolidated benchmark runner — ONE workflow for every dispatch-only bench,
+# replacing a fleet of near-identical bench-<name>.yml scaffolds. The per-bench
+# knobs (install method, native build, workdir, env, extra deps, runner) live in
+# `.github/benchmarks/registry.yml`; this workflow reads that plan via
+# `scripts/bench.py` and the SAME dispatcher builds + runs the command locally.
+#
+# Add a benchmark: add a row to the registry + the `suite` choice option below
+# (a test asserts the two stay in sync) -- no new workflow file.
+#
+# Dispatch:
+#   gh workflow run bench.yml --ref main -f suite=lsh-recall \
+#     -f runner=large-new-64GB -f args="--threshold 0.5 --num-perms 128"
+name: bench
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: "Which benchmark to run (see .github/benchmarks/registry.yml)"
+        type: choice
+        required: true
+        options:
+          - lsh-recall
+          - prepared-store
+          - perceptual
+          - quality-bridges
+          - embedding-providers
+          - inhouse-embedder
+          - native-bulk-fingerprint
+          - native-cluster-kernel
+          - pair-stream-columnar
+          - datafusion-vs-bucket
+          - quality-invariant-scale
+      runner:
+        description: "Runner label (registry has a recommended default per suite)"
+        type: string
+        required: false
+        default: "ubuntu-latest"
+      ref:
+        description: "Branch / tag / SHA to bench (blank = workflow ref)"
+        type: string
+        required: false
+        default: ""
+      args:
+        description: "Extra args forwarded verbatim to the bench script"
+        type: string
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 180
+    env:
+      # Non-sensitive repo var + opt-in key passthrough: empty when unset, so
+      # benches that don't need them are unaffected. Inputs go through env (not
+      # `${{ }}` string interpolation into a run line) to avoid shell injection.
+      GOLDENMATCH_NCVR_SAMPLE_URL: ${{ vars.NCVR_SAMPLE_URL }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      SUITE: ${{ inputs.suite }}
+      BENCH_ARGS: ${{ inputs.args }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      # System Python just to run the dispatcher (registry parse + plan).
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Install dispatcher dep
+        run: python -m pip install --quiet pyyaml
+
+      - name: Resolve run-plan from registry
+        id: plan
+        run: python scripts/bench.py --resolve "$SUITE"
+
+      # --- native kernel (only when the suite needs it) ---
+      - if: steps.plan.outputs.native == 'true'
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - if: steps.plan.outputs.native == 'true'
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: |
+            packages/rust/extensions/native
+            packages/rust/extensions/sketch-core
+
+      # --- install path: uv (default) or pip editable ---
+      - if: steps.plan.outputs.install == 'uv'
+        uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - name: uv sync
+        if: steps.plan.outputs.install == 'uv'
+        run: uv sync --all-packages
+      - name: Build native kernel (uv)
+        if: steps.plan.outputs.install == 'uv' && steps.plan.outputs.native == 'true'
+        run: uv run python scripts/build_native.py
+
+      - name: pip editable install
+        if: steps.plan.outputs.install == 'pip'
+        run: |
+          python -m pip install --upgrade pip
+          EXTRAS=$(python -c "import json,sys;e=json.loads(sys.argv[1]);print('['+','.join(e)+']' if e else '')" '${{ steps.plan.outputs.extras }}')
+          python -m pip install -e "packages/python/goldenmatch${EXTRAS}"
+          for dep in $(python -c "import json,sys;print(' '.join(json.loads(sys.argv[1])))" '${{ steps.plan.outputs.pip }}'); do
+            python -m pip install "$dep"
+          done
+      - name: Build native kernel (pip)
+        if: steps.plan.outputs.install == 'pip' && steps.plan.outputs.native == 'true'
+        run: python scripts/build_native.py
+
+      # --- run: the dispatcher applies env + workdir + builds the uv/pip command ---
+      - name: Run benchmark
+        run: python scripts/bench.py "$SUITE" -- $BENCH_ARGS
+
+      - name: Publish summary
+        if: ${{ !cancelled() && steps.plan.outputs.summary != '' }}
+        run: cat "${{ steps.plan.outputs.workdir }}/${{ steps.plan.outputs.summary }}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload artifact
+        if: ${{ !cancelled() && steps.plan.outputs.artifact != '' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: bench-${{ inputs.suite }}
+          path: ${{ steps.plan.outputs.workdir }}/${{ steps.plan.outputs.artifact }}
+          retention-days: 30
