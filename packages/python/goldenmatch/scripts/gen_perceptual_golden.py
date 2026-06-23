@@ -15,9 +15,17 @@ from __future__ import annotations
 
 import json
 import math
+import struct
 from pathlib import Path
 
 from goldenmatch.core import perceptual
+
+
+def _f64_bits(v: float) -> str:
+    """Little-endian IEEE-754 bit pattern of a float as 16 hex chars. The radial
+    profile is stored bit-exact (not as a JSON decimal) so the parity oracle has
+    zero decimal round-trip ambiguity -- the same reason hashes are stored as hex."""
+    return format(struct.unpack("<Q", struct.pack("<d", float(v)))[0], "016x")
 
 FIXTURE = Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "perceptual_golden.json"
 
@@ -79,6 +87,11 @@ def build() -> dict:
             "cols": len(g[0]),
             "pixels": g,
             "phash": hex(perceptual.phash_image(g)),
+            # Rotation/crop-aware radial-variance profile (ADR 0022 finding 1):
+            # a list of f64 the Rust kernel must reproduce bit-for-bit, stored as
+            # hex bit patterns (see _f64_bits) so JSON decimal round-trip can't
+            # drift a ULP -- the same hex discipline phash/fingerprint use.
+            "radial": [_f64_bits(v) for v in perceptual.radial_variance(g)],
         }
         for name, g in images.items()
     ]
@@ -104,6 +117,7 @@ def build() -> dict:
         "input is pcm16 / 32768.0.",
         "pcm_scale": PCM_SCALE,
         "image_params": {"resize": perceptual.IMG_RESIZE, "hash_size": perceptual.HASH_SIZE},
+        "radial_params": {"resize": perceptual.RADIAL_RESIZE, "angles": perceptual.RADIAL_ANGLES},
         "audio_params": {
             "frame": perceptual.AUDIO_FRAME,
             "hop": perceptual.AUDIO_HOP,

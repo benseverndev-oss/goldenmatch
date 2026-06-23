@@ -3,7 +3,7 @@
 //! cross-language parity anchor: Python and Rust both check against the same
 //! `perceptual_golden.json`, so the implementations cannot drift.
 
-use goldenmatch_perceptual_core::{fingerprint_audio, phash_image};
+use goldenmatch_perceptual_core::{fingerprint_audio, phash_image, radial_variance};
 
 fn fixture_path() -> std::path::PathBuf {
     // CARGO_MANIFEST_DIR = packages/rust/extensions/perceptual-core
@@ -38,6 +38,39 @@ fn rust_reproduces_image_fixture() {
             img["phash"].as_str().unwrap(),
             "phash drift for {name}"
         );
+    }
+}
+
+#[test]
+fn rust_reproduces_radial_fixture() {
+    let raw = std::fs::read_to_string(fixture_path()).expect("read golden fixture");
+    let fx: serde_json::Value = serde_json::from_str(&raw).expect("parse golden fixture");
+    let images = fx["images"].as_array().expect("images array");
+
+    for img in images {
+        let name = img["name"].as_str().unwrap();
+        let grid: Vec<Vec<f64>> = img["pixels"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| {
+                row.as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|v| v.as_f64().unwrap())
+                    .collect()
+            })
+            .collect();
+        let got = radial_variance(&grid);
+        // The fixture stores each f64 as its hex bit pattern (no decimal round-trip
+        // ambiguity), so this is an exact bit-for-bit comparison.
+        let want: Vec<f64> = img["radial"]
+            .as_array()
+            .expect("radial array (regenerate the fixture)")
+            .iter()
+            .map(|v| f64::from_bits(u64::from_str_radix(v.as_str().unwrap(), 16).unwrap()))
+            .collect();
+        assert_eq!(got, want, "radial-variance drift for {name}");
     }
 }
 

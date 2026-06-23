@@ -24,7 +24,7 @@ pub const AUDIO_F_MAX: f64 = 2000.0;
 /// Round half to even (Python `round`), matching the band-edge derivation in the
 /// reference. The transcendental band frequencies never land exactly on `x.5`,
 /// but the tie branch keeps the contract exact rather than probabilistic.
-fn py_round(x: f64) -> f64 {
+pub(crate) fn py_round(x: f64) -> f64 {
     let f = x.floor();
     let diff = x - f;
     if diff < 0.5 {
@@ -68,7 +68,9 @@ fn frame_band_energies(
     hann: &[f64],
 ) -> Vec<f64> {
     let lo = bins[0];
-    let frame: Vec<f64> = (0..AUDIO_FRAME).map(|i| hann[i] * samples[start + i]).collect();
+    let frame: Vec<f64> = (0..AUDIO_FRAME)
+        .map(|i| hann[i] * samples[start + i])
+        .collect();
     let mut mags = Vec::with_capacity(cos_t.len());
     for (rc, rs) in cos_t.iter().zip(sin_t.iter()) {
         let mut re = 0.0;
@@ -114,8 +116,16 @@ pub fn fingerprint_audio(samples: &[f64], sample_rate: u32) -> Vec<u32> {
     let mut sin_t = Vec::with_capacity(hi - lo);
     for k in lo..hi {
         let ang = -two_pi * k as f64 / AUDIO_FRAME as f64;
-        cos_t.push((0..AUDIO_FRAME).map(|idx| (ang * idx as f64).cos()).collect::<Vec<f64>>());
-        sin_t.push((0..AUDIO_FRAME).map(|idx| (ang * idx as f64).sin()).collect::<Vec<f64>>());
+        cos_t.push(
+            (0..AUDIO_FRAME)
+                .map(|idx| (ang * idx as f64).cos())
+                .collect::<Vec<f64>>(),
+        );
+        sin_t.push(
+            (0..AUDIO_FRAME)
+                .map(|idx| (ang * idx as f64).sin())
+                .collect::<Vec<f64>>(),
+        );
     }
 
     let mut prev = frame_band_energies(&data, 0, &bins, &cos_t, &sin_t, hann);

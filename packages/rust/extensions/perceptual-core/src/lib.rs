@@ -20,9 +20,13 @@
 
 pub mod audio_fp;
 pub mod phash;
+pub mod radial;
 
-pub use audio_fp::{fingerprint_audio, AUDIO_BANDS, AUDIO_FRAME, AUDIO_F_MAX, AUDIO_F_MIN, AUDIO_HOP};
+pub use audio_fp::{
+    fingerprint_audio, AUDIO_BANDS, AUDIO_FRAME, AUDIO_F_MAX, AUDIO_F_MIN, AUDIO_HOP,
+};
 pub use phash::{phash_image, HASH_SIZE, IMG_RESIZE};
+pub use radial::{radial_variance, RADIAL_ANGLES, RADIAL_RESIZE};
 
 /// Hamming distance between two equal-width bit-packed hashes.
 pub fn hamming(a: u64, b: u64) -> u32 {
