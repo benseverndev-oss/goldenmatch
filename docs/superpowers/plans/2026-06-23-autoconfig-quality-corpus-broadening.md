@@ -65,11 +65,12 @@ silently ship no FEBRL3 floor). `splink` is needed ONLY for the one-time
 - Modify: `scripts/autoconfig_quality/__main__.py` (`run()`, ~lines 25-57)
 - Test: `scripts/autoconfig_quality/tests/test_main_cap.py` (create)
 
-- [ ] **Step 1: Write the failing test** — `scripts/autoconfig_quality/tests/test_main_cap.py`:
+- [ ] **Step 1: Write the failing test** — `scripts/autoconfig_quality/tests/test_main_cap.py`
+(`effective_row_cap` lives in `datasets.py`, a pure function of `Dataset` + cap — the
+test must NOT import the `__main__` entrypoint module):
 
 ```python
-from scripts.autoconfig_quality.datasets import Dataset
-from scripts.autoconfig_quality.__main__ import effective_row_cap
+from scripts.autoconfig_quality.datasets import Dataset, effective_row_cap
 
 
 def test_full_scan_defaults_false_and_uses_cli_cap():
@@ -88,7 +89,9 @@ def test_full_scan_true_disables_cap():
 Run (pinned env): `python -m pytest scripts/autoconfig_quality/tests/test_main_cap.py -q`
 Expected: FAIL — `Dataset` has no `full_scan`; `effective_row_cap` not defined.
 
-- [ ] **Step 3: Add the field** — in `datasets.py`, extend the dataclass (keep `frozen=True`; the default keeps every existing `Dataset(...)` call valid):
+- [ ] **Step 3: Add the field + helper** — in `datasets.py`, extend the dataclass (keep
+`frozen=True`; the default keeps every existing `Dataset(...)` call valid) and add the
+pure helper right after it:
 
 ```python
 @dataclass(frozen=True)
@@ -97,17 +100,22 @@ class Dataset:
     kind: Literal["anchor", "real"]
     loader: Callable[[], tuple[pl.DataFrame, set] | None]
     full_scan: bool = False  # True -> F1 tier ignores --row-cap, runs the whole df
-```
 
-- [ ] **Step 4: Add the helper + wire it** — in `__main__.py`, add at module scope:
 
-```python
-def effective_row_cap(dataset, cli_row_cap: int | None) -> int | None:
+def effective_row_cap(dataset: Dataset, cli_row_cap: int | None) -> int | None:
     """A full_scan dataset ignores the CLI cap (None = no truncation in evaluate_f1)."""
     return None if dataset.full_scan else cli_row_cap
 ```
 
-Then in `run()`, change the F1 call from `evaluate_f1(df, gt, row_cap=row_cap)` to:
+- [ ] **Step 4: Wire it in `__main__.py`** — import the helper and use it. In the
+deferred-import block inside `run()` (where `REGISTRY` is imported), add
+`effective_row_cap`:
+
+```python
+from scripts.autoconfig_quality.datasets import REGISTRY, effective_row_cap
+```
+
+Then change the F1 call from `evaluate_f1(df, gt, row_cap=row_cap)` to:
 
 ```python
 rec["f1"] = evaluate_f1(df, gt, row_cap=effective_row_cap(d, row_cap))
@@ -501,9 +509,11 @@ job, after `- run: uv sync --all-packages`, add a step (mirrors the
 
 ```yaml
       # FEBRL3's loader needs recordlinkage (ships the dataset bundled); it is not
-      # a declared dep. synthetic-NCVR + historical_50k (vendored parquet) need no
-      # extra install. Real-NCVR + DBLP-ACM skip-when-absent in CI (gitignored).
-      - run: uv pip install recordlinkage
+      # a declared dep. pyarrow backs pl.from_pandas in the febrl3/ncvr loaders
+      # (mirrors the benchmark_runner_smoke precedent, ci.yml ~895). synthetic-NCVR
+      # + historical_50k (vendored parquet) need no extra install. Real-NCVR +
+      # DBLP-ACM skip-when-absent in CI (gitignored).
+      - run: uv pip install recordlinkage pyarrow
 ```
 
 - [ ] **Step 2: Document the corpus** — in `README.md`, extend the "## Corpus"
