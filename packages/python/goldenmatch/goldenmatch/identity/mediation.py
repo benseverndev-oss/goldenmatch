@@ -195,6 +195,8 @@ def mediate_conflict(
     dataset: str | None = None,
     apply: bool = True,
     config: MediationConfig | None = None,
+    actor: str | None = None,
+    trust: float | None = None,
 ) -> dict[str, Any]:
     """Record a steward's verdict on a conflict pair and act on it.
 
@@ -223,6 +225,9 @@ def mediate_conflict(
         or store.find_entity_by_record(record_b_id)
     )
     now = datetime.now()
+    # Provenance (#1075/#1078): attribute the verdict. Falls back to the steward
+    # id when no explicit actor is given.
+    actor = actor or (f"steward:{steward}" if steward else None)
     # Unique run_name per call so re-mediating a pair appends a new verdict
     # (the UNIQUE(entity, a, b, kind, run_name) constraint won't no-op it) and
     # the latest wins in _latest_verdicts.
@@ -242,6 +247,8 @@ def mediate_conflict(
         },
         run_name=verdict_run,
         dataset=dataset,
+        actor=actor,
+        trust=trust,
         recorded_at=now,
     ))
 
@@ -257,6 +264,7 @@ def mediate_conflict(
                 store, entity_id, [record_b_id],
                 reason=reason or "conflict_mediation:distinct",
                 run_name=verdict_run,
+                actor=actor, trust=trust,
             )
             action = {"type": "split", **split}
 
@@ -275,6 +283,8 @@ def mediate_conflict(
             },
             run_name=verdict_run,
             dataset=dataset,
+            actor=actor,
+            trust=trust,
             recorded_at=now,
         ))
 

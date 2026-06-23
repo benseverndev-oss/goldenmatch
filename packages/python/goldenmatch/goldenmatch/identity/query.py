@@ -260,6 +260,58 @@ def manual_split(
     return {"new_entity_id": new_eid, "moved": moved, "at": now.isoformat()}
 
 
+def claim_record(
+    store: IdentityStore,
+    entity_id: str,
+    record_id: str,
+    reason: str | None = None,
+    run_name: str = "manual",
+    actor: str | None = None,
+    trust: float | None = None,
+) -> dict[str, Any]:
+    """Claim ``record_id`` into ``entity_id``, moving it out of any prior entity.
+
+    The agent/steward-facing op for "this record belongs to that identity" -- the
+    fourth identity mutation (#1075) alongside merge / split / resolve-conflict.
+    Reassigns the record and emits a ``claimed`` event (with actor/trust
+    provenance) on the gaining entity, plus one on the losing entity when the
+    record was previously attached elsewhere.
+    """
+    target = store.get_identity(entity_id)
+    if target is None:
+        raise ValueError(f"Entity {entity_id} not found")
+    if target.status != IdentityStatus.ACTIVE.value:
+        raise ValueError("Target entity must be active")
+    rec = store.get_record(record_id)
+    if rec is None:
+        raise ValueError(f"Record {record_id} not found")
+
+    prev_entity = rec.entity_id
+    now = datetime.now()
+    if prev_entity == entity_id:
+        return {"entity_id": entity_id, "record_id": record_id,
+                "moved": False, "from_entity": prev_entity, "at": now.isoformat()}
+
+    rec.entity_id = entity_id
+    rec.last_seen_at = now
+    store.upsert_record(rec)
+    store.emit_event(IdentityEvent(
+        entity_id=entity_id,
+        kind=EventKind.CLAIMED.value,
+        payload={"record_id": record_id, "from_entity": prev_entity, "reason": reason},
+        run_name=run_name, actor=actor, trust=trust, recorded_at=now,
+    ))
+    if prev_entity:
+        store.emit_event(IdentityEvent(
+            entity_id=prev_entity,
+            kind=EventKind.CLAIMED.value,
+            payload={"record_id": record_id, "to_entity": entity_id, "reason": reason},
+            run_name=run_name, actor=actor, trust=trust, recorded_at=now,
+        ))
+    return {"entity_id": entity_id, "record_id": record_id, "moved": True,
+            "from_entity": prev_entity, "at": now.isoformat()}
+
+
 __all__ = [
     "EdgeKind",
     "EventKind",
@@ -271,4 +323,5 @@ __all__ = [
     "list_entities",
     "manual_merge",
     "manual_split",
+    "claim_record",
 ]

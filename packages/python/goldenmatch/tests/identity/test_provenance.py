@@ -17,8 +17,9 @@ from goldenmatch.identity.model import (
     EvidenceEdge,
     IdentityEvent,
     IdentityNode,
+    SourceRecord,
 )
-from goldenmatch.identity.query import manual_merge, manual_split
+from goldenmatch.identity.query import claim_record, manual_merge, manual_split
 
 
 @pytest.fixture()
@@ -94,6 +95,46 @@ def test_manual_split_stamps_actor_trust(store):
     new_eid = out["new_entity_id"]
     assert store.history("e1")[-1].actor == "agent:bot"
     assert store.history(new_eid)[-1].trust == 0.5
+
+
+# ── claim_record (#1075) ──────────────────────────────────────────────────────
+
+
+def _add_record(store, rid, eid):
+    store.upsert_record(SourceRecord(
+        record_id=rid, source="s", source_pk=rid.split(":")[-1],
+        record_hash="h", entity_id=eid,
+    ))
+
+
+def test_claim_record_moves_and_stamps_provenance(store):
+    _mk_entity(store, "e1")
+    _mk_entity(store, "e2")
+    _add_record(store, "s:a", "e1")
+    out = claim_record(store, "e2", "s:a", reason="belongs here",
+                       actor="agent:bot", trust=0.5)
+    assert out["moved"] is True and out["from_entity"] == "e1"
+    # record now under e2
+    assert store.find_entity_by_record("s:a") == "e2"
+    # gaining + losing entities both get a provenance-stamped claimed event
+    gain = store.history("e2")[-1]
+    loss = store.history("e1")[-1]
+    assert gain.kind == "claimed" and gain.actor == "agent:bot" and gain.trust == 0.5
+    assert loss.kind == "claimed" and loss.payload["to_entity"] == "e2"
+
+
+def test_claim_record_noop_when_already_owned(store):
+    _mk_entity(store, "e1")
+    _add_record(store, "s:a", "e1")
+    out = claim_record(store, "e1", "s:a")
+    assert out["moved"] is False
+    assert store.history("e1") == []  # no event for a no-op claim
+
+
+def test_claim_record_rejects_unknown_entity(store):
+    _add_record(store, "s:a", None)
+    with pytest.raises(ValueError, match="not found"):
+        claim_record(store, "ghost", "s:a")
 
 
 # ── audit-log export (#1078) ──────────────────────────────────────────────────

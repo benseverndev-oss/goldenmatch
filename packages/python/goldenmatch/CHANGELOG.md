@@ -23,6 +23,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   fallback when the native wheel is absent.
 
 ### Added
+- **Agent-writable identity ops completed + audit-log export (#1075 / #1078,
+  epic Agent Memory #1073).** Building on the provenance spine, all four identity
+  mutations are now reachable over MCP **and** A2A with `actor`/`trust`
+  provenance: the existing `identity_merge` / `identity_split` plus two new ops —
+  `claim_record` (`identity_claim`: move a record into an identity, emitting a
+  `claimed` event on the gaining and losing entities) and conflict adjudication
+  (`identity_resolve_conflict`, surfacing the existing `mediate_conflict`:
+  same / distinct / defer, now provenance-stamped). New `identity_audit` MCP/A2A
+  tool exports the append-only event log in commit order (who / trust / when /
+  why), optionally filtered by dataset / actor — the compliance-export surface for
+  #1078. MCP identity tools 10 → 13 (total 63 → 66); A2A skills 32 → 35. No
+  migration (`claimed` is a value in the existing `kind` column). Follow-ups:
+  tamper-evident hash-chaining of the log, and CLI front doors for claim /
+  resolve-conflict.
 - **Identity-write provenance spine: `actor` + `trust` on every event/edge
   (#1075 / #1078, epic Agent Memory #1073).** `IdentityEvent` and `EvidenceEdge`
   now record WHO made each write (`actor`, e.g. `pipeline` / `agent:claude` /
