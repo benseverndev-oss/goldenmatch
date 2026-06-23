@@ -47,6 +47,13 @@ __all__ = [
     "phash_image",
     "phash_image_batch",
     "phash_hex",
+    # image: radial-variance (rotation/crop-aware, ADR 0022 finding 1)
+    "RADIAL_RESIZE",
+    "RADIAL_ANGLES",
+    "radial_variance",
+    "radial_hex",
+    "radial_from_hex",
+    "radial_align_similarity",
     # audio
     "AUDIO_FRAME",
     "AUDIO_HOP",
@@ -261,6 +268,144 @@ def phash_image_batch(images: Sequence) -> list[int]:
                 "native perceptual_phash_batch unavailable (wheel skew); using Python fallback"
             )
     return [_phash_image_python(g) for g in grids]
+
+
+# ===================== image: radial-variance (geometric) ====================
+# pHash is photometric, not geometric: the bench harness measured 0.0 recall on
+# rotation and crop (ADR 0022, finding 1). The radial-variance profile is the
+# proven rotation-AWARE answer (pHash's own `ph_image_digest` radial hash): a
+# feature vector of per-angle pixel variance, compared by sliding to the best
+# angular alignment (cyclic, the way :func:`audio_ber_aligned` slides over time
+# offset). Orientation is preserved in the vector (so it discriminates, unlike a
+# rotation-INVARIANT descriptor which collapses different images together), while
+# the alignment search absorbs rotation. Validated: crop 0.0->1.0, rotate
+# 0.0->0.95, photometric transforms stay 1.0, match/non-match separation 0.46.
+RADIAL_RESIZE = 32  # square edge the variance profile is sampled on
+RADIAL_ANGLES = 48  # angular bins over 0..pi (a line is undirected -> half turn)
+
+
+def _radial_variance_python(grid: list[list[float]]) -> list[float]:
+    """Per-angle pixel-variance profile over an align-corners resize (parity ref).
+
+    For each of ``RADIAL_ANGLES`` lines through the image center, sample the luma
+    at half-pixel steps (nearest-neighbour, banker's rounding to match the Rust
+    kernel) and take the variance of the sampled values. Rotation cyclically
+    shifts this profile; :func:`radial_align_similarity` searches that shift.
+    """
+    small = _bilinear_resize(grid, RADIAL_RESIZE)
+    n = RADIAL_RESIZE
+    center = (n - 1) / 2.0
+    steps = [i * 0.5 for i in range(-2 * n, 2 * n + 1)]
+    profile: list[float] = []
+    for line in range(RADIAL_ANGLES):
+        theta = math.pi * line / RADIAL_ANGLES
+        cos_t = math.cos(theta)
+        sin_t = math.sin(theta)
+        vals: list[float] = []
+        for t in steps:
+            x = int(round(center + t * cos_t))
+            y = int(round(center + t * sin_t))
+            if 0 <= x < n and 0 <= y < n:
+                vals.append(small[y][x])
+        if len(vals) < 2:
+            profile.append(0.0)
+            continue
+        mean = sum(vals) / len(vals)
+        profile.append(sum((v - mean) * (v - mean) for v in vals) / len(vals))
+    return profile
+
+
+def radial_variance(luma) -> list[float]:
+    """Rotation-aware radial-variance profile of a decoded luma grid (ADR 0022).
+
+    A ``RADIAL_ANGLES``-length float vector; the geometric counterpart to the
+    photometric :func:`phash_image`. Compare two profiles with
+    :func:`radial_align_similarity` (rotation-aligned) or store the compact column
+    form via :func:`radial_hex`. Uses the native kernel when gated on.
+    """
+    grid = _as_grid(luma)
+    from goldenmatch.core._native_loader import native_enabled, native_module
+
+    if native_enabled("perceptual"):
+        try:
+            return native_module().perceptual_radial_variance(grid)
+        except AttributeError:
+            logger.debug(
+                "native perceptual_radial_variance unavailable (wheel skew); using Python fallback"
+            )
+    return _radial_variance_python(grid)
+
+
+def radial_hex(profile: Sequence[float]) -> str:
+    """Canonical column form of a radial-variance profile: z-normalise then quantise
+    each bin to a signed byte (2 hex chars).
+
+    The comparison (:func:`radial_align_similarity`) is affine-invariant (Pearson
+    over the best angular shift), so the z-normalise + int8 quantise is lossless
+    for scoring while giving a fixed-width hex string a match column can hold. A
+    constant profile (zero variance everywhere) encodes as all-zero bytes.
+    """
+    p = [float(v) for v in profile]
+    n = len(p)
+    if n == 0:
+        return ""
+    mean = sum(p) / n
+    std = math.sqrt(sum((v - mean) * (v - mean) for v in p) / n)
+    if std == 0.0:
+        return "00" * n
+    out = []
+    for v in p:
+        q = int(round((v - mean) / std * 32.0))
+        q = max(-127, min(127, q))
+        out.append(format(q & 0xFF, "02x"))
+    return "".join(out)
+
+
+def radial_from_hex(s: str) -> list[int]:
+    """Inverse of :func:`radial_hex` — parse a 2-hex-char-per-bin signed-byte
+    profile (``0x`` prefix tolerated) back to a list of ints."""
+    if s[:2] in ("0x", "0X"):
+        s = s[2:]
+    usable = len(s) - (len(s) % 2)
+    out: list[int] = []
+    for i in range(0, usable, 2):
+        b = int(s[i : i + 2], 16)
+        out.append(b - 256 if b >= 128 else b)
+    return out
+
+
+def _pearson(a: Sequence[float], b: Sequence[float]) -> float:
+    """Pearson correlation of two equal-length sequences; 0.0 if either is constant."""
+    n = len(a)
+    ma = sum(a) / n
+    mb = sum(b) / n
+    da = sum((x - ma) * (x - ma) for x in a)
+    db = sum((y - mb) * (y - mb) for y in b)
+    if da == 0.0 or db == 0.0:
+        return 0.0
+    num = sum((x - ma) * (y - mb) for x, y in zip(a, b))
+    return num / math.sqrt(da * db)
+
+
+def radial_align_similarity(a: Sequence[float], b: Sequence[float]) -> float:
+    """Rotation-aligned similarity of two radial-variance profiles in ``[0, 1]``.
+
+    Maximum Pearson correlation over all cyclic angular shifts of ``b`` against
+    ``a`` — rotation just rotates the profile, so the best shift recovers it (the
+    angular counterpart to :func:`audio_ber_aligned`'s time-offset search).
+    Negative correlations (unrelated images) clamp to 0.0; mismatched lengths or
+    empty input -> 0.0. This is the scoring-side comparison and stays pure-Python
+    (the kernel parity contract is the profile, not the compare)."""
+    la = len(a)
+    if la == 0 or len(b) != la:
+        return 0.0
+    best = -1.0
+    for shift in range(la):
+        rotated = list(b[shift:]) + list(b[:shift])
+        c = _pearson(a, rotated)
+        if c > best:
+            best = c
+    return max(0.0, min(1.0, best))
 
 
 # ============================== audio fingerprint ============================
