@@ -69,7 +69,13 @@ def ask(
         raise ValueError(f"mode must be 'local' or 'global', got {mode!r}")
     seeds = seed_by_query(slice_graph, query, embedder, k=k)
     subgraph = _retrieve_local(slice_graph, seeds, max_hops=hops, node_budget=node_budget)
-    return synthesize_local(query, subgraph, llm)
+    # Hand the synthesis the seed entity NAMES (the query-relevant anchors) so the
+    # multi-hop walk starts at the right place instead of guessing among the ball.
+    id_to_name = {
+        e["entity_id"]: e["canonical_name"] for e in subgraph.get("entities", ())
+    }
+    seed_names = [id_to_name[s] for s in seeds if s in id_to_name]
+    return synthesize_local(query, subgraph, llm, seed_names=seed_names)
 
 
 _CYPHER_PROMPT = (

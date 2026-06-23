@@ -12,9 +12,15 @@ persisted embedding sidecar + ANN index is the scale optimization, not built.
 
 from __future__ import annotations
 
+import os
 from typing import Protocol
 
 import numpy as np
+
+#: Max texts per provider embedding request. `seed_by_query` embeds EVERY entity
+#: name in the graph in one call; past a few thousand entities that exceeds the
+#: provider's per-request input cap (OpenAI: 2048) -> HTTP 400. Chunk under it.
+_MAX_EMBED_BATCH = max(1, int(os.environ.get("GOLDENGRAPH_EMBED_BATCH", "1000")))
 
 
 class Embedder(Protocol):
@@ -43,7 +49,18 @@ class GoldenmatchEmbedder:
         return self._provider
 
     def embed(self, texts: list[str]) -> np.ndarray:
-        return np.asarray(self._ensure().embed(texts), dtype=float)
+        texts = list(texts)
+        if not texts:
+            return np.zeros((0, 0), dtype=float)
+        prov = self._ensure()
+        if len(texts) <= _MAX_EMBED_BATCH:
+            return np.asarray(prov.embed(texts), dtype=float)
+        # Chunk large batches so no single request exceeds the provider input cap.
+        parts = [
+            np.asarray(prov.embed(texts[i : i + _MAX_EMBED_BATCH]), dtype=float)
+            for i in range(0, len(texts), _MAX_EMBED_BATCH)
+        ]
+        return np.vstack(parts)
 
 
 def seed_by_query(slice_graph, query: str, embedder: Embedder, *, k: int = 5) -> list[int]:
