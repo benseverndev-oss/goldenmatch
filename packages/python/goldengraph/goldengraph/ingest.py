@@ -84,17 +84,63 @@ def build_batch(
             }
         )
 
-    return {
-        "entities": [
+    out_entities = [
+        {
+            "local_id": e.local_id,
+            "canonical_name": e.canonical_name,
+            "typ": e.typ,
+            "surface_names": e.surface_names,
+            "record_keys": e.record_keys,
+        }
+        for e in entities
+    ]
+
+    # Literal attributes -> a value NODE + an edge from its owning entity, so a
+    # non-entity answer (a date / quantity / short defining value) becomes a
+    # reachable, answerable graph node instead of being lost (the dominant
+    # EXTRACTION miss on MuSiQue). Empty unless GOLDENGRAPH_LITERAL_ATTRS made the
+    # extractor emit attributes, so this is a no-op on the base schema.
+    #
+    # Literal nodes get UNIQUE per-occurrence record_keys (keyed on this batch's
+    # `at` + a counter), so identical values in different documents do NOT
+    # overlap-merge in the store -- that would fuse unrelated facts into a false
+    # cross-document bridge. Each literal stays a leaf owned by its own entity.
+    next_local = max((e.local_id for e in entities), default=-1) + 1
+    seen_literals: dict[tuple[int, str, str], int] = {}
+    for a in getattr(extraction, "attributes", ()):
+        owner = mention_to_local.get(a.subj)
+        value = (a.value or "").strip()
+        if owner is None or not value:
+            continue
+        key = (a.key or "").strip()
+        dedup = (owner, key.lower(), value.lower())
+        lit_local = seen_literals.get(dedup)
+        if lit_local is None:
+            lit_local = next_local
+            next_local += 1
+            seen_literals[dedup] = lit_local
+            out_entities.append(
+                {
+                    "local_id": lit_local,
+                    "canonical_name": value,
+                    "typ": "literal",
+                    "surface_names": [],
+                    "record_keys": [f"lit:{at}:{lit_local}"],
+                }
+            )
+        edges.append(
             {
-                "local_id": e.local_id,
-                "canonical_name": e.canonical_name,
-                "typ": e.typ,
-                "surface_names": e.surface_names,
-                "record_keys": e.record_keys,
+                "subj_local": owner,
+                "predicate": key or "has value",
+                "obj_local": lit_local,
+                "valid_from": vf,
+                "valid_to": None,
+                "source_refs": [],
             }
-            for e in entities
-        ],
+        )
+
+    return {
+        "entities": out_entities,
         "edges": edges,
         "ingested_at": at,
     }
@@ -230,12 +276,18 @@ def _existing_features(slice_graph):
             rel[o].add(p)
             nbr[s].add(id_to_name[o])
             nbr[o].add(id_to_name[s])
+    # Exclude literal-attribute leaf nodes (typ="literal") from the link candidate
+    # set -- they are values, not entities to resolve (mirror of `_new_features`).
+    out_ents: list[dict] = []
     feats: list[dict] = []
     keys: list[set[str]] = []
     for e in ents:
+        if e.get("typ") == "literal":
+            continue
         eid = e["entity_id"]
         typ = e.get("typ", "")
         surfaces = e.get("surface_names", ())
+        out_ents.append(e)
         feats.append({
             "name": e.get("canonical_name", ""),
             "type": typ,
@@ -244,7 +296,7 @@ def _existing_features(slice_graph):
             "nbr": " | ".join(sorted(nbr[eid])),
         })
         keys.append({_record_key(s, typ) for s in [e.get("canonical_name", ""), *surfaces] if s})
-    return ents, feats, keys
+    return out_ents, feats, keys
 
 
 def _new_features(batch: dict):
@@ -261,9 +313,17 @@ def _new_features(batch: dict):
             rel[o].add(p)
             nbr[s].add(lid_to_name[o])
             nbr[o].add(lid_to_name[s])
+    # Literal-attribute nodes (typ="literal") are leaf VALUES, not entities to
+    # resolve -- exclude them as cross-doc link candidates so two identical values
+    # in different documents never merge into a false bridge. They stay in the batch
+    # (still stored + still in their owner's neighborhood above), just not linked.
+    out_ents: list[dict] = []
     feats: list[dict] = []
     for be in new_ents:
+        if be.get("typ") == "literal":
+            continue
         lid = be["local_id"]
+        out_ents.append(be)
         feats.append({
             "name": be.get("canonical_name", ""),
             "type": be.get("typ", ""),
@@ -271,7 +331,7 @@ def _new_features(batch: dict):
             "rel": " | ".join(sorted(rel[lid])),
             "nbr": " | ".join(sorted(nbr[lid])),
         })
-    return new_ents, feats
+    return out_ents, feats
 
 
 def _assemble_fp_texts(existing, ex_keys, new_ents, new_fps, fp_index):

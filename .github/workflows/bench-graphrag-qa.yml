@@ -57,6 +57,9 @@ on:
       distill_log:
         description: "goldengraph only: capture (text->extraction)+(entity->fingerprint) pairs to a JSONL artifact for in-house distillation"
         default: "false"
+      literal_attrs:
+        description: "goldengraph only: extract literal attributes (dates/quantities/short values) as reachable value nodes -- targets non-entity answers"
+        default: "false"
 
 permissions:
   contents: read
@@ -124,6 +127,7 @@ jobs:
           GOLDENGRAPH_BUILD_WORKERS: ${{ inputs.build_workers }}
           GOLDENGRAPH_BUILD_DEBUG: ${{ inputs.build_debug }}
           GOLDENGRAPH_EXTRACTOR: ${{ inputs.extractor }}
+          GOLDENGRAPH_LITERAL_ATTRS: ${{ inputs.literal_attrs }}
           GOLDENGRAPH_DISTILL_LOG: ${{ inputs.distill_log == 'true' && format('results/distill_goldengraph_amb{0}.jsonl', matrix.ambiguity) || '' }}
         run: |
           mkdir -p results

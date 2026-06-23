@@ -10,7 +10,8 @@ dropped rather than poisoning the graph.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, field
 
 from .llm import LLMClient
 
@@ -24,6 +25,25 @@ The `description` is a brief, source-grounded characterization (e.g. "American \
 technology corporation") that disambiguates the entity for resolution. \
 `subj`/`obj` are 0-based indices into `entities`. Text:
 {text}"""
+
+#: Appended to `_PROMPT` (before the `Text:` line) when GOLDENGRAPH_LITERAL_ATTRS is
+#: on. Many questions ask for a LITERAL value (a date, a quantity, a measurement, a
+#: short descriptive phrase) that is NOT a named entity -- "when was X founded?",
+#: "how many people?", "what kind of engine?". The base schema can only emit
+#: entity->entity edges, so those answers never enter the graph and are
+#: unanswerable by construction. This adds an `attributes` array carrying each such
+#: literal fact as (entity, key, value); the host materializes every attribute as a
+#: literal NODE plus an edge from its entity, so the value becomes a reachable,
+#: answerable graph node.
+_ATTRS_SCHEMA = """ Additionally extract an `attributes` array capturing LITERAL \
+facts -- a date/year, a quantity/amount/measurement, or a short defining value -- \
+that answers a "when / how many / how much / what kind / how long" question about \
+an entity but is NOT itself a named entity: \
+{{"attributes": [{{"subj": <entity index>, "key": "<what the value is, e.g. \
+'release date', 'population', 'length'>", "value": "<the literal value EXACTLY as \
+stated, e.g. 'May 1990', '$72,641', '4.3 km'>"}}]}}. \
+`subj` is a 0-based index into `entities`. Keep `value` terse and verbatim; omit \
+attributes you are unsure of."""
 
 
 @dataclass
@@ -41,9 +61,29 @@ class Relationship:
 
 
 @dataclass
+class Attribute:
+    """A literal fact about an entity: `mentions[subj]` has `key` = `value`, where
+    `value` is a date/quantity/short defining phrase, NOT a named entity. The host
+    materializes each as a literal node + an edge so the value is answerable."""
+
+    subj: int  # index into the Extraction.mentions list
+    key: str
+    value: str
+
+
+@dataclass
 class Extraction:
     mentions: list[Mention]
     relationships: list[Relationship]
+    # Literal attribute facts (default empty -> back-compat with the base schema and
+    # any extractor/stub that doesn't emit them).
+    attributes: list[Attribute] = field(default_factory=list)
+
+
+def _literal_attrs_enabled() -> bool:
+    """Read inside `extract()` (NOT a call-site kwarg) so monkeypatched 2-arg
+    extractor stubs keep working -- the #1236 lesson."""
+    return os.environ.get("GOLDENGRAPH_LITERAL_ATTRS", "0") not in ("0", "false", "")
 
 
 def _strip_fence(raw: str) -> str:
@@ -73,9 +113,26 @@ def parse_extraction(raw: str) -> Extraction:
         # defensive: drop endpoints that aren't valid entity indices
         if isinstance(s, int) and isinstance(o, int) and 0 <= s < n and 0 <= o < n:
             rels.append(Relationship(subj=s, predicate=str(r.get("predicate", "")), obj=o))
-    return Extraction(mentions=mentions, relationships=rels)
+    attrs: list[Attribute] = []
+    for a in data.get("attributes", []):
+        s = a.get("subj")
+        value = str(a.get("value", "")).strip()
+        # defensive: a valid owner index + a non-empty literal value (an empty value
+        # would materialize a useless blank node).
+        if isinstance(s, int) and 0 <= s < n and value:
+            attrs.append(Attribute(subj=s, key=str(a.get("key", "")).strip(), value=value))
+    return Extraction(mentions=mentions, relationships=rels, attributes=attrs)
 
 
 def extract(text: str, llm: LLMClient) -> Extraction:
-    """Extract entities + relationships from `text` via `llm`."""
-    return parse_extraction(llm.complete(_PROMPT.format(text=text)))
+    """Extract entities + relationships from `text` via `llm`. When
+    GOLDENGRAPH_LITERAL_ATTRS is set, also extract literal attribute facts
+    (dates/quantities/short defining values) so non-entity answers can enter the
+    graph (see `_ATTRS_SCHEMA`)."""
+    prompt = _PROMPT
+    if _literal_attrs_enabled():
+        # Splice the attribute schema in BEFORE the trailing "Text:\n{text}" so the
+        # instruction precedes the document.
+        head, _, tail = _PROMPT.partition(" Text:\n{text}")
+        prompt = head + _ATTRS_SCHEMA + " Text:\n{text}"
+    return parse_extraction(llm.complete(prompt.format(text=text)))
