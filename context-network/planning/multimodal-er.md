@@ -101,41 +101,62 @@ So the real v1 surface is **not** "build vector ER." It is:
   direction that builds on existing assets rather than greenfield — potentially the
   thing that makes GM the *default* here specifically.
 
-## Proposed v1 first slice (the wedge, crawl tier)
+## v1 scope (LOCKED 2026-06-23)
 
-Smallest end-to-end value that respects every commitment:
+Decided via brainstorm:
 
-1. A `perceptual` matchkey/blocker family — pHash for an image-path/bytes column,
-   exposed through the existing `BlockingConfig` strategy seam (mirrors how
-   `strategy="lsh"`/`"simhash"` were added, ADR 0020).
-2. A hamming-distance comparator in the scorer, emitting a **calibrated** signal +
-   provenance ("image pHash hamming=3/64") so `explain` can show *why*.
-3. Auto-config recognizes a media column and wires the perceptual feature with a
-   sane default threshold — zero-config first run.
-4. A parity/recall gate (synthetic image set: re-encode/crop/relight variants),
-   mirroring the `test_lsh_recall.py` posture.
+- **Modality:** **image AND audio together**, as an **in-house native kernel**
+  (no third-party perceptual-hash lib — `imagehash`/`pyacoustid` are out; we own
+  the algorithm, the same posture as `sketch-core`'s hand-rolled hash family).
+- **Encoder posture (walk tier, NOT v1):** ship `goldenmatch[vision]`/`[audio]`
+  optional extras that bundle an encoder. Recorded now; no v1 code.
+- **Release contents:** **crawl tier only** — deterministic perceptual hashing,
+  no ML. (Privacy guardrail and BYO-vector walk are fast-follows, not v1.)
 
-This ships modality-as-evidence on text+image with **no model dependency and full
-auditability**, then "walk" reuses the spine by adding non-text providers.
+### v1 build (the wedge, crawl tier)
 
-## Open questions (to steer next)
+1. **New pyo3-free `goldenmatch-perceptual-core` crate**, mirroring `sketch-core`:
+   `phash.rs` (DCT-based image perceptual hash), `audio_fp.rs` (spectral landmark
+   audio fingerprint), shared `hash.rs`, `lib.rs`. NOT `fingerprint-core` — that's
+   the unrelated SHA-256 record-id canonicalizer.
+2. **Kernel operates on *decoded* input** — a luma pixel grid (image) / mono PCM
+   samples (audio) — so the core stays codec-free and parity-clean. Format
+   decoding (PNG/JPEG/WAV→samples) is a thin Python-side adapter, consistent with
+   the "encoder lives upstream" philosophy; BYO-decoded-input also works.
+3. **Parity-by-construction** (ADR 0020 contract): a Python reference
+   (`core/perceptual.py`) is authoritative; golden vectors
+   (`tests/fixtures/perceptual_golden.json`) checked by Rust + Python, plus the
+   `GOLDENMATCH_NATIVE=0/1` parity sweep. Native ships available but NOT in
+   `_native_loader._GATED_ON` (conservative, like `sketch`/`pprl_bloom`).
+4. **Blocking** `strategy="perceptual"` conforming to the `BlockResult` /
+   `BlockingConfig` seam (mirrors `"lsh"`/`"simhash"`): bucket by hash prefix /
+   banded hamming-LSH for candidate generation.
+5. **Comparator** in the scorer: hamming-distance signal + provenance ("image
+   pHash hamming=3/64") so `explain` shows *why* — keeping the never-black-box
+   commitment without an ML model in the loop.
+6. **Auto-config** recognizes a media column (path/bytes/decoded) and wires the
+   perceptual feature with a sane default threshold — zero-config first run.
+7. **Recall gate** (synthetic variant sets: re-encode/crop/relight for image,
+   re-encode/trim/noise for audio), mirroring `test_lsh_recall.py`.
 
-- **v1 modality:** image (pHash) first, or audio (fingerprint) first? Image has the
-  cleaner deterministic primitive.
-- **Encoder posture:** strictly bring-your-own-vectors for "walk," or do we ship
-  `[vision]`/`[audio]` extras that bundle an encoder (zero-config tension vs. wheel
-  size / GPU)?
-- **Scope of v1:** crawl tier only (deterministic, no ML), or crawl + a BYO-vector
-  walk path in the same release?
-- **Privacy line:** do we make biometric template protection a v1 guardrail, or a
-  fast-follow once within-modality (#1) lands?
+This ships modality-as-evidence on text + image + audio with **no model
+dependency and full auditability**; the "walk" tier then reuses the entire
+existing embedding+ANN+score+explain spine via the optional encoder extras.
+
+## Deferred (fast-follows, not v1)
+
+- **Biometric template-protection guardrail** tied to the existing PPRL/Bloom-CLK
+  work (the privacy differentiator) — lands with or just after within-modality ER.
+- **BYO-vector walk path** + the `[vision]`/`[audio]` encoder extras.
+- **Within-modality ER (#1)** and **cross-modal (#2)** per the priority table.
 
 ## Next steps
 
-- [ ] Lock v1 scope (the four open questions above).
+- [x] Lock v1 scope.
 - [ ] Confirm the `BlockingConfig` strategy seam + scorer comparator seam are the
       right insertion points (read `core/blocker.py`, `core/scorer.py`).
-- [ ] Draft ADR 0022 — Multimodal ER (modality-as-evidence) once scope is locked.
+- [ ] Draft ADR 0022 — Multimodal ER (modality-as-evidence, perceptual crawl tier).
+- [ ] Spec the kernel algorithms + parity contract (`docs/superpowers/specs/`).
 
 ---
 **Classification:** planning/active • **Last updated:** 2026-06-23
