@@ -38,7 +38,13 @@ _AUDIO_RE = re.compile(r"^(?:[0-9a-f]{8}){3,}$")
 
 _SAMPLE = 200
 _IMAGE_THRESHOLD = 0.85  # hamming <= ~10/64
-_AUDIO_THRESHOLD = 0.80
+# Canonical Haitsma-Kalker match threshold: BER <= 0.35 (similarity >= 0.65). The
+# prior 0.80 (BER <= 0.20) missed moderate additive noise; on realistic broadband
+# audio, noisy matches sit at ~0.69-0.86 similarity vs ~0.49 for unrelated, so 0.65
+# recovers noise robustness with a safe precision margin (ADR 0022 finding 3). The
+# earlier "noise kills it / lowering is harmful" reading was a pure-tone artifact --
+# tones leave most log-bands near-empty, making the sign bit pure noise.
+_AUDIO_THRESHOLD = 0.65
 _RADIAL_THRESHOLD = 0.85  # bench operating point (P=1.0, R=0.99 at 0.85)
 # Blocking must recall the same near-duplicate radius the scorer accepts, so the
 # band count is derived from the image threshold rather than hardcoded (the old

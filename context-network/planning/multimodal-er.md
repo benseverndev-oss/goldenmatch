@@ -225,18 +225,25 @@ deterministic image suite (30 bases × 7 transforms) + audio suite (12 bases × 
   (small-angle rotation, content crop) needs a different representation
   (feature-point / log-polar / learned) — i.e. the BYO-vector **walk tier**, not a
   crawl-tier hash trick. Not shipped; documented as a known limitation.
-- **Finding 3 (audio additive noise) — REFUTED, not a threshold problem.** Noisy-pair
-  similarity (0.43–0.54) is **statistically identical** to unrelated pairs (nonmatch
-  mean 0.53): ±0.05 additive noise on the near-pure-tone suite drives BER to ~0.5, so
-  the signal is gone and **no threshold separates it** (at 0.70, precision already
-  collapses to 0.66 with noise recall still 0.0). Lowering the `audio_fp` threshold is
-  measured-harmful; 0.80 stays optimal here. Two compounding causes: (a) pure synthetic
-  tones are pathological for Haitsma-Kalker (most log-bands carry ~zero energy, so the
-  sign-of-double-difference bit is noise-dominated even at ~23 dB SNR — broadband audio
-  degrades more gracefully), and (b) the crawl-tier fingerprint has no bit-reliability /
-  redundancy. A genuinely noise-robust fingerprint is new-kernel work (+ golden-vector
-  parity); deferred. Harness follow-up: make the noise variant broadband so the suite
-  reflects realistic degradation rather than a tone artifact.
+- **Finding 3 (audio additive noise) — RESOLVED: it was a DATASET artifact, fixed by
+  the harness + the threshold (no kernel redesign).** The first read ("noise kills it,
+  not a threshold problem") was measured on **pure tones**, which are pathological for
+  Haitsma-Kalker: a 3-tone signal leaves most log-bands near-empty, so each bit is the
+  sign of a ~zero energy difference = pure noise (tone-noise BER ~0.5, indistinguishable
+  from unrelated — hence the apparent "no threshold separates it"). Re-measured on
+  **realistic broadband audio** (40 sinusoids across the 300-2000 Hz band), the
+  fingerprint **is** noise-robust: at 20 dB SNR a noisy copy scores **0.79–0.88**
+  similarity vs **~0.49** for unrelated (clean separation, overlap 0). Two fixes, both
+  measured: **(1) harness** — the bench audio suite now generates broadband signals +
+  SNR-calibrated noise (`datasets.py`), so it reflects realistic degradation, not a tone
+  artifact; **(2) threshold** — the `audio_fp` auto-config default drops **0.80 → 0.65**
+  (the canonical Haitsma-Kalker BER ≤ 0.35 match point). On the broadband suite that
+  lifts noise recall **0.0 → 1.0** at **P=0.96** (vs P=1.0/R=0.60 at 0.80 — a net F1
+  win), while unrelated (~0.49) stays safely rejected. The earlier "lowering is harmful"
+  was itself the tone artifact (no margin on tones; a real 0.79-vs-0.55 margin on
+  broadband). Locked by `tests/test_perceptual_audio_noise.py` (incl. a test that the
+  pure-tone case is NOT recoverable, documenting the artifact). **No new kernel** — the
+  bit-reliability redesign that was floated is unnecessary at realistic SNR.
 
 ## Status (crawl tier)
 

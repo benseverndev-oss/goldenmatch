@@ -62,7 +62,9 @@ def test_build_perceptual_matchkey_shapes():
     assert mk.type == "weighted" and mk.threshold == 0.85
     assert mk.fields[0].scorer == "phash" and mk.fields[0].weight == 1.0
     mka = build_perceptual_matchkey("fp", "audio")
-    assert mka.fields[0].scorer == "audio_fp" and mka.threshold == 0.80
+    # canonical Haitsma-Kalker match point (BER <= 0.35); the prior 0.80 missed
+    # moderate broadband noise (ADR 0022 finding 3)
+    assert mka.fields[0].scorer == "audio_fp" and mka.threshold == 0.65
     mkr = build_perceptual_matchkey("rv", "radial")
     assert mkr.fields[0].scorer == "radial" and mkr.threshold == 0.85
 

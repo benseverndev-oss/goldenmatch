@@ -181,18 +181,40 @@ def build_image_suite(n_bases: int = 30) -> Suite:
 
 
 # ----------------------------- audio ---------------------------------------- #
-def _base_audio(seed: int, length: int = 16000, sr: int = 44100) -> list[float]:
-    freqs = [300 + (seed % 6) * 130, 700 + (seed % 4) * 170, 1300 + (seed % 5) * 90]
-    return [sum(math.sin(2 * math.pi * f * n / sr) for f in freqs) / len(freqs) for n in range(length)]
+def _base_audio(seed: int, length: int = 16000, sr: int = 44100, k: int = 40) -> list[float]:
+    """Broadband audio: ``k`` sinusoids spread across the 300-2000 Hz Haitsma-Kalker
+    analysis band -- a realistic-spectrum stand-in for music/speech.
+
+    NOT pure tones (the pre-finding-3 shape): a 3-tone signal leaves most log-bands
+    near-empty, so each fingerprint bit is the sign of a ~zero energy difference =
+    pure noise, which made the suite report 0.0 noise recall (a dataset artifact,
+    not a kernel limit). Broadband energy fills the bands, so the fingerprint is
+    actually noise-robust -- which this suite now measures (ADR 0022 finding 3)."""
+    rng = _LCG(seed * 2654435761 + 1)
+    comps = []
+    for _ in range(k):
+        f = 300.0 + (rng.signed(1 << 20) + (1 << 20)) / (1 << 21) * 1700.0  # 300..2000 Hz
+        ph = (rng.signed(1 << 20) + (1 << 20)) / (1 << 21) * (2 * math.pi)
+        comps.append((f, ph))
+    out = []
+    for n in range(length):
+        t = n / sr
+        out.append(sum(math.sin(2 * math.pi * f * t + ph) for f, ph in comps) / k)
+    return out
 
 
 def _aud_amplitude(s: list[float]) -> list[float]:
     return [0.5 * v for v in s]
 
 
-def _aud_noise(s: list[float], base_id: int) -> list[float]:
+def _aud_noise(s: list[float], base_id: int, snr_db: float = 20.0) -> list[float]:
+    """Additive noise at a calibrated signal-to-noise ratio (default 20 dB =
+    moderate). Uniform noise scaled so its RMS hits the target SNR; deterministic."""
     rng = _LCG(base_id * 211 + 13)
-    return [v + rng.signed(50) / 1000.0 for v in s]
+    s_rms = math.sqrt(sum(v * v for v in s) / len(s)) or 1e-9
+    target_n_rms = s_rms / (10.0 ** (snr_db / 20.0))
+    scale = target_n_rms * math.sqrt(3.0)  # uniform[-1,1] has RMS 1/sqrt(3)
+    return [v + (rng.signed(1 << 20) / (1 << 20)) * scale for v in s]
 
 
 def _aud_trim(s: list[float]) -> list[float]:
