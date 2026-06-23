@@ -379,6 +379,42 @@ AGENT_TOOLS = [
             "required": ["file_path"],
         },
     ),
+    Tool(
+        name="retrieve_similar",
+        description=(
+            "Semantic retrieval (#1089): return the records in a CSV most "
+            "similar to a free-text query, ranked by cosine similarity. Embeds "
+            "the chosen column and the query with the zero-config in-house "
+            "embedder (no cloud/torch by default) and runs ANN search. The read "
+            "side of the RAG entity-canonicalization epic -- fetch candidate "
+            "records by query without running a full dedupe."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "file_path": {"type": "string", "description": "CSV/Parquet corpus to search"},
+                "query": {"type": "string", "description": "Free-text query to search for"},
+                "column": {"type": "string", "description": "Column of the corpus to embed + search"},
+                "k": {"type": "integer", "description": "Max records to return (default 20)"},
+                "threshold": {
+                    "type": "number",
+                    "description": "Minimum cosine similarity in [-1, 1] (default 0.0)",
+                },
+                "model": {
+                    "type": "string",
+                    "description": (
+                        "Embedder id (default 'inhouse' -- local, deterministic, "
+                        "no cloud/torch). Also 'all-MiniLM-L6-v2', a Vertex/OpenAI model, etc."
+                    ),
+                },
+                "filters": {
+                    "type": "object",
+                    "description": "Optional {column: value} equality pre-filter applied before embedding",
+                },
+            },
+            "required": ["file_path", "query", "column"],
+        },
+    ),
 ]
 
 _AGENT_TOOL_NAMES = frozenset(t.name for t in AGENT_TOOLS)
@@ -823,6 +859,47 @@ def _dispatch(
             "system_overlap": round(est.mean_overlap, 3),
             "estimable": est.estimable,
             "note": est.note,
+        }
+
+    if name == "retrieve_similar":
+        import polars as pl
+
+        from goldenmatch.core.retrieval import retrieve_similar_records
+
+        file_path = args.get("file_path")
+        if not file_path:
+            return {"error": "Missing required parameter: file_path"}
+        query = args.get("query")
+        if not query:
+            return {"error": "Missing required parameter: query"}
+        column = args.get("column")
+        if not column:
+            return {"error": "Missing required parameter: column"}
+
+        try:
+            df = pl.read_csv(file_path, encoding="utf8-lossy", ignore_errors=True)
+        except FileNotFoundError:
+            return {"error": f"File not found: {file_path}"}
+        except Exception as exc:
+            return {"error": f"Could not read CSV '{file_path}': {exc}"}
+        if column not in df.columns:
+            return {"error": f"Column {column!r} not in {file_path} (have {df.columns})"}
+
+        results = retrieve_similar_records(
+            df,
+            str(query),
+            column,
+            k=int(args.get("k", 20)),
+            threshold=float(args.get("threshold", 0.0)),
+            model=args.get("model") or "inhouse",
+            filters=args.get("filters") or None,
+        )
+        return {
+            "file": file_path,
+            "query": query,
+            "column": column,
+            "count": len(results),
+            "results": [r.as_dict() for r in results],
         }
 
     return {"error": f"Unknown agent tool: {name}"}

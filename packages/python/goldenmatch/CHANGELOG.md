@@ -7,6 +7,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Added
+- **Semantic retrieval on the agent surfaces (#1089, epic #1087).** The
+  `retrieve_similar_records` API is now exposed over the wire on all three
+  surfaces: the MCP `retrieve_similar` tool, the A2A `retrieve_similar` skill,
+  and the REST `POST /retrieve` endpoint. Each embeds a column + a free-text
+  query with the zero-config in-house embedder (no cloud/torch by default) and
+  returns the most similar records ranked by cosine similarity, routing through
+  the same core function and `RetrievedRecord` shape. (MCP tool count 59 -> 60;
+  A2A skill count 31 -> 32.)
 - **Corpus-dedup throughput benchmark + per-PR perf gate (#1086, epic #1080).**
   A new `bench-corpus-dedup` harness (`scripts/bench_corpus_dedup/` +
   `.github/workflows/bench-corpus-dedup.yml`) measures the throughput tier (#1083)

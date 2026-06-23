@@ -17,6 +17,7 @@ Endpoints:
     POST /shatter             Break a cluster into singletons
     POST /unmerge             Pull a record out of its cluster
     POST /certify-recall      Estimate match recall without ground truth
+    POST /retrieve            Semantic retrieval: records most similar to a query
 """
 
 from __future__ import annotations
@@ -399,6 +400,45 @@ class MatchServer:
             "note": est.note,
         }
 
+    def retrieve_similar(
+        self,
+        query: str,
+        column: str,
+        k: int = 20,
+        threshold: float = 0.0,
+        model: str = "inhouse",
+        filters: dict | None = None,
+    ) -> dict:
+        """Semantic retrieval over the loaded corpus (#1089).
+
+        Returns the loaded records most similar to ``query`` (cosine), ranked
+        highest-first. Embeds ``column`` and the query with the zero-config
+        in-house embedder by default (no cloud/torch). Read-only -- does not
+        touch clustering state.
+        """
+        from goldenmatch.core.retrieval import retrieve_similar_records
+
+        df = getattr(self.engine, "data", None)
+        if df is None:
+            return {"error": "no data loaded"}
+        if column not in df.columns:
+            return {"error": f"column {column!r} not in loaded data (have {df.columns})"}
+        results = retrieve_similar_records(
+            df,
+            query,
+            column,
+            k=k,
+            threshold=threshold,
+            model=model,
+            filters=filters or None,
+        )
+        return {
+            "query": query,
+            "column": column,
+            "count": len(results),
+            "results": [r.as_dict() for r in results],
+        }
+
 
 # Global server instance
 _server_instance: MatchServer | None = None
@@ -562,6 +602,24 @@ class APIHandler(BaseHTTPRequestHandler):
         elif path == "/certify-recall":
             result = _server_instance.certify_recall()
             self._json_response(result, 400 if "error" in result else 200)
+        elif path == "/retrieve":
+            query = data.get("query")
+            column = data.get("column")
+            filters = data.get("filters") or None
+            if not query or not column:
+                self._json_response({"error": "query and column are required"}, 400)
+            elif filters is not None and not isinstance(filters, dict):
+                self._json_response({"error": "filters must be an object"}, 400)
+            else:
+                result = _server_instance.retrieve_similar(
+                    str(query),
+                    str(column),
+                    k=int(data.get("k", 20)),
+                    threshold=float(data.get("threshold", 0.0)),
+                    model=data.get("model") or "inhouse",
+                    filters=filters,
+                )
+                self._json_response(result, 400 if "error" in result else 200)
         else:
             self._json_response({"error": "Not found"}, 404)
 
@@ -634,6 +692,7 @@ def start_server(
     print("   GET  /controller/telemetry Last autoconfig's stop_reason / decisions / NE / priors")
     print("   GET  /reviews             Review queue (steward)")
     print("   POST /reviews/decide      Approve/reject a pair")
+    print("   POST /retrieve            Semantic retrieval by query")
     print("\n   Press Ctrl+C to stop.\n")
 
     try:

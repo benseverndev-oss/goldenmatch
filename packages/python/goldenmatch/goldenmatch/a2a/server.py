@@ -251,6 +251,13 @@ _SKILLS = [
         "inputModes": ["application/json"],
         "outputModes": ["application/json"],
     },
+    {
+        "id": "retrieve_similar",
+        "name": "Retrieve Similar",
+        "description": "Semantic retrieval: return the records in a CSV most similar to a free-text query, ranked by cosine similarity (zero-config in-house embedder, no cloud by default).",
+        "inputModes": ["application/json"],
+        "outputModes": ["application/json"],
+    },
 ]
 
 
