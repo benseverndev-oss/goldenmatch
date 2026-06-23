@@ -21,7 +21,6 @@ def e2e_image_dedupe(n_bases: int = 30, threshold: float = 0.85) -> dict:
     score ~0), so this is the honest end-to-end number for the *photometric*
     crawl-tier feature -- the radial feature is what lifts the geometric cases."""
     import polars as pl
-
     from goldenmatch import dedupe_df
     from goldenmatch.config.schemas import (
         BlockingConfig,
