@@ -185,7 +185,7 @@ benchmark.
 ## File structure
 
 - Modify `scripts/autoconfig_quality/datasets.py` — add 4 loaders + registry
-  entries; add the `row_cap` field to `Dataset`.
+  entries; add the `full_scan: bool = False` field to `Dataset`.
 - Modify `scripts/autoconfig_quality/f1.py` — add the attribution scale guard (see
   "historical_50k scaling"); `evaluate_f1`'s `row_cap=None` handling already
   exists and is unchanged.
