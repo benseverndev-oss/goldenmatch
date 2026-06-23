@@ -462,10 +462,17 @@ class PerceptualKeyConfig(BaseModel):
     probability, so they collide into a candidate block. More bands -> higher
     recall and more candidate pairs. This is the *media* near-duplicate blocker,
     complementing the lexical (``lsh``) and semantic (``simhash``) paths.
+
+    The ``num_bands`` default of 16 is recall-driven, not arbitrary: at the 0.85
+    image-pHash threshold (a 0.15 hamming radius) the bench suite measured 16 bands
+    at 0.97 blocking recall vs only 0.72 for the old default of 8 (ADR 0022). The
+    zero-config path derives the count from the scorer threshold via
+    ``core.perceptual_blocker.recommend_num_bands``; this static default is the
+    knob for an explicit config.
     """
 
     column: str
-    num_bands: int = 8
+    num_bands: int = 16
     hash_bits: int = 64
 
     @model_validator(mode="after")

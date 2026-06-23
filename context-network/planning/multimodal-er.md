@@ -199,14 +199,56 @@ existing embedding+ANN+score+explain spine via the optional encoder extras.
       extras backing the `decode_image_to_luma`/`decode_audio_to_mono` adapters.
       TS port of the `phash`/`perceptual`/`audio_fp` surfaces remains a follow-up.
 
+## Bench-harness findings (first measured iteration, 2026-06-23)
+
+The dispatch-only metrics harness (`scripts/bench_perceptual/`, PR #1229) produced
+its first real numbers on the shipped kernel. They **refuted two of three** plausible
+fixes and **confirmed one** — exactly what the harness is for. Numbers from the
+deterministic image suite (30 bases × 7 transforms) + audio suite (12 bases × 3):
+
+- **Finding 2 (blocking band-count) — CONFIRMED, FIXED.** `num_bands=8` recalls only
+  **0.72** of true near-dup pairs (reduction 0.77); `num_bands=16` recalls **0.97**
+  (reduction 0.28). For a near-dup *media* blocker recall is the priority (a missed
+  dup is unrecoverable; the scorer filters extra candidates cheaply). Fix: the band
+  count is now **recall-target-driven** — `perceptual_blocker.recommend_num_bands`
+  derives it from the scorer threshold via the banded-LSH S-curve (mirrors the
+  semantic-blocking move in #1090). `PerceptualKeyConfig.num_bands` default 8→16;
+  the zero-config path computes it from the image threshold (0.85 → 16 bands @ 0.95
+  recall target). Tests in `test_perceptual_feature.py` / `test_perceptual_autoconfig.py`.
+- **Finding 1 (geometric robustness) — REFUTED, deferred to the walk tier.** The
+  suite's `rotate` (8°) and `crop` (content) recall **0.0**; pHash is photometric,
+  not geometric. The cheap candidate fix (dihedral-min canonical hash, min over the
+  8 rotations/flips) was **measured net-negative**: it leaves 8°-rotate and crop at
+  0.0 (neither is a dihedral symmetry) *and* degrades the photometric cases it
+  should leave alone (brightness 1.0→0.97, noise 0.83→0.57, because min-over-
+  orientations adds distance to near-identical pairs). Real geometric robustness
+  (small-angle rotation, content crop) needs a different representation
+  (feature-point / log-polar / learned) — i.e. the BYO-vector **walk tier**, not a
+  crawl-tier hash trick. Not shipped; documented as a known limitation.
+- **Finding 3 (audio additive noise) — REFUTED, not a threshold problem.** Noisy-pair
+  similarity (0.43–0.54) is **statistically identical** to unrelated pairs (nonmatch
+  mean 0.53): ±0.05 additive noise on the near-pure-tone suite drives BER to ~0.5, so
+  the signal is gone and **no threshold separates it** (at 0.70, precision already
+  collapses to 0.66 with noise recall still 0.0). Lowering the `audio_fp` threshold is
+  measured-harmful; 0.80 stays optimal here. Two compounding causes: (a) pure synthetic
+  tones are pathological for Haitsma-Kalker (most log-bands carry ~zero energy, so the
+  sign-of-double-difference bit is noise-dominated even at ~23 dB SNR — broadband audio
+  degrades more gracefully), and (b) the crawl-tier fingerprint has no bit-reliability /
+  redundancy. A genuinely noise-robust fingerprint is new-kernel work (+ golden-vector
+  parity); deferred. Harness follow-up: make the noise variant broadband so the suite
+  reflects realistic degradation rather than a tone artifact.
+
 ## Status (crawl tier)
 
 The image-and-audio perceptual crawl tier is **complete end-to-end**: reference
 (slice 1) → byte-parity Rust kernel (2) → PyO3 binding (2b) → pipeline match
-feature (3) → audio feature + zero-config auto-wiring + recall gate + extras (3b).
+feature (3) → audio feature + zero-config auto-wiring + recall gate + extras (3b),
+plus the recall-target blocking fix from the first bench iteration (finding 2).
 The wedge (#3 modality-as-evidence) is real. Remaining frontier per the priority
 table: within-modality ER (#1) and cross-modal (#2); plus the biometric
-template-protection / PPRL privacy guardrail and the BYO-vector "walk" tier.
+template-protection / PPRL privacy guardrail and the BYO-vector "walk" tier — which
+findings 1 & 3 now concretely motivate (geometric-robust image vectors + a
+noise-robust audio representation are walk-tier, not crawl-tier, work).
 
 ---
 **Classification:** planning/active • **Last updated:** 2026-06-23

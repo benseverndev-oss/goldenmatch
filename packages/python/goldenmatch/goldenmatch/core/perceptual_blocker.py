@@ -20,6 +20,50 @@ import polars as pl
 from goldenmatch.config.schemas import BlockingConfig, PerceptualKeyConfig
 
 
+def _divisor_band_counts(hash_bits: int) -> list[int]:
+    """Ascending band counts that evenly divide ``hash_bits`` (each band >= 1 bit,
+    excluding the degenerate all-bits-one-band case). Ascending == most-reduction
+    first, so the recommender returns the cheapest blocking that meets the target."""
+    return [b for b in range(2, hash_bits + 1) if hash_bits % b == 0]
+
+
+def lsh_collision_probability(
+    hamming_frac: float, num_bands: int, hash_bits: int = 64
+) -> float:
+    """Probability that two hashes at hamming distance ``hamming_frac * hash_bits``
+    share at least one identical band under banded hamming-LSH.
+
+    A band of ``hash_bits // num_bands`` bits matches iff all its bits agree, with
+    per-bit agreement ``1 - hamming_frac``; the hashes collide iff any of the
+    ``num_bands`` bands matches. This is the standard banded-LSH S-curve and the
+    basis for :func:`recommend_num_bands`."""
+    band_width = hash_bits // num_bands
+    per_band = (1.0 - hamming_frac) ** band_width
+    return 1.0 - (1.0 - per_band) ** num_bands
+
+
+def recommend_num_bands(
+    hash_bits: int = 64,
+    target_hamming_frac: float = 0.15,
+    target_recall: float = 0.95,
+) -> int:
+    """Smallest band count whose LSH collision probability at ``target_hamming_frac``
+    meets ``target_recall`` — the recall-vs-reduction knob, set from a recall target
+    instead of a hardcoded count (mirrors the semantic-blocking move in #1090).
+
+    ``target_hamming_frac`` is the near-duplicate radius the blocker must cover,
+    i.e. ``1 - scorer_threshold`` (a 0.85 image-pHash threshold => a 0.15 radius).
+    Returns the cheapest (fewest-bands, highest-reduction) blocking that still
+    recalls the radius; falls back to the finest division if none qualifies.
+    Measured on the bench suite: this picks ``num_bands=16`` for the image default,
+    lifting blocking recall 0.72 -> 0.97 vs the old hardcoded 8 (ADR 0022)."""
+    choices = _divisor_band_counts(hash_bits)
+    for b in choices:
+        if lsh_collision_probability(target_hamming_frac, b, hash_bits) >= target_recall:
+            return b
+    return choices[-1] if choices else 1
+
+
 def _parse_hash(value: str | None) -> int | None:
     """Parse a hex perceptual hash (``0x`` prefix tolerated) to an int, or None."""
     if value is None:
