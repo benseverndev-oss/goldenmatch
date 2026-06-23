@@ -24,11 +24,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ### Added
 - **Unified offline metrics harness (`scripts/metrics/harness.py`).** One entry
-  point that runs the accuracy + perf probes in a single pass and diffs them
-  against a committed baseline (`scripts/metrics/baseline.json`): synthetic
-  labeled-data accuracy (F1 / precision / recall via `evaluate_clusters`) plus
-  perf (wall, peak RSS, throughput, deterministic scored-pair / cluster counts
-  via `bench_capture`). Accuracy metrics and deterministic counts are *gated*
+  point that runs the accuracy + semantic-blocking + perf probes in a single pass
+  and diffs them against a committed baseline (`scripts/metrics/baseline.json`):
+  synthetic labeled-data accuracy (F1 / precision / recall via `evaluate_clusters`),
+  semantic-blocking candidate-generation recall lift (the ANN source over the
+  zero-config in-house embedder reaches name pairs the structured/fuzzy keys miss
+  -- 0.73 -> 0.95 blocking recall, the first measured payoff of the #1087 semantic
+  work), plus perf (wall, peak RSS, throughput, deterministic scored-pair / cluster
+  counts via `bench_capture`). Accuracy metrics and deterministic counts are *gated*
   (a regression past tolerance fails `--check`); wall/RSS/throughput are
   environment-dependent and reported *informationally*. Fully offline (no
   datasets, Postgres, or API keys) so it runs on forks. Driven locally

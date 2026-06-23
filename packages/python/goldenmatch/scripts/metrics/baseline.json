@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated_at": "2026-06-23T15:21:30Z",
+  "updated_at": "2026-06-23T15:36:21Z",
   "metrics": {
     "accuracy_synthetic.f1": {
       "value": 0.8456,
@@ -23,22 +23,57 @@
       "two_sided": false,
       "gated": true
     },
+    "accuracy_synthetic_semantic.blocking_recall_baseline": {
+      "value": 0.7326,
+      "tol": 0.02,
+      "higher_better": true,
+      "two_sided": false,
+      "gated": true
+    },
+    "accuracy_synthetic_semantic.blocking_recall_semantic": {
+      "value": 0.9506,
+      "tol": 0.02,
+      "higher_better": true,
+      "two_sided": false,
+      "gated": true
+    },
+    "accuracy_synthetic_semantic.recall_lift": {
+      "value": 0.218,
+      "tol": 9000000000.0,
+      "higher_better": false,
+      "two_sided": false,
+      "gated": false
+    },
+    "accuracy_synthetic_semantic.ann_pairs_recovered": {
+      "value": 75.0,
+      "tol": 0.0,
+      "higher_better": false,
+      "two_sided": true,
+      "gated": true
+    },
+    "accuracy_synthetic_semantic.ann_candidate_pairs": {
+      "value": 473.0,
+      "tol": 0.0,
+      "higher_better": false,
+      "two_sided": true,
+      "gated": true
+    },
     "perf_synthetic.wall_s": {
-      "value": 2.8687,
+      "value": 2.8723,
       "tol": 9000000000.0,
       "higher_better": false,
       "two_sided": false,
       "gated": false
     },
     "perf_synthetic.peak_rss_mb": {
-      "value": 206.5,
+      "value": 215.6,
       "tol": 9000000000.0,
       "higher_better": false,
       "two_sided": false,
       "gated": false
     },
     "perf_synthetic.records_per_s": {
-      "value": 911.2,
+      "value": 910.1,
       "tol": 9000000000.0,
       "higher_better": true,
       "two_sided": false,
