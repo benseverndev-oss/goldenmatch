@@ -246,9 +246,15 @@ def _localize_trace(engine, handle, corpus, *, limit: int = _TRACE_LIMIT) -> Non
         print(f"== shatter-probe verdicts {{{verdict_mix}}} ==", flush=True)
 
 
-def run_engine(engine: QAEngine, corpus, *, model: str, budget_usd: float) -> dict:
+def run_engine(
+    engine: QAEngine, corpus, *, model: str, budget_usd: float, judge=None
+) -> dict:
     """Build the KG, answer every question under a hard cost cap, score, return a
-    result dict. Stops cleanly (partial result) when the budget is exhausted."""
+    result dict. Stops cleanly (partial result) when the budget is exhausted.
+
+    `judge`, if given, is a callable(prompt)->str used for the format-fair LLM-judge
+    metric (see metrics.judge_prompt); it is eval overhead and is NOT charged against
+    the engine's answer budget."""
     tracker = BudgetTracker(BudgetConfig(max_cost_usd=budget_usd))
 
     build = engine.build_kg(corpus)
@@ -268,6 +274,9 @@ def run_engine(engine: QAEngine, corpus, *, model: str, budget_usd: float) -> di
     # metrics.classify_answer_type). Non-entity golds (dates/amounts/phrases) are
     # unanswerable-by-construction and would otherwise mask the real accuracy.
     matches_entity: list[float] = []
+    # Format-fair LLM-judge equivalence (None-safe: stays empty when no judge).
+    judges: list[float] = []
+    judges_entity: list[float] = []
     type_counts: dict[str, int] = {}
     decay_rows: list[tuple[int, float]] = []
     records: list[dict] = []
@@ -283,6 +292,17 @@ def run_engine(engine: QAEngine, corpus, *, model: str, budget_usd: float) -> di
         rec = metrics.supporting_fact_recall(ans.retrieved_fact_ids, q.gold_supporting_fact_ids)
         atype = metrics.classify_answer_type(q.gold_answer)
         type_counts[atype] = type_counts.get(atype, 0) + 1
+        aj: float | None = None
+        if judge is not None:
+            # An empty prediction is a non-answer -- score it NO without a call.
+            aj = (
+                metrics.parse_judge(judge(metrics.judge_prompt(q.question, q.gold_answer, ans.text)))
+                if ans.text.strip()
+                else 0.0
+            )
+            judges.append(aj)
+            if atype == "entity":
+                judges_entity.append(aj)
         if atype == "entity":
             matches_entity.append(am)
         matches.append(am)
@@ -305,6 +325,7 @@ def run_engine(engine: QAEngine, corpus, *, model: str, budget_usd: float) -> di
                 "hop_count": q.hop_count,
                 "answer_type": atype,
                 "answer_match": am,
+                "answer_judge": aj,
                 "exact_match": em,
                 "token_f1": round(f1, 4),
             }
@@ -327,6 +348,10 @@ def run_engine(engine: QAEngine, corpus, *, model: str, budget_usd: float) -> di
         "answer_match_entity": _mean(matches_entity),
         "n_entity_answerable": len(matches_entity),
         "answer_type_counts": type_counts,
+        # Format-fair LLM-judge equivalence (None when no judge ran), overall + on
+        # the entity-answerable subset -- the apples-to-apples cross-engine number.
+        "answer_judge": _mean(judges) if judges else None,
+        "answer_judge_entity": _mean(judges_entity) if judges_entity else None,
         "exact_match": _mean(ems),
         "token_f1": _mean(f1s),
         "support_recall": _mean(recalls),
@@ -358,16 +383,21 @@ def write_results(results: list[dict], *, md_path: str | Path, json_path: str | 
     Path(json_path).write_text(json.dumps(results, indent=2, sort_keys=True), encoding="utf-8")
     lines = ["# ER-KG-Bench -- end-to-end multi-hop QA (evidence program #1)", ""]
     lines.append(
-        "| engine | corpus | answer-match | AM (entity-subset) | EM | token-F1 | "
-        "support-recall | cost (USD) | answered | budget hit |"
+        "| engine | corpus | answer-match | LLM-judge | judge (entity-subset) | "
+        "AM (entity-subset) | EM | token-F1 | support-recall | cost (USD) | "
+        "answered | budget hit |"
     )
-    lines.append("|---|---|---|---|---|---|---|---|---|---|")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|")
     for r in results:
         ent_am = r.get("answer_match_entity", 0.0)
         n_ent = r.get("n_entity_answerable", 0)
+        judge = r.get("answer_judge")
+        judge_ent = r.get("answer_judge_entity")
+        judge_s = "n/a" if judge is None else f"{judge}"
+        judge_ent_s = "n/a" if judge_ent is None else f"{judge_ent}"
         lines.append(
             f"| {r['engine']} | {r['corpus']} | {r['answer_match']} | "
-            f"{ent_am} (n={n_ent}) | {r['exact_match']} | "
+            f"{judge_s} | {judge_ent_s} | {ent_am} (n={n_ent}) | {r['exact_match']} | "
             f"{r['token_f1']} | {r['support_recall']} | {r['cost_usd']} | "
             f"{r['n_answered']}/{r['n_questions']} | "
             f"{'yes' if r['budget_exhausted'] else 'no'} |"

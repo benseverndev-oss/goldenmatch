@@ -100,6 +100,34 @@ def _build_engine(name: str):
     raise SystemExit(f"unknown engine: {name}")
 
 
+def _make_judge(model: str):
+    """A judge callable(prompt)->str via OpenAI, or None when no key/SDK. Used for
+    the format-fair LLM-judge metric; a FIXED model across engines keeps the
+    comparison honest. Judge failures return '' (scored NO) so they never crash a
+    run. `openai` is installed in every engine lane."""
+    if not os.environ.get("OPENAI_API_KEY"):
+        return None
+    try:
+        from openai import OpenAI
+    except Exception:
+        return None
+    client = OpenAI()
+
+    def _judge(prompt: str) -> str:
+        try:
+            r = client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0,
+                max_tokens=4,
+            )
+            return r.choices[0].message.content or ""
+        except Exception:
+            return ""
+
+    return _judge
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--engine", default=None)
@@ -124,6 +152,18 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--musique-seed", type=int, default=MUSIQUE_SUBSET_SEED)
     p.add_argument("--model", default="gpt-4o-mini")
     p.add_argument("--budget-usd", type=float, default=25.0)
+    p.add_argument(
+        "--judge",
+        action="store_true",
+        help="score a format-fair LLM-judge answer-equivalence metric alongside "
+        "answer_match (one fixed-model call per question; eval overhead, not charged "
+        "to the engine budget). Needs OPENAI_API_KEY.",
+    )
+    p.add_argument(
+        "--judge-model",
+        default="gpt-4o-mini",
+        help="fixed judge model -- the SAME across engines so the comparison is fair.",
+    )
     p.add_argument("--out-md", required=True)
     p.add_argument("--out-json", required=True)
     args = p.parse_args(argv)
@@ -146,7 +186,10 @@ def main(argv: list[str] | None = None) -> int:
         musique_seed=args.musique_seed,
     )
     engine = _MockEngine() if args.self_test else _build_engine(args.engine)
-    result = run_engine(engine, corpus, model=args.model, budget_usd=args.budget_usd)
+    judge = _make_judge(args.judge_model) if (args.judge and not args.self_test) else None
+    result = run_engine(
+        engine, corpus, model=args.model, budget_usd=args.budget_usd, judge=judge
+    )
     write_results([result], md_path=out_md, json_path=out_json)
     print(
         f"wrote {out_md} ({result['n_answered']}/{result['n_questions']} answered, "
@@ -157,6 +200,7 @@ def main(argv: list[str] | None = None) -> int:
     # free-text generative answers).
     print(
         f"  scores[{result['engine']}]: answer_match={result['answer_match']} "
+        f"llm_judge={result.get('answer_judge')} "
         f"token_f1={result['token_f1']} exact_match={result['exact_match']} "
         f"support_recall={result['support_recall']}"
     )
@@ -166,6 +210,7 @@ def main(argv: list[str] | None = None) -> int:
     print(
         f"  scores[{result['engine']}] entity-subset: "
         f"answer_match={result.get('answer_match_entity', 0.0)} "
+        f"llm_judge={result.get('answer_judge_entity')} "
         f"(n={result.get('n_entity_answerable', 0)}/{result['n_answered']}); "
         f"answer_type_mix={result.get('answer_type_counts', {})}"
     )
