@@ -54,12 +54,14 @@ pub fn radial_variance(grid: &[Vec<f64>]) -> Vec<f64> {
             profile.push(0.0);
             continue;
         }
-        // Explicit scalar accumulation loops (NOT `.iter().sum()` / `.map().sum()`):
-        // the iterator-combinator reductions drift by a ULP under the wheel's
-        // cross-crate thin-LTO (LLVM reassociates the contiguous-slice sum), while
-        // this is the exact ordered-accumulation shape `phash.rs`'s DCT uses, which
-        // is parity-stable in the same release+LTO wheel. Matches CPython's strict
-        // left-to-right `sum(...)`. The golden fixture is the bit-exact check.
+        // Explicit ordered scalar accumulation (mirrors `phash.rs`'s DCT loops),
+        // strict left-to-right like CPython's `sum(...)`. The non-LTO core matches
+        // the Python reference bit-for-bit (the `golden.rs` fixture is that exact
+        // check). NOTE the abi3 *wheel* (native crate, thin-LTO + opt-level 3) may
+        // emit a ~1-ULP-different float here via an FMA/reassociated reduction --
+        // harmless for a continuous profile compared by Pearson (unlike the
+        // bit-packed phash/audio hashes), so the native<->python parity test asserts
+        // numerical, not bit-identical, agreement on the profile.
         let count = vals.len() as f64;
         let mut sum = 0.0;
         for &v in &vals {
