@@ -122,6 +122,13 @@ mysql = [
 duckdb = [
     "duckdb>=0.9",
 ]
+# Optional pgvector (Postgres) backend for the persistent vector index (#1088).
+# Needs the `vector` extension in the target database (CREATE EXTENSION vector).
+# DuckDB-HNSW is the in-tree default; pgvector is opt-in for a shared PG store.
+pgvector = [
+    "psycopg[binary]>=3.1",
+    "pgvector>=0.3",
+]
 ray = [
     "ray>=2.0",
 ]

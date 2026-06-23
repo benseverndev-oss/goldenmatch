@@ -7,6 +7,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Added
+- **Pluggable vector-index backends: pgvector + DuckDB-HNSW (#1088, epic #1087).**
+  The persistent vector index gained two storage backends behind the existing
+  `VectorIndex` surface (`build` / `add` / `query` / `save` / `load` / `open`,
+  returning `RetrievedRecord`): `DuckDBVectorIndex` (a DuckDB database file,
+  ranked with core `array_cosine_similarity` and accelerated by a `vss` HNSW
+  index when available) and `PgVectorIndex` (Postgres + pgvector, HNSW over the
+  `<=>` cosine operator). A new `open_vector_index(location, backend="auto"|...)`
+  factory picks local-file / duckdb / pgvector uniformly (auto-inferred from the
+  location). The local on-disk backend is unchanged. DuckDB ships in-tree;
+  pgvector is the new optional `goldenmatch[pgvector]` extra. Both embed with the
+  zero-config in-house model by default (no cloud/torch) and share the
+  re-embed-never text cache.
 - **Semantic retrieval on the agent surfaces (#1089, epic #1087).** The
   `retrieve_similar_records` API is now exposed over the wire on all three
   surfaces: the MCP `retrieve_similar` tool, the A2A `retrieve_similar` skill,
