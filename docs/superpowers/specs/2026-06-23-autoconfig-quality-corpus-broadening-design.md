@@ -67,9 +67,15 @@ independent baselines: `ncvr_synthetic` (always present, runs in CI) and
 runtime; the parquet fallback path is not committed. To make the dataset
 deterministic and identical in CI and locally, a one-time generator
 `scripts/autoconfig_quality/vendor_historical_50k.py` pulls the dataset via splink
-and writes `scripts/autoconfig_quality/datasets/historical_50k.parquet` containing
+and writes `scripts/autoconfig_quality/vendored/historical_50k.parquet` containing
 the record fields **and** the `cluster` truth column. The runtime loader reads
 *only* that committed parquet (never splink), so the source is fixed.
+
+This deliberately does **not** reuse `scripts/bench_er_headtohead/datasets.py`'s
+`_historical_50k()`: that helper pulls from splink-or-an-uncommitted-path at
+runtime (non-deterministic across environments) and lives in a package with no
+`__init__.py`. Reading our own committed parquet is the cleaner, CI-stable choice
+and is the one place "reuse, never reimplement" is set aside on purpose.
 
 The loader splits `cluster` out as ground truth and **drops it from the DataFrame
 passed to dedupe** — the truth label must never reach auto-config, or it would be
@@ -77,18 +83,67 @@ classified as an identifier / matchkey and leak the answer. (The pair-truth
 datasets don't need this: their truth lives in the `id`/`ncid` column the kernel
 legitimately uses, and is external to the match decision.)
 
-Vendoring cost: a ~2-5 MB parquet committed under
-`scripts/autoconfig_quality/datasets/`. Provenance: Splink's historical-50k is
-Wikidata-derived (CC0 / MIT-licensed datasets), safe to vendor.
+Path note: the parquet goes under `scripts/autoconfig_quality/vendored/` — **not**
+`datasets/`, which `.gitignore` excludes globally (line 84, runtime-downloaded PII
+benchmark data). The implementer creates the `vendored/` dir and confirms
+`git check-ignore` does not match it. Vendoring cost: a ~2-5 MB parquet.
+Provenance: Splink's historical-50k is Wikidata-derived (CC0 / MIT-licensed),
+safe to vendor.
 
-## Per-dataset row cap
+## Per-dataset full scan
 
-`Dataset` gains an optional `row_cap: int | None = <sentinel>` field. The F1 tier's
-effective cap is the dataset's `row_cap` when set, else the CLI `--row-cap`
-(default 20000). `historical_50k` sets `row_cap=None` = "no cap" (run the full 50k;
-capping would both change the number and bias it if rows are cluster-ordered).
-`evaluate_f1` is extended to treat `row_cap=None` as no truncation. All other
-datasets fall below 20k and run fully under the default.
+`evaluate_f1(df, gt, row_cap=...)` **already** treats `row_cap=None` as "no
+truncation" (`f1.py:54-58`, deterministic `df.head(row_cap)`) and is already
+unit-tested with `row_cap=None` — so f1.py needs **no change** for capping.
+
+The only real work is selecting the cap per dataset. `Dataset` gains a
+`full_scan: bool = False` field (a clean boolean, deliberately not a tri-state
+`int | None` whose `None`-means-no-cap collides with `None`-means-unset).
+`historical_50k` sets `full_scan=True`. In `__main__.run()`, the effective cap
+passed to `evaluate_f1` is `None if d.full_scan else cli_row_cap` (the `--row-cap`
+default, 20000). Capping historical_50k would both change the number and bias it
+if rows are cluster-ordered, so it runs the full 50k. All other datasets fall
+below 20k and run fully under the default anyway.
+
+## historical_50k scaling (full-50k F1)
+
+The F1/P/R are cheap at 50k: `dedupe_df` + `evaluate_clusters` + the `scored_pairs`
+set (bounded by matches found, ~O(n) for a blocked dataset) fit the `ubuntu-latest`
+quality_gate runner (7 GB). The blow-up risk is the *attribution*:
+`f1.py:_candidate_pairs` rebuilds the entire post-blocking candidate set as a
+Python set via `combinations` over every block — O(block_size^2) per block, which
+at 50k can reach tens of millions of tuples and is **not** bounded by the existing
+`try/except` (an OOM is not catchable).
+
+Fix: add a scale guard to `_candidate_pairs`. Collect each block's row-id list
+(cheap, O(n) total), compute the projected pair count `sum(C(len,2))`; if it
+exceeds a cap (env `GOLDENMATCH_QH_ATTR_MAX_PAIRS`, default ~10M), skip the
+`combinations` materialization and signal `evaluate_f1` to record
+`attribution: {"skipped": "scale"}` — explicit, **not** a misleading
+`blocking_recall=0`. The F1/P/R floor is always computed; the attribution is
+best-effort and degrades visibly. Attribution is informational (real datasets gate
+on the F1 floor only; signal/attribution drift is never a FAIL), so a `skipped`
+attribution can't break the gate or churn the baseline.
+
+The runner stays `ubuntu-latest` — the 50k dedupe + cluster-eval fits, and the
+guard bounds the attribution. Whether historical_50k's real candidate count fits
+under the cap is **measured on the first run** (recorded with peak RSS + wall to
+confirm the ~1-3 min budget), per the repo's "measure the real shape before
+designing" rule. If we later want the attribution at 50k, raise the cap on a
+roomier runner — a follow-up, not a blocker for the floor.
+
+## Bless / vendoring environment
+
+The bless and vendor steps run locally and have dependencies the gate corpus
+needs. The implementer must run them in an environment where:
+- `recordlinkage` is installed (FEBRL3's loader returns `None` without it —
+  blessing without it would silently skip FEBRL3 and ship a baseline with no
+  FEBRL3 floor, defeating the change). `recordlinkage` is **not** a declared dep.
+- `splink` is installed for the one-time `vendor_historical_50k.py` (it's the
+  `bench` extra in `packages/python/goldenmatch/pyproject.toml`). Not needed at
+  gate time — only to generate the committed parquet once.
+The bless must run with `GOLDENMATCH_AUTOCONFIG_MEMORY=0` and native 0 (same as the
+existing anchors) so the new floors match what CI computes.
 
 ## CI
 
@@ -121,16 +176,25 @@ a nonexistent path where applicable). Assert `historical_50k`'s returned df does
 *are* the gate; unit tests cover loading + conversion only. A registry-resolves
 smoke (all entries importable, names unique) rounds it out.
 
+Extend `tests/test_f1.py` for the attribution scale guard: on a small fixture
+whose blocking yields a block over an env-lowered `GOLDENMATCH_QH_ATTR_MAX_PAIRS`,
+`evaluate_f1` still returns F1/P/R and records `attribution: {"skipped": "scale"}`
+(no OOM, no misleading `blocking_recall=0`). This is a small fixture, not a real
+benchmark.
+
 ## File structure
 
 - Modify `scripts/autoconfig_quality/datasets.py` — add 4 loaders + registry
   entries; add the `row_cap` field to `Dataset`.
-- Modify `scripts/autoconfig_quality/f1.py` — `evaluate_f1` honors `row_cap=None`.
-- Modify `scripts/autoconfig_quality/__main__.py` — pass the per-dataset cap to
-  `evaluate_f1` (dataset.row_cap else `--row-cap`).
+- Modify `scripts/autoconfig_quality/f1.py` — add the attribution scale guard (see
+  "historical_50k scaling"); `evaluate_f1`'s `row_cap=None` handling already
+  exists and is unchanged.
+- Modify `scripts/autoconfig_quality/__main__.py` — pass `None if d.full_scan else
+  cli_row_cap` to `evaluate_f1`.
 - Create `scripts/autoconfig_quality/vendor_historical_50k.py` — one-time parquet
   generator (run locally with splink; not run in CI).
-- Create `scripts/autoconfig_quality/datasets/historical_50k.parquet` — vendored.
+- Create `scripts/autoconfig_quality/vendored/historical_50k.parquet` — vendored
+  (under `vendored/`, not the gitignored `datasets/`).
 - Modify `.github/workflows/ci.yml` — `recordlinkage` install in `quality_gate`.
 - Re-bless `scripts/autoconfig_quality/baselines/scorecard.json`.
 - Modify `scripts/autoconfig_quality/tests/test_datasets.py` — loader tests.
