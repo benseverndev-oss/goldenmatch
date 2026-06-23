@@ -145,3 +145,39 @@ def test_radial_align_edge_cases():
     # identical profile -> 1.0
     p = _rv(_pattern(1))
     assert perceptual.radial_align_similarity(p, p) == 1.0
+
+
+# --------------------------------------------------------------------------- #
+# the `radial` pipeline scorer (slice 3) over the hex column form              #
+# --------------------------------------------------------------------------- #
+def _rhex(img) -> str:
+    return perceptual.radial_hex(_rv(img))
+
+
+def test_radial_scorer_via_score_field():
+    from goldenmatch.core.scorer import score_field
+
+    base = _pattern(4)
+    ha = _rhex(base)
+    hb = _rhex(_rotate(base))  # geometric variant
+    hd = _rhex(_pattern(54))  # unrelated
+    assert score_field(ha, ha, "radial") == 1.0
+    # the rotated variant scores far above the unrelated image (the evidence)
+    assert score_field(ha, hb, "radial") > 0.80
+    assert score_field(ha, hb, "radial") > score_field(ha, hd, "radial")
+    # 0x prefix tolerated, None short-circuits to None (generic guard)
+    assert score_field("0x" + ha, ha, "radial") == 1.0
+    assert score_field(None, ha, "radial") is None
+
+
+def test_radial_score_matrix():
+    from goldenmatch.core.scorer import _radial_score_matrix
+
+    base = _pattern(6)
+    vals = [_rhex(base), _rhex(_rotate(base)), _rhex(_pattern(56)), None]
+    m = _radial_score_matrix(vals)
+    assert m.shape == (4, 4)
+    assert m[0, 0] == 1.0 and m[1, 1] == 1.0
+    assert m[0, 1] == m[1, 0] and m[0, 1] > 0.80  # base <-> rotated, symmetric
+    assert m[0, 1] > m[0, 2]  # variant beats unrelated
+    assert (m[3] == 0.0).all() and (m[:, 3] == 0.0).all()  # None scores 0 everywhere

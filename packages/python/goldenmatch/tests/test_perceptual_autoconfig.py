@@ -34,6 +34,14 @@ def _audio_col(n: int) -> list[str]:
     return [perceptual.audio_fp_hex([i, i + 1, i + 2, i + 3]) for i in range(n)]  # 4 words
 
 
+def _radial_col(n: int) -> list[str]:
+    # 96-char (RADIAL_ANGLES=48 int8) profiles; distinct per row
+    return [
+        perceptual.radial_hex([float((i * 7 + k) % 53) for k in range(perceptual.RADIAL_ANGLES)])
+        for i in range(n)
+    ]
+
+
 def test_detect_image_and_audio_columns():
     df = pl.DataFrame({"name": ["a", "b", "c", "d"], "ph": _img_col(4), "fp": _audio_col(4)})
     det = dict(detect_perceptual_hash_columns(df))
@@ -55,6 +63,30 @@ def test_build_perceptual_matchkey_shapes():
     assert mk.fields[0].scorer == "phash" and mk.fields[0].weight == 1.0
     mka = build_perceptual_matchkey("fp", "audio")
     assert mka.fields[0].scorer == "audio_fp" and mka.threshold == 0.80
+    mkr = build_perceptual_matchkey("rv", "radial")
+    assert mkr.fields[0].scorer == "radial" and mkr.threshold == 0.85
+
+
+def test_detect_radial_column_and_disambiguation():
+    # a uniform-96-char column is radial (the geometric profile), distinct from a
+    # 16-char image pHash and a variable-length audio fingerprint
+    df = pl.DataFrame({"rv": _radial_col(4), "ph": _img_col(4), "fp": _audio_col(4)})
+    det = dict(detect_perceptual_hash_columns(df))
+    assert det.get("rv") == "radial"
+    assert det.get("ph") == "image"
+    assert det.get("fp") == "audio"
+
+
+def test_apply_appends_radial_matchkey_no_blocking():
+    # radial has no LSH blocking (rotation breaks banded-LSH), so it adds a matchkey
+    # but leaves blocking unset when it's the only media column
+    df = pl.DataFrame({"rv": _radial_col(4)})
+    out = apply_perceptual_autoconfig(GoldenMatchConfig(), df)
+    names = [mk.name for mk in out.get_matchkeys()]
+    assert "perceptual_radial_rv" in names
+    mk = next(mk for mk in out.get_matchkeys() if mk.name == "perceptual_radial_rv")
+    assert mk.fields[0].scorer == "radial"
+    assert out.blocking is None  # no perceptual blocking for a rotation-aligned feature
 
 
 def test_apply_appends_matchkey_and_sets_blocking_when_empty():

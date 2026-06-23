@@ -4,7 +4,7 @@
 //! The core is byte-identical with the Python reference (`core/perceptual.py`) —
 //! the `perceptual_golden.json` fixture is the shared parity oracle. The Python
 //! caller selects these only when `native_enabled("perceptual")`.
-use goldenmatch_perceptual_core::{fingerprint_audio, phash_image};
+use goldenmatch_perceptual_core::{fingerprint_audio, phash_image, radial_variance};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
@@ -47,4 +47,13 @@ pub fn perceptual_fingerprint_audio(samples: Vec<f64>, sample_rate: u32) -> PyRe
         return Err(PyValueError::new_err("sample_rate must be positive"));
     }
     Ok(fingerprint_audio(&samples, sample_rate))
+}
+
+/// Rotation/crop-aware radial-variance profile of one decoded luma grid (ADR 0022
+/// finding 1). Returns the per-angle variance vector; the comparison
+/// (`radial_align_similarity`) stays in Python.
+#[pyfunction]
+pub fn perceptual_radial_variance(grid: Vec<Vec<f64>>) -> PyResult<Vec<f64>> {
+    validate_grid(&grid)?;
+    Ok(radial_variance(&grid))
 }

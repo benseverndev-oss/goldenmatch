@@ -27,6 +27,10 @@ VALID_SCORERS = frozenset({
     "phash",
     # Offset-aligned bit-error-rate over a hex audio fingerprint (ADR 0022).
     "audio_fp",
+    # Rotation-aligned similarity over a hex radial-variance profile -- the
+    # geometric (rotation/crop-aware) image comparator, vs photometric `phash`
+    # (ADR 0022 finding 1).
+    "radial",
     # Free deterministic equality scorers (1.0/0.0): initialism collapse
     # ("IBM" <-> "International Business Machines") and alias canonicalization
     # ("Acme Inc" <-> "Acme Incorporated", "Bob" <-> "Robert").

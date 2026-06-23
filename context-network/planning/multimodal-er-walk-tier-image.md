@@ -56,21 +56,34 @@ the bench image suite (20 bases × 7 transforms):
       **Lessons:** (1) store golden floats as hex bits, not JSON decimals — a
       shortest-repr decimal drifts a ULP on parse and silently failed 4 entries;
       (2) materialise the squared deviations before summing so no mul-add fuses.
-- [ ] **Slice 2b — PyO3 binding + loader gating + parity sweep.** Shim in
-      `native/src/perceptual.rs`; `radial_variance` already dispatches via
-      `native_enabled("perceptual")`. Parity test in the `native` lane.
-- [ ] **Slice 3 — pipeline match feature.** A `radial` scorer (aligned similarity
-      over the `radial_hex` column) + auto-config detection of the 96-char column
-      form; the geometric counterpart to the `phash` scorer. Blocking for a
-      rotation-aligned feature is its own problem (banded-LSH assumes positional
-      bit-bands, which rotation breaks) — scorer-first; blocking is a follow-up.
+- [x] **Slice 2b — PyO3 binding + loader gating + parity sweep.** `perceptual_radial_variance`
+      shim in `native/src/perceptual.rs` (registered in `lib.rs`); `radial_variance`
+      already dispatches via `native_enabled("perceptual")` ("perceptual" is the
+      existing not-gated component, reachable under `GOLDENMATCH_NATIVE=1`).
+      `goldenmatch-native` bumped 0.1.11→0.1.12 (Cargo + pyproject in lockstep) so a
+      republish carries the new symbol. `test_native_perceptual_parity.py` extended:
+      native↔python radial sweep (60 grids) + golden fixture + forced-native dispatch.
+      `cargo check`/`clippy -D warnings`/`fmt` green; runs for real in the `native` lane.
+- [x] **Slice 3 — pipeline match feature.** A `radial` scorer (`core/scorer.py`,
+      single + NxN matrix over the `radial_hex` column, aligned-Pearson) added to
+      `VALID_SCORERS`; the geometric counterpart to `phash`. Auto-config
+      (`perceptual_autoconfig.py`) detects the 96-char column form and appends a
+      `radial` matchkey — a uniform-96 column reads as radial (audio fingerprints
+      vary in length, so always-96 is the geometric profile). The rotation-aligned
+      feature gets **no LSH blocking** (banded-LSH assumes positional bit-bands that
+      rotation breaks) — scorer-first; rotation-robust blocking is a follow-up.
+      Tests: `test_perceptual_radial.py` (scorer single + matrix),
+      `test_perceptual_autoconfig.py` (detection + disambiguation + matchkey shape);
+      `tuning.mdx` flag description updated.
 
 ## Status
 
-Slice 1 is in-tree and validated: the walk-tier image feature exists as the
-authoritative reference + column form, with the blind-spot closure locked by test.
-The Rust kernel (slice 2), binding (2b), and pipeline wiring (3) follow the exact
-arc the crawl tier took in #1221.
+The walk-tier image feature is **complete end-to-end** (reference → byte-parity
+kernel → native binding → pipeline scorer + auto-config), the same arc the crawl
+tier took in #1221. The rotation/crop blind spot finding 1 identified is closed
+with a measured, parity-clean, no-ML feature. Remaining follow-up: rotation-robust
+**blocking** for the radial feature (banded-LSH breaks under rotation) — today the
+`radial` scorer relies on other blocking or all-pairs at modest N.
 
 ---
 **Classification:** planning/active • **Last updated:** 2026-06-23
