@@ -145,6 +145,32 @@ def test_semantic_blocking_probe_is_deterministic():
     assert harness.probe_semantic_blocking().metrics == harness.probe_semantic_blocking().metrics
 
 
+def test_trained_embedder_probe_shows_large_alias_lift():
+    out = harness.probe_trained_embedder()
+    assert out.group == "accuracy" and out.error is None
+    m = out.metrics
+    # untrained char-n-grams are structurally blind to nickname aliases (robert/bob)
+    # -> near-floor recall; the trained model learns the equivalence -> near-ceiling.
+    assert m["alias_recall_untrained"] < 0.2
+    assert m["alias_recall_trained"] > 0.8
+    assert m["recall_gain"] > 0.5
+    assert m["train_separation"] > m["alias_recall_untrained"]  # training actually learned
+
+
+def test_trained_embedder_probe_is_deterministic():
+    # seeded numpy-only training + ANN must be byte-stable run-to-run.
+    assert harness.probe_trained_embedder().metrics == harness.probe_trained_embedder().metrics
+
+
+def test_trained_embedder_distinct_column_avoids_embed_cache_collision():
+    # the alias probe must use a column name distinct from the semantic probe's so
+    # the embedder's per-column embedding cache doesn't serve stale (wrong-sized)
+    # vectors when both run in one process (regression guard for the IndexError).
+    harness.probe_semantic_blocking()
+    out = harness.probe_trained_embedder()  # would IndexError on a shared cache key
+    assert out.error is None and out.metrics["alias_recall_trained"] > 0.8
+
+
 def test_perf_probe_records_wall_and_counts():
     out = harness.probe_perf(n_entities=120)
     assert out.group == "perf" and out.error is None

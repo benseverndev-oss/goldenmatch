@@ -2,8 +2,9 @@
 
 Runs a suite of offline, deterministic **probes** (accuracy: F1 / precision /
 recall on labeled synthetic data; semantic blocking: candidate-generation recall
-lift from the ANN source; performance: wall, peak RSS, throughput, stage timings)
-and writes a single structured report. Diffs the report against a committed
+lift from the ANN source; trained embedder: alias-recall lift a trained in-house
+model adds over the untrained projection; performance: wall, peak RSS, throughput,
+stage timings) and writes a single structured report. Diffs the report against a committed
 baseline (``baseline.json``) with per-metric tolerances so you can see, in one
 command, whether a code change moved a metric.
 
@@ -315,9 +316,148 @@ def probe_semantic_blocking() -> ProbeOutcome:
     )
 
 
+# ── trained-embedder probe ────────────────────────────────────────────────────
+# Nickname aliases with near-ZERO character overlap (robert<->bob). A lexical /
+# char-n-gram embedder structurally cannot see the equivalence; a TRAINED embedder
+# learns it from labeled pairs. This is the signal that isolates a trained model's
+# value -- surface-noise typos (the semantic probe's data) are already near-ceiling
+# for the untrained char-n-gram random projection, so training is ~a no-op there.
+_ALIASES = {"robert": "bob", "william": "bill", "elizabeth": "liz", "richard": "dick",
+            "margaret": "peg", "james": "jim", "john": "jack", "charles": "chuck",
+            "michael": "mike"}
+# DISJOINT surname vocabularies: the model trains on _TRAIN_SURNAMES and is
+# evaluated on _EVAL_SURNAMES, so a recall lift is generalization (the alias
+# equivalence transferring to unseen full names), not memorization.
+_TRAIN_SURNAMES = ("baker", "fox", "webb", "rose", "pike", "lamb", "frost", "nash")
+_EVAL_SURNAMES = ("smith", "jones", "brown", "lee", "clark", "king", "hill", "green",
+                  "ford", "gray", "ward", "cole", "reed", "shaw", "wood", "bell",
+                  "hunt", "dean", "page", "watt")
+
+
+def _make_alias_labeled(n_entities: int, seed: int) -> tuple[list[dict[str, Any]], set[tuple[int, int]]]:
+    """Each entity = a formal-name row + an alias-name duplicate (robert/bob), over
+    ``_EVAL_SURNAMES``. Returns ``(rows, alias_pairs)`` where ``alias_pairs`` is the
+    HARD subset: same person, first names with near-zero character overlap."""
+    import random
+
+    rng = random.Random(seed)
+    combos = [(f, ln) for f in _ALIASES for ln in _EVAL_SURNAMES]
+    if n_entities > len(combos):
+        raise ValueError(f"_make_alias_labeled: n_entities {n_entities} exceeds {len(combos)} combos")
+    rng.shuffle(combos)
+    rows: list[dict[str, Any]] = []
+    alias_pairs: set[tuple[int, int]] = set()
+    for first, last in combos[:n_entities]:
+        p0 = len(rows)
+        rows.append({"first_name": first, "last_name": last})
+        rows.append({"first_name": _ALIASES[first], "last_name": last})
+        alias_pairs.add((p0, p0 + 1))
+    return rows, alias_pairs
+
+
+def _train_alias_embedder(model_path: Path) -> float:
+    """Train (offline, seeded, numpy-only) a GoldenEmbedModel on alias pairs built
+    over ``_TRAIN_SURNAMES``, save it to ``model_path``, return the train separation
+    (mean match cosine - mean non-match cosine; higher = better learned)."""
+    import random
+
+    from goldenmatch.embeddings.inhouse.trainer import TrainConfig, train_embedder
+
+    rng = random.Random(0)
+    pos = [(f"{formal} {s}", f"{nick} {s}", 1)
+           for formal, nick in _ALIASES.items() for s in _TRAIN_SURNAMES]
+    firsts = list(_ALIASES)
+    neg: list[tuple[str, str, int]] = []
+    while len(neg) < len(pos):
+        a, b = rng.choice(firsts), rng.choice(firsts)
+        s1, s2 = rng.choice(_TRAIN_SURNAMES), rng.choice(_TRAIN_SURNAMES)
+        if a != b:
+            neg.append((f"{a} {s1}", f"{b} {s2}", 0))
+    model, report = train_embedder(pos + neg, TrainConfig(dim=64, epochs=200, seed=0))
+    model.save(model_path)
+    return report.separation_after
+
+
+def _alias_ann_candidates(rows: list[dict[str, Any]], model_id: str) -> set[tuple[int, int]]:
+    """ANN candidate pairs over full names, embedded by ``model_id`` (``"inhouse"``
+    for the untrained projection, ``"inhouse:<path>"`` for a trained model)."""
+    import polars as pl
+    from goldenmatch.config.schemas import BlockingConfig
+    from goldenmatch.core.blocker import build_blocks
+
+    # Distinct column name from the semantic probe's "__full_name__": the embedder
+    # caches embeddings by cache_key=f"ann_{ann_column}", so a shared name collides
+    # across probes (the alias 360-row data would reuse the semantic probe's cached
+    # 1000+-row embeddings -> pair indices overflow row_ids).
+    df = (
+        pl.DataFrame(rows)
+        .with_row_index("__row_id__")
+        .with_columns(
+            (pl.col("first_name") + pl.lit(" ") + pl.col("last_name")).alias("__alias_full_name__")
+        )
+    )
+    blocks = build_blocks(
+        df.lazy(),
+        BlockingConfig(strategy="ann_pairs", ann_column="__alias_full_name__",
+                       ann_model=model_id, ann_top_k=_ANN_TOP_K),
+    )
+    cand: set[tuple[int, int]] = set()
+    for blk in blocks:
+        for a, b, s in (blk.pre_scored_pairs or []):
+            if s >= _ANN_THRESHOLD:
+                cand.add((min(a, b), max(a, b)))
+    return cand
+
+
+def probe_trained_embedder() -> ProbeOutcome:
+    """Recall lift a TRAINED in-house embedder adds over the untrained projection.
+
+    The semantic probe showed the untrained char-n-gram projection already reaches
+    typo'd-name pairs -- but it is structurally blind to equivalences with no
+    surface overlap (nickname aliases: robert<->bob). This probe isolates exactly
+    that: alias-pair blocking recall with the untrained embedder vs a model trained
+    (offline, seeded, numpy-only -- no torch/cloud) on alias pairs over a DISJOINT
+    surname vocabulary. The lift is the trained model's value as a tracked number:
+    "we trained a better embedder" becomes a measurement, not a claim.
+
+    Untrained recall sits near the floor (char-n-grams can't bridge robert->bob);
+    trained recall approaches 1.0 on unseen surnames (the equivalence generalizes).
+    Fully offline + deterministic.
+    """
+    import tempfile
+
+    rows, alias_pairs = _make_alias_labeled(n_entities=180, seed=7)
+    n_alias = len(alias_pairs) or 1
+    untrained = _alias_ann_candidates(rows, "inhouse")
+    untrained_rec = alias_pairs & untrained
+    with tempfile.TemporaryDirectory() as tmp:
+        model_path = Path(tmp) / "alias_model"
+        separation = _train_alias_embedder(model_path)
+        trained = _alias_ann_candidates(rows, f"inhouse:{model_path}")
+    trained_rec = alias_pairs & trained
+
+    r_untrained = len(untrained_rec) / n_alias
+    r_trained = len(trained_rec) / n_alias
+    return ProbeOutcome(
+        group="accuracy",
+        metrics={
+            "alias_recall_untrained": round(r_untrained, 4),
+            "alias_recall_trained": round(r_trained, 4),
+            "recall_gain": round(r_trained - r_untrained, 4),
+            "train_separation": round(separation, 4),
+            "untrained_candidates": len(untrained),
+            "trained_candidates": len(trained),
+        },
+        meta={"alias_pairs": len(alias_pairs), "ann_threshold": _ANN_THRESHOLD,
+              "ann_top_k": _ANN_TOP_K, "train_surnames": len(_TRAIN_SURNAMES),
+              "eval_surnames": len(_EVAL_SURNAMES)},
+    )
+
+
 PROBES: dict[str, Callable[[], ProbeOutcome]] = {
     "accuracy_synthetic": probe_accuracy,
     "accuracy_synthetic_semantic": probe_semantic_blocking,
+    "accuracy_trained_embedder": probe_trained_embedder,
     "perf_synthetic": probe_perf,
 }
 
@@ -411,23 +551,31 @@ def _flatten(report: dict[str, Any]) -> dict[str, float]:
 # Accuracy + deterministic counts are gated.
 _GATED_SUFFIXES = ("f1", "precision", "recall", "scored_pairs", "multi_member_clusters",
                    "blocking_recall_baseline", "blocking_recall_semantic",
-                   "ann_pairs_recovered", "ann_candidate_pairs")
-_INFO_SUFFIXES = ("wall_s", "peak_rss_mb", "records_per_s", "recall_lift")
+                   "ann_pairs_recovered", "ann_candidate_pairs",
+                   "alias_recall_untrained", "alias_recall_trained",
+                   "untrained_candidates", "trained_candidates")
+_INFO_SUFFIXES = ("wall_s", "peak_rss_mb", "records_per_s", "recall_lift",
+                  "recall_gain", "train_separation")
 # direction: True = higher is better (regression = drop); False = lower is better.
 _HIGHER_BETTER = ("f1", "precision", "recall", "records_per_s",
-                  "blocking_recall_baseline", "blocking_recall_semantic")
+                  "blocking_recall_baseline", "blocking_recall_semantic",
+                  "alias_recall_untrained", "alias_recall_trained")
 # Deterministic counts have no "better" direction -- they're env-independent
 # fingerprints of the pipeline, so ANY drift (up OR down) past tolerance is a
 # regression. A drop here is exactly the signal we want (e.g. blocking losing
 # candidate pairs); the one-sided higher/lower gate would miss it.
 _TWO_SIDED = ("scored_pairs", "multi_member_clusters",
-              "ann_pairs_recovered", "ann_candidate_pairs")
+              "ann_pairs_recovered", "ann_candidate_pairs",
+              "untrained_candidates", "trained_candidates")
 # default per-metric tolerance bands.
 _TOL = {"f1": 0.02, "precision": 0.02, "recall": 0.02,
         "scored_pairs": 0.0, "multi_member_clusters": 0.0,
         "blocking_recall_baseline": 0.02, "blocking_recall_semantic": 0.02,
         "ann_pairs_recovered": 0.0, "ann_candidate_pairs": 0.0,
-        "wall_s": 9e9, "peak_rss_mb": 9e9, "records_per_s": 9e9, "recall_lift": 9e9}
+        "alias_recall_untrained": 0.02, "alias_recall_trained": 0.02,
+        "untrained_candidates": 0.0, "trained_candidates": 0.0,
+        "wall_s": 9e9, "peak_rss_mb": 9e9, "records_per_s": 9e9,
+        "recall_lift": 9e9, "recall_gain": 9e9, "train_separation": 9e9}
 
 
 def _suffix(key: str) -> str:
