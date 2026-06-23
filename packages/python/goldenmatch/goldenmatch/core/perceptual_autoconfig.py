@@ -23,6 +23,7 @@ from goldenmatch.config.schemas import (
     MatchkeyField,
     PerceptualKeyConfig,
 )
+from goldenmatch.core.perceptual_blocker import recommend_num_bands
 
 # A 16-char (64-bit) image pHash. An audio fingerprint is two or more 8-char
 # (32-bit) words concatenated -- a 16-char string is ambiguous, so it is read as
@@ -33,6 +34,11 @@ _AUDIO_RE = re.compile(r"^(?:[0-9a-f]{8}){3,}$")
 _SAMPLE = 200
 _IMAGE_THRESHOLD = 0.85  # hamming <= ~10/64
 _AUDIO_THRESHOLD = 0.80
+# Blocking must recall the same near-duplicate radius the scorer accepts, so the
+# band count is derived from the image threshold rather than hardcoded (the old
+# default of 8 under-recalled at 0.72; the recall-target rule picks 16 at 0.97).
+_BLOCK_RECALL_TARGET = 0.95
+_HASH_BITS = 64
 
 
 def _classify(values: list[str]) -> str | None:
@@ -124,7 +130,13 @@ def apply_perceptual_autoconfig(
         blk.strategy == "static" and not blk.keys and not (blk.passes or [])
     )
     if image_cols and no_blocking:
+        num_bands = recommend_num_bands(
+            _HASH_BITS, 1.0 - _IMAGE_THRESHOLD, _BLOCK_RECALL_TARGET
+        )
         config.blocking = BlockingConfig(
-            strategy="perceptual", perceptual=PerceptualKeyConfig(column=image_cols[0])
+            strategy="perceptual",
+            perceptual=PerceptualKeyConfig(
+                column=image_cols[0], num_bands=num_bands, hash_bits=_HASH_BITS
+            ),
         )
     return config

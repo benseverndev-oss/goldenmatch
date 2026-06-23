@@ -64,6 +64,9 @@ def test_apply_appends_matchkey_and_sets_blocking_when_empty():
     assert "perceptual_image_ph" in names
     assert out.blocking is not None and out.blocking.strategy == "perceptual"
     assert out.blocking.perceptual is not None and out.blocking.perceptual.column == "ph"
+    # band count is recall-target-driven (16 at the 0.85 image threshold), not the
+    # old reduction-biased default of 8 (finding 2: 0.72 -> 0.97 blocking recall).
+    assert out.blocking.perceptual.num_bands == 16
 
 
 def test_apply_preserves_existing_blocking():

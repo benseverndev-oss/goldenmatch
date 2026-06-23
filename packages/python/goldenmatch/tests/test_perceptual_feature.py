@@ -69,6 +69,56 @@ def test_perceptual_key_config_validation():
         PerceptualKeyConfig(column="ph", num_bands=7, hash_bits=64)  # 64 % 7 != 0
 
 
+def test_perceptual_key_config_default_is_recall_driven():
+    # The default is the recall-target band count (16), not the old reduction-biased
+    # 8 — a near-dup MEDIA blocker prioritises recall (a missed dup is unrecoverable;
+    # the scorer filters the extra candidates cheaply). Bench: 0.72 -> 0.97 recall.
+    assert PerceptualKeyConfig(column="ph").num_bands == 16
+
+
+# --------------------------------------------------------------------------- #
+# recall-target band recommender (finding 2: blocking recall vs reduction)     #
+# --------------------------------------------------------------------------- #
+def test_recommend_num_bands_meets_recall_target_at_image_radius():
+    from goldenmatch.core.perceptual_blocker import (
+        lsh_collision_probability,
+        recommend_num_bands,
+    )
+
+    # 0.85 image threshold => 0.15 hamming radius; at 0.95 target the cheapest
+    # divisor band count that recalls the radius is 16 (matches the bench sweep).
+    nb = recommend_num_bands(64, 1.0 - 0.85, 0.95)
+    assert nb == 16
+    assert lsh_collision_probability(0.15, nb, 64) >= 0.95
+    # and it is the CHEAPEST such count (8 bands does not reach the target).
+    assert lsh_collision_probability(0.15, 8, 64) < 0.95
+
+
+def test_recommend_num_bands_monotone_in_target_and_radius():
+    from goldenmatch.core.perceptual_blocker import recommend_num_bands
+
+    # a stricter recall target never needs fewer bands
+    assert recommend_num_bands(64, 0.15, 0.99) >= recommend_num_bands(64, 0.15, 0.90)
+    # a wider near-dup radius (lower scorer threshold) never needs fewer bands
+    assert recommend_num_bands(64, 0.25, 0.95) >= recommend_num_bands(64, 0.10, 0.95)
+    # result always evenly divides hash_bits (PerceptualKeyConfig invariant)
+    assert 64 % recommend_num_bands(64, 0.15, 0.95) == 0
+
+
+def test_recommend_num_bands_lifts_blocking_recall():
+    from goldenmatch.core.perceptual_blocker import recommend_num_bands
+
+    # The recommended count recalls more true near-dup pairs than the old default 8.
+    base = 0x0123456789ABCDEF
+    # 12 near-duplicates at a ~2/64 hamming radius (well inside the 0.85 threshold)
+    hashes = [base] + [base ^ ((1 << k) | (1 << ((k + 7) % 64))) for k in range(12)]
+    gt = {(0, i) for i in range(1, len(hashes))}
+    nb = recommend_num_bands(64, 0.15, 0.95)
+    recalled_hi = len(PerceptualLSHBlocker(nb, 64).candidate_pairs(hashes) & gt)
+    recalled_8 = len(PerceptualLSHBlocker(8, 64).candidate_pairs(hashes) & gt)
+    assert recalled_hi >= recalled_8
+
+
 # --------------------------------------------------------------------------- #
 # end-to-end on real image pHashes                                            #
 # --------------------------------------------------------------------------- #
