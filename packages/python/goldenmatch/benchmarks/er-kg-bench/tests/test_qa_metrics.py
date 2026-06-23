@@ -7,8 +7,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from erkgbench.qa_e2e.metrics import (  # noqa: E402
     answer_match,
+    classify_answer_type,
     decay_curve,
     exact_match,
+    is_entity_answer,
     supporting_fact_recall,
     token_f1,
 )
@@ -51,3 +53,48 @@ def test_supporting_fact_recall():
 def test_decay_curve_groups_by_hop():
     rows = [(1, 1.0), (1, 0.0), (2, 1.0), (2, 1.0), (3, 0.0)]
     assert decay_curve(rows) == {1: 0.5, 2: 1.0, 3: 0.0}
+
+
+# --- answer-type classification (entity-answerable subset) --------------------
+#
+# Cases drawn verbatim from the 2026-06-23 N=50 MuSiQue localize trace, which is
+# what the entity-subset denominator is meant to model.
+
+
+def test_classify_entity_answers():
+    for g in [
+        "Exeter College",
+        "the Politburo",
+        "Sega Genesis",
+        "Firefox",
+        "Lana Wood",
+        "U.S. Marshal Rooster Cogburn",
+    ]:
+        assert classify_answer_type(g) == "entity", g
+        assert is_entity_answer(g) is True
+
+
+def test_classify_number_answers():
+    for g in ["$72,641", "5am", "72,641", "3.5 million"]:
+        assert classify_answer_type(g) == "number", g
+        assert is_entity_answer(g) is False
+
+
+def test_classify_date_answers():
+    for g in ["11 February 1929", "February 11, 1929", "1929", "02/11/1929"]:
+        assert classify_answer_type(g) == "date", g
+        assert is_entity_answer(g) is False
+
+
+def test_classify_phrase_answers():
+    for g in [
+        "built on 16-bit architectures and offered improved graphics and sound",
+        "because it was cheaper to produce",
+    ]:
+        assert classify_answer_type(g) == "phrase", g
+        assert is_entity_answer(g) is False
+
+
+def test_classify_handles_empty():
+    assert classify_answer_type("") == "phrase"
+    assert is_entity_answer("") is False

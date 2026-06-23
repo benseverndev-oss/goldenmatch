@@ -133,6 +133,12 @@ def run_engine(engine: QAEngine, corpus, *, model: str, budget_usd: float) -> di
     matches: list[float] = []
     f1s: list[float] = []
     recalls: list[float] = []
+    # answer_match restricted to entity-answerable golds -- the honest denominator
+    # for an entity-graph engine that can only ever emit a node (see
+    # metrics.classify_answer_type). Non-entity golds (dates/amounts/phrases) are
+    # unanswerable-by-construction and would otherwise mask the real accuracy.
+    matches_entity: list[float] = []
+    type_counts: dict[str, int] = {}
     decay_rows: list[tuple[int, float]] = []
     records: list[dict] = []
     answered = 0
@@ -145,6 +151,10 @@ def run_engine(engine: QAEngine, corpus, *, model: str, budget_usd: float) -> di
         em = metrics.exact_match(ans.text, q.gold_answer)
         f1 = metrics.token_f1(ans.text, q.gold_answer)
         rec = metrics.supporting_fact_recall(ans.retrieved_fact_ids, q.gold_supporting_fact_ids)
+        atype = metrics.classify_answer_type(q.gold_answer)
+        type_counts[atype] = type_counts.get(atype, 0) + 1
+        if atype == "entity":
+            matches_entity.append(am)
         matches.append(am)
         ems.append(em)
         f1s.append(f1)
@@ -163,6 +173,7 @@ def run_engine(engine: QAEngine, corpus, *, model: str, budget_usd: float) -> di
                 "gold_answer": q.gold_answer,
                 "prediction": _truncate(ans.text),
                 "hop_count": q.hop_count,
+                "answer_type": atype,
                 "answer_match": am,
                 "exact_match": em,
                 "token_f1": round(f1, 4),
@@ -181,6 +192,11 @@ def run_engine(engine: QAEngine, corpus, *, model: str, budget_usd: float) -> di
         "n_questions": len(corpus.questions),
         "n_answered": answered,
         "answer_match": _mean(matches),
+        # answer_match over entity-answerable golds only + how many there were, so
+        # the headline can be read against the right denominator.
+        "answer_match_entity": _mean(matches_entity),
+        "n_entity_answerable": len(matches_entity),
+        "answer_type_counts": type_counts,
         "exact_match": _mean(ems),
         "token_f1": _mean(f1s),
         "support_recall": _mean(recalls),
@@ -212,17 +228,27 @@ def write_results(results: list[dict], *, md_path: str | Path, json_path: str | 
     Path(json_path).write_text(json.dumps(results, indent=2, sort_keys=True), encoding="utf-8")
     lines = ["# ER-KG-Bench -- end-to-end multi-hop QA (evidence program #1)", ""]
     lines.append(
-        "| engine | corpus | answer-match | EM | token-F1 | support-recall | "
-        "cost (USD) | answered | budget hit |"
+        "| engine | corpus | answer-match | AM (entity-subset) | EM | token-F1 | "
+        "support-recall | cost (USD) | answered | budget hit |"
     )
-    lines.append("|---|---|---|---|---|---|---|---|---|")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|")
     for r in results:
+        ent_am = r.get("answer_match_entity", 0.0)
+        n_ent = r.get("n_entity_answerable", 0)
         lines.append(
-            f"| {r['engine']} | {r['corpus']} | {r['answer_match']} | {r['exact_match']} | "
+            f"| {r['engine']} | {r['corpus']} | {r['answer_match']} | "
+            f"{ent_am} (n={n_ent}) | {r['exact_match']} | "
             f"{r['token_f1']} | {r['support_recall']} | {r['cost_usd']} | "
             f"{r['n_answered']}/{r['n_questions']} | "
             f"{'yes' if r['budget_exhausted'] else 'no'} |"
         )
+    lines.append("")
+    lines.append("## Gold answer-type mix (entity-graph engines can only answer 'entity')")
+    for r in results:
+        counts = r.get("answer_type_counts") or {}
+        if counts:
+            mix = ", ".join(f"{k}:{v}" for k, v in sorted(counts.items()))
+            lines.append(f"- {r['engine']} ({r['corpus']}): {mix}")
     lines.append("")
     lines.append("## Decay curve (engineered corpus: mean answer-match by hop count)")
     for r in results:

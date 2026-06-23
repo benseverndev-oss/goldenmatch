@@ -65,6 +65,75 @@ def supporting_fact_recall(
     return len(gold & set(retrieved_ids)) / len(gold)
 
 
+# --- answer-type classification ------------------------------------------------
+#
+# An entity-graph engine (goldengraph) can ONLY ever answer with a NODE -- a named
+# entity. MuSiQue gold answers are frequently NOT entities (a date, a money amount,
+# a descriptive phrase), so those questions are unanswerable-by-construction and
+# drag the headline `answer_match` down regardless of retrieval/synthesis quality.
+# Classifying the gold lets the harness report `answer_match` on the entity-
+# answerable subset -- the honest denominator for a graph engine (the 2026-06-23
+# N=50 trace: ~60% of losses were non-entity golds like '$72,641', '11 February
+# 1929', 'built on 16-bit architectures ...'). Heuristic + approximate by design;
+# the subset metric is a framing aid, not a second source of truth.
+
+_MONTHS = (
+    "january|february|march|april|may|june|july|august|september|october"
+    "|november|december"
+)
+_DATE_RE = re.compile(
+    rf"^\s*(\d{{1,2}}\s+)?({_MONTHS})\s+\d{{3,4}}\s*$"  # 11 February 1929 / March 1929
+    rf"|^\s*({_MONTHS})\s+\d{{1,2}}\s*,?\s*\d{{3,4}}\s*$"  # February 11, 1929
+    rf"|^\s*(19|20)\d{{2}}\s*$"  # bare 4-digit year
+    rf"|^\s*\d{{1,2}}[/-]\d{{1,2}}[/-]\d{{2,4}}\s*$",  # 02/11/1929
+    re.IGNORECASE,
+)
+_NUMBER_RE = re.compile(
+    r"^[\$£€]?\s*\d[\d,\.]*\s*"
+    r"(%|am|pm|st|nd|rd|th|km|kg|mi|ft|m|million|billion|thousand|hundred|"
+    r"percent|dollars?|years?)?\s*$",
+    re.IGNORECASE,
+)
+_ARTICLES_LEADING = re.compile(r"^(the|a|an)\s+", re.IGNORECASE)
+_STOPWORDS = frozenset(
+    "the a an of in on at to and or for with by from as".split()
+)
+
+
+def classify_answer_type(gold: str) -> str:
+    """Coarse type of a gold answer: 'entity' | 'date' | 'number' | 'phrase'.
+
+    'entity' = a short, proper-noun-dominated name an entity-graph could emit
+    ('Exeter College', 'the Politburo', 'Sega Genesis'). 'date'/'number' =
+    literals the graph cannot emit. 'phrase' = a descriptive clause
+    ('built on 16-bit architectures ...'). Heuristic, not authoritative."""
+    g = (gold or "").strip()
+    if not g:
+        return "phrase"
+    if _DATE_RE.search(g):
+        return "date"
+    if _NUMBER_RE.match(g):
+        return "number"
+    core = _ARTICLES_LEADING.sub("", g)
+    toks = re.findall(r"[A-Za-z0-9.&'-]+", core)
+    if not toks:
+        return "number" if any(c.isdigit() for c in g) else "phrase"
+    alpha = [t for t in toks if t[:1].isalpha() and t.lower() not in _STOPWORDS]
+    if not alpha:
+        return "phrase"
+    capitalized = sum(1 for t in alpha if t[:1].isupper())
+    # A name is short and mostly Title-Case; a descriptive phrase is longer and
+    # mostly lowercase.
+    if len(toks) <= 6 and capitalized / len(alpha) >= 0.6:
+        return "entity"
+    return "phrase"
+
+
+def is_entity_answer(gold: str) -> bool:
+    """True when the gold answer is a named entity an entity-graph could emit."""
+    return classify_answer_type(gold) == "entity"
+
+
 def decay_curve(rows: Iterable[tuple[int, float]]) -> dict[int, float]:
     """rows: (hop_count, correct in {0.0,1.0}) -> {hop_count: mean correctness}."""
     by_hop: dict[int, list[float]] = defaultdict(list)

@@ -167,7 +167,16 @@ class GoldenGraphQAEngine:
         )
         return AnswerResult(
             text=text,
-            retrieved_fact_ids=(),  # see support-recall note in the plan/spec
+            # support_recall is STRUCTURALLY 0.0 for goldengraph and the bench
+            # JSON's support-recall column should be read as "not wired", not "0%
+            # recall". Root cause (2026-06-23 triage): `ask()` returns only the
+            # answer string -- it does not expose which document/edge ids fell in
+            # the retrieval ball, so there is nothing to intersect with
+            # `gold_supporting_fact_ids`. Fixing it needs `ask()` (or a sibling that
+            # reuses the same retrieval) to return the ball's source-doc ids mapped
+            # to corpus ids (MuSiQue '<qid>::p<idx>'); that is a goldengraph API
+            # change, tracked as a follow-up rather than forced here.
+            retrieved_fact_ids=(),
             input_tokens=self._llm.input_tokens - before_in,
             output_tokens=self._llm.output_tokens - before_out,
             latency_s=time.perf_counter() - t0,

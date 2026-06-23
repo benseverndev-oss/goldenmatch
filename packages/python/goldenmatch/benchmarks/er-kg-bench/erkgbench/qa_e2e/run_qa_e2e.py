@@ -160,6 +160,15 @@ def main(argv: list[str] | None = None) -> int:
         f"token_f1={result['token_f1']} exact_match={result['exact_match']} "
         f"support_recall={result['support_recall']}"
     )
+    # Entity-answerable subset: an entity-graph can only emit a node, so non-entity
+    # golds (dates/amounts/phrases) are unanswerable-by-construction -- this is the
+    # honest denominator.
+    print(
+        f"  scores[{result['engine']}] entity-subset: "
+        f"answer_match={result.get('answer_match_entity', 0.0)} "
+        f"(n={result.get('n_entity_answerable', 0)}/{result['n_answered']}); "
+        f"answer_type_mix={result.get('answer_type_counts', {})}"
+    )
     # A few example Q->A records so the log shows WHAT the engine answered (wrong
     # vs. async-corrupted vs. phrasing) -- the full set rides in the JSON artifact.
     for rec in result.get("per_question", [])[:3]:
