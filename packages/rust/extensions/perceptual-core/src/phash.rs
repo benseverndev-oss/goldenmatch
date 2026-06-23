@@ -48,7 +48,7 @@ fn src_coords(n: usize, size: usize) -> Vec<(usize, usize, f64)> {
         .collect()
 }
 
-fn bilinear_resize(grid: &[Vec<f64>], size: usize) -> Vec<Vec<f64>> {
+pub(crate) fn bilinear_resize(grid: &[Vec<f64>], size: usize) -> Vec<Vec<f64>> {
     let h = grid.len();
     let w = grid[0].len();
     let ys = src_coords(h, size);

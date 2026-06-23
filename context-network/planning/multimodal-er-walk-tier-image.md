@@ -45,10 +45,17 @@ the bench image suite (20 bases × 7 transforms):
       quantise lossless for scoring). `tests/test_perceptual_radial.py` locks the
       blind-spot closure (rotate/crop strongly recalled, separated from unrelated),
       photometric non-regression, alignment-beats-raw, and hex round-trip.
-- [ ] **Slice 2 — Rust `perceptual-core` kernel.** `perceptual_radial_variance`
-      byte-parity with `_radial_variance_python` (same banker's-rounding nearest-
-      neighbour sampling the kernel already uses for the audio bins); extend the
-      golden-vector fixture from the reference. The comparison stays Python.
+- [x] **Slice 2 — Rust `perceptual-core` kernel + golden parity.** `radial.rs`
+      (`radial_variance`) reproduces `_radial_variance_python` **bit-for-bit** —
+      reuses the crate's align-corners `bilinear_resize` + banker's-rounding
+      `py_round` (now `pub(crate)`), and the golden-vector fixture carries the
+      profile as **hex bit patterns** (`gen_perceptual_golden.py::_f64_bits`) so the
+      parity oracle has zero decimal round-trip ambiguity. `tests/golden.rs`
+      `rust_reproduces_radial_fixture` asserts exact f64 equality; `cargo test` +
+      `clippy -D warnings` + `fmt` all green locally. The comparison stays Python.
+      **Lessons:** (1) store golden floats as hex bits, not JSON decimals — a
+      shortest-repr decimal drifts a ULP on parse and silently failed 4 entries;
+      (2) materialise the squared deviations before summing so no mul-add fuses.
 - [ ] **Slice 2b — PyO3 binding + loader gating + parity sweep.** Shim in
       `native/src/perceptual.rs`; `radial_variance` already dispatches via
       `native_enabled("perceptual")`. Parity test in the `native` lane.
