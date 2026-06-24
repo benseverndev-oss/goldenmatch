@@ -23,12 +23,8 @@ import copy
 import logging
 import math
 from itertools import combinations
-from typing import TYPE_CHECKING
 
 import polars as pl
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +43,8 @@ def _auto_configure_no_rerank(df: pl.DataFrame):
 
     try:
         config = auto_configure_df(df, confidence_required=False)
-    except Exception:
+    except Exception as exc:
+        logger.debug("auto_configure_df first attempt failed: %s", exc, exc_info=True)
         # Ultra-fallback: allow any config including RED
         config = auto_configure_df(df, confidence_required=False, allow_red_config=True)
 
@@ -67,11 +64,9 @@ def _run_config(df: pl.DataFrame, config) -> tuple[dict, list]:
 
     Uses MatchEngine._run_pipeline (same path as review_config).
     """
-    import copy as _copy  # noqa: PLC0415
-
     from goldenmatch.tui.engine import MatchEngine  # noqa: PLC0415
 
-    _config = _copy.deepcopy(config)
+    _config = copy.deepcopy(config)
     # Disable rerank to be safe
     try:
         for mk in _config.get_matchkeys():
@@ -233,6 +228,7 @@ def evaluate_dataset(
 
         # ── Step 4: Convergence ───────────────────────────────────────────────
         convergence_steps: list[tuple[str, float]] = []
+        applied_ids: set[str] = set()
         current_config = copy.deepcopy(baseline_config)
         current_f1 = baseline_f1
 
@@ -248,6 +244,11 @@ def evaluate_dataset(
 
             # Pick the top suggestion; measure its lift
             top = step_suggestions[0]
+            # Guard against cycling: if the kernel keeps emitting the same
+            # patch (e.g. an idempotent no-op), stop rather than burn steps.
+            if top.id in applied_ids:
+                break
+            applied_ids.add(top.id)
             try:
                 cfg_next = apply_suggestion(current_config, top)
                 clusters_next, scored_next = _run_config(df, cfg_next)
