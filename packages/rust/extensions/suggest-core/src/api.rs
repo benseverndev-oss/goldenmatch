@@ -7,6 +7,9 @@ use crate::diagnostics::{column_signals_from_batch, ClusterDiagnostics, ScoreDia
 use crate::rank::rank;
 use crate::rules::{negative_evidence_rule, scorer_swap_rule, threshold_rule};
 
+/// Bins for the score histogram feeding dip() detection.
+const HISTOGRAM_BINS: i64 = 24;
+
 /// Main entry point for the config-suggestion kernel.
 ///
 /// Accepts three Arrow `RecordBatch`es produced by a finished goldenmatch run:
@@ -46,7 +49,7 @@ pub fn suggest(
     // matchkey dominates; revisit when multi-matchkey configs are common.
     for mk in &config.matchkeys {
         if let Some(t) = mk.threshold {
-            let sd = ScoreDiagnostics::from_batch(scored_pairs, t, 24)?;
+            let sd = ScoreDiagnostics::from_batch(scored_pairs, t, HISTOGRAM_BINS)?;
             all.extend(threshold_rule(
                 &mk.name,
                 t,
@@ -78,6 +81,7 @@ pub fn suggest(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::diagnostics::ColumnSignal;
     use arrow::array::{BooleanArray, Float64Array, Int64Array, StringArray};
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
@@ -127,20 +131,10 @@ mod tests {
         .unwrap()
     }
 
-    /// Build a column_signals batch from parallel arrays of the 11 fields.
-    fn column_signals_batch(
-        fields: &[&str],
-        col_types: &[&str],
-        scorers: &[&str],
-        in_blocking: &[bool],
-        in_negative_evidence: &[bool],
-        identity_scores: &[f64],
-        corruption_scores: &[f64],
-        collision_rates: &[f64],
-        cardinality_ratios: &[f64],
-        null_rates: &[f64],
-        variant_rates: &[f64],
-    ) -> RecordBatch {
+    /// Build a column_signals batch by reading the fields off each `ColumnSignal`.
+    /// Taking `&[ColumnSignal]` (vs 11 positional slices) makes each call site read
+    /// what it means and removes the silent-transposition footgun.
+    fn column_signals_batch(rows: &[ColumnSignal]) -> RecordBatch {
         let schema = Arc::new(Schema::new(vec![
             Field::new("field", DataType::Utf8, false),
             Field::new("col_type", DataType::Utf8, false),
@@ -157,17 +151,39 @@ mod tests {
         RecordBatch::try_new(
             schema,
             vec![
-                Arc::new(StringArray::from(fields.to_vec())),
-                Arc::new(StringArray::from(col_types.to_vec())),
-                Arc::new(StringArray::from(scorers.to_vec())),
-                Arc::new(BooleanArray::from(in_blocking.to_vec())),
-                Arc::new(BooleanArray::from(in_negative_evidence.to_vec())),
-                Arc::new(Float64Array::from(identity_scores.to_vec())),
-                Arc::new(Float64Array::from(corruption_scores.to_vec())),
-                Arc::new(Float64Array::from(collision_rates.to_vec())),
-                Arc::new(Float64Array::from(cardinality_ratios.to_vec())),
-                Arc::new(Float64Array::from(null_rates.to_vec())),
-                Arc::new(Float64Array::from(variant_rates.to_vec())),
+                Arc::new(StringArray::from(
+                    rows.iter().map(|c| c.field.as_str()).collect::<Vec<_>>(),
+                )),
+                Arc::new(StringArray::from(
+                    rows.iter().map(|c| c.col_type.as_str()).collect::<Vec<_>>(),
+                )),
+                Arc::new(StringArray::from(
+                    rows.iter().map(|c| c.scorer.as_str()).collect::<Vec<_>>(),
+                )),
+                Arc::new(BooleanArray::from(
+                    rows.iter().map(|c| c.in_blocking).collect::<Vec<_>>(),
+                )),
+                Arc::new(BooleanArray::from(
+                    rows.iter().map(|c| c.in_negative_evidence).collect::<Vec<_>>(),
+                )),
+                Arc::new(Float64Array::from(
+                    rows.iter().map(|c| c.identity_score).collect::<Vec<_>>(),
+                )),
+                Arc::new(Float64Array::from(
+                    rows.iter().map(|c| c.corruption_score).collect::<Vec<_>>(),
+                )),
+                Arc::new(Float64Array::from(
+                    rows.iter().map(|c| c.collision_rate).collect::<Vec<_>>(),
+                )),
+                Arc::new(Float64Array::from(
+                    rows.iter().map(|c| c.cardinality_ratio).collect::<Vec<_>>(),
+                )),
+                Arc::new(Float64Array::from(
+                    rows.iter().map(|c| c.null_rate).collect::<Vec<_>>(),
+                )),
+                Arc::new(Float64Array::from(
+                    rows.iter().map(|c| c.variant_rate).collect::<Vec<_>>(),
+                )),
             ],
         )
         .unwrap()
@@ -183,19 +199,19 @@ mod tests {
     fn scorer_swap_is_top_when_no_threshold_signal() {
         let pairs = empty_scored_pairs();
         let clusters = empty_clusters();
-        let signals = column_signals_batch(
-            &["res_street_address"],
-            &["address"],
-            &["token_sort"],
-            &[false],
-            &[false],
-            &[0.0],  // identity_score
-            &[0.6],  // corruption_score >= 0.30 -> triggers swap
-            &[0.0],  // collision_rate
-            &[0.5],  // cardinality_ratio
-            &[0.0],  // null_rate
-            &[0.0],  // variant_rate
-        );
+        let signals = column_signals_batch(&[ColumnSignal {
+            field: "res_street_address".into(),
+            col_type: "address".into(),
+            scorer: "token_sort".into(),
+            in_blocking: false,
+            in_negative_evidence: false,
+            identity_score: 0.0,
+            corruption_score: 0.6, // >= 0.30 -> triggers swap
+            collision_rate: 0.0,
+            cardinality_ratio: 0.5,
+            null_rate: 0.0,
+            variant_rate: 0.0,
+        }]);
         let config_json = r#"{
             "matchkeys": [{
                 "name": "person",
@@ -245,38 +261,27 @@ mod tests {
 
         // Build column_signals RecordBatch from the JSON array in the fixture.
         let cs_rows = doc["column_signals"].as_array().expect("column_signals array");
-        let (
-            mut flds, mut ctypes, mut scorers, mut in_bl, mut in_ne,
-            mut id_sc, mut cor_sc, mut coll, mut card, mut null_r, mut var_r,
-        ) = (
-            vec![], vec![], vec![], vec![], vec![],
-            vec![], vec![], vec![], vec![], vec![], vec![],
-        );
-        for row in cs_rows {
-            flds.push(row["field"].as_str().unwrap().to_owned());
-            ctypes.push(row["col_type"].as_str().unwrap().to_owned());
-            scorers.push(row["scorer"].as_str().unwrap().to_owned());
-            in_bl.push(row["in_blocking"].as_bool().unwrap());
-            in_ne.push(row["in_negative_evidence"].as_bool().unwrap());
-            id_sc.push(row["identity_score"].as_f64().unwrap());
-            cor_sc.push(row["corruption_score"].as_f64().unwrap());
-            coll.push(row["collision_rate"].as_f64().unwrap());
-            card.push(row["cardinality_ratio"].as_f64().unwrap());
-            null_r.push(row["null_rate"].as_f64().unwrap());
-            var_r.push(row["variant_rate"].as_f64().unwrap());
-        }
+        let signals: Vec<ColumnSignal> = cs_rows
+            .iter()
+            .map(|row| ColumnSignal {
+                field: row["field"].as_str().unwrap().to_owned(),
+                col_type: row["col_type"].as_str().unwrap().to_owned(),
+                scorer: row["scorer"].as_str().unwrap().to_owned(),
+                in_blocking: row["in_blocking"].as_bool().unwrap(),
+                in_negative_evidence: row["in_negative_evidence"].as_bool().unwrap(),
+                identity_score: row["identity_score"].as_f64().unwrap(),
+                corruption_score: row["corruption_score"].as_f64().unwrap(),
+                collision_rate: row["collision_rate"].as_f64().unwrap(),
+                cardinality_ratio: row["cardinality_ratio"].as_f64().unwrap(),
+                null_rate: row["null_rate"].as_f64().unwrap(),
+                variant_rate: row["variant_rate"].as_f64().unwrap(),
+            })
+            .collect();
+        let signals_batch = column_signals_batch(&signals);
 
-        // Convert Vec<String> -> Vec<&str> for the batch builder.
-        let fld_refs: Vec<&str> = flds.iter().map(|s| s.as_str()).collect();
-        let ctype_refs: Vec<&str> = ctypes.iter().map(|s| s.as_str()).collect();
-        let scorer_refs: Vec<&str> = scorers.iter().map(|s| s.as_str()).collect();
-
-        let signals_batch = column_signals_batch(
-            &fld_refs, &ctype_refs, &scorer_refs,
-            &in_bl, &in_ne,
-            &id_sc, &cor_sc, &coll, &card, &null_r, &var_r,
-        );
-
+        // This golden scenario is scorer-swap only: it uses empty scored_pairs and
+        // clusters by design (no threshold/cluster signal), so the fixture carries
+        // no pairs/clusters arrays -- the batches are built empty unconditionally.
         let pairs = empty_scored_pairs();
         let clusters = empty_clusters();
 
