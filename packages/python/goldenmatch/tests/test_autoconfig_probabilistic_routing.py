@@ -9,6 +9,7 @@ does BETTER deterministically (its email exact matchkey is a strong identity cla
 """
 import goldenmatch
 import polars as pl
+import pytest
 from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
 from goldenmatch.core.autoconfig import (
     ColumnProfile,
@@ -17,16 +18,16 @@ from goldenmatch.core.autoconfig import (
 )
 
 
-def _prof(name, col_type, card=0.5):
+def _prof(name: str, col_type: str, card: float = 0.5):
     return ColumnProfile(name=name, dtype="Utf8", col_type=col_type,
                          confidence=0.9, null_rate=0.0, cardinality_ratio=card, avg_len=10)
 
 
-def _exact(field):
+def _exact(field: str):
     return MatchkeyConfig(name=f"exact_{field}", type="exact", fields=[MatchkeyField(field=field)])
 
 
-def _weighted(*fields):
+def _weighted(*fields: str):
     return MatchkeyConfig(name="fuzzy", type="weighted", threshold=0.8,
                           fields=[MatchkeyField(field=f, scorer="jaro_winkler", weight=1.0)
                                   for f in fields])
@@ -77,19 +78,19 @@ def _bio_df():
     return pl.DataFrame(rows)
 
 
-def test_routing_off_is_deterministic(monkeypatch):
+def test_routing_off_is_deterministic(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC", raising=False)
     monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
     cfg = auto_configure_df(_bio_df())
-    assert all(mk.type != "probabilistic" for mk in cfg.matchkeys)
+    assert all(mk.type != "probabilistic" for mk in (cfg.matchkeys or []))
 
 
-def test_routing_on_emits_probabilistic(monkeypatch):
+def test_routing_on_emits_probabilistic(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC", "1")
     monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
     df = _bio_df()
     cfg = auto_configure_df(df)
-    assert any(mk.type == "probabilistic" for mk in cfg.matchkeys)
+    assert any(mk.type == "probabilistic" for mk in (cfg.matchkeys or []))
     # the full default path runs without raising + produces clusters
     r = goldenmatch.dedupe_df(df)
     assert len(r.clusters) >= 1

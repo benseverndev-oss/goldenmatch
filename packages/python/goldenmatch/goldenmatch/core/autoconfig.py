@@ -695,7 +695,8 @@ def _is_probabilistic_shape(
     Keys on the EMITTED matchkeys (not raw profiles), so a ceiling-excluded id column
     (a perfectly-unique surrogate) correctly counts as 'no surviving strong key'."""
     col_type = {p.name: p.col_type for p in profiles}
-    exact_fields = [f.field for mk in matchkeys if mk.type == "exact" for f in mk.fields]
+    # f.field is str | None (embedding fields have None); drop None for the lookup.
+    exact_fields = [f.field for mk in matchkeys if mk.type == "exact" for f in mk.fields if f.field]
     has_strong_id = any(col_type.get(fld) in _STRONG_EXACT_TYPES for fld in exact_fields)
     fuzzy_field_count = sum(len(mk.fields) for mk in matchkeys if mk.type == "weighted")
     return (not has_strong_id) and fuzzy_field_count >= 2
