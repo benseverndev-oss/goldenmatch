@@ -546,7 +546,9 @@ Add to your Claude Desktop config (`claude_desktop_config.json`):
 }
 ```
 
-**Available tools:**
+**Available tools (19 total):**
+
+9 core tools:
 
 | Tool | Description |
 |------|-------------|
@@ -556,6 +558,13 @@ Add to your Claude Desktop config (`claude_desktop_config.json`):
 | `health_score` | Quick A-F grade for a data file |
 | `get_column_detail` | Deep-dive into a specific column |
 | `list_checks` | List all available profiler checks |
+| `list_domains` | List installed domain rule packs |
+| `get_domain_info` | Inspect a domain rule pack |
+| `install_domain` | Install a domain rule pack |
+
+Plus 10 agent tools for AI-driven workflows: `analyze_data`, `auto_configure`,
+`explain_finding`, `explain_column`, `review_queue`, `approve_reject`,
+`compare_domains`, `suggest_fix`, `pipeline_handoff`, `review_stats`.
 
 ## Remote MCP Server
 

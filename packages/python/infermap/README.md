@@ -140,7 +140,7 @@ export async function POST(req: Request) {
 
 ## How it works
 
-Each field pair runs through a pipeline of **7 scorers**. Each scorer returns a score in `[0.0, 1.0]` or abstains (`None`/`null`). The engine combines scores via weighted average (requiring at least 2 contributors), then uses the **Hungarian algorithm** for optimal one-to-one assignment.
+Each field pair runs through a pipeline of **6 built-in scorers** (plus a pluggable `LLMScorer`, stubbed by default). Each scorer returns a score in `[0.0, 1.0]` or abstains (`None`/`null`). The engine combines scores via weighted average (requiring at least 2 contributors), then uses the **Hungarian algorithm** for optimal one-to-one assignment.
 
 | Scorer | Weight | What it detects |
 |---|---|---|
@@ -160,7 +160,7 @@ The engine also applies **common-prefix canonicalization** — automatically str
 
 | | Python | TypeScript |
 |---|---|---|
-| 7 built-in scorers | ✅ | ✅ |
+| 6 built-in scorers (+ pluggable LLM) | ✅ | ✅ |
 | Hungarian assignment | ✅ (scipy) | ✅ (vendored) |
 | Custom scorers | `@infermap.scorer` | `defineScorer()` |
 | Domain dictionaries | ✅ (YAML) | ✅ (inlined) |
@@ -174,6 +174,7 @@ The engine also applies **common-prefix canonicalization** — automatically str
 | Saved mapping format | YAML | JSON |
 | CLI | ✅ (Typer) | ✅ (`node:util`) |
 | Apply to DataFrame | ✅ | ❌ (CSV rewrite via CLI) |
+| GoldenMatch identity feeder | ✅ (`write_aliases_from_mapping` → `AliasWriteResult`) | ❌ |
 | Edge-runtime compatible | ❌ | ✅ |
 | Zero runtime deps | n/a | ✅ |
 | Accuracy benchmark | ✅ (162 cases, F1 0.84) | ✅ (parity within 0.0005) |
