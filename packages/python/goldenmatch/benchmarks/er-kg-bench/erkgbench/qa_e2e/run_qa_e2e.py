@@ -97,6 +97,14 @@ def _build_engine(name: str):
             falkordb_host=os.environ.get("FALKORDB_HOST", "localhost"),
             falkordb_port=int(os.environ.get("FALKORDB_PORT", "6379")),
         )
+    if name == "text_rag":
+        # The no-KG control: naive paragraph-retrieval RAG on the SAME models the KG
+        # engines use, so the gap is exactly what the graph buys (or costs).
+        from .engines.text_rag import TextRAGQAEngine
+
+        return TextRAGQAEngine(
+            model="gpt-4o-mini", embedding_model="text-embedding-3-large"
+        )
     raise SystemExit(f"unknown engine: {name}")
 
 
