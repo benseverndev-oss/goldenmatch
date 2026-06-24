@@ -272,8 +272,6 @@ def _build_scorecard(
     Floats are rounded to 6 decimal places so byte-stable re-runs produce
     the same JSON diff.
     """
-    import json  # noqa: PLC0415
-
     _PRECISION = 6
 
     def _round(v):
@@ -360,17 +358,33 @@ def _cmd_gate(
 ) -> int:
     """Compare current oracle results against the blessed baseline.
 
-    Exits 1 if any dataset regresses beyond tolerance on:
-      - rank_corr          (drops > 0.05)
-      - suggester_prec     (drops > 0.05)
-      - convergence_final_f1 (drops > 0.02)
+    Exits 1 if ANY of:
+      - zero datasets actually evaluated this run (gate certifies nothing)
+      - a blessed dataset is MISSING from the current run (the dataset no
+        longer evaluates — a regression that hides as "it didn't run")
+      - any metric regressed beyond tolerance:
+          rank_corr            (drops > 0.05)
+          suggester_prec       (drops > 0.05)
+          convergence_final_f1 (drops > 0.02)
 
-    Datasets absent from the baseline are reported as NEW (informational).
-    Datasets in the baseline but absent from the current run are reported
-    as MISSING (informational, not a gate failure — CI skips real datasets).
+    Datasets absent from the baseline are reported as NEW (informational —
+    a brand-new dataset has no baseline to regress against).
     """
     baseline = _loads_baseline()
     base_datasets = baseline.get("datasets", {})
+
+    # A gate that evaluated nothing must NOT be green: it would mask real
+    # regressions. `results` holds only datasets that produced real metrics
+    # this run (skipped/errored ones land in `skipped`).
+    if not results:
+        print("suggest_quality gate")
+        print(f"  native={native_version}  sha={git_sha[:12] if git_sha != 'unknown' else 'unknown'}")
+        print(f"  baseline={_BASELINE}")
+        print()
+        print("  ERROR: gate evaluated 0 datasets; cannot certify.")
+        if skipped:
+            print("  skipped: " + ", ".join(f"{k} ({v})" for k, v in skipped.items()))
+        return 1
 
     _COL_W = 32
     _MET_W = 22
@@ -422,7 +436,7 @@ def _cmd_gate(
                 f"{base:+.4f}", f"{cur:+.4f}", f"{delta:+.4f}", status,
             ))
 
-    # Datasets in baseline but absent from current run
+    # Datasets in baseline but absent from current run -> gate FAIL.
     for name in base_datasets:
         if name not in results:
             rows.append((name, "*", "present", "absent", "  n/a", "MISSING"))
@@ -435,7 +449,7 @@ def _cmd_gate(
     print(header)
     print(sep)
     for ds, met, base_s, cur_s, delta_s, status in rows:
-        mark = {"FAIL": "x", "OK": ".", "NEW": "+", "MISSING": "~"}.get(status, "?")
+        mark = {"FAIL": "x", "OK": ".", "NEW": "+", "MISSING": "x"}.get(status, "?")
         print(
             f"  {ds:<{_COL_W}} {met:<{_MET_W}} "
             f"{base_s:>{_VAL_W}}  {cur_s:>{_VAL_W}}  {delta_s:>8}  {mark} ({status})"
@@ -449,7 +463,10 @@ def _cmd_gate(
     n_new = sum(1 for *_, s in rows if s == "NEW")
     n_missing = sum(1 for *_, s in rows if s == "MISSING")
 
-    verdict = "FAIL" if n_fail > 0 else "PASS"
+    # A blessed dataset that no longer evaluates is a regression too: a real
+    # break can surface as "the dataset stopped running", not just a metric
+    # drop. NEW datasets stay informational (no baseline to regress against).
+    verdict = "FAIL" if (n_fail > 0 or n_missing > 0) else "PASS"
     print(
         f"  verdict: {verdict}  "
         f"({n_ok} ok, {n_fail} fail, {n_new} new, {n_missing} missing, "
