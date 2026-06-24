@@ -19,12 +19,24 @@ def _format_subgraph(view: dict) -> str:
     answer was IN the subgraph but went unread). Name-keyed edges spell the chain out
     directly (``Acme -[made]-> Rocket``), so following a path is a lexical walk, not a
     join."""
-    by_id = {e["entity_id"]: e["canonical_name"] for e in view["entities"]}
+    by_id = {e["entity_id"]: e for e in view["entities"]}
 
     def _name(i):
-        return by_id.get(i, str(i))
+        e = by_id.get(i)
+        if e is None:
+            return str(i)
+        nm = e["canonical_name"]
+        # Quote literal-value leaves so a chain reads `X -[born on]-> "1929"` and the
+        # model can tell a value answer from an entity answer.
+        return f'"{nm}"' if str(e.get("typ", "")).startswith("literal:") else nm
 
-    ents = "; ".join(f"{e['canonical_name']} ({e['typ']})" for e in view["entities"])
+    def _label(e):
+        typ = str(e.get("typ", ""))
+        if typ.startswith("literal:"):
+            return f'"{e["canonical_name"]}" ({typ.split(":", 1)[1]} value)'
+        return f"{e['canonical_name']} ({typ})"
+
+    ents = "; ".join(_label(e) for e in view["entities"])
     edges = "\n".join(
         f"  {_name(e['subj'])} -[{e['predicate']}]-> {_name(e['obj'])}"
         for e in view["edges"]
@@ -32,7 +44,11 @@ def _format_subgraph(view: dict) -> str:
     return f"Entities: {ents}\nRelationships (subject -[relation]-> object):\n{edges}"
 
 
-_LOCAL_PROMPT = (
+# The prompt is shared except for the final-answer clause, which is gated on the
+# literal-attributes flag so the entity-only path (flag off) stays byte-identical
+# to the #1227 prompt -- a relaxed "entity OR literal" instruction must not perturb
+# the measured entity-only baseline.
+_LOCAL_HEAD = (
     "Answer the question using ONLY the knowledge subgraph below (entities joined by "
     "directed, labelled relationships).\n"
     "These questions are usually MULTI-HOP: the answer is reached by chaining several "
@@ -54,13 +70,35 @@ _LOCAL_PROMPT = (
     "end of the answering edge from the entity you carried in. Never answer with the "
     "entity you already held going into the final hop.\n"
     "Anchor entities: {seeds}\n"
+)
+_ANSWER_ENTITY = (
     "Your final answer is ALWAYS a single entity that appears in the Entities list -- "
     "output its EXACT name, nothing else, on the last line prefixed 'Answer: '. Commit "
     "to the single most plausible entity even if an intermediate hop is uncertain; do "
     "NOT answer with a description, a phrase, or 'cannot answer' unless NOTHING in the "
     "Entities list is even loosely related. Show each hop briefly first.\n"
-    "Question: {q}\n{sub}"
 )
+_ANSWER_LITERAL = (
+    "Your final answer is a single item from the Entities list -- usually a named "
+    "entity, but it MAY be a literal VALUE leaf (a date, quantity, or amount, shown in "
+    "quotes) when the question asks 'when', 'how much', or 'how many'. Output its EXACT "
+    "text without the quotes, nothing else, on the last line prefixed 'Answer: '. "
+    "Commit to the single most plausible item even if an intermediate hop is uncertain; "
+    "do NOT answer with a free-form description or 'cannot answer' unless NOTHING in the "
+    "Entities list is even loosely related. Show each hop briefly first.\n"
+)
+_LOCAL_TAIL = "Question: {q}\n{sub}"
+
+_LOCAL_PROMPT = _LOCAL_HEAD + _ANSWER_ENTITY + _LOCAL_TAIL
+_LOCAL_PROMPT_LITERALS = _LOCAL_HEAD + _ANSWER_LITERAL + _LOCAL_TAIL
+
+
+def _literals_enabled() -> bool:
+    """Mirror of ingest._literal_attrs_enabled (kept local to avoid importing the
+    build module into synthesis)."""
+    import os
+
+    return os.environ.get("GOLDENGRAPH_LITERAL_ATTRS", "0") not in ("0", "false", "")
 _MAP_PROMPT = "Summarize this community as it bears on the question.\nQuestion: {q}\n{sub}"
 _REDUCE_PROMPT = (
     "Answer the question by combining these community summaries.\n"
@@ -108,9 +146,10 @@ def synthesize_local(
     seeds = ", ".join(dict.fromkeys(s for s in (seed_names or []) if s)) or (
         "(none identified -- choose the most relevant entities yourself)"
     )
+    prompt = _LOCAL_PROMPT_LITERALS if _literals_enabled() else _LOCAL_PROMPT
     return _extract_answer(
         llm.complete(
-            _LOCAL_PROMPT.format(q=query, seeds=seeds, sub=_format_subgraph(subgraph))
+            prompt.format(q=query, seeds=seeds, sub=_format_subgraph(subgraph))
         )
     )
 
