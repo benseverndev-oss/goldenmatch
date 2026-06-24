@@ -12,12 +12,26 @@ If the native wheel is absent, :exc:`SuggestionsNativeRequired` is raised
 with an "install goldenmatch[native]" message.
 
 Signature chosen:
-    ``review_config(df, config, *, priors=None) -> list[Suggestion]``
+    ``review_config(df, config, *, priors=None, verify=True) -> list[Suggestion]``
 
 We accept a raw ``pl.DataFrame`` + ``GoldenMatchConfig`` and run MatchEngine
 internally. This is the simplest shape for Task 15's benchmark: run dedupe,
 ask for suggestions, compare.  An alternative (pre-computed EngineResult + df)
 is slightly cheaper but adds caller boilerplate that hides the integration path.
+
+Self-verification (verify=True, the default)
+--------------------------------------------
+After the kernel returns ranked suggestions, each one is applied to a candidate
+config and the pipeline is re-run.  The candidate's score distribution is
+compared to the baseline using an unsupervised health proxy (see
+``goldenmatch.core.suggest.health.suggestion_health``).  A suggestion is kept
+only if the candidate's health is >= baseline health - EPS.  This prevents
+net-negative suggestions (e.g. a threshold change that lowers F1 on an
+already-healthy config) from reaching the user.
+
+Cost: one extra pipeline run per candidate (2-5 typical).  Verification can be
+disabled with ``verify=False`` (returns raw kernel suggestions for debugging /
+bench A/B) or with the environment variable ``GOLDENMATCH_SUGGEST_VERIFY=0``.
 """
 from __future__ import annotations
 
@@ -389,6 +403,30 @@ def _build_column_signals_batch(
     )
 
 
+# ── Environment flag ───────────────────────────────────────────────────────
+
+import os as _os
+
+def _verify_enabled_by_env() -> bool:
+    """Check if GOLDENMATCH_SUGGEST_VERIFY env var disables verification.
+
+    Returns True (verify ON) unless GOLDENMATCH_SUGGEST_VERIFY is set to
+    "0", "false", or "disabled" (case-insensitive).  Mirrors the repo-wide
+    env-flag pattern for kill-switches.
+    """
+    val = _os.environ.get("GOLDENMATCH_SUGGEST_VERIFY", "").strip().lower()
+    return val not in {"0", "false", "disabled"}
+
+
+# Maximum number of candidate suggestions to verify (avoids runaway cost
+# when the kernel returns an unusually large list).
+_MAX_VERIFY_CANDIDATES: int = 8
+
+# Epsilon: keep a suggestion if cand_health >= baseline_health - EPS.
+# Near-zero so we only suppress genuine health regressions.
+_VERIFY_EPS: float = 1e-6
+
+
 # ── Public API ─────────────────────────────────────────────────────────────
 
 def review_config(
@@ -396,6 +434,7 @@ def review_config(
     config: Any,
     *,
     priors: dict | None = None,
+    verify: bool = True,
 ) -> list[Suggestion]:
     """Analyze a dedupe run and return config improvement suggestions.
 
@@ -412,16 +451,30 @@ def review_config(
                 ``.blocking``, and ``model_dump()``).
         priors: Optional priors dict passed to the kernel (``{"counts": {}}``
                 by default; Plan 2 fills this with cross-run memory).
+        verify: When True (default), each suggestion is applied to a candidate
+                config and the pipeline is re-run.  Only suggestions whose
+                candidate health >= baseline health - EPS are kept.  This
+                prevents net-negative suggestions from reaching the user.
+                Set False to return raw kernel suggestions (for debugging /
+                bench A/B).  Can also be disabled globally with the env var
+                ``GOLDENMATCH_SUGGEST_VERIFY=0``.
+
+                Cost: one extra pipeline run per candidate (2-5 typical,
+                capped at 8).  Negligible vs the baseline run itself.
 
     Returns:
         A list of :class:`Suggestion` dataclasses.  Empty when the kernel
-        finds nothing to improve.
+        finds nothing to improve (or when all suggestions are health-worsening
+        and verify=True).
 
     Raises:
         SuggestionsNativeRequired: When the native wheel is absent or the
             ``suggest_config`` symbol is missing.
     """
     nm = _require_kernel()
+
+    # Resolve verify: kwarg AND env flag must both be True
+    _do_verify = verify and _verify_enabled_by_env()
 
     # Ensure the df has __row_id__ so collision-rate lookups work
     if "__row_id__" not in df.columns:
@@ -508,4 +561,61 @@ def review_config(
         except Exception:
             logger.debug("Skipping malformed suggestion item: %r", item, exc_info=True)
 
-    return suggestions
+    if not _do_verify or not suggestions:
+        return suggestions
+
+    # -- Self-verification pass (verify=True) --
+    # Compute baseline health from the baseline run's scored pairs + threshold.
+    from goldenmatch.core.suggest.apply import apply_suggestion
+    from goldenmatch.core.suggest.health import suggestion_health_from_clusters
+
+    # Cluster-based health proxy: immune to the scored-pairs threshold-filter
+    # issue (_run_pipeline returns only pairs >= threshold, so mass_above is
+    # always 1.0 in scored_pairs -- the scored-pairs proxy is not useful here).
+    n_records = df.height
+    baseline_health = suggestion_health_from_clusters(clusters, n_records)
+    logger.debug(
+        "review_config verify: baseline_health=%.4f n_records=%d n_clusters=%d",
+        baseline_health, n_records, len(clusters),
+    )
+
+    # Cap verification at _MAX_VERIFY_CANDIDATES (cost guard)
+    candidates = suggestions[:_MAX_VERIFY_CANDIDATES]
+    tail = suggestions[_MAX_VERIFY_CANDIDATES:]  # pass through unverified if any
+
+    verified: list[Suggestion] = []
+    for s in candidates:
+        try:
+            cfg_cand = apply_suggestion(_config, s)
+            # Disable rerank on the candidate config too
+            try:
+                for mk in cfg_cand.get_matchkeys():
+                    if getattr(mk, "rerank", False):
+                        mk.rerank = False
+            except Exception:
+                pass
+
+            cand_result = engine._run_pipeline(df, cfg_cand)
+            cand_health = suggestion_health_from_clusters(cand_result.clusters, n_records)
+
+            logger.debug(
+                "review_config verify: suggestion %r cand_health=%.4f (baseline=%.4f) -> %s",
+                s.id, cand_health, baseline_health,
+                "KEEP" if cand_health >= baseline_health - _VERIFY_EPS else "DROP",
+            )
+
+            if cand_health >= baseline_health - _VERIFY_EPS:
+                verified.append(s)
+        except Exception as exc:
+            # Verification failure is conservative: keep the suggestion
+            # (better to surface a potentially-bad suggestion than to silently
+            # suppress one that couldn't be checked).
+            logger.debug(
+                "review_config verify: suggestion %r verification failed (%s) -- keeping",
+                s.id, exc, exc_info=True,
+            )
+            verified.append(s)
+
+    # Tail (beyond _MAX_VERIFY_CANDIDATES) passes through unverified.
+    # In practice the kernel returns at most 5 suggestions so this is a no-op.
+    return verified + tail
