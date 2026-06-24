@@ -1,6 +1,6 @@
 {
-  "version": "2.0.0",
-  "commit": "81a6000a",
-  "date": "2026-06-14",
+  "version": "2.3.0",
+  "commit": "03ce2e85",
+  "date": "2026-06-24",
   "note": "Set by the rollout-docs-sweep skill when a docs sweep completes for a release. The check_docs_sweep.py gate asserts version == current packages/python/goldenmatch version; bump this marker at the END of a docs sweep."
 }

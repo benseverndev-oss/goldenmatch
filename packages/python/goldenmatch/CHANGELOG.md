@@ -6,6 +6,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-06-24
+
+<!-- README-callout
+**Auto-enabled semantic blocking, now default-on** — text-heavy data automatically routes to SimHash-over-embeddings blocking when an embedder is reachable (a byte-identical no-op otherwise). Plus pluggable pgvector / DuckDB-HNSW vector-index backends and opt-in Fellegi-Sunter routing for no-strong-identifier datasets (`GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC=1`).
+-->
+
 ### Changed
 - **Auto-enabled semantic blocking is now default-on, native-sourced (#1090, epic #1087).**
   Text-heavy data (a long free-text column the lexical/structured keys under-cover)
