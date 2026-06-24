@@ -1,0 +1,184 @@
+{
+  "headline_live": 0.0,
+  "headline_raw": -2.259227,
+  "meta": {
+    "git_sha": "fdd3d8d95b7251b7154ad4dd906960d034312d53",
+    "n_built_ok": 4,
+    "n_ok": 8,
+    "n_records": 16,
+    "native_version": "0.1.5"
+  },
+  "pairs": {
+    "ncvr_synthetic/bad_freetext_scorer": {
+      "builds_on_existing_rule": true,
+      "expected_rule": "swap_scorer",
+      "expected_rule_fired_live": false,
+      "expected_rule_fired_raw": false,
+      "recovery_pct_live": 0.0,
+      "recovery_pct_raw": -8.345059,
+      "status": "ok"
+    },
+    "ncvr_synthetic/dropped_blocking_pass": {
+      "builds_on_existing_rule": false,
+      "expected_rule": null,
+      "expected_rule_fired_live": null,
+      "expected_rule_fired_raw": null,
+      "recovery_pct_live": null,
+      "recovery_pct_raw": null,
+      "status": "n/a"
+    },
+    "ncvr_synthetic/flattened_weights": {
+      "builds_on_existing_rule": false,
+      "expected_rule": "adjust_field_weight",
+      "expected_rule_fired_live": false,
+      "expected_rule_fired_raw": false,
+      "recovery_pct_live": 0.0,
+      "recovery_pct_raw": -8.788472,
+      "status": "ok"
+    },
+    "ncvr_synthetic/missing_negative_evidence": {
+      "builds_on_existing_rule": true,
+      "expected_rule": null,
+      "expected_rule_fired_live": null,
+      "expected_rule_fired_raw": null,
+      "recovery_pct_live": null,
+      "recovery_pct_raw": null,
+      "status": "n/a"
+    },
+    "ncvr_synthetic/naive_single_fuzzy": {
+      "builds_on_existing_rule": false,
+      "expected_rule": "",
+      "expected_rule_fired_live": false,
+      "expected_rule_fired_raw": false,
+      "recovery_pct_live": 0.0,
+      "recovery_pct_raw": 0.0,
+      "status": "ok"
+    },
+    "ncvr_synthetic/skewed_weight": {
+      "builds_on_existing_rule": false,
+      "expected_rule": "adjust_field_weight",
+      "expected_rule_fired_live": false,
+      "expected_rule_fired_raw": false,
+      "recovery_pct_live": 0.0,
+      "recovery_pct_raw": -1.711379,
+      "status": "ok"
+    },
+    "ncvr_synthetic/threshold_too_high": {
+      "builds_on_existing_rule": true,
+      "expected_rule": "lower_threshold",
+      "expected_rule_fired_live": false,
+      "expected_rule_fired_raw": false,
+      "recovery_pct_live": 0.0,
+      "recovery_pct_raw": -2.504262,
+      "status": "ok"
+    },
+    "ncvr_synthetic/threshold_too_low": {
+      "builds_on_existing_rule": true,
+      "expected_rule": "raise_threshold",
+      "expected_rule_fired_live": false,
+      "expected_rule_fired_raw": true,
+      "recovery_pct_live": 0.0,
+      "recovery_pct_raw": 0.723139,
+      "status": "ok"
+    },
+    "synthetic/bad_freetext_scorer": {
+      "builds_on_existing_rule": true,
+      "expected_rule": null,
+      "expected_rule_fired_live": null,
+      "expected_rule_fired_raw": null,
+      "recovery_pct_live": null,
+      "recovery_pct_raw": null,
+      "status": "no_damage"
+    },
+    "synthetic/dropped_blocking_pass": {
+      "builds_on_existing_rule": false,
+      "expected_rule": null,
+      "expected_rule_fired_live": null,
+      "expected_rule_fired_raw": null,
+      "recovery_pct_live": null,
+      "recovery_pct_raw": null,
+      "status": "n/a"
+    },
+    "synthetic/flattened_weights": {
+      "builds_on_existing_rule": false,
+      "expected_rule": null,
+      "expected_rule_fired_live": null,
+      "expected_rule_fired_raw": null,
+      "recovery_pct_live": null,
+      "recovery_pct_raw": null,
+      "status": "n/a"
+    },
+    "synthetic/missing_negative_evidence": {
+      "builds_on_existing_rule": true,
+      "expected_rule": null,
+      "expected_rule_fired_live": null,
+      "expected_rule_fired_raw": null,
+      "recovery_pct_live": null,
+      "recovery_pct_raw": null,
+      "status": "no_damage"
+    },
+    "synthetic/naive_single_fuzzy": {
+      "builds_on_existing_rule": false,
+      "expected_rule": null,
+      "expected_rule_fired_live": null,
+      "expected_rule_fired_raw": null,
+      "recovery_pct_live": null,
+      "recovery_pct_raw": null,
+      "status": "no_damage"
+    },
+    "synthetic/skewed_weight": {
+      "builds_on_existing_rule": false,
+      "expected_rule": "adjust_field_weight",
+      "expected_rule_fired_live": false,
+      "expected_rule_fired_raw": false,
+      "recovery_pct_live": 0.0,
+      "recovery_pct_raw": 0.192998,
+      "status": "ok"
+    },
+    "synthetic/threshold_too_high": {
+      "builds_on_existing_rule": true,
+      "expected_rule": null,
+      "expected_rule_fired_live": null,
+      "expected_rule_fired_raw": null,
+      "recovery_pct_live": null,
+      "recovery_pct_raw": null,
+      "status": "no_damage"
+    },
+    "synthetic/threshold_too_low": {
+      "builds_on_existing_rule": true,
+      "expected_rule": "raise_threshold",
+      "expected_rule_fired_live": false,
+      "expected_rule_fired_raw": true,
+      "recovery_pct_live": 0.0,
+      "recovery_pct_raw": 1.089273,
+      "status": "ok"
+    }
+  },
+  "rule_rollup": {
+    "(none)": {
+      "mean_recovery_pct_live": 0.0,
+      "mean_recovery_pct_raw": 0.0,
+      "n_ok": 1
+    },
+    "adjust_field_weight": {
+      "mean_recovery_pct_live": 0.0,
+      "mean_recovery_pct_raw": -3.435618,
+      "n_ok": 3
+    },
+    "lower_threshold": {
+      "mean_recovery_pct_live": 0.0,
+      "mean_recovery_pct_raw": -2.504262,
+      "n_ok": 1
+    },
+    "raise_threshold": {
+      "mean_recovery_pct_live": 0.0,
+      "mean_recovery_pct_raw": 0.906206,
+      "n_ok": 2
+    },
+    "swap_scorer": {
+      "mean_recovery_pct_live": 0.0,
+      "mean_recovery_pct_raw": -8.345059,
+      "n_ok": 1
+    }
+  }
+}
