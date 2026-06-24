@@ -1,10 +1,14 @@
 use crate::contract::*;
-use crate::diagnostics::ScoreDiagnostics;
+use crate::diagnostics::{ColumnSignal, ScoreDiagnostics};
 
 const EVERYTHING_MATCHES: f64 = 0.90; // mirrors controller precision_collapse_floor
 const RECALL_RISK_BAND: f64 = 0.20; // fraction just-below to call recall risk
 const DIP_MIN_GAP: f64 = 0.05; // min |dip - threshold| before the dip suggestion fires
 const RECALL_STEP_DOWN: f64 = 0.05; // fixed lowering step for the recall-risk suggestion
+
+const SWAP_CORRUPTION_MIN: f64 = 0.30; // corruption_score at/above which token_sort is noise-fragile
+const SWAP_VARIANT_MIN: f64 = 0.02; // fraction of fuzzy-variant rows that also triggers the swap
+const SWAP_TARGET_SCORER: &str = "jaro_winkler";
 
 /// Returns config suggestions for a single matchkey's threshold.
 ///
@@ -110,6 +114,59 @@ pub fn threshold_rule(
     out
 }
 
+/// Returns scorer-swap suggestions for each column signal in a matchkey.
+///
+/// Fires when a free-text/name/address column is still scored by `token_sort`
+/// but carries corruption or variant-rate signal above the threshold.  `token_sort`
+/// is robust to word reordering but fragile to character-level noise; `jaro_winkler`
+/// handles the noise better.  Mirrors the #662 noise-aware auto-config behavior.
+pub fn scorer_swap_rule(matchkey: &str, signals: &[ColumnSignal]) -> Vec<Suggestion> {
+    let mut out = Vec::new();
+    for c in signals {
+        let is_free_text = matches!(c.col_type.as_str(), "address" | "string" | "name");
+        let is_token_sort = c.scorer == "token_sort";
+        let is_noisy = c.corruption_score >= SWAP_CORRUPTION_MIN
+            || c.variant_rate >= SWAP_VARIANT_MIN;
+        if !is_free_text || !is_token_sort || !is_noisy {
+            continue;
+        }
+        let trigger = if c.corruption_score >= SWAP_CORRUPTION_MIN {
+            format!(
+                "corruption_score {:.0}%",
+                c.corruption_score * 100.0
+            )
+        } else {
+            format!("variant_rate {:.0}%", c.variant_rate * 100.0)
+        };
+        out.push(Suggestion {
+            id: format!("swap:{}", c.field),
+            kind: SuggestionKind::SwapScorer,
+            target: c.field.clone(),
+            current_value: "token_sort".into(),
+            proposed_value: SWAP_TARGET_SCORER.into(),
+            rationale: format!(
+                "`{}` has {} signal, but `token_sort` is robust to word reordering \
+                 while fragile to character noise. Switching to `jaro_winkler` will score \
+                 the corrupted values better.",
+                c.field, trigger
+            ),
+            predicted_effect: PredictedEffect::PrecisionUp,
+            confidence: 0.65,
+            patch: ConfigPatch::SetScorer {
+                matchkey: matchkey.into(),
+                field: c.field.clone(),
+                scorer: SWAP_TARGET_SCORER.into(),
+            },
+            evidence: serde_json::json!({
+                "corruption_score": c.corruption_score,
+                "variant_rate": c.variant_rate,
+                "col_type": c.col_type
+            }),
+        });
+    }
+    out
+}
+
 fn round2(x: f64) -> f64 {
     (x * 100.0).round() / 100.0
 }
@@ -117,7 +174,7 @@ fn round2(x: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::diagnostics::ScoreDiagnostics;
+    use crate::diagnostics::{ColumnSignal, ScoreDiagnostics};
 
     fn sd(mass_above: f64, mass_just_below: f64, dip: Option<f64>) -> ScoreDiagnostics {
         // construct directly for unit isolation
@@ -166,5 +223,74 @@ mod tests {
         // mass_above 0.5 (< 0.90), mass_just_below 0.05 (< 0.20), no dip
         let out = threshold_rule("name", 0.80, &sd(0.50, 0.05, None), 0, 0);
         assert!(out.is_empty());
+    }
+
+    // ---------------------------------------------------------------------------
+    // scorer_swap_rule helpers + tests
+    // ---------------------------------------------------------------------------
+
+    /// Build a ColumnSignal with sane defaults; override the fields under test.
+    fn cs(
+        field: &str,
+        col_type: &str,
+        scorer: &str,
+        corruption_score: f64,
+        variant_rate: f64,
+    ) -> ColumnSignal {
+        ColumnSignal {
+            field: field.into(),
+            col_type: col_type.into(),
+            scorer: scorer.into(),
+            in_blocking: false,
+            in_negative_evidence: false,
+            identity_score: 0.5,
+            corruption_score,
+            collision_rate: 0.0,
+            cardinality_ratio: 0.5,
+            null_rate: 0.0,
+            variant_rate,
+        }
+    }
+
+    #[test]
+    fn swaps_token_sort_on_corrupted_address() {
+        // address + token_sort + corruption_score 0.5 (>= 0.30) -> one SwapScorer suggestion
+        let signals = vec![cs("res_street_address", "address", "token_sort", 0.5, 0.0)];
+        let out = scorer_swap_rule("person", &signals);
+        assert_eq!(out.len(), 1, "expected exactly one suggestion");
+        let s = &out[0];
+        assert_eq!(s.kind, SuggestionKind::SwapScorer);
+        assert_eq!(s.id, "swap:res_street_address");
+        assert_eq!(s.current_value, "token_sort");
+        assert_eq!(s.proposed_value, "jaro_winkler");
+        assert!(
+            matches!(&s.patch, ConfigPatch::SetScorer { matchkey, field, scorer }
+                if matchkey == "person" && field == "res_street_address" && scorer == "jaro_winkler")
+        );
+    }
+
+    #[test]
+    fn swaps_on_high_variant_even_if_low_corruption() {
+        // name + token_sort + variant_rate 0.05 (>= 0.02), corruption 0.0 -> fires
+        let signals = vec![cs("given_name", "name", "token_sort", 0.0, 0.05)];
+        let out = scorer_swap_rule("person", &signals);
+        assert_eq!(out.len(), 1, "expected one suggestion from variant_rate trigger");
+        assert_eq!(out[0].kind, SuggestionKind::SwapScorer);
+    }
+
+    #[test]
+    fn no_swap_on_clean_column() {
+        // corruption 0.1 (< 0.30) and variant_rate 0.0 (< 0.02) -> empty
+        let signals = vec![cs("address_line", "address", "token_sort", 0.1, 0.0)];
+        let out = scorer_swap_rule("person", &signals);
+        assert!(out.is_empty(), "clean column should emit no suggestion");
+    }
+
+    #[test]
+    fn no_swap_when_not_token_sort() {
+        // qgram scorer with high corruption -> no swap (rule only targets token_sort)
+        let signals = vec![cs("address_line", "address", "qgram", 0.9, 0.0)];
+        let out = scorer_swap_rule("person", &signals);
+        assert!(out.is_empty(), "non-token_sort scorer should not trigger swap");
     }
 }
