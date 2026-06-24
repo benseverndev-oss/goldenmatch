@@ -43,11 +43,15 @@ jobs:
       action: ${{ steps.filter.outputs.action }}
       dbt: ${{ steps.filter.outputs.dbt }}
       ci_workflow: ${{ steps.filter.outputs.ci_workflow }}
-      # force_all: true on merge_group (the authoritative batched gate) and on a
-      # workflow_dispatch with run_all=true. Drives the full job matrix + the
-      # dynamic python matrix independently of the path filters (which can't diff
-      # on merge_group anyway). Decoupled from ci_workflow so a PR-level ci.yml
-      # edit no longer forces every lane — workflow_lint covers that cheaply.
+      # force_all: forces the full job matrix + the dynamic python matrix,
+      # bypassing the path filters. True on (1) workflow_dispatch run_all=true,
+      # and (2) a merge_group entry that edits ci.yml itself (so the filter
+      # wiring is re-validated against main before it lands). A NORMAL
+      # merge_group entry is now path-filtered against the group's base_sha
+      # (current main) -- see the filter step -- so it no longer force-runs every
+      # lane; force_all=false there. At PR time a ci.yml edit still doesn't force
+      # every lane (workflow_lint covers YAML cheaply); the merge queue is where
+      # the full re-validation happens.
       force_all: ${{ steps.flags.outputs.force_all }}
       pyright_slice: ${{ steps.filter.outputs.pyright_slice }}
       # goldenmatch runs as its own sharded jobs (python_goldenmatch / _heavy /
@@ -78,11 +82,20 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d  # v4.0.1
         id: filter
-        # paths-filter diffs PR head vs base (or push head vs prev). merge_group
-        # and workflow_dispatch have no such diff base, so skip it there and let
-        # the `flags` step below force the full matrix instead.
-        if: github.event_name == 'pull_request' || github.event_name == 'push'
+        # paths-filter diffs PR head vs base (or push head vs prev). On
+        # merge_group there's no implicit diff base, but the event payload
+        # carries one: `merge_group.base_sha` is the up-to-date `main` the queued
+        # group is being merged onto, so diffing HEAD against it yields exactly
+        # what the group changes vs CURRENT main. That makes merge-queue entries
+        # path-filterable too (a queued PR that doesn't touch a lane's paths
+        # skips it) WITHOUT the staleness risk PR-base filtering carries -- the
+        # base here is fresher than the PR's own base. workflow_dispatch still
+        # has no diff base, so it's skipped here and `flags` forces the matrix.
+        if: github.event_name == 'pull_request' || github.event_name == 'push' || github.event_name == 'merge_group'
         with:
+          # On merge_group, diff against the group's base_sha (latest main);
+          # empty elsewhere so paths-filter uses its PR/push default base.
+          base: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || '' }}
           # `filters` runs against the diff between the PR head and base
           # (or push head and the previous push for branch builds). Per-path
           # globs are unanchored — `'foo/**'` matches at any depth.
@@ -391,14 +404,23 @@ jobs:
               - 'packages/python/goldenmatch/goldenmatch/core/complexity_profile.py'
               - 'packages/python/goldenmatch/goldenmatch/core/scorer.py'
               - 'packages/python/goldenmatch/goldenmatch/config/**'
-      # Always-on flag step: force the full matrix on merge_group (the
-      # authoritative batched gate) and on a workflow_dispatch run_all=true.
-      # Runs unconditionally (the `filter` step above is skipped on those
-      # events), so downstream `force_all` gates resolve on every event.
+      # Flag step: decide whether to force the FULL job matrix (bypassing the
+      # path filters). Two cases force it:
+      #   1. workflow_dispatch with run_all=true (manual full re-run).
+      #   2. a merge_group entry that edits ci.yml itself -- the filters are now
+      #      live on merge_group (see the filter step), so a normal queued entry
+      #      is path-filtered against current main. But a queued ci.yml change
+      #      must still re-run EVERY lane so the filter wiring stays validated
+      #      against main before it lands (the invariant the old blanket
+      #      merge_group force protected). `ci_workflow` comes from the filter
+      #      step, which runs on merge_group.
+      # A normal merge_group entry (no ci.yml edit) now falls through to
+      # force_all=false and runs only the lanes its paths touched.
       - id: flags
         shell: bash
         run: |
-          if [ "${{ github.event_name }}" = "merge_group" ] || { [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.run_all }}" = "true" ]; }; then
+          if { [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.run_all }}" = "true" ]; } || \
+             { [ "${{ github.event_name }}" = "merge_group" ] && [ "${{ steps.filter.outputs.ci_workflow }}" = "true" ]; }; then
             echo "force_all=true" >> "$GITHUB_OUTPUT"
           else
             echo "force_all=false" >> "$GITHUB_OUTPUT"
@@ -1718,15 +1740,24 @@ jobs:
   # the three distributed routes (scipy.csgraph / label propagation /
   # two-phase WCC) produce the SAME connected components as the in-memory
   # build_clusters AND are invariant to Ray partition count (1/2/3/7).
+  # Split into THREE jobs (was one ~20-min job that gated the merge queue):
+  #   distributed       -> invariance gate   (blocking, in ci-required)
+  #   distributed_wcc   -> #844 WCC gate      (blocking, in ci-required) -- runs
+  #                        in PARALLEL with the invariance gate (independent),
+  #                        not serially after it.
+  #   distributed_broad -> broad coverage     (continue-on-error at JOB level,
+  #                        ABSENT from ci-required) -- its ~9 min no longer sits
+  #                        on the merge-queue critical path.
+  # The two blocking gates each cost ~setup + their pytest; running them as
+  # sibling jobs makes the lane's gating wall ~max(invariance, wcc) instead of
+  # the old invariance + wcc + broad-coverage sum.
   distributed:
     needs: changes
     if: needs.changes.outputs.distributed == 'true' || needs.changes.outputs.force_all == 'true'
     runs-on: ubuntu-latest
-    # 30 (was 20): the #844 randomized-contraction WCC ray gate adds a ~3.5 min
-    # blocking step on top of the invariance gate (~5.5 min) + broad coverage
-    # (~9.5 min) + setup, which pushed the total past the old 20 min cap (the job
-    # was cancelled mid-run -> spurious "distributed" failure). 30 gives headroom.
-    timeout-minutes: 30
+    # Invariance gate alone is ~5.5 min + setup now that the WCC gate and the
+    # broad-coverage suite moved to sibling jobs. 20 gives ample headroom.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
@@ -1751,7 +1782,7 @@ jobs:
       # each start a ray cluster and race on ports.
       # --timeout=300 (not 120): the label-prop partition-count invariance cases
       # iterate to fixpoint on chains (label-prop's worst case) and sit ~100s on
-      # a 2-core hosted runner; 120s clipped them. Job-level timeout-minutes: 30
+      # a 2-core hosted runner; 120s clipped them. Job-level timeout-minutes: 20
       # is the real backstop.
       #
       # GATE (blocking): the quality-invariance gate is this lane's reason for
@@ -1762,23 +1793,63 @@ jobs:
           .venv/bin/python -c "import ray, scipy, polars; print('ray', ray.__version__)"
           .venv/bin/python -m pytest packages/python/goldenmatch/tests/test_distributed_clustering.py \
             --timeout=300 --durations=20 -v
-      # GATE (blocking, #844): the randomized-contraction WCC is new + clean (no
-      # pre-existing fragility), so its ray-gated tests gate here rather than
-      # riding the non-blocking broad-coverage step. Proves the distributed path
-      # matches the scipy-verified pure-Polars driver + the routing contract.
+
+  # GATE (blocking, #844): the randomized-contraction WCC ray gate, in its own
+  # job so it runs in PARALLEL with the invariance gate (the two are
+  # independent). Required via ci-required. Proves the distributed path matches
+  # the scipy-verified pure-Polars driver + the routing contract. Same ray/uv
+  # venv gotcha as the `distributed` job above (see the long comment there).
+  distributed_wcc:
+    needs: changes
+    if: needs.changes.outputs.distributed == 'true' || needs.changes.outputs.force_all == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      - name: Install ray extra
+        run: uv pip install 'ray[default]>=2.0' 'pandas<3'
       - name: Randomized-contraction WCC ray gate (blocking)
         run: |
           .venv/bin/python -m pytest packages/python/goldenmatch/tests/test_distributed_randomized_contraction_wcc.py \
             --timeout=300 --durations=20 -v
-      # BROAD COVERAGE (non-blocking): the rest of the ray-gated suite (controller
-      # / pipeline / golden / e2e). These exercise real ray execution but several
-      # carry pre-existing, ray-independent fragilities surfaced the first time
-      # they actually ran (e.g. degenerate single-/few-value fixtures that explode
-      # the in-memory blocking+clustering path, and an RSS-growth threshold tuned
-      # for a different runner). They run here for visibility but must not block an
-      # unrelated PR. Tracked for follow-up; do not gate on them until cleaned up.
+
+  # BROAD COVERAGE (non-blocking): the rest of the ray-gated suite (controller /
+  # pipeline / golden / e2e). These exercise real ray execution but several
+  # carry pre-existing, ray-independent fragilities surfaced the first time they
+  # actually ran (degenerate single-/few-value fixtures that explode the
+  # in-memory blocking+clustering path; an RSS-growth threshold tuned for a
+  # different runner). Split into its OWN job that is `continue-on-error` at the
+  # JOB level and deliberately ABSENT from ci-required's needs -- so its ~9 min
+  # never sits on the merge-queue critical path (it previously ran as a
+  # continue-on-error STEP inside `distributed`, where the merge gate still
+  # waited on its wall time). Runs for visibility only; tracked for follow-up,
+  # do not gate on it until the fixtures are cleaned up. Same ray/uv venv gotcha
+  # as the `distributed` job above.
+  distributed_broad:
+    needs: changes
+    if: needs.changes.outputs.distributed == 'true' || needs.changes.outputs.force_all == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      - name: Install ray extra
+        run: uv pip install 'ray[default]>=2.0' 'pandas<3'
       - name: Distributed broad coverage (non-blocking)
-        continue-on-error: true
         run: |
           .venv/bin/python -m pytest packages/python/goldenmatch/tests/test_distributed_*.py \
             --ignore=packages/python/goldenmatch/tests/test_distributed_clustering.py \
@@ -2350,6 +2421,9 @@ jobs:
       - goldenembed
       - embed_wheel
       - distributed
+      - distributed_wcc
+      # NB: distributed_broad is deliberately ABSENT -- it's continue-on-error
+      # (known-fragile fixtures) and must not gate the merge queue.
       - sail
       - pyright
       - version_consistency
