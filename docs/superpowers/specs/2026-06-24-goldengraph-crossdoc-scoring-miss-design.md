@@ -1,9 +1,48 @@
 # goldengraph — cross-doc SCORING-miss lever (scoping)
 
-**Status:** scoping / design — measure-first (measurement dispatched)
+**Status:** MEASURED — linking ON reduces shatter but is **headline-flat**; the real bottleneck is synthesis (§0)
 **Date:** 2026-06-24
 **Author:** measure-driven loop
 **Parent:** `2026-06-24-goldengraph-synthesis-lever-design.md` (synthesis lever was a negative result; pivoted here)
+
+## 0. RESULT 2026-06-24 — linking ON: shatter down, headline flat
+
+The measure-first run (28126587069, `cross_doc_link=true profile_link=true
+literal_attrs=true`, traced) vs the linking-OFF baseline (28121496629):
+
+| | OFF baseline | ON 28126587069 |
+|---|---|---|
+| components | ~620 (top 2356) | **425 (top 3585)** |
+| BROKEN-CHAIN | 12 | **7** |
+| shatter SCORING-miss | 11 | **5** |
+| RETRIEVAL-BUDGET | 2 | 5 |
+| EXTRACTION | 11 | 13 |
+| SYNTHESIS | 25 | 25 |
+| **llm_judge** | **0.34** | **0.34** |
+| answer_match | 0.30 | 0.24 |
+| cost | $0.39 | $0.55 |
+
+The matcher (#1249) **works at the graph level** — BROKEN-CHAIN 12→7, SCORING-miss
+11→5, the giant component grew 2356→3585. **But the headline judge is dead flat
+(0.34→0.34).** The freed answers didn't become hits — they shifted to
+RETRIEVAL-BUDGET (reachable, outside the 256-node ball) and the dominant SYNTHESIS
+bucket (25, 50%) is untouched. At +40% cost.
+
+**Strategic conclusion (4 levers in):** every graph-quality lever (extraction,
+cross-doc linking, budget) successfully puts more correct answers *into the
+retrieved ball*, and **synthesis then fails to use them**. The answer is usually
+retrievable; the multi-hop *reasoning* over it is the ceiling. Closing the
+remaining 5 SCORING-misses (the §3 category-gate override) would shave the
+BROKEN-CHAIN bucket further but those answers would shift to budget/synthesis, not
+hits — so it is **NOT a headline lever** on its own. The §3 fix is shelved as a
+graph-correctness improvement, not a judge lever. The high-leverage experiment the
+data points to is the **synthesis MODEL** (gpt-4o-mini → stronger), tracked next.
+
+The original scope (§1-§5) is retained for the record; the §3 category-gate
+override remains a valid (but headline-flat) correctness fix if cross-doc precision
+is ever the goal.
+
+---
 
 ## 1. Why — the BROKEN-CHAIN bucket + a confound I have to surface
 
