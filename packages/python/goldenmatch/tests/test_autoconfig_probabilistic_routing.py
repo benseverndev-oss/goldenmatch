@@ -56,3 +56,39 @@ def test_too_few_fuzzy_fields_no_route():
     profiles = [_prof("first_name", "name")]
     mks = [_weighted("first_name")]
     assert _is_probabilistic_shape(mks, profiles) is False
+
+
+# ── behavioral: the gated routing through the live auto_configure_df path ──────
+import polars as pl  # noqa: E402
+import goldenmatch  # noqa: E402
+from goldenmatch.core.autoconfig import auto_configure_df  # noqa: E402
+
+
+def _bio_df():
+    """Probabilistic shape: no identifier/email/phone column; several fuzzy fields."""
+    import random
+    rng = random.Random(7)
+    first = ["Jon", "Jane", "Bill", "Mary", "Tom", "Sue", "Ed", "Ann"]
+    last = ["Smith", "Jones", "Brown", "Lee", "Clark", "Hall"]
+    rows = [{"first_name": rng.choice(first), "surname": rng.choice(last),
+             "dob": f"19{rng.randint(50, 99)}-0{rng.randint(1, 9)}-1{rng.randint(0, 9)}",
+             "city": rng.choice(["Raleigh", "Durham", "Cary"])} for _ in range(200)]
+    return pl.DataFrame(rows)
+
+
+def test_routing_off_is_deterministic(monkeypatch):
+    monkeypatch.delenv("GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC", raising=False)
+    monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
+    cfg = auto_configure_df(_bio_df())
+    assert all(mk.type != "probabilistic" for mk in cfg.matchkeys)
+
+
+def test_routing_on_emits_probabilistic(monkeypatch):
+    monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC", "1")
+    monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
+    df = _bio_df()
+    cfg = auto_configure_df(df)
+    assert any(mk.type == "probabilistic" for mk in cfg.matchkeys)
+    # the full default path runs without raising + produces clusters
+    r = goldenmatch.dedupe_df(df)
+    assert len(r.clusters) >= 1

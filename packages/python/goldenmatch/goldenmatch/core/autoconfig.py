@@ -3559,6 +3559,17 @@ def _legacy_auto_configure_v0(  # pyright: ignore[reportUnusedFunction]  # kept 
     # Build matchkeys
     matchkeys = build_matchkeys(profiles, df=df, multi_source=multi_source)
 
+    # Probabilistic routing (gated, default-off): a probabilistic-shaped dataset
+    # (no surviving identifier/email/phone exact matchkey + >=2 fuzzy fields) is
+    # better served by the Fellegi-Sunter path. Delegate to
+    # auto_configure_probabilistic_df (it builds the diversified FS blocking that
+    # lifts recall) and return directly. NOTE: this fires before the domain-extracted
+    # matchkeys are appended below, so a domain-extracted identifier is not seen by
+    # the trigger (acceptable for v1; revisit if a domain-heavy dataset misroutes).
+    if (not multi_source and _route_to_probabilistic_enabled()
+            and _is_probabilistic_shape(matchkeys, profiles)):
+        return auto_configure_probabilistic_df(df, llm_provider=llm_provider)
+
     # ── Add domain-extracted fields to matchkeys ──
     if extracted_columns:
         domain_exact = []
