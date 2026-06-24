@@ -62,12 +62,24 @@ def _candidate_pairs(df: pl.DataFrame) -> set[tuple[int, int]] | None:
     return cand
 
 
-def evaluate_f1(df: pl.DataFrame, gt_pairs: set, row_cap: int | None = 20_000) -> dict[str, Any]:
-    """Full dedupe -> F1/P/R + blocking/threshold attribution (row-index space)."""
+def evaluate_f1(
+    df: pl.DataFrame, gt_pairs: set, row_cap: int | None = 20_000,
+    strategy: str = "default",
+) -> dict[str, Any]:
+    """Full dedupe -> F1/P/R + blocking/threshold attribution (row-index space).
+
+    strategy='probabilistic' forces the Fellegi-Sunter config
+    (auto_configure_probabilistic_df); 'default' uses the zero-config dedupe_df path
+    (which reflects the routing lever when GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC
+    is enabled)."""
     if row_cap is not None and df.height > row_cap:
         df = df.head(row_cap)
         gt_pairs = {(a, b) for a, b in gt_pairs if a < row_cap and b < row_cap}
-    result = goldenmatch.dedupe_df(df)
+    if strategy == "probabilistic":
+        from goldenmatch.core.autoconfig import auto_configure_probabilistic_df
+        result = goldenmatch.dedupe_df(df, config=auto_configure_probabilistic_df(df))
+    else:
+        result = goldenmatch.dedupe_df(df)
     ev = evaluate_clusters(result.clusters, gt_pairs).summary()
     emitted = {(min(a, b), max(a, b)) for a, b, _ in result.scored_pairs}
     cand = _candidate_pairs(df)

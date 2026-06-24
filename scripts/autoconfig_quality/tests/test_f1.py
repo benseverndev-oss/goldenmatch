@@ -19,3 +19,10 @@ def test_attribution_skips_at_scale(monkeypatch):
     out = evaluate_f1(df, gt)
     assert "f1" in out and "precision" in out and "recall" in out  # floor intact
     assert out["attribution"] == {"skipped": "scale"}  # explicit, not blocking_recall=0
+
+
+def test_evaluate_f1_probabilistic_strategy():
+    df, gt = gen_labeled(n_entities=120, seed=7)
+    out = evaluate_f1(df, gt, row_cap=None, strategy="probabilistic")
+    assert 0.0 <= out["f1"] <= 1.0
+    assert set(out) >= {"f1", "precision", "recall", "attribution"}

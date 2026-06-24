@@ -2,6 +2,23 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-06-24 — Auto-config quality harness + probabilistic-routing lever (#1216/#1226/#1254)
+- New ADR [../decisions/0024-autoconfig-probabilistic-routing.md](../decisions/0024-autoconfig-probabilistic-routing.md):
+  a decision-kernel **quality harness** (`scripts/autoconfig_quality/`, report/gate/bless)
+  that runs auto-config over a committed corpus (real benchmarks FEBRL3 / NCVR /
+  historical_50k + synthetic anchors) and diffs the resulting decisions against a
+  pinned baseline — 2-tier (host-independent config signals, hard-gated; slow F1 +
+  attribution) with a CI `quality_gate` job. It exists to make a kernel change's
+  quality impact measurable in one run and to **nominate the next lever on evidence**.
+- The first lever it nominated: **probabilistic routing**. A dual-strategy scorecard
+  column (`f1` default vs `f1_probabilistic` forced Fellegi-Sunter) measured a +0.36
+  F1 gap on historical_50k. Auto-config now routes to FS when
+  `GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC=1` (default-off) and the shape is
+  probabilistic (no surviving exact matchkey on `{identifier,email,phone}` + ≥2 fuzzy).
+  Flag-on proof: historical_50k 0.466→0.829, ncvr 0.983→0.990 routed; febrl3 +
+  anchor_person_match unchanged (strong key blocks). Zero regression; default-flip
+  deferred to a broader sweep. Flag in `docs-site/goldenmatch/tuning.mdx`.
+
 ## 2026-06-20 — Corpus-dedup throughput benchmark + perf gate (#1086)
 - Closes the training-data-dedup epic's "defend the throughput claim" item. New ADR
   [../decisions/0022-corpus-dedup-throughput-benchmark.md](../decisions/0022-corpus-dedup-throughput-benchmark.md):

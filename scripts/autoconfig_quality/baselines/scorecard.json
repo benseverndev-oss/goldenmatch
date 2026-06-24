@@ -11,6 +11,16 @@
         "precision": 0.9793,
         "recall": 1.0
       },
+      "f1_probabilistic": {
+        "attribution": {
+          "blocking_recall": 1.0,
+          "final_recall": 1.0,
+          "threshold_loss": 0.0
+        },
+        "f1": 0.9607,
+        "precision": 0.9244,
+        "recall": 1.0
+      },
       "kind": "anchor",
       "signals": {
         "blocking_cost": {
@@ -114,6 +124,16 @@
         "precision": 0.9418,
         "recall": 0.9925
       },
+      "f1_probabilistic": {
+        "attribution": {
+          "blocking_recall": 0.9787,
+          "final_recall": 0.9504,
+          "threshold_loss": 0.0283
+        },
+        "f1": 0.9907,
+        "precision": 1.0,
+        "recall": 0.9816
+      },
       "kind": "real",
       "signals": {
         "blocking_cost": {
@@ -165,6 +185,14 @@
         "precision": 0.5714,
         "recall": 0.3938
       },
+      "f1_probabilistic": {
+        "attribution": {
+          "skipped": "scale"
+        },
+        "f1": 0.8294,
+        "precision": 0.931,
+        "recall": 0.7478
+      },
       "kind": "real",
       "signals": {
         "blocking_cost": {
@@ -210,6 +238,16 @@
         "f1": 0.9828,
         "precision": 0.9943,
         "recall": 0.9716
+      },
+      "f1_probabilistic": {
+        "attribution": {
+          "blocking_recall": 1.0,
+          "final_recall": 0.9876,
+          "threshold_loss": 0.0124
+        },
+        "f1": 0.9894,
+        "precision": 0.9912,
+        "recall": 0.9876
       },
       "kind": "real",
       "signals": {
@@ -260,7 +298,7 @@
       "dblp_acm": "absent",
       "ncvr_real": "absent"
     },
-    "git_sha": "9743c7b7def8c590ad545d57f7217ae33f97596b",
-    "native_version": "0.1.11"
+    "git_sha": "3234de9aeaa33acdbf0e23ffab725c900f2a1259",
+    "native_version": "0.1.5"
   }
 }
