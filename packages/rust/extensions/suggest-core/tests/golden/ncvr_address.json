@@ -1,0 +1,43 @@
+{
+  "column_signals": [
+    {
+      "field": "res_street_address",
+      "col_type": "address",
+      "scorer": "token_sort",
+      "in_blocking": false,
+      "in_negative_evidence": false,
+      "identity_score": 0.0,
+      "corruption_score": 0.6,
+      "collision_rate": 0.0,
+      "cardinality_ratio": 0.5,
+      "null_rate": 0.0,
+      "variant_rate": 0.0
+    }
+  ],
+  "scored_pairs": [],
+  "clusters": [],
+  "config": {
+    "matchkeys": [
+      {
+        "name": "person",
+        "kind": "weighted",
+        "threshold": 0.8,
+        "fields": [
+          {
+            "field": "res_street_address",
+            "scorer": "token_sort",
+            "weight": 1.0
+          }
+        ]
+      }
+    ],
+    "negative_evidence": []
+  },
+  "priors": {
+    "counts": {}
+  },
+  "expected_top": {
+    "kind": "swap_scorer",
+    "target": "res_street_address"
+  }
+}
