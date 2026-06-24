@@ -154,7 +154,7 @@ def test_real_f1_probabilistic_floored():
 
 - [ ] **Step 2: Run to verify it fails** → FAIL (probabilistic drop not gated; verdict PASS).
 
-- [ ] **Step 3: Implement** — in `diff.py`'s `real` branch, extract the existing f1-floor logic into a local helper and call it for `"f1"` and `"f1_probabilistic"`. The helper reproduces the current rule (FAIL if `cur < base - tol`; the crash/absent sub-cases stay as-is for the primary `f1`; for `f1_probabilistic`, absent-with-baseline-present is WARN "not measured", mirroring the existing fast-only treatment). Keep `f1` as the primary block; `f1_probabilistic` is a second floored block.
+- [ ] **Step 3: Implement** — in `diff.py`'s `real` branch, extract the existing f1-floor logic into a local helper and call it for `"f1"` and `"f1_probabilistic"`. The helper reproduces the current real-branch rule (FAIL if `cur < base - tol`; absent-current simply skips — the real branch has NO WARN precedent, that's anchor-branch-only, so just skip absent `f1_probabilistic`; `error_probabilistic` is informational/NEUTRAL). Keep `f1` as the primary block; `f1_probabilistic` is a second floored block.
 
 - [ ] **Step 4: Run** `test_diff.py` → all PASS (10+ existing + new) + ruff.
 
@@ -208,9 +208,10 @@ git commit -m "feat(quality): re-bless with dual-strategy (default + probabilist
 - [ ] **Step 1: Write the failing test** — `tests/test_autoconfig_probabilistic_routing.py`:
 
 ```python
-from goldenmatch.core.autoconfig import _is_probabilistic_shape
+from goldenmatch.core.autoconfig import _is_probabilistic_shape, ColumnProfile
 from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
-from goldenmatch.core.profiling import ColumnProfile  # adjust import to where ColumnProfile lives
+# NOTE: ColumnProfile lives in core/autoconfig.py:137 (NOT core/profiling.py, which
+# does not exist; a different ColumnProfile in core/quality_exclusions.py is the wrong one).
 
 
 def _prof(name, col_type, card=0.5):
@@ -245,7 +246,7 @@ def test_too_few_fuzzy_fields_no_route():
     assert _is_probabilistic_shape(mks, profiles) is False
 ```
 
-- [ ] **Step 2: Run to verify it fails** (`cd packages/python/goldenmatch && uv run pytest tests/test_autoconfig_probabilistic_routing.py -q`) → FAIL (`_is_probabilistic_shape` undefined). Fix the `ColumnProfile`/`MatchkeyConfig` import paths if the test errors on import (grep for `class ColumnProfile` / `class MatchkeyConfig` to confirm modules).
+- [ ] **Step 2: Run to verify it fails** (`cd packages/python/goldenmatch && uv run pytest tests/test_autoconfig_probabilistic_routing.py -q`) → FAIL (`_is_probabilistic_shape` undefined). The imports above are verified correct (`ColumnProfile` from `core.autoconfig`, `MatchkeyConfig`/`MatchkeyField` from `config.schemas`).
 
 - [ ] **Step 3: Implement** — in `autoconfig.py` (near the other `_*_enabled` helpers):
 
@@ -341,9 +342,16 @@ def test_routing_on_emits_probabilistic(monkeypatch):
         return auto_configure_probabilistic_df(df, llm_provider=llm_provider)
 ```
 
-- [ ] **Step 4: Run the test.** If `test_routing_on_emits_probabilistic` PASSES — good (the controller commits the probabilistic config from `_initial_config` unchanged; its refit rules are weighted-specific and don't alter the matchkey type). If it FAILS because the controller loop mangles or rejects the probabilistic config (e.g. raises ControllerNotConfidentError or refits it away), do Step 4b.
+> **Known blind spot (note in the Task 7 rationale):** this fires immediately after
+> `build_matchkeys()` at `:3529`, BEFORE lines 3531-3559 append *domain-extracted*
+> exact/fuzzy matchkeys. So `_is_probabilistic_shape` won't see a domain-extracted
+> identifier-backed exact matchkey. Fine for historical_50k (no domain identifier),
+> but if Task 7's corpus run shows a domain-heavy dataset misrouting, move the check
+> to after the domain-augmentation block (post-`:3570`) using the augmented `matchkeys`.
 
-- [ ] **Step 4b (contingency only if Step 4 shows the controller mishandles the prob config):** add a short-circuit in `autoconfig_controller.py` `run()` — after `_initial_config(...)` returns, if `any(mk.type == "probabilistic" for mk in config_v0.matchkeys)`, commit it directly and skip the iterative refit loop (use the existing early-return/commit pattern). Add a test asserting no refit occurs on a probabilistic initial config.
+- [ ] **Step 4: Run the test.** PASSING here is **necessary but not sufficient** — at 200 rows the controller commits via warn-and-run regardless, so a green unit test does NOT prove the probabilistic config survives the controller's `pick_committed` at corpus scale. The REAL controller-survival verifier is the Task 7 Step 2 flag-on corpus run (does historical_50k's default `f1` actually jump to ~0.826?). If the unit test FAILS outright (config not probabilistic, or a raise), do Step 4b now; if it passes but Task 7's `f1` does NOT jump, the controller mangled the config at scale → also do Step 4b.
+
+- [ ] **Step 4b (contingency: controller refits/rejects the probabilistic config):** there is NO pre-loop early-return in `autoconfig_controller.py run()` to mirror — all stop logic is inside the iteration loop (`break`/`stop_reason`, then `pick_committed` + `_finalize`). Add a NEW branch in `run()` right after the initial config is built: `if any(mk.type == "probabilistic" for mk in config_v0.matchkeys):` commit `config_v0` straight through the existing finalize machinery (the same `_finalize`/telemetry path the loop's committed config takes) WITHOUT entering the refit loop. Note `promote_negative_evidence` is a documented no-op on probabilistic matchkeys (`config/schemas.py:283-289`), so it's safe to leave in the finalize path. Add a test asserting a probabilistic initial config is committed unchanged (matchkey type stays `probabilistic`, no weighted refit) and that `run()` doesn't raise.
 
 - [ ] **Step 5: Run** the full routing test file → PASS. ruff/py_compile.
 
