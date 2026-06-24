@@ -1,6 +1,6 @@
 """Config-suggestion quality harness CLI.
 
-    python -m scripts.suggest_quality report   # enumerate datasets + stub metrics
+    python -m scripts.suggest_quality report   # oracle + metrics per dataset
     python -m scripts.suggest_quality gate     # exit nonzero on regression (CI)
     python -m scripts.suggest_quality bless    # accept current as the baseline
 
@@ -10,17 +10,13 @@ Flags:
     --native {0,1,auto}  GOLDENMATCH_NATIVE for this run
     --tolerance F   delta-F1 floor band for the gate (default 0.01)
 
-Task 14 scope:
-    ``report`` loads each dataset, prints name + row count + GT pair count
-    (or ``SKIPPED: <reason>``), and prints a placeholder metrics line.
-    ``gate`` and ``bless`` are wired but not yet implemented (Task 15/16).
-
-Determinism: set before any goldenmatch import — mirrors autoconfig_quality.
+Determinism: set before any goldenmatch import -- mirrors autoconfig_quality.
 """
 from __future__ import annotations
 
 import argparse
 import gc
+import math
 import os
 import sys
 from pathlib import Path
@@ -58,15 +54,17 @@ def run(
     dataset_names: set[str] | None,
     row_cap: int | None,
 ) -> tuple[dict[str, dict], dict[str, str]]:
-    """Load the corpus -> (results, skipped).
+    """Load the corpus, run the oracle for each dataset -> (results, skipped).
 
     Heavy imports are deferred so ``--native`` can set GOLDENMATCH_NATIVE
     before goldenmatch loads.  Same pattern as autoconfig_quality.run().
 
-    Task 14: results records carry only ``kind`` + ``rows`` + ``gt_pairs``.
-    Task 15 will add the oracle + metrics (before_f1, after_f1, delta).
+    Each result record carries the oracle output from evaluate_dataset plus
+    the computed metrics (rank_corr, suggester_prec) ready for the table.
     """
     from scripts.suggest_quality.datasets import REGISTRY, effective_row_cap  # noqa: PLC0415
+    from scripts.suggest_quality.metrics import rank_correlation, suggester_precision  # noqa: PLC0415
+    from scripts.suggest_quality.oracle import evaluate_dataset  # noqa: PLC0415
 
     results: dict[str, dict] = {}
     skipped: dict[str, str] = {}
@@ -84,10 +82,31 @@ def run(
             continue
         df, gt = loaded
         cap = effective_row_cap(d, row_cap)
+
+        try:
+            oracle_rec = evaluate_dataset(d.name, df, gt, row_cap=cap)
+        except Exception as e:
+            skipped[d.name] = f"oracle_error: {e}"
+            del loaded, df, gt
+            gc.collect()
+            continue
+
+        # Compute derived metrics
+        lifts = oracle_rec.get("suggested_order_lifts", [])
+        # Filter NaN lifts before passing to metrics (oracle may produce NaN
+        # per-suggestion on error; exclude them from correlation/precision)
+        clean_lifts = [x for x in lifts if not math.isnan(x)]
+
+        rank_corr = rank_correlation(clean_lifts)
+        sugg_prec = suggester_precision(clean_lifts)
+
         results[d.name] = {
             "kind": d.kind,
-            "rows": min(df.height, cap) if cap is not None else df.height,
-            "gt_pairs": len(gt),
+            # oracle output
+            **oracle_rec,
+            # derived metrics
+            "rank_corr": rank_corr,
+            "suggester_prec": sugg_prec,
         }
         del loaded, df, gt
         gc.collect()
@@ -95,10 +114,10 @@ def run(
     return results, skipped
 
 
-# ── scorecard helpers (stubs — Task 15 wires the oracle + metrics) ────────────
+# ── scorecard helpers ─────────────────────────────────────────────────────────
 
 def _gather_meta() -> tuple[str, str]:
-    """(native_version, git_sha) — best-effort, never raises."""
+    """(native_version, git_sha) -- best-effort, never raises."""
     try:
         import goldenmatch_native  # noqa: PLC0415
         native_version = getattr(goldenmatch_native, "__version__", "unknown")
@@ -114,19 +133,71 @@ def _gather_meta() -> tuple[str, str]:
     return native_version, git_sha
 
 
+def _fmt_f1(v: float) -> str:
+    if math.isnan(v):
+        return "   n/a"
+    return f"{v:.4f}"
+
+
+def _fmt_corr(v: float) -> str:
+    if math.isnan(v):
+        return "   n/a"
+    return f"{v:+.3f}"
+
+
+def _fmt_prec(v: float) -> str:
+    return f"{v:.2f}"
+
+
 def _render_report_table(
     results: dict[str, dict], skipped: dict[str, str]
 ) -> str:
-    """Print a simple summary table (no metrics yet — Task 15 adds them)."""
+    """Render the per-dataset metrics table."""
     lines: list[str] = []
+
+    header = (
+        f"  {'dataset':<30} {'kind':<7}  {'rows':<7}  "
+        f"{'gt_pairs':<9}  {'base_f1':<8}  {'n_sugg':<6}  "
+        f"{'rank_corr':<10}  {'sugg_prec':<9}  {'conv_f1':<8}  {'steps':<5}"
+    )
+    sep = "  " + "-" * (len(header) - 2)
+    lines.append(header)
+    lines.append(sep)
+
     for name, rec in results.items():
-        gt = rec["gt_pairs"]
-        rows = rec["rows"]
-        kind = rec["kind"]
-        lines.append(f"  {name:<30} {kind:<7}  rows={rows:<7}  gt_pairs={gt}")
+        if rec.get("error"):
+            lines.append(
+                f"  {name:<30} {'ERROR':<7}  {rec.get('error', '')}"
+            )
+            continue
+
+        lines.append(
+            f"  {name:<30} {rec['kind']:<7}  {rec['rows']:<7}  "
+            f"{rec['gt_pairs']:<9}  {_fmt_f1(rec['baseline_f1']):<8}  "
+            f"{rec['n_suggestions']:<6}  "
+            f"{_fmt_corr(rec['rank_corr']):<10}  "
+            f"{_fmt_prec(rec['suggester_prec']):<9}  "
+            f"{_fmt_f1(rec['convergence_final_f1']):<8}  "
+            f"{rec['convergence_steps']:<5}"
+        )
+
     for name, reason in skipped.items():
         lines.append(f"  {name:<30} SKIPPED: {reason}")
+
     return "\n".join(lines)
+
+
+def _compute_headline(results: dict[str, dict]) -> float:
+    """Mean rank_correlation across datasets that have >= 2 suggestions."""
+    corrs = [
+        rec["rank_corr"]
+        for rec in results.values()
+        if not math.isnan(rec.get("rank_corr", float("nan")))
+        and rec.get("n_suggestions", 0) >= 2
+    ]
+    if not corrs:
+        return float("nan")
+    return sum(corrs) / len(corrs)
 
 
 # ── main ──────────────────────────────────────────────────────────────────────
@@ -162,8 +233,16 @@ def main(argv: list[str] | None = None) -> int:
         print()
         print(_render_report_table(results, skipped))
         print()
+
+        headline = _compute_headline(results)
+        n_with_gt = sum(1 for r in results.values() if r.get("gt_pairs", 0) > 0)
+        native_ok = any(r.get("native_available", False) for r in results.values())
+
         print(f"  {len(results)} dataset(s) loaded, {len(skipped)} skipped")
-        print("  0 metrics yet (Task 15 wires the oracle and delta-F1 measurement)")
+        print(f"  {n_with_gt} dataset(s) with ground truth (F1 applicable)")
+        if not native_ok:
+            print("  native kernel absent -- suggestions not evaluated (install goldenmatch[native])")
+        print(f"  suggester score (mean rank_corr): {_fmt_corr(headline)}")
         return 0
 
     if args.mode == "bless":
@@ -172,8 +251,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.mode == "gate":
-        print("suggest_quality gate: not implemented until Task 15/16")
-        print("(Task 15 wires the oracle; Task 16 adds the CI gate against the bless'd baseline.)")
+        print("suggest_quality gate: not implemented until Task 16")
+        print("(Task 16 adds the CI gate against the bless'd baseline.)")
         # Exit 0 (never fail) until the gate is implemented.
         return 0
 
