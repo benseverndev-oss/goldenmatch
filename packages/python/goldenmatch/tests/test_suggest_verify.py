@@ -202,20 +202,54 @@ class TestSuggestionHealthFromClusters:
         )
 
     def test_merge_collapse_is_penalised(self):
-        """A single giant cluster absorbing > 50% of records triggers the penalty."""
+        """A single giant cluster absorbing most records triggers the penalty."""
         from goldenmatch.core.suggest.health import suggestion_health_from_clusters
 
-        # One cluster with 60 of 100 records -> collapse flag
+        # One cluster with 60 of 100 records -> high concentration (HHI 0.36)
         clusters = {0: {"size": 60, "members": list(range(60)), "confidence": 0.6, "oversized": False}}
         h_collapsed = suggestion_health_from_clusters(clusters, n_records=100)
 
-        # Healthy: 60 records in 30 clusters of 2
+        # Healthy: 60 records in 30 clusters of 2 (HHI ~ 0.012)
         clusters_healthy = self._make_clusters([2] * 30, [0.8] * 30)
         h_healthy = suggestion_health_from_clusters(clusters_healthy, n_records=100)
 
         assert h_collapsed < h_healthy, (
             f"Merge-collapsed config (h={h_collapsed:.3f}) should score below "
             f"healthy config (h={h_healthy:.3f})"
+        )
+
+    def test_two_equal_mega_clusters_is_penalised(self):
+        """Over-merge SPREAD across two equal 50% clusters must score below healthy.
+
+        This is the case a single-max collapse check (max_size/n > 0.5) misses:
+        each cluster holds exactly 50% so max_size/n == 0.5 (not > 0.5), yet the
+        clustering is degenerate.  HHI = 0.5^2 + 0.5^2 = 0.5 catches it.
+
+        To isolate the concentration penalty from confidence/recall, hold both
+        avg_conf and matched_rate IDENTICAL between the degenerate and healthy
+        cases -- the ONLY difference is how the matched records are distributed.
+        """
+        from goldenmatch.core.suggest.health import suggestion_health_from_clusters
+
+        # Degenerate: 100 matched records spread across two 50-record clusters.
+        # matched_rate = 1.0, avg_conf = 0.8, HHI = 0.5.
+        two_mega = self._make_clusters([50, 50], [0.8, 0.8])
+        h_two_mega = suggestion_health_from_clusters(two_mega, n_records=100)
+
+        # Healthy: the SAME 100 matched records, SAME avg_conf, but in 50 pairs.
+        # matched_rate = 1.0, avg_conf = 0.8, HHI = 50 * (2/100)^2 = 0.02.
+        fifty_pairs = self._make_clusters([2] * 50, [0.8] * 50)
+        h_fifty_pairs = suggestion_health_from_clusters(fifty_pairs, n_records=100)
+
+        assert h_two_mega < h_fifty_pairs, (
+            f"Two-equal-mega-cluster config (h={h_two_mega:.3f}) should score "
+            f"below the healthy many-small-cluster config (h={h_fifty_pairs:.3f}) "
+            "-- the concentration penalty must catch over-merge spread across a "
+            "few big clusters, not just a single giant one."
+        )
+        # And the gap must come from the penalty alone (recall + conf are equal).
+        assert h_fifty_pairs - h_two_mega > 0.05, (
+            "The two-mega-cluster penalty should be a meaningful margin, not noise"
         )
 
     def test_threshold_extraction_from_config(self):
