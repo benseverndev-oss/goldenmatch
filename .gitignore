@@ -71,7 +71,9 @@ packages/python/goldenmatch/bench-dataset-v1/
 
 # Compiled native acceleration ext (built from packages/rust/extensions/native
 # via scripts/build_native.py). Platform-specific abi3 artifact, never source.
+# (.pyd = the Windows in-tree build artifact; .so = Linux/macOS.)
 packages/python/goldenmatch/goldenmatch/_native*.so
+packages/python/goldenmatch/goldenmatch/_native*.pyd
 # maturin-develop drops the compiled ext next to the tracked __init__.py in
 # python/goldenmatch_native/. Ignore ONLY the artifacts, not the source dir.
 packages/rust/extensions/native/python/goldenmatch_native/*.pyd
