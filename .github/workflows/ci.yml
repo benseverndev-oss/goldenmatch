@@ -43,11 +43,15 @@ jobs:
       action: ${{ steps.filter.outputs.action }}
       dbt: ${{ steps.filter.outputs.dbt }}
       ci_workflow: ${{ steps.filter.outputs.ci_workflow }}
-      # force_all: true on merge_group (the authoritative batched gate) and on a
-      # workflow_dispatch with run_all=true. Drives the full job matrix + the
-      # dynamic python matrix independently of the path filters (which can't diff
-      # on merge_group anyway). Decoupled from ci_workflow so a PR-level ci.yml
-      # edit no longer forces every lane — workflow_lint covers that cheaply.
+      # force_all: forces the full job matrix + the dynamic python matrix,
+      # bypassing the path filters. True on (1) workflow_dispatch run_all=true,
+      # and (2) a merge_group entry that edits ci.yml itself (so the filter
+      # wiring is re-validated against main before it lands). A NORMAL
+      # merge_group entry is now path-filtered against the group's base_sha
+      # (current main) -- see the filter step -- so it no longer force-runs every
+      # lane; force_all=false there. At PR time a ci.yml edit still doesn't force
+      # every lane (workflow_lint covers YAML cheaply); the merge queue is where
+      # the full re-validation happens.
       force_all: ${{ steps.flags.outputs.force_all }}
       pyright_slice: ${{ steps.filter.outputs.pyright_slice }}
       # goldenmatch runs as its own sharded jobs (python_goldenmatch / _heavy /
@@ -78,11 +82,20 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d  # v4.0.1
         id: filter
-        # paths-filter diffs PR head vs base (or push head vs prev). merge_group
-        # and workflow_dispatch have no such diff base, so skip it there and let
-        # the `flags` step below force the full matrix instead.
-        if: github.event_name == 'pull_request' || github.event_name == 'push'
+        # paths-filter diffs PR head vs base (or push head vs prev). On
+        # merge_group there's no implicit diff base, but the event payload
+        # carries one: `merge_group.base_sha` is the up-to-date `main` the queued
+        # group is being merged onto, so diffing HEAD against it yields exactly
+        # what the group changes vs CURRENT main. That makes merge-queue entries
+        # path-filterable too (a queued PR that doesn't touch a lane's paths
+        # skips it) WITHOUT the staleness risk PR-base filtering carries -- the
+        # base here is fresher than the PR's own base. workflow_dispatch still
+        # has no diff base, so it's skipped here and `flags` forces the matrix.
+        if: github.event_name == 'pull_request' || github.event_name == 'push' || github.event_name == 'merge_group'
         with:
+          # On merge_group, diff against the group's base_sha (latest main);
+          # empty elsewhere so paths-filter uses its PR/push default base.
+          base: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || '' }}
           # `filters` runs against the diff between the PR head and base
           # (or push head and the previous push for branch builds). Per-path
           # globs are unanchored — `'foo/**'` matches at any depth.
@@ -391,14 +404,23 @@ jobs:
               - 'packages/python/goldenmatch/goldenmatch/core/complexity_profile.py'
               - 'packages/python/goldenmatch/goldenmatch/core/scorer.py'
               - 'packages/python/goldenmatch/goldenmatch/config/**'
-      # Always-on flag step: force the full matrix on merge_group (the
-      # authoritative batched gate) and on a workflow_dispatch run_all=true.
-      # Runs unconditionally (the `filter` step above is skipped on those
-      # events), so downstream `force_all` gates resolve on every event.
+      # Flag step: decide whether to force the FULL job matrix (bypassing the
+      # path filters). Two cases force it:
+      #   1. workflow_dispatch with run_all=true (manual full re-run).
+      #   2. a merge_group entry that edits ci.yml itself -- the filters are now
+      #      live on merge_group (see the filter step), so a normal queued entry
+      #      is path-filtered against current main. But a queued ci.yml change
+      #      must still re-run EVERY lane so the filter wiring stays validated
+      #      against main before it lands (the invariant the old blanket
+      #      merge_group force protected). `ci_workflow` comes from the filter
+      #      step, which runs on merge_group.
+      # A normal merge_group entry (no ci.yml edit) now falls through to
+      # force_all=false and runs only the lanes its paths touched.
       - id: flags
         shell: bash
         run: |
-          if [ "${{ github.event_name }}" = "merge_group" ] || { [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.run_all }}" = "true" ]; }; then
+          if { [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.run_all }}" = "true" ]; } || \
+             { [ "${{ github.event_name }}" = "merge_group" ] && [ "${{ steps.filter.outputs.ci_workflow }}" = "true" ]; }; then
             echo "force_all=true" >> "$GITHUB_OUTPUT"
           else
             echo "force_all=false" >> "$GITHUB_OUTPUT"
