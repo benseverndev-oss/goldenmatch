@@ -36,13 +36,17 @@ only, no prose, in exactly this shape:
 "relationships": [{{"subj": <entity index>, "predicate": "<verb phrase>", \
 "obj": <entity index>}}], \
 "attributes": [{{"subj": <entity index>, "predicate": "<attribute phrase>", \
-"value": "<literal value>", "type": "date|quantity|text"}}]}}
+"value": "<literal value>", \
+"type": "date|quantity|ordinal|range|region|event|text"}}]}}
 `relationships` connect two ENTITIES. `attributes` attach a LITERAL VALUE to an \
-entity -- use them for dates, quantities, money amounts, measurements, and other \
-values that are NOT themselves entities (e.g. {{"subj": 0, "predicate": "born on", \
-"value": "11 February 1929", "type": "date"}}). Do NOT put a date/number/amount in \
-`entities`. The `description` disambiguates an entity for resolution. \
-`subj`/`obj` are 0-based indices into `entities`. Text:
+entity -- use them for any answer-bearing value that is NOT itself a named entity. \
+Pick the closest `type`: `date` (e.g. "11 February 1929"), `quantity` (counts, \
+money, measurements, e.g. "2" or "$3M"), `ordinal` (ranks/positions, e.g. \
+"third-largest"), `range` (spans, e.g. "551-600" or "upper 40s-lower 50s F"), \
+`region` (a place qualified by a sub-area, e.g. "northeastern Oklahoma"), `event` \
+(a named occurrence, e.g. "the 2010 election"), or `text` for anything else. Do \
+NOT put such a value in `entities`. The `description` disambiguates an entity for \
+resolution. `subj`/`obj` are 0-based indices into `entities`. Text:
 {text}"""
 
 
@@ -87,7 +91,14 @@ def _strip_fence(raw: str) -> str:
     return s.strip()
 
 
-_ATTR_TYPES = ("date", "quantity", "text")
+# Typed literal-leaf kinds. The original date/quantity/text set is broadened with
+# ordinal/range/region/event (the "phrase-span Part 1" lever) so the qualified-value
+# golds the entity-only graph drops -- ranks, ranges, sub-regions, events -- become
+# typed leaf nodes. Every kind lives under the `literal:<kind>` namespace, so each
+# inherits the existing isolation for free: excluded from query-seeding and from the
+# cross-doc link candidate set, quoted as a value leaf in synthesis. An unknown type
+# still coerces to `text`.
+_ATTR_TYPES = ("date", "quantity", "ordinal", "range", "region", "event", "text")
 
 
 def parse_extraction(raw: str) -> Extraction:
