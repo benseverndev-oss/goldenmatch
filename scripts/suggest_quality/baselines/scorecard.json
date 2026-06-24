@@ -42,14 +42,12 @@
       "error": null,
       "gt_pairs": 0,
       "kind": "anchor",
-      "n_suggestions": 3,
+      "n_suggestions": 1,
       "name": "anchor_sparse_zip",
       "native_available": true,
       "rank_corr": null,
       "rows": 20000,
       "suggested_order_lifts": [
-        null,
-        null,
         null
       ],
       "suggester_prec": 1.0
@@ -61,32 +59,27 @@
       "error": null,
       "gt_pairs": 2500,
       "kind": "real",
-      "n_suggestions": 2,
+      "n_suggestions": 0,
       "name": "ncvr_synthetic",
       "native_available": true,
-      "rank_corr": -1.0,
+      "rank_corr": null,
       "rows": 7500,
-      "suggested_order_lifts": [
-        -0.254421,
-        -0.072603
-      ],
-      "suggester_prec": 0.0
+      "suggested_order_lifts": [],
+      "suggester_prec": 1.0
     },
     "synthetic": {
       "baseline_f1": 0.988662,
-      "convergence_final_f1": 1.0,
-      "convergence_steps": 1,
+      "convergence_final_f1": 0.988662,
+      "convergence_steps": 0,
       "error": null,
       "gt_pairs": 218,
       "kind": "real",
-      "n_suggestions": 1,
+      "n_suggestions": 0,
       "name": "synthetic",
       "native_available": true,
       "rank_corr": null,
       "rows": 373,
-      "suggested_order_lifts": [
-        0.011338
-      ],
+      "suggested_order_lifts": [],
       "suggester_prec": 1.0
     }
   },
@@ -99,7 +92,7 @@
       "synthetic"
     ],
     "datasets_skipped": {},
-    "git_sha": "a79675d71e5e13dc1da71b4f01794a4e14efed2f",
+    "git_sha": "db0c761cdc69c3bc60a07608ec7f974e65cce531",
     "native_version": "0.1.5"
   }
 }
