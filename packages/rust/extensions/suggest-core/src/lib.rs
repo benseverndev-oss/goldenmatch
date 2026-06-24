@@ -6,6 +6,7 @@
 //! shim and (later) the datafusion-udf FFI + TS/WASM surfaces. No I/O, no pyo3.
 
 pub mod contract;
+pub mod diagnostics;
 
 #[cfg(test)]
 mod tests {
