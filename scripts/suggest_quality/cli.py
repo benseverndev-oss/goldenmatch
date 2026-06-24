@@ -246,17 +246,219 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.mode == "bless":
-        print("suggest_quality bless: not implemented until Task 16")
-        print("(Task 16 will wire the oracle, build the scorecard, and commit the baseline.)")
-        return 0
+        return _cmd_bless(results, skipped, native_version, git_sha)
 
     if args.mode == "gate":
-        print("suggest_quality gate: not implemented until Task 16")
-        print("(Task 16 adds the CI gate against the bless'd baseline.)")
-        # Exit 0 (never fail) until the gate is implemented.
-        return 0
+        return _cmd_gate(results, skipped, native_version, git_sha, args.tolerance)
 
     return 0  # unreachable
+
+
+# ── bless ─────────────────────────────────────────────────────────────────────
+
+def _build_scorecard(
+    results: dict[str, dict],
+    skipped: dict[str, str],
+    native_version: str,
+    git_sha: str,
+) -> dict:
+    """Assemble a stable, round-floated scorecard dict.
+
+    Per-dataset record shape (mirrors the oracle output):
+        kind, rows, gt_pairs, baseline_f1, n_suggestions,
+        suggested_order_lifts, convergence_final_f1, convergence_steps,
+        rank_corr, suggester_prec
+
+    Floats are rounded to 6 decimal places so byte-stable re-runs produce
+    the same JSON diff.
+    """
+    import json  # noqa: PLC0415
+
+    _PRECISION = 6
+
+    def _round(v):
+        if isinstance(v, float):
+            if math.isnan(v):
+                return None  # JSON has no NaN; None serializes as null
+            return round(v, _PRECISION)
+        if isinstance(v, dict):
+            return {k: _round(vv) for k, vv in v.items()}
+        if isinstance(v, list):
+            return [_round(x) for x in v]
+        return v
+
+    datasets_out: dict[str, dict] = {}
+    for name, rec in results.items():
+        datasets_out[name] = _round(rec)
+
+    return {
+        "meta": {
+            "native_version": native_version,
+            "git_sha": git_sha,
+            "datasets_run": sorted(results.keys()),
+            "datasets_skipped": skipped,
+        },
+        "datasets": datasets_out,
+    }
+
+
+def _dumps(scorecard: dict) -> str:
+    """Serialize scorecard to a stable, human-readable JSON string."""
+    import json  # noqa: PLC0415
+    return json.dumps(scorecard, indent=2, sort_keys=True)
+
+
+def _loads_baseline() -> dict:
+    """Load the blessed baseline from disk, or return an empty baseline."""
+    if not _BASELINE.exists():
+        return {"datasets": {}, "meta": {}}
+    try:
+        import json  # noqa: PLC0415
+        return json.loads(_BASELINE.read_text(encoding="utf-8"))
+    except Exception:
+        return {"datasets": {}, "meta": {}}
+
+
+def _cmd_bless(
+    results: dict[str, dict],
+    skipped: dict[str, str],
+    native_version: str,
+    git_sha: str,
+) -> int:
+    """Write the current oracle results as the new blessed baseline."""
+    scorecard = _build_scorecard(results, skipped, native_version, git_sha)
+    _BASELINE.parent.mkdir(parents=True, exist_ok=True)
+    _BASELINE.write_text(_dumps(scorecard), encoding="utf-8")
+    print(f"suggest_quality bless: wrote {_BASELINE}")
+    print(f"  {len(results)} dataset(s) blessed, {len(skipped)} skipped")
+    for name, rec in results.items():
+        bf = rec.get("baseline_f1")
+        nc = rec.get("convergence_final_f1")
+        print(
+            f"  {name}: baseline_f1={_fmt_f1(bf if bf is not None else float('nan'))}  "
+            f"conv_f1={_fmt_f1(nc if nc is not None else float('nan'))}  "
+            f"n_sugg={rec.get('n_suggestions', 0)}"
+        )
+    return 0
+
+
+# ── gate ──────────────────────────────────────────────────────────────────────
+
+_GATE_TOLERANCES = {
+    "rank_corr": 0.05,        # Spearman rank correlation
+    "suggester_prec": 0.05,   # fraction of non-regressing suggestions
+    "convergence_final_f1": 0.02,  # greedy-convergence final F1
+}
+
+
+def _cmd_gate(
+    results: dict[str, dict],
+    skipped: dict[str, str],
+    native_version: str,
+    git_sha: str,
+    cli_tolerance: float,
+) -> int:
+    """Compare current oracle results against the blessed baseline.
+
+    Exits 1 if any dataset regresses beyond tolerance on:
+      - rank_corr          (drops > 0.05)
+      - suggester_prec     (drops > 0.05)
+      - convergence_final_f1 (drops > 0.02)
+
+    Datasets absent from the baseline are reported as NEW (informational).
+    Datasets in the baseline but absent from the current run are reported
+    as MISSING (informational, not a gate failure — CI skips real datasets).
+    """
+    baseline = _loads_baseline()
+    base_datasets = baseline.get("datasets", {})
+
+    _COL_W = 32
+    _MET_W = 22
+    _VAL_W = 8
+
+    header = (
+        f"  {'dataset':<{_COL_W}} {'metric':<{_MET_W}} "
+        f"{'baseline':>{_VAL_W}}  {'current':>{_VAL_W}}  {'delta':>8}  status"
+    )
+    sep = "  " + "-" * (len(header) - 2)
+
+    rows: list[tuple[str, str, str, str, str, str]] = []  # (ds, metric, base, cur, delta, status)
+
+    for name, rec in results.items():
+        b = base_datasets.get(name)
+        for metric, tol in _GATE_TOLERANCES.items():
+            cur_raw = rec.get(metric)
+            if cur_raw is None or (isinstance(cur_raw, float) and math.isnan(cur_raw)):
+                continue  # not available this run -> skip
+
+            cur = float(cur_raw)
+
+            if b is None:
+                # New dataset not in baseline
+                rows.append((
+                    name, metric,
+                    "n/a", f"{cur:+.4f}", "  n/a", "NEW",
+                ))
+                continue
+
+            base_raw = b.get(metric)
+            if base_raw is None:
+                rows.append((name, metric, "n/a", f"{cur:+.4f}", "  n/a", "NEW"))
+                continue
+
+            base = float(base_raw) if base_raw is not None else float("nan")
+            if math.isnan(base):
+                rows.append((name, metric, "n/a", f"{cur:+.4f}", "  n/a", "NEW"))
+                continue
+
+            delta = cur - base
+            if delta < -tol:
+                status = "FAIL"
+            else:
+                status = "OK"
+
+            rows.append((
+                name, metric,
+                f"{base:+.4f}", f"{cur:+.4f}", f"{delta:+.4f}", status,
+            ))
+
+    # Datasets in baseline but absent from current run
+    for name in base_datasets:
+        if name not in results:
+            rows.append((name, "*", "present", "absent", "  n/a", "MISSING"))
+
+    # Render table
+    print("suggest_quality gate")
+    print(f"  native={native_version}  sha={git_sha[:12] if git_sha != 'unknown' else 'unknown'}")
+    print(f"  baseline={_BASELINE}")
+    print()
+    print(header)
+    print(sep)
+    for ds, met, base_s, cur_s, delta_s, status in rows:
+        mark = {"FAIL": "x", "OK": ".", "NEW": "+", "MISSING": "~"}.get(status, "?")
+        print(
+            f"  {ds:<{_COL_W}} {met:<{_MET_W}} "
+            f"{base_s:>{_VAL_W}}  {cur_s:>{_VAL_W}}  {delta_s:>8}  {mark} ({status})"
+        )
+    if not rows:
+        print("  (no comparable datasets — baseline may be empty)")
+    print()
+
+    n_fail = sum(1 for *_, s in rows if s == "FAIL")
+    n_ok = sum(1 for *_, s in rows if s == "OK")
+    n_new = sum(1 for *_, s in rows if s == "NEW")
+    n_missing = sum(1 for *_, s in rows if s == "MISSING")
+
+    verdict = "FAIL" if n_fail > 0 else "PASS"
+    print(
+        f"  verdict: {verdict}  "
+        f"({n_ok} ok, {n_fail} fail, {n_new} new, {n_missing} missing, "
+        f"{len(skipped)} skipped)"
+    )
+    if skipped:
+        print("  skipped: " + ", ".join(f"{k} ({v})" for k, v in skipped.items()))
+
+    return 0 if verdict == "PASS" else 1
 
 
 if __name__ == "__main__":
