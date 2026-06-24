@@ -268,6 +268,49 @@ def test_missing_native_raises():
             _adapter.review_config(df, config)
 
 
+def test_review_config_raises_when_native_loader_absent():
+    """review_config raises SuggestionsNativeRequired when the loader returns None.
+
+    This test exercises the real _require_kernel guard (not a mock of the guard
+    itself) by patching the loader so native_module() returns None.  The guard
+    fires at the top of review_config -- before MatchEngine runs -- so the test
+    does not need to supply a valid df/config shape, but we supply one anyway for
+    clarity.
+
+    Two variants are tested:
+    - loader-absent: native_module() returns None.
+    - symbol-absent: native_module() returns an object without suggest_config.
+    Both arms of the ``if nm is None or not hasattr(nm, "suggest_config")`` guard
+    must raise with "goldenmatch[native]" in the message.
+    """
+    import types
+    import unittest.mock as mock
+
+    import goldenmatch.core._native_loader as _loader
+    from goldenmatch.core.suggest import SuggestionsNativeRequired
+    from goldenmatch.core.suggest.adapter import review_config
+
+    df = _make_df()
+    config = _make_config()
+
+    # Arm 1: loader returns None (wheel not installed / not built)
+    with mock.patch.object(_loader, "native_module", return_value=None):
+        with pytest.raises(SuggestionsNativeRequired) as exc_info:
+            review_config(df, config)
+        assert "goldenmatch[native]" in str(exc_info.value), (
+            f"Expected 'goldenmatch[native]' in error message; got: {exc_info.value!r}"
+        )
+
+    # Arm 2: loader returns a module object that lacks suggest_config
+    stub = types.SimpleNamespace()  # no suggest_config attribute
+    with mock.patch.object(_loader, "native_module", return_value=stub):
+        with pytest.raises(SuggestionsNativeRequired) as exc_info:
+            review_config(df, config)
+        assert "goldenmatch[native]" in str(exc_info.value), (
+            f"Expected 'goldenmatch[native]' in error message; got: {exc_info.value!r}"
+        )
+
+
 @requires_native
 def test_review_config_adds_row_id_if_absent():
     """review_config works even when __row_id__ is not pre-set on the df."""
