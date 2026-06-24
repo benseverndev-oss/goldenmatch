@@ -785,4 +785,83 @@ Expected: `True`.
 
 ## Task 0 findings
 
-_(Appended during Task 0 — records the resolved input schema and artifact sources.)_
+_Resolved 2026-06-24 in worktree `feat/config-suggestion-kernel` (off `main` @ 2de2b20e)._
+
+### Step 1 — No pyo3-free autoconfig decision crate exists → `suggest-core` is greenfield
+
+`packages/rust/extensions/` crates: `analysis-core`, `analysis-native`, `bridge`,
+`datafusion-udf`, `embed-py`, `fingerprint-core`, `goldencheck-core`,
+`goldencheck-native`, `goldenembed`, `graph-core`, `native`, `native-flow`,
+`postgres`, `score-core`. **None own autoconfig or suggestion decision logic.**
+`bridge::autoconfig` (`bridge/src/api.rs:311`) imports `goldenmatch.core.autoconfig`
+and calls `auto_configure_df` in Python — it delegates, it does not reimplement.
+The `project_autoconfig_native_core` memory ("native 0.1.11 shipped") is **stale /
+refers to small score-kernel levers**, not a decision crate. `suggest-core` is the
+first decision kernel; build it greenfield on the `score-core` standalone-workspace
+pattern. **No change to the plan.**
+
+### Step 2 — scored_pairs + clusters: use `MatchEngine`, not `run_dedupe`
+
+- **scored_pairs:** `MatchEngine.run()` → `EngineResult.scored_pairs: list[tuple[int,int,float]]`
+  (`tui/engine.py:40`). `run_dedupe()` does NOT carry scored pairs (CLAUDE.md). So
+  `review_config` **and** the benchmark MUST drive the run through `MatchEngine`
+  (`tui/engine.py::MatchEngine`), exactly as `goldenmatch explain`/`lineage` already
+  do. This is the reliable `(id_a, id_b, score)` source for the `scored_pairs` batch.
+- **clusters:** `build_clusters` dicts carry `members`, `size`, `oversized`,
+  `pair_scores`, `confidence`, and `quality` ∈ {`strong`,`weak`,`split`}
+  (`core/cluster.py` — `_confidence_fields`; frame form has a `quality` column at
+  `cluster.py:631`). These map 1:1 to the `clusters` batch
+  `(cluster_id, size, confidence, quality, oversized)`.
+- **Bucket-backend degradation RESOLVED, not a risk:** the earlier worry was that
+  `scored_pairs` is empty on `backend=bucket`. That was a `run_dedupe` limitation;
+  the scorer produces pairs on every backend and `MatchEngine` collects them into
+  `EngineResult.scored_pairs`. **Driving through `MatchEngine` removes the
+  degradation entirely** — the threshold rule has its score distribution on all
+  backends. Supersede the Task 0-Step-4 / line-69 caveat with: "always run via
+  `MatchEngine`; no backend degrades scored_pairs."
+
+### Step 3 — column_signals field sources (all available)
+
+| field | source |
+|-------|--------|
+| `field`, `col_type` | `core/autoconfig.py` `DataProfile` / `profile_columns` (col-type classification) |
+| `scorer` | the committed `GoldenMatchConfig` (matchkey field's scorer) |
+| `in_blocking` | committed config `blocking` fields (`collect_blocking_fields`) |
+| `in_negative_evidence` | committed config matchkey `negative_evidence` lists |
+| `identity_score`, `corruption_score` | `core/indicators.py::compute_column_priors(df) -> dict[str, ColumnPrior]` |
+| `cardinality_ratio`, `null_rate` | `core/autoconfig.py` `DataProfile` (`cardinality_ratio = n_unique/n_non_null`, `null_rate = 1 - n_non_null/n_rows`) |
+| `variant_rate` | `core/quality.py::blocking_risk(df) -> dict[str,float] \| None`; **defaults to 0.0 when goldencheck is absent / returns None** (fail-open) |
+| `collision_rate` | **NOT available off-the-shelf — computed by the Python adapter from run results** (see below) |
+
+**`collision_rate` definition (adapter-computed, result-driven).** There is no
+reusable per-column collision function (`promote_negative_evidence` in
+`core/autoconfig_negative_evidence.py:99` gates on `identity_score >= 0.75` +
+`cardinality_ratio >= 0.5` only; the memory's `compute_identity_collision_signal` /
+`rule_demote_clustered_identity` no longer exist by those names). So the adapter
+computes, per candidate column, **the fraction of multi-member clusters in which
+that column has ≥2 distinct non-null values among members** — i.e. a strong
+identity-like column that *disagrees inside a merged cluster*, which is exactly the
+negative-evidence signal (the merge should have been penalised by that field). This
+is computable purely from `clusters` + the source frame, no sample, no controller
+internals. Rule 3 (Task 7) gates: `identity_score >= 0.75` AND
+`cardinality_ratio >= 0.5` AND `not in_negative_evidence` AND `collision_rate >= 0.5`
+(mirrors `_IDENTITY_SCORE_THRESHOLD` / `_CARDINALITY_THRESHOLD` from
+`autoconfig_negative_evidence.py`, plus the new result-driven collision gate).
+
+### Step 4 — Frozen Arrow input schema
+
+```
+scored_pairs:   id_a:int64, id_b:int64, score:float64
+clusters:       cluster_id:int64, size:int64, confidence:float64,
+                quality:utf8 ("strong"|"weak"|"split"), oversized:bool
+column_signals: field:utf8, col_type:utf8, scorer:utf8, in_blocking:bool,
+                in_negative_evidence:bool, identity_score:float64,
+                corruption_score:float64, collision_rate:float64,
+                cardinality_ratio:float64, null_rate:float64, variant_rate:float64
+```
+
+No rule is fully degraded: rule 1 (threshold) needs `scored_pairs` + cluster counts
+(available via MatchEngine); rule 2 (scorer swap) needs `corruption_score` +
+`variant_rate` (available; `variant_rate` fail-open to 0.0); rule 3 (NE) needs
+`identity_score` + `cardinality_ratio` + `collision_rate` + `in_negative_evidence`
+(available; `collision_rate` adapter-computed). **Schema frozen — proceed to Task 1.**
