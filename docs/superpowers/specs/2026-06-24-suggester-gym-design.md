@@ -84,17 +84,32 @@ new question. New / changed modules:
 - **`cli.py`** (extend) — a `gym` subcommand; fold recovery metrics into
   `bless`/`gate`.
 
-**Required refactor — extract `converge`.** The oracle's greedy convergence loop
-(apply top suggestion → re-run → recompute → stop when no positive *unsupervised*
-lift) currently lives inline in `oracle.py::evaluate_dataset`. The gym needs the
-exact same loop starting from a *degraded* config, so extract it to a shared
-`converge(df, config) -> (final_config, trail)` that both the oracle and the gym
-call. Keeps "how the suggester behaves" in one place.
+**New helper — `converge_unsupervised` (NOT a reuse of the oracle's loop).**
+Grounding the plan surfaced a correction: the oracle's existing convergence loop
+in `oracle.py::evaluate_dataset` is **label-driven** — it applies the top
+suggestion only when the *measured F1 lift* (ground truth) is positive
+(`oracle.py:260-266`). That measures an oracle *ceiling* (best achievable by
+greedily following labels), which is a legitimate but **different** thing from
+what the gym needs. The gym must measure what a user **actually** gets with no
+labels, so it adds a new
 
-**The key invariant:** the suggester runs **fully unsupervised** (convergence
-decisions use the self-verify health proxy, never labels). The gym uses
-ground-truth F1 only to *grade* the result. We measure real recovery without
-changing how the suggester operates — the gym is an honest mirror of production.
+```
+converge_unsupervised(df, config) -> (final_config, trail)
+```
+
+that loops: `review_config(df, current)` → if empty, stop → apply the top
+suggestion (cycle-guard on `id`) → repeat to a step cap. `review_config` already
+self-verifies (it only returns suggestions that pass the unsupervised health
+gate), so this loop has **zero label dependency** and is *simpler* than the
+oracle's (no F1 in the loop). **The oracle is left untouched** — so the byte-
+stability concern (old open question #2) dissolves: there is no oracle refactor.
+
+**The key invariant:** the suggester runs **fully unsupervised** (every apply
+decision comes from `review_config`'s self-verify health proxy, never labels).
+The gym uses ground-truth F1 only to *grade* the converged result. We measure
+real recovery without changing how the suggester operates — the gym is an honest
+mirror of production, and recovery% reflects what a user genuinely gets (not an
+oracle that peeks at F1).
 
 **Separate scoreboard:** a new `baselines/gym_scorecard.json`, distinct from the
 oracle's `scorecard.json`. Different questions — oracle: "does it suggest well
@@ -145,8 +160,8 @@ For each `(dataset with ground truth, applicable perturbation)`:
 3. **Damage check:** if `F1_ceiling − F1_degraded < DAMAGE_EPS` → record
    `no_damage`, skip recovery scoring. `DAMAGE_EPS = 0.005` (a named constant;
    below it the recovery ratio's denominator is too small to be meaningful).
-4. **Recover:** `recovered_config, trail = converge(df, degraded_config)` (shared
-   unsupervised loop).
+4. **Recover:** `recovered_config, trail = converge_unsupervised(df,
+   degraded_config)` (the no-labels loop above).
 5. **Score:** run + score `recovered_config` → `F1_recovered`.
 6. **Record:** `recovery_pct = (F1_recovered − F1_degraded) /
    (F1_ceiling − F1_degraded)` (100% = fully undone, >100% = beat zero-config,
@@ -254,9 +269,9 @@ or job), same `large-new-64GB` + native-build + symbol-assert setup.
   in `datasets.py` / `tests/generate_synthetic.py`) exposes a corruption-intensity
   knob, or whether the sweep needs a thin corruption-injection wrapper over a
   clean synthetic base.
-- Confirm `converge` can be cleanly extracted from `oracle.py::evaluate_dataset`
-  without changing the oracle's measured output (the oracle scorecard must stay
-  byte-stable after the refactor — gate it).
+- RESOLVED during planning: the gym does NOT extract/reuse the oracle's loop (it
+  is label-driven); it adds its own `converge_unsupervised` and leaves `oracle.py`
+  untouched, so there is no byte-stability risk to gate.
 - Exact zero-config build path the gym perturbs from (`auto_configure_df` with
   rerank disabled, matching the oracle's baseline builder) so ceiling F1 matches
   the oracle's baseline_f1 for shared datasets.
