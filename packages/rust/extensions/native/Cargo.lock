@@ -26,6 +26,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "analysis-core"
+version = "0.1.0"
+
+[[package]]
 name = "android_system_properties"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -563,6 +567,7 @@ dependencies = [
  "goldenmatch-perceptual-core",
  "goldenmatch-score-core",
  "goldenmatch-sketch-core",
+ "goldenmatch-suggest-core",
  "hmac",
  "numpy",
  "pyo3",
@@ -587,6 +592,16 @@ name = "goldenmatch-sketch-core"
 version = "0.1.0"
 dependencies = [
  "rayon",
+]
+
+[[package]]
+name = "goldenmatch-suggest-core"
+version = "0.1.0"
+dependencies = [
+ "analysis-core",
+ "arrow",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
