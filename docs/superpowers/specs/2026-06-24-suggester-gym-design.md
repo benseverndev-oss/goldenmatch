@@ -142,8 +142,9 @@ For each `(dataset with ground truth, applicable perturbation)`:
 1. **Ceiling:** `ceiling_config` = zero-config; run + score → `F1_ceiling`.
 2. **Damage:** `degraded_config = perturbation.apply(ceiling_config)`; run +
    score → `F1_degraded`.
-3. **Damage check:** if `F1_ceiling − F1_degraded < ε` (≈0.005) → record
-   `no_damage`, skip recovery scoring.
+3. **Damage check:** if `F1_ceiling − F1_degraded < DAMAGE_EPS` → record
+   `no_damage`, skip recovery scoring. `DAMAGE_EPS = 0.005` (a named constant;
+   below it the recovery ratio's denominator is too small to be meaningful).
 4. **Recover:** `recovered_config, trail = converge(df, degraded_config)` (shared
    unsupervised loop).
 5. **Score:** run + score `recovered_config` → `F1_recovered`.
@@ -200,10 +201,18 @@ tests **data so noisy that zero-config itself weakens**.
 **bless/gate** (separate `gym_scorecard.json`): `bless` writes per-
 `(dataset,perturbation)` recovery% + per-rule rollup + sweep lift-per-level + the
 headline. `gate` fails (exit 1) on a **recovery regression** — a built rule's
-recovery% dropping > tolerance (~5%), the headline dropping, or any sweep level's
-lift going negative (self-verify regression). Reuses the Plan-1 gate semantics
+recovery% dropping by more than `RECOVERY_GATE_TOL` (named constant, `0.05`), the
+headline dropping by more than `RECOVERY_GATE_TOL`, or **any sweep level's lift
+going negative** (self-verify regression). Reuses the Plan-1 gate semantics
 (zero-eval guard → fail; missing-blessed → fail). This is the payoff: "the
 suggester got smarter or dumber" becomes a CI-gated number.
+
+**What the sweep gate does and does not enforce:** the gate enforces only
+`lift ≥ 0` at every corruption level (the suggester never hurts). The "lift
+*grows* as data degrades" property is **report-only** — it's the qualitative
+trend we read off the board to judge whether the suggester is earning its keep on
+hard data; gating on monotonic growth would be brittle (small-sample noise across
+levels). If a later spec wants it gated, that's an explicit future decision.
 
 **CI:** extend `bench-suggest-quality.yml` to also run `gym gate` (sibling step
 or job), same `large-new-64GB` + native-build + symbol-assert setup.
