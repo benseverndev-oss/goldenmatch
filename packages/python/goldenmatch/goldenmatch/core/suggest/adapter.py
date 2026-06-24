@@ -21,19 +21,19 @@ is slightly cheaper but adds caller boilerplate that hides the integration path.
 """
 from __future__ import annotations
 
+import copy
 import json
 import logging
 from typing import Any
 
 import polars as pl
+import pyarrow as pa
 
 from goldenmatch.core.suggest.types import Suggestion, SuggestionsNativeRequired
 
 logger = logging.getLogger(__name__)
 
 # ── Arrow schemas (frozen - must match the Rust kernel exactly) ────────────
-
-import pyarrow as pa
 
 _SCORED_PAIRS_SCHEMA = pa.schema([
     pa.field("id_a", pa.int64()),
@@ -164,7 +164,7 @@ def _collision_rates(
     # Work on string columns only (what blockers and scorers actually use)
     string_cols = [
         c for c in df.columns
-        if not c.startswith("__") and df[c].dtype == pl.Utf8
+        if not c.startswith("__") and df[c].dtype == pl.String
     ]
     if not string_cols:
         return {}
@@ -239,7 +239,9 @@ def _config_summary(config: Any) -> dict:
                     if ne.field not in ne_fields:
                         ne_fields.append(ne.field)
     except Exception:
-        pass
+        logger.warning(
+            "_config_summary: failed to serialize config", exc_info=True
+        )
 
     return {
         "matchkeys": matchkeys_summary,
@@ -430,26 +432,25 @@ def review_config(
     # -- Run the pipeline to get scored_pairs + clusters --
     from goldenmatch.tui.engine import MatchEngine
 
+    # Deep-copy the config so disabling rerank below NEVER mutates the caller's
+    # object (the engine + the suggestion summary all run against the copy).
+    _config = copy.deepcopy(config)
+
     # Disable rerank to avoid HuggingFace model downloads in tests/offline env
     try:
-        _config = config
-        matchkeys = _config.get_matchkeys()
-        for mk in matchkeys:
+        for mk in _config.get_matchkeys():
             if mk.rerank:
                 mk.rerank = False
     except Exception:
-        pass
+        logger.debug(
+            "review_config: failed to disable rerank on config copy", exc_info=True
+        )
 
-    # We call _run_pipeline directly (no file loading needed)
-    engine = object.__new__(MatchEngine)
-    engine._files = []
-    engine._data = df
-    engine._profile = None
-    engine._last_result = None
-    engine._last_telemetry = None
+    # Build an engine over the in-memory frame (no file loading).
+    engine = MatchEngine.from_dataframe(df)
 
     try:
-        result = engine._run_pipeline(df, config)
+        result = engine._run_pipeline(df, _config)
     except Exception as exc:
         raise RuntimeError(
             f"review_config: pipeline failed on the provided df/config: {exc}"
@@ -461,9 +462,9 @@ def review_config(
     # -- Build Arrow batches --
     scored_pairs_batch = _build_scored_pairs_batch(scored_pairs)
     clusters_batch = _build_clusters_batch(clusters)
-    column_signals_batch = _build_column_signals_batch(df, config, clusters)
+    column_signals_batch = _build_column_signals_batch(df, _config, clusters)
 
-    config_json = json.dumps(_config_summary(config), default=str)
+    config_json = json.dumps(_config_summary(_config), default=str)
     priors_dict = priors if priors is not None else {"counts": {}}
     priors_json = json.dumps(priors_dict, default=str)
 

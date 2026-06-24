@@ -92,6 +92,25 @@ class MatchEngine:
         profile_cols = [c for c in combined.columns if not c.startswith("__")]
         self._profile = profile_dataframe(combined.select(profile_cols))
 
+    @classmethod
+    def from_dataframe(cls, df: pl.DataFrame) -> MatchEngine:
+        """Build an engine over an in-memory frame (no file loading).
+
+        For callers like config-suggestion review (``core/suggest``) that
+        already hold the data and only need ``_run_pipeline``/``run_full``.
+        Mirrors every instance field ``__init__`` assigns so it can't break
+        silently if ``__init__`` evolves -- ``_data`` is the passed frame,
+        the rest take ``__init__``'s post-load defaults (profile is left None;
+        callers that need it should go through the file constructor).
+        """
+        engine = object.__new__(cls)
+        engine._files = []
+        engine._data = df
+        engine._profile = None
+        engine._last_result = None
+        engine._last_telemetry = None
+        return engine
+
     @property
     def data(self) -> pl.DataFrame:
         return self._data
