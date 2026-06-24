@@ -97,3 +97,13 @@ jobs:
             FILTER=""
           fi
           uv run python -m scripts.suggest_quality "$MODE" $FILTER
+
+      - name: Run gym-gate (catalog recovery non-regression)
+        run: |
+          DATASETS="${{ inputs.datasets }}"
+          if [ -n "$DATASETS" ]; then
+            FILTER="--datasets $DATASETS"
+          else
+            FILTER=""
+          fi
+          uv run python -m scripts.suggest_quality gym-gate $FILTER
