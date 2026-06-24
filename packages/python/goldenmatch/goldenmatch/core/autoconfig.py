@@ -687,7 +687,9 @@ def _route_to_probabilistic_enabled() -> bool:
 _STRONG_EXACT_TYPES = ("identifier", "email", "phone")
 
 
-def _is_probabilistic_shape(matchkeys, profiles) -> bool:
+def _is_probabilistic_shape(
+    matchkeys: list[MatchkeyConfig], profiles: list[ColumnProfile]
+) -> bool:
     """Probabilistic shape = no SURVIVING exact matchkey backed by a strong-identity
     column (identifier/email/phone) + >=2 fuzzy (weighted) fields for EM to weight.
     Keys on the EMITTED matchkeys (not raw profiles), so a ceiling-excluded id column
