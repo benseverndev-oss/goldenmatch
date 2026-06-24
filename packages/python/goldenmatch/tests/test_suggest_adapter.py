@@ -8,9 +8,8 @@ Guards:
 """
 from __future__ import annotations
 
-import pytest
 import polars as pl
-
+import pytest
 
 # ── Native guard ──────────────────────────────────────────────────────────
 
@@ -23,11 +22,121 @@ def _native_suggest_available() -> bool:
         return False
 
 
-if not _native_suggest_available():
-    pytest.skip(
-        "native suggest_config not built -- skipping adapter tests",
-        allow_module_level=True,
+# ── Pure-Python helper tests (no native needed) ───────────────────────────
+# These run unconditionally -- they exercise _collision_rates and
+# _config_summary, which never touch the kernel.
+
+def _helper_config():
+    from goldenmatch.config.schemas import (
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
     )
+
+    mk = MatchkeyConfig(
+        name="fuzzy_match",
+        type="weighted",
+        threshold=0.3,
+        fields=[
+            MatchkeyField(field="first_name", scorer="jaro_winkler", weight=0.5),
+            MatchkeyField(field="last_name", scorer="jaro_winkler", weight=0.5),
+        ],
+    )
+    blocking = BlockingConfig(
+        strategy="static",
+        keys=[BlockingKeyConfig(fields=["last_name"])],
+        auto_suggest=False,
+    )
+    return GoldenMatchConfig(matchkeys=[mk], blocking=blocking)
+
+
+def test_collision_rates_all_identical_is_zero():
+    """A multi-member cluster where the column is all-identical -> 0.0."""
+    from goldenmatch.core.suggest.adapter import _collision_rates
+
+    df = pl.DataFrame({
+        "__row_id__": [0, 1],
+        "name": ["Alice", "Alice"],  # identical
+    })
+    clusters = {0: {"size": 2, "oversized": False, "members": [0, 1]}}
+    rates = _collision_rates(clusters, df)
+    assert rates.get("name") == 0.0
+
+
+def test_collision_rates_two_distinct_is_one():
+    """A multi-member cluster with two distinct non-null values -> 1.0."""
+    from goldenmatch.core.suggest.adapter import _collision_rates
+
+    df = pl.DataFrame({
+        "__row_id__": [0, 1],
+        "name": ["Alice", "Bob"],  # distinct
+    })
+    clusters = {0: {"size": 2, "oversized": False, "members": [0, 1]}}
+    rates = _collision_rates(clusters, df)
+    assert rates.get("name") == 1.0
+
+
+def test_collision_rates_single_member_ignored():
+    """Single-member clusters are not counted (no multi-member -> empty)."""
+    from goldenmatch.core.suggest.adapter import _collision_rates
+
+    df = pl.DataFrame({
+        "__row_id__": [0, 1],
+        "name": ["Alice", "Bob"],
+    })
+    clusters = {
+        0: {"size": 1, "oversized": False, "members": [0]},
+        1: {"size": 1, "oversized": False, "members": [1]},
+    }
+    rates = _collision_rates(clusters, df)
+    assert rates == {}  # no multi-member clusters
+
+
+def test_collision_rates_mixed_clusters():
+    """Two multi-member clusters: one collides, one doesn't -> 0.5."""
+    from goldenmatch.core.suggest.adapter import _collision_rates
+
+    df = pl.DataFrame({
+        "__row_id__": [0, 1, 2, 3],
+        "name": ["Alice", "Alice", "Bob", "Carol"],  # cluster1 same, cluster2 differs
+    })
+    clusters = {
+        0: {"size": 2, "oversized": False, "members": [0, 1]},  # identical -> no collision
+        1: {"size": 2, "oversized": False, "members": [2, 3]},  # distinct -> collision
+    }
+    rates = _collision_rates(clusters, df)
+    assert rates.get("name") == 0.5
+
+
+def test_config_summary_shape():
+    """_config_summary returns the kernel ConfigSummary shape with 'kind'."""
+    from goldenmatch.core.suggest.adapter import _config_summary
+
+    summary = _config_summary(_helper_config())
+    assert set(summary.keys()) == {"matchkeys", "negative_evidence"}
+    assert isinstance(summary["matchkeys"], list)
+    assert len(summary["matchkeys"]) == 1
+    mk = summary["matchkeys"][0]
+    assert mk["name"] == "fuzzy_match"
+    assert mk["kind"] == "weighted"  # the required field discovered at runtime
+    assert mk["threshold"] == 0.3
+    assert len(mk["fields"]) == 2
+    assert mk["fields"][0]["field"] == "first_name"
+    assert mk["fields"][0]["scorer"] == "jaro_winkler"
+    assert summary["negative_evidence"] == []
+
+
+# ── Native-gated tests below ──────────────────────────────────────────────
+# The helper tests above run unconditionally; everything below needs the
+# kernel, so they carry a per-test skipif marker (NOT a module-level skip,
+# which would also skip the pure-Python helper tests above).
+
+requires_native = pytest.mark.skipif(
+    not _native_suggest_available(),
+    reason="native suggest_config not built",
+)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────
@@ -90,9 +199,10 @@ def _make_config():
 
 # ── Tests ─────────────────────────────────────────────────────────────────
 
+@requires_native
 def test_review_config_returns_suggestions():
     """review_config returns a non-empty list of Suggestion objects."""
-    from goldenmatch.core.suggest import review_config, Suggestion
+    from goldenmatch.core.suggest import Suggestion, review_config
 
     df = _make_df()
     config = _make_config()
@@ -101,12 +211,13 @@ def test_review_config_returns_suggestions():
     assert isinstance(suggestions, list), "review_config must return a list"
     assert len(suggestions) > 0, (
         "Expected at least one suggestion for a loose-threshold config "
-        f"(got zero; kernel output may be empty or adapter failed silently)"
+        "(got zero; kernel output may be empty or adapter failed silently)"
     )
     for s in suggestions:
         assert isinstance(s, Suggestion), f"Expected Suggestion, got {type(s)}"
 
 
+@requires_native
 def test_suggestion_has_rationale_and_patch():
     """Every returned Suggestion has a non-empty rationale and a patch with an op key."""
     from goldenmatch.core.suggest import review_config
@@ -127,6 +238,7 @@ def test_suggestion_has_rationale_and_patch():
     )
 
 
+@requires_native
 def test_suggestion_confidence_in_range():
     """Confidence scores must be in [0.0, 1.0]."""
     from goldenmatch.core.suggest import review_config
@@ -144,6 +256,7 @@ def test_missing_native_raises():
     We simulate absence by patching _native_loader.native_module to return None.
     """
     import unittest.mock as mock
+
     from goldenmatch.core.suggest import SuggestionsNativeRequired
     from goldenmatch.core.suggest import adapter as _adapter
 
@@ -155,6 +268,7 @@ def test_missing_native_raises():
             _adapter.review_config(df, config)
 
 
+@requires_native
 def test_review_config_adds_row_id_if_absent():
     """review_config works even when __row_id__ is not pre-set on the df."""
     from goldenmatch.core.suggest import review_config
@@ -168,16 +282,34 @@ def test_review_config_adds_row_id_if_absent():
     assert isinstance(suggestions, list)
 
 
+@requires_native
+def test_review_config_does_not_mutate_caller_config():
+    """review_config must deep-copy the config; the caller's rerank stays set."""
+    from goldenmatch.core.suggest import review_config
+
+    config = _make_config()
+    # Force rerank ON on the caller's config; the adapter disables it on its
+    # OWN copy, so the caller's object must come back unchanged.
+    for mk in config.get_matchkeys():
+        mk.rerank = True
+
+    review_config(_make_df(), config)
+
+    for mk in config.get_matchkeys():
+        assert mk.rerank is True, (
+            "review_config mutated the caller's config (rerank was flipped off)"
+        )
+
+
 def test_arrow_batch_helpers():
     """Unit-test the three Arrow batch builders directly for schema correctness."""
-    import pyarrow as pa
     from goldenmatch.core.suggest.adapter import (
-        _build_clusters_batch,
-        _build_column_signals_batch,
-        _build_scored_pairs_batch,
         _CLUSTERS_SCHEMA,
         _COLUMN_SIGNALS_SCHEMA,
         _SCORED_PAIRS_SCHEMA,
+        _build_clusters_batch,
+        _build_column_signals_batch,
+        _build_scored_pairs_batch,
     )
 
     # scored_pairs
