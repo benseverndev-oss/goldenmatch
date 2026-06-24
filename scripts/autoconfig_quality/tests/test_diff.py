@@ -110,6 +110,21 @@ def test_anchor_f1_fastonly_skip_is_warn_not_fail():
     assert any(r["field"] == "f1" and r["status"] == "WARN" for r in rows)
 
 
+def test_real_f1_probabilistic_floored():
+    base = {"datasets": {"hist": {"kind": "real",
+        "f1": {"f1": 0.46}, "f1_probabilistic": {"f1": 0.82}}}}
+    # probabilistic drop beyond tol -> FAIL (even though default f1 is unchanged)
+    cur = {"datasets": {"hist": {"kind": "real",
+        "f1": {"f1": 0.46}, "f1_probabilistic": {"f1": 0.70}}}}
+    _, verdict = diff_scorecards(cur, base, tolerance=0.01)
+    assert verdict == "FAIL"
+    # both within tol -> PASS
+    cur2 = {"datasets": {"hist": {"kind": "real",
+        "f1": {"f1": 0.455}, "f1_probabilistic": {"f1": 0.815}}}}
+    _, verdict2 = diff_scorecards(cur2, base, tolerance=0.01)
+    assert verdict2 == "PASS"
+
+
 def test_render_table_smoke():
     rows, _ = diff_scorecards(BASE, BASE)
     assert isinstance(render_table(rows), str)

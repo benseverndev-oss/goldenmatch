@@ -51,6 +51,21 @@ def _row(dataset: str, field: str, before: Any, after: Any, status: str) -> dict
             "status": status}
 
 
+def _floor_real_block(
+    rows: list[dict], name: str, label: str, c: dict, b: dict | None, tolerance: float,
+) -> None:
+    """Floor one real-dataset F1 strategy block (`label` = 'f1' or 'f1_probabilistic'):
+    FAIL if current < baseline - tolerance, OK otherwise. Absent current = skip (the
+    real branch has no WARN; an error leaves the block absent)."""
+    cur = c.get(label, {}).get("f1")
+    base = b.get(label, {}).get("f1") if b else None
+    if cur is not None and base is not None:
+        status = _STATUS_FAIL if cur < base - tolerance else _STATUS_OK
+        rows.append(_row(name, label, base, cur, status))
+    elif cur is not None:
+        rows.append(_row(name, label, None, cur, _STATUS_OK))
+
+
 def diff_scorecards(
     current: dict, baseline: dict, *, tolerance: float = 0.01,
 ) -> tuple[list[dict], str]:
@@ -99,13 +114,12 @@ def diff_scorecards(
             if "error" in c:
                 rows.append(_row(name, "f1", None, c["error"], _STATUS_NEUTRAL))
                 continue
-            cur_f1 = c.get("f1", {}).get("f1")
-            base_f1 = b.get("f1", {}).get("f1") if b else None
-            if cur_f1 is not None and base_f1 is not None:
-                status = _STATUS_FAIL if cur_f1 < base_f1 - tolerance else _STATUS_OK
-                rows.append(_row(name, "f1", base_f1, cur_f1, status))
-            elif cur_f1 is not None:
-                rows.append(_row(name, "f1", None, cur_f1, _STATUS_OK))
+            # Floor both strategy blocks: `f1` (default, what ships) and
+            # `f1_probabilistic` (forced Fellegi-Sunter). A drop in EITHER beyond
+            # tolerance is a regression. Absent current = skip (no WARN in the real
+            # branch); an `error_probabilistic` leaves the block absent -> skipped.
+            _floor_real_block(rows, name, "f1", c, b, tolerance)
+            _floor_real_block(rows, name, "f1_probabilistic", c, b, tolerance)
 
     # Datasets in baseline but absent from current -> neutral (skipped).
     for name in base:
