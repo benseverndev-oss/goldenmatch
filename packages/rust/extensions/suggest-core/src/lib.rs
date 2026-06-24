@@ -5,6 +5,8 @@
 //! text, and ranks. Shared by construction across the `goldenmatch-native` pyo3
 //! shim and (later) the datafusion-udf FFI + TS/WASM surfaces. No I/O, no pyo3.
 
+pub mod contract;
+
 #[cfg(test)]
 mod tests {
     #[test]
