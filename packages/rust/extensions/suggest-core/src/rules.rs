@@ -3,6 +3,8 @@ use crate::diagnostics::ScoreDiagnostics;
 
 const EVERYTHING_MATCHES: f64 = 0.90; // mirrors controller precision_collapse_floor
 const RECALL_RISK_BAND: f64 = 0.20; // fraction just-below to call recall risk
+const DIP_MIN_GAP: f64 = 0.05; // min |dip - threshold| before the dip suggestion fires
+const RECALL_STEP_DOWN: f64 = 0.05; // fixed lowering step for the recall-risk suggestion
 
 /// Returns config suggestions for a single matchkey's threshold.
 ///
@@ -18,7 +20,7 @@ pub fn threshold_rule(
 
     // (a) bimodality dip not aligned with current threshold
     if let Some(dip) = sd.dip() {
-        if (dip - current).abs() > 0.05 {
+        if (dip - current).abs() > DIP_MIN_GAP {
             let kind = if dip > current {
                 SuggestionKind::RaiseThreshold
             } else {
@@ -78,7 +80,7 @@ pub fn threshold_rule(
 
     // (c) recall risk: mass just below + weak/oversized clusters -> lower
     if sd.mass_just_below > RECALL_RISK_BAND && (weak_clusters + oversized_clusters) > 0 {
-        let proposed = round2(current - 0.05);
+        let proposed = round2(current - RECALL_STEP_DOWN);
         out.push(Suggestion {
             id: format!("thr:lower:{matchkey}"),
             kind: SuggestionKind::LowerThreshold,
@@ -151,11 +153,18 @@ mod tests {
         let out = threshold_rule("name", 0.80, &sd(0.4, 0.05, Some(0.5)), 0, 0);
         let s = out
             .iter()
-            .find(|s| matches!(s.patch, ConfigPatch::SetThreshold { .. }))
+            .find(|s| s.id == "thr:dip:name")
             .unwrap();
         // dip at 0.5 is below current 0.80 -> suggest lowering toward the valley
         assert!(
-            matches!(&s.patch, ConfigPatch::SetThreshold { value, .. } if (*value - 0.5).abs() < 0.11)
+            matches!(&s.patch, ConfigPatch::SetThreshold { value, .. } if (*value - 0.5).abs() < 1e-9)
         );
+    }
+
+    #[test]
+    fn no_suggestions_when_nothing_triggered() {
+        // mass_above 0.5 (< 0.90), mass_just_below 0.05 (< 0.20), no dip
+        let out = threshold_rule("name", 0.80, &sd(0.50, 0.05, None), 0, 0);
+        assert!(out.is_empty());
     }
 }
