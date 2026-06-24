@@ -16,6 +16,7 @@ mod pairs;
 mod perceptual;
 mod score;
 mod sketch;
+mod suggest;
 
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -63,5 +64,6 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(autoconfig::autoconfig_extrapolate_pair_count, m)?)?;
     m.add_function(wrap_pyfunction!(autoconfig::autoconfig_sparse_match_floor, m)?)?;
     m.add_function(wrap_pyfunction!(autoconfig::autoconfig_exact_matchkey_floor, m)?)?;
+    m.add_function(wrap_pyfunction!(suggest::suggest_config, m)?)?;
     Ok(())
 }
