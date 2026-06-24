@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.3.0 (2026-06-24)
+
+New pure-scalar canonicalizers for clean-room match keys, an opt-in Arrow-native date/phone acceleration runtime, and expanded carceral domain coverage. No breaking changes; existing transform outputs are unchanged.
+
+### Added
+
+- `goldenflow.canonicalize(value, kind)` — pure, scalar, stdlib-only field canonicalizers for `email`, `phone`, `name`, and `postal`. Total, idempotent, and locale-independent (ASCII-only case folding) so they reproduce byte-for-byte in a browser JS/TS port. Built for PPRL / clean-room two-party CLK linkage, where server-Python and browser-JS must agree on the exact canonical string before hashing. Exported from the package root. (#1183, closes #1128)
+- Optional `goldenflow[native]` extra: a Rust/PyO3 acceleration runtime (`goldenflow-native`) with vectorized Arrow-native date and phone kernels. Off by default at runtime, NANP-gated, and output-preserving; the pure-Python path stays the default fallback. (#796)
+- `carceral` domain: state-prison aliases for PA and CA. (#1010)
+
+### Changed
+
+- Vectorized fast paths for the `date_iso8601` and phone transforms, dispatched to the native kernel when `goldenflow[native]` is installed and enabled. Outputs are unchanged from the pure-Python path. (#796)
+
+### Fixed
+
+- `carceral` domain: corrected the Texas (TX) facility prefix. (#1010)
+
 ## 1.2.0 (2026-06-01)
 
 New `carceral` domain pack plus a native-Polars (expr-mode) perf migration of the

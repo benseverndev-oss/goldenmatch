@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.0 (2026-06-24)
+
+### Added
+
+- **goldenanalysis tool surface** — the aggregator now surfaces a sixth sub-package, `goldenanalysis`. Its MCP tools (`list_analyzers`, `analyze_frame`, `get_trend`, `detect_regressions`) flow through transitively via `goldenanalysis.mcp.server.TOOLS`/`HANDLERS`, registered last in `_SUITE_ORDER` so existing tools keep first-wins precedence on name collisions. (#817)
+
+### Changed
+
+- **Security/hardening** — bumped the `starlette` pin and closed CodeQL findings as part of the suite-wide workflow hardening. (#738)
+
 ## 0.2.0 (2026-05-13)
 
 First real release. The aggregator package was scaffolded as `0.1.0` but

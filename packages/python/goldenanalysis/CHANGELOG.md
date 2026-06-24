@@ -4,6 +4,17 @@ All notable changes to GoldenAnalysis are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic
 versioning.
 
+## [0.3.0] - 2026-06-24
+
+The Rust accelerator goes live and GoldenAnalysis becomes an MCP server. (First published release since 0.1.0 — the 0.2.0 section below was staged but never tagged/published; its features ship here.)
+
+### Added
+- **MCP server** (`goldenanalysis[mcp]`) — exposes the analysis surface over the Model Context Protocol, surfaced through `goldensuite-mcp` alongside the other suite servers. Streamable-HTTP deploy scaffold (`Dockerfile.mcp` + `railway.json`, port 8300) for hosting it as a Smithery remote. (#817, #1068)
+- **Rust accelerator** (`goldenanalysis[native]`) — `analysis-core` / `analysis-native` crates, parity-proven against the pure-Python/Polars reference, behind the `GOLDENANALYSIS_NATIVE` loader gate. (#816)
+
+### Changed
+- **`histogram` and `quantile` now dispatch to the native kernel** when the accelerator is installed (gate default `auto`). Measured 5.8–9.9× faster than pure Python on Linux, including Arrow conversion; byte-identical output. Set `GOLDENANALYSIS_NATIVE=0` to force the pure-Python path. (#822)
+
 ## [0.2.0] - 2026-06-17
 
 Phase 2a — suite consumption. Produce an `AnalysisReport` from real suite outputs.
