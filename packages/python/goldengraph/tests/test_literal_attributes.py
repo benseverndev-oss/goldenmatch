@@ -107,6 +107,52 @@ def test_build_batch_drops_attribute_with_unresolved_owner():
     assert not [e for e in batch["entities"] if e["typ"] == "literal"]
 
 
+class _FakeGraph:
+    def __init__(self, ents):
+        self._ents = ents
+
+    def entities(self):
+        return self._ents
+
+
+def test_seed_by_query_excludes_literal_and_empty_names():
+    """Regression: a literal value node (or an empty name) must NOT enter the
+    embedding batch -- a raw value can be an empty/invalid input that 400s the whole
+    provider request. Literals are reached by BFS from a seed, never seeded on."""
+    from goldengraph.embed import seed_by_query
+
+    embedded: dict = {}
+
+    class _Emb:
+        def embed(self, texts):
+            import numpy as np
+
+            embedded["texts"] = list(texts)
+            # deterministic: first token-char ordinal, enough to rank
+            return np.asarray([[float(len(t))] for t in texts], dtype=float)
+
+    graph = _FakeGraph([
+        {"entity_id": 1, "canonical_name": "Sega Genesis", "typ": "console"},
+        {"entity_id": 2, "canonical_name": "May 1990", "typ": "literal"},  # excluded
+        {"entity_id": 3, "canonical_name": "   ", "typ": "console"},  # empty -> excluded
+    ])
+    seeds = seed_by_query(graph, "when released?", _Emb(), k=5)
+    # only the real, non-empty entity is embedded (plus the query) and seedable
+    assert embedded["texts"] == ["when released?", "Sega Genesis"]
+    assert seeds == [1]
+
+
+def test_seed_by_query_empty_graph_returns_empty():
+    from goldengraph.embed import seed_by_query
+
+    class _Emb:
+        def embed(self, texts):  # pragma: no cover - must not be called
+            raise AssertionError("should not embed an all-literal/empty graph")
+
+    graph = _FakeGraph([{"entity_id": 1, "canonical_name": "May 1990", "typ": "literal"}])
+    assert seed_by_query(graph, "q", _Emb()) == []
+
+
 def test_literal_nodes_excluded_from_cross_doc_link_candidates():
     ingest = importlib.import_module("goldengraph.ingest")
 

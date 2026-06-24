@@ -66,8 +66,19 @@ class GoldenmatchEmbedder:
 def seed_by_query(slice_graph, query: str, embedder: Embedder, *, k: int = 5) -> list[int]:
     """Top-`k` entity ids in `slice_graph` (a `PyGraph` from `as_of`) nearest the
     query by cosine over canonical-name embeddings. Tie-break: ascending
-    `entity_id` (deterministic — stub/zero vectors tie often)."""
-    ents = slice_graph.entities()
+    `entity_id` (deterministic — stub/zero vectors tie often).
+
+    Only real ENTITY nodes are seed candidates: literal-attribute value nodes
+    (typ="literal") are excluded -- they are answers reached by walking an edge FROM
+    a seed entity, not query anchors themselves, and embedding raw values (a bare
+    date / amount) both wastes budget and risks an empty/invalid embedding input
+    that 400s the whole batch. Empty/whitespace names are skipped for the same
+    reason (a provider rejects an empty input)."""
+    ents = [
+        e
+        for e in slice_graph.entities()
+        if e.get("typ") != "literal" and str(e.get("canonical_name", "")).strip()
+    ]
     if not ents:
         return []
     ids = [int(e["entity_id"]) for e in ents]
