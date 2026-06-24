@@ -1,0 +1,110 @@
+# Benchmark registry — the single source of truth for the consolidated
+# `bench.yml` workflow and the local `scripts/bench.py` dispatcher (#repo-hygiene).
+#
+# Each entry collapses one former `bench-<name>.yml` workflow into a row. The
+# parametrized `bench.yml` reads this file (via `scripts/bench.py --resolve`) to
+# decide install method, native build, working directory, env, and extra deps —
+# so adding a benchmark is ONE row here + the script, not a new ~50-line YAML.
+#
+# Per-bench CLI flags stay in each script's own argparse; pass them through the
+# workflow's free-form `args` input (or after `--` to `scripts/bench.py`).
+#
+# Schema (all optional unless noted):
+#   desc      str   one-line description (REQUIRED)
+#   script    str   path to the bench entrypoint, relative to `workdir` (REQUIRED)
+#   workdir   str   dir to run from, relative to repo root (default ".")
+#   native    bool  build the Rust native kernel first (default false)
+#   install   str   "uv" (default; `uv sync --all-packages`) or "pip" (editable install)
+#   extras    list  package extras for the pip editable install (e.g. [bench])
+#   with      list  uv `--with` ephemeral run deps (uv install only)
+#   pip       list  extra `pip install <dep>` packages (e.g. [recordlinkage])
+#   runner    str   RECOMMENDED runner label (default "ubuntu-latest"). The
+#                   workflow takes `runner` as an input — this is the default it
+#                   pre-fills and what `--list` prints; `runs-on` can't be
+#                   computed from a step, so the input is the override knob.
+#   env       map   static env vars exported before the run
+#   args      str   default args appended when none are supplied
+#   artifact  str   path (relative to workdir) to upload as an artifact
+#   summary   str   path (relative to workdir) to cat into the job step-summary
+
+lsh-recall:
+  desc: "MinHash/LSH (or SimHash) blocking recall on real Quora Question Pairs"
+  script: scripts/bench_lsh_recall_qqp.py
+  native: true
+  with: [datasets, sentence-transformers]
+  runner: large-new-64GB
+  env:
+    GOLDENMATCH_NATIVE: "1"
+    GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+  artifact: lsh_qqp_report.md
+  summary: lsh_qqp_report.md
+
+prepared-store:
+  desc: "dedupe_df with/without prepared_record_store (Distributed Plan v1 C1)"
+  script: scripts/bench_prepared_store.py
+  workdir: packages/python/goldenmatch
+  install: pip
+  runner: large-new-64GB
+  env:
+    GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+
+perceptual:
+  desc: "Perceptual (multimodal-ER) accuracy / perf / robustness / e2e / hotspot"
+  script: scripts/bench_perceptual/run.py
+  workdir: packages/python/goldenmatch
+  native: true
+  artifact: perceptual_bench.json
+
+quality-bridges:
+  desc: "GoldenCheck quality-bridge levers (quality-aware blocking / NE / review)"
+  script: scripts/bench_quality_bridges.py
+  with: [recordlinkage]
+  env:
+    GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+
+embedding-providers:
+  desc: "Embedding-provider accuracy/cost sweep across backends"
+  script: scripts/bench_embedding_providers.py
+  with: [recordlinkage]
+  env:
+    GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+
+inhouse-embedder:
+  desc: "In-house embedder accuracy/latency vs cloud providers"
+  script: scripts/bench_inhouse_embedder.py
+  with: [recordlinkage]
+  env:
+    GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+
+native-bulk-fingerprint:
+  desc: "Native bulk-fingerprint kernel throughput vs pure Python"
+  script: scripts/bench_native_bulk_fingerprint.py
+  native: true
+
+native-cluster-kernel:
+  desc: "Native cluster kernel (union-find) throughput vs pure Python"
+  script: scripts/bench_native_cluster_kernel.py
+  native: true
+
+pair-stream-columnar:
+  desc: "Columnar pair-stream scoring path throughput"
+  script: scripts/bench_pair_stream_columnar.py
+  workdir: packages/python/goldenmatch
+  native: true
+  runner: large-new-64GB
+
+datafusion-vs-bucket:
+  desc: "DataFusion spine vs in-house bucket backend (scoring)"
+  script: scripts/bench_datafusion_vs_bucket.py
+  workdir: packages/python/goldenmatch
+  native: true
+  runner: large-new-64GB
+
+quality-invariant-scale:
+  desc: "Quality-invariant scale audit across the staged-collect env flags"
+  script: scripts/quality_invariant_scale.py
+  native: true
+  runner: large-new-64GB
+  env:
+    GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+    GOLDENMATCH_NATIVE: "1"
