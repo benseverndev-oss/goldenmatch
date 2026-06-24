@@ -123,11 +123,16 @@ pub fn cosine01(a: &[f64], b: &[f64]) -> Option<f64> {
 
 /// Score one profile pair. `emb_a`/`emb_b` are the host-supplied fingerprint
 /// embeddings (pass empty slices to score on the structured fields alone).
+/// `cat_emb_a`/`cat_emb_b` are OPTIONAL category-only embeddings: when supplied
+/// they drive the category gate's synonym escape hatch (see below); pass empty
+/// slices to fall back to the whole-fingerprint cosine (legacy behavior).
 pub fn score_pair(
     a: &Profile,
     b: &Profile,
     emb_a: &[f64],
     emb_b: &[f64],
+    cat_emb_a: &[f64],
+    cat_emb_b: &[f64],
     cfg: &ScoreConfig,
 ) -> PairScore {
     // Name: the cross-document identity signal. Short forms ("Nabbes") and full
@@ -136,8 +141,8 @@ pub fn score_pair(
     // token-subset of a longer one scores 1.0) -- the token_set behavior the
     // three base scorers lack.
     let name = name_similarity(&a.name, &b.name);
-    // Category: jaro_winkler -- categories are short controlled-ish vocab.
-    let category = field_sim(&a.category, &b.category, cfg.neutral_prior, true);
+    // Category, lexical: jaro_winkler -- categories are short controlled-ish vocab.
+    let category_lex = field_sim(&a.category, &b.category, cfg.neutral_prior, true);
     // Embedding cosine of the rendered fingerprints, computed once. `None` when
     // no embedding was supplied for a side; the soft signals fall back to the
     // neutral prior in that case.
@@ -145,13 +150,40 @@ pub fn score_pair(
     let embedding = emb_cos.unwrap_or(cfg.neutral_prior);
     let anchor = field_sim(&a.anchor, &b.anchor, cfg.neutral_prior, false);
 
+    // Soft category signal: synonym labels ("Country" vs "Nation") score LOW
+    // lexically but HIGH by a category-specific embedding. Credit whichever is
+    // stronger, so the weighted base does not UNDER-count a category the embedding
+    // confirms is the same. Without this, an exact-name bridge lands marginally
+    // below the merge threshold on lexical category noise alone even though the
+    // gate opened via the embedding -- an internal inconsistency (the gate trusts
+    // the embedding; the base must too). The hard gate below is the independent
+    // precision guard, so lifting this soft term cannot itself cause an over-merge.
+    let cat_emb_cos = cosine01(cat_emb_a, cat_emb_b);
+    let category = match cat_emb_cos {
+        Some(c) => category_lex.max(c),
+        None => category_lex,
+    };
+
     // Hard gate. Name is the true Row-4 discriminator (Nabbes vs Shakespeare
     // share a category, not a name), so it is always required. Category guards
     // cross-sense collisions ("Apple" the company vs the fruit) and passes on
     // EITHER lexical agreement OR a strong embedding cosine -- the latter bridges
     // synonym categories the lexical scorer would wrongly veto.
-    let category_ok = category >= cfg.category_gate
-        || emb_cos.is_some_and(|c| c >= cfg.category_embedding_gate);
+    //
+    // The escape-hatch cosine MUST be a category-SPECIFIC signal. The
+    // whole-fingerprint cosine (`emb_cos`) conflates the *defining attribute*,
+    // which is EXPECTED to diverge across documents (the Row-3 case) -- so a true
+    // bridge whose attribute differs scores a low fingerprint cosine and the hatch
+    // never fires, silently re-shattering same-name entities the LLM labeled with
+    // synonym categories ("Country" vs "Nation"). When the host supplies a
+    // category-only embedding we use IT for the hatch (synonyms ~ close, distinct
+    // senses ~ far); otherwise we fall back to the fingerprint cosine so legacy
+    // callers are unchanged. The gate's lexical arm uses the RAW lexical score
+    // (`category_lex`), NOT the embedding-lifted `category`, so gate precision is
+    // unchanged -- only the soft base benefits from the lift.
+    let category_gate_cos = cat_emb_cos.or(emb_cos);
+    let category_ok = category_lex >= cfg.category_gate
+        || category_gate_cos.is_some_and(|c| c >= cfg.category_embedding_gate);
     let gated_in = category_ok && name >= cfg.name_gate;
     if !gated_in {
         return PairScore {
@@ -240,7 +272,7 @@ mod tests {
         let a = node("Thomas Nabbes | Playwright | 17th Century England | Wrote Play X");
         let b = node("Thomas Nabbes | Playwright | UNKNOWN | Born 1605");
         let cfg = ScoreConfig::default();
-        let ps = score_pair(&a, &b, &[], &[], &cfg);
+        let ps = score_pair(&a, &b, &[], &[], &[], &[], &cfg);
         assert!(ps.gated_in);
         assert!(
             ps.score >= cfg.merge_threshold,
@@ -256,7 +288,7 @@ mod tests {
         let a = node("Thomas Nabbes | Playwright | 17th Century | UNKNOWN");
         let b = node("William Shakespeare | Playwright | 17th Century | UNKNOWN");
         let emb = vec![0.3, 0.4, 0.5, 0.6];
-        let ps = score_pair(&a, &b, &emb, &emb, &ScoreConfig::default());
+        let ps = score_pair(&a, &b, &emb, &emb, &[], &[], &ScoreConfig::default());
         assert!(!ps.gated_in);
         assert_eq!(ps.score, 0.0, "name gate must veto the over-merge");
     }
@@ -267,8 +299,8 @@ mod tests {
         let b_same = node("Acme Corp | Company | UNKNOWN | Makes anvils");
         let b_diff = node("Acme Corp | Company | UNKNOWN | Sells rockets");
         let cfg = ScoreConfig::default();
-        let s_same = score_pair(&a, &b_same, &[], &[], &cfg).score;
-        let s_diff = score_pair(&a, &b_diff, &[], &[], &cfg).score;
+        let s_same = score_pair(&a, &b_same, &[], &[], &[], &[], &cfg).score;
+        let s_diff = score_pair(&a, &b_diff, &[], &[], &[], &[], &cfg).score;
         // Matching attribute scores higher, but the divergent one must NOT be
         // penalized below the threshold (no veto).
         assert!(s_same > s_diff);
@@ -281,10 +313,65 @@ mod tests {
         let b_unknown = node("Globex | Company | UNKNOWN | UNKNOWN");
         let b_conflict = node("Globex | Company | 1750 | UNKNOWN");
         let cfg = ScoreConfig::default();
-        let s_unknown = score_pair(&a, &b_unknown, &[], &[], &cfg);
-        let s_conflict = score_pair(&a, &b_conflict, &[], &[], &cfg);
+        let s_unknown = score_pair(&a, &b_unknown, &[], &[], &[], &[], &cfg);
+        let s_conflict = score_pair(&a, &b_conflict, &[], &[], &[], &[], &cfg);
         // An UNKNOWN anchor (neutral 0.5) must beat a genuinely conflicting one.
         assert!(s_unknown.anchor > s_conflict.anchor);
+    }
+
+    #[test]
+    fn category_embedding_bridges_synonym_labels_with_divergent_attributes() {
+        // The exact-name shatter the bench surfaced: SAME proper name, the LLM
+        // labeled the category with synonyms ("Country" vs "Nation"), and the
+        // defining attributes DIVERGE across documents (so the whole-fingerprint
+        // cosine is LOW and the legacy escape hatch never fires). A category-only
+        // embedding (synonyms ~ close) must open the gate and let the pair merge.
+        let a = node("Australia | Country | UNKNOWN | Federal parliamentary monarchy");
+        let b = node("Australia | Nation | UNKNOWN | Smallest continent landmass");
+        let cfg = ScoreConfig::default();
+        // Deliberately FAR whole-fingerprint embeddings (attributes diverge), so
+        // the only thing that can open the gate is the category embedding.
+        let fp_a = vec![1.0, 0.0, 0.0, 0.0];
+        let fp_b = vec![0.0, 1.0, 0.0, 0.0];
+        // Without a category embedding: legacy fingerprint-cosine hatch fails ->
+        // gated out -> the bench's exact-name shatter.
+        let legacy = score_pair(&a, &b, &fp_a, &fp_b, &[], &[], &cfg);
+        assert!(
+            !legacy.gated_in,
+            "divergent-attribute fingerprint cosine must not bridge"
+        );
+        // With CLOSE category embeddings ("Country" ~ "Nation"): hatch opens.
+        let cat_a = vec![1.0, 0.05, 0.0];
+        let cat_b = vec![0.98, 0.1, 0.02];
+        let bridged = score_pair(&a, &b, &fp_a, &fp_b, &cat_a, &cat_b, &cfg);
+        assert!(
+            bridged.gated_in,
+            "synonym category embedding must open the gate"
+        );
+        assert!(
+            bridged.score >= cfg.merge_threshold,
+            "exact-name synonym-category bridge must merge, got {}",
+            bridged.score
+        );
+    }
+
+    #[test]
+    fn category_embedding_does_not_bridge_cross_sense_same_name() {
+        // The over-merge guard the category gate exists for: SAME name, GENUINELY
+        // distinct senses ("Apple" the company vs the fruit). Distant category
+        // embeddings must keep the hatch shut even though the name is identical.
+        let a = node("Apple | Company | UNKNOWN | Makes phones");
+        let b = node("Apple | Fruit | UNKNOWN | Grows on trees");
+        let cfg = ScoreConfig::default();
+        let fp = vec![0.5, 0.5, 0.5, 0.5];
+        let cat_a = vec![1.0, 0.0, 0.0];
+        let cat_b = vec![0.0, 1.0, 0.0]; // orthogonal -> cosine01 = 0.5 < gate
+        let ps = score_pair(&a, &b, &fp, &fp, &cat_a, &cat_b, &cfg);
+        assert!(
+            !ps.gated_in,
+            "distinct-sense category embedding must keep the gate shut"
+        );
+        assert_eq!(ps.score, 0.0);
     }
 
     #[test]

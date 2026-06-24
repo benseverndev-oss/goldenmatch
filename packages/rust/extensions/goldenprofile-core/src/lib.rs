@@ -43,6 +43,11 @@ pub struct ResolveRequest {
     pub profiles: Vec<Profile>,
     #[serde(default)]
     pub embeddings: Vec<Vec<f64>>,
+    /// Optional category-only embeddings (one per profile) for the category gate's
+    /// synonym escape hatch. Empty -> the hatch falls back to the whole-fingerprint
+    /// `embeddings` (legacy behavior). When non-empty, must align with `profiles`.
+    #[serde(default)]
+    pub category_embeddings: Vec<Vec<f64>>,
     #[serde(default)]
     pub config: ResolveConfig,
 }
@@ -59,7 +64,19 @@ pub fn resolve_json(request: &str) -> Result<String, String> {
             req.profiles.len()
         ));
     }
-    let res = resolve(&req.profiles, &req.embeddings, &req.config);
+    if !req.category_embeddings.is_empty() && req.category_embeddings.len() != req.profiles.len() {
+        return Err(format!(
+            "category_embeddings length {} != profiles length {} (supply one per profile, or none)",
+            req.category_embeddings.len(),
+            req.profiles.len()
+        ));
+    }
+    let res = resolve(
+        &req.profiles,
+        &req.embeddings,
+        &req.category_embeddings,
+        &req.config,
+    );
     serde_json::to_string(&res).map_err(|e| e.to_string())
 }
 
