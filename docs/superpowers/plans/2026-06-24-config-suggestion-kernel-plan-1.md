@@ -541,7 +541,7 @@ fn round2(x: f64) -> f64 { (x * 100.0).round() / 100.0 }
 
 **Files:** `src/rules.rs` (extend)
 
-- [ ] **Step 1: Failing test** — a `ColumnSignal` for an `address`/`name`/free-text column, `scorer == "token_sort"`, `corruption_score > 0.3` (or `variant_rate > 0.02`) → emits a `SwapScorer` to `jaro_winkler`; a clean column or a `qgram`-coded column emits nothing.
+- [ ] **Step 1: Failing test** — a `ColumnSignal` for an `address`/`name`/free-text column, `scorer == "token_sort"`, `corruption_score >= 0.3` (or `variant_rate >= 0.02`) → emits a `SwapScorer` to `jaro_winkler`; a clean column or a `qgram`-coded column emits nothing. (Use a fixture value clearly inside the band, e.g. `corruption_score = 0.5`, so the `>=` boundary is unambiguous.)
 - [ ] **Step 2: Run → fail.**
 - [ ] **Step 3: Implement** `pub fn scorer_swap_rule(matchkey: &str, signals: &[ColumnSignal]) -> Vec<Suggestion>`. Gate: `col_type in {address, string, name}` AND `scorer == token_sort` AND (`corruption_score >= 0.3` OR `variant_rate >= 0.02`). Propose `jaro_winkler`. Rationale cites the corruption/variant number. `confidence: 0.65`. Patch `SetScorer`. (Mirror the #662 noise-aware default and `core/autoconfig.py` guard logic — read it to match thresholds.)
 - [ ] **Step 4: Run → PASS.**
