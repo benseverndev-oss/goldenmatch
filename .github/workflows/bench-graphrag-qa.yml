@@ -66,6 +66,9 @@ on:
       literal_attrs:
         description: "goldengraph only: capture literal attribute values (dates/quantities/amounts) as typed leaf nodes so the graph can answer non-entity questions"
         default: "false"
+      synth_model:
+        description: "goldengraph only: model for the answer-time synthesis call ONLY (build stays on --model); blank = same as build. Tests the SYNTHESIS-is-the-bottleneck hypothesis, e.g. gpt-4o"
+        default: ""
       judge:
         description: "ALL engines: also score a format-fair LLM-judge answer-equivalence metric (fixed gpt-4o-mini judge) so terse vs verbose answers compare fairly"
         default: "true"
@@ -137,6 +140,7 @@ jobs:
           GOLDENGRAPH_BUILD_DEBUG: ${{ inputs.build_debug }}
           GOLDENGRAPH_EXTRACTOR: ${{ inputs.extractor }}
           GOLDENGRAPH_LITERAL_ATTRS: ${{ inputs.literal_attrs }}
+          GOLDENGRAPH_SYNTH_MODEL: ${{ inputs.synth_model }}
           GOLDENGRAPH_QA_RETRIEVAL_HOPS: ${{ inputs.retrieval_hops }}
           GOLDENGRAPH_QA_NODE_BUDGET: ${{ inputs.retrieval_node_budget }}
           GOLDENGRAPH_DISTILL_LOG: ${{ inputs.distill_log == 'true' && format('results/distill_goldengraph_amb{0}.jsonl', matrix.ambiguity) || '' }}

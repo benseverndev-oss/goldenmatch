@@ -140,6 +140,20 @@ class GoldenGraphQAEngine:
             node_budget if node_budget is not None
             else int(os.environ.get("GOLDENGRAPH_QA_NODE_BUDGET", "256"))
         )
+        # Synthesis-model override (GOLDENGRAPH_SYNTH_MODEL): the trace shows the
+        # answer edge is usually IN the retrieved ball (SYNTHESIS is the dominant
+        # loss) -- i.e. the bottleneck is the multi-hop REASONING at answer time, not
+        # retrieval. This lets a run use a STRONGER model for the answer-time `ask()`
+        # call ONLY, while the build stays on the (cheap, high-volume) base model.
+        # Empty -> reuse the base llm (byte-identical to before). The synth model's
+        # tokens are charged to the engine (returned as the answer's token usage).
+        synth_model = os.environ.get("GOLDENGRAPH_SYNTH_MODEL", "").strip()
+        if synth_model:
+            from goldengraph.llm import OpenAIClient
+
+            self._synth_llm = _CountingLLM(OpenAIClient(model=synth_model))
+        else:
+            self._synth_llm = self._llm
 
     def build_kg(self, corpus) -> BuildResult:
         from goldengraph.ingest import ingest_corpus
@@ -172,11 +186,13 @@ class GoldenGraphQAEngine:
         from goldengraph.answer import ask
 
         t0 = time.perf_counter()
-        before_in, before_out = self._llm.input_tokens, self._llm.output_tokens
+        # Meter the SYNTH llm (== base llm unless GOLDENGRAPH_SYNTH_MODEL is set), so
+        # the answer's reported token usage reflects whichever model did the reasoning.
+        before_in, before_out = self._synth_llm.input_tokens, self._synth_llm.output_tokens
         text = ask(
             question,
             handle["store"],
-            llm=self._llm,
+            llm=self._synth_llm,
             embedder=self._embedder,
             valid_t=handle["valid_t"],
             tx_t=handle["tx_t"],
@@ -196,8 +212,8 @@ class GoldenGraphQAEngine:
             # to corpus ids (MuSiQue '<qid>::p<idx>'); that is a goldengraph API
             # change, tracked as a follow-up rather than forced here.
             retrieved_fact_ids=(),
-            input_tokens=self._llm.input_tokens - before_in,
-            output_tokens=self._llm.output_tokens - before_out,
+            input_tokens=self._synth_llm.input_tokens - before_in,
+            output_tokens=self._synth_llm.output_tokens - before_out,
             latency_s=time.perf_counter() - t0,
         )
 
