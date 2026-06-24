@@ -56,6 +56,31 @@ dataset whose candidate set is too large to materialize, attribution records
 `{"skipped": "scale"}` (the F1 floor still holds; only the localization is
 deferred).
 
+## Two strategies per dataset (default vs probabilistic)
+
+Each ground-truth dataset records F1/P/R for **two strategies**, both floored:
+
+- `f1` — the **default** strategy: `dedupe_df(df)` (exact + weighted matchkeys).
+  This reflects the probabilistic-routing lever once
+  `GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC` is enabled.
+- `f1_probabilistic` — the **forced Fellegi-Sunter** strategy:
+  `auto_configure_probabilistic_df(df)` → `dedupe_df(df, config=...)`.
+
+Comparing the two per dataset is what tells us whether the probabilistic path
+helps (route candidate) or hurts (leave deterministic) — the evidence base for the
+routing lever, and its regression guard. Baseline snapshot (memory-off, native-0,
+routing off):
+
+| dataset | f1 (default) | f1_probabilistic | verdict |
+| --- | --- | --- | --- |
+| historical_50k | 0.4663 | 0.8294 | prob >> det (+0.36) |
+| febrl3 | 0.9665 | 0.9907 | prob > det (+0.024) |
+| ncvr_synthetic | 0.9828 | 0.9894 | prob > det (+0.007) |
+| anchor_person_match | 0.9896 | 0.9607 | det > prob (don't route) |
+
+The probabilistic strategy carries a small EM-convergence wobble (±0.004, recall
+stable); the 0.01 floor tolerance absorbs it.
+
 ## The gate
 
 `gate` diffs the current scorecard against the committed baseline

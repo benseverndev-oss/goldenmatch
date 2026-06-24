@@ -55,6 +55,7 @@ def run(dataset_names: set[str] | None, fast_only: bool, row_cap: int | None):
                 rec["f1"] = evaluate_f1(df, gt, row_cap=cap)
             except Exception as e:
                 rec["error"] = str(e)  # real F1 error -> neutral (per diff)
+            gc.collect()  # free the default dedupe before the second (FS) dedupe
             try:  # second strategy: forced Fellegi-Sunter (the routing-lever evidence)
                 rec["f1_probabilistic"] = evaluate_f1(df, gt, row_cap=cap, strategy="probabilistic")
             except Exception as e:
