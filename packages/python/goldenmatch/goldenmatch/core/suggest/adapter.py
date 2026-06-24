@@ -38,6 +38,7 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import os
 from typing import Any
 
 import polars as pl
@@ -405,8 +406,6 @@ def _build_column_signals_batch(
 
 # ── Environment flag ───────────────────────────────────────────────────────
 
-import os as _os
-
 def _verify_enabled_by_env() -> bool:
     """Check if GOLDENMATCH_SUGGEST_VERIFY env var disables verification.
 
@@ -414,7 +413,7 @@ def _verify_enabled_by_env() -> bool:
     "0", "false", or "disabled" (case-insensitive).  Mirrors the repo-wide
     env-flag pattern for kill-switches.
     """
-    val = _os.environ.get("GOLDENMATCH_SUGGEST_VERIFY", "").strip().lower()
+    val = os.environ.get("GOLDENMATCH_SUGGEST_VERIFY", "").strip().lower()
     return val not in {"0", "false", "disabled"}
 
 
@@ -618,4 +617,10 @@ def review_config(
 
     # Tail (beyond _MAX_VERIFY_CANDIDATES) passes through unverified.
     # In practice the kernel returns at most 5 suggestions so this is a no-op.
+    if tail:
+        logger.debug(
+            "review_config verify: %d suggestion(s) beyond _MAX_VERIFY_CANDIDATES=%d "
+            "passed through unverified",
+            len(tail), _MAX_VERIFY_CANDIDATES,
+        )
     return verified + tail

@@ -15,13 +15,16 @@ See ``goldenmatch.core.suggest.health`` for the proxy formula.
 """
 from goldenmatch.core.suggest.adapter import review_config
 from goldenmatch.core.suggest.apply import apply_suggestion
-from goldenmatch.core.suggest.health import suggestion_health, suggestion_health_from_clusters
+from goldenmatch.core.suggest.health import suggestion_health_from_clusters
 from goldenmatch.core.suggest.types import Suggestion, SuggestionsNativeRequired
 
+# suggestion_health (scored-pairs proxy) is intentionally NOT in __all__: the
+# pipeline returns only pairs >= threshold so mass_above is always 1.0 there,
+# making the proxy meaningless on _run_pipeline output.  Access it explicitly
+# via `from goldenmatch.core.suggest.health import suggestion_health`.
 __all__ = [
     "review_config",
     "apply_suggestion",
-    "suggestion_health",
     "suggestion_health_from_clusters",
     "Suggestion",
     "SuggestionsNativeRequired",

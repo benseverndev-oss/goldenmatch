@@ -11,9 +11,9 @@ use pyo3::prelude::*;
 /// Suggest config adjustments from a finished run's Arrow artifacts.
 ///
 /// Parameters mirror `goldenmatch_suggest_core::suggest`:
-/// - `scored_pairs`    – RecordBatch with columns `id_a`, `id_b`, `score`
-/// - `clusters`        – RecordBatch with columns `record_id`, `cluster_id`
-/// - `column_signals`  – RecordBatch with per-column diagnostic signals
+/// - `scored_pairs`    – RecordBatch with columns `id_a:i64, id_b:i64, score:f64`
+/// - `clusters`        – RecordBatch with columns `cluster_id:i64, size:i64, confidence:f64, quality:utf8, oversized:bool`
+/// - `column_signals`  – RecordBatch with columns `field:utf8, col_type:utf8, scorer:utf8, in_blocking:bool, in_negative_evidence:bool, identity_score:f64, corruption_score:f64, collision_rate:f64, cardinality_ratio:f64, null_rate:f64, variant_rate:f64`
 /// - `config_json`     – current domain config serialized as JSON
 /// - `priors_json`     – learned priors (empty object `"{}"` if none)
 ///

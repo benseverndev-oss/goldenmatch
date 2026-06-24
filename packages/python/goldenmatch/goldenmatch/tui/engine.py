@@ -100,13 +100,14 @@ class MatchEngine:
         already hold the data and only need ``_run_pipeline``/``run_full``.
         Mirrors every instance field ``__init__`` assigns so it can't break
         silently if ``__init__`` evolves -- ``_data`` is the passed frame,
-        the rest take ``__init__``'s post-load defaults (profile is left None;
-        callers that need it should go through the file constructor).
+        the rest take ``__init__``'s post-load defaults.
+        Note: ``profile`` is None until a file-constructor run populates it;
+        callers that need it should use the file constructor instead.
         """
         engine = object.__new__(cls)
         engine._files = []
         engine._data = df
-        engine._profile = None
+        engine._profile = None  # not populated by from_dataframe
         engine._last_result = None
         engine._last_telemetry = None
         return engine
@@ -116,7 +117,7 @@ class MatchEngine:
         return self._data
 
     @property
-    def profile(self) -> dict:
+    def profile(self) -> dict | None:
         return self._profile
 
     @property
