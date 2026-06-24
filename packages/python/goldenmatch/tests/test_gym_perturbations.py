@@ -251,6 +251,52 @@ def test_bad_freetext_scorer_applies_to_freetext_config():
     assert get_perturbation("bad_freetext_scorer").applies_to(_cfg()) is True
 
 
+def test_bad_freetext_scorer_skips_jaro_winkler_email_field():
+    """A jaro_winkler-on-email field must NOT be picked as 'free text'.
+
+    Auto-config routinely uses jaro_winkler on email/phone/id fields, so the
+    scorer alone is not a free-text signal. With ONLY an email field (no
+    real free-text field), bad_freetext_scorer must not apply; with a real
+    free-text field present, it must pick that one and leave email alone."""
+    from scripts.suggest_quality.perturbations import get as get_perturbation
+    from goldenmatch.config.schemas import (
+        BlockingConfig, BlockingKeyConfig, GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
+    )
+
+    # Email-only config: no real free-text field -> must not apply.
+    email_only_mk = MatchkeyConfig(
+        name="mk",
+        type="weighted",
+        threshold=0.85,
+        fields=[MatchkeyField(field="email", scorer="jaro_winkler", weight=1.0)],
+    )
+    email_only = GoldenMatchConfig(
+        matchkeys=[email_only_mk],
+        blocking=BlockingConfig(strategy="static", keys=[BlockingKeyConfig(fields=["email"])]),
+    )
+    assert get_perturbation("bad_freetext_scorer").applies_to(email_only) is False
+
+    # email (jaro_winkler) + address (a real free-text field). Must pick
+    # address, leaving email untouched.
+    mixed_mk = MatchkeyConfig(
+        name="mk",
+        type="weighted",
+        threshold=0.85,
+        fields=[
+            MatchkeyField(field="email", scorer="jaro_winkler", weight=1.0),
+            MatchkeyField(field="address", scorer="jaro_winkler", weight=1.0),
+        ],
+    )
+    mixed = GoldenMatchConfig(
+        matchkeys=[mixed_mk],
+        blocking=BlockingConfig(strategy="static", keys=[BlockingKeyConfig(fields=["email"])]),
+    )
+    out = get_perturbation("bad_freetext_scorer").apply(mixed)
+    out_fields = {f.field: f.scorer for f in out.get_matchkeys()[0].fields}
+    assert out_fields["address"] == "token_sort"
+    assert out_fields["email"] == "jaro_winkler"  # email left alone
+
+
 def test_bad_freetext_scorer_not_applies_when_already_token_sort():
     from scripts.suggest_quality.perturbations import get as get_perturbation
     from goldenmatch.config.schemas import (
@@ -442,6 +488,26 @@ def test_naive_single_fuzzy_default_threshold():
 
     out = get_perturbation("naive_single_fuzzy").apply(_cfg())
     assert out.get_matchkeys()[0].threshold == pytest_approx(0.85)
+
+
+def test_naive_single_fuzzy_builds_fresh_single_field_static_blocking():
+    """The naive config must build a fresh single-field static blocking config,
+    NOT copy the original (possibly multi-pass) blocking -- copying would
+    reference fields the single matchkey doesn't cover -> empty blocks -> a
+    spurious F1=0 in the gym."""
+    from scripts.suggest_quality.perturbations import get as get_perturbation
+
+    # _cfg_multi_pass has a multi_pass blocking config with two passes.
+    out = get_perturbation("naive_single_fuzzy").apply(_cfg_multi_pass())
+    blocking = out.blocking
+    assert blocking is not None
+    assert blocking.strategy == "static"
+    # No passes carried over from the multi-pass source.
+    assert not blocking.passes
+    # Single static key covering exactly the one naive matchkey field.
+    assert len(blocking.keys) == 1
+    naive_field = out.get_matchkeys()[0].fields[0].field
+    assert blocking.keys[0].fields == [naive_field]
 
 
 def test_naive_single_fuzzy_preserves_original():

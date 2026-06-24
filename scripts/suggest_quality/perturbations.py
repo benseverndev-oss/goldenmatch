@@ -41,9 +41,13 @@ _FREETEXT_FIELD_NAMES: frozenset[str] = frozenset({
 # used for multi-token strings like "123 Main St" where corruption scrambles tokens).
 _ADDRESS_FIELD_NAMES: frozenset[str] = frozenset({"address", "street", "city"})
 
-_FREETEXT_SCORERS: frozenset[str] = frozenset({
-    "jaro_winkler", "token_sort", "ensemble",
-})
+# Only `ensemble` signals free text purely from the scorer. `jaro_winkler` is
+# routinely auto-configured on email/phone/id fields, so it is NOT a free-text
+# signal -- relying on it would let bad_freetext_scorer swap the scorer on an
+# email field, producing a meaningless swap_scorer recovery signal in the gym.
+# `token_sort` is excluded anyway by the `scorer != "token_sort"` guard. The
+# field-NAME set above is the primary free-text signal.
+_FREETEXT_SCORERS: frozenset[str] = frozenset({"ensemble"})
 
 
 def _is_freetext_field(mf: MatchkeyField) -> bool:
@@ -111,7 +115,7 @@ def _apply_threshold_too_low(config: GoldenMatchConfig) -> GoldenMatchConfig:
 def _applies_threshold_too_low(config: GoldenMatchConfig) -> bool:
     try:
         return _primary_weighted_mk(config) is not None
-    except Exception:
+    except AttributeError:
         return False
 
 
@@ -128,12 +132,19 @@ def _apply_threshold_too_high(config: GoldenMatchConfig) -> GoldenMatchConfig:
 def _applies_threshold_too_high(config: GoldenMatchConfig) -> bool:
     try:
         return _primary_weighted_mk(config) is not None
-    except Exception:
+    except AttributeError:
         return False
 
 
 def _apply_bad_freetext_scorer(config: GoldenMatchConfig) -> GoldenMatchConfig:
-    """Set the first free-text field's scorer to token_sort."""
+    """Set the first free-text field's scorer to token_sort.
+
+    token_sort is the *bad* choice here: it is word-order-robust (good for
+    reordered tokens) but character-noise-fragile -- under typo/OCR corruption
+    it collapses, so swapping a free-text field onto it degrades recall. The
+    swap_scorer rule should detect this and swap back to a noise-tolerant
+    scorer.
+    """
     new = copy.deepcopy(config)
     mk = _primary_weighted_mk(new)
     if mk is None:
@@ -151,7 +162,7 @@ def _applies_bad_freetext_scorer(config: GoldenMatchConfig) -> bool:
         if mk is None:
             return False
         return _first_freetext_field(mk) is not None
-    except Exception:
+    except AttributeError:
         return False
 
 
@@ -172,7 +183,7 @@ def _applies_missing_negative_evidence(config: GoldenMatchConfig) -> bool:
         if mk is None:
             return False
         return bool(mk.negative_evidence)
-    except Exception:
+    except AttributeError:
         return False
 
 
@@ -187,14 +198,14 @@ def _apply_dropped_blocking_pass(config: GoldenMatchConfig) -> GoldenMatchConfig
 
 
 def _applies_dropped_blocking_pass(config: GoldenMatchConfig) -> bool:
-    try:
-        return (
-            config.blocking is not None
-            and config.blocking.passes is not None
-            and len(config.blocking.passes) > 1
-        )
-    except Exception:
-        return False
+    # Pure None-checks / len comparisons on the typed `BlockingConfig | None`
+    # field -- nothing to catch, and a bare except would hide a real
+    # malformed-blocking AttributeError.
+    return (
+        config.blocking is not None
+        and config.blocking.passes is not None
+        and len(config.blocking.passes) > 1
+    )
 
 
 def _apply_flattened_weights(config: GoldenMatchConfig) -> GoldenMatchConfig:
@@ -218,7 +229,7 @@ def _applies_flattened_weights(config: GoldenMatchConfig) -> bool:
             return False
         # Only applies if weights are NOT already all equal.
         return len(set(weights)) > 1
-    except Exception:
+    except AttributeError:
         return False
 
 
@@ -228,7 +239,8 @@ def _apply_skewed_weight(config: GoldenMatchConfig) -> GoldenMatchConfig:
     mk = _primary_weighted_mk(new)
     if mk is None or len(mk.fields) < 2:
         return new
-    mk.fields[0].weight = (mk.fields[0].weight or 1.0) * 5
+    w = mk.fields[0].weight
+    mk.fields[0].weight = (w if w is not None else 1.0) * 5
     return new
 
 
@@ -236,7 +248,7 @@ def _applies_skewed_weight(config: GoldenMatchConfig) -> bool:
     try:
         mk = _primary_weighted_mk(config)
         return mk is not None and len(mk.fields) >= 2
-    except Exception:
+    except AttributeError:
         return False
 
 
@@ -267,8 +279,11 @@ def _apply_naive_single_fuzzy(config: GoldenMatchConfig) -> GoldenMatchConfig:
         ],
     )
 
-    # Preserve or create a minimal blocking config.
-    blocking = copy.deepcopy(new.blocking) if new.blocking is not None else BlockingConfig(
+    # ALWAYS build a fresh single-field static blocking config. Copying the
+    # original (possibly multi-key / multi-pass) blocking would reference
+    # fields the naive single-field matchkey doesn't cover -> empty blocks ->
+    # a spurious F1=0 in the gym rather than the honest naive-baseline signal.
+    blocking = BlockingConfig(
         strategy="static",
         keys=[BlockingKeyConfig(fields=[field_name])],
     )
@@ -285,7 +300,7 @@ def _applies_naive_single_fuzzy(config: GoldenMatchConfig) -> bool:
     try:
         mks = config.get_matchkeys()
         return bool(mks) and bool(mks[0].fields)
-    except Exception:
+    except AttributeError:
         return False
 
 
