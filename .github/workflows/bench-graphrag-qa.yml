@@ -66,6 +66,9 @@ on:
       literal_attrs:
         description: "goldengraph only: capture literal attribute values (dates/quantities/amounts) as typed leaf nodes so the graph can answer non-entity questions"
         default: "false"
+      judge:
+        description: "ALL engines: also score a format-fair LLM-judge answer-equivalence metric (fixed gpt-4o-mini judge) so terse vs verbose answers compare fairly"
+        default: "true"
 
 permissions:
   contents: read
@@ -145,6 +148,7 @@ jobs:
             --max-questions "${{ inputs.max_questions }}" \
             --ambiguity "${{ matrix.ambiguity }}" \
             --budget-usd "${{ inputs.budget_usd }}" \
+            ${{ inputs.judge == 'true' && '--judge' || '' }} \
             --out-md "results/RESULTS_QA_E2E_goldengraph_amb${{ matrix.ambiguity }}.md" \
             --out-json "results/results_qa_e2e_goldengraph_amb${{ matrix.ambiguity }}.json"
       - name: Upload results
@@ -190,6 +194,7 @@ jobs:
             --max-questions "${{ inputs.max_questions }}" \
             --ambiguity "${{ matrix.ambiguity }}" \
             --budget-usd "${{ inputs.budget_usd }}" \
+            ${{ inputs.judge == 'true' && '--judge' || '' }} \
             --out-md "results/RESULTS_QA_E2E_lightrag_amb${{ matrix.ambiguity }}.md" \
             --out-json "results/results_qa_e2e_lightrag_amb${{ matrix.ambiguity }}.json"
       - name: Upload results
@@ -229,6 +234,7 @@ jobs:
             --max-questions "${{ inputs.max_questions }}" \
             --ambiguity "${{ matrix.ambiguity }}" \
             --budget-usd "${{ inputs.budget_usd }}" \
+            ${{ inputs.judge == 'true' && '--judge' || '' }} \
             --out-md "results/RESULTS_QA_E2E_ms_graphrag_amb${{ matrix.ambiguity }}.md" \
             --out-json "results/results_qa_e2e_ms_graphrag_amb${{ matrix.ambiguity }}.json"
       - name: Upload results
@@ -274,6 +280,7 @@ jobs:
             --max-questions "${{ inputs.max_questions }}" \
             --ambiguity "${{ matrix.ambiguity }}" \
             --budget-usd "${{ inputs.budget_usd }}" \
+            ${{ inputs.judge == 'true' && '--judge' || '' }} \
             --out-md "results/RESULTS_QA_E2E_graphiti_amb${{ matrix.ambiguity }}.md" \
             --out-json "results/results_qa_e2e_graphiti_amb${{ matrix.ambiguity }}.json"
       - name: Upload results

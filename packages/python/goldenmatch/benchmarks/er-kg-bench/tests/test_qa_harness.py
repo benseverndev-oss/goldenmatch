@@ -133,3 +133,30 @@ def test_cli_self_test_writes_results(tmp_path):
     assert rc == 0
     assert md.exists() and js.exists()
     assert "end-to-end multi-hop QA" in md.read_text(encoding="utf-8")
+
+
+def test_run_engine_llm_judge_metric_populates_when_judge_given():
+    # A stub judge callable(prompt)->str drives the format-fair equivalence metric.
+    # The harness must populate answer_judge (overall + entity-subset) + the
+    # per-question record, and must pass the question into the judge prompt.
+    seen = []
+
+    def _judge(prompt):
+        seen.append(prompt)
+        return "YES"
+
+    res = run_engine(
+        _MockEngine(answer_text="Definitely Ada, no doubt."),
+        _toy_corpus(), model="gpt-4o-mini", budget_usd=25.0, judge=_judge,
+    )
+    assert res["answer_judge"] == 1.0
+    assert res["answer_judge_entity"] == 1.0  # 'Ada' classifies as an entity gold
+    assert res["per_question"][0]["answer_judge"] == 1.0
+    assert len(seen) == 1 and "Who founded Acme?" in seen[0]
+
+
+def test_run_engine_judge_none_by_default():
+    res = run_engine(_MockEngine(), _toy_corpus(), model="gpt-4o-mini", budget_usd=25.0)
+    assert res["answer_judge"] is None
+    assert res["answer_judge_entity"] is None
+    assert res["per_question"][0]["answer_judge"] is None

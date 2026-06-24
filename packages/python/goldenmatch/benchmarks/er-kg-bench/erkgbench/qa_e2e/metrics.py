@@ -65,6 +65,44 @@ def supporting_fact_recall(
     return len(gold & set(retrieved_ids)) / len(gold)
 
 
+# --- LLM-judge answer equivalence ---------------------------------------------
+#
+# `answer_match` (gold-token containment) is FORMAT-SENSITIVE: a verbose essay
+# trivially contains the gold span, while a terse one-entity answer is all-or-
+# nothing -- so it scores essay-style RAG engines generously and precise-answer
+# engines harshly (2026-06-23 head-to-head: ms_graphrag essays vs goldengraph's
+# `Answer: X`). The judge asks a fixed model whether the prediction CONVEYS the
+# gold answer regardless of verbosity, applied uniformly to every engine, so the
+# comparison is fair. Kept ALONGSIDE answer_match (not replacing it). The prompt +
+# parse are pure/unit-testable; the call itself is wired in the harness.
+
+_JUDGE_PROMPT = (
+    "You are grading a question-answering system. Decide whether the PREDICTION "
+    "correctly answers the QUESTION, using the reference GOLD answer as ground "
+    "truth. The prediction is CORRECT if it conveys the same answer as the gold -- "
+    "even if phrased differently, more verbose, or with extra context. It is "
+    "INCORRECT if it gives a different answer, contradicts the gold, only hedges "
+    "without committing, or says it cannot answer. Reply with exactly one word: "
+    "YES or NO.\n"
+    "QUESTION: {question}\nGOLD: {gold}\nPREDICTION: {pred}"
+)
+
+
+def judge_prompt(question: str, gold: str, pred: str) -> str:
+    return _JUDGE_PROMPT.format(question=question, gold=gold, pred=pred)
+
+
+def parse_judge(text: str) -> float:
+    """Map an LLM judge verdict to 1.0 (YES) / 0.0 (NO or anything else). The first
+    token decides; a leading hedge falls back to a standalone 'yes' search."""
+    t = (text or "").strip().lower()
+    if t.startswith("yes"):
+        return 1.0
+    if t.startswith("no"):
+        return 0.0
+    return 1.0 if "yes" in t.replace("'", " ").replace(".", " ").split() else 0.0
+
+
 # --- answer-type classification ------------------------------------------------
 #
 # An entity-graph engine (goldengraph) can ONLY ever answer with a NODE -- a named
