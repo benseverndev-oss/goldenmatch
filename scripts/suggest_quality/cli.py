@@ -554,7 +554,7 @@ def _cmd_gym(records: list[dict], native_version: str, git_sha: str) -> int:
     """Print the catalog board: one row per (dataset, perturbation)."""
     ok_records = [r for r in records if r.get("status") == "ok"]
     built_ok = [r for r in ok_records if r.get("builds_on_existing_rule")]
-    standing = [r for r in records if not r.get("builds_on_existing_rule", True)]
+    standing = [r for r in records if not r.get("builds_on_existing_rule", False)]
 
     print("gym catalog board")
     print(f"  native={native_version}  sha={git_sha[:12] if git_sha != 'unknown' else 'unknown'}")
