@@ -51,22 +51,49 @@ class _LCG:
 
 
 # ----------------------------- image ---------------------------------------- #
+_IMG_DCT_BINS = 8  # low-freq DCT signature edge (matches pHash's 8x8 HASH_SIZE)
+
+
 def _base_image(seed: int, h: int = 48, w: int = 48) -> Grid:
-    """A frequency-rich procedural pattern (stable mid-band pHash), distinct per seed."""
-    fx = 1.5 + (seed % 5) * 0.4
-    fy = 2.0 + (seed % 7) * 0.3
-    fd = 2.2 + (seed % 3) * 0.6
-    ph = seed * 0.7
+    """A base whose low-frequency DCT *signature* is randomised per seed, built as
+    the inverse DCT of that signature.
+
+    pHash reads the sign of each coefficient in the top-left 8x8 DCT block (vs the
+    median). The old 3-sinusoid pattern only varied freq by ``seed % {5,7,3}``, so
+    many bases shared a low-band sign pattern and *collided* in pHash space -- the
+    end-to-end suite saw thousands of cross-base false positives (a dataset
+    artifact, not a pipeline limit). Here each base draws a random signed amplitude
+    per ``8x8`` DCT bin under a low-pass envelope (``1/(1+ku+kv)`` -- energy
+    concentrated in the lowest, photometric-transform-robust frequencies) and
+    synthesises the image directly from it. Distinct seeds => distinct sign
+    patterns => cross-base Hamming ~32 (validated min 20 over 30 bases, 0 collisions
+    at the 0.85 match threshold), while brightness/contrast/blur/noise/recompress
+    preserve the dominant low-band signs (per-transform recall stays ~1.0). Rotation
+    still breaks pHash by design (the radial feature is the geometric answer)."""
+    rng = _LCG(seed * 2654435761 + 1)
+    amp = [[0.0] * _IMG_DCT_BINS for _ in range(_IMG_DCT_BINS)]
+    for ku in range(_IMG_DCT_BINS):
+        for kv in range(_IMG_DCT_BINS):
+            if ku == 0 and kv == 0:
+                continue  # DC stays mid-gray (128 offset below)
+            d = rng.signed(1 << 20)  # ~uniform in [-2^20, 2^20]
+            sign = 1.0 if d >= 0 else -1.0
+            amp[ku][kv] = sign * (40.0 / (1.0 + ku + kv)) * (0.5 + abs(d) / (1 << 20))
+    # Separable inverse DCT-II: pixel = 128 + sum_{ku,kv} A[ku][kv]*cos_x*cos_y.
+    cos_x = [[math.cos(math.pi * (x + 0.5) * ku / w) for x in range(w)] for ku in range(_IMG_DCT_BINS)]
+    cos_y = [[math.cos(math.pi * (y + 0.5) * kv / h) for y in range(h)] for kv in range(_IMG_DCT_BINS)]
     out: Grid = []
     for y in range(h):
         row = []
         for x in range(w):
-            v = (
-                128
-                + 45 * math.sin(x / fx + ph)
-                + 40 * math.sin(y / fy)
-                + 30 * math.sin((x + y) / fd)
-            )
+            v = 128.0
+            for ku in range(_IMG_DCT_BINS):
+                cxu = cos_x[ku][x]
+                au = amp[ku]
+                for kv in range(_IMG_DCT_BINS):
+                    a = au[kv]
+                    if a != 0.0:
+                        v += a * cxu * cos_y[kv][y]
             row.append(max(0, min(255, int(round(v)))))
         out.append(row)
     return out
