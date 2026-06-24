@@ -1,9 +1,45 @@
 # goldengraph — synthesis lever (scoping)
 
-**Status:** scoping / design (not yet implemented)
+**Status:** Levers A+B BUILT, MEASURED, and REVERTED — **negative result** (below). Lever pivoted to the cross-doc SCORING-miss (§7).
 **Date:** 2026-06-24
 **Author:** measure-driven loop
 **Parent:** `2026-06-24-goldengraph-phrase-span-extraction-design.md` (which pivoted here)
+
+## 0. RESULT 2026-06-24 — A+B measured WORSE; reverted
+
+Levers A (edge salience ordering) + B (answer grounding) were implemented, gated
+default-off, and measured against the baseline on the same traced N=50 bench
+(both `literal_attrs=true`, same judge):
+
+| | baseline `28121496629` | A+B `28125230768` |
+|---|---|---|
+| SYNTHESIS (target) | 25 | 24 |
+| BROKEN-CHAIN | 12 | 12 |
+| EXTRACTION | 11 | 12 |
+| **llm_judge** | **0.34** | **0.28** |
+| answer_match | 0.30 | 0.22 |
+
+The target bucket did not move (25→24 = one question, noise) and the headline
+**regressed** (judge 0.34→0.28; the two prior `literal=true` runs both scored
+0.34, so the drop is likely real, not pure build noise).
+
+**Lever B (grounding) backfired.** The clause "if no listed edge supports a
+candidate, pick the closest one rather than inventing a fact" converted honest
+non-answers into confident-wrong ones: gold "Exeter College" went from `''`
+(baseline) to `'Royal Military Academy, Benghazi'`; "the Politburo" USSR→Korea.
+**Lever A didn't rescue it** — the Karen-Fairchild SYNTHESIS miss persisted with
+BOTH answer-edges in the ball. Likely reason A is weak: in multi-hop the *answer*
+entity is NOT in the question, so question-similarity ranking surfaces the SETUP
+edges, not the answer edge.
+
+**Deeper lesson:** the SYNTHESIS bucket is a **multi-hop reasoning** failure, not
+a salience-or-grounding one — harder and noisier to move than hoped. The code was
+reverted (this PR is scope + negative result only). The next lever moves to the
+more mechanical cross-doc SCORING-miss (§7), where the answer isn't in the ball at
+all (a clean recall problem, not fuzzy reasoning). The original scope (§3-§6) is
+retained for the record but is superseded by this result.
+
+---
 
 ## 1. Why — the trace says synthesis is HALF the loss
 
