@@ -85,7 +85,9 @@ suggest(
     clusters:        RecordBatch,   // (cluster_id, size, confidence, quality, oversized)
     column_signals:  RecordBatch,   // one row per column: (field, col_type, scorer,
                                     //  identity_score, corruption_score, collision_rate,
-                                    //  cardinality, null_rate, variant_rate)
+                                    //  cardinality_ratio, null_rate, variant_rate)
+                                    //  cardinality is a RATIO in [0,1], matching the
+                                    //  existing cardinality_ratio used by autoconfig guards
     config:          ConfigSummary, // small struct (JSON)
     priors:          AcceptancePriors,
 ) -> RankedSuggestions              // structs incl. the rendered display string
@@ -255,7 +257,9 @@ non-regression on real F1.
   atomically.
 - **MCP:** upgrade `suggest_config` to the result-driven engine (keep
   `bad_merges` as one back-compat evidence source), add `accept_suggestion` /
-  `reject_suggestion`; bump the server-card tool count.
+  `reject_suggestion`; bump the server-card tool count. The plan must make the
+  `server.json` → MCP-registry sync an explicit task (lockstep footgun per
+  CLAUDE.md), not an afterthought.
 - **TUI:** a Suggestions panel in the Config tab post-run, reusing the Ctrl+T
   triage accept/reject pattern.
 - **Staged (cheap later, by design):** SQL/DataFusion (Arrow-direct), TS (WASM),
@@ -272,10 +276,13 @@ non-regression on real F1.
 
 ## Open questions for planning
 
-- Confirm whether any pyo3-free autoconfig decision crate already exists (memory
-  note suggests one shipped; the `bridge::autoconfig` delegates to Python, so it
-  may be stale or refer to specific small levers). Resolve before assuming
-  `suggest-core` is the first decision crate.
+- Confirm whether any pyo3-free autoconfig decision crate already exists. The
+  `project_autoconfig_native_core` memory note claims one shipped ("PyPI native
+  0.1.11"), but `bridge::autoconfig` delegates to Python and no autoconfig crate
+  was found under `packages/rust/extensions/`, so the note may be stale or refer
+  to specific small levers. Resolve in planning before assuming `suggest-core` is
+  the first decision crate — it affects whether we extend an existing crate or
+  go greenfield.
 - Exact column set for the `column_signals` batch and which already-computed
   artifact each field comes from (`ComplexityProfile`, indicators, clusters).
 - Whether `scored_pairs` is materialized at the size needed post-run for all
