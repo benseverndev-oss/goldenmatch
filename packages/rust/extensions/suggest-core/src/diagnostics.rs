@@ -8,6 +8,128 @@
 use arrow::array::{Array, BooleanArray, Float64Array, StringArray};
 use arrow::record_batch::RecordBatch;
 
+// ---------------------------------------------------------------------------
+// ColumnSignal — per-column signals extracted from the column_signals batch.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ColumnSignal {
+    pub field: String,
+    pub col_type: String,
+    pub scorer: String,
+    pub in_blocking: bool,
+    pub in_negative_evidence: bool,
+    pub identity_score: f64,
+    pub corruption_score: f64,
+    pub collision_rate: f64,
+    pub cardinality_ratio: f64,
+    pub null_rate: f64,
+    pub variant_rate: f64,
+}
+
+/// Extract one `ColumnSignal` per row from a `column_signals` RecordBatch.
+///
+/// Schema (one row per column):
+/// `field:utf8, col_type:utf8, scorer:utf8, in_blocking:bool,
+///  in_negative_evidence:bool, identity_score:f64, corruption_score:f64,
+///  collision_rate:f64, cardinality_ratio:f64, null_rate:f64, variant_rate:f64`
+pub fn column_signals_from_batch(batch: &RecordBatch) -> Result<Vec<ColumnSignal>, String> {
+    let field_arr = batch
+        .column_by_name("field")
+        .ok_or("missing field column")?
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .ok_or("field not utf8")?;
+
+    let col_type_arr = batch
+        .column_by_name("col_type")
+        .ok_or("missing col_type column")?
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .ok_or("col_type not utf8")?;
+
+    let scorer_arr = batch
+        .column_by_name("scorer")
+        .ok_or("missing scorer column")?
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .ok_or("scorer not utf8")?;
+
+    let in_blocking_arr = batch
+        .column_by_name("in_blocking")
+        .ok_or("missing in_blocking column")?
+        .as_any()
+        .downcast_ref::<BooleanArray>()
+        .ok_or("in_blocking not bool")?;
+
+    let in_neg_arr = batch
+        .column_by_name("in_negative_evidence")
+        .ok_or("missing in_negative_evidence column")?
+        .as_any()
+        .downcast_ref::<BooleanArray>()
+        .ok_or("in_negative_evidence not bool")?;
+
+    let identity_score_arr = batch
+        .column_by_name("identity_score")
+        .ok_or("missing identity_score column")?
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .ok_or("identity_score not f64")?;
+
+    let corruption_score_arr = batch
+        .column_by_name("corruption_score")
+        .ok_or("missing corruption_score column")?
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .ok_or("corruption_score not f64")?;
+
+    let collision_rate_arr = batch
+        .column_by_name("collision_rate")
+        .ok_or("missing collision_rate column")?
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .ok_or("collision_rate not f64")?;
+
+    let cardinality_ratio_arr = batch
+        .column_by_name("cardinality_ratio")
+        .ok_or("missing cardinality_ratio column")?
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .ok_or("cardinality_ratio not f64")?;
+
+    let null_rate_arr = batch
+        .column_by_name("null_rate")
+        .ok_or("missing null_rate column")?
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .ok_or("null_rate not f64")?;
+
+    let variant_rate_arr = batch
+        .column_by_name("variant_rate")
+        .ok_or("missing variant_rate column")?
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .ok_or("variant_rate not f64")?;
+
+    let mut signals = Vec::with_capacity(batch.num_rows());
+    for i in 0..batch.num_rows() {
+        signals.push(ColumnSignal {
+            field: field_arr.value(i).to_owned(),
+            col_type: col_type_arr.value(i).to_owned(),
+            scorer: scorer_arr.value(i).to_owned(),
+            in_blocking: in_blocking_arr.value(i),
+            in_negative_evidence: in_neg_arr.value(i),
+            identity_score: identity_score_arr.value(i),
+            corruption_score: corruption_score_arr.value(i),
+            collision_rate: collision_rate_arr.value(i),
+            cardinality_ratio: cardinality_ratio_arr.value(i),
+            null_rate: null_rate_arr.value(i),
+            variant_rate: variant_rate_arr.value(i),
+        });
+    }
+    Ok(signals)
+}
+
 pub struct ScoreDiagnostics {
     pub histogram: Vec<(f64, i64)>,
     pub mass_above: f64,      // fraction of pairs with score >= threshold
@@ -287,5 +409,115 @@ mod tests {
         assert_eq!(d.split, 0);
         assert_eq!(d.oversized, 0);
         assert_eq!(d.n_clusters, 3);
+    }
+
+    fn column_signals_batch(
+        fields: &[&str],
+        col_types: &[&str],
+        scorers: &[&str],
+        in_blocking: &[bool],
+        in_negative_evidence: &[bool],
+        identity_scores: &[f64],
+        corruption_scores: &[f64],
+        collision_rates: &[f64],
+        cardinality_ratios: &[f64],
+        null_rates: &[f64],
+        variant_rates: &[f64],
+    ) -> RecordBatch {
+        use arrow::datatypes::DataType;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("field", DataType::Utf8, false),
+            Field::new("col_type", DataType::Utf8, false),
+            Field::new("scorer", DataType::Utf8, false),
+            Field::new("in_blocking", DataType::Boolean, false),
+            Field::new("in_negative_evidence", DataType::Boolean, false),
+            Field::new("identity_score", DataType::Float64, false),
+            Field::new("corruption_score", DataType::Float64, false),
+            Field::new("collision_rate", DataType::Float64, false),
+            Field::new("cardinality_ratio", DataType::Float64, false),
+            Field::new("null_rate", DataType::Float64, false),
+            Field::new("variant_rate", DataType::Float64, false),
+        ]));
+        RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(StringArray::from(fields.to_vec())),
+                Arc::new(StringArray::from(col_types.to_vec())),
+                Arc::new(StringArray::from(scorers.to_vec())),
+                Arc::new(BooleanArray::from(in_blocking.to_vec())),
+                Arc::new(BooleanArray::from(in_negative_evidence.to_vec())),
+                Arc::new(Float64Array::from(identity_scores.to_vec())),
+                Arc::new(Float64Array::from(corruption_scores.to_vec())),
+                Arc::new(Float64Array::from(collision_rates.to_vec())),
+                Arc::new(Float64Array::from(cardinality_ratios.to_vec())),
+                Arc::new(Float64Array::from(null_rates.to_vec())),
+                Arc::new(Float64Array::from(variant_rates.to_vec())),
+            ],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn column_signals_round_trip() {
+        // Row 0: corrupted address column scored with token_sort, used in blocking
+        // Row 1: clean id column scored with exact, not in blocking
+        let batch = column_signals_batch(
+            &["street_address", "record_id"],
+            &["text", "id"],
+            &["token_sort", "exact"],
+            &[true, false],
+            &[false, true],
+            &[0.72, 0.99],
+            &[0.45, 0.02],
+            &[0.08, 0.001],
+            &[0.88, 1.0],
+            &[0.12, 0.0],
+            &[0.30, 0.01],
+        );
+        let signals = column_signals_from_batch(&batch).unwrap();
+        assert_eq!(signals.len(), 2);
+
+        let addr = &signals[0];
+        assert_eq!(addr.field, "street_address");
+        assert_eq!(addr.col_type, "text");
+        assert_eq!(addr.scorer, "token_sort");
+        assert!(addr.in_blocking);
+        assert!(!addr.in_negative_evidence);
+        assert!((addr.identity_score - 0.72).abs() < 1e-9);
+        assert!((addr.corruption_score - 0.45).abs() < 1e-9);
+        assert!((addr.collision_rate - 0.08).abs() < 1e-9);
+        assert!((addr.cardinality_ratio - 0.88).abs() < 1e-9);
+        assert!((addr.null_rate - 0.12).abs() < 1e-9);
+        assert!((addr.variant_rate - 0.30).abs() < 1e-9);
+
+        let id_col = &signals[1];
+        assert_eq!(id_col.field, "record_id");
+        assert_eq!(id_col.col_type, "id");
+        assert_eq!(id_col.scorer, "exact");
+        assert!(!id_col.in_blocking);
+        assert!(id_col.in_negative_evidence);
+        assert!((id_col.identity_score - 0.99).abs() < 1e-9);
+        assert!((id_col.corruption_score - 0.02).abs() < 1e-9);
+    }
+
+    #[test]
+    fn column_signals_missing_column_returns_error() {
+        // Build a batch that is missing the `scorer` column — should error cleanly.
+        use arrow::datatypes::DataType;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("field", DataType::Utf8, false),
+            Field::new("col_type", DataType::Utf8, false),
+            // scorer intentionally omitted
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(StringArray::from(vec!["name"])),
+                Arc::new(StringArray::from(vec!["text"])),
+            ],
+        )
+        .unwrap();
+        let err = column_signals_from_batch(&batch).unwrap_err();
+        assert!(err.contains("scorer"), "expected scorer in error: {err}");
     }
 }
