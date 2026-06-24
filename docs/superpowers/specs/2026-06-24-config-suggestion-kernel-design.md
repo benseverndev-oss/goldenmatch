@@ -288,4 +288,48 @@ non-regression on real F1.
 - Whether `scored_pairs` is materialized at the size needed post-run for all
   backends, or whether the histogram should be read from `ComplexityProfile`
   where the run already computed it.
+
+## Implementation addendum (2026-06-24): self-verification
+
+The original design had `review_config` emit the kernel's ranked suggestions
+**blind**. The benchmark immediately exposed the flaw: on `ncvr_synthetic`
+(zero-config baseline F1 already 0.983), the kernel emitted two suggestions that
+*both lowered F1* (`suggester_precision = 0.0`). A suggester that can suggest
+harm is worse than no suggester.
+
+**Fix (Task 17): `review_config(df, config, *, verify=True)` self-verifies.**
+After the kernel returns ranked suggestions, the adapter simulates each one
+(`apply_suggestion` → re-run the engine) and keeps it only if an **unsupervised
+config-health proxy** does not worsen. There is no ground truth at suggest-time,
+so the proxy is computed from the run's own outputs:
+`health = matched_rate * avg_confidence - concentration_penalty`, where the
+penalty is a graded Herfindahl concentration over multi-member clusters
+(`sum((size/n)²)`) — a threshold-lower that over-merges raises concentration and
+drops `avg_confidence`; a threshold-raise that loses matches drops
+`matched_rate`. Survivors keep the kernel's rank order. `verify=False` (or
+`GOLDENMATCH_SUGGEST_VERIFY=0`) returns the raw kernel list; candidates are
+capped at 8. Cost: one extra pipeline run per candidate (suggestions are few).
+
+**Measured result:** `suggester_precision = 1.0` across all benchmark datasets.
+The suggester now **declines** to suggest on already-near-optimal configs
+(`ncvr_synthetic`/`synthetic` → 0 suggestions) while still emitting genuinely
+helpful ones (`anchor_person_match`: 1 suggestion lifts F1 0.9896 → 1.0; the
+NCVR address scorer-swap survives verify). "Don't emit net-negative" is now a
+structural property, not per-rule tuning.
+
+**Honest limitation:** the proxy is unsupervised and can disagree with F1; it
+reduces but cannot perfectly eliminate net-negative suggestions. The benchmark's
+`suggester_precision` metric is the standing check. Rule-quality iteration (the
+threshold/NE rules are still simple) and proving a default-on flip remain the
+Plan-2 frontier; this addendum makes the v1 suggester *safe*, not yet *optimal*.
+
+## Status
+
+Plan 1 SHIPPED on branch `feat/config-suggestion-kernel` (PR #1267): the
+pyo3-free `suggest-core` kernel (29 Rust tests + golden vectors), the native
+pyo3 shim, the Python `review_config`/`apply_suggestion` adapters with
+self-verification, and the `scripts/suggest_quality` oracle benchmark
+(report/gate/bless + CI gate). Feature is opt-in via the Python API and
+default-off in pipelines. Surfaces (CLI/MCP/TUI), accept/reject persistence,
+and the default-on flip are Plan 2.
 ```
