@@ -99,7 +99,7 @@ flowchart LR
 - **Learning Memory** — corrections persist across runs and re-anchor across row reorders, so the system stops needing the same correction twice (GoldenMatch v1.6.0; off by default).
 - **Identity Graph** — a durable graph layer above run-local clusters: stable `entity_id`s that survive across runs, an append-only event log, and create / absorb / merge / split semantics, surfaced on the CLI, REST, MCP, and SQL interfaces (the Identity Graph v2 feature, shipped in GoldenMatch v1.15).
 - **Privacy-preserving record linkage** — match across organizations without sharing raw data (PPRL, 92.4% F1 on FEBRL4).
-- **AI-native by design** — every package ships an MCP server, a REST API, and an A2A agent surface. 50+ MCP tools across the suite, including `auto_configure` + `controller_telemetry` for v1.7-v1.12 introspection.
+- **AI-native by design** — every package ships an MCP server, a REST API, and an A2A agent surface. 70+ MCP tools across the suite, including `auto_configure` + `controller_telemetry` for auto-config introspection.
 - **AutoConfigController visible everywhere** (v1.7-v1.12 surface-parity arc) — web `ControllerPanel`, TUI `Ctrl+A`, CLI `goldenmatch autoconfig`, REST `/autoconfig` + `/controller/telemetry`, Postgres `goldenmatch_autoconfig` + `gm_telemetry`, DuckDB UDFs, MCP/A2A telemetry tools. One JSON shape across every interface.
 - **Polyglot parity** — the full suite ships on **npm** (goldenmatch, goldencheck, goldenflow, goldenanalysis, infermap, goldenpipe) alongside PyPI; the TypeScript and Python implementations track the same outputs to 4-decimal precision via a cross-language parity harness.
 - **Edge-safe, with optional native speed** — the TypeScript cores are dependency-free and `node:*`-free, so they run in browsers, Cloudflare Workers, Vercel Edge, and Deno. An **opt-in WebAssembly backend** (`await enableWasm()` / `enableAnalysisWasm()`) swaps in the *same* pyo3-free Rust kernels the Python wheels and the SQL UDFs use — pure-TS stays the default and the byte-identical fallback, so default users download zero wasm bytes.
@@ -115,7 +115,7 @@ flowchart LR
 | **[GoldenMatch](packages/python/goldenmatch/README.md)** 🟡 | Python · TS | Zero-config entity resolution. Fuzzy + exact + probabilistic + LLM. Headline package. | `pip install goldenmatch` · `npm i goldenmatch` |
 | **[GoldenCheck](packages/python/goldencheck/README.md)** | Python · TS | Data-quality scanning: encoding, Unicode, format validation, anomaly detection. | `pip install goldencheck` · `npm i goldencheck` |
 | **[GoldenFlow](packages/python/goldenflow/README.md)** | Python · TS | Transforms & standardizers: phone, date, address, categorical normalization. | `pip install goldenflow` · `npm i goldenflow` |
-| **[GoldenPipe](packages/python/goldenpipe/README.md)** | Python · TS | Orchestrator that wires Check → Flow → Match into one declarative pipeline. | `pip install goldenpipe` · `npm i goldenpipe` |
+| **[GoldenPipe](packages/python/goldenpipe/README.md)** | Python · TS | Orchestrator that wires Check → Flow → Match → Identity → Analysis into one declarative pipeline. | `pip install goldenpipe` · `npm i goldenpipe` |
 | **[InferMap](packages/python/infermap/README.md)** | Python · TS | Schema mapping engine — auto-aligns columns across heterogeneous sources. | `pip install infermap` · `npm i infermap` |
 | **[GoldenAnalysis](packages/python/goldenanalysis/README.md)** | Python · TS | Cross-cutting analysis & reporting — consumes any stage's typed artifacts (or a raw DataFrame) and emits a unified, exportable `AnalysisReport`; optional Rust / WASM `histogram`+`quantile` kernels. | `pip install goldenanalysis` · `npm i goldenanalysis` |
 | **[goldenmatch-extensions](packages/rust/extensions/README.md)** | Rust | Postgres extension (pgrx) + DuckDB UDFs. SQL-native fuzzy matching. | source build |
@@ -277,7 +277,7 @@ GoldenMatch is hosted as an MCP server on [Smithery](https://smithery.ai/servers
 }
 ```
 
-50+ MCP tools across the suite: deduplicate, match, explain, review, link privately, configure, scan quality, transform, synthesize golden records, and manage Learning Memory corrections.
+70+ MCP tools across the suite: deduplicate, match, explain, review, link privately, configure, scan quality, transform, synthesize golden records, analyze trends and regressions, and manage Learning Memory corrections.
 
 ---
 

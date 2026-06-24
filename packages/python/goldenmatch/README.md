@@ -70,10 +70,13 @@ npm install goldenmatch
 - **96.4% F1 zero-config** on DBLP-ACM (hand-tuned ceiling: 91.8%). [DQBench ER score: 62.87 no-LLM](https://github.com/benseverndev-oss/dqbench)
 - **Learning Memory** — corrections from stewards, unmerges, and LLM votes persist to disk and apply automatically on the next run; survives row reorders via record-hash re-anchoring (v1.6.0)
 - **Privacy-preserving** — match across organizations without sharing raw data (PPRL, 92.4% F1)
-- **59 MCP tools** — use from Claude Desktop, Claude Code, or any AI assistant ([Smithery](https://smithery.ai/servers/benzsevern/goldenmatch))
+- **68 MCP tools** — use from Claude Desktop, Claude Code, or any AI assistant ([Smithery](https://smithery.ai/servers/benzsevern/goldenmatch))
 - **Production-ready** — Postgres sync, daemon mode, lineage tracking, review queues
 
-### What's new in v1.17
+### Auto-config & scale safeguards
+
+(Recent release highlights are in the **What's new** callout at the top; this
+section documents the durable auto-config and scale-safety behaviour.)
 
 - **Refuse-on-uncertainty by default** (`confidence_required=True`). At
   `df.height >= 100_000`, when auto-config commits a RED-health config,
@@ -133,7 +136,7 @@ npm install goldenmatch
 
 ### Matching
 - **12+ scoring methods** — exact, Jaro-Winkler, Levenshtein, token sort, soundex, ensemble, embedding, record embedding, dice, jaccard, **`name_freq_weighted_jw`** (surname IDF-weighted), **`given_name_aliased_jw`** (alias-aware) + plugin extensible
-- **8+ blocking strategies** — static, adaptive, sorted neighborhood, multi-pass, ANN, ann_pairs, canopy, **learned** (data-driven predicate selection)
+- **10+ blocking strategies** — static, adaptive, sorted neighborhood, multi-pass, ANN, ann_pairs, canopy, **learned** (data-driven predicate selection), **`lsh`** (MinHash/LSH), **`simhash`** (semantic SimHash)
 - **Bundled OSS reference data** — five packs ship with the wheel: US Census 2010 surnames, given-name aliases, business legal forms, USPS Pub. 28 addresses, NAICS 2022 industries. Auto-config swaps in the matching scorer / transform when a column name AND its profiled data shape agree. See [Reference Data](https://docs.bensevern.dev/goldenmatch/reference-data).
 - **Fellegi-Sunter probabilistic matching** — EM-trained m/u probabilities, automatic threshold estimation
 - **LLM scorer with budget controls** — GPT-4o-mini scores borderline pairs for just $0.04. Budget caps, model tiering, graceful degradation
@@ -157,7 +160,7 @@ npm install goldenmatch
 - **In-house embedding (cloud-free)** — back the `embedding` / `record_embedding` scorer with a small numpy + ONNX model trained in-process on your labeled pairs (`goldenmatch.embeddings.inhouse.train_embedder`); set the matchkey field's `model="inhouse:<path>"`. No cloud calls, no torch. **Within ~0.2pp of Vertex AI on structured ER** (Railway-validated 3-way comparison, #506 / PR #543) — febrl3 in-house 0.9488 vs Vertex 0.9512, DBLP-ACM 0.9709 vs 0.9708, synthetic-20k 0.9814 vs 0.9834. Use it when you want embedding-grade recall without a cloud dependency.
 
 ### Integration
-- **REST API + MCP Server** — 31 tools for matching, explaining, reviewing, data quality, transforms, and AutoConfigController telemetry
+- **REST API + MCP Server** — 68 MCP tools for matching, explaining, reviewing, data quality, transforms, AutoConfigController telemetry, identity-graph operations, and Learning Memory
 - **A2A Agent** — 12 skills for AI-to-AI autonomous entity resolution (incl. `autoconfig` + `controller_telemetry`)
 - **AutoConfigController telemetry visible from every surface** (v1.7-v1.12 surface-parity arc, PRs #156-#161) — web ControllerPanel, TUI Controller tab (`Ctrl+A`), CLI `goldenmatch autoconfig`, REST `POST /autoconfig` + `GET /controller/telemetry`, Postgres `goldenmatch_autoconfig` + `gm_telemetry`, DuckDB UDF equivalents, MCP/A2A telemetry tools. Every surface returns the same JSON shape (`stop_reason`, `health`, refit decisions, indicator column priors, `negative_evidence` / Path Y).
 - **Database sync** — incremental Postgres matching with persistent ANN index
@@ -773,7 +776,7 @@ llm_scorer:
   # model: gpt-4o-mini       # default, cheapest option
 
 blocking:
-  strategy: adaptive         # static | adaptive | sorted_neighborhood | multi_pass | ann | ann_pairs | canopy
+  strategy: adaptive         # static | adaptive | sorted_neighborhood | multi_pass | ann | ann_pairs | canopy | learned | lsh | simhash
   auto_select: true          # auto-pick best key by histogram analysis
   keys:
     - fields: [zip]
@@ -808,6 +811,8 @@ output:
 | `record_embedding` | Embed concatenated fields | Cross-field semantic matching |
 | `dice` | Dice coefficient on bloom filters | Privacy-preserving matching |
 | `jaccard` | Jaccard similarity on bloom filters | Privacy-preserving matching |
+| `name_freq_weighted_jw` | Jaro-Winkler weighted by US Census surname IDF | Person surnames (down-weights common names) |
+| `given_name_aliased_jw` | Alias-aware Jaro-Winkler (nickname/diminutive lookup) | Given names (Bob↔Robert) |
 
 ## Blocking Strategies
 
@@ -821,6 +826,8 @@ output:
 | `ann_pairs` | Direct-pair ANN scoring (50-100x faster than `ann`) |
 | `canopy` | TF-IDF canopy clustering |
 | `learned` | Data-driven predicate selection (auto-discovers blocking rules) |
+| `lsh` | MinHash / Locality-Sensitive Hashing (high-throughput near-duplicate blocking) |
+| `simhash` | Semantic SimHash blocking |
 
 ## Database Integration
 

@@ -18,11 +18,13 @@ Built by [Ben Severn](https://bensevern.dev).
 
 ```
 Raw Data
-  | GoldenCheck   -- profile & discover quality issues
-  | GoldenFlow    -- fix issues, standardize, reshape
-  | GoldenMatch   -- deduplicate, match, create golden records
+  | GoldenCheck    -- profile & discover quality issues
+  | GoldenFlow     -- fix issues, standardize, reshape
+  | GoldenMatch    -- deduplicate, match, create golden records
+  | GoldenIdentity -- persist stable entity IDs across runs   (optional)
+  | GoldenAnalysis -- terminal reporting over the run's artifacts  (optional)
   v
-Golden Records
+Golden Records + AnalysisReport
 ```
 
 GoldenPipe orchestrates the full pipeline with adaptive logic:
@@ -34,6 +36,14 @@ GoldenPipe orchestrates the full pipeline with adaptive logic:
 
 ```bash
 pip install goldenpipe
+```
+
+Optional extras:
+
+```bash
+pip install goldenpipe[analysis]      # adds the GoldenAnalysis terminal report stage
+pip install goldenpipe[golden-suite]  # full suite, incl. goldenanalysis
+pip install goldenpipe[tui,api,mcp]   # interactive TUI, REST API, MCP server
 ```
 
 ## Quick Start
@@ -58,6 +68,10 @@ goldenpipe run customers.csv --verbose      # Show reasoning
 goldenpipe run customers.csv --skip-flow    # Check + Match only
 goldenpipe run customers.csv --strategy pprl  # Force privacy mode
 goldenpipe run customers.csv -o golden.csv  # Save golden records
+
+goldenpipe interactive                       # Launch the 4-tab TUI
+goldenpipe interactive customers.csv         # Load a source; press 'r' to run it
+goldenpipe interactive customers.csv -c pipeline.yml  # Load source + YAML config
 ```
 
 ## Remote MCP Server
