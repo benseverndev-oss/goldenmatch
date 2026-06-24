@@ -50,10 +50,15 @@ def run(dataset_names: set[str] | None, fast_only: bool, row_cap: int | None):
         except Exception as e:
             rec["signals"] = {"error": str(e)}  # anchor->FAIL, real->neutral (per diff)
         if not fast_only and gt:
+            cap = effective_row_cap(d, row_cap)
             try:
-                rec["f1"] = evaluate_f1(df, gt, row_cap=effective_row_cap(d, row_cap))
+                rec["f1"] = evaluate_f1(df, gt, row_cap=cap)
             except Exception as e:
                 rec["error"] = str(e)  # real F1 error -> neutral (per diff)
+            try:  # second strategy: forced Fellegi-Sunter (the routing-lever evidence)
+                rec["f1_probabilistic"] = evaluate_f1(df, gt, row_cap=cap, strategy="probabilistic")
+            except Exception as e:
+                rec["error_probabilistic"] = str(e)  # informational; floored only when present
         results[d.name] = rec
         # Release each dataset's frame + dedupe intermediates before the next one.
         # The corpus runs in ONE process; without this, a big dataset's dedupe
