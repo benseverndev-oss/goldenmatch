@@ -1,9 +1,49 @@
 # goldengraph — phrase-span extraction lever (scoping)
 
-**Status:** scoping / design (not yet implemented)
+**Status:** Part 1 SHIPPED (#1260); **Part 2 DEPRIORITIZED** — see the pivot below
 **Date:** 2026-06-24
 **Author:** measure-driven loop (follows the literal-attribute lever #1236/#1253)
 **Parent:** `2026-06-22-goldengraph-qa-e2e-first-headline-handoff.md`
+
+## 0. UPDATE 2026-06-24 — PIVOT: extraction is not the bottleneck, retrieval is
+
+Part 1 (broadened literal typing → `ordinal|range|region|event`) shipped (#1260)
+and was measured. The result **redirects this whole lever** and is worth pinning
+at the top so no one builds Part 2 on the old premise.
+
+**Part 1 works at the extraction layer.** A `distill_log=true` N=50 run (with the
+distill logger fixed to actually record attributes, #1264) shows the extractor
+emits the new types across 1000 docs: `date` 1198, `text` 744, `quantity` 722,
+**`ordinal` 170, `range` 76, `region` 19, `event` 17** (88% of docs carry ≥1
+attribute). And the *specific* phrase-gold values land as typed leaf nodes — the
+smoking gun:
+- `Piedmont -[average temperature range]-> "upper 40s-lower 50s °F" (range)` — the
+  **exact** gold, captured. Yet the QA answered `"−15 °C"` (wrong).
+- `Mississippi River -[rises in]-> "northern Minnesota" (text)` — captured. QA said
+  "Gulf of Mexico".
+- `Mega Drive -[is built on]-> "16-bit architecture" (text)` — captured. QA said "60%".
+
+**So the binding constraint is RETRIEVAL/SYNTHESIS, not extraction.** The value
+leaf exists 1-hop off its subject, but the multi-hop chain to the subject never
+reaches it, or synthesis fails to select the predicate-matched attribute among the
+subject's several. The earlier 2010-election case (gold extracted as an `event`
+*entity*, still retrieval-missed) points the same way.
+
+**Consequences:**
+1. Part 1 succeeded at its layer and stays (it's the right representation).
+2. **Part 2 (descriptive-span extraction machinery) is DEPRIORITIZED** — the
+   values are already in the graph; more extraction won't move the bench. Building
+   it would have solved the wrong problem.
+3. The next lever is **retrieval/synthesis-side**: pull a reached entity's
+   value-leaves into the answer ball, and have synthesis match the question's
+   predicate to the attribute label. Pin the exact failure mode with a
+   `GOLDENGRAPH_QA_TRACE=1` run on the phrase golds (EXTRACTION /
+   RETRIEVAL-BROKEN-CHAIN / RETRIEVAL-BUDGET / SYNTHESIS) before designing it.
+
+The original scoping below is retained for the record; sections 4-part-2 and 6
+onward are superseded by this pivot.
+
+---
 
 ## 1. Why — the measured loss bucket
 
