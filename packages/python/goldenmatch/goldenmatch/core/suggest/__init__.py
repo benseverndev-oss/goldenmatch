@@ -8,9 +8,21 @@ Public surface::
 the three Arrow batches required by the native kernel, and returns a list of
 :class:`Suggestion` dataclasses.  Raises :exc:`SuggestionsNativeRequired` when
 the native wheel is absent.
+
+Self-verification (verify=True, the default) filters suggestions whose
+application would worsen the score distribution's unsupervised health proxy.
+See ``goldenmatch.core.suggest.health`` for the proxy formula.
 """
 from goldenmatch.core.suggest.adapter import review_config
 from goldenmatch.core.suggest.apply import apply_suggestion
+from goldenmatch.core.suggest.health import suggestion_health, suggestion_health_from_clusters
 from goldenmatch.core.suggest.types import Suggestion, SuggestionsNativeRequired
 
-__all__ = ["review_config", "apply_suggestion", "Suggestion", "SuggestionsNativeRequired"]
+__all__ = [
+    "review_config",
+    "apply_suggestion",
+    "suggestion_health",
+    "suggestion_health_from_clusters",
+    "Suggestion",
+    "SuggestionsNativeRequired",
+]
