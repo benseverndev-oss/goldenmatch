@@ -668,6 +668,37 @@ def _noise_aware_scorers_enabled() -> bool:
     )
 
 
+def _route_to_probabilistic_enabled() -> bool:
+    """Auto-route a probabilistic-shaped dataset (no strong-identity exact matchkey
+    + multiple weak fuzzy fields) to the Fellegi-Sunter path instead of the default
+    exact+weighted matchkeys. Default OFF (2026-06-23) -- a behavior change pending
+    the dual-strategy corpus proof. Enable:
+    GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC=1 (or true/yes/on/enabled)."""
+    return os.environ.get("GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC", "0").lower() in (
+        "1", "true", "yes", "on", "enabled",
+    )
+
+
+# Exact matchkeys on these col_types are a strong identity claim — when one
+# SURVIVES into the config, exact matching carries the dedup and the probabilistic
+# path tends to lose (verified on anchor_person_match: clean-email exact beats FS).
+# Broader than just "identifier": the dual-strategy harness showed email/phone exact
+# matchkeys are equally strong. `zip` is NOT here (a blocking signal, not identity).
+_STRONG_EXACT_TYPES = ("identifier", "email", "phone")
+
+
+def _is_probabilistic_shape(matchkeys, profiles) -> bool:
+    """Probabilistic shape = no SURVIVING exact matchkey backed by a strong-identity
+    column (identifier/email/phone) + >=2 fuzzy (weighted) fields for EM to weight.
+    Keys on the EMITTED matchkeys (not raw profiles), so a ceiling-excluded id column
+    (a perfectly-unique surrogate) correctly counts as 'no surviving strong key'."""
+    col_type = {p.name: p.col_type for p in profiles}
+    exact_fields = [f.field for mk in matchkeys if mk.type == "exact" for f in mk.fields]
+    has_strong_id = any(col_type.get(fld) in _STRONG_EXACT_TYPES for fld in exact_fields)
+    fuzzy_field_count = sum(len(mk.fields) for mk in matchkeys if mk.type == "weighted")
+    return (not has_strong_id) and fuzzy_field_count >= 2
+
+
 def _noise_aware_scorer(col_type: str, scorer: str) -> str:
     """Upgrade a noise-fragile token_sort to the noise-aware target scorer for
     free-text col_types prone to character-level corruption. No-op unless the gate
