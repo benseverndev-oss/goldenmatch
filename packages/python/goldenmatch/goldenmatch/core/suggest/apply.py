@@ -31,6 +31,7 @@ promote_negative_evidence constants):
 from __future__ import annotations
 
 import copy
+import logging
 
 from goldenmatch.config.schemas import (
     GoldenMatchConfig,
@@ -38,6 +39,8 @@ from goldenmatch.config.schemas import (
     NegativeEvidenceField,
 )
 from goldenmatch.core.suggest.types import Suggestion
+
+logger = logging.getLogger(__name__)
 
 # Defaults for a kernel-suggested NE field.  Mirror the constants in
 # autoconfig_negative_evidence.py (_DEFAULT_NE_THRESHOLD / _DEFAULT_NE_PENALTY).
@@ -125,11 +128,19 @@ def _apply_add_negative_evidence(config: GoldenMatchConfig, patch: dict) -> None
         return
 
     # Pick target matchkey.
-    target = (
-        next((m for m in matchkeys if m.type == "weighted"), None)
-        or next((m for m in matchkeys if m.type == "exact"), None)
-        or matchkeys[0]
-    )
+    weighted = next((m for m in matchkeys if m.type == "weighted"), None)
+    exact = next((m for m in matchkeys if m.type == "exact"), None)
+    target = weighted or exact
+    if target is None:
+        # The kernel should only emit AddNegativeEvidence when a weighted or
+        # exact matchkey exists; reaching this branch indicates an unexpected
+        # kernel output.
+        logger.warning(
+            "_apply_add_negative_evidence: no weighted or exact matchkey found; "
+            "falling back to first matchkey %r (unexpected kernel output for field %r)",
+            matchkeys[0].name, field_name,
+        )
+        target = matchkeys[0]
 
     # Initialise NE list if absent.
     if target.negative_evidence is None:
