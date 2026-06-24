@@ -47,9 +47,13 @@ _COLLAPSE_FLOOR: float = 0.90
 # Penalty applied when mass_above exceeds the collapse floor
 _COLLAPSE_PENALTY: float = 0.50
 
-# Collapse threshold for the cluster-based health proxy: a single cluster
-# absorbing more than this fraction of all records signals a merge pathology.
-_COLLAPSE_FLOOR_CLUSTER: float = 0.50
+# Concentration floor for the cluster-based health proxy (Herfindahl index).
+# Below this HHI the clustering is considered well-distributed (no penalty);
+# above it the graded merge-collapse penalty ramps in.  0.25 means: a single
+# cluster holding ~half the records (HHI 0.25) is the point where over-merge
+# concern begins; the two-equal-50%-clusters case (HHI 0.50) lands solidly in
+# the penalized band; many small clusters (HHI -> 0) pay nothing.
+_COLLAPSE_FLOOR_CLUSTER: float = 0.25
 
 
 def suggestion_health(
@@ -110,19 +114,38 @@ def suggestion_health_from_clusters(
     therefore immune to the threshold-filtering issue (``_run_pipeline`` returns
     only pairs >= threshold, so ``mass_above`` is always 1.0 in the pairs list).
 
-    Formula::
+    Basis: ``matched_rate * avg_conf - concentration_penalty``.
 
         matched_rate = (records in multi-member clusters) / n_records
         avg_conf     = mean confidence over multi-member clusters
-        collapse     = (largest cluster size / n_records) > 0.50
-        health       = matched_rate * avg_conf - 0.5 * collapse
+        hhi          = Herfindahl concentration = sum((size / n_records)**2)
+                       over multi-member clusters  (a few giant clusters => high)
+        penalty      = COLLAPSE_PENALTY * clamp01((hhi - FLOOR) / (1 - FLOOR))
+        health       = matched_rate * avg_conf - penalty
+
+    Why HHI (concentration) and not max-cluster-size: a single-max check
+    (``max_size / n_records > 0.5``) misses over-merge SPREAD across a few big
+    clusters -- e.g. two clusters each at 50% of records (a degenerate
+    over-merge) keeps ``max_size`` at exactly 0.5 and would slip the gate.  HHI
+    sums the squared mass of EVERY cluster, so the two-50% case scores
+    ``0.5^2 + 0.5^2 = 0.5`` and is penalized just like one 71%-cluster
+    (``0.71^2 ~= 0.5``).  The penalty is GRADED (continuous) above ``FLOOR``
+    rather than a hard flag, so a borderline concentration degrades smoothly
+    instead of snapping.  A healthy frame of many small clusters has
+    ``hhi -> 0`` and pays no penalty.
 
     Interpretation:
         - A threshold raise that drops true matches lowers ``matched_rate``.
-        - A threshold lower that causes over-merging lowers ``avg_conf`` and
-          may trigger ``collapse``.
+        - A threshold lower that over-merges raises ``hhi`` (and usually lowers
+          ``avg_conf``), so the penalty grows.
         - Returns -1.0 when ``n_records == 0`` (degenerate).
         - Returns 0.0 when no multi-member clusters exist (no matches found).
+
+    Known limitation: this is an UNSUPERVISED proxy, NOT F1.  It cannot see
+    ground truth -- it rewards "confident, non-degenerate clustering" and
+    penalizes recall collapse and merge collapse, which empirically tracks the
+    direction of F1 on already-healthy configs (the self-verify use case) but
+    is not a substitute for a labeled metric.
 
     Args:
         clusters: Dict mapping cluster_id -> cluster_info dict (as returned by
@@ -157,11 +180,17 @@ def suggestion_health_from_clusters(
         float(info.get("confidence", 0.5)) for info in multi_member
     ) / len(multi_member)
 
-    # Collapse pathology: a single cluster absorbing > 50% of records
-    max_size = max(info.get("size", 2) for info in multi_member)
-    collapse = 1.0 if max_size / n_records > _COLLAPSE_FLOOR_CLUSTER else 0.0
+    # Concentration pathology via Herfindahl index over multi-member clusters.
+    # Catches over-merge spread across several big clusters, not just one.
+    hhi = sum((info.get("size", 2) / n_records) ** 2 for info in multi_member)
 
-    return matched_rate * avg_conf - _COLLAPSE_PENALTY * collapse
+    # Graded penalty above the floor: 0 at hhi <= FLOOR, ramps to the full
+    # COLLAPSE_PENALTY at hhi == 1.0 (one cluster == all records).
+    over = (hhi - _COLLAPSE_FLOOR_CLUSTER) / (1.0 - _COLLAPSE_FLOOR_CLUSTER)
+    concentration = min(1.0, max(0.0, over))
+    penalty = _COLLAPSE_PENALTY * concentration
+
+    return matched_rate * avg_conf - penalty
 
 
 def _extract_threshold(config: object) -> float:
