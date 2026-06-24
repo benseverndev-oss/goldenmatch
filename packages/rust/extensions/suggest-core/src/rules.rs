@@ -167,6 +167,58 @@ pub fn scorer_swap_rule(matchkey: &str, signals: &[ColumnSignal]) -> Vec<Suggest
     out
 }
 
+const NE_IDENTITY_MIN: f64 = 0.75; // identity_score floor (mirrors _IDENTITY_SCORE_THRESHOLD)
+const NE_CARDINALITY_MIN: f64 = 0.50; // cardinality_ratio floor (mirrors _CARDINALITY_THRESHOLD)
+const NE_COLLISION_MIN: f64 = 0.50; // in-cluster disagreement rate that flags over-trust
+
+/// Returns add-negative-evidence suggestions for each column signal.
+///
+/// Fires when a column looks like a strong identity field (high identity_score,
+/// high cardinality_ratio) that is NOT already in negative evidence, but disagrees
+/// within merged clusters at a rate above the collision threshold.  Adding it as
+/// negative evidence penalises future merges where the field conflicts.  Mirrors
+/// the shipped `promote_negative_evidence` thresholds plus a result-driven
+/// collision gate.
+pub fn negative_evidence_rule(signals: &[ColumnSignal]) -> Vec<Suggestion> {
+    let mut out = Vec::new();
+    for c in signals {
+        if c.identity_score < NE_IDENTITY_MIN
+            || c.cardinality_ratio < NE_CARDINALITY_MIN
+            || c.in_negative_evidence
+            || c.collision_rate < NE_COLLISION_MIN
+        {
+            continue;
+        }
+        out.push(Suggestion {
+            id: format!("ne:{}", c.field),
+            kind: SuggestionKind::AddNegativeEvidence,
+            target: c.field.clone(),
+            current_value: "none".into(),
+            proposed_value: "negative_evidence".into(),
+            rationale: format!(
+                "`{}` looks like a strong identity column (identity_score {:.2}, \
+                 cardinality_ratio {:.2}) yet disagrees within {:.0}% of merged clusters. \
+                 Adding it as negative evidence will penalise merges where it conflicts.",
+                c.field,
+                c.identity_score,
+                c.cardinality_ratio,
+                c.collision_rate * 100.0
+            ),
+            predicted_effect: PredictedEffect::PrecisionUp,
+            confidence: 0.55,
+            patch: ConfigPatch::AddNegativeEvidence {
+                field: c.field.clone(),
+            },
+            evidence: serde_json::json!({
+                "identity_score": c.identity_score,
+                "collision_rate": c.collision_rate,
+                "cardinality_ratio": c.cardinality_ratio
+            }),
+        });
+    }
+    out
+}
+
 fn round2(x: f64) -> f64 {
     (x * 100.0).round() / 100.0
 }
@@ -292,5 +344,74 @@ mod tests {
         let signals = vec![cs("address_line", "address", "qgram", 0.9, 0.0)];
         let out = scorer_swap_rule("person", &signals);
         assert!(out.is_empty(), "non-token_sort scorer should not trigger swap");
+    }
+
+    // ---------------------------------------------------------------------------
+    // negative_evidence_rule tests
+    // ---------------------------------------------------------------------------
+
+    /// Build a ColumnSignal for NE-rule tests, reusing the cs() helper's base
+    /// but overriding the NE-relevant fields explicitly.
+    fn ne_signal(
+        field: &str,
+        identity_score: f64,
+        cardinality_ratio: f64,
+        collision_rate: f64,
+        in_negative_evidence: bool,
+    ) -> ColumnSignal {
+        ColumnSignal {
+            field: field.into(),
+            col_type: "string".into(),
+            scorer: "exact".into(),
+            in_blocking: false,
+            in_negative_evidence,
+            identity_score,
+            corruption_score: 0.0,
+            collision_rate,
+            cardinality_ratio,
+            null_rate: 0.0,
+            variant_rate: 0.0,
+        }
+    }
+
+    #[test]
+    fn adds_ne_for_colliding_identity_column() {
+        // identity 0.9, cardinality 0.8, collision 0.6, not already NE -> one suggestion
+        let signals = vec![ne_signal("npi", 0.9, 0.8, 0.6, false)];
+        let out = negative_evidence_rule(&signals);
+        assert_eq!(out.len(), 1, "expected exactly one suggestion");
+        let s = &out[0];
+        assert_eq!(s.kind, SuggestionKind::AddNegativeEvidence);
+        assert_eq!(s.id, "ne:npi");
+        assert_eq!(s.current_value, "none");
+        assert_eq!(s.proposed_value, "negative_evidence");
+        assert!(
+            matches!(&s.patch, ConfigPatch::AddNegativeEvidence { field } if field == "npi"),
+            "patch should be AddNegativeEvidence for npi"
+        );
+    }
+
+    #[test]
+    fn no_ne_when_already_negative_evidence() {
+        // same strong signals but already in NE -> empty
+        let signals = vec![ne_signal("npi", 0.9, 0.8, 0.6, true)];
+        let out = negative_evidence_rule(&signals);
+        assert!(out.is_empty(), "already-NE column should not re-suggest NE");
+    }
+
+    #[test]
+    fn no_ne_when_low_collision() {
+        // identity 0.9, cardinality 0.8, but collision 0.1 (< 0.50) -> empty
+        let signals = vec![ne_signal("npi", 0.9, 0.8, 0.1, false)];
+        let out = negative_evidence_rule(&signals);
+        assert!(out.is_empty(), "low collision_rate should not trigger NE");
+    }
+
+    #[test]
+    fn no_ne_when_low_identity() {
+        // identity 0.3 (< 0.75), cardinality 0.8, collision 0.9 -> empty
+        let signals = vec![ne_signal("weak_field", 0.3, 0.8, 0.9, false)];
+        let out = negative_evidence_rule(&signals);
+        assert!(out.is_empty(), "low identity_score should not trigger NE");
     }
 }
