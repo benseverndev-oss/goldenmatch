@@ -1,4 +1,7 @@
-from scripts.autoconfig_quality.datasets import REGISTRY, Dataset
+import polars as pl
+import pytest
+
+from scripts.autoconfig_quality.datasets import REGISTRY, Dataset, _pairs_to_row_index
 
 
 def test_anchors_always_load():
@@ -27,3 +30,47 @@ def test_real_loader_skips_when_absent():
     assert dblp.kind == "real"
     res = dblp.loader()                             # data absent locally -> None
     assert res is None or (isinstance(res, tuple) and len(res) == 2)
+
+
+def test_pairs_to_row_index_maps_and_canonicalizes():
+    df = pl.DataFrame({"id": ["a", "b", "c"]})
+    # (c,a) -> rows (2,0) -> canonical (0,2); (b,b) self -> dropped; (x,a) missing -> dropped
+    gt = _pairs_to_row_index(df, "id", {("c", "a"), ("b", "b"), ("x", "a")})
+    assert gt == {(0, 2)}
+
+
+def test_febrl3_loader_shape_or_skip():
+    pytest.importorskip("recordlinkage")
+    from scripts.autoconfig_quality.datasets import _febrl3
+    loaded = _febrl3()
+    assert loaded is not None
+    df, gt = loaded
+    assert "id" in df.columns and gt and all(0 <= a < b < df.height for a, b in gt)
+
+
+def test_ncvr_synthetic_always_loads_with_row_index_gt():
+    from scripts.autoconfig_quality.datasets import _ncvr_synthetic
+    df, gt = _ncvr_synthetic()
+    assert "ncid" in df.columns
+    assert gt and all(0 <= a < b < df.height for a, b in gt)
+
+
+def test_ncvr_real_skips_when_absent(monkeypatch):
+    import scripts.autoconfig_quality.datasets as ds
+    monkeypatch.setattr(ds, "_NCVR_REAL_PATH", ds.Path("does/not/exist.txt"))
+    assert ds._ncvr_real() is None
+
+
+def test_historical_50k_loads_drops_truth_and_has_row_index_gt():
+    from scripts.autoconfig_quality.datasets import _historical_50k
+    loaded = _historical_50k()
+    assert loaded is not None  # parquet is committed
+    df, gt = loaded
+    assert "cluster" not in df.columns and "unique_id" not in df.columns
+    assert gt and all(0 <= a < b < df.height for a, b in gt)
+
+
+def test_historical_50k_registered_full_scan():
+    from scripts.autoconfig_quality.datasets import REGISTRY
+    h = next(d for d in REGISTRY if d.name == "historical_50k")
+    assert h.full_scan is True

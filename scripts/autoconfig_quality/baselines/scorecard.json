@@ -102,18 +102,165 @@
           "rule_name": "plan_selected_simple"
         }
       }
+    },
+    "febrl3": {
+      "f1": {
+        "attribution": {
+          "blocking_recall": 0.9787,
+          "final_recall": 0.9824,
+          "threshold_loss": -0.0037
+        },
+        "f1": 0.9665,
+        "precision": 0.9418,
+        "recall": 0.9925
+      },
+      "kind": "real",
+      "signals": {
+        "blocking_cost": {
+          "candidate_pairs": 202462,
+          "max_block": 186,
+          "n_blocks": 4384,
+          "p99": 43,
+          "reduction_ratio": 0.9838
+        },
+        "blocking_fields": [
+          "date_of_birth",
+          "given_name",
+          "state",
+          "surname"
+        ],
+        "classification": {
+          "address_1": "name",
+          "address_2": "name",
+          "date_of_birth": "date",
+          "given_name": "name",
+          "id": "identifier",
+          "postcode": "numeric",
+          "soc_sec_id": "identifier",
+          "state": "geo",
+          "street_number": "numeric",
+          "suburb": "name",
+          "surname": "name"
+        },
+        "exact_matchkeys": [
+          "address_1",
+          "address_2",
+          "date_of_birth",
+          "given_name",
+          "soc_sec_id",
+          "surname"
+        ],
+        "planner_rung": {
+          "backend": "polars-direct",
+          "rule_name": "plan_selected_simple"
+        }
+      }
+    },
+    "historical_50k": {
+      "f1": {
+        "attribution": {
+          "skipped": "scale"
+        },
+        "f1": 0.4663,
+        "precision": 0.5714,
+        "recall": 0.3938
+      },
+      "kind": "real",
+      "signals": {
+        "blocking_cost": {
+          "candidate_pairs": 17997410,
+          "max_block": 1000,
+          "n_blocks": 21821,
+          "p99": 124,
+          "reduction_ratio": 0.9859
+        },
+        "blocking_fields": [
+          "first_and_surname",
+          "full_name"
+        ],
+        "classification": {
+          "birth_place": "name",
+          "dob": "date",
+          "first_and_surname": "name",
+          "first_name": "name",
+          "full_name": "name",
+          "gender": "name",
+          "occupation": "name",
+          "postcode_fake": "zip",
+          "surname": "name"
+        },
+        "exact_matchkeys": [
+          "dob",
+          "first_and_surname",
+          "full_name"
+        ],
+        "planner_rung": {
+          "backend": "polars-direct",
+          "rule_name": "plan_selected_simple"
+        }
+      }
+    },
+    "ncvr_synthetic": {
+      "f1": {
+        "attribution": {
+          "blocking_recall": 1.0,
+          "final_recall": 0.9716,
+          "threshold_loss": 0.0284
+        },
+        "f1": 0.9828,
+        "precision": 0.9943,
+        "recall": 0.9716
+      },
+      "kind": "real",
+      "signals": {
+        "blocking_cost": {
+          "candidate_pairs": 434530,
+          "max_block": 145,
+          "n_blocks": 65,
+          "p99": 145,
+          "reduction_ratio": 0.9845
+        },
+        "blocking_fields": [
+          "birth_year"
+        ],
+        "classification": {
+          "birth_year": "year",
+          "first_name": "name",
+          "gender_code": "string",
+          "last_name": "name",
+          "middle_name": "name",
+          "ncid": "string",
+          "res_city_desc": "geo",
+          "res_street_address": "address",
+          "state_cd": "geo",
+          "zip_code": "zip"
+        },
+        "exact_matchkeys": [
+          "birth_year",
+          "first_name",
+          "last_name"
+        ],
+        "planner_rung": {
+          "backend": "polars-direct",
+          "rule_name": "plan_selected_simple"
+        }
+      }
     }
   },
   "meta": {
     "datasets_run": [
       "anchor_person_match",
       "anchor_shared_email",
-      "anchor_sparse_zip"
+      "anchor_sparse_zip",
+      "febrl3",
+      "historical_50k",
+      "ncvr_synthetic"
     ],
     "datasets_skipped": {
-      "dblp_acm": "absent"
+      "dblp_acm": "absent",
+      "ncvr_real": "absent"
     },
-    "git_sha": "d7ce338a565d01ba062dbaa5a1eb343eea4bd982",
+    "git_sha": "9743c7b7def8c590ad545d57f7217ae33f97596b",
     "native_version": "0.1.11"
   }
 }

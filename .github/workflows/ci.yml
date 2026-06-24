@@ -968,6 +968,12 @@ jobs:
             uv.lock
             **/pyproject.toml
       - run: uv sync --all-packages
+      # FEBRL3's loader needs recordlinkage (ships the dataset bundled); it is not
+      # a declared dep. pyarrow backs pl.from_pandas in the febrl3/ncvr loaders
+      # (mirrors the benchmark_runner_smoke precedent). synthetic-NCVR +
+      # historical_50k (vendored parquet) need no extra install; real-NCVR +
+      # DBLP-ACM skip-when-absent in CI (gitignored).
+      - run: uv pip install recordlinkage pyarrow
       - name: Run auto-config quality gate
         shell: bash
         env:
