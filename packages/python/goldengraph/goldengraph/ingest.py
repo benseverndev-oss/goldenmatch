@@ -271,12 +271,20 @@ def _existing_features(slice_graph):
             rel[o].add(p)
             nbr[s].add(id_to_name[o])
             nbr[o].add(id_to_name[s])
+    # Literal-attribute leaf nodes (typ "literal:<kind>") are values, not entities to
+    # resolve -- exclude them as cross-doc link candidates so they are never embedded
+    # as fingerprints (a raw value can be an empty/over-long input that 400s the
+    # provider batch during the profile-link build) and never spuriously cluster.
+    out_ents: list[dict] = []
     feats: list[dict] = []
     keys: list[set[str]] = []
     for e in ents:
+        if str(e.get("typ", "")).startswith("literal:"):
+            continue
         eid = e["entity_id"]
         typ = e.get("typ", "")
         surfaces = e.get("surface_names", ())
+        out_ents.append(e)
         feats.append({
             "name": e.get("canonical_name", ""),
             "type": typ,
@@ -285,7 +293,7 @@ def _existing_features(slice_graph):
             "nbr": " | ".join(sorted(nbr[eid])),
         })
         keys.append({_record_key(s, typ) for s in [e.get("canonical_name", ""), *surfaces] if s})
-    return ents, feats, keys
+    return out_ents, feats, keys
 
 
 def _new_features(batch: dict):
@@ -302,9 +310,16 @@ def _new_features(batch: dict):
             rel[o].add(p)
             nbr[s].add(lid_to_name[o])
             nbr[o].add(lid_to_name[s])
+    # Exclude literal leaf nodes (typ "literal:<kind>") from the link candidate set --
+    # values, not entities (mirror of `_existing_features`); keeps them out of the
+    # profile-link fingerprint embedding that would otherwise 400 on a bad value.
+    out_ents: list[dict] = []
     feats: list[dict] = []
     for be in new_ents:
+        if str(be.get("typ", "")).startswith("literal:"):
+            continue
         lid = be["local_id"]
+        out_ents.append(be)
         feats.append({
             "name": be.get("canonical_name", ""),
             "type": be.get("typ", ""),
@@ -312,7 +327,7 @@ def _new_features(batch: dict):
             "rel": " | ".join(sorted(rel[lid])),
             "nbr": " | ".join(sorted(nbr[lid])),
         })
-    return new_ents, feats
+    return out_ents, feats
 
 
 def _assemble_fp_texts(existing, ex_keys, new_ents, new_fps, fp_index):
