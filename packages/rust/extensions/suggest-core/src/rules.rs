@@ -34,7 +34,7 @@ pub fn threshold_rule(
                 kind: kind.clone(),
                 target: matchkey.into(),
                 current_value: format!("{current:.2}"),
-                proposed_value: format!("{dip:.2}"),
+                proposed_value: format!("{:.2}", round2(dip)),
                 rationale: format!(
                     "Pair scores split into two groups with a gap near {dip:.2}, but the \
                      `{matchkey}` threshold sits at {current:.2}. Moving it to {dip:.2} \
