@@ -12,6 +12,8 @@ pub struct ScoreDiagnostics {
     pub histogram: Vec<(f64, i64)>,
     pub mass_above: f64,      // fraction of pairs with score >= threshold
     pub mass_just_below: f64, // fraction in [threshold-0.10, threshold)
+    // Total scored_pairs rows (incl. null scores); the mass fractions divide by
+    // the count of NON-NULL scores so blocked/null pairs don't dilute them.
     pub n_pairs: usize,
 }
 
@@ -25,17 +27,20 @@ impl ScoreDiagnostics {
             .downcast_ref::<Float64Array>()
             .ok_or("score not f64")?;
         let vals: Vec<f64> = scores.iter().flatten().collect();
+        // Total rows (incl. null scores) -- surfaced in rationale text. The mass
+        // fractions divide by non-null score count so null pairs don't dilute them.
+        let n_pairs = batch.num_rows();
         let n = vals.len();
         if n == 0 {
             return Ok(Self {
                 histogram: vec![],
                 mass_above: 0.0,
                 mass_just_below: 0.0,
-                n_pairs: 0,
+                n_pairs,
             });
         }
         let above = vals.iter().filter(|&&s| s >= threshold).count();
-        let band_lo = threshold - 0.10;
+        let band_lo = (threshold - 0.10).max(0.0);
         let just_below = vals
             .iter()
             .filter(|&&s| s >= band_lo && s < threshold)
@@ -46,7 +51,7 @@ impl ScoreDiagnostics {
             histogram,
             mass_above: above as f64 / n as f64,
             mass_just_below: just_below as f64 / n as f64,
-            n_pairs: n,
+            n_pairs,
         })
     }
 
@@ -57,7 +62,10 @@ impl ScoreDiagnostics {
             return None;
         }
         let counts: Vec<i64> = self.histogram.iter().map(|(_, c)| *c).collect();
-        let peak = *counts.iter().max().unwrap();
+        let peak = counts.iter().max().copied().unwrap_or(0);
+        if peak == 0 {
+            return None;
+        }
         // find the global min that has a higher-count bin on BOTH sides
         let mut best: Option<(usize, i64)> = None;
         for i in 1..counts.len() - 1 {
@@ -159,6 +167,35 @@ mod tests {
         assert!((d.mass_above - 3.0 / 6.0).abs() < 1e-9);
         assert!((d.mass_just_below - 1.0 / 6.0).abs() < 1e-9); // [0.70,0.80)
         assert_eq!(d.histogram.len(), 24);
+    }
+
+    #[test]
+    fn n_pairs_counts_total_rows_fractions_over_non_null() {
+        // 4 rows: scores [0.9, null, 0.85, 0.5]. n_pairs = 4 (total rows),
+        // but mass fractions divide by the 3 non-null scores.
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id_a", DataType::Int64, false),
+            Field::new("id_b", DataType::Int64, false),
+            Field::new("score", DataType::Float64, true),
+        ]));
+        let b = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int64Array::from(vec![0i64, 1, 2, 3])),
+                Arc::new(Int64Array::from(vec![1i64, 2, 3, 4])),
+                Arc::new(Float64Array::from(vec![
+                    Some(0.9),
+                    None,
+                    Some(0.85),
+                    Some(0.5),
+                ])),
+            ],
+        )
+        .unwrap();
+        let d = ScoreDiagnostics::from_batch(&b, 0.80, 8).unwrap();
+        assert_eq!(d.n_pairs, 4); // total rows, incl. the null
+        // 2 of 3 non-null scores are >= 0.80
+        assert!((d.mass_above - 2.0 / 3.0).abs() < 1e-9);
     }
 
     #[test]
