@@ -162,3 +162,68 @@ def test_entity_only_prompt_is_byte_identical_to_pre_literal():
     # The flag-off prompt must equal head + entity-clause + tail exactly, so the
     # measured entity-only baseline is never perturbed by this slice.
     assert synth._LOCAL_PROMPT == synth._LOCAL_HEAD + synth._ANSWER_ENTITY + synth._LOCAL_TAIL
+
+
+# --- seeding + cross-doc-link exclusion (the embed-400 fix) ------------------
+
+
+class _FakeGraph:
+    def __init__(self, ents):
+        self._ents = ents
+
+    def entities(self):
+        return self._ents
+
+
+def test_seed_by_query_excludes_literal_and_empty_names():
+    """Regression: a literal leaf value (or an empty name) must NOT enter the seed
+    embedding -- a raw value can be an empty/over-long input that 400s the whole
+    provider batch. Literals are reached by BFS from a seed, never seeded on."""
+    import numpy as np
+
+    from goldengraph.embed import seed_by_query
+
+    embedded = {}
+
+    class _Emb:
+        def embed(self, texts):
+            embedded["texts"] = list(texts)
+            return np.asarray([[float(len(t))] for t in texts], dtype=float)
+
+    graph = _FakeGraph([
+        {"entity_id": 1, "canonical_name": "Acme", "typ": "org"},
+        {"entity_id": 2, "canonical_name": "1976", "typ": "literal:date"},  # excluded
+        {"entity_id": 3, "canonical_name": "   ", "typ": "org"},  # empty -> excluded
+    ])
+    seeds = seed_by_query(graph, "when founded?", _Emb(), k=5)
+    assert embedded["texts"] == ["when founded?", "Acme"]
+    assert seeds == [1]
+
+
+def test_seed_by_query_all_literal_graph_returns_empty():
+    from goldengraph.embed import seed_by_query
+
+    class _Emb:
+        def embed(self, texts):  # pragma: no cover - must not be called
+            raise AssertionError("should not embed an all-literal/empty graph")
+
+    graph = _FakeGraph([{"entity_id": 1, "canonical_name": "1976", "typ": "literal:date"}])
+    assert seed_by_query(graph, "q", _Emb()) == []
+
+
+def test_literal_nodes_excluded_from_cross_doc_link_candidates():
+    import importlib
+
+    ingest = importlib.import_module("goldengraph.ingest")
+    entities = [_ent(0, "Acme", members=[0])]
+    ex = Extraction(
+        mentions=[Mention("Acme", "org")],
+        relationships=[],
+        attributes=[Attribute(subj=0, predicate="founded on", value="1976", typ="date")],
+    )
+    batch = build_batch(ex, entities, at=1)
+    new_ents, feats = ingest._new_features(batch)
+    # the literal node is in the batch but NOT a link candidate (so never embedded)
+    assert any(str(e["typ"]).startswith("literal:") for e in batch["entities"])
+    assert all(not str(e.get("typ", "")).startswith("literal:") for e in new_ents)
+    assert len(new_ents) == len(feats) == 1
