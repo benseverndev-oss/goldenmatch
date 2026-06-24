@@ -7,8 +7,14 @@ because the dual-strategy harness showed a clean-email anchor (anchor_person_mat
 does BETTER deterministically (its email exact matchkey is a strong identity claim)
 -- routing it would regress it.
 """
+import goldenmatch
+import polars as pl
 from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
-from goldenmatch.core.autoconfig import ColumnProfile, _is_probabilistic_shape
+from goldenmatch.core.autoconfig import (
+    ColumnProfile,
+    _is_probabilistic_shape,
+    auto_configure_df,
+)
 
 
 def _prof(name, col_type, card=0.5):
@@ -59,11 +65,6 @@ def test_too_few_fuzzy_fields_no_route():
 
 
 # ── behavioral: the gated routing through the live auto_configure_df path ──────
-import polars as pl  # noqa: E402
-import goldenmatch  # noqa: E402
-from goldenmatch.core.autoconfig import auto_configure_df  # noqa: E402
-
-
 def _bio_df():
     """Probabilistic shape: no identifier/email/phone column; several fuzzy fields."""
     import random
