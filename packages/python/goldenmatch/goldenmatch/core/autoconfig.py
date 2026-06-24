@@ -3563,9 +3563,12 @@ def _legacy_auto_configure_v0(  # pyright: ignore[reportUnusedFunction]  # kept 
     # (no surviving identifier/email/phone exact matchkey + >=2 fuzzy fields) is
     # better served by the Fellegi-Sunter path. Delegate to
     # auto_configure_probabilistic_df (it builds the diversified FS blocking that
-    # lifts recall) and return directly. NOTE: this fires before the domain-extracted
-    # matchkeys are appended below, so a domain-extracted identifier is not seen by
-    # the trigger (acceptable for v1; revisit if a domain-heavy dataset misroutes).
+    # lifts recall) and return directly. NOTE (v1 scoping): this fires before the
+    # domain-extracted matchkeys are appended below, so a domain-extracted identifier
+    # is not seen by the trigger; and auto_configure_probabilistic_df re-profiles df
+    # (excluding __-prefixed cols), so any already-extracted domain feature is dropped
+    # on the routed path. Acceptable while default-off; revisit if a domain-heavy
+    # dataset misroutes or needs its domain features under FS.
     if (not multi_source and _route_to_probabilistic_enabled()
             and _is_probabilistic_shape(matchkeys, profiles)):
         return auto_configure_probabilistic_df(df, llm_provider=llm_provider)

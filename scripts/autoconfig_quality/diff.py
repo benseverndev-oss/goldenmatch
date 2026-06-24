@@ -100,6 +100,10 @@ def diff_scorecards(
             # must run cleanly) from an intentional fast-only skip (no f1, no
             # error -> WARN so it's visible, but doesn't fail a config-only run;
             # the CI gate runs the full tier, so the floor is enforced there).
+            # NOTE: anchors floor only the `f1` (default) block. An anchor's
+            # `f1_probabilistic` is recorded in the baseline (provenance / the
+            # det-vs-prob evidence) but intentionally NOT floored — the anchor's job
+            # is to prove default > FS, and the default side is what's gated.
             cur_f1 = c.get("f1", {}).get("f1")
             base_f1 = b.get("f1", {}).get("f1") if b else None
             if base_f1 is not None and cur_f1 is None:
