@@ -61,7 +61,7 @@ def test_extract_literals_flag_uses_the_attribute_prompt():
     llm = RecordingLLM(response='{"entities": [], "relationships": [], "attributes": []}')
     extract("some text", llm, literals=True)
     assert "attributes" in llm.prompts[-1]
-    assert '"date|quantity|text"' in llm.prompts[-1]
+    assert '"date|quantity|ordinal|range|region|event|text"' in llm.prompts[-1]
     # default (no literals) keeps the entity-only prompt
     llm2 = RecordingLLM(response='{"entities": [], "relationships": []}')
     extract("some text", llm2)
@@ -227,3 +227,106 @@ def test_literal_nodes_excluded_from_cross_doc_link_candidates():
     assert any(str(e["typ"]).startswith("literal:") for e in batch["entities"])
     assert all(not str(e.get("typ", "")).startswith("literal:") for e in new_ents)
     assert len(new_ents) == len(feats) == 1
+
+
+# --- phrase-span Part 1: broadened literal typing ---------------------------
+
+_NEW_TYPES = ("ordinal", "range", "region", "event")
+
+
+def test_parse_extraction_retains_broadened_literal_types():
+    """ordinal/range/region/event must survive as their own typ (not coerce to
+    text) -- they are the qualified-value golds the entity-only graph drops."""
+    import json
+
+    attrs = [
+        {"subj": 0, "predicate": "ranks", "value": "third-largest", "type": "ordinal"},
+        {"subj": 0, "predicate": "ranked", "value": "551-600", "type": "range"},
+        {"subj": 0, "predicate": "located in", "value": "northeastern Oklahoma",
+         "type": "region"},
+        {"subj": 0, "predicate": "gained control in", "value": "the 2010 election",
+         "type": "event"},
+    ]
+    raw = json.dumps(
+        {"entities": [{"name": "X", "type": "org"}], "relationships": [],
+         "attributes": attrs}
+    )
+    ex = parse_extraction(raw)
+    assert [a.typ for a in ex.attributes] == list(_NEW_TYPES)
+    assert ex.attributes[0].value == "third-largest"
+
+
+def test_build_batch_materializes_broadened_literal_subtypes():
+    """Each broadened kind becomes a `literal:<kind>` leaf carrying no record_keys
+    (never anchors a cross-doc merge), inheriting the literal-namespace isolation."""
+    entities = [_ent(0, "X", members=[0])]
+    ex = Extraction(
+        mentions=[Mention("X", "org")],
+        relationships=[],
+        attributes=[
+            Attribute(subj=0, predicate="ranks", value="third-largest", typ="ordinal"),
+            Attribute(subj=0, predicate="located in", value="northeastern Oklahoma",
+                      typ="region"),
+        ],
+    )
+    batch = build_batch(ex, entities, at=1)
+    lits = {e["canonical_name"]: e for e in batch["entities"]
+            if e["typ"].startswith("literal:")}
+    assert lits["third-largest"]["typ"] == "literal:ordinal"
+    assert lits["northeastern Oklahoma"]["typ"] == "literal:region"
+    assert all(e["record_keys"] == [] for e in lits.values())
+
+
+def test_broadened_subtypes_excluded_from_seeding_and_linking():
+    """A `literal:ordinal` leaf inherits the prefix-keyed isolation: never seeded,
+    never a cross-doc link candidate -- same guard that protects literal:date."""
+    import importlib
+
+    import numpy as np
+
+    from goldengraph.embed import seed_by_query
+
+    ingest = importlib.import_module("goldengraph.ingest")
+
+    class _Emb:
+        def embed(self, texts):
+            return np.asarray([[float(len(t))] for t in texts], dtype=float)
+
+    graph = _FakeGraph([
+        {"entity_id": 1, "canonical_name": "Tulsa", "typ": "city"},
+        {"entity_id": 2, "canonical_name": "third-largest", "typ": "literal:ordinal"},
+    ])
+    assert seed_by_query(graph, "where does it rank?", _Emb(), k=5) == [1]
+
+    entities = [_ent(0, "Tulsa", typ="city", members=[0])]
+    ex = Extraction(
+        mentions=[Mention("Tulsa", "city")],
+        relationships=[],
+        attributes=[Attribute(subj=0, predicate="ranks", value="third-largest",
+                              typ="ordinal")],
+    )
+    new_ents, _ = ingest._new_features(build_batch(ex, entities, at=1))
+    assert all(not str(e.get("typ", "")).startswith("literal:") for e in new_ents)
+
+
+def test_format_subgraph_labels_broadened_value_leaf():
+    sub = {
+        "entities": [
+            {"entity_id": 0, "canonical_name": "Tulsa", "typ": "city"},
+            {"entity_id": 1, "canonical_name": "third-largest", "typ": "literal:ordinal"},
+        ],
+        "edges": [{"subj": 0, "predicate": "ranks", "obj": 1}],
+    }
+    text = _format_subgraph(sub)
+    assert '"third-largest" (ordinal value)' in text
+    assert 'Tulsa -[ranks]-> "third-largest"' in text
+
+
+def test_literal_answer_clause_admits_broadened_types():
+    """The gated literal answer clause must invite rank/region/event answers so the
+    new leaves are surfaced; the entity-only clause stays free of them."""
+    for kind in ("rank/ordinal", "range", "region", "event"):
+        assert kind in synth._ANSWER_LITERAL
+    # entity-only path unperturbed
+    assert "region" not in synth._ANSWER_ENTITY
+    assert synth._LOCAL_PROMPT == synth._LOCAL_HEAD + synth._ANSWER_ENTITY + synth._LOCAL_TAIL

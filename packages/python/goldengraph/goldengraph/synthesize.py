@@ -80,8 +80,9 @@ _ANSWER_ENTITY = (
 )
 _ANSWER_LITERAL = (
     "Your final answer is a single item from the Entities list -- usually a named "
-    "entity, but it MAY be a literal VALUE leaf (a date, quantity, or amount, shown in "
-    "quotes) when the question asks 'when', 'how much', or 'how many'. Output its EXACT "
+    "entity, but it MAY be a literal VALUE leaf (shown in quotes: a date, quantity, "
+    "rank/ordinal, range, region, or event) when the question asks 'when', 'how much', "
+    "'how many', 'where', or 'which rank/position'. Output its EXACT "
     "text without the quotes, nothing else, on the last line prefixed 'Answer: '. "
     "Commit to the single most plausible item even if an intermediate hop is uncertain; "
     "do NOT answer with a free-form description or 'cannot answer' unless NOTHING in the "
