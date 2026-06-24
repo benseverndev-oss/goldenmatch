@@ -7,6 +7,7 @@
 
 pub mod contract;
 pub mod diagnostics;
+pub mod rules;
 
 #[cfg(test)]
 mod tests {
