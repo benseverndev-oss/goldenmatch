@@ -23,6 +23,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   fallback when the native wheel is absent.
 
 ### Added
+- **Auto-config probabilistic routing — opt-in, default-off (#1254; harness #1216/#1226).**
+  Zero-config `dedupe_df` can now route a *probabilistic-shaped* dataset (no surviving
+  exact matchkey backed by a strong-identity column — `identifier`/`email`/`phone` —
+  plus ≥2 fuzzy fields) to the Fellegi-Sunter path instead of exact+weighted matchkeys,
+  when `GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC=1`. There's no clean key to carry the
+  dedup, so EM-weighted comparison wins: measured lift on no-strong-id / error-heavy
+  data (`historical_50k` F1 0.466→0.829, recall 0.39→0.75) with no regression on
+  datasets that retain a strong key (those stay deterministic). **Default-off** — a
+  behavior change pending a broader regression sweep; `dedupe_df` output is unchanged
+  when the flag is unset. Nominated on evidence by the new decision-kernel **quality
+  harness** (`scripts/autoconfig_quality/`, a `report`/`gate`/`bless` loop with a CI
+  `quality_gate` job + a dual-strategy det-vs-FS scorecard column). See
+  `docs-site/goldenmatch/tuning.mdx` and context-network ADR 0024.
 - **Tamper-evident audit log: per-event hash + on-demand seal chain (#1078,
   epic Agent Memory #1073).** The append-only identity event log is now
   cryptographically tamper-evident in two contention-free layers. (1) Every
