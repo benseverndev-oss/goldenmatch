@@ -17,7 +17,7 @@ faster (27s vs 100s). Measured twice (0.8244 / 0.8284: recall stable, F1 wobbles
 
 The gap is a **routing miss**: auto-config never routes the probabilistic shape to
 the FS path. `_legacy_auto_configure_v0` calls `build_matchkeys()` unconditionally
-(`autoconfig.py:3469`), which only emits `exact` + `weighted` matchkeys; nothing
+(`autoconfig.py:3529`), which only emits `exact` + `weighted` matchkeys; nothing
 checks "no strong identifier + many weak fuzzy fields → go probabilistic." The FS
 machinery exists (`build_probabilistic_matchkeys`, `auto_configure_probabilistic_df`,
 EM training + probabilistic block scoring in `pipeline.py`) but is opt-in only.
@@ -66,7 +66,7 @@ artifact: the committed scorecard shows det-vs-prob for every dataset (historica
 ## Phase 2 — Kernel: the routing lever
 
 **Decision site.** In `_legacy_auto_configure_v0` (`autoconfig.py`), immediately
-after `build_matchkeys()` (`:3469`), check the trigger; if it fires, return a
+after `build_matchkeys()` (`:3529`), check the trigger; if it fires, return a
 probabilistic config from `build_probabilistic_matchkeys()` instead and **skip the
 iterative controller loop** (that loop refines *weighted* matchkeys; FS configs are
 stable post-EM and don't need it — this mirrors the existing non-iterative
