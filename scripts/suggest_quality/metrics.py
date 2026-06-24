@@ -84,3 +84,20 @@ def convergence(steps: list[tuple[str, float]]) -> dict:
         "steps": len(steps),
         "improved": len(steps) > 0,
     }
+
+
+DAMAGE_EPS = 0.005  # min ceiling-minus-degraded gap for recovery% to be meaningful
+
+
+def recovery_pct(f1_degraded: float, f1_recovered: float, f1_ceiling: float) -> float:
+    """Fraction of the damage the suggester recovered.
+
+    (f1_recovered - f1_degraded) / (f1_ceiling - f1_degraded).
+    1.0 = fully undid the damage; >1.0 = beat the zero-config ceiling;
+    <0.0 = made it worse. Returns nan when the damage gap < DAMAGE_EPS
+    (no meaningful damage to recover). Not clamped.
+    """
+    denom = f1_ceiling - f1_degraded
+    if denom < DAMAGE_EPS:
+        return float("nan")
+    return (f1_recovered - f1_degraded) / denom
