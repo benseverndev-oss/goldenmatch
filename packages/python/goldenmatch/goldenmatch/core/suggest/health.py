@@ -105,7 +105,7 @@ def suggestion_health(
     return mass_sep - _COLLAPSE_PENALTY * pathology
 
 
-def suggestion_health_from_clusters(
+def _health_legacy(
     clusters: dict,
     n_records: int,
 ) -> float:
@@ -193,6 +193,17 @@ def suggestion_health_from_clusters(
     penalty = _COLLAPSE_PENALTY * concentration
 
     return matched_rate * avg_conf - penalty
+
+
+def suggestion_health_from_clusters(clusters: dict, n_records: int) -> float:
+    """Public health proxy used by review_config's verify gate. Env-selectable:
+    GOLDENMATCH_SUGGEST_HEALTH = 'legacy' (default, the shipped formula) or
+    'cohesion' (the precision-sensitive redesign). Default keeps PR #1267
+    behavior byte-identical."""
+    mode = os.environ.get("GOLDENMATCH_SUGGEST_HEALTH", "legacy").strip().lower()
+    if mode == "cohesion":
+        return suggestion_health_cohesion(clusters, n_records)
+    return _health_legacy(clusters, n_records)
 
 
 def _cluster_min_edges(clusters: dict) -> list[float]:
