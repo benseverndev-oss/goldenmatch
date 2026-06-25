@@ -190,6 +190,91 @@ measurable:
 - No default behavior change (default stays `legacy`); the default-on flip is a
   separate evidence-backed change.
 
+## Findings (gym sweep, 2026-06-24, sha 29345d58)
+
+Sweep ran across all four variants on `synthetic` (373 rows, 218 gt_pairs) and
+`ncvr_synthetic` (7500 rows, 2500 gt_pairs). All runs used
+`GOLDENMATCH_NATIVE=0` (pure Python; native not needed for the proxy logic).
+
+### Gym board (threshold_too_low perturbation focus)
+
+| variant | live rec synthetic | rule_fired synthetic | live rec ncvr | rule_fired ncvr | gym score (live) |
+|---|---|---|---|---|---|
+| legacy | 0.0% | no | 0.0% | no | 0.0% |
+| cohesion / min_edge | 108.9% | yes | 72.3% | yes | -225.9% |
+| cohesion / mean_bottomk_edge | 108.9% | yes | 72.3% | yes | -225.9% |
+| cohesion / edge_below_cutoff_fraction | 108.9% | yes | 72.3% | yes | -225.9%* |
+
+*`edge_below_cutoff_fraction` errored on `ncvr_synthetic/flattened_weights` (OOM
+on a 95x95 array in an unrelated code path, not the proxy); the
+`threshold_too_low` row was clean.
+
+The headline finding for `threshold_too_low`: **all three cohesion statistics
+unblock recovery completely** (legacy 0.0% -> 108.9% / 72.3%), with the correct
+`raise_threshold` rule firing on both datasets. This confirms the on-paper math
+from the spec: the degraded config's proxy score (0.518) < the fixed config's
+score (0.611), so the gate passes the fix.
+
+### Oracle (suggester_precision no-harm check)
+
+| variant | sugg_prec synthetic | sugg_prec ncvr | passes no-harm? |
+|---|---|---|---|
+| legacy | 1.00 | 1.00 | yes (0 suggestions) |
+| cohesion / min_edge | 1.00 | 0.00 | **NO** |
+| cohesion / mean_bottomk_edge | 1.00 | 0.00 | **NO** |
+| cohesion / edge_below_cutoff_fraction | 1.00 | 0.00 | **NO** |
+
+**All three cohesion statistics fail the oracle no-harm constraint on
+ncvr_synthetic.** `suggester_prec = 0.00` on ncvr means the proxy is accepting
+suggestions that do NOT improve F1 (rank_corr = -1.000 on the oracle report).
+The oracle `n_sugg=2` for ncvr vs `n_sugg=0` (legacy) shows the cohesion proxy
+passes suggestions the legacy proxy correctly suppressed.
+
+### Dual-gate verdict
+
+**NO statistic threads both constraints on this gym/oracle pairing.**
+
+- Gym half (live recovery): PASS for all three cohesion variants.
+- Oracle half (no-harm / suggester_precision): FAIL for all three cohesion variants.
+
+The cohesion proxy unblocks `threshold_too_low` recovery as predicted, but it
+simultaneously re-opens the net-negative door on ncvr_synthetic: the proxy is
+now too permissive and accepts suggestions that hurt F1. This is the opposing
+failure mode to the legacy proxy (which was too strict). The design's "peak at
+the right operating point" hasn't been achieved with cohesion x coverage alone.
+
+### Why the no-harm failure happens
+
+The cohesion x coverage proxy has no mechanism to penalize suggestions that
+LOWER the threshold (over-merge direction). When the ncvr suggester fires
+`lower_threshold` or similar rules, the resulting over-merged config can
+still have high cohesion (high-confidence merges dominate) and high coverage
+(more records matched), so the proxy score RISES even when F1 falls. The legacy
+proxy had the same property conceptually but its `matched_rate * avg_conf`
+formula happened to suppress those suggestions via the recall-sensitivity of
+`matched_rate` in this dataset. The cohesion proxy, with saturating coverage
+(capped at 0.30 = 30% of records matched), saturates faster and allows the gate
+to open on over-merge.
+
+### Recommendation: escalate to Approach C (weak-pseudo-labels)
+
+Per the design's escalation criterion: "If NO stat threads both constraints, say
+so HONESTLY and recommend escalation to Approach C (weak-pseudo-labels)."
+
+Approach C generates pseudo-positives (pairs agreeing on >=2 discriminative
+fields) + pseudo-negatives (random cross-block pairs) to estimate a
+pseudo-precision and pseudo-recall. This approach is structurally immune to the
+bias that bites both the legacy proxy (recall-only, saturated precision) and
+the cohesion proxy (precision-sensitive on the over-merge tail, but not
+directional -- it can't tell "fewer correct merges" from "fewer wrong merges"
+without reference pairs). The pseudo-label layer adds the directional signal
+both proxies lack.
+
+The cohesion x coverage proxy is a real improvement on the specific
+`threshold_too_low / over-merge` pathology the design targeted, but the
+ncvr_synthetic oracle failure means it cannot be flipped default-on safely.
+Approach C is the next step.
+
 ## Open questions for planning
 
 - Confirm the clusters dict reliably carries `confidence` and `cluster_quality`
