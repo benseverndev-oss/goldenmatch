@@ -545,8 +545,19 @@ def review_config(
     scored_pairs = result.scored_pairs
     clusters = result.clusters
 
+    # When full-dist is on, source the score distribution from a threshold-0
+    # diagnostic run so the kernel sees the FULL (pre-threshold) distribution --
+    # otherwise mass_above is always 1.0 (only >= threshold pairs are returned).
+    # clusters/column_signals still come from the REAL run; config_json below still
+    # carries the REAL threshold, so the kernel evaluates against the true cutoff.
+    pairs_for_kernel = scored_pairs
+    if _full_dist_enabled():
+        diag_pairs = _diagnostic_scored_pairs(engine, df, _config)
+        if diag_pairs is not None:
+            pairs_for_kernel = diag_pairs
+
     # -- Build Arrow batches --
-    scored_pairs_batch = _build_scored_pairs_batch(scored_pairs)
+    scored_pairs_batch = _build_scored_pairs_batch(pairs_for_kernel)
     clusters_batch = _build_clusters_batch(clusters)
     column_signals_batch = _build_column_signals_batch(df, _config, clusters)
 
