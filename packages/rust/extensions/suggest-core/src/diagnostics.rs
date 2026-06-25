@@ -361,6 +361,76 @@ mod tests {
         assert!(d.dip().is_none(), "uniform distribution should have no dip");
     }
 
+    fn diag(hist: Vec<(f64, i64)>) -> ScoreDiagnostics {
+        let n: i64 = hist.iter().map(|(_, c)| *c).sum();
+        ScoreDiagnostics {
+            histogram: hist,
+            mass_above: 0.0,
+            mass_just_below: 0.0,
+            n_pairs: n as usize,
+        }
+    }
+
+    // (1) The real NCVR-synthetic shape: dip MUST land in the high band (the
+    //     trough below the true-match mode), NOT the 0.04 left-tail sliver.
+    #[test]
+    fn dip_targets_valley_below_match_mode_on_right_skewed() {
+        let hist = vec![
+            (0.0000, 441008),
+            (0.0417, 48),
+            (0.0833, 1002),
+            (0.1250, 5376),
+            (0.1667, 6263),
+            (0.2083, 10586),
+            (0.2500, 16894),
+            (0.2917, 39651),
+            (0.3333, 52055),
+            (0.3750, 40747),
+            (0.4167, 49015),
+            (0.4583, 72972),
+            (0.5000, 66375),
+            (0.5417, 40352),
+            (0.5833, 19660),
+            (0.6250, 7669),
+            (0.6667, 2296),
+            (0.7083, 536),
+            (0.7500, 152),
+            (0.7917, 154),
+            (0.8333, 181),
+            (0.8750, 97),
+            (0.9167, 583),
+            (0.9583, 1456),
+        ];
+        let d = diag(hist).dip().expect("should find a high-side valley");
+        assert!(d >= 0.75, "expected valley below the match mode (~0.875), got {d}");
+        assert!(d >= 0.10, "must not return the left-tail sliver 0.04, got {d}");
+    }
+
+    // (2) Clean bimodal (preserves existing behavior): valley between the two modes.
+    #[test]
+    fn dip_clean_bimodal_returns_mid_valley() {
+        let d = diag(vec![(0.0, 100), (0.5, 2), (0.9, 100)]).dip();
+        assert_eq!(d, Some(0.5));
+    }
+
+    // (3) Single mode / no prominent high-score peak: return None (no suggestion
+    //     beats a destructive one). Monotonic decay, no second hump.
+    #[test]
+    fn dip_single_mode_returns_none() {
+        let d = diag(vec![
+            (0.0, 500),
+            (0.1, 200),
+            (0.2, 80),
+            (0.3, 30),
+            (0.4, 12),
+            (0.5, 5),
+            (0.6, 2),
+            (0.7, 1),
+        ])
+        .dip();
+        assert_eq!(d, None);
+    }
+
     fn clusters_batch(
         qualities: &[&str],
         oversized_flags: &[bool],
