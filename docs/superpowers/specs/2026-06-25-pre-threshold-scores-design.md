@@ -184,3 +184,13 @@ rule fired, recovery, precision).
   for `mass_above`/`mass_just_below` — i.e. the diagnostic threshold is used ONLY
   to widen `scored_pairs`, while the kernel still evaluates against the config's
   true threshold.
+- The diagnostic re-score must reuse the SAME `engine` instance / blocking as the
+  real run so blocking is provably identical between the two runs — the cost
+  argument ("only the score filter differs, blocking is identical") depends on it.
+  Pin this in the plan.
+- The verify pass currently uses `suggestion_health_from_clusters` *because* the
+  scored-pairs proxy was useless under the threshold filter. Once `FULL_DIST=1`
+  de-saturates the distribution, the plan should make an explicit decision on
+  whether the verify-pass health proxy stays cluster-based or can now also consume
+  the full scored-pairs distribution — so the two code paths don't silently
+  diverge on which `scored_pairs` they assume.
