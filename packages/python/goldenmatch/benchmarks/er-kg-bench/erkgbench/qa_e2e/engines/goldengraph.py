@@ -61,6 +61,41 @@ _NODE_BUDGET = int(os.environ.get("GOLDENGRAPH_QA_NODE_BUDGET", "256"))
 #: the graph but disconnected from the seeds within any reasonable depth).
 _WIDE_HOPS = 8
 
+#: Answer-time retrieval mode. "local" (default) = the entity-graph BFS over extracted
+#: triples (the historical goldengraph path). "hybrid" = that ball PLUS raw source
+#: passages retrieved by goldenmatch's own retrieval surface, fed to synthesis as the
+#: ground truth with the graph as a multi-hop map. The bench's structural finding was
+#: that the triple-only graph is a LOSSY intermediate (it lost to plain paragraph RAG);
+#: hybrid tests whether layering the passages back in -- while keeping the graph for
+#: cross-passage bridging -- closes that gap. Env-tunable for the A/B.
+_QA_MODE = os.environ.get("GOLDENGRAPH_QA_MODE", "local")
+
+#: Passages retrieved per question in hybrid mode (matches the goldenmatch_rag /
+#: text_rag context budget so the comparison is apples-to-apples).
+_QA_PASSAGE_K = int(os.environ.get("GOLDENGRAPH_QA_PASSAGE_K", "10"))
+
+
+class _PassageRetriever:
+    """goldenmatch paragraph retrieval over the corpus -- literally the goldenmatch_rag
+    retriever (`retrieve_similar_records` + the SAME OpenAI embedder), reused as the
+    passage source for goldengraph's hybrid `ask`. The injected embedder caches by
+    cache_key, so the corpus embeds once across all questions; each query embeds once.
+    Holds NO graph state -- the graph half stays the store's job."""
+
+    def __init__(self, ids, texts, embedder):
+        from .goldenmatch_rag import _make_frame
+
+        self._frame = _make_frame(ids, texts)
+        self._embedder = embedder
+
+    def retrieve(self, query: str, k: int) -> list[str]:
+        from goldenmatch.core.retrieval import retrieve_similar_records
+
+        hits = retrieve_similar_records(
+            self._frame, query, "text", k=k, embedder=self._embedder
+        )
+        return [str(h.record.get("text", "")) for h in hits]
+
 
 class _CachingEmbedder:
     """Memoizes embeddings by text across the WHOLE run. Two callers re-embed the
@@ -123,6 +158,8 @@ class GoldenGraphQAEngine:
         resolver: Any | None = None,
         retrieval_hops: int | None = None,
         node_budget: int | None = None,
+        retrieval_mode: str | None = None,
+        passage_k: int | None = None,
     ):
         self._llm = _CountingLLM(llm)
         # Cache embeddings across the whole run: the build's cross-doc linking and
@@ -139,6 +176,16 @@ class GoldenGraphQAEngine:
         self._node_budget = (
             node_budget if node_budget is not None
             else int(os.environ.get("GOLDENGRAPH_QA_NODE_BUDGET", "256"))
+        )
+        # "local" (entity-graph BFS, default) vs "hybrid" (BFS + goldenmatch passage
+        # retrieval fed to synthesis). hybrid builds a passage index at build time.
+        self._retrieval_mode = (
+            retrieval_mode if retrieval_mode is not None
+            else os.environ.get("GOLDENGRAPH_QA_MODE", "local")
+        )
+        self._passage_k = (
+            passage_k if passage_k is not None
+            else int(os.environ.get("GOLDENGRAPH_QA_PASSAGE_K", "10"))
         )
 
     def build_kg(self, corpus) -> BuildResult:
@@ -160,7 +207,27 @@ class GoldenGraphQAEngine:
             [doc.text for doc in corpus.documents], store, llm=self._llm,
             resolver=self._resolver, embedder=self._embedder, fp_index=fp_index,
         )
-        handle = {"store": store, "valid_t": _AS_OF, "tx_t": _AS_OF}
+        # Hybrid mode also indexes the raw paragraphs for answer-time passage
+        # retrieval. Built with a SEPARATE OpenAI embedder (text-embedding-3-large,
+        # matching goldenmatch_rag/text_rag) so the passage half is identical to the
+        # standalone goldenmatch_rag engine -- the graph half stays the store's job.
+        # Embedding calls here are NOT charged to the engine token budget (parity with
+        # text_rag/goldenmatch_rag, which meter only synthesis chat tokens).
+        passages = None
+        if self._retrieval_mode == "hybrid":
+            from openai import OpenAI
+
+            from .goldenmatch_rag import _OpenAIEmbedderAdapter
+
+            adapter = _OpenAIEmbedderAdapter(OpenAI(), "text-embedding-3-large")
+            passages = _PassageRetriever(
+                [d.id for d in corpus.documents],
+                [d.text for d in corpus.documents],
+                adapter,
+            )
+        handle = {
+            "store": store, "valid_t": _AS_OF, "tx_t": _AS_OF, "passages": passages,
+        }
         return BuildResult(
             handle=handle,
             input_tokens=self._llm.input_tokens - before_in,
@@ -180,9 +247,11 @@ class GoldenGraphQAEngine:
             embedder=self._embedder,
             valid_t=handle["valid_t"],
             tx_t=handle["tx_t"],
-            mode="local",
+            mode=self._retrieval_mode,
             hops=self._retrieval_hops,
             node_budget=self._node_budget,
+            passages=handle.get("passages"),
+            passage_k=self._passage_k,
         )
         return AnswerResult(
             text=text,

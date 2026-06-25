@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from .embed import Embedder, seed_by_query
 from .llm import LLMClient
-from .synthesize import synthesize_global, synthesize_local
+from .synthesize import synthesize_global, synthesize_hybrid, synthesize_local
 
 
 def _retrieve_local(slice_graph, seeds, *, max_hops: int, node_budget: int) -> dict:
@@ -50,13 +50,20 @@ def ask(
     hops: int = 4,
     max_communities: int = 10,
     node_budget: int = 64,
+    passages: object | None = None,
+    passage_k: int = 10,
 ) -> str:
     """Answer `query` against `store` as-of `(valid_t, tx_t)`.
 
     `mode="local"`: embedding-seeded neighborhood, expanded adaptively up to `hops`
     (bounded by `node_budget` entities) so multi-hop answers are reachable, then
-    synthesized with explicit step-by-step relation tracing. `mode="global"`: community
-    map-reduce (capped at `max_communities` --
+    synthesized with explicit step-by-step relation tracing. `mode="hybrid"`: the same
+    seeded ball PLUS raw source passages retrieved by `passages.retrieve(query,
+    passage_k)` -> `list[str]`, handed to synthesis as the ground-truth context with
+    the graph as a cross-passage multi-hop map (recovers the source-text fidelity the
+    extracted triples drop; the answer is freed from the entity-only constraint). With
+    no `passages` retriever it degrades to passages-empty (graph-only, free-form
+    answer). `mode="global"`: community map-reduce (capped at `max_communities` --
     the pre-emptive guard on the N+1 LLM fan-out; per-call budget is the `LLMClient`'s
     job). Each community is contextualized with its immediate (1-hop) neighborhood.
     """
@@ -65,8 +72,8 @@ def ask(
         communities = slice_graph.communities()[:max_communities]
         views = [slice_graph.query(c["members"], 1) for c in communities]
         return synthesize_global(query, views, llm)
-    if mode != "local":
-        raise ValueError(f"mode must be 'local' or 'global', got {mode!r}")
+    if mode not in ("local", "hybrid"):
+        raise ValueError(f"mode must be 'local', 'hybrid', or 'global', got {mode!r}")
     seeds = seed_by_query(slice_graph, query, embedder, k=k)
     subgraph = _retrieve_local(slice_graph, seeds, max_hops=hops, node_budget=node_budget)
     # Hand the synthesis the seed entity NAMES (the query-relevant anchors) so the
@@ -75,6 +82,13 @@ def ask(
         e["entity_id"]: e["canonical_name"] for e in subgraph.get("entities", ())
     }
     seed_names = [id_to_name[s] for s in seeds if s in id_to_name]
+    if mode == "hybrid":
+        passage_texts = (
+            list(passages.retrieve(query, passage_k)) if passages is not None else []
+        )
+        return synthesize_hybrid(
+            query, subgraph, passage_texts, llm, seed_names=seed_names
+        )
     return synthesize_local(query, subgraph, llm, seed_names=seed_names)
 
 
