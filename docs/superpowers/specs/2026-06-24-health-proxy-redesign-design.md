@@ -26,7 +26,9 @@ HHI_penalty`. Decomposing the `threshold_too_low` case on synthetic
 | fixed (threshold raised) | 0.990 | **0.7624** | 0.764 | 0.999 | 0.000 |
 
 The fix **raises F1 +0.088** but the proxy **drops −0.009**, so the verify gate
-(`cand_health >= baseline_health`) DROPS it.
+DROPS it. (The gate is `cand_health >= baseline_health - _VERIFY_EPS` with
+`_VERIFY_EPS = 1e-6` (`adapter.py`) — negligible; the −0.009 drop is ~9000× the
+slack, so EPS is not a contributor and the diagnosis is unaffected.)
 
 The mechanism is NOT simply "matched_rate is bad" — the proxy is already a
 precision×recall product. The bug is that **the precision factor (`avg_conf`) is
@@ -90,9 +92,15 @@ health = cohesion × coverage
   Candidates (all from the clusters dict the run already emits —
   `confidence` = 0.4·min_edge + 0.3·avg_edge + 0.3·connectivity, `cluster_quality`
   ∈ {strong, weak, split}, `bottleneck_pair`, `pair_scores`):
-  - `weak_fraction`: `1 − (#weak clusters / #multi-member clusters)`.
+  - `weak_fraction`: `1 − (#weak clusters / #multi-member clusters)`, where a
+    weak cluster is `info["cluster_quality"] == "weak"`. NOTE the per-cluster
+    dict key is **`cluster_quality`**, NOT `quality` (`quality` is only the
+    Polars metadata column; the per-cluster dict uses `cluster_quality` — see
+    `cluster.py` `build_clusters` return shape). Building against `quality` would
+    silently read "no weak clusters" and neuter this candidate.
   - `p10_conf`: the 10th-percentile cluster confidence (not the mean).
-  - `min_edge`: mean of per-cluster weakest intra-cluster edge.
+  - `min_edge`: mean of per-cluster weakest intra-cluster edge (from
+    `bottleneck_pair` score / `min(pair_scores)`).
   Each drops sharply when a few clusters over-merge.
 - **coverage** keeps the under-merge guard: as a threshold rises too far and
   matches vanish, `matched_rate → 0 → health → 0`. Saturating (capped) so it
@@ -185,3 +193,9 @@ measurable:
 - Confirm whether `min_edge` is directly available per cluster (`bottleneck_pair`
   score / `pair_scores` min) or must be derived, so the `min_edge` candidate is
   cheap.
+- `suggestion_health_from_clusters` currently EXCLUDES `oversized` clusters before
+  computing stats, but over-merge can manifest as an oversized cluster (later
+  auto-split). Planning must confirm the over-merge signal the cohesion stat needs
+  survives the `oversized` exclusion, or decide whether the cohesion statistic
+  should include oversized clusters too (else the very pathology we want to catch
+  is filtered out before the proxy sees it).
