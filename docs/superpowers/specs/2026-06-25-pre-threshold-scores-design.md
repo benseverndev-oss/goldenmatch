@@ -263,3 +263,85 @@ health proxy + full-dist holds precision at 1.0 but only by suppressing the
 suggestion — no live recovery gain. The flag stays default-off (as designed).
 Next lever is the `lower_threshold` magnitude / target-threshold logic in the
 kernel rule, not the distribution plumbing, which now demonstrably works.
+
+## Findings (dip valley-targeting, 2026-06-25)
+
+Follow-on to the full-dist findings above. The full-dist work proved the
+distribution plumbing but exposed a destructive `lower_threshold` magnitude:
+on the right-skewed ncvr_synthetic distribution the old global-min `dip()`
+returned the **0.04 left-tail sliver** (the gap between the bin-0 non-match
+spike and the central hump), so `threshold_too_high` fired
+`lower_threshold -> 0.04`, raw recovery **-1231.6%**. This run validates the
+right-anchored `dip()` rewrite (`suggest-core/src/diagnostics.rs`, commit
+`059f3bca`; native rebuilt in-tree, gym reports `native=0.1.5 sha=059f3bca348a`).
+Env: `GOLDENMATCH_SUGGEST_FULL_DIST=1`, `GOLDENMATCH_AUTOCONFIG_MEMORY=0`,
+`POLARS_SKIP_CPU_CHECK=1`.
+
+**Headline (FULL_DIST=1 gym, both datasets):** raw gym recovery **+50.5%**
+(was **-399.3%**), live gym recovery 0.0% (unchanged — self-verify still
+suppresses every built-rule suggestion). The catastrophic raw hole is gone.
+
+Per-perturbation rows of interest (`rec%_RAW` = raw recovery, `rec%_LIVE` =
+live recovery; `rule_fired` from the gym board):
+
+| dataset / perturbation | rule_fired | proposed_value | raw recovery | live recovery | suggester_prec |
+|---|---|---|---|---|---|
+| ncvr_synthetic / `threshold_too_high` | (none — no fire) | n/a (dip=**0.875**, gap to current=0.025 < `DIP_MIN_GAP` 0.05) | **0.0%** (was **-1231.6%**) | 0.0% | **1.00** (was 0.00) |
+| ncvr_synthetic / `threshold_too_low` | `raise_threshold` | (raises toward valley) | +93.2% | 0.0% | 1.00 |
+| ncvr_synthetic / `bad_freetext_scorer` | (none) | n/a | 0.0% | 0.0% | 1.00 |
+| synthetic / `threshold_too_low` | `raise_threshold` | (raises toward valley) | +108.9% | 0.0% | 1.00 |
+
+Oracle no-harm (`report --datasets synthetic,ncvr_synthetic`, FULL_DIST=1):
+`suggester_prec` = **1.00 / 1.00** (synthetic / ncvr), `conv_f1` == `base_f1`
+on both (0.9887 / 0.9828), `n_sugg=0`.
+
+### Why `threshold_too_high` now fires NOTHING (and that is correct)
+
+The right-anchored `dip()` lands at **0.875** — the trough just below the
+true-match mode (bins 22-23, 583+1456 pairs), exactly the spec's measured
+target — NOT the 0.04 sliver. The `threshold_too_high` perturbation raises the
+ncvr threshold to **0.90**, which is already within `DIP_MIN_GAP` (0.05) of the
+0.875 valley (`|0.875 - 0.90| = 0.025`). So the dip rule correctly declines to
+move it, and the other threshold rules don't apply (`mass_above` is ~0.2% of
+candidate pairs, far below the 0.90 "everything matches" floor; no weak/oversized
+clusters trigger the recall-risk band). The kernel emitting NO suggestion here is
+the right call: the perturbed config is essentially already at the correct
+operating point, and the prior `-1231.6%` "recovery" was the harm of forcing it
+to 0.04. (Rust unit tests `dip_targets_valley_below_match_mode_on_right_skewed`,
+`dip_clean_bimodal_returns_mid_valley`, `dip_single_mode_returns_none` pin
+dip=0.875 / 0.5 / None respectively; the whole `suggest-core` crate is green.)
+
+The symmetric `threshold_too_low` case still fires `raise_threshold` correctly
+on both datasets (raw +93.2% ncvr / +108.9% synthetic), so the rewrite did not
+break the raise direction.
+
+### Verdict against the kill criterion
+
+The kill criterion (plan Task 3 Step 6): continued investment is earned only if,
+across BOTH datasets, (a) `threshold_too_high` recovery materially improves vs
+the -1231%/-399.3% baseline AND (b) `suggester_prec` holds ~1.0.
+
+- **(b) PRECISION HELD: PASS.** `suggester_prec` = 1.00 / 1.00 (was 1.00 / **0.00**
+  under full-dist-alone). The net-negative suggestion that tanked ncvr precision
+  is gone.
+- **(a) RECOVERY: this is the honest split.** The destructive collapse is FIXED —
+  `threshold_too_high` raw recovery goes from **-1231.6% → 0.0%** and the raw gym
+  headline from **-399.3% → +50.5%**. But the improvement is "stopped the
+  catastrophe," NOT "delivered a positive recovery on `threshold_too_high`": the
+  kernel now correctly emits no suggestion (0.0%) rather than a harmful one, because
+  the 0.90 perturbed threshold is already at the valley. There is no *positive*
+  recovery win on `threshold_too_high` to bank — the win is the correctness of NOT
+  collapsing the threshold.
+
+**Honest bottom line:** the fix is a **correctness win, not an accuracy win.** It
+removes the threshold-collapse pathology (the dip lands at the true 0.875 valley,
+precision holds at 1.0, the -1231% / -399.3% hole is closed) without producing a
+positive live-recovery gain on the built-rule perturbations. Per the kill
+criterion's explicit allowance for exactly this outcome — "if it only stops the
+catastrophe without a recovery win... that is still a correctness improvement
+... but signals the suggestion arc is at diminishing returns and should rest" —
+the dip-valley arc has delivered its correctness value and **rests here.** The
+flag stays default-off as designed. The remaining gap (live recovery 0.0% — the
+self-verify gate suppresses correct fixes) is a property of the gym's degraded
+configs being already near-optimal under zero-config #662, not a dip-location
+bug, and is out of scope for this plan.

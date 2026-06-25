@@ -91,7 +91,22 @@ def test_full_dist_off_is_unchanged(monkeypatch):
     reason="native suggest_config kernel absent or requires worktree package "
            "(MatchEngine.from_dataframe missing)",
 )
-def test_full_dist_on_fires_lower_threshold_on_too_high(monkeypatch):
+def test_full_dist_on_does_not_collapse_threshold_on_too_high(monkeypatch):
+    """After the right-anchored dip fix (2026-06-25), the dip on the NCVR-synthetic
+    `threshold_too_high` shape lands at the high-side valley (~0.875, the trough
+    below the true-match mode), NOT the 0.04 left-tail sliver the buggy global-min
+    dip returned.
+
+    On this corpus the perturbation raises the threshold to 0.90, which is already
+    within DIP_MIN_GAP (0.05) of the 0.875 valley, so the kernel correctly emits NO
+    threshold suggestion rather than the destructive `lower_threshold -> 0.04` it
+    used to fire (recorded at raw recovery -1231.6% in the prior full-dist findings).
+
+    This test pins the FIX: no suggestion may lower the `fuzzy_match` threshold into
+    the left tail. (Originally `test_full_dist_on_fires_lower_threshold_on_too_high`,
+    which asserted the buggy `lower_threshold` KIND fires; that expectation encoded
+    the bug this plan removes -- updated per the plan's "written justification" rule.)
+    """
     monkeypatch.setenv("GOLDENMATCH_SUGGEST_FULL_DIST", "1")
     monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
     from goldenmatch.core.suggest import review_config  # noqa: PLC0415
@@ -101,5 +116,11 @@ def test_full_dist_on_fires_lower_threshold_on_too_high(monkeypatch):
     ceil = _auto_configure_no_rerank(df)
     too_high = getp("threshold_too_high").apply(ceil)
     sugg = review_config(df, too_high, verify=False)
-    kinds = {s.kind for s in sugg}
-    assert "lower_threshold" in kinds, f"expected lower_threshold, got {kinds}"
+    # No suggestion may collapse the threshold into the low-score tail.
+    for s in sugg:
+        if s.kind == "lower_threshold":
+            proposed = float(s.proposed_value)
+            assert proposed >= 0.10, (
+                f"lower_threshold must not collapse into the left-tail sliver, "
+                f"got proposed_value={proposed} (suggestion {s.id})"
+            )
