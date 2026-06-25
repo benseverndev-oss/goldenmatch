@@ -177,31 +177,60 @@ impl ScoreDiagnostics {
         })
     }
 
-    /// Lowest-count bin strictly between the two highest-mass regions -- the
-    /// bimodality "dip". Returns the bin's left edge, or None if no clear valley.
+    /// Locate the threshold valley that separates the true-match mass (a
+    /// high-score mode) from the non-match bulk. Right-anchored: finds the
+    /// RIGHTMOST prominent high-score peak (the match mode -- detectable even when
+    /// it carries little total mass, because it stands well above the trough to its
+    /// left), then walks LEFT from that peak to the adjacent local minimum and
+    /// returns that trough's left edge. Returns None when there is no prominent
+    /// high-score mode (unimodal / pure decay) -- in that case the kernel emits no
+    /// dip suggestion rather than collapse the threshold into the left tail.
     pub fn dip(&self) -> Option<f64> {
-        if self.histogram.len() < 3 {
-            return None;
-        }
         let counts: Vec<i64> = self.histogram.iter().map(|(_, c)| *c).collect();
-        let peak = counts.iter().max().copied().unwrap_or(0);
-        if peak == 0 {
+        let n = counts.len();
+        if n < 3 {
             return None;
         }
-        // find the global min that has a higher-count bin on BOTH sides
-        let mut best: Option<(usize, i64)> = None;
-        for i in 1..counts.len() - 1 {
-            let left_max = counts[..i].iter().max().copied().unwrap_or(0);
-            let right_max = counts[i + 1..].iter().max().copied().unwrap_or(0);
-            if left_max > counts[i] && right_max > counts[i] {
-                if best.map_or(true, |(_, c)| counts[i] < c) {
-                    best = Some((i, counts[i]));
-                }
+        const PEAK_PROMINENCE: f64 = 3.0; // match-mode peak must stand >=3x above its left trough
+        // Leftmost global-max bin (the non-match bulk anchor). `max_by_key`
+        // returns the LAST max on ties, which would place the anchor at the
+        // right mode of a clean bimodal and leave nothing to its right -- pick
+        // the FIRST max instead so the right-anchored search has the high band
+        // to scan.
+        let global_max = counts.iter().copied().max().unwrap_or(0);
+        if global_max == 0 {
+            return None;
+        }
+        let global_max_idx = counts.iter().position(|&c| c == global_max)?;
+
+        // 1. Find the RIGHTMOST prominent local-maximum bin to the right of the
+        //    global max. "Prominent" = it stands >= PEAK_PROMINENCE x above the
+        //    local trough immediately to its left (walk left while non-increasing).
+        let mut peak_idx: Option<usize> = None;
+        for i in (global_max_idx + 1)..n {
+            let is_local_max = counts[i] >= counts[i - 1] && (i + 1 == n || counts[i] >= counts[i + 1]);
+            if !is_local_max {
+                continue;
+            }
+            // trough immediately left of this peak
+            let mut t = i;
+            while t > 0 && counts[t - 1] <= counts[t] {
+                t -= 1;
+            }
+            let trough = counts[t];
+            if trough == 0 || (counts[i] as f64) >= PEAK_PROMINENCE * (trough as f64) {
+                peak_idx = Some(i); // rightmost qualifying peak wins (loop continues)
             }
         }
-        // require the valley to be a real dip (< 25% of peak) to avoid noise
-        best.filter(|&(_, c)| (c as f64) < 0.25 * peak as f64)
-            .map(|(i, _)| self.histogram[i].0)
+        let peak = peak_idx?;
+
+        // 2. Valley = the local minimum adjacent to (left of) that peak: walk left
+        //    while the left neighbor is no greater (descending into the trough).
+        let mut v = peak;
+        while v > 0 && counts[v - 1] <= counts[v] {
+            v -= 1;
+        }
+        Some(self.histogram[v].0)
     }
 }
 
