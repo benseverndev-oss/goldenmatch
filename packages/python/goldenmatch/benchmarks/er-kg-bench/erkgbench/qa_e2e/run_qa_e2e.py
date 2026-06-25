@@ -105,6 +105,23 @@ def _build_engine(name: str):
         return TextRAGQAEngine(
             model="gpt-4o-mini", embedding_model="text-embedding-3-large"
         )
+    if name == "goldenmatch_rag":
+        # goldenmatch's OWN retrieval surface (retrieve_similar_records) with the SAME
+        # OpenAI embedder text_rag uses -- isolates our retrieval mechanics vs naive
+        # cosine, embedder held constant.
+        from .engines.goldenmatch_rag import GoldenmatchRAGQAEngine
+
+        return GoldenmatchRAGQAEngine(
+            model="gpt-4o-mini", embedding_model="text-embedding-3-large"
+        )
+    if name == "goldenmatch_entity_rag":
+        # goldenmatch's entity-aware RAG (retrieve -> dedupe -> canonicalize) -- the
+        # product's differentiated claim, measured for the first time.
+        from .engines.goldenmatch_rag import GoldenmatchEntityRAGQAEngine
+
+        return GoldenmatchEntityRAGQAEngine(
+            model="gpt-4o-mini", embedding_model="text-embedding-3-large"
+        )
     raise SystemExit(f"unknown engine: {name}")
 
 
