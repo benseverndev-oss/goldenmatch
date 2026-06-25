@@ -10,7 +10,7 @@ import pytest
 from goldenmatch.core.suggest import adapter as A
 
 # Make scripts/ importable (suggest_quality gym loader + oracle + perturbations).
-_REPO_ROOT = Path(__file__).resolve().parents[5]
+_REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
