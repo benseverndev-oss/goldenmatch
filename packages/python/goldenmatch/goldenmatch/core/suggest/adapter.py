@@ -417,6 +417,40 @@ def _verify_enabled_by_env() -> bool:
     return val not in {"0", "false", "disabled"}
 
 
+def _full_dist_enabled() -> bool:
+    """When True, source the kernel's scored_pairs from a threshold-0 diagnostic
+    run (full pre-threshold distribution) instead of the threshold-filtered run.
+    Default OFF -> byte-identical to current behavior."""
+    return os.environ.get("GOLDENMATCH_SUGGEST_FULL_DIST", "0").strip().lower() in {"1", "true", "on"}
+
+
+def _zero_threshold_config(config):
+    """Deep-copy the config with every matchkey threshold forced to 0.0. Used
+    ONLY to widen the diagnostic scored_pairs run; blocking (the candidate set) is
+    unchanged. Never mutates the input."""
+    diag = copy.deepcopy(config)
+    try:
+        for mk in diag.get_matchkeys():
+            if getattr(mk, "threshold", None) is not None:
+                mk.threshold = 0.0
+    except Exception:
+        logger.debug("_zero_threshold_config: failed to zero thresholds", exc_info=True)
+    return diag
+
+
+def _diagnostic_scored_pairs(engine, df, config):
+    """Run the SAME engine at threshold 0 to capture the full candidate-pair
+    score distribution (the sub-threshold tail). Returns scored_pairs; clusters
+    discarded. Falls back to None on failure (caller keeps the filtered pairs)."""
+    try:
+        diag_cfg = _zero_threshold_config(config)
+        diag_result = engine._run_pipeline(df, diag_cfg)
+        return diag_result.scored_pairs
+    except Exception:
+        logger.debug("_diagnostic_scored_pairs: diagnostic run failed", exc_info=True)
+        return None
+
+
 # Maximum number of candidate suggestions to verify (avoids runaway cost
 # when the kernel returns an unusually large list).
 _MAX_VERIFY_CANDIDATES: int = 8
