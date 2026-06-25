@@ -124,3 +124,53 @@ def test_full_dist_on_does_not_collapse_threshold_on_too_high(monkeypatch):
                 f"lower_threshold must not collapse into the left-tail sliver, "
                 f"got proposed_value={proposed} (suggestion {s.id})"
             )
+
+
+@pytest.mark.skipif(
+    not _suggest_available(),
+    reason="native suggest_config kernel absent or requires worktree package "
+           "(MatchEngine.from_dataframe missing)",
+)
+def test_full_dist_on_lowers_to_high_side_valley_when_threshold_far_above(monkeypatch):
+    """ACTIVE end-to-end assertion of the right-anchored dip fix through the
+    Python boundary (review_config).
+
+    The `..._does_not_collapse...` test above is a regression guard whose loop
+    body is vacuous on this corpus (the `threshold_too_high` perturbation lands
+    the threshold at 0.90, already within DIP_MIN_GAP (0.05) of the 0.875 valley,
+    so NO `lower_threshold` fires). This test forces the dip rule to fire by
+    setting the threshold to 0.98 -- 0.105 ABOVE the valley, well beyond
+    DIP_MIN_GAP -- so a `lower_threshold` MUST be emitted, and asserts its
+    proposed value is the HIGH-side valley (>= 0.75; observed 0.88), NOT the
+    0.04 left-tail sliver the buggy global-min dip used to return.
+
+    This is the positive counterpart to the Rust unit tests: it proves the fix
+    survives the full marshaling path (diagnostic-run -> Arrow batches ->
+    suggest_config kernel -> Suggestion) and not just in `cargo test`.
+    """
+    monkeypatch.setenv("GOLDENMATCH_SUGGEST_FULL_DIST", "1")
+    monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
+    from goldenmatch.core.suggest import review_config  # noqa: PLC0415
+    from scripts.suggest_quality.oracle import _auto_configure_no_rerank  # noqa: PLC0415
+    df = _ncvr()
+    cfg = _auto_configure_no_rerank(df)
+    # Set the primary weighted/fuzzy matchkey threshold WELL above the 0.875
+    # valley (> DIP_MIN_GAP) so the dip rule is guaranteed to fire.
+    primary = next(
+        mk for mk in cfg.get_matchkeys()
+        if mk.type in ("weighted", "fuzzy") and mk.threshold is not None
+    )
+    primary.threshold = 0.98
+    sugg = review_config(df, cfg, verify=False)
+    lowers = [s for s in sugg if s.kind == "lower_threshold"]
+    assert lowers, (
+        "expected a lower_threshold suggestion at threshold 0.98 "
+        f"(dip valley ~0.875), got kinds {[s.kind for s in sugg]}"
+    )
+    for s in lowers:
+        proposed = float(s.proposed_value)
+        # High-side valley (~0.88), NOT the 0.04 left-tail sliver.
+        assert proposed >= 0.75, (
+            f"lower_threshold must target the high-side valley (>= 0.75), "
+            f"got proposed_value={proposed} (suggestion {s.id})"
+        )
