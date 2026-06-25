@@ -38,6 +38,8 @@ Reuse philosophy:
 """
 from __future__ import annotations
 
+import os
+
 # Fraction of scored pairs within this band just below threshold = "borderline"
 _BORDER_WIDTH: float = 0.10
 
@@ -191,6 +193,77 @@ def suggestion_health_from_clusters(
     penalty = _COLLAPSE_PENALTY * concentration
 
     return matched_rate * avg_conf - penalty
+
+
+def _cluster_min_edges(clusters: dict) -> list[float]:
+    """Per-cluster weakest intra-cluster edge, over all multi-member clusters
+    (INCLUDING oversized -- an oversized cluster is over-merge we must penalise)."""
+    out: list[float] = []
+    for info in clusters.values():
+        if info.get("size", 1) <= 1:
+            continue
+        ps = info.get("pair_scores") or {}
+        if isinstance(ps, dict) and ps:
+            out.append(min(ps.values()))
+        else:
+            out.append(float(info.get("confidence", 0.5)))
+    return out
+
+
+def _cohesion_min(clusters: dict) -> float:
+    edges = _cluster_min_edges(clusters)
+    return min(edges) if edges else 0.0
+
+
+def _cohesion_mean_bottomk(clusters: dict, k: int = 5) -> float:
+    edges = sorted(_cluster_min_edges(clusters))
+    if not edges:
+        return 0.0
+    bottom = edges[: max(1, min(k, len(edges)))]
+    return sum(bottom) / len(bottom)
+
+
+def _cohesion_edge_below_cutoff(clusters: dict, cutoff: float = 0.75) -> float:
+    edges = _cluster_min_edges(clusters)
+    if not edges:
+        return 1.0  # no clusters -> no weak clusters (coverage handles recall collapse;
+                    # NOTE: divergent default from _cohesion_min/_mean_bottomk which return 0.0)
+    below = sum(1 for e in edges if e < cutoff)
+    return 1.0 - below / len(edges)
+
+
+# ---------------------------------------------------------------------------
+# Task 2: cohesion x saturating-coverage proxy
+# ---------------------------------------------------------------------------
+
+_COVERAGE_CAP: float = 0.30
+_COHESION_BOTTOMK: int = 5
+_COHESION_CUTOFF: float = 0.75
+
+
+def _coverage(clusters: dict, n_records: int) -> float:
+    if n_records <= 0:
+        return 0.0
+    n_matched = sum(i.get("size", 2) for i in clusters.values() if i.get("size", 1) > 1)
+    return min((n_matched / n_records) / _COVERAGE_CAP, 1.0)
+
+
+def _select_cohesion(clusters: dict) -> float:
+    which = os.environ.get("GOLDENMATCH_SUGGEST_COHESION", "min_edge").strip().lower()
+    if which == "mean_bottomk_edge":
+        return _cohesion_mean_bottomk(clusters, _COHESION_BOTTOMK)
+    if which == "edge_below_cutoff_fraction":
+        return _cohesion_edge_below_cutoff(clusters, _COHESION_CUTOFF)
+    return _cohesion_min(clusters)
+
+
+def suggestion_health_cohesion(clusters: dict, n_records: int) -> float:
+    """Precision-sensitive health proxy: cohesion (low-tail intra-cluster edge)
+    x saturating coverage. Cohesion statistic env-selectable
+    (GOLDENMATCH_SUGGEST_COHESION); default min_edge. NO ground truth."""
+    if n_records <= 0:
+        return -1.0
+    return _select_cohesion(clusters) * _coverage(clusters, n_records)
 
 
 def _extract_threshold(config: object) -> float:
