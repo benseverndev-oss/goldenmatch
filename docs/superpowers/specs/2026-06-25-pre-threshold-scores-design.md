@@ -194,3 +194,72 @@ rule fired, recovery, precision).
   whether the verify-pass health proxy stays cluster-based or can now also consume
   the full scored-pairs distribution — so the two code paths don't silently
   diverge on which `scored_pairs` they assume.
+
+## Findings (full-dist, 2026-06-25)
+
+Ran the gym + oracle harness on `synthetic` + `ncvr_synthetic`
+(`native=0.1.5`, `sha=a2a913df2379`, `--row-cap 20000`, determinism pinned:
+`GOLDENMATCH_AUTOCONFIG_MEMORY=0`, `PYTHONHASHSEED=0`). Three variants:
+default (flag off), `GOLDENMATCH_SUGGEST_FULL_DIST=1`, and full-dist +
+`GOLDENMATCH_SUGGEST_HEALTH=cohesion GOLDENMATCH_SUGGEST_COHESION=min_edge`.
+
+| variant | `threshold_too_high` rule fired | raw gym recovery headline | live gym recovery headline | oracle suggester_precision (synthetic / ncvr) |
+|---|---|---|---|---|
+| off (default) | `raise_threshold` (the misfire; `lower_threshold` no) | -225.9% | 0.0% | 1.00 / 1.00 |
+| full-dist | `lower_threshold` **yes** | -399.3% | -309.2% | 1.00 / **0.00** |
+| full-dist + cohesion | `lower_threshold` (raw yes; live gate blocks it) | -399.3% | 0.0% | 1.00 / 1.00 |
+
+Supporting raw numbers (per-perturbation `rec%_RAW`, ncvr_synthetic):
+
+| perturbation | off | full-dist | full-dist + cohesion |
+|---|---|---|---|
+| `threshold_too_high` (rule `lower_threshold`) | -250.4% (fired `raise`) | **-1231.6%** (fired `lower`) | -1231.6% raw / live blocked |
+| `threshold_too_low` (rule `raise_threshold`) | +72.3% | -5.2% | -5.2% |
+| `bad_freetext_scorer` (rule `swap_scorer`) | -834.5% | 0.0% (no fire) | 0.0% (no fire) |
+
+### Verdict — honest read
+
+**1. Is the rule-misfire RESOLVED?** *Partially — the rule SELECTION is fixed,
+but the resulting fix is harmful.* With `FULL_DIST=1`, `threshold_too_high` now
+fires `lower_threshold` (was the spurious `raise_threshold`), confirming the
+mechanism the design predicted: a full pre-threshold distribution de-saturates
+`mass_above` and surfaces `mass_just_below>0`, so the recall-risk path can fire.
+**But the fix it emits is wrong-signed in impact** — recovery on
+`threshold_too_high` goes from -250.4% to **-1231.6%**, and the raw gym headline
+*fell* from -225.9% to -399.3% (the design hoped it would climb out of the hole;
+it dug deeper). So the kernel now picks the *right rule name* and applies a
+*destructive parameterization*: lowering the threshold on the ncvr config floods
+in false-positive pairs (degraded F1 0.9102 → far worse). The design's premise
+("the kernel computes correctly given correct input") does not hold for the
+`lower_threshold` *magnitude* on this dataset — feeding the full distribution
+fixed the dispatch but exposed a second bug in how far the rule lowers the
+threshold. `swap_scorer` and `raise_threshold` did NOT improve either.
+
+**2. Did oracle precision hold (~1.0, no net-negative)?** *No — full-dist alone
+regresses precision.* `suggester_precision` on ncvr_synthetic dropped from 1.00
+to **0.00**: the one suggestion full-dist emits on ncvr is net-negative against
+ground-truth F1. synthetic held at 1.00 (it emits no suggestion). So full-dist
+on its own violates the no-net-negative bar the oracle exists to protect.
+
+**3. Did the cohesion bonus check rescue the health proxy?** *It prevents the
+harm, but does not deliver a win — it rescues precision by suppression, not by
+threading the gate.* With full-dist + cohesion (`min_edge`), the live gate
+catches the harmful `lower_threshold` (`expected_rule_fired_live=no` on
+`threshold_too_high`) and oracle precision is restored to **1.00 / 1.00**.
+That is the design's "unifying bonus" working in the *defensive* direction:
+the de-saturated proxy now correctly rejects a bad suggestion. But it does NOT
+let any correct fix through — live gym recovery is back to 0.0% across the
+built-rule perturbations. So the proxy stops the bleeding; it does not close
+the arc.
+
+### Bottom line
+
+`GOLDENMATCH_SUGGEST_FULL_DIST=1` is **not ready to flip default-on.** It fixes
+the rule-dispatch misfire (the original Finding #2 root cause is confirmed and
+addressed at the input layer) but reveals a follow-on bug: the `lower_threshold`
+rule's chosen threshold is destructive on the gym's degraded configs, and
+full-dist alone trips the oracle precision gate (ncvr 1.00 → 0.00). The cohesion
+health proxy + full-dist holds precision at 1.0 but only by suppressing the
+suggestion — no live recovery gain. The flag stays default-off (as designed).
+Next lever is the `lower_threshold` magnitude / target-threshold logic in the
+kernel rule, not the distribution plumbing, which now demonstrably works.
