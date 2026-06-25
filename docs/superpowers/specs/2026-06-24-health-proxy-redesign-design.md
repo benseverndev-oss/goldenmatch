@@ -88,20 +88,30 @@ health = cohesion × coverage
 ```
 
 - **cohesion** is the load-bearing change. Over-merge *concentrates* damage in a
-  few clusters, so a sensitive statistic catches what the mean washes out.
-  Candidates (all from the clusters dict the run already emits —
-  `confidence` = 0.4·min_edge + 0.3·avg_edge + 0.3·connectivity, `cluster_quality`
-  ∈ {strong, weak, split}, `bottleneck_pair`, `pair_scores`):
-  - `weak_fraction`: `1 − (#weak clusters / #multi-member clusters)`, where a
-    weak cluster is `info["cluster_quality"] == "weak"`. NOTE the per-cluster
-    dict key is **`cluster_quality`**, NOT `quality` (`quality` is only the
-    Polars metadata column; the per-cluster dict uses `cluster_quality` — see
-    `cluster.py` `build_clusters` return shape). Building against `quality` would
-    silently read "no weak clusters" and neuter this candidate.
-  - `p10_conf`: the 10th-percentile cluster confidence (not the mean).
-  - `min_edge`: mean of per-cluster weakest intra-cluster edge (from
-    `bottleneck_pair` score / `min(pair_scores)`).
-  Each drops sharply when a few clusters over-merge.
+  few clusters, so the discriminating signal lives in the **low tail** of
+  intra-cluster edge strength — NOT the mean, NOT p10, NOT the coarse
+  `cluster_quality` flag (all empirically dead on the synthetic over-merge; see
+  Grounding findings). The candidate statistics to sweep (all from the clusters
+  dict the run already emits — `confidence`, `cluster_quality`, `bottleneck_pair`,
+  `pair_scores`; per-cluster min edge = `min(pair_scores.values())` /
+  `pair_scores[bottleneck_pair]`):
+  - `min_edge`: the GLOBAL minimum intra-cluster edge across all multi-member
+    clusters (degraded 0.66 vs clean 0.80 — clear signal).
+  - `mean_bottomk_edge`: mean of the k weakest per-cluster min-edges (smooths the
+    single-min noise; k a small constant, e.g. 5, or a small fraction).
+  - `edge_below_cutoff_fraction`: `1 − (#clusters with min-edge < CUTOFF) / #mm`,
+    a CONTINUOUS weak-fraction with a tunable edge cutoff (e.g. 0.75) — NOT the
+    coarse `cluster_quality == "weak"` flag, which never trips here.
+
+  **Grounding findings (planning, synthetic `threshold_too_low`, 706 records):**
+  `conf[p10]` and `minedge[p10]` are saturated at **1.000** for both degraded and
+  clean (>90% of clusters perfect), and all clusters read `cluster_quality ==
+  "strong"` — so `p10_conf` and coarse `weak_fraction` carry NO signal. The
+  global MIN does: conf-min 0.678 (degraded) vs 0.790 (clean); minedge-min 0.657
+  vs 0.800. Product check confirms the fix: `min_edge` cohesion gives degraded
+  `0.788×0.657=0.518` < clean `0.764×0.800=0.611` → **fix KEPT** (vs the old
+  mean: `0.772 > 0.763` → fix dropped, the bug). So a low-tail edge statistic
+  flips the verdict correctly on the case that motivated this work.
 - **coverage** keeps the under-merge guard: as a threshold rises too far and
   matches vanish, `matched_rate → 0 → health → 0`. Saturating (capped) so it
   stops *rewarding* volume past a reasonable point — the peak lands in the middle.
@@ -125,8 +135,8 @@ Drop-in internals swap behind the existing verify gate; default-off until proven
   behavior is **byte-identical** until a separate flip. The gym/oracle runs set
   `cohesion`.
 - **Cohesion sub-switch for the sweep.** `GOLDENMATCH_SUGGEST_COHESION` ∈
-  {`weak_fraction`, `p10_conf`, `min_edge`} selects the sensitive statistic, so
-  the gym A/Bs all three without a rebuild. The gym-winning statistic becomes the
+  {`min_edge`, `mean_bottomk_edge`, `edge_below_cutoff_fraction`} selects the
+  low-tail statistic, so the gym A/Bs all three without a rebuild. The gym-winning statistic becomes the
   hardcoded default inside `cohesion`; keep or drop the sub-switch at flip time
   (YAGNI).
 - **One focused file.** All of this lives in `health.py` (formula + two
@@ -150,7 +160,7 @@ measurable:
   not reopen the net-negative door self-verify closed). This is the BINDING
   safety constraint — recovery that reintroduces harm is a regression.
 - **The sweep is the experiment:** run the gym for each of
-  {`weak_fraction`, `p10_conf`, `min_edge`}, tabulate (live recovery%,
+  {`min_edge`, `mean_bottomk_edge`, `edge_below_cutoff_fraction`}, tabulate (live recovery%,
   suggester_precision) per candidate, pick the one maximizing recovery subject to
   precision ≈ 1.0. Record the table in a findings note appended to this spec.
 
