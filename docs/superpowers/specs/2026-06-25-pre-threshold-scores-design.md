@@ -345,3 +345,44 @@ flag stays default-off as designed. The remaining gap (live recovery 0.0% — th
 self-verify gate suppresses correct fixes) is a property of the gym's degraded
 configs being already near-optimal under zero-config #662, not a dip-location
 bug, and is out of scope for this plan.
+
+## Findings (threshold_far_too_high, 2026-06-26)
+
+**This refines the "0.0% live recovery / rests here" bottom line above.** That
+conclusion was drawn from the *gentle* `threshold_too_high` (+0.10), which on
+`ncvr_synthetic` lands at 0.90 — within `DIP_MIN_GAP` (0.05) of the ~0.875
+valley — so the dip rule correctly stays quiet and recovery is 0.0%. It did
+*not* prove the dip rule has zero accuracy value; it proved the rule is quiet
+when the threshold is only slightly off. The new `threshold_far_too_high`
+perturbation (+0.18 → 0.98, beyond the gap) drives the rule into its firing
+regime and demonstrates the accuracy value end-to-end through the gym's
+apply-and-remeasure path, under `GOLDENMATCH_SUGGEST_FULL_DIST=1` (now enabled
+for the gym steps of `bench-suggest-quality.yml`).
+
+Measured by the CI gym-bless run (run 28242375706, blessed into
+`scripts/suggest_quality/baselines/gym_scorecard.json` commit `1af6a586`):
+
+| dataset | perturbation | status | rule fires live/raw | recovery_pct_live | recovery_pct_raw | verification_gap |
+|---|---|---|---|---|---|---|
+| ncvr_synthetic | threshold_too_high (+0.10) | ok | no / no | 0.0 | 0.0 | 0.0 |
+| ncvr_synthetic | threshold_far_too_high (+0.18) | ok | **yes / yes** | **0.754406** | 0.754406 | **0.0** |
+| synthetic | threshold_far_too_high (+0.18) | no_damage | — | — | — | — |
+
+The far variant fires (`expected_rule_fired_live = true`), lowers the threshold
+one step to ~0.88 (just above the valley, high/right side — no overshoot into
+the left tail), and **survives the live health-proxy gate** (`recovery_pct_live
+== recovery_pct_raw` → `verification_gap = 0.0`, the self-verify suppresses
+nothing). Gym headline moved up: `headline_live` 0.0 → **0.150881**,
+`headline_raw` -2.259227 → **0.555137**. On `synthetic` the egregious threshold
+does not degrade recoverable matches, so the gym reports `no_damage` and skips
+it honestly (no per-dataset special-casing). The re-blessed baseline locks the
+`ncvr_synthetic` pair's 0.754 live recovery in as a standing `gym-gate`
+regression floor.
+
+**Honest caveat:** recovery is *partial* (0.754, lands at 0.88 not the original
+0.80 auto-config ceiling). The kernel targets the valley (0.88), arguably a more
+precise threshold than the 0.80 ceiling; `recovery_pct` is measured against the
+0.80-ceiling F1, so it cannot reach 1.0. It clears the "live recovery > 0" bar
+comfortably; it is not a full recovery, recorded as-is. The dip-valley arc still
+rests for further *rule* work — what changed is that its accuracy value is now a
+measured, gated asset rather than an untested claim.
