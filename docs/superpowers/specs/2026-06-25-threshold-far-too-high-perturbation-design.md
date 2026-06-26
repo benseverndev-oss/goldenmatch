@@ -58,6 +58,15 @@ A new catalog entry is NOT a pure no-op for the machine-checked baseline. The gy
 
 Even though the gate passes on direction, the committed baseline MUST be regenerated so the scorecard records the new pair and its aggregates stay in sync with the live catalog (a stale baseline silently disagrees with the catalog). The `mode` is a positional arg (`cli.py:214-216`, choices include `gym-bless`), and the baseline path is `scripts/suggest_quality/baselines/gym_scorecard.json` (`_GYM_BASELINE`, `cli.py:32`; written by `_cmd_gym_bless`, `cli.py:743`). Regenerate under FULL_DIST=1: `GOLDENMATCH_SUGGEST_FULL_DIST=1 ... -m scripts.suggest_quality.cli gym-bless` (or the `bench-suggest-quality.yml` `mode=gym-bless` dispatch), and commit the updated `gym_scorecard.json`. Confirm the regenerated `headline_live`/`headline_raw` moved UP (no regression) before committing. Blessing also locks the new pair's `recovery_pct_live (~0.75)` in as a future regression floor (`gym-gate` fails if a blessed built-rule pair later drops > `RECOVERY_GATE_TOL`) -- exactly the standing regression asset intended.
 
+**Correction (planning, 2026-06-25):** `bench-suggest-quality.yml` did NOT
+previously set `GOLDENMATCH_SUGGEST_FULL_DIST=1`, and `gym-gate` re-runs the
+catalog live -- so blessing the far pair's ~0.75 live recovery without enabling
+FULL_DIST on the gym steps would make the CI gate re-compute ~0 and go red.
+The plan therefore enables FULL_DIST for the gym steps of that workflow (gym
+bless + gym-gate only; the scorecard gate is untouched) and has CI commit the
+re-blessed baseline back to the branch. This is scoped to the gym CI job, NOT
+a global FULL_DIST default-on flip (still out of scope).
+
 ## Components / files
 - **Modify:** `scripts/suggest_quality/perturbations.py` -- add `_apply_threshold_far_too_high` (and reuse `_applies_threshold_too_high`), append the `Perturbation` to `CATALOG`.
 - **Test (new file):** `scripts/suggest_quality/tests/test_perturbations.py` (no perturbations test file exists today -- the dir holds only `test_datasets.py`). Assert (a) `threshold_far_too_high` is in `CATALOG` with `expected_rule="lower_threshold"`, and (b) `apply` on a config with a 0.80-threshold primary weighted mk sets it to ~0.98 (>= 0.95, beyond the valley) without mutating the input.
