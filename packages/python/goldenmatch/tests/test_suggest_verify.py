@@ -218,7 +218,7 @@ class TestSuggestionHealthFromClusters:
             f"healthy config (h={h_healthy:.3f})"
         )
 
-    def test_two_equal_mega_clusters_is_penalised(self):
+    def test_two_equal_mega_clusters_is_penalised(self, monkeypatch):
         """Over-merge SPREAD across two equal 50% clusters must score below healthy.
 
         This is the case a single-max collapse check (max_size/n > 0.5) misses:
@@ -228,7 +228,14 @@ class TestSuggestionHealthFromClusters:
         To isolate the concentration penalty from confidence/recall, hold both
         avg_conf and matched_rate IDENTICAL between the degenerate and healthy
         cases -- the ONLY difference is how the matched records are distributed.
+
+        Pinned to the LEGACY proxy: this asserts the legacy HHI concentration
+        penalty specifically. The default proxy is now cohesion (min_edge x
+        cap-0.50, per the 2026-06-26 bake-off), which has no HHI term -- these
+        no-pair_scores fixtures fall back to identical confidence under cohesion,
+        so the legacy mechanism under test must be selected explicitly.
         """
+        monkeypatch.setenv("GOLDENMATCH_SUGGEST_HEALTH", "legacy")
         from goldenmatch.core.suggest.health import suggestion_health_from_clusters
 
         # Degenerate: 100 matched records spread across two 50-record clusters.

@@ -269,10 +269,15 @@ def _coverage_cap_from_env() -> float:
     """Coverage cap: env override GOLDENMATCH_SUGGEST_COVERAGE_CAP, else the
     blessed default _COVERAGE_CAP (0.50)."""
     raw = os.environ.get("GOLDENMATCH_SUGGEST_COVERAGE_CAP", "").strip()
+    if not raw:
+        return _COVERAGE_CAP
     try:
-        return float(raw) if raw else _COVERAGE_CAP
+        cap = float(raw)
     except ValueError:
         return _COVERAGE_CAP
+    # Guard the rollback knob: a non-positive cap would ZeroDivisionError in
+    # _coverage; fall back to the blessed default rather than crash.
+    return cap if cap > 0 else _COVERAGE_CAP
 
 
 def _select_cohesion(clusters: dict) -> float:
