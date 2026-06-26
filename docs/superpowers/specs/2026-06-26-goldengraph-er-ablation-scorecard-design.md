@@ -69,10 +69,30 @@ dial at ingest:
 | `name_only` | merge only mentions whose surface strings are exactly equal |
 | `none` | every mention is its own entity (no merge — maximal under-merge) |
 
-Each resolver is an injectable `resolver=` callable matching goldengraph's ingest
-contract (returns, per mention group, a resolved entity with member mentions); the
-four are deterministic (no embeddings, no network — `dedupe_df` is fuzzy string
-scoring, not embedding-based).
+Each resolver is a `Callable[[list[Mention]], list[ResolvedEntity]]` — exactly
+goldengraph's existing `ingest.Resolver` seam (`ResolvedEntity` = `local_id,
+canonical_name, typ, surface_names, record_keys, member_idx`). `oracle` uses the
+concept `variants[].surface → canonical_id` map from `concepts_loader`; `name_only`
+groups by exact surface string; `none` returns one entity per mention; `goldengraph`
+runs `goldenmatch.dedupe_df` (fuzzy string scoring, not embedding-based).
+
+**Store-build path (do NOT route the dial through `ingest_corpus`).** `ingest_corpus`
+/ `_prepare_doc` unconditionally call `_extract(text, llm)`, so they cannot hold
+extraction at oracle offline (extraction needs an LLM or a downloaded local model).
+The ablation builds the store **directly** from the gold edges: construct an
+`Extraction(mentions, relationships)` per document from the oracle's parsed gold
+triples, call `resolver(mentions)`, then `build_batch(...)` → `store.append(...)`
+(all real `ingest.py` functions). This bypasses `_extract` entirely — no LLM, no
+model download — and is the only path that isolates resolution.
+
+**Offline-gate footgun — force rerank off.** `dedupe_df` on a 3-field weighted
+matchkey (name + type + context) triggers auto-config's cross-encoder **rerank**,
+which downloads a HuggingFace model and **fails in the network-free gate** (package
+CLAUDE.md footgun). The deterministic gate therefore runs the `goldengraph` resolver
+on **name + type only** (two fields — stays under the rerank trigger; still a real
+ER edge over `name_only`'s exact match). The full **name + type + context** resolver
+is exercised only in the network-available real-LLM lane. (The plan pins the exact
+mechanism; name+type-only is the robust default that needs no flag.)
 
 **Bridge-recall metric (no LLM):** for each question,
 
@@ -82,6 +102,13 @@ scoring, not embedding-based).
 2. Expand the ball (`PyGraph.query`) under the engine's normal retrieval.
 3. Test whether `relation_chain` is **walkable end-to-end** in the resolved +
    retrieved subgraph, from the seed to a node carrying the `gold_answer` mention.
+
+The gold chain lives in **canonical-id space** (parsed from doc ids); the resolved
+subgraph lives in **resolved-entity-id space**. Bridge-recall maps each gold
+canonical edge to the resolved node(s) *carrying that entity's mentions* and checks
+reachability there — never comparing ids across the two spaces directly. This
+mapping is the crux: under `none`, a bridge entity's mentions scatter across
+distinct resolved nodes, so no single walk connects them and the chain breaks.
 
 Report **whole-chain hit** (binary: full chain reachable) and **per-edge recall**
 (fraction of gold chain edges present), each **bucketed by `hop_count`**.
@@ -104,6 +131,10 @@ API key, and asserts:
    improves — the iteration signal.**
 
 Margins are chosen from an observed run with slack (the SP6 lesson: 0.10 not 0.20).
+The gate's small engineered corpus is generated at **`ambiguity > 0`**: at
+`ambiguity = 0` there are no variant surfaces, so `name_only ≡ none` and the dial
+collapses — the gate corpus must inject variants for the ER quality levels to
+separate.
 
 ### The full scorecard (one page)
 
@@ -140,8 +171,11 @@ New, under `erkgbench/qa_e2e/`:
 - **`scorecard.py`** — the metrics: `bridge_recall(gold_chain, resolved_subgraph)`
   (whole-chain + per-edge), `extraction_f1(extracted, gold)`,
   `synthesis_given_gold(...)`, and reuse of `er-kg-bench` ER-F1.
-- **`ablation.py`** — the runner: sweep resolvers × questions → bridge-recall matrix
-  (by hop), the 3 gate assertions, optional `--with-llm` answer-match confirmation.
+- **`ablation.py`** — the runner: for each dial setting, build the store **directly**
+  from the oracle's gold triples (per-doc `Extraction` → `resolver(mentions)` →
+  `build_batch` → `store.append`, bypassing `ingest_corpus`/`_extract`), then sweep
+  questions → bridge-recall matrix (by hop), the 3 gate assertions, optional
+  `--with-llm` answer-match confirmation.
 - **`run_ablation.py`** — CLI → writes `ABLATION.md` (matrix + assertions) always;
   `--with-llm` adds answer-match + the extraction/synthesis scorecard rows when an
   API key is present.
