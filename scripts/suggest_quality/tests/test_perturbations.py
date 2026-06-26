@@ -74,3 +74,22 @@ def test_far_too_high_no_primary_mk_returns_unchanged():
     out = perturbations._apply_threshold_far_too_high(cfg)
     assert out is not None
     assert perturbations._applies_threshold_too_high(cfg) is False
+
+
+def test_near_valley_threshold_nudges_just_below():
+    cfg = _config_with_threshold(0.80)
+    out = perturbations._apply_near_valley_threshold(cfg)
+    assert out.get_matchkeys()[0].threshold == 0.75   # 0.80 - 0.05
+    assert cfg.get_matchkeys()[0].threshold == 0.80   # input untouched
+
+
+def test_over_merge_bait_lowers_hard_floor_050():
+    cfg = _config_with_threshold(0.70)
+    out = perturbations._apply_over_merge_bait(cfg)
+    assert out.get_matchkeys()[0].threshold == 0.50   # max(0.50, 0.70 - 0.30)
+    assert cfg.get_matchkeys()[0].threshold == 0.70
+
+
+def test_adversarial_perturbations_in_catalog():
+    names = {p.name for p in CATALOG}
+    assert {"near_valley_threshold", "over_merge_bait"} <= names

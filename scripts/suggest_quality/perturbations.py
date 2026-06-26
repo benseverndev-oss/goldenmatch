@@ -136,6 +136,29 @@ def _applies_threshold_too_high(config: GoldenMatchConfig) -> bool:
         return False
 
 
+def _apply_near_valley_threshold(config: GoldenMatchConfig) -> GoldenMatchConfig:
+    """Adversarial: nudge the primary threshold JUST BELOW the valley (-0.05,
+    floor 0.50) so the dip rule is tempted to lower further into the tail -- a
+    precision-losing fix a good proxy must reject."""
+    new = copy.deepcopy(config)
+    mk = _primary_weighted_mk(new)
+    if mk is None:
+        return new
+    mk.threshold = max(0.50, mk.threshold - 0.05)
+    return new
+
+
+def _apply_over_merge_bait(config: GoldenMatchConfig) -> GoldenMatchConfig:
+    """Adversarial: lower the primary threshold a large step (-0.30, floor 0.50)
+    to induce over-merge -- baits a recall-biased proxy that rewards matched_rate."""
+    new = copy.deepcopy(config)
+    mk = _primary_weighted_mk(new)
+    if mk is None:
+        return new
+    mk.threshold = max(0.50, mk.threshold - 0.30)
+    return new
+
+
 def _apply_threshold_far_too_high(config: GoldenMatchConfig) -> GoldenMatchConfig:
     """Raise primary weighted matchkey threshold by 0.18, ceiling 0.99.
 
@@ -362,6 +385,30 @@ CATALOG: list[Perturbation] = [
         ),
         applies_to=_applies_threshold_too_high,
         apply=_apply_threshold_far_too_high,
+    ),
+    Perturbation(
+        name="near_valley_threshold",
+        expected_rule="lower_threshold",
+        builds_on_existing_rule=True,
+        description=(
+            "ADVERSARIAL precision trap: nudge the primary threshold just below "
+            "the score valley so the dip rule is tempted to over-lower into the "
+            "sub-threshold tail. A good health proxy must REJECT the fix."
+        ),
+        applies_to=_applies_threshold_too_high,
+        apply=_apply_near_valley_threshold,
+    ),
+    Perturbation(
+        name="over_merge_bait",
+        expected_rule="lower_threshold",
+        builds_on_existing_rule=True,
+        description=(
+            "ADVERSARIAL precision trap: lower the primary threshold a large "
+            "step to induce over-merge. Baits a recall-biased proxy that rewards "
+            "matched_rate; a good proxy must REJECT the over-merging fix."
+        ),
+        applies_to=_applies_threshold_too_high,
+        apply=_apply_over_merge_bait,
     ),
     Perturbation(
         name="bad_freetext_scorer",
