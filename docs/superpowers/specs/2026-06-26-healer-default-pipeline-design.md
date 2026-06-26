@@ -63,7 +63,7 @@ run pipeline → DedupeResult (.config, .postflight_report)
 maybe_suggest(result, df, verify=False):
     headroom_signal(result)?            # FREE
        GREEN & no dip  -> []            # common case: kernel never called, byte-identical no-op
-       RED/YELLOW/dip  -> review_config(df, config, verify=False)   # ONE cheap kernel call, no re-runs
+       RED/YELLOW/dip  -> suggest_from_result(result, df, verify=False)   # reuse result artifacts; NO pipeline re-run
     native absent      -> []            # graceful, silent
 result.suggestions = candidates (verified=False)   # empty when not triggered/no-native
 CLI prints a one-line hint when result.suggestions is non-empty
@@ -111,7 +111,7 @@ Every surface reads `result.suggestions` / calls `dedupe_df(suggest=/heal=)` and
 ## Done criteria
 
 - Default `dedupe_df` attaches raw candidates **only** when the free trigger fires **and** native is present; byte-identical no-op otherwise; kill-switch works.
-- `suggest=True` (verified, not applied) and `heal=True` (verified loop, applied, `heal_trail`) work and are gated by the same free trigger.
+- `suggest=True` (verified, not applied) and `heal=True` (verified loop, applied, `heal_trail`) work and run regardless of the trigger (only the no-kwarg default surface is trigger-gated); when controller signals are present a no-headroom case short-circuits for free.
 - All seven surfaces expose the healer via the one core helper + serializer; surface count-assertions updated.
 - Graceful no-native everywhere; the cost short-circuit (kernel not called on GREEN/no-dip) is proven by test.
 
