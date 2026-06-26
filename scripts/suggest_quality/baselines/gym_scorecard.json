@@ -1,12 +1,12 @@
 {
-  "headline_live": 0.0,
-  "headline_raw": -2.259227,
+  "headline_live": 0.150881,
+  "headline_raw": 0.555137,
   "meta": {
-    "git_sha": "fdd3d8d95b7251b7154ad4dd906960d034312d53",
-    "n_built_ok": 4,
-    "n_ok": 8,
-    "n_records": 16,
-    "native_version": "0.1.5"
+    "git_sha": "ac511b6ef99bffc509659f6a76e1de6b650a5c34",
+    "n_built_ok": 5,
+    "n_ok": 9,
+    "n_records": 18,
+    "native_version": "0.1.12"
   },
   "pairs": {
     "ncvr_synthetic/bad_freetext_scorer": {
@@ -15,7 +15,7 @@
       "expected_rule_fired_live": false,
       "expected_rule_fired_raw": false,
       "recovery_pct_live": 0.0,
-      "recovery_pct_raw": -8.345059,
+      "recovery_pct_raw": 0.0,
       "status": "ok"
     },
     "ncvr_synthetic/dropped_blocking_pass": {
@@ -60,7 +60,16 @@
       "expected_rule_fired_live": false,
       "expected_rule_fired_raw": false,
       "recovery_pct_live": 0.0,
-      "recovery_pct_raw": -1.711379,
+      "recovery_pct_raw": 0.0,
+      "status": "ok"
+    },
+    "ncvr_synthetic/threshold_far_too_high": {
+      "builds_on_existing_rule": true,
+      "expected_rule": "lower_threshold",
+      "expected_rule_fired_live": true,
+      "expected_rule_fired_raw": true,
+      "recovery_pct_live": 0.754406,
+      "recovery_pct_raw": 0.754406,
       "status": "ok"
     },
     "ncvr_synthetic/threshold_too_high": {
@@ -69,7 +78,7 @@
       "expected_rule_fired_live": false,
       "expected_rule_fired_raw": false,
       "recovery_pct_live": 0.0,
-      "recovery_pct_raw": -2.504262,
+      "recovery_pct_raw": 0.0,
       "status": "ok"
     },
     "ncvr_synthetic/threshold_too_low": {
@@ -78,7 +87,7 @@
       "expected_rule_fired_live": false,
       "expected_rule_fired_raw": true,
       "recovery_pct_live": 0.0,
-      "recovery_pct_raw": 0.723139,
+      "recovery_pct_raw": 0.932005,
       "status": "ok"
     },
     "synthetic/bad_freetext_scorer": {
@@ -132,8 +141,17 @@
       "expected_rule_fired_live": false,
       "expected_rule_fired_raw": false,
       "recovery_pct_live": 0.0,
-      "recovery_pct_raw": 0.192998,
+      "recovery_pct_raw": 0.792809,
       "status": "ok"
+    },
+    "synthetic/threshold_far_too_high": {
+      "builds_on_existing_rule": true,
+      "expected_rule": null,
+      "expected_rule_fired_live": null,
+      "expected_rule_fired_raw": null,
+      "recovery_pct_live": null,
+      "recovery_pct_raw": null,
+      "status": "no_damage"
     },
     "synthetic/threshold_too_high": {
       "builds_on_existing_rule": true,
@@ -162,22 +180,22 @@
     },
     "adjust_field_weight": {
       "mean_recovery_pct_live": 0.0,
-      "mean_recovery_pct_raw": -3.435618,
+      "mean_recovery_pct_raw": -2.665221,
       "n_ok": 3
     },
     "lower_threshold": {
-      "mean_recovery_pct_live": 0.0,
-      "mean_recovery_pct_raw": -2.504262,
-      "n_ok": 1
+      "mean_recovery_pct_live": 0.377203,
+      "mean_recovery_pct_raw": 0.377203,
+      "n_ok": 2
     },
     "raise_threshold": {
       "mean_recovery_pct_live": 0.0,
-      "mean_recovery_pct_raw": 0.906206,
+      "mean_recovery_pct_raw": 1.010639,
       "n_ok": 2
     },
     "swap_scorer": {
       "mean_recovery_pct_live": 0.0,
-      "mean_recovery_pct_raw": -8.345059,
+      "mean_recovery_pct_raw": 0.0,
       "n_ok": 1
     }
   }
