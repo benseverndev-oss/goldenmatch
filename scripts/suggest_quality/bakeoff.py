@@ -111,3 +111,117 @@ def select_best(rows: list[dict]) -> tuple[str | None, dict]:
 def _neg_lex(name: str) -> tuple[int, ...]:
     """Lexically-smaller name wins ties (so max() prefers it): negate codepoints."""
     return tuple(-ord(c) for c in name)
+
+
+_STEP_CAP = 5
+
+
+def bakeoff_dataset(df, gt_pairs, degraded_config, proxies) -> list[dict]:
+    """Raw greedy convergence over `degraded_config`, emitting one row per
+    (applied fix x proxy). Advances the RAW path (apply top suggestion each
+    step regardless of any gate). Defers goldenmatch imports."""
+    import copy  # noqa: PLC0415
+
+    from goldenmatch.core.suggest import apply_suggestion, review_config  # noqa: PLC0415
+
+    from scripts.suggest_quality.oracle import _compute_f1, _run_config  # noqa: PLC0415
+
+    n = df.height
+    rows: list[dict] = []
+    current = copy.deepcopy(degraded_config)
+    cur_clusters, cur_scored = _run_config(df, current)
+    f1_current = _compute_f1(cur_clusters, cur_scored, gt_pairs)
+    applied_ids: set = set()
+
+    for step in range(_STEP_CAP):
+        suggestions = review_config(df, current, verify=False)
+        if not suggestions:
+            break
+        top = suggestions[0]
+        if top.id in applied_ids:
+            break
+        applied_ids.add(top.id)
+
+        candidate = apply_suggestion(current, top)
+        cand_clusters, cand_scored = _run_config(df, candidate)
+        f1_cand = _compute_f1(cand_clusters, cand_scored, gt_pairs)
+        f1_delta = f1_cand - f1_current
+
+        for proxy_name, proxy_fn in proxies:
+            delta = proxy_fn(cand_clusters, n) - proxy_fn(cur_clusters, n)
+            rows.append({
+                "proxy": proxy_name,
+                "step": step,
+                "kind": getattr(top, "kind", None),
+                "accept": delta >= -_EPS,
+                "proxy_delta": delta,
+                "f1_delta": f1_delta,
+            })
+
+        # advance raw path
+        current, cur_clusters, cur_scored, f1_current = (
+            candidate, cand_clusters, cand_scored, f1_cand
+        )
+    return rows
+
+
+def run_bakeoff_catalog(datasets, perturbations, proxies) -> list[dict]:
+    """Mirror gym.run_catalog: load -> ceiling -> per-damaging-perturbation
+    raw bake-off. Each emitted row carries dataset + perturbation. Never raises."""
+    import logging  # noqa: PLC0415
+    import math  # noqa: PLC0415
+
+    import polars as pl  # noqa: PLC0415
+
+    from scripts.suggest_quality.metrics import DAMAGE_EPS  # noqa: PLC0415
+    from scripts.suggest_quality.oracle import (  # noqa: PLC0415
+        _auto_configure_no_rerank,
+        _compute_f1,
+        _run_config,
+    )
+
+    log = logging.getLogger(__name__)
+    out: list[dict] = []
+
+    for dataset in datasets:
+        try:
+            loaded = dataset.loader()
+        except Exception as exc:
+            log.warning("bakeoff: loader failed for %r: %s", dataset.name, exc)
+            loaded = None
+        if loaded is None:
+            continue
+        df, gt_pairs = loaded
+        if not gt_pairs:
+            continue
+        if "__row_id__" not in df.columns:
+            df = df.with_row_index("__row_id__").with_columns(pl.col("__row_id__").cast(pl.Int64))
+
+        try:
+            ceiling = _auto_configure_no_rerank(df)
+            cc, cs = _run_config(df, ceiling)
+            f1_ceiling = _compute_f1(cc, cs, gt_pairs)
+        except Exception as exc:
+            log.warning("bakeoff: ceiling failed for %r: %s", dataset.name, exc)
+            continue
+
+        for pert in perturbations:
+            try:
+                if not pert.applies_to(ceiling):
+                    continue
+                degraded = pert.apply(ceiling)
+                dc, ds = _run_config(df, degraded)
+                f1_degraded = _compute_f1(dc, ds, gt_pairs)
+                if math.isnan(f1_degraded) or math.isnan(f1_ceiling):
+                    continue
+                if f1_ceiling - f1_degraded < DAMAGE_EPS:
+                    continue  # no_damage: nothing to recover, skip
+                rows = bakeoff_dataset(df, gt_pairs, degraded, proxies)
+            except Exception as exc:
+                log.warning("bakeoff: %r/%r failed: %s", dataset.name, pert.name, exc, exc_info=True)
+                continue
+            for r in rows:
+                r["dataset"] = dataset.name
+                r["perturbation"] = pert.name
+                out.append(r)
+    return out
