@@ -254,6 +254,20 @@ There are also a number of experimental blocking and probabilistic knobs (`GOLDE
 
 ---
 
+## Config-suggestion (healer) knobs {#config-suggestion-healer-knobs}
+
+These tune the [healer](/goldenmatch/config-suggestions) — the `review_config` config-suggestion loop. They only matter when you call `review_config` (it is opt-in and needs `goldenmatch[native]`); the default `dedupe_df` pipeline does not read them. You almost never need to change these — the defaults are the values the suggester gym selected.
+
+| Variable | Default | Effect | When to set |
+|----------|---------|--------|-------------|
+| `GOLDENMATCH_SUGGEST_HEALTH` | `cohesion` | Self-verify health proxy the gate uses to keep only non-worsening suggestions. `cohesion` (precision-sensitive `min_edge` × saturating coverage) is the default since 2026-06; `legacy` restores the older `matched_rate × avg_conf − HHI` proxy. | `legacy` only to reproduce pre-2026-06 suggestion behavior. The bake-off showed `cohesion` lifts live recovery 0.15 → 0.54 with no real-pair net-negatives. |
+| `GOLDENMATCH_SUGGEST_COHESION` | `min_edge` | Cohesion statistic: `min_edge`, `mean_bottomk_edge`, or `edge_below_cutoff_fraction`. | Leave alone; `min_edge` won the bake-off. |
+| `GOLDENMATCH_SUGGEST_COVERAGE_CAP` | `0.50` | Coverage-saturation cap for the cohesion proxy (matched-rate at which coverage saturates to 1.0). | Leave alone; `0.50` is the safe operating point — tighter caps let a real-pair net-negative through. |
+| `GOLDENMATCH_SUGGEST_VERIFY` | on | The self-verify gate. Set `0` to return raw kernel suggestions **unfiltered** (no no-net-negative guarantee). | Diagnostics only — to see what the kernel would propose before the gate. |
+| `GOLDENMATCH_SUGGEST_FULL_DIST` | `0` (off) | Source the kernel's score distribution from a threshold-0 diagnostic run so the dip (`lower_threshold`) rule sees the full pre-threshold tail. | Set `1` when you want the dip rule to fire on configs whose threshold is well above the score valley. |
+
+---
+
 ## Servers, security & storage
 
 When you expose any server (MCP, REST, A2A, web UI) on a non-loopback host, it is **fail-closed**: it refuses to start without the matching bearer token.

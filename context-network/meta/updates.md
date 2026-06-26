@@ -2,6 +2,18 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-06-26 — Healer self-verify gate: default proxy -> cohesion (#1272) + healing-loop docs
+- New ADR [../decisions/0025-healer-verify-gate-proxy.md](../decisions/0025-healer-verify-gate-proxy.md):
+  the healer (`review_config`) self-verify gate's default health proxy flipped legacy -> cohesion
+  (`cohesion_min_edge_cap50`), chosen by a proxy bake-off (`scripts/suggest_quality/bakeoff.py`)
+  against the F1 oracle. Closes the raw-vs-live gap: suggester-gym live recovery 0.151 -> 0.543
+  (== raw ceiling), zero net-negatives on real perturbations. Supersedes the earlier
+  "cohesion fails / escalate to pseudo-labels" finding.
+- Established the **healing-loop thesis** across the docs (new `/goldenmatch/config-suggestions`
+  page, README "The healing loop" sections, overview, project-definition product-loop section,
+  tuning healer-knobs): zero-config -> returned config -> healer suggests self-verified tweaks ->
+  apply -> improve -> repeat. Healer stays opt-in (`goldenmatch[native]`).
+
 ## 2026-06-24 — Auto-config quality harness + probabilistic-routing lever (#1216/#1226/#1254)
 - New ADR [../decisions/0024-autoconfig-probabilistic-routing.md](../decisions/0024-autoconfig-probabilistic-routing.md):
   a decision-kernel **quality harness** (`scripts/autoconfig_quality/`, report/gate/bless)
