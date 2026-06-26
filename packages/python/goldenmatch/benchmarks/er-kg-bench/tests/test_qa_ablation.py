@@ -52,3 +52,28 @@ def test_render_ablation_md_has_dials_hops_and_verdicts():
     assert "monotonic" in md.lower()
     assert "widen" in md.lower()
     assert "PASS" in md or "FAIL" in md
+
+
+def test_gate_exit_code_zero_when_hard_assertions_pass():
+    from erkgbench.qa_e2e.ablation import gate_exit_code
+
+    # _fake_result is monotone + widens (gaps 0.60->0.75); soft may vary -> exit 0
+    assert gate_exit_code(_fake_result()) == 0
+
+
+def test_gate_exit_code_one_when_a_hard_assertion_fails():
+    from erkgbench.qa_e2e.ablation import gate_exit_code
+
+    def dial(mean, h2, h3, h4):
+        return {"mean": mean, "by_hop": {2: h2, 3: h3, 4: h4}}
+
+    # non-monotone: none > name_only -> a HARD failure -> exit 1
+    bad = AblationResult(
+        recall={
+            "oracle": dial(0.9, 0.9, 0.9, 0.9),
+            "goldengraph": dial(0.5, 0.5, 0.5, 0.5),
+            "name_only": dial(0.2, 0.2, 0.2, 0.2),
+            "none": dial(0.6, 0.6, 0.6, 0.6),
+        }
+    )
+    assert gate_exit_code(bad) == 1

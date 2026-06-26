@@ -173,6 +173,14 @@ def evaluate_assertions(res: AblationResult) -> list[tuple[str, bool, bool]]:
     ]
 
 
+def gate_exit_code(res: AblationResult) -> int:
+    """0 if every HARD assertion passes, 1 otherwise. Soft assertions never gate."""
+    hard_failed = any(
+        is_hard and not passed for _label, passed, is_hard in evaluate_assertions(res)
+    )
+    return 1 if hard_failed else 0
+
+
 def render_ablation_md(res: AblationResult) -> str:
     r = res.recall
     hops = sorted(r["oracle"]["by_hop"])
