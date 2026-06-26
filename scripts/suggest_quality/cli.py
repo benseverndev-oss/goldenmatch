@@ -543,7 +543,7 @@ def _run_gym_mode(
     return 0  # unreachable
 
 
-def _run_bakeoff_mode(dataset_names, native_version, git_sha) -> int:
+def _run_bakeoff_mode(dataset_names: set[str] | None, native_version: str, git_sha: str) -> int:
     """Run the verify-gate proxy bake-off and print the per-proxy table + winner."""
     from scripts.suggest_quality.bakeoff import (  # noqa: PLC0415
         build_proxies,
@@ -580,7 +580,7 @@ def _run_bakeoff_mode(dataset_names, native_version, git_sha) -> int:
     print("  " + "-" * (len(hdr) - 2))
     for name in sorted(table):
         s = table[name]
-        rec = "   n/a" if s["recall"] != s["recall"] else f"{s['recall']:6.3f}"
+        rec = "   n/a" if math.isnan(s["recall"]) else f"{s['recall']:6.3f}"
         flag = "  <-- DISQUALIFIED (accepts harmful)" if s["n_accepted_harmful"] else ""
         print(f"  {name:<34} {s['n_accepted']:>8} {s['n_accepted_harmful']:>8} "
               f"{s['n_real_wins']:>9} {s['precision_safe']:>9.3f} {rec:>7}{flag}")
