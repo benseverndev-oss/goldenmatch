@@ -158,17 +158,23 @@ def suggest_from_result(result, df, *, priors=None, verify=False) -> list[Sugges
     if "__row_id__" not in df.columns:
         df = df.with_row_index("__row_id__").with_columns(pl.col("__row_id__").cast(pl.Int64))
     config = result.config
-    scored_pairs = result.scored_pairs or []
     clusters = result.clusters or {}
-    suggestions = _kernel_suggest(nm, df, config, scored_pairs, clusters, priors)
+    # Default cheap path: reuse the result's pairs (NO re-run). FULL_DIST (off by
+    # default) needs the threshold-0 distribution for the dip rule, which IS a
+    # re-run — only then build an engine and run the diagnostic.
+    pairs_for_kernel = result.scored_pairs or []
+    if _full_dist_enabled():
+        from goldenmatch.tui.engine import MatchEngine
+        diag = _diagnostic_scored_pairs(MatchEngine.from_dataframe(df), df, config)
+        if diag is not None:
+            pairs_for_kernel = diag
+    suggestions = _kernel_suggest(nm, df, config, pairs_for_kernel, clusters, priors)
     if not (verify and _verify_enabled_by_env()) or not suggestions:
         return suggestions
     from goldenmatch.tui.engine import MatchEngine
     engine = MatchEngine.from_dataframe(df)
     return _verify_suggestions(suggestions, df, config, clusters, engine)
 ```
-
-(FULL_DIST note: `suggest_from_result` uses the result's pairs as-is; if `_full_dist_enabled()` the dip rule needs the threshold-0 distribution, which IS a re-run — so when FULL_DIST is on, build an engine and call `_diagnostic_scored_pairs` for `pairs_for_kernel`. FULL_DIST is off by default, so the cheap path stays cheap; include this branch for correctness.)
 
 - [ ] **Step 4: Export in `__init__.py`** — add `suggest_from_result` to the imports + `__all__`.
 
@@ -217,13 +223,16 @@ def maybe_suggest(result, df, *, verify=False):
     from goldenmatch.core.suggest.adapter import suggest_from_result
     return suggest_from_result(result, df, verify=verify)
 
-def serialize_suggestions(suggestions):
+def serialize_suggestions(suggestions, *, verified: bool) -> list[dict]:
+    """The single wire shape every surface emits. `verified` is supplied by the
+    caller (NOT read off the Suggestion — the dataclass has no such field): the
+    default/maybe_suggest path passes verified=False; suggest=/heal= pass True."""
     return [{"id": s.id, "kind": s.kind, "target": s.target,
-             "rationale": s.rationale, "verified": getattr(s, "_verified", False),
+             "rationale": s.rationale, "verified": verified,
              "patch": dict(s.patch)} for s in suggestions]
 ```
 
-(The `verified` flag: set it where suggestions are produced — `verify=True` paths tag `s._verified=True`, or carry a parallel bool. Keep it simple: `serialize_suggestions(suggestions, *, verified)` takes the flag from the caller instead of a per-object attr.)
+**`verified` plumbing (resolved — do NOT use a per-object attr).** `Suggestion` (`core/suggest/types.py`) has no `verified`/`_verified` field and `_verify_suggestions` does not tag kept ones. So `verified` is a **caller-supplied** flag: `serialize_suggestions(..., verified=True)` only from the `suggest=`/`heal=` (verify=True) paths, `verified=False` from the default `maybe_suggest` path. `DedupeResult.suggestions` stores the **serialized dicts** (which carry `verified`), so every surface consumes one uniform shape and the spec's "each carries a `verified` bool" holds without touching the `Suggestion` dataclass.
 
 - [ ] **Step 4: Run → passes. Commit.**
 
@@ -243,18 +252,23 @@ def serialize_suggestions(suggestions):
 
 ---
 
-## Task 6: Wire into `dedupe_df`/`match_df` + `DedupeResult` (TDD + no-op parity)
+## Task 6: Wire into `dedupe_df` + `DedupeResult` (TDD + no-op parity)
 
 **Files:** Modify `_api.py`. Test: `tests/test_api.py` (extend) or `tests/test_suggest_surface.py`.
 
-- [ ] **Step 1: Failing tests** — (a) `dedupe_df(df)` on a near-ceiling input → `result.suggestions == []` and the call is byte-identical to today (no other field changed) — the no-op parity guard; (b) with `headroom_signal` monkeypatched to fire, `result.suggestions` is populated (verify=False); (c) `dedupe_df(df, heal=True)` returns a result whose `config` is the healed config and `heal_trail` is non-None (monkeypatch `heal`); (d) `suggest=True` attaches verified suggestions.
+> **Scope:** `dedupe_df` ONLY. `match_df` (record-linkage; returns `MatchResult`, which has no suggestion fields) is a named follow-on — do NOT add `suggest=`/`heal=` to it or touch `MatchResult` in this spec. The healer reviews dedupe configs.
+
+- [ ] **Step 1: Failing tests** — (a) `dedupe_df(df)` on a near-ceiling input → `result.suggestions == []` and the call is byte-identical to today (no other field changed) — the no-op parity guard; (b) with `headroom_signal` monkeypatched to fire + `suggest_from_result` monkeypatched to return one Suggestion, `result.suggestions` is a one-element list of dicts with `verified=False`; (c) `dedupe_df(df, heal=True)` (monkeypatch `surface.heal`) returns a result whose `config` is the healed config and `heal_trail` is a non-None list of dicts (`verified=True`); (d) `suggest=True` attaches dicts with `verified=True`.
 
 - [ ] **Step 2: Run → fails.**
 
 - [ ] **Step 3: Implement**
-- Add `suggestions: list = field(default_factory=list)` and `heal_trail: list | None = None` to `DedupeResult` (after `throughput_posture`).
-- Add `suggest: bool = False`, `heal: bool = False` to `dedupe_df`/`match_df` signatures.
-- After the result is built (where `lint_findings`/`native` are attached): if `heal`: run `surface.heal(...)`, replace the result + set `heal_trail`; elif `suggest`: `result.suggestions = surface.suggest_from_result(result, df, verify=True)`; else (default): `result.suggestions = surface.maybe_suggest(result, df, verify=False)`. Wrap in try/except (advisory; never break a dedupe). `match_df` mirrors (suggestions on the match result if applicable, else skip — keep symmetric but minimal).
+- Add `suggestions: list = field(default_factory=list)` and `heal_trail: list | None = None` to `DedupeResult` (after `throughput_posture`). Both hold **serialized dicts** (the `serialize_suggestions` shape), not raw `Suggestion` objects.
+- Add `suggest: bool = False`, `heal: bool = False` to the `dedupe_df` signature only.
+- After the result is built (where `lint_findings`/`native` are attached), in a try/except (advisory — never break a dedupe):
+  - if `heal`: `outcome = surface.heal(df, result.config)`; rebuild/replace the returned result with `outcome.result`; set `result.heal_trail = serialize_suggestions(outcome.trail, verified=True)` and `result.suggestions = serialize_suggestions(outcome.trail, verified=True)`.
+  - elif `suggest`: `result.suggestions = serialize_suggestions(surface.suggest_from_result(result, df, verify=True), verified=True)`.
+  - else (default): `result.suggestions = serialize_suggestions(surface.maybe_suggest(result, df, verify=False), verified=False)`.
 
 - [ ] **Step 4: Run → passes; run the broader `tests/test_api.py` to confirm no regression. Commit.**
 
