@@ -23,6 +23,11 @@ MUSIQUE_SUBSET_SEED = 20260620
 class Document:
     id: str
     text: str
+    #: Engineered edge docs only: the rendered (ambiguity-dialed) surface forms of
+    #: the src/dst mentions, so the ER-ablation can assign per-mention record_keys
+    #: without re-parsing `text`. Empty for MuSiQue / non-edge docs.
+    src_surface: str = ""
+    dst_surface: str = ""
 
 
 @dataclass(frozen=True)
