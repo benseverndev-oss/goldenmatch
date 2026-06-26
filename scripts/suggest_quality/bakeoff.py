@@ -13,22 +13,31 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+# Proxy signature: (clusters, n_records) -> health score.
+ProxyFn = Callable[[dict, int], float]
+
 # Candidate coverage caps to sweep (the default 0.30 plus a tighter/looser pair).
 _COVERAGE_CAPS: tuple[float, ...] = (0.30, 0.15, 0.50)
 _EPS: float = 1e-6  # mirrors adapter._VERIFY_EPS
 
 
 def _coverage_with_cap(clusters: dict, n_records: int, cap: float) -> float:
-    """Saturating coverage with an explicit cap (mirrors health._coverage)."""
+    """Saturating coverage with an explicit cap.
+
+    TEMPORARY FORK of ``health._coverage`` so this registry is order-independent
+    of Task 6 (which adds a ``cap`` param to ``health._coverage``). Once that
+    lands, delete this and call ``health._coverage(clusters, n_records, cap=cap)``
+    so the bake-off and production share one formula and cannot drift.
+    """
     if n_records <= 0:
         return 0.0
     n_matched = sum(i.get("size", 2) for i in clusters.values() if i.get("size", 1) > 1)
     return min((n_matched / n_records) / cap, 1.0)
 
 
-def build_proxies() -> list[tuple[str, Callable]]:
+def build_proxies() -> list[tuple[str, ProxyFn]]:
     """Enumerate candidate proxies as (name, fn(clusters, n_records) -> float)."""
-    from goldenmatch.core.suggest import health  # local import keeps module light
+    from goldenmatch.core.suggest import health  # noqa: PLC0415 -- local import keeps module light
 
     # Keys MUST equal the production GOLDENMATCH_SUGGEST_COHESION values that
     # health._select_cohesion recognizes (min_edge / mean_bottomk_edge /
@@ -40,7 +49,7 @@ def build_proxies() -> list[tuple[str, Callable]]:
         "edge_below_cutoff_fraction": lambda c: health._cohesion_edge_below_cutoff(c, health._COHESION_CUTOFF),
     }
 
-    proxies: list[tuple[str, Callable]] = [
+    proxies: list[tuple[str, ProxyFn]] = [
         ("legacy", lambda c, n: float(health._health_legacy(c, n))),
     ]
     for stat_name, stat_fn in cohesion_stats.items():
