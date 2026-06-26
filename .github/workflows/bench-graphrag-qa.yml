@@ -78,6 +78,9 @@ on:
       goldengraph_passage_k:
         description: "goldengraph hybrid only: raw passages retrieved per question (matches text_rag/goldenmatch_rag context budget)"
         default: "10"
+      goldengraph_hybrid_filter:
+        description: "goldengraph hybrid only: subgraph relevance filter -- none (full ball) | path (keep seeds + anchor-to-anchor paths + 1-hop halo)"
+        default: "none"
       distill_log:
         description: "goldengraph only: capture (text->extraction)+(entity->fingerprint) pairs to a JSONL artifact for in-house distillation"
         default: "false"
@@ -159,6 +162,7 @@ jobs:
           GOLDENGRAPH_QA_NODE_BUDGET: ${{ inputs.retrieval_node_budget }}
           GOLDENGRAPH_QA_MODE: ${{ inputs.goldengraph_qa_mode }}
           GOLDENGRAPH_QA_PASSAGE_K: ${{ inputs.goldengraph_passage_k }}
+          GOLDENGRAPH_HYBRID_FILTER: ${{ inputs.goldengraph_hybrid_filter }}
           GOLDENGRAPH_DISTILL_LOG: ${{ inputs.distill_log == 'true' && format('results/distill_goldengraph_amb{0}.jsonl', matrix.ambiguity) || '' }}
         run: |
           mkdir -p results
