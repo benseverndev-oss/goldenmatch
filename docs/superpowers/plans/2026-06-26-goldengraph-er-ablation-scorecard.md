@@ -25,8 +25,8 @@
   - `ResolvedEntity(local_id, canonical_name, typ, surface_names: list[str], record_keys: list[str], member_idx: list[int])`
   - `build_batch(extraction, entities, *, at, valid_from=None) -> dict`
   - store: `from goldengraph_native import _native as ggn; store = ggn.PyStore(); store.append(json.dumps(batch))`
-  - **The store merges entities across appends when they share a `record_key`** (the cross-doc-link mechanism injects record_keys precisely so "the store's overlap-merge" connects them).
-- **Retrieval:** `slice_graph = store.as_of(valid_t, tx_t)`; `slice_graph.query(seed_ids, hops) -> {"entities":[{entity_id,canonical_name,typ,surface_names,record_keys,...}], "edges":[{subj,obj,predicate}]}`. Seeds are explicit ids — no embedder needed for oracle-seeding. `_AS_OF` in the engine adapter is the as-of coordinate (read it; reuse the same value).
+  - **The store merges entities across appends when they share a `record_key`** (build-side: `record_keys` go INTO the batch and drive the store's overlap-merge). **But `record_keys` are NOT marshaled back out** — the pyo3 read layer (`goldengraph-native/src/lib.rs`) emits entity dicts with only `entity_id, canonical_name, typ, members, surface_names`. So the dial controls merge via `record_keys` at build time, and the **read-side coverage map is built from `surface_names`** (a merged entity's `surface_names` accumulates every merged surface — confirmed in `store.rs` and `store_golden.json`).
+- **Retrieval:** `slice_graph = store.as_of(valid_t, tx_t)`; `slice_graph.query(seed_ids, hops) -> {"entities":[{entity_id,canonical_name,typ,members,surface_names}], "edges":[{subj,obj,predicate}]}` (NO `record_keys` on the read side). Seeds are explicit ids — no embedder needed for oracle-seeding. `_AS_OF = 10**12` in the engine adapter (reuse the same value).
 
 ## Test environment
 
@@ -80,10 +80,14 @@ def test_gold_chain_walks_to_gold_answer():
 
 
 def test_gold_graph_ignores_non_edge_documents():
-    # MuSiQue-style docs (no `::`) must not crash / pollute the graph.
-    corpus = generate_engineered(seed=1, n_questions=5, ambiguity=0.0, max_hops=2)
+    # A non-edge (MuSiQue-style, not 3-part) doc id must be skipped, not crash.
+    from erkgbench.qa_e2e.corpora import Document, QACorpus
+
+    edge = Document(id="gm:a::works_at::gm:b", text="A works at B.")
+    musique = Document(id="q1::p0", text="unrelated paragraph")  # 2-part id
+    corpus = QACorpus(name="mix", documents=(edge, musique), questions=())
     g = GoldGraph.from_corpus(corpus)
-    assert g.edge_count() > 0
+    assert g.edge_count() == 1 and g.has_edge("gm:a", "works_at", "gm:b")
 ```
 
 - [ ] **Step 2: Run to verify they fail** — `... test_qa_gold_oracle.py -q` → `ModuleNotFoundError: ... qa_e2e.gold`.
@@ -263,11 +267,17 @@ def goldengraph_keys(corpus: QACorpus, g: GoldGraph) -> dict[tuple[str, str], st
     # rerank OFF: name+type is two fields, under the 3-field cross-encoder trigger;
     # this keeps the gate network-free (no HuggingFace download).
     result = gm.dedupe_df(df)  # zero-config; 2 fields => no rerank
-    cluster_of = result.cluster_ids()  # row index -> cluster id  (CONFIRM exact accessor)
-    return {(rows[i][0], rows[i][1]): f"c{cluster_of[i]}" for i in range(len(rows))}
+    # DedupeResult.clusters is dict[cluster_id, {"members":[row_idx,...], "size":n}].
+    # It may only surface multi-member clusters -> default every other row to its
+    # own singleton id (mirrors resolve.py::resolve / ingest.py::_gm_cluster).
+    cluster_of = {i: f"s{i}" for i in range(len(rows))}  # singleton fallback
+    for cid, info in result.clusters.items():
+        for ri in info["members"]:
+            cluster_of[ri] = f"c{cid}"
+    return {(rows[i][0], rows[i][1]): cluster_of[i] for i in range(len(rows))}
 ```
 
-> **CONFIRM during impl:** the exact `dedupe_df` result accessor that yields a per-row cluster/group id (`.cluster_ids()` is a placeholder — check `goldenmatch.dedupe_df`'s return type; it may be a frame with a `cluster_id` column). Use whatever maps row index → group. This is the only API-shape unknown; everything else is verified.
+> Reference implementations of the `result.clusters` → row-group map: `resolve.py::resolve` and `ingest.py::_gm_cluster`. Confirm `DedupeResult.clusters` shape (`_api.py`) during impl — `{cluster_id: {"members":[...], "size":n}}`.
 
 - [ ] **Step 4: Run → pass.**
 - [ ] **Step 5: Commit** — `feat(er-kg-bench): ER-quality dial key-policies`.
@@ -376,6 +386,16 @@ def bridge_recall(gold_chain, subgraph: dict, coverage: dict) -> dict:
 
 `ablation.py` ties it together: for each dial, build a store directly from gold triples (record_keys from the dial), retrieve per question (oracle-seeded), compute bridge-recall by hop.
 
+### Task 4a (prerequisite, shared-file change): expose per-document rendered surfaces
+
+The rendered surface (canonical or variant, chosen by the ambiguity dial) is currently embedded ONLY in `Document.text` (`f"{s} {rel_words} {o}."`), and parsing it back is ambiguous (surfaces and relation phrases both contain spaces). It's load-bearing: for `name_only`/`goldengraph` the rendered variant surface is what differentiates those dials from `oracle`. Extend the generator (small, backward-compatible):
+
+- Modify `erkgbench/qa_e2e/corpora.py`: add `src_surface: str = ""` and `dst_surface: str = ""` to the frozen `Document` dataclass (defaults keep MuSiQue + all existing callers working).
+- Modify `erkgbench/qa_e2e/engineered.py` (the edge-doc render loop, ~lines 102–114): pass the already-computed `s` / `o` rendered surfaces into the `Document(...)` constructor as `src_surface=s, dst_surface=o`.
+- Test (wheel-free, `tests/test_qa_engineered_surfaces.py`): `generate_engineered(...)` edge docs carry non-empty `src_surface`/`dst_surface`, each ∈ {canonical, a variant} of the doc-id's src/dst entity; commit as its own step.
+
+Keyspace consistency: every rendered surface is canonical-or-variant, and `dials._entity_surfaces` enumerates exactly canonical+variants, so `km[(entity_id, rendered_surface)]` always hits.
+
 - [ ] **Step 1: Write the failing test**
 
 ```python
@@ -405,15 +425,14 @@ def test_ablation_monotonic_and_hop_widening():
 - [ ] **Step 3: Implement `ablation.py`**
 
 Build path per dial (bypass `ingest_corpus`/`_extract`):
-1. `g = GoldGraph.from_corpus(corpus)`; `km = dials.<dial>_keys(corpus, g)`.
-2. For each edge document, derive the two mention surfaces actually rendered in `Document.text` (parse the doc text, OR — simpler & exact — re-derive from the doc id's canonical ids + the gold, choosing the surface deterministically the SAME way the generator did). **CONFIRM the cleanest source of the rendered surface** (the doc text contains it; `engineered.py` renders `src`/`dst` mentions). Pragmatic: extract the two surfaces from `Document.text` via the known render template, or extend `generate_engineered` to also emit per-document `(src_surface, dst_surface)` gold metadata (preferred — a tiny, backward-compatible addition to the generator). Use the metadata route if parsing is fragile.
-3. Build one `Extraction(mentions=[Mention(src_surface, src_typ), Mention(dst_surface, dst_typ)], relationships=[Relationship(0, rel, 1)])`.
-4. Build `ResolvedEntity`s with `record_keys=[km[(entity_id, surface)]]`, `member_idx=[i]`, `surface_names=[surface]`. (Each mention its own ResolvedEntity; the STORE merges across docs by record_key.)
-5. Maintain `record_key -> canonical_id` side map as you go.
-6. `store.append(json.dumps(build_batch(extraction, entities, at=i+1)))`.
-7. After all docs: `slice_graph = store.as_of(_AS_OF, _AS_OF)`. Build `coverage`: enumerate `slice_graph.entities()`, map each `entity_id` → `{canonical for rk in entity["record_keys"] for canonical in side_map[rk]}`.
-8. Per question: oracle-seed = the store entity id covering `qa.start_entity_id`; `subgraph = _retrieve_local(slice_graph, [seed], max_hops, node_budget)`; `bridge_recall(gold_chain(g, qa), subgraph, coverage)`; bucket by `qa.hop_count`.
-9. Aggregate per dial: `mean` whole-chain + `by_hop[k]` mean.
+1. `g = GoldGraph.from_corpus(corpus)`; `km = dials.<dial>_keys(corpus, g)`. Build the read-side side map `surface_to_canon: dict[str, set[str]]` by inverting `dials._entity_surfaces(g)` (one surface may map to multiple canonicals — the `name_only` collision case).
+2. For each edge document, read the rendered surfaces directly from `doc.src_surface` / `doc.dst_surface` (Task 4a) and the entity ids + relation from `doc.id.split("::")`.
+3. Build one `Extraction(mentions=[Mention(src_surface, src_typ), Mention(dst_surface, dst_typ)], relationships=[Relationship(0, rel, 1)])` (types from the concept universe).
+4. Build two `ResolvedEntity`s (one per mention): `record_keys=[km[(entity_id, surface)]]`, `member_idx=[i]`, `surface_names=[surface]`, `local_id=i`. The STORE merges across docs by record_key overlap.
+5. `store.append(json.dumps(build_batch(extraction, entities, at=i+1)))`.
+6. After all docs: `slice_graph = store.as_of(_AS_OF, _AS_OF)`. Build `coverage: dict[entity_id, set[canonical]]` from the READABLE `surface_names` (record_keys aren't exposed): `coverage[e["entity_id"]] = { c for s in e["surface_names"] for c in surface_to_canon.get(s, ()) }` over `slice_graph.entities()`.
+7. Per question: oracle-seed = the store entity id whose coverage contains `qa.start_entity_id` (invert `coverage`; if several, pick the smallest entity_id deterministically); `subgraph = _retrieve_local(slice_graph, [seed], max_hops=self_hops, node_budget=self_budget)`; `bridge_recall(gold_chain(g, qa), subgraph, coverage)`; bucket by `qa.hop_count`. (Use the engine adapter's default hops/node_budget — read them from `engines/goldengraph.py`.)
+8. Aggregate per dial: `mean` whole-chain + `by_hop[k]` mean.
 
 Return a small dataclass `AblationResult(recall: dict[str, dict])`.
 
