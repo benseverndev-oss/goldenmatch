@@ -136,6 +136,23 @@ def _applies_threshold_too_high(config: GoldenMatchConfig) -> bool:
         return False
 
 
+def _apply_threshold_far_too_high(config: GoldenMatchConfig) -> GoldenMatchConfig:
+    """Raise primary weighted matchkey threshold by 0.18, ceiling 0.99.
+
+    The EGREGIOUS variant of threshold_too_high: +0.18 lands beyond
+    DIP_MIN_GAP of the score valley (e.g. 0.80 -> 0.98 on ncvr_synthetic,
+    valley ~0.875), so the dip lower_threshold rule actually fires and
+    recovers matches -- unlike the gentle +0.10, which stays within the gap
+    and (correctly) emits nothing.
+    """
+    new = copy.deepcopy(config)
+    mk = _primary_weighted_mk(new)
+    if mk is None:
+        return new
+    mk.threshold = min(0.99, mk.threshold + 0.18)
+    return new
+
+
 def _apply_bad_freetext_scorer(config: GoldenMatchConfig) -> GoldenMatchConfig:
     """Set the first free-text field's scorer to token_sort.
 
@@ -330,6 +347,21 @@ CATALOG: list[Perturbation] = [
         ),
         applies_to=_applies_threshold_too_high,
         apply=_apply_threshold_too_high,
+    ),
+    Perturbation(
+        name="threshold_far_too_high",
+        expected_rule="lower_threshold",
+        builds_on_existing_rule=True,
+        description=(
+            "Raise the primary weighted matchkey threshold by 0.18 "
+            "(ceiling 0.99) -- simulates an EGREGIOUSLY over-strict threshold "
+            "that lands beyond DIP_MIN_GAP of the score valley, so the "
+            "lower_threshold (dip) rule actually fires and recovers matches "
+            "(unlike the gentle threshold_too_high, whose +0.10 stays within "
+            "the valley gap and correctly emits nothing)."
+        ),
+        applies_to=_applies_threshold_too_high,
+        apply=_apply_threshold_far_too_high,
     ),
     Perturbation(
         name="bad_freetext_scorer",
