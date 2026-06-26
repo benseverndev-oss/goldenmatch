@@ -40,7 +40,7 @@ on:
       - ".github/workflows/bench-suggest-quality.yml"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   suggest-quality:
@@ -88,6 +88,8 @@ jobs:
           PY
 
       - name: Run suggest_quality ${{ inputs.mode || 'gate' }}
+        env:
+          GOLDENMATCH_SUGGEST_FULL_DIST: ${{ startsWith(inputs.mode, 'gym') && '1' || '0' }}
         run: |
           MODE="${{ inputs.mode || 'gate' }}"
           DATASETS="${{ inputs.datasets }}"
@@ -99,6 +101,8 @@ jobs:
           uv run python -m scripts.suggest_quality "$MODE" $FILTER
 
       - name: Run gym-gate (catalog recovery non-regression)
+        env:
+          GOLDENMATCH_SUGGEST_FULL_DIST: "1"
         run: |
           DATASETS="${{ inputs.datasets }}"
           if [ -n "$DATASETS" ]; then
@@ -107,3 +111,16 @@ jobs:
             FILTER=""
           fi
           uv run python -m scripts.suggest_quality gym-gate $FILTER
+
+      - name: Commit re-blessed gym baseline
+        if: ${{ inputs.mode == 'gym-bless' }}
+        run: |
+          if git diff --quiet -- scripts/suggest_quality/baselines/gym_scorecard.json; then
+            echo "No gym baseline change to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add scripts/suggest_quality/baselines/gym_scorecard.json
+          git commit -m "chore(suggest-gym): re-bless gym baseline under FULL_DIST [skip ci]"
+          git push origin HEAD:${{ github.ref_name }}
