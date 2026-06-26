@@ -197,10 +197,10 @@ def _health_legacy(
 
 def suggestion_health_from_clusters(clusters: dict, n_records: int) -> float:
     """Public health proxy used by review_config's verify gate. Env-selectable:
-    GOLDENMATCH_SUGGEST_HEALTH = 'legacy' (default, the shipped formula) or
-    'cohesion' (the precision-sensitive redesign). Default keeps PR #1267
-    behavior byte-identical."""
-    mode = os.environ.get("GOLDENMATCH_SUGGEST_HEALTH", "legacy").strip().lower()
+    GOLDENMATCH_SUGGEST_HEALTH = 'cohesion' (default, min_edge x cap-0.50, the
+    2026-06-26 bake-off winner) or 'legacy' (the original shipped formula,
+    available via the env for rollback)."""
+    mode = os.environ.get("GOLDENMATCH_SUGGEST_HEALTH", "cohesion").strip().lower()
     if mode == "cohesion":
         return suggestion_health_cohesion(clusters, n_records)
     return _health_legacy(clusters, n_records)
@@ -247,16 +247,32 @@ def _cohesion_edge_below_cutoff(clusters: dict, cutoff: float = 0.75) -> float:
 # Task 2: cohesion x saturating-coverage proxy
 # ---------------------------------------------------------------------------
 
-_COVERAGE_CAP: float = 0.30
+# Blessed default per the 2026-06-26 verify-gate bake-off (was 0.30): cohesion is
+# now the default proxy and cap 0.50 is its safe operating point -- recovers 100%
+# of real wins with zero real-pair net-negatives. Override via
+# GOLDENMATCH_SUGGEST_COVERAGE_CAP for rollback/tuning.
+_COVERAGE_CAP: float = 0.50
 _COHESION_BOTTOMK: int = 5
 _COHESION_CUTOFF: float = 0.75
 
 
-def _coverage(clusters: dict, n_records: int) -> float:
+def _coverage(clusters: dict, n_records: int, cap: float | None = None) -> float:
     if n_records <= 0:
         return 0.0
+    if cap is None:
+        cap = _coverage_cap_from_env()
     n_matched = sum(i.get("size", 2) for i in clusters.values() if i.get("size", 1) > 1)
-    return min((n_matched / n_records) / _COVERAGE_CAP, 1.0)
+    return min((n_matched / n_records) / cap, 1.0)
+
+
+def _coverage_cap_from_env() -> float:
+    """Coverage cap: env override GOLDENMATCH_SUGGEST_COVERAGE_CAP, else the
+    blessed default _COVERAGE_CAP (0.50)."""
+    raw = os.environ.get("GOLDENMATCH_SUGGEST_COVERAGE_CAP", "").strip()
+    try:
+        return float(raw) if raw else _COVERAGE_CAP
+    except ValueError:
+        return _COVERAGE_CAP
 
 
 def _select_cohesion(clusters: dict) -> float:

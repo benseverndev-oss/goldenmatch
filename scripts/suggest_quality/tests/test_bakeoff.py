@@ -82,3 +82,30 @@ def test_select_best_tie_broken_by_lexically_smaller_name():
     ]
     winner, _ = bakeoff.select_best(rows)
     assert winner == "aaa"
+
+
+def test_default_health_proxy_is_cohesion_min_edge_cap50(monkeypatch):
+    # Default (no env) must resolve to the bake-off winner: min_edge cohesion at
+    # coverage-cap 0.50 -- NOT legacy.
+    monkeypatch.delenv("GOLDENMATCH_SUGGEST_HEALTH", raising=False)
+    monkeypatch.delenv("GOLDENMATCH_SUGGEST_COHESION", raising=False)
+    monkeypatch.delenv("GOLDENMATCH_SUGGEST_COVERAGE_CAP", raising=False)
+    from goldenmatch.core.suggest import health
+
+    clusters = {
+        1: {"size": 2, "members": [0, 1], "confidence": 0.9, "pair_scores": {(0, 1): 0.9}},
+        2: {"size": 3, "members": [2, 3, 4], "confidence": 0.6, "pair_scores": {(2, 3): 0.6, (3, 4): 0.7}},
+    }
+    n = 10
+    default_val = health.suggestion_health_from_clusters(clusters, n)
+    cohesion_val = health._cohesion_min(clusters) * health._coverage(clusters, n, cap=0.50)
+    legacy_val = health._health_legacy(clusters, n)
+    assert default_val == cohesion_val      # default routes to min_edge cohesion @ cap 0.50
+    assert default_val != legacy_val        # and is NOT legacy (the flip happened)
+
+
+def test_legacy_still_available_via_env(monkeypatch):
+    monkeypatch.setenv("GOLDENMATCH_SUGGEST_HEALTH", "legacy")
+    from goldenmatch.core.suggest import health
+    clusters = {1: {"size": 2, "members": [0, 1], "confidence": 0.9, "pair_scores": {(0, 1): 0.9}}}
+    assert health.suggestion_health_from_clusters(clusters, 10) == health._health_legacy(clusters, 10)
