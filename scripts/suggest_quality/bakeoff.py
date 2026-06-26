@@ -60,3 +60,50 @@ def build_proxies() -> list[tuple[str, ProxyFn]]:
                 (name, (lambda c, n, sf=stat_fn, cp=cap: float(sf(c) * _coverage_with_cap(c, n, cp))))
             )
     return proxies
+
+
+def score_proxy(rows: list[dict]) -> dict:
+    """Classifier metrics for one proxy's rows (already filtered to that proxy)."""
+    accepted = [r for r in rows if r["accept"]]
+    real_wins = [r for r in rows if r["f1_delta"] > 0]
+    accepted_harmful = [r for r in accepted if r["f1_delta"] < 0]
+    accepted_wins = [r for r in accepted if r["f1_delta"] > 0]
+    n_accepted = len(accepted)
+    return {
+        "n_rows": len(rows),
+        "n_accepted": n_accepted,
+        "n_accepted_harmful": len(accepted_harmful),
+        "n_real_wins": len(real_wins),
+        # precision_safe: fraction of accepts that were not harmful (1.0 if none accepted)
+        "precision_safe": 1.0 if n_accepted == 0 else (n_accepted - len(accepted_harmful)) / n_accepted,
+        # recall: fraction of real wins that were accepted (nan if no real wins)
+        "recall": (len(accepted_wins) / len(real_wins)) if real_wins else float("nan"),
+    }
+
+
+def select_best(rows: list[dict]) -> tuple[str | None, dict]:
+    """Pick the proxy with max recall among those with ZERO accepted-harmful rows.
+
+    Returns (winner_name_or_None, {proxy: score_dict}). Tie-break: higher
+    n_accepted, then lexical name (deterministic).
+    """
+    by_proxy: dict[str, list[dict]] = {}
+    for r in rows:
+        by_proxy.setdefault(r["proxy"], []).append(r)
+    table = {name: score_proxy(rs) for name, rs in by_proxy.items()}
+
+    eligible = [name for name, s in table.items() if s["n_accepted_harmful"] == 0]
+
+    def _key(name: str):
+        s = table[name]
+        rec = s["recall"]
+        rec = -1.0 if rec != rec else rec  # nan -> worst
+        return (rec, s["n_accepted"], _neg_lex(name))
+
+    winner = max(eligible, key=_key) if eligible else None
+    return winner, table
+
+
+def _neg_lex(name: str) -> tuple:
+    """Lexically-smaller name wins ties (so max() prefers it): negate codepoints."""
+    return tuple(-ord(c) for c in name)
