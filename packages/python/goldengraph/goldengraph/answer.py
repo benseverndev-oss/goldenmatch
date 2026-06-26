@@ -12,6 +12,15 @@ from .llm import LLMClient
 from .synthesize import synthesize_global, synthesize_hybrid, synthesize_local
 
 
+def _hybrid_filter_mode() -> str:
+    """Hybrid subgraph filter selector, read at call time. "" / "none" / unset =
+    off (pass the full ball; the measured 0.420 control). "path" = path-preserving
+    prune (`subgraph_filter.filter_subgraph_to_paths`)."""
+    import os
+
+    return os.environ.get("GOLDENGRAPH_HYBRID_FILTER", "").strip().lower()
+
+
 def _retrieve_local(slice_graph, seeds, *, max_hops: int, node_budget: int) -> dict:
     """Expand the seed neighborhood depth-by-depth up to ``max_hops``, stopping early
     once the subgraph reaches ``node_budget`` entities.
@@ -83,6 +92,10 @@ def ask(
     }
     seed_names = [id_to_name[s] for s in seeds if s in id_to_name]
     if mode == "hybrid":
+        if _hybrid_filter_mode() == "path":
+            from .subgraph_filter import filter_subgraph_to_paths
+
+            subgraph = filter_subgraph_to_paths(subgraph, seeds)
         passage_texts = (
             list(passages.retrieve(query, passage_k)) if passages is not None else []
         )

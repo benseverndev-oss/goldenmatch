@@ -167,3 +167,63 @@ def test_ask_rejects_unknown_mode():
             "Start", store, llm=RecordingLLM(), embedder=StubEmbedder({"Start": 0}),
             valid_t=1, tx_t=1, mode="bogus",
         )
+
+
+# --- ask(mode="hybrid") path-filter (GOLDENGRAPH_HYBRID_FILTER), default off ---
+
+
+def test_ask_hybrid_filter_path_prunes_offtopic_from_synthesis(monkeypatch):
+    # Graph: Start(0)-works_at->A(1)-acquired->Zeta(2) chain + off-topic leaf
+    # Noise(3) hanging off ZETA (a NON-seed node), NOT off a seed -- so it sits
+    # outside every seed's 1-hop halo and the filter drops it. (If Noise hung off
+    # the seed A instead, halo=1 would legitimately KEEP it -- see review note.)
+    names = ["Start", "A", "Zeta", "Noise"]
+    edges = [(0, "works_at", 1), (1, "acquired", 2), (2, "mentions", 3)]
+    llm = RecordingLLM()
+    store = _FakeStore(_FakeGraph(names, edges))
+    embedder = StubEmbedder({"Start": 0, "A": 1, "Zeta": 2, "Noise": 3})
+    passages = _FakePassages(["Start works at A.", "A acquired Zeta in 1990."])
+    monkeypatch.setenv("GOLDENGRAPH_HYBRID_FILTER", "path")
+    ask(
+        "Start", store, llm=llm, embedder=embedder, valid_t=1, tx_t=1,
+        mode="hybrid", k=2, hops=4, node_budget=64,
+        passages=passages, passage_k=7,
+    )
+    prompt = llm.prompts[-1]
+    # seeds = top-2 by cosine = Start(0), A(1) (one-hot). Production default halo=1:
+    # path 0-1 keeps {Start,A}; A's halo keeps Zeta(2); Noise(3) hangs off the
+    # non-seed Zeta, beyond any seed's 1-hop halo -> DROPPED.
+    assert "Start -[works_at]-> A" in prompt
+    assert "Noise" not in prompt
+    # passages are untouched by the filter (ground-truth context stays whole)
+    assert "A acquired Zeta in 1990." in prompt
+
+
+def test_ask_hybrid_filter_off_keeps_full_ball(monkeypatch):
+    names = ["Start", "A", "Zeta", "Noise"]
+    edges = [(0, "works_at", 1), (1, "acquired", 2), (2, "mentions", 3)]
+    llm = RecordingLLM()
+    store = _FakeStore(_FakeGraph(names, edges))
+    embedder = StubEmbedder({"Start": 0, "A": 1, "Zeta": 2, "Noise": 3})
+    monkeypatch.delenv("GOLDENGRAPH_HYBRID_FILTER", raising=False)
+    ask(
+        "Start", store, llm=llm, embedder=embedder, valid_t=1, tx_t=1,
+        mode="hybrid", k=2, hops=4, node_budget=64, passages=None,
+    )
+    # control: with the flag off the off-topic leaf is still present (current 0.420)
+    assert "Noise" in llm.prompts[-1]
+
+
+def test_ask_local_mode_ignores_filter_flag(monkeypatch):
+    # The filter must touch hybrid ONLY -- local stays byte-identical.
+    names = ["Start", "A", "Zeta", "Noise"]
+    edges = [(0, "works_at", 1), (1, "acquired", 2), (2, "mentions", 3)]
+    llm = RecordingLLM()
+    store = _FakeStore(_FakeGraph(names, edges))
+    embedder = StubEmbedder({"Start": 0, "A": 1, "Zeta": 2, "Noise": 3})
+    monkeypatch.setenv("GOLDENGRAPH_HYBRID_FILTER", "path")
+    ask(
+        "Start", store, llm=llm, embedder=embedder, valid_t=1, tx_t=1,
+        mode="local", k=2, hops=4, node_budget=64,
+    )
+    assert "Noise" in llm.prompts[-1]  # local ball is unfiltered regardless of flag
