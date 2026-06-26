@@ -11,6 +11,7 @@ goldenmatch imports.
 """
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 
 # Proxy signature: (clusters, n_records) -> health score.
@@ -62,7 +63,7 @@ def build_proxies() -> list[tuple[str, ProxyFn]]:
     return proxies
 
 
-def score_proxy(rows: list[dict]) -> dict:
+def score_proxy(rows: list[dict]) -> dict[str, float | int]:
     """Classifier metrics for one proxy's rows (already filtered to that proxy)."""
     accepted = [r for r in rows if r["accept"]]
     real_wins = [r for r in rows if r["f1_delta"] > 0]
@@ -92,18 +93,21 @@ def select_best(rows: list[dict]) -> tuple[str | None, dict]:
         by_proxy.setdefault(r["proxy"], []).append(r)
     table = {name: score_proxy(rs) for name, rs in by_proxy.items()}
 
+    # A safe proxy that accepted nothing (recall 0 or nan) is still "eligible" and
+    # CAN be returned as a (useless-but-valid) winner -- semantically distinct from
+    # None (no safe proxy at all), which is the signal for the Phase-B contingency.
     eligible = [name for name, s in table.items() if s["n_accepted_harmful"] == 0]
 
     def _key(name: str):
         s = table[name]
         rec = s["recall"]
-        rec = -1.0 if rec != rec else rec  # nan -> worst
+        rec = -1.0 if math.isnan(rec) else rec  # nan recall -> sorts worst
         return (rec, s["n_accepted"], _neg_lex(name))
 
     winner = max(eligible, key=_key) if eligible else None
     return winner, table
 
 
-def _neg_lex(name: str) -> tuple:
+def _neg_lex(name: str) -> tuple[int, ...]:
     """Lexically-smaller name wins ties (so max() prefers it): negate codepoints."""
     return tuple(-ord(c) for c in name)

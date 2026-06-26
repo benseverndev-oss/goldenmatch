@@ -60,3 +60,25 @@ def test_select_best_returns_none_when_all_disqualified():
     rows = [_row("A", accept=True, f1_delta=-0.1)]
     winner, table = bakeoff.select_best(rows)
     assert winner is None
+
+
+def test_select_best_nan_recall_proxy_loses_to_real_recall():
+    # Z has no real wins -> recall is nan; it must sort WORSE than A (recall 1.0),
+    # never win on a nan comparison footgun. Both are eligible (no accepted harmful).
+    rows = [
+        _row("Z", accept=True, f1_delta=0.0),   # accepted neutral -> no real win
+        _row("A", accept=True, f1_delta=0.2),   # accepted real win -> recall 1.0
+    ]
+    winner, table = bakeoff.select_best(rows)
+    assert table["Z"]["recall"] != table["Z"]["recall"]  # nan
+    assert winner == "A"
+
+
+def test_select_best_tie_broken_by_lexically_smaller_name():
+    # bbb and aaa: identical recall (1.0) AND n_accepted (1) -> lex-smaller wins.
+    rows = [
+        _row("bbb", accept=True, f1_delta=0.2),
+        _row("aaa", accept=True, f1_delta=0.2),
+    ]
+    winner, _ = bakeoff.select_best(rows)
+    assert winner == "aaa"
