@@ -266,9 +266,12 @@ Append to `packages/python/goldengraph/tests/test_hybrid_synthesis.py` (the `_Fa
 
 ```python
 def test_ask_hybrid_filter_path_prunes_offtopic_from_synthesis(monkeypatch):
-    # Graph: Start(0)-A(1)-Zeta(2) chain + off-topic leaf Noise(3) hanging off A.
+    # Graph: Start(0)-works_at->A(1)-acquired->Zeta(2) chain + off-topic leaf
+    # Noise(3) hanging off ZETA (a NON-seed node), NOT off a seed -- so it sits
+    # outside every seed's 1-hop halo and the filter drops it. (If Noise hung off
+    # the seed A instead, halo=1 would legitimately KEEP it -- see review note.)
     names = ["Start", "A", "Zeta", "Noise"]
-    edges = [(0, "works_at", 1), (1, "acquired", 2), (1, "mentions", 3)]
+    edges = [(0, "works_at", 1), (1, "acquired", 2), (2, "mentions", 3)]
     llm = RecordingLLM()
     store = _FakeStore(_FakeGraph(names, edges))
     embedder = StubEmbedder({"Start": 0, "A": 1, "Zeta": 2, "Noise": 3})
@@ -280,8 +283,9 @@ def test_ask_hybrid_filter_path_prunes_offtopic_from_synthesis(monkeypatch):
         passages=passages, passage_k=7,
     )
     prompt = llm.prompts[-1]
-    # seeds are top-2 by cosine = Start, A (one-hot). Filter keeps the Start-A edge
-    # and A's halo (Zeta), and DROPS the off-topic Noise leaf.
+    # seeds = top-2 by cosine = Start(0), A(1) (one-hot). Production default halo=1:
+    # path 0-1 keeps {Start,A}; A's halo keeps Zeta(2); Noise(3) hangs off the
+    # non-seed Zeta, beyond any seed's 1-hop halo -> DROPPED.
     assert "Start -[works_at]-> A" in prompt
     assert "Noise" not in prompt
     # passages are untouched by the filter (ground-truth context stays whole)
@@ -290,7 +294,7 @@ def test_ask_hybrid_filter_path_prunes_offtopic_from_synthesis(monkeypatch):
 
 def test_ask_hybrid_filter_off_keeps_full_ball(monkeypatch):
     names = ["Start", "A", "Zeta", "Noise"]
-    edges = [(0, "works_at", 1), (1, "acquired", 2), (1, "mentions", 3)]
+    edges = [(0, "works_at", 1), (1, "acquired", 2), (2, "mentions", 3)]
     llm = RecordingLLM()
     store = _FakeStore(_FakeGraph(names, edges))
     embedder = StubEmbedder({"Start": 0, "A": 1, "Zeta": 2, "Noise": 3})
@@ -306,7 +310,7 @@ def test_ask_hybrid_filter_off_keeps_full_ball(monkeypatch):
 def test_ask_local_mode_ignores_filter_flag(monkeypatch):
     # The filter must touch hybrid ONLY -- local stays byte-identical.
     names = ["Start", "A", "Zeta", "Noise"]
-    edges = [(0, "works_at", 1), (1, "acquired", 2), (1, "mentions", 3)]
+    edges = [(0, "works_at", 1), (1, "acquired", 2), (2, "mentions", 3)]
     llm = RecordingLLM()
     store = _FakeStore(_FakeGraph(names, edges))
     embedder = StubEmbedder({"Start": 0, "A": 1, "Zeta": 2, "Noise": 3})
