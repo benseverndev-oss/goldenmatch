@@ -132,8 +132,30 @@ def test_under_merge_below_balanced_peak():
 from goldenmatch.core.suggest import health as H  # noqa: E402
 
 
-def test_legacy_is_default_and_byte_identical(monkeypatch):
+def test_cohesion_is_default_and_byte_identical(monkeypatch):
+    # The default verify-gate proxy was flipped legacy -> cohesion (min_edge x
+    # coverage-cap 0.50) per the 2026-06-26 verify-gate bake-off: cohesion_*_cap50
+    # recovers 100% of real wins (net +2.63 F1) with zero real-pair net-negatives,
+    # vs legacy's recall 0.286. `legacy` stays reachable via GOLDENMATCH_SUGGEST_HEALTH.
     monkeypatch.delenv("GOLDENMATCH_SUGGEST_HEALTH", raising=False)
+    monkeypatch.delenv("GOLDENMATCH_SUGGEST_COHESION", raising=False)
+    monkeypatch.delenv("GOLDENMATCH_SUGGEST_COVERAGE_CAP", raising=False)
+    cl = {
+        0: {
+            "size": 3,
+            "oversized": False,
+            "members": [0, 1, 2],
+            "pair_scores": {(0, 1): 0.9, (1, 2): 0.8},
+            "confidence": 0.85,
+            "cluster_quality": "strong",
+            "bottleneck_pair": (1, 2),
+        }
+    }
+    assert H.suggestion_health_from_clusters(cl, 100) == H.suggestion_health_cohesion(cl, 100)
+
+
+def test_legacy_still_available_via_env(monkeypatch):
+    monkeypatch.setenv("GOLDENMATCH_SUGGEST_HEALTH", "legacy")
     cl = {
         0: {
             "size": 3,
