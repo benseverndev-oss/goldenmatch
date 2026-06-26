@@ -37,11 +37,15 @@ All new code lives under `scripts/suggest_quality/` (the gym/oracle harness), ex
 ### 1. Proxy bake-off harness (core deliverable)
 For each `(dataset, perturbation)`, run the gym's convergence **once in raw mode** (`verify=False`) to get the sequence of fixes the kernel proposes and, for each applied fix, the candidate clusters + candidate F1 (computed from labels, as the oracle already does). For every applied fix, compute **all** proxy candidates on the same candidate-vs-baseline clusters -- one re-run feeds every proxy, so the bake-off is cheap (no per-proxy pipeline re-runs).
 
+> **Implementation note (not a no-op against existing code):** neither existing path yields per-applied-fix candidate clusters + F1 in raw mode directly. `converge_unsupervised(verify=False)` returns only `(final_config, trail)` (no per-step clusters/F1), and the oracle's per-step loop that *does* capture per-fix F1 (`oracle.py`) runs `review_config` with the default `verify=True`. Component 1 must combine the two: a raw per-step convergence loop that also captures each step's clusters + label-derived F1. The "as the oracle already does" phrasing refers only to the F1-from-labels technique, not a ready-made function.
+
 Emit one row per `(dataset, perturbation, applied_fix, proxy)`:
 - `proxy_delta = P(candidate_clusters) - P(baseline_clusters)`; gate decision `accept = proxy_delta >= -eps`
 - `f1_delta = F1(candidate) - F1(baseline)`; truth `is_real_win = f1_delta > 0`
 
 Candidate proxies (all already built in `health.py`): `legacy`; `cohesion` x its three sub-variants (`min_edge`, `mean_bottomk_edge`, `edge_below_cutoff_fraction`); plus a small number of coverage-cap settings. Each candidate is identified by the `(GOLDENMATCH_SUGGEST_HEALTH, GOLDENMATCH_SUGGEST_COHESION, coverage-cap)` tuple it corresponds to.
+
+> **Coverage-cap has no env selector today.** `_COVERAGE_CAP = 0.30` is a module constant (`health.py:250`) and only affects the `cohesion` proxy (no-op for `legacy`). The bake-off must vary it either by adding a `GOLDENMATCH_SUGGEST_COVERAGE_CAP` env knob or by monkeypatching the constant in-harness; the plan picks one. If a non-default coverage-cap wins, the "default flip" is the env knob's default plus the mode line (see Component 4) -- still a small, contained change, not literally one line.
 
 ### 2. Classifier scoring & selection
 Treat each proxy as an accept/reject classifier vs F1 truth, over the full suite + adversarial cases:
