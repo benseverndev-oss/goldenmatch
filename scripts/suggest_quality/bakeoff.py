@@ -169,7 +169,6 @@ def run_bakeoff_catalog(datasets, perturbations, proxies) -> list[dict]:
     """Mirror gym.run_catalog: load -> ceiling -> per-damaging-perturbation
     raw bake-off. Each emitted row carries dataset + perturbation. Never raises."""
     import logging  # noqa: PLC0415
-    import math  # noqa: PLC0415
 
     import polars as pl  # noqa: PLC0415
 
