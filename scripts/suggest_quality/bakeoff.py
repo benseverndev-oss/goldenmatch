@@ -79,7 +79,18 @@ def score_proxy(rows: list[dict]) -> dict[str, float | int]:
         "precision_safe": 1.0 if n_accepted == 0 else (n_accepted - len(accepted_harmful)) / n_accepted,
         # recall: fraction of real wins that were accepted (nan if no real wins)
         "recall": (len(accepted_wins) / len(real_wins)) if real_wins else float("nan"),
+        # net_f1_delta: total F1 the proxy would actually deliver if its accepts were
+        # applied (sum of f1_delta over accepted) -- the "best overall value" metric,
+        # which can favour a proxy that takes one small harm to capture many wins.
+        "net_f1_delta": sum(r["f1_delta"] for r in accepted),
     }
+
+
+def harmful_accept_rows(rows: list[dict]) -> list[dict]:
+    """The accepted-AND-harmful rows (proxy/dataset/perturbation/f1_delta), so a
+    reviewer can see WHETHER a disqualifying net-negative is on an adversarial
+    trap (acceptable) or a real recovery pair (a true production net-negative)."""
+    return [r for r in rows if r["accept"] and r["f1_delta"] < 0]
 
 
 def select_best(rows: list[dict]) -> tuple[str | None, dict]:

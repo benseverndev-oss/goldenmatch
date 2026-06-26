@@ -565,17 +565,24 @@ def _run_bakeoff_mode(dataset_names: set[str] | None, native_version: str, git_s
         print(f"bakeoff: native loader error: {exc}")
         return 1
 
+    from scripts.suggest_quality.bakeoff import harmful_accept_rows  # noqa: PLC0415
+
     datasets = [d for d in REGISTRY if dataset_names is None or d.name in dataset_names]
     proxies = build_proxies()
     rows = run_bakeoff_catalog(datasets, CATALOG, proxies)
     winner, table = select_best(rows)
+
+    # Which perturbation names are the deliberately-adversarial traps (a harmful
+    # accept on one of these is far less damning than on a real recovery pair).
+    _ADVERSARIAL = {"near_valley_threshold", "over_merge_bait"}
 
     print("verify-gate proxy bake-off")
     print(f"  native={native_version}  sha={git_sha[:12] if git_sha != 'unknown' else 'unknown'}")
     n_pairs = len({(r['dataset'], r['perturbation']) for r in rows})
     print(f"  {len(rows)} (fix x proxy) rows over {n_pairs} damaging pairs")
     print()
-    hdr = f"  {'proxy':<34} {'accepted':>8} {'acc_harm':>8} {'real_wins':>9} {'precision':>9} {'recall':>7}"
+    hdr = (f"  {'proxy':<34} {'accepted':>8} {'acc_harm':>8} {'real_wins':>9} "
+           f"{'precision':>9} {'recall':>7} {'net_f1':>8}")
     print(hdr)
     print("  " + "-" * (len(hdr) - 2))
     for name in sorted(table):
@@ -583,13 +590,29 @@ def _run_bakeoff_mode(dataset_names: set[str] | None, native_version: str, git_s
         rec = "   n/a" if math.isnan(s["recall"]) else f"{s['recall']:6.3f}"
         flag = "  <-- DISQUALIFIED (accepts harmful)" if s["n_accepted_harmful"] else ""
         print(f"  {name:<34} {s['n_accepted']:>8} {s['n_accepted_harmful']:>8} "
-              f"{s['n_real_wins']:>9} {s['precision_safe']:>9.3f} {rec:>7}{flag}")
+              f"{s['n_real_wins']:>9} {s['precision_safe']:>9.3f} {rec:>7} "
+              f"{s['net_f1_delta']:>+8.4f}{flag}")
     print()
+
+    # Per-proxy harmful-accept detail: trap vs real pair is the load-bearing
+    # distinction for whether a disqualified proxy is actually shippable.
+    harmful = harmful_accept_rows(rows)
+    if harmful:
+        print("  harmful accepts (proxy accepted a fix that LOWERED F1):")
+        for r in sorted(harmful, key=lambda x: (x["proxy"], x["dataset"], x["perturbation"])):
+            tag = "ADVERSARIAL-TRAP" if r["perturbation"] in _ADVERSARIAL else "REAL-PAIR"
+            print(f"    {r['proxy']:<34} {r['dataset']}/{r['perturbation']} "
+                  f"f1_delta={r['f1_delta']:+.4f}  [{tag}]")
+        print()
+
     if winner is None:
-        print("  WINNER: none -- no proxy achieved zero accepted-harmful fixes. "
-              "Consider Phase B (valley-margin proxy).")
+        print("  WINNER (zero accepted-harmful, max recall): none -- consider Phase B.")
     else:
-        print(f"  WINNER: {winner}  (max recall at zero accepted-harmful)")
+        print(f"  WINNER (zero accepted-harmful, max recall): {winner}")
+    # Also surface the best-by-net-value proxy, which may differ from the strict winner.
+    best_net = max(table, key=lambda nm: table[nm]["net_f1_delta"])
+    print(f"  BEST net_f1_delta: {best_net}  (net={table[best_net]['net_f1_delta']:+.4f}, "
+          f"acc_harm={table[best_net]['n_accepted_harmful']})")
     return 0
 
 
