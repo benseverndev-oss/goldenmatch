@@ -213,7 +213,7 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="suggest_quality")
     p.add_argument(
         "mode", nargs="?", default="report",
-        choices=["report", "gate", "bless", "gym", "gym-bless", "gym-gate"],
+        choices=["report", "gate", "bless", "gym", "gym-bless", "gym-gate", "bakeoff"],
     )
     p.add_argument("--datasets", default="", help="comma-separated dataset filter")
     p.add_argument("--row-cap", type=int, default=20_000, help="oracle row cap")
@@ -236,6 +236,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.mode in ("gym", "gym-bless", "gym-gate"):
         native_version, git_sha = _gather_meta()
         return _run_gym_mode(args.mode, names, native_version, git_sha)
+
+    if args.mode == "bakeoff":
+        native_version, git_sha = _gather_meta()
+        return _run_bakeoff_mode(names, native_version, git_sha)
 
     results, skipped = run(names, args.row_cap)
     native_version, git_sha = _gather_meta()
@@ -537,6 +541,56 @@ def _run_gym_mode(
     if mode == "gym-gate":
         return _cmd_gym_gate(records, native_version, git_sha)
     return 0  # unreachable
+
+
+def _run_bakeoff_mode(dataset_names, native_version, git_sha) -> int:
+    """Run the verify-gate proxy bake-off and print the per-proxy table + winner."""
+    from scripts.suggest_quality.bakeoff import (  # noqa: PLC0415
+        build_proxies,
+        run_bakeoff_catalog,
+        select_best,
+    )
+    from scripts.suggest_quality.datasets import REGISTRY  # noqa: PLC0415
+    from scripts.suggest_quality.perturbations import CATALOG  # noqa: PLC0415
+
+    # Same native guard as _run_gym_mode.
+    try:
+        from goldenmatch.core._native_loader import native_module  # noqa: PLC0415
+        _mod = native_module()
+        if _mod is None or not hasattr(_mod, "suggest_config"):
+            print("bakeoff requires the native suggest_config kernel.\n"
+                  "Build it:  uv run python scripts/build_native.py")
+            return 1
+    except Exception as exc:
+        print(f"bakeoff: native loader error: {exc}")
+        return 1
+
+    datasets = [d for d in REGISTRY if dataset_names is None or d.name in dataset_names]
+    proxies = build_proxies()
+    rows = run_bakeoff_catalog(datasets, CATALOG, proxies)
+    winner, table = select_best(rows)
+
+    print("verify-gate proxy bake-off")
+    print(f"  native={native_version}  sha={git_sha[:12] if git_sha != 'unknown' else 'unknown'}")
+    n_pairs = len({(r['dataset'], r['perturbation']) for r in rows})
+    print(f"  {len(rows)} (fix x proxy) rows over {n_pairs} damaging pairs")
+    print()
+    hdr = f"  {'proxy':<34} {'accepted':>8} {'acc_harm':>8} {'real_wins':>9} {'precision':>9} {'recall':>7}"
+    print(hdr)
+    print("  " + "-" * (len(hdr) - 2))
+    for name in sorted(table):
+        s = table[name]
+        rec = "   n/a" if s["recall"] != s["recall"] else f"{s['recall']:6.3f}"
+        flag = "  <-- DISQUALIFIED (accepts harmful)" if s["n_accepted_harmful"] else ""
+        print(f"  {name:<34} {s['n_accepted']:>8} {s['n_accepted_harmful']:>8} "
+              f"{s['n_real_wins']:>9} {s['precision_safe']:>9.3f} {rec:>7}{flag}")
+    print()
+    if winner is None:
+        print("  WINNER: none -- no proxy achieved zero accepted-harmful fixes. "
+              "Consider Phase B (valley-margin proxy).")
+    else:
+        print(f"  WINNER: {winner}  (max recall at zero accepted-harmful)")
+    return 0
 
 
 def _fmt_pct(v) -> str:

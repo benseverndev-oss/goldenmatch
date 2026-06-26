@@ -89,7 +89,7 @@ jobs:
 
       - name: Run suggest_quality ${{ inputs.mode || 'gate' }}
         env:
-          GOLDENMATCH_SUGGEST_FULL_DIST: ${{ startsWith(inputs.mode, 'gym') && '1' || '0' }}
+          GOLDENMATCH_SUGGEST_FULL_DIST: ${{ (startsWith(inputs.mode, 'gym') || inputs.mode == 'bakeoff') && '1' || '0' }}
         run: |
           MODE="${{ inputs.mode || 'gate' }}"
           DATASETS="${{ inputs.datasets }}"
