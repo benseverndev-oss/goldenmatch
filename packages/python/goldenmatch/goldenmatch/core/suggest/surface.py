@@ -1,0 +1,70 @@
+"""Shared orchestration for the config-suggestion (healer) surfaces: the free
+headroom trigger, the cheap/opt-in suggest gate, the heal loop, and the wire
+serializer. See docs/superpowers/specs/2026-06-26-healer-default-pipeline-design.md.
+
+This module only contains the FREE headroom trigger today; the cheap/opt-in
+suggest gate, heal loop, and wire serializer land in later tasks. The trigger
+is intentionally dependency-light: no native kernel, no pipeline re-run, no
+heavy imports at module top.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from goldenmatch.core.complexity_profile import HealthVerdict
+
+# A score-histogram dip is "present" when the committed profile's Hartigan-style
+# dip statistic clears this floor. The controller's own RED floor is 0.005
+# (``ScoringProfile.health``) and its normalized-signal vector treats 0.1 as a
+# full dip; 0.05 sits well above the RED floor and at half the normalization
+# ceiling, so it flags genuine bimodality (a lower-threshold sweet spot) without
+# tripping on near-unimodal noise.
+_DIP_THRESHOLD = 0.05
+
+
+@dataclass(frozen=True)
+class HeadroomReason:
+    """Why the committed auto-config run has headroom to improve.
+
+    ``kind`` is a small human/machine-readable tag, e.g. ``"health:RED"``,
+    ``"health:YELLOW"``, or ``"dip"``.
+    """
+
+    kind: str
+
+
+def headroom_signal(result) -> HeadroomReason | None:
+    """Return a reason when the committed auto-config run shows headroom.
+
+    PURE and FREE: reads only ``result.postflight_report.controller_history``
+    (already computed by the controller). No native kernel, no pipeline re-run.
+
+    Fires when the committed ``ComplexityProfile`` is RED/YELLOW, or when an
+    otherwise-GREEN config carries a score-histogram dip (a lower-threshold
+    sweet spot). Returns ``None`` when the controller never ran (explicit-config
+    path → ``controller_history is None``), when there is no committed entry, or
+    when anything is missing/raises. Never raises.
+    """
+    try:
+        report = getattr(result, "postflight_report", None)
+        history = getattr(report, "controller_history", None) if report is not None else None
+        if history is None:
+            return None
+        committed = history.pick_committed()
+        if committed is None:
+            return None
+        profile = getattr(committed, "profile", None)
+        if profile is None:
+            return None
+
+        health = profile.health()
+        if health in (HealthVerdict.RED, HealthVerdict.YELLOW):
+            return HeadroomReason(kind=f"health:{health.name}")
+
+        # Otherwise-GREEN: a meaningful dip means a threshold sweet spot exists.
+        if profile.scoring.dip_statistic >= _DIP_THRESHOLD:
+            return HeadroomReason(kind="dip")
+
+        return None
+    except Exception:
+        return None
