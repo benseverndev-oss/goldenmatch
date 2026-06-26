@@ -708,7 +708,16 @@ def suggest_from_result(result, df, *, priors=None, verify=False) -> list[Sugges
         return []
     if "__row_id__" not in df.columns:
         df = df.with_row_index("__row_id__").with_columns(pl.col("__row_id__").cast(pl.Int64))
-    config = result.config
+    # Deep-copy + disable rerank (mirror review_config): never mutate the caller's
+    # config, and keep the verify=True engine re-runs from triggering a HuggingFace
+    # rerank-model download offline.
+    config = copy.deepcopy(result.config)
+    try:
+        for mk in config.get_matchkeys():
+            if getattr(mk, "rerank", False):
+                mk.rerank = False
+    except Exception:
+        logger.debug("suggest_from_result: failed to disable rerank on config copy", exc_info=True)
     clusters = result.clusters or {}
     pairs_for_kernel = result.scored_pairs or []
     if _full_dist_enabled():
