@@ -372,12 +372,26 @@ The far variant fires (`expected_rule_fired_live = true`), lowers the threshold
 one step to ~0.88 (just above the valley, high/right side — no overshoot into
 the left tail), and **survives the live health-proxy gate** (`recovery_pct_live
 == recovery_pct_raw` → `verification_gap = 0.0`, the self-verify suppresses
-nothing). Gym headline moved up: `headline_live` 0.0 → **0.150881**,
-`headline_raw` -2.259227 → **0.555137**. On `synthetic` the egregious threshold
-does not degrade recoverable matches, so the gym reports `no_damage` and skips
-it honestly (no per-dataset special-casing). The re-blessed baseline locks the
-`ncvr_synthetic` pair's 0.754 live recovery in as a standing `gym-gate`
-regression floor.
+nothing). On `synthetic` the egregious threshold does not degrade recoverable
+matches, so the gym reports `no_damage` and skips it honestly (no per-dataset
+special-casing). The re-blessed baseline locks the `ncvr_synthetic` pair's 0.754
+live recovery in as a standing `gym-gate` regression floor.
+
+**What's attributable to this perturbation (vs the re-bless environment):** the
+clean, isolated win is `headline_live` 0.0 → **0.150881**, which is *exactly*
+`0.754406 / 5` — i.e. the new pair is the only built-rule pair with non-zero
+live recovery; the other four still read 0.0 live. The `headline_raw` move
+(-2.259227 → 0.555137) is **mostly NOT this perturbation**: the same re-bless
+ran under FULL_DIST=1 *and* a newer kernel (`native_version` 0.1.5 → 0.1.12),
+which recomputed several pre-existing pairs' raw recoveries (e.g.
+`ncvr_synthetic/bad_freetext_scorer` -8.345 → 0.0, `threshold_too_high`
+-2.504 → 0.0). So the raw-headline swing is dominated by the environment change,
+not the far variant — only `headline_live` is cleanly attributable to it.
+
+**Floor is pinned to the kernel.** The 0.754 `recovery_pct_live` gate floor was
+blessed under `native_version 0.1.12` with FULL_DIST=1; a kernel bump (or a
+native-version skew) can move live recovery and will require a re-bless via the
+`bench-suggest-quality.yml` `mode=gym-bless` dispatch.
 
 **Honest caveat:** recovery is *partial* (0.754, lands at 0.88 not the original
 0.80 auto-config ceiling). The kernel targets the valley (0.88), arguably a more
