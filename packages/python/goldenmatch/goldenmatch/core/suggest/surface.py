@@ -90,3 +90,41 @@ def serialize_suggestions(suggestions, *, verified: bool) -> list[dict]:
     return [{"id": s.id, "kind": s.kind, "target": s.target,
              "rationale": s.rationale, "verified": verified,
              "patch": dict(s.patch)} for s in suggestions]
+
+
+@dataclass
+class HealOutcome:
+    """The result of a bounded heal loop: the healed config, the auditable trail
+    of applied suggestions (in order), and the last DedupeResult."""
+
+    config: object
+    trail: list           # list[Suggestion], applied in order
+    result: object        # the last DedupeResult
+
+
+_HEAL_STEP_CAP = 5
+
+
+def heal(df, config, *, step_cap: int = _HEAL_STEP_CAP) -> HealOutcome:
+    """Bounded verified heal loop: re-run -> verified suggest -> apply top -> repeat
+    until the healer goes quiet (or step_cap, or a repeated patch id). Returns the
+    healed config, the applied trail (auditable), and the last DedupeResult."""
+    from goldenmatch._api import dedupe_df  # deferred
+    from goldenmatch.core.suggest.adapter import suggest_from_result  # deferred
+    from goldenmatch.core.suggest.apply import apply_suggestion  # deferred
+
+    trail = []
+    applied_ids = set()
+    last_result = None
+    for _ in range(step_cap):
+        last_result = dedupe_df(df, config=config)
+        sugs = suggest_from_result(last_result, df, verify=True)
+        if not sugs:
+            break
+        top = sugs[0]
+        if top.id in applied_ids:
+            break
+        applied_ids.add(top.id)
+        config = apply_suggestion(config, top)
+        trail.append(top)
+    return HealOutcome(config=config, trail=trail, result=last_result)

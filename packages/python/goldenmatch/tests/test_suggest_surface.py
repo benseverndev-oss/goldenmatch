@@ -166,5 +166,69 @@ def test_serialize_suggestions_shape_and_verified_flag():
     assert surf.serialize_suggestions([s], verified=False)[0]["verified"] is False
 
 
+def test_heal_applies_in_order_then_stops(monkeypatch):
+    import goldenmatch.core.suggest.surface as surf
+    from goldenmatch.core.suggest.types import Suggestion
+
+    s1 = Suggestion(id="s1", kind="lower_threshold", target="t", current_value=None,
+                    proposed_value=None, rationale="", predicted_effect="", confidence=1.0,
+                    patch={}, evidence={})
+    s2 = Suggestion(id="s2", kind="swap_scorer", target="t", current_value=None,
+                    proposed_value=None, rationale="", predicted_effect="", confidence=1.0,
+                    patch={}, evidence={})
+    seq = [[s1], [s2], []]   # suggest returns s1, then s2, then nothing
+    calls = {"sugg": 0, "apply": []}
+
+    class _Res:  # stand-in DedupeResult
+        config = "CFG0"
+    monkeypatch.setattr("goldenmatch._api.dedupe_df", lambda df, *, config=None, **k: _Res())
+    def _sugg(res, df, *, verify=False):
+        i = calls["sugg"]; calls["sugg"] += 1
+        return seq[i] if i < len(seq) else []
+    monkeypatch.setattr("goldenmatch.core.suggest.adapter.suggest_from_result", _sugg)
+    monkeypatch.setattr("goldenmatch.core.suggest.apply.apply_suggestion",
+                        lambda cfg, s: calls["apply"].append(s.id) or f"{cfg}+{s.id}")
+
+    out = surf.heal("DF", "CFG0")
+    assert [s.id for s in out.trail] == ["s1", "s2"]
+    assert calls["apply"] == ["s1", "s2"]
+    assert out.result is not None
+
+
+def test_heal_cycle_guard_breaks_on_repeated_id(monkeypatch):
+    import goldenmatch.core.suggest.surface as surf
+    from goldenmatch.core.suggest.types import Suggestion
+    s1 = Suggestion(id="s1", kind="lower_threshold", target="t", current_value=None,
+                    proposed_value=None, rationale="", predicted_effect="", confidence=1.0,
+                    patch={}, evidence={})
+    class _Res:
+        config = "CFG"
+    monkeypatch.setattr("goldenmatch._api.dedupe_df", lambda df, *, config=None, **k: _Res())
+    monkeypatch.setattr("goldenmatch.core.suggest.adapter.suggest_from_result",
+                        lambda res, df, *, verify=False: [s1])   # ALWAYS returns s1
+    monkeypatch.setattr("goldenmatch.core.suggest.apply.apply_suggestion",
+                        lambda cfg, s: cfg)
+    out = surf.heal("DF", "CFG", step_cap=5)
+    assert [s.id for s in out.trail] == ["s1"]   # applied once, then cycle-guard breaks
+
+
+def test_heal_step_cap(monkeypatch):
+    import goldenmatch.core.suggest.surface as surf
+    from goldenmatch.core.suggest.types import Suggestion
+    n = {"i": 0}
+    def _sugg(res, df, *, verify=False):
+        n["i"] += 1
+        return [Suggestion(id=f"s{n['i']}", kind="k", target="t", current_value=None,
+                           proposed_value=None, rationale="", predicted_effect="",
+                           confidence=1.0, patch={}, evidence={})]
+    class _Res:
+        config = "CFG"
+    monkeypatch.setattr("goldenmatch._api.dedupe_df", lambda df, *, config=None, **k: _Res())
+    monkeypatch.setattr("goldenmatch.core.suggest.adapter.suggest_from_result", _sugg)
+    monkeypatch.setattr("goldenmatch.core.suggest.apply.apply_suggestion", lambda cfg, s: cfg)
+    out = surf.heal("DF", "CFG", step_cap=3)
+    assert len(out.trail) == 3   # stops at the cap (unique ids each step)
+
+
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__, "-v"]))
