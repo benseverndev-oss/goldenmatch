@@ -695,3 +695,30 @@ def review_config(
 
     # -- Self-verification pass (verify=True) --
     return _verify_suggestions(suggestions, df, _config, clusters, engine)
+
+
+def suggest_from_result(result, df, *, priors=None, verify=False) -> list[Suggestion]:
+    """Artifacts-in suggestion: reuse result.scored_pairs/result.clusters (NO
+    pipeline re-run for verify=False) and call the kernel directly. verify=True
+    runs the per-candidate simulation loop (which DOES re-run). Returns [] when
+    the native kernel is absent (graceful)."""
+    try:
+        nm = _require_kernel()
+    except SuggestionsNativeRequired:
+        return []
+    if "__row_id__" not in df.columns:
+        df = df.with_row_index("__row_id__").with_columns(pl.col("__row_id__").cast(pl.Int64))
+    config = result.config
+    clusters = result.clusters or {}
+    pairs_for_kernel = result.scored_pairs or []
+    if _full_dist_enabled():
+        from goldenmatch.tui.engine import MatchEngine
+        diag = _diagnostic_scored_pairs(MatchEngine.from_dataframe(df), df, config)
+        if diag is not None:
+            pairs_for_kernel = diag
+    suggestions = _kernel_suggest(nm, df, config, pairs_for_kernel, clusters, priors)
+    if not (verify and _verify_enabled_by_env()) or not suggestions:
+        return suggestions
+    from goldenmatch.tui.engine import MatchEngine
+    engine = MatchEngine.from_dataframe(df)
+    return _verify_suggestions(suggestions, df, config, clusters, engine)
