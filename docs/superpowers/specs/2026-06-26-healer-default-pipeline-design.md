@@ -32,17 +32,20 @@ Rejected alternatives: per-surface wiring (duplicates trigger+cost logic across 
 A **free** controller signal gates whether the **cheap** kernel call happens; the **expensive** verified path is opt-in only.
 
 - **Free:** `headroom_signal(result)` reads `result.postflight_report.controller_history` — committed health (RED/YELLOW) or a score-histogram dip on the committed `ComplexityProfile`. No kernel call, no re-run.
-- **Cheap (default, when triggered):** `review_config(df, config, verify=False)` — one native kernel call over already-collected run artifacts, **no pipeline re-runs**. Produces *unverified candidate* suggestions.
-- **Expensive (opt-in only):** `review_config(df, config, verify=True)` — simulates each candidate (apply + re-run, up to 8) and keeps only non-worsening ones (the no-net-negative guarantee). Reached via `suggest=True` / `heal=True`.
+- **Cheap (default, when triggered):** an **artifacts-in** suggestion call that reuses the `scored_pairs` + `clusters` the just-finished `dedupe_df` already produced (on the `DedupeResult`) and does only a cheap column-signals profiling pass over `df` — then ONE native kernel `suggest()` call. **No pipeline re-run.** Produces *unverified candidate* suggestions.
+- **Expensive (opt-in only):** the verify gate simulates each candidate (apply + re-run the pipeline, up to 8) and keeps only non-worsening ones (the no-net-negative guarantee). Reached via `suggest=True` / `heal=True`.
+
+> **Critical correction (spec-review, 2026-06-26).** The existing `review_config(df, config, verify=...)` (`core/suggest/adapter.py`) **always** calls `engine._run_pipeline(df, config)` to (re)produce the artifacts it feeds the kernel — the `verify` flag only gates the *per-candidate* re-run loop. So calling `review_config` on the default path would run the full dedupe pipeline a SECOND time, roughly doubling wall on every triggered run — which would break the whole "the common case doesn't pay" premise. The cheap default path therefore must NOT call `review_config`; it must use a new **artifacts-in entry point** (below) that consumes the result's already-computed `scored_pairs`/`clusters`. `review_config` (which re-runs) is used only on the opt-in verified/heal paths, where the simulation cost is accepted by request.
 
 ## Components
 
 All new code in `goldenmatch/core/suggest/surface.py` (the orchestration) plus thin per-surface call-sites.
 
 ### `surface.py`
-- **`headroom_signal(result) -> HeadroomReason | None`** — pure, free. Returns a small reason object (e.g. `health=RED` / `dip`) when the committed run shows RED/YELLOW health **or** a score-histogram dip; `None` otherwise. Reads only `result.postflight_report.controller_history` (already computed). No native, no kernel.
-- **`maybe_suggest(result, df, *, verify=False) -> list[Suggestion]`** — the default-path entry. Returns `[]` immediately unless `headroom_signal` fired. When fired, calls `review_config(df, result.config, verify=verify)`; catches `SuggestionsNativeRequired` → `[]` (graceful no-native). Honors the kill-switch `GOLDENMATCH_SUGGEST_ON_DEDUPE=0` (→ `[]`).
-- **`heal(df, config, *, step_cap=5) -> HealOutcome`** — the bounded loop: `review_config(verify=True)` → `apply_suggestion` → re-run `dedupe_df(df, config=...)` → repeat until no suggestions or `step_cap` (guarding against re-emitting the same patch id, like the existing convergence loops). Returns `(healed_config, applied_trail, healed_result)`. Reuses `review_config` / `apply_suggestion` — no new rule logic.
+- **`headroom_signal(result) -> HeadroomReason | None`** — pure, free. Returns a small reason object (e.g. `health=RED` / `dip`) when the committed run shows RED/YELLOW health **or** a score-histogram dip; `None` otherwise. Reads `result.postflight_report.controller_history`; it must re-derive the committed entry via `history.pick_committed(...)` (there is no stored "committed" pointer) and read `committed.profile.health()` plus the dip at `committed.profile.scoring.dip_statistic` / `bimodality_or_dip_score`. No native, no kernel. **Returns `None` when `controller_history` is `None`** — i.e. on the explicit-config path (`dedupe_df(df, config=...)`), where the controller never ran (see Posture). The default surface therefore targets the zero-config workflow.
+- **`suggest_from_result(result, df, *, verify=False) -> list[Suggestion]`** — the **artifacts-in** entry point this spec adds (the cheap path's workhorse). Builds the kernel input from the result's already-computed `result.scored_pairs` + `result.clusters` + a column-signals profiling pass over `df` (reuse the existing `core/indicators.py` / autoconfig profiling helpers — a cheap O(N)-per-column pass, NOT a pipeline run), then calls the native `suggest()` kernel directly. When `verify=True`, runs the per-candidate simulation loop (which DOES re-run the pipeline) on top. Catches `SuggestionsNativeRequired` → `[]`. This is what lets the default path skip the redundant `_run_pipeline` that `review_config` would do.
+- **`maybe_suggest(result, df, *, verify=False) -> list[Suggestion]`** — the default-path gate. Returns `[]` immediately unless `headroom_signal` fired and the kill-switch `GOLDENMATCH_SUGGEST_ON_DEDUPE` is not `0`. When fired, delegates to `suggest_from_result(result, df, verify=verify)`. Graceful no-native → `[]`.
+- **`heal(df, config, *, step_cap=5) -> HealOutcome`** — the bounded loop: re-run `dedupe_df(df, config=...)` → `suggest_from_result(result, df, verify=True)` → `apply_suggestion(top)` → repeat until no suggestions or `step_cap` (guarding against re-emitting the same patch id, like the existing convergence loops). Returns `(healed_config, applied_trail, healed_result)`. Reuses `suggest_from_result` / `apply_suggestion` — no new rule logic. (The per-step re-run is inherent to applying a config and is the accepted opt-in cost.)
 - **`serialize_suggestions(suggestions) -> list[dict]`** — the single wire shape every non-Python surface emits: `{id, kind, target, rationale, verified, patch}`. One serializer, no per-surface drift.
 
 ### `DedupeResult` (`goldenmatch/_api.py`)
@@ -62,16 +65,17 @@ maybe_suggest(result, df, verify=False):
        GREEN & no dip  -> []            # common case: kernel never called, byte-identical no-op
        RED/YELLOW/dip  -> review_config(df, config, verify=False)   # ONE cheap kernel call, no re-runs
     native absent      -> []            # graceful, silent
-result.suggestions = candidates (verified=False) ; result.suggestions_available = bool(...)
-CLI prints a one-line hint when non-empty
+result.suggestions = candidates (verified=False)   # empty when not triggered/no-native
+CLI prints a one-line hint when result.suggestions is non-empty
 ```
+(No separate `suggestions_available` field — surfaces key off `bool(result.suggestions)`.)
 Default-on; suppress with `GOLDENMATCH_SUGGEST_ON_DEDUPE=0`. Surfaced candidates are explicitly **unverified**; the no-net-negative guarantee is enforced at apply/heal time.
 
 ### `dedupe_df(df, suggest=True)` — verified, not applied
-Same free-trigger gate, but `maybe_suggest(..., verify=True)`. Attaches verified `result.suggestions` (`verified=True`); applies nothing.
+Runs `suggest_from_result(result, df, verify=True)`. Attaches verified `result.suggestions` (`verified=True`); applies nothing. As an explicit request it runs regardless of the trigger; when controller signals are present a no-headroom case still short-circuits for free (see Posture → "Explicit-config path & the trigger gate").
 
 ### `dedupe_df(df, heal=True)` — verified loop, applied
-Runs `heal()`. Returns the healed `DedupeResult` (golden/clusters reflect the improved config; `result.config` is the improved config) plus `result.heal_trail` (auditable). `heal=True` implies verified; `heal` wins over `suggest` if both set. Gated by the same free trigger, so a near-ceiling input is a cheap no-op (the loop exits immediately).
+Runs `heal()`. Returns the healed `DedupeResult` (golden/clusters reflect the improved config; `result.config` is the improved config) plus `result.heal_trail` (auditable). `heal=True` implies verified; `heal` wins over `suggest` if both set. As an explicit request it runs regardless of the trigger; on a near-ceiling input it's a cheap no-op — the loop exits immediately when `suggest_from_result` returns nothing.
 
 ## Cross-surface wiring
 
@@ -89,11 +93,14 @@ Every surface reads `result.suggestions` / calls `dedupe_df(suggest=/heal=)` and
 
 **TS port is out** — the suggest kernel has no WASM/TS binding yet (honest constraint; named follow-on).
 
+**Count-assertion sites to update (so CI stays green):** repointing/adding the MCP tool touches the server-card count in `mcp/server.py` (~line 1002) AND the `len(TOOLS) == N` assertion in `tests/test_mcp_new_tools.py`; the A2A skill touches `_SKILLS` in `a2a/server.py` AND `test_agent_card_has_<N>_skills` in `tests/test_a2a.py`. The plan must bump all of these.
+
 ## Posture & graceful-degrade
 
 - **Additive / advisory**, like `lint_findings` (warn-default): a triggered run gains a populated field + a CLI hint; nothing is applied, nothing blocks. Kill-switch `GOLDENMATCH_SUGGEST_ON_DEDUPE=0`.
 - **No native → invisible + safe:** `maybe_suggest` returns `[]`, no error, no hint. Fully real for `[native]` users; **bundling the kernel into the base wheel is a named follow-on**, not this spec (it would turn the base into a platform wheel — large blast radius on the pure-Python / edge-safe story).
-- **Cost guarantee:** on a GREEN/no-dip run the kernel is never called (free trigger short-circuits). Triggered default runs pay exactly one `verify=False` kernel call. Verified/heal cost is opt-in only.
+- **Cost guarantee:** on a GREEN/no-dip run the kernel is never called (free trigger short-circuits). A triggered default run pays one column-signals profiling pass + one native `suggest()` call over the **reused** artifacts — NOT a second pipeline run (that is the whole point of `suggest_from_result`). Verified/heal simulation cost is opt-in only.
+- **Explicit-config path & the trigger gate.** The free trigger is an optimization that skips the kernel call when there's no headroom. On the **default** (no-kwarg) path it gates the auto-surface: `controller_history` is populated only on the zero-config path, so `dedupe_df(df, config=...)` (explicit config, no controller) surfaces nothing by default — matching the thesis that the auto-loop is the zero-config workflow. On an **explicit** `suggest=True` / `heal=True` the user has asked, so it runs regardless: when controller signals ARE present it still short-circuits a no-headroom case for free (the approved "cheap no-op on near-ceiling"); when they are absent (explicit-config), it builds from the result's artifacts and runs.
 
 ## Testing
 
