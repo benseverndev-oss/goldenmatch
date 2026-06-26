@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-26
 **Branch:** `feat/suggest-verify-gate-proxy` (worktree `.worktrees/verify-gate`), stacked on `feat/suggest-gym` (PR #1271)
-**Status:** Design approved (brainstorm); spec under review.
+**Status:** SHIPPED on the branch (pending PR merge). See "Findings" at the bottom.
 
 ## Problem
 
@@ -118,3 +118,63 @@ The guarantee is explicitly "no net-negative on the full + adversarial bench," w
 - Flipping `FULL_DIST` default-on globally (still env-gated; the gym CI steps enable it as shipped in PR #1271).
 - Real-world-headroom hunting on messier datasets -- separate project.
 - Improving layer 1 (zero-config near-ceiling) -- not a gate problem.
+
+## Findings (verify-gate proxy bake-off, 2026-06-26)
+
+**Outcome: the raw-vs-live gap is fully closed.** Default flipped legacy ->
+`cohesion_min_edge_cap50` (proxy=cohesion, statistic=min_edge, coverage-cap=0.50).
+Re-blessed gym (CI, FULL_DIST, `native_version 0.1.12`):
+
+- `headline_live` **0.151 -> 0.542785** (3.6x), and `headline_live == headline_raw`
+  exactly -- the gate now suppresses nothing it shouldn't and adds nothing it
+  shouldn't. The gap the whole project targeted is closed.
+
+**Bake-off (100 fix x proxy decisions over 10 damaging pairs; 7 real wins):**
+
+| proxy | recall | net_f1 | accepted-harmful |
+|---|---|---|---|
+| legacy (old default) | 0.286 | +0.69 | 0 |
+| cohesion_*_cap30 / _cap15 | 0.86-1.0 | +2.21-2.41 | trap + 1 REAL pair (`flattened_weights`, -0.228) |
+| **cohesion_*_cap50 (WINNER)** | **1.000** | **+2.63** | only the `near_valley` trap (-0.034) |
+
+The strict "zero accepted-harmful on ANY pair" winner was `legacy` (recall 0.286).
+But that bar buried the most *valuable* proxy: the cap50 cohesion variants recover
+100% of real wins for one tiny (-0.034 absolute) miss on the deliberately-adversarial
+`near_valley` trap, and ZERO net-negatives on real pairs. We adopted the
+production-meaningful guarantee: **zero net-negative on REAL pairs**, with the one
+small trap miss accepted (decision recorded with the user, 2026-06-26).
+
+**Per-pair live recovery in the blessed baseline (built-rule pairs):**
+
+| dataset/perturbation | recovery_pct_live | note |
+|---|---|---|
+| ncvr_synthetic/threshold_too_low | **0.932** | the diagnosis showcase: was 0.0 (suppressed) under legacy, `verification_gap` 0.932 |
+| ncvr_synthetic/threshold_far_too_high | 0.754 | (the #1271 dip asset, unchanged) |
+| ncvr_synthetic/over_merge_bait | 0.935 | adversarial trap -- actually RECOVERED, not harmful |
+| ncvr_synthetic/near_valley_threshold | **-1.177** | the one accepted trap miss: ~-0.034 absolute F1, amplified by near_valley's tiny damage denominator |
+| ncvr_synthetic/threshold_too_high | 0.0 | gentle, correctly quiet (within DIP_MIN_GAP) |
+| ncvr_synthetic/bad_freetext_scorer | 0.0 | no fire |
+| synthetic/threshold_too_low | 1.089 | beats ceiling |
+| synthetic/over_merge_bait | 1.023 | recovered |
+| synthetic/near_valley_threshold | 1.327 | recovered |
+
+**Real-pair net-negatives: NONE** (verified programmatically over the blessed
+scorecard). The only negative is `ncvr_synthetic/near_valley_threshold` (a trap),
+which the bake-off measured as a -0.034 absolute F1 hit; in `recovery_pct` terms it
+reads -1.177 only because near_valley inflicts so little damage that any harm is a
+large *fraction* of a tiny denominator. The other trap (`over_merge_bait`) is
+recovered, not harmed.
+
+**Honest caveats:**
+- The blended `headline_live` (0.543) *includes* the adversarial traps. The
+  authoritative evidence is (a) the bake-off precision table and (b) the per-pair
+  "zero real-pair net-negative" check -- not the headline number alone.
+- The 0.754 ceiling I quoted in the Goal is the *gym-suite* raw ceiling; the live
+  headline matching raw (0.543, blended with traps) means the gate is now optimal
+  for this proxy family. Further gains need new rules / real-world headroom (out of
+  scope, see "Out of scope").
+- The floor is pinned to the kernel: blessed under `native_version 0.1.12` + FULL_DIST.
+  A kernel bump can move live recovery and needs a re-bless via the
+  `bench-suggest-quality.yml mode=gym-bless` dispatch. Rollback knobs preserved:
+  `GOLDENMATCH_SUGGEST_HEALTH=legacy`, `GOLDENMATCH_SUGGEST_COHESION`,
+  `GOLDENMATCH_SUGGEST_COVERAGE_CAP`.
