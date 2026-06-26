@@ -122,5 +122,49 @@ def test_result_without_postflight_attr_returns_none():
     assert headroom_signal(object()) is None
 
 
+def test_maybe_suggest_skips_kernel_when_no_headroom(monkeypatch):
+    import goldenmatch.core.suggest.surface as surf
+    called = {"n": 0}
+    def _spy(*a, **k):
+        called["n"] += 1; return []
+    monkeypatch.setattr("goldenmatch.core.suggest.adapter.suggest_from_result", _spy)
+    monkeypatch.setattr(surf, "headroom_signal", lambda r: None)  # no headroom
+    assert surf.maybe_suggest(object(), None) == []
+    assert called["n"] == 0   # kernel/suggest_from_result NOT called when no headroom
+
+
+def test_maybe_suggest_kill_switch(monkeypatch):
+    import goldenmatch.core.suggest.surface as surf
+    monkeypatch.setenv("GOLDENMATCH_SUGGEST_ON_DEDUPE", "0")
+    monkeypatch.setattr(surf, "headroom_signal", lambda r: surf.HeadroomReason("health:RED"))
+    called = {"n": 0}
+    monkeypatch.setattr("goldenmatch.core.suggest.adapter.suggest_from_result",
+                        lambda *a, **k: called.__setitem__("n", called["n"]+1) or [])
+    assert surf.maybe_suggest(object(), None) == []
+    assert called["n"] == 0   # kill-switch short-circuits before the kernel
+
+
+def test_maybe_suggest_delegates_when_headroom(monkeypatch):
+    import goldenmatch.core.suggest.surface as surf
+    monkeypatch.delenv("GOLDENMATCH_SUGGEST_ON_DEDUPE", raising=False)
+    monkeypatch.setattr(surf, "headroom_signal", lambda r: surf.HeadroomReason("dip"))
+    sentinel = ["S"]
+    monkeypatch.setattr("goldenmatch.core.suggest.adapter.suggest_from_result",
+                        lambda result, df, verify=False: sentinel)
+    assert surf.maybe_suggest("RES", "DF", verify=False) is sentinel
+
+
+def test_serialize_suggestions_shape_and_verified_flag():
+    import goldenmatch.core.suggest.surface as surf
+    from goldenmatch.core.suggest.types import Suggestion
+    s = Suggestion(id="x", kind="lower_threshold", target="mk.threshold",
+                   current_value=0.9, proposed_value=0.85, rationale="why",
+                   predicted_effect="", confidence=0.7, patch={"a": 1}, evidence={})
+    out = surf.serialize_suggestions([s], verified=True)
+    assert out == [{"id": "x", "kind": "lower_threshold", "target": "mk.threshold",
+                    "rationale": "why", "verified": True, "patch": {"a": 1}}]
+    assert surf.serialize_suggestions([s], verified=False)[0]["verified"] is False
+
+
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__, "-v"]))

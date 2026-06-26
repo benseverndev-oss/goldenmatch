@@ -9,6 +9,7 @@ heavy imports at module top.
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 from goldenmatch.core.complexity_profile import HealthVerdict
@@ -68,3 +69,24 @@ def headroom_signal(result) -> HeadroomReason | None:
         return None
     except Exception:
         return None
+
+
+def maybe_suggest(result, df, *, verify: bool = False):
+    """Default-path gate: returns [] (without calling the kernel) unless the free
+    headroom trigger fires and the kill-switch is off. Delegates to the artifacts-in
+    suggest_from_result. Graceful []-on-no-native is handled downstream."""
+    if os.environ.get("GOLDENMATCH_SUGGEST_ON_DEDUPE", "1").strip() == "0":
+        return []
+    if headroom_signal(result) is None:
+        return []
+    from goldenmatch.core.suggest.adapter import suggest_from_result  # deferred
+    return suggest_from_result(result, df, verify=verify)
+
+
+def serialize_suggestions(suggestions, *, verified: bool) -> list[dict]:
+    """The single wire shape every surface emits. `verified` is caller-supplied
+    (Suggestion has no such field): default/maybe_suggest pass False; suggest=/heal=
+    pass True."""
+    return [{"id": s.id, "kind": s.kind, "target": s.target,
+             "rationale": s.rationale, "verified": verified,
+             "patch": dict(s.patch)} for s in suggestions]
