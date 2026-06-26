@@ -119,7 +119,14 @@ _STEP_CAP = 5
 def bakeoff_dataset(df, gt_pairs, degraded_config, proxies) -> list[dict]:
     """Raw greedy convergence over `degraded_config`, emitting one row per
     (applied fix x proxy). Advances the RAW path (apply top suggestion each
-    step regardless of any gate). Defers goldenmatch imports."""
+    step regardless of any gate). Defers goldenmatch imports.
+
+    Sampling note: this evaluates only the TOP suggestion at each greedy step
+    (then advances), so a proxy is scored on the greedy-best trajectory -- NOT
+    on every candidate the production single-pass gate tests against one fixed
+    baseline. It is a representative sample of gate decisions along the realistic
+    apply-path, not an exhaustive enumeration of all candidate decisions.
+    """
     import copy  # noqa: PLC0415
 
     from goldenmatch.core.suggest import apply_suggestion, review_config  # noqa: PLC0415
@@ -131,7 +138,7 @@ def bakeoff_dataset(df, gt_pairs, degraded_config, proxies) -> list[dict]:
     current = copy.deepcopy(degraded_config)
     cur_clusters, cur_scored = _run_config(df, current)
     f1_current = _compute_f1(cur_clusters, cur_scored, gt_pairs)
-    applied_ids: set = set()
+    applied_ids: set[str] = set()
 
     for step in range(_STEP_CAP):
         suggestions = review_config(df, current, verify=False)
@@ -139,7 +146,7 @@ def bakeoff_dataset(df, gt_pairs, degraded_config, proxies) -> list[dict]:
             break
         top = suggestions[0]
         if top.id in applied_ids:
-            break
+            break  # repeated top => config has converged, stop
         applied_ids.add(top.id)
 
         candidate = apply_suggestion(current, top)
@@ -152,7 +159,7 @@ def bakeoff_dataset(df, gt_pairs, degraded_config, proxies) -> list[dict]:
             rows.append({
                 "proxy": proxy_name,
                 "step": step,
-                "kind": getattr(top, "kind", None),
+                "kind": top.kind,
                 "accept": delta >= -_EPS,
                 "proxy_delta": delta,
                 "f1_delta": f1_delta,
@@ -192,6 +199,7 @@ def run_bakeoff_catalog(datasets, perturbations, proxies) -> list[dict]:
             continue
         df, gt_pairs = loaded
         if not gt_pairs:
+            log.debug("bakeoff: skip %r (no gt_pairs -- blocking-shape anchor)", dataset.name)
             continue
         if "__row_id__" not in df.columns:
             df = df.with_row_index("__row_id__").with_columns(pl.col("__row_id__").cast(pl.Int64))
@@ -207,13 +215,16 @@ def run_bakeoff_catalog(datasets, perturbations, proxies) -> list[dict]:
         for pert in perturbations:
             try:
                 if not pert.applies_to(ceiling):
+                    log.debug("bakeoff: skip %r/%r (n/a to ceiling)", dataset.name, pert.name)
                     continue
                 degraded = pert.apply(ceiling)
                 dc, ds = _run_config(df, degraded)
                 f1_degraded = _compute_f1(dc, ds, gt_pairs)
                 if math.isnan(f1_degraded) or math.isnan(f1_ceiling):
+                    log.debug("bakeoff: skip %r/%r (nan F1)", dataset.name, pert.name)
                     continue
                 if f1_ceiling - f1_degraded < DAMAGE_EPS:
+                    log.debug("bakeoff: skip %r/%r (no_damage)", dataset.name, pert.name)
                     continue  # no_damage: nothing to recover, skip
                 rows = bakeoff_dataset(df, gt_pairs, degraded, proxies)
             except Exception as exc:
