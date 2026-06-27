@@ -29,6 +29,24 @@ def aggregate_members(slice_graph, anchor_surface: str, relation: str) -> set[st
     }
 
 
+def asof_object(slice_graph, anchor_surface: str, relation: str) -> str | None:
+    """The object on a (subj==seed, predicate==relation) edge present IN THIS SLICE (the slice
+    already encodes the as-of window). The aggregate traversal returning ONE object. LLM-free."""
+    seeds = slice_graph.seeds_by_name(anchor_surface)
+    if not seeds:
+        return None
+    sub = slice_graph.query(seeds, 1)
+    id_to_name = {e["entity_id"]: e["canonical_name"] for e in sub.get("entities", ())}
+    seedset = set(seeds)
+    objs = {
+        id_to_name[e["obj"]]
+        for e in sub.get("edges", ())
+        if e["subj"] in seedset and e["predicate"] == relation and e["obj"] in id_to_name
+    }
+    objs.discard(anchor_surface)
+    return next(iter(sorted(objs)), None)
+
+
 def _format_aggregate(members: set[str]) -> str:
     return ", ".join(sorted(members)) if members else "(none found)"
 
@@ -113,7 +131,18 @@ def ask(
             return _format_aggregate(
                 aggregate_members(slice_graph, profile.anchor_surface, profile.relation)
             )
-        mode = plan.mode  # fall through to the existing local/hybrid/global handling
+        if plan.mode == "as_of" and profile.anchor_surface and profile.relation and profile.as_of:
+            # the date IS the slice time -> override the caller's valid_t for this temporal query
+            try:
+                d = int(profile.as_of)
+            except ValueError:
+                d = None
+            if d is not None:
+                obj = asof_object(store.as_of(d, tx_t), profile.anchor_surface, profile.relation)
+                return obj if obj is not None else "(unknown)"
+        # clamp: a specialized plan that did NOT return must not carry an invalid mode into the
+        # `if mode not in ("local","hybrid"): raise` guard below
+        mode = plan.mode if plan.mode in ("local", "hybrid", "global") else "local"
     if mode == "global":
         communities = slice_graph.communities()[:max_communities]
         views = [slice_graph.query(c["members"], 1) for c in communities]

@@ -57,10 +57,33 @@ def test_plan_low_confidence_aggregate_falls_back():
     assert route.plan_query(p).mode in ("local", "hybrid")
 
 
-def test_plan_temporal_marked_not_yet_promoted():
-    p = route.classify_query("Who did X work for as of 2019?")
+def test_temporal_slots_extracted():
+    p = route.classify_query("As of 42, what does Metaphone works at?", predicates=_PREDS)
+    assert p.intent is route.QueryIntent.TEMPORAL_ASOF
+    assert p.anchor_surface == "Metaphone"
+    assert p.relation == "works_at"
+    assert p.as_of == "42"
+    assert p.confidence >= 0.8
+
+
+def test_temporal_multiword_anchor():
+    p = route.classify_query(
+        "As of 7, what does Levenshtein distance located in?", predicates=_PREDS
+    )
+    assert p.anchor_surface == "Levenshtein distance"
+    assert p.relation == "located_in"
+    assert p.as_of == "7"
+
+
+def test_plan_temporal_routes_to_as_of():
+    p = route.classify_query("As of 42, what does Metaphone works at?", predicates=_PREDS)
     plan = route.plan_query(p)
-    assert plan.mode == "local" and plan.note == "not_yet_promoted"
+    assert plan.mode == "as_of" and plan.note is None
+
+
+def test_plan_temporal_low_confidence_falls_back():
+    p = route.classify_query("As of 42, what does Metaphone works at?")
+    assert route.plan_query(p).mode == "local"
 
 
 def test_plan_multihop_routes_hybrid():
