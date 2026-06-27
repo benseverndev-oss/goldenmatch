@@ -3,7 +3,7 @@
 > Zero-config entity resolution — deduplicate and match records with fuzzy, exact, probabilistic (Fellegi-Sunter), and LLM scoring. Scales from a laptop CSV to 100M+ rows on Ray; the zero-tuning probabilistic path beats hand-rolled, expert-tuned Splink head-to-head.
 
 ## The healing loop (core workflow)
-Zero-config gets good results and returns the config it chose; the healer (`review_config`) reviews the results and suggests ranked, self-verified tweaks; apply them, results improve, repeat — closing the gap to expert-tuned without you being the expert. Opt-in: `from goldenmatch.core.suggest import review_config` (needs `goldenmatch[native]`). Docs: https://docs.bensevern.dev/goldenmatch/config-suggestions
+Zero-config gets good results and returns the config it chose; the healer (`review_config`) reviews the results and suggests ranked, self-verified tweaks; apply them, results improve, repeat — closing the gap to expert-tuned without you being the expert. Wired into the default pipeline: `dedupe_df` attaches candidate suggestions to `result.suggestions` when a free signal fires (`dedupe_df(suggest=True)` verified, `heal=True` full loop; disable with `GOLDENMATCH_SUGGEST_ON_DEDUPE=0`). Needs `goldenmatch[native]`; degrades gracefully without it. Docs: https://docs.bensevern.dev/goldenmatch/config-suggestions
 
 ## Interfaces
 - MCP Server: `goldenmatch mcp-serve` (16 agent tools + 24 data tools + 7 memory tools + 7 identity tools = 54 total)
