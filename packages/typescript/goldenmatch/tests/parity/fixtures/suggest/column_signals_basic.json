@@ -1,12 +1,92 @@
 {
   "rows": [
-    { "email": "alice@example.com", "name": "Alice Smith", "phone": "555-100-2000", "zip": "10001" },
-    { "email": "alice@example.com", "name": "Alice Smyth", "phone": "555-100-2000", "zip": "10001" },
-    { "email": "bob@example.com", "name": "Bob Jones", "phone": "555-300-4000", "zip": "20002" },
-    { "email": "carol@example.com", "name": "Carol White", "phone": null, "zip": "30003" }
+    {
+      "email": "alice@example.com",
+      "name": "Alice Smith",
+      "phone": "555-100-2000",
+      "zip": "10001"
+    },
+    {
+      "email": "alice@example.com",
+      "name": "Alice Smyth",
+      "phone": "555-100-2000",
+      "zip": "10001"
+    },
+    {
+      "email": "bob@example.com",
+      "name": "Bob Jones",
+      "phone": "555-300-4000",
+      "zip": "20002"
+    },
+    {
+      "email": "carol@example.com",
+      "name": "Carol White",
+      "phone": null,
+      "zip": "30003"
+    }
   ],
   "clusters": [
-    { "members": [0, 1], "size": 2, "oversized": false }
+    {
+      "members": [
+        0,
+        1
+      ],
+      "size": 2,
+      "oversized": false
+    }
   ],
-  "expected": null
+  "expected": [
+    {
+      "field": "email",
+      "col_type": "email",
+      "scorer": "",
+      "in_blocking": false,
+      "in_negative_evidence": true,
+      "identity_score": 0.95,
+      "corruption_score": 0.0,
+      "collision_rate": 0.0,
+      "cardinality_ratio": 0.75,
+      "null_rate": 0.0,
+      "variant_rate": 0.0
+    },
+    {
+      "field": "name",
+      "col_type": "name",
+      "scorer": "jaro_winkler",
+      "in_blocking": false,
+      "in_negative_evidence": false,
+      "identity_score": 0.7,
+      "corruption_score": 0.0,
+      "collision_rate": 1.0,
+      "cardinality_ratio": 1.0,
+      "null_rate": 0.0,
+      "variant_rate": 0.0
+    },
+    {
+      "field": "phone",
+      "col_type": "phone",
+      "scorer": "",
+      "in_blocking": false,
+      "in_negative_evidence": false,
+      "identity_score": 0.85,
+      "corruption_score": 0.0,
+      "collision_rate": 0.0,
+      "cardinality_ratio": 0.6666666666666666,
+      "null_rate": 0.25,
+      "variant_rate": 0.0
+    },
+    {
+      "field": "zip",
+      "col_type": "zip",
+      "scorer": "",
+      "in_blocking": true,
+      "in_negative_evidence": false,
+      "identity_score": 0.7,
+      "corruption_score": 0.0,
+      "collision_rate": 0.0,
+      "cardinality_ratio": 0.75,
+      "null_rate": 0.0,
+      "variant_rate": 0.0
+    }
+  ]
 }
