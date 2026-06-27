@@ -109,3 +109,86 @@ def goldengraph_aggregate(slice_graph, coverage, anchor_id: str, relation: str) 
             members |= coverage.get(e["obj"], set())
     members.discard(anchor_id)  # never count the anchor itself
     return members
+
+
+def passage_window_floor(docs, anchor_surfaces: set, relation: str, *,
+                         passage_k: int, surface_to_canon: dict) -> set:
+    """RAG-without-structure floor: the first `passage_k` docs mentioning ANY anchor
+    surface, extract every entity-universe surface present -> canonical set. Recall
+    is capped by the window (members past `passage_k` docs are unseen); precision is
+    low (no relation filter). Deterministic, no embedder."""
+    hits = [d for d in docs if any(a in d.text for a in anchor_surfaces)][:passage_k]
+    out: set = set()
+    for d in hits:
+        for surf, canon in surface_to_canon.items():
+            if surf in d.text:
+                out.add(canon)
+    for a in anchor_surfaces:  # the anchor is not a member of its own set
+        out.discard(surface_to_canon.get(a))
+    out.discard(None)
+    return out
+
+
+@dataclass
+class AggregationResult:
+    gg_setf1: dict        # size_bucket -> mean goldengraph set-F1
+    floor_setf1: dict     # size_bucket -> mean passage-floor set-F1
+    gg_count_acc: dict    # size_bucket -> mean goldengraph count-accuracy
+    llm_setf1: dict | None = None  # opt-in real-LLM RAG set-F1 by bucket
+
+
+def _ordered_buckets(d: dict) -> list[str]:
+    """Populated buckets in _BUCKETS order (smallest -> largest)."""
+    order = [f"{lo}-{hi}" for lo, hi in _BUCKETS]
+    return [b for b in order if b in d]
+
+
+def gate_verdicts(gg_setf1: dict, floor_setf1: dict, *, gg_threshold: float = 0.9,
+                  widen_margin: float = 0.1) -> list[tuple[str, bool, bool]]:
+    """[(label, passed, is_hard), ...]. All three are HARD."""
+    buckets = _ordered_buckets(gg_setf1)
+    size_inv = all(gg_setf1[b] >= gg_threshold for b in buckets)
+    lo_b, hi_b = (buckets[0], buckets[-1]) if len(buckets) >= 2 else (None, None)
+    collapse = bool(lo_b) and floor_setf1.get(hi_b, 0.0) < floor_setf1.get(lo_b, 0.0)
+    gap_lo = gg_setf1.get(lo_b, 0.0) - floor_setf1.get(lo_b, 0.0) if lo_b else 0.0
+    gap_hi = gg_setf1.get(hi_b, 0.0) - floor_setf1.get(hi_b, 0.0) if hi_b else 0.0
+    widen = bool(lo_b) and (gap_hi - gap_lo) >= widen_margin
+    return [
+        (f"goldengraph set-F1 >= {gg_threshold} in every size bucket", size_inv, True),
+        ("passage-floor set-F1 collapses (largest < smallest bucket)", collapse, True),
+        ("the (goldengraph - floor) gap WIDENS with set size", widen, True),
+    ]
+
+
+def gate_exit_code(res: AggregationResult) -> int:
+    failed = any(
+        not passed for _l, passed, is_hard in gate_verdicts(res.gg_setf1, res.floor_setf1)
+        if is_hard
+    )
+    return 1 if failed else 0
+
+
+def render_aggregation_md(res: AggregationResult) -> str:
+    buckets = _ordered_buckets(res.gg_setf1)
+    lines = [
+        "# GoldenGraph aggregation/set/count -- KG vs passage-window floor",
+        "",
+        "Set-F1 of the recovered member set vs gold, by gold-set-size bucket. The KG",
+        "does what RAG can't: exact traversal is size-invariant; a passage window's",
+        "recall collapses as the set outgrows it.",
+        "",
+        "| size bucket | goldengraph set-F1 | floor set-F1 | gg count-acc |",
+        "|---|---|---|---|",
+    ]
+    for b in buckets:
+        lines.append(
+            f"| {b} | {res.gg_setf1[b]:.3f} | {res.floor_setf1.get(b, 0.0):.3f} "
+            f"| {res.gg_count_acc.get(b, 0.0):.3f} |"
+        )
+    if res.llm_setf1:
+        lines += ["", "real-LLM RAG floor set-F1 (opt-in): " + ", ".join(
+            f"{b}:{res.llm_setf1.get(b, 0.0):.3f}" for b in buckets)]
+    lines += ["", "## verdicts", ""]
+    for label, passed, _hard in gate_verdicts(res.gg_setf1, res.floor_setf1):
+        lines.append(f"- [{'PASS' if passed else 'FAIL'}] {label}")
+    return "\n".join(lines) + "\n"
