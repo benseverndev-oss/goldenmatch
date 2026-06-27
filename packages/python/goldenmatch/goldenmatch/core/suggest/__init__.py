@@ -13,7 +13,7 @@ Self-verification (verify=True, the default) filters suggestions whose
 application would worsen the score distribution's unsupervised health proxy.
 See ``goldenmatch.core.suggest.health`` for the proxy formula.
 """
-from goldenmatch.core.suggest.adapter import review_config
+from goldenmatch.core.suggest.adapter import review_config, suggest_from_result
 from goldenmatch.core.suggest.apply import apply_suggestion
 from goldenmatch.core.suggest.health import suggestion_health_from_clusters
 from goldenmatch.core.suggest.types import Suggestion, SuggestionsNativeRequired
@@ -24,6 +24,7 @@ from goldenmatch.core.suggest.types import Suggestion, SuggestionsNativeRequired
 # via `from goldenmatch.core.suggest.health import suggestion_health`.
 __all__ = [
     "review_config",
+    "suggest_from_result",
     "apply_suggestion",
     "suggestion_health_from_clusters",
     "Suggestion",

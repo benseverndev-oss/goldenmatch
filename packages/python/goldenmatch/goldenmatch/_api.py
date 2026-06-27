@@ -169,6 +169,14 @@ class DedupeResult:
     # reduction_ratio, candidate/verified pair counts, and the banding params used.
     # None on all normal (accuracy-tier) runs — the no-op guarantee is tested.
     throughput_posture: dict | None = None
+    # Config-suggestion (healer) surface output. Both hold SERIALIZED DICTS in the
+    # serialize_suggestions wire shape (id/kind/target/rationale/verified/patch),
+    # NOT raw Suggestion objects. `suggestions`: default-path = unverified
+    # candidates when the free headroom trigger fires (else []); suggest=True =
+    # verified candidates. `heal_trail`: the auditable applied-suggestion trail
+    # when heal=True (else None).
+    suggestions: list = field(default_factory=list)
+    heal_trail: list | None = None
 
     def to_csv(self, path: str, which: str = "golden") -> Path:
         """Write results to CSV.
@@ -409,6 +417,8 @@ def dedupe_df(
     certify: bool = False,
     semantic_blocking: bool = False,
     throughput: Any | None = None,
+    suggest: bool = False,
+    heal: bool = False,
 ) -> DedupeResult:
     """Deduplicate a Polars DataFrame directly (no file I/O).
 
@@ -617,7 +627,7 @@ def dedupe_df(
     _native = summarize_native_dispatch(baseline=_native_baseline)
     warn_if_slow_path(_native, logger)
 
-    return DedupeResult(
+    dedupe_result = DedupeResult(
         golden=result.get("golden"),
         clusters=result.get("clusters", {}),
         dupes=result.get("dupes"),
@@ -641,6 +651,39 @@ def dedupe_df(
         ),
         throughput_posture=result.get("throughput_posture"),
     )
+
+    # Config-suggestion (healer) surface. ADVISORY — wrapped so a healer failure
+    # NEVER breaks a dedupe. The default path (no suggest=/heal=) is a no-op
+    # guarantee: maybe_suggest returns [] without a kernel call unless the free
+    # headroom trigger fires, so dedupe_result.suggestions stays [].
+    #
+    # Skip entirely on the throughput tier: it replaces fuzzy/FS scoring with
+    # sketch-then-verify, so the quality signals the healer profiles are both
+    # meaningless there AND catastrophic on corpus text — `_build_column_signals_batch`
+    # runs goldencheck `cell_quality` (O(distinct^2) Levenshtein) over the full frame,
+    # which never finishes on free-text documents (hangs past the bench timeout).
+    if throughput is not None:
+        return dedupe_result
+    try:
+        from goldenmatch.core.suggest import surface as _surface
+        if heal:
+            outcome = _surface.heal(df, dedupe_result.config)
+            dedupe_result = outcome.result if outcome.result is not None else dedupe_result
+            dedupe_result.config = outcome.config
+            trail_dicts = _surface.serialize_suggestions(outcome.trail, verified=True)
+            dedupe_result.heal_trail = trail_dicts
+            dedupe_result.suggestions = trail_dicts
+        elif suggest:
+            from goldenmatch.core.suggest.adapter import suggest_from_result
+            dedupe_result.suggestions = _surface.serialize_suggestions(
+                suggest_from_result(dedupe_result, df, verify=True), verified=True)
+        else:
+            dedupe_result.suggestions = _surface.serialize_suggestions(
+                _surface.maybe_suggest(dedupe_result, df, verify=False), verified=False)
+    except Exception:  # noqa: BLE001 - healer is advisory; never break a dedupe
+        logger.debug("config-suggestion surface skipped (error)", exc_info=True)
+
+    return dedupe_result
 
 
 def match_df(

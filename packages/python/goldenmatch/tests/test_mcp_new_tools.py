@@ -26,9 +26,9 @@ def test_total_tool_count_is_66():
     assert len(AGENT_TOOLS) == 18   # +1 retrieve_similar (#1089)
     assert len(MEMORY_TOOLS) == 7
     assert len(IDENTITY_TOOLS) == 15  # +3 MDM ops (#1114) +5 agent-memory ops (#1075/#1078)
-    assert len(_BASE_TOOLS) == 25   # +1 config_weaknesses
+    assert len(_BASE_TOOLS) == 26   # +1 config_weaknesses +1 review_config (healer)
     assert len(ROUTING_TOOLS) == 3  # plan_routing / explain_routing / lint_routing
-    assert len(TOOLS) == 68
+    assert len(TOOLS) == 69
     # No duplicate tool names across the whole surface.
     names = [t.name for t in TOOLS]
     assert len(names) == len(set(names))
@@ -41,7 +41,7 @@ def test_new_tool_names_registered():
     for new in (
         "evaluate", "analyze_blocking", "compare_clusters", "schema_match",
         "lineage", "list_runs", "rollback", "sensitivity", "incremental",
-        "identity_show", "memory_import", "config_weaknesses",
+        "identity_show", "memory_import", "config_weaknesses", "review_config",
     ):
         assert new in names, f"{new} missing from TOOLS"
 
@@ -134,6 +134,60 @@ def test_config_weaknesses(demo_file, simple_config):
     assert isinstance(result["findings"], list)
     assert isinstance(result["summary_plain"], str)
     assert "config_weaknesses" in {t.name for t in TOOLS}
+
+
+def test_review_config_serialized_suggestions(demo_file, simple_config):
+    """review_config returns the shared wire shape (stubbed kernel)."""
+    from unittest.mock import patch
+
+    from goldenmatch.core.suggest.types import Suggestion
+    from goldenmatch.mcp.server import _handle_tool, create_server
+
+    create_server([demo_file], simple_config)
+
+    fake = [
+        Suggestion(
+            id="raise_threshold:exact_email",
+            kind="threshold",
+            target="matchkeys[0].threshold",
+            current_value=0.5,
+            proposed_value=0.8,
+            rationale="Borderline merges cluster near the cutoff.",
+            predicted_effect="Fewer false merges.",
+            confidence=0.9,
+            patch={"op": "replace", "path": "matchkeys[0].threshold", "value": 0.8},
+        ),
+    ]
+    with patch("goldenmatch.core.suggest.review_config", return_value=fake):
+        result = _handle_tool("review_config", {})
+
+    assert "error" not in result
+    assert isinstance(result["suggestions"], list)
+    s = result["suggestions"][0]
+    assert s["id"] == "raise_threshold:exact_email"
+    assert s["kind"] == "threshold"
+    assert s["target"] == "matchkeys[0].threshold"
+    assert s["verified"] is True
+    assert s["patch"]["value"] == 0.8
+
+
+def test_review_config_native_required(demo_file, simple_config):
+    """review_config degrades gracefully when the native kernel is absent."""
+    from unittest.mock import patch
+
+    from goldenmatch.core.suggest.types import SuggestionsNativeRequired
+    from goldenmatch.mcp.server import _handle_tool, create_server
+
+    create_server([demo_file], simple_config)
+
+    with patch(
+        "goldenmatch.core.suggest.review_config",
+        side_effect=SuggestionsNativeRequired("install goldenmatch[native]"),
+    ):
+        result = _handle_tool("review_config", {})
+
+    assert result["suggestions"] == []
+    assert result["native_required"] is True
 
 
 # ── Base tools that are file/store based (no loaded dataset needed) ────────────

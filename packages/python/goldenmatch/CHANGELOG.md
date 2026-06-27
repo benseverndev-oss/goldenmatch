@@ -7,9 +7,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Changed
-- **Healer (config-suggestion) self-verify gate default flipped to the precision-sensitive `cohesion` proxy (`cohesion_min_edge_cap50`).** Closes the raw-vs-live gap in `review_config`: suggester-gym live recovery 0.151 -> 0.543 (now equal to the raw kernel ceiling), with zero net-negatives on real perturbations. Rollback via `GOLDENMATCH_SUGGEST_HEALTH=legacy`. New knob `GOLDENMATCH_SUGGEST_COVERAGE_CAP` (default 0.50). The healer stays opt-in (`from goldenmatch.core.suggest import review_config`, needs `goldenmatch[native]`).
+- **Healer (config-suggestion) self-verify gate default flipped to the precision-sensitive `cohesion` proxy (`cohesion_min_edge_cap50`).** Closes the raw-vs-live gap in `review_config`: suggester-gym live recovery 0.151 -> 0.543 (now equal to the raw kernel ceiling), with zero net-negatives on real perturbations. Rollback via `GOLDENMATCH_SUGGEST_HEALTH=legacy`. New knob `GOLDENMATCH_SUGGEST_COVERAGE_CAP` (default 0.50).
 
 ### Added
+- **Healer wired into the default pipeline (advisory, every surface).** `dedupe_df` now
+  checks a free controller signal (RED/YELLOW health or a score dip) on every run and,
+  only when it fires, attaches cheap raw candidate suggestions to `result.suggestions` --
+  no second pipeline run, byte-identical timing on a healthy result. Opt into the expensive
+  verified path with `dedupe_df(df, suggest=True)`, or run the full apply-and-re-run loop
+  with `dedupe_df(df, heal=True)` (reading `result.heal_trail` + the healed `result.config`).
+  The same surface ships on CLI (`--suggest` / `--heal` plus a free default-run hint), MCP
+  (`review_config` tool), A2A (`review_config` skill), REST (`GET /suggest`), web
+  (`GET /api/v1/suggest`), and the TUI (Suggestions tab). Requires `goldenmatch[native]`;
+  every surface degrades gracefully without the wheel (attaches nothing, never raises).
+  Kill-switch `GOLDENMATCH_SUGGEST_ON_DEDUPE=0`.
 - **Config-suggestions ("the healing loop") documentation** — the iterative zero-config -> returned config -> healer-suggests-tweaks -> apply -> improve -> repeat workflow is now documented at `/goldenmatch/config-suggestions`.
 
 ## [2.3.0] - 2026-06-24

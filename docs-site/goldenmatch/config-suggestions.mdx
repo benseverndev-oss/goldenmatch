@@ -27,7 +27,7 @@ GoldenMatch is built around one workflow, not a pile of knobs:
 **Zero-config gets you most of the way in one pass; the healing loop closes the gap to an expert-tuned config without you having to be the expert.** It is the user-facing expression of two project commitments: *zero-config should embarrass the alternatives*, and *out-of-the-box should approach the hand-tuned expert*.
 
 <Note>
-  The healer is available today via the Python API (`from goldenmatch.core.suggest import review_config`) and requires `goldenmatch[native]` (the suggestion kernel is compiled). It is **opt-in** — it is not yet wired into the default `dedupe_df` pipeline, and CLI / MCP surfaces are in progress. Without the native wheel it degrades to the older shallow `suggest_config` with an "install [native]" message.
+  The healer is **wired into the default pipeline**. Every `dedupe_df(df)` run now checks a free controller signal (RED/YELLOW health or a score dip) and, only when it fires, attaches cheap raw candidate suggestions to `result.suggestions` — no extra pipeline run on a healthy result. Opt into the expensive verified path with `dedupe_df(df, suggest=True)`, or run the full apply-and-re-run loop with `dedupe_df(df, heal=True)`. The same surface is on CLI (`--suggest` / `--heal`), MCP (`review_config`), A2A, REST, web, and the TUI (Suggestions tab). It requires `goldenmatch[native]` (the suggestion kernel is compiled); without the native wheel every surface **degrades gracefully** — it attaches no suggestions and never raises. Kill-switch: `GOLDENMATCH_SUGGEST_ON_DEDUPE=0`.
 </Note>
 
 ## The loop in code
@@ -54,6 +54,32 @@ for s in suggestions:
 result = dedupe_df(df, config=config)
 ```
 
+### Or let the pipeline do it for you
+
+The loop above is wired into `dedupe_df` directly, so you don't have to call `review_config` by hand:
+
+```python
+from goldenmatch import dedupe_df
+
+# Default run: free trigger gates a cheap attach. result.suggestions is
+# [] on a healthy result; on a RED/YELLOW or score-dip result it carries
+# raw candidate suggestions (cheap, unverified) you can inspect.
+result = dedupe_df(df)
+for s in result.suggestions:        # serialized dicts: id/kind/target/rationale/verified/patch
+    print(s["kind"], "->", s["rationale"])
+
+# Opt in to the expensive verified path (each candidate simulated through the gate):
+result = dedupe_df(df, suggest=True)
+
+# Or run the full apply-and-re-run loop and read the trail of what changed:
+result = dedupe_df(df, heal=True)
+for step in result.heal_trail or []:
+    print("applied", step["kind"], "->", step["rationale"])
+result.config   # the healed config, ready to persist
+```
+
+The default attach is **free on a healthy result** — the free controller signal short-circuits before the kernel is ever called. Set `GOLDENMATCH_SUGGEST_ON_DEDUPE=0` to turn the surface off entirely.
+
 ## What the healer suggests
 
 The suggestion kernel emits ranked, explainable edits, each with a rendered rationale so the loop is **never a black box**:
@@ -77,6 +103,7 @@ You can change or disable the gate:
 
 | Env var | Default | Effect |
 |---|---|---|
+| `GOLDENMATCH_SUGGEST_ON_DEDUPE` | on | Set `0` to disable the default-pipeline healer surface entirely (no trigger, no attach, on every `dedupe_df`/CLI/server run). |
 | `GOLDENMATCH_SUGGEST_HEALTH` | `cohesion` | Health proxy: `cohesion` (precision-sensitive, default) or `legacy` (recall-biased, the pre-2026-06 default). |
 | `GOLDENMATCH_SUGGEST_COHESION` | `min_edge` | Cohesion statistic: `min_edge`, `mean_bottomk_edge`, or `edge_below_cutoff_fraction`. |
 | `GOLDENMATCH_SUGGEST_COVERAGE_CAP` | `0.50` | Coverage-saturation cap for the cohesion proxy. |

@@ -2,6 +2,23 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-06-26 — Healer wired into the default pipeline (advisory, every surface)
+- New ADR [../decisions/0026-healer-default-pipeline.md](../decisions/0026-healer-default-pipeline.md):
+  the healer (`review_config`) is now part of the default `dedupe_df` pipeline as a
+  **two-stage cost-bounded advisory surface**. (1) A *free* controller trigger reads the
+  run's existing `postflight_report` (RED/YELLOW health or scoring dip ≥ 0.05) — no kernel
+  call. (2) Only on a trigger does a new artifacts-in `suggest_from_result(result, df)`
+  reuse the run's `scored_pairs`/`clusters` to attach raw candidate suggestions to
+  `result.suggestions` (no re-run). Healthy result = byte-identical timing (no-op parity).
+- Opt-in deeper paths: `dedupe_df(suggest=True)` (expensive verified gate),
+  `dedupe_df(heal=True)` (full apply-and-re-run loop → `result.heal_trail` + healed config).
+- Present on every surface: Python, CLI (`--suggest`/`--heal` + free default hint), MCP
+  (`review_config` tool), A2A (`review_config` skill), REST (`GET /suggest`), web
+  (`GET /api/v1/suggest`), TUI (Suggestions tab). Graceful-degrade without `goldenmatch[native]`
+  (attaches nothing, never raises). Kill-switch `GOLDENMATCH_SUGGEST_ON_DEDUPE=0`.
+- Stacked on the verify-gate flip (#1272): the default surface only delivers wins because
+  the gate now keeps precision fixes ([0025](../decisions/0025-healer-verify-gate-proxy.md)).
+
 ## 2026-06-26 — Healer self-verify gate: default proxy -> cohesion (#1272) + healing-loop docs
 - New ADR [../decisions/0025-healer-verify-gate-proxy.md](../decisions/0025-healer-verify-gate-proxy.md):
   the healer (`review_config`) self-verify gate's default health proxy flipped legacy -> cohesion

@@ -459,6 +459,212 @@ _MAX_VERIFY_CANDIDATES: int = 8
 # Near-zero so we only suppress genuine health regressions.
 _VERIFY_EPS: float = 1e-6
 
+# Recall-justification guard for threshold-RAISING suggestions.
+# ---------------------------------------------------------------------------
+# The default cohesion health proxy (suggestion_health_cohesion) is structurally
+# biased toward `raise_threshold`: raising a threshold mechanically removes the
+# weakest intra-cluster edges, so cohesion (min-edge) can only go UP and the
+# coverage term saturates above ~50% matched -- the proxy can essentially never
+# veto a threshold raise, even one that sheds real matches on an already-healthy,
+# high-recall config (e.g. ncvr_synthetic: cohesion 0.80->0.90 KEEP, yet F1 -7pt).
+#
+# This guard adds a recall floor SCOPED to threshold-raising suggestions: a raise
+# is suppressed only when it sheds material recall (matched-record rate) AND that
+# loss is not justified by the cohesion gain. All three conditions must hold, so
+# legitimate precision fixes -- a small shed (synthetic), or a large cohesion gain
+# that earns the shed (historical_50k) -- still pass. Env-overridable for tuning.
+def _recall_guard_params() -> tuple[float, float, float]:
+    def _f(name: str, default: float) -> float:
+        raw = os.environ.get(name, "").strip()
+        if not raw:
+            return default
+        try:
+            return float(raw)
+        except ValueError:
+            return default
+    # min recall shed to even consider vetoing; max cohesion gain that still
+    # counts as "small"; min cohesion-gain-per-recall-shed ratio to justify a shed.
+    return (
+        _f("GOLDENMATCH_SUGGEST_RECALL_MIN_SHED", 0.02),
+        _f("GOLDENMATCH_SUGGEST_RECALL_COH_ABS", 0.15),
+        _f("GOLDENMATCH_SUGGEST_RECALL_RATIO", 2.0),
+    )
+
+
+def _matched_rate(clusters: dict, n_records: int) -> float:
+    """Fraction of records in a multi-member cluster (an unsupervised recall
+    proxy). Ungated/uncapped, unlike health._coverage."""
+    if n_records <= 0:
+        return 0.0
+    matched = sum(c.get("size", 2) for c in clusters.values() if c.get("size", 1) > 1)
+    return matched / n_records
+
+
+def _raise_sheds_unjustified_recall(
+    baseline_clusters: dict, cand_clusters: dict, n_records: int
+) -> bool:
+    """True when a threshold raise sheds material recall not justified by its
+    cohesion gain -- the case the cohesion proxy is blind to."""
+    from goldenmatch.core.suggest.health import _select_cohesion
+
+    min_shed, coh_abs, ratio_min = _recall_guard_params()
+    recall_shed = _matched_rate(baseline_clusters, n_records) - _matched_rate(
+        cand_clusters, n_records
+    )
+    if recall_shed <= min_shed:
+        return False  # negligible recall loss -- not the pathology
+    coh_gain = _select_cohesion(cand_clusters) - _select_cohesion(baseline_clusters)
+    if coh_gain >= coh_abs:
+        return False  # a large cohesion gain justifies the shed
+    if coh_gain / recall_shed >= ratio_min:
+        return False  # gain-per-shed is favorable enough
+    return True
+
+
+def _parse_suggestions(raw_json: str) -> list[Suggestion]:
+    """Parse the kernel's JSON output into a list of Suggestion dataclasses.
+
+    Raises RuntimeError on JSONDecodeError; malformed individual items are
+    skipped (logged at debug)."""
+    try:
+        items = json.loads(raw_json)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"review_config: kernel returned invalid JSON: {exc}"
+        ) from exc
+
+    suggestions: list[Suggestion] = []
+    for item in items:
+        try:
+            suggestions.append(Suggestion(
+                id=str(item.get("id", "")),
+                kind=str(item.get("kind", "")),
+                target=str(item.get("target", "")),
+                current_value=item.get("current_value"),
+                proposed_value=item.get("proposed_value"),
+                rationale=str(item.get("rationale", "")),
+                predicted_effect=str(item.get("predicted_effect", "")),
+                confidence=float(item.get("confidence", 0.0)),
+                patch=dict(item.get("patch", {})),
+                evidence=dict(item.get("evidence", {})),
+            ))
+        except Exception:
+            logger.debug("Skipping malformed suggestion item: %r", item, exc_info=True)
+
+    return suggestions
+
+
+def _kernel_suggest(nm, df, config, scored_pairs, clusters, priors) -> list[Suggestion]:
+    """Build the three Arrow batches from the PASSED-IN scored_pairs/clusters/df/
+    config (no re-run), call the native ``suggest_config`` kernel, and parse the
+    result.  FULL_DIST pair selection happens in the caller, which passes the
+    chosen pairs in as ``scored_pairs``."""
+    # -- Build Arrow batches --
+    scored_pairs_batch = _build_scored_pairs_batch(scored_pairs)
+    clusters_batch = _build_clusters_batch(clusters)
+    column_signals_batch = _build_column_signals_batch(df, config, clusters)
+
+    config_json = json.dumps(_config_summary(config), default=str)
+    priors_dict = priors if priors is not None else {"counts": {}}
+    priors_json = json.dumps(priors_dict, default=str)
+
+    # -- Call the native kernel --
+    try:
+        raw_json: str = nm.suggest_config(
+            scored_pairs_batch,
+            clusters_batch,
+            column_signals_batch,
+            config_json,
+            priors_json,
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            f"review_config: native suggest_config kernel failed: {exc}"
+        ) from exc
+
+    # -- Parse results --
+    return _parse_suggestions(raw_json)
+
+
+def _verify_suggestions(suggestions, df, config, clusters, engine) -> list[Suggestion]:
+    """Self-verification pass: re-run the pipeline per candidate suggestion and
+    keep only the non-worsening ones (cand_health >= baseline_health - EPS).
+    Caps verification at ``_MAX_VERIFY_CANDIDATES``; the tail passes through
+    unverified.  Verification failures are conservative (keep the suggestion)."""
+    # Compute baseline health from the baseline run's scored pairs + threshold.
+    from goldenmatch.core.suggest.apply import apply_suggestion
+    from goldenmatch.core.suggest.health import suggestion_health_from_clusters
+
+    # Cluster-based health proxy: immune to the scored-pairs threshold-filter
+    # issue (_run_pipeline returns only pairs >= threshold, so mass_above is
+    # always 1.0 in scored_pairs -- the scored-pairs proxy is not useful here).
+    n_records = df.height
+    baseline_health = suggestion_health_from_clusters(clusters, n_records)
+    logger.debug(
+        "review_config verify: baseline_health=%.4f n_records=%d n_clusters=%d",
+        baseline_health, n_records, len(clusters),
+    )
+
+    # Cap verification at _MAX_VERIFY_CANDIDATES (cost guard)
+    candidates = suggestions[:_MAX_VERIFY_CANDIDATES]
+    tail = suggestions[_MAX_VERIFY_CANDIDATES:]  # pass through unverified if any
+
+    verified: list[Suggestion] = []
+    for s in candidates:
+        try:
+            cfg_cand = apply_suggestion(config, s)
+            # Disable rerank on the candidate config too
+            try:
+                for mk in cfg_cand.get_matchkeys():
+                    if getattr(mk, "rerank", False):
+                        mk.rerank = False
+            except Exception:
+                pass
+
+            cand_result = engine._run_pipeline(df, cfg_cand)
+            cand_health = suggestion_health_from_clusters(cand_result.clusters, n_records)
+
+            keep = cand_health >= baseline_health - _VERIFY_EPS
+            # Recall-justification guard: the cohesion proxy cannot veto a
+            # threshold raise that sheds real matches (cohesion only rises when a
+            # threshold is raised). Override KEEP->DROP when a raise sheds material
+            # recall unjustified by its cohesion gain.
+            recall_vetoed = False
+            if keep and s.kind == "raise_threshold" and _raise_sheds_unjustified_recall(
+                clusters, cand_result.clusters, n_records
+            ):
+                keep = False
+                recall_vetoed = True
+
+            logger.debug(
+                "review_config verify: suggestion %r cand_health=%.4f (baseline=%.4f) -> %s%s",
+                s.id, cand_health, baseline_health,
+                "KEEP" if keep else "DROP",
+                " (recall-guard veto)" if recall_vetoed else "",
+            )
+
+            if keep:
+                verified.append(s)
+        except Exception as exc:
+            # Verification failure is conservative: keep the suggestion
+            # (better to surface a potentially-bad suggestion than to silently
+            # suppress one that couldn't be checked).
+            logger.debug(
+                "review_config verify: suggestion %r verification failed (%s) -- keeping",
+                s.id, exc, exc_info=True,
+            )
+            verified.append(s)
+
+    # Tail (beyond _MAX_VERIFY_CANDIDATES) passes through unverified.
+    # In practice the kernel returns at most 5 suggestions so this is a no-op.
+    if tail:
+        logger.debug(
+            "review_config verify: %d suggestion(s) beyond _MAX_VERIFY_CANDIDATES=%d "
+            "passed through unverified",
+            len(tail), _MAX_VERIFY_CANDIDATES,
+        )
+    return verified + tail
+
 
 # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -556,116 +762,46 @@ def review_config(
         if diag_pairs is not None:
             pairs_for_kernel = diag_pairs
 
-    # -- Build Arrow batches --
-    scored_pairs_batch = _build_scored_pairs_batch(pairs_for_kernel)
-    clusters_batch = _build_clusters_batch(clusters)
-    column_signals_batch = _build_column_signals_batch(df, _config, clusters)
-
-    config_json = json.dumps(_config_summary(_config), default=str)
-    priors_dict = priors if priors is not None else {"counts": {}}
-    priors_json = json.dumps(priors_dict, default=str)
-
-    # -- Call the native kernel --
-    try:
-        raw_json: str = nm.suggest_config(
-            scored_pairs_batch,
-            clusters_batch,
-            column_signals_batch,
-            config_json,
-            priors_json,
-        )
-    except Exception as exc:
-        raise RuntimeError(
-            f"review_config: native suggest_config kernel failed: {exc}"
-        ) from exc
-
-    # -- Parse results --
-    try:
-        items = json.loads(raw_json)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(
-            f"review_config: kernel returned invalid JSON: {exc}"
-        ) from exc
-
-    suggestions: list[Suggestion] = []
-    for item in items:
-        try:
-            suggestions.append(Suggestion(
-                id=str(item.get("id", "")),
-                kind=str(item.get("kind", "")),
-                target=str(item.get("target", "")),
-                current_value=item.get("current_value"),
-                proposed_value=item.get("proposed_value"),
-                rationale=str(item.get("rationale", "")),
-                predicted_effect=str(item.get("predicted_effect", "")),
-                confidence=float(item.get("confidence", 0.0)),
-                patch=dict(item.get("patch", {})),
-                evidence=dict(item.get("evidence", {})),
-            ))
-        except Exception:
-            logger.debug("Skipping malformed suggestion item: %r", item, exc_info=True)
+    suggestions = _kernel_suggest(nm, df, _config, pairs_for_kernel, clusters, priors)
 
     if not _do_verify or not suggestions:
         return suggestions
 
     # -- Self-verification pass (verify=True) --
-    # Compute baseline health from the baseline run's scored pairs + threshold.
-    from goldenmatch.core.suggest.apply import apply_suggestion
-    from goldenmatch.core.suggest.health import suggestion_health_from_clusters
+    return _verify_suggestions(suggestions, df, _config, clusters, engine)
 
-    # Cluster-based health proxy: immune to the scored-pairs threshold-filter
-    # issue (_run_pipeline returns only pairs >= threshold, so mass_above is
-    # always 1.0 in scored_pairs -- the scored-pairs proxy is not useful here).
-    n_records = df.height
-    baseline_health = suggestion_health_from_clusters(clusters, n_records)
-    logger.debug(
-        "review_config verify: baseline_health=%.4f n_records=%d n_clusters=%d",
-        baseline_health, n_records, len(clusters),
-    )
 
-    # Cap verification at _MAX_VERIFY_CANDIDATES (cost guard)
-    candidates = suggestions[:_MAX_VERIFY_CANDIDATES]
-    tail = suggestions[_MAX_VERIFY_CANDIDATES:]  # pass through unverified if any
-
-    verified: list[Suggestion] = []
-    for s in candidates:
-        try:
-            cfg_cand = apply_suggestion(_config, s)
-            # Disable rerank on the candidate config too
-            try:
-                for mk in cfg_cand.get_matchkeys():
-                    if getattr(mk, "rerank", False):
-                        mk.rerank = False
-            except Exception:
-                pass
-
-            cand_result = engine._run_pipeline(df, cfg_cand)
-            cand_health = suggestion_health_from_clusters(cand_result.clusters, n_records)
-
-            logger.debug(
-                "review_config verify: suggestion %r cand_health=%.4f (baseline=%.4f) -> %s",
-                s.id, cand_health, baseline_health,
-                "KEEP" if cand_health >= baseline_health - _VERIFY_EPS else "DROP",
-            )
-
-            if cand_health >= baseline_health - _VERIFY_EPS:
-                verified.append(s)
-        except Exception as exc:
-            # Verification failure is conservative: keep the suggestion
-            # (better to surface a potentially-bad suggestion than to silently
-            # suppress one that couldn't be checked).
-            logger.debug(
-                "review_config verify: suggestion %r verification failed (%s) -- keeping",
-                s.id, exc, exc_info=True,
-            )
-            verified.append(s)
-
-    # Tail (beyond _MAX_VERIFY_CANDIDATES) passes through unverified.
-    # In practice the kernel returns at most 5 suggestions so this is a no-op.
-    if tail:
-        logger.debug(
-            "review_config verify: %d suggestion(s) beyond _MAX_VERIFY_CANDIDATES=%d "
-            "passed through unverified",
-            len(tail), _MAX_VERIFY_CANDIDATES,
-        )
-    return verified + tail
+def suggest_from_result(result, df, *, priors=None, verify=False) -> list[Suggestion]:
+    """Artifacts-in suggestion: reuse result.scored_pairs/result.clusters (NO
+    pipeline re-run for verify=False) and call the kernel directly. verify=True
+    runs the per-candidate simulation loop (which DOES re-run). Returns [] when
+    the native kernel is absent (graceful)."""
+    try:
+        nm = _require_kernel()
+    except SuggestionsNativeRequired:
+        return []
+    if "__row_id__" not in df.columns:
+        df = df.with_row_index("__row_id__").with_columns(pl.col("__row_id__").cast(pl.Int64))
+    # Deep-copy + disable rerank (mirror review_config): never mutate the caller's
+    # config, and keep the verify=True engine re-runs from triggering a HuggingFace
+    # rerank-model download offline.
+    config = copy.deepcopy(result.config)
+    try:
+        for mk in config.get_matchkeys():
+            if getattr(mk, "rerank", False):
+                mk.rerank = False
+    except Exception:
+        logger.debug("suggest_from_result: failed to disable rerank on config copy", exc_info=True)
+    clusters = result.clusters or {}
+    pairs_for_kernel = result.scored_pairs or []
+    if _full_dist_enabled():
+        from goldenmatch.tui.engine import MatchEngine
+        diag = _diagnostic_scored_pairs(MatchEngine.from_dataframe(df), df, config)
+        if diag is not None:
+            pairs_for_kernel = diag
+    suggestions = _kernel_suggest(nm, df, config, pairs_for_kernel, clusters, priors)
+    if not (verify and _verify_enabled_by_env()) or not suggestions:
+        return suggestions
+    from goldenmatch.tui.engine import MatchEngine
+    engine = MatchEngine.from_dataframe(df)
+    return _verify_suggestions(suggestions, df, config, clusters, engine)
