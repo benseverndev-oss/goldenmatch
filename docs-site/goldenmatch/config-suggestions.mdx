@@ -1,7 +1,7 @@
 ---
 title: "Config suggestions (the healing loop)"
 description: "GoldenMatch's iterative workflow: zero-config gets good results and returns the config it chose; the healer reviews the results and suggests self-verified tweaks; you apply them, results improve, repeat."
-keywords: ["config suggestions", "healer", "review_config", "iterative", "self-verify", "auto-config", "entity resolution"]
+keywords: ["config suggestions", "healer", "review_config", "iterative", "self-verify", "auto-config", "entity resolution", "typescript", "wasm"]
 ---
 
 GoldenMatch is built around one workflow, not a pile of knobs:
@@ -27,7 +27,7 @@ GoldenMatch is built around one workflow, not a pile of knobs:
 **Zero-config gets you most of the way in one pass; the healing loop closes the gap to an expert-tuned config without you having to be the expert.** It is the user-facing expression of two project commitments: *zero-config should embarrass the alternatives*, and *out-of-the-box should approach the hand-tuned expert*.
 
 <Note>
-  The healer is **wired into the default pipeline**. Every `dedupe_df(df)` run now checks a free controller signal (RED/YELLOW health or a score dip) and, only when it fires, attaches cheap raw candidate suggestions to `result.suggestions` — no extra pipeline run on a healthy result. Opt into the expensive verified path with `dedupe_df(df, suggest=True)`, or run the full apply-and-re-run loop with `dedupe_df(df, heal=True)`. The same surface is on CLI (`--suggest` / `--heal`), MCP (`review_config`), A2A, REST, web, and the TUI (Suggestions tab). It requires `goldenmatch[native]` (the suggestion kernel is compiled); without the native wheel every surface **degrades gracefully** — it attaches no suggestions and never raises. Kill-switch: `GOLDENMATCH_SUGGEST_ON_DEDUPE=0`.
+  The healer is **wired into the default pipeline**. Every `dedupe_df(df)` run now checks a free controller signal (RED/YELLOW health or a score dip) and, only when it fires, attaches cheap raw candidate suggestions to `result.suggestions` — no extra pipeline run on a healthy result. Opt into the expensive verified path with `dedupe_df(df, suggest=True)`, or run the full apply-and-re-run loop with `dedupe_df(df, heal=True)`. The same surface is on CLI (`--suggest` / `--heal`), MCP (`review_config`), A2A, REST, web, and the TUI (Suggestions tab). It requires `goldenmatch[native]` (the suggestion kernel is compiled); without the native wheel every surface **degrades gracefully** — it attaches no suggestions and never raises. Kill-switch: `GOLDENMATCH_SUGGEST_ON_DEDUPE=0`. On the TypeScript surface the same healer is the opt-in `goldenmatch/core/suggest-wasm` subpath (see [TypeScript / WASM](#typescript--wasm) below); without the WASM kernel TS degrades gracefully to empty suggestions.
 </Note>
 
 ## The loop in code
@@ -111,6 +111,47 @@ You can change or disable the gate:
 | `GOLDENMATCH_SUGGEST_FULL_DIST` | off | Source the kernel's score distribution from a threshold-0 diagnostic run so the dip (`lower_threshold`) rule sees the full pre-threshold tail. |
 
 These are also in the full [tuning reference](/goldenmatch/tuning#config-suggestion-healer-knobs).
+
+## TypeScript / WASM
+
+The healer runs on the TS/JS surface too, via the `suggest-core` kernel compiled to
+WebAssembly (`suggest-wasm`). It is the same pyo3-free kernel
+(`packages/rust/extensions/suggest-core`) as the Python native path, so a suggestion is
+byte-for-byte identical across surfaces. It is wired into `dedupe()` with full parity:
+`dedupe({ suggest })` and `dedupe({ heal })`, the same free trigger, and the same
+bounded heal loop. Every TS surface (core, CLI, MCP `review_config`, A2A
+`review_config` skill) reaches it.
+
+```typescript
+import { dedupe } from "goldenmatch";
+import { enableSuggestWasm } from "goldenmatch/core/suggest-wasm";
+
+// The WASM kernel is OPT-IN — the analog of `pip install goldenmatch[native]`.
+// Until you enable it the healer is gracefully empty (see below).
+enableSuggestWasm();
+
+const free = await dedupe(rows);          // free.suggestions: verified=false
+const verified = await dedupe(rows, { suggest: true });  // verified=true
+const healed = await dedupe(rows, { heal: true });       // healed.config + healTrail
+```
+
+- **Opt-in kernel.** The always-on healer surface reaches the kernel through a tiny
+  lean registry; the heavy WASM module is behind the opt-in subpath
+  `goldenmatch/core/suggest-wasm`. Importing it and calling `enableSuggestWasm()`
+  registers the backend. This is the exact TS analog of the Python `[native]` extra —
+  it keeps default bundles lean (no inlined wasm) and edge-safe. `disableSuggestWasm()`
+  unregisters it again.
+- **Graceful-empty without the kernel.** With no backend registered, every TS healer
+  surface returns `[]` / `undefined` and never throws — `dedupe()` works exactly as
+  before, just without suggestions. There is no hard failure for not opting in.
+- **Kill-switch / explicit options.** The default suggestion pass honors
+  `GOLDENMATCH_SUGGEST_ON_DEDUPE` (set `0` to disable) where a Node-style `process.env`
+  is available; `{ suggest: true }` / `{ heal: true }` are explicit and always run.
+
+The TS kernel is byte-for-byte the same logic as Python and Rust: the suggestion
+golden vectors authored by the `suggest-core` oracle are run against the committed
+WASM in the TS parity suite and against the Python native path, so a suggestion's
+`{input → expected}` is one shared cross-surface contract (TS == Rust == Python).
 
 ## Related
 
