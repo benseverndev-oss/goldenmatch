@@ -92,8 +92,10 @@ fn cases() -> Vec<Case> {
             config: config_one_matchkey(0.85),
             priors: priors_empty(),
         },
-        // (2) raise_threshold: every score clears a low threshold (mass_above > 0.90),
-        //     unimodal (no dip) -> a single raise_threshold suggestion.
+        // (2) raise_threshold: every score clears a low threshold (mass_above > 0.90).
+        //     Whatever the kernel emits is the oracle -- here a dip-based raise plus
+        //     the mass_above>0.90 raise (two raise_threshold suggestions). The TS/wasm
+        //     path must reproduce both byte-for-byte.
         Case {
             name: "raise_threshold",
             scored_pairs: serde_json::to_string(&serde_json::json!({
