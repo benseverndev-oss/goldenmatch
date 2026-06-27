@@ -25,6 +25,9 @@ on:
       scorecard_budget_usd:
         description: "scorecard only: hard USD cap for the whole scorecard run"
         default: "2"
+      run_aggregation_llm:
+        description: "run the slice-B1 real-LLM RAG aggregation floor (realistic confirmation of the deterministic gate)"
+        default: "false"
       engine:
         description: "all | goldengraph | lightrag | ms_graphrag | graphiti | text_rag | goldenmatch_rag | goldenmatch_entity_rag"
         default: "all"
@@ -472,9 +475,9 @@ jobs:
           if-no-files-found: ignore
 
   scorecard:
-    # Opt-in Phase-2 real-LLM scorecard (extraction-F1 + synthesis-given-gold +
-    # 4-dial answer-match ablation). Standalone; NON-gating; gated on run_scorecard.
-    if: ${{ inputs.run_scorecard == 'true' }}
+    # Opt-in real-LLM confirmation rows (NON-gating): Phase-2 scorecard
+    # (run_scorecard) and/or the slice-B1 RAG aggregation floor (run_aggregation_llm).
+    if: ${{ inputs.run_scorecard == 'true' || inputs.run_aggregation_llm == 'true' }}
     runs-on: large-new-64GB
     timeout-minutes: 120
     steps:
@@ -491,6 +494,7 @@ jobs:
           python -m pip install dist/*.whl
           python -m pip install --no-deps -e packages/python/goldengraph
       - name: Run the real-LLM scorecard (budget-capped, opt-in)
+        if: ${{ inputs.run_scorecard == 'true' }}
         working-directory: packages/python/goldenmatch/benchmarks/er-kg-bench
         env:
           OPENAI_API_KEY: ${{ secrets.GOLDENGRAPH_OPENAI_API_KEY }}
@@ -501,9 +505,30 @@ jobs:
             --budget-usd "${{ inputs.scorecard_budget_usd }}" \
             --out-md SCORECARD.md
       - name: Upload SCORECARD.md
-        if: ${{ always() }}
+        if: ${{ always() && inputs.run_scorecard == 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
         with:
           name: graphrag-qa-scorecard
           path: packages/python/goldenmatch/benchmarks/er-kg-bench/SCORECARD.md
+          if-no-files-found: ignore
+      - name: Run the real-LLM RAG aggregation floor (slice B1, opt-in)
+        if: ${{ inputs.run_aggregation_llm == 'true' }}
+        working-directory: packages/python/goldenmatch/benchmarks/er-kg-bench
+        env:
+          OPENAI_API_KEY: ${{ secrets.GOLDENGRAPH_OPENAI_API_KEY }}
+          POLARS_SKIP_CPU_CHECK: "1"
+        # --with-llm adds the realistic RAG row. This opt-in lane is NON-gating (the
+        # deterministic gate is goldengraph-pipeline's job) -> `|| true` so the gate
+        # exit code can't fail this confirmation run.
+        run: |
+          python -m erkgbench.qa_e2e.run_aggregation \
+            --seed 7 --n-anchors 60 --ambiguity 0.6 --passage-k 10 \
+            --with-llm --budget-usd "${{ inputs.scorecard_budget_usd }}" \
+            --out-md AGGREGATION_LLM.md || true
+      - name: Upload AGGREGATION_LLM.md
+        if: ${{ always() && inputs.run_aggregation_llm == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: graphrag-qa-aggregation-llm
+          path: packages/python/goldenmatch/benchmarks/er-kg-bench/AGGREGATION_LLM.md
           if-no-files-found: ignore
