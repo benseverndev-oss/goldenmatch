@@ -480,6 +480,7 @@ export async function runDedupePipeline(
     config,
     ...(postflightReport !== undefined ? { postflightReport } : {}),
     memoryStats,
+    suggestions: [],
   };
 }
 
@@ -594,5 +595,6 @@ function _emptyDedupeResult(config: GoldenMatchConfig): DedupeResult {
     },
     scoredPairs: [],
     config,
+    suggestions: [],
   };
 }
