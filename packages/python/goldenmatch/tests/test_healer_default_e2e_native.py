@@ -84,9 +84,18 @@ def test_suggest_from_result_verified_matches_review_config():
 
 
 def test_clean_data_short_circuits_without_kernel_call(monkeypatch):
-    """Cost guarantee with native PRESENT: a healthy result fires no trigger, so
-    the artifacts-in kernel call is never made on the default path."""
+    """Cost guarantee with native PRESENT: when the free trigger reports a healthy
+    result (no headroom), the artifacts-in kernel call is gated out — proving the
+    GATE, not the mere absence of native, is what prevents the call.
+
+    We force the trigger to report "healthy" rather than relying on a real dataset
+    to commit a GREEN config: a tiny all-unique frame actually commits a RED/YELLOW
+    config (nothing matches → sparse), which correctly DOES fire the trigger. The
+    cost guarantee under test is "trigger says healthy ⇒ no kernel call", so we pin
+    exactly that.
+    """
     import goldenmatch.core.suggest.adapter as ad
+    import goldenmatch.core.suggest.surface as surf
     calls = {"n": 0}
     real = ad.suggest_from_result
 
@@ -95,7 +104,9 @@ def test_clean_data_short_circuits_without_kernel_call(monkeypatch):
         return real(result, df, verify=verify)
 
     monkeypatch.setattr(ad, "suggest_from_result", _counting)
-    # Clean, well-separated data: distinct people, no corruption -> healthy run.
+    # Healthy verdict: the free trigger reports no headroom.
+    monkeypatch.setattr(surf, "headroom_signal", lambda result: None)
+
     df = pl.DataFrame({
         "name": [f"Person{i} Surname{i}" for i in range(40)],
         "email": [f"person{i}@example.com" for i in range(40)],
