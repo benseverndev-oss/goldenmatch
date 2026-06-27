@@ -13,6 +13,16 @@ on:
       max_questions:
         description: "questions to run"
         default: "300"
+      use_local_llm:
+        description: "goldengraph: run against a LOCAL Ollama OSS model (no OpenAI key, non-gating). Use a SMALL max_questions (~12) on the first run -- CPU inference is slow."
+        type: boolean
+        default: false
+      local_chat_model:
+        description: "Ollama chat model when use_local_llm=true"
+        default: "qwen2.5:7b-instruct"
+      local_embed_model:
+        description: "Ollama embedding model when use_local_llm=true"
+        default: "nomic-embed-text"
       ambiguity:
         description: "comma-separated engineered ambiguity sweep (the decay curve)"
         default: "0.0,0.25,0.5,0.75,1.0"
@@ -155,10 +165,27 @@ jobs:
             python -m pip install transformers torch
             if [ "${{ inputs.extractor }}" = "gliner" ]; then python -m pip install gliner; fi
           fi
+      - name: Start local OSS LLM (Ollama)
+        # Free, key-free real-LLM path: an OpenAI-compatible server in the runner. The goldengraph
+        # OpenAIClient honors OPENAI_BASE_URL automatically; the embedding provider honors it too
+        # (this lane's goldenmatch change). Non-gating -- the deterministic gates stay the signal.
+        if: ${{ inputs.use_local_llm }}
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          ollama serve > ollama.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf http://localhost:11434/api/version && break || sleep 2; done
+          ollama pull "${{ inputs.local_chat_model }}"
+          ollama pull "${{ inputs.local_embed_model }}"
+
       - name: Run goldengraph end-to-end (real LLM, budget-capped)
         working-directory: packages/python/goldenmatch/benchmarks/er-kg-bench
         env:
-          OPENAI_API_KEY: ${{ secrets.GOLDENGRAPH_OPENAI_API_KEY }}
+          # use_local_llm swaps the OpenAI API for the local Ollama server. Empty strings read as
+          # UNSET by the code (or-default), so the non-local path is byte-identical to before.
+          OPENAI_API_KEY: ${{ inputs.use_local_llm && 'ollama' || secrets.GOLDENGRAPH_OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ inputs.use_local_llm && 'http://localhost:11434/v1' || '' }}
+          OPENAI_MODEL: ${{ inputs.use_local_llm && inputs.local_chat_model || '' }}
+          OPENAI_EMBED_MODEL: ${{ inputs.use_local_llm && inputs.local_embed_model || '' }}
           POLARS_SKIP_CPU_CHECK: "1"
           GOLDENGRAPH_QA_TRACE: ${{ inputs.trace }}
           GOLDENGRAPH_QA_TRACE_LIMIT: ${{ inputs.trace_limit }}
