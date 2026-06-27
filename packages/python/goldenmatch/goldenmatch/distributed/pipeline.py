@@ -286,13 +286,18 @@ def _ensure_global_row_id(ds: Dataset) -> Dataset:
     if "__row_id__" in _row_columns(ds):
         return ds
 
-    # Only a real Ray Dataset supports the row-id assignment below. Stub-based
-    # wiring tests pass a bare object() whose only exercised method is the
-    # patched scorer -- leave anything without the Dataset API untouched.
-    if not (hasattr(ds, "count") and hasattr(ds, "zip")):
+    # Only a real Ray Dataset gets the row-id assignment below. In the ray-less
+    # python lane ``ds`` cannot be a real Dataset, and the mock/stub wiring tests
+    # pass a MagicMock or bare object(); a MagicMock satisfies ``hasattr`` for any
+    # attribute, so guard on the concrete type (not duck-typing) and import ray
+    # defensively -- both cases fall through to a no-op.
+    try:
+        import ray
+        from ray.data import Dataset as _RayDataset
+    except Exception:
         return ds
-
-    import ray
+    if not isinstance(ds, _RayDataset):
+        return ds
 
     logger.warning(
         "phase5: input rows carry no __row_id__; assigning a global row id "
