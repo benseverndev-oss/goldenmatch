@@ -172,3 +172,39 @@ def render_crossover_md(res: CrossoverResult) -> str:
         tag = "PASS" if passed else ("FAIL" if is_hard else "WARN")
         lines.append(f"- [{tag}] {label}{'' if is_hard else ' (soft)'}")
     return "\n".join(lines) + "\n"
+
+
+# --- opt-in real-LLM answer arms (ungated) ---
+
+
+def _map_answer_to_canon(text: str, surface_to_canon: dict) -> str | None:
+    """Longest-surface-first match of any known surface appearing in the model's text;
+    return one canonical id (sorted for determinism) or None."""
+    low = text.lower()
+    for surf in sorted(surface_to_canon, key=len, reverse=True):
+        if surf.lower() in low:
+            cands = surface_to_canon[surf]
+            return sorted(cands)[0] if cands else None
+    return None
+
+
+def llm_answer_rag(passages, question: str, llm, *, surface_to_canon: dict) -> str | None:
+    """RAG arm: answer the question from the retrieved passages; map to a canonical id."""
+    ctx = "\n".join(f"- {p}" for p in passages)
+    prompt = (
+        "Answer the question using ONLY these passages. Reply with the entity name only.\n\n"
+        f"Passages:\n{ctx}\n\nQuestion: {question}\nAnswer:"
+    )
+    out = llm.complete(prompt) or ""
+    return _map_answer_to_canon(out, surface_to_canon)
+
+
+def llm_answer_graph(triples, question: str, llm, *, surface_to_canon: dict) -> str | None:
+    """Graph arm: answer the question from resolved-subgraph triples; map to a canonical."""
+    ctx = "\n".join(f"- {s} {p} {o}" for (s, p, o) in triples)
+    prompt = (
+        "Answer the question using ONLY these facts. Reply with the entity name only.\n\n"
+        f"Facts:\n{ctx}\n\nQuestion: {question}\nAnswer:"
+    )
+    out = llm.complete(prompt) or ""
+    return _map_answer_to_canon(out, surface_to_canon)
