@@ -208,3 +208,110 @@ def llm_answer_graph(triples, question: str, llm, *, surface_to_canon: dict) -> 
     )
     out = llm.complete(prompt) or ""
     return _map_answer_to_canon(out, surface_to_canon)
+
+
+@dataclass
+class AnswerMatchResult:
+    graph: dict  # ambiguity -> {passage_k -> accuracy}
+    rag: dict    # ambiguity -> {passage_k -> accuracy}
+    budget_exhausted: bool
+
+
+def answer_match_accuracy(preds, gold) -> float:
+    if not gold:
+        return 0.0
+    hits = sum(1 for p, gd in zip(preds, gold) if p is not None and p == gd)
+    return hits / len(gold)
+
+
+def _question_text(qa, g) -> str:
+    start = g.canonical_name(qa.start_entity_id)
+    chain = " then ".join(qa.relation_chain)
+    return f"Starting from {start}, follow {chain}. What is the final entity?"
+
+
+def answer_match_grid(*, seed: int, n_questions: int, max_hops: int, llm) -> AnswerMatchResult:
+    """Opt-in real-LLM answer-match crossover. NEEDS the wheel (graph arm). Honors
+    llm.exhausted (duck-typed; short-circuits remaining cells)."""
+    from goldengraph.answer import _retrieve_local
+
+    from . import dials
+    from .ablation import _KEYFN, _build_store, _typ_of
+    from .engineered import generate_engineered
+    from .engines.goldengraph import _NODE_BUDGET, _RETRIEVAL_HOPS
+    from .gold import GoldGraph, gold_chain
+
+    graph: dict = {}
+    rag: dict = {}
+    exhausted = False
+    for a in AMBIGUITY_GRID:
+        corpus = generate_engineered(seed=seed, n_questions=n_questions, ambiguity=a, max_hops=max_hops)
+        g = GoldGraph.from_corpus(corpus)
+        s2c = dials.surface_to_canon(g)
+        typ_of = _typ_of(g)
+        km = _KEYFN["goldengraph"](corpus, g)
+        slice_graph, coverage = _build_store(corpus, g, km, typ_of)
+        seed_of: dict[str, int] = {}
+        for nid in sorted(coverage):
+            for c in coverage[nid]:
+                seed_of.setdefault(c, nid)
+        chains = {qa.id: gold_chain(g, qa) for qa in corpus.questions}
+        gold = {qa.id: (chains[qa.id][-1][2] if chains[qa.id] else None) for qa in corpus.questions}
+        questions = {qa.id: _question_text(qa, g) for qa in corpus.questions}
+        texts = {d.id: d.text for d in corpus.documents}
+
+        graph[a], rag[a] = {}, {}
+        for k in PASSAGE_K_GRID:
+            rag_preds, graph_preds, golds = [], [], []
+            for qa in corpus.questions:
+                if getattr(llm, "exhausted", False):
+                    exhausted = True
+                    break
+                golds.append(gold[qa.id])
+                topk = lexical_retrieve(corpus.documents, query_terms_for(qa, g), k)
+                rag_preds.append(
+                    llm_answer_rag([texts[i] for i in topk], questions[qa.id], llm, surface_to_canon=s2c)
+                )
+                sn = seed_of.get(qa.start_entity_id)
+                if sn is None:
+                    graph_preds.append(None)
+                else:
+                    sub = _retrieve_local(
+                        slice_graph, [sn], max_hops=_RETRIEVAL_HOPS, node_budget=_NODE_BUDGET
+                    )
+                    triples = [(e["subj"], e.get("predicate", ""), e["obj"]) for e in sub.get("edges", ())]
+                    graph_preds.append(
+                        llm_answer_graph(triples, questions[qa.id], llm, surface_to_canon=s2c)
+                    )
+            rag[a][k] = answer_match_accuracy(rag_preds, golds)
+            graph[a][k] = answer_match_accuracy(graph_preds, golds)
+            if exhausted:
+                break
+        if exhausted:
+            break
+    return AnswerMatchResult(graph=graph, rag=rag, budget_exhausted=exhausted)
+
+
+def render_answer_match_md(res: AnswerMatchResult) -> str:
+    ks = list(PASSAGE_K_GRID)
+    lines = [
+        "# GoldenGraph crossover -- answer-match (real LLM, opt-in, UNGATED)",
+        "",
+        "Does the recall crossover flow to answers? graph arm = LLM over resolved subgraph;",
+        "rag arm = LLM over top-k lexical passages. A negative (graph never overtakes RAG)",
+        "is a valid finding, not a failure.",
+        "",
+        f"budget_exhausted: {res.budget_exhausted}",
+        "",
+    ]
+    for arm, tbl in (("graph", res.graph), ("rag", res.rag)):
+        lines += [f"## {arm} answer-match", "",
+                  "| ambiguity | " + " | ".join(f"k={k}" for k in ks) + " |",
+                  "|---|" + "---|" * len(ks)]
+        for a in AMBIGUITY_GRID:
+            if a not in tbl:
+                continue
+            cells = " | ".join(f"{tbl[a].get(k, float('nan')):.3f}" for k in ks)
+            lines.append(f"| {a:.2f} | {cells} |")
+        lines.append("")
+    return "\n".join(lines) + "\n"

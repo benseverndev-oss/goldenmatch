@@ -24,7 +24,7 @@ on:
         description: "all | goldengraph | lightrag | ms_graphrag | graphiti | text_rag | goldenmatch_rag | goldenmatch_entity_rag (head_to_head mode only)"
         default: "all"
       mode:
-        description: "head_to_head | scorecard | aggregation_llm | temporal_llm | kg_capability | router_capability | extraction_f1 | synthesis_gold | retrieval_coverage"
+        description: "head_to_head | scorecard | aggregation_llm | temporal_llm | crossover_llm | kg_capability | router_capability | extraction_f1 | synthesis_gold | retrieval_coverage"
         default: "head_to_head"
       budget_usd:
         description: "hard cost cap per (engine, ambiguity) run"
@@ -544,6 +544,27 @@ jobs:
         with:
           name: graphrag-qa-temporal-llm
           path: packages/python/goldenmatch/benchmarks/er-kg-bench/TEMPORAL_LLM.md
+          if-no-files-found: ignore
+      - name: Run the real-LLM answer-match crossover (slice C, opt-in)
+        if: ${{ inputs.mode == 'crossover_llm' }}
+        working-directory: packages/python/goldenmatch/benchmarks/er-kg-bench
+        env:
+          OPENAI_API_KEY: ${{ secrets.GOLDENGRAPH_OPENAI_API_KEY }}
+          POLARS_SKIP_CPU_CHECK: "1"
+        # --with-llm adds the answer-match crossover table. NON-gating (the deterministic
+        # recall gate is goldengraph-pipeline's job) -> `|| true` so the recall gate exit
+        # code can't fail this confirmation run.
+        run: |
+          python -m erkgbench.qa_e2e.run_crossover \
+            --seed 7 --n-questions 80 \
+            --with-llm --budget-usd "$SCORECARD_BUDGET_USD" \
+            --out-md CROSSOVER.md --llm-out-md CROSSOVER_ANSWER_MATCH.md || true
+      - name: Upload CROSSOVER_ANSWER_MATCH.md
+        if: ${{ always() && inputs.mode == 'crossover_llm' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: graphrag-qa-crossover-answer-match
+          path: packages/python/goldenmatch/benchmarks/er-kg-bench/CROSSOVER_ANSWER_MATCH.md
           if-no-files-found: ignore
       - name: Real-framework KG capability confirmation (slice D, opt-in)
         if: ${{ inputs.mode == 'kg_capability' }}
