@@ -11,6 +11,7 @@ pub mod diagnostics;
 pub mod rank;
 pub mod rules;
 
+#[cfg(feature = "arrow")]
 pub use api::suggest;
 
 #[cfg(test)]

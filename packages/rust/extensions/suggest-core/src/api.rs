@@ -1,13 +1,19 @@
 //! Top-level `suggest()` entry point -- integrates all kernel modules over Arrow batches.
 
+#[cfg(feature = "arrow")]
 use arrow::record_batch::RecordBatch;
 
+#[cfg(feature = "arrow")]
 use crate::contract::{AcceptancePriors, ConfigSummary, Suggestion};
+#[cfg(feature = "arrow")]
 use crate::diagnostics::{column_signals_from_batch, ClusterDiagnostics, ScoreDiagnostics};
+#[cfg(feature = "arrow")]
 use crate::rank::rank;
+#[cfg(feature = "arrow")]
 use crate::rules::{negative_evidence_rule, scorer_swap_rule, threshold_rule};
 
 /// Bins for the score histogram feeding dip() detection.
+#[cfg(feature = "arrow")]
 const HISTOGRAM_BINS: i64 = 24;
 
 /// Main entry point for the config-suggestion kernel.
@@ -22,6 +28,7 @@ const HISTOGRAM_BINS: i64 = 24;
 /// `config_json` must serialise to `ConfigSummary`; `priors_json` to `AcceptancePriors`.
 ///
 /// Returns a JSON array of `Suggestion` objects sorted by descending ranking score.
+#[cfg(feature = "arrow")]
 pub fn suggest(
     scored_pairs: &RecordBatch,
     clusters: &RecordBatch,
@@ -78,7 +85,7 @@ pub fn suggest(
 // Tests (both unit and golden live here to avoid a dev-dependency on arrow
 // in a separate `tests/` integration crate).
 // ---------------------------------------------------------------------------
-#[cfg(test)]
+#[cfg(all(test, feature = "arrow"))]
 mod tests {
     use super::*;
     use crate::diagnostics::ColumnSignal;
