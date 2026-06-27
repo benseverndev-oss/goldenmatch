@@ -102,9 +102,9 @@ class HealOutcome:
     """The result of a bounded heal loop: the healed config, the auditable trail
     of applied suggestions (in order), and the last DedupeResult."""
 
-    config: "GoldenMatchConfig"
+    config: GoldenMatchConfig
     trail: list                       # list[Suggestion], applied in order
-    result: "DedupeResult | None"     # the last DedupeResult (None if no step ran)
+    result: DedupeResult | None       # the last DedupeResult (None if no step ran)
 
 
 _HEAL_STEP_CAP = 5
