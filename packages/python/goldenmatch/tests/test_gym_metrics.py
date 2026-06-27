@@ -1,5 +1,7 @@
 import math
+
 from scripts.suggest_quality.metrics import recovery_pct
+
 
 def test_full_recovery_is_one():
     assert abs(recovery_pct(0.70, 0.90, 0.90) - 1.0) < 1e-9

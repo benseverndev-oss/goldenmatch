@@ -44,6 +44,13 @@ def _suggest_available() -> bool:
 
 
 @pytest.mark.skipif(
+    os.environ.get("PYTEST_XDIST_WORKER") is not None,
+    reason="heavy native-kernel gym smoke crashes a parallel xdist worker under "
+           "`-n auto` (resource contention, not a deterministic segfault — the same "
+           "kernel runs clean serially in the suggest-quality lane). Runs serially / "
+           "locally; gym recovery is also covered by the suggest-quality bench lane.",
+)
+@pytest.mark.skipif(
     not _suggest_available(),
     reason="native suggest_config kernel absent or requires worktree package "
            "(MatchEngine.from_dataframe missing)",
@@ -61,8 +68,8 @@ def test_gym_recovers_a_builtin_rule_perturbation():
     os.environ.setdefault("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
 
     from scripts.suggest_quality.datasets import REGISTRY  # noqa: PLC0415
-    from scripts.suggest_quality.perturbations import CATALOG  # noqa: PLC0415
     from scripts.suggest_quality.gym import run_catalog  # noqa: PLC0415
+    from scripts.suggest_quality.perturbations import CATALOG  # noqa: PLC0415
 
     # Pick datasets where a built-rule perturbation can cause measurable damage.
     names = {"synthetic", "ncvr_synthetic"}

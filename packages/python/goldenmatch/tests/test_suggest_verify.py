@@ -21,7 +21,6 @@ import os
 import polars as pl
 import pytest
 
-
 # ── Native guard ──────────────────────────────────────────────────────────────
 
 def _native_suggest_available() -> bool:

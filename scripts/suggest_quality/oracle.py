@@ -185,7 +185,10 @@ def evaluate_dataset(
 
         # ── Step 2: Suggestions ───────────────────────────────────────────────
         try:
-            from goldenmatch.core.suggest import SuggestionsNativeRequired, review_config  # noqa: PLC0415
+            from goldenmatch.core.suggest import (  # noqa: PLC0415
+                SuggestionsNativeRequired,
+                review_config,
+            )
 
             suggestions = review_config(df, baseline_config)
             record["native_available"] = True

@@ -13,7 +13,7 @@ class _Sugg:
 
 
 def test_stops_when_no_suggestions(monkeypatch):
-    monkeypatch.setattr(C, "review_config", lambda df, cfg: [])
+    monkeypatch.setattr(C, "review_config", lambda df, cfg, verify=True: [])
     monkeypatch.setattr(C, "apply_suggestion", lambda cfg, s: cfg)
     final, trail = C.converge_unsupervised(df=object(), config={"v": 0})
     assert trail == []
@@ -21,7 +21,7 @@ def test_stops_when_no_suggestions(monkeypatch):
 
 def test_applies_until_empty(monkeypatch):
     calls = {"n": 0}
-    def fake_review(df, cfg):
+    def fake_review(df, cfg, verify=True):
         if calls["n"] >= 2: return []
         return [_Sugg(f"s{calls['n']}")]
     def fake_apply(cfg, s):
@@ -34,7 +34,7 @@ def test_applies_until_empty(monkeypatch):
 
 
 def test_cycle_guard_breaks_on_repeated_id(monkeypatch):
-    monkeypatch.setattr(C, "review_config", lambda df, cfg: [_Sugg("same")])
+    monkeypatch.setattr(C, "review_config", lambda df, cfg, verify=True: [_Sugg("same")])
     monkeypatch.setattr(C, "apply_suggestion", lambda cfg, s: cfg)
     final, trail = C.converge_unsupervised(df=object(), config={"v": 0})
     assert len(trail) == 1
@@ -42,7 +42,7 @@ def test_cycle_guard_breaks_on_repeated_id(monkeypatch):
 
 def test_respects_step_cap(monkeypatch):
     counter = {"i": 0}
-    def fake_review(df, cfg):
+    def fake_review(df, cfg, verify=True):
         counter["i"] += 1
         return [_Sugg(f"s{counter['i']}")]
     monkeypatch.setattr(C, "review_config", fake_review)

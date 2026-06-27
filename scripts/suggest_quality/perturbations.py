@@ -19,8 +19,8 @@ the intended future rule that a later kernel version would supply.
 from __future__ import annotations
 
 import copy
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 from goldenmatch.config.schemas import (
     BlockingConfig,

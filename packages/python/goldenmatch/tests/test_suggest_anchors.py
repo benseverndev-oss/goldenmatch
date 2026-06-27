@@ -245,7 +245,7 @@ def test_anchor_ncvr_address_swap_real() -> None:
     loaded = build_ncvr_df_and_gt(_root, seed=42)
     assert loaded is not None, "build_ncvr_df_and_gt returned None"
     df, ncid_pairs = loaded
-    gt = _pairs_to_row_index(df, "ncid", ncid_pairs)
+    _gt = _pairs_to_row_index(df, "ncid", ncid_pairs)
 
     zero_config = _make_zero_config_with_token_sort(df, "res_street_address")
 
@@ -338,8 +338,8 @@ def test_anchor_address_swap_token_sort_triggers_rule2() -> None:
     oracle loop and pinned to the exact Rule 2 preconditions.
     """
     import json  # noqa: PLC0415
-    import pyarrow as pa  # noqa: PLC0415
 
+    import pyarrow as pa  # noqa: PLC0415
     from goldenmatch.core._native_loader import native_module  # noqa: PLC0415
 
     nm = native_module()

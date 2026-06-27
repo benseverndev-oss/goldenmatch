@@ -6,7 +6,6 @@ import sys
 from pathlib import Path
 
 import pytest
-
 from goldenmatch.core.suggest import adapter as A
 
 # Make scripts/ importable (suggest_quality gym loader + oracle + perturbations).
@@ -39,7 +38,11 @@ def _ncvr():
 
 def _cfg():
     from goldenmatch.config.schemas import (
-        GoldenMatchConfig, MatchkeyConfig, MatchkeyField, BlockingConfig, BlockingKeyConfig,
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
     )
     mk = MatchkeyConfig(name="person", type="weighted", threshold=0.85, fields=[
         MatchkeyField(field="first_name", scorer="jaro_winkler", weight=1.0),
@@ -76,6 +79,7 @@ def test_full_dist_off_is_unchanged(monkeypatch):
     monkeypatch.delenv("GOLDENMATCH_SUGGEST_FULL_DIST", raising=False)
     monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
     from goldenmatch.core.suggest import review_config  # noqa: PLC0415
+
     from scripts.suggest_quality.oracle import _auto_configure_no_rerank  # noqa: PLC0415
     df = _ncvr()
     cfg = _auto_configure_no_rerank(df)
@@ -110,6 +114,7 @@ def test_full_dist_on_does_not_collapse_threshold_on_too_high(monkeypatch):
     monkeypatch.setenv("GOLDENMATCH_SUGGEST_FULL_DIST", "1")
     monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
     from goldenmatch.core.suggest import review_config  # noqa: PLC0415
+
     from scripts.suggest_quality.oracle import _auto_configure_no_rerank  # noqa: PLC0415
     from scripts.suggest_quality.perturbations import get as getp  # noqa: PLC0415
     df = _ncvr()
@@ -151,6 +156,7 @@ def test_full_dist_on_lowers_to_high_side_valley_when_threshold_far_above(monkey
     monkeypatch.setenv("GOLDENMATCH_SUGGEST_FULL_DIST", "1")
     monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
     from goldenmatch.core.suggest import review_config  # noqa: PLC0415
+
     from scripts.suggest_quality.oracle import _auto_configure_no_rerank  # noqa: PLC0415
     df = _ncvr()
     cfg = _auto_configure_no_rerank(df)
