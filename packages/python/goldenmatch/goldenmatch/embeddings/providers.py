@@ -98,8 +98,11 @@ class OpenAIProvider:
                 "OPENAI_API_KEY)"
             )
         payload = json.dumps({"model": self.model, "input": list(texts)}).encode()
+        # Default is OpenAI's fixed https endpoint; OPENAI_BASE_URL overrides it (e.g. a local
+        # Ollama OpenAI-compatible server). `or` (not a get default) so an EMPTY env reads as unset.
+        base = (os.environ.get("OPENAI_BASE_URL") or "https://api.openai.com/v1").rstrip("/")
         req = urllib.request.Request(
-            "https://api.openai.com/v1/embeddings",
+            f"{base}/embeddings",
             data=payload,
             headers={
                 "Authorization": f"Bearer {api_key}",
@@ -107,7 +110,7 @@ class OpenAIProvider:
             },
             method="POST",
         )
-        with urllib.request.urlopen(req) as resp:  # noqa: S310 - fixed https endpoint
+        with urllib.request.urlopen(req) as resp:  # noqa: S310 - endpoint defaults to fixed https
             body = json.loads(resp.read().decode())
         rows = sorted(body["data"], key=lambda d: d["index"])
         return np.asarray([r["embedding"] for r in rows], dtype=np.float32)
