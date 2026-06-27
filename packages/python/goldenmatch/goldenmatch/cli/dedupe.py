@@ -351,7 +351,7 @@ def dedupe_cmd(
     # trigger surfaced candidates; --suggest prints them; --heal applies the loop
     # and prints the trail. Wrapped so a healer failure NEVER breaks a dedupe.
     _emit_healer_surface(
-        file_specs, cfg,
+        file_specs, cfg, results,
         suggest=suggest, heal=heal, quiet=quiet,
         used_autoconfig=_used_autoconfig,
     )
@@ -392,26 +392,40 @@ def _render_suggestion_lines(items) -> list[str]:
 
 
 def _emit_healer_surface(
-    file_specs, cfg, *, suggest: bool, heal: bool, quiet: bool, used_autoconfig: bool
+    file_specs, cfg, results, *, suggest: bool, heal: bool, quiet: bool, used_autoconfig: bool
 ) -> None:
     """Advisory config-suggestion (healer) surface. NEVER raises.
 
-    Default run (no flags): one-line hint to stderr when candidates surfaced
-    (zero-config path only; kill-switch ``GOLDENMATCH_SUGGEST_ON_DEDUPE=0``).
-    ``--suggest``: print verified suggestions. ``--heal``: print applied trail.
+    Default run (no flags): one-line hint to stderr when the FREE headroom trigger
+    fires on the run that already happened (reads `results["postflight_report"]` --
+    NO second pipeline). Zero-config path only; kill-switch
+    ``GOLDENMATCH_SUGGEST_ON_DEDUPE=0``. ``--suggest``/``--heal`` (opt-in) DO pay a
+    `dedupe_df` re-run, because the file-based `run_dedupe` result carries no
+    `scored_pairs` for the kernel; that cost is accepted by explicit request.
     """
     import os
 
     if not (suggest or heal):
-        # Default hint: respects --quiet + the kill-switch, and only fires on the
-        # zero-config path (an explicit --config surfaces nothing -- matches the
-        # engine's free-trigger gate, which reads controller history).
-        if quiet:
+        # Default hint: FREE trigger only. Respects --quiet + kill-switch + the
+        # zero-config gate (an explicit --config never ran the controller).
+        if quiet or used_autoconfig is False:
             return
         if os.environ.get("GOLDENMATCH_SUGGEST_ON_DEDUPE", "1").strip() == "0":
             return
-        if not used_autoconfig:
-            return
+        try:
+            from goldenmatch.core.suggest.surface import headroom_signal
+
+            class _R:  # shim so headroom_signal can read .postflight_report
+                postflight_report = (results or {}).get("postflight_report")
+
+            if headroom_signal(_R()) is not None:
+                err_console.print(
+                    "[yellow]Config-improvement suggestions may be available - "
+                    "re-run with --suggest to see them, --heal to apply.[/yellow]"
+                )
+        except Exception:  # noqa: BLE001 - advisory; never break dedupe
+            pass
+        return
 
     try:
         from goldenmatch import _api
@@ -442,14 +456,6 @@ def _emit_healer_surface(
                     console.print(line)
             else:
                 console.print("No suggestions - config looks good.")
-        else:
-            result = _api.dedupe_df(df)
-            items = result.suggestions or []
-            if items:
-                err_console.print(
-                    f"[yellow]{len(items)} suggestion(s) to improve this config - "
-                    "re-run with --suggest to see them, --heal to apply.[/yellow]"
-                )
     except Exception as exc:  # noqa: BLE001 - healer is advisory; never break dedupe
         if not quiet:
             err_console.print(f"[dim]suggestions unavailable: {exc}[/dim]")

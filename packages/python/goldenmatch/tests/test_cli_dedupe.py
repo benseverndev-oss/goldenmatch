@@ -186,20 +186,22 @@ class TestHealerSurface:
         )
         monkeypatch.setattr(
             "goldenmatch.core.pipeline.run_dedupe",
-            lambda **kwargs: {"clusters": {}},
+            lambda **kwargs: {"clusters": {}, "postflight_report": object()},
         )
-        sug = {
-            "id": "thr-name", "kind": "threshold", "target": "name",
-            "rationale": "lower threshold", "verified": False, "patch": {},
-        }
+        # The default hint reads the FREE trigger off the already-run result --
+        # NO second pipeline. Force the trigger to fire.
         monkeypatch.setattr(
-            "goldenmatch._api.dedupe_df",
-            lambda df, **kwargs: self._fake_result(suggestions=[sug]),
+            "goldenmatch.core.suggest.surface.headroom_signal",
+            lambda result: object(),  # any non-None reason
         )
+        # dedupe_df must NOT be called on the default path (the cost guarantee).
+        def _boom(*a, **k):
+            raise AssertionError("dedupe_df must not run on the default hint path")
+        monkeypatch.setattr("goldenmatch._api.dedupe_df", _boom)
 
         result = runner.invoke(app, ["dedupe", str(cli_csv), "--no-tui"])
         assert result.exit_code == 0, result.stderr
-        assert "suggestion(s) to improve this config" in result.stderr
+        assert "suggestions may be available" in result.stderr
         assert "--suggest" in result.stderr
 
     def test_default_run_no_hint_with_explicit_config(
@@ -220,7 +222,7 @@ class TestHealerSurface:
         ])
         assert result.exit_code == 0, result.stderr
         assert called["n"] == 0
-        assert "suggestion(s) to improve this config" not in (result.stderr or "")
+        assert "suggestions may be available" not in (result.stderr or "")
 
 
 class TestMatchCmd:
