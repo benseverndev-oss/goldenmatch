@@ -31,16 +31,17 @@ class TestTUIApp:
 
     @pytest.mark.asyncio
     async def test_tabs_exist(self, sample_csv):
-        """All eight tab panes should be present.
+        """All nine tab panes should be present.
 
         Tabs: Data, Config, Matches, Golden, Boost, Export, Controller
-        (v1.13+), Corrections (v1.20.0 Phase 4 of #437 surface sync).
+        (v1.13+), Corrections (v1.20.0 Phase 4 of #437 surface sync),
+        Suggestions (Task 9 config-healer surface).
         """
         app = GoldenMatchApp(files=[str(sample_csv)])
         async with app.run_test() as pilot:
             await pilot.pause()
             panes = app.query("TabPane")
-            assert len(panes) == 8
+            assert len(panes) == 9
 
     @pytest.mark.asyncio
     async def test_app_launches_without_files(self):
@@ -275,3 +276,79 @@ class TestExportTab:
             from textual.widgets import Select
             sel = app.query_one("#output-format", Select)
             assert sel is not None
+
+
+class TestSuggestTab:
+    @pytest.mark.asyncio
+    async def test_suggest_tab_renders(self, sample_csv):
+        """Suggestions tab should render when switched to."""
+        from goldenmatch.tui.tabs.suggest_tab import SuggestTab
+
+        app = GoldenMatchApp(files=[str(sample_csv)])
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            tabs = app.query_one(TabbedContent)
+            tabs.active = "tab-suggest"
+            await pilot.pause()
+            assert app.query_one(SuggestTab) is not None
+
+    @pytest.mark.asyncio
+    async def test_suggest_tab_refresh_no_data_shows_status(self, sample_csv):
+        """Refresh with no config loaded shows a friendly status, not a crash."""
+        from goldenmatch.tui.tabs.suggest_tab import SuggestTab
+        from textual.widgets import Static
+
+        app = GoldenMatchApp(files=[str(sample_csv)])
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            tabs = app.query_one(TabbedContent)
+            tabs.active = "tab-suggest"
+            await pilot.pause()
+            tab = app.query_one(SuggestTab)
+            tab.action_refresh()
+            await pilot.pause()
+            status = app.query_one("#suggest-status", Static)
+            assert "Run matching first" in str(status.render())
+
+    @pytest.mark.asyncio
+    async def test_suggest_tab_lists_serialized_suggestions(
+        self, sample_csv, monkeypatch,
+    ):
+        """With data + config + a mocked healer, the table lists suggestions
+        in the shared wire shape."""
+        import goldenmatch.core.suggest as suggest_mod
+        from goldenmatch.core.suggest import Suggestion
+        from goldenmatch.tui.tabs.suggest_tab import SuggestTab
+        from textual.widgets import DataTable
+
+        sug = Suggestion(
+            id="lower_threshold",
+            kind="threshold",
+            target="matchkeys[0].threshold",
+            current_value=0.9,
+            proposed_value=0.8,
+            rationale="a dip suggests a lower threshold",
+            predicted_effect="recovers borderline matches",
+            confidence=0.7,
+            patch={"op": "replace", "path": "matchkeys[0].threshold", "value": 0.8},
+        )
+        monkeypatch.setattr(suggest_mod, "review_config", lambda df, cfg: [sug])
+
+        app = GoldenMatchApp(files=[str(sample_csv)])
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            # Give the tab a config to review (engine is loaded from files).
+            from goldenmatch.core.autoconfig import auto_configure_df
+            app.current_config = auto_configure_df(
+                app.engine.data, allow_remote_assets=False,
+            )
+            tabs = app.query_one(TabbedContent)
+            tabs.active = "tab-suggest"
+            await pilot.pause()
+            tab = app.query_one(SuggestTab)
+            tab.action_refresh()
+            await pilot.pause()
+            table = app.query_one("#suggest-table", DataTable)
+            assert table.row_count == 1
+            assert tab._suggestions[0]["id"] == "lower_threshold"
+            assert tab._suggestions[0]["verified"] is True
