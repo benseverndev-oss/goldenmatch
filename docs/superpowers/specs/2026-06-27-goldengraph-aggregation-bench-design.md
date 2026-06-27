@@ -83,14 +83,28 @@ graph", deterministic and free.
 ### The gate (free, deterministic, key-free, builds the wheel)
 
 In `goldengraph-pipeline.yml` (already builds the native wheel), mirroring #1274:
-1. **goldengraph size-invariant & high:** set-F1 >= threshold in *every* size bucket.
-2. **floor collapses:** passage-floor set-F1 in the largest size bucket is materially
-   below the smallest bucket.
-3. **the gap widens (the capability signature, HARD):** `(goldengraph - floor)` gap
-   in the largest bucket exceeds the smallest by a margin -- the assertion that *is*
-   "KG does what RAG can't".
+1. **goldengraph size-invariant & high (HARD):** set-F1 >= threshold (0.9) in *every*
+   size bucket.
+2. **large consistent gap (HARD):** `(goldengraph - floor)` set-F1 >= a margin (0.3)
+   in *every* bucket -- the assertion that *is* "KG does what RAG can't".
+3. **floor recall collapses (SOFT):** floor recall in the largest size bucket is
+   materially below the smallest (the window effect).
 
-Margins chosen from an observed run with slack.
+**MEASURED-FIRST REFRAME (run 28289519948).** The original design asserted "the gap
+*widens* with set size", hypothesizing the floor fails by RECALL (a window that can't
+hold a large scattered set). The first gate run refuted that: goldengraph set-F1 is
+1.000 at every bucket, but the floor's dominant failure is **precision, not recall**
+-- it has no relation/direction filter, so it returns everything co-mentioned with
+the anchor (the anchor's other-relation neighbours + entities that point *to* it).
+That structure-blindness is **size-independent**, so it produces a large but FLAT
+gap, not a widening one. Measured floor set-F1 = 0.315 / 0.532 / 0.483 across buckets
+(gap vs goldengraph 0.685 / 0.468 / 0.517 -- huge at every size). The recall collapse
+IS real (0.679 -> 0.399) but F1 masks it because precision rises with size. So the
+HARD signal is the large *consistent* gap (verdict 2); the recall collapse is a SOFT
+window-effect detail (verdict 3). This is a cleaner "RAG can't" claim: RAG can't do
+relation-filtered set aggregation *at any size*, not just large ones.
+
+Margins chosen from the observed run with slack.
 
 ### Opt-in real-LLM RAG confirmation (non-gating)
 

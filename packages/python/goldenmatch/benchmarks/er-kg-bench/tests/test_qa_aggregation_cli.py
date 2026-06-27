@@ -11,19 +11,20 @@ def test_parser_defaults():
     assert args.seed == 7 and args.n_anchors == 60 and args.passage_k == 10
 
 
-def test_gate_exit_code_zero_on_widening_gap():
+def test_gate_exit_code_zero_on_large_gap():
     res = AggregationResult(
         gg_setf1={"2-4": 1.0, "11-20": 1.0},
-        floor_setf1={"2-4": 0.9, "11-20": 0.3},
+        floor_setf1={"2-4": 0.3, "11-20": 0.5},  # large gap every bucket
         gg_count_acc={"2-4": 1.0, "11-20": 1.0},
+        floor_recall={"2-4": 0.68, "11-20": 0.40},  # collapse is soft
     )
     assert gate_exit_code(res) == 0
 
 
-def test_gate_exit_code_one_on_flat_gap():
+def test_gate_exit_code_one_on_small_gap():
     res = AggregationResult(
         gg_setf1={"2-4": 1.0, "11-20": 1.0},
-        floor_setf1={"2-4": 0.5, "11-20": 0.5},  # no collapse -> gap flat
+        floor_setf1={"2-4": 0.9, "11-20": 0.9},  # gap only 0.1 < 0.3 -> hard fail
         gg_count_acc={"2-4": 1.0, "11-20": 1.0},
     )
     assert gate_exit_code(res) == 1
