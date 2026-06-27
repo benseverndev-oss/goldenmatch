@@ -28,6 +28,9 @@ on:
       run_aggregation_llm:
         description: "run the slice-B1 real-LLM RAG aggregation floor (realistic confirmation of the deterministic gate)"
         default: "false"
+      run_crossover_llm:
+        description: "run the slice-C real-LLM answer-match crossover (ambiguity x passage_k)"
+        default: "false"
       engine:
         description: "all | goldengraph | lightrag | ms_graphrag | graphiti | text_rag | goldenmatch_rag | goldenmatch_entity_rag"
         default: "all"
@@ -476,8 +479,9 @@ jobs:
 
   scorecard:
     # Opt-in real-LLM confirmation rows (NON-gating): Phase-2 scorecard
-    # (run_scorecard) and/or the slice-B1 RAG aggregation floor (run_aggregation_llm).
-    if: ${{ inputs.run_scorecard == 'true' || inputs.run_aggregation_llm == 'true' }}
+    # (run_scorecard), the slice-B1 RAG aggregation floor (run_aggregation_llm),
+    # and/or the slice-C answer-match crossover (run_crossover_llm).
+    if: ${{ inputs.run_scorecard == 'true' || inputs.run_aggregation_llm == 'true' || inputs.run_crossover_llm == 'true' }}
     runs-on: large-new-64GB
     timeout-minutes: 120
     steps:
@@ -531,4 +535,25 @@ jobs:
         with:
           name: graphrag-qa-aggregation-llm
           path: packages/python/goldenmatch/benchmarks/er-kg-bench/AGGREGATION_LLM.md
+          if-no-files-found: ignore
+      - name: Run the real-LLM answer-match crossover (slice C, opt-in)
+        if: ${{ inputs.run_crossover_llm == 'true' }}
+        working-directory: packages/python/goldenmatch/benchmarks/er-kg-bench
+        env:
+          OPENAI_API_KEY: ${{ secrets.GOLDENGRAPH_OPENAI_API_KEY }}
+          POLARS_SKIP_CPU_CHECK: "1"
+        # --with-llm adds the answer-match crossover table. NON-gating (the deterministic
+        # recall gate is goldengraph-pipeline's job) -> `|| true` so the recall gate exit
+        # code can't fail this confirmation run.
+        run: |
+          python -m erkgbench.qa_e2e.run_crossover \
+            --seed 7 --n-questions 80 \
+            --with-llm --budget-usd "${{ inputs.scorecard_budget_usd }}" \
+            --out-md CROSSOVER.md --llm-out-md CROSSOVER_ANSWER_MATCH.md || true
+      - name: Upload CROSSOVER_ANSWER_MATCH.md
+        if: ${{ always() && inputs.run_crossover_llm == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: graphrag-qa-crossover-answer-match
+          path: packages/python/goldenmatch/benchmarks/er-kg-bench/CROSSOVER_ANSWER_MATCH.md
           if-no-files-found: ignore

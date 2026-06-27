@@ -27,3 +27,9 @@ def test_llm_answer_unknown_is_none():
     llm = _StubLLM("Some Bogus Entity")
     got = cx.llm_answer_rag(["irrelevant"], "q?", llm, surface_to_canon={"Apple": {"a"}})
     assert got is None
+
+
+def test_answer_match_counts_hits():
+    preds = ["a", "b", None, "d"]
+    gold = ["a", "x", "c", "d"]
+    assert cx.answer_match_accuracy(preds, gold) == 0.5  # a,d hit; b,None miss
