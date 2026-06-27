@@ -368,6 +368,21 @@ _GATE_TOLERANCES = {
     "convergence_final_f1": 0.02,  # greedy-convergence final F1
 }
 
+# (dataset, metric) pairs that are REPORTED but NOT gating. A metric here shows
+# in the table with status ADVISORY and never flips the verdict.
+#
+# ncvr_synthetic/suggester_prec: ncvr_synthetic is large enough that auto-config
+# commits a best-effort RED config under a WALL-CLOCK budget (stop_reason
+# BUDGET_TIME), so WHICH config commits — and therefore whether the suggester's
+# fix scores prec 1.0 (no/clean suggestion) or 0.0 (one spurious suggestion) —
+# varies run-to-run with CI speed, NOT with the code. Verified: across recent
+# runs on a byte-identical kernel it flips 1.0<->0.0 (~1 in 6). A wall-clock-
+# non-deterministic value can't be a hard gate; pinning a config doesn't help
+# (the committed config is RED either way). Keep it visible, don't gate on it.
+_GATE_ADVISORY = {
+    ("ncvr_synthetic", "suggester_prec"),
+}
+
 
 def _cmd_gate(
     results: dict[str, dict],
@@ -446,7 +461,9 @@ def _cmd_gate(
                 continue
 
             delta = cur - base
-            if delta < -tol:
+            if (name, metric) in _GATE_ADVISORY:
+                status = "ADVISORY"  # reported, never gates (non-deterministic)
+            elif delta < -tol:
                 status = "FAIL"
             else:
                 status = "OK"
@@ -469,7 +486,7 @@ def _cmd_gate(
     print(header)
     print(sep)
     for ds, met, base_s, cur_s, delta_s, status in rows:
-        mark = {"FAIL": "x", "OK": ".", "NEW": "+", "MISSING": "x"}.get(status, "?")
+        mark = {"FAIL": "x", "OK": ".", "NEW": "+", "MISSING": "x", "ADVISORY": "~"}.get(status, "?")
         print(
             f"  {ds:<{_COL_W}} {met:<{_MET_W}} "
             f"{base_s:>{_VAL_W}}  {cur_s:>{_VAL_W}}  {delta_s:>8}  {mark} ({status})"
@@ -482,6 +499,7 @@ def _cmd_gate(
     n_ok = sum(1 for *_, s in rows if s == "OK")
     n_new = sum(1 for *_, s in rows if s == "NEW")
     n_missing = sum(1 for *_, s in rows if s == "MISSING")
+    n_advisory = sum(1 for *_, s in rows if s == "ADVISORY")
 
     # A blessed dataset that no longer evaluates is a regression too: a real
     # break can surface as "the dataset stopped running", not just a metric
@@ -490,7 +508,7 @@ def _cmd_gate(
     print(
         f"  verdict: {verdict}  "
         f"({n_ok} ok, {n_fail} fail, {n_new} new, {n_missing} missing, "
-        f"{len(skipped)} skipped)"
+        f"{n_advisory} advisory, {len(skipped)} skipped)"
     )
     if skipped:
         print("  skipped: " + ", ".join(f"{k} ({v})" for k, v in skipped.items()))
