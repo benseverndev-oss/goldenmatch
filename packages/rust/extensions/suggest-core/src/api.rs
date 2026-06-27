@@ -159,6 +159,126 @@ pub fn suggest(
 }
 
 // ---------------------------------------------------------------------------
+// Always-compiled JSON smoke tests (NOT arrow-gated).
+//
+// The arrow-gated `mod tests` below never RUNS under a bare `cargo test`
+// (the shipping wasm configuration: no features), so `suggest_from_json` --
+// the only entry the wasm binding calls -- had zero executed coverage there.
+// These tests exercise it directly with hand-written JSON fixtures so both
+// `cargo test` (no features) and `cargo test --features arrow` run them.
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod json_smoke_tests {
+    use super::suggest_from_json;
+
+    /// Config carrying one weighted matchkey whose threshold (0.85) sits well
+    /// ABOVE the score distribution's bimodal valley near ~0.5, so a
+    /// lower_threshold/dip suggestion is plausible. The `res_street_address`
+    /// field is scored with `token_sort` so the corrupted-address signal also
+    /// makes a swap_scorer suggestion deterministic (>= 1 suggestion).
+    fn config_json() -> &'static str {
+        r#"{
+            "matchkeys": [{
+                "name": "person",
+                "kind": "weighted",
+                "threshold": 0.85,
+                "fields": [{"field": "res_street_address", "scorer": "token_sort", "weight": 1.0}]
+            }],
+            "negative_evidence": []
+        }"#
+    }
+
+    fn priors_json() -> &'static str {
+        r#"{"counts": {}}"#
+    }
+
+    /// Bimodal score distribution: a low cluster near 0.1-0.3 and a high cluster
+    /// near 0.7-0.9 with a clear gap in the middle -- feeds dip() detection.
+    fn scored_pairs_json() -> String {
+        let mut scores: Vec<f64> = Vec::new();
+        for _ in 0..20 {
+            scores.extend_from_slice(&[0.05, 0.10, 0.15, 0.20, 0.25]);
+        }
+        for _ in 0..20 {
+            scores.extend_from_slice(&[0.70, 0.75, 0.80, 0.85, 0.90]);
+        }
+        let n_pairs = scores.len();
+        serde_json::to_string(&serde_json::json!({
+            "score": scores,
+            "n_pairs": n_pairs,
+        }))
+        .unwrap()
+    }
+
+    /// A weak + oversized cluster so the recall-risk branch has cluster signal.
+    fn clusters_json() -> &'static str {
+        r#"[{"quality": "weak", "oversized": true}, {"quality": "strong", "oversized": false}]"#
+    }
+
+    /// One corrupted address column scored with token_sort (snake_case fields,
+    /// matching `ColumnSignal`). corruption_score 0.6 (>= 0.30) deterministically
+    /// triggers a swap_scorer suggestion.
+    fn column_signals_json() -> &'static str {
+        r#"[{
+            "field": "res_street_address",
+            "col_type": "address",
+            "scorer": "token_sort",
+            "in_blocking": false,
+            "in_negative_evidence": false,
+            "identity_score": 0.0,
+            "corruption_score": 0.6,
+            "collision_rate": 0.0,
+            "cardinality_ratio": 0.5,
+            "null_rate": 0.0,
+            "variant_rate": 0.0
+        }]"#
+    }
+
+    #[test]
+    fn suggest_from_json_returns_parseable_array() {
+        let out = suggest_from_json(
+            &scored_pairs_json(),
+            clusters_json(),
+            column_signals_json(),
+            config_json(),
+            priors_json(),
+        )
+        .expect("suggest_from_json should return Ok on valid input");
+
+        let suggestions: Vec<serde_json::Value> =
+            serde_json::from_str(&out).expect("payload should parse as a JSON array of suggestions");
+
+        // The corrupted-address + token_sort signal deterministically yields a
+        // swap_scorer suggestion, so the array is non-empty here.
+        assert!(
+            !suggestions.is_empty(),
+            "fixture should produce at least one suggestion, got: {out}"
+        );
+        // Each element should be a JSON object (a Suggestion).
+        assert!(
+            suggestions.iter().all(|s| s.is_object()),
+            "every suggestion should be a JSON object"
+        );
+    }
+
+    #[test]
+    fn suggest_from_json_errs_on_malformed_input() {
+        // Malformed scored_pairs_json ("not json") must surface as Err, not panic.
+        let result = suggest_from_json(
+            "not json",
+            "[]",
+            "[]",
+            config_json(),
+            priors_json(),
+        );
+        assert!(
+            result.is_err(),
+            "malformed scored_pairs JSON should return Err, got: {result:?}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests (both unit and golden live here to avoid a dev-dependency on arrow
 // in a separate `tests/` integration crate).
 // ---------------------------------------------------------------------------
