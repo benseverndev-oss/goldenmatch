@@ -96,3 +96,24 @@ jobs:
           name: goldengraph-aggregation
           path: packages/python/goldenmatch/benchmarks/er-kg-bench/AGGREGATION.md
           if-no-files-found: ignore
+
+      - name: Crossover capability gate (deterministic, key-free)
+        # Slice C: where (if anywhere) the KG overtakes passage-RAG under retrieval
+        # starvation. graph reachability is passage_k-invariant; a lexical passage floor
+        # decays as passage_k shrinks. Gates HARD on graph-flat + RAG-monotone +
+        # RAG-starts-high + a measurement-frozen crossover cell. No key.
+        working-directory: packages/python/goldenmatch/benchmarks/er-kg-bench
+        env:
+          POLARS_SKIP_CPU_CHECK: "1"
+        run: |
+          python -m pytest tests/test_qa_crossover.py -v
+          python -m erkgbench.qa_e2e.run_crossover \
+            --seed 7 --n-questions 80 --out-md CROSSOVER.md
+
+      - name: Upload CROSSOVER.md
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: goldengraph-crossover
+          path: packages/python/goldenmatch/benchmarks/er-kg-bench/CROSSOVER.md
+          if-no-files-found: ignore
