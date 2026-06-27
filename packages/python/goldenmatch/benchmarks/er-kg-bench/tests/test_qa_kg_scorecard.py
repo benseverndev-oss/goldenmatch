@@ -56,3 +56,15 @@ def test_render_md_is_ascii_and_has_both_capabilities():
     md = ks.render_scorecard_md(_good_result())
     assert md.isascii()
     assert "bridge_recall" in md and "aggregation" in md and "## verdicts" in md
+
+
+def test_framework_set_f1_scores_parsed_answers():
+    s2c = {"Apple": "a", "Widgets": "w", "Cupertino": "c"}
+    got = ks.framework_set_f1(answers=["Apple and Widgets."], golds=[{"a", "w"}], s2c=s2c)
+    assert got == 1.0  # perfect set match -> F1 1.0
+
+
+def test_framework_set_f1_partial():
+    s2c = {"Apple": "a", "Widgets": "w"}
+    got = ks.framework_set_f1(answers=["Apple only."], golds=[{"a", "w"}], s2c=s2c)
+    assert 0.0 < got < 1.0  # recall 0.5 -> F1 0.667

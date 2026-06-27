@@ -174,3 +174,75 @@ def run_scorecard_deterministic(*, seed: int, n_questions: int, n_anchors: int,
         bridge[dial] = _bridge_recall_for_dial(eng, g_e, typ_e, chains, keyfn[dial](eng, g_e))
         aggf1[dial] = _aggregation_f1_for_dial(agg, qs, g_a, typ_a, keyfn[dial](agg, g_a))
     return ScorecardResult(bridge_recall=bridge, aggregation_f1=aggf1)
+
+
+# --- opt-in real-framework confirmation lane (ungated; real LLM + infra) ---
+
+
+@dataclass
+class FrameworkResult:
+    set_f1: dict          # engine name -> mean set-F1 (or None if the engine failed/skipped)
+    budget_exhausted: bool
+
+
+def framework_set_f1(answers, golds, s2c) -> float:
+    """Mean set-F1 of parsed framework answers vs gold member sets (reuses aggregation.set_f1)."""
+    from .aggregation import set_f1
+
+    if not golds:
+        return 0.0
+    vals = [set_f1(parse_entity_set(a, s2c), g)["f1"] for a, g in zip(answers, golds)]
+    return sum(vals) / len(vals)
+
+
+def framework_aggregation_f1(*, seed: int, n_anchors: int, ambiguity: float, tracker) -> FrameworkResult:
+    """Drive each real engine over the aggregation list-questions; mean set-F1 per engine. Heavy /
+    real-LLM / infra-dependent: a per-engine failure (missing extra, infra, 429) -> None, never
+    raises. Reuses the canonical `run_qa_e2e._build_engine` constructor (engines own their LLM +
+    cost seam). `tracker` is a coarse budget guard (engines self-manage cost, so enforcement is
+    best-effort). NOT unit-tested (the pure scoring is framework_set_f1)."""
+    from . import dials
+    from .aggregation import agg_documents_corpus, generate_aggregation
+    from .gold import GoldGraph
+    from .run_qa_e2e import _build_engine
+
+    docs, qs = generate_aggregation(seed=seed, n_anchors=n_anchors, ambiguity=ambiguity)
+    corpus = agg_documents_corpus(docs)
+    g = GoldGraph.from_corpus(corpus)
+    s2c: dict = {}
+    for eid, surf, _typ in dials._entity_surfaces(g):
+        s2c.setdefault(surf, eid)  # first-wins scalar
+    list_qs = [q for q in qs if q.kind == "list"]
+    golds = [set(q.gold_members) for q in list_qs]
+
+    out: dict = {}
+    for name in ("lightrag", "ms_graphrag", "graphiti"):
+        if tracker.budget_exhausted:
+            out[name] = None
+            continue
+        try:
+            engine = _build_engine(name)
+            build = engine.build_kg(corpus)
+            answers = [engine.answer(build.handle, q.question).text for q in list_qs]
+            out[name] = framework_set_f1(answers, golds, s2c)
+        except Exception:  # missing infra / 429 / version drift -> skip this engine
+            out[name] = None
+    return FrameworkResult(set_f1=out, budget_exhausted=tracker.budget_exhausted)
+
+
+def render_framework_md(res: FrameworkResult) -> str:
+    lines = [
+        "# KG-vs-KG real-framework aggregation confirmation (real LLM, opt-in, UNGATED)",
+        "",
+        "Real LightRAG/MS-GraphRAG/Graphiti over the aggregation list-questions. Confirms the",
+        "exact-match dial model (real frameworks under-aggregate) and gives Graphiti a real",
+        "semantic-ER number. A n/a row = the engine failed to build (missing infra / 429).",
+        "",
+        f"budget_exhausted: {res.budget_exhausted}",
+        "",
+        "| framework | aggregation_setF1 |",
+        "|---|---|",
+    ]
+    for name, v in res.set_f1.items():
+        lines.append(f"| {name} | {'n/a' if v is None else f'{v:.3f}'} |")
+    return "\n".join(lines) + "\n"

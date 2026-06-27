@@ -31,6 +31,9 @@ on:
       run_temporal_llm:
         description: "run the slice-B2 real-LLM RAG temporal floor (realistic confirmation of the deterministic gate)"
         default: "false"
+      run_kg_capability:
+        description: "Slice D: real-framework aggregation confirmation (LightRAG/MS-GraphRAG/Graphiti)"
+        default: "false"
       engine:
         description: "all | goldengraph | lightrag | ms_graphrag | graphiti | text_rag | goldenmatch_rag | goldenmatch_entity_rag"
         default: "all"
@@ -480,7 +483,7 @@ jobs:
   scorecard:
     # Opt-in real-LLM confirmation rows (NON-gating): Phase-2 scorecard
     # (run_scorecard) and/or the slice-B1 RAG aggregation floor (run_aggregation_llm).
-    if: ${{ inputs.run_scorecard == 'true' || inputs.run_aggregation_llm == 'true' || inputs.run_temporal_llm == 'true' }}
+    if: ${{ inputs.run_scorecard == 'true' || inputs.run_aggregation_llm == 'true' || inputs.run_temporal_llm == 'true' || inputs.run_kg_capability == 'true' }}
     runs-on: large-new-64GB
     timeout-minutes: 120
     steps:
@@ -554,4 +557,26 @@ jobs:
         with:
           name: graphrag-qa-temporal-llm
           path: packages/python/goldenmatch/benchmarks/er-kg-bench/TEMPORAL_LLM.md
+      - name: Real-framework KG capability confirmation (slice D, opt-in)
+        if: ${{ inputs.run_kg_capability == 'true' }}
+        working-directory: packages/python/goldenmatch/benchmarks/er-kg-bench
+        env:
+          OPENAI_API_KEY: ${{ secrets.GOLDENGRAPH_OPENAI_API_KEY }}
+          POLARS_SKIP_CPU_CHECK: "1"
+        # --with-frameworks drives the real LightRAG/MS-GraphRAG/Graphiti adapters over the
+        # aggregation list-questions (confirms the exact-match dial model + a real Graphiti
+        # semantic-ER number). NON-gating (`|| true`; the deterministic gate is
+        # goldengraph-pipeline's job). Engines whose extras/infra (FalkorDB) are absent record n/a.
+        run: |
+          python -m erkgbench.qa_e2e.run_kg_scorecard \
+            --seed 7 --n-questions 80 --n-anchors 60 --ambiguity 0.6 \
+            --with-frameworks --budget-usd "${{ inputs.scorecard_budget_usd }}" \
+            --out-md KG_SCORECARD.md --frameworks-out-md KG_SCORECARD_FRAMEWORKS.md || true
+      - name: Upload KG_SCORECARD_FRAMEWORKS.md
+        if: ${{ always() && inputs.run_kg_capability == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: graphrag-qa-kg-frameworks
+          path: packages/python/goldenmatch/benchmarks/er-kg-bench/KG_SCORECARD_FRAMEWORKS.md
+          if-no-files-found: ignore
           if-no-files-found: ignore

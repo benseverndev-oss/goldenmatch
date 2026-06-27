@@ -52,7 +52,7 @@ def main(argv: list[str] | None = None) -> int:
         # engine; main() only owns the shared budget tracker.
         tracker = BudgetTracker(BudgetConfig(max_cost_usd=args.budget_usd))
         fr = framework_aggregation_f1(seed=args.seed, n_anchors=args.n_anchors,
-                                      ambiguity=args.ambiguity, tracker=tracker, model="gpt-4o-mini")
+                                      ambiguity=args.ambiguity, tracker=tracker)
         fr_md = render_framework_md(fr)
         with open(args.frameworks_out_md, "w", encoding="utf-8") as fh:
             fh.write(fr_md)
