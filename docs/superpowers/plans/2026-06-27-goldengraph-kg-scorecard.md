@@ -164,7 +164,7 @@ def test_gate_fails_when_no_moat():
 
 def test_gate_fails_when_monotonicity_violated():
     res = _good_result()
-    res.bridge_recall["exact_match"] = 0.80  # now > goldengraph 0.558
+    res.aggregation_f1["none"] = 0.50  # none > exact_match 0.45 -> mono fails (moat+inert stay green)
     assert ks.gate_exit_code(res) == 1
 
 
@@ -444,10 +444,9 @@ def main(argv: list[str] | None = None) -> int:
         from goldenmatch.core.llm_budget import BudgetTracker
 
         from .kg_scorecard import framework_aggregation_f1, render_framework_md
-        from .scorecard_llm import _BudgetedLLM
 
-        # the inner LLM client is constructed inside framework_aggregation_f1 per engine; the
-        # tracker enforces the shared budget.
+        # the inner LLM client + _BudgetedLLM wrapping happen INSIDE framework_aggregation_f1 per
+        # engine; main() only owns the shared budget tracker (do NOT import _BudgetedLLM here -- F401).
         tracker = BudgetTracker(BudgetConfig(max_cost_usd=args.budget_usd))
         fr = framework_aggregation_f1(seed=args.seed, n_anchors=args.n_anchors,
                                       ambiguity=args.ambiguity, tracker=tracker, model="gpt-4o-mini")
@@ -497,8 +496,8 @@ git commit -m "feat(er-kg-bench): slice D deterministic CLI + freeze gate consta
 
 - [ ] **Step 4: Wire the pipeline gate step**
 
-In `.github/workflows/goldengraph-pipeline.yml`, after the **"Upload AGGREGATION.md"** step (the last
-step in the `pipeline` job), add:
+In `.github/workflows/goldengraph-pipeline.yml`, after the **"Upload TEMPORAL.md"** step (the last
+step in the `pipeline` job; B2 temporal IS on main in this worktree), add:
 
 ```yaml
       - name: KG-vs-KG capability scorecard gate (deterministic, key-free)
@@ -548,10 +547,15 @@ Drives the real `engines/` adapters over the aggregation list-questions. The ada
 heavy/real-LLM/infra and NOT runnable locally; this lane is opt-in + `|| true` and expected-red until
 the OpenAI key is funded. The local test exercises only the pure `framework_set_f1` scoring helper.
 
-First READ `engines/lightrag.py`, `engines/ms_graphrag.py`, `engines/graphiti.py` + `harness.py`
-(`QAEngine` protocol: `build(...)` then `answer(question)->AnswerResult` with `.answer` text) to
-confirm the exact build/answer signatures before wiring `framework_aggregation_f1`. Capture per-engine
-build/answer failures (missing infra, 429) and record that engine as `None`, never raise.
+First READ `engines/lightrag.py`, `engines/ms_graphrag.py`, `engines/graphiti.py` + `harness.py` to
+confirm the exact signatures. The REAL contract (verified): engines are CLASSES constructed with
+`llm_model_func` + `embedding_func` (e.g. `LightRAGQAEngine(*, llm_model_func, embedding_func, ...)`);
+the build method is **`build_kg(corpus) -> BuildResult`** (has `.handle`); answering is
+**`answer(handle, question) -> AnswerResult`** whose text field is **`.text`** (NOT `.answer`). The
+cost seam is the injected counting LLM (`make_counting_llm_func` in `lightrag.py`). Build the index
+over the aggregation docs (wrapped as a corpus), ask each list-question, read `.text`. Capture
+per-engine build/answer failures (missing infra, 429, version drift) and record that engine as `None`,
+never raise.
 
 - [ ] **Step 1: Write the failing test (pure scoring helper)**
 
@@ -686,8 +690,8 @@ they are untyped STRING inputs `default: "false"`, NOT `type: boolean`):
      default: "false"
    ```
 2. Append the clause to the existing `scorecard` job `if:` (currently
-   `if: ${{ inputs.run_scorecard == 'true' || inputs.run_aggregation_llm == 'true' }}`):
-   `... || inputs.run_kg_capability == 'true' }}`.
+   `if: ${{ inputs.run_scorecard == 'true' || inputs.run_aggregation_llm == 'true' || inputs.run_temporal_llm == 'true' }}`
+   -- confirm the exact current expression before editing): append `|| inputs.run_kg_capability == 'true'`.
 3. Add a guarded step + upload (mirror the "real-LLM RAG aggregation floor" step + its upload),
    non-gating, using the SAME secret name the existing steps use (`secrets.GOLDENGRAPH_OPENAI_API_KEY`):
    ```yaml
