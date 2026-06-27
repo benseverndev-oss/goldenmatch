@@ -155,6 +155,67 @@ def synthesize_local(
     )
 
 
+_HYBRID_HEAD = (
+    "Answer the question using the PASSAGES below as the primary source of truth.\n"
+    "These questions are usually MULTI-HOP: the answer is reached by chaining facts "
+    "that may be split across several passages, and the bridge entity in the middle is "
+    "often NOT named in the question. Use the RELATIONSHIP GRAPH (entities joined by "
+    "directed, labelled relationships) as a MAP to connect facts across passages -- it "
+    "shows how entities mentioned in different passages link up, so you can carry a "
+    "bridge entity from one passage to the next. The PASSAGES are AUTHORITATIVE on the "
+    "actual facts and values; the graph is only a navigation aid -- never answer with a "
+    "graph entity that the passages contradict.\n"
+    "Work it out step by step: decompose the question into an ordered chain of "
+    "sub-questions, resolve each against the passages (using the graph to find the next "
+    "bridge entity when a passage doesn't state it directly), and carry the result "
+    "forward until you reach the answer.\n"
+    "Anchor entities (most query-relevant): {seeds}\n"
+)
+# Free-form answer instruction (UNLIKE synthesize_local's entity-only clause): the
+# passages can carry the non-entity answers (dates/numbers/phrases) the extracted
+# triples drop, so the hybrid path must not force the answer to be a graph node.
+_HYBRID_ANSWER = (
+    "Give the SHORTEST exact answer (an entity, name, date, number, or short phrase) "
+    "and nothing else on the last line, prefixed 'Answer: '. Show brief reasoning "
+    "first if helpful.\n"
+)
+_HYBRID_TAIL = "Question: {q}\n\nPassages:\n{passages}\n\nRelationship graph:\n{sub}"
+_HYBRID_PROMPT = _HYBRID_HEAD + _HYBRID_ANSWER + _HYBRID_TAIL
+
+
+def synthesize_hybrid(
+    query: str,
+    subgraph: dict,
+    passages: list[str],
+    llm: LLMClient,
+    *,
+    seed_names: list[str] | None = None,
+) -> str:
+    """Hybrid synthesis: raw retrieved PASSAGES (ground truth) + the graph subgraph
+    (a multi-hop navigation scaffold).
+
+    The bench's structural finding was that the KG is a LOSSY intermediate -- the
+    extracted triples drop the source-text fidelity that plain text-RAG keeps, which
+    is why goldengraph lost to a naive paragraph retriever. This path layers the
+    passages back in (recovering fidelity) while keeping the graph as a cross-passage
+    multi-hop map. It also FREES the answer from `synthesize_local`'s entity-only
+    constraint -- the passages can carry the date/number/phrase answers the triples
+    can't. Returns the parsed ``Answer:`` line (see `_extract_answer`)."""
+    seeds = ", ".join(dict.fromkeys(s for s in (seed_names or []) if s)) or (
+        "(none identified -- choose the most relevant entities yourself)"
+    )
+    ctx = "\n\n".join(f"[{i + 1}] {p}" for i, p in enumerate(passages)) or (
+        "(no passages retrieved)"
+    )
+    return _extract_answer(
+        llm.complete(
+            _HYBRID_PROMPT.format(
+                q=query, seeds=seeds, passages=ctx, sub=_format_subgraph(subgraph)
+            )
+        )
+    )
+
+
 def synthesize_global(query: str, community_views: list[dict], llm: LLMClient) -> str:
     summaries = [
         llm.complete(_MAP_PROMPT.format(q=query, sub=_format_subgraph(v)))

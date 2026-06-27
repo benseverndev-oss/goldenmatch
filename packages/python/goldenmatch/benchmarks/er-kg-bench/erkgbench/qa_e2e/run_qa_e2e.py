@@ -97,6 +97,31 @@ def _build_engine(name: str):
             falkordb_host=os.environ.get("FALKORDB_HOST", "localhost"),
             falkordb_port=int(os.environ.get("FALKORDB_PORT", "6379")),
         )
+    if name == "text_rag":
+        # The no-KG control: naive paragraph-retrieval RAG on the SAME models the KG
+        # engines use, so the gap is exactly what the graph buys (or costs).
+        from .engines.text_rag import TextRAGQAEngine
+
+        return TextRAGQAEngine(
+            model="gpt-4o-mini", embedding_model="text-embedding-3-large"
+        )
+    if name == "goldenmatch_rag":
+        # goldenmatch's OWN retrieval surface (retrieve_similar_records) with the SAME
+        # OpenAI embedder text_rag uses -- isolates our retrieval mechanics vs naive
+        # cosine, embedder held constant.
+        from .engines.goldenmatch_rag import GoldenmatchRAGQAEngine
+
+        return GoldenmatchRAGQAEngine(
+            model="gpt-4o-mini", embedding_model="text-embedding-3-large"
+        )
+    if name == "goldenmatch_entity_rag":
+        # goldenmatch's entity-aware RAG (retrieve -> dedupe -> canonicalize) -- the
+        # product's differentiated claim, measured for the first time.
+        from .engines.goldenmatch_rag import GoldenmatchEntityRAGQAEngine
+
+        return GoldenmatchEntityRAGQAEngine(
+            model="gpt-4o-mini", embedding_model="text-embedding-3-large"
+        )
     raise SystemExit(f"unknown engine: {name}")
 
 

@@ -20,8 +20,14 @@ on:
         description: "hard cost cap per (engine, ambiguity) run"
         default: "25"
       engine:
-        description: "all | goldengraph | lightrag | ms_graphrag | graphiti"
+        description: "all | goldengraph | lightrag | ms_graphrag | graphiti | text_rag | goldenmatch_rag | goldenmatch_entity_rag"
         default: "all"
+      text_rag_top_k:
+        description: "text_rag only: passages retrieved per question (the naive-RAG no-KG baseline's context budget)"
+        default: "10"
+      goldenmatch_rag_top_k:
+        description: "goldenmatch_rag / goldenmatch_entity_rag only: records retrieved per question via goldenmatch's own retrieval surface"
+        default: "10"
       trace:
         description: "goldengraph only: localize where each answer is lost (extraction/retrieval/synthesis)"
         default: "false"
@@ -60,6 +66,12 @@ on:
       retrieval_node_budget:
         description: "goldengraph only: max entities in the answer ball (RETRIEVAL-BUDGET sweep; bigger = more reach + cost)"
         default: "256"
+      goldengraph_qa_mode:
+        description: "goldengraph only: answer retrieval mode -- local (entity-graph BFS) | hybrid (BFS + goldenmatch passage retrieval fed to synthesis)"
+        default: "local"
+      goldengraph_passage_k:
+        description: "goldengraph hybrid only: raw passages retrieved per question (matches text_rag/goldenmatch_rag context budget)"
+        default: "10"
       distill_log:
         description: "goldengraph only: capture (text->extraction)+(entity->fingerprint) pairs to a JSONL artifact for in-house distillation"
         default: "false"
@@ -139,6 +151,8 @@ jobs:
           GOLDENGRAPH_LITERAL_ATTRS: ${{ inputs.literal_attrs }}
           GOLDENGRAPH_QA_RETRIEVAL_HOPS: ${{ inputs.retrieval_hops }}
           GOLDENGRAPH_QA_NODE_BUDGET: ${{ inputs.retrieval_node_budget }}
+          GOLDENGRAPH_QA_MODE: ${{ inputs.goldengraph_qa_mode }}
+          GOLDENGRAPH_QA_PASSAGE_K: ${{ inputs.goldengraph_passage_k }}
           GOLDENGRAPH_DISTILL_LOG: ${{ inputs.distill_log == 'true' && format('results/distill_goldengraph_amb{0}.jsonl', matrix.ambiguity) || '' }}
         run: |
           mkdir -p results
@@ -203,6 +217,126 @@ jobs:
         with:
           name: graphrag-qa-results-lightrag-amb${{ matrix.ambiguity }}
           path: packages/python/goldenmatch/benchmarks/er-kg-bench/results/results_qa_e2e_lightrag_amb${{ matrix.ambiguity }}*.*
+          if-no-files-found: ignore
+
+  text_rag:
+    needs: setup
+    if: ${{ inputs.engine == 'all' || inputs.engine == 'text_rag' }}
+    runs-on: ubuntu-latest  # no KG build -- just embeddings + chat; the light lane
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        ambiguity: ${{ fromJSON(needs.setup.outputs.ambiguities) }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Install text-RAG baseline deps (isolated)
+        run: python -m pip install --upgrade pip pytest numpy goldenmatch datasets openai
+      - name: Run text-RAG baseline end-to-end (real LLM, budget-capped)
+        working-directory: packages/python/goldenmatch/benchmarks/er-kg-bench
+        env:
+          OPENAI_API_KEY: ${{ secrets.GOLDENGRAPH_OPENAI_API_KEY }}
+          POLARS_SKIP_CPU_CHECK: "1"
+          TEXT_RAG_TOP_K: ${{ inputs.text_rag_top_k }}
+        run: |
+          python -m erkgbench.qa_e2e.run_qa_e2e \
+            --engine text_rag \
+            --corpus "${{ inputs.corpus }}" \
+            --max-questions "${{ inputs.max_questions }}" \
+            --ambiguity "${{ matrix.ambiguity }}" \
+            --budget-usd "${{ inputs.budget_usd }}" \
+            ${{ inputs.judge == 'true' && '--judge' || '' }} \
+            --out-md "results/RESULTS_QA_E2E_text_rag_amb${{ matrix.ambiguity }}.md" \
+            --out-json "results/results_qa_e2e_text_rag_amb${{ matrix.ambiguity }}.json"
+      - name: Upload results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: graphrag-qa-results-text_rag-amb${{ matrix.ambiguity }}
+          path: packages/python/goldenmatch/benchmarks/er-kg-bench/results/results_qa_e2e_text_rag_amb${{ matrix.ambiguity }}*.*
+          if-no-files-found: ignore
+
+  goldenmatch_rag:
+    needs: setup
+    if: ${{ inputs.engine == 'all' || inputs.engine == 'goldenmatch_rag' }}
+    runs-on: ubuntu-latest  # goldenmatch retrieval (embed + ANN), no KG build -- light lane
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        ambiguity: ${{ fromJSON(needs.setup.outputs.ambiguities) }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Install goldenmatch + datasets (isolated)
+        run: python -m pip install --upgrade pip pytest numpy goldenmatch datasets openai
+      - name: Run goldenmatch-RAG end-to-end (real LLM, budget-capped)
+        working-directory: packages/python/goldenmatch/benchmarks/er-kg-bench
+        env:
+          OPENAI_API_KEY: ${{ secrets.GOLDENGRAPH_OPENAI_API_KEY }}
+          POLARS_SKIP_CPU_CHECK: "1"
+          GOLDENMATCH_RAG_TOP_K: ${{ inputs.goldenmatch_rag_top_k }}
+        run: |
+          python -m erkgbench.qa_e2e.run_qa_e2e \
+            --engine goldenmatch_rag \
+            --corpus "${{ inputs.corpus }}" \
+            --max-questions "${{ inputs.max_questions }}" \
+            --ambiguity "${{ matrix.ambiguity }}" \
+            --budget-usd "${{ inputs.budget_usd }}" \
+            ${{ inputs.judge == 'true' && '--judge' || '' }} \
+            --out-md "results/RESULTS_QA_E2E_goldenmatch_rag_amb${{ matrix.ambiguity }}.md" \
+            --out-json "results/results_qa_e2e_goldenmatch_rag_amb${{ matrix.ambiguity }}.json"
+      - name: Upload results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: graphrag-qa-results-goldenmatch_rag-amb${{ matrix.ambiguity }}
+          path: packages/python/goldenmatch/benchmarks/er-kg-bench/results/results_qa_e2e_goldenmatch_rag_amb${{ matrix.ambiguity }}*.*
+          if-no-files-found: ignore
+
+  goldenmatch_entity_rag:
+    needs: setup
+    if: ${{ inputs.engine == 'all' || inputs.engine == 'goldenmatch_entity_rag' }}
+    runs-on: ubuntu-latest  # goldenmatch entity-aware retrieval (retrieve -> dedupe -> canonicalize)
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        ambiguity: ${{ fromJSON(needs.setup.outputs.ambiguities) }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Install goldenmatch + datasets (isolated)
+        run: python -m pip install --upgrade pip pytest numpy goldenmatch datasets openai
+      - name: Run goldenmatch entity-aware RAG end-to-end (real LLM, budget-capped)
+        working-directory: packages/python/goldenmatch/benchmarks/er-kg-bench
+        env:
+          OPENAI_API_KEY: ${{ secrets.GOLDENGRAPH_OPENAI_API_KEY }}
+          POLARS_SKIP_CPU_CHECK: "1"
+          GOLDENMATCH_RAG_TOP_K: ${{ inputs.goldenmatch_rag_top_k }}
+        run: |
+          python -m erkgbench.qa_e2e.run_qa_e2e \
+            --engine goldenmatch_entity_rag \
+            --corpus "${{ inputs.corpus }}" \
+            --max-questions "${{ inputs.max_questions }}" \
+            --ambiguity "${{ matrix.ambiguity }}" \
+            --budget-usd "${{ inputs.budget_usd }}" \
+            ${{ inputs.judge == 'true' && '--judge' || '' }} \
+            --out-md "results/RESULTS_QA_E2E_goldenmatch_entity_rag_amb${{ matrix.ambiguity }}.md" \
+            --out-json "results/results_qa_e2e_goldenmatch_entity_rag_amb${{ matrix.ambiguity }}.json"
+      - name: Upload results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: graphrag-qa-results-goldenmatch_entity_rag-amb${{ matrix.ambiguity }}
+          path: packages/python/goldenmatch/benchmarks/er-kg-bench/results/results_qa_e2e_goldenmatch_entity_rag_amb${{ matrix.ambiguity }}*.*
           if-no-files-found: ignore
 
   ms_graphrag:
@@ -292,7 +426,7 @@ jobs:
           if-no-files-found: ignore
 
   aggregate:
-    needs: [goldengraph, lightrag, ms_graphrag, graphiti]
+    needs: [goldengraph, lightrag, ms_graphrag, graphiti, text_rag, goldenmatch_rag, goldenmatch_entity_rag]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
