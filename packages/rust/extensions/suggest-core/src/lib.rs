@@ -13,6 +13,7 @@ pub mod rules;
 
 #[cfg(feature = "arrow")]
 pub use api::suggest;
+pub use api::suggest_from_json;
 
 #[cfg(test)]
 mod tests {
