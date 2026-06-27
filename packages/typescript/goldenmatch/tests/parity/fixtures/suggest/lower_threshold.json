@@ -5,18 +5,18 @@
       "current_value": "0.85",
       "evidence": {
         "current": 0.85,
-        "dip": 0.15625
+        "dip": 0.7583333333333333
       },
       "id": "thr:dip:person",
       "kind": "lower_threshold",
       "patch": {
         "matchkey": "person",
         "op": "set_threshold",
-        "value": 0.16
+        "value": 0.76
       },
       "predicted_effect": "recall_up",
-      "proposed_value": "0.16",
-      "rationale": "Pair scores split into two groups with a gap near 0.16, but the `person` threshold sits at 0.85. Moving it to 0.16 separates the two groups cleanly.",
+      "proposed_value": "0.76",
+      "rationale": "Pair scores split into two groups with a gap near 0.76, but the `person` threshold sits at 0.85. Moving it to 0.76 separates the two groups cleanly.",
       "target": "person"
     }
   ],

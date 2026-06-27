@@ -58,7 +58,11 @@ goldenmatch-perceptual-core = { path = "../perceptual-core" }
 goldenmatch-autoconfig-core = { path = "../autoconfig-core" }
 # Config-suggestion kernel — ingests a finished run's Arrow artifacts and
 # emits ranked config adjustments. Thin PyO3 shim in suggest.rs delegates here.
-goldenmatch-suggest-core = { path = "../suggest-core" }
+# `arrow` feature required: native/src/suggest.rs calls the arrow-gated
+# `goldenmatch_suggest_core::suggest()`. suggest-core's `arrow` is optional
+# (default-off) so the wasm consumer stays arrow-free; the native wheel must
+# opt in or the maturin build fails (suggest() not compiled).
+goldenmatch-suggest-core = { path = "../suggest-core", features = ["arrow"] }
 serde_json = "1"
 rayon = "1.12.0"
 # CLK bloom-filter hashing (bloom.rs) -- MUST match Python hashlib.sha256 /
