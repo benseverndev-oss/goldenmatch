@@ -39,6 +39,9 @@ class RouterResult:
     temporal_slot_acc: float = 1.0
     temporal_past_acc: float = 1.0
     temporal_current_acc: float = 1.0
+    # NL paraphrase / LLM-tier (slice 3); defaults keep slice-1/2 constructions valid
+    heuristic_paraphrase_acc: float = 0.0
+    stub_escalation_acc: float = 1.0
 
 
 # frozen from the first measured run (verify-then-freeze)
@@ -48,6 +51,8 @@ ROUTED_SETF1_MIN = 0.99
 TEMPORAL_RECALL_MIN = 0.99
 TEMPORAL_SLOT_MIN = 0.99
 TEMPORAL_ACC_MIN = 0.99
+HEURISTIC_PARAPHRASE_CEIL = 0.2   # heuristic must route <= this fraction of paraphrases correctly
+STUB_ESCALATION_MIN = 0.99        # an oracle tier-2 must recover all paraphrases
 
 
 def evaluate_assertions(res: RouterResult):
@@ -64,6 +69,10 @@ def evaluate_assertions(res: RouterResult):
          res.temporal_slot_acc >= TEMPORAL_SLOT_MIN, True),
         (f"routed as-of-accuracy past={res.temporal_past_acc:.3f} current={res.temporal_current_acc:.3f} (both >= {TEMPORAL_ACC_MIN})",
          res.temporal_past_acc >= TEMPORAL_ACC_MIN and res.temporal_current_acc >= TEMPORAL_ACC_MIN, True),
+        (f"heuristic MISSES paraphrases (acc {res.heuristic_paraphrase_acc:.3f} <= {HEURISTIC_PARAPHRASE_CEIL})",
+         res.heuristic_paraphrase_acc <= HEURISTIC_PARAPHRASE_CEIL, True),
+        (f"stub tier-2 RECOVERS paraphrases (acc {res.stub_escalation_acc:.3f} >= {STUB_ESCALATION_MIN})",
+         res.stub_escalation_acc >= STUB_ESCALATION_MIN, True),
     ]
 
 
@@ -182,6 +191,59 @@ def first_known_name(text: str, universe: set) -> str | None:
     return min(hits)[1] if hits else None
 
 
+# --- NL paraphrase / LLM-tier escalation (slice 3) ---
+
+
+class StubClassifier:
+    """Deterministic tier-2 ORACLE: paraphrase question -> a high-confidence QueryProfile from its
+    gold slots. confidence=1.0 is REQUIRED so resolve_profile/plan_query accept it."""
+
+    def __init__(self, paraphrases):
+        from goldengraph.route import QueryProfile
+
+        self._m = {
+            pp.question: QueryProfile(intent=pp.intent, anchor_surface=pp.anchor_surface,
+                                      relation=pp.relation, as_of=pp.as_of, confidence=1.0)
+            for pp in paraphrases
+        }
+
+    def classify(self, query, *, predicates=None):
+        from goldengraph.route import QueryIntent, QueryProfile
+
+        return self._m.get(query, QueryProfile(QueryIntent.MULTI_HOP, confidence=0.0))
+
+
+def _profile_matches(p, pp) -> bool:
+    return (p.intent is pp.intent and p.anchor_surface == pp.anchor_surface
+            and p.relation == pp.relation and (p.as_of or None) == (pp.as_of or None))
+
+
+def heuristic_paraphrase_accuracy() -> float:
+    from goldengraph.route import classify_query
+
+    from .router_paraphrases import PARAPHRASES
+
+    preds = set(RELATION_SCHEMA)
+    hits = sum(_profile_matches(classify_query(pp.question, predicates=preds), pp) for pp in PARAPHRASES)
+    return hits / (len(PARAPHRASES) or 1)
+
+
+def stub_escalation_accuracy() -> float:
+    from goldengraph.route import plan_query, resolve_profile
+
+    from .router_paraphrases import PARAPHRASES
+
+    preds = set(RELATION_SCHEMA)
+    stub = StubClassifier(PARAPHRASES)
+    hits = 0
+    for pp in PARAPHRASES:
+        p = resolve_profile(pp.question, predicates=preds, llm_classifier=stub)
+        want = "aggregate" if pp.intent.name == "AGGREGATE" else "as_of"
+        if _profile_matches(p, pp) and plan_query(p).mode == want:
+            hits += 1
+    return hits / (len(PARAPHRASES) or 1)
+
+
 def run_router_deterministic(*, seed: int, n_anchors: int) -> RouterResult:
     acc = classifier_accuracy(seed=seed, n_anchors=n_anchors, ambiguity=0.0)
     routed = run_routed_correctness(seed=seed, n_anchors=n_anchors)
@@ -199,6 +261,8 @@ def run_router_deterministic(*, seed: int, n_anchors: int) -> RouterResult:
         temporal_slot_acc=tacc["temporal_slot_acc"],
         temporal_past_acc=tr.get("past", 0.0),
         temporal_current_acc=tr.get("current", 0.0),
+        heuristic_paraphrase_acc=heuristic_paraphrase_accuracy(),
+        stub_escalation_acc=stub_escalation_accuracy(),
     )
 
 
@@ -216,6 +280,8 @@ def render_router_md(res: RouterResult) -> str:
         f"- temporal_slot_acc:    {res.temporal_slot_acc:.3f}",
         f"- temporal_past_acc:    {res.temporal_past_acc:.3f}",
         f"- temporal_current_acc: {res.temporal_current_acc:.3f}",
+        f"- heuristic_paraphrase_acc: {res.heuristic_paraphrase_acc:.3f} (heuristic on NL paraphrases -- expected LOW)",
+        f"- stub_escalation_acc:      {res.stub_escalation_acc:.3f} (ORACLE tier-2 recovery -- proves the MECHANISM, not real-LLM accuracy)",
         "",
         "## verdicts",
         "",
