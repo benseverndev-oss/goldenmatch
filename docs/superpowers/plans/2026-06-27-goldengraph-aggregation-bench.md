@@ -111,7 +111,7 @@ exact set aggregation, size-invariant; the window's recall collapses with set si
 from __future__ import annotations
 
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from .corpora import Document, QACorpus
 from .engineered import RELATION_SCHEMA, _edge_doc_id, _load_entities, _render_mention
@@ -150,7 +150,14 @@ def generate_aggregation(*, seed: int, n_anchors: int, ambiguity: float,
     for i in range(n_anchors):
         lo, hi = fanout_buckets[i % len(fanout_buckets)]
         src_id = ids[i % len(ids)]
-        rel = RELATION_SCHEMA[i % len(RELATION_SCHEMA)]
+        # Relation varies on the OUTER cycle so (src_id, rel) is unique per anchor up
+        # to n_anchors = len(ids)*len(RELATION_SCHEMA) (=225), AND a reused src_id
+        # accumulates MULTIPLE relations in the store -- both are load-bearing: the
+        # former keeps the gate's exactness (no two anchors merge into one node and
+        # union their gold sets -> set-F1 precision would halve and the HARD gate
+        # would fail); the latter makes the Task 3 predicate test real. Do NOT revert
+        # to `i % len(RELATION_SCHEMA)` (collides at n_anchors>len(ids)).
+        rel = RELATION_SCHEMA[(i // len(ids)) % len(RELATION_SCHEMA)]
         k = min(rng.randint(lo, hi), len(ids) - 1)
         members = rng.sample([x for x in ids if x != src_id], k)
         for m in members:
@@ -181,9 +188,7 @@ def agg_documents_corpus(docs) -> QACorpus:
     return QACorpus(name="aggregation", documents=tuple(docs), questions=())
 ```
 
-> CONFIRM during impl: `dataclass` `field` import is unused here — drop it if so (keep ruff clean).
-
-- [ ] **Step 4: Run -> pass.** (If `test_buckets_each_get_enough_questions` underfills, raise `n_anchors`; each anchor yields 1 list + 1 count, so ~`n_anchors/len(buckets)*2` per bucket — `n_anchors=60` over 3 buckets = 40 q/bucket.)
+- [ ] **Step 4: Run -> pass.** (If `test_buckets_each_get_enough_questions` underfills, raise `n_anchors`; each anchor yields 1 list + 1 count, so ~`n_anchors/len(buckets)*2` per bucket — `n_anchors=60` over 3 buckets = 40 q/bucket. The outer-cycle relation assignment keeps `(src_id, rel)` unique through `n_anchors=225`, so 60 is safe.)
 - [ ] **Step 5: Commit** — `feat(er-kg-bench): fan-out aggregation corpus + gold accessor`.
 
 ---
@@ -283,14 +288,22 @@ def test_traversal_returns_the_exact_member_set():
 
 
 def test_predicate_survives_the_store_round_trip():
-    # An anchor with TWO relations: traversal of rel A must NOT return rel B's objects.
-    docs, qs = generate_aggregation(seed=7, n_anchors=20, ambiguity=0.0,
+    # The outer-cycle relation assignment means a reused src_id holds MULTIPLE
+    # relations once n_anchors > len(ids) (45). Find an anchor_id that has >=2
+    # distinct relations among the questions, then assert traversal of rel A returns
+    # A's members and EXCLUDES B's -- the real wrong-relation-exclusion check.
+    docs, qs = generate_aggregation(seed=7, n_anchors=95, ambiguity=0.0,
                                     fanout_buckets=((3, 6),))
     slice_graph, coverage = _build(docs)
-    # pick a (anchor, relation) and confirm only that relation's members come back
-    q = next(q for q in qs if q.kind == "list")
-    got = goldengraph_aggregate(slice_graph, coverage, q.anchor_id, q.relation)
-    assert got == set(q.gold_members)
+    rels_by_anchor: dict = {}
+    for q in (q for q in qs if q.kind == "list"):
+        rels_by_anchor.setdefault(q.anchor_id, {})[q.relation] = set(q.gold_members)
+    anchor = next(a for a, rm in rels_by_anchor.items() if len(rm) >= 2)
+    rel_a, rel_b = list(rels_by_anchor[anchor])[:2]
+    got_a = goldengraph_aggregate(slice_graph, coverage, anchor, rel_a)
+    assert got_a == rels_by_anchor[anchor][rel_a]            # A's members come back
+    assert not (got_a & rels_by_anchor[anchor][rel_b] - rels_by_anchor[anchor][rel_a])
+    # ^ none of B's exclusive members leak into A's traversal (predicate filter works)
 ```
 
 - [ ] **Step 2: Run -> fail/skip** (skips locally without the wheel; in the gate lane it fails on missing `goldengraph_aggregate`).
