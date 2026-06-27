@@ -30,6 +30,7 @@
   - `ComplexityProfile` lives in `goldenmatch/core/complexity_profile.py` (KNOWN-UNKNOWN: construction cost; minimal/representative profile is the fallback -- scale rules key off `n_rows_full` + `runtime.available_ram_gb`).
   - Engineered universe loader pattern (mirror `engineered._load_entities`): `bench_root = Path(__file__).resolve().parents[2]`; `sys.path.insert(0, str(bench_root))`; `from dataset.concepts_loader import load_concepts`; `load_concepts(bench_root/"dataset"/"concepts.jsonl")`. Slice-1 `router_eval.py` already builds the engineered aggregate setup at `ambiguity=0.0` -- REUSE it, don't rebuild.
   - `goldengraph.extract.Mention(name, typ, context="")`.
+  - `goldengraph.resolve.ResolvedEntity(local_id, canonical_name, typ, surface_names, record_keys, member_idx)` (positional 6-arg dataclass; re-grep `resolve.py` in Task 3 Step 2 to confirm before relying on the stub).
 - Commit footer:
   ```
   Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
@@ -331,7 +332,7 @@ NOTE: Step 2 must CONFIRM exactly which store methods `_commit_doc` calls (grep 
 
 - [ ] **Step 2: Confirm the store-call surface, run to verify the test fails**
 
-Grep: `grep -n "store\.\|extraction =" packages/python/goldengraph/goldengraph/ingest.py | head -30` to enumerate the store methods `_commit_doc` uses + the extraction JSON contract `_prepare_doc` expects. Adjust `_RecordingStore`/`_StubLLM` to match (or relocate per the Step-1 note).
+Grep: `grep -n "store\.\|extraction =" packages/python/goldengraph/goldengraph/ingest.py | head -30` to enumerate the store methods `_commit_doc` uses + the extraction JSON contract `_prepare_doc` expects, AND `grep -n "class ResolvedEntity" -A8 packages/python/goldengraph/goldengraph/resolve.py` to confirm the stub's field order. Adjust `_RecordingStore`/`_StubLLM`/`_stub_resolver` to match (or relocate per the Step-1 note).
 Run: `... pytest packages/python/goldengraph/tests/test_graph_facade.py -k build -v` -> FAIL (`AttributeError: GoldenGraph`).
 
 - [ ] **Step 3: Write minimal implementation** (append the class to `graph.py`)
