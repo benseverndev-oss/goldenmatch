@@ -45,7 +45,10 @@ permissions:
 jobs:
   suggest-quality:
     runs-on: ${{ inputs.runner || 'large-new-64GB' }}
-    timeout-minutes: 60
+    # gym-bless runs FULL_DIST over the regular datasets AND the gym catalog,
+    # which overruns 60min (the plain gate fits because only the gym step uses
+    # FULL_DIST). 120 gives margin for the one-shot bless.
+    timeout-minutes: 120
     env:
       GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
       GOLDENMATCH_NATIVE: "1"
