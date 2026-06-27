@@ -57,7 +57,11 @@ A new Ollama setup in the goldengraph job: install Ollama (official `curl | sh`)
 
 Env the run step sets: `OPENAI_BASE_URL=http://localhost:11434/v1`, `OPENAI_API_KEY=ollama` (dummy,
 Ollama ignores it but the providers require non-empty), `OPENAI_MODEL=<chat-model>`,
-`OPENAI_EMBED_MODEL=<embed-model>`.
+`OPENAI_EMBED_MODEL=<embed-model>`. Naming note: `OPENAI_BASE_URL` is the openai SDK's own convention
+(honored automatically by the chat client); `OPENAI_MODEL` and `OPENAI_EMBED_MODEL` are NEW
+project-defined vars this lane introduces (the SDK does not read them) -- `_build_engine` reads them
+explicitly. Document all three in the tuning note. First dispatch defaults to a SMALL N (the workflow
+input default = 12 questions, one ambiguity) per the cap risk below.
 
 ### 2. Embedding provider honors OPENAI_BASE_URL (`goldenmatch/embeddings/providers.py`, MODIFY)
 
@@ -97,8 +101,9 @@ scope). Unit-testable: set env -> `_build_engine("goldengraph")` constructs the 
 
 Add a `workflow_dispatch` input `use_local_llm` (default `false`). When true, the goldengraph job:
 (a) runs the Ollama setup steps, (b) sets the four env vars above on the run step INSTEAD of
-`OPENAI_API_KEY: ${{ secrets... }}`, (c) installs `goldenmatch[embeddings]` is NOT needed (Ollama
-serves embeddings via the openai provider + the base-url change). Keep the existing budget cap (Ollama
+`OPENAI_API_KEY: ${{ secrets... }}`. No `goldenmatch[embeddings]` (torch/sentence-transformers) install
+is needed -- Ollama serves embeddings through the existing openai provider once it honors the base-url.
+Keep the existing budget cap (Ollama
 returns `usage`, so `BudgetTracker` still accounts; the cap is effectively a call/length guard, cost
 is ~0). Bounded scale via the existing `n_questions`/ambiguity inputs (default to a SMALL N for the
 first run -- see Open risks). The job stays `if: engine == 'all' || 'goldengraph'` and remains
