@@ -47,24 +47,44 @@ _LEADIN_RE = re.compile(
 )
 
 
-def _extract_agg_slots(query: str, predicates) -> tuple[str | None, str | None]:
-    m = _LEADIN_RE.match(query)
-    if not m:
-        return None, None
-    rest = m.group("rest").strip()
+def _split_anchor_relation(rest: str, predicates) -> tuple[str | None, str | None]:
+    """Split '<anchor> <relation words>' by matching the LONGEST predicate phrase that is a suffix
+    of `rest`; the prefix is the anchor. Without `predicates` the relation can't be split out."""
+    rest = rest.strip()
     if not predicates:
-        return rest, None  # can't split anchor from relation without the vocab
-    # longest predicate-phrase that is a suffix of `rest` -> that's the relation; prefix is anchor.
+        return (rest or None), None
     best = None
     for pred in predicates:
         phrase = pred.replace("_", " ")
         if rest.lower().endswith(phrase.lower()) and (best is None or len(phrase) > len(best[1])):
             best = (pred, phrase)
     if best is None:
-        return rest, None
+        return (rest or None), None
     pred, phrase = best
     anchor = rest[: len(rest) - len(phrase)].strip()
     return (anchor or None), pred
+
+
+def _extract_agg_slots(query: str, predicates) -> tuple[str | None, str | None]:
+    m = _LEADIN_RE.match(query)
+    if not m:
+        return None, None
+    return _split_anchor_relation(m.group("rest"), predicates)
+
+
+_TEMPORAL_LEADIN_RE = re.compile(
+    r"^\s*as of\s+(?P<d>\d+)\s*,\s*what does\s+(?P<rest>.+?)\s*[.?]?\s*$",
+    re.IGNORECASE,
+)
+
+
+def _extract_temporal_slots(query: str, predicates):
+    """(anchor, relation, as_of) from 'As of <D>, what does <anchor> <relation words>?'."""
+    m = _TEMPORAL_LEADIN_RE.match(query)
+    if not m:
+        return None, None, None
+    anchor, relation = _split_anchor_relation(m.group("rest"), predicates)
+    return anchor, relation, m.group("d")
 
 
 def classify_query(query: str, *, predicates=None) -> QueryProfile:
@@ -76,6 +96,11 @@ def classify_query(query: str, *, predicates=None) -> QueryProfile:
         anchor, relation = _extract_agg_slots(query, predicates)
         conf = 0.9 if (anchor and relation) else 0.5
         return QueryProfile(intent=intent, anchor_surface=anchor, relation=relation, confidence=conf)
+    if intent is QueryIntent.TEMPORAL_ASOF:
+        anchor, relation, as_of = _extract_temporal_slots(query, predicates)
+        conf = 0.9 if (anchor and relation and as_of) else 0.5
+        return QueryProfile(intent=intent, anchor_surface=anchor, relation=relation,
+                            as_of=as_of, confidence=conf)
     conf = 0.5 if intent is not QueryIntent.MULTI_HOP else 0.3
     return QueryProfile(intent=intent, confidence=conf)
 
@@ -99,8 +124,14 @@ def plan_query(profile: QueryProfile) -> RetrievalPlan:
     ):
         return RetrievalPlan(mode="aggregate")
     if profile.intent is QueryIntent.TEMPORAL_ASOF:
-        # the as-of mode lands in slice 2; route to general for now but mark it honestly
-        return RetrievalPlan(mode="local", note="not_yet_promoted")
+        if (
+            profile.confidence >= MIN_CONF
+            and profile.anchor_surface
+            and profile.relation
+            and profile.as_of
+        ):
+            return RetrievalPlan(mode="as_of")
+        return RetrievalPlan(mode="local")  # low-confidence temporal -> safe general mode
     if profile.intent is QueryIntent.MULTI_HOP:
         return RetrievalPlan(mode="hybrid")
     return RetrievalPlan(mode="local")  # LOOKUP + low-confidence fallbacks
