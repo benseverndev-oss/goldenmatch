@@ -474,7 +474,7 @@ Implements (mirroring Python names/behavior):
 - Test: `packages/typescript/goldenmatch/tests/unit/mcp-review-config.test.ts`, `.../a2a-review-config.test.ts`
 
 - [ ] **Step 1: Failing tests** — the MCP server lists a `review_config` tool and dispatches it to `reviewConfig`; the A2A agent card advertises a `review_config` skill. The MCP test asserts `TOOLS.length` dynamically (no hardcoded count), so no count to bump — BUT update the stale doc-comment tool count at `server.ts:7` ("44 tools" → 45).
-- [ ] **Step 2: Implement.** MCP: a Tool def + a `switch` case in `handleTool` (`server.ts:477`) + add to the composed `TOOLS` array — no hidden plumbing. A2A: add the SkillDef to **`AGENT_SKILLS` only** (`core/agent/skills.ts`) — `buildCardSkills` (`a2a/server.ts:176`) auto-surfaces it and `SKILLS_BY_ID` auto-dispatches; do NOT also add it to the separate hardcoded `NATIVE_A2A_SKILLS` list (`a2a/server.ts:82`) or it duplicates. Leave legacy `suggest_config` untouched. Graceful-empty when the backend is null.
+- [ ] **Step 2: Implement.** MCP: a Tool def + a `switch` case in `handleTool` (`server.ts:477`) + add to the composed `TOOLS` array — no hidden plumbing. A2A: add the SkillDef to **`AGENT_SKILLS` only** (`core/agent/skills.ts`) — `buildCardSkills` (`a2a/server.ts:167`, which unions `BASE_SKILLS` + `AGENT_SKILLS` + memory + identity, deduped by name) auto-surfaces it and `SKILLS_BY_ID` (`skills.ts:486`) auto-dispatches; do NOT also add it to the separate hardcoded `BASE_SKILLS` list (`a2a/server.ts:85`) or it duplicates. Leave legacy `suggest_config` untouched. Graceful-empty when the backend is null.
 - [ ] **Step 3: Run — PASS.** **Step 4: Commit.**
 
 ---
