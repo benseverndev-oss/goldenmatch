@@ -233,6 +233,8 @@ class RouterLLMResult:
     auto_setf1: float | None
     local_setf1: float | None
     budget_exhausted: bool
+    temporal_auto_acc: float | None = None
+    temporal_local_acc: float | None = None
 
 
 def answer_setf1(answer_text: str, gold_names: set, universe: set) -> float:
@@ -278,13 +280,48 @@ def run_router_llm(*, seed: int, n_anchors: int, tracker) -> RouterLLMResult:
                      valid_t=_BIG, tx_t=_BIG, mode="local")
             auto_vals.append(answer_setf1(a, gold, universe))
             local_vals.append(answer_setf1(ln, gold, universe))
+        t_auto, t_local = _temporal_auto_vs_local(seed, n_anchors, engine, tracker, _BIG)
         return RouterLLMResult(
             auto_setf1=(sum(auto_vals) / len(auto_vals)) if auto_vals else None,
             local_setf1=(sum(local_vals) / len(local_vals)) if local_vals else None,
             budget_exhausted=tracker.budget_exhausted,
+            temporal_auto_acc=t_auto,
+            temporal_local_acc=t_local,
         )
     except Exception:
         return RouterLLMResult(auto_setf1=None, local_setf1=None, budget_exhausted=tracker.budget_exhausted)
+
+
+def _temporal_auto_vs_local(seed, n_anchors, engine, tracker, big):
+    """Past-regime temporal auto-vs-local over the concept-named WINDOWED store (NOT engine.build_kg:
+    real ingest doesn't parse the engineered date phrasing into valid_to windows). Returns
+    (auto_acc, local_acc) or (None, None) on failure. Uses the engine's real llm/embedder."""
+    try:
+        from goldengraph.answer import ask
+
+        from .temporal import as_of_accuracy, generate_temporal
+
+        _docs, facts, qs = generate_temporal(seed=seed, n_facts=n_anchors, ambiguity=0.6)
+        by_id = {e.id: e for e in _load_entities()}
+        universe = {e.canonical for e in _load_entities()}
+        store = _build_concept_named_temporal_store(facts, by_id)
+        a_vals, l_vals = [], []
+        for q in (q for q in qs if q.regime == "past"):
+            if tracker.budget_exhausted:
+                break
+            gold = by_id[q.gold_obj].canonical
+            a = ask(q.question, store, llm=engine._llm, embedder=engine._embedder,
+                    valid_t=big, tx_t=big, mode="auto")
+            ln = ask(q.question, store, llm=engine._llm, embedder=engine._embedder,
+                     valid_t=big, tx_t=big, mode="local")
+            a_vals.append(as_of_accuracy(first_known_name(a, universe), gold))
+            l_vals.append(as_of_accuracy(first_known_name(ln, universe), gold))
+        return (
+            (sum(a_vals) / len(a_vals)) if a_vals else None,
+            (sum(l_vals) / len(l_vals)) if l_vals else None,
+        )
+    except Exception:
+        return None, None
 
 
 def render_router_llm_md(res: RouterLLMResult) -> str:
@@ -298,5 +335,9 @@ def render_router_llm_md(res: RouterLLMResult) -> str:
         f"budget_exhausted: {res.budget_exhausted}\n\n"
         "| mode | answer_setF1 |\n|---|---|\n"
         f"| auto (routed->aggregate) | {_f(res.auto_setf1)} |\n"
-        f"| local (general) | {_f(res.local_setf1)} |\n"
+        f"| local (general) | {_f(res.local_setf1)} |\n\n"
+        "## temporal past-regime (as-of-accuracy on a corrected-away value)\n\n"
+        "| mode | as_of_accuracy |\n|---|---|\n"
+        f"| auto (routed->as_of, slices at D) | {_f(res.temporal_auto_acc)} |\n"
+        f"| local (general, no temporal slice) | {_f(res.temporal_local_acc)} |\n"
     )
