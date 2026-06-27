@@ -38,3 +38,65 @@ def plan_er_execution(docs, *, corpus_records: int | None = None):
     runtime = capture_runtime_profile()
     profile = _representative_complexity(n_rows_full)
     return apply_planner_rules(profile, runtime, n_rows_full, DEFAULT_RULES)
+
+
+def _new_store():
+    from goldengraph_native import _native as ggn  # native wheel; e2e lane only
+
+    return ggn.PyStore()
+
+
+class GoldenGraph:
+    """One stateful entry point: profile a workload -> tier-resolver build (4a/4b) -> auto answers
+    (slices 1/2/3), with the ER scale plan surfaced (`execution_plan`, ADVISORY) and ONE `budget`
+    threaded across build + answer LLM work (the cross-controller ceiling)."""
+
+    def __init__(self, *, store, plan, execution_plan, budget, llm, embedder, llm_classifier):
+        self._store = store
+        self._plan = plan
+        self._execution_plan = execution_plan
+        self._budget = budget
+        self._llm = llm  # the _BudgetedLLM, reused by ask -> shared pool
+        self._embedder = embedder
+        self._llm_classifier = llm_classifier
+
+    @classmethod
+    def build(cls, docs, workload, *, llm, embedder, predicates=None, llm_classifier=None,
+              budget=None, resolver=None, corpus_records=None, store=None):
+        from .budget import Budget, _BudgetedLLM
+        from .ingest import ingest_corpus
+        from .unified import plan_resolver
+
+        budget = budget if budget is not None else Budget()
+        plan, planned_resolver = plan_resolver(
+            workload, predicates=predicates, llm_classifier=llm_classifier
+        )
+        execution_plan = plan_er_execution(docs, corpus_records=corpus_records)
+        store = store if store is not None else _new_store()
+        bllm = _BudgetedLLM(llm, budget)
+        ingest_corpus(docs, store, llm=bllm, resolver=resolver or planned_resolver, embedder=embedder)
+        return cls(store=store, plan=plan, execution_plan=execution_plan, budget=budget,
+                   llm=bllm, embedder=embedder, llm_classifier=llm_classifier)
+
+    def ask(self, query, *, valid_t, tx_t, mode="auto", **ask_kwargs):
+        from .answer import ask as _ask
+
+        return _ask(query, self._store, llm=self._llm, embedder=self._embedder,
+                    valid_t=valid_t, tx_t=tx_t, mode=mode,
+                    query_classifier=self._llm_classifier, **ask_kwargs)
+
+    @property
+    def plan(self):
+        return self._plan
+
+    @property
+    def execution_plan(self):
+        return self._execution_plan
+
+    @property
+    def budget(self):
+        return self._budget
+
+    @property
+    def store(self):
+        return self._store
