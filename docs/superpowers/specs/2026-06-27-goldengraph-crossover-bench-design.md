@@ -30,9 +30,11 @@ structured/temporal/aggregation, not prose multi-hop) rather than leave it asser
 A two-axis sweep -- `ambiguity in {0, .25, .5, .75, 1}` x `passage_k in {10, 5, 3, 1}` --
 over the engineered multi-hop corpus, producing:
 
-1. A **free, deterministic, CI-gated** recall-crossover surface that proves the
-   *mechanism*: graph reachability is `passage_k`-invariant while lexical passage-recall
-   decays under starvation, so they cross at small `passage_k`.
+1. A **free, deterministic, CI-gated** recall surface: graph reachability is
+   `passage_k`-invariant while lexical passage-recall decays under starvation. (Measured
+   outcome: the lexical floor never leads, so graph *dominates* it at every cell rather than
+   crossing -- see the MEASURED REFRAME under the gate. The opt-in arm keeps the true
+   answer-match crossover question.)
 2. An **opt-in, real-LLM, ungated** answer-match crossover table -- the headline verdict
    on whether that recall advantage flows to answers (it may not: the graph-dilution
    finding above is a real risk, and a no-crossover result is reported honestly).
@@ -104,36 +106,44 @@ As `passage_k` shrinks the window can't hold the whole chain, so recall decays f
 (k=10) toward `~1/hop_count` (k=1). As ambiguity rises, variant surfaces reduce the lexical
 overlap between the query mention and the chain docs, decaying recall further.
 
-**Gate** -- split into by-construction HARD assertions (the `passage_k` mechanism), a
-retriever-sanity HARD assertion (so the gate is meaningful), and a measurement-frozen
-empirical crossover assertion. `gate_exit_code` returns 1 on any HARD failure; soft
-assertions only WARN, mirroring `ablation.evaluate_assertions`.
+**Gate** -- two by-construction HARD assertions (the `passage_k` mechanism) + two
+measurement-frozen HARD assertions (the domination + starvation finding). `gate_exit_code`
+returns 1 on any HARD failure; soft assertions only WARN, mirroring
+`ablation.evaluate_assertions`.
+
+> **MEASURED REFRAME (run 28294346180, seed 7, n=80).** The deterministic gate was
+> originally designed around a *starvation crossover* (RAG starts near 1.0 at `passage_k=10`
+> then starves below graph). The measured lexical floor tops out at ~0.40-0.54 recall even
+> at `passage_k=10` -- the multi-hop-RAG limitation (later-hop chain docs don't mention the
+> start entity; only ~5 relation types), exactly the "broken/weak retriever" case the
+> retriever-sanity guard existed to catch. RAG therefore never leads, so there is **no
+> crossover** -- graph reachability *dominates* the floor at every cell. Per the
+> measure-then-freeze + surface-to-human clause, the gate was reframed (with Ben's sign-off)
+> to the honest, stronger finding below. The lexical retriever was deliberately NOT
+> "strengthened" to force a high floor.
 
 By-construction HARD (cannot flake on a well-formed corpus):
-1. **Graph flat in `passage_k`:** for each ambiguity row, `max - min` of graph_recall across
-   `passage_k` <= 1e-9 (it does not read `passage_k`, so exactly flat).
+1. **Graph flat in `passage_k`:** graph_recall is stored per-ambiguity (does not read
+   `passage_k`), so it is flat by representation.
 2. **RAG monotone in `passage_k`:** for each ambiguity row, rag_recall is monotone
-   non-increasing as `passage_k` shrinks. This is structural: top-`k` is a nested prefix of
-   one fixed total order (overlap count, ties by `doc.id`), so per-question recall is
-   monotone in `k` and averaging preserves it. (No tie tolerance needed; assert exact.)
+   non-increasing as `passage_k` shrinks. Structural: top-`k` is a nested prefix of one fixed
+   total order (overlap count, ties by `doc.id`), so per-question recall is monotone in `k`
+   and averaging preserves it. (Asserted exact.)
 
-Retriever-sanity HARD (so the starvation crossover is real, not a broken-retriever
-artifact -- review issue 2):
-3. **RAG starts high at max `passage_k`:** rag_recall at `passage_k=10` >= a measured floor
-   near 1.0 (frozen from the local run; if the query-term construction can't retrieve the
-   later-hop chain docs, this fails loudly instead of the gate silently passing for the wrong
-   reason -- graph-dominates-everywhere rather than a `passage_k` starvation crossover).
+Measurement-frozen HARD (frozen from the measured grid, headroom below the tightest cell):
+3. **Graph dominates the floor at every cell (HEADLINE):** `graph_recall[a] - rag_recall[a][k]
+   >= DOMINATION_MARGIN` for every `(ambiguity, passage_k)`. Frozen `DOMINATION_MARGIN = 0.08`
+   (measured worst margin 0.121 @ ambiguity 0.5, `passage_k=10`).
+4. **Passage starvation bites the floor:** `rag_recall[a][10] - rag_recall[a][1] >=
+   STARVATION_DROP` for every ambiguity row -- confirms `passage_k` actually starves the floor
+   (so the domination isn't measured against an inert axis). Frozen `STARVATION_DROP = 0.10`
+   (measured smallest drop 0.169 @ ambiguity 1.0).
 
-Measurement-frozen empirical (NOT by-construction -- depends on measured graph ER quality,
-review issues 1+3):
-4. **A crossover cell exists:** there is at least ONE `(ambiguity, passage_k)` cell where
-   graph_recall >= rag_recall by a frozen margin. The cell is NOT assumed to be the
-   highest-ambiguity row -- at max ambiguity the goldengraph dial's ER can itself collapse
-   below `1/hops`, so the crossover most likely lives at *moderate* ambiguity + min
-   `passage_k` (graph still walkable, RAG starved). The asserting cell + margin are pinned
-   from the measured grid (the argmax of graph-minus-RAG), per the verification clause below.
-   Labeled in `render_crossover_md` as an empirical/measurement-frozen gate, not a structural
-   guarantee.
+**Reachability != answerability.** That graph reachability dominates the floor is NOT a claim
+that the KG answers better -- the prior head-to-head showed the graph *losing* on answer-match
+(0.420 vs 0.520). Whether the reachability advantage converts to answers is the opt-in
+answer-match arm's question; the deterministic gate only certifies the reachability/recall
+structure.
 
 **Verification before gating** (lesson from B1): the gate is designed around the hypothesized
 mechanism but MUST be verified against the measured curve on the real corpus locally (the

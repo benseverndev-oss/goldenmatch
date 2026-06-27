@@ -55,15 +55,15 @@ def test_passage_recall_fraction_of_gold_support():
 
 
 def _good_result():
-    # graph flat per ambiguity; rag decays with k and starts high at k=10;
-    # a crossover cell exists at moderate ambiguity + small k.
-    graph = {0.0: 0.95, 0.25: 0.9, 0.5: 0.8, 0.75: 0.6, 1.0: 0.3}
+    # Mirrors the measured grid (run 28294346180): graph reachability flat per ambiguity
+    # and DOMINATING the lexical floor at every cell; the floor decays with passage_k.
+    graph = {0.0: 0.90, 0.25: 0.75, 0.5: 0.60, 0.75: 0.71, 1.0: 0.66}
     rag = {
-        0.0: {10: 1.0, 5: 0.9, 3: 0.7, 1: 0.4},
-        0.25: {10: 1.0, 5: 0.85, 3: 0.6, 1: 0.3},
-        0.5: {10: 0.98, 5: 0.7, 3: 0.45, 1: 0.2},  # graph 0.8 >> rag 0.2 at k=1 -> crossover
-        0.75: {10: 0.97, 5: 0.6, 3: 0.4, 1: 0.15},
-        1.0: {10: 0.95, 5: 0.5, 3: 0.3, 1: 0.1},
+        0.0: {10: 0.53, 5: 0.50, 3: 0.47, 1: 0.27},
+        0.25: {10: 0.54, 5: 0.48, 3: 0.46, 1: 0.25},
+        0.5: {10: 0.48, 5: 0.42, 3: 0.41, 1: 0.25},
+        0.75: {10: 0.43, 5: 0.38, 3: 0.33, 1: 0.22},
+        1.0: {10: 0.40, 5: 0.33, 3: 0.29, 1: 0.23},
     }
     return cx.CrossoverResult(graph=graph, rag=rag)
 
@@ -82,10 +82,16 @@ def test_gate_fails_when_rag_non_monotone():
     assert cx.gate_exit_code(res) == 1
 
 
-def test_gate_fails_when_retriever_broken_at_k10():
+def test_gate_fails_when_graph_does_not_dominate():
     res = _good_result()
-    for a in res.rag:
-        res.rag[a][10] = 0.2  # retriever never starts high -> sanity fails
+    res.graph[0.0] = 0.40  # now below rag@10=0.53 -> domination fails
+    assert cx.gate_exit_code(res) == 1
+
+
+def test_gate_fails_when_floor_does_not_starve():
+    res = _good_result()
+    for k in (10, 5, 3, 1):
+        res.rag[1.0][k] = 0.40  # flat across passage_k -> no starvation drop
     assert cx.gate_exit_code(res) == 1
 
 

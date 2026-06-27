@@ -86,9 +86,15 @@ def graph_recall_at(corpus, g, *, max_hops: int) -> float:
     return (sum(vals) / len(vals)) if vals else 0.0
 
 
-#: Frozen from the local measured grid (Task 5). Placeholders -- TIGHTEN after measuring.
-RAG_HIGH_FLOOR = 0.85     # rag_recall at passage_k=10 must be at least this (retriever sane)
-CROSSOVER_MARGIN = 0.2    # max over cells of (graph - rag) must reach this (crossover exists)
+#: Frozen from the measured grid (goldengraph-pipeline run 28294346180, seed 7, n=80).
+#: The lexical multi-hop floor tops out at ~0.5 recall even at passage_k=10 (later-hop
+#: chain docs don't mention the start entity; only ~5 relation types) -- so there is no
+#: "RAG starts high then starves below graph" crossover. The honest finding is STRONGER:
+#: graph reachability DOMINATES the floor at every cell. Margins set below the measured
+#: tightest values with headroom (min domination 0.121 @ amb0.5/k10; min starvation drop
+#: 0.169 @ amb1.0).
+DOMINATION_MARGIN = 0.08  # graph - rag must be at least this at EVERY (ambiguity, passage_k)
+STARVATION_DROP = 0.10    # rag@kmax - rag@kmin must be at least this per ambiguity row
 
 
 @dataclass
@@ -121,7 +127,14 @@ def recall_crossover_grid(*, seed: int, n_questions: int, max_hops: int = 4) -> 
 
 
 def evaluate_assertions(res: CrossoverResult):
-    """[(label, passed, is_hard), ...]. HARD gates; soft only warns."""
+    """[(label, passed, is_hard), ...]. HARD gates; soft only warns.
+
+    The measured lexical floor never leads graph (it tops out ~0.5 even at passage_k=10),
+    so this is NOT a starvation crossover -- it is graph reachability DOMINATING the floor
+    everywhere. The gate asserts that domination + that passage_k starvation actually bites
+    the floor. Whether the reachability advantage converts to ANSWERS is the opt-in
+    answer-match arm's question (and the prior head-to-head says it does not -- reachability
+    != answerability)."""
     ks_desc = sorted(PASSAGE_K_GRID, reverse=True)  # 10,5,3,1
     kmax, kmin = max(PASSAGE_K_GRID), min(PASSAGE_K_GRID)
 
@@ -133,17 +146,18 @@ def evaluate_assertions(res: CrossoverResult):
         for a in res.rag
         for i in range(len(ks_desc) - 1)
     )
-    # 3. retriever-sanity: RAG starts high at the largest passage_k.
-    rag_starts_high = all(res.rag[a][kmax] >= RAG_HIGH_FLOOR for a in res.rag)
-    # 4. measurement-frozen: a crossover cell exists somewhere (argmax graph-RAG margin).
-    best_margin = max(res.graph[a] - res.rag[a][k] for a in res.rag for k in PASSAGE_K_GRID)
-    crossover_exists = best_margin >= CROSSOVER_MARGIN
+    # 3. measurement-frozen HEADLINE: graph dominates the floor at EVERY cell.
+    worst_margin = min(res.graph[a] - res.rag[a][k] for a in res.rag for k in PASSAGE_K_GRID)
+    graph_dominates = worst_margin >= DOMINATION_MARGIN
+    # 4. measurement-frozen: passage_k starvation actually bites the floor (per row).
+    smallest_drop = min(res.rag[a][kmax] - res.rag[a][kmin] for a in res.rag)
+    floor_starves = smallest_drop >= STARVATION_DROP
 
     return [
         ("graph reachability flat across passage_k (does not read passages)", graph_flat, True),
         ("RAG passage-recall monotone non-increasing as passage_k shrinks", rag_monotone, True),
-        (f"RAG passage-recall >= {RAG_HIGH_FLOOR} at passage_k={kmax} (retriever sane)", rag_starts_high, True),
-        (f"a crossover cell exists (max graph-RAG margin {best_margin:.3f} >= {CROSSOVER_MARGIN}, k={kmin} most starved)", crossover_exists, True),
+        (f"graph dominates the lexical floor at every cell (worst margin {worst_margin:.3f} >= {DOMINATION_MARGIN})", graph_dominates, True),
+        (f"passage_k starvation bites the floor (smallest rag@{kmax}-rag@{kmin} drop {smallest_drop:.3f} >= {STARVATION_DROP})", floor_starves, True),
     ]
 
 
@@ -155,10 +169,14 @@ def gate_exit_code(res: CrossoverResult) -> int:
 def render_crossover_md(res: CrossoverResult) -> str:
     ks = list(PASSAGE_K_GRID)
     lines = [
-        "# GoldenGraph crossover -- ambiguity x passage_k (recall, no LLM)",
+        "# GoldenGraph reachability vs lexical floor -- ambiguity x passage_k (recall, no LLM)",
         "",
         "graph = whole-chain bridge-recall (passage_k-invariant). rag = lexical top-k",
-        "passage-recall vs the gold answer-chain docs. Where does graph overtake RAG?",
+        "passage-recall vs the gold answer-chain docs. The lexical multi-hop floor tops out",
+        "at ~0.5 even at passage_k=10 (later-hop docs don't mention the start entity), so",
+        "graph reachability DOMINATES it at every cell -- there is no starvation crossover.",
+        "Whether that reachability advantage converts to ANSWERS is the opt-in answer-match",
+        "arm's question (reachability != answerability).",
         "",
         "| ambiguity | graph | " + " | ".join(f"rag@{k}" for k in ks) + " |",
         "|---|---|" + "---|" * len(ks),
@@ -167,7 +185,7 @@ def render_crossover_md(res: CrossoverResult) -> str:
         cells = " | ".join(f"{res.rag[a][k]:.3f}" for k in ks)
         lines.append(f"| {a:.2f} | {res.graph[a]:.3f} | {cells} |")
     lines += ["", "## verdicts", "",
-              "(assertion 4 is a measurement-frozen empirical gate, not a structural guarantee)"]
+              "(assertions 3-4 are measurement-frozen empirical gates, not structural guarantees)"]
     for label, passed, is_hard in evaluate_assertions(res):
         tag = "PASS" if passed else ("FAIL" if is_hard else "WARN")
         lines.append(f"- [{tag}] {label}{'' if is_hard else ' (soft)'}")
