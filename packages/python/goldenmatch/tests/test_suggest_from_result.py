@@ -1,5 +1,4 @@
 import polars as pl
-import pytest
 from goldenmatch import dedupe_df
 from goldenmatch.core.suggest.adapter import suggest_from_result
 from goldenmatch.core.suggest.types import SuggestionsNativeRequired
@@ -30,10 +29,7 @@ def test_graceful_without_native(monkeypatch):
     assert suggest_from_result(res, df) == []
 
 
-@pytest.mark.skipif(True, reason="needs native suggest kernel; CI parity test")
-def test_matches_review_config_raw():
-    from goldenmatch.core.suggest import review_config
-    df = _person_df()
-    res = dedupe_df(df)
-    assert [s.id for s in suggest_from_result(res, df, verify=False)] == \
-           [s.id for s in review_config(df, res.config, verify=False)]
+# The native parity test (suggest_from_result raw/verified == review_config) lives
+# in test_healer_default_e2e_native.py, gated on the real `suggest_config` symbol
+# so it actually runs in the native CI lane (this module's prior copy was
+# skipif(True) -> permanently dead).

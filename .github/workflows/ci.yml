@@ -284,6 +284,12 @@ jobs:
               - 'packages/python/goldenmatch/goldenmatch/core/autoconfig_planner.py'
               - 'packages/python/goldenmatch/goldenmatch/core/autoconfig.py'
               - 'packages/python/goldenmatch/tests/test_autoconfig_native_parity.py'
+              # suggest-core: the native ext exposes the config-suggestion kernel
+              # (suggest_config) via PyO3. The default-pipeline healer surface +
+              # the artifacts-in adapter are wired into dedupe_df, so a change to
+              # them must re-run the native suggest e2e (parity + cost short-circuit).
+              - 'packages/python/goldenmatch/goldenmatch/core/suggest/**'
+              - 'packages/python/goldenmatch/tests/test_healer_default_e2e_native.py'
             goldencheck_native:
               # GoldenCheck's native acceleration ext (PyO3), a standalone
               # workspace like goldenmatch's `native`. Builds the .so and runs the
@@ -1412,6 +1418,7 @@ jobs:
             packages/python/goldenmatch/tests/test_inhouse_embedder.py \
             packages/python/goldenmatch/tests/test_autoconfig_native_parity.py \
             packages/python/goldenmatch/tests/test_native_perceptual_parity.py \
+            packages/python/goldenmatch/tests/test_healer_default_e2e_native.py \
             -v
 
   # GoldenCheck native parity: the goldencheck-native ext (PyO3, standalone
