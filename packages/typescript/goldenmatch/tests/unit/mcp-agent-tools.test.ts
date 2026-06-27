@@ -15,8 +15,8 @@ import {
 import { AGENT_SKILLS } from "../../src/core/agent/skills.js";
 
 describe("AGENT_MCP_TOOLS surface", () => {
-  it("renders exactly 14 tools", () => {
-    expect(AGENT_MCP_TOOLS.length).toBe(14);
+  it("renders exactly 15 tools", () => {
+    expect(AGENT_MCP_TOOLS.length).toBe(15);
   });
 
   it("mirrors AGENT_SKILLS (name/description/inputSchema)", () => {

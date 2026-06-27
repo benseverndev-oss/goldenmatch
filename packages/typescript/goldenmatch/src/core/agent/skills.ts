@@ -8,13 +8,20 @@
  * land in Waves 2-4 — the registry is shaped so they slot in later.
  */
 
-import type { Row, MatchkeyConfig, MatchkeyField } from "../types.js";
+import type {
+  Row,
+  MatchkeyConfig,
+  MatchkeyField,
+  GoldenMatchConfig,
+} from "../types.js";
 import { makeMatchkeyConfig, makeMatchkeyField } from "../types.js";
 import type { SkillDef, SkillContext, SkillResult, JSONSchema } from "./types.js";
 import { profileForAgent, selectStrategy } from "./strategy.js";
 import { explainPair } from "../explain.js";
 import { gatePairs } from "../review-queue.js";
 import { dedupe } from "../api.js";
+import { reviewConfig, serializeSuggestions } from "../suggest.js";
+import { autoConfigureRows } from "../autoconfig.js";
 
 // ---------------------------------------------------------------------------
 // rows-or-path seam
@@ -157,6 +164,31 @@ const FIX_QUALITY_SCHEMA: JSONSchema = {
     domain: {
       type: "string",
       description: "Optional domain hint (healthcare, finance, ecommerce).",
+    },
+  },
+};
+
+const REVIEW_CONFIG_SCHEMA: JSONSchema = {
+  type: "object",
+  properties: {
+    rows: {
+      type: "array",
+      description: "Inline row objects (edge path). Takes precedence over file_path.",
+      items: { type: "object" },
+    },
+    file_path: {
+      type: "string",
+      description: "Path to a CSV table, loaded via the injected loader.",
+    },
+    config: {
+      type: "object",
+      description:
+        "Optional GoldenMatchConfig to review. Auto-configured from the data when omitted.",
+    },
+    verify: {
+      type: "boolean",
+      description:
+        "Re-run the pipeline per candidate and drop health-worsening suggestions (default true).",
     },
   },
 };
@@ -473,6 +505,28 @@ export const AGENT_SKILLS: readonly SkillDef[] = [
         error:
           "goldenflow integration is not wired in the TS core yet; " +
           `transformed 0 of ${rows.length} rows`,
+      };
+    },
+  },
+  {
+    id: "review_config",
+    description:
+      "Review a dedupe config and return verified config-improvement " +
+      "suggestions (the healer). Opt-in: returns [] unless the suggest-wasm " +
+      "backend is enabled.",
+    inputSchema: REVIEW_CONFIG_SCHEMA,
+    handler: async (args, ctx): Promise<SkillResult> => {
+      const rows = await resolveTable(args, ctx);
+      const explicit = args.config;
+      const config: GoldenMatchConfig =
+        explicit !== null && typeof explicit === "object" && !Array.isArray(explicit)
+          ? (explicit as GoldenMatchConfig)
+          : autoConfigureRows(rows);
+      const verify = args.verify !== false; // default true (explicit request)
+      const suggestions = await reviewConfig(rows, config, { verify });
+      return {
+        suggestions: serializeSuggestions(suggestions, { verified: verify }),
+        count: suggestions.length,
       };
     },
   },
