@@ -33,3 +33,20 @@ def lexical_retrieve(docs, query_terms, passage_k: int) -> list[str]:
         scored.append((-overlap, d.id))
     scored.sort()
     return [doc_id for _neg, doc_id in scored[:passage_k]]
+
+
+def query_terms_for(qa, g) -> list[str]:
+    """Tokens a naive retriever would key on: the start-entity surface + the relation
+    chain. Intermediate-hop entity surfaces are intentionally absent (the multi-hop RAG
+    problem -- later edges retrieved on relation overlap alone)."""
+    terms = list(_tokens(g.canonical_name(qa.start_entity_id)))
+    for rel in qa.relation_chain:
+        terms.extend(rel.lower().split("_"))
+    return terms
+
+
+def passage_recall(qa, topk_ids) -> float:
+    gold = set(qa.gold_supporting_fact_ids)
+    if not gold:
+        return 0.0
+    return len(set(topk_ids) & gold) / len(gold)
