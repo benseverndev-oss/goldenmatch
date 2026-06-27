@@ -50,3 +50,36 @@ def passage_recall(qa, topk_ids) -> float:
     if not gold:
         return 0.0
     return len(set(topk_ids) & gold) / len(gold)
+
+
+def graph_recall_at(corpus, g, *, max_hops: int) -> float:
+    """Whole-chain bridge-recall under the goldengraph resolution dial -- the slice-A
+    number, used here as the passage_k-INVARIANT graph surface. Needs the wheel."""
+    from goldengraph.answer import _retrieve_local
+
+    from .ablation import _KEYFN, _build_store, _typ_of
+    from .engines.goldengraph import _NODE_BUDGET, _RETRIEVAL_HOPS
+    from .gold import gold_chain
+    from .scorecard import bridge_recall
+
+    typ_of = _typ_of(g)
+    km = _KEYFN["goldengraph"](corpus, g)
+    slice_graph, coverage = _build_store(corpus, g, km, typ_of)
+
+    seed_of: dict[str, int] = {}
+    for nid in sorted(coverage):  # ascending id => deterministic tie-break (matches ablation)
+        for c in coverage[nid]:
+            seed_of.setdefault(c, nid)
+
+    chains = {qa.id: gold_chain(g, qa) for qa in corpus.questions}
+    vals: list[float] = []
+    for qa in corpus.questions:
+        seed_node = seed_of.get(qa.start_entity_id)
+        if seed_node is None:
+            vals.append(0.0)
+            continue
+        subgraph = _retrieve_local(
+            slice_graph, [seed_node], max_hops=_RETRIEVAL_HOPS, node_budget=_NODE_BUDGET
+        )
+        vals.append(bridge_recall(chains[qa.id], subgraph, coverage)["whole_chain"])
+    return (sum(vals) / len(vals)) if vals else 0.0
