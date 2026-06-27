@@ -178,3 +178,23 @@ jobs:
           name: goldengraph-unified
           path: packages/python/goldenmatch/benchmarks/er-kg-bench/UNIFIED.md
           if-no-files-found: ignore
+
+      - name: Tier-resolver gate (deterministic, key-free)
+        # Slice 4b: 4a's UnifiedPlan made EXECUTABLE -- resolution_tier -> the resolver ingest uses.
+        # Proves the tiers resolve differently: FUZZY merges variant surfaces EXACT cannot (same-
+        # concept distinct-surface merge recall on the engineered universe; FUZZY 0.467 vs EXACT 0.0).
+        # Needs goldenmatch (dedupe_df). Gates HARD on FUZZY - EXACT >= MARGIN.
+        working-directory: packages/python/goldenmatch/benchmarks/er-kg-bench
+        env:
+          POLARS_SKIP_CPU_CHECK: "1"
+        run: |
+          python -m pytest tests/test_qa_tier.py -v
+          python -m erkgbench.qa_e2e.run_tier_eval --out-md TIER.md
+
+      - name: Upload TIER.md
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: goldengraph-tier
+          path: packages/python/goldenmatch/benchmarks/er-kg-bench/TIER.md
+          if-no-files-found: ignore
