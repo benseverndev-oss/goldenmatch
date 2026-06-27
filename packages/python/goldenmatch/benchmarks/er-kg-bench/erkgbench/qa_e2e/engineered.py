@@ -110,6 +110,8 @@ def generate_engineered(
                 Document(
                     id=_edge_doc_id(src_id, rel, dst_id),
                     text=f"{s} {rel.replace('_', ' ')} {o}.",
+                    src_surface=s,
+                    dst_surface=o,
                 )
             )
 

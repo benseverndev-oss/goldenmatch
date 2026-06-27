@@ -53,3 +53,25 @@ jobs:
         env:
           POLARS_SKIP_CPU_CHECK: "1"
         run: python -m pytest tests/test_qa_goldengraph_smoke.py -v
+
+      - name: ER-quality ablation gate (deterministic, key-free, builds bridge-recall)
+        # The (ER_accuracy)^hops thesis at the retrieval layer: build the store per
+        # resolution dial from gold triples (no LLM extraction), measure bridge-recall
+        # by hop. Gates HARD on monotonic decay + a widening oracle-none gap;
+        # goldengraph>=name_only is a soft WARN (offline fuzzy only separates on
+        # string-close variants). No API key, no network.
+        working-directory: packages/python/goldenmatch/benchmarks/er-kg-bench
+        env:
+          POLARS_SKIP_CPU_CHECK: "1"
+        run: |
+          python -m pytest tests/test_qa_ablation.py -v
+          python -m erkgbench.qa_e2e.run_ablation \
+            --seed 7 --n-questions 80 --ambiguity 0.6 --out-md ABLATION.md
+
+      - name: Upload ABLATION.md
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: goldengraph-er-ablation
+          path: packages/python/goldenmatch/benchmarks/er-kg-bench/ABLATION.md
+          if-no-files-found: ignore
