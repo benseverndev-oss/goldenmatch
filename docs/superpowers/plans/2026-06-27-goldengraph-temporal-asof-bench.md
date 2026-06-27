@@ -17,6 +17,7 @@
 - **Store JSON shape** (`build_batch` in `goldengraph/ingest.py`): `{"entities":[{local_id, canonical_name, typ, surface_names, record_keys}], "edges":[{subj_local, predicate, obj_local, valid_from, valid_to, source_refs}], "ingested_at": at}`. `build_batch` always emits `valid_to=None` — B2 hand-builds this dict with explicit `valid_to`.
 - **valid_to is honored end-to-end** (reviewer-confirmed): `PyStore.append(json)` → serde `StoreBatch` (no rename, no validation) → `append` copies `e.valid_to` → `as_of` window filter `valid_from <= valid_t && valid_to.is_none_or(|vt| valid_t < vt)`. The regime boundary is half-open: `D=Tc → B`.
 - **Store API:** `from goldengraph_native import _native as ggn; store = ggn.PyStore(); store.append(json.dumps(batch)); slice = store.as_of(valid_t, tx_t)`. `slice.query([node_id], 1) -> {"entities":[{entity_id, canonical_name, typ, surface_names}], "edges":[{subj, predicate, obj, source_refs}]}` (edges in slice-view id space). `slice.entities()` enumerates.
+- **LOAD-BEARING (reviewer):** the store does NOT keep the batch's `canonical_name` field — `append` RECOMPUTES it as the longest `surface_names` entry (tie → lex-smallest, `canonical_of`). The `canonical_name == id` shortcut in `build_temporal_store`/`goldengraph_asof` works ONLY because `surface_names=[anchor_id]` (so `canonical_of([id]) == id`). Do NOT drop `surface_names=[id]` (e.g. to `[]`) — `canonical_name` would go empty and the entire `id_to_canon`/seed lookup silently breaks. Re-appending X with `record_keys=[anchor_id]` reconciles to one StableId, and surfaces stay `[id]` across re-appends.
 - **Reused:** `engineered._load_entities() -> [_Entity(id, canonical, variants)]`, `engineered._render_mention(ent, rng, ambiguity)`, `engineered.RELATION_SCHEMA` (5); `dials.surface_to_canon(g) -> {surface: set(canonical_id)}` (concept-universe, edge-independent — call with any `GoldGraph`); `gold.GoldGraph.from_corpus`; `scorecard_llm._BudgetedLLM` (#1276); `from . import metrics`.
 - `goldengraph` is a STANDALONE package (PYTHONPATH for local runs; CI installs editable).
 
@@ -94,7 +95,9 @@ store.as_of(D) traversal vs a temporal-blind passage floor. The KG does what RAG
 can't: answer 'as of a PAST date' correctly when a fact was later corrected."""
 from __future__ import annotations
 
+import json
 import random
+import re
 from dataclasses import dataclass
 
 from .corpora import Document
@@ -230,13 +233,9 @@ def test_render_has_regimes_and_verdicts():
 
 - [ ] **Step 2: Run -> fail.**
 
-- [ ] **Step 3: Implement** (append to `temporal.py`):
+- [ ] **Step 3: Implement** (append to `temporal.py`; `re`/`dataclass` are already imported at the top):
 
 ```python
-import re
-from dataclasses import dataclass  # already imported; keep one
-
-
 def _mentions(text: str, surface: str) -> bool:
     return re.search(r"\b" + re.escape(surface) + r"\b", text) is not None
 
@@ -372,20 +371,21 @@ def test_goldengraph_asof_returns_the_gold_object_in_both_regimes():
 
 - [ ] **Step 2: Run -> fail/skip** (skips locally without the wheel; the round-trip test is the first thing the gate lane runs).
 
-- [ ] **Step 3: Implement** (append to `temporal.py`):
+- [ ] **Step 3: Implement** (append to `temporal.py`; `json` is already imported at the top):
 
 ```python
-import json
-from pathlib import Path  # if needed
-
-
 _BIG_TX = 10**12
 
 
 def build_temporal_store(facts):
     """Build a bi-temporal store from the facts: per fact ONE batch with X-rel-A
     [T1,tc) and X-rel-B [tc,inf). Oracle record_keys (= canonical id) so X merges
-    across facts/relations. Hand-built JSON (build_batch can't set valid_to)."""
+    across facts/relations. Hand-built JSON (build_batch can't set valid_to).
+
+    LOAD-BEARING: surface_names=[<id>] is REQUIRED -- the store recomputes
+    canonical_name as the longest surface (ignoring the batch canonical_name field),
+    so surface_names=[id] makes canonical_name==id, which goldengraph_asof relies on
+    to map view-entity-id -> the gold canonical id. Do not drop it."""
     from goldengraph_native import _native as ggn
 
     store = ggn.PyStore()
