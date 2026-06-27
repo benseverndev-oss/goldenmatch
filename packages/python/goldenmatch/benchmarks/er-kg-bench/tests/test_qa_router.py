@@ -23,3 +23,13 @@ def test_gate_fails_when_routed_setf1_low():
 def test_gate_fails_when_classifier_misses():
     res = re_.RouterResult(aggregate_recall=0.5, slot_accuracy=1.0, routed_setf1=1.0)
     assert re_.gate_exit_code(res) == 1
+
+
+def test_answer_setf1_pure():
+    # parse "Banana, Cherry" -> {Banana,Cherry}; gold {Banana,Cherry} -> 1.0
+    assert re_.answer_setf1("Banana, Cherry.", {"Banana", "Cherry"}, {"Banana", "Cherry", "Date"}) == 1.0
+
+
+def test_answer_setf1_partial():
+    got = re_.answer_setf1("Only Banana here.", {"Banana", "Cherry"}, {"Banana", "Cherry"})
+    assert 0.0 < got < 1.0

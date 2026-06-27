@@ -114,3 +114,80 @@ def render_router_md(res: RouterResult) -> str:
     for label, ok, _h in evaluate_assertions(res):
         lines.append(f"- [{'PASS' if ok else 'FAIL'}] {label}")
     return "\n".join(lines) + "\n"
+
+
+# --- opt-in real-LLM auto-vs-local row (ungated; real LLM + infra) ---
+
+
+@dataclass
+class RouterLLMResult:
+    auto_setf1: float | None
+    local_setf1: float | None
+    budget_exhausted: bool
+
+
+def answer_setf1(answer_text: str, gold_names: set, universe: set) -> float:
+    """Parse a free-text answer into the set of universe names it mentions, set-F1 vs gold."""
+    from .aggregation import set_f1
+
+    if not gold_names:
+        return 0.0
+    low = answer_text.lower()
+    pred = {n for n in universe if n.lower() in low}
+    return set_f1(pred, gold_names)["f1"]
+
+
+def run_router_llm(*, seed: int, n_anchors: int, tracker) -> RouterLLMResult:
+    """Real-LLM auto-vs-local: build a store over the B1 docs, and for each list-question compare
+    ask(mode='auto') (routes to aggregate) vs ask(mode='local'). Heavy / real-LLM / infra; any
+    failure (missing key, 429, build error) -> None rows, never raises. NOT unit-tested beyond
+    answer_setf1."""
+    _BIG = 10**9
+    try:
+        from goldengraph.answer import ask
+
+        from .aggregation import agg_documents_corpus, generate_aggregation
+        from .run_qa_e2e import _build_engine
+
+        docs, qs = generate_aggregation(seed=seed, n_anchors=n_anchors, ambiguity=0.6)
+        corpus = agg_documents_corpus(docs)
+        engine = _build_engine("goldengraph")
+        build = engine.build_kg(corpus)
+        store = build.handle
+        by_id = {e.id: e for e in _load_entities()}
+        universe = {e.canonical for e in _load_entities()}
+        list_qs = [q for q in qs if q.kind == "list"]
+
+        auto_vals, local_vals = [], []
+        for q in list_qs:
+            if tracker.budget_exhausted:
+                break
+            gold = {by_id[m].canonical for m in q.gold_members}
+            a = ask(q.question, store, llm=engine._llm, embedder=engine._embedder,
+                    valid_t=_BIG, tx_t=_BIG, mode="auto")
+            ln = ask(q.question, store, llm=engine._llm, embedder=engine._embedder,
+                     valid_t=_BIG, tx_t=_BIG, mode="local")
+            auto_vals.append(answer_setf1(a, gold, universe))
+            local_vals.append(answer_setf1(ln, gold, universe))
+        return RouterLLMResult(
+            auto_setf1=(sum(auto_vals) / len(auto_vals)) if auto_vals else None,
+            local_setf1=(sum(local_vals) / len(local_vals)) if local_vals else None,
+            budget_exhausted=tracker.budget_exhausted,
+        )
+    except Exception:
+        return RouterLLMResult(auto_setf1=None, local_setf1=None, budget_exhausted=tracker.budget_exhausted)
+
+
+def render_router_llm_md(res: RouterLLMResult) -> str:
+    def _f(v):
+        return "n/a" if v is None else f"{v:.3f}"
+
+    return (
+        "# Query-router auto-vs-local (real LLM, opt-in, UNGATED)\n\n"
+        "Does routing an aggregation query to the aggregate lever (auto) beat the general local\n"
+        "mode on answer-set-F1? n/a = the run failed to build (missing key / 429 / infra).\n\n"
+        f"budget_exhausted: {res.budget_exhausted}\n\n"
+        "| mode | answer_setF1 |\n|---|---|\n"
+        f"| auto (routed->aggregate) | {_f(res.auto_setf1)} |\n"
+        f"| local (general) | {_f(res.local_setf1)} |\n"
+    )
