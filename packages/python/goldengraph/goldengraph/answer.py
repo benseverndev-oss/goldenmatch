@@ -9,7 +9,36 @@ from __future__ import annotations
 
 from .embed import Embedder, seed_by_query
 from .llm import LLMClient
+from .route import classify_query, plan_query
 from .synthesize import synthesize_global, synthesize_hybrid, synthesize_local
+
+
+def aggregate_members(slice_graph, anchor_surface: str, relation: str) -> set[str]:
+    """Engine-native exact aggregation: seed the anchor by name, 1-hop ball, return the canonical
+    NAMES of objects on edges (subj in seeds, predicate==relation). LLM-FREE."""
+    seeds = slice_graph.seeds_by_name(anchor_surface)
+    if not seeds:
+        return set()
+    sub = slice_graph.query(seeds, 1)
+    id_to_name = {e["entity_id"]: e["canonical_name"] for e in sub.get("entities", ())}
+    seedset = set(seeds)
+    return {
+        id_to_name[e["obj"]]
+        for e in sub.get("edges", ())
+        if e["subj"] in seedset and e["predicate"] == relation and e["obj"] in id_to_name
+    }
+
+
+def _format_aggregate(members: set[str]) -> str:
+    return ", ".join(sorted(members)) if members else "(none found)"
+
+
+def _slice_predicates(slice_graph) -> set[str]:
+    """Distinct edge predicates in the slice -- the relation vocabulary for slot extraction."""
+    ids = [e["entity_id"] for e in slice_graph.entities()]
+    if not ids:
+        return set()
+    return {e["predicate"] for e in slice_graph.query(ids, 1).get("edges", ())}
 
 
 def _hybrid_filter_mode() -> str:
@@ -77,6 +106,14 @@ def ask(
     job). Each community is contextualized with its immediate (1-hop) neighborhood.
     """
     slice_graph = store.as_of(valid_t, tx_t)
+    if mode == "auto":
+        profile = classify_query(query, predicates=_slice_predicates(slice_graph))
+        plan = plan_query(profile)
+        if plan.mode == "aggregate" and profile.anchor_surface and profile.relation:
+            return _format_aggregate(
+                aggregate_members(slice_graph, profile.anchor_surface, profile.relation)
+            )
+        mode = plan.mode  # fall through to the existing local/hybrid/global handling
     if mode == "global":
         communities = slice_graph.communities()[:max_communities]
         views = [slice_graph.query(c["members"], 1) for c in communities]
