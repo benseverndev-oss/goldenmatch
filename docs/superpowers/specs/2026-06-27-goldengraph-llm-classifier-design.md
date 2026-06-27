@@ -94,7 +94,12 @@ randomness) so the gate is reproducible.
 ### 4. Gate (free, deterministic, key-free; extends the router gate)
 
 A `StubClassifier` (deterministic): a dict keyed by the paraphrase question -> the gold
-`QueryProfile` (the "oracle" an ideal LLM would return). New `router_eval` functions + assertions:
+`QueryProfile` (the "oracle" an ideal LLM would return). **LOAD-BEARING: the StubClassifier MUST set
+`confidence >= MIN_CONF` (use 1.0) on each oracle `QueryProfile`** -- `QueryProfile.confidence`
+defaults to 0.0, and both `resolve_profile` (LLM wins only if `ll.confidence > h.confidence`) and
+`plan_query` (gates `aggregate`/`as_of` on `confidence >= MIN_CONF`) would otherwise discard it and
+the stub-escalation accuracy would read 0.0 instead of 1.0. (Same requirement holds for the real
+`LLMQueryClassifier`: emit ~0.85 on a clean answer.) New `router_eval` functions + assertions:
 1. **Heuristic perfect on canonical** -- unchanged (slices 1-2 verdicts stay green).
 2. **Heuristic MISSES paraphrases (HARD):** the heuristic's slot-accuracy on the paraphrase set is
    <= a frozen ceiling (e.g. it routes < 50% correctly, likely ~0) -- proves the gap the LLM tier
@@ -110,10 +115,14 @@ isn't actually exercising the gap -- re-author harder paraphrases).
 
 ### 5. Opt-in real-LLM accuracy (`bench-graphrag-qa`, ungated)
 
-Extend the `run_router_capability` lane: run the REAL `LLMQueryClassifier` (via the goldengraph
-`OpenAIClient`) over the paraphrase set, report intent-accuracy + slot-accuracy vs the heuristic
-baseline (which fails them). Shows the real LLM recovers the NL the heuristic can't. Budget-capped,
-`|| true`, billing-blocked.
+The existing `run_router_capability` workflow input already drives `run_router_eval --with-llm` ->
+`run_router_llm`, which today measures `ask(mode=auto)`-vs-`ask(mode=local)` answer-setF1 over the B1
+aggregation questions. Slice 3 ADDS a new measurement to that same lane (no new workflow input): a
+`llm_classifier_accuracy(paraphrases, llm)` function that runs the REAL `LLMQueryClassifier` (via the
+goldengraph `OpenAIClient`) over the paraphrase asset and reports intent-accuracy + slot-accuracy vs
+the heuristic baseline (which fails them). `run_router_llm` calls it and `render_router_llm_md` adds
+the rows. Shows the real LLM recovers the NL the heuristic can't. Budget-capped, `|| true`,
+billing-blocked.
 
 ## Components / file structure
 
