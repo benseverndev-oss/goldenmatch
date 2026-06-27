@@ -89,3 +89,23 @@ def set_f1(predicted: set, gold: set) -> dict:
 
 def count_accuracy(predicted_count: int, gold_count: int) -> float:
     return 1.0 if predicted_count == gold_count else 0.0
+
+
+def goldengraph_aggregate(slice_graph, coverage, anchor_id: str, relation: str) -> set:
+    """Exact traversal: seed the anchor's store node (invert coverage), pull its
+    1-hop ball, filter edges to `relation` with subj == anchor node, map obj nodes
+    -> covered canonical members. No LLM, no embedder; size-invariant."""
+    node_of_canon: dict = {}
+    for nid in sorted(coverage):  # ascending id -> deterministic
+        for c in coverage[nid]:
+            node_of_canon.setdefault(c, nid)
+    seed = node_of_canon.get(anchor_id)
+    if seed is None:
+        return set()
+    ball = slice_graph.query([seed], 1)
+    members: set = set()
+    for e in ball.get("edges", ()):
+        if e["subj"] == seed and e["predicate"] == relation:
+            members |= coverage.get(e["obj"], set())
+    members.discard(anchor_id)  # never count the anchor itself
+    return members
