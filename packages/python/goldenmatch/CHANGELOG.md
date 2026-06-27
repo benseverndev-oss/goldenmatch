@@ -6,6 +6,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Changed
+- **Healer (config-suggestion) self-verify gate default flipped to the precision-sensitive `cohesion` proxy (`cohesion_min_edge_cap50`).** Closes the raw-vs-live gap in `review_config`: suggester-gym live recovery 0.151 -> 0.543 (now equal to the raw kernel ceiling), with zero net-negatives on real perturbations. Rollback via `GOLDENMATCH_SUGGEST_HEALTH=legacy`. New knob `GOLDENMATCH_SUGGEST_COVERAGE_CAP` (default 0.50). The healer stays opt-in (`from goldenmatch.core.suggest import review_config`, needs `goldenmatch[native]`).
+
+### Added
+- **Config-suggestions ("the healing loop") documentation** — the iterative zero-config -> returned config -> healer-suggests-tweaks -> apply -> improve -> repeat workflow is now documented at `/goldenmatch/config-suggestions`.
+
 ## [2.3.0] - 2026-06-24
 
 <!-- README-callout

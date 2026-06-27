@@ -108,6 +108,22 @@ flowchart LR
 
 ---
 
+## The healing loop
+
+GoldenMatch's core workflow is a loop, not a one-shot:
+
+1. **Zero-config first pass** — `dedupe_df(df)` runs with no rules and no training data. Auto-config picks a defensible config and you get good results immediately.
+2. **You get the config it chose** — the chosen config comes back on `result.config`: inspectable, diffable, versionable. Never a black box.
+3. **The healer suggests tweaks** — `review_config(df, config)` reviews the results against the config and emits ranked, explainable, self-verified edits. Each suggestion is kept only if it doesn't worsen an unsupervised health proxy, so a tweak never makes results worse.
+4. **You apply the tweaks** — `apply_suggestion` turns a suggestion into an improved config.
+5. **Results improve. Repeat** — re-run and loop until the healer goes quiet.
+
+Zero-config gets you most of the way in one pass; the healing loop closes the gap to an expert-tuned config without you having to be the expert.
+
+> **Status:** the healer is opt-in via the Python API (`from goldenmatch.core.suggest import review_config`) and needs `goldenmatch[native]`. It is not yet wired into the default `dedupe_df` pipeline; CLI/MCP surfaces are in progress. Full details: [config-suggestions](https://docs.bensevern.dev/goldenmatch/config-suggestions).
+
+---
+
 ## The Suite
 
 | Package | Lang | What it does | Install |
