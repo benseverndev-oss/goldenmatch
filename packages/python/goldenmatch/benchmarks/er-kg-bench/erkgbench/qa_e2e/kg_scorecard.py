@@ -15,7 +15,12 @@ from dataclasses import dataclass
 #: best -> worst ER (by merge-recall). Labels map to EXISTING dials.py keyfns in run_scorecard.
 DIAL_TIERS = ("oracle", "goldengraph", "exact_match", "none")
 
-#: Frozen from the measured grid (run_kg_scorecard). Placeholders -- TIGHTEN after measuring.
+#: Frozen + measurement-confirmed (goldengraph-pipeline run 28296079431, seed 7). Measured grid:
+#: bridge_recall oracle 1.000 / goldengraph 0.558 / exact-match 0.234 / none 0.234;
+#: aggregation_setF1 oracle 1.000 / goldengraph 0.797 / exact-match 0.510 / none 0.510. The binding
+#: moat is aggregation (0.797 - 0.510 = 0.287); MOAT_MARGIN kept at 0.15 for headroom below it
+#: (absorbs goldengraph_keys/dedupe_df run-to-run jitter). exact-match == none on BOTH metrics, so
+#: exact-match ER adds nothing over no-merge (EPS only needs to cover the bridge 0.000 gap).
 MOAT_MARGIN = 0.15   # goldengraph - exact_match must be >= this on EVERY capability
 MONO_TOL = 1e-9      # tolerance for the oracle>=goldengraph>=exact_match>=none chain
 EPS = 0.02           # exact_match <= none + EPS on bridge-recall (exact-match ~= no-merge)
