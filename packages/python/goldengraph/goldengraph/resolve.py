@@ -35,34 +35,9 @@ def _record_key(name: str, typ: str) -> str:
     return gm.record_fingerprint({"name": name, "typ": typ})
 
 
-def resolve(mentions: list[Mention]) -> list[ResolvedEntity]:
-    """Resolve mentions into entities via goldenmatch's zero-config dedupe."""
-    if not mentions:
-        return []
-
-    import goldenmatch as gm
-    import polars as pl
-
-    # Resolve on name+type, and on `context` (the per-mention description) when
-    # any mention carries one -- the extra evidence sharpens resolution (the field
-    # that takes goldenmatch from name-only to its best on ER-KG-Bench). Falls back
-    # to name+type when extraction produced no descriptions (backward compatible).
-    cols = {"name": [m.name for m in mentions], "type": [m.typ for m in mentions]}
-    if any(m.context for m in mentions):
-        cols["context"] = [m.context for m in mentions]
-    df = pl.DataFrame(cols)
-    result = gm.dedupe_df(df)
-
-    n = len(mentions)
-    groups_idx: list[list[int]] = []
-    seen: set[int] = set()
-    for info in result.clusters.values():
-        members = [int(x) for x in info["members"]]
-        if info.get("size", len(members)) > 1:
-            groups_idx.append(members)
-            seen.update(members)
-    groups_idx.extend([i] for i in range(n) if i not in seen)  # singletons
-
+def _build_entities(mentions: list[Mention], groups_idx: list[list[int]]) -> list[ResolvedEntity]:
+    """Shared construction: groups of mention-indices -> ResolvedEntity list (longest-name rep,
+    sorted-distinct surfaces + record_keys)."""
     out: list[ResolvedEntity] = []
     for local_id, grp in enumerate(sorted(groups_idx, key=min)):
         rep = min(grp, key=lambda i: (-len(mentions[i].name), i))  # longest name
@@ -77,3 +52,53 @@ def resolve(mentions: list[Mention]) -> list[ResolvedEntity]:
             )
         )
     return out
+
+
+def _fuzzy_resolve(mentions: list[Mention], *, use_context: bool) -> list[ResolvedEntity]:
+    """Resolve mentions into entities via goldenmatch's zero-config dedupe (the moat).
+
+    Resolves on name+type, and on `context` (the per-mention description) when `use_context` AND any
+    mention carries one -- the extra evidence sharpens resolution (the field that takes goldenmatch
+    from name-only to its best on ER-KG-Bench). Falls back to name+type otherwise. At
+    `use_context=True` this is byte-identical to the historical `resolve` behavior.
+    """
+    if not mentions:
+        return []
+
+    import goldenmatch as gm
+    import polars as pl
+
+    cols = {"name": [m.name for m in mentions], "type": [m.typ for m in mentions]}
+    if use_context and any(m.context for m in mentions):
+        cols["context"] = [m.context for m in mentions]
+    df = pl.DataFrame(cols)
+    result = gm.dedupe_df(df)
+
+    n = len(mentions)
+    groups_idx: list[list[int]] = []
+    seen: set[int] = set()
+    for info in result.clusters.values():
+        members = [int(x) for x in info["members"]]
+        if info.get("size", len(members)) > 1:
+            groups_idx.append(members)
+            seen.update(members)
+    groups_idx.extend([i] for i in range(n) if i not in seen)  # singletons
+    return _build_entities(mentions, groups_idx)
+
+
+def _exact_resolve(mentions: list[Mention]) -> list[ResolvedEntity]:
+    """Group mentions by EXACT (name, typ) -- distinct surfaces never merge. Deterministic (no
+    dedupe_df). record_keys via the SAME `_record_key` as the fuzzy path, so EXACT- and FUZZY-built
+    stores reconcile across documents with identical fingerprints.
+    """
+    if not mentions:
+        return []
+    groups: dict[tuple[str, str], list[int]] = {}
+    for i, m in enumerate(mentions):
+        groups.setdefault((m.name, m.typ), []).append(i)
+    return _build_entities(mentions, list(groups.values()))
+
+
+def resolve(mentions: list[Mention]) -> list[ResolvedEntity]:
+    """Backward-compatible default: fuzzy name+type+context (FUZZY_CONTEXT)."""
+    return _fuzzy_resolve(mentions, use_context=True)
