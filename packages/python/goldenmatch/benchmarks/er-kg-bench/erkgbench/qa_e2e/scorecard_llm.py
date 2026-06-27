@@ -67,3 +67,78 @@ def synthesis_given_gold(question, gold_chain, g, typ_of, gold_answer, llm) -> f
     start_name = g.canonical_name(gold_chain[0][0])
     pred = synthesize_local(question, sub, llm, seed_names=[start_name])
     return metrics.answer_match(pred, gold_answer)
+
+
+_DIAL_ORDER = ("oracle", "goldengraph", "name_only", "none")
+
+
+def tracking_verdict(answer_match_by_dial: dict, bridge_recall_by_dial: dict) -> tuple[str, bool]:
+    """PASS if the answer-match dial ranking matches the bridge-recall ranking
+    (both should descend oracle..none). A faithful proxy tracks."""
+
+    def _rank(d):
+        return sorted(d, key=lambda k: -d[k])
+
+    same = _rank(answer_match_by_dial) == _rank(bridge_recall_by_dial)
+    return ("answer-match tracks bridge-recall", same)
+
+
+def answer_match_ablation(corpus, g, typ_of, llm) -> dict:
+    """Per dial: reuse ablation._build_store (oracle extraction, dial record_keys),
+    oracle-seed + _retrieve_local ball (IDENTICAL to bridge-recall), then real
+    synthesize_local over that ball. Returns per-dial answer-match + bridge-recall
+    (mean + by_hop)."""
+    from goldengraph.answer import _retrieve_local
+    from goldengraph.synthesize import synthesize_local
+
+    from .ablation import _DIALS, _KEYFN, _build_store
+    from .engines.goldengraph import _NODE_BUDGET, _RETRIEVAL_HOPS
+    from .gold import gold_chain
+    from .scorecard import bridge_recall
+
+    chains = {qa.id: gold_chain(g, qa) for qa in corpus.questions}
+    out: dict = {}
+    for dial in _DIALS:
+        km = _KEYFN[dial](corpus, g)
+        slice_graph, coverage = _build_store(corpus, g, km, typ_of)
+        seed_of: dict = {}
+        for nid in sorted(coverage):
+            for c in coverage[nid]:
+                seed_of.setdefault(c, nid)
+        id_to_name = {e["entity_id"]: e["canonical_name"] for e in slice_graph.entities()}
+
+        am, br = [], []
+        am_hop: dict = {}
+        br_hop: dict = {}
+        for qa in corpus.questions:
+            seed_node = seed_of.get(qa.start_entity_id)
+            if seed_node is None:
+                a, b = 0.0, 0.0
+            else:
+                ball = _retrieve_local(
+                    slice_graph, [seed_node], max_hops=_RETRIEVAL_HOPS, node_budget=_NODE_BUDGET
+                )
+                # mid-ablation budget short-circuit (duck-typed: no-op for a plain LLM)
+                if getattr(llm, "exhausted", False):
+                    pred = ""
+                else:
+                    pred = synthesize_local(
+                        qa.question, ball, llm, seed_names=[id_to_name.get(seed_node, "")]
+                    )
+                a = metrics.answer_match(pred, qa.gold_answer)
+                b = bridge_recall(chains[qa.id], ball, coverage)["whole_chain"]
+            am.append(a)
+            br.append(b)
+            am_hop.setdefault(qa.hop_count, []).append(a)
+            br_hop.setdefault(qa.hop_count, []).append(b)
+        out[dial] = {
+            "answer_match": {
+                "mean": sum(am) / len(am) if am else 0.0,
+                "by_hop": {h: sum(v) / len(v) for h, v in sorted(am_hop.items())},
+            },
+            "bridge_recall": {
+                "mean": sum(br) / len(br) if br else 0.0,
+                "by_hop": {h: sum(v) / len(v) for h, v in sorted(br_hop.items())},
+            },
+        }
+    return out
