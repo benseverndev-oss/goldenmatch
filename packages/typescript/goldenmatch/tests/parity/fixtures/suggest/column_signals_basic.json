@@ -1,0 +1,12 @@
+{
+  "rows": [
+    { "email": "alice@example.com", "name": "Alice Smith", "phone": "555-100-2000", "zip": "10001" },
+    { "email": "alice@example.com", "name": "Alice Smyth", "phone": "555-100-2000", "zip": "10001" },
+    { "email": "bob@example.com", "name": "Bob Jones", "phone": "555-300-4000", "zip": "20002" },
+    { "email": "carol@example.com", "name": "Carol White", "phone": null, "zip": "30003" }
+  ],
+  "clusters": [
+    { "members": [0, 1], "size": 2, "oversized": false }
+  ],
+  "expected": null
+}
