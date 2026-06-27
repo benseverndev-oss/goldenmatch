@@ -122,6 +122,51 @@ def test_resolve_profile_classifier_abstain_keeps_heuristic():
     assert p.intent is route.QueryIntent.MULTI_HOP  # heuristic 0.3 kept (0.0 not > 0.3)
 
 
+class _StubLLM:
+    def __init__(self, response):
+        self.response = response
+        self.calls = 0
+
+    def complete(self, prompt):
+        self.calls += 1
+        return self.response
+
+
+def test_llm_classifier_parses_json_to_profile():
+    llm = _StubLLM('{"intent": "aggregate", "anchor": "Metaphone", "relation": "works_at", "as_of": null}')
+    c = route.LLMQueryClassifier(llm)
+    p = c.classify("who all does Metaphone work with?", predicates=_PREDS)
+    assert p.intent is route.QueryIntent.AGGREGATE
+    assert p.anchor_surface == "Metaphone" and p.relation == "works_at"
+    assert p.confidence >= 0.8
+
+
+def test_llm_classifier_strips_fence():
+    llm = _StubLLM('```json\n{"intent":"temporal_asof","anchor":"X","relation":"works_at","as_of":"3"}\n```')
+    p = route.LLMQueryClassifier(llm).classify("...", predicates=_PREDS)
+    assert p.intent is route.QueryIntent.TEMPORAL_ASOF and p.as_of == "3"
+
+
+def test_llm_classifier_out_of_vocab_relation_abstains():
+    llm = _StubLLM('{"intent":"aggregate","anchor":"X","relation":"NOT_A_PREDICATE","as_of":null}')
+    p = route.LLMQueryClassifier(llm).classify("...", predicates=_PREDS)
+    assert p.confidence == 0.0
+
+
+def test_llm_classifier_bad_json_abstains():
+    p = route.LLMQueryClassifier(_StubLLM("not json at all")).classify("...", predicates=_PREDS)
+    assert p.intent is route.QueryIntent.MULTI_HOP and p.confidence == 0.0
+
+
+def test_llm_classifier_budget_cap():
+    llm = _StubLLM('{"intent":"lookup","anchor":null,"relation":null,"as_of":null}')
+    c = route.LLMQueryClassifier(llm, max_calls=2)
+    c.classify("a", predicates=_PREDS)
+    c.classify("b", predicates=_PREDS)
+    p = c.classify("c", predicates=_PREDS)
+    assert p.confidence == 0.0 and llm.calls == 2
+
+
 def test_plan_multihop_routes_hybrid():
     p = route.classify_query("How is A related to B?")
     assert route.plan_query(p).mode == "hybrid"
