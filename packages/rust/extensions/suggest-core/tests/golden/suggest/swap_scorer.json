@@ -1,0 +1,32 @@
+{
+  "expected": [
+    {
+      "confidence": 0.65,
+      "current_value": "token_sort",
+      "evidence": {
+        "col_type": "address",
+        "corruption_score": 0.6,
+        "variant_rate": 0.0
+      },
+      "id": "swap:res_street_address",
+      "kind": "swap_scorer",
+      "patch": {
+        "field": "res_street_address",
+        "matchkey": "person",
+        "op": "set_scorer",
+        "scorer": "jaro_winkler"
+      },
+      "predicted_effect": "precision_up",
+      "proposed_value": "jaro_winkler",
+      "rationale": "`res_street_address` has corruption_score 60% signal, but `token_sort` is robust to word reordering while fragile to character noise. Switching to `jaro_winkler` will score the corrupted values better.",
+      "target": "res_street_address"
+    }
+  ],
+  "input": {
+    "clusters": "[]",
+    "column_signals": "[{\n                \"field\": \"res_street_address\",\n                \"col_type\": \"address\",\n                \"scorer\": \"token_sort\",\n                \"in_blocking\": false,\n                \"in_negative_evidence\": false,\n                \"identity_score\": 0.0,\n                \"corruption_score\": 0.6,\n                \"collision_rate\": 0.0,\n                \"cardinality_ratio\": 0.5,\n                \"null_rate\": 0.0,\n                \"variant_rate\": 0.0\n            }]",
+    "config": "{\"matchkeys\":[{\"fields\":[{\"field\":\"record_id\",\"scorer\":\"exact\",\"weight\":1.0}],\"kind\":\"weighted\",\"name\":\"person\",\"threshold\":0.8}],\"negative_evidence\":[]}",
+    "priors": "{\"counts\": {}}",
+    "scored_pairs": "{\"score\": [], \"n_pairs\": 0}"
+  }
+}
