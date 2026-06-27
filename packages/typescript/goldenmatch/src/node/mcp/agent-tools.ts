@@ -1,7 +1,7 @@
 /**
  * mcp/agent-tools.ts -- MCP wiring for the AgentSession skill registry.
  *
- * Renders the edge-safe `AGENT_SKILLS` (14 SkillDefs) as MCP `Tool`s and
+ * Renders the edge-safe `AGENT_SKILLS` (15 SkillDefs) as MCP `Tool`s and
  * routes their names through the shared `dispatchSkill`, injecting a node
  * `SkillContext` whose `loadTable` is the file connector's `readFile`.
  *
