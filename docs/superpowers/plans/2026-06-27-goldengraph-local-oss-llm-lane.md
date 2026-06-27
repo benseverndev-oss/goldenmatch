@@ -20,7 +20,7 @@
 - Ruff-clean per commit. Env-var names introduced by this lane: `OPENAI_MODEL`, `OPENAI_EMBED_MODEL` (project-defined; the SDK does not read them). `OPENAI_BASE_URL` is the SDK's own (honored automatically by `OpenAIClient`).
 - Verified reuse facts (do NOT re-derive):
   - `goldenmatch/embeddings/providers.py::OpenAIProvider.embed` builds the literal `"https://api.openai.com/v1/embeddings"`, reads `OPENAI_API_KEY`, uses `urllib.request.urlopen`. `os` + `urllib.request` already imported in that module (CONFIRM at edit; add if absent).
-  - `erkgbench/qa_e2e/run_qa_e2e.py::_build_engine(name)` hardcodes `model="gpt-4o-mini"`; `os` already imported (it reads `FALKORDB_HOST` etc.). goldengraph branch builds `OpenAIClient(model="gpt-4o-mini")` + `GoldenmatchEmbedder(provider="openai")`. The `goldenmatch_rag`/`goldenmatch_entity_rag` branches also build `OpenAIClient(model="gpt-4o-mini", ...)`.
+  - `erkgbench/qa_e2e/run_qa_e2e.py::_build_engine(name)` hardcodes `model="gpt-4o-mini"`; `os` already imported (it reads `FALKORDB_HOST` etc.). goldengraph branch builds `OpenAIClient(model="gpt-4o-mini")` + `GoldenmatchEmbedder(provider="openai")`. The `goldenmatch_rag`/`goldenmatch_entity_rag` branches build `GoldenmatchRAGQAEngine(model="gpt-4o-mini", embedding_model="text-embedding-3-large")` (a STRING `model=` kwarg, NOT an `OpenAIClient`, plus a hardcoded OpenAI `embedding_model`). **v1 threads env into the goldengraph branch ONLY** -- the rag controls would also need `embedding_model` threaded (Ollama won't serve `text-embedding-3-large`), so they are deferred (out of v1 scope; left on the gpt-4o-mini default).
   - `OpenAIClient(model=...)`; `GoldenmatchEmbedder(provider="openai", model=None)` forwards model to the provider. `OpenAIClient.complete` uses `openai.OpenAI()` (honors `OPENAI_BASE_URL`).
   - `bench-graphrag-qa.yml` goldengraph job: `runs-on: large-new-64GB`; install step `python -m pip install --upgrade pip maturin pytest goldenmatch datasets openai` + maturin-builds the wheel + `pip install --no-deps -e packages/python/goldengraph`; run step env `OPENAI_API_KEY: ${{ secrets.GOLDENGRAPH_OPENAI_API_KEY }}`. CONFIRM exact step names + the run command (`python -m erkgbench.qa_e2e.run_qa_e2e ...`) at edit time.
 - Commit footer:
@@ -168,13 +168,15 @@ def _chat_model() -> str:
 def _embed_model():
     return os.environ.get("OPENAI_EMBED_MODEL")  # None -> provider default
 
-# goldengraph branch:
+# goldengraph branch ONLY:
     llm=OpenAIClient(model=_chat_model()),
     embedder=GoldenmatchEmbedder(provider="openai", model=_embed_model()),
-# goldenmatch_rag / goldenmatch_entity_rag branches: model=_chat_model()
 ```
 
-Leave LightRAG/MS-GraphRAG/Graphiti branches unchanged (out of v1 scope; they pin their own model funcs).
+Leave ALL other branches unchanged (goldenmatch_rag/entity_rag pin an OpenAI `embedding_model` that
+Ollama won't serve; LightRAG/MS-GraphRAG/Graphiti pin their own model funcs) -- all out of v1 scope.
+Update the test accordingly: `_build_engine("goldengraph")` reads the env; assert the goldengraph
+engine's chat model only.
 
 - [ ] **Step 4: Run to verify it passes**
 
