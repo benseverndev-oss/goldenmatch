@@ -420,11 +420,14 @@ class _CostLLM:
 
 
 def test_budgeted_llm_stops_at_cap():
-    tracker = BudgetTracker(BudgetConfig(max_cost_usd=0.0))  # zero budget
+    # tiny POSITIVE cap (not 0.0 -- 0.0 is exhausted at construction, which wouldn't
+    # exercise the record->exhaust transition). One big-output call records enough
+    # usage to flip the flag, proving _BudgetedLLM.complete -> record_usage works.
+    tracker = BudgetTracker(BudgetConfig(max_cost_usd=1e-9))
     llm = _BudgetedLLM(_CostLLM(), tracker, model="gpt-4o-mini")
-    # one call records usage; with a zero cap the tracker reports exhausted
+    assert llm.exhausted is False  # not yet -- nothing recorded
     llm.complete("a prompt that costs tokens")
-    assert llm.exhausted is True
+    assert llm.exhausted is True   # the recorded usage crossed the cap
 
 
 def test_render_scorecard_md_has_all_three_stages():
@@ -560,7 +563,7 @@ def run_scorecard(*, seed, n_questions, ambiguity, max_hops, inner_llm, budget_u
     )
 ```
 
-> The `answer_match_ablation` synthesize calls must also short-circuit on `llm.exhausted` — add a guard in its per-question loop (`if llm has exhausted attr and llm.exhausted: pred=""`) so a mid-ablation cap stops cleanly. Keep it duck-typed (the e2e test's `_FixedLLM` has no `exhausted` — guard with `getattr(llm, "exhausted", False)`).
+> **This EDITS the Task 3 `answer_match_ablation` function in the same `scorecard_llm.py`** (not a new definition). Add a budget short-circuit in its per-question loop: before the `synthesize_local` call, `if getattr(llm, "exhausted", False): pred = ""` (then `a = answer_match("", gold) = 0.0`), so a mid-ablation cap stops cleanly. Duck-typed: the Task 3 e2e `_FixedLLM` has no `exhausted` attr, so `getattr(..., False)` leaves it unaffected — the Task 3 test stays green after this edit.
 
 - [ ] **Step 4: Run -> pass** (budget + render wheel-free; full `run_scorecard` validates in CI).
 - [ ] **Step 5: Commit** — `feat(er-kg-bench): scorecard orchestrator + budget + render`.
