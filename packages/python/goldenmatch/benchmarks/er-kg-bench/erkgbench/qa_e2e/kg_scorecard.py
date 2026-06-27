@@ -99,3 +99,78 @@ def render_scorecard_md(res: ScorecardResult) -> str:
         tag = "PASS" if passed else ("FAIL" if is_hard else "WARN")
         lines.append(f"- [{tag}] {label}{'' if is_hard else ' (soft)'}")
     return "\n".join(lines) + "\n"
+
+
+# --- per-dial graph metrics + orchestrator (NEEDS the goldengraph_native wheel) ---
+
+
+def _bridge_recall_for_dial(corpus, g, typ_of, chains, km) -> float:
+    """Mean whole-chain bridge-recall over the engineered corpus under one dial's km. Mirrors the
+    ablation.run_ablation per-dial loop exactly. Needs the wheel."""
+    from goldengraph.answer import _retrieve_local
+
+    from . import ablation
+    from .engines.goldengraph import _NODE_BUDGET, _RETRIEVAL_HOPS
+    from .scorecard import bridge_recall
+
+    slice_graph, coverage = ablation._build_store(corpus, g, km, typ_of)
+    seed_of: dict[str, int] = {}
+    for nid in sorted(coverage):  # ascending id => deterministic tie-break
+        for c in coverage[nid]:
+            seed_of.setdefault(c, nid)
+    vals: list[float] = []
+    for qa in corpus.questions:
+        sn = seed_of.get(qa.start_entity_id)
+        if sn is None:
+            vals.append(0.0)
+            continue
+        sub = _retrieve_local(slice_graph, [sn], max_hops=_RETRIEVAL_HOPS, node_budget=_NODE_BUDGET)
+        vals.append(bridge_recall(chains[qa.id], sub, coverage)["whole_chain"])
+    return (sum(vals) / len(vals)) if vals else 0.0
+
+
+def _aggregation_f1_for_dial(corpus, qs, g, typ_of, km) -> float:
+    """Mean set-F1 over the fan-out list-questions under one dial's km. Reuses
+    aggregation.goldengraph_aggregate + set_f1. Needs the wheel."""
+    from . import ablation
+    from .aggregation import goldengraph_aggregate, set_f1
+
+    slice_graph, coverage = ablation._build_store(corpus, g, km, typ_of)
+    vals: list[float] = []
+    for q in (q for q in qs if q.kind == "list"):
+        got = goldengraph_aggregate(slice_graph, coverage, q.anchor_id, q.relation)
+        vals.append(set_f1(got, set(q.gold_members))["f1"])
+    return (sum(vals) / len(vals)) if vals else 0.0
+
+
+def run_scorecard_deterministic(*, seed: int, n_questions: int, n_anchors: int,
+                                ambiguity: float, max_hops: int = 4) -> ScorecardResult:
+    """Build BOTH capability corpora, run every ER tier through both metrics. NEEDS the wheel."""
+    from . import ablation, dials
+    from .aggregation import agg_documents_corpus, generate_aggregation
+    from .engineered import generate_engineered
+    from .gold import GoldGraph, gold_chain
+
+    keyfn = {
+        "oracle": dials.oracle_keys,
+        "goldengraph": dials.goldengraph_keys,
+        "exact_match": dials.name_only_keys,   # LightRAG / MS-GraphRAG (coincide on single-type corpus)
+        "none": dials.none_keys,
+    }
+
+    eng = generate_engineered(seed=seed, n_questions=n_questions, ambiguity=ambiguity, max_hops=max_hops)
+    g_e = GoldGraph.from_corpus(eng)
+    typ_e = ablation._typ_of(g_e)
+    chains = {qa.id: gold_chain(g_e, qa) for qa in eng.questions}
+
+    docs, qs = generate_aggregation(seed=seed, n_anchors=n_anchors, ambiguity=ambiguity)
+    agg = agg_documents_corpus(docs)
+    g_a = GoldGraph.from_corpus(agg)
+    typ_a = ablation._typ_of(g_a)
+
+    bridge: dict = {}
+    aggf1: dict = {}
+    for dial in DIAL_TIERS:
+        bridge[dial] = _bridge_recall_for_dial(eng, g_e, typ_e, chains, keyfn[dial](eng, g_e))
+        aggf1[dial] = _aggregation_f1_for_dial(agg, qs, g_a, typ_a, keyfn[dial](agg, g_a))
+    return ScorecardResult(bridge_recall=bridge, aggregation_f1=aggf1)
