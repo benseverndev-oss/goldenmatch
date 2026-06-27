@@ -59,3 +59,18 @@ def test_ask_auto_routes_temporal_current():
     out = ask("As of 7, what does X works at?", store, llm=StubLLM("UNUSED"),
               embedder=StubEmbedder({}), valid_t=_BIG, tx_t=_BIG, mode="auto")
     assert out == "Banana"
+
+
+def test_ask_auto_injected_classifier_recovers_paraphrase():
+    from goldengraph.route import QueryIntent, QueryProfile
+
+    class _Stub:
+        def classify(self, query, *, predicates=None):
+            return QueryProfile(QueryIntent.TEMPORAL_ASOF, anchor_surface="X",
+                                relation="works_at", as_of="3", confidence=1.0)
+
+    store = _windowed_store()
+    # a paraphrase the heuristic lead-in regexes miss -> would route local; injected stub recovers
+    out = ask("tell me X's employer back in 3", store, llm=StubLLM("UNUSED"),
+              embedder=StubEmbedder({}), valid_t=_BIG, tx_t=_BIG, mode="auto", query_classifier=_Stub())
+    assert out == "Apple"

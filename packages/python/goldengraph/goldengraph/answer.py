@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from .embed import Embedder, seed_by_query
 from .llm import LLMClient
-from .route import classify_query, plan_query
+from .route import plan_query, resolve_profile
 from .synthesize import synthesize_global, synthesize_hybrid, synthesize_local
 
 
@@ -108,6 +108,7 @@ def ask(
     node_budget: int = 64,
     passages: object | None = None,
     passage_k: int = 10,
+    query_classifier: object | None = None,
 ) -> str:
     """Answer `query` against `store` as-of `(valid_t, tx_t)`.
 
@@ -125,7 +126,9 @@ def ask(
     """
     slice_graph = store.as_of(valid_t, tx_t)
     if mode == "auto":
-        profile = classify_query(query, predicates=_slice_predicates(slice_graph))
+        profile = resolve_profile(
+            query, predicates=_slice_predicates(slice_graph), llm_classifier=query_classifier
+        )
         plan = plan_query(profile)
         if plan.mode == "aggregate" and profile.anchor_surface and profile.relation:
             return _format_aggregate(
