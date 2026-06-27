@@ -158,3 +158,23 @@ jobs:
           name: goldengraph-router
           path: packages/python/goldenmatch/benchmarks/er-kg-bench/ROUTER.md
           if-no-files-found: ignore
+
+      - name: Unified planner gate (deterministic, key-free)
+        # Slice 4a meta-kernel JOIN: a query workload's capability demand picks the ER resolution
+        # tier (capability -> FUZZY, lookup -> EXACT), and slice-D's measured kg_scorecard proves
+        # FUZZY beats EXACT on the workload's capability. Gates HARD on routing + the measured deltas.
+        working-directory: packages/python/goldenmatch/benchmarks/er-kg-bench
+        env:
+          POLARS_SKIP_CPU_CHECK: "1"
+        run: |
+          python -m pytest tests/test_qa_unified.py -v
+          python -m erkgbench.qa_e2e.run_unified_eval \
+            --seed 7 --n-anchors 60 --n-facts 40 --n-questions 80 --out-md UNIFIED.md
+
+      - name: Upload UNIFIED.md
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: goldengraph-unified
+          path: packages/python/goldenmatch/benchmarks/er-kg-bench/UNIFIED.md
+          if-no-files-found: ignore
