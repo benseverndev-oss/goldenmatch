@@ -75,3 +75,24 @@ jobs:
           name: goldengraph-er-ablation
           path: packages/python/goldenmatch/benchmarks/er-kg-bench/ABLATION.md
           if-no-files-found: ignore
+
+      - name: Aggregation capability gate (deterministic, key-free)
+        # The first capability RAG structurally can't do: set/count aggregation.
+        # goldengraph exact traversal is size-invariant; a passage-window floor's
+        # recall collapses as the set outgrows passage_k. Gates HARD on size-invariant
+        # goldengraph set-F1 + floor collapse + a WIDENING gap with set size. No key.
+        working-directory: packages/python/goldenmatch/benchmarks/er-kg-bench
+        env:
+          POLARS_SKIP_CPU_CHECK: "1"
+        run: |
+          python -m pytest tests/test_qa_aggregation_traversal.py -v
+          python -m erkgbench.qa_e2e.run_aggregation \
+            --seed 7 --n-anchors 60 --ambiguity 0.6 --passage-k 10 --out-md AGGREGATION.md
+
+      - name: Upload AGGREGATION.md
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: goldengraph-aggregation
+          path: packages/python/goldenmatch/benchmarks/er-kg-bench/AGGREGATION.md
+          if-no-files-found: ignore
