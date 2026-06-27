@@ -47,13 +47,15 @@ def test_asof_object_none_when_anchor_missing():
 
 def test_ask_auto_routes_temporal_past():
     store = _windowed_store()
-    out = ask("As of 3, what does X works_at?", store, llm=StubLLM("UNUSED"),
+    # NL question uses the SPACED relation phrase ("works at"), like the real B2 corpus
+    # (rel.replace("_"," ")); the slot-splitter suffix-matches the spaced predicate phrase.
+    out = ask("As of 3, what does X works at?", store, llm=StubLLM("UNUSED"),
               embedder=StubEmbedder({}), valid_t=_BIG, tx_t=_BIG, mode="auto")
     assert out == "Apple"
 
 
 def test_ask_auto_routes_temporal_current():
     store = _windowed_store()
-    out = ask("As of 7, what does X works_at?", store, llm=StubLLM("UNUSED"),
+    out = ask("As of 7, what does X works at?", store, llm=StubLLM("UNUSED"),
               embedder=StubEmbedder({}), valid_t=_BIG, tx_t=_BIG, mode="auto")
     assert out == "Banana"
