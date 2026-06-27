@@ -303,6 +303,19 @@ _SKILLS = [
         "outputModes": ["application/json"],
     },
     {
+        "id": "review_config",
+        "name": "Review Config",
+        "description": (
+            "Run the config healer over a CSV: analyze the dedupe run and return "
+            "ranked, self-verified suggestions for improving the matching config "
+            "(thresholds, scorers, negative evidence, blocking), each with an id, "
+            "kind, target, rationale, and machine-applicable patch. Requires the "
+            "native kernel; returns an empty list otherwise."
+        ),
+        "inputModes": ["application/json"],
+        "outputModes": ["application/json"],
+    },
+    {
         "id": "retrieve_similar",
         "name": "Retrieve Similar",
         "description": "Semantic retrieval: return the records in a CSV most similar to a free-text query, ranked by cosine similarity (zero-config in-house embedder, no cloud by default).",

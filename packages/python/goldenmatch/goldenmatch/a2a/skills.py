@@ -417,6 +417,45 @@ def dispatch_skill(skill_id: str, params: dict) -> dict:
             "suggestions": [asdict(s) for s in suggestions[:limit]],
         }
 
+    if skill_id == "review_config":
+        import polars as pl
+
+        from goldenmatch.core.suggest import (
+            SuggestionsNativeRequired,
+            review_config,
+        )
+        from goldenmatch.core.suggest.surface import serialize_suggestions
+
+        file_path = params.get("file_path")
+        if not file_path:
+            return {"error": "Missing required parameter: file_path"}
+
+        try:
+            df = pl.read_csv(file_path, encoding="utf8-lossy", ignore_errors=True)
+        except FileNotFoundError:
+            return {"error": f"File not found: {file_path}"}
+        except Exception as exc:
+            return {"error": f"Could not read CSV '{file_path}': {exc}"}
+
+        cfg = params.get("config")
+        if cfg:
+            from goldenmatch.config.loader import load_config
+            cfg = load_config(cfg) if isinstance(cfg, str) else cfg
+        else:
+            from pathlib import Path as _Path
+
+            from goldenmatch.core.autoconfig import auto_configure
+            cfg = auto_configure([(file_path, _Path(file_path).stem)])
+
+        try:
+            suggestions = review_config(df, cfg)
+        except SuggestionsNativeRequired as exc:
+            return {"suggestions": [], "native_required": True, "message": str(exc)}
+        except Exception as exc:
+            return {"error": f"review_config failed: {exc}"}
+
+        return {"suggestions": serialize_suggestions(suggestions, verified=True)}
+
     raise ValueError(f"Unknown skill: {skill_id}")
 
 

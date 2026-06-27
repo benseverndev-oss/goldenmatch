@@ -273,6 +273,18 @@ _BASE_TOOLS = [
         },
     ),
     Tool(
+        name="review_config",
+        description=(
+            "Run the config healer over the loaded dataset: analyze the dedupe "
+            "run and return ranked, self-verified suggestions for improving the "
+            "matching config (thresholds, scorers, negative evidence, blocking). "
+            "Each suggestion carries an id, kind, target, rationale, and a "
+            "machine-applicable patch. Requires the native kernel "
+            "(pip install goldenmatch[native]); returns an empty list otherwise."
+        ),
+        inputSchema={"type": "object", "properties": {}},
+    ),
+    Tool(
         name="profile_data",
         description="Get data quality profile: column types, null rates, unique counts, sample values.",
         inputSchema={"type": "object", "properties": {}},
@@ -896,6 +908,8 @@ def _handle_tool(name: str, args: dict) -> dict:
         return _tool_shatter_cluster(args["cluster_id"])
     elif name == "suggest_config":
         return _tool_suggest_config(args.get("bad_merges", []))
+    elif name == "review_config":
+        return _tool_review_config()
     elif name == "profile_data":
         return _tool_profile_data()
     elif name == "export_results":
@@ -1230,6 +1244,30 @@ def _tool_suggest_config(bad_merges: list[dict]) -> dict:
         "current_threshold": threshold,
         "bad_merges_analyzed": len(analyses),
     }
+
+
+def _tool_review_config() -> dict:
+    """Run the config healer over the loaded dataset and return ranked,
+    self-verified suggestions in the shared cross-surface wire shape.
+
+    Fail-safe: returns a structured ``native_required`` payload when the native
+    kernel is absent, and an ``error`` payload on any other failure -- never
+    raises out of the MCP dispatch.
+    """
+    if _engine is None or _config is None:
+        return {"error": "No dataset loaded. Start the server with --file."}
+
+    from goldenmatch.core.suggest import SuggestionsNativeRequired, review_config
+    from goldenmatch.core.suggest.surface import serialize_suggestions
+
+    try:
+        suggestions = review_config(_engine.data, _config)
+    except SuggestionsNativeRequired as exc:
+        return {"suggestions": [], "native_required": True, "message": str(exc)}
+    except Exception as exc:  # noqa: BLE001 - fail-safe MCP handler
+        return {"error": f"review_config failed: {exc}"}
+
+    return {"suggestions": serialize_suggestions(suggestions, verified=True)}
 
 
 def _tool_profile_data() -> dict:
@@ -1667,7 +1705,7 @@ async def run_server_http(
     async def server_card(request):
         return JSONResponse({
             "name": "GoldenMatch",
-            "description": "Entity resolution toolkit — deduplicate records, match across datasets, and create golden records using fuzzy, probabilistic, and LLM-powered scoring. Zero-config mode auto-detects your data. 63 MCP tools for matching, semantic retrieval, explaining, reviewing, evaluating, blocking analysis, config critique, lineage, data quality, transforms, identity graph, distributed-routing config, and privacy-preserving linkage. Built on Polars. 97.2% F1 on DBLP-ACM.",
+            "description": "Entity resolution toolkit — deduplicate records, match across datasets, and create golden records using fuzzy, probabilistic, and LLM-powered scoring. Zero-config mode auto-detects your data. 69 MCP tools for matching, semantic retrieval, explaining, reviewing, evaluating, blocking analysis, config critique, config healing, lineage, data quality, transforms, identity graph, distributed-routing config, and privacy-preserving linkage. Built on Polars. 97.2% F1 on DBLP-ACM.",
             "homepage": "https://github.com/benseverndev-oss/goldenmatch",
             "iconUrl": "https://avatars.githubusercontent.com/u/192581748"
         })

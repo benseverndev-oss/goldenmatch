@@ -157,11 +157,11 @@ def test_memory_tools_op_error_returns_structured_error(tmp_path, monkeypatch):
 
 
 def test_server_card_description_count():
-    """server.py description string advertises 63 MCP tools."""
+    """server.py description string advertises 69 MCP tools."""
     server_path = (
         Path(__file__).resolve().parent.parent / "goldenmatch" / "mcp" / "server.py"
     )
     text = server_path.read_text(encoding="utf-8")
     match = re.search(r"(\d+) MCP tools", text)
     assert match is not None
-    assert int(match.group(1)) == 63
+    assert int(match.group(1)) == 69
