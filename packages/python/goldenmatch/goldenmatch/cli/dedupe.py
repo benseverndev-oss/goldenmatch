@@ -113,10 +113,22 @@ def dedupe_cmd(
         "--show-controller/--hide-controller",
         help="Render AutoConfigController telemetry (stop_reason, decisions, Path Y) when auto-config ran. No-op for runs with an explicit --config.",
     ),
+    suggest: bool = typer.Option(
+        False, "--suggest",
+        help="Show verified config-improvement suggestions for this run.",
+    ),
+    heal: bool = typer.Option(
+        False, "--heal",
+        help="Apply the suggestion heal loop and print the applied trail.",
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress output"),
 ) -> None:
     """Run deduplication on one or more input files."""
+    # Whether this run resolved its config via auto-config (zero-config path).
+    # The default-run healer hint only fires here -- the free trigger reads the
+    # controller history that only the auto-config path produces.
+    _used_autoconfig = False
     # Telemetry captured if/when auto_configure runs in this command. Stays
     # None on the explicit-config path; the panel is suppressed in that case.
     _ctrl_profile: object = None
@@ -158,6 +170,7 @@ def dedupe_cmd(
                 # auto_configure_df. None on legacy paths that bypass it.
                 _ctrl_profile, _ctrl_history = capture_controller_state()
                 _ctrl_committed_config = cfg
+                _used_autoconfig = True
                 if not quiet:
                     console.print("[green]Auto-config complete. Launching TUI for review...[/green]")
             except Exception as exc:
@@ -332,3 +345,111 @@ def dedupe_cmd(
     elif not quiet:
         clusters = results.get("clusters", {})
         console.print(f"Dedupe complete. {len(clusters)} clusters found.")
+
+    # ── Config-suggestion (healer) surface ──
+    # ADVISORY and additive: a default run prints a one-line hint when the free
+    # trigger surfaced candidates; --suggest prints them; --heal applies the loop
+    # and prints the trail. Wrapped so a healer failure NEVER breaks a dedupe.
+    _emit_healer_surface(
+        file_specs, cfg,
+        suggest=suggest, heal=heal, quiet=quiet,
+        used_autoconfig=_used_autoconfig,
+    )
+
+
+def _load_combined_frame(file_specs):
+    """Load + concat the input files into one frame for the advisory healer.
+
+    Mirrors the ingest the dedupe pipeline does (load + optional column_map),
+    but skips source/row-id bookkeeping -- ``dedupe_df`` handles that itself.
+    """
+    import polars as pl
+
+    from goldenmatch.core.ingest import apply_column_map, load_file
+
+    frames = []
+    for spec in file_specs:
+        path = spec[0]
+        col_map = spec[2] if len(spec) == 3 else None
+        lf = load_file(path)
+        if col_map:
+            lf = apply_column_map(lf, col_map)
+        frames.append(lf.collect())
+    if len(frames) == 1:
+        return frames[0]
+    return pl.concat(frames, how="diagonal_relaxed")
+
+
+def _render_suggestion_lines(items) -> list[str]:
+    """One ASCII line per serialized suggestion dict: kind + target + rationale."""
+    lines = []
+    for s in items:
+        kind = s.get("kind", "")
+        target = s.get("target", "")
+        rationale = s.get("rationale", "")
+        lines.append(f"- {kind}: {target} - {rationale}")
+    return lines
+
+
+def _emit_healer_surface(
+    file_specs, cfg, *, suggest: bool, heal: bool, quiet: bool, used_autoconfig: bool
+) -> None:
+    """Advisory config-suggestion (healer) surface. NEVER raises.
+
+    Default run (no flags): one-line hint to stderr when candidates surfaced
+    (zero-config path only; kill-switch ``GOLDENMATCH_SUGGEST_ON_DEDUPE=0``).
+    ``--suggest``: print verified suggestions. ``--heal``: print applied trail.
+    """
+    import os
+
+    if not (suggest or heal):
+        # Default hint: respects --quiet + the kill-switch, and only fires on the
+        # zero-config path (an explicit --config surfaces nothing -- matches the
+        # engine's free-trigger gate, which reads controller history).
+        if quiet:
+            return
+        if os.environ.get("GOLDENMATCH_SUGGEST_ON_DEDUPE", "1").strip() == "0":
+            return
+        if not used_autoconfig:
+            return
+
+    try:
+        from goldenmatch import _api
+
+        df = _load_combined_frame(file_specs)
+
+        if heal:
+            result = _api.dedupe_df(df, config=cfg, heal=True)
+            trail = result.heal_trail or []
+            if trail:
+                console.print(
+                    f"[green]Config healed - {len(trail)} suggestion(s) applied:[/green]"
+                )
+                for line in _render_suggestion_lines(trail):
+                    console.print(line)
+                console.print(
+                    "[dim]Output above reflects the pre-heal config; re-run with "
+                    "the healed config to apply it to the written output.[/dim]"
+                )
+            else:
+                console.print("Healer found nothing to apply - config looks good.")
+        elif suggest:
+            result = _api.dedupe_df(df, config=cfg, suggest=True)
+            items = result.suggestions or []
+            if items:
+                console.print(f"[cyan]{len(items)} suggestion(s):[/cyan]")
+                for line in _render_suggestion_lines(items):
+                    console.print(line)
+            else:
+                console.print("No suggestions - config looks good.")
+        else:
+            result = _api.dedupe_df(df)
+            items = result.suggestions or []
+            if items:
+                err_console.print(
+                    f"[yellow]{len(items)} suggestion(s) to improve this config - "
+                    "re-run with --suggest to see them, --heal to apply.[/yellow]"
+                )
+    except Exception as exc:  # noqa: BLE001 - healer is advisory; never break dedupe
+        if not quiet:
+            err_console.print(f"[dim]suggestions unavailable: {exc}[/dim]")
