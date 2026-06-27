@@ -480,6 +480,32 @@ def test_distill_logger_writes_jsonl(tmp_path):
     assert rec["text"] == "Acme made Rocket"
     assert rec["entities"][0]["name"] == "Acme made Rocket"  # stub: one mention
     assert rec["fingerprints"] == {"0": "Acme | org | UNKNOWN | maker"}
+    assert rec["attributes"] == []  # back-compat: attribute-less extraction
+
+
+def test_distill_logger_captures_attributes(tmp_path):
+    """The capture must record literal attributes (entity -[predicate]-> typed
+    value) -- otherwise the literal/phrase-span extraction channel is invisible in
+    the distillation log it is meant to train."""
+    import json as _json
+
+    from goldengraph.extract import Attribute, Extraction, Mention
+
+    p = tmp_path / "distill.jsonl"
+    ext = Extraction(
+        mentions=[Mention(name="Cairo University", typ="university")],
+        relationships=[],
+        attributes=[
+            Attribute(subj=0, predicate="ranked", value="551-600", typ="range"),
+            Attribute(subj=0, predicate="located in", value="Egypt", typ="region"),
+        ],
+    )
+    ingest._DistillLogger(str(p)).log("Cairo University ...", ext, None)
+    rec = _json.loads(p.read_text().strip())
+    assert rec["attributes"] == [
+        {"subj": 0, "predicate": "ranked", "value": "551-600", "type": "range"},
+        {"subj": 0, "predicate": "located in", "value": "Egypt", "type": "region"},
+    ]
 
 
 def test_resolve_extractor_default_and_unknown(monkeypatch):

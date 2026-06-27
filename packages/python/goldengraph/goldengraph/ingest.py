@@ -578,6 +578,15 @@ class _DistillLogger:
                 {"subj": r.subj, "predicate": r.predicate, "obj": r.obj}
                 for r in extraction.relationships
             ],
+            # Literal attributes (entity -[predicate]-> typed value). Absent from the
+            # capture before this -- which made the literal/phrase-span extraction
+            # (the very channel the distillation is meant to train) invisible in the
+            # log. getattr keeps it back-compat for an attribute-less Extraction.
+            "attributes": [
+                {"subj": a.subj, "predicate": a.predicate, "value": a.value,
+                 "type": a.typ}
+                for a in getattr(extraction, "attributes", ())
+            ],
             "fingerprints": {str(k): v for k, v in (new_fps or {}).items()},
         }
         line = json.dumps(rec, ensure_ascii=False)
