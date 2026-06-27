@@ -86,6 +86,42 @@ def test_plan_temporal_low_confidence_falls_back():
     assert route.plan_query(p).mode == "local"
 
 
+class _StubClassifier:
+    """Deterministic tier-2: returns a pre-set high-confidence profile for a known query."""
+    def __init__(self, mapping):
+        self.mapping = mapping  # query -> QueryProfile
+
+    def classify(self, query, *, predicates=None):
+        return self.mapping.get(query, route.QueryProfile(route.QueryIntent.MULTI_HOP, confidence=0.0))
+
+
+def test_resolve_profile_no_classifier_is_heuristic():
+    p = route.resolve_profile("List all entities that Metaphone works at.", predicates=_PREDS)
+    assert p.intent is route.QueryIntent.AGGREGATE and p.relation == "works_at"
+
+
+def test_resolve_profile_canonical_never_escalates():
+    oracle = route.QueryProfile(route.QueryIntent.AGGREGATE, anchor_surface="WRONG", relation="works_at", confidence=1.0)
+    stub = _StubClassifier({"List all entities that Metaphone works at.": oracle})
+    p = route.resolve_profile("List all entities that Metaphone works at.", predicates=_PREDS, llm_classifier=stub)
+    assert p.anchor_surface == "Metaphone"  # heuristic kept (0.9 >= MIN_CONF), stub NOT consulted
+
+
+def test_resolve_profile_low_conf_escalates_to_classifier():
+    q = "who all does Metaphone work with?"
+    oracle = route.QueryProfile(route.QueryIntent.AGGREGATE, anchor_surface="Metaphone", relation="works_at", confidence=1.0)
+    stub = _StubClassifier({q: oracle})
+    p = route.resolve_profile(q, predicates=_PREDS, llm_classifier=stub)
+    assert p.intent is route.QueryIntent.AGGREGATE and p.anchor_surface == "Metaphone" and p.relation == "works_at"
+
+
+def test_resolve_profile_classifier_abstain_keeps_heuristic():
+    q = "ramble ramble nonsense"
+    stub = _StubClassifier({})
+    p = route.resolve_profile(q, predicates=_PREDS, llm_classifier=stub)
+    assert p.intent is route.QueryIntent.MULTI_HOP  # heuristic 0.3 kept (0.0 not > 0.3)
+
+
 def test_plan_multihop_routes_hybrid():
     p = route.classify_query("How is A related to B?")
     assert route.plan_query(p).mode == "hybrid"

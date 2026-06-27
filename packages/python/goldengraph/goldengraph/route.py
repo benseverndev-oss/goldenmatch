@@ -7,6 +7,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import Protocol
 
 _AGG_RE = re.compile(r"\b(list all|how many|which entities|all entities)\b", re.IGNORECASE)
 _TEMPORAL_RE = re.compile(r"\b(as of|at the time|in \d{4}|before \d|after \d)\b", re.IGNORECASE)
@@ -135,3 +136,19 @@ def plan_query(profile: QueryProfile) -> RetrievalPlan:
     if profile.intent is QueryIntent.MULTI_HOP:
         return RetrievalPlan(mode="hybrid")
     return RetrievalPlan(mode="local")  # LOOKUP + low-confidence fallbacks
+
+
+class QueryClassifier(Protocol):
+    def classify(self, query: str, *, predicates=None) -> QueryProfile: ...
+
+
+def resolve_profile(query: str, *, predicates=None,
+                    llm_classifier: QueryClassifier | None = None) -> QueryProfile:
+    """Two-tier: heuristic FIRST; escalate to the injected classifier ONLY when the heuristic is
+    below MIN_CONF AND a classifier is given; the classifier's result wins only if strictly more
+    confident (so a confidently-abstaining tier-2 keeps the heuristic -> safe local route)."""
+    h = classify_query(query, predicates=predicates)
+    if h.confidence >= MIN_CONF or llm_classifier is None:
+        return h
+    ll = llm_classifier.classify(query, predicates=predicates)
+    return ll if ll.confidence > h.confidence else h
