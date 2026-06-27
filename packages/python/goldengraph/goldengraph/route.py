@@ -5,7 +5,7 @@ controller's HeuristicRefitPolicy; an LLM-assisted classifier tier is a slice-3 
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 
 _AGG_RE = re.compile(r"\b(list all|how many|which entities|all entities)\b", re.IGNORECASE)
@@ -78,3 +78,29 @@ def classify_query(query: str, *, predicates=None) -> QueryProfile:
         return QueryProfile(intent=intent, anchor_surface=anchor, relation=relation, confidence=conf)
     conf = 0.5 if intent is not QueryIntent.MULTI_HOP else 0.3
     return QueryProfile(intent=intent, confidence=conf)
+
+
+MIN_CONF = 0.8  # below this, a specialized intent routes to the safe general mode
+
+
+@dataclass
+class RetrievalPlan:
+    mode: str
+    note: str | None = None
+    params: dict = field(default_factory=dict)
+
+
+def plan_query(profile: QueryProfile) -> RetrievalPlan:
+    if (
+        profile.intent is QueryIntent.AGGREGATE
+        and profile.confidence >= MIN_CONF
+        and profile.anchor_surface
+        and profile.relation
+    ):
+        return RetrievalPlan(mode="aggregate")
+    if profile.intent is QueryIntent.TEMPORAL_ASOF:
+        # the as-of mode lands in slice 2; route to general for now but mark it honestly
+        return RetrievalPlan(mode="local", note="not_yet_promoted")
+    if profile.intent is QueryIntent.MULTI_HOP:
+        return RetrievalPlan(mode="hybrid")
+    return RetrievalPlan(mode="local")  # LOOKUP + low-confidence fallbacks

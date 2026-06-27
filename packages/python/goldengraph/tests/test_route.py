@@ -45,3 +45,24 @@ def test_slots_without_predicates_low_confidence():
     p = route.classify_query("List all entities that Metaphone works at.")
     assert p.relation is None
     assert p.confidence < 0.8
+
+
+def test_plan_aggregate_routes_to_aggregate():
+    p = route.classify_query("List all entities that Metaphone works at.", predicates=_PREDS)
+    assert route.plan_query(p).mode == "aggregate"
+
+
+def test_plan_low_confidence_aggregate_falls_back():
+    p = route.classify_query("List all entities that Metaphone works at.")
+    assert route.plan_query(p).mode in ("local", "hybrid")
+
+
+def test_plan_temporal_marked_not_yet_promoted():
+    p = route.classify_query("Who did X work for as of 2019?")
+    plan = route.plan_query(p)
+    assert plan.mode == "local" and plan.note == "not_yet_promoted"
+
+
+def test_plan_multihop_routes_hybrid():
+    p = route.classify_query("How is A related to B?")
+    assert route.plan_query(p).mode == "hybrid"
