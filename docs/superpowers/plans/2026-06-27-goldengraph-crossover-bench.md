@@ -867,12 +867,14 @@ Expected: PASS. `ruff check erkgbench/qa_e2e/crossover.py erkgbench/qa_e2e/run_c
 
 In `.github/workflows/bench-graphrag-qa.yml` (B2/temporal is NOT on main here -- mirror the B1
 `run_aggregation_llm` patterns, not temporal):
-1. Under `workflow_dispatch.inputs`, add (mirror the `run_aggregation_llm` input block):
+1. Under `workflow_dispatch.inputs`, add (mirror the `run_aggregation_llm` input block EXACTLY
+   -- the siblings are UNTYPED STRING inputs with `default: "false"`, NOT `type: boolean`. A
+   boolean input would make `inputs.run_crossover_llm == 'true'` compare bool-vs-string and
+   never fire the lane):
    ```yaml
    run_crossover_llm:
      description: "Slice C: real-LLM answer-match crossover (ambiguity x passage_k)"
-     type: boolean
-     default: false
+     default: "false"
    ```
 2. In the `scorecard` job's `if:`, append the new clause to the EXACT existing two-clause
    expression. The current line is
