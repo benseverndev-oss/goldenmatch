@@ -62,3 +62,31 @@ def test_embed_url_strips_trailing_slash(monkeypatch):
     captured = _capture_embed_url(monkeypatch)
     providers.OpenAIProvider(model="m").embed(["hi"])
     assert captured["url"] == "http://localhost:11434/v1/embeddings"
+
+
+def _goldengraph_chat_model(eng) -> str:
+    return eng._llm._inner.model  # GoldenGraphQAEngine -> _CountingLLM -> OpenAIClient
+
+
+def test_build_engine_reads_openai_model_env(monkeypatch):
+    monkeypatch.setenv("OPENAI_MODEL", "qwen2.5:7b-instruct")
+    from erkgbench.qa_e2e import run_qa_e2e
+
+    eng = run_qa_e2e._build_engine("goldengraph")
+    assert _goldengraph_chat_model(eng) == "qwen2.5:7b-instruct"
+
+
+def test_build_engine_default_model_when_unset(monkeypatch):
+    monkeypatch.delenv("OPENAI_MODEL", raising=False)
+    from erkgbench.qa_e2e import run_qa_e2e
+
+    eng = run_qa_e2e._build_engine("goldengraph")
+    assert _goldengraph_chat_model(eng) == "gpt-4o-mini"
+
+
+def test_build_engine_empty_model_treated_as_unset(monkeypatch):
+    monkeypatch.setenv("OPENAI_MODEL", "")
+    from erkgbench.qa_e2e import run_qa_e2e
+
+    eng = run_qa_e2e._build_engine("goldengraph")
+    assert _goldengraph_chat_model(eng) == "gpt-4o-mini"

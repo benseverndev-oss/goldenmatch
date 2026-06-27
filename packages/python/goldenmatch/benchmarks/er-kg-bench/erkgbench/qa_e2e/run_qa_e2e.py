@@ -59,6 +59,16 @@ def _load_corpus(
     raise SystemExit(f"unknown corpus: {name}")
 
 
+def _chat_model() -> str:
+    """Chat model for the OpenAIClient-based engines. `or` so an empty env reads as unset."""
+    return os.environ.get("OPENAI_MODEL") or "gpt-4o-mini"
+
+
+def _embed_model():
+    """Embedding model name; None -> the provider's default (OpenAI text-embedding-3-*)."""
+    return os.environ.get("OPENAI_EMBED_MODEL") or None
+
+
 def _build_engine(name: str):
     if name == "goldengraph":
         from goldengraph.embed import GoldenmatchEmbedder
@@ -67,14 +77,16 @@ def _build_engine(name: str):
         from .engines.goldengraph import GoldenGraphQAEngine
 
         return GoldenGraphQAEngine(
-            llm=OpenAIClient(model="gpt-4o-mini"),
+            # OPENAI_MODEL / OPENAI_EMBED_MODEL (project-defined; empty == unset) let the local
+            # OSS-LLM lane point goldengraph at a self-hosted Ollama model. Default unchanged.
+            llm=OpenAIClient(model=_chat_model()),
             # provider="openai" uses goldenmatch's stdlib-only OpenAI embedding
             # provider (urllib + OPENAI_API_KEY) -- no torch/sentence-transformers
             # install, and it matches the OpenAI embeddings the other engines use, so
             # the head-to-head compares KG construction, not embedding backends. The
             # default "local" provider needs goldenmatch[embeddings] (not installed in
             # this lane) and raised ImportError at query time.
-            embedder=GoldenmatchEmbedder(provider="openai"),
+            embedder=GoldenmatchEmbedder(provider="openai", model=_embed_model()),
         )
     if name == "lightrag":
         from lightrag.llm.openai import gpt_4o_mini_complete, openai_embed
