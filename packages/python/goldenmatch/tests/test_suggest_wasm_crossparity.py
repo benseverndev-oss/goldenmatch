@@ -103,7 +103,7 @@ _COLUMN_SIGNALS_SCHEMA = pa.schema(
 )
 
 
-def _scored_pairs_batch(scored_pairs_json: str) -> "pa.RecordBatch":
+def _scored_pairs_batch(scored_pairs_json: str) -> pa.RecordBatch:
     d = json.loads(scored_pairs_json)
     scores = list(d.get("score", []))
     n_pairs = int(d.get("n_pairs", len(scores)))
@@ -120,7 +120,7 @@ def _scored_pairs_batch(scored_pairs_json: str) -> "pa.RecordBatch":
     )
 
 
-def _clusters_batch(clusters_json: str) -> "pa.RecordBatch":
+def _clusters_batch(clusters_json: str) -> pa.RecordBatch:
     rows = json.loads(clusters_json)
     return pa.record_batch(
         {
@@ -138,7 +138,7 @@ def _clusters_batch(clusters_json: str) -> "pa.RecordBatch":
     )
 
 
-def _column_signals_batch(column_signals_json: str) -> "pa.RecordBatch":
+def _column_signals_batch(column_signals_json: str) -> pa.RecordBatch:
     rows = json.loads(column_signals_json)
     return pa.record_batch(
         {

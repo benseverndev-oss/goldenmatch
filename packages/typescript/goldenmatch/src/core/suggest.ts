@@ -536,7 +536,7 @@ function applyAddNegativeEvidence(
     mks.find((m) => m.type === "exact") ??
     mks[0]!;
 
-  const mutable = target as { negativeEvidence?: NegativeEvidenceField[] };
+  const mutable = target as unknown as { negativeEvidence?: NegativeEvidenceField[] };
   if (mutable.negativeEvidence === undefined || mutable.negativeEvidence === null) {
     mutable.negativeEvidence = [];
   }

@@ -532,6 +532,7 @@ mod tests {
         assert_eq!(d.n_clusters, 3);
     }
 
+    #[allow(clippy::too_many_arguments)] // test helper: one arg per ColumnSignal column
     fn column_signals_batch(
         fields: &[&str],
         col_types: &[&str],

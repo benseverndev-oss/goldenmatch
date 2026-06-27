@@ -27,11 +27,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import polars as pl
-
 # Force the goldencheck-absent variant_rate path (TS has no goldencheck), so the
 # emitted variant_rate is 0.0 for every column — matching the TS builder.
 import goldenmatch.core.quality as _quality
+import polars as pl
 
 _quality.blocking_risk = lambda *args, **kwargs: {}  # type: ignore[assignment]
 
