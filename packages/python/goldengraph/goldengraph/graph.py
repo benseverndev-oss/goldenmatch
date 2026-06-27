@@ -78,6 +78,17 @@ class GoldenGraph:
         return cls(store=store, plan=plan, execution_plan=execution_plan, budget=budget,
                    llm=bllm, embedder=embedder, llm_classifier=llm_classifier)
 
+    @classmethod
+    def from_store(cls, store, *, llm, embedder, llm_classifier=None, plan=None,
+                   execution_plan=None, budget=None):
+        """Wrap an ALREADY-built store (e.g. a reopened/persisted store) in the facade -- skips the
+        build. The llm is wrapped in the same `_BudgetedLLM` seam so `ask` draws from `budget`."""
+        from .budget import Budget, _BudgetedLLM
+
+        budget = budget if budget is not None else Budget()
+        return cls(store=store, plan=plan, execution_plan=execution_plan, budget=budget,
+                   llm=_BudgetedLLM(llm, budget), embedder=embedder, llm_classifier=llm_classifier)
+
     def ask(self, query, *, valid_t, tx_t, mode="auto", **ask_kwargs):
         from .answer import ask as _ask
 

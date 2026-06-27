@@ -198,3 +198,23 @@ jobs:
           name: goldengraph-tier
           path: packages/python/goldenmatch/benchmarks/er-kg-bench/TIER.md
           if-no-files-found: ignore
+
+      - name: Unified entry-point gate (deterministic, key-free)
+        # Slice 4c (program close): the GoldenGraph facade end-to-end -- profile workload ->
+        # tier-resolver build -> auto answer, ONE budget across build+ask, ER scale plan surfaced.
+        # Gates HARD on routing (FUZZY + aggregate set-F1) + budget-sharing + the plan scaling with
+        # corpus size. Needs goldenmatch + the native wheel.
+        working-directory: packages/python/goldenmatch/benchmarks/er-kg-bench
+        env:
+          POLARS_SKIP_CPU_CHECK: "1"
+        run: |
+          python -m pytest tests/test_qa_unified_entry.py -v
+          python -m erkgbench.qa_e2e.run_unified_entry_eval --seed 7 --n-anchors 60 --out-md UNIFIED_ENTRY.md
+
+      - name: Upload UNIFIED_ENTRY.md
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: goldengraph-unified-entry
+          path: packages/python/goldenmatch/benchmarks/er-kg-bench/UNIFIED_ENTRY.md
+          if-no-files-found: ignore

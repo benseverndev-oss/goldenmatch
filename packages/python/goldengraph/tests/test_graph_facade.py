@@ -67,3 +67,11 @@ def test_build_unbounded_budget_default():
         resolver=_stub_resolver, store=_RecordingStore(),
     )
     assert gg.budget.total_tokens is None and gg.budget.spent_tokens > 0
+
+
+def test_from_store_wraps_existing_store_and_budget():
+    store = _RecordingStore()
+    b = Budget(total_tokens=500)
+    gg = GoldenGraph.from_store(store, llm=_StubLLM(), embedder=None, budget=b)
+    assert gg.store is store and gg.budget is b
+    assert gg.plan is None and gg.execution_plan is None  # not built, just wrapped

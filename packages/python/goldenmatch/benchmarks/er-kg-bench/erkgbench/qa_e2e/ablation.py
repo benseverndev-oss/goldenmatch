@@ -50,6 +50,13 @@ def _typ_of(g: GoldGraph) -> dict[str, str]:
 def _build_store(corpus, g, km, typ_of):
     """Build a native store from gold triples under a dial's record_key map.
     Returns (slice_graph, coverage: entity_id -> set(canonical_id))."""
+    _store, slice_graph, coverage = _build_store_obj(corpus, g, km, typ_of)
+    return slice_graph, coverage
+
+
+def _build_store_obj(corpus, g, km, typ_of):
+    """Like `_build_store` but also returns the live `store` (for callers that need `store.as_of`
+    themselves, e.g. the slice-4c GoldenGraph facade). Returns (store, slice_graph, coverage)."""
     from goldengraph.extract import Extraction, Mention, Relationship
     from goldengraph.ingest import build_batch
     from goldengraph.resolve import ResolvedEntity
@@ -101,7 +108,7 @@ def _build_store(corpus, g, km, typ_of):
         for s in e.get("surface_names", ()):
             cov |= s2c.get(s, set())
         coverage[e["entity_id"]] = cov
-    return slice_graph, coverage
+    return store, slice_graph, coverage
 
 
 def run_ablation(*, seed: int, n_questions: int, ambiguity: float, max_hops: int = 4) -> AblationResult:
