@@ -11,7 +11,6 @@ Coverage:
 from __future__ import annotations
 
 import pytest
-
 from goldenmatch.config.schemas import (
     BlockingConfig,
     BlockingKeyConfig,
@@ -22,7 +21,6 @@ from goldenmatch.config.schemas import (
 )
 from goldenmatch.core.suggest.apply import apply_suggestion
 from goldenmatch.core.suggest.types import Suggestion
-
 
 # ── helpers ────────────────────────────────────────────────────────────────────
 

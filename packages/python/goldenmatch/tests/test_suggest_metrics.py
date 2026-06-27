@@ -19,7 +19,6 @@ if str(_REPO_ROOT) not in sys.path:
 
 from scripts.suggest_quality.metrics import convergence, rank_correlation, suggester_precision
 
-
 # ─── rank_correlation ────────────────────────────────────────────────────────
 
 class TestRankCorrelation:

@@ -539,6 +539,17 @@ Every `GOLDENMATCH_*` variable the package reads, grouped by who should care. De
 | `GOLDENMATCH_CLUSTER_SPLIT_EDGE_BUDGET` | ∝ n_rows | Oversized-cluster auto-split work budget. |
 | `GOLDENMATCH_COLUMNAR_PIPELINE` / `GOLDENMATCH_COLUMNAR_CLUSTER_BUILD` | `0` | Columnar pipeline experiments. |
 
+### Config suggestion & healer (advanced)
+
+Opt-in config-suggestion subsystem (`goldenmatch[native]`). `review_config` proposes ranked, explainable config edits and self-verifies them against an unsupervised health proxy so a suggestion is never net-negative.
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `GOLDENMATCH_SUGGEST_VERIFY` | on | Self-verify each candidate suggestion against the health proxy before emitting it. `0` emits raw, unverified suggestions (bench A/B only). |
+| `GOLDENMATCH_SUGGEST_FULL_DIST` | `0` | Capture the full pre-threshold score distribution so the `lower_threshold` (dip) rule can fire. Off keeps the lighter histogram. |
+| `GOLDENMATCH_SUGGEST_HEALTH` | `legacy` | Unsupervised health proxy used by the self-verify gate. `legacy` = matched-rate × confidence − HHI penalty. |
+| `GOLDENMATCH_SUGGEST_COHESION` | `min_edge` | Cohesion statistic for the cohesion health proxy (`min_edge` / `avg_edge`). |
+
 ### Servers, security, storage, LLM/embedding
 
 | Variable | Default | Effect |

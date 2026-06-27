@@ -7,9 +7,9 @@ Task 3: env-gated selector in suggestion_health_from_clusters
 """
 from goldenmatch.core.suggest.health import (
     _cluster_min_edges,
-    _cohesion_min,
-    _cohesion_mean_bottomk,
     _cohesion_edge_below_cutoff,
+    _cohesion_mean_bottomk,
+    _cohesion_min,
 )
 
 

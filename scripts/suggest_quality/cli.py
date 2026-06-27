@@ -70,7 +70,10 @@ def run(
     the computed metrics (rank_corr, suggester_prec) ready for the table.
     """
     from scripts.suggest_quality.datasets import REGISTRY, effective_row_cap  # noqa: PLC0415
-    from scripts.suggest_quality.metrics import rank_correlation, suggester_precision  # noqa: PLC0415
+    from scripts.suggest_quality.metrics import (  # noqa: PLC0415
+        rank_correlation,
+        suggester_precision,
+    )
     from scripts.suggest_quality.oracle import evaluate_dataset  # noqa: PLC0415
 
     results: dict[str, dict] = {}
@@ -672,7 +675,6 @@ def _build_gym_scorecard(
     git_sha: str,
 ) -> dict:
     """Build the gym scorecard dict from run_catalog output."""
-    import json as _json  # noqa: PLC0415 (only for type hint clarity below)
     _PRECISION = 6
 
     def _rf(v):
@@ -792,7 +794,6 @@ def _cmd_gym_gate(records: list[dict], native_version: str, git_sha: str) -> int
     base_hl_raw = baseline.get("headline_raw")
 
     ok_records = [r for r in records if r.get("status") == "ok"]
-    built_ok = [r for r in ok_records if r.get("builds_on_existing_rule")]
 
     print("gym-gate")
     print(f"  native={native_version}  sha={git_sha[:12] if git_sha != 'unknown' else 'unknown'}")

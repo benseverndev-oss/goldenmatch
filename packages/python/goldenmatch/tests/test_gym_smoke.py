@@ -61,8 +61,8 @@ def test_gym_recovers_a_builtin_rule_perturbation():
     os.environ.setdefault("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
 
     from scripts.suggest_quality.datasets import REGISTRY  # noqa: PLC0415
-    from scripts.suggest_quality.perturbations import CATALOG  # noqa: PLC0415
     from scripts.suggest_quality.gym import run_catalog  # noqa: PLC0415
+    from scripts.suggest_quality.perturbations import CATALOG  # noqa: PLC0415
 
     # Pick datasets where a built-rule perturbation can cause measurable damage.
     names = {"synthetic", "ncvr_synthetic"}

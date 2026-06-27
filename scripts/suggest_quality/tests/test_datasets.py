@@ -4,7 +4,6 @@ Mirrors ``scripts.autoconfig_quality.tests.test_datasets`` — same assertions,
 adapted for the suggest_quality registry and the extra ``synthetic`` entry.
 """
 import polars as pl
-import pytest
 
 from scripts.suggest_quality.datasets import REGISTRY, Dataset, _pairs_to_row_index
 

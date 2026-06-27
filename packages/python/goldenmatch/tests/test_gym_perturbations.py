@@ -113,10 +113,10 @@ def test_every_catalog_entry_has_required_shape():
         )
 
 
-def test_catalog_has_eight_entries():
+def test_catalog_has_nine_entries():
     from scripts.suggest_quality.perturbations import CATALOG
 
-    assert len(CATALOG) == 8, f"Expected 8 catalog entries, got {len(CATALOG)}"
+    assert len(CATALOG) == 9, f"Expected 9 catalog entries, got {len(CATALOG)}"
 
 
 def test_built_rule_expected_rules_are_real_suggestion_kinds():
@@ -138,8 +138,9 @@ def test_get_by_name_returns_correct_perturbation():
 
 
 def test_get_unknown_raises_key_error():
-    from scripts.suggest_quality.perturbations import get as get_perturbation
     import pytest
+
+    from scripts.suggest_quality.perturbations import get as get_perturbation
 
     with pytest.raises(KeyError):
         get_perturbation("does_not_exist")
@@ -165,10 +166,15 @@ def test_threshold_too_low_applies_to_weighted_config():
 
 
 def test_threshold_too_low_floor_at_0_50():
-    from scripts.suggest_quality.perturbations import get as get_perturbation
     from goldenmatch.config.schemas import (
-        BlockingConfig, BlockingKeyConfig, GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
     )
+
+    from scripts.suggest_quality.perturbations import get as get_perturbation
 
     mk = MatchkeyConfig(
         name="mk",
@@ -205,10 +211,15 @@ def test_threshold_too_high_applies_to_weighted_config():
 
 
 def test_threshold_too_high_ceiling_at_0_99():
-    from scripts.suggest_quality.perturbations import get as get_perturbation
     from goldenmatch.config.schemas import (
-        BlockingConfig, BlockingKeyConfig, GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
     )
+
+    from scripts.suggest_quality.perturbations import get as get_perturbation
 
     mk = MatchkeyConfig(
         name="mk",
@@ -258,10 +269,15 @@ def test_bad_freetext_scorer_skips_jaro_winkler_email_field():
     scorer alone is not a free-text signal. With ONLY an email field (no
     real free-text field), bad_freetext_scorer must not apply; with a real
     free-text field present, it must pick that one and leave email alone."""
-    from scripts.suggest_quality.perturbations import get as get_perturbation
     from goldenmatch.config.schemas import (
-        BlockingConfig, BlockingKeyConfig, GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
     )
+
+    from scripts.suggest_quality.perturbations import get as get_perturbation
 
     # Email-only config: no real free-text field -> must not apply.
     email_only_mk = MatchkeyConfig(
@@ -298,10 +314,15 @@ def test_bad_freetext_scorer_skips_jaro_winkler_email_field():
 
 
 def test_bad_freetext_scorer_not_applies_when_already_token_sort():
-    from scripts.suggest_quality.perturbations import get as get_perturbation
     from goldenmatch.config.schemas import (
-        BlockingConfig, BlockingKeyConfig, GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
     )
+
+    from scripts.suggest_quality.perturbations import get as get_perturbation
 
     mk = MatchkeyConfig(
         name="mk",
@@ -389,7 +410,11 @@ def test_dropped_blocking_pass_not_applies_without_multi_pass():
 def _cfg_skewed():
     """Config with intentionally different weights."""
     from goldenmatch.config.schemas import (
-        BlockingConfig, BlockingKeyConfig, GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
     )
 
     mk = MatchkeyConfig(
@@ -566,6 +591,7 @@ def test_built_rule_perturbations_build_on_existing():
 def test_applies_to_minimal_empty_config_does_not_crash():
     """applies_to must return False (not raise) for configs missing relevant structure."""
     from goldenmatch.config.schemas import GoldenMatchConfig
+
     from scripts.suggest_quality.perturbations import CATALOG
 
     minimal = GoldenMatchConfig(matchkeys=[])

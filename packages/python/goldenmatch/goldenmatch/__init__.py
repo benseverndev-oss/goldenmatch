@@ -256,6 +256,7 @@ from goldenmatch.core.sensitivity import SensitivityResult, SweepParam, run_sens
 from goldenmatch.core.standardize import apply_standardization
 from goldenmatch.core.streaming import StreamProcessor, run_stream
 from goldenmatch.core.threshold import suggest_threshold
+
 # Note: config-suggestion review (review_config, apply_suggestion) is
 # intentionally NOT re-exported here -- it is opt-in, accessed via
 # `from goldenmatch.core.suggest import review_config, apply_suggestion`.
