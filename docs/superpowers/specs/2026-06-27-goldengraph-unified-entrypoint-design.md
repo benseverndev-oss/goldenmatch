@@ -85,6 +85,12 @@ call raises without spending); the output's tokens are recorded after. Unbounded
 is None`) is a pure pass-through (`would_exceed` always False), so the default facade behavior is
 unchanged from calling the bare LLM.
 
+**Pre-check is on INPUT only -- `spent_tokens` can overshoot `total_tokens`** after a call that passed
+the pre-check (the output tokens are recorded but not pre-charged). This is intended (estimate, not a
+real tokenizer): the contract is "raise BEFORE a call whose INPUT would exceed", not exact-ceiling
+accounting. Exhaustion tests therefore assert that the NEXT call raises, not that `spent_tokens ==
+total_tokens` exactly.
+
 ### 2. ExecutionPlan surface (`goldengraph/graph.py`, NEW -- helper)
 
 ```
@@ -170,10 +176,14 @@ Three verdicts (HARD where noted), `run_unified_entry_eval.py` -> `UNIFIED_ENTRY
    through `gg.ask(mode="auto")` returns the EXACT gold member set. Reuses the slice-1 setup
    (engineered universe, `ambiguity=0.0` so `seeds_by_name(canonical)` resolves, NAME-space comparison
    `{by_id[m].canonical for m in gold}`). Proves the facade composes profile->build->auto-answer.
-2. **Cross-controller budget sharing (HARD; wheel-free, deterministic):** with one `Budget`, after
-   `build` (using an injected store stub) `budget.spent_tokens > 0`; after an `ask` it is STRICTLY
-   greater (answer drew from the SAME pool). With a tiny `total_tokens`, `build`/`ask` raises
-   `BudgetExhausted`. No real LLM (StubLLM + len//4).
+2. **Cross-controller budget sharing (HARD; wheel-free, deterministic):** proven at the `_BudgetedLLM`
+   level so it needs NO store at all -- one `Budget` + one `_BudgetedLLM(StubLLM)`; a first `complete`
+   (the "build" draw) makes `spent_tokens > 0`, a second `complete` (the "ask" draw) makes it STRICTLY
+   greater (both drew from the SAME pool). With a tiny `total_tokens`, the over-budget call raises
+   `BudgetExhausted` (assert the NEXT call raises -- see the overshoot note, not exact-ceiling). This is
+   the cross-controller-ceiling proof without `ingest_corpus`/store coupling. The facade-level
+   sharing (build-then-ask through `GoldenGraph`) is additionally exercised in verdict 1's lane run
+   (real PyStore), where `gg.budget.spent_tokens` is asserted to grow across build then ask.
 3. **Plan scales with corpus size (HARD; needs goldenmatch planner):** `plan_er_execution(docs,
    corpus_records=SMALL).rule_name != plan_er_execution(docs, corpus_records=HUGE).rule_name` (or the
    plan's backend/mode differs) -- a CONSTANT fails this, so it proves the ER controller's planner is
@@ -216,3 +226,6 @@ real run before freezing them; if the planner doesn't separate, surface to Ben.
   deterministic given DEFAULT_RULES; `available_ram_gb` varies by box but the SMALL-vs-HUGE separation
   (not the absolute rule) is what is asserted, robust to RAM differences. Freeze the corpus_records
   endpoints far apart (e.g. 1k vs 500M) for a stable separation.
+- **Use the real default-rules symbol.** The sketch writes `_default_rules()`; confirm the actual
+  exported name (`_default_rules` vs a public `DEFAULT_RULES`) at implementation time and feed the
+  planner the production default rule set (custom rule lists stay on the pure-Python planner path).
