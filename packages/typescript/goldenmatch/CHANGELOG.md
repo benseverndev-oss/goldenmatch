@@ -7,6 +7,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Added
+- **Config-suggestion healer on WASM + TypeScript.** The `suggest-core` Rust
+  kernel is compiled to `suggest-wasm` and wired into `dedupe(rows, { suggest,
+  heal })` at full default-pipeline parity: a free trigger off the run's
+  postflight surfaces raw candidate `suggestions` (no extra pipeline run),
+  `suggest: true` runs the verified gate, and `heal: true` runs the bounded
+  apply-and-re-run loop (returning `healTrail` + the healed config). The kernel
+  is reached through the opt-in subpath `goldenmatch/core/suggest-wasm`
+  (`enableSuggestWasm()` / `disableSuggestWasm()`) — the `[native]` analog;
+  without it every surface degrades to graceful-empty and never throws.
+  `buildColumnSignals` (`suggestColumnSignals.ts`) builds the kernel's column
+  signals TS-side with a Python-parity fixture. Surfaces: CLI `--suggest` /
+  `--heal`, MCP `review_config` tool (MCP 44 → 45), A2A `review_config` skill
+  (15 agent skills). Kill-switch `GOLDENMATCH_SUGGEST_ON_DEDUPE`. Cross-surface
+  golden-vector parity (TS == Rust == Python on shared fixtures). Design:
+  `context-network/decisions/0027-healer-wasm-ts.md`.
 - **MinHash/LSH sketch kernel (#1081).** `src/core/sketch.ts` is a pure-TS,
   edge-safe port of the Python/Rust sketch kernel (shingling → MinHash → banded
   LSH) using `BigInt` for u64/u128 math; it reproduces the shared golden vectors

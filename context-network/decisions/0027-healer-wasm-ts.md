@@ -66,6 +66,9 @@ mirroring the autoconfig precedent exactly rather than reimplementing rule logic
   build script copies the committed crate golden; it does NOT re-bless — so the diff
   catches "crate golden changed but not copied". Stale committed wasm is caught
   behaviorally by the parity test.
-- Canonical flag reference stays `docs-site/goldenmatch/tuning.mdx`
-  (`GOLDENMATCH_SUGGEST_ON_DEDUPE`); the TS/WASM usage is documented on
-  `docs-site/goldenmatch/config-suggestions.mdx`.
+- `GOLDENMATCH_SUGGEST_ON_DEDUPE` + the TS/WASM usage are documented on
+  `docs-site/goldenmatch/config-suggestions.mdx`. The canonical
+  `docs-site/goldenmatch/tuning.mdx` flag index gains its
+  `GOLDENMATCH_SUGGEST_ON_DEDUPE` row when this branch rebases onto a main that
+  carries the Python healer's tuning section (that section ships via the Python
+  stack, not this branch's base — adding the row here would orphan it).
