@@ -3,6 +3,7 @@ store.as_of(D) traversal vs a temporal-blind passage floor. The KG does what RAG
 can't: answer 'as of a PAST date' correctly when a fact was later corrected."""
 from __future__ import annotations
 
+import json
 import random
 import re
 from dataclasses import dataclass
@@ -148,3 +149,60 @@ def render_temporal_md(res: TemporalResult) -> str:
         tag = "PASS" if passed else ("FAIL" if is_hard else "WARN")
         lines.append(f"- [{tag}] {label}")
     return "\n".join(lines) + "\n"
+
+
+# --- store build + goldengraph as_of traversal (needs the native wheel) ---
+
+_BIG_TX = 10**12
+
+
+def build_temporal_store(facts):
+    """Build a bi-temporal store from the facts: per fact ONE batch with X-rel-A
+    [T1,tc) and X-rel-B [tc,inf). Oracle record_keys (= canonical id) so X merges
+    across facts/relations. Hand-built JSON (build_batch can't set valid_to).
+
+    LOAD-BEARING: surface_names=[<id>] is REQUIRED -- the store recomputes
+    canonical_name as the longest surface (ignoring the batch canonical_name field),
+    so surface_names=[id] makes canonical_name==id, which goldengraph_asof relies on
+    to map view-entity-id -> the gold canonical id. Do not drop it."""
+    from goldengraph_native import _native as ggn
+
+    store = ggn.PyStore()
+    for f in facts:
+        batch = {
+            "entities": [
+                {"local_id": 0, "canonical_name": f.anchor_id, "typ": "concept",
+                 "surface_names": [f.anchor_id], "record_keys": [f.anchor_id]},
+                {"local_id": 1, "canonical_name": f.a_id, "typ": "concept",
+                 "surface_names": [f.a_id], "record_keys": [f.a_id]},
+                {"local_id": 2, "canonical_name": f.b_id, "typ": "concept",
+                 "surface_names": [f.b_id], "record_keys": [f.b_id]},
+            ],
+            "edges": [
+                {"subj_local": 0, "predicate": f.relation, "obj_local": 1,
+                 "valid_from": T1, "valid_to": f.tc, "source_refs": []},
+                {"subj_local": 0, "predicate": f.relation, "obj_local": 2,
+                 "valid_from": f.tc, "valid_to": None, "source_refs": []},
+            ],
+            "ingested_at": 1,
+        }
+        store.append(json.dumps(batch))
+    return store
+
+
+def goldengraph_asof(store, anchor_id: str, relation: str, D: int) -> str | None:
+    """Exact as_of traversal: slice the store at valid_t=D, seed the anchor, 1-hop,
+    filter edges by predicate -> the single object whose valid window contains D."""
+    slice_g = store.as_of(D, _BIG_TX)
+    # canonical_name == the canonical id here (build_temporal_store sets
+    # surface_names=[id] -> store recomputes canonical_name = id), so map directly.
+    id_to_canon = {e["entity_id"]: e["canonical_name"] for e in slice_g.entities()}
+    seed = next((eid for eid, c in id_to_canon.items() if c == anchor_id), None)
+    if seed is None:
+        return None
+    ball = slice_g.query([seed], 1)
+    objs = {id_to_canon.get(e["obj"]) for e in ball.get("edges", ())
+            if e["subj"] == seed and e["predicate"] == relation}
+    objs.discard(None)
+    objs.discard(anchor_id)
+    return next(iter(objs), None) if len(objs) <= 1 else next(iter(objs))
