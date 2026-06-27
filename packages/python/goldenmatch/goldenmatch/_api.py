@@ -656,6 +656,14 @@ def dedupe_df(
     # NEVER breaks a dedupe. The default path (no suggest=/heal=) is a no-op
     # guarantee: maybe_suggest returns [] without a kernel call unless the free
     # headroom trigger fires, so dedupe_result.suggestions stays [].
+    #
+    # Skip entirely on the throughput tier: it replaces fuzzy/FS scoring with
+    # sketch-then-verify, so the quality signals the healer profiles are both
+    # meaningless there AND catastrophic on corpus text — `_build_column_signals_batch`
+    # runs goldencheck `cell_quality` (O(distinct^2) Levenshtein) over the full frame,
+    # which never finishes on free-text documents (hangs past the bench timeout).
+    if throughput is not None:
+        return dedupe_result
     try:
         from goldenmatch.core.suggest import surface as _surface
         if heal:
