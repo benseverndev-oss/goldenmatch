@@ -34,12 +34,20 @@ class RouterResult:
     aggregate_recall: float
     slot_accuracy: float
     routed_setf1: float
+    # temporal (slice 2); defaults keep slice-1 constructions valid (1.0 == not-failing)
+    temporal_recall: float = 1.0
+    temporal_slot_acc: float = 1.0
+    temporal_past_acc: float = 1.0
+    temporal_current_acc: float = 1.0
 
 
 # frozen from the first measured run (verify-then-freeze)
 AGG_RECALL_MIN = 0.99
 SLOT_ACC_MIN = 0.99
 ROUTED_SETF1_MIN = 0.99
+TEMPORAL_RECALL_MIN = 0.99
+TEMPORAL_SLOT_MIN = 0.99
+TEMPORAL_ACC_MIN = 0.99
 
 
 def evaluate_assertions(res: RouterResult):
@@ -50,6 +58,12 @@ def evaluate_assertions(res: RouterResult):
          res.slot_accuracy >= SLOT_ACC_MIN, True),
         (f"routed aggregate set-F1 at ambiguity=0.0 (got {res.routed_setf1:.3f} >= {ROUTED_SETF1_MIN})",
          res.routed_setf1 >= ROUTED_SETF1_MIN, True),
+        (f"classifier routes temporal questions to TEMPORAL_ASOF (recall {res.temporal_recall:.3f} >= {TEMPORAL_RECALL_MIN})",
+         res.temporal_recall >= TEMPORAL_RECALL_MIN, True),
+        (f"temporal slots (anchor/relation/date) correct (acc {res.temporal_slot_acc:.3f} >= {TEMPORAL_SLOT_MIN})",
+         res.temporal_slot_acc >= TEMPORAL_SLOT_MIN, True),
+        (f"routed as-of-accuracy past={res.temporal_past_acc:.3f} current={res.temporal_current_acc:.3f} (both >= {TEMPORAL_ACC_MIN})",
+         res.temporal_past_acc >= TEMPORAL_ACC_MIN and res.temporal_current_acc >= TEMPORAL_ACC_MIN, True),
     ]
 
 
@@ -87,26 +101,121 @@ def run_routed_correctness(*, seed: int, n_anchors: int) -> float:
     return (sum(vals) / len(vals)) if vals else 0.0
 
 
+# --- temporal as-of routing (slice 2) ---
+
+
+def temporal_classifier_accuracy(*, seed: int, n_facts: int, ambiguity: float) -> dict:
+    from goldengraph.route import QueryIntent
+
+    from .temporal import generate_temporal
+
+    _docs, _facts, qs = generate_temporal(seed=seed, n_facts=n_facts, ambiguity=ambiguity)
+    by_id = {e.id: e for e in _load_entities()}
+    preds = set(RELATION_SCHEMA)
+    rec = slot = 0
+    for q in qs:
+        p = classify_query(q.question, predicates=preds)
+        if p.intent is QueryIntent.TEMPORAL_ASOF:
+            rec += 1
+        ok_date = p.as_of is not None and p.as_of.isdigit() and int(p.as_of) == q.D
+        if p.anchor_surface == by_id[q.anchor_id].canonical and p.relation == q.relation and ok_date:
+            slot += 1
+    n = len(qs) or 1
+    return {"temporal_recall": rec / n, "temporal_slot_acc": slot / n}
+
+
+def _build_concept_named_temporal_store(facts, by_id):
+    """Mirror temporal.build_temporal_store but name nodes by CONCEPT SURFACE (so question-text
+    seeds_by_name resolves) while keeping oracle merge on the QID record_keys. Needs the wheel."""
+    import json
+
+    from goldengraph_native import _native as ggn
+
+    from .temporal import T1
+
+    def ent(local, _id):
+        return {"local_id": local, "canonical_name": by_id[_id].canonical, "typ": "concept",
+                "surface_names": [by_id[_id].canonical], "record_keys": [_id]}
+
+    store = ggn.PyStore()
+    for f in facts:
+        batch = {
+            "entities": [ent(0, f.anchor_id), ent(1, f.a_id), ent(2, f.b_id)],
+            "edges": [
+                {"subj_local": 0, "predicate": f.relation, "obj_local": 1,
+                 "valid_from": T1, "valid_to": f.tc, "source_refs": []},
+                {"subj_local": 0, "predicate": f.relation, "obj_local": 2,
+                 "valid_from": f.tc, "valid_to": None, "source_refs": []},
+            ],
+            "ingested_at": 1,
+        }
+        store.append(json.dumps(batch))
+    return store
+
+
+def run_temporal_routed_accuracy(*, seed: int, n_facts: int, ambiguity: float) -> dict:
+    """Route each B2 question through classify_query -> store.as_of(D) -> asof_object; as-of-accuracy
+    by regime vs name-projected gold. Needs the wheel."""
+    from goldengraph.answer import asof_object
+
+    from .temporal import _BIG_TX, as_of_accuracy, generate_temporal
+
+    _docs, facts, qs = generate_temporal(seed=seed, n_facts=n_facts, ambiguity=ambiguity)
+    by_id = {e.id: e for e in _load_entities()}
+    store = _build_concept_named_temporal_store(facts, by_id)
+    preds = set(RELATION_SCHEMA)
+    acc: dict = {"past": [], "current": []}
+    for q in qs:
+        p = classify_query(q.question, predicates=preds)
+        got = None
+        if p.anchor_surface and p.relation and p.as_of and p.as_of.isdigit():
+            got = asof_object(store.as_of(int(p.as_of), _BIG_TX), p.anchor_surface, p.relation)
+        gold_name = by_id[q.gold_obj].canonical
+        acc[q.regime].append(as_of_accuracy(got, gold_name))
+    return {r: (sum(v) / len(v) if v else 0.0) for r, v in acc.items()}
+
+
+def first_known_name(text: str, universe: set) -> str | None:
+    """First universe name appearing in `text` (the single-object analog of parse_entity_set)."""
+    low = text.lower()
+    hits = [(low.index(n.lower()), n) for n in universe if n.lower() in low]
+    return min(hits)[1] if hits else None
+
+
 def run_router_deterministic(*, seed: int, n_anchors: int) -> RouterResult:
     acc = classifier_accuracy(seed=seed, n_anchors=n_anchors, ambiguity=0.0)
     routed = run_routed_correctness(seed=seed, n_anchors=n_anchors)
+    # Temporal: B2 store is oracle-keyed so ER is perfect regardless of ambiguity (it only affects
+    # rendered doc surfaces, which the gate does not read). NOTE: at n_facts==_N_ANCHORS the
+    # generator uses a single RELATION_SCHEMA[0] relation -- lower relation diversity, exact by
+    # construction.
+    tacc = temporal_classifier_accuracy(seed=seed, n_facts=n_anchors, ambiguity=0.6)
+    tr = run_temporal_routed_accuracy(seed=seed, n_facts=n_anchors, ambiguity=0.6)
     return RouterResult(
         aggregate_recall=acc["aggregate_recall"],
         slot_accuracy=acc["slot_accuracy"],
         routed_setf1=routed,
+        temporal_recall=tacc["temporal_recall"],
+        temporal_slot_acc=tacc["temporal_slot_acc"],
+        temporal_past_acc=tr.get("past", 0.0),
+        temporal_current_acc=tr.get("current", 0.0),
     )
 
 
 def render_router_md(res: RouterResult) -> str:
     lines = [
-        "# GoldenGraph query-router gate (slice 1, no LLM)",
+        "# GoldenGraph query-router gate (slices 1-2, no LLM)",
         "",
-        "Heuristic classify_query routes B1 list-questions to the aggregate lever; the engine-native",
-        "aggregate_members traversal returns the exact member set (name space, ambiguity=0.0).",
+        "Heuristic classify_query routes B1 list-questions to the aggregate lever and B2 temporal",
+        "questions to the as-of lever; the engine-native traversals return the exact answer.",
         "",
-        f"- aggregate_recall: {res.aggregate_recall:.3f}",
-        f"- slot_accuracy:    {res.slot_accuracy:.3f}",
-        f"- routed_setF1:     {res.routed_setf1:.3f}",
+        f"- aggregate_recall:     {res.aggregate_recall:.3f}",
+        f"- slot_accuracy:        {res.slot_accuracy:.3f}",
+        f"- routed_setF1:         {res.routed_setf1:.3f}",
+        f"- temporal_recall:      {res.temporal_recall:.3f}",
+        f"- temporal_slot_acc:    {res.temporal_slot_acc:.3f}",
+        f"- temporal_past_acc:    {res.temporal_past_acc:.3f}",
+        f"- temporal_current_acc: {res.temporal_current_acc:.3f}",
         "",
         "## verdicts",
         "",
