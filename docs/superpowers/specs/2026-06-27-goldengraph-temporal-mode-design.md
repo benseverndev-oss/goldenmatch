@@ -90,8 +90,21 @@ slice-1 aggregate branch, right after the existing `slice_graph = store.as_of(va
             if d is not None:
                 obj = asof_object(store.as_of(d, tx_t), profile.anchor_surface, profile.relation)
                 return obj if obj is not None else "(unknown)"
-        mode = plan.mode  # fall through to local/hybrid/global
+        # Any specialized plan that did NOT return (unparseable date, missing slots) must clamp to a
+        # VALID downstream synthesis mode -- letting `plan.mode` carry "aggregate"/"as_of" forward
+        # would hit the existing `if mode not in ("local","hybrid"): raise ValueError` guard. (This
+        # also retro-hardens slice 1's aggregate path.)
+        mode = plan.mode if plan.mode in ("local", "hybrid", "global") else "local"
 ```
+
+NOTE (predicate vocab source): `_slice_predicates` reads the relation vocabulary from the
+caller's-`valid_t` slice. For a temporal query whose answer lives in a LATER window, the relation
+predicate still exists in that caller slice as long as the caller passes a non-empty "now"-ish
+`valid_t` (the predicate appears on at least one edge somewhere in `[valid_t]`); if the caller passes
+an empty/early slice the relation won't resolve and the query safely routes to `local`. The
+deterministic gate calls `classify_query` directly with `RELATION_SCHEMA` (not via `ask`), so this
+caveat is not load-bearing for the gate; it is a documented edge for direct `ask(mode="auto")`
+callers.
 
 ### 3. Gate (free, deterministic, key-free; extends the slice-1 router gate)
 
@@ -125,10 +138,15 @@ date->slice-time wiring is wrong).
 
 ### Opt-in real-LLM confirmation (`bench-graphrag-qa`, ungated)
 
-Extend slice-1's `run_router_capability` lane: on the past-regime questions, compare answer-match of
-`ask(mode="auto")` (routes to as-of, slices at D) vs `ask(mode="local")` (general, no temporal
-slice). Shows routing to the as-of lever WINS on a corrected-away past value. Non-gating, `|| true`,
-billing-blocked.
+Extend slice-1's `run_router_capability` lane with a temporal comparison: on the past-regime
+questions, `ask(mode="auto")` (routes to as-of, slices at D) vs `ask(mode="local")` (general, no
+temporal slice). **Store choice (load-bearing):** this lane MUST build the concept-surface-named
+WINDOWED store via `_build_concept_named_temporal_store` (the same gate builder) -- NOT
+`engine.build_kg` real-ingest, because the real extraction pipeline does not parse the engineered
+`"As of {T1}, ..."` / `"From {tc}, ..."` document phrasing into edge `valid_from`/`valid_to` windows,
+so as-of slicing could not distinguish A from B and the demonstration would be vacuous. A real
+LLM/embedder is still used for the synthesis side of `local` mode. Shows routing to the as-of lever
+WINS on a corrected-away past value. Non-gating, `|| true`, billing-blocked.
 
 ## Components / file structure
 
@@ -152,7 +170,9 @@ billing-blocked.
 ## Error handling
 
 - `classify_query` never raises; a temporal query with an unparseable date -> `as_of` set but the
-  `ask` branch's `int()` guard falls through to `local`.
+  `ask` branch's `int()` guard fails, the as-of branch does not return, and the final `mode = ... else
+  "local"` CLAMP routes it to the safe general mode (it must NOT let `mode="as_of"` reach the
+  `if mode not in ("local","hybrid"): raise` guard). The clamp covers the aggregate path too.
 - `asof_object` returns `None` (anchor not found / no edge in slice) -> the `ask` branch returns
   `"(unknown)"`; the gate scores it as a miss.
 - `ask(mode="auto")` temporal branch never raises (parse-guarded) -> no regression vs slice 1.
