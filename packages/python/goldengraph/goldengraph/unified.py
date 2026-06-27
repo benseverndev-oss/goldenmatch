@@ -62,3 +62,25 @@ def plan_resolution(wp: WorkloadProfile) -> UnifiedPlan:
         why = f"only {wp.capability_fraction:.0%} capability-demanding -> cheap EXACT ER suffices"
     return UnifiedPlan(resolution_tier=tier, retrieval_modes_needed=wp.retrieval_modes_needed,
                        capability_fraction=wp.capability_fraction, rationale=why)
+
+
+def resolver_for_tier(tier: ResolutionTier):
+    """Map a ResolutionTier to a Resolver (the `ingest(resolver=...)` callable)."""
+    from .resolve import _exact_resolve, _fuzzy_resolve
+
+    if tier is ResolutionTier.EXACT:
+        return _exact_resolve
+    if tier is ResolutionTier.FUZZY:
+        return lambda ms: _fuzzy_resolve(ms, use_context=False)
+    return lambda ms: _fuzzy_resolve(ms, use_context=True)  # FUZZY_CONTEXT
+
+
+def plan_resolver(queries, *, predicates=None, llm_classifier=None):
+    """The executable join: a query workload -> (UnifiedPlan, the resolver ingest should use).
+
+    `plan_resolution` emits EXACT or FUZZY (FUZZY == the slice-D-measured `goldengraph` dial); so
+    FUZZY_CONTEXT is reachable via `resolver_for_tier` but not auto-selected here -- its win on the
+    engineered corpus isn't separately measured (a deferred 4c refinement).
+    """
+    plan = plan_resolution(profile_workload(queries, predicates=predicates, llm_classifier=llm_classifier))
+    return plan, resolver_for_tier(plan.resolution_tier)

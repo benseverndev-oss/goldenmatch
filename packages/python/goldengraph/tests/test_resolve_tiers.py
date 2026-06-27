@@ -17,3 +17,35 @@ def test_exact_resolve_merges_identical_separates_variants():
 
 def test_exact_resolve_empty():
     assert _exact_resolve([]) == []
+
+
+from goldengraph import unified  # noqa: E402
+
+_PREDS = {"works_at", "located_in", "acquired", "authored", "part_of"}
+
+
+def test_resolver_for_tier_returns_distinct():
+    assert unified.resolver_for_tier(unified.ResolutionTier.EXACT) is _exact_resolve
+    f = unified.resolver_for_tier(unified.ResolutionTier.FUZZY)
+    fc = unified.resolver_for_tier(unified.ResolutionTier.FUZZY_CONTEXT)
+    assert callable(f) and callable(fc) and f is not fc
+
+
+def test_exact_tier_resolver_groups_exactly():
+    r = unified.resolver_for_tier(unified.ResolutionTier.EXACT)
+    ents = r([Mention("Apple", "org"), Mention("Apple Inc", "org")])
+    assert len(ents) == 2  # distinct surfaces stay separate under EXACT
+
+
+def test_plan_resolver_capability_returns_fuzzy_resolver():
+    plan, resolver = unified.plan_resolver(
+        ["List all entities that Metaphone works at."], predicates=_PREDS
+    )
+    assert plan.resolution_tier is unified.ResolutionTier.FUZZY
+    assert callable(resolver)
+
+
+def test_plan_resolver_lookup_returns_exact_resolver():
+    plan, resolver = unified.plan_resolver(["what is Soundex?"], predicates=_PREDS)
+    assert plan.resolution_tier is unified.ResolutionTier.EXACT
+    assert resolver is _exact_resolve
