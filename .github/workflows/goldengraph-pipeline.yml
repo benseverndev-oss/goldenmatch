@@ -118,3 +118,24 @@ jobs:
           name: goldengraph-temporal
           path: packages/python/goldenmatch/benchmarks/er-kg-bench/TEMPORAL.md
           if-no-files-found: ignore
+
+      - name: KG-vs-KG capability scorecard gate (deterministic, key-free)
+        # Slice D: does each KG framework's documented ER strategy (as a record_key dial) cost it
+        # on the capabilities goldengraph wins? Runs oracle/goldengraph-fuzzy/exact-match/none
+        # through bridge-recall + aggregation set-F1. Gates HARD on goldengraph beating the
+        # exact-match tier (LightRAG/MS-GraphRAG) by a frozen margin on every metric. No key.
+        working-directory: packages/python/goldenmatch/benchmarks/er-kg-bench
+        env:
+          POLARS_SKIP_CPU_CHECK: "1"
+        run: |
+          python -m pytest tests/test_qa_kg_scorecard.py -v
+          python -m erkgbench.qa_e2e.run_kg_scorecard \
+            --seed 7 --n-questions 80 --n-anchors 60 --ambiguity 0.6 --out-md KG_SCORECARD.md
+
+      - name: Upload KG_SCORECARD.md
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: goldengraph-kg-scorecard
+          path: packages/python/goldenmatch/benchmarks/er-kg-bench/KG_SCORECARD.md
+          if-no-files-found: ignore
