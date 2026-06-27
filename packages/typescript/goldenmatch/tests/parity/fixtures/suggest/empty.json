@@ -1,0 +1,10 @@
+{
+  "expected": [],
+  "input": {
+    "clusters": "[]",
+    "column_signals": "[]",
+    "config": "{\"matchkeys\":[{\"fields\":[{\"field\":\"record_id\",\"scorer\":\"exact\",\"weight\":1.0}],\"kind\":\"weighted\",\"name\":\"person\",\"threshold\":0.8}],\"negative_evidence\":[]}",
+    "priors": "{\"counts\": {}}",
+    "scored_pairs": "{\"score\": [], \"n_pairs\": 0}"
+  }
+}

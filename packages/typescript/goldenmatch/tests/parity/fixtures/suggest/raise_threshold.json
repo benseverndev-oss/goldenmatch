@@ -1,0 +1,48 @@
+{
+  "expected": [
+    {
+      "confidence": 0.7,
+      "current_value": "0.50",
+      "evidence": {
+        "current": 0.5,
+        "dip": 0.9229166666666668
+      },
+      "id": "thr:dip:person",
+      "kind": "raise_threshold",
+      "patch": {
+        "matchkey": "person",
+        "op": "set_threshold",
+        "value": 0.92
+      },
+      "predicted_effect": "precision_up",
+      "proposed_value": "0.92",
+      "rationale": "Pair scores split into two groups with a gap near 0.92, but the `person` threshold sits at 0.50. Moving it to 0.92 separates the two groups cleanly.",
+      "target": "person"
+    },
+    {
+      "confidence": 0.6,
+      "current_value": "0.50",
+      "evidence": {
+        "mass_above": 1.0
+      },
+      "id": "thr:raise:person",
+      "kind": "raise_threshold",
+      "patch": {
+        "matchkey": "person",
+        "op": "set_threshold",
+        "value": 0.75
+      },
+      "predicted_effect": "precision_up",
+      "proposed_value": "0.75",
+      "rationale": "100% of scored pairs clear the `person` threshold of 0.50 -- almost everything is matching, which usually means false merges. Raising it to 0.75 tightens the match.",
+      "target": "person"
+    }
+  ],
+  "input": {
+    "clusters": "[{\"quality\": \"strong\", \"oversized\": false}]",
+    "column_signals": "[{\n        \"field\": \"record_id\",\n        \"col_type\": \"identifier\",\n        \"scorer\": \"exact\",\n        \"in_blocking\": true,\n        \"in_negative_evidence\": false,\n        \"identity_score\": 0.3,\n        \"corruption_score\": 0.0,\n        \"collision_rate\": 0.0,\n        \"cardinality_ratio\": 0.4,\n        \"null_rate\": 0.0,\n        \"variant_rate\": 0.0\n    }]",
+    "config": "{\"matchkeys\":[{\"fields\":[{\"field\":\"record_id\",\"scorer\":\"exact\",\"weight\":1.0}],\"kind\":\"weighted\",\"name\":\"person\",\"threshold\":0.5}],\"negative_evidence\":[]}",
+    "priors": "{\"counts\": {}}",
+    "scored_pairs": "{\"n_pairs\":7,\"score\":[0.92,0.94,0.95,0.96,0.97,0.98,0.99]}"
+  }
+}
