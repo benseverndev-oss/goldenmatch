@@ -71,42 +71,85 @@ suggest-core (Rust, pyo3-free)            ← the ONLY rule/rank/diagnostics log
   `reviewConfig()`, `suggestFromResult()`, `heal()`, `serializeSuggestions()`,
   `headroomSignal()`, `maybeSuggest()` (mirrors the Python `goldenmatch/core/suggest/`
   surface and the `_api.py` wiring helpers).
+- `packages/typescript/goldenmatch/src/core/suggestColumnSignals.ts` — the TS
+  `column_signals` builder (a first-class component; see "Caller-built column
+  signals" below). Mirrors Python's `adapter.py::_build_column_signals_batch`.
 
 ## The kernel change (load-bearing)
 
 `suggest-core` currently takes arrow `RecordBatch`es as a **mandatory** dependency
-(`api.rs::suggest(scored_pairs, clusters, column_signals, …)`). The rule logic,
-however, runs on serde-derived diagnostic structs (`ScoreDiagnostics`,
-`ClusterDiagnostics`, `ColumnSignal`, `ConfigSummary`, `AcceptancePriors`, →
-`Suggestion`); arrow is only the input encoding at the boundary. WASM should not
-pull arrow (size + arrow-in-JS marshaling cost). The fix mirrors `autoconfig-core`:
+(`api.rs::suggest(scored_pairs, clusters, column_signals, …)`). The *rules*
+(`rules.rs`) run on plain structs (`ScoreDiagnostics`, `ClusterDiagnostics`,
+`&[ColumnSignal]`), but those diagnostic structs are **arrow-coupled today**: they
+are built only via `ScoreDiagnostics::from_batch` / `ClusterDiagnostics::from_batch`
+/ `column_signals_from_batch`, and `ColumnSignal` (`diagnostics.rs`) derives only
+`Debug, Clone, PartialEq` — no serde. Arrow is the input encoding at the boundary;
+WASM should not pull it (size + arrow-in-JS marshaling cost). The fix mirrors
+`autoconfig-core`:
 
-1. **Feature-gate arrow** in `suggest-core/Cargo.toml`: `arrow = ["dep:arrow"]`,
-   default off. The arrow-typed `suggest(&RecordBatch, …)` becomes
+1. **Feature-gate arrow** in `suggest-core/Cargo.toml`: `arrow = { optional = true }`
+   + `[features] arrow = ["dep:arrow"]`, default off. The arrow-typed
+   `suggest(&RecordBatch, …)` and the `*::from_batch` constructors become
    `#[cfg(feature = "arrow")]`.
-2. **Add a pure JSON entry point** (always compiled):
+2. **Add serde derives + arrow-free constructors.** Add `Serialize, Deserialize` to
+   `ColumnSignal`, and give `ScoreDiagnostics` / `ClusterDiagnostics` arrow-free
+   constructors (e.g. `ScoreDiagnostics::from_scores(&[f64], cutoff)`,
+   `ClusterDiagnostics::from_rows(...)`) that take the same raw values the arrow
+   constructors extract. The arrow `*::from_batch` constructors are refactored to
+   decode the batch and delegate to these — so both paths share the diagnostic math.
+3. **Add a pure JSON entry point** (always compiled):
    `suggest_from_json(scored_pairs_json, clusters_json, column_signals_json,
    config_json, priors_json) -> Result<String, String>`. It deserializes the raw
-   artifacts and runs the **same** `diagnostics → rules → rank` path, returning the
-   same suggestion JSON the arrow path returns.
-3. The arrow `suggest()` becomes a thin adapter: arrow batches → the same internal
-   structs → shared core path. **Both paths share the diagnostics + rule + rank
-   code** — one source of truth; the arrow path's behavior is unchanged.
-4. `native` (Python) keeps calling the arrow path (it has arrow batches in hand) —
+   artifacts, builds the diagnostics via the arrow-free constructors, and runs the
+   **same** `rules → rank` path, returning the same suggestion JSON.
+4. The arrow `suggest()` stays as the `#[cfg(feature = "arrow")]` adapter and now
+   shares the diagnostic + rule + rank code with the JSON path — one source of truth;
+   its behavior is unchanged.
+5. `native` (Python) keeps calling the arrow path (it has arrow batches in hand) —
    **zero Python-side change**. `suggest-wasm` calls the JSON path.
 
 This is the only change to existing Rust. It is behavior-preserving (the existing
 `suggest-core` golden tests must stay green) and is also what unblocks the future
 C-ABI / DataFusion consumers.
 
-### Diagnostics computation lives in the kernel
+### What the kernel computes vs. what the caller supplies
 
-The JSON entry takes the raw-ish artifacts (per-pair scores, cluster memberships,
-per-column signal rows) and computes diagnostics **inside the kernel**, exactly as
-the arrow path does. TS does NOT compute diagnostics — it only marshals its run's
-`scoredPairs` / `clusters` / column profiles into the input JSON. This keeps the
-diagnostic computation (histogram/dip, cohesion edges, corruption) single-sourced
-in Rust and is what makes byte-parity achievable.
+Two of the three input batches are **caller-built**, not kernel-derived — this is
+the crux of the parity story:
+
+- **Kernel-computed (single-sourced in Rust):** `ScoreDiagnostics` (histogram /
+  dip / sub-cutoff mass) from `scored_pairs`, and `ClusterDiagnostics` (weak /
+  oversized clusters) from `clusters`. The JSON path computes these in the kernel
+  exactly as the arrow path does.
+- **Caller-built (NOT computed by the kernel):** the `column_signals` rows. The
+  kernel only *reads* `corruption_score`, `collision_rate`, `identity_score`,
+  `variant_rate`, `cardinality_ratio`, `null_rate`, `col_type`, `in_blocking`. In
+  Python these are produced by `adapter.py::_build_column_signals_batch` over a stack
+  of Python modules (`compute_column_priors`, `_collision_rates`, the column
+  classifier, `blocking_risk`, direct Polars). **TS must reproduce this** — see the
+  next section. This is why end-to-end TS-run parity needs the column-signal port,
+  while fixture-fed kernel parity does not.
+
+## Caller-built column signals (TS)
+
+`suggestColumnSignals.ts` builds the `column_signals` JSON the kernel reads, from a
+TS run's rows + clusters + config. It mirrors `_build_column_signals_batch` field by
+field, and the building blocks already exist in TS:
+
+- `identity_score`, `corruption_score` → `indicators.ts::computeColumnPriors` (already
+  documented as mirroring Python's `compute_column_priors`).
+- `col_type` → `profiler.ts::profileColumn` (`ColumnProfile.colType`, the same
+  classifier autoconfig uses).
+- `cardinality_ratio`, `null_rate` → direct reduction over the rows.
+- `in_blocking` → from the resolved config's blocking fields.
+- `collision_rate` → a small TS reduction mirroring `_collision_rates` (fraction of
+  multi-member clusters where the column's values disagree).
+- `variant_rate` → `0.0` default (matches Python's behavior when goldencheck is
+  absent; Python's `blocking_risk` source is optional there too).
+
+Each field gets a **parity surface** (TS value == Python value on shared fixtures),
+because this is where end-to-end drift would live — the kernel itself is already
+covered by fixture-fed golden vectors.
 
 ## TS surface wiring (full default-pipeline parity)
 
@@ -115,19 +158,34 @@ Scoped to the surfaces TS actually has (no TS web/TUI/REST exist):
 - **Core — `dedupe(rows, { suggest?, heal? })`** (`api.ts`): the result gains
   `suggestions` (serialized objects, same `{id, kind, target, rationale, verified,
   patch}` wire shape as Python) and `healTrail`.
-  - **Default** (`suggest`/`heal` unset): a **free trigger** reads the run's
-    `postflightReport` (health RED/YELLOW or a score dip), mirroring Python's
-    `headroom_signal` — no kernel call on a healthy result. Only on a trigger does
-    the cheap artifacts-in path attach **raw, unverified** candidates from the run's
-    `scoredPairs` / `clusters`.
-  - **`suggest: true`** → the expensive verified path (each candidate simulated
-    through the gate). **`heal: true`** → the bounded apply-and-re-run loop,
-    recording `healTrail` and returning the healed config.
+  - **Default** (`suggest`/`heal` unset): a **free trigger** (`headroomSignal`)
+    reads the run's `postflightReport` — no kernel call on a healthy result. Only on
+    a trigger does the cheap artifacts-in path attach **raw, unverified** candidates
+    from the run's `scoredPairs` / `clusters`.
+
+    **Trigger signal — honest difference from Python.** Python's `headroom_signal`
+    reads `controller_history.pick_committed().profile.health()` (RED/YELLOW) and
+    `profile.scoring.dip_statistic`. The TS `PostflightReport`
+    (`autoconfigVerify.ts`) carries only `signals` / `adjustments` / `advisories` —
+    there is **no `controllerHistory`, health verdict, or `dip_statistic`** on the
+    TS `DedupeResult`. So the TS trigger derives a **score-distribution** signal:
+    fire when the postflight `scoreHistogram` is bimodal (sub-cutoff mass present) OR
+    a threshold `adjustment` fired (postflight only adjusts in response to a clearly
+    bimodal distribution). This is the dip half of Python's trigger, not the
+    controller-health half — an accepted, documented divergence (threading
+    controller health onto `DedupeResult` is out of scope). The trigger also handles
+    `postflightReport === undefined` (the field is optional) → no fire.
+  - **`suggest: true`** → the expensive verified path (each candidate simulated by a
+    **TS pipeline re-run**, NOT a per-candidate WASM round-trip; the kernel is called
+    once up front). Mirror Python's per-run candidate cap (`_MAX_VERIFY_CANDIDATES =
+    8`). **`heal: true`** → the bounded apply-and-re-run loop, recording `healTrail`
+    and returning the healed config.
 - **CLI** (`cli.ts`): `--suggest` / `--heal` flags plus a free default-run hint
   (the hint reads the free trigger; no second pipeline run).
 - **MCP** (`node/mcp/server.ts`): a `review_config` tool (mirror the Python MCP tool
   in this stack). The legacy `suggest_config` tool, if present, is untouched.
-- **A2A** (`node/agent/skills.ts` + `node/a2a/server.ts`): a `review_config` skill.
+- **A2A** (`core/agent/skills.ts` + `node/a2a/server.ts`): a `review_config` skill.
+  (Skills live in the edge-safe `core/agent/`, not `node/agent/`.)
 - **Kill-switch**: `GOLDENMATCH_SUGGEST_ON_DEDUPE=0` (read from Node env) **plus** an
   explicit `dedupe` option so edge/browser callers with no env can opt out.
 
@@ -144,12 +202,19 @@ Scoped to the surfaces TS actually has (no TS web/TUI/REST exist):
 
 ## Testing
 
-- **Golden-vector parity (success bar):** shared JSON fixtures in
-  `tests/parity/fixtures/suggest/`. The **same** input artifacts produce
-  **byte-identical** suggestion JSON from (a) the Python native path, (b) the
-  `suggest-core` Rust golden test, and (c) the TS/WASM path. Fixtures are emitted by
-  the build script from the Rust kernel so they cannot drift from the source of
-  truth (the `autoconfig-wasm-*` parity tests are the precedent).
+- **Kernel golden-vector parity (success bar):** shared JSON fixtures in
+  `tests/parity/fixtures/suggest/`. Given **identical input artifacts JSON** (the
+  three batches + config + priors), the suggestion JSON is **byte-identical** across
+  (a) the Python native path, (b) the `suggest-core` Rust golden test, and (c) the
+  TS/WASM path. Fixtures are emitted by the build script from the Rust kernel so they
+  cannot drift (the `autoconfig-wasm-*` parity tests are the precedent). This proves
+  the kernel binding is correct; it does NOT by itself prove a TS `dedupe` run
+  matches a Python one — that depends on the column-signal builder below.
+- **Column-signal parity:** `suggestColumnSignals.ts` field values (identity,
+  corruption, collision, cardinality, null, col_type, in_blocking, variant) ==
+  Python's `_build_column_signals_batch` on shared fixtures. This is where
+  end-to-end drift would live, so it gets its own parity surface (`computeColumnPriors`
+  already has a TS parity test to extend).
 - **TS unit tests:** the trigger gate (no-op when healthy, no kernel call),
   `suggest` / `heal` option behavior, serialize wire shape, and graceful-empty when
   the WASM backend is stubbed unavailable.
