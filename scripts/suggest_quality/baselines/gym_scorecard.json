@@ -1,14 +1,176 @@
 {
-  "headline_live": 0.150881,
-  "headline_raw": 0.555137,
+  "headline_live": 0.107772,
+  "headline_raw": -1.34958,
   "meta": {
-    "git_sha": "ac511b6ef99bffc509659f6a76e1de6b650a5c34",
-    "n_built_ok": 5,
-    "n_ok": 9,
-    "n_records": 18,
+    "git_sha": "996e4cd0d1dc3a97ebae7dd152515a8d787634b3",
+    "n_built_ok": 7,
+    "n_ok": 13,
+    "n_records": 36,
     "native_version": "0.1.12"
   },
   "pairs": {
+    "anchor_person_match/bad_freetext_scorer": {
+      "builds_on_existing_rule": true,
+      "expected_rule": null,
+      "expected_rule_fired_live": null,
+      "expected_rule_fired_raw": null,
+      "recovery_pct_live": null,
+      "recovery_pct_raw": null,
+      "status": "no_damage"
+    },
+    "anchor_person_match/dropped_blocking_pass": {
+      "builds_on_existing_rule": false,
+      "expected_rule": null,
+      "expected_rule_fired_live": null,
+      "expected_rule_fired_raw": null,
+      "recovery_pct_live": null,
+      "recovery_pct_raw": null,
+      "status": "n/a"
+    },
+    "anchor_person_match/flattened_weights": {
+      "builds_on_existing_rule": false,
+      "expected_rule": null,
+      "expected_rule_fired_live": null,
+      "expected_rule_fired_raw": null,
+      "recovery_pct_live": null,
+      "recovery_pct_raw": null,
+      "status": "n/a"
+    },
+    "anchor_person_match/missing_negative_evidence": {
+      "builds_on_existing_rule": true,
+      "expected_rule": null,
+      "expected_rule_fired_live": null,
+      "expected_rule_fired_raw": null,
+      "recovery_pct_live": null,
+      "recovery_pct_raw": null,
+      "status": "no_damage"
+    },
+    "anchor_person_match/naive_single_fuzzy": {
+      "builds_on_existing_rule": false,
+      "expected_rule": null,
+      "expected_rule_fired_live": null,
+      "expected_rule_fired_raw": null,
+      "recovery_pct_live": null,
+      "recovery_pct_raw": null,
+      "status": "no_damage"
+    },
+    "anchor_person_match/skewed_weight": {
+      "builds_on_existing_rule": false,
+      "expected_rule": "adjust_field_weight",
+      "expected_rule_fired_live": false,
+      "expected_rule_fired_raw": false,
+      "recovery_pct_live": 0.0,
+      "recovery_pct_raw": 1.143904,
+      "status": "ok"
+    },
+    "anchor_person_match/threshold_far_too_high": {
+      "builds_on_existing_rule": true,
+      "expected_rule": null,
+      "expected_rule_fired_live": null,
+      "expected_rule_fired_raw": null,
+      "recovery_pct_live": null,
+      "recovery_pct_raw": null,
+      "status": "no_damage"
+    },
+    "anchor_person_match/threshold_too_high": {
+      "builds_on_existing_rule": true,
+      "expected_rule": null,
+      "expected_rule_fired_live": null,
+      "expected_rule_fired_raw": null,
+      "recovery_pct_live": null,
+      "recovery_pct_raw": null,
+      "status": "no_damage"
+    },
+    "anchor_person_match/threshold_too_low": {
+      "builds_on_existing_rule": true,
+      "expected_rule": "raise_threshold",
+      "expected_rule_fired_live": false,
+      "expected_rule_fired_raw": true,
+      "recovery_pct_live": 0.0,
+      "recovery_pct_raw": 1.118347,
+      "status": "ok"
+    },
+    "historical_50k/bad_freetext_scorer": {
+      "builds_on_existing_rule": true,
+      "expected_rule": null,
+      "expected_rule_fired_live": null,
+      "expected_rule_fired_raw": null,
+      "recovery_pct_live": null,
+      "recovery_pct_raw": null,
+      "status": "no_damage"
+    },
+    "historical_50k/dropped_blocking_pass": {
+      "builds_on_existing_rule": false,
+      "expected_rule": null,
+      "expected_rule_fired_live": null,
+      "expected_rule_fired_raw": null,
+      "recovery_pct_live": null,
+      "recovery_pct_raw": null,
+      "status": "no_damage"
+    },
+    "historical_50k/flattened_weights": {
+      "builds_on_existing_rule": false,
+      "expected_rule": null,
+      "expected_rule_fired_live": null,
+      "expected_rule_fired_raw": null,
+      "recovery_pct_live": null,
+      "recovery_pct_raw": null,
+      "status": "n/a"
+    },
+    "historical_50k/missing_negative_evidence": {
+      "builds_on_existing_rule": true,
+      "expected_rule": null,
+      "expected_rule_fired_live": null,
+      "expected_rule_fired_raw": null,
+      "recovery_pct_live": null,
+      "recovery_pct_raw": null,
+      "status": "n/a"
+    },
+    "historical_50k/naive_single_fuzzy": {
+      "builds_on_existing_rule": false,
+      "expected_rule": null,
+      "expected_rule_fired_live": null,
+      "expected_rule_fired_raw": null,
+      "recovery_pct_live": null,
+      "recovery_pct_raw": null,
+      "status": "no_damage"
+    },
+    "historical_50k/skewed_weight": {
+      "builds_on_existing_rule": false,
+      "expected_rule": "adjust_field_weight",
+      "expected_rule_fired_live": false,
+      "expected_rule_fired_raw": false,
+      "recovery_pct_live": 0.0,
+      "recovery_pct_raw": -14.522264,
+      "status": "ok"
+    },
+    "historical_50k/threshold_far_too_high": {
+      "builds_on_existing_rule": true,
+      "expected_rule": null,
+      "expected_rule_fired_live": null,
+      "expected_rule_fired_raw": null,
+      "recovery_pct_live": null,
+      "recovery_pct_raw": null,
+      "status": "no_damage"
+    },
+    "historical_50k/threshold_too_high": {
+      "builds_on_existing_rule": true,
+      "expected_rule": null,
+      "expected_rule_fired_live": null,
+      "expected_rule_fired_raw": null,
+      "recovery_pct_live": null,
+      "recovery_pct_raw": null,
+      "status": "no_damage"
+    },
+    "historical_50k/threshold_too_low": {
+      "builds_on_existing_rule": true,
+      "expected_rule": "raise_threshold",
+      "expected_rule_fired_live": false,
+      "expected_rule_fired_raw": false,
+      "recovery_pct_live": 0.0,
+      "recovery_pct_raw": -13.341091,
+      "status": "ok"
+    },
     "ncvr_synthetic/bad_freetext_scorer": {
       "builds_on_existing_rule": true,
       "expected_rule": "swap_scorer",
@@ -180,8 +342,8 @@
     },
     "adjust_field_weight": {
       "mean_recovery_pct_live": 0.0,
-      "mean_recovery_pct_raw": -2.665221,
-      "n_ok": 3
+      "mean_recovery_pct_raw": -4.274805,
+      "n_ok": 5
     },
     "lower_threshold": {
       "mean_recovery_pct_live": 0.377203,
@@ -190,8 +352,8 @@
     },
     "raise_threshold": {
       "mean_recovery_pct_live": 0.0,
-      "mean_recovery_pct_raw": 1.010639,
-      "n_ok": 2
+      "mean_recovery_pct_raw": -2.550367,
+      "n_ok": 4
     },
     "swap_scorer": {
       "mean_recovery_pct_live": 0.0,
