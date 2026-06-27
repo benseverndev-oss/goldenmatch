@@ -168,6 +168,18 @@ def _run_phase5_pipeline(
         "distributed streaming pipeline (GOLDENMATCH_DISTRIBUTED_PIPELINE=2)",
     )
 
+    # 1c. Guarantee a GLOBAL __row_id__ on the input rows. Phase 5 scoring keys
+    #     pairs on __row_id__ and step 4 joins rows.__row_id__ == member_id, so
+    #     BOTH require a globally-unique id. Production inputs (the bench parquet
+    #     generator) already carry it -- a no-op that leaves the streaming path
+    #     untouched. When absent (a caller passing a raw frame, e.g. the wiring
+    #     tests) the prior code let each partition synthesize colliding local ids
+    #     AND left the join referencing a __row_id__ column that wasn't on the
+    #     rows: on older Ray the join silently produced nothing; newer Ray's
+    #     hash-shuffle eagerly projects the key and raises KeyError. Adding the id
+    #     here fixes the crash and the latent cross-partition id collision.
+    ds = _ensure_global_row_id(ds)
+
     # 2. Distributed scoring -> Ray Dataset of pairs (RAW: per-partition, so each
     #    component's edges are co-located in one block -- required by local_cc).
     raw_pairs_ds = score_blocks_distributed(ds, cfg)
@@ -258,6 +270,48 @@ def _row_columns(ds: Dataset) -> list[str]:
         return list(ds.schema().names)
     except Exception:  # pragma: no cover - schema() shape varies by Ray version
         return []
+
+
+def _ensure_global_row_id(ds: Dataset) -> Dataset:
+    """Return ``ds`` guaranteed to carry a globally-unique ``__row_id__``.
+
+    No-op when the column already exists (the production contract -- the input
+    parquet carries ``__row_id__``, so the streaming path is unchanged). When it
+    is absent, attach a deterministic global index via ``zip(range(n))`` and
+    materialize so distributed scoring (step 2) and the cluster join (step 4)
+    observe the SAME ids. ``zip``/``count`` execute the input once; that cost is
+    only paid on the fallback (callers that didn't supply ``__row_id__``), which
+    is why we also warn -- supplying it upstream keeps the pipeline streaming.
+    """
+    if "__row_id__" in _row_columns(ds):
+        return ds
+
+    # Only a real Ray Dataset gets the row-id assignment below. In the ray-less
+    # python lane ``ds`` cannot be a real Dataset, and the mock/stub wiring tests
+    # pass a MagicMock or bare object(); a MagicMock satisfies ``hasattr`` for any
+    # attribute, so guard on the concrete type (not duck-typing) and import ray
+    # defensively -- both cases fall through to a no-op.
+    try:
+        import ray
+        from ray.data import Dataset as _RayDataset
+    except Exception:
+        return ds
+    if not isinstance(ds, _RayDataset):
+        return ds
+
+    logger.warning(
+        "phase5: input rows carry no __row_id__; assigning a global row id "
+        "(this materializes the input). Provide a global __row_id__ upstream to "
+        "keep the pipeline fully streaming."
+    )
+    n = ds.count()
+    indexed = ds.zip(ray.data.range(n))
+
+    def _rename_id(batch: Any) -> Any:  # pa.Table -> pa.Table
+        names = ["__row_id__" if c == "id" else c for c in batch.column_names]
+        return batch.rename_columns(names)
+
+    return indexed.map_batches(_rename_id, batch_format="pyarrow").materialize()
 
 
 def _join_assignments_distributed(
