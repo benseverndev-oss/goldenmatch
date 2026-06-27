@@ -459,6 +459,67 @@ _MAX_VERIFY_CANDIDATES: int = 8
 # Near-zero so we only suppress genuine health regressions.
 _VERIFY_EPS: float = 1e-6
 
+# Recall-justification guard for threshold-RAISING suggestions.
+# ---------------------------------------------------------------------------
+# The default cohesion health proxy (suggestion_health_cohesion) is structurally
+# biased toward `raise_threshold`: raising a threshold mechanically removes the
+# weakest intra-cluster edges, so cohesion (min-edge) can only go UP and the
+# coverage term saturates above ~50% matched -- the proxy can essentially never
+# veto a threshold raise, even one that sheds real matches on an already-healthy,
+# high-recall config (e.g. ncvr_synthetic: cohesion 0.80->0.90 KEEP, yet F1 -7pt).
+#
+# This guard adds a recall floor SCOPED to threshold-raising suggestions: a raise
+# is suppressed only when it sheds material recall (matched-record rate) AND that
+# loss is not justified by the cohesion gain. All three conditions must hold, so
+# legitimate precision fixes -- a small shed (synthetic), or a large cohesion gain
+# that earns the shed (historical_50k) -- still pass. Env-overridable for tuning.
+def _recall_guard_params() -> tuple[float, float, float]:
+    def _f(name: str, default: float) -> float:
+        raw = os.environ.get(name, "").strip()
+        if not raw:
+            return default
+        try:
+            return float(raw)
+        except ValueError:
+            return default
+    # min recall shed to even consider vetoing; max cohesion gain that still
+    # counts as "small"; min cohesion-gain-per-recall-shed ratio to justify a shed.
+    return (
+        _f("GOLDENMATCH_SUGGEST_RECALL_MIN_SHED", 0.02),
+        _f("GOLDENMATCH_SUGGEST_RECALL_COH_ABS", 0.15),
+        _f("GOLDENMATCH_SUGGEST_RECALL_RATIO", 2.0),
+    )
+
+
+def _matched_rate(clusters: dict, n_records: int) -> float:
+    """Fraction of records in a multi-member cluster (an unsupervised recall
+    proxy). Ungated/uncapped, unlike health._coverage."""
+    if n_records <= 0:
+        return 0.0
+    matched = sum(c.get("size", 2) for c in clusters.values() if c.get("size", 1) > 1)
+    return matched / n_records
+
+
+def _raise_sheds_unjustified_recall(
+    baseline_clusters: dict, cand_clusters: dict, n_records: int
+) -> bool:
+    """True when a threshold raise sheds material recall not justified by its
+    cohesion gain -- the case the cohesion proxy is blind to."""
+    from goldenmatch.core.suggest.health import _select_cohesion
+
+    min_shed, coh_abs, ratio_min = _recall_guard_params()
+    recall_shed = _matched_rate(baseline_clusters, n_records) - _matched_rate(
+        cand_clusters, n_records
+    )
+    if recall_shed <= min_shed:
+        return False  # negligible recall loss -- not the pathology
+    coh_gain = _select_cohesion(cand_clusters) - _select_cohesion(baseline_clusters)
+    if coh_gain >= coh_abs:
+        return False  # a large cohesion gain justifies the shed
+    if coh_gain / recall_shed >= ratio_min:
+        return False  # gain-per-shed is favorable enough
+    return True
+
 
 def _parse_suggestions(raw_json: str) -> list[Suggestion]:
     """Parse the kernel's JSON output into a list of Suggestion dataclasses.
@@ -563,13 +624,26 @@ def _verify_suggestions(suggestions, df, config, clusters, engine) -> list[Sugge
             cand_result = engine._run_pipeline(df, cfg_cand)
             cand_health = suggestion_health_from_clusters(cand_result.clusters, n_records)
 
+            keep = cand_health >= baseline_health - _VERIFY_EPS
+            # Recall-justification guard: the cohesion proxy cannot veto a
+            # threshold raise that sheds real matches (cohesion only rises when a
+            # threshold is raised). Override KEEP->DROP when a raise sheds material
+            # recall unjustified by its cohesion gain.
+            recall_vetoed = False
+            if keep and s.kind == "raise_threshold" and _raise_sheds_unjustified_recall(
+                clusters, cand_result.clusters, n_records
+            ):
+                keep = False
+                recall_vetoed = True
+
             logger.debug(
-                "review_config verify: suggestion %r cand_health=%.4f (baseline=%.4f) -> %s",
+                "review_config verify: suggestion %r cand_health=%.4f (baseline=%.4f) -> %s%s",
                 s.id, cand_health, baseline_health,
-                "KEEP" if cand_health >= baseline_health - _VERIFY_EPS else "DROP",
+                "KEEP" if keep else "DROP",
+                " (recall-guard veto)" if recall_vetoed else "",
             )
 
-            if cand_health >= baseline_health - _VERIFY_EPS:
+            if keep:
                 verified.append(s)
         except Exception as exc:
             # Verification failure is conservative: keep the suggestion
