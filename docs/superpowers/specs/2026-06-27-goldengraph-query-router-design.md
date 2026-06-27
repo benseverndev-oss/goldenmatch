@@ -91,8 +91,12 @@ def plan_query(profile: QueryProfile) -> RetrievalPlan: ...
 ```
 def aggregate_members(slice_graph, anchor_surface: str, relation: str) -> set[str]:
     """Engine-native exact aggregation: seed the anchor by name, 1-hop ball, return the
-    canonical names of objects on edges (subj==seed, predicate==relation). LLM-FREE.
-    Parity reference: er-kg-bench aggregation.goldengraph_aggregate."""
+    canonical NAMES (surfaces) of objects on edges (subj in seeds, predicate==relation).
+    LLM-FREE. NOTE the representation: this returns canonical NAMES, whereas the bench
+    `goldengraph_aggregate` returns canonical IDS -- the gate compares in name space (see
+    Gate). `seeds_by_name` returns a LIST (every node whose canonical/merged surface equals
+    the name); on the oracle-keyed gate store all of an anchor's mentions merge into one node,
+    so the seed set is effectively a single node (surface collisions are out-of-scope here)."""
     seeds = slice_graph.seeds_by_name(anchor_surface)
     if not seeds:
         return set()
@@ -114,11 +118,11 @@ aggregation the caller passes the store's current time, same convention as B1).
 ### 3. `ask(mode="auto")` dispatch (`goldengraph/answer.py`)
 
 ```
+# placed AFTER the existing `slice_graph = store.as_of(valid_t, tx_t)` line so it reuses it
 if mode == "auto":
     profile = classify_query(query)
     plan = plan_query(profile)
-    if plan.mode == "aggregate":
-        slice_graph = store.as_of(valid_t, tx_t)
+    if plan.mode == "aggregate" and profile.anchor_surface and profile.relation:
         return _format_aggregate(aggregate_members(slice_graph, profile.anchor_surface, profile.relation))
     mode = plan.mode  # fall through to the existing local/hybrid/global path
 # ... existing body unchanged ...
@@ -129,22 +133,39 @@ non-aggregate profile flows into today's `local`/`hybrid` path, so it never regr
 
 ## Gate (free, deterministic, key-free; in `goldengraph-pipeline.yml`)
 
-Reuses the B1 aggregation corpus + the bench `goldengraph_aggregate` as the parity reference. A new
-`erkgbench/qa_e2e/router_eval.py` + `run_router_eval.py` + `test_qa_router.py`:
+Reuses the B1 aggregation corpus. **Pinned to `ambiguity=0.0`** for the routed-correctness row (see
+why below). A new `erkgbench/qa_e2e/router_eval.py` + `run_router_eval.py` + `test_qa_router.py`:
 
 1. **Classifier accuracy (wheel-free):** `classify_query` labels the B1 list-questions as AGGREGATE
    and a held-out set of non-aggregation phrasings (multi-hop / lookup templates) as NOT-aggregate,
-   above a frozen accuracy threshold. Also asserts the extracted `anchor_surface`/`relation` match
-   the question's true anchor/relation on the list-questions.
-2. **Routed aggregate parity (needs wheel):** for each list-question, the FULL router path
-   (`classify_query` -> `aggregate_members`) returns a set EQUAL to the bench `goldengraph_aggregate`
-   on the same store, and set-F1 vs gold == the B1 measured (1.0). Proves the router picks the right
-   lever AND the lever is correct end-to-end, no LLM.
+   above a frozen accuracy threshold. Slot assertion: the extracted `anchor_surface` equals the
+   question's true anchor SURFACE `by_id[q.anchor_id].canonical` (NOT the QID `q.anchor_id`), and
+   `relation` equals `q.relation`.
+2. **Routed aggregate correctness (needs wheel), at `ambiguity=0.0`:** build the B1 store at
+   `ambiguity=0.0` via the oracle-keyed `_build_store` path. For each list-question, the FULL router
+   path (`classify_query` -> `aggregate_members`) returns a set EQUAL to the NAME-PROJECTED gold
+   `{by_id[m].canonical for m in q.gold_members}`, i.e. set-F1 == 1.0. (Optional informative
+   cross-check: the same set equals the bench `goldengraph_aggregate` projected to names via
+   `g.canonical_name`.) Proves the router picks the right lever AND the lever computes the exact set,
+   no LLM.
 
-Gate HARD on (1) classifier accuracy >= frozen threshold and (2) routed-parity exact + set-F1 floor.
-Verify-then-freeze the threshold from the first measured run (per B1/C/D). STOP-and-surface if the
-heuristic classifier can't cleanly separate aggregation from non-aggregation on the engineered
-phrasing (it would mean the routing signal is too weak even on the easy corpus).
+**Why `ambiguity=0.0` (resolves the spec-review BLOCKER + MAJOR):** (a) the engine `aggregate_members`
+returns canonical NAMES while the bench/gold are canonical IDS -- comparing requires one
+representation, so the gate projects gold IDS through names (`by_id[id].canonical`). (b) name-seeding
+(`seeds_by_name(anchor_surface)`) only resolves if the anchor's canonical surface was actually rendered
+into the store; at `ambiguity>0` `_render_mention` emits a variant with probability `ambiguity`, so a
+small-set anchor may never appear under its canonical surface and the seed misses. At `ambiguity=0.0`
+every mention is the canonical surface, so the anchor node's `canonical_name` == the concept AND
+`seeds_by_name(concept)` resolves -- making name-space, name-seeded correctness exact and reproducible.
+Higher-ambiguity corpora are for the robustness/LLM rows, not this deterministic gate. (The bench's
+id-seeded coverage path is ER-robust by construction; the engine's name-seeded path is what a real
+caller has, so testing it at `ambiguity=0` is the honest scope for "does the lever traverse right".)
+
+Gate HARD on (1) classifier accuracy >= frozen threshold and (2) routed correctness set-F1 == 1.0 at
+`ambiguity=0.0`. Verify-then-freeze the classifier threshold from the first measured run (per B1/C/D).
+STOP-and-surface if the heuristic classifier can't cleanly separate aggregation from non-aggregation
+on the engineered phrasing (the routing signal would be too weak even on the easy corpus), or if
+routed correctness is not 1.0 at `ambiguity=0.0` (the engine-native aggregate traversal is wrong).
 
 ### Opt-in real-LLM confirmation (`bench-graphrag-qa`, ungated)
 
@@ -161,7 +182,8 @@ WINS, not just matches a reference. Budget-capped, `run_router_capability` input
 - `packages/python/goldengraph/tests/test_route.py` (CREATE): classify_query intents + slot
   extraction + plan_query rules + confidence floor (pure-Python).
 - `packages/python/goldenmatch/benchmarks/er-kg-bench/erkgbench/qa_e2e/router_eval.py` (CREATE):
-  classifier-accuracy + routed-parity over the B1 corpus; gate verdicts + render.
+  classifier-accuracy + routed-correctness (name-space, ambiguity=0.0) over the B1 corpus; gate
+  verdicts + render.
 - `.../qa_e2e/run_router_eval.py` (CREATE): CLI (deterministic + `--with-llm`).
 - `.../tests/test_qa_router.py` (CREATE): wheel-free classifier-accuracy + gate shape.
 - `.github/workflows/goldengraph-pipeline.yml` (MODIFY): router gate step + upload.
@@ -192,7 +214,15 @@ real B1 phrasing before freezing the threshold.
 - **Anchor/relation slot extraction vs the predicate vocabulary.** The relation words must map to the
   stored predicate (underscore-join). If a relation phrase doesn't round-trip to a real predicate,
   `aggregate_members` returns an empty set -> a miss the gate catches. Extraction is validated
-  against the B1 questions' true anchor/relation in the classifier-accuracy gate.
+  against the B1 questions' true anchor SURFACE (`by_id[q.anchor_id].canonical`, NOT the QID) +
+  relation in the classifier-accuracy gate.
+- **Representation + name-seeding (resolved by the `ambiguity=0.0` pin).** `aggregate_members` works
+  in NAME space (`seeds_by_name`, `canonical_name`), whereas the bench/gold are canonical IDS. The
+  deterministic gate runs at `ambiguity=0.0` and compares the engine's name-set to the gold IDS
+  projected through `by_id[id].canonical`; at `ambiguity=0` the canonical surface is always rendered
+  (so `seeds_by_name` resolves) and the node `canonical_name` == the concept (so name-projection is
+  exact). This is the honest scope: it tests the engine-native traversal a real caller gets, with ER
+  held perfect; ER-under-ambiguity is slice A's concern, not this lever's.
 - **If routing doesn't win (opt-in).** If `auto` (aggregate) does NOT beat `local` on answer-match,
   that is a real finding about whether the aggregate mode's exactness survives formatting/synthesis;
   report it, do not gate on it (the deterministic gate is parity, which is LLM-free and robust).
