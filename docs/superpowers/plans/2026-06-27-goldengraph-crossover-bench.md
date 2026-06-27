@@ -106,8 +106,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from .corpora import Document
-
 #: 5 x 4 sweep grid (spec).
 AMBIGUITY_GRID = (0.0, 0.25, 0.5, 0.75, 1.0)
 PASSAGE_K_GRID = (10, 5, 3, 1)
@@ -196,7 +194,7 @@ def query_terms_for(qa, g) -> list[str]:
     """Tokens a naive retriever would key on: the start-entity surface + the relation
     chain. Intermediate-hop entity surfaces are intentionally absent (the multi-hop RAG
     problem -- later edges retrieved on relation overlap alone)."""
-    start_surface = g.canonical_of(qa.start_entity_id) if hasattr(g, "canonical_of") else qa.start_entity_id
+    start_surface = g.canonical_name(qa.start_entity_id)
     terms = list(_tokens(start_surface))
     for rel in qa.relation_chain:
         terms.extend(rel.lower().split("_"))
@@ -210,11 +208,10 @@ def passage_recall(qa, topk_ids) -> float:
     return len(set(topk_ids) & gold) / len(gold)
 ```
 
-NOTE: confirm the GoldGraph accessor for a canonical surface. Inspect `gold.py` (`GoldGraph`)
-for a `canonical_of`/`canonical`/surface map. If the method name differs, use it; if there is
-no such accessor, fall back to `dials.surface_to_canon(g)` inverted, or use
-`qa.start_entity_id` directly (the engineered ids ARE concept ids; the relation tokens carry
-the discriminative signal regardless). The `hasattr` guard above already degrades safely.
+NOTE: `GoldGraph.canonical_name(entity_id)` is the real accessor (gold.py; same call used in
+`scorecard_llm.py`). It returns the canonical surface and falls back to the id when unknown.
+Do NOT guess `canonical_of`/`hasattr` -- a silent fall-through to the raw id (`gm:...`) gives
+zero document overlap and would depress `rag@10` (gate assertion 3) and the crossover margin.
 
 - [ ] **Step 4: Run to verify it passes**
 
@@ -552,11 +549,19 @@ loosened first, the run observed, then tightened in a follow-up commit).
 Read the printed grid. Freeze in `crossover.py`:
 - `RAG_HIGH_FLOOR` = a value just below the measured `rag@10` minimum across ambiguity rows
   (e.g. if the min `rag@10` is 0.93, set 0.90). This proves the retriever isn't broken.
+  CAUTION: `query_terms_for` deliberately omits intermediate-hop surfaces (the multi-hop RAG
+  problem) and there are only ~5 relation types, so `rag@10` may measure WELL below 1.0. If so
+  that is the honest multi-hop-RAG limitation -- set a LOW floor that the measured min clears;
+  do NOT "fix" the retriever to force a high floor (that would defeat the slice's point).
 - `CROSSOVER_MARGIN` = a value just below the measured max `(graph - rag)` over all cells
   (e.g. if the argmax margin is 0.34, set 0.25). Leave headroom so the seeded run is not
   borderline. If NO cell shows graph >= rag (margin <= 0), the deterministic crossover does
   not exist on this corpus -- STOP and surface to Ben: the gate's assertion 4 cannot hold and
   the slice's framing (recall crossover) must be revisited before shipping.
+- Keep the two literals compatible with the hand-built `_good_result()` fixture in
+  `test_qa_crossover.py` (min `rag@10` = 0.95, max margin ~0.6): set `RAG_HIGH_FLOOR <= 0.95`
+  and `CROSSOVER_MARGIN <= 0.6`, or update the fixture numbers in the SAME commit so
+  `test_gate_passes_on_well_formed_surface` stays green.
 
 - [ ] **Step 3: Edit the frozen constants + commit**
 
@@ -571,8 +576,9 @@ git commit -m "feat(er-kg-bench): slice C deterministic CLI + freeze gate consta
 
 - [ ] **Step 4: Wire the pipeline gate step**
 
-In `.github/workflows/goldengraph-pipeline.yml`, after the Temporal gate's upload step (end of
-the `pipeline` job steps), add:
+In `.github/workflows/goldengraph-pipeline.yml`, after the **"Upload AGGREGATION.md"** step
+(the last step in the `pipeline` job; the B2 Temporal slice is NOT on main in this worktree,
+so anchor to the aggregation gate, not temporal), add:
 
 ```yaml
       - name: Crossover capability gate (deterministic, key-free)
@@ -822,7 +828,7 @@ def answer_match_grid(*, seed: int, n_questions: int, max_hops: int, llm) -> Ans
 
 
 def _question_text(qa, g) -> str:
-    start = g.canonical_of(qa.start_entity_id) if hasattr(g, "canonical_of") else qa.start_entity_id
+    start = g.canonical_name(qa.start_entity_id)
     chain = " then ".join(qa.relation_chain)
     return f"Starting from {start}, follow {chain}. What is the final entity?"
 
@@ -859,18 +865,22 @@ Expected: PASS. `ruff check erkgbench/qa_e2e/crossover.py erkgbench/qa_e2e/run_c
 
 - [ ] **Step 5: Wire bench-graphrag-qa.yml**
 
-In `.github/workflows/bench-graphrag-qa.yml`:
-1. Under `workflow_dispatch.inputs`, add (mirror `run_temporal_llm`):
+In `.github/workflows/bench-graphrag-qa.yml` (B2/temporal is NOT on main here -- mirror the B1
+`run_aggregation_llm` patterns, not temporal):
+1. Under `workflow_dispatch.inputs`, add (mirror the `run_aggregation_llm` input block):
    ```yaml
    run_crossover_llm:
      description: "Slice C: real-LLM answer-match crossover (ambiguity x passage_k)"
      type: boolean
      default: false
    ```
-2. In the `scorecard` job's `if:`, OR it in:
-   `if: ${{ inputs.run_scorecard == 'true' || inputs.run_aggregation_llm == 'true' || inputs.run_temporal_llm == 'true' || inputs.run_crossover_llm == 'true' }}`
-   (match the exact existing expression; just append the new clause.)
-3. Add a guarded step + upload (mirror the temporal LLM step), non-gating:
+2. In the `scorecard` job's `if:`, append the new clause to the EXACT existing two-clause
+   expression. The current line is
+   `if: ${{ inputs.run_scorecard == 'true' || inputs.run_aggregation_llm == 'true' }}`;
+   change it to
+   `if: ${{ inputs.run_scorecard == 'true' || inputs.run_aggregation_llm == 'true' || inputs.run_crossover_llm == 'true' }}`.
+3. Add a guarded step + upload (mirror the existing "real-LLM RAG aggregation floor" step +
+   its upload), non-gating:
    ```yaml
        - name: Slice C answer-match crossover (real LLM)
          if: ${{ inputs.run_crossover_llm == 'true' }}
@@ -910,9 +920,8 @@ git commit -m "feat(er-kg-bench): slice C answer-match grid + opt-in bench-graph
 
 ## Known unknowns to resolve during implementation (call out, don't guess)
 
-- `GoldGraph` canonical-surface accessor name (Task 2/7 `_question_text`/`query_terms_for`):
-  inspect `gold.py`; the `hasattr(g, "canonical_of")` guard degrades safely but verify and
-  use the real accessor for a faithful query string.
+- `GoldGraph` canonical-surface accessor: RESOLVED -- it is `g.canonical_name(entity_id)`
+  (gold.py; also used in `scorecard_llm.py`). The plan uses it directly; no `hasattr` guess.
 - `_retrieve_local` subgraph edge dict keys (`subj`/`obj`/`predicate`): confirmed used by
   `ablation.run_ablation` + `scorecard.bridge_recall` (`e["subj"]`, `e["obj"]`); `predicate`
   may be absent on some edges -> `.get("predicate", "")` already guards it.
