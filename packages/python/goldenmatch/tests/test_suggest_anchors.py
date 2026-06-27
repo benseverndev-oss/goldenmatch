@@ -105,21 +105,25 @@ def _make_zero_config_with_token_sort(df: pl.DataFrame, address_col: str):
 
 
 def _corrupt_address(val: str, rng: random.Random) -> str:
-    """Add character-level noise to a street address value."""
-    if not val or len(val) < 4:
+    """Produce a case/whitespace variant of the address.
+
+    The corruption-score heuristic (``indicators._compute_corruption_score_inline``,
+    which feeds Rule 2's column signals) measures *case-or-whitespace-collapsed*
+    duplicates -- ``Brian/BRIAN/brian/Brian `` -- via ``1 - distinct_normalized /
+    distinct_raw``, NOT character-level edit noise. A typo'd address is a NEW
+    distinct normalized form (it does not collapse), so it reads as CLEAN and
+    never crosses the 0.30 threshold. To genuinely exercise Rule 2 the duplicate
+    must be the SAME address in a different case/whitespace form so it collapses
+    onto the original's normalized key.
+    """
+    if not val:
         return val
-    ops = ["typo", "swap", "drop"]
-    op = rng.choice(ops)
-    if op == "typo":
-        pos = rng.randint(0, len(val) - 1)
-        return val[:pos] + rng.choice("abcdefghijklmnopqrstuvwxyz ") + val[pos + 1:]
-    if op == "swap" and len(val) >= 3:
-        pos = rng.randint(0, len(val) - 2)
-        return val[:pos] + val[pos + 1] + val[pos] + val[pos + 2:]
-    if op == "drop" and len(val) >= 3:
-        pos = rng.randint(0, len(val) - 1)
-        return val[:pos] + val[pos + 1:]
-    return val
+    op = rng.choice(["lower", "upper", "trailing_ws"])
+    if op == "lower":
+        return val.lower()
+    if op == "upper":
+        return val.upper()
+    return val + "  "  # trailing whitespace; strip().lower() collapses it
 
 
 def _make_address_anchor_dataset(
