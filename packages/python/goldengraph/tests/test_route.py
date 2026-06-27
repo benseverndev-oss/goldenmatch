@@ -86,6 +86,87 @@ def test_plan_temporal_low_confidence_falls_back():
     assert route.plan_query(p).mode == "local"
 
 
+class _StubClassifier:
+    """Deterministic tier-2: returns a pre-set high-confidence profile for a known query."""
+    def __init__(self, mapping):
+        self.mapping = mapping  # query -> QueryProfile
+
+    def classify(self, query, *, predicates=None):
+        return self.mapping.get(query, route.QueryProfile(route.QueryIntent.MULTI_HOP, confidence=0.0))
+
+
+def test_resolve_profile_no_classifier_is_heuristic():
+    p = route.resolve_profile("List all entities that Metaphone works at.", predicates=_PREDS)
+    assert p.intent is route.QueryIntent.AGGREGATE and p.relation == "works_at"
+
+
+def test_resolve_profile_canonical_never_escalates():
+    oracle = route.QueryProfile(route.QueryIntent.AGGREGATE, anchor_surface="WRONG", relation="works_at", confidence=1.0)
+    stub = _StubClassifier({"List all entities that Metaphone works at.": oracle})
+    p = route.resolve_profile("List all entities that Metaphone works at.", predicates=_PREDS, llm_classifier=stub)
+    assert p.anchor_surface == "Metaphone"  # heuristic kept (0.9 >= MIN_CONF), stub NOT consulted
+
+
+def test_resolve_profile_low_conf_escalates_to_classifier():
+    q = "who all does Metaphone work with?"
+    oracle = route.QueryProfile(route.QueryIntent.AGGREGATE, anchor_surface="Metaphone", relation="works_at", confidence=1.0)
+    stub = _StubClassifier({q: oracle})
+    p = route.resolve_profile(q, predicates=_PREDS, llm_classifier=stub)
+    assert p.intent is route.QueryIntent.AGGREGATE and p.anchor_surface == "Metaphone" and p.relation == "works_at"
+
+
+def test_resolve_profile_classifier_abstain_keeps_heuristic():
+    q = "ramble ramble nonsense"
+    stub = _StubClassifier({})
+    p = route.resolve_profile(q, predicates=_PREDS, llm_classifier=stub)
+    assert p.intent is route.QueryIntent.MULTI_HOP  # heuristic 0.3 kept (0.0 not > 0.3)
+
+
+class _StubLLM:
+    def __init__(self, response):
+        self.response = response
+        self.calls = 0
+
+    def complete(self, prompt):
+        self.calls += 1
+        return self.response
+
+
+def test_llm_classifier_parses_json_to_profile():
+    llm = _StubLLM('{"intent": "aggregate", "anchor": "Metaphone", "relation": "works_at", "as_of": null}')
+    c = route.LLMQueryClassifier(llm)
+    p = c.classify("who all does Metaphone work with?", predicates=_PREDS)
+    assert p.intent is route.QueryIntent.AGGREGATE
+    assert p.anchor_surface == "Metaphone" and p.relation == "works_at"
+    assert p.confidence >= 0.8
+
+
+def test_llm_classifier_strips_fence():
+    llm = _StubLLM('```json\n{"intent":"temporal_asof","anchor":"X","relation":"works_at","as_of":"3"}\n```')
+    p = route.LLMQueryClassifier(llm).classify("...", predicates=_PREDS)
+    assert p.intent is route.QueryIntent.TEMPORAL_ASOF and p.as_of == "3"
+
+
+def test_llm_classifier_out_of_vocab_relation_abstains():
+    llm = _StubLLM('{"intent":"aggregate","anchor":"X","relation":"NOT_A_PREDICATE","as_of":null}')
+    p = route.LLMQueryClassifier(llm).classify("...", predicates=_PREDS)
+    assert p.confidence == 0.0
+
+
+def test_llm_classifier_bad_json_abstains():
+    p = route.LLMQueryClassifier(_StubLLM("not json at all")).classify("...", predicates=_PREDS)
+    assert p.intent is route.QueryIntent.MULTI_HOP and p.confidence == 0.0
+
+
+def test_llm_classifier_budget_cap():
+    llm = _StubLLM('{"intent":"lookup","anchor":null,"relation":null,"as_of":null}')
+    c = route.LLMQueryClassifier(llm, max_calls=2)
+    c.classify("a", predicates=_PREDS)
+    c.classify("b", predicates=_PREDS)
+    p = c.classify("c", predicates=_PREDS)
+    assert p.confidence == 0.0 and llm.calls == 2
+
+
 def test_plan_multihop_routes_hybrid():
     p = route.classify_query("How is A related to B?")
     assert route.plan_query(p).mode == "hybrid"

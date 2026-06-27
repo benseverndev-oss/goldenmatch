@@ -4,9 +4,11 @@ controller's HeuristicRefitPolicy; an LLM-assisted classifier tier is a slice-3 
 """
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import Protocol
 
 _AGG_RE = re.compile(r"\b(list all|how many|which entities|all entities)\b", re.IGNORECASE)
 _TEMPORAL_RE = re.compile(r"\b(as of|at the time|in \d{4}|before \d|after \d)\b", re.IGNORECASE)
@@ -135,3 +137,69 @@ def plan_query(profile: QueryProfile) -> RetrievalPlan:
     if profile.intent is QueryIntent.MULTI_HOP:
         return RetrievalPlan(mode="hybrid")
     return RetrievalPlan(mode="local")  # LOOKUP + low-confidence fallbacks
+
+
+class QueryClassifier(Protocol):
+    def classify(self, query: str, *, predicates=None) -> QueryProfile: ...
+
+
+def resolve_profile(query: str, *, predicates=None,
+                    llm_classifier: QueryClassifier | None = None) -> QueryProfile:
+    """Two-tier: heuristic FIRST; escalate to the injected classifier ONLY when the heuristic is
+    below MIN_CONF AND a classifier is given; the classifier's result wins only if strictly more
+    confident (so a confidently-abstaining tier-2 keeps the heuristic -> safe local route)."""
+    h = classify_query(query, predicates=predicates)
+    if h.confidence >= MIN_CONF or llm_classifier is None:
+        return h
+    ll = llm_classifier.classify(query, predicates=predicates)
+    return ll if ll.confidence > h.confidence else h
+
+
+def _strip_fence(raw: str) -> str:
+    s = raw.strip()
+    if s.startswith("```"):
+        s = s.split("\n", 1)[1] if "\n" in s else s[3:]
+        if s.rstrip().endswith("```"):
+            s = s.rstrip()[:-3]
+    return s.strip()
+
+
+class LLMQueryClassifier:
+    """Tier-2 classifier: prompt an LLMClient for {intent, anchor, relation, as_of}; defensive
+    parse -> QueryProfile. Budget-capped (max_calls). Fail-open: any failure (budget, exception,
+    bad JSON, out-of-vocab relation) -> abstain QueryProfile(MULTI_HOP, confidence=0.0)."""
+
+    _PROMPT = (
+        "Classify this knowledge-graph question. Reply with ONLY a JSON object:\n"
+        '{{"intent": "aggregate|temporal_asof|lookup|multi_hop", "anchor": "<entity or null>", '
+        '"relation": "<one of: {preds}> or null", "as_of": "<integer date or null>"}}\n'
+        "Question: {q}"
+    )
+
+    def __init__(self, llm, *, max_calls: int = 5):
+        self._llm = llm
+        self._max_calls = max_calls
+        self._calls = 0
+
+    def classify(self, query: str, *, predicates=None) -> QueryProfile:
+        abstain = QueryProfile(QueryIntent.MULTI_HOP, confidence=0.0)
+        if self._calls >= self._max_calls:
+            return abstain
+        self._calls += 1
+        try:
+            preds = ", ".join(sorted(predicates)) if predicates else ""
+            raw = self._llm.complete(self._PROMPT.format(preds=preds, q=query))
+            data = json.loads(_strip_fence(raw))
+        except Exception:
+            return abstain
+        try:
+            intent = QueryIntent(str(data.get("intent", "")).strip().lower())
+        except ValueError:
+            return abstain
+        anchor = data.get("anchor") or None
+        relation = data.get("relation") or None
+        if relation is not None and (not predicates or relation not in predicates):
+            return abstain  # hallucinated / out-of-vocab relation
+        as_of = str(data["as_of"]) if data.get("as_of") not in (None, "") else None
+        return QueryProfile(intent=intent, anchor_surface=anchor, relation=relation,
+                            as_of=as_of, confidence=0.85)
