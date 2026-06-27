@@ -192,3 +192,51 @@ def render_aggregation_md(res: AggregationResult) -> str:
     for label, passed, _hard in gate_verdicts(res.gg_setf1, res.floor_setf1):
         lines.append(f"- [{'PASS' if passed else 'FAIL'}] {label}")
     return "\n".join(lines) + "\n"
+
+
+def _mean_by_bucket(pairs) -> dict:
+    """pairs: iterable of (bucket, value) -> {bucket: mean}."""
+    agg: dict = {}
+    for b, v in pairs:
+        agg.setdefault(b, []).append(v)
+    return {b: sum(v) / len(v) for b, v in agg.items()}
+
+
+def run_aggregation_deterministic(*, seed: int, n_anchors: int, ambiguity: float,
+                                  passage_k: int) -> AggregationResult:
+    """Build the fan-out corpus + oracle store; per list-question score goldengraph
+    exact traversal and the passage-window floor by gold-set-size bucket. Needs the
+    native wheel (via ablation._build_store)."""
+    from . import ablation, dials
+    from .gold import GoldGraph
+
+    docs, qs = generate_aggregation(seed=seed, n_anchors=n_anchors, ambiguity=ambiguity)
+    corpus = agg_documents_corpus(docs)
+    g = GoldGraph.from_corpus(corpus)
+    slice_graph, coverage = ablation._build_store(
+        corpus, g, dials.oracle_keys(corpus, g), ablation._typ_of(g)
+    )
+    # surface -> canonical (first-wins) + anchor_id -> its surfaces, for the floor.
+    s2c: dict = {}
+    anchor_surfaces: dict = {}
+    for eid, surf, _typ in dials._entity_surfaces(g):
+        s2c.setdefault(surf, eid)
+        anchor_surfaces.setdefault(eid, set()).add(surf)
+
+    gg_f1, floor_f1, gg_count = [], [], []
+    for q in (q for q in qs if q.kind == "list"):
+        b = size_bucket(q.gold_count)
+        gold = set(q.gold_members)
+        got = goldengraph_aggregate(slice_graph, coverage, q.anchor_id, q.relation)
+        floor = passage_window_floor(
+            docs, anchor_surfaces.get(q.anchor_id, set()), q.relation,
+            passage_k=passage_k, surface_to_canon=s2c,
+        )
+        gg_f1.append((b, set_f1(got, gold)["f1"]))
+        floor_f1.append((b, set_f1(floor, gold)["f1"]))
+        gg_count.append((b, count_accuracy(len(got), q.gold_count)))
+    return AggregationResult(
+        gg_setf1=_mean_by_bucket(gg_f1),
+        floor_setf1=_mean_by_bucket(floor_f1),
+        gg_count_acc=_mean_by_bucket(gg_count),
+    )
