@@ -194,6 +194,30 @@ def render_aggregation_md(res: AggregationResult) -> str:
     return "\n".join(lines) + "\n"
 
 
+def llm_rag_aggregate(docs, anchor_surfaces: set, relation: str, *, passage_k: int,
+                      surface_to_canon: dict, llm) -> set:
+    """Realistic RAG floor (opt-in, real LLM): the first `passage_k` anchor-mentioning
+    docs + 'list every entity that X <relation>'. Output names mapped back to
+    canonical ids via `surface_to_canon` (unknown lines dropped). Same window cap as
+    the deterministic floor, so its recall collapses with set size too."""
+    hits = [d for d in docs if any(a in d.text for a in anchor_surfaces)][:passage_k]
+    passages = "\n".join(f"- {d.text}" for d in hits) or "(no passages)"
+    rel_words = relation.replace("_", " ")
+    prompt = (
+        f"From the passages below, list EVERY entity that the subject {rel_words}. "
+        "One entity name per line, nothing else.\n\n" + passages
+    )
+    out: set = set()
+    for line in llm.complete(prompt).splitlines():
+        name = line.strip().lstrip("-* ").strip()
+        if name in surface_to_canon:
+            out.add(surface_to_canon[name])
+    for a in anchor_surfaces:
+        out.discard(surface_to_canon.get(a))
+    out.discard(None)
+    return out
+
+
 def _mean_by_bucket(pairs) -> dict:
     """pairs: iterable of (bucket, value) -> {bucket: mean}."""
     agg: dict = {}
@@ -203,10 +227,11 @@ def _mean_by_bucket(pairs) -> dict:
 
 
 def run_aggregation_deterministic(*, seed: int, n_anchors: int, ambiguity: float,
-                                  passage_k: int) -> AggregationResult:
+                                  passage_k: int, llm=None) -> AggregationResult:
     """Build the fan-out corpus + oracle store; per list-question score goldengraph
     exact traversal and the passage-window floor by gold-set-size bucket. Needs the
-    native wheel (via ablation._build_store)."""
+    native wheel (via ablation._build_store). If `llm` is given, ALSO score the
+    realistic real-LLM RAG floor (budget-gated via `llm.exhausted` if present)."""
     from . import ablation, dials
     from .gold import GoldGraph
 
@@ -223,20 +248,24 @@ def run_aggregation_deterministic(*, seed: int, n_anchors: int, ambiguity: float
         s2c.setdefault(surf, eid)
         anchor_surfaces.setdefault(eid, set()).add(surf)
 
-    gg_f1, floor_f1, gg_count = [], [], []
+    gg_f1, floor_f1, gg_count, llm_f1 = [], [], [], []
     for q in (q for q in qs if q.kind == "list"):
         b = size_bucket(q.gold_count)
         gold = set(q.gold_members)
+        a_surfs = anchor_surfaces.get(q.anchor_id, set())
         got = goldengraph_aggregate(slice_graph, coverage, q.anchor_id, q.relation)
-        floor = passage_window_floor(
-            docs, anchor_surfaces.get(q.anchor_id, set()), q.relation,
-            passage_k=passage_k, surface_to_canon=s2c,
-        )
+        floor = passage_window_floor(docs, a_surfs, q.relation, passage_k=passage_k,
+                                     surface_to_canon=s2c)
         gg_f1.append((b, set_f1(got, gold)["f1"]))
         floor_f1.append((b, set_f1(floor, gold)["f1"]))
         gg_count.append((b, count_accuracy(len(got), q.gold_count)))
+        if llm is not None and not getattr(llm, "exhausted", False):
+            rag = llm_rag_aggregate(docs, a_surfs, q.relation, passage_k=passage_k,
+                                    surface_to_canon=s2c, llm=llm)
+            llm_f1.append((b, set_f1(rag, gold)["f1"]))
     return AggregationResult(
         gg_setf1=_mean_by_bucket(gg_f1),
         floor_setf1=_mean_by_bucket(floor_f1),
         gg_count_acc=_mean_by_bucket(gg_count),
+        llm_setf1=_mean_by_bucket(llm_f1) if llm_f1 else None,
     )
