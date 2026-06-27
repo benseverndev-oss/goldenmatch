@@ -8,7 +8,7 @@
 - A2A Server: `goldenmatch agent-serve --port 8200` (31 skills advertised in the agent card)
 - CLI: `goldenmatch dedupe`, `goldenmatch autoconfig`, `goldenmatch match`, `goldenmatch memory ...`, `goldenmatch identity ...`, + more
 - Python API: `import goldenmatch` -- `dedupe_df()`, `match_df()`, `score_strings()`, `evaluate()`, `AgentSession.autoconfigure()`, `add_correction()`, `learn()`, `memory_stats()`, `get_memory()`, ~106 exports
-- TypeScript / Edge: `npm install goldenmatch` -- same API in browsers, Cloudflare Workers, Vercel Edge, Deno; optional WASM via `await enableWasm()` swaps in the Rust score-core kernel (pure-TS stays the default + byte-identical fallback)
+- TypeScript / Edge: `npm install goldenmatch` -- same API in browsers, Cloudflare Workers, Vercel Edge, Deno; optional WASM via `await enableWasm()` swaps in the Rust score-core kernel (pure-TS stays the default + byte-identical fallback); `enableSuggestWasm()` brings the config-suggestion "healer" (`dedupe({ suggest, heal })`) to TS via the suggest-core kernel (graceful-empty without it)
 - REST API: `goldenmatch serve` on port 8000 (incl. `POST /autoconfig`, `GET /controller/telemetry`)
 - SQL: Postgres extension + DuckDB UDFs at `packages/rust/extensions/` (`goldenmatch_autoconfig`, `goldenmatch_dedupe_full`, `gm_telemetry`)
 

@@ -25,6 +25,7 @@ import {
 import { runDedupePipeline, runMatchPipeline } from "./pipeline.js";
 import { scoreField, scorePair, asString } from "./scorer.js";
 import { applyTransforms } from "./transforms.js";
+import { maybeSuggest, heal, serializeSuggestions } from "./suggest.js";
 
 // ---------------------------------------------------------------------------
 // Options
@@ -49,6 +50,12 @@ export interface DedupeOptions {
   readonly memoryConfig?: Partial<MemoryConfig>;
   /** Dataset label forwarded to memory hooks. Defaults to "<DataFrame>". */
   readonly derivedDataset?: string;
+  /** Surface verified config suggestions on the result (healer; opt-in).
+   *  No-op (graceful-empty) unless the suggest-wasm backend is registered. */
+  readonly suggest?: boolean;
+  /** Apply-and-re-run the healer loop; returns the healed config + trail.
+   *  Takes precedence over `suggest`. No-op unless wasm is registered. */
+  readonly heal?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -217,7 +224,7 @@ export async function dedupe(
   options?: DedupeOptions,
 ): Promise<DedupeResult> {
   const config = buildConfigFromOptions(options);
-  return runDedupePipeline(rows, config, {
+  const result = await runDedupePipeline(rows, config, {
     ...(options?.memoryStore !== undefined
       ? { memoryStore: options.memoryStore }
       : {}),
@@ -225,6 +232,44 @@ export async function dedupe(
       ? { derivedDataset: options.derivedDataset }
       : {}),
   });
+
+  // Healer surface — advisory block. NEVER throws (mirrors _api.py): any
+  // failure leaves the base result (with suggestions: []) intact. The default
+  // path is the free, trigger-gated, unverified surface; `suggest`/`heal` are
+  // the explicit verified paths.
+  try {
+    if (options?.heal === true) {
+      const healed = await heal(rows, config);
+      return {
+        ...healed.result,
+        config: healed.config,
+        suggestions: [],
+        healTrail: serializeSuggestions(healed.trail, { verified: true }),
+      };
+    }
+
+    if (options?.suggest === true) {
+      const suggestions = await maybeSuggest(result, rows, config, {
+        verify: true,
+      });
+      return {
+        ...result,
+        suggestions: serializeSuggestions(suggestions, { verified: true }),
+      };
+    }
+
+    // Default: free trigger-gated, unverified hint (kill-switch + trigger gate
+    // live inside maybeSuggest; backend untouched when either says no).
+    const suggestions = await maybeSuggest(result, rows, config, {
+      verify: false,
+    });
+    return {
+      ...result,
+      suggestions: serializeSuggestions(suggestions, { verified: false }),
+    };
+  } catch {
+    return result;
+  }
 }
 
 // ---------------------------------------------------------------------------

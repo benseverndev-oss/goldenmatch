@@ -105,8 +105,8 @@ describe("dispatchSkill", () => {
     }
   });
 
-  it("registers the full Wave-2 skill set (14 skills)", () => {
-    expect(AGENT_SKILLS.length).toBe(14);
+  it("registers the full Wave-2 skill set + healer review_config (15 skills)", () => {
+    expect(AGENT_SKILLS.length).toBe(15);
     const ids = new Set(AGENT_SKILLS.map((s) => s.id));
     for (const expected of [
       "agent_explain_pair",
@@ -117,6 +117,7 @@ describe("dispatchSkill", () => {
       "scan_quality",
       "fix_quality",
       "run_transforms",
+      "review_config",
     ]) {
       expect(ids.has(expected)).toBe(true);
     }

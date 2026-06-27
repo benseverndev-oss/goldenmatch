@@ -15,14 +15,27 @@ description = "Pyo3-free config-suggestion kernel; ingests run artifacts, applie
 # datafusion-udf (FFI). Mirrors score-core / analysis-core.
 
 [dependencies]
+# `arrow` is OPTIONAL (mirrors autoconfig-core): the arrow constructors +
+# `suggest()` entry are feature-gated so the wasm/JSON path compiles without
+# pulling arrow (which does not build for wasm32). The always-compiled
+# `suggest_from_json` + arrow-free diagnostics twins hold the identical math.
+#
 # MUST equal the arrow version `native/Cargo.toml` pins (currently 59, per the
 # #1003/#1005 arrow 55->59 bump). A different arrow version will NOT unify with
 # the `PyArrowType<RecordBatch>` coming from `native` later and the shim will
 # fail to compile. analysis-core carries NO arrow dep (it's a pure &[f64] crate)
 # -- do not try to "match" it for arrow.
-arrow = { version = "59", default-features = false }
+#
+# NOTE: `cargo test` MUST run with `--features arrow` -- the unit + golden tests
+# construct `RecordBatch`es. Bare `cargo test` compiles cleanly (test modules are
+# gated on `feature = "arrow"`) but runs zero arrow tests.
+arrow = { version = "59", default-features = false, optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Reuse the existing reduction kernels -- do NOT reimplement histogram/quantile.
 # analysis-core is pure (&[f64] in, no arrow), so it imposes no arrow version.
 analysis-core = { path = "../analysis-core" }
+
+[features]
+default = []
+arrow = ["dep:arrow"]

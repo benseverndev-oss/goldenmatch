@@ -2,6 +2,26 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-06-27 — Config-suggestion healer on the TS/WASM surface
+- New ADR [../decisions/0027-healer-wasm-ts.md](../decisions/0027-healer-wasm-ts.md):
+  the healer (config-suggestion engine) now runs on the TypeScript/JS surface via
+  WebAssembly. The existing pyo3-free `suggest-core` kernel is compiled to a
+  `suggest-wasm` cdylib (mirroring the autoconfig `-core → -wasm → TS` precedent):
+  arrow is feature-gated and an arrow-free `suggest_from_json` entry is shared by the
+  Python native path and the wasm path (single source of truth, **zero Python change**).
+- Full default-pipeline parity: wired into `dedupe({suggest, heal})` with the free
+  trigger + verify path + bounded heal loop, on every TS surface (core / CLI / MCP
+  `review_config` → MCP tool count 44→45 / A2A `review_config` skill). Opt-in
+  `enableSuggestWasm()` (the `[native]` analog) registers the kernel; with no backend
+  every surface is gracefully empty (`[]`/undefined, never throws). Kill-switch
+  `GOLDENMATCH_SUGGEST_ON_DEDUPE`.
+- One cross-surface golden-vector contract: the `suggest-core` BLESS oracle authors the
+  fixtures; the TS parity test and a Python native cross-surface test run the SAME
+  fixtures (TS == Rust == Python). CI: a `suggest_wasm` path filter gates a drift-guard
+  step in the `typescript` lane + `suggest-core`/`suggest-wasm` steps in the `rust` lane.
+- Docs: new [config-suggestions.mdx](../../docs-site/goldenmatch/config-suggestions.mdx)
+  page (+ nav), TS README/CLAUDE.md healer sections, llms.txt notes.
+
 ## 2026-06-26 — Healer wired into the default pipeline (advisory, every surface)
 - New ADR [../decisions/0026-healer-default-pipeline.md](../decisions/0026-healer-default-pipeline.md):
   the healer (`review_config`) is now part of the default `dedupe_df` pipeline as a

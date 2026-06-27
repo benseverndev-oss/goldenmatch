@@ -5,14 +5,16 @@
 //! does the same for the `clusters` RecordBatch.  Both reuse `analysis_core`
 //! kernels -- do NOT add a second histogram / quantile implementation here.
 
+#[cfg(feature = "arrow")]
 use arrow::array::{Array, BooleanArray, Float64Array, StringArray};
+#[cfg(feature = "arrow")]
 use arrow::record_batch::RecordBatch;
 
 // ---------------------------------------------------------------------------
 // ColumnSignal — per-column signals extracted from the column_signals batch.
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ColumnSignal {
     pub field: String,
     pub col_type: String,
@@ -33,6 +35,7 @@ pub struct ColumnSignal {
 /// `field:utf8, col_type:utf8, scorer:utf8, in_blocking:bool,
 ///  in_negative_evidence:bool, identity_score:f64, corruption_score:f64,
 ///  collision_rate:f64, cardinality_ratio:f64, null_rate:f64, variant_rate:f64`
+#[cfg(feature = "arrow")]
 pub fn column_signals_from_batch(batch: &RecordBatch) -> Result<Vec<ColumnSignal>, String> {
     let field_arr = batch
         .column_by_name("field")
@@ -140,6 +143,39 @@ pub struct ScoreDiagnostics {
 }
 
 impl ScoreDiagnostics {
+    /// Arrow-free twin of `from_batch` -- the single source of truth for the math.
+    ///
+    /// `scores` = the NON-NULL pair scores; `n_pairs` = total rows incl. null
+    /// scores (matches `batch.num_rows()`). The mass fractions divide by the
+    /// non-null score count (`scores.len()`) so blocked/null pairs don't dilute
+    /// them; `n_pairs` is carried for rationale text only.
+    pub fn from_scores(scores: &[f64], n_pairs: usize, threshold: f64, bins: i64) -> Self {
+        let n = scores.len();
+        if n == 0 {
+            return Self {
+                histogram: vec![],
+                mass_above: 0.0,
+                mass_just_below: 0.0,
+                n_pairs,
+            };
+        }
+        let above = scores.iter().filter(|&&s| s >= threshold).count();
+        let band_lo = (threshold - 0.10).max(0.0);
+        let just_below = scores
+            .iter()
+            .filter(|&&s| s >= band_lo && s < threshold)
+            .count();
+        // Reuse analysis-core histogram (no second implementation).
+        let histogram = analysis_core::histogram(scores, bins);
+        Self {
+            histogram,
+            mass_above: above as f64 / n as f64,
+            mass_just_below: just_below as f64 / n as f64,
+            n_pairs,
+        }
+    }
+
+    #[cfg(feature = "arrow")]
     pub fn from_batch(batch: &RecordBatch, threshold: f64, bins: i64) -> Result<Self, String> {
         let col = batch
             .column_by_name("score")
@@ -152,29 +188,7 @@ impl ScoreDiagnostics {
         // Total rows (incl. null scores) -- surfaced in rationale text. The mass
         // fractions divide by non-null score count so null pairs don't dilute them.
         let n_pairs = batch.num_rows();
-        let n = vals.len();
-        if n == 0 {
-            return Ok(Self {
-                histogram: vec![],
-                mass_above: 0.0,
-                mass_just_below: 0.0,
-                n_pairs,
-            });
-        }
-        let above = vals.iter().filter(|&&s| s >= threshold).count();
-        let band_lo = (threshold - 0.10).max(0.0);
-        let just_below = vals
-            .iter()
-            .filter(|&&s| s >= band_lo && s < threshold)
-            .count();
-        // Reuse analysis-core histogram (no second implementation).
-        let histogram = analysis_core::histogram(&vals, bins);
-        Ok(Self {
-            histogram,
-            mass_above: above as f64 / n as f64,
-            mass_just_below: just_below as f64 / n as f64,
-            n_pairs,
-        })
+        Ok(Self::from_scores(&vals, n_pairs, threshold, bins))
     }
 
     /// Locate the threshold valley that separates the true-match mass (a
@@ -242,6 +256,28 @@ pub struct ClusterDiagnostics {
 }
 
 impl ClusterDiagnostics {
+    /// Arrow-free twin of `from_batch` -- the single source of truth for the math.
+    /// `quality` = per-cluster quality labels; `oversized` aligned per cluster.
+    pub fn from_rows(quality: &[String], oversized: &[bool], n_clusters: usize) -> Self {
+        let mut weak = 0usize;
+        let mut split = 0usize;
+        for q in quality {
+            match q.as_str() {
+                "weak" => weak += 1,
+                "split" => split += 1,
+                _ => {}
+            }
+        }
+        let oversized_n = oversized.iter().filter(|&&b| b).count();
+        Self {
+            weak,
+            oversized: oversized_n,
+            split,
+            n_clusters,
+        }
+    }
+
+    #[cfg(feature = "arrow")]
     pub fn from_batch(batch: &RecordBatch) -> Result<Self, String> {
         let n_clusters = batch.num_rows();
 
@@ -261,28 +297,14 @@ impl ClusterDiagnostics {
             .downcast_ref::<BooleanArray>()
             .ok_or("oversized not bool")?;
 
-        let mut weak = 0usize;
-        let mut split = 0usize;
-        for v in quality.iter().flatten() {
-            match v {
-                "weak" => weak += 1,
-                "split" => split += 1,
-                _ => {}
-            }
-        }
+        let quality_vec: Vec<String> = quality.iter().flatten().map(|s| s.to_owned()).collect();
+        let oversized_vec: Vec<bool> = oversized_arr.iter().flatten().collect();
 
-        let oversized = oversized_arr.iter().flatten().filter(|&b| b).count();
-
-        Ok(Self {
-            weak,
-            oversized,
-            split,
-            n_clusters,
-        })
+        Ok(Self::from_rows(&quality_vec, &oversized_vec, n_clusters))
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "arrow"))]
 mod tests {
     use super::*;
     use arrow::array::{BooleanArray, Float64Array, Int64Array, StringArray};
@@ -510,6 +532,7 @@ mod tests {
         assert_eq!(d.n_clusters, 3);
     }
 
+    #[allow(clippy::too_many_arguments)] // test helper: one arg per ColumnSignal column
     fn column_signals_batch(
         fields: &[&str],
         col_types: &[&str],

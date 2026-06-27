@@ -31,7 +31,7 @@ learning memory, MCP, A2A, CLI), validated by Python-generated parity fixtures.
 
 | npm | ≈ PyPI | What the npm release covers |
 |-----|--------|-----------------------------|
-| **1.0.0** | 2.0.x | Stable API. Core ER + identity graph + MCP (44 tools) + A2A (bearer auth) + the AgentSession agent surface. |
+| **1.0.0** | 2.0.x | Stable API. Core ER + identity graph + MCP (45 tools) + A2A (bearer auth) + the AgentSession agent surface + the config-suggestion healer (WASM). |
 | 0.4–0.13 | 1.6–1.30 | Pre-1.0 wave line (see `CHANGELOG.md`). |
 
 **Python-only by design (not in the npm package):**
@@ -117,6 +117,35 @@ threshold is never touched — use this for reproducible CI pipelines.
 
 See `examples/verificationInspection.ts` and `examples/strictModeParity.ts`
 for runnable demos.
+
+## Config suggestions (the healer)
+
+The config-suggestion engine — the "healer" — reads a run's diagnostics and
+proposes (or applies) config fixes: lower/raise a threshold, swap a scorer, add a
+negative-evidence field. It runs on the TS/JS surface via the shared `suggest-core`
+kernel compiled to WebAssembly (`suggest-wasm`), at full parity with the Python
+default pipeline — same free trigger, same verify path, same bounded heal loop, on
+every surface (core, CLI, MCP `review_config`, A2A `review_config`).
+
+```typescript
+import { dedupe } from "goldenmatch";
+import { enableSuggestWasm } from "goldenmatch/core/suggest-wasm";
+
+enableSuggestWasm();                                   // opt-in (the [native] analog)
+
+const free = await dedupe(rows);          // free.suggestions (verified: false) when the trigger fires
+const verified = await dedupe(rows, { suggest: true }); // verified: true
+const healed = await dedupe(rows, { heal: true });      // healed.config + healTrail
+```
+
+- **Opt-in WASM kernel.** The healer reaches the kernel through a lean registry; the
+  heavy WASM module is behind the opt-in subpath `goldenmatch/core/suggest-wasm`.
+  `enableSuggestWasm()` registers it — the exact TS analog of `pip install
+  goldenmatch[native]`. Default bundles stay lean (no inlined wasm) and edge-safe.
+- **Graceful-empty.** With no backend registered, every healer surface returns `[]` /
+  `undefined` and never throws; `dedupe()` works exactly as before.
+- **Kill-switch.** The free suggestion pass honors `GOLDENMATCH_SUGGEST_ON_DEDUPE=0`
+  (where `process.env` is available); `{ suggest }` / `{ heal }` are explicit opt-ins.
 
 ## Three entrypoints
 

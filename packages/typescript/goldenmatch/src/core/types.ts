@@ -361,6 +361,22 @@ export interface DedupeStats {
   readonly uniqueRecords: number;
 }
 
+/**
+ * Wire shape of a single config suggestion as it rides on {@link DedupeResult}.
+ * Mirrors the Python healer's `serialize_suggestions` output
+ * (`{id, kind, target, rationale, verified, patch}`) — the user-facing subset
+ * of the kernel's full `Suggestion`. `verified` is caller-supplied (true on the
+ * `suggest`/`heal` paths, false on the free default-pipeline hint).
+ */
+export interface SerializedSuggestion {
+  readonly id: string;
+  readonly kind: string;
+  readonly target: string;
+  readonly rationale: string;
+  readonly verified: boolean;
+  readonly patch: Readonly<Record<string, unknown>>;
+}
+
 export interface DedupeResult {
   readonly goldenRecords: readonly Row[];
   readonly clusters: ReadonlyMap<number, ClusterInfo>;
@@ -373,6 +389,13 @@ export interface DedupeResult {
   /** Learning Memory outcome for this run. Null when memory was disabled
    *  or no corrections existed. Set by `_applyMemoryPost` in pipeline.ts. */
   readonly memoryStats?: CorrectionStats | null;
+  /** Config suggestions surfaced by the healer. Always `[]` unless the opt-in
+   *  wasm backend is registered AND (for the default path) the free trigger
+   *  fires; populated by `dedupe()`'s advisory block. Default `[]`. */
+  readonly suggestions: readonly SerializedSuggestion[];
+  /** Applied heal trail (one entry per accepted step), set only on the
+   *  `dedupe({ heal: true })` path; undefined otherwise. */
+  readonly healTrail?: readonly SerializedSuggestion[];
 }
 
 export interface MatchResult {

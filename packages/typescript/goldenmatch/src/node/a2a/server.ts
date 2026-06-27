@@ -160,7 +160,7 @@ function toAgentSkill(entry: {
 
 /**
  * Build the card's skill list from the union of every registry: the 10 base
- * A2A skills + the 14 `AGENT_SKILLS` + the memory tools + the identity tools.
+ * A2A skills + the 15 `AGENT_SKILLS` + the memory tools + the identity tools.
  * De-duped by skill id (`name`); first occurrence wins, so a base skill
  * shadows a same-named registry entry.
  */
