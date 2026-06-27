@@ -25,7 +25,7 @@ The repo has a complete `-core → -wasm → TS` precedent for autoconfig. Mirro
 | heavy opt-in module + `initSync` | `packages/typescript/goldenmatch/src/core/autoconfigWasm.ts` + the `goldenmatch/core/autoconfig-wasm` subpath export in `package.json` |
 | committed wasm outputs | `packages/typescript/goldenmatch/src/core/_wasm/autoconfigWasm*.{js,d.ts,ts}` |
 | wasm parity tests | `packages/typescript/goldenmatch/tests/parity/autoconfig-wasm-*.test.ts` |
-| Python healer (the behavior to match) | `packages/python/goldenmatch/goldenmatch/core/suggest/{adapter.py,surface.py}` + `_api.py` |
+| Python healer (the behavior to match) | `packages/python/goldenmatch/goldenmatch/core/suggest/{adapter.py,surface.py}` + `packages/python/goldenmatch/goldenmatch/_api.py` (the `dedupe_df` wiring lives in `_api.py`, NOT under `core/suggest/`) |
 | CI wasm/native lanes | `.github/workflows/ci.yml` (`autoconfig` native filter + the TS job) |
 
 **Toolchain / environment constraints (from the repo CLAUDE.md + memory):**
@@ -109,6 +109,8 @@ impl ClusterDiagnostics {
 
   - Refactor the `#[cfg(feature = "arrow")]` `from_batch` constructors to extract the raw vecs and **delegate** to `from_scores`/`from_rows` (so the math lives in one place). `column_signals_from_batch` stays arrow-only (it extracts into `ColumnSignal`, which is now also serde-decodable for the JSON path).
 
+- [ ] **Step 3b: Gate the existing test modules on the arrow feature.** The test modules in `api.rs` (`:81`) and `diagnostics.rs` (`:285`) use `use arrow::...` unconditionally and are gated only `#[cfg(test)]`. Once arrow is an *optional non-dev* dep, bare `cargo test` (no `--features arrow`) fails to **compile** those modules. Change both to `#[cfg(all(test, feature = "arrow"))]` so plain `cargo test` compiles cleanly (with zero arrow tests) instead of erroring.
+
 - [ ] **Step 4: Gate the arrow `suggest()` in `api.rs`.** Annotate the existing `pub fn suggest(scored_pairs: &RecordBatch, ...)` and its `use arrow::...` with `#[cfg(feature = "arrow")]`. Leave the body otherwise unchanged.
 
 - [ ] **Step 5: Verify the arrow path still builds + golden tests pass.**
@@ -134,12 +136,64 @@ git commit -m "refactor(suggest-core): feature-gate arrow + arrow-free diagnosti
 - Modify: `packages/rust/extensions/suggest-core/src/api.rs`
 - Test: in `api.rs` `#[cfg(test)]` (gated on `feature = "arrow"` since it compares to the arrow path)
 
-- [ ] **Step 1: Write the failing equivalence test** (in `api.rs` tests, `#[cfg(all(test, feature = "arrow"))]`): build the existing golden batches, call `suggest(...)`, then build the equivalent JSON inputs and call `suggest_from_json(...)`, assert the two result JSON strings are equal.
+> **CRITICAL — read `api.rs::suggest()` before writing code.** The real `suggest()`
+> (api.rs:50-68) does NOT compute one `ScoreDiagnostics` from a single threshold. It
+> **loops over `config.matchkeys`**; for each matchkey with `Some(threshold)` it builds
+> a *fresh* `ScoreDiagnostics::from_batch(scored_pairs, mk.threshold, HISTOGRAM_BINS)`
+> (`HISTOGRAM_BINS = 24`, api.rs:11) and runs `threshold_rule`; `scorer_swap_rule` runs
+> **per matchkey**; `negative_evidence_rule` runs **once globally**. There is **no
+> `config.threshold()` method** (`ConfigSummary` has only `matchkeys` + `negative_evidence`,
+> contract.rs:41-45). So the JSON path must run the identical per-matchkey loop.
+
+- [ ] **Step 1: Extract a shared post-parse fn FIRST (refactor, no behavior change).** In
+  `api.rs`, pull the body of `suggest()` after the diagnostics are available into a private
+  fn that takes the already-decoded raw inputs and runs the exact per-matchkey loop. The key
+  move: have it accept the **raw score vec + n_pairs** (not a pre-built `ScoreDiagnostics`)
+  so it can build a per-matchkey `ScoreDiagnostics::from_scores(&scores, n_pairs, mk.threshold,
+  HISTOGRAM_BINS)` inside the loop — identical to today's per-matchkey `from_batch`.
+
+```rust
+const HISTOGRAM_BINS: i64 = 24;  // already at api.rs:11
+
+/// Shared core: the per-matchkey rule loop. Both the arrow `suggest()` and the
+/// JSON entry decode their inputs to these raw values, then call this — true
+/// single source of truth.
+fn suggest_core(
+    scores: &[f64],           // non-null pair scores
+    n_pairs: usize,           // total rows incl. null scores
+    cluster_diag: &ClusterDiagnostics,
+    signals: &[ColumnSignal],
+    config: &ConfigSummary,
+    priors: &AcceptancePriors,
+) -> Vec<Suggestion> {
+    let mut out = Vec::new();
+    for mk in &config.matchkeys {
+        if let Some(t) = mk.threshold {
+            let score_diag = ScoreDiagnostics::from_scores(scores, n_pairs, t, HISTOGRAM_BINS);
+            out.extend(threshold_rule(&score_diag, mk, config, priors));   // EXACT current args
+        }
+        out.extend(scorer_swap_rule(signals, mk, config, priors));         // per matchkey
+    }
+    out.extend(negative_evidence_rule(&cluster_diag, signals, config, priors)); // once
+    rank(out, priors)  // EXACT current rank call
+}
+```
+
+  Refactor the arrow `suggest()` to decode the batches → `scores`/`n_pairs` (via the score
+  array) + `ClusterDiagnostics::from_batch` + `column_signals_from_batch`, then call
+  `suggest_core(...)` and `serde_json::to_string`. **Read the real signatures of
+  `threshold_rule`/`scorer_swap_rule`/`negative_evidence_rule`/`rank` and match them exactly**
+  — the above arg lists are illustrative. Run `cargo test --features arrow` after this refactor
+  alone — all existing golden/unit tests MUST still pass (pure refactor).
+
+- [ ] **Step 2: Write the failing equivalence test** (`#[cfg(all(test, feature = "arrow"))]`),
+  with THREE cases so a single-threshold shortcut can't pass: (a) the existing single-matchkey
+  golden, (b) a **multi-matchkey** config (≥2 matchkeys, each with a threshold), (c) a config
+  with a **no-threshold matchkey** (`threshold: None`) mixed with a thresholded one.
 
 ```rust
 #[test]
-fn json_path_matches_arrow_path() {
-    // reuse an existing golden batch trio + config/priors
+fn json_path_matches_arrow_path_multikey() {
     let arrow_out = suggest(&sp_batch, &cl_batch, &cs_batch, config_json, priors_json).unwrap();
     let sp_json = /* {"score":[...non-null...], "n_pairs": N} */;
     let cl_json = /* [{"quality":..,"oversized":..}, ...] */;
@@ -149,12 +203,13 @@ fn json_path_matches_arrow_path() {
 }
 ```
 
-- [ ] **Step 2: Run it to confirm it fails** (`suggest_from_json` undefined).
+- [ ] **Step 3: Run it to confirm it fails** (`suggest_from_json` undefined).
 
-Run: `cargo test -p goldenmatch-suggest-core --features arrow json_path_matches_arrow_path`
+Run: `cargo test -p goldenmatch-suggest-core --features arrow json_path_matches_arrow_path_multikey`
 Expected: FAIL (function not defined).
 
-- [ ] **Step 3: Implement `suggest_from_json`** (always compiled — no arrow). Mirror the arrow `suggest()` body, but build diagnostics from JSON:
+- [ ] **Step 4: Implement `suggest_from_json`** (always compiled — no arrow), delegating to
+  the shared `suggest_core`:
 
 ```rust
 #[derive(serde::Deserialize)]
@@ -162,46 +217,34 @@ struct ScoredPairsJson { score: Vec<f64>, n_pairs: usize }
 #[derive(serde::Deserialize)]
 struct ClusterRowJson { quality: String, oversized: bool }
 
-/// Pure-JSON entry: same diagnostics->rules->rank path as the arrow `suggest()`.
+/// Pure-JSON entry: same per-matchkey loop as the arrow `suggest()` (via `suggest_core`).
 pub fn suggest_from_json(
-    scored_pairs_json: &str,
-    clusters_json: &str,
-    column_signals_json: &str,
-    config_json: &str,
-    priors_json: &str,
+    scored_pairs_json: &str, clusters_json: &str, column_signals_json: &str,
+    config_json: &str, priors_json: &str,
 ) -> Result<String, String> {
     let config: ConfigSummary = serde_json::from_str(config_json).map_err(|e| e.to_string())?;
     let priors: AcceptancePriors = serde_json::from_str(priors_json).map_err(|e| e.to_string())?;
     let sp: ScoredPairsJson = serde_json::from_str(scored_pairs_json).map_err(|e| e.to_string())?;
     let cl: Vec<ClusterRowJson> = serde_json::from_str(clusters_json).map_err(|e| e.to_string())?;
     let signals: Vec<ColumnSignal> = serde_json::from_str(column_signals_json).map_err(|e| e.to_string())?;
-
-    let threshold = config.threshold(); // SAME accessor the arrow path uses
-    let bins = /* SAME bins constant the arrow path passes */;
-    let score_diag = ScoreDiagnostics::from_scores(&sp.score, sp.n_pairs, threshold, bins);
     let quality: Vec<String> = cl.iter().map(|c| c.quality.clone()).collect();
     let oversized: Vec<bool> = cl.iter().map(|c| c.oversized).collect();
     let cluster_diag = ClusterDiagnostics::from_rows(&quality, &oversized, cl.len());
-
-    // identical rule + rank invocation as the arrow path:
-    let ranked = rank(/* threshold_rule + scorer_swap_rule + negative_evidence_rule over
-                          score_diag, cluster_diag, &signals, &config, &priors */);
+    let ranked = suggest_core(&sp.score, sp.n_pairs, &cluster_diag, &signals, &config, &priors);
     serde_json::to_string(&ranked).map_err(|e| e.to_string())
 }
 ```
 
-> Executor note: read the arrow `suggest()` body and replicate its exact threshold/bins derivation and rule-call order. The ONLY difference is how `score_diag`/`cluster_diag` are constructed. If `suggest()` factors the post-diagnostics work into a private `fn`, call that from both — preferred (true single source).
+- [ ] **Step 5: Run the equivalence test — PASS** (all three cases).
 
-- [ ] **Step 4: Run the equivalence test — PASS.**
-
-Run: `cargo test -p goldenmatch-suggest-core --features arrow json_path_matches_arrow_path`
+Run: `cargo test -p goldenmatch-suggest-core --features arrow`
 Expected: PASS.
 
-- [ ] **Step 5: Commit.**
+- [ ] **Step 6: Commit.**
 
 ```bash
 git add packages/rust/extensions/suggest-core/src/api.rs
-git commit -m "feat(suggest-core): suggest_from_json entry (arrow-free) + arrow-equivalence test"
+git commit -m "feat(suggest-core): suggest_from_json entry (arrow-free, shared per-matchkey core) + multi-key equivalence test"
 ```
 
 ---
@@ -258,7 +301,19 @@ git commit -m "feat(suggest-wasm): wasm-bindgen wrapper over suggest_from_json"
 
 - [ ] **Step 1: Copy + adapt `build_autoconfig_wasm.mjs`** → `build_suggest_wasm.mjs`. Point `wasmCrate`/`coreCrate` at `suggest-wasm`/`suggest-core`; output names `suggestWasm*`. Keep the async-init strip (neutralize `import.meta.url`, re-export only `initSync`). Emit base64 bytes into `suggestWasmBytes.ts`.
 
-- [ ] **Step 2: Emit golden fixtures.** Extend the script to write `tests/parity/fixtures/suggest/<case>.json`, each `{ input: {scored_pairs, clusters, column_signals, config, priors}, expected: <suggestion json> }`, by invoking the freshly built wasm (or `suggest_from_json` via a tiny node harness) on a handful of cases (one per rule: lower_threshold, raise_threshold, swap_scorer, add_negative_evidence, plus an empty/no-op case). These are the cross-surface source of truth.
+- [ ] **Step 2: Author golden fixtures from the RUST kernel, not the wasm.** The fixtures'
+  `expected` must come from an **independent oracle**, not from the wasm we're about to test
+  against them (that would be tautological — it'd pin determinism, not correctness). Mirror
+  autoconfig, whose build script *copies pre-authored golden files* from the crate. Concretely:
+  add a `#[cfg(all(test, feature = "arrow"))]` Rust test in `suggest-core` that constructs a
+  handful of cases (one per rule: lower_threshold, raise_threshold, swap_scorer,
+  add_negative_evidence, plus an empty/no-op case), runs `suggest_from_json`, and **writes**
+  each `{ input, expected }` to `suggest-core/tests/golden/suggest/<case>.json` (only when a
+  `BLESS=1` env is set; otherwise it asserts the committed file matches — same bless pattern as
+  the gym baseline). The `expected` is thus authored + guarded by the Rust kernel. Then have
+  `build_suggest_wasm.mjs` **copy** those files into `tests/parity/fixtures/suggest/` (exactly
+  as `build_autoconfig_wasm.mjs` copies `coreCrate/golden/*`). Commit both the crate golden
+  files and the copied TS fixtures.
 
 - [ ] **Step 3: Run the build** (where wasm-pack + wasm32 target exist):
 
@@ -384,14 +439,16 @@ Implements (mirroring Python names/behavior):
 - [ ] **Step 3: Run tests — PASS.**
 - [ ] **Step 4: Commit.** `git commit -am "feat(ts): wire healer into dedupe() (default surface + suggest/heal + kill-switch)"`
 
-### Task 9: Kernel golden-vector parity (TS == fixtures)
+### Task 9: Kernel golden-vector parity (TS == fixtures) + Python cross-surface check
 
 **Files:**
-- Test: `packages/typescript/goldenmatch/tests/parity/suggest-wasm.parity.test.ts` (mirror `autoconfig-wasm-*.parity.test.ts`)
+- Test (TS): `packages/typescript/goldenmatch/tests/parity/suggest-wasm.parity.test.ts` (mirror `autoconfig-wasm-*.parity.test.ts`)
+- Test (Python): `packages/python/goldenmatch/tests/test_suggest_wasm_crossparity.py` (native-gated)
 
-- [ ] **Step 1:** For each `tests/parity/fixtures/suggest/<case>.json`, enable the wasm backend (`enableSuggestWasm()`), call `suggestReview(input)`, assert the output JSON equals `expected` (byte / deep-equal). Skip gracefully if wasm can't init in the test env (but it should — autoconfig parity tests run wasm in vitest).
-- [ ] **Step 2: Run — PASS.**
-- [ ] **Step 3: Commit.** `git commit -am "test(ts): suggest-wasm kernel golden-vector parity"`
+- [ ] **Step 1 (TS):** For each `tests/parity/fixtures/suggest/<case>.json`, enable the wasm backend (`enableSuggestWasm()`), call `suggestReview(input)`, assert the output JSON equals `expected` (deep-equal). Skip gracefully if wasm can't init in the test env (but it should — autoconfig parity tests run wasm in vitest). This proves the TS/wasm binding faithfully exposes the kernel whose `expected` the Rust oracle authored.
+- [ ] **Step 2 (Python cross-surface):** to back the spec's "Python == Rust == TS" claim, add a Python test (gated on the real `suggest_config` symbol, mirroring `test_healer_default_e2e_native.py`) that loads the SAME `tests/parity/fixtures/suggest/*.json`, feeds each `input` through the Python native path (arrow `suggest`/`suggest_config`), and asserts the result equals `expected`. (Runs in the native CI lane; the fixtures are the shared cross-surface contract.)
+- [ ] **Step 3: Run — PASS** (TS in CI; Python in the native lane).
+- [ ] **Step 4: Commit.** `git commit -am "test: suggest-wasm kernel parity (TS) + Python cross-surface parity on shared fixtures"`
 
 ---
 
@@ -416,8 +473,8 @@ Implements (mirroring Python names/behavior):
 - Reference: the Python MCP/A2A `review_config` added earlier in this stack (`mcp/server.py`, `a2a/{server,skills}.py`)
 - Test: `packages/typescript/goldenmatch/tests/unit/mcp-review-config.test.ts`, `.../a2a-review-config.test.ts`
 
-- [ ] **Step 1: Failing tests** — the MCP server lists a `review_config` tool and dispatches it to `reviewConfig`; the A2A agent card advertises a `review_config` skill. Update any hard-coded tool/skill count assertions.
-- [ ] **Step 2: Implement.** Leave legacy `suggest_config` untouched. Graceful-empty when the backend is null.
+- [ ] **Step 1: Failing tests** — the MCP server lists a `review_config` tool and dispatches it to `reviewConfig`; the A2A agent card advertises a `review_config` skill. The MCP test asserts `TOOLS.length` dynamically (no hardcoded count), so no count to bump — BUT update the stale doc-comment tool count at `server.ts:7` ("44 tools" → 45).
+- [ ] **Step 2: Implement.** MCP: a Tool def + a `switch` case in `handleTool` (`server.ts:477`) + add to the composed `TOOLS` array — no hidden plumbing. A2A: add the SkillDef to **`AGENT_SKILLS` only** (`core/agent/skills.ts`) — `buildCardSkills` (`a2a/server.ts:176`) auto-surfaces it and `SKILLS_BY_ID` auto-dispatches; do NOT also add it to the separate hardcoded `NATIVE_A2A_SKILLS` list (`a2a/server.ts:82`) or it duplicates. Leave legacy `suggest_config` untouched. Graceful-empty when the backend is null.
 - [ ] **Step 3: Run — PASS.** **Step 4: Commit.**
 
 ---
