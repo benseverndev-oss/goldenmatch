@@ -40,9 +40,41 @@ def _detect_intent(query: str) -> QueryIntent:
     return QueryIntent.MULTI_HOP
 
 
+_LEADIN_RE = re.compile(
+    r"^\s*(?:list all entities that|all entities that|how many entities does|"
+    r"which entities)\s+(?P<rest>.+?)\s*[.?]?\s*$",
+    re.IGNORECASE,
+)
+
+
+def _extract_agg_slots(query: str, predicates) -> tuple[str | None, str | None]:
+    m = _LEADIN_RE.match(query)
+    if not m:
+        return None, None
+    rest = m.group("rest").strip()
+    if not predicates:
+        return rest, None  # can't split anchor from relation without the vocab
+    # longest predicate-phrase that is a suffix of `rest` -> that's the relation; prefix is anchor.
+    best = None
+    for pred in predicates:
+        phrase = pred.replace("_", " ")
+        if rest.lower().endswith(phrase.lower()) and (best is None or len(phrase) > len(best[1])):
+            best = (pred, phrase)
+    if best is None:
+        return rest, None
+    pred, phrase = best
+    anchor = rest[: len(rest) - len(phrase)].strip()
+    return (anchor or None), pred
+
+
 def classify_query(query: str, *, predicates=None) -> QueryProfile:
     """Heuristic intent + (for AGGREGATE) anchor/relation slots. `predicates` is an optional
     set of stored predicate ids (underscored) used to split '<anchor> <relation words>'; when
     absent the relation slot stays None and confidence drops (routes to the safe fallback)."""
     intent = _detect_intent(query)
-    return QueryProfile(intent=intent, confidence=0.5 if intent is not QueryIntent.MULTI_HOP else 0.3)
+    if intent is QueryIntent.AGGREGATE:
+        anchor, relation = _extract_agg_slots(query, predicates)
+        conf = 0.9 if (anchor and relation) else 0.5
+        return QueryProfile(intent=intent, anchor_surface=anchor, relation=relation, confidence=conf)
+    conf = 0.5 if intent is not QueryIntent.MULTI_HOP else 0.3
+    return QueryProfile(intent=intent, confidence=conf)
