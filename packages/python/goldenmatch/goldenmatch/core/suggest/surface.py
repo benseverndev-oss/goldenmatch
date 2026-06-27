@@ -11,8 +11,13 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from goldenmatch.core.complexity_profile import HealthVerdict
+
+if TYPE_CHECKING:
+    from goldenmatch._api import DedupeResult
+    from goldenmatch.config.schemas import GoldenMatchConfig
 
 # A score-histogram dip is "present" when the committed profile's Hartigan-style
 # dip statistic clears this floor. The controller's own RED floor is 0.005
@@ -97,9 +102,9 @@ class HealOutcome:
     """The result of a bounded heal loop: the healed config, the auditable trail
     of applied suggestions (in order), and the last DedupeResult."""
 
-    config: object
-    trail: list           # list[Suggestion], applied in order
-    result: object        # the last DedupeResult
+    config: "GoldenMatchConfig"
+    trail: list                       # list[Suggestion], applied in order
+    result: "DedupeResult | None"     # the last DedupeResult (None if no step ran)
 
 
 _HEAL_STEP_CAP = 5
