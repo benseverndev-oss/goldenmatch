@@ -77,6 +77,7 @@ jobs:
       ts_parity: ${{ steps.filter.outputs.ts_parity }}
       throughput: ${{ steps.filter.outputs.throughput }}
       autoconfig_wasm: ${{ steps.filter.outputs.autoconfig_wasm }}
+      suggest_wasm: ${{ steps.filter.outputs.suggest_wasm }}
       quality_gate: ${{ steps.filter.outputs.quality_gate }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
@@ -155,6 +156,12 @@ jobs:
               # artifacts and fails if they're stale vs the committed copies.
               - 'packages/rust/extensions/autoconfig-core/**'
               - 'packages/rust/extensions/autoconfig-wasm/**'
+              # The TS healer surface embeds the suggest wasm core; a core/wasm
+              # change must re-run the TS lane so the suggest drift guard rebuilds
+              # the embedded artifacts and fails if they're stale vs the committed
+              # copies.
+              - 'packages/rust/extensions/suggest-core/**'
+              - 'packages/rust/extensions/suggest-wasm/**'
             wasm_score:
               - 'packages/rust/extensions/score-wasm/**'
               - 'packages/rust/extensions/score-core/**'
@@ -188,6 +195,16 @@ jobs:
               - 'packages/rust/extensions/autoconfig-core/**'
               - 'packages/rust/extensions/autoconfig-wasm/**'
               - 'packages/typescript/goldenmatch/scripts/build_autoconfig_wasm.mjs'
+            suggest_wasm:
+              # Gates the (rust-toolchain-heavy) suggest (healer) wasm rebuild +
+              # drift guard inside the typescript lane. Only fires when the shared
+              # suggest core, the wasm wrapper, the embed script, or the TS suggest
+              # surface changes.
+              - 'packages/rust/extensions/suggest-core/**'
+              - 'packages/rust/extensions/suggest-wasm/**'
+              - 'packages/typescript/goldenmatch/scripts/build_suggest_wasm.mjs'
+              - 'packages/typescript/goldenmatch/src/core/suggest*.ts'
+              - 'packages/typescript/goldenmatch/src/core/_wasm/suggestWasm*'
             web:
               - 'packages/python/goldenmatch/web/**'
               - 'packages/python/goldenmatch/goldenmatch/web/**'
@@ -1074,6 +1091,36 @@ jobs:
             exit 1
           fi
           npx vitest run tests/parity/autoconfig-core.parity.test.ts
+      # Same drift-guard pattern for the suggest (healer) wasm core. Rebuild the
+      # inlined wasm + bindings + golden fixtures from the live suggest-core, then
+      # prove the fresh build passes parity. wasm32 + wasm-pack are only
+      # provisioned on suggest-touching PRs (not every TS change).
+      #
+      # We diff ONLY the kernel {input,expected} golden fixtures — NOT the
+      # .wasm/.js bytes (toolchain-variant, would false-positive), and NOT
+      # column_signals_basic.json (Python-emitted, never written by this build
+      # script). Those fixtures are authored by the suggest-core BLESS golden
+      # test; the build script COPIES the committed crate golden, it does NOT
+      # re-bless — so this diff catches "crate golden changed but not copied".
+      # Stale committed wasm is instead caught behaviorally: the parity test
+      # (committed wasm vs committed fixtures) fails if the fixtures moved but the
+      # wasm wasn't rebuilt.
+      - name: Rebuild + verify embedded suggest wasm
+        if: needs.changes.outputs.suggest_wasm == 'true' || needs.changes.outputs.force_all == 'true'
+        working-directory: packages/typescript/goldenmatch
+        run: |
+          rustup target add wasm32-unknown-unknown
+          curl -sSf https://rustwasm.github.io/wasm-pack/installer/init.sh | sh
+          node scripts/build_suggest_wasm.mjs
+          if ! git diff --exit-code -- tests/parity/fixtures/suggest/; then
+            echo "::error::suggest golden fixtures are stale. Re-bless the suggest-core \
+              oracle ('BLESS_SUGGEST_FIXTURES=1 cargo test -p goldenmatch-suggest-core \
+              --features arrow --test bless'), then run \
+              'node scripts/build_suggest_wasm.mjs' in packages/typescript/goldenmatch \
+              and commit the result." >&2
+            exit 1
+          fi
+          npx vitest run tests/parity/suggest-wasm.parity.test.ts
       - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
         with:
           path: .turbo
@@ -1247,6 +1294,7 @@ jobs:
             packages/rust/extensions/perceptual-core
             packages/rust/extensions/graph-layout
             packages/rust/extensions/autoconfig-core
+            packages/rust/extensions/suggest-core
       - run: cargo test --workspace
         # Bridge tests now hard-require goldenmatch (installed above) -- a Python
         # import/marshalling failure fails the lane instead of silently skipping.
@@ -1285,6 +1333,19 @@ jobs:
       # lane's drift guard, which needs the wasm32 target + wasm-pack).
       - run: cargo check --manifest-path autoconfig-wasm/Cargo.toml
       - run: cargo clippy --manifest-path autoconfig-wasm/Cargo.toml --all-targets -- -D warnings
+      # suggest-core: the pyo3-free healer kernel (config-suggestion). Its own
+      # [workspace] sibling like autoconfig-core, so `cargo test --workspace`
+      # above never builds it. Its unit + golden tests construct arrow
+      # RecordBatches, so they need `--features arrow` (bare `cargo test` compiles
+      # clean but runs zero arrow tests).
+      - run: cargo test --manifest-path suggest-core/Cargo.toml --features arrow
+      - run: cargo clippy --manifest-path suggest-core/Cargo.toml --features arrow --all-targets -- -D warnings
+      # suggest-wasm: the wasm-bindgen wrapper over suggest-core that the TS healer
+      # surface consumes. Host `cargo check` + clippy validate it compiles against
+      # the core (the actual wasm build + embed is exercised in the typescript
+      # lane's suggest drift guard, which needs the wasm32 target + wasm-pack).
+      - run: cargo check --manifest-path suggest-wasm/Cargo.toml
+      - run: cargo clippy --manifest-path suggest-wasm/Cargo.toml --all-targets -- -D warnings
 
   # Measured Rust line coverage (cargo-llvm-cov). The structural audit's unit
   # tests (graph-core / score-core / fingerprint-core / native / bridge) are now
