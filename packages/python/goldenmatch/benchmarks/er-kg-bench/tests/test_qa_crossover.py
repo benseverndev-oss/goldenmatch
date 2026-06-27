@@ -52,3 +52,44 @@ def test_passage_recall_fraction_of_gold_support():
     assert cx.passage_recall(_QA(), ["a::r::b", "zzz"]) == 0.5
     assert cx.passage_recall(_QA(), ["a::r::b", "b::r::c"]) == 1.0
     assert cx.passage_recall(_QA(), []) == 0.0
+
+
+def _good_result():
+    # graph flat per ambiguity; rag decays with k and starts high at k=10;
+    # a crossover cell exists at moderate ambiguity + small k.
+    graph = {0.0: 0.95, 0.25: 0.9, 0.5: 0.8, 0.75: 0.6, 1.0: 0.3}
+    rag = {
+        0.0: {10: 1.0, 5: 0.9, 3: 0.7, 1: 0.4},
+        0.25: {10: 1.0, 5: 0.85, 3: 0.6, 1: 0.3},
+        0.5: {10: 0.98, 5: 0.7, 3: 0.45, 1: 0.2},  # graph 0.8 >> rag 0.2 at k=1 -> crossover
+        0.75: {10: 0.97, 5: 0.6, 3: 0.4, 1: 0.15},
+        1.0: {10: 0.95, 5: 0.5, 3: 0.3, 1: 0.1},
+    }
+    return cx.CrossoverResult(graph=graph, rag=rag)
+
+
+def test_gate_passes_on_well_formed_surface():
+    res = _good_result()
+    labels = cx.evaluate_assertions(res)
+    hard = [(lbl, ok) for lbl, ok, is_hard in labels if is_hard]
+    assert all(ok for _lbl, ok in hard), hard
+    assert cx.gate_exit_code(res) == 0
+
+
+def test_gate_fails_when_rag_non_monotone():
+    res = _good_result()
+    res.rag[0.5][3] = 0.99  # k=3 recall above k=5 -> non-monotone
+    assert cx.gate_exit_code(res) == 1
+
+
+def test_gate_fails_when_retriever_broken_at_k10():
+    res = _good_result()
+    for a in res.rag:
+        res.rag[a][10] = 0.2  # retriever never starts high -> sanity fails
+    assert cx.gate_exit_code(res) == 1
+
+
+def test_render_md_is_ascii_and_has_grid():
+    md = cx.render_crossover_md(_good_result())
+    assert md.isascii()
+    assert "passage_k" in md and "## verdicts" in md
