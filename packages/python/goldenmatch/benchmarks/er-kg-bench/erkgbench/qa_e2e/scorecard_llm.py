@@ -42,3 +42,28 @@ def f1_from_counts(tp: int, fp: int, fn: int) -> dict:
     r = tp / (tp + fn) if (tp + fn) else 0.0
     f1 = 2 * p * r / (p + r) if (p + r) else 0.0
     return {"precision": p, "recall": r, "f1": f1}
+
+
+def build_gold_subgraph(gold_chain, g, typ_of: dict) -> dict:
+    """{entities, edges} over the chain's canonical entities -- the shape
+    synthesize_local's _format_subgraph reads. entity_id = canonical id."""
+    ids: list = []
+    for (s, _rel, o) in gold_chain:
+        for x in (s, o):
+            if x not in ids:
+                ids.append(x)
+    entities = [
+        {"entity_id": x, "canonical_name": g.canonical_name(x), "typ": typ_of.get(x, "concept")}
+        for x in ids
+    ]
+    edges = [{"subj": s, "predicate": rel, "obj": o} for (s, rel, o) in gold_chain]
+    return {"entities": entities, "edges": edges}
+
+
+def synthesis_given_gold(question, gold_chain, g, typ_of, gold_answer, llm) -> float:
+    from goldengraph.synthesize import synthesize_local
+
+    sub = build_gold_subgraph(gold_chain, g, typ_of)
+    start_name = g.canonical_name(gold_chain[0][0])
+    pred = synthesize_local(question, sub, llm, seed_names=[start_name])
+    return metrics.answer_match(pred, gold_answer)
