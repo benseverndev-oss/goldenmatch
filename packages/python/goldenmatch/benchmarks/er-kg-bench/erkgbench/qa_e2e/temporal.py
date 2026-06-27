@@ -206,3 +206,67 @@ def goldengraph_asof(store, anchor_id: str, relation: str, D: int) -> str | None
     objs.discard(None)
     objs.discard(anchor_id)
     return next(iter(objs), None) if len(objs) <= 1 else next(iter(objs))
+
+
+def _mean_by_regime(pairs) -> dict:
+    agg: dict = {}
+    for r, v in pairs:
+        agg.setdefault(r, []).append(v)
+    return {r: sum(v) / len(v) for r, v in agg.items()}
+
+
+def run_temporal_deterministic(*, seed: int, n_facts: int, ambiguity: float,
+                               llm=None) -> TemporalResult:
+    """Build the corpus + bi-temporal store; per question score goldengraph as_of
+    vs the temporal-blind floor, mean by regime. Needs the wheel (build_temporal_store).
+    If `llm` is given, also score the realistic real-LLM RAG row."""
+    from . import dials
+    from .corpora import QACorpus
+    from .gold import GoldGraph
+
+    docs, facts, qs = generate_temporal(seed=seed, n_facts=n_facts, ambiguity=ambiguity)
+    store = build_temporal_store(facts)
+    g = GoldGraph.from_corpus(QACorpus(name="temporal", documents=docs, questions=()))
+    s2c: dict = {}
+    anchor_surf: dict = {}
+    for eid, surf, _typ in dials._entity_surfaces(g):
+        s2c.setdefault(surf, eid)
+        anchor_surf.setdefault(eid, set()).add(surf)
+
+    gg, floor, llm_acc = [], [], []
+    for q in qs:
+        a_surfs = anchor_surf.get(q.anchor_id, set())
+        gg.append((q.regime, as_of_accuracy(
+            goldengraph_asof(store, q.anchor_id, q.relation, q.D), q.gold_obj)))
+        floor.append((q.regime, as_of_accuracy(
+            temporal_blind_floor(docs, a_surfs, q.relation, q.D, surface_to_canon=s2c),
+            q.gold_obj)))
+        if llm is not None and not getattr(llm, "exhausted", False):
+            llm_acc.append((q.regime, as_of_accuracy(
+                llm_temporal_rag(docs, a_surfs, q.relation, q.D, llm, surface_to_canon=s2c),
+                q.gold_obj)))
+    return TemporalResult(
+        gg_acc=_mean_by_regime(gg),
+        floor_acc=_mean_by_regime(floor),
+        llm_acc=_mean_by_regime(llm_acc) if llm_acc else None,
+    )
+
+
+def llm_temporal_rag(docs, anchor_surfaces: set, relation: str, D: int, llm, *,
+                     surface_to_canon: dict) -> str | None:
+    """Realistic RAG floor (opt-in, real LLM): hand the LLM BOTH dated passages +
+    'As of D, what does X <relation>?'. The text states the dates but nothing
+    enforces a slice, so past-regime accuracy collapses. Maps the answer name back
+    to a canonical id (unknown -> None)."""
+    rel_words = relation.replace("_", " ")
+    hits = [d for d in docs
+            if any(_mentions(d.text, a) for a in anchor_surfaces) and rel_words in d.text]
+    passages = "\n".join(f"- {d.text}" for d in hits) or "(no passages)"
+    prompt = (
+        f"As of time {D}, what does the subject {rel_words}? Use ONLY the passages "
+        "below; answer with one entity name and nothing else.\n\n" + passages
+    )
+    out = llm.complete(prompt) or ""
+    lines = out.strip().splitlines()
+    name = lines[0].strip().lstrip("-* ").strip() if lines else ""
+    return surface_to_canon.get(name)
