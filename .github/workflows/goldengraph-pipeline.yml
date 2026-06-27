@@ -139,3 +139,22 @@ jobs:
           name: goldengraph-kg-scorecard
           path: packages/python/goldenmatch/benchmarks/er-kg-bench/KG_SCORECARD.md
           if-no-files-found: ignore
+
+      - name: Query-router gate (deterministic, key-free)
+        # Slice 1 of the KG/RAG router: classify_query routes B1 list-questions to the aggregate
+        # lever; the engine-native aggregate_members returns the exact set (name space, amb=0.0).
+        # Gates HARD on classifier recall + slot accuracy + routed set-F1. No key.
+        working-directory: packages/python/goldenmatch/benchmarks/er-kg-bench
+        env:
+          POLARS_SKIP_CPU_CHECK: "1"
+        run: |
+          python -m pytest tests/test_qa_router.py -v
+          python -m erkgbench.qa_e2e.run_router_eval --seed 7 --n-anchors 60 --out-md ROUTER.md
+
+      - name: Upload ROUTER.md
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: goldengraph-router
+          path: packages/python/goldenmatch/benchmarks/er-kg-bench/ROUTER.md
+          if-no-files-found: ignore

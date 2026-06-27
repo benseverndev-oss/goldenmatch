@@ -34,6 +34,9 @@ on:
       run_kg_capability:
         description: "Slice D: real-framework aggregation confirmation (LightRAG/MS-GraphRAG/Graphiti)"
         default: "false"
+      run_router_capability:
+        description: "Query-router slice 1: real-LLM auto-vs-local answer-match on aggregation questions"
+        default: "false"
       engine:
         description: "all | goldengraph | lightrag | ms_graphrag | graphiti | text_rag | goldenmatch_rag | goldenmatch_entity_rag"
         default: "all"
@@ -483,7 +486,7 @@ jobs:
   scorecard:
     # Opt-in real-LLM confirmation rows (NON-gating): Phase-2 scorecard
     # (run_scorecard) and/or the slice-B1 RAG aggregation floor (run_aggregation_llm).
-    if: ${{ inputs.run_scorecard == 'true' || inputs.run_aggregation_llm == 'true' || inputs.run_temporal_llm == 'true' || inputs.run_kg_capability == 'true' }}
+    if: ${{ inputs.run_scorecard == 'true' || inputs.run_aggregation_llm == 'true' || inputs.run_temporal_llm == 'true' || inputs.run_kg_capability == 'true' || inputs.run_router_capability == 'true' }}
     runs-on: large-new-64GB
     timeout-minutes: 120
     steps:
@@ -578,5 +581,26 @@ jobs:
         with:
           name: graphrag-qa-kg-frameworks
           path: packages/python/goldenmatch/benchmarks/er-kg-bench/KG_SCORECARD_FRAMEWORKS.md
+          if-no-files-found: ignore
+      - name: Query-router auto-vs-local confirmation (slice 1, opt-in)
+        if: ${{ inputs.run_router_capability == 'true' }}
+        working-directory: packages/python/goldenmatch/benchmarks/er-kg-bench
+        env:
+          OPENAI_API_KEY: ${{ secrets.GOLDENGRAPH_OPENAI_API_KEY }}
+          POLARS_SKIP_CPU_CHECK: "1"
+        # --with-llm compares ask(mode=auto) (routes to the aggregate lever) vs ask(mode=local)
+        # on the aggregation list-questions. NON-gating (`|| true`; the deterministic gate is
+        # goldengraph-pipeline's job). A build failure (missing key / 429) records n/a.
+        run: |
+          python -m erkgbench.qa_e2e.run_router_eval \
+            --seed 7 --n-anchors 60 \
+            --with-llm --budget-usd "${{ inputs.scorecard_budget_usd }}" \
+            --out-md ROUTER.md --llm-out-md ROUTER_LLM.md || true
+      - name: Upload ROUTER_LLM.md
+        if: ${{ always() && inputs.run_router_capability == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: graphrag-qa-router-llm
+          path: packages/python/goldenmatch/benchmarks/er-kg-bench/ROUTER_LLM.md
           if-no-files-found: ignore
           if-no-files-found: ignore
