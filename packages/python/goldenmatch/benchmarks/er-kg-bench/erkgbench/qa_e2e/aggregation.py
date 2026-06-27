@@ -77,3 +77,15 @@ def generate_aggregation(*, seed: int, n_anchors: int, ambiguity: float,
 def agg_documents_corpus(docs) -> QACorpus:
     """Wrap the fan-out docs as a QACorpus so ablation._build_store can consume it."""
     return QACorpus(name="aggregation", documents=tuple(docs), questions=())
+
+
+def set_f1(predicted: set, gold: set) -> dict:
+    tp = len(predicted & gold)
+    p = tp / len(predicted) if predicted else 0.0
+    r = tp / len(gold) if gold else 0.0
+    f1 = 2 * p * r / (p + r) if (p + r) else 0.0
+    return {"precision": p, "recall": r, "f1": f1}
+
+
+def count_accuracy(predicted_count: int, gold_count: int) -> float:
+    return 1.0 if predicted_count == gold_count else 0.0
