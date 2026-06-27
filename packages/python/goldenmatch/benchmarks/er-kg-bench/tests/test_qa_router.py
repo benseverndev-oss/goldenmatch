@@ -95,3 +95,16 @@ def test_gate_fails_when_paraphrases_too_easy():
         heuristic_paraphrase_acc=0.9, stub_escalation_acc=1.0,
     )
     assert re_.gate_exit_code(res) == 1
+
+
+def test_llm_classifier_accuracy_with_stub_llm():
+    from erkgbench.qa_e2e.router_paraphrases import Paraphrase
+    from goldengraph.route import QueryIntent
+
+    class _LLM:
+        def complete(self, prompt):
+            return '{"intent":"aggregate","anchor":"Soundex","relation":"works_at","as_of":null}'
+
+    pps = [Paraphrase("who all does Soundex works at, name them", QueryIntent.AGGREGATE, "Soundex", "works_at")]
+    acc = re_.llm_classifier_accuracy(pps, _LLM())
+    assert acc["slot_acc"] == 1.0 and acc["intent_acc"] == 1.0

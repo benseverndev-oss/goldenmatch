@@ -244,6 +244,24 @@ def stub_escalation_accuracy() -> float:
     return hits / (len(PARAPHRASES) or 1)
 
 
+def llm_classifier_accuracy(paraphrases, llm) -> dict:
+    """Run the REAL LLMQueryClassifier over the paraphrases; intent-accuracy + slot-accuracy vs gold.
+    Opt-in (real LLM). The classifier itself is fail-open (abstain on any failure)."""
+    from goldengraph.route import LLMQueryClassifier
+
+    c = LLMQueryClassifier(llm, max_calls=len(paraphrases) + 1)
+    preds = set(RELATION_SCHEMA)
+    intent_hits = slot_hits = 0
+    for pp in paraphrases:
+        p = c.classify(pp.question, predicates=preds)
+        if p.intent is pp.intent:
+            intent_hits += 1
+        if _profile_matches(p, pp):
+            slot_hits += 1
+    n = len(paraphrases) or 1
+    return {"intent_acc": intent_hits / n, "slot_acc": slot_hits / n}
+
+
 def run_router_deterministic(*, seed: int, n_anchors: int) -> RouterResult:
     acc = classifier_accuracy(seed=seed, n_anchors=n_anchors, ambiguity=0.0)
     routed = run_routed_correctness(seed=seed, n_anchors=n_anchors)
@@ -301,6 +319,8 @@ class RouterLLMResult:
     budget_exhausted: bool
     temporal_auto_acc: float | None = None
     temporal_local_acc: float | None = None
+    paraphrase_intent_acc: float | None = None
+    paraphrase_slot_acc: float | None = None
 
 
 def answer_setf1(answer_text: str, gold_names: set, universe: set) -> float:
@@ -347,12 +367,21 @@ def run_router_llm(*, seed: int, n_anchors: int, tracker) -> RouterLLMResult:
             auto_vals.append(answer_setf1(a, gold, universe))
             local_vals.append(answer_setf1(ln, gold, universe))
         t_auto, t_local = _temporal_auto_vs_local(seed, n_anchors, engine, tracker, _BIG)
+        p_intent = p_slot = None
+        try:
+            from .router_paraphrases import PARAPHRASES
+            pa = llm_classifier_accuracy(PARAPHRASES, engine._llm)
+            p_intent, p_slot = pa["intent_acc"], pa["slot_acc"]
+        except Exception:
+            pass
         return RouterLLMResult(
             auto_setf1=(sum(auto_vals) / len(auto_vals)) if auto_vals else None,
             local_setf1=(sum(local_vals) / len(local_vals)) if local_vals else None,
             budget_exhausted=tracker.budget_exhausted,
             temporal_auto_acc=t_auto,
             temporal_local_acc=t_local,
+            paraphrase_intent_acc=p_intent,
+            paraphrase_slot_acc=p_slot,
         )
     except Exception:
         return RouterLLMResult(auto_setf1=None, local_setf1=None, budget_exhausted=tracker.budget_exhausted)
@@ -405,5 +434,9 @@ def render_router_llm_md(res: RouterLLMResult) -> str:
         "## temporal past-regime (as-of-accuracy on a corrected-away value)\n\n"
         "| mode | as_of_accuracy |\n|---|---|\n"
         f"| auto (routed->as_of, slices at D) | {_f(res.temporal_auto_acc)} |\n"
-        f"| local (general, no temporal slice) | {_f(res.temporal_local_acc)} |\n"
+        f"| local (general, no temporal slice) | {_f(res.temporal_local_acc)} |\n\n"
+        "## LLM classifier on NL paraphrases (the heuristic misses these)\n\n"
+        "| metric | accuracy |\n|---|---|\n"
+        f"| intent_acc | {_f(res.paraphrase_intent_acc)} |\n"
+        f"| slot_acc | {_f(res.paraphrase_slot_acc)} |\n"
     )
