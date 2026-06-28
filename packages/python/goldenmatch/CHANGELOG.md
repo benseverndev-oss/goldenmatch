@@ -6,6 +6,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-06-27
+
+<!-- README-callout
+**The healing loop, now default-on across every surface** — every `dedupe_df` run surfaces ranked, self-verified config-suggestions on `result.suggestions` when there's headroom (free on a healthy run, no second pipeline pass). `dedupe_df(suggest=True)` returns verified suggestions; `heal=True` applies them and re-runs, returning the healed `result.config` + `result.heal_trail`. Available across Python, CLI (`--suggest` / `--heal`), MCP, A2A, REST, web, the TUI, and the edge-safe TypeScript port via WebAssembly. Needs `goldenmatch[native]`; degrades gracefully without it. Kill-switch `GOLDENMATCH_SUGGEST_ON_DEDUPE=0`.
+-->
+
 ### Changed
 - **Healer (config-suggestion) self-verify gate default flipped to the precision-sensitive `cohesion` proxy (`cohesion_min_edge_cap50`).** Closes the raw-vs-live gap in `review_config`: suggester-gym live recovery 0.151 -> 0.543 (now equal to the raw kernel ceiling), with zero net-negatives on real perturbations. Rollback via `GOLDENMATCH_SUGGEST_HEALTH=legacy`. New knob `GOLDENMATCH_SUGGEST_COVERAGE_CAP` (default 0.50).
 
