@@ -138,14 +138,25 @@ def run_bench(eval: str, n: int = 20, ambiguity: float = 0.6, opts: str = "",
             cwd=_BENCH, env=env, capture_output=True, text=True, check=True,
         )
         results = pathlib.Path(out_md).read_text() if os.path.exists(out_md) else "(no results md)"
-        return proc.stdout + "\n\n===== RESULTS_MD =====\n" + results
+        return _persist(eval, n, proc.stdout + "\n\n===== RESULTS_MD =====\n" + results)
     module, extra = _EVAL[eval]
     subprocess.run(
         ["python", "-m", module, *extra, "--n-questions", str(n),
          "--ambiguity", str(ambiguity), "--out-md", out_md],
         cwd=_BENCH, env=env, check=True,
     )
-    return pathlib.Path(out_md).read_text()
+    return _persist(eval, n, pathlib.Path(out_md).read_text())
+
+
+def _persist(eval: str, n: int, text: str) -> str:
+    """Write the result to the cache Volume so a DETACHED run survives local-CLI death -- pull it
+    back later with `modal volume get gg-bench-cache results/<eval>_<n>.md .`."""
+    import os
+
+    os.makedirs("/cache/results", exist_ok=True)
+    pathlib.Path(f"/cache/results/{eval}_{n}.md").write_text(text)
+    cache.commit()
+    return text
 
 
 @app.local_entrypoint()
