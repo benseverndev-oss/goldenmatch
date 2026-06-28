@@ -16,10 +16,13 @@ description = "Connected-components + pair-dedup graph kernels (no pyo3) shared 
 name = "goldenmatch_graph_core"
 
 # `arrow` is OPTIONAL and ON BY DEFAULT, so every existing consumer (native /
-# pgrx / datafusion) compiles byte-identically with zero change. Disable it
-# (`default-features = false`) only on targets that can't link arrow — e.g. the
-# `wasm32` build of `goldenprofile-core`, which uses only the arrow-free
-# `connected_components`. Mirrors the autoconfig-core arrow-gating precedent.
+# pgrx / datafusion) compiles byte-identically with zero change. The wasm
+# surfaces (goldenprofile-core / goldengraph-core) set `default-features = false`
+# because they call only the arrow-free `connected_components` — arrow itself
+# compiles to wasm32 fine and dead-code-elimination already strips it from the
+# .wasm, so dropping it is a BUILD-TIME + dep-hygiene win (skip compiling ~11
+# arrow crates), not a link or size requirement. Mirrors the autoconfig-core
+# arrow-gating precedent.
 [features]
 default = ["arrow"]
 arrow = ["dep:arrow"]
