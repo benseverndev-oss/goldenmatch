@@ -24,7 +24,7 @@ on:
         description: "all | goldengraph | lightrag | ms_graphrag | graphiti | text_rag | goldenmatch_rag | goldenmatch_entity_rag (head_to_head mode only)"
         default: "all"
       mode:
-        description: "head_to_head (engine matrix) | scorecard | aggregation_llm | temporal_llm | kg_capability | router_capability"
+        description: "head_to_head | scorecard | aggregation_llm | temporal_llm | kg_capability | router_capability | extraction_f1 | synthesis_gold"
         default: "head_to_head"
       budget_usd:
         description: "hard cost cap per (engine, ambiguity) run"
@@ -465,7 +465,7 @@ jobs:
 
   scorecard:
     # Opt-in real-LLM confirmation rows (NON-gating), selected by `mode`. One mode per dispatch.
-    if: ${{ inputs.mode != 'head_to_head' && inputs.mode != 'extraction_f1' }}
+    if: ${{ inputs.mode != 'head_to_head' && inputs.mode != 'extraction_f1' && inputs.mode != 'synthesis_gold' }}
     runs-on: large-new-64GB
     timeout-minutes: 120
     steps:
@@ -633,4 +633,47 @@ jobs:
         with:
           name: graphrag-qa-extraction-f1
           path: packages/python/goldenmatch/benchmarks/er-kg-bench/EXTRACTION_F1.md
+          if-no-files-found: ignore
+
+  synthesis_gold:
+    # Stage 0 of the distillation pivot: synthesis-given-gold (hand the model the GOLD subgraph +
+    # question -> answer-match). LOW => synthesis is the bottleneck; HIGH but low end-to-end =>
+    # retrieval is. Wheel-free (subgraph dicts, no PyStore); api needs Ollama (local_llm). Non-gating.
+    needs: setup
+    if: ${{ inputs.mode == 'synthesis_gold' }}
+    runs-on: large-new-64GB
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Install goldenmatch + goldengraph + datasets (no wheel -- synthesis is pure)
+        run: |
+          python -m pip install --upgrade pip pytest goldenmatch datasets openai
+          python -m pip install --no-deps -e packages/python/goldengraph
+      - name: Start local OSS LLM (Ollama)
+        if: ${{ inputs.local_llm != '' }}
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          ollama serve > ollama.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf http://localhost:11434/api/version && break || sleep 2; done
+          ollama pull "${{ inputs.local_llm }}"
+      - name: Run synthesis-given-gold (isolation)
+        working-directory: packages/python/goldenmatch/benchmarks/er-kg-bench
+        env:
+          OPENAI_API_KEY: ${{ inputs.local_llm != '' && 'ollama' || secrets.GOLDENGRAPH_OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ inputs.local_llm != '' && 'http://localhost:11434/v1' || '' }}
+          OPENAI_MODEL: ${{ inputs.local_llm }}
+          POLARS_SKIP_CPU_CHECK: "1"
+        run: |
+          python -m erkgbench.qa_e2e.run_synthesis_eval \
+            --n-questions "${{ inputs.max_questions }}" --ambiguity 0.6 \
+            --out-md SYNTHESIS_GOLD.md
+      - name: Upload SYNTHESIS_GOLD.md
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: graphrag-qa-synthesis-gold
+          path: packages/python/goldenmatch/benchmarks/er-kg-bench/SYNTHESIS_GOLD.md
           if-no-files-found: ignore
