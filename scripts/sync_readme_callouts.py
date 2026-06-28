@@ -90,11 +90,11 @@ def _format_callout(version: str, body: str, *, is_first: bool) -> str:
 
     Input body is the raw text from the CHANGELOG marker. If it leads
     with ``**Title** — rest``, fold the version into the bold span so
-    the homepage reads ``**🆕 vX.Y.Z — Title** — rest``. Otherwise just
+    the homepage reads ``**vX.Y.Z — Title** — rest``. Otherwise just
     bold the version.
     """
     body = body.strip()
-    new_badge = "🆕 " if is_first else ""
+    new_badge = ""  # latest callout is already first; no emoji marker
     label = _version_label(version)
     match = _BOLD_TITLE_RE.match(body)
     if match:
