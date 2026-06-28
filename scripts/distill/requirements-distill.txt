@@ -1,0 +1,3 @@
+# Local deps for the distill scaffold. The GPU trainer deps (torch/transformers/peft/trl)
+# live in the Modal image (scripts/distill/modal_train.py), NOT here.
+modal>=0.64
