@@ -22,6 +22,7 @@ import lowerThreshold from "./fixtures/suggest/lower_threshold.json" with { type
 import raiseThreshold from "./fixtures/suggest/raise_threshold.json" with { type: "json" };
 import swapScorer from "./fixtures/suggest/swap_scorer.json" with { type: "json" };
 import addNegativeEvidence from "./fixtures/suggest/add_negative_evidence.json" with { type: "json" };
+import dropMatchkey from "./fixtures/suggest/drop_matchkey.json" with { type: "json" };
 
 interface Fixture {
   readonly input: SuggestKernelInput;
@@ -34,6 +35,7 @@ const CASES: readonly [string, Fixture][] = [
   ["raise_threshold", raiseThreshold as unknown as Fixture],
   ["swap_scorer", swapScorer as unknown as Fixture],
   ["add_negative_evidence", addNegativeEvidence as unknown as Fixture],
+  ["drop_matchkey", dropMatchkey as unknown as Fixture],
 ];
 
 // Init once at collection time so we can statically skip if wasm is unavailable.

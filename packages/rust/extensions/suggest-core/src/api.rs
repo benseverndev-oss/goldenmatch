@@ -14,7 +14,10 @@ use crate::diagnostics::{ColumnSignal, ScoreDiagnostics};
 #[cfg(not(feature = "arrow"))]
 use crate::diagnostics::ClusterDiagnostics;
 use crate::rank::rank;
-use crate::rules::{negative_evidence_rule, scorer_swap_rule, threshold_rule};
+use crate::rules::{
+    drop_overmerge_matchkey_rule, negative_evidence_rule, scorer_swap_rule, threshold_rule,
+    EVERYTHING_MATCHES,
+};
 
 /// Bins for the score histogram feeding dip() detection.
 const HISTOGRAM_BINS: i64 = 24;
@@ -41,9 +44,16 @@ fn suggest_core(
     // and those global counts are passed to every matchkey's threshold_rule.
     // This is correct for the common zero-config case where a single weighted
     // matchkey dominates; revisit when multi-matchkey configs are common.
+    // Precision-collapse signal: any thresholded matchkey where almost every pair
+    // clears the threshold. Feeds the drop-matchkey rule below (a raised fuzzy
+    // threshold can't fix collapse driven by a separate exact matchkey).
+    let mut precision_collapsed = false;
     for mk in &config.matchkeys {
         if let Some(t) = mk.threshold {
             let sd = ScoreDiagnostics::from_scores(scores, n_pairs, t, HISTOGRAM_BINS);
+            if sd.mass_above > EVERYTHING_MATCHES {
+                precision_collapsed = true;
+            }
             all.extend(threshold_rule(
                 &mk.name,
                 t,
@@ -60,6 +70,10 @@ fn suggest_core(
     // negative_evidence_rule produces at most one suggestion per field and is
     // matchkey-agnostic, so run it once globally.
     all.extend(negative_evidence_rule(signals));
+
+    // drop_overmerge_matchkey_rule is config-level (reasons across matchkeys), so
+    // run it once globally after the per-matchkey loop.
+    all.extend(drop_overmerge_matchkey_rule(config, precision_collapsed));
 
     // Rank (deduplicates by id, suppresses repeatedly-rejected, sorts by score).
     rank(all, priors)

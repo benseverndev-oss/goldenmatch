@@ -81,6 +81,30 @@ fn config_one_matchkey(threshold: f64) -> String {
     .to_string()
 }
 
+/// Two-matchkey config: a weighted matchkey plus an `exact` matchkey on a
+/// DERIVED key (`__title_key__`). With a precision-collapsed score distribution
+/// this triggers the drop_matchkey rule (#1299).
+fn config_drop_shape() -> String {
+    serde_json::json!({
+        "matchkeys": [
+            {
+                "name": "fuzzy_match",
+                "kind": "weighted",
+                "threshold": 0.70,
+                "fields": [{"field": "title", "scorer": "token_sort", "weight": 1.0}]
+            },
+            {
+                "name": "title_key",
+                "kind": "exact",
+                "threshold": null,
+                "fields": [{"field": "__title_key__", "scorer": null, "weight": null}]
+            }
+        ],
+        "negative_evidence": []
+    })
+    .to_string()
+}
+
 fn cases() -> Vec<Case> {
     vec![
         // (1) lower_threshold: bimodal scores, threshold above the valley.
@@ -153,6 +177,22 @@ fn cases() -> Vec<Case> {
             }]"#
             .to_string(),
             config: config_one_matchkey(0.80),
+            priors: priors_empty(),
+        },
+        // (6) drop_matchkey: precision collapsed (every pair clears the 0.70
+        //     weighted threshold) AND an exact matchkey on the derived key
+        //     `__title_key__` is present alongside it -> a drop_matchkey
+        //     suggestion (plus the mass_above raise). #1299.
+        Case {
+            name: "drop_matchkey",
+            scored_pairs: serde_json::to_string(&serde_json::json!({
+                "score": [0.92, 0.94, 0.95, 0.96, 0.97, 0.98, 0.99],
+                "n_pairs": 7
+            }))
+            .unwrap(),
+            clusters: r#"[{"quality": "strong", "oversized": false}]"#.to_string(),
+            column_signals: clean_signals(),
+            config: config_drop_shape(),
             priors: priors_empty(),
         },
         // (5) empty/no-op: empty pairs + empty clusters + empty signals -> no
