@@ -4,13 +4,17 @@
 # datasets (synthetic + ncvr_synthetic + anchor_*) and gates on regression
 # vs the committed scorecard.json baseline.
 #
-# Three ways to trigger:
-#   1. Automatically on push when relevant paths change.
-#   2. workflow_dispatch (for a manual re-check or one-shot bless).
+# Two-tier cost split (the gym-gate / FULL_DIST catalog recovery check overruns
+# ~70-120min, so it does NOT belong on every suggest-touching push):
+#   - PUSH (PR signal): runs ONLY the fast `gate` step (deterministic subset,
+#     FULL_DIST=0, ~minutes). This is the per-PR suggester-quality regression
+#     guard -- it's the step that catches suggester_prec / convergence drops.
+#   - SCHEDULE (nightly) + workflow_dispatch: ALSO run the heavy `gym-gate`
+#     (FULL_DIST over the whole catalog). The comprehensive recovery check runs
+#     daily on main instead of taxing each PR with a 2h tail.
 #
-# The gate step exits nonzero on a regression; the job fails and blocks
-# the PR.  The bench runner matches the repo default for bench workloads
-# (large-new-64GB, 16c/64GB).
+# The gate step exits nonzero on a regression; the job fails. The bench runner
+# matches the repo default for bench workloads (large-new-64GB, 16c/64GB).
 #
 # To bless a new baseline after an intentional kernel change:
 #   gh workflow run bench-suggest-quality.yml --ref <branch> -f mode=bless
@@ -31,6 +35,10 @@ on:
         description: "Runner label"
         required: false
         default: "large-new-64GB"
+  schedule:
+    # Nightly full run (fast gate + heavy gym-gate FULL_DIST) on main, off-peak
+    # off-minute so it doesn't pile onto the top-of-hour scheduler.
+    - cron: "37 7 * * *"
   push:
     paths:
       - "packages/rust/extensions/suggest-core/**"
@@ -105,6 +113,10 @@ jobs:
           uv run python -m scripts.suggest_quality "$MODE" $FILTER
 
       - name: Run gym-gate (catalog recovery non-regression)
+        # Heavy FULL_DIST catalog recovery check (~70-120min). Skipped on push so
+        # PRs get only the fast `gate`; runs on the nightly schedule + manual
+        # workflow_dispatch.
+        if: ${{ github.event_name != 'push' }}
         env:
           GOLDENMATCH_SUGGEST_FULL_DIST: "1"
         run: |
