@@ -100,6 +100,22 @@ export const GOLDENPROFILE_WASM_BASE64 =
 `,
 );
 
+// 5. Regenerate the shared cross-surface parity fixtures from the HOST kernel
+//    (the same one the wasm + Python -native wheel wrap). Canonicalized + so
+//    byte-stable across runs; the TS + Python parity tests assert this file.
+const fixtureFile = resolve(
+  tsPkg,
+  "tests/parity/fixtures/goldenprofile/resolutions.json",
+);
+mkdirSync(dirname(fixtureFile), { recursive: true });
+console.log(`$ cargo run --release --example gen_parity_fixtures > ${fixtureFile}`);
+const fixtures = execFileSync(
+  "cargo",
+  ["run", "--release", "--example", "gen_parity_fixtures"],
+  { cwd: wasmCrate, encoding: "utf8" },
+);
+writeFileSync(fixtureFile, fixtures);
+
 console.log(
-  `\nDone. wasm ${wasm.length} B -> ${b64.length} B base64; bindings + bytes written to src/core/_wasm/.`,
+  `\nDone. wasm ${wasm.length} B -> ${b64.length} B base64; bindings + bytes + parity fixtures written.`,
 );
