@@ -20,6 +20,7 @@ class ExtractionF1:
     entity: dict  # {precision, recall, f1}
     relation: dict
     n_docs: int
+    n_failed: int = 0  # docs whose extraction raised (malformed JSON etc.) -> counted as empty
 
 
 def evaluate_extractor(label: str, *, llm, seed: int = 7, n_questions: int = 80,
@@ -28,6 +29,7 @@ def evaluate_extractor(label: str, *, llm, seed: int = 7, n_questions: int = 80,
 
     `llm` is the LLMClient for the `api` extractor (ignored by rebel/gliner). GOLDENGRAPH_EXTRACTOR /
     GOLDENGRAPH_EXTRACT_JSON_MODE must be set by the caller BEFORE this call (one config per call)."""
+    from goldengraph.extract import Extraction
     from goldengraph.extract import extract as _extract
     from goldengraph.ingest import _resolve_extractor
 
@@ -39,11 +41,18 @@ def evaluate_extractor(label: str, *, llm, seed: int = 7, n_questions: int = 80,
         seed=seed, n_questions=n_questions, ambiguity=ambiguity, max_hops=max_hops
     )
     et = dict.fromkeys(_COUNTERS, 0)
-    n_docs = 0
+    n_docs = n_failed = 0
     for d in corpus.documents:
         if len(d.id.split("::")) != 3:
             continue
-        ex = (extractor or _extract)(d.text, llm)
+        # Fail-soft per doc, exactly like ingest._prepare_doc: a malformed-JSON / errored extraction
+        # counts as EMPTY (all FN for this doc -- the honest scoring), not a crashed run. The failure
+        # rate is itself signal (JSON-mode should reduce it), so we report it.
+        try:
+            ex = (extractor or _extract)(d.text, llm)
+        except Exception:
+            ex = Extraction(mentions=[], relationships=[])
+            n_failed += 1
         c = extraction_counts(d.src_surface, d.dst_surface, ex)
         for k in _COUNTERS:
             et[k] += c[k]
@@ -53,6 +62,7 @@ def evaluate_extractor(label: str, *, llm, seed: int = 7, n_questions: int = 80,
         entity=f1_from_counts(et["ent_tp"], et["ent_fp"], et["ent_fn"]),
         relation=f1_from_counts(et["rel_tp"], et["rel_fp"], et["rel_fn"]),
         n_docs=n_docs,
+        n_failed=n_failed,
     )
 
 
@@ -64,11 +74,12 @@ def render_md(results, *, model: str) -> str:
         "triple (entity = name overlap, relation = edge existence either-direction). This isolates",
         "EXTRACTION from synthesis and is far less noisy than end-to-end answer-match.",
         "",
-        "| config | entity-F1 | relation-F1 | docs |",
-        "|---|---|---|---|",
+        "| config | entity-F1 | relation-F1 | docs | parse-fail |",
+        "|---|---|---|---|---|",
     ]
     for r in results:
+        fail = f"{r.n_failed}/{r.n_docs}" if r.n_docs else "0/0"
         lines.append(
-            f"| {r.label} | {r.entity['f1']:.3f} | {r.relation['f1']:.3f} | {r.n_docs} |"
+            f"| {r.label} | {r.entity['f1']:.3f} | {r.relation['f1']:.3f} | {r.n_docs} | {fail} |"
         )
     return "\n".join(lines) + "\n"
