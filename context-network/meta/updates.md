@@ -2,6 +2,23 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-06-28 — GoldenGraph (KG engine) on the TS/WASM surface (v1: graph+query)
+- New ADR [../decisions/0029-goldengraph-wasm-ts.md](../decisions/0029-goldengraph-wasm-ts.md):
+  the GoldenGraph knowledge-graph engine gets a TS/JS surface via `goldengraph-wasm`
+  — the second fold after goldenprofile (ADR 0028), same pattern.
+- New **standalone** `packages/typescript/goldengraph` npm package: pure-by-default
+  base + opt-in `goldengraph/wasm`; query fns REFUSE (throw) until enabled. **v1 = the
+  4 graph+query ops** (`buildGraph`/`neighborhood`/`seedsByName`/`communities`);
+  the bitemporal store (`store_append/as_of/history`) is DEFERRED (heaviest surface).
+- Zero runtime deps (the resolution input is a `{mention:entity}` map / `["native",…]`,
+  not goldenprofile's `Resolution` — composition is a future adapter).
+- Enabling change: `goldengraph-core` → `graph-core { default-features = false }`
+  (build-time gating; same accurate rationale as 0028).
+- CI: `goldengraph_wasm` path-filter + drift guard in the `typescript` lane; publish
+  wired-unfired (`publish-goldengraph-js.yml`). No Python cross-parity (native API is
+  OO, not the JSON boundary; not in the py matrix — see issue #1304). Plan:
+  [../../docs/superpowers/plans/2026-06-28-goldengraph-wasm-ts-parity.md](../../docs/superpowers/plans/2026-06-28-goldengraph-wasm-ts-parity.md).
+
 ## 2026-06-28 — GoldenProfile (Virtual Fingerprint) on the TS/WASM surface
 - New ADR [../decisions/0028-goldenprofile-wasm-ts.md](../decisions/0028-goldenprofile-wasm-ts.md):
   the GoldenProfile Virtual Fingerprint engine (cross-document entity resolution,

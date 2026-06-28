@@ -39,10 +39,13 @@ goldengraph's world into JS.
 ## Enabling change
 `graph-core`'s `arrow` dependency became an **opt-in, default-on** feature.
 `goldenprofile-core` uses only the arrow-free `connected_components`, so
-`default-features = false` drops arrow and lets it link on `wasm32`. Default-on
-means native / pgrx / datafusion compile byte-identically (verified: default
-build all tests pass; `--no-default-features` clean). Mirrors the autoconfig-core
-arrow-gating precedent.
+`default-features = false` drops arrow from the wasm build. (Honest note: arrow
+*does* compile to wasm32, and dead-code elimination already strips it from the
+linked `.wasm` — measured ~1 KB difference — so this is a **build-time +
+dep-hygiene** win, ~11 fewer arrow crates to compile, NOT a "won't link" or size
+requirement as first assumed.) Default-on means native / pgrx / datafusion
+compile byte-identically (verified: default build all tests pass;
+`--no-default-features` clean). Mirrors the autoconfig-core arrow-gating precedent.
 
 ## Consequences / honest flags
 - **The Python cross-parity test `importorskip`s `goldenprofile_native` and only
