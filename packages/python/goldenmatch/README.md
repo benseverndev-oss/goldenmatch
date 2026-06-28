@@ -9,6 +9,8 @@
 
 **⚡ Scales from a CSV on your laptop to 100M+ rows on a Ray cluster — verified: 100,000,000 records deduped recall-complete (correct across any partitioning) in 9.2 min, with a 0.36 GB driver footprint.** ([how →](#scaling-to-100m))
 
+**🕸️ The resolution stage for knowledge graphs** — ER is the stage GraphRAG does *worst*. [`goldenmatch-kg`](https://github.com/benseverndev-oss/goldenmatch/blob/main/packages/python/goldenmatch-kg/README.md) plugs GoldenMatch into neo4j-graphrag / LlamaIndex / Graphiti; [`goldengraph`](https://github.com/benseverndev-oss/goldenmatch/blob/main/packages/python/goldengraph/README.md) builds a knowledge graph from text with that resolution at its core. Both in early access.
+
 <br>
 
 <!-- Packages -->

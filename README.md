@@ -7,6 +7,8 @@
 
 *The headline package, **GoldenMatch**, does the matching — fuzzy + exact + probabilistic (Fellegi-Sunter) + LLM — and **beats hand-tuned Splink out of the box** (96.4% F1 on DBLP-ACM), identical in Python, edge-safe TypeScript, and SQL. Around it sits a full data-quality suite: GoldenCheck profiles, GoldenFlow standardizes, GoldenAnalysis reports, GoldenPipe orchestrates, and InferMap maps schemas — with a Rust extension layer for Postgres / DuckDB and optional WebAssembly acceleration behind the TS ports.*
 
+**🕸️ Made for GraphRAG, too** — entity resolution is the stage knowledge-graph pipelines do *worst* (the same entity scatters across documents as duplicate surface forms). GoldenMatch drops into **neo4j-graphrag / LlamaIndex / Graphiti** as the resolution stage ([`goldenmatch-kg`](packages/python/goldenmatch-kg/README.md)), or builds a knowledge graph straight from text with that resolution at its core ([`goldengraph`](packages/python/goldengraph/README.md)). Both in early access. [→ Knowledge graphs](#knowledge-graphs)
+
 **⚡ Verified at scale: 100,000,000 records deduped in 9.2 min on a Ray cluster — recall-complete across any partitioning, 0.36 GB driver footprint.**
 
 <br>
