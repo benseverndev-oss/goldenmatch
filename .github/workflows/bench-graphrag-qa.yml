@@ -624,7 +624,7 @@ jobs:
         # max_questions sizes the corpus; use a SMALL value for a local Ollama run (CPU per-doc extract).
         run: |
           python -m erkgbench.qa_e2e.run_extraction_eval \
-            --configs api_json,api_nojson,rebel \
+            --configs api_json,api_schema \
             --n-questions "${{ inputs.max_questions }}" --ambiguity 0.6 \
             --out-md EXTRACTION_F1.md
       - name: Upload EXTRACTION_F1.md

@@ -16,9 +16,13 @@ _REL = ("rel_tp", "rel_fp", "rel_fn")
 
 
 def _norm(s) -> str:
+    # Bridge underscore vs space FIRST: the gold schema labels are underscored (`works_at`) but models
+    # emit spaced (`works at`), and metrics._normalize deletes the underscore (-> `worksat`) rather than
+    # spacing it -- which would unfairly miss a SEMANTICALLY correct predicate. Replacing `_`->space
+    # makes the predicate metric measure real label agreement, not a formatting artifact.
     from . import metrics
 
-    return metrics._normalize(str(s))
+    return metrics._normalize(str(s).replace("_", " "))
 
 
 def predicate_counts(gold_src: str, gold_dst: str, gold_rel: str, extraction) -> dict:
