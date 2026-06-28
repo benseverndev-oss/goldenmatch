@@ -1,2 +1,3 @@
 # distill datasets + trained artifacts are not committed
 data/
+modal_*.log
