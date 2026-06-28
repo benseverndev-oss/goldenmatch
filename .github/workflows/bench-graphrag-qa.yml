@@ -109,6 +109,11 @@ jobs:
             -m packages/rust/extensions/goldenprofile-native/Cargo.toml --out dist
           python -m pip install dist/*.whl
           python -m pip install --no-deps -e packages/python/goldengraph
+          # Overlay the REPO goldenmatch (pure-Python) so THIS branch's OPENAI_BASE_URL embedding
+          # change is the one that runs -- the PyPI goldenmatch above lacks it, so a local_llm run's
+          # embeddings would otherwise hit api.openai.com with the dummy key (401). The native kernel
+          # still comes from the goldenmatch-native wheel pulled by the PyPI install.
+          python -m pip install --no-deps -e packages/python/goldenmatch
           # In-house local-extractor prototype-eval deps (only when selected via opts).
           if [ "${GOLDENGRAPH_EXTRACTOR:-api}" != "api" ]; then
             python -m pip install transformers torch
