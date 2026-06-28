@@ -2,6 +2,10 @@
 # Opt-in (workflow_dispatch only): real LLM, hard cost cap. NOT ci-required.
 # Each engine x ambiguity is its own budget-capped, independently-timed job (matrix);
 # the `aggregate` job merges every run into the RESULTS_QA_E2E.md headline + decay curve.
+#
+# INPUT BUDGET: GitHub caps workflow_dispatch at 10 inputs. The many per-engine tuning
+# knobs are consolidated into one `opts` passthrough (newline KEY=VALUE -> env), and the
+# run-mode toggles into one `mode` enum, to stay under the cap. See `opts` below for keys.
 name: bench-graphrag-qa
 
 on:
@@ -11,107 +15,29 @@ on:
         description: "engineered | musique"
         default: "engineered"
       max_questions:
-        description: "questions to run"
+        description: "questions to run (use a SMALL value ~12 for a local_llm run -- CPU inference is slow)"
         default: "300"
-      use_local_llm:
-        description: "goldengraph: run against a LOCAL Ollama OSS model (no OpenAI key, non-gating). Use a SMALL max_questions (~12) on the first run -- CPU inference is slow."
-        type: boolean
-        default: false
-      local_chat_model:
-        description: "Ollama chat model when use_local_llm=true"
-        default: "qwen2.5:7b-instruct"
-      local_embed_model:
-        description: "Ollama embedding model when use_local_llm=true"
-        default: "nomic-embed-text"
       ambiguity:
         description: "comma-separated engineered ambiguity sweep (the decay curve)"
         default: "0.0,0.25,0.5,0.75,1.0"
+      engine:
+        description: "all | goldengraph | lightrag | ms_graphrag | graphiti | text_rag | goldenmatch_rag | goldenmatch_entity_rag (head_to_head mode only)"
+        default: "all"
+      mode:
+        description: "head_to_head (engine matrix) | scorecard | aggregation_llm | temporal_llm | kg_capability | router_capability"
+        default: "head_to_head"
       budget_usd:
         description: "hard cost cap per (engine, ambiguity) run"
         default: "25"
-      run_scorecard:
-        description: "run the Phase-2 real-LLM scorecard (extraction-F1 + synthesis-given-gold + answer-match ablation) instead of the head-to-head"
-        default: "false"
-      scorecard_budget_usd:
-        description: "scorecard only: hard USD cap for the whole scorecard run"
-        default: "2"
-      run_aggregation_llm:
-        description: "run the slice-B1 real-LLM RAG aggregation floor (realistic confirmation of the deterministic gate)"
-        default: "false"
-      run_temporal_llm:
-        description: "run the slice-B2 real-LLM RAG temporal floor (realistic confirmation of the deterministic gate)"
-        default: "false"
-      run_kg_capability:
-        description: "Slice D: real-framework aggregation confirmation (LightRAG/MS-GraphRAG/Graphiti)"
-        default: "false"
-      run_router_capability:
-        description: "Query-router slice 1: real-LLM auto-vs-local answer-match on aggregation questions"
-        default: "false"
-      engine:
-        description: "all | goldengraph | lightrag | ms_graphrag | graphiti | text_rag | goldenmatch_rag | goldenmatch_entity_rag"
-        default: "all"
-      text_rag_top_k:
-        description: "text_rag only: passages retrieved per question (the naive-RAG no-KG baseline's context budget)"
-        default: "10"
-      goldenmatch_rag_top_k:
-        description: "goldenmatch_rag / goldenmatch_entity_rag only: records retrieved per question via goldenmatch's own retrieval surface"
-        default: "10"
-      trace:
-        description: "goldengraph only: localize where each answer is lost (extraction/retrieval/synthesis)"
-        default: "false"
-      trace_limit:
-        description: "goldengraph only: how many questions the localize trace inspects (0 = all; bigger = real SCORING-vs-RECALL shatter distribution)"
-        default: "10"
-      cross_doc_link:
-        description: "goldengraph only: enable cross-document entity linking (merge bridge entities across paragraphs)"
-        default: "false"
-      link_threshold:
-        description: "goldengraph only: embedding cosine cutoff for cross-doc linking (lower = more merging)"
-        default: "0.82"
-      profile_link:
-        description: "goldengraph only: use the goldenprofile anti-shatter engine as the cross-doc matcher (needs cross_doc_link=true)"
-        default: "false"
-      profile_merge_threshold:
-        description: "goldengraph only: goldenprofile merge threshold (engine ScoreConfig default 0.72)"
-        default: "0.72"
-      build_workers:
-        description: "goldengraph only: concurrent per-doc LLM workers at build (rate-limit-bounded; retry/backoff absorbs 429s)"
-        # 12, not 8: the N=50 build-debug showed wall/summed-extract ~= 8x at 8
-        # workers (near-linear, not saturated), so more concurrency still buys
-        # overlap; the adapter's exp-backoff retry absorbs the extra 429 pressure.
-        # The library default stays 8 for arbitrary users on tight RPM tiers; this
-        # only raises it for the bench account, which tolerates it.
-        default: "12"
-      build_debug:
-        description: "goldengraph only: print the per-sub-step build timing breakdown (extract/resolve/fingerprint/link/append) for hotspot analysis"
-        default: "false"
-      extractor:
-        description: "goldengraph only: document extractor -- api (LLM) | rebel | gliner (in-house local model prototype-eval)"
-        default: "api"
-      retrieval_hops:
-        description: "goldengraph only: answer-time ball hop depth (RETRIEVAL-BUDGET sweep)"
-        default: "6"
-      retrieval_node_budget:
-        description: "goldengraph only: max entities in the answer ball (RETRIEVAL-BUDGET sweep; bigger = more reach + cost)"
-        default: "256"
-      goldengraph_qa_mode:
-        description: "goldengraph only: answer retrieval mode -- local (entity-graph BFS) | hybrid (BFS + goldenmatch passage retrieval fed to synthesis)"
-        default: "local"
-      goldengraph_passage_k:
-        description: "goldengraph hybrid only: raw passages retrieved per question (matches text_rag/goldenmatch_rag context budget)"
-        default: "10"
-      goldengraph_hybrid_filter:
-        description: "goldengraph hybrid only: subgraph relevance filter -- none (full ball) | path (keep seeds + anchor-to-anchor paths + 1-hop halo)"
-        default: "none"
-      distill_log:
-        description: "goldengraph only: capture (text->extraction)+(entity->fingerprint) pairs to a JSONL artifact for in-house distillation"
-        default: "false"
-      literal_attrs:
-        description: "goldengraph only: capture literal attribute values (dates/quantities/amounts) as typed leaf nodes so the graph can answer non-entity questions"
-        default: "false"
       judge:
-        description: "ALL engines: also score a format-fair LLM-judge answer-equivalence metric (fixed gpt-4o-mini judge) so terse vs verbose answers compare fairly"
+        description: "also score a format-fair LLM-judge answer-equivalence metric (fixed gpt-4o-mini judge)"
         default: "true"
+      local_llm:
+        description: "goldengraph: run against a LOCAL Ollama OSS chat model (e.g. qwen2.5:7b-instruct). EMPTY = use the OpenAI API. No key needed; non-gating. Embed model via opts LOCAL_EMBED_MODEL (default nomic-embed-text)."
+        default: ""
+      opts:
+        description: "newline KEY=VALUE passthrough -> env (overrides the baked bench defaults). Keys: GOLDENGRAPH_QA_MODE(local|hybrid) GOLDENGRAPH_HYBRID_FILTER(none|path) GOLDENGRAPH_QA_PASSAGE_K GOLDENGRAPH_QA_RETRIEVAL_HOPS GOLDENGRAPH_QA_NODE_BUDGET GOLDENGRAPH_CROSS_DOC_LINK GOLDENGRAPH_LINK_THRESHOLD GOLDENGRAPH_PROFILE_LINK GOLDENGRAPH_PROFILE_MERGE_THRESHOLD GOLDENGRAPH_BUILD_WORKERS GOLDENGRAPH_BUILD_DEBUG GOLDENGRAPH_EXTRACTOR(api|rebel|gliner) GOLDENGRAPH_LITERAL_ATTRS GOLDENGRAPH_QA_TRACE GOLDENGRAPH_QA_TRACE_LIMIT GOLDENGRAPH_DISTILL_LOG(1) TEXT_RAG_TOP_K GOLDENMATCH_RAG_TOP_K SCORECARD_BUDGET_USD LOCAL_EMBED_MODEL"
+        default: ""
 
 permissions:
   contents: read
@@ -134,7 +60,7 @@ jobs:
 
   goldengraph:
     needs: setup
-    if: ${{ inputs.engine == 'all' || inputs.engine == 'goldengraph' }}
+    if: ${{ inputs.mode == 'head_to_head' && (inputs.engine == 'all' || inputs.engine == 'goldengraph') }}
     runs-on: large-new-64GB
     # Large-N MuSiQue builds a graph from ~20 docs/question sequentially (per-doc LLM
     # extraction + fingerprint synthesis), so N=200 (~4000 docs) needs hours, not the
@@ -150,6 +76,29 @@ jobs:
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
         with:
           python-version: "3.12"
+      - name: Resolve bench env (baked defaults, then opts override)
+        # opts lines are appended AFTER the defaults, so a duplicate KEY in opts wins
+        # (GITHUB_ENV = last assignment wins). Only well-formed KEY=VALUE lines pass.
+        env:
+          OPTS: ${{ inputs.opts }}
+        run: |
+          {
+            echo "GOLDENGRAPH_BUILD_WORKERS=12"
+            echo "GOLDENGRAPH_QA_TRACE_LIMIT=10"
+            echo "GOLDENGRAPH_LINK_THRESHOLD=0.82"
+            echo "GOLDENGRAPH_PROFILE_MERGE_THRESHOLD=0.72"
+            echo "GOLDENGRAPH_QA_RETRIEVAL_HOPS=6"
+            echo "GOLDENGRAPH_QA_NODE_BUDGET=256"
+            echo "GOLDENGRAPH_QA_MODE=local"
+            echo "GOLDENGRAPH_QA_PASSAGE_K=10"
+            echo "GOLDENGRAPH_HYBRID_FILTER=none"
+            echo "GOLDENGRAPH_EXTRACTOR=api"
+            echo "TEXT_RAG_TOP_K=10"
+            echo "GOLDENMATCH_RAG_TOP_K=10"
+            echo "SCORECARD_BUDGET_USD=2"
+            echo "LOCAL_EMBED_MODEL=nomic-embed-text"
+            printf '%s\n' "$OPTS"
+          } | grep -E '^[A-Za-z_][A-Za-z0-9_]*=' >> "$GITHUB_ENV"
       - name: Install goldenmatch + native engine wheel + goldengraph + datasets
         run: |
           python -m pip install --upgrade pip maturin pytest goldenmatch datasets openai
@@ -160,51 +109,38 @@ jobs:
             -m packages/rust/extensions/goldenprofile-native/Cargo.toml --out dist
           python -m pip install dist/*.whl
           python -m pip install --no-deps -e packages/python/goldengraph
-          # In-house local-extractor prototype-eval deps (only when selected).
-          if [ "${{ inputs.extractor }}" != "api" ]; then
+          # In-house local-extractor prototype-eval deps (only when selected via opts).
+          if [ "${GOLDENGRAPH_EXTRACTOR:-api}" != "api" ]; then
             python -m pip install transformers torch
-            if [ "${{ inputs.extractor }}" = "gliner" ]; then python -m pip install gliner; fi
+            if [ "${GOLDENGRAPH_EXTRACTOR}" = "gliner" ]; then python -m pip install gliner; fi
           fi
       - name: Start local OSS LLM (Ollama)
         # Free, key-free real-LLM path: an OpenAI-compatible server in the runner. The goldengraph
         # OpenAIClient honors OPENAI_BASE_URL automatically; the embedding provider honors it too
         # (this lane's goldenmatch change). Non-gating -- the deterministic gates stay the signal.
-        if: ${{ inputs.use_local_llm }}
+        if: ${{ inputs.local_llm != '' }}
         run: |
           curl -fsSL https://ollama.com/install.sh | sh
           ollama serve > ollama.log 2>&1 &
           for i in $(seq 1 30); do curl -sf http://localhost:11434/api/version && break || sleep 2; done
-          ollama pull "${{ inputs.local_chat_model }}"
-          ollama pull "${{ inputs.local_embed_model }}"
-
+          ollama pull "${{ inputs.local_llm }}"
+          ollama pull "$LOCAL_EMBED_MODEL"
       - name: Run goldengraph end-to-end (real LLM, budget-capped)
         working-directory: packages/python/goldenmatch/benchmarks/er-kg-bench
         env:
-          # use_local_llm swaps the OpenAI API for the local Ollama server. Empty strings read as
-          # UNSET by the code (or-default), so the non-local path is byte-identical to before.
-          OPENAI_API_KEY: ${{ inputs.use_local_llm && 'ollama' || secrets.GOLDENGRAPH_OPENAI_API_KEY }}
-          OPENAI_BASE_URL: ${{ inputs.use_local_llm && 'http://localhost:11434/v1' || '' }}
-          OPENAI_MODEL: ${{ inputs.use_local_llm && inputs.local_chat_model || '' }}
-          OPENAI_EMBED_MODEL: ${{ inputs.use_local_llm && inputs.local_embed_model || '' }}
+          # local_llm (non-empty) swaps the OpenAI API for the local Ollama server. Empty strings
+          # read as UNSET by the code (or-default), so the non-local path is byte-identical to before.
+          OPENAI_API_KEY: ${{ inputs.local_llm != '' && 'ollama' || secrets.GOLDENGRAPH_OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ inputs.local_llm != '' && 'http://localhost:11434/v1' || '' }}
+          OPENAI_MODEL: ${{ inputs.local_llm }}
+          OPENAI_EMBED_MODEL: ${{ inputs.local_llm != '' && env.LOCAL_EMBED_MODEL || '' }}
           POLARS_SKIP_CPU_CHECK: "1"
-          GOLDENGRAPH_QA_TRACE: ${{ inputs.trace }}
-          GOLDENGRAPH_QA_TRACE_LIMIT: ${{ inputs.trace_limit }}
-          GOLDENGRAPH_CROSS_DOC_LINK: ${{ inputs.cross_doc_link }}
-          GOLDENGRAPH_LINK_THRESHOLD: ${{ inputs.link_threshold }}
-          GOLDENGRAPH_PROFILE_LINK: ${{ inputs.profile_link }}
-          GOLDENGRAPH_PROFILE_MERGE_THRESHOLD: ${{ inputs.profile_merge_threshold }}
-          GOLDENGRAPH_BUILD_WORKERS: ${{ inputs.build_workers }}
-          GOLDENGRAPH_BUILD_DEBUG: ${{ inputs.build_debug }}
-          GOLDENGRAPH_EXTRACTOR: ${{ inputs.extractor }}
-          GOLDENGRAPH_LITERAL_ATTRS: ${{ inputs.literal_attrs }}
-          GOLDENGRAPH_QA_RETRIEVAL_HOPS: ${{ inputs.retrieval_hops }}
-          GOLDENGRAPH_QA_NODE_BUDGET: ${{ inputs.retrieval_node_budget }}
-          GOLDENGRAPH_QA_MODE: ${{ inputs.goldengraph_qa_mode }}
-          GOLDENGRAPH_QA_PASSAGE_K: ${{ inputs.goldengraph_passage_k }}
-          GOLDENGRAPH_HYBRID_FILTER: ${{ inputs.goldengraph_hybrid_filter }}
-          GOLDENGRAPH_DISTILL_LOG: ${{ inputs.distill_log == 'true' && format('results/distill_goldengraph_amb{0}.jsonl', matrix.ambiguity) || '' }}
         run: |
           mkdir -p results
+          # GOLDENGRAPH_DISTILL_LOG=1 in opts -> expand to the per-ambiguity artifact path.
+          if [ "${GOLDENGRAPH_DISTILL_LOG:-}" = "1" ] || [ "${GOLDENGRAPH_DISTILL_LOG:-}" = "true" ]; then
+            export GOLDENGRAPH_DISTILL_LOG="results/distill_goldengraph_amb${{ matrix.ambiguity }}.jsonl"
+          fi
           python -m erkgbench.qa_e2e.run_qa_e2e \
             --engine goldengraph \
             --corpus "${{ inputs.corpus }}" \
@@ -222,7 +158,7 @@ jobs:
           path: packages/python/goldenmatch/benchmarks/er-kg-bench/results/results_qa_e2e_goldengraph_amb${{ matrix.ambiguity }}*.*
           if-no-files-found: ignore
       - name: Upload distillation pairs
-        if: ${{ always() && inputs.distill_log == 'true' }}
+        if: ${{ always() && env.GOLDENGRAPH_DISTILL_LOG != '' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
         with:
           name: graphrag-distill-goldengraph-amb${{ matrix.ambiguity }}
@@ -231,7 +167,7 @@ jobs:
 
   lightrag:
     needs: setup
-    if: ${{ inputs.engine == 'all' || inputs.engine == 'lightrag' }}
+    if: ${{ inputs.mode == 'head_to_head' && (inputs.engine == 'all' || inputs.engine == 'lightrag') }}
     runs-on: large-new-64GB
     timeout-minutes: 60
     strategy:
@@ -270,7 +206,7 @@ jobs:
 
   text_rag:
     needs: setup
-    if: ${{ inputs.engine == 'all' || inputs.engine == 'text_rag' }}
+    if: ${{ inputs.mode == 'head_to_head' && (inputs.engine == 'all' || inputs.engine == 'text_rag') }}
     runs-on: ubuntu-latest  # no KG build -- just embeddings + chat; the light lane
     timeout-minutes: 60
     strategy:
@@ -282,6 +218,11 @@ jobs:
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
         with:
           python-version: "3.12"
+      - name: Resolve bench env (opts -> TEXT_RAG_TOP_K)
+        env:
+          OPTS: ${{ inputs.opts }}
+        run: |
+          { echo "TEXT_RAG_TOP_K=10"; printf '%s\n' "$OPTS"; } | grep -E '^[A-Za-z_][A-Za-z0-9_]*=' >> "$GITHUB_ENV"
       - name: Install text-RAG baseline deps (isolated)
         run: python -m pip install --upgrade pip pytest numpy goldenmatch datasets openai
       - name: Run text-RAG baseline end-to-end (real LLM, budget-capped)
@@ -289,7 +230,6 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.GOLDENGRAPH_OPENAI_API_KEY }}
           POLARS_SKIP_CPU_CHECK: "1"
-          TEXT_RAG_TOP_K: ${{ inputs.text_rag_top_k }}
         run: |
           python -m erkgbench.qa_e2e.run_qa_e2e \
             --engine text_rag \
@@ -310,7 +250,7 @@ jobs:
 
   goldenmatch_rag:
     needs: setup
-    if: ${{ inputs.engine == 'all' || inputs.engine == 'goldenmatch_rag' }}
+    if: ${{ inputs.mode == 'head_to_head' && (inputs.engine == 'all' || inputs.engine == 'goldenmatch_rag') }}
     runs-on: ubuntu-latest  # goldenmatch retrieval (embed + ANN), no KG build -- light lane
     timeout-minutes: 60
     strategy:
@@ -322,6 +262,11 @@ jobs:
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
         with:
           python-version: "3.12"
+      - name: Resolve bench env (opts -> GOLDENMATCH_RAG_TOP_K)
+        env:
+          OPTS: ${{ inputs.opts }}
+        run: |
+          { echo "GOLDENMATCH_RAG_TOP_K=10"; printf '%s\n' "$OPTS"; } | grep -E '^[A-Za-z_][A-Za-z0-9_]*=' >> "$GITHUB_ENV"
       - name: Install goldenmatch + datasets (isolated)
         run: python -m pip install --upgrade pip pytest numpy goldenmatch datasets openai
       - name: Run goldenmatch-RAG end-to-end (real LLM, budget-capped)
@@ -329,7 +274,6 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.GOLDENGRAPH_OPENAI_API_KEY }}
           POLARS_SKIP_CPU_CHECK: "1"
-          GOLDENMATCH_RAG_TOP_K: ${{ inputs.goldenmatch_rag_top_k }}
         run: |
           python -m erkgbench.qa_e2e.run_qa_e2e \
             --engine goldenmatch_rag \
@@ -350,7 +294,7 @@ jobs:
 
   goldenmatch_entity_rag:
     needs: setup
-    if: ${{ inputs.engine == 'all' || inputs.engine == 'goldenmatch_entity_rag' }}
+    if: ${{ inputs.mode == 'head_to_head' && (inputs.engine == 'all' || inputs.engine == 'goldenmatch_entity_rag') }}
     runs-on: ubuntu-latest  # goldenmatch entity-aware retrieval (retrieve -> dedupe -> canonicalize)
     timeout-minutes: 60
     strategy:
@@ -362,6 +306,11 @@ jobs:
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
         with:
           python-version: "3.12"
+      - name: Resolve bench env (opts -> GOLDENMATCH_RAG_TOP_K)
+        env:
+          OPTS: ${{ inputs.opts }}
+        run: |
+          { echo "GOLDENMATCH_RAG_TOP_K=10"; printf '%s\n' "$OPTS"; } | grep -E '^[A-Za-z_][A-Za-z0-9_]*=' >> "$GITHUB_ENV"
       - name: Install goldenmatch + datasets (isolated)
         run: python -m pip install --upgrade pip pytest numpy goldenmatch datasets openai
       - name: Run goldenmatch entity-aware RAG end-to-end (real LLM, budget-capped)
@@ -369,7 +318,6 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.GOLDENGRAPH_OPENAI_API_KEY }}
           POLARS_SKIP_CPU_CHECK: "1"
-          GOLDENMATCH_RAG_TOP_K: ${{ inputs.goldenmatch_rag_top_k }}
         run: |
           python -m erkgbench.qa_e2e.run_qa_e2e \
             --engine goldenmatch_entity_rag \
@@ -390,7 +338,7 @@ jobs:
 
   ms_graphrag:
     needs: setup
-    if: ${{ inputs.engine == 'all' || inputs.engine == 'ms_graphrag' }}
+    if: ${{ inputs.mode == 'head_to_head' && (inputs.engine == 'all' || inputs.engine == 'ms_graphrag') }}
     runs-on: large-new-64GB
     timeout-minutes: 90  # MS-GraphRAG indexing is the long pole
     strategy:
@@ -430,7 +378,7 @@ jobs:
 
   graphiti:
     needs: setup
-    if: ${{ inputs.engine == 'all' || inputs.engine == 'graphiti' }}
+    if: ${{ inputs.mode == 'head_to_head' && (inputs.engine == 'all' || inputs.engine == 'graphiti') }}
     runs-on: large-new-64GB
     timeout-minutes: 60
     strategy:
@@ -476,7 +424,7 @@ jobs:
 
   aggregate:
     needs: [goldengraph, lightrag, ms_graphrag, graphiti, text_rag, goldenmatch_rag, goldenmatch_entity_rag]
-    if: ${{ always() }}
+    if: ${{ always() && inputs.mode == 'head_to_head' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
@@ -511,9 +459,8 @@ jobs:
           if-no-files-found: ignore
 
   scorecard:
-    # Opt-in real-LLM confirmation rows (NON-gating): Phase-2 scorecard
-    # (run_scorecard) and/or the slice-B1 RAG aggregation floor (run_aggregation_llm).
-    if: ${{ inputs.run_scorecard == 'true' || inputs.run_aggregation_llm == 'true' || inputs.run_temporal_llm == 'true' || inputs.run_kg_capability == 'true' || inputs.run_router_capability == 'true' }}
+    # Opt-in real-LLM confirmation rows (NON-gating), selected by `mode`. One mode per dispatch.
+    if: ${{ inputs.mode != 'head_to_head' }}
     runs-on: large-new-64GB
     timeout-minutes: 120
     steps:
@@ -522,6 +469,11 @@ jobs:
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
         with:
           python-version: "3.12"
+      - name: Resolve bench env (opts -> SCORECARD_BUDGET_USD)
+        env:
+          OPTS: ${{ inputs.opts }}
+        run: |
+          { echo "SCORECARD_BUDGET_USD=2"; printf '%s\n' "$OPTS"; } | grep -E '^[A-Za-z_][A-Za-z0-9_]*=' >> "$GITHUB_ENV"
       - name: Install goldenmatch + native engine wheel + goldengraph + datasets
         run: |
           python -m pip install --upgrade pip maturin pytest goldenmatch datasets openai
@@ -530,7 +482,7 @@ jobs:
           python -m pip install dist/*.whl
           python -m pip install --no-deps -e packages/python/goldengraph
       - name: Run the real-LLM scorecard (budget-capped, opt-in)
-        if: ${{ inputs.run_scorecard == 'true' }}
+        if: ${{ inputs.mode == 'scorecard' }}
         working-directory: packages/python/goldenmatch/benchmarks/er-kg-bench
         env:
           OPENAI_API_KEY: ${{ secrets.GOLDENGRAPH_OPENAI_API_KEY }}
@@ -538,17 +490,17 @@ jobs:
         run: |
           python -m erkgbench.qa_e2e.run_scorecard \
             --seed 7 --n-questions 60 --ambiguity 0.6 \
-            --budget-usd "${{ inputs.scorecard_budget_usd }}" \
+            --budget-usd "$SCORECARD_BUDGET_USD" \
             --out-md SCORECARD.md
       - name: Upload SCORECARD.md
-        if: ${{ always() && inputs.run_scorecard == 'true' }}
+        if: ${{ always() && inputs.mode == 'scorecard' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
         with:
           name: graphrag-qa-scorecard
           path: packages/python/goldenmatch/benchmarks/er-kg-bench/SCORECARD.md
           if-no-files-found: ignore
       - name: Run the real-LLM RAG aggregation floor (slice B1, opt-in)
-        if: ${{ inputs.run_aggregation_llm == 'true' }}
+        if: ${{ inputs.mode == 'aggregation_llm' }}
         working-directory: packages/python/goldenmatch/benchmarks/er-kg-bench
         env:
           OPENAI_API_KEY: ${{ secrets.GOLDENGRAPH_OPENAI_API_KEY }}
@@ -559,17 +511,17 @@ jobs:
         run: |
           python -m erkgbench.qa_e2e.run_aggregation \
             --seed 7 --n-anchors 60 --ambiguity 0.6 --passage-k 10 \
-            --with-llm --budget-usd "${{ inputs.scorecard_budget_usd }}" \
+            --with-llm --budget-usd "$SCORECARD_BUDGET_USD" \
             --out-md AGGREGATION_LLM.md || true
       - name: Upload AGGREGATION_LLM.md
-        if: ${{ always() && inputs.run_aggregation_llm == 'true' }}
+        if: ${{ always() && inputs.mode == 'aggregation_llm' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
         with:
           name: graphrag-qa-aggregation-llm
           path: packages/python/goldenmatch/benchmarks/er-kg-bench/AGGREGATION_LLM.md
           if-no-files-found: ignore
       - name: Run the real-LLM RAG temporal floor (slice B2, opt-in)
-        if: ${{ inputs.run_temporal_llm == 'true' }}
+        if: ${{ inputs.mode == 'temporal_llm' }}
         working-directory: packages/python/goldenmatch/benchmarks/er-kg-bench
         env:
           OPENAI_API_KEY: ${{ secrets.GOLDENGRAPH_OPENAI_API_KEY }}
@@ -579,16 +531,17 @@ jobs:
         run: |
           python -m erkgbench.qa_e2e.run_temporal \
             --seed 7 --n-facts 40 --ambiguity 0.6 \
-            --with-llm --budget-usd "${{ inputs.scorecard_budget_usd }}" \
+            --with-llm --budget-usd "$SCORECARD_BUDGET_USD" \
             --out-md TEMPORAL_LLM.md || true
       - name: Upload TEMPORAL_LLM.md
-        if: ${{ always() && inputs.run_temporal_llm == 'true' }}
+        if: ${{ always() && inputs.mode == 'temporal_llm' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
         with:
           name: graphrag-qa-temporal-llm
           path: packages/python/goldenmatch/benchmarks/er-kg-bench/TEMPORAL_LLM.md
+          if-no-files-found: ignore
       - name: Real-framework KG capability confirmation (slice D, opt-in)
-        if: ${{ inputs.run_kg_capability == 'true' }}
+        if: ${{ inputs.mode == 'kg_capability' }}
         working-directory: packages/python/goldenmatch/benchmarks/er-kg-bench
         env:
           OPENAI_API_KEY: ${{ secrets.GOLDENGRAPH_OPENAI_API_KEY }}
@@ -600,17 +553,17 @@ jobs:
         run: |
           python -m erkgbench.qa_e2e.run_kg_scorecard \
             --seed 7 --n-questions 80 --n-anchors 60 --ambiguity 0.6 \
-            --with-frameworks --budget-usd "${{ inputs.scorecard_budget_usd }}" \
+            --with-frameworks --budget-usd "$SCORECARD_BUDGET_USD" \
             --out-md KG_SCORECARD.md --frameworks-out-md KG_SCORECARD_FRAMEWORKS.md || true
       - name: Upload KG_SCORECARD_FRAMEWORKS.md
-        if: ${{ always() && inputs.run_kg_capability == 'true' }}
+        if: ${{ always() && inputs.mode == 'kg_capability' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
         with:
           name: graphrag-qa-kg-frameworks
           path: packages/python/goldenmatch/benchmarks/er-kg-bench/KG_SCORECARD_FRAMEWORKS.md
           if-no-files-found: ignore
       - name: Query-router auto-vs-local confirmation (slice 1, opt-in)
-        if: ${{ inputs.run_router_capability == 'true' }}
+        if: ${{ inputs.mode == 'router_capability' }}
         working-directory: packages/python/goldenmatch/benchmarks/er-kg-bench
         env:
           OPENAI_API_KEY: ${{ secrets.GOLDENGRAPH_OPENAI_API_KEY }}
@@ -621,13 +574,12 @@ jobs:
         run: |
           python -m erkgbench.qa_e2e.run_router_eval \
             --seed 7 --n-anchors 60 \
-            --with-llm --budget-usd "${{ inputs.scorecard_budget_usd }}" \
+            --with-llm --budget-usd "$SCORECARD_BUDGET_USD" \
             --out-md ROUTER.md --llm-out-md ROUTER_LLM.md || true
       - name: Upload ROUTER_LLM.md
-        if: ${{ always() && inputs.run_router_capability == 'true' }}
+        if: ${{ always() && inputs.mode == 'router_capability' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
         with:
           name: graphrag-qa-router-llm
           path: packages/python/goldenmatch/benchmarks/er-kg-bench/ROUTER_LLM.md
-          if-no-files-found: ignore
           if-no-files-found: ignore
