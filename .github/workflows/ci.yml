@@ -64,6 +64,7 @@ jobs:
       duckdb_extensions: ${{ steps.filter.outputs.duckdb_extensions }}
       native: ${{ steps.filter.outputs.native }}
       goldencheck_native: ${{ steps.filter.outputs.goldencheck_native }}
+      goldenprofile_native: ${{ steps.filter.outputs.goldenprofile_native }}
       analysis_native: ${{ steps.filter.outputs.analysis_native }}
       native_flow: ${{ steps.filter.outputs.native_flow }}
       goldenembed: ${{ steps.filter.outputs.goldenembed }}
@@ -331,6 +332,20 @@ jobs:
               # them must re-run the native suggest e2e (parity + cost short-circuit).
               - 'packages/python/goldenmatch/goldenmatch/core/suggest/**'
               - 'packages/python/goldenmatch/tests/test_healer_default_e2e_native.py'
+            goldenprofile_native:
+              # Builds the goldenprofile_native maturin wheel and runs the
+              # Python<->WASM cross-parity test (which SKIPS without the wheel) —
+              # so the goldenprofile kernel's Python boundary is actually tested
+              # in CI (issue #1304). The fixtures are authored from the host
+              # kernel, so this closes the Python == WASM loop.
+              - 'packages/rust/extensions/goldenprofile-native/**'
+              - 'packages/rust/extensions/goldenprofile-core/**'
+              - 'packages/rust/extensions/graph-core/**'
+              - 'packages/rust/extensions/score-core/**'
+              - 'packages/rust/extensions/sketch-core/**'
+              - 'packages/rust/extensions/fingerprint-core/**'
+              - 'packages/python/goldengraph/tests/test_goldenprofile_wasm_crossparity.py'
+              - 'packages/typescript/goldenprofile/tests/parity/fixtures/goldenprofile/**'
             goldencheck_native:
               # GoldenCheck's native acceleration ext (PyO3), a standalone
               # workspace like goldenmatch's `native`. Builds the .so and runs the
@@ -1550,6 +1565,36 @@ jobs:
   # this lane the goldencheck kernels would be UNTESTED in CI. Parity asserts the
   # native path matches pure-Python (Benford byte-identical; composite-key/FD
   # integer-exact), incl. a GOLDENCHECK_NATIVE=1 required-mode run.
+  goldenprofile_native:
+    needs: changes
+    if: needs.changes.outputs.goldenprofile_native == 'true' || needs.changes.outputs.force_all == 'true'
+    # Builds the standalone goldenprofile_native maturin wheel (abi3) and runs
+    # the Python<->WASM cross-parity test un-skipped (issue #1304). The wheel is
+    # its own [workspace] (not a uv member), so build it directly with maturin.
+    # The fixtures are authored from the host kernel, so this closes the loop:
+    # Python (native wheel) == the fixtures == WASM (the TS parity lane).
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/goldenprofile-native
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: test (goldenprofile-core, pyo3-free kernel)
+        working-directory: packages/rust/extensions/goldenprofile-core
+        run: cargo test
+      - name: Build + install the goldenprofile_native wheel (maturin, abi3)
+        run: |
+          pip install maturin pytest
+          maturin build -m packages/rust/extensions/goldenprofile-native/Cargo.toml --release --out dist
+          pip install dist/goldenprofile_native*.whl
+      - name: Python <-> WASM cross-parity (wheel present -> runs, not skips) [THE GATE]
+        run: pytest packages/python/goldengraph/tests/test_goldenprofile_wasm_crossparity.py -v
+
   goldencheck_native:
     needs: changes
     if: needs.changes.outputs.goldencheck_native == 'true' || needs.changes.outputs.force_all == 'true'
@@ -2546,6 +2591,7 @@ jobs:
       - duckdb_extensions
       - native
       - goldencheck_native
+      - goldenprofile_native
       - native_wheel
       - goldenembed
       - embed_wheel
