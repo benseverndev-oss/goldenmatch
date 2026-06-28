@@ -98,20 +98,27 @@ def trace_chain(slice_graph, anchor_surface: str, relation_chain) -> str | None:
         id_to_name = {e["entity_id"]: e["canonical_name"] for e in sub.get("entities", ())}
         out_edges = [e for e in sub.get("edges", ()) if e["subj"] in frontier and e["obj"] in id_to_name]
         nxt = {e["obj"] for e in out_edges if _rel_match(e["predicate"], rel)}
+        reversed_used = False
+        if not nxt:
+            # direction-tolerant fallback: the 7B extracts passive/locative phrasings ("X was authored
+            # by Y", "X is located in Y") with the edge pointing object->subject, opposite the forward
+            # walk. When no FORWARD edge matches, accept a REVERSED edge of the same relation and take
+            # its subject as the next node. Scoped (only fires when forward yields nothing) and safe in
+            # the engineered corpus (at most one edge per (entity, relation), so the reversed edge is
+            # the same semantic link extracted backwards). Measured: 6 of 8 hop-1 walk deaths.
+            in_edges = [e for e in sub.get("edges", ())
+                        if e["obj"] in frontier and e["subj"] in id_to_name]
+            nxt = {e["subj"] for e in in_edges if _rel_match(e["predicate"], rel)}
+            reversed_used = bool(nxt)
         if dbg:
             avail = sorted({_norm_rel(e["predicate"]) for e in out_edges})
-            print(f"[chain] hop{hop} rel={rel!r} frontier={len(frontier)} matched={len(nxt)} "
+            tag = " REVERSED-FALLBACK" if reversed_used else ""
+            print(f"[chain] hop{hop} rel={rel!r} frontier={len(frontier)} matched={len(nxt)}{tag} "
                   f"avail={avail[:8]}", flush=True)
         if not nxt:
             if dbg:
-                # direction probe: does the SAME relation exist pointing INTO the frontier? If so the
-                # edge was extracted with reversed subj/obj -> a direction bug, not a missing edge.
-                in_edges = [e for e in sub.get("edges", ())
-                            if e["obj"] in frontier and e["subj"] in id_to_name]
-                rev = sum(1 for e in in_edges if _rel_match(e["predicate"], rel))
-                in_avail = sorted({_norm_rel(e["predicate"]) for e in in_edges})
-                print(f"[chain] DIED at hop{hop}: no {rel!r} edge from frontier "
-                      f"| REVERSED {rel!r} in-edges={rev} in_avail={in_avail[:8]}", flush=True)
+                print(f"[chain] DIED at hop{hop}: no {rel!r} edge (either direction) from frontier",
+                      flush=True)
             return None
         # bridge the reached nodes across the under-merge so the NEXT hop sees the sibling's out-edges
         frontier = _bridge_surfaces(slice_graph, nxt, id_to_name)

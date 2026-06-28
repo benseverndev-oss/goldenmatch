@@ -90,3 +90,17 @@ def _split_graph():
 def test_trace_chain_bridges_under_merge():
     # Without surface bridging the walk strands on B(id1) (avail=[]); with it, it reaches C.
     assert trace_chain(_split_graph(), "A", ("acquired", "part of")) == "C"
+
+
+def _reversed_edge_graph():
+    """The 'authored' edge is extracted BACKWARDS: 'Paper authored-by Author' (subj=Paper, obj=Author)
+    instead of 'Author authored Paper'. The forward walk from the author finds no outgoing 'authored';
+    the direction-tolerant fallback takes the in-edge's subject (Paper) as the next node."""
+    ents = [{"entity_id": i, "canonical_name": n} for i, n in [(0, "Author"), (1, "Paper")]]
+    edges = [{"subj": 1, "predicate": "authored", "obj": 0}]  # Paper -authored-> Author (reversed)
+    return _StubGraph(ents, edges)
+
+
+def test_trace_chain_direction_tolerant_fallback():
+    # Forward walk finds no outgoing 'authored' from Author; reversed fallback reaches Paper.
+    assert trace_chain(_reversed_edge_graph(), "Author", ("authored",)) == "Paper"
