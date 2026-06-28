@@ -1,0 +1,309 @@
+{
+  "cases": [
+    {
+      "args": {
+        "edges": [
+          {
+            "obj": 0,
+            "predicate": "ceo_of",
+            "source_ref": "doc1",
+            "subj": 2
+          }
+        ],
+        "mentions": [
+          {
+            "name": "Apple Inc",
+            "typ": "Company"
+          },
+          {
+            "name": "Apple",
+            "typ": "Company"
+          },
+          {
+            "name": "Tim Cook",
+            "typ": "Person"
+          }
+        ],
+        "resolution": {
+          "0": 0,
+          "1": 0,
+          "2": 1
+        }
+      },
+      "expected": {
+        "edges": [
+          {
+            "obj": 0,
+            "predicate": "ceo_of",
+            "source_refs": [
+              "doc1"
+            ],
+            "subj": 1
+          }
+        ],
+        "entities": [
+          {
+            "canonical_name": "Apple Inc",
+            "entity_id": 0,
+            "members": [
+              0,
+              1
+            ],
+            "surface_names": [
+              "Apple",
+              "Apple Inc"
+            ],
+            "typ": "Company"
+          },
+          {
+            "canonical_name": "Tim Cook",
+            "entity_id": 1,
+            "members": [
+              2
+            ],
+            "surface_names": [
+              "Tim Cook"
+            ],
+            "typ": "Person"
+          }
+        ]
+      },
+      "fn": "build_graph",
+      "name": "build_graph_provided"
+    },
+    {
+      "args": {
+        "graph": {
+          "edges": [
+            {
+              "obj": 0,
+              "predicate": "ceo_of",
+              "source_refs": [
+                "doc1"
+              ],
+              "subj": 1
+            }
+          ],
+          "entities": [
+            {
+              "canonical_name": "Apple Inc",
+              "entity_id": 0,
+              "members": [
+                0,
+                1
+              ],
+              "surface_names": [
+                "Apple",
+                "Apple Inc"
+              ],
+              "typ": "Company"
+            },
+            {
+              "canonical_name": "Tim Cook",
+              "entity_id": 1,
+              "members": [
+                2
+              ],
+              "surface_names": [
+                "Tim Cook"
+              ],
+              "typ": "Person"
+            }
+          ]
+        },
+        "hops": 1,
+        "seeds": [
+          0
+        ]
+      },
+      "expected": {
+        "edges": [
+          {
+            "obj": 0,
+            "predicate": "ceo_of",
+            "source_refs": [
+              "doc1"
+            ],
+            "subj": 1
+          }
+        ],
+        "entities": [
+          {
+            "canonical_name": "Apple Inc",
+            "entity_id": 0,
+            "members": [
+              0,
+              1
+            ],
+            "surface_names": [
+              "Apple",
+              "Apple Inc"
+            ],
+            "typ": "Company"
+          },
+          {
+            "canonical_name": "Tim Cook",
+            "entity_id": 1,
+            "members": [
+              2
+            ],
+            "surface_names": [
+              "Tim Cook"
+            ],
+            "typ": "Person"
+          }
+        ]
+      },
+      "fn": "neighborhood",
+      "name": "neighborhood_e0_1hop"
+    },
+    {
+      "args": {
+        "graph": {
+          "edges": [
+            {
+              "obj": 0,
+              "predicate": "ceo_of",
+              "source_refs": [
+                "doc1"
+              ],
+              "subj": 1
+            }
+          ],
+          "entities": [
+            {
+              "canonical_name": "Apple Inc",
+              "entity_id": 0,
+              "members": [
+                0,
+                1
+              ],
+              "surface_names": [
+                "Apple",
+                "Apple Inc"
+              ],
+              "typ": "Company"
+            },
+            {
+              "canonical_name": "Tim Cook",
+              "entity_id": 1,
+              "members": [
+                2
+              ],
+              "surface_names": [
+                "Tim Cook"
+              ],
+              "typ": "Person"
+            }
+          ]
+        },
+        "name": "Apple"
+      },
+      "expected": [
+        0
+      ],
+      "fn": "seeds_by_name",
+      "name": "seeds_by_name_apple"
+    },
+    {
+      "args": {
+        "graph": {
+          "edges": [
+            {
+              "obj": 0,
+              "predicate": "ceo_of",
+              "source_refs": [
+                "doc1"
+              ],
+              "subj": 1
+            }
+          ],
+          "entities": [
+            {
+              "canonical_name": "Apple Inc",
+              "entity_id": 0,
+              "members": [
+                0,
+                1
+              ],
+              "surface_names": [
+                "Apple",
+                "Apple Inc"
+              ],
+              "typ": "Company"
+            },
+            {
+              "canonical_name": "Tim Cook",
+              "entity_id": 1,
+              "members": [
+                2
+              ],
+              "surface_names": [
+                "Tim Cook"
+              ],
+              "typ": "Person"
+            }
+          ]
+        }
+      },
+      "expected": [
+        {
+          "id": 0,
+          "members": [
+            0,
+            1
+          ]
+        }
+      ],
+      "fn": "communities",
+      "name": "communities_connected"
+    },
+    {
+      "args": {
+        "graph": {
+          "edges": [],
+          "entities": [
+            {
+              "canonical_name": "Acme",
+              "entity_id": 0,
+              "members": [
+                0
+              ],
+              "surface_names": [
+                "Acme"
+              ],
+              "typ": "Company"
+            },
+            {
+              "canonical_name": "Globex",
+              "entity_id": 1,
+              "members": [
+                1
+              ],
+              "surface_names": [
+                "Globex"
+              ],
+              "typ": "Company"
+            }
+          ]
+        }
+      },
+      "expected": [
+        {
+          "id": 0,
+          "members": [
+            0
+          ]
+        },
+        {
+          "id": 1,
+          "members": [
+            1
+          ]
+        }
+      ],
+      "fn": "communities",
+      "name": "communities_disconnected"
+    }
+  ]
+}
