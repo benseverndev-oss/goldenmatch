@@ -26,3 +26,14 @@ serde_json = "1"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
+
+[profile.release]
+opt-level = "s"   # optimize for small wasm size
+lto = true
+
+# wasm-opt (binaryen) is an extra size pass wasm-pack runs post-build; it
+# downloads a binaryen release at build time, unavailable in network-restricted
+# CI. opt-level="s"+lto already give a small wasm; disable the post-pass so the
+# build is hermetic (no network fetch).
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false
