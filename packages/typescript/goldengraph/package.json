@@ -1,6 +1,6 @@
 {
   "name": "goldengraph",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "GoldenGraph knowledge-graph engine — build / query / community over resolved entities. Edge-safe TypeScript surface over the same pyo3-free Rust kernel as the Python/C bindings, via opt-in WebAssembly.",
   "keywords": [
     "knowledge-graph",

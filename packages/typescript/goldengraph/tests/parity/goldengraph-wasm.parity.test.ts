@@ -17,14 +17,27 @@ import {
   neighborhood,
   seedsByName,
   communities,
+  appendBatch,
+  asOf,
+  history,
   type Graph,
   type Community,
+  type Snapshot,
+  type StoreBatch,
+  type HistoryEvent,
 } from "../../src/index.js";
 import { enableGoldengraphWasm } from "../../src/core/goldengraphWasm.js";
 
 interface Case {
   name: string;
-  fn: "build_graph" | "neighborhood" | "seeds_by_name" | "communities";
+  fn:
+    | "build_graph"
+    | "neighborhood"
+    | "seeds_by_name"
+    | "communities"
+    | "store_append"
+    | "store_as_of"
+    | "store_history";
   args: Record<string, unknown>;
   expected: unknown;
 }
@@ -85,6 +98,22 @@ describe("goldengraph wasm <-> host parity", () => {
         case "communities": {
           const got = communities(c.args.graph as Graph);
           expect(got).toEqual(c.expected as Community[]);
+          break;
+        }
+        case "store_append": {
+          const snap = c.args.snapshot === "" ? null : (c.args.snapshot as Snapshot);
+          const got = appendBatch(snap, c.args.batch as StoreBatch);
+          expect(got).toEqual(c.expected as Snapshot); // snapshot is deterministic
+          break;
+        }
+        case "store_as_of": {
+          const got = asOf(c.args.snapshot as Snapshot, c.args.valid_t as number, c.args.tx_t as number);
+          expect(canonGraph(got)).toEqual(canonGraph(c.expected as Graph));
+          break;
+        }
+        case "store_history": {
+          const got = history(c.args.snapshot as Snapshot, c.args.id as number);
+          expect(got).toEqual(c.expected as HistoryEvent[]);
           break;
         }
       }

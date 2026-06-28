@@ -14,6 +14,9 @@ import {
   neighborhood,
   seeds_by_name,
   communities,
+  store_append,
+  store_as_of,
+  store_history,
   initSync,
 } from "./_wasm/goldengraphWasmBindings.js";
 import { GOLDENGRAPH_WASM_BASE64 } from "./_wasm/goldengraphWasmBytes.js";
@@ -44,5 +47,9 @@ export function enableGoldengraphWasm(): void {
     neighborhood: (g, s, h) => neighborhood(g, s, h),
     seedsByName: (g, n) => seeds_by_name(g, n),
     communities: (g) => communities(g),
+    storeAppend: (s, b) => store_append(s, b),
+    // valid_t/tx_t/id are i64/u64 in the kernel -> wasm-bindgen wants BigInt.
+    storeAsOf: (s, v, t) => store_as_of(s, BigInt(v), BigInt(t)),
+    storeHistory: (s, id) => store_history(s, BigInt(id)),
   });
 }

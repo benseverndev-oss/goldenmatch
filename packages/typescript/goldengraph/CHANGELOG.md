@@ -2,6 +2,16 @@
 
 All notable changes to `goldengraph` are documented here.
 
+## [0.2.0] - 2026-06-28
+
+### Added
+- **Bitemporal store** surface: `appendBatch(snapshot, batch)`, `asOf(snapshot,
+  validT, txT)`, `history(snapshot, id)` — the kernel's `store_*` ops, over a
+  portable JSON snapshot. Types: `StoreBatch` / `BatchEntity` / `BatchEdge` /
+  `Snapshot` / `StoredEntity` / `StoredEdge` / `HistoryEvent`.
+- `goldenprofile -> goldengraph` composition helpers (`resolutionFromClusters`,
+  `mentionsFromProfiles`).
+
 ## [0.1.0] - 2026-06-28
 
 Initial release: edge-safe TypeScript surface for the GoldenGraph knowledge-graph engine (v1 — the 4 graph + query ops).

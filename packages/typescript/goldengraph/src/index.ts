@@ -14,8 +14,8 @@
  * The engine is the SAME pyo3-free Rust kernel (`goldengraph-core`) the Python
  * (`goldengraph_native`) and C bindings use — byte-identical by construction.
  *
- * v1 surfaces the 4 graph+query ops. The bitemporal store
- * (`store_append/as_of/history`) is in the kernel but not yet wired here.
+ * Surfaces the 4 graph+query ops plus the bitemporal store (`appendBatch` /
+ * `asOf` / `history`, re-exported from `./store.js`).
  */
 export {
   setGoldengraphWasmBackend,
@@ -31,6 +31,20 @@ export {
   mentionsFromProfiles,
   type ProfileLike,
 } from "./compose.js";
+
+// The bitemporal store surface (append / as-of / history).
+export {
+  appendBatch,
+  asOf,
+  history,
+  type BatchEntity,
+  type BatchEdge,
+  type StoreBatch,
+  type StoredEntity,
+  type StoredEdge,
+  type HistoryEvent,
+  type Snapshot,
+} from "./store.js";
 
 import { getGoldengraphWasmBackend } from "./core/goldengraphWasmBackend.js";
 

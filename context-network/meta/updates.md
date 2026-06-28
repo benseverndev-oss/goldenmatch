@@ -2,6 +2,15 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-06-28 — GoldenGraph TS: bitemporal store shipped (0.2.0)
+- The store deferred in [0029](../decisions/0029-goldengraph-wasm-ts.md) now ships:
+  `appendBatch` / `asOf` / `history` over a portable JSON `Snapshot` (the kernel's
+  `store_*` ops). Parity fixtures cover the append → as_of → history flow; 9 total
+  goldengraph parity cases. Also: the `goldenprofile → goldengraph` composition
+  helpers (`resolutionFromClusters` / `mentionsFromProfiles`) landed (#1306).
+- Gotcha recorded in 0029: wasm-bindgen maps the kernel's i64/u64 params to BigInt;
+  the public API takes `number` and converts at the boundary.
+
 ## 2026-06-28 — GoldenGraph (KG engine) on the TS/WASM surface (v1: graph+query)
 - New ADR [../decisions/0029-goldengraph-wasm-ts.md](../decisions/0029-goldengraph-wasm-ts.md):
   the GoldenGraph knowledge-graph engine gets a TS/JS surface via `goldengraph-wasm`

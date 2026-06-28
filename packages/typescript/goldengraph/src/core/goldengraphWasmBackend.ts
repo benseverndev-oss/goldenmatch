@@ -9,7 +9,7 @@
  * an actionable error (mirrors goldenprofile + Python's native-wheel requirement).
  */
 
-/** The 4 graph+query JSON boundaries the wasm kernel implements (one core). */
+/** The JSON boundaries the wasm kernel implements (one core). */
 export interface GoldengraphWasmBackend {
   /** `(mentions, edges, resolution) -> graph` JSON. */
   buildGraph(mentionsJson: string, edgesJson: string, resolutionJson: string): string;
@@ -19,6 +19,12 @@ export interface GoldengraphWasmBackend {
   seedsByName(graphJson: string, name: string): string;
   /** `(graph) -> communities` JSON. */
   communities(graphJson: string): string;
+  /** `(snapshot|"" , batch) -> snapshot` JSON (bitemporal store append). */
+  storeAppend(snapshotJson: string, batchJson: string): string;
+  /** `(snapshot, valid_t, tx_t) -> graph` JSON (bitemporal slice). */
+  storeAsOf(snapshotJson: string, validT: number, txT: number): string;
+  /** `(snapshot, id) -> history-events` JSON. */
+  storeHistory(snapshotJson: string, id: number): string;
 }
 
 let _backend: GoldengraphWasmBackend | null = null;
@@ -41,4 +47,16 @@ export function disableGoldengraphWasm(): void {
 /** True when the opt-in wasm backend is currently registered. */
 export function isGoldengraphWasmEnabled(): boolean {
   return _backend !== null;
+}
+
+/** The registered backend, or throw the actionable "enable wasm" error. */
+export function requireGoldengraphWasmBackend(): GoldengraphWasmBackend {
+  if (_backend === null) {
+    throw new Error(
+      "GoldenGraph requires the wasm backend. " +
+        'Import { enableGoldengraphWasm } from "goldengraph/wasm" and call it ' +
+        "once before any query.",
+    );
+  }
+  return _backend;
 }

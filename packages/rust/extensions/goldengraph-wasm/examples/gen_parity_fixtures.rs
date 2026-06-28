@@ -158,6 +158,77 @@ fn main() {
         "expected": serde_json::from_str::<Value>(&comms2).unwrap(),
     }));
 
+    // ---- Bitemporal store: append -> append(merge via record_key) -> as_of / history.
+    let be = |local_id: u32, name: &str, typ: &str, surf: Value, keys: Value| {
+        json!({"local_id": local_id, "canonical_name": name, "typ": typ,
+               "surface_names": surf, "record_keys": keys})
+    };
+    let bed = |s: u32, p: &str, o: u32, vf: i64, refs: Value| {
+        json!({"subj_local": s, "predicate": p, "obj_local": o,
+               "valid_from": vf, "valid_to": Value::Null, "source_refs": refs})
+    };
+    // Batch 1 @ t=100: Apple Inc + Tim Cook, one ceo_of edge.
+    let batch1 = json!({
+        "entities": [
+            be(0, "Apple Inc", "Company", json!(["Apple Inc"]), json!(["k_apple"])),
+            be(1, "Tim Cook", "Person", json!(["Tim Cook"]), json!(["k_tim"])),
+        ],
+        "edges": [bed(1, "ceo_of", 0, 100, json!(["doc1"]))],
+        "ingested_at": 100,
+    });
+    // Batch 2 @ t=200: same record_key k_apple, new surface "Apple".
+    let batch2 = json!({
+        "entities": [be(0, "Apple", "Company", json!(["Apple"]), json!(["k_apple"]))],
+        "edges": [],
+        "ingested_at": 200,
+    });
+
+    let snap1 = goldengraph_wasm::store_append_impl("", &serde_json::to_string(&batch1).unwrap())
+        .expect("append1");
+    let snap2 =
+        goldengraph_wasm::store_append_impl(&snap1, &serde_json::to_string(&batch2).unwrap())
+            .expect("append2");
+
+    cases.push(json!({
+        "name": "store_append_fresh",
+        "fn": "store_append",
+        "args": { "snapshot": "", "batch": batch1 },
+        "expected": serde_json::from_str::<Value>(&snap1).unwrap(),
+    }));
+    cases.push(json!({
+        "name": "store_append_merge",
+        "fn": "store_append",
+        "args": { "snapshot": serde_json::from_str::<Value>(&snap1).unwrap(), "batch": batch2 },
+        "expected": serde_json::from_str::<Value>(&snap2).unwrap(),
+    }));
+
+    // as_of the current view (valid + tx both after the last ingest).
+    let g_asof = goldengraph_wasm::store_as_of_impl(&snap2, 250, 250).expect("as_of");
+    cases.push(json!({
+        "name": "store_as_of_current",
+        "fn": "store_as_of",
+        "args": { "snapshot": serde_json::from_str::<Value>(&snap2).unwrap(), "valid_t": 250, "tx_t": 250 },
+        "expected": canon_graph(serde_json::from_str(&g_asof).unwrap()),
+    }));
+
+    // history of the first entity id in the snapshot.
+    let snap2v: Value = serde_json::from_str(&snap2).unwrap();
+    let first_id: u64 = snap2v["entities"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let hist = goldengraph_wasm::store_history_impl(&snap2, first_id).expect("history");
+    cases.push(json!({
+        "name": "store_history_first",
+        "fn": "store_history",
+        "args": { "snapshot": snap2v, "id": first_id },
+        "expected": serde_json::from_str::<Value>(&hist).unwrap(),
+    }));
+
     println!(
         "{}",
         serde_json::to_string_pretty(&json!({ "cases": cases })).unwrap()
