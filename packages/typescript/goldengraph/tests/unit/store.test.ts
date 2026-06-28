@@ -37,16 +37,20 @@ describe("goldengraph bitemporal store", () => {
     expect(snap.next_id).toBeGreaterThan(0);
   });
 
-  it("chained append + as-of reflects the merged record_key entity", () => {
+  it("chained append + as-of dedups by record_key (no duplicate entity)", () => {
     enableGoldengraphWasm();
     let snap = appendBatch(null, batch1);
-    snap = appendBatch(snap, batch2); // same k_apple -> merges into Apple Inc
+    snap = appendBatch(snap, batch2); // same k_apple -> updates entity 0, no new entity
 
     const graph = asOf(snap, 250, 250);
-    const apple = graph.entities.find((e) => e.surface_names.includes("Apple Inc"));
-    // the merge brought the "Apple" surface onto the same entity
-    expect(apple?.surface_names).toEqual(expect.arrayContaining(["Apple", "Apple Inc"]));
-    // Tim Cook + the CEO edge survive
+    // Still 2 entities: batch2's k_apple matched entity 0 (no duplicate added).
+    expect(graph.entities.length).toBe(2);
+    // The matched entity is updated to the latest batch (canonical "Apple",
+    // surfaces ["Apple"]) — the kernel is latest-wins, not a surface union.
+    const apple = graph.entities.find((e) => e.canonical_name === "Apple");
+    expect(apple).toBeDefined();
+    expect(apple?.surface_names).toEqual(["Apple"]);
+    // Tim Cook + the CEO edge survive.
     expect(graph.entities.some((e) => e.canonical_name === "Tim Cook")).toBe(true);
     expect(graph.edges.some((e) => e.predicate === "ceo_of")).toBe(true);
   });

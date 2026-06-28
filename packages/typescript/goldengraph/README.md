@@ -81,14 +81,16 @@ import { enableGoldengraphWasm } from "goldengraph/wasm";
 enableGoldengraphWasm();
 
 let snap = appendBatch(null, batch1);   // null opens a fresh store
-snap = appendBatch(snap, batch2);       // entities sharing a record_key merge
+snap = appendBatch(snap, batch2);       // entities sharing a record_key dedup
 
 const graph = asOf(snap, validTime, txTime);  // bitemporal slice
 const events = history(snap, entityId);        // [{ Merge: {...} } | { Split: {...} }]
 ```
 
-`record_keys` (e.g. `:h1:` fingerprints) match entities across batches; a match
-merges them and records a `Merge` history event.
+`record_keys` (e.g. `:h1:` fingerprints) match entities across batches: a match
+updates the existing entity in place (latest-wins on its attributes — no
+duplicate entity is created). `history(id)` returns an entity's merge/split
+events, which come from distinct-entity merges/splits, not from record_key dedup.
 
 ## Regenerating the wasm artifact
 
