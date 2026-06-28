@@ -581,7 +581,7 @@ def _detect_distributed_over_merge(
             f"merge across many medium clusters"
             + (f"; the run merged {pct} of records" if pct else "")
             + ". This is precision collapse spread thin enough that no single "
-            f"cluster looks oversized."
+            "cluster looks oversized."
         )
     else:
         title = "Records are grouped using a column with very few values"
