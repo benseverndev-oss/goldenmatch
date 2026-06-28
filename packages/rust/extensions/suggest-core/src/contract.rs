@@ -7,6 +7,7 @@ pub enum SuggestionKind {
     LowerThreshold,
     SwapScorer,
     AddNegativeEvidence,
+    DropMatchkey,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -21,6 +22,7 @@ pub enum ConfigPatch {
     SetThreshold { matchkey: String, value: f64 },
     SetScorer { matchkey: String, field: String, scorer: String },
     AddNegativeEvidence { field: String },
+    DropMatchkey { matchkey: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

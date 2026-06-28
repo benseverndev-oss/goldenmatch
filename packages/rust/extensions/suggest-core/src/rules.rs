@@ -1,7 +1,7 @@
 use crate::contract::*;
 use crate::diagnostics::{ColumnSignal, ScoreDiagnostics};
 
-const EVERYTHING_MATCHES: f64 = 0.90; // mirrors controller precision_collapse_floor
+pub(crate) const EVERYTHING_MATCHES: f64 = 0.90; // mirrors controller precision_collapse_floor
 const RECALL_RISK_BAND: f64 = 0.20; // fraction just-below to call recall risk
 const DIP_MIN_GAP: f64 = 0.05; // min |dip - threshold| before the dip suggestion fires
 const RECALL_STEP_DOWN: f64 = 0.05; // fixed lowering step for the recall-risk suggestion
@@ -219,6 +219,75 @@ pub fn negative_evidence_rule(signals: &[ColumnSignal]) -> Vec<Suggestion> {
     out
 }
 
+/// Returns a drop-matchkey suggestion when an over-broad `exact` matchkey on a
+/// DERIVED column is the likely over-merge source.
+///
+/// Fires only when ALL hold:
+///   1. `precision_collapsed` -- a thresholded matchkey shows the "everything
+///      matches" signal (mass_above > EVERYTHING_MATCHES), so raising a fuzzy
+///      threshold alone won't fix precision.
+///   2. There is an `exact` matchkey whose field is a DERIVED/internal column
+///      (name starts with `__`, e.g. the domain-extraction `__title_key__`).
+///      A normalized-key exact match is a blocking-grade signal masquerading as
+///      an identity claim; we NEVER target a user column.
+///   3. The config has >= 2 matchkeys, so dropping one still leaves recall
+///      coverage from the others.
+///
+/// The suggestion is deliberately aggressive (it removes a rule), so it relies
+/// on the caller's self-verify pass (apply -> re-run -> keep only if the
+/// unsupervised health proxy improves) as the safety net. Mirrors the
+/// DBLP-ACM finding (#1299) where an `exact __title_key__` matchkey collapsed
+/// precision and dropping it was the only lever that helped.
+pub fn drop_overmerge_matchkey_rule(
+    config: &ConfigSummary,
+    precision_collapsed: bool,
+) -> Vec<Suggestion> {
+    if !precision_collapsed || config.matchkeys.len() < 2 {
+        return Vec::new();
+    }
+    for mk in &config.matchkeys {
+        if mk.kind != "exact" {
+            continue;
+        }
+        // Only ever propose dropping an exact matchkey built on a DERIVED column
+        // (internal `__*__` name). A user's real identifier column is never touched.
+        let derived_field = mk
+            .fields
+            .iter()
+            .find(|f| f.field.starts_with("__") && f.field.ends_with("__"));
+        let Some(field) = derived_field else {
+            continue;
+        };
+        return vec![Suggestion {
+            id: format!("drop:{}", mk.name),
+            kind: SuggestionKind::DropMatchkey,
+            target: mk.name.clone(),
+            current_value: "exact matchkey present".into(),
+            proposed_value: "dropped".into(),
+            rationale: format!(
+                "Almost every pair is matching (precision looks collapsed), and the \
+                 `{}` matchkey is an exact match on the derived key `{}`. A normalized-key \
+                 exact match merges every record sharing that key regardless of other \
+                 fields, which over-merges. Dropping it lets the remaining matchkeys carry \
+                 recall; the change is re-run and kept only if cluster health improves.",
+                mk.name, field.field
+            ),
+            predicted_effect: PredictedEffect::PrecisionUp,
+            confidence: 0.6,
+            patch: ConfigPatch::DropMatchkey {
+                matchkey: mk.name.clone(),
+            },
+            evidence: serde_json::json!({
+                "matchkey": mk.name,
+                "derived_field": field.field,
+                "precision_collapsed": precision_collapsed,
+                "n_matchkeys": config.matchkeys.len(),
+            }),
+        }];
+    }
+    Vec::new()
+}
+
 fn round2(x: f64) -> f64 {
     (x * 100.0).round() / 100.0
 }
@@ -413,5 +482,72 @@ mod tests {
         let signals = vec![ne_signal("weak_field", 0.3, 0.8, 0.9, false)];
         let out = negative_evidence_rule(&signals);
         assert!(out.is_empty(), "low identity_score should not trigger NE");
+    }
+
+    // ---------------------------------------------------------------------------
+    // drop_overmerge_matchkey_rule helpers + tests
+    // ---------------------------------------------------------------------------
+
+    fn mk_summary(name: &str, kind: &str, field: &str) -> MatchkeySummary {
+        MatchkeySummary {
+            name: name.into(),
+            kind: kind.into(),
+            threshold: if kind == "exact" { None } else { Some(0.7) },
+            fields: vec![FieldSummary {
+                field: field.into(),
+                scorer: None,
+                weight: None,
+            }],
+        }
+    }
+
+    fn cfg(matchkeys: Vec<MatchkeySummary>) -> ConfigSummary {
+        ConfigSummary {
+            matchkeys,
+            negative_evidence: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn drops_exact_derived_key_when_precision_collapsed() {
+        let config = cfg(vec![
+            mk_summary("fuzzy_match", "weighted", "title"),
+            mk_summary("title_key", "exact", "__title_key__"),
+        ]);
+        let out = drop_overmerge_matchkey_rule(&config, true);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].kind, SuggestionKind::DropMatchkey);
+        assert_eq!(out[0].target, "title_key");
+        assert!(matches!(
+            &out[0].patch,
+            ConfigPatch::DropMatchkey { matchkey } if matchkey == "title_key"
+        ));
+    }
+
+    #[test]
+    fn no_drop_when_not_collapsed() {
+        let config = cfg(vec![
+            mk_summary("fuzzy_match", "weighted", "title"),
+            mk_summary("title_key", "exact", "__title_key__"),
+        ]);
+        assert!(drop_overmerge_matchkey_rule(&config, false).is_empty());
+    }
+
+    #[test]
+    fn no_drop_when_only_one_matchkey() {
+        // dropping the last matchkey would destroy recall -> never propose it.
+        let config = cfg(vec![mk_summary("title_key", "exact", "__title_key__")]);
+        assert!(drop_overmerge_matchkey_rule(&config, true).is_empty());
+    }
+
+    #[test]
+    fn no_drop_when_exact_key_is_a_user_column() {
+        // an exact match on a real user column (e.g. email) is a legitimate
+        // identity claim -- never targeted, only derived `__*__` keys are.
+        let config = cfg(vec![
+            mk_summary("fuzzy_match", "weighted", "name"),
+            mk_summary("email_key", "exact", "email"),
+        ]);
+        assert!(drop_overmerge_matchkey_rule(&config, true).is_empty());
     }
 }

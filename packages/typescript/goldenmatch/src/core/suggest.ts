@@ -501,6 +501,27 @@ function applyPatch(
     (f as { scorer: string }).scorer = String(patch["scorer"]);
   } else if (op === "add_negative_evidence") {
     applyAddNegativeEvidence(mks, String(patch["field"]));
+  } else if (op === "drop_matchkey") {
+    const name = String(patch["matchkey"]);
+    if (mks.find((m) => m.name === name) === undefined) {
+      throw new Error(
+        `patch references matchkey ${name} which does not exist`,
+      );
+    }
+    if (mks.length <= 1) {
+      throw new Error(
+        `refusing to drop matchkey ${name}: it is the only matchkey`,
+      );
+    }
+    const kept = mks.filter((m) => m.name !== name);
+    // Matchkeys live at config.matchkeys (preferred) or config.matchSettings;
+    // reassign whichever currently holds them (mirrors getMatchkeys).
+    if (next.matchkeys !== undefined) {
+      (next as { matchkeys?: readonly MatchkeyConfig[] }).matchkeys = kept;
+    } else {
+      (next as { matchSettings?: readonly MatchkeyConfig[] }).matchSettings =
+        kept;
+    }
   } else {
     throw new Error(`unknown patch op: ${op}`);
   }

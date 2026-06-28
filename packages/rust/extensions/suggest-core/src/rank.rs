@@ -13,6 +13,7 @@ pub fn prior_key(kind: &SuggestionKind, target: &str) -> String {
         SuggestionKind::LowerThreshold => "lower_threshold",
         SuggestionKind::SwapScorer => "swap_scorer",
         SuggestionKind::AddNegativeEvidence => "add_negative_evidence",
+        SuggestionKind::DropMatchkey => "drop_matchkey",
     };
     format!("{k}:{target}")
 }
