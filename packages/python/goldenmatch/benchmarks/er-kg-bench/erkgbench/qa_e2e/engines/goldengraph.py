@@ -145,6 +145,16 @@ class _CountingLLM:
             self.output_tokens += max(1, len(out) // 4)
         return out
 
+    def complete_json(self, prompt: str) -> str:
+        # JSON-constrained extraction path; forward to the inner client's complete_json
+        # when present (the OpenAIClient/Ollama path), else fall back to complete.
+        fn = getattr(self._inner, "complete_json", self._inner.complete)
+        out = _with_retry(lambda: fn(prompt))
+        with self._lock:
+            self.input_tokens += max(1, len(prompt) // 4)
+            self.output_tokens += max(1, len(out) // 4)
+        return out
+
 
 class GoldenGraphQAEngine:
     name = "goldengraph"

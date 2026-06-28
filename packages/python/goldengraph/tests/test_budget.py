@@ -42,6 +42,35 @@ def test_over_budget_input_raises_before_calling():
     assert stub.calls == 0           # raised BEFORE delegating
 
 
+class _JsonStub:
+    def __init__(self):
+        self.calls = []
+
+    def complete(self, prompt: str) -> str:
+        self.calls.append("complete")
+        return "x"
+
+    def complete_json(self, prompt: str) -> str:
+        self.calls.append("complete_json")
+        return "y"
+
+
+def test_budgeted_complete_json_forwards_and_charges():
+    b = Budget(total_tokens=10_000)
+    inner = _JsonStub()
+    bllm = _BudgetedLLM(inner, b)
+    assert bllm.complete_json("hello there") == "y"
+    assert inner.calls == ["complete_json"]
+    assert b.spent_tokens > 0
+
+
+def test_budgeted_complete_json_falls_back_without_inner():
+    b = Budget()
+    inner = _StubLLM()  # has complete only
+    bllm = _BudgetedLLM(inner, b)
+    assert bllm.complete_json("hi") == "ok response text"  # routed to inner.complete
+
+
 def test_exhaustion_on_next_call_not_exact_ceiling():
     # spent may overshoot total (output not pre-charged); contract = NEXT over-input call raises
     b = Budget(total_tokens=30)

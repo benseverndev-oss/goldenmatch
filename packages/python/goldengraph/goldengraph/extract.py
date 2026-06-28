@@ -150,4 +150,15 @@ def extract(text: str, llm: LLMClient, *, literals: bool | None = None) -> Extra
     if literals is None:
         literals = os.environ.get("GOLDENGRAPH_LITERAL_ATTRS", "0") not in ("0", "false", "")
     prompt = _PROMPT_LITERALS if literals else _PROMPT
-    return parse_extraction(llm.complete(prompt.format(text=text)))
+    return parse_extraction(_complete_extraction(llm, prompt.format(text=text)))
+
+
+def _complete_extraction(llm: LLMClient, prompt: str) -> str:
+    """Use the JSON-constrained completion when the client supports it (and
+    `GOLDENGRAPH_EXTRACT_JSON_MODE` != 0) -- forcing valid JSON is the highest-ROI
+    lever for weak/OSS models, which otherwise emit unparseable extraction. Falls
+    back to plain `complete` for stubs / clients without `complete_json`."""
+    json_mode = os.environ.get("GOLDENGRAPH_EXTRACT_JSON_MODE", "1") not in ("0", "false", "")
+    if json_mode and hasattr(llm, "complete_json"):
+        return llm.complete_json(prompt)
+    return llm.complete(prompt)
