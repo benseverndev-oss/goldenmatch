@@ -73,3 +73,20 @@ def test_trace_chain_missing_edge_returns_none():
 
 def test_trace_chain_unknown_anchor():
     assert trace_chain(_graph(), "Nope", ("acquired",)) is None
+
+
+def _split_graph():
+    """B is UNDER-MERGED: id 1 is the sink of A-acquired->B, id 4 is the source of B-part_of->C.
+    Same canonical name 'B', different ids, NOT connected. The walk must bridge by name to cross."""
+    ents = [{"entity_id": i, "canonical_name": n} for i, n in
+            [(0, "A"), (1, "B"), (4, "B"), (2, "C")]]
+    edges = [
+        {"subj": 0, "predicate": "acquired", "obj": 1},   # A -acquired-> B(id1, sink: no out-edge)
+        {"subj": 4, "predicate": "part_of", "obj": 2},    # B(id4) -part_of-> C
+    ]
+    return _StubGraph(ents, edges)
+
+
+def test_trace_chain_bridges_under_merge():
+    # Without surface bridging the walk strands on B(id1) (avail=[]); with it, it reaches C.
+    assert trace_chain(_split_graph(), "A", ("acquired", "part of")) == "C"

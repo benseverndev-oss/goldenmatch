@@ -59,11 +59,30 @@ def _rel_match(edge_pred: str, query_rel: str) -> bool:
     return bool(a) and bool(b) and (a == b or b in a or a in b)
 
 
+def _bridge_surfaces(slice_graph, ids, id_to_name) -> set:
+    """Under-merge bridge: expand each id to ALL entity_ids sharing its canonical name. The store
+    under-merges -- the same surface form gets several entity_ids, so an edge's object (an *in*-copy,
+    a pure sink) is a different id than the *out*-copy that owns the chain's next edge. Re-seeding by
+    canonical name unions the unmerged siblings so the walk crosses the bridge entity. (Measured: 27
+    of 29 multi-hop walk deaths landed on a sink-copy with zero outgoing edges -- this is that fix.)"""
+    out = set()
+    for i in ids:
+        out.add(i)
+        name = id_to_name.get(i)
+        if name:
+            out.update(slice_graph.seeds_by_name(name))
+    return out
+
+
 def trace_chain(slice_graph, anchor_surface: str, relation_chain) -> str | None:
     """Relation-guided multi-hop walk: seed the anchor by name, then for each named relation follow
     the matching outgoing edge to the next node(s). Returns the final node's canonical name. LLM-FREE
     -- the directed walk IS the answer (the graph has at most one edge per (entity, relation)), so it
-    hands synthesis nothing to drown in. The fix for multi-hop synthesis-over-the-ball failure."""
+    hands synthesis nothing to drown in. The fix for multi-hop synthesis-over-the-ball failure.
+
+    Each hop bridges the reached nodes across the store's entity under-merge (``_bridge_surfaces``):
+    without it the walk strands on the object's sink-copy, whose unmerged sibling owns the next edge.
+    """
     import os
 
     dbg = os.environ.get("GOLDENGRAPH_CHAIN_DEBUG", "") not in ("", "0", "false")
@@ -87,7 +106,8 @@ def trace_chain(slice_graph, anchor_surface: str, relation_chain) -> str | None:
             if dbg:
                 print(f"[chain] DIED at hop{hop}: no {rel!r} edge from frontier", flush=True)
             return None
-        frontier = nxt
+        # bridge the reached nodes across the under-merge so the NEXT hop sees the sibling's out-edges
+        frontier = _bridge_surfaces(slice_graph, nxt, id_to_name)
     names = sorted({id_to_name[i] for i in frontier if i in id_to_name} - {anchor_surface})
     if dbg:
         print(f"[chain] OK -> {names[:3]}", flush=True)
