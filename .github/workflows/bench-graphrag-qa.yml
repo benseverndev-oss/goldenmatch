@@ -24,7 +24,7 @@ on:
         description: "all | goldengraph | lightrag | ms_graphrag | graphiti | text_rag | goldenmatch_rag | goldenmatch_entity_rag (head_to_head mode only)"
         default: "all"
       mode:
-        description: "head_to_head | scorecard | aggregation_llm | temporal_llm | kg_capability | router_capability | extraction_f1 | synthesis_gold"
+        description: "head_to_head | scorecard | aggregation_llm | temporal_llm | kg_capability | router_capability | extraction_f1 | synthesis_gold | retrieval_coverage"
         default: "head_to_head"
       budget_usd:
         description: "hard cost cap per (engine, ambiguity) run"
@@ -465,7 +465,7 @@ jobs:
 
   scorecard:
     # Opt-in real-LLM confirmation rows (NON-gating), selected by `mode`. One mode per dispatch.
-    if: ${{ inputs.mode != 'head_to_head' && inputs.mode != 'extraction_f1' && inputs.mode != 'synthesis_gold' }}
+    if: ${{ inputs.mode != 'head_to_head' && inputs.mode != 'extraction_f1' && inputs.mode != 'synthesis_gold' && inputs.mode != 'retrieval_coverage' }}
     runs-on: large-new-64GB
     timeout-minutes: 120
     steps:
@@ -676,4 +676,54 @@ jobs:
         with:
           name: graphrag-qa-synthesis-gold
           path: packages/python/goldenmatch/benchmarks/er-kg-bench/SYNTHESIS_GOLD.md
+          if-no-files-found: ignore
+
+  retrieval_coverage:
+    # Stage 0b: does answer-time retrieval surface the gold chain? Isolates retrieval on a PERFECT
+    # oracle graph (no extraction LLM -- only the embedder is exercised). LOW anchor-seed = mis-seeding;
+    # LOW chain-coverage = the undirected ball drops the directed chain. Needs the wheel (PyStore) +
+    # the embedder (Ollama nomic-embed-text). Non-gating.
+    needs: setup
+    if: ${{ inputs.mode == 'retrieval_coverage' }}
+    runs-on: large-new-64GB
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Install goldenmatch + native wheel + goldengraph (retrieval needs PyStore + embedder)
+        run: |
+          python -m pip install --upgrade pip maturin pytest goldenmatch datasets openai
+          maturin build --release \
+            -m packages/rust/extensions/goldengraph-native/Cargo.toml --out dist
+          python -m pip install dist/*.whl
+          python -m pip install --no-deps -e packages/python/goldengraph
+          # Repo goldenmatch overlay: the OPENAI_BASE_URL embedding change (so the embedder hits Ollama).
+          python -m pip install --no-deps -e packages/python/goldenmatch
+      - name: Start local OSS embedder (Ollama)
+        if: ${{ inputs.local_llm != '' }}
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          ollama serve > ollama.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf http://localhost:11434/api/version && break || sleep 2; done
+          ollama pull nomic-embed-text
+      - name: Run retrieval-coverage eval (oracle graph)
+        working-directory: packages/python/goldenmatch/benchmarks/er-kg-bench
+        env:
+          OPENAI_API_KEY: ${{ inputs.local_llm != '' && 'ollama' || secrets.GOLDENGRAPH_OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ inputs.local_llm != '' && 'http://localhost:11434/v1' || '' }}
+          OPENAI_EMBED_MODEL: ${{ inputs.local_llm != '' && 'nomic-embed-text' || '' }}
+          POLARS_SKIP_CPU_CHECK: "1"
+        run: |
+          python -m erkgbench.qa_e2e.run_retrieval_eval \
+            --n-questions "${{ inputs.max_questions }}" --ambiguity 0.6 \
+            --out-md RETRIEVAL_COVERAGE.md
+      - name: Upload RETRIEVAL_COVERAGE.md
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: graphrag-qa-retrieval-coverage
+          path: packages/python/goldenmatch/benchmarks/er-kg-bench/RETRIEVAL_COVERAGE.md
           if-no-files-found: ignore
