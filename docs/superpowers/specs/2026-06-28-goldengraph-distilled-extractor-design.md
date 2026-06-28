@@ -1,6 +1,13 @@
 # GoldenGraph distilled SYNTHESIS model -- purpose-built small KG reasoner design
 
-**Status:** design (PIVOTED 2026-06-28 from extraction -> synthesis, on measured evidence)
+> **PARKED 2026-06-28 -- Stage 0 refuted this too.** synthesis-given-gold = **1.000 at every hop**
+> (run 28327040114): given the gold subgraph the 7B answers every multi-hop question. With extraction
+> already good (0.92/0.81), the bottleneck is **RETRIEVAL** (the answer-time subgraph assembly), not
+> extraction OR synthesis. NO model distillation is needed -- the fix is in goldengraph's retrieval code
+> (deterministic, free, helps every model). This design is shelved (not deleted -- useful if a future
+> measurement shows a model-quality gap). Current work: improve retrieval. See [[project_goldengraph_local_oss_llm_lane]].
+
+**Status:** PARKED (both extraction- and synthesis-distillation premises refuted by measurement)
 **Date:** 2026-06-28
 **Owner:** Ben Severn
 **Worktree:** TBD (design only -- training is off-GH GPU on Modal)
