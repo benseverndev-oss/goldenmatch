@@ -40,6 +40,33 @@ communities(graph);           // [{ id: 0, members: [0, 1] }]
 
 The query functions throw until the wasm backend is enabled.
 
+## Composing with goldenprofile
+
+GoldenProfile resolves mentions into a cluster partition; GoldenGraph builds a
+graph from a `{ mentionIndex: entityId }` resolution. The zero-dep bridge
+helpers (`resolutionFromClusters`, `mentionsFromProfiles`) pipeline the two —
+`goldengraph` does not depend on `goldenprofile`; you bring both:
+
+```ts
+import { resolveProfiles } from "goldenprofile";
+import { enableGoldenprofileWasm } from "goldenprofile/wasm";
+import { buildGraph, resolutionFromClusters, mentionsFromProfiles } from "goldengraph";
+import { enableGoldengraphWasm } from "goldengraph/wasm";
+
+enableGoldenprofileWasm();
+enableGoldengraphWasm();
+
+const { clusters } = resolveProfiles({ profiles });
+const graph = buildGraph(
+  mentionsFromProfiles(profiles),     // same order you resolved
+  edges,                              // your mention-level relationships
+  resolutionFromClusters(clusters),   // the bridge
+);
+```
+
+The conversion is exact and order-preserving (profile index `i` == mention index
+`i`), as long as you build the mentions from the SAME profile list you resolved.
+
 > **Scope:** v1 surfaces the 4 graph + query ops. The kernel's bitemporal store (`store_append/as_of/history`) is not yet wired into this package.
 
 ## Regenerating the wasm artifact

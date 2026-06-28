@@ -25,6 +25,13 @@ export {
   type GoldengraphWasmBackend,
 } from "./core/goldengraphWasmBackend.js";
 
+// The goldenprofile -> goldengraph bridge (zero-dep; operates on plain shapes).
+export {
+  resolutionFromClusters,
+  mentionsFromProfiles,
+  type ProfileLike,
+} from "./compose.js";
+
 import { getGoldengraphWasmBackend } from "./core/goldengraphWasmBackend.js";
 
 /** A raw mention to be resolved. Mirrors the Rust `Mention` serde shape. */
