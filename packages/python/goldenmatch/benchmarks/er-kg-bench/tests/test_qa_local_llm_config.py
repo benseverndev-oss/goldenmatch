@@ -90,3 +90,14 @@ def test_build_engine_empty_model_treated_as_unset(monkeypatch):
 
     eng = run_qa_e2e._build_engine("goldengraph")
     assert _goldengraph_chat_model(eng) == "gpt-4o-mini"
+
+
+def test_chat_model_is_the_run_label_source(monkeypatch):
+    # the result artifact labels the run with _chat_model() (the model actually used), so a local_llm
+    # run is honestly labelled instead of the gpt-4o-mini CLI default.
+    from erkgbench.qa_e2e import run_qa_e2e
+
+    monkeypatch.setenv("OPENAI_MODEL", "qwen2.5:7b-instruct")
+    assert run_qa_e2e._chat_model() == "qwen2.5:7b-instruct"
+    monkeypatch.delenv("OPENAI_MODEL", raising=False)
+    assert run_qa_e2e._chat_model() == "gpt-4o-mini"

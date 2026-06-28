@@ -224,8 +224,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     engine = _MockEngine() if args.self_test else _build_engine(args.engine)
     judge = _make_judge(args.judge_model) if (args.judge and not args.self_test) else None
+    # Label the run with the model the engine ACTUALLY used (_chat_model() honors OPENAI_MODEL), not
+    # the CLI default -- otherwise a local_llm run's artifact mislabels itself as gpt-4o-mini. Unknown
+    # local models fall back to the default cost rate in BudgetTracker (notional; local runs are free).
     result = run_engine(
-        engine, corpus, model=args.model, budget_usd=args.budget_usd, judge=judge
+        engine, corpus, model=_chat_model(), budget_usd=args.budget_usd, judge=judge
     )
     write_results([result], md_path=out_md, json_path=out_json)
     print(
