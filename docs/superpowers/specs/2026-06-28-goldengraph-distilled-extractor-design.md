@@ -59,9 +59,15 @@ MuSiQue paragraphs (realistic) + engineered docs + a broader open text set (e.g.
 to avoid overfitting to the bench's narrow domain. Use the SAME extraction prompt + JSON-mode the
 student will run, so the target format matches exactly. The capture can piggy-back on the existing
 gpt-4o-mini bench dispatch (DISTILL_LOG is already a workflow knob) OR a dedicated capture run. Output
-a clean `pairs.jsonl`. HONEST: teacher quality CAPS the student (gpt-4o-mini extraction ~ the 0.602 ER
-region); the student aims to MATCH the teacher cheaply, not beat it. One-time, budget-capped OpenAI
-cost (the thing we're working around -- but offline + amortized, not per-eval).
+a clean `pairs.jsonl`. HONEST: teacher quality CAPS the student -- gpt-4o-mini extraction is itself
+imperfect (the measured ceiling on this bench, not ground truth), so the student aims to MATCH the
+teacher cheaply, not beat it. One-time, budget-capped OpenAI cost (the thing we're working around --
+but offline + amortized, not per-eval).
+
+**Dataset-size targets (interacts with open decision #3):** a seq2seq specialist (path b) trains well
+on ~2-10k pairs; a LoRA-3B (path a) wants more (~10-50k) to avoid catastrophic-forgetting artifacts.
+Size the teacher pass to the chosen student; start small (~2-5k) to validate the loop before a large
+capture.
 
 ### Stage 2 -- Dataset build
 
@@ -86,22 +92,40 @@ Two student options (the spec recommends evaluating both, leading with whichever
 Training infra: a GPU is required and is NOT free on GH -- Modal / Runpod / Lambda / Colab / a Railway
 GPU box for a few GPU-hours (LoRA-3B or seq2seq are small). One-time per dataset revision.
 
-### Stage 4 -- Serve
+### Stage 4 -- Serve (+ the off-GH -> on-GH artifact seam)
 
-- Path (a): `ollama create gg-extract -f Modelfile` (base + adapter) -> `local_llm=gg-extract`.
-- Path (b): commit/host the fine-tuned checkpoint; `GOLDENGRAPH_EXTRACTOR=rebel` +
-  `GG_REBEL_MODEL=<path>` (extend `rebel_extractor` to read the model from env).
+The trained artifact lives off-GH; the eval lane runs on-GH, so the artifact must land somewhere the
+runner pulls from. **Publish it as a GitHub Release asset** (the `bench-dataset-v1` release pattern
+already used here) or an HF Hub repo, then the eval lane downloads it in a setup step:
+
+- Path (a) LoRA-qwen: publish the merged GGUF + a `Modelfile`; eval step `gh release download ... &&
+  ollama create gg-extract -f Modelfile` -> `local_llm=gg-extract`.
+- Path (b) seq2seq: publish the checkpoint (Release/HF); eval step downloads it; `GOLDENGRAPH_EXTRACTOR=
+  rebel` + a new `GG_REBEL_MODEL=<downloaded path or HF id>` env (extend `rebel_extractor` to read the
+  model from env -- a small code change, in scope when this is built).
 
 ### Stage 5 -- Eval / gate (the honest measurement)
 
-1. **Extraction-F1 in isolation (PRIMARY):** the scorecard's `extraction_counts` -> entity-F1 +
-   relation-F1 of {base-OSS, student, teacher} on the HELDOUT docs. The student must beat base-OSS by a
-   frozen margin and ideally approach the teacher. This is cheap (no full pipeline) and is the
-   iteration signal.
-2. **End-to-end answer-match:** the local-llm lane with student-extraction + OSS-synthesis -> does the
-   improved graph lift the decay curve (esp. 2-3 hop)?
-3. **Held-out discipline:** eval on MuSiQue held-out (realistic) FIRST; the 45-entity engineered corpus
-   is far too small to train/eval on alone (it would memorize) -- use it only as a secondary slice.
+**Eval gold is INDEPENDENT of the teacher (avoids circularity).** Teacher labels are TRAINING-only. The
+headline extraction-F1 is scored against the bench's **planted gold triples** -- the engineered corpus
+emits `src::rel::dst` document ids, and `scorecard_llm.extraction_counts(gold_src, gold_dst, extraction)`
+already scores entity/relation-F1 against those, NOT against teacher output. So {base-OSS, student,
+teacher} are all scored vs the SAME independent planted gold; "approaches the teacher" means "closes the
+gap to the teacher's F1-vs-gold," not "agrees with the teacher's labels." Teacher-agreement (student vs
+teacher labels) is reported SEPARATELY as a distillation-fidelity sanity check, never the headline -- a
+student that perfectly mimics teacher ERRORS would score high on agreement but NOT on F1-vs-gold.
+
+1. **Extraction-F1 in isolation (PRIMARY):** `extraction_counts` -> entity-F1 + relation-F1 of
+   {base-OSS, student, teacher} vs planted gold on the HELDOUT engineered docs. Student must beat
+   base-OSS by a frozen margin and close most of the gap to the teacher. Cheap (no full pipeline) ->
+   the iteration signal.
+2. **End-to-end answer-match (where there is no triple-gold):** MuSiQue paragraphs ship NO
+   schema-triples, so they can't score extraction-F1 -- their signal is the local-lane ANSWER-MATCH
+   (student-extraction + OSS-synthesis): does the better graph lift the decay curve (esp. 2-3 hop)?
+3. **Held-out discipline:** train on teacher pairs over DIVERSE text; eval extraction-F1 on a held-out
+   ENGINEERED slice (the only source of planted triples) + answer-match on held-out MuSiQue (realistic).
+   The 45-entity engineered universe is tiny -> a win only there is NOT a win; MuSiQue answer-match is
+   the generalization check. (Generating schema-triple gold for MuSiQue is a larger future asset.)
 
 ## Components / file structure (when implemented -- NOT in this design)
 
@@ -129,7 +153,9 @@ GPU box for a few GPU-hours (LoRA-3B or seq2seq are small). One-time per dataset
 ## Open decisions (for Ben)
 
 1. **Student type:** lead with seq2seq-REBEL (cheapest, CPU-only, seam exists) or LoRA-qwen-3B (more
-   general, reusable for synthesis)? The A/B arm-B (base REBEL) result should inform this.
+   general, reusable for synthesis)? The A/B arm-B (base REBEL) result should inform this. **Default if
+   inconclusive:** start with seq2seq-REBEL -- cheapest to train + serve and the seam already exists, so
+   it validates the whole loop at lowest cost before committing to the heavier LoRA path.
 2. **Training infra:** which GPU provider (Modal / Runpod / Lambda / Railway-GPU)?
 3. **Teacher-pass budget:** how many docs to capture (dataset size vs OpenAI cost), and whether to
    piggy-back capture on the existing gpt-4o-mini bench runs vs a dedicated pass.
