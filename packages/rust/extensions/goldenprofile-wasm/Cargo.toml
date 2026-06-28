@@ -25,7 +25,20 @@ name = "goldenprofile_wasm"
 crate-type = ["cdylib", "rlib"] # cdylib for wasm; rlib so host parity tests link
 
 [dependencies]
+# `default-features = false` keeps the arrow-free path so this crate links on
+# wasm32 (goldenprofile-core already opts out of graph-core's arrow feature).
 goldenprofile-core = { path = "../goldenprofile-core" }
+
+[profile.release]
+opt-level = "s"   # optimize for small wasm size
+lto = true
+
+# wasm-opt (binaryen) is an extra size pass that wasm-pack runs after the build.
+# It downloads a binaryen release at build time, which is unavailable in
+# network-restricted CI sandboxes. opt-level="s"+lto already give a small wasm;
+# disable the post-pass so the build is hermetic (no network fetch).
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false
 
 [dev-dependencies]
 # Host parity tests parse the JSON result to assert cluster structure.

@@ -2,6 +2,26 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-06-28 — GoldenProfile (Virtual Fingerprint) on the TS/WASM surface
+- New ADR [../decisions/0028-goldenprofile-wasm-ts.md](../decisions/0028-goldenprofile-wasm-ts.md):
+  the GoldenProfile Virtual Fingerprint engine (cross-document entity resolution,
+  kernel ADR [0023](../decisions/0023-semantic-signature-virtual-fingerprint-engine.md))
+  now has a TS/JS surface — the last unfinished leg of its one-kernel-many-surfaces
+  matrix (Python/`-native` + C/`-cabi` + `-wasm` already existed).
+- New **standalone** `packages/typescript/goldenprofile` npm package: pure-by-default
+  base entry (zero wasm bytes, edge-safe) + an opt-in `goldenprofile/wasm` subpath that
+  loads the kernel. Follows the **healer precedent** (opt-in-or-absent, no pure-TS
+  resolver), not the score/analysis acceleration track. `resolveProfiles()` REFUSES
+  (throws) when the backend isn't enabled — never a fake empty Resolution.
+- Enabling change: `graph-core`'s `arrow` became an **opt-in default-on feature** so
+  `goldenprofile-core` links on `wasm32`; native/pgrx/datafusion compile byte-identically.
+- Cross-surface contract corrected to **partition + edge set + scores(4dp)**, NOT
+  byte-ordering (the kernel's cluster/edge ordering is `HashMap`-seed nondeterministic).
+  Canonical, idempotent fixtures gate both the TS-wasm and Python-native parity tests.
+- CI: `goldenprofile_wasm` path-filter + a drift guard in the `typescript` lane; publish
+  wired-but-unfired (`publish-goldenprofile-js.yml`). Plan:
+  [../../docs/superpowers/plans/2026-06-28-goldenprofile-wasm-ts-parity.md](../../docs/superpowers/plans/2026-06-28-goldenprofile-wasm-ts-parity.md).
+
 ## 2026-06-27 — Config-suggestion healer on the TS/WASM surface
 - New ADR [../decisions/0027-healer-wasm-ts.md](../decisions/0027-healer-wasm-ts.md):
   the healer (config-suggestion engine) now runs on the TypeScript/JS surface via

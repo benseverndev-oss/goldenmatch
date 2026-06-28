@@ -15,7 +15,16 @@ description = "Connected-components + pair-dedup graph kernels (no pyo3) shared 
 [lib]
 name = "goldenmatch_graph_core"
 
+# `arrow` is OPTIONAL and ON BY DEFAULT, so every existing consumer (native /
+# pgrx / datafusion) compiles byte-identically with zero change. Disable it
+# (`default-features = false`) only on targets that can't link arrow — e.g. the
+# `wasm32` build of `goldenprofile-core`, which uses only the arrow-free
+# `connected_components`. Mirrors the autoconfig-core arrow-gating precedent.
+[features]
+default = ["arrow"]
+arrow = ["dep:arrow"]
+
 [dependencies]
 # Arrow columnar helpers for the DuckDB/DataFusion zero-copy path. No pyarrow/pyo3
 # here — callers pass `arrow::array::ArrayData`; the pyo3 bridge lives in `native`.
-arrow = { version = "59", default-features = false }
+arrow = { version = "59", default-features = false, optional = true }
