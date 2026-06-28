@@ -70,6 +70,23 @@ _IDENTITY_COL_TYPES = frozenset(
 _BLOCK_P99_WARN = 5000
 _BLOCK_P99_HIGH = 50_000
 
+# Distributed-over-merge detector (#1261). A precision collapse that is spread
+# across many MEDIUM clusters (no single mega-cluster) is invisible to the
+# oversized-cluster smell, so this looks at the BLOCKING side instead: blocking
+# that leans entirely on low-cardinality columns lets unrelated records collide.
+# A blocking field at/above this distinct-ratio is a real anchor (near-unique
+# keys don't distributed-over-merge); below it the field is "low-signal" for
+# blocking and a handful of values group large swaths of the data.
+_DIST_STRONG_BLOCK_CARD = 0.5
+_DIST_LOW_BLOCK_CARD = 0.1
+# Col types that are strong blocking anchors regardless of the sampled ratio.
+_DIST_STRONG_BLOCK_TYPES = frozenset({"email", "phone", "identifier"})
+# Merge evidence floors: fire only when the run actually merged a lot. From real
+# clusters, the fraction of records that landed in a multi-member cluster; from
+# preliminary signals alone, the p95 cluster size (medium clusters forming).
+_DIST_MERGE_RATE = 0.10
+_DIST_CLUSTER_P95 = 3
+
 # severity → rank for stable high→low ordering.
 _SEVERITY_RANK = {"high": 0, "medium": 1, "low": 2}
 
@@ -313,7 +330,16 @@ def _detect_low_signal_key(
                     "column": col,
                     "cardinality_ratio": round(prof.cardinality_ratio, 4),
                 },
-                fix_config_hint={"action": "demote_to_blocking", "column": col},
+                # #1263: the remedy is ``exclude_column`` (drop it from scoring),
+                # NOT ``demote_to_blocking``. A column that trips this detector is
+                # near-constant by definition (cardinality_ratio < 0.01) — exactly
+                # the property that makes it a catastrophic STANDALONE blocking
+                # key (a handful of values group the whole dataset). Demoting it
+                # to its own blocking pass collapsed candidate generation into a
+                # few mega-blocks and tanked precision. ``exclude_column``'s
+                # collapse guard preserves the column where it's load-bearing for
+                # blocking and only removes its (useless) scoring role.
+                fix_config_hint={"action": "exclude_column", "column": col},
                 title_plain=title,
                 detail_plain=detail,
                 fix_plain=(
@@ -427,6 +453,159 @@ def _detect_over_merge(
             fix_plain=(
                 "Raise the match threshold (or tighten the rules) so only "
                 "strong evidence merges records."
+            ),
+        )
+    ]
+
+
+def _merge_signal(
+    signals: dict | None, clusters: dict | None, n_rows: int
+) -> tuple[float | None, int, bool]:
+    """Summarize how much the run merged.
+
+    Returns ``(merge_rate, p95, mega)``:
+    - ``merge_rate`` — fraction of input records that landed in a multi-member
+      cluster, from the REAL clusters when present, else ``None``.
+    - ``p95`` — 95th-percentile preliminary cluster size (medium clusters
+      forming), from postflight signals; ``0`` if unavailable.
+    - ``mega`` — a >100-member cluster exists; the oversized-cluster smell
+      (:func:`_detect_over_merge`) already owns that case, so the distributed
+      detector defers to it.
+    """
+    mega = False
+    p95 = 0
+    if signals:
+        if signals.get("oversized_clusters"):
+            mega = True
+        prelim = signals.get("preliminary_cluster_sizes") or {}
+        pv = prelim.get("p95")
+        if isinstance(pv, (int, float)):
+            p95 = int(pv)
+        pmax = prelim.get("max")
+        if isinstance(pmax, (int, float)) and pmax > 100:
+            mega = True
+    merge_rate: float | None = None
+    if clusters and n_rows > 0:
+        try:
+            merged = 0
+            for info in clusters.values():
+                if not isinstance(info, dict):
+                    continue
+                members = info.get("members")
+                size = len(members) if members is not None else info.get("size", 0)
+                if isinstance(size, int) and size > 1:
+                    merged += size
+                    if size > 100:
+                        mega = True
+            merge_rate = merged / n_rows
+        except Exception:
+            merge_rate = None
+    return merge_rate, p95, mega
+
+
+def _detect_distributed_over_merge(
+    config: GoldenMatchConfig,
+    signals: dict | None,
+    clusters: dict | None,
+    profiles_by_name: dict[str, ColumnProfile],
+    n_rows: int,
+    phrasing: str,
+) -> list[dict]:
+    """Flag precision collapse driven by low-cardinality blocking (#1261).
+
+    The oversized-cluster detector only fires on a single mega-cluster (>100
+    members). When the over-merge is DISTRIBUTED across many medium clusters —
+    the textbook failure when blocking leans on a few low-cardinality columns
+    (e.g. ~30 surnames / 12 companies across 416 rows, so unrelated people
+    collide on name+company+city) — no cluster is individually huge and the
+    smell stays silent at precision 0.22. This detector looks at the BLOCKING
+    side: blocking that has NO strong anchor (every key is a low-cardinality
+    column) plus real merging is the distributed-over-merge signature.
+    """
+    blocking = getattr(config, "blocking", None)
+    if blocking is None:
+        return []
+    try:
+        from goldenmatch.core.blocker import collect_blocking_fields
+
+        block_fields = collect_blocking_fields(blocking)
+    except Exception:
+        return []
+    if not block_fields:
+        return []
+
+    # Resolve each blocking field's cardinality. A field with no profile is
+    # treated as unknown (can't assess) — skip it for the anchor check.
+    low_card: list[tuple[str, int]] = []  # (column, distinct_value_count)
+    for col in block_fields:
+        prof = profiles_by_name.get(col)
+        if prof is None:
+            continue
+        if (
+            prof.cardinality_ratio >= _DIST_STRONG_BLOCK_CARD
+            or prof.col_type in _DIST_STRONG_BLOCK_TYPES
+        ):
+            return []  # a strong anchor key — distributed over-merge unlikely.
+        if prof.cardinality_ratio < _DIST_LOW_BLOCK_CARD:
+            distinct = max(1, round(prof.cardinality_ratio * n_rows))
+            low_card.append((col, distinct))
+    if not low_card:
+        return []
+
+    merge_rate, p95, mega = _merge_signal(signals, clusters, n_rows)
+    if mega:
+        return []  # the oversized-cluster detector owns the mega-cluster case.
+    has_merge = (
+        merge_rate is not None and merge_rate >= _DIST_MERGE_RATE
+    ) or (merge_rate is None and p95 >= _DIST_CLUSTER_P95)
+    if not has_merge:
+        return []
+
+    # Report the weakest (fewest-distinct) blocking key as the culprit.
+    col, distinct = min(low_card, key=lambda t: t[1])
+    evidence: dict = {"blocking_key": col, "distinct_values": distinct}
+    if merge_rate is not None:
+        evidence["merge_rate"] = round(merge_rate, 3)
+    else:
+        evidence["cluster_p95"] = p95
+    pct = f"{round((merge_rate or 0) * 100)}%" if merge_rate is not None else None
+    if phrasing == "technical":
+        title = (
+            f"Blocking key '{col}' has only {distinct} distinct values "
+            f"(distributed over-merge risk)"
+        )
+        detail = (
+            f"Blocking relies on low-cardinality column '{col}' "
+            f"(~{distinct} distinct values) with no near-unique anchor key, so "
+            f"unrelated records that merely share '{col}' are compared and can "
+            f"merge across many medium clusters"
+            + (f"; the run merged {pct} of records" if pct else "")
+            + ". This is precision collapse spread thin enough that no single "
+            "cluster looks oversized."
+        )
+    else:
+        title = "Records are grouped using a column with very few values"
+        detail = (
+            f"The matching groups records by '{col}', which only has about "
+            f"{distinct} different values, and there's no more specific key to "
+            f"separate them. So unrelated records that happen to share '{col}' "
+            f"get compared and merged"
+            + (f" (about {pct} of records ended up merged)" if pct else "")
+            + ". The over-merging is spread across many groups, so no single "
+            "group looks too big — but precision still suffers."
+        )
+    return [
+        _finding(
+            id="distributed_over_merge",
+            severity="high",
+            evidence=evidence,
+            fix_config_hint={"action": "compound_blocking"},
+            title_plain=title,
+            detail_plain=detail,
+            fix_plain=(
+                f"Add a more specific blocking key — combine '{col}' with "
+                "another field (or add a stronger key) so records that only "
+                f"share '{col}' aren't compared."
             ),
         )
     ]
@@ -609,6 +788,10 @@ def diagnose_config(
     profiles_by_name = _profiles_by_name(df)
     signals = _signals_of(result)
     clusters = _clusters_of(result)
+    try:
+        n_rows = df.height
+    except Exception:
+        n_rows = 0
 
     findings: list[dict] = []
     findings += _safe(_detect_source_admitted, referenced, excluded, phrasing)
@@ -617,6 +800,15 @@ def diagnose_config(
     )
     findings += _safe(_detect_oversized_block, signals, phrasing)
     findings += _safe(_detect_over_merge, signals, clusters, phrasing)
+    findings += _safe(
+        _detect_distributed_over_merge,
+        config,
+        signals,
+        clusters,
+        profiles_by_name,
+        n_rows,
+        phrasing,
+    )
     findings += _safe(_detect_null_sink, matchkey_cols, profiles_by_name, phrasing)
     findings += _safe(
         _detect_low_signal_key, matchkey_cols, profiles_by_name, phrasing
@@ -729,18 +921,41 @@ def _set_matchkeys(config: Any, matchkeys: list) -> None:
         config.matchkeys = matchkeys
 
 
+def _is_blocking_field(blocking: Any, column: str) -> bool:
+    """Whether ``column`` appears in any blocking key/pass/sub-block."""
+    if blocking is None:
+        return False
+    for attr in ("keys", "passes", "sub_block_keys"):
+        for kc in getattr(blocking, attr, None) or []:
+            if column in kc.fields:
+                return True
+    return False
+
+
 def _strip_column_from_blocking(blocking: Any, column: str) -> bool:
     """Remove ``column`` from blocking keys/passes/sub_block_keys (in place).
 
     A key/pass whose only field was ``column`` is dropped. Returns whether
     anything changed.
+
+    **Collapse guard (#1263):** if removing the column would leave blocking with
+    NO keys/passes/sub-blocks at all (it was the sole partition key), the strip
+    is refused and blocking is left untouched — dropping the only blocking key
+    turns candidate generation into a full cross-product. The column's
+    (load-bearing) blocking role is preserved; its scoring role is still removed
+    by the matchkey strip, and the caller skips ``exclude_columns`` so the two
+    don't contradict.
     """
     if blocking is None:
         return False
+    # Compute the post-removal groups WITHOUT committing, so a total collapse
+    # can be detected before any mutation.
+    proposed: dict[str, list] = {}
     changed = False
     for attr in ("keys", "passes", "sub_block_keys"):
         kcs = getattr(blocking, attr, None)
         if not kcs:
+            proposed[attr] = list(kcs or [])
             continue
         new_kcs: list = []
         for kc in kcs:
@@ -752,8 +967,14 @@ def _strip_column_from_blocking(blocking: Any, column: str) -> bool:
                 # else: single-field block on the column -> drop it
             else:
                 new_kcs.append(kc)
+        proposed[attr] = new_kcs
+    if not changed:
+        return False
+    if sum(len(v) for v in proposed.values()) == 0:
+        return False  # sole partition key — preserve blocking, refuse the strip.
+    for attr, new_kcs in proposed.items():
         setattr(blocking, attr, new_kcs)
-    return changed
+    return True
 
 
 def _add_blocking_pass(config: Any, column: str) -> bool:
@@ -818,10 +1039,16 @@ def _apply_exclude_column(config: Any, hint: dict) -> tuple[Any, bool]:
     if mk_changed:
         _set_matchkeys(new, mks)
     block_changed = _strip_column_from_blocking(new.blocking, column)
-    excl = list(new.exclude_columns or [])
-    excl_changed = column not in excl
-    if excl_changed:
-        new.exclude_columns = excl + [column]
+    # If the column is STILL a blocking field (the collapse guard kept it as the
+    # sole partition key), don't also add it to exclude_columns — that would
+    # neutralize the blocking key we just preserved. Strip it from scoring only.
+    still_blocking = _is_blocking_field(new.blocking, column)
+    excl_changed = False
+    if not still_blocking:
+        excl = list(new.exclude_columns or [])
+        if column not in excl:
+            new.exclude_columns = excl + [column]
+            excl_changed = True
     if not (mk_changed or block_changed or excl_changed):
         return new, False
     return _revalidated(config, new)
@@ -885,7 +1112,10 @@ def apply_hint(config: GoldenMatchConfig, fix_config_hint: dict) -> tuple[Any, b
     side). Supported actions:
 
     - ``exclude_column``: strip the column from every matchkey field and every
-      blocking key/pass, and add it to ``exclude_columns``.
+      blocking key/pass, and add it to ``exclude_columns``. If the column is the
+      SOLE blocking key, its blocking role is preserved (the strip + exclude are
+      skipped) so removal can't collapse candidate generation into a
+      cross-product (#1263).
     - ``demote_to_blocking``: strip the column from every matchkey field and add
       a single-field blocking pass on it (converting ``static``/``adaptive``
       blocking to an explicit ``multi_pass`` union when needed).
