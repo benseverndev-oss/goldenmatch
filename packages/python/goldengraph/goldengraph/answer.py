@@ -47,6 +47,43 @@ def asof_object(slice_graph, anchor_surface: str, relation: str) -> str | None:
     return next(iter(sorted(objs)), None)
 
 
+def _norm_rel(s: str) -> str:
+    return " ".join(str(s).lower().replace("_", " ").split())
+
+
+def _rel_match(edge_pred: str, query_rel: str) -> bool:
+    """Lenient predicate match: normalize (lowercase, underscore<->space) then equality or substring
+    either way -- so the model's 'was acquired by' / 'works_at' matches the question's 'acquired' /
+    'works at'. Tolerates the ~0.85-accurate extracted predicates."""
+    a, b = _norm_rel(edge_pred), _norm_rel(query_rel)
+    return bool(a) and bool(b) and (a == b or b in a or a in b)
+
+
+def trace_chain(slice_graph, anchor_surface: str, relation_chain) -> str | None:
+    """Relation-guided multi-hop walk: seed the anchor by name, then for each named relation follow
+    the matching outgoing edge to the next node(s). Returns the final node's canonical name. LLM-FREE
+    -- the directed walk IS the answer (the graph has at most one edge per (entity, relation)), so it
+    hands synthesis nothing to drown in. The fix for multi-hop synthesis-over-the-ball failure."""
+    seeds = slice_graph.seeds_by_name(anchor_surface)
+    if not seeds:
+        return None
+    frontier = set(seeds)
+    id_to_name: dict = {}
+    for rel in relation_chain:
+        sub = slice_graph.query(list(frontier), 1)
+        id_to_name = {e["entity_id"]: e["canonical_name"] for e in sub.get("entities", ())}
+        nxt = {
+            e["obj"]
+            for e in sub.get("edges", ())
+            if e["subj"] in frontier and e["obj"] in id_to_name and _rel_match(e["predicate"], rel)
+        }
+        if not nxt:
+            return None
+        frontier = nxt
+    names = sorted({id_to_name[i] for i in frontier if i in id_to_name} - {anchor_surface})
+    return names[0] if names else None
+
+
 def _format_aggregate(members: set[str]) -> str:
     return ", ".join(sorted(members)) if members else "(none found)"
 
@@ -143,6 +180,11 @@ def ask(
             if d is not None:
                 obj = asof_object(store.as_of(d, tx_t), profile.anchor_surface, profile.relation)
                 return obj if obj is not None else "(unknown)"
+        if plan.mode == "chain" and profile.anchor_surface and profile.relation_chain:
+            ans = trace_chain(slice_graph, profile.anchor_surface, profile.relation_chain)
+            if ans is not None:
+                return ans
+            # walk hit a missing/mislabeled edge -> fall through to the general retrieval+synthesis
         # clamp: a specialized plan that did NOT return must not carry an invalid mode into the
         # `if mode not in ("local","hybrid"): raise` guard below
         mode = plan.mode if plan.mode in ("local", "hybrid", "global") else "local"

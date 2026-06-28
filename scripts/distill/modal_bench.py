@@ -49,6 +49,7 @@ _EVAL = {
     "extraction_f1": ("erkgbench.qa_e2e.run_extraction_eval", ["--configs", "api_json,api_schema"]),
     "synthesis_gold": ("erkgbench.qa_e2e.run_synthesis_eval", []),
     "retrieval_coverage": ("erkgbench.qa_e2e.run_retrieval_eval", []),
+    "end_to_end": ("erkgbench.qa_e2e.run_qa_e2e", []),  # full pipeline + localize trace (stdout)
 }
 
 
@@ -125,9 +126,20 @@ def run_bench(eval: str, n: int = 20, ambiguity: float = 0.6, opts: str = "",
             k, v = line.split("=", 1)
             env[k.strip()] = v
 
-    # 4. Run the eval CLI; return the markdown.
-    module, extra = _EVAL[eval]
+    # 4. Run the eval CLI; return the markdown (or, for end_to_end, the localize trace from stdout).
     out_md = "/tmp/out.md"
+    if eval == "end_to_end":
+        env["GOLDENGRAPH_QA_TRACE"] = "1"
+        env["GOLDENGRAPH_QA_TRACE_LIMIT"] = "0"  # trace every question
+        proc = subprocess.run(
+            ["python", "-m", "erkgbench.qa_e2e.run_qa_e2e", "--engine", "goldengraph",
+             "--corpus", "engineered", "--max-questions", str(n), "--ambiguity", str(ambiguity),
+             "--out-md", out_md, "--out-json", "/tmp/e2e.json"],
+            cwd=_BENCH, env=env, capture_output=True, text=True, check=True,
+        )
+        results = pathlib.Path(out_md).read_text() if os.path.exists(out_md) else "(no results md)"
+        return proc.stdout + "\n\n===== RESULTS_MD =====\n" + results
+    module, extra = _EVAL[eval]
     subprocess.run(
         ["python", "-m", module, *extra, "--n-questions", str(n),
          "--ambiguity", str(ambiguity), "--out-md", out_md],

@@ -29,6 +29,7 @@ class QueryProfile:
     relation: str | None = None
     as_of: str | None = None
     confidence: float = 0.0
+    relation_chain: tuple[str, ...] | None = None  # multi-hop: the named relations to follow in order
 
 
 def _detect_intent(query: str) -> QueryIntent:
@@ -80,6 +81,26 @@ _TEMPORAL_LEADIN_RE = re.compile(
 )
 
 
+#: "Starting from <anchor>, follow the relation <r1>, then <r2>, ... . What entity ..." -- the
+#: engineered multi-hop form. The named relations make a DETERMINISTIC walk (at most one edge per
+#: (entity, relation)), so it's answerable LLM-free by tracing the chain -- the fix for synthesis
+#: drowning in the retrieved ball (measured: gold-chain synthesis 1.00, ball synthesis 0.15).
+_CHAIN_RE = re.compile(
+    r"^\s*starting from\s+(?P<anchor>.+?),\s*follow the relation\s+(?P<chain>.+?)\.\s*what entity",
+    re.IGNORECASE,
+)
+
+
+def _extract_chain_slots(query: str):
+    """(anchor, relation_chain) from the 'Starting from X, follow the relation R1, then R2.' form."""
+    m = _CHAIN_RE.match(query)
+    if not m:
+        return None, None
+    anchor = m.group("anchor").strip()
+    chain = tuple(s.strip() for s in m.group("chain").split(", then ") if s.strip())
+    return (anchor or None), (chain or None)
+
+
 def _extract_temporal_slots(query: str, predicates):
     """(anchor, relation, as_of) from 'As of <D>, what does <anchor> <relation words>?'."""
     m = _TEMPORAL_LEADIN_RE.match(query)
@@ -103,6 +124,11 @@ def classify_query(query: str, *, predicates=None) -> QueryProfile:
         conf = 0.9 if (anchor and relation and as_of) else 0.5
         return QueryProfile(intent=intent, anchor_surface=anchor, relation=relation,
                             as_of=as_of, confidence=conf)
+    if intent is QueryIntent.MULTI_HOP:
+        anchor, chain = _extract_chain_slots(query)
+        if anchor and chain:
+            return QueryProfile(intent=intent, anchor_surface=anchor,
+                                relation_chain=chain, confidence=0.9)
     conf = 0.5 if intent is not QueryIntent.MULTI_HOP else 0.3
     return QueryProfile(intent=intent, confidence=conf)
 
@@ -135,6 +161,8 @@ def plan_query(profile: QueryProfile) -> RetrievalPlan:
             return RetrievalPlan(mode="as_of")
         return RetrievalPlan(mode="local")  # low-confidence temporal -> safe general mode
     if profile.intent is QueryIntent.MULTI_HOP:
+        if profile.confidence >= MIN_CONF and profile.anchor_surface and profile.relation_chain:
+            return RetrievalPlan(mode="chain")  # relation-guided deterministic walk
         return RetrievalPlan(mode="hybrid")
     return RetrievalPlan(mode="local")  # LOOKUP + low-confidence fallbacks
 
