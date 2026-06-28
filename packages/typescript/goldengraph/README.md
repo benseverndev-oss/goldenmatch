@@ -67,7 +67,28 @@ const graph = buildGraph(
 The conversion is exact and order-preserving (profile index `i` == mention index
 `i`), as long as you build the mentions from the SAME profile list you resolved.
 
-> **Scope:** v1 surfaces the 4 graph + query ops. The kernel's bitemporal store (`store_append/as_of/history`) is not yet wired into this package.
+## Bitemporal store
+
+Ingest entities + edges over time, then read the graph "as of" a (valid-time,
+transaction-time) point, or an entity's merge/split history. The snapshot is a
+portable JSON value — the store ops are stateless over it (no handles cross the
+boundary), so you hold and pass it back.
+
+```ts
+import { appendBatch, asOf, history } from "goldengraph";
+import { enableGoldengraphWasm } from "goldengraph/wasm";
+
+enableGoldengraphWasm();
+
+let snap = appendBatch(null, batch1);   // null opens a fresh store
+snap = appendBatch(snap, batch2);       // entities sharing a record_key merge
+
+const graph = asOf(snap, validTime, txTime);  // bitemporal slice
+const events = history(snap, entityId);        // [{ Merge: {...} } | { Split: {...} }]
+```
+
+`record_keys` (e.g. `:h1:` fingerprints) match entities across batches; a match
+merges them and records a `Merge` history event.
 
 ## Regenerating the wasm artifact
 

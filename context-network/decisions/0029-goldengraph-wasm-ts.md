@@ -16,9 +16,12 @@ missing. Bigger surface — 7 kernel ops — and it composes goldenprofile (its
    (throw) when the backend isn't enabled — never a fake result.
 2. **v1 = the 4 graph+query ops** (`buildGraph` / `neighborhood` / `seedsByName`
    / `communities`). **The bitemporal store** (`store_append` / `store_as_of` /
-   `store_history`) is **deferred** — it is roughly double the type + fixture
-   surface (`StableId`, `StoredEntity/Edge`, `HistoryEvent`, snapshot format,
-   bitemporal `as_of`) and cleanly separable. A fast-follow.
+   `store_history`) was deferred as a separable fast-follow. **UPDATE (0.2.0,
+   2026-06-28): the store shipped** — `appendBatch` / `asOf` / `history` over a
+   portable JSON `Snapshot`, with parity fixtures for the append→as_of→history
+   flow. Gotcha: the kernel's i64/u64 params (`valid_t`/`tx_t`/`id`) map to
+   wasm-bindgen **BigInt**; the public API takes `number` and converts at the
+   wasm boundary.
 3. **Zero runtime deps.** The resolution input is a `{mentionIndex: entityId}`
    map or `["native", scorerId, threshold]` — NOT goldenprofile's `Resolution`
    shape — so no hard goldenprofile dependency. Composition (`resolveProfiles →
