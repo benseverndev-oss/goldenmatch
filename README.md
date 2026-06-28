@@ -3,11 +3,11 @@
 
 # 🟡 Golden Suite
 
-**A polyglot data-quality and entity-resolution toolkit. Polished, opinionated, AI-native.**
+**Zero-config entity resolution that scales — dedupe & match messy records from a laptop CSV to 100M+ rows. No training data, no tuning.**
 
-*GoldenCheck profiles → GoldenFlow standardizes → GoldenMatch deduplicates → GoldenAnalysis reports, all orchestrated by GoldenPipe. With InferMap for schema mapping, a Rust extension layer for Postgres / DuckDB, and optional WebAssembly acceleration behind the edge-safe TypeScript ports.*
+*The headline package, **GoldenMatch**, does the matching — fuzzy + exact + probabilistic (Fellegi-Sunter) + LLM — and **beats hand-tuned Splink out of the box** (96.4% F1 on DBLP-ACM), identical in Python, edge-safe TypeScript, and SQL. Around it sits a full data-quality suite: GoldenCheck profiles, GoldenFlow standardizes, GoldenAnalysis reports, GoldenPipe orchestrates, and InferMap maps schemas — with a Rust extension layer for Postgres / DuckDB and optional WebAssembly acceleration behind the TS ports.*
 
-**⚡ GoldenMatch scales from a CSV on your laptop to 100M+ rows on a Ray cluster — verified: 100,000,000 records deduped recall-complete (correct across any partitioning) in 9.2 min, with a 0.36 GB driver footprint.**
+**⚡ Verified at scale: 100,000,000 records deduped in 9.2 min on a Ray cluster — recall-complete across any partitioning, 0.36 GB driver footprint.**
 
 <br>
 
