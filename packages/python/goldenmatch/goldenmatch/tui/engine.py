@@ -199,6 +199,15 @@ class MatchEngine:
         if config.standardization and config.standardization.rules:
             combined_lf = apply_standardization(combined_lf, config.standardization.rules)
 
+        # ── Domain feature extraction ──
+        # Materializes derived columns (e.g. ``__title_key__``) that auto-config
+        # may reference from matchkeys / blocking keys. Must run BEFORE
+        # compute_matchkeys, mirroring ``_run_dedupe_pipeline`` -- without it this
+        # path crashes with ColumnNotFoundError whenever auto-config detects a
+        # domain (bibliographic / product shapes, e.g. DBLP-ACM). See issue #1300.
+        from goldenmatch.core.pipeline import _apply_domain_extraction
+        combined_lf = _apply_domain_extraction(combined_lf, config)
+
         # ── Compute matchkeys ──
         matchkeys = config.get_matchkeys()
         combined_lf = compute_matchkeys(combined_lf, matchkeys)
