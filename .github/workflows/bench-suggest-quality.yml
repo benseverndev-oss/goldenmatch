@@ -45,7 +45,11 @@ permissions:
 jobs:
   suggest-quality:
     runs-on: ${{ inputs.runner || 'large-new-64GB' }}
-    timeout-minutes: 60
+    # The gym-gate step (FULL_DIST over the whole catalog) + native build + the
+    # regular gate overrun 60min on every push, cancelling the job at "Complete
+    # job" -> a perpetual red `suggest-quality` check on main. 120 gives the
+    # FULL_DIST work headroom (a one-shot gym-bless completed in ~70min under it).
+    timeout-minutes: 120
     env:
       GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
       GOLDENMATCH_NATIVE: "1"
