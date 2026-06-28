@@ -89,8 +89,11 @@ Two student options (the spec recommends evaluating both, leading with whichever
   takes a model arg). Cheapest to train + serve; the risk is REBEL's format/vocab vs our relations
   (the A/B arm B measures base-REBEL today to size this).
 
-Training infra: a GPU is required and is NOT free on GH -- Modal / Runpod / Lambda / Colab / a Railway
-GPU box for a few GPU-hours (LoRA-3B or seq2seq are small). One-time per dataset revision.
+Training infra: **Modal** (creds in Infisical: `MODAL_TOKEN_ID` + `MODAL_TOKEN_SECRET`, project
+`a99885f0-c5af-4ae1-9dc8-255cc60aa129` env `dev`). A GPU is NOT free on GH -- Modal is serverless GPU:
+define training as a `@app.function(gpu="A10G"|"A100")` Python function, mount the dataset, `modal run`,
+write the artifact to a Modal Volume / publish out. LoRA-3B or seq2seq need only a few GPU-hours. One-
+time per dataset revision; no VM to manage. (Resolves open decision #2.)
 
 ### Stage 4 -- Serve (+ the off-GH -> on-GH artifact seam)
 
@@ -156,7 +159,7 @@ student that perfectly mimics teacher ERRORS would score high on agreement but N
    general, reusable for synthesis)? The A/B arm-B (base REBEL) result should inform this. **Default if
    inconclusive:** start with seq2seq-REBEL -- cheapest to train + serve and the seam already exists, so
    it validates the whole loop at lowest cost before committing to the heavier LoRA path.
-2. **Training infra:** which GPU provider (Modal / Runpod / Lambda / Railway-GPU)?
+2. ~~**Training infra:**~~ RESOLVED -- **Modal** (serverless GPU; creds in Infisical, see Stage 3).
 3. **Teacher-pass budget:** how many docs to capture (dataset size vs OpenAI cost), and whether to
    piggy-back capture on the existing gpt-4o-mini bench runs vs a dedicated pass.
 4. **Phase 2 (synthesis distillation):** in-scope now or only after extraction is shown to close the
