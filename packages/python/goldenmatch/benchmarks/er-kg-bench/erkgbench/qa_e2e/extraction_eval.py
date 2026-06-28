@@ -9,18 +9,47 @@ extraction the pipeline runs.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 _COUNTERS = ("ent_tp", "ent_fp", "ent_fn", "rel_tp", "rel_fp", "rel_fn")
+_REL = ("rel_tp", "rel_fp", "rel_fn")
+
+
+def _norm(s) -> str:
+    from . import metrics
+
+    return metrics._normalize(str(s))
+
+
+def predicate_counts(gold_src: str, gold_dst: str, gold_rel: str, extraction) -> dict:
+    """PREDICATE-AWARE relation counts: an edge hits only if the entity pair matches AND the predicate
+    LABEL matches the gold relation (lenient: normalized equality or substring either way -- so "was
+    acquired by" still matches gold "acquired"). This is the metric the predicate-specific multi-hop
+    questions actually need; the predicate-AGNOSTIC `extraction_counts` does not capture mislabeling."""
+    gold_pair = frozenset({_norm(gold_src), _norm(gold_dst)})
+    gr = _norm(gold_rel)
+    tp, fp = 0, 0
+    for r in extraction.relationships:
+        if not (r.subj < len(extraction.mentions) and r.obj < len(extraction.mentions)):
+            continue
+        pair = frozenset({_norm(extraction.mentions[r.subj].name), _norm(extraction.mentions[r.obj].name)})
+        pred = _norm(str(r.predicate))
+        hit = pair == gold_pair and (pred == gr or (gr and gr in pred) or (pred and pred in gr))
+        if hit and tp == 0:
+            tp = 1
+        else:
+            fp += 1
+    return {"rel_tp": tp, "rel_fp": fp, "rel_fn": 1 - tp}
 
 
 @dataclass
 class ExtractionF1:
     label: str
     entity: dict  # {precision, recall, f1}
-    relation: dict
+    relation: dict  # edge-existence (predicate-agnostic)
     n_docs: int
     n_failed: int = 0  # docs whose extraction raised (malformed JSON etc.) -> counted as empty
+    relation_pred: dict = field(default_factory=dict)  # predicate-EXACT relation F1
 
 
 def evaluate_extractor(label: str, *, llm, seed: int = 7, n_questions: int = 80,
@@ -41,10 +70,13 @@ def evaluate_extractor(label: str, *, llm, seed: int = 7, n_questions: int = 80,
         seed=seed, n_questions=n_questions, ambiguity=ambiguity, max_hops=max_hops
     )
     et = dict.fromkeys(_COUNTERS, 0)
+    ep = dict.fromkeys(_REL, 0)  # predicate-EXACT relation counts
     n_docs = n_failed = 0
     for d in corpus.documents:
-        if len(d.id.split("::")) != 3:
+        parts = d.id.split("::")
+        if len(parts) != 3:
             continue
+        gold_rel = parts[1]
         # Fail-soft per doc, exactly like ingest._prepare_doc: a malformed-JSON / errored extraction
         # counts as EMPTY (all FN for this doc -- the honest scoring), not a crashed run. The failure
         # rate is itself signal (JSON-mode should reduce it), so we report it.
@@ -54,8 +86,11 @@ def evaluate_extractor(label: str, *, llm, seed: int = 7, n_questions: int = 80,
             ex = Extraction(mentions=[], relationships=[])
             n_failed += 1
         c = extraction_counts(d.src_surface, d.dst_surface, ex)
+        pc = predicate_counts(d.src_surface, d.dst_surface, gold_rel, ex)
         for k in _COUNTERS:
             et[k] += c[k]
+        for k in _REL:
+            ep[k] += pc[k]
         n_docs += 1
     return ExtractionF1(
         label=label,
@@ -63,6 +98,7 @@ def evaluate_extractor(label: str, *, llm, seed: int = 7, n_questions: int = 80,
         relation=f1_from_counts(et["rel_tp"], et["rel_fp"], et["rel_fn"]),
         n_docs=n_docs,
         n_failed=n_failed,
+        relation_pred=f1_from_counts(ep["rel_tp"], ep["rel_fp"], ep["rel_fn"]),
     )
 
 
@@ -74,12 +110,17 @@ def render_md(results, *, model: str) -> str:
         "triple (entity = name overlap, relation = edge existence either-direction). This isolates",
         "EXTRACTION from synthesis and is far less noisy than end-to-end answer-match.",
         "",
-        "| config | entity-F1 | relation-F1 | docs | parse-fail |",
-        "|---|---|---|---|---|",
+        "relation-F1 is edge EXISTENCE (predicate-agnostic); relation-F1(pred) requires the predicate",
+        "LABEL to match too -- the metric the predicate-specific multi-hop questions actually need.",
+        "",
+        "| config | entity-F1 | relation-F1 | relation-F1(pred) | docs | parse-fail |",
+        "|---|---|---|---|---|---|",
     ]
     for r in results:
         fail = f"{r.n_failed}/{r.n_docs}" if r.n_docs else "0/0"
+        predf1 = r.relation_pred.get("f1", 0.0)
         lines.append(
-            f"| {r.label} | {r.entity['f1']:.3f} | {r.relation['f1']:.3f} | {r.n_docs} | {fail} |"
+            f"| {r.label} | {r.entity['f1']:.3f} | {r.relation['f1']:.3f} | {predf1:.3f} "
+            f"| {r.n_docs} | {fail} |"
         )
     return "\n".join(lines) + "\n"

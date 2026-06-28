@@ -1,7 +1,30 @@
 """Extraction-F1 eval -- wheel-free (stub LLM, api extractor; no torch/PyStore)."""
 from __future__ import annotations
 
-from erkgbench.qa_e2e.extraction_eval import ExtractionF1, evaluate_extractor, render_md
+from erkgbench.qa_e2e.extraction_eval import (
+    ExtractionF1,
+    evaluate_extractor,
+    predicate_counts,
+    render_md,
+)
+from goldengraph.extract import Extraction, Mention, Relationship
+
+
+def test_predicate_counts_requires_label_match():
+    ex = Extraction(
+        mentions=[Mention("Acme", "org"), Mention("Beta", "org")],
+        relationships=[Relationship(subj=0, predicate="acquired", obj=1)],
+    )
+    # right entities + right predicate -> hit
+    assert predicate_counts("Acme", "Beta", "acquired", ex)["rel_tp"] == 1
+    # right entities + WRONG predicate -> miss (the predicate-mislabel case the agnostic metric hides)
+    assert predicate_counts("Acme", "Beta", "works at", ex)["rel_tp"] == 0
+    # lenient: gold substring of extracted predicate
+    ex2 = Extraction(
+        mentions=[Mention("Acme", "org"), Mention("Beta", "org")],
+        relationships=[Relationship(subj=0, predicate="was acquired by", obj=1)],
+    )
+    assert predicate_counts("Acme", "Beta", "acquired", ex2)["rel_tp"] == 1
 
 
 class _StubLLM:
@@ -37,10 +60,8 @@ def test_evaluate_is_fail_soft_on_bad_json(monkeypatch):
 
 def test_render_md_table():
     res = [
-        ExtractionF1("api_json", {"f1": 0.5, "precision": 0.5, "recall": 0.5},
-                     {"f1": 0.3, "precision": 0.3, "recall": 0.3}, 20),
-        ExtractionF1("rebel", {"f1": 0.7, "precision": 0.7, "recall": 0.7},
-                     {"f1": 0.1, "precision": 0.1, "recall": 0.1}, 20),
+        ExtractionF1("api_json", {"f1": 0.5}, {"f1": 0.8}, 20, relation_pred={"f1": 0.3}),
     ]
     md = render_md(res, model="qwen2.5:7b-instruct")
-    assert "Extraction-F1" in md and "api_json" in md and "rebel" in md and "0.500" in md
+    assert "Extraction-F1" in md and "api_json" in md and "relation-F1(pred)" in md
+    assert "0.800" in md and "0.300" in md  # edge-existence vs predicate-exact both shown
