@@ -1,0 +1,34 @@
+name: Publish goldengraph to npm
+
+# Thin caller -> .github/workflows/_publish-js.yml (the shared template).
+# Wired but unfired: nothing publishes until a `goldengraph-js-v*` tag is pushed.
+# The committed src/core/_wasm/* artifacts mean the npm build needs no Rust
+# toolchain — tsup bundles the inlined wasm bytes.
+on:
+  push:
+    tags:
+      - "goldengraph-js-v*"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Tag or commit to build (default: HEAD of main)"
+        required: false
+        default: ""
+      dry_run:
+        description: "Pack and validate without publishing"
+        required: false
+        default: "false"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    uses: ./.github/workflows/_publish-js.yml
+    with:
+      package: goldengraph
+      build_deps: false
+      ref: ${{ inputs.ref || '' }}
+      dry_run: ${{ inputs.dry_run || 'false' }}
+    secrets: inherit
