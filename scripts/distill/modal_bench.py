@@ -160,6 +160,14 @@ def _persist(eval: str, n: int, text: str) -> str:
 
 
 @app.local_entrypoint()
-def main(eval: str = "extraction_f1", n: int = 20, ambiguity: float = 0.6, opts: str = "") -> None:
+def main(eval: str = "extraction_f1", n: int = 20, ambiguity: float = 0.6, opts: str = "",
+         spawn: bool = False) -> None:
+    if spawn:
+        # fire-and-forget: queue the call SERVER-SIDE and return instantly, so a local-CLI kill can't
+        # cancel it. Result lands on the volume at results/<eval>_<n>.md (pull with `modal volume get`).
+        # Pair with `modal run --detach` so the app outlives this process.
+        call = run_bench.spawn(eval, n=n, ambiguity=ambiguity, opts=opts)
+        print(f"SPAWNED call_id={call.object_id} -> results/{eval}_{n}.md on volume gg-bench-cache")
+        return
     md = run_bench.remote(eval, n=n, ambiguity=ambiguity, opts=opts)
     print("\n===== RESULT =====\n" + md)
