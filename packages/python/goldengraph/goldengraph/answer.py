@@ -64,23 +64,33 @@ def trace_chain(slice_graph, anchor_surface: str, relation_chain) -> str | None:
     the matching outgoing edge to the next node(s). Returns the final node's canonical name. LLM-FREE
     -- the directed walk IS the answer (the graph has at most one edge per (entity, relation)), so it
     hands synthesis nothing to drown in. The fix for multi-hop synthesis-over-the-ball failure."""
+    import os
+
+    dbg = os.environ.get("GOLDENGRAPH_CHAIN_DEBUG", "") not in ("", "0", "false")
     seeds = slice_graph.seeds_by_name(anchor_surface)
     if not seeds:
+        if dbg:
+            print(f"[chain] anchor {anchor_surface!r} NOT SEEDED", flush=True)
         return None
     frontier = set(seeds)
     id_to_name: dict = {}
-    for rel in relation_chain:
+    for hop, rel in enumerate(relation_chain, 1):
         sub = slice_graph.query(list(frontier), 1)
         id_to_name = {e["entity_id"]: e["canonical_name"] for e in sub.get("entities", ())}
-        nxt = {
-            e["obj"]
-            for e in sub.get("edges", ())
-            if e["subj"] in frontier and e["obj"] in id_to_name and _rel_match(e["predicate"], rel)
-        }
+        out_edges = [e for e in sub.get("edges", ()) if e["subj"] in frontier and e["obj"] in id_to_name]
+        nxt = {e["obj"] for e in out_edges if _rel_match(e["predicate"], rel)}
+        if dbg:
+            avail = sorted({_norm_rel(e["predicate"]) for e in out_edges})
+            print(f"[chain] hop{hop} rel={rel!r} frontier={len(frontier)} matched={len(nxt)} "
+                  f"avail={avail[:8]}", flush=True)
         if not nxt:
+            if dbg:
+                print(f"[chain] DIED at hop{hop}: no {rel!r} edge from frontier", flush=True)
             return None
         frontier = nxt
     names = sorted({id_to_name[i] for i in frontier if i in id_to_name} - {anchor_surface})
+    if dbg:
+        print(f"[chain] OK -> {names[:3]}", flush=True)
     return names[0] if names else None
 
 
