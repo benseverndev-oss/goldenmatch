@@ -78,6 +78,7 @@ jobs:
       throughput: ${{ steps.filter.outputs.throughput }}
       autoconfig_wasm: ${{ steps.filter.outputs.autoconfig_wasm }}
       suggest_wasm: ${{ steps.filter.outputs.suggest_wasm }}
+      goldenprofile_wasm: ${{ steps.filter.outputs.goldenprofile_wasm }}
       quality_gate: ${{ steps.filter.outputs.quality_gate }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
@@ -205,6 +206,19 @@ jobs:
               - 'packages/typescript/goldenmatch/scripts/build_suggest_wasm.mjs'
               - 'packages/typescript/goldenmatch/src/core/suggest*.ts'
               - 'packages/typescript/goldenmatch/src/core/_wasm/suggestWasm*'
+            goldenprofile_wasm:
+              # Gates the (rust-toolchain-heavy) goldenprofile (Virtual
+              # Fingerprint) wasm rebuild + drift guard inside the typescript
+              # lane. Fires when the kernel, the wasm wrapper, the build script,
+              # or the TS goldenprofile surface changes. graph-core is included
+              # because goldenprofile-core links it (the arrow-gating feature).
+              - 'packages/rust/extensions/goldenprofile-core/**'
+              - 'packages/rust/extensions/goldenprofile-wasm/**'
+              - 'packages/rust/extensions/graph-core/**'
+              - 'packages/rust/extensions/score-core/**'
+              - 'packages/rust/extensions/sketch-core/**'
+              - 'packages/rust/extensions/fingerprint-core/**'
+              - 'packages/typescript/goldenprofile/**'
             web:
               - 'packages/python/goldenmatch/web/**'
               - 'packages/python/goldenmatch/goldenmatch/web/**'
@@ -1121,6 +1135,28 @@ jobs:
             exit 1
           fi
           npx vitest run tests/parity/suggest-wasm.parity.test.ts
+      # Same drift-guard pattern for the goldenprofile (Virtual Fingerprint)
+      # wasm core. Rebuild the inlined wasm + bindings + parity fixtures from the
+      # live kernel, then prove the fresh build passes parity. The build script
+      # regenerates the fixtures itself (cargo run --example gen_parity_fixtures,
+      # which IS the host oracle), so we diff the fixtures to catch "kernel moved
+      # but fixtures not regenerated". We diff ONLY the fixtures — NOT the
+      # .wasm/.js bytes (toolchain-variant, would false-positive). Stale committed
+      # wasm is caught behaviorally by the parity test (committed wasm vs fixtures).
+      - name: Rebuild + verify embedded goldenprofile wasm
+        if: needs.changes.outputs.goldenprofile_wasm == 'true' || needs.changes.outputs.force_all == 'true'
+        working-directory: packages/typescript/goldenprofile
+        run: |
+          rustup target add wasm32-unknown-unknown
+          curl -sSf https://rustwasm.github.io/wasm-pack/installer/init.sh | sh
+          node scripts/build_goldenprofile_wasm.mjs
+          if ! git diff --exit-code -- tests/parity/fixtures/goldenprofile/; then
+            echo "::error::goldenprofile parity fixtures are stale. Run \
+              'node scripts/build_goldenprofile_wasm.mjs' in \
+              packages/typescript/goldenprofile and commit the result." >&2
+            exit 1
+          fi
+          npx vitest run tests/parity/goldenprofile-wasm.parity.test.ts
       - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
         with:
           path: .turbo
