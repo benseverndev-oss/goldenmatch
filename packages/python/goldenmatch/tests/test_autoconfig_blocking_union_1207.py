@@ -115,6 +115,34 @@ def test_build_union_returns_none_when_under_coverage():
     assert _build_strong_identifier_union(profiles, df, n_rows_full=df.height) is None
 
 
+def test_union_excludes_perfect_surrogate_id():
+    """#876 guard: a perfect-surrogate id (unique per row, card_ratio 1.0) makes
+    only singleton blocks (0 candidate pairs) -- it must NOT become a union pass,
+    while genuinely repeating strong ids still do."""
+    n = 100
+    df = pl.DataFrame({
+        # perfect surrogate: unique per row -> cardinality_ratio 1.0
+        "rec_id": [f"{1000000000 + i}" for i in range(n)],
+        # two genuinely repeating strong ids (card < 1.0), fully non-null so the
+        # union still has >=2 passes AND clears the 0.95 coverage gate.
+        "id_a": [f"{2000000000 + (i % 20)}" for i in range(n)],
+        "id_b": [f"{3000000000 + (i % 25)}" for i in range(n)],
+    })
+    profiles = profile_columns(df)
+    by_name = {p.name: p for p in profiles}
+    # sanity: rec_id must profile as a STRONG-ID type with card_ratio >= 1.0,
+    # else the guard is never exercised (the test would pass trivially).
+    assert by_name["rec_id"].col_type in ("identifier", "email", "phone")
+    assert by_name["rec_id"].cardinality_ratio >= 1.0
+    cfg = _build_strong_identifier_union(profiles, df, n_rows_full=df.height)
+    assert cfg is not None
+    fieldsets = {tuple(p.fields) for p in cfg.passes}
+    assert ("rec_id",) not in fieldsets, f"perfect surrogate leaked into {fieldsets}"
+    # the two genuinely repeating ids DID survive as passes
+    assert ("id_a",) in fieldsets
+    assert ("id_b",) in fieldsets
+
+
 def test_build_blocking_emits_union_on_null_sparse_shape():
     df = _null_sparse_person_df()
     profiles = profile_columns(df)

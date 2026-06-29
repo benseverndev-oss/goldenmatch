@@ -1338,6 +1338,12 @@ def _build_strong_identifier_union(
         if p.col_type in _STRONG_EXACT_TYPES and p.name in df.columns:
             if _nonnull(p.name) < _UNION_PASS_MIN_NONNULL:
                 continue
+            # #876 surrogate guard: a perfect-surrogate id (card_ratio >= 1.0)
+            # makes singleton blocks (0 pairs) — exclude. NOTE: do NOT apply
+            # blocking_max_ratio here; the union exists precisely to use
+            # near-unique-but-repeating ids the single-key gate rejects.
+            if (p.cardinality_ratio or 0.0) >= 1.0:
+                continue
             candidate_passes.append([p.name])
             strong_id_passes += 1
 
