@@ -97,6 +97,35 @@ def _cluster_predicates(predicates, embedder, cosine_threshold: float | None = N
     return [sorted(g) for g in groups.values()]
 
 
+def _cluster_predicates_gm(predicates):
+    """Relation resolution via goldenmatch dedupe: treat the distinct predicate phrases as records and
+    let goldenmatch's CALIBRATED zero-config resolver cluster them -- the product's own matching engine
+    (the same one that resolves entity synonyms) applied to the RELATION vocabulary, instead of a fixed
+    cosine threshold. Signal = the phrase string, so it merges fuzzy/bleed variants (and more than the
+    exact-substring rules), but string-disjoint pure synonyms ('works at' vs 'on staff at') have no
+    string signal to match on -- the honest test of whether calibrated matching beats naive clustering.
+    Fail-open: any error -> each predicate its own cluster (caller's deterministic backbone can follow)."""
+    import goldenmatch as gm
+    import polars as pl
+
+    uniq = sorted({p for p in predicates if _norm(p)})
+    if len(uniq) < 2:
+        return [[u] for u in uniq]
+    df = pl.DataFrame({"predicate": [_norm(u) for u in uniq]})
+    try:
+        result = gm.dedupe_df(df, fuzzy={"predicate": 0.82}, confidence_required=False)
+    except Exception:
+        return [[u] for u in uniq]
+    clusters, seen = [], set()
+    for info in getattr(result, "clusters", {}).values():
+        members = [uniq[int(i)] for i in info.get("members", ()) if 0 <= int(i) < len(uniq)]
+        if members:
+            clusters.append(sorted(set(members)))
+            seen.update(members)
+    clusters.extend([u] for u in uniq if u not in seen)  # singletons dedupe left out
+    return clusters
+
+
 # ── direction detection (source word-order + passive) ────────────────────────
 
 
@@ -210,7 +239,12 @@ def discover_schema(extractions, sources, embedder, llm=None) -> RelationSchema:
     by_phrase: dict[str, list] = {}
     for (s, p, o, src) in edges:
         by_phrase.setdefault(p, []).append((s, p, o, src))
-    clusters = _cluster_predicates(list(by_phrase), embedder)
+    # Clustering backend: 'gm' resolves the relation vocabulary with goldenmatch dedupe (the product's
+    # calibrated matcher); default is the deterministic string + embedding union-find.
+    if os.environ.get("GOLDENGRAPH_DISCOVER_RESOLVE", "").strip().lower() == "gm":
+        clusters = _cluster_predicates_gm(list(by_phrase))
+    else:
+        clusters = _cluster_predicates(list(by_phrase), embedder)
     if llm is not None:
         clusters = _llm_consolidate(clusters, llm)
     return _assemble_schema(clusters, by_phrase)

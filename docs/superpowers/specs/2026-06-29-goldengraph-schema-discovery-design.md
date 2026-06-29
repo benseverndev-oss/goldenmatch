@@ -16,6 +16,23 @@ band 0.655–0.689), all 5 real relations recovered, correctly separated, with c
 > threshold, default 0.93 -- string rules are primary), `GOLDENGRAPH_DISCOVER_LLM` (tie-break, default
 > off). Module: `goldengraph/schema_discovery.py`; gate `GOLDENGRAPH_SCHEMA_DISCOVER=1`.
 
+> **PHASE-2 (open synonymy) -- the boundary, 2026-06-29.** A paraphrase-injected engineered corpus
+> (3 surface phrasings per relation -- `works_at` = "works at" / "is employed at" / "is on staff at"
+> -- questions stay canonical; `GOLDENGRAPH_BENCH_REL_PARAPHRASE=1`) stress-tests synonym clustering.
+> Result: discovery does NOT generalize to open synonymy with the free stack. Three tools, three
+> failure modes: deterministic string-clustering **fragments** (0.172 -- synonyms are string-disjoint);
+> nomic embedding at 0.7 **over-merges** (0.155 -- collapsed `works_at`+`located_in`+`part_of` into one
+> cluster: nomic puts distinct-but-adjacent relations as close as true synonyms, so NO threshold
+> separates them); goldenmatch dedupe over the predicate strings (`GOLDENGRAPH_DISCOVER_RESOLVE=gm`,
+> `_cluster_predicates_gm`) merges **nothing** (all singletons -- no string signal to match on).
+> **The core finding: the synonym signal is not in the predicate string.** It lives in semantics (an
+> LLM knows "works at" == "on staff at") or in argument structure (the entity types/co-occurrence the
+> predicate connects) -- and this corpus is adversarial for the latter (homogeneous entities, disjoint
+> edges). Scope conclusion: schema discovery self-configures for **closed / extraction-noisy** vocab
+> (the common case; Phase-1 = 0.655) but **open synonymy** needs either constrained LLM-MAPPING (map
+> each predicate to the nearest canonical relation -- the LLM's synonym knowledge without the
+> free-merge over-merge that broke Phase-1) or a seed vocabulary. Future work, not v1.
+
 **Status (original):** Designed (approved 2026-06-29); ready for implementation plan.
 **Owner:** Ben Severn
 **Context:** Generalizes the schema-constrained ingest win
