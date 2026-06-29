@@ -92,3 +92,6 @@ packages/python/goldenanalysis/goldenanalysis/_native*.so
 
 # codebase-memory-mcp local index/snapshot (rebuilt by the SessionStart hook)
 .codebase-memory/
+
+# scratch Modal run logs (transient)
+modal_*.log
