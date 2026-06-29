@@ -55,9 +55,16 @@ def _string_close(a: str, b: str) -> bool:
     return bool(na) and bool(nb) and (na in nb or nb in na)
 
 
-def _cluster_predicates(predicates, embedder, cosine_threshold: float = 0.82):
+def _cluster_predicates(predicates, embedder, cosine_threshold: float | None = None):
     """Union-find clustering of distinct raw predicates. Edge when `_string_close` OR
-    embedding cosine >= threshold. Deterministic: predicates processed in sorted order."""
+    embedding cosine >= threshold. Deterministic: predicates processed in sorted order.
+
+    The threshold is HIGH (0.93) on purpose: string rules are primary (they separate distinct
+    verbs cleanly), and embedding only merges NEAR-identical meanings. A loose threshold (0.82)
+    over-merged adjacent-but-distinct relations -- measured: 'authored' collapsed into 'acquired'
+    on nomic embeddings, mislabeling every authored edge. Override via `GOLDENGRAPH_DISCOVER_COSINE`."""
+    if cosine_threshold is None:
+        cosine_threshold = float(os.environ.get("GOLDENGRAPH_DISCOVER_COSINE", "0.93"))
     import numpy as np
 
     uniq = sorted({p for p in predicates if _norm(p)})
