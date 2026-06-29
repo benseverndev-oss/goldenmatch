@@ -1,6 +1,22 @@
 # GoldenGraph schema discovery — design
 
-**Status:** Designed (approved 2026-06-29); ready for implementation plan.
+**Status:** IMPLEMENTED + Phase-1 PASSED 2026-06-29. Discovery recovers the hand-fed win on the
+engineered corpus **without being told the schema**: e2e answer-match **0.655** (hand-fed 0.672;
+band 0.655–0.689), all 5 real relations recovered, correctly separated, with correct directions.
+
+> **KEY CORRECTION to the design below (the LLM tie-break).** The hybrid LLM consolidation (Component
+> 1d) was the ENTIRE gap: a weak 7B asked to merge same-relation clusters over-merged `acquired`+
+> `authored` into one relation, mislabeling every authored edge (0.53 with it on). Disabling it ->
+> pure deterministic string-clustering -> **0.655** (clean `acquired`/`authored` separation). So the
+> implemented default is **deterministic-only**; the LLM tie-break is **opt-in** (`GOLDENGRAPH_
+> DISCOVER_LLM=1`), not the default the design assumed. Same lesson as the rest of the program:
+> deterministic structure beats LLM judgment on a weak model. The 6 spurious low-frequency relations
+> the 7B's noisy extraction invents (`describes`, `involves`, ...) are present but non-load-bearing
+> (no query uses them; 0.655 confirms). Knobs: `GOLDENGRAPH_DISCOVER_COSINE` (embedding-merge
+> threshold, default 0.93 -- string rules are primary), `GOLDENGRAPH_DISCOVER_LLM` (tie-break, default
+> off). Module: `goldengraph/schema_discovery.py`; gate `GOLDENGRAPH_SCHEMA_DISCOVER=1`.
+
+**Status (original):** Designed (approved 2026-06-29); ready for implementation plan.
 **Owner:** Ben Severn
 **Context:** Generalizes the schema-constrained ingest win
 ([[2026-06-28-goldengraph-distilled-extractor-design]]): the 7B reached **0.672**
