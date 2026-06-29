@@ -75,6 +75,50 @@ def _rag_embed_model() -> str:
     return os.environ.get("OPENAI_EMBED_MODEL") or "text-embedding-3-large"
 
 
+def _rag_embed_dim() -> int:
+    """Embedding dimension LightRAG needs declared up front. `OPENAI_EMBED_DIM` override, else inferred
+    from the model (nomic-embed-text = 768; OpenAI text-embedding-3-* = 3072)."""
+    v = os.environ.get("OPENAI_EMBED_DIM")
+    if v:
+        return int(v)
+    return 768 if "nomic" in (os.environ.get("OPENAI_EMBED_MODEL") or "").lower() else 3072
+
+
+def _lightrag_llm_func():
+    """LightRAG llm_model_func bound to the configured chat model + endpoint. Mirrors LightRAG's own
+    `gpt_4o_mini_complete` wrapper (absorbs the `keyword_extraction` flag, forwards `hashing_kv` etc.),
+    but with our model and OPENAI_BASE_URL so it can target a local Ollama 7B."""
+    from lightrag.llm.openai import openai_complete_if_cache
+
+    model = _chat_model()
+    base_url = os.environ.get("OPENAI_BASE_URL") or None
+    api_key = os.environ.get("OPENAI_API_KEY") or None
+
+    async def _llm(prompt, system_prompt=None, history_messages=None, keyword_extraction=False, **kw):
+        return await openai_complete_if_cache(
+            model, prompt, system_prompt=system_prompt,
+            history_messages=history_messages or [], base_url=base_url, api_key=api_key, **kw,
+        )
+
+    return _llm
+
+
+def _lightrag_embedding_func():
+    """LightRAG embedding_func (EmbeddingFunc with declared dim) bound to the configured embed model +
+    endpoint -- OpenAI or a local Ollama embedding model."""
+    from lightrag.llm.openai import openai_embed
+    from lightrag.utils import EmbeddingFunc
+
+    model = _rag_embed_model()
+    base_url = os.environ.get("OPENAI_BASE_URL") or None
+    api_key = os.environ.get("OPENAI_API_KEY") or None
+
+    async def _embed(texts):
+        return await openai_embed(texts, model=model, base_url=base_url, api_key=api_key)
+
+    return EmbeddingFunc(embedding_dim=_rag_embed_dim(), max_token_size=8192, func=_embed)
+
+
 def _build_engine(name: str):
     if name == "goldengraph":
         from goldengraph.embed import GoldenmatchEmbedder
@@ -95,12 +139,13 @@ def _build_engine(name: str):
             embedder=GoldenmatchEmbedder(provider="openai", model=_embed_model()),
         )
     if name == "lightrag":
-        from lightrag.llm.openai import gpt_4o_mini_complete, openai_embed
-
         from .engines.lightrag import LightRAGQAEngine
 
+        # Local-aware: openai_complete_if_cache / openai_embed honor OPENAI_BASE_URL, so the SAME funcs
+        # serve OpenAI (model=gpt-4o-mini, base_url unset) or a local Ollama 7B (model=qwen, base_url
+        # set). LightRAG needs the embedding DIM up front -> _rag_embed_dim() (nomic=768, OpenAI=3072).
         return LightRAGQAEngine(
-            llm_model_func=gpt_4o_mini_complete, embedding_func=openai_embed
+            llm_model_func=_lightrag_llm_func(), embedding_func=_lightrag_embedding_func()
         )
     if name == "ms_graphrag":
         from .engines.ms_graphrag import MSGraphRAGQAEngine

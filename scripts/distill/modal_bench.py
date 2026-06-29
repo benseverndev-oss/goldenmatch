@@ -31,7 +31,8 @@ image = (
     .apt_install("curl", "build-essential", "pkg-config", "libssl-dev", "git", "zstd")
     .run_commands("curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y")
     .env({"PATH": "/root/.cargo/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin"})
-    .pip_install("maturin", "goldenmatch", "datasets", "openai", "numpy", "pytest")
+    .pip_install("maturin", "goldenmatch", "datasets", "openai", "numpy", "pytest",
+                 "lightrag-hku>=1.5,<1.6")  # the LightRAG competitor for the local-7B head-to-head
     .run_commands("curl -fsSL https://ollama.com/install.sh | sh")
     .add_local_dir(str(REPO / "packages/rust"), "/repo/packages/rust", ignore=["**/target/**"])
     .add_local_dir(str(REPO / "packages/python/goldengraph"), "/repo/packages/python/goldengraph",
