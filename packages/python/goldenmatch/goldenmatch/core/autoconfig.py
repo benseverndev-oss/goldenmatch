@@ -668,6 +668,18 @@ def _noise_aware_scorers_enabled() -> bool:
     )
 
 
+def _tf_name_weighting_enabled() -> bool:
+    """Whether auto-config populates ``MatchkeyField.tf_freqs`` for the
+    data-driven name-frequency downweight on ``name_freq_weighted_jw`` fields
+    (#1207 PR2a). Default ON. Without a populated table the scorer falls back to
+    the static US-Census surname path, so this is the seam that makes the
+    per-dataset downweight actually fire. Kill-switch:
+    GOLDENMATCH_TF_NAME_WEIGHTING=0 (or false/no/off, case-insensitive)."""
+    return os.environ.get("GOLDENMATCH_TF_NAME_WEIGHTING", "1").strip().lower() not in {
+        "0", "false", "no", "off",
+    }
+
+
 def _route_to_probabilistic_enabled() -> bool:
     """Auto-route a probabilistic-shaped dataset (no strong-identity exact matchkey
     + multiple weak fuzzy fields) to the Fellegi-Sunter path instead of the default
@@ -1021,6 +1033,27 @@ def build_matchkeys(
             weight=weight,
             transforms=transforms,
         )
+
+        # #1207 PR2a: arm the data-driven name-frequency downweight. The
+        # name_freq_weighted_jw scorer applies a per-dataset common-value
+        # downweight ONLY when handed a frequency table; without this it falls
+        # back to the static US-Census surname path. Build the table from the
+        # SAME (df, transforms) the scorer sees at score time: find_fuzzy_matches
+        # scores apply_transforms(value, field.transforms), and these transforms
+        # include `lowercase`, which neutralizes the `name_proper` standardizer
+        # auto-config also emits (title-case only) -- so raw-df-plus-transforms
+        # keys align byte-for-byte with the post-standardization scored values.
+        # Skip when the table has no signal (<2 distinct values) or df is absent.
+        if (
+            scorer == "name_freq_weighted_jw"
+            and df is not None
+            and _tf_name_weighting_enabled()
+        ):
+            from goldenmatch.core.tf_tables import value_frequencies  # noqa: PLC0415
+
+            _tf = value_frequencies(df, p.name, transforms)
+            if len(_tf) >= 2:
+                mf.tf_freqs = _tf
 
         if scorer == "exact":
             exact_fields.append(mf)
