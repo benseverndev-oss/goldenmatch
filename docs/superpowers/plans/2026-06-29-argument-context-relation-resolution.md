@@ -191,6 +191,10 @@ def test_distributional_merges_synonyms_separates_distinct():
     feats = argctx_features(build_argctx_gold(seed=1, edges_per_rel=15, cooccur_frac=1.0))
     clusters = resolve_distributional(feats)
     cmap = {p: i for i, c in enumerate(clusters) for p in c}
+    # defensive: all five relations must have produced edges (45 entities / 5 types ~= 9 each; if a
+    # type bucket were starved a phrasing could be absent -> fail legibly, not with a KeyError)
+    for p in ("works at", "is on staff at", "acquired", "authored", "part of"):
+        assert p in cmap, f"{p!r} absent -- a type bucket was starved; lower edges_per_rel or reseed"
     # must-pass: works-at synonyms merged
     assert cmap["works at"] == cmap["is on staff at"]
     # must-pass: distinct relations apart (different type sig)
@@ -419,13 +423,23 @@ if __name__ == "__main__":
 
 ## Task 7: Ablation (only if Task 6 distributional PASSES)
 
-Re-run `build_argctx_gold` with **co-occurrence only** (`cooccur_frac=0.0`, so each edge gets one
-phrasing — synonyms get DISJOINT pairs) and **types-only is already covered** by the type blocker; to
-isolate, also run with the type collision REMOVED check. Print B-cubed for each and record which signal
-carries the win in the spec's validation section. (No new corpus code beyond the `cooccur_frac` knob;
-this is a runner variation.)
+Attribute the win to the right signal with two clean, concrete knobs. First add a
+`use_type_blocker: bool = True` parameter to `resolve_distributional` (when False, compare ALL phrasing
+pairs regardless of type signature — isolates the pair-set/co-occurrence signal alone). Then run:
 
-- [ ] Run the two ablation configs, record numbers in the spec, commit.
+- **Co-occurrence WITHOUT types** — `cooccur_frac=1.0`, `resolve_distributional(..., use_type_blocker=False)`.
+  Expectation: still passes (synonyms share identical pair-sets → Jaccard 1.0; distinct relations have
+  disjoint pair-sets → 0). Shows pair-set/co-occurrence is sufficient on its own.
+- **Types WITHOUT co-occurrence** — `cooccur_frac=0.0` (one phrasing per edge → synonyms get DISJOINT
+  pairs). Expectation: FAILS to merge synonyms (Jaccard 0 even within a relation), and the type blocker
+  can't rescue it (it prunes, the Jaccard still decides; and the `acquired`/`part_of` collision means
+  type-sig alone couldn't separate them anyway). Shows types alone are insufficient.
+
+The expected conclusion: **co-occurrence (the pair-set distributional signal) is the necessary+sufficient
+lever; entity types are a helpful blocker but insufficient alone** (the collision proves it). Record the
+two B-cubed numbers + this conclusion in the spec's validation section.
+
+- [ ] Add `use_type_blocker` param, run both ablation configs, record numbers in the spec, commit.
 
 ---
 
