@@ -1,14 +1,18 @@
 """#1207 PR1: per-identifier blocking-union on null-sparse multi-source person data."""
 from __future__ import annotations
 
+from collections import defaultdict
+
 import polars as pl
 import pytest
+from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig
 from goldenmatch.core.autoconfig import (
     _build_strong_identifier_union,
     _union_coverage,
     build_blocking,
     profile_columns,
 )
+from goldenmatch.core.blocker import build_blocks
 from goldenmatch.refdata import surnames
 
 
@@ -122,6 +126,105 @@ def test_build_blocking_emits_union_on_null_sparse_shape():
     )
     cov = _union_coverage(df, [p.fields for p in cfg.passes])
     assert cov >= 0.95
+
+
+def _null_sparse_with_dupes_df(n_entities: int = 1500, seed: int = 99) -> pl.DataFrame:
+    """Like _null_sparse_person_df but plants TRUE duplicates: ~1/3 of entities
+    appear as 2 records that SHARE a strong id (npi or email) but have a
+    DIFFERENT surname (data-entry/name-change), so name/soundex blocking can't
+    co-locate them — only an id pass can. Returns one row per record with a
+    ground-truth column `__entity__` (NOT a blocking/scoring field — drop it
+    before profiling)."""
+    import random
+
+    rng = random.Random(seed)
+    surnames._load()
+    if surnames._state is None:
+        pytest.skip("surname refdata unavailable")
+    last_pool = [s.title() for s in list(surnames._state.ranks.keys())[:400]]
+    first_pool = ["John", "Jane", "Robert", "Mary", "Michael", "Linda", "James", "Susan"]
+    rows = []
+    rec = 0
+    for e in range(n_entities):
+        npi = f"{1000000000 + e}"          # entity's shared strong id
+        email = f"person{e}@example.com"
+        first = rng.choice(first_pool)
+        last_a = rng.choice(last_pool)
+        # base record (always present)
+        rows.append({"__entity__": e, "first_name": first, "last_name": last_a,
+                     "npi": npi, "email": email,
+                     "phone": None if rng.random() < 0.71 else f"555{rng.randint(1000000,9999999)}",
+                     "zip": None if rng.random() < 0.69 else f"{rng.randint(10000,99999)}"})
+        rec += 1
+        if e % 3 == 0:
+            # planted duplicate: SAME npi+email, DIFFERENT surname, sparse other ids
+            last_b = rng.choice([s for s in last_pool if s != last_a])
+            rows.append({"__entity__": e, "first_name": first, "last_name": last_b,
+                         "npi": npi if rng.random() < 0.7 else None,   # id sometimes only in one record
+                         "email": email,
+                         "phone": None, "zip": None})
+            rec += 1
+    return pl.DataFrame(rows)
+
+
+def _truth_pairs(df_full: pl.DataFrame) -> set[tuple[int, int]]:
+    """All (min,max) record-position pairs that share a ground-truth __entity__."""
+    ent = df_full["__entity__"].to_list()
+    groups: dict[int, list[int]] = defaultdict(list)
+    for idx, e in enumerate(ent):
+        groups[e].append(idx)
+    pairs: set[tuple[int, int]] = set()
+    for members in groups.values():
+        for i in range(len(members)):
+            for j in range(i + 1, len(members)):
+                pairs.add((members[i], members[j]))
+    return pairs
+
+
+def _membership_recall(df: pl.DataFrame, cfg, truth: set[tuple[int, int]]) -> float:
+    """Fraction of true-dup pairs whose two records co-occur in >=1 emitted block.
+
+    Aligns `__row_id__` to the record's POSITION index (the same index
+    `_truth_pairs` uses), so a co-membership lookup maps straight back to truth.
+    """
+    if not truth:
+        return 0.0
+    df_rid = df if "__row_id__" in df.columns else df.with_row_index("__row_id__")
+    blocks = build_blocks(df_rid.lazy(), cfg)
+    row_to_blocks: dict[int, set[int]] = defaultdict(set)
+    for bi, b in enumerate(blocks):
+        bdf = b.df.collect() if hasattr(b.df, "collect") else b.df
+        for rid in bdf["__row_id__"].to_list():
+            row_to_blocks[int(rid)].add(bi)
+    covered = sum(1 for a, c in truth if row_to_blocks[a] & row_to_blocks[c])
+    return covered / len(truth)
+
+
+def test_union_lifts_blocking_recall_vs_name_only():
+    df_full = _null_sparse_with_dupes_df()
+    truth = _truth_pairs(df_full)
+    assert truth, "fixture planted no true-duplicate pairs"
+    df = df_full.drop("__entity__")          # __entity__ must NOT be a blocking field
+    profiles = profile_columns(df)
+
+    union_cfg = build_blocking(profiles, df, n_rows_full=df.height)
+    assert _has_union_over_identifiers(union_cfg), (
+        f"expected a per-identifier union, got strategy={union_cfg.strategy} "
+        f"passes={[p.fields for p in (union_cfg.passes or [])]}"
+    )
+
+    union_recall = _membership_recall(df, union_cfg, truth)
+    # a name-only baseline (single last_name soundex pass) cannot co-locate the
+    # divergent-surname dupes
+    name_only = BlockingConfig(
+        keys=[BlockingKeyConfig(fields=["last_name"], transforms=["lowercase", "soundex"])]
+    )
+    name_recall = _membership_recall(df, name_only, truth)
+
+    assert union_recall >= 0.95, f"union_recall={union_recall:.3f} (name_recall={name_recall:.3f})"
+    assert union_recall > name_recall, (
+        f"union did not lift recall: union={union_recall:.3f} name={name_recall:.3f}"
+    )
 
 
 def test_union_does_not_displace_a_good_single_key():
