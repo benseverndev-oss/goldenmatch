@@ -1281,6 +1281,89 @@ def build_matchkeys(
     return matchkeys
 
 
+# ── Strong-identifier blocking-union (#1207) ──────────────────────────────
+# Coverage is restored by the OR across passes, so a per-id pass is admitted on
+# a minimal non-null population floor (NOT a null ceiling) — that keeps high-null
+# phone/zip passes that each block only the rows that *have* that id. Scale-safety
+# is enforced by the caller via _gate_passes, so it is NOT checked here. Strong-id
+# col_types reuse the module-level `_STRONG_EXACT_TYPES` (identifier/email/phone).
+_BLOCKING_UNION_COVERAGE_TARGET = 0.95
+_UNION_PASS_MIN_NONNULL = 0.02  # a pass must block more than a trivial handful
+
+
+def _union_coverage(df: pl.DataFrame, pass_field_lists: list[list[str]]) -> float:
+    """Fraction of rows non-null on at least one pass's fields (OR across passes).
+    A multi-field pass requires ALL its fields non-null (it can't block a row
+    missing any component)."""
+    if df.height == 0:
+        return 0.0
+    covered = pl.repeat(False, df.height, eager=True)
+    for fields in pass_field_lists:
+        present = pl.repeat(True, df.height, eager=True)
+        for f in fields:
+            if f not in df.columns:
+                present = pl.repeat(False, df.height, eager=True)
+                break
+            present = present & df[f].is_not_null()
+        covered = covered | present
+    return float(covered.sum()) / df.height
+
+
+def _build_strong_identifier_union(
+    profiles: list[ColumnProfile],
+    df: pl.DataFrame,
+    *,
+    n_rows_full: int | None = None,
+) -> BlockingConfig | None:
+    """Emit a multi_pass UNION of one pass per strong id + name+geo, or None.
+
+    Returns None unless >=2 distinct passes survive AND their OR-coverage
+    clears _BLOCKING_UNION_COVERAGE_TARGET. Caller (build_blocking) is
+    responsible for invoking this only on the fall-through (no single key
+    passed the strict 0.20 ceiling)."""
+    def _nonnull(col: str) -> float:
+        return 1.0 - (df[col].null_count() / df.height) if df.height else 0.0
+
+    candidate_passes: list[list[str]] = []
+
+    # one pass per strong-identifier field, above the non-null population floor.
+    # No scale-safety check here — _gate_passes at the call site enforces #715.
+    for p in profiles:
+        if p.col_type in _STRONG_EXACT_TYPES and p.name in df.columns:
+            if _nonnull(p.name) < _UNION_PASS_MIN_NONNULL:
+                continue
+            candidate_passes.append([p.name])
+
+    # name+geo passes for rows missing every strong id
+    name_cols_local = [p for p in profiles if _classify_by_name(p.name) == "name"]
+    first = next((p.name for p in name_cols_local if "first" in p.name.lower()), None)
+    last = next((p.name for p in name_cols_local if "last" in p.name.lower()
+                 or "surname" in p.name.lower()), None)
+    geo = next((p.name for p in profiles if p.col_type in ("zip", "geo")), None)
+    if first and last:
+        candidate_passes.append([first, last])
+    if last and geo:
+        candidate_passes.append([last, geo])
+
+    if len(candidate_passes) < 2:
+        return None
+    if _union_coverage(df, candidate_passes) < _BLOCKING_UNION_COVERAGE_TARGET:
+        return None
+
+    def _transforms_for(fields: list[str]) -> list[str]:
+        prof = next((p for p in profiles if p.name == fields[0]), None)
+        return ["lowercase", "strip"] if prof and prof.col_type == "email" else ["strip"]
+
+    passes = [BlockingKeyConfig(fields=f, transforms=_transforms_for(f))
+              for f in candidate_passes]
+    return BlockingConfig(
+        keys=[passes[0]],
+        strategy="multi_pass",
+        passes=passes,
+        skip_oversized=True,
+    )
+
+
 # ── Compound blocking helpers ─────────────────────────────────────────────
 
 

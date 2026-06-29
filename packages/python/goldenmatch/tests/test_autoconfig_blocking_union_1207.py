@@ -67,3 +67,34 @@ def test_characterize_current_emission_is_not_a_union():
           [k.fields for k in (cfg.keys or [])],
           "passes=", [p.fields for p in (cfg.passes or [])])
     assert not _has_union_over_identifiers(cfg)
+
+
+from goldenmatch.core.autoconfig import (  # noqa: E402
+    _build_strong_identifier_union,
+    _union_coverage,
+)
+
+
+def test_union_coverage_is_or_over_passes():
+    df = _null_sparse_person_df()
+    cov = _union_coverage(df, [["npi"], ["email"], ["first_name", "last_name"]])
+    assert cov >= 0.95
+
+
+def test_build_union_includes_high_null_id_passes():
+    df = _null_sparse_person_df()
+    profiles = profile_columns(df)
+    cfg = _build_strong_identifier_union(profiles, df, n_rows_full=df.height)
+    assert cfg is not None
+    assert cfg.strategy == "multi_pass"
+    fieldsets = {tuple(p.fields) for p in cfg.passes}
+    assert ("phone",) in fieldsets
+    assert ("npi",) in fieldsets
+    assert ("email",) in fieldsets
+    assert any(p.fields == ["first_name", "last_name"] for p in cfg.passes)
+
+
+def test_build_union_returns_none_when_no_coverage():
+    df = pl.DataFrame({"npi": [None, None, "x", None], "note": ["a", "b", "c", "d"]})
+    profiles = profile_columns(df)
+    assert _build_strong_identifier_union(profiles, df, n_rows_full=df.height) is None
