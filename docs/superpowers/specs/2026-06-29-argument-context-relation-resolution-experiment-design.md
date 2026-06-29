@@ -37,9 +37,16 @@ sufficient?) from extraction, the LLM, and Modal. Costs seconds, not GPU runs.
 - **Entity types.** Assign each entity a coarse type (e.g. person / org / place / concept / method) so
   each relation has a canonical `(subj_type → obj_type)` signature (`works_at`: person→org; `located_in`:
   thing→place; `authored`: person→work). Deterministic per seed.
-- **Co-occurrence.** Render a configurable fraction of edges with MULTIPLE phrasings (the same
-  `(subj,obj)` stated two ways across docs), so synonyms share argument distributions while distinct
-  relations do not. Builds on the Phase-2 `_REL_PHRASINGS` (`GOLDENGRAPH_BENCH_REL_PARAPHRASE`).
+- **Co-occurrence.** Render edges with MULTIPLE phrasings (the same `(subj,obj)` stated two ways across
+  docs), so synonyms share argument distributions while distinct relations do not. Builds on the
+  Phase-2 `_REL_PHRASINGS` (`GOLDENGRAPH_BENCH_REL_PARAPHRASE`). **Default for the headline best-case
+  run: every edge gets all available phrasings** (co-occurrence fraction = 1.0); the ablation sweeps it.
+- **Disjoint pairs across relations (clean best-case).** The current generator (`edges[e.id][rel] =
+  dst`) can connect the SAME `(subj,dst)` pair via *distinct* relations, which would create `pair_set`
+  overlap between distinct relations and falsely depress the Jaccard resolver's precision. Under
+  `GOLDENGRAPH_BENCH_ARGCTX=1`, forbid duplicate `(subj,obj)` pairs across relations (each pair carries
+  at most one relation), so distinct relations have disjoint pair-sets — the clean signal test. (The
+  realistic with-collisions variant is a later ablation, not the de-risk gate.)
 - Reuses the `_edge_doc_id` oracle (canonical ids encode structure); seed-stable.
 
 ### 2. Feature builder (`argctx_features`)
@@ -53,21 +60,28 @@ Counter[(subj_type, obj_type)]}`. Pure; derived from corpus gold, no LLM.
   (synonyms connect the same pairs), with the type signature as a blocker (only consider pairs whose
   dominant type-signatures are compatible). Free; the clean signal test.
 - **goldenmatch-with-context-features.** Feed phrasings-as-records to `dedupe_df` with argument-context
-  FEATURES (the type signature, neighbor-entity names) instead of the bare phrase string — fixing the
-  impoverished-features problem that made the earlier gm-over-strings prototype produce all singletons.
-  Fails-open (dedupe error → singletons). Opt-in / lazy-imported so the local harness stays light.
+  FEATURES instead of the bare phrase string — fixing the impoverished-features problem that made the
+  earlier gm-over-strings prototype produce all singletons. **Record schema (one row per phrasing):**
+  `type_sig` = the dominant `(subj_type→obj_type)` as a string (e.g. `"person>org"`); `neighbors` =
+  sorted distinct connected entity canonical-names joined (e.g. `"Acme | Globex | Initech"`); `phrase`
+  = the surface (kept as a weak feature). dedupe over (`type_sig` exact + `neighbors` fuzzy) so two
+  phrasings sharing a type-signature AND overlapping neighbor sets cluster. Fails-open (dedupe error →
+  singletons). Opt-in / lazy-imported so the local harness stays light.
 
-### 4. Validation — synonym-recovery precision/recall
+### 4. Validation — B-cubed synonym-recovery precision/recall
 
-Score each resolver's clusters against the known `_REL_PHRASINGS → 5 relations` ground truth:
-relation-cluster **precision** (clusters don't mix distinct relations) and **recall** (a relation's
-phrasings land together). Computed locally from gold.
+Score each resolver's clusters against the known `_REL_PHRASINGS → 5 relations` ground truth using
+**B-cubed precision/recall** (the standard per-element ER/clustering metric the suite already uses for
+match quality). Pinning the exact metric matters: with only ~15 phrasings, one misplacement is ~7%, so
+an unspecified metric family (pairwise-F vs B-cubed vs purity) could flip the 0.9 gate. B-cubed:
+per-phrasing, precision = fraction of its predicted cluster that shares its true relation, recall =
+fraction of its true relation captured in its cluster; report the means. Computed locally from gold.
 
 ## Success threshold (the de-risk gate)
 
-PASS = **precision ≥ 0.9 AND recall ≥ 0.9**, with the two must-pass cases explicit: `works at` ≡
-`is on staff at` merged, AND `acquired` ≠ `authored` kept apart (the cases every prior method failed).
-Below that, argument-context is insufficient in the best case.
+PASS = **B-cubed precision ≥ 0.9 AND recall ≥ 0.9**, with the two must-pass cases explicit (binary,
+metric-independent): `works at` ≡ `is on staff at` merged, AND `acquired` ≠ `authored` kept apart (the
+cases every prior method failed). Below that, argument-context is insufficient in the best case.
 
 ## Ablation (only if the best case passes)
 
