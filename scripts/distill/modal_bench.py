@@ -252,3 +252,61 @@ def main(eval: str = "extraction_f1", n: int = 20, ambiguity: float = 0.6, opts:
         return
     md = fn.remote(eval, n=n, ambiguity=ambiguity, opts=opts, chat=chat, embed=embed, engine=engine)
     print("\n===== RESULT =====\n" + md)
+
+
+@app.function(image=image, gpu="A10G", timeout=600, volumes={"/cache": cache})
+def cosine_probe() -> str:
+    """Embedding-DISCRIMINATION probe (free, ~2 min): does nomic-embed-text separate true relation
+    SYNONYMS (works at / on staff at -> should merge) from DISTINCT relations (acquired / authored ->
+    must NOT)? Embeds the 5x3 paraphrase set, prints the within-synonym vs across-relation cosine bands.
+    If the bands overlap, NO threshold works and embedding-assisted argctx is dead on this embedder --
+    decided WITHOUT a full e2e gamble."""
+    import os, subprocess, time, urllib.request, itertools
+    import numpy as np
+    from openai import OpenAI
+
+    PHR = {
+        "works_at": ("works at", "is employed at", "is on staff at"),
+        "located_in": ("located in", "is based in", "sits within"),
+        "acquired": ("acquired", "took over", "bought out"),
+        "authored": ("authored", "wrote", "penned"),
+        "part_of": ("part of", "belongs to", "is a component of"),
+    }
+    os.environ["OLLAMA_MODELS"] = "/cache/ollama"
+    os.makedirs("/cache/ollama", exist_ok=True)
+    subprocess.Popen(["ollama", "serve"])
+    for _ in range(60):
+        try:
+            urllib.request.urlopen("http://localhost:11434/api/version", timeout=2); break
+        except Exception:
+            time.sleep(1)
+    subprocess.run(["ollama", "pull", "nomic-embed-text"], check=True)
+    cache.commit()
+    cli = OpenAI(api_key="ollama", base_url="http://localhost:11434/v1")
+
+    phrases, label = [], []
+    for rel, ps in PHR.items():
+        for p in ps:
+            phrases.append(p); label.append(rel)
+    vecs = np.asarray([d.embedding for d in cli.embeddings.create(model="nomic-embed-text", input=phrases).data], dtype=float)
+    unit = vecs / (np.linalg.norm(vecs, axis=1, keepdims=True) + 1e-12)
+    sim = unit @ unit.T
+
+    within, across = [], []
+    for i, j in itertools.combinations(range(len(phrases)), 2):
+        (within if label[i] == label[j] else across).append((sim[i, j], phrases[i], phrases[j]))
+    within.sort(); across.sort(reverse=True)
+    lines = ["=== WITHIN-synonym cosines (SHOULD be high -> merge) ==="]
+    for s, a, b in within:
+        lines.append(f"  {s:.3f}  '{a}' ~ '{b}'")
+    lines.append("=== ACROSS-relation cosines, top (should be LOW -> stay apart) ===")
+    for s, a, b in across[:10]:
+        lines.append(f"  {s:.3f}  '{a}' ~ '{b}'")
+    wmin = min(s for s, _, _ in within); amax = max(s for s, _, _ in across)
+    sep = wmin - amax
+    lines.append(f"\nmin(within-synonym) = {wmin:.3f}   max(across-relation) = {amax:.3f}")
+    lines.append(f"separation margin   = {sep:+.3f}   "
+                 + ("SEPARABLE -- a threshold exists" if sep > 0 else "OVERLAP -- NO threshold separates synonyms from distinct relations"))
+    out = "\n".join(lines)
+    print(out)
+    return out
