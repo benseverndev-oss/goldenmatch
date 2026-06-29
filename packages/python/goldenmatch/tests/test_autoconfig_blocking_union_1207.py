@@ -33,7 +33,9 @@ def _null_sparse_person_df(n: int = 6000, seed: int = 1207) -> pl.DataFrame:
         # ~1/3 of records reuse a small (first,last) space to force collisions
         first = rng.choice(first_pool)
         last = rng.choice(last_pool[:30]) if i % 3 == 0 else rng.choice(last_pool)
-        npi = None if rng.random() < 0.39 else f"npi{1000000 + i}"
+        # realistic 10-digit numeric NPI so the profiler classifies it as an
+        # identifier (the "npi####" string form profiles as plain string).
+        npi = None if rng.random() < 0.39 else f"{1000000000 + i}"
         email = None if rng.random() < 0.25 else f"user{i}@example.com"
         phone = None if rng.random() < 0.71 else f"555{rng.randint(1000000, 9999999)}"
         zipc = None if rng.random() < 0.69 else f"{rng.randint(10000, 99999)}"
