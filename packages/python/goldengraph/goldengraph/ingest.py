@@ -835,6 +835,11 @@ def ingest_corpus(
             from .schema_discovery import discover_schema
 
             schema = discover_schema([p[0] for p in prepared], docs, embedder, llm)
+            if os.environ.get("GOLDENGRAPH_SCHEMA_DISCOVER", "") not in ("", "0", "false"):
+                print(f"[schema-discover] relations={list(schema.relations)}", flush=True)
+                for _r in schema.relations:
+                    print(f"[schema-discover]   {_r}: fwd={sorted(schema.forward[_r])[:6]} "
+                          f"rev={sorted(schema.reverse[_r])[:6]}", flush=True)
             prepared = [(canonicalize_extraction(p[0], schema), p[1], p[2]) for p in prepared]
         except Exception as e:  # noqa: BLE001 -- discovery is best-effort
             print(f"[schema-discover] failed ({e!r}); committing open extractions", flush=True)
