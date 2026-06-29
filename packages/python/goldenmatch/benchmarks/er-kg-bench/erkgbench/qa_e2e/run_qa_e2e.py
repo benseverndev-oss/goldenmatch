@@ -69,6 +69,12 @@ def _embed_model():
     return os.environ.get("OPENAI_EMBED_MODEL") or None
 
 
+def _rag_embed_model() -> str:
+    """Concrete embedding model for the openai-SDK RAG/baseline engines (they need a name, not None).
+    Local lane sets OPENAI_EMBED_MODEL (e.g. nomic-embed-text via Ollama); else the OpenAI default."""
+    return os.environ.get("OPENAI_EMBED_MODEL") or "text-embedding-3-large"
+
+
 def _build_engine(name: str):
     if name == "goldengraph":
         from goldengraph.embed import GoldenmatchEmbedder
@@ -114,26 +120,20 @@ def _build_engine(name: str):
         # engines use, so the gap is exactly what the graph buys (or costs).
         from .engines.text_rag import TextRAGQAEngine
 
-        return TextRAGQAEngine(
-            model="gpt-4o-mini", embedding_model="text-embedding-3-large"
-        )
+        return TextRAGQAEngine(model=_chat_model(), embedding_model=_rag_embed_model())
     if name == "goldenmatch_rag":
         # goldenmatch's OWN retrieval surface (retrieve_similar_records) with the SAME
         # OpenAI embedder text_rag uses -- isolates our retrieval mechanics vs naive
         # cosine, embedder held constant.
         from .engines.goldenmatch_rag import GoldenmatchRAGQAEngine
 
-        return GoldenmatchRAGQAEngine(
-            model="gpt-4o-mini", embedding_model="text-embedding-3-large"
-        )
+        return GoldenmatchRAGQAEngine(model=_chat_model(), embedding_model=_rag_embed_model())
     if name == "goldenmatch_entity_rag":
         # goldenmatch's entity-aware RAG (retrieve -> dedupe -> canonicalize) -- the
         # product's differentiated claim, measured for the first time.
         from .engines.goldenmatch_rag import GoldenmatchEntityRAGQAEngine
 
-        return GoldenmatchEntityRAGQAEngine(
-            model="gpt-4o-mini", embedding_model="text-embedding-3-large"
-        )
+        return GoldenmatchEntityRAGQAEngine(model=_chat_model(), embedding_model=_rag_embed_model())
     raise SystemExit(f"unknown engine: {name}")
 
 
