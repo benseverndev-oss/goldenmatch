@@ -1,18 +1,61 @@
-# GoldenGraph distilled SYNTHESIS model -- purpose-built small KG reasoner design
+# GoldenGraph local-OSS-LLM KG/RAG quality -- investigation record + verdict
 
-> **PARKED 2026-06-28 -- Stage 0 refuted this too.** synthesis-given-gold = **1.000 at every hop**
-> (run 28327040114): given the gold subgraph the 7B answers every multi-hop question. With extraction
-> already good (0.92/0.81), the bottleneck is **RETRIEVAL** (the answer-time subgraph assembly), not
-> extraction OR synthesis. NO model distillation is needed -- the fix is in goldengraph's retrieval code
-> (deterministic, free, helps every model). This design is shelved (not deleted -- useful if a future
-> measurement shows a model-quality gap). Current work: improve retrieval. See [[project_goldengraph_local_oss_llm_lane]].
+> **CONCLUDED 2026-06-29.** A measure-first arc took the local 7B lane from **0.15 -> 0.672**
+> end-to-end answer-match, all free (no paid models, no training). The winning lever was the
+> cheapest: **schema-constrained + direction-canonical ingest** (deterministic post-processing), which
+> **beats a 32B OSS model (0.569)** at the same task. Three plausible "smarter model" levers were each
+> refuted by measurement before any was shipped. Fine-tuning is NOT worth it for this task. See
+> [[project_goldengraph_local_oss_llm_lane]].
 
-**Status:** PARKED (both extraction- and synthesis-distillation premises refuted by measurement)
-**Date:** 2026-06-28
+**Status:** CONCLUDED -- schema-constrained deterministic path adopted; distillation/fine-tune closed.
+**Date:** 2026-06-29 (investigation 2026-06-28..29)
 **Owner:** Ben Severn
-**Worktree:** TBD (design only -- training is off-GH GPU on Modal)
+**Harness:** `scripts/distill/modal_bench.py` (Modal GPU eval), `scripts/distill/modal_train.py` (QLoRA)
 
-## Measured finding that drove the pivot
+## The arc (engineered corpus, qwen2.5:7b-instruct, N=60, ambiguity 0.0, eval seed 20260620)
+
+| stage | answer-match | what changed |
+|-------|-------------|--------------|
+| naive ball synthesis (`mode=local`) | 0.241 | seed a ball, let the LLM synthesize over it |
+| relation-guided walk (`trace_chain`) | 0.293 | follow the named relations LLM-free instead of synthesizing |
+| + under-merge bridge | 0.586 | re-seed each hop by canonical name (cross the split bridge entity) |
+| **+ schema-constrained + direction-canonical ingest** | **0.672** | closed-vocab predicate snapping + passive/inverse direction flip at ingest |
+
+`synthesis_given_gold = 1.00` and `retrieval_coverage = 1.00` throughout: given the *correct* graph the
+engine is perfect, so the entire 1.00 -> 0.67 gap is **graph-construction error** (extraction +
+resolution), not retrieval or synthesis. Every lever above repairs a graph defect; the schema-constrained
+one repairs it at the source (deterministically, free).
+
+## The three refutations (why "use a smarter model" was wrong each time)
+
+1. **Distillation-as-first-instinct -- refuted.** The original premise (below) said synthesis was the
+   bottleneck; localization showed `synthesis_given_gold=1.00`. The bottleneck is **extraction +
+   resolution fidelity**, not model reasoning.
+2. **Scale the model -- refuted.** A **32B** OSS teacher (same family) scored **0.569 <= the 7B's
+   0.586** on the identical pipeline -- *worse*, with more hop-1 deaths and 2 unseeded anchors. The
+   defects (under-merge, reversed edges, predicate noise) are open-extraction *task-framing* failures,
+   not capacity failures; a bigger model makes the same class of errors with different surface variance.
+3. **Fine-tune the direction -- refuted.** A QLoRA on the same 7B to teach canonical edge direction on
+   reverse-phrased text scored `reverse_direction_acc` **0.000** (iter 1: r16/3ep) -> **0.078** (iter 2:
+   r64/8ep, 50%-reverse data, MLP targets). 4x the reverse data + 4x rank + 2.6x epochs moved it from 0%
+   to ~8% -- the base "subj = first-mentioned entity" prior is too strong to train out, and the fine-tune's
+   predicate accuracy (0.82) is *worse* than the free deterministic vocab-snapping (~1.0 on in-vocab). The
+   merged model therefore cannot beat the 0.672 schema-constrained 7B at e2e (bake-off: 0.672 vs
+   `__FINETUNE_E2E__`).
+
+**Verdict:** the deterministic, free, schema-constrained path is the answer. Fine-tuning is closed for
+this task. The harness (`modal_train.py` QLoRA + `gen_gold_pairs.py` key-free gold labels) is kept,
+working, and documented for a future task where a model-quality gap is actually shown.
+
+---
+
+## Historical design (SUPERSEDED -- kept for the record)
+
+The sections below are the original "distill the SYNTHESIS model" design, written when synthesis was
+*believed* to be the bottleneck. The measurements above superseded it. Preserved so the reasoning trail
+is auditable.
+
+### Measured finding that drove the (then) pivot
 
 The local OSS-LLM lane runs `qwen2.5:7b-instruct` end-to-end at answer-match **0.25** (decay
 `{1:0.5, 2:0.5, 3:0.0, 4:0.0}`). The original design assumed EXTRACTION was the bottleneck. The
