@@ -6,6 +6,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Changed
+- **Auto-config: `name_freq_weighted_jw` now downweights agreements on high-frequency name values using a per-dataset frequency table** (data-driven, applied across the whole score range), so identical common surnames (e.g. two "Smith") score below identical rare surnames - a higher matchkey threshold then separates same-name strangers from true matches (#1207, PR2a). Default-on; kill-switch `GOLDENMATCH_TF_NAME_WEIGHTING=0` restores the static-census behavior. Validated by the CI accuracy gates (#528/DQbench/Febrl/NCVR); this is an accuracy change, not a measured-local win.
+
 ## [2.4.0] - 2026-06-27
 
 <!-- README-callout
