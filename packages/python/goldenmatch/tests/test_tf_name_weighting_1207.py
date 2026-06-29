@@ -12,3 +12,28 @@ def test_value_frequencies_relative_and_transformed():
     assert abs(freqs["smith"] - 0.75) < 1e-9
     assert abs(freqs["zelinski"] - 0.25) < 1e-9
     assert "" not in freqs and None not in freqs
+
+
+from goldenmatch.refdata.scorer import NameFreqWeightedJW
+
+
+def test_tf_downweights_identical_common_below_identical_rare():
+    s = NameFreqWeightedJW()
+    tf = {"smith": 0.5, "zelinski": 0.001}   # Smith common, Zelinski rare
+    common = s.score_matrix(["smith", "smith"], tf_freqs=tf)[0, 1]
+    rare = s.score_matrix(["zelinski", "zelinski"], tf_freqs=tf)[0, 1]
+    assert common < rare
+    assert rare >= 0.99            # rare identical ~ full credit
+    assert common <= 0.75          # common identical materially downweighted
+
+
+def test_tf_absent_is_todays_static_behavior():
+    s = NameFreqWeightedJW()
+    m = s.score_matrix(["smith", "smith"])     # no tf_freqs -> static path -> plain jw
+    assert abs(m[0, 1] - 1.0) < 1e-6
+
+
+def test_tf_score_pair_matches_matrix():
+    s = NameFreqWeightedJW()
+    tf = {"smith": 0.5, "zelinski": 0.001}
+    assert abs(s.score_pair("smith", "smith", tf_freqs=tf) - s.score_matrix(["smith","smith"], tf_freqs=tf)[0,1]) < 1e-6
