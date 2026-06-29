@@ -125,12 +125,17 @@ def test_build_blocking_emits_union_on_null_sparse_shape():
 
 
 def test_union_does_not_displace_a_good_single_key():
-    """Guard: when a low-null high-card exact key exists, the single-key path
-    still wins (we only add the union on the fall-through)."""
+    """Guard: when a low-null, non-surrogate exact key exists, the single-key
+    path wins; the union does not fire (we only add the union on the
+    fall-through)."""
     df = pl.DataFrame({
-        "email": [f"u{i}@x.com" for i in range(200)],   # 0% null, unique-ish
+        # REPEAT email so it's a legitimate exact key, not a surrogate: card_ratio
+        # 0.5, 0% null. (A unique-per-row email has card_ratio 1.0 and is DROPPED
+        # by the surrogate guard, which would let the union fire -- a vacuous test.)
+        "email": [f"u{i % 100}@x.com" for i in range(200)],
         "first_name": ["A"] * 200, "last_name": ["B"] * 200,
     })
     profiles = profile_columns(df)
     cfg = build_blocking(profiles, df, n_rows_full=df.height)
-    assert cfg.strategy != "multi_pass" or {tuple(k.fields) for k in (cfg.keys or [])} == {("email",)}
+    assert cfg.strategy == "static"
+    assert [k.fields for k in (cfg.keys or [])] == [["email"]]
