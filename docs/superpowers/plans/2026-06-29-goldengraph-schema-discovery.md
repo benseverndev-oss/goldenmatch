@@ -345,13 +345,20 @@ def test_discover_schema_recovers_and_canonicalizes_reversed_edge():
 
 - [ ] **Step 3: Implement**
 
+> **Module imports:** add `from collections import Counter` to the module header (Task 1's skeleton
+> only imported `os`/`.extract`/`.schema`). `numpy` stays a local import inside functions.
+
 ```python
 def _assemble_schema(clusters, edges_by_phrase) -> RelationSchema:
     relations, forward, reverse = [], {}, {}
     for members in clusters:
-        # canonical label = most frequent member by edge count (tie -> shortest, then alpha)
-        counts = Counter({m: len(edges_by_phrase.get(m, ())) for m in members})
-        label_phrase = max(members, key=lambda m: (counts[m], -len(m), tuple(-ord(c) for c in m)))
+        # canonical label = most frequent member by edge count, PREFERRING a non-passive member so
+        # the relation name is the active form ('acquired', not 'acquired_by'). Fall back to the full
+        # member set only if every member is passive. (tie -> shortest, then alpha)
+        def _key(m):
+            return (len(edges_by_phrase.get(m, ())), -len(m), tuple(-ord(c) for c in m))
+        active = [m for m in members if not _is_passive(m)]
+        label_phrase = max(active or members, key=_key)
         rel = _norm(label_phrase).replace(" ", "_")
         if rel in forward:  # cluster label collision -> merge into existing
             pass
@@ -503,7 +510,9 @@ def test_discovery_flow_canonicalizes_corpus_edges(monkeypatch):
     assert got == [("A", "acquired", "B"), ("D", "acquired", "C")]
 ```
 
-- [ ] **Step 2: Run to verify pass** (this asserts the seam works; it should pass on Task 4–5 code — it's the contract the ingest wiring relies on). If it passes, proceed to wire ingest.
+- [ ] **Step 2: Run to verify pass** — **this is a SEAM-CONFIRMATION check, not red-first TDD.** It asserts the discover→canonicalize contract the ingest wiring relies on, and should PASS on Task 4–5 code (no new production code drives it). If it passes, proceed to wire ingest.
+
+> **Embedder required:** the discovery flow passes `ingest_corpus`'s `embedder` into `discover_schema`. With `embedder=None`, `_cluster_predicates` raises → the fail-soft try/except makes discovery a no-op (falls back to open extraction). That's spec-consistent, but it means the Phase-1 Modal run MUST supply an embedder (the bench harness does — it builds `GoldenmatchEmbedder`).
 
 - [ ] **Step 3: Add the gate + flow to `ingest.py`**
 
