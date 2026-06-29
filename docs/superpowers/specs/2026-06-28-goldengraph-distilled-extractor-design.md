@@ -40,8 +40,10 @@ one repairs it at the source (deterministically, free).
    r64/8ep, 50%-reverse data, MLP targets). 4x the reverse data + 4x rank + 2.6x epochs moved it from 0%
    to ~8% -- the base "subj = first-mentioned entity" prior is too strong to train out, and the fine-tune's
    predicate accuracy (0.82) is *worse* than the free deterministic vocab-snapping (~1.0 on in-vocab). The
-   merged model therefore cannot beat the 0.672 schema-constrained 7B at e2e (bake-off: 0.672 vs
-   `__FINETUNE_E2E__`).
+   merged model therefore cannot beat the 0.672 schema-constrained 7B at e2e. (The literal fine-tuned e2e
+   number was not chased to a value: the heldout already pins it <= 0.672, and the Ollama serve path hit
+   GGUF-conversion friction on the merged QLoRA model -- confirming a number that wouldn't change the
+   verdict was not worth the iterations. Effort redirected to the local-7B head-to-head instead.)
 
 **Verdict:** the deterministic, free, schema-constrained path is the answer. Fine-tuning is closed for
 this task. The harness (`modal_train.py` QLoRA + `gen_gold_pairs.py` key-free gold labels) is kept,

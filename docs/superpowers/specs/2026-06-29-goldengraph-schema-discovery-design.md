@@ -65,13 +65,31 @@ corroborates and breaks ties when types are informative; it contributes nothing 
 homogeneous-entity corpora (the engineered corpus is all `concept`), which is why source order is
 primary.
 
+*Source granularity:* `sources` is the per-document text already available in `ingest_corpus`
+(the docs aligned 1:1 with the extractions); no new field on the `Extraction`/`Relationship`
+records. Alignment locates the subj/obj **surface strings** (`Mention.name`) and the relation
+phrase within the doc text by substring position; when a doc is multi-sentence, the relevant
+sentence is the one containing both surfaces. The engineered corpus is one sentence per doc, so
+this is exact there; general corpora rely on the both-surfaces-present heuristic, accepting some
+noise.
+
+*Per-edge → per-surface aggregation (feeds 1c):* step (b) yields a direction *per edge*; the
+forward/reverse classification is per **surface predicate phrase**, decided by the **majority
+observed direction** of that phrase across all its edges within the cluster (ties → forward).
+So a phrase seen mostly object-first (e.g. `acquired by`) becomes a reverse alias; mostly
+subject-first becomes forward.
+
 **c. Alias map.** Cluster members split into forward vs reverse alias sets (reverse = the
 passive-phrased or type-reversed members), assembled into the `RelationSchema.{forward,reverse}`
 shape the canonicalizer already holds.
 
 **d. LLM tie-break (hybrid, bounded).** One call to name ambiguous clusters and merge
 near-duplicate clusters. Bounded (a single call over cluster summaries, not per-doc); fail-open
-(LLM error → keep the deterministic clustering).
+(LLM error → keep the deterministic clustering). **Determinism posture:** the LLM merge mutates
+the schema, so for a reproducible bench it is pinned (temperature 0; the merge applied as
+deterministic post-processing of the parsed LLM output). The "seed-stable" guarantee below holds
+strictly for the `llm=None` deterministic backbone; with the LLM tie-break on, stability is
+pinned-best-effort.
 
 ### 2. Ingest wiring
 
@@ -92,7 +110,7 @@ no hand-fed vocab. Two bars:
 - **Schema recovery:** discovered schema recovers the 5 known relations (modulo naming) with
   correct canonical direction — precision/recall on the relation set + direction agreement vs the
   known engineered schema.
-- **End-to-end:** answer-match **≈ 0.672** (within ~1-question noise of the hand-fed run).
+- **End-to-end:** answer-match **≈ 0.672** (within ~1-question noise at N=60, i.e. ≈ 0.655–0.689).
   *Discovered ≈ given* is the real proof the win survives without a human.
 
 **Unit tests (wheel-free, deterministic).** `discover_schema` over a small synthetic
@@ -112,7 +130,8 @@ measurement *is* the generalization test.
   as-is, not dropped — discovery must not *lose* edges it cannot classify (unlike the hand-fed
   schema, which drops out-of-vocab; discovery is conservative because its vocab is inferred).
 - **Fail-soft:** any discovery error → fall back to open extraction, logged.
-- **Determinism:** seed-stable clustering so the bench is reproducible.
+- **Determinism:** the deterministic backbone (`llm=None`) is seed-stable (same corpus → same
+  schema) so the bench is reproducible; the optional LLM tie-break is pinned-best-effort (see 1d).
 
 ## Out of scope (v1)
 
