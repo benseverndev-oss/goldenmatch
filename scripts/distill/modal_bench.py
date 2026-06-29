@@ -41,6 +41,7 @@ image = (
 )
 
 cache = modal.Volume.from_name("gg-bench-cache", create_if_missing=True)
+distill_vol = modal.Volume.from_name("gg-distill", create_if_missing=True)  # the fine-tuned model
 
 _BENCH = "/repo/packages/python/goldenmatch/benchmarks/er-kg-bench"
 
@@ -71,7 +72,8 @@ def _which(exe):
     return shutil.which(exe)
 
 
-def _bench_impl(eval: str, n: int, ambiguity: float, opts: str, chat: str, embed: str) -> str:
+def _bench_impl(eval: str, n: int, ambiguity: float, opts: str, chat: str, embed: str,
+                create_from: str = "") -> str:
     """Shared bench body -- runs inside the container. Wrapped by run_bench (A10G, for the 7B student)
     and run_bench_big (A100, for the 32B/72B OSS teacher). The teacher ceiling is measured free-to-free:
     a larger same-family OSS model as the distillation target, no paid API."""
@@ -108,7 +110,15 @@ def _bench_impl(eval: str, n: int, ambiguity: float, opts: str, chat: str, embed
             break
         except Exception:
             time.sleep(1)
-    subprocess.run(["ollama", "pull", chat], check=True)
+    if create_from:
+        # the fine-tuned student: import the merged HF safetensors dir directly (modern Ollama
+        # converts to GGUF internally), no manual llama.cpp step. `chat` is the local model name.
+        with open("/tmp/Modelfile", "w") as mf:
+            mf.write(f"FROM {create_from}\n")
+        print(f"ollama create {chat} from {create_from} ...", flush=True)
+        subprocess.run(["ollama", "create", chat, "-f", "/tmp/Modelfile"], check=True)
+    else:
+        subprocess.run(["ollama", "pull", chat], check=True)
     if embed:
         subprocess.run(["ollama", "pull", embed], check=True)
     cache.commit()
@@ -162,6 +172,15 @@ def run_bench_big(eval: str, n: int = 20, ambiguity: float = 0.6, opts: str = ""
     return _bench_impl(eval, n, ambiguity, opts, chat, embed)
 
 
+@app.function(image=image, gpu="A10G", volumes={"/cache": cache, "/distill": distill_vol},
+              timeout=7200)
+def run_bench_distilled(merged: str, eval: str = "end_to_end", n: int = 60, ambiguity: float = 0.0,
+                        opts: str = "", embed: str = "nomic-embed-text") -> str:
+    """Bench the FINE-TUNED student: import its merged HF dir from the gg-distill volume into Ollama,
+    then run the eval. `merged` is the artifact path from the train manifest (rooted at /distill)."""
+    return _bench_impl(eval, n, ambiguity, opts, "gg-distilled", embed, create_from=merged)
+
+
 def _persist(eval: str, n: int, chat: str, text: str) -> str:
     """Write the result to the cache Volume so a DETACHED run survives local-CLI death. Filename is
     tagged with the model so teacher (32B) and student (7B) runs don't collide -- pull it back with
@@ -178,7 +197,18 @@ def _persist(eval: str, n: int, chat: str, text: str) -> str:
 @app.local_entrypoint()
 def main(eval: str = "extraction_f1", n: int = 20, ambiguity: float = 0.6, opts: str = "",
          spawn: bool = False, chat: str = "qwen2.5:7b-instruct",
-         embed: str = "nomic-embed-text", gpu: str = "a10g") -> None:
+         embed: str = "nomic-embed-text", gpu: str = "a10g", merged: str = "") -> None:
+    # --merged <path>: bench the fine-tuned student (Ollama-imported from the gg-distill volume).
+    if merged:
+        tag = "gg-distilled"
+        if spawn:
+            call = run_bench_distilled.spawn(merged, eval=eval, n=n, ambiguity=ambiguity,
+                                             opts=opts, embed=embed)
+            print(f"SPAWNED call_id={call.object_id} -> results/{eval}_{n}_{tag}.md on gg-bench-cache")
+            return
+        print("\n===== RESULT =====\n" + run_bench_distilled.remote(
+            merged, eval=eval, n=n, ambiguity=ambiguity, opts=opts, embed=embed))
+        return
     fn = run_bench_big if gpu.lower() in ("a100", "a100-80gb", "big") else run_bench
     tag = chat.replace(":", "-").replace("/", "-")
     if spawn:
