@@ -1,0 +1,41 @@
+# goldenmatch-perceptual-wasm -- the wasm-bindgen / TS surface over the pyo3-free
+# `goldenmatch-perceptual-core` (DCT image pHash + Haitsma-Kalker audio
+# fingerprint). The TS/WASM analogue of the Python reference; wraps the SAME core
+# over a JSON boundary.
+#
+# Parity NOTE: the core uses std transcendentals (cos/sin) whose bit-level result
+# can differ between the native libm (Python reference / host) and wasm32's libm.
+# Perceptual hashes are consumed via hamming distance with a match threshold, so
+# the TS parity contract is "within K bits", not byte-exact (see the parity test).
+#
+# Standalone workspace so this wrapper can path-depend on perceptual-core without
+# either workspace claiming it (same rationale as goldenprofile-wasm).
+[workspace]
+
+[package]
+name = "goldenmatch-perceptual-wasm"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Ben Severn <benzsevern@gmail.com>"]
+description = "wasm-bindgen wrapper over goldenmatch-perceptual-core: image pHash + audio fingerprint over a JSON boundary"
+
+[lib]
+name = "goldenmatch_perceptual_wasm"
+crate-type = ["cdylib", "rlib"] # cdylib for wasm; rlib so host parity tests link
+
+[dependencies]
+goldenmatch-perceptual-core = { path = "../perceptual-core" }
+# serde_json marshals the JSON boundary (grids / pcm / fingerprints).
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+
+# wasm-opt (binaryen) downloads at build time; disable so the build is hermetic.
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"

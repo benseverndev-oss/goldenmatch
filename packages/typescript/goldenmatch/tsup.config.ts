@@ -12,6 +12,7 @@ export default defineConfig({
     // (~220 KB base64), so it's a separate subpath — consumers pay that cost
     // only when they import `goldenmatch/core/suggest-wasm`.
     "core/suggestWasm": "src/core/suggestWasm.ts",
+    "core/perceptualWasm": "src/core/perceptualWasm.ts",
     "node/index": "src/node/index.ts",
     "node/mcp/server": "src/node/mcp/server.ts",
     cli: "src/cli.ts",

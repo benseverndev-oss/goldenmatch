@@ -2,6 +2,17 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-06-28 — Perceptual image pHash: cross-platform determinism + wasm/TS
+- New ADR [../decisions/0030-perceptual-cross-platform-determinism.md](../decisions/0030-perceptual-cross-platform-determinism.md):
+  the image pHash computed its DCT basis cos() at runtime, so it was libm-fragile
+  across platforms/surfaces (committed golden test passed on Linux CI, FAILED on
+  Windows native; a wasm build was 6 bits off). Fix: a COMMITTED 8x32 DCT table
+  that the Rust kernel (native + wasm) AND the Python reference both read (one
+  generator, bit-exact in both languages) -> byte-identical everywhere. New opt-in
+  `goldenmatch/core/perceptual-wasm` TS subpath (phashImage / hamming), byte-exact
+  parity-gated + a `perceptual_wasm` CI drift lane. Image only; radial + audio stay
+  Python/native (non-cos fragility). Fixture rebased 2 borderline phash values.
+
 ## 2026-06-28 — GoldenGraph TS: bitemporal store shipped (0.2.0)
 - The store deferred in [0029](../decisions/0029-goldengraph-wasm-ts.md) now ships:
   `appendBatch` / `asOf` / `history` over a portable JSON `Snapshot` (the kernel's

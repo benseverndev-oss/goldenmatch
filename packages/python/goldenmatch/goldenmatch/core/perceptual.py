@@ -39,6 +39,8 @@ import math
 from collections.abc import Sequence
 from operator import mul
 
+from goldenmatch.core import _perceptual_tables as _pt
+
 logger = logging.getLogger(__name__)
 
 __all__ = [
@@ -160,14 +162,20 @@ def _bilinear_resize(grid: list[list[float]], size: int) -> list[list[float]]:
 
 
 def _dct1d_matrix(n: int) -> list[list[float]]:
-    """Precompute the unnormalized DCT-II basis: ``M[k][i] = cos(pi*(i+0.5)*k/n)``."""
+    """Precompute the unnormalized DCT-II basis: ``M[k][i] = cos(pi*(i+0.5)*k/n)``.
+
+    Retained for reference/tools; the kernel reads the COMMITTED constant basis
+    (`_perceptual_tables.DCT_BASIS`, the 8x32 slice `_dct2_topleft` needs) so the
+    hash is bit-identical across CPython / native / wasm -- no runtime libm.
+    """
     return [
         [math.cos(math.pi * (i + 0.5) * k / n) for i in range(n)]
         for k in range(n)
     ]
 
 
-_DCT_M = _dct1d_matrix(IMG_RESIZE)
+# The frozen 8x32 basis shared bit-for-bit with the Rust kernel (tables.rs).
+_DCT_M = _pt.DCT_BASIS
 
 
 def _dct2_topleft(block: list[list[float]], size: int, keep: int) -> list[list[float]]:

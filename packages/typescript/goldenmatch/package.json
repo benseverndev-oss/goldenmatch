@@ -8,6 +8,7 @@
     "./core": { "types": "./dist/core/index.d.ts", "import": "./dist/core/index.js", "require": "./dist/core/index.cjs" },
     "./core/autoconfig-wasm": { "types": "./dist/core/autoconfigWasm.d.ts", "import": "./dist/core/autoconfigWasm.js", "require": "./dist/core/autoconfigWasm.cjs" },
     "./core/suggest-wasm": { "types": "./dist/core/suggestWasm.d.ts", "import": "./dist/core/suggestWasm.js", "require": "./dist/core/suggestWasm.cjs" },
+    "./core/perceptual-wasm": { "types": "./dist/core/perceptualWasm.d.ts", "import": "./dist/core/perceptualWasm.js", "require": "./dist/core/perceptualWasm.cjs" },
     "./node": { "types": "./dist/node/index.d.ts", "import": "./dist/node/index.js", "require": "./dist/node/index.cjs" }
   },
   "bin": { "goldenmatch-js": "./dist/cli.cjs", "goldenmatch-mcp": "./dist/node/mcp/server.cjs" },
