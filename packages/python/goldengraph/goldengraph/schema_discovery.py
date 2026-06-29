@@ -126,6 +126,39 @@ def _cluster_predicates_gm(predicates):
     return clusters
 
 
+def _cluster_predicates_argctx(by_phrase, jaccard_threshold: float | None = None):
+    """Argument-context relation resolution (the live backend): cluster predicates by the SURFACE
+    entity pairs they connect. Synonyms on a co-occurrence corpus connect the same (subj,obj) pairs ->
+    high Jaccard -> merge; distinct relations connect disjoint pairs -> apart; a predicate sharing no
+    pairs stays a singleton. The proven (gold-experiment) distributional method, over live-extracted
+    surface pairs (`_norm`'d). Env-tunable `GOLDENGRAPH_ARGCTX_JACCARD` (default 0.3 -- lenient for
+    recall under live-extraction pair noise)."""
+    if jaccard_threshold is None:
+        jaccard_threshold = float(os.environ.get("GOLDENGRAPH_ARGCTX_JACCARD", "0.3"))
+    preds = sorted(by_phrase)
+    pair_set = {
+        p: {(_norm(s), _norm(o)) for (s, _pred, o, _src) in by_phrase[p]} for p in preds
+    }
+    parent = {p: p for p in preds}
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for i, a in enumerate(preds):
+        for b in preds[i + 1:]:
+            pa, pb = pair_set[a], pair_set[b]
+            union = pa | pb
+            if union and len(pa & pb) / len(union) >= jaccard_threshold:
+                parent[find(a)] = find(b)
+    groups: dict[str, list[str]] = {}
+    for p in preds:
+        groups.setdefault(find(p), []).append(p)
+    return [sorted(g) for g in groups.values()]
+
+
 # ── direction detection (source word-order + passive) ────────────────────────
 
 
@@ -305,12 +338,15 @@ def discover_schema(extractions, sources, embedder, llm=None) -> RelationSchema:
     by_phrase: dict[str, list] = {}
     for (s, p, o, src) in edges:
         by_phrase.setdefault(p, []).append((s, p, o, src))
-    # Clustering backend (GOLDENGRAPH_DISCOVER_RESOLVE): 'gm' = goldenmatch dedupe; 'llm_map' =
-    # deterministic clusters + constrained LLM synonym-mapping (embedding-block + LLM-verify, for open
-    # synonymy); default = deterministic string + embedding union-find.
+    # Clustering backend (GOLDENGRAPH_DISCOVER_RESOLVE): 'gm' = goldenmatch dedupe; 'argctx' = cluster
+    # by the surface entity pairs each predicate connects (open-vocab synonymy, needs a co-occurrence
+    # corpus); 'llm_map' = deterministic clusters + constrained LLM synonym-mapping (embedding-block +
+    # LLM-verify); default = deterministic string + embedding union-find.
     resolve = os.environ.get("GOLDENGRAPH_DISCOVER_RESOLVE", "").strip().lower()
     if resolve == "gm":
         clusters = _cluster_predicates_gm(list(by_phrase))
+    elif resolve == "argctx":
+        clusters = _cluster_predicates_argctx(by_phrase)
     else:
         clusters = _cluster_predicates(list(by_phrase), embedder)
     if resolve == "llm_map" and llm is not None:

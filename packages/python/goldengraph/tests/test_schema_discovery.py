@@ -237,3 +237,43 @@ def test_ingest_corpus_discovery_flow_commits_canonical_edges(monkeypatch):
     assert [(names[e["subj_local"]], e["predicate"], names[e["obj_local"]]) for e in edges] == [
         ("D", "acquired", "C")
     ]
+
+
+# ── argctx backend (production wiring) ──
+
+
+def test_argctx_clusters_by_shared_pairs():
+    from goldengraph.schema_discovery import _cluster_predicates_argctx
+
+    by_phrase = {
+        "works at": [("Jo", "works at", "Acme", "s"), ("Mae", "works at", "Globex", "s")],
+        "is on staff at": [("Jo", "is on staff at", "Acme", "s"), ("Mae", "is on staff at", "Globex", "s")],
+        "located in": [("Acme", "located in", "Reno", "s")],
+        "spurious rel": [("X", "spurious rel", "Y", "s")],
+    }
+    clusters = _cluster_predicates_argctx(by_phrase)
+    cmap = {p: i for i, c in enumerate(clusters) for p in c}
+    assert cmap["works at"] == cmap["is on staff at"]
+    assert cmap["works at"] != cmap["located in"]
+    assert len([c for c in clusters if "spurious rel" in c][0]) == 1
+
+
+def test_argctx_normalizes_surfaces():
+    from goldengraph.schema_discovery import _cluster_predicates_argctx
+
+    by_phrase = {
+        "works at": [("Jo", "works at", "Acme", "s")],
+        "employed at": [("jo", "employed at", "ACME", "s")],
+    }
+    assert len(_cluster_predicates_argctx(by_phrase)) == 1
+
+
+def test_discover_schema_argctx_backend(monkeypatch):
+    from goldengraph.schema_discovery import discover_schema
+
+    monkeypatch.setenv("GOLDENGRAPH_DISCOVER_RESOLVE", "argctx")
+    exts = [_ext(["Jo", "Acme"], [(0, "works at", 1)]),
+            _ext(["Jo", "Acme"], [(0, "is on staff at", 1)])]
+    sch = discover_schema(exts, ["Jo works at Acme.", "Jo is on staff at Acme."], _StubEmbedder())
+    m1, m2 = sch.match("works at"), sch.match("is on staff at")
+    assert m1 is not None and m2 is not None and m1[0] == m2[0]
