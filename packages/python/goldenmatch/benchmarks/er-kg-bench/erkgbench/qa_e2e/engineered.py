@@ -125,6 +125,14 @@ def generate_engineered(
 
     # One document per edge stating the relation, with ambiguity-dialed mentions.
     # Iterate the (src, rel) map in a fixed order so the corpus is seed-deterministic.
+    # GOLDENGRAPH_BENCH_COOCCUR renders each edge with EVERY phrasing (extra docs) so synonyms
+    # co-occur on the same (subj,obj) pair -- the signal argument-context resolution needs. The BASE
+    # doc keeps the unsuffixed `_edge_doc_id` (so question gold-support resolves) and is rendered on
+    # the MAIN rng identically to the non-cooccur path (so the questions, sampled later on that rng,
+    # stay byte-identical); the extra docs use a per-edge SIDE rng and a `::<i>` id suffix.
+    import os as _os
+
+    _cooccur = _os.environ.get("GOLDENGRAPH_BENCH_COOCCUR", "") not in ("", "0", "false")
     documents: list[Document] = []
     for src_id in ids:
         for rel, dst_id in edges[src_id].items():
@@ -138,6 +146,19 @@ def generate_engineered(
                     dst_surface=o,
                 )
             )
+            if _cooccur:
+                side = random.Random(f"{seed}:{src_id}:{rel}:{dst_id}")
+                for i, phrase in enumerate(_REL_PHRASINGS.get(rel, ()), start=1):
+                    s2 = _render_mention(by_id[src_id], side, ambiguity)
+                    o2 = _render_mention(by_id[dst_id], side, ambiguity)
+                    documents.append(
+                        Document(
+                            id=f"{_edge_doc_id(src_id, rel, dst_id)}::{i}",
+                            text=f"{s2} {phrase} {o2}.",
+                            src_surface=s2,
+                            dst_surface=o2,
+                        )
+                    )
 
     # Sample k-hop questions by walking the edge graph and RECORDING the relation
     # sequence taken; the question states that sequence, the answer is the terminal
