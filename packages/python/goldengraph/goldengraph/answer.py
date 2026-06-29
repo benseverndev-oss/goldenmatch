@@ -13,7 +13,17 @@ from .route import plan_query, resolve_profile
 from .synthesize import synthesize_global, synthesize_hybrid, synthesize_local
 
 
-def aggregate_members(slice_graph, anchor_surface: str, relation: str) -> set[str]:
+def _add_refs(refs_out, edges) -> None:
+    """Collect the `source_refs` (owning-document ids) of `edges` into `refs_out` (a set), when a
+    collector is supplied. The provenance behind a retrieval/traversal step -- intersected with the
+    gold supporting-fact ids to make supporting-fact recall measurable. No-op when `refs_out` is None."""
+    if refs_out is None:
+        return
+    for e in edges:
+        refs_out.update(e.get("source_refs", ()))
+
+
+def aggregate_members(slice_graph, anchor_surface: str, relation: str, *, refs_out=None) -> set[str]:
     """Engine-native exact aggregation: seed the anchor by name, 1-hop ball, return the canonical
     NAMES of objects on edges (subj in seeds, predicate==relation). LLM-FREE."""
     seeds = slice_graph.seeds_by_name(anchor_surface)
@@ -22,14 +32,15 @@ def aggregate_members(slice_graph, anchor_surface: str, relation: str) -> set[st
     sub = slice_graph.query(seeds, 1)
     id_to_name = {e["entity_id"]: e["canonical_name"] for e in sub.get("entities", ())}
     seedset = set(seeds)
-    return {
-        id_to_name[e["obj"]]
-        for e in sub.get("edges", ())
+    matched = [
+        e for e in sub.get("edges", ())
         if e["subj"] in seedset and e["predicate"] == relation and e["obj"] in id_to_name
-    }
+    ]
+    _add_refs(refs_out, matched)
+    return {id_to_name[e["obj"]] for e in matched}
 
 
-def asof_object(slice_graph, anchor_surface: str, relation: str) -> str | None:
+def asof_object(slice_graph, anchor_surface: str, relation: str, *, refs_out=None) -> str | None:
     """The object on a (subj==seed, predicate==relation) edge present IN THIS SLICE (the slice
     already encodes the as-of window). The aggregate traversal returning ONE object. LLM-free."""
     seeds = slice_graph.seeds_by_name(anchor_surface)
@@ -38,13 +49,99 @@ def asof_object(slice_graph, anchor_surface: str, relation: str) -> str | None:
     sub = slice_graph.query(seeds, 1)
     id_to_name = {e["entity_id"]: e["canonical_name"] for e in sub.get("entities", ())}
     seedset = set(seeds)
-    objs = {
-        id_to_name[e["obj"]]
-        for e in sub.get("edges", ())
+    matched = [
+        e for e in sub.get("edges", ())
         if e["subj"] in seedset and e["predicate"] == relation and e["obj"] in id_to_name
-    }
+    ]
+    _add_refs(refs_out, matched)
+    objs = {id_to_name[e["obj"]] for e in matched}
     objs.discard(anchor_surface)
     return next(iter(sorted(objs)), None)
+
+
+def _norm_rel(s: str) -> str:
+    return " ".join(str(s).lower().replace("_", " ").split())
+
+
+def _rel_match(edge_pred: str, query_rel: str) -> bool:
+    """Lenient predicate match: normalize (lowercase, underscore<->space) then equality or substring
+    either way -- so the model's 'was acquired by' / 'works_at' matches the question's 'acquired' /
+    'works at'. Tolerates the ~0.85-accurate extracted predicates."""
+    a, b = _norm_rel(edge_pred), _norm_rel(query_rel)
+    return bool(a) and bool(b) and (a == b or b in a or a in b)
+
+
+def _bridge_surfaces(slice_graph, ids, id_to_name) -> set:
+    """Under-merge bridge: expand each id to ALL entity_ids sharing its canonical name. The store
+    under-merges -- the same surface form gets several entity_ids, so an edge's object (an *in*-copy,
+    a pure sink) is a different id than the *out*-copy that owns the chain's next edge. Re-seeding by
+    canonical name unions the unmerged siblings so the walk crosses the bridge entity. (Measured: 27
+    of 29 multi-hop walk deaths landed on a sink-copy with zero outgoing edges -- this is that fix.)"""
+    out = set()
+    for i in ids:
+        out.add(i)
+        name = id_to_name.get(i)
+        if name:
+            out.update(slice_graph.seeds_by_name(name))
+    return out
+
+
+def trace_chain(slice_graph, anchor_surface: str, relation_chain, *, refs_out=None) -> str | None:
+    """Relation-guided multi-hop walk: seed the anchor by name, then for each named relation follow
+    the matching outgoing edge to the next node(s). Returns the final node's canonical name. LLM-FREE
+    -- the directed walk IS the answer (the graph has at most one edge per (entity, relation)), so it
+    hands synthesis nothing to drown in. The fix for multi-hop synthesis-over-the-ball failure.
+
+    Each hop bridges the reached nodes across the store's entity under-merge (``_bridge_surfaces``):
+    without it the walk strands on the object's sink-copy, whose unmerged sibling owns the next edge.
+    """
+    import os
+
+    dbg = os.environ.get("GOLDENGRAPH_CHAIN_DEBUG", "") not in ("", "0", "false")
+    seeds = slice_graph.seeds_by_name(anchor_surface)
+    if not seeds:
+        if dbg:
+            print(f"[chain] anchor {anchor_surface!r} NOT SEEDED", flush=True)
+        return None
+    frontier = set(seeds)
+    id_to_name: dict = {}
+    for hop, rel in enumerate(relation_chain, 1):
+        sub = slice_graph.query(list(frontier), 1)
+        id_to_name = {e["entity_id"]: e["canonical_name"] for e in sub.get("entities", ())}
+        out_edges = [e for e in sub.get("edges", ()) if e["subj"] in frontier and e["obj"] in id_to_name]
+        matched_fwd = [e for e in out_edges if _rel_match(e["predicate"], rel)]
+        nxt = {e["obj"] for e in matched_fwd}
+        _add_refs(refs_out, matched_fwd)  # provenance of the edge(s) this hop traversed
+        reversed_used = False
+        if not nxt:
+            # direction-tolerant fallback: the 7B extracts passive/locative phrasings ("X was authored
+            # by Y", "X is located in Y") with the edge pointing object->subject, opposite the forward
+            # walk. When no FORWARD edge matches, accept a REVERSED edge of the same relation and take
+            # its subject as the next node. Scoped (only fires when forward yields nothing) and safe in
+            # the engineered corpus (at most one edge per (entity, relation), so the reversed edge is
+            # the same semantic link extracted backwards). Measured: 6 of 8 hop-1 walk deaths.
+            in_edges = [e for e in sub.get("edges", ())
+                        if e["obj"] in frontier and e["subj"] in id_to_name]
+            matched_rev = [e for e in in_edges if _rel_match(e["predicate"], rel)]
+            nxt = {e["subj"] for e in matched_rev}
+            _add_refs(refs_out, matched_rev)  # provenance of the reversed edge(s) traversed
+            reversed_used = bool(nxt)
+        if dbg:
+            avail = sorted({_norm_rel(e["predicate"]) for e in out_edges})
+            tag = " REVERSED-FALLBACK" if reversed_used else ""
+            print(f"[chain] hop{hop} rel={rel!r} frontier={len(frontier)} matched={len(nxt)}{tag} "
+                  f"avail={avail[:8]}", flush=True)
+        if not nxt:
+            if dbg:
+                print(f"[chain] DIED at hop{hop}: no {rel!r} edge (either direction) from frontier",
+                      flush=True)
+            return None
+        # bridge the reached nodes across the under-merge so the NEXT hop sees the sibling's out-edges
+        frontier = _bridge_surfaces(slice_graph, nxt, id_to_name)
+    names = sorted({id_to_name[i] for i in frontier if i in id_to_name} - {anchor_surface})
+    if dbg:
+        print(f"[chain] OK -> {names[:3]}", flush=True)
+    return names[0] if names else None
 
 
 def _format_aggregate(members: set[str]) -> str:
@@ -57,6 +154,18 @@ def _slice_predicates(slice_graph) -> set[str]:
     if not ids:
         return set()
     return {e["predicate"] for e in slice_graph.query(ids, 1).get("edges", ())}
+
+
+def _canon_query_rel(rel, schema):
+    """Map a query relation to the discovered schema's canonical label, so it matches the canonicalized
+    edge predicates -- the QUERY side of schema discovery. When the schema relabels a synonym cluster
+    (e.g. {'located in','sits within'} -> 'sits_within'), the edges become 'sits_within' but the query
+    still says 'located in'; routing the query relation through the SAME schema realigns them. Surface
+    unchanged when there is no schema or no match."""
+    if not rel or schema is None:
+        return rel
+    m = schema.match(rel)
+    return m[0] if m is not None else rel
 
 
 def _hybrid_filter_mode() -> str:
@@ -109,6 +218,8 @@ def ask(
     passages: object | None = None,
     passage_k: int = 10,
     query_classifier: object | None = None,
+    query_schema: object | None = None,
+    provenance_out: set | None = None,
 ) -> str:
     """Answer `query` against `store` as-of `(valid_t, tx_t)`.
 
@@ -129,10 +240,21 @@ def ask(
         profile = resolve_profile(
             query, predicates=_slice_predicates(slice_graph), llm_classifier=query_classifier
         )
+        # Query-side schema canonicalization: route the query's relation(s) through the discovered
+        # schema so they match the (relabeled) canonical edge predicates. Without this, a cluster
+        # relabeled to a non-canonical synonym strands every query that used the canonical word.
+        if query_schema is not None:
+            if profile.relation:
+                profile.relation = _canon_query_rel(profile.relation, query_schema)
+            if profile.relation_chain:
+                profile.relation_chain = tuple(
+                    _canon_query_rel(r, query_schema) for r in profile.relation_chain
+                )
         plan = plan_query(profile)
         if plan.mode == "aggregate" and profile.anchor_surface and profile.relation:
             return _format_aggregate(
-                aggregate_members(slice_graph, profile.anchor_surface, profile.relation)
+                aggregate_members(slice_graph, profile.anchor_surface, profile.relation,
+                                  refs_out=provenance_out)
             )
         if plan.mode == "as_of" and profile.anchor_surface and profile.relation and profile.as_of:
             # the date IS the slice time -> override the caller's valid_t for this temporal query
@@ -141,14 +263,23 @@ def ask(
             except ValueError:
                 d = None
             if d is not None:
-                obj = asof_object(store.as_of(d, tx_t), profile.anchor_surface, profile.relation)
+                obj = asof_object(store.as_of(d, tx_t), profile.anchor_surface, profile.relation,
+                                  refs_out=provenance_out)
                 return obj if obj is not None else "(unknown)"
+        if plan.mode == "chain" and profile.anchor_surface and profile.relation_chain:
+            ans = trace_chain(slice_graph, profile.anchor_surface, profile.relation_chain,
+                              refs_out=provenance_out)
+            if ans is not None:
+                return ans
+            # walk hit a missing/mislabeled edge -> fall through to the general retrieval+synthesis
         # clamp: a specialized plan that did NOT return must not carry an invalid mode into the
         # `if mode not in ("local","hybrid"): raise` guard below
         mode = plan.mode if plan.mode in ("local", "hybrid", "global") else "local"
     if mode == "global":
         communities = slice_graph.communities()[:max_communities]
         views = [slice_graph.query(c["members"], 1) for c in communities]
+        for v in views:
+            _add_refs(provenance_out, v.get("edges", ()))
         return synthesize_global(query, views, llm)
     if mode not in ("local", "hybrid"):
         raise ValueError(f"mode must be 'local', 'hybrid', or 'global', got {mode!r}")
@@ -168,9 +299,11 @@ def ask(
         passage_texts = (
             list(passages.retrieve(query, passage_k)) if passages is not None else []
         )
+        _add_refs(provenance_out, subgraph.get("edges", ()))  # provenance of the synthesized ball
         return synthesize_hybrid(
             query, subgraph, passage_texts, llm, seed_names=seed_names
         )
+    _add_refs(provenance_out, subgraph.get("edges", ()))  # provenance of the retrieval ball
     return synthesize_local(query, subgraph, llm, seed_names=seed_names)
 
 

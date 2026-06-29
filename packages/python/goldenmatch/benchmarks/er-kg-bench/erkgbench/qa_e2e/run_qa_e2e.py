@@ -69,6 +69,56 @@ def _embed_model():
     return os.environ.get("OPENAI_EMBED_MODEL") or None
 
 
+def _rag_embed_model() -> str:
+    """Concrete embedding model for the openai-SDK RAG/baseline engines (they need a name, not None).
+    Local lane sets OPENAI_EMBED_MODEL (e.g. nomic-embed-text via Ollama); else the OpenAI default."""
+    return os.environ.get("OPENAI_EMBED_MODEL") or "text-embedding-3-large"
+
+
+def _rag_embed_dim() -> int:
+    """Embedding dimension LightRAG needs declared up front. `OPENAI_EMBED_DIM` override, else inferred
+    from the model (nomic-embed-text = 768; OpenAI text-embedding-3-* = 3072)."""
+    v = os.environ.get("OPENAI_EMBED_DIM")
+    if v:
+        return int(v)
+    return 768 if "nomic" in (os.environ.get("OPENAI_EMBED_MODEL") or "").lower() else 3072
+
+
+def _lightrag_llm_func():
+    """LightRAG llm_model_func bound to the configured chat model + endpoint. Mirrors LightRAG's own
+    `gpt_4o_mini_complete` wrapper (absorbs the `keyword_extraction` flag, forwards `hashing_kv` etc.),
+    but with our model and OPENAI_BASE_URL so it can target a local Ollama 7B."""
+    from lightrag.llm.openai import openai_complete_if_cache
+
+    model = _chat_model()
+    base_url = os.environ.get("OPENAI_BASE_URL") or None
+    api_key = os.environ.get("OPENAI_API_KEY") or None
+
+    async def _llm(prompt, system_prompt=None, history_messages=None, keyword_extraction=False, **kw):
+        return await openai_complete_if_cache(
+            model, prompt, system_prompt=system_prompt,
+            history_messages=history_messages or [], base_url=base_url, api_key=api_key, **kw,
+        )
+
+    return _llm
+
+
+def _lightrag_embedding_func():
+    """LightRAG embedding_func (EmbeddingFunc with declared dim) bound to the configured embed model +
+    endpoint -- OpenAI or a local Ollama embedding model."""
+    from lightrag.llm.openai import openai_embed
+    from lightrag.utils import EmbeddingFunc
+
+    model = _rag_embed_model()
+    base_url = os.environ.get("OPENAI_BASE_URL") or None
+    api_key = os.environ.get("OPENAI_API_KEY") or None
+
+    async def _embed(texts):
+        return await openai_embed(texts, model=model, base_url=base_url, api_key=api_key)
+
+    return EmbeddingFunc(embedding_dim=_rag_embed_dim(), max_token_size=8192, func=_embed)
+
+
 def _build_engine(name: str):
     if name == "goldengraph":
         from goldengraph.embed import GoldenmatchEmbedder
@@ -89,12 +139,13 @@ def _build_engine(name: str):
             embedder=GoldenmatchEmbedder(provider="openai", model=_embed_model()),
         )
     if name == "lightrag":
-        from lightrag.llm.openai import gpt_4o_mini_complete, openai_embed
-
         from .engines.lightrag import LightRAGQAEngine
 
+        # Local-aware: openai_complete_if_cache / openai_embed honor OPENAI_BASE_URL, so the SAME funcs
+        # serve OpenAI (model=gpt-4o-mini, base_url unset) or a local Ollama 7B (model=qwen, base_url
+        # set). LightRAG needs the embedding DIM up front -> _rag_embed_dim() (nomic=768, OpenAI=3072).
         return LightRAGQAEngine(
-            llm_model_func=gpt_4o_mini_complete, embedding_func=openai_embed
+            llm_model_func=_lightrag_llm_func(), embedding_func=_lightrag_embedding_func()
         )
     if name == "ms_graphrag":
         from .engines.ms_graphrag import MSGraphRAGQAEngine
@@ -114,26 +165,20 @@ def _build_engine(name: str):
         # engines use, so the gap is exactly what the graph buys (or costs).
         from .engines.text_rag import TextRAGQAEngine
 
-        return TextRAGQAEngine(
-            model="gpt-4o-mini", embedding_model="text-embedding-3-large"
-        )
+        return TextRAGQAEngine(model=_chat_model(), embedding_model=_rag_embed_model())
     if name == "goldenmatch_rag":
         # goldenmatch's OWN retrieval surface (retrieve_similar_records) with the SAME
         # OpenAI embedder text_rag uses -- isolates our retrieval mechanics vs naive
         # cosine, embedder held constant.
         from .engines.goldenmatch_rag import GoldenmatchRAGQAEngine
 
-        return GoldenmatchRAGQAEngine(
-            model="gpt-4o-mini", embedding_model="text-embedding-3-large"
-        )
+        return GoldenmatchRAGQAEngine(model=_chat_model(), embedding_model=_rag_embed_model())
     if name == "goldenmatch_entity_rag":
         # goldenmatch's entity-aware RAG (retrieve -> dedupe -> canonicalize) -- the
         # product's differentiated claim, measured for the first time.
         from .engines.goldenmatch_rag import GoldenmatchEntityRAGQAEngine
 
-        return GoldenmatchEntityRAGQAEngine(
-            model="gpt-4o-mini", embedding_model="text-embedding-3-large"
-        )
+        return GoldenmatchEntityRAGQAEngine(model=_chat_model(), embedding_model=_rag_embed_model())
     raise SystemExit(f"unknown engine: {name}")
 
 
@@ -224,8 +269,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     engine = _MockEngine() if args.self_test else _build_engine(args.engine)
     judge = _make_judge(args.judge_model) if (args.judge and not args.self_test) else None
+    # Label the run with the model the engine ACTUALLY used (_chat_model() honors OPENAI_MODEL), not
+    # the CLI default -- otherwise a local_llm run's artifact mislabels itself as gpt-4o-mini. Unknown
+    # local models fall back to the default cost rate in BudgetTracker (notional; local runs are free).
     result = run_engine(
-        engine, corpus, model=args.model, budget_usd=args.budget_usd, judge=judge
+        engine, corpus, model=_chat_model(), budget_usd=args.budget_usd, judge=judge
     )
     write_results([result], md_path=out_md, json_path=out_json)
     print(

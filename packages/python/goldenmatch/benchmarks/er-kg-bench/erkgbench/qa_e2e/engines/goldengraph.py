@@ -145,6 +145,16 @@ class _CountingLLM:
             self.output_tokens += max(1, len(out) // 4)
         return out
 
+    def complete_json(self, prompt: str) -> str:
+        # JSON-constrained extraction path; forward to the inner client's complete_json
+        # when present (the OpenAIClient/Ollama path), else fall back to complete.
+        fn = getattr(self._inner, "complete_json", self._inner.complete)
+        out = _with_retry(lambda: fn(prompt))
+        with self._lock:
+            self.input_tokens += max(1, len(prompt) // 4)
+            self.output_tokens += max(1, len(out) // 4)
+        return out
+
 
 class GoldenGraphQAEngine:
     name = "goldengraph"
@@ -203,10 +213,11 @@ class GoldenGraphQAEngine:
         # synthesis -- the build's dominant, network-bound cost) across documents,
         # committing to the store serially in document order (identical result). The
         # shared caching embedder (self._embedder) embeds each entity text once.
-        ingest_corpus(
+        query_schema = ingest_corpus(
             [doc.text for doc in corpus.documents], store, llm=self._llm,
             resolver=self._resolver, embedder=self._embedder, fp_index=fp_index,
-        )
+            doc_ids=[doc.id for doc in corpus.documents],  # stamp doc ids onto edges -> support_recall
+        )  # the discovered RelationSchema (or None) -> canonicalize QUERY relations through it too
         # Hybrid mode also indexes the raw paragraphs for answer-time passage
         # retrieval. Built with a SEPARATE OpenAI embedder (text-embedding-3-large,
         # matching goldenmatch_rag/text_rag) so the passage half is identical to the
@@ -227,6 +238,7 @@ class GoldenGraphQAEngine:
             )
         handle = {
             "store": store, "valid_t": _AS_OF, "tx_t": _AS_OF, "passages": passages,
+            "query_schema": query_schema,
         }
         return BuildResult(
             handle=handle,
@@ -240,6 +252,10 @@ class GoldenGraphQAEngine:
 
         t0 = time.perf_counter()
         before_in, before_out = self._llm.input_tokens, self._llm.output_tokens
+        # `provenance_out` collects the source-doc ids of every edge the retrieval/traversal touched.
+        # The store stamps each edge with its owning document id (ingest doc_ids); intersecting these
+        # with the question's gold_supporting_fact_ids is the supporting-fact recall the harness scores.
+        provenance: set = set()
         text = ask(
             question,
             handle["store"],
@@ -252,19 +268,17 @@ class GoldenGraphQAEngine:
             node_budget=self._node_budget,
             passages=handle.get("passages"),
             passage_k=self._passage_k,
+            query_schema=handle.get("query_schema"),
+            provenance_out=provenance,
         )
         return AnswerResult(
             text=text,
-            # support_recall is STRUCTURALLY 0.0 for goldengraph and the bench
-            # JSON's support-recall column should be read as "not wired", not "0%
-            # recall". Root cause (2026-06-23 triage): `ask()` returns only the
-            # answer string -- it does not expose which document/edge ids fell in
-            # the retrieval ball, so there is nothing to intersect with
-            # `gold_supporting_fact_ids`. Fixing it needs `ask()` (or a sibling that
-            # reuses the same retrieval) to return the ball's source-doc ids mapped
-            # to corpus ids (MuSiQue '<qid>::p<idx>'); that is a goldengraph API
-            # change, tracked as a follow-up rather than forced here.
-            retrieved_fact_ids=(),
+            # Supporting-fact recall is now wired: `ask(provenance_out=)` returns the source-doc ids
+            # of the retrieved/traversed edges (the store stamps each edge with its document id at
+            # ingest), which the harness intersects with `gold_supporting_fact_ids`. The co-occurrence
+            # corpus renders an edge in several docs (base id + `::N` suffixes); the base id IS the gold
+            # id, so the intersection still hits. Empty when retrieval surfaced no stored edge.
+            retrieved_fact_ids=tuple(sorted(provenance)),
             input_tokens=self._llm.input_tokens - before_in,
             output_tokens=self._llm.output_tokens - before_out,
             latency_s=time.perf_counter() - t0,

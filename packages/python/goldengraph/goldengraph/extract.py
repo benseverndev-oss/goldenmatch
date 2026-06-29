@@ -141,13 +141,52 @@ def parse_extraction(raw: str) -> Extraction:
     return Extraction(mentions=mentions, relationships=rels, attributes=attrs)
 
 
-def extract(text: str, llm: LLMClient, *, literals: bool | None = None) -> Extraction:
+#: Prepended when a closed relation schema is known -- the highest-ROI fix for weak models, which
+#: get entities + edges right but SEMANTICALLY PARAPHRASE the predicate (measured: relation-F1 edge
+#: 0.81 vs predicate-exact 0.30 on qwen-7B). The multi-hop questions are predicate-specific, so a
+#: wrong label breaks the trace. Constraining to the canonical vocabulary fixes it without training.
+_RELATION_VOCAB_INSTRUCTION = (
+    "IMPORTANT: for every relationship, set `predicate` to EXACTLY ONE label, verbatim, from this "
+    "closed set -- do NOT paraphrase, pluralize, or invent labels: [{vocab}]. If none of these "
+    "relations holds between two entities, OMIT that relationship. "
+    "DIRECTION MATTERS: `subj` is the entity that the relation acts FROM (the grammatical subject, "
+    "stated FIRST), `obj` is the entity it acts ON (stated second). For 'A works_at B', subj=A, "
+    "obj=B. Never invert subject and object.\n\n"
+)
+
+
+def _relation_vocab(explicit) -> tuple[str, ...]:
+    """The closed relation vocabulary: explicit arg, else the comma-separated
+    `GOLDENGRAPH_RELATION_VOCAB` env, else empty (open extraction, unchanged)."""
+    if explicit is not None:
+        return tuple(explicit)
+    raw = os.environ.get("GOLDENGRAPH_RELATION_VOCAB", "")
+    return tuple(v.strip() for v in raw.split(",") if v.strip())
+
+
+def extract(text: str, llm: LLMClient, *, literals: bool | None = None,
+            relation_vocab=None) -> Extraction:
     """Extract entities + relationships (+ literal attributes when `literals`) from
     `text` via `llm`. `literals=None` (the default) reads the
     `GOLDENGRAPH_LITERAL_ATTRS` flag, so the build's 2-arg call site stays unchanged
     (and monkeypatched test stubs keep their `(text, llm)` shape); pass an explicit
-    bool to force it."""
+    bool to force it. `relation_vocab` (or `GOLDENGRAPH_RELATION_VOCAB`) constrains
+    predicates to a closed schema -- open extraction when absent."""
     if literals is None:
         literals = os.environ.get("GOLDENGRAPH_LITERAL_ATTRS", "0") not in ("0", "false", "")
-    prompt = _PROMPT_LITERALS if literals else _PROMPT
-    return parse_extraction(llm.complete(prompt.format(text=text)))
+    prompt = (_PROMPT_LITERALS if literals else _PROMPT).format(text=text)
+    vocab = _relation_vocab(relation_vocab)
+    if vocab:
+        prompt = _RELATION_VOCAB_INSTRUCTION.format(vocab=", ".join(vocab)) + prompt
+    return parse_extraction(_complete_extraction(llm, prompt))
+
+
+def _complete_extraction(llm: LLMClient, prompt: str) -> str:
+    """Use the JSON-constrained completion when the client supports it (and
+    `GOLDENGRAPH_EXTRACT_JSON_MODE` != 0) -- forcing valid JSON is the highest-ROI
+    lever for weak/OSS models, which otherwise emit unparseable extraction. Falls
+    back to plain `complete` for stubs / clients without `complete_json`."""
+    json_mode = os.environ.get("GOLDENGRAPH_EXTRACT_JSON_MODE", "1") not in ("0", "false", "")
+    if json_mode and hasattr(llm, "complete_json"):
+        return llm.complete_json(prompt)
+    return llm.complete(prompt)

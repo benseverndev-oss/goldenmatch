@@ -24,7 +24,7 @@ on:
         description: "all | goldengraph | lightrag | ms_graphrag | graphiti | text_rag | goldenmatch_rag | goldenmatch_entity_rag (head_to_head mode only)"
         default: "all"
       mode:
-        description: "head_to_head (engine matrix) | scorecard | aggregation_llm | temporal_llm | kg_capability | router_capability"
+        description: "head_to_head | scorecard | aggregation_llm | temporal_llm | kg_capability | router_capability | extraction_f1 | synthesis_gold | retrieval_coverage"
         default: "head_to_head"
       budget_usd:
         description: "hard cost cap per (engine, ambiguity) run"
@@ -109,6 +109,11 @@ jobs:
             -m packages/rust/extensions/goldenprofile-native/Cargo.toml --out dist
           python -m pip install dist/*.whl
           python -m pip install --no-deps -e packages/python/goldengraph
+          # Overlay the REPO goldenmatch (pure-Python) so THIS branch's OPENAI_BASE_URL embedding
+          # change is the one that runs -- the PyPI goldenmatch above lacks it, so a local_llm run's
+          # embeddings would otherwise hit api.openai.com with the dummy key (401). The native kernel
+          # still comes from the goldenmatch-native wheel pulled by the PyPI install.
+          python -m pip install --no-deps -e packages/python/goldenmatch
           # In-house local-extractor prototype-eval deps (only when selected via opts).
           if [ "${GOLDENGRAPH_EXTRACTOR:-api}" != "api" ]; then
             python -m pip install transformers torch
@@ -460,7 +465,7 @@ jobs:
 
   scorecard:
     # Opt-in real-LLM confirmation rows (NON-gating), selected by `mode`. One mode per dispatch.
-    if: ${{ inputs.mode != 'head_to_head' }}
+    if: ${{ inputs.mode != 'head_to_head' && inputs.mode != 'extraction_f1' && inputs.mode != 'synthesis_gold' && inputs.mode != 'retrieval_coverage' }}
     runs-on: large-new-64GB
     timeout-minutes: 120
     steps:
@@ -582,4 +587,143 @@ jobs:
         with:
           name: graphrag-qa-router-llm
           path: packages/python/goldenmatch/benchmarks/er-kg-bench/ROUTER_LLM.md
+          if-no-files-found: ignore
+
+  extraction_f1:
+    # The low-noise instrument for the extraction A/B: extraction-F1 vs PLANTED gold for several
+    # extractor configs (api_json / api_nojson / rebel), far less noisy than end-to-end answer-match.
+    # Wheel-free (no PyStore) -> no maturin build. `api*` configs need Ollama (local_llm); `rebel`
+    # needs transformers+torch. Non-gating; writes EXTRACTION_F1.md.
+    needs: setup
+    if: ${{ inputs.mode == 'extraction_f1' }}
+    runs-on: large-new-64GB
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Install goldenmatch + goldengraph + datasets + rebel deps (no wheel -- extraction is pure)
+        run: |
+          python -m pip install --upgrade pip pytest goldenmatch datasets openai transformers torch
+          python -m pip install --no-deps -e packages/python/goldengraph
+      - name: Start local OSS LLM (Ollama)
+        if: ${{ inputs.local_llm != '' }}
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          ollama serve > ollama.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf http://localhost:11434/api/version && break || sleep 2; done
+          ollama pull "${{ inputs.local_llm }}"
+      - name: Run extraction-F1 eval (api_json / api_nojson / rebel)
+        working-directory: packages/python/goldenmatch/benchmarks/er-kg-bench
+        env:
+          OPENAI_API_KEY: ${{ inputs.local_llm != '' && 'ollama' || secrets.GOLDENGRAPH_OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ inputs.local_llm != '' && 'http://localhost:11434/v1' || '' }}
+          OPENAI_MODEL: ${{ inputs.local_llm }}
+          POLARS_SKIP_CPU_CHECK: "1"
+        # max_questions sizes the corpus; use a SMALL value for a local Ollama run (CPU per-doc extract).
+        run: |
+          python -m erkgbench.qa_e2e.run_extraction_eval \
+            --configs api_json,api_schema \
+            --n-questions "${{ inputs.max_questions }}" --ambiguity 0.6 \
+            --out-md EXTRACTION_F1.md
+      - name: Upload EXTRACTION_F1.md
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: graphrag-qa-extraction-f1
+          path: packages/python/goldenmatch/benchmarks/er-kg-bench/EXTRACTION_F1.md
+          if-no-files-found: ignore
+
+  synthesis_gold:
+    # Stage 0 of the distillation pivot: synthesis-given-gold (hand the model the GOLD subgraph +
+    # question -> answer-match). LOW => synthesis is the bottleneck; HIGH but low end-to-end =>
+    # retrieval is. Wheel-free (subgraph dicts, no PyStore); api needs Ollama (local_llm). Non-gating.
+    needs: setup
+    if: ${{ inputs.mode == 'synthesis_gold' }}
+    runs-on: large-new-64GB
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Install goldenmatch + goldengraph + datasets (no wheel -- synthesis is pure)
+        run: |
+          python -m pip install --upgrade pip pytest goldenmatch datasets openai
+          python -m pip install --no-deps -e packages/python/goldengraph
+      - name: Start local OSS LLM (Ollama)
+        if: ${{ inputs.local_llm != '' }}
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          ollama serve > ollama.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf http://localhost:11434/api/version && break || sleep 2; done
+          ollama pull "${{ inputs.local_llm }}"
+      - name: Run synthesis-given-gold (isolation)
+        working-directory: packages/python/goldenmatch/benchmarks/er-kg-bench
+        env:
+          OPENAI_API_KEY: ${{ inputs.local_llm != '' && 'ollama' || secrets.GOLDENGRAPH_OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ inputs.local_llm != '' && 'http://localhost:11434/v1' || '' }}
+          OPENAI_MODEL: ${{ inputs.local_llm }}
+          POLARS_SKIP_CPU_CHECK: "1"
+        run: |
+          python -m erkgbench.qa_e2e.run_synthesis_eval \
+            --n-questions "${{ inputs.max_questions }}" --ambiguity 0.6 \
+            --out-md SYNTHESIS_GOLD.md
+      - name: Upload SYNTHESIS_GOLD.md
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: graphrag-qa-synthesis-gold
+          path: packages/python/goldenmatch/benchmarks/er-kg-bench/SYNTHESIS_GOLD.md
+          if-no-files-found: ignore
+
+  retrieval_coverage:
+    # Stage 0b: does answer-time retrieval surface the gold chain? Isolates retrieval on a PERFECT
+    # oracle graph (no extraction LLM -- only the embedder is exercised). LOW anchor-seed = mis-seeding;
+    # LOW chain-coverage = the undirected ball drops the directed chain. Needs the wheel (PyStore) +
+    # the embedder (Ollama nomic-embed-text). Non-gating.
+    needs: setup
+    if: ${{ inputs.mode == 'retrieval_coverage' }}
+    runs-on: large-new-64GB
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Install goldenmatch + native wheel + goldengraph (retrieval needs PyStore + embedder)
+        run: |
+          python -m pip install --upgrade pip maturin pytest goldenmatch datasets openai
+          maturin build --release \
+            -m packages/rust/extensions/goldengraph-native/Cargo.toml --out dist
+          python -m pip install dist/*.whl
+          python -m pip install --no-deps -e packages/python/goldengraph
+          # Repo goldenmatch overlay: the OPENAI_BASE_URL embedding change (so the embedder hits Ollama).
+          python -m pip install --no-deps -e packages/python/goldenmatch
+      - name: Start local OSS embedder (Ollama)
+        if: ${{ inputs.local_llm != '' }}
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          ollama serve > ollama.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf http://localhost:11434/api/version && break || sleep 2; done
+          ollama pull nomic-embed-text
+      - name: Run retrieval-coverage eval (oracle graph)
+        working-directory: packages/python/goldenmatch/benchmarks/er-kg-bench
+        env:
+          OPENAI_API_KEY: ${{ inputs.local_llm != '' && 'ollama' || secrets.GOLDENGRAPH_OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ inputs.local_llm != '' && 'http://localhost:11434/v1' || '' }}
+          OPENAI_EMBED_MODEL: ${{ inputs.local_llm != '' && 'nomic-embed-text' || '' }}
+          POLARS_SKIP_CPU_CHECK: "1"
+        run: |
+          python -m erkgbench.qa_e2e.run_retrieval_eval \
+            --n-questions "${{ inputs.max_questions }}" --ambiguity 0.6 \
+            --out-md RETRIEVAL_COVERAGE.md
+      - name: Upload RETRIEVAL_COVERAGE.md
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: graphrag-qa-retrieval-coverage
+          path: packages/python/goldenmatch/benchmarks/er-kg-bench/RETRIEVAL_COVERAGE.md
           if-no-files-found: ignore

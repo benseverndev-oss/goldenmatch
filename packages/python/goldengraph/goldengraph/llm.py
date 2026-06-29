@@ -16,6 +16,11 @@ class LLMClient(Protocol):
 
     def complete(self, prompt: str) -> str: ...
 
+    # Optional: a JSON-constrained completion for structured extraction. Callers MUST
+    # feature-detect with `hasattr(llm, "complete_json")` and fall back to `complete`
+    # -- test stubs and the pure protocol need not implement it.
+    # def complete_json(self, prompt: str) -> str: ...
+
 
 class OpenAIClient:
     """Minimal OpenAI adapter (optional `[openai]` extra). Reuses goldenmatch's
@@ -34,12 +39,25 @@ class OpenAIClient:
         return self._client
 
     def complete(self, prompt: str) -> str:
+        return self._chat(prompt, json_mode=False)
+
+    def complete_json(self, prompt: str) -> str:
+        """Like `complete` but constrains the model to a single JSON object
+        (`response_format=json_object`). Forces valid extraction JSON from weaker
+        models that otherwise emit prose/fenced/invalid output (the small-OSS-model
+        failure mode). Honored by OpenAI + Ollama's OpenAI-compatible endpoint."""
+        return self._chat(prompt, json_mode=True)
+
+    def _chat(self, prompt: str, *, json_mode: bool) -> str:
         client = self._ensure_client()
-        resp = client.chat.completions.create(
-            model=self.model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0,
-        )
+        kwargs = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0,
+        }
+        if json_mode:
+            kwargs["response_format"] = {"type": "json_object"}
+        resp = client.chat.completions.create(**kwargs)
         text = resp.choices[0].message.content or ""
         if self.budget is not None:
             # Best-effort spend accounting; BudgetTracker raises if over cap.

@@ -61,12 +61,24 @@ class LightRAGQAEngine:
         return self._loop.run_until_complete(coro)
 
     def _new_rag(self, working_dir: str):
+        import os
+
         from lightrag import LightRAG
 
+        # NOTE (2026-06-29): this cosine-threshold lever did NOT fix LightRAG's local-7B '[no-context]'
+        # failure -- measured: naive mode returns '[no-context]' identically with the threshold at 0.05
+        # vs the default, so the empty retrieval is NOT a threshold filter. The likely cause is the
+        # stored chunk embeddings being unusable on the local stack (a dim/shape mismatch between
+        # lightrag's `openai_embed` wrapper and Ollama's /v1/embeddings response), but confirming it
+        # needs lightrag-internal debugging out of scope for the head-to-head. LightRAG is recorded as a
+        # diagnosed honest-null (see docs/oss-llm-usage.md). The knob is harmless and kept as a config
+        # seam; it is not the fix. Env-tunable (GOLDENGRAPH_LIGHTRAG_COSINE, default 0.05).
+        thr = float(os.environ.get("GOLDENGRAPH_LIGHTRAG_COSINE", "0.05"))
         return LightRAG(
             working_dir=working_dir,
             llm_model_func=self._llm_func,
             embedding_func=self._embedding_func,
+            vector_db_storage_cls_kwargs={"cosine_better_than_threshold": thr},
         )
 
     def build_kg(self, corpus) -> BuildResult:
@@ -90,12 +102,19 @@ class LightRAGQAEngine:
         )
 
     def answer(self, handle, question: str) -> AnswerResult:
+        import os
+
         from lightrag import QueryParam
 
         t0 = time.perf_counter()
         before = dict(self._counter)
         rag = handle["rag"]
-        text = self._run(rag.aquery(question, param=QueryParam(mode="hybrid")))
+        # `LIGHTRAG_QUERY_MODE` (default hybrid) -- "naive" = pure vector RAG, skipping the graph +
+        # keyword-extraction LLM steps. The A/B that isolates whether LightRAG's structured prompts
+        # (entity-extraction format, keyword JSON) survive a weak local model: if naive answers and
+        # hybrid doesn't, the graph pipeline is what the 7B can't drive.
+        mode = os.environ.get("LIGHTRAG_QUERY_MODE", "hybrid")
+        text = self._run(rag.aquery(question, param=QueryParam(mode=mode)))
         return AnswerResult(
             text=text or "",
             retrieved_fact_ids=(),  # LightRAG doesn't surface retrieved ids; see spec note

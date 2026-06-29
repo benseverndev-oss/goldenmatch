@@ -58,6 +58,30 @@ def _render_mention(ent: _Entity, rng: random.Random, ambiguity: float) -> str:
     return ent.canonical
 
 
+#: Phase-2 schema-DISCOVERY stress test: multiple surface PARAPHRASES per relation. The questions
+#: still state the canonical relation ("works at"), so an engine must cluster these synonyms back to
+#: one relation to answer -- the real test of schema discovery (Phase 1 used one phrase per relation,
+#: so clustering was never exercised). Each set includes the canonical phrasing so a discovered
+#: cluster can recover the query-matching label. Enabled via GOLDENGRAPH_BENCH_REL_PARAPHRASE=1.
+_REL_PHRASINGS: dict[str, tuple[str, ...]] = {
+    "works_at": ("works at", "is employed at", "is on staff at"),
+    "located_in": ("located in", "is based in", "sits within"),
+    "acquired": ("acquired", "took over", "bought out"),
+    "authored": ("authored", "wrote", "penned"),
+    "part_of": ("part of", "belongs to", "is a component of"),
+}
+
+
+def _render_relation(rel: str, rng: random.Random) -> str:
+    """Canonical 'rel with spaces', or (when GOLDENGRAPH_BENCH_REL_PARAPHRASE is set) a random
+    paraphrase from `_REL_PHRASINGS` -- exercising synonym clustering in schema discovery."""
+    import os
+
+    if os.environ.get("GOLDENGRAPH_BENCH_REL_PARAPHRASE", "") not in ("", "0", "false"):
+        return rng.choice(_REL_PHRASINGS.get(rel, (rel.replace("_", " "),)))
+    return rel.replace("_", " ")
+
+
 def _edge_doc_id(src_id: str, rel: str, dst_id: str) -> str:
     """Stable document id that ENCODES the edge structure (canonical ids, never
     variant surfaces), so a pure-Python oracle can rebuild the graph from the
@@ -101,6 +125,14 @@ def generate_engineered(
 
     # One document per edge stating the relation, with ambiguity-dialed mentions.
     # Iterate the (src, rel) map in a fixed order so the corpus is seed-deterministic.
+    # GOLDENGRAPH_BENCH_COOCCUR renders each edge with EVERY phrasing (extra docs) so synonyms
+    # co-occur on the same (subj,obj) pair -- the signal argument-context resolution needs. The BASE
+    # doc keeps the unsuffixed `_edge_doc_id` (so question gold-support resolves) and is rendered on
+    # the MAIN rng identically to the non-cooccur path (so the questions, sampled later on that rng,
+    # stay byte-identical); the extra docs use a per-edge SIDE rng and a `::<i>` id suffix.
+    import os as _os
+
+    _cooccur = _os.environ.get("GOLDENGRAPH_BENCH_COOCCUR", "") not in ("", "0", "false")
     documents: list[Document] = []
     for src_id in ids:
         for rel, dst_id in edges[src_id].items():
@@ -109,11 +141,32 @@ def generate_engineered(
             documents.append(
                 Document(
                     id=_edge_doc_id(src_id, rel, dst_id),
-                    text=f"{s} {rel.replace('_', ' ')} {o}.",
+                    text=f"{s} {_render_relation(rel, rng)} {o}.",
                     src_surface=s,
                     dst_surface=o,
                 )
             )
+            if _cooccur:
+                # ONE extra doc with a RANDOM phrasing (not all) -- so each edge shows 2 phrasings
+                # (base + extra) that co-occur on its pair (the clustering signal), but the CANONICAL
+                # word is absent from a fraction of edges (~4/9). Those canonical-free edges are
+                # reachable only by clustering the synonyms (argctx), not by the canonical-label
+                # default backend -- the discriminating case. Side rng so the main rng (questions)
+                # is untouched.
+                phr = _REL_PHRASINGS.get(rel, ())
+                if phr:
+                    side = random.Random(f"{seed}:{src_id}:{rel}:{dst_id}")
+                    phrase = side.choice(phr)
+                    s2 = _render_mention(by_id[src_id], side, ambiguity)
+                    o2 = _render_mention(by_id[dst_id], side, ambiguity)
+                    documents.append(
+                        Document(
+                            id=f"{_edge_doc_id(src_id, rel, dst_id)}::1",
+                            text=f"{s2} {phrase} {o2}.",
+                            src_surface=s2,
+                            dst_surface=o2,
+                        )
+                    )
 
     # Sample k-hop questions by walking the edge graph and RECORDING the relation
     # sequence taken; the question states that sequence, the answer is the terminal

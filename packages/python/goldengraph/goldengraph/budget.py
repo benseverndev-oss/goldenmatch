@@ -49,3 +49,16 @@ class _BudgetedLLM:
         out = self._llm.complete(prompt)
         self._budget.record(est_in + _est_tokens(out))
         return out
+
+    def complete_json(self, prompt: str) -> str:
+        """Budgeted JSON-constrained completion; forwards to the inner client's
+        `complete_json` when present, else falls back to `complete`."""
+        est_in = _est_tokens(prompt)
+        if self._budget.would_exceed(est_in):
+            raise BudgetExhausted(
+                f"budget exhausted: {self._budget.spent_tokens}/{self._budget.total_tokens} (+{est_in})"
+            )
+        fn = getattr(self._llm, "complete_json", self._llm.complete)
+        out = fn(prompt)
+        self._budget.record(est_in + _est_tokens(out))
+        return out
