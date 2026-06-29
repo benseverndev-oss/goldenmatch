@@ -58,6 +58,30 @@ def _render_mention(ent: _Entity, rng: random.Random, ambiguity: float) -> str:
     return ent.canonical
 
 
+#: Phase-2 schema-DISCOVERY stress test: multiple surface PARAPHRASES per relation. The questions
+#: still state the canonical relation ("works at"), so an engine must cluster these synonyms back to
+#: one relation to answer -- the real test of schema discovery (Phase 1 used one phrase per relation,
+#: so clustering was never exercised). Each set includes the canonical phrasing so a discovered
+#: cluster can recover the query-matching label. Enabled via GOLDENGRAPH_BENCH_REL_PARAPHRASE=1.
+_REL_PHRASINGS: dict[str, tuple[str, ...]] = {
+    "works_at": ("works at", "is employed at", "is on staff at"),
+    "located_in": ("located in", "is based in", "sits within"),
+    "acquired": ("acquired", "took over", "bought out"),
+    "authored": ("authored", "wrote", "penned"),
+    "part_of": ("part of", "belongs to", "is a component of"),
+}
+
+
+def _render_relation(rel: str, rng: random.Random) -> str:
+    """Canonical 'rel with spaces', or (when GOLDENGRAPH_BENCH_REL_PARAPHRASE is set) a random
+    paraphrase from `_REL_PHRASINGS` -- exercising synonym clustering in schema discovery."""
+    import os
+
+    if os.environ.get("GOLDENGRAPH_BENCH_REL_PARAPHRASE", "") not in ("", "0", "false"):
+        return rng.choice(_REL_PHRASINGS.get(rel, (rel.replace("_", " "),)))
+    return rel.replace("_", " ")
+
+
 def _edge_doc_id(src_id: str, rel: str, dst_id: str) -> str:
     """Stable document id that ENCODES the edge structure (canonical ids, never
     variant surfaces), so a pure-Python oracle can rebuild the graph from the
@@ -109,7 +133,7 @@ def generate_engineered(
             documents.append(
                 Document(
                     id=_edge_doc_id(src_id, rel, dst_id),
-                    text=f"{s} {rel.replace('_', ' ')} {o}.",
+                    text=f"{s} {_render_relation(rel, rng)} {o}.",
                     src_surface=s,
                     dst_surface=o,
                 )
