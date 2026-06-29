@@ -37,3 +37,21 @@ def test_tf_score_pair_matches_matrix():
     s = NameFreqWeightedJW()
     tf = {"smith": 0.5, "zelinski": 0.001}
     assert abs(s.score_pair("smith", "smith", tf_freqs=tf) - s.score_matrix(["smith","smith"], tf_freqs=tf)[0,1]) < 1e-6
+    # mixed pair: smith (common) vs zelinski (rare), jw < 1.0
+    sp = s.score_pair("smith", "zelinski", tf_freqs=tf)
+    sm = s.score_matrix(["smith", "zelinski"], tf_freqs=tf)[0, 1]
+    assert abs(sp - sm) < 1e-4   # float32 matrix vs float64 pair tolerance
+
+
+def test_fuzzy_score_matrix_passes_tf_freqs():
+    from goldenmatch.core.scorer import _fuzzy_score_matrix
+    tf = {"smith": 0.5, "zelinski": 0.001}
+    common = _fuzzy_score_matrix(["smith", "smith"], "name_freq_weighted_jw", tf_freqs=tf)[0, 1]
+    rare = _fuzzy_score_matrix(["zelinski", "zelinski"], "name_freq_weighted_jw", tf_freqs=tf)[0, 1]
+    assert common < rare
+
+
+def test_fuzzy_score_matrix_tf_none_is_static():
+    from goldenmatch.core.scorer import _fuzzy_score_matrix
+    m = _fuzzy_score_matrix(["smith", "smith"], "name_freq_weighted_jw")
+    assert abs(m[0, 1] - 1.0) < 1e-6

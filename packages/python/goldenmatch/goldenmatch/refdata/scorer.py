@@ -21,6 +21,8 @@ validation through the existing plugin path — no changes to
 """
 from __future__ import annotations
 
+import math
+
 import numpy as np
 from rapidfuzz.distance import JaroWinkler
 from rapidfuzz.process import cdist
@@ -59,7 +61,6 @@ def _tf_rarity(value: str | None, tf_freqs: dict[str, float], log_ref: float) ->
     f = tf_freqs.get(value)
     if f is None or f <= 0.0:
         return 1.0                      # unseen at scoring time -> treat as rare
-    import math
     if log_ref <= 0.0:
         return 1.0
     return max(0.0, min(1.0, math.log(1.0 / f) / log_ref))
@@ -98,8 +99,8 @@ class NameFreqWeightedJW(ScorerPlugin):
         # post-transform values too (find_fuzzy_matches passes
         # _get_transformed_values), so keys align with Task A4's table build.
         if tf_freqs:
-            import math
-            log_ref = -math.log(min(tf_freqs.values()))
+            _min_f = min(tf_freqs.values())
+            log_ref = -math.log(_min_f) if _min_f > 0.0 else 0.0
             ra = _tf_rarity(val_a, tf_freqs, log_ref)
             rb = _tf_rarity(val_b, tf_freqs, log_ref)
             weight = _COMMON_NAME_FLOOR + (1.0 - _COMMON_NAME_FLOOR) * ((ra + rb) / 2.0)
@@ -142,8 +143,8 @@ class NameFreqWeightedJW(ScorerPlugin):
         # post-transform values too (find_fuzzy_matches passes
         # _get_transformed_values), so keys align with Task A4's table build.
         if n > 0 and tf_freqs:
-            import math
-            log_ref = -math.log(min(tf_freqs.values()))
+            _min_f = min(tf_freqs.values())
+            log_ref = -math.log(_min_f) if _min_f > 0.0 else 0.0
             rarity = np.array(
                 [_tf_rarity(v if v else None, tf_freqs, log_ref) for v in clean],
                 dtype=np.float32,
