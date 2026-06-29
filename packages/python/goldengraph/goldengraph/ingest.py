@@ -55,12 +55,20 @@ def build_batch(
     *,
     at: int,
     valid_from: int | None = None,
+    source_ref: str | None = None,
 ) -> dict:
     """Build a `StoreBatch` dict (SP4a JSON shape) from a resolved extraction.
 
     Remaps each relationship's mention indices to the owning entity `local_id`;
     drops self-loops (endpoints in the same entity after dedup) and orphans.
+
+    `source_ref` (the owning document's id) is stamped onto every edge's
+    `source_refs`; the store unions+dedups these across documents (store.rs::append),
+    and `query()` returns them, so a caller can recover which document each retrieved
+    edge came from -- the provenance that makes supporting-fact recall measurable.
+    `None` -> empty `source_refs` (back-compat: no provenance).
     """
+    refs = [source_ref] if source_ref else []
     mention_to_local: dict[int, int] = {}
     for e in entities:
         for mi in e.member_idx:
@@ -80,7 +88,7 @@ def build_batch(
                 "obj_local": o,
                 "valid_from": vf,
                 "valid_to": None,
-                "source_refs": [],
+                "source_refs": list(refs),
             }
         )
 
@@ -130,7 +138,7 @@ def build_batch(
                 "obj_local": lid,
                 "valid_from": vf,
                 "valid_to": None,
-                "source_refs": [],
+                "source_refs": list(refs),
             }
         )
 
@@ -701,13 +709,16 @@ def _prepare_doc(
 def _commit_doc(
     store, extraction, entities, new_fps, *, at, valid_from, embedder, fp_index,
     link_index: _LinkIndex | None = None, timers: _BuildTimers | None = None,
+    source_ref: str | None = None,
 ) -> None:
     """The store-BOUND half of ingest (must run serially, in document order):
     build the batch, cross-document-link, append, and persist this batch's
     fingerprints under their (link-augmented) record_keys for later docs. With a
     `link_index` (profile-link path) the cross-doc match runs against the O(N)
-    incremental blocked index instead of re-reading the whole store each doc."""
-    batch = build_batch(extraction, entities, at=at, valid_from=valid_from)
+    incremental blocked index instead of re-reading the whole store each doc.
+
+    `source_ref` (this document's id) is stamped onto every edge for provenance."""
+    batch = build_batch(extraction, entities, at=at, valid_from=valid_from, source_ref=source_ref)
     if _cross_doc_link_enabled():
         tl = time.perf_counter()
         if link_index is not None and _profile_link_enabled():
@@ -773,6 +784,7 @@ def ingest_corpus(
     embedder=None,
     fp_index: dict[str, str] | None = None,
     max_workers: int | None = None,
+    doc_ids=None,
 ):
     """Build the KG from an ordered list of document texts. Returns the discovered `RelationSchema`
     when `GOLDENGRAPH_SCHEMA_DISCOVER=1` (so the caller can canonicalize QUERY relations through the
@@ -785,6 +797,10 @@ def ingest_corpus(
     is identical to a sequential build. `max_workers` defaults to
     `GOLDENGRAPH_BUILD_WORKERS` (8)."""
     docs = list(docs)
+    # Per-document provenance ids (stamped onto every edge's source_refs). Default to the
+    # positional index as a string so provenance is always present; the bench passes the real
+    # corpus document ids so retrieved edges map back to gold supporting-fact ids.
+    doc_ids = list(doc_ids) if doc_ids is not None else [str(i) for i in range(len(docs))]
     if max_workers is None:
         max_workers = int(os.environ.get("GOLDENGRAPH_BUILD_WORKERS", "8"))
     profile_link = _cross_doc_link_enabled() and _profile_link_enabled()
@@ -815,7 +831,7 @@ def ingest_corpus(
         extraction, entities, new_fps = prepared
         _commit_doc(store, extraction, entities, new_fps, at=i + 1, valid_from=None,
                     embedder=embedder, fp_index=fp_index, link_index=link_index,
-                    timers=timers)
+                    timers=timers, source_ref=doc_ids[i] if i < len(doc_ids) else None)
 
     def _prep_all():
         if max_workers <= 1 or len(docs) <= 1:
