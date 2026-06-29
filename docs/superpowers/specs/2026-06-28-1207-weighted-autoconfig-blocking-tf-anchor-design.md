@@ -19,7 +19,10 @@ On a hand-labeled jackknife evaluation of this data, the best precision-safe con
 
 Both failures are **structural and deterministic** — visible in the code at any scale, not scale-emergent like #715's block-size-∝-N blowup. (This is why a shaped, moderate-scale fixture reproduces them faithfully; see Testing.)
 
-- **Obs 1:** `core/autoconfig.py::build_blocking` (~`:1778–1790`) sorts exact columns by **cardinality**, keeps those whose block size is safe, and returns the single highest-cardinality safe key — with **no population-coverage / null-rate gate**. A 39%-null npi is highest-cardinality and block-size-safe, so it is returned as a lone key even though it excludes 39% of rows from blocking entirely.
+- **Obs 1:** the recall ceiling is that **no blocking path emits a per-identifier union + name+geo**, so whichever single key/compound is chosen leaves a large fraction of the population uncovered. Concretely in `core/autoconfig.py::build_blocking` (`:2317`):
+  - The lone-exact-key path (`:2561–2588`) *does* gate nulls: `exact_cols` are filtered at `_null_rate ≤ NULL_RATE_CEILING` (`= max_null_rate = 0.20`, `:2338`/`:2404–2407`). So a 39%-null npi is **excluded** from the single-key path and never returned as a lone key — it falls through to compound / name fallbacks.
+  - The compound path `_build_compound_blocking` (`:1254`) admits components at a **relaxed** ceiling `_component_null_ceiling = max(max_null_rate, 0.6)` (`:1318`/`:1335`) — which is exactly how a 39%-null npi enters a compound like `[last_name, npi]` (the field repro on recent main). That compound co-locates only the ~61% of records that *have* an npi, so recall is capped at the strong id's population.
+  - Neither path builds the union the issue shows lifts recall (`[npi] | [email] | [phone] | [first_name,last_name] | [last_name,zip]`). A *union* of per-identifier passes restores population coverage that no single high-null key has — the union of {has-npi} ∪ {has-email} ∪ {has-phone} ∪ {name+geo} covers ~all rows even though each pass is individually high-null.
 - **Obs 2:** `refdata/scorer.py::NameFreqWeightedJW` only applies its surname-IDF downweight in the borderline JW zone `[0.70, 0.95)` (`_BORDERLINE_LOW`/`_BORDERLINE_HIGH`, lines 75–76 / 119). Identical or near-identical names score JW ≥ 0.95, so the scorer returns plain JW **unchanged** — two "John Smith" stay at ~1.0. The downweight is also static-census-based, not dataset-specific.
 
 ## Prior art to reuse
@@ -41,17 +44,18 @@ Three changes, all **default-on** (no opt-in flag), each guarded by golden-vecto
 - **PR1 — Obs 1 (blocking-union).** The recall ceiling; lands first.
 - **PR2 — Obs 2 (data-driven TF name scorer + precision-anchor controller rule).**
 
-### PR1 — Obs 1: coverage-gated blocking-union
+### PR1 — Obs 1: per-identifier blocking-union
 
-In `core/autoconfig.py::build_blocking`, add a **population-coverage gate** to the single-exact-key return:
+The fix adds the missing **union emission** and gates it on whole-population coverage at the *union* level (not on any single key). In `core/autoconfig.py::build_blocking`:
 
-- A lone exact key is accepted only if its non-null coverage ≥ `_BLOCKING_COVERAGE_TARGET` (default ~0.95).
-- If the best exact key fails coverage, build `strategy="multi_pass"` with a `passes` **union**:
-  - one pass per strong-identifier field (`identifier`/`email`/`phone`) present above a minimal coverage floor, and
-  - a `[first_name, last_name]` pass and a `[last_name, zip]` (name+geo) pass.
-- Run the union through the existing `_gate_passes` projected-full-N size guard (#715-safe) before emitting; if nothing survives, fall through to today's existing fallbacks (compound / name multi-pass / degenerate-refuse) unchanged.
+- Add a `_build_strong_identifier_union(profiles, df, …)` builder that emits `strategy="multi_pass"` with a `passes` union:
+  - one pass per strong-identifier field (`identifier`/`email`/`phone`) — each gated at the **relaxed** coverage floor (the existing `_component_null_ceiling = 0.6`), because a per-id pass legitimately blocks only the rows that *have* that id, and
+  - a `[first_name, last_name]` pass and a `[last_name, zip]` (name+geo) pass to cover rows missing every strong id.
+- **Trigger:** when no single exact key passes the strict `NULL_RATE_CEILING` (0.20) gate — i.e. exactly the case where `build_blocking` falls through to the compound / name fallbacks today — AND ≥2 distinct strong-identifier or name+geo passes are available. Emit the union *in preference to* the single-strong-id compound (`[last_name, npi]`) that caps recall at the id's population.
+- **Coverage gate (union-level):** only emit the union if the OR of its passes covers ≥ `_BLOCKING_UNION_COVERAGE_TARGET` (~0.95) of rows (non-null on at least one pass's fields); otherwise fall through to today's fallbacks unchanged.
+- Run the union through the existing `_gate_passes` / `_is_scale_safe` projected-full-N size guard (#715-safe) before emitting; if nothing survives, fall through to today's existing fallbacks (compound / name multi-pass / degenerate-refuse) unchanged.
 
-Reuses the `BlockingConfig(strategy="multi_pass", passes=[...])` machinery already present in `build_blocking`; mirrors FS-v2 lever-3 and the `apply_quality_aware_blocking` additive-union precedent. Purely widens candidate generation — precision is still decided downstream by scoring, so recall can only rise.
+Reconciliation with existing gates: the strict 0.20 `NULL_RATE_CEILING` on the *single-key* path is unchanged; the union deliberately reuses the relaxed 0.6 component ceiling *per pass* because coverage is restored by the OR across passes, not by any one pass. Reuses the `BlockingConfig(strategy="multi_pass", passes=[...])` machinery already present in `build_blocking`; mirrors FS-v2 lever-3 and the `apply_quality_aware_blocking` additive-union precedent. Purely widens candidate generation — precision is still decided downstream by scoring, so recall can only rise.
 
 Cross-surface: the union is expressed entirely in the emitted `BlockingConfig`, so every consumer (CLI, REST, MCP, A2A, web, SQL bridge) inherits it with no per-surface change.
 
@@ -76,7 +80,7 @@ Add a controller rule (in `core/autoconfig_rules.py`, fired from the controller 
 ## Testing & validation
 
 - **Repro fixture (TDD red, committed):** `_null_sparse_multisource_person_df(n)` in `tests/test_autoconfig_regressions.py`, reusing the surname→soundex distribution discipline from `tests/fixtures/realistic_person.py` (surnames must spread across soundex codes or blocking hangs). Shape: a highest-cardinality but ~39%-null `npi`; sparser `email`/`phone`/`zip`, none 1:1; common-name collisions (distinct people sharing `first_name+last_name` across different `npi`). Moderate scale (~5–20k rows).
-  - Red test A (Obs 1): asserts `build_blocking` emits a multi-pass union (not a single null-heavy key) and that recall clears a target the single key cannot.
+  - Red test A (Obs 1): first assert today's actual emission on the fixture (a single-strong-id compound such as `[last_name, npi]`, or the name+soundex fallback — derive it by calling `build_blocking` on the fixture, don't assume), then assert the desired post-fix behavior: `build_blocking` emits a `multi_pass` union whose passes cover ≥95% of rows, and end-to-end recall clears a target the single compound cannot.
   - Red test B (Obs 2): asserts two same-name / different-npi records score below two rare-surname agreements on the name component, and that the committed config re-anchors off name (no `mass_above_threshold≈1.0` commit).
 - **Unit tests:** TF scorer (data-driven downweight on identical common names; static fallback when no table); coverage-gate boundary (key just above/below the coverage target).
 - **Regression guard:** the existing CI gates — #528 `synthetic_benchmarks` (clean-precision), DQbench composite non-regression (≥ 91.04). Spot-check Febrl / DBLP-ACM F1 unmoved by the weighted-path changes (the weighted path, not FS, is what changes).
