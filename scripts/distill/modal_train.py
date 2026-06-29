@@ -227,9 +227,12 @@ def _train_lora(base_model: str, epochs: int) -> dict:
         base_model, quantization_config=bnb, device_map="auto", torch_dtype=torch.bfloat16,
     )
     model = prepare_model_for_kbit_training(model)
+    # rank 64 / alpha 128 (up from 16/32): the first run underfit the reverse-direction lesson
+    # (reverse_direction_acc 0.0) against the base model's strong "subj=first-mention" prior -- more
+    # adapter capacity + more epochs + 50%-reverse data is the iteration to override it.
     lora = LoraConfig(
-        r=16, lora_alpha=32, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM",
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+        r=64, lora_alpha=128, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM",
+        target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
     )
     # completion-only loss: mask the prompt so the student is graded only on the JSON it must produce.
     collator = DataCollatorForCompletionOnlyLM(
