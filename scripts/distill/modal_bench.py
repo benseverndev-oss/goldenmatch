@@ -174,10 +174,22 @@ def run_bench_big(eval: str, n: int = 20, ambiguity: float = 0.6, opts: str = ""
 
 @app.function(image=image, gpu="A10G", volumes={"/cache": cache, "/distill": distill_vol},
               timeout=7200)
-def run_bench_distilled(merged: str, eval: str = "end_to_end", n: int = 60, ambiguity: float = 0.0,
-                        opts: str = "", embed: str = "nomic-embed-text") -> str:
+def run_bench_distilled(merged: str = "auto", eval: str = "end_to_end", n: int = 60,
+                        ambiguity: float = 0.0, opts: str = "", embed: str = "nomic-embed-text") -> str:
     """Bench the FINE-TUNED student: import its merged HF dir from the gg-distill volume into Ollama,
-    then run the eval. `merged` is the artifact path from the train manifest (rooted at /distill)."""
+    then run the eval. `merged="auto"` (default) discovers the newest `/distill/out/*/merged` SERVER-SIDE
+    -- avoids passing a leading-slash path through local Git Bash (MSYS mangles it to a Windows path)."""
+    import glob
+    import os
+
+    if merged in ("", "auto"):
+        cands = sorted(glob.glob("/distill/out/*/merged"), key=os.path.getmtime)
+        if not cands:
+            raise RuntimeError("no /distill/out/*/merged model found -- train one first")
+        merged = cands[-1]
+    elif not merged.startswith("/distill"):
+        merged = f"/distill/{merged.lstrip('/')}"
+    print(f"distilled model dir: {merged}", flush=True)
     return _bench_impl(eval, n, ambiguity, opts, "gg-distilled", embed, create_from=merged)
 
 
