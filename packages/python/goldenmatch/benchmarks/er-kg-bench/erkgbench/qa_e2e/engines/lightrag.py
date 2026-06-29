@@ -61,12 +61,21 @@ class LightRAGQAEngine:
         return self._loop.run_until_complete(coro)
 
     def _new_rag(self, working_dir: str):
+        import os
+
         from lightrag import LightRAG
 
+        # LightRAG filters retrieval by `cosine_better_than_threshold` (default ~0.2). nomic-embed-text
+        # (no task prefixes) gives lower cosines on short docs than OpenAI embeddings, so the default
+        # threshold filtered EVERY result -> '[no-context]' / empty answers on the local 7B, even
+        # though text_rag (top-k, no threshold) retrieved fine with the same embeddings. Lower it so
+        # local retrieval surfaces context. Env-tunable (GOLDENGRAPH_LIGHTRAG_COSINE, default 0.05).
+        thr = float(os.environ.get("GOLDENGRAPH_LIGHTRAG_COSINE", "0.05"))
         return LightRAG(
             working_dir=working_dir,
             llm_model_func=self._llm_func,
             embedding_func=self._embedding_func,
+            vector_db_storage_cls_kwargs={"cosine_better_than_threshold": thr},
         )
 
     def build_kg(self, corpus) -> BuildResult:
