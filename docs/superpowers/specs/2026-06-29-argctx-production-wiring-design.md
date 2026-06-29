@@ -117,3 +117,59 @@ references).
   a corpus test under the bench `tests/` dir for the co-occurrence renderer.
 - Validation: the existing `scripts/distill/modal_bench.py` (opts pass the new env flags; no bench code
   change beyond what already threads opts → env).
+
+---
+
+## Results — DIAGNOSED HONEST-NULL (2026-06-29)
+
+Stage 1 ran end to end on live 7B extraction. The machinery works; the signal does not carry at
+realistic sparsity. Recording the negative so the line is closed, not silently dropped.
+
+### What worked
+
+- **Query-side schema canonicalization** (the missing half): `ingest_corpus` returns the discovered
+  `RelationSchema`; the bench engine threads it into `ask(query_schema=)`; `ask` routes the query
+  relation through the same schema (`_canon_query_rel`). Without it, relabeling a cluster to an
+  arbitrary synonym (`located_in` → `sits_within`) breaks query matching. **Fix moved 0.086 → 0.586**
+  on the all-phrasings co-occurrence corpus. Shipped (`dff6cb67`).
+- **argctx clustering** groups synonyms by shared `(subj,obj)` pairs on live extraction — confirmed in
+  the schema dumps. The distributional hypothesis itself is sound (gold experiment: B-cubed 1.0 under
+  DENSE co-occurrence).
+
+### What didn't — the necessity test failed
+
+The all-phrasings corpus was a **non-discriminating control**: it renders the canonical phrasing on
+every edge, so the default (canonical-label) backend already answered everything (0.655) and argctx
+wasn't needed (0.586, slightly *worse* via relabeling noise). Fixed the corpus to render **one random
+extra phrasing per edge** (`7212c90b`): 75% of edges still co-occur (clustering signal) but the
+canonical word is absent from ~42% of edges — reachable only by clustering. On that discriminating
+corpus:
+
+| backend | answer_match (58 q) |
+|---|---|
+| argctx (jaccard 0.2) | **0.328** |
+| default (string) | **0.345** |
+
+A statistical tie (Δ = 1 question). argctx does **not** beat the default. Cause: sparse co-occurrence
+→ **partial** clustering (catches ~2-of-3 synonyms; `acquired`/`belongs_to` fragment) → the gain on
+recovered canonical-free edges cancels against relabeling noise.
+
+### All three rescue signals measured out
+
+| signal | result |
+|---|---|
+| distributional (argctx pair-set Jaccard) | partial clustering at realistic sparsity → ties default |
+| lexical (token similarity) | within-synonym content-token overlap = 0.00; only stopword signal, which false-merges `works_at`↔`located_in` |
+| semantic (nomic embedding) | `cosine_probe`: min(within-synonym)=0.527 < max(across-relation)=0.605, margin **−0.078** → NO threshold separates synonyms from distinct relations |
+
+The embedding kill-test (`scripts/distill/modal_bench.py::cosine_probe`, `dc6df27e`) was decided in
+~2 min instead of a full e2e gamble.
+
+### Conclusion
+
+Open-vocab synonym resolution on the **7B + nomic** stack cannot be done by clustering (distributional,
+lexical, or semantic) when co-occurrence is sparse — the realistic regime. The argument-context method
+is necessary-and-sufficient only under DENSE co-occurrence (gold experiment), which real text won't
+supply. This matches the concluded OSS-LLM arc: the deterministic `SCHEMA_CANON` path (known vocab)
+beat every cleverer approach, including 32B. **Open-vocab clustering line CLOSED.** The proven
+open-vocab path forward is a known/constrained vocabulary, not unsupervised predicate clustering.
