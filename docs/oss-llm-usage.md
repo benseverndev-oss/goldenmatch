@@ -106,11 +106,34 @@ for a future task where a real model-quality gap is shown.
 
 ## Head-to-head on the local 7B
 
-`run_qa_e2e --engine <name>` runs any engine on the same local model. The openai-SDK engines
-(`text_rag`, `goldenmatch_rag`, `goldenmatch_entity_rag`) just needed the model name threaded from
-the env. The KG competitors differ in effort: **LightRAG** is pip-installable + injected local
-funcs; **MS-GraphRAG** needs a `settings.yaml` `api_base` + is slow/expensive on a 7B; **Graphiti**
-needs an external FalkorDB service. goldengraph is compared at its best config (schema-constrained).
+`run_qa_e2e --engine <name>` runs any engine on the same local model (`qwen2.5:7b-instruct`,
+nomic-embed-text), N=60, engineered corpus, ambiguity 0.0. goldengraph is compared at its best
+config (schema-constrained). Measured 2026-06-29:
+
+| engine | answer-match | notes |
+|--------|-------------|-------|
+| **goldengraph (schema-constrained)** | **0.672** | the deterministic-canonicalization winner |
+| goldengraph (open extraction, 32B) | 0.569 | a 4.5x-bigger model, *worse* |
+| goldenmatch_rag | 0.293 | goldenmatch's own retrieval surface |
+| text_rag (no-KG control) | 0.259 | naive paragraph RAG, same models |
+| goldenmatch_entity_rag | 0.138 | retrieve->dedupe->canonicalize (hurt on this corpus) |
+| LightRAG | **diagnosed honest-null** | see below |
+
+**Schema-constrained goldengraph is ~2.3x the best RAG baseline on the same free model**, and beats
+a 32B -- the edge is architectural (deterministic graph construction), not model scale.
+
+**LightRAG (honest-null, NOT a scored loss).** LightRAG's retrieval returns `[no-context]` /
+empty answers on the local 7B + nomic stack: its build runs (thousands of extraction LLM calls,
+embeddings return 200s) but naive-mode retrieval surfaces nothing, and hybrid mode additionally
+fails its keyword-extraction step (the 7B doesn't reliably emit the keyword JSON). The
+`cosine_better_than_threshold` knob did NOT fix it (identical `[no-context]` at 0.05 vs default --
+refuted), so the empty retrieval is not a threshold filter; the likely cause is unusable stored
+chunk embeddings (a dim/shape mismatch between lightrag's `openai_embed` wrapper and Ollama's
+`/v1/embeddings`), but confirming needs lightrag-internal debugging out of scope for a fair cell.
+Recording 0.0 would be unfair -- it is a broken integration on the local stack, not a measured
+capability. The *other* engines retrieve fine with the same nomic embeddings, so nomic is not the
+issue. **MS-GraphRAG** (graphrag `settings.yaml` `api_base`, slow/expensive) and **Graphiti**
+(external FalkorDB service) were not run -- heavier integrations, deferred.
 
 ## Canonical references
 

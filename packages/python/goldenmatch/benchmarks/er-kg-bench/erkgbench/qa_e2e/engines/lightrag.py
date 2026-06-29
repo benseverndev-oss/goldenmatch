@@ -65,11 +65,14 @@ class LightRAGQAEngine:
 
         from lightrag import LightRAG
 
-        # LightRAG filters retrieval by `cosine_better_than_threshold` (default ~0.2). nomic-embed-text
-        # (no task prefixes) gives lower cosines on short docs than OpenAI embeddings, so the default
-        # threshold filtered EVERY result -> '[no-context]' / empty answers on the local 7B, even
-        # though text_rag (top-k, no threshold) retrieved fine with the same embeddings. Lower it so
-        # local retrieval surfaces context. Env-tunable (GOLDENGRAPH_LIGHTRAG_COSINE, default 0.05).
+        # NOTE (2026-06-29): this cosine-threshold lever did NOT fix LightRAG's local-7B '[no-context]'
+        # failure -- measured: naive mode returns '[no-context]' identically with the threshold at 0.05
+        # vs the default, so the empty retrieval is NOT a threshold filter. The likely cause is the
+        # stored chunk embeddings being unusable on the local stack (a dim/shape mismatch between
+        # lightrag's `openai_embed` wrapper and Ollama's /v1/embeddings response), but confirming it
+        # needs lightrag-internal debugging out of scope for the head-to-head. LightRAG is recorded as a
+        # diagnosed honest-null (see docs/oss-llm-usage.md). The knob is harmless and kept as a config
+        # seam; it is not the fix. Env-tunable (GOLDENGRAPH_LIGHTRAG_COSINE, default 0.05).
         thr = float(os.environ.get("GOLDENGRAPH_LIGHTRAG_COSINE", "0.05"))
         return LightRAG(
             working_dir=working_dir,
