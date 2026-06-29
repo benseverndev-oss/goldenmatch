@@ -18,6 +18,27 @@ validation (#881). **Spec:**
 **Code-level notes:** `packages/typescript/CLAUDE.md` (shared runtime),
 `packages/typescript/goldenmatch/CLAUDE.md` (scorer slice).
 
+**Folds since (2026-06-28).** The same `-core → -wasm → TS` pattern extended to
+five more kernels:
+
+| Core | WASM surface | Track | ADR |
+|---|---|---|---|
+| `autoconfig-core` | goldenmatch `core/autoconfig-wasm` | acceleration | — |
+| `suggest-core` (healer) | goldenmatch `core/suggest-wasm` | enablement | [0027](../decisions/0027-healer-wasm-ts.md) |
+| `goldenprofile-core` (Virtual Fingerprint) | standalone `goldenprofile` pkg | enablement | [0028](../decisions/0028-goldenprofile-wasm-ts.md) |
+| `goldengraph-core` (KG: build/query + bitemporal store) | standalone `goldengraph` pkg | enablement | [0029](../decisions/0029-goldengraph-wasm-ts.md) |
+| `perceptual-core` (image pHash) | goldenmatch `core/perceptual-wasm` (PR #1309) | enablement (+ determinism fix) | [0030](../decisions/0030-perceptual-cross-platform-determinism.md) |
+
+Contract refinements learned across these: cross-surface parity for the
+resolver/graph kernels is **partition + value (4dp), not byte-ordering**
+(hash-map iteration order is non-deterministic); the perceptual fold was really a
+**cross-platform determinism** fix (runtime-`cos` libm divergence flipped pHash
+bits → a committed DCT table makes native/wasm/Python bit-identical); `i64`/`u64`
+kernel params surface as wasm-bindgen **BigInt**; `goldenprofile`/`goldengraph`
+publish is wired-but-unfired (not yet on npm). The `goldenprofile_native` CI lane
+([#1304](https://github.com/benseverndev-oss/goldenmatch/issues/1304)) runs the
+Python↔WASM cross-parity.
+
 ## The shared runtime: `goldenmatch-wasm-runtime`
 A tiny zero-dependency workspace package holding the genuinely-shared, fiddly
 plumbing — extracted once and reused, not duplicated per core:
@@ -90,17 +111,28 @@ stack-overflowing at 1M elements (exactly the large-array case WASM exists for),
 now a loop.
 
 ## Parked cores (measure-first verdict, not built)
-- **`graph-core` → `cluster.ts` — PARK.** Its only accelerable op is the
-  UnionFind construction (`cluster.ts:317-323`), one O(N) step among several
-  O(N) steps in `buildClusters` (sort, pair-score assignment, confidence,
-  MST-split); marshaling N pairs across the boundary is itself O(N) →
-  boundary-bound. Python's native graph win comes from doing the *whole*
-  clustering in Rust, which the TS slice can't replicate without porting all of
-  `buildClusters`. Building a `graph-wasm` crate just to bench it would cost the
-  thing we'd park.
-- **`fingerprint-core` / `goldencheck-core` — PARK** (design): Web Crypto
-  SHA-256 is already native **and async**; the goldencheck TS path mirrors the
-  sampled, already-vectorized scan. Revisit either only with a bench showing a win.
+- **`graph-core` / `fingerprint-core` / `sketch-core` — PARK as a *direct* TS
+  slice** (boundary-bound: marshaling N pairs is itself O(N), so a per-op TS
+  surface can't replicate Python's whole-clustering-in-Rust win). NOTE these are
+  now compiled **into** the `goldenprofile`/`goldengraph` wasm bundles (those
+  cores depend on them), so the kernels DO reach JS — only a standalone per-op
+  surface stays unjustified.
+- **`goldenflow` — PARK** (scoped 2026-06-28, measure-first NO-GO). Its only
+  kernel is phone (via the `phonenumber` crate; dates were vectorized in Polars,
+  [0006](../decisions/0006-goldenflow-native-nanp-gating.md)). No win: the TS
+  phone transform is a trivial digit-strip (nothing hot to beat). No parity: the
+  native kernel already diverges ~6% from Python `phonenumbers` on international
+  numbers, so a WASM kernel would be a third disagreeing impl, not a unifier. And
+  the mature `libphonenumber-js` already serves JS.
+- **`goldencheck-core` — PARK** (re-confirmed 2026-06-28, [0014](../decisions/0014-opt-in-wasm-acceleration.md)).
+  wasm-viable (only `rustc-hash`), but: the relations kernels (FD / composite-key
+  / approx-dup) use **different algorithms** than the existing pure-TS profilers
+  (Rust distinct-count-all-pairs vs TS "simplified TANE single-column") → no
+  parity drop-in (would change results). The one clean reduction
+  (`benford_leading_digits`) is a trivial single-pass tally pure-TS does fine,
+  and TS already computes the fuller benford (chi²). Differs from `analysis-core`
+  (which won) = same-algorithm + genuinely hot reduction. Unifying would need
+  TS↔Rust algorithm alignment first (bigger than a fold), with no measured need.
 
 ## Verification (CI)
 - The required `typescript` lane builds the shared runtime first (turbo `^build`)
@@ -119,4 +151,4 @@ parity test + bench, a CI lane (build runtime before the parity test; bench as a
 dist gate). Only build it if a cheap profile says it will win.
 
 ---
-**Classification:** architecture/shipped • **Last updated:** 2026-06-13
+**Classification:** architecture/shipped • **Last updated:** 2026-06-28
