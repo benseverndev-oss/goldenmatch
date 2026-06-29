@@ -90,12 +90,19 @@ class LightRAGQAEngine:
         )
 
     def answer(self, handle, question: str) -> AnswerResult:
+        import os
+
         from lightrag import QueryParam
 
         t0 = time.perf_counter()
         before = dict(self._counter)
         rag = handle["rag"]
-        text = self._run(rag.aquery(question, param=QueryParam(mode="hybrid")))
+        # `LIGHTRAG_QUERY_MODE` (default hybrid) -- "naive" = pure vector RAG, skipping the graph +
+        # keyword-extraction LLM steps. The A/B that isolates whether LightRAG's structured prompts
+        # (entity-extraction format, keyword JSON) survive a weak local model: if naive answers and
+        # hybrid doesn't, the graph pipeline is what the 7B can't drive.
+        mode = os.environ.get("LIGHTRAG_QUERY_MODE", "hybrid")
+        text = self._run(rag.aquery(question, param=QueryParam(mode=mode)))
         return AnswerResult(
             text=text or "",
             retrieved_fact_ids=(),  # LightRAG doesn't surface retrieved ids; see spec note
