@@ -595,6 +595,28 @@ class _DistillLogger:
                 f.write(line + "\n")
 
 
+def _maybe_canonicalize(extraction: Extraction) -> Extraction:
+    """Schema-constrain + direction-canonicalize the extraction when
+    `GOLDENGRAPH_SCHEMA_CANON=1` and a relation vocab is set. Snaps predicates to the
+    closed schema, flips reverse-phrased edges, drops out-of-schema edges -- the
+    source-side fix for the under-merge/direction defects the walk repairs stand in
+    for. Fail-soft: any error returns the extraction unchanged."""
+    from .schema import default_schema, schema_canon_enabled
+
+    if not schema_canon_enabled():
+        return extraction
+    raw = os.environ.get("GOLDENGRAPH_RELATION_VOCAB", "")
+    vocab = [v.strip() for v in raw.split(",") if v.strip()]
+    if not vocab:
+        return extraction
+    try:
+        from .schema import canonicalize_extraction
+
+        return canonicalize_extraction(extraction, default_schema(vocab))
+    except Exception:
+        return extraction
+
+
 def _resolve_extractor():
     """Select the document extractor from `GOLDENGRAPH_EXTRACTOR` (default `api` ->
     the injected LLM extractor). `rebel`/`gliner` load a LOCAL, network-free model
@@ -632,6 +654,7 @@ def _prepare_doc(
         # `_extract` honors GOLDENGRAPH_LITERAL_ATTRS internally, so this call stays
         # 2-arg (custom rebel/gliner extractors and test stubs keep that shape).
         extraction = (extractor or _extract)(text, llm)
+        extraction = _maybe_canonicalize(extraction)
         if timers:
             timers.add("extract", time.perf_counter() - t0)
         t1 = time.perf_counter()

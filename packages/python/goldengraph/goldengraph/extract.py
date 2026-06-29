@@ -148,7 +148,10 @@ def parse_extraction(raw: str) -> Extraction:
 _RELATION_VOCAB_INSTRUCTION = (
     "IMPORTANT: for every relationship, set `predicate` to EXACTLY ONE label, verbatim, from this "
     "closed set -- do NOT paraphrase, pluralize, or invent labels: [{vocab}]. If none of these "
-    "relations holds between two entities, OMIT that relationship.\n\n"
+    "relations holds between two entities, OMIT that relationship. "
+    "DIRECTION MATTERS: `subj` is the entity that the relation acts FROM (the grammatical subject, "
+    "stated FIRST), `obj` is the entity it acts ON (stated second). For 'A works_at B', subj=A, "
+    "obj=B. Never invert subject and object.\n\n"
 )
 
 
