@@ -25,13 +25,32 @@ band 0.655–0.689), all 5 real relations recovered, correctly separated, with c
 > cluster: nomic puts distinct-but-adjacent relations as close as true synonyms, so NO threshold
 > separates them); goldenmatch dedupe over the predicate strings (`GOLDENGRAPH_DISCOVER_RESOLVE=gm`,
 > `_cluster_predicates_gm`) merges **nothing** (all singletons -- no string signal to match on).
-> **The core finding: the synonym signal is not in the predicate string.** It lives in semantics (an
-> LLM knows "works at" == "on staff at") or in argument structure (the entity types/co-occurrence the
-> predicate connects) -- and this corpus is adversarial for the latter (homogeneous entities, disjoint
-> edges). Scope conclusion: schema discovery self-configures for **closed / extraction-noisy** vocab
-> (the common case; Phase-1 = 0.655) but **open synonymy** needs either constrained LLM-MAPPING (map
-> each predicate to the nearest canonical relation -- the LLM's synonym knowledge without the
-> free-merge over-merge that broke Phase-1) or a seed vocabulary. Future work, not v1.
+> Then the CONSTRAINED LLM-mapping arms (`GOLDENGRAPH_DISCOVER_RESOLVE=llm_map`: embedding blocks
+> candidate pairs, the LLM is a strict pairwise synonym JUDGE, not a free-merger): 7B judge 0.241
+> (partial -- correctly merged authored/located_in synonyms, but lumped works_at+located_in+part_of);
+> 32B judge (`GOLDENGRAPH_DISCOVER_JUDGE_MODEL=qwen2.5:32b`) 0.138 -- WORSE, different but equally bad
+> over-merges. **A stronger judge does NOT solve it.** Five-arm sweep:
+>
+> | method | Phase-2 | failure |
+> |--------|---------|---------|
+> | deterministic string | 0.172 | fragments (synonyms string-disjoint) |
+> | nomic embedding @0.7 | 0.155 | over-merges (geometry conflates distinct relations w/ synonyms) |
+> | goldenmatch dedupe (strings) | all singletons | no string signal |
+> | constrained LLM-map, 7B judge | 0.241 | noisy judge |
+> | constrained LLM-map, 32B judge | 0.138 | also noisy (lumped located_in+works_at+part_of) |
+>
+> **DEFINITIVE: the synonym signal is not in the predicate phrase pair, for any model at any size.**
+> Asked "is `based in` the same relation as `employed at`?" in isolation, even a 32B over-merges --
+> the phrases alone sound alike; what disambiguates them is ARGUMENT STRUCTURE (the entities they
+> connect, types, co-occurrence). This is the entity-resolution lesson applied to relations: you can't
+> resolve a record from its surface string, you need its context/attributes ("sources of truth" come
+> from matching on full evidence, not the label). **Open relational synonymy is a CONTEXTUAL-RESOLUTION
+> problem, not a clustering or model-strength problem** -- the path is argument-context resolution
+> (resolve predicates by the entity records they link, the way goldenmatch resolves entities by
+> attributes) on a corpus that PROVIDES that signal, NOT a bigger judge. Scope conclusion: schema
+> discovery self-configures for **closed / extraction-noisy** vocab (the common case; Phase-1 = 0.655);
+> **open synonymy** is future work (argument-context resolution). Backends built + measured:
+> `GOLDENGRAPH_DISCOVER_RESOLVE` in {default, gm, llm_map}, `GOLDENGRAPH_DISCOVER_JUDGE_MODEL`.
 
 **Status (original):** Designed (approved 2026-06-29); ready for implementation plan.
 **Owner:** Ben Severn
