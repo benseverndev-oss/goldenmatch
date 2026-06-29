@@ -71,9 +71,10 @@ def _which(exe):
     return shutil.which(exe)
 
 
-@app.function(image=image, gpu="A10G", volumes={"/cache": cache}, timeout=3600)
-def run_bench(eval: str, n: int = 20, ambiguity: float = 0.6, opts: str = "",
-              chat: str = "qwen2.5:7b-instruct", embed: str = "nomic-embed-text") -> str:
+def _bench_impl(eval: str, n: int, ambiguity: float, opts: str, chat: str, embed: str) -> str:
+    """Shared bench body -- runs inside the container. Wrapped by run_bench (A10G, for the 7B student)
+    and run_bench_big (A100, for the 32B/72B OSS teacher). The teacher ceiling is measured free-to-free:
+    a larger same-family OSS model as the distillation target, no paid API."""
     import os
     import subprocess
     import time
@@ -138,36 +139,53 @@ def run_bench(eval: str, n: int = 20, ambiguity: float = 0.6, opts: str = "",
             cwd=_BENCH, env=env, capture_output=True, text=True, check=True,
         )
         results = pathlib.Path(out_md).read_text() if os.path.exists(out_md) else "(no results md)"
-        return _persist(eval, n, proc.stdout + "\n\n===== RESULTS_MD =====\n" + results)
+        return _persist(eval, n, chat, proc.stdout + "\n\n===== RESULTS_MD =====\n" + results)
     module, extra = _EVAL[eval]
     subprocess.run(
         ["python", "-m", module, *extra, "--n-questions", str(n),
          "--ambiguity", str(ambiguity), "--out-md", out_md],
         cwd=_BENCH, env=env, check=True,
     )
-    return _persist(eval, n, pathlib.Path(out_md).read_text())
+    return _persist(eval, n, chat, pathlib.Path(out_md).read_text())
 
 
-def _persist(eval: str, n: int, text: str) -> str:
-    """Write the result to the cache Volume so a DETACHED run survives local-CLI death -- pull it
-    back later with `modal volume get gg-bench-cache results/<eval>_<n>.md .`."""
+@app.function(image=image, gpu="A10G", volumes={"/cache": cache}, timeout=3600)
+def run_bench(eval: str, n: int = 20, ambiguity: float = 0.6, opts: str = "",
+              chat: str = "qwen2.5:7b-instruct", embed: str = "nomic-embed-text") -> str:
+    return _bench_impl(eval, n, ambiguity, opts, chat, embed)
+
+
+@app.function(image=image, gpu="A100", volumes={"/cache": cache}, timeout=10800)
+def run_bench_big(eval: str, n: int = 20, ambiguity: float = 0.6, opts: str = "",
+                  chat: str = "qwen2.5:32b", embed: str = "nomic-embed-text") -> str:
+    """Bigger GPU for the OSS teacher (32B fits A100-40GB q4; 72B needs A100-80GB)."""
+    return _bench_impl(eval, n, ambiguity, opts, chat, embed)
+
+
+def _persist(eval: str, n: int, chat: str, text: str) -> str:
+    """Write the result to the cache Volume so a DETACHED run survives local-CLI death. Filename is
+    tagged with the model so teacher (32B) and student (7B) runs don't collide -- pull it back with
+    `modal volume get gg-bench-cache results/<eval>_<n>_<model>.md .`."""
     import os
 
     os.makedirs("/cache/results", exist_ok=True)
-    pathlib.Path(f"/cache/results/{eval}_{n}.md").write_text(text)
+    tag = chat.replace(":", "-").replace("/", "-")
+    pathlib.Path(f"/cache/results/{eval}_{n}_{tag}.md").write_text(text)
     cache.commit()
     return text
 
 
 @app.local_entrypoint()
 def main(eval: str = "extraction_f1", n: int = 20, ambiguity: float = 0.6, opts: str = "",
-         spawn: bool = False) -> None:
+         spawn: bool = False, chat: str = "qwen2.5:7b-instruct",
+         embed: str = "nomic-embed-text", gpu: str = "a10g") -> None:
+    fn = run_bench_big if gpu.lower() in ("a100", "a100-80gb", "big") else run_bench
+    tag = chat.replace(":", "-").replace("/", "-")
     if spawn:
         # fire-and-forget: queue the call SERVER-SIDE and return instantly, so a local-CLI kill can't
-        # cancel it. Result lands on the volume at results/<eval>_<n>.md (pull with `modal volume get`).
-        # Pair with `modal run --detach` so the app outlives this process.
-        call = run_bench.spawn(eval, n=n, ambiguity=ambiguity, opts=opts)
-        print(f"SPAWNED call_id={call.object_id} -> results/{eval}_{n}.md on volume gg-bench-cache")
+        # cancel it. Result lands at results/<eval>_<n>_<model>.md. Pair with `modal run --detach`.
+        call = fn.spawn(eval, n=n, ambiguity=ambiguity, opts=opts, chat=chat, embed=embed)
+        print(f"SPAWNED call_id={call.object_id} -> results/{eval}_{n}_{tag}.md on volume gg-bench-cache")
         return
-    md = run_bench.remote(eval, n=n, ambiguity=ambiguity, opts=opts)
+    md = fn.remote(eval, n=n, ambiguity=ambiguity, opts=opts, chat=chat, embed=embed)
     print("\n===== RESULT =====\n" + md)
