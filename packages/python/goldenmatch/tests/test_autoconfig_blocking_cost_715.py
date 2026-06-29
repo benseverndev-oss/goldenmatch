@@ -37,21 +37,75 @@ def _proj_block(df, cols, full_n):
     return project_max_block_size(mb, df.height, full_n)
 
 
+def _proj_block_nonnull(df, field, full_n):
+    """#1207: project a SINGLE-field key's block on the NON-NULL subframe.
+
+    The static blocker (`core/blocker.py` ~363-369) turns a null single-field
+    block key into a null/sentinel `__block_key__` and filters it BEFORE blocks
+    form, so a high-null single-field id key's null bucket never materializes at
+    runtime (only the near-unique non-null values block -> tiny blocks). The
+    null-INCLUSIVE projection counts that phantom bucket and is a false negative
+    for single-field strong-id keys -- mirror the production gate by measuring on
+    the non-null rows. (A COMPOUND uses `concat_str`, where nulls propagate /
+    stringified-NaN can survive, so compounds keep the null-inclusive check.)
+    """
+    import polars as pl
+    from goldenmatch.core.blocking_candidates import project_max_block_size
+    sub = df.filter(pl.col(field).is_not_null())
+    mb = int(sub.group_by(field).len().get_column("len").max() or 0) if sub.height else 0
+    # Full-N projection unchanged: scale by full_n / FULL df.height (not the
+    # non-null height), so a bounded id (zip) still grows with N.
+    return project_max_block_size(mb, df.height, full_n)
+
+
 def test_no_emitted_blocking_pass_exceeds_cap_sparse_zip():
-    from goldenmatch.core.autoconfig import build_blocking, profile_columns
+    from goldenmatch.core.autoconfig import _STRONG_EXACT_TYPES, build_blocking, profile_columns
     from repro_issue_715 import make_healthcare_df
 
     # matching_id is the ground-truth record id (`not used for config`), so the
     # real pipeline never feeds it to build_blocking; drop it here too.
     df = make_healthcare_df(30_000, zip_present=0.5).drop("matching_id")  # sparse zip5
     profiles = profile_columns(df)
+    col_type = {p.name: p.col_type for p in profiles}
     full_n = 1_000_000  # simulate scale; v0 path uses full df but we assert projected
     blk = build_blocking(profiles, df, n_rows_full=full_n)
     cap = blk.max_block_size or 5000
+
+    def _assert_bounded(fields, label):
+        # #1207: single-field strong-id keys are gated on the NON-NULL block (the
+        # static blocker drops null single-field keys before blocks form, so their
+        # null bucket never exists at runtime). All other keys -- compounds, name,
+        # geo -- keep the null-INCLUSIVE projection (concat_str can carry nulls).
+        if len(fields) == 1 and col_type.get(fields[0]) in _STRONG_EXACT_TYPES:
+            proj = _proj_block_nonnull(df, fields[0], full_n)
+        else:
+            proj = _proj_block(df, fields, full_n)
+        assert proj <= cap, f"{label} {fields} oversized (projected {proj} > {cap})"
+
     for k in (blk.keys or []):
-        assert _proj_block(df, k.fields, full_n) <= cap, f"key {k.fields} oversized"
+        _assert_bounded(k.fields, "key")
     for p in (blk.passes or []):
-        assert _proj_block(df, p.fields, full_n) <= cap, f"pass {p.fields} oversized"
+        _assert_bounded(p.fields, "pass")
+
+
+def test_sparse_healthcare_emits_strong_id_union_1207():
+    """#1207: the canonical null-sparse healthcare shape (npi/email/phone all
+    high-null + near-unique, sparse zip) must emit a per-identifier UNION, not a
+    single bounded compound. Locks in the #1207 behavior so it can't silently
+    revert to the pre-#1207 name-compound fallback."""
+    from goldenmatch.core.autoconfig import build_blocking, profile_columns
+    from repro_issue_715 import make_healthcare_df
+
+    df = make_healthcare_df(30_000, zip_present=0.5).drop("matching_id")
+    profiles = profile_columns(df)
+    blk = build_blocking(profiles, df, n_rows_full=1_000_000)
+    assert blk.strategy == "multi_pass", f"expected union multi_pass, got {blk.strategy}"
+    pass_fieldsets = {tuple(p.fields) for p in (blk.passes or [])}
+    id_singletons = {("npi",), ("email",), ("phone_number",)}
+    present = pass_fieldsets & id_singletons
+    assert len(present) >= 2, (
+        f"expected >=2 strong-id singleton passes, got {sorted(pass_fieldsets)}"
+    )
 
 
 def test_dense_zip_still_picks_bounded_compound():

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import polars as pl
 import pytest
-
 from goldenmatch.core.autoconfig import (
     _build_strong_identifier_union,
     _union_coverage,
@@ -62,16 +61,11 @@ def _has_union_over_identifiers(cfg) -> bool:
 
 
 def test_characterize_current_emission_is_not_a_union():
-    """RED baseline: today build_blocking does NOT emit a per-identifier union
-    on this shape (it returns a single-id compound or a name fallback)."""
+    """Post-fix: the null-sparse shape now yields a per-identifier union."""
     df = _null_sparse_person_df()
     profiles = profile_columns(df)
     cfg = build_blocking(profiles, df, n_rows_full=df.height)
-    # Document what it actually is, for the record:
-    print("CURRENT strategy=", cfg.strategy, "keys=",
-          [k.fields for k in (cfg.keys or [])],
-          "passes=", [p.fields for p in (cfg.passes or [])])
-    assert not _has_union_over_identifiers(cfg)
+    assert _has_union_over_identifiers(cfg)
 
 
 def test_union_coverage_is_or_over_passes():
@@ -115,3 +109,28 @@ def test_build_union_returns_none_when_under_coverage():
     assert set(strong) == {"id_a", "id_b"}, f"expected 2 strong ids, got {strong}"
     assert _union_coverage(df, [["id_a"], ["id_b"]]) < 0.95
     assert _build_strong_identifier_union(profiles, df, n_rows_full=df.height) is None
+
+
+def test_build_blocking_emits_union_on_null_sparse_shape():
+    df = _null_sparse_person_df()
+    profiles = profile_columns(df)
+    cfg = build_blocking(profiles, df, n_rows_full=df.height)
+    assert _has_union_over_identifiers(cfg), (
+        f"expected a per-identifier union, got strategy={cfg.strategy} "
+        f"keys={[k.fields for k in (cfg.keys or [])]} "
+        f"passes={[p.fields for p in (cfg.passes or [])]}"
+    )
+    cov = _union_coverage(df, [p.fields for p in cfg.passes])
+    assert cov >= 0.95
+
+
+def test_union_does_not_displace_a_good_single_key():
+    """Guard: when a low-null high-card exact key exists, the single-key path
+    still wins (we only add the union on the fall-through)."""
+    df = pl.DataFrame({
+        "email": [f"u{i}@x.com" for i in range(200)],   # 0% null, unique-ish
+        "first_name": ["A"] * 200, "last_name": ["B"] * 200,
+    })
+    profiles = profile_columns(df)
+    cfg = build_blocking(profiles, df, n_rows_full=df.height)
+    assert cfg.strategy != "multi_pass" or {tuple(k.fields) for k in (cfg.keys or [])} == {("email",)}

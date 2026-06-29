@@ -2761,6 +2761,77 @@ def build_blocking(
         )
         return text_blk
 
+    # #1207: per-identifier blocking-union. We reach here only when no single
+    # exact key passed the strict NULL_RATE_CEILING (0.20) gate — exactly the
+    # null-sparse multi-source shape where the compound fallback would build a
+    # single-strong-id compound ([last_name, npi]) that caps recall at the id's
+    # population. Prefer a UNION of one pass per strong id + name+geo, whose
+    # OR-coverage restores the population the single key drops. Emitted before
+    # the compound fallback so it wins; falls through unchanged when it can't
+    # reach the coverage target or <2 passes survive.
+    def _id_pass_scale_safe_nonnull(field: str) -> bool:
+        """#1207: scale-safety for a strong-id SINGLETON pass, measured on the
+        NON-NULL subframe.
+
+        The runtime static blocker drops null block keys, so a high-null id's
+        null bucket (which dominates its raw max block) never actually forms.
+        The default ``_pass_is_bounded`` gate measures block size via a
+        null-INCLUSIVE ``group_by`` — that null bucket falsely rejects exactly
+        the null-sparse strong ids this union exists to add. We still apply the
+        SAME full-N projection + ``max_safe_block`` guard (just over the
+        non-null rows), so a bounded id (zip) or a mistyped low-cardinality
+        ``identifier`` with a genuinely large non-null block is still dropped.
+        """
+        try:
+            sub = df.filter(pl.col(field).is_not_null())
+            if sub.height == 0:
+                return False
+            g = sub.group_by(field).len()
+            sb = int(g.get_column("len").max() or 0)  # pyright: ignore[reportArgumentType]
+            sd = int(g.height)
+        except Exception:  # pragma: no cover -- defensive
+            return False
+        # Full-N projection unchanged: sample_n / effective_n_full stay the FULL
+        # row counts; only the measured block/distinct exclude the null bucket.
+        pb = _typed_projected_block(_col_types, [field], sb, effective_n_full, sample_n, sd)
+        if pb > max_safe_block:
+            return False
+        if pb > sb:  # block grows with N (bounded-domain / concentrated key)
+            return _project_pairs_per_row(pb) <= _blocking_pairs_per_row_budget()
+        return True
+
+    union_cfg = _build_strong_identifier_union(profiles, df, n_rows_full=n_rows_full)
+    if union_cfg is not None:
+        id_passes: list[BlockingKeyConfig] = []
+        other_passes: list[BlockingKeyConfig] = []
+        for p in union_cfg.passes or []:
+            if len(p.fields) == 1 and _col_types.get(p.fields[0]) in _STRONG_EXACT_TYPES:
+                id_passes.append(p)
+            else:
+                other_passes.append(p)
+        # Strong-id singletons: gate on the NON-NULL projected block (the static
+        # blocker drops null keys). Name/geo passes: standard #715/#876 gate.
+        surviving_ids = [p for p in id_passes if _id_pass_scale_safe_nonnull(p.fields[0])]
+        surviving_other = [p for p in other_passes if _pass_is_bounded(p)]
+        survivors = surviving_ids + surviving_other
+        if surviving_ids and len(survivors) >= 2:
+            primary = survivors[0]
+            logger.info(
+                "Auto-selecting strong-identifier blocking UNION (%d passes, "
+                "%d strong-id) on null-sparse data: no single exact key cleared "
+                "the 0.20 null ceiling; union OR-coverage restores the dropped "
+                "population. Strong-id passes gated on non-null block size "
+                "(null keys are dropped at runtime). See #1207.",
+                len(survivors), len(surviving_ids),
+            )
+            return BlockingConfig(
+                keys=[primary],
+                strategy="multi_pass",
+                passes=survivors,
+                max_block_size=max_safe_block,
+                skip_oversized=True,
+            )
+
     # ── Check if name-based fallback would also be oversized ──
     # #715: the name path picks ONE primary name column (pattern_names[0], else
     # name_cols[0]) and blocks on it. If THAT primary is oversized, single-name
