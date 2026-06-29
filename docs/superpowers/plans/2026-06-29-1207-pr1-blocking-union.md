@@ -4,7 +4,7 @@
 
 **Goal:** On null-sparse multi-source person data, make `build_blocking` emit a per-identifier blocking UNION (`[npi] | [email] | [phone] | [first_name,last_name] | [last_name,zip]`) instead of a single high-null compound that caps recall — lifting candidate-generation recall without touching precision.
 
-**Architecture:** Add a `_build_strong_identifier_union(...)` builder in `core/autoconfig.py` and invoke it inside `build_blocking` at the point where the single-exact-key path has fallen through (no single key passed the strict 0.20 `NULL_RATE_CEILING`) and before the compound fallback. The union reuses the existing `BlockingConfig(strategy="multi_pass", passes=[...])` machinery and the `_gate_passes` / `_is_scale_safe` #715 size guards. Each standalone single-id pass is gated on scale-safety + a minimal non-null population floor (NOT a null ceiling — coverage is restored by the OR across passes); the union is emitted only if its passes' OR-coverage ≥ ~95% of rows.
+**Architecture:** Add a `_build_strong_identifier_union(...)` builder in `core/autoconfig.py` and invoke it inside `build_blocking` at the point where the single-exact-key path has fallen through (no single key passed the strict 0.20 `NULL_RATE_CEILING`) and before the compound fallback. The union reuses the existing `BlockingConfig(strategy="multi_pass", passes=[...])` machinery. Each standalone single-id pass is gated in the builder only on a minimal non-null population floor (NOT a null ceiling — coverage is restored by the OR across passes); the union is emitted only if its passes' OR-coverage ≥ ~95% of rows. Scale-safety (#715/#876) is enforced at the call site via `_gate_passes`, not inside the builder.
 
 **Tech Stack:** Python 3.11+, Polars, pytest. No new deps.
 
