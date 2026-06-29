@@ -21,6 +21,8 @@ validation through the existing plugin path — no changes to
 """
 from __future__ import annotations
 
+import math
+
 import numpy as np
 from rapidfuzz.distance import JaroWinkler
 from rapidfuzz.process import cdist
@@ -51,6 +53,19 @@ _COMMON_NAME_FLOOR = 0.6
 from goldenmatch.plugins.base import ScorerPlugin  # noqa: E402
 
 
+def _tf_rarity(value: str | None, tf_freqs: dict[str, float], log_ref: float) -> float:
+    """Rarity in [0,1]: 1.0 for a once-seen / unseen value, ~0 for the most
+    common. log_ref = -log(min observed freq) normalizes a singleton to 1.0."""
+    if value is None or value == "":
+        return 1.0
+    f = tf_freqs.get(value)
+    if f is None or f <= 0.0:
+        return 1.0                      # unseen at scoring time -> treat as rare
+    if log_ref <= 0.0:
+        return 1.0
+    return max(0.0, min(1.0, math.log(1.0 / f) / log_ref))
+
+
 class NameFreqWeightedJW(ScorerPlugin):
     """Frequency-weighted Jaro–Winkler scorer.
 
@@ -68,10 +83,28 @@ class NameFreqWeightedJW(ScorerPlugin):
 
     name = "name_freq_weighted_jw"
 
-    def score_pair(self, val_a: str | None, val_b: str | None) -> float | None:
+    def score_pair(
+        self,
+        val_a: str | None,
+        val_b: str | None,
+        *,
+        tf_freqs: dict[str, float] | None = None,
+    ) -> float | None:
         if val_a is None or val_b is None:
             return None
         jw = JaroWinkler.similarity(val_a, val_b)
+        # Data-driven branch (#1207 PR2a): when a per-dataset frequency table is
+        # supplied, downweight agreements on common values across the WHOLE JW
+        # range. tf_freqs is keyed on POST-transform values; score_pair receives
+        # post-transform values too (find_fuzzy_matches passes
+        # _get_transformed_values), so keys align with Task A4's table build.
+        if tf_freqs:
+            _min_f = min(tf_freqs.values())
+            log_ref = -math.log(_min_f) if _min_f > 0.0 else 0.0
+            ra = _tf_rarity(val_a, tf_freqs, log_ref)
+            rb = _tf_rarity(val_b, tf_freqs, log_ref)
+            weight = _COMMON_NAME_FLOOR + (1.0 - _COMMON_NAME_FLOOR) * ((ra + rb) / 2.0)
+            return jw * weight          # data-driven: whole JW range
         if jw >= _BORDERLINE_HIGH or jw < _BORDERLINE_LOW:
             return jw
         if not is_available():
@@ -91,7 +124,12 @@ class NameFreqWeightedJW(ScorerPlugin):
         weight = _COMMON_NAME_FLOOR + (1.0 - _COMMON_NAME_FLOOR) * idf
         return jw * weight
 
-    def score_matrix(self, values: list[str | None]) -> np.ndarray:
+    def score_matrix(
+        self,
+        values: list[str | None],
+        *,
+        tf_freqs: dict[str, float] | None = None,
+    ) -> np.ndarray:
         """Vectorized NxN scorer. Replaces an O(N^2) score_pair loop with
         one rapidfuzz cdist + numpy ops. Semantics match score_pair."""
         n = len(values)
@@ -100,6 +138,20 @@ class NameFreqWeightedJW(ScorerPlugin):
             cdist(clean, clean, scorer=JaroWinkler.similarity),
             dtype=np.float32,
         )
+        # Data-driven branch (#1207 PR2a): short-circuits the static census path.
+        # tf_freqs is keyed on POST-transform values; score_matrix receives
+        # post-transform values too (find_fuzzy_matches passes
+        # _get_transformed_values), so keys align with Task A4's table build.
+        if n > 0 and tf_freqs:
+            _min_f = min(tf_freqs.values())
+            log_ref = -math.log(_min_f) if _min_f > 0.0 else 0.0
+            rarity = np.array(
+                [_tf_rarity(v if v else None, tf_freqs, log_ref) for v in clean],
+                dtype=np.float32,
+            )
+            mean_r = (rarity[:, None] + rarity[None, :]) / 2.0
+            weight = _COMMON_NAME_FLOOR + (1.0 - _COMMON_NAME_FLOOR) * mean_r
+            return (jw * weight).astype(np.float32)   # whole range, no zone gating
         if n == 0 or not is_available():
             return jw
         idf_arr = np.zeros(n, dtype=np.float32)

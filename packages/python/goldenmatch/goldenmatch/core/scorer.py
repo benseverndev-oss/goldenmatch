@@ -501,6 +501,7 @@ def _exact_score_matrix(values: list) -> np.ndarray:
 
 def _fuzzy_score_matrix(
     values: list, scorer_name: str, model_name: str = "all-MiniLM-L6-v2",
+    tf_freqs: dict[str, float] | None = None,
 ) -> np.ndarray:
     """NxN fuzzy score matrix using rapidfuzz cdist or embedding cosine similarity."""
     if scorer_name == "embedding":
@@ -576,7 +577,12 @@ def _fuzzy_score_matrix(
             raise ValueError(f"Unknown fuzzy scorer: {scorer_name!r}")
         matrix_fn = getattr(plugin, "score_matrix", None)
         if matrix_fn is not None:
-            matrix = np.asarray(matrix_fn(values), dtype=np.float32)
+            # Pass the per-field tf table only if the plugin's score_matrix
+            # accepts it (back-compat: most plugins are score_matrix(values)).
+            try:
+                matrix = np.asarray(matrix_fn(values, tf_freqs=tf_freqs), dtype=np.float32)
+            except TypeError:
+                matrix = np.asarray(matrix_fn(values), dtype=np.float32)
         else:
             n = len(values)
             if n > 1000:
@@ -1209,7 +1215,10 @@ def find_fuzzy_matches(
                 valid = ~null_mask
 
                 assert f.scorer is not None, "fuzzy field scorer must be set"
-                scores = _fuzzy_score_matrix(values, f.scorer, model_name=f.model or "all-MiniLM-L6-v2")
+                scores = _fuzzy_score_matrix(
+                    values, f.scorer, model_name=f.model or "all-MiniLM-L6-v2",
+                    tf_freqs=getattr(f, "tf_freqs", None),
+                )
 
                 fuzzy_numerator += scores * _w(f) * valid
                 fuzzy_denominator += _w(f) * valid

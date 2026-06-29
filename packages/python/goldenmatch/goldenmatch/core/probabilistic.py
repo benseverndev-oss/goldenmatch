@@ -932,7 +932,7 @@ def _build_tf_tables(
     block. ``tf_collision[field] = Σ freq(v)^2`` is the expected exact-match
     collision rate — the baseline an agreement weight is adjusted against.
     """
-    from goldenmatch.utils.transforms import apply_transforms
+    from goldenmatch.core.tf_tables import value_frequencies
 
     tf_fields = [f for f in mk.fields if getattr(f, "tf_adjustment", False)]
     if not tf_fields:
@@ -943,22 +943,9 @@ def _build_tf_tables(
     for f in tf_fields:
         if f.field not in df.columns:
             continue
-        vals = df[f.field].to_list()
-        counts: dict[str, int] = {}
-        total = 0
-        for v in vals:
-            if v is None:
-                continue
-            s = str(v)
-            if f.transforms:
-                s = apply_transforms(s, f.transforms)
-            if s is None or s == "":
-                continue
-            counts[s] = counts.get(s, 0) + 1
-            total += 1
-        if total == 0:
+        freqs = value_frequencies(df, f.field, f.transforms)
+        if not freqs:
             continue
-        freqs = {val: c / total for val, c in counts.items()}
         tf_freqs[f.field] = freqs
         tf_collision[f.field] = sum(p * p for p in freqs.values())
     if not tf_freqs:
