@@ -1317,10 +1317,15 @@ def _build_strong_identifier_union(
 ) -> BlockingConfig | None:
     """Emit a multi_pass UNION of one pass per strong id + name+geo, or None.
 
-    Returns None unless >=2 distinct passes survive AND their OR-coverage
-    clears _BLOCKING_UNION_COVERAGE_TARGET. Caller (build_blocking) is
-    responsible for invoking this only on the fall-through (no single key
-    passed the strict 0.20 ceiling)."""
+    Returns None unless >=1 strong-id pass is present AND >=2 distinct passes
+    survive AND their OR-coverage clears _BLOCKING_UNION_COVERAGE_TARGET. The
+    >=1 strong-id requirement keeps this from emitting a name-only "strong-id
+    union" (a name-only shape is left to the existing name-fallback path).
+    Caller (build_blocking) is responsible for invoking this only on the
+    fall-through (no single key passed the strict 0.20 ceiling).
+
+    `n_rows_full` is reserved for call-site signature parity; scale-safety is
+    enforced by the caller via `_gate_passes`, not here."""
     def _nonnull(col: str) -> float:
         return 1.0 - (df[col].null_count() / df.height) if df.height else 0.0
 
@@ -1328,11 +1333,17 @@ def _build_strong_identifier_union(
 
     # one pass per strong-identifier field, above the non-null population floor.
     # No scale-safety check here — _gate_passes at the call site enforces #715.
+    strong_id_passes = 0
     for p in profiles:
         if p.col_type in _STRONG_EXACT_TYPES and p.name in df.columns:
             if _nonnull(p.name) < _UNION_PASS_MIN_NONNULL:
                 continue
             candidate_passes.append([p.name])
+            strong_id_passes += 1
+
+    # require >=1 strong-id pass; a name-only shape belongs to the name fallback.
+    if strong_id_passes < 1:
+        return None
 
     # name+geo passes for rows missing every strong id
     name_cols_local = [p for p in profiles if _classify_by_name(p.name) == "name"]

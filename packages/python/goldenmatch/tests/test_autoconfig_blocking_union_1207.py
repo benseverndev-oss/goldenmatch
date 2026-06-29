@@ -4,7 +4,12 @@ from __future__ import annotations
 import polars as pl
 import pytest
 
-from goldenmatch.core.autoconfig import build_blocking, profile_columns
+from goldenmatch.core.autoconfig import (
+    _build_strong_identifier_union,
+    _union_coverage,
+    build_blocking,
+    profile_columns,
+)
 from goldenmatch.refdata import surnames
 
 
@@ -69,12 +74,6 @@ def test_characterize_current_emission_is_not_a_union():
     assert not _has_union_over_identifiers(cfg)
 
 
-from goldenmatch.core.autoconfig import (  # noqa: E402
-    _build_strong_identifier_union,
-    _union_coverage,
-)
-
-
 def test_union_coverage_is_or_over_passes():
     df = _null_sparse_person_df()
     cov = _union_coverage(df, [["npi"], ["email"], ["first_name", "last_name"]])
@@ -94,7 +93,25 @@ def test_build_union_includes_high_null_id_passes():
     assert any(p.fields == ["first_name", "last_name"] for p in cfg.passes)
 
 
-def test_build_union_returns_none_when_no_coverage():
+def test_build_union_returns_none_when_too_few_passes():
     df = pl.DataFrame({"npi": [None, None, "x", None], "note": ["a", "b", "c", "d"]})
     profiles = profile_columns(df)
+    assert _build_strong_identifier_union(profiles, df, n_rows_full=df.height) is None
+
+
+def test_build_union_returns_none_when_under_coverage():
+    df = pl.DataFrame({
+        # both ids non-null on the SAME 40 of 100 rows -> OR-coverage = 0.40 < 0.95,
+        # each 40% non-null (above the 2% floor) -> 2 strong-id passes survive.
+        # No name/geo columns, so name passes can't form and rescue coverage.
+        "id_a": [f"{1000000000 + i}" if i < 40 else None for i in range(100)],
+        "id_b": [f"{2000000000 + i}" if i < 40 else None for i in range(100)],
+    })
+    profiles = profile_columns(df)
+    # sanity: both columns must profile as a strong-id type AND form >=2 passes,
+    # so the None result comes from the COVERAGE gate, not the <2-passes path.
+    strong = [p.name for p in profiles
+              if p.col_type in ("identifier", "email", "phone")]
+    assert set(strong) == {"id_a", "id_b"}, f"expected 2 strong ids, got {strong}"
+    assert _union_coverage(df, [["id_a"], ["id_b"]]) < 0.95
     assert _build_strong_identifier_union(profiles, df, n_rows_full=df.height) is None
