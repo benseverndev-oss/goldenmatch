@@ -145,6 +145,35 @@ def test_llm_consolidate_fail_open_on_bad_json():
     assert _llm_consolidate(clusters, _StubLLM("not json")) == clusters
 
 
+class _AllCandidateEmbedder:
+    """Everything embeds identically -> every cluster pair is a candidate, so the LLM judge is the
+    sole decider (isolates the constrained-mapping logic from the blocking)."""
+
+    def embed(self, texts):
+        return [[1.0, 0.0] for _ in texts]
+
+
+class _SynonymJudgeLLM:
+    """Strict pairwise judge: yes only for the works-at synonym pair, no for everything else
+    (incl. the merely-related acquired/authored that the free-merge wrongly lumped)."""
+
+    def complete(self, prompt):
+        p = prompt.lower()
+        a = p.rsplit("phrase 1:", 1)[-1]
+        return "yes" if ("works at" in a and "staff" in a) else "no"
+
+
+def test_llm_mapping_merges_synonyms_not_distinct():
+    from goldengraph.schema_discovery import _consolidate_llm_mapping
+
+    clusters = [["works at"], ["is on staff at"], ["acquired"], ["authored"]]
+    edges = {p: [("x", p, "y", f"x {p} y")] for c in clusters for p in c}
+    out = _consolidate_llm_mapping(clusters, edges, _AllCandidateEmbedder(), _SynonymJudgeLLM())
+    fam = {frozenset(c) for c in out}
+    assert frozenset({"works at", "is on staff at"}) in fam  # true synonyms merged
+    assert frozenset({"acquired"}) in fam and frozenset({"authored"}) in fam  # distinct kept apart
+
+
 # ── Task 6: discovery flow seam (seam-confirmation, not red-first) ──
 
 

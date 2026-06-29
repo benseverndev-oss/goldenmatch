@@ -199,6 +199,61 @@ _CONSOLIDATE_PROMPT = (
 )
 
 
+def _cluster_rep(members, edges_by_phrase) -> str:
+    """A cluster's representative phrase: the most frequent member (by edge count)."""
+    return max(members, key=lambda m: (len(edges_by_phrase.get(m, ())), -len(m)))
+
+
+_SYNONYM_PROMPT = (
+    "Do these two phrases describe the SAME relationship between two entities -- true synonyms, "
+    "interchangeable in 'X ___ Y'? Answer ONLY yes or no.\n"
+    "Examples: 'works at' / 'is employed at' -> yes (same relation). "
+    "'acquired' / 'authored' -> no (different relations, merely both past actions).\n"
+    "Phrase 1: {a}\nPhrase 2: {b}\nAnswer:"
+)
+
+
+def _consolidate_llm_mapping(clusters, edges_by_phrase, embedder, llm, cand_cosine: float = 0.5):
+    """Constrained LLM synonym-MAPPING (not free-merge). Embedding BLOCKS candidate cluster pairs
+    (recall-safe, skip implausible ones), then the LLM is the PRECISE pairwise judge: 'are these the
+    SAME relation, interchangeable synonyms?' -- strict + per-pair, so it won't lump merely-related
+    relations (acquired/authored) the way the free 'merge same-relation clusters' call did. Union
+    only YES pairs. Fail-open per pair. This is the one tool with the synonym signal, used safely."""
+    import numpy as np
+
+    if len(clusters) < 2 or embedder is None or llm is None:
+        return clusters
+    reps = [_cluster_rep(c, edges_by_phrase) for c in clusters]
+    try:
+        vecs = np.asarray(embedder.embed([_norm(r) for r in reps]), dtype=float)
+        unit = vecs / (np.linalg.norm(vecs, axis=1, keepdims=True) + 1e-12)
+        sim = unit @ unit.T
+    except Exception:
+        return clusters
+    parent = list(range(len(clusters)))
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for i in range(len(clusters)):
+        for j in range(i + 1, len(clusters)):
+            if sim[i, j] < cand_cosine:  # blocking: skip implausible pairs (recall-safe)
+                continue
+            try:
+                ans = llm.complete(_SYNONYM_PROMPT.format(a=reps[i], b=reps[j])).strip().lower()
+            except Exception:
+                continue
+            if ans.startswith("yes"):
+                parent[find(i)] = find(j)
+    merged: dict[int, list] = {}
+    for i in range(len(clusters)):
+        merged.setdefault(find(i), []).extend(clusters[i])
+    return [sorted(set(c)) for c in merged.values()]
+
+
 def _llm_consolidate(clusters, llm):
     """Union clusters the LLM says are the same relation. Deterministic post-processing of the
     parsed output; fail-open (any error -> input unchanged)."""
@@ -239,13 +294,17 @@ def discover_schema(extractions, sources, embedder, llm=None) -> RelationSchema:
     by_phrase: dict[str, list] = {}
     for (s, p, o, src) in edges:
         by_phrase.setdefault(p, []).append((s, p, o, src))
-    # Clustering backend: 'gm' resolves the relation vocabulary with goldenmatch dedupe (the product's
-    # calibrated matcher); default is the deterministic string + embedding union-find.
-    if os.environ.get("GOLDENGRAPH_DISCOVER_RESOLVE", "").strip().lower() == "gm":
+    # Clustering backend (GOLDENGRAPH_DISCOVER_RESOLVE): 'gm' = goldenmatch dedupe; 'llm_map' =
+    # deterministic clusters + constrained LLM synonym-mapping (embedding-block + LLM-verify, for open
+    # synonymy); default = deterministic string + embedding union-find.
+    resolve = os.environ.get("GOLDENGRAPH_DISCOVER_RESOLVE", "").strip().lower()
+    if resolve == "gm":
         clusters = _cluster_predicates_gm(list(by_phrase))
     else:
         clusters = _cluster_predicates(list(by_phrase), embedder)
-    if llm is not None:
+    if resolve == "llm_map" and llm is not None:
+        clusters = _consolidate_llm_mapping(clusters, by_phrase, embedder, llm)
+    elif llm is not None:
         clusters = _llm_consolidate(clusters, llm)
     return _assemble_schema(clusters, by_phrase)
 
