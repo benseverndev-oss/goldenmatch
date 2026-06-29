@@ -223,6 +223,17 @@ def _consolidate_llm_mapping(clusters, edges_by_phrase, embedder, llm, cand_cosi
 
     if len(clusters) < 2 or embedder is None or llm is None:
         return clusters
+    # Optional SEPARATE judge model (GOLDENGRAPH_DISCOVER_JUDGE_MODEL) -- keep cheap extraction but
+    # use a stronger model for the synonym judgment, isolating judge quality. Falls back to `llm`.
+    judge = llm
+    _jm = os.environ.get("GOLDENGRAPH_DISCOVER_JUDGE_MODEL", "").strip()
+    if _jm:
+        try:
+            from .llm import OpenAIClient
+
+            judge = OpenAIClient(model=_jm)
+        except Exception:
+            judge = llm
     reps = [_cluster_rep(c, edges_by_phrase) for c in clusters]
     try:
         vecs = np.asarray(embedder.embed([_norm(r) for r in reps]), dtype=float)
@@ -243,7 +254,7 @@ def _consolidate_llm_mapping(clusters, edges_by_phrase, embedder, llm, cand_cosi
             if sim[i, j] < cand_cosine:  # blocking: skip implausible pairs (recall-safe)
                 continue
             try:
-                ans = llm.complete(_SYNONYM_PROMPT.format(a=reps[i], b=reps[j])).strip().lower()
+                ans = judge.complete(_SYNONYM_PROMPT.format(a=reps[i], b=reps[j])).strip().lower()
             except Exception:
                 continue
             if ans.startswith("yes"):

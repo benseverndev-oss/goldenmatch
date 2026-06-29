@@ -146,6 +146,13 @@ def _bench_impl(eval: str, n: int, ambiguity: float, opts: str, chat: str, embed
             k, v = line.split("=", 1)
             env[k.strip()] = v
 
+    # If a separate synonym-judge model is requested, pull it too (served alongside the chat model;
+    # Ollama loads each on demand). Needs a big enough GPU to hold both (use --gpu a100).
+    judge_model = env.get("GOLDENGRAPH_DISCOVER_JUDGE_MODEL", "").strip()
+    if judge_model and judge_model != chat:
+        subprocess.run(["ollama", "pull", judge_model], check=True)
+        cache.commit()
+
     # 4. Run the eval CLI; return the markdown (or, for end_to_end, the localize trace from stdout).
     out_md = "/tmp/out.md"
     if eval == "end_to_end":
