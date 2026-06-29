@@ -131,7 +131,7 @@ def _chat_text(tok, rec: dict) -> str:
     """One training example: user=extraction prompt over the text, assistant=gold JSON, rendered
     through the model's chat template (so the served Ollama prompt matches)."""
     msgs = [
-        {"role": "user", "content": _TRAIN_PROMPT.format(text=rec["text"])},
+        {"role": "user", "content": _TRAIN_PROMPT.replace("{text}", rec["text"])},
         {"role": "assistant", "content": _completion_json(rec)},
     ]
     return tok.apply_chat_template(msgs, tokenize=False)
@@ -150,7 +150,7 @@ def _eval_heldout(model, tok, heldout: list[dict]) -> dict:
     rev_total = rev_dir_ok = 0
     for rec in heldout:
         prompt = tok.apply_chat_template(
-            [{"role": "user", "content": _TRAIN_PROMPT.format(text=rec["text"])}],
+            [{"role": "user", "content": _TRAIN_PROMPT.replace("{text}", rec["text"])}],
             tokenize=False, add_generation_prompt=True,
         )
         ids = tok(prompt, return_tensors="pt").to(model.device)
@@ -194,7 +194,11 @@ def _train_lora(base_model: str, epochs: int) -> dict:
     """QLoRA fine-tune the student on (extraction prompt -> canonical JSON) pairs, then self-eval on
     the heldout split (predicate + direction accuracy). Saves the merged FP16 model to /data/out/ for
     later GGUF/Ollama export. The merge + serve path is a follow step gated on these metrics."""
+    import os
     import time
+
+    # cache HF model weights on the Volume so retries don't re-download the 7B (~15GB).
+    os.environ.setdefault("HF_HOME", f"{DATA_DIR}/hf_cache")
 
     import torch
     from datasets import Dataset
