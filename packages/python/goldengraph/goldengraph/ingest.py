@@ -834,7 +834,11 @@ def ingest_corpus(
             from .schema import canonicalize_extraction
             from .schema_discovery import discover_schema
 
-            schema = discover_schema([p[0] for p in prepared], docs, embedder, llm)
+            # The LLM consolidation over-merges on a weak model (measured: a 7B lumps 'acquired' and
+            # 'authored' as one relation), so it is opt-IN via GOLDENGRAPH_DISCOVER_LLM=1; the
+            # deterministic backbone is the default.
+            _disc_llm = llm if os.environ.get("GOLDENGRAPH_DISCOVER_LLM", "0") not in ("0", "false", "") else None
+            schema = discover_schema([p[0] for p in prepared], docs, embedder, _disc_llm)
             if os.environ.get("GOLDENGRAPH_SCHEMA_DISCOVER", "") not in ("", "0", "false"):
                 print(f"[schema-discover] relations={list(schema.relations)}", flush=True)
                 for _r in schema.relations:
