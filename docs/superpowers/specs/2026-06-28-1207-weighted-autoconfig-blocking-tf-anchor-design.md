@@ -91,6 +91,10 @@ Add a controller rule (in `core/autoconfig_rules.py`, fired from the controller 
 - **Regression guard:** the existing CI gates — #528 `synthetic_benchmarks` (clean-precision), DQbench composite non-regression (≥ 91.04). Spot-check Febrl / DBLP-ACM F1 unmoved by the weighted-path changes (the weighted path, not FS, is what changes).
 - **Cross-surface:** blocking-union flows through `BlockingConfig` (no per-surface change); telemetry change uses the single `serialize_telemetry` serializer; TS parity case added for the TF scorer.
 
+## Known scope boundary (PR1)
+
+`auto_configure_df` switches `blocking.strategy` to `"learned"` at `total_rows >= 50_000` (autoconfig.py ~`:3864`), which overwrites the union's `multi_pass` config. So through the public entry point PR1's union takes effect **below 50k rows** (or when learned blocking is disabled) — and #1207's stated shape is ~1M. The learned blocker re-derives predicates at `min_recall=0.95` and may rediscover the per-identifier keys, but this is **unmeasured**. Reconciling the union with the ≥50k learned-blocking path (measure union vs learned at scale; have the union seed/feed the learner, or raise the learned threshold for null-sparse strong-id shapes) is a tracked **follow-up**, deliberately deferred to keep PR1 a measured, bounded slice (consistent with the "shaped fixture, moderate scale" repro decision — we do not force the union past the learned path without an at-scale measurement).
+
 ## Out of scope
 
 - The probabilistic / Fellegi-Sunter path (already addressed by FS-v2).

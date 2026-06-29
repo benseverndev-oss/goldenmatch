@@ -15,6 +15,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   low-null single exact key exists. Strong-id passes use a non-null scale gate (the runtime
   blocker filters null block keys) with a #876 perfect-surrogate exclusion. Measured blocking
   recall 1.0 vs name-only 0.004 on a planted-dup fixture, no regression on the auto-config suite.
+  Scope: `auto_configure_df` switches to learned blocking at `total_rows >= 50_000`, so the
+  union applies below that threshold (or when learned blocking is off) today; the >=50k
+  learned-blocking interaction is a tracked follow-up.
 
 ## [2.4.0] - 2026-06-27
 
