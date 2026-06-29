@@ -1,6 +1,21 @@
 # Argument-context relation-resolution experiment — design
 
-**Status:** Designed (approved 2026-06-29); ready for implementation plan.
+**Status:** RUN + PASSED 2026-06-29. **Argument-context resolution crosses the Phase-2 open-vocab
+boundary.** The deterministic distributional+type resolver recovers the schema PERFECTLY (B-cubed
+**P=1.0 R=1.0**), including the `acquired` ≠ `part_of` type-collision that only the pair-set signal can
+separate; all must-pass cases hold. The goldenmatch-with-context-features resolver scored P=0.8
+(over-merged the `(org,org)` collision via its fuzzy-neighbor feature -- tunable; secondary comparison).
+
+**Ablation (signal attribution):** co-occurrence WITHOUT types = **P=1.0 R=1.0** (the pair-set
+distributional signal alone is sufficient); types WITHOUT co-occurrence = **P=1.0 R=0.33** (types alone
+*fragment* -- precise but can't merge synonyms). **Verdict: co-occurrence (synonyms connect the same
+entity pairs) is the necessary+sufficient lever; entity types are a helpful blocker but neither
+necessary nor sufficient alone.** This tells us exactly what a real corpus must provide -- the same
+entity pairs stated with different phrasings, which real text naturally does ("J works at Acme" / "J is
+on staff at Acme"). The open-vocab path is validated: resolve predicates by the entities they connect,
+deterministically -- no LLM, no model scale. Implementation: `erkgbench.qa_e2e.argctx_resolve`.
+
+**Status (original):** Designed (approved 2026-06-29); ready for implementation plan.
 **Owner:** Ben Severn
 **Context:** Phase-2 of schema discovery ([[2026-06-29-goldengraph-schema-discovery-design]]) proved
 that open relational synonymy is NOT resolvable from the predicate phrase pair — by any method, at any
