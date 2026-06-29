@@ -147,13 +147,21 @@ def generate_engineered(
                 )
             )
             if _cooccur:
-                side = random.Random(f"{seed}:{src_id}:{rel}:{dst_id}")
-                for i, phrase in enumerate(_REL_PHRASINGS.get(rel, ()), start=1):
+                # ONE extra doc with a RANDOM phrasing (not all) -- so each edge shows 2 phrasings
+                # (base + extra) that co-occur on its pair (the clustering signal), but the CANONICAL
+                # word is absent from a fraction of edges (~4/9). Those canonical-free edges are
+                # reachable only by clustering the synonyms (argctx), not by the canonical-label
+                # default backend -- the discriminating case. Side rng so the main rng (questions)
+                # is untouched.
+                phr = _REL_PHRASINGS.get(rel, ())
+                if phr:
+                    side = random.Random(f"{seed}:{src_id}:{rel}:{dst_id}")
+                    phrase = side.choice(phr)
                     s2 = _render_mention(by_id[src_id], side, ambiguity)
                     o2 = _render_mention(by_id[dst_id], side, ambiguity)
                     documents.append(
                         Document(
-                            id=f"{_edge_doc_id(src_id, rel, dst_id)}::{i}",
+                            id=f"{_edge_doc_id(src_id, rel, dst_id)}::1",
                             text=f"{s2} {phrase} {o2}.",
                             src_surface=s2,
                             dst_surface=o2,
