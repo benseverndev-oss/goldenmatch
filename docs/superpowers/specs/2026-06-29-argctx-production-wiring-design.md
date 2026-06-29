@@ -41,7 +41,8 @@ live docs (co-occurrence) -> 7B extract -> discover_schema [argctx: surface-pair
 ### 1. `_cluster_predicates_argctx(by_phrase)` — `schema_discovery.py`
 
 `by_phrase` maps each predicate to its extracted edges. Build `pair_set[pred] = {(_norm(subj_surface),
-_norm(obj_surface))}` and cluster by pair-set **Jaccard ≥ threshold** (default 0.5, env-tunable
+_norm(obj_surface))}` and cluster by pair-set **Jaccard ≥ threshold** (default **0.3** — more lenient
+than the gold experiment's 0.5, for recall under live-extraction pair noise; env-tunable
 `GOLDENGRAPH_ARGCTX_JACCARD`) via union-find — the experiment's `resolve_distributional` without the type
 blocker (surface-only). Wire as `argctx` in `discover_schema`'s `GOLDENGRAPH_DISCOVER_RESOLVE` dispatch.
 Singleton-isolation is automatic: a predicate sharing no pairs stays its own cluster.

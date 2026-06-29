@@ -145,6 +145,9 @@ def test_discover_schema_argctx_backend(monkeypatch):
     assert m1 is not None and m2 is not None and m1[0] == m2[0]
 ```
 
+> `RelationSchema.match(predicate)` returns `(canonical_relation, flip) | None` (see `schema.py`), so
+> `m[0]` is the canonical relation label — the assertion checks both phrasings map to the same relation.
+
 - [ ] **Step 7: Run the full discovery suite, then commit.**
 
 ```bash
