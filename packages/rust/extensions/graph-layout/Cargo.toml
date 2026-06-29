@@ -28,7 +28,7 @@ rayon = "1"
 # OPTIONAL nicer output: tiny-skia is the SIMD software rasterizer. Off by default
 # so the crate builds offline (the built-in PPM rasterizer in `raster.rs` needs no
 # deps); enable with `--features skia` for anti-aliased PNG frames.
-tiny-skia = { version = "0.11", optional = true }
+tiny-skia = { version = "0.12", optional = true }
 
 [features]
 default = []
