@@ -77,6 +77,8 @@ def test_value_frequencies_relative_and_transformed():
     assert "" not in freqs and None not in freqs
 ```
 
+(The test uses transforms `["lowercase", "strip"]` — confirm both are in `VALID_SIMPLE_TRANSFORMS` (`config/schemas.py`) before relying on the assertion; they're standard, but a typo'd transform name would fail the test for the wrong reason.)
+
 - [ ] **Step 2: Run → fail** (`... -m pytest tests/test_tf_name_weighting_1207.py -k value_frequencies -v`) — ImportError.
 
 - [ ] **Step 3: Implement `value_frequencies`**
@@ -299,6 +301,8 @@ def test_kill_switch_disables_tf_population(monkeypatch):
 - [ ] **Step 3: Implement population**
 
 In `autoconfig.py`, after weighted matchkeys are built (where a field's `scorer` is set to `name_freq_weighted_jw`), add a gated post-pass: for each weighted matchkey field whose `scorer == "name_freq_weighted_jw"`, set `field.tf_freqs = value_frequencies(df, field.field, field.transforms)` — using the SAME df the rest of auto-config profiles on, and the SAME transforms the scorer will see (keep consistent with the Task A2 transform assumption). Gate behind `_tf_name_weighting_enabled()` (default True unless `GOLDENMATCH_TF_NAME_WEIGHTING` in `{"0","false","no","off"}`), mirroring `_noise_aware_scorers_enabled` style already in the file. Skip when the table would be empty or trivial (e.g. < 2 distinct values).
+
+**Standardization-consistency check (load-bearing — verified concern from plan review):** the table is built from the auto-config `df` with `field.transforms`, but the pipeline may apply column STANDARDIZATION (a separate step from matchkey transforms) before scoring. If the name field is standardized upstream, the scored values won't match the table's keys (built on un-standardized values) and the downweight silently no-ops. In Task A4's e2e test, **assert the mechanism actually bites end-to-end**, not just that `tf_freqs` is populated: e.g. score two records that share an identical common surname and two that share an identical rare surname through the FULL configured path (`dedupe_df(df, config=cfg)` with weighted-matchkey `rerank=False` per the repo's offline-CI pattern, or `score_pair_df`) and assert the common-surname pair's score is lower. If standardization breaks key alignment, either build `tf_freqs` AFTER standardization (from the standardized column) or document that `name_freq_weighted_jw` fields are not auto-standardized. Confirm which, and make the e2e test prove the downweight reaches scoring.
 
 - [ ] **Step 4: Run → pass** (both tests).
 
