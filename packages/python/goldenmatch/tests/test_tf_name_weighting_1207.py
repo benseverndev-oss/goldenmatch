@@ -74,6 +74,27 @@ def _common_vs_rare_name_df(n=800, seed=7):
     return pl.DataFrame(rows)
 
 
+def _mixed_case_common_vs_rare_name_df(n=800, seed=7):
+    """Same shape as _common_vs_rare_name_df, but the COMMON and RARE surnames
+    appear in mixed casing across rows (SMITH / smith / Smith, Rarename1 /
+    RARENAME1). This is the real production scenario: sources disagree on
+    casing. The data-driven downweight must still bite because the table key
+    (transforms(raw)) and the scored value (transforms(name_proper(raw))) both
+    collapse to one lowercased bucket.
+    """
+    import random
+    rng = random.Random(seed)
+    common_variants = ["SMITH", "smith", "Smith", "Jones", "JONES", "Brown"]
+    rare_variants = ([f"Rarename{i}" for i in range(60)]
+                     + [f"RARENAME{i}" for i in range(60)])
+    rows = [{"first_name": rng.choice(["John", "Jane", "Mary", "Alex"]),
+             "last_name": (rng.choice(common_variants) if rng.random() < 0.7
+                           else rng.choice(rare_variants)),
+             "city": rng.choice(["Springfield", "Madison", "Fairview"])}
+            for _ in range(n)]
+    return pl.DataFrame(rows)
+
+
 def _name_fields(cfg):
     return [f for mk in cfg.get_matchkeys() for f in (mk.fields or [])
             if getattr(f, "scorer", None) == "name_freq_weighted_jw"]
@@ -134,6 +155,57 @@ def test_tf_downweight_reaches_scoring_end_to_end(monkeypatch):
     )[0, 1]
     rare_pair_score = _fuzzy_score_matrix(
         [rare_val, rare_val], "name_freq_weighted_jw", tf_freqs=tf
+    )[0, 1]
+
+    assert common_pair_score < rare_pair_score
+
+
+def test_tf_downweight_robust_to_source_casing(monkeypatch):
+    """Casing-skew is the real production scenario: sources disagree on the
+    casing of the same surname. The data-driven downweight must still bite
+    because alignment holds: `lowercase` in the field transforms absorbs
+    `name_proper`'s title-casing (lowercase(title(x)) == lowercase(x)), so all
+    casings of "smith" share one frequency bucket. If a future auto-config
+    drops `lowercase` from name fields, rebuild the table from standardized
+    values.
+    """
+    monkeypatch.setenv("GOLDENMATCH_TF_NAME_WEIGHTING", "1")
+    df = _mixed_case_common_vs_rare_name_df()
+    cfg = auto_configure_df(df)
+    nf = _name_fields(cfg)
+    if not nf:
+        import pytest
+        pytest.skip("name_freq_weighted_jw not selected on this shape")
+
+    field = nf[0]
+    tf = field.tf_freqs
+    assert tf, "tf_freqs missing on configured field"
+
+    from goldenmatch.core.scorer import _fuzzy_score_matrix
+    from goldenmatch.core.standardize import get_standardizer
+    from goldenmatch.utils.transforms import apply_transforms
+
+    std_rules = (cfg.standardization.rules or {}).get(field.field, []) if cfg.standardization else []
+
+    def _scored(raw):
+        v = raw
+        for s in std_rules:
+            v = get_standardizer(s)(v)
+        return apply_transforms(v, field.transforms)
+
+    # Score an AGREEMENT where the two rows carry DIFFERENT source casings of
+    # the same common surname (SMITH vs smith) vs a rare-surname agreement
+    # (Rarename1 vs RARENAME1). Both collapse to one bucket after transforms.
+    common_a = _scored("SMITH")
+    common_b = _scored("smith")
+    rare_a = _scored("Rarename1")
+    rare_b = _scored("RARENAME1")
+
+    common_pair_score = _fuzzy_score_matrix(
+        [common_a, common_b], "name_freq_weighted_jw", tf_freqs=tf
+    )[0, 1]
+    rare_pair_score = _fuzzy_score_matrix(
+        [rare_a, rare_b], "name_freq_weighted_jw", tf_freqs=tf
     )[0, 1]
 
     assert common_pair_score < rare_pair_score
