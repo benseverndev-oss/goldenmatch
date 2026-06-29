@@ -113,9 +113,17 @@ def _bench_impl(eval: str, n: int, ambiguity: float, opts: str, chat: str, embed
     if create_from:
         # the fine-tuned student: import the merged HF safetensors dir directly (modern Ollama
         # converts to GGUF internally), no manual llama.cpp step. `chat` is the local model name.
+        # COPY the model off the Modal volume first: the volume mounts as a symlink, and Ollama
+        # refuses a `FROM` path that escapes via the symlink ("insecure path"). copytree derefs it.
+        import shutil
+
+        local_dir = "/tmp/merged_local"
+        if not os.path.exists(local_dir):
+            print(f"copying {create_from} -> {local_dir} (deref volume symlink) ...", flush=True)
+            shutil.copytree(create_from, local_dir, symlinks=False)
         with open("/tmp/Modelfile", "w") as mf:
-            mf.write(f"FROM {create_from}\n")
-        print(f"ollama create {chat} from {create_from} ...", flush=True)
+            mf.write(f"FROM {local_dir}\n")
+        print(f"ollama create {chat} from {local_dir} ...", flush=True)
         subprocess.run(["ollama", "create", chat, "-f", "/tmp/Modelfile"], check=True)
     else:
         subprocess.run(["ollama", "pull", chat], check=True)
