@@ -2,6 +2,63 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-06-28 — Perceptual image pHash: cross-platform determinism + wasm/TS
+- New ADR [../decisions/0030-perceptual-cross-platform-determinism.md](../decisions/0030-perceptual-cross-platform-determinism.md):
+  the image pHash computed its DCT basis cos() at runtime, so it was libm-fragile
+  across platforms/surfaces (committed golden test passed on Linux CI, FAILED on
+  Windows native; a wasm build was 6 bits off). Fix: a COMMITTED 8x32 DCT table
+  that the Rust kernel (native + wasm) AND the Python reference both read (one
+  generator, bit-exact in both languages) -> byte-identical everywhere. New opt-in
+  `goldenmatch/core/perceptual-wasm` TS subpath (phashImage / hamming), byte-exact
+  parity-gated + a `perceptual_wasm` CI drift lane. Image only; radial + audio stay
+  Python/native (non-cos fragility). Fixture rebased 2 borderline phash values.
+
+## 2026-06-28 — GoldenGraph TS: bitemporal store shipped (0.2.0)
+- The store deferred in [0029](../decisions/0029-goldengraph-wasm-ts.md) now ships:
+  `appendBatch` / `asOf` / `history` over a portable JSON `Snapshot` (the kernel's
+  `store_*` ops). Parity fixtures cover the append → as_of → history flow; 9 total
+  goldengraph parity cases. Also: the `goldenprofile → goldengraph` composition
+  helpers (`resolutionFromClusters` / `mentionsFromProfiles`) landed (#1306).
+- Gotcha recorded in 0029: wasm-bindgen maps the kernel's i64/u64 params to BigInt;
+  the public API takes `number` and converts at the boundary.
+
+## 2026-06-28 — GoldenGraph (KG engine) on the TS/WASM surface (v1: graph+query)
+- New ADR [../decisions/0029-goldengraph-wasm-ts.md](../decisions/0029-goldengraph-wasm-ts.md):
+  the GoldenGraph knowledge-graph engine gets a TS/JS surface via `goldengraph-wasm`
+  — the second fold after goldenprofile (ADR 0028), same pattern.
+- New **standalone** `packages/typescript/goldengraph` npm package: pure-by-default
+  base + opt-in `goldengraph/wasm`; query fns REFUSE (throw) until enabled. **v1 = the
+  4 graph+query ops** (`buildGraph`/`neighborhood`/`seedsByName`/`communities`);
+  the bitemporal store (`store_append/as_of/history`) is DEFERRED (heaviest surface).
+- Zero runtime deps (the resolution input is a `{mention:entity}` map / `["native",…]`,
+  not goldenprofile's `Resolution` — composition is a future adapter).
+- Enabling change: `goldengraph-core` → `graph-core { default-features = false }`
+  (build-time gating; same accurate rationale as 0028).
+- CI: `goldengraph_wasm` path-filter + drift guard in the `typescript` lane; publish
+  wired-unfired (`publish-goldengraph-js.yml`). No Python cross-parity (native API is
+  OO, not the JSON boundary; not in the py matrix — see issue #1304). Plan:
+  [../../docs/superpowers/plans/2026-06-28-goldengraph-wasm-ts-parity.md](../../docs/superpowers/plans/2026-06-28-goldengraph-wasm-ts-parity.md).
+
+## 2026-06-28 — GoldenProfile (Virtual Fingerprint) on the TS/WASM surface
+- New ADR [../decisions/0028-goldenprofile-wasm-ts.md](../decisions/0028-goldenprofile-wasm-ts.md):
+  the GoldenProfile Virtual Fingerprint engine (cross-document entity resolution,
+  kernel ADR [0023](../decisions/0023-semantic-signature-virtual-fingerprint-engine.md))
+  now has a TS/JS surface — the last unfinished leg of its one-kernel-many-surfaces
+  matrix (Python/`-native` + C/`-cabi` + `-wasm` already existed).
+- New **standalone** `packages/typescript/goldenprofile` npm package: pure-by-default
+  base entry (zero wasm bytes, edge-safe) + an opt-in `goldenprofile/wasm` subpath that
+  loads the kernel. Follows the **healer precedent** (opt-in-or-absent, no pure-TS
+  resolver), not the score/analysis acceleration track. `resolveProfiles()` REFUSES
+  (throws) when the backend isn't enabled — never a fake empty Resolution.
+- Enabling change: `graph-core`'s `arrow` became an **opt-in default-on feature** so
+  `goldenprofile-core` links on `wasm32`; native/pgrx/datafusion compile byte-identically.
+- Cross-surface contract corrected to **partition + edge set + scores(4dp)**, NOT
+  byte-ordering (the kernel's cluster/edge ordering is `HashMap`-seed nondeterministic).
+  Canonical, idempotent fixtures gate both the TS-wasm and Python-native parity tests.
+- CI: `goldenprofile_wasm` path-filter + a drift guard in the `typescript` lane; publish
+  wired-but-unfired (`publish-goldenprofile-js.yml`). Plan:
+  [../../docs/superpowers/plans/2026-06-28-goldenprofile-wasm-ts-parity.md](../../docs/superpowers/plans/2026-06-28-goldenprofile-wasm-ts-parity.md).
+
 ## 2026-06-27 — Config-suggestion healer on the TS/WASM surface
 - New ADR [../decisions/0027-healer-wasm-ts.md](../decisions/0027-healer-wasm-ts.md):
   the healer (config-suggestion engine) now runs on the TypeScript/JS surface via

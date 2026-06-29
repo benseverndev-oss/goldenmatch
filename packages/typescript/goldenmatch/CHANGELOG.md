@@ -6,6 +6,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-06-27
+
 ### Added
 - **Config-suggestion healer on WASM + TypeScript.** The `suggest-core` Rust
   kernel is compiled to `suggest-wasm` and wired into `dedupe(rows, { suggest,

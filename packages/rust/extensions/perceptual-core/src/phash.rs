@@ -6,27 +6,10 @@
 //! of the 64 coefficients. Bit `i = row*8 + col` (LSB-first) is set when the
 //! coefficient strictly exceeds the median; exact ties resolve to 0.
 
-use std::f64::consts::PI;
-use std::sync::OnceLock;
+use crate::tables::DCT_BASIS;
 
 pub const IMG_RESIZE: usize = 32;
 pub const HASH_SIZE: usize = 8;
-
-/// Unnormalized DCT-II basis: `M[k][i] = cos(pi * (i + 0.5) * k / n)`.
-fn dct_basis(n: usize) -> Vec<Vec<f64>> {
-    (0..n)
-        .map(|k| {
-            (0..n)
-                .map(|i| (PI * (i as f64 + 0.5) * k as f64 / n as f64).cos())
-                .collect()
-        })
-        .collect()
-}
-
-fn dct_m() -> &'static Vec<Vec<f64>> {
-    static M: OnceLock<Vec<Vec<f64>>> = OnceLock::new();
-    M.get_or_init(|| dct_basis(IMG_RESIZE))
-}
 
 /// Source sample coordinates for an align-corners resize of a length-`n`
 /// dimension to `size` outputs: `(i0, i1, weight)` per output index.
@@ -66,13 +49,13 @@ pub(crate) fn bilinear_resize(grid: &[Vec<f64>], size: usize) -> Vec<Vec<f64>> {
 
 /// 2D separable DCT-II of `block` (size x size); rows first, then columns (the
 /// fixed order the Python reference uses). Returns the top-left `keep` x `keep`.
-fn dct2_topleft(block: &[Vec<f64>], size: usize, keep: usize, m: &[Vec<f64>]) -> Vec<Vec<f64>> {
+fn dct2_topleft(block: &[Vec<f64>], size: usize, keep: usize) -> Vec<Vec<f64>> {
     let mut tmp = vec![vec![0.0f64; keep]; size];
     for i in 0..size {
         for k in 0..keep {
             let mut acc = 0.0;
             for x in 0..size {
-                acc += block[i][x] * m[k][x];
+                acc += block[i][x] * DCT_BASIS[k][x];
             }
             tmp[i][k] = acc;
         }
@@ -82,7 +65,7 @@ fn dct2_topleft(block: &[Vec<f64>], size: usize, keep: usize, m: &[Vec<f64>]) ->
         for k in 0..keep {
             let mut acc = 0.0;
             for y in 0..size {
-                acc += tmp[y][l] * m[k][y];
+                acc += tmp[y][l] * DCT_BASIS[k][y];
             }
             out[k][l] = acc;
         }
@@ -101,7 +84,7 @@ pub fn phash_image(grid: &[Vec<f64>]) -> u64 {
         "luma grid must be non-empty"
     );
     let small = bilinear_resize(grid, IMG_RESIZE);
-    let block = dct2_topleft(&small, IMG_RESIZE, HASH_SIZE, dct_m());
+    let block = dct2_topleft(&small, IMG_RESIZE, HASH_SIZE);
 
     let mut coeffs = Vec::with_capacity(HASH_SIZE * HASH_SIZE);
     for row in block.iter().take(HASH_SIZE) {

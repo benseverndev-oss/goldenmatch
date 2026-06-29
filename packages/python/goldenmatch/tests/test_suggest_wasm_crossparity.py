@@ -67,6 +67,7 @@ _CASES = [
     "raise_threshold",
     "swap_scorer",
     "add_negative_evidence",
+    "drop_matchkey",
 ]
 
 # Frozen schemas (mirror goldenmatch/core/suggest/adapter.py).

@@ -1,0 +1,286 @@
+{
+  "cases": [
+    {
+      "expected": {
+        "clusters": [
+          [
+            0,
+            1
+          ]
+        ],
+        "edges": [
+          {
+            "a": 0,
+            "b": 1,
+            "score": {
+              "anchor": 0.5,
+              "attribute_bonus": 0.011111111111111117,
+              "category": 1.0,
+              "embedding": 0.5,
+              "gated_in": true,
+              "name": 1.0,
+              "score": 0.8611111111111109
+            }
+          }
+        ]
+      },
+      "name": "clean_merge",
+      "request": {
+        "profiles": [
+          {
+            "anchor": "UNKNOWN",
+            "attribute": "Anvils",
+            "category": "Company",
+            "kind": "node",
+            "name": "Acme Inc"
+          },
+          {
+            "anchor": "UNKNOWN",
+            "attribute": "Founded 1900",
+            "category": "Company",
+            "kind": "node",
+            "name": "Acme"
+          }
+        ]
+      }
+    },
+    {
+      "expected": {
+        "clusters": [
+          [
+            0
+          ],
+          [
+            1
+          ]
+        ],
+        "edges": []
+      },
+      "name": "node_edge_no_cross",
+      "request": {
+        "profiles": [
+          {
+            "anchor": "UNKNOWN",
+            "attribute": "x",
+            "category": "Company",
+            "kind": "node",
+            "name": "Acme"
+          },
+          {
+            "anchor": "UNKNOWN",
+            "attribute": "x",
+            "category": "Company",
+            "kind": "edge",
+            "name": "Acme"
+          }
+        ]
+      }
+    },
+    {
+      "expected": {
+        "clusters": [
+          [
+            0
+          ]
+        ],
+        "edges": []
+      },
+      "name": "singleton",
+      "request": {
+        "profiles": [
+          {
+            "anchor": "UNKNOWN",
+            "attribute": "only one",
+            "category": "Company",
+            "kind": "node",
+            "name": "Solo Corp"
+          }
+        ]
+      }
+    },
+    {
+      "expected": {
+        "clusters": [
+          [
+            0
+          ],
+          [
+            1
+          ]
+        ],
+        "edges": []
+      },
+      "name": "distinct_stay_split",
+      "request": {
+        "profiles": [
+          {
+            "anchor": "UNKNOWN",
+            "attribute": "anvils",
+            "category": "Company",
+            "kind": "node",
+            "name": "Acme"
+          },
+          {
+            "anchor": "UNKNOWN",
+            "attribute": "rockets",
+            "category": "Company",
+            "kind": "node",
+            "name": "Globex"
+          }
+        ]
+      }
+    },
+    {
+      "expected": {
+        "clusters": [
+          [
+            0
+          ],
+          [
+            1,
+            2
+          ]
+        ],
+        "edges": [
+          {
+            "a": 1,
+            "b": 2,
+            "score": {
+              "anchor": 0.5,
+              "attribute_bonus": 0.1,
+              "category": 1.0,
+              "embedding": 0.5,
+              "gated_in": true,
+              "name": 1.0,
+              "score": 0.9499999999999998
+            }
+          }
+        ]
+      },
+      "name": "transitive_chain",
+      "request": {
+        "profiles": [
+          {
+            "anchor": "UNKNOWN",
+            "attribute": "mainframes",
+            "category": "Company",
+            "kind": "node",
+            "name": "International Business Machines"
+          },
+          {
+            "anchor": "UNKNOWN",
+            "attribute": "mainframes",
+            "category": "Company",
+            "kind": "node",
+            "name": "IBM Corp"
+          },
+          {
+            "anchor": "UNKNOWN",
+            "attribute": "mainframes",
+            "category": "Company",
+            "kind": "node",
+            "name": "IBM"
+          }
+        ]
+      }
+    },
+    {
+      "expected": {
+        "clusters": [
+          [
+            0,
+            1
+          ]
+        ],
+        "edges": [
+          {
+            "a": 0,
+            "b": 1,
+            "score": {
+              "anchor": 0.5,
+              "attribute_bonus": 0.07692307692307693,
+              "category": 1.0,
+              "embedding": 0.5,
+              "gated_in": true,
+              "name": 1.0,
+              "score": 0.9269230769230767
+            }
+          }
+        ]
+      },
+      "name": "unicode_nonbmp",
+      "request": {
+        "profiles": [
+          {
+            "anchor": "UNKNOWN",
+            "attribute": "emoji",
+            "category": "Company",
+            "kind": "node",
+            "name": "Acmé 😀 Inc"
+          },
+          {
+            "anchor": "UNKNOWN",
+            "attribute": "emoji co",
+            "category": "Company",
+            "kind": "node",
+            "name": "Acmé 😀"
+          }
+        ]
+      }
+    },
+    {
+      "expected": {
+        "clusters": [
+          [
+            0,
+            1
+          ],
+          [
+            2
+          ]
+        ],
+        "edges": [
+          {
+            "a": 0,
+            "b": 1,
+            "score": {
+              "anchor": 1.0,
+              "attribute_bonus": 0.1,
+              "category": 1.0,
+              "embedding": 0.5,
+              "gated_in": true,
+              "name": 1.0,
+              "score": 1.0
+            }
+          }
+        ]
+      },
+      "name": "people_shared_anchor",
+      "request": {
+        "profiles": [
+          {
+            "anchor": "Acme Inc",
+            "attribute": "engineer",
+            "category": "Person",
+            "kind": "node",
+            "name": "Jane Q Smith"
+          },
+          {
+            "anchor": "Acme Inc",
+            "attribute": "engineer",
+            "category": "Person",
+            "kind": "node",
+            "name": "Jane Smith"
+          },
+          {
+            "anchor": "Globex",
+            "attribute": "manager",
+            "category": "Person",
+            "kind": "node",
+            "name": "John Doe"
+          }
+        ]
+      }
+    }
+  ]
+}

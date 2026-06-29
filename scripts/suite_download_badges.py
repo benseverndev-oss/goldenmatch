@@ -54,6 +54,13 @@ NPM_PACKAGES = [
     "goldenanalysis",
     "infermap",
     "goldencheck-types",
+    # npm-only (no PyPI dist): the goldengraph Virtual Fingerprint resolver's
+    # TS/WASM surface. Published via publish-goldenprofile-js.yml (wired; the
+    # first release is pending, so download stats 404 until then — tolerated).
+    "goldenprofile",
+    # npm-only: the goldengraph KG-engine TS/WASM surface (publish-goldengraph-js.yml,
+    # wired; first release pending, stats 404 until then — tolerated).
+    "goldengraph",
 ]
 
 # pypistats.org rate-limits unauthenticated callers; a short sleep between

@@ -21,6 +21,7 @@
 pub mod audio_fp;
 pub mod phash;
 pub mod radial;
+mod tables;
 
 pub use audio_fp::{
     fingerprint_audio, AUDIO_BANDS, AUDIO_FRAME, AUDIO_F_MAX, AUDIO_F_MIN, AUDIO_HOP,

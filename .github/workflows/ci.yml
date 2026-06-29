@@ -64,6 +64,7 @@ jobs:
       duckdb_extensions: ${{ steps.filter.outputs.duckdb_extensions }}
       native: ${{ steps.filter.outputs.native }}
       goldencheck_native: ${{ steps.filter.outputs.goldencheck_native }}
+      goldenprofile_native: ${{ steps.filter.outputs.goldenprofile_native }}
       analysis_native: ${{ steps.filter.outputs.analysis_native }}
       native_flow: ${{ steps.filter.outputs.native_flow }}
       goldenembed: ${{ steps.filter.outputs.goldenembed }}
@@ -78,6 +79,9 @@ jobs:
       throughput: ${{ steps.filter.outputs.throughput }}
       autoconfig_wasm: ${{ steps.filter.outputs.autoconfig_wasm }}
       suggest_wasm: ${{ steps.filter.outputs.suggest_wasm }}
+      perceptual_wasm: ${{ steps.filter.outputs.perceptual_wasm }}
+      goldenprofile_wasm: ${{ steps.filter.outputs.goldenprofile_wasm }}
+      goldengraph_wasm: ${{ steps.filter.outputs.goldengraph_wasm }}
       quality_gate: ${{ steps.filter.outputs.quality_gate }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
@@ -205,6 +209,38 @@ jobs:
               - 'packages/typescript/goldenmatch/scripts/build_suggest_wasm.mjs'
               - 'packages/typescript/goldenmatch/src/core/suggest*.ts'
               - 'packages/typescript/goldenmatch/src/core/_wasm/suggestWasm*'
+            perceptual_wasm:
+              # Gates the perceptual image-pHash wasm rebuild + drift guard inside
+              # the typescript lane. Fires on the kernel (DCT table lives here), the
+              # wasm wrapper, the build script, or the TS perceptual surface.
+              - 'packages/rust/extensions/perceptual-core/**'
+              - 'packages/rust/extensions/perceptual-wasm/**'
+              - 'packages/typescript/goldenmatch/scripts/build_perceptual_wasm.mjs'
+              - 'packages/typescript/goldenmatch/src/core/perceptualWasm.ts'
+              - 'packages/typescript/goldenmatch/src/core/_wasm/perceptualWasm*'
+              - 'packages/typescript/goldenmatch/tests/parity/fixtures/perceptual/**'
+            goldenprofile_wasm:
+              # Gates the (rust-toolchain-heavy) goldenprofile (Virtual
+              # Fingerprint) wasm rebuild + drift guard inside the typescript
+              # lane. Fires when the kernel, the wasm wrapper, the build script,
+              # or the TS goldenprofile surface changes. graph-core is included
+              # because goldenprofile-core links it (the arrow-gating feature).
+              - 'packages/rust/extensions/goldenprofile-core/**'
+              - 'packages/rust/extensions/goldenprofile-wasm/**'
+              - 'packages/rust/extensions/graph-core/**'
+              - 'packages/rust/extensions/score-core/**'
+              - 'packages/rust/extensions/sketch-core/**'
+              - 'packages/rust/extensions/fingerprint-core/**'
+              - 'packages/typescript/goldenprofile/**'
+            goldengraph_wasm:
+              # Gates the goldengraph (KG engine) wasm rebuild + drift guard
+              # inside the typescript lane. graph-core/score-core are included
+              # because goldengraph-core links them.
+              - 'packages/rust/extensions/goldengraph-core/**'
+              - 'packages/rust/extensions/goldengraph-wasm/**'
+              - 'packages/rust/extensions/graph-core/**'
+              - 'packages/rust/extensions/score-core/**'
+              - 'packages/typescript/goldengraph/**'
             web:
               - 'packages/python/goldenmatch/web/**'
               - 'packages/python/goldenmatch/goldenmatch/web/**'
@@ -307,6 +343,20 @@ jobs:
               # them must re-run the native suggest e2e (parity + cost short-circuit).
               - 'packages/python/goldenmatch/goldenmatch/core/suggest/**'
               - 'packages/python/goldenmatch/tests/test_healer_default_e2e_native.py'
+            goldenprofile_native:
+              # Builds the goldenprofile_native maturin wheel and runs the
+              # Python<->WASM cross-parity test (which SKIPS without the wheel) —
+              # so the goldenprofile kernel's Python boundary is actually tested
+              # in CI (issue #1304). The fixtures are authored from the host
+              # kernel, so this closes the Python == WASM loop.
+              - 'packages/rust/extensions/goldenprofile-native/**'
+              - 'packages/rust/extensions/goldenprofile-core/**'
+              - 'packages/rust/extensions/graph-core/**'
+              - 'packages/rust/extensions/score-core/**'
+              - 'packages/rust/extensions/sketch-core/**'
+              - 'packages/rust/extensions/fingerprint-core/**'
+              - 'packages/python/goldengraph/tests/test_goldenprofile_wasm_crossparity.py'
+              - 'packages/typescript/goldenprofile/tests/parity/fixtures/goldenprofile/**'
             goldencheck_native:
               # GoldenCheck's native acceleration ext (PyO3), a standalone
               # workspace like goldenmatch's `native`. Builds the .so and runs the
@@ -1121,6 +1171,56 @@ jobs:
             exit 1
           fi
           npx vitest run tests/parity/suggest-wasm.parity.test.ts
+      # Perceptual image-pHash wasm. Rebuild the inlined wasm from the live kernel
+      # (DCT table) and run the BYTE-EXACT parity test (committed wasm vs the
+      # Python golden image vectors). No fixture-regen-diff: the perceptual fixture
+      # is Python-owned (regenerated by the Python kernel, not a TS step); a stale
+      # committed wasm or a kernel change is caught behaviorally by the parity test.
+      - name: Rebuild + verify embedded perceptual wasm
+        if: needs.changes.outputs.perceptual_wasm == 'true' || needs.changes.outputs.force_all == 'true'
+        working-directory: packages/typescript/goldenmatch
+        run: |
+          rustup target add wasm32-unknown-unknown
+          curl -sSf https://rustwasm.github.io/wasm-pack/installer/init.sh | sh
+          node scripts/build_perceptual_wasm.mjs
+          npx vitest run tests/parity/perceptual-wasm.parity.test.ts
+      # Same drift-guard pattern for the goldenprofile (Virtual Fingerprint)
+      # wasm core. Rebuild the inlined wasm + bindings + parity fixtures from the
+      # live kernel, then prove the fresh build passes parity. The build script
+      # regenerates the fixtures itself (cargo run --example gen_parity_fixtures,
+      # which IS the host oracle), so we diff the fixtures to catch "kernel moved
+      # but fixtures not regenerated". We diff ONLY the fixtures — NOT the
+      # .wasm/.js bytes (toolchain-variant, would false-positive). Stale committed
+      # wasm is caught behaviorally by the parity test (committed wasm vs fixtures).
+      - name: Rebuild + verify embedded goldenprofile wasm
+        if: needs.changes.outputs.goldenprofile_wasm == 'true' || needs.changes.outputs.force_all == 'true'
+        working-directory: packages/typescript/goldenprofile
+        run: |
+          rustup target add wasm32-unknown-unknown
+          curl -sSf https://rustwasm.github.io/wasm-pack/installer/init.sh | sh
+          node scripts/build_goldenprofile_wasm.mjs
+          if ! git diff --exit-code -- tests/parity/fixtures/goldenprofile/; then
+            echo "::error::goldenprofile parity fixtures are stale. Run \
+              'node scripts/build_goldenprofile_wasm.mjs' in \
+              packages/typescript/goldenprofile and commit the result." >&2
+            exit 1
+          fi
+          npx vitest run tests/parity/goldenprofile-wasm.parity.test.ts
+      # Same drift-guard pattern for the goldengraph (KG engine) wasm core.
+      - name: Rebuild + verify embedded goldengraph wasm
+        if: needs.changes.outputs.goldengraph_wasm == 'true' || needs.changes.outputs.force_all == 'true'
+        working-directory: packages/typescript/goldengraph
+        run: |
+          rustup target add wasm32-unknown-unknown
+          curl -sSf https://rustwasm.github.io/wasm-pack/installer/init.sh | sh
+          node scripts/build_goldengraph_wasm.mjs
+          if ! git diff --exit-code -- tests/parity/fixtures/goldengraph/; then
+            echo "::error::goldengraph parity fixtures are stale. Run \
+              'node scripts/build_goldengraph_wasm.mjs' in \
+              packages/typescript/goldengraph and commit the result." >&2
+            exit 1
+          fi
+          npx vitest run tests/parity/goldengraph-wasm.parity.test.ts
       - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
         with:
           path: .turbo
@@ -1489,6 +1589,36 @@ jobs:
   # this lane the goldencheck kernels would be UNTESTED in CI. Parity asserts the
   # native path matches pure-Python (Benford byte-identical; composite-key/FD
   # integer-exact), incl. a GOLDENCHECK_NATIVE=1 required-mode run.
+  goldenprofile_native:
+    needs: changes
+    if: needs.changes.outputs.goldenprofile_native == 'true' || needs.changes.outputs.force_all == 'true'
+    # Builds the standalone goldenprofile_native maturin wheel (abi3) and runs
+    # the Python<->WASM cross-parity test un-skipped (issue #1304). The wheel is
+    # its own [workspace] (not a uv member), so build it directly with maturin.
+    # The fixtures are authored from the host kernel, so this closes the loop:
+    # Python (native wheel) == the fixtures == WASM (the TS parity lane).
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/goldenprofile-native
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: test (goldenprofile-core, pyo3-free kernel)
+        working-directory: packages/rust/extensions/goldenprofile-core
+        run: cargo test
+      - name: Build + install the goldenprofile_native wheel (maturin, abi3)
+        run: |
+          pip install maturin pytest
+          maturin build -m packages/rust/extensions/goldenprofile-native/Cargo.toml --release --out dist
+          pip install dist/goldenprofile_native*.whl
+      - name: Python <-> WASM cross-parity (wheel present -> runs, not skips) [THE GATE]
+        run: pytest packages/python/goldengraph/tests/test_goldenprofile_wasm_crossparity.py -v
+
   goldencheck_native:
     needs: changes
     if: needs.changes.outputs.goldencheck_native == 'true' || needs.changes.outputs.force_all == 'true'
@@ -2485,6 +2615,7 @@ jobs:
       - duckdb_extensions
       - native
       - goldencheck_native
+      - goldenprofile_native
       - native_wheel
       - goldenembed
       - embed_wheel

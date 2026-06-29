@@ -1,0 +1,67 @@
+{
+  "name": "goldenprofile",
+  "version": "0.1.0",
+  "description": "GoldenProfile Virtual Fingerprint engine — cross-document entity resolution. Edge-safe TypeScript surface over the same pyo3-free Rust kernel as the Python/C bindings, via opt-in WebAssembly.",
+  "keywords": [
+    "entity-resolution",
+    "deduplication",
+    "record-linkage",
+    "virtual-fingerprint",
+    "wasm",
+    "goldenprofile",
+    "goldengraph",
+    "edge"
+  ],
+  "license": "MIT",
+  "author": "Ben Severn (https://bensevern.dev)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/benseverndev-oss/goldenmatch.git",
+    "directory": "packages/typescript/goldenprofile"
+  },
+  "homepage": "https://github.com/benseverndev-oss/goldenmatch/tree/main/packages/typescript/goldenprofile",
+  "bugs": {
+    "url": "https://github.com/benseverndev-oss/goldenmatch/issues"
+  },
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./wasm": {
+      "types": "./dist/core/goldenprofileWasm.d.ts",
+      "import": "./dist/core/goldenprofileWasm.js",
+      "require": "./dist/core/goldenprofileWasm.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit",
+    "build:wasm": "node scripts/build_goldenprofile_wasm.mjs",
+    "clean": "rimraf dist"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.4",
+    "rimraf": "^6.1.3",
+    "tsup": "^8.5.1",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.9"
+  }
+}

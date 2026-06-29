@@ -163,3 +163,69 @@ class TestMatchEngineRunFull:
         engine = MatchEngine([sample_csv])
         result = engine.run_full(exact_email_config)
         assert result.stats.total_records == 5
+
+
+class TestEngineDomainExtraction:
+    """Regression for #1300.
+
+    ``MatchEngine._run_pipeline`` must materialize domain-derived columns (e.g.
+    ``__title_key__``) that the config references from a matchkey, the same way
+    ``core.pipeline._run_dedupe_pipeline`` does. Without the domain-extraction
+    step, any MatchEngine run on a bibliographic/product config -- including the
+    healer's ``review_config(verify=True)`` baseline + per-candidate re-runs --
+    crashed with ``ColumnNotFoundError: __title_key__``.
+    """
+
+    @staticmethod
+    def _biblio_config(tmp_path):
+        from goldenmatch.config.schemas import DomainConfig
+
+        return GoldenMatchConfig(
+            domain=DomainConfig(enabled=True, mode="bibliographic", llm_validation=False),
+            matchkeys=[
+                MatchkeyConfig(
+                    name="title_key",
+                    fields=[MatchkeyField(column="__title_key__")],
+                    comparison="exact",
+                )
+            ],
+            output=OutputConfig(format="csv", directory=str(tmp_path), run_name="biblio"),
+            golden_rules=GoldenRulesConfig(
+                default=GoldenFieldRule(strategy="most_complete"),
+            ),
+        )
+
+    @staticmethod
+    def _biblio_df():
+        return pl.DataFrame(
+            {
+                "title": [
+                    "A Survey of Entity Resolution",
+                    "A Survey of Entity Resolution",
+                    "Deep Learning for Record Linkage",
+                    "Scalable Blocking Techniques",
+                ],
+                "authors": ["Smith, J", "J. Smith", "Lee, K", "Brown, A"],
+                "venue": ["VLDB", "VLDB", "SIGMOD", "ICDE"],
+                "year": ["2020", "2020", "2021", "2019"],
+            }
+        )
+
+    def test_run_pipeline_materializes_domain_derived_matchkey_column(self, tmp_path):
+        from goldenmatch.tui.engine import MatchEngine
+
+        # _run_pipeline expects __row_id__ on the frame (callers add it upstream;
+        # the healer does df.with_row_index("__row_id__") before calling in).
+        df = self._biblio_df().with_row_index("__row_id__").with_columns(
+            pl.col("__row_id__").cast(pl.Int64)
+        )
+        config = self._biblio_config(tmp_path)
+        engine = MatchEngine.from_dataframe(df)
+
+        # Pre-fix this raised ColumnNotFoundError("__title_key__") because the
+        # domain-extraction step that creates __title_key__ never ran.
+        result = engine._run_pipeline(df, config)
+
+        assert result is not None
+        # The two identical-title rows share a __title_key__ -> exact match.
+        assert result.clusters, "expected the duplicate-title rows to cluster"

@@ -237,3 +237,63 @@ def test_apply_unknown_op_raises():
 
     with pytest.raises(ValueError, match="bogus"):
         apply_suggestion(config, suggestion)
+
+
+# ── drop_matchkey (#1299) ───────────────────────────────────────────────────────
+
+def _two_matchkey_config() -> GoldenMatchConfig:
+    """Weighted matchkey + an exact matchkey on a derived key (the #1299 shape)."""
+    return GoldenMatchConfig(
+        matchkeys=[
+            MatchkeyConfig(
+                name="fuzzy_match",
+                type="weighted",
+                threshold=0.70,
+                fields=[MatchkeyField(field="title", scorer="token_sort", weight=1.0)],
+            ),
+            MatchkeyConfig(
+                name="title_key",
+                comparison="exact",
+                fields=[MatchkeyField(field="__title_key__")],
+            ),
+        ],
+        blocking=BlockingConfig(
+            strategy="static",
+            keys=[BlockingKeyConfig(fields=["title"])],
+        ),
+    )
+
+
+def test_apply_drop_matchkey_removes_named_matchkey():
+    config = _two_matchkey_config()
+    suggestion = _mk_suggestion({"op": "drop_matchkey", "matchkey": "title_key"})
+
+    new_config = apply_suggestion(config, suggestion)
+
+    names = [mk.name for mk in new_config.get_matchkeys()]
+    assert names == ["fuzzy_match"], "the exact derived-key matchkey should be dropped"
+
+
+def test_apply_drop_matchkey_leaves_original_unchanged():
+    config = _two_matchkey_config()
+    suggestion = _mk_suggestion({"op": "drop_matchkey", "matchkey": "title_key"})
+
+    apply_suggestion(config, suggestion)
+
+    assert [mk.name for mk in config.get_matchkeys()] == ["fuzzy_match", "title_key"]
+
+
+def test_apply_drop_matchkey_unknown_raises():
+    config = _two_matchkey_config()
+    suggestion = _mk_suggestion({"op": "drop_matchkey", "matchkey": "nope"})
+
+    with pytest.raises(ValueError, match="nope"):
+        apply_suggestion(config, suggestion)
+
+
+def test_apply_drop_matchkey_refuses_last_matchkey():
+    config = _build_weighted_config(mk_name="only")
+    suggestion = _mk_suggestion({"op": "drop_matchkey", "matchkey": "only"})
+
+    with pytest.raises(ValueError, match="only matchkey"):
+        apply_suggestion(config, suggestion)

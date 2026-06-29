@@ -1,13 +1,15 @@
 <!-- mcp-name: io.github.benseverndev-oss/goldenmatch -->
 <div align="center">
 
-# 🟡 Golden Suite
+# Golden Suite
 
-**A polyglot data-quality and entity-resolution toolkit. Polished, opinionated, AI-native.**
+**Zero-config entity resolution that scales — dedupe & match messy records from a laptop CSV to 100M+ rows. No training data, no tuning.**
 
-*GoldenCheck profiles → GoldenFlow standardizes → GoldenMatch deduplicates → GoldenAnalysis reports, all orchestrated by GoldenPipe. With InferMap for schema mapping, a Rust extension layer for Postgres / DuckDB, and optional WebAssembly acceleration behind the edge-safe TypeScript ports.*
+*The headline package, **GoldenMatch**, does the matching — fuzzy + exact + probabilistic (Fellegi-Sunter) + LLM — and **beats hand-tuned Splink out of the box** (96.4% F1 on DBLP-ACM), identical in Python, edge-safe TypeScript, and SQL. Around it sits a full data-quality suite: GoldenCheck profiles, GoldenFlow standardizes, GoldenAnalysis reports, GoldenPipe orchestrates, and InferMap maps schemas — with a Rust extension layer for Postgres / DuckDB and optional WebAssembly acceleration behind the TS ports.*
 
-**⚡ GoldenMatch scales from a CSV on your laptop to 100M+ rows on a Ray cluster — verified: 100,000,000 records deduped recall-complete (correct across any partitioning) in 9.2 min, with a 0.36 GB driver footprint.**
+**Made for GraphRAG, too** — entity resolution is the stage knowledge-graph pipelines do *worst* (the same entity scatters across documents as duplicate surface forms). GoldenMatch drops into **neo4j-graphrag / LlamaIndex / Graphiti** as the resolution stage ([`goldenmatch-kg`](packages/python/goldenmatch-kg/README.md)), or builds a knowledge graph straight from text with that resolution at its core ([`goldengraph`](packages/python/goldengraph/README.md)). Both in early access. [→ Knowledge graphs](#knowledge-graphs)
+
+**Verified at scale: 100,000,000 records deduped in 9.2 min on a Ray cluster — recall-complete across any partitioning, 0.36 GB driver footprint.**
 
 <br>
 
@@ -54,11 +56,11 @@ npm install goldenmatch
 ```
 
 <!-- README-callouts:start  (auto-synced from packages/python/goldenmatch/CHANGELOG.md by scripts/sync_readme_callouts.py — edit the CHANGELOG, not this block) -->
-> **🆕 v2.3.0 — Auto-enabled semantic blocking, now default-on** — text-heavy data automatically routes to SimHash-over-embeddings blocking when an embedder is reachable (a byte-identical no-op otherwise). Plus pluggable pgvector / DuckDB-HNSW vector-index backends and opt-in Fellegi-Sunter routing for no-strong-identifier datasets (`GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC=1`).
+> **v2.4.0 — The healing loop, now default-on across every surface** — every `dedupe_df` run surfaces ranked, self-verified config-suggestions on `result.suggestions` when there's headroom (free on a healthy run, no second pipeline pass). `dedupe_df(suggest=True)` returns verified suggestions; `heal=True` applies them and re-runs, returning the healed `result.config` + `result.heal_trail`. Available across Python, CLI (`--suggest` / `--heal`), MCP, A2A, REST, web, the TUI, and the edge-safe TypeScript port via WebAssembly. Needs `goldenmatch[native]`; degrades gracefully without it. Kill-switch `GOLDENMATCH_SUGGEST_ON_DEDUPE=0`.
+>
+> **v2.3.0 — Auto-enabled semantic blocking, now default-on** — text-heavy data automatically routes to SimHash-over-embeddings blocking when an embedder is reachable (a byte-identical no-op otherwise). Plus pluggable pgvector / DuckDB-HNSW vector-index backends and opt-in Fellegi-Sunter routing for no-strong-identifier datasets (`GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC=1`).
 >
 > **v2.2.0 — Semantic blocking** — an opt-in recall lever for abbreviations and aliases. `dedupe_df(semantic_blocking=...)` unions extra candidate sources (initialism/abbreviation blocking, a business-alias canonical-form table, and an embedding ANN pass) into the pipeline. Off by default; on the abbreviation-heavy benchmark it adds **+5.3pp recall at zero precision cost**.
->
-> **v2.1.0 — Correlated survivorship** — golden-record survivorship can now keep correlated fields (street/city/postcode) in lock-step from a single winning source instead of mixing best-per-field values across records. New `FieldGroupSpec` + `DomainPack.groups` (domain-pack schema v3, additive), an `anchor`/`allow_fill` group-winner strategy, and per-cluster provenance surfaced through lineage, `explain`, the MCP tools, and the review queue. Plus chunked PPRL linkage (peak memory ~9-14x lower, byte-identical) and `result.native` dispatch telemetry that flags a silently-slow Python fallback.
 <!-- README-callouts:end -->
 
 ---
@@ -128,7 +130,7 @@ Zero-config gets you most of the way in one pass; the healing loop closes the ga
 
 | Package | Lang | What it does | Install |
 |---|---|---|---|
-| **[GoldenMatch](packages/python/goldenmatch/README.md)** 🟡 | Python · TS | Zero-config entity resolution. Fuzzy + exact + probabilistic + LLM. Headline package. | `pip install goldenmatch` · `npm i goldenmatch` |
+| **[GoldenMatch](packages/python/goldenmatch/README.md)** | Python · TS | Zero-config entity resolution. Fuzzy + exact + probabilistic + LLM. Headline package. | `pip install goldenmatch` · `npm i goldenmatch` |
 | **[GoldenCheck](packages/python/goldencheck/README.md)** | Python · TS | Data-quality scanning: encoding, Unicode, format validation, anomaly detection. | `pip install goldencheck` · `npm i goldencheck` |
 | **[GoldenFlow](packages/python/goldenflow/README.md)** | Python · TS | Transforms & standardizers: phone, date, address, categorical normalization. | `pip install goldenflow` · `npm i goldenflow` |
 | **[GoldenPipe](packages/python/goldenpipe/README.md)** | Python · TS | Orchestrator that wires Check → Flow → Match → Identity → Analysis into one declarative pipeline. | `pip install goldenpipe` · `npm i goldenpipe` |
@@ -244,9 +246,9 @@ result.report.write_html("report.html")
 
 Reproducible end-to-end pipelines running GoldenMatch on public data at scale, each with measured headline numbers vs baselines:
 
-- 🕵️ **[goldenmatch-shell-company-network](https://github.com/benseverndev-oss/goldenmatch-shell-company-network)** — investigative ER across ICIJ Offshore Leaks + OpenSanctions + GLEIF + UK PSC + UK disqualified-directors. Confidence-weighted graph, structure mining, named investigative candidates. **−62.5% analyst-hours to triage** vs single-source baselines; +133% adversarial perturbation recovery.
-- 🛡️ **[goldenmatch-vuln-attribution](https://github.com/benseverndev-oss/goldenmatch-vuln-attribution)** — cross-database ER on 6.1M OSS vulnerability records across 40 sources (OSV, GHSA, PyPA, RustSec, Go vulndb, EPSS, CISA KEV, CVE Project bulk). **6,126,895 records → 847,475 canonical vulns** in ~5 minutes end-to-end on a single 64GB runner via the full Golden Suite (Check + Flow + Match + Pipe).
-- ⚖️ **[goldenmatch-sanctions-reconciliation](https://github.com/benseverndev-oss/goldenmatch-sanctions-reconciliation)** — cross-list coverage analysis on 85 public sanctions lists across 50+ jurisdictions via OpenSanctions, plus 10-year OFAC SDN history and PEP/crypto cross-analysis. Coverage-gap benchmark for any sanctions-screening vendor.
+- **[goldenmatch-shell-company-network](https://github.com/benseverndev-oss/goldenmatch-shell-company-network)** — investigative ER across ICIJ Offshore Leaks + OpenSanctions + GLEIF + UK PSC + UK disqualified-directors. Confidence-weighted graph, structure mining, named investigative candidates. **−62.5% analyst-hours to triage** vs single-source baselines; +133% adversarial perturbation recovery.
+- **[goldenmatch-vuln-attribution](https://github.com/benseverndev-oss/goldenmatch-vuln-attribution)** — cross-database ER on 6.1M OSS vulnerability records across 40 sources (OSV, GHSA, PyPA, RustSec, Go vulndb, EPSS, CISA KEV, CVE Project bulk). **6,126,895 records → 847,475 canonical vulns** in ~5 minutes end-to-end on a single 64GB runner via the full Golden Suite (Check + Flow + Match + Pipe).
+- **[goldenmatch-sanctions-reconciliation](https://github.com/benseverndev-oss/goldenmatch-sanctions-reconciliation)** — cross-list coverage analysis on 85 public sanctions lists across 50+ jurisdictions via OpenSanctions, plus 10-year OFAC SDN history and PEP/crypto cross-analysis. Coverage-gap benchmark for any sanctions-screening vendor.
 
 ---
 

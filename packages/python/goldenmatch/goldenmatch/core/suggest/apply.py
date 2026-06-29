@@ -11,6 +11,10 @@ Supported patch ops (matching the Rust kernel's serde snake_case tag):
     {"op": "set_scorer", "matchkey": "<name>", "field": "<field>", "scorer": "<scorer>"}
         Set the scorer of a named field within a named matchkey.
 
+    {"op": "drop_matchkey", "matchkey": "<name>"}
+        Remove the named matchkey (an over-broad exact matchkey on a derived
+        key that is collapsing precision). Refuses to drop the last matchkey.
+
     {"op": "add_negative_evidence", "field": "<field>"}
         Add a NegativeEvidenceField to the first weighted matchkey.
         If the field is already present, the list is left unchanged (idempotent).
@@ -75,6 +79,8 @@ def apply_suggestion(
         _apply_set_scorer(new_config, patch)
     elif op == "add_negative_evidence":
         _apply_add_negative_evidence(new_config, patch)
+    elif op == "drop_matchkey":
+        _apply_drop_matchkey(new_config, patch)
     else:
         raise ValueError(f"unknown patch op: {op!r}")
 
@@ -110,6 +116,34 @@ def _apply_set_scorer(config: GoldenMatchConfig, patch: dict) -> None:
         f"patch references field {field_name!r} in matchkey {mk.name!r} "
         f"which does not exist (available: {[f.field for f in mk.fields]})"
     )
+
+
+def _apply_drop_matchkey(config: GoldenMatchConfig, patch: dict) -> None:
+    """Remove the named matchkey from the config.
+
+    Matchkeys live either at ``config.matchkeys`` (top-level) or at
+    ``config.match_settings.matchkeys``; remove from whichever list holds the
+    name. Refuses to drop the last remaining matchkey (a config with no
+    matchkeys produces no pairs) -- the kernel only emits this op when >= 2
+    matchkeys exist, so this guard is defensive.
+    """
+    name = patch["matchkey"]
+    # _find_matchkey raises ValueError if the name is absent.
+    _find_matchkey(config, name)
+
+    if len(config.get_matchkeys()) <= 1:
+        raise ValueError(
+            f"refusing to drop matchkey {name!r}: it is the only matchkey "
+            "(dropping it would leave the config with no matchkeys)"
+        )
+
+    for holder in (config, getattr(config, "match_settings", None)):
+        mks = getattr(holder, "matchkeys", None)
+        if mks:
+            kept = [mk for mk in mks if mk.name != name]
+            if len(kept) != len(mks):
+                holder.matchkeys = kept
+                return
 
 
 def _apply_add_negative_evidence(config: GoldenMatchConfig, patch: dict) -> None:
