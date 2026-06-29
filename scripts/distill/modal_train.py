@@ -154,7 +154,7 @@ def _eval_heldout(model, tok, heldout: list[dict]) -> dict:
             tokenize=False, add_generation_prompt=True,
         )
         ids = tok(prompt, return_tensors="pt").to(model.device)
-        with torch.no_grad():
+        with torch.no_grad(), torch.autocast(device_type="cuda", dtype=torch.bfloat16):
             out = model.generate(**ids, max_new_tokens=256, do_sample=False,
                                  pad_token_id=tok.eos_token_id)
         text = tok.decode(out[0][ids["input_ids"].shape[1]:], skip_special_tokens=True)
@@ -247,24 +247,36 @@ def _train_lora(base_model: str, epochs: int) -> dict:
     )
     trainer.train()
 
-    metrics = _eval_heldout(trainer.model, tok, heldout)
-    print("heldout metrics:", metrics, flush=True)
-
-    # merge adapter -> FP16 and persist for later GGUF/Ollama export.
+    # Persist the trained ASSET first (the valuable output), THEN self-eval -- so an eval hiccup never
+    # loses the model. merge_and_unload dequantizes the 4-bit base to bf16 for clean generation/serving.
     merged = trainer.model.merge_and_unload()
     merged.save_pretrained(f"{out_dir}/merged", safe_serialization=True)
     tok.save_pretrained(f"{out_dir}/merged")
     manifest = {"student": "lora", "base_model": base_model, "artifact": f"{out_dir}/merged",
-                "metrics": metrics}
-    # persist the manifest so a DETACHED/spawned run survives local-CLI death (pull with volume get).
-    import json as _json
-    import os as _os
+                "metrics": None}
+    _write_manifest(manifest)  # asset-safe checkpoint: manifest points at the saved model
+    vol.commit()
 
-    _os.makedirs(f"{DATA_DIR}/out", exist_ok=True)
-    with open(f"{DATA_DIR}/out/manifest.json", "w", encoding="utf-8") as _f:
-        _json.dump(manifest, _f)
+    # Heldout self-eval is non-fatal -- the served e2e is the real validation; a generation hiccup
+    # must not sink the trained model. Eval on the MERGED bf16 model (autocast inside _eval_heldout).
+    try:
+        manifest["metrics"] = _eval_heldout(merged, tok, heldout)
+        print("heldout metrics:", manifest["metrics"], flush=True)
+    except Exception as e:
+        manifest["eval_error"] = repr(e)
+        print("heldout eval failed (non-fatal):", repr(e), flush=True)
+    _write_manifest(manifest)
     vol.commit()
     return manifest
+
+
+def _write_manifest(manifest: dict) -> None:
+    import json
+    import os
+
+    os.makedirs(f"{DATA_DIR}/out", exist_ok=True)
+    with open(f"{DATA_DIR}/out/manifest.json", "w", encoding="utf-8") as f:
+        json.dump(manifest, f)
 
 
 @app.local_entrypoint()
