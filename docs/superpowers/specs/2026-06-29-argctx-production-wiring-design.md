@@ -49,10 +49,15 @@ Singleton-isolation is automatic: a predicate sharing no pairs stays its own clu
 ### 2. Co-occurrence corpus rendering — `engineered.py` (gated `GOLDENGRAPH_BENCH_COOCCUR=1`)
 
 Render the SAME edge `(subj, rel, dst)` in MULTIPLE docs — one per phrasing from `_REL_PHRASINGS[rel]`
-— so the same `(subj,obj)` pair appears with different predicate phrasings (co-occurrence). The edge
-graph and the sampled multi-hop questions are UNCHANGED (only more docs per edge); doc-ids get a
-phrasing-index suffix so `_edge_doc_id` stays unique. Default off; composes with `ambiguity` (stage 1
-uses ambiguity=0 so surfaces are canonical and pairs align without a resolution step).
+— so the same `(subj,obj)` pair appears with different predicate phrasings (co-occurrence).
+
+**Doc-id reconciliation (load-bearing).** The question generator records gold support as the BASE
+`_edge_doc_id(cur, rel, nxt)` (`engineered.py:161`), so doc-ids cannot be blindly suffixed or every
+`gold_supporting_fact_ids` entry dangles. Rule: **phrasing index 0 keeps the unsuffixed base
+`_edge_doc_id`; only the ADDITIONAL phrasings get a `::<i>` suffix.** Then the base doc still exists, the
+sampled multi-hop questions (text, gold_answer, `gold_supporting_fact_ids`) are **byte-identical** to
+the non-co-occurrence corpus, and the only change is extra docs. Default off; composes with `ambiguity`
+(stage 1 uses ambiguity=0 so surfaces are canonical and pairs align without a resolution step).
 
 ### 3. No change to `canonicalize_extraction` / the walk
 
@@ -77,9 +82,12 @@ real finding, diagnosed via the schema dump (the existing `[schema-discover]` lo
 
 **Unit tests (wheel-free, deterministic).** `_cluster_predicates_argctx` over a small synthetic
 `by_phrase` (two phrasings sharing pairs merge; a distinct-pair predicate stays apart; a no-pair
-spurious predicate stays a singleton). The co-occurrence renderer: the same edge yields multiple docs
-with distinct phrasings + unique doc-ids, and the edge graph/questions are unchanged vs the
-non-co-occurrence corpus.
+spurious predicate stays a singleton); it uses `schema_discovery._norm` (already imported) for surface
+normalization. The co-occurrence renderer (assert the exact invariants, not a vague "unchanged"): the
+document SET is a strict SUPERSET of the non-co-occurrence corpus's; doc-ids are unique; and the
+generated question objects (`text`, `gold_answer`, `gold_supporting_fact_ids`) are **byte-identical** to
+the non-co-occurrence corpus at the same seed (proving phrasing-0-keeps-base-id resolved the dangling
+references).
 
 ## Error handling
 
