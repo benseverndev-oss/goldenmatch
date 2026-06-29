@@ -773,8 +773,10 @@ def ingest_corpus(
     embedder=None,
     fp_index: dict[str, str] | None = None,
     max_workers: int | None = None,
-) -> None:
-    """Build the KG from an ordered list of document texts.
+):
+    """Build the KG from an ordered list of document texts. Returns the discovered `RelationSchema`
+    when `GOLDENGRAPH_SCHEMA_DISCOVER=1` (so the caller can canonicalize QUERY relations through the
+    SAME schema the edges were canonicalized with -- the query-side alignment), else None.
 
     The per-doc LLM work (extraction + fingerprint synthesis) is the build's
     dominant cost and is store-independent, so it runs CONCURRENTLY across docs
@@ -823,6 +825,7 @@ def ingest_corpus(
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
             return list(ex.map(_prep, docs))  # map preserves input order
 
+    discovered_schema = None
     if _schema_discover_enabled():
         # One-pass schema discovery: prepare all docs (open extraction, per-doc canonicalize already
         # skipped in `_prepare_doc`), discover the schema over the whole corpus, canonicalize each
@@ -845,6 +848,7 @@ def ingest_corpus(
                     print(f"[schema-discover]   {_r}: fwd={sorted(schema.forward[_r])[:6]} "
                           f"rev={sorted(schema.reverse[_r])[:6]}", flush=True)
             prepared = [(canonicalize_extraction(p[0], schema), p[1], p[2]) for p in prepared]
+            discovered_schema = schema  # return it so the query side can canonicalize too
         except Exception as e:  # noqa: BLE001 -- discovery is best-effort
             print(f"[schema-discover] failed ({e!r}); committing open extractions", flush=True)
         for i, p in enumerate(prepared):
@@ -862,3 +866,4 @@ def ingest_corpus(
 
     if timers is not None:
         print(timers.report(wall=time.perf_counter() - t_wall, n_docs=len(docs)), flush=True)
+    return discovered_schema

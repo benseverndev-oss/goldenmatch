@@ -213,10 +213,10 @@ class GoldenGraphQAEngine:
         # synthesis -- the build's dominant, network-bound cost) across documents,
         # committing to the store serially in document order (identical result). The
         # shared caching embedder (self._embedder) embeds each entity text once.
-        ingest_corpus(
+        query_schema = ingest_corpus(
             [doc.text for doc in corpus.documents], store, llm=self._llm,
             resolver=self._resolver, embedder=self._embedder, fp_index=fp_index,
-        )
+        )  # the discovered RelationSchema (or None) -> canonicalize QUERY relations through it too
         # Hybrid mode also indexes the raw paragraphs for answer-time passage
         # retrieval. Built with a SEPARATE OpenAI embedder (text-embedding-3-large,
         # matching goldenmatch_rag/text_rag) so the passage half is identical to the
@@ -237,6 +237,7 @@ class GoldenGraphQAEngine:
             )
         handle = {
             "store": store, "valid_t": _AS_OF, "tx_t": _AS_OF, "passages": passages,
+            "query_schema": query_schema,
         }
         return BuildResult(
             handle=handle,
@@ -262,6 +263,7 @@ class GoldenGraphQAEngine:
             node_budget=self._node_budget,
             passages=handle.get("passages"),
             passage_k=self._passage_k,
+            query_schema=handle.get("query_schema"),
         )
         return AnswerResult(
             text=text,

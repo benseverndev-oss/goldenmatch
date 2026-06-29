@@ -140,6 +140,18 @@ def _slice_predicates(slice_graph) -> set[str]:
     return {e["predicate"] for e in slice_graph.query(ids, 1).get("edges", ())}
 
 
+def _canon_query_rel(rel, schema):
+    """Map a query relation to the discovered schema's canonical label, so it matches the canonicalized
+    edge predicates -- the QUERY side of schema discovery. When the schema relabels a synonym cluster
+    (e.g. {'located in','sits within'} -> 'sits_within'), the edges become 'sits_within' but the query
+    still says 'located in'; routing the query relation through the SAME schema realigns them. Surface
+    unchanged when there is no schema or no match."""
+    if not rel or schema is None:
+        return rel
+    m = schema.match(rel)
+    return m[0] if m is not None else rel
+
+
 def _hybrid_filter_mode() -> str:
     """Hybrid subgraph filter selector, read at call time. "" / "none" / unset =
     off (pass the full ball; the measured 0.420 control). "path" = path-preserving
@@ -190,6 +202,7 @@ def ask(
     passages: object | None = None,
     passage_k: int = 10,
     query_classifier: object | None = None,
+    query_schema: object | None = None,
 ) -> str:
     """Answer `query` against `store` as-of `(valid_t, tx_t)`.
 
@@ -210,6 +223,16 @@ def ask(
         profile = resolve_profile(
             query, predicates=_slice_predicates(slice_graph), llm_classifier=query_classifier
         )
+        # Query-side schema canonicalization: route the query's relation(s) through the discovered
+        # schema so they match the (relabeled) canonical edge predicates. Without this, a cluster
+        # relabeled to a non-canonical synonym strands every query that used the canonical word.
+        if query_schema is not None:
+            if profile.relation:
+                profile.relation = _canon_query_rel(profile.relation, query_schema)
+            if profile.relation_chain:
+                profile.relation_chain = tuple(
+                    _canon_query_rel(r, query_schema) for r in profile.relation_chain
+                )
         plan = plan_query(profile)
         if plan.mode == "aggregate" and profile.anchor_surface and profile.relation:
             return _format_aggregate(

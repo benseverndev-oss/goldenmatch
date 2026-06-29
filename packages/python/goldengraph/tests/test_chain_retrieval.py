@@ -104,3 +104,17 @@ def _reversed_edge_graph():
 def test_trace_chain_direction_tolerant_fallback():
     # Forward walk finds no outgoing 'authored' from Author; reversed fallback reaches Paper.
     assert trace_chain(_reversed_edge_graph(), "Author", ("authored",)) == "Paper"
+
+
+def test_canon_query_rel_maps_through_schema():
+    from goldengraph.answer import _canon_query_rel
+    from goldengraph.schema import RelationSchema
+
+    sch = RelationSchema(
+        relations=("sits_within",),
+        forward={"sits_within": frozenset({"located in", "sits within"})},
+        reverse={"sits_within": frozenset()},
+    )
+    assert _canon_query_rel("located in", sch) == "sits_within"  # query word -> cluster label
+    assert _canon_query_rel("unrelated", sch) == "unrelated"     # no match -> unchanged
+    assert _canon_query_rel("located in", None) == "located in"  # no schema -> unchanged
