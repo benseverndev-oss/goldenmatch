@@ -57,8 +57,7 @@ from __future__ import annotations
 import polars as pl
 import pytest
 
-from goldenmatch.core.autoconfig import build_blocking
-from goldenmatch.core.profile import profile_columns  # profiling entry point
+from goldenmatch.core.autoconfig import build_blocking, profile_columns
 from goldenmatch.refdata import surnames
 
 
@@ -75,6 +74,8 @@ def _null_sparse_person_df(n: int = 6000, seed: int = 1207) -> pl.DataFrame:
 
     rng = random.Random(seed)
     surnames._load()
+    if surnames._state is None:  # refdata file missing -> can't guarantee soundex spread
+        pytest.skip("surname refdata unavailable")
     last_pool = [s.title() for s in list(surnames._state.ranks.keys())[:400]]
     first_pool = ["John", "Jane", "Robert", "Mary", "Michael", "Linda",
                   "James", "Patricia", "David", "Jennifer", "William", "Susan"]
@@ -187,13 +188,14 @@ Expected: FAIL — `ImportError: cannot import name '_build_strong_identifier_un
 
 - [ ] **Step 3: Implement the helpers**
 
-In `autoconfig.py`, add near `_build_compound_blocking` (module level). The builder gates each standalone single-id pass on `_is_scale_safe` + a minimal non-null *population* floor (NOT the 0.6 null ceiling), and emits only if the union's OR-coverage clears the target. Adjust helper names to whatever is actually in scope (`_is_scale_safe`, `_classify_by_name`); these are referenced from inside `build_blocking` today so they exist.
+In `autoconfig.py`, add as a **module-level** function near `_build_compound_blocking`. It must be module-level (not a closure) because Task 2's unit tests import it directly. The builder gates each standalone single-id pass on a minimal non-null *population* floor (NOT the 0.6 null ceiling). It deliberately does **NOT** call `_is_scale_safe` — that helper is a nested closure inside `build_blocking` (captures `effective_n_full`/`sample_n`/`max_safe_block`) and is unreachable at module scope; the #715/#876 scale guard is re-applied at the call site in Task 3 via `_gate_passes(primary, union_cfg.passes)`, so an in-builder check would be redundant anyway. The only module-level helper the builder depends on is `_classify_by_name` (confirmed module-level at `:173`).
 
 ```python
 # Strong-identifier blocking-union (#1207). Coverage is restored by the OR
-# across passes, so a per-id pass is admitted on scale-safety + a minimal
-# non-null population floor (NOT a null ceiling) — that keeps high-null
-# phone/zip passes that each block only the rows that *have* that id.
+# across passes, so a per-id pass is admitted on a minimal non-null population
+# floor (NOT a null ceiling) — that keeps high-null phone/zip passes that each
+# block only the rows that *have* that id. Scale-safety is enforced by the
+# caller via _gate_passes, so it is NOT checked here.
 _BLOCKING_UNION_COVERAGE_TARGET = 0.95
 _UNION_PASS_MIN_NONNULL = 0.02  # a pass must block more than a trivial handful
 
@@ -235,12 +237,11 @@ def _build_strong_identifier_union(
 
     candidate_passes: list[list[str]] = []
 
-    # one pass per strong-identifier field, scale-safe + above the population floor
+    # one pass per strong-identifier field, above the non-null population floor.
+    # No scale-safety check here — _gate_passes at the call site enforces #715.
     for p in profiles:
         if p.col_type in _STRONG_ID_TYPES and p.name in df.columns:
             if _nonnull(p.name) < _UNION_PASS_MIN_NONNULL:
-                continue
-            if not _is_scale_safe([p.name]):
                 continue
             candidate_passes.append([p.name])
 
@@ -275,7 +276,7 @@ def _build_strong_identifier_union(
     )
 ```
 
-NOTE for the implementer: if `_is_scale_safe` / `_classify_by_name` are nested INSIDE `build_blocking` (not module-level), either (a) lift the small ones to module level, or (b) define `_build_strong_identifier_union` as a closure inside `build_blocking` at the insertion point. Prefer (b) if lifting would touch unrelated code — keep the diff minimal. Verify by reading the actual definitions before implementing.
+NOTE for the implementer: keep `_build_strong_identifier_union` module-level (Task 2 imports it directly). `_classify_by_name` is already module-level (`:173`) so it's callable. Do not reference `_is_scale_safe`/`_gate_passes`/`_projected_block` from inside the builder — they are closures local to `build_blocking`; the scale guard is applied at the Task 3 call site instead.
 
 - [ ] **Step 4: Run the union unit tests**
 
