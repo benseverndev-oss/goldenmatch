@@ -165,3 +165,46 @@ def test_discovery_flow_canonicalizes_corpus_edges():
         for c in canon
     ]
     assert got == [("A", "acquired", "B"), ("D", "acquired", "C")]
+
+
+def test_ingest_corpus_discovery_flow_commits_canonical_edges(monkeypatch):
+    """End-to-end through ingest_corpus: with GOLDENGRAPH_SCHEMA_DISCOVER=1 a passive-phrased edge
+    is committed in canonical direction. Stub extractor + identity resolver + capturing store."""
+    import json
+    import sys
+
+    import goldengraph.ingest  # noqa: F401 -- ensure the submodule is in sys.modules
+    from goldengraph.resolve import ResolvedEntity
+
+    ing = sys.modules["goldengraph.ingest"]  # the MODULE (the package re-exports the `ingest` fn)
+
+    docs = ["A acquired B.", "C was acquired by D."]
+    by_text = {
+        "A acquired B.": _ext(["A", "B"], [(0, "acquired", 1)]),
+        "C was acquired by D.": _ext(["C", "D"], [(0, "was acquired by", 1)]),
+    }
+    monkeypatch.setattr(ing, "_extract", lambda text, llm: by_text[text])
+
+    def _identity_resolver(mentions):
+        return [
+            ResolvedEntity(local_id=i, canonical_name=m.name, typ=m.typ,
+                           surface_names=[m.name], record_keys=[m.name], member_idx=[i])
+            for i, m in enumerate(mentions)
+        ]
+
+    committed = []
+
+    class _Store:
+        def append(self, batch_json):
+            committed.append(json.loads(batch_json))
+
+    monkeypatch.setenv("GOLDENGRAPH_SCHEMA_DISCOVER", "1")
+    ing.ingest_corpus(docs, _Store(), llm=None, resolver=_identity_resolver,
+                      embedder=_StubEmbedder(), max_workers=1)
+
+    # second doc's edge: extracted (C, was acquired by, D) -> canonical (D, acquired, C)
+    edges = committed[1]["edges"]
+    names = {e["local_id"]: e["canonical_name"] for e in committed[1]["entities"]}
+    assert [(names[e["subj_local"]], e["predicate"], names[e["obj_local"]]) for e in edges] == [
+        ("D", "acquired", "C")
+    ]

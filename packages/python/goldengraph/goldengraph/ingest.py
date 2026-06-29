@@ -617,6 +617,13 @@ def _maybe_canonicalize(extraction: Extraction) -> Extraction:
         return extraction
 
 
+def _schema_discover_enabled() -> bool:
+    """`GOLDENGRAPH_SCHEMA_DISCOVER` gate. When on, `ingest_corpus` discovers the schema over the
+    whole corpus (one pass) instead of reading `GOLDENGRAPH_RELATION_VOCAB`, and per-doc
+    canonicalization is deferred until the discovered schema exists."""
+    return os.environ.get("GOLDENGRAPH_SCHEMA_DISCOVER", "0") not in ("0", "false", "")
+
+
 def _resolve_extractor():
     """Select the document extractor from `GOLDENGRAPH_EXTRACTOR` (default `api` ->
     the injected LLM extractor). `rebel`/`gliner` load a LOCAL, network-free model
@@ -654,7 +661,10 @@ def _prepare_doc(
         # `_extract` honors GOLDENGRAPH_LITERAL_ATTRS internally, so this call stays
         # 2-arg (custom rebel/gliner extractors and test stubs keep that shape).
         extraction = (extractor or _extract)(text, llm)
-        extraction = _maybe_canonicalize(extraction)
+        # In discovery mode the schema isn't known until the whole corpus is extracted, so defer
+        # canonicalization to the post-discovery pass in `ingest_corpus`.
+        if not _schema_discover_enabled():
+            extraction = _maybe_canonicalize(extraction)
         if timers:
             timers.add("extract", time.perf_counter() - t0)
         t1 = time.perf_counter()
@@ -805,7 +815,32 @@ def ingest_corpus(
                     embedder=embedder, fp_index=fp_index, link_index=link_index,
                     timers=timers)
 
-    if max_workers <= 1 or len(docs) <= 1:
+    def _prep_all():
+        if max_workers <= 1 or len(docs) <= 1:
+            return [_prep(t) for t in docs]
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            return list(ex.map(_prep, docs))  # map preserves input order
+
+    if _schema_discover_enabled():
+        # One-pass schema discovery: prepare all docs (open extraction, per-doc canonicalize already
+        # skipped in `_prepare_doc`), discover the schema over the whole corpus, canonicalize each
+        # extraction with it, THEN commit in document order. Resolution ran on the open mentions,
+        # which canonicalization does not change. Fail-soft: discovery error -> commit the open
+        # extractions (today's behavior).
+        prepared = _prep_all()
+        try:
+            from .schema import canonicalize_extraction
+            from .schema_discovery import discover_schema
+
+            schema = discover_schema([p[0] for p in prepared], docs, embedder, llm)
+            prepared = [(canonicalize_extraction(p[0], schema), p[1], p[2]) for p in prepared]
+        except Exception as e:  # noqa: BLE001 -- discovery is best-effort
+            print(f"[schema-discover] failed ({e!r}); committing open extractions", flush=True)
+        for i, p in enumerate(prepared):
+            _commit(i, p)
+    elif max_workers <= 1 or len(docs) <= 1:
         for i, t in enumerate(docs):
             _commit(i, _prep(t))
     else:
