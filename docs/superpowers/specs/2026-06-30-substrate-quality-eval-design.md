@@ -93,6 +93,19 @@ matching):
   the edge whose `source_refs` contain the EXACT unsuffixed doc id (the base doc id), falling back to any
   edge whose refs include a doc-id prefix; document this so it builds one way. Surface forms are used
   ONLY as a secondary check, never as the primary key (they are a deduped set and collision-prone).
+- **src/dst role recovery:** the gold tuple has no explicit src/dst flag, so parse the doc id
+  `src_id::rel::dst_id` (`::`-split per `_edge_doc_id`) and compare the mention's `entity_id` to the
+  parsed src/dst to pick the edge endpoint (subj for src, obj for dst). **Strip the `::N` co-occurrence
+  suffix** (`GOLDENGRAPH_BENCH_COOCCUR` extras) before the 3-way split. **Assumption: direction
+  canonicalization OFF** (`GOLDENGRAPH_SCHEMA_CANON` can flip subj/obj relative to src/dst); the v1
+  config runs canon-off, stated here so the planner doesn't assume otherwise.
+- **Known precision-attribution limit (in scope to document, not fix):** if the resolver merges a single
+  doc's src+dst (two distinct gold entities) into one node, the build drops the resulting self-loop
+  (`build_batch` skips `s == o`), so that doc produces no edge and both mentions fall to extraction-miss
+  singletons — mislabeling a within-doc over-merge as two recall misses. This does NOT affect the headline
+  (the `ambiguity` dial drives CROSS-doc fragmentation, which is recall-side and correctly captured;
+  cross-doc over-merge is also captured via two docs' endpoints landing on one node). Note the limit; do
+  not engineer around it in v1.
 
 This is the component to get right and the focus of the unit tests (§Testing), including the
 shared-surface-across-two-entities and node-absorbs-two-entities cases.
@@ -148,8 +161,10 @@ the validation run.
 
 ## Scope / YAGNI
 
-**v1 (IN):** both levels' ER-F1 + failure classes, the A−B gap, coherence, provenance — on the engineered
-corpus (ambiguity dial) — a committed scoreboard for **goldengraph**.
+**v1 (IN):** both levels' **`__overall__` ER-F1**, the A−B gap, coherence, provenance — on the engineered
+corpus (ambiguity dial) — a committed scoreboard for **goldengraph**. (Provenance is ~100% for
+goldengraph alone — it always stamps `source_refs` — so it is a cheap *correctness check* in v1 and only
+becomes *discriminating* in the v2 multi-engine bake-off.)
 
 **Deferred to v1.1:**
 - **Per-class failure breakdown** (`score_by_class`) — requires emitting per-mention `failure_class`
