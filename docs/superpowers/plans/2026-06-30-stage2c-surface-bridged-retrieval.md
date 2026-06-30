@@ -102,9 +102,9 @@ def test_empty_seeds_falls_back():
 def _retrieve_local_bridged(slice_graph, seeds, *, max_hops: int, node_budget: int) -> dict:
     """Like `_retrieve_local`, but at each hop bridges the reached frontier across same-NAME
     under-merged siblings (the proven `trace_chain` mechanism), so an answer stranded behind a split
-    bridge-entity (a sink-copy with no out-edge whose source-copy owns the next hop) enters the ball
-    connected to the seeds. Opt-in via the `GOLDENGRAPH_RETRIEVAL_BRIDGE` gate; `node_budget` bounds the
-    accumulation so a popular-name frontier cannot blow up the ball."""
+    bridge-entity (a sink-copy with no out-edge whose source-copy owns the next hop) enters the ball.
+    The ball is a connectivity-SUPERSET (not pruned to the seed-connected component); `node_budget` is
+    the only bound on its growth. Opt-in via the `GOLDENGRAPH_RETRIEVAL_BRIDGE` gate."""
     if not seeds:
         return slice_graph.query(seeds, max_hops)
     frontier = set(seeds)
@@ -238,12 +238,14 @@ Result: `results/end_to_end_20_goldengraph-qwen2.5-7b-instruct-musique.md`. Poll
 
 - [ ] **Step 3: Aggregate** (same-component is the primary signal)
 
+First `volume get --force` the result file to a local path (e.g. `/tmp/s2c.md`), then:
 ```bash
 grep -iE "support_recall=|musique \| 0" /tmp/s2c.md | head -2
 grep -oE "(EXTRACTION|RETRIEVAL-BROKEN-CHAIN|SYNTHESIS)" /tmp/s2c.md | sort | uniq -c | sort -rn
 # SYNTHESIS same_component split (islands should DROP if bridging connects them)
 awk '/SYNTHESIS \(retrieved/{i=1;next} i&&/same_component=/{if(/=True/)t++;else f++;i=0} END{print "True:",t+0," False:",f+0}' /tmp/s2c.md
 ```
+(The Modal result lands as `results/end_to_end_20_...musique.md` on the volume; `volume get` it to `/tmp/s2c.md` first — the grep path and the results path are otherwise different.)
 
 - [ ] **Step 4: Write the verdict report** — `docs/superpowers/reports/2026-06-30-stage2c-surface-bridged-retrieval.md`:
   - Run config (N=20, model, RETRIEVAL_BRIDGE=1, date) + the matched bridge-OFF N=20 baseline.
