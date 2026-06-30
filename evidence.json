@@ -1,0 +1,27 @@
+﻿{
+  "summary": "Published Sourcey-generated documentation for benseverndev-oss/goldenmatch (Python ecosystem) with 36 pages on codeboost-tr fork GitHub Pages. PR #1324 submitted to upstream for merge. Evidence includes ecosystem, repo, commit, license, adapter, command/config, page list, and gaps.",
+  "observations": [
+    "runx_cli_version: runx-cli 0.6.14",
+    "ecosystem: python",
+    "repo: benseverndev-oss/goldenmatch",
+    "commit: f61ed565bad76a03b5257a22266bfe84adcf4ac8",
+    "license: Apache-2.0",
+    "adapter: sourcey",
+    "sourcey_version: 0.6.x",
+    "command: npx sourcey build",
+    "config: sourcey.config.ts",
+    "public_url: https://codeboost-tr.github.io/goldenmatch/",
+    "pr_url: https://github.com/benseverndev-oss/goldenmatch/pull/1324",
+    "page_count: 36",
+    "page_list: index + 16 guides + 19 design specs",
+    "ecosystem_primary: Python (PyPI package goldenmatch)",
+    "ecosystem_secondary: TypeScript (npm), Rust (crates.io)",
+    "third_party: true, permissively licensed (Apache-2.0)",
+    "maintained: true, active multi-committer project with daily commits",
+    "num_public_apis: 50+ across GoldenMatch, GoldenCheck, GoldenFlow, GoldenAnalysis, GoldenPipe, InferMap, GoldenGraph",
+    "host_type: GitHub Pages on codeboost-tr fork with upstream PR open",
+    "host_durability: PR #1324 submitted to benseverndev-oss/goldenmatch; fork Pages serves as interim durable host",
+    "source_mapped_pages: true, 36 generated HTML pages with real navigation from source markdown",
+    "gaps: API reference pages not yet generated; focus is on guides and design specs"
+  ]
+}
