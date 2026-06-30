@@ -53,6 +53,11 @@ Ollama with the dummy `ollama` key (the same path the chat client uses). So the 
 the corpus once and each query via nomic-on-Ollama. **Off the local lane (real OpenAI, env unset) it
 falls back to `text-embedding-3-large` exactly as today — back-compat preserved.**
 
+Same edit: update the now-stale `build_kg` comment (~line 222-226) that claims the passage embedder is
+"a SEPARATE OpenAI embedder (text-embedding-3-large)" — on the local lane it is now the env model
+(nomic), which actually KEEPS the "passage half == goldenmatch_rag" invariant (goldenmatch_rag already
+uses `_rag_embed_model()` = nomic on local).
+
 ### Selecting hybrid
 
 Run with `GOLDENGRAPH_QA_MODE=hybrid`. The engine reads it into `_retrieval_mode`
