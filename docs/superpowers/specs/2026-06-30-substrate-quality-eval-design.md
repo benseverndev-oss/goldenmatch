@@ -25,21 +25,26 @@ scoring math.
   the resolver → clusters → `score()` vs gold. (Essentially the existing record→cluster ER eval, on
   engineered mentions.)
 - **Level B — end-to-end construction:** run the engineered corpus *text* through the full build
-  (`ingest_corpus`: extract → resolve-across-docs → graph); the built graph's **nodes ARE the clusters**
-  (each node = the mentions merged into it) → align nodes to gold ids → `score()` the node-clustering.
+  (`ingest_corpus`: extract → resolve-across-docs → graph). Then build a **mention-level clustering**:
+  assign each gold mention to the built node it landed in (via the doc's `source_refs` — see §4, exact,
+  not fuzzy), and `score()` that clustering over the SAME gold-mention index space as Level A.
 - **A − B = the extraction-induced fragmentation.** High A (good resolver) but low B (shattered graph)
   means extraction emitted inconsistent mentions the resolver never got to compare. **This decomposition
   is the headline output** — the attribution the QA arc could never make.
 
 ## The four substrate dimensions
 
-1. **ER correctness** — `score()` at both A and B (pairwise/cluster F1 + the existing failure classes).
+1. **ER correctness** — `metrics.score()` **`__overall__`** pairwise/cluster P/R/F1 at both A and B.
+   (Per-class failure breakdown via `score_by_class` needs per-mention `failure_class` labels +
+   deliberately-injected `same_name_collision`s that the corpus does not emit today → **DEFERRED to
+   v1.1** along with the collision injection. v1 ships the overall score, which is the headline.)
 2. **Graph coherence** — connected components / largest-connected-fraction of the built graph (Level B;
    reuses the `same_component` machinery from the QA localize trace).
 3. **Provenance completeness** — % of built edges with non-empty `source_refs` (Level B; `source_refs`
    already wired into the store + ingest).
-4. **Temporal correctness** — the resolution-level `temporal_version` failure class is free at Level A;
-   full as-of *query* correctness needs a temporal corpus extension → **DEFERRED to v2** (YAGNI).
+4. **Temporal correctness** — needs bitemporal corpus rendering + as-of test queries; the corpus has no
+   temporal versions today, so the `temporal_version` failure class would be empty → **DEFERRED to v2**
+   (YAGNI). v1 makes no temporal claim.
 
 ## Architecture / components
 
@@ -48,11 +53,12 @@ Five units, mostly reuse. New code lives under `er-kg-bench` mirroring `qa_e2e`.
 ### 1. Corpus + gold (extend `qa_e2e/engineered.py`)
 
 It already builds entities with canonical gold ids and renders them with surface VARIANTS across
-edge-docs (the `ambiguity` dial). Add two emitters from the SAME generation:
-- (a) the flat **mention records** + gold `mention → entity_id` map (for Level A),
-- (b) the **text docs** (for Level B; already produced),
-both carrying the gold ids + surface forms. The `ambiguity` dial controls how hard cross-doc resolution
-is (more variants → harder).
+edge-docs (the `ambiguity` dial), and each `Document` already carries `src_surface`/`dst_surface` with an
+id encoding `src_id::rel::dst_id`. Add ONE emitter from the SAME generation: the list of **gold mentions**
+as `(entity_id, surface, doc_id)` — two per edge-doc (src + dst). This single structure serves both
+levels: it IS the record set for Level A (clustered by the resolver, scored against `entity_id`), and it
+is the index space + `source_refs` anchor for Level B (§4). The text docs for Level B are already
+produced. The `ambiguity` dial controls how hard cross-doc resolution is (more variants → harder).
 
 ### 2. Level A runner
 
@@ -61,18 +67,35 @@ Reuses the existing `er-kg-bench` adapter path.
 
 ### 3. Level B runner
 
-`ingest_corpus(text)` → built graph; then:
-- derive the **node-clustering over the gold mentions** (via §4) → `metrics.score`,
+`ingest_corpus(text, doc_ids=…)` → built graph; then:
+- derive the **mention-level clustering** (via §4) → `metrics.score` over the gold-mention index space,
 - **coherence**: connected components + largest-fraction of the graph,
 - **provenance**: fraction of edges with non-empty `source_refs`.
 
 ### 4. Alignment (the one new algorithm — the engineering risk)
 
-Map *built graph nodes → gold entity ids*. Each gold entity has known surface variants; for each built
-node, match its `surface_names` to the gold surfaces to assign it to a gold entity (or mark
-unmatched/noise). A gold entity whose surfaces land in 3 nodes → recall loss; a node absorbing 2 gold
-entities → precision loss. **Surface-set matching with explicit unmatched handling, fail-soft.** This is
-the component to get right and the focus of the unit tests.
+The unit is the **gold mention**, NOT the node — so the clustering can represent both fragmentation AND
+over-merge, and survive surface collisions. The engineered corpus makes this **exact** (no fuzzy
+matching):
+
+- Each engineered doc is ONE edge `src_id —rel→ dst_id`; its two gold mentions are `(src_id,
+  src_surface)` and `(dst_id, dst_surface)`, and the doc id is `_edge_doc_id(src_id, rel, dst_id)`.
+- After the build, the edge for that doc carries `source_refs` containing the doc id (stage-2-D wiring,
+  `ingest_corpus(doc_ids=…)`). That edge connects two built nodes (`subj`, `obj`). **So `subj` node = the
+  cluster the src mention landed in; `obj` node = the dst mention's cluster** — recovered directly from
+  the edge endpoints + `source_refs`. No surface heuristics; collisions are disambiguated by doc.
+- The Level-B clustering is then: **group all gold mentions by the built-node id they were assigned to.**
+  A gold entity whose mentions land in 3 different nodes → recall loss; a node holding mentions of 2 gold
+  entities → precision loss — both representable because the clustering is over mentions.
+- **Unmatched mention** (the doc produced no edge, or the edge's endpoint can't be located) → its own
+  singleton cluster, tagged an *extraction miss* (a real failure the eval should count, fail-soft).
+- **Tie-break / robustness:** if a doc yields multiple candidate edges (the build may emit several), pick
+  the edge whose `source_refs` contain the EXACT unsuffixed doc id (the base doc id), falling back to any
+  edge whose refs include a doc-id prefix; document this so it builds one way. Surface forms are used
+  ONLY as a secondary check, never as the primary key (they are a deduped set and collision-prone).
+
+This is the component to get right and the focus of the unit tests (§Testing), including the
+shared-surface-across-two-entities and node-absorbs-two-entities cases.
 
 ### 5. Scoreboard emitter
 
@@ -101,14 +124,19 @@ engineered(seed, ambiguity) ──► gold {mention→entity_id, surfaces}
 ## Testing
 
 The new logic is mostly pure → box-safe TDD:
-- **Alignment** (core): given a built graph with known node `surface_names` + a gold surface→entity map —
-  a gold entity split across 3 nodes → recall loss; a node absorbing 2 gold entities → precision loss; an
-  unmatched node → noise. Assert the derived node-clustering, then `metrics.score` on it.
+- **Alignment** (core): given a built graph (nodes + edges with `source_refs`) + the gold mentions
+  `(entity_id, surface, doc_id)`, assert the derived **mention-level clustering** in four cases:
+  (a) a gold entity whose mentions land in 3 nodes → recall loss; (b) a node holding mentions of 2 gold
+  entities → precision loss; (c) **a surface shared by two gold entities** (`ambiguity` collision) →
+  still resolved correctly because assignment is by `source_refs`/doc, not surface; (d) a doc that
+  produced no edge → the mention is an unmatched singleton (extraction miss). Then `metrics.score` on the
+  clustering.
 - **Coherence**: a stub graph with K known components → assert component count + largest-fraction.
 - **Provenance**: edges with/without `source_refs` → assert coverage %.
-- **End-to-end wiring**: a deterministic smoke test with a STUB extractor + STUB resolver (the existing
-  `qa_e2e` stub pattern), asserting the full scoreboard without an LLM — locks Level A + Level B + the
-  A−B computation.
+- **End-to-end wiring**: a deterministic smoke test. NOTE `ingest_corpus` has no `extractor` param — it
+  takes an injected `llm` + `resolver`; drive it with a stub `LLMClient` (returns canned extractions) +
+  an injected deterministic `resolver`, asserting the full scoreboard without a real LLM. Locks Level A +
+  Level B + the A−B computation.
 - `metrics.score` is already tested; no new scoring math.
 
 ## The eval's OWN success criterion (its validation)
@@ -123,9 +151,14 @@ the validation run.
 **v1 (IN):** both levels' ER-F1 + failure classes, the A−B gap, coherence, provenance — on the engineered
 corpus (ambiguity dial) — a committed scoreboard for **goldengraph**.
 
+**Deferred to v1.1:**
+- **Per-class failure breakdown** (`score_by_class`) — requires emitting per-mention `failure_class`
+  labels and *deliberately injecting* `same_name_collision`s (today `ambiguity` only swaps a per-entity
+  variant; cross-entity surface collisions are incidental). v1 ships `__overall__` ER-F1.
+
 **Deferred to v2:**
-- **Temporal as-of query correctness** (needs bitemporal corpus rendering + as-of test queries; the
-  resolution-level `temporal_version` failure class still ships free at Level A).
+- **Temporal as-of query correctness** (needs bitemporal corpus rendering + as-of test queries; with no
+  temporal versions in the corpus the `temporal_version` class is empty, so v1 makes no temporal claim).
 - **Competitor adapters → the reframed substrate bake-off** (v1 builds the INSTRUMENT on goldengraph;
   adding other KG-construction engines as adapters and running the bake-off is the follow-on —
   instrument-before-comparison, as stage-2-A built the metric before ranking).
