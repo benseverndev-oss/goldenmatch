@@ -46,6 +46,8 @@
 Default off = the extraction llm (same object). Pure (openai.OpenAI constructs without network)."""
 from __future__ import annotations
 
+import pytest
+
 from erkgbench.qa_e2e.engines.goldengraph import _build_synthesis_llm
 
 
@@ -56,6 +58,7 @@ def test_synthesis_unset_reuses_extraction_llm(monkeypatch):
 
 
 def test_synthesis_set_builds_separate_client(monkeypatch):
+    pytest.importorskip("openai")                            # set branch needs openai; skip if absent
     monkeypatch.setenv("GOLDENGRAPH_SYNTHESIS_MODEL", "deepseek-reasoner")
     monkeypatch.setenv("GOLDENGRAPH_SYNTHESIS_BASE_URL", "https://api.deepseek.com")
     monkeypatch.setenv("GOLDENGRAPH_SYNTHESIS_API_KEY", "sk-test-not-real")
@@ -94,7 +97,9 @@ In `__init__`, right after `self._llm = _CountingLLM(llm)`:
         self._synth_llm = _build_synthesis_llm(self._llm)
 ```
 
-In `answer`, change the THREE `self._llm` references (and only those — `build_kg` keeps `self._llm`):
+In `answer`, change the three logical `self._llm` sites — 5 literal occurrences: the before-counters
+line (2), the `ask(llm=)` arg (1), and the delta-counters (2) — and ONLY those (`build_kg`'s `self._llm`
+stays):
 ```python
         before_in, before_out = self._synth_llm.input_tokens, self._synth_llm.output_tokens
         ...
