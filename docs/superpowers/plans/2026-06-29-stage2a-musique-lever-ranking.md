@@ -29,7 +29,11 @@
 
 ## Spec-deviation to note (decided here, in the plan)
 
-The spec lists `100 ≡ one hundred` as a positive case, but its own scope says "no compound parsing". `one hundred` is a compound (`one`+`hundred`). **Resolution: support STANDALONE cardinals only.** `hundred`≡`100`, `twenty`≡`20`, `one`≡`1` all canonicalize; `one hundred` falls through unchanged (compound, out of scope). This honors the stricter rule and removes the contradiction. The positive number-word tests use standalone words.
+The spec lists `100 ≡ one hundred` as a positive case, but its own scope says "no compound parsing". `one hundred` is a compound (`one`+`hundred`). **Resolution: support STANDALONE cardinals only.** `hundred`≡`100`, `twenty`≡`20`, `one`≡`1` all canonicalize. Compound handling is split by separator, and the regex is **hyphen/word-guarded** (lookarounds, not `\b`) so the two cases are consistent and intentional:
+- **Hyphenated** compounds (`twenty-one`) **fall through untouched** — the guard refuses to match a cardinal adjacent to `-` or another word char.
+- **Whitespace-separated** compounds (`one hundred`) split into two tokens (`1 100`). This does NOT equal `100`, so it simply does not match — acceptable, because we never *claim* a compound match and distinct values stay distinct. We do not assert `one hundred` as either a match or a fall-through.
+
+The positive number-word tests use standalone words only.
 
 ## File structure
 
@@ -216,15 +220,17 @@ def test_number_word_distinct_values_differ():
     assert metrics._normalize("twenty") != metrics._normalize("twelve")
 
 
-def test_compound_and_out_of_scope_number_words_fall_through():
-    # compound / decimal / magnitude / ordinal are NOT parsed (left as-is)
-    for w in ["twenty-one", "1.5 million", "third", "one hundred"]:
-        assert metrics._normalize(w) == metrics._normalize_legacy_for_test(w)
+def test_out_of_scope_number_words_fall_through():
+    # hyphenated compound / decimal+magnitude / ordinal are NOT parsed (left as the old normalization).
+    # NB: `one hundred` is deliberately NOT here -- whitespace compounds split to `1 100` by design
+    # (see the spec-deviation note); we assert neither a match nor a fall-through for it.
+    for w in ["twenty-one", "1.5 million", "third"]:
+        assert metrics._normalize(w) == _legacy(w)
 ```
 
-> `_normalize_legacy_for_test` is a tiny test-only helper that applies ONLY the old normalization
-> (lower/punct/articles/whitespace, no span-canon) so the fall-through assertion is precise. Add it
-> in the test file, not in `metrics.py`:
+> `_legacy` is a tiny test-only helper (top of the test file, NOT in `metrics.py`) that applies ONLY
+> the old normalization (lower/punct/articles/whitespace, no span-canon), so the fall-through assertion
+> is precise:
 > ```python
 > import re as _re, string as _string
 > _OLD_PUNCT = str.maketrans("", "", _string.punctuation)
@@ -232,7 +238,8 @@ def test_compound_and_out_of_scope_number_words_fall_through():
 > def _legacy(s):
 >     s = s.lower().translate(_OLD_PUNCT); s = _OLD_ART.sub(" ", s); return " ".join(s.split())
 > ```
-> Reference it as `_legacy` (rename the assertion call accordingly).
+> Trace for `twenty-one` under the guarded regex (Step 3): the lookarounds refuse `twenty` (followed
+> by `-`) and `one` (preceded by `-`), so canon is a no-op → `_normalize` = `twentyone` = `_legacy`. ✓
 
 - [ ] **Step 2: Run, verify FAIL**.
 
@@ -247,13 +254,15 @@ _NUMWORD = {
     "forty": "40", "fifty": "50", "sixty": "60", "seventy": "70", "eighty": "80",
     "ninety": "90", "hundred": "100",
 }
-_NUMWORD_RE = re.compile(r"\b(" + "|".join(_NUMWORD) + r")\b")
+# Hyphen/word-GUARDED (lookarounds, not \b): a cardinal adjacent to `-` or another word char is NOT
+# matched, so hyphenated compounds ("twenty-one") fall through untouched. Whitespace-separated
+# compounds ("one hundred") still split to "1 100" -- non-matching by design (see spec-deviation note).
+_NUMWORD_RE = re.compile(r"(?<![\w-])(" + "|".join(_NUMWORD) + r")(?![\w-])")
 
 
 def _canon_numwords(s: str) -> str:
-    # Replace ONLY standalone cardinal words. Compounds ("one hundred") become two tokens
-    # ("1 100") which won't equal "100", so they effectively fall through as non-matching --
-    # acceptable: we never CLAIM a compound match, and distinct values stay distinct.
+    # Replace ONLY standalone cardinal words (guarded). "one hundred" -> "1 100" (won't equal "100",
+    # so it simply doesn't match); "twenty-one" -> untouched. Distinct values stay distinct.
     return _NUMWORD_RE.sub(lambda m: _NUMWORD[m.group(1)], s)
 ```
 
