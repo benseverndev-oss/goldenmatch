@@ -13,7 +13,8 @@ _PUNCT = str.maketrans("", "", string.punctuation)
 
 
 def _normalize(s: str) -> str:
-    s = s.lower().translate(_PUNCT)
+    s = _canonicalize_spans(s.lower())   # NEW: canonicalize while punctuation/structure intact
+    s = s.translate(_PUNCT)
     s = _ARTICLES.sub(" ", s)
     return " ".join(s.split())
 
@@ -119,6 +120,80 @@ _MONTHS = (
     "january|february|march|april|may|june|july|august|september|october"
     "|november|december"
 )
+
+# --- fair-metric span canonicalization ----------------------------------------
+#
+# Canonicalize equivalent date/time/number spellings to one form BEFORE the
+# punctuation/article strip in `_normalize`, so equivalent answers compare equal
+# without making distinct answers collide. Reuses `_MONTHS` (above).
+
+_MONTH_NUM = {m: i for i, m in enumerate(
+    "january february march april may june july august september october november december".split(),
+    start=1,
+)}
+
+# Non-anchored date spans (input is already lowercased by `_normalize`). Each ->
+# ISO `YYYY-MM-DD`; the later punctuation-strip collapses the dashes so all formats
+# converge. A BARE year is deliberately NOT matched here (left as the 4-digit token),
+# so it never collides with a full date.
+_DATE_DMY = re.compile(rf"\b(\d{{1,2}})\s+({_MONTHS})\s+(\d{{3,4}})\b")          # 11 february 1929
+_DATE_MDY = re.compile(rf"\b({_MONTHS})\s+(\d{{1,2}}),?\s+(\d{{3,4}})\b")        # february 11, 1929
+_DATE_ISO = re.compile(r"\b(\d{4})-(\d{1,2})-(\d{1,2})\b")                       # 1929-02-11
+_DATE_SLASH = re.compile(r"\b(\d{1,2})/(\d{1,2})/(\d{2,4})\b")                   # 02/11/1929 (M/D/Y)
+
+
+def _iso(y: int, m: int, d: int) -> str:
+    return f"{y:04d}-{m:02d}-{d:02d}"
+
+
+def _canon_dates(s: str) -> str:
+    s = _DATE_DMY.sub(lambda m: _iso(int(m.group(3)), _MONTH_NUM[m.group(2)], int(m.group(1))), s)
+    s = _DATE_MDY.sub(lambda m: _iso(int(m.group(3)), _MONTH_NUM[m.group(1)], int(m.group(2))), s)
+    s = _DATE_ISO.sub(lambda m: _iso(int(m.group(1)), int(m.group(2)), int(m.group(3))), s)
+    s = _DATE_SLASH.sub(
+        lambda m: _iso(int(m.group(3)) + (1900 if int(m.group(3)) < 100 else 0),
+                       int(m.group(1)), int(m.group(2))), s)
+    return s
+
+
+# 5am / 5 am / 5 a.m. / 5 AM -> "5am"; 5pm / 5 p.m. -> "5pm". hour (+ optional :minute) only.
+_TIME_RE = re.compile(r"\b(\d{1,2})(?::(\d{2}))?\s*([ap])\.?\s*m\.?\b")
+
+
+def _canon_times(s: str) -> str:
+    def repl(m):
+        hh, mm, ap = m.group(1), m.group(2), m.group(3)
+        return f"{int(hh)}{(':' + mm) if mm else ''}{ap}m"
+    return _TIME_RE.sub(repl, s)
+
+
+_NUMWORD = {
+    "zero": "0", "one": "1", "two": "2", "three": "3", "four": "4", "five": "5",
+    "six": "6", "seven": "7", "eight": "8", "nine": "9", "ten": "10", "eleven": "11",
+    "twelve": "12", "thirteen": "13", "fourteen": "14", "fifteen": "15", "sixteen": "16",
+    "seventeen": "17", "eighteen": "18", "nineteen": "19", "twenty": "20", "thirty": "30",
+    "forty": "40", "fifty": "50", "sixty": "60", "seventy": "70", "eighty": "80",
+    "ninety": "90", "hundred": "100",
+}
+# Hyphen/word-GUARDED (lookarounds, not \b): a cardinal adjacent to `-` or another word char is NOT
+# matched, so hyphenated compounds ("twenty-one") fall through untouched. Whitespace-separated
+# compounds ("one hundred") still split to "1 100" -- non-matching by design (see spec-deviation note).
+_NUMWORD_RE = re.compile(r"(?<![\w-])(" + "|".join(_NUMWORD) + r")(?![\w-])")
+
+
+def _canon_numwords(s: str) -> str:
+    # Replace ONLY standalone cardinal words (guarded). "one hundred" -> "1 100" (won't equal "100",
+    # so it simply doesn't match); "twenty-one" -> untouched. Distinct values stay distinct.
+    return _NUMWORD_RE.sub(lambda m: _NUMWORD[m.group(1)], s)
+
+
+def _canonicalize_spans(s: str) -> str:
+    """Canonicalize date/time/standalone-number-word spans in a LOWERCASED string so equivalent
+    answers compare equal after `_normalize`. Narrow + fail-soft: only the recognized span types are
+    touched; everything else (and anything out of scope) passes through unchanged."""
+    return _canon_numwords(_canon_times(_canon_dates(s)))
+
+
 _DATE_RE = re.compile(
     rf"^\s*(\d{{1,2}}\s+)?({_MONTHS})\s+\d{{3,4}}\s*$"  # 11 February 1929 / March 1929
     rf"|^\s*({_MONTHS})\s+\d{{1,2}}\s*,?\s*\d{{3,4}}\s*$"  # February 11, 1929
