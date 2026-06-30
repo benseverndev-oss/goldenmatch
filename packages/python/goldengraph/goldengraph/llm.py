@@ -21,6 +21,10 @@ class LLMClient(Protocol):
     # -- test stubs and the pure protocol need not implement it.
     # def complete_json(self, prompt: str) -> str: ...
 
+    # Optional: N independent samples at a temperature, for synthesis self-consistency.
+    # Callers feature-detect with `hasattr(llm, "complete_many")` and fall back to `complete`.
+    # def complete_many(self, prompt: str, *, n: int, temperature: float) -> list[str]: ...
+
 
 class OpenAIClient:
     """Minimal OpenAI adapter (optional `[openai]` extra). Reuses goldenmatch's
@@ -48,12 +52,18 @@ class OpenAIClient:
         failure mode). Honored by OpenAI + Ollama's OpenAI-compatible endpoint."""
         return self._chat(prompt, json_mode=True)
 
-    def _chat(self, prompt: str, *, json_mode: bool) -> str:
+    def complete_many(self, prompt: str, *, n: int, temperature: float) -> list[str]:
+        """N independent completions at `temperature` (for synthesis self-consistency).
+        A LOOP of single calls -- Ollama's OpenAI-compatible endpoint does not reliably
+        honor the `n=` param -- each token-tracked through `_chat`'s budget path."""
+        return [self._chat(prompt, temperature=temperature) for _ in range(max(1, n))]
+
+    def _chat(self, prompt: str, *, json_mode: bool = False, temperature: float = 0) -> str:
         client = self._ensure_client()
         kwargs = {
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0,
+            "temperature": temperature,
         }
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
