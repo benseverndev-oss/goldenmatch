@@ -8,7 +8,49 @@ the caller (`ask`) pre-emptively caps community count.
 
 from __future__ import annotations
 
+import os
+import string
+from collections import Counter
+
 from .llm import LLMClient
+
+
+def _synth_samples() -> int:
+    """`GOLDENGRAPH_SYNTH_SAMPLES` (default 1 = single call). Non-int / <=1 -> 1 (fail-safe)."""
+    try:
+        n = int(os.environ.get("GOLDENGRAPH_SYNTH_SAMPLES", "1"))
+    except ValueError:
+        return 1
+    return n if n > 1 else 1
+
+
+def _synth_temperature() -> float:
+    """`GOLDENGRAPH_SYNTH_TEMPERATURE` (default 0.7). Non-float -> 0.7."""
+    try:
+        return float(os.environ.get("GOLDENGRAPH_SYNTH_TEMPERATURE", "0.7"))
+    except ValueError:
+        return 0.7
+
+
+def _vote_key(s: str) -> str:
+    """Group-key for voting: lowercase, collapse whitespace, strip surrounding punctuation.
+    goldengraph-LOCAL + minimal (cannot import the bench's metrics._normalize); its only job is
+    to make 'Firefox' and 'firefox.' vote together."""
+    return " ".join(s.lower().split()).strip(string.punctuation + " ")
+
+
+def _vote_answer(answers: list[str]) -> str:
+    """Majority vote over parsed answers. Group by `_vote_key`, pick the key with the most votes
+    (tie -> first-seen key), return the FIRST raw answer carrying that key (preserves real casing).
+    Empty/blank answers are skipped; no candidates -> ''."""
+    cand = [a for a in answers if a and a.strip()]
+    if not cand:
+        return ""
+    keys = [_vote_key(a) for a in cand]
+    counts = Counter(keys)
+    # max() is stable -> first-seen order breaks ties; iterate keys in first-seen order
+    best_key = max(dict.fromkeys(keys), key=lambda k: counts[k])
+    return next(a for a, k in zip(cand, keys) if k == best_key)
 
 
 def _format_subgraph(view: dict) -> str:

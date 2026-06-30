@@ -59,3 +59,36 @@ def test_complete_unchanged_temperature_zero():
     client = OpenAIClient(model="m", client=fake)
     client.complete("p")
     assert fake.calls[-1]["temperature"] == 0
+
+
+from goldengraph.synthesize import _synth_samples, _synth_temperature, _vote_answer
+
+
+def test_vote_majority_returns_raw_form():
+    # 'Firefox' and 'firefox.' share a normalized key -> 2 votes; raw winner keeps casing
+    assert _vote_answer(["Firefox", "firefox.", "Chrome"]) == "Firefox"
+
+
+def test_vote_skips_empty_and_handles_single():
+    assert _vote_answer(["", "Acme", ""]) == "Acme"
+    assert _vote_answer(["Solo"]) == "Solo"
+    assert _vote_answer([]) == ""
+    assert _vote_answer(["", "  "]) == ""
+
+
+def test_vote_tie_breaks_first_seen():
+    # one each -> the key seen first wins
+    assert _vote_answer(["Beta", "Alpha"]) == "Beta"
+
+
+def test_synth_env_parsers_defensive(monkeypatch):
+    monkeypatch.delenv("GOLDENGRAPH_SYNTH_SAMPLES", raising=False)
+    monkeypatch.delenv("GOLDENGRAPH_SYNTH_TEMPERATURE", raising=False)
+    assert _synth_samples() == 1 and _synth_temperature() == 0.7
+    monkeypatch.setenv("GOLDENGRAPH_SYNTH_SAMPLES", "5")
+    assert _synth_samples() == 5
+    for bad in ("abc", "0", "-3", "1"):  # non-int / <=1 -> single call
+        monkeypatch.setenv("GOLDENGRAPH_SYNTH_SAMPLES", bad)
+        assert _synth_samples() == 1
+    monkeypatch.setenv("GOLDENGRAPH_SYNTH_TEMPERATURE", "xyz")
+    assert _synth_temperature() == 0.7
