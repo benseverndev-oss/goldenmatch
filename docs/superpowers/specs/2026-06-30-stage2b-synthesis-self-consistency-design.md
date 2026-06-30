@@ -34,14 +34,18 @@ feature; the bench exercises it via env).
 Add `complete_many(prompt, *, n, temperature) -> list[str]` to `OpenAIClient`: a **loop of N calls** at
 the given temperature (NOT the OpenAI `n=` param — Ollama's OpenAI-compatible endpoint does not reliably
 support `n`), each token-tracked through the existing budget path. `complete()` stays `temperature=0`,
-untouched. The `LLMClient` Protocol gains `complete_many` as an OPTIONAL capability; `synthesize_local`
-falls back to single-call when a stub lacks it (back-compat for test stubs).
+untouched. **Implementation note for the plan:** `_chat` currently hardcodes `temperature: 0` and takes
+no temperature argument; the plan must thread a `temperature` param through `_chat` (default 0, so
+`complete()` is unchanged) rather than reuse `complete()` verbatim. The `LLMClient` Protocol gains
+`complete_many` as an OPTIONAL capability — mirroring the existing `complete_json` feature-detect
+pattern; `synthesize_local` falls back to single-call (via `hasattr`) when a stub lacks it.
 
 ### 2. Self-consistency in `synthesize_local` (`goldengraph/synthesize.py`)
 
-Gated by two env vars:
+Gated by two env vars (parsed defensively, mirroring the repo's `_literals_enabled` house style — a
+non-int / `<= 1` / negative `SAMPLES` resolves to single-call, never crashes synthesis):
 - `GOLDENGRAPH_SYNTH_SAMPLES` (default `1` = current single call; opt-in).
-- `GOLDENGRAPH_SYNTH_TEMPERATURE` (default `0.7`).
+- `GOLDENGRAPH_SYNTH_TEMPERATURE` (default `0.7`; non-float falls back to the default).
 
 When `samples > 1`: draw N completions via `complete_many`, parse each with the existing
 `_extract_answer`, then **vote**:
@@ -58,6 +62,10 @@ The prompt text, `_extract_answer`, and the `samples=1` path are unchanged.
 
 MuSiQue N=50 with self-consistency on (`GOLDENGRAPH_SYNTH_SAMPLES=5`), compared to the stage-2-A
 baseline (`answer_match` 0.12, SYNTHESIS bucket 18). The fair metric (now on main) scores it.
+**Lever/metric alignment:** the bench runs goldengraph in `mode=auto`, which routes MuSiQue's
+natural-language questions to the LOCAL synthesis path (`synthesize_local`) — the exact path this lever
+modifies and the one the stage-2-A SYNTHESIS bucket was measured on. (`synthesize_hybrid`/`global` share
+the single-call shape but are explicitly OUT of scope here.)
 
 ## Data flow
 
