@@ -202,6 +202,35 @@ def _retrieve_local(slice_graph, seeds, *, max_hops: int, node_budget: int) -> d
     return sub
 
 
+def _retrieve_local_bridged(slice_graph, seeds, *, max_hops: int, node_budget: int) -> dict:
+    """Like `_retrieve_local`, but at each hop bridges the reached frontier across same-NAME
+    under-merged siblings (the proven `trace_chain` mechanism), so an answer stranded behind a split
+    bridge-entity (a sink-copy with no out-edge whose source-copy owns the next hop) enters the ball.
+    The ball is a connectivity-SUPERSET (not pruned to the seed-connected component); `node_budget` is
+    the only bound on its growth. Opt-in via the `GOLDENGRAPH_RETRIEVAL_BRIDGE` gate."""
+    if not seeds:
+        return slice_graph.query(seeds, max_hops)
+    frontier = set(seeds)
+    ents: dict = {}            # dedup by entity_id
+    edges: list = []
+    seen: set = set()          # dedup edges by (subj, predicate, obj)
+    for _hop in range(max(max_hops, 1)):
+        sub = slice_graph.query(list(frontier), 1)
+        id_to_name = {e["entity_id"]: e["canonical_name"] for e in sub.get("entities", ())}
+        for e in sub.get("entities", ()):
+            ents.setdefault(e["entity_id"], e)
+        for ed in sub.get("edges", ()):
+            k = (ed["subj"], ed["predicate"], ed["obj"])
+            if k not in seen:
+                seen.add(k)
+                edges.append(ed)
+        if len(ents) >= node_budget:
+            break
+        # next frontier: the reached ids, BRIDGED across same-name siblings
+        frontier = _bridge_surfaces(slice_graph, set(id_to_name), id_to_name)
+    return {"entities": list(ents.values()), "edges": edges}
+
+
 def ask(
     query: str,
     store,
