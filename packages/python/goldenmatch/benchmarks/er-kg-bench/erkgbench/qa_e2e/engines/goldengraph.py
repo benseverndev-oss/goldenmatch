@@ -164,6 +164,23 @@ class _CountingLLM:
         return out
 
 
+def _build_synthesis_llm(default_llm):
+    """The synthesis-stage LLM. When GOLDENGRAPH_SYNTHESIS_MODEL is set, build a SEPARATE client (own
+    model + endpoint + key) so a frontier reasoning model handles the ~20 low-volume synthesis calls
+    while the cheap 7B keeps the ~400 parallel extractions -- the cascade. Unset -> the extraction llm
+    (byte-identical). `openai.OpenAI` + `OpenAIClient` are imported lazily so the unset path adds no deps."""
+    model = os.environ.get("GOLDENGRAPH_SYNTHESIS_MODEL") or ""
+    if not model:
+        return default_llm
+    import openai
+    from goldengraph.llm import OpenAIClient
+
+    base = os.environ.get("GOLDENGRAPH_SYNTHESIS_BASE_URL") or None
+    key = os.environ.get("GOLDENGRAPH_SYNTHESIS_API_KEY") or None
+    client = openai.OpenAI(base_url=base, api_key=key) if (base or key) else openai.OpenAI()
+    return _CountingLLM(OpenAIClient(model=model, client=client))
+
+
 class GoldenGraphQAEngine:
     name = "goldengraph"
     fidelity = "real-e2e"
@@ -180,6 +197,8 @@ class GoldenGraphQAEngine:
         passage_k: int | None = None,
     ):
         self._llm = _CountingLLM(llm)
+        # Cascade seam: synthesis may use a separate (larger) model; extraction stays on self._llm.
+        self._synth_llm = _build_synthesis_llm(self._llm)
         # Cache embeddings across the whole run: the build's cross-doc linking and
         # answer-time seeding both re-embed the same entity texts many times, which
         # is the O(N^2) network wall at large N.
@@ -258,7 +277,7 @@ class GoldenGraphQAEngine:
         from goldengraph.answer import ask
 
         t0 = time.perf_counter()
-        before_in, before_out = self._llm.input_tokens, self._llm.output_tokens
+        before_in, before_out = self._synth_llm.input_tokens, self._synth_llm.output_tokens
         # `provenance_out` collects the source-doc ids of every edge the retrieval/traversal touched.
         # The store stamps each edge with its owning document id (ingest doc_ids); intersecting these
         # with the question's gold_supporting_fact_ids is the supporting-fact recall the harness scores.
@@ -266,7 +285,7 @@ class GoldenGraphQAEngine:
         text = ask(
             question,
             handle["store"],
-            llm=self._llm,
+            llm=self._synth_llm,
             embedder=self._embedder,
             valid_t=handle["valid_t"],
             tx_t=handle["tx_t"],
@@ -286,8 +305,8 @@ class GoldenGraphQAEngine:
             # corpus renders an edge in several docs (base id + `::N` suffixes); the base id IS the gold
             # id, so the intersection still hits. Empty when retrieval surfaced no stored edge.
             retrieved_fact_ids=tuple(sorted(provenance)),
-            input_tokens=self._llm.input_tokens - before_in,
-            output_tokens=self._llm.output_tokens - before_out,
+            input_tokens=self._synth_llm.input_tokens - before_in,
+            output_tokens=self._synth_llm.output_tokens - before_out,
             latency_s=time.perf_counter() - t0,
         )
 
