@@ -43,14 +43,23 @@ same-name siblings** via the existing `_bridge_surfaces`:
 
 ```
 frontier = seeds
+ents: dict[entity_id -> entity]   # dedup by entity_id
+edges: list ; seen: set            # dedup edges by the (subj, predicate, obj) tuple
 for hop in range(max_hops):
     sub = slice_graph.query(list(frontier), 1)
-    accumulate sub's entities + edges into the ball (dedup)
-    if ball entity count >= node_budget: break
-    reached = the entity ids in sub
-    frontier = _bridge_surfaces(slice_graph, reached, id_to_name(sub))  # union same-name siblings
-return {entities, edges}   # the accumulated, connectivity-closed ball
+    id_to_name = {e["entity_id"]: e["canonical_name"] for e in sub["entities"]}
+    for e in sub["entities"]: ents.setdefault(e["entity_id"], e)
+    for ed in sub["edges"]:
+        k = (ed["subj"], ed["predicate"], ed["obj"])
+        if k not in seen: seen.add(k); edges.append(ed)
+    if len(ents) >= node_budget: break
+    reached = set(id_to_name)                                   # the entity ids in sub
+    frontier = _bridge_surfaces(slice_graph, reached, id_to_name)  # union same-name siblings
+return {"entities": list(ents.values()), "edges": edges}        # accumulated, connectivity-closed ball
 ```
+
+Edge dedup uses the `(subj, predicate, obj)` tuple (edges are plain dicts with no natural id);
+entity dedup uses `entity_id`.
 
 So the source-copy of a split bridge-entity joins the next expansion, its out-edge becomes reachable,
 and the answer enters the ball connected. `node_budget` bounds the accumulation (early-exit), so a
@@ -89,6 +98,10 @@ Pure, box-safe (stub graph; no LLM, no native).
   - the **plain** `_retrieve_local` ball seeded at A does NOT contain `C` (strands at the sink-copy);
   - the **bridged** `_retrieve_local_bridged` ball seeded at A DOES contain `C` (per-hop bridging unions
     `B(id1)`↔`B(id4)`, so `part_of→C` enters the ball).
+  - **Plan note:** assert-1 (plain ball lacks C) holds *because the test stub's `query` ignores `hops`
+    and re-expands the fixed seed* — that is exactly what makes the sink-copy strand reproduce in the
+    fixture. Do NOT "fix" the stub to honor `hops`; the fixture proves the BRIDGING mechanism, not the
+    depth-growth of the real `query`.
 - **No-strand baseline:** on a CONNECTED graph (no under-merge), bridged and plain balls both contain
   the answer entity (bridging doesn't break the easy case).
 - **Budget bound:** a graph with a popular name (many same-name siblings) still respects `node_budget`
