@@ -181,7 +181,7 @@ def _bench_impl(eval: str, n: int, ambiguity: float, opts: str, chat: str, embed
     return _persist(eval, n, chat, pathlib.Path(out_md).read_text())
 
 
-@app.function(image=image, gpu="A10G", volumes={"/cache": cache}, timeout=3600)
+@app.function(image=image, gpu="A10G", volumes={"/cache": cache}, timeout=5400)
 def run_bench(eval: str, n: int = 20, ambiguity: float = 0.6, opts: str = "",
               chat: str = "qwen2.5:7b-instruct", embed: str = "nomic-embed-text",
               engine: str = "goldengraph", corpus: str = "engineered") -> str:
