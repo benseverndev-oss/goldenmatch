@@ -191,9 +191,9 @@ def run_bench(eval: str, n: int = 20, ambiguity: float = 0.6, opts: str = "",
 @app.function(image=image, gpu="A100", volumes={"/cache": cache}, timeout=10800)
 def run_bench_big(eval: str, n: int = 20, ambiguity: float = 0.6, opts: str = "",
                   chat: str = "qwen2.5:32b", embed: str = "nomic-embed-text",
-                  engine: str = "goldengraph") -> str:
+                  engine: str = "goldengraph", corpus: str = "engineered") -> str:
     """Bigger GPU for the OSS teacher (32B fits A100-40GB q4; 72B needs A100-80GB)."""
-    return _bench_impl(eval, n, ambiguity, opts, chat, embed, engine=engine)
+    return _bench_impl(eval, n, ambiguity, opts, chat, embed, engine=engine, corpus=corpus)
 
 
 @app.function(image=image, gpu="A10G", volumes={"/cache": cache, "/distill": distill_vol},
