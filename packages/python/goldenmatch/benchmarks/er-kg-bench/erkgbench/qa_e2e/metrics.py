@@ -156,11 +156,22 @@ def _canon_dates(s: str) -> str:
     return s
 
 
+# 5am / 5 am / 5 a.m. / 5 AM -> "5am"; 5pm / 5 p.m. -> "5pm". hour (+ optional :minute) only.
+_TIME_RE = re.compile(r"\b(\d{1,2})(?::(\d{2}))?\s*([ap])\.?\s*m\.?\b")
+
+
+def _canon_times(s: str) -> str:
+    def repl(m):
+        hh, mm, ap = m.group(1), m.group(2), m.group(3)
+        return f"{int(hh)}{(':' + mm) if mm else ''}{ap}m"
+    return _TIME_RE.sub(repl, s)
+
+
 def _canonicalize_spans(s: str) -> str:
     """Canonicalize date/time/standalone-number-word spans in a LOWERCASED string so equivalent
     answers compare equal after `_normalize`. Narrow + fail-soft: only the recognized span types are
     touched; everything else (and anything out of scope) passes through unchanged."""
-    return _canon_dates(s)
+    return _canon_times(_canon_dates(s))
 
 
 _DATE_RE = re.compile(

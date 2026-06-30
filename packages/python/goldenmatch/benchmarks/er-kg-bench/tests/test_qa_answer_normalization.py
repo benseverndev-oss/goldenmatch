@@ -25,3 +25,12 @@ def test_date_distinct_years_still_differ():
 def test_bare_year_not_forced_to_match_full_date():
     # gold = full date, pred mentions only the year -> incomplete, must NOT match (containment)
     assert answer_match("the year was 1929", "11 February 1929") == 0.0
+
+
+def test_time_formats_canonicalize_equal():
+    for a, b in [("5am", "5 a.m."), ("5am", "5 AM"), ("5pm", "5 p.m.")]:
+        assert metrics._normalize(a) == metrics._normalize(b), (a, b)
+
+
+def test_time_am_pm_distinct():
+    assert metrics._normalize("5am") != metrics._normalize("5pm")
