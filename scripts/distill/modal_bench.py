@@ -74,7 +74,8 @@ def _which(exe):
 
 
 def _bench_impl(eval: str, n: int, ambiguity: float, opts: str, chat: str, embed: str,
-                create_from: str = "", engine: str = "goldengraph") -> str:
+                create_from: str = "", engine: str = "goldengraph",
+                corpus: str = "engineered") -> str:
     """Shared bench body -- runs inside the container. Wrapped by run_bench (A10G, for the 7B student)
     and run_bench_big (A100, for the 32B/72B OSS teacher). The teacher ceiling is measured free-to-free:
     a larger same-family OSS model as the distillation target, no paid API."""
@@ -158,14 +159,19 @@ def _bench_impl(eval: str, n: int, ambiguity: float, opts: str, chat: str, embed
     if eval == "end_to_end":
         env["GOLDENGRAPH_QA_TRACE"] = "1"
         env["GOLDENGRAPH_QA_TRACE_LIMIT"] = "0"  # trace every question
+        # MuSiQue fetches a seeded subset from HF on demand (datasets is in the image); engineered is
+        # generated locally (ambiguity dial applies). The corpus is a CLI choice in run_qa_e2e.
         proc = subprocess.run(
             ["python", "-m", "erkgbench.qa_e2e.run_qa_e2e", "--engine", engine,
-             "--corpus", "engineered", "--max-questions", str(n), "--ambiguity", str(ambiguity),
+             "--corpus", corpus, "--max-questions", str(n), "--ambiguity", str(ambiguity),
              "--out-md", out_md, "--out-json", "/tmp/e2e.json"],
             cwd=_BENCH, env=env, capture_output=True, text=True, check=True,
         )
         results = pathlib.Path(out_md).read_text() if os.path.exists(out_md) else "(no results md)"
-        return _persist(eval, n, f"{engine}-{chat}", proc.stdout + "\n\n===== RESULTS_MD =====\n" + results)
+        # suffix non-default corpora so musique results don't overwrite the engineered file
+        csuf = "" if corpus == "engineered" else f"-{corpus}"
+        return _persist(eval, n, f"{engine}-{chat}{csuf}",
+                        proc.stdout + "\n\n===== RESULTS_MD =====\n" + results)
     module, extra = _EVAL[eval]
     subprocess.run(
         ["python", "-m", module, *extra, "--n-questions", str(n),
@@ -178,8 +184,8 @@ def _bench_impl(eval: str, n: int, ambiguity: float, opts: str, chat: str, embed
 @app.function(image=image, gpu="A10G", volumes={"/cache": cache}, timeout=3600)
 def run_bench(eval: str, n: int = 20, ambiguity: float = 0.6, opts: str = "",
               chat: str = "qwen2.5:7b-instruct", embed: str = "nomic-embed-text",
-              engine: str = "goldengraph") -> str:
-    return _bench_impl(eval, n, ambiguity, opts, chat, embed, engine=engine)
+              engine: str = "goldengraph", corpus: str = "engineered") -> str:
+    return _bench_impl(eval, n, ambiguity, opts, chat, embed, engine=engine, corpus=corpus)
 
 
 @app.function(image=image, gpu="A100", volumes={"/cache": cache}, timeout=10800)
@@ -228,7 +234,7 @@ def _persist(eval: str, n: int, chat: str, text: str) -> str:
 def main(eval: str = "extraction_f1", n: int = 20, ambiguity: float = 0.6, opts: str = "",
          spawn: bool = False, chat: str = "qwen2.5:7b-instruct",
          embed: str = "nomic-embed-text", gpu: str = "a10g", merged: str = "",
-         engine: str = "goldengraph") -> None:
+         engine: str = "goldengraph", corpus: str = "engineered") -> None:
     # --merged <path>: bench the fine-tuned student (Ollama-imported from the gg-distill volume).
     if merged:
         tag = "gg-distilled"
@@ -242,15 +248,18 @@ def main(eval: str = "extraction_f1", n: int = 20, ambiguity: float = 0.6, opts:
         return
     fn = run_bench_big if gpu.lower() in ("a100", "a100-80gb", "big") else run_bench
     # head-to-head: end_to_end tags results by engine (`{eng}-{chat}`), so concurrent engine runs on
-    # the same local model don't collide.
-    tag = (f"{engine}-{chat}" if eval == "end_to_end" else chat).replace(":", "-").replace("/", "-")
+    # the same local model don't collide. Non-default corpora get a `-{corpus}` suffix (matches _persist).
+    csuf = "" if corpus == "engineered" else f"-{corpus}"
+    tag = (f"{engine}-{chat}{csuf}" if eval == "end_to_end" else chat).replace(":", "-").replace("/", "-")
     if spawn:
         # fire-and-forget: queue the call SERVER-SIDE and return instantly, so a local-CLI kill can't
         # cancel it. Result lands at results/<eval>_<n>_<model>.md. Pair with `modal run --detach`.
-        call = fn.spawn(eval, n=n, ambiguity=ambiguity, opts=opts, chat=chat, embed=embed, engine=engine)
+        call = fn.spawn(eval, n=n, ambiguity=ambiguity, opts=opts, chat=chat, embed=embed,
+                        engine=engine, corpus=corpus)
         print(f"SPAWNED call_id={call.object_id} -> results/{eval}_{n}_{tag}.md on volume gg-bench-cache")
         return
-    md = fn.remote(eval, n=n, ambiguity=ambiguity, opts=opts, chat=chat, embed=embed, engine=engine)
+    md = fn.remote(eval, n=n, ambiguity=ambiguity, opts=opts, chat=chat, embed=embed,
+                   engine=engine, corpus=corpus)
     print("\n===== RESULT =====\n" + md)
 
 
