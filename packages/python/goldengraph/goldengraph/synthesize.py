@@ -190,11 +190,18 @@ def synthesize_local(
         "(none identified -- choose the most relevant entities yourself)"
     )
     prompt = _LOCAL_PROMPT_LITERALS if _literals_enabled() else _LOCAL_PROMPT
-    return _extract_answer(
-        llm.complete(
-            prompt.format(q=query, seeds=seeds, sub=_format_subgraph(subgraph))
-        )
-    )
+    filled = prompt.format(q=query, seeds=seeds, sub=_format_subgraph(subgraph))
+    n = _synth_samples()
+    if n > 1 and hasattr(llm, "complete_many"):
+        try:
+            samples = llm.complete_many(filled, n=n, temperature=_synth_temperature())
+        except Exception:
+            samples = []
+        voted = _vote_answer([_extract_answer(s) for s in samples])
+        if voted:
+            return voted
+        # all samples empty/failed -> single-call fallback below
+    return _extract_answer(llm.complete(filled))
 
 
 _HYBRID_HEAD = (

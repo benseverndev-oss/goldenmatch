@@ -61,7 +61,12 @@ def test_complete_unchanged_temperature_zero():
     assert fake.calls[-1]["temperature"] == 0
 
 
-from goldengraph.synthesize import _synth_samples, _synth_temperature, _vote_answer
+from goldengraph.synthesize import (
+    _synth_samples,
+    _synth_temperature,
+    _vote_answer,
+    synthesize_local,
+)
 
 
 def test_vote_majority_returns_raw_form():
@@ -92,3 +97,57 @@ def test_synth_env_parsers_defensive(monkeypatch):
         assert _synth_samples() == 1
     monkeypatch.setenv("GOLDENGRAPH_SYNTH_TEMPERATURE", "xyz")
     assert _synth_temperature() == 0.7
+
+
+_SUB = {
+    "entities": [{"entity_id": 0, "canonical_name": "Acme", "typ": "org"}],
+    "edges": [],
+}
+
+
+class _ManyStub:
+    """LLM stub with complete_many returning a CANNED list of completions (already in the
+    'show hops then Answer: X' shape). Records whether complete_many vs complete was used."""
+    def __init__(self, samples: list[str], single: str = "Answer: SingleFallback"):
+        self._samples = samples
+        self._single = single
+        self.many_calls = 0
+        self.single_calls = 0
+
+    def complete(self, prompt: str) -> str:
+        self.single_calls += 1
+        return self._single
+
+    def complete_many(self, prompt: str, *, n: int, temperature: float) -> list[str]:
+        self.many_calls += 1
+        return list(self._samples)
+
+
+def test_self_consistency_votes_when_enabled(monkeypatch):
+    monkeypatch.setenv("GOLDENGRAPH_SYNTH_SAMPLES", "3")
+    llm = _ManyStub(["Answer: Firefox", "Answer: Firefox", "Answer: Chrome"])
+    assert synthesize_local("q?", _SUB, llm) == "Firefox"
+    assert llm.many_calls == 1 and llm.single_calls == 0
+
+
+def test_default_off_uses_single_complete(monkeypatch):
+    monkeypatch.delenv("GOLDENGRAPH_SYNTH_SAMPLES", raising=False)
+    llm = _ManyStub(["Answer: X"])
+    out = synthesize_local("q?", _SUB, llm)
+    assert out == "SingleFallback"           # the single-call path
+    assert llm.single_calls == 1 and llm.many_calls == 0
+
+
+def test_stub_without_complete_many_falls_back(monkeypatch):
+    from conftest import RecordingLLM
+    monkeypatch.setenv("GOLDENGRAPH_SYNTH_SAMPLES", "3")   # enabled, but stub lacks complete_many
+    llm = RecordingLLM("Answer: Y")
+    assert synthesize_local("q?", _SUB, llm) == "Y"
+    assert len(llm.prompts) == 1                            # single call, no crash
+
+
+def test_all_samples_empty_falls_back(monkeypatch):
+    monkeypatch.setenv("GOLDENGRAPH_SYNTH_SAMPLES", "3")
+    llm = _ManyStub(["", "   ", ""], single="Answer: Recovered")
+    assert synthesize_local("q?", _SUB, llm) == "Recovered"
+    assert llm.many_calls == 1 and llm.single_calls == 1   # sampled, all empty -> one fallback
