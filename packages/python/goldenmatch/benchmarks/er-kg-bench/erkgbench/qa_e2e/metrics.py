@@ -167,11 +167,31 @@ def _canon_times(s: str) -> str:
     return _TIME_RE.sub(repl, s)
 
 
+_NUMWORD = {
+    "zero": "0", "one": "1", "two": "2", "three": "3", "four": "4", "five": "5",
+    "six": "6", "seven": "7", "eight": "8", "nine": "9", "ten": "10", "eleven": "11",
+    "twelve": "12", "thirteen": "13", "fourteen": "14", "fifteen": "15", "sixteen": "16",
+    "seventeen": "17", "eighteen": "18", "nineteen": "19", "twenty": "20", "thirty": "30",
+    "forty": "40", "fifty": "50", "sixty": "60", "seventy": "70", "eighty": "80",
+    "ninety": "90", "hundred": "100",
+}
+# Hyphen/word-GUARDED (lookarounds, not \b): a cardinal adjacent to `-` or another word char is NOT
+# matched, so hyphenated compounds ("twenty-one") fall through untouched. Whitespace-separated
+# compounds ("one hundred") still split to "1 100" -- non-matching by design (see spec-deviation note).
+_NUMWORD_RE = re.compile(r"(?<![\w-])(" + "|".join(_NUMWORD) + r")(?![\w-])")
+
+
+def _canon_numwords(s: str) -> str:
+    # Replace ONLY standalone cardinal words (guarded). "one hundred" -> "1 100" (won't equal "100",
+    # so it simply doesn't match); "twenty-one" -> untouched. Distinct values stay distinct.
+    return _NUMWORD_RE.sub(lambda m: _NUMWORD[m.group(1)], s)
+
+
 def _canonicalize_spans(s: str) -> str:
     """Canonicalize date/time/standalone-number-word spans in a LOWERCASED string so equivalent
     answers compare equal after `_normalize`. Narrow + fail-soft: only the recognized span types are
     touched; everything else (and anything out of scope) passes through unchanged."""
-    return _canon_times(_canon_dates(s))
+    return _canon_numwords(_canon_times(_canon_dates(s)))
 
 
 _DATE_RE = re.compile(
