@@ -13,7 +13,8 @@ _PUNCT = str.maketrans("", "", string.punctuation)
 
 
 def _normalize(s: str) -> str:
-    s = s.lower().translate(_PUNCT)
+    s = _canonicalize_spans(s.lower())   # NEW: canonicalize while punctuation/structure intact
+    s = s.translate(_PUNCT)
     s = _ARTICLES.sub(" ", s)
     return " ".join(s.split())
 
@@ -119,6 +120,49 @@ _MONTHS = (
     "january|february|march|april|may|june|july|august|september|october"
     "|november|december"
 )
+
+# --- fair-metric span canonicalization ----------------------------------------
+#
+# Canonicalize equivalent date/time/number spellings to one form BEFORE the
+# punctuation/article strip in `_normalize`, so equivalent answers compare equal
+# without making distinct answers collide. Reuses `_MONTHS` (above).
+
+_MONTH_NUM = {m: i for i, m in enumerate(
+    "january february march april may june july august september october november december".split(),
+    start=1,
+)}
+
+# Non-anchored date spans (input is already lowercased by `_normalize`). Each ->
+# ISO `YYYY-MM-DD`; the later punctuation-strip collapses the dashes so all formats
+# converge. A BARE year is deliberately NOT matched here (left as the 4-digit token),
+# so it never collides with a full date.
+_DATE_DMY = re.compile(rf"\b(\d{{1,2}})\s+({_MONTHS})\s+(\d{{3,4}})\b")          # 11 february 1929
+_DATE_MDY = re.compile(rf"\b({_MONTHS})\s+(\d{{1,2}}),?\s+(\d{{3,4}})\b")        # february 11, 1929
+_DATE_ISO = re.compile(r"\b(\d{4})-(\d{1,2})-(\d{1,2})\b")                       # 1929-02-11
+_DATE_SLASH = re.compile(r"\b(\d{1,2})/(\d{1,2})/(\d{2,4})\b")                   # 02/11/1929 (M/D/Y)
+
+
+def _iso(y: int, m: int, d: int) -> str:
+    return f"{y:04d}-{m:02d}-{d:02d}"
+
+
+def _canon_dates(s: str) -> str:
+    s = _DATE_DMY.sub(lambda m: _iso(int(m.group(3)), _MONTH_NUM[m.group(2)], int(m.group(1))), s)
+    s = _DATE_MDY.sub(lambda m: _iso(int(m.group(3)), _MONTH_NUM[m.group(1)], int(m.group(2))), s)
+    s = _DATE_ISO.sub(lambda m: _iso(int(m.group(1)), int(m.group(2)), int(m.group(3))), s)
+    s = _DATE_SLASH.sub(
+        lambda m: _iso(int(m.group(3)) + (1900 if int(m.group(3)) < 100 else 0),
+                       int(m.group(1)), int(m.group(2))), s)
+    return s
+
+
+def _canonicalize_spans(s: str) -> str:
+    """Canonicalize date/time/standalone-number-word spans in a LOWERCASED string so equivalent
+    answers compare equal after `_normalize`. Narrow + fail-soft: only the recognized span types are
+    touched; everything else (and anything out of scope) passes through unchanged."""
+    return _canon_dates(s)
+
+
 _DATE_RE = re.compile(
     rf"^\s*(\d{{1,2}}\s+)?({_MONTHS})\s+\d{{3,4}}\s*$"  # 11 February 1929 / March 1929
     rf"|^\s*({_MONTHS})\s+\d{{1,2}}\s*,?\s*\d{{3,4}}\s*$"  # February 11, 1929
