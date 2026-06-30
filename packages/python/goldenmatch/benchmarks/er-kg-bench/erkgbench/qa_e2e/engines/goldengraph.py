@@ -75,6 +75,14 @@ _QA_MODE = os.environ.get("GOLDENGRAPH_QA_MODE", "local")
 _QA_PASSAGE_K = int(os.environ.get("GOLDENGRAPH_QA_PASSAGE_K", "10"))
 
 
+def _passage_embed_model() -> str:
+    """Passage-retriever embedding model: the local lane's OPENAI_EMBED_MODEL (e.g. nomic-embed-text via
+    Ollama) when set, else the OpenAI default. Routes the passage half through the SAME endpoint as the
+    chat/graph halves on the local stack, unblocking hybrid mode without OpenAI spend. (Intentional
+    duplicate of run_qa_e2e._rag_embed_model -- the engine must not import the CLI module.)"""
+    return os.environ.get("OPENAI_EMBED_MODEL") or "text-embedding-3-large"
+
+
 class _PassageRetriever:
     """goldenmatch paragraph retrieval over the corpus -- literally the goldenmatch_rag
     retriever (`retrieve_similar_records` + the SAME OpenAI embedder), reused as the
@@ -218,19 +226,18 @@ class GoldenGraphQAEngine:
             resolver=self._resolver, embedder=self._embedder, fp_index=fp_index,
             doc_ids=[doc.id for doc in corpus.documents],  # stamp doc ids onto edges -> support_recall
         )  # the discovered RelationSchema (or None) -> canonicalize QUERY relations through it too
-        # Hybrid mode also indexes the raw paragraphs for answer-time passage
-        # retrieval. Built with a SEPARATE OpenAI embedder (text-embedding-3-large,
-        # matching goldenmatch_rag/text_rag) so the passage half is identical to the
-        # standalone goldenmatch_rag engine -- the graph half stays the store's job.
-        # Embedding calls here are NOT charged to the engine token budget (parity with
-        # text_rag/goldenmatch_rag, which meter only synthesis chat tokens).
+        # Hybrid mode also indexes the raw paragraphs for answer-time passage retrieval, using the
+        # passage-embedding model from `_passage_embed_model()` (OPENAI_EMBED_MODEL -> nomic on the local
+        # lane, text-embedding-3-large on the OpenAI lane). Same model as goldenmatch_rag/text_rag on
+        # each lane, so the passage half stays comparable; the graph half stays the store's job.
+        # Embedding calls here are NOT charged to the engine token budget (parity with text_rag).
         passages = None
         if self._retrieval_mode == "hybrid":
             from openai import OpenAI
 
             from .goldenmatch_rag import _OpenAIEmbedderAdapter
 
-            adapter = _OpenAIEmbedderAdapter(OpenAI(), "text-embedding-3-large")
+            adapter = _OpenAIEmbedderAdapter(OpenAI(), _passage_embed_model())
             passages = _PassageRetriever(
                 [d.id for d in corpus.documents],
                 [d.text for d in corpus.documents],
