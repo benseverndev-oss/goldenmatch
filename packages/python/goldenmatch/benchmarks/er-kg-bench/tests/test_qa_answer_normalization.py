@@ -67,3 +67,21 @@ def test_out_of_scope_number_words_fall_through():
     # canon ADDS nothing -- `million` isn't in the lookup -- not that the string is preserved verbatim.)
     for w in ["twenty-one", "1.5 million", "third"]:
         assert metrics._normalize(w) == _legacy(w)
+
+
+def test_answer_match_date_crossformat_containment():
+    # harness.py:153/155 compute in_graph/in_ball as answer_match(" ".join(names), gold).
+    # A graph node holding the date in a DIFFERENT format must now read as a hit.
+    graph_names = "foo bar February 11, 1929 baz"
+    assert answer_match(graph_names, "11 February 1929") == 1.0
+
+
+def test_entity_answers_unchanged_no_regression():
+    # engineered-style entity answers contain no date/time/number-word spans -> canon is a no-op
+    for name in ["Exeter College", "the Politburo", "Sega Genesis", "Lana Wood"]:
+        assert metrics._normalize(name) == _legacy(name)
+
+
+def test_answer_match_entity_still_works():
+    assert answer_match("the final entity is Acme Corp", "Acme Corp") == 1.0
+    assert answer_match("Acme Corp", "Globex") == 0.0
