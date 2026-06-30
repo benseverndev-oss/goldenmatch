@@ -52,9 +52,23 @@ fairness gaps it does **not** handle:
 - **Times**: `5am` vs `5 a.m.` vs `5 AM`.
 - **Number-words**: `100` vs `one hundred`.
 
-Add a layered canonicalization (dates → a canonical token order; times → canonical form;
-number-words ↔ digits) on top of `_normalize`. **Fail-soft**: an un-parseable string canonicalizes
-exactly as today (the date/number rules only fire when the parse succeeds).
+Add a layered canonicalization on top of `_normalize`, with **deliberately narrow** parse scope to
+keep the false-positive surface small:
+
+- **Dates → ISO `YYYY-MM-DD`** when a *full* day/month/year parses (so `11 February 1929`,
+  `February 11, 1929`, and `1929-02-11` all canonicalize identically). A **bare year** (`1929`) is
+  left as the year token — *not* expanded — so it is never forced to match a full date; the existing
+  containment in `answer_match` already lets a bare-year gold match the year token inside a full date
+  where that is genuinely correct, and we do not invent the reverse.
+- **Times → a single canonical form** (`5am`, `5 a.m.`, `5 AM` → `5am`); hour[:minute] + am/pm only.
+- **Number-words ↔ digits → small integer cardinals only**, via a **fixed lookup** (zero..twenty,
+  thirty..hundred and the obvious tens). **No** compound parsing (`twenty-one`), **no** decimals
+  (`1.5 million`), **no** large-magnitude words (`million`/`billion`), **no** ordinals. Anything
+  outside the lookup falls through untouched.
+
+**Fail-soft**: the date/time/number rules fire *only* on a successful parse within these narrow
+bounds; any failure (or anything out of scope) falls through to the existing `_normalize` output, so
+an un-parseable string canonicalizes exactly as today.
 
 **Load-bearing coupling (the reason this is required, not cosmetic):** the localize buckets are
 computed *via* `metrics.answer_match` (`harness.py:153` `in_graph`, `harness.py:155` `in_ball`).
@@ -73,8 +87,9 @@ confident distribution. Run via the existing `scripts/distill/modal_bench.py --c
 ### 3. Verdict report
 
 A committed markdown alongside the other bench reports: the fair-metric `answer_match`, the
-per-bucket counts, and a **ranked recommendation** for the next sub-project. States confidence
-honestly (see Risks).
+**actual per-bucket counts** (the raw N per bucket, so the confidence claim is data-backed rather
+than assuming an even three-way split), and a **ranked recommendation** for the next sub-project.
+States confidence honestly (see Risks).
 
 ## Data flow
 
@@ -97,9 +112,13 @@ run_qa_e2e (--corpus musique, N≈50)
 ## Testing
 
 - **Normalizer unit tests** (pure, box-safe, the TDD core):
-  - *Should now match*: `11 February 1929` ≡ `February 11, 1929` ≡ `1929-02-11`; `5am` ≡ `5 a.m.`;
-    `100` ≡ `one hundred`.
-  - *Must still NOT match*: `1928` ≠ `1929`; `Lana Wood` ≠ `Natalie Wood`; `100` ≠ `1000`.
+  - *Should now match*: `11 February 1929` ≡ `February 11, 1929` ≡ `1929-02-11` (all → ISO);
+    `5am` ≡ `5 a.m.`; `100` ≡ `one hundred`.
+  - *Must still NOT match*: `1928` ≠ `1929`; `Lana Wood` ≠ `Natalie Wood`; `100` ≠ `1000`;
+    a bare year `1929` ≠ a full date `11 February 1929` (gold-full direction: answering only the
+    year is incomplete — the narrow rule must not invent this match).
+  - *Out-of-scope falls through untouched*: `twenty-one`, `1.5 million`, `third` are left as-is
+    (no compound/decimal/large-magnitude/ordinal parsing) — locks the narrow number-word boundary.
   - *Fall-through*: `"the Politburo"` normalizes exactly as today (regression-locked against
     the current `_normalize`).
 - **Bucket-coupling test**: a graph containing `February 11, 1929` reads `in_graph=True` for a
