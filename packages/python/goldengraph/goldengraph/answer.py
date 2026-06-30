@@ -177,6 +177,14 @@ def _hybrid_filter_mode() -> str:
     return os.environ.get("GOLDENGRAPH_HYBRID_FILTER", "").strip().lower()
 
 
+def _bridge_enabled() -> bool:
+    """`GOLDENGRAPH_RETRIEVAL_BRIDGE` gate (default off). On -> the local/hybrid retrieval ball is
+    built with `_retrieve_local_bridged` (same-name under-merge bridging) instead of `_retrieve_local`."""
+    import os
+
+    return os.environ.get("GOLDENGRAPH_RETRIEVAL_BRIDGE", "0") not in ("0", "false", "")
+
+
 def _retrieve_local(slice_graph, seeds, *, max_hops: int, node_budget: int) -> dict:
     """Expand the seed neighborhood depth-by-depth up to ``max_hops``, stopping early
     once the subgraph reaches ``node_budget`` entities.
@@ -200,6 +208,35 @@ def _retrieve_local(slice_graph, seeds, *, max_hops: int, node_budget: int) -> d
             break
         sub = slice_graph.query(seeds, h)
     return sub
+
+
+def _retrieve_local_bridged(slice_graph, seeds, *, max_hops: int, node_budget: int) -> dict:
+    """Like `_retrieve_local`, but at each hop bridges the reached frontier across same-NAME
+    under-merged siblings (the proven `trace_chain` mechanism), so an answer stranded behind a split
+    bridge-entity (a sink-copy with no out-edge whose source-copy owns the next hop) enters the ball.
+    The ball is a connectivity-SUPERSET (not pruned to the seed-connected component); `node_budget` is
+    the only bound on its growth. Opt-in via the `GOLDENGRAPH_RETRIEVAL_BRIDGE` gate."""
+    if not seeds:
+        return slice_graph.query(seeds, max_hops)
+    frontier = set(seeds)
+    ents: dict = {}            # dedup by entity_id
+    edges: list = []
+    seen: set = set()          # dedup edges by (subj, predicate, obj)
+    for _hop in range(max(max_hops, 1)):
+        sub = slice_graph.query(list(frontier), 1)
+        id_to_name = {e["entity_id"]: e["canonical_name"] for e in sub.get("entities", ())}
+        for e in sub.get("entities", ()):
+            ents.setdefault(e["entity_id"], e)
+        for ed in sub.get("edges", ()):
+            k = (ed["subj"], ed["predicate"], ed["obj"])
+            if k not in seen:
+                seen.add(k)
+                edges.append(ed)
+        if len(ents) >= node_budget:
+            break
+        # next frontier: the reached ids, BRIDGED across same-name siblings
+        frontier = _bridge_surfaces(slice_graph, set(id_to_name), id_to_name)
+    return {"entities": list(ents.values()), "edges": edges}
 
 
 def ask(
@@ -284,7 +321,8 @@ def ask(
     if mode not in ("local", "hybrid"):
         raise ValueError(f"mode must be 'local', 'hybrid', or 'global', got {mode!r}")
     seeds = seed_by_query(slice_graph, query, embedder, k=k)
-    subgraph = _retrieve_local(slice_graph, seeds, max_hops=hops, node_budget=node_budget)
+    _retrieve = _retrieve_local_bridged if _bridge_enabled() else _retrieve_local
+    subgraph = _retrieve(slice_graph, seeds, max_hops=hops, node_budget=node_budget)
     # Hand the synthesis the seed entity NAMES (the query-relevant anchors) so the
     # multi-hop walk starts at the right place instead of guessing among the ball.
     id_to_name = {
