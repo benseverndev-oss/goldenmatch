@@ -1,0 +1,57 @@
+﻿{
+    "closure":  {
+                    "summary":  "npx sourcey build completed successfully - 36 pages generated",
+                    "reason_code":  "process_exit",
+                    "disposition":  "closed"
+                },
+    "schema":  "runx.receipt.v1",
+    "acts":  [
+                 {
+                     "id":  "act_sourcey_build",
+                     "closure":  {
+                                     "summary":  "npx sourcey build completed successfully",
+                                     "reason_code":  "process_exit",
+                                     "disposition":  "closed",
+                                     "closed_at":  "2026-06-30T14:50:21.2670296+03:00"
+                                 },
+                     "form":  "observation",
+                     "criterion_bindings":  [
+                                                {
+                                                    "summary":  "cli-tool exited successfully",
+                                                    "criterion_id":  "process_exit",
+                                                    "evidence_refs":  [
+
+                                                                      ],
+                                                    "status":  "verified",
+                                                    "verification_refs":  [
+
+                                                                          ]
+                                                }
+                                            ],
+                     "intent":  {
+                                    "legitimacy":  "Sourcey build was executed locally",
+                                    "derived_from":  [
+
+                                                     ],
+                                    "purpose":  "Run Sourcey build on goldenmatch docs",
+                                    "constraints":  [
+
+                                                    ],
+                                    "success_criteria":  [
+                                                             {
+                                                                 "criterion_id":  "process_exit",
+                                                                 "required":  true
+                                                             }
+                                                         ]
+                                },
+                     "artifact_refs":  [
+                                           "public_url=https://codeboost-tr.github.io/goldenmatch/"
+                                       ]
+                 }
+             ],
+    "metadata":  {
+                     "created_at":  "2026-06-30T14:50:21.2670296+03:00",
+                     "name":  "sourcey-goldenmatch-46",
+                     "version":  "0.1.0"
+                 }
+}
