@@ -224,6 +224,8 @@ def test_out_of_scope_number_words_fall_through():
     # hyphenated compound / decimal+magnitude / ordinal are NOT parsed (left as the old normalization).
     # NB: `one hundred` is deliberately NOT here -- whitespace compounds split to `1 100` by design
     # (see the spec-deviation note); we assert neither a match nor a fall-through for it.
+    # (`1.5 million`: both legacy and canon strip the decimal point identically; the point is that
+    # canon ADDS nothing -- `million` isn't in the lookup -- not that the string is preserved verbatim.)
     for w in ["twenty-one", "1.5 million", "third"]:
         assert metrics._normalize(w) == _legacy(w)
 ```
