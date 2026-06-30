@@ -85,8 +85,9 @@ Two models, two endpoints, one engine. Default off → both are the same object.
 - **`_build_synthesis_llm` unset → returns the EXACT default object** (the byte-identical guarantee; no
   openai dependency). The critical test.
 - **set (MODEL+BASE+KEY) → returns a DIFFERENT `_CountingLLM`-wrapped `OpenAIClient` whose `.model` is
-  the configured synthesis model** (`synth._inner.model`). Proves the separate client is built right.
-  `openai.OpenAI(base_url=…, api_key=…)` constructs without network, so this is box-safe.
+  the configured synthesis model** — assert BOTH `synth is not default_llm` (a separate object is built)
+  AND `synth._inner.model == "<configured>"`. `openai.OpenAI(base_url=…, api_key=…)` constructs without
+  network, so this is box-safe.
 - **No-regression:** existing engine tests unaffected (default path unchanged).
 - **Integration validation** = the N=20 hybrid run with a real synthesis endpoint.
 
@@ -96,6 +97,10 @@ Two models, two endpoints, one engine. Default off → both are the same object.
   sub-project.
 - **Reuse, don't add** — the existing injectable client + `_CountingLLM`. No new client class.
 - **No change** to extraction, build_kg, retrieval, or embeddings.
+- **Note:** `_CountingLLM` does not wrap `complete_many`, so synthesis self-consistency (stage-2-B) will
+  not engage through the synth client — it falls back to `complete`. This is the existing status quo (the
+  default path is also a `_CountingLLM` wrapper), so the cascade introduces no behavior change; just don't
+  expect cascade + self-consistency to compose without a separate change.
 
 ## Validation gate
 
