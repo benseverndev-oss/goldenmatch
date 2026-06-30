@@ -48,3 +48,15 @@ def test_node_budget_bounds_expansion():
 def test_empty_seeds_falls_back():
     ball = _retrieve_local_bridged(_split_graph(), [], max_hops=4, node_budget=64)
     assert ball["entities"] == [] and ball["edges"] == []
+
+
+def test_bridge_gate_env(monkeypatch):
+    from goldengraph.answer import _bridge_enabled
+    monkeypatch.delenv("GOLDENGRAPH_RETRIEVAL_BRIDGE", raising=False)
+    assert _bridge_enabled() is False
+    for on in ("1", "true", "yes"):
+        monkeypatch.setenv("GOLDENGRAPH_RETRIEVAL_BRIDGE", on)
+        assert _bridge_enabled() is True
+    for off in ("0", "false", ""):
+        monkeypatch.setenv("GOLDENGRAPH_RETRIEVAL_BRIDGE", off)
+        assert _bridge_enabled() is False

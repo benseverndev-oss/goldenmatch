@@ -177,6 +177,14 @@ def _hybrid_filter_mode() -> str:
     return os.environ.get("GOLDENGRAPH_HYBRID_FILTER", "").strip().lower()
 
 
+def _bridge_enabled() -> bool:
+    """`GOLDENGRAPH_RETRIEVAL_BRIDGE` gate (default off). On -> the local/hybrid retrieval ball is
+    built with `_retrieve_local_bridged` (same-name under-merge bridging) instead of `_retrieve_local`."""
+    import os
+
+    return os.environ.get("GOLDENGRAPH_RETRIEVAL_BRIDGE", "0") not in ("0", "false", "")
+
+
 def _retrieve_local(slice_graph, seeds, *, max_hops: int, node_budget: int) -> dict:
     """Expand the seed neighborhood depth-by-depth up to ``max_hops``, stopping early
     once the subgraph reaches ``node_budget`` entities.
@@ -313,7 +321,8 @@ def ask(
     if mode not in ("local", "hybrid"):
         raise ValueError(f"mode must be 'local', 'hybrid', or 'global', got {mode!r}")
     seeds = seed_by_query(slice_graph, query, embedder, k=k)
-    subgraph = _retrieve_local(slice_graph, seeds, max_hops=hops, node_budget=node_budget)
+    _retrieve = _retrieve_local_bridged if _bridge_enabled() else _retrieve_local
+    subgraph = _retrieve(slice_graph, seeds, max_hops=hops, node_budget=node_budget)
     # Hand the synthesis the seed entity NAMES (the query-relevant anchors) so the
     # multi-hop walk starts at the right place instead of guessing among the ball.
     id_to_name = {
