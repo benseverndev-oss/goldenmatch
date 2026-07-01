@@ -90,6 +90,24 @@ def _edge_doc_id(src_id: str, rel: str, dst_id: str) -> str:
     return f"{src_id}::{rel}::{dst_id}"
 
 
+def emit_gold_mentions(documents) -> list[tuple[str, str, str]]:
+    """Gold mentions read directly off the generated engineered `Document`s -- two per edge-doc,
+    `(entity_id, surface, doc_id)` for src and dst. The doc id encodes `src::rel::dst` (gold canonical
+    ids) and the Document carries the rendered `src_surface`/`dst_surface`, so the mentions match EXACTLY
+    what the build saw -- no rng replay, no drift at any ambiguity. Co-occurrence extras (`::N` suffix,
+    4+ `::`-parts) and any non-edge docs are skipped, so run the corpus WITHOUT GOLDENGRAPH_BENCH_COOCCUR
+    for a clean base-doc gold set."""
+    out: list[tuple[str, str, str]] = []
+    for d in documents:
+        parts = d.id.split("::")
+        if len(parts) != 3:          # not a base edge-doc (cooccur ::N extra / non-edge) -> skip
+            continue
+        src_id, dst_id = parts[0], parts[2]
+        out.append((src_id, d.src_surface, d.id))
+        out.append((dst_id, d.dst_surface, d.id))
+    return out
+
+
 def _question_text(start_mention: str, relation_chain: tuple[str, ...]) -> str:
     """Phrase a question that STATES the relation chain to follow -- the fix for the
     old "follow the chain" phrasing, which was unanswerable (a start node has several
