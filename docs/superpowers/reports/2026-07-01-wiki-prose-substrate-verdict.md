@@ -33,8 +33,24 @@ The final de-risk of the substrate arc: does the `name_ci` fix survive **real se
 
 The fix generalizes to real prose (direction, precision). The clean *absolute* real-prose number is not achievable with a surface-match aligner — it needs gold mention **offsets** (an entity-linking corpus like AIDA-CoNLL, or Wikipedia wikilink *character spans* rather than just anchor text), so the aligner keys on position, not surface. That is the definitive-L2 follow-on. What we have is enough to close the arc's central question — *the substrate fix is real and generalizes* — while being straight that the real-prose *magnitude* is bounded below by an alignment ceiling, not measured cleanly.
 
+## Alias-anchored clean absolute (follow-on, PR #1342)
+
+The surface-match aligner's 0.40 coverage conflated surface-mismatch (fixable) with extraction-drop (a floor). **Alias-anchoring** — match a built node to a gold QID via the QID's full Wikidata alias set (`dataset/wiki_aliases.json`), not the single wikilink surface — dissolves the surface-mismatch so coverage reflects only extraction recall.
+
+| L2 aligner | baseline R(B) | `name_ci` R(B) | P(B) | coverage |
+|---|---|---|---|---|
+| surface-only | 0.126 | 0.232 | 1.0 | 0.40 |
+| **alias-anchored (clean)** | **0.1768** | **0.3182** | 1.0 | **0.44** |
+
+(A build bug surfaced en route: the first aliased matcher did exact-set-only and *dropped* the substring fallback, so coverage *regressed* to 0.29 — the coverage guard caught it before it produced a misleading verdict; fixed by restoring substring fallback over the alias set, strictly ≥ surface-only.)
+
+**Two clean conclusions:**
+1. **`name_ci` lifts R(B) ~1.8× on real prose (0.177→0.318, P(B)=1.0)** — the fix generalizes, now confirmed with a trustworthy aligner. Consistent with the surface-only ~1.8×.
+2. **Coverage is ~0.44 even with the best alignment** — alias-anchoring recovered only +4pp, so the low coverage is **dominantly real extraction-drop, not surface-mismatch**. The 7B doesn't extract ~56% of the wikilinked entities from dense Wikipedia sentences. **The real L2 ceiling is EXTRACTION recall (~0.44), not resolution** — which points the next frontier back at extraction, not the merge key. This is the definitive real-prose read: `name_ci` resolves cross-doc co-reference well *within* what the 7B extracts; the binding limit on real prose is how little it extracts.
+
 ## Follow-ons
 
-1. **Offset-based alignment** (wikilink char-spans / an EL dataset) for the clean absolute L2 number.
-2. Larger / multi-domain wiki corpus (this is 19 tech articles).
-3. Pronoun/coreference gold (Wikipedia doesn't wikilink pronouns → named-mention co-reference only).
+1. ~~Alias/offset alignment for the clean absolute~~ — DONE (alias-anchored; offset blocked — no build-side spans). The clean absolute is coverage 0.44 / `name_ci` R(B) 0.318.
+2. **Real-prose EXTRACTION recall** — the true L2 ceiling; multi-pass / recall-tuned extraction on dense prose is the frontier (not the resolution key).
+3. Larger / multi-domain wiki corpus (this is 19 tech articles).
+4. Pronoun/coreference gold (Wikipedia doesn't wikilink pronouns → named-mention co-reference only).
