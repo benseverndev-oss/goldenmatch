@@ -658,7 +658,9 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
         with:
-          workspaces: packages/rust/extensions/datafusion-udf
+          workspaces: |
+            packages/rust/extensions/datafusion-udf
+            packages/rust/extensions/native
       # THE BUILD-TIME WIN: cache the built FFI UDF wheel keyed on the Rust
       # sources it's compiled from (the crate + every path-dep crate). On a hit
       # (the common case — these change rarely) the ~6.5-min --release maturin
@@ -685,6 +687,15 @@ jobs:
             echo "::notice::datafusion-udf wheel restored from cache; skipping the maturin build"
           fi
           uv pip install dist-dfudf/*.whl
+      # Reference mode (docs/design/2026-07-01-rust-is-the-reference-roadmap.md):
+      # Rust is the reference implementation, so the DEFAULT goldenmatch suite runs
+      # with the native ext BUILT -- native is the test path, not an opt-in lane
+      # that skips. Pure-Python is the lossy fallback, asserted separately in
+      # python_goldenmatch_fallback (GOLDENMATCH_NATIVE=0). The rust toolchain +
+      # cache are already set up above (for datafusion-udf); build_native.py drops
+      # goldenmatch._native into the package the way the `native` parity job does.
+      - name: Build native ext (reference mode -> native is the default test path)
+        run: uv run python scripts/build_native.py
       # Shard the suite with pytest-split (deterministic collection -> stable,
       # disjoint groups). The OOM-prone heavy files run in python_goldenmatch_heavy
       # and are --ignored here so they're neither double-run nor split. The
@@ -783,6 +794,40 @@ jobs:
           uv run coverage xml --rcfile=packages/python/goldenmatch/pyproject.toml \
             -o packages/python/goldenmatch/coverage.xml
           uv run python scripts/check_coverage_floors.py packages/python/goldenmatch/coverage.xml
+
+  # Reference mode: python_goldenmatch now runs NATIVE by default. This lean lane
+  # asserts the pure-Python FALLBACK still imports and passes on a core behavior
+  # slice -- the no-wheel path (musl / unsupported platform / GOLDENMATCH_NATIVE=0)
+  # must keep working, even though it is non-authoritative (native-vs-python parity
+  # is asserted in the `native` lane, not here). No native ext is built; the env
+  # var additionally forces the fallback even if a wheel were present.
+  python_goldenmatch_fallback:
+    needs: changes
+    if: needs.changes.outputs.python_goldenmatch == 'true' || needs.changes.outputs.force_all == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GOLDENMATCH_NATIVE: "0"
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      - name: pytest (pure-Python fallback -- core behavior slice, GOLDENMATCH_NATIVE=0)
+        run: |
+          uv run pytest \
+            packages/python/goldenmatch/tests/test_cluster.py \
+            packages/python/goldenmatch/tests/test_golden.py \
+            packages/python/goldenmatch/tests/test_lineage.py \
+            packages/python/goldenmatch/tests/test_config.py \
+            packages/python/goldenmatch/tests/test_pipeline.py \
+            packages/python/goldenmatch/tests/test_pairs.py \
+            packages/python/goldenmatch/tests/test_probabilistic.py \
+            -n auto --timeout=120 --timeout-method=thread -q
 
   # Visibility lanes for tests that the main `python` job currently --ignores.
   # Each lane runs the gated tests with explicit prerequisites; when prereqs
@@ -2605,6 +2650,7 @@ jobs:
       - python_goldenmatch
       - python_goldenmatch_heavy
       - python_goldenmatch_coverage
+      - python_goldenmatch_fallback
       - python_skipped_lanes
       - python_postgres
       - synthetic_benchmarks
