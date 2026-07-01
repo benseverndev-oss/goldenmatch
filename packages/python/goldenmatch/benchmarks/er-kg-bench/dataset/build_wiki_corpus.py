@@ -24,6 +24,7 @@ from pathlib import Path
 HERE = Path(__file__).parent
 SEEDS = HERE / "wiki_seeds.jsonl"
 OUT = HERE / "wiki_corpus.jsonl"
+ALIASES_OUT = HERE / "wiki_aliases.json"
 _UA = "goldenmatch-erkgbench/1.0 (https://github.com/benseverndev-oss/goldenmatch; substrate eval corpus)"
 _WP = "https://en.wikipedia.org/w/api.php"
 _WD = "https://www.wikidata.org/w/api.php"
@@ -94,6 +95,25 @@ def resolve_qids(titles: list[str]) -> dict[str, str]:
     return out
 
 
+def fetch_aliases(qids: list[str]) -> dict[str, list[str]]:
+    """{QID: sorted distinct en labels + altLabels} from Wikidata (batched <=50 ids/call). The full alias
+    set anchors gold mentions to built nodes regardless of which surface the extractor produced."""
+    out: dict[str, list[str]] = {}
+    for i in range(0, len(qids), 50):
+        data = _get(_WD, {"action": "wbgetentities", "ids": "|".join(qids[i:i + 50]),
+                          "props": "labels|aliases", "languages": "en"})
+        for qid, ent in data.get("entities", {}).items():
+            names = set()
+            lab = ent.get("labels", {}).get("en", {}).get("value")
+            if lab:
+                names.add(lab)
+            names.update(a["value"] for a in ent.get("aliases", {}).get("en", []) if a.get("value"))
+            if names:
+                out[qid] = sorted(names)
+        time.sleep(0.5)
+    return out
+
+
 def wikitext_to_plain(wt: str) -> str:
     """Best-effort lead wikitext -> natural prose: wikilinks -> anchor text, drop templates/refs/comments/
     html/emphasis, collapse whitespace."""
@@ -115,7 +135,17 @@ def wikitext_to_plain(wt: str) -> str:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--max", type=int, default=24, help="cap total articles (seeds + 1-hop)")
+    ap.add_argument("--aliases-only", action="store_true",
+                    help="regenerate only wiki_aliases.json for the EXISTING committed corpus (no re-fetch)")
     args = ap.parse_args()
+
+    if args.aliases_only:  # short-circuit before any article fetch
+        recs = [json.loads(x) for x in OUT.read_text(encoding="utf-8").splitlines() if x.strip()]
+        qids = sorted({qid for r in recs for qid, _s in r["gold"]})
+        aliases = fetch_aliases(qids)
+        ALIASES_OUT.write_text(json.dumps(aliases, ensure_ascii=False) + "\n", encoding="utf-8")
+        print(f"[wiki] wrote {ALIASES_OUT.name}: {len(aliases)}/{len(qids)} entities", flush=True)
+        return
 
     seeds = [json.loads(line)["title"] for line in SEEDS.read_text(encoding="utf-8").splitlines() if line.strip()]
     print(f"[wiki] {len(seeds)} seeds", flush=True)
@@ -159,6 +189,10 @@ def main() -> None:
     OUT.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in records) + "\n", encoding="utf-8")
     ngold = sum(len(r["gold"]) for r in records)
     print(f"[wiki] wrote {OUT.name}: {len(records)} docs, {ngold} gold mentions", flush=True)
+
+    gold_qids = sorted({qid for r in records for qid, _s in r["gold"]})
+    ALIASES_OUT.write_text(json.dumps(fetch_aliases(gold_qids), ensure_ascii=False) + "\n", encoding="utf-8")
+    print(f"[wiki] wrote {ALIASES_OUT.name}: aliases for {len(gold_qids)} gold entities", flush=True)
 
 
 if __name__ == "__main__":

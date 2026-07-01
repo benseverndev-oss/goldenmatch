@@ -72,10 +72,10 @@ def run_wiki() -> dict:
     from erkgbench import metrics
     from erkgbench.qa_e2e.wiki_corpus import load_wiki_corpus
 
-    documents, gold = load_wiki_corpus()
+    documents, gold, qid_aliases = load_wiki_corpus()
     graph = _build_graph_from_documents(documents)
-    clustering = substrate_eval.align_real_mentions_to_nodes(graph, gold)
-    coverage = substrate_eval.real_alignment_coverage(graph, gold)
+    clustering = substrate_eval.align_real_mentions_to_nodes_aliased(graph, gold, qid_aliases)
+    coverage = substrate_eval.real_alignment_coverage_aliased(graph, gold, qid_aliases)
     b = metrics.score([m[0] for m in gold], clustering)
     coh = substrate_eval.graph_coherence(graph)
     return {"er_r_b": b.recall, "er_p_b": b.precision, "er_f1_b": b.f1, "coverage": coverage,

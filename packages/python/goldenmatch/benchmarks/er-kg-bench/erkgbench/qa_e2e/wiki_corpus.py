@@ -25,12 +25,18 @@ def parse_wikilinks(wikitext: str) -> list[tuple[str, str]]:
 
 
 def load_wiki_corpus(path: str | Path | None = None):
-    """Read the committed `wiki_corpus.jsonl` -> (documents, gold_mentions). `documents` reuse
-    `corpora.Document` (id/text; surface fields unused); `gold_mentions` = `(Target_QID, Surface, doc_id)`
-    flattened across articles. Pure / no network."""
+    """Read the committed `wiki_corpus.jsonl` -> (documents, gold_mentions, qid_aliases). `documents` reuse
+    `corpora.Document` (id/text); `gold_mentions` = `(Target_QID, Surface, doc_id)` flattened across
+    articles; `qid_aliases` = `{QID: set(lowercased aliases)}` from a sibling `wiki_aliases.json` (empty
+    when absent -> the aligner degrades to surface-only). Pure / no network."""
     from .corpora import Document
 
     p = Path(path) if path else Path(__file__).resolve().parents[2] / "dataset" / "wiki_corpus.jsonl"
+    apath = p.parent / "wiki_aliases.json"  # resolve relative to the corpus path (tmp_path safe)
+    qid_aliases: dict[str, set[str]] = {}
+    if apath.exists():
+        qid_aliases = {q: {a.lower() for a in al}
+                       for q, al in json.loads(apath.read_text(encoding="utf-8")).items()}
     docs: list[Document] = []
     gold: list[tuple[str, str, str]] = []
     for line in p.read_text(encoding="utf-8").splitlines():
@@ -40,4 +46,4 @@ def load_wiki_corpus(path: str | Path | None = None):
         docs.append(Document(id=rec["doc_id"], text=rec["text"]))
         for qid, surface in rec.get("gold", []):
             gold.append((qid, surface, rec["doc_id"]))
-    return docs, gold
+    return docs, gold, qid_aliases

@@ -4,11 +4,13 @@ from __future__ import annotations
 from erkgbench.substrate_eval import (
     align_mentions_to_nodes,
     align_real_mentions_to_nodes,
+    align_real_mentions_to_nodes_aliased,
     edge_recall,
     fragmentation_report,
     graph_coherence,
     provenance_coverage,
     real_alignment_coverage,
+    real_alignment_coverage_aliased,
     score_substrate,
 )
 
@@ -37,6 +39,44 @@ def test_align_real_exact_beats_substring_and_orphan_unique():
     assert [0] in clusters                          # Apple -> node 7 (exact), own cluster
     assert sum(len(c) for c in clusters) == 3       # 2 orphans stay SEPARATE (unique negatives)
     assert real_alignment_coverage(graph, gm) == 1 / 3
+
+
+def test_aliased_match_finds_node_when_wikilink_surface_misses():
+    # gold surface "Big Blue" != node surface "IBM"; the QID alias set bridges it
+    graph = {"entities": [_rent(5, "IBM"), _rent(1, "Red Hat")],
+             "edges": [{"subj": 5, "obj": 1, "predicate": "acquired", "source_refs": ["Q37156"]}]}
+    gm = [("Q37156", "Big Blue", "Q37156"), ("Qrh", "Red Hat", "Q37156")]
+    aliases = {"Q37156": {"ibm", "big blue", "international business machines"}, "Qrh": {"red hat"}}
+    clusters = sorted(map(sorted, align_real_mentions_to_nodes_aliased(graph, gm, aliases)))
+    assert clusters == [[0], [1]]                            # Big Blue -> node 5 via alias "ibm"
+    assert real_alignment_coverage_aliased(graph, gm, aliases) == 1.0
+
+
+def test_aliased_orphan_unique_and_coverage():
+    graph = {"entities": [_rent(5, "IBM"), _rent(8, "Apple")],
+             "edges": [{"subj": 5, "obj": 8, "predicate": "r", "source_refs": ["d1"]}]}
+    gm = [("Q37156", "IBM", "d1"), ("Qx", "Ghost", "d1")]
+    aliases = {"Q37156": {"ibm"}}                            # Qx: no alias + no surface match -> orphan
+    clusters = sorted(map(sorted, align_real_mentions_to_nodes_aliased(graph, gm, aliases)))
+    assert [0] in clusters and sum(len(c) for c in clusters) == 2
+    assert real_alignment_coverage_aliased(graph, gm, aliases) == 0.5
+
+
+def test_aliased_substring_fallback_when_extracted_form_is_novel():
+    # the 7B extracted "IBM Corporation" -- not a verbatim alias/surface; substring bridges via "ibm"
+    graph = {"entities": [_rent(5, "IBM Corporation")],
+             "edges": [{"subj": 5, "obj": 5, "predicate": "r", "source_refs": ["d1"]}]}
+    gm = [("Q37156", "IBM", "d1")]
+    aliases = {"Q37156": {"ibm", "ibm corp."}}          # exact-intersect misses "ibm corporation"
+    assert align_real_mentions_to_nodes_aliased(graph, gm, aliases) == [[0]]   # substring "ibm" hits
+    assert real_alignment_coverage_aliased(graph, gm, aliases) == 1.0
+
+
+def test_aliased_reduces_to_exact_surface_when_alias_is_surface():
+    graph = {"entities": [_rent(7, "Apple")],
+             "edges": [{"subj": 7, "obj": 7, "predicate": "r", "source_refs": ["d1"]}]}
+    gm = [("Qa", "Apple", "d1")]
+    assert align_real_mentions_to_nodes_aliased(graph, gm, {"Qa": {"apple"}}) == [[0]]
 
 
 def test_align_real_reproduces_engineered_oracle():
