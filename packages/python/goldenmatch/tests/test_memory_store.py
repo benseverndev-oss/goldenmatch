@@ -164,7 +164,15 @@ class TestPairCanonicalization:
 class TestUnsupportedBackend:
     def test_raises_not_implemented(self, tmp_path):
         import pytest
-        with pytest.raises(NotImplementedError, match="postgres"):
+        with pytest.raises(NotImplementedError, match="mysql"):
+            MemoryStore(backend="mysql", path=str(tmp_path / "x.db"))
+
+    def test_postgres_requires_connection(self, tmp_path):
+        """backend='postgres' is implemented (see test_memory_store_postgres.py)
+        but requires a connection DSN -- no DSN raises ValueError, not
+        NotImplementedError."""
+        import pytest
+        with pytest.raises(ValueError, match="connection"):
             MemoryStore(backend="postgres", path=str(tmp_path / "x.db"))
 
 
