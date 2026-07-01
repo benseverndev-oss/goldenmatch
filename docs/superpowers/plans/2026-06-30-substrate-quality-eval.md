@@ -55,55 +55,53 @@
 from __future__ import annotations
 
 
-def test_emit_gold_mentions_two_per_edge_doc():
-    from erkgbench.qa_e2e.engineered import emit_gold_mentions, _edge_doc_id
+def test_emit_gold_mentions_from_documents():
+    from erkgbench.qa_e2e.engineered import emit_gold_mentions
 
-    mentions = emit_gold_mentions(seed=7, ambiguity=0.0, max_hops=4)
-    # every mention is (entity_id, surface, doc_id); doc_id parses to src::rel::dst
-    assert mentions and all(len(m) == 3 for m in mentions)
-    for entity_id, surface, doc_id in mentions:
-        parts = doc_id.split("::")
-        assert len(parts) == 3                       # src :: rel :: dst
-        assert entity_id in (parts[0], parts[2])     # the mention is one endpoint
-        assert isinstance(surface, str) and surface
-    # ambiguity=0 -> surfaces are canonical (deterministic); two mentions per distinct edge-doc
-    by_doc: dict = {}
-    for m in mentions:
-        by_doc.setdefault(m[2], []).append(m)
-    assert all(len(v) == 2 for v in by_doc.values())  # src + dst
+    class _Doc:  # mimic corpora.Document (id + src_surface + dst_surface)
+        def __init__(self, id, ss, ds):
+            self.id, self.src_surface, self.dst_surface = id, ss, ds
+
+    docs = [_Doc("gm:a::works_at::gm:b", "Ay", "Bee"),
+            _Doc("gm:a::located_in::gm:c", "Ay", "Cee"),
+            _Doc("gm:a::works_at::gm:b::1", "X", "Y")]   # a co-occurrence extra (::1) -> SKIPPED
+    mentions = emit_gold_mentions(docs)
+    assert mentions == [
+        ("gm:a", "Ay", "gm:a::works_at::gm:b"), ("gm:b", "Bee", "gm:a::works_at::gm:b"),
+        ("gm:a", "Ay", "gm:a::located_in::gm:c"), ("gm:c", "Cee", "gm:a::located_in::gm:c"),
+    ]
 ```
 
 - [ ] **Step 2: Run, verify FAIL** (`emit_gold_mentions` undefined).
 
-- [ ] **Step 3: Implement** — in `engineered.py`, add (reusing `_load_entities`, the edge graph, `_render_mention`, `_edge_doc_id` exactly as `generate_engineered` does, so surfaces match the rendered docs):
+- [ ] **Step 3: Implement** — in `engineered.py`, derive the gold mentions DIRECTLY off the generated
+`Document`s (NO rng replay — so surfaces match the built graph by construction at any `ambiguity`). Each
+engineered edge-doc's `id` is `_edge_doc_id(src, rel, dst)` = `src::rel::dst` and it carries
+`src_surface`/`dst_surface`:
 
 ```python
-def emit_gold_mentions(*, seed: int, ambiguity: float, max_hops: int = 4) -> list[tuple[str, str, str]]:
-    """Gold mentions for the substrate eval: two per edge-doc -- (entity_id, surface, doc_id) for the
-    src and dst. Mirrors `generate_engineered`'s edge graph + `_render_mention` so the surfaces match the
-    text the build sees; `entity_id` is the canonical gold id, `doc_id` = `_edge_doc_id(src, rel, dst)`."""
-    rng = random.Random(seed)
-    entities = _load_entities()
-    by_id = {e.id: e for e in entities}
-    ids = [e.id for e in entities]
-    edges: dict[str, dict[str, str]] = {e.id: {} for e in entities}
-    for e in entities:
-        n = rng.randint(2, 4)
-        rels = rng.sample(RELATION_SCHEMA, min(n, len(RELATION_SCHEMA)))
-        for rel in rels:
-            dst = rng.choice(ids)
-            if dst != e.id:
-                edges[e.id][rel] = dst
+def emit_gold_mentions(documents) -> list[tuple[str, str, str]]:
+    """Gold mentions read directly off the generated engineered `Document`s -- two per edge-doc,
+    `(entity_id, surface, doc_id)` for src and dst. The doc id encodes `src::rel::dst` (gold canonical
+    ids) and the Document carries the rendered `src_surface`/`dst_surface`, so the mentions match EXACTLY
+    what the build saw -- no rng replay, no drift at any ambiguity. Co-occurrence extras (`::N` suffix,
+    4+ `::`-parts) and any non-edge docs are skipped, so run the corpus WITHOUT GOLDENGRAPH_BENCH_COOCCUR
+    for a clean base-doc gold set."""
     out: list[tuple[str, str, str]] = []
-    for src_id in ids:
-        for rel, dst_id in edges[src_id].items():
-            doc_id = _edge_doc_id(src_id, rel, dst_id)
-            out.append((src_id, _render_mention(by_id[src_id], rng, ambiguity), doc_id))
-            out.append((dst_id, _render_mention(by_id[dst_id], rng, ambiguity), doc_id))
+    for d in documents:
+        parts = d.id.split("::")
+        if len(parts) != 3:          # not a base edge-doc (cooccur ::N extra / non-edge) -> skip
+            continue
+        src_id, dst_id = parts[0], parts[2]
+        out.append((src_id, d.src_surface, d.id))
+        out.append((dst_id, d.dst_surface, d.id))
     return out
 ```
 
-> **CRITICAL — rng determinism:** this MUST consume the rng identically to `generate_engineered` up to the point the surfaces are drawn, OR the surfaces won't match the built graph's docs. The simplest guarantee: the substrate runner generates the corpus AND the gold mentions from a *single* shared generation (see Task 5), rather than two independent calls. For THIS unit (and its test) the standalone emitter above is fine — the test only checks shape + the ambiguity=0 canonical case. The runner (Task 5) wires the shared-generation path; note this in the docstring.
+> **Why this kills the determinism risk:** the gold comes from the SAME `Document` objects the build
+> ingests (Task 5 passes `corpus.documents` to both `emit_gold_mentions` and `ingest_corpus`), so the
+> surfaces and doc ids are identical by construction — not reconstructed from a replayed rng. No
+> `ambiguity`-dependent drift.
 
 - [ ] **Step 4: Run, verify PASS.**
 - [ ] **Step 5: Commit** `feat(er-kg-bench): emit_gold_mentions for the substrate eval`.
@@ -348,7 +346,10 @@ def score_substrate(*, gold_mentions, resolver_clusters, graph) -> dict:
 **Files:** Create `erkgbench/run_substrate_eval.py`; Create `docs/superpowers/reports/2026-06-30-substrate-quality-eval.md`.
 
 - [ ] **Step 1: Write the runner** `erkgbench/run_substrate_eval.py`:
-  - Build the corpus + gold from a **single shared generation** (so surfaces match): generate the engineered `QACorpus` AND `emit_gold_mentions` with the SAME `(seed, ambiguity)`. (Confirm the docs and the gold mentions reference the same `doc_id`s; if rng-drift is observed, refactor `generate_engineered` to expose the (corpus, gold_mentions) pair from one rng — note in the report if needed.)
+  - Generate the engineered `QACorpus` ONCE (with `GOLDENGRAPH_BENCH_COOCCUR` unset), then derive gold via
+    `emit_gold_mentions(corpus.documents)` — the SAME Document objects the build ingests, so surfaces +
+    doc ids match exactly with **no rng-drift at any ambiguity** (the determinism risk is gone by
+    construction).
   - **Level A:** feed the gold mentions' surfaces to the resolver (the same goldenmatch/goldengraph resolver `ingest_corpus` uses) → a clustering over mention indices → done.
   - **Level B:** `ingest_corpus([doc.text...], store, llm=…, resolver=…, doc_ids=[doc.id...])`; then `slice_graph = store.as_of(_AS_OF,_AS_OF)`; query ALL entities' 1-hop to get the full `{entities, edges}` dict.
   - Call `score_substrate(...)`; print + write the scoreboard markdown for the given `ambiguity`.
