@@ -259,6 +259,16 @@ class MemoryStore:
     def __exit__(self, *exc: Any) -> None:
         self.close()
 
+    def _ph(self, sql: str) -> str:
+        """Translate '?' placeholders to the backend's style."""
+        return sql if self._backend == "sqlite" else sql.replace("?", "%s")
+
+    def _execute(self, sql: str, params: tuple = ()):  # returns a cursor/iterable of rows
+        return self._conn.execute(self._ph(sql), params)
+
+    def _commit(self):
+        self._conn.commit()
+
     def add_correction(self, correction: Correction) -> None:
         """Upsert a correction. Higher trust wins; same trust = latest wins.
 
@@ -283,30 +293,30 @@ class MemoryStore:
                 return
 
         # Atomic upsert: DELETE + INSERT in one transaction
-        with self._conn:
-            self._conn.execute(
-                "DELETE FROM corrections WHERE id_a = ? AND id_b = ? AND dataset IS ?",
-                (ca, cb, correction.dataset),
-            )
-            self._conn.execute(
-                "INSERT INTO corrections "
-                "(id, id_a, id_b, decision, source, trust, field_hash, record_hash, "
-                "original_score, matchkey_name, reason, dataset, created_at, "
-                "field_name, original_value, corrected_value, "
-                "cluster_score, cluster_outcome) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    correction.id, ca, cb,
-                    correction.decision, correction.source, correction.trust,
-                    correction.field_hash, correction.record_hash,
-                    correction.original_score, correction.matchkey_name,
-                    correction.reason, correction.dataset,
-                    correction.created_at.isoformat(),
-                    correction.field_name, correction.original_value,
-                    correction.corrected_value,
-                    correction.cluster_score, correction.cluster_outcome,
-                ),
-            )
+        self._execute(
+            "DELETE FROM corrections WHERE id_a = ? AND id_b = ? AND dataset IS ?",
+            (ca, cb, correction.dataset),
+        )
+        self._execute(
+            "INSERT INTO corrections "
+            "(id, id_a, id_b, decision, source, trust, field_hash, record_hash, "
+            "original_score, matchkey_name, reason, dataset, created_at, "
+            "field_name, original_value, corrected_value, "
+            "cluster_score, cluster_outcome) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                correction.id, ca, cb,
+                correction.decision, correction.source, correction.trust,
+                correction.field_hash, correction.record_hash,
+                correction.original_score, correction.matchkey_name,
+                correction.reason, correction.dataset,
+                correction.created_at.isoformat(),
+                correction.field_name, correction.original_value,
+                correction.corrected_value,
+                correction.cluster_score, correction.cluster_outcome,
+            ),
+        )
+        self._commit()
         log.debug("Correction stored: (%d, %d) %s [%s]", ca, cb,
                    correction.decision, correction.source)
 
@@ -377,12 +387,12 @@ class MemoryStore:
     ) -> Correction | None:
         ca, cb = _canon_pair(id_a, id_b)
         if dataset is not None:
-            row = self._conn.execute(
+            row = self._execute(
                 "SELECT * FROM corrections WHERE id_a = ? AND id_b = ? AND dataset = ?",
                 (ca, cb, dataset),
             ).fetchone()
         else:
-            row = self._conn.execute(
+            row = self._execute(
                 "SELECT * FROM corrections WHERE id_a = ? AND id_b = ? AND dataset IS NULL",
                 (ca, cb),
             ).fetchone()
@@ -403,36 +413,36 @@ class MemoryStore:
 
     def get_corrections(self, dataset: str | None = None) -> list[Correction]:
         if dataset is not None:
-            rows = self._conn.execute(
+            rows = self._execute(
                 "SELECT * FROM corrections WHERE dataset = ? ORDER BY created_at",
                 (dataset,),
             ).fetchall()
         else:
-            rows = self._conn.execute(
+            rows = self._execute(
                 "SELECT * FROM corrections ORDER BY created_at",
             ).fetchall()
         return [self._row_to_correction(r) for r in rows]
 
     def count_corrections(self, dataset: str | None = None) -> int:
         if dataset is not None:
-            row = self._conn.execute(
+            row = self._execute(
                 "SELECT COUNT(*) FROM corrections WHERE dataset = ?", (dataset,),
             ).fetchone()
         else:
-            row = self._conn.execute("SELECT COUNT(*) FROM corrections").fetchone()
+            row = self._execute("SELECT COUNT(*) FROM corrections").fetchone()
         return row[0] if row else 0
 
     def corrections_since(
         self, since: datetime, dataset: str | None = None,
     ) -> list[Correction]:
         if dataset is not None:
-            rows = self._conn.execute(
+            rows = self._execute(
                 "SELECT * FROM corrections WHERE created_at > ? AND dataset = ? "
                 "ORDER BY created_at",
                 (since.isoformat(), dataset),
             ).fetchall()
         else:
-            rows = self._conn.execute(
+            rows = self._execute(
                 "SELECT * FROM corrections WHERE created_at > ? ORDER BY created_at",
                 (since.isoformat(),),
             ).fetchall()
@@ -450,14 +460,14 @@ class MemoryStore:
         if adj.dataset is None and dataset is not None:
             adj.dataset = dataset
         weights_json = json.dumps(adj.field_weights) if adj.field_weights else None
-        with self._conn:
-            self._conn.execute(
-                "INSERT OR REPLACE INTO adjustments "
-                "(matchkey_name, threshold, field_weights, sample_size, learned_at) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (adj.matchkey_name, adj.threshold, weights_json,
-                 adj.sample_size, adj.learned_at.isoformat()),
-            )
+        self._execute(
+            "INSERT OR REPLACE INTO adjustments "
+            "(matchkey_name, threshold, field_weights, sample_size, learned_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (adj.matchkey_name, adj.threshold, weights_json,
+             adj.sample_size, adj.learned_at.isoformat()),
+        )
+        self._commit()
         log.debug("Adjustment saved: %s threshold=%.3f samples=%d",
                    adj.matchkey_name, adj.threshold or 0, adj.sample_size)
 
@@ -467,7 +477,7 @@ class MemoryStore:
         """SQLite ignores `dataset` for lookup (matchkey-only); the passed
         value is used to tag the returned adjustment for caller consistency.
         """
-        row = self._conn.execute(
+        row = self._execute(
             "SELECT * FROM adjustments WHERE matchkey_name = ?",
             (matchkey_name,),
         ).fetchone()
@@ -480,11 +490,11 @@ class MemoryStore:
 
     def get_all_adjustments(self, dataset: str | None = None) -> list[LearnedAdjustment]:
         """SQLite ignores `dataset` and returns all rows (no dataset column)."""
-        rows = self._conn.execute("SELECT * FROM adjustments").fetchall()
+        rows = self._execute("SELECT * FROM adjustments").fetchall()
         return [self._row_to_adjustment(r) for r in rows]
 
     def last_learn_time(self) -> datetime | None:
-        row = self._conn.execute(
+        row = self._execute(
             "SELECT MAX(learned_at) FROM adjustments",
         ).fetchone()
         if row and row[0]:
