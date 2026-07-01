@@ -24,10 +24,10 @@ Extend the committed wiki snapshot with a `{QID: [alias, ...]}` map (fetched off
 - Politeness: same UA + backoff as the corpus fetch; small QID set (~17), so a handful of calls.
 
 ### 2. `load_wiki_corpus` returns aliases (`qa_e2e/wiki_corpus.py`)
-- Load `wiki_aliases.json` alongside `wiki_corpus.jsonl`; return `(documents, gold_mentions, qid_aliases)`. `qid_aliases` = `{QID: set(lowercased aliases)}`. Back-compat: if the alias file is absent, return an empty map (aligner then degrades to surface-only).
+- Load `wiki_aliases.json` **resolved relative to the passed `path`** (`Path(path).parent / "wiki_aliases.json"`, mirroring how the default corpus path is derived) — NOT a hardcoded dataset dir, so an explicit `path` (e.g. the `tmp_path` test) that has no sibling alias file correctly gets the empty map. Return `(documents, gold_mentions, qid_aliases)`. `qid_aliases` = `{QID: set(lowercased aliases)}`. Back-compat: alias file absent → empty map (aligner degrades to surface-only). **Both existing callers must update to the 3-tuple:** `run_substrate_eval.run_wiki` and `tests/test_wiki_corpus.py::test_load_wiki_corpus_flattens_gold`.
 
 ### 3. `align_real_mentions_to_nodes_aliased(graph, gold_mentions, qid_aliases)` + coverage (`substrate_eval.py`)
-- Per gold mention `(QID, surface, doc)`: candidates = built nodes touched by an edge sourced from `doc`. The mention's match set = `qid_aliases.get(QID, {surface_lc})` UNION `{surface_lc}` (always include the literal wikilink surface as a fallback). Assign to the candidate whose `surface_names` (case-folded) **intersect** the match set; tie-break by **largest intersection**, then **lowest node id**; no match → a UNIQUE decrementing negative (orphan).
+- Per gold mention `(QID, surface, doc)`: candidates = built nodes touched by an edge sourced from `doc`. The mention's match set = `qid_aliases.get(QID, {surface_lc})` UNION `{surface_lc}` (always include the literal wikilink surface as a fallback). Assign to the candidate whose node surface set (`surface_names` ∪ `{canonical_name}`, case-folded — same fields `_assign_real_nodes` reads) **intersect** the match set; tie-break by **largest intersection**, then **lowest node id**; no match → a UNIQUE decrementing negative (orphan).
 - `real_alignment_coverage_aliased` = fraction assigned a non-orphan node.
 - Keep the existing surface-only `align_real_mentions_to_nodes` (the engineered-reproduction guard + the surface-only baseline still use it). The aliased fn is additive.
 
@@ -52,7 +52,7 @@ Modal, `--corpus wiki`, `GOLDENGRAPH_XDOC_KEY` ∈ {unset, `name_ci`}. Report R(
 - `erkgbench/qa_e2e/wiki_corpus.py` — `load_wiki_corpus` returns `qid_aliases` (back-compat empty if absent).
 - `erkgbench/substrate_eval.py` — `align_real_mentions_to_nodes_aliased` + `real_alignment_coverage_aliased` (via a shared `_assign_real_nodes_aliased`).
 - `erkgbench/run_substrate_eval.py` — wiki path uses the aliased aligner.
-- Tests: `tests/test_wiki_corpus.py` (loader returns aliases), `tests/test_substrate_eval.py` (aliased aligner: alias-set match beats surface miss, largest-intersection tie-break, orphan uniqueness, and reduces to surface-align when `qid_aliases[QID] == {surface}`).
+- Tests: `tests/test_wiki_corpus.py` (loader returns the 3-tuple incl. aliases; update the existing 2-tuple unpack), `tests/test_substrate_eval.py` (aliased aligner: alias-set match finds the node when the wikilink surface misses, largest-intersection tie-break, orphan uniqueness, and reduces to **exact-surface** align when `qid_aliases[QID] == {surface}`).
 
 ## Testing
 
