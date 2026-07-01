@@ -52,6 +52,7 @@ _EVAL = {
     "synthesis_gold": ("erkgbench.qa_e2e.run_synthesis_eval", []),
     "retrieval_coverage": ("erkgbench.qa_e2e.run_retrieval_eval", []),
     "end_to_end": ("erkgbench.qa_e2e.run_qa_e2e", []),  # full pipeline + localize trace (stdout)
+    "substrate": ("erkgbench.run_substrate_eval", []),  # substrate-quality A/B ambiguity sweep
 }
 
 
@@ -171,6 +172,18 @@ def _bench_impl(eval: str, n: int, ambiguity: float, opts: str, chat: str, embed
         # suffix non-default corpora so musique results don't overwrite the engineered file
         csuf = "" if corpus == "engineered" else f"-{corpus}"
         return _persist(eval, n, f"{engine}-{chat}{csuf}",
+                        proc.stdout + "\n\n===== RESULTS_MD =====\n" + results)
+    if eval == "substrate":
+        # Substrate-quality A/B ambiguity sweep (engineered corpus; the `--ambiguity` list overrides the
+        # scalar `ambiguity` arg). Level A resolver-isolation vs Level B end-to-end build; A-B gap = the
+        # construction ceiling as a number. goldengraph only (needs the native store + resolver).
+        proc = subprocess.run(
+            ["python", "-m", "erkgbench.run_substrate_eval",
+             "--ambiguity", "0.0", "0.3", "0.6", "--out-md", out_md],
+            cwd=_BENCH, env=env, capture_output=True, text=True, check=True,
+        )
+        results = pathlib.Path(out_md).read_text() if os.path.exists(out_md) else "(no results md)"
+        return _persist(eval, n, f"{engine}-{chat}",
                         proc.stdout + "\n\n===== RESULTS_MD =====\n" + results)
     module, extra = _EVAL[eval]
     subprocess.run(
