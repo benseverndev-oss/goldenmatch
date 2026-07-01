@@ -27,12 +27,29 @@ class ResolvedEntity:
     member_idx: list[int]  # indices into the extraction's mentions list
 
 
+def _key_payload(name: str, typ: str) -> dict:
+    """The dict fed to `record_fingerprint` for cross-document reconciliation. Default is (name, typ) --
+    but an open-vocab extractor assigns a DIFFERENT `typ` to one entity per document (measured: 97.6% of
+    cross-doc fragmentation is type jitter -- 'schema matching' typed Process/Algorithm/method/... across
+    docs), so its record_keys never overlap and the store never unifies it. `GOLDENGRAPH_XDOC_KEY` relaxes
+    the key: `name` = name only (type-agnostic); `name_ci` = name, case-folded (also absorbs the ~case-only
+    name jitter). Pure + goldenmatch-free so the normalization is unit-tested without the fingerprint."""
+    import os
+
+    mode = os.environ.get("GOLDENGRAPH_XDOC_KEY", "").strip().lower()
+    if mode == "name":
+        return {"name": name}
+    if mode == "name_ci":
+        return {"name": name.strip().lower()}
+    return {"name": name, "typ": typ}
+
+
 def _record_key(name: str, typ: str) -> str:
     import goldenmatch as gm
 
-    # dict arg, fixed keys — the fingerprint must be constructed identically on
-    # every call or cross-document reconciliation drifts.
-    return gm.record_fingerprint({"name": name, "typ": typ})
+    # The fingerprint must be constructed identically on every call or cross-document reconciliation
+    # drifts; `_key_payload` is the single chokepoint (all call sites route through it).
+    return gm.record_fingerprint(_key_payload(name, typ))
 
 
 def _build_entities(mentions: list[Mention], groups_idx: list[list[int]]) -> list[ResolvedEntity]:
