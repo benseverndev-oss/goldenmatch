@@ -74,3 +74,22 @@ def provenance_coverage(graph: dict) -> float:
     if not edges:
         return 1.0
     return sum(1 for e in edges if e.get("source_refs")) / len(edges)
+
+
+def score_substrate(*, gold_mentions, resolver_clusters, graph) -> dict:
+    """Assemble the substrate scoreboard. ER-F1(A) = the resolver clustering scored vs gold; ER-F1(B) =
+    the built-graph mention->node clustering scored vs gold; A-B gap = extraction-induced fragmentation;
+    plus coherence + provenance on the built graph. All over the SAME gold-mention index space."""
+    from erkgbench import metrics
+
+    entity_ids = [m[0] for m in gold_mentions]
+    a = metrics.score(entity_ids, resolver_clusters)
+    b = metrics.score(entity_ids, align_mentions_to_nodes(graph, gold_mentions))
+    coh = graph_coherence(graph)
+    return {
+        "er_f1_a": a.f1, "er_p_a": a.precision, "er_r_a": a.recall,
+        "er_f1_b": b.f1, "er_p_b": b.precision, "er_r_b": b.recall,
+        "ab_gap": a.f1 - b.f1,
+        "components": coh["components"], "largest_fraction": coh["largest_fraction"],
+        "provenance": provenance_coverage(graph),
+    }

@@ -1,7 +1,12 @@
 """Substrate-quality eval: pure scoring over a built graph (alignment / coherence / provenance / A-B)."""
 from __future__ import annotations
 
-from erkgbench.substrate_eval import align_mentions_to_nodes, graph_coherence, provenance_coverage
+from erkgbench.substrate_eval import (
+    align_mentions_to_nodes,
+    graph_coherence,
+    provenance_coverage,
+    score_substrate,
+)
 
 
 def _edge(subj, obj, doc, pred="r"):
@@ -90,3 +95,18 @@ def test_provenance_coverage():
         {"subj": 0, "predicate": "r", "obj": 1, "source_refs": ["d"]},
         {"subj": 1, "predicate": "r", "obj": 2, "source_refs": []}]}
     assert provenance_coverage(graph) == 0.5   # 1 of 2 edges has a source_ref
+
+
+def test_score_substrate_assembles_a_b_gap():
+    gm = [("A", "A", "A::r::B"), ("B", "B", "A::r::B"), ("A", "A", "A::r2::C"), ("C", "C", "A::r2::C")]
+    # Level A: a PERFECT resolver clustering (A's two mentions together)
+    resolver_clusters = [[0, 2], [1], [3]]
+    # Level B graph: under-merge split A across node0 and node9 -> worse than A
+    graph = {"entities": [{"entity_id": n, "canonical_name": "x", "surface_names": ["x"]} for n in (0, 1, 2, 9)],
+             "edges": [{"subj": 0, "predicate": "r", "obj": 1, "source_refs": ["A::r::B"]},
+                       {"subj": 9, "predicate": "r2", "obj": 2, "source_refs": ["A::r2::C"]}]}
+    sb = score_substrate(gold_mentions=gm, resolver_clusters=resolver_clusters, graph=graph)
+    assert sb["er_f1_a"] == 1.0                       # perfect resolver
+    assert sb["er_f1_b"] < sb["er_f1_a"]              # build fragmented A -> B worse
+    assert abs(sb["ab_gap"] - (sb["er_f1_a"] - sb["er_f1_b"])) < 1e-9
+    assert sb["components"] == 2 and 0.0 <= sb["provenance"] <= 1.0
