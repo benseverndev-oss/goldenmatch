@@ -18,7 +18,7 @@ from goldenmatch.core.agent import (
 )
 
 
-def dispatch_skill(skill_id: str, params: dict) -> dict:
+def dispatch_skill(skill_id: str, params: dict, allow_pprl: bool = False) -> dict:
     """Dispatch an A2A skill request to the appropriate handler.
 
     Parameters
@@ -28,6 +28,9 @@ def dispatch_skill(skill_id: str, params: dict) -> dict:
         review, compare_strategies, pprl, quality, transform.
     params : dict
         Skill-specific parameters.
+    allow_pprl : bool
+        Opt-in flag threaded through to ``select_strategy()``. PPRL is not
+        auto-selected for sensitive data unless this is True.
 
     Returns
     -------
@@ -144,7 +147,8 @@ def dispatch_skill(skill_id: str, params: dict) -> dict:
         decision = select_strategy(
             profile_for_agent(
                 pl.read_csv(params["file_path"], encoding="utf8-lossy", ignore_errors=True)
-            )
+            ),
+            allow_pprl=allow_pprl,
         )
         cfg = _decision_to_config(decision)
         return {"config_yaml": yaml.dump(cfg.model_dump(), default_flow_style=False)}

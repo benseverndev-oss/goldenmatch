@@ -157,9 +157,28 @@ class TestProfileForAgent:
 class TestSelectStrategy:
     def test_pprl_for_sensitive(self, sensitive_df):
         profile = profile_for_agent(sensitive_df)
-        decision = select_strategy(profile)
+        decision = select_strategy(profile, allow_pprl=True)
         assert decision.strategy == "pprl"
         assert decision.auto_execute is False
+        assert decision.pprl_available is True
+
+    def test_pprl_not_default_for_sensitive(self, sensitive_df):
+        """PPRL must be opt-in: sensitive data with default args should NOT
+        auto-route to pprl, but should flag pprl_available."""
+        profile = profile_for_agent(sensitive_df)
+        decision = select_strategy(profile)
+        assert decision.strategy != "pprl"
+        assert decision.pprl_available is True
+
+    def test_pprl_opt_in_for_sensitive(self, sensitive_df):
+        profile = profile_for_agent(sensitive_df)
+        decision = select_strategy(profile, allow_pprl=True)
+        assert decision.strategy == "pprl"
+
+    def test_pprl_available_false_for_non_sensitive(self, names_df):
+        profile = profile_for_agent(names_df)
+        decision = select_strategy(profile)
+        assert decision.pprl_available is False
 
     def test_exact_only(self, id_df):
         profile = profile_for_agent(id_df)
@@ -238,7 +257,7 @@ class TestBuildAlternatives:
     def test_pprl_not_duplicated(self, sensitive_df):
         """When strategy is already pprl, it should not appear in alternatives."""
         profile = profile_for_agent(sensitive_df)
-        decision = select_strategy(profile)
+        decision = select_strategy(profile, allow_pprl=True)
         assert decision.strategy == "pprl"
         alts = build_alternatives(decision, profile)
         strategies = {a["strategy"] for a in alts}

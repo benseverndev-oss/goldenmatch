@@ -57,6 +57,7 @@ class StrategyDecision:
     fuzzy_fields: list[str] = field(default_factory=list)
     backend: str | None = None
     auto_execute: bool = True
+    pprl_available: bool = False
 
 
 # ── Profiling ────────────────────────────────────────────────────────────────
@@ -117,25 +118,40 @@ def profile_for_agent(df: pl.DataFrame) -> DataProfile:
 # ── Strategy selection ───────────────────────────────────────────────────────
 
 
-def select_strategy(profile: DataProfile) -> StrategyDecision:
+def select_strategy(
+    profile: DataProfile, *, allow_pprl: bool = False
+) -> StrategyDecision:
     """Choose a matching strategy based on data profile.
 
     Decision tree:
-    1. Sensitive fields detected -> PPRL (manual review required).
+    1. PPRL only when allow_pprl=True (opt-in) and sensitive fields detected
+       (manual review required).
     2. Strong IDs only (high uniqueness, low nulls) -> exact_only.
     3. Strong IDs + fuzzy candidates -> exact_then_fuzzy.
     4. Fuzzy candidates available -> fuzzy.
     5. Domain detected with confidence -> domain_extraction.
     6. Fallback -> fuzzy.
     """
-    # Sensitive data -> PPRL
-    if profile.has_sensitive:
+    if profile.has_sensitive and allow_pprl:
         return StrategyDecision(
             strategy="pprl",
             why="Sensitive fields detected; using privacy-preserving record linkage.",
             auto_execute=False,
+            pprl_available=True,
         )
 
+    decision = _select_strategy_tree(profile)
+    if profile.has_sensitive:
+        decision.pprl_available = True
+        decision.why += (
+            " Sensitive fields detected — PPRL is available "
+            "(opt in with allow_pprl=True)."
+        )
+    return decision
+
+
+def _select_strategy_tree(profile: DataProfile) -> StrategyDecision:
+    """Non-PPRL strategy selection tree (domain detection through fallback)."""
     # Detect domain
     domain_name: str | None = None
     domain_confidence: float = 0.0
@@ -407,13 +423,13 @@ class AgentSession:
 
     # ── analyze ──────────────────────────────────────────────────────────
 
-    def analyze(self, file_path: str) -> dict[str, Any]:
+    def analyze(self, file_path: str, allow_pprl: bool = False) -> dict[str, Any]:
         """Load a CSV and return profiling + strategy analysis."""
         df = pl.read_csv(file_path, encoding="utf8-lossy", ignore_errors=True)
         self.data = df
 
         profile = profile_for_agent(df)
-        decision = select_strategy(profile)
+        decision = select_strategy(profile, allow_pprl=allow_pprl)
         alternatives = build_alternatives(decision, profile)
 
         self.reasoning = {
@@ -449,6 +465,7 @@ class AgentSession:
         self,
         file_path: str,
         config: Any = None,
+        allow_pprl: bool = False,
     ) -> dict[str, Any]:
         """Full deduplication with profiling, strategy, gating, and review queue.
 
@@ -471,7 +488,7 @@ class AgentSession:
         # AutoConfigController gives us the v1.7-v1.12 telemetry that the
         # legacy `_decision_to_config(decision)` heuristic does not.
         profile = profile_for_agent(df)
-        decision = select_strategy(profile)
+        decision = select_strategy(profile, allow_pprl=allow_pprl)
 
         if config is not None:
             cfg = config
@@ -539,6 +556,7 @@ class AgentSession:
         file_a: str,
         file_b: str,
         config: Any = None,
+        allow_pprl: bool = False,
     ) -> dict[str, Any]:
         """Match two CSV sources with profiling, strategy, and gating.
 
@@ -555,7 +573,7 @@ class AgentSession:
         # payload, NOT to build the actual matching config when config is None
         # (see deduplicate() for the rationale).
         profile = profile_for_agent(df_a)
-        decision = select_strategy(profile)
+        decision = select_strategy(profile, allow_pprl=allow_pprl)
 
         if config is not None:
             cfg = config
@@ -591,6 +609,7 @@ class AgentSession:
         self,
         file_path: str,
         ground_truth: str | None = None,
+        allow_pprl: bool = False,
     ) -> dict[str, Any]:
         """Run multiple strategies on the same data and compare proxy metrics.
 
@@ -603,7 +622,7 @@ class AgentSession:
         self.data = df
 
         profile = profile_for_agent(df)
-        decision = select_strategy(profile)
+        decision = select_strategy(profile, allow_pprl=allow_pprl)
 
         # Strategies to try
         strategies_to_run: list[StrategyDecision] = [decision]
