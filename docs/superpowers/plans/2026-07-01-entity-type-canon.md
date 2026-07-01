@@ -279,54 +279,37 @@ def test_homograph_off_by_default(monkeypatch):
 
 - [ ] **Step 2: Run, verify fail.**
 
-- [ ] **Step 3: Implement.** In `engineered.py`:
+**Data finding (plan review):** every entity in `dataset/concepts.jsonl` has `entity_type: "concept"` (uniform). So we CANNOT pick pairs of *different* upstream type — and don't need to: the `name_ci_type` key uses the **extracted** type (what the 7B reads from the appositive cue), not the gold `_Entity` type. So the injection **assigns** each pair two different coarse types from the vocab and renders the matching cue. No `_Entity.coarse_type` threading is needed.
 
-1. Add `coarse_type` to `_Entity` and populate it in `_load_entities`:
+1. (No `_Entity` change.) Inject collisions immediately AFTER the existing `_cooccur = _os.environ.get(...)` line (so the local `import os as _os` at ~line 151 is in scope), BEFORE the `documents: list[Document] = []` / doc-render loop. Assign differing coarse types by fiat:
 ```python
-@dataclass(frozen=True)
-class _Entity:
-    id: str
-    canonical: str
-    variants: tuple[str, ...]
-    coarse_type: str = "concept"
-```
-```python
-# in _load_entities, inside the loop:
-from goldengraph.schema import canonicalize_entity_type
-entities.append(_Entity(id=c.canonical_id, canonical=c.concept, variants=variants,
-                        coarse_type=canonicalize_entity_type(getattr(c, "entity_type", ""))))
-```
-
-2. After `edges` is built in `generate_engineered`, inject collisions:
-```python
-import os as _os2
-homo_k = int(_os2.environ.get("GOLDENGRAPH_BENCH_HOMOGRAPH", "0") or "0")
+homo_k = int(_os.environ.get("GOLDENGRAPH_BENCH_HOMOGRAPH", "0") or "0")   # _os = the existing local `import os as _os`
 homo_surface: dict[str, str] = {}   # entity_id -> shared surface
-homo_type: dict[str, str] = {}      # entity_id -> coarse type (for the cue)
+homo_type: dict[str, str] = {}      # entity_id -> ASSIGNED coarse type (drives the cue + the gold-free test)
 if homo_k > 0:
-    # entities that actually appear as an edge endpoint (else they emit no docs)
-    endpoints = set(e for e in ids if edges[e]) | {d for e in ids for d in edges[e].values()}
+    from goldengraph.schema import entity_type_vocab
+    tvocab = [t for t in entity_type_vocab() if t != "other"] or ["organization", "product"]
+    endpoints = sorted(set(e for e in ids if edges[e]) | {d for e in ids for d in edges[e].values()})
     adj = {e: set(edges[e].values()) for e in ids}
-    pool = sorted(endpoints)
-    picks = random.Random(f"{seed}:homograph").sample(pool, min(len(pool), homo_k * 4))
+    rr = random.Random(f"{seed}:homograph")
+    picks = rr.sample(endpoints, min(len(endpoints), homo_k * 4))
     used: set[str] = set()
     made = 0
-    for a in picks:
+    for i, a in enumerate(picks):
         if made >= homo_k or a in used:
             continue
-        for b in picks:
-            if b in used or b == a or b in adj[a] or a in adj[b]:
+        for b in picks[i + 1:]:
+            if b in used or b in adj[a] or a in adj[b]:   # non-adjacent (spec: avoid self-loop mislabel)
                 continue
-            if by_id[a].coarse_type != by_id[b].coarse_type:  # DIFFERENT coarse type
-                shared = f"HG{made}"
-                for e in (a, b):
-                    homo_surface[e] = shared
-                    homo_type[e] = by_id[e].coarse_type
-                used.update({a, b}); made += 1
-                break
+            ta, tb = tvocab[made % len(tvocab)], tvocab[(made + 1) % len(tvocab)]   # two DIFFERENT types
+            shared = f"HG{made}"
+            homo_surface[a], homo_type[a] = shared, ta
+            homo_surface[b], homo_type[b] = shared, tb
+            used.update({a, b}); made += 1
+            break
 ```
 
-3. In the doc-render loop, use the shared surface + appositive cue for homograph entities. Replace the `s`/`o` render + `Document` text:
+2. In the doc-render loop, use the shared surface + assigned-type appositive cue for homograph entities. Replace the `s`/`o` render + `Document` text:
 ```python
 s = homo_surface.get(src_id) or _render_mention(by_id[src_id], rng, ambiguity)
 o = homo_surface.get(dst_id) or _render_mention(by_id[dst_id], rng, ambiguity)
