@@ -52,6 +52,33 @@ def _load_entities() -> list[_Entity]:
     return entities
 
 
+def _load_real_entities() -> list[_Entity]:
+    """Real entities from dataset/records.csv (Wikidata / RxNorm / event reference data). Group rows by
+    `entity_id` VERBATIM (a QID `Q37156`, an `rxcui:<n>`, or an event slug -- never assume a `Q` prefix,
+    that would drop the 26 non-Q ids). canonical = the lowest-`record_id` mention (numeric sort); variants =
+    the other distinct real aliases. The entity_id is the ground truth. Pure / no network (records.csv is
+    committed) -- the real-corpus counterpart to `_load_entities`, feeding the SAME generator."""
+    import csv
+
+    bench_root = Path(__file__).resolve().parents[2]
+    path = bench_root / "dataset" / "records.csv"
+    by_id: dict[str, list[tuple[int, str]]] = {}
+    with open(path, encoding="utf-8") as fh:
+        for row in csv.DictReader(fh):
+            eid = (row.get("entity_id") or "").strip()
+            mention = (row.get("mention") or "").strip()
+            if not eid or not mention:
+                continue
+            by_id.setdefault(eid, []).append((int(row["record_id"]), mention))
+    entities: list[_Entity] = []
+    for eid, rows in by_id.items():
+        rows.sort(key=lambda t: t[0])          # numeric record_id (int, not lexical)
+        canonical = rows[0][1]
+        variants = tuple(dict.fromkeys(m for _rid, m in rows[1:] if m != canonical))
+        entities.append(_Entity(id=eid, canonical=canonical, variants=variants))
+    return entities
+
+
 def _render_mention(ent: _Entity, rng: random.Random, ambiguity: float) -> str:
     if ent.variants and rng.random() < ambiguity:
         return rng.choice(list(ent.variants))
@@ -125,7 +152,11 @@ def generate_engineered(
     *, seed: int, n_questions: int, ambiguity: float, max_hops: int = 4
 ) -> QACorpus:
     rng = random.Random(seed)
-    entities = _load_entities()
+    import os as _os_src
+    if _os_src.environ.get("GOLDENGRAPH_BENCH_ENTITIES", "").strip().lower() == "real":
+        entities = _load_real_entities()
+    else:
+        entities = _load_entities()
     by_id = {e.id: e for e in entities}
     ids = [e.id for e in entities]
 
