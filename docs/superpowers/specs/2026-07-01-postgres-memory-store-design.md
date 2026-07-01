@@ -31,7 +31,13 @@ spec that depends on the contract at the bottom of this doc.
   - `adjustments (matchkey_name TEXT PRIMARY KEY, threshold, field_weights, sample_size, learned_at)` — **keyed by matchkey_name alone**.
 - ~15 methods, all `self._conn.execute(...)` with `?` placeholders. `add_correction` upserts via DELETE+INSERT in a transaction (trust-wins).
 - `core/pipeline.py` already constructs the store as
-  `MemoryStore(backend=config.memory.backend, path=config.memory.path, connection=config.memory.connection)` — **so the run path needs no change** once the backend exists.
+  `MemoryStore(backend=config.memory.backend, path=config.memory.path, connection=config.memory.connection)` — so the **existing** `backend`/`path`/`connection`
+  plumbing needs no change. (The two new params this spec adds — `table_prefix`
+  and threading `dataset` into the learner — do require small pipeline edits; see
+  §4/§5 + Files touched.)
+- `get_corrections` and `count_corrections` **already** accept a `dataset`
+  argument; `corrections_since` does not. The real gap is that `MemoryLearner`
+  never passes a dataset to any of them (§4).
 - `MemoryConfig` fields already present: `enabled, backend, path, connection, trust, learning, reanchor, dataset`.
 
 ## Design
@@ -120,9 +126,10 @@ dataset filter** and groups by `matchkey_name`; `has_new_corrections()` calls
 `pipeline._apply_memory_pre` builds `MemoryLearner(...)` + calls `learn()`
 **without** threading `config.memory.dataset` (only `_apply_memory_post` →
 `apply_corrections` gets `dataset=config.memory.dataset`). Required changes:
-- `get_corrections`, `count_corrections`, `corrections_since` gain an optional
-  `dataset: str | None = None` filter (Postgres: `WHERE COALESCE(dataset,'')=…`;
-  SQLite: `dataset=None` → today's unfiltered behavior, back-compat).
+- `corrections_since` gains an optional `dataset: str | None = None` filter
+  (`get_corrections` and `count_corrections` already have one). Postgres:
+  `WHERE COALESCE(dataset,'')=…`; SQLite: `dataset=None` → today's unfiltered
+  behavior, back-compat.
 - `MemoryLearner.__init__` gains an optional `dataset: str | None = None`;
   `learn()` and `has_new_corrections()` pass it to the store reads and
   `save_adjustment(..., dataset=self._dataset)`. Default None → today's pooled
@@ -208,9 +215,9 @@ store + pgvector tests use it. Skip cleanly when unset.
 ## Files touched
 
 - `core/memory/store.py` — dialect driver + postgres branch; `dataset` param on
-  `get_corrections`/`count_corrections`/`corrections_since`/`save_adjustment`/
-  `get_adjustment`/`get_all_adjustments`; `table_prefix` (+ regex guard);
-  `dataset` field on `LearnedAdjustment`.
+  `corrections_since` (new) + `save_adjustment`/`get_adjustment`/
+  `get_all_adjustments` (`get_corrections`/`count_corrections` already have it);
+  `table_prefix` (+ regex guard); `dataset` field on `LearnedAdjustment`.
 - `core/memory/learner.py` — `MemoryLearner.__init__(dataset=…)`; thread it
   through `learn()` + `has_new_corrections()`.
 - `core/pipeline.py` — `_apply_memory_pre` passes `dataset=config.memory.dataset`
