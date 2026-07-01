@@ -8,6 +8,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ### Changed
 - **Auto-config: `name_freq_weighted_jw` now downweights agreements on high-frequency name values using a per-dataset frequency table** (data-driven, applied across the whole score range), so identical common surnames (e.g. two "Smith") score below identical rare surnames - a higher matchkey threshold then separates same-name strangers from true matches (#1207, PR2a). Default-on; kill-switch `GOLDENMATCH_TF_NAME_WEIGHTING=0` restores the static-census behavior. Validated by the CI accuracy gates (#528/DQbench/Febrl/NCVR); this is an accuracy change, not a measured-local win.
+- **Auto-config: per-identifier blocking union on null-sparse multi-source data (#1207, PR1).**
+  When no single exact key clears the null-rate gate, `build_blocking` now emits a
+  per-identifier blocking union (one pass per strong identifier + name/geo) instead of a
+  single high-null compound that capped recall. Default-on; no behavior change when a
+  low-null single exact key exists. Strong-id passes use a non-null scale gate (the runtime
+  blocker filters null block keys) with a #876 perfect-surrogate exclusion. Measured blocking
+  recall 1.0 vs name-only 0.004 on a planted-dup fixture, no regression on the auto-config suite.
+  Scope: `auto_configure_df` switches to learned blocking at `total_rows >= 50_000`, so the
+  union applies below that threshold (or when learned blocking is off) today; the >=50k
+  learned-blocking interaction is a tracked follow-up.
 
 ## [2.4.0] - 2026-06-27
 

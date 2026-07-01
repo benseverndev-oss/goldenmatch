@@ -1281,6 +1281,106 @@ def build_matchkeys(
     return matchkeys
 
 
+# ── Strong-identifier blocking-union (#1207) ──────────────────────────────
+# Coverage is restored by the OR across passes, so a per-id pass is admitted on
+# a minimal non-null population floor (NOT a null ceiling) — that keeps high-null
+# phone/zip passes that each block only the rows that *have* that id. Scale-safety
+# is enforced by the caller via _gate_passes, so it is NOT checked here. Strong-id
+# col_types reuse the module-level `_STRONG_EXACT_TYPES` (identifier/email/phone).
+_BLOCKING_UNION_COVERAGE_TARGET = 0.95
+_UNION_PASS_MIN_NONNULL = 0.02  # a pass must block more than a trivial handful
+
+
+def _union_coverage(df: pl.DataFrame, pass_field_lists: list[list[str]]) -> float:
+    """Fraction of rows non-null on at least one pass's fields (OR across passes).
+    A multi-field pass requires ALL its fields non-null (it can't block a row
+    missing any component)."""
+    if df.height == 0:
+        return 0.0
+    covered = pl.repeat(False, df.height, eager=True)
+    for fields in pass_field_lists:
+        present = pl.repeat(True, df.height, eager=True)
+        for f in fields:
+            if f not in df.columns:
+                present = pl.repeat(False, df.height, eager=True)
+                break
+            present = present & df[f].is_not_null()
+        covered = covered | present
+    return float(covered.sum()) / df.height
+
+
+def _build_strong_identifier_union(
+    profiles: list[ColumnProfile],
+    df: pl.DataFrame,
+    *,
+    n_rows_full: int | None = None,
+) -> BlockingConfig | None:
+    """Emit a multi_pass UNION of one pass per strong id + name+geo, or None.
+
+    Returns None unless >=1 strong-id pass is present AND >=2 distinct passes
+    survive AND their OR-coverage clears _BLOCKING_UNION_COVERAGE_TARGET. The
+    >=1 strong-id requirement keeps this from emitting a name-only "strong-id
+    union" (a name-only shape is left to the existing name-fallback path).
+    Caller (build_blocking) is responsible for invoking this only on the
+    fall-through (no single key passed the strict 0.20 ceiling).
+
+    `n_rows_full` is reserved for call-site signature parity; scale-safety is
+    enforced by the caller via `_gate_passes`, not here."""
+    def _nonnull(col: str) -> float:
+        return 1.0 - (df[col].null_count() / df.height) if df.height else 0.0
+
+    candidate_passes: list[list[str]] = []
+
+    # one pass per strong-identifier field, above the non-null population floor.
+    # No scale-safety check here — _gate_passes at the call site enforces #715.
+    strong_id_passes = 0
+    for p in profiles:
+        if p.col_type in _STRONG_EXACT_TYPES and p.name in df.columns:
+            if _nonnull(p.name) < _UNION_PASS_MIN_NONNULL:
+                continue
+            # #876 surrogate guard: a perfect-surrogate id (card_ratio >= 1.0)
+            # makes singleton blocks (0 pairs) — exclude. NOTE: do NOT apply
+            # blocking_max_ratio here; the union exists precisely to use
+            # near-unique-but-repeating ids the single-key gate rejects.
+            if (p.cardinality_ratio or 0.0) >= 1.0:
+                continue
+            candidate_passes.append([p.name])
+            strong_id_passes += 1
+
+    # require >=1 strong-id pass; a name-only shape belongs to the name fallback.
+    if strong_id_passes < 1:
+        return None
+
+    # name+geo passes for rows missing every strong id
+    name_cols_local = [p for p in profiles if _classify_by_name(p.name) == "name"]
+    first = next((p.name for p in name_cols_local if "first" in p.name.lower()), None)
+    last = next((p.name for p in name_cols_local if "last" in p.name.lower()
+                 or "surname" in p.name.lower()), None)
+    geo = next((p.name for p in profiles if p.col_type in ("zip", "geo")), None)
+    if first and last:
+        candidate_passes.append([first, last])
+    if last and geo:
+        candidate_passes.append([last, geo])
+
+    if len(candidate_passes) < 2:
+        return None
+    if _union_coverage(df, candidate_passes) < _BLOCKING_UNION_COVERAGE_TARGET:
+        return None
+
+    def _transforms_for(fields: list[str]) -> list[str]:
+        prof = next((p for p in profiles if p.name == fields[0]), None)
+        return ["lowercase", "strip"] if prof and prof.col_type == "email" else ["strip"]
+
+    passes = [BlockingKeyConfig(fields=f, transforms=_transforms_for(f))
+              for f in candidate_passes]
+    return BlockingConfig(
+        keys=[passes[0]],
+        strategy="multi_pass",
+        passes=passes,
+        skip_oversized=True,
+    )
+
+
 # ── Compound blocking helpers ─────────────────────────────────────────────
 
 
@@ -2666,6 +2766,77 @@ def build_blocking(
             text_blk.strategy,
         )
         return text_blk
+
+    # #1207: per-identifier blocking-union. We reach here only when no single
+    # exact key passed the strict NULL_RATE_CEILING (0.20) gate — exactly the
+    # null-sparse multi-source shape where the compound fallback would build a
+    # single-strong-id compound ([last_name, npi]) that caps recall at the id's
+    # population. Prefer a UNION of one pass per strong id + name+geo, whose
+    # OR-coverage restores the population the single key drops. Emitted before
+    # the compound fallback so it wins; falls through unchanged when it can't
+    # reach the coverage target or <2 passes survive.
+    def _id_pass_scale_safe_nonnull(field: str) -> bool:
+        """#1207: scale-safety for a strong-id SINGLETON pass, measured on the
+        NON-NULL subframe.
+
+        The runtime static blocker drops null block keys, so a high-null id's
+        null bucket (which dominates its raw max block) never actually forms.
+        The default ``_pass_is_bounded`` gate measures block size via a
+        null-INCLUSIVE ``group_by`` — that null bucket falsely rejects exactly
+        the null-sparse strong ids this union exists to add. We still apply the
+        SAME full-N projection + ``max_safe_block`` guard (just over the
+        non-null rows), so a bounded id (zip) or a mistyped low-cardinality
+        ``identifier`` with a genuinely large non-null block is still dropped.
+        """
+        try:
+            sub = df.filter(pl.col(field).is_not_null())
+            if sub.height == 0:
+                return False
+            g = sub.group_by(field).len()
+            sb = int(g.get_column("len").max() or 0)  # pyright: ignore[reportArgumentType]
+            sd = int(g.height)
+        except Exception:  # pragma: no cover -- defensive
+            return False
+        # Full-N projection unchanged: sample_n / effective_n_full stay the FULL
+        # row counts; only the measured block/distinct exclude the null bucket.
+        pb = _typed_projected_block(_col_types, [field], sb, effective_n_full, sample_n, sd)
+        if pb > max_safe_block:
+            return False
+        if pb > sb:  # block grows with N (bounded-domain / concentrated key)
+            return _project_pairs_per_row(pb) <= _blocking_pairs_per_row_budget()
+        return True
+
+    union_cfg = _build_strong_identifier_union(profiles, df, n_rows_full=n_rows_full)
+    if union_cfg is not None:
+        id_passes: list[BlockingKeyConfig] = []
+        other_passes: list[BlockingKeyConfig] = []
+        for p in union_cfg.passes or []:
+            if len(p.fields) == 1 and _col_types.get(p.fields[0]) in _STRONG_EXACT_TYPES:
+                id_passes.append(p)
+            else:
+                other_passes.append(p)
+        # Strong-id singletons: gate on the NON-NULL projected block (the static
+        # blocker drops null keys). Name/geo passes: standard #715/#876 gate.
+        surviving_ids = [p for p in id_passes if _id_pass_scale_safe_nonnull(p.fields[0])]
+        surviving_other = [p for p in other_passes if _pass_is_bounded(p)]
+        survivors = surviving_ids + surviving_other
+        if surviving_ids and len(survivors) >= 2:
+            primary = survivors[0]
+            logger.info(
+                "Auto-selecting strong-identifier blocking UNION (%d passes, "
+                "%d strong-id) on null-sparse data: no single exact key cleared "
+                "the 0.20 null ceiling; union OR-coverage restores the dropped "
+                "population. Strong-id passes gated on non-null block size "
+                "(null keys are dropped at runtime). See #1207.",
+                len(survivors), len(surviving_ids),
+            )
+            return BlockingConfig(
+                keys=[primary],
+                strategy="multi_pass",
+                passes=survivors,
+                max_block_size=max_safe_block,
+                skip_oversized=True,
+            )
 
     # ── Check if name-based fallback would also be oversized ──
     # #715: the name path picks ONE primary name column (pattern_names[0], else
