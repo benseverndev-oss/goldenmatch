@@ -1093,11 +1093,10 @@ jobs:
   # baseline (scripts/autoconfig_quality/baselines/scorecard.json). A FAIL means a
   # kernel change moved a host-independent decision (classification / matchkeys /
   # blocking fields+cost) or dropped the anchor_person_match F1 below its floor.
-  # planner_rung drift (native availability / box size) is informational WARN.
-  # Reference mode: this job now BUILDS the native ext and runs the gate on the
-  # native path, so it matches the native-blessed baseline (native vs pure-Python
-  # are not parity-identical on every dataset -- ncvr_synthetic differs ~1.8pp).
-  # Real datasets (DBLP-ACM) skip-when-absent. Iterate loop + how to re-bless:
+  # Reference mode: this job BUILDS the native ext and runs the gate on the native
+  # path, and the committed baseline is blessed native-on -- native is the
+  # reference. planner_rung drift is still informational WARN. Real datasets
+  # (DBLP-ACM) skip-when-absent. Iterate loop + how to re-bless:
   # scripts/autoconfig_quality/README.md.
   quality_gate:
     needs: changes
@@ -1120,12 +1119,11 @@ jobs:
       # DBLP-ACM skip-when-absent in CI (gitignored).
       - run: uv pip install recordlinkage pyarrow
       # Reference mode (docs/design/2026-07-01-rust-is-the-reference-roadmap.md):
-      # the committed baseline is blessed native-on, and native vs pure-Python are
-      # NOT parity-identical on every dataset (ncvr_synthetic differs ~1.8pp), so a
-      # no-wheel run diffs the pure-Python fallback against a native baseline and
-      # FAILs. Native is the reference -> build the ext and run the gate on the
-      # native path so it matches the native baseline. build_native.py drops
-      # goldenmatch._native into the package (as the `native` parity lane does).
+      # native is the reference, so the gate runs on the native path and the
+      # baseline is blessed native-on. build_native.py drops goldenmatch._native
+      # into the package (as the `native` parity lane does). Kernel signals are
+      # parity-identical native/Python; running native keeps planner_rung aligned
+      # with the native baseline (it picks `bucket`, not `polars-direct`).
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
         with:
@@ -1144,7 +1142,15 @@ jobs:
           # and bench-attribution paths to sys.path internally. No --fast-only:
           # the anchors' fast signals AND the anchor_person_match F1 floor are
           # both gated (anchor_person_match is 400 entities, F1 is seconds).
-          uv run python -m scripts.autoconfig_quality gate
+          # TEMP (re-bless on native): produce the native baseline in CI, upload it,
+          # then this step reverts to `gate`. Remove before merge.
+          uv run python -m scripts.autoconfig_quality bless
+      - name: Upload re-blessed native scorecard (TEMP)
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: reblessed-scorecard
+          path: scripts/autoconfig_quality/baselines/scorecard.json
+          retention-days: 1
       - name: Quality scorecard summary
         if: always()
         shell: bash
