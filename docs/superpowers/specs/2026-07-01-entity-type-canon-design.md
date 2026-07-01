@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-01
 **Status:** Design (approved for spec)
-**Builds on:** `GOLDENGRAPH_XDOC_KEY` (PR #1331) — the type-agnostic cross-doc merge key that lifted substrate R(B) 0.23→0.75.
+**Hard prerequisite:** `GOLDENGRAPH_XDOC_KEY` / `_key_payload` land in **PR #1331** (branch `feat/xdoc-type-jitter-fix`). They are NOT on `main` yet. Implementation MUST begin only after #1331 merges; the impl branch rebases onto main and **re-verifies** that `_key_payload` is the single cross-doc-key chokepoint (in #1331, `_record_key` routes through `_key_payload` and both `_exact_resolve`/`_fuzzy_resolve` call `_record_key` — confirm this still holds post-merge before adding the `name_ci_type` branch). This spec was reviewed against `origin/main`, where these symbols do not yet exist — that absence is the prerequisite, not a design error.
 **Report context:** `docs/superpowers/reports/2026-07-01-substrate-recall-type-jitter.md`.
 
 ## Problem
@@ -43,9 +43,13 @@ Source-side, gated, deterministic. text → **extract (type constrained to the c
 - `GOLDENGRAPH_XDOC_KEY` values become: unset (default `(name,typ)`) / `name` / `name_ci` / `name_ci_type`.
 
 ### 5. Homograph corpus — engineered generator extension
-- `GOLDENGRAPH_BENCH_HOMOGRAPH=k`: after entity load, pick `k` disjoint pairs of gold entities and force them to render under the **same** surface name while carrying **different** gold coarse types. Deterministic for a seed.
-- Gold mentions (`emit_gold_mentions`) already read `(entity_id, surface, doc_id)` off the documents, so the injected collision is captured correctly: the two entities keep distinct `entity_id`s (gold says "different") but share a surface (so `name_ci` wrongly merges them).
-- The eval then scores: `name_ci` **loses precision** on these pairs (false co-reference); `(name_ci, coarse_type)` **holds** it because the coarse types differ.
+
+This is the piece the design review flagged as unmeasurable in its first form. A homograph test **only works if the rendered text gives the extractor a basis to type the two same-surface entities DIFFERENTLY** — otherwise the 7B types them identically, `name_ci_type` collapses them exactly as `name_ci` does, and the precision-recovery deliverable is a false negative. Four required parts:
+
+- **Thread the coarse type into the corpus.** `concepts_loader` carries an upstream `entity_type` per concept, but `engineered._Entity` currently drops it (only `id`/`canonical`/`variants`). Add `coarse_type` to `_Entity`, mapped from the upstream type into the closed vocab (§1) via `canonicalize_entity_type`. This is the gold-type channel the current corpus lacks.
+- **Inject collisions between DIFFERENT coarse types.** `GOLDENGRAPH_BENCH_HOMOGRAPH=k`: deterministically pick `k` disjoint pairs of entities that (a) both appear as edge endpoints (an edge-less entity emits no docs → no mentions) and (b) have **different** `coarse_type`. Force both to render under one shared surface string (a new token, not either canonical, to avoid colliding with a third entity). The shared surface replaces the rendered surface for BOTH entities across ALL their edge docs (and question mentions), keeping distinct `entity_id`s.
+- **Render a type-disambiguating cue.** Homograph docs render with an appositive naming the coarse type — `"{surface}, a {coarse_type}, {rel} {obj}."` (e.g. `"Vertex, an organization, acquired Beats."` vs `"Vertex, a product, is part of the suite."`). This is what lets even a weak 7B assign the two the correct, DIFFERENT coarse type. The cue names the exact vocab word, so the test isolates the KEY's separation behavior, not the extractor's typing acuity (extractor typing consistency is tested separately by the standard-corpus recall arm).
+- **Gold is captured for free.** `emit_gold_mentions` reads `(entity_id, surface, doc_id)` off the docs; the two entities keep distinct `entity_id`s under the shared surface, so `name_ci` wrongly co-references them (P(B) drop) and `(name_ci, coarse_type)` keeps them apart (P(B) held). P(B) scores on `entity_id`, so no gold-type plumbing into the eval is needed — only into the rendering.
 
 ## Data flow / failure modes it fixes
 
@@ -61,10 +65,12 @@ The third row is the honest boundary: a coarse-type key cannot separate same-coa
 
 Two substrate-eval runs, `name_ci` vs `name_ci_type`, on two corpora:
 
-1. **Standard engineered corpus (recall parity):** `name_ci_type` R(B) must stay ≈ `name_ci` R(B) (within ~0.05 of 0.75 at ambiguity=0). A drop means the vocab is too fine and the 7B jitters within it.
-2. **Homograph corpus (precision recovery):** `name_ci` P(B) must visibly **drop** (proves the corpus exercises the risk); `name_ci_type` P(B) must **hold** near the non-homograph level. That delta is the deliverable.
+The two arms test two different things:
 
-Gate: `name_ci_type` recall within 0.05 of `name_ci` on standard **and** precision strictly better than `name_ci` on homograph.
+1. **Standard engineered corpus (recall parity — tests EXTRACTOR type consistency):** with `ENTITY_TYPE_CANON=1`, `name_ci_type` R(B) must stay ≈ `name_ci` R(B) (within ~0.05 of 0.75 at ambiguity=0). A drop means the vocab is too fine and the 7B jitters *within* it (the constraint didn't yield consistent coarse types) — the vocab-granularity knob is the lever.
+2. **Homograph corpus (precision recovery — tests the KEY's separation):** the injected docs carry explicit coarse-type cues, so this isolates whether the key separates different-typed same-name entities. `name_ci` P(B) must visibly **drop** (a negative control proving the corpus exercises the risk — if it doesn't drop, the injection is broken, not the fix); `name_ci_type` P(B) must **hold** near the non-homograph level. That delta is the deliverable.
+
+Gate: `name_ci_type` recall within 0.05 of `name_ci` on standard **and** — with `name_ci` P(B) confirmed to drop on the homograph corpus (the control) — `name_ci_type` P(B) strictly better than `name_ci` there.
 
 ## Scope
 
@@ -80,9 +86,10 @@ Gate: `name_ci_type` recall within 0.05 of `name_ci` on standard **and** precisi
 
 - `goldengraph/schema.py` — `DEFAULT_ENTITY_TYPE_VOCAB`, `entity_type_vocab()`, `canonicalize_entity_type(raw, vocab)`, `entity_type_canon_enabled()`.
 - `goldengraph/extract.py` — `_ENTITY_TYPE_VOCAB_INSTRUCTION`; prepend it in `extract()` when the gate is on.
-- `goldengraph/resolve.py` — `_key_payload` `name_ci_type` branch (reads the vocab lazily).
-- `benchmarks/.../qa_e2e/engineered.py` — `GOLDENGRAPH_BENCH_HOMOGRAPH` injection.
-- Tests: `test_xdoc_key.py` (name_ci_type payload), `test_entity_type_canon.py` (canonicalize_entity_type), `test_substrate_eval.py`/generator test (homograph gold correctness).
+- `goldengraph/resolve.py` — `_key_payload` `name_ci_type` branch (reads the vocab + `canonicalize_entity_type` lazily). **After #1331 merges**; re-verify single-chokepoint first.
+- `benchmarks/.../dataset/concepts_loader.py` (read-only check) — confirm the `entity_type` field the injection maps from.
+- `benchmarks/.../qa_e2e/engineered.py` — add `coarse_type` to `_Entity` (mapped via `canonicalize_entity_type`); `GOLDENGRAPH_BENCH_HOMOGRAPH=k` injection (pick edge-endpoint pairs of DIFFERENT coarse type, shared surface across all their docs); type-cued appositive rendering for homograph docs.
+- Tests: `test_entity_type_canon.py` (canonicalize_entity_type: exact/substring/fallback/case-fold), `test_xdoc_key.py` (name_ci_type payload), a generator test (homograph docs carry two distinct entity_ids under one surface with differing coarse-type cues; `emit_gold_mentions` captures both).
 
 ## Testing
 
@@ -90,6 +97,8 @@ Box-safe pure tests for `canonicalize_entity_type` (exact/substring/fallback/cas
 
 ## Risks
 
-- **7B non-compliance with the vocab** — mitigated by the deterministic safety net (the key canonicalizes regardless).
+- **Homograph docs without a type cue = false negative** (the design-review catch). If the injected docs render the bare `"{s} {rel} {o}."` template, the 7B has no basis to type the two same-surface entities differently, so `name_ci_type` collapses them like `name_ci` and the test wrongly reads "fix doesn't work." Mitigated by the mandatory type-disambiguating appositive rendering (§5). The negative control (`name_ci` P(B) must drop on the homograph corpus) catches a broken injection before it can produce a misleading result.
+- **7B non-compliance with the vocab** — mitigated by the deterministic safety net (the key canonicalizes whatever raw type extraction emits).
 - **Within-vocab jitter re-fragmenting recall** — measured directly by the recall-parity gate; the vocab-granularity knob is the lever if it fails.
-- **Coarse vocab too coarse to separate real homograph classes** — surfaced by the homograph corpus; the honest boundary (same-coarse-class) is documented, not hidden.
+- **Coarse vocab too coarse to separate real homograph classes** (two `concept`s named `blocking`) — surfaced by the homograph corpus; the honest boundary (same-coarse-class needs the ER scorer, not a key) is documented, not hidden.
+- **Prerequisite drift** — #1331 may change shape before merge; the impl step re-verifies the `_key_payload` chokepoint before extending it.
