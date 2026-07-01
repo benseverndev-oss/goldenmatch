@@ -179,9 +179,10 @@ def _bench_impl(eval: str, n: int, ambiguity: float, opts: str, chat: str, embed
         # construction ceiling as a number. goldengraph only (needs the native store + resolver).
         _amb = (env.get("GOLDENGRAPH_SUBSTRATE_AMBIGUITY", "").split()
                 or ["0.0", "0.3", "0.6"])
+        _corpus = env.get("GOLDENGRAPH_SUBSTRATE_CORPUS", "").strip() or "engineered"
         proc = subprocess.run(
             ["python", "-m", "erkgbench.run_substrate_eval",
-             "--ambiguity", *_amb, "--out-md", out_md],
+             "--corpus", _corpus, "--ambiguity", *_amb, "--out-md", out_md],
             cwd=_BENCH, env=env, capture_output=True, text=True, check=True,
         )
         results = pathlib.Path(out_md).read_text() if os.path.exists(out_md) else "(no results md)"

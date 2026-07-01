@@ -34,8 +34,8 @@ def _resolver_clusters(gold_mentions) -> list[list[int]]:
     return [list(r.member_idx) for r in resolve(mentions)]
 
 
-def _build_graph(corpus) -> dict:
-    """Level B: run the full build over the rendered text, then return the whole graph as the
+def _build_graph_from_documents(documents) -> dict:
+    """Level B: run the full build over a list of `Document`s, then return the whole graph as the
     `{entities, edges}` dict `substrate_eval` consumes (edges carry `subj`/`obj`/`source_refs`)."""
     from goldengraph.embed import GoldenmatchEmbedder
     from goldengraph.ingest import ingest_corpus
@@ -53,12 +53,33 @@ def _build_graph(corpus) -> dict:
         from goldengraph.resolve import _exact_resolve
         resolver = _exact_resolve
     ingest_corpus(
-        [d.text for d in corpus.documents], store, llm=llm, embedder=embedder,
-        doc_ids=[d.id for d in corpus.documents], resolver=resolver,
+        [d.text for d in documents], store, llm=llm, embedder=embedder,
+        doc_ids=[d.id for d in documents], resolver=resolver,
     )
     slice_graph = store.as_of(_AS_OF, _AS_OF)
     all_ids = [e["entity_id"] for e in slice_graph.entities()]
     return slice_graph.query(all_ids, 1) if all_ids else {"entities": [], "edges": []}
+
+
+def _build_graph(corpus) -> dict:
+    return _build_graph_from_documents(corpus.documents)
+
+
+def run_wiki() -> dict:
+    """Level 2: build over REAL Wikipedia prose (committed snapshot), align gold to nodes by SURFACE+DOC
+    (no engineered doc-id oracle), and score R(B)/P(B) + alignment coverage. Baseline-vs-`name_ci` is
+    selected by `GOLDENGRAPH_XDOC_KEY` as usual. No ambiguity dial -- real prose has its own variance."""
+    from erkgbench import metrics
+    from erkgbench.qa_e2e.wiki_corpus import load_wiki_corpus
+
+    documents, gold = load_wiki_corpus()
+    graph = _build_graph_from_documents(documents)
+    clustering = substrate_eval.align_real_mentions_to_nodes(graph, gold)
+    coverage = substrate_eval.real_alignment_coverage(graph, gold)
+    b = metrics.score([m[0] for m in gold], clustering)
+    coh = substrate_eval.graph_coherence(graph)
+    return {"er_r_b": b.recall, "er_p_b": b.precision, "er_f1_b": b.f1, "coverage": coverage,
+            "n_docs": len(documents), "n_gold": len(gold), "components": coh["components"]}
 
 
 def run_one(seed: int, ambiguity: float) -> dict:
@@ -110,8 +131,31 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Substrate-quality eval: A vs B ER-F1 + coherence + provenance.")
     ap.add_argument("--seed", type=int, default=20260620)
     ap.add_argument("--ambiguity", type=float, nargs="+", default=[0.0, 0.3, 0.6])
+    ap.add_argument("--corpus", choices=["engineered", "wiki"], default="engineered")
     ap.add_argument("--out-md", default="SUBSTRATE.md")
     args = ap.parse_args()
+
+    if args.corpus == "wiki":
+        r = run_wiki()
+        print(
+            f"[substrate-wiki] R(B)={r['er_r_b']:.4f} P(B)={r['er_p_b']:.4f} F1(B)={r['er_f1_b']:.4f} "
+            f"coverage={r['coverage']:.4f} docs={r['n_docs']} gold={r['n_gold']} components={r['components']}",
+            flush=True,
+        )
+        md = (
+            "# Substrate-Quality (real Wikipedia prose)\n\n"
+            "| R(B) | P(B) | F1(B) | coverage | docs | gold | components |\n"
+            "|---|---|---|---|---|---|---|\n"
+            f"| {r['er_r_b']:.4f} | {r['er_p_b']:.4f} | {r['er_f1_b']:.4f} | {r['coverage']:.4f} | "
+            f"{r['n_docs']} | {r['n_gold']} | {r['components']} |\n\n"
+            "Real Wikipedia lead-section prose; gold = wikilink->QID; nodes aligned by surface+doc. "
+            "coverage = fraction of gold mentions aligned to a built node (low coverage => alignment noise, "
+            "not resolution).\n"
+        )
+        with open(args.out_md, "w", encoding="utf-8") as fh:
+            fh.write(md)
+        print("\n" + md, flush=True)
+        return
 
     rows: list[tuple[float, dict]] = []
     for amb in args.ambiguity:
