@@ -29,6 +29,31 @@ A gated `GOLDENGRAPH_XDOC_KEY=name_ci_type` cross-doc key → `(name_ci, canonic
 
 **Combined gate: FAIL on recall parity.** `name_ci_type` is therefore NOT a drop-in replacement for `name_ci` — it trades recall for homograph safety.
 
+## Vocab-granularity sweep + isolation (follow-up)
+
+The recall cost is NOT mostly the 7B. Two follow-up sweeps decomposed it.
+
+**Coarser vocab is a real lever, with a sweet spot.** Standard-corpus R(B) under `name_ci_type` by vocab size:
+
+| vocab | R(B) standard | homograph P(B) |
+|---|---|---|
+| `name_ci` ceiling (no type) | 0.7475 | 0.8038 (control) |
+| 8-type | 0.6374 | 0.8856 |
+| **4-type** | **0.6856** | **0.9309** |
+| 3-type | 0.6696 | — |
+
+Coarsening 8→4 recovers a third of the recall gap AND *improves* homograph precision (0.886→0.931) — because the injected homographs are assigned distinct coarse buckets, coarsening never costs precision. 3-type is worse than 4-type (non-monotonic), so **4 is the sweet spot** on this concept corpus. **The default vocab is now 4-type.**
+
+**Isolation — the residual is the extraction constraint, not the key or the model.** Decomposing the 0.062 gap from the `name_ci` ceiling (0.7475) to `name_ci_type`+canon+4-type (0.6856):
+
+| step | R(B) | Δ | attributed to |
+|---|---|---|---|
+| `name_ci`, no canon | 0.7475 | — | ceiling |
+| `name_ci`, **+canon** | 0.7092 | **−0.038** | extraction-constraint perturbation |
+| `name_ci_type`, +canon | 0.6856 | **−0.024** | the coarse-type key (within-vocab jitter) |
+
+**61% of the recall cost is the prompt constraint perturbing what the 7B extracts** — a prompt-interaction effect, not model capability. Only 0.024 is type-key jitter (part model-consistency, part irreducible: an abstract concept's coarse type isn't a stable property). This means the recommended config may be `name_ci_type` **without** `ENTITY_TYPE_CANON` — rely on the deterministic `canonicalize_entity_type` substring-snap over OPEN extraction, recovering the 0.038 (the arc's recurring lesson: deterministic post-hoc snap beats prompt-constraint, cf. `SCHEMA_CANON`). Untested; the leading follow-on.
+
 ## What this means
 
 - **Ship gated, as planned.** The feature is default-off and its characteristics are now measured: homograph precision +0.08 at a recall cost of −0.11 vs bare `name_ci`. It is a legitimate opt-in tool for corpora where homographs matter, not a default.
@@ -37,6 +62,7 @@ A gated `GOLDENGRAPH_XDOC_KEY=name_ci_type` cross-doc key → `(name_ci, canonic
 
 ## Follow-ons
 
-1. **Vocab-granularity sweep** — the direct lever for the recall cost; re-run legs 30/31 across 2–3 vocab sizes.
-2. Embedding-NN / LLM type derivation (the deferred coarse-type mechanisms) if extraction-constraint consistency stays the bottleneck.
-3. Same-coarse-class homograph disambiguation via the ER scorer.
+1. **`name_ci_type` without `ENTITY_TYPE_CANON`** (deterministic post-hoc snap over open extraction) — the isolation attributes 61% of the recall cost to the extraction constraint, so dropping it may recover ~0.038 and nearly collapse the tradeoff. The leading next leg.
+2. ~~Vocab-granularity sweep~~ — DONE; 4-type is the sweet spot, now the default.
+3. Embedding-NN / LLM type derivation (the deferred coarse-type mechanisms) if `canonicalize_entity_type`'s substring-snap coverage proves the bottleneck.
+4. Same-coarse-class homograph disambiguation via the ER scorer.
