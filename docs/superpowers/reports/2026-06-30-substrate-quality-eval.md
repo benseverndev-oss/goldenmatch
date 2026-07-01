@@ -33,6 +33,20 @@ The plan set two validation clauses. The discriminating one holds; the other was
 
 **Resolution is not the bottleneck.** Level A stays high across the whole sweep (0.97 → 0.90 → 0.87) — the resolver degrades gracefully with surface variance. The substrate defect lives in **extraction**, which is where the architecture work must land.
 
+## Precision/recall decomposition (v1.1)
+
+The floor is **entirely recall.** Surfacing `P(B)`/`R(B)` on the same corpus:
+
+| ambiguity | ER-F1(B) | P(B) | R(B) | components |
+|---|---|---|---|---|
+| 0.0 | 0.3629 | 0.9333 | 0.2252 | 28 |
+| 0.3 | 0.2020 | 0.9785 | 0.1126 | 64 |
+| 0.6 | 0.1375 | 0.9231 | 0.0743 | 78 |
+
+Precision holds at **0.92–0.98** across the whole sweep while recall collapses **0.23 → 0.11 → 0.07.** When the 7B connects two mentions into a node it is almost always right; the damage is connections it never makes — dropped edges and mentions left as orphan singletons. This is **missed-edges, not over-merge**, and it settles the architecture direction: **recall recovery via cross-document entity resolution** (fold the disconnected mentions back into their entities), not splitting. The high precision is headroom — we can merge far more aggressively before precision is at risk.
+
+(Numbers from a second build; ambiguity=0 drifts trivially from the F1-only run above — F1 0.363 vs 0.371, 28 vs 27 components — LLM nondeterminism, within noise.)
+
 ## What it means for the roadmap
 
 This is the instrument the reframed north star needed. The QA arc's "the graph shatters on real prose" symptom is now a **standing, optimizable metric** with an attribution axis:
@@ -44,13 +58,13 @@ The architecture fix — proper cross-document entity resolution using goldenmat
 
 ## Caveats / v1 scope
 
-- **No precision/recall decomposition in the scoreboard yet.** The `[substrate]` line and table report F1 only; `run_one` computes `er_p_b`/`er_r_b` but they aren't surfaced. At ambiguity=0 the low B is most likely recall-driven (docs whose edge never extracted → orphan gold mentions → singleton fresh-ids), but that needs the P/R split to state. **v1.1: emit P/R columns** and attribute the floor.
+- **Precision/recall decomposition — done (v1.1, above).** The floor is recall (P(B) 0.92–0.98, R(B) 0.23→0.07). Confirmed the prior hypothesis: dropped edges → orphan gold mentions, not over-merge.
 - **Within-doc over-merge is under-counted.** Alignment keys on the doc's `(subj, obj)`; two gold entities merged inside a single doc can't be distinguished. This does not affect the cross-doc, ambiguity-driven fragmentation that dominates here (documented in the spec).
 - **provenance = 1.000 across the board** is expected with a single build engine (every edge that lands carries its `source_refs`); it becomes discriminating only in the multi-engine v2 bake-off.
 - Single seed, N=20 questions' worth of corpus (~139 edge-docs / 278 gold mentions). The monotone gap is robust to that, but the absolute floor should be re-confirmed on a second seed before it drives a specific architecture target.
 
 ## Next
 
-1. **v1.1** — P/R columns + floor attribution (recall-vs-precision) on this same corpus.
-2. **Architecture** — cross-doc entity resolution via the goldenmatch engine; re-run this eval as the pass/fail gate.
+1. **v1.1 — done.** P/R columns landed; the floor is recall (see decomposition above).
+2. **Architecture** — cross-doc entity resolution via the goldenmatch engine to recover the missed edges; re-run this eval as the pass/fail gate. Target: lift R(B) at ambiguity=0 without dropping P(B) below ~0.9.
 3. **v2 bake-off** — reframe the multi-engine comparison around substrate quality (this A/B + coherence + temporal as-of correctness), not factoid QA. `provenance` and cross-engine A−B become the discriminators.

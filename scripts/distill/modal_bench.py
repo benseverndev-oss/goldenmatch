@@ -261,10 +261,11 @@ def main(eval: str = "extraction_f1", n: int = 20, ambiguity: float = 0.6, opts:
             merged, eval=eval, n=n, ambiguity=ambiguity, opts=opts, embed=embed))
         return
     fn = run_bench_big if gpu.lower() in ("a100", "a100-80gb", "big") else run_bench
-    # head-to-head: end_to_end tags results by engine (`{eng}-{chat}`), so concurrent engine runs on
-    # the same local model don't collide. Non-default corpora get a `-{corpus}` suffix (matches _persist).
+    # head-to-head: end_to_end + substrate tag results by engine (`{eng}-{chat}`), so concurrent engine
+    # runs on the same local model don't collide. Non-default corpora get a `-{corpus}` suffix. This MUST
+    # mirror the tag `_persist` actually writes, or the printed SPAWNED path points at the wrong file.
     csuf = "" if corpus == "engineered" else f"-{corpus}"
-    tag = (f"{engine}-{chat}{csuf}" if eval == "end_to_end" else chat).replace(":", "-").replace("/", "-")
+    tag = (f"{engine}-{chat}{csuf}" if eval in ("end_to_end", "substrate") else chat).replace(":", "-").replace("/", "-")
     if spawn:
         # fire-and-forget: queue the call SERVER-SIDE and return instantly, so a local-CLI kill can't
         # cancel it. Result lands at results/<eval>_<n>_<model>.md. Pair with `modal run --detach`.
