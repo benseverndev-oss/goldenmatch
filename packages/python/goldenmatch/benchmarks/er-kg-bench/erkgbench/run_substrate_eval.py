@@ -71,12 +71,12 @@ def run_one(seed: int, ambiguity: float) -> dict:
 def _to_markdown(rows: list[tuple[float, dict]]) -> str:
     head = (
         "# Substrate-Quality Scoreboard\n\n"
-        "| ambiguity | ER-F1(A) | ER-F1(B) | A-B gap | components | largest-frac | provenance |\n"
-        "|---|---|---|---|---|---|---|\n"
+        "| ambiguity | ER-F1(A) | ER-F1(B) | P(B) | R(B) | A-B gap | components | largest-frac | provenance |\n"
+        "|---|---|---|---|---|---|---|---|---|\n"
     )
     body = "".join(
-        f"| {amb} | {sb['er_f1_a']:.4f} | {sb['er_f1_b']:.4f} | {sb['ab_gap']:.4f} | "
-        f"{sb['components']} | {sb['largest_fraction']:.4f} | {sb['provenance']:.4f} |\n"
+        f"| {amb} | {sb['er_f1_a']:.4f} | {sb['er_f1_b']:.4f} | {sb['er_p_b']:.4f} | {sb['er_r_b']:.4f} | "
+        f"{sb['ab_gap']:.4f} | {sb['components']} | {sb['largest_fraction']:.4f} | {sb['provenance']:.4f} |\n"
         for amb, sb in rows
     )
     note = (
@@ -100,7 +100,8 @@ def main() -> None:
         rows.append((amb, sb))
         print(
             f"[substrate] ambiguity={amb}: ER-F1(A)={sb['er_f1_a']:.4f} ER-F1(B)={sb['er_f1_b']:.4f} "
-            f"gap={sb['ab_gap']:.4f} components={sb['components']} provenance={sb['provenance']:.3f}",
+            f"P(B)={sb['er_p_b']:.4f} R(B)={sb['er_r_b']:.4f} gap={sb['ab_gap']:.4f} "
+            f"components={sb['components']} provenance={sb['provenance']:.3f}",
             flush=True,
         )
     md = _to_markdown(rows)
