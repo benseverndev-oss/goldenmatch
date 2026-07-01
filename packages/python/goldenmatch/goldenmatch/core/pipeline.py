@@ -300,6 +300,7 @@ def _open_memory_store(config: GoldenMatchConfig):
             backend=config.memory.backend,
             path=config.memory.path,
             connection=config.memory.connection,
+            table_prefix=config.memory.table_prefix,
         )
     except Exception as e:
         logger.warning("Memory store init failed, continuing without memory: %s", e)
@@ -520,6 +521,7 @@ def _apply_memory_pre(memory_store: Any, config: GoldenMatchConfig, matchkeys: l
             memory_store,
             threshold_min=config.memory.learning.threshold_min_corrections,
             weights_min=config.memory.learning.weights_min_corrections,
+            dataset=config.memory.dataset,
         )
         if not learner.has_new_corrections():
             return

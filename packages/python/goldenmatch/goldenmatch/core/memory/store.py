@@ -167,8 +167,17 @@ class MemoryStore:
         backend: str = "sqlite",
         path: str = ".goldenmatch/memory.db",
         connection: str | None = None,
+        table_prefix: str = "",
     ) -> None:
+        import re
+        if table_prefix and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", table_prefix):
+            raise ValueError(
+                f"table_prefix must match ^[A-Za-z_][A-Za-z0-9_]*$; got {table_prefix!r}",
+            )
         self._backend = backend
+        # Accepted for both backends (regex-guarded above); unused by SQLite
+        # today -- honored by the Postgres branch (Task 6).
+        self._table_prefix = table_prefix
         if backend == "sqlite":
             import os
             import sqlite3  # noqa: PLC0415 -- lazy, see #364

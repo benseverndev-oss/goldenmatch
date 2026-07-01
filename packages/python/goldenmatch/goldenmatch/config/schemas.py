@@ -901,6 +901,7 @@ class MemoryConfig(BaseModel):
     learning: LearningConfig = Field(default_factory=LearningConfig)
     reanchor: bool = True
     dataset: str | None = None
+    table_prefix: str = ""
 
     @field_validator("dataset")
     @classmethod
@@ -911,6 +912,14 @@ class MemoryConfig(BaseModel):
         if not stripped:
             raise ValueError("MemoryConfig.dataset must be non-empty (or None)")
         return stripped
+
+    @field_validator("table_prefix")
+    @classmethod
+    def _validate_table_prefix(cls, v: str) -> str:
+        import re
+        if v and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", v):
+            raise ValueError("table_prefix must match ^[A-Za-z_][A-Za-z0-9_]*$")
+        return v
 
 
 # ── MatchSettingsConfig ─────────────────────────────────────────────────────
