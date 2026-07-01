@@ -45,7 +45,7 @@ def dispatch_skill(skill_id: str, params: dict, allow_pprl: bool = False) -> dic
     session = AgentSession()
 
     if skill_id == "analyze_data":
-        return session.analyze(params["file_path"])
+        return session.analyze(params["file_path"], allow_pprl=allow_pprl)
 
     if skill_id == "autoconfig":
         # v1.7-v1.12: AutoConfigController via AgentSession. Returns committed
@@ -86,6 +86,7 @@ def dispatch_skill(skill_id: str, params: dict, allow_pprl: bool = False) -> dic
             result = session.deduplicate(
                 params["file_path"],
                 config=params.get("config"),
+                allow_pprl=allow_pprl,
             )
         finally:
             if _excl_token is not None:
@@ -108,6 +109,7 @@ def dispatch_skill(skill_id: str, params: dict, allow_pprl: bool = False) -> dic
                 params["file_a"],
                 params["file_b"],
                 config=params.get("config"),
+                allow_pprl=allow_pprl,
             )
         finally:
             if _excl_token is not None:
@@ -121,6 +123,7 @@ def dispatch_skill(skill_id: str, params: dict, allow_pprl: bool = False) -> dic
         return session.compare_strategies(
             params["file_path"],
             ground_truth=params.get("ground_truth"),
+            allow_pprl=allow_pprl,
         )
 
     if skill_id == "explain":

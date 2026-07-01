@@ -69,6 +69,16 @@ def tmp_csv(names_df):
 
 
 @pytest.fixture
+def tmp_sensitive_csv(sensitive_df):
+    """Write sensitive_df to a temp CSV and return its path."""
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
+        sensitive_df.write_csv(f.name)
+        path = f.name
+    yield path
+    os.unlink(path)
+
+
+@pytest.fixture
 def tmp_csv_b():
     """A second temp CSV for match_sources tests."""
     df = pl.DataFrame({
@@ -461,3 +471,22 @@ class TestAgentSessionTelemetry:
         # earlier call produced (we didn't mutate it; we cleared the session
         # attribute).
         assert prior_telemetry["available"] is True
+
+
+class TestDispatchSkillPprlOptIn:
+    """End-to-end: allow_pprl must reach select_strategy through the A2A
+    skill dispatcher, not just the raw AgentSession/select_strategy API."""
+
+    def test_analyze_data_default_no_pprl(self, tmp_sensitive_csv):
+        from goldenmatch.a2a.skills import dispatch_skill
+
+        result = dispatch_skill("analyze_data", {"file_path": tmp_sensitive_csv})
+        assert result["strategy"] != "pprl"
+
+    def test_analyze_data_opt_in_pprl(self, tmp_sensitive_csv):
+        from goldenmatch.a2a.skills import dispatch_skill
+
+        result = dispatch_skill(
+            "analyze_data", {"file_path": tmp_sensitive_csv}, allow_pprl=True
+        )
+        assert result["strategy"] == "pprl"
