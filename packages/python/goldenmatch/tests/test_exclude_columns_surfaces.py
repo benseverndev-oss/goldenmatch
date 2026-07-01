@@ -218,9 +218,10 @@ def test_a2a_dispatch_accepts_exclude_columns_param():
     class _FakeSession:
         last_telemetry = None
 
-        def deduplicate(self, file_path, config=None):
+        def deduplicate(self, file_path, config=None, allow_pprl=False):
             from goldenmatch.core.autoconfig import _RUNTIME_EXCLUDE_COLUMNS
             captured["runtime"] = _RUNTIME_EXCLUDE_COLUMNS.get()
+            captured["allow_pprl"] = allow_pprl
             return {"results": None}
 
     import unittest.mock as _mock
