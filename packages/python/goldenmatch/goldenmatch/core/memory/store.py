@@ -211,14 +211,18 @@ class MemoryStore:
             self._migrate_cluster_decision_columns()
             log.debug("MemoryStore opened: %s (journal_mode=WAL)", path)
         elif backend == "postgres":
+            # Validate the DSN BEFORE importing the optional dep: a missing DSN
+            # is a usage error regardless of whether psycopg is installed (and
+            # keeps `test_postgres_requires_connection` a ValueError in CI lanes
+            # that don't install the `postgres` extra).
+            if not connection:
+                raise ValueError("backend='postgres' requires a connection DSN")
             try:
                 import psycopg  # noqa: PLC0415 — lazy, optional extra
             except ImportError as e:
                 raise ImportError(
                     "backend='postgres' requires: pip install goldenmatch[postgres]"
                 ) from e
-            if not connection:
-                raise ValueError("backend='postgres' requires a connection DSN")
             # autocommit=True: the store's writes are single-statement upserts
             # (atomic on their own) and it is a long-lived connection (golden-truth
             # holds one per request/worker). Without it, read methods open a
