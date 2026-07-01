@@ -125,11 +125,17 @@ def _assign_real_nodes_aliased(graph: dict, gold_mentions, qid_aliases) -> dict[
     fresh = -1
     for i, (qid, surface, doc) in enumerate(gold_mentions):
         match = set(qid_aliases.get(qid, ())) | {str(surface).strip().lower()}
+        cands = sorted(by_doc.get(_base_doc_id(doc), set()))       # sorted -> lowest id on tie
         best, best_ov = None, 0
-        for n in sorted(by_doc.get(_base_doc_id(doc), set())):   # sorted -> lowest id on tie
+        for n in cands:                                            # exact set-intersection: largest wins
             ov = len(id2surf.get(n, set()) & match)
             if ov > best_ov:
                 best, best_ov = n, ov
+        if best is None:                                           # substring fallback (parity with surface
+            for n in cands:                                        # aligner): any alias/surface term overlaps
+                if any(m and any(m in sn or sn in m for sn in id2surf.get(n, ())) for m in match):
+                    best = n
+                    break
         if best is not None:
             node_of[i] = best
         else:

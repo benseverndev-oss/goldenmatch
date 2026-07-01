@@ -62,6 +62,16 @@ def test_aliased_orphan_unique_and_coverage():
     assert real_alignment_coverage_aliased(graph, gm, aliases) == 0.5
 
 
+def test_aliased_substring_fallback_when_extracted_form_is_novel():
+    # the 7B extracted "IBM Corporation" -- not a verbatim alias/surface; substring bridges via "ibm"
+    graph = {"entities": [_rent(5, "IBM Corporation")],
+             "edges": [{"subj": 5, "obj": 5, "predicate": "r", "source_refs": ["d1"]}]}
+    gm = [("Q37156", "IBM", "d1")]
+    aliases = {"Q37156": {"ibm", "ibm corp."}}          # exact-intersect misses "ibm corporation"
+    assert align_real_mentions_to_nodes_aliased(graph, gm, aliases) == [[0]]   # substring "ibm" hits
+    assert real_alignment_coverage_aliased(graph, gm, aliases) == 1.0
+
+
 def test_aliased_reduces_to_exact_surface_when_alias_is_surface():
     graph = {"entities": [_rent(7, "Apple")],
              "edges": [{"subj": 7, "obj": 7, "predicate": "r", "source_refs": ["d1"]}]}
