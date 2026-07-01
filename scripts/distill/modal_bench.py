@@ -284,7 +284,12 @@ def cosine_probe() -> str:
     must NOT)? Embeds the 5x3 paraphrase set, prints the within-synonym vs across-relation cosine bands.
     If the bands overlap, NO threshold works and embedding-assisted argctx is dead on this embedder --
     decided WITHOUT a full e2e gamble."""
-    import os, subprocess, time, urllib.request, itertools
+    import itertools
+    import os
+    import subprocess
+    import time
+    import urllib.request
+
     import numpy as np
     from openai import OpenAI
 
