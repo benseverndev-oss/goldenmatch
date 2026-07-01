@@ -13,7 +13,11 @@ is unset.
 
 from __future__ import annotations
 
+import os
 import re
+
+from .extract import Attribute, Extraction, Mention, Relationship
+from .llm import LLMClient
 
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
 
@@ -50,3 +54,56 @@ def sentence_windows(sents: list[str], size: int, overlap: int) -> list[str]:
             break
         i += stride
     return out
+
+
+def _env_int(name: str, default: int) -> int:
+    """Parse an int env var defensively: unset OR set-but-empty OR non-numeric ->
+    `default` (the empty-string-env footgun -- `NAME=` must not raise ValueError)."""
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def chunk_extract_enabled() -> bool:
+    """`GOLDENGRAPH_CHUNK_EXTRACT` gate. Off by default; "0"/"false"/"" -> off."""
+    return os.environ.get("GOLDENGRAPH_CHUNK_EXTRACT", "0") not in ("0", "false", "")
+
+
+def _chunk_params() -> tuple[int, int]:
+    """(window size, overlap) from env; defaults (4, 1). Defensive parse."""
+    return _env_int("GOLDENGRAPH_CHUNK_SENTENCES", 4), _env_int("GOLDENGRAPH_CHUNK_OVERLAP", 1)
+
+
+def chunk_extract(text: str, llm: LLMClient | None, extractor) -> Extraction:
+    """Split `text` into overlapping sentence windows, run `extractor(window, llm)`
+    on each, and union: concatenate mentions and OFFSET each window's relationship /
+    attribute indices by the running mention count. A window whose extractor raises
+    is skipped (its mentions just don't contribute), never fatal to the doc.
+
+    `extractor` is the same callable the single-pass path uses (`extract.extract`,
+    or a rebel/gliner closure) -- it still honors LITERAL_ATTRS / vocab / recall
+    gates internally per window."""
+    size, overlap = _chunk_params()
+    windows = sentence_windows(split_sentences(text), size, overlap)
+    merged_mentions: list[Mention] = []
+    merged_rels: list[Relationship] = []
+    merged_attrs: list[Attribute] = []
+    for window in windows:
+        try:
+            ex = extractor(window, llm)
+        except Exception:
+            continue  # a bad window degrades recall, never sinks the doc
+        base = len(merged_mentions)  # captured BEFORE the append -> correct per-window offset
+        merged_mentions += ex.mentions
+        merged_rels += [
+            Relationship(r.subj + base, r.predicate, r.obj + base) for r in ex.relationships
+        ]
+        merged_attrs += [
+            Attribute(a.subj + base, a.predicate, a.value, a.typ)
+            for a in getattr(ex, "attributes", ())
+        ]
+    return Extraction(mentions=merged_mentions, relationships=merged_rels, attributes=merged_attrs)
