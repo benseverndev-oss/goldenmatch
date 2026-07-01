@@ -1,0 +1,76 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "golden-suite"
+version = "0.1.0"
+description = "One-line, perf-optimized install for the entire Golden Suite — goldenmatch, goldencheck, goldenflow, goldenpipe, GoldenSchema (infermap), goldenanalysis, native acceleration on by default"
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+license = { text = "MIT" }
+authors = [{ name = "Ben Severn", email = "ben@bensevern.dev" }]
+keywords = ["data-quality", "entity-resolution", "pipeline", "schema-inference", "golden-suite", "meta-package"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+# `pip install golden-suite` gets the WHOLE suite AND the native acceleration
+# kernels, in one line, defaulting to the perf-optimized configuration.
+#
+# `goldenpipe` is the orchestrator (adapts every tool as a stage). The native
+# wheels are HARD dependencies on purpose: the suite should never silently run
+# the slow pure-Python path. abi3 wheels are published for the five mainstream
+# platforms (Linux x86_64/aarch64, macOS x86_64/arm64, Windows amd64); on any
+# platform without a wheel the install fails LOUDLY rather than degrading.
+# Under each package's default `auto` gate, the parity-signed-off hot paths then
+# run native automatically — no env vars to set. `golden-suite doctor` verifies
+# it; `golden-suite optimize` repairs it.
+dependencies = [
+    # --- suite ---
+    "goldenpipe[golden-suite]>=1.2.1",  # orchestrator + check/flow/match/analysis
+    "goldenmatch>=1.30",                # entity resolution: dedupe, match, golden records
+    "goldencheck>=1.3",                 # data validation (rules discovered from your data)
+    "goldenflow>=1.2",                  # transform / standardize / normalize
+    "infermap>=0.5",                    # GoldenSchema: inference-driven schema mapping
+    "goldenanalysis>=0.1",              # read-only cross-cutting metrics + reporting
+    "goldencheck-types>=0.1",           # shared canonical field-type contracts
+    # --- native acceleration (on by default; see note above) ---
+    "goldenmatch-native>=0.1.11",       # >=0.1.11 carries the #692 rayon-park fix
+    "goldencheck-native>=0.1",
+    "goldenflow-native>=0.1.1",
+    "goldenanalysis-native>=0.1",
+    # --- CLI (doctor / optimize) ---
+    "typer>=0.12",
+    "rich>=13.0",
+]
+
+[project.optional-dependencies]
+# One MCP server exposing every tool — the agent front door.
+mcp = ["goldensuite-mcp>=0.2"]
+# GoldenPipe serving surfaces (A2A + async transports + TUI + REST).
+agent = ["goldenpipe[tui,api,agent]>=1.2.1"]
+# Everything: full suite + native + MCP + serving.
+all = ["golden-suite[mcp,agent]"]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[project.scripts]
+golden-suite = "golden_suite.cli:app"
+
+[project.urls]
+Homepage = "https://github.com/benseverndev-oss/goldenmatch"
+Repository = "https://github.com/benseverndev-oss/goldenmatch"
+Documentation = "https://github.com/benseverndev-oss/goldenmatch/tree/main/packages/python/golden-suite#readme"
+Issues = "https://github.com/benseverndev-oss/goldenmatch/issues"
+Changelog = "https://github.com/benseverndev-oss/goldenmatch/blob/main/packages/python/golden-suite/CHANGELOG.md"
+
+[tool.hatch.build.targets.wheel]
+packages = ["golden_suite"]

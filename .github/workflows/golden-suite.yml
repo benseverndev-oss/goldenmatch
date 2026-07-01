@@ -1,0 +1,60 @@
+# golden-suite meta-package lane. `golden-suite` is a dependency-only meta-package
+# (one-line install for the whole suite + native acceleration, on by default) that
+# is EXCLUDED from the uv workspace -- its heavy dep tree (4 native wheels +
+# goldensuite-mcp) would otherwise enter the main uv.lock (the goldenmatch[native]
+# uv-sync footgun). So this is its only CI: build the wheel (packaging + the native
+# Requires-Dist), then smoke the introspection helpers + doctor CLI WITHOUT the
+# heavy deps installed (--no-deps), so the lane stays fast. Real install behavior
+# is covered by the standalone `pip install golden-suite` path, not the workspace.
+#
+# Informational lane (not part of ci-required). Confirm green before arming
+# auto-merge. Published via publish-golden-suite.yml on a `golden-suite-v*` tag.
+name: golden-suite
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "packages/python/golden-suite/**"
+      - ".github/workflows/golden-suite.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: packages/python/golden-suite
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Build the meta-package wheel + sdist
+        run: |
+          pip install build
+          python -m build
+      - name: Wheel carries the native Requires-Dist (native on by default)
+        run: |
+          python - <<'PY'
+          import glob, zipfile, sys
+          whl = glob.glob("dist/*.whl")[0]
+          meta = zipfile.ZipFile(whl).read(
+              [n for n in zipfile.ZipFile(whl).namelist() if n.endswith("METADATA")][0]
+          ).decode()
+          reqs = [l for l in meta.splitlines() if l.startswith("Requires-Dist")]
+          need = ["goldenmatch-native", "goldencheck-native", "goldenflow-native", "goldenanalysis-native"]
+          missing = [n for n in need if not any(n in r and "extra ==" not in r for r in reqs)]
+          assert not missing, f"native not in BASE deps: {missing}"
+          print(f"OK: {len(reqs)} Requires-Dist, native in base deps")
+          PY
+      - name: Smoke the introspection helpers + doctor CLI (--no-deps, fast)
+        run: |
+          pip install --no-deps dist/*.whl typer rich
+          python -c "import golden_suite; print('version', golden_suite.__version__); print(golden_suite.installed()); print(golden_suite.native_status())"
+          # doctor --no-strict must exit 0 even with the suite absent (reports None, doesn't fail)
+          golden-suite doctor --json --no-strict
+          golden-suite version

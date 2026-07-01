@@ -14,7 +14,7 @@ members = ["packages/python/*"]
 # goldengraph (SP4b) is EXCLUDED for the same reasons: it depends on the
 # goldengraph-native engine wheel (maturin-built) + optional LLM extras, so it is
 # standalone, built + tested by .github/workflows/goldengraph-pipeline.yml.
-exclude = ["packages/python/goldenmatch-kg", "packages/python/goldengraph"]
+exclude = ["packages/python/goldenmatch-kg", "packages/python/goldengraph", "packages/python/golden-suite"]
 
 [tool.uv.sources]
 goldenmatch = { workspace = true }

@@ -1,0 +1,94 @@
+# Golden Suite
+
+> One-line, perf-optimized install and single front door for the whole Golden Suite: entity
+> resolution (GoldenMatch), data validation (GoldenCheck), transformation (GoldenFlow),
+> schema mapping (GoldenSchema/infermap), read-only analysis (GoldenAnalysis), all
+> orchestrated by GoldenPipe. Native (Rust) acceleration is included and on by default;
+> the suite never silently runs the slow pure-Python path. Ships a tiny `golden-suite` CLI
+> (doctor/optimize) plus introspection helpers.
+
+## Mental model
+- `goldenpipe` is the orchestrator and the front door. It adapts every other tool as a
+  pluggable stage. Most integrations only touch `goldenpipe`.
+- `goldenmatch` is a LEAF (entity resolution), not the root. Do not expect the pipeline,
+  validation, or transforms from it.
+- `goldensuite-mcp` is one MCP server exposing every tool — the agent front door.
+
+## Components
+- GoldenPipe (`goldenpipe`) — orchestrator; `import goldenpipe as gp`
+- GoldenMatch (`goldenmatch`) — dedupe, match, golden records; `import goldenmatch as gm`
+- GoldenCheck (`goldencheck`) — validation, rules discovered from data; `import goldencheck`
+- GoldenFlow (`goldenflow`) — transform / standardize / normalize; `import goldenflow`
+- GoldenSchema (`infermap`) — inference-driven schema mapping; `import infermap`
+- GoldenAnalysis (`goldenanalysis`) — read-only metrics + reporting; `import goldenanalysis`
+- `goldencheck-types` — shared field-type contracts (transitive)
+- `goldensuite-mcp` — one MCP server, every tool
+
+## Install
+- `pip install golden-suite` — whole suite + native acceleration, perf-optimized (Python)
+- `pip install "golden-suite[mcp]"` — suite + one MCP server (`goldensuite-mcp`)
+- `pip install "golden-suite[all]"` — suite + mcp + serving surfaces
+- Single tool instead: `pip install goldenmatch` / `goldencheck` / `goldenflow` / `infermap`
+- Orchestrator + core three: `pip install "goldenpipe[golden-suite]"`
+- Native wheels cover Linux x86_64/aarch64, macOS x86_64/arm64, Windows amd64. On an
+  unsupported platform the install fails loudly (no silent pure-Python) — install the
+  individual pure-Python packages directly there.
+
+## Verify + repair the setup
+- `golden-suite doctor` — every component + whether native is ACTIVE; non-zero exit if silently slow (CI-safe)
+- `golden-suite optimize` — install missing native kernels for this platform, then re-verify
+```python
+from golden_suite import installed, native_status
+print(installed())      # dist -> version|None for every suite component
+print(native_status())  # per-package native_active / silently_slow / env_mode
+```
+
+## Quick examples
+
+### Full pipeline (validate -> transform -> match), one call
+```python
+import goldenpipe as gp
+result = gp.run("customers.csv")
+print(result.status, result.check, result.transform, result.match, result.reasoning)
+```
+
+### Deduplicate
+```python
+import goldenmatch as gm
+result = gm.dedupe("customers.csv", exact=["email"], fuzzy={"name": 0.85}, blocking=["zip"])
+result.golden.write_csv("deduped.csv")
+```
+
+### Match two sources
+```python
+result = gm.match("crm.csv", "billing.csv", fuzzy={"name": 0.85, "address": 0.80})
+```
+
+### Validate
+```python
+import goldencheck
+report = goldencheck.scan("customers.csv")
+```
+
+### Map an unknown schema
+```python
+import infermap                       # GoldenSchema
+mapping = infermap.infer("raw_export.csv")
+```
+
+### One MCP server for everything
+```bash
+pip install "golden-suite[mcp]" && goldensuite-mcp
+```
+
+## Anti-patterns
+- Installing `goldenmatch` and expecting the pipeline/check/transform — use `goldenpipe`.
+- Hand-wiring each tool — `goldenpipe` already registers them as stages.
+- Running six MCP servers — use one `goldensuite-mcp`.
+- `import goldenschema` — the import name is `infermap`.
+- Setting `<PKG>_NATIVE=1` "to enable native" — it's already on by default; `=1` force-runs
+  non-signed-off components (goldenflow) and can change outputs. Use `optimize --strict` only
+  after validating parity.
+
+## Repo
+- Monorepo: benseverndev-oss/goldenmatch (packages/python/<pkg>). Python 3.11-3.13, Polars-backed.
