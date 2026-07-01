@@ -6,7 +6,7 @@
 
 ## Problem
 
-The L2 clean-absolute finding put the real-prose substrate ceiling at **extraction recall**: on the wiki corpus the 7B extracts only ~0.44 of the wikilinked entities, and the aliased aligner sees coverage ~0.40 / R(B) ~0.23 over 12 components. The recall-prompt lever tried to lift this by *instructing* exhaustive entity extraction; it made the substrate **worse** (coverage −0.05, R(B) −0.07, components 12→25) because "extract EVERY entity" pushed the model to list entities at the expense of relations, and the substrate is edge-centric.
+The L2 clean-absolute finding put the real-prose substrate ceiling at **extraction recall**: on the wiki corpus the 7B extracts only ~0.44 of the wikilinked entities. The recall-prompt lever's **surface-aligner** control measured coverage 0.40 / R(B) 0.23 over 12 components; those are the *surface-aligner prior*, not an aliased-aligner baseline (the predecessor verdict explicitly flags "re-confirm on the aliased aligner" as follow-on #3). The recall-prompt lever tried to lift recall by *instructing* exhaustive entity extraction; it made the substrate **worse** (coverage −0.05, R(B) −0.07, components 12→25) because "extract EVERY entity" pushed the model to list entities at the expense of relations, and the substrate is edge-centric.
 
 The diagnostic from that negative: the miss is **not** relation-centric framing — it is **density**. The docs are a single dense ~2750-char, ~20-sentence paragraph, extracted in one LLM pass. A weak model attending over the whole lead drops entities regardless of how exhaustively it is prompted.
 
@@ -20,6 +20,12 @@ A gated `GOLDENGRAPH_CHUNK_EXTRACT=1` path that splits each document into **over
 - No new cross-document or within-doc entity-dedup machinery — the existing `resolve()` already collapses duplicate mentions within a doc.
 - No edge-multiplicity dedup (see Union semantics).
 - Not a general RAG chunker: this chunks for *extraction*, not retrieval.
+
+## Known failure modes
+
+- **Cross-window relation loss (structural).** Chunking drops any relationship whose two entities never co-occur in a single window — e.g. a subject in sentence 1 and its object in sentence 12 at `size=4`. This is the mechanism most likely to *fragment components* (the REFUTED signature), and overlap only partially compensates (it recovers relations that straddle a window boundary, not ones spanning many sentences). Larger windows recover these edges but blunt the entity-recall gain — that tension is why the sweep varies both size and overlap, and why component count is a primary guardrail.
+- **Resolution distribution shift (soft).** "resolve() collapses duplicates for free" is not perfectly transparent: `_fuzzy_resolve` calls `gm.dedupe_df`, whose zero-config auto-calibration is distribution-sensitive. Feeding it 3-7× duplicated mentions changes the row distribution and can shift which *borderline, non-identical* entities merge versus the single-pass path. The union is therefore an approximation, not an identity, on the resolution step — a real (usually small) source of behavior change to keep in mind when reading the delta.
+- **LLM-call multiplication (operational).** A ~20-sentence doc at `(4,1)` (stride 3) is ~7 windows ≈ 7× extraction calls per doc; `(3,1)` (stride 2) is ~10×. The wiki corpus is only 19 docs, so even 10× keeps a Modal `gg-bench` leg cheap (tens of extraction calls × 19 docs), but the multiplier is real and would matter at corpus scale — the gate stays default-off partly for this reason.
 
 ## Architecture
 
@@ -62,14 +68,16 @@ Three units in a new module `goldengraph/chunk_extract.py`, each independently t
 
 ### 1. `split_sentences(text: str) -> list[str]`
 
-Stdlib `re` only (network-free, no nltk/spacy — matches the repo norm set by `build_wiki_corpus`). Split on `(?<=[.!?])\s+`; drop empties/whitespace. Abbreviations ("Inc.", "U.S.") will occasionally over-split; that is harmless for extraction (a fragment yields fewer entities, never wrong ones), so tests assert a lower bound, not an exact count.
+Stdlib `re` only (network-free, no nltk/spacy — matches the repo norm set by `build_wiki_corpus`). Split on `(?<=[.!?])\s+`; drop empties/whitespace. Empty/whitespace-only input → `[]` (so an empty doc yields zero windows, not one wasted `extractor("", llm)` call). Abbreviations ("Inc.", "U.S.") will occasionally over-split; that is harmless for extraction (a fragment yields fewer entities, never wrong ones), so tests assert a lower bound, not an exact count.
 
 ### 2. `sentence_windows(sents, size, overlap) -> list[str]`
 
-Slide a window of `size` sentences advancing by `size - overlap`, each window joined back with a space. Guards:
+Slide a window of `size` sentences advancing by `size - overlap`, each window joined back with a space. Guards (applied in order):
+- `size <= 0` → floor to `1` (a typo like `GOLDENGRAPH_CHUNK_SENTENCES=0` must not produce a zero/negative stride).
+- `overlap < 0` → treat as `0`.
+- `overlap >= size` → clamp to `size - 1` (guarantees stride ≥ 1, forward progress; no infinite loop).
+- `sents == []` → `[]` (no windows).
 - `len(sents) <= size` → one window containing the whole doc (chunking is a correct no-op).
-- `overlap >= size` → clamp to `size - 1` (guarantees forward progress; no infinite loop).
-- `overlap < 0` → treat as 0.
 
 ### 3. `chunk_extract(text, llm, extractor) -> Extraction`
 
@@ -89,15 +97,17 @@ return Extraction(mentions=merged_mentions, relationships=merged_rels, attribute
 ```
 
 **Config (read at call time so the sweep varies env between Modal legs):**
-- `GOLDENGRAPH_CHUNK_EXTRACT` — the gate (default off).
+- `GOLDENGRAPH_CHUNK_EXTRACT` — the gate (default off; `"0"`/`"false"`/`""` → off).
 - `GOLDENGRAPH_CHUNK_SENTENCES` — window size (default `4`).
 - `GOLDENGRAPH_CHUNK_OVERLAP` — sentence overlap (default `1`).
+
+Parse the two int knobs **defensively** against the empty-string-env footgun already recorded in this project's memory: `GOLDENGRAPH_CHUNK_SENTENCES=` (set but empty) must fall back to the default, not throw `ValueError`. Use a helper like `int(v) if (v := os.environ.get(name, "").strip()) else default` (and a `try/except ValueError → default` around it), not a bare `int(os.environ.get(name, "4"))`.
 
 ### Union semantics — no dedup (deliberate)
 
 Overlap re-extracts some mentions and edges. We do **not** dedup at union time:
 - Duplicate **mentions** → `resolve()` collapses them into one entity downstream. No action needed.
-- Duplicate **edges** between the same resolved pair are benign: identical `(subj_local, predicate, obj_local)` edges union their `source_refs` in the store and do not change graph structure. The substrate metrics key on entity-pairs and components, not edge multiplicity.
+- Duplicate **edges** between the same resolved pair are benign *for the metrics*: `build_batch` emits one edge per relationship with no intra-batch dedup, so overlap does produce duplicate `(subj_local, predicate, obj_local)` edges within a doc. Whether `store.rs::append` collapses them intra-batch or keeps both, it does not matter — coverage / R(B) / components / P(B) key on entity-pairs and components, not edge multiplicity, so duplicates cannot distort the measurement. (The claim deliberately does not depend on unverified intra-batch store dedup behavior.)
 
 Adding edge-dedup would mean touching shared `build_batch` — out of scope. If the measurement shows edge inflation distorting a signal, that is a follow-up, not part of this lever.
 
@@ -109,7 +119,7 @@ Fail-soft, matching the existing per-doc guard:
 
 ## Measurement — falsifiable bar
 
-Same rig as the recall-prompt verdict, so results are directly comparable: Modal `gg-bench`, 7B, `--corpus wiki`, `GOLDENGRAPH_XDOC_KEY=name_ci`, aliased aligner (on `main` via #1345). One control leg (chunking off) re-confirms the ~0.40 coverage / 0.23 R(B) / 12-component baseline on the current build, then 2-3 chunked legs varying `(GOLDENGRAPH_CHUNK_SENTENCES, GOLDENGRAPH_CHUNK_OVERLAP)` — e.g. `(4,1)`, `(3,1)`, `(6,2)`.
+Same rig as the recall-prompt verdict (7B, `--corpus wiki`, `GOLDENGRAPH_XDOC_KEY=name_ci`) but on the **aliased aligner** (on `main` via #1345). The comparison that matters is control-vs-chunked *within this run*, both on the aliased aligner — so the fresh control leg establishes the real aliased baseline rather than assuming the surface-aligner prior (0.40 / 0.23 / 12) reproduces. Then 2-3 chunked legs varying `(GOLDENGRAPH_CHUNK_SENTENCES, GOLDENGRAPH_CHUNK_OVERLAP)` — e.g. `(4,1)`, `(3,1)`, `(6,2)`. Distinct `--n` per leg so the `gg-bench-cache` volume results don't clobber.
 
 | Outcome | Signature | Action |
 |---|---|---|
