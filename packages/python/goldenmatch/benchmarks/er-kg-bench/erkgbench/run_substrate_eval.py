@@ -45,9 +45,16 @@ def _build_graph(corpus) -> dict:
     store = ggn.PyStore()
     llm = OpenAIClient(model=os.environ.get("OPENAI_MODEL") or "gpt-4o-mini")
     embedder = GoldenmatchEmbedder(provider="openai", model=os.environ.get("OPENAI_EMBED_MODEL") or None)
+    # Diagnostic lever: GOLDENGRAPH_SUBSTRATE_RESOLVER=exact swaps the fuzzy dedupe for exact (name,typ)
+    # resolution -> zero within-doc over-merge. If edge_recall/R(B) jump under exact, fuzzy over-merge was
+    # collapsing src+dst into dropped self-loops; if flat, the loss is pure extraction drop. Default fuzzy.
+    resolver = None
+    if os.environ.get("GOLDENGRAPH_SUBSTRATE_RESOLVER", "").strip().lower() == "exact":
+        from goldengraph.resolve import _exact_resolve
+        resolver = _exact_resolve
     ingest_corpus(
         [d.text for d in corpus.documents], store, llm=llm, embedder=embedder,
-        doc_ids=[d.id for d in corpus.documents],
+        doc_ids=[d.id for d in corpus.documents], resolver=resolver,
     )
     slice_graph = store.as_of(_AS_OF, _AS_OF)
     all_ids = [e["entity_id"] for e in slice_graph.entities()]
@@ -63,6 +70,17 @@ def run_one(seed: int, ambiguity: float) -> dict:
     gold = emit_gold_mentions(corpus.documents)
     resolver_clusters = _resolver_clusters(gold)
     graph = _build_graph(corpus)
+    if os.environ.get("GOLDENGRAPH_SUBSTRATE_FRAG", "") not in ("", "0", "false"):
+        fr = substrate_eval.fragmentation_report(graph, gold)
+        print(
+            f"[frag] ambiguity={ambiguity}: mean_nodes/entity={fr['mean_nodes_per_entity']:.3f} "
+            f"max={fr['max_nodes_per_entity']} fragmented={fr['fragmented_entities']}/{fr['total_entities']} "
+            f"name_jitter={fr['name_jitter_frac']:.3f} type_jitter={fr['type_jitter_frac']:.3f} "
+            f"identical={fr['identical_frac']:.3f}",
+            flush=True,
+        )
+        for eid, k, nts in fr["worst"]:
+            print(f"[frag]   {eid}: {k} nodes -> {nts}", flush=True)
     return substrate_eval.score_substrate(
         gold_mentions=gold, resolver_clusters=resolver_clusters, graph=graph
     )
@@ -71,12 +89,13 @@ def run_one(seed: int, ambiguity: float) -> dict:
 def _to_markdown(rows: list[tuple[float, dict]]) -> str:
     head = (
         "# Substrate-Quality Scoreboard\n\n"
-        "| ambiguity | ER-F1(A) | ER-F1(B) | P(B) | R(B) | A-B gap | components | largest-frac | provenance |\n"
-        "|---|---|---|---|---|---|---|---|---|\n"
+        "| ambiguity | ER-F1(A) | ER-F1(B) | P(B) | R(B) | edge-recall | A-B gap | components | largest-frac | provenance |\n"
+        "|---|---|---|---|---|---|---|---|---|---|\n"
     )
     body = "".join(
         f"| {amb} | {sb['er_f1_a']:.4f} | {sb['er_f1_b']:.4f} | {sb['er_p_b']:.4f} | {sb['er_r_b']:.4f} | "
-        f"{sb['ab_gap']:.4f} | {sb['components']} | {sb['largest_fraction']:.4f} | {sb['provenance']:.4f} |\n"
+        f"{sb['edge_recall']:.4f} | {sb['ab_gap']:.4f} | {sb['components']} | {sb['largest_fraction']:.4f} | "
+        f"{sb['provenance']:.4f} |\n"
         for amb, sb in rows
     )
     note = (
@@ -100,8 +119,8 @@ def main() -> None:
         rows.append((amb, sb))
         print(
             f"[substrate] ambiguity={amb}: ER-F1(A)={sb['er_f1_a']:.4f} ER-F1(B)={sb['er_f1_b']:.4f} "
-            f"P(B)={sb['er_p_b']:.4f} R(B)={sb['er_r_b']:.4f} gap={sb['ab_gap']:.4f} "
-            f"components={sb['components']} provenance={sb['provenance']:.3f}",
+            f"P(B)={sb['er_p_b']:.4f} R(B)={sb['er_r_b']:.4f} edge_recall={sb['edge_recall']:.4f} "
+            f"gap={sb['ab_gap']:.4f} components={sb['components']} provenance={sb['provenance']:.3f}",
             flush=True,
         )
     md = _to_markdown(rows)

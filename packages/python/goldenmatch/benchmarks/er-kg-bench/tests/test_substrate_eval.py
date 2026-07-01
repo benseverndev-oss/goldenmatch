@@ -3,10 +3,16 @@ from __future__ import annotations
 
 from erkgbench.substrate_eval import (
     align_mentions_to_nodes,
+    edge_recall,
+    fragmentation_report,
     graph_coherence,
     provenance_coverage,
     score_substrate,
 )
+
+
+def _ent(eid, name, typ="thing"):
+    return {"entity_id": eid, "canonical_name": name, "typ": typ}
 
 
 def _edge(subj, obj, doc, pred="r"):
@@ -37,6 +43,42 @@ def test_align_clean_one_node_per_entity():
     clustering = align_mentions_to_nodes(graph, gm)
     # mention 0 (A) -> node0, 1 (B)->node1, 2 (A)->node0, 3 (C)->node2
     assert sorted(map(sorted, clustering)) == [[0, 2], [1], [3]]   # A's two mentions share node0
+
+
+def test_edge_recall_counts_gold_docs_with_surviving_edge():
+    # 3 gold edge-docs; build produced an edge for only 2 (doc "A::r3::D" dropped -> extraction/self-loop)
+    gm = [
+        ("A", "A", "A::r::B"), ("B", "B", "A::r::B"),
+        ("A", "A", "A::r2::C"), ("C", "C", "A::r2::C"),
+        ("A", "A", "A::r3::D"), ("D", "D", "A::r3::D"),
+    ]
+    graph = {"entities": [], "edges": [_edge(0, 1, "A::r::B"), _edge(0, 2, "A::r2::C", "r2")]}
+    assert edge_recall(graph, gm) == 2 / 3
+    # a ::N co-occurrence suffix on a source_ref still counts its base doc
+    graph2 = {"entities": [], "edges": [_edge(0, 1, "A::r::B::1")]}
+    assert edge_recall(graph2, [("A", "A", "A::r::B"), ("B", "B", "A::r::B")]) == 1.0
+    assert edge_recall({"edges": []}, []) == 1.0  # no gold -> 1.0
+
+
+def test_fragmentation_report_attributes_name_vs_type_jitter():
+    # gold entity "A" appears in two docs; the build put it in two nodes (5 and 6) that differ by NAME
+    gm = [("A", "A", "A::r::B"), ("B", "B", "A::r::B"), ("A", "A", "A::r2::C"), ("C", "C", "A::r2::C")]
+    graph = {
+        "entities": [_ent(5, "A"), _ent(6, "Ay"), _ent(1, "B"), _ent(2, "C")],
+        "edges": [_edge(5, 1, "A::r::B"), _edge(6, 2, "A::r2::C", "r2")],
+    }
+    fr = fragmentation_report(graph, gm)
+    assert fr["fragmented_entities"] == 1 and fr["total_entities"] == 3
+    assert fr["mean_nodes_per_entity"] == (2 + 1 + 1) / 3   # A->2 nodes, B->1, C->1
+    assert fr["name_jitter_frac"] == 1.0 and fr["type_jitter_frac"] == 0.0
+    assert fr["identical_frac"] == 0.0
+    # type jitter: same name, different typ -> attributed to type not name
+    graph_t = {
+        "entities": [_ent(5, "A", "person"), _ent(6, "A", "org"), _ent(1, "B"), _ent(2, "C")],
+        "edges": [_edge(5, 1, "A::r::B"), _edge(6, 2, "A::r2::C", "r2")],
+    }
+    ft = fragmentation_report(graph_t, gm)
+    assert ft["type_jitter_frac"] == 1.0 and ft["name_jitter_frac"] == 0.0
 
 
 def test_align_entity_split_recall_loss():

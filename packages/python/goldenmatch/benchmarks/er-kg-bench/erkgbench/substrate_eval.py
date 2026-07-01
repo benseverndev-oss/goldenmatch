@@ -9,6 +9,30 @@ def _base_doc_id(ref: str) -> str:
     return "::".join(parts[:3]) if len(parts) >= 3 else ref
 
 
+def _assign_nodes(graph: dict, gold_mentions: list[tuple[str, str, str]]) -> dict[int, int]:
+    """Per gold-mention index -> the built node it landed in (via the doc's edge endpoints), or a fresh
+    NEGATIVE id when the doc produced no matching edge (extraction miss / dropped self-loop). Shared by
+    `align_mentions_to_nodes` (which groups these) and `fragmentation_report` (which counts them)."""
+    by_doc: dict[str, tuple[int, int]] = {}
+    for e in graph.get("edges", ()):
+        for ref in e.get("source_refs", ()):
+            by_doc.setdefault(_base_doc_id(ref), (e["subj"], e["obj"]))
+    node_of: dict[int, int] = {}
+    fresh = -1
+    for i, (entity_id, _surface, doc_id) in enumerate(gold_mentions):
+        edge = by_doc.get(_base_doc_id(doc_id))
+        if edge is None:
+            node_of[i] = fresh
+            fresh -= 1
+            continue
+        parts = doc_id.split("::")
+        src_id, dst_id = parts[0], parts[2]
+        node_of[i] = edge[0] if entity_id == src_id else edge[1] if entity_id == dst_id else fresh
+        if node_of[i] == fresh:
+            fresh -= 1
+    return node_of
+
+
 def align_mentions_to_nodes(graph: dict, gold_mentions: list[tuple[str, str, str]]) -> list[list[int]]:
     """Cluster gold-mention INDICES by the built node each landed in. Exact, doc-keyed (not surface):
     each engineered doc is ONE edge `src::rel::dst`; the built edge for that doc (matched by base doc id
@@ -19,28 +43,57 @@ def align_mentions_to_nodes(graph: dict, gold_mentions: list[tuple[str, str, str
     entities) into one node, the build drops the self-loop -> no edge -> both mentions become singletons,
     mislabeling a within-doc over-merge as recall misses. Does not affect the ambiguity-driven (cross-doc,
     recall-side) headline."""
-    # doc base id -> the edge (subj, obj). Prefer an exact base-id match.
-    by_doc: dict[str, tuple[int, int]] = {}
-    for e in graph.get("edges", ()):
-        for ref in e.get("source_refs", ()):
-            by_doc.setdefault(_base_doc_id(ref), (e["subj"], e["obj"]))
-    node_of: dict[int, int] = {}   # mention index -> node id ; unmatched -> a fresh negative id
-    fresh = -1
-    for i, (entity_id, _surface, doc_id) in enumerate(gold_mentions):
-        edge = by_doc.get(_base_doc_id(doc_id))
-        if edge is None:
-            node_of[i] = fresh
-            fresh -= 1
-            continue
-        parts = doc_id.split("::")
-        src_id, dst_id = parts[0], parts[2]
-        node_of[i] = edge[0] if entity_id == src_id else edge[1] if entity_id == dst_id else (fresh)
-        if node_of[i] == fresh:   # entity_id matched neither endpoint (shouldn't happen) -> unmatched
-            fresh -= 1
     groups: dict[int, list[int]] = {}
-    for i, node in node_of.items():
+    for i, node in _assign_nodes(graph, gold_mentions).items():
         groups.setdefault(node, []).append(i)
     return [sorted(v) for v in groups.values()]
+
+
+def fragmentation_report(graph: dict, gold_mentions: list[tuple[str, str, str]]) -> dict:
+    """Diagnose WHY cross-doc co-reference is lost: for each GOLD entity, how many distinct built NODES
+    its mentions scattered across, and whether those nodes differ in NAME or in TYPE. `mean_nodes_per_entity`
+    == 1.0 is perfect unification; higher means the same entity became many nodes. Of the fragmented
+    entities, `name_jitter_frac`/`type_jitter_frac` attribute the cause (the extractor rendering one entity
+    under varied names/types across docs -> mismatched `record_key` -> no store merge); `identical_frac` is
+    fragmented-despite-identical-(name,typ) == a store-merge BUG, not modeling. Ignores fresh (<0) miss
+    nodes so this isolates cross-doc NON-MERGE from extraction drop (that is `edge_recall`)."""
+    id2nt: dict[int, tuple[str, str]] = {
+        e["entity_id"]: (e.get("canonical_name", ""), e.get("typ", "")) for e in graph.get("entities", ())
+    }
+    node_of = _assign_nodes(graph, gold_mentions)
+    by_entity: dict[str, set[int]] = {}
+    for i, (eid, _s, _d) in enumerate(gold_mentions):
+        node = node_of[i]
+        if node < 0:  # extraction-miss singleton -> not a cross-doc non-merge; excluded
+            continue
+        by_entity.setdefault(eid, set()).add(node)
+    multi = {eid: nodes for eid, nodes in by_entity.items() if len(nodes) > 1}
+    total = len(by_entity) or 1
+    name_j = type_j = ident = 0
+    worst: list[tuple[str, int, list[tuple[str, str]]]] = []
+    for eid, nodes in multi.items():
+        nts = [id2nt.get(n, ("?", "?")) for n in nodes]
+        names = {nt[0] for nt in nts}
+        types = {nt[1] for nt in nts}
+        if len(names) > 1:
+            name_j += 1
+        if len(types) > 1:
+            type_j += 1
+        if len(names) == 1 and len(types) == 1:
+            ident += 1
+        worst.append((eid, len(nodes), sorted(nts)))
+    worst.sort(key=lambda t: -t[1])
+    nodes_per = [len(nodes) for nodes in by_entity.values()]
+    return {
+        "mean_nodes_per_entity": sum(nodes_per) / total,
+        "max_nodes_per_entity": max(nodes_per, default=0),
+        "fragmented_entities": len(multi),
+        "total_entities": len(by_entity),
+        "name_jitter_frac": name_j / (len(multi) or 1),
+        "type_jitter_frac": type_j / (len(multi) or 1),
+        "identical_frac": ident / (len(multi) or 1),
+        "worst": worst[:12],
+    }
 
 
 def graph_coherence(graph: dict) -> dict:
@@ -65,6 +118,22 @@ def graph_coherence(graph: dict) -> dict:
     from collections import Counter
     sizes = Counter(roots)
     return {"components": len(sizes), "largest_fraction": max(sizes.values()) / len(roots)}
+
+
+def edge_recall(graph: dict, gold_mentions: list[tuple[str, str, str]]) -> float:
+    """Fraction of GOLD edge-docs that produced a surviving built edge (base doc id present in some
+    edge's `source_refs`). This is extraction COMPLETENESS: a doc whose edge was never extracted -- or
+    whose endpoints the resolver collapsed into a self-loop that `build_batch` drops -- contributes no
+    edge, so both its gold mentions orphan. Decomposes the R(B) floor: low edge_recall => the edges
+    aren't in the graph at all (extraction/over-merge), NOT a cross-doc resolution miss. 1.0 if no gold."""
+    gold_docs = {_base_doc_id(doc_id) for (_eid, _surface, doc_id) in gold_mentions}
+    if not gold_docs:
+        return 1.0
+    built_docs: set[str] = set()
+    for e in graph.get("edges", ()):
+        for ref in e.get("source_refs", ()):
+            built_docs.add(_base_doc_id(ref))
+    return len(gold_docs & built_docs) / len(gold_docs)
 
 
 def provenance_coverage(graph: dict) -> float:
@@ -92,4 +161,5 @@ def score_substrate(*, gold_mentions, resolver_clusters, graph) -> dict:
         "ab_gap": a.f1 - b.f1,
         "components": coh["components"], "largest_fraction": coh["largest_fraction"],
         "provenance": provenance_coverage(graph),
+        "edge_recall": edge_recall(graph, gold_mentions),
     }
