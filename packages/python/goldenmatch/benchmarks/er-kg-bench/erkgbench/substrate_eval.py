@@ -104,6 +104,57 @@ def real_alignment_coverage(graph: dict, gold_mentions: list[tuple[str, str, str
     return sum(1 for n in node_of.values() if n >= 0) / len(node_of)
 
 
+def _assign_real_nodes_aliased(graph: dict, gold_mentions, qid_aliases) -> dict[int, int]:
+    """Like `_assign_real_nodes` but the match target is the mention's QID ALIAS SET (union the literal
+    wikilink surface), so a built node is found by ANY of the entity's aliases -- dissolving the
+    wikilink-surface-vs-extracted-form mismatch (`Big Blue` gold aligns to the `IBM` node). Node surface set
+    = `surface_names` + `canonical_name` (case-folded). Largest alias-intersection wins, lowest node id
+    breaks ties; no match -> a UNIQUE decrementing negative (orphan)."""
+    id2surf: dict[int, set[str]] = {}
+    for e in graph.get("entities", ()):
+        surfs = {str(s).strip().lower() for s in e.get("surface_names", ()) if s}
+        cn = str(e.get("canonical_name", "")).strip().lower()
+        if cn:
+            surfs.add(cn)
+        id2surf[e.get("entity_id")] = surfs
+    by_doc: dict[str, set[int]] = {}
+    for e in graph.get("edges", ()):
+        for ref in e.get("source_refs", ()):
+            by_doc.setdefault(_base_doc_id(ref), set()).update((e.get("subj"), e.get("obj")))
+    node_of: dict[int, int] = {}
+    fresh = -1
+    for i, (qid, surface, doc) in enumerate(gold_mentions):
+        match = set(qid_aliases.get(qid, ())) | {str(surface).strip().lower()}
+        best, best_ov = None, 0
+        for n in sorted(by_doc.get(_base_doc_id(doc), set())):   # sorted -> lowest id on tie
+            ov = len(id2surf.get(n, set()) & match)
+            if ov > best_ov:
+                best, best_ov = n, ov
+        if best is not None:
+            node_of[i] = best
+        else:
+            node_of[i] = fresh
+            fresh -= 1
+    return node_of
+
+
+def align_real_mentions_to_nodes_aliased(graph: dict, gold_mentions, qid_aliases) -> list[list[int]]:
+    """Cluster gold-mention indices by built node via ALIAS-set + doc match (the clean-absolute L2 aligner)."""
+    groups: dict[int, list[int]] = {}
+    for i, node in _assign_real_nodes_aliased(graph, gold_mentions, qid_aliases).items():
+        groups.setdefault(node, []).append(i)
+    return [sorted(v) for v in groups.values()]
+
+
+def real_alignment_coverage_aliased(graph: dict, gold_mentions, qid_aliases) -> float:
+    """Fraction of gold mentions aligned to a real node under alias-anchoring. With surface-mismatch
+    removed, this is the true EXTRACTION-RECALL floor (an entity the extractor never produced can't align)."""
+    node_of = _assign_real_nodes_aliased(graph, gold_mentions, qid_aliases)
+    if not node_of:
+        return 1.0
+    return sum(1 for n in node_of.values() if n >= 0) / len(node_of)
+
+
 def fragmentation_report(graph: dict, gold_mentions: list[tuple[str, str, str]]) -> dict:
     """Diagnose WHY cross-doc co-reference is lost: for each GOLD entity, how many distinct built NODES
     its mentions scattered across, and whether those nodes differ in NAME or in TYPE. `mean_nodes_per_entity`
