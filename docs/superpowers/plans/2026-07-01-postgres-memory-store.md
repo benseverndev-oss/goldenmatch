@@ -4,7 +4,7 @@
 
 **Goal:** Add a `backend='postgres'` path to `MemoryStore` so Learning Memory corrections + adjustments persist in a shared multi-tenant Postgres, isolated by `dataset`, with `learn()` scoped per-tenant.
 
-**Architecture:** Keep one `MemoryStore` class. Introduce a thin execution seam (`_execute`/`_executescript`/`_commit` + a placeholder/upsert/DDL that dispatch on `self._backend`) so existing method bodies keep their `?`-style SQL and only the genuinely dialect-specific bits (DDL, the two upserts, `IS NULL`→`COALESCE`) branch. Thread `dataset` through the learner + pipeline and `table_prefix` through config + pipeline.
+**Architecture:** Keep one `MemoryStore` class. Introduce a thin execution seam (`_execute`/`_commit` + a placeholder helper that dispatch on `self._backend`) so existing method bodies keep their `?`-style SQL and only the genuinely dialect-specific bits (DDL, the two upserts, `IS NULL`→`COALESCE`) branch. Thread `dataset` through the learner + pipeline and `table_prefix` through config + pipeline.
 
 **Tech Stack:** Python, `psycopg` v3 (existing optional `postgres` extra), SQLite (stdlib), Pydantic config, pytest (DB-gated via `tests/_pg_helpers.py`).
 
@@ -72,7 +72,14 @@ And make `_row_to_adjustment` populate it defensively (SQLite rows won't have th
         )
 ```
 
-> Note the `learned_at` guard: psycopg returns `datetime`, sqlite returns an ISO string. Apply the same `isinstance(...)` guard to `created_at` in `_row_to_correction` (Step: update that converter identically).
+- [ ] **Step 3b: Apply the same timestamp guard to `_row_to_correction`** (load-bearing for Postgres reads in Task 6: psycopg returns a `datetime`, sqlite an ISO string). Change its `created_at=datetime.fromisoformat(row["created_at"])` to:
+
+```python
+            created_at=(row["created_at"] if isinstance(row["created_at"], datetime)
+                        else datetime.fromisoformat(row["created_at"])),
+```
+
+Add a focused test that a `Correction` round-trips through the SQLite store with a parseable `created_at` (guards the refactor).
 
 - [ ] **Step 4: Run → pass.**
 - [ ] **Step 5: Commit** — `feat(memory): LearnedAdjustment.dataset + dialect-safe timestamp parsing`
@@ -212,7 +219,7 @@ Thread through the pipeline:
 **Files:** Modify `core/memory/store.py`. Test: existing SQLite memory tests are the guard (pure refactor — no behavior change).
 
 - [ ] **Step 1: Confirm the SQLite suite is green** (baseline): `uv run pytest packages/python/goldenmatch/tests/<memory tests> -q` → PASS.
-- [ ] **Step 2: Introduce the seam.** Add helpers on `MemoryStore` and route every `self._conn.execute(...)` / `executescript` / `with self._conn:` through them:
+- [ ] **Step 2: Introduce the seam.** Add helpers on `MemoryStore` and route every `self._conn.execute(...)` / `with self._conn:` through them. (`executescript` stays inside the SQLite-only `__init__` branch — it needs no seam.)
 
 ```python
     def _ph(self, sql: str) -> str:
@@ -246,9 +253,10 @@ from tests._pg_helpers import HAS_POSTGRES, pg_url_fixture
 pytestmark = pytest.mark.skipif(not HAS_POSTGRES, reason="no test postgres")
 
 @pytest.fixture
-def pg_url():
-    with pg_url_fixture() as holder:
-        yield holder.url()
+def pg():
+    # pg_url_fixture is a generator (NOT a context manager) — mirror the existing
+    # pattern in tests/test_db.py: `yield from`. The yielded holder exposes .url().
+    yield from pg_url_fixture()
 
 def _mk(a, b, ds, dec="reject", score=0.5, trust=1.0, src="steward"):
     from goldenmatch.core.memory.store import Correction
@@ -256,9 +264,9 @@ def _mk(a, b, ds, dec="reject", score=0.5, trust=1.0, src="steward"):
                       trust=trust, field_hash="", record_hash="", original_score=score,
                       matchkey_name="mk", dataset=ds)
 
-def test_pg_correction_roundtrip_and_trust_wins(pg_url):
+def test_pg_correction_roundtrip_and_trust_wins(pg):
     from goldenmatch.core.memory.store import MemoryStore
-    s = MemoryStore(backend="postgres", connection=pg_url, table_prefix="goldenmatch_")
+    s = MemoryStore(backend="postgres", connection=pg.url(), table_prefix="goldenmatch_")
     s.add_correction(_mk(1, 2, "A"))
     assert s.count_corrections(dataset="A") == 1
     # lower-trust does not overwrite higher-trust
@@ -267,17 +275,17 @@ def test_pg_correction_roundtrip_and_trust_wins(pg_url):
     assert got.decision == "reject"           # steward (1.0) kept
     s.close()
 
-def test_pg_null_dataset_upsert(pg_url):
+def test_pg_null_dataset_upsert(pg):
     from goldenmatch.core.memory.store import MemoryStore
-    s = MemoryStore(backend="postgres", connection=pg_url, table_prefix="goldenmatch_")
+    s = MemoryStore(backend="postgres", connection=pg.url(), table_prefix="goldenmatch_")
     s.add_correction(_mk(1, 2, None)); s.add_correction(_mk(1, 2, None, dec="approve"))
     assert s.count_corrections() == 1          # upsert, not duplicate
     s.close()
 
-def test_pg_adjustments_tenant_isolation(pg_url):
+def test_pg_adjustments_tenant_isolation(pg):
     from goldenmatch.core.memory.store import MemoryStore, LearnedAdjustment
     from datetime import datetime
-    s = MemoryStore(backend="postgres", connection=pg_url, table_prefix="goldenmatch_")
+    s = MemoryStore(backend="postgres", connection=pg.url(), table_prefix="goldenmatch_")
     s.save_adjustment(LearnedAdjustment("mk", threshold=0.8, learned_at=datetime.now()), dataset="A")
     s.save_adjustment(LearnedAdjustment("mk", threshold=0.6, learned_at=datetime.now()), dataset="B")
     assert s.get_adjustment("mk", dataset="A").threshold == 0.8
@@ -287,13 +295,17 @@ def test_pg_adjustments_tenant_isolation(pg_url):
     s.close()
 
 def test_pg_missing_extra_message(monkeypatch):
-    # Simulate psycopg missing → actionable ImportError (only meaningful if importable)
-    ...
+    # Force `import psycopg` to fail → the actionable ImportError, without a DB.
+    import sys
+    monkeypatch.setitem(sys.modules, "psycopg", None)
+    from goldenmatch.core.memory.store import MemoryStore
+    with pytest.raises(ImportError, match=r"goldenmatch\[postgres\]"):
+        MemoryStore(backend="postgres", connection="postgresql://unused")
 
-def test_pg_learn_per_dataset_isolation(pg_url):
+def test_pg_learn_per_dataset_isolation(pg):
     from goldenmatch.core.memory.store import MemoryStore
     from goldenmatch.core.memory.learner import MemoryLearner
-    s = MemoryStore(backend="postgres", connection=pg_url, table_prefix="goldenmatch_")
+    s = MemoryStore(backend="postgres", connection=pg.url(), table_prefix="goldenmatch_")
     for i in range(10): s.add_correction(_mk(i, 100+i, "A", "approve", 0.9))
     for i in range(10): s.add_correction(_mk(200+i, 300+i, "A", "reject", 0.2))
     for i in range(10): s.add_correction(_mk(i, 100+i, "B", "approve", 0.3))
@@ -328,7 +340,7 @@ def test_pg_learn_per_dataset_isolation(pg_url):
     - corrections: `id TEXT PRIMARY KEY, id_a BIGINT, id_b BIGINT, decision TEXT, source TEXT, trust DOUBLE PRECISION, field_hash TEXT, record_hash TEXT, original_score DOUBLE PRECISION, matchkey_name TEXT, reason TEXT, dataset TEXT, created_at TIMESTAMPTZ DEFAULT now(), field_name TEXT, original_value TEXT, corrected_value TEXT, cluster_score DOUBLE PRECISION, cluster_outcome TEXT`
     - `CREATE UNIQUE INDEX IF NOT EXISTS <prefix>corrections_pair ON <prefix>corrections (id_a, id_b, COALESCE(dataset, ''))`
     - adjustments: `dataset TEXT NOT NULL DEFAULT '', matchkey_name TEXT, threshold DOUBLE PRECISION, field_weights TEXT, sample_size INTEGER, learned_at TIMESTAMPTZ, PRIMARY KEY (dataset, matchkey_name)`
-  - **Table names:** parameterize the hard-coded `corrections`/`adjustments` in every method's SQL through `self._p` — simplest is a small `self._t("corrections")` returning `f"{self._p}corrections"` and building SQL with it, OR keep sqlite bare names and prefix only in the postgres DDL + queries. Given both backends run the same method bodies, introduce `self._corrections` / `self._adjustments` table-name attributes set in `__init__` (sqlite → bare, postgres → prefixed) and interpolate them in the (already dialect-neutral) SQL strings. Validate the prefix with the regex before interpolation (never raw input).
+  - **Table names (pick ONE approach — this one).** In `__init__`, after validating `table_prefix` against `^[A-Za-z_][A-Za-z0-9_]*$` (reuse the same guard as the config validator; empty string allowed), set two attributes: `self._corrections = f"{table_prefix}corrections"` and `self._adjustments = f"{table_prefix}adjustments"` (sqlite → `table_prefix=""` → bare `corrections`/`adjustments`, unchanged). Then f-string-interpolate these attributes into the SQL of **every method that hard-codes a table name** — sweep all nine: `add_correction`, `get_pair_correction`, `get_corrections`, `count_corrections`, `corrections_since`, `save_adjustment`, `get_adjustment`, `get_all_adjustments`, `last_learn_time` (plus the DDL). The names come from validated config, never raw user input, so interpolation is safe. Do NOT introduce a `self._t()` helper — the two attributes are enough.
   - **`add_correction` upsert (postgres):** branch on `self._backend`. Postgres uses:
     `INSERT INTO <corrections> (...) VALUES (...) ON CONFLICT (id_a, id_b, COALESCE(dataset, '')) DO UPDATE SET decision=EXCLUDED.decision, ... WHERE EXCLUDED.trust >= <corrections>.trust`. This replaces the trust-check-then-DELETE+INSERT for postgres (keep the existing sqlite path). Timestamps: pass `correction.created_at` (a `datetime`) directly for postgres (not `.isoformat()`).
   - **`save_adjustment` (postgres):** `INSERT INTO <adjustments> (dataset, matchkey_name, threshold, field_weights, sample_size, learned_at) VALUES (%s,...) ON CONFLICT (dataset, matchkey_name) DO UPDATE SET ...`. Use `dataset or ''`.
