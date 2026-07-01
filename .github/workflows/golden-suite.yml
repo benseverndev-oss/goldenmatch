@@ -53,7 +53,10 @@ jobs:
           PY
       - name: Smoke the introspection helpers + doctor CLI (--no-deps, fast)
         run: |
-          pip install --no-deps dist/*.whl typer rich
+          # --no-deps ONLY for the meta-package (skip the heavy suite deps); typer
+          # + rich install WITH their own deps (typer needs annotated_doc etc.).
+          pip install --no-deps dist/*.whl
+          pip install typer rich
           python -c "import golden_suite; print('version', golden_suite.__version__); print(golden_suite.installed()); print(golden_suite.native_status())"
           # doctor --no-strict must exit 0 even with the suite absent (reports None, doesn't fail)
           golden-suite doctor --json --no-strict
