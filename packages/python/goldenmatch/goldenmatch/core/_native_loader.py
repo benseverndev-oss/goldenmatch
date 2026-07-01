@@ -4,16 +4,19 @@ The native extension (Rust/PyO3, built from ``packages/rust/extensions/native``)
 is an *optional accelerator*: when it isn't importable, the pure-Python paths run
 unchanged. Selection is centralised here so every call site reads one gate.
 
-``GOLDENMATCH_NATIVE`` env:
-- ``"0"``    -> force the Python path (never use native).
-- ``"1"``    -> require native; raise if it isn't importable (CI parity lane).
-- ``"auto"`` / unset -> use native iff it's importable AND the component has been
-  signed off (is in ``_GATED_ON``). ``clustering`` and ``block_scoring`` have
-  cleared the gate (DQbench ER composite unchanged vs the pure-Python baseline),
-  so under ``auto`` they run native whenever the ext is importable — we ship the
-  ext able to run and flip the default per phase, per the spec.
+Reference mode (2026-07-01): Rust is the reference implementation; pure-Python is
+the lossy fallback for a missing wheel/symbol, not a gated exception.
 
-Spec: ``docs/design/2026-05-25-rust-acceleration-spec.md`` §0.3.
+``GOLDENMATCH_NATIVE`` env:
+- ``"0"``    -> force the Python fallback (never use native).
+- ``"1"``    -> require native; raise if it isn't importable (CI parity lane).
+- ``"auto"`` / unset -> run native wherever the component's kernel symbol exists
+  on this wheel (``_COMPONENT_SYMBOLS``), EXCEPT the known-divergent kernels in
+  ``_FALLBACK_ONLY``. ``_GATED_ON`` is retained as documentation of the byte-exact
+  sign-off history but no longer governs ``auto``.
+
+Spec: ``docs/design/2026-07-01-rust-is-the-reference-roadmap.md`` (supersedes the
+per-phase allowlist in ``docs/design/2026-05-25-rust-acceleration-spec.md`` §0.3).
 """
 from __future__ import annotations
 
@@ -142,6 +145,53 @@ _GATED_ON: frozenset[str] = frozenset(
 )
 
 
+# --- reference-mode gate (2026-07-01, docs/design/2026-07-01-rust-is-the-reference-roadmap.md)
+# Rust is the reference implementation. Under ``auto`` the native kernel runs
+# wherever the component's kernel symbol exists on this wheel; pure-Python is the
+# lossy fallback (missing wheel/symbol), NOT a gated exception. ``_GATED_ON`` above
+# is retained as documentation of the byte-exact sign-off history but no longer
+# governs ``auto`` -- ``_COMPONENT_SYMBOLS`` + ``_FALLBACK_ONLY`` do.
+#
+# Each component maps to the native symbol(s) its ``auto`` CALL SITE actually
+# invokes (the *floor* symbol first). A component is native-capable if ANY listed
+# symbol is present, so an older published wheel carrying the Phase-1 kernel but
+# not a newer arrow one still runs native (wheel-skew safe). Call sites still guard
+# each specific symbol; this is the per-component gate for ``auto`` + the honest
+# dispatch telemetry.
+_COMPONENT_SYMBOLS: dict[str, tuple[str, ...]] = {
+    "clustering": ("connected_components", "mst_split_components"),
+    "block_scoring": ("score_block_pairs_arrow",),
+    "pairs": ("canonicalize_pairs", "dedup_pairs_max_score"),
+    "featurize": ("char_ngram_features",),
+    "hashing": ("record_fingerprint", "record_fingerprints_batch"),
+    "field_scoring": ("score_field_matrix",),
+    "autoconfig": ("autoconfig_decide_plan",),
+    "sketch": ("sketch_simhash_band_hashes_batch",),
+    "simhash": ("sketch_simhash_band_hashes_batch",),  # same byte-exact kernel as sketch
+    "pprl_bloom": ("bloom_clk_batch",),
+    "perceptual": ("perceptual_phash_image",),
+    # "sail_scoring" is intentionally absent -> _FALLBACK_ONLY below.
+}
+
+# Components with a native symbol that is KNOWN to diverge from the Python
+# reference and must NOT auto-run native even under reference-mode:
+#   - sail_scoring: score_field_pairwise returns f32 vs the pure f64 floor
+#     (boundary-nondeterminism, same class as FS). Stays Python under ``auto``
+#     until its parity battery is green on the PUBLISHED wheel. Previously "off by
+#     accident" (unmapped); now off ON PURPOSE.
+# (FS block scoring is gated separately via GOLDENMATCH_FS_NATIVE, not here.)
+_FALLBACK_ONLY: frozenset[str] = frozenset({"sail_scoring"})
+
+
+def _has_symbol(component: str) -> bool:
+    """Whether this wheel carries a native kernel the ``component``'s auto call
+    site can use (any of its listed symbols present)."""
+    syms = _COMPONENT_SYMBOLS.get(component)
+    if not syms or _native is None:
+        return False
+    return any(hasattr(_native, s) for s in syms)
+
+
 # Per-process record of which components actually dispatched to the native
 # kernel vs fell back to Python, so telemetry can report THIS run's reality
 # (#884) instead of just "the wheel is importable + the static allowlist".
@@ -207,16 +257,21 @@ def native_enabled(component: str) -> bool:
             )
         _record_dispatch(component, True)
         return True
-    # auto / unset: native iff importable AND signed off (in _GATED_ON).
+    # auto / unset: Rust is the reference -- run native wherever the component's
+    # kernel symbol exists on this wheel; pure-Python is the lossy fallback. The
+    # only auto exceptions are _FALLBACK_ONLY (known-divergent kernels).
     if _native is not None and not _AUTO_HINT_LOGGED:
         _AUTO_HINT_LOGGED = True
         logger.info(
             "goldenmatch native kernel available; running under GOLDENMATCH_NATIVE=auto "
-            "(gated set only: %s). Set GOLDENMATCH_NATIVE=1 for full native "
-            "acceleration on large / benchmark runs.",
-            sorted(_GATED_ON),
+            "(reference mode: native wherever the kernel symbol exists). Set "
+            "GOLDENMATCH_NATIVE=0 to force the pure-Python fallback."
         )
-    result = _native is not None and component in _GATED_ON
+    result = (
+        _native is not None
+        and component not in _FALLBACK_ONLY
+        and _has_symbol(component)
+    )
     _record_dispatch(component, result)
     return result
 
