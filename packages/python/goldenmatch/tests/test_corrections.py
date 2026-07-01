@@ -221,3 +221,17 @@ def test_adjustment_roundtrip_ignores_dataset_on_sqlite(tmp_path):
     )
     got = s.get_adjustment("mk", dataset="A")
     assert got is not None and got.threshold == 0.9
+
+
+def test_sqlite_ignores_table_prefix(tmp_path):
+    """SQLite creates bare tables and ignores table_prefix — a set prefix must
+    not break reads/writes (regression: prefixed query vs bare DDL)."""
+    from goldenmatch.core.memory.store import Correction, MemoryStore
+
+    s = MemoryStore(path=str(tmp_path / "m.db"), table_prefix="goldenmatch_")
+    s.add_correction(Correction(
+        id="1-2-A", id_a=1, id_b=2, decision="reject", source="steward",
+        trust=1.0, field_hash="", record_hash="", original_score=0.5, dataset="A",
+    ))
+    assert s.count_corrections(dataset="A") == 1
+    assert s.get_pair_correction(1, 2, dataset="A") is not None

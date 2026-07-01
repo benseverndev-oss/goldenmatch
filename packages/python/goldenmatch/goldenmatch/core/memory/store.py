@@ -175,14 +175,23 @@ class MemoryStore:
                 f"table_prefix must match ^[A-Za-z_][A-Za-z0-9_]*$; got {table_prefix!r}",
             )
         self._backend = backend
-        # Accepted for both backends (regex-guarded above); unused by SQLite
-        # today -- honored by the Postgres branch (Task 6).
         self._table_prefix = table_prefix
-        # Table names: bare for sqlite (table_prefix="" there), prefixed for
-        # postgres. Prefix is validated above against ^[A-Za-z_][A-Za-z0-9_]*$,
-        # so f-string interpolation into SQL below is safe (never raw user input).
-        self._corrections = f"{table_prefix}corrections"
-        self._adjustments = f"{table_prefix}adjustments"
+        # Table names drive the f-stringed SQL in every query method, so they
+        # MUST agree with the DDL that actually created the tables:
+        #   - SQLite creates BARE `corrections`/`adjustments` (the module-level
+        #     `_SCHEMA` + the `_migrate_*` helpers hardcode bare names), and per
+        #     spec SQLite ignores `table_prefix` — so use bare names here too.
+        #     (Applying the prefix on SQLite would query `<prefix>corrections`
+        #     while the DDL made `corrections` → OperationalError at write time.)
+        #   - Postgres applies the validated prefix so its tables can coexist in
+        #     a shared multi-tenant DB.
+        # The prefix is regex-validated above, so interpolation is safe here.
+        if backend == "postgres":
+            self._corrections = f"{table_prefix}corrections"
+            self._adjustments = f"{table_prefix}adjustments"
+        else:
+            self._corrections = "corrections"
+            self._adjustments = "adjustments"
         if backend == "sqlite":
             import os
             import sqlite3  # noqa: PLC0415 -- lazy, see #364
@@ -210,7 +219,13 @@ class MemoryStore:
                 ) from e
             if not connection:
                 raise ValueError("backend='postgres' requires a connection DSN")
-            self._conn = psycopg.connect(connection, row_factory=psycopg.rows.dict_row)
+            # autocommit=True: the store's writes are single-statement upserts
+            # (atomic on their own) and it is a long-lived connection (golden-truth
+            # holds one per request/worker). Without it, read methods open a
+            # transaction that lingers idle-in-transaction until the next write.
+            self._conn = psycopg.connect(
+                connection, autocommit=True, row_factory=psycopg.rows.dict_row,
+            )
             for stmt in self._pg_schema():   # split DDL; execute individually
                 self._conn.execute(stmt)
             self._conn.commit()
