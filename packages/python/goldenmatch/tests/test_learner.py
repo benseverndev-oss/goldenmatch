@@ -122,3 +122,28 @@ class TestMultipleMatchkeys:
         names = {r.matchkey_name for r in result}
         assert "mk1" in names
         assert "mk2" in names
+
+
+# ── Postgres MemoryStore backend: Task 3 -- MemoryLearner dataset scoping ────
+
+
+def test_learner_scopes_to_dataset(tmp_path):
+    s = MemoryStore(path=str(tmp_path / "m.db"))
+
+    def mk(a, b, ds, dec, score):
+        return Correction(
+            id=f"{a}-{b}-{ds}", id_a=a, id_b=b, decision=dec,
+            source="steward", trust=1.0, field_hash="", record_hash="",
+            original_score=score, matchkey_name="mk", dataset=ds,
+        )
+
+    # 10 approves high, 10 rejects low in dataset A; noise in B
+    for i in range(10):
+        s.add_correction(mk(i, 100 + i, "A", "approve", 0.9))
+    for i in range(10):
+        s.add_correction(mk(200 + i, 300 + i, "A", "reject", 0.2))
+    s.add_correction(mk(999, 1000, "B", "approve", 0.1))
+    learner = MemoryLearner(s, dataset="A")
+    adjustments = learner.learn()
+    assert adjustments and adjustments[0].dataset == "A"
+    assert 0.2 <= adjustments[0].threshold <= 0.9
