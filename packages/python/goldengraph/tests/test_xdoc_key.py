@@ -29,3 +29,15 @@ def test_name_ci_mode_folds_case_and_drops_type(monkeypatch):
         == _key_payload("schema matching", "Algorithm")
         == {"name": "schema matching"}
     )
+
+
+def test_name_ci_type_mode_folds_case_and_coarsens_type(monkeypatch):
+    monkeypatch.setenv("GOLDENGRAPH_XDOC_KEY", "name_ci_type")
+    # same entity, jittered type across docs -> SAME key (both coarsen to 'concept')
+    assert (
+        _key_payload("Schema Matching", "Process")
+        == _key_payload("schema matching", "Algorithm")
+        == {"name": "schema matching", "typ": "concept"}
+    )
+    # homograph: same name, DIFFERENT coarse class -> DIFFERENT key (stays separate)
+    assert _key_payload("Vertex", "company") != _key_payload("Vertex", "product")

@@ -33,7 +33,9 @@ def _key_payload(name: str, typ: str) -> dict:
     cross-doc fragmentation is type jitter -- 'schema matching' typed Process/Algorithm/method/... across
     docs), so its record_keys never overlap and the store never unifies it. `GOLDENGRAPH_XDOC_KEY` relaxes
     the key: `name` = name only (type-agnostic); `name_ci` = name, case-folded (also absorbs the ~case-only
-    name jitter). Pure + goldenmatch-free so the normalization is unit-tested without the fingerprint."""
+    name jitter); `name_ci_type` = case-folded name + the COARSE type (homograph-safe: same-name entities
+    of different coarse class stay separate, while per-doc type jitter within a class still collapses). Pure
+    + goldenmatch-free so the normalization is unit-tested without the fingerprint."""
     import os
 
     mode = os.environ.get("GOLDENGRAPH_XDOC_KEY", "").strip().lower()
@@ -41,6 +43,9 @@ def _key_payload(name: str, typ: str) -> dict:
         return {"name": name}
     if mode == "name_ci":
         return {"name": name.strip().lower()}
+    if mode == "name_ci_type":
+        from .schema import canonicalize_entity_type
+        return {"name": name.strip().lower(), "typ": canonicalize_entity_type(typ)}
     return {"name": name, "typ": typ}
 
 
