@@ -28,7 +28,7 @@
 [![DBLP-ACM F1](https://img.shields.io/badge/DBLP--ACM%20F1-96.4%25-d4a017)](packages/python/goldenmatch/README.md#benchmarks)
 
 <!-- Reach -->
-[![PyPI downloads (suite)](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fbenseverndev-oss%2Fgoldenmatch%2Fbadges%2Fpypi-downloads.json)](https://pepy.tech/projects?q=goldenmatch+goldencheck+goldenpipe+goldenflow+goldenanalysis+infermap+goldencheck-types+goldensuite-mcp+goldenmatch-duckdb+goldenmatch-native+goldenflow-native+goldencheck-native+goldenanalysis-native+goldenmatch-embed)
+[![PyPI downloads (suite)](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fbenseverndev-oss%2Fgoldenmatch%2Fbadges%2Fpypi-downloads.json)](https://pepy.tech/projects?q=goldenmatch+goldencheck+goldenpipe+goldenflow+goldenanalysis+infermap+goldencheck-types+goldensuite-mcp+goldenmatch-duckdb+goldenmatch-native+goldenflow-native+goldencheck-native+goldenanalysis-native+goldenmatch-embed+golden-suite)
 [![npm downloads (suite)](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fbenseverndev-oss%2Fgoldenmatch%2Fbadges%2Fnpm-downloads.json)](https://www.npmjs.com/~benzsevern)
 [![GitHub stars](https://img.shields.io/github/stars/benseverndev-oss/goldenmatch?style=flat&color=d4a017&logo=github)](https://github.com/benseverndev-oss/goldenmatch/stargazers)
 
@@ -130,6 +130,7 @@ Zero-config gets you most of the way in one pass; the healing loop closes the ga
 
 | Package | Lang | What it does | Install |
 |---|---|---|---|
+| **[golden-suite](packages/python/golden-suite/README.md)** | Python | One-line meta-install: the whole suite + native acceleration, defaulted to the perf-optimized config. `golden-suite doctor` verifies the setup. | `pip install golden-suite` |
 | **[GoldenMatch](packages/python/goldenmatch/README.md)** | Python · TS | Zero-config entity resolution. Fuzzy + exact + probabilistic + LLM. Headline package. | `pip install goldenmatch` · `npm i goldenmatch` |
 | **[GoldenCheck](packages/python/goldencheck/README.md)** | Python · TS | Data-quality scanning: encoding, Unicode, format validation, anomaly detection. | `pip install goldencheck` · `npm i goldencheck` |
 | **[GoldenFlow](packages/python/goldenflow/README.md)** | Python · TS | Transforms & standardizers: phone, date, address, categorical normalization. | `pip install goldenflow` · `npm i goldenflow` |
