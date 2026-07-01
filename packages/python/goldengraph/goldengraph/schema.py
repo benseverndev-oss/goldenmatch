@@ -134,8 +134,11 @@ def schema_canon_enabled() -> bool:
 #: Coarse entity-type vocab -- the closed set the extractor is constrained to and the cross-doc key
 #: coarsens to. Deliberately small so a weak model is CONSISTENT within it (kills type jitter) while
 #: still separating homograph classes (person vs organization). Override via GOLDENGRAPH_ENTITY_TYPE_VOCAB.
+#: 4 buckets, MEASURED best on the substrate homograph sweep: vs an 8-type vocab, standard-corpus recall
+#: +0.05 (0.637->0.686, less within-vocab jitter) AND homograph precision +0.05 (0.886->0.931). Going to
+#: 3 buckets did NOT help (recall 0.670 < 0.686) -- 4 is the sweet spot on the concept corpus.
 DEFAULT_ENTITY_TYPE_VOCAB = (
-    "person", "organization", "location", "concept", "work", "event", "product", "other",
+    "person", "organization", "concept", "other",
 )
 
 #: Substring keyword -> coarse type, for the open prose a 7B emits when it ignores the constraint.
