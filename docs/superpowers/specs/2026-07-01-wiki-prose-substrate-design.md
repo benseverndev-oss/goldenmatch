@@ -35,9 +35,10 @@ Offline fetch → committed snapshot → eval. `dataset/build_wiki_corpus.py` (n
 
 ### 3. New alignment `align_real_mentions_to_nodes(graph, gold_mentions)` (in `substrate_eval.py`)
 - Build a `by_doc_surface` index from the graph: for each edge, for each `source_ref` doc, record its endpoint nodes; each node carries `surface_names`.
-- Per gold mention `(qid, surface, doc)`: candidate nodes = built nodes touched by an edge sourced from `doc`; assign to the candidate whose `surface_names` matches `surface` (case-folded): **exact match > substring**, tie-break by most edges; no candidate matches → a fresh negative id (orphan / build miss, mirrors the engineered align's miss handling).
+- Per gold mention `(qid, surface, doc)`: candidate nodes = built nodes touched by an edge sourced from `doc`; assign to the candidate whose `surface_names` matches `surface` (case-folded): **exact match > substring**, then most-edges, then **lowest node id** as the deterministic final tie-break (so identical-surface candidates — homograph mode, coincidental abbreviations — resolve reproducibly, never undefined). No candidate matches → a **unique** decrementing negative id per mention (`fresh -= 1`), exactly like `_assign_nodes` — NOT a single shared negative, or all orphans collapse into one false cluster and precision craters.
 - Group gold-mention indices by assigned node → clustering → `metrics.score`.
-- **Emit alignment coverage** (`aligned / total` gold mentions) into the scoreboard so a low-coverage run cannot masquerade as a low ER score.
+- **Emit alignment coverage** (`aligned / total` gold mentions, aligned = assigned a non-negative node) into the scoreboard so a low-coverage run cannot masquerade as a low ER score.
+- **Real-article candidate sets are large.** Unlike engineered (1 edge/doc → 2 candidate nodes), a real article stamps `source_ref=article_QID` on every edge, so candidates = all nodes in that article's edges (dozens+). Aligner precision therefore rides on the **exact>substring** ordering (surface `Apple` must not substring-hit `Apple Inc`/`Apple Store` when an exact `Apple` node exists); coverage + the exact-first rule are the guards.
 
 ### 4. Eval runner
 - `run_substrate_eval.py` gains a `--corpus wiki` path (or a sibling `run_substrate_eval_real.py`): load the wiki snapshot instead of `generate_engineered`, build, align via `align_real_mentions_to_nodes`, score baseline vs `name_ci`. No ambiguity dial (real prose has its own surface variance).
