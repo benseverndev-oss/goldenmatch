@@ -6,6 +6,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [2.5.1] - 2026-07-01
+
+### Fixed
+- **PPRL is now opt-in instead of the default for sensitive data (#1342, #1344).** `select_strategy()` auto-routed any dataset with sensitive fields (PII/health) to privacy-preserving record linkage, returning empty `strong_ids`/`fuzzy_fields` even for a user deduping their own list. PPRL now fires only when the caller opts in via `allow_pprl=True`; sensitive data otherwise gets a normal weighted/fuzzy strategy, with `StrategyDecision.pprl_available=True` flagging that PPRL can be opted into. `allow_pprl` is threaded through `AgentSession.analyze/deduplicate/match_sources/compare_strategies`, `a2a.dispatch_skill`, and the A2A `_handle_send_task` HTTP handler (reads `allow_pprl` from the request body). MCP tool args (`mcp/agent_tools.py`) are a tracked follow-up. Non-sensitive-data behavior is unchanged.
+
+### Changed
+- `StrategyDecision` gains a `pprl_available: bool` field.
+
 ## [2.5.0] - 2026-07-01
 
 ### Added
