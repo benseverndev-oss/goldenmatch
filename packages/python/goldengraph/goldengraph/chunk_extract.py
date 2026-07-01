@@ -69,8 +69,15 @@ def _env_int(name: str, default: int) -> int:
 
 
 def chunk_extract_enabled() -> bool:
-    """`GOLDENGRAPH_CHUNK_EXTRACT` gate. Off by default; "0"/"false"/"" -> off."""
-    return os.environ.get("GOLDENGRAPH_CHUNK_EXTRACT", "0") not in ("0", "false", "")
+    """`GOLDENGRAPH_CHUNK_EXTRACT` gate. Off by default; case-insensitive, stripped:
+    ""/"0"/"false"/"no"/"off" -> off so `=False` doesn't surprisingly enable it."""
+    return os.environ.get("GOLDENGRAPH_CHUNK_EXTRACT", "0").strip().lower() not in (
+        "",
+        "0",
+        "false",
+        "no",
+        "off",
+    )
 
 
 def _chunk_params() -> tuple[int, int]:

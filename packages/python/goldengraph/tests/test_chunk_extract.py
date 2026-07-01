@@ -6,7 +6,7 @@ from goldengraph.chunk_extract import (
     sentence_windows,
     split_sentences,
 )
-from goldengraph.extract import Extraction, Mention, Relationship
+from goldengraph.extract import Attribute, Extraction, Mention, Relationship
 
 
 class _WindowStub:
@@ -73,6 +73,13 @@ def test_windows_size_zero_floored_to_one():
     assert wins == ["a.", "b.", "c."]
 
 
+def test_windows_negative_overlap_treated_as_zero():
+    sents = [f"s{i}." for i in range(6)]
+    # overlap<0 must clamp to 0 -> stride == size, no gaps, no crash.
+    wins = sentence_windows(sents, size=3, overlap=-2)
+    assert wins == ["s0. s1. s2.", "s3. s4. s5."]
+
+
 def test_chunk_extract_enabled_gate(monkeypatch):
     monkeypatch.delenv("GOLDENGRAPH_CHUNK_EXTRACT", raising=False)
     assert chunk_extract_enabled() is False
@@ -80,6 +87,13 @@ def test_chunk_extract_enabled_gate(monkeypatch):
     assert chunk_extract_enabled() is True
     monkeypatch.setenv("GOLDENGRAPH_CHUNK_EXTRACT", "")  # set-but-empty -> off
     assert chunk_extract_enabled() is False
+
+
+def test_chunk_extract_enabled_case_insensitive_off(monkeypatch):
+    # "False"/"Off"/" 0 " must read as OFF (case-insensitive, stripped), not surprisingly on.
+    for off in ("False", "FALSE", "off", "No", " 0 "):
+        monkeypatch.setenv("GOLDENGRAPH_CHUNK_EXTRACT", off)
+        assert chunk_extract_enabled() is False, off
 
 
 def test_chunk_params_defaults_and_empty_string(monkeypatch):
@@ -131,6 +145,25 @@ def test_chunk_extract_skips_failing_window(monkeypatch):
     ex = chunk_extract(text, llm=None, extractor=flaky)
     # 3 windows, middle one raises -> 2 mentions survive, no crash
     assert len(ex.mentions) == 2
+
+
+def test_chunk_extract_offsets_attribute_subj(monkeypatch):
+    monkeypatch.setenv("GOLDENGRAPH_CHUNK_SENTENCES", "1")
+    monkeypatch.setenv("GOLDENGRAPH_CHUNK_OVERLAP", "0")
+
+    def attr_extractor(text, llm=None):
+        # one entity + one attribute on subj=0 per window
+        return Extraction(
+            mentions=[Mention(name="Amazon", typ="org")],
+            relationships=[],
+            attributes=[Attribute(subj=0, predicate="founded", value="1994", typ="date")],
+        )
+
+    text = "One here. Two here. Three here."
+    ex = chunk_extract(text, llm=None, extractor=attr_extractor)
+    # window k's attribute subj must offset to window k's mention block: 0, 1, 2
+    assert [a.subj for a in ex.attributes] == [0, 1, 2]
+    assert all(a.value == "1994" for a in ex.attributes)
 
 
 def test_prepare_doc_uses_chunking_only_when_gated(monkeypatch):
