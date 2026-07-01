@@ -151,15 +151,54 @@ def generate_engineered(
     import os as _os
 
     _cooccur = _os.environ.get("GOLDENGRAPH_BENCH_COOCCUR", "") not in ("", "0", "false")
+
+    # Homograph injection (GOLDENGRAPH_BENCH_HOMOGRAPH=k): the concept corpus has unique names + a uniform
+    # upstream type, so it can't test the homograph-safe key. Give k pairs of distinct entities ONE shared
+    # surface but two DIFFERENT ASSIGNED coarse types (the cross-doc key uses the EXTRACTED type read from
+    # the appositive cue, not the gold type). name_ci then wrongly co-references the pair (P drop);
+    # (name_ci, coarse_type) keeps them apart. Prefer non-adjacent pairs so align's self-loop limit can't
+    # mislabel a precision hit as a recall miss. Side rng -> the main rng (questions) is untouched.
+    homo_k = int(_os.environ.get("GOLDENGRAPH_BENCH_HOMOGRAPH", "0") or "0")
+    homo_surface: dict[str, str] = {}   # entity_id -> shared surface
+    homo_type: dict[str, str] = {}      # entity_id -> ASSIGNED coarse type (drives the cue)
+    if homo_k > 0:
+        try:  # use goldengraph's real vocab when importable (Modal); fall back for the box test
+            from goldengraph.schema import entity_type_vocab
+            tvocab = [t for t in entity_type_vocab() if t != "other"]
+        except Exception:
+            tvocab = []
+        tvocab = tvocab or ["organization", "product", "person", "location"]
+        endpoints = sorted(set(e for e in ids if edges[e]) | {d for e in ids for d in edges[e].values()})
+        adj = {e: set(edges[e].values()) for e in ids}
+        rr = random.Random(f"{seed}:homograph")
+        picks = rr.sample(endpoints, min(len(endpoints), homo_k * 4))
+        used: set[str] = set()
+        made = 0
+        for i, a in enumerate(picks):
+            if made >= homo_k or a in used:
+                continue
+            for b in picks[i + 1:]:
+                if b in used or b in adj[a] or a in adj[b]:   # non-adjacent
+                    continue
+                ta, tb = tvocab[made % len(tvocab)], tvocab[(made + 1) % len(tvocab)]
+                shared = f"HG{made}"
+                homo_surface[a], homo_type[a] = shared, ta
+                homo_surface[b], homo_type[b] = shared, tb
+                used.update({a, b})
+                made += 1
+                break
+
     documents: list[Document] = []
     for src_id in ids:
         for rel, dst_id in edges[src_id].items():
-            s = _render_mention(by_id[src_id], rng, ambiguity)
-            o = _render_mention(by_id[dst_id], rng, ambiguity)
+            s = homo_surface.get(src_id) or _render_mention(by_id[src_id], rng, ambiguity)
+            o = homo_surface.get(dst_id) or _render_mention(by_id[dst_id], rng, ambiguity)
+            s_txt = f"{s}, a {homo_type[src_id]}," if src_id in homo_surface else s
+            o_txt = f"{o}, a {homo_type[dst_id]}," if dst_id in homo_surface else o
             documents.append(
                 Document(
                     id=_edge_doc_id(src_id, rel, dst_id),
-                    text=f"{s} {_render_relation(rel, rng)} {o}.",
+                    text=f"{s_txt} {_render_relation(rel, rng)} {o_txt}.",
                     src_surface=s,
                     dst_surface=o,
                 )
