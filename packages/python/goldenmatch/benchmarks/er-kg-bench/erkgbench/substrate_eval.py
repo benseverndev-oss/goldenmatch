@@ -49,6 +49,61 @@ def align_mentions_to_nodes(graph: dict, gold_mentions: list[tuple[str, str, str
     return [sorted(v) for v in groups.values()]
 
 
+def _assign_real_nodes(graph: dict, gold_mentions: list[tuple[str, str, str]]) -> dict[int, int]:
+    """Per gold-mention index -> built node, by SURFACE+DOC match (no engineered `src::rel::dst` doc-id
+    oracle -- real prose has none). Candidates = nodes touched by an edge sourced from the mention's doc;
+    pick exact surface match (case-folded) over substring, tie-broken by LOWEST node id (deterministic);
+    no match -> a UNIQUE decrementing negative (orphan singleton, like `_assign_nodes`). On real articles
+    the candidate set is large, so precision rides on exact-before-substring."""
+    id2surf: dict[int, set[str]] = {}
+    for e in graph.get("entities", ()):
+        nid = e.get("entity_id")
+        surfs = {str(s).strip().lower() for s in e.get("surface_names", ()) if s}
+        cn = str(e.get("canonical_name", "")).strip().lower()
+        if cn:
+            surfs.add(cn)
+        id2surf[nid] = surfs
+    by_doc: dict[str, set[int]] = {}
+    for e in graph.get("edges", ()):
+        for ref in e.get("source_refs", ()):
+            by_doc.setdefault(_base_doc_id(ref), set()).update((e.get("subj"), e.get("obj")))
+    node_of: dict[int, int] = {}
+    fresh = -1
+    for i, (_eid, surface, doc) in enumerate(gold_mentions):
+        s = str(surface).strip().lower()
+        cands = by_doc.get(_base_doc_id(doc), set())
+        exact = sorted(n for n in cands if s in id2surf.get(n, ()))
+        if exact:
+            node_of[i] = exact[0]
+            continue
+        substr = sorted(n for n in cands if any(s and (s in sn or sn in s) for sn in id2surf.get(n, ())))
+        if substr:
+            node_of[i] = substr[0]
+            continue
+        node_of[i] = fresh
+        fresh -= 1
+    return node_of
+
+
+def align_real_mentions_to_nodes(graph: dict, gold_mentions: list[tuple[str, str, str]]) -> list[list[int]]:
+    """Cluster gold-mention indices by built node via surface+doc match -- the real-prose counterpart to
+    `align_mentions_to_nodes` (which needs the engineered doc-id). Same output shape; reproduces the oracle
+    on engineered graphs (1 edge/doc, distinct surfaces)."""
+    groups: dict[int, list[int]] = {}
+    for i, node in _assign_real_nodes(graph, gold_mentions).items():
+        groups.setdefault(node, []).append(i)
+    return [sorted(v) for v in groups.values()]
+
+
+def real_alignment_coverage(graph: dict, gold_mentions: list[tuple[str, str, str]]) -> float:
+    """Fraction of gold mentions assigned to a real (non-orphan) built node. A low value means the ER score
+    is measuring alignment failure, not resolution -- report it alongside R(B)."""
+    node_of = _assign_real_nodes(graph, gold_mentions)
+    if not node_of:
+        return 1.0
+    return sum(1 for n in node_of.values() if n >= 0) / len(node_of)
+
+
 def fragmentation_report(graph: dict, gold_mentions: list[tuple[str, str, str]]) -> dict:
     """Diagnose WHY cross-doc co-reference is lost: for each GOLD entity, how many distinct built NODES
     its mentions scattered across, and whether those nodes differ in NAME or in TYPE. `mean_nodes_per_entity`

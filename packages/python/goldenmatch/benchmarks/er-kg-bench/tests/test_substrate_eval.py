@@ -3,16 +3,50 @@ from __future__ import annotations
 
 from erkgbench.substrate_eval import (
     align_mentions_to_nodes,
+    align_real_mentions_to_nodes,
     edge_recall,
     fragmentation_report,
     graph_coherence,
     provenance_coverage,
+    real_alignment_coverage,
     score_substrate,
 )
 
 
 def _ent(eid, name, typ="thing"):
     return {"entity_id": eid, "canonical_name": name, "typ": typ}
+
+
+def _rent(eid, *surfaces):  # entity with surface_names for the real (surface+doc) aligner
+    return {"entity_id": eid, "canonical_name": surfaces[0], "typ": "thing", "surface_names": list(surfaces)}
+
+
+def test_align_real_surface_and_doc_match():
+    graph = {"entities": [_rent(5, "IBM"), _rent(1, "Red Hat")],
+             "edges": [{"subj": 5, "obj": 1, "predicate": "acquired", "source_refs": ["d1"]}]}
+    gm = [("Q_ibm", "IBM", "d1"), ("Q_rh", "Red Hat", "d1")]
+    assert sorted(map(sorted, align_real_mentions_to_nodes(graph, gm))) == [[0], [1]]
+    assert real_alignment_coverage(graph, gm) == 1.0
+
+
+def test_align_real_exact_beats_substring_and_orphan_unique():
+    graph = {"entities": [_rent(7, "Apple"), _rent(8, "Apple Inc")],
+             "edges": [{"subj": 7, "obj": 8, "predicate": "r", "source_refs": ["d1"]}]}
+    gm = [("Qa", "Apple", "d1"), ("Qx", "Ghost", "d1"), ("Qy", "Nowhere", "d1")]
+    clusters = sorted(map(sorted, align_real_mentions_to_nodes(graph, gm)))
+    assert [0] in clusters                          # Apple -> node 7 (exact), own cluster
+    assert sum(len(c) for c in clusters) == 3       # 2 orphans stay SEPARATE (unique negatives)
+    assert real_alignment_coverage(graph, gm) == 1 / 3
+
+
+def test_align_real_reproduces_engineered_oracle():
+    # SANITY GUARD: on an engineered-shaped graph the surface aligner must match the doc-id oracle.
+    graph = {"entities": [_rent(0, "A"), _rent(1, "B"), _rent(2, "C")],
+             "edges": [{"subj": 0, "obj": 1, "predicate": "r", "source_refs": ["A::r::B"]},
+                       {"subj": 0, "obj": 2, "predicate": "r2", "source_refs": ["A::r2::C"]}]}
+    gm = [("A", "A", "A::r::B"), ("B", "B", "A::r::B"), ("A", "A", "A::r2::C"), ("C", "C", "A::r2::C")]
+    assert (sorted(map(sorted, align_real_mentions_to_nodes(graph, gm)))
+            == sorted(map(sorted, align_mentions_to_nodes(graph, gm))))
 
 
 def _edge(subj, obj, doc, pred="r"):
