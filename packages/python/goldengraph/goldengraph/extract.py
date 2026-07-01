@@ -155,6 +155,16 @@ _RELATION_VOCAB_INSTRUCTION = (
 )
 
 
+#: Prepended when the coarse entity-type vocab is enforced (GOLDENGRAPH_ENTITY_TYPE_CANON). An open-vocab
+#: 7B invents a fresh `type` per document for the same entity (measured: 97.6% of cross-doc fragmentation
+#: is type jitter), which shatters the (name,type) cross-doc key. Constraining to a small closed set makes
+#: the type CONSISTENT across docs while still separating homograph classes.
+_ENTITY_TYPE_VOCAB_INSTRUCTION = (
+    "Every entity's `type` MUST be exactly one of: {vocab}. "
+    "Pick the single closest; do not invent other type labels.\n\n"
+)
+
+
 def _relation_vocab(explicit) -> tuple[str, ...]:
     """The closed relation vocabulary: explicit arg, else the comma-separated
     `GOLDENGRAPH_RELATION_VOCAB` env, else empty (open extraction, unchanged)."""
@@ -178,6 +188,9 @@ def extract(text: str, llm: LLMClient, *, literals: bool | None = None,
     vocab = _relation_vocab(relation_vocab)
     if vocab:
         prompt = _RELATION_VOCAB_INSTRUCTION.format(vocab=", ".join(vocab)) + prompt
+    from .schema import entity_type_canon_enabled, entity_type_vocab
+    if entity_type_canon_enabled():
+        prompt = _ENTITY_TYPE_VOCAB_INSTRUCTION.format(vocab=", ".join(entity_type_vocab())) + prompt
     return parse_extraction(_complete_extraction(llm, prompt))
 
 
