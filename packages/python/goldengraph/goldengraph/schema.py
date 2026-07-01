@@ -129,3 +129,54 @@ def schema_canon_enabled() -> bool:
     """`GOLDENGRAPH_SCHEMA_CANON` gate. Off by default; the canonicalization needs a
     relation vocab (`GOLDENGRAPH_RELATION_VOCAB`) to have a schema to snap to."""
     return os.environ.get("GOLDENGRAPH_SCHEMA_CANON", "0") not in ("0", "false", "")
+
+
+#: Coarse entity-type vocab -- the closed set the extractor is constrained to and the cross-doc key
+#: coarsens to. Deliberately small so a weak model is CONSISTENT within it (kills type jitter) while
+#: still separating homograph classes (person vs organization). Override via GOLDENGRAPH_ENTITY_TYPE_VOCAB.
+DEFAULT_ENTITY_TYPE_VOCAB = (
+    "person", "organization", "location", "concept", "work", "event", "product", "other",
+)
+
+#: Substring keyword -> coarse type, for the open prose a 7B emits when it ignores the constraint.
+_ENTITY_TYPE_HINTS = {
+    "technique": "concept", "method": "concept", "algorithm": "concept", "process": "concept",
+    "index": "concept", "measure": "concept", "metric": "concept", "model": "concept",
+    "concept": "concept", "theory": "concept", "approach": "concept", "function": "concept",
+    "company": "organization", "corp": "organization", "inc": "organization", "ltd": "organization",
+    "organization": "organization", "organisation": "organization", "university": "organization",
+    "lab": "organization", "institute": "organization", "agency": "organization", "team": "organization",
+    "person": "person", "author": "person", "researcher": "person", "scientist": "person",
+    "city": "location", "country": "location", "region": "location", "place": "location",
+    "location": "location", "site": "location",
+    "book": "work", "paper": "work", "article": "work", "publication": "work", "work": "work",
+    "event": "event", "conference": "event", "war": "event",
+    "product": "product", "tool": "product", "software": "product", "system": "product",
+    "device": "product", "technology": "product",
+}
+
+
+def entity_type_vocab() -> tuple:
+    """The closed coarse-type vocab (`GOLDENGRAPH_ENTITY_TYPE_VOCAB`, comma-separated) or the default."""
+    raw = os.environ.get("GOLDENGRAPH_ENTITY_TYPE_VOCAB", "")
+    vocab = tuple(dict.fromkeys(v.strip().lower() for v in raw.split(",") if v.strip()))
+    return vocab or DEFAULT_ENTITY_TYPE_VOCAB
+
+
+def canonicalize_entity_type(raw: str, vocab: tuple | None = None) -> str:
+    """Snap an open-vocab type string to the closed coarse vocab: exact match, else a substring hint,
+    else `other` (or the vocab's last entry if it has no `other`). Pure + goldenmatch-free, so the
+    normalization is unit-testable without the fingerprint."""
+    vocab = vocab or entity_type_vocab()
+    t = (raw or "").strip().lower()
+    if t in vocab:
+        return t
+    for kw, coarse in _ENTITY_TYPE_HINTS.items():
+        if kw in t and coarse in vocab:
+            return coarse
+    return "other" if "other" in vocab else (vocab[-1] if vocab else "other")
+
+
+def entity_type_canon_enabled() -> bool:
+    """`GOLDENGRAPH_ENTITY_TYPE_CANON` gate: constrain extraction to `entity_type_vocab()`."""
+    return os.environ.get("GOLDENGRAPH_ENTITY_TYPE_CANON", "0") not in ("0", "false", "")
