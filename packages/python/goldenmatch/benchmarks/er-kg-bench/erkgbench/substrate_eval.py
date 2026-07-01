@@ -41,3 +41,36 @@ def align_mentions_to_nodes(graph: dict, gold_mentions: list[tuple[str, str, str
     for i, node in node_of.items():
         groups.setdefault(node, []).append(i)
     return [sorted(v) for v in groups.values()]
+
+
+def graph_coherence(graph: dict) -> dict:
+    """Connected components of the built graph (edges undirected) + largest-component fraction. A
+    coherent knowledge base is few components / one dominant; the construction ceiling shows as many
+    small components."""
+    nodes = {e["entity_id"] for e in graph.get("entities", ())}
+    parent: dict[int, int] = {n: n for n in nodes}
+
+    def find(x):
+        parent.setdefault(x, x)
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for e in graph.get("edges", ()):
+        parent[find(e["subj"])] = find(e["obj"])
+    roots = [find(n) for n in parent]
+    if not roots:
+        return {"components": 0, "largest_fraction": 0.0}
+    from collections import Counter
+    sizes = Counter(roots)
+    return {"components": len(sizes), "largest_fraction": max(sizes.values()) / len(roots)}
+
+
+def provenance_coverage(graph: dict) -> float:
+    """Fraction of edges carrying a non-empty `source_refs` (every fact traceable to a source). ~1.0 for
+    goldengraph alone (it always stamps doc ids); discriminating in the multi-engine bake-off."""
+    edges = list(graph.get("edges", ()))
+    if not edges:
+        return 1.0
+    return sum(1 for e in edges if e.get("source_refs")) / len(edges)

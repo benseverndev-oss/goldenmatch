@@ -1,7 +1,7 @@
 """Substrate-quality eval: pure scoring over a built graph (alignment / coherence / provenance / A-B)."""
 from __future__ import annotations
 
-from erkgbench.substrate_eval import align_mentions_to_nodes
+from erkgbench.substrate_eval import align_mentions_to_nodes, graph_coherence, provenance_coverage
 
 
 def _edge(subj, obj, doc, pred="r"):
@@ -74,3 +74,19 @@ def test_align_strips_cooccur_suffix():
     graph = {"entities": [], "edges": [{"subj": 0, "predicate": "r", "obj": 1, "source_refs": ["A::r::B::1"]}]}
     clustering = align_mentions_to_nodes(graph, gm)
     assert sorted(map(sorted, clustering)) == [[0], [1]]   # matched via base id
+
+
+def test_coherence_components_and_largest_fraction():
+    # nodes 0-1 connected, 2-3 connected, 4 isolated -> 3 components, largest = 2/5
+    graph = {"entities": [{"entity_id": i, "canonical_name": str(i), "surface_names": [str(i)]} for i in range(5)],
+             "edges": [{"subj": 0, "predicate": "r", "obj": 1, "source_refs": ["d"]},
+                       {"subj": 2, "predicate": "r", "obj": 3, "source_refs": ["d"]}]}
+    coh = graph_coherence(graph)
+    assert coh["components"] == 3 and abs(coh["largest_fraction"] - 0.4) < 1e-9
+
+
+def test_provenance_coverage():
+    graph = {"entities": [], "edges": [
+        {"subj": 0, "predicate": "r", "obj": 1, "source_refs": ["d"]},
+        {"subj": 1, "predicate": "r", "obj": 2, "source_refs": []}]}
+    assert provenance_coverage(graph) == 0.5   # 1 of 2 edges has a source_ref
