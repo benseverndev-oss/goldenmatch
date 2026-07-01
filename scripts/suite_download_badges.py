@@ -30,6 +30,10 @@ PYPI_PACKAGES = [
     "infermap",
     "goldencheck-types",
     "goldensuite-mcp",
+    # One-line meta-package (whole suite + native, on by default). A distinct PyPI
+    # distribution whose downloads partially overlap its component packages --
+    # counted here for the same reason as the *-native extras below.
+    "golden-suite",
     # SQL extension + the optional compiled `*-native` / embed runtimes. These
     # are extras (goldenmatch[native], goldenanalysis[native], ...), so their
     # downloads partially overlap their parent packages -- counted here because
