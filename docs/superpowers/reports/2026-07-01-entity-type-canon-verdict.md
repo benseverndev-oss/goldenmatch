@@ -52,7 +52,16 @@ Coarsening 8→4 recovers a third of the recall gap AND *improves* homograph pre
 | `name_ci`, **+canon** | 0.7092 | **−0.038** | extraction-constraint perturbation |
 | `name_ci_type`, +canon | 0.6856 | **−0.024** | the coarse-type key (within-vocab jitter) |
 
-**61% of the recall cost is the prompt constraint perturbing what the 7B extracts** — a prompt-interaction effect, not model capability. Only 0.024 is type-key jitter (part model-consistency, part irreducible: an abstract concept's coarse type isn't a stable property). This means the recommended config may be `name_ci_type` **without** `ENTITY_TYPE_CANON` — rely on the deterministic `canonicalize_entity_type` substring-snap over OPEN extraction, recovering the 0.038 (the arc's recurring lesson: deterministic post-hoc snap beats prompt-constraint, cf. `SCHEMA_CANON`). Untested; the leading follow-on.
+**61% of the recall cost is the prompt constraint perturbing what the 7B extracts** — a prompt-interaction effect, not model capability. Only 0.024 is type-key jitter (part model-consistency, part irreducible: an abstract concept's coarse type isn't a stable property).
+
+**Post-hoc-snap-only — TESTED and REFUTED.** The obvious follow-on was to drop `ENTITY_TYPE_CANON`, let the 7B extract OPEN types, and rely on `canonicalize_entity_type`'s substring-snap on the key side (recovering the 0.038 perturbation — the arc's "post-hoc snap beats prompt-constraint" lesson, cf. `SCHEMA_CANON`). Measured: it is **worse**, not better.
+
+| config (4-type) | standard R(B) | homograph P(B) |
+|---|---|---|
+| `name_ci_type` **+canon** | **0.6856** | 0.9309 |
+| `name_ci_type` **no-canon** (post-hoc snap) | 0.6151 | 0.9443 |
+
+Open extraction emits types too varied for the substring hints to cover (`Data Processing Technique`, `Statistical Method`, …), so they scatter to `other`/wrong buckets — *more* key jitter than the constraint had. Homograph precision holds either way (the appositive cue is still snapped), but recall drops. **The extraction constraint earns its keep: it forces the extracted type consistent BEFORE the key, which the deterministic snap cannot replicate on open-ended type prose.** This is the BOUNDARY of the `SCHEMA_CANON` lesson — post-hoc snap wins for a small closed vocab (predicates: 5 relations, hand-curated aliases), but prompt-constraint wins for open-ended entity-type prose. **Final config: `name_ci_type` + `ENTITY_TYPE_CANON` + 4-type vocab.**
 
 ## What this means
 
@@ -62,7 +71,7 @@ Coarsening 8→4 recovers a third of the recall gap AND *improves* homograph pre
 
 ## Follow-ons
 
-1. **`name_ci_type` without `ENTITY_TYPE_CANON`** (deterministic post-hoc snap over open extraction) — the isolation attributes 61% of the recall cost to the extraction constraint, so dropping it may recover ~0.038 and nearly collapse the tradeoff. The leading next leg.
+1. ~~`name_ci_type` without `ENTITY_TYPE_CANON`~~ — TESTED, REFUTED (recall 0.686→0.615; open types outrun the hints). The constraint stays; see above.
 2. ~~Vocab-granularity sweep~~ — DONE; 4-type is the sweet spot, now the default.
 3. Embedding-NN / LLM type derivation (the deferred coarse-type mechanisms) if `canonicalize_entity_type`'s substring-snap coverage proves the bottleneck.
 4. Same-coarse-class homograph disambiguation via the ER scorer.
