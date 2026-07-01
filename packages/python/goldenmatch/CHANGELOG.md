@@ -6,6 +6,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [2.5.0] - 2026-07-01
+
+### Added
+- **MemoryStore: Postgres backend for Learning Memory (#1338).** `MemoryStore(backend='postgres', connection=<dsn>, table_prefix='goldenmatch_')` and `MemoryConfig(backend='postgres', connection, dataset=<tenant>, table_prefix)` persist dedupe corrections + learned adjustments in Postgres, isolated per tenant: corrections filtered by `dataset`, `adjustments` keyed `(dataset, matchkey_name)`, and `MemoryLearner(dataset=…)` so `learn()` never pools corrections across tenants. Adds `LearnedAdjustment.dataset` and `MemoryConfig.table_prefix` (regex-guarded). Reuses the existing `postgres` extra (`psycopg[binary]`) — no new hard deps. **SQLite remains the default; every existing call path, signature default, and behavior is unchanged** (the dialect refactor is behavior-preserving; full SQLite memory suite green).
+
 ### Changed
 - **Auto-config: `name_freq_weighted_jw` now downweights agreements on high-frequency name values using a per-dataset frequency table** (data-driven, applied across the whole score range), so identical common surnames (e.g. two "Smith") score below identical rare surnames - a higher matchkey threshold then separates same-name strangers from true matches (#1207, PR2a). Default-on; kill-switch `GOLDENMATCH_TF_NAME_WEIGHTING=0` restores the static-census behavior. Validated by the CI accuracy gates (#528/DQbench/Febrl/NCVR); this is an accuracy change, not a measured-local win.
 - **Auto-config: per-identifier blocking union on null-sparse multi-source data (#1207, PR1).**

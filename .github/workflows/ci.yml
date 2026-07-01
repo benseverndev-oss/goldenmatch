@@ -124,8 +124,10 @@ jobs:
             python_goldenmatch_postgres:
               - 'packages/python/goldenmatch/tests/test_db.py'
               - 'packages/python/goldenmatch/tests/test_reconcile.py'
+              - 'packages/python/goldenmatch/tests/test_memory_store_postgres.py'
               - 'packages/python/goldenmatch/tests/_pg_helpers.py'
               - 'packages/python/goldenmatch/goldenmatch/db/**'
+              - 'packages/python/goldenmatch/goldenmatch/core/memory/**'
             # #1086 throughput-tier perf gate: re-run when the tier code or the
             # bench harness changes (so a regression in the sketch-then-verify
             # cost is caught), and on ci.yml edits (keeps the gate logic tested).
@@ -916,7 +918,8 @@ jobs:
           # -n 0 (serial): per-test DB provisioning + the shared admin
           # connection make xdist worker contention plausible; serial avoids
           # the headache for a small (~30-test) lane.
-          uv run pytest tests/test_db.py tests/test_reconcile.py \
+          uv run --extra postgres pytest tests/test_db.py tests/test_reconcile.py \
+            tests/test_memory_store_postgres.py \
             -n 0 --timeout=180 --timeout-method=thread -v
 
   # Synthetic-fixture benchmark smoke. Runs on every PR against committed
