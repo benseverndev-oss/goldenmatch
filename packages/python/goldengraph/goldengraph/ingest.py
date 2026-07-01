@@ -16,6 +16,7 @@ from collections.abc import Callable
 
 import numpy as np
 
+from .chunk_extract import chunk_extract, chunk_extract_enabled
 from .extract import Extraction, Mention
 from .extract import extract as _extract
 from .llm import LLMClient
@@ -668,7 +669,12 @@ def _prepare_doc(
         t0 = time.perf_counter()
         # `_extract` honors GOLDENGRAPH_LITERAL_ATTRS internally, so this call stays
         # 2-arg (custom rebel/gliner extractors and test stubs keep that shape).
-        extraction = (extractor or _extract)(text, llm)
+        _extractor = extractor or _extract
+        extraction = (
+            chunk_extract(text, llm, _extractor)
+            if chunk_extract_enabled()
+            else _extractor(text, llm)
+        )
         # In discovery mode the schema isn't known until the whole corpus is extracted, so defer
         # canonicalization to the post-discovery pass in `ingest_corpus`.
         if not _schema_discover_enabled():

@@ -131,3 +131,48 @@ def test_chunk_extract_skips_failing_window(monkeypatch):
     ex = chunk_extract(text, llm=None, extractor=flaky)
     # 3 windows, middle one raises -> 2 mentions survive, no crash
     assert len(ex.mentions) == 2
+
+
+def test_prepare_doc_uses_chunking_only_when_gated(monkeypatch):
+    """_prepare_doc calls the extractor once when off, once-per-window when on."""
+    import importlib
+
+    from goldengraph.resolve import ResolvedEntity
+
+    # goldengraph/__init__ re-exports the `ingest` FUNCTION, shadowing the submodule,
+    # so import the module object explicitly to reach `_prepare_doc`.
+    ingest = importlib.import_module("goldengraph.ingest")
+
+    calls = {"n": 0}
+
+    def counting_extractor(text, llm=None):
+        calls["n"] += 1
+        return Extraction(mentions=[Mention(name="X", typ="org")], relationships=[])
+
+    # identity resolver: one entity per mention (no goldenmatch needed)
+    def resolver(mentions):
+        return [
+            ResolvedEntity(
+                local_id=i, canonical_name=m.name, typ=m.typ,
+                surface_names=[m.name], record_keys=[], member_idx=[i],
+            )
+            for i, m in enumerate(mentions)
+        ]
+
+    text = "One here. Two here. Three here. Four here. Five here. Six here. Seven here."
+
+    # gate OFF -> single call
+    monkeypatch.delenv("GOLDENGRAPH_CHUNK_EXTRACT", raising=False)
+    calls["n"] = 0
+    ingest._prepare_doc(text, llm=None, resolver=resolver, profile_fps=False,
+                        extractor=counting_extractor)
+    assert calls["n"] == 1
+
+    # gate ON, size=3 overlap=1 (stride 2) over 7 sentences -> windows [0:3],[2:5],[4:7] = 3 calls
+    monkeypatch.setenv("GOLDENGRAPH_CHUNK_EXTRACT", "1")
+    monkeypatch.setenv("GOLDENGRAPH_CHUNK_SENTENCES", "3")
+    monkeypatch.setenv("GOLDENGRAPH_CHUNK_OVERLAP", "1")
+    calls["n"] = 0
+    ingest._prepare_doc(text, llm=None, resolver=resolver, profile_fps=False,
+                        extractor=counting_extractor)
+    assert calls["n"] == 3
