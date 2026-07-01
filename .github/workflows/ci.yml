@@ -1093,10 +1093,12 @@ jobs:
   # baseline (scripts/autoconfig_quality/baselines/scorecard.json). A FAIL means a
   # kernel change moved a host-independent decision (classification / matchkeys /
   # blocking fields+cost) or dropped the anchor_person_match F1 below its floor.
-  # planner_rung drift (native availability / box size) is informational WARN, so
-  # this normal-runner job (no native wheel) doesn't flap the native-on dev
-  # baseline. Real datasets (DBLP-ACM) skip-when-absent. Iterate loop + how to
-  # re-bless: scripts/autoconfig_quality/README.md.
+  # planner_rung drift (native availability / box size) is informational WARN.
+  # Reference mode: this job now BUILDS the native ext and runs the gate on the
+  # native path, so it matches the native-blessed baseline (native vs pure-Python
+  # are not parity-identical on every dataset -- ncvr_synthetic differs ~1.8pp).
+  # Real datasets (DBLP-ACM) skip-when-absent. Iterate loop + how to re-bless:
+  # scripts/autoconfig_quality/README.md.
   quality_gate:
     needs: changes
     if: needs.changes.outputs.quality_gate == 'true' || needs.changes.outputs.force_all == 'true'
@@ -1117,6 +1119,19 @@ jobs:
       # historical_50k (vendored parquet) need no extra install; real-NCVR +
       # DBLP-ACM skip-when-absent in CI (gitignored).
       - run: uv pip install recordlinkage pyarrow
+      # Reference mode (docs/design/2026-07-01-rust-is-the-reference-roadmap.md):
+      # the committed baseline is blessed native-on, and native vs pure-Python are
+      # NOT parity-identical on every dataset (ncvr_synthetic differs ~1.8pp), so a
+      # no-wheel run diffs the pure-Python fallback against a native baseline and
+      # FAILs. Native is the reference -> build the ext and run the gate on the
+      # native path so it matches the native baseline. build_native.py drops
+      # goldenmatch._native into the package (as the `native` parity lane does).
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/native
+      - name: Build native ext (reference mode -> gate runs on the native path)
+        run: uv run python scripts/build_native.py
       - name: Run auto-config quality gate
         shell: bash
         env:
