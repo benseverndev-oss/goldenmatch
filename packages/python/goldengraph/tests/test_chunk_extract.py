@@ -99,17 +99,17 @@ def test_chunk_extract_enabled_case_insensitive_off(monkeypatch):
 def test_chunk_params_defaults_and_empty_string(monkeypatch):
     monkeypatch.delenv("GOLDENGRAPH_CHUNK_SENTENCES", raising=False)
     monkeypatch.delenv("GOLDENGRAPH_CHUNK_OVERLAP", raising=False)
-    assert _chunk_params() == (4, 1)
+    assert _chunk_params() == (6, 2)  # measured wiki-sweep winner
     # empty-string env must fall back to default, not raise ValueError
     monkeypatch.setenv("GOLDENGRAPH_CHUNK_SENTENCES", "")
     monkeypatch.setenv("GOLDENGRAPH_CHUNK_OVERLAP", "")
-    assert _chunk_params() == (4, 1)
+    assert _chunk_params() == (6, 2)
     # garbage falls back too
     monkeypatch.setenv("GOLDENGRAPH_CHUNK_SENTENCES", "abc")
-    assert _chunk_params() == (4, 1)
+    assert _chunk_params() == (6, 2)
     monkeypatch.setenv("GOLDENGRAPH_CHUNK_SENTENCES", "3")
-    monkeypatch.setenv("GOLDENGRAPH_CHUNK_OVERLAP", "2")
-    assert _chunk_params() == (3, 2)
+    monkeypatch.setenv("GOLDENGRAPH_CHUNK_OVERLAP", "1")
+    assert _chunk_params() == (3, 1)
 
 
 def test_chunk_extract_unions_and_offsets_indices(monkeypatch):

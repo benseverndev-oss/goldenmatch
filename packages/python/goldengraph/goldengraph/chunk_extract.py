@@ -81,8 +81,11 @@ def chunk_extract_enabled() -> bool:
 
 
 def _chunk_params() -> tuple[int, int]:
-    """(window size, overlap) from env; defaults (4, 1). Defensive parse."""
-    return _env_int("GOLDENGRAPH_CHUNK_SENTENCES", 4), _env_int("GOLDENGRAPH_CHUNK_OVERLAP", 1)
+    """(window size, overlap) from env; defaults (6, 2) -- the measured wiki-sweep
+    winner (2026-07-01 verdict): 6-sentence windows keep cross-sentence relations
+    intact while lifting entity recall, +2 overlap stitches boundaries. Smaller
+    windows ((3,1)/(4,1)) fragmented the graph and lost edges. Defensive parse."""
+    return _env_int("GOLDENGRAPH_CHUNK_SENTENCES", 6), _env_int("GOLDENGRAPH_CHUNK_OVERLAP", 2)
 
 
 def chunk_extract(text: str, llm: LLMClient | None, extractor) -> Extraction:
