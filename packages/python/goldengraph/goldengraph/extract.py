@@ -164,6 +164,20 @@ _ENTITY_TYPE_VOCAB_INSTRUCTION = (
     "Pick the single closest; do not invent other type labels.\n\n"
 )
 
+#: Prepended when GOLDENGRAPH_EXTRACT_RECALL is on. The default prompt is relation-centric (entities exist
+#: to be indexed by relationships), so a 7B drops entities mentioned without a clear relation -- the ~0.44
+#: real-prose extraction-recall ceiling (L2). This instruction pushes exhaustive named-entity extraction.
+_RECALL_INSTRUCTION = (
+    "Extract EVERY named entity mentioned -- people, organizations, places, products, works -- and list "
+    "it in `entities` even if it does not participate in any relationship. Do not omit an entity just "
+    "because it lacks a clear relation.\n\n"
+)
+
+
+def extract_recall_enabled() -> bool:
+    """`GOLDENGRAPH_EXTRACT_RECALL` gate: push exhaustive named-entity extraction (recall over precision)."""
+    return os.environ.get("GOLDENGRAPH_EXTRACT_RECALL", "0") not in ("0", "false", "")
+
 
 def _relation_vocab(explicit) -> tuple[str, ...]:
     """The closed relation vocabulary: explicit arg, else the comma-separated
@@ -191,6 +205,8 @@ def extract(text: str, llm: LLMClient, *, literals: bool | None = None,
     from .schema import entity_type_canon_enabled, entity_type_vocab
     if entity_type_canon_enabled():
         prompt = _ENTITY_TYPE_VOCAB_INSTRUCTION.format(vocab=", ".join(entity_type_vocab())) + prompt
+    if extract_recall_enabled():
+        prompt = _RECALL_INSTRUCTION + prompt
     return parse_extraction(_complete_extraction(llm, prompt))
 
 
