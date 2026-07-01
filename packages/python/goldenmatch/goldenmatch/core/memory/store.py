@@ -119,6 +119,7 @@ class LearnedAdjustment:
     field_weights: dict[str, float] | None = None
     sample_size: int = 0
     learned_at: datetime = field(default_factory=datetime.now)
+    dataset: str | None = None
 
 
 def _canon_pair(id_a: int, id_b: int) -> tuple[int, int]:
@@ -467,7 +468,8 @@ class MemoryStore:
             original_score=row["original_score"],
             matchkey_name=row["matchkey_name"],
             reason=row["reason"], dataset=row["dataset"],
-            created_at=datetime.fromisoformat(row["created_at"]),
+            created_at=(row["created_at"] if isinstance(row["created_at"], datetime)
+                        else datetime.fromisoformat(row["created_at"])),
             field_name=row["field_name"] if "field_name" in keys else None,
             original_value=row["original_value"] if "original_value" in keys else None,
             corrected_value=row["corrected_value"] if "corrected_value" in keys else None,
@@ -479,10 +481,13 @@ class MemoryStore:
     @staticmethod
     def _row_to_adjustment(row: Any) -> LearnedAdjustment:
         weights = json.loads(row["field_weights"]) if row["field_weights"] else None
+        keys = row.keys() if hasattr(row, "keys") else ()
         return LearnedAdjustment(
             matchkey_name=row["matchkey_name"],
             threshold=row["threshold"],
             field_weights=weights,
             sample_size=row["sample_size"],
-            learned_at=datetime.fromisoformat(row["learned_at"]),
+            learned_at=(row["learned_at"] if isinstance(row["learned_at"], datetime)
+                        else datetime.fromisoformat(row["learned_at"])),
+            dataset=row["dataset"] if "dataset" in keys else None,
         )

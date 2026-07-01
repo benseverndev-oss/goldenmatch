@@ -165,3 +165,59 @@ class TestCorrectionStatsInvariant:
         """Synthetic / unset construction should not trip the invariant."""
         stats = CorrectionStats(applied=10, total_pairs=0)
         assert stats.validate() is True
+
+
+# ── Postgres MemoryStore backend: Task 1 -- LearnedAdjustment.dataset ────────
+
+
+def test_learned_adjustment_has_dataset_field():
+    from goldenmatch.core.memory.store import LearnedAdjustment
+
+    adj = LearnedAdjustment(matchkey_name="mk", threshold=0.9)
+    assert adj.dataset is None
+    adj2 = LearnedAdjustment(matchkey_name="mk", threshold=0.9, dataset="org_1")
+    assert adj2.dataset == "org_1"
+
+
+def test_correction_roundtrip_created_at_parseable(store):
+    """Guards the Task 1 timestamp-guard refactor on `_row_to_correction`."""
+    _make_correction(store, 1, 2, "reject")
+    got = store.get_pair_correction(1, 2, dataset="test")
+    assert got is not None
+    assert isinstance(got.created_at, datetime)
+
+
+# ── Postgres MemoryStore backend: Task 2 -- dataset params (sqlite back-compat) ──
+
+
+def test_corrections_since_dataset_filter(tmp_path):
+    from datetime import timedelta
+
+    from goldenmatch.core.memory.store import Correction, MemoryStore
+
+    s = MemoryStore(path=str(tmp_path / "m.db"))
+    old = datetime.now() - timedelta(hours=1)
+
+    def mk(a, b, ds):
+        return Correction(
+            id=f"{a}-{b}-{ds}", id_a=a, id_b=b, decision="reject",
+            source="steward", trust=1.0, field_hash="", record_hash="",
+            original_score=0.5, dataset=ds,
+        )
+
+    s.add_correction(mk(1, 2, "A"))
+    s.add_correction(mk(3, 4, "B"))
+    assert len(s.corrections_since(old, dataset="A")) == 1
+    assert len(s.corrections_since(old)) == 2  # back-compat: unfiltered
+
+
+def test_adjustment_roundtrip_ignores_dataset_on_sqlite(tmp_path):
+    from goldenmatch.core.memory.store import LearnedAdjustment, MemoryStore
+
+    s = MemoryStore(path=str(tmp_path / "m.db"))
+    s.save_adjustment(
+        LearnedAdjustment("mk", threshold=0.9, sample_size=12, learned_at=datetime.now()),
+        dataset="A",
+    )
+    got = s.get_adjustment("mk", dataset="A")
+    assert got is not None and got.threshold == 0.9
