@@ -424,6 +424,7 @@ async def _handle_send_task(request: web.Request) -> web.Response:
     body = await request.json()
     skill_id = body.get("skill")
     params = body.get("params", {})
+    allow_pprl = bool(body.get("allow_pprl", False))
 
     if not skill_id:
         return web.json_response({"error": "Missing 'skill' field"}, status=400)
@@ -433,7 +434,7 @@ async def _handle_send_task(request: web.Request) -> web.Response:
     registry.set_state(task_id, "working")
 
     try:
-        result = dispatch_skill(skill_id, params)
+        result = dispatch_skill(skill_id, params, allow_pprl=allow_pprl)
         registry.set_state(task_id, "completed", result=result)
         return web.json_response({
             "id": task_id,
