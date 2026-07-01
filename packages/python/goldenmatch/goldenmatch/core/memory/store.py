@@ -413,14 +413,33 @@ class MemoryStore:
             row = self._conn.execute("SELECT COUNT(*) FROM corrections").fetchone()
         return row[0] if row else 0
 
-    def corrections_since(self, since: datetime) -> list[Correction]:
-        rows = self._conn.execute(
-            "SELECT * FROM corrections WHERE created_at > ? ORDER BY created_at",
-            (since.isoformat(),),
-        ).fetchall()
+    def corrections_since(
+        self, since: datetime, dataset: str | None = None,
+    ) -> list[Correction]:
+        if dataset is not None:
+            rows = self._conn.execute(
+                "SELECT * FROM corrections WHERE created_at > ? AND dataset = ? "
+                "ORDER BY created_at",
+                (since.isoformat(), dataset),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT * FROM corrections WHERE created_at > ? ORDER BY created_at",
+                (since.isoformat(),),
+            ).fetchall()
         return [self._row_to_correction(r) for r in rows]
 
-    def save_adjustment(self, adj: LearnedAdjustment) -> None:
+    def save_adjustment(self, adj: LearnedAdjustment, dataset: str | None = None) -> None:
+        """Persist a learned adjustment.
+
+        SQLite keeps the original `INSERT OR REPLACE` keyed by
+        `matchkey_name` (its schema has no `dataset` column) --
+        `dataset` is accepted + ignored here (honored on Postgres,
+        Task 6). If `adj.dataset` is unset and `dataset` was passed,
+        tag `adj.dataset` so the returned object stays consistent.
+        """
+        if adj.dataset is None and dataset is not None:
+            adj.dataset = dataset
         weights_json = json.dumps(adj.field_weights) if adj.field_weights else None
         with self._conn:
             self._conn.execute(
@@ -433,16 +452,25 @@ class MemoryStore:
         log.debug("Adjustment saved: %s threshold=%.3f samples=%d",
                    adj.matchkey_name, adj.threshold or 0, adj.sample_size)
 
-    def get_adjustment(self, matchkey_name: str) -> LearnedAdjustment | None:
+    def get_adjustment(
+        self, matchkey_name: str, dataset: str | None = None,
+    ) -> LearnedAdjustment | None:
+        """SQLite ignores `dataset` for lookup (matchkey-only); the passed
+        value is used to tag the returned adjustment for caller consistency.
+        """
         row = self._conn.execute(
             "SELECT * FROM adjustments WHERE matchkey_name = ?",
             (matchkey_name,),
         ).fetchone()
         if not row:
             return None
-        return self._row_to_adjustment(row)
+        adj = self._row_to_adjustment(row)
+        if adj.dataset is None and dataset is not None:
+            adj.dataset = dataset
+        return adj
 
-    def get_all_adjustments(self) -> list[LearnedAdjustment]:
+    def get_all_adjustments(self, dataset: str | None = None) -> list[LearnedAdjustment]:
+        """SQLite ignores `dataset` and returns all rows (no dataset column)."""
         rows = self._conn.execute("SELECT * FROM adjustments").fetchall()
         return [self._row_to_adjustment(r) for r in rows]
 
