@@ -15,7 +15,7 @@ This validates the fix on **real entities** with real types and real aliases, re
 
 ## Approach (decided)
 
-Wikidata-grounded, reusing `dataset/records.csv` (built by `dataset/build_real.py`): 48 real QIDs, each with real surface variants (`IBM` / `International Business Machines Corporation` / `IBM Corp.`), real `entity_type`, real `context`, `entity_id`=QID as ground truth. Feed these to the **existing engineered generator** as the entity source; everything downstream is reused. The alternatives (real Wikipedia prose + string-match gold; an off-the-shelf entity-linking dataset) are recorded under Deferred — this is the low-friction, highest-signal first cut.
+Reuse `dataset/records.csv` (built by `dataset/build_real.py`): **48 distinct real entities** across three sources — Wikidata (`Q37156`), RxNorm drug brand/generic (`rxcui:11289`, e.g. Coumadin/warfarin), and events (slug ids like `fifa-world-cup-2018`). Each entity has real surface variants (`IBM` / `International Business Machines Corporation` / `IBM Corp.`), real `entity_type`, real `context`, and `entity_id` (its QID / rxcui / slug) as ground truth. **The `entity_id` is NOT always a QID — group on it verbatim, never assume a `Q` prefix (that would drop 24 of 48 entities).** Feed these to the **existing engineered generator** as the entity source; everything downstream is reused. The alternatives (real Wikipedia prose + string-match gold; an off-the-shelf entity-linking dataset) are recorded under Deferred — this is the low-friction, highest-signal first cut.
 
 ## Architecture
 
@@ -24,8 +24,8 @@ Wikidata-grounded, reusing `dataset/records.csv` (built by `dataset/build_real.p
 ## Components
 
 ### 1. `_load_real_entities()` (engineered.py)
-- Read `dataset/records.csv`; group rows by `entity_id` (QID).
-- Per QID → `_Entity(id=QID, canonical=<primary label>, variants=<other distinct mentions>)`. Primary label = the mention with the lowest `record_id` (deterministic). Variants = the remaining distinct `mention` strings (real aliases).
+- Read `dataset/records.csv`; group rows by `entity_id` **verbatim** (may be a QID, `rxcui:<n>`, or a slug — do NOT assume a `Q` prefix).
+- Per entity → `_Entity(id=entity_id, canonical=<primary label>, variants=<other distinct mentions>)`. Primary label = the mention with the lowest `record_id`, sorted **numerically** (`record_id` is an int stored as string — a lexical sort would put `"10"` before `"2"`). Variants = the remaining distinct `mention` strings (real aliases).
 - Anchored to `__file__` (CWD differs local vs Modal). Pure / no network (`records.csv` is committed).
 
 ### 2. Gate in `generate_engineered`
@@ -35,7 +35,7 @@ Wikidata-grounded, reusing `dataset/records.csv` (built by `dataset/build_real.p
 - `_render_mention` already picks a random `variant` at rate `ambiguity`. With real entities, variants are real aliases, so the ambiguity sweep exercises **real** surface variation (abbreviations, full names, exonyms) instead of synthetic corruptions.
 
 ### 4. Gold + eval (unchanged)
-- `emit_gold_mentions` derives `(entity_id, surface, doc_id)` off the generated docs; the QID flows through as `entity_id`. `run_substrate_eval` + `score_substrate` need no change.
+- `emit_gold_mentions` derives `(entity_id, surface, doc_id)` off the generated docs; the real id (QID / rxcui / slug) flows through as `entity_id`. `run_substrate_eval` + `score_substrate` need no change.
 
 ## Data flow / what it tests
 
@@ -56,18 +56,18 @@ Reading the outcome (all are informative, none is a pass/fail — this is a *cal
 ## Scope
 
 **v1:** the real-entity loader + gate + one calibration run. **Deferred:**
-- **Real-homograph validation of `name_ci_type`** — `records.csv`'s `failure_class` collisions are real same-surface/distinct-QID homographs; a natural next test of the homograph work on real data.
+- **Real-homograph validation of `name_ci_type`** — `records.csv` has real same-surface/distinct-id homographs (`Georgia` → Q230 country vs Q1428 US state, `failure_class=same_name_collision`); a natural next test of the homograph work on real data.
 - **Real Wikidata edges** (vs synthetic edge-gen over real entities) — the sourced QIDs aren't interconnected, so v1 keeps synthetic edges.
 - **Real Wikipedia prose** (level-2 realism) — real sentences/ambiguity; the explicitly set-aside deeper validation.
 
 ## File plan
 
 - `benchmarks/.../qa_e2e/engineered.py` — `_load_real_entities()`; the `GOLDENGRAPH_BENCH_ENTITIES=real` gate in `generate_engineered`.
-- Test: `benchmarks/.../tests/test_real_entities.py` — `_load_real_entities` groups records.csv by QID into `_Entity`s (correct id/canonical/aliases); the gate switches the source; `emit_gold_mentions` yields QID gold.
+- Test: `benchmarks/.../tests/test_real_entities.py` — `_load_real_entities` groups records.csv by `entity_id` (verbatim: QID/rxcui/slug) into `_Entity`s (correct id/canonical/aliases); the gate switches the source; `emit_gold_mentions` yields real-id gold.
 
 ## Testing
 
-Box-safe: `_load_real_entities` returns 48 `_Entity`s with QID ids and real aliases as variants; a QID with multiple mentions (e.g. Q37156) has ≥2 variants; the gate makes `generate_engineered` emit QID-keyed gold mentions. One Modal substrate run for the calibration table.
+Box-safe: `_load_real_entities` returns 48 `_Entity`s keyed on the verbatim `entity_id` (assert a mix — a `Q…`, an `rxcui:…`, and a slug are all present, NOT filtered to `Q`-prefix), with real aliases as variants; an entity with multiple mentions (e.g. Q37156) has ≥2 variants; the gate makes `generate_engineered` emit real-id-keyed gold mentions. One Modal substrate run for the calibration table.
 
 ## Risks
 
