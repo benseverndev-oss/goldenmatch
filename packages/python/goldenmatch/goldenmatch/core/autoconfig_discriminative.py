@@ -166,3 +166,85 @@ def should_veto_exact(
     if support < min_shared_pairs:
         return False
     return power < tau()
+
+
+# ---------------------------------------------------------------------------
+# Weighted-fuzzy ATTRIBUTE demotion (single-source workplace/locality attributes)
+# ---------------------------------------------------------------------------
+
+# Col_types that are a WORKPLACE / LOCALITY signal rather than a person identity
+# claim, and so are candidates for the discriminative-power demotion (of either
+# an exact OR a weighted-fuzzy use). ``phone`` is here because a shared clinic /
+# switchboard line collapses colleagues under an exact_phone matchkey -- the
+# dominant DERM over-merge -- yet a personal cell is a strong identity signal;
+# the name-anchored measure keeps the personal cell (its shared-value records DO
+# co-agree on name) and demotes only the shared line. ``name`` is handled
+# separately (only when it is NOT a person-name column -- an employer / org /
+# department name), so a real first/last-name field is never eligible.
+_WORKPLACE_ATTRIBUTE_TYPES = frozenset({"address", "phone"})
+
+
+def attribute_demotion_enabled() -> bool:
+    """Whether to demote a WEIGHTED FUZZY attribute field (clinic address, org
+    name) whose shared values do not co-agree on person identity. Default OFF --
+    a behavior change pending the DQbench/Febrl/NCVR accuracy sweep; byte-
+    identical when off. Enable: GOLDENMATCH_ATTRIBUTE_DEMOTION=1 (or
+    true/yes/on/enabled, case-insensitive)."""
+    return os.environ.get("GOLDENMATCH_ATTRIBUTE_DEMOTION", "0").strip().lower() in {
+        "1", "true", "yes", "on", "enabled",
+    }
+
+
+def should_demote_attribute_field(
+    df: pl.DataFrame | None,
+    candidate_col: str,
+    col_type: str | None,
+    name_basket: list[tuple[str, bool]],
+    *,
+    is_person_name: bool,
+    min_shared_pairs: int = _MIN_SHARED_PAIRS,
+    max_pairs: int = _MAX_PAIRS,
+) -> bool:
+    """True => demote a matchkey use of candidate_col to blocking-only (applies
+    to an exact OR a weighted-fuzzy use).
+
+    A workplace / locality attribute (a clinic ``address``, a shared clinic
+    ``phone`` line, or an employer / org ``company`` name) shared by colleagues
+    is NOT person-identity evidence: records sharing its value do not co-agree on
+    the PERSON NAME. Reuses the
+    #1351 co-agreement machinery, but with two deliberate narrowings vs
+    :func:`should_veto_exact`:
+
+    * **Scope** -- only ATTRIBUTE-typed fields are eligible (``address``, or a
+      ``name``-typed field that is NOT a person name, i.e. an org/employer/dept
+      name). A real first/last-name or structured-identity field can never be
+      demoted.
+    * **Basket** -- co-agreement is measured against PERSON-NAME columns only
+      (``name_basket``), NOT the broad identity basket. The broad basket is wrong
+      here: colleagues at one clinic trivially agree on constant dataset metadata
+      mis-typed as ``identifier`` (a publication/franchise code) and on a shared
+      workplace ``phone``, which masks the fact that they are different people.
+      The person name is the clean anchor: do records sharing this attribute
+      value share a NAME? If not, the attribute is workplace/locality, not
+      identity.
+
+    Data-measured (no name allowlist), so it is a no-op where the attribute is
+    genuinely identity-correlated (shared-value records DO co-agree on name ->
+    power >= tau -> kept). Fail-safe = keep (False) on: flag off, df is None, a
+    non-attribute field, an empty name basket (no person-name anchor), or
+    insufficient shared-value support.
+    """
+    if not attribute_demotion_enabled() or df is None:
+        return False
+    is_attribute = col_type in _WORKPLACE_ATTRIBUTE_TYPES or (
+        col_type == "name" and not is_person_name
+    )
+    if not is_attribute:
+        return False
+    basket = [(c, f) for (c, f) in name_basket if c != candidate_col and c in df.columns]
+    if not basket:
+        return False
+    power, support = discriminative_power(df, candidate_col, basket, max_pairs=max_pairs)
+    if support < min_shared_pairs:
+        return False
+    return power < tau()

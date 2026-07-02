@@ -1,0 +1,179 @@
+"""Discriminative-power demotion of weighted-fuzzy ATTRIBUTE fields.
+
+A workplace/locality attribute (a clinic ``address`` or an employer ``company``
+name) shared by colleagues is not person-identity evidence -- as a full-weight
+positive fuzzy feature it collapses distinct people at one practice into a
+mega-cluster. The demotion measures, from the data, whether records sharing the
+attribute value co-agree on the person's name; if not, it demotes the field to
+blocking-only. Default OFF (GOLDENMATCH_ATTRIBUTE_DEMOTION=1); scoped so a real
+person-name / identity field is never eligible; a no-op where the attribute
+really is identity-correlated.
+
+Motivated by a real MJH dermatology list where ~70 distinct dermatologists
+sharing a clinic address + generic company name merged into one cluster.
+"""
+from __future__ import annotations
+
+import polars as pl
+from goldenmatch.core.autoconfig import build_matchkeys, profile_columns
+from goldenmatch.core.autoconfig_discriminative import should_demote_attribute_field
+
+
+def _colleagues_df(clinic_rows: int = 40) -> pl.DataFrame:
+    """A clinic of DISTINCT people sharing one address + company + phone line,
+    plus a tail of varied singletons so the frame is not degenerate."""
+    first = [f"first{i}" for i in range(clinic_rows)]
+    last = [f"last{i}" for i in range(clinic_rows)]
+    address = ["100 MAIN ST STE 5"] * clinic_rows
+    company = ["DERMATOLOGY ASSOCIATES"] * clinic_rows
+    phone = ["5551002000"] * clinic_rows  # one shared switchboard line
+    # tail: unrelated people at unique addresses/companies/phones
+    for i in range(clinic_rows, clinic_rows + 40):
+        first.append(f"tf{i}")
+        last.append(f"tl{i}")
+        address.append(f"{i} OAK AVE")
+        company.append(f"Clinic {i}")
+        phone.append(f"999200{i:04d}")
+    return pl.DataFrame({
+        "first_name": first, "last_name": last,
+        "address1": address, "company": company, "phone": phone,
+    })
+
+
+def _personal_cell_df(n_people: int = 30) -> pl.DataFrame:
+    """Phone IS identity-correlated: each person appears twice with the SAME name
+    and the SAME personal cell -> shared-phone pairs co-agree on name -> KEEP."""
+    first, last, phone = [], [], []
+    for i in range(n_people):
+        for _ in range(2):
+            first.append(f"first{i}")
+            last.append(f"last{i}")
+            phone.append(f"555{i:07d}")
+    return pl.DataFrame({"first_name": first, "last_name": last, "phone": phone})
+
+
+def _true_dupes_df(n_people: int = 30) -> pl.DataFrame:
+    """Address IS identity-correlated: each person appears twice at the SAME
+    address with the SAME name (a genuine duplicate), so shared-address pairs
+    co-agree on name -> address must be KEPT."""
+    first, last, address = [], [], []
+    for i in range(n_people):
+        for _ in range(2):
+            first.append(f"first{i}")
+            last.append(f"last{i}")
+            address.append(f"{i} HOME RD")
+    return pl.DataFrame({"first_name": first, "last_name": last, "address1": address})
+
+
+_NAME_BASKET = [("first_name", True), ("last_name", True)]
+
+
+def _profile(df: pl.DataFrame, col: str):
+    for p in profile_columns(df):
+        if p.name == col:
+            return p
+    raise AssertionError(f"no profile for {col}")
+
+
+def test_shared_workplace_address_demoted(monkeypatch):
+    monkeypatch.setenv("GOLDENMATCH_ATTRIBUTE_DEMOTION", "1")
+    df = _colleagues_df()
+    addr = _profile(df, "address1")
+    assert should_demote_attribute_field(
+        df, "address1", addr.col_type, _NAME_BASKET, is_person_name=False
+    )
+
+
+def test_shared_workplace_phone_demoted(monkeypatch):
+    """A shared clinic switchboard line -- the real DERM over-merge driver -- is
+    demoted (records sharing it are different people)."""
+    monkeypatch.setenv("GOLDENMATCH_ATTRIBUTE_DEMOTION", "1")
+    df = _colleagues_df()
+    ph = _profile(df, "phone")
+    assert ph.col_type == "phone"
+    assert should_demote_attribute_field(
+        df, "phone", ph.col_type, _NAME_BASKET, is_person_name=False
+    )
+
+
+def test_personal_cell_kept(monkeypatch):
+    """A personal cell (shared-value records co-agree on name) is KEPT."""
+    monkeypatch.setenv("GOLDENMATCH_ATTRIBUTE_DEMOTION", "1")
+    df = _personal_cell_df()
+    ph = _profile(df, "phone")
+    assert not should_demote_attribute_field(
+        df, "phone", ph.col_type, _NAME_BASKET, is_person_name=False
+    )
+
+
+def test_person_name_never_demoted(monkeypatch):
+    """Even shared and even with the flag on, a person-name field is out of scope."""
+    monkeypatch.setenv("GOLDENMATCH_ATTRIBUTE_DEMOTION", "1")
+    df = _colleagues_df()
+    ln = _profile(df, "last_name")
+    assert not should_demote_attribute_field(
+        df, "last_name", ln.col_type, _NAME_BASKET, is_person_name=True
+    )
+
+
+def test_identity_correlated_address_kept(monkeypatch):
+    """When shared-address records DO co-agree on name (true dupes), keep it."""
+    monkeypatch.setenv("GOLDENMATCH_ATTRIBUTE_DEMOTION", "1")
+    df = _true_dupes_df()
+    addr = _profile(df, "address1")
+    assert not should_demote_attribute_field(
+        df, "address1", addr.col_type, _NAME_BASKET, is_person_name=False
+    )
+
+
+def test_default_off_is_noop(monkeypatch):
+    monkeypatch.delenv("GOLDENMATCH_ATTRIBUTE_DEMOTION", raising=False)
+    df = _colleagues_df()
+    addr = _profile(df, "address1")
+    assert not should_demote_attribute_field(
+        df, "address1", addr.col_type, _NAME_BASKET, is_person_name=False
+    )
+
+
+def test_df_none_fail_safe(monkeypatch):
+    monkeypatch.setenv("GOLDENMATCH_ATTRIBUTE_DEMOTION", "1")
+    assert not should_demote_attribute_field(None, "address1", "address", _NAME_BASKET, is_person_name=False)
+
+
+def test_empty_basket_fail_safe(monkeypatch):
+    """No name/identity anchor to measure against -> keep (no demotion)."""
+    monkeypatch.setenv("GOLDENMATCH_ATTRIBUTE_DEMOTION", "1")
+    df = pl.DataFrame({"address1": ["100 MAIN ST"] * 40})
+    addr = _profile(df, "address1")
+    assert not should_demote_attribute_field(
+        df, "address1", addr.col_type, _NAME_BASKET, is_person_name=False
+    )
+
+
+def _weighted_fuzzy_field_names(matchkeys) -> set[str]:
+    out: set[str] = set()
+    for mk in matchkeys:
+        if mk.type == "weighted":
+            for f in mk.fields:
+                if (f.scorer or "") != "exact":
+                    out.add(f.field)
+    return out
+
+
+def test_build_matchkeys_integration(monkeypatch):
+    """End-to-end: the workplace address/company drop out of the weighted rule
+    when the flag is on, and are retained (byte-identical) when off."""
+    df = _colleagues_df()
+    profiles = profile_columns(df)
+
+    monkeypatch.delenv("GOLDENMATCH_ATTRIBUTE_DEMOTION", raising=False)
+    off = _weighted_fuzzy_field_names(build_matchkeys(profiles, df=df))
+
+    monkeypatch.setenv("GOLDENMATCH_ATTRIBUTE_DEMOTION", "1")
+    on = _weighted_fuzzy_field_names(build_matchkeys(profiles, df=df))
+
+    # Person names always survive; the shared workplace attributes drop only
+    # when the flag is on.
+    assert {"first_name", "last_name"} & on
+    assert "address1" in off
+    assert "address1" not in on

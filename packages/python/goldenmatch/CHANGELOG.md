@@ -6,6 +6,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Added
+- **Workplace-attribute demotion for single-source person data (opt-in, `GOLDENMATCH_ATTRIBUTE_DEMOTION=1`, default OFF).** A shared workplace/locality attribute — a clinic `address`, a shared switchboard `phone` line, or a generic employer/org `company` name — is not a person-identity claim: as an `exact` matchkey (`exact_phone`) or a full-weight fuzzy feature it collapses distinct colleagues at one practice into a mega-cluster. New `autoconfig_discriminative.should_demote_attribute_field` extends the #1351 co-agreement machinery to demote such a field (exact OR weighted use) to blocking-only when records sharing its value do NOT co-agree on the **person name**. Two deliberate narrowings vs the #1351 exact-key veto: (1) scope — only `address`/`phone`/non-person-`name` fields are eligible, so a real first/last-name or structured-identity field is never demoted; (2) basket — co-agreement is measured against person-name columns ONLY, not the broad identity basket (which is polluted here by constant dataset-metadata columns mis-typed as `identifier`, e.g. a publication/franchise code, and by the shared line itself). Data-measured (no name allowlist), so it is a no-op where the attribute is genuinely identity-correlated (a personal cell whose shared-value records DO co-agree on name is kept). Measured on a real MJH dermatology list (19,278 rows): the shared-clinic-`phone` `exact_phone` matchkey is dropped, biggest cluster 70→59, second-biggest 67→15, clusters recovered 11,347→16,306, with no change to any matchkey when the flag is off (byte-identical). Default OFF pending the DQbench/Febrl/NCVR accuracy sweep before the default can flip. Kill-switch shares the veto's `GOLDENMATCH_DISCRIMINATIVE_VETO`/tau helpers.
+
 ## [2.6.0] - 2026-07-01
 
 ### Changed
