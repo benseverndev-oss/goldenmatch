@@ -1,0 +1,120 @@
+# WhoIsWho SND -- external entity-resolution validation for goldenmatch.
+# Groups an ambiguous author name's papers into one cluster per real person
+# (From-scratch Name Disambiguation) and scores Pairwise-F1 vs the human-curated
+# WhoIsWho / OAG-Bench ground truth -- a corpus we did NOT build.
+#
+# Opt-in (workflow_dispatch only), NOT ci-required. Two run modes:
+#   runner=direct  -- run on the GH runner itself (valid set is ~107MB / CPU-bound;
+#                     fits ubuntu-latest). No secrets needed.
+#   runner=modal   -- the GH runner DRIVES a Modal run on a beefy box (for the full
+#                     v3 scale). Needs MODAL_TOKEN_ID / MODAL_TOKEN_SECRET secrets.
+#
+# The corpus is fetched on demand from AMiner's public LFS (see fetch.py) and is
+# never committed. Metric + mapping: benchmarks/whoiswho-snd/README.md.
+name: bench-whoiswho-snd
+
+on:
+  workflow_dispatch:
+    inputs:
+      engine:
+        description: "all | relational | coauthor_only | text_only | zero_config | graph_er | all_one | all_singletons"
+        default: "relational"
+      split:
+        description: "valid (headline, locally scorable) | train"
+        default: "valid"
+      limit:
+        description: "score only the first N names (empty = all)"
+        default: ""
+      runner:
+        description: "direct (GH runner) | modal (drive a Modal box)"
+        default: "direct"
+      coauthor_threshold:
+        description: "co-author Jaccard accept threshold (relational/coauthor_only)"
+        default: "0.15"
+
+permissions:
+  contents: read
+
+jobs:
+  direct:
+    if: ${{ inputs.runner == 'direct' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install "goldenmatch>=2.7.0" "polars>=1.0" numpy rapidfuzz pyarrow
+      - name: Run SND
+        working-directory: packages/python/goldenmatch
+        env:
+          GOLDENMATCH_NATIVE: "0"
+          POLARS_SKIP_CPU_CHECK: "1"
+        run: |
+          set -euo pipefail
+          LIM=""
+          [ -n "${{ inputs.limit }}" ] && LIM="--limit ${{ inputs.limit }}"
+          if [ "${{ inputs.engine }}" = "all" ]; then
+            ENGINES="all_singletons all_one text_only coauthor_only relational"
+          else
+            ENGINES="${{ inputs.engine }}"
+          fi
+          mkdir -p benchmarks/whoiswho-snd/results/ci
+          {
+            echo "## WhoIsWho SND -- ${{ inputs.split }} (direct)"
+            echo ""
+            echo "| engine | Pairwise-F1 | precision | recall | wall |"
+            echo "|---|--:|--:|--:|--:|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          for eng in $ENGINES; do
+            python benchmarks/whoiswho-snd/run_snd.py \
+              --split "${{ inputs.split }}" --engine "$eng" $LIM \
+              --coauthor-threshold "${{ inputs.coauthor_threshold }}" \
+              --out "benchmarks/whoiswho-snd/results/ci/${eng}.json"
+            python - "$eng" "benchmarks/whoiswho-snd/results/ci/${eng}.json" <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json, sys
+          eng, path = sys.argv[1], sys.argv[2]
+          d = json.load(open(path))
+          print(f"| {eng} | {d['pairwise_f1_macro']:.4f} | "
+                f"{d['pairwise_precision_macro']:.4f} | {d['pairwise_recall_macro']:.4f} | "
+                f"{d['wall_s']}s |")
+          PY
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: whoiswho-snd-results
+          path: packages/python/goldenmatch/benchmarks/whoiswho-snd/results/ci/*.json
+
+  modal:
+    if: ${{ inputs.runner == 'modal' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Modal
+        run: pip install modal
+      - name: Guard -- Modal token present
+        run: |
+          if [ -z "${MODAL_TOKEN_ID}" ] || [ -z "${MODAL_TOKEN_SECRET}" ]; then
+            echo "::error::runner=modal needs MODAL_TOKEN_ID + MODAL_TOKEN_SECRET repo secrets."
+            exit 1
+          fi
+      - name: Drive Modal run
+        working-directory: packages/python/goldenmatch
+        run: |
+          set -euo pipefail
+          LIM=0
+          [ -n "${{ inputs.limit }}" ] && LIM="${{ inputs.limit }}"
+          modal run benchmarks/whoiswho-snd/modal_app.py \
+            --engine "${{ inputs.engine }}" --split "${{ inputs.split }}" --limit "$LIM" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
