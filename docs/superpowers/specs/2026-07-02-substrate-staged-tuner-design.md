@@ -28,16 +28,18 @@ SP-B1 gives a config object + a static rule-table pick (`for_profile`). But whic
 run_staged(docs, gold, qid_aliases, *, build_and_score, thresholds, budget, relation_vocab=(), ...)
   1. config = for_profile(profile_corpus(docs), ...)          # SP-B1 initial pick
   2. slice = a fixed gold-bearing subset (docs+gold+aliases)
+  # precondition: budget >= 1 (else there is no round to score and best_config is undefined)
   3. tried = set()                                            # (lever, next_value) pairs, mutated ONLY by escalate
      rounds = []
      for r in range(budget):
        sc = build_and_score(config, slice)                    # INJECTED: real=Modal, test=fake
        gate = evaluate_gate(sc, thresholds)
-       config2 = None if gate.passed else escalate(config, gate.failing_axis, tried,
-                                                    relation_vocab=relation_vocab)
-       rounds.append(RoundReport(r, config, sc, gate, escalated_to=_lever_of(config, config2)))
+       step = None if gate.passed else escalate(config, gate.failing_axis, tried,
+                                                 relation_vocab=relation_vocab)   # (lever, new_config) | None
+       escalated_to, config2 = (None, None) if step is None else step
+       rounds.append(RoundReport(r, config, sc, gate, escalated_to=escalated_to))
        if gate.passed: stopped = "passed"; break
-       if config2 is None: stopped = "exhausted"; break       # no eligible lever left on the failing axis
+       if step is None: stopped = "exhausted"; break          # no eligible lever left on the failing axis
        config = config2
      else:
        stopped = "budget"
@@ -65,12 +67,12 @@ Env-overridable defaults. Thresholds are *hypotheses* (like SP-B1's `CHUNK_MIN_S
 
 **Connectivity is intentionally ungated in v1.** `GateThresholds` has only `presence_min` + `relational_f1_min`, so `evaluate_gate` only ever routes to `{presence, relational}`. This is deliberate: `LEVER_AXIS_MAP["connectivity"]` is `[relation_reprompt, rebel_fuse, relation_vocab]` — all refuted or not-auto-toggled — so a connectivity failure would have no eligible escalation and immediately exhaust. Connectivity is reported in the scorecard (visible in the trace) but is not a gate axis; that is why the escalate transform table has no connectivity-only rows. Adding a connectivity gate waits until there's a non-refuted lever that moves it.
 
-### 3. `escalate(config, failing_axis, tried, *, relation_vocab=(), allow_refuted=False) -> SubstrateConfig | None`
+### 3. `escalate(config, failing_axis, tried, *, relation_vocab=(), allow_refuted=False) -> tuple[str, SubstrateConfig] | None`
 Deterministic policy, built on **next-state transitions** (NOT a "tried lever name" set — that breaks the `xdoc_key` ladder). Each lever has an `_advance(config) -> (next_value_repr, new_config) | None` that moves it ONE step from its current state (returns `None` when already at the end of its ladder). `escalate` walks `LEVER_AXIS_MAP[failing_axis]` in order and selects the **first** lever that is:
   (a) not refuted [unless `allow_refuted`], and
   (b) `_advance` yields a step (`next != current`), and
   (c) the `(lever, next_value_repr)` pair is not already in `tried`.
-It records `(lever, next_value_repr)` in `tried` (escalate is the **sole** mutator of `tried`) and returns the new (frozen) config via `dataclasses.replace`. Returns `None` when every axis lever is exhausted → terminal eject.
+It records `(lever, next_value_repr)` in `tried` (escalate is the **sole** mutator of `tried`) and returns **`(lever_name, new_config)`** — the new frozen config via `dataclasses.replace`, PAIRED WITH the advanced lever's name so the caller records `escalated_to` directly instead of diffing (a diff is ambiguous: the `xdoc_key→name_ci_type` and `schema_canon` steps each change two fields). Returns `None` when every axis lever is exhausted → terminal eject (`escalated_to` is then `None`, as it is for a passed round).
 
 **Termination:** every lever's ladder is finite (`chunk_extract`: F→T; `extractor`: api→gliner; `xdoc_key`: ""→name_ci→name_ci_type; `entity_type_canon`: F→T; `schema_canon`: F→T), each `(lever, next)` pair is recorded once and never re-selected, so the total number of escalations across all rounds is bounded by the sum of ladder lengths → the loop always terminates (independent of `budget`).
 
@@ -111,6 +113,8 @@ Under `config.apply()`: run `ingest_corpus` over the dataset's docs → graph �
 - `run_staged_budget_exhausted` — fake always fails → stops at `budget`, `stopped_reason="budget"`, full build still runs on best-so-far.
 - `run_staged_promotes_argmax_not_last` — fake returns a HIGH score on round 1 then LOWER on later rounds (a regressing escalation) → `TunerResult.config` is round-1's config (argmax), and the full build is invoked with it (not the last-tried config).
 - `run_staged_terminal_eject` — fail on an axis with no eligible lever → `stopped_reason="exhausted"`, full build still runs on best-so-far.
+- `run_staged_rejects_budget_below_one` — `run_staged(..., budget=0)` raises `ValueError` (no round → `best_config` undefined; guard the precondition rather than degenerate the argmax over an empty trace).
+- `escalate_returns_lever_and_config` — a successful escalate returns a `(lever_name, SubstrateConfig)` tuple whose lever_name is the advanced lever (e.g. `"chunk_extract"`), so `RoundReport.escalated_to` is set without diffing.
 - `tuner_result_trace_is_serializable` — `trace` RoundReports carry the scorecard + config + escalated_to (the SP-C hand-off shape).
 
 ## Design choices flagged for review
