@@ -91,6 +91,47 @@ def test_dedupe_df_throughput_posture_fields():
     assert not missing, f"posture missing keys: {missing}"
 
 
+def test_throughput_skips_golden_survivorship(monkeypatch):
+    """#1151: the throughput tier skips golden-record survivorship (the O(N)
+    polars iter_rows that wedged the 100k+ corpus ceiling). Golden stays empty;
+    clusters — what corpus dedup actually consumes — are intact."""
+    from goldenmatch.core import autoconfig
+    monkeypatch.setattr(autoconfig, "_embedder_available", lambda config=None: False)
+
+    base = ["the quick brown fox jumps over the lazy dog"]
+    near = ["the quick brown fox jumps over the lazy dogs"]
+    far = ["completely unrelated text about quantum computing"]
+    df = pl.DataFrame({"body": (base * 3) + (near * 3) + (far * 3)})
+
+    from goldenmatch import dedupe_df
+
+    res = dedupe_df(df, throughput=0.95)
+    assert res.throughput_posture is not None, "throughput tier did not engage"
+    # Survivorship skipped -> no golden records built.
+    golden = res.golden
+    assert golden is None or getattr(golden, "height", 0) == 0, (
+        f"expected golden skipped on throughput path; got {golden}"
+    )
+    # The actual deliverable — clusters / dup mapping — is still there.
+    assert res.clusters, "throughput run must still produce clusters"
+
+
+def test_non_throughput_still_builds_golden():
+    """Guard: the golden skip is scoped to throughput only — a normal run still
+    builds golden records for a multi-member cluster."""
+    df = pl.DataFrame({
+        "name": ["Alice Smith", "Alice Smith", "Bob Jones"],
+        "email": ["a@x.com", "a@x.com", "b@y.com"],
+    })
+    from goldenmatch import dedupe_df
+
+    res = dedupe_df(df)
+    assert res.throughput_posture is None
+    assert res.golden is not None and res.golden.height >= 1, (
+        "normal run must still produce golden records"
+    )
+
+
 def test_throughput_off_is_byte_identical():
     import polars as pl
     from goldenmatch import dedupe_df
