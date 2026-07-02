@@ -96,6 +96,7 @@ Encodes the arc's MEASURED findings as deterministic rules (each cites its repor
 - `default_config_is_noop_env` — `SubstrateConfig().to_env()` sets `xdoc_key=""`, all bools `"0"` (reproduces engine default).
 - `to_env_maps_types` — bool→1/0, tuple→csv, name_ci_type present.
 - `apply_sets_and_restores` — inside `apply()` the env reflects `to_env()`; after, a key that was ABSENT before is deleted, a key that had a PRIOR value is restored to it.
+- `schema_discover_guard` (the load-bearing leak fix) — `"GOLDENGRAPH_SCHEMA_DISCOVER" in MANAGED_ENV_VARS`; `to_env()` always emits it as `"0"`; and an `apply()` test that with ambient `GOLDENGRAPH_SCHEMA_DISCOVER="1"` pre-set, inside the context it reads `"0"` (forced off) and after the context it is restored to `"1"`.
 - `profile_corpus_signals` — hand docs → correct n_docs / mean_sentences / mean_chars; empty → zeros.
 - `for_profile_short_docs_no_chunking` — low mean_sentences → `chunk_extract False`, `xdoc_key "name_ci"`.
 - `for_profile_dense_docs_enables_chunking` — high mean_sentences → `chunk_extract True`, (6,2).
