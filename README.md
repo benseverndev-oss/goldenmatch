@@ -48,11 +48,18 @@
 <p align="center"><sub><em>Pair drilldown in the web workbench: cluster members, field-level diff, and a one-line NL explanation per pair. <code>pip install goldenmatch[web]</code> then <code>goldenmatch serve-ui &lt;project&gt;</code>. <a href="https://github.com/benseverndev-oss/goldenmatch/wiki/Web-UI">More screenshots →</a></em></sub></p>
 
 ```bash
-# Headline package: dedupe a CSV in 30 seconds
+# Dedupe a CSV in 30 seconds — zero config, writes <timestamp>_golden.csv to the
+# current directory. Add --tui to review interactively, --output-all for every artifact.
 pip install goldenmatch && goldenmatch dedupe customers.csv
+
+# From Python — zero-config, returns golden records
+python -c "import goldenmatch as gm; gm.dedupe('customers.csv').golden.write_csv('deduped.csv')"
 
 # TypeScript / Edge runtimes
 npm install goldenmatch
+
+# The WHOLE suite (Check + Flow + Match + Analysis + Pipe + InferMap) + native acceleration, one line:
+pip install golden-suite
 ```
 
 <!-- README-callouts:start  (auto-synced from packages/python/goldenmatch/CHANGELOG.md by scripts/sync_readme_callouts.py — edit the CHANGELOG, not this block) -->
@@ -250,6 +257,40 @@ Reproducible end-to-end pipelines running GoldenMatch on public data at scale, e
 - **[goldenmatch-shell-company-network](https://github.com/benseverndev-oss/goldenmatch-shell-company-network)** — investigative ER across ICIJ Offshore Leaks + OpenSanctions + GLEIF + UK PSC + UK disqualified-directors. Confidence-weighted graph, structure mining, named investigative candidates. **−62.5% analyst-hours to triage** vs single-source baselines; +133% adversarial perturbation recovery.
 - **[goldenmatch-vuln-attribution](https://github.com/benseverndev-oss/goldenmatch-vuln-attribution)** — cross-database ER on 6.1M OSS vulnerability records across 40 sources (OSV, GHSA, PyPA, RustSec, Go vulndb, EPSS, CISA KEV, CVE Project bulk). **6,126,895 records → 847,475 canonical vulns** in ~5 minutes end-to-end on a single 64GB runner via the full Golden Suite (Check + Flow + Match + Pipe).
 - **[goldenmatch-sanctions-reconciliation](https://github.com/benseverndev-oss/goldenmatch-sanctions-reconciliation)** — cross-list coverage analysis on 85 public sanctions lists across 50+ jurisdictions via OpenSanctions, plus 10-year OFAC SDN history and PEP/crypto cross-analysis. Coverage-gap benchmark for any sanctions-screening vendor.
+
+---
+
+## The whole suite in one line — `golden-suite`
+
+Want everything, configured for speed, without hand-picking packages? The
+[`golden-suite`](packages/python/golden-suite/README.md) meta-package pulls in
+the entire suite plus the native (Rust) acceleration in a single install:
+
+```bash
+pip install golden-suite
+```
+
+That one command installs **GoldenMatch** (entity resolution), **GoldenCheck**
+(data quality), **GoldenFlow** (transforms), **GoldenAnalysis** (reporting),
+**GoldenPipe** (orchestration), **InferMap** (schema mapping), and the
+`goldenmatch-native` / `goldencheck-native` / `goldenflow-native` /
+`goldenanalysis-native` compiled kernels — all pinned to compatible versions and
+defaulted to the perf-optimized configuration (native paths on, no env vars to
+set). The native wheels are **hard** dependencies on purpose: on a platform
+without a wheel the install fails loudly rather than silently running the slow
+pure-Python path.
+
+```bash
+golden-suite doctor      # verify every package + native kernel is importable and healthy
+golden-suite optimize    # repair / re-enable the perf-optimized config if doctor finds a gap
+
+pip install golden-suite[mcp]     # + the aggregator MCP server (every tool, one endpoint)
+pip install golden-suite[agent]   # + GoldenPipe serving surfaces (A2A + REST + TUI)
+pip install golden-suite[all]     # everything above
+```
+
+Prefer to install just one tool, or pick your own extras? Use the per-package
+installs below.
 
 ---
 

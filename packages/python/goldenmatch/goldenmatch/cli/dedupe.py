@@ -67,7 +67,14 @@ def dedupe_cmd(
     config: str | None = typer.Option(
         None, "--config", "-c", help="Path to YAML config file (optional - auto-detects if omitted)"
     ),
-    no_tui: bool = typer.Option(False, "--no-tui", help="Skip TUI, run with auto-config directly"),
+    tui: bool = typer.Option(
+        False, "--tui",
+        help="Open the interactive review TUI instead of running directly (auto-config path only).",
+    ),
+    no_tui: bool = typer.Option(
+        False, "--no-tui",
+        help="Deprecated: non-interactive is now the default. Accepted for back-compat (no-op).",
+    ),
     model: str | None = typer.Option(None, "--model", help="Override embedding model selection"),
     preview: bool = typer.Option(False, "--preview", help="Preview results without writing files"),
     preview_size: int = typer.Option(10000, "--preview-size", help="Number of records for preview sample"),
@@ -185,8 +192,12 @@ def dedupe_cmd(
                         if f.scorer in ("embedding", "record_embedding"):
                             f.model = model
 
-            # Launch TUI for review (unless --no-tui)
-            if not no_tui and not preview:
+            # Launch the interactive TUI only when explicitly requested via
+            # --tui. The default is non-interactive (run auto-config, write
+            # output, print a summary) so `goldenmatch dedupe file.csv` delivers
+            # CSV-in/CSV-out without a full-screen app. --no-tui stays accepted
+            # (now a no-op) for back-compat.
+            if tui and not no_tui and not preview:
                 from goldenmatch.tui.app import GoldenMatchApp
                 file_paths = [fp for fp, _name in parsed_files]
                 tui_app = GoldenMatchApp(files=file_paths)
@@ -242,6 +253,26 @@ def dedupe_cmd(
         output_dupes = True
         output_unique = True
         output_report = True
+
+    # Zero-config default: a bare `goldenmatch dedupe file.csv` (auto-config path,
+    # no explicit output flag) writes golden records by default, so "CSV in ->
+    # CSV out" actually happens without needing --output-golden. Confined to the
+    # auto-config path -- an explicit --config run keeps its exact prior behavior.
+    if (
+        _used_autoconfig
+        and not preview
+        and not merge_preview
+        and not any([
+            output_golden, output_clusters, output_dupes, output_unique,
+            output_report, html_report, dashboard,
+        ])
+    ):
+        output_golden = True
+        if not quiet:
+            console.print(
+                "[dim]No output flag given -- writing golden records by default "
+                "(use --output-all / --output-dir to control, --tui to review).[/dim]"
+            )
 
     # Enable auto-fix from CLI flag
     if auto_fix:
