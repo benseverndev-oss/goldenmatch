@@ -63,6 +63,62 @@ def test_goldenmatch_runner_engages_tier(tmp_path):
 _HAS_DATATROVE = importlib.util.find_spec("datatrove") is not None
 
 
+def test_datatrove_dup_edge_parsing(tmp_path):
+    """Parse datatrove buckets `.dups` output the way the runner must (#1150).
+
+    The recall=0 bug read the CLUSTER stage's `.remove` list (single doc ids, no
+    pairs). The edges live in the BUCKETS `.dups` files as packed `<4I` records
+    (file_id_1, doc_id_1, file_id_2, doc_id_2). This synthesizes that exact byte
+    format — no datatrove install needed — and checks edges + de-dup + SENTINEL skip.
+    """
+    import struct
+
+    dt = _load("run_datatrove")
+    buck = tmp_path / "buckets"
+    buck.mkdir()
+    SENT = (1 << 32) - 1
+    records = [
+        (0, 1, 0, 3),      # edge 1-3
+        (0, 3, 0, 7),      # edge 3-7  (1,3,7 form one cluster)
+        (0, 7, 0, 3),      # same pair as 3-7, reversed -> de-duped
+        (0, 5, 0, 9),      # edge 5-9  (separate cluster)
+        (SENT, SENT, 0, 4),  # index-signature match -> skipped
+        (0, 2, 0, 2),      # self-pair -> skipped
+    ]
+    blob = b"".join(struct.pack("<4I", *r) for r in records)
+    (buck / "00000_00.dups").write_bytes(blob)
+
+    edges, raw = dt._read_dup_edges(buck)
+    assert raw == 6  # every record counted, including skipped ones
+    assert edges == [(1, 3), (3, 7), (5, 9)]  # de-duped, canonical, no self/SENTINEL
+
+    # Union-find the parsed edges the way _run_minhash does: {1,3,7} and {5,9}.
+    parent: dict[int, int] = {}
+
+    def find(x):
+        parent.setdefault(x, x)
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for a, b in edges:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[min(ra, rb)] = max(ra, rb)
+    assert find(1) == find(3) == find(7)
+    assert find(5) == find(9)
+    assert find(1) != find(5)
+
+
+def test_datatrove_dup_edges_empty_when_no_dups(tmp_path):
+    dt = _load("run_datatrove")
+    buck = tmp_path / "buckets"
+    buck.mkdir()
+    edges, raw = dt._read_dup_edges(buck)
+    assert edges == [] and raw == 0
+
+
 @pytest.mark.skipif(not _HAS_DATATROVE, reason="datatrove not installed (headline lane installs it)")
 def test_datatrove_runner_schema(tmp_path):
     corpus, _ = _make_corpus(tmp_path)
