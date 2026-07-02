@@ -64,6 +64,8 @@ jobs:
       native_flow: ${{ steps.filter.outputs.native_flow }}
       goldenembed: ${{ steps.filter.outputs.goldenembed }}
       embed: ${{ steps.filter.outputs.embed }}
+      goldenhnsw: ${{ steps.filter.outputs.goldenhnsw }}
+      hnsw: ${{ steps.filter.outputs.hnsw }}
       distributed: ${{ steps.filter.outputs.distributed }}
       sail: ${{ steps.filter.outputs.sail }}
       readme_callouts: ${{ steps.filter.outputs.readme_callouts }}
@@ -327,6 +329,21 @@ jobs:
               # goldenembed crate, so a goldenembed-only change must re-trigger.
               - 'packages/rust/extensions/embed-py/**'
               - 'packages/rust/extensions/goldenembed/**'
+            goldenhnsw:
+              # Standalone pure-Rust HNSW (IndexHNSWFlat) ANN index. Own
+              # workspace, zero C deps, not in the `rust` job's
+              # `cargo test --workspace`, so it needs its own lane.
+              - 'packages/rust/extensions/goldenhnsw/**'
+            hnsw:
+              # goldenmatch-hnsw: the maturin/pyo3 wheel exposing the goldenhnsw
+              # index to Python (goldenmatch.core.ann_blocker's native ANN
+              # backend). Own workspace; the wheel depends on the goldenhnsw
+              # crate, so a goldenhnsw-only change must re-trigger. The
+              # ann_blocker integration tests exercise this wheel.
+              - 'packages/rust/extensions/hnsw-py/**'
+              - 'packages/rust/extensions/goldenhnsw/**'
+              - 'packages/python/goldenmatch/goldenmatch/core/ann_blocker.py'
+              - 'packages/python/goldenmatch/tests/test_ann_hnsw.py'
             distributed:
               # Ray-backed distributed paths. The main `python` job installs
               # without the `ray` extra, so every tests/test_distributed_*.py
@@ -1704,6 +1721,79 @@ jobs:
               print(f"OK: goldenmatch-embed wheel loads + embeds (dim={m.dim}); in-house parity skipped ({e})")
           PY
 
+  # Standalone pure-Rust HNSW (IndexHNSWFlat) ANN index: clippy + unit tests
+  # (recall vs brute force, exact-parity at small N, determinism). Own
+  # workspace, zero C deps — not in the `rust` job's `cargo test --workspace`.
+  goldenhnsw:
+    needs: changes
+    if: needs.changes.outputs.goldenhnsw == 'true' || needs.changes.outputs.force_all == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/goldenhnsw
+      - name: clippy
+        working-directory: packages/rust/extensions/goldenhnsw
+        run: cargo clippy --release --all-targets -- -D warnings
+      - name: test
+        working-directory: packages/rust/extensions/goldenhnsw
+        run: cargo test --release
+
+  # goldenmatch-hnsw wheel smoke: build the SEPARATE maturin/pyo3 wheel
+  # (packages/rust/extensions/hnsw-py/) that exposes the goldenhnsw index to
+  # Python, install it alongside goldenmatch, and run the ann_blocker native
+  # integration tests (recall vs numpy, scores, incremental add). Distinct from
+  # `goldenhnsw`, which only clippy/tests the underlying Rust crate. maturin
+  # normalizes the dist name `goldenmatch-hnsw` -> `goldenmatch_hnsw`.
+  hnsw_wheel:
+    needs: changes
+    if: needs.changes.outputs.hnsw == 'true' || needs.changes.outputs.force_all == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/hnsw-py
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      - name: Build the goldenmatch-hnsw wheel (maturin, pyo3)
+        run: uv run --with maturin maturin build --release --manifest-path packages/rust/extensions/hnsw-py/Cargo.toml --out dist
+      - name: Install the wheel + standalone smoke
+        run: |
+          uv pip install dist/goldenmatch_hnsw-*.whl
+          uv run python - <<'PY'
+          import numpy as np
+          from goldenmatch_hnsw import HnswIndex, __version__
+          rng = np.random.default_rng(0)
+          X = rng.standard_normal((2000, 32)).astype("<f4")
+          X /= np.linalg.norm(X, axis=1, keepdims=True)
+          idx = HnswIndex(dim=32, ef_search=128)
+          idx.add_batch(X.tobytes(), n=len(X))
+          assert len(idx) == 2000
+          hits = tot = 0
+          for qi in range(0, 2000, 50):
+              got = {i for i, _ in idx.search(X[qi].tolist(), 10)}
+              want = set(np.argsort(-(X @ X[qi]))[:10].tolist())
+              hits += len(got & want); tot += len(want)
+          rec = hits / tot
+          assert rec >= 0.95, f"recall {rec} < 0.95"
+          print(f"OK: goldenmatch-hnsw {__version__} wheel loads; recall@10={rec:.4f}")
+          PY
+      - name: Run ann_blocker native HNSW integration tests
+        run: uv run python -m pytest packages/python/goldenmatch/tests/test_ann_hnsw.py -q
+
   # Ray-backed distributed lane. The full goldenmatch `python` job runs
   # `uv sync --all-packages` WITHOUT the optional `ray` extra, so every
   # tests/test_distributed_*.py SKIPS there via `pytest.importorskip("ray")`.
@@ -2343,6 +2433,8 @@ jobs:
       - native_wheel
       - goldenembed
       - embed_wheel
+      - goldenhnsw
+      - hnsw_wheel
       - distributed
       - sail
       - pyright
