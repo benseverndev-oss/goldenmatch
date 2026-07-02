@@ -40,10 +40,13 @@ extract_recall: bool = False             # REFUTED (trades edges for entity nois
 
 `__post_init__` validates: `xdoc_key in {"", "name", "name_ci", "name_ci_type"}`; `extractor in {"api", "rebel", "gliner"}`; `chunk_sentences >= 1`; `0 <= chunk_overlap < chunk_sentences`. Invalid → `ValueError`. (Frozen + validated → a config is a safe, immutable value object to pass around and log.)
 
+**Note:** the config's `extractor` set is stricter than the engine — the engine also accepts `""`/`"llm"` as aliases for `api` (ingest.py:643), but the config canonicalizes to `"api"` and rejects the aliases with `ValueError`. Callers pass the canonical `"api"`; documented so a caller passing `"llm"` isn't surprised.
+
 ### 2. `MANAGED_ENV_VARS` + `to_env()`
 
-- `MANAGED_ENV_VARS: tuple[str, ...]` — the exact set of `GOLDENGRAPH_*` names this config owns (one per field, + `GOLDENGRAPH_CHUNK_SENTENCES`/`_CHUNK_OVERLAP`/`_ENTITY_TYPE_VOCAB`/`_RELATION_VOCAB`). The single source of truth for what `apply()` snapshots/restores.
-- `to_env() -> dict[str, str]` — materialize the config to a **total** env map (every managed key present, so applying a config fully determines the env — no ambient `GOLDENGRAPH_*` leaks through). Bool → `"1"`/`"0"`; `xdoc_key`/vocabs empty → `""`; tuple → comma-joined. Deterministic.
+- `MANAGED_ENV_VARS: tuple[str, ...]` — the exact `GOLDENGRAPH_*` names this config owns. That is **one var per field (12 total)** — `GOLDENGRAPH_XDOC_KEY`, `_CHUNK_EXTRACT`, `_CHUNK_SENTENCES`, `_CHUNK_OVERLAP`, `_ENTITY_TYPE_CANON`, `_ENTITY_TYPE_VOCAB`, `_SCHEMA_CANON`, `_RELATION_VOCAB`, `_EXTRACTOR`, `_RELATION_REPROMPT`, `_REBEL_FUSE`, `_EXTRACT_RECALL` — **plus one leak-guard var, `GOLDENGRAPH_SCHEMA_DISCOVER`** (13 total). `SCHEMA_DISCOVER` is not a config field but MUST be managed: if it is ambient `=1`, `ingest_corpus` runs schema *discovery* and ignores `GOLDENGRAPH_RELATION_VOCAB` (ingest.py:631-635, 885), silently defeating the `has_known_schema` rule. `to_env()` always emits `GOLDENGRAPH_SCHEMA_DISCOVER="0"`. This is the single source of truth for what `apply()` snapshots/restores.
+- `to_env() -> dict[str, str]` — materialize the config to a **total** env map over `MANAGED_ENV_VARS` (every managed key present, so applying a config fully determines those keys — no ambient value of a *managed* var leaks through). Bool → `"1"`/`"0"`; `xdoc_key`/vocabs empty → `""`; tuple → comma-joined. Deterministic.
+- **Residual (documented, not fixed in SP-B1):** ~18 other substrate `GOLDENGRAPH_*` vars (e.g. `LITERAL_ATTRS`, `EXTRACT_JSON_MODE` [default-on], `CROSS_DOC_LINK`, `PROFILE_LINK`, link/merge thresholds) are NOT managed and still read from ambient env. None of them *defeats a `for_profile` rule* (only `SCHEMA_DISCOVER` did, hence its inclusion), so they are left unmanaged for now; SP-B2 can widen the managed set if a gate proves to interact. The config is leak-proof over its **managed** keys, not over all `GOLDENGRAPH_*`.
 
 ### 3. `apply()` — context manager
 
@@ -64,7 +67,7 @@ class CorpusProfile:
     mean_chars_per_doc: float
 ```
 
-`profile_corpus(docs: Sequence[str]) -> CorpusProfile` — cheap signals from RAW text only (no LLM, no build). Sentence count via a simple `[.!?]`-boundary split (reuse `chunk_extract`'s splitter if cheaply importable without side effects, else a local 3-line helper — decided at implementation, whichever avoids importing the LLM path). Empty corpus → zeros.
+`profile_corpus(docs: Sequence[str]) -> CorpusProfile` — cheap signals from RAW text only (no LLM, no build). Sentence count via a **local** `(?<=[.!?])\s+` split helper defined in `config.py`. (Reusing `chunk_extract`'s splitter is rejected: importing `goldengraph.chunk_extract` runs `from .llm import LLMClient` at module top — it drags in the LLM path, which `config.py` must stay free of.) Empty corpus → zeros.
 
 ### 5. `for_profile()` — the deterministic rule table
 
@@ -82,6 +85,8 @@ Encodes the arc's MEASURED findings as deterministic rules (each cites its repor
 | `mean_sentences_per_doc >= CHUNK_MIN_SENTENCES` (default 8) | `chunk_extract=True` (6,2) | chunking win on dense multi-sentence docs; no-op + 4-10x cost on short docs (#1350) |
 | `has_known_schema` | `schema_canon=True`, `relation_vocab=<given>` | closed-vocab predicate win (SCHEMA_CANON arc) |
 | — | refuted levers stay `False` | reprompt/rebel/extract_recall all refuted |
+
+**Rule precedence (explicit):** the base rule always sets `xdoc_key="name_ci"`; the `expect_homographs` rule **overrides** it to `"name_ci_type"` and is the only rule that sets `entity_type_canon=True`. The rows are not independent — homograph wins over base. `chunk_extract` and `schema_canon` are orthogonal (compose freely). Implement as: start from base, then apply homograph override, then the chunk and schema rules.
 
 `CHUNK_MIN_SENTENCES` is a module constant, env-overridable (`GOLDENGRAPH_AUTOCFG_CHUNK_MIN_SENTENCES`).
 
@@ -104,7 +109,13 @@ Encodes the arc's MEASURED findings as deterministic rules (each cites its repor
 - **Rule-table thresholds are hypotheses.** `CHUNK_MIN_SENTENCES=8` comes from the wiki finding (leads ~20 sentences, chunking won at (6,2)); it is a documented, env-overridable default. SP-B2 (which can actually *score* a config) is where these get measured/tuned — SP-B1 just ships defensible starting rules.
 - **`apply()` mutates process-global env.** Acceptable for the single-build use; explicitly flagged not-thread-safe for concurrent different configs.
 - **Refuted levers are IN the config** (so SP-C can measurement-gate a re-test) but default `False` and are never selected by `for_profile`.
-- **`to_env()` is total** (emits every managed key including `"0"`/`""`) so `apply()` is leak-proof against ambient `GOLDENGRAPH_*`. Alternative (emit only non-defaults) was rejected: it would let a stale env var bleed into a build.
+- **`to_env()` is total** (emits every managed key including `"0"`/`""`) so `apply()` is leak-proof over its **managed** keys (the 12 field vars + `SCHEMA_DISCOVER` guard). Alternative (emit only non-defaults) was rejected: it would let a stale *managed* env var bleed into a build. It does NOT manage the ~18 other substrate vars (documented in §2); only `SCHEMA_DISCOVER` is pulled in because it alone can defeat a `for_profile` rule.
+
+## Branch / dependency note
+
+SP-B1's runtime code (`config.py`) does NOT depend on SP-A's code — it lives in the `goldengraph` package and only touches `GOLDENGRAPH_*` env semantics. The ONLY cross-dependency is the optional consistency test `config_fields_cover_known_levers`, which imports `erkgbench.substrate_eval.KNOWN_LEVERS` (added in SP-A #1371). SP-A merged to `main` but this branch (`feat/substrate-config`) was cut before that merge landed, so `KNOWN_LEVERS`/`substrate_scorecard` are not yet present here. Implementation handling:
+- The consistency test **skips** if `KNOWN_LEVERS` is unimportable (so SP-B1 is testable standalone).
+- Before the final PR, **rebase `feat/substrate-config` onto `origin/main`** (after #1371 has merged) so the consistency test actually runs and the SP-A↔SP-B contract is enforced. If #1371 has not merged by then, note it in the PR and land the skip.
 
 ## Follow-ons
 
