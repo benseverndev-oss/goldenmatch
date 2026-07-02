@@ -107,3 +107,29 @@ class TestFullDataCardinality1351:
             f"promoted to {prof.col_type!r} on "
             f"{'native' if _NATIVE_AUTOCONFIG else 'python'} classify path"
         )
+
+    def test_name_authoritative_id_not_demoted(self):
+        """A column NAMED like an id (`order_id`) holding legitimately-repeating
+        numeric values (moderate cardinality) must stay ``identifier``.
+
+        The native-path demotion correction (#1351) re-runs the data-only
+        classifier, which would call a moderate-cardinality numeric column
+        "numeric" -- but ``order_id`` is ``identifier`` because its NAME is
+        authoritative, not because of the cardinality promotion being corrected.
+        Demoting it to "numeric" would make ``build_matchkeys`` skip it and the id
+        would silently lose its matchkey. The name-authority guard must prevent
+        that on the native path (the pure-Python path already respects it).
+        """
+        # 900 distinct ids across 3,000 rows -> honest ratio 0.3 (below the
+        # promotion floor); numeric-shaped so _guess_type -> "numeric".
+        ids = [str(700000 + (i % 900)) for i in range(3000)]
+        df = pl.DataFrame({"order_id": ids})
+
+        prof = _profile_by_name(df)["order_id"]
+
+        assert prof.cardinality_ratio == pytest.approx(900 / 3000, abs=1e-3)
+        assert prof.col_type == "identifier", (
+            f"name-authoritative order_id wrongly reclassified to "
+            f"{prof.col_type!r} on "
+            f"{'native' if _NATIVE_AUTOCONFIG else 'python'} classify path"
+        )

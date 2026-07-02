@@ -185,13 +185,19 @@ def _full_column_cardinality_null(
         if total_rows == 0:
             return 0.0, 0.0
         null_rate = series.null_count() / total_rows
-        # Strip blanks consistently with the sample values filter (str(v).strip()).
-        non_null = series.drop_nulls().cast(pl.Utf8).str.strip_chars()
-        non_blank = non_null.filter(non_null.str.len_chars() > 0)
+        non_null = series.drop_nulls()
+        # Blank-stripping only applies to text: non-string dtypes have no "blank"
+        # once nulls are dropped, so skip the Utf8 cast + per-value scan (pure
+        # overhead on numeric/date/bool) and hash the native dtype directly. For
+        # strings, strip + drop empties to match the sample values filter
+        # (str(v).strip() truthiness).
+        if non_null.dtype in (pl.Utf8, pl.String, pl.Categorical):
+            stripped = non_null.cast(pl.Utf8).str.strip_chars()
+            non_null = stripped.filter(stripped.str.len_chars() > 0)
         if total_rows >= _full_cardinality_max_rows():
-            unique = non_blank.approx_n_unique()
+            unique = non_null.approx_n_unique()
         else:
-            unique = non_blank.n_unique()
+            unique = non_null.n_unique()
         return unique / total_rows, null_rate
     except Exception:  # noqa: BLE001 -- exotic dtype; fall back to sample estimate
         return None
@@ -490,6 +496,17 @@ def profile_columns(
         }
         for prof in profiles:
             if prof.col_type != "identifier":
+                continue
+            # Name-authority guard: a column named like an id (`*_id`, `*_key`,
+            # `uuid`, `account_no`, ...) is "identifier" because its NAME says so,
+            # and the pure-Python path treats that as authoritative over data
+            # shape (identifier in _name_authoritative). Such a column can hold
+            # legitimately-repeating numeric ids (moderate cardinality), so only
+            # demote when the classification is NOT name-authoritative -- i.e.
+            # this "identifier" came from the cardinality promotion we're
+            # correcting, not from the column name. Otherwise a numeric-shaped
+            # `order_id` would be demoted to "numeric" and lose its matchkey.
+            if _classify_by_name(prof.name) == "identifier":
                 continue
             vals = names_to_sample_values.get(prof.name, [])
             honest = honest_ratios.get(prof.name)
