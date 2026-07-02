@@ -127,13 +127,11 @@ goldenmatch dedupe big.csv --chunked
 
 | Variable | Default | Effect |
 |----------|---------|--------|
-| `GOLDENMATCH_AUTOCONFIG_BACKEND` | unset | Override the picked backend. A name (`duckdb`, `ray`) forces it regardless of size; `0`/`false`/`disabled` disables the override (use the default). |
-| `GOLDENMATCH_AUTOCONFIG_BACKEND_THRESHOLD` | `1000000` | Row count at/above which the legacy shim picks `duckdb`. |
 | `GOLDENMATCH_PLANNER_BUCKET` | `1` | The v3 planner may pick `bucket`. Set `0` to opt the bucket backend out. |
 | `GOLDENMATCH_DUCKDB_SCORE_DB` | unset (in-memory) | Path for the DuckDB pair store to spill to disk. Point it at scratch with room when running DuckDB at 50M+. |
 
 <Note>
-  The single-threshold `GOLDENMATCH_AUTOCONFIG_BACKEND_THRESHOLD` shim is deprecated in favor of the v3 planner, which decides from `(ComplexityProfile, RuntimeProfile)`. It still works and is honored for explicit overrides.
+  The old single-threshold `GOLDENMATCH_AUTOCONFIG_BACKEND` / `GOLDENMATCH_AUTOCONFIG_BACKEND_THRESHOLD` env overrides were removed in v2.0. Backend selection is now the v3 planner's job — it decides from `(ComplexityProfile, RuntimeProfile)`. To force a backend, set it explicitly on `GoldenMatchConfig(backend=...)` or the CLI `--backend`.
 </Note>
 
 ---
@@ -475,9 +473,11 @@ Every `GOLDENMATCH_*` variable the package reads, grouped by who should care. De
 | `GOLDENMATCH_PLANNING_EFFORT` | `normal` | `fast`/`normal`/`thinking`/`einstein` | Auto-config iteration budget. |
 | `GOLDENMATCH_DISTRIBUTED_PIPELINE` | unset | `1`/`2` | Distributed execution phase. `2` = real streaming (needs `__row_id__`, writes to `output_path`). |
 | `GOLDENMATCH_ENABLE_DISTRIBUTED_RAY` | `0` | `0`/`1` | Let the planner pick `ray`. Does not enable streaming on its own. |
-| `GOLDENMATCH_AUTOCONFIG_BACKEND` | unset | name / `0` | Force/disable the picked backend. |
-| `GOLDENMATCH_AUTOCONFIG_BACKEND_THRESHOLD` | `1000000` | int | Row count where the legacy shim picks `duckdb`. |
 | `GOLDENMATCH_PLANNER_BUCKET` | `1` | `0`/`1` | Allow the planner to pick `bucket`. |
+| `GOLDENMATCH_ATTRIBUTE_DEMOTION` | `1` (on) | `0`/`1` | Demote an EXACT matchkey on a shared group/list/facility value (shared clinic phone, campaign id, facility NPI) when its large shared-value groups do not co-agree on the person name. `0` restores the pre-2.7.0 behavior. |
+| `GOLDENMATCH_DISCRIMINATIVE_VETO` | `1` (on) | `0`/`1` | The #1351 exact-key discriminative-power veto (demote a shared-locality exact key). `0` disables it. |
+| `GOLDENMATCH_TF_NAME_WEIGHTING` | `1` (on) | `0`/`1` | Data-driven per-dataset name-frequency downweight on `name_freq_weighted_jw` fields. `0` restores the static-census behavior. |
+| `GOLDENMATCH_BASE_STORE` | `auto` | `auto`/`memory`/`lance` | Candidate base store for the ANN `match_one` path. `auto` picks Lance only above ~2M rows when installed. |
 | `GOLDENMATCH_DUCKDB_SCORE_DB` | unset | path | DuckDB pair-store spill path. |
 | `GOLDENMATCH_NATIVE_RAYON_MIN_PAIRS` | `20000000` | int | Native kernel sequential-vs-rayon threshold. |
 | `GOLDENMATCH_CONFIG_LINT` | `warn` | `warn`/`strict`/`off` | Pre-flight config linter: warn-and-run, refuse on error, or skip. |
@@ -532,7 +532,6 @@ Every `GOLDENMATCH_*` variable the package reads, grouped by who should care. De
 | `GOLDENMATCH_BLOCKING_CARDINALITY_SCALER` | Chao1 | `observed` uses sample-observed cardinality. |
 | `GOLDENMATCH_BLOCKING_DEGENERATE_THRESHOLD` / `_MAX_AVG_BLOCK_SIZE` | `0.95` / `10000` | Degenerate-blocking guard. |
 | `GOLDENMATCH_BLOCKING_PRUNE_PASSES` / `_PASS_MIN_WEAKPOS` | `0` / `1` | Weak-positive multi-pass pruning. |
-| `GOLDENMATCH_ANN_MIN_ROWS` | auto | Minimum rows to enable ANN blocking. |
 | `GOLDENMATCH_QUALITY_AWARE_BLOCKING` | `0` | Add fuzzy passes for noisy columns (GoldenCheck door #1). |
 | `GOLDENMATCH_FD_NEGATIVE_EVIDENCE` | `0` | FD-driven negative evidence (GoldenCheck door #3). |
 | `GOLDENMATCH_QUALITY_GATED_REVIEW` | `0` | Downgrade auto-merge on low-quality records. |
@@ -552,7 +551,7 @@ Every `GOLDENMATCH_*` variable the package reads, grouped by who should care. De
 | `GOLDENMATCH_GOLDEN_STRATEGY_STRICT` | `0` | Strict golden survivorship. |
 | `GOLDENMATCH_GOLDEN_TUNER_MIN_CORRECTIONS` / `GOLDENMATCH_NE_TUNER_MIN_CORRECTIONS` | — | Memory re-tuning floors. |
 | `GOLDENMATCH_CLUSTER_SPLIT_EDGE_BUDGET` | ∝ n_rows | Oversized-cluster auto-split work budget. |
-| `GOLDENMATCH_COLUMNAR_PIPELINE` / `GOLDENMATCH_COLUMNAR_CLUSTER_BUILD` | `0` | Columnar pipeline experiments. |
+| `GOLDENMATCH_COLUMNAR_PIPELINE` | `0` | Columnar pipeline experiment (Phase A opt-in). |
 
 ### Servers, security, storage, LLM/embedding
 

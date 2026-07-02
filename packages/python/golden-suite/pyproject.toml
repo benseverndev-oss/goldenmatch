@@ -37,7 +37,7 @@ classifiers = [
 dependencies = [
     # --- suite (floors track the current majors) ---
     "goldenpipe[golden-suite]>=1.3",    # orchestrator + check/flow/match/analysis
-    "goldenmatch>=2.5",                 # entity resolution: dedupe, match, golden records (2.5.1 is latest on PyPI; 2.6.0 unreleased)
+    "goldenmatch>=2.5",                 # entity resolution: dedupe, match, golden records (2.7.0 is latest on PyPI as of this floor bump)
     "goldencheck>=1.4",                 # data validation (rules discovered from your data)
     "goldenflow>=1.3",                  # transform / standardize / normalize
     "infermap>=0.5.1",                  # GoldenSchema: inference-driven schema mapping

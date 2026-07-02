@@ -35,7 +35,7 @@ def test_agent_card_has_required_fields():
     assert card["authentication"]["schemes"] == ["bearer"]
 
 
-def test_agent_card_has_37_skills():
+def test_agent_card_has_38_skills():
     """v1.7-v1.12 added autoconfig+controller_telemetry (10->12); v2.0 added
     six identity_* skills (12->18); v1.19.x Phase 3 added add_correction
     (18->19); the MCP tool-coverage parity pass added 12 (19->31); #1089 added

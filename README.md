@@ -171,7 +171,7 @@ Entity resolution is the stage most GraphRAG pipelines do badly — duplicate su
 | Match in Postgres / DuckDB SQL | [`packages/rust/extensions`](packages/rust/extensions/README.md) |
 | Add data-quality gates to dbt | [`packages/dbt/goldensuite`](packages/dbt/goldensuite/README.md) |
 | Block bad data in GitHub PRs | [`packages/actions/goldencheck`](packages/actions/goldencheck/README.md) |
-| Run as Airflow DAGs | [`examples/airflow/`](examples/airflow/README.md) — 12 drop-in DAGs |
+| Run as Airflow DAGs | [`examples/airflow/`](examples/airflow/README.md) — 13 drop-in DAGs |
 | Run from a single MCP container | [`docker run ghcr.io/benseverndev-oss/goldensuite-mcp:latest`](packages/python/goldensuite-mcp/README.md) |
 | Pull every Suite container | [GitHub Packages](https://github.com/benzsevern?tab=packages) |
 
@@ -330,11 +330,11 @@ See [`packages/python/goldensuite-mcp/README.md`](packages/python/goldensuite-mc
 
 ## Airflow
 
-12 drop-in DAGs at [`examples/airflow/`](examples/airflow/README.md), grouped by lifecycle stage:
+13 drop-in DAGs at [`examples/airflow/`](examples/airflow/README.md), grouped by lifecycle stage:
 
 | Group | DAGs |
 |---|---|
-| **Core pipeline** | `daily_dedupe`, `incremental_match`, `warehouse_native` (Snowflake), `customer_360` (multi-source) |
+| **Core pipeline** | `daily_dedupe`, `incremental_match`, `warehouse_native` (Snowflake), `customer_360` (multi-source), `identity_graph` (durable entity IDs) |
 | **Privacy** | `pprl_linkage` (two-party PPRL) |
 | **Onboarding & monitoring** | `schema_align_and_load`, `schema_drift_alarm`, `quality_gate` |
 | **Feedback loop** | `review_worker`, `active_learning` |

@@ -85,7 +85,7 @@ Zero-config gets you most of the way in one pass; the healing loop closes the ga
 ## Why GoldenMatch?
 
 - **Zero-config that beats hand-tuned** — the introspective controller auto-detects columns, picks scorers, iterates on complexity signals, and converges on a defensible config. No training data, no rules to write. (v1.8.0)
-- **96.4% F1 zero-config** on DBLP-ACM (hand-tuned ceiling: 91.8%). [DQBench ER score: 62.87 no-LLM](https://github.com/benseverndev-oss/dqbench)
+- **96.4% F1 zero-config** on DBLP-ACM (hand-tuned ceiling: 91.8%). [DQBench ER score: 91.04 no-LLM](https://github.com/benseverndev-oss/dqbench)
 - **Learning Memory** — corrections from stewards, unmerges, and LLM votes persist to disk and apply automatically on the next run; survives row reorders via record-hash re-anchoring (v1.6.0)
 - **Privacy-preserving** — match across organizations without sharing raw data (PPRL, 92.4% F1)
 - **68 MCP tools** — use from Claude Desktop, Claude Code, or any AI assistant ([Smithery](https://smithery.ai/servers/benzsevern/goldenmatch))
@@ -179,7 +179,7 @@ section documents the durable auto-config and scale-safety behaviour.)
 
 ### Integration
 - **REST API + MCP Server** — 68 MCP tools for matching, explaining, reviewing, data quality, transforms, AutoConfigController telemetry, identity-graph operations, and Learning Memory
-- **A2A Agent** — 12 skills for AI-to-AI autonomous entity resolution (incl. `autoconfig` + `controller_telemetry`)
+- **A2A Agent** — 38 skills for AI-to-AI autonomous entity resolution (incl. `autoconfig` + `controller_telemetry`)
 - **AutoConfigController telemetry visible from every surface** (v1.7-v1.12 surface-parity arc, PRs #156-#161) — web ControllerPanel, TUI Controller tab (`Ctrl+A`), CLI `goldenmatch autoconfig`, REST `POST /autoconfig` + `GET /controller/telemetry`, Postgres `goldenmatch_autoconfig` + `gm_telemetry`, DuckDB UDF equivalents, MCP/A2A telemetry tools. Every surface returns the same JSON shape (`stop_reason`, `health`, refit decisions, indicator column priors, `negative_evidence` / Path Y).
 - **Database sync** — incremental Postgres matching with persistent ANN index
 - **Enterprise connectors** — Snowflake, Databricks, BigQuery, HubSpot, Salesforce
@@ -246,7 +246,7 @@ console.log(result.stats);  // { totalRecords: 3, totalClusters: 2, ... }
 - **Zero-dep install** works — optional peer deps unlock native paths (hnswlib-node, @huggingface/transformers for ONNX cross-encoder, piscina for worker threads, pg/duckdb/snowflake for data connectors)
 
 Full docs: [docs.bensevern.dev/goldenmatch/typescript](https://docs.bensevern.dev/goldenmatch/typescript)
-See [packages/goldenmatch-js/examples/](packages/goldenmatch-js/examples/) for 10+ usage examples.
+See [examples/typescript/](../../../examples/typescript/) for runnable usage examples (quickstart, Vercel Edge, MCP client).
 
 ## Web UI
 
@@ -686,7 +686,7 @@ Guides you through GPU mode selection, Vertex AI / Colab / local GPU configurati
 | Privacy-preserving (PPRL) | Built-in (92.4% F1) | No | No | No | No |
 | Interactive TUI | Yes | No | No | No | No |
 | Golden record synthesis | 5 strategies | No | No | No | No |
-| MCP server (AI integration) | Yes (54 tools) | No | No | No | No |
+| MCP server (AI integration) | Yes (69 tools) | No | No | No | No |
 | Database sync | Postgres + DuckDB | No | No | No | Spark/DuckDB |
 | Single `pip install` | Yes | Yes | Yes | No (Java/Spark) | Yes |
 | Polars-native | Yes | No (pandas) | No (pandas) | No (Spark) | Yes (DuckDB) |
@@ -1137,7 +1137,7 @@ block-shuffle scoring  ->  distributed WCC (randomized contraction)
 - **Config:** [`configs/distributed-100m.yaml`](configs/distributed-100m.yaml) (matching policy + the full recipe).
 - **Runnable demo** (Ray local mode, no cluster): [`examples/distributed_pipeline.py`](examples/distributed_pipeline.py).
 - **The exact 100M assembly:** [`scripts/bench_phase5_explicit.py`](scripts/bench_phase5_explicit.py).
-- **Background:** [`docs/scale-100m-ray-vs-spark.md`](docs/scale-100m-ray-vs-spark.md).
+- **Background:** [`docs/scale-envelope.md`](../../../docs/scale-envelope.md) and [`docs/distributed-ray-cluster-setup.md`](../../../docs/distributed-ray-cluster-setup.md).
 
 ## Interactive TUI
 
@@ -1249,7 +1249,7 @@ pip install goldenmatch[mcp]
 goldenmatch mcp-serve data.csv
 ```
 
-54 tools available: deduplicate files, match records, explain decisions, review borderline pairs, privacy-preserving linkage, configure rules, scan data quality, run transforms, synthesize golden records, and manage Learning Memory (`list_corrections`, `add_correction`, `learn_thresholds`, `memory_stats`, `memory_export`).
+69 tools available: deduplicate files, match records, explain decisions, review borderline pairs, privacy-preserving linkage, configure rules, scan data quality, run transforms, synthesize golden records, and manage Learning Memory (`list_corrections`, `add_correction`, `learn_thresholds`, `memory_stats`, `memory_export`).
 
 ## Architecture
 
@@ -1275,7 +1275,7 @@ goldenmatch/
 └── utils/          # Transforms, helpers
 ```
 
-**Run tests:** `pytest` (924 tests)
+**Run tests:** `pytest` (1300+ tests)
 
 ## Part of the Golden Suite
 
