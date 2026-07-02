@@ -97,15 +97,27 @@ def _bench_impl(eval: str, n: int, ambiguity: float, opts: str, chat: str, embed
     # 1. goldengraph native wheel -- build once, cache on the Volume.
     wheels = "/cache/wheels"
     os.makedirs(wheels, exist_ok=True)
+    cache.reload()  # refresh the volume view: a cleared wheels/ must read empty on a WARM container
     if not any(f.endswith(".whl") for f in os.listdir(wheels)):
         print("building goldengraph-native wheel (first run) ...", flush=True)
+        # `cargo clean` first: add_local_dir NORMALIZES source mtimes, so a warm container's
+        # incremental target/ cache thinks the source is unchanged and reuses a STALE .so
+        # (silently masking any Rust change). A clean compile guarantees the wheel reflects source.
+        subprocess.run(
+            ["cargo", "clean", "--manifest-path",
+             "/repo/packages/rust/extensions/goldengraph-native/Cargo.toml"],
+            check=False,
+        )
         subprocess.run(
             ["maturin", "build", "--release", "-m",
              "/repo/packages/rust/extensions/goldengraph-native/Cargo.toml", "--out", wheels],
             check=True,
         )
         cache.commit()
-    subprocess.run(f"pip install --no-deps {wheels}/*.whl", shell=True, check=True)
+    # --force-reinstall: the native wheel version is static (0.1.0), so on a WARM container pip would
+    # skip reinstalling a freshly-rebuilt-from-source wheel (same version already satisfied) and keep
+    # a STALE module -- silently masking any Rust change. Force it so source rebuilds always land.
+    subprocess.run(f"pip install --no-deps --force-reinstall {wheels}/*.whl", shell=True, check=True)
     subprocess.run(["pip", "install", "--no-deps", "-e", "/repo/packages/python/goldengraph"], check=True)
     subprocess.run(["pip", "install", "--no-deps", "-e", "/repo/packages/python/goldenmatch"], check=True)
 
