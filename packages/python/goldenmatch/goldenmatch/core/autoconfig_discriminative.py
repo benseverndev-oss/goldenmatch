@@ -87,6 +87,7 @@ def discriminative_power(
     basket: list[tuple[str, bool]],
     *,
     max_pairs: int = _MAX_PAIRS,
+    min_group_size: int = 2,
 ) -> tuple[float, int]:
     """Mean co-agreement over shared-value pairs, and support (n pairs measured).
 
@@ -116,9 +117,10 @@ def discriminative_power(
 
     total = 0.0
     measured = 0
+    _floor = max(2, min_group_size)
     for cv in sorted(groups):
         rows = groups[cv]
-        if len(rows) < 2 or measured >= max_pairs:
+        if len(rows) < _floor or measured >= max_pairs:
             continue
         anchor = rows[0]
         for other in rows[1:]:
@@ -163,6 +165,104 @@ def should_veto_exact(
     if not basket:
         return False
     power, support = discriminative_power(df, candidate_col, basket, max_pairs=max_pairs)
+    if support < min_shared_pairs:
+        return False
+    return power < tau()
+
+
+# ---------------------------------------------------------------------------
+# Weighted-fuzzy ATTRIBUTE demotion (single-source workplace/locality attributes)
+# ---------------------------------------------------------------------------
+
+# Col_types eligible for the group-attribute demotion (an exact OR a weighted use).
+# These are all the field kinds that CAN legitimately back a matchkey but can ALSO
+# be a shared group/list/facility signal rather than a person identity:
+#   address  -- a shared clinic address
+#   phone    -- a shared switchboard line (a personal cell is kept: it co-agrees)
+#   email    -- a shared role/team inbox (a personal inbox is kept)
+#   identifier -- a mailing-list / campaign id, a facility NPI, a placeholder
+# ``name`` is eligible ONLY when it is NOT a person name (an org/employer/dept
+# name), so a real first/last-name field is never demoted. The group-size-aware
+# measure (see should_demote_attribute_field) is what makes broadening to
+# ``identifier``/``email`` safe: a real personal id groups only a handful of
+# duplicates (no large group -> kept), while a campaign list / facility id / role
+# inbox groups many DIFFERENT people (a large group that fails name co-agreement).
+_WORKPLACE_ATTRIBUTE_TYPES = frozenset({"address", "phone", "email", "identifier"})
+
+# A shared-value group of at least this many records is "large". The demotion
+# measures name co-agreement over LARGE groups only, so a mostly-unique column
+# (e.g. tl_id at 0.53 cardinality) whose FEW big values are campaign lists is
+# caught, without a handful of small same-person duplicate groups diluting the
+# signal (measured on the DERM list: big-group name-power 0.01 vs small-group 0.80).
+_LARGE_GROUP_MIN = 10
+
+
+def attribute_demotion_enabled() -> bool:
+    """Whether to demote a WEIGHTED FUZZY attribute field (clinic address, org
+    name) whose shared values do not co-agree on person identity. Default OFF --
+    a behavior change pending the DQbench/Febrl/NCVR accuracy sweep; byte-
+    identical when off. Enable: GOLDENMATCH_ATTRIBUTE_DEMOTION=1 (or
+    true/yes/on/enabled, case-insensitive)."""
+    return os.environ.get("GOLDENMATCH_ATTRIBUTE_DEMOTION", "0").strip().lower() in {
+        "1", "true", "yes", "on", "enabled",
+    }
+
+
+def should_demote_attribute_field(
+    df: pl.DataFrame | None,
+    candidate_col: str,
+    col_type: str | None,
+    name_basket: list[tuple[str, bool]],
+    *,
+    is_person_name: bool,
+    min_shared_pairs: int = _MIN_SHARED_PAIRS,
+    max_pairs: int = _MAX_PAIRS,
+) -> bool:
+    """True => demote a matchkey use of candidate_col to blocking-only (applies
+    to an exact OR a weighted-fuzzy use).
+
+    A shared GROUP / LIST / FACILITY value -- a clinic ``address``, a shared
+    switchboard ``phone`` line, a generic org ``company`` name, a mailing-list /
+    campaign ``identifier`` (``tl_id``), a facility NPI, a role ``email`` inbox --
+    is NOT person-identity evidence: the DIFFERENT people sharing it do not
+    co-agree on the PERSON NAME. As an exact matchkey or a full-weight fuzzy
+    feature it collapses them into a mega-cluster.
+
+    Three deliberate design choices make this general and safe:
+
+    * **Scope** -- eligible col_types are the group/list-capable ones
+      (:data:`_WORKPLACE_ATTRIBUTE_TYPES`) plus a non-person ``name``. A real
+      first/last-name field is never eligible.
+    * **Group-size-aware** -- co-agreement is measured over LARGE shared-value
+      groups only (``>= _LARGE_GROUP_MIN``). This is what makes broadening to
+      ``identifier``/``email`` safe: a real personal id groups only a few
+      duplicates (no large group -> insufficient support -> KEPT), while a
+      campaign list / facility id / role inbox groups many different people (a
+      large group that fails name co-agreement -> demoted). It also stops a
+      mostly-unique column (tl_id, 0.53 cardinality) from being rescued by its
+      many small same-person groups averaging the co-agreement up.
+    * **Person-name basket** -- co-agreement is measured against person-name
+      columns only, NOT the broad #1351 identity basket (which on real data is
+      polluted by constant dataset-metadata columns mis-typed as ``identifier``
+      and by the shared attribute itself). The person name is the clean anchor.
+
+    Data-measured (no name/value allowlist). Fail-safe = keep (False) on: flag
+    off, df is None, an ineligible field, an empty name basket (no person-name
+    anchor), or no large shared-value group with enough support.
+    """
+    if not attribute_demotion_enabled() or df is None:
+        return False
+    is_eligible = col_type in _WORKPLACE_ATTRIBUTE_TYPES or (
+        col_type == "name" and not is_person_name
+    )
+    if not is_eligible:
+        return False
+    basket = [(c, f) for (c, f) in name_basket if c != candidate_col and c in df.columns]
+    if not basket:
+        return False
+    power, support = discriminative_power(
+        df, candidate_col, basket, max_pairs=max_pairs, min_group_size=_LARGE_GROUP_MIN,
+    )
     if support < min_shared_pairs:
         return False
     return power < tau()
