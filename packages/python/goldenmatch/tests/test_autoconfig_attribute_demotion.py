@@ -65,6 +65,25 @@ def _true_dupes_df(n_people: int = 30) -> pl.DataFrame:
     return pl.DataFrame({"first_name": first, "last_name": last, "address1": address})
 
 
+def _campaign_list_df(list_rows: int = 30, dupe_people: int = 15) -> pl.DataFrame:
+    """A mailing-list identifier: `list_id` = 'CAMPAIGN_A' shared by many DIFFERENT
+    people (one large group), plus small same-person duplicate groups on other
+    ids. The large campaign group must be demoted; the column is mostly-unique
+    overall, so a blind co-agreement AVERAGE would be rescued by the small
+    same-person groups -- only the group-size-aware measure catches it."""
+    first, last, list_id = [], [], []
+    for i in range(list_rows):
+        first.append(f"first{i}")
+        last.append(f"last{i}")
+        list_id.append("CAMPAIGN_A")
+    for i in range(dupe_people):
+        for _ in range(2):
+            first.append(f"dp{i}")
+            last.append(f"dp{i}")
+            list_id.append(f"L{i}")
+    return pl.DataFrame({"first_name": first, "last_name": last, "list_id": list_id})
+
+
 _NAME_BASKET = [("first_name", True), ("last_name", True)]
 
 
@@ -103,6 +122,33 @@ def test_personal_cell_kept(monkeypatch):
     ph = _profile(df, "phone")
     assert not should_demote_attribute_field(
         df, "phone", ph.col_type, _NAME_BASKET, is_person_name=False
+    )
+
+
+def test_group_list_identifier_demoted(monkeypatch):
+    """A mailing-list / campaign identifier (large group of DIFFERENT people) is
+    demoted, even though the column is mostly-unique overall."""
+    monkeypatch.setenv("GOLDENMATCH_ATTRIBUTE_DEMOTION", "1")
+    df = _campaign_list_df()
+    # col_type passed explicitly to isolate the group-size logic from classification
+    assert should_demote_attribute_field(
+        df, "list_id", "identifier", _NAME_BASKET, is_person_name=False
+    )
+
+
+def test_small_group_identifier_kept(monkeypatch):
+    """A real personal identifier only ever groups a person's few duplicates (no
+    large group) -> insufficient support -> KEPT."""
+    monkeypatch.setenv("GOLDENMATCH_ATTRIBUTE_DEMOTION", "1")
+    first, last, pid = [], [], []
+    for i in range(40):
+        for _ in range(2):  # each id shared by 2 records of the SAME person
+            first.append(f"first{i}")
+            last.append(f"last{i}")
+            pid.append(f"ID{i}")
+    df = pl.DataFrame({"first_name": first, "last_name": last, "member_id": pid})
+    assert not should_demote_attribute_field(
+        df, "member_id", "identifier", _NAME_BASKET, is_person_name=False
     )
 
 
