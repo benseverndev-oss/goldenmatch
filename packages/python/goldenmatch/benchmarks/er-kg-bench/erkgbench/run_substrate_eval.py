@@ -86,8 +86,10 @@ def run_wiki() -> dict:
     coverage = substrate_eval.real_alignment_coverage_aliased(graph, gold, qid_aliases)
     b = metrics.score([m[0] for m in gold], clustering)
     coh = substrate_eval.graph_coherence(graph)
+    sc = substrate_eval.substrate_scorecard(graph, gold, qid_aliases)
     return {"er_r_b": b.recall, "er_p_b": b.precision, "er_f1_b": b.f1, "coverage": coverage,
-            "n_docs": len(documents), "n_gold": len(gold), "components": coh["components"]}
+            "n_docs": len(documents), "n_gold": len(gold), "components": coh["components"],
+            "scorecard": sc}
 
 
 def _gliner_by_doc(documents, *, threshold: float) -> dict:
@@ -155,8 +157,9 @@ def run_one(seed: int, ambiguity: float) -> dict:
 
 def _to_markdown(rows: list[tuple[float, dict]]) -> str:
     head = (
-        "# Substrate-Quality Scoreboard\n\n"
-        "| ambiguity | ER-F1(A) | ER-F1(B) | P(B) | R(B) | edge-recall | A-B gap | components | largest-frac | provenance |\n"
+        "# Substrate-Quality Scoreboard (engineered)\n\n"
+        "| ambiguity | ER-F1(A) | relational_F1(B) | relational_P | relational_R | edge_recall | "
+        "A-B gap | components | largest-frac | provenance |\n"
         "|---|---|---|---|---|---|---|---|---|---|\n"
     )
     body = "".join(
@@ -166,9 +169,10 @@ def _to_markdown(rows: list[tuple[float, dict]]) -> str:
         for amb, sb in rows
     )
     note = (
-        "\nA = resolver in isolation (clean gold surfaces); B = end-to-end build (extract+resolve over "
-        "text). **A-B gap = extraction-induced fragmentation.** The instrument is validated if the gap "
-        "widens as ambiguity rises (B drops below A) -- reproducing the construction ceiling as a number.\n"
+        "\nA = resolver in isolation (clean gold surfaces); B = end-to-end build. **A-B gap = "
+        "extraction-induced fragmentation.** On the engineered corpus the doc-id oracle IS the presence "
+        "signal, so only the RELATIONAL (B) + connectivity(edge_recall) axes are reported here; the "
+        "presence/connectivity-coverage split is a wiki-path (alias-bearing) metric.\n"
     )
     return head + body + note
 
@@ -243,20 +247,31 @@ def main() -> None:
 
     if args.corpus == "wiki":
         r = run_wiki()
+        sc = r["scorecard"]
         print(
-            f"[substrate-wiki] R(B)={r['er_r_b']:.4f} P(B)={r['er_p_b']:.4f} F1(B)={r['er_f1_b']:.4f} "
-            f"coverage={r['coverage']:.4f} docs={r['n_docs']} gold={r['n_gold']} components={r['components']}",
+            f"[substrate-wiki] presence: cov={sc['presence']['coverage']:.4f} | "
+            f"relational: F1={sc['relational']['f1']:.4f} R={sc['relational']['recall']:.4f} "
+            f"P={sc['relational']['precision']:.4f} | "
+            f"connectivity: cov={sc['connectivity']['coverage']:.4f} F1={sc['connectivity']['f1']:.4f} "
+            f"edge_recall={sc['connectivity']['edge_recall']:.4f} | "
+            f"coherence: comp={sc['coherence']['components']} "
+            f"largest={sc['coherence']['largest_fraction']:.3f} "
+            f"docs={r['n_docs']} gold={r['n_gold']}",
             flush=True,
         )
         md = (
             "# Substrate-Quality (real Wikipedia prose)\n\n"
-            "| R(B) | P(B) | F1(B) | coverage | docs | gold | components |\n"
-            "|---|---|---|---|---|---|---|\n"
-            f"| {r['er_r_b']:.4f} | {r['er_p_b']:.4f} | {r['er_f1_b']:.4f} | {r['coverage']:.4f} | "
-            f"{r['n_docs']} | {r['n_gold']} | {r['components']} |\n\n"
-            "Real Wikipedia lead-section prose; gold = wikilink->QID; nodes aligned by surface+doc. "
-            "coverage = fraction of gold mentions aligned to a built node (low coverage => alignment noise, "
-            "not resolution).\n"
+            "| presence_cov | relational_F1 | relational_R | relational_P | connectivity_cov | "
+            "connectivity_F1 | edge_recall | components | docs | gold |\n"
+            "|---|---|---|---|---|---|---|---|---|---|\n"
+            f"| {sc['presence']['coverage']:.4f} | {sc['relational']['f1']:.4f} | "
+            f"{sc['relational']['recall']:.4f} | {sc['relational']['precision']:.4f} | "
+            f"{sc['connectivity']['coverage']:.4f} | {sc['connectivity']['f1']:.4f} | "
+            f"{sc['connectivity']['edge_recall']:.4f} | {sc['coherence']['components']} | "
+            f"{r['n_docs']} | {r['n_gold']} |\n\n"
+            "PRESENCE = fraction of gold entities present as a node (global alias match). "
+            "RELATIONAL = clustering quality given presence. CONNECTIVITY = the old edge-gated "
+            "'coverage' (relabeled) + edge_recall. See the metric-split spec.\n"
         )
         with open(args.out_md, "w", encoding="utf-8") as fh:
             fh.write(md)
@@ -267,10 +282,14 @@ def main() -> None:
     for amb in args.ambiguity:
         sb = run_one(args.seed, amb)
         rows.append((amb, sb))
+        sc = sb["scorecard"]
         print(
-            f"[substrate] ambiguity={amb}: ER-F1(A)={sb['er_f1_a']:.4f} ER-F1(B)={sb['er_f1_b']:.4f} "
-            f"P(B)={sb['er_p_b']:.4f} R(B)={sb['er_r_b']:.4f} edge_recall={sb['edge_recall']:.4f} "
-            f"gap={sb['ab_gap']:.4f} components={sb['components']} provenance={sb['provenance']:.3f}",
+            f"[substrate] ambiguity={amb}: relational: F1={sc['relational']['f1']:.4f} "
+            f"R={sc['relational']['recall']:.4f} P={sc['relational']['precision']:.4f} | "
+            f"connectivity: edge_recall={sc['connectivity']['edge_recall']:.4f} | "
+            f"coherence: comp={sc['coherence']['components']} "
+            f"largest={sc['coherence']['largest_fraction']:.3f} | "
+            f"ER-F1(A)={sb['er_f1_a']:.4f} gap={sb['ab_gap']:.4f} provenance={sb['provenance']:.3f}",
             flush=True,
         )
     md = _to_markdown(rows)
