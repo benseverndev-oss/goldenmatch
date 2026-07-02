@@ -24,7 +24,7 @@ Set nothing. Zero-config is the supported path. If you want the compiled kernels
 pip install goldenmatch[native]
 ```
 
-With the wheel present, the default `GOLDENMATCH_NATIVE=auto` already runs the signed-off kernels (clustering, block scoring, pair ops, hashing, featurize) natively. You do not need to set `GOLDENMATCH_NATIVE=1`.
+With the wheel present, the default `GOLDENMATCH_NATIVE=auto` already runs every component that has a kernel natively (native is the reference; pure-Python is the lossy fallback). You do not need to set `GOLDENMATCH_NATIVE=1`.
 
 ### Single box at scale (1M–200M rows, 16-core / 64 GB class)
 
@@ -65,17 +65,17 @@ Phase 5 has a hard contract: a Ray Dataset input with a **global `__row_id__` co
 
 ## Native acceleration
 
-GoldenMatch ships an **optional** Rust/PyO3 kernel (`pip install goldenmatch[native]`). When it isn't installed, every path runs in pure Python unchanged. When it is, a central gate decides per-component whether to use it.
+**Rust is the reference implementation** (as of the 2026-07 reference-mode change). The Rust/PyO3 kernel is the source of truth for GoldenMatch's hot-path primitives; **pure-Python is the lossy fallback** used only when a native wheel isn't installed (the wheel ships as `pip install goldenmatch[native]`). A central gate (`core/_native_loader.py`) selects per component.
 
 `GOLDENMATCH_NATIVE` (`core/_native_loader.py`):
 
 | Value | Behavior |
 |-------|----------|
-| `auto` (default, or unset) | Use the native kernel **iff** it is importable **and** the component has been signed off (in the gated-on set below). Silently falls back to Python otherwise. |
-| `1` | Require native. Raises `RuntimeError` at the first kernel call if the wheel isn't importable. Use this on scale/bench runs so a missing wheel fails loudly instead of running 100x+ slower in Python. |
-| `0` | Force pure Python everywhere. Use for parity debugging or if you suspect a kernel bug. |
+| `auto` (default, or unset) | Run native **wherever the component's kernel symbol exists on the wheel** — native is the reference. Pure-Python is the fallback for a missing wheel/symbol. |
+| `1` | Require native. Raises `RuntimeError` at the first kernel call if the wheel isn't importable. Use this on scale/bench runs so a missing wheel fails loudly instead of running 100x+ slower in the Python fallback. |
+| `0` | Force the pure-Python fallback everywhere. Use for parity debugging or if you suspect a kernel bug. |
 
-**Signed-off components (run native under `auto`):** `clustering`, `block_scoring`, `pairs`, `featurize`, `hashing`, `autoconfig`, `sketch`. These cleared bit-/ULP-level parity against the Python reference, so flipping native on or off never changes output. The `sketch` component covers both the MinHash/LSH (#1081) and the SimHash-over-embeddings (#1090) band hashing; it is **default-on as of #1090** — byte-identical to the Python reference (golden-vector verified) and ~29x faster — so semantic blocking runs on the Rust `sketch-core` kernel by default (the single source of truth across Python/Rust/TS), with a graceful Python fallback when the wheel is absent. `pprl_bloom` is built but **not** gated on — it only runs native under `GOLDENMATCH_NATIVE=1`, pending a published-wheel parity pass and a perf bench before the default-on flip. Output is byte-identical either way (golden-vector verified), so that flip is a perf decision.
+Under `auto`, native runs for every component that has a kernel symbol — `clustering`, `block_scoring`, `pairs`, `featurize`, `hashing`, `autoconfig`, `sketch`, `pprl_bloom`, and the multimodal `perceptual` hashes. Each cleared bit-/ULP-level parity against the Python reference, so the fallback is output-identical (golden-vector verified). (The former per-component allowlist, `_GATED_ON`, is retained in the loader as sign-off documentation but no longer governs `auto`.) The `sketch` component covers both MinHash/LSH (#1081) and SimHash-over-embeddings (#1090) band hashing (~29x faster; the single source of truth across Python/Rust/TS, so semantic blocking runs on the Rust `sketch-core` kernel by default). Fellegi-Sunter block scoring is **native-authoritative by default as of goldenmatch 2.6.0** (`GOLDENMATCH_FS_NATIVE=0` opts out to the reproducible numpy path); it is scoped to the probabilistic path only.
 
 The `autoconfig` component is the shared, pyo3-free decision core (`goldenmatch-autoconfig-core`) behind auto-config — the planner, column classifier (with the adaptive `1 − 1/√n` identifier-cardinality floor), the sample→full pair-count extrapolation (the corrected `ratio²` + Chao1 estimate), and the adaptive decision thresholds (the sparse-match floor and the per-type exact-matchkey floor). It runs native under `auto` and is byte-identical to the pure-Python oracle (golden-vector parity across Python / native / wasm-TS). The same crate compiles to WebAssembly so the TypeScript surface consumes the identical decision logic — one source of truth, zero cross-surface drift.
 
