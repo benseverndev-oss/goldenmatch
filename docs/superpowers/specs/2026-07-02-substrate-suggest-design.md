@@ -1,7 +1,7 @@
 # Substrate Config Suggester — Design (SP-C)
 
 **Date:** 2026-07-02
-**Status:** design, pre-implementation
+**Status:** implemented (branch `feat/substrate-suggest`; smoke verdict `docs/superpowers/reports/2026-07-02-suggester-smoke-verdict.md`)
 **Sub-project:** SP-C of the substrate-builder config-surface program (SP-A metric split #1371 · SP-B1 config #1373 · SP-B2 tuner #1375 · reset fix #1380 armed).
 
 ## Premise (reframed by the SP-B2 smoke)
