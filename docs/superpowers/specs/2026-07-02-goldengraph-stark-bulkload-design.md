@@ -57,15 +57,18 @@ def bulk_load(store, nodes, edges, *, at: int = 1, chunk_edges: int | None = Non
     `edges`: iterable of (subj_stark_id: str, predicate: str, obj_stark_id: str).
 
     Each node -> BatchEntity(local_id=positional index, canonical_name=name,
-    typ=typ, surface_names=[name], record_keys=[stark_id], source_refs=[]).
+    typ=typ, surface_names=[name], record_keys=[stark_id], source_refs=[stark_id]).
     Each edge -> BatchEdge(subj_local, predicate, obj_local, valid_from=at,
     valid_to=None, source_refs=[]). Edges whose endpoint stark_id is unknown are
     dropped (counted). Returns {"n_nodes", "n_edges", "n_dropped_edges", "n_batches"}.
 
-    Default single batch (O(N) append). `chunk_edges=C` splits edges into batches
-    of <=C edges, each re-listing ONLY its endpoint entities (so the store's
-    local->stable remap resolves them to their already-minted ids via the unique
-    record_key). The fallback for when the single-batch JSON OOMs -- off by default."""
+    Default single batch (O(N) append). `chunk_edges=C` emits an initial
+    nodes-ONLY batch first (mints every stable id), THEN splits edges into batches
+    of <=C edges, each re-listing ONLY its endpoint entities (the store's
+    overlap-merge re-resolves them to the id minted in the nodes batch via the
+    unique record_key -- single inheritor, no merge/mint). The fallback for when
+    the single-batch JSON OOMs -- off by default. `n_batches` counts every append
+    (1 for single-batch; 1 + ceil(n_edges/C) for chunked)."""
 ```
 
 Responsibility: the node/edge → `StoreBatch` mapping and the `store.append`
@@ -91,26 +94,40 @@ so `append`'s overlap-merge re-resolves them to the id minted in the node batch
   - Hit@k = 1 if any gold id in the top-k, else 0 (mean over queries).
   - Recall@20 = |gold ∩ top-20| / |gold|.
   - MRR = 1 / rank of the first gold id (0 if none in the ranking).
-- `evaluate(index, store, queries, embedder, *, arm)` runs one retrieval arm over
-  the query set and returns the mean metric dict + timing.
+- `evaluate(index, slice_graph, eid_to_stark, queries, embedder, *, arm)` runs one
+  retrieval arm over the query set, translates each arm's view-local ids back to
+  stark ids via `eid_to_stark`, and returns the mean metric dict + timing.
 
-Node ids in STaRK are integers already; the adapter stringifies them for
-`record_keys` and keeps the int for `EntityIndex.entity_id` so `query()` returns
-ints directly comparable to gold.
+Node ids in STaRK are integers; the adapter stringifies them for `record_keys` /
+`source_refs`. The retrieval id space is NOT the stark id (see §3) -- it is the
+`as_of` slice's view-local `EntityId`, and a single `eid_to_stark` map recovered
+from the slice translates both arms' outputs to stark ids for scoring.
 
 ### 3. Retrieval arms + measurement — driven from the adapter / a Modal entry
 
-Build `EntityIndex` with `entity_id = the STaRK node id` and
-`canonical_name = node name` (so `query()` returns STaRK ids, sidestepping the
-`as_of` view-local id remap). Two arms:
+**Id spaces (the correction that makes Arm B runnable).** There are THREE:
+the stark id (gold answers), the store's minted `StableId`, and the per-slice
+**view-local `EntityId`** that `as_of` assigns in ascending `StableId` order
+(store.rs:426-432; `embed.py::query` warns ids are slice-specific). Graph
+expansion (`as_of().query(seeds,1)`) only works in the view-local space, so the
+index MUST be built in that space, not on stark ids.
 
-- **Arm A — dense baseline:** `EntityIndex.query(q, k=20)`. Pure vector
-  retrieval; the graph contributes nothing. This is the "vectors alone" number.
-- **Arm B — graph-expanded:** seeds from `EntityIndex` (k small, e.g. 5) then
-  1-hop neighborhood expansion via `ask(entity_index=index)` /
-  `store.as_of(∞,∞).query(seeds, 1)`, ranking seeds + their neighbors. This is
-  the graph's value-add — answers reachable by a relation but not textually near
-  the query.
+Take ONE slice `slice_graph = store.as_of(BIG, BIG)`. Build `EntityIndex` over
+`slice_graph.entities()` (so `entity_id` = view-local `EntityId`,
+`canonical_name` = node name). Build `eid_to_stark = {e["entity_id"]:
+e["source_refs"][0] for e in slice_graph.entities()}` from the SAME slice -- the
+stark id rides through on `source_refs` (lib.rs:79-80 exposes it; the loader
+stamps `source_refs=[stark_id]`). Both arms retrieve view-local ids and map to
+stark ids via `eid_to_stark` before `metrics(...)`.
+
+- **Arm A — dense baseline:** `index.query(q, embedder, k=20)` -> view-local ids
+  -> `eid_to_stark` -> compare gold. Pure vector retrieval; the graph contributes
+  nothing. The "vectors alone" number.
+- **Arm B — graph-expanded:** `seeds = index.query(q, embedder, k=5)` (view-local),
+  then 1-hop expansion `slice_graph.query(seeds, 1)` on the SAME slice; rank seeds
+  ++ their neighbor ids, map via `eid_to_stark`, compare gold. This is the graph's
+  value-add -- answers reachable by a relation but not textually near the query.
+  (Equivalent to `ask(entity_index=index)`, which already seeds + walks one slice.)
 
 Captured per run: ingest wall, `EntityIndex.build` wall, mean/95p per-query
 latency, peak RSS (via `resource`/`tracemalloc` or a Modal memory sample), and
@@ -132,11 +149,15 @@ PRIME first; AMAZON is the same entry with `--kb amazon` once PRIME is clean.
 STaRK HF download
   -> load_stark_kb(name) -> (nodes, edges, queries)
   -> bulk_load(store, nodes, edges)         # StoreBatch -> store.append  [MEASURE ingest, RAM]
-  -> EntityIndex.build(nodes-as-entities)   # embed names once            [MEASURE build, RAM]
-  -> for q in queries:
-       Arm A: index.query(q, k=20)                                        [MEASURE latency]
-       Arm B: seeds=index.query(q,k=5); expand via store.as_of.query(seeds,1)
-  -> metrics(ranked, gold) per arm -> numbers table
+  -> slice_graph = store.as_of(BIG, BIG)    # one view-local id space
+  -> eid_to_stark = {e["entity_id"]: e["source_refs"][0] for e in slice_graph.entities()}
+  -> index = EntityIndex.build(slice_graph.entities(), embedder)  # embed names once [MEASURE build, RAM]
+  -> for q in queries:                                             [MEASURE latency]
+       Arm A: ids = index.query(q, embedder, k=20)
+       Arm B: seeds = index.query(q, embedder, k=5); ids = seeds ++ slice_graph.query(seeds,1) neighbors
+       ranked_stark = [eid_to_stark[i] for i in ids]
+       metrics(ranked_stark, gold) per arm
+  -> numbers table
 ```
 
 ## Error handling / honest-null posture
@@ -158,6 +179,8 @@ no Modal):
 - `bulk_load` single-batch: N nodes → N stored entities, each with its stark_id
   as a record_key; edges remapped to the right stable-id pairs.
 - passthrough: distinct record_keys ⇒ zero `HistoryEvent` (no merges/splits).
+- stark_id rides through: after load, `store.as_of(BIG,BIG).entities()` each carry
+  `source_refs == [stark_id]`, so `eid_to_stark` is recoverable (the Arm-B id map).
 - dangling edge dropped + counted; return dict shape.
 - `chunk_edges=C`: same final store state as single-batch (endpoint re-listing
   resolves to the same ids) — the parity guard for the fallback path.
