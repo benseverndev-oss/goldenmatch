@@ -1,7 +1,7 @@
 # Substrate Metric Split — Design (SP-A)
 
 **Date:** 2026-07-02
-**Status:** design, pre-implementation
+**Status:** implemented (branch `feat/substrate-metric-split`)
 **Sub-project:** SP-A of the substrate-builder config-surface program (SP-B `SubstrateConfig` + staged harness, SP-C MCP/LLM tweak loop follow on this).
 
 ## Problem
