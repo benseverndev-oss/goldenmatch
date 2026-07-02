@@ -21,7 +21,13 @@ from goldenmatch.core.autoconfig_discriminative import should_demote_attribute_f
 
 def _colleagues_df(clinic_rows: int = 40) -> pl.DataFrame:
     """A clinic of DISTINCT people sharing one address + company + phone line,
-    plus a tail of varied singletons so the frame is not degenerate."""
+    plus a tail of varied singletons so the frame is not degenerate.
+
+    Carries constant ``*_id`` metadata columns (classified ``identifier`` by the
+    ``*_id`` name pattern) that replicate the real DERM shape: they pollute the
+    broad #1351 co-agreement basket enough that the existing exact-key veto KEEPS
+    a shared clinic phone, so this fixture actually isolates the group-attribute
+    demotion (which measures name co-agreement only)."""
     first = [f"first{i}" for i in range(clinic_rows)]
     last = [f"last{i}" for i in range(clinic_rows)]
     address = ["100 MAIN ST STE 5"] * clinic_rows
@@ -34,9 +40,12 @@ def _colleagues_df(clinic_rows: int = 40) -> pl.DataFrame:
         address.append(f"{i} OAK AVE")
         company.append(f"Clinic {i}")
         phone.append(f"999200{i:04d}")
+    n = len(first)
     return pl.DataFrame({
         "first_name": first, "last_name": last,
         "address1": address, "company": company, "phone": phone,
+        # constant metadata (identifier-by-name) -> pollutes the broad basket
+        "batch_id": ["B1"] * n, "f_id": ["47"] * n, "s_id": ["S9"] * n,
     })
 
 
@@ -206,20 +215,39 @@ def _weighted_fuzzy_field_names(matchkeys) -> set[str]:
     return out
 
 
+def _exact_matchkey_fields(matchkeys) -> set[str]:
+    """Single-column EXACT matchkey fields (e.g. exact_phone -> {'phone'})."""
+    out: set[str] = set()
+    for mk in matchkeys:
+        if mk.type == "exact" and len(mk.fields) == 1:
+            out.add(mk.fields[0].field)
+    return out
+
+
 def test_build_matchkeys_integration(monkeypatch):
-    """End-to-end: the workplace address/company drop out of the weighted rule
-    when the flag is on, and are retained (byte-identical) when off."""
+    """End-to-end (exact-only scope): the shared-clinic ``phone`` EXACT matchkey
+    is demoted when the flag is on, while the weighted ``address1`` fuzzy field is
+    KEPT (a soft contributor is load-bearing on corrupted-name data; only exact
+    force-merges are removed). Byte-identical when off."""
     df = _colleagues_df()
     profiles = profile_columns(df)
 
     monkeypatch.delenv("GOLDENMATCH_ATTRIBUTE_DEMOTION", raising=False)
-    off = _weighted_fuzzy_field_names(build_matchkeys(profiles, df=df))
+    mks_off = build_matchkeys(profiles, df=df)
+    off_exact = _exact_matchkey_fields(mks_off)
+    off_weighted = _weighted_fuzzy_field_names(mks_off)
 
     monkeypatch.setenv("GOLDENMATCH_ATTRIBUTE_DEMOTION", "1")
-    on = _weighted_fuzzy_field_names(build_matchkeys(profiles, df=df))
+    mks_on = build_matchkeys(profiles, df=df)
+    on_exact = _exact_matchkey_fields(mks_on)
+    on_weighted = _weighted_fuzzy_field_names(mks_on)
 
-    # Person names always survive; the shared workplace attributes drop only
-    # when the flag is on.
-    assert {"first_name", "last_name"} & on
-    assert "address1" in off
-    assert "address1" not in on
+    # The shared clinic phone backs an EXACT matchkey off, and is demoted on.
+    assert "phone" in off_exact
+    assert "phone" not in on_exact
+    # The weighted address field is a soft contributor -- KEPT in BOTH (exact-only
+    # scope), so corrupted-name recall is never sacrificed.
+    assert "address1" in off_weighted
+    assert "address1" in on_weighted
+    # Person names always survive.
+    assert {"first_name", "last_name"} & on_weighted
