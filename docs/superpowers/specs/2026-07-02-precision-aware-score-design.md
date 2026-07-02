@@ -1,7 +1,7 @@
 # Precision-Aware Accept Metric (F-beta `_score`) — Design
 
 **Date:** 2026-07-02
-**Status:** design, pre-implementation
+**Status:** implemented + verified (branch `feat/precision-aware-score`; beta=0.5 flips the SP-C homograph accept to True, precision 0.815→0.932 — see the smoke verdict addendum)
 **Follows:** the substrate config-surface program (SP-A #1371 · SP-B1 #1373 · SP-B2 #1375 · SP-C #1384). The SP-C smoke (`docs/superpowers/reports/2026-07-02-suggester-smoke-verdict.md`) surfaced this as the top lever.
 
 ## Problem

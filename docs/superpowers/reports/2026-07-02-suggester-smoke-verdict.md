@@ -45,3 +45,17 @@ On a homograph corpus the objective is **precision** (don't conflate distinct sa
 
 - One corpus (engineered homograph), one seed, one 7B. The precision gain (0.815 → 0.892) is a single measured delta.
 - The homograph surfaces are synthetic (`HG0`…) with appositive type cues — a fair-ish but not natural homograph test; a natural-homograph corpus (Apple co/fruit) would strengthen the perception claim.
+
+---
+
+## Addendum (2026-07-02): precision-aware F-beta closes the loop
+
+The top follow-on above — a precision-aware accept metric — was built (`_score` → F-beta, env `GOLDENGRAPH_SUBSTRATE_SCORE_BETA`, default 1.0 = F1; spec `docs/superpowers/specs/2026-07-02-precision-aware-score-design.md`). Re-running this exact smoke with **beta=0.5** flips the result:
+
+| | F1 (beta=1.0) | F_0.5 (beta=0.5) |
+|---|---|---|
+| baseline (`name_ci`) | F1=0.7368 P=0.8153 | — |
+| proposed (`name_ci_type`+canon) | F1=0.6723–0.6885 P=**0.892–0.932** | — |
+| **accepted** | **False** (F1 fell) | **True** |
+
+Under F_0.5 the proposed homograph-safe config's score (≈0.817) beats the baseline's (0.782), so the self-verify **accepts** it — the winner is `name_ci_type` + `entity_type_canon`, precision **0.815 → 0.932**. SP-C's value is now fully realized and measurement-verified: the LLM perceives the homographs, proposes the right config, and a precision-tuned metric rewards the precision win the F1 default hid — all with the guardrail intact (a truly-worse config would still be rejected at any beta). The homograph win was **metric-gated, and the metric is now tunable.** (Data: `data/2026-07-02-suggest-smoke-beta05.md`.)
