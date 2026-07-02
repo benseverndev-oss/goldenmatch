@@ -198,14 +198,17 @@ _LARGE_GROUP_MIN = 10
 
 
 def attribute_demotion_enabled() -> bool:
-    """Whether to demote a WEIGHTED FUZZY attribute field (clinic address, org
-    name) whose shared values do not co-agree on person identity. Default OFF --
-    a behavior change pending the DQbench/Febrl/NCVR accuracy sweep; byte-
-    identical when off. Enable: GOLDENMATCH_ATTRIBUTE_DEMOTION=1 (or
-    true/yes/on/enabled, case-insensitive)."""
-    return os.environ.get("GOLDENMATCH_ATTRIBUTE_DEMOTION", "0").strip().lower() in {
-        "1", "true", "yes", "on", "enabled",
-    }
+    """Whether to demote an EXACT matchkey on a shared group/list/facility value
+    (a shared clinic phone line, a campaign identifier, a facility NPI) whose
+    large shared-value groups do not co-agree on the person name. Default ON as of
+    v2.7.0: the accuracy sweep (scripts/autoconfig_quality) showed zero F1 change
+    across the whole corpus (flag-on == flag-off on every dataset) while it fixes
+    real-world group-attribute over-merges. Kill-switch:
+    GOLDENMATCH_ATTRIBUTE_DEMOTION=0 (or false/no/off/disabled, case-insensitive)
+    restores the pre-2.7.0 behavior."""
+    return os.environ.get(
+        "GOLDENMATCH_ATTRIBUTE_DEMOTION", "1"
+    ).strip().lower() not in {"0", "false", "no", "off", "disabled"}
 
 
 def should_demote_attribute_field(

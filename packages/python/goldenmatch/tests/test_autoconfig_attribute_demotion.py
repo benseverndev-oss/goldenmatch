@@ -5,7 +5,8 @@ name) shared by colleagues is not person-identity evidence -- as a full-weight
 positive fuzzy feature it collapses distinct people at one practice into a
 mega-cluster. The demotion measures, from the data, whether records sharing the
 attribute value co-agree on the person's name; if not, it demotes the field to
-blocking-only. Default OFF (GOLDENMATCH_ATTRIBUTE_DEMOTION=1); scoped so a real
+blocking-only. Default ON as of v2.7.0 (kill-switch GOLDENMATCH_ATTRIBUTE_DEMOTION=0);
+scoped so a real
 person-name / identity field is never eligible; a no-op where the attribute
 really is identity-correlated.
 
@@ -181,8 +182,19 @@ def test_identity_correlated_address_kept(monkeypatch):
     )
 
 
-def test_default_off_is_noop(monkeypatch):
+def test_default_on_demotes(monkeypatch):
+    """Default ON as of v2.7.0: with the flag UNSET, a group attribute is demoted."""
     monkeypatch.delenv("GOLDENMATCH_ATTRIBUTE_DEMOTION", raising=False)
+    df = _colleagues_df()
+    addr = _profile(df, "address1")
+    assert should_demote_attribute_field(
+        df, "address1", addr.col_type, _NAME_BASKET, is_person_name=False
+    )
+
+
+def test_kill_switch_disables(monkeypatch):
+    """GOLDENMATCH_ATTRIBUTE_DEMOTION=0 restores the pre-2.7.0 no-op behavior."""
+    monkeypatch.setenv("GOLDENMATCH_ATTRIBUTE_DEMOTION", "0")
     df = _colleagues_df()
     addr = _profile(df, "address1")
     assert not should_demote_attribute_field(
@@ -228,11 +240,12 @@ def test_build_matchkeys_integration(monkeypatch):
     """End-to-end (exact-only scope): the shared-clinic ``phone`` EXACT matchkey
     is demoted when the flag is on, while the weighted ``address1`` fuzzy field is
     KEPT (a soft contributor is load-bearing on corrupted-name data; only exact
-    force-merges are removed). Byte-identical when off."""
+    force-merges are removed). Byte-identical under the kill-switch."""
     df = _colleagues_df()
     profiles = profile_columns(df)
 
-    monkeypatch.delenv("GOLDENMATCH_ATTRIBUTE_DEMOTION", raising=False)
+    # Off branch = the kill-switch (demotion is DEFAULT ON as of v2.7.0).
+    monkeypatch.setenv("GOLDENMATCH_ATTRIBUTE_DEMOTION", "0")
     mks_off = build_matchkeys(profiles, df=df)
     off_exact = _exact_matchkey_fields(mks_off)
     off_weighted = _weighted_fuzzy_field_names(mks_off)
