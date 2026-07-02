@@ -7,9 +7,10 @@ call sites have one place to read. Mirrors ``goldencheck.core._native_loader``.
 ``GOLDENANALYSIS_NATIVE`` env:
 - ``"0"``    -> force the Python path (never use native).
 - ``"1"``    -> require native; raise if it isn't importable (CI parity lane).
-- ``"auto"`` / unset -> use native iff importable AND the component has cleared
-  parity (is in ``_GATED_ON``). ``_GATED_ON`` is empty until Phase 4, so ``auto``
-  always uses the pure path today.
+- ``"auto"`` / unset -> reference mode: use native wherever the component's kernel
+  symbol exists (``_COMPONENT_SYMBOLS`` / ``_has_symbol``); the pure-Python path is
+  the lossy fallback. ``histogram`` and ``quantile`` run native under ``auto`` when
+  the ext is importable.
 
 The kernel would be reachable two ways, tried in order:
   1. ``goldenanalysis._native``        -- the in-tree build (local dev / parity lane).
@@ -39,6 +40,20 @@ except Exception:  # noqa: BLE001 - any import/load failure falls back below
 # same two gates clear (heed the goldenmatch-native footguns in the root CLAUDE.md).
 _GATED_ON: frozenset[str] = frozenset({"histogram", "quantile"})
 
+# Component -> the native symbol that backs it (component name == symbol here). A
+# component is only usable when its symbol is present on the loaded module.
+_COMPONENT_SYMBOLS: dict[str, str] = {
+    "histogram": "histogram",
+    "quantile": "quantile",
+}
+
+
+def _has_symbol(component: str) -> bool:
+    if _native is None:
+        return False
+    symbol = _COMPONENT_SYMBOLS.get(component)
+    return symbol is not None and hasattr(_native, symbol)
+
 
 def native_module() -> Any:
     """The imported ``goldenanalysis._native`` module, or ``None`` if unavailable."""
@@ -52,8 +67,11 @@ def native_available() -> bool:
 def native_enabled(component: str) -> bool:
     """Whether to use the native kernel for ``component`` on this call.
 
-    Always ``False`` today (``_GATED_ON`` is empty). With ``GOLDENANALYSIS_NATIVE=1``
-    and no built kernel, raises — the require-native CI parity contract.
+    Reference mode (docs/design/2026-07-01-rust-is-the-reference-roadmap.md): native
+    runs wherever the component's kernel symbol exists; ``_GATED_ON`` is retained as
+    byte-exact sign-off documentation but no longer governs ``auto``. With
+    ``GOLDENANALYSIS_NATIVE=1`` and no built kernel, raises — the require-native CI
+    parity contract.
     """
     mode = os.environ.get("GOLDENANALYSIS_NATIVE", "auto").lower()
     if mode == "0":
@@ -63,5 +81,5 @@ def native_enabled(component: str) -> bool:
             raise RuntimeError(
                 "GOLDENANALYSIS_NATIVE=1 but goldenanalysis._native is not built/importable"
             )
-        return component in _GATED_ON
-    return _native is not None and component in _GATED_ON
+        return _has_symbol(component)
+    return _native is not None and _has_symbol(component)
