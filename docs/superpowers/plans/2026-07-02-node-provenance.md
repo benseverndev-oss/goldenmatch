@@ -50,7 +50,7 @@ cd "$BENCH" && PYTHONPATH="$BENCH" POLARS_SKIP_CPU_CHECK=1 "$PY" -m pytest tests
 - Modify: `goldengraph-core/src/store.rs`, `goldengraph-core/src/model.rs`
 - Test: `goldengraph-core/tests/store_integration.rs`
 
-- [ ] **Step 1: Write failing Rust tests.** Append to `tests/store_integration.rs` (match the existing test style there — `PyStore`/`GraphStore` + `StoreBatch`/`BatchEntity`):
+- [ ] **Step 1: Write failing Rust tests.** Append to `tests/store_integration.rs`. That file today imports only `use goldengraph_core::store::{GraphStore, StoreBatch};` and builds batches via `serde_json::from_value` — so **add the struct imports** the skeleton needs at the top: `use goldengraph_core::store::{BatchEntity, BatchEdge};` (and keep `GraphStore, StoreBatch`). Then append:
 
 ```rust
 // Node provenance: entity source_refs carried through as_of + accretively unioned on merge.
@@ -118,6 +118,7 @@ fn merge_unions_source_refs_accretively() {
     ```
   - `store.rs` `BatchEntity` (~36-43): add `#[serde(default)] pub source_refs: Vec<String>,` after `record_keys`.
   - `store.rs` `StoredEntity` (~66-76): add `#[serde(default)] pub source_refs: Vec<String>,` after `record_keys`.
+  - **`store.rs` inline `#[cfg(test)] mod tests` struct-literal helpers — REQUIRED or `cargo test` won't compile** (`serde(default)` does NOT cover struct literals → E0063 missing field). Add `source_refs: vec![],` to: the `be()` helper (~491-499, builds a `BatchEntity`) and the `mk` closure (~698-707, builds a `StoredEntity`). These are the only two struct-literal sites; all other construction goes through `serde_json` (serde-default covers it).
 
 - [ ] **Step 4: Accretive union at the append merge** (`store.rs` ~299-339, in the `for (i, be) in batch.entities...` loop). After the `keys`/`surfaces` folding, before the `StoredEntity { ... }` insert, compute `refs`:
 ```rust
@@ -295,7 +296,7 @@ and change the candidate line from `cands = sorted(by_doc.get(_base_doc_id(doc),
         d = _base_doc_id(doc)
         cands = sorted(by_doc.get(d, set()) | node_by_doc.get(d, set()))
 ```
-(`defaultdict` is already imported at the top of the module; if not, add `from collections import defaultdict`.)
+(**`defaultdict` is NOT imported in `substrate_eval.py`** — add `from collections import defaultdict` at the top of the module, or the `node_by_doc` line raises `NameError`.)
 
 - [ ] **Step 4: Run tests, verify pass** — the 3 new tests AND the full `test_substrate_eval.py` regression (the existing presence-probe/gliner tests must stay green; the new union must not change any graph that lacks node source_refs). Then `ruff check erkgbench/substrate_eval.py`.
 
