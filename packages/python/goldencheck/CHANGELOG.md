@@ -2,6 +2,11 @@
 
 All notable changes to GoldenCheck will be documented in this file.
 
+## [1.4.1] - 2026-07-02
+
+### Changed
+- **Fuzzy-values / `cell_quality` Python path is ~38x faster.** The near-duplicate value profiler's non-native Levenshtein path now uses `rapidfuzz` (a new dependency, the same pin the rest of the suite uses) instead of a pure-Python dynamic-programming loop. Byte-identical clusters (same `1 - dist/maxlen` metric, pinned against a reference DP), so the native kernel and the Python path still agree; the pure-Python fallback is retired. Measured 1757ms → 46ms on 110k candidate pairs — this is the path GoldenMatch's quality-weighted survivorship hits via `cell_quality`. (#1386, #1387)
+
 ## [1.4.0] - 2026-06-24
 
 ### Added
