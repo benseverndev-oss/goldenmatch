@@ -8,6 +8,7 @@ from goldenflow.transforms._fastpath import _V, apply_with_residual
 from goldenflow.transforms._native import (
     phone_country_code_native,
     phone_e164_native,
+    phone_national_native,
 )
 
 _DEFAULT_REGION = "US"
@@ -82,10 +83,17 @@ def phone_national(series: pl.Series) -> pl.Series:
             return val
         return phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.NATIONAL)
 
-    # No native path: the Rust port's national formatting diverges from
-    # phonenumbers on ambiguous leading-1 inputs (e.g. "1234567890"), and unlike
-    # E.164 there's no cheap canonical-form check to gate on. Stays pure Python.
-    return series.map_elements(_format, return_dtype=pl.Utf8)
+    # Native NANP national format, gated to the canonical "(NXX) NXX-XXXX" shape
+    # (phone_national_native nulls the ambiguous leading-1 outputs so tier-3
+    # Python settles them). No Polars fast expr -- a no-op lit + the Python
+    # residual, same shape as phone_country_code.
+    return apply_with_residual(
+        series,
+        pl.lit(None, dtype=pl.Utf8),
+        _format,
+        pl.Utf8,
+        native_fn=phone_national_native(),
+    )
 
 
 @register_transform(
