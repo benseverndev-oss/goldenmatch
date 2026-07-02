@@ -17,7 +17,7 @@ A gated `GOLDENGRAPH_REBEL_FUSE=1` pass that runs REBEL per window over the doc,
 ## Non-goals
 
 - **No new entity nodes.** REBEL triples with an endpoint that doesn't map to an existing mention are dropped (the diagnostic proved entities aren't the gap; an unmapped endpoint can't be edged; dropping keeps precision).
-- No predicate-vocab snapping — REBEL's relation labels are kept verbatim (the substrate metric aligns on entity-pairs, not predicate strings; downstream `_maybe_canonicalize` handles them like any edge when `SCHEMA_CANON=1`).
+- No predicate-vocab snapping — REBEL's relation labels are kept verbatim (the substrate metric aligns on entity-pairs, not predicate strings). **Caveat (measurement scope):** REBEL emits Wikidata-style labels ("founded by", "country of citizenship"), which will almost never match a closed `GOLDENGRAPH_RELATION_VOCAB`. So under `GOLDENGRAPH_SCHEMA_CANON=1`, `_maybe_canonicalize` (which *drops out-of-schema edges*) would silently discard most REBEL edges — nullifying the lever. This is asymmetric with the re-prompt, which passes the vocab instruction so its edges survive canon. Therefore **the measurement rig runs `SCHEMA_CANON` off / no relation vocab** (as the chunking + re-prompt rig does), and a WIN here is claimed **only for canon-off configs**. Making REBEL edges survive a canon config would need a predicate-normalization step — out of scope for this lever (a follow-on if a canon-on deployment wants it).
 - No edge dedup (consistent with re-prompt/chunking; duplicates are benign for pair/component metrics).
 - Not a training/fine-tuning effort — off-the-shelf REBEL only.
 
@@ -54,9 +54,13 @@ Same placement rationale as the re-prompt (edges get direction/schema canonicali
 
 Reuses `rebel_extractor`'s load path (transformers `AutoModelForSeq2SeqLM` + `AutoTokenizer`, `Babelscape/rebel-large`; `transformers`+`torch` are already in the Modal image via the gliner dep). Returns a callable that, per input text: tokenize with `truncation=True, max_length=256`, `generate(max_length=256)`, `decode(skip_special_tokens=False)`, then `parse_rebel_triplets(decoded)` → `list[(head, rel, tail)]`. Cached in a module global under a `threading.Lock` (double-checked) so concurrent first-calls in the parallel prepare phase load it exactly once.
 
+**Concurrency note (perf, not correctness):** after load, the shared model's `generate` is called from up to `GOLDENGRAPH_BUILD_WORKERS` (default 8) prepare threads. Torch eval-forward is reentrant so this is correct, but it oversubscribes intra-op CPU threads — a perf wrinkle on the shared box, not a bug. Acceptable for a 19-doc measurement; a real deployment might serialize REBEL or lower the worker count.
+
 ### Windowing
 
 REBEL's ~256-token window can't hold the ~2750-char lead, so window the input: `sentence_windows(split_sentences(text), size, overlap)` (reuse `chunk_extract`'s utilities — DRY) with `GOLDENGRAPH_REBEL_SENTENCES` (default 4) / `GOLDENGRAPH_REBEL_OVERLAP` (default 1), parsed defensively (empty-string-env safe, same helper style as chunk_extract). Run REBEL per window; concatenate triples across windows.
+
+**Residual truncation (accepted).** A 4-sentence window is not *guaranteed* ≤256 tokens — a window of long sentences still hits `truncation=True, max_length=256` and silently drops tail relations. Windowing mitigates but does not eliminate this. The bias is conservative (it costs REBEL *fewer* edges, biasing toward REFUTED), so a WIN is trustworthy; if REFUTED, a smaller `REBEL_SENTENCES` is the cheap first retry before believing it. Not token-capped in v1.
 
 ### Surface → entity mapping (`_match_mention`)
 
@@ -72,7 +76,7 @@ Fail-soft at two levels (mirrors re-prompt): `rebel_fuse` returns `[]` on empty 
 
 ## Measurement — the 3-way marginal delta
 
-Same wiki/7B/best-config rig (`name_ci` + chunking `(6,2)`), plain `run_wiki` (coverage / R(B) / P(B) / components):
+Same wiki/7B/best-config rig (`name_ci` + chunking `(6,2)`, **`SCHEMA_CANON` off / no relation vocab** — see the predicate caveat in Non-goals; REBEL edges must survive to drive merges), plain `run_wiki` (coverage / R(B) / P(B) / components):
 
 | leg | config | reads |
 |---|---|---|
@@ -97,9 +101,9 @@ Box-safe (injected fake REBEL, no model/network), in `packages/python/goldengrap
 2. **Drop unmapped + self-loop** — a triple whose head matches no mention → dropped; a triple whose head and tail map to the same index → dropped.
 3. **Windowing** — fake rebel asserts it is called once per sentence window (reuses `sentence_windows`); triples concatenate across windows.
 4. **Gate + empty guards** — `rebel_fuse_enabled` env parsing (case-insensitive, empty-safe); empty `mentions` → `[]` with the fake rebel never called.
-5. **Wiring in `_prepare_doc`** — gate off → `rebel_fuse` not invoked (monkeypatch counter); gate on → invoked once, edges appended; a raising `rebel_fuse` preserves the first-pass extraction (not the empty-extraction fallback).
+5. **Wiring in `_prepare_doc`** — gate off → `rebel_fuse` not invoked (monkeypatch counter); gate on → invoked once, edges appended; a raising `rebel_fuse` preserves the first-pass extraction (not the empty-extraction fallback). For this to patch the seam without loading the real model, `ingest.py` must import `rebel_fuse` as a top-level name (`from .rebel_fuse import rebel_fuse, rebel_fuse_enabled`, mirroring the re-prompt import) so `monkeypatch.setattr(ingest, "rebel_fuse", fake)` intercepts the seam's call.
 
-Run via the goldengraph `.venv` + `PYTHONPATH` shadow, `POLARS_SKIP_CPU_CHECK=1 GOLDENGRAPH_NATIVE=0 -p no:cacheprovider`. The real REBEL model is never loaded in tests (always injected).
+Run via the goldengraph `.venv` + `PYTHONPATH` shadow, `POLARS_SKIP_CPU_CHECK=1 GOLDENGRAPH_NATIVE=0 -p no:cacheprovider`. The real REBEL model is never loaded in tests (always injected or monkeypatched).
 
 ## Rollout
 
