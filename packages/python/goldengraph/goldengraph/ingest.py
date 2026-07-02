@@ -102,6 +102,7 @@ def build_batch(
             "typ": e.typ,
             "surface_names": e.surface_names,
             "record_keys": e.record_keys,
+            "source_refs": list(refs),  # doc provenance, mirroring edges (per-doc node alignment)
         }
         for e in entities
     ]
@@ -132,6 +133,7 @@ def build_batch(
                     "typ": f"literal:{a.typ}",
                     "surface_names": [val],
                     "record_keys": [],
+                    "source_refs": list(refs),
                 }
             )
         edges.append(
