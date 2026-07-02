@@ -130,6 +130,8 @@ Rerun the **shipped** `run_wiki` (no probe flag — the fix is in the shipped al
 - **Python box (aligner):** (i) a hand-built graph with an entity that is an edge endpoint only in docB but has `source_refs=["docA","docB"]`, and a gold for it in docA → it now aligns in docA (was orphan under edge-only); (ii) **no** node `source_refs` → aligner output byte-identical to today (fallback regression guard); (iii) **mixed** graph (one entity with `source_refs`, one without) → no regression vs today for the without-provenance entity (union-superset guard). Existing `test_substrate_eval.py` suite stays green.
 - **Modal:** one 7B-seeded + one V3 `run_wiki` leg for the end-to-end coverage lift.
 
+**Coverage gap (accepted):** mutation point 5 — the pyo3 dict serialization in `lib.rs` (`entities()` and the query serializer) — has **no pre-Modal test tier**. `cargo test -p goldengraph-core` covers the core crate (`EntityNode`/`as_of`) but not the pyo3 wrapper, and the Python aligner tier uses hand-built dicts. So the native-serialize layer is verified only by the Modal `run_wiki` leg (a flat-coverage no-op there localizes the miss to this layer, since every other layer has a unit test). This is a pragmatic omission given the pyo3 local-build constraints, not a correctness risk.
+
 Box invocations: goldengraph `.venv` + `PYTHONPATH` shadow (Python); `cargo test -p goldengraph-core` with the D: rustup toolchain on PATH (Rust).
 
 ## Rollout
