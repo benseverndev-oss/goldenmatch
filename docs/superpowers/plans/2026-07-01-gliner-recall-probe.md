@@ -311,13 +311,15 @@ def run_wiki_gliner_probe() -> dict:
     return r
 ```
 
-- [ ] **Step 3: Route it in `main`.** Add the flag and branch:
+- [ ] **Step 3: Route it in `main`.** Two edits to the EXISTING `main` (do NOT add a second `ap.parse_args()` — it already exists at `run_substrate_eval.py:136`):
 
+  (a) Insert this `add_argument` line just BEFORE the existing `args = ap.parse_args()`:
 ```python
     ap.add_argument("--gliner-probe", action="store_true",
                     help="run the GLiNER entity-recall probe instead of the plain wiki eval")
-    args = ap.parse_args()
-
+```
+  (b) Insert the probe branch AFTER `args = ap.parse_args()` and BEFORE the existing `if args.corpus == "wiki":` (line ~138):
+```python
     _probe = args.gliner_probe or os.environ.get("GOLDENGRAPH_GLINER_PROBE", "") not in ("", "0", "false")
     if args.corpus == "wiki" and _probe:
         r = run_wiki_gliner_probe()
