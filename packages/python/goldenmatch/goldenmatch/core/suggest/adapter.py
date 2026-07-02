@@ -268,6 +268,8 @@ def _build_column_signals_batch(
     df: pl.DataFrame,
     config: Any,
     clusters: dict[int, dict],
+    *,
+    cheap: bool = False,
 ) -> pa.RecordBatch:
     """Build the column_signals Arrow batch from the df + config + run results.
 
@@ -348,10 +350,23 @@ def _build_column_signals_batch(
     collision_rates = _collision_rates(clusters, df)
 
     # -- variant_rate from goldencheck blocking_risk (fail-open: 0.0) --
-    try:
-        variant_risk = blocking_risk(df.select(data_cols)) or {}
-    except Exception:
-        variant_risk = {}
+    # `cheap` skips this scan entirely (variant_rate defaults to 0.0, the same
+    # value used when goldencheck is absent). goldencheck `blocking_risk` /
+    # `cell_quality` runs an O(distinct^2) pairwise fuzzy-variant comparison per
+    # string column; on moderate-cardinality categorical columns (~200-5000
+    # distinct: city/company/status/product) that is 350ms-950ms EACH, and the
+    # default advisory `dedupe_df` path was paying it on every run whose free
+    # headroom trigger fired (RED/YELLOW health -- the norm for messy production
+    # data, with the native kernel present). The default surface attaches raw,
+    # unverified candidates (ADR 0026's cheap tier), so the full-fidelity variant
+    # signal belongs to the opt-in verified paths (`suggest=`/`heal=`) only.
+    if cheap:
+        variant_risk: dict = {}
+    else:
+        try:
+            variant_risk = blocking_risk(df.select(data_cols)) or {}
+        except Exception:
+            variant_risk = {}
 
     # -- Assemble rows --
     rows_field: list[str] = []
@@ -554,15 +569,19 @@ def _parse_suggestions(raw_json: str) -> list[Suggestion]:
     return suggestions
 
 
-def _kernel_suggest(nm, df, config, scored_pairs, clusters, priors) -> list[Suggestion]:
+def _kernel_suggest(
+    nm, df, config, scored_pairs, clusters, priors, *, cheap: bool = False
+) -> list[Suggestion]:
     """Build the three Arrow batches from the PASSED-IN scored_pairs/clusters/df/
     config (no re-run), call the native ``suggest_config`` kernel, and parse the
     result.  FULL_DIST pair selection happens in the caller, which passes the
-    chosen pairs in as ``scored_pairs``."""
+    chosen pairs in as ``scored_pairs``.  ``cheap`` skips the expensive
+    full-frame goldencheck variant scan in the column-signals batch (default
+    advisory path); see ``_build_column_signals_batch``."""
     # -- Build Arrow batches --
     scored_pairs_batch = _build_scored_pairs_batch(scored_pairs)
     clusters_batch = _build_clusters_batch(clusters)
-    column_signals_batch = _build_column_signals_batch(df, config, clusters)
+    column_signals_batch = _build_column_signals_batch(df, config, clusters, cheap=cheap)
 
     config_json = json.dumps(_config_summary(config), default=str)
     priors_dict = priors if priors is not None else {"counts": {}}
@@ -799,7 +818,14 @@ def suggest_from_result(result, df, *, priors=None, verify=False) -> list[Sugges
         diag = _diagnostic_scored_pairs(MatchEngine.from_dataframe(df), df, config)
         if diag is not None:
             pairs_for_kernel = diag
-    suggestions = _kernel_suggest(nm, df, config, pairs_for_kernel, clusters, priors)
+    # The default advisory path (verify=False) is ADR 0026's "cheap raw
+    # candidates" tier: skip the expensive full-frame goldencheck variant scan
+    # (`cheap=True`). The opt-in verified paths (`suggest=`/`heal=`) keep full
+    # fidelity. This is the fix for the production slowdown -- the variant scan is
+    # O(distinct^2) per moderate-cardinality column and was paid on every default run.
+    suggestions = _kernel_suggest(
+        nm, df, config, pairs_for_kernel, clusters, priors, cheap=not verify
+    )
     if not (verify and _verify_enabled_by_env()) or not suggestions:
         return suggestions
     from goldenmatch.tui.engine import MatchEngine
