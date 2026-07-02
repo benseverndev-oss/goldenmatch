@@ -20,6 +20,7 @@ from .chunk_extract import chunk_extract, chunk_extract_enabled
 from .extract import Extraction, Mention
 from .extract import extract as _extract
 from .llm import LLMClient
+from .relation_reprompt import relation_reprompt, relation_reprompt_enabled
 from .resolve import ResolvedEntity, _record_key
 from .resolve import resolve as _resolve
 
@@ -675,6 +676,15 @@ def _prepare_doc(
             if chunk_extract_enabled()
             else _extractor(text, llm)
         )
+        # Relation re-prompt (2nd pass): add relations among the already-extracted entities. Runs
+        # BEFORE canonicalization so re-prompt edges get the same direction/schema snapping as
+        # first-pass edges. Own try/except: a 2nd-pass failure must never discard the first-pass
+        # extraction (the outer except returns an EMPTY extraction).
+        if relation_reprompt_enabled():
+            try:
+                extraction.relationships += relation_reprompt(text, extraction.mentions, llm)
+            except Exception:
+                pass
         # In discovery mode the schema isn't known until the whole corpus is extracted, so defer
         # canonicalization to the post-discovery pass in `ingest_corpus`.
         if not _schema_discover_enabled():
