@@ -363,3 +363,66 @@ def gliner_probe_report(graph: dict, gold_mentions, qid_aliases, gliner_by_doc) 
         "residual_recovered_frac": _frac(missed_recovered, missed),
         "junk_rate": _frac(junk, total_surf),
     }
+
+
+def _assign_real_nodes_presence(graph: dict, gold_mentions, qid_aliases) -> dict[int, int]:
+    """Strict edge-based assignment (`_assign_real_nodes_aliased`), then for each gold left unaligned
+    (node_of < 0) a GLOBAL surface/alias match to ANY node -- reaching edgeless nodes the doc-keyed
+    strict path cannot. Exact set-intersection largest-wins, then substring fallback (shared
+    primitive), lowest node id on tie. Still-unmatched keep their unique negatives."""
+    node_of = dict(_assign_real_nodes_aliased(graph, gold_mentions, qid_aliases))
+    id2surf: dict[int, set[str]] = {}
+    for e in graph.get("entities", ()):
+        surfs = {str(s).strip().lower() for s in e.get("surface_names", ()) if s}
+        cn = str(e.get("canonical_name", "")).strip().lower()
+        if cn:
+            surfs.add(cn)
+        id2surf[e.get("entity_id")] = surfs
+    all_ids = sorted(id2surf)
+    for i, (qid, surface, _doc) in enumerate(gold_mentions):
+        if node_of.get(i, -1) >= 0:
+            continue
+        match = set(qid_aliases.get(qid, ())) | {str(surface).strip().lower()}
+        best, best_ov = None, 0
+        for nid in all_ids:                                    # exact set-intersection: largest wins
+            ov = len(id2surf[nid] & match)
+            if ov > best_ov:
+                best, best_ov = nid, ov
+        if best is None:                                       # substring fallback via shared primitive
+            for nid in all_ids:
+                if any(_alias_match_surface(s, match) for s in id2surf[nid]):
+                    best = nid
+                    break
+        if best is not None:
+            node_of[i] = best
+    return node_of
+
+
+def presence_aligner_report(graph: dict, gold_mentions, qid_aliases) -> dict:
+    """Strict (edge-based) vs relaxed (global surface fallback reaching edgeless nodes) alignment on
+    the SAME graph: coverage / R(B) / P(B) both ways. The delta quantifies the coverage ceiling and
+    its precision cost -- a metric-side diagnostic, NOT a change to the shipped strict path. Pure
+    (graph dict + the pure `metrics.score`)."""
+    from erkgbench import metrics
+
+    def _cluster(node_of: dict[int, int]) -> list[list[int]]:
+        groups: dict[int, list[int]] = {}
+        for i, n in node_of.items():
+            groups.setdefault(n, []).append(i)
+        return [sorted(v) for v in groups.values()]
+
+    def _cov(node_of: dict[int, int]) -> float:
+        return sum(1 for n in node_of.values() if n >= 0) / len(node_of) if node_of else 1.0
+
+    qids = [m[0] for m in gold_mentions]
+    strict = _assign_real_nodes_aliased(graph, gold_mentions, qid_aliases)
+    relaxed = _assign_real_nodes_presence(graph, gold_mentions, qid_aliases)
+    sb = metrics.score(qids, _cluster(strict))
+    rb = metrics.score(qids, _cluster(relaxed))
+    return {
+        "n_gold": len(gold_mentions),
+        "strict_coverage": _cov(strict), "relaxed_coverage": _cov(relaxed),
+        "strict_pb": sb.precision, "relaxed_pb": rb.precision,
+        "strict_rb": sb.recall, "relaxed_rb": rb.recall,
+        "strict_fb": sb.f1, "relaxed_fb": rb.f1,
+    }
