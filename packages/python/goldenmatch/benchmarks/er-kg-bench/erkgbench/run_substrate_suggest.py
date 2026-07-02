@@ -26,8 +26,12 @@ def main() -> None:
     ap.add_argument("--homograph", type=int, default=4)
     ap.add_argument("--ambiguity", type=float, default=0.0)
     ap.add_argument("--out-md", default="SUBSTRATE_SUGGEST.md")
+    ap.add_argument("--score-beta", type=float, default=0.5,
+                    help="F-beta for the accept metric; <1 favors precision (the homograph win). "
+                         "0.5 accepts the SP-C precision win the F1 default (1.0) hid.")
     args = ap.parse_args()
 
+    os.environ["GOLDENGRAPH_SUBSTRATE_SCORE_BETA"] = str(args.score_beta)
     os.environ["GOLDENGRAPH_BENCH_HOMOGRAPH"] = str(args.homograph)
     os.environ.pop("GOLDENGRAPH_BENCH_COOCCUR", None)
     corpus = generate_engineered(seed=20260620, n_questions=1, ambiguity=args.ambiguity)
