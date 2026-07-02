@@ -171,7 +171,9 @@ def _canon_query_rel(rel, schema):
 def _hybrid_filter_mode() -> str:
     """Hybrid subgraph filter selector, read at call time. "" / "none" / unset =
     off (pass the full ball; the measured 0.420 control). "path" = path-preserving
-    prune (`subgraph_filter.filter_subgraph_to_paths`)."""
+    prune (`subgraph_filter.filter_subgraph_to_paths`). "graphless" = the graph-off
+    ABLATION: empty the ball so synthesis sees passages only (isolates the graph's
+    marginal contribution over plain passage RAG)."""
     import os
 
     return os.environ.get("GOLDENGRAPH_HYBRID_FILTER", "").strip().lower()
@@ -330,10 +332,19 @@ def ask(
     }
     seed_names = [id_to_name[s] for s in seeds if s in id_to_name]
     if mode == "hybrid":
-        if _hybrid_filter_mode() == "path":
+        _fm = _hybrid_filter_mode()
+        if _fm == "path":
             from .subgraph_filter import filter_subgraph_to_paths
 
             subgraph = filter_subgraph_to_paths(subgraph, seeds)
+        elif _fm == "graphless":
+            # ABLATION ("does the graph do anything?"): empty the graph entirely so
+            # synthesis sees ONLY the retrieved passages, through the IDENTICAL hybrid
+            # prompt. Isolates the graph's marginal contribution over plain passage RAG
+            # -- passages + prompt held fixed vs the full-ball `none` control. If
+            # graphless ties the full ball, the graph is adding nothing on this task.
+            subgraph = {"entities": [], "edges": []}
+            seed_names = []
         passage_texts = (
             list(passages.retrieve(query, passage_k)) if passages is not None else []
         )

@@ -199,6 +199,26 @@ def test_ask_hybrid_filter_path_prunes_offtopic_from_synthesis(monkeypatch):
     assert "A acquired Zeta in 1990." in prompt
 
 
+def test_ask_hybrid_graphless_ablation_empties_the_graph(monkeypatch):
+    # GOLDENGRAPH_HYBRID_FILTER=graphless -> synthesis sees ONLY passages; the graph
+    # (and seed anchors) are dropped from the prompt. Passages stay whole.
+    llm = RecordingLLM()
+    store = _FakeStore(_FakeGraph(_NAMES, _EDGES))
+    embedder = StubEmbedder({"Start": 0, "A": 1, "Zeta": 2})
+    passages = _FakePassages(["Start works at A.", "A acquired Zeta in 1990."])
+    monkeypatch.setenv("GOLDENGRAPH_HYBRID_FILTER", "graphless")
+    ask(
+        "Start", store, llm=llm, embedder=embedder, valid_t=1, tx_t=1,
+        mode="hybrid", k=1, hops=4, node_budget=64, passages=passages, passage_k=7,
+    )
+    prompt = llm.prompts[-1]
+    # passages present (whole), but the graph edges + seed anchors are gone
+    assert "A acquired Zeta in 1990." in prompt
+    assert "-[works_at]->" not in prompt  # name-keyed graph edge form dropped
+    assert "-[acquired]->" not in prompt
+    assert "Anchor entities (most query-relevant): Start" not in prompt
+
+
 def test_ask_hybrid_filter_off_keeps_full_ball(monkeypatch):
     names = ["Start", "A", "Zeta", "Noise"]
     edges = [(0, "works_at", 1), (1, "acquired", 2), (2, "mentions", 3)]
