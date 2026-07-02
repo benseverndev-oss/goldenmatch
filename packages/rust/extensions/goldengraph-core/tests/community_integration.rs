@@ -33,6 +33,7 @@ fn build_graph(v: &Value) -> Graph {
                 .iter()
                 .map(|s| s.as_str().unwrap().to_string())
                 .collect(),
+            source_refs: vec![],
         })
         .collect();
     let edges = v["graph"]["edges"]

@@ -48,6 +48,7 @@ pub fn apply_resolution(
                 typ: mentions[rep].typ.clone(),
                 members: members.clone(),
                 surface_names,
+                source_refs: Vec::new(),
             }
         })
         .collect();

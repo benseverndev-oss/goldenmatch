@@ -51,6 +51,10 @@ pub struct EntityNode {
     #[serde(default)]
     pub members: Vec<MentionId>,
     pub surface_names: Vec<String>,
+    /// Docs this entity was extracted from (accreted across cross-doc merges). Provenance for
+    /// per-doc alignment of relationless entities. Serde-default for snapshot back-compat.
+    #[serde(default)]
+    pub source_refs: Vec<String>,
 }
 
 /// An entity-space relationship: endpoints rewritten to entity ids, with the

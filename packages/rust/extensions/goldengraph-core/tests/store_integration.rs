@@ -5,7 +5,7 @@
 //! round-trip stability. SP5's WASM/C bindings reuse this fixture for parity.
 
 use goldengraph_core::model::{Edge, EntityNode};
-use goldengraph_core::store::{GraphStore, StoreBatch};
+use goldengraph_core::store::{BatchEdge, BatchEntity, GraphStore, StoreBatch};
 use serde_json::{json, Value};
 
 fn load() -> Value {
@@ -75,4 +75,93 @@ fn store_golden_vectors_match() {
     // snapshot is portable + stable: reopening re-serializes byte-identical.
     let snap = store.snapshot();
     assert_eq!(snap, GraphStore::open(Some(&snap)).unwrap().snapshot());
+}
+
+// ---- node provenance: entity source_refs carried through as_of + accretive merge union ----
+
+#[test]
+fn as_of_carries_entity_source_refs() {
+    let mut s = GraphStore::open(None).unwrap();
+    s.append(StoreBatch {
+        entities: vec![BatchEntity {
+            local_id: 0,
+            canonical_name: "Apple".into(),
+            typ: "org".into(),
+            surface_names: vec!["Apple".into()],
+            record_keys: vec!["k:apple".into()],
+            source_refs: vec!["docA".into()],
+        }],
+        edges: vec![BatchEdge {
+            subj_local: 0,
+            predicate: "is".into(),
+            obj_local: 0,
+            valid_from: 1,
+            valid_to: None,
+            source_refs: vec!["docA".into()],
+        }],
+        ingested_at: 1,
+    });
+    let g = s.as_of(i64::MAX, i64::MAX);
+    let e = g
+        .entities
+        .iter()
+        .find(|e| e.canonical_name == "Apple")
+        .expect("Apple node present");
+    assert_eq!(e.source_refs, vec!["docA".to_string()]);
+}
+
+#[test]
+fn merge_unions_source_refs_accretively() {
+    let mut s = GraphStore::open(None).unwrap();
+    // batch 1: entity from docA (record key k:ibm)
+    s.append(StoreBatch {
+        entities: vec![BatchEntity {
+            local_id: 0,
+            canonical_name: "IBM".into(),
+            typ: "org".into(),
+            surface_names: vec!["IBM".into()],
+            record_keys: vec!["k:ibm".into()],
+            source_refs: vec!["docA".into()],
+        }],
+        edges: vec![BatchEdge {
+            subj_local: 0,
+            predicate: "is".into(),
+            obj_local: 0,
+            valid_from: 1,
+            valid_to: None,
+            source_refs: vec!["docA".into()],
+        }],
+        ingested_at: 1,
+    });
+    // batch 2: SAME record key (merges) from docB
+    s.append(StoreBatch {
+        entities: vec![BatchEntity {
+            local_id: 0,
+            canonical_name: "IBM".into(),
+            typ: "org".into(),
+            surface_names: vec!["IBM".into()],
+            record_keys: vec!["k:ibm".into()],
+            source_refs: vec!["docB".into()],
+        }],
+        edges: vec![BatchEdge {
+            subj_local: 0,
+            predicate: "is".into(),
+            obj_local: 0,
+            valid_from: 2,
+            valid_to: None,
+            source_refs: vec!["docB".into()],
+        }],
+        ingested_at: 2,
+    });
+    let g = s.as_of(i64::MAX, i64::MAX);
+    let e = g
+        .entities
+        .iter()
+        .find(|e| e.canonical_name == "IBM")
+        .expect("IBM node present");
+    // accretive union -- docA is NOT lost when docB merges in
+    assert_eq!(
+        e.source_refs,
+        vec!["docA".to_string(), "docB".to_string()]
+    );
 }
