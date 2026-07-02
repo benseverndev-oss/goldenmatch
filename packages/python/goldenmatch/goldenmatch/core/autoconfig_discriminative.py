@@ -115,3 +115,29 @@ def discriminative_power(
     if measured == 0:
         return 0.0, 0
     return total / measured, measured
+
+
+def should_veto_exact(
+    df: pl.DataFrame | None,
+    candidate_col: str,
+    profiles: list[Any],
+    *,
+    min_shared_pairs: int = _MIN_SHARED_PAIRS,
+    max_pairs: int = _MAX_PAIRS,
+) -> bool:
+    """True => demote the proposed standalone exact matchkey on candidate_col.
+
+    Fail-safe = keep (False) on: kill-switch off, df is None, empty identity
+    basket, or insufficient shared-value support. Only vetoes a high-density
+    column whose shared-value pairs measurably fail to co-agree on other identity
+    fields (support >= min_shared_pairs AND power < tau()).
+    """
+    if not veto_enabled() or df is None:
+        return False
+    basket = identity_basket(candidate_col, profiles)
+    if not basket:
+        return False
+    power, support = discriminative_power(df, candidate_col, basket, max_pairs=max_pairs)
+    if support < min_shared_pairs:
+        return False
+    return power < tau()

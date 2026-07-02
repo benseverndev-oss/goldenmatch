@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 
 import polars as pl
-
 from goldenmatch.core import autoconfig_discriminative as disc
 
 
@@ -59,3 +58,35 @@ def test_discriminative_power_zero_support_when_all_unique():
 
 def test_discriminative_power_empty_basket_zero():
     assert disc.discriminative_power(_zip_like_df(), "zip", []) == (0.0, 0)
+
+
+def test_should_veto_zip_true():
+    profiles = [_P("zip", "zip"), _P("name", "name")]
+    assert disc.should_veto_exact(_zip_like_df(), "zip", profiles) is True
+
+
+def test_should_veto_npi_false():
+    profiles = [_P("npi", "identifier"), _P("name", "name")]
+    assert disc.should_veto_exact(_npi_like_df(), "npi", profiles) is False
+
+
+def test_should_veto_thin_support_false():
+    df = pl.DataFrame({"id": [str(i) for i in range(100)], "name": [f"n{i}" for i in range(100)]})
+    profiles = [_P("id", "identifier"), _P("name", "name")]
+    assert disc.should_veto_exact(df, "id", profiles) is False
+
+
+def test_should_veto_df_none_false():
+    profiles = [_P("zip", "zip"), _P("name", "name")]
+    assert disc.should_veto_exact(None, "zip", profiles) is False
+
+
+def test_should_veto_empty_basket_false():
+    profiles = [_P("zip", "zip")]
+    assert disc.should_veto_exact(_zip_like_df(), "zip", profiles) is False
+
+
+def test_should_veto_kill_switch_false(monkeypatch):
+    monkeypatch.setenv("GOLDENMATCH_DISCRIMINATIVE_VETO", "0")
+    profiles = [_P("zip", "zip"), _P("name", "name")]
+    assert disc.should_veto_exact(_zip_like_df(), "zip", profiles) is False
