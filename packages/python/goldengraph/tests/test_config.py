@@ -170,15 +170,24 @@ def test_for_profile_never_selects_refuted():
         assert c.relation_reprompt is False and c.rebel_fuse is False and c.extract_recall is False
 
 
-# --- Task 6: cross-contract consistency (skip-if-unimportable) ---------------------------------------
+# --- Task 6: cross-contract consistency ---------------------------------------------------------------
 def test_config_fields_cover_known_levers():
     # SP-A ships erkgbench.substrate_eval.KNOWN_LEVERS (lever-name -> env). Every such lever must be a
-    # SubstrateConfig field, keeping the SP-A contract and the SP-B object in sync. Skips if erkgbench
-    # isn't importable on this branch (SP-A #1371 not yet merged/rebased in).
-    try:
-        from erkgbench.substrate_eval import KNOWN_LEVERS
-    except Exception:
-        pytest.skip("erkgbench.substrate_eval.KNOWN_LEVERS not importable on this branch (pre-#1371)")
+    # SubstrateConfig field, keeping the SP-A contract and the SP-B object in sync. erkgbench lives in a
+    # sibling package not on the default goldengraph test path, so locate it relative to the repo root
+    # and add it before importing; skip only if the file genuinely isn't there (e.g. goldengraph shipped
+    # standalone without the bench).
+    import pathlib
+    import sys
+
+    repo = pathlib.Path(__file__).resolve().parents[4]  # tests/goldengraph/python/packages/<repo>
+    erkg = repo / "packages" / "python" / "goldenmatch" / "benchmarks" / "er-kg-bench"
+    if not (erkg / "erkgbench" / "substrate_eval.py").exists():
+        pytest.skip(f"erkgbench not present at {erkg} (goldengraph shipped without the bench)")
+    if str(erkg) not in sys.path:
+        sys.path.insert(0, str(erkg))
+    from erkgbench.substrate_eval import KNOWN_LEVERS
+
     field_names = {f.name for f in dataclasses.fields(SubstrateConfig)}
     missing = set(KNOWN_LEVERS) - field_names
     assert not missing, f"KNOWN_LEVERS not covered by SubstrateConfig fields: {missing}"

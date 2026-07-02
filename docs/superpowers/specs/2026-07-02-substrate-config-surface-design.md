@@ -1,7 +1,7 @@
 # Substrate Config Surface — Design (SP-B1)
 
 **Date:** 2026-07-02
-**Status:** design, pre-implementation
+**Status:** implemented (branch `feat/substrate-config`)
 **Sub-project:** SP-B1 of the substrate-builder config-surface program (SP-A metric split shipped #1371; SP-B2 staged ejection harness + SP-C MCP/LLM loop follow this).
 
 ## Problem
