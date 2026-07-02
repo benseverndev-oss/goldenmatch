@@ -88,7 +88,10 @@ def native_enabled(component: str) -> bool:
                 "GOLDENCHECK_NATIVE=1 but goldencheck._native is not built/importable"
             )
         return _has_symbol(component)
-    return _native is not None and component in _GATED_ON and _has_symbol(component)
+    # Reference mode (docs/design/2026-07-01-rust-is-the-reference-roadmap.md): native
+    # runs wherever the component's kernel symbol exists; ``_GATED_ON`` is retained as
+    # byte-exact sign-off documentation but no longer governs ``auto``.
+    return _native is not None and _has_symbol(component)
 
 
 # Component name -> the native symbol that backs it. A component is only usable
