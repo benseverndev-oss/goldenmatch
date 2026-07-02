@@ -170,3 +170,53 @@ def test_tuner_result_trace_is_serializable():
     r0 = res.trace[0]
     assert r0.round == 0 and isinstance(r0.config, SubstrateConfig) and "relational" in r0.scorecard
     assert r0.escalated_to is None
+
+
+# --- precision-aware F-beta _score --------------------------------------------------------------------
+def _rel(p, r, f1, *, presence=None):
+    """A scorecard with explicit relational P/R/F1 (F-beta reads P/R; beta==1 uses the STORED f1)."""
+    return {"presence": None if presence is None else {"coverage": presence},
+            "relational": {"f1": f1, "recall": r, "precision": p},
+            "connectivity": {"coverage": None, "f1": None, "edge_recall": 0.9},
+            "coherence": {"components": 1, "largest_fraction": 1.0}}
+
+
+def test_score_beta1_equals_stored_f1():
+    # f1 sentinel (0.99) deliberately != 2PR/(P+R)=0.5 -> beta==1 must return the STORED f1, not recompute
+    sc = _rel(0.5, 0.5, 0.99)
+    assert st._score(sc, beta=1.0) == 0.99
+
+
+def test_score_beta_half_favors_precision():
+    base = _rel(0.8153, 0.672, 0.7368)     # the SP-C smoke baseline
+    prop = _rel(0.8916, 0.540, 0.6723)     # the proposed homograph-safe config
+    # default (F1): baseline wins (the bug we're fixing)
+    assert st._score(base, beta=1.0) > st._score(prop, beta=1.0)
+    # beta<1 (favor precision): proposed wins
+    assert st._score(prop, beta=0.5) > st._score(base, beta=0.5)
+
+
+def test_score_beta_reads_env():
+    import os
+    sc = _rel(0.9, 0.5, 0.643)
+    prev = os.environ.get("GOLDENGRAPH_SUBSTRATE_SCORE_BETA")
+    try:
+        os.environ["GOLDENGRAPH_SUBSTRATE_SCORE_BETA"] = "0.25"
+        assert st._score(sc) == st._score(sc, beta=0.25)          # env beta applied
+        assert st._score(sc) != st._score(sc, beta=1.0)           # and it's NOT F1
+    finally:
+        if prev is None:
+            os.environ.pop("GOLDENGRAPH_SUBSTRATE_SCORE_BETA", None)
+        else:
+            os.environ["GOLDENGRAPH_SUBSTRATE_SCORE_BETA"] = prev
+
+
+def test_score_beta_zero_denom_safe():
+    sc = _rel(0.0, 0.0, 0.0)
+    assert st._score(sc, beta=0.5) == 0.0                          # denom 0 -> 0.0, no ZeroDivisionError
+
+
+def test_score_presence_still_additive():
+    sc = _rel(0.8, 0.6, 0.686, presence=0.5)
+    fbeta = (1 + 0.25) * 0.8 * 0.6 / (0.25 * 0.8 + 0.6)           # F_0.5(0.8,0.6)
+    assert abs(st._score(sc, beta=0.5) - (fbeta + 0.5)) < 1e-9

@@ -9,6 +9,7 @@ docs/superpowers/specs/2026-07-02-substrate-staged-tuner-design.md.
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field, replace
 
 from goldengraph.config import SubstrateConfig, for_profile, profile_corpus
@@ -125,9 +126,21 @@ class TunerResult:
     stopped_reason: str = ""
 
 
-def _score(scorecard: dict) -> float:
-    """Round-ranking scalar: relational.f1 (+ presence.coverage when present). Higher wins."""
-    s = scorecard["relational"]["f1"]
+def _score(scorecard: dict, *, beta: float | None = None) -> float:
+    """Round-ranking / accept scalar: F-beta of relational P/R (+ presence.coverage when present).
+    beta<1 favors PRECISION, >1 recall, ==1 is F1. Default beta from GOLDENGRAPH_SUBSTRATE_SCORE_BETA
+    (1.0). At beta==1.0 the STORED relational.f1 is used (bit-identical to the prior F1-only behavior).
+    Both consumers (run_staged argmax, suggest accept) read this via the env by default."""
+    if beta is None:
+        beta = float(os.environ.get("GOLDENGRAPH_SUBSTRATE_SCORE_BETA", "1.0") or "1.0")
+    rel = scorecard["relational"]
+    if beta == 1.0:
+        f = rel["f1"]
+    else:
+        p, r, b2 = rel["precision"], rel["recall"], beta * beta
+        denom = b2 * p + r
+        f = (1.0 + b2) * p * r / denom if denom > 0 else 0.0
+    s = f
     presence = scorecard.get("presence")
     if presence is not None:
         s += presence["coverage"]
