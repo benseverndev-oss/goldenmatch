@@ -818,6 +818,11 @@ jobs:
             **/pyproject.toml
       - run: uv sync --all-packages
       - name: pytest (pure-Python fallback -- core behavior slice, GOLDENMATCH_NATIVE=0)
+        # -k excludes tests that ASSERT native dispatch (e.g. TestNativeFSParity's
+        # opt-in-picks-native): the job-level GOLDENMATCH_NATIVE=0 force-disables
+        # native, so those tests can't hold here by construction. This lane proves
+        # the pure-Python behavior path, not native dispatch (that's the `native`
+        # lane's job).
         run: |
           uv run pytest \
             packages/python/goldenmatch/tests/test_cluster.py \
@@ -827,6 +832,7 @@ jobs:
             packages/python/goldenmatch/tests/test_pipeline.py \
             packages/python/goldenmatch/tests/test_pairs.py \
             packages/python/goldenmatch/tests/test_probabilistic.py \
+            -k "not native and not Native" \
             -n auto --timeout=120 --timeout-method=thread -q
 
   # Visibility lanes for tests that the main `python` job currently --ignores.
