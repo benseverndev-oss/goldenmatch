@@ -63,6 +63,18 @@ def event_content_hash(event: IdentityEvent) -> str:
         "trust": round(event.trust, 6) if event.trust is not None else None,
         "recorded_at": _normalize_dt(event.recorded_at),
     }
+    # Claim-authority fields (#1256) are hashed only when SET, not always-None
+    # like actor/trust. Adding an always-present ``"claim_type": null`` key would
+    # change every pre-#1256 event's hash and break existing seals; omitting the
+    # keys when None keeps old (all-None) events byte-identical while still making
+    # a set claim_type/evidence_ref/previous_claim_id tamper-evident (adding or
+    # removing the key changes the blob).
+    if event.claim_type is not None:
+        canon["claim_type"] = str(event.claim_type)
+    if event.evidence_ref is not None:
+        canon["evidence_ref"] = str(event.evidence_ref)
+    if event.previous_claim_id is not None:
+        canon["previous_claim_id"] = int(event.previous_claim_id)
     blob = json.dumps(canon, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 

@@ -40,6 +40,37 @@ class EventKind(StrEnum):
     # Agent Memory (#1075): a record was manually claimed into an entity (moved
     # from any prior entity). Distinct from ABSORBED_RECORD (pipeline-driven).
     CLAIMED = "claimed"
+    # Claim lifecycle (#1256): explicit transitions of a claim's authority.
+    # ``PROMOTE`` raises a claim's tier (e.g. inference -> verified) -- makes an
+    # agent inference becoming durable shared truth an auditable event rather
+    # than invisible drift. ``AMEND`` supersedes a prior claim's content;
+    # ``REVOKE`` retracts it. Distinct from the structural ops above.
+    PROMOTE = "promote"
+    AMEND = "amend"
+    REVOKE = "revoke"
+
+
+class ClaimType(StrEnum):
+    """Categorical authority of a claim (#1256), orthogonal to numeric ``trust``.
+
+    ``trust`` stays the confidence *within* a tier; ``claim_type`` is the tier
+    itself, so a reviewer can tell "an agent inferred this at 0.8" from "a tool
+    verified this at 0.8".
+    """
+
+    OBSERVATION = "observation"  # agent saw this in a session
+    INFERENCE = "inference"      # agent concluded this; needs revalidation
+    VERIFIED = "verified"        # backed by tool output / source / test / user
+    DIRECTIVE = "directive"      # human-authorized rule or constraint
+
+
+class EvidenceRef(StrEnum):
+    """What backs a claim (#1256) -- the typed provenance of the evidence."""
+
+    TOOL_CALL = "tool-call"
+    SOURCE = "source"
+    USER_CONFIRMATION = "user-confirmation"
+    TEST_RUN = "test-run"
 
 
 @dataclass
@@ -103,6 +134,15 @@ class IdentityEvent:
     # See EvidenceEdge for the contract. The "why" rides in ``payload['reason']``.
     actor: str | None = None
     trust: float | None = None
+    # Claim-authority tier (#1256): categorical authority of the claim this event
+    # writes, ORTHOGONAL to ``trust`` (numeric confidence within a tier). See
+    # ``ClaimType``. ``evidence_ref`` (``EvidenceRef``) is what backs the claim;
+    # ``previous_claim_id`` chains a claim's lifecycle (promote/amend/revoke ->
+    # the event_id it supersedes). All nullable/additive: pre-#1256 rows and
+    # callers that don't supply them read back as None, exactly like actor/trust.
+    claim_type: str | None = None
+    evidence_ref: str | None = None
+    previous_claim_id: int | None = None
     # Tamper-evidence (#1078): per-event content hash (sha256 over the event's
     # own immutable fields), computed at insert by ``audit.event_content_hash``.
     # A pure function -- no prior-state read, so it imposes no insert-time

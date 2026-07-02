@@ -28,7 +28,7 @@ from goldenmatch.identity.model import (
 
 log = logging.getLogger("goldenmatch.identity")
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS identity_nodes (
@@ -86,16 +86,19 @@ CREATE INDEX IF NOT EXISTS idx_edges_pair   ON evidence_edges(record_a_id, recor
 CREATE INDEX IF NOT EXISTS idx_edges_run    ON evidence_edges(run_name);
 
 CREATE TABLE IF NOT EXISTS identity_events (
-    event_id     INTEGER PRIMARY KEY AUTOINCREMENT,
-    entity_id    TEXT NOT NULL,
-    kind         TEXT NOT NULL,
-    payload      TEXT,
-    run_name     TEXT,
-    dataset      TEXT,
-    actor        TEXT,
-    trust        REAL,
-    entry_hash   TEXT,
-    recorded_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    event_id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    entity_id         TEXT NOT NULL,
+    kind              TEXT NOT NULL,
+    payload           TEXT,
+    run_name          TEXT,
+    dataset           TEXT,
+    actor             TEXT,
+    trust             REAL,
+    claim_type        TEXT,
+    evidence_ref      TEXT,
+    previous_claim_id INTEGER,
+    entry_hash        TEXT,
+    recorded_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_events_entity ON identity_events(entity_id);
 CREATE INDEX IF NOT EXISTS idx_events_kind   ON identity_events(kind);
@@ -283,6 +286,12 @@ class IdentityStore:
             # DB. Old rows keep entry_hash=NULL and are hashed on the fly by the
             # seal/verify path.
             self._ensure_audit_columns()
+        if version < 5:
+            # v4 -> v5: claim-authority tier (#1256). Add the nullable
+            # claim_type / evidence_ref / previous_claim_id columns to the event
+            # log. PRAGMA-guarded ADD COLUMN, idempotent on fresh (already carry
+            # them from ``_SCHEMA``) and migrated DBs. Old rows read back None.
+            self._ensure_claim_columns()
         if version < SCHEMA_VERSION:
             self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
@@ -326,6 +335,26 @@ class IdentityStore:
             CREATE INDEX IF NOT EXISTS idx_audit_seals_dataset ON audit_seals(dataset);
             """
         )
+
+    def _ensure_claim_columns(self) -> None:
+        """Add the nullable claim-authority columns to identity_events if absent
+        (#1256): ``claim_type`` + ``evidence_ref`` (categorical authority tier +
+        typed evidence, orthogonal to ``trust``) and ``previous_claim_id`` (the
+        event this claim supersedes). PRAGMA-guarded ADD COLUMN, idempotent on
+        fresh and migrated databases; old rows read back None."""
+        cols = {r[1] for r in self._conn.execute("PRAGMA table_info(identity_events)")}
+        if "claim_type" not in cols:
+            self._conn.execute(
+                "ALTER TABLE identity_events ADD COLUMN claim_type TEXT"
+            )
+        if "evidence_ref" not in cols:
+            self._conn.execute(
+                "ALTER TABLE identity_events ADD COLUMN evidence_ref TEXT"
+            )
+        if "previous_claim_id" not in cols:
+            self._conn.execute(
+                "ALTER TABLE identity_events ADD COLUMN previous_claim_id INTEGER"
+            )
 
     def _pg_init_schema(self) -> None:
         ddl = """
@@ -394,6 +423,11 @@ class IdentityStore:
         );
         ALTER TABLE identity_events ADD COLUMN IF NOT EXISTS actor TEXT;
         ALTER TABLE identity_events ADD COLUMN IF NOT EXISTS trust DOUBLE PRECISION;
+        -- Claim-authority tier (#1256): categorical authority + typed evidence +
+        -- lifecycle chain, orthogonal to numeric ``trust``. Nullable/additive.
+        ALTER TABLE identity_events ADD COLUMN IF NOT EXISTS claim_type TEXT;
+        ALTER TABLE identity_events ADD COLUMN IF NOT EXISTS evidence_ref TEXT;
+        ALTER TABLE identity_events ADD COLUMN IF NOT EXISTS previous_claim_id BIGINT;
         -- Tamper-evidence (#1078): per-event content hash + seal chain table.
         ALTER TABLE identity_events ADD COLUMN IF NOT EXISTS entry_hash TEXT;
         CREATE INDEX IF NOT EXISTS idx_events_entity ON identity_events(entity_id);
@@ -901,12 +935,14 @@ class IdentityStore:
         self._exec(
             "INSERT INTO identity_events "
             "(entity_id, kind, payload, run_name, dataset, actor, trust, "
+            "claim_type, evidence_ref, previous_claim_id, "
             "entry_hash, recorded_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 event.entity_id, event.kind, payload, event.run_name,
-                event.dataset, event.actor, event.trust, event.entry_hash,
-                event.recorded_at.isoformat(),
+                event.dataset, event.actor, event.trust,
+                event.claim_type, event.evidence_ref, event.previous_claim_id,
+                event.entry_hash, event.recorded_at.isoformat(),
             ),
         )
         row = self._fetchone(
@@ -1160,6 +1196,9 @@ class IdentityStore:
             dataset=row["dataset"],
             actor=_row_get(row, "actor"),
             trust=_row_get(row, "trust"),
+            claim_type=_row_get(row, "claim_type"),
+            evidence_ref=_row_get(row, "evidence_ref"),
+            previous_claim_id=_row_get(row, "previous_claim_id"),
             entry_hash=_row_get(row, "entry_hash"),
             recorded_at=_to_dt(row["recorded_at"]),
             event_id=row["event_id"],
