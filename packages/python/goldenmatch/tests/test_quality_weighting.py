@@ -109,3 +109,35 @@ def test_dedupe_df_pipeline_runs_with_quality_weighting() -> None:
     # wiring/no-crash guard (the flip itself is locked by the test above).
     assert golden.height == 1
     assert golden["state"][0] in ("California", "Californa")
+
+
+def test_quality_scan_scoped_to_cluster_members(monkeypatch):
+    """The golden-stage cell_quality scan must run only over rows that get a
+    golden record (multi-member, non-oversized cluster members), NOT the whole
+    frame -- a singleton row never consumes a quality weight. Regression for the
+    full-frame scan that ran on every default dedupe."""
+    import goldenmatch.core.quality as q
+    from goldenmatch import dedupe_df
+
+    seen: dict[str, int] = {}
+    orig = q.compute_quality_scores
+
+    def _recording(df):
+        seen["height"] = df.height
+        return orig(df)
+
+    monkeypatch.setattr(q, "compute_quality_scores", _recording)
+
+    # 2 exact-email duplicate pairs (4 member rows) + 4 unique singletons.
+    df = pl.DataFrame({
+        "name": ["Ann Lee", "Ann Lee", "Bob Ray", "Bob Ray",
+                 "Cy Xu", "Dee Fo", "Ed Gu", "Fi Ho"],
+        "email": ["a@x.com", "a@x.com", "b@y.com", "b@y.com",
+                  "c@z.com", "d@w.com", "e@v.com", "f@u.com"],
+    })
+    res = dedupe_df(df)
+
+    # The dup pairs must have clustered, and the scan must have seen ONLY the
+    # 4 member rows -- not all 8 (which is what the pre-fix full-frame scan did).
+    assert res.clusters, "expected the exact-email dup pairs to cluster"
+    assert seen.get("height") == 4
