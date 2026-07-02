@@ -21,6 +21,8 @@ The F-beta `_score` makes the accept metric precision-tunable, but the caller ha
 
 ## Design
 
+**Note on the presence term:** `_score = relational_F_beta + presence.coverage` (when presence not None). `beta` shifts ONLY the relational term; the presence term is beta-independent and appears equally in both `_score(prop)` and `_score(base)`. So on the engineered/homograph corpus (presence is `None` there → `_score` is relational-only) the P/R-only frontier numbers reproduce exactly. If two scorecards had *differing* presence, the accept bool at a given beta would also reflect that (beta-independent) presence delta — the flip logic is unchanged, but the shown P/R-only numbers assume equal-or-None presence (which the box-test `_rel` helper builds). Also: at `beta==1.0` `_score` uses the STORED `relational.f1` while `beta!=1.0` recomputes F_beta from P/R — they agree when the stored f1 == 2PR/(P+R) (it does for these scorecards); a latent edge inherited from `_score`, not introduced here.
+
 ### 1. `_accept_frontier(base_sc, prop_sc, betas=(1.0, 0.5, 0.25)) -> dict[float, bool]`
 Pure helper in `substrate_suggest.py`:
 ```python
