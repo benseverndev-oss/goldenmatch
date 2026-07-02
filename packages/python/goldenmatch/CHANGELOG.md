@@ -6,8 +6,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [2.8.0] - 2026-07-02
+
+### Added
+- **Identity audit log: claim-authority tier + claim-lifecycle operations.** Events now carry a categorical `ClaimType` (`observation` / `inference` / `verified` / `directive`) — orthogonal to the numeric `trust` — plus a typed `EvidenceRef` and a `previous_claim_id` chain, so a reviewer can tell "an agent inferred this at 0.8" from "a tool verified this at 0.8". New lifecycle ops `promote_claim` / `amend_claim` / `revoke_claim` make an agent inference *becoming* durable shared truth an explicit, auditable event. All additive/nullable — the tamper-evidence hash stays byte-identical for pre-existing events. SQLite `v4→v5` migration + Postgres/Mongo + Alembic 0004. (#1383)
+
 ### Changed
 - **`goldenmatch dedupe <file>` is now non-interactive by default.** A bare `goldenmatch dedupe customers.csv` runs auto-config, writes golden records (a timestamped `*_golden.csv` in the current directory), and prints a summary — so the advertised "CSV in, 30 seconds, CSV out" is what actually happens. The interactive review TUI is now opt-in via **`--tui`** (previously it opened by default). `--no-tui` is still accepted as a no-op for back-compat. When no explicit output flag is given on the auto-config path, golden records are written by default (use `--output-all` / `--output-dir` to control, `--tui` to review). An explicit `--config` run keeps its exact prior behavior.
+- **Input validation on the `dedupe` CLI + ingest (break-it review).** A Windows-1252 / Latin-1 CSV is no longer silently lossy-decoded into replacement chars — non-UTF-8 files are detected, decoded as cp1252, and warned about (so `José Muñoz` survives instead of becoming mojibake in the golden record); explicit `--encoding cp1252`/`latin-1` now works too. `--anomaly-sensitivity` is validated + case-normalized (a miscased `Low` no longer silently inverts to the most-sensitive behavior); an unknown `--backend` is rejected instead of silently dropped; `--format` is validated at parse time (not after the whole run); structured non-tabular inputs (`.json`/`.xml`/`.yaml`) get a clear message; `--chunk-size`/`--preview-size` reject non-positive values. (#1390)
+
+### Fixed
+- **Config-suggestion "healer" production slowdown.** The default `dedupe_df` advisory path no longer runs the O(distinct²) goldencheck variant scan (`cell_quality`) over the full frame on every run whose free trigger fired — the scan is reserved for the opt-in `suggest=`/`heal=` paths. Instant mitigation without upgrading: `GOLDENMATCH_SUGGEST_ON_DEDUPE=0`. (#1385)
+
+### Performance
+- **Golden-stage quality-weighting scan scoped to cluster members.** `goldencheck.cell_quality` runs only over rows that actually get a golden record (multi-member, non-oversized cluster members) instead of the entire collected frame — much cheaper on real data, since singletons never consume a quality weight. (#1389)
+- **Throughput tier skips golden-record survivorship.** Lifts the 100k+ corpus ceiling for the `dedupe_df(throughput=...)` path, which consumes clusters, not canonical records. (#1382)
 
 ## [2.7.0] - 2026-07-02
 
