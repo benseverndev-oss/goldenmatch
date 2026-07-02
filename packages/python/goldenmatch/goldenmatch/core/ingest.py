@@ -2,14 +2,38 @@
 
 from __future__ import annotations
 
+import codecs
+import io
+import logging
 from pathlib import Path
 
 import polars as pl
 
 from goldenmatch.core._paths import safe_path
 
+logger = logging.getLogger(__name__)
+
 # Text-file extensions that should route through smart_load
 _TEXT_SUFFIXES = {".csv", ".txt", ".tsv", ".dat", ".tab", ".psv", ".log", ".asc"}
+
+
+def _is_probably_utf8(path: Path | str, sample_bytes: int = 1 << 16) -> bool:
+    """True if a leading sample of the file decodes as UTF-8.
+
+    Uses an incremental decoder with ``final=False`` so a multi-byte character
+    split at the sample boundary is buffered (not a false 'invalid'); only real
+    invalid bytes inside the sample flip it to False.
+    """
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(sample_bytes)
+    except OSError:
+        return True  # unreadable -> let the polars path surface the real error
+    try:
+        codecs.getincrementaldecoder("utf-8")().decode(head, final=False)
+        return True
+    except UnicodeDecodeError:
+        return False
 
 
 def load_file(
@@ -68,8 +92,33 @@ def load_file(
         # fast Polars scan_csv path (comma-delimited by default).
         if parse_mode == "auto" and (delimiter is not None or suffix == ".csv"):
             sep = delimiter or ","
-            enc = encoding or "utf8-lossy"
-            return pl.scan_csv(path, separator=sep, encoding=enc)
+            if encoding is not None:
+                # Caller was explicit. polars scan_csv only accepts utf8 /
+                # utf8-lossy; for any other Python codec (cp1252, latin-1, ...)
+                # decode via the codec and feed polars, so `--encoding cp1252`
+                # actually works instead of erroring on an unsupported literal.
+                if encoding in ("utf8", "utf8-lossy"):
+                    return pl.scan_csv(path, separator=sep, encoding=encoding)
+                text = Path(path).read_bytes().decode(encoding, errors="replace")
+                return pl.read_csv(io.StringIO(text), separator=sep).lazy()
+            if _is_probably_utf8(path):
+                # Fast lazy path for the common (valid UTF-8) case -- unchanged.
+                return pl.scan_csv(path, separator=sep, encoding="utf8-lossy")
+            # Non-UTF-8 file (typically a Windows-1252 / Latin-1 export from
+            # Excel or a legacy system). The old default silently lossy-decoded
+            # these, turning "José Muñoz" into U+FFFD replacement chars in the
+            # golden output -- silent corruption of a name-matching tool's own
+            # canonical record. Decode as cp1252 (the dominant real-world case)
+            # and WARN loudly instead. Explicit `encoding=` / `--encoding`
+            # overrides. This path materializes (non-UTF-8 files are typically
+            # small legacy exports); valid-UTF-8 files keep the lazy fast path.
+            logger.warning(
+                "%s is not valid UTF-8; decoding as Windows-1252 (cp1252). "
+                "Pass encoding=/--encoding to override if that is wrong.",
+                path,
+            )
+            text = Path(path).read_bytes().decode("cp1252", errors="replace")
+            return pl.read_csv(io.StringIO(text), separator=sep).lazy()
 
         # Otherwise route through smart_load
         from goldenmatch.core.smart_ingest import smart_load

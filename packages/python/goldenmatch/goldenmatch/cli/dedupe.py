@@ -144,6 +144,33 @@ def dedupe_cmd(
     # Parse file:source pairs
     parsed_files = [_parse_file_source(f) for f in files]
 
+    # Reject clearly-structured non-tabular inputs early with a helpful message.
+    # Without this a .json/.xml file is routed to the text loader and surfaces as
+    # a confusing "no data to configure on" instead of "this format isn't tabular".
+    _structured_suffixes = {".json", ".jsonl", ".ndjson", ".xml", ".yaml", ".yml"}
+    for _fp, _ in parsed_files:
+        _fp_str = str(_fp)
+        if "://" in _fp_str:
+            continue  # cloud URI -- let the connector decide
+        _suffix = Path(_fp_str).suffix.lower()
+        if _suffix in _structured_suffixes:
+            raise typer.BadParameter(
+                f"{_fp_str!r} looks like a structured non-tabular format "
+                f"({_suffix}). GoldenMatch dedupes tabular files "
+                "(CSV/TSV/Parquet/Excel); convert it to CSV first.",
+                param_hint="FILES",
+            )
+
+    # Positive-value guards on size flags -- a negative/zero value was silently
+    # accepted (benign on tiny data, but a negative chunk size on a real chunked
+    # run is undefined).
+    if chunk_size < 1:
+        raise typer.BadParameter("--chunk-size must be >= 1.", param_hint="--chunk-size")
+    if preview_size < 1:
+        raise typer.BadParameter(
+            "--preview-size must be >= 1.", param_hint="--preview-size"
+        )
+
     # Load config - from file, project settings, or auto-detect
     if config:
         try:
@@ -294,8 +321,29 @@ def dedupe_cmd(
     if llm_boost or llm_retrain:
         cfg.llm_boost = True
 
-    # Set backend from CLI flag
+    # Validate --format at parse time. It was only checked at WRITE time, so on a
+    # large dataset the user waited for the entire matching run and then failed at
+    # the last step with an unsupported-format error.
+    if format and format.strip().lower() not in {"csv", "parquet", "xlsx"}:
+        raise typer.BadParameter(
+            f"Unsupported output format {format!r}. Valid: csv, parquet, xlsx.",
+            param_hint="--format",
+        )
+
+    # Set backend from CLI flag (validate first -- an unknown value was silently
+    # accepted and dropped by the auto-planner, so a user opting into a scaling
+    # backend on a 100M-row run got no signal their choice wasn't honored).
     if backend:
+        _valid_backends = {
+            "default", "auto", "bucket", "chunked",
+            "ray", "duckdb", "datafusion", "polars-direct",
+        }
+        if backend.strip().lower() not in _valid_backends:
+            raise typer.BadParameter(
+                f"Unknown backend {backend!r}. "
+                "Valid: default, bucket, chunked, ray, duckdb.",
+                param_hint="--backend",
+            )
         cfg.backend = backend
 
     # Resolve column maps from config input.files section

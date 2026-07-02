@@ -56,6 +56,17 @@ def detect_anomalies(
         [{"row_id": 42, "column": "email", "type": "fake_email",
           "value": "test@test.com", "severity": "high", "reason": "..."}]
     """
+    # Normalize + validate the sensitivity enum. Before this, a miscased or
+    # typo'd value (e.g. "Low", "lo") silently fell through the low/medium
+    # branches to NO filtering -- i.e. the "high" (most-sensitive) behavior,
+    # the exact inverse of what a user asking for "low" wanted.
+    sensitivity = (sensitivity or "medium").strip().lower()
+    if sensitivity not in ("low", "medium", "high"):
+        raise ValueError(
+            f"Invalid anomaly sensitivity {sensitivity!r}; "
+            "use 'low', 'medium', or 'high'."
+        )
+
     cols = [c for c in df.columns if not c.startswith("__")]
     anomalies = []
 
