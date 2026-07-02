@@ -76,6 +76,8 @@ impl PyGraph {
             d.set_item("members", PyList::new(py, &e.members)?)?;
             let names: Vec<&str> = e.surface_names.iter().map(String::as_str).collect();
             d.set_item("surface_names", PyList::new(py, names)?)?;
+            let refs: Vec<&str> = e.source_refs.iter().map(String::as_str).collect();
+            d.set_item("source_refs", PyList::new(py, refs)?)?;
             out.append(d)?;
         }
         Ok(out)
