@@ -226,3 +226,91 @@ def test_score_substrate_assembles_a_b_gap():
     assert sb["er_f1_b"] < sb["er_f1_a"]              # build fragmented A -> B worse
     assert abs(sb["ab_gap"] - (sb["er_f1_a"] - sb["er_f1_b"])) < 1e-9
     assert sb["components"] == 2 and 0.0 <= sb["provenance"] <= 1.0
+
+
+# --- GLiNER entity-recall probe (gliner_probe_report) ---
+from erkgbench.substrate_eval import gliner_probe_report
+
+
+def _graph(entities, edges):
+    return {"entities": entities, "edges": edges}
+
+
+def test_probe_splits_ner_miss_from_edge_miss():
+    # gold A: aligned (node 1 has an in-doc edge). gold B: edge-miss (node 2 exists, no edge in its doc).
+    # gold C: ner-miss (no node matches its aliases anywhere).
+    entities = [
+        {"entity_id": 1, "canonical_name": "Apple", "surface_names": ["Apple"], "typ": "org"},
+        {"entity_id": 2, "canonical_name": "Tim Cook", "surface_names": ["Tim Cook"], "typ": "person"},
+    ]
+    edges = [{"subj": 1, "obj": 1, "predicate": "is", "source_refs": ["docA"]}]  # only docA has an edge
+    graph = _graph(entities, edges)
+    gold = [
+        ("Qa", "apple", "docA"),      # aligned (node 1, docA edge)
+        ("Qb", "tim cook", "docB"),   # edge-miss: node 2 exists but docB has no edge
+        ("Qc", "sundar pichai", "docC"),  # ner-miss: no node matches
+    ]
+    aliases = {"Qa": ["apple"], "Qb": ["tim cook"], "Qc": ["sundar pichai"]}
+    # GLiNER finds the edge-miss AND the ner-miss entity in their docs
+    gliner_by_doc = {"docB": {"Tim Cook"}, "docC": {"Sundar Pichai"}}
+    r = gliner_probe_report(graph, gold, aliases, gliner_by_doc)
+    assert r["n_gold"] == 3
+    assert r["n_missed"] == 2          # B and C
+    assert r["n_edge_miss"] == 1       # B
+    assert r["n_ner_miss"] == 1        # C
+    # the true prize: of the 1 ner-miss, GLiNER found 1
+    assert r["ner_recovered_frac"] == 1.0
+    # conflated context metric counts both missed that GLiNER matched
+    assert r["residual_recovered_frac"] == 1.0
+
+
+def test_probe_case_folds_gliner_surface():
+    # cased GLiNER surface must match a lowercased alias/gold set (guards false REFUTED).
+    graph = _graph([], [])
+    gold = [("Qx", "barack obama", "d1")]
+    aliases = {"Qx": ["barack obama"]}
+    r = gliner_probe_report(graph, gold, aliases, {"d1": {"Barack Obama"}})
+    assert r["gliner_recall"] == 1.0
+
+
+def test_probe_alias_and_substring_and_per_doc_match():
+    graph = _graph([], [])
+    gold = [
+        ("Qibm", "big blue", "d1"),        # matches via alias "ibm"
+        ("Qn", "thomas nabbes", "d2"),     # matches via substring "nabbes"
+        ("Qz", "zeta", "d3"),              # no gliner match
+    ]
+    aliases = {"Qibm": ["ibm", "big blue"], "Qn": ["thomas nabbes"], "Qz": ["zeta"]}
+    gliner_by_doc = {
+        "d1": {"IBM"},          # alias match
+        "d2": {"Nabbes"},       # substring match
+        "d3": {"Yeti"},         # unrelated -> junk, no gold match
+    }
+    r = gliner_probe_report(graph, gold, aliases, gliner_by_doc)
+    assert r["gliner_recall"] == 2 / 3
+    # per-doc: a d1 surface must not match a d3 gold
+    # junk: "Yeti" in d3 matches no d3 gold -> 1 junk of 3 total surfaces
+    assert r["junk_rate"] == 1 / 3
+
+
+def test_probe_junk_rate_all_match_is_zero():
+    graph = _graph([], [])
+    gold = [("Qa", "apple", "d1")]
+    aliases = {"Qa": ["apple"]}
+    r = gliner_probe_report(graph, gold, aliases, {"d1": {"Apple"}})
+    assert r["junk_rate"] == 0.0
+
+
+def test_probe_degenerate_guards():
+    graph = _graph([], [])
+    # empty gliner
+    r = gliner_probe_report(graph, [("Qa", "apple", "d1")], {"Qa": ["apple"]}, {})
+    assert r["gliner_recall"] == 0.0 and r["ner_recovered_frac"] == 0.0 and r["junk_rate"] == 0.0
+    # empty gold
+    r0 = gliner_probe_report(graph, [], {}, {"d1": {"Apple"}})
+    assert r0["n_gold"] == 0 and r0["residual_recovered_frac"] == 0.0
+    # all-aligned (|missed| == 0): one gold, one node with an in-doc edge
+    g2 = _graph([{"entity_id": 1, "canonical_name": "Apple", "surface_names": ["Apple"], "typ": "org"}],
+                [{"subj": 1, "obj": 1, "predicate": "is", "source_refs": ["d1"]}])
+    r2 = gliner_probe_report(g2, [("Qa", "apple", "d1")], {"Qa": ["apple"]}, {"d1": {"Apple"}})
+    assert r2["n_missed"] == 0 and r2["residual_recovered_frac"] == 0.0 and r2["ner_recovered_frac"] == 0.0
