@@ -1142,15 +1142,7 @@ jobs:
           # and bench-attribution paths to sys.path internally. No --fast-only:
           # the anchors' fast signals AND the anchor_person_match F1 floor are
           # both gated (anchor_person_match is 400 entities, F1 is seconds).
-          # TEMP (re-bless on native): produce the native baseline in CI, upload it,
-          # then this step reverts to `gate`. Remove before merge.
-          uv run python -m scripts.autoconfig_quality bless
-      - name: Upload re-blessed native scorecard (TEMP)
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
-        with:
-          name: reblessed-scorecard
-          path: scripts/autoconfig_quality/baselines/scorecard.json
-          retention-days: 1
+          uv run python -m scripts.autoconfig_quality gate
       - name: Quality scorecard summary
         if: always()
         shell: bash
