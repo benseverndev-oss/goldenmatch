@@ -133,6 +133,70 @@ _ID_PATTERNS = re.compile(
 )
 
 
+# Full-data cardinality threshold (#1351). cardinality_ratio + null_rate are
+# measured on the FULL column, not the 1k classification sample, because a small
+# sample systematically OVER-estimates cardinality_ratio (birthday /
+# coupon-collector effect) -- which used to promote moderate-cardinality
+# zip/phone columns to "identifier" and commit a standalone exact matchkey (~55%
+# over-merge). Below this row count use an EXACT n_unique on the full column;
+# at/above it fall back to Polars' HyperLogLog approx_n_unique (still on the FULL
+# column, never the sample). Env override follows the GOLDENMATCH_* knob
+# convention.
+_FULL_CARDINALITY_MAX_ROWS = 2_000_000
+
+# Data shapes whose cardinality promotion to "identifier" is governed by the
+# honest full-data ratio (#1351). Mirrors the scope of the promotion guard in
+# _classify_by_data -- used to gate the native-path demotion correction.
+_CARDINALITY_PROMOTION_SHAPES = frozenset({"phone", "zip", "numeric"})
+
+
+def _full_cardinality_max_rows() -> int:
+    """Row-count threshold for exact vs HyperLogLog full-column cardinality.
+
+    Env override ``GOLDENMATCH_FULL_CARDINALITY_MAX_ROWS``; a missing or malformed
+    value falls back to the module default (#1351)."""
+    raw = os.environ.get("GOLDENMATCH_FULL_CARDINALITY_MAX_ROWS")
+    if raw is None:
+        return _FULL_CARDINALITY_MAX_ROWS
+    try:
+        val = int(raw)
+    except (ValueError, TypeError):
+        return _FULL_CARDINALITY_MAX_ROWS
+    return val if val > 0 else _FULL_CARDINALITY_MAX_ROWS
+
+
+def _full_column_cardinality_null(
+    df: pl.DataFrame, col_name: str,
+) -> tuple[float, float] | None:
+    """Honest full-column ``(cardinality_ratio, null_rate)`` for #1351.
+
+    ``cardinality_ratio`` = n_unique(non-null, non-blank) / total_rows_including_nulls
+    -- the same definition as the sample-based estimate, measured on the FULL
+    column so it isn't inflated by sampling. Exact ``n_unique`` below
+    ``_full_cardinality_max_rows()``, HyperLogLog ``approx_n_unique`` at/above it.
+
+    Returns ``None`` on ANY failure -- cast/filter/n_unique can raise on exotic
+    dtypes (Object/Binary/List/Struct) -- so the caller falls back to the
+    sample-based estimate. This must never raise out of ``profile_columns``.
+    """
+    try:
+        series = df[col_name]
+        total_rows = series.len()
+        if total_rows == 0:
+            return 0.0, 0.0
+        null_rate = series.null_count() / total_rows
+        # Strip blanks consistently with the sample values filter (str(v).strip()).
+        non_null = series.drop_nulls().cast(pl.Utf8).str.strip_chars()
+        non_blank = non_null.filter(non_null.str.len_chars() > 0)
+        if total_rows >= _full_cardinality_max_rows():
+            unique = non_blank.approx_n_unique()
+        else:
+            unique = non_blank.n_unique()
+        return unique / total_rows, null_rate
+    except Exception:  # noqa: BLE001 -- exotic dtype; fall back to sample estimate
+        return None
+
+
 @dataclass
 class ColumnProfile:
     """Profile of a single column for auto-configuration."""
@@ -200,8 +264,16 @@ def _classify_by_name(col_name: str) -> str | None:
     return None
 
 
-def _classify_by_data(values: list[str]) -> tuple[str, float]:
-    """Phase 2: classify column by data profiling. Returns (type, confidence)."""
+def _classify_by_data(
+    values: list[str], *, cardinality_ratio: float | None = None,
+) -> tuple[str, float]:
+    """Phase 2: classify column by data profiling. Returns (type, confidence).
+
+    ``cardinality_ratio`` (#1351): the HONEST full-data ratio for the identifier
+    promotion. When provided it governs the promotion floor instead of the
+    sample recompute; when ``None`` (hand-built value lists, legacy callers) the
+    original sample recompute is used, so existing callers/tests are unchanged.
+    """
     if not values:
         return "string", 0.0
 
@@ -213,7 +285,13 @@ def _classify_by_data(values: list[str]) -> tuple[str, float]:
     # distinct names) as identifiers. Require a non-trivial sample (>=10)
     # so a handful of genuinely-unique zip/phone rows don't trip the guard.
     if data_type in ("phone", "zip", "numeric") and len(values) >= 10:
-        cardinality_ratio = len(set(values)) / len(values)
+        # #1351: prefer the HONEST full-data ratio the caller threaded in; only
+        # fall back to the sample recompute when it's absent (legacy callers).
+        card = (
+            cardinality_ratio
+            if cardinality_ratio is not None
+            else len(set(values)) / len(values)
+        )
         # S2a (spec 2026-06-22): identifier floor max(0.95, 1 - 1/sqrt(n)). At
         # scale the floor RISES above the old fixed 0.95 (a 10k-row 0.95-card
         # column is a high-entropy name, not an ID), and never drops below 0.95
@@ -222,7 +300,7 @@ def _classify_by_data(values: list[str]) -> tuple[str, float]:
         # behavior). math.sqrt is correctly-rounded IEEE 754 -> bit-identical to
         # Rust's .sqrt() (do NOT use n ** 0.5 -- pow isn't correctly-rounded).
         floor = max(0.95, 1.0 - 1.0 / math.sqrt(len(values)))
-        if cardinality_ratio >= floor:
+        if card >= floor:
             return "identifier", 0.9
 
     # Year detection: 4-digit integers in 1900..2100. Cheap blocking signal
@@ -335,16 +413,27 @@ def profile_columns(
         dtype = str(df[col_name].dtype)
 
         col_series = sample[col_name]
-        total_rows = col_series.len()
-        null_count = col_series.null_count()
-        null_rate = null_count / total_rows if total_rows > 0 else 0.0
 
+        # Type-classification value heuristics stay on the SAMPLE (regex/pattern
+        # matching legitimately trades accuracy for speed). #1351: cardinality
+        # and null_rate must be honest, so measure them on the FULL column below.
         values = [
             str(v) for v in col_series.drop_nulls().to_list()
             if v is not None and str(v).strip()
         ]
 
-        cardinality_ratio = len(set(values)) / total_rows if total_rows > 0 else 0.0
+        full_stats = _full_column_cardinality_null(df, col_name)
+        if full_stats is not None:
+            cardinality_ratio, null_rate = full_stats
+        else:
+            # Exotic dtype broke the full-column path -- fall back to the
+            # sample-based estimate (pre-#1351 behavior) rather than fail.
+            total_rows = col_series.len()
+            null_rate = col_series.null_count() / total_rows if total_rows > 0 else 0.0
+            cardinality_ratio = (
+                len(set(values)) / total_rows if total_rows > 0 else 0.0
+            )
+
         avg_len = sum(len(v) for v in values) / len(values) if values else 0.0
 
         col_stats.append((col_name, dtype, values, null_rate, cardinality_ratio, avg_len))
@@ -384,6 +473,34 @@ def profile_columns(
         profiles: list[ColumnProfile] = column_profiles_from_json(
             native_json, names_to_sample_values
         )
+
+        # #1351 NATIVE LANDMINE: the native classifier recomputes cardinality
+        # from `sample_values` and promotes numeric/zip/phone shapes to
+        # "identifier" off that SAMPLE cardinality -- ignoring the honest
+        # full-data `cardinality_ratio` we pass in. That defeats the full-data
+        # fix on the native path. We can't feed the honest ratio into the Rust
+        # promotion, so re-check every native "identifier" here: for a
+        # promotion-eligible data shape (phone/zip/numeric) whose HONEST
+        # full-data ratio is below the promotion floor, demote it to what the
+        # non-promotion classification says. Python-side only (no Rust change);
+        # a no-op when native already agreed with the honest ratio.
+        honest_ratios = {
+            col_name: cardinality_ratio
+            for col_name, _dtype, _values, _nr, cardinality_ratio, _al in col_stats
+        }
+        for prof in profiles:
+            if prof.col_type != "identifier":
+                continue
+            vals = names_to_sample_values.get(prof.name, [])
+            honest = honest_ratios.get(prof.name)
+            if honest is None or _guess_type(vals) not in _CARDINALITY_PROMOTION_SHAPES:
+                continue
+            demoted_type, demoted_conf = _classify_by_data(
+                vals, cardinality_ratio=honest,
+            )
+            if demoted_type != "identifier":
+                prof.col_type = demoted_type
+                prof.confidence = demoted_conf
     else:
         # Pure-Python classification path (unchanged).
         profiles = []
@@ -391,8 +508,11 @@ def profile_columns(
             # Phase 1: name heuristics
             name_type = _classify_by_name(col_name)
 
-            # Phase 2: data profiling
-            data_type, data_confidence = _classify_by_data(values)
+            # Phase 2: data profiling (#1351: thread the honest full-data ratio
+            # into the identifier promotion instead of a sample recompute).
+            data_type, data_confidence = _classify_by_data(
+                values, cardinality_ratio=cardinality_ratio,
+            )
 
             # Combine: name heuristics are authoritative for structural types
             # (date, geo) because data profiling frequently misclassifies them
