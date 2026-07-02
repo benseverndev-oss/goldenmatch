@@ -54,16 +54,44 @@ offline. gpt-free, deterministic. `GOLDENMATCH_NATIVE=0`.
 | engine | Pairwise-F1 (macro) | precision | recall | wall | note |
 |---|--:|--:|--:|--:|---|
 | `all_singletons` | 0.000 | – | 0.000 | 10s | trivial floor |
-| `text_only` (unresolved straw) | ~0.01 | ~1.0 | ~0.006 | slow | topical similarity ALONE |
+| `text_only` (unresolved straw) | 0.009 | 0.952 | 0.005 | 777s | topical similarity ALONE |
 | `all_one` | 0.375 | 0.256 | 1.000 | 10s | merge-everything floor |
 | `coauthor_only` | 0.440 | 0.824 | 0.332 | 18s | co-author Jaccard alone |
 | **`relational`** (co-author OR org+topic) | **0.452** | **0.844** | 0.352 | 799s | **headline** |
 
-Context: published toolkit baseline ≈ **0.89** Pairwise-F1, KDD Cup 2024 SOTA
-higher. **0.452 is a respectable record-linkage result that beats every naive
-baseline decisively** — the substrate claim ("resolved ≫ naive"), framed
-honestly, not a leaderboard win. (`text_only` full-valid finalizes ~0.01,
-matching the 5-name spike; the row is refreshed when it lands.)
+### How it stacks up against the published SND field
+
+Same corpus, same Pairwise-F1 metric ([OAG-Bench](https://arxiv.org/html/2402.15810v2), [WhoIsWho KDD'23](https://arxiv.org/pdf/2302.11848)):
+
+| method | Pairwise-F1 | what it is |
+|---|--:|---|
+| `all_one` floor | 0.375 | merge everything |
+| **goldenmatch `relational`** | **0.452** | co-author Jaccard, zero-tuning |
+| IUAD | 0.616 | published baseline |
+| LAND | 0.611 | published baseline |
+| G/L-Emb | 0.635 | graph + local embeddings baseline |
+| SND-all (toolkit) | 0.892 | full reference pipeline |
+| KDD Cup 2024 winner | 0.891 | tuned competition system |
+
+**Honest placement: below the field.** A first-pass, hand-thresholded application
+of a general-purpose ER engine lands under even the weakest published SND
+baselines (~0.61) and well under the ~0.89 full pipelines. It is NOT competitive
+with methods purpose-built and tuned for SND — and this benchmark does not claim
+to be. Two things make the gap the *right* kind:
+
+- **The published research validates the axis.** OAG-Bench finds Word2Vec beats
+  OAG-BERT and semantic embeddings alone underperform -- the discriminative signal
+  is *relational*, not semantic. Our co-author-first design is aimed correctly; it
+  is under-featured, not mis-directed.
+- **The gap is a concrete Phase-1 list**, not a redirection: per-name adaptive
+  clustering (learned/DBSCAN distance per block) instead of one global Jaccard
+  threshold; co-author *graph* structure fused with `record_embedding` (already in
+  goldenmatch, unwired here); external OAG org/venue data (na-v3's `org` is empty).
+
+The claim this benchmark DOES support -- **resolved ≫ naive** (0.452 vs text-only
+0.009 and all-one 0.375, with the co-author signal carrying 97% of the result) --
+holds decisively, on a corpus we did not build. That is the substrate claim,
+framed honestly; "beat the SND leaderboard" was never the goal and we are not there.
 
 ### The finding
 
