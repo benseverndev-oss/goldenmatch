@@ -470,6 +470,8 @@ def _dispatch(name: str, args: dict) -> dict[str, Any]:
             {
                 "event_id": e.event_id, "entity_id": e.entity_id, "kind": e.kind,
                 "actor": e.actor, "trust": e.trust,
+                "claim_type": e.claim_type, "evidence_ref": e.evidence_ref,
+                "previous_claim_id": e.previous_claim_id,
                 "recorded_at": e.recorded_at.isoformat() if e.recorded_at else None,
                 "run_name": e.run_name, "dataset": e.dataset, "payload": e.payload,
             }
