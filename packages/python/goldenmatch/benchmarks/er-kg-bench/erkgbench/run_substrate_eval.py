@@ -65,21 +65,58 @@ def _build_graph(corpus) -> dict:
     return _build_graph_from_documents(corpus.documents)
 
 
+def _wiki_build():
+    """Load the wiki corpus and build the graph with the current env config. Returns
+    (documents, gold, qid_aliases, graph) so both run_wiki and the GLiNER probe reuse it."""
+    from erkgbench.qa_e2e.wiki_corpus import load_wiki_corpus
+
+    documents, gold, qid_aliases = load_wiki_corpus()
+    graph = _build_graph_from_documents(documents)
+    return documents, gold, qid_aliases, graph
+
+
 def run_wiki() -> dict:
     """Level 2: build over REAL Wikipedia prose (committed snapshot), align gold to nodes by SURFACE+DOC
     (no engineered doc-id oracle), and score R(B)/P(B) + alignment coverage. Baseline-vs-`name_ci` is
     selected by `GOLDENGRAPH_XDOC_KEY` as usual. No ambiguity dial -- real prose has its own variance."""
     from erkgbench import metrics
-    from erkgbench.qa_e2e.wiki_corpus import load_wiki_corpus
 
-    documents, gold, qid_aliases = load_wiki_corpus()
-    graph = _build_graph_from_documents(documents)
+    documents, gold, qid_aliases, graph = _wiki_build()
     clustering = substrate_eval.align_real_mentions_to_nodes_aliased(graph, gold, qid_aliases)
     coverage = substrate_eval.real_alignment_coverage_aliased(graph, gold, qid_aliases)
     b = metrics.score([m[0] for m in gold], clustering)
     coh = substrate_eval.graph_coherence(graph)
     return {"er_r_b": b.recall, "er_p_b": b.precision, "er_f1_b": b.f1, "coverage": coverage,
             "n_docs": len(documents), "n_gold": len(gold), "components": coh["components"]}
+
+
+def _gliner_by_doc(documents, *, threshold: float) -> dict:
+    """Run GLiNER per-doc (whole lead), returning {base_doc_id: set(entity surfaces)}. GLiNER loads once."""
+    from goldengraph.extract_local import gliner_extractor
+
+    from erkgbench.substrate_eval import _base_doc_id
+
+    extractor = gliner_extractor(threshold=threshold)
+    out: dict[str, set[str]] = {}
+    for d in documents:
+        ex = extractor(d.text)
+        out[_base_doc_id(d.id)] = {m.name for m in ex.mentions}
+    return out
+
+
+def run_wiki_gliner_probe() -> dict:
+    """GLiNER entity-recall probe: build best-config graph, run GLiNER per-doc, report NER-addressable
+    recovery of the residual. Threshold from GOLDENGRAPH_GLINER_THRESHOLD (default 0.4)."""
+    documents, gold, qid_aliases, graph = _wiki_build()
+    threshold = float(os.environ.get("GOLDENGRAPH_GLINER_THRESHOLD", "0.4") or "0.4")
+    try:
+        gbd = _gliner_by_doc(documents, threshold=threshold)
+    except Exception as e:  # noqa: BLE001 -- fail-soft: still report the LLM baseline
+        print(f"[gliner-probe] GLiNER failed ({e!r}); reporting empty gliner_by_doc", flush=True)
+        gbd = {}
+    r = substrate_eval.gliner_probe_report(graph, gold, qid_aliases, gbd)
+    r.update(n_docs=len(documents), threshold=threshold)
+    return r
 
 
 def run_one(seed: int, ambiguity: float) -> dict:
@@ -133,7 +170,37 @@ def main() -> None:
     ap.add_argument("--ambiguity", type=float, nargs="+", default=[0.0, 0.3, 0.6])
     ap.add_argument("--corpus", choices=["engineered", "wiki"], default="engineered")
     ap.add_argument("--out-md", default="SUBSTRATE.md")
+    ap.add_argument("--gliner-probe", action="store_true",
+                    help="run the GLiNER entity-recall probe instead of the plain wiki eval")
     args = ap.parse_args()
+
+    _probe = args.gliner_probe or os.environ.get("GOLDENGRAPH_GLINER_PROBE", "") not in ("", "0", "false")
+    if args.corpus == "wiki" and _probe:
+        r = run_wiki_gliner_probe()
+        print(
+            f"[gliner-probe] thr={r['threshold']} gliner_recall={r['gliner_recall']:.4f} "
+            f"llm_coverage={r['llm_coverage']:.4f} n_missed={r['n_missed']} "
+            f"ner_miss={r['n_ner_miss']} edge_miss={r['n_edge_miss']} "
+            f"NER_recovered={r['ner_recovered_frac']:.4f} residual_recovered={r['residual_recovered_frac']:.4f} "
+            f"junk_rate={r['junk_rate']:.4f}",
+            flush=True,
+        )
+        md = (
+            "# GLiNER Entity-Recall Probe (wiki)\n\n"
+            "| threshold | gliner_recall | llm_coverage | n_missed | ner_miss | edge_miss | "
+            "NER_recovered | residual_recovered | junk_rate |\n"
+            "|---|---|---|---|---|---|---|---|---|\n"
+            f"| {r['threshold']} | {r['gliner_recall']:.4f} | {r['llm_coverage']:.4f} | {r['n_missed']} | "
+            f"{r['n_ner_miss']} | {r['n_edge_miss']} | {r['ner_recovered_frac']:.4f} | "
+            f"{r['residual_recovered_frac']:.4f} | {r['junk_rate']:.4f} |\n\n"
+            "NER_recovered = of the NER-miss gold (entity absent from the graph), share GLiNER surfaces. "
+            "residual_recovered conflates NER-miss + edge-miss (context only). junk_rate is inflated by "
+            "wikilink-only gold.\n"
+        )
+        with open(args.out_md, "w", encoding="utf-8") as fh:
+            fh.write(md)
+        print("\n" + md, flush=True)
+        return
 
     if args.corpus == "wiki":
         r = run_wiki()
