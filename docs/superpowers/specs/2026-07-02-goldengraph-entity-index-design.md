@@ -28,26 +28,35 @@ New module `goldengraph/entity_index.py`:
 class EntityIndex:
     """A persisted ANN index over entity canonical-name embeddings, keyed by entity_id. Built ONCE
     (embed all names in batches), queried per-request without re-embedding the corpus. Wraps
-    goldenmatch's ANNBlocker (FAISS IndexFlatIP + numpy fallback)."""
+    goldenmatch's ANNBlocker (FAISS IndexFlatIP + numpy fallback). EntityIndex OWNS the L2-normalized
+    embedding array (`self._corpus`) + `self._row_to_entity_id`; ANNBlocker is a rebuildable view over
+    that array, so nothing reaches into ANNBlocker's private state."""
 
     @classmethod
-    def build(cls, entities, embedder, *, top_k=20) -> "EntityIndex":
+    def build(cls, entities, embedder, *, top_k=50) -> "EntityIndex":
         # entities: iterable of {"entity_id", "canonical_name", "typ", ...} (e.g. slice_graph.entities()).
         # Filter to real entity nodes (typ not startswith "literal:", non-empty name) -- same rule as
-        # seed_by_query. Embed all names ONCE (batched via embedder.embed), L2-normalize,
-        # ANNBlocker.build_index. Keep row_to_entity_id: list[int] parallel to the corpus rows.
+        # seed_by_query. Embed all names ONCE (batched via embedder.embed), L2-normalize -> self._corpus.
+        # Keep row_to_entity_id: list[int] parallel to the corpus rows. Construct ANNBlocker(top_k=top_k)
+        # and build_index(self._corpus). `top_k` is the index CAPACITY (max neighbors any query can ask).
 
     def query(self, query: str, embedder, *, k=5) -> list[int]:
-        # embed the QUERY only (one call), ANNBlocker.query_one, map rows -> entity_ids, top-k, dedup.
+        # embed the QUERY only (one call), ANNBlocker.query_one -> [(row, score)], map rows->entity_ids,
+        # take the top k. REQUIRES k <= top_k (query_one caps at the construction-time top_k); raise
+        # ValueError if k > self._top_k rather than silently truncate.
 
-    def save(self, path) -> None: ...   # faiss.write_index (or np.save the corpus) + np.save row_to_entity_id
+    def save(self, path) -> None:
+        # Backend-agnostic (identical on faiss + numpy): np.save the corpus + row_to_entity_id, write a
+        # meta.json (dim, top_k). NO faiss.write_index (that would reach into ANNBlocker._index).
     @classmethod
-    def load(cls, path) -> "EntityIndex": ...
+    def load(cls, path) -> "EntityIndex":
+        # np.load corpus + row_to_entity_id, read meta, ANNBlocker(top_k).build_index(corpus).
     def __len__(self) -> int: ...
 ```
 - **Filtering** mirrors `seed_by_query`: skip `typ` starting `literal:` and empty/whitespace names (embedding a bare value 400s the provider batch — the exact bug seed_by_query documents).
-- **Normalization:** L2-normalize both corpus and query so `IndexFlatIP` inner product == cosine (ANNBlocker's contract).
-- **Persistence:** `save`/`load` so SP2 doesn't re-embed 1M names every run (the expensive part). FAISS path = `faiss.write_index`; numpy-fallback path = `np.save` the corpus; both + `np.save(row_to_entity_id)`. A small `meta.json` records which backend + dim.
+- **Normalization:** L2-normalize the corpus (in `build`) and the query (in `query`) so `IndexFlatIP` inner product == cosine (`ANNBlocker` does NOT normalize internally; the numpy fallback ranks by raw IP, so normalized inputs make both paths return cosine ranking identically).
+- **`k <= top_k` contract:** `ANNBlocker.query_one` returns at most the construction-time `top_k`; `query` validates `k <= self._top_k` and raises `ValueError` otherwise (no silent truncation). `build` defaults `top_k=50` (ample retrieval capacity); raise it for larger-recall runs.
+- **`EntityIndex` owns the array:** `save`/`load` operate on `self._corpus` (the normalized embeddings `EntityIndex` computed) — backend-agnostic, no `faiss.write_index`, no private-attr access. `load` rebuilds the `ANNBlocker` from the saved corpus. This is why SP2 can skip re-embedding 1M names every run.
 
 ### Retrieval seam
 `seed_by_query(slice_graph, query, embedder, *, k=5, index=None)` gains an optional `index`:
@@ -62,7 +71,8 @@ class EntityIndex:
 - `build_and_query_topk` — 4 entities with distinct stub vectors; `query` returns the nearest entity_ids in order.
 - `query_maps_rows_to_entity_ids` — non-contiguous entity_ids (e.g. 5, 1, 99) → `query` returns entity_ids, not row indices.
 - `build_filters_literals_and_empty` — a `literal:`-typed node and an empty-name node are excluded from the index (mirrors seed_by_query).
-- `query_embeds_query_only` — a counting stub embedder: `build` embeds N names once; each `query` makes exactly ONE embed call (the query), NOT N (the anti-regression for the whole sub-project).
+- `query_embeds_query_only` — a counting stub embedder: after `build`, each `query` makes exactly ONE `embed()` call (the query), NOT N (the anti-regression for the whole sub-project). Count ONLY query-phase calls — `build` may make >1 `embed()` call (the embedder batches at `_MAX_EMBED_BATCH`), so don't assert a total across build+query.
+- `query_rejects_k_above_capacity` — `query(k=100)` on an index built with `top_k=50` raises `ValueError` (no silent truncation).
 - `save_load_roundtrip` — `build` → `save` → `load` → `query` returns the same top-k (numpy-backend path; the faiss path is exercised in SP2/CI where faiss is installed).
 - `empty_index_returns_empty` — no eligible entities → `query` returns `[]`.
 - `seed_by_query_uses_index_when_given` — `seed_by_query(graph, q, emb, index=idx)` calls `idx.query` and does NOT re-embed the graph (counting stub confirms one embed call); `index=None` preserves the current path.
