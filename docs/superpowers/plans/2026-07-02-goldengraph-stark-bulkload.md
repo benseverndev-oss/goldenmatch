@@ -493,7 +493,7 @@ def load_stark_kb(name: str):
     """Return (nodes, edges, queries). `name` in {"prime","amazon","mag"}.
     nodes: list of (stark_id:str, name:str, typ:str).
     edges: list of (subj_stark_id:str, predicate:str, obj_stark_id:str).
-    queries: list of (query_text:str, gold_stark_ids:set[str]).
+    queries: list of (query_text:str, gold_stark_ids:set[int]).  # ints -- match index/entity_id
 
     Uses the `stark_qa` package (SKB loader + QA split) when available; that is the
     canonical STaRK data path. The node's display name is title/name if present else
@@ -513,7 +513,7 @@ def load_stark_kb(name: str):
         for (s, r, o) in skb.get_tuples()   # (head, relation, tail)
     ]
     qa = load_qa(name)
-    queries = [(row["query"], {str(a) for a in row["answer_ids"]}) for row in qa]
+    queries = [(row["query"], {int(a) for a in row["answer_ids"]}) for row in qa]
     return nodes, edges, queries
 ```
 
@@ -522,10 +522,14 @@ NOTE for the implementer: the exact `stark_qa` API names (`load_skb`, `get_tuple
 - [ ] **Step 2: Implement `evaluate` (one arm over the query set)**
 
 ```python
-def evaluate(index, slice_graph, eid_to_stark, queries, embedder, *, arm: str,
-             sample: int | None = None) -> dict:
-    """Run one retrieval arm over `queries`, translate view-local ids -> stark ids
-    via `eid_to_stark`, return mean metrics + timing. `arm` in {"dense","graph"}."""
+def evaluate(index, slice_graph, stark_to_eid, eid_to_stark, queries, embedder, *,
+             arm: str, sample: int | None = None) -> dict:
+    """Run one retrieval arm over `queries`, return mean metrics + timing. `arm` in
+    {"dense","graph"}. The index returns STARK ids (entity_id=int(stark_id) at build
+    time), so Arm A needs no translation and covers ALL nodes. Arm B walks the STORE
+    (as_of().query -- the thing under test), translating stark<->slice-local ids only
+    at the walk boundary. `stark_to_eid`/`eid_to_stark` cover edge-endpoint nodes
+    only, which is exactly the set that has neighbors."""
     from erkgbench.stark_metrics import dedup_first_seen, mean_metrics, metrics
 
     qs = queries[:sample] if sample else queries
@@ -533,16 +537,16 @@ def evaluate(index, slice_graph, eid_to_stark, queries, embedder, *, arm: str,
     for text, gold in qs:
         t0 = time.perf_counter()
         if arm == "dense":
-            local_ids = index.query(text, embedder, k=20)
+            ranked = index.query(text, embedder, k=20)               # stark ids already
         elif arm == "graph":
-            seeds = index.query(text, embedder, k=5)
-            neigh = [e["entity_id"] for e in _neighbors(slice_graph, seeds)]
-            local_ids = dedup_first_seen([*seeds, *neigh])
+            seeds = index.query(text, embedder, k=5)                 # stark ids
+            seed_eids = [stark_to_eid[s] for s in seeds if s in stark_to_eid]
+            nbr = [eid_to_stark[e["entity_id"]] for e in _neighbors(slice_graph, seed_eids)]
+            ranked = dedup_first_seen([*seeds, *nbr])
         else:
             raise ValueError(f"unknown arm {arm!r}")
         latencies.append(time.perf_counter() - t0)
-        ranked = [eid_to_stark[i] for i in local_ids if i in eid_to_stark]
-        per_query.append(metrics(ranked, gold))
+        per_query.append(metrics(ranked, gold))                      # gold: int stark ids
     agg = mean_metrics(per_query)
     lat = sorted(latencies)
     agg["latency_ms_mean"] = 1000 * sum(lat) / (len(lat) or 1)
@@ -551,13 +555,14 @@ def evaluate(index, slice_graph, eid_to_stark, queries, embedder, *, arm: str,
     return agg
 
 
-def _neighbors(slice_graph, seeds):
-    """1-hop neighbor entity dicts of `seeds` on the slice. `query(ids, 1)` returns
-    {'entities':[...], 'edges':[...]}; the entities are seeds ++ their neighbors."""
-    if not seeds:
+def _neighbors(slice_graph, seed_eids):
+    """1-hop neighbor entity dicts of `seed_eids` (view-local ids) on the slice.
+    `query(ids, 1)` returns {'entities':[...], 'edges':[...]}; entities are the seeds
+    ++ their neighbors, so drop the seeds themselves."""
+    if not seed_eids:
         return []
-    res = slice_graph.query(list(seeds), 1)
-    seed_set = set(seeds)
+    res = slice_graph.query(list(seed_eids), 1)
+    seed_set = set(seed_eids)
     return [e for e in res["entities"] if e["entity_id"] not in seed_set]
 ```
 
@@ -580,12 +585,13 @@ git commit -m "feat(erkgbench): STaRK HF loader + dense/graph arm evaluator"
 The function (runs on the Modal box):
 1. `nodes, edges, queries = load_stark_kb(kb)`  # `kb` default "prime"
 2. `store = goldengraph_native._native.PyStore()`; time `bulk_load(store, nodes, edges)` → **ingest wall + peak RSS**. On MemoryError (single-batch OOM), re-run with `chunk_edges` and RECORD the node/edge count at the ceiling — that is a finding, not a silent fallback.
-3. `slice_graph = store.as_of(_BIG, _BIG)`
-4. `eid_to_stark = {e["entity_id"]: e["source_refs"][0] for e in slice_graph.entities() if e["source_refs"]}`
-5. `index = EntityIndex.build(slice_graph.entities(), embedder)` → **index-build wall + peak RSS**
-6. `dense = evaluate(index, slice_graph, eid_to_stark, queries, embedder, arm="dense", sample=N)`
-7. `graph = evaluate(..., arm="graph", sample=N)`
-8. Print a numbers table: `n_nodes / n_edges / n_dropped_edges / n_batches`, ingest wall, index-build wall, per-query mean+p95 latency, peak RSS, and the dense-vs-graph metric rows.
+3. **Index over ALL nodes (not the slice — isolated nodes must stay in the dense baseline):**
+   `index = EntityIndex.build([{"entity_id": int(sid), "canonical_name": name, "typ": typ} for sid, name, typ in nodes], embedder)` → **index-build wall + peak RSS**. `entity_id=int(stark_id)` so `query()` returns stark ids directly.
+4. `slice_graph = store.as_of(_BIG, _BIG)`  (for the Arm-B store walk only)
+5. `stark_to_eid = {int(e["source_refs"][0]): e["entity_id"] for e in slice_graph.entities() if e["source_refs"]}`; `eid_to_stark = {v: k for k, v in stark_to_eid.items()}`
+6. `dense = evaluate(index, slice_graph, stark_to_eid, eid_to_stark, queries, embedder, arm="dense", sample=N)`
+7. `graph = evaluate(index, slice_graph, stark_to_eid, eid_to_stark, queries, embedder, arm="graph", sample=N)`
+8. Print a numbers table: `n_nodes / n_edges / n_dropped_edges / n_batches`, count of ISOLATED nodes (`n_nodes - len(stark_to_eid)`, the honesty caveat), ingest wall, index-build wall, per-query mean+p95 latency, peak RSS, and the dense-vs-graph metric rows.
 
 Embedder: a real goldenmatch embedding provider (`GoldenmatchEmbedder("local")` or a GPU provider on the box). PRIME first with a query `sample` (e.g. 200) to keep the first run cheap.
 
@@ -623,3 +629,4 @@ git commit -m "feat(bench): Modal STaRK feasibility entry + PRIME verdict"
 - **The parity test (Task 3) is load-bearing:** chunked and single-batch MUST produce identical graph state, or the OOM fallback silently changes results. Do not weaken it.
 - **`stark_qa` accessor names may drift** by version — the mapping contract is fixed; confirm the exact attribute names against the installed package when building Task 5.
 - **OOM at single-batch AMAZON is an expected possible finding**, not a failure — record the ceiling and switch to `chunk_edges`.
+- **`as_of()` surfaces edge-endpoint nodes only** (store.rs:412-432) — isolated nodes vanish from `slice_graph.entities()`. This is WHY the index is built over the full `nodes` list (Task 6 step 3), not the slice: a slice-built index would silently drop isolated nodes from the dense baseline and understate Recall@20. The Task 2/3 tests use all-connected fixtures so their slice-based assertions are unaffected; report the isolated-node count in the Task-6 verdict so the numbers stay honest.

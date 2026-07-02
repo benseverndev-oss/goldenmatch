@@ -94,47 +94,54 @@ so `append`'s overlap-merge re-resolves them to the id minted in the node batch
   - Hit@k = 1 if any gold id in the top-k, else 0 (mean over queries).
   - Recall@20 = |gold ∩ top-20| / |gold|.
   - MRR = 1 / rank of the first gold id (0 if none in the ranking).
-- `evaluate(index, slice_graph, eid_to_stark, queries, embedder, *, arm)` runs one
-  retrieval arm over the query set, translates each arm's view-local ids back to
-  stark ids via `eid_to_stark`, and returns the mean metric dict + timing.
+- `evaluate(index, slice_graph, stark_to_eid, eid_to_stark, queries, embedder, *, arm)`
+  runs one retrieval arm over the query set and returns the mean metric dict +
+  timing. Arm A (dense) works directly in stark-id space (the index returns stark
+  ids); Arm B (graph) translates stark->slice-local at the walk boundary and back
+  (see §3).
 
-Node ids in STaRK are integers; the adapter stringifies them for `record_keys` /
-`source_refs`. The retrieval id space is NOT the stark id (see §3) -- it is the
-`as_of` slice's view-local `EntityId`, and a single `eid_to_stark` map recovered
-from the slice translates both arms' outputs to stark ids for scoring.
+Node ids in STaRK are integers; the adapter keeps them as ints for `entity_id` and
+gold, and stringifies them for `record_keys` / `source_refs` (opaque store keys).
 
 ### 3. Retrieval arms + measurement — driven from the adapter / a Modal entry
 
-**Id spaces (the correction that makes Arm B runnable).** There are THREE:
-the stark id (gold answers), the store's minted `StableId`, and the per-slice
+**Id spaces + the isolated-node honesty fix.** There are THREE id spaces: the
+stark id (gold answers, ints), the store's minted `StableId`, and the per-slice
 **view-local `EntityId`** that `as_of` assigns in ascending `StableId` order
-(store.rs:426-432; `embed.py::query` warns ids are slice-specific). Graph
-expansion (`as_of().query(seeds,1)`) only works in the view-local space, so the
-index MUST be built in that space, not on stark ids.
+(store.rs:426-432; `embed.py::query` warns ids are slice-specific). Critically,
+`as_of` builds its entity set from resolved EDGE ENDPOINTS only (store.rs:412-432)
+-- an **isolated** node (no edges) is absent from `slice_graph.entities()`. So the
+index MUST NOT be built from the slice: that would silently drop every isolated
+node from even the dense baseline, handicapping Arm A vs a real dense retriever and
+understating Recall@20 for isolated-node gold answers. A spike that cripples its
+own baseline is dishonest.
 
-Take ONE slice `slice_graph = store.as_of(BIG, BIG)`. Build `EntityIndex` over
-`slice_graph.entities()` (so `entity_id` = view-local `EntityId`,
-`canonical_name` = node name). Build `eid_to_stark = {e["entity_id"]:
-e["source_refs"][0] for e in slice_graph.entities() if e["source_refs"]}` from the
-SAME slice -- the stark id rides through on `source_refs` (lib.rs:79-80 exposes it;
-the loader stamps `source_refs=[stark_id]`). The map spans the FULL slice (a
-superset of the index's rows, which drop literal/empty-name nodes) so Arm B
-neighbors that are stored-but-unindexed still translate. The `if e["source_refs"]`
-guard keeps it robust to a source-ref-less node (a retrieved id with no mapping is
-simply skipped from the ranked list, never an `IndexError`). Both arms retrieve view-local ids and map to
-stark ids via `eid_to_stark` before `metrics(...)`.
+**Build the index over the FULL node list** (all N nodes, not the slice), with
+`entity_id = int(stark_id)` and `canonical_name = node name`. Then
+`index.query(...)` returns stark ids directly -- Arm A needs no translation and
+covers every node. Arm B still walks the **store** (the thing under test),
+translating only at the walk boundary:
 
-- **Arm A — dense baseline:** `index.query(q, embedder, k=20)` -> view-local ids
-  -> `eid_to_stark` -> compare gold. Pure vector retrieval; the graph contributes
+- `slice_graph = store.as_of(BIG, BIG)` (one slice).
+- `stark_to_eid = {int(e["source_refs"][0]): e["entity_id"] for e in slice_graph.entities() if e["source_refs"]}` and its inverse
+  `eid_to_stark = {v: k for k, v in stark_to_eid.items()}` (stark id rides through
+  on `source_refs`; lib.rs:79-80 exposes it; the loader stamps
+  `source_refs=[stark_id]`). These cover only edge-endpoint nodes -- exactly the
+  nodes that HAVE neighbors, which is all Arm B needs.
+
+- **Arm A — dense baseline:** `index.query(q, embedder, k=20)` -> stark ids ->
+  compare gold. Pure vector retrieval over ALL nodes; the graph contributes
   nothing. The "vectors alone" number.
-- **Arm B — graph-expanded:** `seeds = index.query(q, embedder, k=5)` (view-local),
-  then 1-hop expansion `slice_graph.query(seeds, 1)` on the SAME slice; rank
-  `seeds ++ neighbors` **deduped preserving first-seen order** (a neighbor equal to
-  a seed must not occupy a second rank slot -- an undeduped duplicate can push a
-  distinct gold id past position 20 and understate Recall@20), map via
-  `eid_to_stark`, compare gold. This is the graph's value-add -- answers reachable
-  by a relation but not textually near the query. (Equivalent to
-  `ask(entity_index=index)`, which already seeds + walks one slice.)
+- **Arm B — graph-expanded:** `seeds = index.query(q, embedder, k=5)` (stark ids);
+  `seed_eids = [stark_to_eid[s] for s in seeds if s in stark_to_eid]` (an isolated
+  seed has no slice eid -> no neighbors, correctly); 1-hop expansion
+  `slice_graph.query(seed_eids, 1)` on the store; neighbor eids -> stark via
+  `eid_to_stark`; rank `seeds ++ neighbor_stark_ids` **deduped preserving
+  first-seen order** (a neighbor equal to a seed must not occupy a second rank slot
+  -- an undeduped duplicate can push a distinct gold id past position 20 and
+  understate Recall@20); compare gold. This is the graph's value-add -- answers
+  reachable by a relation but not textually near the query, retrieved THROUGH the
+  store's `as_of`+`query`.
 
 Captured per run: ingest wall, `EntityIndex.build` wall, mean/95p per-query
 latency, peak RSS (via `resource`/`tracemalloc` or a Modal memory sample), and
@@ -156,14 +163,17 @@ PRIME first; AMAZON is the same entry with `--kb amazon` once PRIME is clean.
 STaRK HF download
   -> load_stark_kb(name) -> (nodes, edges, queries)
   -> bulk_load(store, nodes, edges)         # StoreBatch -> store.append  [MEASURE ingest, RAM]
-  -> slice_graph = store.as_of(BIG, BIG)    # one view-local id space
-  -> eid_to_stark = {e["entity_id"]: e["source_refs"][0] for e in slice_graph.entities()}
-  -> index = EntityIndex.build(slice_graph.entities(), embedder)  # embed names once [MEASURE build, RAM]
+  -> index = EntityIndex.build([{entity_id:int(sid),canonical_name:name,typ} for ALL nodes], embedder)  # [MEASURE build, RAM]
+  -> slice_graph = store.as_of(BIG, BIG)    # for the Arm-B store walk
+  -> stark_to_eid = {int(e["source_refs"][0]): e["entity_id"] for e in slice_graph.entities() if e["source_refs"]}
+     eid_to_stark = {v: k for k, v in stark_to_eid.items()}
   -> for q in queries:                                             [MEASURE latency]
-       Arm A: ids = index.query(q, embedder, k=20)
-       Arm B: seeds = index.query(q, embedder, k=5); ids = seeds ++ slice_graph.query(seeds,1) neighbors
-       ranked_stark = [eid_to_stark[i] for i in ids]
-       metrics(ranked_stark, gold) per arm
+       Arm A (dense): ranked = index.query(q, embedder, k=20)                 # stark ids already
+       Arm B (graph): seeds = index.query(q, embedder, k=5)
+                      seed_eids = [stark_to_eid[s] for s in seeds if s in stark_to_eid]
+                      nbr = [eid_to_stark[e["entity_id"]] for e in slice_graph.query(seed_eids,1) neighbors]
+                      ranked = dedup_first_seen(seeds ++ nbr)
+       metrics(ranked, gold) per arm     # gold is int stark ids
   -> numbers table
 ```
 
