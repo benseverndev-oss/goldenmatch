@@ -257,6 +257,7 @@ def ask(
     query_classifier: object | None = None,
     query_schema: object | None = None,
     provenance_out: set | None = None,
+    entity_index: object | None = None,
 ) -> str:
     """Answer `query` against `store` as-of `(valid_t, tx_t)`.
 
@@ -320,7 +321,7 @@ def ask(
         return synthesize_global(query, views, llm)
     if mode not in ("local", "hybrid"):
         raise ValueError(f"mode must be 'local', 'hybrid', or 'global', got {mode!r}")
-    seeds = seed_by_query(slice_graph, query, embedder, k=k)
+    seeds = seed_by_query(slice_graph, query, embedder, k=k, index=entity_index)
     _retrieve = _retrieve_local_bridged if _bridge_enabled() else _retrieve_local
     subgraph = _retrieve(slice_graph, seeds, max_hops=hops, node_budget=node_budget)
     # Hand the synthesis the seed entity NAMES (the query-relevant anchors) so the
