@@ -24,7 +24,7 @@ PYTHONPATH="D:/show_case/gg-local-llm/packages/python/goldengraph" POLARS_SKIP_C
 | File | Responsibility |
 |---|---|
 | `packages/python/goldengraph/goldengraph/relation_reprompt.py` | **Create.** `relation_reprompt_enabled`, `_parse_relationships`, `relation_reprompt`. Pure w.r.t. store; reuses `extract` helpers. |
-| `packages/python/goldengraph/tests/test_relation_reprompt.py` | **Create.** 7 tests (prompt format, parse+index, defensive drops, gate/empty, wiring, raise-preserves-first-pass, canon ordering). |
+| `packages/python/goldengraph/tests/test_relation_reprompt.py` | **Create.** 9 tests: Task 1 (gate, prompt format, parse+index, defensive drops, malformed→[], empty-mentions, vocab) + Task 2 (gated wiring, raise-preserves-first-pass — the latter also asserts the pre-canonicalization ordering structurally, per the spec's optional-test note). |
 | `packages/python/goldengraph/goldengraph/ingest.py` | **Modify** — import + gated seam at line ~677 (before `_maybe_canonicalize`). |
 | `docs/superpowers/reports/2026-07-01-relation-reprompt-verdict.md` | **Create** in Task 3 after the Modal run. |
 
