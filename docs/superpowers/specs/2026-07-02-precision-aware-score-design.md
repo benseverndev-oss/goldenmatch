@@ -38,6 +38,7 @@ def _score(scorecard: dict, *, beta: float | None = None) -> float:
 ```
 
 Key properties:
+- **Implementation note (review catch):** `substrate_tuner.py` currently imports `os` ONLY function-locally (inside `_reset_llm_state`) — there is no module-level `import os`. The plan MUST add `import os` at the module top, else `_score`'s env read raises `NameError` on any `beta != default` path. (The `beta == 1.0` default path never reads env only if the env var is unset AND no param — actually the env read runs whenever `beta is None`, i.e. every default call, so `import os` is required for the default path too.)
 - **No signature change at the call sites.** `beta` is a keyword-only param defaulting to the env read, so `_score(scorecard)` (both existing call sites) is unchanged and picks up the env beta automatically. The optional param exists for tests/callers that want to pin beta explicitly.
 - **beta == 1.0 uses the STORED `relational.f1`** (not recomputed) → byte-identical to today; every existing SP-B2/SP-C test and the validated wiki/`name_ci` result are unchanged at the default.
 - **Verified from the smoke numbers** (baseline P=0.815/R=0.672 vs proposed P=0.892/R=0.540): beta=0.5 → proposed 0.789 > baseline 0.782 (flips to accept); beta=0.25 → 0.859 > 0.805 (clear). So beta<1 accepts the real precision win.
@@ -63,7 +64,7 @@ Existing SP-B2 (`test_substrate_tuner.py`) and SP-C (`test_substrate_suggest.py`
 
 ## Verification (Modal, closes the SP-C loop)
 
-Re-run the SP-C homograph smoke with `GOLDENGRAPH_SUBSTRATE_SCORE_BETA=0.5` (via `--opts`). **Expected:** `accepted=True`, winner `name_ci_type` (+canon), proposed's higher F_0.5 beats baseline — i.e. the metric now rewards the precision win (P 0.815→0.892) the F1 gate hid. Record in a short verdict addendum.
+Re-run the SP-C homograph smoke with `GOLDENGRAPH_SUBSTRATE_SCORE_BETA=0.5` (via `--opts`). **Expected:** `accepted=True`, proposed's higher F_0.5 beats baseline — i.e. the metric now rewards the precision win (P 0.815→0.892) the F1 gate hid. (The proposed winner is `name_ci_type` + `entity_type_canon` directly from `for_profile(expect_homographs=True)` — SP-C's suggest builds the config from the LLM flags, NOT via the SP-B2 escalate ladder, so `name_ci_type` is reached unconditionally when the LLM flags homographs.) Record in a short verdict addendum.
 
 ## Design choices flagged for review
 
