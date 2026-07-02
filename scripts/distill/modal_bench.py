@@ -89,6 +89,11 @@ def _bench_impl(eval: str, n: int, ambiguity: float, opts: str, chat: str, embed
     if eval not in _EVAL:
         raise ValueError(f"unknown eval {eval!r} (choose from {', '.join(_EVAL)})")
 
+    # API-backed chat model (e.g. deepseek-chat = DeepSeek-V3): route to the DeepSeek OpenAI-compatible
+    # endpoint instead of local Ollama. Key comes from the attached `deepseek` Modal secret. A CEILING
+    # reference -- out of the free/local thesis, one-off.
+    _api_mode = chat.startswith("deepseek")
+
     # 1. goldengraph native wheel -- build once, cache on the Volume.
     wheels = "/cache/wheels"
     os.makedirs(wheels, exist_ok=True)
@@ -129,17 +134,25 @@ def _bench_impl(eval: str, n: int, ambiguity: float, opts: str, chat: str, embed
             mf.write(f"FROM {local_dir}\n")
         print(f"ollama create {chat} from {local_dir} ...", flush=True)
         subprocess.run(["ollama", "create", chat, "-f", "/tmp/Modelfile"], check=True)
-    else:
+    elif not _api_mode:
         subprocess.run(["ollama", "pull", chat], check=True)
     if embed:
         subprocess.run(["ollama", "pull", embed], check=True)
     cache.commit()
 
-    # 3. Env for the bench (local Ollama via the OpenAI-compatible endpoint).
+    # 3. Env for the bench. Local Ollama by default; DeepSeek API when `_api_mode` (chat via the
+    # OpenAI-compatible DeepSeek endpoint, key from the attached secret). The embedder is unused in the
+    # substrate best config (no cross-doc link), so it stays pointed at the chat endpoint harmlessly.
+    if _api_mode:
+        _endpoint = {
+            "OPENAI_API_KEY": os.environ.get("DEEPSEEK_API_KEY", ""),
+            "OPENAI_BASE_URL": "https://api.deepseek.com/v1",
+        }
+    else:
+        _endpoint = {"OPENAI_API_KEY": "ollama", "OPENAI_BASE_URL": "http://localhost:11434/v1"}
     env = {
         **os.environ,
-        "OPENAI_API_KEY": "ollama",
-        "OPENAI_BASE_URL": "http://localhost:11434/v1",
+        **_endpoint,
         "OPENAI_MODEL": chat,
         "OPENAI_EMBED_MODEL": embed,
         "POLARS_SKIP_CPU_CHECK": "1",
@@ -199,7 +212,8 @@ def _bench_impl(eval: str, n: int, ambiguity: float, opts: str, chat: str, embed
 
 
 @app.function(image=image, gpu="A10G", volumes={"/cache": cache}, timeout=5400,
-              secrets=[modal.Secret.from_name("goldengraph-synth")])
+              secrets=[modal.Secret.from_name("goldengraph-synth"),
+                       modal.Secret.from_name("deepseek")])
 def run_bench(eval: str, n: int = 20, ambiguity: float = 0.6, opts: str = "",
               chat: str = "qwen2.5:7b-instruct", embed: str = "nomic-embed-text",
               engine: str = "goldengraph", corpus: str = "engineered") -> str:
