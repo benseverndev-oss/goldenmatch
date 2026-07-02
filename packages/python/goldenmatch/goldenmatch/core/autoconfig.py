@@ -31,6 +31,7 @@ from goldenmatch.config.schemas import (
     MemoryConfig,
     OutputConfig,
 )
+from goldenmatch.core.autoconfig_discriminative import should_veto_exact
 from goldenmatch.core.complexity_profile import DataProfile
 from goldenmatch.core.profile_emitter import _emitter_stack, current_emitter
 from goldenmatch.core.profiler import _guess_type
@@ -998,6 +999,18 @@ def build_matchkeys(
             logger.info(
                 "Skipping exact matchkey for '%s' (%s).", p.name, reason,
             )
+            skipped_exact.append((p.name, reason))
+            continue
+
+        # #1351: discriminative-power veto. A column that clears the cardinality
+        # gates can still be a shared LOCALITY attribute (e.g. a zip mis-promoted
+        # to "identifier") rather than an identity key. Veto its exact matchkey
+        # when records sharing its value don't co-agree on other identity fields.
+        # Fail-safe keep (df is None / thin support / empty basket) is handled
+        # inside should_veto_exact, so near-unique identity keys are unaffected.
+        if scorer == "exact" and should_veto_exact(df, p.name, profiles):
+            reason = "discriminative-power veto: shared-value records do not co-agree on identity fields"
+            logger.warning("Skipping exact matchkey for '%s' (%s).", p.name, reason)
             skipped_exact.append((p.name, reason))
             continue
 
