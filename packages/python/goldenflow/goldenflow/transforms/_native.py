@@ -69,6 +69,30 @@ def phone_e164_native() -> Callable[[pl.Series], pl.Series] | None:
     return run
 
 
+# Canonical NANP NATIONAL format: "(NXX) NXX-XXXX", area/exchange codes 2-9 (a
+# valid NANP number). The same gate idea as E.164: native and phonenumbers agree
+# on this well-formed shape; the ambiguous leading-1 inputs the loader comment
+# worried about produce a non-canonical shape (or a 1-leading area code) that
+# fails this regex and is nulled for tier-3 Python to settle. So national IS
+# gate-able after all -- the residual is just narrower than E.164's.
+_CANONICAL_NANP_NATIONAL = r"^\([2-9]\d{2}\) [2-9]\d{2}-\d{4}$"
+
+
+def phone_national_native() -> Callable[[pl.Series], pl.Series] | None:
+    inner = _kernel_runner("phone_national_arrow")
+    if inner is None:
+        return None
+
+    def run(s: pl.Series) -> pl.Series:
+        out = inner(s)
+        # Keep only canonical NANP national format; null the rest for Python.
+        return out.set(
+            ~out.str.contains(_CANONICAL_NANP_NATIONAL).fill_null(False), None
+        )
+
+    return run
+
+
 def phone_country_code_native() -> Callable[[pl.Series], pl.Series] | None:
     # Safe under nanp_only: native and phonenumbers agree on the country code
     # (1) for every NANP row; the leading-1 ambiguity only affects the national

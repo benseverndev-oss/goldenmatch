@@ -7,12 +7,14 @@ parity gate — the pure-Python transform paths run unchanged.
 
 ``GOLDENFLOW_NATIVE`` env:
 - ``"0"``    -> force the Python path (never use native).
-- ``"1"``    -> require native; raise if it isn't importable. This is the
-  parity/opt-in lane: it enables native for ALL components regardless of
-  ``_GATED_ON``, so it WILL change outputs where native diverges from the
-  Python reference (see below). Use only when you accept that.
+- ``"1"``    -> require native; raise if it isn't importable (CI parity lane).
 - ``"auto"`` / unset -> use native iff it's importable AND the component is in
-  ``_GATED_ON`` (signed off on parity). Default.
+  ``_GATED_ON``. Default. All wired phone transforms (``phone_e164``,
+  ``phone_country_code``, ``phone_national``) are canonical-NANP-gated and
+  byte-identical to ``phonenumbers`` over the corpus, so both ``auto`` and ``=1``
+  are output-faithful. (``phone_validate`` stays pure-Python -- the ``phonenumber``
+  Rust crate exposes no ``is_possible_number``; see the goldenflow reference-mode
+  spec. ``phone_digits`` is pure Polars.)
 
 The kernel is reachable two ways, tried in order, exactly like goldenmatch:
   1. ``goldenflow._native``        — in-tree build (scripts/build_native.py).
