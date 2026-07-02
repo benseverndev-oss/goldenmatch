@@ -2227,6 +2227,28 @@ def _run_dedupe_pipeline(
             _clusters_cache.append(d)
         return _clusters_cache[0]
 
+    def _golden_member_row_ids() -> list[int]:
+        """``__row_id__`` of members of multi-member, non-oversized clusters --
+        the only rows survivorship builds a golden record for (singletons and
+        oversized clusters never are). Read from whichever cluster representation
+        is populated, WITHOUT materializing the full cluster dict on the
+        frames-out path."""
+        if cluster_frames is not None:
+            keep = cluster_frames.metadata.filter(
+                (pl.col("size") > 1) & (~pl.col("oversized"))
+            )["cluster_id"].to_list()
+            return cluster_frames.assignments.filter(
+                pl.col("cluster_id").is_in(keep)
+            )["member_id"].to_list()
+        return [
+            mid
+            for info in clusters.values()
+            if isinstance(info, dict)
+            and info.get("size", 0) > 1
+            and not info.get("oversized")
+            for mid in info.get("members", [])
+        ]
+
     if cluster_frames is not None:
         # Stats from frame aggregates (no dict materialization). Matches the
         # dict path's len(clusters) / size>1 / oversized counts exactly.
@@ -2310,13 +2332,29 @@ def _run_dedupe_pipeline(
     # documented no-op until now.
     quality_scores = None
     if not _skip_golden and getattr(golden_rules, "quality_weighting", False):
-        from goldenmatch.core.quality import compute_quality_scores
-        with stage("golden_quality_scores"):
-            quality_scores = compute_quality_scores(collected_df)
-        if quality_scores:
-            logger.info(
-                "GoldenCheck quality weighting: %d penalized cell(s)", len(quality_scores)
-            )
+        # Scope the goldencheck.cell_quality scan (full-frame O(N) value counts +
+        # O(distinct^2) fuzzy variant detection per string column) to just the
+        # rows that will actually get a golden record -- members of multi-member,
+        # non-oversized clusters -- instead of the entire collected frame. On a
+        # typical dedupe that is a fraction of N with far fewer distinct values,
+        # so the scan is much cheaper, and singleton rows never consume a quality
+        # weight anyway. When nothing multi-member clustered, the scan is skipped
+        # entirely. Variant detection is now judged relative to the cluster
+        # members (the values survivorship actually compares), which is the
+        # relevant universe; scoped so cell_quality is not paid over the whole
+        # frame on every default dedupe.
+        _member_ids = _golden_member_row_ids()
+        if _member_ids:
+            from goldenmatch.core.quality import compute_quality_scores
+            with stage("golden_quality_scores"):
+                quality_scores = compute_quality_scores(
+                    collected_df.filter(pl.col("__row_id__").is_in(_member_ids))
+                )
+            if quality_scores:
+                logger.info(
+                    "GoldenCheck quality weighting: %d penalized cell(s)",
+                    len(quality_scores),
+                )
 
     # Golden-record construction was the hidden N²-shaped stage that the
     # bench harness surfaced at 11K rows (36% of wall before this rewrite):
