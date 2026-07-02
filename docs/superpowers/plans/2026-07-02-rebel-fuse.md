@@ -24,7 +24,7 @@ PYTHONPATH="D:/show_case/gg-local-llm/packages/python/goldengraph" POLARS_SKIP_C
 | File | Responsibility |
 |---|---|
 | `packages/python/goldengraph/goldengraph/rebel_fuse.py` | **Create.** `rebel_fuse_enabled`, `_rebel_params`, `_load_rebel` (cached singleton), `_match_mention`, `rebel_fuse`. |
-| `packages/python/goldengraph/tests/test_rebel_fuse.py` | **Create.** 7 tests (mapping, drop-unmapped/self-loop, windowing, gate/empty, wiring, raise-preserves). All inject a fake REBEL. |
+| `packages/python/goldengraph/tests/test_rebel_fuse.py` | **Create.** 8 tests: Task 1 (mapping, substring/casefold, drop-unmapped+self-loop, per-window, gate, empty) + Task 2 (gated wiring, raise-preserves). All inject/monkeypatch a fake REBEL (real model never loaded). |
 | `packages/python/goldengraph/goldengraph/ingest.py` | **Modify** — import + gated seam after line 687 (after re-prompt, before `_maybe_canonicalize`). |
 | `docs/superpowers/reports/2026-07-02-rebel-fuse-verdict.md` | **Create** in Task 3 after the Modal run. |
 
