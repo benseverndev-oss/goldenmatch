@@ -11,15 +11,24 @@ matchkey (demote to blocking-only). Veto-only; never promotes.
 from __future__ import annotations
 
 import os
+from difflib import SequenceMatcher
 from typing import Any
 
 import polars as pl
 
 _IDENTITY_BASKET_TYPES = frozenset({"name", "multi_name", "email", "phone", "identifier"})
+# Basket types compared FUZZILY (a true duplicate's name is often corrupted --
+# "Smith"/"Smyth" -- so exact-equality would read a genuine identity key's
+# shared-value pairs as disagreement and wrongly veto it, e.g. soc_sec_id on
+# febrl3). Structured ids (email/phone/identifier) are compared exactly: a
+# near-miss there means a DIFFERENT entity, not a corruption of the same one.
+_NAME_FUZZY_TYPES = frozenset({"name", "multi_name"})
 
 _TAU_DEFAULT = 0.5
 _MIN_SHARED_PAIRS = 20
 _MAX_PAIRS = 200
+# SequenceMatcher ratio at/above which two name strings count as agreement.
+_AGREE_THRESHOLD = 0.85
 
 
 def veto_enabled() -> bool:
@@ -39,13 +48,19 @@ def tau() -> float:
     return val if 0.0 <= val <= 1.0 else _TAU_DEFAULT
 
 
-def identity_basket(candidate_col: str, profiles: list[Any]) -> list[str]:
-    """Other columns whose col_type is an identity signal (excludes candidate)."""
-    return [
-        p.name
-        for p in profiles
-        if p.name != candidate_col and getattr(p, "col_type", None) in _IDENTITY_BASKET_TYPES
-    ]
+def identity_basket(candidate_col: str, profiles: list[Any]) -> list[tuple[str, bool]]:
+    """Other identity-typed columns as ``(name, fuzzy)`` pairs (excludes candidate).
+
+    ``fuzzy`` is True for name-typed columns (compared with a similarity
+    threshold to tolerate duplicate-record corruption), False for structured
+    identity types (email/phone/identifier, compared exactly).
+    """
+    out: list[tuple[str, bool]] = []
+    for p in profiles:
+        col_type = getattr(p, "col_type", None)
+        if p.name != candidate_col and col_type in _IDENTITY_BASKET_TYPES:
+            out.append((p.name, col_type in _NAME_FUZZY_TYPES))
+    return out
 
 
 def _norm(v: Any) -> str | None:
@@ -56,31 +71,41 @@ def _norm(v: Any) -> str | None:
     return s or None
 
 
+def _agree(a: str, b: str, fuzzy: bool) -> bool:
+    """Whether two normalized cells agree. Exact match always counts; for fuzzy
+    (name) fields, a SequenceMatcher ratio >= _AGREE_THRESHOLD also counts."""
+    if a == b:
+        return True
+    if not fuzzy:
+        return False
+    return SequenceMatcher(None, a, b).ratio() >= _AGREE_THRESHOLD
+
+
 def discriminative_power(
     df: pl.DataFrame,
     candidate_col: str,
-    basket: list[str],
+    basket: list[tuple[str, bool]],
     *,
     max_pairs: int = _MAX_PAIRS,
 ) -> tuple[float, int]:
     """Mean co-agreement over shared-value pairs, and support (n pairs measured).
 
-    Groups df by candidate_col; for value-groups with >=2 rows, forms up to
-    max_pairs record-pairs deterministically (row 0 paired with rows 1..k-1
-    within each group, groups visited in sorted-value order). Per pair,
-    agreement = (# basket fields where BOTH cells are non-null and
-    normalized-equal) / (# basket fields where BOTH are non-null); pairs with no
-    jointly-populated basket field are skipped. Returns (mean over measured
-    pairs, count of measured pairs); (0.0, 0) when basket empty, candidate
-    absent, or no measurable shared-value pair exists.
+    ``basket`` is a list of ``(column, fuzzy)`` pairs. Groups df by
+    candidate_col; for value-groups with >=2 rows, forms up to max_pairs
+    record-pairs deterministically (row 0 paired with rows 1..k-1 within each
+    group, groups visited in sorted-value order). Per pair, agreement =
+    (# basket fields where BOTH cells are non-null and :func:`_agree`) /
+    (# basket fields where BOTH are non-null); name-typed fields agree fuzzily,
+    structured ids exactly. Pairs with no jointly-populated basket field are
+    skipped. Returns (mean over measured pairs, count of measured pairs);
+    (0.0, 0) when basket empty, candidate absent, or no measurable pair exists.
     """
     if not basket or candidate_col not in df.columns:
         return 0.0, 0
-    keep = [candidate_col, *[c for c in basket if c in df.columns]]
-    if len(keep) < 2:
+    basket_cols = [(c, fuzzy) for (c, fuzzy) in basket if c in df.columns]
+    if not basket_cols:
         return 0.0, 0
-    sub = df.select(keep)
-    basket_cols = keep[1:]
+    sub = df.select([candidate_col, *[c for (c, _f) in basket_cols]])
 
     groups: dict[str, list[dict[str, Any]]] = {}
     for row in sub.iter_rows(named=True):
@@ -101,12 +126,12 @@ def discriminative_power(
                 break
             agree = 0
             comparable = 0
-            for c in basket_cols:
+            for c, fuzzy in basket_cols:
                 a, b = _norm(anchor[c]), _norm(other[c])
                 if a is None or b is None:
                     continue
                 comparable += 1
-                if a == b:
+                if _agree(a, b, fuzzy):
                     agree += 1
             if comparable == 0:
                 continue
