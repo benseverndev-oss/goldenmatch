@@ -2258,11 +2258,22 @@ def _run_dedupe_pipeline(
     golden_df: pl.DataFrame | None = None
     golden_rules = config.golden_rules or GoldenRulesConfig(default_strategy="most_complete")
 
+    # Throughput tier (#1151): corpus dedup consumes the clusters / dup mapping,
+    # not canonical golden records — that's the whole point of the tier. Golden
+    # survivorship's per-cluster build is an O(N) polars iter_rows that wedges the
+    # 100k+ corpus ceiling (a 100k FineWeb run was faulthandler-killed at 150s in
+    # this stage). When the throughput plan engaged, skip the golden/survivorship
+    # stage (and its quality scan + adaptive refinement) entirely: golden_df stays
+    # None and clusters/dupes/unique carry the result. Same posture as the #1134
+    # quality-scan skip already applied to this tier. `_throughput_posture` is a
+    # non-None dict only after the throughput scoring branch actually ran.
+    _skip_golden = _throughput_posture is not None
+
     # v1.18: post-cluster golden-rules refinement. When the user opted
     # in via `golden_rules.adaptive=True`, refine per-field strategies
     # using cluster shape + column profiles. Refinement is a NEW config
     # (immutable mutation); the original golden_rules is unchanged.
-    if golden_rules.adaptive:
+    if not _skip_golden and golden_rules.adaptive:
         try:
             from goldenmatch.core.golden_rules_refiner import refine_golden_rules
 
@@ -2298,7 +2309,7 @@ def _run_dedupe_pipeline(
     # unless there are real quality issues). The field defaulted True but was a
     # documented no-op until now.
     quality_scores = None
-    if getattr(golden_rules, "quality_weighting", False):
+    if not _skip_golden and getattr(golden_rules, "quality_weighting", False):
         from goldenmatch.core.quality import compute_quality_scores
         with stage("golden_quality_scores"):
             quality_scores = compute_quality_scores(collected_df)
@@ -2327,7 +2338,14 @@ def _run_dedupe_pipeline(
     # rebuilt by the shared block below). quality_scores is always None in this
     # pipeline (matching the dict path's _polars_native_eligible(..., None)
     # gate); provenance mirrors config.output.lineage_provenance.
-    if cluster_frames is not None:
+    if _skip_golden:
+        with stage("golden"):
+            # Throughput tier: no survivorship (see _skip_golden above). golden_df
+            # stays None; the DedupeResult exposes clusters/dupes/unique instead.
+            logger.info(
+                "throughput tier: skipping golden-record survivorship (#1151)"
+            )
+    elif cluster_frames is not None:
         with stage("golden"):
             from goldenmatch.core.golden import build_golden_records_from_frames
             _provenance_on = config.output.lineage_provenance
