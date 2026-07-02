@@ -4,7 +4,7 @@ description: "Gold-themed terminal UI for GoldenMatch: 8 tabs for data profiling
 keywords: ["tui", "terminal", "interactive", "textual", "goldenmatch interactive"]
 ---
 
-GoldenMatch includes a gold-themed terminal UI built with Textual. Launch it with `goldenmatch interactive` or `goldenmatch dedupe` (zero-config mode opens the TUI automatically).
+GoldenMatch includes a gold-themed terminal UI built with Textual. Launch it with `goldenmatch interactive`, or add `--tui` to a `goldenmatch dedupe` run to review that run interactively. (As of v2.7.x `dedupe` is non-interactive by default — it writes golden records and prints a summary; `--tui` opts into review.)
 
 ```bash
 goldenmatch interactive customers.csv

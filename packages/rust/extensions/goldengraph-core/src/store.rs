@@ -40,6 +40,9 @@ pub struct BatchEntity {
     pub surface_names: Vec<String>,
     /// Host-supplied stable keys (e.g. `:h1:` fingerprints). Need not be sorted.
     pub record_keys: Vec<String>,
+    /// Docs this batch entity was extracted from (serde-default: older batches omit it).
+    #[serde(default)]
+    pub source_refs: Vec<String>,
 }
 
 /// A relationship in an incoming batch (endpoints are batch-local ids).
@@ -70,6 +73,10 @@ pub struct StoredEntity {
     pub typ: String,
     pub surface_names: Vec<String>,
     pub record_keys: Vec<String>,
+    /// Docs this entity was extracted from, accreted (union) across cross-doc merges. Monotonic
+    /// provenance -- unlike record_keys it never shrinks on a split. Serde-default for back-compat.
+    #[serde(default)]
+    pub source_refs: Vec<String>,
     pub created_at: i64,
     pub superseded_by: Option<StableId>,
     pub superseded_at: Option<i64>,
@@ -305,16 +312,24 @@ impl GraphStore {
             // unioned back in; only absorbed (merged) entities' keys fold in.
             let mut keys = sorted_keys[i].clone();
             let mut surfaces = be.surface_names.clone();
+            // source_refs are MONOTONIC provenance -- ACCRETIVE union of survivor + absorbed + batch
+            // (unlike record_keys, which deliberately drop the prior survivor on a split). A doc a
+            // node was ever extracted from must never leave it.
+            let mut refs = be.source_refs.clone();
             let (created_at, typ) = match self.entities.get(&id) {
-                Some(prev) => (prev.created_at, prev.typ.clone()),
+                Some(prev) => {
+                    refs.extend(prev.source_refs.iter().cloned()); // keep survivor's docs
+                    (prev.created_at, prev.typ.clone())
+                }
                 None => (at, be.typ.clone()),
             };
-            // fold in absorbed entities' keys/surfaces
+            // fold in absorbed entities' keys/surfaces/source_refs
             for &sid in &inherited[i] {
                 if sid != id {
                     if let Some(ab) = self.entities.get(&sid) {
                         keys.extend(ab.record_keys.iter().cloned());
                         surfaces.extend(ab.surface_names.iter().cloned());
+                        refs.extend(ab.source_refs.iter().cloned());
                     }
                 }
             }
@@ -322,6 +337,8 @@ impl GraphStore {
             keys.dedup();
             surfaces.sort();
             surfaces.dedup();
+            refs.sort();
+            refs.dedup();
             let canonical_name = canonical_of(&surfaces);
             self.entities.insert(
                 id,
@@ -331,6 +348,7 @@ impl GraphStore {
                     typ,
                     surface_names: surfaces,
                     record_keys: keys,
+                    source_refs: refs,
                     created_at,
                     superseded_by: None,
                     superseded_at: None,
@@ -423,6 +441,7 @@ impl GraphStore {
                     typ: se.typ.clone(),
                     members: Vec::new(),
                     surface_names: se.surface_names.clone(),
+                    source_refs: se.source_refs.clone(),
                 }
             })
             .collect();
@@ -495,6 +514,7 @@ mod tests {
             typ: "t".into(),
             surface_names: vec![name.into()],
             record_keys: keys.iter().map(|s| s.to_string()).collect(),
+            source_refs: vec![],
         }
     }
     fn edge(s: u32, o: u32, vf: i64, vt: Option<i64>, refs: &[&str]) -> BatchEdge {
@@ -701,6 +721,7 @@ mod tests {
             typ: "t".into(),
             surface_names: vec![format!("e{id}")],
             record_keys: vec![],
+            source_refs: vec![],
             created_at: 0,
             superseded_by: by,
             superseded_at: at,

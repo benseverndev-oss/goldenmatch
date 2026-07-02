@@ -1,6 +1,8 @@
 """Substrate-quality scoring over a BUILT graph (pure; operates on the graph dict + gold mentions)."""
 from __future__ import annotations
 
+from collections import defaultdict
+
 # --- Config-driver contract (consumed by SP-B/SP-C) -------------------------------------------------
 # Each substrate lever -> the GOLDENGRAPH_* env var that gates it. The explicit source of truth for
 # "what levers exist" until SP-B's SubstrateConfig becomes the registry.
@@ -158,11 +160,20 @@ def _assign_real_nodes_aliased(graph: dict, gold_mentions, qid_aliases) -> dict[
     for e in graph.get("edges", ()):
         for ref in e.get("source_refs", ()):
             by_doc.setdefault(_base_doc_id(ref), set()).update((e.get("subj"), e.get("obj")))
+    # Node provenance: nodes whose OWN source_refs name a doc are candidates there too, reaching
+    # per-doc-relationless entities (present, but no surviving edge in this doc) the edge-derived
+    # by_doc can't. UNION with by_doc -> always a superset (never a coverage regression); empty when
+    # no entity carries source_refs (byte-identical to the edge-only path).
+    node_by_doc: dict[str, set[int]] = defaultdict(set)
+    for e in graph.get("entities", ()):
+        for ref in e.get("source_refs", ()):
+            node_by_doc[_base_doc_id(ref)].add(e.get("entity_id"))
     node_of: dict[int, int] = {}
     fresh = -1
     for i, (qid, surface, doc) in enumerate(gold_mentions):
         match = set(qid_aliases.get(qid, ())) | {str(surface).strip().lower()}
-        cands = sorted(by_doc.get(_base_doc_id(doc), set()))       # sorted -> lowest id on tie
+        d = _base_doc_id(doc)
+        cands = sorted(by_doc.get(d, set()) | node_by_doc.get(d, set()))  # sorted -> lowest id on tie
         best, best_ov = None, 0
         for n in cands:                                            # exact set-intersection: largest wins
             ov = len(id2surf.get(n, set()) & match)

@@ -85,6 +85,7 @@ mod tests {
             typ: "t".into(),
             members: vec![],
             surface_names: vec![name.into()],
+            source_refs: vec![],
         }
     }
     fn edge(s: EntityId, p: &str, o: EntityId) -> Edge {
@@ -192,6 +193,7 @@ mod tests {
             typ: "org".into(),
             members: vec![0, 1, 2],
             surface_names: vec!["Apple".into(), "Apple Computer".into(), "Apple Inc.".into()],
+            source_refs: vec![],
         };
         let g = Graph {
             entities: vec![apple],

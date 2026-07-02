@@ -6,6 +6,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Changed
+- **`goldenmatch dedupe <file>` is now non-interactive by default.** A bare `goldenmatch dedupe customers.csv` runs auto-config, writes golden records (a timestamped `*_golden.csv` in the current directory), and prints a summary — so the advertised "CSV in, 30 seconds, CSV out" is what actually happens. The interactive review TUI is now opt-in via **`--tui`** (previously it opened by default). `--no-tui` is still accepted as a no-op for back-compat. When no explicit output flag is given on the auto-config path, golden records are written by default (use `--output-all` / `--output-dir` to control, `--tui` to review). An explicit `--config` run keeps its exact prior behavior.
+
 ## [2.7.0] - 2026-07-02
 
 ### Added

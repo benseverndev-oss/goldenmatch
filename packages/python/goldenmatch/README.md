@@ -701,7 +701,7 @@ GoldenMatch is the only tool that combines zero-config operation, probabilistic 
 goldenmatch dedupe customers.csv
 ```
 
-Auto-detects column types (name, email, phone, zip, address, description), assigns appropriate scorers, picks blocking strategy, and launches the TUI for review.
+Auto-detects column types (name, email, phone, zip, address, description), assigns appropriate scorers, picks a blocking strategy, runs, and writes golden records (a timestamped `*_golden.csv` in the current directory) with a printed summary — zero config, no prompts. Add `--tui` to review interactively, or `--output-all` / `--output-dir` to control outputs.
 
 ### With Config
 
