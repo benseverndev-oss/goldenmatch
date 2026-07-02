@@ -4,7 +4,15 @@ All notable changes to golden-suite are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic
 versioning.
 
-## [0.1.0] - unreleased
+## [0.1.1] - 2026-07-02
+
+### Changed
+- Bumped floors to mandate the latest member fixes: **`goldenmatch>=2.8`** (the B1
+  silent Latin-1 data-corruption fix + the config-healer production-slowdown fix)
+  and **`goldencheck>=1.4.1`** (rapidfuzz `cell_quality` perf). Lockstep policy:
+  whenever a bundled member releases, golden-suite bumps its floor and re-cuts.
+
+## [0.1.0] - 2026-07-02
 
 Initial release. A one-line, perf-optimized install and a single canonical front
 door for the whole Golden Suite.
