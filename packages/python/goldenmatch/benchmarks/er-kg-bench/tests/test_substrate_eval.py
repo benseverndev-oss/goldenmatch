@@ -379,3 +379,166 @@ def test_presence_degenerate_guards():
     # empty graph but non-empty gold -> nothing to align, strict and relaxed both 0 coverage
     r1 = presence_aligner_report(_g([], []), [("Qa", "apple", "d1")], {"Qa": ["apple"]})
     assert r1["strict_coverage"] == 0.0 and r1["relaxed_coverage"] == 0.0
+
+
+# --- SP-A metric split: substrate_scorecard + LEVER_AXIS_MAP -----------------------------------------
+from erkgbench import substrate_eval as se
+
+
+def _wiki_graph():
+    # Q1 present+connected in docA; Q2 present but EDGELESS (reachable only via global surface match).
+    return {
+        "entities": [
+            {"entity_id": 0, "canonical_name": "ibm", "typ": "org", "members": [],
+             "surface_names": ["ibm", "big blue"], "source_refs": ["docA"]},
+            {"entity_id": 1, "canonical_name": "lenovo", "typ": "org", "members": [],
+             "surface_names": ["lenovo"], "source_refs": ["docA"]},
+            {"entity_id": 2, "canonical_name": "acme", "typ": "org", "members": [],
+             "surface_names": ["acme"], "source_refs": ["docB"]},
+        ],
+        "edges": [
+            {"subj": 0, "predicate": "acquired", "obj": 1, "source_refs": ["docA"]},
+        ],
+    }
+
+
+def _wiki_gold():
+    return [("Q1", "big blue", "docA"), ("Q2", "acme", "docB")]
+
+
+def _wiki_aliases():
+    return {"Q1": ["ibm", "big blue"], "Q2": ["acme"]}
+
+
+def test_scorecard_presence_matches_relaxed():
+    g, gold, al = _wiki_graph(), _wiki_gold(), _wiki_aliases()
+    sc = se.substrate_scorecard(g, gold, al)
+    rep = se.presence_aligner_report(g, gold, al)
+    assert sc["presence"]["coverage"] == rep["relaxed_coverage"]
+
+
+def test_scorecard_relational_over_presence():
+    g, gold, al = _wiki_graph(), _wiki_gold(), _wiki_aliases()
+    sc = se.substrate_scorecard(g, gold, al)
+    rep = se.presence_aligner_report(g, gold, al)
+    assert sc["relational"]["f1"] == rep["relaxed_fb"]
+    assert sc["relational"]["recall"] == rep["relaxed_rb"]
+    assert sc["relational"]["precision"] == rep["relaxed_pb"]
+
+
+def test_scorecard_connectivity_is_strict():
+    g, gold, al = _wiki_graph(), _wiki_gold(), _wiki_aliases()
+    sc = se.substrate_scorecard(g, gold, al)
+    rep = se.presence_aligner_report(g, gold, al)
+    assert sc["connectivity"]["coverage"] == rep["strict_coverage"]
+    assert sc["connectivity"]["f1"] == rep["strict_fb"]
+    assert sc["connectivity"]["edge_recall"] == se.edge_recall(g, gold)
+    assert sc["coherence"] == se.graph_coherence(g)
+
+
+def test_scorecard_no_aliases_presence_none():
+    # No-alias path == engineered path: score_substrate/align_mentions_to_nodes require src::rel::dst
+    # doc ids, so use the engineered fixture (not the wiki one).
+    g, gold = _eng_graph_gold()
+    sc = se.substrate_scorecard(g, gold, qid_aliases=None)
+    assert sc["presence"] is None
+    assert sc["connectivity"]["coverage"] is None
+    assert sc["connectivity"]["f1"] is None
+    assert sc["connectivity"]["edge_recall"] == se.edge_recall(g, gold)
+    assert set(sc["relational"]) == {"f1", "recall", "precision"}
+    assert sc["coherence"] == se.graph_coherence(g)
+
+
+def test_scorecard_all_present_perfect():
+    g = {
+        "entities": [
+            {"entity_id": 0, "canonical_name": "ibm", "typ": "org", "members": [],
+             "surface_names": ["ibm"], "source_refs": ["docA"]},
+            {"entity_id": 1, "canonical_name": "lenovo", "typ": "org", "members": [],
+             "surface_names": ["lenovo"], "source_refs": ["docA"]},
+        ],
+        "edges": [{"subj": 0, "predicate": "acquired", "obj": 1, "source_refs": ["docA"]}],
+    }
+    gold = [("Q1", "ibm", "docA"), ("Q2", "lenovo", "docA")]
+    al = {"Q1": ["ibm"], "Q2": ["lenovo"]}
+    sc = se.substrate_scorecard(g, gold, al)
+    assert sc["presence"]["coverage"] == 1.0
+    assert sc["connectivity"]["coverage"] == 1.0
+
+
+def test_scorecard_present_but_unconnected():
+    g = {
+        "entities": [
+            {"entity_id": 0, "canonical_name": "ibm", "typ": "org", "members": [],
+             "surface_names": ["ibm"], "source_refs": ["docA"]},
+            {"entity_id": 1, "canonical_name": "acme", "typ": "org", "members": [],
+             "surface_names": ["acme"], "source_refs": ["docB"]},
+        ],
+        "edges": [],
+    }
+    gold = [("Q1", "ibm", "docA"), ("Q2", "acme", "docB")]
+    al = {"Q1": ["ibm"], "Q2": ["acme"]}
+    sc = se.substrate_scorecard(g, gold, al)
+    assert sc["presence"]["coverage"] == 1.0
+    assert sc["connectivity"]["coverage"] == 0.0
+
+
+def test_lever_axis_map_names_are_real_gates():
+    mapped = {lv for lvs in se.LEVER_AXIS_MAP.values() for lv in lvs}
+    assert mapped <= set(se.KNOWN_LEVERS), mapped - set(se.KNOWN_LEVERS)
+    for lever, env in se.KNOWN_LEVERS.items():
+        assert env.startswith("GOLDENGRAPH_"), (lever, env)
+    assert set(se.LEVER_AXIS_MAP) == {"presence", "relational", "connectivity"}
+
+
+def test_known_levers_gates_exist_in_source():
+    import pathlib
+    root = pathlib.Path(se.__file__).resolve()
+    pkg = None
+    for _ in range(10):
+        cand = root.parent / "packages" / "python" / "goldengraph" / "goldengraph"
+        if cand.is_dir():
+            pkg = cand
+            break
+        root = root.parent
+    if pkg is None:
+        import pytest
+        pytest.skip("goldengraph package not locatable from this checkout")
+    blob = "\n".join(p.read_text(encoding="utf-8", errors="ignore") for p in pkg.glob("*.py"))
+    for lever, env in se.KNOWN_LEVERS.items():
+        assert env in blob, f"{lever} -> {env} not found in goldengraph source"
+
+
+def _eng_graph_gold():
+    g = {
+        "entities": [
+            {"entity_id": 0, "canonical_name": "a", "typ": "t", "members": [], "surface_names": ["a"],
+             "source_refs": ["e0::r::e1"]},
+            {"entity_id": 1, "canonical_name": "b", "typ": "t", "members": [], "surface_names": ["b"],
+             "source_refs": ["e0::r::e1"]},
+        ],
+        "edges": [{"subj": 0, "predicate": "r", "obj": 1, "source_refs": ["e0::r::e1"]}],
+    }
+    gold = [("e0", "a", "e0::r::e1"), ("e1", "b", "e0::r::e1")]
+    return g, gold
+
+
+def test_score_substrate_backcompat_no_aliases():
+    g, gold = _eng_graph_gold()
+    out = se.score_substrate(gold_mentions=gold, resolver_clusters=[[0], [1]], graph=g)
+    for k in ("er_f1_a", "er_p_a", "er_r_a", "er_f1_b", "er_p_b", "er_r_b",
+              "ab_gap", "components", "largest_fraction", "provenance", "edge_recall"):
+        assert k in out
+    assert "scorecard" in out
+    assert out["scorecard"]["presence"] is None
+    assert out["scorecard"]["relational"]["f1"] == out["er_f1_b"]
+
+
+def test_score_substrate_embeds_scorecard_with_aliases():
+    # score_substrate's flat er_*_b path needs engineered doc ids; alias-key on the engineered ids so
+    # the presence axis populates (both entities present -> coverage 1.0).
+    g, gold = _eng_graph_gold()
+    al = {"e0": ["a"], "e1": ["b"]}
+    out = se.score_substrate(gold_mentions=gold, resolver_clusters=[[0], [1]], graph=g, qid_aliases=al)
+    assert out["scorecard"]["presence"] is not None
+    assert out["scorecard"]["presence"]["coverage"] == 1.0
