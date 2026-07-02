@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "golden-suite"
-version = "0.1.0"
+version = "0.1.1"
 description = "One-line, perf-optimized install for the entire Golden Suite — goldenmatch, goldencheck, goldenflow, goldenpipe, GoldenSchema (infermap), goldenanalysis, native acceleration on by default"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
@@ -37,8 +37,8 @@ classifiers = [
 dependencies = [
     # --- suite (floors track the current majors) ---
     "goldenpipe[golden-suite]>=1.3",    # orchestrator + check/flow/match/analysis
-    "goldenmatch>=2.5",                 # entity resolution: dedupe, match, golden records (2.7.0 is latest on PyPI as of this floor bump)
-    "goldencheck>=1.4",                 # data validation (rules discovered from your data)
+    "goldenmatch>=2.8",                 # entity resolution: dedupe, match, golden records (>=2.8 mandates the B1 silent-corruption + healer fixes)
+    "goldencheck>=1.4.1",               # data validation (rules discovered from your data; >=1.4.1 = rapidfuzz cell_quality)
     "goldenflow>=1.3",                  # transform / standardize / normalize
     "infermap>=0.5.1",                  # GoldenSchema: inference-driven schema mapping
     "goldenanalysis>=0.3",              # read-only cross-cutting metrics + reporting
