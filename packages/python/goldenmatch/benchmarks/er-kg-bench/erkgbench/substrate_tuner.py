@@ -172,16 +172,50 @@ def run_staged(docs, gold, qid_aliases, *, build_and_score, thresholds=None, bud
     return TunerResult(best.config, best.scorecard, full_sc, rounds, stopped)
 
 
+def _reset_llm_state() -> None:
+    """Unload the Ollama model (keep_alive=0) so the NEXT build reloads it cold, clearing the KV/model
+    cache that otherwise carries from one in-process build to the next. WITHOUT this, build-2 of the same
+    seeded config diverges from build-1 by ~0.15 F1 (measured: staged-tuner slice-vs-full smoke); WITH it
+    the gap collapses to ~0.018 F1 / +/-1 component (the residual GPU float wobble the seed-determinism
+    verdict already documented), so each build matches the reproducible single-cold-build regime and the
+    tuner's gate/escalation decisions ride on a trustworthy signal. Root cause: Ollama warm-server state,
+    NOT concurrency (workers=1 diverged identically) and NOT a missing seed (llm._chat seeds every
+    request). Best-effort + Ollama-specific (no-op off a local endpoint / on failure). Gate:
+    GOLDENGRAPH_TUNER_RESET_LLM (default on)."""
+    import json
+    import os
+    import urllib.request
+
+    if os.environ.get("GOLDENGRAPH_TUNER_RESET_LLM", "1") in ("0", "false", ""):
+        return
+    base = (os.environ.get("OPENAI_BASE_URL") or "").rstrip("/")
+    if not base or ("localhost" not in base and "127.0.0.1" not in base):
+        return  # only meaningful against a local Ollama server
+    host = base[: -len("/v1")] if base.endswith("/v1") else base
+    model = os.environ.get("OPENAI_MODEL") or ""
+    if not model:
+        return
+    try:
+        body = json.dumps({"model": model, "keep_alive": 0}).encode()
+        req = urllib.request.Request(f"{host}/api/generate", data=body,
+                                     headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=30).read()
+    except Exception as e:  # noqa: BLE001 -- best-effort reset; a failed unload just means warm state
+        print(f"[tuner] LLM reset failed ({e!r}); continuing", flush=True)
+
+
 def build_and_score_real(config, dataset):
     """Real build_and_score: under config.apply(), build the graph over the dataset docs and score it
-    with the SP-A three-axis scorecard. Needs the native store + an LLM -> Modal/CI only, NOT box-safe.
-    Kept thin; the pure harness above is the tested surface."""
+    with the SP-A three-axis scorecard. Resets the LLM (cold) BEFORE each build so builds are independent
+    and reproducible (see _reset_llm_state). Needs the native store + an LLM -> Modal/CI only, NOT
+    box-safe. Kept thin; the pure harness above is the tested surface."""
     from erkgbench import substrate_eval
     from erkgbench.run_substrate_eval import _build_graph_from_documents
 
     docs, gold, qid_aliases = dataset
     if not docs:
         raise ValueError("build_and_score_real: empty docs")
+    _reset_llm_state()
 
     class _Doc:  # _build_graph_from_documents wants .text/.id; wrap raw text strings
         __slots__ = ("text", "id")
