@@ -343,24 +343,30 @@ def test_run_staged_escalates_then_passes():
 
 def test_run_staged_budget_exhausted():
     docs, gold, al = _tiny_corpus()
-    res = st.run_staged(docs, gold, al, build_and_score=lambda cfg, ds: _sc(0.95, 0.10), budget=2)
+    # Start from a bare config (xdoc_key="") so the relational ladder has TWO steps (""->name_ci->
+    # name_ci_type); with budget=2 both rounds fail + escalate successfully, so the for-loop reaches
+    # its cap -> "budget" (NOT "exhausted", which the 1-step for_profile default would hit at round1).
+    res = st.run_staged(docs, gold, al, build_and_score=lambda cfg, ds: _sc(0.95, 0.10),
+                        budget=2, initial_config=SubstrateConfig())
     assert res.stopped_reason == "budget" and len(res.trace) == 2
 
 
 def test_run_staged_promotes_argmax_not_last():
     docs, gold, al = _tiny_corpus()
-    # round0 high, then regressions; best-so-far must be round0's config, and the full build uses it.
-    scores = iter([_sc(0.95, 0.80), _sc(0.95, 0.10), _sc(0.95, 0.10)])
+    # round0 FAILS the gate (0.40<0.50) but is the highest scorer; later rounds regress lower. Best-so-
+    # far must be round0's config, and the full build must use it. Bare init gives a 2-step ladder so
+    # rounds 0/1 escalate and round2 exhausts (trace has 3 rounds to argmax over).
+    scores = iter([_sc(0.95, 0.40), _sc(0.95, 0.10), _sc(0.95, 0.10)])
     seen = []
 
     def fake(cfg, ds):
         seen.append(cfg)
         return next(scores)
 
-    res = st.run_staged(docs, gold, al, build_and_score=fake, budget=3)
-    # best config == the round-0 config (default from for_profile), full build invoked with it
-    assert res.config == res.trace[0].config
-    assert seen[-1] == res.config  # last call (the full build) used the argmax config
+    res = st.run_staged(docs, gold, al, build_and_score=fake, budget=3,
+                        initial_config=SubstrateConfig())
+    assert res.config == res.trace[0].config  # argmax = round0, not the last (regressed) config
+    assert seen[-1] == res.config             # the full build used the argmax config
 
 
 def test_run_staged_terminal_eject():
@@ -380,7 +386,7 @@ def test_tuner_result_trace_is_serializable():
     assert r0.escalated_to is None
 ```
 
-- [ ] **Step 2: Run to verify it fails** — box-safe `-k run_staged or tuner_result`. Expected: FAIL — no `run_staged`.
+- [ ] **Step 2: Run to verify it fails** — box-safe `-k "run_staged or tuner_result"` (quote the expression — the shell splits an unquoted `or`). Expected: FAIL — no `run_staged`.
 
 - [ ] **Step 3: Implement**
 
@@ -489,8 +495,10 @@ def build_and_score_real(config, dataset):
         def __init__(self, text, doc_id):
             self.text, self.id = text, doc_id
 
+    if not docs:
+        raise ValueError("build_and_score_real: empty docs")
     with config.apply():
-        documents = [_Doc(t, f"d{i}") for i, t in enumerate(docs)] if not hasattr(docs[0], "text") else docs
+        documents = docs if hasattr(docs[0], "text") else [_Doc(t, f"d{i}") for i, t in enumerate(docs)]
         graph = _build_graph_from_documents(documents)
     return substrate_eval.substrate_scorecard(graph, gold, qid_aliases)
 ```
