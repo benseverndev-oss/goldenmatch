@@ -43,7 +43,7 @@
           "email"
         ],
         "planner_rung": {
-          "backend": "polars-direct",
+          "backend": "bucket",
           "rule_name": "plan_selected_simple"
         }
       }
@@ -74,7 +74,7 @@
           "phone"
         ],
         "planner_rung": {
-          "backend": "polars-direct",
+          "backend": "bucket",
           "rule_name": "plan_selected_simple"
         }
       }
@@ -83,15 +83,18 @@
       "kind": "anchor",
       "signals": {
         "blocking_cost": {
-          "candidate_pairs": 1529,
-          "max_block": 4,
-          "n_blocks": 1411,
-          "p99": 3,
-          "reduction_ratio": 1.0
+          "candidate_pairs": 415097,
+          "max_block": 49,
+          "n_blocks": 1407,
+          "p99": 43,
+          "reduction_ratio": 0.9991
         },
         "blocking_fields": [
+          "email",
           "first_name",
           "last_name",
+          "npi",
+          "phone_number",
           "zip5"
         ],
         "classification": {
@@ -108,7 +111,7 @@
           "npi"
         ],
         "planner_rung": {
-          "backend": "polars-direct",
+          "backend": "bucket",
           "rule_name": "plan_selected_simple"
         }
       }
@@ -116,36 +119,35 @@
     "febrl3": {
       "f1": {
         "attribution": {
-          "blocking_recall": 0.9787,
-          "final_recall": 0.9824,
-          "threshold_loss": -0.0037
+          "blocking_recall": 0.9296,
+          "final_recall": 0.9618,
+          "threshold_loss": -0.0321
         },
-        "f1": 0.9665,
-        "precision": 0.9418,
-        "recall": 0.9925
+        "f1": 0.9921,
+        "precision": 0.9997,
+        "recall": 0.9847
       },
       "f1_probabilistic": {
         "attribution": {
-          "blocking_recall": 0.9787,
-          "final_recall": 0.9504,
-          "threshold_loss": 0.0283
+          "blocking_recall": 0.9296,
+          "final_recall": 0.9524,
+          "threshold_loss": -0.0228
         },
-        "f1": 0.9907,
+        "f1": 0.9908,
         "precision": 1.0,
-        "recall": 0.9816
+        "recall": 0.9818
       },
       "kind": "real",
       "signals": {
         "blocking_cost": {
-          "candidate_pairs": 202462,
-          "max_block": 186,
-          "n_blocks": 4384,
-          "p99": 43,
-          "reduction_ratio": 0.9838
+          "candidate_pairs": 15484,
+          "max_block": 36,
+          "n_blocks": 1974,
+          "p99": 14,
+          "reduction_ratio": 0.9988
         },
         "blocking_fields": [
-          "date_of_birth",
-          "given_name",
+          "soc_sec_id",
           "state",
           "surname"
         ],
@@ -171,7 +173,7 @@
           "surname"
         ],
         "planner_rung": {
-          "backend": "polars-direct",
+          "backend": "bucket",
           "rule_name": "plan_selected_simple"
         }
       }
@@ -181,16 +183,16 @@
         "attribution": {
           "skipped": "scale"
         },
-        "f1": 0.4663,
-        "precision": 0.5714,
-        "recall": 0.3938
+        "f1": 0.3409,
+        "precision": 0.2474,
+        "recall": 0.5478
       },
       "f1_probabilistic": {
         "attribution": {
           "skipped": "scale"
         },
-        "f1": 0.8294,
-        "precision": 0.931,
+        "f1": 0.8279,
+        "precision": 0.9272,
         "recall": 0.7478
       },
       "kind": "real",
@@ -223,7 +225,7 @@
           "full_name"
         ],
         "planner_rung": {
-          "backend": "polars-direct",
+          "backend": "bucket",
           "rule_name": "plan_selected_simple"
         }
       }
@@ -232,12 +234,12 @@
       "f1": {
         "attribution": {
           "blocking_recall": 1.0,
-          "final_recall": 0.9716,
-          "threshold_loss": 0.0284
+          "final_recall": 0.936,
+          "threshold_loss": 0.064
         },
-        "f1": 0.9828,
-        "precision": 0.9943,
-        "recall": 0.9716
+        "f1": 0.9649,
+        "precision": 0.9957,
+        "recall": 0.936
       },
       "f1_probabilistic": {
         "attribution": {
@@ -279,7 +281,7 @@
           "last_name"
         ],
         "planner_rung": {
-          "backend": "polars-direct",
+          "backend": "bucket",
           "rule_name": "plan_selected_simple"
         }
       }
@@ -298,7 +300,7 @@
       "dblp_acm": "absent",
       "ncvr_real": "absent"
     },
-    "git_sha": "3234de9aeaa33acdbf0e23ffab725c900f2a1259",
-    "native_version": "0.1.5"
+    "git_sha": "5db27b2fce7f84487d680b02bd229a4b805cabe7",
+    "native_version": "0.1.12"
   }
 }

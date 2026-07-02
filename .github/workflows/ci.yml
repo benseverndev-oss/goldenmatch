@@ -658,7 +658,9 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
         with:
-          workspaces: packages/rust/extensions/datafusion-udf
+          workspaces: |
+            packages/rust/extensions/datafusion-udf
+            packages/rust/extensions/native
       # THE BUILD-TIME WIN: cache the built FFI UDF wheel keyed on the Rust
       # sources it's compiled from (the crate + every path-dep crate). On a hit
       # (the common case — these change rarely) the ~6.5-min --release maturin
@@ -685,6 +687,15 @@ jobs:
             echo "::notice::datafusion-udf wheel restored from cache; skipping the maturin build"
           fi
           uv pip install dist-dfudf/*.whl
+      # Reference mode (docs/design/2026-07-01-rust-is-the-reference-roadmap.md):
+      # Rust is the reference implementation, so the DEFAULT goldenmatch suite runs
+      # with the native ext BUILT -- native is the test path, not an opt-in lane
+      # that skips. Pure-Python is the lossy fallback, asserted separately in
+      # python_goldenmatch_fallback (GOLDENMATCH_NATIVE=0). The rust toolchain +
+      # cache are already set up above (for datafusion-udf); build_native.py drops
+      # goldenmatch._native into the package the way the `native` parity job does.
+      - name: Build native ext (reference mode -> native is the default test path)
+        run: uv run python scripts/build_native.py
       # Shard the suite with pytest-split (deterministic collection -> stable,
       # disjoint groups). The OOM-prone heavy files run in python_goldenmatch_heavy
       # and are --ignored here so they're neither double-run nor split. The
@@ -783,6 +794,46 @@ jobs:
           uv run coverage xml --rcfile=packages/python/goldenmatch/pyproject.toml \
             -o packages/python/goldenmatch/coverage.xml
           uv run python scripts/check_coverage_floors.py packages/python/goldenmatch/coverage.xml
+
+  # Reference mode: python_goldenmatch now runs NATIVE by default. This lean lane
+  # asserts the pure-Python FALLBACK still imports and passes on a core behavior
+  # slice -- the no-wheel path (musl / unsupported platform / GOLDENMATCH_NATIVE=0)
+  # must keep working, even though it is non-authoritative (native-vs-python parity
+  # is asserted in the `native` lane, not here). No native ext is built; the env
+  # var additionally forces the fallback even if a wheel were present.
+  python_goldenmatch_fallback:
+    needs: changes
+    if: needs.changes.outputs.python_goldenmatch == 'true' || needs.changes.outputs.force_all == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GOLDENMATCH_NATIVE: "0"
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      - name: pytest (pure-Python fallback -- core behavior slice, GOLDENMATCH_NATIVE=0)
+        # -k excludes tests that ASSERT native dispatch (e.g. TestNativeFSParity's
+        # opt-in-picks-native): the job-level GOLDENMATCH_NATIVE=0 force-disables
+        # native, so those tests can't hold here by construction. This lane proves
+        # the pure-Python behavior path, not native dispatch (that's the `native`
+        # lane's job).
+        run: |
+          uv run pytest \
+            packages/python/goldenmatch/tests/test_cluster.py \
+            packages/python/goldenmatch/tests/test_golden.py \
+            packages/python/goldenmatch/tests/test_lineage.py \
+            packages/python/goldenmatch/tests/test_config.py \
+            packages/python/goldenmatch/tests/test_pipeline.py \
+            packages/python/goldenmatch/tests/test_pairs.py \
+            packages/python/goldenmatch/tests/test_probabilistic.py \
+            -k "not native and not Native" \
+            -n auto --timeout=120 --timeout-method=thread -q
 
   # Visibility lanes for tests that the main `python` job currently --ignores.
   # Each lane runs the gated tests with explicit prerequisites; when prereqs
@@ -1048,10 +1099,11 @@ jobs:
   # baseline (scripts/autoconfig_quality/baselines/scorecard.json). A FAIL means a
   # kernel change moved a host-independent decision (classification / matchkeys /
   # blocking fields+cost) or dropped the anchor_person_match F1 below its floor.
-  # planner_rung drift (native availability / box size) is informational WARN, so
-  # this normal-runner job (no native wheel) doesn't flap the native-on dev
-  # baseline. Real datasets (DBLP-ACM) skip-when-absent. Iterate loop + how to
-  # re-bless: scripts/autoconfig_quality/README.md.
+  # Reference mode: this job BUILDS the native ext and runs the gate on the native
+  # path, and the committed baseline is blessed native-on -- native is the
+  # reference. planner_rung drift is still informational WARN. Real datasets
+  # (DBLP-ACM) skip-when-absent. Iterate loop + how to re-bless:
+  # scripts/autoconfig_quality/README.md.
   quality_gate:
     needs: changes
     if: needs.changes.outputs.quality_gate == 'true' || needs.changes.outputs.force_all == 'true'
@@ -1072,6 +1124,18 @@ jobs:
       # historical_50k (vendored parquet) need no extra install; real-NCVR +
       # DBLP-ACM skip-when-absent in CI (gitignored).
       - run: uv pip install recordlinkage pyarrow
+      # Reference mode (docs/design/2026-07-01-rust-is-the-reference-roadmap.md):
+      # native is the reference, so the gate runs on the native path and the
+      # baseline is blessed native-on. build_native.py drops goldenmatch._native
+      # into the package (as the `native` parity lane does). Kernel signals are
+      # parity-identical native/Python; running native keeps planner_rung aligned
+      # with the native baseline (it picks `bucket`, not `polars-direct`).
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/native
+      - name: Build native ext (reference mode -> gate runs on the native path)
+        run: uv run python scripts/build_native.py
       - name: Run auto-config quality gate
         shell: bash
         env:
@@ -2605,6 +2669,7 @@ jobs:
       - python_goldenmatch
       - python_goldenmatch_heavy
       - python_goldenmatch_coverage
+      - python_goldenmatch_fallback
       - python_skipped_lanes
       - python_postgres
       - synthetic_benchmarks
