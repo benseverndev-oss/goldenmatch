@@ -4,13 +4,17 @@
 **Branch:** `feat/relation-reprompt` (off `main`)
 **Program:** goldengraph substrate-quality arc — the first **relation-recall** lever, after the edge-miss diagnostic showed the real-prose residual is *relation-never-extracted* (the 7B extracts the entities but omits the edge connecting them), not resolver-dropped and not an entity-recall gap.
 
+**Source note:** the motivating findings (65 gold / 32 aligned / 33 edge-miss; exact-resolver recovers zero) live in `docs/superpowers/reports/2026-07-01-gliner-recall-probe-verdict.md` and `...-edge-miss-diagnostic-verdict.md`, which are on the `feat/gliner-recall-probe` branch (PR #1353, in the merge queue) — not yet on `main`. The chunking win this builds on (`...-chunked-extraction-verdict.md`) IS on `main`.
+
 ## Problem
 
 The GLiNER probe + edge-miss diagnostic pinned the real-prose ceiling precisely: of 65 gold, 32 align and 33 are **edge-miss** — the entity is a node in the graph but has no surviving edge, so the edge-centric aligner can't reach it. Exact resolution recovers zero of them, so the relations were simply never extracted. The entities are already correct and unioned (name_ci + chunking got them in); only the edges are missing.
 
 ## Goal
 
-A gated `GOLDENGRAPH_RELATION_REPROMPT=1` **second pass** that, after (chunked) extraction, hands the 7B the already-extracted entity list plus the full document text and asks specifically *"what relations hold among these entities?"*, appending the found edges. It splits the hard joint task (find entities AND relations in dense prose) into two easy tasks — entities first (already done), then relations over a given list — the same "narrow the task" principle that made chunking win. Runs whole-doc over the unioned entity set, so it also attacks the cross-window relation loss that is chunking's known limitation. Default-off; measured on the wiki rig via coverage uplift (edge-miss → aligned).
+A gated `GOLDENGRAPH_RELATION_REPROMPT=1` **second pass** that, after (chunked) extraction, hands the 7B the already-extracted entity list plus the full document text and asks specifically *"what relations hold among these entities?"*, appending the found edges. It splits the hard joint task (find entities AND relations in dense prose) into two passes — entities first (already done), then relations over a given list. Runs whole-doc over the unioned entity set, so it also targets the cross-window relation loss that is chunking's known limitation. Default-off; measured on the wiki rig via coverage uplift (edge-miss → aligned).
+
+**Central hypothesis (under test, not assumed):** narrowing the *task* (relations over a provided entity list) makes the 7B robust to the full-doc *density* that chunking removed by narrowing the *context*. These are different axes — task-narrowing is not the same as context-narrowing — so this is exactly what the measurement tests. If density still dominates (the model drops relations over the full lead regardless of the provided entities), the lever is REFUTED and the answer is per-window re-prompt or REBEL, not this.
 
 ## Non-goals
 
@@ -30,15 +34,23 @@ Isolated and box-testable, mirroring `chunk_extract.py`:
 
 ### The seam — `ingest._prepare_doc`
 
-After the extraction is built (single-pass or chunked), before resolve:
+After the extraction is built (single-pass or chunked) and **BEFORE `_maybe_canonicalize` (`ingest.py:680`)**:
 
 ```python
 extraction = chunk_extract(text, llm, _extractor) if chunk_extract_enabled() else _extractor(text, llm)
 if relation_reprompt_enabled():
-    extraction.relationships += relation_reprompt(text, extraction.mentions, llm)
+    try:
+        extraction.relationships += relation_reprompt(text, extraction.mentions, llm)
+    except Exception:
+        pass  # never let the 2nd pass discard the whole doc's first-pass extraction
+# ... then the existing _maybe_canonicalize(extraction) line
 ```
 
-`text` = the whole doc; `extraction.mentions` = the unioned entity set → whole-doc-over-unioned-entities scope. Runs after chunk_extract (composes with the chunking win) and independently of it. Everything downstream (`build_batch → _cross_doc_link → append`) is untouched; the extra edges give the edge-miss entities the edges the aligner needs.
+**Placement matters (before canonicalization, not after).** `_maybe_canonicalize` (`ingest.py:680-681` → `schema.canonicalize_extraction`) snaps predicates to the closed schema, flips reverse-phrased edges, and drops out-of-schema edges when `GOLDENGRAPH_SCHEMA_CANON=1`. Appending re-prompt edges *before* it means they flow through the same direction-canonicalization and schema-snapping as first-pass edges (a backwards-phrased re-prompt edge gets flipped, not shipped raw). Appending *after* would bypass that. So the append goes immediately after the extraction assignment, above the canonicalize line.
+
+**Belt-and-suspenders fail-soft (load-bearing).** The seam lives inside `_prepare_doc`'s existing `try` whose `except` returns an *empty* extraction (`ingest.py:689`) — so a raise from `relation_reprompt` would discard the doc's first-pass entities+edges too, not just the re-prompt's contribution. `relation_reprompt` is designed to never raise (fail-soft → `[]`), but the seam also wraps the call in its own `try/except: pass` as a second guard, so a re-prompt failure can never cost the first-pass extraction.
+
+`text` = the whole doc; `extraction.mentions` = the unioned entity set → whole-doc-over-unioned-entities scope. Runs after chunk_extract (composes with the chunking win) and independently of it. Everything downstream (`_maybe_canonicalize → resolve → build_batch → _cross_doc_link → append`) is untouched; the extra edges give the edge-miss entities the edges the aligner needs.
 
 ## Components
 
@@ -59,7 +71,9 @@ Text:
 <full doc text>
 ```
 
-When `GOLDENGRAPH_RELATION_VOCAB` (or the `relation_vocab` arg) is set, prepend the existing `_RELATION_VOCAB_INSTRUCTION` from `extract.py` (reuse — same closed-predicate + direction rules as first-pass extraction, so the re-prompt honors the same schema). Resolve the vocab with the same precedence as `extract._relation_vocab` (arg, else env, else open).
+When a relation vocab is set, prepend the existing `_RELATION_VOCAB_INSTRUCTION` from `extract.py` (reuse — same closed-predicate + direction rules as first-pass extraction). Two reuse details the implementer must not miss:
+- **Resolve the vocab by calling `extract._relation_vocab(relation_vocab)` directly** (arg → `GOLDENGRAPH_RELATION_VOCAB` env → open) — do not reimplement the precedence.
+- **`_RELATION_VOCAB_INSTRUCTION` is a `.format(vocab=...)` template** (`extract.py:148`, literal `[{vocab}]`). Prepend it as `_RELATION_VOCAB_INSTRUCTION.format(vocab=", ".join(vocab))`, exactly as `extract.extract` does — not raw (a raw prepend ships a literal `{vocab}` into the prompt).
 
 ### Parsing
 
@@ -75,7 +89,7 @@ The re-prompt may re-emit first-pass edges. Duplicates are benign — the substr
 
 ## Error handling
 
-Fail-soft throughout: empty mentions → `[]` (no call); LLM error or unparseable output → `[]` (extraction unchanged, doc still builds). The `_prepare_doc` try/except already guards the surrounding extract+resolve.
+Fail-soft at two levels: (1) `relation_reprompt` internally returns `[]` on empty mentions (no LLM call), LLM error, or unparseable output; (2) the seam ALSO wraps the call in `try/except: pass`. Level 2 is load-bearing, not redundant: the seam sits inside `_prepare_doc`'s `try` whose `except` returns an *empty* extraction, so without the seam's own guard a re-prompt raise would discard the doc's first-pass entities+edges. With both guards, a re-prompt failure costs at most the re-prompt's own edges — the first-pass extraction is always preserved.
 
 ## Measurement
 
@@ -106,6 +120,8 @@ Box-safe (capturing/fixed stub LLM, no network), in `packages/python/goldengraph
 3. **Defensive drops** — an out-of-range endpoint and a `subj==obj` self-loop are dropped; malformed JSON → `[]`.
 4. **Gate + empty guards** — `relation_reprompt_enabled` env parsing (case-insensitive, empty-safe); empty `mentions` → `[]` with no LLM call.
 5. **Wiring in `_prepare_doc`** — gate off → the re-prompt callable is not invoked (counter stub); gate on → invoked once and `extraction.relationships` is extended.
+6. **Re-prompt raise preserves first-pass extraction** — gate on, stub whose re-prompt path raises; assert `_prepare_doc` still returns the first-pass entities+edges (the seam's `try/except` swallowed it), not an empty extraction.
+7. **Canonicalization pass-through** — with `GOLDENGRAPH_SCHEMA_CANON=1` + a relation vocab, a reverse-phrased re-prompt edge is flipped/snapped by `_maybe_canonicalize` (proves the append lands before canonicalization, not after). If exercising the real `canonicalize_extraction` is too heavy for a box unit test, assert the ordering structurally (re-prompt append precedes the `_maybe_canonicalize` call site).
 
 Run via the goldengraph `.venv` + `PYTHONPATH` shadow, `POLARS_SKIP_CPU_CHECK=1 GOLDENGRAPH_NATIVE=0 -p no:cacheprovider`.
 
