@@ -314,3 +314,46 @@ def test_probe_degenerate_guards():
                 [{"subj": 1, "obj": 1, "predicate": "is", "source_refs": ["d1"]}])
     r2 = gliner_probe_report(g2, [("Qa", "apple", "d1")], {"Qa": ["apple"]}, {"d1": {"Apple"}})
     assert r2["n_missed"] == 0 and r2["residual_recovered_frac"] == 0.0 and r2["ner_recovered_frac"] == 0.0
+
+
+# --- node-provenance aligner union (edge-endpoints U node source_refs) ---
+from erkgbench.substrate_eval import _assign_real_nodes_aliased
+
+
+def _graph_prov(entities, edges):
+    return {"entities": entities, "edges": edges}
+
+
+def test_aligner_reaches_node_via_source_refs_not_edge():
+    # node 1 edged only in docB but source_refs = {docA, docB}; gold for it in docA.
+    entities = [{"entity_id": 1, "canonical_name": "IBM", "surface_names": ["IBM"],
+                 "typ": "org", "source_refs": ["docA", "docB"]}]
+    edges = [{"subj": 1, "obj": 1, "predicate": "is", "source_refs": ["docB"]}]
+    gold = [("Qibm", "ibm", "docA")]
+    aliases = {"Qibm": ["ibm"]}
+    node_of = _assign_real_nodes_aliased(_graph_prov(entities, edges), gold, aliases)
+    assert node_of[0] == 1          # reached via source_refs (docA), though its edge is in docB
+
+
+def test_aligner_byte_identical_without_node_source_refs():
+    # no entity carries source_refs -> candidate set is edge-only, exactly as before.
+    entities = [{"entity_id": 1, "canonical_name": "IBM", "surface_names": ["IBM"], "typ": "org"}]
+    edges = [{"subj": 1, "obj": 1, "predicate": "is", "source_refs": ["docA"]}]
+    gold = [("Qibm", "ibm", "docA"), ("Qz", "zeta", "docB")]
+    aliases = {"Qibm": ["ibm"], "Qz": ["zeta"]}
+    node_of = _assign_real_nodes_aliased(_graph_prov(entities, edges), gold, aliases)
+    assert node_of[0] == 1 and node_of[1] < 0   # docA aligns via edge; docB orphan (no node there)
+
+
+def test_aligner_mixed_provenance_no_regression():
+    # one entity has source_refs, one doesn't; the without-prov entity still aligns via its edge.
+    entities = [
+        {"entity_id": 1, "canonical_name": "IBM", "surface_names": ["IBM"], "typ": "org",
+         "source_refs": ["docA"]},
+        {"entity_id": 2, "canonical_name": "Apple", "surface_names": ["Apple"], "typ": "org"},  # no refs
+    ]
+    edges = [{"subj": 2, "obj": 2, "predicate": "is", "source_refs": ["docB"]}]
+    gold = [("Qibm", "ibm", "docA"), ("Qap", "apple", "docB")]
+    aliases = {"Qibm": ["ibm"], "Qap": ["apple"]}
+    node_of = _assign_real_nodes_aliased(_graph_prov(entities, edges), gold, aliases)
+    assert node_of[0] == 1 and node_of[1] == 2   # IBM via source_refs, Apple via edge -- both align
