@@ -1,7 +1,7 @@
 # Substrate Staged Tuner — Design (SP-B2)
 
 **Date:** 2026-07-02
-**Status:** design, pre-implementation
+**Status:** implemented (branch `feat/substrate-tuner`)
 **Sub-project:** SP-B2 of the substrate-builder config-surface program (SP-A metric split #1371 merged; SP-B1 config surface #1373 armed; SP-C MCP/LLM loop follows this).
 
 ## Scope decisions (flagged for review)
