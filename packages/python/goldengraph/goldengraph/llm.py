@@ -8,6 +8,7 @@ extraction stays testable + provider-swappable.
 
 from __future__ import annotations
 
+import os
 from typing import Protocol
 
 
@@ -65,6 +66,15 @@ class OpenAIClient:
             "messages": [{"role": "user", "content": prompt}],
             "temperature": temperature,
         }
+        # Optional fixed seed for reproducible decoding (GOLDENGRAPH_LLM_SEED). Ollama's
+        # OpenAI-compatible endpoint honors `seed` + temperature=0; unset/non-int -> omitted
+        # (unchanged behavior). Reduces run-to-run extraction variance for bench determinism.
+        _raw_seed = os.environ.get("GOLDENGRAPH_LLM_SEED", "").strip()
+        if _raw_seed:
+            try:
+                kwargs["seed"] = int(_raw_seed)
+            except ValueError:
+                pass
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
         resp = client.chat.completions.create(**kwargs)
