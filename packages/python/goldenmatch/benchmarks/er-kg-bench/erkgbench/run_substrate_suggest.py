@@ -33,8 +33,12 @@ def main() -> None:
     corpus = generate_engineered(seed=20260620, n_questions=1, ambiguity=args.ambiguity)
     gold = emit_gold_mentions(corpus.documents)
     # PASS Document objects (with .text/.id), NOT [d.text] -- build_and_score_real needs the real doc-ids.
+    # Sample the WHOLE corpus for the proposer: with ~139 SHORT docs, a small sample gives an INCOMPLETE
+    # relation set (schema_canon then drops out-of-vocab edges -> F1 collapse) and misses both halves of
+    # the diluted homograph pairs. Whole-corpus sampling is the fair perception test (prompt stays small).
     res = suggest_substrate_config(corpus.documents, gold=gold, qid_aliases=None,
-                                   build_and_score=build_and_score_real, chat=_chat)
+                                   build_and_score=build_and_score_real, chat=_chat,
+                                   sample_docs=len(corpus.documents))
 
     b, p = res.baseline_scorecard, res.proposed_scorecard
     print(f"[suggest] accepted={res.accepted} flags={res.flags} "
