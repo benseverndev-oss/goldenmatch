@@ -42,7 +42,8 @@ Rationale for scoring relational over the *presence* (relaxed) alignment rather 
    {
      "presence": {"coverage": float} | None,   # None when qid_aliases is None
      "relational": {"f1": float, "recall": float, "precision": float},
-     "connectivity": {"coverage": float, "f1": float, "edge_recall": float},
+     "connectivity": {"coverage": float | None, "f1": float | None, "edge_recall": float},  # cov/f1 None on no-alias path
+
      "coherence": {"components": int, "largest_fraction": float},
    }
    ```
