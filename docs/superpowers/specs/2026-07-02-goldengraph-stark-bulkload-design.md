@@ -115,19 +115,26 @@ index MUST be built in that space, not on stark ids.
 Take ONE slice `slice_graph = store.as_of(BIG, BIG)`. Build `EntityIndex` over
 `slice_graph.entities()` (so `entity_id` = view-local `EntityId`,
 `canonical_name` = node name). Build `eid_to_stark = {e["entity_id"]:
-e["source_refs"][0] for e in slice_graph.entities()}` from the SAME slice -- the
-stark id rides through on `source_refs` (lib.rs:79-80 exposes it; the loader
-stamps `source_refs=[stark_id]`). Both arms retrieve view-local ids and map to
+e["source_refs"][0] for e in slice_graph.entities() if e["source_refs"]}` from the
+SAME slice -- the stark id rides through on `source_refs` (lib.rs:79-80 exposes it;
+the loader stamps `source_refs=[stark_id]`). The map spans the FULL slice (a
+superset of the index's rows, which drop literal/empty-name nodes) so Arm B
+neighbors that are stored-but-unindexed still translate. The `if e["source_refs"]`
+guard keeps it robust to a source-ref-less node (a retrieved id with no mapping is
+simply skipped from the ranked list, never an `IndexError`). Both arms retrieve view-local ids and map to
 stark ids via `eid_to_stark` before `metrics(...)`.
 
 - **Arm A — dense baseline:** `index.query(q, embedder, k=20)` -> view-local ids
   -> `eid_to_stark` -> compare gold. Pure vector retrieval; the graph contributes
   nothing. The "vectors alone" number.
 - **Arm B — graph-expanded:** `seeds = index.query(q, embedder, k=5)` (view-local),
-  then 1-hop expansion `slice_graph.query(seeds, 1)` on the SAME slice; rank seeds
-  ++ their neighbor ids, map via `eid_to_stark`, compare gold. This is the graph's
-  value-add -- answers reachable by a relation but not textually near the query.
-  (Equivalent to `ask(entity_index=index)`, which already seeds + walks one slice.)
+  then 1-hop expansion `slice_graph.query(seeds, 1)` on the SAME slice; rank
+  `seeds ++ neighbors` **deduped preserving first-seen order** (a neighbor equal to
+  a seed must not occupy a second rank slot -- an undeduped duplicate can push a
+  distinct gold id past position 20 and understate Recall@20), map via
+  `eid_to_stark`, compare gold. This is the graph's value-add -- answers reachable
+  by a relation but not textually near the query. (Equivalent to
+  `ask(entity_index=index)`, which already seeds + walks one slice.)
 
 Captured per run: ingest wall, `EntityIndex.build` wall, mean/95p per-query
 latency, peak RSS (via `resource`/`tracemalloc` or a Modal memory sample), and
