@@ -46,3 +46,72 @@ def identity_basket(candidate_col: str, profiles: list[Any]) -> list[str]:
         for p in profiles
         if p.name != candidate_col and getattr(p, "col_type", None) in _IDENTITY_BASKET_TYPES
     ]
+
+
+def _norm(v: Any) -> str | None:
+    """Normalize a cell for equality: str -> stripped lower; blank/None -> None."""
+    if v is None:
+        return None
+    s = str(v).strip().lower()
+    return s or None
+
+
+def discriminative_power(
+    df: pl.DataFrame,
+    candidate_col: str,
+    basket: list[str],
+    *,
+    max_pairs: int = _MAX_PAIRS,
+) -> tuple[float, int]:
+    """Mean co-agreement over shared-value pairs, and support (n pairs measured).
+
+    Groups df by candidate_col; for value-groups with >=2 rows, forms up to
+    max_pairs record-pairs deterministically (row 0 paired with rows 1..k-1
+    within each group, groups visited in sorted-value order). Per pair,
+    agreement = (# basket fields where BOTH cells are non-null and
+    normalized-equal) / (# basket fields where BOTH are non-null); pairs with no
+    jointly-populated basket field are skipped. Returns (mean over measured
+    pairs, count of measured pairs); (0.0, 0) when basket empty, candidate
+    absent, or no measurable shared-value pair exists.
+    """
+    if not basket or candidate_col not in df.columns:
+        return 0.0, 0
+    keep = [candidate_col, *[c for c in basket if c in df.columns]]
+    if len(keep) < 2:
+        return 0.0, 0
+    sub = df.select(keep)
+    basket_cols = keep[1:]
+
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for row in sub.iter_rows(named=True):
+        cv = _norm(row[candidate_col])
+        if cv is None:
+            continue
+        groups.setdefault(cv, []).append(row)
+
+    total = 0.0
+    measured = 0
+    for cv in sorted(groups):
+        rows = groups[cv]
+        if len(rows) < 2 or measured >= max_pairs:
+            continue
+        anchor = rows[0]
+        for other in rows[1:]:
+            if measured >= max_pairs:
+                break
+            agree = 0
+            comparable = 0
+            for c in basket_cols:
+                a, b = _norm(anchor[c]), _norm(other[c])
+                if a is None or b is None:
+                    continue
+                comparable += 1
+                if a == b:
+                    agree += 1
+            if comparable == 0:
+                continue
+            total += agree / comparable
+            measured += 1
+    if measured == 0:
+        return 0.0, 0
+    return total / measured, measured

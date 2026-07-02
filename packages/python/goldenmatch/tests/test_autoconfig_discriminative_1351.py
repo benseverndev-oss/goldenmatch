@@ -25,3 +25,37 @@ def test_identity_basket_includes_identity_types_excludes_locality():
 def test_identity_basket_excludes_the_candidate_even_if_identity_typed():
     profiles = [_P("npi", "identifier"), _P("email", "email")]
     assert disc.identity_basket("npi", profiles) == ["email"]
+
+
+def _zip_like_df(n=300):
+    zips = [f"{10000 + (i % 30):05d}" for i in range(n)]
+    names = [f"person{i}" for i in range(n)]   # unique -> shared-zip pairs DISAGREE
+    return pl.DataFrame({"zip": zips, "name": names})
+
+
+def _npi_like_df(n=300):
+    npis = [f"{1000000000 + (i % 30)}" for i in range(n)]
+    names = [f"provider{i % 30}" for i in range(n)]  # shared-npi pairs AGREE
+    return pl.DataFrame({"npi": npis, "name": names})
+
+
+def test_discriminative_power_low_for_shared_locality():
+    power, support = disc.discriminative_power(_zip_like_df(), "zip", ["name"])
+    assert support >= disc._MIN_SHARED_PAIRS
+    assert power < 0.5
+
+
+def test_discriminative_power_high_for_shared_identity():
+    power, support = disc.discriminative_power(_npi_like_df(), "npi", ["name"])
+    assert support >= disc._MIN_SHARED_PAIRS
+    assert power > 0.9
+
+
+def test_discriminative_power_zero_support_when_all_unique():
+    df = pl.DataFrame({"id": [str(i) for i in range(100)], "name": [f"n{i}" for i in range(100)]})
+    power, support = disc.discriminative_power(df, "id", ["name"])
+    assert support == 0
+
+
+def test_discriminative_power_empty_basket_zero():
+    assert disc.discriminative_power(_zip_like_df(), "zip", []) == (0.0, 0)
