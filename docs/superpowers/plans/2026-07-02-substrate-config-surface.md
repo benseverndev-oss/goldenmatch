@@ -30,6 +30,13 @@ PYTHONIOENCODING=utf-8 PYTHONUTF8=1 POLARS_SKIP_CPU_CHECK=1 GOLDENMATCH_NATIVE=0
 ```
 
 > NOTE: importing `goldengraph.config` runs `goldengraph/__init__.py` (which imports the LLM/embed path) — this is why the env flags are needed, and it is the same wrapping every goldengraph test wears. `config.py` itself must NOT `import` any of `.llm`, `.embed`, `.chunk_extract`, `.ingest` (keep it stdlib-only).
+>
+> **Pre-flight (run once before Task 1):** confirm `goldengraph` resolves to THIS worktree, not a stale cross-repo editable install (the `reference_py_worktree_test_native_skew` footgun):
+> ```bash
+> cd /d/show_case/gg-local-llm/packages/python/goldengraph
+> POLARS_SKIP_CPU_CHECK=1 GOLDENMATCH_NATIVE=0 /d/show_case/goldenmatch/.venv/Scripts/python.exe -c "import goldengraph; print(goldengraph.__file__)"
+> ```
+> Expected: a path under `D:\show_case\gg-local-llm\...`. If it prints a different repo, prepend `PYTHONPATH="$PWD"` to every test command below.
 
 ## Ground-truth lever facts (verified against source — do not re-derive)
 
@@ -292,6 +299,9 @@ git commit -m "feat(goldengraph): MANAGED_ENV_VARS + to_env total map incl SCHEM
 
 ```python
 def _clear_managed():
+    # Box-safe test isolation: pops all managed keys to test from a known-clean state. Destructive to
+    # ambient GOLDENGRAPH_* with no restore -- fine for CI/box (those vars are unset there), not for a
+    # shell that has them set. The two tests that need a prior value use try/finally to restore.
     for k in MANAGED_ENV_VARS:
         os.environ.pop(k, None)
 
@@ -590,9 +600,11 @@ git commit -m "test(goldengraph): SubstrateConfig fields cover SP-A KNOWN_LEVERS
   git fetch origin main
   # only if #1371 (SP-A) is in origin/main:
   git rebase origin/main
-  # re-run tests; Task 6 test must now PASS (not skip)
+  # re-run tests; Task 6 test should now PASS (not skip)
   ```
   If #1371 has NOT merged yet, skip the rebase, note it in the PR, and land with the skip (rebase later).
+
+  **Expected to PASS, not fail (verified against SP-A):** SP-A's `KNOWN_LEVERS` is keyed by lever-NAME — `xdoc_key, chunk_extract, chunk_extract, extract_recall, extractor, entity_type_canon, schema_canon, relation_vocab, relation_reprompt, rebel_fuse` — every one of which is a `SubstrateConfig` field, so `set(KNOWN_LEVERS) - field_names == set()`. `schema_discover` is deliberately NOT a `KNOWN_LEVERS` key (it's a leak-guard, not a lever), so it can't trip the subset check. If the rebased test unexpectedly FAILS, the cause is a key-SHAPE mismatch (SP-A keying by env-var name instead of lever-name) — reconcile the two, don't just skip.
 
 - [ ] **Step 4: Update the spec status** — flip the spec header `Status:` to `implemented`; commit `docs(substrate): mark SP-B1 spec implemented`.
 
