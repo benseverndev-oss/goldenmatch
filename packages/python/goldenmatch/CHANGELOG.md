@@ -6,6 +6,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [2.6.0] - 2026-07-01
+
+### Changed
+- **Native Fellegi-Sunter (FS) block scorer is now authoritative by default (reference mode).** `_fs_native_enabled()` flips from opt-in to default-on: when the native ext is importable, the probabilistic path uses the native Rust FS kernel (rapidfuzz-rs decides comparison levels); the numpy vectorized path becomes the reproducible fallback via `GOLDENMATCH_FS_NATIVE=0` (also the automatic fallback for TF-adjustment / non-native-scorer fields or a missing wheel). Part of the Rust-is-the-reference direction (`docs/design/2026-07-01-rust-is-the-reference-roadmap.md`). **Scoped to the probabilistic path only** (opt-in `type: probabilistic` matchkeys / probabilistic routing); the default weighted path is unaffected. **Measured F1-neutral** on the probabilistic bench panel (`gm_prob_native` vs `gm_probabilistic`): febrl3 and synthetic_person identical, historical_50k −0.0007 (within noise); dblp_acm not measured (Leipzig CSVs gitignored in CI). Boundary-level score differences are possible where a rapidfuzz-rs vs rapidfuzz-py similarity sits exactly on a comparison-level threshold — the native result is now the reference; `GOLDENMATCH_FS_NATIVE=0` restores the prior numpy operating point.
+
 ## [2.5.1] - 2026-07-01
 
 ### Fixed
