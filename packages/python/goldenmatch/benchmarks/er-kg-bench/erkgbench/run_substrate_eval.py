@@ -119,6 +119,15 @@ def run_wiki_gliner_probe() -> dict:
     return r
 
 
+def run_wiki_presence_probe() -> dict:
+    """Presence-aligner diagnostic: build the best-config graph, report strict vs relaxed alignment
+    (coverage / R(B) / P(B)). Quantifies how much of the coverage ceiling is edgeless-but-present."""
+    documents, gold, qid_aliases, graph = _wiki_build()
+    r = substrate_eval.presence_aligner_report(graph, gold, qid_aliases)
+    r.update(n_docs=len(documents))
+    return r
+
+
 def run_one(seed: int, ambiguity: float) -> dict:
     """One substrate scoreboard at a given `ambiguity`. Gold comes DIRECTLY off the generated
     Documents (no rng replay), so surfaces match the build by construction. Cooccur OFF -> clean base
@@ -172,6 +181,8 @@ def main() -> None:
     ap.add_argument("--out-md", default="SUBSTRATE.md")
     ap.add_argument("--gliner-probe", action="store_true",
                     help="run the GLiNER entity-recall probe instead of the plain wiki eval")
+    ap.add_argument("--presence-probe", action="store_true",
+                    help="run the strict-vs-relaxed presence-aligner diagnostic")
     args = ap.parse_args()
 
     _probe = args.gliner_probe or os.environ.get("GOLDENGRAPH_GLINER_PROBE", "") not in ("", "0", "false")
@@ -196,6 +207,34 @@ def main() -> None:
             "NER_recovered = of the NER-miss gold (entity absent from the graph), share GLiNER surfaces. "
             "residual_recovered conflates NER-miss + edge-miss (context only). junk_rate is inflated by "
             "wikilink-only gold.\n"
+        )
+        with open(args.out_md, "w", encoding="utf-8") as fh:
+            fh.write(md)
+        print("\n" + md, flush=True)
+        return
+
+    _presence = (args.presence_probe
+                 or os.environ.get("GOLDENGRAPH_PRESENCE_PROBE", "") not in ("", "0", "false"))
+    if args.corpus == "wiki" and _presence:
+        r = run_wiki_presence_probe()
+        print(
+            f"[presence-probe] strict_cov={r['strict_coverage']:.4f} relaxed_cov={r['relaxed_coverage']:.4f} "
+            f"strict_pb={r['strict_pb']:.4f} relaxed_pb={r['relaxed_pb']:.4f} "
+            f"strict_rb={r['strict_rb']:.4f} relaxed_rb={r['relaxed_rb']:.4f} "
+            f"strict_fb={r['strict_fb']:.4f} relaxed_fb={r['relaxed_fb']:.4f}",
+            flush=True,
+        )
+        md = (
+            "# Presence-Aligner Probe (wiki)\n\n"
+            "| axis | strict (edge) | relaxed (global surface) |\n"
+            "|---|---|---|\n"
+            f"| coverage | {r['strict_coverage']:.4f} | {r['relaxed_coverage']:.4f} |\n"
+            f"| R(B) | {r['strict_rb']:.4f} | {r['relaxed_rb']:.4f} |\n"
+            f"| P(B) | {r['strict_pb']:.4f} | {r['relaxed_pb']:.4f} |\n"
+            f"| F1(B) | {r['strict_fb']:.4f} | {r['relaxed_fb']:.4f} |\n\n"
+            "relaxed reaches edgeless-but-present nodes globally (any doc). A P(B) drop means "
+            "more-aligned-with-some-collisions, not pure error -- the two P columns are over different "
+            "pair populations.\n"
         )
         with open(args.out_md, "w", encoding="utf-8") as fh:
             fh.write(md)
