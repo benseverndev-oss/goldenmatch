@@ -144,6 +144,33 @@ def dedupe_cmd(
     # Parse file:source pairs
     parsed_files = [_parse_file_source(f) for f in files]
 
+    # Reject clearly-structured non-tabular inputs early with a helpful message.
+    # Without this a .json/.xml file is routed to the text loader and surfaces as
+    # a confusing "no data to configure on" instead of "this format isn't tabular".
+    _structured_suffixes = {".json", ".jsonl", ".ndjson", ".xml", ".yaml", ".yml"}
+    for _fp, _ in parsed_files:
+        _fp_str = str(_fp)
+        if "://" in _fp_str:
+            continue  # cloud URI -- let the connector decide
+        _suffix = Path(_fp_str).suffix.lower()
+        if _suffix in _structured_suffixes:
+            raise typer.BadParameter(
+                f"{_fp_str!r} looks like a structured non-tabular format "
+                f"({_suffix}). GoldenMatch dedupes tabular files "
+                "(CSV/TSV/Parquet/Excel); convert it to CSV first.",
+                param_hint="FILES",
+            )
+
+    # Positive-value guards on size flags -- a negative/zero value was silently
+    # accepted (benign on tiny data, but a negative chunk size on a real chunked
+    # run is undefined).
+    if chunk_size < 1:
+        raise typer.BadParameter("--chunk-size must be >= 1.", param_hint="--chunk-size")
+    if preview_size < 1:
+        raise typer.BadParameter(
+            "--preview-size must be >= 1.", param_hint="--preview-size"
+        )
+
     # Load config - from file, project settings, or auto-detect
     if config:
         try:

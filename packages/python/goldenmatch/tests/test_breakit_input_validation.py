@@ -106,3 +106,31 @@ def test_cli_unknown_format_rejected_at_parse_time(tmp_path):
     r = runner.invoke(app, ["dedupe", _tiny_csv(tmp_path), "--format", "xml"])
     assert r.exit_code != 0
     assert "Unsupported output format" in r.output
+
+
+# ── watch-list: structured non-tabular input + non-positive size flags ──────
+
+def test_cli_json_input_rejected_with_helpful_message(tmp_path):
+    from goldenmatch.cli.main import app
+
+    p = tmp_path / "data.json"
+    p.write_text('[{"name": "a"}]', encoding="utf-8")
+    r = runner.invoke(app, ["dedupe", str(p)])
+    assert r.exit_code != 0
+    assert "non-tabular" in r.output and ".json" in r.output
+
+
+def test_cli_negative_chunk_size_rejected(tmp_path):
+    from goldenmatch.cli.main import app
+
+    r = runner.invoke(app, ["dedupe", _tiny_csv(tmp_path), "--chunk-size", "-1"])
+    assert r.exit_code != 0
+    assert "--chunk-size must be >= 1" in r.output
+
+
+def test_cli_zero_preview_size_rejected(tmp_path):
+    from goldenmatch.cli.main import app
+
+    r = runner.invoke(app, ["dedupe", _tiny_csv(tmp_path), "--preview-size", "0", "--preview"])
+    assert r.exit_code != 0
+    assert "--preview-size must be >= 1" in r.output
