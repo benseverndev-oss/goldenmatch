@@ -394,7 +394,9 @@ git add -A && git commit -m "feat(autoconfig): should_veto_exact decision + fail
 - Modify: `packages/python/goldenmatch/goldenmatch/core/autoconfig.py` (exact-matchkey gate loop, ~line 1108, near the `_exact_floor` gate and the `>= 1.0` surrogate gate)
 - Test: `packages/python/goldenmatch/tests/test_build_matchkeys_veto_1351.py`
 
-**Context:** In `build_matchkeys(profiles, df=None, *, multi_source=False)`, the per-field loop appends columns to `exact_fields` after passing the zip/geo guard (~1089), the `_exact_floor` gate (~1108), and the `>= 1.0` surrogate gate. Add a veto check in that loop: when a column would otherwise become an exact field, call `should_veto_exact(df, p.name, profiles)`; if True, add to `skipped_exact` with a reason and `continue` (mirror the existing skip branches). Import at top: `from goldenmatch.core.autoconfig_discriminative import should_veto_exact`.
+**Context:** In `build_matchkeys(profiles, df=None, *, multi_source=False)`, the per-field loop appends columns to `exact_fields` after passing the zip/geo guard (~948, `col_type in ("zip","geo")`), the `_exact_floor` gate (~966), and the `>= 1.0` surrogate gate (~993–1002). **Insert the veto directly after the surrogate gate (~line 1002)** — before the intervening multi_source name-demotion block and the `mf`/`tf_freqs` construction, and before the `if scorer == "exact": exact_fields.append(mf)` record (~1058). Placing it there means the `continue` fires before `mf` is built, and `p`, `scorer`, `profiles`, `df`, `skipped_exact` are all in scope. Call `should_veto_exact(df, p.name, profiles)`; if True, append to `skipped_exact` with a reason and `continue` (mirror the three adjacent skip branches byte-for-byte). Import at top: `from goldenmatch.core.autoconfig_discriminative import should_veto_exact`.
+
+**Note (perf, non-blocking):** the estimator groups rows via `iter_rows` into Python dicts over the whole `df` before capping pairs — O(rows). Fine for the controller's ~1.5k-row sample and the tiny test fixtures; if a future caller passes a large frame, cap/sample rows before grouping.
 
 - [ ] **Step 1: Write failing test at the build_matchkeys level**
 
