@@ -943,31 +943,42 @@ def build_matchkeys(
         # _noise_aware_scorer.
         scorer = _noise_aware_scorer(p.col_type, scorer)
 
-        # Workplace-attribute demotion (single-source counterpart to the #858
-        # multi-source demotion; gated, default OFF). A workplace / locality
-        # attribute -- a clinic ``address``, a shared clinic ``phone`` line, or
-        # an employer / org ``company`` name -- shared by colleagues is NOT a
-        # person-identity claim: as an exact matchkey (exact_phone) OR a
-        # full-weight fuzzy feature it collapses distinct people at one practice
-        # into a mega-cluster (the DERM over-merge). Applies to BOTH exact and
-        # weighted uses. The verdict is data-measured against the PERSON NAME
-        # (not the broad #1351 identity basket, which is polluted here by
-        # constant dataset-metadata columns mis-typed as ``identifier`` and by
-        # the shared line itself), and scoped so a real person-name / structured
-        # identity field is never eligible -- so it is a no-op where the attribute
-        # is genuinely identity-correlated (a personal cell whose shared-value
-        # records DO co-agree on name is kept). Column stays a blocking candidate.
-        if should_demote_attribute_field(
+        # Group/list-attribute demotion for EXACT matchkeys (single-source
+        # counterpart to the #858 multi-source demotion; gated, default OFF).
+        # A shared group/list/facility value -- a clinic ``phone`` line, a
+        # mailing-list / campaign ``identifier`` (tl_id), a facility NPI -- as an
+        # EXACT matchkey force-merges every DIFFERENT person sharing it into one
+        # mega-cluster (the DERM over-merge: exact_phone / exact_tl_id).
+        #
+        # Scoped to EXACT uses ONLY, deliberately. The same attribute as a
+        # WEIGHTED fuzzy contributor is NOT demoted: it is a soft signal, not a
+        # force-merge, and on corruption-heavy data (febrl3, whose synthetic
+        # addresses also collide across people) it is LOAD-BEARING -- names are
+        # too corrupted to carry identity alone, so the weighted address field is
+        # needed to match true duplicates. Demoting the weighted use there
+        # regressed febrl3 F1 0.99->0.86 in the accuracy sweep; restricting to
+        # exact keeps that recall while still killing the hard force-merges.
+        #
+        # Verdict is data-measured (group-size-aware co-agreement on the person
+        # name; see should_demote_attribute_field) and a no-op where the value is
+        # genuinely identity-correlated (a personal cell / personal id whose
+        # shared-value records DO co-agree on name is kept). Column stays a
+        # blocking candidate.
+        if scorer == "exact" and should_demote_attribute_field(
             df, p.name, p.col_type, _person_name_basket,
             is_person_name=_is_person_name_column(p.name),
         ):
-            logger.info(
-                "Demoting %s field '%s' to blocking-only (discriminative-power: "
-                "records sharing its value do not co-agree on the person name -- "
-                "shared workplace/locality attribute, not an identity claim). "
-                "Column remains a blocking candidate.",
-                "exact" if scorer == "exact" else "weighted", p.name,
+            reason = (
+                "group-attribute: the different people sharing its value do not "
+                "co-agree on the person name -- a shared group/list/facility "
+                "value, not an identity claim"
             )
+            logger.info(
+                "Demoting exact matchkey '%s' to blocking-only (%s). "
+                "Column remains a blocking candidate.",
+                p.name, reason,
+            )
+            skipped_exact.append((p.name, reason))
             continue
 
         # #858: when multi-source, phone is a blocking signal, not an identity
