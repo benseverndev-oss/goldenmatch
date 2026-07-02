@@ -451,7 +451,10 @@ from erkgbench.substrate_suggest import build_and_score_real, suggest_substrate_
 def _chat(prompt: str) -> str:
     from goldengraph.llm import OpenAIClient
 
-    return OpenAIClient(model=os.environ.get("OPENAI_MODEL") or "gpt-4o-mini")._chat(prompt)
+    # json_mode=True (response_format=json_object): the 7B homograph perception is exactly the weak-OSS-
+    # model "emits prose/fenced/invalid JSON" failure mode -- forcing JSON avoids a null result being
+    # MISATTRIBUTED to "the LLM can't perceive homographs" when it's really a fixable formatting artifact.
+    return OpenAIClient(model=os.environ.get("OPENAI_MODEL") or "gpt-4o-mini")._chat(prompt, json_mode=True)
 
 
 def main() -> None:
