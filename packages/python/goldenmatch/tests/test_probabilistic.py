@@ -1128,8 +1128,8 @@ class TestNativeFSGating:
         # with GOLDENMATCH_FS_NATIVE unset it follows native availability (was
         # opt-in/default-off pre-2.6.0). See docs/design/2026-07-01-rust-is-the-
         # reference-roadmap.md.
-        from goldenmatch.core import probabilistic as p
         from goldenmatch.core import _native_loader as nl
+        from goldenmatch.core import probabilistic as p
         monkeypatch.delenv("GOLDENMATCH_FS_NATIVE", raising=False)
         monkeypatch.delenv("GOLDENMATCH_NATIVE", raising=False)
         assert p._fs_native_enabled() is nl.native_available()
