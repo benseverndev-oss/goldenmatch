@@ -20,6 +20,7 @@ from .chunk_extract import chunk_extract, chunk_extract_enabled
 from .extract import Extraction, Mention
 from .extract import extract as _extract
 from .llm import LLMClient
+from .rebel_fuse import rebel_fuse, rebel_fuse_enabled
 from .relation_reprompt import relation_reprompt, relation_reprompt_enabled
 from .resolve import ResolvedEntity, _record_key
 from .resolve import resolve as _resolve
@@ -683,6 +684,13 @@ def _prepare_doc(
         if relation_reprompt_enabled():
             try:
                 extraction.relationships += relation_reprompt(text, extraction.mentions, llm)
+            except Exception:
+                pass
+        # REBEL fusion (2nd relation source): map REBEL triples onto existing entities as edges.
+        # Same before-canonicalization placement + own try/except as the re-prompt.
+        if rebel_fuse_enabled():
+            try:
+                extraction.relationships += rebel_fuse(text, extraction.mentions)
             except Exception:
                 pass
         # In discovery mode the schema isn't known until the whole corpus is extracted, so defer
