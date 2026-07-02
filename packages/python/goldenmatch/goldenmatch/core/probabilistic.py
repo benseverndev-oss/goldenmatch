@@ -1754,23 +1754,27 @@ _NATIVE_FS_SCORER_IDS: dict[str, int] = {
 
 
 def _fs_native_enabled() -> bool:
-    """Whether the native FS block kernel is active. **Opt-in, default OFF.**
+    """Whether the native FS block kernel is active. **Default ON (reference mode).**
 
-    Enable with `GOLDENMATCH_FS_NATIVE=1` (also needs the native ext built).
-    Unlike the weighted native kernel (default ON), FS stays opt-in because its
-    DISCRETE comparison levels amplify the tiny rapidfuzz-rs-vs-Python-rapidfuzz
-    float differences: a similarity sitting exactly on a `partial_threshold`
-    (token_sort ratios are rationals like 0.7 / 0.857, so this is common) can
-    flip a level between the two libraries, and with EM weights that can span
-    ~40 bits a single level flip swings the normalized score ~0.45 and can move
-    a pair across the link threshold. The numpy vectorized path is the default
-    so FS output is reproducible; native is a measured ~2.9x opt-in speedup for
-    callers who accept boundary-level differences (same CLASS as the documented
-    vectorized-vs-scalar FS parity, larger in per-pair magnitude).
+    Under Rust-is-the-reference (2026-07-01,
+    `docs/design/2026-07-01-rust-is-the-reference-roadmap.md`) the native FS kernel
+    is the authoritative FS scorer -- rapidfuzz-rs decides the comparison levels;
+    the numpy vectorized path is the reproducible FALLBACK, selected explicitly
+    with `GOLDENMATCH_FS_NATIVE=0` (or when the native ext isn't built / a field is
+    ineligible -- see `_fs_native_eligible`).
+
+    The DISCRETE-level sensitivity that kept this opt-in still exists (a similarity
+    on a `partial_threshold` -- token_sort ratios are rationals like 0.7 / 0.857 --
+    can flip a level between rapidfuzz-rs and Python-rapidfuzz, swinging the
+    normalized score up to ~0.45), but under reference mode the native result IS
+    the answer, so it is a defined, reproducible output rather than a divergence.
+    The default flip was gated on the probabilistic bench panel (gm_prob_native vs
+    gm_probabilistic F1 non-regression) -- see the PR. `=0` restores the prior
+    numpy operating point.
     """
     val = os.environ.get("GOLDENMATCH_FS_NATIVE")
-    if val is None or val.strip().lower() not in ("1", "true", "yes", "on", "enabled"):
-        return False
+    if val is not None and val.strip().lower() in ("0", "false", "no", "off", "disabled"):
+        return False  # explicit opt-out to the reproducible numpy fallback
     from goldenmatch.core._native_loader import native_enabled
     return native_enabled("block_scoring")
 
