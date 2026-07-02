@@ -41,15 +41,18 @@ base_sc   = build_and_score(baseline,  (docs, gold, qid_aliases))
 prop_sc   = build_and_score(proposed,  (docs, gold, qid_aliases))
 accepted  = _score(prop_sc) > _score(base_sc)            # SP-B2 _score; proposed > baseline, else fall back
 winner    = proposed if accepted else baseline
-# Stamp entity_type_vocab ONLY on the accepted proposed config (never on the baseline fallback):
-if accepted and flags.entity_type_vocab:
+# Stamp entity_type_vocab ONLY on an accepted proposed config that ALSO turned canon on (via
+# expect_homographs) -- else the vocab is a no-op AND we'd dirty a canon-off winner. `accepted` does
+# NOT imply expect_homographs (a has_known_schema-only proposal can be accepted with canon off), so
+# BOTH terms are required (matches the MCP gate in section 3):
+if accepted and flags.expect_homographs and flags.entity_type_vocab:
     winner = dataclasses.replace(winner, entity_type_vocab=flags.entity_type_vocab)
 return SuggestResult(config=winner, flags=flags, accepted=accepted,
                      baseline_scorecard=base_sc, proposed_scorecard=prop_sc)
 ```
 - `_score` is imported from `substrate_tuner` (relational.f1 + presence.coverage, or relational.f1 when presence None — the homograph engineered corpus has presence None, so the win shows as relational F1, which rises because `name_ci_type` recovers the precision `name_ci` loses to over-merged homographs).
 - **Reproducibility:** `build_and_score` is `build_and_score_real`, which resets the LLM between builds (#1380) so the baseline-vs-proposed comparison is trustworthy (the reason #1 came first). If a build isn't reproducible, the ±noise could flip `accepted` on a marginal delta.
-- **`entity_type_vocab` gating (review fix):** `for_profile` doesn't take `entity_type_vocab` (it's env-driven, `GOLDENGRAPH_ENTITY_TYPE_VOCAB`, and only bites when `entity_type_canon` is on). It is stamped via `dataclasses.replace` **only when `accepted` is true** — i.e. only on the *proposed* winner, which (via `for_profile(expect_homographs=True)`) already has `entity_type_canon=True` so the vocab actually bites. On the `accepted=False` fallback the winner is exactly `for_profile(profile)` (baseline), untouched — preserving the clean "fallback == deterministic baseline" guarantee. (SubstrateConfig HAS the `entity_type_vocab` field; `for_profile` just doesn't set it.)
+- **`entity_type_vocab` gating (review fix):** `for_profile` doesn't take `entity_type_vocab` (it's env-driven, `GOLDENGRAPH_ENTITY_TYPE_VOCAB`, and — verified — only bites when `entity_type_canon` is on). It is stamped via `dataclasses.replace` only when **both** `accepted` **and** `flags.expect_homographs` — because `entity_type_canon` turns on *only* via `expect_homographs` in `for_profile`, and `accepted` alone does NOT imply `expect_homographs` (a `has_known_schema`-only proposal can be accepted with canon off; §1 explicitly couples proposed `entity_type_vocab` to the *schema* signal, so vocab-without-homographs is the expected shape). Requiring both terms means we never stamp vocab onto a canon-off config. On the `accepted=False` fallback the winner is exactly `for_profile(profile)` (baseline), untouched — preserving the clean "fallback == deterministic baseline" guarantee. (SubstrateConfig HAS the `entity_type_vocab` field; `for_profile` just doesn't set it.)
 
 ### 3. Thin MCP tool `suggest_substrate_config` (no-gold surface)
 Wraps **`propose_corpus_flags` only** → returns the LLM's suggested `SubstrateConfig` **labeled UNVERIFIED**. An MCP caller has a corpus but no gold, so the tool cannot run the self-verify; it returns the perception + a note to measurement-verify with gold on the bench. Build the config the SAME way as §2 (NOT `**flags` — `CorpusFlags` is a frozen dataclass whose `entity_type_vocab` field `for_profile` doesn't accept, so a splat would `TypeError`):
@@ -77,6 +80,7 @@ Loads the **homograph engineered corpus** (`GOLDENGRAPH_BENCH_HOMOGRAPH=k` via `
 - `suggest_accepts_when_proposed_beats_baseline` — fake `build_and_score` returns a HIGHER `_score` for the `name_ci_type` config than for `name_ci` (key the fake on `config.xdoc_key`) → `accepted=True`, `config.xdoc_key=="name_ci_type"`.
 - `suggest_falls_back_when_proposed_worse` — fake returns a LOWER `_score` for the proposed config → `accepted=False`, `config==for_profile(profile)` exactly (baseline, NO entity_type_vocab stamped — the LLM can't make it worse).
 - `suggest_homograph_flags_apply_type_vocab` — fake scores proposed higher (so `accepted=True`); flags `expect_homographs=True` + `entity_type_vocab=(...)` → winning config has `xdoc_key=="name_ci_type"` AND `entity_type_canon is True` AND `entity_type_vocab` set.
+- `suggest_vocab_without_homograph_not_stamped` — flags `expect_homographs=False, has_known_schema=True, entity_type_vocab=(...)`, fake scores proposed higher (`accepted=True` via schema_canon) → winner has `entity_type_canon is False` AND `entity_type_vocab == ()` (vocab NOT stamped on the canon-off config — the §2 gate requires `expect_homographs` too).
 - `suggest_bad_llm_read_is_safe` — fake `chat` returns garbage → flags default → proposed==baseline → `accepted=False`, no crash.
 - `mcp_suggest_returns_unverified_config` — the MCP wrapper returns a config + `verified=False` note without touching gold/build.
 
