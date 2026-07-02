@@ -28,7 +28,7 @@
 
 ## Test runner (box-safe)
 
-All test steps use this exact command from the `er-kg-bench` package dir (the package is not pip-installed in the shared `.venv`; `PYTHONPATH=$PWD` shadows it):
+All test steps use this exact command from the `er-kg-bench` package dir. Note the interpreter lives in a DIFFERENT repo (`/d/show_case/goldenmatch/.venv`) than the code (`/d/show_case/gg-local-llm/`): that shared venv is the only one with pytest + deps installed, and it works here because these tests are pure Python and `PYTHONPATH=$PWD` shadows the package. This is the established worktree-shadow pattern; don't try to create a venv inside `gg-local-llm`.
 
 ```bash
 cd /d/show_case/gg-local-llm/packages/python/goldenmatch/benchmarks/er-kg-bench
@@ -46,7 +46,7 @@ Reference fixture shape used throughout (a graph dict is `{"entities": [...], "e
 ### Task 1: `substrate_scorecard()` — wiki (aliased) three-axis path
 
 **Files:**
-- Modify: `packages/python/goldenmatch/benchmarks/er-kg-bench/erkgbench/substrate_eval.py` (add fn after `score_substrate`, ~line 285)
+- Modify: `packages/python/goldenmatch/benchmarks/er-kg-bench/erkgbench/substrate_eval.py` (add fn after `score_substrate`, which spans lines 271-288 — insert after line 288)
 - Test: `packages/python/goldenmatch/benchmarks/er-kg-bench/tests/test_substrate_eval.py`
 
 - [ ] **Step 1: Write the failing tests (aliased path)**
@@ -332,7 +332,7 @@ git commit -m "feat(substrate): LEVER_AXIS_MAP + KNOWN_LEVERS driver contract (S
 ### Task 4: `score_substrate` optional `qid_aliases` + embedded scorecard (back-compat)
 
 **Files:**
-- Modify: `substrate_eval.py:271-285` (`score_substrate`)
+- Modify: `substrate_eval.py:271-288` (`score_substrate`; signature at 271, return dict closes at 288)
 - Test: `tests/test_substrate_eval.py`
 
 - [ ] **Step 1: Write the failing tests**
@@ -512,11 +512,11 @@ git commit -m "feat(substrate): wiki reporting shows presence/relational/connect
 ### Task 6: Wire reporting — engineered path (`[substrate]` + `_to_markdown`)
 
 **Files:**
-- Modify: `run_substrate_eval.py:156-173` (`_to_markdown`), `:270-275` (engineered print)
+- Modify: `run_substrate_eval.py:156-173` (`_to_markdown`), `:266-275` (the engineered loop: `sb=run_one(...)`/`rows.append(...)` at 268-269 + the print at 270-275)
 
-- [ ] **Step 1: Rework the engineered `[substrate]` print (lines 270-275)**
+- [ ] **Step 1: Rework the engineered `[substrate]` loop body (replace lines 268-275, the `sb=run_one` + `rows.append` + print)**
 
-`run_one` already returns `score_substrate(...)` which now embeds `scorecard`. Update the print to add the connectivity(edge_recall)+coherence framing via the scorecard (no presence, no connectivity cov/f1 — None on this path):
+`run_one` already returns `score_substrate(...)` which now embeds `scorecard`. Replace the whole loop body (keep `sb=run_one`/`rows.append`) to add the connectivity(edge_recall)+coherence framing via the scorecard (no presence, no connectivity cov/f1 — None on this path). NOTE: the spec says "append" to the `[substrate]` line; this reworks it instead — the dropped literal `ER-F1(B)/P(B)/R(B)/components` fields are re-expressed as `relational.*`/`coherence.*` and are numerically identical (`relational.f1 == er_f1_b` by construction), so no signal is lost:
 
 ```python
         sb = run_one(args.seed, amb)
@@ -612,4 +612,4 @@ git commit -m "feat(substrate): engineered reporting shows relational + edge_rec
 - **Do NOT run the full pytest suite or Modal.** Only the single `tests/test_substrate_eval.py` file via the box-safe command. The box is memory-starved.
 - **No LLM, no build, no Modal in this sub-project** — every changed line is pure Python over dict fixtures. The wiki/engineered *end-to-end* numbers don't change; only the *reporting* of them does.
 - **`metrics.score`** returns an object with `.f1`, `.precision`, `.recall` (see existing `score_substrate`). Don't assume a dict.
-- **Back-compat is load-bearing:** `score_substrate`'s existing flat keys must stay byte-identical; the scorecard is strictly additive. If any existing test asserts the exact key set of `score_substrate`'s return, update it to allow the new `scorecard` key.
+- **Back-compat is load-bearing:** `score_substrate`'s existing flat keys must stay byte-identical; the scorecard is strictly additive. (Verified: no existing test asserts an exact key set of `score_substrate`'s return — only individual keys — so the added `scorecard` key breaks nothing.)
