@@ -55,3 +55,54 @@ def test_heal_true_returns_healed(monkeypatch):
     res = dedupe_df(_df(), heal=True)
     assert res.config == "HEALED_CFG"
     assert res.heal_trail and res.heal_trail[0]["id"] == "h" and res.heal_trail[0]["verified"] is True
+
+
+# ── Production slowdown regression: the default path must not run the O(distinct^2)
+#    goldencheck variant scan (blocking_risk). Fake the native kernel so the REAL
+#    signal-build path executes even without the wheel; record any blocking_risk call.
+
+
+class _FakeKernel:
+    def suggest_config(self, *args):
+        return "[]"          # valid-empty -> _parse_suggestions returns []
+
+
+def _record_blocking_risk(monkeypatch):
+    """Patch the SOURCE (blocking_risk is a function-local import inside
+    _build_column_signals_batch, so the adapter attribute can't be patched)."""
+    calls = {"n": 0}
+
+    def _rec(df, *a, **k):
+        calls["n"] += 1
+        return {}
+
+    monkeypatch.setattr("goldenmatch.core.quality.blocking_risk", _rec)
+    return calls
+
+
+def test_default_dedupe_df_does_not_call_blocking_risk(monkeypatch):
+    """The default advisory `dedupe_df` path must NOT run goldencheck's
+    O(distinct^2) fuzzy-variant scan — it was the production slowdown (350ms-950ms
+    per moderate-cardinality column, on every run whose free trigger fired)."""
+    import goldenmatch.core.suggest.adapter as adapter
+    import goldenmatch.core.suggest.surface as surf
+
+    # Force the free trigger to fire and fake the kernel so the real signal build runs.
+    monkeypatch.setattr(surf, "headroom_signal", lambda r: surf.HeadroomReason("dip"))
+    monkeypatch.setattr(adapter, "_require_kernel", lambda: _FakeKernel())
+    calls = _record_blocking_risk(monkeypatch)
+
+    res = dedupe_df(_df())
+    assert calls["n"] == 0, "default dedupe_df must not run the goldencheck variant scan"
+    assert res.suggestions == []
+
+
+def test_suggest_true_still_computes_variant_signal(monkeypatch):
+    """The opt-in verified path keeps full fidelity — it DOES compute variant_rate."""
+    import goldenmatch.core.suggest.adapter as adapter
+
+    monkeypatch.setattr(adapter, "_require_kernel", lambda: _FakeKernel())
+    calls = _record_blocking_risk(monkeypatch)
+
+    dedupe_df(_df(), suggest=True)   # verify=True -> full signal build
+    assert calls["n"] >= 1, "suggest=True must still compute the variant signal"

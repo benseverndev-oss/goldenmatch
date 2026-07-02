@@ -376,3 +376,37 @@ def test_arrow_batch_helpers():
     csb = _build_column_signals_batch(df, config, clusters)
     assert csb.schema.equals(_COLUMN_SIGNALS_SCHEMA)
     assert csb.num_rows >= 1  # at least one column
+
+
+# ── cheap-signal gate (production slowdown fix) ──────────────────────────────
+
+def test_build_column_signals_cheap_skips_blocking_risk(monkeypatch):
+    """`cheap=True` (the default advisory path) must NOT call goldencheck
+    blocking_risk — that O(distinct^2) scan was the production slowdown.
+    variant_rate falls back to 0.0, exactly as when goldencheck is absent."""
+    from goldenmatch.core.suggest.adapter import (
+        _build_column_signals_batch,
+    )
+
+    calls = {"n": 0}
+
+    def _rec(df, *a, **k):
+        calls["n"] += 1
+        return {}
+
+    # blocking_risk is a function-local import inside the builder -> patch the source.
+    monkeypatch.setattr("goldenmatch.core.quality.blocking_risk", _rec)
+
+    df = _make_df().with_row_index("__row_id__").with_columns(
+        pl.col("__row_id__").cast(pl.Int64)
+    )
+    config = _make_config()
+
+    # cheap=True -> no scan, variant_rate all 0.0
+    batch = _build_column_signals_batch(df, config, {}, cheap=True)
+    assert calls["n"] == 0
+    assert all(v == 0.0 for v in batch.column("variant_rate").to_pylist())
+
+    # cheap=False (opt-in verified path) -> scan runs
+    _build_column_signals_batch(df, config, {}, cheap=False)
+    assert calls["n"] == 1
