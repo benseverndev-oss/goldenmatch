@@ -84,6 +84,13 @@ def propose_corpus_flags(sample_docs, *, chat) -> CorpusFlags:
     return _parse_flags(chat(_PROMPT.format(sample=sample)))
 
 
+def _accept_frontier(base_sc, prop_sc, betas=(1.0, 0.5, 0.25)) -> dict:
+    """Accept decision (proposed beats baseline) at each beta, recomputed from the two scorecards
+    already in hand (no rebuild). beta<1 favors precision -> shows where a precision-improving-but-
+    F1-losing config flips to accepted. See the beta-frontier design doc."""
+    return {b: _score(prop_sc, beta=b) > _score(base_sc, beta=b) for b in betas}
+
+
 @dataclass(frozen=True)
 class SuggestResult:
     config: SubstrateConfig
@@ -91,6 +98,7 @@ class SuggestResult:
     accepted: bool
     baseline_scorecard: dict
     proposed_scorecard: dict
+    accept_frontier: dict
 
 
 def suggest_substrate_config(docs, *, gold, qid_aliases, build_and_score, chat,
@@ -109,13 +117,14 @@ def suggest_substrate_config(docs, *, gold, qid_aliases, build_and_score, chat,
     base_sc = build_and_score(baseline, dataset)
     prop_sc = build_and_score(proposed, dataset)
     accepted = _score(prop_sc) > _score(base_sc)
+    frontier = _accept_frontier(base_sc, prop_sc)
     winner = proposed if accepted else baseline
     # Stamp entity_type_vocab ONLY on an accepted homograph winner (canon is on only via
     # expect_homographs; `accepted` alone does NOT imply it -- a schema-only proposal can be accepted
     # with canon off). Both terms required -> never dirties a canon-off config.
     if accepted and flags.expect_homographs and flags.entity_type_vocab:
         winner = replace(winner, entity_type_vocab=flags.entity_type_vocab)
-    return SuggestResult(winner, flags, accepted, base_sc, prop_sc)
+    return SuggestResult(winner, flags, accepted, base_sc, prop_sc, accept_frontier=frontier)
 
 
 def suggest_substrate_config_unverified(sample_texts, *, chat, sample_docs=6) -> dict:

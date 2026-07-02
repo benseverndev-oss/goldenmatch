@@ -48,12 +48,20 @@ def main() -> None:
     print(f"[suggest] accepted={res.accepted} flags={res.flags} "
           f"baseline_F1={b['relational']['f1']:.4f} proposed_F1={p['relational']['f1']:.4f} "
           f"winner_xdoc={res.config.xdoc_key} canon={res.config.entity_type_canon}", flush=True)
+    print(f"[suggest] accept_frontier={res.accept_frontier} | "
+          f"baseline P/R={b['relational']['precision']:.4f}/{b['relational']['recall']:.4f} "
+          f"proposed P/R={p['relational']['precision']:.4f}/{p['relational']['recall']:.4f} "
+          f"-> set GOLDENGRAPH_SUBSTRATE_SCORE_BETA to the lowest beta where accept flips True",
+          flush=True)
     md = (
         "# SP-C Suggester Smoke (homograph engineered)\n\n"
         f"- accepted: `{res.accepted}`  flags: `{res.flags}`\n"
         f"- baseline relational F1: {b['relational']['f1']:.4f} (P={b['relational']['precision']:.4f})\n"
         f"- proposed relational F1: {p['relational']['f1']:.4f} (P={p['relational']['precision']:.4f})\n"
         f"- winner: xdoc_key=`{res.config.xdoc_key}` entity_type_canon={res.config.entity_type_canon}\n"
+        f"- accept_frontier: `{res.accept_frontier}` (beta<1 favors precision)\n"
+        f"- baseline P/R: {b['relational']['precision']:.4f} / {b['relational']['recall']:.4f}  |  "
+        f"proposed P/R: {p['relational']['precision']:.4f} / {p['relational']['recall']:.4f}\n"
     )
     with open(args.out_md, "w", encoding="utf-8") as fh:
         fh.write(md)

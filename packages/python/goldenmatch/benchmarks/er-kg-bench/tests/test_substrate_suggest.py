@@ -140,3 +140,39 @@ def test_mcp_unverified_returns_config_and_flag():
 def test_mcp_unverified_bad_read_is_baseline():
     out = ss.suggest_substrate_config_unverified(["doc"], chat=lambda p: "nope")
     assert out["config"] == for_profile(profile_corpus(["doc"]))  # baseline, no vocab
+
+
+# --- SP-C beta-frontier report ------------------------------------------------------------------------
+def _relsc(p, r, f1):
+    """A presence=None scorecard with explicit relational P/R/F1 (so _score is relational-only)."""
+    return {"presence": None, "relational": {"f1": f1, "recall": r, "precision": p},
+            "connectivity": {"coverage": None, "f1": None, "edge_recall": 0.9},
+            "coherence": {"components": 1, "largest_fraction": 1.0}}
+
+
+def test_accept_frontier_flips_at_beta():
+    base = _relsc(0.8153, 0.672, 0.7368)     # SP-C smoke baseline
+    prop = _relsc(0.9323, 0.545, 0.6885)     # proposed homograph-safe config (beta=0.5 run)
+    assert ss._accept_frontier(base, prop) == {1.0: False, 0.5: True, 0.25: True}
+
+
+def test_accept_frontier_all_true_when_proposed_dominates():
+    base = _relsc(0.6, 0.6, 0.6)
+    prop = _relsc(0.9, 0.9, 0.9)             # better on both P and R
+    assert set(ss._accept_frontier(base, prop).values()) == {True}
+
+
+def test_accept_frontier_all_false_when_baseline_dominates():
+    base = _relsc(0.9, 0.9, 0.9)
+    prop = _relsc(0.6, 0.6, 0.6)             # worse on both
+    assert set(ss._accept_frontier(base, prop).values()) == {False}
+
+
+def test_suggest_result_carries_frontier():
+    # frontier is ADDITIVE: accepted/config unchanged, accept_frontier == _accept_frontier(base, prop)
+    docs = [_Doc("a"), _Doc("b")]
+    res = ss.suggest_substrate_config(
+        docs, gold=[], qid_aliases=None, profile=_short_profile(),
+        build_and_score=_bykey(0.40, 0.70), chat=_fake_chat_homograph)
+    assert res.accepted is True and res.config.xdoc_key == "name_ci_type"
+    assert res.accept_frontier == ss._accept_frontier(res.baseline_scorecard, res.proposed_scorecard)
