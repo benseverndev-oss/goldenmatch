@@ -25,21 +25,31 @@ SP-B1 gives a config object + a static rule-table pick (`for_profile`). But whic
 ## Architecture
 
 ```
-run_staged(docs, gold, qid_aliases, *, build_and_score, thresholds, budget, ...)
+run_staged(docs, gold, qid_aliases, *, build_and_score, thresholds, budget, relation_vocab=(), ...)
   1. config = for_profile(profile_corpus(docs), ...)          # SP-B1 initial pick
   2. slice = a fixed gold-bearing subset (docs+gold+aliases)
-  3. for round in range(budget):
+  3. tried = set()                                            # (lever, next_value) pairs, mutated ONLY by escalate
+     rounds = []
+     for r in range(budget):
        sc = build_and_score(config, slice)                    # INJECTED: real=Modal, test=fake
        gate = evaluate_gate(sc, thresholds)
-       if gate.passed: break
-       tried.add(...); config2 = escalate(config, gate.failing_axis, tried)
-       if config2 is None: break                              # escalation exhausted -> eject terminal
+       config2 = None if gate.passed else escalate(config, gate.failing_axis, tried,
+                                                    relation_vocab=relation_vocab)
+       rounds.append(RoundReport(r, config, sc, gate, escalated_to=_lever_of(config, config2)))
+       if gate.passed: stopped = "passed"; break
+       if config2 is None: stopped = "exhausted"; break       # no eligible lever left on the failing axis
        config = config2
-  4. full_sc = build_and_score(best_config, full)             # promote winner to full build
-  5. return TunerResult(config, slice_scorecard, full_scorecard, trace=[RoundReport...])
+     else:
+       stopped = "budget"
+  4. best_config = argmax over rounds by _score(round.scorecard)   # escalation is NOT monotonic -> pick best
+     full_sc = build_and_score(best_config, full)             # ALWAYS promote best-so-far to the full build
+  5. return TunerResult(best_config, slice_scorecard=best_round.scorecard, full_scorecard=full_sc,
+                        trace=rounds, stopped_reason=stopped)
 ```
 
 `build_and_score(config, dataset) -> scorecard_dict` is the single injection seam. The pure harness never imports Modal or runs a real build; it calls this callable and reads the SP-A scorecard shape (`{"presence": {...}|None, "relational": {...}, "connectivity": {...}, "coherence": {...}}`).
+
+`_score(scorecard) -> float` is the round-ranking scalar used to pick `best_config`: `relational.f1 + presence.coverage` (or just `relational.f1` when `presence is None`). Higher wins; ties → earliest round. This is what makes "promote the best-so-far" well-defined even though escalation can regress (e.g. an `extractor` swap).
 
 ## Components (in `erkgbench/substrate_tuner.py`)
 
@@ -53,25 +63,33 @@ Env-overridable defaults. Thresholds are *hypotheses* (like SP-B1's `CHUNK_MIN_S
 ### 2. `GateResult` + `evaluate_gate(scorecard, thresholds) -> GateResult`
 `GateResult{passed: bool, failing_axis: str | None, scorecard: dict}`. Axis-precedence when both fail: **presence before relational** (you can't fix relational quality on entities that aren't in the KB — fix presence first). If `presence is None` (engineered/no-alias path), the presence check is skipped and only relational is gated.
 
+**Connectivity is intentionally ungated in v1.** `GateThresholds` has only `presence_min` + `relational_f1_min`, so `evaluate_gate` only ever routes to `{presence, relational}`. This is deliberate: `LEVER_AXIS_MAP["connectivity"]` is `[relation_reprompt, rebel_fuse, relation_vocab]` — all refuted or not-auto-toggled — so a connectivity failure would have no eligible escalation and immediately exhaust. Connectivity is reported in the scorecard (visible in the trace) but is not a gate axis; that is why the escalate transform table has no connectivity-only rows. Adding a connectivity gate waits until there's a non-refuted lever that moves it.
+
 ### 3. `escalate(config, failing_axis, tried, *, relation_vocab=(), allow_refuted=False) -> SubstrateConfig | None`
-Deterministic policy. Walks `LEVER_AXIS_MAP[failing_axis]` in order; for the first lever that is (a) not refuted [unless `allow_refuted`], (b) not already tried, and (c) has an applicable transform that *changes* the config, returns a new config with that transform applied and records it in `tried`. Returns `None` when the axis is exhausted (→ terminal eject).
+Deterministic policy, built on **next-state transitions** (NOT a "tried lever name" set — that breaks the `xdoc_key` ladder). Each lever has an `_advance(config) -> (next_value_repr, new_config) | None` that moves it ONE step from its current state (returns `None` when already at the end of its ladder). `escalate` walks `LEVER_AXIS_MAP[failing_axis]` in order and selects the **first** lever that is:
+  (a) not refuted [unless `allow_refuted`], and
+  (b) `_advance` yields a step (`next != current`), and
+  (c) the `(lever, next_value_repr)` pair is not already in `tried`.
+It records `(lever, next_value_repr)` in `tried` (escalate is the **sole** mutator of `tried`) and returns the new (frozen) config via `dataclasses.replace`. Returns `None` when every axis lever is exhausted → terminal eject.
 
-Per-lever transforms (the escalation "moves"):
-| lever | transform | notes |
+**Termination:** every lever's ladder is finite (`chunk_extract`: F→T; `extractor`: api→gliner; `xdoc_key`: ""→name_ci→name_ci_type; `entity_type_canon`: F→T; `schema_canon`: F→T), each `(lever, next)` pair is recorded once and never re-selected, so the total number of escalations across all rounds is bounded by the sum of ladder lengths → the loop always terminates (independent of `budget`).
+
+Per-lever `_advance` transitions (the escalation "moves"):
+| lever | advance (current → next) | notes |
 |---|---|---|
-| `chunk_extract` | `False→True` (6,2) | presence lever, the measured win |
-| `extractor` | `"api"→"gliner"` | presence lever, a swap |
-| `xdoc_key` | `""→"name_ci"→"name_ci_type"` (+`entity_type_canon=True` on the last) | relational lever |
-| `entity_type_canon` | `False→True` | relational (usually rides xdoc_key) |
-| `schema_canon` | `False→True` **only if `relation_vocab` non-empty** | relational; needs a vocab |
+| `chunk_extract` | `False → True` (with `chunk_sentences=6, chunk_overlap=2`) | presence lever, the measured win |
+| `extractor` | `"api" → "gliner"` | presence lever, a swap |
+| `xdoc_key` | `"" → "name_ci" → "name_ci_type"` (sets `entity_type_canon=True` on the `→name_ci_type` step) | relational ladder (2 steps) |
+| `entity_type_canon` | `False → True` | relational (usually already set by the xdoc_key ladder) |
+| `schema_canon` | `False → True` **AND set `relation_vocab=<escalate's relation_vocab param>`** — eligible ONLY if that param is non-empty and `config.schema_canon` is False | relational; enabling canon WITHOUT a vocab is engine-defeated (SP-B1 §2), so the two are set together |
 | `relation_reprompt`, `rebel_fuse`, `extract_recall` | skipped unless `allow_refuted` | REFUTED levers |
-| `relation_vocab` | not auto-toggled (needs an external vocab) | skipped in auto-escalation |
+| `relation_vocab` | not auto-toggled on its own (has no ladder; it rides `schema_canon`) | — |
 
-Refuted levers are gated behind `allow_refuted=False` (default) so the deterministic policy never re-arms a dead path; SP-C can flip it to let the LLM *propose* a measurement-gated re-test.
+The `relation_vocab` param carries EXTERNAL knowledge (the caller's known schema, same as SP-B1's `for_profile(relation_vocab=)`); it is read from the param, not `config.relation_vocab`, and written onto the config together with `schema_canon`. Refuted levers are gated behind `allow_refuted=False` (default) so the deterministic policy never re-arms a dead path; SP-C can flip it to let the LLM *propose* a measurement-gated re-test.
 
 ### 4. `RoundReport` + `TunerResult`
-- `RoundReport{round: int, config: SubstrateConfig, scorecard: dict, gate: GateResult, escalated_to: str | None}` — the ejection diagnostic (`escalated_to` = the lever toggled, or None if passed/exhausted). This is the structured hand-off SP-C's LLM will consume in place of `escalate`.
-- `TunerResult{config, slice_scorecard, full_scorecard, trace: list[RoundReport], stopped_reason: str}` (`"passed" | "budget" | "exhausted"`).
+- `RoundReport{round: int, config: SubstrateConfig, scorecard: dict, gate: GateResult, escalated_to: str | None}` — the ejection diagnostic (`escalated_to` = the lever advanced this round, or None if passed/exhausted). This is the structured hand-off SP-C's LLM will consume in place of `escalate`.
+- `TunerResult{config, slice_scorecard, full_scorecard, trace: list[RoundReport], stopped_reason: str}` (`"passed" | "budget" | "exhausted"`). `config` = the **best-so-far** config (argmax of `_score` over `trace`, not necessarily the last one tried), and `full_scorecard` is that best config re-scored on the full corpus. The full build ALWAYS runs on the best-so-far, including on the `budget` and `exhausted` exits (escalate returning `None` means "no further improvement available," so the best already-seen config is the answer).
 
 ### 5. Real adapter `build_and_score_real(config, dataset)` (thin, erkgbench)
 Under `config.apply()`: run `ingest_corpus` over the dataset's docs → graph → `substrate_scorecard(graph, gold, qid_aliases)`. Reuses `run_substrate_eval._wiki_build`-style plumbing. NOT box-testable (needs native store + LLM) → validated by a Modal smoke, not TDD. The pure harness is validated with a fake.
@@ -83,13 +101,16 @@ Under `config.apply()`: run `ingest_corpus` over the dataset's docs → graph �
 - `gate_routes_presence_before_relational` — both below floor → `failing_axis == "presence"`.
 - `gate_skips_presence_when_none` — engineered `presence=None` → only relational gated.
 - `escalate_presence_enables_chunking_first` — presence fail on a default config → `chunk_extract` turned on.
-- `escalate_relational_bumps_xdoc_key` — relational fail with `xdoc_key=""` → `"name_ci"`; again → `"name_ci_type"` + `entity_type_canon`.
+- `escalate_relational_ladder_bumps_xdoc_key_twice` — relational fail with `xdoc_key=""` → `"name_ci"` (records `(xdoc_key, name_ci)`); escalate the RESULT again → `"name_ci_type"` + `entity_type_canon` (records `(xdoc_key, name_ci_type)`). Proves the ladder advances across calls (the Critical: `tried` keyed by `(lever, next_value)`, not lever name).
+- `escalate_schema_canon_sets_vocab` — relational fail, `relation_vocab=("acquired",)` passed, xdoc_key ladder exhausted → `schema_canon=True` AND `relation_vocab==("acquired",)` on the new config (never one without the other).
+- `escalate_schema_canon_skipped_without_vocab` — same but `relation_vocab=()` → `schema_canon` NOT selected (would be engine-defeated).
 - `escalate_skips_refuted` — no escalation path selects reprompt/rebel/extract_recall (allow_refuted=False).
-- `escalate_returns_none_when_exhausted` — all axis levers tried → `None`.
+- `escalate_returns_none_when_exhausted` — all axis levers advanced → `None`.
 - `run_staged_passes_first_round` — fake returns a passing scorecard immediately → 1 round, `stopped_reason="passed"`, full build invoked once.
 - `run_staged_escalates_then_passes` — fake returns fail then pass → 2 rounds, config escalated once, trace records the ejection, then the full build runs on the winner.
 - `run_staged_budget_exhausted` — fake always fails → stops at `budget`, `stopped_reason="budget"`, full build still runs on best-so-far.
-- `run_staged_terminal_eject` — fail on an axis with no eligible lever → `stopped_reason="exhausted"`.
+- `run_staged_promotes_argmax_not_last` — fake returns a HIGH score on round 1 then LOWER on later rounds (a regressing escalation) → `TunerResult.config` is round-1's config (argmax), and the full build is invoked with it (not the last-tried config).
+- `run_staged_terminal_eject` — fail on an axis with no eligible lever → `stopped_reason="exhausted"`, full build still runs on best-so-far.
 - `tuner_result_trace_is_serializable` — `trace` RoundReports carry the scorecard + config + escalated_to (the SP-C hand-off shape).
 
 ## Design choices flagged for review
