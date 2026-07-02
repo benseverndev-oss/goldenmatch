@@ -1,6 +1,32 @@
 """Substrate-quality scoring over a BUILT graph (pure; operates on the graph dict + gold mentions)."""
 from __future__ import annotations
 
+# --- Config-driver contract (consumed by SP-B/SP-C) -------------------------------------------------
+# Each substrate lever -> the GOLDENGRAPH_* env var that gates it. The explicit source of truth for
+# "what levers exist" until SP-B's SubstrateConfig becomes the registry.
+KNOWN_LEVERS: dict[str, str] = {
+    "chunk_extract": "GOLDENGRAPH_CHUNK_EXTRACT",
+    "extract_recall": "GOLDENGRAPH_EXTRACT_RECALL",
+    "extractor": "GOLDENGRAPH_EXTRACTOR",
+    "xdoc_key": "GOLDENGRAPH_XDOC_KEY",
+    "entity_type_canon": "GOLDENGRAPH_ENTITY_TYPE_CANON",
+    "schema_canon": "GOLDENGRAPH_SCHEMA_CANON",
+    "relation_vocab": "GOLDENGRAPH_RELATION_VOCAB",
+    "relation_reprompt": "GOLDENGRAPH_RELATION_REPROMPT",
+    "rebel_fuse": "GOLDENGRAPH_REBEL_FUSE",
+}
+
+# Which axis each lever CAN move (not exclusive -- a lever may affect more than one). The SP-C ejection
+# router reads LEVER_AXIS_MAP[failing_axis] to narrow which levers to propose tweaking. Encodes the
+# arc's MEASURED findings (chunking->presence WIN, name_ci/xdoc->relational WIN; reprompt/rebel refuted
+# -> included but must stay measurement-gated). A hint, not an authorization to blind-flip.
+LEVER_AXIS_MAP: dict[str, list[str]] = {
+    "presence": ["chunk_extract", "extract_recall", "extractor"],
+    "relational": ["xdoc_key", "entity_type_canon", "schema_canon", "relation_vocab",
+                   "relation_reprompt", "rebel_fuse"],
+    "connectivity": ["relation_reprompt", "rebel_fuse", "relation_vocab"],
+}
+
 
 def _base_doc_id(ref: str) -> str:
     """A source_ref may carry a `::N` co-occurrence suffix; the base doc id is `src::rel::dst` (3 parts).
@@ -268,23 +294,61 @@ def provenance_coverage(graph: dict) -> float:
     return sum(1 for e in edges if e.get("source_refs")) / len(edges)
 
 
-def score_substrate(*, gold_mentions, resolver_clusters, graph) -> dict:
+def score_substrate(*, gold_mentions, resolver_clusters, graph, qid_aliases=None) -> dict:
     """Assemble the substrate scoreboard. ER-F1(A) = the resolver clustering scored vs gold; ER-F1(B) =
     the built-graph mention->node clustering scored vs gold; A-B gap = extraction-induced fragmentation;
-    plus coherence + provenance on the built graph. All over the SAME gold-mention index space."""
+    plus coherence + provenance on the built graph. All over the SAME gold-mention index space.
+
+    Always embeds a `scorecard` (the three-axis presence/relational/connectivity split); pass
+    `qid_aliases` (wiki path) to populate the presence + connectivity-coverage axes, else they are None.
+    Legacy flat keys are unchanged (the scorecard is strictly additive)."""
     from erkgbench import metrics
 
     entity_ids = [m[0] for m in gold_mentions]
     a = metrics.score(entity_ids, resolver_clusters)
     b = metrics.score(entity_ids, align_mentions_to_nodes(graph, gold_mentions))
     coh = graph_coherence(graph)
-    return {
+    result = {
         "er_f1_a": a.f1, "er_p_a": a.precision, "er_r_a": a.recall,
         "er_f1_b": b.f1, "er_p_b": b.precision, "er_r_b": b.recall,
         "ab_gap": a.f1 - b.f1,
         "components": coh["components"], "largest_fraction": coh["largest_fraction"],
         "provenance": provenance_coverage(graph),
         "edge_recall": edge_recall(graph, gold_mentions),
+    }
+    result["scorecard"] = substrate_scorecard(graph, gold_mentions, qid_aliases)
+    return result
+
+
+def substrate_scorecard(graph: dict, gold_mentions, qid_aliases=None) -> dict:
+    """Three-axis substrate scoreboard, assembled from existing pure scorers (no new alignment math):
+    PRESENCE  = is the gold entity in the KB at all (global alias match; wiki path only, needs
+                `qid_aliases`); RELATIONAL = given presence, clustering quality R(B)/P(B)/F1;
+                CONNECTIVITY = how much is actually edge-wired (the old edge-gated headline, relabeled).
+    On the engineered/no-alias path (`qid_aliases is None`) presence and connectivity.coverage/.f1 are
+    None (both derive from the alias-dependent strict/relaxed aligner); only edge_recall + coherence
+    are alias-free. See docs/superpowers/specs/2026-07-02-substrate-metric-split-design.md."""
+    from erkgbench import metrics
+
+    coh = graph_coherence(graph)
+    er = edge_recall(graph, gold_mentions)
+    if qid_aliases is not None:
+        rep = presence_aligner_report(graph, gold_mentions, qid_aliases)
+        return {
+            "presence": {"coverage": rep["relaxed_coverage"]},
+            "relational": {"f1": rep["relaxed_fb"], "recall": rep["relaxed_rb"],
+                           "precision": rep["relaxed_pb"]},
+            "connectivity": {"coverage": rep["strict_coverage"], "f1": rep["strict_fb"],
+                             "edge_recall": er},
+            "coherence": coh,
+        }
+    entity_ids = [m[0] for m in gold_mentions]
+    b = metrics.score(entity_ids, align_mentions_to_nodes(graph, gold_mentions))
+    return {
+        "presence": None,
+        "relational": {"f1": b.f1, "recall": b.recall, "precision": b.precision},
+        "connectivity": {"coverage": None, "f1": None, "edge_recall": er},
+        "coherence": coh,
     }
 
 
