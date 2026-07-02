@@ -52,7 +52,9 @@ Two graphs (reproducible): **7B seeded** (seed 42) and **DeepSeek-V3** best conf
 | **Metric artifact** | `relaxed_cov` → ~0.9-1.0 at `relaxed_pb` ~1.0 | The ~51% is entities-present-but-doc-unreachable; the ceiling is the aligner, not the substrate. → **Build node-provenance** (recovers coverage *within-doc*, keeping precision) as the next sub-project. |
 | **Real limit** | `relaxed_pb` craters | Cross-doc surface collisions are real; the edge-requirement was load-bearing precision, and ~0.5 is an honest substrate limit. Node provenance (per-doc, safer than global) may still help partially, but the ceiling is partly real. |
 
-Node provenance is the *per-doc* version of what the relaxed probe does *globally*: the probe's global match over-reaches (any doc), so its `relaxed_pb` is a **lower bound** on the precision a real per-doc node-provenance fix would achieve. A clean relaxed result therefore strongly implies a clean engine fix; a dirty one bounds the risk.
+Node provenance is the *per-doc* version of what the relaxed probe does *globally*: the probe's global match over-reaches (any doc, not literally only zero-edge nodes), so its `relaxed_pb` is a **directional lower bound** (heuristic, not a theorem) on the precision a real per-doc node-provenance fix would achieve. A clean relaxed result therefore strongly implies a clean engine fix; a dirty one bounds the risk.
+
+**Verdict-wording guards (carry into the report, do not harden):** (1) keep "lower bound" as directional, not a guarantee — the relaxed path re-aligns only the strict *residual*, while a per-doc fix re-aligns the whole gold set against a different pool. (2) "edgeless" is shorthand — the global fallback reaches any-doc same-surface nodes, not strictly zero-edge ones. (3) `strict_pb` and `relaxed_pb` are over *different pair populations* (relaxed clusters more gold → more pairs), so the table must say a P drop means "more-aligned-with-some-collisions," not pure error.
 
 ## Testing
 
