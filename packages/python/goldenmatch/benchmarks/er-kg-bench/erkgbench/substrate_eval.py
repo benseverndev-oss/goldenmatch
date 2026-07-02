@@ -104,6 +104,17 @@ def real_alignment_coverage(graph: dict, gold_mentions: list[tuple[str, str, str
     return sum(1 for n in node_of.values() if n >= 0) / len(node_of)
 
 
+def _alias_match_surface(surf_lc: str, match_set: set[str]) -> bool:
+    """True iff a (already lowercased) surface matches a lowercased alias/gold `match_set`:
+    exact membership OR substring either way. The single shared predicate behind both the
+    aligned-node substring fallback and the GLiNER-probe match, so they cannot drift."""
+    if not surf_lc:
+        return False
+    if surf_lc in match_set:
+        return True
+    return any(surf_lc in m or m in surf_lc for m in match_set if m)
+
+
 def _assign_real_nodes_aliased(graph: dict, gold_mentions, qid_aliases) -> dict[int, int]:
     """Like `_assign_real_nodes` but the match target is the mention's QID ALIAS SET (union the literal
     wikilink surface), so a built node is found by ANY of the entity's aliases -- dissolving the
@@ -131,9 +142,9 @@ def _assign_real_nodes_aliased(graph: dict, gold_mentions, qid_aliases) -> dict[
             ov = len(id2surf.get(n, set()) & match)
             if ov > best_ov:
                 best, best_ov = n, ov
-        if best is None:                                           # substring fallback (parity with surface
-            for n in cands:                                        # aligner): any alias/surface term overlaps
-                if any(m and any(m in sn or sn in m for sn in id2surf.get(n, ())) for m in match):
+        if best is None:                                           # substring fallback via the shared primitive
+            for n in cands:                                        # (parity with the probe; behavior-preserving)
+                if any(_alias_match_surface(sn, match) for sn in id2surf.get(n, ())):
                     best = n
                     break
         if best is not None:
@@ -274,4 +285,81 @@ def score_substrate(*, gold_mentions, resolver_clusters, graph) -> dict:
         "components": coh["components"], "largest_fraction": coh["largest_fraction"],
         "provenance": provenance_coverage(graph),
         "edge_recall": edge_recall(graph, gold_mentions),
+    }
+
+
+def gliner_probe_report(graph: dict, gold_mentions, qid_aliases, gliner_by_doc) -> dict:
+    """Measure GLiNER's addressable recall against the real-prose substrate residual.
+
+    Splits the unaligned gold (`_assign_real_nodes_aliased` node_of < 0) into NER-miss (no graph node
+    matches the alias set anywhere -> GLiNER-addressable) vs edge-miss (a node exists but produced no
+    in-doc edge -> GLiNER can't help). The gate number is `ner_recovered_frac`: of the NER-miss gold,
+    the share whose entity GLiNER surfaces (in the same doc). Pure; `gliner_by_doc` maps base doc id ->
+    set of raw GLiNER surface strings."""
+    node_of = _assign_real_nodes_aliased(graph, gold_mentions, qid_aliases)
+    # node surfaces (case-folded), exactly as the aligner builds them
+    id2surf: dict[int, set[str]] = {}
+    for e in graph.get("entities", ()):
+        surfs = {str(s).strip().lower() for s in e.get("surface_names", ()) if s}
+        cn = str(e.get("canonical_name", "")).strip().lower()
+        if cn:
+            surfs.add(cn)
+        id2surf[e.get("entity_id")] = surfs
+
+    def _match_set(qid, surface):
+        return set(qid_aliases.get(qid, ())) | {str(surface).strip().lower()}
+
+    def _entity_exists(match_set):  # any node anywhere whose surfaces match -> NER present
+        return any(
+            any(_alias_match_surface(s, match_set) for s in surfs) for surfs in id2surf.values()
+        )
+
+    def _gliner_hit(doc, match_set):  # any GLiNER surface IN THIS DOC matches
+        surfaces = gliner_by_doc.get(_base_doc_id(doc), ())
+        return any(_alias_match_surface(str(g).strip().lower(), match_set) for g in surfaces)
+
+    n_gold = len(gold_mentions)
+    gliner_matched = ner_miss = edge_miss = ner_recovered = missed_recovered = missed = 0
+    for i, (qid, surface, doc) in enumerate(gold_mentions):
+        ms = _match_set(qid, surface)
+        hit = _gliner_hit(doc, ms)
+        gliner_matched += hit
+        if node_of.get(i, -1) < 0:
+            missed += 1
+            if hit:
+                missed_recovered += 1
+            if _entity_exists(ms):
+                edge_miss += 1
+            else:
+                ner_miss += 1
+                if hit:
+                    ner_recovered += 1
+
+    # junk proxy: GLiNER surfaces (per doc) matching NO gold of that doc
+    gold_by_doc: dict[str, list] = {}
+    for (qid, surface, doc) in gold_mentions:
+        gold_by_doc.setdefault(_base_doc_id(doc), []).append(_match_set(qid, surface))
+    total_surf = junk = 0
+    for doc, surfaces in gliner_by_doc.items():
+        base = _base_doc_id(doc)
+        golds = gold_by_doc.get(base, [])
+        for g in surfaces:
+            total_surf += 1
+            g_lc = str(g).strip().lower()
+            if not any(_alias_match_surface(g_lc, ms) for ms in golds):
+                junk += 1
+
+    def _frac(num, den):
+        return num / den if den else 0.0
+
+    return {
+        "n_gold": n_gold,
+        "n_missed": missed,
+        "n_ner_miss": ner_miss,
+        "n_edge_miss": edge_miss,
+        "gliner_recall": _frac(gliner_matched, n_gold),
+        "llm_coverage": _frac(sum(1 for v in node_of.values() if v >= 0), n_gold),
+        "ner_recovered_frac": _frac(ner_recovered, ner_miss),
+        "residual_recovered_frac": _frac(missed_recovered, missed),
+        "junk_rate": _frac(junk, total_surf),
     }
