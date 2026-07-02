@@ -49,3 +49,30 @@ def test_native_and_python_agree(monkeypatch: pytest.MonkeyPatch) -> None:
     except RuntimeError:
         pytest.skip("native extension not built")
     assert py == nat
+
+
+def test_rapidfuzz_and_pure_python_fallback_agree(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The Python fallback uses rapidfuzz's Levenshtein when importable (~38x
+    faster) and a pure-Python DP Levenshtein otherwise. Both use the identical
+    `1 - dist/maxlen` metric, so the resulting clusters must be byte-identical.
+    Forces the pure-Python branch by hiding rapidfuzz from the import machinery."""
+    import sys
+
+    from goldencheck.profilers.fuzzy_values import _python_clusters
+
+    # A moderate set with clear near-duplicate variant groups + distractors.
+    values = [
+        "Acme Corp", "Acme Corporation", "Acme Corp.",
+        "Globex Inc", "Globex Incorporated",
+        "Initech", "Umbrella", "Wonka",
+    ]
+
+    rf_clusters = _python_clusters(values, 0.82)  # rapidfuzz present (venv has it)
+
+    # Hide rapidfuzz.distance so `from rapidfuzz.distance import Levenshtein` raises.
+    monkeypatch.setitem(sys.modules, "rapidfuzz.distance", None)
+    py_clusters = _python_clusters(values, 0.82)  # forced pure-Python
+
+    assert rf_clusters == py_clusters
+    # And the fallback actually found the near-dup groups (not a trivial [] == []).
+    assert rf_clusters, "expected at least one near-duplicate cluster"
