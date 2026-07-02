@@ -51,37 +51,36 @@ Single fixed ground truth (`sna_valid_ground_truth.json`), so it is scorable
 offline. gpt-free, deterministic. `GOLDENMATCH_NATIVE=0`.
 
 <!-- RESULTS_TABLE -->
-| engine | Pairwise-F1 (macro) | precision | recall | note |
-|---|--:|--:|--:|---|
-| `all_singletons` | 0.000 | – | 0.00 | trivial floor |
-| `text_only` (unresolved straw) | _see below_ | ~1.0 | ~0.006 | topical similarity ALONE |
-| `all_one` | 0.375 | 0.256 | 1.00 | merge-everything floor |
-| `coauthor_only` | _running_ | ~0.87 | ~0.36 | co-author Jaccard alone |
-| **`relational`** (co-author OR org+topic) | **_running_** | ~0.89 | ~0.37 | **headline** |
+| engine | Pairwise-F1 (macro) | precision | recall | wall | note |
+|---|--:|--:|--:|--:|---|
+| `all_singletons` | 0.000 | – | 0.000 | 10s | trivial floor |
+| `text_only` (unresolved straw) | ~0.01 | ~1.0 | ~0.006 | slow | topical similarity ALONE |
+| `all_one` | 0.375 | 0.256 | 1.000 | 10s | merge-everything floor |
+| `coauthor_only` | 0.440 | 0.824 | 0.332 | 18s | co-author Jaccard alone |
+| **`relational`** (co-author OR org+topic) | **0.452** | **0.844** | 0.352 | 799s | **headline** |
 
-_(Numbers above are being finalized on the full 80-name valid set; the 5-name
-spike gave relational F1 **0.488** / P **0.886** / R **0.372**, and text_only
-**0.011** — the table is refreshed from the full run.)_
+Context: published toolkit baseline ≈ **0.89** Pairwise-F1, KDD Cup 2024 SOTA
+higher. **0.452 is a respectable record-linkage result that beats every naive
+baseline decisively** — the substrate claim ("resolved ≫ naive"), framed
+honestly, not a leaderboard win. (`text_only` full-valid finalizes ~0.01,
+matching the 5-name spike; the row is refreshed when it lands.)
 
 ### The finding
 
 - **Topical similarity alone is worthless for SND** (`text_only` ≈ 0.01): papers
   by the same person are *not* textually near-duplicate. This is the "unresolved"
-  straw baseline the substrate must beat.
-- **The co-author relational signal carries essentially the entire result**
-  (`relational` ≈ `coauthor_only`), and beats every naive baseline **decisively** —
-  which is exactly the substrate claim ("resolved ≫ naive"), framed honestly.
-- **Precision is high (~0.89), recall is the lever (~0.37).** When two papers share
+  straw baseline the substrate must beat — and it beats it by ~45×.
+- **The co-author relational signal carries ~97% of the result.** `relational`
+  (0.452) adds only **+0.012 F1** over `coauthor_only` (0.440) — and pays 45× the
+  wall (799s vs 18s) for it, because the org+topic path's `token_sort` over long
+  text is the whole cost. The relational signal is the engine; org+topic is a thin
+  garnish on na-v3 (whose `org` fields are largely empty).
+- **Precision is high (~0.84), recall is the lever (~0.35).** When two papers share
   a specific co-author they really are the same person; but many same-author papers
   share *no* co-author directly, and transitive chaining only reaches so far. The
-  na-v3 `org` fields are largely empty, so the org+topic path adds little here —
-  the WhoIsWho leaderboard leaders reconstruct org/venue from external OAG data and
-  run OAG-BERT + a GNN over the co-author graph to close the recall gap. Lifting
-  recall (richer relational features / collective propagation) is the Phase-1 lever.
-
-Context: published toolkit baseline ≈ **89%** Pairwise-F1, KDD Cup 2024 SOTA
-higher. Our number is a **respectable record-linkage result with resolved ≫ naive**,
-not a leaderboard win — and that is the substrate claim, not a trophy.
+  WhoIsWho leaderboard leaders reconstruct org/venue from external OAG data and run
+  OAG-BERT + a GNN over the co-author graph to close the recall gap. Lifting recall
+  (richer relational features / collective propagation) is the Phase-1 lever.
 
 ## Engines (`run_snd.py --engine`)
 
