@@ -54,6 +54,7 @@ _EVAL = {
     "retrieval_coverage": ("erkgbench.qa_e2e.run_retrieval_eval", []),
     "end_to_end": ("erkgbench.qa_e2e.run_qa_e2e", []),  # full pipeline + localize trace (stdout)
     "substrate": ("erkgbench.run_substrate_eval", []),  # substrate-quality A/B ambiguity sweep
+    "tuner": ("erkgbench.run_substrate_tuner", []),  # SP-B2 staged-tuner smoke (handled specially above)
 }
 
 
@@ -214,6 +215,17 @@ def _bench_impl(eval: str, n: int, ambiguity: float, opts: str, chat: str, embed
         results = pathlib.Path(out_md).read_text() if os.path.exists(out_md) else "(no results md)"
         return _persist(eval, n, f"{engine}-{chat}",
                         proc.stdout + "\n\n===== RESULTS_MD =====\n" + results)
+    if eval == "tuner":
+        # SP-B2 staged-tuner smoke on the wiki corpus with the REAL build. Establishes the deterministic
+        # baseline scorecard SP-C must beat. goldengraph only (native store + resolver + LLM). budget=3.
+        env["GOLDENGRAPH_TUNER_ECHO_MD"] = "1"
+        proc = subprocess.run(
+            ["python", "-m", "erkgbench.run_substrate_tuner", "--budget", "3", "--out-md", out_md],
+            cwd=_BENCH, env=env, capture_output=True, text=True, check=True,
+        )
+        results = pathlib.Path(out_md).read_text() if os.path.exists(out_md) else "(no results md)"
+        return _persist(eval, n, f"{engine}-{chat}",
+                        proc.stdout + "\n\n===== RESULTS_MD =====\n" + results)
     module, extra = _EVAL[eval]
     subprocess.run(
         ["python", "-m", module, *extra, "--n-questions", str(n),
@@ -295,7 +307,7 @@ def main(eval: str = "extraction_f1", n: int = 20, ambiguity: float = 0.6, opts:
     # runs on the same local model don't collide. Non-default corpora get a `-{corpus}` suffix. This MUST
     # mirror the tag `_persist` actually writes, or the printed SPAWNED path points at the wrong file.
     csuf = "" if corpus == "engineered" else f"-{corpus}"
-    tag = (f"{engine}-{chat}{csuf}" if eval in ("end_to_end", "substrate") else chat).replace(":", "-").replace("/", "-")
+    tag = (f"{engine}-{chat}{csuf}" if eval in ("end_to_end", "substrate", "tuner") else chat).replace(":", "-").replace("/", "-")
     if spawn:
         # fire-and-forget: queue the call SERVER-SIDE and return instantly, so a local-CLI kill can't
         # cancel it. Result lands at results/<eval>_<n>_<model>.md. Pair with `modal run --detach`.
