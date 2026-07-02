@@ -33,6 +33,10 @@ dependencies = [
     "openpyxl>=3.1",
     "textual>=1.0",
     "goldencheck-types",
+    # Fast C Levenshtein for the fuzzy_values / cell_quality Python path (the
+    # fallback when goldencheck-native is absent). Same pin as the rest of the
+    # suite (goldenmatch/goldenflow). ~38x over the pure-Python DP it replaced.
+    "rapidfuzz>=3.0",
 ]
 
 [project.urls]

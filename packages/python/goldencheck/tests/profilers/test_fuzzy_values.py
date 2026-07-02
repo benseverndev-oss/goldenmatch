@@ -51,28 +51,40 @@ def test_native_and_python_agree(monkeypatch: pytest.MonkeyPatch) -> None:
     assert py == nat
 
 
-def test_rapidfuzz_and_pure_python_fallback_agree(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The Python fallback uses rapidfuzz's Levenshtein when importable (~38x
-    faster) and a pure-Python DP Levenshtein otherwise. Both use the identical
-    `1 - dist/maxlen` metric, so the resulting clusters must be byte-identical.
-    Forces the pure-Python branch by hiding rapidfuzz from the import machinery."""
-    import sys
-
+def test_python_clusters_rapidfuzz_metric() -> None:
+    """The Python path scores candidate pairs with rapidfuzz's Levenshtein
+    (`1 - dist/maxlen`) -- the identical metric to the native kernel. Verify it
+    groups near-duplicate variants and leaves distinct values apart."""
     from goldencheck.profilers.fuzzy_values import _python_clusters
 
-    # A moderate set with clear near-duplicate variant groups + distractors.
     values = [
-        "Acme Corp", "Acme Corporation", "Acme Corp.",
-        "Globex Inc", "Globex Incorporated",
-        "Initech", "Umbrella", "Wonka",
+        "Acme Corp", "Acme Corporation", "Acme Corp.",   # one variant group
+        "Globex Inc", "Globex Incorporated",             # another
+        "Initech", "Umbrella", "Wonka",                  # distinct distractors
     ]
+    clusters = _python_clusters(values, 0.82)
+    grouped = {tuple(sorted(values[i] for i in c)) for c in clusters}
 
-    rf_clusters = _python_clusters(values, 0.82)  # rapidfuzz present (venv has it)
+    # The near-identical spellings cluster; the unrelated names never join one.
+    assert any({"Acme Corp", "Acme Corp."} <= set(g) for g in grouped)
+    assert all("Wonka" not in g for g in grouped)
 
-    # Hide rapidfuzz.distance so `from rapidfuzz.distance import Levenshtein` raises.
-    monkeypatch.setitem(sys.modules, "rapidfuzz.distance", None)
-    py_clusters = _python_clusters(values, 0.82)  # forced pure-Python
 
-    assert rf_clusters == py_clusters
-    # And the fallback actually found the near-dup groups (not a trivial [] == []).
-    assert rf_clusters, "expected at least one near-duplicate cluster"
+def test_rapidfuzz_ratio_matches_reference_levenshtein() -> None:
+    """Lock the metric: rapidfuzz's `1 - dist/maxlen` equals a plain DP
+    Levenshtein ratio, so clustering can't drift from the native kernel."""
+    from rapidfuzz.distance import Levenshtein as RL
+
+    def dp(a: str, b: str) -> int:
+        prev = list(range(len(b) + 1))
+        for i, ca in enumerate(a):
+            cur = [i + 1]
+            for j, cb in enumerate(b):
+                cur.append(min(prev[j + 1] + 1, cur[j] + 1, prev[j] + (ca != cb)))
+            prev = cur
+        return prev[len(b)]
+
+    for a, b in [("acme corp", "acme corp."), ("globex inc", "globex incorporated"),
+                 ("initech", "wonka"), ("", "x"), ("same", "same")]:
+        m = max(len(a), len(b)) or 1
+        assert abs((1 - RL.distance(a, b) / m) - (1 - dp(a, b) / m)) < 1e-9
