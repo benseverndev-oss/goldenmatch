@@ -1,5 +1,15 @@
 # Relation Re-Prompt — Verdict
 
+> **⚠️ CORRECTION (2026-07-02): this "WIN" was REFUTED by seeded re-measurement.** The +33% R(B) / +26% F1
+> reported below was an **unseeded single-leg artifact** — the control (leg 100) and re-prompt (leg 101) legs
+> were two independent draws from a distribution with ~0.14 F1 run-to-run spread (the 7B extraction is
+> non-deterministic; see `2026-07-02-rebel-fuse-verdict.md`). Re-measured at a fixed `GOLDENGRAPH_LLM_SEED`
+> across seeds 42 and 7, the re-prompt delta is **0.000 / −0.046** — no gain, slightly negative. See
+> `2026-07-02-seed-determinism-verdict.md` for the corrected result. The `GOLDENGRAPH_RELATION_REPROMPT` gate
+> is default-off (nothing incorrect shipped to users) but is **NOT recommended**. Chunking (the predecessor
+> lever) was re-confirmed as a genuine win at both seeds. The analysis below is retained as-written for the
+> record; treat its headline as superseded.
+
 **Date:** 2026-07-01
 **Branch:** `feat/relation-reprompt`
 **Spec/Plan:** `docs/superpowers/specs/2026-07-01-relation-reprompt-design.md` · `docs/superpowers/plans/2026-07-01-relation-reprompt.md`
