@@ -39,8 +39,9 @@ image = (
     # STaRK data deps only. stark-qa's FULL tree drags in the retrieval-model baselines
     # (colbert-ai/gritlm/mteb/wandb) -- exactly what goldengraph replaces -- and pip backtracks
     # forever resolving them. Install the SKB/QA DATA loaders with --no-deps + just what they need:
-    # torch (SKB edge tensors), pandas/hf_hub/gdown (download+parse), PyTDC (PRIME's tdc.resource).
-    .pip_install("torch", "pandas", "huggingface_hub", "gdown", "requests", "PyTDC")
+    # torch (SKB edge tensors), pandas/hf_hub/gdown (download+parse), PyTDC (PRIME's tdc.resource),
+    # ogb (skb/__init__ eagerly imports amazon+mag which need ogb.utils.url regardless of --kb).
+    .pip_install("torch", "pandas", "huggingface_hub", "gdown", "requests", "PyTDC", "ogb")
     .pip_install("stark-qa", extra_options="--no-deps")
     .run_commands("curl -fsSL https://ollama.com/install.sh | sh")
     .add_local_dir(str(REPO / "packages/rust"), "/repo/packages/rust", ignore=["**/target/**"])
