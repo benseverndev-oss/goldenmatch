@@ -22,4 +22,6 @@ name = "goldencheck_core"
 rustc-hash = "2"
 
 [dev-dependencies]
-# Property/parity checks for the Benford leading-digit extraction.
+# Property/parity checks for the Benford leading-digit extraction, plus the
+# cross-surface golden fixture (golden/gc_vectors.json) parity test.
+serde_json = "1"

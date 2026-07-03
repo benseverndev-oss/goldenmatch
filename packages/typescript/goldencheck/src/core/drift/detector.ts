@@ -37,6 +37,10 @@ import {
   cramersV,
 } from "../stats.js";
 import { induceColumnGrammars } from "../baseline/patterns.js";
+// Lean registry only (a getter + type-erased import) — zero wasm bytes in the
+// default bundle. Populated via `enableGoldencheckWasm()` from the opt-in
+// `goldencheck/core/wasm` subpath.
+import { getGoldencheckWasmBackend } from "../goldencheckWasmBackend.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -959,22 +963,27 @@ function histogramEntropy(values: number[]): number {
 
 /** Compute Benford's law chi-squared p-value. Returns null on failure. */
 function computeBenfordPvalue(values: number[]): number | null {
-  const leadingDigits: number[] = [];
-  for (const v of values) {
-    if (v <= 0 || !Number.isFinite(v)) continue;
-    const exp = Math.floor(Math.log10(v));
-    const normalised = v / 10 ** exp;
-    const d = Math.floor(normalised);
-    if (d >= 1 && d <= 9) leadingDigits.push(d);
+  // Rust-source-of-truth path: the shared goldencheck-core kernel (same as the
+  // Python `goldencheck-native` wheel) when the wasm backend is enabled; the
+  // pure-TS extract-and-count below stays the fallback. Both yield the 9-bin
+  // leading-digit histogram.
+  const backend = getGoldencheckWasmBackend();
+  let digitCounts: number[];
+  if (backend) {
+    digitCounts = backend.benfordLeadingDigits(values);
+  } else {
+    digitCounts = new Array<number>(9).fill(0);
+    for (const v of values) {
+      if (v <= 0 || !Number.isFinite(v)) continue;
+      const exp = Math.floor(Math.log10(v));
+      const normalised = v / 10 ** exp;
+      const d = Math.floor(normalised);
+      if (d >= 1 && d <= 9) digitCounts[d - 1]!++;
+    }
   }
 
-  if (leadingDigits.length === 0) return null;
-
-  const total = leadingDigits.length;
-  const digitCounts = new Array<number>(9).fill(0);
-  for (const d of leadingDigits) {
-    digitCounts[d - 1]!++;
-  }
+  const total = digitCounts.reduce((a, b) => a + b, 0);
+  if (total === 0) return null;
 
   const expectedProps = benfordExpected();
   const expectedCounts = expectedProps.map((p) => p * total);

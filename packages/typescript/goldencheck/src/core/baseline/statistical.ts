@@ -16,6 +16,10 @@ import {
   benfordExpected,
   normalCdf,
 } from "../stats.js";
+// Lean registry only (a getter + type-erased import) — zero wasm bytes in the
+// default bundle. Populated via `enableGoldencheckWasm()` from the opt-in
+// `goldencheck/core/wasm` subpath.
+import { getGoldencheckWasmBackend } from "../goldencheckWasmBackend.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -413,17 +417,18 @@ function maybeBenford(
 }
 
 function computeBenford(values: number[]): { conforming: boolean; chi2_pvalue: number } {
-  const leadingDigits = extractLeadingDigits(values);
-  const total = leadingDigits.length;
+  // Rust-source-of-truth path: the shared goldencheck-core kernel (same as the
+  // Python `goldencheck-native` wheel) when the wasm backend is enabled; the
+  // pure-TS extract-and-count below stays the fallback. Both yield the 9-bin
+  // leading-digit histogram.
+  const backend = getGoldencheckWasmBackend();
+  const digitCounts = backend
+    ? backend.benfordLeadingDigits(values)
+    : leadingDigitHistogram(values);
+  const total = digitCounts.reduce((a, b) => a + b, 0);
 
   if (total === 0) {
     return { conforming: false, chi2_pvalue: 0 };
-  }
-
-  // Count observed digits 1-9
-  const digitCounts = new Array<number>(9).fill(0);
-  for (const d of leadingDigits) {
-    digitCounts[d - 1]!++;
   }
 
   // Expected counts from Benford's law
@@ -439,17 +444,22 @@ function computeBenford(values: number[]): { conforming: boolean; chi2_pvalue: n
   };
 }
 
-/** Extract the leading significant digit (1-9) from each value. */
-function extractLeadingDigits(values: number[]): number[] {
-  const digits: number[] = [];
+/**
+ * Pure-TS fallback for the Benford leading-digit histogram (9 bins, digits
+ * 1..9) over finite positive values — mirror of goldencheck-core's
+ * `benford_leading_digits` (the wasm/native path). Non-positive and non-finite
+ * values are skipped.
+ */
+function leadingDigitHistogram(values: number[]): number[] {
+  const counts = new Array<number>(9).fill(0);
   for (const v of values) {
     if (v <= 0 || !Number.isFinite(v)) continue;
     const exp = Math.floor(Math.log10(v));
     const normalised = v / 10 ** exp;
     const d = Math.floor(normalised);
     if (d >= 1 && d <= 9) {
-      digits.push(d);
+      counts[d - 1]!++;
     }
   }
-  return digits;
+  return counts;
 }

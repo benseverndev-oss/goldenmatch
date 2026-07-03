@@ -38,6 +38,11 @@
       "import": "./dist/core/index.js",
       "require": "./dist/core/index.cjs"
     },
+    "./core/wasm": {
+      "types": "./dist/core/goldencheckWasm.d.ts",
+      "import": "./dist/core/goldencheckWasm.js",
+      "require": "./dist/core/goldencheckWasm.cjs"
+    },
     "./node": {
       "types": "./dist/node/index.d.ts",
       "import": "./dist/node/index.js",

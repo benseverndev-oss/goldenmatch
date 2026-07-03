@@ -9,6 +9,13 @@
 import type { TabularData, Dtype } from "../data.js";
 import { type Finding, Severity, makeFinding } from "../types.js";
 import type { RelationProfiler } from "../profilers/base.js";
+// Lean registry only (a getter + type-erased import) — pulls ZERO wasm bytes
+// into the default bundle. Populated only when `enableGoldencheckWasm()` is
+// called from the opt-in `goldencheck/core/wasm` subpath.
+import {
+  getGoldencheckWasmBackend,
+  type WasmColumn,
+} from "../goldencheckWasmBackend.js";
 
 const MAX_KEY_SIZE = 3;
 const MAX_CANDIDATE_COLS = 12;
@@ -44,6 +51,18 @@ function search(
   nRows: number,
   maxSize: number,
 ): number[][] {
+  // Rust-source-of-truth path: when the wasm backend is enabled, run the SAME
+  // goldencheck-core kernel the Python `goldencheck-native` wheel uses instead of
+  // the hand-written BFS below (which stays the pure-TS fallback). `candidates`
+  // are already the non-unique, non-constant columns, so single_unique is all
+  // false and the returned indices are into `candidates` — same shape.
+  const backend = getGoldencheckWasmBackend();
+  if (backend) {
+    const cols: WasmColumn[] = candidates.map((name) =>
+      data.column(name).map((v) => (v == null ? null : String(v))),
+    );
+    return backend.compositeKeySearch(cols, maxSize, candidates.map(() => false));
+  }
   const idxs = candidates.map((_, i) => i);
   const found: number[][] = [];
   const cap = Math.min(maxSize, idxs.length);

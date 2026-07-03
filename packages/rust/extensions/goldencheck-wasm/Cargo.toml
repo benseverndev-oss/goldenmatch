@@ -1,0 +1,33 @@
+# Standalone workspace: a thin wasm-bindgen wrapper over `goldencheck-core`, so
+# the JS/TS port runs the SAME deep-profiling kernels as the Python
+# `goldencheck-native` wheel — one source of truth, no hand-maintained parallel
+# composite-key / FD / near-duplicate logic. Mirrors the sibling
+# `autoconfig-wasm` / `goldenhnsw-wasm` crates. JSON in / JSON out.
+[workspace]
+
+[package]
+name = "goldencheck-wasm"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Ben Severn <ben@bensevern.dev>"]
+description = "wasm-bindgen wrapper over goldencheck-core (deep-profiling kernels) for the JS/TS port"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wasm-bindgen = "0.2"
+goldencheck-core = { path = "../goldencheck-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"   # optimize for small wasm size
+lto = true
+
+# wasm-opt (binaryen) downloads a binaryen release at build time, unavailable in
+# network-restricted CI. opt-level="s"+lto already give a small wasm; disable the
+# post-pass so the build is hermetic. Same rationale as autoconfig-wasm.
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false
