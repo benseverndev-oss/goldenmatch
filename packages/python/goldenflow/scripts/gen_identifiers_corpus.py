@@ -32,6 +32,8 @@ from goldenflow.transforms.identifiers import (  # noqa: E402
     _cc_format_py,
     _cc_mask_py,
     _cc_validate_py,
+    _iban_format_py,
+    _iban_validate_py,
 )
 
 CORPUS_PATH = Path(__file__).resolve().parent.parent / "tests" / "parity" / "identifiers_corpus.jsonl"
@@ -79,18 +81,46 @@ _CASES: list[tuple[str, str | None]] = [
     ("cc_mask", "1234"),
     ("cc_mask", ""),
     ("cc_mask", None),
+    # --- iban_validate: valid ---
+    ("iban_validate", "GB82 WEST 1234 5698 7654 32"),  # UK, spaced
+    ("iban_validate", "GB82WEST12345698765432"),  # UK, bare
+    ("iban_validate", "DE89370400440532013000"),  # Germany
+    ("iban_validate", "FR1420041010050500013M02606"),  # France, alnum BBAN
+    ("iban_validate", "de89 370400440532013000"),  # lowercase + spaced
+    # --- iban_validate: invalid ---
+    ("iban_validate", "GB82WEST12345698765433"),  # bad check digits
+    ("iban_validate", "XX00"),  # too short
+    ("iban_validate", "GB82WEST1234569876543212345678901234"),  # too long (>34)
+    ("iban_validate", "1B82WEST12345698765432"),  # non-alpha country code
+    ("iban_validate", "GBXXWEST12345698765432"),  # non-digit check digits
+    ("iban_validate", "GB82WEST1234569876543!"),  # non-alnum BBAN char
+    ("iban_validate", ""),  # empty
+    ("iban_validate", None),  # null
+    # --- iban_format: valid ---
+    ("iban_format", "DE89370400440532013000"),
+    ("iban_format", "GB82 WEST 1234 5698 7654 32"),
+    ("iban_format", "FR1420041010050500013M02606"),
+    # --- iban_format: invalid -> null ---
+    ("iban_format", "GB82WEST12345698765433"),
+    ("iban_format", "XX00"),
+    ("iban_format", ""),
+    ("iban_format", None),
 ]
 
 _PY_FN = {
     "cc_validate": _cc_validate_py,
     "cc_format": _cc_format_py,
     "cc_mask": _cc_mask_py,
+    "iban_validate": _iban_validate_py,
+    "iban_format": _iban_format_py,
 }
 
 _NATIVE_ARROW_FN = {
     "cc_validate": "cc_validate_arrow",
     "cc_format": "cc_format_arrow",
     "cc_mask": "cc_mask_arrow",
+    "iban_validate": "iban_validate_arrow",
+    "iban_format": "iban_format_arrow",
 }
 
 

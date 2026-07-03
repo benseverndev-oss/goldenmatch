@@ -4,6 +4,8 @@ from goldenflow.transforms.identifiers import (
     cc_mask,
     cc_validate,
     ein_format,
+    iban_format,
+    iban_validate,
     ssn_format,
     ssn_mask,
 )
@@ -112,3 +114,44 @@ def test_cc_mask_stars_plus_last4():
     assert result[1] is None
     assert result[2] is None
     assert result[3] is None
+
+
+# --- IBAN (ISO 7064 mod-97) identifiers -------------------------------------
+
+
+def test_iban_validate_valid_and_invalid():
+    s = pl.Series(
+        "iban",
+        [
+            "GB82 WEST 1234 5698 7654 32",  # UK, spaced
+            "DE89370400440532013000",  # Germany
+            "FR1420041010050500013M02606",  # France, alnum BBAN
+            "GB82WEST12345698765433",  # bad check digits
+            "XX00",  # too short
+            "",  # empty
+            None,
+        ],
+    )
+    result = iban_validate(s)
+    assert result[0] is True
+    assert result[1] is True
+    assert result[2] is True
+    assert result[3] is False
+    assert result[4] is False
+    assert result[5] is False
+    assert result[6] is None
+
+
+def test_iban_format_groups_in_4s():
+    s = pl.Series(
+        "iban",
+        [
+            "DE89370400440532013000",
+            "GB82WEST12345698765433",  # invalid -> null
+            None,
+        ],
+    )
+    result = iban_format(s)
+    assert result[0] == "DE89 3704 0044 0532 0130 00"
+    assert result[1] is None
+    assert result[2] is None

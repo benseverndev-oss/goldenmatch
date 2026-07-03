@@ -13,7 +13,13 @@ from pathlib import Path
 import polars as pl
 import pytest
 from goldenflow.core._native_loader import native_available
-from goldenflow.transforms.identifiers import cc_format, cc_mask, cc_validate
+from goldenflow.transforms.identifiers import (
+    cc_format,
+    cc_mask,
+    cc_validate,
+    iban_format,
+    iban_validate,
+)
 
 _CORPUS_PATH = Path(__file__).parent.parent / "parity" / "identifiers_corpus.jsonl"
 
@@ -21,6 +27,19 @@ _TRANSFORMS = {
     "cc_validate": cc_validate,
     "cc_format": cc_format,
     "cc_mask": cc_mask,
+    "iban_validate": iban_validate,
+    "iban_format": iban_format,
+}
+
+# Floor native symbol per transform's component -- used to skip a row when the
+# installed/built goldenflow-native predates that transform's kernel (wheel
+# skew), mirroring _native_loader._COMPONENT_SYMBOLS.
+_NATIVE_FLOOR_SYMBOL = {
+    "cc_validate": "cc_validate_arrow",
+    "cc_format": "cc_validate_arrow",
+    "cc_mask": "cc_validate_arrow",
+    "iban_validate": "iban_validate_arrow",
+    "iban_format": "iban_validate_arrow",
 }
 
 
@@ -51,13 +70,18 @@ def test_identifiers_fallback_parity(row, monkeypatch):
 @pytest.mark.parametrize("row", _CORPUS, ids=_IDS)
 def test_identifiers_native_parity(row, monkeypatch):
     """Native path matches the committed corpus exactly (skips if the native
-    module isn't built/importable, or the ``cc`` symbols aren't in the wheel)."""
+    module isn't built/importable, or the transform's kernel symbol isn't in
+    the wheel)."""
     if not native_available():
         pytest.skip("goldenflow-native not built/importable")
     from goldenflow.core._native_loader import native_module
 
-    if not hasattr(native_module(), "cc_validate_arrow"):
-        pytest.skip("installed goldenflow-native predates the cc kernel (wheel skew)")
+    floor_symbol = _NATIVE_FLOOR_SYMBOL[row["transform"]]
+    if not hasattr(native_module(), floor_symbol):
+        pytest.skip(
+            f"installed goldenflow-native predates the {row['transform']} kernel "
+            "(wheel skew)"
+        )
     monkeypatch.setenv("GOLDENFLOW_NATIVE", "auto")
     transform = _TRANSFORMS[row["transform"]]
     result = transform(pl.Series("v", [row["input"]]))

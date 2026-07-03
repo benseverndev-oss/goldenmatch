@@ -33,3 +33,23 @@
 {"transform": "cc_mask", "input": "1234", "expected": null}
 {"transform": "cc_mask", "input": "", "expected": null}
 {"transform": "cc_mask", "input": null, "expected": null}
+{"transform": "iban_validate", "input": "GB82 WEST 1234 5698 7654 32", "expected": true}
+{"transform": "iban_validate", "input": "GB82WEST12345698765432", "expected": true}
+{"transform": "iban_validate", "input": "DE89370400440532013000", "expected": true}
+{"transform": "iban_validate", "input": "FR1420041010050500013M02606", "expected": true}
+{"transform": "iban_validate", "input": "de89 370400440532013000", "expected": true}
+{"transform": "iban_validate", "input": "GB82WEST12345698765433", "expected": false}
+{"transform": "iban_validate", "input": "XX00", "expected": false}
+{"transform": "iban_validate", "input": "GB82WEST1234569876543212345678901234", "expected": false}
+{"transform": "iban_validate", "input": "1B82WEST12345698765432", "expected": false}
+{"transform": "iban_validate", "input": "GBXXWEST12345698765432", "expected": false}
+{"transform": "iban_validate", "input": "GB82WEST1234569876543!", "expected": false}
+{"transform": "iban_validate", "input": "", "expected": false}
+{"transform": "iban_validate", "input": null, "expected": null}
+{"transform": "iban_format", "input": "DE89370400440532013000", "expected": "DE89 3704 0044 0532 0130 00"}
+{"transform": "iban_format", "input": "GB82 WEST 1234 5698 7654 32", "expected": "GB82 WEST 1234 5698 7654 32"}
+{"transform": "iban_format", "input": "FR1420041010050500013M02606", "expected": "FR14 2004 1010 0505 0001 3M02 606"}
+{"transform": "iban_format", "input": "GB82WEST12345698765433", "expected": null}
+{"transform": "iban_format", "input": "XX00", "expected": null}
+{"transform": "iban_format", "input": "", "expected": null}
+{"transform": "iban_format", "input": null, "expected": null}

@@ -9,6 +9,8 @@ from goldenflow.transforms._native import (
     cc_format_native,
     cc_mask_native,
     cc_validate_native,
+    iban_format_native,
+    iban_validate_native,
 )
 
 
@@ -147,6 +149,92 @@ def cc_mask(series: pl.Series) -> pl.Series:
     if native is not None:
         return native(series)
     return series.map_elements(_cc_mask_py, return_dtype=pl.Utf8)
+
+
+# --- IBAN (ISO 7064 mod-97) identifiers -------------------------------------
+#
+# Pure-Python reference for goldenflow-core's ``identifiers::iban`` kernel.
+# MUST reproduce the Rust kernel byte-for-byte (asserted by
+# tests/transforms/test_identifiers_parity.py over
+# tests/parity/identifiers_corpus.jsonl) -- same separator strip + uppercase,
+# same structural checks, same mod-97 fold, same 4-char grouping.
+
+
+def _iban_normalize(val: str) -> str:
+    """Strip separators + uppercase -- mirrors Rust ``strip_sep`` + upper."""
+    return _cc_strip_sep(val).upper()
+
+
+def _iban_mod97_ok(t: str) -> bool:
+    """ISO 7064 mod-97 check: move the first 4 chars to the end, fold the
+    resulting decimal string mod 97 digit-by-digit (letters -> two-digit
+    A=10..Z=35 value folded in one step), require remainder 1."""
+    rearranged = t[4:] + t[:4]
+    acc = 0
+    for c in rearranged:
+        if c.isdigit():
+            acc = (acc * 10 + (ord(c) - ord("0"))) % 97
+        else:
+            v = (ord(c) - ord("A")) + 10
+            acc = (acc * 100 + v) % 97
+    return acc == 1
+
+
+def _iban_validate_py(val: str | None) -> bool | None:
+    if val is None:
+        return None
+    t = _iban_normalize(val)
+    if not (15 <= len(t) <= 34):
+        return False
+    if not (t[0].isascii() and t[0].isalpha() and t[1].isascii() and t[1].isalpha()):
+        return False
+    if not (t[2].isascii() and t[2].isdigit() and t[3].isascii() and t[3].isdigit()):
+        return False
+    if not all(c.isascii() and c.isalnum() for c in t[4:]):
+        return False
+    return _iban_mod97_ok(t)
+
+
+def _iban_group4(t: str) -> str:
+    return " ".join(t[i : i + 4] for i in range(0, len(t), 4))
+
+
+def _iban_format_py(val: str | None) -> str | None:
+    if val is None:
+        return None
+    if not _iban_validate_py(val):
+        return None
+    return _iban_group4(_iban_normalize(val))
+
+
+@register_transform(
+    name="iban_validate",
+    input_types=["identifier", "string"],
+    auto_apply=False,
+    priority=50,
+    mode="series",
+)
+def iban_validate(series: pl.Series) -> pl.Series:
+    """Validate an IBAN via structural checks + the ISO 7064 mod-97 check."""
+    native = iban_validate_native()
+    if native is not None:
+        return native(series)
+    return series.map_elements(_iban_validate_py, return_dtype=pl.Boolean)
+
+
+@register_transform(
+    name="iban_format",
+    input_types=["identifier", "string"],
+    auto_apply=False,
+    priority=50,
+    mode="series",
+)
+def iban_format(series: pl.Series) -> pl.Series:
+    """Group a valid IBAN into 4-char blocks; ``null`` for invalid input."""
+    native = iban_format_native()
+    if native is not None:
+        return native(series)
+    return series.map_elements(_iban_format_py, return_dtype=pl.Utf8)
 
 
 @register_transform(

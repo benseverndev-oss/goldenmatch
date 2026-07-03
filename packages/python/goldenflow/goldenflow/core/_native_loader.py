@@ -70,6 +70,8 @@ _COMPONENT_SYMBOLS: dict[str, tuple[str, ...]] = {
     # deliberately unwired AND listed in _FALLBACK_ONLY below.
     # cc: payment-card (Luhn) identifiers -- floor symbol only, region-free.
     "cc": ("cc_validate_arrow",),
+    # iban: IBAN (ISO 7064 mod-97) identifiers -- floor symbol only, region-free.
+    "iban": ("iban_validate_arrow",),
 }
 
 # Components whose only native path is intentionally non-authoritative (the
