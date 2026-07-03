@@ -404,6 +404,9 @@ jobs:
               # suite. Trigger on the crate, the extensions workspace manifest,
               # the Python files it's wired into, and the build script.
               - 'packages/rust/extensions/native-flow/**'
+              # native-flow path-depends on goldenflow-core (the owned pyo3-free
+              # kernels), so a core change must fire this lane's cargo checks too.
+              - 'packages/rust/extensions/goldenflow-core/**'
               - 'packages/rust/extensions/Cargo.toml'
               - 'packages/python/goldenflow/goldenflow/core/_native_loader.py'
               - 'packages/python/goldenflow/goldenflow/transforms/_native.py'
