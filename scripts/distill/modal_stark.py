@@ -132,7 +132,8 @@ def _start_ollama(embed_model: str) -> str:
     return "http://localhost:11434/v1"
 
 
-def _stark_impl(kb: str, sample: int, embed_model: str, chunk_edges: int) -> str:
+def _stark_impl(kb: str, sample: int, embed_model: str, chunk_edges: int,
+                text_mode: str = "names") -> str:
     import os
     import sys
     import time
@@ -152,11 +153,13 @@ def _stark_impl(kb: str, sample: int, embed_model: str, chunk_edges: int) -> str
     from goldengraph_native import _native as ggn
 
     _BIG = 1 << 62
-    lines = [f"# STaRK feasibility -- {kb} (sample={sample})", ""]
+    lines = [f"# STaRK feasibility -- {kb} (sample={sample}, text_mode={text_mode})", ""]
 
-    # 1. download + map
+    # 1. download + map. with_text builds the fair-baseline corpus (each node's intrinsic doc,
+    #    add_rel=False -- NO relations, so the graph walk stays the only structural signal).
     t = time.perf_counter()
-    nodes, edges, queries = load_stark_kb(kb, split="test", limit_queries=sample)
+    nodes, edges, queries, node_texts = load_stark_kb(
+        kb, split="test", limit_queries=sample, with_text=(text_mode == "full"))
     lines.append(f"load_stark_kb: {time.perf_counter() - t:.1f}s  "
                  f"nodes={len(nodes)} edges={len(edges)} queries={len(queries)}")
 
@@ -178,10 +181,16 @@ def _stark_impl(kb: str, sample: int, embed_model: str, chunk_edges: int) -> str
     lines.append(f"bulk_load: {ingest_s:.1f}s  {stats}  peak_rss={_peak_rss_gb():.2f}GB")
 
     # 3. index over ALL nodes (entity_id=int(stark_id) -> query returns stark ids; isolated
-    #    nodes stay in the dense baseline). [index-build wall + RSS]
+    #    nodes stay in the dense baseline). names mode embeds the node NAME; full mode embeds the
+    #    node's intrinsic DOC (fair dense baseline). canonical_name is just the index's embed text
+    #    here -- the store keeps the real name, so display/walk are unaffected. [build wall + RSS]
     embedder = _OllamaEmbedder(embed_model, base_url)
-    index_entities = [{"entity_id": int(sid), "canonical_name": name, "typ": typ}
-                      for sid, name, typ in nodes]
+    if text_mode == "full":
+        corpus = [(node_texts[i] or name) for i, (sid, name, typ) in enumerate(nodes)]
+    else:
+        corpus = [name for sid, name, typ in nodes]
+    index_entities = [{"entity_id": int(sid), "canonical_name": corpus[i], "typ": typ}
+                      for i, (sid, name, typ) in enumerate(nodes)]
     t = time.perf_counter()
     index = EntityIndex.build(index_entities, embedder, top_k=50)
     build_s = time.perf_counter() - t
@@ -207,29 +216,36 @@ def _stark_impl(kb: str, sample: int, embed_model: str, chunk_edges: int) -> str
         )
 
     lines.append(f"\npeak_rss_final={_peak_rss_gb():.2f}GB")
-    lines.append("\nNOTE: EntityIndex embeds node NAMES (not STaRK full node text), so absolute "
-                 "numbers are NOT leaderboard-comparable; the dense-vs-graph DELTA is the signal.")
+    if text_mode == "full":
+        lines.append("\nNOTE: EntityIndex embeds each node's INTRINSIC doc (name+description, "
+                     "add_rel=False -- NO relations), so the graph walk is the only structural "
+                     "signal. Compare vs the names-mode run: does the graph delta SURVIVE a strong "
+                     "dense baseline? Still not STaRK-leaderboard (their docs add relations).")
+    else:
+        lines.append("\nNOTE: EntityIndex embeds node NAMES (not full node text), so absolute "
+                     "numbers are NOT leaderboard-comparable; the dense-vs-graph DELTA is the signal.")
     text = "\n".join(lines)
     print(text, flush=True)
 
     os.makedirs("/cache/results", exist_ok=True)
-    pathlib.Path(f"/cache/results/stark_{kb}.md").write_text(text)
+    pathlib.Path(f"/cache/results/stark_{kb}_{text_mode}.md").write_text(text)
     cache.commit()
     return text
 
 
 @app.function(image=image, gpu="A10G", volumes={"/cache": cache}, timeout=10800, memory=65536)
 def run_stark(kb: str = "prime", sample: int = 200, embed_model: str = "nomic-embed-text",
-              chunk_edges: int = 0) -> str:
-    return _stark_impl(kb, sample, embed_model, chunk_edges)
+              chunk_edges: int = 0, text_mode: str = "names") -> str:
+    return _stark_impl(kb, sample, embed_model, chunk_edges, text_mode)
 
 
 @app.local_entrypoint()
 def main(kb: str = "prime", sample: int = 200, embed_model: str = "nomic-embed-text",
-         chunk_edges: int = 0, spawn: bool = False) -> None:
+         chunk_edges: int = 0, text_mode: str = "names", spawn: bool = False) -> None:
     if spawn:
-        call = run_stark.spawn(kb=kb, sample=sample, embed_model=embed_model, chunk_edges=chunk_edges)
-        print(f"SPAWNED call_id={call.object_id} -> results/stark_{kb}.md on gg-bench-cache")
+        call = run_stark.spawn(kb=kb, sample=sample, embed_model=embed_model,
+                               chunk_edges=chunk_edges, text_mode=text_mode)
+        print(f"SPAWNED call_id={call.object_id} -> results/stark_{kb}_{text_mode}.md on gg-bench-cache")
         return
     print("\n===== RESULT =====\n" + run_stark.remote(
-        kb=kb, sample=sample, embed_model=embed_model, chunk_edges=chunk_edges))
+        kb=kb, sample=sample, embed_model=embed_model, chunk_edges=chunk_edges, text_mode=text_mode))

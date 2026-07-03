@@ -24,12 +24,18 @@ def _node_name(info: dict) -> str:
     return str(info.get("name") or info.get("title") or "").strip()
 
 
-def load_stark_kb(name: str, *, split: str = "test", limit_queries: int | None = None):
-    """Return ``(nodes, edges, queries)`` for a STaRK KB.
+def load_stark_kb(name: str, *, split: str = "test", limit_queries: int | None = None,
+                  with_text: bool = False):
+    """Return ``(nodes, edges, queries, node_texts)`` for a STaRK KB.
 
     nodes: list of ``(stark_id: str, name: str, typ: str)``.
     edges: list of ``(subj_stark_id: str, predicate: str, obj_stark_id: str)``.
     queries: list of ``(query_text: str, gold_stark_ids: set[int])`` from ``split``.
+    node_texts: ``None`` unless ``with_text`` -- then a list aligned to ``nodes`` of each
+      node's INTRINSIC document (``get_doc_info(add_rel=False)`` = name + description, NO
+      relations). This is the fair-baseline embedding corpus: with relations excluded, the
+      graph WALK stays the only structural signal, so text-dense vs text-graph is a clean
+      test of whether the graph earns its place over strong text retrieval.
 
     Node/gold ids stay INTS for retrieval+scoring; ids are stringified only for the
     store's opaque ``record_keys`` (done inside ``bulk_load``)."""
@@ -60,6 +66,19 @@ def load_stark_kb(name: str, *, split: str = "test", limit_queries: int | None =
         info = skb.node_info[nid]
         nodes.append((str(nid), _node_name(info), str(skb.get_node_type_by_id(nid))))
 
+    # Fair-baseline corpus: each node's intrinsic doc (name + description, add_rel=False so NO
+    # relations leak into the dense vector). compact=True keeps it embedder-context-sized. Fail-soft
+    # per node -> fall back to the name (an unrenderable node must not sink the whole load).
+    node_texts = None
+    if with_text:
+        node_texts = []
+        for nid in range(n_nodes):
+            try:
+                txt = str(skb.get_doc_info(nid, add_rel=False, compact=True)).strip()
+            except Exception:
+                txt = ""
+            node_texts.append(txt or nodes[nid][1])
+
     # Real edges live in edge_index (2xE) + edge_types (E); get_tuples() is only the
     # SCHEMA (type-triples), not instances. Materialize once as python lists (fast),
     # decode each relation-type id once via a cache.
@@ -85,7 +104,7 @@ def load_stark_kb(name: str, *, split: str = "test", limit_queries: int | None =
     for i in idx:
         query, _q_id, answer_ids, _meta = qa[i]
         queries.append((query, {int(a) for a in answer_ids}))
-    return nodes, edges, queries
+    return nodes, edges, queries, node_texts
 
 
 def evaluate(index, slice_graph, stark_to_eid, eid_to_stark, queries, embedder, *,
