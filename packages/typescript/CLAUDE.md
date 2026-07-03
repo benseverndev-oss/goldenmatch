@@ -49,6 +49,21 @@ this — `workspace:^` handles the linking cross-platform. The stale
   consumer `src/core/wasm/` (backend + loader + index using the shared runtime),
   wire the batch boundary, a skip-guarded parity test + bench, and a CI lane.
 
+## Committed wasm parity fixtures: the `fixture_drift` backstop
+A committed `build_*_wasm.mjs`-generated fixture (`tests/parity/fixtures/<core>/`)
+can silently drift from its Rust core. Each surface has a per-core `*_wasm` drift
+guard (rebuild + diff), but those are path-filtered — they only fire when that
+surface's own paths change, so a stale fixture carried by a branch that never
+touched those paths slips through until a full-matrix run (this is exactly how a
+stale goldengraph fixture failed PR #1398 four times in the merge queue). The
+**`fixture_drift` CI job** (root `ci.yml`, gated on the broad `rust_cores` filter
+= any `packages/rust/extensions/**` change) is the catch-all: it regenerates
+EVERY committed wasm parity fixture from its live core and diffs, so a stale
+sibling fails on the PR. New `build_*_wasm.mjs` scripts are picked up
+automatically (it globs `packages/typescript/*/scripts/build_*_wasm.mjs`) — no
+job edit needed. It diffs ONLY `tests/parity/fixtures/**`, never the
+toolchain-variant wasm bytes.
+
 ## Known pre-existing failures
 
 - `infermap` parity test references `packages/tests/fixtures/parity_cases.json` (path was valid pre-monorepo, now broken). Not introduced by handoff work.
