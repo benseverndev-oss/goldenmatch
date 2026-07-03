@@ -24,11 +24,11 @@
 ## File structure
 
 - **Create** `packages/python/goldengraph/goldengraph/stark_inject.py` — the corruption: `inject_aliases`, `_variants`. Pure + seeded rng. No store, no goldenmatch.
-- **Create** `packages/python/goldengraph/goldengraph/stark_moat.py` — the clustering→materialization: `build_clusters`, `collapse_for_index`, `collapse_for_store`, `canon_rank`. Pure except `collapse_for_store`'s consumer (bulk_load in the test).
+- **Create** `packages/python/goldengraph/goldengraph/stark_moat.py` — the clustering→materialization: `build_clusters`, `collapse_for_index`, `collapse_for_store`. Pure except `collapse_for_store`'s consumer (bulk_load in the test). (No `canon_rank` — the single map+dedup helper is `_apply_id_map` in `stark_adapter`.)
 - **Create** `packages/python/goldenmatch/benchmarks/er-kg-bench/erkgbench/stark_resolve.py` — `resolve_aliases` (none/exact/er). Lazy goldenmatch import.
-- **Modify** `packages/python/goldenmatch/benchmarks/er-kg-bench/erkgbench/stark_adapter.py` — add `id_map=None` to `evaluate` (canon-map retrieved ids before scoring).
+- **Modify** `packages/python/goldenmatch/benchmarks/er-kg-bench/erkgbench/stark_adapter.py` — add `id_map=None` to `evaluate` + the `_apply_id_map` helper (canon-map retrieved ids before scoring).
 - **Modify** `scripts/distill/modal_stark.py` — add `--inject` mode driver (integration).
-- **Tests:** `goldengraph/tests/test_stark_inject.py`, `goldengraph/tests/test_alias_materialize.py` (real PyStore), `er-kg-bench/tests/test_stark_resolve.py`, `er-kg-bench/tests/test_alias_scoring.py` (pure).
+- **Tests (5 files):** `goldengraph/tests/test_stark_inject.py`, `goldengraph/tests/test_build_clusters.py` (build_clusters, pure), `goldengraph/tests/test_alias_materialize.py` (real PyStore), `er-kg-bench/tests/test_stark_resolve.py`, `er-kg-bench/tests/test_alias_scoring.py` (`_apply_id_map` + metrics, pure). The two "scoring"-ish tests live in separate roots and test different functions — no clash.
 
 ## Box-safe test runners
 
@@ -347,19 +347,21 @@ git commit -m "feat(erkgbench): STaRK alias resolver (none/exact/goldenmatch ded
 
 ---
 
-## Task 3: `build_clusters` + `canon_rank` — cluster ordinals + scoring map (pure)
+## Task 3: `build_clusters` — cluster ordinals + int canon map (pure)
 
 **Files:**
 - Create: `packages/python/goldengraph/goldengraph/stark_moat.py`
-- Test: `packages/python/goldengraph/tests/test_alias_scoring.py` (pure — lives in goldengraph tests; erkgbench's copy imports it too, see Task 5)
+- Test: `packages/python/goldengraph/tests/test_build_clusters.py` (pure)
 
 - [ ] **Step 1: Write the failing tests**
 
 ```python
-"""SP-moat cluster assembly + canon scoring map (pure)."""
+"""SP-moat cluster assembly + INT canon scoring map (pure). ord2canon values are
+INTS -- the original STaRK node ids -- so they match the int `gold` sets in
+stark_metrics. (A str->int mismatch here would make every method score ~0.)"""
 from __future__ import annotations
 
-from goldengraph.stark_moat import build_clusters, canon_rank
+from goldengraph.stark_moat import build_clusters
 
 
 def test_build_clusters_targets_grouped_nontargets_singleton():
@@ -369,21 +371,16 @@ def test_build_clusters_targets_grouped_nontargets_singleton():
     ordinal_of, ord2canon = build_clusters(canon, method_clusters, all_ids)
     assert ordinal_of["1#a0"] == ordinal_of["1#a1"]    # aliases share an ordinal
     assert ordinal_of["2"] != ordinal_of["1#a0"]        # non-target its own ordinal
-    assert ord2canon[ordinal_of["1#a0"]] == "1"         # cluster -> canonical original
-    assert ord2canon[ordinal_of["2"]] == "2"
+    assert ord2canon[ordinal_of["1#a0"]] == 1           # INT canonical original (matches int gold)
+    assert ord2canon[ordinal_of["2"]] == 2
+    assert all(isinstance(v, int) for v in ord2canon.values())
 
 
 def test_build_clusters_fragmented_all_singletons():
     canon = {"1#a0": "1", "1#a1": "1"}
     ordinal_of, ord2canon = build_clusters(canon, [["1#a0"], ["1#a1"]], ["1#a0", "1#a1"])
     assert ordinal_of["1#a0"] != ordinal_of["1#a1"]     # fragmented -> distinct ordinals
-    assert ord2canon[ordinal_of["1#a0"]] == "1"         # both still map to original 1
-
-
-def test_canon_rank_maps_and_dedups_first_seen():
-    # retrieved ordinals -> canonical originals, dedup preserving order
-    ord2canon = {10: "1", 11: "1", 12: "2"}
-    assert canon_rank([12, 10, 11], ord2canon) == ["2", "1"]   # 11->1 is a dup of 10->1
+    assert ord2canon[ordinal_of["1#a0"]] == 1           # both still map to original 1 (int)
 ```
 
 - [ ] **Step 2: Run to verify failure** (goldengraph box runner).
@@ -401,15 +398,17 @@ from __future__ import annotations
 
 
 def build_clusters(canon, method_clusters, all_ids):
-    """`canon`: alias_id -> original id. `method_clusters`: resolver output over the
-    INJECTED aliases (list[list[alias_id]]). `all_ids`: every node id in the injected
-    graph (aliases + passthrough non-targets). Returns (ordinal_of, ord2canon):
+    """`canon`: alias_id -> original id (STRING stark ids). `method_clusters`: resolver
+    output over the INJECTED aliases (list[list[alias_id]]). `all_ids`: every node id in
+    the injected graph (aliases + passthrough non-targets). Returns (ordinal_of, ord2canon):
       ordinal_of: id -> cluster_ordinal (int, deterministic)
-      ord2canon:  cluster_ordinal -> canonical original id
+      ord2canon:  cluster_ordinal -> canonical original id, **as INT** (STaRK node ids
+                  are integers; the int match is what makes scoring against the int
+                  `gold` sets work -- a str value here scores ~0 for every method).
     Injected aliases group by `method_clusters`; every other id is its own singleton
     cluster. Ordinals assigned in sorted order for determinism."""
     ordinal_of: dict[str, int] = {}
-    ord2canon: dict[int, str] = {}
+    ord2canon: dict[int, int] = {}
     clustered: set[str] = set()
     # deterministic order: sort clusters by their lexicographically smallest member
     ordered = sorted((sorted(c) for c in method_clusters), key=lambda c: c[0])
@@ -418,38 +417,24 @@ def build_clusters(canon, method_clusters, all_ids):
         for m in members:
             ordinal_of[m] = ordinal
             clustered.add(m)
-        # canonical = the original that the cluster's members map to (first by sort);
-        # a resolver error mixing two originals deterministically picks the smallest.
-        ord2canon[ordinal] = canon.get(members[0], members[0])
+        # canonical = the original the cluster's members map to (first by sort); a
+        # resolver error mixing two originals deterministically picks the smallest.
+        ord2canon[ordinal] = int(canon.get(members[0], members[0]))
         ordinal += 1
     for nid in sorted(set(all_ids) - clustered):        # singletons (non-targets etc.)
         ordinal_of[nid] = ordinal
-        ord2canon[ordinal] = canon.get(nid, nid)
+        ord2canon[ordinal] = int(canon.get(nid, nid))
         ordinal += 1
     return ordinal_of, ord2canon
-
-
-def canon_rank(retrieved_ordinals, ord2canon):
-    """Map retrieved cluster ordinals -> canonical original ids, dedup first-seen
-    (a later ordinal resolving to an already-seen original must not take a 2nd rank
-    slot -- it would understate recall@20)."""
-    seen: set = set()
-    out: list = []
-    for o in retrieved_ordinals:
-        c = ord2canon.get(o)
-        if c is not None and c not in seen:
-            seen.add(c)
-            out.append(c)
-    return out
 ```
 
-- [ ] **Step 4: Run to verify pass** (goldengraph box runner). Expected: 3 pass.
+- [ ] **Step 4: Run to verify pass** (goldengraph box runner). Expected: 2 pass.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add packages/python/goldengraph/goldengraph/stark_moat.py packages/python/goldengraph/tests/test_alias_scoring.py
-git commit -m "feat(goldengraph): stark_moat cluster ordinals + canon scoring map"
+git add packages/python/goldengraph/goldengraph/stark_moat.py packages/python/goldengraph/tests/test_build_clusters.py
+git commit -m "feat(goldengraph): stark_moat cluster ordinals + int canon scoring map"
 ```
 
 ---
