@@ -25,6 +25,17 @@ _PUB = {
 _TRUTH = [["p1", "p2", "p3"], ["q1", "q2"]]
 
 
+def test_fusion_configs_build_with_tfidf_scorer():
+    # the schema validator must resolve `tfidf_cosine` through the registry;
+    # this pins that the fusion / coauthor_topic configs construct without error.
+    import scorers
+    from configs import coauthor_topic_config, fusion_config
+
+    scorers.register(force=True)
+    fusion_config(coauthor_threshold=0.15, topic_threshold=0.5)
+    coauthor_topic_config(coauthor_threshold=0.15, topic_threshold=0.5)
+
+
 def test_relational_clusters_the_coauthor_graph():
     import goldenmatch as gm
 

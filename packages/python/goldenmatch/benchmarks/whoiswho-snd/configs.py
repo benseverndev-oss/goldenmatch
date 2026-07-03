@@ -100,6 +100,20 @@ def fusion_config(
     return GoldenMatchConfig(matchkeys=[coauthor, orgtext, topic], blocking=_const_blocking())
 
 
+def coauthor_topic_config(*, coauthor_threshold: float = 0.15, topic_threshold: float = 0.5):
+    """Lean fusion (co-author OR topic, NO orgtext) -- fast, isolates the topic
+    bridge's net effect on top of the co-author signal for threshold sweeps."""
+    from goldenmatch.config.schemas import GoldenMatchConfig
+
+    coauthor = _mk("coauthor", coauthor_threshold, [
+        _field("coauthors", "set_jaccard", 1.0),
+    ])
+    topic = _mk("topic", topic_threshold, [
+        _field("text", "tfidf_cosine", 1.0),
+    ])
+    return GoldenMatchConfig(matchkeys=[coauthor, topic], blocking=_const_blocking())
+
+
 def coauthor_only_config(*, coauthor_threshold: float = 0.15):
     """Ablation: the relational signal ALONE (no org/text). Isolates how much of
     the score co-author overlap earns by itself."""

@@ -60,6 +60,7 @@ offline. gpt-free, deterministic. `GOLDENMATCH_NATIVE=0`.
 | `coauthor_adaptive` | 0.447 | 0.812 | 0.344 | 28s | + per-name adaptive threshold |
 | **`relational`** (co-author OR org+topic) | **0.452** | **0.844** | 0.352 | 799s | **headline** |
 | `adaptive` (relational + per-name threshold) | 0.453 | 0.829 | 0.362 | 794s | recall lever |
+| `fusion` (relational + TF-IDF topical bridge) | 0.447 | 0.821 | 0.364 | 805s | REGRESSES (see below) |
 
 ### Recall lever: per-name adaptive thresholding
 
@@ -77,10 +78,43 @@ cost -- so net F1 barely moves (0.452 -> 0.453). And dropping the clamp floor
 0.06 -> 0.02 changes NOTHING, which is the real diagnosis: **recall is no longer
 threshold-limited -- it is capped by co-author-GRAPH CONNECTIVITY.** ~66% of a
 real author's paper-pairs share *no* co-author at all, and no threshold can link
-papers with zero overlap. Breaking that ceiling needs a **second bridging signal**
-(`record_embedding` over title/abstract fused with the co-author signal, so
-same-author papers with disjoint collaborators still link) -- the next lever, and
-a bigger change than thresholding.
+papers with zero overlap. Breaking that ceiling needs a **second bridging signal**.
+
+### Attempted: embedding fusion (a topical bridge) -- NEGATIVE RESULT
+
+The obvious second signal is topical: a person publishes in one subfield, so two
+same-author papers with disjoint co-authors should still link through shared
+domain vocabulary. `fusion` OR's a `tfidf_cosine` matchkey (word-level TF-IDF
+cosine over title/abstract, `scorers.TfidfCosineScorer`; `--engine fusion
+--topic-threshold T`) onto the co-author signal.
+
+**It does not work here -- F1 regresses at EVERY threshold.** A lean co-author +
+topic sweep on the full valid set (baseline `coauthor_adaptive` F1 **0.447**):
+
+| topic cosine bar | F1 | precision | recall |
+|---|--:|--:|--:|
+| none (baseline) | **0.447** | 0.812 | 0.344 |
+| 0.40 | 0.442 | 0.812 | 0.354 |
+| 0.55 | 0.437 | 0.808 | 0.345 |
+| 0.70 | 0.438 | 0.810 | 0.341 |
+| 0.85 | 0.437 | 0.808 | 0.337 |
+
+Recall barely moves and F1 is *below* baseline throughout. Two reasons: (1) SND's
+hard cases are same-name people in the **same or adjacent subfield** (that's what
+makes them hard) -- topical similarity cannot separate them, so it merges
+different people (precision cost); (2) the extra topic edges inflate clusters that
+goldenmatch's oversized-cluster auto-split then shatters, sometimes *lowering*
+recall below co-author-alone. A 5-name spike looked promising (recall +3.3pt, flat
+precision) but was a small-sample artifact -- the full 80-name set is the truth.
+
+This matches the published finding that semantic embeddings underperform for SND
+(Word2Vec beats OAG-BERT; the signal is relational, not semantic), so a heavier
+`record_embedding` (sentence-transformers) is unlikely to rescue the *topical*
+approach. **The real lever is co-author GRAPH structure** -- a GNN/collective model
+over the collaboration network with a learned per-name distance, which is how the
+~0.61-0.89 published systems close the gap. That is a substantially larger build,
+tracked as the next step; `fusion` stays in the harness as a measured,
+reproducible negative result (like `graph_er`).
 
 ### How it stacks up against the published SND field
 

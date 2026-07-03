@@ -132,6 +132,7 @@ def run(split: str, engine: str, *, limit: int | None = None, data_dir=None,
 
     from configs import (
         coauthor_only_config,
+        coauthor_topic_config,
         fusion_config,
         relational_config,
         text_only_config,
@@ -172,7 +173,7 @@ def run(split: str, engine: str, *, limit: int | None = None, data_dir=None,
             # per-name adaptive engines pick the co-author threshold from THIS
             # block's co-author-set-size distribution (the recall fix); the fixed
             # engines use the global `coauthor_threshold`.
-            if engine in ("adaptive", "coauthor_adaptive", "fusion"):
+            if engine in ("adaptive", "coauthor_adaptive", "fusion", "coauthor_topic"):
                 import adaptive
                 t_ca = adaptive.per_name_coauthor_threshold(df["coauthors"].to_list())
             else:
@@ -185,6 +186,8 @@ def run(split: str, engine: str, *, limit: int | None = None, data_dir=None,
                 "fusion": lambda: fusion_config(
                     coauthor_threshold=t_ca, orgtext_threshold=orgtext_threshold,
                     topic_threshold=topic_threshold),
+                "coauthor_topic": lambda: coauthor_topic_config(
+                    coauthor_threshold=t_ca, topic_threshold=topic_threshold),
                 "coauthor_only": lambda: coauthor_only_config(coauthor_threshold=t_ca),
                 "coauthor_adaptive": lambda: coauthor_only_config(coauthor_threshold=t_ca),
                 "text_only": lambda: text_only_config(),
@@ -206,7 +209,7 @@ def main():
     ap = argparse.ArgumentParser(description="WhoIsWho SND runner")
     ap.add_argument("--split", default="valid", choices=["valid", "train"])
     ap.add_argument("--engine", default="relational", choices=[
-        "relational", "adaptive", "fusion", "coauthor_only", "coauthor_adaptive",
+        "relational", "adaptive", "fusion", "coauthor_topic", "coauthor_only", "coauthor_adaptive",
         "text_only", "zero_config", "graph_er", "all_singletons", "all_one"])
     ap.add_argument("--limit", type=int, default=None, help="score only the first N names")
     ap.add_argument("--coauthor-threshold", type=float, default=0.15)
