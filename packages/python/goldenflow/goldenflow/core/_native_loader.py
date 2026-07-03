@@ -8,13 +8,16 @@ parity gate — the pure-Python transform paths run unchanged.
 ``GOLDENFLOW_NATIVE`` env:
 - ``"0"``    -> force the Python path (never use native).
 - ``"1"``    -> require native; raise if it isn't importable (CI parity lane).
-- ``"auto"`` / unset -> use native iff it's importable AND the component is in
-  ``_GATED_ON``. Default. All wired phone transforms (``phone_e164``,
+- ``"auto"`` / unset -> use native wherever a WIRED symbol exists for the
+  component (``_has_symbol``), EXCEPT the known-divergent components in
+  ``_FALLBACK_ONLY``. Default. All wired phone transforms (``phone_e164``,
   ``phone_country_code``, ``phone_national``) are canonical-NANP-gated and
   byte-identical to ``phonenumbers`` over the corpus, so both ``auto`` and ``=1``
-  are output-faithful. (``phone_validate`` stays pure-Python -- the ``phonenumber``
-  Rust crate exposes no ``is_possible_number``; see the goldenflow reference-mode
-  spec. ``phone_digits`` is pure Polars.)
+  are output-faithful. (``phone_validate`` stays pure-Python -- its only native
+  symbol, ``phone_valid_arrow``, implements ``is_valid``, NOT the product-chosen
+  ``is_possible`` spec, so it is deliberately unwired and listed in
+  ``_FALLBACK_ONLY``; see the goldenflow reference-mode spec. ``phone_digits``
+  is pure Polars.)
 
 The kernel is reachable two ways, tried in order, exactly like goldenmatch:
   1. ``goldenflow._native``        — in-tree build (scripts/build_native.py).
@@ -54,6 +57,33 @@ except Exception:  # noqa: BLE001 - any import/load failure falls back below
 #     tests/transforms/test_native_parity.py.
 _GATED_ON: frozenset[str] = frozenset({"phone"})
 
+# Reference-mode (2026-07: Rust is the reference). Under ``auto`` the native
+# kernel runs wherever a WIRED symbol exists for the component, EXCEPT the
+# known-divergent components in ``_FALLBACK_ONLY``. ``_GATED_ON`` is retained
+# only as documentation of the byte-exact surface; it no longer governs ``auto``.
+
+# Floor symbols per component (wheel-skew safe: probe the actual module).
+_COMPONENT_SYMBOLS: dict[str, tuple[str, ...]] = {
+    "phone": ("phone_e164_arrow", "phone_national_arrow", "phone_country_code_arrow"),
+    # NOTE: no "phone_validate" entry. Its only native symbol, phone_valid_arrow,
+    # implements `is_valid`, NOT the product-chosen `is_possible` spec, so it is
+    # deliberately unwired AND listed in _FALLBACK_ONLY below.
+}
+
+# Components whose only native path is intentionally non-authoritative (the
+# native symbol exists but implements the wrong spec). Mirrors goldenmatch's
+# _FALLBACK_ONLY={"sail_scoring"}.
+_FALLBACK_ONLY: frozenset[str] = frozenset({"phone_validate"})
+
+
+def _has_symbol(component: str) -> bool:
+    if _native is None:
+        return False
+    syms = _COMPONENT_SYMBOLS.get(component)
+    if not syms:
+        return False
+    return any(hasattr(_native, s) for s in syms)
+
 
 def native_module() -> Any:
     """The imported native module, or ``None`` if unavailable. Guard call sites
@@ -76,4 +106,8 @@ def native_enabled(component: str) -> bool:
                 "GOLDENFLOW_NATIVE=1 but goldenflow._native is not built/importable"
             )
         return True
-    return _native is not None and component in _GATED_ON
+    return (
+        _native is not None
+        and component not in _FALLBACK_ONLY
+        and _has_symbol(component)
+    )

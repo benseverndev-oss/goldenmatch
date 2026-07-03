@@ -25,17 +25,14 @@ pyo3 = { version = ">=0.28, <0.29", features = ["extension-module", "abi3-py311"
 # string buffers in, string/int/bool buffers out). default features off — we
 # only read/build array buffers, no csv/ipc/json/compute.
 arrow = { version = "59", default-features = false, features = ["pyarrow"] }
-# Phone parsing/formatting: a Rust port of Google's libphonenumber. Backs the
-# international phone kernel (E.164 / national / country-code / validity). Its
-# E.164 output is metadata-driven and matches the Python `phonenumbers`
-# library for valid numbers; the parity gate asserts this per installed
-# version, and any row it can't resolve falls back to Python (never worse).
-#
 # Dates are intentionally NOT a native kernel: GoldenFlow's Polars fast path
 # (str.to_date coalesce) already resolves the 4-digit-year formats in vectorized
 # Rust, and a per-row chrono parser would be slower while reintroducing the
 # 2-digit-year parity hazard. The ragged date tail stays on dateutil.
-phonenumber = "0.3"
+#
+# Owned reference kernels (pure phone logic). native-flow is now a marshaling
+# shim: Arrow in/out + GIL release here, the actual computation in the core.
+goldenflow-core = { path = "../goldenflow-core" }
 
 [profile.release]
 opt-level = 3

@@ -1,0 +1,23 @@
+# Standalone workspace so this pyo3-free core can be a path dependency of BOTH
+# the `native-flow` crate (its own workspace, extension-module) and, in Wave 0c,
+# the `goldenflow-wasm` crate — without either workspace claiming it. Same
+# isolation rationale as goldenmatch's score-core / fingerprint-core. No
+# rust-toolchain.toml on purpose: inherits each parent crate's toolchain when
+# built as a path dep.
+[workspace]
+
+[package]
+name = "goldenflow-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Ben Severn <benzsevern@gmail.com>"]
+description = "Owned reference kernels for GoldenFlow (phone; identifiers in Wave 0b), pyo3-free, shared across the native ext, WASM, and future SQL surfaces"
+
+[lib]
+name = "goldenflow_core"
+
+[dependencies]
+# Same pin native-flow used, so phone output is byte-identical before/after the
+# extraction (parity by construction — one source of truth).
+phonenumber = "0.3"
