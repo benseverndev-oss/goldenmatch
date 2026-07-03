@@ -40,10 +40,15 @@ def load_stark_kb(name: str, *, split: str = "test", limit_queries: int | None =
     import sys
     from unittest.mock import MagicMock
 
+    # Retrieval baselines (colbert/gritlm/mteb/...) AND amazon's text-cleaning deps
+    # (nltk/bs4/langchain, pulled by skb/__init__'s eager `from .amazon import AmazonSKB`).
+    # None are used to load PRIME's graph tensors -- safe to stub since we never call them.
     for _m in ("colbert", "colbert.infra", "colbert.infra.config", "colbert.infra.run",
                "colbert.data", "colbert.modeling", "colbert.modeling.checkpoint",
                "colbert.searcher", "gritlm", "mteb", "sentence_transformers", "transformers",
-               "rank_bm25"):
+               "rank_bm25", "nltk", "nltk.corpus", "nltk.stem", "nltk.tokenize", "bs4",
+               "langchain", "langchain.text_splitter", "langchain_text_splitters",
+               "gensim", "spacy", "unidecode"):
         sys.modules.setdefault(_m, MagicMock())
     from stark_qa import load_qa, load_skb
 
