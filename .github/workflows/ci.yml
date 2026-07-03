@@ -891,15 +891,16 @@ jobs:
             uv.lock
             **/pyproject.toml
       - run: uv sync --all-packages
-      - name: pytest (pure-Python fallback -- transform + loader slice, GOLDENFLOW_NATIVE=0)
+      - name: pytest (pure-Python fallback -- transform slice, GOLDENFLOW_NATIVE=0)
         # -k excludes tests that ASSERT native dispatch: the job-level
         # GOLDENFLOW_NATIVE=0 force-disables native, so those tests can't hold
-        # here by construction. This lane proves the pure-Python behavior path,
-        # not native dispatch (that's the `native_flow` lane's job).
+        # here by construction. This lane proves the pure-Python transform
+        # behavior path (native dispatch is the native_flow lane's job; the
+        # loader gate logic is covered by tests/core in the native-default leg,
+        # and "native" in that module name means -k would deselect it here anyway).
         run: |
           uv run pytest \
             packages/python/goldenflow/tests/transforms \
-            packages/python/goldenflow/tests/core \
             -k "not native and not Native" \
             -n auto --timeout=120 --timeout-method=thread -q
 
