@@ -124,6 +124,7 @@ export function enableGoldencheckWasm(): void {
   setGoldencheckWasmBackend({
     compositeKeySearch,
     discoverFunctionalDependencies,
+    nearDuplicateClusters,
   });
 }
 

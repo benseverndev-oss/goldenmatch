@@ -1272,7 +1272,7 @@ jobs:
               and commit the result." >&2
             exit 1
           fi
-          npx vitest run tests/parity/goldencheck-wasm.parity.test.ts tests/unit/goldencheck-wasm-reroute.test.ts
+          npx vitest run tests/parity/goldencheck-wasm.parity.test.ts tests/unit/goldencheck-wasm-reroute.test.ts tests/unit/goldencheck-wasm-relations.test.ts
       # Perceptual image-pHash wasm. Rebuild the inlined wasm from the live kernel
       # (DCT table) and run the BYTE-EXACT parity test (committed wasm vs the
       # Python golden image vectors). No fixture-regen-diff: the perceptual fixture

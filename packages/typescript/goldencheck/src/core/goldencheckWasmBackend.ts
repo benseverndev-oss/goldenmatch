@@ -28,6 +28,8 @@ export interface GoldencheckWasmBackend {
   ): number[][];
   /** Strict single-column FDs `(detIdx, depIdx)` among `columns`. */
   discoverFunctionalDependencies(columns: readonly WasmColumn[]): Array<[number, number]>;
+  /** Edit-distance-close value clusters (indices into `values`), size >= 2. */
+  nearDuplicateClusters(values: readonly string[], minSimilarity: number): number[][];
 }
 
 let _backend: GoldencheckWasmBackend | null = null;

@@ -9,6 +9,10 @@
 import type { TabularData, Dtype } from "../data.js";
 import { type Finding, Severity, makeFinding } from "../types.js";
 import type { RelationProfiler } from "../profilers/base.js";
+// Lean registry only (a getter + type-erased import) — zero wasm bytes in the
+// default bundle. Populated via `enableGoldencheckWasm()` from the opt-in
+// `goldencheck/core/wasm` subpath.
+import { getGoldencheckWasmBackend } from "../goldencheckWasmBackend.js";
 
 const MIN_ROWS = 50;
 const MAX_CANDIDATES = 12;
@@ -39,16 +43,29 @@ export class FunctionalDependencyProfiler implements RelationProfiler {
     const distinct = new Map<string, number>();
     for (const c of cols) distinct.set(c, data.nUnique(c));
 
-    const pairs: Array<[number, number]> = [];
-    for (let i = 0; i < cols.length; i++) {
-      const det = cols[i]!;
-      if (distinct.get(det) === nRows) continue; // unique determinant → trivial
-      for (let j = 0; j < cols.length; j++) {
-        if (i === j) continue;
-        const dep = cols[j]!;
-        if (distinct.get(dep)! <= 1) continue;
-        if (data.nUniqueTuple([det, dep]) === distinct.get(det)) {
-          pairs.push([i, j]);
+    // Rust-source-of-truth path: run the shared goldencheck-core kernel (the
+    // same one the Python `goldencheck-native` wheel uses) when the wasm backend
+    // is enabled; the pure-TS nested loop stays the fallback. Both yield
+    // `(detIdx, depIdx)` pairs into `cols`.
+    let pairs: Array<[number, number]>;
+    const backend = getGoldencheckWasmBackend();
+    if (backend) {
+      const wcols = cols.map((c) =>
+        data.column(c).map((v) => (v == null ? null : String(v))),
+      );
+      pairs = backend.discoverFunctionalDependencies(wcols);
+    } else {
+      pairs = [];
+      for (let i = 0; i < cols.length; i++) {
+        const det = cols[i]!;
+        if (distinct.get(det) === nRows) continue; // unique determinant → trivial
+        for (let j = 0; j < cols.length; j++) {
+          if (i === j) continue;
+          const dep = cols[j]!;
+          if (distinct.get(dep)! <= 1) continue;
+          if (data.nUniqueTuple([det, dep]) === distinct.get(det)) {
+            pairs.push([i, j]);
+          }
         }
       }
     }

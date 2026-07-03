@@ -12,6 +12,10 @@ import type { TabularData } from "../data.js";
 import { isNullish } from "../data.js";
 import { type Finding, Severity, makeFinding } from "../types.js";
 import type { Profiler } from "./base.js";
+// Lean registry only (a getter + type-erased import) — zero wasm bytes in the
+// default bundle. Populated via `enableGoldencheckWasm()` from the opt-in
+// `goldencheck/core/wasm` subpath.
+import { getGoldencheckWasmBackend } from "../goldencheckWasmBackend.js";
 
 const MIN_ROWS = 50;
 const MIN_DISTINCT = 3;
@@ -55,6 +59,11 @@ function pushBucket(map: Map<string, number[]>, key: string, value: number): voi
 
 /** Mirror of goldencheck_core::near_duplicate_clusters / the Python fallback. */
 function clusters(values: readonly string[], minSimilarity: number): number[][] {
+  // Rust-source-of-truth path: the shared goldencheck-core kernel (same as the
+  // Python `goldencheck-native` wheel) when the wasm backend is enabled; the
+  // pure-TS blocking + Levenshtein + union-find below stays the fallback.
+  const backend = getGoldencheckWasmBackend();
+  if (backend) return backend.nearDuplicateClusters(values, minSimilarity);
   const norm = values.map(normalize);
   const n = values.length;
   const trigram = new Map<string, number[]>();
