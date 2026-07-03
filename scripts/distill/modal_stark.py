@@ -40,8 +40,11 @@ image = (
     # (colbert-ai/gritlm/mteb/wandb) -- exactly what goldengraph replaces -- and pip backtracks
     # forever resolving them. Install the SKB/QA DATA loaders with --no-deps + just what they need:
     # torch (SKB edge tensors), pandas/hf_hub/gdown (download+parse), PyTDC (PRIME's tdc.resource),
-    # ogb (skb/__init__ eagerly imports amazon+mag which need ogb.utils.url regardless of --kb).
-    .pip_install("torch", "pandas", "huggingface_hub", "gdown", "requests", "PyTDC", "ogb")
+    # ogb (skb/__init__ eagerly imports amazon+mag which need ogb.utils.url regardless of --kb);
+    # torch_geometric (base SKB knowledge_base.py uses torch_geometric.utils -- pure-Python, no
+    # torch-scatter/sparse C++ ext needed for is_undirected/to_undirected).
+    .pip_install("torch", "pandas", "huggingface_hub", "gdown", "requests", "PyTDC", "ogb",
+                 "torch_geometric")
     .pip_install("stark-qa", extra_options="--no-deps")
     .run_commands("curl -fsSL https://ollama.com/install.sh | sh")
     .add_local_dir(str(REPO / "packages/rust"), "/repo/packages/rust", ignore=["**/target/**"])
