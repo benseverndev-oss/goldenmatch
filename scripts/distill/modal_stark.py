@@ -35,7 +35,17 @@ image = (
     .apt_install("curl", "build-essential", "pkg-config", "libssl-dev", "git", "zstd")
     .run_commands("curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y")
     .env({"PATH": "/root/.cargo/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin"})
-    .pip_install("maturin", "goldenmatch", "numpy", "openai", "stark-qa")
+    .pip_install("maturin", "goldenmatch", "numpy", "openai")
+    # STaRK data deps only. stark-qa's FULL tree drags in the retrieval-model baselines
+    # (colbert-ai/gritlm/mteb/wandb) -- exactly what goldengraph replaces -- and pip backtracks
+    # forever resolving them. Install the SKB/QA DATA loaders with --no-deps + just what they need:
+    # torch (SKB edge tensors), pandas/hf_hub/gdown (download+parse), PyTDC (PRIME's tdc.resource),
+    # ogb (skb/__init__ eagerly imports amazon+mag which need ogb.utils.url regardless of --kb);
+    # torch_geometric (base SKB knowledge_base.py uses torch_geometric.utils -- pure-Python, no
+    # torch-scatter/sparse C++ ext needed for is_undirected/to_undirected).
+    .pip_install("torch", "pandas", "huggingface_hub", "gdown", "requests", "PyTDC", "ogb",
+                 "torch_geometric")
+    .pip_install("stark-qa", extra_options="--no-deps")
     .run_commands("curl -fsSL https://ollama.com/install.sh | sh")
     .add_local_dir(str(REPO / "packages/rust"), "/repo/packages/rust", ignore=["**/target/**"])
     .add_local_dir(str(REPO / "packages/python/goldengraph"), "/repo/packages/python/goldengraph",
@@ -130,7 +140,12 @@ def _stark_impl(kb: str, sample: int, embed_model: str, chunk_edges: int) -> str
     _build_native_and_install()
     base_url = _start_ollama(embed_model)
     os.environ["POLARS_SKIP_CPU_CHECK"] = "1"
-    sys.path.insert(0, _BENCH)
+    # `pip install -e` ran in a SUBPROCESS; its .pth is only read at interpreter startup, so this
+    # already-running process can't import the editable packages. Put the (flat-layout) src roots on
+    # sys.path directly -- the native wheel installs into site-packages so it imports fine.
+    for _p in ("/repo/packages/python/goldengraph", "/repo/packages/python/goldenmatch", _BENCH):
+        if _p not in sys.path:
+            sys.path.insert(0, _p)
 
     from erkgbench.stark_adapter import evaluate, load_stark_kb
     from goldengraph.entity_index import EntityIndex

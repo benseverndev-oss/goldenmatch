@@ -33,6 +33,24 @@ def load_stark_kb(name: str, *, split: str = "test", limit_queries: int | None =
 
     Node/gold ids stay INTS for retrieval+scoring; ids are stringified only for the
     store's opaque ``record_keys`` (done inside ``bulk_load``)."""
+    # stark_qa is installed --no-deps (its FULL tree pulls the colbert/gritlm/mteb retrieval
+    # baselines -- what we replace -- and pip can't resolve them). Its package __init__ imports
+    # load_model -> stark_qa.models -> those baselines at top level, so seed lightweight MagicMock
+    # stand-ins for the heavy backends: we only call the SKB/QA DATA loaders, never a model.
+    import sys
+    from unittest.mock import MagicMock
+
+    # `stark_qa/__init__` does `from .load_model import load_model`, dragging in the WHOLE
+    # retrieval-baseline + evaluator branch (colbert/gritlm/mteb/torchmetrics/faiss/...). We never
+    # call a stark model (we reimplement retrieval + metrics), and load_skb/load_qa don't depend on
+    # it, so stub the branch WHOLESALE -- one move instead of chasing each transitive dep.
+    for _mod in ("stark_qa.load_model", "stark_qa.models"):
+        sys.modules.setdefault(_mod, MagicMock())
+    # The SKB branch (load_skb) DOES load: skb/__init__ eagerly imports amazon+mag, whose modules
+    # pull text-cleaning libs at top level. Stub just those (we read raw node data, not the cleaners).
+    for _m in ("nltk", "nltk.corpus", "nltk.stem", "nltk.tokenize", "bs4", "langchain",
+               "langchain.text_splitter", "langchain_text_splitters", "langdetect", "unidecode"):
+        sys.modules.setdefault(_m, MagicMock())
     from stark_qa import load_qa, load_skb
 
     skb = load_skb(name)
