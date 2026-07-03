@@ -90,6 +90,7 @@ jobs:
       perceptual_wasm: ${{ steps.filter.outputs.perceptual_wasm }}
       goldenprofile_wasm: ${{ steps.filter.outputs.goldenprofile_wasm }}
       goldengraph_wasm: ${{ steps.filter.outputs.goldengraph_wasm }}
+      hnsw_wasm: ${{ steps.filter.outputs.hnsw_wasm }}
       quality_gate: ${{ steps.filter.outputs.quality_gate }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
@@ -187,6 +188,10 @@ jobs:
               # guard rebuilds the embedded artifacts and fails if they're stale.
               - 'packages/rust/extensions/goldencheck-core/**'
               - 'packages/rust/extensions/goldencheck-wasm/**'
+              # Same for the goldenhnsw wasm core: a kernel or wrapper change must
+              # re-run the TS lane's HNSW drift guard.
+              - 'packages/rust/extensions/goldenhnsw/**'
+              - 'packages/rust/extensions/goldenhnsw-wasm/**'
             wasm_score:
               - 'packages/rust/extensions/score-wasm/**'
               - 'packages/rust/extensions/score-core/**'
@@ -270,6 +275,13 @@ jobs:
               - 'packages/rust/extensions/graph-core/**'
               - 'packages/rust/extensions/score-core/**'
               - 'packages/typescript/goldengraph/**'
+            hnsw_wasm:
+              # Gates the (rust-toolchain-heavy) goldenhnsw wasm rebuild + drift
+              # guard inside the typescript lane. Only fires when the HNSW kernel,
+              # its wasm wrapper, or the embed script changes.
+              - 'packages/rust/extensions/goldenhnsw/**'
+              - 'packages/rust/extensions/goldenhnsw-wasm/**'
+              - 'packages/typescript/goldenmatch/scripts/build_goldenhnsw_wasm.mjs'
             web:
               - 'packages/python/goldenmatch/web/**'
               - 'packages/python/goldenmatch/goldenmatch/web/**'
@@ -323,6 +335,9 @@ jobs:
               # goldenmatch_embed_local) and supplies the embed-smoke fixture,
               # so a goldenembed change must rebuild + re-smoke this lane.
               - 'packages/rust/extensions/goldenembed/**'
+              # goldenhnsw is a path dep of the postgres crate (goldenmatch_hnsw_pairs),
+              # so a kernel change must rebuild + re-smoke this lane.
+              - 'packages/rust/extensions/goldenhnsw/**'
               - 'packages/rust/extensions/Cargo.toml'
             rust_cores:
               # ANY Rust extension change re-validates EVERY committed TS wasm
@@ -1428,6 +1443,25 @@ jobs:
             exit 1
           fi
           npx vitest run tests/parity/goldengraph-wasm.parity.test.ts
+      # Same drift guard for the goldenhnsw wasm surface: rebuild the inlined
+      # wasm + bindings + copy the golden fixture from the live kernel, diff ONLY
+      # the deterministic golden JSON (not the version-varying wasm bytes), then
+      # prove the committed wasm reproduces it. Stale committed wasm is caught
+      # behaviorally by the parity test, exactly like the autoconfig guard above.
+      - name: Rebuild + verify embedded goldenhnsw wasm
+        if: needs.changes.outputs.hnsw_wasm == 'true' || needs.changes.outputs.force_all == 'true'
+        working-directory: packages/typescript/goldenmatch
+        run: |
+          rustup target add wasm32-unknown-unknown
+          command -v wasm-pack >/dev/null 2>&1 || curl -sSf https://rustwasm.github.io/wasm-pack/installer/init.sh | sh
+          node scripts/build_goldenhnsw_wasm.mjs
+          if ! git diff --exit-code -- tests/parity/fixtures/hnsw/; then
+            echo "::error::goldenhnsw golden fixture is stale. Run \
+              'node scripts/build_goldenhnsw_wasm.mjs' in packages/typescript/goldenmatch \
+              (after regenerating goldenhnsw/golden/hnsw_vectors.json) and commit the result." >&2
+            exit 1
+          fi
+          npx vitest run tests/parity/hnsw.parity.test.ts tests/unit/hnsw-wasm.test.ts
       - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
         with:
           path: .turbo
@@ -2521,6 +2555,8 @@ jobs:
           # (installs default_version, now 0.9.0) and `ALTER EXTENSION ... UPDATE`
           # find them. The schema files are the canonical declaration of public
           # function signatures.
+          cp sql/goldenmatch_pg--0.10.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
+          cp sql/goldenmatch_pg--0.9.0--0.10.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
           cp sql/goldenmatch_pg--0.9.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
           cp sql/goldenmatch_pg--0.8.0--0.9.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
           cp sql/goldenmatch_pg--0.8.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
@@ -2598,6 +2634,16 @@ jobs:
                 ARRAY[0.3, 0.7, 0.5]::DOUBLE PRECISION[]);
               IF pd.n <> 1 OR pd.a <> 1 OR pd.b <> 2 OR abs(pd.s - 0.7) > 1e-9 THEN
                 RAISE EXCEPTION 'pair_dedup: expected exactly (1,2,0.7), got n=% (%,%,%)', pd.n, pd.a, pd.b, pd.s;
+              END IF;
+
+              -- hnsw_pairs: 3 dim-2 unit vectors, rows 0 and 1 identical (IP=1),
+              -- row 2 orthogonal. At threshold 0.5 exactly one pair (0,1) with
+              -- score ~1 must surface (0-based positions).
+              SELECT count(*) AS n, min(a) AS a, min(b) AS b, max(s) AS s INTO pd
+              FROM goldenmatch.goldenmatch_hnsw_pairs(
+                ARRAY[1,0, 1,0, 0,1]::real[], 2, 5, 0.5::DOUBLE PRECISION);
+              IF pd.n <> 1 OR pd.a <> 0 OR pd.b <> 1 OR abs(pd.s - 1.0) > 1e-5 THEN
+                RAISE EXCEPTION 'hnsw_pairs: expected exactly (0,1,1.0), got n=% (%,%,%)', pd.n, pd.a, pd.b, pd.s;
               END IF;
 
               -- record_fingerprint: stable across key order (fields sorted by name).

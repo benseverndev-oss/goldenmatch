@@ -17,5 +17,10 @@ path = "src/lib.rs"
 
 [dependencies]
 
+[dev-dependencies]
+# Golden cross-surface parity fixture (golden/hnsw_vectors.json) is JSON. Only
+# a dev-dep — the wheel / wasm builds carry no serde.
+serde_json = "1"
+
 [profile.release]
 opt-level = 3

@@ -17,8 +17,74 @@
 //! -- gm_embed reads GOLDENEMBED_MODEL_DIR from the backend env (float4[]):
 //! SELECT goldenmatch.gm_embed('John Smith');
 //! ```
+use goldenhnsw::{HnswIndex, HnswParams};
 use goldenmatch_graph_core as gc;
 use pgrx::prelude::*;
+
+/// Native-direct (no CPython) HNSW ANN blocking. Given a **row-major flat**
+/// `real[]` corpus of `n = flat_vecs.len() / dim` vectors, build a `goldenhnsw`
+/// index and return the canonical `(min, max)` candidate pairs whose inner
+/// product clears `threshold`, keeping the max score per pair. Row ids are
+/// 0-based positions in the flattened input (aggregation order). The SQL
+/// analogue of `ANNBlocker.query_with_scores`; same inner-product ranking as
+/// the Python wheel / TS-wasm / DuckDB surfaces (one kernel).
+///
+/// Flat input (not `real[][]`) because pgrx flattens multidim arrays anyway;
+/// aggregate a column of embeddings with `unnest ... WITH ORDINALITY` +
+/// `array_agg` and pass the element count as `dim`.
+#[pg_extern]
+pub fn goldenmatch_hnsw_pairs(
+    flat_vecs: Vec<f32>,
+    dim: i32,
+    k: i32,
+    threshold: f64,
+) -> TableIterator<'static, (name!(a, i64), name!(b, i64), name!(s, f64))> {
+    let dim = dim.max(0) as usize;
+    let k = k.max(0) as usize;
+    if dim == 0 || flat_vecs.is_empty() || flat_vecs.len() % dim != 0 {
+        return TableIterator::new(Vec::new());
+    }
+    let n = flat_vecs.len() / dim;
+    let mut idx = HnswIndex::new(
+        dim,
+        HnswParams {
+            ef_search: 64.max(k),
+            ..Default::default()
+        },
+    );
+    for row in flat_vecs.chunks_exact(dim) {
+        idx.add(row);
+    }
+    let kk = k.min(n);
+    let mut best: std::collections::HashMap<(i64, i64), f64> = std::collections::HashMap::new();
+    for i in 0..n {
+        let q = &flat_vecs[i * dim..(i + 1) * dim];
+        for (j, score) in idx.search(q, kk) {
+            let j = j as usize;
+            if j == i {
+                continue;
+            }
+            let score = score as f64;
+            if score < threshold {
+                continue;
+            }
+            let (a, b) = if i < j {
+                (i as i64, j as i64)
+            } else {
+                (j as i64, i as i64)
+            };
+            let e = best.entry((a, b)).or_insert(f64::NEG_INFINITY);
+            if score > *e {
+                *e = score;
+            }
+        }
+    }
+    TableIterator::new(
+        best.into_iter()
+            .map(|((a, b), s)| (a, b, s))
+            .collect::<Vec<_>>(),
+    )
+}
 
 /// Native-direct (no CPython): canonical max-score pairs over int64 id arrays.
 /// Each pair is canonicalized to `(min, max)` keeping the maximum score.
