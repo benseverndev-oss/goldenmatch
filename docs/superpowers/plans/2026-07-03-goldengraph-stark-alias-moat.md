@@ -563,7 +563,7 @@ git commit -m "feat(goldengraph): stark_moat collapse-for-index/store (Python ed
 - Modify: `packages/python/goldenmatch/benchmarks/er-kg-bench/erkgbench/stark_adapter.py`
 - Test: `packages/python/goldenmatch/benchmarks/er-kg-bench/tests/test_alias_scoring.py`
 
-- [ ] **Step 1: Write the failing test** (pure — reuses `canon_rank` semantics against `metrics`)
+- [ ] **Step 1: Write the failing test** (pure — `_apply_id_map` semantics against `metrics`)
 
 ```python
 """SP-moat scoring: canon-mapped ranked list -> equivalence-class hit."""
