@@ -36,3 +36,39 @@ def build_clusters(canon, method_clusters, all_ids):
         ord2canon[ordinal] = int(canon.get(nid, nid))
         ordinal += 1
     return ordinal_of, ord2canon
+
+
+def collapse_for_index(nodes2, node_texts2, ordinal_of):
+    """One index entry per cluster: entity_id = ordinal, canonical_name = the joined
+    member docs (the MERGED text -- where dense-ER recovery happens), typ from the
+    first member. Docs joined in stable (ordinal, id) order."""
+    text_of = dict(zip([n[0] for n in nodes2], node_texts2))
+    typ_of = {n[0]: n[2] for n in nodes2}
+    members: dict[int, list[str]] = {}
+    for nid, _name, _typ in nodes2:
+        members.setdefault(ordinal_of[nid], []).append(nid)
+    out = []
+    for ordv, ids in sorted(members.items()):
+        ids_sorted = sorted(ids)
+        doc = " ".join(text_of.get(i, "") for i in ids_sorted).strip()
+        out.append({"entity_id": ordv, "canonical_name": doc, "typ": typ_of[ids_sorted[0]]})
+    return out
+
+
+def collapse_for_store(nodes2, edges2, ordinal_of):
+    """One store node per cluster (id = str(ordinal)) + edges remapped endpoint ->
+    its cluster ordinal, dropping intra-cluster self-loops. Feed to bulk_load
+    UNCHANGED -- each node's unique key = str(ordinal) => passthrough, so the store
+    holds exactly this pre-merged graph (no store-side merge)."""
+    seen: dict[int, tuple] = {}
+    for nid, name, typ in nodes2:
+        ordv = ordinal_of[nid]
+        seen.setdefault(ordv, (str(ordv), name, typ))       # first member names the node
+    coll_nodes = [seen[o] for o in sorted(seen)]
+    coll_edges = []
+    for s, p, o in edges2:
+        so, oo = ordinal_of[s], ordinal_of[o]
+        if so == oo:
+            continue                                        # intra-cluster self-loop
+        coll_edges.append((str(so), p, str(oo)))
+    return coll_nodes, coll_edges
