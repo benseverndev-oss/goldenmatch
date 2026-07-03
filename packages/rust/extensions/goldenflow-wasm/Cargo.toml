@@ -1,0 +1,24 @@
+# Standalone workspace so this wasm-bindgen wrapper can path-depend on the
+# pyo3-free `goldenflow-core` WITHOUT either crate's workspace claiming it —
+# same isolation rationale as `score-wasm`/`score-core`. NO rust-toolchain.toml:
+# inherits the caller's toolchain. This crate is the TS analogue of a future
+# native-flow-wasm wrapper: it wraps the SAME `goldenflow-core` identifier
+# kernels, so validation/formatting is byte-identical by construction.
+[workspace]
+
+[package]
+name = "goldenflow-wasm"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Ben Severn <benzsevern@gmail.com>"]
+description = "wasm-bindgen wrapper over goldenflow-core identifier kernels for the GoldenFlow TS opt-in WASM backend"
+
+[lib]
+crate-type = ["cdylib", "rlib"]  # cdylib for wasm; rlib so host unit tests link
+
+[dependencies]
+goldenflow-core = { path = "../goldenflow-core" }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"

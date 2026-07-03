@@ -16,6 +16,9 @@ Cargo.lock
 # and wasm-bindgen-cli MUST match the exact wasm-bindgen crate version resolved
 # here; a floating lock would silently produce broken JS glue at runtime.
 !score-wasm/Cargo.lock
+# Same rationale for goldenflow-wasm: same wasm-bindgen wrapper shape as
+# score-wasm, also destined to ship a built .wasm artifact via a build script.
+!goldenflow-wasm/Cargo.lock
 # Same rationale for datafusion-udf: the python_goldenmatch CI lane builds this
 # cdylib (datafusion 53 / arrow 58 / ort), so its deps must NOT float. Its lock
 # was previously (mistakenly) ignored, which let a fresh resolve pull the broken
