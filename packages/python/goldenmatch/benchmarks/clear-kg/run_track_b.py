@@ -24,8 +24,10 @@ from generate import generate_corpus  # noqa: E402
 from score import score_track_b  # noqa: E402
 from track_b import ENGINES  # noqa: E402
 
+DEFAULT_ENGINES = ("neo4j_exact", "neo4j_fuzzy", "name_cosine", "goldenmatch")
 
-def run(corpus: dict, engines=("exact_surface", "goldenmatch"), threshold=None) -> dict:
+
+def run(corpus: dict, engines=DEFAULT_ENGINES, threshold=None) -> dict:
     mentions = corpus["mentions"]
     gold = {m["mention_id"]: m["gold_entity_id"] for m in mentions}
     out = {}
@@ -62,12 +64,14 @@ def main():
         print(f"{eng:16s} {s['pairwise_f1']:8.3f} {s['bcubed_f1']:7.3f} "
               f"{s['homograph_split_rate']:15.3f}  {s['n_pred_clusters']:8d}  "
               f"(gold {s['n_gold_entities']})")
-    gm = res.get("goldenmatch", {})
-    ex = res.get("exact_surface", {})
-    if gm and ex:
-        print(f"\nhomograph split-rate: goldenmatch {gm['homograph_split_rate']:.3f} "
-              f"vs exact_surface {ex['homograph_split_rate']:.3f}  "
-              f"(confusable pairs: {gm['homograph_confusable']})")
+    gm = res.get("goldenmatch")
+    incumbents = {k: v for k, v in res.items() if k != "goldenmatch"}
+    if gm and incumbents:
+        worst = max(s["homograph_split_rate"] for s in incumbents.values())
+        print(f"\nHOMOGRAPH SPLIT-RATE: goldenmatch {gm['homograph_split_rate']:.3f} "
+              f"vs best incumbent {worst:.3f}  "
+              f"(confusable pairs: {gm['homograph_confusable']}) -- every documented "
+              f"`if similar: merge` mechanism collapses on homographs.")
 
 
 if __name__ == "__main__":

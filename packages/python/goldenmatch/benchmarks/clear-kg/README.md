@@ -17,19 +17,30 @@ Phase 0 proves the moat exists and is measurable: on a synthetic corpus with
 controlled **homographs** (distinct entities sharing a surface string), does
 principled ER keep them apart where `if same name: merge` cannot?
 
-**Result — full na-v3-style synthetic corpus, 60 mentions / 20 gold entities:**
+**We ran the market's three ER families** (faithful reimplementations of each
+tool's documented ER *mechanism*, on identical inputs — isolating the ER
+algorithm from extraction/LLM/server differences; see `incumbents.py`). On a
+synthetic corpus (60 mentions / 20 gold entities):
 
-| engine | pairwise-F1 | B³-F1 | **homograph split-rate** |
+| engine (documented mechanism) | pairwise-F1 | B³-F1 | **homograph split-rate** |
 |---|--:|--:|--:|
-| `exact_surface` (Neo4j-default `if same name: merge`) | 0.705 | 0.826 | **0.000** |
-| **`goldenmatch`** (neighborhood ER) | **0.889** | **0.929** | **1.000** |
+| `neo4j_exact` — exact name (Neo4j `SimpleKGPipeline` default) | 0.705 | 0.826 | **0.000** |
+| `neo4j_fuzzy` — RapidFuzz (Neo4j `FuzzyMatchResolver`) | 0.705 | 0.826 | **0.000** |
+| `name_cosine` — embedding-cosine on name (iText2KG / spaCy / KGGen family) | 0.713 | 0.842 | **0.000** |
+| **`goldenmatch`** — neighborhood ER | **0.889** | **0.929** | **1.000** |
 
-At larger scale (60 entities / 963 confusable pairs) the gap widens: exact_surface
-pairwise collapses to 0.334 (split 0.000) while goldenmatch holds 0.854 (split
-0.983). goldenmatch wins **both** axes — the incumbent fails both ways
-(over-merges homographs, under-merges alias variants); co-mention (neighborhood)
-overlap fixes both. This is the WhoIsWho SND signal generalized: **structure, not
-string, resolves entities.**
+**Every documented `if similar: merge` mechanism scores 0.000 on homographs** —
+because they all resolve on the surface string, and two identical surfaces always
+merge. At 60 entities / 963 confusable pairs the gap widens: all incumbents ~0.33
+pairwise / 0.000 split; goldenmatch 0.854 / **0.983**. goldenmatch wins **both**
+axes — the incumbents fail both ways (over-merge homographs, under-merge alias
+variants); co-mention (neighborhood) overlap fixes both. This is the WhoIsWho SND
+signal generalized: **structure, not string, resolves entities.**
+
+> The incumbent baselines are faithful reimplementations of each tool's
+> *documented* ER mechanism, not the packaged tools run end-to-end (which need API
+> keys, a Neo4j server, torch). Running the packaged tools is a later phase; this
+> isolates the ER algorithm, which is the cleaner comparison.
 
 ## The homograph split-rate (the money metric)
 

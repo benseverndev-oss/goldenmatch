@@ -124,7 +124,10 @@ def predict_goldenmatch(mentions: list[dict], *, threshold: float | None = None)
     return _clusters_to_mentions(result.clusters, df)
 
 
+from incumbents import INCUMBENT_ENGINES  # noqa: E402
+
 ENGINES = {
-    "exact_surface": predict_exact_surface,
-    "goldenmatch": predict_goldenmatch,
+    "exact_surface": predict_exact_surface,   # alias of neo4j_exact (kept for back-compat)
+    **INCUMBENT_ENGINES,                       # neo4j_exact / neo4j_fuzzy / name_cosine
+    "goldenmatch": predict_goldenmatch,        # the neighborhood-ER moat
 }
