@@ -1,0 +1,122 @@
+{
+ "benford": {
+  "expected": [
+   4,
+   1,
+   1,
+   1,
+   0,
+   0,
+   1,
+   1,
+   1
+  ],
+  "values": [
+   123.0,
+   199.0,
+   250.0,
+   314.0,
+   42.0,
+   7.0,
+   900.0,
+   1000.0,
+   15.0,
+   88.0
+  ]
+ },
+ "composite_key": {
+  "columns": [
+   [
+    "1",
+    "1",
+    "2",
+    "2"
+   ],
+   [
+    "x",
+    "y",
+    "x",
+    "y"
+   ]
+  ],
+  "expected": [
+   [
+    0,
+    1
+   ]
+  ],
+  "max_size": 4,
+  "single_unique": [
+   false,
+   false
+  ]
+ },
+ "fd": {
+  "approx_expected": [],
+  "approx_min_confidence": 0.7,
+  "columns": [
+   [
+    "A",
+    "A",
+    "B",
+    "B",
+    "C",
+    "C"
+   ],
+   [
+    "Sales",
+    "Sales",
+    "Eng",
+    "Eng",
+    "Ops",
+    "Ops"
+   ],
+   [
+    "NYC",
+    "NYC",
+    "SF",
+    "LA",
+    "SF",
+    "SF"
+   ]
+  ],
+  "discover_expected": [
+   [
+    0,
+    1
+   ],
+   [
+    1,
+    0
+   ]
+  ],
+  "holds_dep": 2,
+  "holds_det": 0,
+  "holds_expected": false,
+  "violation_rows_expected": [
+   3
+  ]
+ },
+ "near_dup": {
+  "expected": [
+   [
+    0,
+    1,
+    2
+   ],
+   [
+    3,
+    4
+   ]
+  ],
+  "min_similarity": 0.8,
+  "values": [
+   "California",
+   "Californa",
+   "CALIFORNIA ",
+   "Texas",
+   "Texbs",
+   "Oregon"
+  ]
+ }
+}
