@@ -8,6 +8,17 @@ GoldenFlow sibling of `goldenmatch-native`.
 
 **Status:** SHIPPED (2026-06-07, branch `claude/review-technical-work-en9SG`).
 **Decision:** [../decisions/0006-goldenflow-native-nanp-gating.md](../decisions/0006-goldenflow-native-nanp-gating.md).
+
+> **Wave 0 update (2026-07, ADR [../decisions/0031-goldenflow-reference-mode-identifiers-wasm.md](../decisions/0031-goldenflow-reference-mode-identifiers-wasm.md)):**
+> the kernels now live in a pyo3-free `goldenflow-core` crate; `native-flow` is a
+> thin PyO3 shim over it and a new `goldenflow-wasm` crate surfaces the identifier
+> kernels to the edge. The loader moved to reference-mode (`_has_symbol` +
+> `_COMPONENT_SYMBOLS` + `_FALLBACK_ONLY`) — `GOLDENFLOW_NATIVE=auto` now runs
+> native wherever a component's kernel symbol exists (phone + the checksummed
+> identifiers cc/iban/isbn/ean/vat), and `_GATED_ON` below is retained only as
+> documentation of the byte-exact phone sign-off. `phone_validate` is now
+> `_FALLBACK_ONLY`. The phone-kernel content below is still accurate for that
+> component.
 **Code-level notes:** `packages/python/goldenflow/CLAUDE.md` (Performance section),
 `packages/rust/extensions/native-flow/README.md`. **Docs-site:** `goldenflow/performance.mdx`.
 

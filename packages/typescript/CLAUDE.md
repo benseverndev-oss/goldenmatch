@@ -41,10 +41,12 @@ this — `workspace:^` handles the linking cross-platform. The stale
   `import('./artifacts/<name>.js')` MUST live in the consumer's own module so
   `import.meta.url` resolves to that package's `dist` — passing the URL into the
   shared package would resolve to the wrong location.
-- Consumers: `goldenmatch` (score-wasm → `scoreMatrix`, `enableWasm`) and
-  `goldenanalysis` (analysis-wasm → `histogram`/`quantile`, `enableAnalysisWasm`).
-  Both depend via `workspace:^`. Pure-TS stays the default + fallback; the `.wasm`
-  is built in CI (`wasm_score` / `analysis_wasm` lanes), never committed.
+- Consumers: `goldenmatch` (score-wasm → `scoreMatrix`, `enableWasm`),
+  `goldenanalysis` (analysis-wasm → `histogram`/`quantile`, `enableAnalysisWasm`),
+  and `goldenflow` (goldenflow-wasm → identifier validate/format kernels,
+  `enableWasm`). All depend via `workspace:^`. Pure-TS stays the default +
+  fallback; the `.wasm` is built in CI (`wasm_score` / `analysis_wasm` /
+  `wasm_flow` lanes), never committed.
 - Adding a new accelerated core: new `*-wasm` crate (mirror `score-wasm`), a
   consumer `src/core/wasm/` (backend + loader + index using the shared runtime),
   wire the batch boundary, a skip-guarded parity test + bench, and a CI lane.

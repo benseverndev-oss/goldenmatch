@@ -91,6 +91,7 @@ jobs:
       goldenprofile_wasm: ${{ steps.filter.outputs.goldenprofile_wasm }}
       goldengraph_wasm: ${{ steps.filter.outputs.goldengraph_wasm }}
       hnsw_wasm: ${{ steps.filter.outputs.hnsw_wasm }}
+      wasm_flow: ${{ steps.filter.outputs.wasm_flow }}
       quality_gate: ${{ steps.filter.outputs.quality_gate }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
@@ -205,6 +206,17 @@ jobs:
               - 'packages/typescript/goldenanalysis/src/core/wasm/**'
               - 'packages/typescript/goldenanalysis/src/core/aggregate.ts'
               - 'packages/typescript/goldenanalysis/tests/parity/wasm-aggregate.test.ts'
+              - 'packages/typescript/goldenmatch-wasm-runtime/**'
+            wasm_flow:
+              # Opt-in GoldenFlow WASM lane (Wave 0c): the wasm-bindgen wrapper,
+              # the shared -core kernel it wraps, the TS wasm/loader + identifier
+              # transforms it dispatches to, the cross-surface parity test, and
+              # the shared wasm-runtime the loader imports.
+              - 'packages/rust/extensions/goldenflow-wasm/**'
+              - 'packages/rust/extensions/goldenflow-core/**'
+              - 'packages/typescript/goldenflow/src/core/wasm/**'
+              - 'packages/typescript/goldenflow/src/core/transforms/identifiers.ts'
+              - 'packages/typescript/goldenflow/tests/parity/**'
               - 'packages/typescript/goldenmatch-wasm-runtime/**'
             ts_parity:
               # TS parity-fixture staleness gate (#856): a Python behaviour
@@ -1553,6 +1565,71 @@ jobs:
         run: |
           pnpm --filter goldenanalysis build
           node packages/typescript/goldenanalysis/scripts/bench_wasm_aggregate.mjs 1000000
+
+  wasm_flow:
+    needs: changes
+    if: needs.changes.outputs.wasm_flow == 'true' || needs.changes.outputs.force_all == 'true'
+    # Opt-in GoldenFlow WASM lane (Wave 0c): builds the goldenflow-wasm artifact
+    # into the goldenflow TS package's src/core/wasm/artifacts/ (where the loader
+    # resolves it), then runs the identifier parity test with the artifact present
+    # so its WASM leg (skipped elsewhere with no artifact) actually executes. This
+    # is the only cross-surface native-vs-wasm gate for GoldenFlow. The pure-TS
+    # parity leg + typecheck already run in the `typescript` lane above (turbo
+    # test/typecheck over the goldenflow package); this lane adds the wasm leg.
+    #
+    # goldenflow-wasm has NO build_wasm.sh (unlike score-wasm), so the build is
+    # inlined here mirroring score-wasm/build_wasm.sh: cargo build for wasm32 +
+    # wasm-bindgen-cli pinned to the version in the crate's Cargo.lock (a CLI/crate
+    # skew silently produces broken JS glue). wasm-pack is avoided because the
+    # crate declares wasm-bindgen under a cfg(target_arch="wasm32") table, which
+    # wasm-pack's dependency detection doesn't see.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/goldenflow-wasm
+      - uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093  # v6.0.8
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Corpus sync-check: the oracle corpus is committed in TWO byte-identical
+      # copies (Python + TS). A future edit to one that isn't mirrored to the
+      # other must fail CI, or the parity gate would silently assert against
+      # divergent fixtures.
+      - name: Corpus sync-check (Python vs TS copies must be byte-identical)
+        run: |
+          cmp packages/python/goldenflow/tests/parity/identifiers_corpus.jsonl \
+              packages/typescript/goldenflow/tests/parity/identifiers_corpus.jsonl
+      - name: Build goldenflow WASM artifact into the loader's artifacts/ dir
+        # Mirrors score-wasm/build_wasm.sh: cargo build wasm32 + wasm-bindgen-cli
+        # pinned from Cargo.lock, emitting goldenflow_wasm_bg.wasm + .js where the
+        # loader resolves `./artifacts/goldenflow_wasm_bg.wasm`.
+        run: |
+          set -euo pipefail
+          CRATE_DIR=packages/rust/extensions/goldenflow-wasm
+          OUT_DIR=packages/typescript/goldenflow/src/core/wasm/artifacts
+          cargo build --manifest-path "$CRATE_DIR/Cargo.toml" \
+            --target wasm32-unknown-unknown --release
+          WB_VER="$(grep -A1 '^name = "wasm-bindgen"$' "$CRATE_DIR/Cargo.lock" | grep '^version = ' | head -1 | sed -E 's/version = "([^"]+)"/\1/')"
+          if [ -z "$WB_VER" ]; then echo "could not resolve wasm-bindgen version from Cargo.lock" >&2; exit 1; fi
+          echo "Using wasm-bindgen $WB_VER"
+          if ! wasm-bindgen --version 2>/dev/null | grep -q "$WB_VER"; then
+            cargo install wasm-bindgen-cli --version "=$WB_VER" --locked
+          fi
+          wasm-bindgen \
+            "$CRATE_DIR/target/wasm32-unknown-unknown/release/goldenflow_wasm.wasm" \
+            --target web --out-dir "$OUT_DIR" --out-name goldenflow_wasm
+      - name: Build shared wasm-runtime (the loader imports goldenmatch-wasm-runtime)
+        run: pnpm --filter goldenmatch-wasm-runtime build
+      - name: WASM identifier parity (un-skipped — artifact now present) [THE GATE]
+        run: pnpm --filter goldenflow exec vitest run tests/parity/identifiers.parity.test.ts
 
   web_ui_e2e:
     needs: changes
@@ -3019,6 +3096,7 @@ jobs:
       - synthetic_benchmarks
       - benchmark_runner_smoke
       - typescript
+      - wasm_flow
       - web_ui_e2e
       - rust
       - action

@@ -1,0 +1,6 @@
+# Built by goldenflow-wasm/build_wasm.sh (CI) — never committed.
+goldenflow_wasm_bg.wasm
+goldenflow_wasm.js
+goldenflow_wasm.d.ts
+goldenflow_wasm_bg.wasm.d.ts
+goldenflow_wasm_base64.js

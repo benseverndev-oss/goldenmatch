@@ -312,7 +312,7 @@ describe("config learner parity", () => {
 
 describe("transform registry parity", () => {
   it("has the expected core transform count", () => {
-    // Python core registry: 76 transforms
+    // Python core registry: 86 transforms
     // Domain-specific transforms are registered when domain modules are imported
     expect(registry().size).toBeGreaterThanOrEqual(75);
   });
