@@ -33,6 +33,18 @@ def load_stark_kb(name: str, *, split: str = "test", limit_queries: int | None =
 
     Node/gold ids stay INTS for retrieval+scoring; ids are stringified only for the
     store's opaque ``record_keys`` (done inside ``bulk_load``)."""
+    # stark_qa is installed --no-deps (its FULL tree pulls the colbert/gritlm/mteb retrieval
+    # baselines -- what we replace -- and pip can't resolve them). Its package __init__ imports
+    # load_model -> stark_qa.models -> those baselines at top level, so seed lightweight MagicMock
+    # stand-ins for the heavy backends: we only call the SKB/QA DATA loaders, never a model.
+    import sys
+    from unittest.mock import MagicMock
+
+    for _m in ("colbert", "colbert.infra", "colbert.infra.config", "colbert.infra.run",
+               "colbert.data", "colbert.modeling", "colbert.modeling.checkpoint",
+               "colbert.searcher", "gritlm", "mteb", "sentence_transformers", "transformers",
+               "rank_bm25"):
+        sys.modules.setdefault(_m, MagicMock())
     from stark_qa import load_qa, load_skb
 
     skb = load_skb(name)

@@ -35,9 +35,13 @@ image = (
     .apt_install("curl", "build-essential", "pkg-config", "libssl-dev", "git", "zstd")
     .run_commands("curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y")
     .env({"PATH": "/root/.cargo/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin"})
-    # PyTDC provides tdc.resource.PrimeKG, which stark_qa's PRIME SKB imports at load time
-    # (stark-qa does not pull it transitively). MAG/AMAZON pull ogb/gdown via stark-qa itself.
-    .pip_install("maturin", "goldenmatch", "numpy", "openai", "stark-qa", "PyTDC")
+    .pip_install("maturin", "goldenmatch", "numpy", "openai")
+    # STaRK data deps only. stark-qa's FULL tree drags in the retrieval-model baselines
+    # (colbert-ai/gritlm/mteb/wandb) -- exactly what goldengraph replaces -- and pip backtracks
+    # forever resolving them. Install the SKB/QA DATA loaders with --no-deps + just what they need:
+    # torch (SKB edge tensors), pandas/hf_hub/gdown (download+parse), PyTDC (PRIME's tdc.resource).
+    .pip_install("torch", "pandas", "huggingface_hub", "gdown", "requests", "PyTDC")
+    .pip_install("stark-qa", extra_options="--no-deps")
     .run_commands("curl -fsSL https://ollama.com/install.sh | sh")
     .add_local_dir(str(REPO / "packages/rust"), "/repo/packages/rust", ignore=["**/target/**"])
     .add_local_dir(str(REPO / "packages/python/goldengraph"), "/repo/packages/python/goldengraph",
