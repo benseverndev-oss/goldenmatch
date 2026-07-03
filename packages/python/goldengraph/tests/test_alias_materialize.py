@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 ggn = pytest.importorskip("goldengraph_native")
-from goldengraph.bulk import bulk_load                       # noqa: E402
+from goldengraph.bulk import bulk_load  # noqa: E402
 from goldengraph.stark_moat import collapse_for_index, collapse_for_store  # noqa: E402
 
 _BIG = 1 << 62
