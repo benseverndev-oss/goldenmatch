@@ -68,6 +68,8 @@ _COMPONENT_SYMBOLS: dict[str, tuple[str, ...]] = {
     # NOTE: no "phone_validate" entry. Its only native symbol, phone_valid_arrow,
     # implements `is_valid`, NOT the product-chosen `is_possible` spec, so it is
     # deliberately unwired AND listed in _FALLBACK_ONLY below.
+    # cc: payment-card (Luhn) identifiers -- floor symbol only, region-free.
+    "cc": ("cc_validate_arrow",),
 }
 
 # Components whose only native path is intentionally non-authoritative (the

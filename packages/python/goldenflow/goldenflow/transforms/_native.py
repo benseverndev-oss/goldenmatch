@@ -98,3 +98,37 @@ def phone_country_code_native() -> Callable[[pl.Series], pl.Series] | None:
     # (1) for every NANP row; the leading-1 ambiguity only affects the national
     # number, not the code. International rows come back null -> Python.
     return _kernel_runner("phone_country_code_arrow")
+
+
+def _cc_kernel_runner(attr: str) -> Callable[[pl.Series], pl.Series] | None:
+    """Build a whole-series runner for card-identifier kernel function ``attr``
+    if native ``cc`` is enabled and the dependencies are importable; else
+    ``None``. Unlike ``_kernel_runner`` (phone), the card kernel takes no
+    region/gating args -- Luhn is region-free."""
+    if not native_enabled("cc"):
+        return None
+    nm = native_module()
+    if nm is None or not hasattr(nm, attr):
+        return None
+    try:
+        import pyarrow  # noqa: F401  (zero-copy bridge)
+    except ImportError:
+        return None
+    func = getattr(nm, attr)
+
+    def run(s: pl.Series) -> pl.Series:
+        return pl.from_arrow(func(s.to_arrow()))
+
+    return run
+
+
+def cc_validate_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _cc_kernel_runner("cc_validate_arrow")
+
+
+def cc_format_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _cc_kernel_runner("cc_format_arrow")
+
+
+def cc_mask_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _cc_kernel_runner("cc_mask_arrow")

@@ -11,6 +11,7 @@
 
 use pyo3::prelude::*;
 
+mod identifiers;
 mod phone;
 mod util;
 
@@ -21,5 +22,8 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(phone::phone_national_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(phone::phone_country_code_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(phone::phone_valid_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(identifiers::cc_validate_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(identifiers::cc_format_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(identifiers::cc_mask_arrow, m)?)?;
     Ok(())
 }

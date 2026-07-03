@@ -1,0 +1,35 @@
+{"transform": "cc_validate", "input": "4242 4242 4242 4242", "expected": true}
+{"transform": "cc_validate", "input": "4242424242424242", "expected": true}
+{"transform": "cc_validate", "input": "5555555555554444", "expected": true}
+{"transform": "cc_validate", "input": "378282246310005", "expected": true}
+{"transform": "cc_validate", "input": "4000-0000-0000-0002", "expected": true}
+{"transform": "cc_validate", "input": "6011111111111117", "expected": true}
+{"transform": "cc_validate", "input": "30569309025904", "expected": true}
+{"transform": "cc_validate", "input": "4111111111111111111", "expected": false}
+{"transform": "cc_validate", "input": "4242424242424241", "expected": false}
+{"transform": "cc_validate", "input": "1234", "expected": false}
+{"transform": "cc_validate", "input": "4242abcd42424242", "expected": false}
+{"transform": "cc_validate", "input": "42424242424242424242", "expected": false}
+{"transform": "cc_validate", "input": "123456789012", "expected": false}
+{"transform": "cc_validate", "input": "", "expected": false}
+{"transform": "cc_validate", "input": null, "expected": null}
+{"transform": "cc_format", "input": "4242424242424242", "expected": "4242 4242 4242 4242"}
+{"transform": "cc_format", "input": "4242 4242 4242 4242", "expected": "4242 4242 4242 4242"}
+{"transform": "cc_format", "input": "378282246310005", "expected": "3782 822463 10005"}
+{"transform": "cc_format", "input": "340000000000009", "expected": "3400 000000 00009"}
+{"transform": "cc_format", "input": "6011111111111117", "expected": "6011 1111 1111 1117"}
+{"transform": "cc_format", "input": "30569309025904", "expected": "3056 9309 0259 04"}
+{"transform": "cc_format", "input": "4111111111111111111", "expected": null}
+{"transform": "cc_format", "input": "4242424242424241", "expected": null}
+{"transform": "cc_format", "input": "1234", "expected": null}
+{"transform": "cc_format", "input": "", "expected": null}
+{"transform": "cc_format", "input": null, "expected": null}
+{"transform": "cc_mask", "input": "4242424242424242", "expected": "************4242"}
+{"transform": "cc_mask", "input": "4242 4242 4242 4242", "expected": "************4242"}
+{"transform": "cc_mask", "input": "378282246310005", "expected": "***********0005"}
+{"transform": "cc_mask", "input": "4242424242424241", "expected": "************4241"}
+{"transform": "cc_mask", "input": "4111111111111111111", "expected": "***************1111"}
+{"transform": "cc_mask", "input": "bogus", "expected": null}
+{"transform": "cc_mask", "input": "1234", "expected": null}
+{"transform": "cc_mask", "input": "", "expected": null}
+{"transform": "cc_mask", "input": null, "expected": null}
