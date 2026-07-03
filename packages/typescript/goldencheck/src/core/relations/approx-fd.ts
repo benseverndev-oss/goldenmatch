@@ -10,6 +10,10 @@ import type { TabularData, Dtype, ColumnValue } from "../data.js";
 import { isNullish } from "../data.js";
 import { type Finding, Severity, makeFinding } from "../types.js";
 import type { RelationProfiler } from "../profilers/base.js";
+// Lean registry only (a getter + type-erased import) — zero wasm bytes in the
+// default bundle. Populated via `enableGoldencheckWasm()` from the opt-in
+// `goldencheck/core/wasm` subpath.
+import { getGoldencheckWasmBackend } from "../goldencheckWasmBackend.js";
 
 const MIN_ROWS = 100;
 const MIN_CONFIDENCE = 0.95;
@@ -95,19 +99,36 @@ export class ApproximateFDProfiler implements RelationProfiler {
     const cols = selectCandidates(data);
     if (cols.length < 2) return [];
 
-    const colsIds = cols.map((c) => intern(data.column(c)));
-    const distinct = colsIds.map((c) => new Set(c).size);
-
-    // Discover (det, dep, violationCount) triples above the confidence floor.
-    const triples: Array<[number, number, number]> = [];
-    for (let i = 0; i < colsIds.length; i++) {
-      if (distinct[i] === 0 || distinct[i]! * MIN_AVG_GROUP > nRows) continue;
-      for (let j = 0; j < colsIds.length; j++) {
-        if (i === j || distinct[j]! <= 1) continue;
-        const viol = violationRows(colsIds[i]!, colsIds[j]!).length;
-        if (viol === 0) continue;
-        if (1.0 - viol / nRows >= MIN_CONFIDENCE) triples.push([i, j, viol]);
+    // Rust-source-of-truth path: the shared goldencheck-core kernels (same as the
+    // Python `goldencheck-native` wheel) when the wasm backend is enabled — this
+    // relation exercises BOTH `discover_approximate_fds` and `fd_violation_rows`.
+    // The pure-TS intern + nested-loop + group-mode path stays the fallback. Both
+    // produce identical `(det, dep, violationCount)` triples (interning is
+    // first-seen null->0 in each column, so equivalence classes match) and
+    // identical ascending violation-row indices.
+    const backend = getGoldencheckWasmBackend();
+    let triples: Array<[number, number, number]>;
+    let violationRowsFor: (i: number, j: number) => number[];
+    if (backend) {
+      const wcols = cols.map((c) =>
+        data.column(c).map((v) => (v == null ? null : String(v))),
+      );
+      triples = backend.discoverApproximateFds(wcols, MIN_CONFIDENCE);
+      violationRowsFor = (i, j) => backend.fdViolationRows(wcols[i]!, wcols[j]!);
+    } else {
+      const colsIds = cols.map((c) => intern(data.column(c)));
+      const distinct = colsIds.map((c) => new Set(c).size);
+      triples = [];
+      for (let i = 0; i < colsIds.length; i++) {
+        if (distinct[i] === 0 || distinct[i]! * MIN_AVG_GROUP > nRows) continue;
+        for (let j = 0; j < colsIds.length; j++) {
+          if (i === j || distinct[j]! <= 1) continue;
+          const viol = violationRows(colsIds[i]!, colsIds[j]!).length;
+          if (viol === 0) continue;
+          if (1.0 - viol / nRows >= MIN_CONFIDENCE) triples.push([i, j, viol]);
+        }
       }
+      violationRowsFor = (i, j) => violationRows(colsIds[i]!, colsIds[j]!);
     }
     if (triples.length === 0) return [];
 
@@ -118,7 +139,7 @@ export class ApproximateFDProfiler implements RelationProfiler {
       const det = cols[i]!;
       const dep = cols[j]!;
       const confidence = 1.0 - viol / nRows;
-      const rows = violationRows(colsIds[i]!, colsIds[j]!).slice(0, 5);
+      const rows = violationRowsFor(i, j).slice(0, 5);
       const detVals = data.column(det);
       const depVals = data.column(dep);
       const samples = rows.map(

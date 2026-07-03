@@ -28,8 +28,17 @@ export interface GoldencheckWasmBackend {
   ): number[][];
   /** Strict single-column FDs `(detIdx, depIdx)` among `columns`. */
   discoverFunctionalDependencies(columns: readonly WasmColumn[]): Array<[number, number]>;
+  /** Approximate FDs `(detIdx, depIdx, nViolations)` at `minConfidence`. */
+  discoverApproximateFds(
+    columns: readonly WasmColumn[],
+    minConfidence: number,
+  ): Array<[number, number, number]>;
+  /** Row indices where `dep` deviates from its per-`det`-group mode (ascending). */
+  fdViolationRows(det: WasmColumn, dep: WasmColumn): number[];
   /** Edit-distance-close value clusters (indices into `values`), size >= 2. */
   nearDuplicateClusters(values: readonly string[], minSimilarity: number): number[][];
+  /** Benford leading-digit histogram (9 bins, digits 1..9) over finite positives. */
+  benfordLeadingDigits(values: readonly (number | null)[]): number[];
 }
 
 let _backend: GoldencheckWasmBackend | null = null;

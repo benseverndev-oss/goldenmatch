@@ -124,7 +124,10 @@ export function enableGoldencheckWasm(): void {
   setGoldencheckWasmBackend({
     compositeKeySearch,
     discoverFunctionalDependencies,
+    discoverApproximateFds,
+    fdViolationRows,
     nearDuplicateClusters,
+    benfordLeadingDigits,
   });
 }
 
