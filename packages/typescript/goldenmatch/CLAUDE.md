@@ -90,6 +90,31 @@ It mirrors the autoconfig wasm pattern above exactly:
   the `typescript` lane (rebuilds, `git diff --exit-code` the kernel fixtures only — NOT the
   toolchain-variant wasm bytes — then runs the parity test); `suggest-core` (`--features arrow`) +
   `suggest-wasm` (`cargo check`) run in the `rust` lane.
+## Native HNSW ANN via wasm (`goldenmatch/core/hnsw-wasm`)
+The `WasmHNSWANNBlocker` runs the SAME `goldenhnsw` Rust kernel as the Python
+`goldenmatch-hnsw` wheel and the Rust core — compiled to wasm, so the
+inner-product ANN ranking is byte-identical across Python / Rust / TS. Unlike
+the `HNSWANNBlocker` (which wraps the Node-only `hnswlib-node` native addon),
+this is **edge-safe**: no `node:*`, no native peer dep, runs in browsers /
+Workers / edge. Loader `src/core/hnswWasm.ts`, exposed as the **opt-in subpath**
+`goldenmatch/core/hnsw-wasm` (a separate tsup entry so the ~62 KB inlined wasm
+never bloats the default `core` bundle — verified: `dist/core/index.js` carries
+no wasm bytes).
+- **Same synchronous inlined-wasm pattern as autoconfig-wasm** (`initSync` over a
+  committed base64 wasm; the `.wasm` IS committed under `src/core/_wasm/` so
+  `tsc`/`vitest`/`tsup` need no rust toolchain).
+- **Regenerate the embed** (after any `goldenhnsw`/`goldenhnsw-wasm` change):
+  `node scripts/build_goldenhnsw_wasm.mjs` (needs wasm-pack + the wasm32 target).
+  Rebuilds the wasm, strips the wasm-bindgen async init path, base64-embeds it,
+  and copies the golden vector into `tests/parity/fixtures/hnsw/`.
+- **Cross-surface parity gate:** `tests/parity/hnsw.parity.test.ts` runs the SAME
+  golden fixture as Rust (`goldenhnsw/tests/golden.rs`) + Python — ids match
+  exactly, scores to f32. The CI `typescript` lane's HNSW drift guard (gated on
+  the `hnsw_wasm` path filter) rebuilds + diffs the golden JSON, catching a stale
+  committed wasm behaviorally.
+- Scores are the raw inner product (cosine on L2-normalized embeddings) — same
+  contract as the Python HNSW / FAISS `IndexFlatIP` path. Inner-product only; the
+  `metric` option is accepted for interface symmetry (no euclidean).
 
 ## Wave history
 | npm | Python parity | Headline |

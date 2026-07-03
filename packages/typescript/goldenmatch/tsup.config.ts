@@ -13,6 +13,11 @@ export default defineConfig({
     // only when they import `goldenmatch/core/suggest-wasm`.
     "core/suggestWasm": "src/core/suggestWasm.ts",
     "core/perceptualWasm": "src/core/perceptualWasm.ts",
+    // Opt-in entry: the native HNSW ANN kernel (goldenhnsw) compiled to wasm.
+    // Carries the inlined wasm (~62 KB base64) as a separate subpath, so the
+    // default bundle stays lean; consumers pay it only when they import
+    // `goldenmatch/core/hnsw-wasm`.
+    "core/hnswWasm": "src/core/hnswWasm.ts",
     "node/index": "src/node/index.ts",
     "node/mcp/server": "src/node/mcp/server.ts",
     cli: "src/cli.ts",
