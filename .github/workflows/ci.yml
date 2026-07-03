@@ -65,6 +65,7 @@ jobs:
       python_goldenflow: ${{ steps.filter.outputs.python_goldenflow }}
       benchmark_runner: ${{ steps.filter.outputs.benchmark_runner }}
       rust_pgrx: ${{ steps.filter.outputs.rust_pgrx }}
+      rust_cores: ${{ steps.filter.outputs.rust_cores }}
       duckdb_extensions: ${{ steps.filter.outputs.duckdb_extensions }}
       native: ${{ steps.filter.outputs.native }}
       goldencheck_native: ${{ steps.filter.outputs.goldencheck_native }}
@@ -309,6 +310,21 @@ jobs:
               # so a goldenembed change must rebuild + re-smoke this lane.
               - 'packages/rust/extensions/goldenembed/**'
               - 'packages/rust/extensions/Cargo.toml'
+            rust_cores:
+              # ANY Rust extension change re-validates EVERY committed TS wasm
+              # parity fixture (the fixture_drift job regenerates them all and
+              # diffs). This is deliberately broad — broader than each surface's
+              # own `*_wasm` filter — because a committed fixture can be stale for
+              # reasons its own paths never capture: e.g. a feature branch based
+              # on older main carries an out-of-date fixture, and no per-surface
+              # filter fires because that surface wasn't touched. Such a branch
+              # almost always touches SOME rust extension (goldenmatch's own HNSW
+              # PR #1398 added packages/rust/extensions/goldenhnsw/), so keying on
+              # the whole extensions tree catches the stale sibling fixture on the
+              # PR instead of late in the full-matrix merge queue. The per-surface
+              # `*_wasm` guards stay for their fast, targeted feedback; this is the
+              # catch-all backstop.
+              - 'packages/rust/extensions/**'
             duckdb_extensions:
               # The DuckDB UDF package is pure Python but lives under
               # packages/rust/extensions/duckdb/ alongside the Rust crates.
@@ -2840,6 +2856,72 @@ jobs:
       - name: Throughput perf gate (cost vs committed baseline)
         run: uv run python scripts/bench_corpus_dedup/throughput_perf_gate.py --check
 
+  pgrx_sql_sync:
+    # Guard: every `#[pg_extern]` in the goldenmatch_pg crate is declared in the
+    # current base SQL. pgrx 0.12.9's SQL generator is broken in this workspace,
+    # so sql/goldenmatch_pg--<version>.sql is hand-maintained (see
+    # packages/rust/extensions/CLAUDE.md) — nothing otherwise caught a forgotten
+    # CREATE FUNCTION until the pgrx build/smoke, if at all. Python-only, no pgrx
+    # toolchain, runs in seconds. Same trigger as rust_pgrx.
+    needs: changes
+    if: needs.changes.outputs.rust_pgrx == 'true' || needs.changes.outputs.force_all == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Check pgrx pg_extern set matches the base SQL
+        run: python3 scripts/check_pgrx_sql_sync.py
+
+  fixture_drift:
+    # Backstop for stale committed TS wasm parity fixtures. Each surface's own
+    # `*_wasm` drift guard only fires when that surface's paths change, but a
+    # committed fixture can be stale for reasons its paths never capture (e.g. a
+    # branch based on older main). On ANY rust-extension change, regenerate EVERY
+    # committed wasm parity fixture from its live core and diff — so a stale
+    # sibling fails HERE, on the PR, rather than late in the full-matrix merge
+    # queue (which is exactly how the goldengraph fixture bit PR #1398 four times).
+    needs: changes
+    if: needs.changes.outputs.rust_cores == 'true' || needs.changes.outputs.force_all == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0
+        with:
+          node-version: 22
+      - name: Install wasm-pack
+        run: curl -sSf https://rustwasm.github.io/wasm-pack/installer/init.sh | sh
+      - name: Regenerate every committed wasm parity fixture from its live core and diff
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          for script in packages/typescript/*/scripts/build_*_wasm.mjs; do
+            pkg=$(dirname "$(dirname "$script")")
+            name=$(basename "$script")
+            echo "::group::regenerate $name ($pkg)"
+            ( cd "$pkg" && node "scripts/$name" )
+            echo "::endgroup::"
+          done
+          # Diff ONLY the deterministic golden fixtures — NOT the toolchain-variant
+          # wasm bytes/bindings under src/core/_wasm/ (those legitimately differ by
+          # wasm-pack / rustc version and are never committed-diffed anywhere). A
+          # git `:(glob)` pathspec is used so the match is robust regardless of
+          # shell expansion.
+          if ! git diff --exit-code -- ':(glob)packages/typescript/**/tests/parity/fixtures/**'; then
+            echo "::error::A committed wasm parity fixture is stale vs its Rust core. A (possibly shared) core changed and a fixture was not regenerated. Run the matching packages/typescript/<pkg>/scripts/build_*_wasm.mjs and commit the fixture." >&2
+            exit 1
+          fi
+          echo "all committed wasm parity fixtures are in sync with their live cores"
+
   ci-required:
     needs:
       - changes
@@ -2861,6 +2943,8 @@ jobs:
       - action
       - dbt
       - rust_pgrx
+      - pgrx_sql_sync
+      - fixture_drift
       - duckdb_extensions
       - native
       - goldencheck_native
