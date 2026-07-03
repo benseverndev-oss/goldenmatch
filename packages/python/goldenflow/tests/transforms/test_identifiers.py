@@ -1,4 +1,6 @@
+import goldenflow
 import polars as pl
+from goldenflow.transforms import registry
 from goldenflow.transforms.identifiers import (
     cc_format,
     cc_mask,
@@ -14,6 +16,19 @@ from goldenflow.transforms.identifiers import (
     vat_format,
     vat_validate,
 )
+
+IDENTIFIER_TRANSFORM_NAMES = [
+    "cc_validate",
+    "cc_format",
+    "cc_mask",
+    "iban_validate",
+    "iban_format",
+    "isbn_validate",
+    "isbn_normalize",
+    "ean_validate",
+    "vat_validate",
+    "vat_format",
+]
 
 
 def test_ssn_format_normalizes_various_formats():
@@ -292,3 +307,30 @@ def test_vat_format_normalizes_and_nulls_invalid():
     assert result[2] is None
     assert result[3] is None
     assert result[4] is None
+
+
+# --- Registration + zero-config posture --------------------------------------
+
+
+def test_identifier_transforms_all_registered():
+    registered = registry()
+    for name in IDENTIFIER_TRANSFORM_NAMES:
+        assert name in registered, f"{name} did not self-register"
+
+
+def test_identifier_transforms_are_not_auto_applied():
+    df = pl.DataFrame(
+        {
+            "card": ["4242 4242 4242 4242", "378282246310005", "4242424242424242"],
+            "iban": ["GB82 WEST 1234 5698 7654 32", "DE89370400440532013000", None],
+            "isbn": ["0-306-40615-2", "9780306406157", "0306406152"],
+            "ean": ["4006381333931", "73513537", "036000291452"],
+            "vat": ["DE136695976", "IT00743110157", "NL004495445B01"],
+        }
+    )
+    result = goldenflow.transform_df(df)
+    applied = {record.transform for record in result.manifest.records}
+    leaked = applied.intersection(IDENTIFIER_TRANSFORM_NAMES)
+    assert not leaked, (
+        f"zero-config applied auto_apply=False identifier transforms: {leaked}"
+    )
