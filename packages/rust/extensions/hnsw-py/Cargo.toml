@@ -1,0 +1,40 @@
+# goldenmatch-hnsw — the thin pyo3/maturin WRAPPER over the pyo3-free
+# `goldenhnsw` crate. Keeping the wrapper separate mirrors the sibling
+# `embed-py`/`native` wheels: `goldenhnsw` stays pyo3-free (usable from the pgrx
+# `postgres` crate or a DataFusion FFI surface without embedding CPython), and
+# the pyo3 dependency is confined to THIS wheel. `pip install goldenmatch-hnsw`
+# is what `goldenmatch.core.ann_blocker` imports for the native HNSW ANN path.
+#
+# Standalone workspace (empty [workspace]) so pyo3's `extension-module` feature
+# here is NOT unified with the `bridge` crate's `auto-initialize` feature — the
+# two are mutually incompatible (ext-module must NOT link libpython; embedding
+# must). Same reasoning as the sibling `native` / `embed-py` wheels.
+#
+# Unlike `embed-py`, this wheel has NO C dependency (no `ort`/openssl), so the
+# manylinux publish containers that bite goldenmatch-embed do not apply.
+[workspace]
+
+[package]
+name = "goldenmatch-hnsw-py"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Ben Severn <benzsevern@gmail.com>"]
+description = "Native HNSW ANN index for GoldenMatch (PyO3 extension module over goldenhnsw)"
+
+[lib]
+# Produces lib_hnsw.so; renamed to goldenmatch_hnsw/_hnsw.abi3.so at install.
+# The #[pymodule] is `_hnsw`, so the init symbol is PyInit__hnsw.
+name = "_hnsw"
+crate-type = ["cdylib"]
+
+[dependencies]
+# abi3-py311: one stable-ABI artifact spans CPython 3.11-3.13.
+# extension-module: don't link libpython (this .so is imported BY CPython).
+pyo3 = { version = ">=0.23.3, <0.25", features = ["extension-module", "abi3-py311"] }
+# The pyo3-free HNSW kernel this wheel wraps. Zero C deps.
+goldenhnsw = { path = "../goldenhnsw" }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
