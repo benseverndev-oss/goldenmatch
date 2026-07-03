@@ -22,6 +22,8 @@ from goldenflow.transforms.identifiers import (
     iban_validate,
     isbn_normalize,
     isbn_validate,
+    vat_format,
+    vat_validate,
 )
 
 _CORPUS_PATH = Path(__file__).parent.parent / "parity" / "identifiers_corpus.jsonl"
@@ -35,6 +37,8 @@ _TRANSFORMS = {
     "isbn_validate": isbn_validate,
     "isbn_normalize": isbn_normalize,
     "ean_validate": ean_validate,
+    "vat_validate": vat_validate,
+    "vat_format": vat_format,
 }
 
 # Floor native symbol per transform's component -- used to skip a row when the
@@ -49,6 +53,8 @@ _NATIVE_FLOOR_SYMBOL = {
     "isbn_validate": "isbn_validate_arrow",
     "isbn_normalize": "isbn_validate_arrow",
     "ean_validate": "ean_validate_arrow",
+    "vat_validate": "vat_validate_arrow",
+    "vat_format": "vat_validate_arrow",
 }
 
 

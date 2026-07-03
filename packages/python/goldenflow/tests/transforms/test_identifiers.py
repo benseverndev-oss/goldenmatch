@@ -11,6 +11,8 @@ from goldenflow.transforms.identifiers import (
     isbn_validate,
     ssn_format,
     ssn_mask,
+    vat_format,
+    vat_validate,
 )
 
 
@@ -237,3 +239,56 @@ def test_ean_validate_valid_and_invalid():
     assert result[5] is False
     assert result[6] is False
     assert result[7] is None
+
+
+# --- EU VAT identifiers (bounded scope: structural for all, checksum DE/IT) --
+
+
+def test_vat_validate_valid_and_invalid():
+    s = pl.Series(
+        "vat",
+        [
+            "DE136695976",  # DE, checksum ok
+            "de 136 695 976",  # DE, lowercase + spaced, checksum ok
+            "IT00743110157",  # IT, checksum ok
+            "NL004495445B01",  # NL, structural-only prefix
+            "ATU13585627",  # AT, structural-only prefix
+            "DE136695970",  # bad DE checksum
+            "IT00743110150",  # bad IT checksum
+            "ZZ123",  # unknown prefix
+            "DE12345",  # bad length
+            "",  # empty
+            None,  # null
+        ],
+    )
+    result = vat_validate(s)
+    assert result[0] is True
+    assert result[1] is True
+    assert result[2] is True
+    assert result[3] is True
+    assert result[4] is True
+    assert result[5] is False
+    assert result[6] is False
+    assert result[7] is False
+    assert result[8] is False
+    assert result[9] is False
+    assert result[10] is None
+
+
+def test_vat_format_normalizes_and_nulls_invalid():
+    s = pl.Series(
+        "vat",
+        [
+            "de 136 695 976",  # -> DE136695976
+            "NL004495445B01",
+            "DE136695970",  # bad checksum -> null
+            "ZZ123",  # unknown prefix -> null
+            None,
+        ],
+    )
+    result = vat_format(s)
+    assert result[0] == "DE136695976"
+    assert result[1] == "NL004495445B01"
+    assert result[2] is None
+    assert result[3] is None
+    assert result[4] is None

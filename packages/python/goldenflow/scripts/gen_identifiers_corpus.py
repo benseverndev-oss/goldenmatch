@@ -37,6 +37,8 @@ from goldenflow.transforms.identifiers import (  # noqa: E402
     _iban_validate_py,
     _isbn_normalize_py,
     _isbn_validate_py,
+    _vat_format_py,
+    _vat_validate_py,
 )
 
 CORPUS_PATH = Path(__file__).resolve().parent.parent / "tests" / "parity" / "identifiers_corpus.jsonl"
@@ -145,6 +147,31 @@ _CASES: list[tuple[str, str | None]] = [
     ("ean_validate", "40063813339a1"),  # non-digit
     ("ean_validate", ""),  # empty
     ("ean_validate", None),  # null
+    # --- vat_validate: valid, checksummed (DE, IT) ---
+    ("vat_validate", "DE136695976"),  # DE, checksum ok
+    ("vat_validate", "de 136 695 976"),  # DE, lowercase + spaced
+    ("vat_validate", "IT00743110157"),  # IT, checksum ok
+    # --- vat_validate: valid, structural-only prefixes ---
+    ("vat_validate", "NL004495445B01"),  # NL, digits + B + 2 digits
+    ("vat_validate", "ATU13585627"),  # AT, U + 8 digits
+    ("vat_validate", "FR12345678901"),  # FR, 2 alnum + 9 digits
+    ("vat_validate", "RO12"),  # RO, variable-length digits (2)
+    # --- vat_validate: invalid ---
+    ("vat_validate", "DE136695970"),  # bad DE checksum
+    ("vat_validate", "IT00743110150"),  # bad IT checksum
+    ("vat_validate", "ZZ123"),  # unknown prefix
+    ("vat_validate", "DE12345"),  # bad length for DE
+    ("vat_validate", "GR123456789"),  # GR is not a valid VAT prefix (EL is)
+    ("vat_validate", ""),  # empty
+    ("vat_validate", None),  # null
+    # --- vat_format: valid ---
+    ("vat_format", "de 136 695 976"),  # -> DE136695976
+    ("vat_format", "NL004495445B01"),
+    # --- vat_format: invalid -> null ---
+    ("vat_format", "DE136695970"),  # bad checksum
+    ("vat_format", "ZZ123"),  # unknown prefix
+    ("vat_format", ""),
+    ("vat_format", None),
 ]
 
 _PY_FN = {
@@ -156,6 +183,8 @@ _PY_FN = {
     "isbn_validate": _isbn_validate_py,
     "isbn_normalize": _isbn_normalize_py,
     "ean_validate": _ean_validate_py,
+    "vat_validate": _vat_validate_py,
+    "vat_format": _vat_format_py,
 }
 
 _NATIVE_ARROW_FN = {
@@ -167,6 +196,8 @@ _NATIVE_ARROW_FN = {
     "isbn_validate": "isbn_validate_arrow",
     "isbn_normalize": "isbn_normalize_arrow",
     "ean_validate": "ean_validate_arrow",
+    "vat_validate": "vat_validate_arrow",
+    "vat_format": "vat_format_arrow",
 }
 
 

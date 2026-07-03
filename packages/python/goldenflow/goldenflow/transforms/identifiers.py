@@ -14,6 +14,8 @@ from goldenflow.transforms._native import (
     iban_validate_native,
     isbn_normalize_native,
     isbn_validate_native,
+    vat_format_native,
+    vat_validate_native,
 )
 
 
@@ -396,6 +398,183 @@ def ean_validate(series: pl.Series) -> pl.Series:
     if native is not None:
         return native(series)
     return series.map_elements(_ean_validate_py, return_dtype=pl.Boolean)
+
+
+# --- EU VAT identifiers (bounded scope) -------------------------------------
+#
+# Pure-Python reference for goldenflow-core's ``identifiers::vat`` kernel.
+# MUST reproduce the Rust kernel byte-for-byte (asserted by
+# tests/transforms/test_identifiers_parity.py over
+# tests/parity/identifiers_corpus.jsonl) -- same separator strip + uppercase,
+# same per-prefix structural rules, same DE/IT checksums.
+#
+# CHECKSUM COVERAGE: DE, IT (structural-only: all other supported prefixes).
+# This is a deliberate, documented bound (Wave 0b, Task 5): all 27 EU
+# member-state VAT prefixes below are validated STRUCTURALLY (country prefix
+# + length + per-position charset), but only Germany (DE, ISO 7064 mod 11,10)
+# and Italy (IT, partita IVA Luhn) additionally run a checksum. Checksum
+# coverage may grow later without changing this contract. Unsupported /
+# unknown prefixes (including a bare "GR" -- Greece's VAT prefix is the
+# well-known quirk "EL") -> False.
+
+# Per-prefix structural rule: either a tuple of per-position classes ("D"igit,
+# "A"lpha, "N"alnum, or a literal char) for one or more fixed-length variants,
+# or ("digits", min, max) for the one variable-length EU VAT format (RO).
+_VAT_FIXED_RULES: dict[str, tuple[tuple[str, ...], ...]] = {
+    "AT": (("U", "D", "D", "D", "D", "D", "D", "D", "D"),),
+    "BE": (("D",) * 10,),
+    "CY": (("D",) * 8 + ("A",),),
+    "DE": (("D",) * 9,),
+    "DK": (("D",) * 8,),
+    "EE": (("D",) * 9,),
+    "EL": (("D",) * 9,),
+    "ES": (("N",) + ("D",) * 7 + ("N",),),
+    "FI": (("D",) * 8,),
+    "FR": (("N", "N") + ("D",) * 9,),
+    "HR": (("D",) * 11,),
+    "HU": (("D",) * 8,),
+    "IE": (
+        ("D", "N", "D", "D", "D", "D", "D", "A"),
+        ("D", "N", "D", "D", "D", "D", "D", "A", "A"),
+    ),
+    "IT": (("D",) * 11,),
+    "LT": (("D",) * 9, ("D",) * 12),
+    "LU": (("D",) * 8,),
+    "LV": (("D",) * 11,),
+    "MT": (("D",) * 8,),
+    "NL": (("D",) * 9 + ("B",) + ("D",) * 2,),
+    "PL": (("D",) * 10,),
+    "PT": (("D",) * 9,),
+    "SE": (("D",) * 12,),
+    "SI": (("D",) * 8,),
+    "SK": (("D",) * 10,),
+}
+_VAT_DIGITS_RULES: dict[str, tuple[int, int]] = {
+    "BG": (9, 10),
+    "CZ": (8, 10),
+    "RO": (2, 10),
+}
+
+
+def _vat_pos_ok(pos: str, c: str) -> bool:
+    if pos == "D":
+        return c.isascii() and c.isdigit()
+    if pos == "A":
+        return c.isascii() and c.isalpha()
+    if pos == "N":
+        return c.isascii() and c.isalnum()
+    return c == pos  # literal char (e.g. NL's "B", AT's "U")
+
+
+def _vat_fixed_ok(pattern: tuple[str, ...], suffix: str) -> bool:
+    return len(suffix) == len(pattern) and all(
+        _vat_pos_ok(p, c) for p, c in zip(pattern, suffix, strict=True)
+    )
+
+
+def _vat_structural_ok(prefix: str, suffix: str) -> bool:
+    if prefix in _VAT_FIXED_RULES:
+        return any(_vat_fixed_ok(p, suffix) for p in _VAT_FIXED_RULES[prefix])
+    if prefix in _VAT_DIGITS_RULES:
+        lo, hi = _VAT_DIGITS_RULES[prefix]
+        return lo <= len(suffix) <= hi and suffix.isascii() and suffix.isdigit()
+    return False
+
+
+def _vat_de_checksum_ok(digits: str) -> bool:
+    if len(digits) != 9:
+        return False
+    d = [ord(c) - ord("0") for c in digits]
+    p = 10
+    for i in range(8):
+        m = (d[i] + p) % 10
+        if m == 0:
+            m = 10
+        p = (2 * m) % 11
+    check = 11 - p
+    if check == 10:
+        check = 0
+    return check == d[8]
+
+
+def _vat_it_checksum_ok(digits: str) -> bool:
+    if len(digits) != 11:
+        return False
+    d = [ord(c) - ord("0") for c in digits]
+    total = 0
+    for i in range(10):
+        if i % 2 == 0:
+            total += d[i]
+        else:
+            x = d[i] * 2
+            total += x - 9 if x > 9 else x
+    check = (10 - (total % 10)) % 10
+    return check == d[10]
+
+
+def _vat_split_prefix(val: str) -> tuple[str, str] | None:
+    t = _cc_strip_sep(val).upper()
+    if len(t) < 3 or not (t[0].isascii() and t[0].isalpha() and t[1].isascii() and t[1].isalpha()):
+        return None
+    return t[0:2], t[2:]
+
+
+def _vat_validate_py(val: str | None) -> bool | None:
+    if val is None:
+        return None
+    split = _vat_split_prefix(val)
+    if split is None:
+        return False
+    prefix, suffix = split
+    if not _vat_structural_ok(prefix, suffix):
+        return False
+    if prefix == "DE":
+        return _vat_de_checksum_ok(suffix)
+    if prefix == "IT":
+        return _vat_it_checksum_ok(suffix)
+    return True
+
+
+def _vat_format_py(val: str | None) -> str | None:
+    if val is None:
+        return None
+    if not _vat_validate_py(val):
+        return None
+    return _cc_strip_sep(val).upper()
+
+
+@register_transform(
+    name="vat_validate",
+    input_types=["identifier", "string"],
+    auto_apply=False,
+    priority=50,
+    mode="series",
+)
+def vat_validate(series: pl.Series) -> pl.Series:
+    """Validate an EU VAT number: structural check (country prefix + length +
+    charset) for all 27 supported member-state prefixes, plus a checksum for
+    DE (ISO 7064 mod 11,10) and IT (partita IVA Luhn) -- see the
+    CHECKSUM COVERAGE note above this section for the bound."""
+    native = vat_validate_native()
+    if native is not None:
+        return native(series)
+    return series.map_elements(_vat_validate_py, return_dtype=pl.Boolean)
+
+
+@register_transform(
+    name="vat_format",
+    input_types=["identifier", "string"],
+    auto_apply=False,
+    priority=50,
+    mode="series",
+)
+def vat_format(series: pl.Series) -> pl.Series:
+    """Normalize a valid EU VAT number to its compact uppercase form (prefix
+    kept, separators stripped); ``null`` for invalid input."""
+    native = vat_format_native()
+    if native is not None:
+        return native(series)
+    return series.map_elements(_vat_format_py, return_dtype=pl.Utf8)
 
 
 @register_transform(

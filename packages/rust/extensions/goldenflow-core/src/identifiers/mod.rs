@@ -5,7 +5,7 @@ pub mod ean;
 pub mod iban;
 pub mod isbn;
 pub mod luhn;
-// (vat added in later tasks)
+pub mod vat;
 
 /// Remove ASCII spaces, '-' and '.' — the separators identifiers tolerate.
 pub(crate) fn strip_sep(s: &str) -> String {

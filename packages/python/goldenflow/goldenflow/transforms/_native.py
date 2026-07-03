@@ -219,3 +219,34 @@ def _ean_kernel_runner(attr: str) -> Callable[[pl.Series], pl.Series] | None:
 
 def ean_validate_native() -> Callable[[pl.Series], pl.Series] | None:
     return _ean_kernel_runner("ean_validate_arrow")
+
+
+def _vat_kernel_runner(attr: str) -> Callable[[pl.Series], pl.Series] | None:
+    """Build a whole-series runner for EU VAT kernel function ``attr`` if
+    native ``vat`` is enabled and the dependencies are importable; else
+    ``None``. Like ``_ean_kernel_runner`` -- no region/gating args, the
+    structural + DE/IT checksum checks are region-free (the region is
+    encoded in the input's own country prefix)."""
+    if not native_enabled("vat"):
+        return None
+    nm = native_module()
+    if nm is None or not hasattr(nm, attr):
+        return None
+    try:
+        import pyarrow  # noqa: F401  (zero-copy bridge)
+    except ImportError:
+        return None
+    func = getattr(nm, attr)
+
+    def run(s: pl.Series) -> pl.Series:
+        return pl.from_arrow(func(s.to_arrow()))
+
+    return run
+
+
+def vat_validate_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _vat_kernel_runner("vat_validate_arrow")
+
+
+def vat_format_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _vat_kernel_runner("vat_format_arrow")

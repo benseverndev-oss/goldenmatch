@@ -84,3 +84,23 @@
 {"transform": "ean_validate", "input": "40063813339a1", "expected": false}
 {"transform": "ean_validate", "input": "", "expected": false}
 {"transform": "ean_validate", "input": null, "expected": null}
+{"transform": "vat_validate", "input": "DE136695976", "expected": true}
+{"transform": "vat_validate", "input": "de 136 695 976", "expected": true}
+{"transform": "vat_validate", "input": "IT00743110157", "expected": true}
+{"transform": "vat_validate", "input": "NL004495445B01", "expected": true}
+{"transform": "vat_validate", "input": "ATU13585627", "expected": true}
+{"transform": "vat_validate", "input": "FR12345678901", "expected": true}
+{"transform": "vat_validate", "input": "RO12", "expected": true}
+{"transform": "vat_validate", "input": "DE136695970", "expected": false}
+{"transform": "vat_validate", "input": "IT00743110150", "expected": false}
+{"transform": "vat_validate", "input": "ZZ123", "expected": false}
+{"transform": "vat_validate", "input": "DE12345", "expected": false}
+{"transform": "vat_validate", "input": "GR123456789", "expected": false}
+{"transform": "vat_validate", "input": "", "expected": false}
+{"transform": "vat_validate", "input": null, "expected": null}
+{"transform": "vat_format", "input": "de 136 695 976", "expected": "DE136695976"}
+{"transform": "vat_format", "input": "NL004495445B01", "expected": "NL004495445B01"}
+{"transform": "vat_format", "input": "DE136695970", "expected": null}
+{"transform": "vat_format", "input": "ZZ123", "expected": null}
+{"transform": "vat_format", "input": "", "expected": null}
+{"transform": "vat_format", "input": null, "expected": null}
