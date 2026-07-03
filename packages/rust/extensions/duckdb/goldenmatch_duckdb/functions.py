@@ -197,6 +197,12 @@ def register(con: duckdb.DuckDBPyConnection) -> None:
     from goldenmatch_duckdb.core_kernels import register_core_kernel_functions
     register_core_kernel_functions(con)
 
+    # goldenmatch_hnsw_pairs: native HNSW ANN blocking over an aggregated
+    # embedding column (goldenhnsw kernel via the optional goldenmatch-hnsw
+    # wheel, else a numpy brute fallback). See `hnsw_kernels.py`.
+    from goldenmatch_duckdb.hnsw_kernels import register_hnsw_functions
+    register_hnsw_functions(con)
+
 
 # ── Implementation ──────────────────────────────────────────────────────
 
