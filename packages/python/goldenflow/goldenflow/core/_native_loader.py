@@ -74,6 +74,8 @@ _COMPONENT_SYMBOLS: dict[str, tuple[str, ...]] = {
     "iban": ("iban_validate_arrow",),
     # isbn: ISBN-10/13 checksum identifiers -- floor symbol only, region-free.
     "isbn": ("isbn_validate_arrow",),
+    # ean: EAN/UPC (GTIN mod-10) identifiers -- floor symbol only, region-free.
+    "ean": ("ean_validate_arrow",),
 }
 
 # Components whose only native path is intentionally non-authoritative (the

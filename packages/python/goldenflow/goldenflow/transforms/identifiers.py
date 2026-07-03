@@ -9,6 +9,7 @@ from goldenflow.transforms._native import (
     cc_format_native,
     cc_mask_native,
     cc_validate_native,
+    ean_validate_native,
     iban_format_native,
     iban_validate_native,
     isbn_normalize_native,
@@ -348,6 +349,53 @@ def isbn_normalize(series: pl.Series) -> pl.Series:
     if native is not None:
         return native(series)
     return series.map_elements(_isbn_normalize_py, return_dtype=pl.Utf8)
+
+
+# --- EAN/UPC (GTIN mod-10) identifiers --------------------------------------
+#
+# Pure-Python reference for goldenflow-core's ``identifiers::ean`` kernel.
+# MUST reproduce the Rust kernel byte-for-byte (asserted by
+# tests/transforms/test_identifiers_parity.py over
+# tests/parity/identifiers_corpus.jsonl) -- same separator strip, same length
+# band (8/12/13), same GTIN mod-10 check. Validate-only -- no format/normalize.
+
+
+def _ean_gtin_checksum_ok(t: str) -> bool:
+    if not t.isascii() or not t.isdigit():
+        return False
+    data, check = t[:-1], t[-1]
+    check_digit = ord(check) - ord("0")
+    total = 0
+    for i, c in enumerate(reversed(data)):
+        d = ord(c) - ord("0")
+        weight = 3 if i % 2 == 0 else 1
+        total += d * weight
+    computed = (10 - (total % 10)) % 10
+    return computed == check_digit
+
+
+def _ean_validate_py(val: str | None) -> bool | None:
+    if val is None:
+        return None
+    t = _cc_strip_sep(val)
+    if len(t) not in (8, 12, 13):
+        return False
+    return _ean_gtin_checksum_ok(t)
+
+
+@register_transform(
+    name="ean_validate",
+    input_types=["identifier", "string"],
+    auto_apply=False,
+    priority=50,
+    mode="series",
+)
+def ean_validate(series: pl.Series) -> pl.Series:
+    """Validate an EAN-8, UPC-A, or EAN-13 via its GTIN mod-10 checksum."""
+    native = ean_validate_native()
+    if native is not None:
+        return native(series)
+    return series.map_elements(_ean_validate_py, return_dtype=pl.Boolean)
 
 
 @register_transform(

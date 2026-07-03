@@ -3,7 +3,7 @@
 use crate::util::{map_str_to_bool, map_str_to_str};
 use arrow::array::ArrayData;
 use arrow::pyarrow::PyArrowType;
-use goldenflow_core::identifiers::{iban, isbn, luhn};
+use goldenflow_core::identifiers::{ean, iban, isbn, luhn};
 use pyo3::prelude::*;
 
 #[pyfunction]
@@ -66,4 +66,14 @@ pub fn isbn_normalize_arrow(
         array.0,
         isbn::isbn_normalize,
     )?))
+}
+
+#[pyfunction]
+pub fn ean_validate_arrow(
+    py: Python,
+    array: PyArrowType<ArrayData>,
+) -> PyResult<PyArrowType<ArrayData>> {
+    Ok(PyArrowType(map_str_to_bool(py, array.0, |s| {
+        Some(ean::ean_validate(s))
+    })?))
 }

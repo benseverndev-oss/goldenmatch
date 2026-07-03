@@ -3,6 +3,7 @@ from goldenflow.transforms.identifiers import (
     cc_format,
     cc_mask,
     cc_validate,
+    ean_validate,
     ein_format,
     iban_format,
     iban_validate,
@@ -208,3 +209,31 @@ def test_isbn_normalize_to_isbn13():
     assert result[3] == "9780306406157"
     assert result[4] is None
     assert result[5] is None
+
+
+# --- EAN/UPC (GTIN mod-10) identifiers --------------------------------------
+
+
+def test_ean_validate_valid_and_invalid():
+    s = pl.Series(
+        "ean",
+        [
+            "4006381333931",  # EAN-13
+            "73513537",  # EAN-8
+            "036000291452",  # UPC-A
+            "4006381333930",  # bad check digit
+            "12345",  # wrong length
+            "40063813339a1",  # non-digit
+            "",  # empty
+            None,  # null
+        ],
+    )
+    result = ean_validate(s)
+    assert result[0] is True
+    assert result[1] is True
+    assert result[2] is True
+    assert result[3] is False
+    assert result[4] is False
+    assert result[5] is False
+    assert result[6] is False
+    assert result[7] is None

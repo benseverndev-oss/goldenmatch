@@ -74,3 +74,13 @@
 {"transform": "isbn_normalize", "input": "12345", "expected": null}
 {"transform": "isbn_normalize", "input": "", "expected": null}
 {"transform": "isbn_normalize", "input": null, "expected": null}
+{"transform": "ean_validate", "input": "4006381333931", "expected": true}
+{"transform": "ean_validate", "input": "73513537", "expected": true}
+{"transform": "ean_validate", "input": "036000291452", "expected": true}
+{"transform": "ean_validate", "input": "400 6381 3339 31", "expected": true}
+{"transform": "ean_validate", "input": "0-36000-29145-2", "expected": true}
+{"transform": "ean_validate", "input": "4006381333930", "expected": false}
+{"transform": "ean_validate", "input": "12345", "expected": false}
+{"transform": "ean_validate", "input": "40063813339a1", "expected": false}
+{"transform": "ean_validate", "input": "", "expected": false}
+{"transform": "ean_validate", "input": null, "expected": null}

@@ -17,6 +17,7 @@ from goldenflow.transforms.identifiers import (
     cc_format,
     cc_mask,
     cc_validate,
+    ean_validate,
     iban_format,
     iban_validate,
     isbn_normalize,
@@ -33,6 +34,7 @@ _TRANSFORMS = {
     "iban_format": iban_format,
     "isbn_validate": isbn_validate,
     "isbn_normalize": isbn_normalize,
+    "ean_validate": ean_validate,
 }
 
 # Floor native symbol per transform's component -- used to skip a row when the
@@ -46,6 +48,7 @@ _NATIVE_FLOOR_SYMBOL = {
     "iban_format": "iban_validate_arrow",
     "isbn_validate": "isbn_validate_arrow",
     "isbn_normalize": "isbn_validate_arrow",
+    "ean_validate": "ean_validate_arrow",
 }
 
 

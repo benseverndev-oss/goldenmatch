@@ -192,3 +192,30 @@ def isbn_validate_native() -> Callable[[pl.Series], pl.Series] | None:
 
 def isbn_normalize_native() -> Callable[[pl.Series], pl.Series] | None:
     return _isbn_kernel_runner("isbn_normalize_arrow")
+
+
+def _ean_kernel_runner(attr: str) -> Callable[[pl.Series], pl.Series] | None:
+    """Build a whole-series runner for EAN/UPC kernel function ``attr`` if
+    native ``ean`` is enabled and the dependencies are importable; else
+    ``None``. Like ``_cc_kernel_runner``/``_iban_kernel_runner``/
+    ``_isbn_kernel_runner`` -- no region/gating args, the GTIN checksum is
+    region-free."""
+    if not native_enabled("ean"):
+        return None
+    nm = native_module()
+    if nm is None or not hasattr(nm, attr):
+        return None
+    try:
+        import pyarrow  # noqa: F401  (zero-copy bridge)
+    except ImportError:
+        return None
+    func = getattr(nm, attr)
+
+    def run(s: pl.Series) -> pl.Series:
+        return pl.from_arrow(func(s.to_arrow()))
+
+    return run
+
+
+def ean_validate_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _ean_kernel_runner("ean_validate_arrow")

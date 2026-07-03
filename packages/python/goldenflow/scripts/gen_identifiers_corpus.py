@@ -32,6 +32,7 @@ from goldenflow.transforms.identifiers import (  # noqa: E402
     _cc_format_py,
     _cc_mask_py,
     _cc_validate_py,
+    _ean_validate_py,
     _iban_format_py,
     _iban_validate_py,
     _isbn_normalize_py,
@@ -132,6 +133,18 @@ _CASES: list[tuple[str, str | None]] = [
     ("isbn_normalize", "12345"),  # wrong length
     ("isbn_normalize", ""),
     ("isbn_normalize", None),
+    # --- ean_validate: valid ---
+    ("ean_validate", "4006381333931"),  # EAN-13
+    ("ean_validate", "73513537"),  # EAN-8
+    ("ean_validate", "036000291452"),  # UPC-A
+    ("ean_validate", "400 6381 3339 31"),  # EAN-13, spaced
+    ("ean_validate", "0-36000-29145-2"),  # UPC-A, dashed
+    # --- ean_validate: invalid ---
+    ("ean_validate", "4006381333930"),  # bad check digit
+    ("ean_validate", "12345"),  # wrong length
+    ("ean_validate", "40063813339a1"),  # non-digit
+    ("ean_validate", ""),  # empty
+    ("ean_validate", None),  # null
 ]
 
 _PY_FN = {
@@ -142,6 +155,7 @@ _PY_FN = {
     "iban_format": _iban_format_py,
     "isbn_validate": _isbn_validate_py,
     "isbn_normalize": _isbn_normalize_py,
+    "ean_validate": _ean_validate_py,
 }
 
 _NATIVE_ARROW_FN = {
@@ -152,6 +166,7 @@ _NATIVE_ARROW_FN = {
     "iban_format": "iban_format_arrow",
     "isbn_validate": "isbn_validate_arrow",
     "isbn_normalize": "isbn_normalize_arrow",
+    "ean_validate": "ean_validate_arrow",
 }
 
 
