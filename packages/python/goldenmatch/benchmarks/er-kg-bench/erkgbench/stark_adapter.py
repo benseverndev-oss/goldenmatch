@@ -48,7 +48,7 @@ def load_stark_kb(name: str, *, split: str = "test", limit_queries: int | None =
                "colbert.searcher", "gritlm", "mteb", "sentence_transformers", "transformers",
                "rank_bm25", "nltk", "nltk.corpus", "nltk.stem", "nltk.tokenize", "bs4",
                "langchain", "langchain.text_splitter", "langchain_text_splitters",
-               "gensim", "spacy", "unidecode"):
+               "gensim", "spacy", "unidecode", "langdetect"):
         sys.modules.setdefault(_m, MagicMock())
     from stark_qa import load_qa, load_skb
 
