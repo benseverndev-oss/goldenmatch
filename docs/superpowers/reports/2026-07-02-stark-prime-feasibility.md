@@ -3,10 +3,19 @@
 **Question:** does goldengraph's ingest + retrieve path run at STaRK scale, and
 does the graph earn its place over a pure-dense baseline?
 
-**Answer: YES on both, at PRIME scale.** Ingest + retrieve runs cleanly on
-129,375 nodes / 8.1M edges; the 1-hop graph walk lifts recall@20 +39% and MRR
-+17% over dense-only. Run on Modal (A10G, 64GB), `snap-stanford/stark` PRIME,
-200 test queries, Ollama `nomic-embed-text`.
+**Answers.** Feasibility: **YES** — ingest + retrieve runs cleanly on 129,375
+nodes / 8.1M edges. Does the graph earn its place: **NO on vanilla PRIME once the
+dense baseline is FAIR.** The initial "graph +39% recall@20" held only against a
+name-only dense baseline; when dense embeds each node's intrinsic description, it
+nearly doubles and the naive 1-hop walk provides no net benefit (recall@20 −18%).
+See "Fair-baseline follow-up" below — this is the load-bearing correction, and it
+redirects to the ER-moat experiment (alias-injected STaRK). Run on Modal (A10G,
+64GB), `snap-stanford/stark` PRIME, 200 test queries, Ollama `nomic-embed-text`.
+
+> The "names-mode" numbers below (§Raw numbers / §Findings 1-4) are the FIRST run
+> and are superseded on the retrieval-quality question by the fair-baseline
+> follow-up. They remain valid for FEASIBILITY (ingest/RAM/scale) and as the
+> weak-baseline half of the A/B.
 
 ## Raw numbers
 
@@ -84,3 +93,65 @@ Entry: `scripts/distill/modal_stark.py` (`modal run --detach ... --kb prime --sa
 Eight Modal-harness fixes were needed to get `stark_qa` importable without its
 retrieval-baseline dependency tree (see the PR #1399 commit history); the
 box-tested `bulk_load` + metrics code was unchanged throughout.
+
+---
+
+## Fair-baseline follow-up (the load-bearing correction)
+
+**Motivation.** The names-mode "graph +39% recall@20" came against a dense baseline
+that embeds only node NAMES — it cannot see a node's description, so it misses
+answers the 1-hop walk then recovers. That is a handicapped baseline. The honest
+test: embed each node's INTRINSIC document (`get_doc_info(add_rel=False)` = name +
+description, NO relations, so the graph walk stays the ONLY structural signal) and
+ask whether the graph delta SURVIVES. Same run (`--text-mode full`), same PRIME,
+same 200 queries, same machine.
+
+| metric | names-dense | names-graph | **text-dense** | **text-graph** |
+|--------|-------------|-------------|----------------|----------------|
+| hit@1 | 0.035 | 0.035 | **0.085** | 0.085 |
+| hit@5 | 0.145 | 0.145 | **0.230** | 0.230 |
+| recall@20 | 0.144 | 0.200 (+39%) | **0.261** | 0.213 (**−18%**) |
+| MRR | 0.077 | 0.090 (+17%) | **0.151** | 0.150 (flat) |
+
+(text run: load 44.2s, bulk_load 34.8s @ 11.0GB, EntityIndex.build 1123s — longer
+docs embed slower than names; peak RSS 11.3GB.)
+
+**Finding 1 — a fair dense baseline is far stronger.** Embedding the intrinsic doc
+nearly doubles dense: recall@20 0.144→0.261 (+81%), hit@1 0.035→0.085 (2.4x), MRR
+0.077→0.151 (~2x). The name-only baseline was badly handicapped.
+
+**Finding 2 — the graph delta does not survive; it INVERTS.** Against fair dense,
+the naive 1-hop walk gives **no net benefit and hurts recall@20 (−18%: 0.213 vs
+0.261)**; MRR is flat. hit@1/hit@5 identical (the top-5 seeds are unchanged). So
+the earlier +39% was **entirely a weak-baseline artifact**.
+
+**Mechanism.** The graph arm ranks `top-5 seeds ++ all their 1-hop neighbors`
+(deduped). When dense is strong, the top-20 dense hits are already good; flooding
+in unranked neighbors after only 5 seeds displaces good dense hits at ranks 6-20
+with structurally-adjacent-but-irrelevant nodes → recall@20 drops. First-hit rank
+is unchanged → MRR flat, hit@1/5 unchanged.
+
+**Conclusion.** On **vanilla** STaRK-PRIME, with a fair dense baseline, the graph
+walk does **not** earn its place. This is expected and honest: vanilla STaRK is
+**pre-resolved and text-rich**, so structure adds nothing over strong text. It does
+NOT refute the program thesis — it sharpens it. The graph's value must be shown
+where text retrieval BREAKS: the **ER-moat experiment (alias-injected STaRK)** —
+inject alias/duplicate noise so the text signal fragments and dense collapses, and
+resolved-graph structure is the only way to recover the answer. This negative is
+the strongest argument for running the moat experiment next.
+
+**Caveat on the graph arm itself.** The 1-hop expansion here is naive (top-5 seeds,
+unranked neighbor flood). A smarter arm — rank neighbors by dense score, expand only
+when dense confidence is low, or cap by degree — might not hurt. But the clean
+finding stands: naive structural expansion does not beat strong dense on vanilla,
+pre-resolved, text-rich STaRK.
+
+## Revised next step
+
+- **NOT the AMAZON scale rung** (it would only re-run the same weak-vs-fair question
+  at 10x cost). Scale/OOM is an engineering data point available anytime.
+- **The ER-moat experiment: alias-injected STaRK.** Corrupt a real STaRK KB with
+  duplicate/alias nodes (mirror the homograph injection), run ad-hoc-dedup vs
+  ER-native ingest, and measure whether resolved-graph retrieval recovers quality
+  that fragmented-text dense loses. That is the battlefield where the graph is the
+  only way to win — the test vanilla STaRK cannot provide.
