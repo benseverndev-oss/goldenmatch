@@ -18,22 +18,24 @@ class MemoryLearner:
         store: MemoryStore,
         threshold_min: int = 10,
         weights_min: int = 50,
+        dataset: str | None = None,
     ) -> None:
         self._store = store
         self._threshold_min = threshold_min
         self._weights_min = weights_min
+        self._dataset = dataset
 
     def has_new_corrections(self) -> bool:
         """True if corrections exist since the last learning pass."""
         last = self._store.last_learn_time()
         if last is None:
-            return self._store.count_corrections() > 0
-        since = self._store.corrections_since(last)
+            return self._store.count_corrections(dataset=self._dataset) > 0
+        since = self._store.corrections_since(last, dataset=self._dataset)
         return len(since) > 0
 
     def learn(self, matchkey_name: str | None = None) -> list[LearnedAdjustment]:
         """Run learning pass. Returns list of learned adjustments."""
-        all_corrections = self._store.get_corrections()
+        all_corrections = self._store.get_corrections(dataset=self._dataset)
         if not all_corrections:
             return []
 
@@ -69,8 +71,9 @@ class MemoryLearner:
                 field_weights=field_weights,
                 sample_size=len(corrections),
                 learned_at=datetime.now(),
+                dataset=self._dataset,
             )
-            self._store.save_adjustment(adj)
+            self._store.save_adjustment(adj, dataset=self._dataset)
             results.append(adj)
 
         return results

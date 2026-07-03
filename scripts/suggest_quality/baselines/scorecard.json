@@ -1,0 +1,98 @@
+{
+  "datasets": {
+    "anchor_person_match": {
+      "baseline_f1": 0.989556,
+      "convergence_final_f1": 1.0,
+      "convergence_steps": 1,
+      "error": null,
+      "gt_pairs": 379,
+      "kind": "anchor",
+      "n_suggestions": 1,
+      "name": "anchor_person_match",
+      "native_available": true,
+      "rank_corr": null,
+      "rows": 706,
+      "suggested_order_lifts": [
+        0.010444
+      ],
+      "suggester_prec": 1.0
+    },
+    "anchor_shared_email": {
+      "baseline_f1": null,
+      "convergence_final_f1": null,
+      "convergence_steps": 0,
+      "error": null,
+      "gt_pairs": 0,
+      "kind": "anchor",
+      "n_suggestions": 2,
+      "name": "anchor_shared_email",
+      "native_available": true,
+      "rank_corr": null,
+      "rows": 30,
+      "suggested_order_lifts": [
+        null,
+        null
+      ],
+      "suggester_prec": 1.0
+    },
+    "anchor_sparse_zip": {
+      "baseline_f1": null,
+      "convergence_final_f1": null,
+      "convergence_steps": 0,
+      "error": null,
+      "gt_pairs": 0,
+      "kind": "anchor",
+      "n_suggestions": 1,
+      "name": "anchor_sparse_zip",
+      "native_available": true,
+      "rank_corr": null,
+      "rows": 20000,
+      "suggested_order_lifts": [
+        null
+      ],
+      "suggester_prec": 1.0
+    },
+    "ncvr_synthetic": {
+      "baseline_f1": 0.982804,
+      "convergence_final_f1": 0.982804,
+      "convergence_steps": 0,
+      "error": null,
+      "gt_pairs": 2500,
+      "kind": "real",
+      "n_suggestions": 0,
+      "name": "ncvr_synthetic",
+      "native_available": true,
+      "rank_corr": null,
+      "rows": 7500,
+      "suggested_order_lifts": [],
+      "suggester_prec": 1.0
+    },
+    "synthetic": {
+      "baseline_f1": 0.988662,
+      "convergence_final_f1": 0.988662,
+      "convergence_steps": 0,
+      "error": null,
+      "gt_pairs": 218,
+      "kind": "real",
+      "n_suggestions": 0,
+      "name": "synthetic",
+      "native_available": true,
+      "rank_corr": null,
+      "rows": 373,
+      "suggested_order_lifts": [],
+      "suggester_prec": 1.0
+    }
+  },
+  "meta": {
+    "datasets_run": [
+      "anchor_person_match",
+      "anchor_shared_email",
+      "anchor_sparse_zip",
+      "ncvr_synthetic",
+      "synthetic"
+    ],
+    "datasets_skipped": {},
+    "git_sha": "db0c761cdc69c3bc60a07608ec7f974e65cce531",
+    "native_version": "0.1.5"
+  }
+}

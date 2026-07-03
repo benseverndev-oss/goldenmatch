@@ -335,6 +335,13 @@ class MongoIdentityStore:
     # ----- events ------------------------------------------------------
 
     def emit_event(self, event: IdentityEvent) -> int | None:
+        # Tamper-evidence (#1078): stamp the per-event content hash. The seal
+        # chain (seal_audit_log/verify_audit_chain) is not supported on mongo,
+        # but the per-event hash carries through so a future mongo seal backend
+        # finds it already populated.
+        from goldenmatch.identity.audit import event_content_hash  # noqa: PLC0415
+        if event.entry_hash is None:
+            event.entry_hash = event_content_hash(event)
         doc = {
             "entity_id": event.entity_id,
             "kind": event.kind,
@@ -343,6 +350,10 @@ class MongoIdentityStore:
             "dataset": event.dataset,
             "actor": event.actor,
             "trust": event.trust,
+            "claim_type": event.claim_type,
+            "evidence_ref": event.evidence_ref,
+            "previous_claim_id": event.previous_claim_id,
+            "entry_hash": event.entry_hash,
             "recorded_at": event.recorded_at,
         }
         result = self._db[_EVENTS].insert_one(doc)
@@ -466,6 +477,10 @@ def _to_event(d: dict[str, Any]) -> IdentityEvent:
         dataset=d.get("dataset"),
         actor=d.get("actor"),
         trust=d.get("trust"),
+        claim_type=d.get("claim_type"),
+        evidence_ref=d.get("evidence_ref"),
+        previous_claim_id=d.get("previous_claim_id"),
+        entry_hash=d.get("entry_hash"),
         recorded_at=d.get("recorded_at") or datetime.now(),
         event_id=_objectid_to_int(d.get("_id")) if d.get("_id") else None,
     )

@@ -15,13 +15,15 @@ a column's *distinct* values (a small set for the categorical columns it
 targets), with trigram + prefix blocking and a Levenshtein-ratio scorer.
 
 Native (``goldencheck[native]``) runs the blocking + pairwise edit distance in
-Rust -- pairwise Levenshtein is the part that is slow in Python, so this kernel
-genuinely beats the fallback. The pure-Python fallback (used when the ext is
-absent) computes the same clusters with the same algorithm via difflib.
+Rust. The Python fallback (used when the ext is absent) computes the same
+clusters with the same trigram/prefix blocking and the same ``1 - dist/maxlen``
+Levenshtein-ratio metric, scored with rapidfuzz's C Levenshtein (~38x over the
+old pure-Python DP), so the two paths agree.
 """
 from __future__ import annotations
 
 import polars as pl
+from rapidfuzz.distance import Levenshtein as _RFLevenshtein
 
 from goldencheck.core._native_loader import native_enabled, native_module
 from goldencheck.models.finding import Finding, Severity
@@ -75,27 +77,15 @@ def _python_clusters(values: list[str], min_similarity: float) -> list[list[int]
             x = parent[x]
         return x
 
-    def levenshtein(a: str, b: str) -> int:
-        if not a:
-            return len(b)
-        if not b:
-            return len(a)
-        prev = list(range(len(b) + 1))
-        for i, ca in enumerate(a):
-            cur = [i + 1]
-            for j, cb in enumerate(b):
-                cost = 0 if ca == cb else 1
-                cur.append(min(prev[j + 1] + 1, cur[j] + 1, prev[j] + cost))
-            prev = cur
-        return prev[len(b)]
-
     def lev_ratio(a: str, b: str) -> float:
-        # Identical metric to goldencheck_core::similarity, so the fallback
-        # clusters match the native kernel exactly.
+        # `1 - dist/maxlen`, the identical metric to goldencheck_core::similarity,
+        # so this Python path clusters match the native kernel exactly. Backed by
+        # rapidfuzz's C Levenshtein (~38x over the old pure-Python DP); rapidfuzz
+        # is a goldencheck dependency (same pin as the rest of the suite).
         maxlen = max(len(a), len(b))
         if maxlen == 0:
             return 1.0
-        return 1.0 - levenshtein(a, b) / maxlen
+        return 1.0 - _RFLevenshtein.distance(a, b) / maxlen
 
     linked = False
     for i, j in candidates:

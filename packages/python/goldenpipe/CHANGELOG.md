@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.3.0 (2026-06-24)
+
+**Analysis reporting + a live TUI.** GoldenPipe gains an optional terminal reporting stage so one chain runs `Check -> Flow -> Match -> Identity -> Analysis`, and the 4-tab TUI is now wired to the real pipeline.
+
+### Added
+
+- **New stage `goldenanalysis.report`** registered at the `goldenpipe.stages` entry-point. Read-only terminal stage that runs `goldenanalysis` over the run's accumulated artifacts (`clusters`, `scored_pairs`, `match_stats`, `findings`, `manifest`, `identity_summary`) and attaches an `analysis_report` artifact. Writes only that one artifact and never mutates the data or any store; only `df` is hard-required, so it works on any pipeline and degrades to whatever artifacts are present. A reporting failure is logged and returns `FAILED` for the stage; it never breaks the run. (#819)
+- **New extras**: `goldenpipe[analysis]` (pulls `goldenanalysis>=0.1.0`); `goldenpipe[golden-suite]` now includes `goldenanalysis>=0.1.0` so the full-suite extra installs the reporting stage.
+- **`goldenpipe interactive` now accepts an optional `SOURCE` data file** and `-c/--config` YAML config (was no-arg). The TUI loads the source and runs it through `goldenpipe.run` on `r`. (#776)
+
+### Changed
+
+- **The 4-tab TUI is wired to the real pipeline.** Pressing `r` runs the loaded source in a worker thread and populates all four tabs from the `PipeResult` (Pipeline status + timing, Config, Results artifacts, Log). Previously the tabs were empty placeholders. (#776)
+
+### Fixed
+
+- The FastAPI app and `/health` endpoint now report the real package version (`goldenpipe.__version__`) instead of a hardcoded `1.0.0`. (#903)
+
 ## 1.2.1 (2026-06-01)
 
 ### Fixed

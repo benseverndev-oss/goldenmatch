@@ -67,7 +67,14 @@ def dedupe_cmd(
     config: str | None = typer.Option(
         None, "--config", "-c", help="Path to YAML config file (optional - auto-detects if omitted)"
     ),
-    no_tui: bool = typer.Option(False, "--no-tui", help="Skip TUI, run with auto-config directly"),
+    tui: bool = typer.Option(
+        False, "--tui",
+        help="Open the interactive review TUI instead of running directly (auto-config path only).",
+    ),
+    no_tui: bool = typer.Option(
+        False, "--no-tui",
+        help="Deprecated: non-interactive is now the default. Accepted for back-compat (no-op).",
+    ),
     model: str | None = typer.Option(None, "--model", help="Override embedding model selection"),
     preview: bool = typer.Option(False, "--preview", help="Preview results without writing files"),
     preview_size: int = typer.Option(10000, "--preview-size", help="Number of records for preview sample"),
@@ -113,10 +120,22 @@ def dedupe_cmd(
         "--show-controller/--hide-controller",
         help="Render AutoConfigController telemetry (stop_reason, decisions, Path Y) when auto-config ran. No-op for runs with an explicit --config.",
     ),
+    suggest: bool = typer.Option(
+        False, "--suggest",
+        help="Show verified config-improvement suggestions for this run.",
+    ),
+    heal: bool = typer.Option(
+        False, "--heal",
+        help="Apply the suggestion heal loop and print the applied trail.",
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress output"),
 ) -> None:
     """Run deduplication on one or more input files."""
+    # Whether this run resolved its config via auto-config (zero-config path).
+    # The default-run healer hint only fires here -- the free trigger reads the
+    # controller history that only the auto-config path produces.
+    _used_autoconfig = False
     # Telemetry captured if/when auto_configure runs in this command. Stays
     # None on the explicit-config path; the panel is suppressed in that case.
     _ctrl_profile: object = None
@@ -124,6 +143,33 @@ def dedupe_cmd(
     _ctrl_committed_config: object = None
     # Parse file:source pairs
     parsed_files = [_parse_file_source(f) for f in files]
+
+    # Reject clearly-structured non-tabular inputs early with a helpful message.
+    # Without this a .json/.xml file is routed to the text loader and surfaces as
+    # a confusing "no data to configure on" instead of "this format isn't tabular".
+    _structured_suffixes = {".json", ".jsonl", ".ndjson", ".xml", ".yaml", ".yml"}
+    for _fp, _ in parsed_files:
+        _fp_str = str(_fp)
+        if "://" in _fp_str:
+            continue  # cloud URI -- let the connector decide
+        _suffix = Path(_fp_str).suffix.lower()
+        if _suffix in _structured_suffixes:
+            raise typer.BadParameter(
+                f"{_fp_str!r} looks like a structured non-tabular format "
+                f"({_suffix}). GoldenMatch dedupes tabular files "
+                "(CSV/TSV/Parquet/Excel); convert it to CSV first.",
+                param_hint="FILES",
+            )
+
+    # Positive-value guards on size flags -- a negative/zero value was silently
+    # accepted (benign on tiny data, but a negative chunk size on a real chunked
+    # run is undefined).
+    if chunk_size < 1:
+        raise typer.BadParameter("--chunk-size must be >= 1.", param_hint="--chunk-size")
+    if preview_size < 1:
+        raise typer.BadParameter(
+            "--preview-size must be >= 1.", param_hint="--preview-size"
+        )
 
     # Load config - from file, project settings, or auto-detect
     if config:
@@ -158,6 +204,7 @@ def dedupe_cmd(
                 # auto_configure_df. None on legacy paths that bypass it.
                 _ctrl_profile, _ctrl_history = capture_controller_state()
                 _ctrl_committed_config = cfg
+                _used_autoconfig = True
                 if not quiet:
                     console.print("[green]Auto-config complete. Launching TUI for review...[/green]")
             except Exception as exc:
@@ -172,8 +219,12 @@ def dedupe_cmd(
                         if f.scorer in ("embedding", "record_embedding"):
                             f.model = model
 
-            # Launch TUI for review (unless --no-tui)
-            if not no_tui and not preview:
+            # Launch the interactive TUI only when explicitly requested via
+            # --tui. The default is non-interactive (run auto-config, write
+            # output, print a summary) so `goldenmatch dedupe file.csv` delivers
+            # CSV-in/CSV-out without a full-screen app. --no-tui stays accepted
+            # (now a no-op) for back-compat.
+            if tui and not no_tui and not preview:
                 from goldenmatch.tui.app import GoldenMatchApp
                 file_paths = [fp for fp, _name in parsed_files]
                 tui_app = GoldenMatchApp(files=file_paths)
@@ -230,6 +281,26 @@ def dedupe_cmd(
         output_unique = True
         output_report = True
 
+    # Zero-config default: a bare `goldenmatch dedupe file.csv` (auto-config path,
+    # no explicit output flag) writes golden records by default, so "CSV in ->
+    # CSV out" actually happens without needing --output-golden. Confined to the
+    # auto-config path -- an explicit --config run keeps its exact prior behavior.
+    if (
+        _used_autoconfig
+        and not preview
+        and not merge_preview
+        and not any([
+            output_golden, output_clusters, output_dupes, output_unique,
+            output_report, html_report, dashboard,
+        ])
+    ):
+        output_golden = True
+        if not quiet:
+            console.print(
+                "[dim]No output flag given -- writing golden records by default "
+                "(use --output-all / --output-dir to control, --tui to review).[/dim]"
+            )
+
     # Enable auto-fix from CLI flag
     if auto_fix:
         from goldenmatch.config.schemas import ValidationConfig
@@ -250,8 +321,29 @@ def dedupe_cmd(
     if llm_boost or llm_retrain:
         cfg.llm_boost = True
 
-    # Set backend from CLI flag
+    # Validate --format at parse time. It was only checked at WRITE time, so on a
+    # large dataset the user waited for the entire matching run and then failed at
+    # the last step with an unsupported-format error.
+    if format and format.strip().lower() not in {"csv", "parquet", "xlsx"}:
+        raise typer.BadParameter(
+            f"Unsupported output format {format!r}. Valid: csv, parquet, xlsx.",
+            param_hint="--format",
+        )
+
+    # Set backend from CLI flag (validate first -- an unknown value was silently
+    # accepted and dropped by the auto-planner, so a user opting into a scaling
+    # backend on a 100M-row run got no signal their choice wasn't honored).
     if backend:
+        _valid_backends = {
+            "default", "auto", "bucket", "chunked",
+            "ray", "duckdb", "datafusion", "polars-direct",
+        }
+        if backend.strip().lower() not in _valid_backends:
+            raise typer.BadParameter(
+                f"Unknown backend {backend!r}. "
+                "Valid: default, bucket, chunked, ray, duckdb.",
+                param_hint="--backend",
+            )
         cfg.backend = backend
 
     # Resolve column maps from config input.files section
@@ -332,3 +424,117 @@ def dedupe_cmd(
     elif not quiet:
         clusters = results.get("clusters", {})
         console.print(f"Dedupe complete. {len(clusters)} clusters found.")
+
+    # ── Config-suggestion (healer) surface ──
+    # ADVISORY and additive: a default run prints a one-line hint when the free
+    # trigger surfaced candidates; --suggest prints them; --heal applies the loop
+    # and prints the trail. Wrapped so a healer failure NEVER breaks a dedupe.
+    _emit_healer_surface(
+        file_specs, cfg, results,
+        suggest=suggest, heal=heal, quiet=quiet,
+        used_autoconfig=_used_autoconfig,
+    )
+
+
+def _load_combined_frame(file_specs):
+    """Load + concat the input files into one frame for the advisory healer.
+
+    Mirrors the ingest the dedupe pipeline does (load + optional column_map),
+    but skips source/row-id bookkeeping -- ``dedupe_df`` handles that itself.
+    """
+    import polars as pl
+
+    from goldenmatch.core.ingest import apply_column_map, load_file
+
+    frames = []
+    for spec in file_specs:
+        path = spec[0]
+        col_map = spec[2] if len(spec) == 3 else None
+        lf = load_file(path)
+        if col_map:
+            lf = apply_column_map(lf, col_map)
+        frames.append(lf.collect())
+    if len(frames) == 1:
+        return frames[0]
+    return pl.concat(frames, how="diagonal_relaxed")
+
+
+def _render_suggestion_lines(items) -> list[str]:
+    """One ASCII line per serialized suggestion dict: kind + target + rationale."""
+    lines = []
+    for s in items:
+        kind = s.get("kind", "")
+        target = s.get("target", "")
+        rationale = s.get("rationale", "")
+        lines.append(f"- {kind}: {target} - {rationale}")
+    return lines
+
+
+def _emit_healer_surface(
+    file_specs, cfg, results, *, suggest: bool, heal: bool, quiet: bool, used_autoconfig: bool
+) -> None:
+    """Advisory config-suggestion (healer) surface. NEVER raises.
+
+    Default run (no flags): one-line hint to stderr when the FREE headroom trigger
+    fires on the run that already happened (reads `results["postflight_report"]` --
+    NO second pipeline). Zero-config path only; kill-switch
+    ``GOLDENMATCH_SUGGEST_ON_DEDUPE=0``. ``--suggest``/``--heal`` (opt-in) DO pay a
+    `dedupe_df` re-run, because the file-based `run_dedupe` result carries no
+    `scored_pairs` for the kernel; that cost is accepted by explicit request.
+    """
+    import os
+
+    if not (suggest or heal):
+        # Default hint: FREE trigger only. Respects --quiet + kill-switch + the
+        # zero-config gate (an explicit --config never ran the controller).
+        if quiet or used_autoconfig is False:
+            return
+        if os.environ.get("GOLDENMATCH_SUGGEST_ON_DEDUPE", "1").strip() == "0":
+            return
+        try:
+            from goldenmatch.core.suggest.surface import headroom_signal
+
+            class _R:  # shim so headroom_signal can read .postflight_report
+                postflight_report = (results or {}).get("postflight_report")
+
+            if headroom_signal(_R()) is not None:
+                err_console.print(
+                    "[yellow]Config-improvement suggestions may be available - "
+                    "re-run with --suggest to see them, --heal to apply.[/yellow]"
+                )
+        except Exception:  # noqa: BLE001 - advisory; never break dedupe
+            pass
+        return
+
+    try:
+        from goldenmatch import _api
+
+        df = _load_combined_frame(file_specs)
+
+        if heal:
+            result = _api.dedupe_df(df, config=cfg, heal=True)
+            trail = result.heal_trail or []
+            if trail:
+                console.print(
+                    f"[green]Config healed - {len(trail)} suggestion(s) applied:[/green]"
+                )
+                for line in _render_suggestion_lines(trail):
+                    console.print(line)
+                console.print(
+                    "[dim]Output above reflects the pre-heal config; re-run with "
+                    "the healed config to apply it to the written output.[/dim]"
+                )
+            else:
+                console.print("Healer found nothing to apply - config looks good.")
+        elif suggest:
+            result = _api.dedupe_df(df, config=cfg, suggest=True)
+            items = result.suggestions or []
+            if items:
+                console.print(f"[cyan]{len(items)} suggestion(s):[/cyan]")
+                for line in _render_suggestion_lines(items):
+                    console.print(line)
+            else:
+                console.print("No suggestions - config looks good.")
+    except Exception as exc:  # noqa: BLE001 - healer is advisory; never break dedupe
+        if not quiet:
+            err_console.print(f"[dim]suggestions unavailable: {exc}[/dim]")

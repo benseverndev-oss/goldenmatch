@@ -61,6 +61,7 @@ mod tests {
             typ: "t".into(),
             members: vec![],
             surface_names: vec![format!("E{id}")],
+            source_refs: vec![],
         }
     }
     fn edge(s: EntityId, o: EntityId) -> Edge {

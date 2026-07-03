@@ -11,6 +11,7 @@ Flags: --fast-only (skip the F1 tier), --datasets a,b (filter), --row-cap N
 from __future__ import annotations
 
 import argparse
+import gc
 import os
 import sys
 from pathlib import Path
@@ -25,7 +26,7 @@ _BASELINE = Path(__file__).resolve().parent / "baselines" / "scorecard.json"
 def run(dataset_names: set[str] | None, fast_only: bool, row_cap: int | None):
     """Run the corpus -> (results, skipped). Heavy imports are deferred so
     --native can set GOLDENMATCH_NATIVE before goldenmatch loads."""
-    from scripts.autoconfig_quality.datasets import REGISTRY
+    from scripts.autoconfig_quality.datasets import REGISTRY, effective_row_cap
     from scripts.autoconfig_quality.f1 import evaluate_f1
     from scripts.autoconfig_quality.signals import extract_signals
 
@@ -49,11 +50,23 @@ def run(dataset_names: set[str] | None, fast_only: bool, row_cap: int | None):
         except Exception as e:
             rec["signals"] = {"error": str(e)}  # anchor->FAIL, real->neutral (per diff)
         if not fast_only and gt:
+            cap = effective_row_cap(d, row_cap)
             try:
-                rec["f1"] = evaluate_f1(df, gt, row_cap=row_cap)
+                rec["f1"] = evaluate_f1(df, gt, row_cap=cap)
             except Exception as e:
                 rec["error"] = str(e)  # real F1 error -> neutral (per diff)
+            gc.collect()  # free the default dedupe before the second (FS) dedupe
+            try:  # second strategy: forced Fellegi-Sunter (the routing-lever evidence)
+                rec["f1_probabilistic"] = evaluate_f1(df, gt, row_cap=cap, strategy="probabilistic")
+            except Exception as e:
+                rec["error_probabilistic"] = str(e)  # informational; floored only when present
         results[d.name] = rec
+        # Release each dataset's frame + dedupe intermediates before the next one.
+        # The corpus runs in ONE process; without this, a big dataset's dedupe
+        # (e.g. historical_50k at 50k rows) can fail to allocate on a memory-tight
+        # runner because earlier datasets' frames are still held.
+        del loaded, df, gt
+        gc.collect()
     return results, skipped
 
 

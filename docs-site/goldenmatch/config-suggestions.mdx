@@ -1,0 +1,160 @@
+---
+title: "Config suggestions (the healing loop)"
+description: "GoldenMatch's iterative workflow: zero-config gets good results and returns the config it chose; the healer reviews the results and suggests self-verified tweaks; you apply them, results improve, repeat."
+keywords: ["config suggestions", "healer", "review_config", "iterative", "self-verify", "auto-config", "entity resolution", "typescript", "wasm"]
+---
+
+GoldenMatch is built around one workflow, not a pile of knobs:
+
+<Steps>
+  <Step title="Zero-config first pass">
+    `dedupe_df(df)` runs with **no rules and no training**. Auto-config profiles your data, picks a defensible matching config, and you get good results immediately.
+  </Step>
+  <Step title="You get the config it chose">
+    The chosen config is **returned to you**, inspectable and versionable — never a hidden black box. Keep it, diff it, check it into git.
+  </Step>
+  <Step title="The healer suggests tweaks">
+    `review_config(df, config)` reviews the *results* against the *config that produced them* and emits ranked, explainable edits — lower this threshold, swap that scorer, add negative evidence. Each suggestion is **self-verified**: it is simulated and kept only if it does not worsen an unsupervised health proxy, so a suggestion never makes your results worse.
+  </Step>
+  <Step title="You apply the tweaks">
+    Accept the ones you want with `apply_suggestion(config, suggestion)` → an improved config.
+  </Step>
+  <Step title="Results improve. Repeat.">
+    Re-run with the improved config; loop until the healer goes quiet.
+  </Step>
+</Steps>
+
+**Zero-config gets you most of the way in one pass; the healing loop closes the gap to an expert-tuned config without you having to be the expert.** It is the user-facing expression of two project commitments: *zero-config should embarrass the alternatives*, and *out-of-the-box should approach the hand-tuned expert*.
+
+<Note>
+  The healer is **wired into the default pipeline**. Every `dedupe_df(df)` run now checks a free controller signal (RED/YELLOW health or a score dip) and, only when it fires, attaches cheap raw candidate suggestions to `result.suggestions` — no extra pipeline run on a healthy result. Opt into the expensive verified path with `dedupe_df(df, suggest=True)`, or run the full apply-and-re-run loop with `dedupe_df(df, heal=True)`. The same surface is on CLI (`--suggest` / `--heal`), MCP (`review_config`), A2A, REST, web, and the TUI (Suggestions tab). It requires `goldenmatch[native]` (the suggestion kernel is compiled); without the native wheel every surface **degrades gracefully** — it attaches no suggestions and never raises. Kill-switch: `GOLDENMATCH_SUGGEST_ON_DEDUPE=0`. On the TypeScript surface the same healer is the opt-in `goldenmatch/core/suggest-wasm` subpath (see [TypeScript / WASM](#typescript--wasm) below); without the WASM kernel TS degrades gracefully to empty suggestions.
+</Note>
+
+## The loop in code
+
+```python
+from goldenmatch import dedupe_df
+from goldenmatch.core.suggest import review_config, apply_suggestion
+
+# 1. Zero-config first pass — good results, no rules.
+result = dedupe_df(df)
+
+# 2. You get the config it chose.
+config = result.config
+
+# 3. The healer reviews results vs the config and ranks self-verified tweaks.
+suggestions = review_config(df, config)   # verify=True by default
+
+# 4. Apply the ones you want.
+for s in suggestions:
+    print(s.kind, "->", s.rationale)      # every suggestion explains itself
+    config = apply_suggestion(config, s)
+
+# 5. Re-run; results improve. Repeat until review_config returns nothing.
+result = dedupe_df(df, config=config)
+```
+
+### Or let the pipeline do it for you
+
+The loop above is wired into `dedupe_df` directly, so you don't have to call `review_config` by hand:
+
+```python
+from goldenmatch import dedupe_df
+
+# Default run: free trigger gates a cheap attach. result.suggestions is
+# [] on a healthy result; on a RED/YELLOW or score-dip result it carries
+# raw candidate suggestions (cheap, unverified) you can inspect.
+result = dedupe_df(df)
+for s in result.suggestions:        # serialized dicts: id/kind/target/rationale/verified/patch
+    print(s["kind"], "->", s["rationale"])
+
+# Opt in to the expensive verified path (each candidate simulated through the gate):
+result = dedupe_df(df, suggest=True)
+
+# Or run the full apply-and-re-run loop and read the trail of what changed:
+result = dedupe_df(df, heal=True)
+for step in result.heal_trail or []:
+    print("applied", step["kind"], "->", step["rationale"])
+result.config   # the healed config, ready to persist
+```
+
+The default attach is **free on a healthy result** — the free controller signal short-circuits before the kernel is ever called. Set `GOLDENMATCH_SUGGEST_ON_DEDUPE=0` to turn the surface off entirely.
+
+## What the healer suggests
+
+The suggestion kernel emits ranked, explainable edits, each with a rendered rationale so the loop is **never a black box**:
+
+| Suggestion kind | What it does | Signal it reads |
+|---|---|---|
+| `lower_threshold` | Loosen an over-strict matchkey threshold sitting above the score valley | score-histogram bimodality / sub-threshold mass |
+| `raise_threshold` | Tighten an over-permissive threshold ("everything matches") | mass above the cutoff |
+| `swap_scorer` | Replace a noise-fragile scorer on a corrupted free-text field | per-column corruption / variant rate |
+| `add_negative_evidence` | Add a disagreement penalty on an identity-ish field that collides | in-cluster collision rate |
+
+Blocking-pass and field-weight suggestions are staged for a later kernel version.
+
+## The self-verify gate (why a suggestion never makes things worse)
+
+At suggestion time there is **no ground truth**, so the healer cannot peek at F1. Instead, for each candidate it simulates the edit (apply → re-run) and keeps it only if an **unsupervised health proxy** does not get worse than the current config. That structural guarantee — "no net-negative suggestion" — is what makes the loop safe to run unattended.
+
+The default proxy is **cohesion** (`min_edge` × saturating coverage, cap `0.50`): it rewards clusters held together by strong intra-cluster edges and is sensitive to over-merge, so it correctly keeps precision-improving fixes that a recall-biased proxy would discard. Measured on the suggester gym, switching the gate to this proxy lifted live recovery from **0.15 → 0.54** (matching the raw kernel ceiling — the gate stops discarding correct fixes) with zero net-negatives on real perturbations.
+
+You can change or disable the gate:
+
+| Env var | Default | Effect |
+|---|---|---|
+| `GOLDENMATCH_SUGGEST_ON_DEDUPE` | on | Set `0` to disable the default-pipeline healer surface entirely (no trigger, no attach, on every `dedupe_df`/CLI/server run). |
+| `GOLDENMATCH_SUGGEST_HEALTH` | `cohesion` | Health proxy: `cohesion` (precision-sensitive, default) or `legacy` (recall-biased, the pre-2026-06 default). |
+| `GOLDENMATCH_SUGGEST_COHESION` | `min_edge` | Cohesion statistic: `min_edge`, `mean_bottomk_edge`, or `edge_below_cutoff_fraction`. |
+| `GOLDENMATCH_SUGGEST_COVERAGE_CAP` | `0.50` | Coverage-saturation cap for the cohesion proxy. |
+| `GOLDENMATCH_SUGGEST_VERIFY` | on | Set `0` to disable self-verification (return raw kernel suggestions, unfiltered). |
+| `GOLDENMATCH_SUGGEST_FULL_DIST` | off | Source the kernel's score distribution from a threshold-0 diagnostic run so the dip (`lower_threshold`) rule sees the full pre-threshold tail. |
+
+These are also in the full [tuning reference](/goldenmatch/tuning#config-suggestion-healer-knobs).
+
+## TypeScript / WASM
+
+The healer runs on the TS/JS surface too, via the `suggest-core` kernel compiled to
+WebAssembly (`suggest-wasm`). It is the same pyo3-free kernel
+(`packages/rust/extensions/suggest-core`) as the Python native path, so a suggestion is
+byte-for-byte identical across surfaces. It is wired into `dedupe()` with full parity:
+`dedupe({ suggest })` and `dedupe({ heal })`, the same free trigger, and the same
+bounded heal loop. Every TS surface (core, CLI, MCP `review_config`, A2A
+`review_config` skill) reaches it.
+
+```typescript
+import { dedupe } from "goldenmatch";
+import { enableSuggestWasm } from "goldenmatch/core/suggest-wasm";
+
+// The WASM kernel is OPT-IN — the analog of `pip install goldenmatch[native]`.
+// Until you enable it the healer is gracefully empty (see below).
+enableSuggestWasm();
+
+const free = await dedupe(rows);          // free.suggestions: verified=false
+const verified = await dedupe(rows, { suggest: true });  // verified=true
+const healed = await dedupe(rows, { heal: true });       // healed.config + healTrail
+```
+
+- **Opt-in kernel.** The always-on healer surface reaches the kernel through a tiny
+  lean registry; the heavy WASM module is behind the opt-in subpath
+  `goldenmatch/core/suggest-wasm`. Importing it and calling `enableSuggestWasm()`
+  registers the backend. This is the exact TS analog of the Python `[native]` extra —
+  it keeps default bundles lean (no inlined wasm) and edge-safe. `disableSuggestWasm()`
+  unregisters it again.
+- **Graceful-empty without the kernel.** With no backend registered, every TS healer
+  surface returns `[]` / `undefined` and never throws — `dedupe()` works exactly as
+  before, just without suggestions. There is no hard failure for not opting in.
+- **Kill-switch / explicit options.** The default suggestion pass honors
+  `GOLDENMATCH_SUGGEST_ON_DEDUPE` (set `0` to disable) where a Node-style `process.env`
+  is available; `{ suggest: true }` / `{ heal: true }` are explicit and always run.
+
+The TS kernel is byte-for-byte the same logic as Python and Rust: the suggestion
+golden vectors authored by the `suggest-core` oracle are run against the committed
+WASM in the TS parity suite and against the Python native path, so a suggestion's
+`{input → expected}` is one shared cross-surface contract (TS == Rust == Python).
+
+## Related
+
+- [Auto-config](/goldenmatch/auto-config) — how the zero-config first pass converges on a defensible config.
+- [Learning Memory](/goldenmatch/learning-memory) — persists steward accept/reject decisions across runs (the durable layer beneath the loop).
+- [Evaluation](/goldenmatch/evaluation) — measure F1 once you have labels.

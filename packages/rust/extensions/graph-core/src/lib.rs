@@ -7,8 +7,11 @@ pub use dict::*;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 
+#[cfg(feature = "arrow")]
 use arrow::array::builder::{Int64Builder, ListBuilder, StringBuilder};
+#[cfg(feature = "arrow")]
 use arrow::array::{Array, ArrayData, Float64Array, Int64Array, ListArray, StringArray};
+#[cfg(feature = "arrow")]
 use arrow::datatypes::DataType;
 
 /// Canonicalize each pair as `(min,max)` and keep the max score per pair.
@@ -164,6 +167,7 @@ pub fn label_propagation_communities(
 
 /// Arrow columnar dedup over int64 id columns + float64 score. Validates types,
 /// reads the columns, runs `dedup_pairs_max_score`, returns three Arrow arrays.
+#[cfg(feature = "arrow")]
 pub fn dedup_pairs_arrow_data(
     id_a: ArrayData,
     id_b: ArrayData,
@@ -223,6 +227,7 @@ pub fn dedup_pairs_arrow_data(
 
 /// String-id dedup: id columns are Utf8 (StringArray). Builds a first-seen Dict,
 /// runs the i64 kernel, maps the deduped pairs back to the original strings.
+#[cfg(feature = "arrow")]
 pub fn dedup_pairs_arrow_data_utf8(
     id_a: ArrayData,
     id_b: ArrayData,
@@ -292,6 +297,7 @@ pub fn dedup_pairs_arrow_data_utf8(
 /// Arrow columnar connected components. Edge columns int64/int64/float64 + an
 /// int64 `all_ids` universe column. Returns ONE Arrow `List<Int64>` array: one
 /// list element per component, each a sorted list of member ids.
+#[cfg(feature = "arrow")]
 pub fn connected_components_arrow_data(
     id_a: ArrayData,
     id_b: ArrayData,
@@ -366,6 +372,7 @@ pub fn connected_components_arrow_data(
 /// String-id connected components. Edge + universe columns are Utf8. Interns via
 /// a first-seen Dict, runs the i64 kernel, maps members back to strings, sorts
 /// each component by the original string ascending, returns a `List<Utf8>`.
+#[cfg(feature = "arrow")]
 pub fn connected_components_arrow_data_utf8(
     id_a: ArrayData,
     id_b: ArrayData,
@@ -510,8 +517,10 @@ mod tests {
         assert_eq!(all, vec![0, 1, 2, 3]);
     }
 
+    #[cfg(feature = "arrow")]
     use arrow::array::{Array, Float64Array, Int64Array, ListArray, StringArray};
 
+    #[cfg(feature = "arrow")]
     #[test]
     fn dedup_arrow_int64_canonicalizes_and_keeps_max() {
         let id_a = Int64Array::from(vec![2_i64, 1]).to_data();
@@ -527,6 +536,7 @@ mod tests {
         assert!((s.value(0) - 0.9).abs() < 1e-12);
     }
 
+    #[cfg(feature = "arrow")]
     #[test]
     fn dedup_arrow_utf8_maps_back_to_strings() {
         let id_a = StringArray::from(vec!["b", "a"]).to_data();
@@ -543,6 +553,7 @@ mod tests {
         assert!((s.value(0) - 0.9).abs() < 1e-12);
     }
 
+    #[cfg(feature = "arrow")]
     fn read_list_int64(out: arrow::array::ArrayData) -> Vec<Vec<i64>> {
         let list = ListArray::from(out);
         let mut comps = Vec::new();
@@ -554,6 +565,7 @@ mod tests {
         comps
     }
 
+    #[cfg(feature = "arrow")]
     fn read_list_utf8(out: arrow::array::ArrayData) -> Vec<Vec<String>> {
         let list = ListArray::from(out);
         let mut comps = Vec::new();
@@ -565,6 +577,7 @@ mod tests {
         comps
     }
 
+    #[cfg(feature = "arrow")]
     #[test]
     fn cc_arrow_int64_returns_sorted_list() {
         let id_a = Int64Array::from(vec![1_i64, 2]).to_data();
@@ -577,6 +590,7 @@ mod tests {
         assert_eq!(comps, vec![vec![1, 2, 3], vec![4]]);
     }
 
+    #[cfg(feature = "arrow")]
     #[test]
     fn cc_arrow_utf8_returns_sorted_list() {
         let id_a = StringArray::from(vec!["x", "y"]).to_data();

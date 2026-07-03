@@ -10,9 +10,11 @@ from datetime import datetime
 from typing import Any
 
 from goldenmatch.identity.model import (
+    ClaimType,
     EdgeKind,
     EventKind,
     EvidenceEdge,
+    EvidenceRef,
     IdentityEvent,
     IdentityNode,
     IdentityStatus,
@@ -312,6 +314,154 @@ def claim_record(
             "from_entity": prev_entity, "at": now.isoformat()}
 
 
+# ── Claim lifecycle (#1256) ──────────────────────────────────────────────────
+# promote / amend / revoke are the explicit, auditable transitions of a claim's
+# authority. They emit a dedicated EventKind carrying the claim_type authority
+# tier + typed evidence_ref + a previous_claim_id chain, so a compliance reviewer
+# can see an agent inference *becoming* durable shared truth (promote) rather than
+# that transition happening as invisible drift. Appending a fresh claim needs no
+# helper -- ``store.emit_event(IdentityEvent(..., claim_type=..., evidence_ref=...))``.
+
+
+def _require_active_entity(store: IdentityStore, entity_id: str) -> None:
+    node = store.get_identity(entity_id)
+    if node is None:
+        raise ValueError(f"Entity {entity_id} not found")
+    if node.status != IdentityStatus.ACTIVE.value:
+        raise ValueError("Target entity must be active")
+
+
+def _resolve_prior_claim(
+    store: IdentityStore, entity_id: str, previous_claim_id: int | None
+) -> None:
+    """Validate that ``previous_claim_id`` (when given) is an event on this
+    entity. Lifecycle ops are rare/manual, so a history scan is fine."""
+    if previous_claim_id is None:
+        return
+    if not any(e.event_id == previous_claim_id for e in store.history(entity_id)):
+        raise ValueError(
+            f"previous_claim_id {previous_claim_id} not found on entity {entity_id}"
+        )
+
+
+def _emit_claim_lifecycle(
+    store: IdentityStore,
+    entity_id: str,
+    operation: EventKind,
+    *,
+    previous_claim_id: int | None,
+    claim_type: str | None,
+    evidence_ref: str | None,
+    reason: str | None,
+    extra_payload: dict[str, Any] | None,
+    run_name: str,
+    actor: str | None,
+    trust: float | None,
+) -> dict[str, Any]:
+    _require_active_entity(store, entity_id)
+    _resolve_prior_claim(store, entity_id, previous_claim_id)
+    now = datetime.now()
+    payload: dict[str, Any] = {"reason": reason}
+    if extra_payload:
+        payload.update(extra_payload)
+    ct = str(claim_type) if claim_type is not None else None
+    er = str(evidence_ref) if evidence_ref is not None else None
+    event_id = store.emit_event(IdentityEvent(
+        entity_id=entity_id,
+        kind=operation.value,
+        payload=payload,
+        claim_type=ct,
+        evidence_ref=er,
+        previous_claim_id=previous_claim_id,
+        run_name=run_name,
+        actor=actor,
+        trust=trust,
+        recorded_at=now,
+    ))
+    return {
+        "event_id": event_id,
+        "entity_id": entity_id,
+        "operation": operation.value,
+        "claim_type": ct,
+        "evidence_ref": er,
+        "previous_claim_id": previous_claim_id,
+        "at": now.isoformat(),
+    }
+
+
+def promote_claim(
+    store: IdentityStore,
+    entity_id: str,
+    *,
+    to_claim_type: str | ClaimType,
+    previous_claim_id: int | None = None,
+    evidence_ref: str | EvidenceRef | None = None,
+    reason: str | None = None,
+    run_name: str = "manual",
+    actor: str | None = None,
+    trust: float | None = None,
+) -> dict[str, Any]:
+    """Raise a claim's authority tier (e.g. ``inference`` -> ``verified``).
+
+    Records the transition as an explicit ``promote`` event so an agent inference
+    becoming durable shared truth is auditable, not invisible drift. ``evidence_ref``
+    is what justified the promotion (tool-call / source / user-confirmation / test-run).
+    """
+    return _emit_claim_lifecycle(
+        store, entity_id, EventKind.PROMOTE,
+        previous_claim_id=previous_claim_id,
+        claim_type=to_claim_type, evidence_ref=evidence_ref, reason=reason,
+        extra_payload=None, run_name=run_name, actor=actor, trust=trust,
+    )
+
+
+def amend_claim(
+    store: IdentityStore,
+    entity_id: str,
+    *,
+    previous_claim_id: int | None = None,
+    claim_type: str | ClaimType | None = None,
+    evidence_ref: str | EvidenceRef | None = None,
+    payload: dict[str, Any] | None = None,
+    reason: str | None = None,
+    run_name: str = "manual",
+    actor: str | None = None,
+    trust: float | None = None,
+) -> dict[str, Any]:
+    """Supersede a prior claim's content with a corrected/updated claim.
+
+    ``claim_type`` defaults to unchanged (None) -- pass it to also restate the tier.
+    ``payload`` carries the amended claim body.
+    """
+    return _emit_claim_lifecycle(
+        store, entity_id, EventKind.AMEND,
+        previous_claim_id=previous_claim_id,
+        claim_type=claim_type, evidence_ref=evidence_ref, reason=reason,
+        extra_payload=payload, run_name=run_name, actor=actor, trust=trust,
+    )
+
+
+def revoke_claim(
+    store: IdentityStore,
+    entity_id: str,
+    *,
+    previous_claim_id: int | None = None,
+    reason: str | None = None,
+    run_name: str = "manual",
+    actor: str | None = None,
+    trust: float | None = None,
+) -> dict[str, Any]:
+    """Retract a claim. Emits a ``revoke`` event chained (via ``previous_claim_id``)
+    to the claim it retracts; the append-only log keeps the revoked claim visible
+    with its retraction recorded rather than deleting it."""
+    return _emit_claim_lifecycle(
+        store, entity_id, EventKind.REVOKE,
+        previous_claim_id=previous_claim_id,
+        claim_type=None, evidence_ref=None, reason=reason,
+        extra_payload=None, run_name=run_name, actor=actor, trust=trust,
+    )
+
+
 __all__ = [
     "EdgeKind",
     "EventKind",
@@ -324,4 +474,9 @@ __all__ = [
     "manual_merge",
     "manual_split",
     "claim_record",
+    "ClaimType",
+    "EvidenceRef",
+    "promote_claim",
+    "amend_claim",
+    "revoke_claim",
 ]

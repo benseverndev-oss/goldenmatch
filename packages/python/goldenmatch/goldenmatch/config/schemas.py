@@ -101,6 +101,11 @@ class MatchkeyField(BaseModel):
     # categorical fields (names, cities). Applied by the vectorized FS scorer
     # using per-value frequencies computed at EM-train time.
     tf_adjustment: bool = False
+    # #1207 PR2a: per-dataset value->relative-frequency table for
+    # name_freq_weighted_jw; when present the scorer downweights agreements on
+    # high-frequency values across the whole JW range (data-driven), else falls
+    # back to static census IDF in the borderline zone.
+    tf_freqs: dict[str, float] | None = None
     # Workbench-only hint: which kind of MatchkeyConfig to wrap this field
     # in when /preview / /run translate the flat row list into engine
     # MatchkeyConfigs. Optional + None-default so engine-internal callers
@@ -896,6 +901,7 @@ class MemoryConfig(BaseModel):
     learning: LearningConfig = Field(default_factory=LearningConfig)
     reanchor: bool = True
     dataset: str | None = None
+    table_prefix: str = ""
 
     @field_validator("dataset")
     @classmethod
@@ -906,6 +912,14 @@ class MemoryConfig(BaseModel):
         if not stripped:
             raise ValueError("MemoryConfig.dataset must be non-empty (or None)")
         return stripped
+
+    @field_validator("table_prefix")
+    @classmethod
+    def _validate_table_prefix(cls, v: str) -> str:
+        import re
+        if v and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", v):
+            raise ValueError("table_prefix must match ^[A-Za-z_][A-Za-z0-9_]*$")
+        return v
 
 
 # ── MatchSettingsConfig ─────────────────────────────────────────────────────

@@ -2,6 +2,129 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-06-28 — Perceptual image pHash: cross-platform determinism + wasm/TS
+- New ADR [../decisions/0030-perceptual-cross-platform-determinism.md](../decisions/0030-perceptual-cross-platform-determinism.md):
+  the image pHash computed its DCT basis cos() at runtime, so it was libm-fragile
+  across platforms/surfaces (committed golden test passed on Linux CI, FAILED on
+  Windows native; a wasm build was 6 bits off). Fix: a COMMITTED 8x32 DCT table
+  that the Rust kernel (native + wasm) AND the Python reference both read (one
+  generator, bit-exact in both languages) -> byte-identical everywhere. New opt-in
+  `goldenmatch/core/perceptual-wasm` TS subpath (phashImage / hamming), byte-exact
+  parity-gated + a `perceptual_wasm` CI drift lane. Image only; radial + audio stay
+  Python/native (non-cos fragility). Fixture rebased 2 borderline phash values.
+
+## 2026-06-28 — GoldenGraph TS: bitemporal store shipped (0.2.0)
+- The store deferred in [0029](../decisions/0029-goldengraph-wasm-ts.md) now ships:
+  `appendBatch` / `asOf` / `history` over a portable JSON `Snapshot` (the kernel's
+  `store_*` ops). Parity fixtures cover the append → as_of → history flow; 9 total
+  goldengraph parity cases. Also: the `goldenprofile → goldengraph` composition
+  helpers (`resolutionFromClusters` / `mentionsFromProfiles`) landed (#1306).
+- Gotcha recorded in 0029: wasm-bindgen maps the kernel's i64/u64 params to BigInt;
+  the public API takes `number` and converts at the boundary.
+
+## 2026-06-28 — GoldenGraph (KG engine) on the TS/WASM surface (v1: graph+query)
+- New ADR [../decisions/0029-goldengraph-wasm-ts.md](../decisions/0029-goldengraph-wasm-ts.md):
+  the GoldenGraph knowledge-graph engine gets a TS/JS surface via `goldengraph-wasm`
+  — the second fold after goldenprofile (ADR 0028), same pattern.
+- New **standalone** `packages/typescript/goldengraph` npm package: pure-by-default
+  base + opt-in `goldengraph/wasm`; query fns REFUSE (throw) until enabled. **v1 = the
+  4 graph+query ops** (`buildGraph`/`neighborhood`/`seedsByName`/`communities`);
+  the bitemporal store (`store_append/as_of/history`) is DEFERRED (heaviest surface).
+- Zero runtime deps (the resolution input is a `{mention:entity}` map / `["native",…]`,
+  not goldenprofile's `Resolution` — composition is a future adapter).
+- Enabling change: `goldengraph-core` → `graph-core { default-features = false }`
+  (build-time gating; same accurate rationale as 0028).
+- CI: `goldengraph_wasm` path-filter + drift guard in the `typescript` lane; publish
+  wired-unfired (`publish-goldengraph-js.yml`). No Python cross-parity (native API is
+  OO, not the JSON boundary; not in the py matrix — see issue #1304). Plan:
+  [../../docs/superpowers/plans/2026-06-28-goldengraph-wasm-ts-parity.md](../../docs/superpowers/plans/2026-06-28-goldengraph-wasm-ts-parity.md).
+
+## 2026-06-28 — GoldenProfile (Virtual Fingerprint) on the TS/WASM surface
+- New ADR [../decisions/0028-goldenprofile-wasm-ts.md](../decisions/0028-goldenprofile-wasm-ts.md):
+  the GoldenProfile Virtual Fingerprint engine (cross-document entity resolution,
+  kernel ADR [0023](../decisions/0023-semantic-signature-virtual-fingerprint-engine.md))
+  now has a TS/JS surface — the last unfinished leg of its one-kernel-many-surfaces
+  matrix (Python/`-native` + C/`-cabi` + `-wasm` already existed).
+- New **standalone** `packages/typescript/goldenprofile` npm package: pure-by-default
+  base entry (zero wasm bytes, edge-safe) + an opt-in `goldenprofile/wasm` subpath that
+  loads the kernel. Follows the **healer precedent** (opt-in-or-absent, no pure-TS
+  resolver), not the score/analysis acceleration track. `resolveProfiles()` REFUSES
+  (throws) when the backend isn't enabled — never a fake empty Resolution.
+- Enabling change: `graph-core`'s `arrow` became an **opt-in default-on feature** so
+  `goldenprofile-core` links on `wasm32`; native/pgrx/datafusion compile byte-identically.
+- Cross-surface contract corrected to **partition + edge set + scores(4dp)**, NOT
+  byte-ordering (the kernel's cluster/edge ordering is `HashMap`-seed nondeterministic).
+  Canonical, idempotent fixtures gate both the TS-wasm and Python-native parity tests.
+- CI: `goldenprofile_wasm` path-filter + a drift guard in the `typescript` lane; publish
+  wired-but-unfired (`publish-goldenprofile-js.yml`). Plan:
+  [../../docs/superpowers/plans/2026-06-28-goldenprofile-wasm-ts-parity.md](../../docs/superpowers/plans/2026-06-28-goldenprofile-wasm-ts-parity.md).
+
+## 2026-06-27 — Config-suggestion healer on the TS/WASM surface
+- New ADR [../decisions/0027-healer-wasm-ts.md](../decisions/0027-healer-wasm-ts.md):
+  the healer (config-suggestion engine) now runs on the TypeScript/JS surface via
+  WebAssembly. The existing pyo3-free `suggest-core` kernel is compiled to a
+  `suggest-wasm` cdylib (mirroring the autoconfig `-core → -wasm → TS` precedent):
+  arrow is feature-gated and an arrow-free `suggest_from_json` entry is shared by the
+  Python native path and the wasm path (single source of truth, **zero Python change**).
+- Full default-pipeline parity: wired into `dedupe({suggest, heal})` with the free
+  trigger + verify path + bounded heal loop, on every TS surface (core / CLI / MCP
+  `review_config` → MCP tool count 44→45 / A2A `review_config` skill). Opt-in
+  `enableSuggestWasm()` (the `[native]` analog) registers the kernel; with no backend
+  every surface is gracefully empty (`[]`/undefined, never throws). Kill-switch
+  `GOLDENMATCH_SUGGEST_ON_DEDUPE`.
+- One cross-surface golden-vector contract: the `suggest-core` BLESS oracle authors the
+  fixtures; the TS parity test and a Python native cross-surface test run the SAME
+  fixtures (TS == Rust == Python). CI: a `suggest_wasm` path filter gates a drift-guard
+  step in the `typescript` lane + `suggest-core`/`suggest-wasm` steps in the `rust` lane.
+- Docs: new [config-suggestions.mdx](../../docs-site/goldenmatch/config-suggestions.mdx)
+  page (+ nav), TS README/CLAUDE.md healer sections, llms.txt notes.
+
+## 2026-06-26 — Healer wired into the default pipeline (advisory, every surface)
+- New ADR [../decisions/0026-healer-default-pipeline.md](../decisions/0026-healer-default-pipeline.md):
+  the healer (`review_config`) is now part of the default `dedupe_df` pipeline as a
+  **two-stage cost-bounded advisory surface**. (1) A *free* controller trigger reads the
+  run's existing `postflight_report` (RED/YELLOW health or scoring dip ≥ 0.05) — no kernel
+  call. (2) Only on a trigger does a new artifacts-in `suggest_from_result(result, df)`
+  reuse the run's `scored_pairs`/`clusters` to attach raw candidate suggestions to
+  `result.suggestions` (no re-run). Healthy result = byte-identical timing (no-op parity).
+- Opt-in deeper paths: `dedupe_df(suggest=True)` (expensive verified gate),
+  `dedupe_df(heal=True)` (full apply-and-re-run loop → `result.heal_trail` + healed config).
+- Present on every surface: Python, CLI (`--suggest`/`--heal` + free default hint), MCP
+  (`review_config` tool), A2A (`review_config` skill), REST (`GET /suggest`), web
+  (`GET /api/v1/suggest`), TUI (Suggestions tab). Graceful-degrade without `goldenmatch[native]`
+  (attaches nothing, never raises). Kill-switch `GOLDENMATCH_SUGGEST_ON_DEDUPE=0`.
+- Stacked on the verify-gate flip (#1272): the default surface only delivers wins because
+  the gate now keeps precision fixes ([0025](../decisions/0025-healer-verify-gate-proxy.md)).
+
+## 2026-06-26 — Healer self-verify gate: default proxy -> cohesion (#1272) + healing-loop docs
+- New ADR [../decisions/0025-healer-verify-gate-proxy.md](../decisions/0025-healer-verify-gate-proxy.md):
+  the healer (`review_config`) self-verify gate's default health proxy flipped legacy -> cohesion
+  (`cohesion_min_edge_cap50`), chosen by a proxy bake-off (`scripts/suggest_quality/bakeoff.py`)
+  against the F1 oracle. Closes the raw-vs-live gap: suggester-gym live recovery 0.151 -> 0.543
+  (== raw ceiling), zero net-negatives on real perturbations. Supersedes the earlier
+  "cohesion fails / escalate to pseudo-labels" finding.
+- Established the **healing-loop thesis** across the docs (new `/goldenmatch/config-suggestions`
+  page, README "The healing loop" sections, overview, project-definition product-loop section,
+  tuning healer-knobs): zero-config -> returned config -> healer suggests self-verified tweaks ->
+  apply -> improve -> repeat. Healer stays opt-in (`goldenmatch[native]`).
+
+## 2026-06-24 — Auto-config quality harness + probabilistic-routing lever (#1216/#1226/#1254)
+- New ADR [../decisions/0024-autoconfig-probabilistic-routing.md](../decisions/0024-autoconfig-probabilistic-routing.md):
+  a decision-kernel **quality harness** (`scripts/autoconfig_quality/`, report/gate/bless)
+  that runs auto-config over a committed corpus (real benchmarks FEBRL3 / NCVR /
+  historical_50k + synthetic anchors) and diffs the resulting decisions against a
+  pinned baseline — 2-tier (host-independent config signals, hard-gated; slow F1 +
+  attribution) with a CI `quality_gate` job. It exists to make a kernel change's
+  quality impact measurable in one run and to **nominate the next lever on evidence**.
+- The first lever it nominated: **probabilistic routing**. A dual-strategy scorecard
+  column (`f1` default vs `f1_probabilistic` forced Fellegi-Sunter) measured a +0.36
+  F1 gap on historical_50k. Auto-config now routes to FS when
+  `GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC=1` (default-off) and the shape is
+  probabilistic (no surviving exact matchkey on `{identifier,email,phone}` + ≥2 fuzzy).
+  Flag-on proof: historical_50k 0.466→0.829, ncvr 0.983→0.990 routed; febrl3 +
+  anchor_person_match unchanged (strong key blocks). Zero regression; default-flip
+  deferred to a broader sweep. Flag in `docs-site/goldenmatch/tuning.mdx`.
+
 ## 2026-06-20 — Corpus-dedup throughput benchmark + perf gate (#1086)
 - Closes the training-data-dedup epic's "defend the throughput claim" item. New ADR
   [../decisions/0022-corpus-dedup-throughput-benchmark.md](../decisions/0022-corpus-dedup-throughput-benchmark.md):

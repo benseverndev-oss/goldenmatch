@@ -63,11 +63,31 @@ class GoldenmatchEmbedder:
         return np.vstack(parts)
 
 
-def seed_by_query(slice_graph, query: str, embedder: Embedder, *, k: int = 5) -> list[int]:
+def seed_by_query(slice_graph, query: str, embedder: Embedder, *, k: int = 5, index=None) -> list[int]:
     """Top-`k` entity ids in `slice_graph` (a `PyGraph` from `as_of`) nearest the
     query by cosine over canonical-name embeddings. Tie-break: ascending
-    `entity_id` (deterministic — stub/zero vectors tie often)."""
-    ents = slice_graph.entities()
+    `entity_id` (deterministic — stub/zero vectors tie often).
+
+    When `index` (a `goldengraph.entity_index.EntityIndex` built once over the graph) is
+    given, query the PREBUILT index -- embeds ONLY the query, not every entity name -- the
+    O(1)-embed-per-query path for scale. `index=None` (default) keeps the re-embed path below
+    (fine for small graphs; back-compat).
+
+    Only real ENTITY nodes are seed candidates: literal-attribute value leaves
+    (`typ` starts with ``literal:``, from GOLDENGRAPH_LITERAL_ATTRS) are excluded --
+    they are answers reached by walking an edge FROM a seed entity, not query
+    anchors, and embedding a raw value (a bare date / amount) both wastes budget and
+    risks an empty/over-long input that 400s the WHOLE provider batch. Empty /
+    whitespace names are dropped for the same reason (a provider rejects an empty
+    input). Without this, a literal-attrs run 400s on every answer at seed time."""
+    if index is not None:
+        return index.query(query, embedder, k=k)
+    ents = [
+        e
+        for e in slice_graph.entities()
+        if not str(e.get("typ", "")).startswith("literal:")
+        and str(e.get("canonical_name", "")).strip()
+    ]
     if not ents:
         return []
     ids = [int(e["entity_id"]) for e in ents]

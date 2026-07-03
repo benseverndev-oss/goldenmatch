@@ -4,11 +4,11 @@
  *
  * Node-only: uses node:fs, node:path, node:readline. NOT edge-safe.
  *
- * Exposes 44 tools covering dedupe, match, scoring, explanation,
+ * Exposes 45 tools covering dedupe, match, scoring, explanation,
  * profiling, auto-config (shorthand), evaluation, listings, Learning
  * Memory (5 memory tools via MEMORY_TOOLS), the Identity Graph
  * (6 identity tools via IDENTITY_TOOLS), and the AgentSession skills
- * (14 agent tools via AGENT_MCP_TOOLS).
+ * (15 agent tools via AGENT_MCP_TOOLS, incl. the healer's review_config).
  *
  * Every tool dispatch is wrapped in try/catch so a single failure never
  * crashes the JSON-RPC loop; errors come back as `{ error: "<msg>" }`.

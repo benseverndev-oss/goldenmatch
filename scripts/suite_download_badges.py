@@ -30,6 +30,10 @@ PYPI_PACKAGES = [
     "infermap",
     "goldencheck-types",
     "goldensuite-mcp",
+    # One-line meta-package (whole suite + native, on by default). A distinct PyPI
+    # distribution whose downloads partially overlap its component packages --
+    # counted here for the same reason as the *-native extras below.
+    "golden-suite",
     # SQL extension + the optional compiled `*-native` / embed runtimes. These
     # are extras (goldenmatch[native], goldenanalysis[native], ...), so their
     # downloads partially overlap their parent packages -- counted here because
@@ -54,6 +58,13 @@ NPM_PACKAGES = [
     "goldenanalysis",
     "infermap",
     "goldencheck-types",
+    # npm-only (no PyPI dist): the goldengraph Virtual Fingerprint resolver's
+    # TS/WASM surface. Published via publish-goldenprofile-js.yml (wired; the
+    # first release is pending, so download stats 404 until then — tolerated).
+    "goldenprofile",
+    # npm-only: the goldengraph KG-engine TS/WASM surface (publish-goldengraph-js.yml,
+    # wired; first release pending, stats 404 until then — tolerated).
+    "goldengraph",
 ]
 
 # pypistats.org rate-limits unauthenticated callers; a short sleep between

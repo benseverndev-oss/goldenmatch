@@ -92,12 +92,32 @@ class MatchEngine:
         profile_cols = [c for c in combined.columns if not c.startswith("__")]
         self._profile = profile_dataframe(combined.select(profile_cols))
 
+    @classmethod
+    def from_dataframe(cls, df: pl.DataFrame) -> MatchEngine:
+        """Build an engine over an in-memory frame (no file loading).
+
+        For callers like config-suggestion review (``core/suggest``) that
+        already hold the data and only need ``_run_pipeline``/``run_full``.
+        Mirrors every instance field ``__init__`` assigns so it can't break
+        silently if ``__init__`` evolves -- ``_data`` is the passed frame,
+        the rest take ``__init__``'s post-load defaults.
+        Note: ``profile`` is None until a file-constructor run populates it;
+        callers that need it should use the file constructor instead.
+        """
+        engine = object.__new__(cls)
+        engine._files = []
+        engine._data = df
+        engine._profile = None  # not populated by from_dataframe
+        engine._last_result = None
+        engine._last_telemetry = None
+        return engine
+
     @property
     def data(self) -> pl.DataFrame:
         return self._data
 
     @property
-    def profile(self) -> dict:
+    def profile(self) -> dict | None:
         return self._profile
 
     @property
@@ -178,6 +198,15 @@ class MatchEngine:
         # ── Standardization ──
         if config.standardization and config.standardization.rules:
             combined_lf = apply_standardization(combined_lf, config.standardization.rules)
+
+        # ── Domain feature extraction ──
+        # Materializes derived columns (e.g. ``__title_key__``) that auto-config
+        # may reference from matchkeys / blocking keys. Must run BEFORE
+        # compute_matchkeys, mirroring ``_run_dedupe_pipeline`` -- without it this
+        # path crashes with ColumnNotFoundError whenever auto-config detects a
+        # domain (bibliographic / product shapes, e.g. DBLP-ACM). See issue #1300.
+        from goldenmatch.core.pipeline import _apply_domain_extraction
+        combined_lf = _apply_domain_extraction(combined_lf, config)
 
         # ── Compute matchkeys ──
         matchkeys = config.get_matchkeys()

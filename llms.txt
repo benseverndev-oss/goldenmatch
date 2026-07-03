@@ -14,6 +14,9 @@ GoldenCheck (profile + validate) → GoldenFlow (standardize) → GoldenMatch (d
 - InferMap — schema mapping; auto-aligns columns across heterogeneous sources. `pip install infermap` / `npm i infermap`.
 - goldenmatch-extensions (Rust) — Postgres (pgrx) extension + DuckDB UDFs: SQL-native dedupe / match / score / auto-config + telemetry / identity graph. Detail: packages/rust/extensions/llms.txt
 
+## The healing loop (GoldenMatch's core workflow)
+Zero-config gets good results and returns the config it chose; the healer (`review_config`) reviews those results and suggests ranked, self-verified tweaks; you apply them, results improve, repeat. One zero-config pass gets you most of the way; the loop closes the gap to expert-tuned without you being the expert. The healer is wired into the default pipeline: every `dedupe_df` run attaches cheap candidate suggestions to `result.suggestions` when a free signal fires (`dedupe_df(suggest=True)` for verified, `heal=True` for the full apply loop; `GOLDENMATCH_SUGGEST_ON_DEDUPE=0` to disable). Needs `goldenmatch[native]`; degrades gracefully without it. Docs: [config-suggestions](https://docs.bensevern.dev/goldenmatch/config-suggestions)
+
 ## Why it stands out (GoldenMatch headline proofs)
 - 96.4% F1 on DBLP-ACM out of the box. The zero-tuning Fellegi-Sunter auto-config beats hand-rolled, expert-tuned Splink head-to-head on every dataset Splink scores: historical_50k pairwise F1 0.778 vs 0.757 (cluster-level B³ 0.844 vs 0.789), febrl3 0.991 vs 0.965, synthetic_person 0.998 vs 0.996 — one shared evaluator. Bake-off: docs/benchmarks/2026-06-09-splink-bakeoff.md
 - Scales from a laptop CSV to a verified 100M-row dedupe in 9.2 min on a 5-node Ray cluster — recall-complete (correct across any partitioning), 20,000,000 clusters recovered exactly, driver peak 0.36 GB RSS
@@ -27,7 +30,7 @@ GoldenCheck (profile + validate) → GoldenFlow (standardize) → GoldenMatch (d
 ## Polyglot & edge
 - Python (PyPI) + TypeScript (npm), tracked to 4-decimal scorer parity via a cross-language harness
 - TypeScript cores are dependency-free and `node:*`-free, so they run in browsers, Cloudflare Workers, Vercel Edge, and Deno
-- An opt-in WebAssembly backend (`await enableWasm()` / `enableAnalysisWasm()`) swaps in the same pyo3-free Rust kernels (`score-core` / `analysis-core`) the Python wheels and SQL UDFs use; pure-TS stays the default and the byte-identical fallback
+- An opt-in WebAssembly backend (`await enableWasm()` / `enableAnalysisWasm()` / `enableSuggestWasm()`) swaps in the same pyo3-free Rust kernels (`score-core` / `analysis-core` / `suggest-core`, the last being the config-suggestion "healer") the Python wheels and SQL UDFs use; pure-TS stays the default and the byte-identical fallback
 - SQL-native in PostgreSQL (pgrx extension) and DuckDB
 
 ## Install (quick start)

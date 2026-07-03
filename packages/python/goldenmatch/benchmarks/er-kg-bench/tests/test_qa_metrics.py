@@ -11,6 +11,8 @@ from erkgbench.qa_e2e.metrics import (  # noqa: E402
     decay_curve,
     exact_match,
     is_entity_answer,
+    judge_prompt,
+    parse_judge,
     supporting_fact_recall,
     token_f1,
 )
@@ -98,3 +100,32 @@ def test_classify_phrase_answers():
 def test_classify_handles_empty():
     assert classify_answer_type("") == "phrase"
     assert is_entity_answer("") is False
+
+
+# --- LLM-judge answer equivalence (format-fair cross-engine metric) ----------
+
+
+def test_parse_judge_yes_no():
+    assert parse_judge("YES") == 1.0
+    assert parse_judge("yes") == 1.0
+    assert parse_judge("Yes, that is correct.") == 1.0
+    assert parse_judge("NO") == 0.0
+    assert parse_judge("no.") == 0.0
+    assert parse_judge("No, the answer differs") == 0.0
+
+
+def test_parse_judge_fallback_and_empty():
+    # leading hedge but a standalone yes later -> correct
+    assert parse_judge("Verdict: YES") == 1.0
+    # no clear verdict / empty / unrelated -> NO (0.0), never crashes
+    assert parse_judge("") == 0.0
+    assert parse_judge("maybe") == 0.0
+    assert parse_judge(None) == 0.0  # type: ignore[arg-type]
+
+
+def test_judge_prompt_includes_all_three_fields():
+    p = judge_prompt("When founded?", "1976", "It was founded in 1976.")
+    assert "When founded?" in p
+    assert "1976" in p
+    assert "It was founded in 1976." in p
+    assert "YES or NO" in p

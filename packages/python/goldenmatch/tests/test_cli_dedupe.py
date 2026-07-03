@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 import textwrap
 from pathlib import Path
+from types import SimpleNamespace
 
 import polars as pl
 import pytest
@@ -110,6 +111,118 @@ class TestDedupeCmd:
             "--output-dir", str(tmp_path / "out"),
         ])
         assert result.exit_code == 0
+
+
+class TestHealerSurface:
+    """CLI surface for the config-suggestion (healer): --suggest / --heal flags
+    plus the default-run one-line hint."""
+
+    def _fake_result(self, suggestions=None, heal_trail=None):
+        return SimpleNamespace(
+            suggestions=suggestions or [],
+            heal_trail=heal_trail,
+        )
+
+    def test_suggest_flag_accepted_and_renders(self, cli_csv, simple_config, monkeypatch):
+        """--suggest is accepted (exit 0) and prints the surfaced suggestions."""
+        sug = {
+            "id": "thr-name", "kind": "threshold", "target": "name",
+            "rationale": "lower threshold to 0.8", "verified": True, "patch": {},
+        }
+        captured = {}
+
+        def fake_dedupe_df(df, **kwargs):
+            captured.update(kwargs)
+            return self._fake_result(suggestions=[sug])
+
+        monkeypatch.setattr("goldenmatch._api.dedupe_df", fake_dedupe_df)
+
+        result = runner.invoke(app, [
+            "dedupe", str(cli_csv), "--config", str(simple_config), "--suggest",
+        ])
+        assert result.exit_code == 0, result.stderr
+        assert captured.get("suggest") is True
+        assert "threshold" in result.output
+        assert "lower threshold to 0.8" in result.output
+
+    def test_heal_flag_prints_trail(self, cli_csv, simple_config, monkeypatch):
+        """--heal prints the applied trail and a healed-config note."""
+        applied = {
+            "id": "thr-name", "kind": "threshold", "target": "name",
+            "rationale": "raise threshold to 0.9", "verified": True, "patch": {},
+        }
+
+        def fake_dedupe_df(df, **kwargs):
+            assert kwargs.get("heal") is True
+            return self._fake_result(suggestions=[applied], heal_trail=[applied])
+
+        monkeypatch.setattr("goldenmatch._api.dedupe_df", fake_dedupe_df)
+
+        result = runner.invoke(app, [
+            "dedupe", str(cli_csv), "--config", str(simple_config), "--heal",
+        ])
+        assert result.exit_code == 0, result.stderr
+        assert "healed" in result.output.lower()
+        assert "raise threshold to 0.9" in result.output
+
+    def test_default_run_prints_hint_when_suggestions_present(
+        self, cli_csv, simple_config, monkeypatch
+    ):
+        """A default (zero-config) run prints the one-line hint to stderr when
+        the healer surfaced candidates."""
+        from goldenmatch.config.loader import load_config
+
+        cfg = load_config(str(simple_config))
+
+        monkeypatch.setenv("GOLDENMATCH_SUGGEST_ON_DEDUPE", "1")
+        # Take the zero-config path cheaply: stub auto-config + the controller
+        # capture + the dedupe run so we don't run a real pipeline.
+        monkeypatch.setattr(
+            "goldenmatch.core.autoconfig.auto_configure", lambda files: cfg
+        )
+        monkeypatch.setattr(
+            "goldenmatch.cli._controller_render.capture_controller_state",
+            lambda: (None, None),
+        )
+        monkeypatch.setattr(
+            "goldenmatch.core.pipeline.run_dedupe",
+            lambda **kwargs: {"clusters": {}, "postflight_report": object()},
+        )
+        # The default hint reads the FREE trigger off the already-run result --
+        # NO second pipeline. Force the trigger to fire.
+        monkeypatch.setattr(
+            "goldenmatch.core.suggest.surface.headroom_signal",
+            lambda result: object(),  # any non-None reason
+        )
+        # dedupe_df must NOT be called on the default path (the cost guarantee).
+        def _boom(*a, **k):
+            raise AssertionError("dedupe_df must not run on the default hint path")
+        monkeypatch.setattr("goldenmatch._api.dedupe_df", _boom)
+
+        result = runner.invoke(app, ["dedupe", str(cli_csv), "--no-tui"])
+        assert result.exit_code == 0, result.stderr
+        assert "suggestions may be available" in result.stderr
+        assert "--suggest" in result.stderr
+
+    def test_default_run_no_hint_with_explicit_config(
+        self, cli_csv, simple_config, monkeypatch
+    ):
+        """An explicit --config run surfaces nothing by default (no controller
+        history) -- dedupe_df is never reached for the hint."""
+        called = {"n": 0}
+
+        def fake_dedupe_df(df, **kwargs):
+            called["n"] += 1
+            return self._fake_result(suggestions=[{"id": "x", "kind": "k",
+                                                   "target": "t", "rationale": "r"}])
+
+        monkeypatch.setattr("goldenmatch._api.dedupe_df", fake_dedupe_df)
+        result = runner.invoke(app, [
+            "dedupe", str(cli_csv), "--config", str(simple_config),
+        ])
+        assert result.exit_code == 0, result.stderr
+        assert called["n"] == 0
+        assert "suggestions may be available" not in (result.stderr or "")
 
 
 class TestMatchCmd:

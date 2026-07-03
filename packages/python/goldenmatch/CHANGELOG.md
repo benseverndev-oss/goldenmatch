@@ -6,6 +6,92 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [2.8.0] - 2026-07-02
+
+### Added
+- **Identity audit log: claim-authority tier + claim-lifecycle operations.** Events now carry a categorical `ClaimType` (`observation` / `inference` / `verified` / `directive`) — orthogonal to the numeric `trust` — plus a typed `EvidenceRef` and a `previous_claim_id` chain, so a reviewer can tell "an agent inferred this at 0.8" from "a tool verified this at 0.8". New lifecycle ops `promote_claim` / `amend_claim` / `revoke_claim` make an agent inference *becoming* durable shared truth an explicit, auditable event. All additive/nullable — the tamper-evidence hash stays byte-identical for pre-existing events. SQLite `v4→v5` migration + Postgres/Mongo + Alembic 0004. (#1383)
+
+### Changed
+- **`goldenmatch dedupe <file>` is now non-interactive by default.** A bare `goldenmatch dedupe customers.csv` runs auto-config, writes golden records (a timestamped `*_golden.csv` in the current directory), and prints a summary — so the advertised "CSV in, 30 seconds, CSV out" is what actually happens. The interactive review TUI is now opt-in via **`--tui`** (previously it opened by default). `--no-tui` is still accepted as a no-op for back-compat. When no explicit output flag is given on the auto-config path, golden records are written by default (use `--output-all` / `--output-dir` to control, `--tui` to review). An explicit `--config` run keeps its exact prior behavior.
+- **Input validation on the `dedupe` CLI + ingest (break-it review).** A Windows-1252 / Latin-1 CSV is no longer silently lossy-decoded into replacement chars — non-UTF-8 files are detected, decoded as cp1252, and warned about (so `José Muñoz` survives instead of becoming mojibake in the golden record); explicit `--encoding cp1252`/`latin-1` now works too. `--anomaly-sensitivity` is validated + case-normalized (a miscased `Low` no longer silently inverts to the most-sensitive behavior); an unknown `--backend` is rejected instead of silently dropped; `--format` is validated at parse time (not after the whole run); structured non-tabular inputs (`.json`/`.xml`/`.yaml`) get a clear message; `--chunk-size`/`--preview-size` reject non-positive values. (#1390)
+
+### Fixed
+- **Config-suggestion "healer" production slowdown.** The default `dedupe_df` advisory path no longer runs the O(distinct²) goldencheck variant scan (`cell_quality`) over the full frame on every run whose free trigger fired — the scan is reserved for the opt-in `suggest=`/`heal=` paths. Instant mitigation without upgrading: `GOLDENMATCH_SUGGEST_ON_DEDUPE=0`. (#1385)
+
+### Performance
+- **Golden-stage quality-weighting scan scoped to cluster members.** `goldencheck.cell_quality` runs only over rows that actually get a golden record (multi-member, non-oversized cluster members) instead of the entire collected frame — much cheaper on real data, since singletons never consume a quality weight. (#1389)
+- **Throughput tier skips golden-record survivorship.** Lifts the 100k+ corpus ceiling for the `dedupe_df(throughput=...)` path, which consumes clusters, not canonical records. (#1382)
+
+## [2.7.0] - 2026-07-02
+
+### Added
+- **Group/list-attribute demotion for EXACT matchkeys on single-source person data — now DEFAULT ON.** A shared GROUP/LIST/FACILITY value — a shared switchboard `phone` line, a mailing-list / campaign `identifier` (`tl_id`), a facility NPI, a role `email` inbox — is not a person-identity claim: as an `exact` matchkey (`exact_phone`, `exact_tl_id`) it *force-merges* every DIFFERENT person sharing it into one mega-cluster. `autoconfig_discriminative.should_demote_attribute_field` demotes such an **exact** matchkey to blocking-only when the LARGE shared-value groups do NOT co-agree on the **person name**. Design: (1) **group-size-aware** — co-agreement is measured over large shared-value groups only (≥10 records), so a real personal id that only ever groups a person's few duplicates is KEPT (insufficient support), while a campaign list / facility id / role inbox that groups many different people is demoted — this also stops a mostly-unique column (a `tl_id` at 0.53 cardinality) from being rescued by its many small same-person groups averaging the signal up (measured: big-group name-power 0.01 vs small-group 0.80); (2) **person-name basket** — co-agreement is measured against person-name columns only, not the broad #1351 identity basket (polluted on real data by constant metadata mis-typed as `identifier`).
+  - **Scoped to EXACT uses only, deliberately.** The accuracy sweep (`scripts/autoconfig_quality`) showed that demoting the same attribute from a **weighted fuzzy** contributor regressed corruption-heavy data: febrl3 F1 0.99→0.86, ncvr_synthetic 0.96→0.95 — its synthetic addresses also collide across people, but with the names corrupted the weighted address field is *load-bearing* for matching true duplicates. Restricting to exact matchkeys keeps that recall (a soft contributor never force-merges) while still killing the hard force-merges.
+  - **Default flipped ON in 2.7.0.** The exact-only sweep showed **zero F1 change across the whole corpus** (febrl3 0.9921→0.9921, ncvr_synthetic 0.9636→0.9636, anchors unchanged — flag-on == flag-off on every dataset), while it fixes real-world group-attribute over-merges: measured on a real MJH dermatology list (19,278 rows), the shared-clinic-`phone` and campaign-`tl_id` exact matchkeys are both dropped, **biggest cluster 70→6**, clusters recovered 11,347→16,509. Kill-switch: `GOLDENMATCH_ATTRIBUTE_DEMOTION=0` restores the pre-2.7.0 behavior. (PRs #1368, #1370.)
+
+## [2.6.0] - 2026-07-01
+
+### Changed
+- **Native Fellegi-Sunter (FS) block scorer is now authoritative by default (reference mode).** `_fs_native_enabled()` flips from opt-in to default-on: when the native ext is importable, the probabilistic path uses the native Rust FS kernel (rapidfuzz-rs decides comparison levels); the numpy vectorized path becomes the reproducible fallback via `GOLDENMATCH_FS_NATIVE=0` (also the automatic fallback for TF-adjustment / non-native-scorer fields or a missing wheel). Part of the Rust-is-the-reference direction (`docs/design/2026-07-01-rust-is-the-reference-roadmap.md`). **Scoped to the probabilistic path only** (opt-in `type: probabilistic` matchkeys / probabilistic routing); the default weighted path is unaffected. **Measured F1-neutral** on the probabilistic bench panel (`gm_prob_native` vs `gm_probabilistic`): febrl3 and synthetic_person identical, historical_50k −0.0007 (within noise); dblp_acm not measured (Leipzig CSVs gitignored in CI). Boundary-level score differences are possible where a rapidfuzz-rs vs rapidfuzz-py similarity sits exactly on a comparison-level threshold — the native result is now the reference; `GOLDENMATCH_FS_NATIVE=0` restores the prior numpy operating point.
+
+### Fixed
+- **Auto-config no longer commits a standalone `exact` matchkey on a shared locality attribute (#1351).** A high-density column mis-classified as an identifier (e.g. a `zip` whose cardinality inflates on the 1k-row profiling sample) could back an `exact` matchkey and collapse everyone sharing a value into one cluster (~55% over-merge on real circulation data). A new discriminative-power veto (`build_matchkeys` → `autoconfig_discriminative.should_veto_exact`) demotes a proposed exact key to blocking-only when records sharing its value do NOT co-agree on other identity fields — measured from the data, not from cardinality (which cannot separate `zip` from `npi`: both moderate-cardinality, opposite correct answers). Name-typed basket fields co-agree FUZZILY (SequenceMatcher ≥ 0.85) so corrupted duplicates keep their key (e.g. febrl3's `soc_sec_id`, whose duplicates carry corrupted names); structured ids compare exactly. Veto-only (never promotes; classification/blocking untouched), fail-safe keep on thin support / `df=None`; kill-switch `GOLDENMATCH_DISCRIMINATIVE_VETO=0`. Auto-config accuracy gate held (febrl3 / ncvr_synthetic / historical_50k F1 unchanged).
+
+## [2.5.1] - 2026-07-01
+
+### Fixed
+- **PPRL is now opt-in instead of the default for sensitive data (#1342, #1344).** `select_strategy()` auto-routed any dataset with sensitive fields (PII/health) to privacy-preserving record linkage, returning empty `strong_ids`/`fuzzy_fields` even for a user deduping their own list. PPRL now fires only when the caller opts in via `allow_pprl=True`; sensitive data otherwise gets a normal weighted/fuzzy strategy, with `StrategyDecision.pprl_available=True` flagging that PPRL can be opted into. `allow_pprl` is threaded through `AgentSession.analyze/deduplicate/match_sources/compare_strategies`, `a2a.dispatch_skill`, and the A2A `_handle_send_task` HTTP handler (reads `allow_pprl` from the request body). MCP tool args (`mcp/agent_tools.py`) are a tracked follow-up. Non-sensitive-data behavior is unchanged.
+
+### Changed
+- `StrategyDecision` gains a `pprl_available: bool` field.
+
+## [2.5.0] - 2026-07-01
+
+### Added
+- **MemoryStore: Postgres backend for Learning Memory (#1338).** `MemoryStore(backend='postgres', connection=<dsn>, table_prefix='goldenmatch_')` and `MemoryConfig(backend='postgres', connection, dataset=<tenant>, table_prefix)` persist dedupe corrections + learned adjustments in Postgres, isolated per tenant: corrections filtered by `dataset`, `adjustments` keyed `(dataset, matchkey_name)`, and `MemoryLearner(dataset=…)` so `learn()` never pools corrections across tenants. Adds `LearnedAdjustment.dataset` and `MemoryConfig.table_prefix` (regex-guarded). Reuses the existing `postgres` extra (`psycopg[binary]`) — no new hard deps. **SQLite remains the default; every existing call path, signature default, and behavior is unchanged** (the dialect refactor is behavior-preserving; full SQLite memory suite green).
+
+### Changed
+- **Auto-config: `name_freq_weighted_jw` now downweights agreements on high-frequency name values using a per-dataset frequency table** (data-driven, applied across the whole score range), so identical common surnames (e.g. two "Smith") score below identical rare surnames - a higher matchkey threshold then separates same-name strangers from true matches (#1207, PR2a). Default-on; kill-switch `GOLDENMATCH_TF_NAME_WEIGHTING=0` restores the static-census behavior. Validated by the CI accuracy gates (#528/DQbench/Febrl/NCVR); this is an accuracy change, not a measured-local win.
+- **Auto-config: per-identifier blocking union on null-sparse multi-source data (#1207, PR1).**
+  When no single exact key clears the null-rate gate, `build_blocking` now emits a
+  per-identifier blocking union (one pass per strong identifier + name/geo) instead of a
+  single high-null compound that capped recall. Default-on; no behavior change when a
+  low-null single exact key exists. Strong-id passes use a non-null scale gate (the runtime
+  blocker filters null block keys) with a #876 perfect-surrogate exclusion. Measured blocking
+  recall 1.0 vs name-only 0.004 on a planted-dup fixture, no regression on the auto-config suite.
+  Scope: `auto_configure_df` switches to learned blocking at `total_rows >= 50_000`, so the
+  union applies below that threshold (or when learned blocking is off) today; the >=50k
+  learned-blocking interaction is a tracked follow-up.
+
+## [2.4.0] - 2026-06-27
+
+<!-- README-callout
+**The healing loop, now default-on across every surface** — every `dedupe_df` run surfaces ranked, self-verified config-suggestions on `result.suggestions` when there's headroom (free on a healthy run, no second pipeline pass). `dedupe_df(suggest=True)` returns verified suggestions; `heal=True` applies them and re-runs, returning the healed `result.config` + `result.heal_trail`. Available across Python, CLI (`--suggest` / `--heal`), MCP, A2A, REST, web, the TUI, and the edge-safe TypeScript port via WebAssembly. Needs `goldenmatch[native]`; degrades gracefully without it. Kill-switch `GOLDENMATCH_SUGGEST_ON_DEDUPE=0`.
+-->
+
+### Changed
+- **Healer (config-suggestion) self-verify gate default flipped to the precision-sensitive `cohesion` proxy (`cohesion_min_edge_cap50`).** Closes the raw-vs-live gap in `review_config`: suggester-gym live recovery 0.151 -> 0.543 (now equal to the raw kernel ceiling), with zero net-negatives on real perturbations. Rollback via `GOLDENMATCH_SUGGEST_HEALTH=legacy`. New knob `GOLDENMATCH_SUGGEST_COVERAGE_CAP` (default 0.50).
+
+### Added
+- **Healer wired into the default pipeline (advisory, every surface).** `dedupe_df` now
+  checks a free controller signal (RED/YELLOW health or a score dip) on every run and,
+  only when it fires, attaches cheap raw candidate suggestions to `result.suggestions` --
+  no second pipeline run, byte-identical timing on a healthy result. Opt into the expensive
+  verified path with `dedupe_df(df, suggest=True)`, or run the full apply-and-re-run loop
+  with `dedupe_df(df, heal=True)` (reading `result.heal_trail` + the healed `result.config`).
+  The same surface ships on CLI (`--suggest` / `--heal` plus a free default-run hint), MCP
+  (`review_config` tool), A2A (`review_config` skill), REST (`GET /suggest`), web
+  (`GET /api/v1/suggest`), and the TUI (Suggestions tab). Requires `goldenmatch[native]`;
+  every surface degrades gracefully without the wheel (attaches nothing, never raises).
+  Kill-switch `GOLDENMATCH_SUGGEST_ON_DEDUPE=0`.
+- **Config-suggestions ("the healing loop") documentation** — the iterative zero-config -> returned config -> healer-suggests-tweaks -> apply -> improve -> repeat workflow is now documented at `/goldenmatch/config-suggestions`.
+
+## [2.3.0] - 2026-06-24
+
+<!-- README-callout
+**Auto-enabled semantic blocking, now default-on** — text-heavy data automatically routes to SimHash-over-embeddings blocking when an embedder is reachable (a byte-identical no-op otherwise). Plus pluggable pgvector / DuckDB-HNSW vector-index backends and opt-in Fellegi-Sunter routing for no-strong-identifier datasets (`GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC=1`).
+-->
+
 ### Changed
 - **Auto-enabled semantic blocking is now default-on, native-sourced (#1090, epic #1087).**
   Text-heavy data (a long free-text column the lexical/structured keys under-cover)
@@ -23,6 +109,39 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   fallback when the native wheel is absent.
 
 ### Added
+- **Auto-config probabilistic routing — opt-in, default-off (#1254; harness #1216/#1226).**
+  Zero-config `dedupe_df` can now route a *probabilistic-shaped* dataset (no surviving
+  exact matchkey backed by a strong-identity column — `identifier`/`email`/`phone` —
+  plus ≥2 fuzzy fields) to the Fellegi-Sunter path instead of exact+weighted matchkeys,
+  when `GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC=1`. There's no clean key to carry the
+  dedup, so EM-weighted comparison wins: measured lift on no-strong-id / error-heavy
+  data (`historical_50k` F1 0.466→0.829, recall 0.39→0.75) with no regression on
+  datasets that retain a strong key (those stay deterministic). **Default-off** — a
+  behavior change pending a broader regression sweep; `dedupe_df` output is unchanged
+  when the flag is unset. Nominated on evidence by the new decision-kernel **quality
+  harness** (`scripts/autoconfig_quality/`, a `report`/`gate`/`bless` loop with a CI
+  `quality_gate` job + a dual-strategy det-vs-FS scorecard column). See
+  `docs-site/goldenmatch/tuning.mdx` and context-network ADR 0024.
+- **Tamper-evident audit log: per-event hash + on-demand seal chain (#1078,
+  epic Agent Memory #1073).** The append-only identity event log is now
+  cryptographically tamper-evident in two contention-free layers. (1) Every
+  event is stamped at insert with an `entry_hash` — a sha256 over its own
+  immutable fields (`audit.event_content_hash`); a *pure* function, so it adds
+  no insert-time serialization point and works uniformly with the Postgres
+  bulk-COPY write path. (2) `seal_audit_log()` folds the per-event hashes (in
+  `event_id` order) into a single chained root stored in the new `audit_seals`
+  table; each seal chains to its predecessor. `verify_audit_chain()` replays
+  both layers to detect content edits, deletion, reordering, and insertion of
+  any sealed event, returning `{ok, events_checked, seals_checked}` plus the
+  ids of any failures. Sealing is an explicit, infrequent op (never on the
+  write hot path), so streaming/bulk ingest is untouched; pre-hash-chain rows
+  (`entry_hash` NULL) are hashed on the fly so an existing log can be sealed
+  retroactively. Surfaced via two new MCP/A2A tools `identity_audit_seal` /
+  `identity_audit_verify` (MCP identity tools 13 → 15, total 66 → 68; A2A skills
+  35 → 37). Schema v3 → v4 (idempotent SQLite migration + Postgres
+  `ADD COLUMN IF NOT EXISTS` + Alembic `0003`). This closes the last #1078
+  follow-up; the mongo backend stamps `entry_hash` but the seal chain is
+  SQLite/Postgres-only.
 - **Agent-writable identity ops completed + audit-log export (#1075 / #1078,
   epic Agent Memory #1073).** Building on the provenance spine, all four identity
   mutations are now reachable over MCP **and** A2A with `actor`/`trust`
@@ -34,9 +153,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   tool exports the append-only event log in commit order (who / trust / when /
   why), optionally filtered by dataset / actor — the compliance-export surface for
   #1078. MCP identity tools 10 → 13 (total 63 → 66); A2A skills 32 → 35. No
-  migration (`claimed` is a value in the existing `kind` column). Follow-ups:
-  tamper-evident hash-chaining of the log, and CLI front doors for claim /
-  resolve-conflict.
+  migration (`claimed` is a value in the existing `kind` column). Follow-up
+  (tamper-evident hash-chaining of the log) shipped in the entry above; CLI
+  front doors for claim / resolve-conflict remain open.
 - **Identity-write provenance spine: `actor` + `trust` on every event/edge
   (#1075 / #1078, epic Agent Memory #1073).** `IdentityEvent` and `EvidenceEdge`
   now record WHO made each write (`actor`, e.g. `pipeline` / `agent:claude` /

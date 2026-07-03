@@ -37,6 +37,9 @@ from __future__ import annotations
 import logging
 import math
 from collections.abc import Sequence
+from operator import mul
+
+from goldenmatch.core import _perceptual_tables as _pt
 
 logger = logging.getLogger(__name__)
 
@@ -159,14 +162,20 @@ def _bilinear_resize(grid: list[list[float]], size: int) -> list[list[float]]:
 
 
 def _dct1d_matrix(n: int) -> list[list[float]]:
-    """Precompute the unnormalized DCT-II basis: ``M[k][i] = cos(pi*(i+0.5)*k/n)``."""
+    """Precompute the unnormalized DCT-II basis: ``M[k][i] = cos(pi*(i+0.5)*k/n)``.
+
+    Retained for reference/tools; the kernel reads the COMMITTED constant basis
+    (`_perceptual_tables.DCT_BASIS`, the 8x32 slice `_dct2_topleft` needs) so the
+    hash is bit-identical across CPython / native / wasm -- no runtime libm.
+    """
     return [
         [math.cos(math.pi * (i + 0.5) * k / n) for i in range(n)]
         for k in range(n)
     ]
 
 
-_DCT_M = _dct1d_matrix(IMG_RESIZE)
+# The frozen 8x32 basis shared bit-for-bit with the Rust kernel (tables.rs).
+_DCT_M = _pt.DCT_BASIS
 
 
 def _dct2_topleft(block: list[list[float]], size: int, keep: int) -> list[list[float]]:
@@ -464,20 +473,18 @@ def _frame_band_energies(samples: Sequence[float], start: int, tw) -> list[float
     n = AUDIO_FRAME
     frame = [_HANN[i] * samples[start + i] for i in range(n)]
     mags: list[float] = []  # |X[k]|^2 for k in [lo, hi)
+    # `sum(map(mul, ...))` accumulates left-to-right starting from 0 exactly as
+    # the naive `re += x * row_c[idx]` loop did, so it is bit-identical to the
+    # Rust kernel and golden vectors -- the multiply/accumulate just moves into C
+    # (~1.7x over the Python loop). Do NOT swap in math.fsum/numpy: that changes
+    # the summation order and breaks cross-language parity.
     for row_c, row_s in zip(cos_table, sin_table):
-        re = 0.0
-        im = 0.0
-        for idx in range(n):
-            x = frame[idx]
-            re += x * row_c[idx]
-            im += x * row_s[idx]
+        re = sum(map(mul, frame, row_c))
+        im = sum(map(mul, frame, row_s))
         mags.append(re * re + im * im)
     energies = []
     for m in range(AUDIO_BANDS):
-        acc = 0.0
-        for k in range(band_bins[m], band_bins[m + 1]):
-            acc += mags[k - lo]
-        energies.append(acc)
+        energies.append(sum(mags[k - lo] for k in range(band_bins[m], band_bins[m + 1])))
     return energies
 
 

@@ -300,6 +300,7 @@ def _open_memory_store(config: GoldenMatchConfig):
             backend=config.memory.backend,
             path=config.memory.path,
             connection=config.memory.connection,
+            table_prefix=config.memory.table_prefix,
         )
     except Exception as e:
         logger.warning("Memory store init failed, continuing without memory: %s", e)
@@ -520,6 +521,7 @@ def _apply_memory_pre(memory_store: Any, config: GoldenMatchConfig, matchkeys: l
             memory_store,
             threshold_min=config.memory.learning.threshold_min_corrections,
             weights_min=config.memory.learning.weights_min_corrections,
+            dataset=config.memory.dataset,
         )
         if not learner.has_new_corrections():
             return
@@ -2225,6 +2227,28 @@ def _run_dedupe_pipeline(
             _clusters_cache.append(d)
         return _clusters_cache[0]
 
+    def _golden_member_row_ids() -> list[int]:
+        """``__row_id__`` of members of multi-member, non-oversized clusters --
+        the only rows survivorship builds a golden record for (singletons and
+        oversized clusters never are). Read from whichever cluster representation
+        is populated, WITHOUT materializing the full cluster dict on the
+        frames-out path."""
+        if cluster_frames is not None:
+            keep = cluster_frames.metadata.filter(
+                (pl.col("size") > 1) & (~pl.col("oversized"))
+            )["cluster_id"].to_list()
+            return cluster_frames.assignments.filter(
+                pl.col("cluster_id").is_in(keep)
+            )["member_id"].to_list()
+        return [
+            mid
+            for info in clusters.values()
+            if isinstance(info, dict)
+            and info.get("size", 0) > 1
+            and not info.get("oversized")
+            for mid in info.get("members", [])
+        ]
+
     if cluster_frames is not None:
         # Stats from frame aggregates (no dict materialization). Matches the
         # dict path's len(clusters) / size>1 / oversized counts exactly.
@@ -2256,11 +2280,22 @@ def _run_dedupe_pipeline(
     golden_df: pl.DataFrame | None = None
     golden_rules = config.golden_rules or GoldenRulesConfig(default_strategy="most_complete")
 
+    # Throughput tier (#1151): corpus dedup consumes the clusters / dup mapping,
+    # not canonical golden records — that's the whole point of the tier. Golden
+    # survivorship's per-cluster build is an O(N) polars iter_rows that wedges the
+    # 100k+ corpus ceiling (a 100k FineWeb run was faulthandler-killed at 150s in
+    # this stage). When the throughput plan engaged, skip the golden/survivorship
+    # stage (and its quality scan + adaptive refinement) entirely: golden_df stays
+    # None and clusters/dupes/unique carry the result. Same posture as the #1134
+    # quality-scan skip already applied to this tier. `_throughput_posture` is a
+    # non-None dict only after the throughput scoring branch actually ran.
+    _skip_golden = _throughput_posture is not None
+
     # v1.18: post-cluster golden-rules refinement. When the user opted
     # in via `golden_rules.adaptive=True`, refine per-field strategies
     # using cluster shape + column profiles. Refinement is a NEW config
     # (immutable mutation); the original golden_rules is unchanged.
-    if golden_rules.adaptive:
+    if not _skip_golden and golden_rules.adaptive:
         try:
             from goldenmatch.core.golden_rules_refiner import refine_golden_rules
 
@@ -2296,14 +2331,30 @@ def _run_dedupe_pipeline(
     # unless there are real quality issues). The field defaulted True but was a
     # documented no-op until now.
     quality_scores = None
-    if getattr(golden_rules, "quality_weighting", False):
-        from goldenmatch.core.quality import compute_quality_scores
-        with stage("golden_quality_scores"):
-            quality_scores = compute_quality_scores(collected_df)
-        if quality_scores:
-            logger.info(
-                "GoldenCheck quality weighting: %d penalized cell(s)", len(quality_scores)
-            )
+    if not _skip_golden and getattr(golden_rules, "quality_weighting", False):
+        # Scope the goldencheck.cell_quality scan (full-frame O(N) value counts +
+        # O(distinct^2) fuzzy variant detection per string column) to just the
+        # rows that will actually get a golden record -- members of multi-member,
+        # non-oversized clusters -- instead of the entire collected frame. On a
+        # typical dedupe that is a fraction of N with far fewer distinct values,
+        # so the scan is much cheaper, and singleton rows never consume a quality
+        # weight anyway. When nothing multi-member clustered, the scan is skipped
+        # entirely. Variant detection is now judged relative to the cluster
+        # members (the values survivorship actually compares), which is the
+        # relevant universe; scoped so cell_quality is not paid over the whole
+        # frame on every default dedupe.
+        _member_ids = _golden_member_row_ids()
+        if _member_ids:
+            from goldenmatch.core.quality import compute_quality_scores
+            with stage("golden_quality_scores"):
+                quality_scores = compute_quality_scores(
+                    collected_df.filter(pl.col("__row_id__").is_in(_member_ids))
+                )
+            if quality_scores:
+                logger.info(
+                    "GoldenCheck quality weighting: %d penalized cell(s)",
+                    len(quality_scores),
+                )
 
     # Golden-record construction was the hidden N²-shaped stage that the
     # bench harness surfaced at 11K rows (36% of wall before this rewrite):
@@ -2325,7 +2376,14 @@ def _run_dedupe_pipeline(
     # rebuilt by the shared block below). quality_scores is always None in this
     # pipeline (matching the dict path's _polars_native_eligible(..., None)
     # gate); provenance mirrors config.output.lineage_provenance.
-    if cluster_frames is not None:
+    if _skip_golden:
+        with stage("golden"):
+            # Throughput tier: no survivorship (see _skip_golden above). golden_df
+            # stays None; the DedupeResult exposes clusters/dupes/unique instead.
+            logger.info(
+                "throughput tier: skipping golden-record survivorship (#1151)"
+            )
+    elif cluster_frames is not None:
         with stage("golden"):
             from goldenmatch.core.golden import build_golden_records_from_frames
             _provenance_on = config.output.lineage_provenance

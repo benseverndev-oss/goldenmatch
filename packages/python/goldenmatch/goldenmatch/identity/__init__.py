@@ -5,6 +5,12 @@ See ``docs/superpowers/specs/2026-05-12-identity-graph-design.md``.
 """
 from __future__ import annotations
 
+from goldenmatch.identity.audit import (
+    AuditVerification,
+    event_content_hash,
+    seal_audit_log,
+    verify_audit_chain,
+)
 from goldenmatch.identity.mediation import (
     ConflictItem,
     ConflictResolution,
@@ -16,9 +22,12 @@ from goldenmatch.identity.mediation import (
 )
 from goldenmatch.identity.migrate_ids import MigrationReport, migrate_record_ids
 from goldenmatch.identity.model import (
+    AuditSeal,
+    ClaimType,
     EdgeKind,
     EventKind,
     EvidenceEdge,
+    EvidenceRef,
     IdentityAlias,
     IdentityEvent,
     IdentityNode,
@@ -35,6 +44,7 @@ from goldenmatch.identity.profile import (
 )
 from goldenmatch.identity.query import (
     IdentityView,
+    amend_claim,
     claim_record,
     find_by_record,
     find_conflicts,
@@ -43,6 +53,8 @@ from goldenmatch.identity.query import (
     list_entities,
     manual_merge,
     manual_split,
+    promote_claim,
+    revoke_claim,
 )
 from goldenmatch.identity.resolve import (
     ResolveSummary,
@@ -105,6 +117,9 @@ __all__ = [
     "manual_merge",
     "manual_split",
     "claim_record",
+    "promote_claim",
+    "amend_claim",
+    "revoke_claim",
     "match_record_to_entity",
     "migrate_record_ids",
     "resolve_clusters",
@@ -131,6 +146,13 @@ __all__ = [
     "entity_profile",
     "identity_summary_stats",
     "steward_worklist",
+    "AuditSeal",
+    "AuditVerification",
+    "event_content_hash",
+    "seal_audit_log",
+    "verify_audit_chain",
+    "ClaimType",
+    "EvidenceRef",
     "EdgeKind",
     "EventKind",
     "EvidenceEdge",

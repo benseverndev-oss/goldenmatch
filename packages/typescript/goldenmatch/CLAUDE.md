@@ -57,6 +57,40 @@ exposed as the **opt-in subpath** `goldenmatch/core/autoconfig-wasm`.
   SEPARATE coarser `ColumnType` (`text`/`id-like`/`unknown`, populated from JS `typeof`, used
   by `autoconfigRules.ts`) — that one is a different layer, untouched by this lever.
 
+## Suggest-wasm healer core (`goldenmatch/core/suggest-wasm`)
+The **config-suggestion engine** (the "healer") is the pyo3-free `suggest-core` crate
+(`packages/rust/extensions/suggest-core`) compiled to wasm and shared by both the Python
+`goldenmatch-native` wheel and this TS package — one kernel, no parallel JS rule logic.
+It mirrors the autoconfig wasm pattern above exactly:
+- **Synchronous `initSync` over an inlined base64 wasm**, committed under `src/core/_wasm/`
+  (`suggestWasmBindings.{js,d.ts}` + `suggestWasmBytes.ts`) so `tsc`/`vitest`/`tsup` need no
+  rust toolchain. Loader = `src/core/suggestWasm.ts`, exposed as the **opt-in subpath**
+  `goldenmatch/core/suggest-wasm`.
+- **Lean registry, graceful-empty default.** The always-on healer surface (`src/core/suggest.ts`:
+  `serializeSuggestions` / `headroomSignal` / `maybeSuggest` / `reviewConfig` / `heal`, wired into
+  `dedupe()` in `api.ts`) reaches the kernel through `src/core/suggestWasmBackend.ts`
+  (`get/setSuggestWasmBackend`, `import type` only — erased). Importing the heavy subpath and
+  calling **`enableSuggestWasm()`** registers the backend; until then every surface returns `[]` /
+  `undefined` and NEVER throws (the `[native]`-analog posture — opt-in, pure graceful-empty
+  default). `disableSuggestWasm()` reverts (test isolation).
+- **Regenerate the embed** (after any `suggest-core`/`suggest-wasm` change):
+  `node scripts/build_suggest_wasm.mjs` (needs wasm-pack + the wasm32 target). It rebuilds the
+  wasm, strips the async-init path, base64-embeds it, and COPIES the kernel golden vectors from
+  `suggest-core/tests/golden/suggest/` into `tests/parity/fixtures/suggest/`. The fixtures are
+  AUTHORED by the suggest-core BLESS golden test (`BLESS_SUGGEST_FIXTURES=1 cargo test -p
+  goldenmatch-suggest-core --features arrow --test bless`), the independent oracle — the build
+  script only copies, it does NOT re-bless. (`column_signals_basic.json` is Python-emitted, not a
+  kernel golden — the build script never touches it.)
+- **Caller-built column signals.** The `column_signals` batch is built TS-side by
+  `src/core/suggestColumnSignals.ts` (`buildColumnSignals`) over the existing profiler / indicator
+  functions, with a Python-parity fixture.
+- **Cross-surface parity gate:** `tests/parity/suggest-wasm.parity.test.ts` (committed wasm vs the
+  copied golden fixtures) + the Python native cross-surface check on the SAME fixtures. CI: the
+  `suggest_wasm` path filter gates a "Rebuild + verify embedded suggest wasm" drift-guard step in
+  the `typescript` lane (rebuilds, `git diff --exit-code` the kernel fixtures only — NOT the
+  toolchain-variant wasm bytes — then runs the parity test); `suggest-core` (`--features arrow`) +
+  `suggest-wasm` (`cargo check`) run in the `rust` lane.
+
 ## Wave history
 | npm | Python parity | Headline |
 |-----|---------------|----------|
@@ -69,6 +103,7 @@ exposed as the **opt-in subpath** `goldenmatch/core/autoconfig-wasm`.
 | 0.10.0 | v1.15 CLI + REST surface | `goldenmatch identity {list,show,history,conflicts,merge,split}` CLI subcommands + matching `/identities/*` REST routes (bound via `setServerIdentityStore`). Web UI / TUI / MCP-identity-tools / pipeline-driven `resolveClusters` still deferred. |
 | 0.11.0 | core-algo catch-up + Phase 5 | Continuous-EM probabilistic (`trainEMContinuous`/`scoreProbabilisticContinuous`), `embedding`/`record_embedding` scorers (pluggable embedder shim — structural parity, not numeric), software/biblio domain extractors, autoconfig v3 planner + 3 tuners + `AutoConfigMemory`, and the golden-strategy plugin port (#208). Parity harness broadened with Python-generated goldens for blocker / clustering / golden-survivorship / discrete-EM. Still gappy: embedding numeric values (no torch/Vertex), cluster-threshold tuner is logic-parity only, `DOMAIN_EXTRACTED_COLS` still 3 vs Python's 12. |
 | 0.14.0 (pending) | agent surface (AgentSession + A2A) | **AgentSession/A2A port (2026-06-15, the last undeclared parity gap).** Edge-safe `AgentSession` decision core + the shared `AGENT_SKILLS` registry + `dispatchSkill` (`src/core/agent/`); 14 agent-level MCP tools (MCP 30→44); A2A skill-union agent card + fail-closed bearer auth (`GOLDENMATCH_AGENT_TOKEN`) + unified `dispatchAnySkill` + `/tasks/send` + `/tasks/{id}/cancel`; node file-loaders (`analyzeFile`/`deduplicateFile`/`matchSourcesFile`). Behavior-fixture parity vs Python (`selectStrategy` decision table is the keystone). 4 waves, PRs #989/#994/#995 + this one. |
+| 0.x (pending) | config-suggestion healer (WASM) | **Healer on TS/WASM (2026-06-27).** The `suggest-core` kernel compiled to wasm (`suggest-wasm`) wired into `dedupe()` at full default-pipeline parity: free trigger + `{ suggest }` verify + `{ heal }` loop, opt-in `enableSuggestWasm()` (the `[native]` analog) with graceful-empty default, on every surface (core / CLI / MCP `review_config` → MCP 44→45 / A2A `review_config` skill). Cross-surface golden-vector parity (TS == Rust == Python). See `context-network/decisions/0027-healer-wasm-ts.md`. |
 
 Each wave's spec/plan: `docs/superpowers/specs/2026-05-10-ts-parity-arc-design.md`, `docs/superpowers/specs/2026-06-15-ts-agentsession-a2a-port-design.md` + per-wave plans.
 
@@ -214,7 +249,7 @@ npx vitest run tests/parity/        # parity-only suite
 - **Identity Graph (v0.8.0, edge-safe core):** `InMemoryIdentityStore`, `newEntityId`, `findByRecord`, `getEntity`, `listEntities`, `findConflicts`, `history`, `manualMerge`, `manualSplit`, `resolveClusters`, `ResolveSummary`, `IdentityView`, types
 - **Pipeline-driven population (Wave 4, 2026-06-05): `resolveClusters` ported.** `src/core/identity/resolve.ts` is the edge-safe port of Python `identity/resolve.py`'s core (dict/Map path): per cluster it decides create / absorb / merge from which existing identities cover the records (`store.lookupEntityIds` pre-flight), upserts nodes + records, records `same_as` edges from `pairScores`, emits an idempotent event log (`hasRunEvent`), and flags weak-bottleneck `conflicts_with` edges. record_id = `${source}:${pk}` when `sourcePkCol` set, else `recordFingerprint`. Returns a `ResolveSummary` (created/absorbedRecords/merged/edgesAdded/eventsEmitted/recordsUpserted/conflictsFlagged). **Parity is structural** (UUID entity ids): fixture `tests/parity/fixtures/resolve-clusters.json` is emitted by `packages/python/goldenmatch/scripts/emit_resolve_fixture.py` (3-run create→absorb→merge scenario) and `tests/parity/resolve-clusters.test.ts` asserts identical per-run summaries + final record→entity grouping. **Deferred vs Python (documented):** postgres bulk fast-path, SP-A `cluster_frames` path, legacy content-hash migration candidate, `controllerSnapshot`, batch-fingerprint. Not yet wired into the TS dedupe pipeline (callable directly); auto-wiring is a follow-up. (`IdentityNode`, `SourceRecord`, `EvidenceEdge`, `IdentityEvent`, `IdentityAlias`, `IdentityStatus`, `EventKind`, `EdgeKind`, `IdentityStore`).
 - **Identity Graph (v0.9.0, persistent backend):** `SqliteIdentityStore` in `src/node/identity/`. Implements every `IdentityStore` method (19 total) against an SQLite file at `.goldenmatch/identity.db` (configurable). `better-sqlite3` is an optional peer dep. Schema is byte-identical to Python so cross-toolkit DBs round-trip.
-- MCP tool count: 30 (19 base + 5 memory + 6 identity). Description literal at `src/node/mcp/server.ts:7`. `tool_count` is derived from `TOOLS.length`, asserted dynamically in `tests/unit/mcp-server.test.ts` (no hardcoded count).
+- MCP tool count: 45 (19 base + 5 memory + 6 identity + 15 agent, incl. the healer's `review_config`). Description literal at `src/node/mcp/server.ts:7`. `tool_count` is derived from `TOOLS.length`, asserted dynamically in `tests/unit/mcp-server.test.ts` (no hardcoded count).
 - **MCP bin (v0.12.0):** `src/node/mcp/server.ts` is exposed as the `goldenmatch-mcp` bin (tsup entry `node/mcp/server`); it already had the JSON-RPC stdio loop (`startMcpServer`) — v0.12.0 added the shebang + `require.main` guard + bin wiring so it's directly runnable.
 - **TS-TUI boost/export wiring (Wave 2.3, 2026-06-05):** the ink TUI's Boost tab now persists y/n labels to Learning Memory via `addCorrection({decision: "approve"|"reject", source: "steward", path: options.memoryPath})` (skip writes nothing) instead of dropping them in local React state. The Export tab writes real files via the extracted, unit-testable `writeExports(result, "csv"|"json", dir)` (golden/dupes/unique through `writeCsv`/`writeJson`) instead of the old `setTimeout` stub. New `tui` CLI flags: `--memory-path`, `-o/--output-dir`; new `TuiOptions.memoryPath`/`.outputDir`. Test: `tests/unit/tui-export.test.ts` (writeExports round-trips CSV + JSON to a tmp dir; ink closures themselves aren't renderable without ink-testing-library).
 - **Identity MCP tools (v0.13.0):** `src/node/mcp/identity-tools.ts` exposes the 6 identity tools (`identity_resolve`/`identity_list`/`identity_history`/`identity_conflicts`/`identity_merge`/`identity_split`) at parity with `goldenmatch/mcp/identity_tools.py`, composed into `TOOLS` and routed via `IDENTITY_TOOL_NAMES` in the server. snake_case wire format; backed by `SqliteIdentityStore` (test seam `__setIdentityStoreFactoryForTests` injects `InMemoryIdentityStore` so tests skip the better-sqlite3 peer dep).

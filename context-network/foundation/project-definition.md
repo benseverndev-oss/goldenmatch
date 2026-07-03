@@ -24,6 +24,24 @@ Five commitments turn the North Star into a test every change must pass:
 The honest gap-assessment against these five commitments, and the sequenced plan to close
 it, is [../planning/north-star-roadmap.md](../planning/north-star-roadmap.md).
 
+## The product loop (healing)
+The **healing loop** is the *user-facing expression* of two commitments —
+"zero-config should embarrass the alternatives" and "out-of-the-box should
+approach the hand-tuned expert." The five beats:
+
+1. **Zero-config first pass** — `dedupe_df(df)` runs with no rules or training; auto-config picks a defensible config; good results immediately.
+2. **You get the config it chose** — returned, inspectable, versionable; not a black box.
+3. **The healer suggests tweaks** — `review_config(df, config)` emits ranked, explainable, self-verified edits (kept only if they don't worsen an unsupervised health proxy, so a suggestion never makes results worse).
+4. **You apply the tweaks** — `apply_suggestion` → improved config.
+5. **Results improve. Repeat.**
+
+This is the *product-facing* arc — distinct from, and complementary to, the
+engine-portability governing arc above (one is "the same answer at any scale,"
+the other is "approach the expert without being one"). The healer is opt-in
+today (`review_config`, requires `goldenmatch[native]`); its verify-gate default
+is now the precision-sensitive `cohesion` proxy, see
+[../decisions/0025-healer-verify-gate-proxy.md](../decisions/0025-healer-verify-gate-proxy.md).
+
 ## What it is
 **Golden Suite** is a polyglot monorepo of data-quality / entity-resolution tooling.
 **goldenmatch** is the flagship: an entity-resolution (ER / dedupe / record-linkage)
@@ -65,4 +83,4 @@ the `CLAUDE.md` files (see [structure.md](structure.md)); designs are in
 `docs/superpowers/specs/`.
 
 ---
-**Classification:** foundation/stable • **Last updated:** 2026-06-15
+**Classification:** foundation/stable • **Last updated:** 2026-06-26

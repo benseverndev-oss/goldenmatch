@@ -1,0 +1,142 @@
+# Config-suggestion kernel quality gate.
+#
+# Runs the suggest_quality oracle over the always-available deterministic
+# datasets (synthetic + ncvr_synthetic + anchor_*) and gates on regression
+# vs the committed scorecard.json baseline.
+#
+# Two-tier cost split (the gym-gate / FULL_DIST catalog recovery check overruns
+# ~70-120min, so it does NOT belong on every suggest-touching push):
+#   - PUSH (PR signal): runs ONLY the fast `gate` step (deterministic subset,
+#     FULL_DIST=0, ~minutes). This is the per-PR suggester-quality regression
+#     guard -- it's the step that catches suggester_prec / convergence drops.
+#   - SCHEDULE (nightly) + workflow_dispatch: ALSO run the heavy `gym-gate`
+#     (FULL_DIST over the whole catalog). The comprehensive recovery check runs
+#     daily on main instead of taxing each PR with a 2h tail.
+#
+# The gate step exits nonzero on a regression; the job fails. The bench runner
+# matches the repo default for bench workloads (large-new-64GB, 16c/64GB).
+#
+# To bless a new baseline after an intentional kernel change:
+#   gh workflow run bench-suggest-quality.yml --ref <branch> -f mode=bless
+name: bench-suggest-quality
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "gate (default) or bless (write a new baseline)"
+        required: false
+        default: "gate"
+      datasets:
+        description: "Comma-separated dataset filter (empty = all available)"
+        required: false
+        default: ""
+      runner:
+        description: "Runner label"
+        required: false
+        default: "large-new-64GB"
+  schedule:
+    # Nightly full run (fast gate + heavy gym-gate FULL_DIST) on main, off-peak
+    # off-minute so it doesn't pile onto the top-of-hour scheduler.
+    - cron: "37 7 * * *"
+  push:
+    paths:
+      - "packages/rust/extensions/suggest-core/**"
+      - "packages/rust/extensions/native/src/suggest.rs"
+      - "packages/python/goldenmatch/goldenmatch/core/suggest/**"
+      - "scripts/suggest_quality/**"
+      - ".github/workflows/bench-suggest-quality.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  suggest-quality:
+    runs-on: ${{ inputs.runner || 'large-new-64GB' }}
+    # The gym-gate step (FULL_DIST over the whole catalog) + native build + the
+    # regular gate overrun 60min on every push, cancelling the job at "Complete
+    # job" -> a perpetual red `suggest-quality` check on main. 120 gives the
+    # FULL_DIST work headroom (a one-shot gym-bless completed in ~70min under it).
+    timeout-minutes: 120
+    env:
+      GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+      GOLDENMATCH_NATIVE: "1"
+      POLARS_SKIP_CPU_CHECK: "1"
+      PYTHONHASHSEED: "0"
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/native
+
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+
+      - name: Sync workspace
+        run: uv sync --all-packages
+
+      - name: Build native extension (suggest_config kernel)
+        run: uv run python scripts/build_native.py
+
+      - name: Assert suggest_config kernel symbol is present
+        run: |
+          uv run python - <<'PY'
+          from goldenmatch.core._native_loader import native_module
+          mod = native_module()
+          assert mod is not None, "native ext did not load after build_native.py"
+          assert hasattr(mod, "suggest_config"), (
+              "native ext loaded but suggest_config is MISSING -- the suggestion "
+              "kernel would silently raise SuggestionsNativeRequired. Rebuild the "
+              "crate or bump goldenmatch-native so the symbol ships."
+          )
+          print("OK: suggest_config present in native ext")
+          PY
+
+      - name: Run suggest_quality ${{ inputs.mode || 'gate' }}
+        env:
+          GOLDENMATCH_SUGGEST_FULL_DIST: ${{ (startsWith(inputs.mode, 'gym') || inputs.mode == 'bakeoff') && '1' || '0' }}
+        run: |
+          MODE="${{ inputs.mode || 'gate' }}"
+          DATASETS="${{ inputs.datasets }}"
+          if [ -n "$DATASETS" ]; then
+            FILTER="--datasets $DATASETS"
+          else
+            FILTER=""
+          fi
+          uv run python -m scripts.suggest_quality "$MODE" $FILTER
+
+      - name: Run gym-gate (catalog recovery non-regression)
+        # Heavy FULL_DIST catalog recovery check (~70-120min). Skipped on push so
+        # PRs get only the fast `gate`; runs on the nightly schedule + manual
+        # workflow_dispatch.
+        if: ${{ github.event_name != 'push' }}
+        env:
+          GOLDENMATCH_SUGGEST_FULL_DIST: "1"
+        run: |
+          DATASETS="${{ inputs.datasets }}"
+          if [ -n "$DATASETS" ]; then
+            FILTER="--datasets $DATASETS"
+          else
+            FILTER=""
+          fi
+          uv run python -m scripts.suggest_quality gym-gate $FILTER
+
+      - name: Commit re-blessed gym baseline
+        if: ${{ inputs.mode == 'gym-bless' }}
+        run: |
+          if git diff --quiet -- scripts/suggest_quality/baselines/gym_scorecard.json; then
+            echo "No gym baseline change to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add scripts/suggest_quality/baselines/gym_scorecard.json
+          git commit -m "chore(suggest-gym): re-bless gym baseline under FULL_DIST [skip ci]"
+          git push origin HEAD:${{ github.ref_name }}

@@ -1,0 +1,30 @@
+{
+  "expected": [
+    {
+      "confidence": 0.55,
+      "current_value": "none",
+      "evidence": {
+        "cardinality_ratio": 0.8,
+        "collision_rate": 0.6,
+        "identity_score": 0.9
+      },
+      "id": "ne:npi",
+      "kind": "add_negative_evidence",
+      "patch": {
+        "field": "npi",
+        "op": "add_negative_evidence"
+      },
+      "predicted_effect": "precision_up",
+      "proposed_value": "negative_evidence",
+      "rationale": "`npi` looks like a strong identity column (identity_score 0.90, cardinality_ratio 0.80) yet disagrees within 60% of merged clusters. Adding it as negative evidence will penalise merges where it conflicts.",
+      "target": "npi"
+    }
+  ],
+  "input": {
+    "clusters": "[]",
+    "column_signals": "[{\n                \"field\": \"npi\",\n                \"col_type\": \"string\",\n                \"scorer\": \"exact\",\n                \"in_blocking\": false,\n                \"in_negative_evidence\": false,\n                \"identity_score\": 0.9,\n                \"corruption_score\": 0.0,\n                \"collision_rate\": 0.6,\n                \"cardinality_ratio\": 0.8,\n                \"null_rate\": 0.0,\n                \"variant_rate\": 0.0\n            }]",
+    "config": "{\"matchkeys\":[{\"fields\":[{\"field\":\"record_id\",\"scorer\":\"exact\",\"weight\":1.0}],\"kind\":\"weighted\",\"name\":\"person\",\"threshold\":0.8}],\"negative_evidence\":[]}",
+    "priors": "{\"counts\": {}}",
+    "scored_pairs": "{\"score\": [], \"n_pairs\": 0}"
+  }
+}

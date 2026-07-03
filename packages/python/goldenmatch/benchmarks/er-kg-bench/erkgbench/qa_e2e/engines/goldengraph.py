@@ -43,15 +43,66 @@ def _with_retry(fn, *, attempts: int = 6, base: float = 2.0, cap: float = 45.0):
 _AS_OF = 10**12
 
 #: Local-retrieval expansion depth. The default-1 ball couldn't reach k-hop answers
-#: (the 1->2 hop accuracy cliff in the 2026-06-22 headline); 4 covers the engineered
-#: corpus's 1-4 hop range. Overridable for tuning sweeps.
-_RETRIEVAL_HOPS = int(os.environ.get("GOLDENGRAPH_QA_RETRIEVAL_HOPS", "4"))
+#: (the 1->2 hop accuracy cliff in the 2026-06-22 headline). Raised 4->6 (2026-06-23):
+#: the N=50 trace showed connected answers (same_component=True) sitting JUST outside
+#: the hops=4 ball -- RETRIEVAL-BUDGET misses. Env-tunable for sweeps.
+_RETRIEVAL_HOPS = int(os.environ.get("GOLDENGRAPH_QA_RETRIEVAL_HOPS", "6"))
+
+#: Max entities in the budget-capped answer ball (the `ask` node_budget). 256, not
+#: the library default 64: the N=50 RETRIEVAL-BUDGET misses had balls of ~64-171
+#: entities while the connected answer sat out in the 1300+ "wide" ball -- 64 was
+#: starving multi-hop answers. The budget still BOUNDS the synthesis prompt; this
+#: trades a bigger (costlier) ball for reach. Env-tunable for the sweep.
+_NODE_BUDGET = int(os.environ.get("GOLDENGRAPH_QA_NODE_BUDGET", "256"))
 
 #: Deep, unbudgeted hop count for the localize trace's "wide ball" -- approximates
 #: "everything reachable from the seeds" to split a retrieval miss (answer in the
 #: graph but outside the budget-capped ball) from a broken-chain miss (answer in
 #: the graph but disconnected from the seeds within any reasonable depth).
 _WIDE_HOPS = 8
+
+#: Answer-time retrieval mode. "local" (default) = the entity-graph BFS over extracted
+#: triples (the historical goldengraph path). "hybrid" = that ball PLUS raw source
+#: passages retrieved by goldenmatch's own retrieval surface, fed to synthesis as the
+#: ground truth with the graph as a multi-hop map. The bench's structural finding was
+#: that the triple-only graph is a LOSSY intermediate (it lost to plain paragraph RAG);
+#: hybrid tests whether layering the passages back in -- while keeping the graph for
+#: cross-passage bridging -- closes that gap. Env-tunable for the A/B.
+_QA_MODE = os.environ.get("GOLDENGRAPH_QA_MODE", "local")
+
+#: Passages retrieved per question in hybrid mode (matches the goldenmatch_rag /
+#: text_rag context budget so the comparison is apples-to-apples).
+_QA_PASSAGE_K = int(os.environ.get("GOLDENGRAPH_QA_PASSAGE_K", "10"))
+
+
+def _passage_embed_model() -> str:
+    """Passage-retriever embedding model: the local lane's OPENAI_EMBED_MODEL (e.g. nomic-embed-text via
+    Ollama) when set, else the OpenAI default. Routes the passage half through the SAME endpoint as the
+    chat/graph halves on the local stack, unblocking hybrid mode without OpenAI spend. (Intentional
+    duplicate of run_qa_e2e._rag_embed_model -- the engine must not import the CLI module.)"""
+    return os.environ.get("OPENAI_EMBED_MODEL") or "text-embedding-3-large"
+
+
+class _PassageRetriever:
+    """goldenmatch paragraph retrieval over the corpus -- literally the goldenmatch_rag
+    retriever (`retrieve_similar_records` + the SAME OpenAI embedder), reused as the
+    passage source for goldengraph's hybrid `ask`. The injected embedder caches by
+    cache_key, so the corpus embeds once across all questions; each query embeds once.
+    Holds NO graph state -- the graph half stays the store's job."""
+
+    def __init__(self, ids, texts, embedder):
+        from .goldenmatch_rag import _make_frame
+
+        self._frame = _make_frame(ids, texts)
+        self._embedder = embedder
+
+    def retrieve(self, query: str, k: int) -> list[str]:
+        from goldenmatch.core.retrieval import retrieve_similar_records
+
+        hits = retrieve_similar_records(
+            self._frame, query, "text", k=k, embedder=self._embedder
+        )
+        return [str(h.record.get("text", "")) for h in hits]
 
 
 class _CachingEmbedder:
@@ -102,6 +153,33 @@ class _CountingLLM:
             self.output_tokens += max(1, len(out) // 4)
         return out
 
+    def complete_json(self, prompt: str) -> str:
+        # JSON-constrained extraction path; forward to the inner client's complete_json
+        # when present (the OpenAIClient/Ollama path), else fall back to complete.
+        fn = getattr(self._inner, "complete_json", self._inner.complete)
+        out = _with_retry(lambda: fn(prompt))
+        with self._lock:
+            self.input_tokens += max(1, len(prompt) // 4)
+            self.output_tokens += max(1, len(out) // 4)
+        return out
+
+
+def _build_synthesis_llm(default_llm):
+    """The synthesis-stage LLM. When GOLDENGRAPH_SYNTHESIS_MODEL is set, build a SEPARATE client (own
+    model + endpoint + key) so a frontier reasoning model handles the ~20 low-volume synthesis calls
+    while the cheap 7B keeps the ~400 parallel extractions -- the cascade. Unset -> the extraction llm
+    (byte-identical). `openai.OpenAI` + `OpenAIClient` are imported lazily so the unset path adds no deps."""
+    model = os.environ.get("GOLDENGRAPH_SYNTHESIS_MODEL") or ""
+    if not model:
+        return default_llm
+    import openai
+    from goldengraph.llm import OpenAIClient
+
+    base = os.environ.get("GOLDENGRAPH_SYNTHESIS_BASE_URL") or None
+    key = os.environ.get("GOLDENGRAPH_SYNTHESIS_API_KEY") or None
+    client = openai.OpenAI(base_url=base, api_key=key) if (base or key) else openai.OpenAI()
+    return _CountingLLM(OpenAIClient(model=model, client=client))
+
 
 class GoldenGraphQAEngine:
     name = "goldengraph"
@@ -113,15 +191,39 @@ class GoldenGraphQAEngine:
         llm: Any,
         embedder: Any,
         resolver: Any | None = None,
-        retrieval_hops: int = _RETRIEVAL_HOPS,
+        retrieval_hops: int | None = None,
+        node_budget: int | None = None,
+        retrieval_mode: str | None = None,
+        passage_k: int | None = None,
     ):
         self._llm = _CountingLLM(llm)
+        # Cascade seam: synthesis may use a separate (larger) model; extraction stays on self._llm.
+        self._synth_llm = _build_synthesis_llm(self._llm)
         # Cache embeddings across the whole run: the build's cross-doc linking and
         # answer-time seeding both re-embed the same entity texts many times, which
         # is the O(N^2) network wall at large N.
         self._embedder = _CachingEmbedder(embedder)
         self._resolver = resolver  # None -> ingest uses the goldenmatch-backed default
-        self._retrieval_hops = retrieval_hops
+        # Retrieval budget read at construction (None -> env/default) so a sweep can
+        # set GOLDENGRAPH_QA_RETRIEVAL_HOPS / _NODE_BUDGET per run.
+        self._retrieval_hops = (
+            retrieval_hops if retrieval_hops is not None
+            else int(os.environ.get("GOLDENGRAPH_QA_RETRIEVAL_HOPS", "6"))
+        )
+        self._node_budget = (
+            node_budget if node_budget is not None
+            else int(os.environ.get("GOLDENGRAPH_QA_NODE_BUDGET", "256"))
+        )
+        # "local" (entity-graph BFS, default) vs "hybrid" (BFS + goldenmatch passage
+        # retrieval fed to synthesis). hybrid builds a passage index at build time.
+        self._retrieval_mode = (
+            retrieval_mode if retrieval_mode is not None
+            else os.environ.get("GOLDENGRAPH_QA_MODE", "local")
+        )
+        self._passage_k = (
+            passage_k if passage_k is not None
+            else int(os.environ.get("GOLDENGRAPH_QA_PASSAGE_K", "10"))
+        )
 
     def build_kg(self, corpus) -> BuildResult:
         from goldengraph.ingest import ingest_corpus
@@ -138,11 +240,32 @@ class GoldenGraphQAEngine:
         # synthesis -- the build's dominant, network-bound cost) across documents,
         # committing to the store serially in document order (identical result). The
         # shared caching embedder (self._embedder) embeds each entity text once.
-        ingest_corpus(
+        query_schema = ingest_corpus(
             [doc.text for doc in corpus.documents], store, llm=self._llm,
             resolver=self._resolver, embedder=self._embedder, fp_index=fp_index,
-        )
-        handle = {"store": store, "valid_t": _AS_OF, "tx_t": _AS_OF}
+            doc_ids=[doc.id for doc in corpus.documents],  # stamp doc ids onto edges -> support_recall
+        )  # the discovered RelationSchema (or None) -> canonicalize QUERY relations through it too
+        # Hybrid mode also indexes the raw paragraphs for answer-time passage retrieval, using the
+        # passage-embedding model from `_passage_embed_model()` (OPENAI_EMBED_MODEL -> nomic on the local
+        # lane, text-embedding-3-large on the OpenAI lane). Same model as goldenmatch_rag/text_rag on
+        # each lane, so the passage half stays comparable; the graph half stays the store's job.
+        # Embedding calls here are NOT charged to the engine token budget (parity with text_rag).
+        passages = None
+        if self._retrieval_mode == "hybrid":
+            from openai import OpenAI
+
+            from .goldenmatch_rag import _OpenAIEmbedderAdapter
+
+            adapter = _OpenAIEmbedderAdapter(OpenAI(), _passage_embed_model())
+            passages = _PassageRetriever(
+                [d.id for d in corpus.documents],
+                [d.text for d in corpus.documents],
+                adapter,
+            )
+        handle = {
+            "store": store, "valid_t": _AS_OF, "tx_t": _AS_OF, "passages": passages,
+            "query_schema": query_schema,
+        }
         return BuildResult(
             handle=handle,
             input_tokens=self._llm.input_tokens - before_in,
@@ -154,31 +277,36 @@ class GoldenGraphQAEngine:
         from goldengraph.answer import ask
 
         t0 = time.perf_counter()
-        before_in, before_out = self._llm.input_tokens, self._llm.output_tokens
+        before_in, before_out = self._synth_llm.input_tokens, self._synth_llm.output_tokens
+        # `provenance_out` collects the source-doc ids of every edge the retrieval/traversal touched.
+        # The store stamps each edge with its owning document id (ingest doc_ids); intersecting these
+        # with the question's gold_supporting_fact_ids is the supporting-fact recall the harness scores.
+        provenance: set = set()
         text = ask(
             question,
             handle["store"],
-            llm=self._llm,
+            llm=self._synth_llm,
             embedder=self._embedder,
             valid_t=handle["valid_t"],
             tx_t=handle["tx_t"],
-            mode="local",
+            mode=self._retrieval_mode,
             hops=self._retrieval_hops,
+            node_budget=self._node_budget,
+            passages=handle.get("passages"),
+            passage_k=self._passage_k,
+            query_schema=handle.get("query_schema"),
+            provenance_out=provenance,
         )
         return AnswerResult(
             text=text,
-            # support_recall is STRUCTURALLY 0.0 for goldengraph and the bench
-            # JSON's support-recall column should be read as "not wired", not "0%
-            # recall". Root cause (2026-06-23 triage): `ask()` returns only the
-            # answer string -- it does not expose which document/edge ids fell in
-            # the retrieval ball, so there is nothing to intersect with
-            # `gold_supporting_fact_ids`. Fixing it needs `ask()` (or a sibling that
-            # reuses the same retrieval) to return the ball's source-doc ids mapped
-            # to corpus ids (MuSiQue '<qid>::p<idx>'); that is a goldengraph API
-            # change, tracked as a follow-up rather than forced here.
-            retrieved_fact_ids=(),
-            input_tokens=self._llm.input_tokens - before_in,
-            output_tokens=self._llm.output_tokens - before_out,
+            # Supporting-fact recall is now wired: `ask(provenance_out=)` returns the source-doc ids
+            # of the retrieved/traversed edges (the store stamps each edge with its document id at
+            # ingest), which the harness intersects with `gold_supporting_fact_ids`. The co-occurrence
+            # corpus renders an edge in several docs (base id + `::N` suffixes); the base id IS the gold
+            # id, so the intersection still hits. Empty when retrieval surfaced no stored edge.
+            retrieved_fact_ids=tuple(sorted(provenance)),
+            input_tokens=self._synth_llm.input_tokens - before_in,
+            output_tokens=self._synth_llm.output_tokens - before_out,
             latency_s=time.perf_counter() - t0,
         )
 
@@ -197,7 +325,7 @@ class GoldenGraphQAEngine:
         slice_graph = handle["store"].as_of(handle["valid_t"], handle["tx_t"])
         seeds = seed_by_query(slice_graph, question, self._embedder, k=5)
         subgraph = _retrieve_local(
-            slice_graph, seeds, max_hops=self._retrieval_hops, node_budget=64
+            slice_graph, seeds, max_hops=self._retrieval_hops, node_budget=self._node_budget
         )
         # Wide ball: deep neighborhood, no node budget -- "is the answer reachable
         # from the seeds at ALL?" Splits a retrieval miss into budget-too-small

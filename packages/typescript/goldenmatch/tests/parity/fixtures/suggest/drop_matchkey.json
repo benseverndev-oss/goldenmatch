@@ -1,0 +1,68 @@
+{
+  "expected": [
+    {
+      "confidence": 0.7,
+      "current_value": "0.70",
+      "evidence": {
+        "current": 0.7,
+        "dip": 0.98125
+      },
+      "id": "thr:dip:fuzzy_match",
+      "kind": "raise_threshold",
+      "patch": {
+        "matchkey": "fuzzy_match",
+        "op": "set_threshold",
+        "value": 0.98
+      },
+      "predicted_effect": "precision_up",
+      "proposed_value": "0.98",
+      "rationale": "Pair scores split into two groups with a gap near 0.98, but the `fuzzy_match` threshold sits at 0.70. Moving it to 0.98 separates the two groups cleanly.",
+      "target": "fuzzy_match"
+    },
+    {
+      "confidence": 0.6,
+      "current_value": "0.70",
+      "evidence": {
+        "mass_above": 1.0
+      },
+      "id": "thr:raise:fuzzy_match",
+      "kind": "raise_threshold",
+      "patch": {
+        "matchkey": "fuzzy_match",
+        "op": "set_threshold",
+        "value": 0.85
+      },
+      "predicted_effect": "precision_up",
+      "proposed_value": "0.85",
+      "rationale": "100% of scored pairs clear the `fuzzy_match` threshold of 0.70 -- almost everything is matching, which usually means false merges. Raising it to 0.85 tightens the match.",
+      "target": "fuzzy_match"
+    },
+    {
+      "confidence": 0.6,
+      "current_value": "exact matchkey present",
+      "evidence": {
+        "derived_field": "__title_key__",
+        "matchkey": "title_key",
+        "n_matchkeys": 2,
+        "precision_collapsed": true
+      },
+      "id": "drop:title_key",
+      "kind": "drop_matchkey",
+      "patch": {
+        "matchkey": "title_key",
+        "op": "drop_matchkey"
+      },
+      "predicted_effect": "precision_up",
+      "proposed_value": "dropped",
+      "rationale": "Almost every pair is matching (precision looks collapsed), and the `title_key` matchkey is an exact match on the derived key `__title_key__`. A normalized-key exact match merges every record sharing that key regardless of other fields, which over-merges. Dropping it lets the remaining matchkeys carry recall; the change is re-run and kept only if cluster health improves.",
+      "target": "title_key"
+    }
+  ],
+  "input": {
+    "clusters": "[{\"quality\": \"strong\", \"oversized\": false}]",
+    "column_signals": "[{\n        \"field\": \"record_id\",\n        \"col_type\": \"identifier\",\n        \"scorer\": \"exact\",\n        \"in_blocking\": true,\n        \"in_negative_evidence\": false,\n        \"identity_score\": 0.3,\n        \"corruption_score\": 0.0,\n        \"collision_rate\": 0.0,\n        \"cardinality_ratio\": 0.4,\n        \"null_rate\": 0.0,\n        \"variant_rate\": 0.0\n    }]",
+    "config": "{\"matchkeys\":[{\"fields\":[{\"field\":\"title\",\"scorer\":\"token_sort\",\"weight\":1.0}],\"kind\":\"weighted\",\"name\":\"fuzzy_match\",\"threshold\":0.7},{\"fields\":[{\"field\":\"__title_key__\",\"scorer\":null,\"weight\":null}],\"kind\":\"exact\",\"name\":\"title_key\",\"threshold\":null}],\"negative_evidence\":[]}",
+    "priors": "{\"counts\": {}}",
+    "scored_pairs": "{\"n_pairs\":7,\"score\":[0.92,0.94,0.95,0.96,0.97,0.98,0.99]}"
+  }
+}

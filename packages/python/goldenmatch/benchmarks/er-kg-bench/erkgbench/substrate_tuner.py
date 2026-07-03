@@ -1,0 +1,242 @@
+"""SP-B2 substrate staged tuner.
+
+A deterministic staged-ejection optimizer: build a config on a cheap gold slice, score it with the
+SP-A three-axis scorecard (erkgbench.substrate_eval.substrate_scorecard), escalate the config along
+the failing axis, and promote the best-so-far config to the full build. The real build is injected
+(build_and_score) so the whole control flow is pure + box-testable; build_and_score_real wires the
+actual ingest_corpus + scorecard (Modal-smoke only). See
+docs/superpowers/specs/2026-07-02-substrate-staged-tuner-design.md.
+"""
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass, field, replace
+
+from goldengraph.config import SubstrateConfig, for_profile, profile_corpus
+
+from erkgbench.substrate_eval import LEVER_AXIS_MAP
+
+_REFUTED = ("relation_reprompt", "rebel_fuse", "extract_recall")
+
+
+@dataclass(frozen=True)
+class GateThresholds:
+    """Per-axis pass floors. Hypotheses tuned by running the harness; env-overridable by the caller."""
+    presence_min: float = 0.90
+    relational_f1_min: float = 0.50
+
+
+@dataclass(frozen=True)
+class GateResult:
+    passed: bool
+    failing_axis: str | None
+    scorecard: dict
+
+
+def evaluate_gate(scorecard: dict, thresholds: GateThresholds) -> GateResult:
+    """Presence before relational (can't fix relational quality on absent entities). Presence is
+    skipped when the scorecard's presence is None (engineered/no-alias path)."""
+    presence = scorecard.get("presence")
+    if presence is not None and presence["coverage"] < thresholds.presence_min:
+        return GateResult(False, "presence", scorecard)
+    if scorecard["relational"]["f1"] < thresholds.relational_f1_min:
+        return GateResult(False, "relational", scorecard)
+    return GateResult(True, None, scorecard)
+
+
+# --- escalation: per-lever next-state advances (return (next_value_repr, new_config) | None) ----------
+def _advance_chunk_extract(c):
+    if c.chunk_extract:
+        return None
+    return "True", replace(c, chunk_extract=True, chunk_sentences=6, chunk_overlap=2)
+
+
+def _advance_extractor(c):
+    if c.extractor != "api":
+        return None
+    return "gliner", replace(c, extractor="gliner")
+
+
+def _advance_xdoc_key(c):
+    nxt = {"": "name_ci", "name_ci": "name_ci_type"}.get(c.xdoc_key)
+    if nxt is None:
+        return None
+    if nxt == "name_ci_type":
+        return nxt, replace(c, xdoc_key=nxt, entity_type_canon=True)
+    return nxt, replace(c, xdoc_key=nxt)
+
+
+def _advance_entity_type_canon(c):
+    if c.entity_type_canon:
+        return None
+    return "True", replace(c, entity_type_canon=True)
+
+
+def _advance_schema_canon(c, relation_vocab):
+    if c.schema_canon or not relation_vocab:
+        return None
+    return "True", replace(c, schema_canon=True, relation_vocab=tuple(relation_vocab))
+
+
+#: lever -> its _advance. Refuted levers + relation_vocab (no self-ladder) are absent -> never advanced.
+_ADVANCERS = {
+    "chunk_extract": lambda c, v: _advance_chunk_extract(c),
+    "extractor": lambda c, v: _advance_extractor(c),
+    "xdoc_key": lambda c, v: _advance_xdoc_key(c),
+    "entity_type_canon": lambda c, v: _advance_entity_type_canon(c),
+    "schema_canon": lambda c, v: _advance_schema_canon(c, v),
+}
+
+
+def escalate(config, failing_axis, tried, *, relation_vocab=(), allow_refuted=False):
+    """First eligible next-state advance along LEVER_AXIS_MAP[failing_axis]. Returns (lever, new_config)
+    and records (lever, next_value_repr) in `tried` (sole mutator), or None when the axis is exhausted."""
+    for lever in LEVER_AXIS_MAP.get(failing_axis, ()):
+        if lever in _REFUTED and not allow_refuted:
+            continue
+        adv = _ADVANCERS.get(lever)
+        if adv is None:
+            continue
+        step = adv(config, relation_vocab)
+        if step is None:
+            continue
+        next_repr, new_config = step
+        if (lever, next_repr) in tried:
+            continue
+        tried.add((lever, next_repr))
+        return lever, new_config
+    return None
+
+
+@dataclass(frozen=True)
+class RoundReport:
+    round: int
+    config: SubstrateConfig
+    scorecard: dict
+    gate: GateResult
+    escalated_to: str | None
+
+
+@dataclass(frozen=True)
+class TunerResult:
+    config: SubstrateConfig
+    slice_scorecard: dict
+    full_scorecard: dict
+    trace: list = field(default_factory=list)
+    stopped_reason: str = ""
+
+
+def _score(scorecard: dict, *, beta: float | None = None) -> float:
+    """Round-ranking / accept scalar: F-beta of relational P/R (+ presence.coverage when present).
+    beta<1 favors PRECISION, >1 recall, ==1 is F1. Default beta from GOLDENGRAPH_SUBSTRATE_SCORE_BETA
+    (1.0). At beta==1.0 the STORED relational.f1 is used (bit-identical to the prior F1-only behavior).
+    Both consumers (run_staged argmax, suggest accept) read this via the env by default."""
+    if beta is None:
+        beta = float(os.environ.get("GOLDENGRAPH_SUBSTRATE_SCORE_BETA", "1.0") or "1.0")
+    rel = scorecard["relational"]
+    if beta == 1.0:
+        f = rel["f1"]
+    else:
+        p, r, b2 = rel["precision"], rel["recall"], beta * beta
+        denom = b2 * p + r
+        f = (1.0 + b2) * p * r / denom if denom > 0 else 0.0
+    s = f
+    presence = scorecard.get("presence")
+    if presence is not None:
+        s += presence["coverage"]
+    return s
+
+
+def run_staged(docs, gold, qid_aliases, *, build_and_score, thresholds=None, budget=5,
+               relation_vocab=(), expect_homographs=False, has_known_schema=False,
+               initial_config=None):
+    """Slice-gated deterministic optimizer. Escalates on the failing axis up to `budget` rounds, then
+    promotes the best-so-far (argmax _score) config to a full build. `build_and_score(config, dataset)`
+    is the injection seam (dataset = (docs, gold, qid_aliases)). Raises ValueError on budget < 1."""
+    if budget < 1:
+        raise ValueError(f"budget must be >= 1, got {budget}")
+    thresholds = thresholds or GateThresholds()
+    if initial_config is None:
+        initial_config = for_profile(
+            profile_corpus(docs), has_known_schema=has_known_schema,
+            expect_homographs=expect_homographs, relation_vocab=relation_vocab,
+        )
+    dataset = (docs, gold, qid_aliases)
+    config = initial_config
+    tried: set = set()
+    rounds: list[RoundReport] = []
+    stopped = "budget"
+    for r in range(budget):
+        sc = build_and_score(config, dataset)
+        gate = evaluate_gate(sc, thresholds)
+        step = None if gate.passed else escalate(config, gate.failing_axis, tried,
+                                                 relation_vocab=relation_vocab)
+        escalated_to, next_config = (None, None) if step is None else step
+        rounds.append(RoundReport(r, config, sc, gate, escalated_to))
+        if gate.passed:
+            stopped = "passed"
+            break
+        if step is None:
+            stopped = "exhausted"
+            break
+        config = next_config
+    best = max(rounds, key=lambda rr: _score(rr.scorecard))
+    full_sc = build_and_score(best.config, dataset)
+    return TunerResult(best.config, best.scorecard, full_sc, rounds, stopped)
+
+
+def _reset_llm_state() -> None:
+    """Unload the Ollama model (keep_alive=0) so the NEXT build reloads it cold, clearing the KV/model
+    cache that otherwise carries from one in-process build to the next. WITHOUT this, build-2 of the same
+    seeded config diverges from build-1 by ~0.15 F1 (measured: staged-tuner slice-vs-full smoke); WITH it
+    the gap collapses to ~0.018 F1 / +/-1 component (the residual GPU float wobble the seed-determinism
+    verdict already documented), so each build matches the reproducible single-cold-build regime and the
+    tuner's gate/escalation decisions ride on a trustworthy signal. Root cause: Ollama warm-server state,
+    NOT concurrency (workers=1 diverged identically) and NOT a missing seed (llm._chat seeds every
+    request). Best-effort + Ollama-specific (no-op off a local endpoint / on failure). Gate:
+    GOLDENGRAPH_TUNER_RESET_LLM (default on)."""
+    import json
+    import os
+    import urllib.request
+
+    if os.environ.get("GOLDENGRAPH_TUNER_RESET_LLM", "1") in ("0", "false", ""):
+        return
+    base = (os.environ.get("OPENAI_BASE_URL") or "").rstrip("/")
+    if not base or ("localhost" not in base and "127.0.0.1" not in base):
+        return  # only meaningful against a local Ollama server
+    host = base[: -len("/v1")] if base.endswith("/v1") else base
+    model = os.environ.get("OPENAI_MODEL") or ""
+    if not model:
+        return
+    try:
+        body = json.dumps({"model": model, "keep_alive": 0}).encode()
+        req = urllib.request.Request(f"{host}/api/generate", data=body,
+                                     headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=30).read()
+    except Exception as e:  # noqa: BLE001 -- best-effort reset; a failed unload just means warm state
+        print(f"[tuner] LLM reset failed ({e!r}); continuing", flush=True)
+
+
+def build_and_score_real(config, dataset):
+    """Real build_and_score: under config.apply(), build the graph over the dataset docs and score it
+    with the SP-A three-axis scorecard. Resets the LLM (cold) BEFORE each build so builds are independent
+    and reproducible (see _reset_llm_state). Needs the native store + an LLM -> Modal/CI only, NOT
+    box-safe. Kept thin; the pure harness above is the tested surface."""
+    from erkgbench import substrate_eval
+    from erkgbench.run_substrate_eval import _build_graph_from_documents
+
+    docs, gold, qid_aliases = dataset
+    if not docs:
+        raise ValueError("build_and_score_real: empty docs")
+    _reset_llm_state()
+
+    class _Doc:  # _build_graph_from_documents wants .text/.id; wrap raw text strings
+        __slots__ = ("text", "id")
+
+        def __init__(self, text, doc_id):
+            self.text, self.id = text, doc_id
+
+    with config.apply():
+        documents = docs if hasattr(docs[0], "text") else [_Doc(t, f"d{i}") for i, t in enumerate(docs)]
+        graph = _build_graph_from_documents(documents)
+    return substrate_eval.substrate_scorecard(graph, gold, qid_aliases)

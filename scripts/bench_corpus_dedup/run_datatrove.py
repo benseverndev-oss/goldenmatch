@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import struct
 import tempfile
 import time
 from pathlib import Path
@@ -35,6 +36,46 @@ os.environ.setdefault("POLARS_SKIP_CPU_CHECK", "1")
 # LSH config targeting ~0.8 Jaccard (see module docstring).
 NUM_BUCKETS = 10
 HASHES_PER_BUCKET = 10
+
+# datatrove's MinhashDedupBuckets writes each in-bucket match to a `.dups` file as a
+# packed record of four uint32s: (file_id_1, doc_id_1, file_id_2, doc_id_2). When a match
+# involves an index signature the file id is replaced by SENTINEL — we run without an
+# index_folder, so that never appears here, but we skip it defensively.
+_DUP_RECORD = struct.Struct("<4I")
+_DUP_SENTINEL = (1 << 32) - 1
+
+
+def _read_dup_edges(buckets_dir: Path) -> tuple[list[tuple[int, int]], int]:
+    """Parse the near-dup edges datatrove's *buckets* stage emitted.
+
+    Returns ``(edges, raw_record_count)`` where ``edges`` are de-duplicated
+    ``(doc_id_a, doc_id_b)`` pairs (``a <= b``, self-pairs and SENTINEL matches
+    dropped) and ``raw_record_count`` is the total ``.dups`` records read (a
+    single pair can appear in more than one bucket).
+
+    The signature stage runs single-task, so every doc has ``file_id == 0`` and
+    ``doc_id`` equals the reader's global row index — i.e. the same index the
+    caller maps clusters back onto. This reads the BUCKETS output (`.dups`
+    edges), NOT the cluster stage output (a `.remove` list of single doc ids,
+    which carries no pairs — reading it was the recall=0 bug, #1150).
+    """
+    seen: set[tuple[int, int]] = set()
+    raw = 0
+    size = _DUP_RECORD.size
+    for f in sorted(buckets_dir.rglob("*.dups")):
+        if not f.is_file():
+            continue
+        blob = f.read_bytes()
+        usable = len(blob) - (len(blob) % size)
+        for off in range(0, usable, size):
+            f1, d1, f2, d2 = _DUP_RECORD.unpack_from(blob, off)
+            raw += 1
+            if f1 == _DUP_SENTINEL or f2 == _DUP_SENTINEL:
+                continue
+            if d1 == d2:
+                continue
+            seen.add((d1, d2) if d1 <= d2 else (d2, d1))
+    return sorted(seen), raw
 
 
 def _peak_rss_mb() -> float | None:
@@ -53,9 +94,11 @@ def _atomic_write(path: Path, payload: dict) -> None:
 def _run_minhash(corpus_path: Path, workdir: Path) -> tuple[dict[str, int], int]:
     """Run datatrove MinHash dedup; return (doc_id -> cluster_id, candidate_pairs).
 
-    Clusters: datatrove's cluster stage emits, per near-dup match, the duplicate doc and its
-    kept representative. We union-find those edges into cluster ids; every doc not in any edge
-    is its own singleton. candidate_pairs = number of bucket-matched duplicate edges.
+    Clusters: datatrove's buckets stage emits, per in-bucket match, a `.dups` edge
+    ``(file_id_1, doc_id_1, file_id_2, doc_id_2)``. We union-find those edges into cluster
+    ids; every doc not in any edge is its own singleton. candidate_pairs = number of unique
+    bucket-matched duplicate edges. (Union-find over the raw bucket edges reproduces the
+    cluster stage's own clustering, which is order-invariant.)
     """
     import polars as pl
     from datatrove.data import Document
@@ -117,26 +160,12 @@ def _run_minhash(corpus_path: Path, workdir: Path) -> tuple[dict[str, int], int]
         if ra != rb:
             parent[min(ra, rb)] = max(ra, rb)
 
-    n_edges = 0
-    # datatrove writes the duplicates as a `.remove` list of (kept, removed) idx pairs in the
-    # cluster output; format is version-dependent, so read defensively from any *.txt/.parquet.
-    for f in sorted(clus_dir.rglob("*")):
-        if not f.is_file():
-            continue
-        try:
-            if f.suffix == ".parquet":
-                edges = pl.read_parquet(f)
-                cols = edges.columns
-                a_col, b_col = cols[0], cols[1]
-                for a, b in zip(edges[a_col].to_list(), edges[b_col].to_list()):
-                    union(int(a), int(b)); n_edges += 1
-            else:
-                for line in f.read_text(errors="replace").splitlines():
-                    parts = line.replace(",", " ").split()
-                    if len(parts) >= 2 and parts[0].lstrip("-").isdigit() and parts[1].lstrip("-").isdigit():
-                        union(int(parts[0]), int(parts[1])); n_edges += 1
-        except Exception:
-            continue
+    # Read the near-dup edges from the BUCKETS stage `.dups` files (the cluster stage's own
+    # output is a `.remove` list of single doc ids — no pairs — which read as zero edges, #1150).
+    edges, _raw = _read_dup_edges(buck_dir)
+    for a, b in edges:
+        union(a, b)
+    n_edges = len(edges)
 
     clusters: dict[str, int] = {}
     for i, did in enumerate(doc_ids):

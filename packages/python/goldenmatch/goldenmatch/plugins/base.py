@@ -24,12 +24,21 @@ class ScorerPlugin(Protocol):
 
     name: str
 
-    def score_pair(self, val_a: str | None, val_b: str | None) -> float | None:
+    def score_pair(
+        self,
+        val_a: str | None,
+        val_b: str | None,
+        *,
+        tf_freqs: dict[str, float] | None = None,
+    ) -> float | None:
         """Score two field values. Returns ``None`` if either is ``None``.
 
         Called from ``goldenmatch.core.scorer.score_field`` for pair-by-pair
         scoring and as a fallback inside ``_fuzzy_score_matrix`` when the
         plugin doesn't expose ``score_matrix``.
+
+        ``tf_freqs`` is an optional per-field term-frequency table (#1207);
+        scorers that don't use it ignore the keyword.
         """
         ...
 
@@ -41,12 +50,20 @@ class VectorizedScorerPlugin(ScorerPlugin, Protocol):
     ``getattr(plugin, "score_matrix", None)`` and avoids the O(N^2) Python
     double-loop on the hot path."""
 
-    def score_matrix(self, values: list[str | None]) -> np.ndarray:
+    def score_matrix(
+        self,
+        values: list[str | None],
+        *,
+        tf_freqs: dict[str, float] | None = None,
+    ) -> np.ndarray:
         """Return an NxN ``float32`` similarity matrix for ``values``.
 
         Symmetric (``output[i,j] == output[j,i]``); diagonals should be the
         scorer's value for ``score_pair(v, v)``. ``None`` entries are
         coerced to ``""`` by the caller before invocation.
+
+        ``tf_freqs`` is an optional per-field term-frequency table (#1207);
+        scorers that don't use it ignore the keyword.
         """
         ...
 

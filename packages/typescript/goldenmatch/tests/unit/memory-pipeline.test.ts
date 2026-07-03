@@ -26,6 +26,7 @@ describe("Phase 2.1: memoryStats result field", () => {
       clusters: new Map(),
       dupes: [],
       unique: [],
+      suggestions: [],
       stats: {
         totalRecords: 0,
         totalClusters: 0,

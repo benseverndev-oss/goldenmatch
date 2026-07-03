@@ -11,6 +11,16 @@
         "precision": 0.9793,
         "recall": 1.0
       },
+      "f1_probabilistic": {
+        "attribution": {
+          "blocking_recall": 1.0,
+          "final_recall": 1.0,
+          "threshold_loss": 0.0
+        },
+        "f1": 0.9607,
+        "precision": 0.9244,
+        "recall": 1.0
+      },
       "kind": "anchor",
       "signals": {
         "blocking_cost": {
@@ -33,7 +43,7 @@
           "email"
         ],
         "planner_rung": {
-          "backend": "polars-direct",
+          "backend": "bucket",
           "rule_name": "plan_selected_simple"
         }
       }
@@ -64,7 +74,7 @@
           "phone"
         ],
         "planner_rung": {
-          "backend": "polars-direct",
+          "backend": "bucket",
           "rule_name": "plan_selected_simple"
         }
       }
@@ -73,15 +83,18 @@
       "kind": "anchor",
       "signals": {
         "blocking_cost": {
-          "candidate_pairs": 1529,
-          "max_block": 4,
-          "n_blocks": 1411,
-          "p99": 3,
-          "reduction_ratio": 1.0
+          "candidate_pairs": 415097,
+          "max_block": 49,
+          "n_blocks": 1407,
+          "p99": 43,
+          "reduction_ratio": 0.9991
         },
         "blocking_fields": [
+          "email",
           "first_name",
           "last_name",
+          "npi",
+          "phone_number",
           "zip5"
         ],
         "classification": {
@@ -98,7 +111,177 @@
           "npi"
         ],
         "planner_rung": {
-          "backend": "polars-direct",
+          "backend": "bucket",
+          "rule_name": "plan_selected_simple"
+        }
+      }
+    },
+    "febrl3": {
+      "f1": {
+        "attribution": {
+          "blocking_recall": 0.9296,
+          "final_recall": 0.9618,
+          "threshold_loss": -0.0321
+        },
+        "f1": 0.9921,
+        "precision": 0.9997,
+        "recall": 0.9847
+      },
+      "f1_probabilistic": {
+        "attribution": {
+          "blocking_recall": 0.9296,
+          "final_recall": 0.9524,
+          "threshold_loss": -0.0228
+        },
+        "f1": 0.9908,
+        "precision": 1.0,
+        "recall": 0.9818
+      },
+      "kind": "real",
+      "signals": {
+        "blocking_cost": {
+          "candidate_pairs": 15484,
+          "max_block": 36,
+          "n_blocks": 1974,
+          "p99": 14,
+          "reduction_ratio": 0.9988
+        },
+        "blocking_fields": [
+          "soc_sec_id",
+          "state",
+          "surname"
+        ],
+        "classification": {
+          "address_1": "name",
+          "address_2": "name",
+          "date_of_birth": "date",
+          "given_name": "name",
+          "id": "identifier",
+          "postcode": "numeric",
+          "soc_sec_id": "identifier",
+          "state": "geo",
+          "street_number": "numeric",
+          "suburb": "name",
+          "surname": "name"
+        },
+        "exact_matchkeys": [
+          "address_1",
+          "address_2",
+          "date_of_birth",
+          "given_name",
+          "soc_sec_id",
+          "surname"
+        ],
+        "planner_rung": {
+          "backend": "bucket",
+          "rule_name": "plan_selected_simple"
+        }
+      }
+    },
+    "historical_50k": {
+      "f1": {
+        "attribution": {
+          "skipped": "scale"
+        },
+        "f1": 0.3409,
+        "precision": 0.2474,
+        "recall": 0.5478
+      },
+      "f1_probabilistic": {
+        "attribution": {
+          "skipped": "scale"
+        },
+        "f1": 0.8279,
+        "precision": 0.9272,
+        "recall": 0.7478
+      },
+      "kind": "real",
+      "signals": {
+        "blocking_cost": {
+          "candidate_pairs": 17997410,
+          "max_block": 1000,
+          "n_blocks": 21821,
+          "p99": 124,
+          "reduction_ratio": 0.9859
+        },
+        "blocking_fields": [
+          "first_and_surname",
+          "full_name"
+        ],
+        "classification": {
+          "birth_place": "name",
+          "dob": "date",
+          "first_and_surname": "name",
+          "first_name": "name",
+          "full_name": "name",
+          "gender": "name",
+          "occupation": "name",
+          "postcode_fake": "zip",
+          "surname": "name"
+        },
+        "exact_matchkeys": [
+          "dob",
+          "first_and_surname",
+          "full_name"
+        ],
+        "planner_rung": {
+          "backend": "bucket",
+          "rule_name": "plan_selected_simple"
+        }
+      }
+    },
+    "ncvr_synthetic": {
+      "f1": {
+        "attribution": {
+          "blocking_recall": 1.0,
+          "final_recall": 0.936,
+          "threshold_loss": 0.064
+        },
+        "f1": 0.9649,
+        "precision": 0.9957,
+        "recall": 0.936
+      },
+      "f1_probabilistic": {
+        "attribution": {
+          "blocking_recall": 1.0,
+          "final_recall": 0.9876,
+          "threshold_loss": 0.0124
+        },
+        "f1": 0.9894,
+        "precision": 0.9912,
+        "recall": 0.9876
+      },
+      "kind": "real",
+      "signals": {
+        "blocking_cost": {
+          "candidate_pairs": 434530,
+          "max_block": 145,
+          "n_blocks": 65,
+          "p99": 145,
+          "reduction_ratio": 0.9845
+        },
+        "blocking_fields": [
+          "birth_year"
+        ],
+        "classification": {
+          "birth_year": "year",
+          "first_name": "name",
+          "gender_code": "string",
+          "last_name": "name",
+          "middle_name": "name",
+          "ncid": "string",
+          "res_city_desc": "geo",
+          "res_street_address": "address",
+          "state_cd": "geo",
+          "zip_code": "zip"
+        },
+        "exact_matchkeys": [
+          "birth_year",
+          "first_name",
+          "last_name"
+        ],
+        "planner_rung": {
+          "backend": "bucket",
           "rule_name": "plan_selected_simple"
         }
       }
@@ -108,12 +291,16 @@
     "datasets_run": [
       "anchor_person_match",
       "anchor_shared_email",
-      "anchor_sparse_zip"
+      "anchor_sparse_zip",
+      "febrl3",
+      "historical_50k",
+      "ncvr_synthetic"
     ],
     "datasets_skipped": {
-      "dblp_acm": "absent"
+      "dblp_acm": "absent",
+      "ncvr_real": "absent"
     },
-    "git_sha": "d7ce338a565d01ba062dbaa5a1eb343eea4bd982",
-    "native_version": "0.1.11"
+    "git_sha": "5db27b2fce7f84487d680b02bd229a4b805cabe7",
+    "native_version": "0.1.12"
   }
 }

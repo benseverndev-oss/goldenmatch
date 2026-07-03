@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.1] - 2026-06-24
+
+### Security
+- **SQL-injection hardening in `DBProvider`** (#898). Table names are now escaped as quoted SQL identifiers (`_quote_ident`, doubling embedded quotes) at every interpolation site across the SQLite, Postgres, and DuckDB paths, since bound parameters can only bind values, not identifiers. `extract()` now rejects a non-string `table` and coerces `sample_size` to `int` before it can reach a query. SQLite column introspection moved from `PRAGMA table_info(<ident>)` to the parameterized `pragma_table_info(?)` table-valued function. `sample_size` is bound as a parameter on SQLite/Postgres (int-coerced inline only on DuckDB's `USING SAMPLE`).
+
+### Changed
+- Node runtime baseline bumped from 20 to 22 (Node 20 EOL) across the JS publish/CI workflows. (#898)
+- Dependency bumps: `esbuild` 0.27.7 → 0.28.1, `@babel/core` 7.29.0 → 7.29.6 (#1162); TS bench-runner `vitest` 1.6 → 4.1 (#761).
+
 ## [0.5.0] - 2026-06-01
 
 ### Added

@@ -30,7 +30,11 @@ if not native_available():
 pa = pytest.importorskip("pyarrow")
 
 from goldenflow.transforms._native import phone_e164_native  # noqa: E402
-from goldenflow.transforms.phone import phone_country_code, phone_e164  # noqa: E402
+from goldenflow.transforms.phone import (  # noqa: E402
+    phone_country_code,
+    phone_e164,
+    phone_national,
+)
 
 # Use whichever kernel the loader resolved (in-tree build shadows the wheel).
 _native = native_module()
@@ -54,6 +58,16 @@ def _ref_cc(v):
     except phonenumbers.NumberParseException:
         return None
     return p.country_code
+
+
+def _ref_national(v):
+    if v is None:
+        return None
+    try:
+        p = phonenumbers.parse(v, "US")
+    except phonenumbers.NumberParseException:
+        return v  # phone_national preserves the original string on parse failure
+    return phonenumbers.format_number(p, phonenumbers.PhoneNumberFormat.NATIONAL)
 
 
 def _corpus(n=20000):
@@ -118,6 +132,16 @@ def test_phone_country_code_parity_with_native(monkeypatch):
     vals = _corpus()
     got = phone_country_code(pl.Series("ph", vals)).to_list()
     assert got == [_ref_cc(v) for v in vals]
+
+
+def test_phone_national_parity_with_native(monkeypatch):
+    """End-to-end NATIONAL == pure phonenumbers across the full corpus, native on.
+    Native resolves canonical "(NXX) NXX-XXXX"; the ambiguous residual falls to
+    Python via the canonical-form gate."""
+    monkeypatch.setenv("GOLDENFLOW_NATIVE", "auto")
+    vals = _corpus()
+    got = phone_national(pl.Series("ph", vals)).to_list()
+    assert got == [_ref_national(v) for v in vals]
 
 
 def test_native_actually_resolves_residual(monkeypatch):

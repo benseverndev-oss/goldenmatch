@@ -35,20 +35,24 @@ def test_agent_card_has_required_fields():
     assert card["authentication"]["schemes"] == ["bearer"]
 
 
-def test_agent_card_has_35_skills():
+def test_agent_card_has_38_skills():
     """v1.7-v1.12 added autoconfig+controller_telemetry (10->12); v2.0 added
     six identity_* skills (12->18); v1.19.x Phase 3 added add_correction
     (18->19); the MCP tool-coverage parity pass added 12 (19->31); #1089 added
     retrieve_similar (31->32); Agent Memory #1075/#1078 added identity_claim /
-    identity_resolve_conflict / identity_audit (32->35)."""
+    identity_resolve_conflict / identity_audit (32->35); #1078 tamper-evidence
+    added identity_audit_seal / identity_audit_verify (35->37); the healer added
+    review_config (37->38)."""
     from goldenmatch.a2a.server import build_agent_card
 
     card = build_agent_card("http://localhost:8080")
-    assert len(card["skills"]) == 35
+    assert len(card["skills"]) == 38
     ids = {s["id"] for s in card["skills"]}
     assert "autoconfig" in ids
     assert "retrieve_similar" in ids
+    assert "review_config" in ids
     assert {"identity_claim", "identity_resolve_conflict", "identity_audit"} <= ids
+    assert {"identity_audit_seal", "identity_audit_verify"} <= ids
     assert "controller_telemetry" in ids
     assert "add_correction" in ids
     assert {
@@ -263,6 +267,50 @@ def test_dispatch_analyze_blocking(tmp_path):
     })
     assert "suggestions" in result
     assert isinstance(result["suggestions"], list)
+
+
+def test_dispatch_review_config_serialized(tmp_path):
+    """review_config skill returns the shared wire shape (stubbed kernel)."""
+    from unittest.mock import patch
+
+    from goldenmatch.a2a.skills import dispatch_skill
+    from goldenmatch.core.suggest.types import Suggestion
+
+    data = tmp_path / "data.csv"
+    data.write_text("name,email\nJohn Smith,john@x.com\nJon Smith,john@x.com\n")
+
+    fake = [
+        Suggestion(
+            id="raise_threshold:exact_email",
+            kind="threshold",
+            target="matchkeys[0].threshold",
+            current_value=0.5,
+            proposed_value=0.8,
+            rationale="Borderline merges cluster near the cutoff.",
+            predicted_effect="Fewer false merges.",
+            confidence=0.9,
+            patch={"op": "replace", "path": "matchkeys[0].threshold", "value": 0.8},
+        ),
+    ]
+    with patch("goldenmatch.core.suggest.review_config", return_value=fake):
+        result = dispatch_skill("review_config", {
+            "file_path": str(data), "config": _exact_email_cfg(tmp_path),
+        })
+
+    assert "error" not in result
+    s = result["suggestions"][0]
+    assert s["id"] == "raise_threshold:exact_email"
+    assert s["verified"] is True
+    assert s["patch"]["value"] == 0.8
+
+
+def test_dispatch_review_config_missing_file_path():
+    """review_config skill returns a structured error without file_path."""
+    from goldenmatch.a2a.skills import dispatch_skill
+
+    result = dispatch_skill("review_config", {})
+    assert "error" in result
+    assert "file_path" in result["error"].lower()
 
 
 def test_dispatch_sensitivity_requires_sweep(tmp_path):

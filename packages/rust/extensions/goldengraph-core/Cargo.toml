@@ -28,7 +28,11 @@ name = "goldengraph_core"
 # and FFI UDFs link, so resolution scoring is identical across surfaces.
 goldenmatch-score-core = { path = "../score-core" }
 # Connected-components kernel reused to turn scored mention-pairs into clusters.
-goldenmatch-graph-core = { path = "../graph-core" }
+# `default-features = false` drops graph-core's arrow feature (unused here — only
+# the arrow-free `connected_components`), keeping the wasm build Arrow-free. Arrow
+# compiles to wasm32 fine and DCE strips it from the .wasm regardless; this just
+# avoids compiling ~11 arrow crates (build-time + dep-hygiene win).
+goldenmatch-graph-core = { path = "../graph-core", default-features = false }
 # SP2 store: serde model + canonical JSON snapshot (the portable persistence
 # format every binding can read). Pyo3-free + WASM-safe, so the core stays
 # portable for SP5's WASM/C bindings.

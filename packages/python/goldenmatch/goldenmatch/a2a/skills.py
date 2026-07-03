@@ -18,7 +18,7 @@ from goldenmatch.core.agent import (
 )
 
 
-def dispatch_skill(skill_id: str, params: dict) -> dict:
+def dispatch_skill(skill_id: str, params: dict, allow_pprl: bool = False) -> dict:
     """Dispatch an A2A skill request to the appropriate handler.
 
     Parameters
@@ -28,6 +28,9 @@ def dispatch_skill(skill_id: str, params: dict) -> dict:
         review, compare_strategies, pprl, quality, transform.
     params : dict
         Skill-specific parameters.
+    allow_pprl : bool
+        Opt-in flag threaded through to ``select_strategy()``. PPRL is not
+        auto-selected for sensitive data unless this is True.
 
     Returns
     -------
@@ -42,7 +45,7 @@ def dispatch_skill(skill_id: str, params: dict) -> dict:
     session = AgentSession()
 
     if skill_id == "analyze_data":
-        return session.analyze(params["file_path"])
+        return session.analyze(params["file_path"], allow_pprl=allow_pprl)
 
     if skill_id == "autoconfig":
         # v1.7-v1.12: AutoConfigController via AgentSession. Returns committed
@@ -83,6 +86,7 @@ def dispatch_skill(skill_id: str, params: dict) -> dict:
             result = session.deduplicate(
                 params["file_path"],
                 config=params.get("config"),
+                allow_pprl=allow_pprl,
             )
         finally:
             if _excl_token is not None:
@@ -105,6 +109,7 @@ def dispatch_skill(skill_id: str, params: dict) -> dict:
                 params["file_a"],
                 params["file_b"],
                 config=params.get("config"),
+                allow_pprl=allow_pprl,
             )
         finally:
             if _excl_token is not None:
@@ -118,6 +123,7 @@ def dispatch_skill(skill_id: str, params: dict) -> dict:
         return session.compare_strategies(
             params["file_path"],
             ground_truth=params.get("ground_truth"),
+            allow_pprl=allow_pprl,
         )
 
     if skill_id == "explain":
@@ -144,7 +150,8 @@ def dispatch_skill(skill_id: str, params: dict) -> dict:
         decision = select_strategy(
             profile_for_agent(
                 pl.read_csv(params["file_path"], encoding="utf8-lossy", ignore_errors=True)
-            )
+            ),
+            allow_pprl=allow_pprl,
         )
         cfg = _decision_to_config(decision)
         return {"config_yaml": yaml.dump(cfg.model_dump(), default_flow_style=False)}
@@ -249,8 +256,9 @@ def dispatch_skill(skill_id: str, params: dict) -> dict:
         "identity_resolve", "identity_list", "identity_history",
         "identity_conflicts", "identity_merge", "identity_split",
         "identity_show",
-        # Agent Memory #1075/#1078: agent-writable ops + audit export
+        # Agent Memory #1075/#1078: agent-writable ops + audit export + seal/verify
         "identity_claim", "identity_resolve_conflict", "identity_audit",
+        "identity_audit_seal", "identity_audit_verify",
     }:
         from goldenmatch.mcp.identity_tools import _dispatch as _identity_dispatch
         # Reuse MCP dispatch since the contract is identical (JSON in/out).
@@ -415,6 +423,45 @@ def dispatch_skill(skill_id: str, params: dict) -> dict:
             "matchkey_columns": cols,
             "suggestions": [asdict(s) for s in suggestions[:limit]],
         }
+
+    if skill_id == "review_config":
+        import polars as pl
+
+        from goldenmatch.core.suggest import (
+            SuggestionsNativeRequired,
+            review_config,
+        )
+        from goldenmatch.core.suggest.surface import serialize_suggestions
+
+        file_path = params.get("file_path")
+        if not file_path:
+            return {"error": "Missing required parameter: file_path"}
+
+        try:
+            df = pl.read_csv(file_path, encoding="utf8-lossy", ignore_errors=True)
+        except FileNotFoundError:
+            return {"error": f"File not found: {file_path}"}
+        except Exception as exc:
+            return {"error": f"Could not read CSV '{file_path}': {exc}"}
+
+        cfg = params.get("config")
+        if cfg:
+            from goldenmatch.config.loader import load_config
+            cfg = load_config(cfg) if isinstance(cfg, str) else cfg
+        else:
+            from pathlib import Path as _Path
+
+            from goldenmatch.core.autoconfig import auto_configure
+            cfg = auto_configure([(file_path, _Path(file_path).stem)])
+
+        try:
+            suggestions = review_config(df, cfg)
+        except SuggestionsNativeRequired as exc:
+            return {"suggestions": [], "native_required": True, "message": str(exc)}
+        except Exception as exc:
+            return {"error": f"review_config failed: {exc}"}
+
+        return {"suggestions": serialize_suggestions(suggestions, verified=True)}
 
     raise ValueError(f"Unknown skill: {skill_id}")
 

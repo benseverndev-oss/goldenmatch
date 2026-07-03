@@ -27,6 +27,12 @@ class Dataset:
     name: str
     kind: Literal["anchor", "real"]
     loader: Callable[[], tuple[pl.DataFrame, set] | None]
+    full_scan: bool = False  # True -> F1 tier ignores --row-cap, runs the whole df
+
+
+def effective_row_cap(dataset: Dataset, cli_row_cap: int | None) -> int | None:
+    """A full_scan dataset ignores the CLI cap (None = no truncation in evaluate_f1)."""
+    return None if dataset.full_scan else cli_row_cap
 
 
 # ── anchors (always available, deterministic) ──────────────────────────────────
@@ -50,6 +56,77 @@ def _person() -> tuple[pl.DataFrame, set]:
 _DATASETS_ROOT = Path(__file__).resolve().parents[2] / "packages/python/goldenmatch/tests/benchmarks/datasets"
 
 
+def _pairs_to_row_index(
+    df: pl.DataFrame, id_col: str, str_pairs: set[tuple[str, str]]
+) -> set[tuple[int, int]]:
+    """Map id-string pairs to canonical (min,max) row-index pairs; drop pairs whose
+    endpoints are missing from the frame or identical."""
+    pos = {str(v): i for i, v in enumerate(df[id_col].to_list())}
+    out: set[tuple[int, int]] = set()
+    for a, b in str_pairs:
+        ia, ib = pos.get(str(a)), pos.get(str(b))
+        if ia is not None and ib is not None and ia != ib:
+            out.add((min(ia, ib), max(ia, ib)))
+    return out
+
+
+def _febrl3() -> tuple[pl.DataFrame, set] | None:
+    """FEBRL3 (recordlinkage-bundled). rec_id-pair truth -> row-index via df['id'].
+    Returns None when recordlinkage isn't installed (skip-when-absent)."""
+    from scripts.dqbench_adapters.febrl3 import load_febrl3_df_and_gt
+    loaded = load_febrl3_df_and_gt()
+    if loaded is None:
+        return None
+    df, rec_pairs = loaded
+    return df, _pairs_to_row_index(df, "id", rec_pairs)
+
+
+_NCVR_REAL_PATH = _DATASETS_ROOT / "NCVR" / "ncvoter_sample_10k.txt"
+
+
+def _ncvr_synthetic() -> tuple[pl.DataFrame, set]:
+    """PII-free NCVR-shaped corpus (seed 42, committable, runs in CI). Its F1 is its
+    OWN baseline, never the real-data number."""
+    from scripts.dqbench_adapters.ncvr import build_ncvr_synthetic_df_and_gt
+    df, ncid_pairs = build_ncvr_synthetic_df_and_gt(seed=42)
+    return df, _pairs_to_row_index(df, "ncid", ncid_pairs)
+
+
+def _ncvr_real() -> tuple[pl.DataFrame, set] | None:
+    """Real NCVR sample (gitignored PII, local-only). None when the file is absent."""
+    from scripts.dqbench_adapters.ncvr import build_ncvr_df_and_gt
+    loaded = build_ncvr_df_and_gt(_NCVR_REAL_PATH, seed=42)
+    if loaded is None:
+        return None
+    df, ncid_pairs = loaded
+    return df, _pairs_to_row_index(df, "ncid", ncid_pairs)
+
+
+_VENDORED = Path(__file__).resolve().parent / "vendored"
+
+
+def _historical_50k() -> tuple[pl.DataFrame, set] | None:
+    """Splink historical_50k from the committed parquet. The `cluster` column is the
+    truth (grouped into within-cluster row-index pairs) and is dropped -- along with
+    the `unique_id` surrogate -- from the df fed to dedupe so the kernel can't see the
+    answer. None when the parquet is absent."""
+    p = _VENDORED / "historical_50k.parquet"
+    if not p.exists():
+        return None
+    df = pl.read_parquet(p)
+    clusters = df["cluster"].to_list()
+    by_cluster: dict[object, list[int]] = {}
+    for row, cid in enumerate(clusters):
+        by_cluster.setdefault(cid, []).append(row)
+    gt: set[tuple[int, int]] = set()
+    for members in by_cluster.values():
+        for i in range(len(members)):
+            for j in range(i + 1, len(members)):
+                gt.add((members[i], members[j]))
+    match_df = df.drop([c for c in ("cluster", "unique_id") if c in df.columns])
+    return match_df, gt
+
+
 def _dblp_acm() -> tuple[pl.DataFrame, set] | None:
     """DBLP-ACM bibliographic record-linkage. Concatenate the two tables, build
     row-index GT from the perfect mapping. Returns None when the data is absent."""
@@ -63,16 +140,14 @@ def _dblp_acm() -> tuple[pl.DataFrame, set] | None:
         acm = pl.read_csv(acm_p, encoding="utf8-lossy", ignore_errors=True)
         mapping = pl.read_csv(map_p, encoding="utf8-lossy", ignore_errors=True)
         df = pl.concat([dblp, acm], how="diagonal_relaxed")
-        # row-index lookup keyed by the source 'id' column (present in both tables)
-        pos = {str(v): i for i, v in enumerate(df["id"].to_list())}
-        gt: set[tuple[int, int]] = set()
+        # row-index GT keyed by the source 'id' column (present in both tables)
         cols = mapping.columns  # standard headers: idDBLP, idACM
         a_col, b_col = cols[0], cols[1]
-        for a, b in zip(mapping[a_col].to_list(), mapping[b_col].to_list()):
-            ia, ib = pos.get(str(a)), pos.get(str(b))
-            if ia is not None and ib is not None and ia != ib:
-                gt.add((min(ia, ib), max(ia, ib)))
-        return df, gt
+        str_pairs = {
+            (str(a), str(b))
+            for a, b in zip(mapping[a_col].to_list(), mapping[b_col].to_list())
+        }
+        return df, _pairs_to_row_index(df, "id", str_pairs)
     except Exception:
         return None  # any malformed piece -> skip, never crash the run
 
@@ -82,6 +157,9 @@ REGISTRY: list[Dataset] = [
     Dataset("anchor_shared_email", "anchor", _shared_email),
     Dataset("anchor_person_match", "anchor", _person),
     Dataset("dblp_acm", "real", _dblp_acm),
-    # FEBRL3 / NCVR / historical_50k / DQbench tiers: add with the same
-    # skip-when-absent loader pattern as their data lands.
+    Dataset("febrl3", "real", _febrl3),
+    Dataset("ncvr_synthetic", "real", _ncvr_synthetic),
+    Dataset("ncvr_real", "real", _ncvr_real),
+    Dataset("historical_50k", "real", _historical_50k, full_scan=True),
+    # DQbench tier: add with the same skip-when-absent loader pattern when it lands.
 ]

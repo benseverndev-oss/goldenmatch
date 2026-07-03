@@ -28,9 +28,58 @@ Two tiers, per dataset:
     matchkey while `phone` is demoted (the per-type matchkey floors).
   - `anchor_person_match` — 400 seeded entities with ground truth; carries an F1
     floor.
-- **Real datasets** (DBLP-ACM, …) are skip-when-absent: their loaders return
-  `None` when the gitignored data isn't on disk, so the gate stays green in CI
-  while still running them wherever the data exists.
+- **Real labeled datasets** reuse the repo's existing benchmark loaders and convert
+  their native truth (rec_id / ncid string pairs, or a `cluster` label column) into
+  the row-index pairs the F1 tier expects:
+  - `febrl3` — recordlinkage-bundled (~5k rows); runs in CI.
+  - `ncvr_synthetic` — PII-free NCVR-shaped, seed 42 (~15k rows); runs in CI. Its
+    F1 is its OWN floor, never the real-data number.
+  - `ncvr_real` — the gitignored NC voter sample; local-only, skip-when-absent.
+  - `historical_50k` — Splink's Wikidata historical-people set, vendored as a
+    committed parquet under `vendored/` and run at full 50k (`full_scan=True`); the
+    `cluster` truth column is dropped before dedupe so the kernel can't see it.
+  - `dblp_acm` — Leipzig bibliographic ER; gitignored, local-only.
+
+  Skip-when-absent is uniform: a loader returns `None` when its data isn't on disk,
+  so the gate stays green in CI while still running the dataset wherever it exists.
+
+## Reading the attribution to nominate a lever
+
+The F1 tier records, per dataset, an attribution split: `blocking_recall` (did
+blocking surface the true pair at all), `final_recall` (did it survive scoring),
+and `threshold_loss` (lost at the cut). That localizes a dataset's F1 loss to a
+*lever class* — a low `blocking_recall` points at the blocking levers, a gap
+between blocking and final recall points at the scorer/threshold levers. This is
+what turns "F1 is low here" into "this specific decision is the culprit", which is
+how the corpus nominates the next lever on evidence rather than guesswork. On a
+dataset whose candidate set is too large to materialize, attribution records
+`{"skipped": "scale"}` (the F1 floor still holds; only the localization is
+deferred).
+
+## Two strategies per dataset (default vs probabilistic)
+
+Each ground-truth dataset records F1/P/R for **two strategies**, both floored:
+
+- `f1` — the **default** strategy: `dedupe_df(df)` (exact + weighted matchkeys).
+  This reflects the probabilistic-routing lever once
+  `GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC` is enabled.
+- `f1_probabilistic` — the **forced Fellegi-Sunter** strategy:
+  `auto_configure_probabilistic_df(df)` → `dedupe_df(df, config=...)`.
+
+Comparing the two per dataset is what tells us whether the probabilistic path
+helps (route candidate) or hurts (leave deterministic) — the evidence base for the
+routing lever, and its regression guard. Baseline snapshot (memory-off, native-0,
+routing off):
+
+| dataset | f1 (default) | f1_probabilistic | verdict |
+| --- | --- | --- | --- |
+| historical_50k | 0.4663 | 0.8294 | prob >> det (+0.36) |
+| febrl3 | 0.9665 | 0.9907 | prob > det (+0.024) |
+| ncvr_synthetic | 0.9828 | 0.9894 | prob > det (+0.007) |
+| anchor_person_match | 0.9896 | 0.9607 | det > prob (don't route) |
+
+The probabilistic strategy carries a small EM-convergence wobble (±0.004, recall
+stable); the 0.01 floor tolerance absorbs it.
 
 ## The gate
 
@@ -65,6 +114,11 @@ git commit -m "quality: re-bless baseline (<what changed and why it's better>)"
 
 The committed baseline's **git history is the trend log** — every bless is a
 reviewable diff of how the auto-config's decisions moved and why.
+
+Keep the loop fast: `--fast-only` skips the F1 tier entirely (config signals are
+seconds), and `--datasets a,b` restricts the run. `historical_50k` is the only slow
+entry (full 50k dedupe, ~1-3 min); exclude it with `--datasets` while iterating on
+signal-level changes, then run the full corpus before you bless.
 
 ## Flags
 

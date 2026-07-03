@@ -11,6 +11,7 @@ Endpoints:
     POST /explain             Explain why two records match
     GET  /clusters            List all clusters
     GET  /clusters/<id>       Get cluster detail
+    GET  /suggest             Config-healer suggestions for the loaded dataset
     GET  /reviews             Review queue (borderline pairs for steward review)
     GET  /reviews/decisions   List completed review decisions
     POST /reviews/decide      Approve or reject a pair (steward action)
@@ -400,6 +401,35 @@ class MatchServer:
             "note": est.note,
         }
 
+    def suggest_config(self) -> dict:
+        """Run the config healer over the loaded dataset and return ranked,
+        self-verified suggestions in the shared cross-surface wire shape.
+
+        Mirrors the MCP ``review_config`` tool / A2A ``review_config`` skill:
+        delegates to ``goldenmatch.core.suggest.review_config(engine.data,
+        config)`` and serializes with the shared ``serialize_suggestions`` so
+        the wire shape matches every other surface.
+
+        Fail-safe: ``{"error": ...}`` when no data is loaded; a structured
+        ``native_required`` payload when the native kernel is absent; an
+        ``error`` payload on any other failure -- never raises.
+        """
+        df = getattr(self.engine, "data", None)
+        if df is None:
+            return {"error": "no data loaded"}
+
+        from goldenmatch.core.suggest import SuggestionsNativeRequired, review_config
+        from goldenmatch.core.suggest.surface import serialize_suggestions
+
+        try:
+            suggestions = review_config(df, self.config)
+        except SuggestionsNativeRequired as exc:
+            return {"suggestions": [], "native_required": True, "message": str(exc)}
+        except Exception as exc:  # noqa: BLE001 - fail-safe REST handler
+            return {"error": f"review_config failed: {exc}"}
+
+        return {"suggestions": serialize_suggestions(suggestions, verified=True)}
+
     def retrieve_similar(
         self,
         query: str,
@@ -518,6 +548,9 @@ class APIHandler(BaseHTTPRequestHandler):
             })
         elif path == "/controller/telemetry":
             self._json_response(_server_instance.get_controller_telemetry())
+        elif path == "/suggest":
+            result = _server_instance.suggest_config()
+            self._json_response(result, 503 if "error" in result else 200)
         else:
             self._json_response({"error": "Not found"}, 404)
 
@@ -690,6 +723,7 @@ def start_server(
     print("   GET  /clusters/<id>       Cluster detail")
     print("   POST /autoconfig          Run AutoConfigController (returns config + telemetry)")
     print("   GET  /controller/telemetry Last autoconfig's stop_reason / decisions / NE / priors")
+    print("   GET  /suggest             Config-healer suggestions (self-verified)")
     print("   GET  /reviews             Review queue (steward)")
     print("   POST /reviews/decide      Approve/reject a pair")
     print("   POST /retrieve            Semantic retrieval by query")

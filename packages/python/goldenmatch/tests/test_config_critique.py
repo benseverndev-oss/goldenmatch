@@ -265,6 +265,160 @@ def test_over_merge_fires_on_oversized_clusters():
     assert finding["evidence"]["max_cluster_size"] == 4200
 
 
+# ── distributed_over_merge (#1261) ─────────────────────────────────────────────
+
+
+def _low_card_df(n=416):
+    """A no-strong-key frame: name/company/city are all low-cardinality, so
+    blocking on them distributes over-merge across many medium clusters."""
+    surnames = [f"sur{i % 30}" for i in range(n)]
+    companies = [f"co{i % 12}" for i in range(n)]
+    cities = [f"city{i % 20}" for i in range(n)]
+    return pl.DataFrame({"name": surnames, "company": companies, "city": cities})
+
+
+def test_distributed_over_merge_fires_on_low_card_blocking_with_merging():
+    df = _low_card_df()
+    cfg = _exact_config(
+        fields=["name", "company", "city"],
+        blocking_fields=["name", "company", "city"],
+    )
+    # Many MEDIUM clusters, none oversized (>100): a distributed over-merge that
+    # the mega-cluster smell can't see. ~40% of records merged.
+    clusters = {
+        i: {"members": [2 * i, 2 * i + 1], "size": 2} for i in range(80)
+    }
+    signals = {
+        "oversized_clusters": [],
+        "preliminary_cluster_sizes": {"p50": 1, "p95": 4, "p99": 8, "max": 9, "count": 80},
+    }
+    out = diagnose_config(df, cfg, _result(signals=signals, clusters=clusters))
+
+    ids = [f["id"] for f in out["findings"]]
+    assert "distributed_over_merge" in ids
+    finding = next(f for f in out["findings"] if f["id"] == "distributed_over_merge")
+    assert finding["severity"] == "high"
+    # The weakest (fewest-distinct) blocking key is reported.
+    assert finding["evidence"]["blocking_key"] == "company"
+    assert finding["evidence"]["distinct_values"] == 12
+    assert finding["fix_config_hint"]["action"] == "compound_blocking"
+
+
+def test_distributed_over_merge_silent_with_strong_blocking_key():
+    # A near-unique anchor (email) means blocking has a strong key -> no
+    # distributed over-merge, even though name is low-cardinality.
+    df = pl.DataFrame({
+        "name": [f"sur{i % 5}" for i in range(50)],
+        "email": [f"user{i}@x.com" for i in range(50)],
+    })
+    cfg = _exact_config(fields=["name", "email"], blocking_fields=["email", "name"])
+    clusters = {i: {"members": [2 * i, 2 * i + 1], "size": 2} for i in range(20)}
+    signals = {
+        "oversized_clusters": [],
+        "preliminary_cluster_sizes": {"p50": 1, "p95": 4, "p99": 6, "max": 6, "count": 20},
+    }
+    out = diagnose_config(df, cfg, _result(signals=signals, clusters=clusters))
+    assert all(f["id"] != "distributed_over_merge" for f in out["findings"])
+
+
+def test_distributed_over_merge_silent_without_merge_evidence():
+    # Low-cardinality blocking but the run barely merged (all singletons) ->
+    # nothing to warn about yet.
+    df = _low_card_df(60)
+    cfg = _exact_config(
+        fields=["name", "company"], blocking_fields=["name", "company"]
+    )
+    clusters = {i: {"members": [i], "size": 1} for i in range(60)}
+    signals = {
+        "oversized_clusters": [],
+        "preliminary_cluster_sizes": {"p50": 1, "p95": 1, "p99": 1, "max": 1, "count": 60},
+    }
+    out = diagnose_config(df, cfg, _result(signals=signals, clusters=clusters))
+    assert all(f["id"] != "distributed_over_merge" for f in out["findings"])
+
+
+def test_distributed_over_merge_defers_to_mega_cluster_detector():
+    # A genuine mega-cluster (>100) is the oversized-cluster detector's job;
+    # the distributed detector stays quiet so the two don't double-report.
+    df = _low_card_df()
+    cfg = _exact_config(fields=["name"], blocking_fields=["name", "company"])
+    signals = {
+        "oversized_clusters": [{"cluster_id": 1, "size": 300}],
+        "preliminary_cluster_sizes": {"p50": 2, "p95": 9, "p99": 50, "max": 300, "count": 50},
+    }
+    out = diagnose_config(df, cfg, _result(signals=signals))
+    assert all(f["id"] != "distributed_over_merge" for f in out["findings"])
+
+
+# ── low_signal_key remedy is exclude_column, not demote_to_blocking (#1263) ─────
+
+
+def test_low_signal_key_emits_exclude_column_not_demote():
+    # The #1263 regression: low_signal_key used to emit demote_to_blocking, which
+    # turned a near-constant column into a standalone blocking pass and collapsed
+    # candidate generation. The remedy must be exclude_column.
+    df = pl.DataFrame({
+        "name": [f"n{i}" for i in range(400)],
+        "gender_code": [("M", "F", "U")[i % 3] for i in range(400)],  # 3/400 < 0.01
+    })
+    cfg = _exact_config(fields=["name", "gender_code"])
+    out = diagnose_config(df, cfg, _result())
+    finding = next(f for f in out["findings"] if f["id"] == "low_signal_key")
+    assert finding["fix_config_hint"] == {
+        "action": "exclude_column",
+        "column": "gender_code",
+    }
+
+
+def test_low_signal_key_roundtrip_does_not_add_blocking_pass():
+    # Applying the low_signal_key hint must NOT create a single-field blocking
+    # pass on the near-constant column (the #1263 over-block).
+    df = pl.DataFrame({
+        "name": [f"n{i}" for i in range(400)],
+        "gender_code": [("M", "F", "U")[i % 3] for i in range(400)],
+    })
+    cfg = _exact_config(
+        fields=["name", "gender_code"], blocking_fields=["name", "gender_code"]
+    )
+    finding = next(
+        f for f in diagnose_config(df, cfg, _result())["findings"]
+        if f["id"] == "low_signal_key"
+    )
+    new, applied = apply_hint(cfg, finding["fix_config_hint"])
+    assert applied
+    # gender_code is gone from matching AND there is no standalone gender pass.
+    assert "gender_code" not in _mk_field_names(new)
+    all_block_fields = [
+        f
+        for attr in ("keys", "passes", "sub_block_keys")
+        for kc in (getattr(new.blocking, attr, None) or [])
+        for f in kc.fields
+    ]
+    assert ["gender_code"] not in [
+        kc.fields
+        for attr in ("keys", "passes", "sub_block_keys")
+        for kc in (getattr(new.blocking, attr, None) or [])
+    ], "must not create a standalone single-field block on the near-constant column"
+    # name survives as a blocking key, so candidate generation isn't collapsed.
+    assert "name" in all_block_fields
+
+
+def test_apply_exclude_column_preserves_sole_blocking_key():
+    # If the excluded column is the ONLY blocking key, removing it would empty
+    # blocking (full cross-product). The collapse guard preserves the blocking
+    # role and skips exclude_columns.
+    cfg = _exact_config(fields=["name", "gender_code"], blocking_fields=["gender_code"])
+    new, applied = apply_hint(
+        cfg, {"action": "exclude_column", "column": "gender_code"}
+    )
+    assert applied  # the matchkey strip still applied
+    assert "gender_code" not in _mk_field_names(new)
+    # blocking is preserved (not collapsed) and the column is NOT excluded.
+    block_fields = [f for kc in (new.blocking.keys or []) for f in kc.fields]
+    assert "gender_code" in block_fields
+    assert "gender_code" not in (new.exclude_columns or [])
+
+
 # ── phrasing="plain" renders the plain fields, no LLM ──────────────────────────
 
 

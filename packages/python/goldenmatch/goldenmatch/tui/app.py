@@ -18,6 +18,7 @@ from goldenmatch.tui.tabs.data_tab import DataTab
 from goldenmatch.tui.tabs.export_tab import ExportTab
 from goldenmatch.tui.tabs.golden_tab import GoldenTab
 from goldenmatch.tui.tabs.matches_tab import MatchesTab
+from goldenmatch.tui.tabs.suggest_tab import SuggestTab
 from goldenmatch.tui.widgets.progress_overlay import ProgressOverlay
 from goldenmatch.tui.widgets.threshold_slider import ThresholdSlider
 
@@ -293,6 +294,10 @@ class GoldenMatchApp(App):
                     # filter. Writes happen via Golden + Matches modals.
                     with TabPane("Corrections", id="tab-corrections"):
                         yield CorrectionsTab()
+                    # Task 9: config-healer suggestions for the loaded data.
+                    # Lists review_config output; apply re-runs via the engine.
+                    with TabPane("Suggestions", id="tab-suggest"):
+                        yield SuggestTab()
         yield Footer()
 
     def on_mount(self) -> None:

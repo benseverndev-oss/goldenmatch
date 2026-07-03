@@ -1,6 +1,6 @@
 # goldensuite-mcp
 
-> One MCP server exposing **every** Golden Suite tool — `goldenmatch`, `goldencheck`, `goldenflow`, `goldenpipe`, `infermap` — under a single endpoint.
+> One MCP server exposing **every** Golden Suite tool — `goldenmatch`, `goldencheck`, `goldenflow`, `goldenpipe`, `infermap`, `goldenanalysis` — under a single endpoint.
 
 ```bash
 pip install goldensuite-mcp
@@ -17,7 +17,7 @@ docker run -p 8300:8300 ghcr.io/benseverndev-oss/goldensuite-mcp:latest
 
 `goldensuite-mcp` imports each sub-package's MCP tool list and dispatcher, composes them into a single `mcp.server.Server` instance, and serves them over stdio or Streamable HTTP.
 
-You point your MCP client at one endpoint and get the full Golden Suite — entity resolution, data quality scanning, transforms, pipeline orchestration, and schema mapping.
+You point your MCP client at one endpoint and get the full Golden Suite — entity resolution, data quality scanning, transforms, pipeline orchestration, schema mapping, and trend analysis & regression detection.
 
 ## Tool collisions
 
@@ -28,6 +28,7 @@ Tool names register on a **first-wins** basis. The registration order is:
 3. **goldenflow** — transforms & standardizers
 4. **goldenpipe** — pipeline orchestrator
 5. **infermap** — schema mapping
+6. **goldenanalysis** — trend analysis & regression detection (registered last)
 
 If two packages register a tool with the same name, the later one is shadowed. **Shadowed tools are logged at WARNING level when the server starts**, so you can see exactly what happened:
 
@@ -64,7 +65,7 @@ Or the hosted variant (when one is published):
 
 ## Why an aggregator?
 
-The Golden Suite ships five Python packages, each with its own MCP server (`goldenmatch mcp-serve`, `goldencheck mcp-serve`, …). For a deployer running all five behind one Claude Desktop config, that's five processes and five mounts.
+The Golden Suite ships six Python packages, each with its own MCP server (`goldenmatch mcp-serve`, `goldencheck mcp-serve`, …). For a deployer running all six behind one Claude Desktop config, that's six processes and six mounts.
 
 `goldensuite-mcp` is the convenience option:
 - One process, one mount, all the tools

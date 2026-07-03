@@ -1,0 +1,63 @@
+# Reusable PyPI-publish template for the simple Python packages. Each
+# packages/python/<pkg> has a thin `publish-<pkg>.yml` caller that fires on its
+# `release: published` (filtered to the `<pkg>-v*` tag) and delegates here -- so
+# this single body replaces the ~40 near-identical lines copy-pasted across six
+# workflows (goldencheck, goldencheck-types, goldenflow, goldenpipe, infermap,
+# goldenanalysis).
+#
+# Every package's dir name under packages/python/ is the one varying value, so a
+# single `package` input parameterizes the working dir + the publish packages-dir.
+# The tag-prefix `if:` gate stays in each caller (it's per-package and needs the
+# sibling-tag exclusions). goldenmatch is intentionally NOT a caller: it has a
+# bespoke web-build + cosign/sigstore + draft-release flow and keeps its own
+# publish-goldenmatch.yml.
+name: _publish-pypi (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      package:
+        description: "Python package dir under packages/python/ (== PyPI dist name)"
+        required: true
+        type: string
+      ref:
+        description: "Tag or commit to build (default: the triggering ref)"
+        required: false
+        type: string
+        default: ""
+      dry_run:
+        description: "Build + validate without publishing to PyPI"
+        required: false
+        type: string
+        default: "false"
+
+permissions:
+  id-token: write   # PyPI OIDC (declared to match the prior per-package workflows)
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+      contents: read
+    defaults:
+      run:
+        working-directory: packages/python/${{ inputs.package }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+      - run: pip install build
+      - run: python -m build
+      - name: Publish to PyPI
+        if: inputs.dry_run != 'true'
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b  # release/v1
+        with:
+          packages-dir: packages/python/${{ inputs.package }}/dist
+          password: ${{ secrets.PYPI_TOKEN }}
+          skip-existing: true

@@ -1,13 +1,15 @@
 <!-- mcp-name: io.github.benseverndev-oss/goldenmatch -->
 <div align="center">
 
-# 🟡 Golden Suite
+# Golden Suite
 
-**A polyglot data-quality and entity-resolution toolkit. Polished, opinionated, AI-native.**
+**Zero-config entity resolution that scales — dedupe & match messy records from a laptop CSV to 100M+ rows. No training data, no tuning.**
 
-*GoldenCheck profiles → GoldenFlow standardizes → GoldenMatch deduplicates → GoldenAnalysis reports, all orchestrated by GoldenPipe. With InferMap for schema mapping, a Rust extension layer for Postgres / DuckDB, and optional WebAssembly acceleration behind the edge-safe TypeScript ports.*
+*The headline package, **GoldenMatch**, does the matching — fuzzy + exact + probabilistic (Fellegi-Sunter) + LLM — and **beats hand-tuned Splink out of the box** (96.4% F1 on DBLP-ACM), identical in Python, edge-safe TypeScript, and SQL. Around it sits a full data-quality suite: GoldenCheck profiles, GoldenFlow standardizes, GoldenAnalysis reports, GoldenPipe orchestrates, and InferMap maps schemas — with a Rust extension layer for Postgres / DuckDB and optional WebAssembly acceleration behind the TS ports.*
 
-**⚡ GoldenMatch scales from a CSV on your laptop to 100M+ rows on a Ray cluster — verified: 100,000,000 records deduped recall-complete (correct across any partitioning) in 9.2 min, with a 0.36 GB driver footprint.**
+**Made for GraphRAG, too** — entity resolution is the stage knowledge-graph pipelines do *worst* (the same entity scatters across documents as duplicate surface forms). GoldenMatch drops into **neo4j-graphrag / LlamaIndex / Graphiti** as the resolution stage ([`goldenmatch-kg`](packages/python/goldenmatch-kg/README.md)), or builds a knowledge graph straight from text with that resolution at its core ([`goldengraph`](packages/python/goldengraph/README.md)). Both in early access. [→ Knowledge graphs](#knowledge-graphs)
+
+**Verified at scale: 100,000,000 records deduped in 9.2 min on a Ray cluster — recall-complete across any partitioning, 0.36 GB driver footprint.**
 
 <br>
 
@@ -26,7 +28,7 @@
 [![DBLP-ACM F1](https://img.shields.io/badge/DBLP--ACM%20F1-96.4%25-d4a017)](packages/python/goldenmatch/README.md#benchmarks)
 
 <!-- Reach -->
-[![PyPI downloads (suite)](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fbenseverndev-oss%2Fgoldenmatch%2Fbadges%2Fpypi-downloads.json)](https://pepy.tech/projects?q=goldenmatch+goldencheck+goldenpipe+goldenflow+goldenanalysis+infermap+goldencheck-types+goldensuite-mcp+goldenmatch-duckdb+goldenmatch-native+goldenflow-native+goldencheck-native+goldenanalysis-native+goldenmatch-embed)
+[![PyPI downloads (suite)](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fbenseverndev-oss%2Fgoldenmatch%2Fbadges%2Fpypi-downloads.json)](https://pepy.tech/projects?q=goldenmatch+goldencheck+goldenpipe+goldenflow+goldenanalysis+infermap+goldencheck-types+goldensuite-mcp+goldenmatch-duckdb+goldenmatch-native+goldenflow-native+goldencheck-native+goldenanalysis-native+goldenmatch-embed+golden-suite)
 [![npm downloads (suite)](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fbenseverndev-oss%2Fgoldenmatch%2Fbadges%2Fnpm-downloads.json)](https://www.npmjs.com/~benzsevern)
 [![GitHub stars](https://img.shields.io/github/stars/benseverndev-oss/goldenmatch?style=flat&color=d4a017&logo=github)](https://github.com/benseverndev-oss/goldenmatch/stargazers)
 
@@ -46,19 +48,26 @@
 <p align="center"><sub><em>Pair drilldown in the web workbench: cluster members, field-level diff, and a one-line NL explanation per pair. <code>pip install goldenmatch[web]</code> then <code>goldenmatch serve-ui &lt;project&gt;</code>. <a href="https://github.com/benseverndev-oss/goldenmatch/wiki/Web-UI">More screenshots →</a></em></sub></p>
 
 ```bash
-# Headline package: dedupe a CSV in 30 seconds
+# Dedupe a CSV in 30 seconds — zero config, writes <timestamp>_golden.csv to the
+# current directory. Add --tui to review interactively, --output-all for every artifact.
 pip install goldenmatch && goldenmatch dedupe customers.csv
+
+# From Python — zero-config, returns golden records
+python -c "import goldenmatch as gm; gm.dedupe('customers.csv').golden.write_csv('deduped.csv')"
 
 # TypeScript / Edge runtimes
 npm install goldenmatch
+
+# The WHOLE suite (Check + Flow + Match + Analysis + Pipe + InferMap) + native acceleration, one line:
+pip install golden-suite
 ```
 
 <!-- README-callouts:start  (auto-synced from packages/python/goldenmatch/CHANGELOG.md by scripts/sync_readme_callouts.py — edit the CHANGELOG, not this block) -->
-> **🆕 v2.2.0 — Semantic blocking** — an opt-in recall lever for abbreviations and aliases. `dedupe_df(semantic_blocking=...)` unions extra candidate sources (initialism/abbreviation blocking, a business-alias canonical-form table, and an embedding ANN pass) into the pipeline. Off by default; on the abbreviation-heavy benchmark it adds **+5.3pp recall at zero precision cost**.
+> **v2.4.0 — The healing loop, now default-on across every surface** — every `dedupe_df` run surfaces ranked, self-verified config-suggestions on `result.suggestions` when there's headroom (free on a healthy run, no second pipeline pass). `dedupe_df(suggest=True)` returns verified suggestions; `heal=True` applies them and re-runs, returning the healed `result.config` + `result.heal_trail`. Available across Python, CLI (`--suggest` / `--heal`), MCP, A2A, REST, web, the TUI, and the edge-safe TypeScript port via WebAssembly. Needs `goldenmatch[native]`; degrades gracefully without it. Kill-switch `GOLDENMATCH_SUGGEST_ON_DEDUPE=0`.
 >
-> **v2.1.0 — Correlated survivorship** — golden-record survivorship can now keep correlated fields (street/city/postcode) in lock-step from a single winning source instead of mixing best-per-field values across records. New `FieldGroupSpec` + `DomainPack.groups` (domain-pack schema v3, additive), an `anchor`/`allow_fill` group-winner strategy, and per-cluster provenance surfaced through lineage, `explain`, the MCP tools, and the review queue. Plus chunked PPRL linkage (peak memory ~9-14x lower, byte-identical) and `result.native` dispatch telemetry that flags a silently-slow Python fallback.
+> **v2.3.0 — Auto-enabled semantic blocking, now default-on** — text-heavy data automatically routes to SimHash-over-embeddings blocking when an embedder is reachable (a byte-identical no-op otherwise). Plus pluggable pgvector / DuckDB-HNSW vector-index backends and opt-in Fellegi-Sunter routing for no-strong-identifier datasets (`GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC=1`).
 >
-> **v2.0.0** — **GoldenMatch 2.0.0: the first backwards-incompatible major.** It removes four deprecation-window items, each shipped with a 1.x runway: the legacy `:hash:` identity lookup bridge + `GOLDENMATCH_IDENTITY_ID_SCHEME` (run `goldenmatch identity migrate-ids` before upgrading; un-fingerprintable rows keep their `:hash:` id), the `GOLDENMATCH_CLUSTER_FRAMES_OUT` gate + legacy dict cluster path (`build_clusters` stays as a frames-backed adapter), and the `cheapest_healthy` / `_scale_aware_backend` shims. Pipeline behavior is output-equivalent. Migration guide: [Migrating to v2](https://docs.bensevern.dev/goldenmatch/migrating-to-v2).
+> **v2.2.0 — Semantic blocking** — an opt-in recall lever for abbreviations and aliases. `dedupe_df(semantic_blocking=...)` unions extra candidate sources (initialism/abbreviation blocking, a business-alias canonical-form table, and an embedding ANN pass) into the pipeline. Off by default; on the abbreviation-heavy benchmark it adds **+5.3pp recall at zero precision cost**.
 <!-- README-callouts:end -->
 
 ---
@@ -99,12 +108,28 @@ flowchart LR
 - **Learning Memory** — corrections persist across runs and re-anchor across row reorders, so the system stops needing the same correction twice (GoldenMatch v1.6.0; off by default).
 - **Identity Graph** — a durable graph layer above run-local clusters: stable `entity_id`s that survive across runs, an append-only event log, and create / absorb / merge / split semantics, surfaced on the CLI, REST, MCP, and SQL interfaces (the Identity Graph v2 feature, shipped in GoldenMatch v1.15).
 - **Privacy-preserving record linkage** — match across organizations without sharing raw data (PPRL, 92.4% F1 on FEBRL4).
-- **AI-native by design** — every package ships an MCP server, a REST API, and an A2A agent surface. 50+ MCP tools across the suite, including `auto_configure` + `controller_telemetry` for v1.7-v1.12 introspection.
+- **AI-native by design** — every package ships an MCP server, a REST API, and an A2A agent surface. 70+ MCP tools across the suite, including `auto_configure` + `controller_telemetry` for auto-config introspection.
 - **AutoConfigController visible everywhere** (v1.7-v1.12 surface-parity arc) — web `ControllerPanel`, TUI `Ctrl+A`, CLI `goldenmatch autoconfig`, REST `/autoconfig` + `/controller/telemetry`, Postgres `goldenmatch_autoconfig` + `gm_telemetry`, DuckDB UDFs, MCP/A2A telemetry tools. One JSON shape across every interface.
 - **Polyglot parity** — the full suite ships on **npm** (goldenmatch, goldencheck, goldenflow, goldenanalysis, infermap, goldenpipe) alongside PyPI; the TypeScript and Python implementations track the same outputs to 4-decimal precision via a cross-language parity harness.
-- **Edge-safe, with optional native speed** — the TypeScript cores are dependency-free and `node:*`-free, so they run in browsers, Cloudflare Workers, Vercel Edge, and Deno. An **opt-in WebAssembly backend** (`await enableWasm()` / `enableAnalysisWasm()`) swaps in the *same* pyo3-free Rust kernels the Python wheels and the SQL UDFs use — pure-TS stays the default and the byte-identical fallback, so default users download zero wasm bytes.
+- **Edge-safe, with optional native speed** — the TypeScript cores are dependency-free and `node:*`-free, so they run in browsers, Cloudflare Workers, Vercel Edge, and Deno. An **opt-in WebAssembly backend** (`await enableWasm()` / `enableAnalysisWasm()` / `enableSuggestWasm()` — the last bringing the config-suggestion "healer" to TS) swaps in the *same* pyo3-free Rust kernels the Python wheels and the SQL UDFs use — pure-TS stays the default and the byte-identical fallback, so default users download zero wasm bytes.
 - **SQL-native, both engines at parity** — the same functions run inside **PostgreSQL** (pgrx extension) and **DuckDB**: dedupe / match / score / auto-config + telemetry / identity graph, plus data profiling, `evaluate`, Fellegi-Sunter probabilistic scoring, and GoldenFlow transforms.
 - **Production paths** — Postgres sync, daemon mode, lineage tracking, review queues, dbt integration, GitHub Actions, and a Rust extension layer for Postgres / DuckDB.
+
+---
+
+## The healing loop
+
+GoldenMatch's core workflow is a loop, not a one-shot:
+
+1. **Zero-config first pass** — `dedupe_df(df)` runs with no rules and no training data. Auto-config picks a defensible config and you get good results immediately.
+2. **You get the config it chose** — the chosen config comes back on `result.config`: inspectable, diffable, versionable. Never a black box.
+3. **The healer suggests tweaks** — every `dedupe_df(df)` run checks a free signal and, when there's headroom, attaches ranked, explainable, self-verified edits to `result.suggestions` (no extra cost on a healthy result). Each suggestion is kept only if it doesn't worsen an unsupervised health proxy, so a tweak never makes results worse.
+4. **You apply the tweaks** — `dedupe_df(df, heal=True)` applies them and re-runs in one call (returning the healed `result.config` + a `result.heal_trail`); or take the wheel with `apply_suggestion`.
+5. **Results improve. Repeat** — loop until the healer goes quiet.
+
+Zero-config gets you most of the way in one pass; the healing loop closes the gap to an expert-tuned config without you having to be the expert.
+
+> **Status:** the healer is **wired into the default pipeline** on every surface — Python (`dedupe_df(df, suggest=True)` for verified suggestions, `heal=True` for the full apply-and-re-run loop, or `review_config` for direct control), CLI (`--suggest` / `--heal`), MCP & A2A (`review_config`), REST, web, and the TUI — plus the edge-safe TypeScript port via WebAssembly (`enableSuggestWasm()`). It needs `goldenmatch[native]` and degrades gracefully without it (attaches nothing, never errors). Kill-switch: `GOLDENMATCH_SUGGEST_ON_DEDUPE=0`. Full details: [config-suggestions](https://docs.bensevern.dev/goldenmatch/config-suggestions).
 
 ---
 
@@ -112,10 +137,11 @@ flowchart LR
 
 | Package | Lang | What it does | Install |
 |---|---|---|---|
-| **[GoldenMatch](packages/python/goldenmatch/README.md)** 🟡 | Python · TS | Zero-config entity resolution. Fuzzy + exact + probabilistic + LLM. Headline package. | `pip install goldenmatch` · `npm i goldenmatch` |
+| **[golden-suite](packages/python/golden-suite/README.md)** | Python | One-line meta-install: the whole suite + native acceleration, defaulted to the perf-optimized config. `golden-suite doctor` verifies the setup. | `pip install golden-suite` |
+| **[GoldenMatch](packages/python/goldenmatch/README.md)** | Python · TS | Zero-config entity resolution. Fuzzy + exact + probabilistic + LLM. Headline package. | `pip install goldenmatch` · `npm i goldenmatch` |
 | **[GoldenCheck](packages/python/goldencheck/README.md)** | Python · TS | Data-quality scanning: encoding, Unicode, format validation, anomaly detection. | `pip install goldencheck` · `npm i goldencheck` |
 | **[GoldenFlow](packages/python/goldenflow/README.md)** | Python · TS | Transforms & standardizers: phone, date, address, categorical normalization. | `pip install goldenflow` · `npm i goldenflow` |
-| **[GoldenPipe](packages/python/goldenpipe/README.md)** | Python · TS | Orchestrator that wires Check → Flow → Match into one declarative pipeline. | `pip install goldenpipe` · `npm i goldenpipe` |
+| **[GoldenPipe](packages/python/goldenpipe/README.md)** | Python · TS | Orchestrator that wires Check → Flow → Match → Identity → Analysis into one declarative pipeline. | `pip install goldenpipe` · `npm i goldenpipe` |
 | **[InferMap](packages/python/infermap/README.md)** | Python · TS | Schema mapping engine — auto-aligns columns across heterogeneous sources. | `pip install infermap` · `npm i infermap` |
 | **[GoldenAnalysis](packages/python/goldenanalysis/README.md)** | Python · TS | Cross-cutting analysis & reporting — consumes any stage's typed artifacts (or a raw DataFrame) and emits a unified, exportable `AnalysisReport`; optional Rust / WASM `histogram`+`quantile` kernels. | `pip install goldenanalysis` · `npm i goldenanalysis` |
 | **[goldenmatch-extensions](packages/rust/extensions/README.md)** | Rust | Postgres extension (pgrx) + DuckDB UDFs. SQL-native fuzzy matching. | source build |
@@ -152,7 +178,7 @@ Entity resolution is the stage most GraphRAG pipelines do badly — duplicate su
 | Match in Postgres / DuckDB SQL | [`packages/rust/extensions`](packages/rust/extensions/README.md) |
 | Add data-quality gates to dbt | [`packages/dbt/goldensuite`](packages/dbt/goldensuite/README.md) |
 | Block bad data in GitHub PRs | [`packages/actions/goldencheck`](packages/actions/goldencheck/README.md) |
-| Run as Airflow DAGs | [`examples/airflow/`](examples/airflow/README.md) — 12 drop-in DAGs |
+| Run as Airflow DAGs | [`examples/airflow/`](examples/airflow/README.md) — 13 drop-in DAGs |
 | Run from a single MCP container | [`docker run ghcr.io/benseverndev-oss/goldensuite-mcp:latest`](packages/python/goldensuite-mcp/README.md) |
 | Pull every Suite container | [GitHub Packages](https://github.com/benzsevern?tab=packages) |
 
@@ -228,9 +254,43 @@ result.report.write_html("report.html")
 
 Reproducible end-to-end pipelines running GoldenMatch on public data at scale, each with measured headline numbers vs baselines:
 
-- 🕵️ **[goldenmatch-shell-company-network](https://github.com/benseverndev-oss/goldenmatch-shell-company-network)** — investigative ER across ICIJ Offshore Leaks + OpenSanctions + GLEIF + UK PSC + UK disqualified-directors. Confidence-weighted graph, structure mining, named investigative candidates. **−62.5% analyst-hours to triage** vs single-source baselines; +133% adversarial perturbation recovery.
-- 🛡️ **[goldenmatch-vuln-attribution](https://github.com/benseverndev-oss/goldenmatch-vuln-attribution)** — cross-database ER on 6.1M OSS vulnerability records across 40 sources (OSV, GHSA, PyPA, RustSec, Go vulndb, EPSS, CISA KEV, CVE Project bulk). **6,126,895 records → 847,475 canonical vulns** in ~5 minutes end-to-end on a single 64GB runner via the full Golden Suite (Check + Flow + Match + Pipe).
-- ⚖️ **[goldenmatch-sanctions-reconciliation](https://github.com/benseverndev-oss/goldenmatch-sanctions-reconciliation)** — cross-list coverage analysis on 85 public sanctions lists across 50+ jurisdictions via OpenSanctions, plus 10-year OFAC SDN history and PEP/crypto cross-analysis. Coverage-gap benchmark for any sanctions-screening vendor.
+- **[goldenmatch-shell-company-network](https://github.com/benseverndev-oss/goldenmatch-shell-company-network)** — investigative ER across ICIJ Offshore Leaks + OpenSanctions + GLEIF + UK PSC + UK disqualified-directors. Confidence-weighted graph, structure mining, named investigative candidates. **−62.5% analyst-hours to triage** vs single-source baselines; +133% adversarial perturbation recovery.
+- **[goldenmatch-vuln-attribution](https://github.com/benseverndev-oss/goldenmatch-vuln-attribution)** — cross-database ER on 6.1M OSS vulnerability records across 40 sources (OSV, GHSA, PyPA, RustSec, Go vulndb, EPSS, CISA KEV, CVE Project bulk). **6,126,895 records → 847,475 canonical vulns** in ~5 minutes end-to-end on a single 64GB runner via the full Golden Suite (Check + Flow + Match + Pipe).
+- **[goldenmatch-sanctions-reconciliation](https://github.com/benseverndev-oss/goldenmatch-sanctions-reconciliation)** — cross-list coverage analysis on 85 public sanctions lists across 50+ jurisdictions via OpenSanctions, plus 10-year OFAC SDN history and PEP/crypto cross-analysis. Coverage-gap benchmark for any sanctions-screening vendor.
+
+---
+
+## The whole suite in one line — `golden-suite`
+
+Want everything, configured for speed, without hand-picking packages? The
+[`golden-suite`](packages/python/golden-suite/README.md) meta-package pulls in
+the entire suite plus the native (Rust) acceleration in a single install:
+
+```bash
+pip install golden-suite
+```
+
+That one command installs **GoldenMatch** (entity resolution), **GoldenCheck**
+(data quality), **GoldenFlow** (transforms), **GoldenAnalysis** (reporting),
+**GoldenPipe** (orchestration), **InferMap** (schema mapping), and the
+`goldenmatch-native` / `goldencheck-native` / `goldenflow-native` /
+`goldenanalysis-native` compiled kernels — all pinned to compatible versions and
+defaulted to the perf-optimized configuration (native paths on, no env vars to
+set). The native wheels are **hard** dependencies on purpose: on a platform
+without a wheel the install fails loudly rather than silently running the slow
+pure-Python path.
+
+```bash
+golden-suite doctor      # verify every package + native kernel is importable and healthy
+golden-suite optimize    # repair / re-enable the perf-optimized config if doctor finds a gap
+
+pip install golden-suite[mcp]     # + the aggregator MCP server (every tool, one endpoint)
+pip install golden-suite[agent]   # + GoldenPipe serving surfaces (A2A + REST + TUI)
+pip install golden-suite[all]     # everything above
+```
+
+Prefer to install just one tool, or pick your own extras? Use the per-package
+installs below.
 
 ---
 
@@ -277,7 +337,7 @@ GoldenMatch is hosted as an MCP server on [Smithery](https://smithery.ai/servers
 }
 ```
 
-50+ MCP tools across the suite: deduplicate, match, explain, review, link privately, configure, scan quality, transform, synthesize golden records, and manage Learning Memory corrections.
+70+ MCP tools across the suite: deduplicate, match, explain, review, link privately, configure, scan quality, transform, synthesize golden records, analyze trends and regressions, and manage Learning Memory corrections.
 
 ---
 
@@ -311,11 +371,11 @@ See [`packages/python/goldensuite-mcp/README.md`](packages/python/goldensuite-mc
 
 ## Airflow
 
-12 drop-in DAGs at [`examples/airflow/`](examples/airflow/README.md), grouped by lifecycle stage:
+13 drop-in DAGs at [`examples/airflow/`](examples/airflow/README.md), grouped by lifecycle stage:
 
 | Group | DAGs |
 |---|---|
-| **Core pipeline** | `daily_dedupe`, `incremental_match`, `warehouse_native` (Snowflake), `customer_360` (multi-source) |
+| **Core pipeline** | `daily_dedupe`, `incremental_match`, `warehouse_native` (Snowflake), `customer_360` (multi-source), `identity_graph` (durable entity IDs) |
 | **Privacy** | `pprl_linkage` (two-party PPRL) |
 | **Onboarding & monitoring** | `schema_align_and_load`, `schema_drift_alarm`, `quality_gate` |
 | **Feedback loop** | `review_worker`, `active_learning` |

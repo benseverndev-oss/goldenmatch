@@ -57,6 +57,7 @@
                 "group": "Features",
                 "pages": [
                   "goldenmatch/auto-config",
+                  "goldenmatch/config-suggestions",
                   "goldenmatch/scoring",
                   "goldenmatch/blocking",
                   "goldenmatch/data-quality",

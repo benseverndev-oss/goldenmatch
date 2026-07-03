@@ -36,8 +36,12 @@ name = "goldenprofile_core"
 # across Python/WASM/C/pgrx.
 goldenmatch-score-core = { path = "../score-core" }
 # Connected-components (WCC) kernel: turns kept scored profile-pairs into the
-# final cross-document entity clusters.
-goldenmatch-graph-core = { path = "../graph-core" }
+# final cross-document entity clusters. `default-features = false` drops the
+# arrow columnar helpers (unused here — we call only the arrow-free
+# `connected_components`), keeping the wasm build Arrow-free. Arrow compiles to
+# wasm32 fine and DCE strips it from the .wasm regardless; dropping it just
+# avoids compiling ~11 arrow crates (build-time + dep-hygiene win).
+goldenmatch-graph-core = { path = "../graph-core", default-features = false }
 # SimHash (sign random-projection / cosine-LSH) band hashing over dense
 # fingerprint embeddings -- the "semantic signature" blocker. Byte-identical
 # with the Python/TS sketch tier.

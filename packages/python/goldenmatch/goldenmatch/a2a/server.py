@@ -170,6 +170,27 @@ _SKILLS = [
         "outputModes": ["application/json"],
     },
     {
+        "id": "identity_audit_seal",
+        "name": "Identity Audit Seal",
+        "description": (
+            "Anchor the audit log with a tamper-evidence seal (chained sha256 "
+            "root over events since the last seal). Idempotent; no-op when "
+            "nothing new is logged."
+        ),
+        "inputModes": ["application/json"],
+        "outputModes": ["application/json"],
+    },
+    {
+        "id": "identity_audit_verify",
+        "name": "Identity Audit Verify",
+        "description": (
+            "Verify the audit log against its seal chain -- detects content "
+            "edits, deletion, reordering, and insertion of any sealed event."
+        ),
+        "inputModes": ["application/json"],
+        "outputModes": ["application/json"],
+    },
+    {
         "id": "controller_telemetry",
         "name": "Controller Telemetry",
         "description": (
@@ -282,6 +303,19 @@ _SKILLS = [
         "outputModes": ["application/json"],
     },
     {
+        "id": "review_config",
+        "name": "Review Config",
+        "description": (
+            "Run the config healer over a CSV: analyze the dedupe run and return "
+            "ranked, self-verified suggestions for improving the matching config "
+            "(thresholds, scorers, negative evidence, blocking), each with an id, "
+            "kind, target, rationale, and machine-applicable patch. Requires the "
+            "native kernel; returns an empty list otherwise."
+        ),
+        "inputModes": ["application/json"],
+        "outputModes": ["application/json"],
+    },
+    {
         "id": "retrieve_similar",
         "name": "Retrieve Similar",
         "description": "Semantic retrieval: return the records in a CSV most similar to a free-text query, ranked by cosine similarity (zero-config in-house embedder, no cloud by default).",
@@ -390,6 +424,7 @@ async def _handle_send_task(request: web.Request) -> web.Response:
     body = await request.json()
     skill_id = body.get("skill")
     params = body.get("params", {})
+    allow_pprl = bool(body.get("allow_pprl", False))
 
     if not skill_id:
         return web.json_response({"error": "Missing 'skill' field"}, status=400)
@@ -399,7 +434,7 @@ async def _handle_send_task(request: web.Request) -> web.Response:
     registry.set_state(task_id, "working")
 
     try:
-        result = dispatch_skill(skill_id, params)
+        result = dispatch_skill(skill_id, params, allow_pprl=allow_pprl)
         registry.set_state(task_id, "completed", result=result)
         return web.json_response({
             "id": task_id,

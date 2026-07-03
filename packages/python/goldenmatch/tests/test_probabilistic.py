@@ -1123,9 +1123,21 @@ def _native_fs_available():
 
 
 class TestNativeFSGating:
-    def test_default_off(self, monkeypatch):
+    def test_default_on_reference_mode(self, monkeypatch):
+        # Reference mode (2026-07-01): native FS is authoritative by DEFAULT --
+        # with GOLDENMATCH_FS_NATIVE unset it follows native availability (was
+        # opt-in/default-off pre-2.6.0). See docs/design/2026-07-01-rust-is-the-
+        # reference-roadmap.md.
+        from goldenmatch.core import _native_loader as nl
         from goldenmatch.core import probabilistic as p
         monkeypatch.delenv("GOLDENMATCH_FS_NATIVE", raising=False)
+        monkeypatch.delenv("GOLDENMATCH_NATIVE", raising=False)
+        assert p._fs_native_enabled() is nl.native_available()
+
+    def test_force_off(self, monkeypatch):
+        # GOLDENMATCH_FS_NATIVE=0 is the explicit opt-out to the numpy fallback.
+        from goldenmatch.core import probabilistic as p
+        monkeypatch.setenv("GOLDENMATCH_FS_NATIVE", "0")
         assert p._fs_native_enabled() is False
         assert p._fs_native_eligible(_make_probabilistic_mk()) is False
 

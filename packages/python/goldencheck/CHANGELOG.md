@@ -2,6 +2,25 @@
 
 All notable changes to GoldenCheck will be documented in this file.
 
+## [1.4.1] - 2026-07-02
+
+### Changed
+- **Fuzzy-values / `cell_quality` Python path is ~38x faster.** The near-duplicate value profiler's non-native Levenshtein path now uses `rapidfuzz` (a new dependency, the same pin the rest of the suite uses) instead of a pure-Python dynamic-programming loop. Byte-identical clusters (same `1 - dist/maxlen` metric, pinned against a reference DP), so the native kernel and the Python path still agree; the pure-Python fallback is retired. Measured 1757ms → 46ms on 110k candidate pairs — this is the path GoldenMatch's quality-weighted survivorship hits via `cell_quality`. (#1386, #1387)
+
+## [1.4.0] - 2026-06-24
+
+### Added
+- **Native acceleration runtime** — optional Rust/Arrow kernels for the CPU-bound deep-profiling work (Benford, composite-key, functional-dependency mining). `pip install goldencheck[native]`; goldencheck stays pure-Python and falls back automatically when the kernel isn't installed. (#793)
+- **Deep-profiling expansion** — new profilers and relation checks: data freshness, fuzzy/near-duplicate values, referential integrity, approximate duplicates, approximate functional dependencies, and composite-key discovery. (#793)
+- **`functional_dependencies(df, ...)`** top-level export — FD-driven negative evidence (surfaces records that violate a discovered functional dependency). (#797)
+- **`cell_quality(...)`** top-level export — per-cell quality scoring for quality-weighted survivorship (wires GoldenCheck signals into GoldenMatch golden-record selection). (#794)
+
+### Changed
+- **Fixer perf** — vectorized the per-cell safe fixes behind a guard; large frames apply the safe fixer significantly faster with identical output. (#843)
+
+### Security
+- Bumped `aiohttp`/`starlette` floors to close known advisories. (#738)
+
 ## [1.3.0] - 2026-06-01
 
 ### Added

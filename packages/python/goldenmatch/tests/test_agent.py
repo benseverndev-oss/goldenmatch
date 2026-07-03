@@ -69,6 +69,16 @@ def tmp_csv(names_df):
 
 
 @pytest.fixture
+def tmp_sensitive_csv(sensitive_df):
+    """Write sensitive_df to a temp CSV and return its path."""
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
+        sensitive_df.write_csv(f.name)
+        path = f.name
+    yield path
+    os.unlink(path)
+
+
+@pytest.fixture
 def tmp_csv_b():
     """A second temp CSV for match_sources tests."""
     df = pl.DataFrame({
@@ -157,9 +167,28 @@ class TestProfileForAgent:
 class TestSelectStrategy:
     def test_pprl_for_sensitive(self, sensitive_df):
         profile = profile_for_agent(sensitive_df)
-        decision = select_strategy(profile)
+        decision = select_strategy(profile, allow_pprl=True)
         assert decision.strategy == "pprl"
         assert decision.auto_execute is False
+        assert decision.pprl_available is True
+
+    def test_pprl_not_default_for_sensitive(self, sensitive_df):
+        """PPRL must be opt-in: sensitive data with default args should NOT
+        auto-route to pprl, but should flag pprl_available."""
+        profile = profile_for_agent(sensitive_df)
+        decision = select_strategy(profile)
+        assert decision.strategy != "pprl"
+        assert decision.pprl_available is True
+
+    def test_pprl_opt_in_for_sensitive(self, sensitive_df):
+        profile = profile_for_agent(sensitive_df)
+        decision = select_strategy(profile, allow_pprl=True)
+        assert decision.strategy == "pprl"
+
+    def test_pprl_available_false_for_non_sensitive(self, names_df):
+        profile = profile_for_agent(names_df)
+        decision = select_strategy(profile)
+        assert decision.pprl_available is False
 
     def test_exact_only(self, id_df):
         profile = profile_for_agent(id_df)
@@ -238,7 +267,7 @@ class TestBuildAlternatives:
     def test_pprl_not_duplicated(self, sensitive_df):
         """When strategy is already pprl, it should not appear in alternatives."""
         profile = profile_for_agent(sensitive_df)
-        decision = select_strategy(profile)
+        decision = select_strategy(profile, allow_pprl=True)
         assert decision.strategy == "pprl"
         alts = build_alternatives(decision, profile)
         strategies = {a["strategy"] for a in alts}
@@ -442,3 +471,22 @@ class TestAgentSessionTelemetry:
         # earlier call produced (we didn't mutate it; we cleared the session
         # attribute).
         assert prior_telemetry["available"] is True
+
+
+class TestDispatchSkillPprlOptIn:
+    """End-to-end: allow_pprl must reach select_strategy through the A2A
+    skill dispatcher, not just the raw AgentSession/select_strategy API."""
+
+    def test_analyze_data_default_no_pprl(self, tmp_sensitive_csv):
+        from goldenmatch.a2a.skills import dispatch_skill
+
+        result = dispatch_skill("analyze_data", {"file_path": tmp_sensitive_csv})
+        assert result["strategy"] != "pprl"
+
+    def test_analyze_data_opt_in_pprl(self, tmp_sensitive_csv):
+        from goldenmatch.a2a.skills import dispatch_skill
+
+        result = dispatch_skill(
+            "analyze_data", {"file_path": tmp_sensitive_csv}, allow_pprl=True
+        )
+        assert result["strategy"] == "pprl"

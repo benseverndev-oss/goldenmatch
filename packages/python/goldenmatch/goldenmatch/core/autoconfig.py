@@ -31,6 +31,10 @@ from goldenmatch.config.schemas import (
     MemoryConfig,
     OutputConfig,
 )
+from goldenmatch.core.autoconfig_discriminative import (
+    should_demote_attribute_field,
+    should_veto_exact,
+)
 from goldenmatch.core.complexity_profile import DataProfile
 from goldenmatch.core.profile_emitter import _emitter_stack, current_emitter
 from goldenmatch.core.profiler import _guess_type
@@ -668,6 +672,52 @@ def _noise_aware_scorers_enabled() -> bool:
     )
 
 
+def _tf_name_weighting_enabled() -> bool:
+    """Whether auto-config populates ``MatchkeyField.tf_freqs`` for the
+    data-driven name-frequency downweight on ``name_freq_weighted_jw`` fields
+    (#1207 PR2a). Default ON. Without a populated table the scorer falls back to
+    the static US-Census surname path, so this is the seam that makes the
+    per-dataset downweight actually fire. Kill-switch:
+    GOLDENMATCH_TF_NAME_WEIGHTING=0 (or false/no/off, case-insensitive)."""
+    return os.environ.get("GOLDENMATCH_TF_NAME_WEIGHTING", "1").strip().lower() not in {
+        "0", "false", "no", "off",
+    }
+
+
+def _route_to_probabilistic_enabled() -> bool:
+    """Auto-route a probabilistic-shaped dataset (no strong-identity exact matchkey
+    + multiple weak fuzzy fields) to the Fellegi-Sunter path instead of the default
+    exact+weighted matchkeys. Default OFF (2026-06-23) -- a behavior change pending
+    the dual-strategy corpus proof. Enable:
+    GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC=1 (or true/yes/on/enabled)."""
+    return os.environ.get("GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC", "0").lower() in (
+        "1", "true", "yes", "on", "enabled",
+    )
+
+
+# Exact matchkeys on these col_types are a strong identity claim — when one
+# SURVIVES into the config, exact matching carries the dedup and the probabilistic
+# path tends to lose (verified on anchor_person_match: clean-email exact beats FS).
+# Broader than just "identifier": the dual-strategy harness showed email/phone exact
+# matchkeys are equally strong. `zip` is NOT here (a blocking signal, not identity).
+_STRONG_EXACT_TYPES = ("identifier", "email", "phone")
+
+
+def _is_probabilistic_shape(
+    matchkeys: list[MatchkeyConfig], profiles: list[ColumnProfile]
+) -> bool:
+    """Probabilistic shape = no SURVIVING exact matchkey backed by a strong-identity
+    column (identifier/email/phone) + >=2 fuzzy (weighted) fields for EM to weight.
+    Keys on the EMITTED matchkeys (not raw profiles), so a ceiling-excluded id column
+    (a perfectly-unique surrogate) correctly counts as 'no surviving strong key'."""
+    col_type = {p.name: p.col_type for p in profiles}
+    # f.field is str | None (embedding fields have None); drop None for the lookup.
+    exact_fields = [f.field for mk in matchkeys if mk.type == "exact" for f in mk.fields if f.field]
+    has_strong_id = any(col_type.get(fld) in _STRONG_EXACT_TYPES for fld in exact_fields)
+    fuzzy_field_count = sum(len(mk.fields) for mk in matchkeys if mk.type == "weighted")
+    return (not has_strong_id) and fuzzy_field_count >= 2
+
+
 def _noise_aware_scorer(col_type: str, scorer: str) -> str:
     """Upgrade a noise-fragile token_sort to the noise-aware target scorer for
     free-text col_types prone to character-level corruption. No-op unless the gate
@@ -821,6 +871,17 @@ def build_matchkeys(
     # noticing their config silently degraded and not.
     skipped_exact: list[tuple[str, str]] = []  # (column, reason)
 
+    # Person-name columns are the co-agreement anchor for the attribute-demotion
+    # check in the loop below: a workplace/locality attribute is one whose
+    # shared-value records do NOT share a person NAME. Built once (name-typed AND
+    # person-name only, so an org/company "name" field is never in the anchor).
+    _person_name_basket: list[tuple[str, bool]] = [
+        (p.name, True)
+        for p in profiles
+        if getattr(p, "col_type", None) in ("name", "multi_name")
+        and _is_person_name_column(p.name)
+    ]
+
     for p in profiles:
         # identifier columns ARE matchable: a real shared identifier
         # (NPI/SSN/MRN) backs an exact matchkey, gated below by the
@@ -881,6 +942,44 @@ def build_matchkeys(
         # guard already rewrote it; this no-ops on non-token_sort). See
         # _noise_aware_scorer.
         scorer = _noise_aware_scorer(p.col_type, scorer)
+
+        # Group/list-attribute demotion for EXACT matchkeys (single-source
+        # counterpart to the #858 multi-source demotion; gated, default OFF).
+        # A shared group/list/facility value -- a clinic ``phone`` line, a
+        # mailing-list / campaign ``identifier`` (tl_id), a facility NPI -- as an
+        # EXACT matchkey force-merges every DIFFERENT person sharing it into one
+        # mega-cluster (the DERM over-merge: exact_phone / exact_tl_id).
+        #
+        # Scoped to EXACT uses ONLY, deliberately. The same attribute as a
+        # WEIGHTED fuzzy contributor is NOT demoted: it is a soft signal, not a
+        # force-merge, and on corruption-heavy data (febrl3, whose synthetic
+        # addresses also collide across people) it is LOAD-BEARING -- names are
+        # too corrupted to carry identity alone, so the weighted address field is
+        # needed to match true duplicates. Demoting the weighted use there
+        # regressed febrl3 F1 0.99->0.86 in the accuracy sweep; restricting to
+        # exact keeps that recall while still killing the hard force-merges.
+        #
+        # Verdict is data-measured (group-size-aware co-agreement on the person
+        # name; see should_demote_attribute_field) and a no-op where the value is
+        # genuinely identity-correlated (a personal cell / personal id whose
+        # shared-value records DO co-agree on name is kept). Column stays a
+        # blocking candidate.
+        if scorer == "exact" and should_demote_attribute_field(
+            df, p.name, p.col_type, _person_name_basket,
+            is_person_name=_is_person_name_column(p.name),
+        ):
+            reason = (
+                "group-attribute: the different people sharing its value do not "
+                "co-agree on the person name -- a shared group/list/facility "
+                "value, not an identity claim"
+            )
+            logger.info(
+                "Demoting exact matchkey '%s' to blocking-only (%s). "
+                "Column remains a blocking candidate.",
+                p.name, reason,
+            )
+            skipped_exact.append((p.name, reason))
+            continue
 
         # #858: when multi-source, phone is a blocking signal, not an identity
         # claim -- an exact match on phone collapses distinct people who share a
@@ -955,6 +1054,18 @@ def build_matchkeys(
             skipped_exact.append((p.name, reason))
             continue
 
+        # #1351: discriminative-power veto. A column that clears the cardinality
+        # gates can still be a shared LOCALITY attribute (e.g. a zip mis-promoted
+        # to "identifier") rather than an identity key. Veto its exact matchkey
+        # when records sharing its value don't co-agree on other identity fields.
+        # Fail-safe keep (df is None / thin support / empty basket) is handled
+        # inside should_veto_exact, so near-unique identity keys are unaffected.
+        if scorer == "exact" and should_veto_exact(df, p.name, profiles):
+            reason = "discriminative-power veto: shared-value records do not co-agree on identity fields"
+            logger.warning("Skipping exact matchkey for '%s' (%s).", p.name, reason)
+            skipped_exact.append((p.name, reason))
+            continue
+
         # #858: under multi-source, a low-cardinality "name"-typed field whose
         # column is NOT a person name (company, job_title, department, ...) is a
         # shared workplace/categorical attribute, NOT an identity claim. As a
@@ -987,6 +1098,27 @@ def build_matchkeys(
             weight=weight,
             transforms=transforms,
         )
+
+        # #1207 PR2a: arm the data-driven name-frequency downweight. The
+        # name_freq_weighted_jw scorer applies a per-dataset common-value
+        # downweight ONLY when handed a frequency table; without this it falls
+        # back to the static US-Census surname path. Build the table from the
+        # SAME (df, transforms) the scorer sees at score time: find_fuzzy_matches
+        # scores apply_transforms(value, field.transforms), and these transforms
+        # include `lowercase`, which neutralizes the `name_proper` standardizer
+        # auto-config also emits (title-case only) -- so raw-df-plus-transforms
+        # keys align byte-for-byte with the post-standardization scored values.
+        # Skip when the table has no signal (<2 distinct values) or df is absent.
+        if (
+            scorer == "name_freq_weighted_jw"
+            and df is not None
+            and _tf_name_weighting_enabled()
+        ):
+            from goldenmatch.core.tf_tables import value_frequencies  # noqa: PLC0415
+
+            _tf = value_frequencies(df, p.name, transforms)
+            if len(_tf) >= 2:
+                mf.tf_freqs = _tf
 
         if scorer == "exact":
             exact_fields.append(mf)
@@ -1212,6 +1344,106 @@ def build_matchkeys(
             ))
 
     return matchkeys
+
+
+# ── Strong-identifier blocking-union (#1207) ──────────────────────────────
+# Coverage is restored by the OR across passes, so a per-id pass is admitted on
+# a minimal non-null population floor (NOT a null ceiling) — that keeps high-null
+# phone/zip passes that each block only the rows that *have* that id. Scale-safety
+# is enforced by the caller via _gate_passes, so it is NOT checked here. Strong-id
+# col_types reuse the module-level `_STRONG_EXACT_TYPES` (identifier/email/phone).
+_BLOCKING_UNION_COVERAGE_TARGET = 0.95
+_UNION_PASS_MIN_NONNULL = 0.02  # a pass must block more than a trivial handful
+
+
+def _union_coverage(df: pl.DataFrame, pass_field_lists: list[list[str]]) -> float:
+    """Fraction of rows non-null on at least one pass's fields (OR across passes).
+    A multi-field pass requires ALL its fields non-null (it can't block a row
+    missing any component)."""
+    if df.height == 0:
+        return 0.0
+    covered = pl.repeat(False, df.height, eager=True)
+    for fields in pass_field_lists:
+        present = pl.repeat(True, df.height, eager=True)
+        for f in fields:
+            if f not in df.columns:
+                present = pl.repeat(False, df.height, eager=True)
+                break
+            present = present & df[f].is_not_null()
+        covered = covered | present
+    return float(covered.sum()) / df.height
+
+
+def _build_strong_identifier_union(
+    profiles: list[ColumnProfile],
+    df: pl.DataFrame,
+    *,
+    n_rows_full: int | None = None,
+) -> BlockingConfig | None:
+    """Emit a multi_pass UNION of one pass per strong id + name+geo, or None.
+
+    Returns None unless >=1 strong-id pass is present AND >=2 distinct passes
+    survive AND their OR-coverage clears _BLOCKING_UNION_COVERAGE_TARGET. The
+    >=1 strong-id requirement keeps this from emitting a name-only "strong-id
+    union" (a name-only shape is left to the existing name-fallback path).
+    Caller (build_blocking) is responsible for invoking this only on the
+    fall-through (no single key passed the strict 0.20 ceiling).
+
+    `n_rows_full` is reserved for call-site signature parity; scale-safety is
+    enforced by the caller via `_gate_passes`, not here."""
+    def _nonnull(col: str) -> float:
+        return 1.0 - (df[col].null_count() / df.height) if df.height else 0.0
+
+    candidate_passes: list[list[str]] = []
+
+    # one pass per strong-identifier field, above the non-null population floor.
+    # No scale-safety check here — _gate_passes at the call site enforces #715.
+    strong_id_passes = 0
+    for p in profiles:
+        if p.col_type in _STRONG_EXACT_TYPES and p.name in df.columns:
+            if _nonnull(p.name) < _UNION_PASS_MIN_NONNULL:
+                continue
+            # #876 surrogate guard: a perfect-surrogate id (card_ratio >= 1.0)
+            # makes singleton blocks (0 pairs) — exclude. NOTE: do NOT apply
+            # blocking_max_ratio here; the union exists precisely to use
+            # near-unique-but-repeating ids the single-key gate rejects.
+            if (p.cardinality_ratio or 0.0) >= 1.0:
+                continue
+            candidate_passes.append([p.name])
+            strong_id_passes += 1
+
+    # require >=1 strong-id pass; a name-only shape belongs to the name fallback.
+    if strong_id_passes < 1:
+        return None
+
+    # name+geo passes for rows missing every strong id
+    name_cols_local = [p for p in profiles if _classify_by_name(p.name) == "name"]
+    first = next((p.name for p in name_cols_local if "first" in p.name.lower()), None)
+    last = next((p.name for p in name_cols_local if "last" in p.name.lower()
+                 or "surname" in p.name.lower()), None)
+    geo = next((p.name for p in profiles if p.col_type in ("zip", "geo")), None)
+    if first and last:
+        candidate_passes.append([first, last])
+    if last and geo:
+        candidate_passes.append([last, geo])
+
+    if len(candidate_passes) < 2:
+        return None
+    if _union_coverage(df, candidate_passes) < _BLOCKING_UNION_COVERAGE_TARGET:
+        return None
+
+    def _transforms_for(fields: list[str]) -> list[str]:
+        prof = next((p for p in profiles if p.name == fields[0]), None)
+        return ["lowercase", "strip"] if prof and prof.col_type == "email" else ["strip"]
+
+    passes = [BlockingKeyConfig(fields=f, transforms=_transforms_for(f))
+              for f in candidate_passes]
+    return BlockingConfig(
+        keys=[passes[0]],
+        strategy="multi_pass",
+        passes=passes,
+        skip_oversized=True,
+    )
 
 
 # ── Compound blocking helpers ─────────────────────────────────────────────
@@ -2600,6 +2832,77 @@ def build_blocking(
         )
         return text_blk
 
+    # #1207: per-identifier blocking-union. We reach here only when no single
+    # exact key passed the strict NULL_RATE_CEILING (0.20) gate — exactly the
+    # null-sparse multi-source shape where the compound fallback would build a
+    # single-strong-id compound ([last_name, npi]) that caps recall at the id's
+    # population. Prefer a UNION of one pass per strong id + name+geo, whose
+    # OR-coverage restores the population the single key drops. Emitted before
+    # the compound fallback so it wins; falls through unchanged when it can't
+    # reach the coverage target or <2 passes survive.
+    def _id_pass_scale_safe_nonnull(field: str) -> bool:
+        """#1207: scale-safety for a strong-id SINGLETON pass, measured on the
+        NON-NULL subframe.
+
+        The runtime static blocker drops null block keys, so a high-null id's
+        null bucket (which dominates its raw max block) never actually forms.
+        The default ``_pass_is_bounded`` gate measures block size via a
+        null-INCLUSIVE ``group_by`` — that null bucket falsely rejects exactly
+        the null-sparse strong ids this union exists to add. We still apply the
+        SAME full-N projection + ``max_safe_block`` guard (just over the
+        non-null rows), so a bounded id (zip) or a mistyped low-cardinality
+        ``identifier`` with a genuinely large non-null block is still dropped.
+        """
+        try:
+            sub = df.filter(pl.col(field).is_not_null())
+            if sub.height == 0:
+                return False
+            g = sub.group_by(field).len()
+            sb = int(g.get_column("len").max() or 0)  # pyright: ignore[reportArgumentType]
+            sd = int(g.height)
+        except Exception:  # pragma: no cover -- defensive
+            return False
+        # Full-N projection unchanged: sample_n / effective_n_full stay the FULL
+        # row counts; only the measured block/distinct exclude the null bucket.
+        pb = _typed_projected_block(_col_types, [field], sb, effective_n_full, sample_n, sd)
+        if pb > max_safe_block:
+            return False
+        if pb > sb:  # block grows with N (bounded-domain / concentrated key)
+            return _project_pairs_per_row(pb) <= _blocking_pairs_per_row_budget()
+        return True
+
+    union_cfg = _build_strong_identifier_union(profiles, df, n_rows_full=n_rows_full)
+    if union_cfg is not None:
+        id_passes: list[BlockingKeyConfig] = []
+        other_passes: list[BlockingKeyConfig] = []
+        for p in union_cfg.passes or []:
+            if len(p.fields) == 1 and _col_types.get(p.fields[0]) in _STRONG_EXACT_TYPES:
+                id_passes.append(p)
+            else:
+                other_passes.append(p)
+        # Strong-id singletons: gate on the NON-NULL projected block (the static
+        # blocker drops null keys). Name/geo passes: standard #715/#876 gate.
+        surviving_ids = [p for p in id_passes if _id_pass_scale_safe_nonnull(p.fields[0])]
+        surviving_other = [p for p in other_passes if _pass_is_bounded(p)]
+        survivors = surviving_ids + surviving_other
+        if surviving_ids and len(survivors) >= 2:
+            primary = survivors[0]
+            logger.info(
+                "Auto-selecting strong-identifier blocking UNION (%d passes, "
+                "%d strong-id) on null-sparse data: no single exact key cleared "
+                "the 0.20 null ceiling; union OR-coverage restores the dropped "
+                "population. Strong-id passes gated on non-null block size "
+                "(null keys are dropped at runtime). See #1207.",
+                len(survivors), len(surviving_ids),
+            )
+            return BlockingConfig(
+                keys=[primary],
+                strategy="multi_pass",
+                passes=survivors,
+                max_block_size=max_safe_block,
+                skip_oversized=True,
+            )
+
     # ── Check if name-based fallback would also be oversized ──
     # #715: the name path picks ONE primary name column (pattern_names[0], else
     # name_cols[0]) and blocks on it. If THAT primary is oversized, single-name
@@ -3527,6 +3830,20 @@ def _legacy_auto_configure_v0(  # pyright: ignore[reportUnusedFunction]  # kept 
 
     # Build matchkeys
     matchkeys = build_matchkeys(profiles, df=df, multi_source=multi_source)
+
+    # Probabilistic routing (gated, default-off): a probabilistic-shaped dataset
+    # (no surviving identifier/email/phone exact matchkey + >=2 fuzzy fields) is
+    # better served by the Fellegi-Sunter path. Delegate to
+    # auto_configure_probabilistic_df (it builds the diversified FS blocking that
+    # lifts recall) and return directly. NOTE (v1 scoping): this fires before the
+    # domain-extracted matchkeys are appended below, so a domain-extracted identifier
+    # is not seen by the trigger; and auto_configure_probabilistic_df re-profiles df
+    # (excluding __-prefixed cols), so any already-extracted domain feature is dropped
+    # on the routed path. Acceptable while default-off; revisit if a domain-heavy
+    # dataset misroutes or needs its domain features under FS.
+    if (not multi_source and _route_to_probabilistic_enabled()
+            and _is_probabilistic_shape(matchkeys, profiles)):
+        return auto_configure_probabilistic_df(df, llm_provider=llm_provider)
 
     # ── Add domain-extracted fields to matchkeys ──
     if extracted_columns:

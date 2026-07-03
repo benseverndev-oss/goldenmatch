@@ -139,7 +139,7 @@ The manifest is an audit trail — what changed, why, and which rows were affect
 
 ## CLI Commands
 
-GoldenFlow has 14 commands. The most common ones:
+GoldenFlow has 16 commands. The most common ones:
 
 ```bash
 # Core transforms
@@ -563,7 +563,7 @@ result.manifest  # renders transform audit trail
 
 ## TypeScript / JavaScript
 
-GoldenFlow has a full TypeScript port with feature parity — same 83 transforms, same engine, same config format. The core is **edge-safe** (runs in browsers, Cloudflare Workers, Vercel Edge) with a Node layer for file I/O and CLI.
+GoldenFlow has a full TypeScript port with feature parity — same 76 transforms, same engine, same config format. The core is **edge-safe** (runs in browsers, Cloudflare Workers, Vercel Edge) with a Node layer for file I/O and CLI.
 
 ### Install
 

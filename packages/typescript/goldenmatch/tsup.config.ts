@@ -8,6 +8,11 @@ export default defineConfig({
     // (~1.7 MB base64), so it's a separate subpath — consumers pay that cost
     // only when they import `goldenmatch/core/autoconfig-wasm`.
     "core/autoconfigWasm": "src/core/autoconfigWasm.ts",
+    // Opt-in entry: the suggest-wasm healer core. Carries the inlined wasm
+    // (~220 KB base64), so it's a separate subpath — consumers pay that cost
+    // only when they import `goldenmatch/core/suggest-wasm`.
+    "core/suggestWasm": "src/core/suggestWasm.ts",
+    "core/perceptualWasm": "src/core/perceptualWasm.ts",
     "node/index": "src/node/index.ts",
     "node/mcp/server": "src/node/mcp/server.ts",
     cli: "src/cli.ts",

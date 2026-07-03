@@ -119,6 +119,7 @@ class LearnedAdjustment:
     field_weights: dict[str, float] | None = None
     sample_size: int = 0
     learned_at: datetime = field(default_factory=datetime.now)
+    dataset: str | None = None
 
 
 def _canon_pair(id_a: int, id_b: int) -> tuple[int, int]:
@@ -166,8 +167,31 @@ class MemoryStore:
         backend: str = "sqlite",
         path: str = ".goldenmatch/memory.db",
         connection: str | None = None,
+        table_prefix: str = "",
     ) -> None:
+        import re
+        if table_prefix and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", table_prefix):
+            raise ValueError(
+                f"table_prefix must match ^[A-Za-z_][A-Za-z0-9_]*$; got {table_prefix!r}",
+            )
         self._backend = backend
+        self._table_prefix = table_prefix
+        # Table names drive the f-stringed SQL in every query method, so they
+        # MUST agree with the DDL that actually created the tables:
+        #   - SQLite creates BARE `corrections`/`adjustments` (the module-level
+        #     `_SCHEMA` + the `_migrate_*` helpers hardcode bare names), and per
+        #     spec SQLite ignores `table_prefix` — so use bare names here too.
+        #     (Applying the prefix on SQLite would query `<prefix>corrections`
+        #     while the DDL made `corrections` → OperationalError at write time.)
+        #   - Postgres applies the validated prefix so its tables can coexist in
+        #     a shared multi-tenant DB.
+        # The prefix is regex-validated above, so interpolation is safe here.
+        if backend == "postgres":
+            self._corrections = f"{table_prefix}corrections"
+            self._adjustments = f"{table_prefix}adjustments"
+        else:
+            self._corrections = "corrections"
+            self._adjustments = "adjustments"
         if backend == "sqlite":
             import os
             import sqlite3  # noqa: PLC0415 -- lazy, see #364
@@ -186,8 +210,73 @@ class MemoryStore:
             self._migrate_field_correction_columns()
             self._migrate_cluster_decision_columns()
             log.debug("MemoryStore opened: %s (journal_mode=WAL)", path)
+        elif backend == "postgres":
+            # Validate the DSN BEFORE importing the optional dep: a missing DSN
+            # is a usage error regardless of whether psycopg is installed (and
+            # keeps `test_postgres_requires_connection` a ValueError in CI lanes
+            # that don't install the `postgres` extra).
+            if not connection:
+                raise ValueError("backend='postgres' requires a connection DSN")
+            try:
+                import psycopg  # noqa: PLC0415 — lazy, optional extra
+            except ImportError as e:
+                raise ImportError(
+                    "backend='postgres' requires: pip install goldenmatch[postgres]"
+                ) from e
+            # autocommit=True: the store's writes are single-statement upserts
+            # (atomic on their own) and it is a long-lived connection (golden-truth
+            # holds one per request/worker). Without it, read methods open a
+            # transaction that lingers idle-in-transaction until the next write.
+            self._conn = psycopg.connect(
+                connection, autocommit=True, row_factory=psycopg.rows.dict_row,
+            )
+            for stmt in self._pg_schema():   # split DDL; execute individually
+                self._conn.execute(stmt)
+            self._conn.commit()
+            log.debug("MemoryStore opened: postgres (table_prefix=%r)", table_prefix)
         else:
             raise NotImplementedError(f"Backend '{backend}' not yet implemented")
+
+    def _pg_schema(self) -> list[str]:
+        """DDL statements for the postgres backend, executed individually.
+
+        Table names use ``self._corrections``/``self._adjustments`` (the
+        validated, prefix-applied names set in ``__init__``).
+        """
+        return [
+            f"""
+            CREATE TABLE IF NOT EXISTS {self._corrections} (
+                id TEXT PRIMARY KEY,
+                id_a BIGINT, id_b BIGINT,
+                decision TEXT, source TEXT, trust DOUBLE PRECISION,
+                field_hash TEXT, record_hash TEXT,
+                original_score DOUBLE PRECISION,
+                matchkey_name TEXT,
+                reason TEXT, dataset TEXT,
+                created_at TIMESTAMPTZ DEFAULT now(),
+                field_name TEXT,
+                original_value TEXT,
+                corrected_value TEXT,
+                cluster_score DOUBLE PRECISION,
+                cluster_outcome TEXT
+            )
+            """,
+            f"""
+            CREATE UNIQUE INDEX IF NOT EXISTS {self._table_prefix}corrections_pair
+            ON {self._corrections} (id_a, id_b, COALESCE(dataset, ''))
+            """,
+            f"""
+            CREATE TABLE IF NOT EXISTS {self._adjustments} (
+                dataset TEXT NOT NULL DEFAULT '',
+                matchkey_name TEXT,
+                threshold DOUBLE PRECISION,
+                field_weights TEXT,
+                sample_size INTEGER,
+                learned_at TIMESTAMPTZ,
+                PRIMARY KEY (dataset, matchkey_name)
+            )
+            """,
+        ]
 
     def _migrate_field_correction_columns(self) -> None:
         """#437: add field_name/original_value/corrected_value to
@@ -249,6 +338,16 @@ class MemoryStore:
     def __exit__(self, *exc: Any) -> None:
         self.close()
 
+    def _ph(self, sql: str) -> str:
+        """Translate '?' placeholders to the backend's style."""
+        return sql if self._backend == "sqlite" else sql.replace("?", "%s")
+
+    def _execute(self, sql: str, params: tuple = ()):  # returns a cursor/iterable of rows
+        return self._conn.execute(self._ph(sql), params)
+
+    def _commit(self):
+        self._conn.commit()
+
     def add_correction(self, correction: Correction) -> None:
         """Upsert a correction. Higher trust wins; same trust = latest wins.
 
@@ -265,6 +364,47 @@ class MemoryStore:
             ca, cb = correction.id_a, correction.id_b
         else:
             ca, cb = _canon_pair(correction.id_a, correction.id_b)
+
+        if self._backend == "postgres":
+            # Trust-wins upsert done atomically in one statement -- no
+            # separate read-then-DELETE+INSERT needed (that pattern is
+            # sqlite-only; see below).
+            self._execute(
+                f"INSERT INTO {self._corrections} "
+                "(id, id_a, id_b, decision, source, trust, field_hash, record_hash, "
+                "original_score, matchkey_name, reason, dataset, created_at, "
+                "field_name, original_value, corrected_value, "
+                "cluster_score, cluster_outcome) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT (id_a, id_b, COALESCE(dataset, '')) DO UPDATE SET "
+                "id=EXCLUDED.id, decision=EXCLUDED.decision, source=EXCLUDED.source, "
+                "trust=EXCLUDED.trust, field_hash=EXCLUDED.field_hash, "
+                "record_hash=EXCLUDED.record_hash, "
+                "original_score=EXCLUDED.original_score, "
+                "matchkey_name=EXCLUDED.matchkey_name, reason=EXCLUDED.reason, "
+                "created_at=EXCLUDED.created_at, field_name=EXCLUDED.field_name, "
+                "original_value=EXCLUDED.original_value, "
+                "corrected_value=EXCLUDED.corrected_value, "
+                "cluster_score=EXCLUDED.cluster_score, "
+                "cluster_outcome=EXCLUDED.cluster_outcome "
+                f"WHERE EXCLUDED.trust >= {self._corrections}.trust",
+                (
+                    correction.id, ca, cb,
+                    correction.decision, correction.source, correction.trust,
+                    correction.field_hash, correction.record_hash,
+                    correction.original_score, correction.matchkey_name,
+                    correction.reason, correction.dataset,
+                    correction.created_at,
+                    correction.field_name, correction.original_value,
+                    correction.corrected_value,
+                    correction.cluster_score, correction.cluster_outcome,
+                ),
+            )
+            self._commit()
+            log.debug("Correction stored: (%d, %d) %s [%s]", ca, cb,
+                       correction.decision, correction.source)
+            return
+
         existing = self.get_pair_correction(ca, cb, correction.dataset)
 
         if existing is not None:
@@ -273,30 +413,30 @@ class MemoryStore:
                 return
 
         # Atomic upsert: DELETE + INSERT in one transaction
-        with self._conn:
-            self._conn.execute(
-                "DELETE FROM corrections WHERE id_a = ? AND id_b = ? AND dataset IS ?",
-                (ca, cb, correction.dataset),
-            )
-            self._conn.execute(
-                "INSERT INTO corrections "
-                "(id, id_a, id_b, decision, source, trust, field_hash, record_hash, "
-                "original_score, matchkey_name, reason, dataset, created_at, "
-                "field_name, original_value, corrected_value, "
-                "cluster_score, cluster_outcome) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    correction.id, ca, cb,
-                    correction.decision, correction.source, correction.trust,
-                    correction.field_hash, correction.record_hash,
-                    correction.original_score, correction.matchkey_name,
-                    correction.reason, correction.dataset,
-                    correction.created_at.isoformat(),
-                    correction.field_name, correction.original_value,
-                    correction.corrected_value,
-                    correction.cluster_score, correction.cluster_outcome,
-                ),
-            )
+        self._execute(
+            f"DELETE FROM {self._corrections} WHERE id_a = ? AND id_b = ? AND dataset IS ?",
+            (ca, cb, correction.dataset),
+        )
+        self._execute(
+            f"INSERT INTO {self._corrections} "
+            "(id, id_a, id_b, decision, source, trust, field_hash, record_hash, "
+            "original_score, matchkey_name, reason, dataset, created_at, "
+            "field_name, original_value, corrected_value, "
+            "cluster_score, cluster_outcome) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                correction.id, ca, cb,
+                correction.decision, correction.source, correction.trust,
+                correction.field_hash, correction.record_hash,
+                correction.original_score, correction.matchkey_name,
+                correction.reason, correction.dataset,
+                correction.created_at.isoformat(),
+                correction.field_name, correction.original_value,
+                correction.corrected_value,
+                correction.cluster_score, correction.cluster_outcome,
+            ),
+        )
+        self._commit()
         log.debug("Correction stored: (%d, %d) %s [%s]", ca, cb,
                    correction.decision, correction.source)
 
@@ -362,18 +502,28 @@ class MemoryStore:
         self.add_correction(correction)
         return correction
 
+    def _null_dataset_pred(self) -> str:
+        """Predicate matching a NULL/absent `dataset`, per backend.
+
+        SQLite: `dataset IS NULL`. Postgres: `COALESCE(dataset, '') = ''`
+        (the unique index is defined on `COALESCE(dataset, '')`, so reads
+        against a NULL dataset must match the same way).
+        """
+        return "dataset IS NULL" if self._backend == "sqlite" else "COALESCE(dataset, '') = ''"
+
     def get_pair_correction(
         self, id_a: int, id_b: int, dataset: str | None = None,
     ) -> Correction | None:
         ca, cb = _canon_pair(id_a, id_b)
         if dataset is not None:
-            row = self._conn.execute(
-                "SELECT * FROM corrections WHERE id_a = ? AND id_b = ? AND dataset = ?",
+            row = self._execute(
+                f"SELECT * FROM {self._corrections} WHERE id_a = ? AND id_b = ? AND dataset = ?",
                 (ca, cb, dataset),
             ).fetchone()
         else:
-            row = self._conn.execute(
-                "SELECT * FROM corrections WHERE id_a = ? AND id_b = ? AND dataset IS NULL",
+            row = self._execute(
+                f"SELECT * FROM {self._corrections} WHERE id_a = ? AND id_b = ? "
+                f"AND {self._null_dataset_pred()}",
                 (ca, cb),
             ).fetchone()
         return self._row_to_correction(row) if row else None
@@ -393,65 +543,136 @@ class MemoryStore:
 
     def get_corrections(self, dataset: str | None = None) -> list[Correction]:
         if dataset is not None:
-            rows = self._conn.execute(
-                "SELECT * FROM corrections WHERE dataset = ? ORDER BY created_at",
+            rows = self._execute(
+                f"SELECT * FROM {self._corrections} WHERE dataset = ? ORDER BY created_at",
                 (dataset,),
             ).fetchall()
         else:
-            rows = self._conn.execute(
-                "SELECT * FROM corrections ORDER BY created_at",
+            rows = self._execute(
+                f"SELECT * FROM {self._corrections} ORDER BY created_at",
             ).fetchall()
         return [self._row_to_correction(r) for r in rows]
 
     def count_corrections(self, dataset: str | None = None) -> int:
         if dataset is not None:
-            row = self._conn.execute(
-                "SELECT COUNT(*) FROM corrections WHERE dataset = ?", (dataset,),
+            row = self._execute(
+                f"SELECT COUNT(*) AS cnt FROM {self._corrections} WHERE dataset = ?",
+                (dataset,),
             ).fetchone()
         else:
-            row = self._conn.execute("SELECT COUNT(*) FROM corrections").fetchone()
-        return row[0] if row else 0
+            row = self._execute(
+                f"SELECT COUNT(*) AS cnt FROM {self._corrections}",
+            ).fetchone()
+        if not row:
+            return 0
+        return row["cnt"] if self._backend == "postgres" else row[0]
 
-    def corrections_since(self, since: datetime) -> list[Correction]:
-        rows = self._conn.execute(
-            "SELECT * FROM corrections WHERE created_at > ? ORDER BY created_at",
-            (since.isoformat(),),
-        ).fetchall()
+    def corrections_since(
+        self, since: datetime, dataset: str | None = None,
+    ) -> list[Correction]:
+        since_val = since if self._backend == "postgres" else since.isoformat()
+        if dataset is not None:
+            rows = self._execute(
+                f"SELECT * FROM {self._corrections} WHERE created_at > ? AND dataset = ? "
+                "ORDER BY created_at",
+                (since_val, dataset),
+            ).fetchall()
+        else:
+            rows = self._execute(
+                f"SELECT * FROM {self._corrections} WHERE created_at > ? ORDER BY created_at",
+                (since_val,),
+            ).fetchall()
         return [self._row_to_correction(r) for r in rows]
 
-    def save_adjustment(self, adj: LearnedAdjustment) -> None:
+    def save_adjustment(self, adj: LearnedAdjustment, dataset: str | None = None) -> None:
+        """Persist a learned adjustment.
+
+        SQLite keeps the original `INSERT OR REPLACE` keyed by
+        `matchkey_name` (its schema has no `dataset` column) --
+        `dataset` is accepted + ignored here (honored on Postgres,
+        Task 6). If `adj.dataset` is unset and `dataset` was passed,
+        tag `adj.dataset` so the returned object stays consistent.
+        """
+        if adj.dataset is None and dataset is not None:
+            adj.dataset = dataset
         weights_json = json.dumps(adj.field_weights) if adj.field_weights else None
-        with self._conn:
-            self._conn.execute(
-                "INSERT OR REPLACE INTO adjustments "
+
+        if self._backend == "postgres":
+            self._execute(
+                f"INSERT INTO {self._adjustments} "
+                "(dataset, matchkey_name, threshold, field_weights, sample_size, learned_at) "
+                "VALUES (?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT (dataset, matchkey_name) DO UPDATE SET "
+                "threshold=EXCLUDED.threshold, field_weights=EXCLUDED.field_weights, "
+                "sample_size=EXCLUDED.sample_size, learned_at=EXCLUDED.learned_at",
+                (adj.dataset or "", adj.matchkey_name, adj.threshold, weights_json,
+                 adj.sample_size, adj.learned_at),
+            )
+        else:
+            self._execute(
+                f"INSERT OR REPLACE INTO {self._adjustments} "
                 "(matchkey_name, threshold, field_weights, sample_size, learned_at) "
                 "VALUES (?, ?, ?, ?, ?)",
                 (adj.matchkey_name, adj.threshold, weights_json,
                  adj.sample_size, adj.learned_at.isoformat()),
             )
+        self._commit()
         log.debug("Adjustment saved: %s threshold=%.3f samples=%d",
                    adj.matchkey_name, adj.threshold or 0, adj.sample_size)
 
-    def get_adjustment(self, matchkey_name: str) -> LearnedAdjustment | None:
-        row = self._conn.execute(
-            "SELECT * FROM adjustments WHERE matchkey_name = ?",
+    def get_adjustment(
+        self, matchkey_name: str, dataset: str | None = None,
+    ) -> LearnedAdjustment | None:
+        """SQLite ignores `dataset` for lookup (matchkey-only); the passed
+        value is used to tag the returned adjustment for caller consistency.
+        Postgres filters by `dataset` (real tenant isolation, dataset or '').
+        """
+        if self._backend == "postgres":
+            row = self._execute(
+                f"SELECT * FROM {self._adjustments} WHERE matchkey_name = ? AND dataset = ?",
+                (matchkey_name, dataset or ""),
+            ).fetchone()
+            return self._row_to_adjustment(row) if row else None
+
+        row = self._execute(
+            f"SELECT * FROM {self._adjustments} WHERE matchkey_name = ?",
             (matchkey_name,),
         ).fetchone()
         if not row:
             return None
-        return self._row_to_adjustment(row)
+        adj = self._row_to_adjustment(row)
+        if adj.dataset is None and dataset is not None:
+            adj.dataset = dataset
+        return adj
 
-    def get_all_adjustments(self) -> list[LearnedAdjustment]:
-        rows = self._conn.execute("SELECT * FROM adjustments").fetchall()
+    def get_all_adjustments(self, dataset: str | None = None) -> list[LearnedAdjustment]:
+        """SQLite ignores `dataset` and returns all rows (no dataset column).
+        Postgres filters by `dataset` when given (dataset or ''), else
+        returns all rows.
+        """
+        if self._backend == "postgres":
+            if dataset is not None:
+                rows = self._execute(
+                    f"SELECT * FROM {self._adjustments} WHERE dataset = ?",
+                    (dataset or "",),
+                ).fetchall()
+            else:
+                rows = self._execute(f"SELECT * FROM {self._adjustments}").fetchall()
+            return [self._row_to_adjustment(r) for r in rows]
+
+        rows = self._execute(f"SELECT * FROM {self._adjustments}").fetchall()
         return [self._row_to_adjustment(r) for r in rows]
 
     def last_learn_time(self) -> datetime | None:
-        row = self._conn.execute(
-            "SELECT MAX(learned_at) FROM adjustments",
+        row = self._execute(
+            f"SELECT MAX(learned_at) AS max_learned_at FROM {self._adjustments}",
         ).fetchone()
-        if row and row[0]:
-            return datetime.fromisoformat(row[0])
-        return None
+        if not row:
+            return None
+        value = row["max_learned_at"] if self._backend == "postgres" else row[0]
+        if not value:
+            return None
+        return value if isinstance(value, datetime) else datetime.fromisoformat(value)
 
     @staticmethod
     def _row_to_correction(row: Any) -> Correction:
@@ -467,7 +688,8 @@ class MemoryStore:
             original_score=row["original_score"],
             matchkey_name=row["matchkey_name"],
             reason=row["reason"], dataset=row["dataset"],
-            created_at=datetime.fromisoformat(row["created_at"]),
+            created_at=(row["created_at"] if isinstance(row["created_at"], datetime)
+                        else datetime.fromisoformat(row["created_at"])),
             field_name=row["field_name"] if "field_name" in keys else None,
             original_value=row["original_value"] if "original_value" in keys else None,
             corrected_value=row["corrected_value"] if "corrected_value" in keys else None,
@@ -479,10 +701,13 @@ class MemoryStore:
     @staticmethod
     def _row_to_adjustment(row: Any) -> LearnedAdjustment:
         weights = json.loads(row["field_weights"]) if row["field_weights"] else None
+        keys = row.keys() if hasattr(row, "keys") else ()
         return LearnedAdjustment(
             matchkey_name=row["matchkey_name"],
             threshold=row["threshold"],
             field_weights=weights,
             sample_size=row["sample_size"],
-            learned_at=datetime.fromisoformat(row["learned_at"]),
+            learned_at=(row["learned_at"] if isinstance(row["learned_at"], datetime)
+                        else datetime.fromisoformat(row["learned_at"])),
+            dataset=row["dataset"] if "dataset" in keys else None,
         )

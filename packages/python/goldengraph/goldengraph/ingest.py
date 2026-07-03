@@ -16,9 +16,12 @@ from collections.abc import Callable
 
 import numpy as np
 
+from .chunk_extract import chunk_extract, chunk_extract_enabled
 from .extract import Extraction, Mention
 from .extract import extract as _extract
 from .llm import LLMClient
+from .rebel_fuse import rebel_fuse, rebel_fuse_enabled
+from .relation_reprompt import relation_reprompt, relation_reprompt_enabled
 from .resolve import ResolvedEntity, _record_key
 from .resolve import resolve as _resolve
 
@@ -55,12 +58,20 @@ def build_batch(
     *,
     at: int,
     valid_from: int | None = None,
+    source_ref: str | None = None,
 ) -> dict:
     """Build a `StoreBatch` dict (SP4a JSON shape) from a resolved extraction.
 
     Remaps each relationship's mention indices to the owning entity `local_id`;
     drops self-loops (endpoints in the same entity after dedup) and orphans.
+
+    `source_ref` (the owning document's id) is stamped onto every edge's
+    `source_refs`; the store unions+dedups these across documents (store.rs::append),
+    and `query()` returns them, so a caller can recover which document each retrieved
+    edge came from -- the provenance that makes supporting-fact recall measurable.
+    `None` -> empty `source_refs` (back-compat: no provenance).
     """
+    refs = [source_ref] if source_ref else []
     mention_to_local: dict[int, int] = {}
     for e in entities:
         for mi in e.member_idx:
@@ -80,21 +91,64 @@ def build_batch(
                 "obj_local": o,
                 "valid_from": vf,
                 "valid_to": None,
-                "source_refs": [],
+                "source_refs": list(refs),
+            }
+        )
+
+    out_entities = [
+        {
+            "local_id": e.local_id,
+            "canonical_name": e.canonical_name,
+            "typ": e.typ,
+            "surface_names": e.surface_names,
+            "record_keys": e.record_keys,
+            "source_refs": list(refs),  # doc provenance, mirroring edges (per-doc node alignment)
+        }
+        for e in entities
+    ]
+
+    # Literal attributes -> typed leaf nodes + edges (entity -[predicate]-> literal).
+    # Represented as ordinary nodes (no store schema change) typed 'literal:<kind>';
+    # the same-type + name gate in the cross-doc matcher isolates them (a literal
+    # only ever clusters with an identical-value literal, which is harmless), and
+    # they carry NO record_keys so they never anchor a cross-doc merge. Deduped by
+    # (kind, value) within the doc so one date mentioned twice is one node.
+    next_local = max((e.local_id for e in entities), default=-1) + 1
+    lit_ids: dict[tuple[str, str], int] = {}
+    for a in getattr(extraction, "attributes", ()):  # back-compat: absent -> no-op
+        subj_local = mention_to_local.get(a.subj)
+        val = (a.value or "").strip()
+        if subj_local is None or not val:
+            continue
+        key = (a.typ, val)
+        lid = lit_ids.get(key)
+        if lid is None:
+            lid = next_local
+            next_local += 1
+            lit_ids[key] = lid
+            out_entities.append(
+                {
+                    "local_id": lid,
+                    "canonical_name": val,
+                    "typ": f"literal:{a.typ}",
+                    "surface_names": [val],
+                    "record_keys": [],
+                    "source_refs": list(refs),
+                }
+            )
+        edges.append(
+            {
+                "subj_local": subj_local,
+                "predicate": a.predicate,
+                "obj_local": lid,
+                "valid_from": vf,
+                "valid_to": None,
+                "source_refs": list(refs),
             }
         )
 
     return {
-        "entities": [
-            {
-                "local_id": e.local_id,
-                "canonical_name": e.canonical_name,
-                "typ": e.typ,
-                "surface_names": e.surface_names,
-                "record_keys": e.record_keys,
-            }
-            for e in entities
-        ],
+        "entities": out_entities,
         "edges": edges,
         "ingested_at": at,
     }
@@ -230,12 +284,20 @@ def _existing_features(slice_graph):
             rel[o].add(p)
             nbr[s].add(id_to_name[o])
             nbr[o].add(id_to_name[s])
+    # Literal-attribute leaf nodes (typ "literal:<kind>") are values, not entities to
+    # resolve -- exclude them as cross-doc link candidates so they are never embedded
+    # as fingerprints (a raw value can be an empty/over-long input that 400s the
+    # provider batch during the profile-link build) and never spuriously cluster.
+    out_ents: list[dict] = []
     feats: list[dict] = []
     keys: list[set[str]] = []
     for e in ents:
+        if str(e.get("typ", "")).startswith("literal:"):
+            continue
         eid = e["entity_id"]
         typ = e.get("typ", "")
         surfaces = e.get("surface_names", ())
+        out_ents.append(e)
         feats.append({
             "name": e.get("canonical_name", ""),
             "type": typ,
@@ -244,7 +306,7 @@ def _existing_features(slice_graph):
             "nbr": " | ".join(sorted(nbr[eid])),
         })
         keys.append({_record_key(s, typ) for s in [e.get("canonical_name", ""), *surfaces] if s})
-    return ents, feats, keys
+    return out_ents, feats, keys
 
 
 def _new_features(batch: dict):
@@ -261,9 +323,16 @@ def _new_features(batch: dict):
             rel[o].add(p)
             nbr[s].add(lid_to_name[o])
             nbr[o].add(lid_to_name[s])
+    # Exclude literal leaf nodes (typ "literal:<kind>") from the link candidate set --
+    # values, not entities (mirror of `_existing_features`); keeps them out of the
+    # profile-link fingerprint embedding that would otherwise 400 on a bad value.
+    out_ents: list[dict] = []
     feats: list[dict] = []
     for be in new_ents:
+        if str(be.get("typ", "")).startswith("literal:"):
+            continue
         lid = be["local_id"]
+        out_ents.append(be)
         feats.append({
             "name": be.get("canonical_name", ""),
             "type": be.get("typ", ""),
@@ -271,7 +340,7 @@ def _new_features(batch: dict):
             "rel": " | ".join(sorted(rel[lid])),
             "nbr": " | ".join(sorted(nbr[lid])),
         })
-    return new_ents, feats
+    return out_ents, feats
 
 
 def _assemble_fp_texts(existing, ex_keys, new_ents, new_fps, fp_index):
@@ -522,12 +591,50 @@ class _DistillLogger:
                 {"subj": r.subj, "predicate": r.predicate, "obj": r.obj}
                 for r in extraction.relationships
             ],
+            # Literal attributes (entity -[predicate]-> typed value). Absent from the
+            # capture before this -- which made the literal/phrase-span extraction
+            # (the very channel the distillation is meant to train) invisible in the
+            # log. getattr keeps it back-compat for an attribute-less Extraction.
+            "attributes": [
+                {"subj": a.subj, "predicate": a.predicate, "value": a.value,
+                 "type": a.typ}
+                for a in getattr(extraction, "attributes", ())
+            ],
             "fingerprints": {str(k): v for k, v in (new_fps or {}).items()},
         }
         line = json.dumps(rec, ensure_ascii=False)
         with self._lock:
             with open(self._path, "a", encoding="utf-8") as f:
                 f.write(line + "\n")
+
+
+def _maybe_canonicalize(extraction: Extraction) -> Extraction:
+    """Schema-constrain + direction-canonicalize the extraction when
+    `GOLDENGRAPH_SCHEMA_CANON=1` and a relation vocab is set. Snaps predicates to the
+    closed schema, flips reverse-phrased edges, drops out-of-schema edges -- the
+    source-side fix for the under-merge/direction defects the walk repairs stand in
+    for. Fail-soft: any error returns the extraction unchanged."""
+    from .schema import default_schema, schema_canon_enabled
+
+    if not schema_canon_enabled():
+        return extraction
+    raw = os.environ.get("GOLDENGRAPH_RELATION_VOCAB", "")
+    vocab = [v.strip() for v in raw.split(",") if v.strip()]
+    if not vocab:
+        return extraction
+    try:
+        from .schema import canonicalize_extraction
+
+        return canonicalize_extraction(extraction, default_schema(vocab))
+    except Exception:
+        return extraction
+
+
+def _schema_discover_enabled() -> bool:
+    """`GOLDENGRAPH_SCHEMA_DISCOVER` gate. When on, `ingest_corpus` discovers the schema over the
+    whole corpus (one pass) instead of reading `GOLDENGRAPH_RELATION_VOCAB`, and per-doc
+    canonicalization is deferred until the discovered schema exists."""
+    return os.environ.get("GOLDENGRAPH_SCHEMA_DISCOVER", "0") not in ("0", "false", "")
 
 
 def _resolve_extractor():
@@ -564,7 +671,34 @@ def _prepare_doc(
     critical path; pre-embedding moves that network cost off the serial path."""
     try:
         t0 = time.perf_counter()
-        extraction = (extractor or _extract)(text, llm)
+        # `_extract` honors GOLDENGRAPH_LITERAL_ATTRS internally, so this call stays
+        # 2-arg (custom rebel/gliner extractors and test stubs keep that shape).
+        _extractor = extractor or _extract
+        extraction = (
+            chunk_extract(text, llm, _extractor)
+            if chunk_extract_enabled()
+            else _extractor(text, llm)
+        )
+        # Relation re-prompt (2nd pass): add relations among the already-extracted entities. Runs
+        # BEFORE canonicalization so re-prompt edges get the same direction/schema snapping as
+        # first-pass edges. Own try/except: a 2nd-pass failure must never discard the first-pass
+        # extraction (the outer except returns an EMPTY extraction).
+        if relation_reprompt_enabled():
+            try:
+                extraction.relationships += relation_reprompt(text, extraction.mentions, llm)
+            except Exception:
+                pass
+        # REBEL fusion (2nd relation source): map REBEL triples onto existing entities as edges.
+        # Same before-canonicalization placement + own try/except as the re-prompt.
+        if rebel_fuse_enabled():
+            try:
+                extraction.relationships += rebel_fuse(text, extraction.mentions)
+            except Exception:
+                pass
+        # In discovery mode the schema isn't known until the whole corpus is extracted, so defer
+        # canonicalization to the post-discovery pass in `ingest_corpus`.
+        if not _schema_discover_enabled():
+            extraction = _maybe_canonicalize(extraction)
         if timers:
             timers.add("extract", time.perf_counter() - t0)
         t1 = time.perf_counter()
@@ -601,13 +735,16 @@ def _prepare_doc(
 def _commit_doc(
     store, extraction, entities, new_fps, *, at, valid_from, embedder, fp_index,
     link_index: _LinkIndex | None = None, timers: _BuildTimers | None = None,
+    source_ref: str | None = None,
 ) -> None:
     """The store-BOUND half of ingest (must run serially, in document order):
     build the batch, cross-document-link, append, and persist this batch's
     fingerprints under their (link-augmented) record_keys for later docs. With a
     `link_index` (profile-link path) the cross-doc match runs against the O(N)
-    incremental blocked index instead of re-reading the whole store each doc."""
-    batch = build_batch(extraction, entities, at=at, valid_from=valid_from)
+    incremental blocked index instead of re-reading the whole store each doc.
+
+    `source_ref` (this document's id) is stamped onto every edge for provenance."""
+    batch = build_batch(extraction, entities, at=at, valid_from=valid_from, source_ref=source_ref)
     if _cross_doc_link_enabled():
         tl = time.perf_counter()
         if link_index is not None and _profile_link_enabled():
@@ -673,8 +810,11 @@ def ingest_corpus(
     embedder=None,
     fp_index: dict[str, str] | None = None,
     max_workers: int | None = None,
-) -> None:
-    """Build the KG from an ordered list of document texts.
+    doc_ids=None,
+):
+    """Build the KG from an ordered list of document texts. Returns the discovered `RelationSchema`
+    when `GOLDENGRAPH_SCHEMA_DISCOVER=1` (so the caller can canonicalize QUERY relations through the
+    SAME schema the edges were canonicalized with -- the query-side alignment), else None.
 
     The per-doc LLM work (extraction + fingerprint synthesis) is the build's
     dominant cost and is store-independent, so it runs CONCURRENTLY across docs
@@ -683,6 +823,10 @@ def ingest_corpus(
     is identical to a sequential build. `max_workers` defaults to
     `GOLDENGRAPH_BUILD_WORKERS` (8)."""
     docs = list(docs)
+    # Per-document provenance ids (stamped onto every edge's source_refs). Default to the
+    # positional index as a string so provenance is always present; the bench passes the real
+    # corpus document ids so retrieved edges map back to gold supporting-fact ids.
+    doc_ids = list(doc_ids) if doc_ids is not None else [str(i) for i in range(len(docs))]
     if max_workers is None:
         max_workers = int(os.environ.get("GOLDENGRAPH_BUILD_WORKERS", "8"))
     profile_link = _cross_doc_link_enabled() and _profile_link_enabled()
@@ -713,9 +857,45 @@ def ingest_corpus(
         extraction, entities, new_fps = prepared
         _commit_doc(store, extraction, entities, new_fps, at=i + 1, valid_from=None,
                     embedder=embedder, fp_index=fp_index, link_index=link_index,
-                    timers=timers)
+                    timers=timers, source_ref=doc_ids[i] if i < len(doc_ids) else None)
 
-    if max_workers <= 1 or len(docs) <= 1:
+    def _prep_all():
+        if max_workers <= 1 or len(docs) <= 1:
+            return [_prep(t) for t in docs]
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            return list(ex.map(_prep, docs))  # map preserves input order
+
+    discovered_schema = None
+    if _schema_discover_enabled():
+        # One-pass schema discovery: prepare all docs (open extraction, per-doc canonicalize already
+        # skipped in `_prepare_doc`), discover the schema over the whole corpus, canonicalize each
+        # extraction with it, THEN commit in document order. Resolution ran on the open mentions,
+        # which canonicalization does not change. Fail-soft: discovery error -> commit the open
+        # extractions (today's behavior).
+        prepared = _prep_all()
+        try:
+            from .schema import canonicalize_extraction
+            from .schema_discovery import discover_schema
+
+            # The LLM consolidation over-merges on a weak model (measured: a 7B lumps 'acquired' and
+            # 'authored' as one relation), so it is opt-IN via GOLDENGRAPH_DISCOVER_LLM=1; the
+            # deterministic backbone is the default.
+            _disc_llm = llm if os.environ.get("GOLDENGRAPH_DISCOVER_LLM", "0") not in ("0", "false", "") else None
+            schema = discover_schema([p[0] for p in prepared], docs, embedder, _disc_llm)
+            if os.environ.get("GOLDENGRAPH_SCHEMA_DISCOVER", "") not in ("", "0", "false"):
+                print(f"[schema-discover] relations={list(schema.relations)}", flush=True)
+                for _r in schema.relations:
+                    print(f"[schema-discover]   {_r}: fwd={sorted(schema.forward[_r])[:6]} "
+                          f"rev={sorted(schema.reverse[_r])[:6]}", flush=True)
+            prepared = [(canonicalize_extraction(p[0], schema), p[1], p[2]) for p in prepared]
+            discovered_schema = schema  # return it so the query side can canonicalize too
+        except Exception as e:  # noqa: BLE001 -- discovery is best-effort
+            print(f"[schema-discover] failed ({e!r}); committing open extractions", flush=True)
+        for i, p in enumerate(prepared):
+            _commit(i, p)
+    elif max_workers <= 1 or len(docs) <= 1:
         for i, t in enumerate(docs):
             _commit(i, _prep(t))
     else:
@@ -728,3 +908,4 @@ def ingest_corpus(
 
     if timers is not None:
         print(timers.report(wall=time.perf_counter() - t_wall, n_docs=len(docs)), flush=True)
+    return discovered_schema

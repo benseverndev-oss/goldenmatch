@@ -1,0 +1,30 @@
+{
+  "expected": [
+    {
+      "confidence": 0.7,
+      "current_value": "0.85",
+      "evidence": {
+        "current": 0.85,
+        "dip": 0.7583333333333333
+      },
+      "id": "thr:dip:person",
+      "kind": "lower_threshold",
+      "patch": {
+        "matchkey": "person",
+        "op": "set_threshold",
+        "value": 0.76
+      },
+      "predicted_effect": "recall_up",
+      "proposed_value": "0.76",
+      "rationale": "Pair scores split into two groups with a gap near 0.76, but the `person` threshold sits at 0.85. Moving it to 0.76 separates the two groups cleanly.",
+      "target": "person"
+    }
+  ],
+  "input": {
+    "clusters": "[{\"quality\": \"strong\", \"oversized\": false}]",
+    "column_signals": "[{\n        \"field\": \"record_id\",\n        \"col_type\": \"identifier\",\n        \"scorer\": \"exact\",\n        \"in_blocking\": true,\n        \"in_negative_evidence\": false,\n        \"identity_score\": 0.3,\n        \"corruption_score\": 0.0,\n        \"collision_rate\": 0.0,\n        \"cardinality_ratio\": 0.4,\n        \"null_rate\": 0.0,\n        \"variant_rate\": 0.0\n    }]",
+    "config": "{\"matchkeys\":[{\"fields\":[{\"field\":\"record_id\",\"scorer\":\"exact\",\"weight\":1.0}],\"kind\":\"weighted\",\"name\":\"person\",\"threshold\":0.85}],\"negative_evidence\":[]}",
+    "priors": "{\"counts\": {}}",
+    "scored_pairs": "{\"n_pairs\":200,\"score\":[0.05,0.1,0.15,0.2,0.25,0.05,0.1,0.15,0.2,0.25,0.05,0.1,0.15,0.2,0.25,0.05,0.1,0.15,0.2,0.25,0.05,0.1,0.15,0.2,0.25,0.05,0.1,0.15,0.2,0.25,0.05,0.1,0.15,0.2,0.25,0.05,0.1,0.15,0.2,0.25,0.05,0.1,0.15,0.2,0.25,0.05,0.1,0.15,0.2,0.25,0.05,0.1,0.15,0.2,0.25,0.05,0.1,0.15,0.2,0.25,0.05,0.1,0.15,0.2,0.25,0.05,0.1,0.15,0.2,0.25,0.05,0.1,0.15,0.2,0.25,0.05,0.1,0.15,0.2,0.25,0.05,0.1,0.15,0.2,0.25,0.05,0.1,0.15,0.2,0.25,0.05,0.1,0.15,0.2,0.25,0.05,0.1,0.15,0.2,0.25,0.7,0.75,0.8,0.85,0.9,0.7,0.75,0.8,0.85,0.9,0.7,0.75,0.8,0.85,0.9,0.7,0.75,0.8,0.85,0.9,0.7,0.75,0.8,0.85,0.9,0.7,0.75,0.8,0.85,0.9,0.7,0.75,0.8,0.85,0.9,0.7,0.75,0.8,0.85,0.9,0.7,0.75,0.8,0.85,0.9,0.7,0.75,0.8,0.85,0.9,0.7,0.75,0.8,0.85,0.9,0.7,0.75,0.8,0.85,0.9,0.7,0.75,0.8,0.85,0.9,0.7,0.75,0.8,0.85,0.9,0.7,0.75,0.8,0.85,0.9,0.7,0.75,0.8,0.85,0.9,0.7,0.75,0.8,0.85,0.9,0.7,0.75,0.8,0.85,0.9,0.7,0.75,0.8,0.85,0.9,0.7,0.75,0.8,0.85,0.9]}"
+  }
+}

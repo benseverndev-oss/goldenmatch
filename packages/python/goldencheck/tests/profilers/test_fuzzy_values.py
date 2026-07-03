@@ -49,3 +49,42 @@ def test_native_and_python_agree(monkeypatch: pytest.MonkeyPatch) -> None:
     except RuntimeError:
         pytest.skip("native extension not built")
     assert py == nat
+
+
+def test_python_clusters_rapidfuzz_metric() -> None:
+    """The Python path scores candidate pairs with rapidfuzz's Levenshtein
+    (`1 - dist/maxlen`) -- the identical metric to the native kernel. Verify it
+    groups near-duplicate variants and leaves distinct values apart."""
+    from goldencheck.profilers.fuzzy_values import _python_clusters
+
+    values = [
+        "Acme Corp", "Acme Corporation", "Acme Corp.",   # one variant group
+        "Globex Inc", "Globex Incorporated",             # another
+        "Initech", "Umbrella", "Wonka",                  # distinct distractors
+    ]
+    clusters = _python_clusters(values, 0.82)
+    grouped = {tuple(sorted(values[i] for i in c)) for c in clusters}
+
+    # The near-identical spellings cluster; the unrelated names never join one.
+    assert any({"Acme Corp", "Acme Corp."} <= set(g) for g in grouped)
+    assert all("Wonka" not in g for g in grouped)
+
+
+def test_rapidfuzz_ratio_matches_reference_levenshtein() -> None:
+    """Lock the metric: rapidfuzz's `1 - dist/maxlen` equals a plain DP
+    Levenshtein ratio, so clustering can't drift from the native kernel."""
+    from rapidfuzz.distance import Levenshtein as RL
+
+    def dp(a: str, b: str) -> int:
+        prev = list(range(len(b) + 1))
+        for i, ca in enumerate(a):
+            cur = [i + 1]
+            for j, cb in enumerate(b):
+                cur.append(min(prev[j + 1] + 1, cur[j] + 1, prev[j] + (ca != cb)))
+            prev = cur
+        return prev[len(b)]
+
+    for a, b in [("acme corp", "acme corp."), ("globex inc", "globex incorporated"),
+                 ("initech", "wonka"), ("", "x"), ("same", "same")]:
+        m = max(len(a), len(b)) or 1
+        assert abs((1 - RL.distance(a, b) / m) - (1 - dp(a, b) / m)) < 1e-9

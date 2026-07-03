@@ -9,6 +9,8 @@
 - ``identity_claim``     -> claim a record into an identity (move it)
 - ``identity_resolve_conflict`` -> adjudicate a conflicts_with pair
 - ``identity_audit``     -> export the append-only audit log (who/when/why)
+- ``identity_audit_seal``   -> anchor the audit log with a tamper-evidence seal
+- ``identity_audit_verify`` -> verify the audit log against its seal chain
 - ``identity_show``      -> full detail of one identity
 - ``identity_profile``   -> MDM profile of one entity (sources, conflicts, version)
 - ``identity_stats``     -> graph-level summary / health stats
@@ -35,7 +37,9 @@ from goldenmatch.identity import (
     manual_merge,
     manual_split,
     mediate_conflict,
+    seal_audit_log,
     steward_worklist,
+    verify_audit_chain,
 )
 
 logger = logging.getLogger(__name__)
@@ -241,6 +245,47 @@ IDENTITY_TOOLS: list[Tool] = [
         },
     ),
     Tool(
+        name="identity_audit_seal",
+        description=(
+            "Anchor the append-only audit log with a tamper-evidence seal: a "
+            "chained sha256 root over every event since the last seal. Cheap "
+            "and idempotent (a no-op when nothing new has been logged). Run it "
+            "periodically (or after a batch of stewardship actions) so the "
+            "history becomes provably untampered. Optionally scoped to a "
+            "dataset. Publish/mirror the returned root_hash to make tampering "
+            "detectable by an external party."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "dataset": {"type": "string"},
+                "actor": {
+                    "type": "string",
+                    "description": "Principal sealing the log. Defaults to 'agent'.",
+                },
+                "path": {"type": "string", "description": "Identity DB path"},
+            },
+        },
+    ),
+    Tool(
+        name="identity_audit_verify",
+        description=(
+            "Verify the append-only audit log against its seal chain. Replays "
+            "the per-event content hashes and the seal roots to detect content "
+            "edits, deletion, reordering, and insertion of any sealed event. "
+            "Returns {ok, events_checked, seals_checked} plus the ids of any "
+            "content mismatches / broken seals / missing sealed events. "
+            "Optionally scoped to a dataset."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "dataset": {"type": "string"},
+                "path": {"type": "string", "description": "Identity DB path"},
+            },
+        },
+    ),
+    Tool(
         name="identity_show",
         description=(
             "Fetch the full detail of one identity by entity_id: its member "
@@ -425,12 +470,43 @@ def _dispatch(name: str, args: dict) -> dict[str, Any]:
             {
                 "event_id": e.event_id, "entity_id": e.entity_id, "kind": e.kind,
                 "actor": e.actor, "trust": e.trust,
+                "claim_type": e.claim_type, "evidence_ref": e.evidence_ref,
+                "previous_claim_id": e.previous_claim_id,
                 "recorded_at": e.recorded_at.isoformat() if e.recorded_at else None,
                 "run_name": e.run_name, "dataset": e.dataset, "payload": e.payload,
             }
             for e in events[:limit]
         ]
         return {"items": items, "total": len(events)}
+
+    if name == "identity_audit_seal":
+        actor, _ = _actor_trust(args)
+        with _open(args) as s:
+            seal = seal_audit_log(s, actor=actor, dataset=args.get("dataset"))
+        if seal is None:
+            return {"sealed": False, "reason": "no new events to seal"}
+        return {
+            "sealed": True,
+            "seal_id": seal.seal_id,
+            "root_hash": seal.root_hash,
+            "event_count": seal.event_count,
+            "last_event_id": seal.last_event_id,
+            "dataset": seal.dataset,
+            "actor": seal.actor,
+        }
+
+    if name == "identity_audit_verify":
+        with _open(args) as s:
+            result = verify_audit_chain(s, dataset=args.get("dataset"))
+        return {
+            "ok": result.ok,
+            "events_checked": result.events_checked,
+            "seals_checked": result.seals_checked,
+            "content_mismatches": result.content_mismatches,
+            "seal_mismatches": result.seal_mismatches,
+            "missing_sealed_events": result.missing_sealed_events,
+            "summary": result.summary(),
+        }
 
     if name == "identity_show":
         with _open(args) as s:

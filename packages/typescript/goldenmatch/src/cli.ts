@@ -16,6 +16,7 @@ import {
 import { dedupe, match, scoreStrings } from "./core/api.js";
 import { evaluateClusters, loadGroundTruthPairs } from "./core/index.js";
 import { loadConfigFile } from "./node/config-file.js";
+import { emitHealerSurface } from "./node/cli-healer.js";
 import type { Row } from "./core/types.js";
 import pkg from "../package.json" with { type: "json" };
 
@@ -72,6 +73,11 @@ interface SharedMatchOpts {
   threshold?: number;
   output?: string;
   format?: string;
+}
+
+interface DedupeCmdOpts extends SharedMatchOpts {
+  suggest?: boolean;
+  heal?: boolean;
 }
 
 function buildOptionsFromFlags(opts: SharedMatchOpts) {
@@ -135,10 +141,22 @@ program
   .option("-t, --threshold <value>", "overall fuzzy threshold", parseFloat)
   .option("-o, --output <path>", "output path for golden records")
   .option("--format <format>", "output format: csv or json", "csv")
-  .action(async (files: string[], opts: SharedMatchOpts) => {
+  .option(
+    "--suggest",
+    "surface verified config-improvement suggestions (the healer; opt-in)",
+  )
+  .option(
+    "--heal",
+    "auto-apply the healer loop and run with the healed config",
+  )
+  .action(async (files: string[], opts: DedupeCmdOpts) => {
     const rows = loadFilesWithSource(files);
     const options = buildOptionsFromFlags(opts);
-    const result = await dedupe(rows, options);
+    const result = await dedupe(rows, {
+      ...options,
+      ...(opts.suggest ? { suggest: true } : {}),
+      ...(opts.heal ? { heal: true } : {}),
+    });
     const pct = (result.stats.matchRate * 100).toFixed(1);
     process.stdout.write(
       `Dedupe complete: ${result.stats.totalRecords} records -> ${result.stats.totalClusters} clusters (${pct}% match rate)\n`,
@@ -153,6 +171,17 @@ program
         `Wrote ${result.goldenRecords.length} golden records to ${opts.output}\n`,
       );
     }
+    // Healer surface: --suggest / --heal print their output; the default run
+    // prints a free headroom hint to stderr, read off the result already
+    // produced above (no second dedupe).
+    emitHealerSurface(
+      result,
+      { suggest: opts.suggest === true, heal: opts.heal === true },
+      {
+        out: (s) => process.stdout.write(s),
+        err: (s) => process.stderr.write(s),
+      },
+    );
   });
 
 // ---------- match ----------
