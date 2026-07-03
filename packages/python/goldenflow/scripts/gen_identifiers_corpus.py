@@ -172,6 +172,15 @@ _CASES: list[tuple[str, str | None]] = [
     ("vat_format", "ZZ123"),  # unknown prefix
     ("vat_format", ""),
     ("vat_format", None),
+    # --- astral-plane / non-ASCII char edge cases (UTF-16-vs-codepoint length
+    # gate insurance -- Python `len()` counts codepoints, JS `.length` counts
+    # UTF-16 code units, so an astral-plane char (surrogate pair) counts as 1
+    # in Python but 2 in JS; both sides must still reject identically because
+    # every char-class gate rejects non-ASCII regardless of how the length is
+    # counted). All expected to fail structurally -> false/null on both sides.
+    ("cc_validate", "424242424242\U0001f6002"),  # astral emoji inside a card number
+    ("iban_validate", "DE89370400440532\U0001f60013000"),  # astral emoji inside IBAN BBAN
+    ("vat_validate", "DE13669597\U0001f600"),  # astral emoji inside VAT suffix
 ]
 
 _PY_FN = {

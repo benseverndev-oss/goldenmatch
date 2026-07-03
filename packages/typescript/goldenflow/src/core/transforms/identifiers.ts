@@ -685,3 +685,27 @@ registerTransform(
   { name: "ein_format", inputTypes: ["ein", "string"], priority: 50, mode: "series" },
   einFormat,
 );
+
+// ---------------------------------------------------------------------------
+// Pure-TS single-value exports (cross-surface byte-parity harness)
+//
+// Bypass the wasm-dispatch wrappers above (`ccValidate` et al., which take a
+// ColumnValue[] and consult `getFlowWasmBackend()` internally) so a parity
+// test can assert the pure-TS path independently of whatever backend is
+// currently registered. The wasm leg of that same test calls
+// `getFlowWasmBackend()!.ccValidate(s)` etc. directly (see
+// `tests/parity/identifiers.parity.test.ts`).
+// ---------------------------------------------------------------------------
+
+export {
+  ccValidateTs,
+  ccFormatTs,
+  ccMaskTs,
+  ibanValidateTs,
+  ibanFormatTs,
+  isbnValidateTs,
+  isbnNormalizeTs,
+  eanValidateTs,
+  vatValidateTs,
+  vatFormatTs,
+};
