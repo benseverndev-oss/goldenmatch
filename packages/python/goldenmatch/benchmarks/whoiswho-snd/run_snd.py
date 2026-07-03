@@ -167,11 +167,21 @@ def run(split: str, engine: str, *, limit: int | None = None, data_dir=None,
             res = gm.dedupe_df(df.drop("__block__"), confidence_required=False)
             predictions[name] = clusters_to_pid_lists(res.clusters, df)
         else:
+            # per-name adaptive engines pick the co-author threshold from THIS
+            # block's co-author-set-size distribution (the recall fix); the fixed
+            # engines use the global `coauthor_threshold`.
+            if engine in ("adaptive", "coauthor_adaptive"):
+                import adaptive
+                t_ca = adaptive.per_name_coauthor_threshold(df["coauthors"].to_list())
+            else:
+                t_ca = coauthor_threshold
             cfg = {
                 "relational": lambda: relational_config(
-                    coauthor_threshold=coauthor_threshold, orgtext_threshold=orgtext_threshold),
-                "coauthor_only": lambda: coauthor_only_config(
-                    coauthor_threshold=coauthor_threshold),
+                    coauthor_threshold=t_ca, orgtext_threshold=orgtext_threshold),
+                "adaptive": lambda: relational_config(
+                    coauthor_threshold=t_ca, orgtext_threshold=orgtext_threshold),
+                "coauthor_only": lambda: coauthor_only_config(coauthor_threshold=t_ca),
+                "coauthor_adaptive": lambda: coauthor_only_config(coauthor_threshold=t_ca),
                 "text_only": lambda: text_only_config(),
             }[engine]()
             predictions[name] = _predict_dedupe(df, cfg)
@@ -191,8 +201,8 @@ def main():
     ap = argparse.ArgumentParser(description="WhoIsWho SND runner")
     ap.add_argument("--split", default="valid", choices=["valid", "train"])
     ap.add_argument("--engine", default="relational", choices=[
-        "relational", "coauthor_only", "text_only", "zero_config", "graph_er",
-        "all_singletons", "all_one"])
+        "relational", "adaptive", "coauthor_only", "coauthor_adaptive",
+        "text_only", "zero_config", "graph_er", "all_singletons", "all_one"])
     ap.add_argument("--limit", type=int, default=None, help="score only the first N names")
     ap.add_argument("--coauthor-threshold", type=float, default=0.15)
     ap.add_argument("--orgtext-threshold", type=float, default=0.55)
