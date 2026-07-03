@@ -59,6 +59,10 @@ jobs:
       # directly for those jobs + the lanes that gate on goldenmatch changing.
       python_goldenmatch: ${{ steps.filter.outputs.python_goldenmatch }}
       python_goldenmatch_postgres: ${{ steps.filter.outputs.python_goldenmatch_postgres }}
+      # goldenflow runs as a generic `python` matrix leg (native-default via
+      # matrix-gated steps), but its pure-Python fallback job gates on this
+      # filter directly, so expose it as a job output too.
+      python_goldenflow: ${{ steps.filter.outputs.python_goldenflow }}
       benchmark_runner: ${{ steps.filter.outputs.benchmark_runner }}
       rust_pgrx: ${{ steps.filter.outputs.rust_pgrx }}
       duckdb_extensions: ${{ steps.filter.outputs.duckdb_extensions }}
@@ -141,6 +145,12 @@ jobs:
               - 'packages/python/goldencheck/**'
             python_goldenflow:
               - 'packages/python/goldenflow/**'
+              # Reference mode: the goldenflow matrix leg builds the native ext
+              # and runs native-default, so a change to the shared -core kernel
+              # or the native-flow shim must re-run the goldenflow leg (and its
+              # pure-Python fallback lane).
+              - 'packages/rust/extensions/goldenflow-core/**'
+              - 'packages/rust/extensions/native-flow/**'
             python_goldenpipe:
               - 'packages/python/goldenpipe/**'
             python_infermap:
@@ -578,6 +588,28 @@ jobs:
       # goldenmatch datafusion lane above.
       - if: matrix.pkg == 'goldenanalysis'
         run: uv pip install -e 'packages/python/goldenanalysis[match,check,flow,pipe]'
+      # Reference mode (docs/design/2026-07-01-rust-is-the-reference-roadmap.md):
+      # goldenflow's DEFAULT test path is now native. Unlike goldenmatch (which
+      # has dedicated sharded jobs), goldenflow runs as a generic `python` matrix
+      # leg, so these steps are matrix-gated to the goldenflow leg only -- the
+      # other 6 packages skip the rust toolchain + native build entirely. The
+      # ext is dropped into the package via build_native.py (mirrors the
+      # `native_flow` job); pytest below then runs goldenflow native-default.
+      # Pure-Python remains covered by the python_goldenflow_fallback job
+      # (GOLDENFLOW_NATIVE=0), and native-vs-python parity by the `native_flow`
+      # lane.
+      - if: matrix.pkg == 'goldenflow'
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - if: matrix.pkg == 'goldenflow'
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/native-flow
+      - if: matrix.pkg == 'goldenflow'
+        name: Build native ext (reference mode -> native is the default test path)
+        run: uv run python packages/python/goldenflow/scripts/build_native.py
+      - if: matrix.pkg == 'goldenflow'
+        name: Install pyarrow (zero-copy Series<->kernel bridge for the native path)
+        run: uv pip install pyarrow
       # Ruff config is driven by the root pyproject.toml [tool.ruff.lint] section
       # (F/I/B-narrowed/UP). Drop the --select override so pyproject's select+ignore wins.
       - run: uv run ruff check packages/python/${{ matrix.pkg }}
@@ -832,6 +864,42 @@ jobs:
             packages/python/goldenmatch/tests/test_pipeline.py \
             packages/python/goldenmatch/tests/test_pairs.py \
             packages/python/goldenmatch/tests/test_probabilistic.py \
+            -k "not native and not Native" \
+            -n auto --timeout=120 --timeout-method=thread -q
+
+  # Reference mode: the goldenflow `python` matrix leg now runs NATIVE by
+  # default (native ext built before pytest). This lean lane asserts the
+  # pure-Python FALLBACK still imports and passes on the transform + loader
+  # slice -- the no-wheel path (musl / unsupported platform / GOLDENFLOW_NATIVE=0)
+  # must keep working, even though it is non-authoritative (native-vs-python
+  # parity is asserted in the `native_flow` lane, not here). No native ext is
+  # built; the env var additionally forces the fallback even if a wheel were
+  # present. Mirrors python_goldenmatch_fallback.
+  python_goldenflow_fallback:
+    needs: changes
+    if: needs.changes.outputs.python_goldenflow == 'true' || needs.changes.outputs.force_all == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GOLDENFLOW_NATIVE: "0"
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      - name: pytest (pure-Python fallback -- transform + loader slice, GOLDENFLOW_NATIVE=0)
+        # -k excludes tests that ASSERT native dispatch: the job-level
+        # GOLDENFLOW_NATIVE=0 force-disables native, so those tests can't hold
+        # here by construction. This lane proves the pure-Python behavior path,
+        # not native dispatch (that's the `native_flow` lane's job).
+        run: |
+          uv run pytest \
+            packages/python/goldenflow/tests/transforms \
+            packages/python/goldenflow/tests/core \
             -k "not native and not Native" \
             -n auto --timeout=120 --timeout-method=thread -q
 
@@ -2670,6 +2738,7 @@ jobs:
       - python_goldenmatch_heavy
       - python_goldenmatch_coverage
       - python_goldenmatch_fallback
+      - python_goldenflow_fallback
       - python_skipped_lanes
       - python_postgres
       - synthetic_benchmarks
