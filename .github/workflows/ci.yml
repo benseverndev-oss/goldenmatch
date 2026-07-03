@@ -1551,6 +1551,7 @@ jobs:
             packages/rust/extensions/graph-layout
             packages/rust/extensions/autoconfig-core
             packages/rust/extensions/suggest-core
+            packages/rust/extensions/goldenflow-core
       - run: cargo test --workspace
         # Bridge tests now hard-require goldenmatch (installed above) -- a Python
         # import/marshalling failure fails the lane instead of silently skipping.
@@ -1566,6 +1567,14 @@ jobs:
       - run: cargo clippy --manifest-path graph-core/Cargo.toml -- -D warnings
       - run: cargo test --manifest-path score-core/Cargo.toml
       - run: cargo clippy --manifest-path score-core/Cargo.toml -- -D warnings
+      # goldenflow-core (owned checksummed-identifier kernels, Wave 0b) is its own
+      # [workspace] pyo3-free sibling too — excluded from the bridge workspace, so
+      # `cargo clippy --workspace` above never touches it and its clippy was DEAD in
+      # CI (the native_flow lane only clippy's the native-flow root package, not this
+      # path-dep). --all-targets so the per-kernel #[cfg(test)] unit tests are linted
+      # too (a clippy violation in the ISBN kernel had shipped green before this).
+      - run: cargo test --manifest-path goldenflow-core/Cargo.toml
+      - run: cargo clippy --manifest-path goldenflow-core/Cargo.toml --all-targets -- -D warnings
       # sketch-core (MinHash/LSH, #1081) is its own [workspace] pyo3-free sibling
       # too; the native binding exercises it indirectly, but its own unit tests +
       # the golden-vector parity test need an explicit run.
@@ -1956,11 +1965,20 @@ jobs:
         # does); without it the native runner returns None and the parity tests
         # that import pyarrow error at collection. Install it explicitly.
         run: uv pip install pyarrow
+      - name: Identifier corpus oracle-drift guard (native kernels are the oracle)
+        # Regenerate the checked-in identifier parity corpus in-memory from the
+        # freshly-built NATIVE kernels and diff vs the committed file. Fails the
+        # lane if the corpus drifts from what the native kernels now produce, so a
+        # kernel change that alters a checksum/format/mask output can't land with a
+        # stale corpus. Runs after the ext is built above so --check uses the native
+        # path as the source of truth.
+        run: uv run python packages/python/goldenflow/scripts/gen_identifiers_corpus.py --check
       - name: Parity suite (ext present -> NANP-gated native path runs, not skips)
         run: |
           uv run pytest \
             packages/python/goldenflow/tests/transforms/test_native_parity.py \
             packages/python/goldenflow/tests/transforms/test_fastpath_parity.py \
+            packages/python/goldenflow/tests/transforms/test_identifiers_parity.py \
             packages/python/goldenflow/tests/transforms/test_phone.py \
             packages/python/goldenflow/tests/transforms/test_dates.py \
             -v
