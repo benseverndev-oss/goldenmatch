@@ -202,10 +202,14 @@ are box-TDD-able; only the STaRK download + embed + Modal run is integration.
 
 `tests/test_alias_materialize.py` (real `PyStore`): the Python collapse builds one
 store node per cluster with edges remapped to `cluster_ordinal`; after `bulk_load`,
-`store.as_of(BIG,BIG).query([cluster_ordinal],1)` shows the UNIONED neighborhood
-(edges from all the cluster's aliases), and singleton/fragmented clusters keep the
-un-collapsed graph. Intra-cluster self-loops are dropped. This is the graph-arm
-edge-union check that the store's own merge can NOT provide in one batch.
+resolve the cluster's view-local eid FIRST (`eid = {int(e["source_refs"][0]):
+e["entity_id"] for e in slice.entities()}[ordinal]` — the store mints StableIds in
+string-sorted record_key order, so the view-eid ≠ the ordinal; the ordinal rides
+through on `source_refs` exactly as SP2 carried stark_id), then
+`slice.query([eid],1)` shows the UNIONED neighborhood (edges from all the cluster's
+aliases). Singleton/fragmented clusters keep the un-collapsed graph; intra-cluster
+self-loops are dropped. This is the graph-arm edge-union check that the store's own
+merge can NOT provide in one batch.
 
 `tests/test_alias_scoring.py` (pure): canon-mapped ranked list → a hit when any
 alias of the gold entity is retrieved; equivalence-class recall.
