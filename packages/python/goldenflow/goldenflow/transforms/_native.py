@@ -22,6 +22,16 @@ from goldenflow.core._native_loader import native_enabled, native_module
 _DEFAULT_REGION = "US"
 
 
+def _as_str_series(s: pl.Series) -> pl.Series:
+    """Ensure a Utf8 series for the Arrow bridge. An all-null column (or a
+    single ``[None]``) is Null-dtype in Polars, and ``.to_arrow()`` on it yields
+    a Null Arrow array the kernels reject (``expected an Arrow Utf8 or LargeUtf8
+    array``). Cast to Utf8 (null-preserving) so the native path handles nulls the
+    same way the pure-Python fallback does. Utf8 input is returned unchanged to
+    keep the round-trip zero-copy."""
+    return s if s.dtype == pl.Utf8 else s.cast(pl.Utf8)
+
+
 def _kernel_runner(attr: str) -> Callable[[pl.Series], pl.Series] | None:
     """Build a ``native_fn`` for kernel function ``attr`` if native phone is
     enabled and the dependencies are importable; else ``None``."""
@@ -117,7 +127,7 @@ def _cc_kernel_runner(attr: str) -> Callable[[pl.Series], pl.Series] | None:
     func = getattr(nm, attr)
 
     def run(s: pl.Series) -> pl.Series:
-        return pl.from_arrow(func(s.to_arrow()))
+        return pl.from_arrow(func(_as_str_series(s).to_arrow()))
 
     return run
 
@@ -151,7 +161,7 @@ def _iban_kernel_runner(attr: str) -> Callable[[pl.Series], pl.Series] | None:
     func = getattr(nm, attr)
 
     def run(s: pl.Series) -> pl.Series:
-        return pl.from_arrow(func(s.to_arrow()))
+        return pl.from_arrow(func(_as_str_series(s).to_arrow()))
 
     return run
 
@@ -181,7 +191,7 @@ def _isbn_kernel_runner(attr: str) -> Callable[[pl.Series], pl.Series] | None:
     func = getattr(nm, attr)
 
     def run(s: pl.Series) -> pl.Series:
-        return pl.from_arrow(func(s.to_arrow()))
+        return pl.from_arrow(func(_as_str_series(s).to_arrow()))
 
     return run
 
@@ -212,7 +222,7 @@ def _ean_kernel_runner(attr: str) -> Callable[[pl.Series], pl.Series] | None:
     func = getattr(nm, attr)
 
     def run(s: pl.Series) -> pl.Series:
-        return pl.from_arrow(func(s.to_arrow()))
+        return pl.from_arrow(func(_as_str_series(s).to_arrow()))
 
     return run
 
@@ -239,7 +249,7 @@ def _vat_kernel_runner(attr: str) -> Callable[[pl.Series], pl.Series] | None:
     func = getattr(nm, attr)
 
     def run(s: pl.Series) -> pl.Series:
-        return pl.from_arrow(func(s.to_arrow()))
+        return pl.from_arrow(func(_as_str_series(s).to_arrow()))
 
     return run
 
