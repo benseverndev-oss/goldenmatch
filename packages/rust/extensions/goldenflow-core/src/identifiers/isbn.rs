@@ -66,7 +66,7 @@ fn isbn10_checksum_ok(t: &str) -> bool {
         let d = if c == 'X' { 10 } else { c as u32 - '0' as u32 };
         sum += d * (10 - i as u32);
     }
-    sum % 11 == 0
+    sum.is_multiple_of(11)
 }
 
 fn isbn13_checksum_ok(t: &str) -> bool {
@@ -80,7 +80,7 @@ fn isbn13_checksum_ok(t: &str) -> bool {
         let weight = if i % 2 == 0 { 1 } else { 3 };
         sum += d * weight;
     }
-    sum % 10 == 0
+    sum.is_multiple_of(10)
 }
 
 /// Compute the ISBN-13 check digit for a 12-digit prefix (ASCII digits).
