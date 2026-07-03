@@ -11,11 +11,15 @@ cosine@0.7, LlamaIndex none-built-in, KGGen LLM-judge clustering) does
 (Text2KGBench, Re-DocRED — both single-document) even measures cross-document ER
 or span-grounded faithfulness. That's the open seam CLEAR-KG targets.
 
-## Status: Phase 0 (Track B spike)
+## Status: Phase 0 (Track B + Track C spikes)
 
-Phase 0 proves the moat exists and is measurable: on a synthetic corpus with
-controlled **homographs** (distinct entities sharing a surface string), does
-principled ER keep them apart where `if same name: merge` cannot?
+Phase 0 proves the two moats exist and are measurable — **corpus-level ER**
+(Track B, below) and **span-grounded faithfulness** (Track C). Both follow the
+same method: reimplement the market's *documented* mechanisms, run them on
+identical inputs, and measure them collapsing on the axis they skip. Track B on
+a synthetic corpus with controlled **homographs**; a **real-data validity
+track** on Wikipedia; Track C on controlled **distractor** and **hallucinated**
+triples.
 
 **We ran the market's three ER families** (faithful reimplementations of each
 tool's documented ER *mechanism*, on identical inputs — isolating the ER
@@ -80,6 +84,47 @@ python benchmarks/clear-kg/run_real.py --refresh  # re-fetch from Wikipedia
 > they are, by article identity. Per-chunk co-mention detection is a later
 > refinement of the recall axis, not the split-rate axis.
 
+## Track C — span-grounded faithfulness (the second axis the market skips)
+
+Track B asks *"is each entity one node?"* Track C asks the other question no
+benchmark measures: **when a KG emits a triple, is it verifiably supported by a
+specific source span — with a confidence — or invented?** The landscape scan
+found faithfulness everywhere is *ontology conformance* or *within-sentence
+presence* — never "does this span actually state this relation."
+
+The discriminator (the faithfulness analogue of the homograph) is the
+**distractor**: a sentence where the two entities co-occur but the claimed
+relation is **not** stated (a different, same-type relation is). Plus
+**hallucinated** triples whose entities never co-occur at all. We reimplement the
+field's documented faithfulness mechanisms (`grounding.py`) and score them on
+52 candidate triples (24 supported / 16 distractor / 12 hallucinated):
+
+| engine (documented mechanism) | support-F1 | coverage | **distractor false-support** | hallucination | conf-AUROC |
+|---|--:|--:|--:|--:|--:|
+| `ungrounded` — assert, cite no span (LlamaIndex / LangChain default) | 0.632 | 0.00 | **1.000** | 1.000 | 0.500 |
+| `sentence_presence` — entities share a sentence (within-sentence presence) | 0.750 | 0.77 | **1.000** | 0.000 | 0.500 |
+| `ontology_conformance` — relation type matches the schema | 0.632 | 0.00 | **1.000** | 1.000 | 0.500 |
+| **`relation_aware`** — a span states *this* relation, with a confidence | **1.000** | 0.46 | **0.000** | 0.000 | **1.000** |
+
+**Every documented mechanism marks a distractor "supported" (1.000)** — because
+none reads whether the span expresses that relation; `ontology_conformance` and
+`ungrounded` pass hallucinations through too. Only relation-aware grounding
+refuses both (0.000 / 0.000), lands perfect support-F1, and is the **only engine
+that emits a calibrated confidence** (AUROC 1.000 vs 0.500, ECE ≈ 0.02) — the
+"never black box" axis measured directly: a system with no graded confidence
+scores 0.5 by construction. Run it:
+
+```bash
+python benchmarks/clear-kg/run_track_c.py
+```
+
+> `relation_aware` uses a trigger-lexicon relation proxy, not an NLI model
+> (torch-free by design). It is a real, if simple, NLU check — not reading a
+> hidden label — and the distractor bait defeats presence/type grounding
+> *regardless* of how the relation is phrased, because they never look at the
+> relation. Gold provenance spans are the backstop; an NLI-backed verifier and
+> LLM-generated multi-sentence prose are later phases (SPEC §3, §8).
+
 ## The homograph split-rate (the money metric)
 
 Of gold mention-pairs that **share a surface string but are different entities**,
@@ -116,13 +161,17 @@ score.py       pairwise-F1, B-cubed, homograph split-rate
 run_track_b.py generate -> resolve -> score, per engine (SYNTHETIC corpus)
 real_data.py   Wikipedia fetcher + pure mention-builder (REAL homographs)
 run_real.py    fetch (cached) -> resolve -> score, per engine (REAL corpus)
-tests/         offline unit + end-to-end, incl. real-data track on a network-free fixture
+grounding_data.py  Track C dataset: supported / distractor / hallucinated triples
+grounding.py   Track C engines (ungrounded, sentence_presence, ontology_conformance,
+               relation_aware) -- the documented faithfulness mechanisms + the moat
+score_c.py     Track C metrics: support-PRF, distractor false-support, hallucination,
+               grounding coverage, confidence AUROC + ECE
+run_track_c.py generate -> verify -> score, per engine (span-grounded faithfulness)
+tests/         offline unit + end-to-end for Tracks B, C, and the real-data track
 ```
 
 ## Next phases (see SPEC.md)
 
-- **Track C — faithfulness:** span-grounded triple verification + confidence
-  calibration (no incumbent measures it).
 - **Track A — extraction:** triple-F1 (table stakes; extend er-kg-bench's
   `extraction_f1`).
 - **Real-data recall axis:** per-chunk co-mention detection (this track's
@@ -131,8 +180,11 @@ tests/         offline unit + end-to-end, incl. real-data track on a network-fre
 - **Packaged incumbents end-to-end** (GraphRAG, Neo4j, iText2KG, KGGen) on all
   tracks, vs. the documented-mechanism reimplementations used today.
 
-_Done:_ **real-data validity track** (Wikipedia homographs — see above); the moat
-holds 1.000 vs 0.000 on prose we did not author.
+_Done:_ **Track B** (corpus-level ER moat) + **real-data validity track**
+(Wikipedia homographs, 1.000 vs 0.000 on prose we did not author) + **Track C**
+(span-grounded faithfulness — relation-aware grounding wins every axis vs the
+documented presence/type mechanisms). Track C next: NLI-backed grounding + a
+real-data faithfulness anchor (DocRED evidence sentences).
 
 ## Note on the Phase-0 signal
 
