@@ -51,3 +51,43 @@ def test_registers_into_registry():
 
     scorers.register(force=True)
     assert PluginRegistry.instance().has_scorer("set_jaccard")
+    assert PluginRegistry.instance().has_scorer("tfidf_cosine")
+
+
+# --- TF-IDF cosine topical scorer (the embedding-fusion bridge) ---
+
+
+def test_tfidf_close_topics_score_high_far_topics_low():
+    from scorers import TfidfCosineScorer
+
+    s = TfidfCosineScorer()
+    vals = [
+        "deep learning neural network image recognition",
+        "neural network deep learning image classification",  # same topic as #0
+        "soil carbon arctic permafrost tundra flux",          # unrelated
+    ]
+    m = s.score_matrix(vals)
+    assert m.shape == (3, 3)
+    assert m[0, 1] > 0.4          # shared domain vocabulary -> high cosine
+    assert m[0, 2] < 0.1          # disjoint vocabulary -> ~0
+    import numpy as np
+    assert np.allclose(m, m.T)    # symmetric
+    assert m[0, 0] > 0.99         # self-similarity ~1
+
+
+def test_tfidf_empty_text_is_zero_and_safe():
+    from scorers import TfidfCosineScorer
+
+    s = TfidfCosineScorer()
+    m = s.score_matrix(["", None, ""])
+    assert m.shape == (3, 3)
+    assert (m == 0.0).all()
+    assert s.score_pair(None, "x") is None
+
+
+def test_tfidf_score_pair_matches_matrix():
+    from scorers import TfidfCosineScorer
+
+    s = TfidfCosineScorer()
+    a, b = "alpha beta gamma", "beta gamma delta"
+    assert abs(s.score_pair(a, b) - s.score_matrix([a, b])[0, 1]) < 1e-6

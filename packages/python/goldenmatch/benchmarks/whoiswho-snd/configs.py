@@ -68,6 +68,38 @@ def relational_config(
     return GoldenMatchConfig(matchkeys=[coauthor, orgtext], blocking=_const_blocking())
 
 
+def fusion_config(
+    *,
+    coauthor_threshold: float = 0.15,
+    orgtext_threshold: float = 0.55,
+    topic_threshold: float = 0.5,
+):
+    """Embedding fusion: co-author OR org+topic OR a TF-IDF TOPICAL bridge.
+
+    Adds a third OR'd matchkey ``topic`` -- TF-IDF cosine over title/abstract --
+    so two same-author papers that share NO co-author (the connectivity ceiling
+    the adaptive threshold couldn't break) still link when they are topically
+    close. ``topic_threshold`` is the cosine bar: high enough that only genuinely
+    same-subfield papers link (guarding against two same-name people in one
+    field), tuned empirically. The co-author matchkey stays the precise primary
+    signal; topic only ADDS edges (recall), never removes.
+    """
+    from goldenmatch.config.schemas import GoldenMatchConfig
+
+    coauthor = _mk("coauthor", coauthor_threshold, [
+        _field("coauthors", "set_jaccard", 1.0),
+    ])
+    orgtext = _mk("orgtext", orgtext_threshold, [
+        _field("orgs", "set_jaccard", 2.0),
+        _field("text", "token_sort", 1.0),
+        _field("venue", "token_sort", 0.5),
+    ])
+    topic = _mk("topic", topic_threshold, [
+        _field("text", "tfidf_cosine", 1.0),
+    ])
+    return GoldenMatchConfig(matchkeys=[coauthor, orgtext, topic], blocking=_const_blocking())
+
+
 def coauthor_only_config(*, coauthor_threshold: float = 0.15):
     """Ablation: the relational signal ALONE (no org/text). Isolates how much of
     the score co-author overlap earns by itself."""

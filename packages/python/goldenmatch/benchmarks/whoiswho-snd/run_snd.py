@@ -126,11 +126,13 @@ def _const_blocking_for(field_name: str):
 
 
 def run(split: str, engine: str, *, limit: int | None = None, data_dir=None,
-        coauthor_threshold: float = 0.15, orgtext_threshold: float = 0.55) -> dict:
+        coauthor_threshold: float = 0.15, orgtext_threshold: float = 0.55,
+        topic_threshold: float = 0.5) -> dict:
     import tempfile
 
     from configs import (
         coauthor_only_config,
+        fusion_config,
         relational_config,
         text_only_config,
     )
@@ -170,7 +172,7 @@ def run(split: str, engine: str, *, limit: int | None = None, data_dir=None,
             # per-name adaptive engines pick the co-author threshold from THIS
             # block's co-author-set-size distribution (the recall fix); the fixed
             # engines use the global `coauthor_threshold`.
-            if engine in ("adaptive", "coauthor_adaptive"):
+            if engine in ("adaptive", "coauthor_adaptive", "fusion"):
                 import adaptive
                 t_ca = adaptive.per_name_coauthor_threshold(df["coauthors"].to_list())
             else:
@@ -180,6 +182,9 @@ def run(split: str, engine: str, *, limit: int | None = None, data_dir=None,
                     coauthor_threshold=t_ca, orgtext_threshold=orgtext_threshold),
                 "adaptive": lambda: relational_config(
                     coauthor_threshold=t_ca, orgtext_threshold=orgtext_threshold),
+                "fusion": lambda: fusion_config(
+                    coauthor_threshold=t_ca, orgtext_threshold=orgtext_threshold,
+                    topic_threshold=topic_threshold),
                 "coauthor_only": lambda: coauthor_only_config(coauthor_threshold=t_ca),
                 "coauthor_adaptive": lambda: coauthor_only_config(coauthor_threshold=t_ca),
                 "text_only": lambda: text_only_config(),
@@ -201,17 +206,20 @@ def main():
     ap = argparse.ArgumentParser(description="WhoIsWho SND runner")
     ap.add_argument("--split", default="valid", choices=["valid", "train"])
     ap.add_argument("--engine", default="relational", choices=[
-        "relational", "adaptive", "coauthor_only", "coauthor_adaptive",
+        "relational", "adaptive", "fusion", "coauthor_only", "coauthor_adaptive",
         "text_only", "zero_config", "graph_er", "all_singletons", "all_one"])
     ap.add_argument("--limit", type=int, default=None, help="score only the first N names")
     ap.add_argument("--coauthor-threshold", type=float, default=0.15)
     ap.add_argument("--orgtext-threshold", type=float, default=0.55)
+    ap.add_argument("--topic-threshold", type=float, default=0.5,
+                    help="TF-IDF cosine bar for the fusion topical bridge")
     ap.add_argument("--out", default=None, help="write results json here")
     args = ap.parse_args()
 
     res = run(args.split, args.engine, limit=args.limit,
               coauthor_threshold=args.coauthor_threshold,
-              orgtext_threshold=args.orgtext_threshold)
+              orgtext_threshold=args.orgtext_threshold,
+              topic_threshold=args.topic_threshold)
 
     print(f"\n== SND {args.engine} on {args.split} "
           f"(n_names={res['n_names']}) ==")
