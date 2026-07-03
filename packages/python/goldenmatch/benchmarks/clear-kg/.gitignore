@@ -1,0 +1,4 @@
+# Fetched real-data corpora (Wikipedia extracts/links) are fetch-on-demand,
+# never committed. Regenerate with `python run_real.py`.
+data/
+__pycache__/

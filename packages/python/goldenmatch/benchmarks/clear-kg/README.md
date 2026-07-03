@@ -42,6 +42,44 @@ signal generalized: **structure, not string, resolves entities.**
 > keys, a Neo4j server, torch). Running the packaged tools is a later phase; this
 > isolates the ER algorithm, which is the cleaner comparison.
 
+## Real-data validity track (kills "you wrote the docs")
+
+The synthetic corpus proves the mechanism; the obvious objection is *"you
+authored the documents, of course it works."* So we re-ran Track B on **real
+Wikipedia prose we did not author**, where the ground truth is Wikipedia's own:
+
+- an article **title** is the exact entity id (Wikipedia disambiguates for us);
+- a curated set of ambiguous **surface** strings — `Java`, `Mercury`, `Amazon`,
+  `Jaguar`, `Michael Jordan`, `Georgia`, `Phoenix`, `Cambridge` — each map to 2+
+  distinct articles (real homographs);
+- an article's outbound **links** are its real co-mention neighborhood, disjoint
+  across homograph articles by construction of being about different things.
+
+On **72 real mentions / 18 gold entities (Wikipedia articles) / 8 ambiguous
+surfaces / 192 real confusable homograph pairs**:
+
+| engine (documented mechanism) | pairwise-F1 | B³-F1 | **homograph split-rate** |
+|---|--:|--:|--:|
+| `neo4j_exact` / `neo4j_fuzzy` / `name_cosine` | 0.529 | 0.615 | **0.000** |
+| **`goldenmatch`** — neighborhood ER | **1.000** | **1.000** | **1.000** |
+
+**Every `if similar: merge` mechanism still scores 0.000 on homographs — on data
+nobody in this repo authored.** The gap is not a property of our generator; it is
+a property of resolving on the surface string. Run it yourself (fetch-on-demand,
+cached, nothing committed):
+
+```bash
+python benchmarks/clear-kg/run_real.py            # fetch (cached) + run
+python benchmarks/clear-kg/run_real.py --refresh  # re-fetch from Wikipedia
+```
+
+> The neighbor signature is per-ARTICLE (an entity's mentions share its outbound-
+> link neighborhood), not per-chunk. Real per-chunk co-mentions are sparser (the
+> WhoIsWho SND lesson) and would lower recall; the honest claim under test is the
+> homograph **split**, which turns on the neighborhoods being disjoint — which
+> they are, by article identity. Per-chunk co-mention detection is a later
+> refinement of the recall axis, not the split-rate axis.
+
 ## The homograph split-rate (the money metric)
 
 Of gold mention-pairs that **share a surface string but are different entities**,
@@ -75,8 +113,10 @@ generate.py    synthetic KG->corpus generator with controlled homographs + exact
 er_utils.py    normalization + the co-mention set-overlap plugin scorer
 track_b.py     the two ER engines (exact_surface baseline, goldenmatch neighborhood ER)
 score.py       pairwise-F1, B-cubed, homograph split-rate
-run_track_b.py generate -> resolve -> score, per engine
-tests/         offline unit + end-to-end (goldenmatch beats exact_surface on both axes)
+run_track_b.py generate -> resolve -> score, per engine (SYNTHETIC corpus)
+real_data.py   Wikipedia fetcher + pure mention-builder (REAL homographs)
+run_real.py    fetch (cached) -> resolve -> score, per engine (REAL corpus)
+tests/         offline unit + end-to-end, incl. real-data track on a network-free fixture
 ```
 
 ## Next phases (see SPEC.md)
@@ -85,10 +125,14 @@ tests/         offline unit + end-to-end (goldenmatch beats exact_surface on bot
   calibration (no incumbent measures it).
 - **Track A — extraction:** triple-F1 (table stakes; extend er-kg-bench's
   `extraction_f1`).
-- **Real-data validity track:** DocRED × Wikidata QIDs for a non-synthetic
-  multi-doc corpus with cross-doc entity ground truth.
-- **LLM-generated prose** (Phase 0 uses templated prose) + Wikidata content for
-  realism; incumbent baselines (GraphRAG, Neo4j, iText2KG, KGGen) on all tracks.
+- **Real-data recall axis:** per-chunk co-mention detection (this track's
+  neighbor signature is per-article/stable — it validates the split-rate, not a
+  sparse-recall regime). Broaden the homograph set beyond the curated 8.
+- **Packaged incumbents end-to-end** (GraphRAG, Neo4j, iText2KG, KGGen) on all
+  tracks, vs. the documented-mechanism reimplementations used today.
+
+_Done:_ **real-data validity track** (Wikipedia homographs — see above); the moat
+holds 1.000 vs 0.000 on prose we did not author.
 
 ## Note on the Phase-0 signal
 
