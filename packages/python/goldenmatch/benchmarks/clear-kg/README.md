@@ -11,15 +11,16 @@ cosine@0.7, LlamaIndex none-built-in, KGGen LLM-judge clustering) does
 (Text2KGBench, Re-DocRED — both single-document) even measures cross-document ER
 or span-grounded faithfulness. That's the open seam CLEAR-KG targets.
 
-## Status: Phase 0 (Track B + Track C spikes)
+## Status: Phase 0 (Tracks A + B + C spikes)
 
-Phase 0 proves the two moats exist and are measurable — **corpus-level ER**
-(Track B, below) and **span-grounded faithfulness** (Track C). Both follow the
-same method: reimplement the market's *documented* mechanisms, run them on
-identical inputs, and measure them collapsing on the axis they skip. Track B on
-a synthetic corpus with controlled **homographs**; a **real-data validity
-track** on Wikipedia; Track C on controlled **distractor** and **hallucinated**
-triples.
+Phase 0 covers all three axes. The two **moats** — **corpus-level ER** (Track B)
+and **span-grounded faithfulness** (Track C) — follow one method: reimplement the
+market's *documented* mechanisms, run them on identical inputs, and measure them
+collapsing on the axis they skip (Track B on synthetic **homographs** + a
+**real-data** Wikipedia track; Track C on **distractor** and **hallucinated**
+triples). **Track A** is table stakes — the convention-matching extraction-F1
+harness — and lands one finding of its own: even the extraction metric's
+canonicalization step is an ER problem.
 
 **We ran the market's three ER families** (faithful reimplementations of each
 tool's documented ER *mechanism*, on identical inputs — isolating the ER
@@ -125,6 +126,44 @@ python benchmarks/clear-kg/run_track_c.py
 > relation. Gold provenance spans are the backstop; an NLI-backed verifier and
 > LLM-generated multi-sentence prose are later phases (SPEC §3, §8).
 
+## Track A — extraction (table stakes), and the metric inherits the moat
+
+Track A is **table stakes**: canonicalized triple precision / recall / F1 vs the
+gold KG, in the Text2KGBench / Re-DocRED convention (report **exact** and
+**relaxed**/canonicalized matching). We are *not* trying to beat the LLM-
+extraction pack here (Re-DocRED SOTA ~74.6 F1 LLM / ~80.7 BERT) — Phase 0 ships
+the convention-matching **harness**, ready to score an LLM extractor's output on
+the real-data corpus (the competitive number is the next phase, and requires an
+LLM pass; deterministic reference extractors stand in for it offline).
+
+The one measured, non-obvious finding is ours: **canonicalized ("relaxed")
+triple matching is itself an entity-resolution problem.** The field resolves a
+predicted entity surface to a gold entity by string match — which mis-credits
+homographs. On a faithful extractor's output (24 gold triples, 4 homograph
+subjects), scored under three canonicalization modes:
+
+| matching mode | P | R | F1 | homograph-recall |
+|---|--:|--:|--:|--:|
+| `exact` — canonical string only (Text2KGBench exact) | 0.250 | 0.250 | 0.250 | 0.000 |
+| `relaxed` — alias match, string-based (the field's relaxed) | 0.750 | 0.750 | 0.750 | **0.500** |
+| `er_aware` — alias + co-mention disambiguation | **1.000** | **1.000** | **1.000** | **1.000** |
+
+`exact` under-counts (the alias-canonicalization penalty that is *why* the field
+uses a relaxed metric); `relaxed` recovers aliases but **mis-credits homographs**
+(resolves the ambiguous surface to the wrong gold entity — homograph-recall
+0.500); only ER-aware canonicalization scores the homograph triples correctly.
+A `lossy` extractor scores strictly lower under every mode, so F1 tracks
+extraction quality as it must. Run it:
+
+```bash
+python benchmarks/clear-kg/run_track_a.py
+```
+
+> Relations are treated as schema-closed (normalized to canonical in every mode),
+> so the **entity surface** is the sole axis under study. The reference extractors
+> are deterministic stand-ins on templated prose — the object of study is the
+> metric's ER-dependence, not a SOTA extraction number.
+
 ## The homograph split-rate (the money metric)
 
 Of gold mention-pairs that **share a surface string but are different entities**,
@@ -167,24 +206,33 @@ grounding.py   Track C engines (ungrounded, sentence_presence, ontology_conforma
 score_c.py     Track C metrics: support-PRF, distractor false-support, hallucination,
                grounding coverage, confidence AUROC + ECE
 run_track_c.py generate -> verify -> score, per engine (span-grounded faithfulness)
-tests/         offline unit + end-to-end for Tracks B, C, and the real-data track
+extract_data.py    Track A dataset: gold KG + alias/homograph-varied docs
+extractors.py  Track A extractors (pattern, lossy) -- doc -> surface triples
+extract_score.py   Track A metric: canonicalized triple-PRF in exact/relaxed/er_aware modes
+run_track_a.py extract -> score under each canonicalization mode (extraction F1)
+tests/         offline unit + end-to-end for Tracks A, B, C, and the real-data track
 ```
 
 ## Next phases (see SPEC.md)
 
-- **Track A — extraction:** triple-F1 (table stakes; extend er-kg-bench's
-  `extraction_f1`).
 - **Real-data recall axis:** per-chunk co-mention detection (this track's
   neighbor signature is per-article/stable — it validates the split-rate, not a
   sparse-recall regime). Broaden the homograph set beyond the curated 8.
 - **Packaged incumbents end-to-end** (GraphRAG, Neo4j, iText2KG, KGGen) on all
   tracks, vs. the documented-mechanism reimplementations used today.
 
-_Done:_ **Track B** (corpus-level ER moat) + **real-data validity track**
-(Wikipedia homographs, 1.000 vs 0.000 on prose we did not author) + **Track C**
-(span-grounded faithfulness — relation-aware grounding wins every axis vs the
-documented presence/type mechanisms). Track C next: NLI-backed grounding + a
-real-data faithfulness anchor (DocRED evidence sentences).
+- **Track A next:** an LLM extraction pass on the real-data corpus for the
+  competitive "in the pack" number (extend er-kg-bench's `extraction_f1`); a real
+  NLI backstop for the ER-aware matcher on paraphrased relations.
+- **Track D — the composite:** a single CLEAR score (harmonic mean of triple-F1,
+  ER-F1, grounded-&-correct rate) so a system cannot win on one axis and be
+  hollow on the others.
+
+_Done:_ **Track A** (extraction-F1 harness + the ER-in-the-metric finding) +
+**Track B** (corpus-level ER moat) + **real-data validity track** (Wikipedia
+homographs, 1.000 vs 0.000 on prose we did not author) + **Track C** (span-
+grounded faithfulness — relation-aware grounding wins every axis vs the
+documented presence/type mechanisms).
 
 ## Note on the Phase-0 signal
 
