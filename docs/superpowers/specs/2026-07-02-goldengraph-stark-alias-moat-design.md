@@ -27,12 +27,26 @@ it never enters the store. So "resolution" acts in **two different places**:
 - **Dense arm** — ER must unify the TEXT: build one `EntityIndex` embedding per
   resolved cluster over the **concatenated member docs**. Merging in the store
   alone does nothing for dense retrieval.
-- **Graph arm** — ER unifies the EDGES: cluster-shared `record_keys` → the store's
-  overlap-merge unions the fragmented neighborhoods so the 1-hop walk can traverse
-  the whole entity.
+- **Graph arm** — ER unifies the EDGES **caller-side, in Python**: collapse the
+  alias graph to ONE node per resolved cluster and remap every edge endpoint to its
+  cluster's canonical id, then `bulk_load` the **pre-merged** graph. The store never
+  sees the aliases.
 
-So "ER-native ingest" is a **clustering step that feeds both** the index (merged
-text) and the store (merged edges), not just a record_key relabel.
+  > **Why not let the store merge via shared record_keys:** `store.rs::append`
+  > reconciles a batch only against ALREADY-STORED entities (`key_to_stored` is
+  > built from `self.entities`), never against siblings in the same batch. `bulk_load`
+  > issues all nodes in one batch, so N aliases sharing a key would each MINT a
+  > separate id — no union — and would also leave multiple current entities sharing
+  > one key (violating the store's one-key-one-entity invariant). And `bulk_load`
+  > hardcodes `record_keys=[stark_id]` (no shared-key lever). So the store-merge path
+  > does not work here; the Python collapse is the correct, simpler mechanism and
+  > needs no `bulk.py` change (each collapsed cluster-node keeps a unique key —
+  > exactly SP2's passthrough usage).
+
+So "ER-native ingest" is a **clustering step that feeds both materializations**: the
+index (one embedding per cluster over merged text) and the store (one node per
+cluster over merged edges). The clustering is the single ER lever; the store's
+overlap-merge is NOT used.
 
 ## Conditions (all on PRIME, over the full-text `get_doc_info` corpus)
 
@@ -102,26 +116,39 @@ ER mistake and is scored as such — not hidden).
 Given `clusters` (from a method) over the injected aliases + the pass-through
 non-target nodes as singletons:
 
-- **Index (dense):** one entry per cluster, `entity_id = int(hash-free cluster
-  ordinal)`, `canonical_name = " ".join(member docs)` (the merged text). Keep a
-  `cluster_ordinal -> canonical original id` map for scoring. Fragmented → each
-  alias is its own cluster → fragmented text embeddings.
-- **Store (graph):** `bulk_load` with `record_keys = [cluster_key]` shared within
-  a cluster (the store then unions the members' edges); non-target singletons keep
-  their unique key (passthrough, as SP2). The graph arm walks the merged
-  neighborhood.
+Both materializations are driven by the SAME `clusters`. Assign each cluster a
+`cluster_ordinal` (int) and pick its `canonical_id` = the `canon`-mapped original
+(all aliases in a true cluster share one original; a resolver error mixing two
+originals picks one deterministically and is scored as the real ER mistake it is).
 
-Reuses SP2's `bulk_load` unchanged (record_keys is the only lever) and the
-full-text `EntityIndex` build path.
+- **Index (dense):** one entry per cluster — `entity_id = cluster_ordinal`,
+  `canonical_name = " ".join(member docs)` (the merged text). Keep
+  `cluster_ordinal -> canonical_id` for scoring. Fragmented → each alias its own
+  cluster → fragmented text embeddings.
+- **Store (graph):** collapse to ONE node per cluster in Python — node id =
+  `cluster_ordinal`, and remap EVERY edge's endpoints from alias id → the cluster
+  each alias belongs to (`alias_id -> cluster_ordinal`), dropping intra-cluster
+  self-loops. Then `bulk_load(collapsed_nodes, collapsed_edges)` with the normal
+  unique per-node key (passthrough). The store thus holds the PRE-MERGED graph; the
+  1-hop walk traverses the unioned neighborhood with no store-side merge. Fragmented
+  → singleton clusters → the full un-collapsed alias graph.
+
+Reuses SP2's `bulk_load` **unchanged** (each collapsed node keeps a unique key) and
+the full-text `EntityIndex` build path. The only new code is the Python clustering
++ the two materializations built from it.
 
 ### 4. Canonical-equivalence scoring
 
-Both arms return retrieved ids (cluster ordinals for the index / stark ids for the
-graph). Map each retrieved id → its **canonical original id** via the cluster maps
-+ `canon`. A query's gold set (original stark ids) is compared against the
-canon-mapped ranked list, deduped first-seen. Reuse `stark_metrics.metrics`
-unchanged. So a retrieval "hits" iff it surfaces ANY node whose canonical original
-is a gold entity — well-defined even though the gold entity is split into k aliases.
+Both arms now operate in the SAME id space — `cluster_ordinal` (index `entity_id`
+= ordinal; store node id = ordinal; the graph slice's `source_refs` carry the
+ordinal for the stark↔slice-eid maps, exactly as SP2 carried stark_id). Map each
+retrieved `cluster_ordinal` → its **canonical original id** via
+`cluster_ordinal -> canonical_id`. A query's gold set (original stark ids) is
+compared against the canon-mapped ranked list, deduped first-seen. Reuse
+`stark_metrics.metrics` unchanged. So a retrieval "hits" iff it surfaces ANY node
+whose canonical original is a gold entity — well-defined even though the gold
+entity is split into k aliases. (For the CLEAN reference reuse, ordinal = stark id
+and the map is identity, so the numbers reconcile with PR #1402.)
 
 ## Data flow
 
@@ -131,11 +158,14 @@ gold_ids = union of sampled queries' gold sets
 nodes2,texts2,edges2,canon = inject_aliases(nodes,node_texts,edges, gold_ids, k=3, seed)
 for method in (none, exact, er):
     clusters = resolve_aliases(injected_alias_nodes, method)          # non-targets = singletons
-    index    = EntityIndex.build(one entry/cluster, canonical_name=joined docs)
-    store    = bulk_load(cluster-keyed nodes2, edges2)                # store unions edges per cluster
-    slice    = store.as_of(BIG,BIG); stark<->eid maps
+    ordinal_of = {alias_id -> cluster_ordinal};  ord2canon = {ordinal -> canonical_id}
+    index    = EntityIndex.build(one entry/cluster, entity_id=ordinal, canonical_name=joined docs)
+    coll_nodes = [one node per cluster, id=ordinal]
+    coll_edges = [(ordinal_of[s], pred, ordinal_of[o]) for (s,pred,o) in edges2 if s!=o cluster]
+    store    = bulk_load(coll_nodes, coll_edges)                      # PRE-MERGED graph (Python collapse)
+    slice    = store.as_of(BIG,BIG); ordinal<->eid maps
     for arm in (dense, graph):
-        ranked = evaluate(...)                    # ids -> canonical originals -> metrics vs gold
+        ranked = evaluate(...) -> [ord2canon[o] for o in retrieved]   # -> metrics vs gold
     -> row(method, arm)
 compare vs clean (PR #1402): does ER recover recall@20 that fragmented/adhoc lose?
 ```
@@ -169,6 +199,13 @@ are box-TDD-able; only the STaRK download + embed + Modal run is integration.
 - `none` → singletons; `exact` → merges only identical names; `er` → merges variant
   surface forms of one entity that `exact` leaves split (the moat in miniature),
   on a small fixture (goldenmatch dedupe available in CI; box run uses main .venv).
+
+`tests/test_alias_materialize.py` (real `PyStore`): the Python collapse builds one
+store node per cluster with edges remapped to `cluster_ordinal`; after `bulk_load`,
+`store.as_of(BIG,BIG).query([cluster_ordinal],1)` shows the UNIONED neighborhood
+(edges from all the cluster's aliases), and singleton/fragmented clusters keep the
+un-collapsed graph. Intra-cluster self-loops are dropped. This is the graph-arm
+edge-union check that the store's own merge can NOT provide in one batch.
 
 `tests/test_alias_scoring.py` (pure): canon-mapped ranked list → a hit when any
 alias of the gold entity is retrieved; equivalence-class recall.
