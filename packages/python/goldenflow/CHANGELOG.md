@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.4.0 (2026-07-03)
+
+Wave 0 of the identifier-kernel + WASM cross-surface program: owned Rust kernels for GoldenFlow's transform engine, a reference-mode native loader, 10 new checksummed-identifier transforms, a byte-parity harness, and an opt-in WASM/TS acceleration surface. No breaking changes; existing transform outputs are unchanged.
+
+### Added
+
+- `goldenflow-core`: a new pyo3-free Rust crate owning GoldenFlow's kernel logic (`native-flow` is now a thin marshaling shim over it — Arrow in/out + GIL release, computation lives in the core).
+- Reference-mode native loader: `GOLDENFLOW_NATIVE` gating now follows the same reference-implementation posture as goldenmatch-native — native is authoritative wherever a kernel symbol exists and is proven parity-safe, pure Python is the documented fallback.
+- 10 new checksummed-identifier transforms covering payment card, IBAN, ISBN, EAN, and EU VAT numbers: validate, format, normalize, and mask variants per family.
+- Byte-parity harness validating the new identifier kernels against their pure-Python reference implementations across a randomized corpus.
+- Cross-surface WASM/TS acceleration surface: `enableWasm()` in the TypeScript package opts into the shared `goldenmatch-wasm-runtime` plumbing for the new identifier kernels. Pure-TS stays the default and fallback; the `.wasm` artifact is built in CI, never committed.
+
 ## 1.3.0 (2026-06-24)
 
 New pure-scalar canonicalizers for clean-room match keys, an opt-in Arrow-native date/phone acceleration runtime, and expanded carceral domain coverage. No breaking changes; existing transform outputs are unchanged.
