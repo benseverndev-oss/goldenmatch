@@ -130,7 +130,12 @@ def _stark_impl(kb: str, sample: int, embed_model: str, chunk_edges: int) -> str
     _build_native_and_install()
     base_url = _start_ollama(embed_model)
     os.environ["POLARS_SKIP_CPU_CHECK"] = "1"
-    sys.path.insert(0, _BENCH)
+    # `pip install -e` ran in a SUBPROCESS; its .pth is only read at interpreter startup, so this
+    # already-running process can't import the editable packages. Put the (flat-layout) src roots on
+    # sys.path directly -- the native wheel installs into site-packages so it imports fine.
+    for _p in ("/repo/packages/python/goldengraph", "/repo/packages/python/goldenmatch", _BENCH):
+        if _p not in sys.path:
+            sys.path.insert(0, _p)
 
     from erkgbench.stark_adapter import evaluate, load_stark_kb
     from goldengraph.entity_index import EntityIndex
