@@ -57,7 +57,30 @@ offline. gpt-free, deterministic. `GOLDENMATCH_NATIVE=0`.
 | `text_only` (unresolved straw) | 0.009 | 0.952 | 0.005 | 777s | topical similarity ALONE |
 | `all_one` | 0.375 | 0.256 | 1.000 | 10s | merge-everything floor |
 | `coauthor_only` | 0.440 | 0.824 | 0.332 | 18s | co-author Jaccard alone |
+| `coauthor_adaptive` | 0.447 | 0.812 | 0.344 | 28s | + per-name adaptive threshold |
 | **`relational`** (co-author OR org+topic) | **0.452** | **0.844** | 0.352 | 799s | **headline** |
+| `adaptive` (relational + per-name threshold) | 0.453 | 0.829 | 0.362 | 794s | recall lever |
+
+### Recall lever: per-name adaptive thresholding
+
+A single SHARED specific co-author is the atomic same-person signal, but its
+Jaccard value is size-dependent: one shared collaborator over a combined `U`
+distinct co-authors scores `1/U`. A GLOBAL threshold (0.15) therefore silently
+misses single-shared pairs in big-collaboration blocks (U > ~7) -- exactly where
+a prolific author's cluster shatters. `adaptive.py` sets a per-name threshold near
+`alpha/U_typical` from each block's own co-author-size distribution (unsupervised;
+`--engine adaptive`).
+
+**Measured: a real recall gain, but F1-flat.** On the full engine it lifts recall
+**0.352 -> 0.362** and on `coauthor_only` **0.332 -> 0.344**, at a ~1.5pt precision
+cost -- so net F1 barely moves (0.452 -> 0.453). And dropping the clamp floor
+0.06 -> 0.02 changes NOTHING, which is the real diagnosis: **recall is no longer
+threshold-limited -- it is capped by co-author-GRAPH CONNECTIVITY.** ~66% of a
+real author's paper-pairs share *no* co-author at all, and no threshold can link
+papers with zero overlap. Breaking that ceiling needs a **second bridging signal**
+(`record_embedding` over title/abstract fused with the co-author signal, so
+same-author papers with disjoint collaborators still link) -- the next lever, and
+a bigger change than thresholding.
 
 ### How it stacks up against the published SND field
 
