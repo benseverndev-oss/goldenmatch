@@ -22,6 +22,16 @@ from goldenflow.core._native_loader import native_enabled, native_module
 _DEFAULT_REGION = "US"
 
 
+def _as_str_series(s: pl.Series) -> pl.Series:
+    """Ensure a Utf8 series for the Arrow bridge. An all-null column (or a
+    single ``[None]``) is Null-dtype in Polars, and ``.to_arrow()`` on it yields
+    a Null Arrow array the kernels reject (``expected an Arrow Utf8 or LargeUtf8
+    array``). Cast to Utf8 (null-preserving) so the native path handles nulls the
+    same way the pure-Python fallback does. Utf8 input is returned unchanged to
+    keep the round-trip zero-copy."""
+    return s if s.dtype == pl.Utf8 else s.cast(pl.Utf8)
+
+
 def _kernel_runner(attr: str) -> Callable[[pl.Series], pl.Series] | None:
     """Build a ``native_fn`` for kernel function ``attr`` if native phone is
     enabled and the dependencies are importable; else ``None``."""
@@ -98,3 +108,155 @@ def phone_country_code_native() -> Callable[[pl.Series], pl.Series] | None:
     # (1) for every NANP row; the leading-1 ambiguity only affects the national
     # number, not the code. International rows come back null -> Python.
     return _kernel_runner("phone_country_code_arrow")
+
+
+def _cc_kernel_runner(attr: str) -> Callable[[pl.Series], pl.Series] | None:
+    """Build a whole-series runner for card-identifier kernel function ``attr``
+    if native ``cc`` is enabled and the dependencies are importable; else
+    ``None``. Unlike ``_kernel_runner`` (phone), the card kernel takes no
+    region/gating args -- Luhn is region-free."""
+    if not native_enabled("cc"):
+        return None
+    nm = native_module()
+    if nm is None or not hasattr(nm, attr):
+        return None
+    try:
+        import pyarrow  # noqa: F401  (zero-copy bridge)
+    except ImportError:
+        return None
+    func = getattr(nm, attr)
+
+    def run(s: pl.Series) -> pl.Series:
+        return pl.from_arrow(func(_as_str_series(s).to_arrow()))
+
+    return run
+
+
+def cc_validate_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _cc_kernel_runner("cc_validate_arrow")
+
+
+def cc_format_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _cc_kernel_runner("cc_format_arrow")
+
+
+def cc_mask_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _cc_kernel_runner("cc_mask_arrow")
+
+
+def _iban_kernel_runner(attr: str) -> Callable[[pl.Series], pl.Series] | None:
+    """Build a whole-series runner for IBAN kernel function ``attr`` if
+    native ``iban`` is enabled and the dependencies are importable; else
+    ``None``. Like ``_cc_kernel_runner`` -- no region/gating args, the mod-97
+    check is region-free."""
+    if not native_enabled("iban"):
+        return None
+    nm = native_module()
+    if nm is None or not hasattr(nm, attr):
+        return None
+    try:
+        import pyarrow  # noqa: F401  (zero-copy bridge)
+    except ImportError:
+        return None
+    func = getattr(nm, attr)
+
+    def run(s: pl.Series) -> pl.Series:
+        return pl.from_arrow(func(_as_str_series(s).to_arrow()))
+
+    return run
+
+
+def iban_validate_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _iban_kernel_runner("iban_validate_arrow")
+
+
+def iban_format_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _iban_kernel_runner("iban_format_arrow")
+
+
+def _isbn_kernel_runner(attr: str) -> Callable[[pl.Series], pl.Series] | None:
+    """Build a whole-series runner for ISBN kernel function ``attr`` if
+    native ``isbn`` is enabled and the dependencies are importable; else
+    ``None``. Like ``_cc_kernel_runner``/``_iban_kernel_runner`` -- no
+    region/gating args, the checksum is region-free."""
+    if not native_enabled("isbn"):
+        return None
+    nm = native_module()
+    if nm is None or not hasattr(nm, attr):
+        return None
+    try:
+        import pyarrow  # noqa: F401  (zero-copy bridge)
+    except ImportError:
+        return None
+    func = getattr(nm, attr)
+
+    def run(s: pl.Series) -> pl.Series:
+        return pl.from_arrow(func(_as_str_series(s).to_arrow()))
+
+    return run
+
+
+def isbn_validate_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _isbn_kernel_runner("isbn_validate_arrow")
+
+
+def isbn_normalize_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _isbn_kernel_runner("isbn_normalize_arrow")
+
+
+def _ean_kernel_runner(attr: str) -> Callable[[pl.Series], pl.Series] | None:
+    """Build a whole-series runner for EAN/UPC kernel function ``attr`` if
+    native ``ean`` is enabled and the dependencies are importable; else
+    ``None``. Like ``_cc_kernel_runner``/``_iban_kernel_runner``/
+    ``_isbn_kernel_runner`` -- no region/gating args, the GTIN checksum is
+    region-free."""
+    if not native_enabled("ean"):
+        return None
+    nm = native_module()
+    if nm is None or not hasattr(nm, attr):
+        return None
+    try:
+        import pyarrow  # noqa: F401  (zero-copy bridge)
+    except ImportError:
+        return None
+    func = getattr(nm, attr)
+
+    def run(s: pl.Series) -> pl.Series:
+        return pl.from_arrow(func(_as_str_series(s).to_arrow()))
+
+    return run
+
+
+def ean_validate_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _ean_kernel_runner("ean_validate_arrow")
+
+
+def _vat_kernel_runner(attr: str) -> Callable[[pl.Series], pl.Series] | None:
+    """Build a whole-series runner for EU VAT kernel function ``attr`` if
+    native ``vat`` is enabled and the dependencies are importable; else
+    ``None``. Like ``_ean_kernel_runner`` -- no region/gating args, the
+    structural + DE/IT checksum checks are region-free (the region is
+    encoded in the input's own country prefix)."""
+    if not native_enabled("vat"):
+        return None
+    nm = native_module()
+    if nm is None or not hasattr(nm, attr):
+        return None
+    try:
+        import pyarrow  # noqa: F401  (zero-copy bridge)
+    except ImportError:
+        return None
+    func = getattr(nm, attr)
+
+    def run(s: pl.Series) -> pl.Series:
+        return pl.from_arrow(func(_as_str_series(s).to_arrow()))
+
+    return run
+
+
+def vat_validate_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _vat_kernel_runner("vat_validate_arrow")
+
+
+def vat_format_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _vat_kernel_runner("vat_format_arrow")

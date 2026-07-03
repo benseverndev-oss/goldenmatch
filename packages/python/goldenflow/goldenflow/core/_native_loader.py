@@ -68,6 +68,18 @@ _COMPONENT_SYMBOLS: dict[str, tuple[str, ...]] = {
     # NOTE: no "phone_validate" entry. Its only native symbol, phone_valid_arrow,
     # implements `is_valid`, NOT the product-chosen `is_possible` spec, so it is
     # deliberately unwired AND listed in _FALLBACK_ONLY below.
+    # cc: payment-card (Luhn) identifiers -- floor symbol only, region-free.
+    "cc": ("cc_validate_arrow",),
+    # iban: IBAN (ISO 7064 mod-97) identifiers -- floor symbol only, region-free.
+    "iban": ("iban_validate_arrow",),
+    # isbn: ISBN-10/13 checksum identifiers -- floor symbol only, region-free.
+    "isbn": ("isbn_validate_arrow",),
+    # ean: EAN/UPC (GTIN mod-10) identifiers -- floor symbol only, region-free.
+    "ean": ("ean_validate_arrow",),
+    # vat: EU VAT identifiers (structural, all prefixes; checksum for DE/IT
+    # only -- see the CHECKSUM COVERAGE note in transforms/identifiers.py) --
+    # floor symbol only, region-free.
+    "vat": ("vat_validate_arrow",),
 }
 
 # Components whose only native path is intentionally non-authoritative (the
