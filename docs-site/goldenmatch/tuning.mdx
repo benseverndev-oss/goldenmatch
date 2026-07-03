@@ -134,6 +134,25 @@ goldenmatch dedupe big.csv --chunked
   The old single-threshold `GOLDENMATCH_AUTOCONFIG_BACKEND` / `GOLDENMATCH_AUTOCONFIG_BACKEND_THRESHOLD` env overrides were removed in v2.0. Backend selection is now the v3 planner's job — it decides from `(ComplexityProfile, RuntimeProfile)`. To force a backend, set it explicitly on `GoldenMatchConfig(backend=...)` or the CLI `--backend`.
 </Note>
 
+### ANN blocker backend (embedding/semantic blocking)
+
+The embedding ANN blocker (`ANNBlocker`) resolves one of three inner-product backends per index build: **native HNSW → FAISS → numpy**. Native HNSW is the optional [`goldenmatch-hnsw`](https://pypi.org/project/goldenmatch-hnsw/) wheel — a pure-Rust `IndexHNSWFlat` with zero C dependencies (no FAISS); FAISS (`goldenmatch[embeddings]`) is exact `IndexFlatIP`; numpy is the always-available all-pairs fallback. Scores are the raw inner product on the HNSW/FAISS paths and cosine on numpy — identical when vectors are L2-normalized (the default embedder output).
+
+In `auto` mode HNSW is chosen only where it wins: a large corpus **and** a small neighbor count per probe. Below that gate, brute force is both faster and exact, so small indexes (and the retrieve-all pattern behind the persistent `VectorIndex`) stay on the exact path unchanged.
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `GOLDENMATCH_ANN_BACKEND` | `auto` | Force a backend: `auto` (size-gated HNSW→FAISS→numpy), `hnsw` (native, ignores the size gate), `faiss`, or `numpy`. Degrades gracefully when the named library is absent. |
+| `GOLDENMATCH_ANN_HNSW_MIN` | `4096` | In `auto`, the minimum corpus size for HNSW. Below it, the exact backend is used (HNSW's win is asymptotic). |
+| `GOLDENMATCH_ANN_HNSW_MAX_K` | `512` | In `auto`, the maximum `top_k` for HNSW. Above it (retrieve-nearly-all), the exact backend is used instead. |
+| `GOLDENMATCH_ANN_HNSW_M` | `16` | HNSW graph degree (`M`): max neighbors per node on upper layers (`2M` on layer 0). Higher = better recall, more memory. |
+| `GOLDENMATCH_ANN_HNSW_EF_CONSTRUCTION` | `200` | Candidate-list size during index build. Higher = better graph quality, slower build. |
+| `GOLDENMATCH_ANN_HNSW_EF_SEARCH` | `64` | Candidate-list size during search (raised to at least `top_k`, capped at the corpus size). Higher = better recall, slower query. |
+
+<Note>
+  `goldenmatch-hnsw` is an **optional** wheel, installed separately (`pip install goldenmatch-hnsw`) exactly like FAISS. Without it, the ANN blocker uses FAISS if present, else the numpy fallback — no behavior change.
+</Note>
+
 ---
 
 ## Distributed pipeline

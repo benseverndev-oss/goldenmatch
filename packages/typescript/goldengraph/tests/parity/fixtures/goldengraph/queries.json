@@ -49,6 +49,7 @@
               0,
               1
             ],
+            "source_refs": [],
             "surface_names": [
               "Apple",
               "Apple Inc"
@@ -61,6 +62,7 @@
             "members": [
               2
             ],
+            "source_refs": [],
             "surface_names": [
               "Tim Cook"
             ],
@@ -92,6 +94,7 @@
                 0,
                 1
               ],
+              "source_refs": [],
               "surface_names": [
                 "Apple",
                 "Apple Inc"
@@ -104,6 +107,7 @@
               "members": [
                 2
               ],
+              "source_refs": [],
               "surface_names": [
                 "Tim Cook"
               ],
@@ -135,6 +139,7 @@
               0,
               1
             ],
+            "source_refs": [],
             "surface_names": [
               "Apple",
               "Apple Inc"
@@ -147,6 +152,7 @@
             "members": [
               2
             ],
+            "source_refs": [],
             "surface_names": [
               "Tim Cook"
             ],
@@ -178,6 +184,7 @@
                 0,
                 1
               ],
+              "source_refs": [],
               "surface_names": [
                 "Apple",
                 "Apple Inc"
@@ -190,6 +197,7 @@
               "members": [
                 2
               ],
+              "source_refs": [],
               "surface_names": [
                 "Tim Cook"
               ],
@@ -226,6 +234,7 @@
                 0,
                 1
               ],
+              "source_refs": [],
               "surface_names": [
                 "Apple",
                 "Apple Inc"
@@ -238,6 +247,7 @@
               "members": [
                 2
               ],
+              "source_refs": [],
               "surface_names": [
                 "Tim Cook"
               ],
@@ -269,6 +279,7 @@
               "members": [
                 0
               ],
+              "source_refs": [],
               "surface_names": [
                 "Acme"
               ],
@@ -280,6 +291,7 @@
               "members": [
                 1
               ],
+              "source_refs": [],
               "surface_names": [
                 "Globex"
               ],
@@ -370,6 +382,7 @@
             "record_keys": [
               "k_apple"
             ],
+            "source_refs": [],
             "superseded_at": null,
             "superseded_by": null,
             "surface_names": [
@@ -384,6 +397,7 @@
             "record_keys": [
               "k_tim"
             ],
+            "source_refs": [],
             "superseded_at": null,
             "superseded_by": null,
             "surface_names": [
@@ -439,6 +453,7 @@
               "record_keys": [
                 "k_apple"
               ],
+              "source_refs": [],
               "superseded_at": null,
               "superseded_by": null,
               "surface_names": [
@@ -453,6 +468,7 @@
               "record_keys": [
                 "k_tim"
               ],
+              "source_refs": [],
               "superseded_at": null,
               "superseded_by": null,
               "surface_names": [
@@ -487,6 +503,7 @@
             "record_keys": [
               "k_apple"
             ],
+            "source_refs": [],
             "superseded_at": null,
             "superseded_by": null,
             "surface_names": [
@@ -501,6 +518,7 @@
             "record_keys": [
               "k_tim"
             ],
+            "source_refs": [],
             "superseded_at": null,
             "superseded_by": null,
             "surface_names": [
@@ -539,6 +557,7 @@
               "record_keys": [
                 "k_apple"
               ],
+              "source_refs": [],
               "superseded_at": null,
               "superseded_by": null,
               "surface_names": [
@@ -553,6 +572,7 @@
               "record_keys": [
                 "k_tim"
               ],
+              "source_refs": [],
               "superseded_at": null,
               "superseded_by": null,
               "surface_names": [
@@ -583,6 +603,7 @@
             "canonical_name": "Apple",
             "entity_id": 0,
             "members": [],
+            "source_refs": [],
             "surface_names": [
               "Apple"
             ],
@@ -592,6 +613,7 @@
             "canonical_name": "Tim Cook",
             "entity_id": 1,
             "members": [],
+            "source_refs": [],
             "surface_names": [
               "Tim Cook"
             ],
@@ -627,6 +649,7 @@
               "record_keys": [
                 "k_apple"
               ],
+              "source_refs": [],
               "superseded_at": null,
               "superseded_by": null,
               "surface_names": [
@@ -641,6 +664,7 @@
               "record_keys": [
                 "k_tim"
               ],
+              "source_refs": [],
               "superseded_at": null,
               "superseded_by": null,
               "surface_names": [

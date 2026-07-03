@@ -1,0 +1,21 @@
+# Standalone workspace (isolated from the pyo3 crates, like `goldenembed`).
+# Pure-Rust HNSW (IndexHNSWFlat) — zero C deps, no rayon, no openssl — so the
+# maturin publish containers that bite `ort` (see extensions/CLAUDE.md) never
+# apply here, and the #688 rayon-futex-park footgun is structurally absent.
+[workspace]
+
+[package]
+name = "goldenhnsw"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Pure-Rust HNSW (IndexHNSWFlat) approximate nearest-neighbor index for GoldenMatch"
+
+[lib]
+name = "goldenhnsw"
+path = "src/lib.rs"
+
+[dependencies]
+
+[profile.release]
+opt-level = 3
