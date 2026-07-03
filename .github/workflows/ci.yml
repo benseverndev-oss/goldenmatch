@@ -335,6 +335,9 @@ jobs:
               # goldenmatch_embed_local) and supplies the embed-smoke fixture,
               # so a goldenembed change must rebuild + re-smoke this lane.
               - 'packages/rust/extensions/goldenembed/**'
+              # goldenhnsw is a path dep of the postgres crate (goldenmatch_hnsw_pairs),
+              # so a kernel change must rebuild + re-smoke this lane.
+              - 'packages/rust/extensions/goldenhnsw/**'
               - 'packages/rust/extensions/Cargo.toml'
             rust_cores:
               # ANY Rust extension change re-validates EVERY committed TS wasm
@@ -2552,6 +2555,8 @@ jobs:
           # (installs default_version, now 0.9.0) and `ALTER EXTENSION ... UPDATE`
           # find them. The schema files are the canonical declaration of public
           # function signatures.
+          cp sql/goldenmatch_pg--0.10.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
+          cp sql/goldenmatch_pg--0.9.0--0.10.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
           cp sql/goldenmatch_pg--0.9.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
           cp sql/goldenmatch_pg--0.8.0--0.9.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
           cp sql/goldenmatch_pg--0.8.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
@@ -2629,6 +2634,16 @@ jobs:
                 ARRAY[0.3, 0.7, 0.5]::DOUBLE PRECISION[]);
               IF pd.n <> 1 OR pd.a <> 1 OR pd.b <> 2 OR abs(pd.s - 0.7) > 1e-9 THEN
                 RAISE EXCEPTION 'pair_dedup: expected exactly (1,2,0.7), got n=% (%,%,%)', pd.n, pd.a, pd.b, pd.s;
+              END IF;
+
+              -- hnsw_pairs: 3 dim-2 unit vectors, rows 0 and 1 identical (IP=1),
+              -- row 2 orthogonal. At threshold 0.5 exactly one pair (0,1) with
+              -- score ~1 must surface (0-based positions).
+              SELECT count(*) AS n, min(a) AS a, min(b) AS b, max(s) AS s INTO pd
+              FROM goldenmatch.goldenmatch_hnsw_pairs(
+                ARRAY[1,0, 1,0, 0,1]::real[], 2, 5, 0.5::DOUBLE PRECISION);
+              IF pd.n <> 1 OR pd.a <> 0 OR pd.b <> 1 OR abs(pd.s - 1.0) > 1e-5 THEN
+                RAISE EXCEPTION 'hnsw_pairs: expected exactly (0,1,1.0), got n=% (%,%,%)', pd.n, pd.a, pd.b, pd.s;
               END IF;
 
               -- record_fingerprint: stable across key order (fields sorted by name).
