@@ -133,7 +133,7 @@ def _start_ollama(embed_model: str) -> str:
 
 
 def _stark_impl(kb: str, sample: int, embed_model: str, chunk_edges: int,
-                text_mode: str = "names") -> str:
+                text_mode: str = "names", inject: bool = False, k: int = 3, seed: int = 0) -> str:
     import os
     import sys
     import time
@@ -153,15 +153,21 @@ def _stark_impl(kb: str, sample: int, embed_model: str, chunk_edges: int,
     from goldengraph_native import _native as ggn
 
     _BIG = 1 << 62
-    lines = [f"# STaRK feasibility -- {kb} (sample={sample}, text_mode={text_mode})", ""]
+    _title = f"# STaRK -- {kb} (sample={sample}, " + (f"INJECT k={k} seed={seed}" if inject
+                                                       else f"text_mode={text_mode}") + ")"
+    lines = [_title, ""]
 
     # 1. download + map. with_text builds the fair-baseline corpus (each node's intrinsic doc,
-    #    add_rel=False -- NO relations, so the graph walk stays the only structural signal).
+    #    add_rel=False -- NO relations). Injection needs the docs too (it fragments them).
     t = time.perf_counter()
     nodes, edges, queries, node_texts = load_stark_kb(
-        kb, split="test", limit_queries=sample, with_text=(text_mode == "full"))
+        kb, split="test", limit_queries=sample, with_text=(text_mode == "full" or inject))
     lines.append(f"load_stark_kb: {time.perf_counter() - t:.1f}s  "
                  f"nodes={len(nodes)} edges={len(edges)} queries={len(queries)}")
+
+    if inject:
+        return _run_moat(lines, nodes, edges, queries, node_texts, k, seed, kb,
+                         embed_model, base_url, ggn, EntityIndex, _BIG)
 
     # 2. bulk_load -> store  [ingest wall + RSS]. Single batch; chunked on OOM.
     from goldengraph.bulk import bulk_load
@@ -233,19 +239,92 @@ def _stark_impl(kb: str, sample: int, embed_model: str, chunk_edges: int,
     return text
 
 
+def _run_moat(lines, nodes, edges, queries, node_texts, k, seed, kb,
+              embed_model, base_url, ggn, EntityIndex, _BIG):
+    """The ER-moat experiment: fragment the sampled queries' gold entities into k
+    alias nodes (split doc + edges), then compare 3 resolution conditions x 2 arms.
+    Moat = ER-dense recovers recall@20 toward clean while ad-hoc stays depressed.
+    See docs/superpowers/specs/2026-07-02-goldengraph-stark-alias-moat-design.md."""
+    import os
+    import time
+
+    from erkgbench.stark_adapter import evaluate
+    from erkgbench.stark_resolve import resolve_aliases
+    from goldengraph.bulk import bulk_load
+    from goldengraph.stark_inject import inject_aliases
+    from goldengraph.stark_moat import build_clusters, collapse_for_index, collapse_for_store
+
+    # fragment ONLY the sampled queries' gold entities (controlled, guaranteed signal)
+    target_ids = {str(g) for _q, gold in queries for g in gold}
+    t = time.perf_counter()
+    nodes2, texts2, edges2, canon = inject_aliases(nodes, node_texts, edges, target_ids, k=k, seed=seed)
+    alias_nodes = [(nid, name) for nid, name, _typ in nodes2 if canon.get(nid) != nid]
+    all_ids = [n[0] for n in nodes2]
+    lines.append(f"inject: {time.perf_counter() - t:.1f}s  targets={len(target_ids)} k={k}  "
+                 f"nodes {len(nodes)}->{len(nodes2)} (aliases={len(alias_nodes)})  "
+                 f"edges {len(edges)}->{len(edges2)}")
+    lines.append("clean reference (PR #1402, no injection): dense recall@20=0.261 mrr=0.151 ; "
+                 "graph recall@20=0.213 mrr=0.150")
+
+    embedder = _OllamaEmbedder(embed_model, base_url)
+    rows = []
+    for method in ("none", "exact", "er"):
+        tc = time.perf_counter()
+        clusters = resolve_aliases(alias_nodes, method)
+        ordinal_of, ord2canon = build_clusters(canon, clusters, all_ids)
+        n_clusters = len(set(ordinal_of.values()))
+        index = EntityIndex.build(collapse_for_index(nodes2, texts2, ordinal_of), embedder, top_k=50)
+        coll_nodes, coll_edges = collapse_for_store(nodes2, edges2, ordinal_of)
+        store = ggn.PyStore()
+        bulk_load(store, coll_nodes, coll_edges)
+        slice_graph = store.as_of(_BIG, _BIG)
+        stark_to_eid = {int(e["source_refs"][0]): e["entity_id"]
+                        for e in slice_graph.entities() if e["source_refs"]}
+        eid_to_stark = {v: kk for kk, v in stark_to_eid.items()}
+        lines.append(f"\n[{method}] clusters={n_clusters} (of {len(alias_nodes)} aliases + "
+                     f"{len(all_ids) - len(alias_nodes)} passthrough)  build={time.perf_counter() - tc:.1f}s "
+                     f"peak_rss={_peak_rss_gb():.2f}GB")
+        for arm in ("dense", "graph"):
+            r = evaluate(index, slice_graph, stark_to_eid, eid_to_stark, queries, embedder,
+                         arm=arm, id_map=ord2canon)
+            rows.append((method, arm, r))
+            lines.append(f"  [{method}/{arm}] hit@1={r['hit@1']:.3f} hit@5={r['hit@5']:.3f} "
+                         f"recall@20={r['recall@20']:.3f} mrr={r['mrr']:.3f} "
+                         f"lat_mean={r['latency_ms_mean']:.1f}ms")
+
+    dr = {m: r["recall@20"] for (m, a, r) in rows if a == "dense"}
+    lines.append(f"\nDENSE recall@20:  fragmented={dr['none']:.3f}  adhoc={dr['exact']:.3f}  "
+                 f"er={dr['er']:.3f}  clean=0.261   |   ER-adhoc={dr['er'] - dr['exact']:+.3f}   "
+                 f"ER-fragmented={dr['er'] - dr['none']:+.3f}   clean-fragmented={0.261 - dr['none']:+.3f}")
+    lines.append("\nMOAT read: (1) CHECK clean-fragmented FIRST -- if ~0 the injection was too weak "
+                 "(inconclusive, not a refutation). (2) ER recovers recall@20 toward clean while adhoc "
+                 "stays depressed (ER-adhoc > 0) => MOAT CONFIRMED. ER~=adhoc => resolver merged nothing "
+                 "exact didn't.")
+    text = "\n".join(lines)
+    print(text, flush=True)
+    os.makedirs("/cache/results", exist_ok=True)
+    pathlib.Path(f"/cache/results/stark_{kb}_inject.md").write_text(text)
+    cache.commit()
+    return text
+
+
 @app.function(image=image, gpu="A10G", volumes={"/cache": cache}, timeout=10800, memory=65536)
 def run_stark(kb: str = "prime", sample: int = 200, embed_model: str = "nomic-embed-text",
-              chunk_edges: int = 0, text_mode: str = "names") -> str:
-    return _stark_impl(kb, sample, embed_model, chunk_edges, text_mode)
+              chunk_edges: int = 0, text_mode: str = "names",
+              inject: bool = False, k: int = 3, seed: int = 0) -> str:
+    return _stark_impl(kb, sample, embed_model, chunk_edges, text_mode, inject, k, seed)
 
 
 @app.local_entrypoint()
 def main(kb: str = "prime", sample: int = 200, embed_model: str = "nomic-embed-text",
-         chunk_edges: int = 0, text_mode: str = "names", spawn: bool = False) -> None:
+         chunk_edges: int = 0, text_mode: str = "names", inject: bool = False,
+         k: int = 3, seed: int = 0, spawn: bool = False) -> None:
+    tag = "inject" if inject else text_mode
     if spawn:
         call = run_stark.spawn(kb=kb, sample=sample, embed_model=embed_model,
-                               chunk_edges=chunk_edges, text_mode=text_mode)
-        print(f"SPAWNED call_id={call.object_id} -> results/stark_{kb}_{text_mode}.md on gg-bench-cache")
+                               chunk_edges=chunk_edges, text_mode=text_mode, inject=inject, k=k, seed=seed)
+        print(f"SPAWNED call_id={call.object_id} -> results/stark_{kb}_{tag}.md on gg-bench-cache")
         return
     print("\n===== RESULT =====\n" + run_stark.remote(
-        kb=kb, sample=sample, embed_model=embed_model, chunk_edges=chunk_edges, text_mode=text_mode))
+        kb=kb, sample=sample, embed_model=embed_model, chunk_edges=chunk_edges,
+        text_mode=text_mode, inject=inject, k=k, seed=seed))

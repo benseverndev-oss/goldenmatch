@@ -107,14 +107,30 @@ def load_stark_kb(name: str, *, split: str = "test", limit_queries: int | None =
     return nodes, edges, queries, node_texts
 
 
+def _apply_id_map(retrieved, id_map):
+    """Map retrieved ids through ``id_map`` (cluster_ordinal -> canonical original id),
+    dedup first-seen. ``id_map=None`` -> identity passthrough (dedup only). Used by the
+    alias-moat scoring: retrieved ordinals -> canonical originals so a hit is
+    equivalence-class (any alias of the gold entity counts)."""
+    seen, out = set(), []
+    for r in retrieved:
+        v = r if id_map is None else id_map.get(r)
+        if v is not None and v not in seen:
+            seen.add(v)
+            out.append(v)
+    return out
+
+
 def evaluate(index, slice_graph, stark_to_eid, eid_to_stark, queries, embedder, *,
-             arm: str, sample: int | None = None) -> dict:
+             arm: str, sample: int | None = None, id_map=None) -> dict:
     """Run one retrieval arm over ``queries``, return mean metrics + timing. ``arm``
-    in {"dense","graph"}. The index returns STARK ids (entity_id=int(stark_id) at
-    build time), so Arm A needs no translation and covers ALL nodes. Arm B walks the
-    STORE (``as_of().query`` -- the thing under test), translating stark<->slice-local
-    ids only at the walk boundary. ``stark_to_eid``/``eid_to_stark`` cover edge-endpoint
-    nodes only, which is exactly the set that has neighbors."""
+    in {"dense","graph"}. The index returns the id it was BUILT with (plain STaRK:
+    entity_id=int(stark_id); alias-moat: entity_id=cluster_ordinal), so Arm A needs no
+    translation of THAT id and covers ALL nodes. Arm B walks the STORE (``as_of().query``
+    -- the thing under test), translating that-id<->slice-local only at the walk
+    boundary. ``id_map`` (alias-moat: cluster_ordinal -> canonical original id) maps the
+    retrieved ids to the scoring space before ``metrics``; ``None`` = plain STaRK
+    (identity), keeping the pre-moat path byte-identical."""
     from erkgbench.stark_metrics import dedup_first_seen, mean_metrics, metrics
 
     qs = queries[:sample] if sample else queries
@@ -122,16 +138,16 @@ def evaluate(index, slice_graph, stark_to_eid, eid_to_stark, queries, embedder, 
     for text, gold in qs:
         t0 = time.perf_counter()
         if arm == "dense":
-            ranked = index.query(text, embedder, k=20)  # stark ids already
+            ranked = index.query(text, embedder, k=20)  # ids already (stark id or ordinal)
         elif arm == "graph":
-            seeds = index.query(text, embedder, k=5)  # stark ids
+            seeds = index.query(text, embedder, k=5)
             seed_eids = [stark_to_eid[s] for s in seeds if s in stark_to_eid]
             nbr = [eid_to_stark[e["entity_id"]] for e in _neighbors(slice_graph, seed_eids)]
             ranked = dedup_first_seen([*seeds, *nbr])
         else:
             raise ValueError(f"unknown arm {arm!r}")
         latencies.append(time.perf_counter() - t0)
-        per_query.append(metrics(ranked, gold))  # gold: int stark ids
+        per_query.append(metrics(_apply_id_map(ranked, id_map), gold))  # gold: int originals
     agg = mean_metrics(per_query)
     lat = sorted(latencies)
     agg["latency_ms_mean"] = 1000 * sum(lat) / (len(lat) or 1)
