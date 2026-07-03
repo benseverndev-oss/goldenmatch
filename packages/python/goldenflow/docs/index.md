@@ -26,7 +26,7 @@ One command to clean what GoldenCheck found and prep what GoldenMatch needs.
 
 ## Features
 
-- **76 built-in transforms** across 11 categories: text, phone, name, address, date, categorical, numeric, email, identifiers, URL, auto-correct
+- **86 built-in transforms** across 11 categories: text, phone, name, address, date, categorical, numeric, email, identifiers (incl. checksummed card/IBAN/ISBN/EAN/VAT), URL, auto-correct
 - **5 domain packs**: people/HR, healthcare, finance, e-commerce, real estate
 - **Zero-config mode**: auto-detects and fixes common data issues
 - **Config-driven mode**: YAML config with `goldenflow learn` to auto-generate

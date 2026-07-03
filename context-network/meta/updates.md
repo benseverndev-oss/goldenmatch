@@ -2,6 +2,26 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-07-03 — GoldenFlow Wave 0: core split + reference-mode + checksummed identifiers + cross-surface WASM
+- New ADR [../decisions/0031-goldenflow-reference-mode-identifiers-wasm.md](../decisions/0031-goldenflow-reference-mode-identifiers-wasm.md):
+  GoldenFlow adopts the suite-standard `-core`/`-native`/`-wasm` layout — new
+  pyo3-free `goldenflow-core` OWNS the phone + identifier kernels, `native-flow`
+  becomes a thin PyO3 shim, and a new `goldenflow-wasm` wasm-bindgen crate
+  surfaces the identifier kernels to the edge.
+- Loader moves to reference-mode (`_has_symbol` + `_COMPONENT_SYMBOLS` +
+  `_FALLBACK_ONLY`, mirroring goldenmatch): `GOLDENFLOW_NATIVE=auto` runs native
+  wherever a kernel symbol exists; `_GATED_ON` retained only as documentation.
+  `phone_validate` is `_FALLBACK_ONLY` (native symbol implements the wrong spec).
+- 10 new checksummed-identifier transforms (cc/iban/isbn/ean/vat, all
+  `auto_apply=False`) take the registry 76 → **86**. EU VAT checksum is bounded to
+  DE + IT this wave (structural-only for the other 25 prefixes).
+- Cross-surface: TS keeps pure-TS default + opt-in `enableWasm()`; one shared
+  oracle corpus (`goldenflow-core`) asserted byte-identical across native /
+  WASM-TS / pure-Python via `gen_identifiers_corpus.py --check` + a `wasm_flow`
+  CI lane. Versions: goldenflow 1.4.0 / npm 0.4.0 / goldenflow-native 0.2.0.
+- Architecture node [../architecture/goldenflow-native-kernel.md](../architecture/goldenflow-native-kernel.md)
+  updated with a Wave 0 header note.
+
 ## 2026-06-28 — Perceptual image pHash: cross-platform determinism + wasm/TS
 - New ADR [../decisions/0030-perceptual-cross-platform-determinism.md](../decisions/0030-perceptual-cross-platform-determinism.md):
   the image pHash computed its DCT basis cos() at runtime, so it was libm-fragile

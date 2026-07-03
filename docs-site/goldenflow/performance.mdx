@@ -35,11 +35,16 @@ only claims rows it resolves exactly the same way.
 
 ## Optional native kernel
 
-`goldenflow-native` is a separate compiled runtime (Rust/PyO3, abi3) — the same
-split as `polars` / `polars-runtime`. The pure-Python `goldenflow` wheel works
-on its own; the native kernel is opt-in and accelerates the **phone** residual
-the Polars fast path can't reach (alpha numbers like `1-800-FLOWERS`,
-extensions, `+1`-prefixed forms) via an Arrow zero-copy path.
+The kernels live in `goldenflow-core` (a pyo3-free Rust crate); `goldenflow-native`
+is a thin PyO3 shim over it, shipped as a separate compiled runtime (abi3) — the
+same split as `polars` / `polars-runtime`. The pure-Python `goldenflow` wheel
+works on its own; the native kernel is opt-in and accelerates:
+
+- the **phone** residual the Polars fast path can't reach (alpha numbers like
+  `1-800-FLOWERS`, extensions, `+1`-prefixed forms), and
+- the **checksummed identifiers** — payment card (Luhn), IBAN (mod-97), ISBN,
+  EAN/UPC, and EU VAT — via owned Rust kernels with pure-Python fallbacks proven
+  byte-identical over a committed corpus.
 
 <CodeGroup>
 
@@ -49,31 +54,45 @@ pip install "goldenflow[native]"
 
 </CodeGroup>
 
-It is **parity-safe and on by default once installed**, but gated to the cases
-where it is proven byte-identical to the `phonenumbers` library: it resolves
-North American (NANP) numbers and defers everything international or ambiguous to
-Python. You never get a different cleaned value with the kernel on.
+It is **parity-safe and on by default once installed**. Rust is the reference
+implementation and pure-Python is the lossy fallback: the native path runs
+wherever a component's kernel is proven output-faithful. The phone kernel is
+gated to North American (NANP) numbers, deferring everything international or
+ambiguous to Python; the identifier kernels are region-free. You never get a
+different cleaned value with the kernel on.
 
 ### Controlling it
 
-The `GOLDENFLOW_NATIVE` environment variable selects the path:
+The `GOLDENFLOW_NATIVE` environment variable selects the path (reference-mode,
+mirroring `GOLDENMATCH_NATIVE`):
 
 | Value | Behavior |
 |---|---|
-| unset / `auto` | Use the native kernel where it's gated (phone, NANP-only). **Default.** |
+| unset / `auto` | Use the native kernel wherever a component's kernel symbol exists (phone + the checksummed identifiers), except known-divergent components. **Default.** |
 | `0` | Force the pure-Python path everywhere. |
-| `1` | Use native for every component with no NANP restriction — a benchmarking/parity lane that **can** differ from Python on international numbers. |
+| `1` | Require native; raise if the kernel isn't importable. Runs every component with no NANP restriction — a benchmarking/parity lane that **can** differ from Python on international phone numbers. |
 
 <Note>
   Dates are intentionally **not** a native kernel — the Polars fast path already
   resolves them in vectorized Rust, so a per-row compiled parser would be
-  slower. `phone_national` / `phone_validate` stay pure Python as well.
+  slower. `phone_national` stays pure Python, and `phone_validate` stays
+  pure-Python by design (its only native symbol implements `is_valid`, not the
+  product-chosen `is_possible` spec). `phone_digits` is pure Polars.
 </Note>
+
+## Cross-surface (WASM / TypeScript)
+
+The identifier kernels also compile to WebAssembly (`goldenflow-wasm`). The
+TypeScript package keeps pure-TS as the default and permanent fallback; an
+opt-in `enableWasm()` (async, stays pure-TS on failure) routes the identifier
+transforms through the WASM kernel — the TS analog of `goldenflow[native]`. One
+shared oracle corpus is asserted byte-identical across native, WASM-TS, and
+pure-Python.
 
 ## Why it's safe
 
 The parity contract is enforced by tests that compare the full output against
-the pure `dateutil` / `phonenumbers` reference over a large random corpus
-(clean, alpha, extension, ambiguous, and international inputs), and a CI lane
-builds the native kernel and runs that suite with the kernel active. Turning the
-kernel on or off only changes speed, never the cleaned data.
+the pure references (`dateutil` / `phonenumbers` for date/phone; the
+`goldenflow-core` Rust oracle for identifiers) over large corpora, and CI lanes
+build the native kernel and the WASM artifact and run those suites with each
+active. Turning any kernel on or off only changes speed, never the cleaned data.

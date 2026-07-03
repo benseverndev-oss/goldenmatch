@@ -1,6 +1,6 @@
 # GoldenFlow — Full API Reference
 
-> Data transformation — standardize, clean, and normalize data with auto-detection and domain-aware transforms. 76 transforms across 11 categories.
+> Data transformation — standardize, clean, and normalize data with auto-detection and domain-aware transforms. 86 transforms across 11 categories.
 > See also: [llms.txt](llms.txt) for a concise overview.
 
 ## Install
@@ -105,6 +105,7 @@ Built-in transform modules:
 - `dates` — parse_date, normalize_date, extract_year/month/day
 - `categorical` — category_auto_correct, standardize_categories
 - `numeric` — parse_numeric, round_numeric, clamp
+- `identifiers` — ssn_format/mask, ein_format, plus checksummed cc/iban/isbn/ean/vat (Luhn, mod-97, ISBN-10/13, GTIN mod-10, EU VAT); owned Rust kernels, native-first with byte-identical fallbacks; all auto_apply=False
 - `auto_correct` — spelling correction via edit distance
 
 ## Mapping

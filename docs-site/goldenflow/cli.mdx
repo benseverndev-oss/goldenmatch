@@ -70,5 +70,6 @@ dedup:
 | `OPENAI_API_KEY` | LLM-enhanced categorical corrections (with `--llm`). |
 | `ANTHROPIC_API_KEY` | Alternative LLM provider. |
 | `GOLDENFLOW_LLM=1` | Enable LLM mode programmatically. |
+| `GOLDENFLOW_NATIVE` | Native-kernel path (reference-mode): `auto`/unset uses native where a kernel exists (phone + checksummed identifiers), `0` forces pure-Python, `1` requires native. See [Performance](/goldenflow/performance). |
 
 Transform runs are saved to `~/.goldenflow/history/` as JSON.

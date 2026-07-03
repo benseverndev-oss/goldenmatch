@@ -39,12 +39,12 @@ goldenflow serve                                 # REST API for real-time transf
 goldenflow mcp-serve                             # MCP server for Claude Desktop
 ```
 
-## TypeScript Package (packages/goldenflow-js/)
+## TypeScript Package (packages/typescript/goldenflow/)
 
-Full TS port with feature parity. Edge-safe core (`goldenflow/core`) + Node layer (`goldenflow/node`).
+Full TS port with feature parity. Edge-safe core (`goldenflow/core`) + Node layer (`goldenflow/node`). Pure-TS is the default and permanent fallback; an opt-in `enableWasm()` (async, returns `false` and stays pure-TS on failure) routes the checksummed-identifier transforms (cc/iban/isbn/ean/vat) through the `goldenflow-wasm` kernel — the TS analog of `pip install goldenflow[native]`.
 
 ```bash
-cd packages/goldenflow-js
+cd packages/typescript/goldenflow
 npm install                      # Install deps
 npm run typecheck                # tsc --noEmit (0 errors required)
 npm run test                     # vitest (71 tests)
@@ -52,7 +52,7 @@ npm run build                    # tsup: ESM + CJS + .d.ts
 npx goldenflow-js transform data.csv  # CLI
 ```
 
-- 54 source files, ~5,200 LOC, 83 transforms (76 core + 7 domain)
+- 54 source files, ~5,200 LOC, 93 transforms (86 core + 7 domain)
 - Strict TS: `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`
 - Tests: `tests/smoke.test.ts`, `tests/parity/`, `tests/unit/`
 - npm package name: `goldenflow`
@@ -150,42 +150,56 @@ of transforms, not the whole library.
   letters (a leading 1 on a 10-digit string is the country code to
   `phonenumbers`).
 
-### goldenflow-native (optional compiled runtime)
+### goldenflow-core / -native / -wasm (owned kernels + optional compiled runtime)
 
-Mirrors `goldenmatch-native`. Separate maturin/PyO3 **abi3** crate at
-`packages/rust/extensions/native-flow/` (pymodule `_native`), shipped as the
-`goldenflow-native` wheel; `pip install goldenflow[native]`. Loader discover
-order in `goldenflow/core/_native_loader.py`: `goldenflow._native` (in-tree
-build via `scripts/build_native.py`) -> `goldenflow_native._native` (wheel) ->
-pure Python. In-tree `.so` is gitignored.
+**Wave 0 split (suite-standard `-core`/`-native`/`-wasm` layout):**
+`packages/rust/extensions/goldenflow-core` (crate `goldenflow-core`, pyo3-free)
+OWNS the kernels (phone + the checksummed identifiers). `native-flow` (pymodule
+`_native`, shipped as the `goldenflow-native` abi3 wheel; `pip install
+goldenflow[native]`) is a thin PyO3 shim over goldenflow-core. NEW
+`packages/rust/extensions/goldenflow-wasm` (crate `goldenflow-wasm`,
+wasm-bindgen cdylib) surfaces the identifier kernels to the edge for the TS
+package. Loader discover order in `goldenflow/core/_native_loader.py`:
+`goldenflow._native` (in-tree build via `scripts/build_native.py`) ->
+`goldenflow_native._native` (wheel) -> pure Python. In-tree `.so` is gitignored.
 
-- **Scope = the international phone family** (`phone_e164/national/country_code/
-  valid_arrow`), Arrow zero-copy in/out (`Series.to_arrow()` <-> kernel <->
-  `pl.from_arrow`), GIL released. Wired as the tier-2 `native_fn` of
-  `apply_with_residual`, so native only touches the residual the Polars fast
-  path couldn't normalize. Dates are deliberately NOT native (Polars already
+- **Reference-mode loader (2026-07, mirrors goldenmatch).** `_native_loader.py`
+  now uses the suite `_has_symbol` + `_COMPONENT_SYMBOLS` + `_FALLBACK_ONLY`
+  pattern, NOT the old `_GATED_ON` allowlist. `GOLDENFLOW_NATIVE`: `auto`
+  (default) = native wherever a component's kernel symbol exists, `0` = force
+  pure-Python fallback, `1` = require native (raise if unbuilt). `_GATED_ON` is
+  retained only as documentation of the byte-exact phone sign-off; it no longer
+  governs `auto`. `_COMPONENT_SYMBOLS` covers `phone` + `cc`/`iban`/`isbn`/`ean`/
+  `vat`. `phone_validate` is `_FALLBACK_ONLY` (its only native symbol
+  `phone_valid_arrow` implements `is_valid`, not the product-chosen
+  `is_possible` spec); `phone_digits` is pure Polars.
+- **Phone kernel** (`phone_e164/national/country_code/valid_arrow`) stays
+  canonical-NANP gated and byte-identical to `phonenumbers` over the corpus, so
+  `auto` and `=1` are both output-faithful. Wired as the tier-2 `native_fn` of
+  `apply_with_residual`. Dates are deliberately NOT native (Polars already
   vectorizes them; per-row chrono would be slower + reintroduce the 2-digit
   hazard).
-- **`GOLDENFLOW_NATIVE`** env (mirrors GOLDENMATCH_NATIVE): `0` force Python,
-  `1` require native for ALL components with NO nanp_only restriction
-  (parity/bench lane -- WILL diverge on intl), `auto`/unset use native iff
-  importable AND in `_GATED_ON`.
-- **`_GATED_ON = {"phone"}` via NANP-only gating (parity-safe, on by default).**
-  Characterization showed the Rust `phonenumber` port is byte-identical to the
-  Python `phonenumbers` library EXCEPT (a) a `+CC` intl number parsed with the
-  mismatched `"US"` default region whose national number starts with `1`
-  (`+33142685300` -> native `+3342685300`; the port mis-applies US national-
-  prefix stripping), and (b) ambiguous leading-`1` inputs (`1234567890` ->
-  native `+1234567890` vs python `+11234567890`). TWO gates make native
-  authoritative only where proven: the kernel's `nanp_only` mode (emit only
-  country-code-1, else null -> Python) AND a canonical-NANP `^\+1[2-9]\d{9}$`
-  acceptance check in `_native.py` (drops the malformed 9-digit leading-1
-  results). Net: native resolves the canonical-NANP residual the Polars fast
-  path can't (alpha `1-800-FLOWERS`, extensions, `+1` forms) at ~4.3x; intl +
-  ambiguous defer to Python. `phone_country_code` is also gated (the code agrees
-  on all NANP); `phone_national`/`phone_validate` stay pure Python (no cheap
-  canonical check). Verified byte-identical to phonenumbers over a 60k mixed
-  corpus in `tests/transforms/test_native_parity.py`.
+- **10 checksummed-identifier kernels (Wave 0, all `auto_apply=False`,
+  native-first):** `cc_validate`/`cc_format`/`cc_mask` (Luhn payment card),
+  `iban_validate`/`iban_format` (ISO 7064 mod-97), `isbn_validate`/
+  `isbn_normalize` (10/13 checksum + 10->13), `ean_validate` (EAN/UPC GTIN
+  mod-10), `vat_validate`/`vat_format` (EU VAT: structural for all 27 prefixes,
+  checksum bounded to DE + IT this wave). Each has a pure-Python reference in
+  `transforms/identifiers.py` and a pure-TS fallback, both proven byte-identical
+  to the goldenflow-core Rust oracle via a committed corpus.
+- **Byte-parity harness (cross-surface oracle = goldenflow-core).**
+  `packages/python/goldenflow/tests/parity/identifiers_corpus.jsonl` (mirrored
+  byte-identical into `packages/typescript/goldenflow/tests/parity/`) is the
+  oracle corpus; `scripts/gen_identifiers_corpus.py --check` is the CI drift
+  guard. `tests/transforms/test_identifiers_parity.py` (Python) and
+  `tests/parity/identifiers.parity.test.ts` (TS) assert native/WASM-TS/
+  pure-Python all agree.
+- **CI.** The `wasm_flow` lane (paths-filter on `packages/rust/extensions/
+  goldenflow-wasm/**`) builds the wasm artifact into the TS package's
+  `src/core/wasm/artifacts/`, runs a corpus sync-check (Python vs TS copies must
+  be byte-identical), then runs the identifier parity test with the WASM leg
+  active. `goldenflow-core` is clippy-linted in the required `rust` job. The
+  phone `native_flow` / `native_flow_wheel` lanes are unchanged.
 - **Tier-1 no-"+" guard (load-bearing):** the Polars E.164 fast path must NOT
   fire when the input contains `+` -- an intl `+CC` number can strip to exactly
   10 digits starting 2-9 (German `+4930123456` -> `4930123456`) and be
@@ -432,7 +446,7 @@ result.manifest.records     # list[TransformRecord]
 result.manifest.created_at  # str
 ```
 
-### Available transforms (76)
+### Available transforms (86)
 **Text:** strip, lowercase, uppercase, title_case, normalize_unicode, normalize_quotes, collapse_whitespace, truncate, remove_punctuation, remove_html_tags, remove_urls, remove_digits, remove_emojis, fix_mojibake, normalize_line_endings, extract_numbers, pad_left, pad_right
 **Phone:** phone_e164, phone_national, phone_digits, phone_validate, phone_country_code
 **Name:** split_name, split_name_reverse, strip_titles, strip_suffixes, name_proper, initial_expand, nickname_standardize, merge_name
@@ -441,7 +455,7 @@ result.manifest.created_at  # str
 **Categorical:** category_auto_correct, category_standardize, category_from_file, boolean_normalize, gender_standardize, null_standardize
 **Numeric:** currency_strip, percentage_normalize, round, clamp, to_integer, abs_value, fill_zero, comma_decimal, scientific_to_decimal
 **Email:** email_lowercase, email_normalize, email_extract_domain, email_validate
-**Identifiers:** ssn_format, ssn_mask, ein_format
+**Identifiers:** ssn_format, ssn_mask, ein_format, cc_validate, cc_format, cc_mask, iban_validate, iban_format, isbn_validate, isbn_normalize, ean_validate, vat_validate, vat_format
 **URL:** url_normalize, url_extract_domain
 
 ### Zero-config vs Configured — when to use which

@@ -333,7 +333,7 @@ goldenflow transform listings.csv --domain real_estate
 
 ---
 
-## Transform Library (76 transforms)
+## Transform Library (86 transforms)
 
 ### Text Transforms (18)
 | Transform | What It Does |
@@ -431,12 +431,26 @@ goldenflow transform listings.csv --domain real_estate
 | `email_extract_domain` | user@example.com -> example.com |
 | `email_validate` | Flag invalid email format |
 
-### Identifier Transforms (3)
+### Identifier Transforms (13)
 | Transform | What It Does |
 |-----------|-------------|
 | `ssn_format` | Normalize to XXX-XX-XXXX |
 | `ssn_mask` | Redact to \*\*\*-\*\*-1234 |
 | `ein_format` | Normalize to XX-XXXXXXX |
+| `cc_validate` | Validate a payment-card number via the Luhn checksum |
+| `cc_format` | Group a valid card (Amex 4-6-5, else 4-4-4-4...); null if invalid |
+| `cc_mask` | Mask a card to stars + last 4 digits |
+| `iban_validate` | Validate an IBAN (structural + ISO 7064 mod-97) |
+| `iban_format` | Group a valid IBAN into 4-char blocks; null if invalid |
+| `isbn_validate` | Validate an ISBN-10 or ISBN-13 checksum |
+| `isbn_normalize` | Canonicalize a valid ISBN-10/13 to 13-digit form; null if invalid |
+| `ean_validate` | Validate an EAN-8/UPC-A/EAN-13 via its GTIN mod-10 checksum |
+| `vat_validate` | Validate an EU VAT number (structural all 27 prefixes; checksum DE + IT) |
+| `vat_format` | Normalize a valid EU VAT to compact uppercase; null if invalid |
+
+The checksummed identifiers (cc/iban/isbn/ean/vat) run on owned Rust kernels
+(native-first with pure-Python fallbacks proven byte-identical), and are
+opt-in (`auto_apply=False`) — request them explicitly in a config.
 
 ### URL Transforms (2)
 | Transform | What It Does |
@@ -563,7 +577,7 @@ result.manifest  # renders transform audit trail
 
 ## TypeScript / JavaScript
 
-GoldenFlow has a full TypeScript port with feature parity — same 76 transforms, same engine, same config format. The core is **edge-safe** (runs in browsers, Cloudflare Workers, Vercel Edge) with a Node layer for file I/O and CLI.
+GoldenFlow has a full TypeScript port with feature parity — same 86 transforms, same engine, same config format. The core is **edge-safe** (runs in browsers, Cloudflare Workers, Vercel Edge) with a Node layer for file I/O and CLI. Pure-TS is the default; an opt-in `enableWasm()` routes the checksummed-identifier transforms through a WASM kernel (see below).
 
 ### Install
 
@@ -662,6 +676,23 @@ import { TransformEngine } from "goldenflow/core";
 // Node-only import (includes file I/O, MCP, CLI)
 import { readFile, TransformEngine } from "goldenflow/node";
 ```
+
+### Optional WASM kernel (`enableWasm()`)
+
+The checksummed-identifier transforms (`cc_*`, `iban_*`, `isbn_*`, `ean_validate`,
+`vat_*`) can run on a compiled `goldenflow-wasm` kernel — the TS analog of
+`pip install goldenflow[native]`. Pure-TS is the default and permanent fallback;
+opting in is a no-op on failure, never an error.
+
+```typescript
+// enableWasm() is async and returns false (staying pure-TS) if the kernel
+// can't be loaded. When it returns true, the identifier transforms route
+// through the WASM kernel.
+const ok = await enableWasm();
+```
+
+The pure-TS and WASM paths are asserted byte-identical to the Rust oracle over one
+shared corpus, so turning the kernel on only changes speed, never the output.
 
 ### MCP Server (TypeScript)
 
@@ -831,7 +862,7 @@ dqbench run goldenflow
 | | GoldenFlow | pandas scripts | [Great Expectations](https://greatexpectations.io/) | [dbt](https://www.getdbt.com/) | [Dataprep.Clean](https://docs.dataprep.ai/user_guide/clean/) |
 |---|---|---|---|---|---|
 | Zero-config transforms | Yes (auto-detect) | No | No (validation only) | No (SQL transforms) | Partial |
-| 76 built-in transforms (11 categories) | Yes | Manual | No (validator, not transformer) | Via SQL | ~30 cleaners |
+| 86 built-in transforms (11 categories) | Yes | Manual | No (validator, not transformer) | Via SQL | ~30 cleaners |
 | Domain packs (healthcare, finance...) | 5 built-in | No | No | No | No |
 | Schema mapping | Auto + manual | Manual | No | Via ref/source | No |
 | Audit trail (manifest) | Automatic JSON | Manual | No | Via logs | No |

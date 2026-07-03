@@ -8,7 +8,7 @@ GoldenCheck (profile + validate) → GoldenFlow (standardize) → GoldenMatch (d
 ## Packages
 - GoldenMatch — zero-config entity resolution (fuzzy + exact + probabilistic Fellegi-Sunter + LLM). Headline package. `pip install goldenmatch` / `npm i goldenmatch`. Detail: packages/python/goldenmatch/llms.txt
 - GoldenCheck — data-quality scanning (encoding, format, anomaly detection, baseline drift). `pip install goldencheck` / `npm i goldencheck`. Detail: packages/python/goldencheck/llms.txt
-- GoldenFlow — transforms & standardizers (phone, date, address, categorical). `pip install goldenflow` / `npm i goldenflow`. Detail: packages/python/goldenflow/llms.txt
+- GoldenFlow — transforms & standardizers (phone, date, address, categorical, checksummed identifiers: card/IBAN/ISBN/EAN/VAT). `pip install goldenflow` / `npm i goldenflow`. Detail: packages/python/goldenflow/llms.txt
 - GoldenAnalysis — read-only cross-cutting analysis & reporting + cross-run regression detection. `pip install goldenanalysis` / `npm i goldenanalysis`. Detail: packages/python/goldenanalysis/llms.txt
 - GoldenPipe — declarative YAML orchestrator wiring the stages. `pip install goldenpipe` / `npm i goldenpipe`. Detail: packages/python/goldenpipe/llms.txt
 - InferMap — schema mapping; auto-aligns columns across heterogeneous sources. `pip install infermap` / `npm i infermap`.
