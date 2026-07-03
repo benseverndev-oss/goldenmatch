@@ -86,3 +86,8 @@ export { applyLlmCorrections, prepareLlmCorrections } from "./llm/index.js";
 
 // Notebook
 export { transformResultToHtml, manifestToHtml, profileToHtml } from "./notebook.js";
+
+// Opt-in WASM acceleration for the identifier transforms (pure-TS stays the
+// default + permanent fallback). Mirrors goldenmatch's public enableWasm surface.
+export { enableWasm, disableWasm, isWasmEnabled } from "./wasm/index.js";
+export type { FlowWasmBackend, EnableWasmOptions } from "./wasm/index.js";
