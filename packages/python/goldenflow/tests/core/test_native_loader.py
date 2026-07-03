@@ -17,6 +17,21 @@ def test_phone_wired_component_enabled_when_symbol_present(monkeypatch):
     assert L.native_enabled("phone") is True
 
 
+def test_fallback_only_excludes_even_when_symbol_present(monkeypatch):
+    # If a phone_validate symbol WERE wired, _FALLBACK_ONLY must still exclude
+    # it: this isolates the guard from the (unrelated) fact that
+    # phone_validate currently has no entry in _COMPONENT_SYMBOLS.
+    class FakeNative:
+        def phone_valid_arrow(self): ...
+
+    monkeypatch.setenv("GOLDENFLOW_NATIVE", "auto")
+    monkeypatch.setattr(L, "_native", FakeNative())
+    monkeypatch.setitem(L._COMPONENT_SYMBOLS, "phone_validate", ("phone_valid_arrow",))
+    # _has_symbol("phone_validate") is now True, so only _FALLBACK_ONLY keeps it off:
+    assert L._has_symbol("phone_validate") is True
+    assert L.native_enabled("phone_validate") is False
+
+
 def test_force_off(monkeypatch):
     monkeypatch.setenv("GOLDENFLOW_NATIVE", "0")
     monkeypatch.setattr(L, "_native", object())
