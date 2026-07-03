@@ -27,5 +27,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(identifiers::cc_mask_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(identifiers::iban_validate_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(identifiers::iban_format_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(identifiers::isbn_validate_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(identifiers::isbn_normalize_arrow, m)?)?;
     Ok(())
 }

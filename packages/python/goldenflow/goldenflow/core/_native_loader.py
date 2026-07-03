@@ -72,6 +72,8 @@ _COMPONENT_SYMBOLS: dict[str, tuple[str, ...]] = {
     "cc": ("cc_validate_arrow",),
     # iban: IBAN (ISO 7064 mod-97) identifiers -- floor symbol only, region-free.
     "iban": ("iban_validate_arrow",),
+    # isbn: ISBN-10/13 checksum identifiers -- floor symbol only, region-free.
+    "isbn": ("isbn_validate_arrow",),
 }
 
 # Components whose only native path is intentionally non-authoritative (the

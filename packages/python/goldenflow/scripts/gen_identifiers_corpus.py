@@ -34,6 +34,8 @@ from goldenflow.transforms.identifiers import (  # noqa: E402
     _cc_validate_py,
     _iban_format_py,
     _iban_validate_py,
+    _isbn_normalize_py,
+    _isbn_validate_py,
 )
 
 CORPUS_PATH = Path(__file__).resolve().parent.parent / "tests" / "parity" / "identifiers_corpus.jsonl"
@@ -105,6 +107,31 @@ _CASES: list[tuple[str, str | None]] = [
     ("iban_format", "XX00"),
     ("iban_format", ""),
     ("iban_format", None),
+    # --- isbn_validate: valid ---
+    ("isbn_validate", "0-306-40615-2"),  # ISBN-10, dashed
+    ("isbn_validate", "0306406152"),  # ISBN-10, bare
+    ("isbn_validate", "0-19-852663-6"),  # ISBN-10, digit check
+    ("isbn_validate", "0-8044-2957-X"),  # ISBN-10, X check digit
+    ("isbn_validate", "0-8044-2957-x"),  # ISBN-10, lowercase x check digit
+    ("isbn_validate", "978-0-306-40615-7"),  # ISBN-13, dashed
+    ("isbn_validate", "9780306406157"),  # ISBN-13, bare
+    # --- isbn_validate: invalid ---
+    ("isbn_validate", "0306406153"),  # ISBN-10, bad check digit
+    ("isbn_validate", "9780306406158"),  # ISBN-13, bad check digit
+    ("isbn_validate", "12345"),  # wrong length
+    ("isbn_validate", ""),  # empty
+    ("isbn_validate", None),  # null
+    # --- isbn_normalize: valid ---
+    ("isbn_normalize", "0306406152"),  # ISBN-10 -> ISBN-13
+    ("isbn_normalize", "0-306-40615-2"),  # ISBN-10, dashed -> ISBN-13
+    ("isbn_normalize", "0-8044-2957-X"),  # ISBN-10, X check -> ISBN-13
+    ("isbn_normalize", "978-0-306-40615-7"),  # ISBN-13 -> canonical digits
+    ("isbn_normalize", "9780306406157"),  # ISBN-13, already canonical
+    # --- isbn_normalize: invalid -> null ---
+    ("isbn_normalize", "0306406153"),  # bad check digit
+    ("isbn_normalize", "12345"),  # wrong length
+    ("isbn_normalize", ""),
+    ("isbn_normalize", None),
 ]
 
 _PY_FN = {
@@ -113,6 +140,8 @@ _PY_FN = {
     "cc_mask": _cc_mask_py,
     "iban_validate": _iban_validate_py,
     "iban_format": _iban_format_py,
+    "isbn_validate": _isbn_validate_py,
+    "isbn_normalize": _isbn_normalize_py,
 }
 
 _NATIVE_ARROW_FN = {
@@ -121,6 +150,8 @@ _NATIVE_ARROW_FN = {
     "cc_mask": "cc_mask_arrow",
     "iban_validate": "iban_validate_arrow",
     "iban_format": "iban_format_arrow",
+    "isbn_validate": "isbn_validate_arrow",
+    "isbn_normalize": "isbn_normalize_arrow",
 }
 
 

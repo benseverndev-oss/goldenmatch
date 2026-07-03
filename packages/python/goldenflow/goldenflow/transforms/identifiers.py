@@ -11,6 +11,8 @@ from goldenflow.transforms._native import (
     cc_validate_native,
     iban_format_native,
     iban_validate_native,
+    isbn_normalize_native,
+    isbn_validate_native,
 )
 
 
@@ -235,6 +237,117 @@ def iban_format(series: pl.Series) -> pl.Series:
     if native is not None:
         return native(series)
     return series.map_elements(_iban_format_py, return_dtype=pl.Utf8)
+
+
+# --- ISBN (10/13 checksum) identifiers --------------------------------------
+#
+# Pure-Python reference for goldenflow-core's ``identifiers::isbn`` kernel.
+# MUST reproduce the Rust kernel byte-for-byte (asserted by
+# tests/transforms/test_identifiers_parity.py over
+# tests/parity/identifiers_corpus.jsonl) -- same separator strip + trailing-X
+# uppercase, same ISBN-10/13 checksums, same ISBN-10 -> ISBN-13 conversion.
+
+
+def _isbn_normalize_case(val: str) -> str:
+    """Strip separators; uppercase a trailing 'x' -- mirrors Rust
+    ``normalize_case``."""
+    t = _cc_strip_sep(val)
+    if t and t[-1] == "x":
+        t = t[:-1] + "X"
+    return t
+
+
+def _isbn10_checksum_ok(t: str) -> bool:
+    if len(t) != 10:
+        return False
+    if not t[0:9].isascii() or not t[0:9].isdigit():
+        return False
+    last = t[9]
+    if not (last.isascii() and last.isdigit()) and last != "X":
+        return False
+    total = 0
+    for i, c in enumerate(t):
+        d = 10 if c == "X" else ord(c) - ord("0")
+        total += d * (10 - i)
+    return total % 11 == 0
+
+
+def _isbn13_checksum_ok(t: str) -> bool:
+    if len(t) != 13 or not t.isascii() or not t.isdigit():
+        return False
+    total = 0
+    for i, c in enumerate(t):
+        d = ord(c) - ord("0")
+        weight = 1 if i % 2 == 0 else 3
+        total += d * weight
+    return total % 10 == 0
+
+
+def _isbn13_check_digit(twelve: str) -> str:
+    total = 0
+    for i, c in enumerate(twelve):
+        d = ord(c) - ord("0")
+        weight = 1 if i % 2 == 0 else 3
+        total += d * weight
+    return str((10 - (total % 10)) % 10)
+
+
+def _isbn_validate_py(val: str | None) -> bool | None:
+    if val is None:
+        return None
+    t = _isbn_normalize_case(val)
+    if len(t) == 10:
+        return _isbn10_checksum_ok(t)
+    if len(t) == 13:
+        return _isbn13_checksum_ok(t)
+    return False
+
+
+def _isbn_normalize_py(val: str | None) -> str | None:
+    if val is None:
+        return None
+    t = _isbn_normalize_case(val)
+    if len(t) == 10:
+        if not _isbn10_checksum_ok(t):
+            return None
+        twelve = "978" + t[0:9]
+        return twelve + _isbn13_check_digit(twelve)
+    if len(t) == 13:
+        if not _isbn13_checksum_ok(t):
+            return None
+        return t
+    return None
+
+
+@register_transform(
+    name="isbn_validate",
+    input_types=["identifier", "string"],
+    auto_apply=False,
+    priority=50,
+    mode="series",
+)
+def isbn_validate(series: pl.Series) -> pl.Series:
+    """Validate an ISBN-10 or ISBN-13 via its checksum."""
+    native = isbn_validate_native()
+    if native is not None:
+        return native(series)
+    return series.map_elements(_isbn_validate_py, return_dtype=pl.Boolean)
+
+
+@register_transform(
+    name="isbn_normalize",
+    input_types=["identifier", "string"],
+    auto_apply=False,
+    priority=50,
+    mode="series",
+)
+def isbn_normalize(series: pl.Series) -> pl.Series:
+    """Canonicalize a valid ISBN-10/13 to its 13-digit form; ``null`` for
+    invalid input."""
+    native = isbn_normalize_native()
+    if native is not None:
+        return native(series)
+    return series.map_elements(_isbn_normalize_py, return_dtype=pl.Utf8)
 
 
 @register_transform(

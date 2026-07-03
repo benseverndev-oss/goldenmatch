@@ -6,6 +6,8 @@ from goldenflow.transforms.identifiers import (
     ein_format,
     iban_format,
     iban_validate,
+    isbn_normalize,
+    isbn_validate,
     ssn_format,
     ssn_mask,
 )
@@ -155,3 +157,54 @@ def test_iban_format_groups_in_4s():
     assert result[0] == "DE89 3704 0044 0532 0130 00"
     assert result[1] is None
     assert result[2] is None
+
+
+# --- ISBN (10/13 checksum) identifiers ---------------------------------------
+
+
+def test_isbn_validate_valid_and_invalid():
+    s = pl.Series(
+        "isbn",
+        [
+            "0-306-40615-2",  # ISBN-10, dashed
+            "0306406152",  # ISBN-10, bare
+            "0-8044-2957-X",  # ISBN-10, X check digit
+            "978-0-306-40615-7",  # ISBN-13, dashed
+            "9780306406157",  # ISBN-13, bare
+            "0306406153",  # ISBN-10, bad check digit
+            "12345",  # wrong length
+            "",  # empty
+            None,
+        ],
+    )
+    result = isbn_validate(s)
+    assert result[0] is True
+    assert result[1] is True
+    assert result[2] is True
+    assert result[3] is True
+    assert result[4] is True
+    assert result[5] is False
+    assert result[6] is False
+    assert result[7] is False
+    assert result[8] is None
+
+
+def test_isbn_normalize_to_isbn13():
+    s = pl.Series(
+        "isbn",
+        [
+            "0306406152",  # ISBN-10 -> ISBN-13
+            "0-306-40615-2",  # ISBN-10, dashed -> ISBN-13
+            "0-8044-2957-X",  # ISBN-10, X check -> ISBN-13
+            "978-0-306-40615-7",  # ISBN-13 -> canonical digits
+            "0306406153",  # invalid -> null
+            None,
+        ],
+    )
+    result = isbn_normalize(s)
+    assert result[0] == "9780306406157"
+    assert result[1] == "9780306406157"
+    assert result[2] == "9780804429573"
+    assert result[3] == "9780306406157"
+    assert result[4] is None
+    assert result[5] is None
