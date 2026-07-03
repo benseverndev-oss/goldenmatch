@@ -40,15 +40,16 @@ def load_stark_kb(name: str, *, split: str = "test", limit_queries: int | None =
     import sys
     from unittest.mock import MagicMock
 
-    # Retrieval baselines (colbert/gritlm/mteb/...) AND amazon's text-cleaning deps
-    # (nltk/bs4/langchain, pulled by skb/__init__'s eager `from .amazon import AmazonSKB`).
-    # None are used to load PRIME's graph tensors -- safe to stub since we never call them.
-    for _m in ("colbert", "colbert.infra", "colbert.infra.config", "colbert.infra.run",
-               "colbert.data", "colbert.modeling", "colbert.modeling.checkpoint",
-               "colbert.searcher", "gritlm", "mteb", "sentence_transformers", "transformers",
-               "rank_bm25", "nltk", "nltk.corpus", "nltk.stem", "nltk.tokenize", "bs4",
-               "langchain", "langchain.text_splitter", "langchain_text_splitters",
-               "gensim", "spacy", "unidecode", "langdetect"):
+    # `stark_qa/__init__` does `from .load_model import load_model`, dragging in the WHOLE
+    # retrieval-baseline + evaluator branch (colbert/gritlm/mteb/torchmetrics/faiss/...). We never
+    # call a stark model (we reimplement retrieval + metrics), and load_skb/load_qa don't depend on
+    # it, so stub the branch WHOLESALE -- one move instead of chasing each transitive dep.
+    for _mod in ("stark_qa.load_model", "stark_qa.models"):
+        sys.modules.setdefault(_mod, MagicMock())
+    # The SKB branch (load_skb) DOES load: skb/__init__ eagerly imports amazon+mag, whose modules
+    # pull text-cleaning libs at top level. Stub just those (we read raw node data, not the cleaners).
+    for _m in ("nltk", "nltk.corpus", "nltk.stem", "nltk.tokenize", "bs4", "langchain",
+               "langchain.text_splitter", "langchain_text_splitters", "langdetect", "unidecode"):
         sys.modules.setdefault(_m, MagicMock())
     from stark_qa import load_qa, load_skb
 
