@@ -11,16 +11,42 @@ cosine@0.7, LlamaIndex none-built-in, KGGen LLM-judge clustering) does
 (Text2KGBench, Re-DocRED — both single-document) even measures cross-document ER
 or span-grounded faithfulness. That's the open seam CLEAR-KG targets.
 
-## Status: Phase 0 (Tracks A + B + C spikes)
+## Status: Phase 0 (Tracks A + B + C + D spikes)
 
-Phase 0 covers all three axes. The two **moats** — **corpus-level ER** (Track B)
+Phase 0 covers all four axes. The two **moats** — **corpus-level ER** (Track B)
 and **span-grounded faithfulness** (Track C) — follow one method: reimplement the
 market's *documented* mechanisms, run them on identical inputs, and measure them
 collapsing on the axis they skip (Track B on synthetic **homographs** + a
 **real-data** Wikipedia track; Track C on **distractor** and **hallucinated**
 triples). **Track A** is table stakes — the convention-matching extraction-F1
 harness — and lands one finding of its own: even the extraction metric's
-canonicalization step is an ER problem.
+canonicalization step is an ER problem. **Track D** composes all three into a
+single **CLEAR score** (below) so a system cannot win by being strong on one axis
+and hollow on the others.
+
+## Track D — the CLEAR composite (headline)
+
+An end-to-end **system** is a full pipeline = a shared extractor × an ER engine
+(Track B) × a grounding engine (Track C). The **CLEAR score** is the *harmonic
+mean* of the three axis scores measured on one corpus, so it is dragged toward the
+weakest axis and zeroes out if any axis does. Extraction is shared (table stakes);
+the composite is decided by the two moats.
+
+| system (stack) | extract-F1 | ER-F1 (B³) | grounded-ok | **CLEAR** |
+|---|--:|--:|--:|--:|
+| `incumbent` — name-merge ER + presence grounding | 1.000 | 0.800 | 0.750 | **0.837** |
+| `er_only` — neighborhood ER + presence grounding | 1.000 | 1.000 | 0.750 | **0.900** |
+| **`goldenmatch`** — neighborhood ER + relation-aware grounding | 1.000 | 1.000 | 1.000 | **1.000** |
+
+The `er_only` row is the point: **perfect extraction AND perfect ER cannot rescue
+a system that grounds distractors** — one hollow axis (grounding 0.750) drags the
+composite from 1.000 to 0.900. The incumbent, hollow on *both* moats, lands 0.837.
+A system has to win corpus-level ER **and** span-grounded faithfulness to top the
+end-to-end score — which is exactly the two axes the market skips. Run it:
+
+```bash
+python benchmarks/clear-kg/run_track_d.py
+```
 
 **We ran the market's three ER families** (faithful reimplementations of each
 tool's documented ER *mechanism*, on identical inputs — isolating the ER
@@ -210,7 +236,10 @@ extract_data.py    Track A dataset: gold KG + alias/homograph-varied docs
 extractors.py  Track A extractors (pattern, lossy) -- doc -> surface triples
 extract_score.py   Track A metric: canonicalized triple-PRF in exact/relaxed/er_aware modes
 run_track_a.py extract -> score under each canonicalization mode (extraction F1)
-tests/         offline unit + end-to-end for Tracks A, B, C, and the real-data track
+pipeline_data.py   Track D unified corpus (aligned entity/triple/provenance truth)
+score_d.py     Track D CLEAR composite (harmonic mean of the three axes)
+run_track_d.py full-pipeline systems -> extract + resolve + ground -> CLEAR score
+tests/         offline unit + end-to-end for Tracks A, B, C, D, and the real-data track
 ```
 
 ## Next phases (see SPEC.md)
@@ -221,18 +250,19 @@ tests/         offline unit + end-to-end for Tracks A, B, C, and the real-data t
 - **Packaged incumbents end-to-end** (GraphRAG, Neo4j, iText2KG, KGGen) on all
   tracks, vs. the documented-mechanism reimplementations used today.
 
-- **Track A next:** an LLM extraction pass on the real-data corpus for the
-  competitive "in the pack" number (extend er-kg-bench's `extraction_f1`); a real
-  NLI backstop for the ER-aware matcher on paraphrased relations.
-- **Track D — the composite:** a single CLEAR score (harmonic mean of triple-F1,
-  ER-F1, grounded-&-correct rate) so a system cannot win on one axis and be
-  hollow on the others.
+- **Competitive numbers on real data:** an LLM extraction pass on the real-data
+  corpus for Track A's "in the pack" number (extend er-kg-bench's
+  `extraction_f1`), an NLI backstop for the ER-aware matcher / relation-aware
+  grounder on paraphrased relations, and the *packaged* incumbents (GraphRAG,
+  Neo4j, iText2KG, KGGen) run end-to-end vs the documented-mechanism baselines.
+- **Package / evangelize:** dataset card, leaderboard, Text2KG @ ISWC paper.
 
-_Done:_ **Track A** (extraction-F1 harness + the ER-in-the-metric finding) +
-**Track B** (corpus-level ER moat) + **real-data validity track** (Wikipedia
-homographs, 1.000 vs 0.000 on prose we did not author) + **Track C** (span-
-grounded faithfulness — relation-aware grounding wins every axis vs the
-documented presence/type mechanisms).
+_Done:_ all four tracks spiked — **A** (extraction-F1 harness + the ER-in-the-
+metric finding), **B** (corpus-level ER moat) + **real-data validity track**
+(Wikipedia homographs, 1.000 vs 0.000 on prose we did not author), **C** (span-
+grounded faithfulness — relation-aware grounding wins every axis vs the documented
+presence/type mechanisms), and **D** (the CLEAR composite — a system must win both
+moats to top the end-to-end score).
 
 ## Note on the Phase-0 signal
 
