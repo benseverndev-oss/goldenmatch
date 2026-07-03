@@ -133,7 +133,8 @@ def _start_ollama(embed_model: str) -> str:
 
 
 def _stark_impl(kb: str, sample: int, embed_model: str, chunk_edges: int,
-                text_mode: str = "names", inject: bool = False, k: int = 3, seed: int = 0) -> str:
+                text_mode: str = "names", inject: bool = False, k: int = 3, seed: int = 0,
+                bridge: bool = False, bridge_cap: int = 8) -> str:
     import os
     import sys
     import time
@@ -153,9 +154,9 @@ def _stark_impl(kb: str, sample: int, embed_model: str, chunk_edges: int,
     from goldengraph_native import _native as ggn
 
     _BIG = 1 << 62
-    _title = f"# STaRK -- {kb} (sample={sample}, " + (f"INJECT k={k} seed={seed}" if inject
-                                                       else f"text_mode={text_mode}") + ")"
-    lines = [_title, ""]
+    _mode = (f"INJECT-{'BRIDGE' if bridge else 'ANSWER'} k={k} seed={seed}" if inject
+             else f"text_mode={text_mode}")
+    lines = [f"# STaRK -- {kb} (sample={sample}, {_mode})", ""]
 
     # 1. download + map. with_text builds the fair-baseline corpus (each node's intrinsic doc,
     #    add_rel=False -- NO relations). Injection needs the docs too (it fragments them).
@@ -167,7 +168,8 @@ def _stark_impl(kb: str, sample: int, embed_model: str, chunk_edges: int,
 
     if inject:
         return _run_moat(lines, nodes, edges, queries, node_texts, k, seed, kb,
-                         embed_model, base_url, ggn, EntityIndex, _BIG)
+                         embed_model, base_url, ggn, EntityIndex, _BIG,
+                         bridge=bridge, bridge_cap=bridge_cap)
 
     # 2. bulk_load -> store  [ingest wall + RSS]. Single batch; chunked on OOM.
     from goldengraph.bulk import bulk_load
@@ -240,10 +242,15 @@ def _stark_impl(kb: str, sample: int, embed_model: str, chunk_edges: int,
 
 
 def _run_moat(lines, nodes, edges, queries, node_texts, k, seed, kb,
-              embed_model, base_url, ggn, EntityIndex, _BIG):
-    """The ER-moat experiment: fragment the sampled queries' gold entities into k
-    alias nodes (split doc + edges), then compare 3 resolution conditions x 2 arms.
-    Moat = ER-dense recovers recall@20 toward clean while ad-hoc stays depressed.
+              embed_model, base_url, ggn, EntityIndex, _BIG, bridge=False, bridge_cap=8):
+    """The ER-moat experiment: fragment entities into k alias nodes (split doc + edges),
+    then compare 3 resolution conditions x 2 arms. Two injection targets:
+      - default (Case A): fragment the sampled queries' GOLD ANSWER entities. CONFOUNDED
+        -- equivalence scoring gives dense k retrieval chances at the gold (see the
+        2026-07-03 verdict); fragmentation HELPS, inverting the signal.
+      - bridge=True (Case B): fragment the gold answers' 1-HOP NEIGHBORS, answers INTACT.
+        No equivalence inflation (gold single); severs the graph WALK's route to the
+        answer -> moat is read on the GRAPH arm, dense = flat control.
     See docs/superpowers/specs/2026-07-02-goldengraph-stark-alias-moat-design.md."""
     import os
     import time
@@ -251,11 +258,14 @@ def _run_moat(lines, nodes, edges, queries, node_texts, k, seed, kb,
     from erkgbench.stark_adapter import evaluate
     from erkgbench.stark_resolve import resolve_aliases
     from goldengraph.bulk import bulk_load
-    from goldengraph.stark_inject import inject_aliases
+    from goldengraph.stark_inject import bridge_targets, inject_aliases
     from goldengraph.stark_moat import build_clusters, collapse_for_index, collapse_for_store
 
-    # fragment ONLY the sampled queries' gold entities (controlled, guaranteed signal)
-    target_ids = {str(g) for _q, gold in queries for g in gold}
+    gold_ids = {str(g) for _q, gold in queries for g in gold}
+    if bridge:
+        target_ids = bridge_targets(edges, gold_ids, cap=bridge_cap)   # Case B: fragment the BRIDGE
+    else:
+        target_ids = gold_ids                                          # Case A: fragment the ANSWER
     t = time.perf_counter()
     nodes2, texts2, edges2, canon = inject_aliases(nodes, node_texts, edges, target_ids, k=k, seed=seed)
     alias_nodes = [(nid, name) for nid, name, _typ in nodes2 if canon.get(nid) != nid]
@@ -293,17 +303,29 @@ def _run_moat(lines, nodes, edges, queries, node_texts, k, seed, kb,
                          f"lat_mean={r['latency_ms_mean']:.1f}ms")
 
     dr = {m: r["recall@20"] for (m, a, r) in rows if a == "dense"}
+    gr = {m: r["recall@20"] for (m, a, r) in rows if a == "graph"}
     lines.append(f"\nDENSE recall@20:  fragmented={dr['none']:.3f}  adhoc={dr['exact']:.3f}  "
-                 f"er={dr['er']:.3f}  clean=0.261   |   ER-adhoc={dr['er'] - dr['exact']:+.3f}   "
-                 f"ER-fragmented={dr['er'] - dr['none']:+.3f}   clean-fragmented={0.261 - dr['none']:+.3f}")
-    lines.append("\nMOAT read: (1) CHECK clean-fragmented FIRST -- if ~0 the injection was too weak "
-                 "(inconclusive, not a refutation). (2) ER recovers recall@20 toward clean while adhoc "
-                 "stays depressed (ER-adhoc > 0) => MOAT CONFIRMED. ER~=adhoc => resolver merged nothing "
-                 "exact didn't.")
+                 f"er={dr['er']:.3f}  clean=0.261   |   ER-adhoc={dr['er'] - dr['exact']:+.3f}")
+    lines.append(f"GRAPH recall@20:  fragmented={gr['none']:.3f}  adhoc={gr['exact']:.3f}  "
+                 f"er={gr['er']:.3f}  clean=0.213   |   ER-adhoc={gr['er'] - gr['exact']:+.3f}   "
+                 f"ER-fragmented={gr['er'] - gr['none']:+.3f}")
+    if bridge:
+        lines.append("\nMOAT read (Case B, bridge-fragmented, answers INTACT): the moat lives on the "
+                     "GRAPH arm (dense = control, should stay ~flat since answers aren't touched). "
+                     "MOAT CONFIRMED iff graph ER-fragmented > 0 AND graph ER-adhoc > 0 -- ER re-merges "
+                     "the severed bridge so the walk reaches the answer, where exact-match can't. If "
+                     "graph stays flat across none/exact/er, the 1-hop walk doesn't route through the "
+                     "fragmented bridge on these queries (structure not load-bearing here) -> honest "
+                     "conclusion that vanilla STaRK can't stage the moat.")
+    else:
+        lines.append("\nMOAT read (Case A, answer-fragmented): CONFOUNDED -- equivalence scoring gives "
+                     "dense k chances at the gold, so fragmentation HELPS (clean-fragmented "
+                     f"={0.261 - dr['none']:+.3f}). Use Case B (bridge) instead.")
     text = "\n".join(lines)
     print(text, flush=True)
     os.makedirs("/cache/results", exist_ok=True)
-    pathlib.Path(f"/cache/results/stark_{kb}_inject.md").write_text(text)
+    _suffix = "bridge" if bridge else "inject"
+    pathlib.Path(f"/cache/results/stark_{kb}_{_suffix}.md").write_text(text)
     cache.commit()
     return text
 
@@ -311,20 +333,24 @@ def _run_moat(lines, nodes, edges, queries, node_texts, k, seed, kb,
 @app.function(image=image, gpu="A10G", volumes={"/cache": cache}, timeout=10800, memory=65536)
 def run_stark(kb: str = "prime", sample: int = 200, embed_model: str = "nomic-embed-text",
               chunk_edges: int = 0, text_mode: str = "names",
-              inject: bool = False, k: int = 3, seed: int = 0) -> str:
-    return _stark_impl(kb, sample, embed_model, chunk_edges, text_mode, inject, k, seed)
+              inject: bool = False, k: int = 3, seed: int = 0,
+              bridge: bool = False, bridge_cap: int = 8) -> str:
+    return _stark_impl(kb, sample, embed_model, chunk_edges, text_mode, inject, k, seed,
+                       bridge, bridge_cap)
 
 
 @app.local_entrypoint()
 def main(kb: str = "prime", sample: int = 200, embed_model: str = "nomic-embed-text",
          chunk_edges: int = 0, text_mode: str = "names", inject: bool = False,
-         k: int = 3, seed: int = 0, spawn: bool = False) -> None:
-    tag = "inject" if inject else text_mode
+         k: int = 3, seed: int = 0, bridge: bool = False, bridge_cap: int = 8,
+         spawn: bool = False) -> None:
+    tag = ("bridge" if bridge else "inject") if inject else text_mode
     if spawn:
         call = run_stark.spawn(kb=kb, sample=sample, embed_model=embed_model,
-                               chunk_edges=chunk_edges, text_mode=text_mode, inject=inject, k=k, seed=seed)
+                               chunk_edges=chunk_edges, text_mode=text_mode, inject=inject, k=k,
+                               seed=seed, bridge=bridge, bridge_cap=bridge_cap)
         print(f"SPAWNED call_id={call.object_id} -> results/stark_{kb}_{tag}.md on gg-bench-cache")
         return
     print("\n===== RESULT =====\n" + run_stark.remote(
         kb=kb, sample=sample, embed_model=embed_model, chunk_edges=chunk_edges,
-        text_mode=text_mode, inject=inject, k=k, seed=seed))
+        text_mode=text_mode, inject=inject, k=k, seed=seed, bridge=bridge, bridge_cap=bridge_cap))

@@ -45,6 +45,26 @@ def _sentences(doc: str) -> list[str]:
     return [s.strip() for s in doc.split(". ") if s.strip()]
 
 
+def bridge_targets(edges, gold_ids, *, cap: int = 8) -> set[str]:
+    """Case B target selector: the 1-hop neighbors of the gold answer entities, to be
+    fragmented while the answers themselves stay INTACT. Fragmenting the BRIDGE (not
+    the answer) severs the route a graph walk takes to reach the answer, without the
+    equivalence-scoring inflation that answer-fragmentation caused. Per gold, keep at
+    most `cap` neighbors (lexicographically smallest -- deterministic, bounds the
+    resolver run); never a gold answer itself."""
+    gold = {str(g) for g in gold_ids}
+    nbrs: dict[str, set[str]] = {}
+    for s, _p, o in edges:
+        if s in gold and o not in gold:
+            nbrs.setdefault(s, set()).add(o)
+        if o in gold and s not in gold:
+            nbrs.setdefault(o, set()).add(s)
+    out: set[str] = set()
+    for g, ns in nbrs.items():
+        out.update(sorted(ns)[:cap])
+    return out
+
+
 def inject_aliases(nodes, node_texts, edges, target_ids, *, k: int = 3, seed: int = 0):
     """Fragment each entity in `target_ids` into k alias nodes. Returns
     (nodes2, node_texts2, edges2, canon). See the spec / module docstring."""
