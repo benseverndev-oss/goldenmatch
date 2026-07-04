@@ -13,6 +13,7 @@
 #[cfg(target_arch = "wasm32")]
 mod wasm {
     use goldenflow_core::identifiers::{aba, ean, iban, imei, isbn, luhn, swift, vat};
+    use goldenflow_core::names;
     use wasm_bindgen::prelude::*;
 
     #[wasm_bindgen]
@@ -83,5 +84,10 @@ mod wasm {
     #[wasm_bindgen]
     pub fn vat_format(s: &str) -> Option<String> {
         vat::vat_format(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn name_transliterate(s: &str) -> String {
+        names::name_transliterate(s)
     }
 }

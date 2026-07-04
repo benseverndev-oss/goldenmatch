@@ -29,6 +29,7 @@ from goldenflow.transforms.identifiers import (
     vat_format,
     vat_validate,
 )
+from goldenflow.transforms.names import name_transliterate
 
 _CORPUS_PATH = Path(__file__).parent.parent / "parity" / "identifiers_corpus.jsonl"
 
@@ -47,6 +48,7 @@ _TRANSFORMS = {
     "vat_format": vat_format,
     "aba_validate": aba_validate,
     "imei_validate": imei_validate,
+    "name_transliterate": name_transliterate,
 }
 
 # Floor native symbol per transform's component -- used to skip a row when the
@@ -67,6 +69,7 @@ _NATIVE_FLOOR_SYMBOL = {
     "vat_format": "vat_validate_arrow",
     "aba_validate": "aba_validate_arrow",
     "imei_validate": "imei_validate_arrow",
+    "name_transliterate": "name_transliterate_arrow",
 }
 
 

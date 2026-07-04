@@ -142,3 +142,14 @@
 {"transform": "cc_validate", "input": "424242424242😀2", "expected": false}
 {"transform": "iban_validate", "input": "DE89370400440532😀13000", "expected": false}
 {"transform": "vat_validate", "input": "DE13669597😀", "expected": false}
+{"transform": "name_transliterate", "input": "José", "expected": "Jose"}
+{"transform": "name_transliterate", "input": "Müller", "expected": "Muller"}
+{"transform": "name_transliterate", "input": "Straße", "expected": "Strasse"}
+{"transform": "name_transliterate", "input": "Łódź", "expected": "Lodz"}
+{"transform": "name_transliterate", "input": "Renée", "expected": "Renee"}
+{"transform": "name_transliterate", "input": "Æsir", "expected": "AEsir"}
+{"transform": "name_transliterate", "input": "Smith", "expected": "Smith"}
+{"transform": "name_transliterate", "input": "", "expected": ""}
+{"transform": "name_transliterate", "input": null, "expected": null}
+{"transform": "name_transliterate", "input": "张😀", "expected": ""}
+{"transform": "name_transliterate", "input": "Nguyễn", "expected": "Nguyn"}

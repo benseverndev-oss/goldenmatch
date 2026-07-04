@@ -89,6 +89,9 @@ _COMPONENT_SYMBOLS: dict[str, tuple[str, ...]] = {
     # imei: IMEI (Luhn checksum, reuses the same luhn_ok as cc) -- floor
     # symbol only, region-free.
     "imei": ("imei_validate_arrow",),
+    # name_transliterate: explicit ASCII-fold map for common Latin-script
+    # diacritics -- floor symbol only, locale-free.
+    "name_transliterate": ("name_transliterate_arrow",),
 }
 
 # Components whose only native path is intentionally non-authoritative (the

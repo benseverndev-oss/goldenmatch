@@ -44,6 +44,7 @@ from goldenflow.transforms.identifiers import (  # noqa: E402
     _vat_format_py,
     _vat_validate_py,
 )
+from goldenflow.transforms.names import _name_transliterate_py  # noqa: E402
 
 CORPUS_PATH = Path(__file__).resolve().parent.parent / "tests" / "parity" / "identifiers_corpus.jsonl"
 
@@ -228,6 +229,18 @@ _CASES: list[tuple[str, str | None]] = [
     ("cc_validate", "424242424242\U0001f6002"),  # astral emoji inside a card number
     ("iban_validate", "DE89370400440532\U0001f60013000"),  # astral emoji inside IBAN BBAN
     ("vat_validate", "DE13669597\U0001f600"),  # astral emoji inside VAT suffix
+    # --- name_transliterate ---
+    ("name_transliterate", "José"),  # single acute vowel
+    ("name_transliterate", "Müller"),  # diaeresis
+    ("name_transliterate", "Straße"),  # eszett -> ss
+    ("name_transliterate", "Łódź"),  # l-stroke, o-acute, z-acute
+    ("name_transliterate", "Renée"),  # trailing double acute-e
+    ("name_transliterate", "Æsir"),  # ligature -> two-char AE
+    ("name_transliterate", "Smith"),  # pure ASCII passthrough
+    ("name_transliterate", ""),  # empty
+    ("name_transliterate", None),  # null
+    ("name_transliterate", "张\U0001f600"),  # CJK + emoji, both unmapped -> dropped
+    ("name_transliterate", "Nguyễn"),  # Vietnamese combining diacritic, unmapped -> dropped
 ]
 
 _PY_FN = {
@@ -245,6 +258,7 @@ _PY_FN = {
     "vat_format": _vat_format_py,
     "aba_validate": _aba_validate_py,
     "imei_validate": _imei_validate_py,
+    "name_transliterate": _name_transliterate_py,
 }
 
 _NATIVE_ARROW_FN = {
@@ -262,6 +276,7 @@ _NATIVE_ARROW_FN = {
     "vat_format": "vat_format_arrow",
     "aba_validate": "aba_validate_arrow",
     "imei_validate": "imei_validate_arrow",
+    "name_transliterate": "name_transliterate_arrow",
 }
 
 

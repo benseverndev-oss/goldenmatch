@@ -342,3 +342,31 @@ def _imei_kernel_runner(attr: str) -> Callable[[pl.Series], pl.Series] | None:
 
 def imei_validate_native() -> Callable[[pl.Series], pl.Series] | None:
     return _imei_kernel_runner("imei_validate_arrow")
+
+
+def _name_kernel_runner(
+    component: str, attr: str
+) -> Callable[[pl.Series], pl.Series] | None:
+    """Build a whole-series runner for name kernel function ``attr`` if
+    native ``component`` is enabled and the dependencies are importable;
+    else ``None``. Like the identifier runners -- no region/gating args,
+    the transliteration map / script-range tables are locale-free."""
+    if not native_enabled(component):
+        return None
+    nm = native_module()
+    if nm is None or not hasattr(nm, attr):
+        return None
+    try:
+        import pyarrow  # noqa: F401  (zero-copy bridge)
+    except ImportError:
+        return None
+    func = getattr(nm, attr)
+
+    def run(s: pl.Series) -> pl.Series:
+        return pl.from_arrow(func(_as_str_series(s).to_arrow()))
+
+    return run
+
+
+def name_transliterate_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _name_kernel_runner("name_transliterate", "name_transliterate_arrow")
