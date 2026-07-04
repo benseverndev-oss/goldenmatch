@@ -106,6 +106,11 @@ _COMPONENT_SYMBOLS: dict[str, tuple[str, ...]] = {
     # abs_value/fill_zero) -- floor symbol only (currency_strip_arrow),
     # locale-free, region-free.
     "numeric": ("currency_strip_arrow",),
+    # categorical: boolean_normalize/gender_standardize/null_standardize +
+    # the shared category_normalize_key (used by category_standardize/
+    # category_from_file's runtime-data mapping lookup) -- floor symbol only
+    # (boolean_normalize_arrow), locale-free, region-free.
+    "categorical": ("boolean_normalize_arrow",),
 }
 
 # Components whose only native path is intentionally non-authoritative (the

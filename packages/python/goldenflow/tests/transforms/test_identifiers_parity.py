@@ -13,6 +13,12 @@ from pathlib import Path
 import polars as pl
 import pytest
 from goldenflow.core._native_loader import native_available
+from goldenflow.transforms.categorical import (
+    _category_normalize_key_series,
+    boolean_normalize,
+    gender_standardize,
+    null_standardize,
+)
 from goldenflow.transforms.email import (
     email_extract_domain,
     email_lowercase,
@@ -111,6 +117,10 @@ _TRANSFORMS = {
     "to_integer": to_integer,
     "comma_decimal": comma_decimal,
     "scientific_to_decimal": scientific_to_decimal,
+    "boolean_normalize": boolean_normalize,
+    "gender_standardize": gender_standardize,
+    "null_standardize": null_standardize,
+    "category_normalize_key": _category_normalize_key_series,
 }
 
 # Floor native symbol per transform's component -- used to skip a row when the
@@ -151,6 +161,14 @@ _NATIVE_FLOOR_SYMBOL = {
     "to_integer": "currency_strip_arrow",
     "comma_decimal": "currency_strip_arrow",
     "scientific_to_decimal": "currency_strip_arrow",
+    # categorical: boolean_normalize/gender_standardize/null_standardize +
+    # category_normalize_key are all wired via the single "categorical"
+    # component (floor symbol boolean_normalize_arrow), region-free/
+    # locale-free.
+    "boolean_normalize": "boolean_normalize_arrow",
+    "gender_standardize": "boolean_normalize_arrow",
+    "null_standardize": "boolean_normalize_arrow",
+    "category_normalize_key": "boolean_normalize_arrow",
 }
 
 

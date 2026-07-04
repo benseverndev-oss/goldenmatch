@@ -235,6 +235,21 @@ package. Loader discover order in `goldenflow/core/_native_loader.py`:
   `round_f64` kernel is the source of truth; this is deliberately NOT
   Python's builtin `round()` (round-half-to-even) nor naive `Math.round`
   (rounds half toward +Infinity, not away from zero) in TS.
+- **Categorical family migrated to owned kernels (Wave D5) -- LOGIC/DATA
+  split for the mapping transforms.** `boolean_normalize`/
+  `gender_standardize`/`null_standardize` are fully owned (fixed in-crate
+  lookup tables) and dispatch native-first through goldenflow-core
+  (`boolean_normalize_arrow` et al.), same cross-surface pattern as the
+  email/url families. `category_standardize`/`category_from_file` apply a
+  CALLER-SUPPLIED variant->canonical mapping (a function param, or loaded
+  from a CSV/YAML file at runtime) -- that mapping is runtime DATA, not
+  logic, so goldenflow-core does NOT own a dict-lookup kernel for it.
+  Instead, goldenflow-core owns `category_normalize_key` (the shared
+  trim+lowercase key-derivation both mapping transforms use before their
+  lookup); the dict-lookup-with-fallback loop stays in Python/TS. All 4
+  kernels wired via the single `"categorical"` `_native_loader` component
+  (floor symbol `boolean_normalize_arrow`). `null_standardize` stays
+  `auto_apply=True`.
 - **Byte-parity harness (cross-surface oracle = goldenflow-core).**
   `packages/python/goldenflow/tests/parity/identifiers_corpus.jsonl` (mirrored
   byte-identical into `packages/typescript/goldenflow/tests/parity/`) is the

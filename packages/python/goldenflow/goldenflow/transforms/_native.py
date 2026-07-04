@@ -539,3 +539,42 @@ def abs_value_native() -> Callable[[pl.Series], pl.Series] | None:
 
 def fill_zero_native() -> Callable[[pl.Series], pl.Series] | None:
     return _numeric_array_kernel_runner("fill_zero_arrow")
+
+
+def _categorical_kernel_runner(attr: str) -> Callable[[pl.Series], pl.Series] | None:
+    """Build a whole-series runner for categorical kernel function ``attr``
+    if native ``categorical`` is enabled and the dependencies are
+    importable; else ``None``. Like the other identifier runners -- no
+    region/gating args, the fixed lookup tables (boolean/gender/null) and
+    the key-normalization step are locale-free."""
+    if not native_enabled("categorical"):
+        return None
+    nm = native_module()
+    if nm is None or not hasattr(nm, attr):
+        return None
+    try:
+        import pyarrow  # noqa: F401  (zero-copy bridge)
+    except ImportError:
+        return None
+    func = getattr(nm, attr)
+
+    def run(s: pl.Series) -> pl.Series:
+        return pl.from_arrow(func(_as_str_series(s).to_arrow()))
+
+    return run
+
+
+def boolean_normalize_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _categorical_kernel_runner("boolean_normalize_arrow")
+
+
+def gender_standardize_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _categorical_kernel_runner("gender_standardize_arrow")
+
+
+def null_standardize_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _categorical_kernel_runner("null_standardize_arrow")
+
+
+def category_normalize_key_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _categorical_kernel_runner("category_normalize_key_arrow")

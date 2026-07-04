@@ -5,10 +5,12 @@
  * The active backend (if any) is consulted by the identifier transforms
  * (cc/iban/isbn/ean/vat/swift/aba/imei) for the 14 covered functions, the
  * i18n-name transforms (name_transliterate/name_script), the email
- * transforms (email_lowercase/normalize/extract_domain/validate), and the
- * URL transforms (url_normalize/extract_domain); everything else stays
- * pure-TS. Mirrors goldenmatch's `setScorerBackend(null)` module-singleton
- * pattern for test isolation.
+ * transforms (email_lowercase/normalize/extract_domain/validate), the URL
+ * transforms (url_normalize/extract_domain), and the categorical transforms
+ * (boolean_normalize/gender_standardize/null_standardize/
+ * category_normalize_key); everything else stays pure-TS. Mirrors
+ * goldenmatch's `setScorerBackend(null)` module-singleton pattern for test
+ * isolation.
  */
 
 /**
@@ -53,6 +55,10 @@ export interface FlowWasmBackend {
   clampValue(x: number, minVal: number, maxVal: number): number;
   absValue(x: number): number;
   fillZero(x: number | undefined): number;
+  booleanNormalize(s: string): boolean | undefined;
+  genderStandardize(s: string): string;
+  nullStandardize(s: string): string | undefined;
+  categoryNormalizeKey(s: string): string;
 }
 
 import { createBackendRegistry } from "goldenmatch-wasm-runtime";

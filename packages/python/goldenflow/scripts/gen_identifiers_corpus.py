@@ -28,6 +28,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from goldenflow.core._native_loader import native_available, native_module  # noqa: E402
+from goldenflow.transforms.categorical import (  # noqa: E402
+    _boolean_normalize_py,
+    _category_normalize_key_py,
+    _gender_standardize_py,
+    _null_standardize_py,
+)
 from goldenflow.transforms.email import (  # noqa: E402
     _email_extract_domain_py,
     _email_lowercase_py,
@@ -377,6 +383,54 @@ _CASES: list[tuple[str, str | None]] = [
     ("scientific_to_decimal", "abc"),  # non-numeric -> null
     ("scientific_to_decimal", ""),  # empty -> null
     ("scientific_to_decimal", None),  # null
+    # --- boolean_normalize (string->bool) ---
+    ("boolean_normalize", "Yes"),
+    ("boolean_normalize", "Y"),
+    ("boolean_normalize", "1"),
+    ("boolean_normalize", "True"),
+    ("boolean_normalize", " true "),  # whitespace around a recognized token
+    ("boolean_normalize", "T"),
+    ("boolean_normalize", "No"),
+    ("boolean_normalize", "N"),
+    ("boolean_normalize", "0"),
+    ("boolean_normalize", "False"),
+    ("boolean_normalize", "f"),
+    ("boolean_normalize", "maybe"),  # unrecognized -> null
+    ("boolean_normalize", ""),  # empty -> null
+    ("boolean_normalize", None),  # null
+    # --- gender_standardize (string->string, passthrough on no match) ---
+    ("gender_standardize", "Male"),
+    ("gender_standardize", "male"),
+    ("gender_standardize", "M"),
+    ("gender_standardize", "m"),
+    ("gender_standardize", "Female"),
+    ("gender_standardize", "female"),
+    ("gender_standardize", "F"),
+    ("gender_standardize", "f"),
+    ("gender_standardize", "Nonbinary"),  # no match -> passthrough UNCHANGED
+    ("gender_standardize", ""),  # empty -> passthrough (empty string)
+    ("gender_standardize", None),  # null
+    # --- null_standardize (string->string|null) ---
+    ("null_standardize", "N/A"),
+    ("null_standardize", "NULL"),
+    ("null_standardize", "none"),
+    ("null_standardize", ""),
+    ("null_standardize", "  "),  # trims to empty -> null
+    ("null_standardize", "null"),
+    ("null_standardize", "NA"),
+    ("null_standardize", "nil"),
+    ("null_standardize", "nan"),
+    ("null_standardize", "-"),
+    ("null_standardize", "actual value"),  # no match -> passthrough UNCHANGED
+    ("null_standardize", None),  # null
+    # --- category_normalize_key (string->string, shared key-derivation for
+    # the mapping-based transforms category_standardize/category_from_file --
+    # always trim+lowercase, never fails) ---
+    ("category_normalize_key", "  Yes  "),
+    ("category_normalize_key", "USA"),
+    ("category_normalize_key", "MiXeD Case"),
+    ("category_normalize_key", ""),
+    ("category_normalize_key", None),  # null
 ]
 
 _PY_FN = {
@@ -407,6 +461,10 @@ _PY_FN = {
     "to_integer": _to_integer_py,
     "comma_decimal": _comma_decimal_py,
     "scientific_to_decimal": _scientific_to_decimal_py,
+    "boolean_normalize": _boolean_normalize_py,
+    "gender_standardize": _gender_standardize_py,
+    "null_standardize": _null_standardize_py,
+    "category_normalize_key": lambda v: None if v is None else _category_normalize_key_py(v),
 }
 
 _NATIVE_ARROW_FN = {
@@ -437,6 +495,10 @@ _NATIVE_ARROW_FN = {
     "to_integer": "to_integer_arrow",
     "comma_decimal": "comma_decimal_arrow",
     "scientific_to_decimal": "scientific_to_decimal_arrow",
+    "boolean_normalize": "boolean_normalize_arrow",
+    "gender_standardize": "gender_standardize_arrow",
+    "null_standardize": "null_standardize_arrow",
+    "category_normalize_key": "category_normalize_key_arrow",
 }
 
 

@@ -44,6 +44,12 @@ import {
   emailValidateTs,
 } from "../../src/core/transforms/email.js";
 import { urlNormalizeTs, urlExtractDomainTs } from "../../src/core/transforms/url.js";
+import {
+  categoryNormalizeKeyTs,
+  booleanNormalizeTs,
+  genderStandardizeTs,
+  nullStandardizeTs,
+} from "../../src/core/transforms/categorical.js";
 import { enableWasm, disableWasm } from "../../src/core/wasm/index.js";
 import { getFlowWasmBackend, type FlowWasmBackend } from "../../src/core/wasm/backend.js";
 
@@ -86,6 +92,10 @@ const PURE_TS_FN: Record<string, (s: string) => boolean | string | undefined> = 
   email_validate: emailValidateTs,
   url_normalize: urlNormalizeTs,
   url_extract_domain: urlExtractDomainTs,
+  boolean_normalize: booleanNormalizeTs,
+  gender_standardize: genderStandardizeTs,
+  null_standardize: nullStandardizeTs,
+  category_normalize_key: categoryNormalizeKeyTs,
 };
 
 /** Same transform set, dispatched through the wasm backend's method of the
@@ -115,6 +125,10 @@ function wasmFn(backend: FlowWasmBackend, transform: string): (s: string) => boo
     email_validate: (s) => backend.emailValidate(s),
     url_normalize: (s) => backend.urlNormalize(s),
     url_extract_domain: (s) => backend.urlExtractDomain(s),
+    boolean_normalize: (s) => backend.booleanNormalize(s),
+    gender_standardize: (s) => backend.genderStandardize(s),
+    null_standardize: (s) => backend.nullStandardize(s),
+    category_normalize_key: (s) => backend.categoryNormalizeKey(s),
   };
   const fn = map[transform];
   if (!fn) throw new Error(`no wasm dispatch for transform ${transform}`);

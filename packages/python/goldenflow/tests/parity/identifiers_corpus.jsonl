@@ -257,3 +257,45 @@
 {"transform": "scientific_to_decimal", "input": "abc", "expected": null}
 {"transform": "scientific_to_decimal", "input": "", "expected": null}
 {"transform": "scientific_to_decimal", "input": null, "expected": null}
+{"transform": "boolean_normalize", "input": "Yes", "expected": true}
+{"transform": "boolean_normalize", "input": "Y", "expected": true}
+{"transform": "boolean_normalize", "input": "1", "expected": true}
+{"transform": "boolean_normalize", "input": "True", "expected": true}
+{"transform": "boolean_normalize", "input": " true ", "expected": true}
+{"transform": "boolean_normalize", "input": "T", "expected": true}
+{"transform": "boolean_normalize", "input": "No", "expected": false}
+{"transform": "boolean_normalize", "input": "N", "expected": false}
+{"transform": "boolean_normalize", "input": "0", "expected": false}
+{"transform": "boolean_normalize", "input": "False", "expected": false}
+{"transform": "boolean_normalize", "input": "f", "expected": false}
+{"transform": "boolean_normalize", "input": "maybe", "expected": null}
+{"transform": "boolean_normalize", "input": "", "expected": null}
+{"transform": "boolean_normalize", "input": null, "expected": null}
+{"transform": "gender_standardize", "input": "Male", "expected": "M"}
+{"transform": "gender_standardize", "input": "male", "expected": "M"}
+{"transform": "gender_standardize", "input": "M", "expected": "M"}
+{"transform": "gender_standardize", "input": "m", "expected": "M"}
+{"transform": "gender_standardize", "input": "Female", "expected": "F"}
+{"transform": "gender_standardize", "input": "female", "expected": "F"}
+{"transform": "gender_standardize", "input": "F", "expected": "F"}
+{"transform": "gender_standardize", "input": "f", "expected": "F"}
+{"transform": "gender_standardize", "input": "Nonbinary", "expected": "Nonbinary"}
+{"transform": "gender_standardize", "input": "", "expected": ""}
+{"transform": "gender_standardize", "input": null, "expected": null}
+{"transform": "null_standardize", "input": "N/A", "expected": null}
+{"transform": "null_standardize", "input": "NULL", "expected": null}
+{"transform": "null_standardize", "input": "none", "expected": null}
+{"transform": "null_standardize", "input": "", "expected": null}
+{"transform": "null_standardize", "input": "  ", "expected": null}
+{"transform": "null_standardize", "input": "null", "expected": null}
+{"transform": "null_standardize", "input": "NA", "expected": null}
+{"transform": "null_standardize", "input": "nil", "expected": null}
+{"transform": "null_standardize", "input": "nan", "expected": null}
+{"transform": "null_standardize", "input": "-", "expected": null}
+{"transform": "null_standardize", "input": "actual value", "expected": "actual value"}
+{"transform": "null_standardize", "input": null, "expected": null}
+{"transform": "category_normalize_key", "input": "  Yes  ", "expected": "yes"}
+{"transform": "category_normalize_key", "input": "USA", "expected": "usa"}
+{"transform": "category_normalize_key", "input": "MiXeD Case", "expected": "mixed case"}
+{"transform": "category_normalize_key", "input": "", "expected": ""}
+{"transform": "category_normalize_key", "input": null, "expected": null}

@@ -12,6 +12,7 @@
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
+    use goldenflow_core::categorical;
     use goldenflow_core::email;
     use goldenflow_core::identifiers::{aba, ean, iban, imei, isbn, luhn, swift, vat};
     use goldenflow_core::names;
@@ -172,5 +173,25 @@ mod wasm {
     #[wasm_bindgen]
     pub fn fill_zero(x: Option<f64>) -> f64 {
         numeric::fill_zero(x)
+    }
+
+    #[wasm_bindgen]
+    pub fn boolean_normalize(s: &str) -> Option<bool> {
+        categorical::boolean_normalize(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn gender_standardize(s: &str) -> String {
+        categorical::gender_standardize(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn null_standardize(s: &str) -> Option<String> {
+        categorical::null_standardize(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn category_normalize_key(s: &str) -> String {
+        categorical::category_normalize_key(s)
     }
 }
