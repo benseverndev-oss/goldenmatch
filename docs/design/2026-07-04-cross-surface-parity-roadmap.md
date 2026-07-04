@@ -29,7 +29,7 @@ one of two camps:
 | sketch / MinHash-LSH | ✅ | ✅ | 🟡#1413 | 🟡#1413 | 🟡#1413 | **full (pending)** |
 | score (jaro/lev/token) | ✅ | ✅ | ✅ | ❌ | ❌ | edge-only |
 | graph (CC + pair-dedup) | ✅ | ✅ | ❌ | ✅ | ✅ | SQL-only |
-| fingerprint (record) | ✅ | ✅ | ❌ | ❌ | ✅ | SQL-partial |
+| fingerprint (record) | ✅ | ✅ | 🟡P3 | ✅ | ✅ | **full (pending P3)** |
 | embed (goldenembed) | ✅ | ✅ | ❌ | ✅ | ✅ | SQL-only (edge blocked) |
 | perceptual (pHash) | ✅ | ✅ | ✅ | ❌ | ❌ | edge-only |
 | autoconfig | ✅ | ✅ | ✅ | ❌ | ❌ | edge-only |
@@ -72,10 +72,16 @@ wasm-hostile deps.
 
 ### Tier 2 — valuable, straightforward
 
-- [ ] **P3 · fingerprint → edge + DuckDB.** `record_fingerprint` (canonical
-  record hash) is Postgres-native only. Small pure-Rust kernel; canonical keys
-  everywhere (dedup joins, cache keys). Add `fingerprint-wasm` + TS reroute, and
-  a DuckDB `goldenmatch_record_fingerprint` native UDF. *Effort: S–M.*
+- [x] **P3 · fingerprint → edge.** `record_fingerprint` (canonical record hash)
+  — canonical keys everywhere (dedup joins, cache keys). On audit the only real
+  gap was the **edge**: DuckDB's `goldenmatch_record_fingerprint` already calls
+  the native-gated `record_fingerprint` (native-authoritative when the wheel is
+  present — not the embedded-CPython bridge), and Postgres is native-direct; only
+  the TS surface hand-rolled its own canonicalizer (a silent-divergence risk).
+  Closed it with a `fingerprint-wasm` crate over `fingerprint-core::fingerprint_
+  json` + a `recordFingerprint` reroute (JSON-primitive-safe records run the
+  shared kernel; bigint/`Uint8Array` stay pure-TS) + a shared golden oracle. Done
+  in the sketch/graph structural twin — `fixture_drift` auto-covers it. *(Done.)*
 - [ ] **P4 · perceptual → SQL (DuckDB + Postgres).** Image pHash
   (`perceptual-core`). Easy (pure Rust, small), niche use (image/near-dup).
   Shape: `goldenmatch_perceptual_hash(bytes) -> int8` + a distance helper.

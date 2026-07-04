@@ -25,9 +25,51 @@
  *     BMP; field names are normally ASCII).
  */
 
+import { getFingerprintWasmBackend } from "./fingerprintWasmBackend.js";
+
 const US = 0x1f; // unit separator: between a field name and its value
 const RS = 0x1e; // record separator: end of one field
 const _enc = new TextEncoder();
+
+/**
+ * Whether a record can be fingerprinted via the shared wasm kernel (which takes
+ * a JSON object string) with a result BYTE-IDENTICAL to the pure-TS path. JSON
+ * can't carry `bigint` / `Uint8Array`, and a handful of value/name shapes hash
+ * differently through a JSON round-trip than through `_valueBytes`, so those
+ * stay on the pure-TS path (which is the reference the wasm kernel matches for
+ * everything else). Only HASHED (non-`__`) fields are inspected — `__`-prefixed
+ * keys are dropped by both surfaces.
+ *
+ * Ineligible (→ pure-TS):
+ *   - `bigint` / `Uint8Array` — not JSON-representable.
+ *   - `undefined` — `JSON.stringify` drops the key; pure-TS hashes it as null.
+ *   - `-0` or a non-safe integer — JSON emits `"0"` / loses precision, so the
+ *     int/float tag or digits would differ.
+ *   - a non-finite number, or a nested array/object — both surfaces throw; we
+ *     keep pure-TS's exact error.
+ *   - a non-ASCII field name — pure-TS sorts by UTF-16, the kernel by UTF-8
+ *     bytes; identical for ASCII, so restrict to ASCII to preserve the id.
+ */
+function _isWasmEligible(record: Record<string, unknown>): boolean {
+  for (const name of Object.keys(record)) {
+    if (name.startsWith("__")) continue; // dropped by both surfaces
+    // eslint-disable-next-line no-control-regex
+    if (!/^[\x00-\x7f]*$/.test(name)) return false; // ASCII names only
+    const v = record[name];
+    if (v === null) continue;
+    const t = typeof v;
+    if (t === "boolean" || t === "string") continue;
+    if (t === "number") {
+      const n = v as number;
+      if (!Number.isFinite(n)) return false;
+      if (Number.isInteger(n) && (Object.is(n, -0) || !Number.isSafeInteger(n)))
+        return false;
+      continue;
+    }
+    return false; // bigint, Uint8Array, undefined, object, symbol, function
+  }
+  return true;
+}
 
 function _hex(bytes: Uint8Array): string {
   let out = "";
@@ -65,6 +107,19 @@ function _valueBytes(name: string, v: unknown): number[] {
  * native C ABI, and SQL surfaces produce for the same record.
  */
 export async function recordFingerprint(record: Record<string, unknown>): Promise<string> {
+  // When the opt-in wasm backend is enabled, run the SHARED fingerprint-core
+  // kernel for JSON-primitive-safe records — one canonicalizer across every
+  // surface. bigint / Uint8Array / edge-case records stay on the pure-TS path
+  // below (the reference the kernel matches). A JSON.stringify throw (e.g. a
+  // bigint hiding in a `__`-prefixed value) also falls through to pure-TS.
+  const backend = getFingerprintWasmBackend();
+  if (backend !== null && _isWasmEligible(record)) {
+    try {
+      return backend.fingerprintJson(JSON.stringify(record));
+    } catch {
+      // fall through to the pure-TS canonicalizer
+    }
+  }
   const names = Object.keys(record)
     .filter((k) => !k.startsWith("__"))
     .sort();

@@ -92,6 +92,7 @@ jobs:
       goldengraph_wasm: ${{ steps.filter.outputs.goldengraph_wasm }}
       hnsw_wasm: ${{ steps.filter.outputs.hnsw_wasm }}
       graph_wasm: ${{ steps.filter.outputs.graph_wasm }}
+      fingerprint_wasm: ${{ steps.filter.outputs.fingerprint_wasm }}
       wasm_flow: ${{ steps.filter.outputs.wasm_flow }}
       sketch_wasm: ${{ steps.filter.outputs.sketch_wasm }}
       quality_gate: ${{ steps.filter.outputs.quality_gate }}
@@ -203,6 +204,10 @@ jobs:
               # wrapper change must re-run the TS lane's graph drift guard.
               - 'packages/rust/extensions/graph-core/**'
               - 'packages/rust/extensions/graph-wasm/**'
+              # Same for the fingerprint wasm core: a kernel or wrapper change
+              # must re-run the TS lane's record-fingerprint drift guard.
+              - 'packages/rust/extensions/fingerprint-core/**'
+              - 'packages/rust/extensions/fingerprint-wasm/**'
             wasm_score:
               - 'packages/rust/extensions/score-wasm/**'
               - 'packages/rust/extensions/score-core/**'
@@ -318,6 +323,14 @@ jobs:
               - 'packages/rust/extensions/graph-core/**'
               - 'packages/rust/extensions/graph-wasm/**'
               - 'packages/typescript/goldenmatch/scripts/build_graph_wasm.mjs'
+            fingerprint_wasm:
+              # Gates the (rust-toolchain-heavy) fingerprint wasm rebuild + drift
+              # guard inside the typescript lane. Only fires when the fingerprint
+              # canonicalization kernel, its wasm wrapper, or the embed script
+              # changes.
+              - 'packages/rust/extensions/fingerprint-core/**'
+              - 'packages/rust/extensions/fingerprint-wasm/**'
+              - 'packages/typescript/goldenmatch/scripts/build_fingerprint_wasm.mjs'
             web:
               - 'packages/python/goldenmatch/web/**'
               - 'packages/python/goldenmatch/goldenmatch/web/**'
@@ -1544,6 +1557,25 @@ jobs:
             exit 1
           fi
           npx vitest run tests/parity/graph-wasm.parity.test.ts tests/unit/graph-wasm-reroute.test.ts
+      # Same drift guard for the fingerprint wasm surface: rebuild the inlined
+      # wasm + bindings + copy the golden fixture from the live kernel, diff ONLY
+      # the deterministic golden JSON (not the version-varying wasm bytes), then
+      # prove the committed wasm reproduces it. Stale committed wasm is caught
+      # behaviorally by the parity + reroute tests.
+      - name: Rebuild + verify embedded fingerprint wasm
+        if: needs.changes.outputs.fingerprint_wasm == 'true' || needs.changes.outputs.force_all == 'true'
+        working-directory: packages/typescript/goldenmatch
+        run: |
+          rustup target add wasm32-unknown-unknown
+          command -v wasm-pack >/dev/null 2>&1 || curl -sSf https://rustwasm.github.io/wasm-pack/installer/init.sh | sh
+          node scripts/build_fingerprint_wasm.mjs
+          if ! git diff --exit-code -- tests/parity/fixtures/fingerprint/; then
+            echo "::error::fingerprint golden fixture is stale. Run \
+              'node scripts/build_fingerprint_wasm.mjs' in packages/typescript/goldenmatch \
+              (after regenerating fingerprint-core/golden/fingerprint_golden.json) and commit the result." >&2
+            exit 1
+          fi
+          npx vitest run tests/parity/fingerprint-wasm.parity.test.ts tests/unit/fingerprint-wasm-reroute.test.ts
       - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
         with:
           path: .turbo
@@ -1854,6 +1886,14 @@ jobs:
       # lane's suggest drift guard, which needs the wasm32 target + wasm-pack).
       - run: cargo check --manifest-path suggest-wasm/Cargo.toml
       - run: cargo clippy --manifest-path suggest-wasm/Cargo.toml --all-targets -- -D warnings
+      # fingerprint-wasm: the wasm-bindgen wrapper over fingerprint-core that the
+      # TS record-fingerprint surface consumes. Host `cargo check` + clippy
+      # validate it compiles against the core (the actual wasm build + embed is
+      # exercised in the typescript lane's fingerprint drift guard, which needs
+      # the wasm32 target + wasm-pack). The core's own tests run in the native
+      # lane's "clippy + test (fingerprint-core crate)" step.
+      - run: cargo check --manifest-path fingerprint-wasm/Cargo.toml
+      - run: cargo clippy --manifest-path fingerprint-wasm/Cargo.toml --all-targets -- -D warnings
 
   # Measured Rust line coverage (cargo-llvm-cov). The structural audit's unit
   # tests (graph-core / score-core / fingerprint-core / native / bridge) are now
