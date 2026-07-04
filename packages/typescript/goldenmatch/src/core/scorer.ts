@@ -163,12 +163,17 @@ export function jaro(a: string, b: string): number {
  * Jaro-Winkler similarity.
  * Adds a bonus for a common prefix of up to 4 characters, scaling factor 0.1.
  *
- * NOTE: this hand-rolled implementation has small known divergences from
- * rapidfuzz (the Python / score-core / WASM source of truth) on some inputs —
- * it applies the prefix bonus below the Winkler 0.7 boost threshold, and its
- * greedy Jaro matcher counts transpositions differently on repeated-character
- * words (e.g. "saturday"). Aligning the pure-TS scorers with rapidfuzz is a
- * tracked follow-up; the opt-in WASM backend already matches rapidfuzz exactly.
+ * This pure-TS implementation is ALIGNED with rapidfuzz (the Python /
+ * score-core / WASM source of truth): codepoint iteration, floored
+ * transposition (t/2), and the Winkler prefix bonus applied ONLY above the
+ * strict jaro > 0.7 boost threshold (#879 closed the three prior known
+ * divergences). A 2005-pair rapidfuzz sweep — repeated-character words,
+ * non-BMP/accented codepoints, near-duplicates, multi-token phrases, and real
+ * names — measured a max absolute error of 5.6e-17 across jaro_winkler /
+ * levenshtein / token_sort, i.e. floating-point-identical to rapidfuzz. The
+ * committed regression gate is `tests/parity/scorer-rapidfuzz.test.ts`
+ * (fixture from emit_scorer_parity_fixtures.py). The opt-in WASM backend runs
+ * the same rapidfuzz kernel, so pure-TS ≈ WASM holds too.
  */
 export function jaroWinkler(a: string, b: string): number {
   const jaroSim = jaro(a, b);
