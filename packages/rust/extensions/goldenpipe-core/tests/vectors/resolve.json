@@ -42,5 +42,13 @@
              "stages": [{"key": "a", "name": "a", "produces": ["out"], "consumes": ["df"]},
                         {"key": "b", "name": "b", "produces": [], "consumes": ["out"]}]},
    "expected": {"ok": {"stages": [{"name": "a", "use": "a", "config": {}, "on_error": "continue"},
-                                  {"name": "b", "use": "b", "config": {}, "on_error": "continue"}]}}}
+                                  {"name": "b", "use": "b", "config": {}, "on_error": "continue"}]}}},
+  {"comment": "DAG: a sole-producer edge (for an earlier consume) pins one of two X producers -> resolves deterministically, not ambiguous",
+   "input": {"config": {"pipeline": "auto", "stages": ["i", "j", "k"]},
+             "stages": [{"key": "i", "name": "i", "produces": [], "consumes": ["y", "x", "df"]},
+                        {"key": "j", "name": "j", "produces": ["y", "x"], "consumes": ["df"]},
+                        {"key": "k", "name": "k", "produces": ["x"], "consumes": ["df"]}]},
+   "expected": {"ok": {"stages": [{"name": "j", "use": "j", "config": {}, "on_error": "continue"},
+                                  {"name": "i", "use": "i", "config": {}, "on_error": "continue"},
+                                  {"name": "k", "use": "k", "config": {}, "on_error": "continue"}]}}}
 ]

@@ -107,6 +107,11 @@ pub fn resolve(config: &PipelineConfig, stages: &[StageInfo]) -> Result<Executio
                     edges.insert((later[0], i));
                 }
                 _ => {
+                    // A producer is "pinned" if ANY must-precede edge already forces it
+                    // before this consumer -- a `needs` edge OR a sole-producer edge added
+                    // for an earlier `consumes` entry of this same stage `i`. Exactly one
+                    // pinned => deterministic binding (a legal re-production chain), so it
+                    // resolves; zero or >=2 pinned => AmbiguousProducer (spec §3.1 rule 2).
                     let pinned = later.iter().filter(|&&j| edges.contains(&(j, i))).count();
                     if pinned != 1 {
                         return Err(PlanError::AmbiguousProducer {
@@ -428,5 +433,23 @@ mod tests {
         let stages = vec![info("a", &["out"], &["df"]), info("b", &[], &["out", "df"])];
         let c = cfg(vec![name_entry("b"), name_entry("a")]);
         assert_eq!(resolve(&c, &stages).unwrap(), resolve(&c, &stages).unwrap());
+    }
+
+    #[test]
+    fn sole_producer_edge_pins_one_of_multiple_producers() {
+        // i consumes Y and X; j (sole Y producer) is forced before i by the Y edge; k
+        // re-produces X later. i binds j's X deterministically -> resolves, not ambiguous.
+        let stages = vec![
+            info("i", &[], &["y", "x", "df"]),
+            info("j", &["y", "x"], &["df"]),
+            info("k", &["x"], &["df"]),
+        ];
+        let plan = resolve(
+            &cfg(vec![name_entry("i"), name_entry("j"), name_entry("k")]),
+            &stages,
+        )
+        .unwrap();
+        let names: Vec<_> = plan.stages.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["j", "i", "k"]);
     }
 }
