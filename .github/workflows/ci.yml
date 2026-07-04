@@ -397,6 +397,9 @@ jobs:
               # goldenmatch_embed_local) and supplies the embed-smoke fixture,
               # so a goldenembed change must rebuild + re-smoke this lane.
               - 'packages/rust/extensions/goldenembed/**'
+              # goldenembed-core (featurizer + native projection) is a transitive
+              # path dep via goldenembed — a kernel change must re-smoke embed.
+              - 'packages/rust/extensions/goldenembed-core/**'
               # goldenhnsw is a path dep of the postgres crate (goldenmatch_hnsw_pairs),
               # so a kernel change must rebuild + re-smoke this lane.
               - 'packages/rust/extensions/goldenhnsw/**'
@@ -2443,12 +2446,19 @@ jobs:
         run: |
           cargo clippy --all-targets -- -D warnings
           cargo test
+      # Default features = NATIVE (no ort): clippy + the native-load test (loads
+      # weights.npz, embeds, matches the numpy reference — no ONNX Runtime).
       - name: clippy
         working-directory: packages/rust/extensions/goldenembed
         run: cargo clippy --release --all-targets -- -D warnings
       - name: test
         working-directory: packages/rust/extensions/goldenembed
         run: cargo test --release
+      # Keep the opt-in ONNX backend (`ort`) compiling — it's cfg'd out of the
+      # default build, so nothing else exercises it.
+      - name: clippy (onnx feature)
+        working-directory: packages/rust/extensions/goldenembed
+        run: cargo clippy --release --features onnx --all-targets -- -D warnings
 
   # goldenmatch-embed wheel smoke: build the SEPARATE maturin/pyo3 wheel
   # (packages/rust/extensions/embed-py/) that exposes the goldenembed runtime

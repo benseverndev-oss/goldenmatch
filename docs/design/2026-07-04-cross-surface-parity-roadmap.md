@@ -151,11 +151,18 @@ wasm-hostile deps.
   differs from numpy at this scale): worst cosine distance **1.8e-7** vs the numpy
   reference, pinned in Rust (`goldenembed-core/tests/project_parity.rs`) and TS
   (`goldenembed-wasm.parity.test.ts`) golden harnesses. *(Done.)*
-  - Follow-up (separate, lower priority): make `ort` a non-default cargo feature
-    and route `goldenembed`'s runtime `embed()` through the native `project` when
-    `weights.npz` is present, so the **SQL surfaces stop linking ONNX Runtime**
-    (smaller extensions, faster cold start). The parity + kernel are already in
-    place; this is just the runtime gating + the 4 consumers' feature flags.
+  - ✅ **Follow-up done: SQL surfaces no longer link ONNX Runtime.** `ort` is now
+    a non-default `onnx` cargo feature; `goldenembed::load` reads `weights.npz`
+    and `embed()` runs the native `project` matmul by default (the `model.onnx`/
+    `ort` path only under `--features onnx`, for onnx-only deployments with no
+    `weights.npz`). A `weights.rs` npz/npy reader (over the existing `zip` dep) +
+    a committed model fixture + a native-load integration test
+    (`goldenembed/tests/native_load.rs`, cosine < 1e-5 vs numpy) prove the whole
+    chain. The 4 consumers (postgres / datafusion-udf / goldenhnsw / embed-py)
+    keep the identical `goldenembed` dep and just stop pulling `ort` — smaller
+    extensions, no per-process ONNX Runtime init. Bonus: the runtime now also
+    loads **weights-only** models (no `model.onnx`), which the old ort path
+    couldn't.
 
 ## Definition of done (the repeatable pattern)
 
