@@ -38,7 +38,7 @@ Native SQL extensions for [GoldenMatch](https://github.com/benseverndev-oss/gold
 
 ### postgres/ (goldenmatch_pg)
 - pgrx 0.12.9 Postgres extension, standalone crate (not in workspace)
-- `quick.rs` -- 11 SQL functions: table-based (SPI), table-returning (TableIterator), scalar, JSON-based
+- `quick.rs` -- 11 SQL functions: table-based (SPI), table-returning (TableIterator), scalar, JSON-based. **`goldenmatch_score(a, b, scorer)` de-bridged (P1):** the four rapidfuzz-family scorers (jaro_winkler / levenshtein / token_sort / exact) now run native-direct over `score-core` (no embedded-CPython per row — matters for row-wise `WHERE goldenmatch_score(...) > t`); other scorers (soundex_match / ensemble) still fall back to the bridge. Same signature + results, so NO version bump (implementation-only change; the SQL is unchanged). `rust_pgrx` smoke asserts the native value (`jaro_winkler` == 0.9125, validated vs the Python reference).
 - `pipeline.rs` -- 5 job management functions: gm_configure, gm_run, gm_jobs, gm_golden, gm_drop
 - `spi.rs` -- reads PG tables via `row_to_json()` SPI queries
 - `correction.rs` -- Learning Memory CRUD + tuning: `correction_add`, `correction_list`, plus `memory_learn` (force a MemoryLearner pass) and `memory_stats` (counts + learned adjustments). All wrap the bridge `goldenmatch_bridge::api::*`. `memory_learn` is REVOKEd from PUBLIC like `correction_add`; `memory_stats` is read-only status, left for PUBLIC.
