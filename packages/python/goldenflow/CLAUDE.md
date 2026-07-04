@@ -211,6 +211,30 @@ package. Loader discover order in `goldenflow/core/_native_loader.py`:
   pattern as the email family above (existing transforms migrated, not new
   additions). Both wired via the single `"url"` `_native_loader` component
   (floor symbol `url_normalize_arrow`).
+- **Numeric family migrated to owned kernels (Wave D4) -- VALUE parity, not
+  string parity.** `currency_strip`/`percentage_normalize`/`to_integer`
+  (mode stays `"expr"`, dispatched via `pl.col(column).map_batches(...)` so
+  the public `func(column) -> Expr` signature is unchanged) and
+  `comma_decimal`/`scientific_to_decimal`/`round`/`clamp`/`abs_value`/
+  `fill_zero` (mode `"series"`) now dispatch native-first through
+  goldenflow-core (`currency_strip_arrow` et al.), all wired via the single
+  `"numeric"` `_native_loader` component (floor symbol
+  `currency_strip_arrow`). This family outputs floats/ints, so the
+  byte-parity harness compares by VALUE: the 5 string->number PARSERS
+  (currency_strip/percentage_normalize/to_integer/comma_decimal/
+  scientific_to_decimal) live in the shared
+  `tests/parity/identifiers_corpus.jsonl` corpus with a numeric-aware
+  `_assert_value_parity` helper in `test_identifiers_parity.py` (exact float
+  equality preferred, 1e-9 epsilon only as a documented last resort); the 4
+  numeric-ARRAY ops (round/clamp/abs_value/fill_zero) take a NUMERIC column
+  as input rather than a string, so they don't fit that string-keyed corpus
+  and instead live in `test_numeric_kernels.py` with pinned-vector native +
+  fallback asserts. **Locked rounding rule:** `round` is round-half-away-
+  from-zero via multiply/round/divide (`(x * 10^n + 0.5).floor() / 10^n` for
+  `x >= 0`, mirrored `ceil` for negative) -- the goldenflow-core
+  `round_f64` kernel is the source of truth; this is deliberately NOT
+  Python's builtin `round()` (round-half-to-even) nor naive `Math.round`
+  (rounds half toward +Infinity, not away from zero) in TS.
 - **Byte-parity harness (cross-surface oracle = goldenflow-core).**
   `packages/python/goldenflow/tests/parity/identifiers_corpus.jsonl` (mirrored
   byte-identical into `packages/typescript/goldenflow/tests/parity/`) is the

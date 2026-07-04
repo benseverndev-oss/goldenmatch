@@ -101,6 +101,11 @@ _COMPONENT_SYMBOLS: dict[str, tuple[str, ...]] = {
     # url: normalize/extract_domain -- floor symbol only (url_normalize_arrow),
     # locale-free, region-free.
     "url": ("url_normalize_arrow",),
+    # numeric: string->number parsers (currency/percentage/to_integer/
+    # comma_decimal/scientific_to_decimal) + numeric-array ops (round/clamp/
+    # abs_value/fill_zero) -- floor symbol only (currency_strip_arrow),
+    # locale-free, region-free.
+    "numeric": ("currency_strip_arrow",),
 }
 
 # Components whose only native path is intentionally non-authoritative (the

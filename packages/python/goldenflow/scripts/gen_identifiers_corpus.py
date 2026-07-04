@@ -54,6 +54,13 @@ from goldenflow.transforms.names import (  # noqa: E402
     _name_script_py,
     _name_transliterate_py,
 )
+from goldenflow.transforms.numeric import (  # noqa: E402
+    _comma_decimal_py,
+    _currency_strip_py,
+    _percentage_normalize_py,
+    _scientific_to_decimal_py,
+    _to_integer_py,
+)
 from goldenflow.transforms.url import (  # noqa: E402
     _url_extract_domain_py,
     _url_normalize_py,
@@ -328,6 +335,48 @@ _CASES: list[tuple[str, str | None]] = [
     ("url_extract_domain", ""),  # empty -> None
     ("url_extract_domain", "   "),  # whitespace-only -> None
     ("url_extract_domain", None),  # null
+    # --- currency_strip (string->float; VALUE parity, not repr) ---
+    ("currency_strip", "$1,234.56"),  # strip $ and comma
+    ("currency_strip", "-$42.00"),  # negative, dollar sign
+    ("currency_strip", "USD 100"),  # strip letters + space
+    ("currency_strip", "0.50"),  # plain decimal
+    ("currency_strip", "free"),  # no numeric chars -> null
+    ("currency_strip", ""),  # empty -> null
+    ("currency_strip", None),  # null
+    # --- percentage_normalize (string->float) ---
+    ("percentage_normalize", "85%"),
+    ("percentage_normalize", "100%"),
+    ("percentage_normalize", "0.5%"),
+    ("percentage_normalize", " 12.5 % "),  # whitespace around number and %
+    ("percentage_normalize", "50"),  # no % sign
+    ("percentage_normalize", "abc%"),  # non-numeric -> null
+    ("percentage_normalize", ""),  # empty -> null
+    ("percentage_normalize", None),  # null
+    # --- to_integer (string->int, truncating) ---
+    ("to_integer", "42"),
+    ("to_integer", "3.7"),  # truncates
+    ("to_integer", "-3.7"),  # truncates toward zero
+    ("to_integer", "100"),
+    ("to_integer", "abc"),  # non-numeric -> null
+    ("to_integer", ""),  # empty -> null
+    ("to_integer", None),  # null
+    # --- comma_decimal (string->float, EU format) ---
+    ("comma_decimal", "1.234,56"),  # EU format
+    ("comma_decimal", "99,99"),  # EU format, no thousands sep
+    ("comma_decimal", "1.000,00"),  # EU format with thousands sep
+    ("comma_decimal", "1.5"),  # US format (no comma) -> parsed as-is
+    ("comma_decimal", "100"),  # plain integer
+    ("comma_decimal", "abc"),  # non-numeric -> null
+    ("comma_decimal", ""),  # empty -> null
+    ("comma_decimal", None),  # null
+    # --- scientific_to_decimal (string->float) ---
+    ("scientific_to_decimal", "1.5e3"),
+    ("scientific_to_decimal", "2.0E-4"),
+    ("scientific_to_decimal", "3.14e0"),
+    ("scientific_to_decimal", "100"),  # plain number, no exponent
+    ("scientific_to_decimal", "abc"),  # non-numeric -> null
+    ("scientific_to_decimal", ""),  # empty -> null
+    ("scientific_to_decimal", None),  # null
 ]
 
 _PY_FN = {
@@ -353,6 +402,11 @@ _PY_FN = {
     "email_validate": _email_validate_py,
     "url_normalize": _url_normalize_py,
     "url_extract_domain": _url_extract_domain_py,
+    "currency_strip": _currency_strip_py,
+    "percentage_normalize": _percentage_normalize_py,
+    "to_integer": _to_integer_py,
+    "comma_decimal": _comma_decimal_py,
+    "scientific_to_decimal": _scientific_to_decimal_py,
 }
 
 _NATIVE_ARROW_FN = {
@@ -378,6 +432,11 @@ _NATIVE_ARROW_FN = {
     "email_validate": "email_validate_arrow",
     "url_normalize": "url_normalize_arrow",
     "url_extract_domain": "url_extract_domain_arrow",
+    "currency_strip": "currency_strip_arrow",
+    "percentage_normalize": "percentage_normalize_arrow",
+    "to_integer": "to_integer_arrow",
+    "comma_decimal": "comma_decimal_arrow",
+    "scientific_to_decimal": "scientific_to_decimal_arrow",
 }
 
 

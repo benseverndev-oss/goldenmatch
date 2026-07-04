@@ -5,8 +5,8 @@
 //! Interface. Each mapper releases the GIL around the compute loop.
 
 use arrow::array::{
-    make_array, Array, ArrayData, BooleanBuilder, Int64Builder, LargeStringArray, StringArray,
-    StringBuilder,
+    make_array, Array, ArrayData, BooleanBuilder, Float64Array, Float64Builder, Int64Builder,
+    LargeStringArray, StringArray, StringBuilder,
 };
 use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
@@ -77,5 +77,48 @@ where
             None => builder.append_null(),
         })
     })?;
+    Ok(builder.finish().into_data())
+}
+
+pub fn map_str_to_f64<F>(py: Python, data: ArrayData, f: F) -> PyResult<ArrayData>
+where
+    F: Fn(&str) -> Option<f64> + Sync,
+{
+    let len = make_array(data.clone()).len();
+    let mut builder = Float64Builder::with_capacity(len);
+    py.detach(|| -> PyResult<()> {
+        for_each_str(&data, |_, v| match v.and_then(&f) {
+            Some(out) => builder.append_value(out),
+            None => builder.append_null(),
+        })
+    })?;
+    Ok(builder.finish().into_data())
+}
+
+/// Apply `f` over each element of a Float64 array, receiving `None` for a
+/// null slot and `Some(x)` otherwise; `f` returns `None` to emit a null,
+/// `Some(out)` to emit a value. Unlike the string mappers, `f` sees the
+/// null-ness itself (some numeric ops, like `fill_zero`, act ON nulls rather
+/// than passing them through untouched).
+pub fn map_f64_to_f64<F>(py: Python, data: ArrayData, f: F) -> PyResult<ArrayData>
+where
+    F: Fn(Option<f64>) -> Option<f64> + Sync,
+{
+    let arr = make_array(data.clone());
+    let a = arr
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .ok_or_else(|| PyTypeError::new_err("expected an Arrow Float64 array"))?;
+    let len = a.len();
+    let mut builder = Float64Builder::with_capacity(len);
+    py.detach(|| {
+        for i in 0..len {
+            let v = if a.is_null(i) { None } else { Some(a.value(i)) };
+            match f(v) {
+                Some(out) => builder.append_value(out),
+                None => builder.append_null(),
+            }
+        }
+    });
     Ok(builder.finish().into_data())
 }

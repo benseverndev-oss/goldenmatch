@@ -11,7 +11,11 @@ pub fn url_normalize_arrow(
     py: Python,
     array: PyArrowType<ArrayData>,
 ) -> PyResult<PyArrowType<ArrayData>> {
-    Ok(PyArrowType(map_str_to_str(py, array.0, url::url_normalize)?))
+    Ok(PyArrowType(map_str_to_str(
+        py,
+        array.0,
+        url::url_normalize,
+    )?))
 }
 
 #[pyfunction]

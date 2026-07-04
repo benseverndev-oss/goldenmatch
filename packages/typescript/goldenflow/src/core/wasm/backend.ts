@@ -44,6 +44,15 @@ export interface FlowWasmBackend {
   emailValidate(s: string): boolean;
   urlNormalize(s: string): string | undefined;
   urlExtractDomain(s: string): string | undefined;
+  currencyStrip(s: string): number | undefined;
+  percentageNormalize(s: string): number | undefined;
+  toInteger(s: string): number | undefined;
+  commaDecimal(s: string): number | undefined;
+  scientificToDecimal(s: string): number | undefined;
+  roundValue(x: number, n: number): number;
+  clampValue(x: number, minVal: number, maxVal: number): number;
+  absValue(x: number): number;
+  fillZero(x: number | undefined): number;
 }
 
 import { createBackendRegistry } from "goldenmatch-wasm-runtime";

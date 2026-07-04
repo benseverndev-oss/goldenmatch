@@ -15,6 +15,7 @@ mod wasm {
     use goldenflow_core::email;
     use goldenflow_core::identifiers::{aba, ean, iban, imei, isbn, luhn, swift, vat};
     use goldenflow_core::names;
+    use goldenflow_core::numeric;
     use goldenflow_core::url;
     use wasm_bindgen::prelude::*;
 
@@ -126,5 +127,50 @@ mod wasm {
     #[wasm_bindgen]
     pub fn url_extract_domain(s: &str) -> Option<String> {
         url::url_extract_domain(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn currency_strip(s: &str) -> Option<f64> {
+        numeric::currency_strip(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn percentage_normalize(s: &str) -> Option<f64> {
+        numeric::percentage_normalize(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn to_integer(s: &str) -> Option<i64> {
+        numeric::to_integer(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn comma_decimal(s: &str) -> Option<f64> {
+        numeric::comma_decimal(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn scientific_to_decimal(s: &str) -> Option<f64> {
+        numeric::scientific_to_decimal(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn round_value(x: f64, n: i32) -> f64 {
+        numeric::round_f64(x, n)
+    }
+
+    #[wasm_bindgen]
+    pub fn clamp_value(x: f64, min_val: f64, max_val: f64) -> f64 {
+        numeric::clamp_f64(x, min_val, max_val)
+    }
+
+    #[wasm_bindgen]
+    pub fn abs_value(x: f64) -> f64 {
+        numeric::abs_f64(x)
+    }
+
+    #[wasm_bindgen]
+    pub fn fill_zero(x: Option<f64>) -> f64 {
+        numeric::fill_zero(x)
     }
 }

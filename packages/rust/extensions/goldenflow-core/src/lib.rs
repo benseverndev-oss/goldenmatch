@@ -8,6 +8,7 @@
 pub mod email;
 pub mod identifiers;
 pub mod names;
+pub mod numeric;
 pub mod phone;
 pub mod text;
 pub mod url;
