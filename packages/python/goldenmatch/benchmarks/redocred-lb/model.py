@@ -176,19 +176,6 @@ def make_collate(pad_token_id: int):
     return collate
 
 
-def decode_preds(pred_matrix, hts_per_doc, id2rel):
-    """Map the model's [total_pairs, 97] binary prediction matrix back to per-doc
-    `(h_idx, t_idx, relation_Pid)` triples, sliced by each doc's pair count. Class 0 (TH)
-    is skipped -- an all-zero-relation row means 'no relation'."""
-    preds_per_doc = []
-    cursor = 0
-    for hts in hts_per_doc:
-        doc_preds = []
-        rows = pred_matrix[cursor: cursor + len(hts)]
-        for (h, t), row in zip(hts, rows):
-            for cls in range(1, row.shape[0]):
-                if row[cls] > 0:
-                    doc_preds.append((int(h), int(t), id2rel[cls]))
-        preds_per_doc.append(doc_preds)
-        cursor += len(hts)
-    return preds_per_doc
+# decode_preds lives in the torch-free ensemble_ops so it unit-tests offline; re-exported
+# here for the eval call sites that import it from `model`.
+from ensemble_ops import decode_preds  # noqa: E402,F401
