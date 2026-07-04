@@ -2,7 +2,17 @@
 
 A benchmark for building knowledge graphs from **document troves**, measuring the
 two axes the market skips: **corpus-level entity resolution** and **span-grounded
-faithfulness** — while staying honest on extraction. Full design in `SPEC.md`.
+faithfulness** — while staying honest on extraction. Full design in `SPEC.md`;
+all measured numbers consolidated in **[`RESULTS.md`](RESULTS.md)**.
+
+> **Companion board:** [`../er-kg-bench`](../er-kg-bench) runs the *real decision
+> code* of the packaged frameworks (GraphRAG, Neo4j, LlamaIndex, KGGen/Cognee,
+> mem0, Graphiti) against goldenmatch on real Wikidata/RxNorm data. CLEAR-KG
+> proves the mechanisms + metrics on controlled and real-Wikipedia corpora;
+> er-kg-bench scores the real tools. The homograph split-rate is a first-class
+> metric on both. See `RESULTS.md` for how they fit together (including the
+> honest "every resolver ties at split-rate 0 without the neighborhood signal"
+> bridge finding).
 
 **Why it exists** (from a 2026 landscape scan, 25/25 claims adversarially
 verified): every incumbent doc→KG tool (Neo4j exact-match default, iText2KG
