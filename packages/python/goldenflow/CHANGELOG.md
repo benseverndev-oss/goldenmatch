@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.7.0 (2026-07-04)
+
+Wave D1: the email transform family (`email_lowercase`, `email_normalize`, `email_extract_domain`, `email_validate`) is now backed by owned Rust kernels in `goldenflow-core`, cross-surface (native + WASM/TS + pure-Python fallback), byte-parity to the Rust oracle. This wave migrated existing transforms to the owned-kernel pattern; it did not add new transforms. `email_lowercase`/`email_extract_domain` moved from a vectorized Polars expression to native-first dispatch (the pure-Python fallback runs per-row when the native wheel is absent). Outputs are unchanged for well-formed inputs.
+
 ## 1.6.0 (2026-07-04)
 
 Wave B of the i18n-name-kernel program: two new owned name kernels for cross-script identity matching, cross-surface (native + WASM/TS + pure-Python), byte-parity to the Rust oracle. No breaking changes; existing transform outputs are unchanged.

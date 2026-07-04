@@ -201,6 +201,10 @@ package. Loader discover order in `goldenflow/core/_native_loader.py`:
   detection via Unicode code point ranges). Same cross-surface pattern as
   Waves 0/A: native + WASM/TS + pure-Python fallback, all byte-identical to
   the goldenflow-core Rust oracle.
+- **Email family migrated to owned kernels (Wave D1):** `email_lowercase`,
+  `email_normalize`, `email_extract_domain`, `email_validate` now dispatch
+  native-first through goldenflow-core, same cross-surface pattern as
+  identifiers/names above (existing transforms migrated, not new additions).
 - **Byte-parity harness (cross-surface oracle = goldenflow-core).**
   `packages/python/goldenflow/tests/parity/identifiers_corpus.jsonl` (mirrored
   byte-identical into `packages/typescript/goldenflow/tests/parity/`) is the
