@@ -214,7 +214,7 @@ function asciiTitle(s: string): string {
   return out;
 }
 
-/** Proper-case a name: title-case then the Mc*/O'* capitalization fixups.
+/** Proper-case a name: title-case then the "Mc"/"O'" capitalization fixups.
  * Byte-identical to `_name_proper_py` (`val.title()` -> Mc sub -> O' sub). */
 export function nameProperTs(s: string): string {
   let result = asciiTitle(s);

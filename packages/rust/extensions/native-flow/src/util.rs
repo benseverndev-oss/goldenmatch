@@ -55,11 +55,7 @@ where
 /// arrays; a non-null input emits both halves of `f`'s `(String, String)`
 /// (either half may be empty, but never null on a present row -- matching the
 /// Python transforms, which only null a row when the input is null).
-pub fn map_str_to_str_pair<F>(
-    py: Python,
-    data: ArrayData,
-    f: F,
-) -> PyResult<(ArrayData, ArrayData)>
+pub fn map_str_to_str_pair<F>(py: Python, data: ArrayData, f: F) -> PyResult<(ArrayData, ArrayData)>
 where
     F: Fn(&str) -> (String, String) + Sync,
 {
