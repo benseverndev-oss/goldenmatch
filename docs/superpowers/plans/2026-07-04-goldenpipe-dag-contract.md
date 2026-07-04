@@ -374,14 +374,16 @@ git commit -m "refactor(goldenpipe): rewrite wiring vector -> missing_producer a
             info("p1", &["x"], &["df"]),
             info("p2", &["x"], &["df"]),
         ];
-        // c needs p2 -> pins exactly one of {p1,p2}; resolves (p2 before c).
+        // c needs p2 -> pins exactly one of {p1,p2}; resolves (only edge is p2->c).
         let plan = resolve(
             &cfg(vec![spec_entry("c", &["p2"]), name_entry("p1"), name_entry("p2")]),
             &stages,
         )
         .unwrap();
         let names: Vec<_> = plan.stages.iter().map(|s| s.name.as_str()).collect();
-        assert_eq!(names, ["p2", "c", "p1"]); // p2 pulled before c; p1 stays after
+        // Stable Kahn by config index: p1@1 is free + lowest index -> schedules first;
+        // p2@2 is free next and frees c@0 (the sole needs edge p2->c). Order = [p1, p2, c].
+        assert_eq!(names, ["p1", "p2", "c"]);
     }
 
     #[test]
@@ -539,7 +541,11 @@ pub fn resolve(config: &PipelineConfig, stages: &[StageInfo]) -> Result<Executio
     let mut adj: Vec<Vec<usize>> = vec![vec![]; n];
     for &(a, b) in &edges {
         if a == b {
-            return Err(PlanError::Cycle { stages: vec![nodes[a].pname.clone()] });
+            // self-edge: bump in-degree so the node can never schedule; it (and any
+            // other cycle members) fall through to the ascending-config-index report
+            // below. Avoids depending on edge-set iteration order for the message.
+            indeg[b] += 1;
+            continue;
         }
         adj[a].push(b);
         indeg[b] += 1;
@@ -651,6 +657,7 @@ The new vectors (Task 4) now make the Python Leg A FAIL — that is the failing 
 **Files:**
 - Rewrite: `packages/python/goldenpipe/goldenpipe/engine/resolver.py` (`Resolver.resolve` + error classes).
 - Modify: `packages/python/goldenpipe/goldenpipe/core/_planner_json.py` (`resolve_json` error mapping).
+- Modify: `packages/python/goldenpipe/tests/core/test_wiring_error_attrs.py` (`WiringError` signature changed — this test constructs it with the removed `missing=`/`available=` kwargs and asserts `.available`; it MUST be updated or the full CI suite breaks).
 
 - [ ] **Step 1: Run Python Leg A — verify it FAILS** — Run the box-safe pytest command. Expected: FAIL on the new DAG cases (linear resolver can't reorder / emits no `ambiguous_producer`/`cycle`/`unknown_need`).
 
@@ -801,7 +808,8 @@ class Resolver:
         adj: list[list[int]] = [[] for _ in range(n)]
         for a, b in edges:
             if a == b:
-                raise CycleError([nodes[a].pname])
+                indeg[b] += 1  # self-edge -> stuck node, reported by the ascending-index fall-through
+                continue
             adj[a].append(b)
             indeg[b] += 1
         heap = [i for i in range(n) if indeg[i] == 0]
@@ -854,18 +862,38 @@ Replace the resolve body:
 
 - [ ] **Step 4: Run Python Leg A — verify it PASSES** — Run the box-safe pytest command. Expected: PASS on ALL resolve vectors incl. the new DAG cases.
 
-- [ ] **Step 5: Run the broader goldenpipe engine tests** (guard against a resolver-consumer regression) — Run:
+- [ ] **Step 5: Update the `WiringError` attrs test** (`tests/core/test_wiring_error_attrs.py` — replace the whole file; the old test used the removed `missing=`/`available=` kwargs and `.available`)
+
+```python
+from goldenpipe.engine.resolver import WiringError
+
+
+def test_wiring_error_is_additive():
+    # legacy raise (message only) still works
+    e0 = WiringError("some message")
+    assert str(e0) == "some message"
+    assert e0.stage is None and e0.artifact is None and e0.missing is None
+    # structured raise carries attrs, message preserved; `.missing` is a legacy alias
+    e1 = WiringError("msg", stage="s", artifact="df")
+    assert str(e1) == "msg"
+    assert (e1.stage, e1.artifact) == ("s", "df")
+    assert e1.missing == "df"  # back-compat alias for artifact
+```
+
+- [ ] **Step 6: Run the broader goldenpipe engine tests** (guard against a resolver-consumer regression; the `-k` filter now includes `wiring`) — Run:
 ```bash
 cd /d/show_case/gg-local-llm/packages/python/goldenpipe
 POLARS_SKIP_CPU_CHECK=1 GOLDENMATCH_NATIVE=0 PYTHONPATH="/d/show_case/gg-local-llm/packages/python/goldenpipe" \
-  /d/show_case/goldenmatch/.venv/Scripts/python.exe -m pytest tests/ -q -k "resolver or planner or pipeline"
+  /d/show_case/goldenmatch/.venv/Scripts/python.exe -m pytest tests/ -q -k "resolver or planner or pipeline or wiring"
 ```
-Expected: PASS (existing valid pipelines unchanged; `except WiringError` sites still catch the missing-producer case).
+Expected: PASS (existing valid pipelines unchanged; `except WiringError` sites still catch the missing-producer case; the updated attrs test passes).
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add packages/python/goldenpipe/goldenpipe/engine/resolver.py packages/python/goldenpipe/goldenpipe/core/_planner_json.py
+git add packages/python/goldenpipe/goldenpipe/engine/resolver.py \
+        packages/python/goldenpipe/goldenpipe/core/_planner_json.py \
+        packages/python/goldenpipe/tests/core/test_wiring_error_attrs.py
 git commit -m "feat(goldenpipe): re-conform Python resolver to the DAG contract"
 ```
 
@@ -1025,7 +1053,10 @@ export function resolvePure(config: PipelineConfig, registry: StageRegistry): Ex
   const adj: number[][] = Array.from({ length: n }, () => []);
   for (const e of edges) {
     const [a, b] = e.split(">").map(Number);
-    if (a === b) throw new CycleError([nodes[a].pname]);
+    if (a === b) {
+      indeg[b] += 1; // self-edge -> stuck node, reported by the ascending-index fall-through
+      continue;
+    }
     adj[a].push(b);
     indeg[b] += 1;
   }
@@ -1097,7 +1128,18 @@ Replace the catch:
 
 (Confirm against the existing tail of `resolveJsonPure` — if it already maps unknown-stage via a different probe, keep that logic and only add the four `instanceof` branches. Read the current file before editing.)
 
-- [ ] **Step 3: Update `plannerJson.ts` `throwFromErr`** (add branches after the `missing_producer` branch from Task 2)
+- [ ] **Step 3: Update `plannerJson.ts` `throwFromErr`** — FIRST replace the `missing_producer` branch (Task 2 wrote it against the OLD `WiringError` constructor `{stage,missing,available}`; the Task 6 Step 1 rewrite changed the constructor to `{stage,artifact}`, so the stale literal now fails typecheck). Replace that branch with:
+
+```ts
+  if (err.kind === "missing_producer") {
+    throw new WiringError(
+      `Stage '${String(err.stage)}' consumes '${String(err.artifact)}' but no prior stage produces it.`,
+      { stage: String(err.stage), artifact: String(err.artifact) },
+    );
+  }
+```
+
+THEN add the three new-kind branches after it:
 
 ```ts
   if (err.kind === "ambiguous_producer") {
@@ -1169,9 +1211,10 @@ Run the `rollout-docs-sweep` skill after merge for the full doc-surface inventor
 - [ ] **Step 2: Rebase `--onto origin/main`** (drop the SP3 base commits) — Run:
 ```bash
 cd /d/show_case/gg-local-llm && git fetch origin
-git rebase --onto origin/main <last-SP3-commit-sha> feat/goldenpipe-dag
+BASE=$(git merge-base feat/goldenpipe-wasm feat/goldenpipe-dag)   # tip of SP3 this was stacked on
+git rebase --onto origin/main "$BASE" feat/goldenpipe-dag
 ```
-Find `<last-SP3-commit-sha>` = the tip of the SP3 branch this was stacked on (`git log --oneline` — the commit just before the first DAG commit `d0494414`). See `reference_rebase_onto_squashed_base` for the squashed-base gotcha (use `--onto`, not a plain rebase).
+`$BASE` is the last SP3 commit before the first DAG commit (the DAG branch's fork point off `feat/goldenpipe-wasm`). If `feat/goldenpipe-wasm` is already gone locally, use `git log --oneline feat/goldenpipe-dag` and take the commit just before the first `docs(dag)`/DAG commit. See `reference_rebase_onto_squashed_base` for the squashed-base gotcha (use `--onto`, not a plain rebase; watch for auto-merge dup-arg bugs in non-conflicted hunks).
 
 - [ ] **Step 3: Re-run Rust + Python parity on-box** (post-rebase sanity) — the two box-safe suites from Tasks 3/5. Expected: green.
 
