@@ -116,6 +116,11 @@ _COMPONENT_SYMBOLS: dict[str, tuple[str, ...]] = {
     # split_name_reverse (pair) + merge_name (two-input) -- floor symbol only
     # (strip_titles_arrow), locale-free.
     "names_ext": ("strip_titles_arrow",),
+    # address: the US-address family -- address_standardize/address_expand/
+    # state_abbreviate/state_expand/zip_normalize/country_standardize/
+    # unit_normalize (scalar) + split_address (1->4 quad) -- floor symbol only
+    # (address_standardize_arrow), US-scoped/locale-free.
+    "address": ("address_standardize_arrow",),
 }
 
 # Components whose only native path is intentionally non-authoritative (the
