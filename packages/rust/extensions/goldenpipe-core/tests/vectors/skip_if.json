@@ -1,0 +1,15 @@
+[
+  {"input": null, "expected": true},
+  {"input": false, "expected": true},
+  {"input": 0, "expected": true},
+  {"input": 0.0, "expected": true},
+  {"input": "", "expected": true},
+  {"input": [], "expected": true},
+  {"input": {}, "expected": true},
+  {"input": true, "expected": false},
+  {"input": 1, "expected": false},
+  {"input": 0.5, "expected": false},
+  {"input": "x", "expected": false},
+  {"input": [0], "expected": false},
+  {"input": {"a": 1}, "expected": false}
+]
