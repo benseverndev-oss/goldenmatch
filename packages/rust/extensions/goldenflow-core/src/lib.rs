@@ -10,3 +10,4 @@ pub mod identifiers;
 pub mod names;
 pub mod phone;
 pub mod text;
+pub mod url;

@@ -54,6 +54,10 @@ from goldenflow.transforms.names import (  # noqa: E402
     _name_script_py,
     _name_transliterate_py,
 )
+from goldenflow.transforms.url import (  # noqa: E402
+    _url_extract_domain_py,
+    _url_normalize_py,
+)
 
 CORPUS_PATH = Path(__file__).resolve().parent.parent / "tests" / "parity" / "identifiers_corpus.jsonl"
 
@@ -302,6 +306,28 @@ _CASES: list[tuple[str, str | None]] = [
     ("email_validate", ""),  # empty -> false
     ("email_validate", "   "),  # whitespace-only -> false
     ("email_validate", None),  # null
+    # --- url_normalize ---
+    ("url_normalize", "Example.COM/Path/"),  # no scheme -> prepend https, lowercase domain
+    ("url_normalize", "http://X.com/"),  # trailing slash, path == "/" -> strip one
+    ("url_normalize", "https://a.com"),  # no trailing slash -> unchanged
+    ("url_normalize", "https://a.com/x/"),  # path beyond root -> strip all trailing slashes
+    ("url_normalize", "https://a.com/x//"),  # multiple trailing slashes -> strip all
+    ("url_normalize", "HTTPS://Foo.com"),  # uppercase scheme -> lowercased
+    ("url_normalize", "HtTp://Foo.com"),  # mixed-case scheme -> lowercased
+    ("url_normalize", "EXAMPLE.com"),  # no scheme, no path -> https prepended
+    ("url_normalize", " example.com "),  # leading/trailing whitespace -> trimmed
+    ("url_normalize", "http://sub.Domain.ORG/Path/More"),  # multi-label domain, mixed-case path
+    ("url_normalize", ""),  # empty -> None
+    ("url_normalize", "   "),  # whitespace-only -> None
+    ("url_normalize", None),  # null
+    # --- url_extract_domain ---
+    ("url_extract_domain", "https://Foo.com/x"),  # mixed-case domain -> lowercased
+    ("url_extract_domain", "bar.com"),  # no scheme -> domain as-is (lowercased)
+    ("url_extract_domain", "http://sub.domain.org/path/more"),  # multi-label domain
+    ("url_extract_domain", "HTTPS://EXAMPLE.COM"),  # all-caps, no path
+    ("url_extract_domain", ""),  # empty -> None
+    ("url_extract_domain", "   "),  # whitespace-only -> None
+    ("url_extract_domain", None),  # null
 ]
 
 _PY_FN = {
@@ -325,6 +351,8 @@ _PY_FN = {
     "email_normalize": _email_normalize_py,
     "email_extract_domain": _email_extract_domain_py,
     "email_validate": _email_validate_py,
+    "url_normalize": _url_normalize_py,
+    "url_extract_domain": _url_extract_domain_py,
 }
 
 _NATIVE_ARROW_FN = {
@@ -348,6 +376,8 @@ _NATIVE_ARROW_FN = {
     "email_normalize": "email_normalize_arrow",
     "email_extract_domain": "email_extract_domain_arrow",
     "email_validate": "email_validate_arrow",
+    "url_normalize": "url_normalize_arrow",
+    "url_extract_domain": "url_extract_domain_arrow",
 }
 
 

@@ -205,6 +205,12 @@ package. Loader discover order in `goldenflow/core/_native_loader.py`:
   `email_normalize`, `email_extract_domain`, `email_validate` now dispatch
   native-first through goldenflow-core, same cross-surface pattern as
   identifiers/names above (existing transforms migrated, not new additions).
+- **URL family migrated to owned kernels (Wave D2):** `url_normalize`,
+  `url_extract_domain` now dispatch native-first through goldenflow-core
+  (`url_normalize_arrow`/`url_extract_domain_arrow`), same cross-surface
+  pattern as the email family above (existing transforms migrated, not new
+  additions). Both wired via the single `"url"` `_native_loader` component
+  (floor symbol `url_normalize_arrow`).
 - **Byte-parity harness (cross-surface oracle = goldenflow-core).**
   `packages/python/goldenflow/tests/parity/identifiers_corpus.jsonl` (mirrored
   byte-identical into `packages/typescript/goldenflow/tests/parity/`) is the

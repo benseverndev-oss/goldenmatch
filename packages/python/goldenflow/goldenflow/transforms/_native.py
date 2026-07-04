@@ -412,3 +412,33 @@ def email_extract_domain_native() -> Callable[[pl.Series], pl.Series] | None:
 
 def email_validate_native() -> Callable[[pl.Series], pl.Series] | None:
     return _email_kernel_runner("email_validate_arrow")
+
+
+def _url_kernel_runner(attr: str) -> Callable[[pl.Series], pl.Series] | None:
+    """Build a whole-series runner for URL kernel function ``attr`` if
+    native ``url`` is enabled and the dependencies are importable; else
+    ``None``. Like the other identifier runners -- no region/gating args,
+    scheme/domain normalization and domain extraction are locale-free."""
+    if not native_enabled("url"):
+        return None
+    nm = native_module()
+    if nm is None or not hasattr(nm, attr):
+        return None
+    try:
+        import pyarrow  # noqa: F401  (zero-copy bridge)
+    except ImportError:
+        return None
+    func = getattr(nm, attr)
+
+    def run(s: pl.Series) -> pl.Series:
+        return pl.from_arrow(func(_as_str_series(s).to_arrow()))
+
+    return run
+
+
+def url_normalize_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _url_kernel_runner("url_normalize_arrow")
+
+
+def url_extract_domain_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _url_kernel_runner("url_extract_domain_arrow")

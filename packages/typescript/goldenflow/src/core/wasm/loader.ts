@@ -61,6 +61,8 @@ export async function instantiateBackend(bytes: Uint8Array): Promise<FlowWasmBac
     email_normalize: (s: string) => string;
     email_extract_domain: (s: string) => string | undefined;
     email_validate: (s: string) => boolean | undefined;
+    url_normalize: (s: string) => string | undefined;
+    url_extract_domain: (s: string) => string | undefined;
   };
   await glue.default({ module_or_path: bytes });
 
@@ -85,5 +87,7 @@ export async function instantiateBackend(bytes: Uint8Array): Promise<FlowWasmBac
     emailNormalize: (s) => glue.email_normalize(s),
     emailExtractDomain: (s) => glue.email_extract_domain(s),
     emailValidate: (s) => glue.email_validate(s) ?? false,
+    urlNormalize: (s) => glue.url_normalize(s),
+    urlExtractDomain: (s) => glue.url_extract_domain(s),
   };
 }

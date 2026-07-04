@@ -43,6 +43,7 @@ import {
   emailExtractDomainTs,
   emailValidateTs,
 } from "../../src/core/transforms/email.js";
+import { urlNormalizeTs, urlExtractDomainTs } from "../../src/core/transforms/url.js";
 import { enableWasm, disableWasm } from "../../src/core/wasm/index.js";
 import { getFlowWasmBackend, type FlowWasmBackend } from "../../src/core/wasm/backend.js";
 
@@ -83,6 +84,8 @@ const PURE_TS_FN: Record<string, (s: string) => boolean | string | undefined> = 
   email_normalize: emailNormalizeTs,
   email_extract_domain: emailExtractDomainTs,
   email_validate: emailValidateTs,
+  url_normalize: urlNormalizeTs,
+  url_extract_domain: urlExtractDomainTs,
 };
 
 /** Same transform set, dispatched through the wasm backend's method of the
@@ -110,6 +113,8 @@ function wasmFn(backend: FlowWasmBackend, transform: string): (s: string) => boo
     email_normalize: (s) => backend.emailNormalize(s),
     email_extract_domain: (s) => backend.emailExtractDomain(s),
     email_validate: (s) => backend.emailValidate(s),
+    url_normalize: (s) => backend.urlNormalize(s),
+    url_extract_domain: (s) => backend.urlExtractDomain(s),
   };
   const fn = map[transform];
   if (!fn) throw new Error(`no wasm dispatch for transform ${transform}`);

@@ -5,8 +5,62 @@ import re
 import polars as pl
 
 from goldenflow.transforms import register_transform
+from goldenflow.transforms._native import (
+    url_extract_domain_native,
+    url_normalize_native,
+)
 
 _SCHEME_RE = re.compile(r"^https?://", re.IGNORECASE)
+
+
+# Pure-Python reference for goldenflow-core's ``url`` kernel. MUST reproduce
+# the Rust kernel byte-for-byte (asserted by
+# tests/transforms/test_identifiers_parity.py over
+# tests/parity/identifiers_corpus.jsonl).
+
+
+def _url_normalize_py(val: str | None) -> str | None:
+    if val is None:
+        return None
+    val = val.strip()
+    if not val:
+        return None
+    # Add scheme if missing
+    if not _SCHEME_RE.match(val):
+        val = "https://" + val
+    # Split scheme from rest
+    scheme_end = val.index("://") + 3
+    scheme = val[:scheme_end].lower()
+    rest = val[scheme_end:]
+    # Lowercase the domain (everything before first /)
+    slash_idx = rest.find("/")
+    if slash_idx == -1:
+        domain = rest.lower()
+        path = ""
+    else:
+        domain = rest[:slash_idx].lower()
+        path = rest[slash_idx:]
+    # Strip trailing slash (but not if path is just "/")
+    result = scheme + domain + path
+    if result.endswith("/") and len(result) > scheme_end + len(domain) + 1:
+        result = result.rstrip("/")
+    elif result.endswith("/") and path == "/":
+        result = result[:-1]
+    return result
+
+
+def _url_extract_domain_py(val: str | None) -> str | None:
+    if val is None:
+        return None
+    val = val.strip()
+    if not val:
+        return None
+    # Strip scheme
+    if "://" in val:
+        val = val.split("://", 1)[1]
+    # Take everything before the first /
+    domain = val.split("/", 1)[0]
+    return domain.lower() if domain else None
 
 
 @register_transform(
@@ -17,38 +71,16 @@ _SCHEME_RE = re.compile(r"^https?://", re.IGNORECASE)
     mode="series",
 )
 def url_normalize(series: pl.Series) -> pl.Series:
-    """Normalize URLs: ensure scheme, lowercase domain, strip trailing slash."""
+    """Normalize URLs: ensure scheme, lowercase domain, strip trailing slash.
 
-    def _norm(val: str | None) -> str | None:
-        if val is None:
-            return None
-        val = val.strip()
-        if not val:
-            return None
-        # Add scheme if missing
-        if not _SCHEME_RE.match(val):
-            val = "https://" + val
-        # Split scheme from rest
-        scheme_end = val.index("://") + 3
-        scheme = val[:scheme_end].lower()
-        rest = val[scheme_end:]
-        # Lowercase the domain (everything before first /)
-        slash_idx = rest.find("/")
-        if slash_idx == -1:
-            domain = rest.lower()
-            path = ""
-        else:
-            domain = rest[:slash_idx].lower()
-            path = rest[slash_idx:]
-        # Strip trailing slash (but not if path is just "/")
-        result = scheme + domain + path
-        if result.endswith("/") and len(result) > scheme_end + len(domain) + 1:
-            result = result.rstrip("/")
-        elif result.endswith("/") and path == "/":
-            result = result[:-1]
-        return result
-
-    return series.map_elements(_norm, return_dtype=pl.Utf8)
+    Native-first (goldenflow-core's ``url::url_normalize`` kernel); the
+    pure-Python fallback below is the byte-exact reference this kernel
+    replicates.
+    """
+    native = url_normalize_native()
+    if native is not None:
+        return native(series)
+    return series.map_elements(_url_normalize_py, return_dtype=pl.Utf8)
 
 
 @register_transform(
@@ -59,19 +91,13 @@ def url_normalize(series: pl.Series) -> pl.Series:
     mode="series",
 )
 def url_extract_domain(series: pl.Series) -> pl.Series:
-    """Extract domain from a URL."""
+    """Extract domain from a URL.
 
-    def _domain(val: str | None) -> str | None:
-        if val is None:
-            return None
-        val = val.strip()
-        if not val:
-            return None
-        # Strip scheme
-        if "://" in val:
-            val = val.split("://", 1)[1]
-        # Take everything before the first /
-        domain = val.split("/", 1)[0]
-        return domain.lower() if domain else None
-
-    return series.map_elements(_domain, return_dtype=pl.Utf8)
+    Native-first (goldenflow-core's ``url::url_extract_domain`` kernel); the
+    pure-Python fallback below is the byte-exact reference this kernel
+    replicates.
+    """
+    native = url_extract_domain_native()
+    if native is not None:
+        return native(series)
+    return series.map_elements(_url_extract_domain_py, return_dtype=pl.Utf8)

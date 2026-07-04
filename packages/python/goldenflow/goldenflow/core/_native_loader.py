@@ -98,6 +98,9 @@ _COMPONENT_SYMBOLS: dict[str, tuple[str, ...]] = {
     # email: lowercase/normalize/extract_domain/validate -- floor symbol only
     # (email_validate_arrow), locale-free, region-free.
     "email": ("email_validate_arrow",),
+    # url: normalize/extract_domain -- floor symbol only (url_normalize_arrow),
+    # locale-free, region-free.
+    "url": ("url_normalize_arrow",),
 }
 
 # Components whose only native path is intentionally non-authoritative (the

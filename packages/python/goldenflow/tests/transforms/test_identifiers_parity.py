@@ -36,6 +36,7 @@ from goldenflow.transforms.identifiers import (
     vat_validate,
 )
 from goldenflow.transforms.names import name_script, name_transliterate
+from goldenflow.transforms.url import url_extract_domain, url_normalize
 
 _CORPUS_PATH = Path(__file__).parent.parent / "parity" / "identifiers_corpus.jsonl"
 
@@ -60,6 +61,8 @@ _TRANSFORMS = {
     "email_normalize": email_normalize,
     "email_extract_domain": email_extract_domain,
     "email_validate": email_validate,
+    "url_normalize": url_normalize,
+    "url_extract_domain": url_extract_domain,
 }
 
 # Floor native symbol per transform's component -- used to skip a row when the
@@ -88,6 +91,10 @@ _NATIVE_FLOOR_SYMBOL = {
     "email_normalize": "email_validate_arrow",
     "email_extract_domain": "email_validate_arrow",
     "email_validate": "email_validate_arrow",
+    # url: both transforms are wired via the single "url" component (floor
+    # symbol url_normalize_arrow), region-free/locale-free.
+    "url_normalize": "url_normalize_arrow",
+    "url_extract_domain": "url_normalize_arrow",
 }
 
 

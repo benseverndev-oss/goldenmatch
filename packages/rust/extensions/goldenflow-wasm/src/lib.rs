@@ -15,6 +15,7 @@ mod wasm {
     use goldenflow_core::email;
     use goldenflow_core::identifiers::{aba, ean, iban, imei, isbn, luhn, swift, vat};
     use goldenflow_core::names;
+    use goldenflow_core::url;
     use wasm_bindgen::prelude::*;
 
     #[wasm_bindgen]
@@ -115,5 +116,15 @@ mod wasm {
     #[wasm_bindgen]
     pub fn name_script(s: &str) -> String {
         names::name_script(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn url_normalize(s: &str) -> Option<String> {
+        url::url_normalize(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn url_extract_domain(s: &str) -> Option<String> {
+        url::url_extract_domain(s)
     }
 }

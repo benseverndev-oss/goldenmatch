@@ -200,3 +200,23 @@
 {"transform": "email_validate", "input": "", "expected": false}
 {"transform": "email_validate", "input": "   ", "expected": false}
 {"transform": "email_validate", "input": null, "expected": null}
+{"transform": "url_normalize", "input": "Example.COM/Path/", "expected": "https://example.com/Path"}
+{"transform": "url_normalize", "input": "http://X.com/", "expected": "http://x.com"}
+{"transform": "url_normalize", "input": "https://a.com", "expected": "https://a.com"}
+{"transform": "url_normalize", "input": "https://a.com/x/", "expected": "https://a.com/x"}
+{"transform": "url_normalize", "input": "https://a.com/x//", "expected": "https://a.com/x"}
+{"transform": "url_normalize", "input": "HTTPS://Foo.com", "expected": "https://foo.com"}
+{"transform": "url_normalize", "input": "HtTp://Foo.com", "expected": "http://foo.com"}
+{"transform": "url_normalize", "input": "EXAMPLE.com", "expected": "https://example.com"}
+{"transform": "url_normalize", "input": " example.com ", "expected": "https://example.com"}
+{"transform": "url_normalize", "input": "http://sub.Domain.ORG/Path/More", "expected": "http://sub.domain.org/Path/More"}
+{"transform": "url_normalize", "input": "", "expected": null}
+{"transform": "url_normalize", "input": "   ", "expected": null}
+{"transform": "url_normalize", "input": null, "expected": null}
+{"transform": "url_extract_domain", "input": "https://Foo.com/x", "expected": "foo.com"}
+{"transform": "url_extract_domain", "input": "bar.com", "expected": "bar.com"}
+{"transform": "url_extract_domain", "input": "http://sub.domain.org/path/more", "expected": "sub.domain.org"}
+{"transform": "url_extract_domain", "input": "HTTPS://EXAMPLE.COM", "expected": "example.com"}
+{"transform": "url_extract_domain", "input": "", "expected": null}
+{"transform": "url_extract_domain", "input": "   ", "expected": null}
+{"transform": "url_extract_domain", "input": null, "expected": null}
