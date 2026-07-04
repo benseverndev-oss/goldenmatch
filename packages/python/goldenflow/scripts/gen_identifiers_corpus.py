@@ -72,6 +72,15 @@ from goldenflow.transforms.numeric import (  # noqa: E402
     _scientific_to_decimal_py,
     _to_integer_py,
 )
+from goldenflow.transforms.address import (  # noqa: E402
+    _address_expand_py,
+    _address_standardize_py,
+    _country_standardize_py,
+    _state_abbreviate_py,
+    _state_expand_py,
+    _unit_normalize_py,
+    _zip_normalize_py,
+)
 from goldenflow.transforms.url import (  # noqa: E402
     _url_extract_domain_py,
     _url_normalize_py,
@@ -394,6 +403,74 @@ _CASES: list[tuple[str, str | None]] = [
     ("url_extract_domain", ""),  # empty -> None
     ("url_extract_domain", "   "),  # whitespace-only -> None
     ("url_extract_domain", None),  # null
+    # --- address_standardize (full street suffix -> abbreviation) ---
+    ("address_standardize", "123 Main Street"),  # Street -> St
+    ("address_standardize", "1 Park Avenue"),  # Avenue -> Ave
+    ("address_standardize", "5 Sunset Boulevard"),  # Boulevard -> Blvd
+    ("address_standardize", "10 elm STREET"),  # case-insensitive, canonical repl
+    ("address_standardize", "Streetsboro Road"),  # word-boundary: Streets NOT abbrev'd
+    ("address_standardize", "42 Nowhere"),  # no suffix -> unchanged
+    ("address_standardize", ""),  # empty
+    ("address_standardize", None),  # null
+    # --- address_expand (abbreviation -> full street suffix) ---
+    ("address_expand", "123 Main St"),  # St -> Street
+    ("address_expand", "1 Park Ave"),  # Ave -> Avenue
+    ("address_expand", "1 Park Ste"),  # St inside Ste is not a word-bound match
+    ("address_expand", "5 sunset blvd"),  # case-insensitive
+    ("address_expand", ""),  # empty
+    ("address_expand", None),  # null
+    # --- state_abbreviate (full name / valid abbr / else original) ---
+    ("state_abbreviate", "California"),  # full -> CA
+    ("state_abbreviate", "new york"),  # case-insensitive full -> NY
+    ("state_abbreviate", "North Carolina"),  # multi-word full -> NC
+    ("state_abbreviate", "ca"),  # valid 2-letter -> uppercased
+    ("state_abbreviate", "Ny"),  # valid 2-letter mixed -> NY
+    ("state_abbreviate", "DC"),  # DC is included
+    ("state_abbreviate", "  Freedonia  "),  # unmatched -> ORIGINAL (unstripped)
+    ("state_abbreviate", "XZ"),  # 2-char non-abbr -> original
+    ("state_abbreviate", ""),  # empty -> original ("")
+    ("state_abbreviate", None),  # null
+    # --- state_expand (abbr -> full name / else original) ---
+    ("state_expand", "CA"),  # -> California
+    ("state_expand", "ny"),  # case-insensitive -> New York
+    ("state_expand", "  il  "),  # stripped lookup -> Illinois
+    ("state_expand", "DC"),  # -> District Of Columbia
+    ("state_expand", "  ZZ  "),  # unmatched -> ORIGINAL (unstripped)
+    ("state_expand", ""),  # empty -> original ("")
+    ("state_expand", None),  # null
+    # --- zip_normalize (auto_apply=True; strip +4, zero-pad, preserve invalid) ---
+    ("zip_normalize", "12345"),  # already 5
+    ("zip_normalize", "12345-6789"),  # strip +4
+    ("zip_normalize", "  90210  "),  # trimmed
+    ("zip_normalize", "210"),  # zero-pad short all-digit
+    ("zip_normalize", "123456"),  # >5 all-digit -> as-is
+    ("zip_normalize", "SW1A"),  # non-numeric passthrough
+    ("zip_normalize", "SW1A-1AA"),  # base segment before '-'
+    ("zip_normalize", ""),  # empty -> unchanged
+    ("zip_normalize", None),  # null
+    # --- country_standardize (name/alias -> ISO alpha-2; else original) ---
+    ("country_standardize", "United States"),  # -> US
+    ("country_standardize", "usa"),  # alias -> US
+    ("country_standardize", "  England  "),  # trimmed alias -> GB
+    ("country_standardize", "Deutschland"),  # -> DE
+    ("country_standardize", "CA"),  # 2-letter alias -> CA
+    ("country_standardize", "  Atlantis  "),  # unknown -> ORIGINAL (unstripped)
+    ("country_standardize", ""),  # empty -> original ("")
+    ("country_standardize", None),  # null
+    # --- unit_normalize (anchored prefix subs, in order) ---
+    ("unit_normalize", "Apt 4"),  # Apt -> Unit
+    ("unit_normalize", "Apt. 4"),  # optional dot
+    ("unit_normalize", "Apartment 12B"),  # Apartment -> Unit
+    ("unit_normalize", "Suite 200"),  # Suite -> Ste
+    ("unit_normalize", "Ste. 200"),  # Ste + dot -> Ste
+    ("unit_normalize", "#5"),  # # -> Unit (no space)
+    ("unit_normalize", "# 5"),  # # + space -> Unit
+    ("unit_normalize", "APT 9"),  # case-insensitive
+    ("unit_normalize", "Apt.5"),  # no whitespace after -> no match
+    ("unit_normalize", "Aptos"),  # Apt prefix but no boundary -> unchanged
+    ("unit_normalize", "  Building C  "),  # no designator -> trimmed
+    ("unit_normalize", ""),  # empty
+    ("unit_normalize", None),  # null
     # --- currency_strip (string->float; VALUE parity, not repr) ---
     ("currency_strip", "$1,234.56"),  # strip $ and comma
     ("currency_strip", "-$42.00"),  # negative, dollar sign
@@ -514,6 +591,13 @@ _PY_FN = {
     "email_validate": _email_validate_py,
     "url_normalize": _url_normalize_py,
     "url_extract_domain": _url_extract_domain_py,
+    "address_standardize": _address_standardize_py,
+    "address_expand": _address_expand_py,
+    "state_abbreviate": _state_abbreviate_py,
+    "state_expand": _state_expand_py,
+    "zip_normalize": _zip_normalize_py,
+    "country_standardize": _country_standardize_py,
+    "unit_normalize": _unit_normalize_py,
     "currency_strip": _currency_strip_py,
     "percentage_normalize": _percentage_normalize_py,
     "to_integer": _to_integer_py,
@@ -553,6 +637,13 @@ _NATIVE_ARROW_FN = {
     "email_validate": "email_validate_arrow",
     "url_normalize": "url_normalize_arrow",
     "url_extract_domain": "url_extract_domain_arrow",
+    "address_standardize": "address_standardize_arrow",
+    "address_expand": "address_expand_arrow",
+    "state_abbreviate": "state_abbreviate_arrow",
+    "state_expand": "state_expand_arrow",
+    "zip_normalize": "zip_normalize_arrow",
+    "country_standardize": "country_standardize_arrow",
+    "unit_normalize": "unit_normalize_arrow",
     "currency_strip": "currency_strip_arrow",
     "percentage_normalize": "percentage_normalize_arrow",
     "to_integer": "to_integer_arrow",
