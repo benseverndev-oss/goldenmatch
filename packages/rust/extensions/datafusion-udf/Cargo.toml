@@ -41,6 +41,10 @@ goldenmatch-score-core = { path = "../score-core" }
 # pin never meets this crate's arrow-58 stack. See graph_udf.rs ARROW-VERSION
 # NOTE.
 goldenmatch-graph-core = { path = "../graph-core" }
+# Pyo3-free canonical record-fingerprint kernel (SHA-256 over canonicalized JSON),
+# shared with the Postgres / DuckDB / edge-TS / Python surfaces. Pure sha2 +
+# serde_json — no arrow — so it adds no version constraint to the arrow-58 stack.
+goldenmatch-fingerprint-core = { path = "../fingerprint-core" }
 # Standalone local embedding runtime (featurize + ONNX). Lets goldenmatch_embed
 # run the in-house embed path with zero CPython inside the SQL engine. Pulls
 # `ort` (onnxruntime) into this cdylib — heavier build; validated in CI.

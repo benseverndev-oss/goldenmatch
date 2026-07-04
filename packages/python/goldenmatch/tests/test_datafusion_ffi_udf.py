@@ -144,3 +144,53 @@ def test_ffi_pair_dedup():
     rows = out[0].column(0).to_pylist()[0]  # list of {a,b,s} structs for row 0
     got = sorted((r["a"], r["b"], r["s"]) for r in rows)
     assert got == [(1, 2, 0.9), (3, 3, 0.1)], got
+
+
+def _fingerprint_golden():
+    """The shared cross-surface record-fingerprint oracle: the same
+    `fingerprint-core/golden/fingerprint_golden.json` the Rust
+    `fingerprint-core/tests/golden.rs`, the edge-TS parity test, and the Python
+    surface all check. Anchored to the repo root from this file's location."""
+    import json
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[4]  # tests -> goldenmatch -> python -> packages -> root
+    golden = root / "packages/rust/extensions/fingerprint-core/golden/fingerprint_golden.json"
+    return json.loads(golden.read_text())
+
+
+def test_ffi_record_fingerprint_matches_golden():
+    """`goldenmatch_record_fingerprint(json)`, exposed as an FFI ScalarUDF over
+    Utf8 -> Utf8, reproduces the shared cross-surface fingerprint golden exactly
+    — so the SQL DataFusion surface emits the SAME 64-hex record id as Postgres /
+    DuckDB / edge-TS / Python. NULL propagates to NULL."""
+    from datafusion import SessionContext, udf
+    from goldenmatch_datafusion_udf import FingerprintUDF
+
+    cases = _fingerprint_golden()
+    assert len(cases) >= 13
+
+    ctx = SessionContext()
+    ctx.register_udf(udf(FingerprintUDF()))
+    # Carry name + expected through so row order across collect() doesn't matter,
+    # plus one explicit NULL row to pin the NULL-propagation convention.
+    names = [c["name"] for c in cases] + ["__null__"]
+    jsons = [c["json"] for c in cases] + [None]
+    expected = {c["name"]: c["hash"] for c in cases}
+    expected["__null__"] = None
+
+    t = pa.table(
+        {"name": pa.array(names, pa.string()), "j": pa.array(jsons, pa.string())}
+    )
+    ctx.from_arrow(t, name="recs")
+    out = ctx.sql(
+        "SELECT name, goldenmatch_record_fingerprint(j) AS fp FROM recs"
+    ).collect()
+
+    got = {}
+    for batch in out:
+        cols = {n: batch.column(i).to_pylist() for i, n in enumerate(batch.schema.names)}
+        for i in range(batch.num_rows):
+            got[cols["name"][i]] = cols["fp"][i]
+
+    assert got == expected

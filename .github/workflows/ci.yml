@@ -136,6 +136,10 @@ jobs:
               # crate. A score-core-only change must re-trigger this lane so the
               # FFI scorer-parity test (vs native) re-runs.
               - 'packages/rust/extensions/score-core/**'
+              # The FFI record-fingerprint UDF delegates to fingerprint-core; a
+              # fingerprint-core-only change must re-trigger this lane so the
+              # cross-surface fingerprint-golden parity test re-runs.
+              - 'packages/rust/extensions/fingerprint-core/**'
             python_goldenmatch_postgres:
               - 'packages/python/goldenmatch/tests/test_db.py'
               - 'packages/python/goldenmatch/tests/test_reconcile.py'
@@ -859,7 +863,7 @@ jobs:
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
         with:
           path: dist-dfudf
-          key: dfudf-wheel-${{ runner.os }}-${{ hashFiles('packages/rust/extensions/datafusion-udf/**', 'packages/rust/extensions/score-core/**', 'packages/rust/extensions/graph-core/**', 'packages/rust/extensions/goldenembed/**') }}
+          key: dfudf-wheel-${{ runner.os }}-${{ hashFiles('packages/rust/extensions/datafusion-udf/**', 'packages/rust/extensions/score-core/**', 'packages/rust/extensions/graph-core/**', 'packages/rust/extensions/goldenembed/**', 'packages/rust/extensions/fingerprint-core/**') }}
       # DataFusion FFI ScalarUDF gate (Stage B): the FFI string scorers
       # (jaro_winkler / token_sort / levenshtein) are diffed against the native
       # per-pair scorers by tests/test_datafusion_ffi_udf.py, which HARD-imports
