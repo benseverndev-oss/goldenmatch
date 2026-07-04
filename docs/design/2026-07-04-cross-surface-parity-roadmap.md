@@ -197,9 +197,59 @@ wasm-hostile deps.
 **Both camps benefit from the #1410 guards:** `fixture_drift` (no stale wasm
 fixture) and `pgrx_sql_sync` (no `#[pg_extern]` missing from the SQL).
 
+## Surface #5 — cloud-warehouse UDFs (BigQuery, Snowflake)
+
+The four surfaces above (Python / edge-TS / DuckDB / Postgres) were the original
+scope. Cloud warehouses are a **fifth** surface, and a cheap one: the committed
+`*-wasm` kernels are *already* portable — reaching BigQuery/Snowflake is
+**packaging, not porting** (no new Rust). The kernel travels base64-inline inside
+a JS UDF and runs the exact committed bytes, so it's byte-identical to every
+other surface by construction.
+
+**Mechanism (verified 2026-07-04):**
+- **BigQuery** — `CREATE FUNCTION … LANGUAGE js` runs V8 with WebAssembly; the
+  base64 wasm is inlined in the body, instantiated **once per worker** (cached on
+  `globalThis`, reused across rows). ~1 MB inline budget — all scalar kernels fit.
+- **Snowflake** — JS UDFs can run wasm too, but the source-size cap (~100 KB) and
+  mandatory full-inline mean only the *small* kernels fit (graph 37 KB, hnsw
+  62 KB, sketch 65 KB, goldenembed 81 KB); fingerprint (156 KB base64) and up
+  exceed it. Snowflake also already has a Python/Snowpark UDF path
+  (`goldenmatch/snowflake/udfs.py`) — but that's CPython-in-a-box, **not** native
+  per the bar above.
+
+**The generator (Camp C — warehouse packaging):**
+`packages/typescript/goldenmatch/scripts/generate_warehouse_udfs.mjs` reads a
+committed `*WasmBytes.ts` + its wasm-bindgen glue and flattens them into a
+self-contained UDF body: the async/`fetch`/`import.meta` init path is dropped
+(only synchronous `new WebAssembly.Module`+`Instance` remains), ES `import`/
+`export` are stripped, `TextEncoder`/`TextDecoder` are routed through inlined
+UTF-8 polyfills (used only where the sandbox lacks them), and `console.*` is
+removed. Output: committed, copy-paste-deployable `warehouse/bigquery/*.sql` (no
+GCS bucket, no external library reference).
+
+**Parity gate:** `tests/parity/warehouse-bigquery.parity.test.ts` extracts each
+UDF's JS body verbatim from the shipped `.sql`, runs it in a fresh V8 realm
+(`node:vm`, no Node globals) — both with host text codecs and with them deleted
+(forcing the polyfills) — and asserts it reproduces the **shared golden oracle**
+byte-for-byte. This validates the wasm+glue logic in BigQuery's engine family
+(V8); it is a simulation, not a live-warehouse test (a one-off smoke query
+confirms host acceptance — see `warehouse/README.md`). CI: a `warehouse_udf`
+path filter + a pure-node regenerate-and-diff drift guard in the `typescript`
+lane.
+
+**Status:**
+- ✅ **`goldenmatch_fingerprint`** (BigQuery) — `fingerprint-core::fingerprint_json`,
+  the record-id hash. Ships the generator + Node/V8 parity harness + drift guard.
+- ⬜ **`goldenmatch_score`** (BigQuery) — needs a `score_one(a,b,method)` scalar
+  export on `score-wasm` (only NxN `score_matrix` today) + a committed base64
+  blob; the flagship fuzzy scorer for in-warehouse `WHERE score(...) > t`.
+- ⬜ **Snowflake** — the sub-100 KB kernels (sketch / hnsw / goldenembed / graph)
+  via the same generator with a Snowflake DDL emitter.
+
 ## Reference PRs (the pattern in action)
 
 - HNSW cross-surface: #1401 (TS/WASM + DuckDB + Postgres, one PR / 3 commits).
 - goldencheck Rust-source-of-truth (edge reroute): #1403.
 - CI guards that make parity self-enforcing: #1410.
 - sketch / MinHash-LSH cross-surface: #1413 (the Camp-B→everywhere template).
+- warehouse UDFs (surface #5, BigQuery fingerprint): the Camp-C packaging template.
