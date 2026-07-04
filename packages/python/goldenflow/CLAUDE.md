@@ -267,6 +267,26 @@ package. Loader discover order in `goldenflow/core/_native_loader.py`:
   scalar transforms live in the shared corpus; the 3 multi-output ones (they
   don't fit a string->scalar row) get pinned-vector `tests/transforms/
   test_name_kernels.py` (native + fallback), the numeric-array-op precedent.
+- **Address-simple family migrated to owned kernels (Wave D address) -- a
+  1->4 marshaling SHAPE.** The 8 US-address transforms now dispatch
+  native-first through goldenflow-core (`address_standardize`/`address_expand`/
+  `state_abbreviate`/`state_expand`/`zip_normalize`/`country_standardize`/
+  `unit_normalize` scalar; `split_address` multi-OUTPUT 1->4), all wired via
+  the single `"address"` `_native_loader` component (floor symbol
+  `address_standardize_arrow`). `zip_normalize` stays `auto_apply=True`; the
+  rest `auto_apply=False`. **New arrow marshaling** in `native-flow/src/util.rs`:
+  `map_str_to_str_quad` (1 array -> `street`+`city`+`state`+`zip`, where the
+  last three may be null on a present row); the wasm `split_address` returns a
+  4-element `[street,city,state,zip]` JS array (nullable city/state/zip). The
+  five `mode="expr"` transforms (standardize/expand/state_*/zip) keep their
+  `func(column)->Expr` signature via `map_batches` (numeric/names precedent).
+  **NO regex dep:** the word-boundary street-suffix replace, the anchored
+  unit-prefix subs, and the `split_address` grammar (non-greedy + backtracking
+  city group) are hand-rolled with ASCII word-char semantics in Rust AND the
+  Python/TS fallbacks -- JS/Py/Rust regex `\b`/greedy/`replace_all` differ, so
+  hand-rolling is the parity guarantee (email.rs precedent). US-scoped; i18n
+  addresses stay Wave C (deferred). The 7 scalar transforms live in the shared
+  corpus; `split_address` gets pinned-vector `test_address_kernels.py`.
 - **Byte-parity harness (cross-surface oracle = goldenflow-core).**
   `packages/python/goldenflow/tests/parity/identifiers_corpus.jsonl` (mirrored
   byte-identical into `packages/typescript/goldenflow/tests/parity/`) is the

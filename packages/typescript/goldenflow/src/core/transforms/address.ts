@@ -1,10 +1,29 @@
 /**
  * Address transforms — ported from goldenflow/transforms/address.py
  * Side-effect module: registers 8 address transforms on import.
+ *
+ * Owned-kernel family (Wave D address-simple): the 7 scalar transforms
+ * (address_standardize/address_expand/state_abbreviate/state_expand/
+ * zip_normalize/country_standardize/unit_normalize) and the multi-output
+ * split_address are byte-for-byte ports of the Python pure-TS reference
+ * (`_*_py` in `goldenflow/transforms/address.py`), which is itself proven
+ * byte-identical to the Rust `goldenflow-core::address` kernels. The 7 scalars
+ * are asserted over the shared oracle corpus
+ * (`tests/parity/identifiers_corpus.jsonl`); split_address (which doesn't fit
+ * a string->scalar row) is asserted with pinned vectors in
+ * `tests/unit/address-kernels.test.ts`. Each registered transform dispatches
+ * to the opt-in WASM backend (`FlowWasmBackend`) when `enableWasm()` has
+ * succeeded; otherwise it runs the pure-TS implementation below. Pure-TS is
+ * the default.
+ *
+ * The word-boundary / anchored-prefix / address-parse logic is hand-rolled
+ * with ASCII semantics (NOT JS regex `\b`/`\w`, which are Unicode-aware and
+ * would diverge from the Rust ASCII kernel).
  */
 
 import type { ColumnValue, Row } from "../types.js";
 import { registerTransform } from "./registry.js";
+import { getFlowWasmBackend, type FlowWasmBackend } from "../wasm/backend.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -20,6 +39,39 @@ function mapStrings(
   });
 }
 
+/** ASCII-only lowercase (Rust `eq_ignore_ascii_case` semantics): fold `A-Z`
+ * only, leave everything else (incl. non-ASCII) untouched. Mirrors
+ * `_ascii_lower` in address.py. */
+function asciiLower(c: string): string {
+  return c >= "A" && c <= "Z" ? String.fromCharCode(c.charCodeAt(0) + 32) : c;
+}
+
+/** `\w` = ASCII `[A-Za-z0-9_]` (matches the Rust kernel, NOT JS's
+ * Unicode-aware `\w`). Mirrors `_is_word_char`. */
+function isWordChar(c: string): boolean {
+  return (
+    (c >= "a" && c <= "z") ||
+    (c >= "A" && c <= "Z") ||
+    (c >= "0" && c <= "9") ||
+    c === "_"
+  );
+}
+
+function isAsciiAlpha(c: string): boolean {
+  return (c >= "a" && c <= "z") || (c >= "A" && c <= "Z");
+}
+
+function isAsciiDigit(c: string): boolean {
+  return c >= "0" && c <= "9";
+}
+
+function isAllAsciiDigits(s: string): boolean {
+  for (let i = 0; i < s.length; i++) {
+    if (!isAsciiDigit(s[i]!)) return false;
+  }
+  return true;
+}
+
 // ---------------------------------------------------------------------------
 // Street abbreviation maps
 // ---------------------------------------------------------------------------
@@ -30,11 +82,6 @@ const _STREET_ABBREV: Record<string, string> = {
   Circle: "Cir", Trail: "Trl", Way: "Way", Parkway: "Pkwy",
   Highway: "Hwy", Terrace: "Ter", Square: "Sq",
 };
-
-const _STREET_EXPAND: Record<string, string> = {};
-for (const [full, abbr] of Object.entries(_STREET_ABBREV)) {
-  _STREET_EXPAND[abbr] = full;
-}
 
 // ---------------------------------------------------------------------------
 // US states
@@ -105,35 +152,65 @@ const _COUNTRIES: Record<string, string> = {
 };
 
 // ---------------------------------------------------------------------------
-// Unit normalization patterns
+// address_standardize / address_expand (series, address, 50)
+//
+// Case-insensitive, ASCII-word-boundary replace-all, one per `_STREET_ABBREV`
+// entry, applied sequentially over the running string. Hand-rolled (no regex)
+// so `\b` semantics match the Rust kernel exactly.
 // ---------------------------------------------------------------------------
 
-const _UNIT_PATTERNS: [RegExp, string][] = [
-  [/^(?:Apt|Apartment)\.?\s+/i, "Unit "],
-  [/^(?:Ste|Suite)\.?\s+/i, "Ste "],
-  [/^#\s*/i, "Unit "],
-];
+/** Case-insensitive, word-boundary-delimited replace-all — byte-identical to
+ * `_replace_word_bounded` / `address.rs::replace_word_bounded`. `needle` is a
+ * non-empty ASCII word; the surrounding text is preserved and the replacement
+ * is not re-scanned. */
+function replaceWordBounded(s: string, needle: string, rep: string): string {
+  const nlen = needle.length;
+  const hlen = s.length;
+  let out = "";
+  let i = 0;
+  while (i < hlen) {
+    let replaced = false;
+    if (i + nlen <= hlen) {
+      let allMatch = true;
+      for (let k = 0; k < nlen; k++) {
+        if (asciiLower(s[i + k]!) !== asciiLower(needle[k]!)) {
+          allMatch = false;
+          break;
+        }
+      }
+      if (allMatch) {
+        const leftOk = i === 0 || !isWordChar(s[i - 1]!);
+        const rightIdx = i + nlen;
+        const rightOk = rightIdx >= hlen || !isWordChar(s[rightIdx]!);
+        if (leftOk && rightOk) {
+          out += rep;
+          i += nlen;
+          replaced = true;
+        }
+      }
+    }
+    if (!replaced) {
+      out += s[i]!;
+      i += 1;
+    }
+  }
+  return out;
+}
 
-// ---------------------------------------------------------------------------
-// address_standardize (series, address, 50)
-// ---------------------------------------------------------------------------
-
-// Pre-compiled regex for address standardize/expand (avoids re-creating per value)
-const _ABBREV_PATTERNS = Object.entries(_STREET_ABBREV).map(
-  ([full, abbr]) => [new RegExp(`\\b${full}\\b`, "gi"), abbr] as const,
-);
-const _EXPAND_PATTERNS = Object.entries(_STREET_EXPAND).map(
-  ([abbr, full]) => [new RegExp(`\\b${abbr}\\b`, "gi"), full] as const,
-);
+/** Replace full street suffixes with abbreviations (`Street`->`St` ...), in
+ * `_STREET_ABBREV` insertion order. Byte-identical to
+ * `_address_standardize_py`. */
+export function addressStandardizeTs(s: string): string {
+  let out = s;
+  for (const [full, abbr] of Object.entries(_STREET_ABBREV)) {
+    out = replaceWordBounded(out, full, abbr);
+  }
+  return out;
+}
 
 function addressStandardize(values: readonly ColumnValue[]): ColumnValue[] {
-  return mapStrings(values, (s) => {
-    let result = s;
-    for (const [pattern, abbr] of _ABBREV_PATTERNS) {
-      result = result.replace(pattern, abbr);
-    }
-    return result;
-  });
+  const backend: FlowWasmBackend | null = getFlowWasmBackend();
+  return mapStrings(values, backend ? (s) => backend.addressStandardize(s) : addressStandardizeTs);
 }
 
 registerTransform(
@@ -141,18 +218,20 @@ registerTransform(
   addressStandardize,
 );
 
-// ---------------------------------------------------------------------------
-// address_expand (series, address, 50)
-// ---------------------------------------------------------------------------
+/** Replace street abbreviations with full forms (`St`->`Street` ...), in
+ * `_STREET_ABBREV` insertion order (abbr->full). Byte-identical to
+ * `_address_expand_py`. */
+export function addressExpandTs(s: string): string {
+  let out = s;
+  for (const [full, abbr] of Object.entries(_STREET_ABBREV)) {
+    out = replaceWordBounded(out, abbr, full);
+  }
+  return out;
+}
 
 function addressExpand(values: readonly ColumnValue[]): ColumnValue[] {
-  return mapStrings(values, (s) => {
-    let result = s;
-    for (const [pattern, full] of _EXPAND_PATTERNS) {
-      result = result.replace(pattern, full);
-    }
-    return result;
-  });
+  const backend: FlowWasmBackend | null = getFlowWasmBackend();
+  return mapStrings(values, backend ? (s) => backend.addressExpand(s) : addressExpandTs);
 }
 
 registerTransform(
@@ -164,16 +243,24 @@ registerTransform(
 // state_abbreviate (series, state|string, 50)
 // ---------------------------------------------------------------------------
 
+/** Normalize a state name to a 2-letter abbreviation. Three-way fallback:
+ * (1) a 2-char input that upper-cases to a valid abbreviation -> uppercase;
+ * (2) full name (case-insensitive) -> `_STATES_LOWER`; (3) neither ->
+ * the ORIGINAL (un-stripped) value. Byte-identical to `_state_abbreviate_py`. */
+export function stateAbbreviateTs(s: string): string {
+  const cleaned = s.trim();
+  const upper = cleaned.toUpperCase();
+  if (cleaned.length === 2 && _STATES_REVERSE[upper] !== undefined) {
+    return upper;
+  }
+  const abbr = _STATES_LOWER[cleaned.toLowerCase()];
+  if (abbr !== undefined) return abbr;
+  return s;
+}
+
 function stateAbbreviate(values: readonly ColumnValue[]): ColumnValue[] {
-  return mapStrings(values, (s) => {
-    const trimmed = s.trim();
-    // Already a 2-letter abbreviation?
-    if (trimmed.length === 2 && _STATES_REVERSE[trimmed.toUpperCase()]) {
-      return trimmed.toUpperCase();
-    }
-    const matched = _STATES_LOWER[trimmed.toLowerCase()];
-    return matched ?? s;
-  });
+  const backend: FlowWasmBackend | null = getFlowWasmBackend();
+  return mapStrings(values, backend ? (s) => backend.stateAbbreviate(s) : stateAbbreviateTs);
 }
 
 registerTransform(
@@ -185,10 +272,17 @@ registerTransform(
 // state_expand (series, state|string, 50)
 // ---------------------------------------------------------------------------
 
+/** Expand a 2-letter state abbreviation to its full name; unmatched inputs
+ * pass through as the ORIGINAL (un-stripped) value. Byte-identical to
+ * `_state_expand_py`. */
+export function stateExpandTs(s: string): string {
+  const full = _STATES_REVERSE[s.trim().toUpperCase()];
+  return full !== undefined ? full : s;
+}
+
 function stateExpand(values: readonly ColumnValue[]): ColumnValue[] {
-  return mapStrings(values, (s) => {
-    return _STATES_REVERSE[s.trim().toUpperCase()] ?? s;
-  });
+  const backend: FlowWasmBackend | null = getFlowWasmBackend();
+  return mapStrings(values, backend ? (s) => backend.stateExpand(s) : stateExpandTs);
 }
 
 registerTransform(
@@ -200,16 +294,20 @@ registerTransform(
 // zip_normalize (series, zip, 55, auto_apply)
 // ---------------------------------------------------------------------------
 
+/** Normalize a US ZIP to 5-digit form: strip +4, zero-pad an all-digit base to
+ * width 5 (a >5-digit base is returned as-is; a non-digit base passes through
+ * unchanged). Byte-identical to `_zip_normalize_py`. */
+export function zipNormalizeTs(s: string): string {
+  const base = s.trim().split("-")[0]!;
+  if (base.length > 0 && isAllAsciiDigits(base)) {
+    return base.padStart(5, "0");
+  }
+  return base;
+}
+
 function zipNormalize(values: readonly ColumnValue[]): ColumnValue[] {
-  return mapStrings(values, (s) => {
-    let val = s.trim();
-    // Strip +4 extension
-    val = val.split("-")[0]!;
-    if (/^\d+$/.test(val)) {
-      return val.padStart(5, "0");
-    }
-    return val; // preserve invalid
-  });
+  const backend: FlowWasmBackend | null = getFlowWasmBackend();
+  return mapStrings(values, backend ? (s) => backend.zipNormalize(s) : zipNormalizeTs);
 }
 
 registerTransform(
@@ -218,39 +316,19 @@ registerTransform(
 );
 
 // ---------------------------------------------------------------------------
-// split_address (dataframe, address, 45)
-// ---------------------------------------------------------------------------
-
-const _ADDRESS_PATTERN = /^(.+?),\s*(.+?),\s*([A-Za-z]{2})\s+(\d{5}(?:-\d{4})?)$/;
-
-function splitAddress(rows: readonly Row[], column: string): Row[] {
-  return rows.map((row) => {
-    const val = row[column];
-    if (val === null || val === undefined || typeof val !== "string") {
-      return { ...row, street: null, city: null, state: null, zip: null };
-    }
-    const m = val.trim().match(_ADDRESS_PATTERN);
-    if (m) {
-      return { ...row, street: m[1], city: m[2], state: m[3], zip: m[4] };
-    }
-    return { ...row, street: val, city: null, state: null, zip: null };
-  });
-}
-
-registerTransform(
-  { name: "split_address", inputTypes: ["address"], priority: 45, mode: "dataframe" },
-  splitAddress,
-);
-
-// ---------------------------------------------------------------------------
 // country_standardize (series, country|string, 50)
 // ---------------------------------------------------------------------------
 
+/** Normalize a country name to its ISO 3166-1 alpha-2 code (trim+lowercase
+ * key); unrecognized values pass through as the ORIGINAL (un-stripped) value.
+ * Byte-identical to `_country_standardize_py`. */
+export function countryStandardizeTs(s: string): string {
+  return _COUNTRIES[s.trim().toLowerCase()] ?? s;
+}
+
 function countryStandardize(values: readonly ColumnValue[]): ColumnValue[] {
-  return mapStrings(values, (s) => {
-    const lookup = s.trim().toLowerCase();
-    return _COUNTRIES[lookup] ?? s;
-  });
+  const backend: FlowWasmBackend | null = getFlowWasmBackend();
+  return mapStrings(values, backend ? (s) => backend.countryStandardize(s) : countryStandardizeTs);
 }
 
 registerTransform(
@@ -260,19 +338,155 @@ registerTransform(
 
 // ---------------------------------------------------------------------------
 // unit_normalize (series, address|string, 45)
+//
+// trim, then three anchored prefix substitutions applied sequentially:
+//   (Apt|Apartment)`.?`\s+ -> "Unit ", (Ste|Suite)`.?`\s+ -> "Ste ",
+//   #\s* -> "Unit ". Hand-rolled (no regex).
 // ---------------------------------------------------------------------------
 
-function unitNormalize(values: readonly ColumnValue[]): ColumnValue[] {
-  return mapStrings(values, (s) => {
-    let result = s.trim();
-    for (const [pattern, replacement] of _UNIT_PATTERNS) {
-      result = result.replace(pattern, replacement);
+/** Case-insensitive ASCII prefix test — mirrors `_ci_startswith`. */
+function ciStartsWith(s: string, prefix: string): boolean {
+  if (s.length < prefix.length) return false;
+  for (let i = 0; i < prefix.length; i++) {
+    if (asciiLower(s[i]!) !== asciiLower(prefix[i]!)) return false;
+  }
+  return true;
+}
+
+/** If `s` starts (case-insensitive) with one of `tokens`, then an optional `.`
+ * then one-or-more whitespace, replace that whole prefix with `rep`. Byte-
+ * identical to `_sub_leading_token` (the `\s+` requires >=1 stripped char). */
+function subLeadingToken(s: string, tokens: readonly string[], rep: string): string {
+  for (const tok of tokens) {
+    if (ciStartsWith(s, tok)) {
+      const rest = s.slice(tok.length);
+      const afterDot = rest.startsWith(".") ? rest.slice(1) : rest;
+      const afterWs = afterDot.trimStart();
+      if (afterWs.length < afterDot.length) {
+        return rep + afterWs;
+      }
     }
-    return result;
-  });
+  }
+  return s;
+}
+
+/** If `s` starts with `#`, replace `#` + zero-or-more whitespace with
+ * "Unit ". Byte-identical to `_sub_leading_hash`. */
+function subLeadingHash(s: string): string {
+  if (s.startsWith("#")) {
+    return "Unit " + s.slice(1).trimStart();
+  }
+  return s;
+}
+
+/** Normalize a unit/apartment/suite designation. Byte-identical to
+ * `_unit_normalize_py`. */
+export function unitNormalizeTs(s: string): string {
+  let result = s.trim();
+  result = subLeadingToken(result, ["Apt", "Apartment"], "Unit ");
+  result = subLeadingToken(result, ["Ste", "Suite"], "Ste ");
+  result = subLeadingHash(result);
+  return result;
+}
+
+function unitNormalize(values: readonly ColumnValue[]): ColumnValue[] {
+  const backend: FlowWasmBackend | null = getFlowWasmBackend();
+  return mapStrings(values, backend ? (s) => backend.unitNormalize(s) : unitNormalizeTs);
 }
 
 registerTransform(
   { name: "unit_normalize", inputTypes: ["address", "string"], priority: 45, mode: "series" },
   unitNormalize,
+);
+
+// ---------------------------------------------------------------------------
+// split_address (dataframe, address, 45)
+//
+// Parse "street, city, ST zip" -> [street, city, state, zip]. Hand-rolled
+// (no regex) port of `_split_address_py` / `_try_parse_address` /
+// `_parse_state_zip_tail` / `_is_zip`. On no-match: [origVal, null, null, null]
+// (street = the ORIGINAL, un-stripped input); null input -> all null (caller).
+// ---------------------------------------------------------------------------
+
+/** True if `s` is a 5-digit ZIP or a 5+4 dash ZIP. Mirrors `_is_zip`. */
+function isZip(s: string): boolean {
+  if (s.length === 5) return isAllAsciiDigits(s);
+  if (s.length === 10) {
+    return isAllAsciiDigits(s.slice(0, 5)) && s[5] === "-" && isAllAsciiDigits(s.slice(6, 10));
+  }
+  return false;
+}
+
+/** Parse the `\s*[A-Za-z]{2}\s+<zip>$` tail into [state, zip] or null. Mirrors
+ * `_parse_state_zip_tail`. */
+function parseStateZipTail(rem: string): [string, string] | null {
+  const afterWs = rem.trimStart();
+  if (afterWs.length < 2 || !(isAsciiAlpha(afterWs[0]!) && isAsciiAlpha(afterWs[1]!))) {
+    return null;
+  }
+  const state = afterWs.slice(0, 2);
+  const rest = afterWs.slice(2);
+  const zipc = rest.trimStart();
+  if (zipc.length === rest.length) return null; // no whitespace between state and ZIP
+  if (isZip(zipc)) return [state, zipc];
+  return null;
+}
+
+/** Parse a trimmed "street, city, ST zip" string. Mirrors `_try_parse_address`:
+ * street = up to the first comma; city = the shortest run to a later comma
+ * whose remainder is a valid `<state> <zip>` tail. */
+function tryParseAddress(t: string): [string, string, string, string] | null {
+  const c1 = t.indexOf(",");
+  if (c1 === -1) return null;
+  const group1 = t.slice(0, c1);
+  if (group1 === "") return null;
+  const after1Ws = t.slice(c1 + 1).trimStart();
+  let search = 0;
+  for (;;) {
+    const c2 = after1Ws.indexOf(",", search);
+    if (c2 === -1) break;
+    const group2 = after1Ws.slice(0, c2);
+    if (group2 !== "") {
+      const tail = parseStateZipTail(after1Ws.slice(c2 + 1));
+      if (tail !== null) {
+        return [group1, group2, tail[0], tail[1]];
+      }
+    }
+    search = c2 + 1;
+  }
+  return null;
+}
+
+/** Parse "street, city, ST zip" -> [street, city, state, zip]. On no-match
+ * returns [origVal, null, null, null] (street = the ORIGINAL, un-stripped
+ * input). Byte-identical to `_split_address_py`. */
+export function splitAddressTs(s: string): [string, string | null, string | null, string | null] {
+  const parsed = tryParseAddress(s.trim());
+  if (parsed !== null) return parsed;
+  return [s, null, null, null];
+}
+
+function splitAddress(rows: readonly Row[], column: string): Row[] {
+  const backend: FlowWasmBackend | null = getFlowWasmBackend();
+  return rows.map((row) => {
+    const val = row[column];
+    if (val === null || val === undefined || typeof val !== "string") {
+      return { ...row, street: null, city: null, state: null, zip: null };
+    }
+    const [street, city, state, zip] = backend
+      ? backend.splitAddress(val)
+      : splitAddressTs(val);
+    return {
+      ...row,
+      street: street ?? null,
+      city: city ?? null,
+      state: state ?? null,
+      zip: zip ?? null,
+    };
+  });
+}
+
+registerTransform(
+  { name: "split_address", inputTypes: ["address"], priority: 45, mode: "dataframe" },
+  splitAddress,
 );

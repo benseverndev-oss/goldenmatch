@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.10.0 (2026-07-04)
+
+Wave D (address-simple): the eight US-address transforms are now backed by owned Rust kernels in `goldenflow-core` (native + WASM/TS + pure-Python fallback), Rust is the reference implementation. This wave migrated existing transforms to the owned-kernel pattern; it did not add new transforms (count unchanged).
+
+- Migrated: `address_standardize`, `address_expand`, `state_abbreviate`, `state_expand`, `zip_normalize`, `country_standardize`, `unit_normalize` (scalar), and `split_address` (multi-output: one column in, `street`/`city`/`state`/`zip` out — four Arrow arrays natively, a 1->4 marshaling shape). The scalar seven fit the string->scalar parity corpus; `split_address` is covered by a pinned-vector test.
+- **Behavior change (reference-mode, resolved in Rust's favor):** the street-suffix, unit-prefix, and `split_address` parsing are now hand-rolled with ASCII word-boundary semantics (no regex engine) for byte-identical output across Rust/Python/JS. `address_standardize`/`address_expand`/`state_abbreviate`/`state_expand`/`zip_normalize` moved from vectorized Polars expressions to native-first dispatch (the pure-Python fallback runs per-row when the native wheel is absent). Outputs are unchanged for well-formed US-address inputs.
+
 ## 1.9.0 (2026-07-04)
 
 Wave D (names-remainder): the eight remaining `name` transforms are now backed by owned Rust kernels in `goldenflow-core` (native + WASM/TS + pure-Python fallback), Rust is the reference implementation. This wave migrated existing transforms to the owned-kernel pattern; it did not add new transforms (count unchanged).

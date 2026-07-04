@@ -12,6 +12,7 @@
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
+    use goldenflow_core::address;
     use goldenflow_core::categorical;
     use goldenflow_core::email;
     use goldenflow_core::identifiers::{aba, ean, iban, imei, isbn, luhn, swift, vat};
@@ -163,6 +164,51 @@ mod wasm {
     #[wasm_bindgen]
     pub fn merge_name(first: Option<String>, last: Option<String>) -> Option<String> {
         names::merge_name(first.as_deref(), last.as_deref())
+    }
+
+    #[wasm_bindgen]
+    pub fn address_standardize(s: &str) -> String {
+        address::address_standardize(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn address_expand(s: &str) -> String {
+        address::address_expand(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn state_abbreviate(s: &str) -> String {
+        address::state_abbreviate(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn state_expand(s: &str) -> String {
+        address::state_expand(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn zip_normalize(s: &str) -> String {
+        address::zip_normalize(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn country_standardize(s: &str) -> String {
+        address::country_standardize(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn unit_normalize(s: &str) -> String {
+        address::unit_normalize(s)
+    }
+
+    /// `"street, city, ST zip"` -> a 4-element JS array `[street, city, state,
+    /// zip]`. `street` is always a string; `city`/`state`/`zip` are `null` on a
+    /// no-match row (only the street parsed).
+    #[wasm_bindgen]
+    pub fn split_address(s: &str) -> Vec<JsValue> {
+        let (street, city, state, zip) = address::split_address(s);
+        let opt = |v: Option<String>| v.map_or(JsValue::NULL, |x| JsValue::from_str(&x));
+        vec![JsValue::from_str(&street), opt(city), opt(state), opt(zip)]
     }
 
     #[wasm_bindgen]

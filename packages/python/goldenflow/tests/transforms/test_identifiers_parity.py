@@ -13,6 +13,25 @@ from pathlib import Path
 import polars as pl
 import pytest
 from goldenflow.core._native_loader import native_available
+from goldenflow.transforms.address import (
+    _address_expand_series as address_expand,
+)
+from goldenflow.transforms.address import (
+    _address_standardize_series as address_standardize,
+)
+from goldenflow.transforms.address import (
+    _state_abbreviate_series as state_abbreviate,
+)
+from goldenflow.transforms.address import (
+    _state_expand_series as state_expand,
+)
+from goldenflow.transforms.address import (
+    _zip_normalize_series as zip_normalize,
+)
+from goldenflow.transforms.address import (
+    country_standardize,
+    unit_normalize,
+)
 from goldenflow.transforms.categorical import (
     _category_normalize_key_series,
     boolean_normalize,
@@ -131,6 +150,13 @@ _TRANSFORMS = {
     "email_validate": email_validate,
     "url_normalize": url_normalize,
     "url_extract_domain": url_extract_domain,
+    "address_standardize": address_standardize,
+    "address_expand": address_expand,
+    "state_abbreviate": state_abbreviate,
+    "state_expand": state_expand,
+    "zip_normalize": zip_normalize,
+    "country_standardize": country_standardize,
+    "unit_normalize": unit_normalize,
     "currency_strip": currency_strip,
     "percentage_normalize": percentage_normalize,
     "to_integer": to_integer,
@@ -179,6 +205,15 @@ _NATIVE_FLOOR_SYMBOL = {
     # symbol url_normalize_arrow), region-free/locale-free.
     "url_normalize": "url_normalize_arrow",
     "url_extract_domain": "url_normalize_arrow",
+    # address: all 7 scalar transforms wired via the single "address" component
+    # (floor symbol address_standardize_arrow), US-scoped/locale-free.
+    "address_standardize": "address_standardize_arrow",
+    "address_expand": "address_standardize_arrow",
+    "state_abbreviate": "address_standardize_arrow",
+    "state_expand": "address_standardize_arrow",
+    "zip_normalize": "address_standardize_arrow",
+    "country_standardize": "address_standardize_arrow",
+    "unit_normalize": "address_standardize_arrow",
     # numeric: all 5 string-parser transforms are wired via the single
     # "numeric" component (floor symbol currency_strip_arrow), region-free/
     # locale-free.

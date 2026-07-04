@@ -475,6 +475,89 @@ def merge_name_native() -> Callable[[pl.Series, pl.Series], pl.Series] | None:
     return run
 
 
+def _address_kernel_runner(attr: str) -> Callable[[pl.Series], pl.Series] | None:
+    """Build a whole-series runner for a scalar address kernel function ``attr``
+    (address_standardize/address_expand/state_abbreviate/state_expand/
+    zip_normalize/country_standardize/unit_normalize) if native ``address`` is
+    enabled and importable; else ``None``. Single string array in, one out.
+    The in-crate street/state/country tables are locale-free (US-scoped)."""
+    if not native_enabled("address"):
+        return None
+    nm = native_module()
+    if nm is None or not hasattr(nm, attr):
+        return None
+    try:
+        import pyarrow  # noqa: F401  (zero-copy bridge)
+    except ImportError:
+        return None
+    func = getattr(nm, attr)
+
+    def run(s: pl.Series) -> pl.Series:
+        return pl.from_arrow(func(_as_str_series(s).to_arrow()))
+
+    return run
+
+
+def address_standardize_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _address_kernel_runner("address_standardize_arrow")
+
+
+def address_expand_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _address_kernel_runner("address_expand_arrow")
+
+
+def state_abbreviate_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _address_kernel_runner("state_abbreviate_arrow")
+
+
+def state_expand_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _address_kernel_runner("state_expand_arrow")
+
+
+def zip_normalize_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _address_kernel_runner("zip_normalize_arrow")
+
+
+def country_standardize_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _address_kernel_runner("country_standardize_arrow")
+
+
+def unit_normalize_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _address_kernel_runner("unit_normalize_arrow")
+
+
+def split_address_native() -> (
+    Callable[[pl.Series], tuple[pl.Series, pl.Series, pl.Series, pl.Series]] | None
+):
+    """Build a runner for the multi-output split_address kernel: one string
+    array in, a QUAD of arrays (street, city, state, zip) out. ``None`` when
+    native ``address`` is off or unbuilt."""
+    if not native_enabled("address"):
+        return None
+    nm = native_module()
+    attr = "split_address_arrow"
+    if nm is None or not hasattr(nm, attr):
+        return None
+    try:
+        import pyarrow  # noqa: F401  (zero-copy bridge)
+    except ImportError:
+        return None
+    func = getattr(nm, attr)
+
+    def run(
+        s: pl.Series,
+    ) -> tuple[pl.Series, pl.Series, pl.Series, pl.Series]:
+        street_arr, city_arr, state_arr, zip_arr = func(_as_str_series(s).to_arrow())
+        return (
+            pl.from_arrow(street_arr),
+            pl.from_arrow(city_arr),
+            pl.from_arrow(state_arr),
+            pl.from_arrow(zip_arr),
+        )
+
+    return run
+
+
 def _email_kernel_runner(attr: str) -> Callable[[pl.Series], pl.Series] | None:
     """Build a whole-series runner for email kernel function ``attr`` if
     native ``email`` is enabled and the dependencies are importable; else

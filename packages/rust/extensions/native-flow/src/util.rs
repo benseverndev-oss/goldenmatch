@@ -78,6 +78,51 @@ where
     Ok((a.finish().into_data(), b.finish().into_data()))
 }
 
+/// Apply `f` over each non-null string element, producing a QUAD of outputs
+/// (e.g. `split_address` -> street + city + state + zip). A null input emits a
+/// null in ALL FOUR output arrays. On a present row `f` returns
+/// `(String, Option, Option, Option)`: the first output is always a value; the
+/// other three may each be null even on a present row (the split may match only
+/// the street) -- matching `address.py::split_address`.
+#[allow(clippy::type_complexity)]
+pub fn map_str_to_str_quad<F>(
+    py: Python,
+    data: ArrayData,
+    f: F,
+) -> PyResult<(ArrayData, ArrayData, ArrayData, ArrayData)>
+where
+    F: Fn(&str) -> (String, Option<String>, Option<String>, Option<String>) + Sync,
+{
+    let len = make_array(data.clone()).len();
+    let mut a = StringBuilder::with_capacity(len, len * 8);
+    let mut b = StringBuilder::with_capacity(len, len * 8);
+    let mut c = StringBuilder::with_capacity(len, len * 4);
+    let mut d = StringBuilder::with_capacity(len, len * 6);
+    py.detach(|| -> PyResult<()> {
+        for_each_str(&data, |_, v| match v {
+            Some(s) => {
+                let (w, x, y, z) = f(s);
+                a.append_value(w);
+                b.append_option(x);
+                c.append_option(y);
+                d.append_option(z);
+            }
+            None => {
+                a.append_null();
+                b.append_null();
+                c.append_null();
+                d.append_null();
+            }
+        })
+    })?;
+    Ok((
+        a.finish().into_data(),
+        b.finish().into_data(),
+        c.finish().into_data(),
+        d.finish().into_data(),
+    ))
+}
+
 /// Apply `f` over two string arrays element-wise, producing one output (e.g.
 /// `merge_name(first, last) -> full`). `f` sees each side's null-ness (it may
 /// combine one present + one null side), and returns `None` to emit a null.

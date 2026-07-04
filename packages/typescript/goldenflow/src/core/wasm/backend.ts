@@ -6,11 +6,13 @@
  * (cc/iban/isbn/ean/vat/swift/aba/imei) for the 14 covered functions, the
  * i18n-name transforms (name_transliterate/name_script), the email
  * transforms (email_lowercase/normalize/extract_domain/validate), the URL
- * transforms (url_normalize/extract_domain), and the categorical transforms
+ * transforms (url_normalize/extract_domain), the categorical transforms
  * (boolean_normalize/gender_standardize/null_standardize/
- * category_normalize_key); everything else stays pure-TS. Mirrors
- * goldenmatch's `setScorerBackend(null)` module-singleton pattern for test
- * isolation.
+ * category_normalize_key), and the address transforms (address_standardize/
+ * address_expand/state_abbreviate/state_expand/zip_normalize/
+ * country_standardize/unit_normalize/split_address); everything else stays
+ * pure-TS. Mirrors goldenmatch's `setScorerBackend(null)` module-singleton
+ * pattern for test isolation.
  */
 
 /**
@@ -67,6 +69,16 @@ export interface FlowWasmBackend {
   genderStandardize(s: string): string;
   nullStandardize(s: string): string | undefined;
   categoryNormalizeKey(s: string): string;
+  addressStandardize(s: string): string;
+  addressExpand(s: string): string;
+  stateAbbreviate(s: string): string;
+  stateExpand(s: string): string;
+  zipNormalize(s: string): string;
+  countryStandardize(s: string): string;
+  unitNormalize(s: string): string;
+  /** `split_address` -> 4-element `[street, city, state, zip]`; `street` is
+   * always a string, the other three are `string | null` (Rust `Option`). */
+  splitAddress(s: string): (string | null)[];
 }
 
 import { createBackendRegistry } from "goldenmatch-wasm-runtime";

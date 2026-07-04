@@ -263,6 +263,67 @@
 {"transform": "url_extract_domain", "input": "", "expected": null}
 {"transform": "url_extract_domain", "input": "   ", "expected": null}
 {"transform": "url_extract_domain", "input": null, "expected": null}
+{"transform": "address_standardize", "input": "123 Main Street", "expected": "123 Main St"}
+{"transform": "address_standardize", "input": "1 Park Avenue", "expected": "1 Park Ave"}
+{"transform": "address_standardize", "input": "5 Sunset Boulevard", "expected": "5 Sunset Blvd"}
+{"transform": "address_standardize", "input": "10 elm STREET", "expected": "10 elm St"}
+{"transform": "address_standardize", "input": "Streetsboro Road", "expected": "Streetsboro Rd"}
+{"transform": "address_standardize", "input": "42 Nowhere", "expected": "42 Nowhere"}
+{"transform": "address_standardize", "input": "", "expected": ""}
+{"transform": "address_standardize", "input": null, "expected": null}
+{"transform": "address_expand", "input": "123 Main St", "expected": "123 Main Street"}
+{"transform": "address_expand", "input": "1 Park Ave", "expected": "1 Park Avenue"}
+{"transform": "address_expand", "input": "1 Park Ste", "expected": "1 Park Ste"}
+{"transform": "address_expand", "input": "5 sunset blvd", "expected": "5 sunset Boulevard"}
+{"transform": "address_expand", "input": "", "expected": ""}
+{"transform": "address_expand", "input": null, "expected": null}
+{"transform": "state_abbreviate", "input": "California", "expected": "CA"}
+{"transform": "state_abbreviate", "input": "new york", "expected": "NY"}
+{"transform": "state_abbreviate", "input": "North Carolina", "expected": "NC"}
+{"transform": "state_abbreviate", "input": "ca", "expected": "CA"}
+{"transform": "state_abbreviate", "input": "Ny", "expected": "NY"}
+{"transform": "state_abbreviate", "input": "DC", "expected": "DC"}
+{"transform": "state_abbreviate", "input": "  Freedonia  ", "expected": "  Freedonia  "}
+{"transform": "state_abbreviate", "input": "XZ", "expected": "XZ"}
+{"transform": "state_abbreviate", "input": "", "expected": ""}
+{"transform": "state_abbreviate", "input": null, "expected": null}
+{"transform": "state_expand", "input": "CA", "expected": "California"}
+{"transform": "state_expand", "input": "ny", "expected": "New York"}
+{"transform": "state_expand", "input": "  il  ", "expected": "Illinois"}
+{"transform": "state_expand", "input": "DC", "expected": "District Of Columbia"}
+{"transform": "state_expand", "input": "  ZZ  ", "expected": "  ZZ  "}
+{"transform": "state_expand", "input": "", "expected": ""}
+{"transform": "state_expand", "input": null, "expected": null}
+{"transform": "zip_normalize", "input": "12345", "expected": "12345"}
+{"transform": "zip_normalize", "input": "12345-6789", "expected": "12345"}
+{"transform": "zip_normalize", "input": "  90210  ", "expected": "90210"}
+{"transform": "zip_normalize", "input": "210", "expected": "00210"}
+{"transform": "zip_normalize", "input": "123456", "expected": "123456"}
+{"transform": "zip_normalize", "input": "SW1A", "expected": "SW1A"}
+{"transform": "zip_normalize", "input": "SW1A-1AA", "expected": "SW1A"}
+{"transform": "zip_normalize", "input": "", "expected": ""}
+{"transform": "zip_normalize", "input": null, "expected": null}
+{"transform": "country_standardize", "input": "United States", "expected": "US"}
+{"transform": "country_standardize", "input": "usa", "expected": "US"}
+{"transform": "country_standardize", "input": "  England  ", "expected": "GB"}
+{"transform": "country_standardize", "input": "Deutschland", "expected": "DE"}
+{"transform": "country_standardize", "input": "CA", "expected": "CA"}
+{"transform": "country_standardize", "input": "  Atlantis  ", "expected": "  Atlantis  "}
+{"transform": "country_standardize", "input": "", "expected": ""}
+{"transform": "country_standardize", "input": null, "expected": null}
+{"transform": "unit_normalize", "input": "Apt 4", "expected": "Unit 4"}
+{"transform": "unit_normalize", "input": "Apt. 4", "expected": "Unit 4"}
+{"transform": "unit_normalize", "input": "Apartment 12B", "expected": "Unit 12B"}
+{"transform": "unit_normalize", "input": "Suite 200", "expected": "Ste 200"}
+{"transform": "unit_normalize", "input": "Ste. 200", "expected": "Ste 200"}
+{"transform": "unit_normalize", "input": "#5", "expected": "Unit 5"}
+{"transform": "unit_normalize", "input": "# 5", "expected": "Unit 5"}
+{"transform": "unit_normalize", "input": "APT 9", "expected": "Unit 9"}
+{"transform": "unit_normalize", "input": "Apt.5", "expected": "Apt.5"}
+{"transform": "unit_normalize", "input": "Aptos", "expected": "Aptos"}
+{"transform": "unit_normalize", "input": "  Building C  ", "expected": "Building C"}
+{"transform": "unit_normalize", "input": "", "expected": ""}
+{"transform": "unit_normalize", "input": null, "expected": null}
 {"transform": "currency_strip", "input": "$1,234.56", "expected": 1234.56}
 {"transform": "currency_strip", "input": "-$42.00", "expected": -42.0}
 {"transform": "currency_strip", "input": "USD 100", "expected": 100.0}
