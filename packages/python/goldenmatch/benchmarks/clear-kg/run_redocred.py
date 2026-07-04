@@ -26,11 +26,12 @@ _SOTA = "Re-DocRED relation-F1 reference: ~80.7 (fine-tuned BERT/DREEAM) / ~74.6
 
 
 def run(docs: list[dict], schema: list[str], *, model: str, extractor=openai_extract,
-        progress=False) -> dict:
+        exhaustive=False, progress=False) -> dict:
     preds = []
     for i, d in enumerate(docs):
-        preds.append(extractor(d, schema, model=model) if extractor is openai_extract
-                     else extractor(d, schema))
+        preds.append(
+            extractor(d, schema, model=model, exhaustive=exhaustive)
+            if extractor is openai_extract else extractor(d, schema))
         if progress:
             print(f"  [{i+1}/{len(docs)}] {d['title'][:48]}", file=sys.stderr)
     return score_redocred(preds, docs)
@@ -40,6 +41,8 @@ def main():
     ap = argparse.ArgumentParser(description="CLEAR-KG Track A on Re-DocRED (real prose)")
     ap.add_argument("--docs", type=int, default=25)
     ap.add_argument("--model", default="gpt-4o-mini")
+    ap.add_argument("--exhaustive", action="store_true",
+                    help="recall-favoring prompt (exhaustive + inverse relations)")
     ap.add_argument("--mock", action="store_true", help="offline dry-run (no key/network)")
     args = ap.parse_args()
 
@@ -53,8 +56,10 @@ def main():
           f"{len(schema)}-relation closed schema")
 
     extractor = mock_extract if args.mock else openai_extract
-    s = run(docs, schema, model=args.model, extractor=extractor, progress=True)
-    print(f"\nmodel: {'mock (oracle)' if args.mock else args.model}")
+    s = run(docs, schema, model=args.model, extractor=extractor,
+            exhaustive=args.exhaustive, progress=True)
+    print(f"\nmodel: {'mock (oracle)' if args.mock else args.model}"
+          f"{' (exhaustive prompt)' if args.exhaustive else ''}")
     print(f"micro P {s['precision']:.3f}  R {s['recall']:.3f}  F1 {s['f1']:.3f}  "
           f"(tp {s['tp']} / pred {s['n_pred']} / gold {s['n_gold']})")
     print(f"\n{_SOTA}")

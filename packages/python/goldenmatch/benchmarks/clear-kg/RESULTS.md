@@ -148,7 +148,8 @@ The takeaway is the thesis: extraction is the hard, LLM-bound, reasoning-hungry
 **commodity** axis you buy — the durable win is the ER + faithfulness layer, which
 is why CLEAR-KG puts the moats there. Harness offline-tested
 (`tests/test_redocred.py`, mock); run with
-`OPENAI_API_KEY=... python run_redocred.py --docs N --model <name>`.
+`OPENAI_API_KEY=... python run_redocred.py --docs N --model <name> [--exhaustive]`
+(the `--exhaustive` flag is the recall-favoring prompt from the experiment above).
 
 ## Track D — the CLEAR composite (headline)
 

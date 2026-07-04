@@ -298,7 +298,7 @@ python run_track_b.py            # corpus-level ER (homograph split-rate)
 python run_real.py               # Track B on real Wikipedia (fetch-on-demand)
 python run_track_c.py            # span-grounded faithfulness
 python run_track_d.py            # the CLEAR composite
-OPENAI_API_KEY=... python run_redocred.py --docs 20 --model gpt-5   # real-prose extraction
+OPENAI_API_KEY=... python run_redocred.py --docs 20 --model gpt-5 [--exhaustive]  # real-prose extraction
 python -m pytest tests/ -q       # 50 offline tests (no key/network)
 
 # companion board (real packaged frameworks + the split-rate)

@@ -23,6 +23,22 @@ _SYSTEM = (
     '{"triples": [{"h": <entity index>, "r": "<relation name>", "t": <entity index>}]}.'
 )
 
+# The exhaustive/inverse variant. Re-DocRED gold is dense (it annotates INVERSE
+# relations and pairs related across sentences), and a single-shot "list the
+# triples" prompt under-generates. Instructing exhaustiveness + inverses lifts
+# recall materially on a frozen model (measured: gpt-4.1 R 0.129 -> 0.196 on a
+# controlled 5-doc slice) -- see RESULTS.md. It does NOT reach fine-tuned SOTA.
+_EXHAUSTIVE_SYSTEM = _SYSTEM + (
+    " Be EXHAUSTIVE and favor recall: emit a relation for EVERY entity pair the "
+    "text supports, INCLUDING inverse relations (if you emit X located-in Y, also "
+    "emit Y contains X when both are in the allowed list) and facts stated across "
+    "different sentences. Do not stop early; scan every pair."
+)
+
+
+def _system_for(exhaustive: bool) -> str:
+    return _EXHAUSTIVE_SYSTEM if exhaustive else _SYSTEM
+
 
 def _prompt(doc: dict, schema: list[str]) -> str:
     ents = "\n".join(f"[{i}] {e['canonical']} ({e['type']})"
@@ -59,7 +75,7 @@ def _is_reasoning(model: str) -> bool:
 
 
 def openai_extract(doc: dict, schema: list[str], *, model: str = "gpt-4o-mini",
-                   client=None) -> set[tuple]:
+                   exhaustive: bool = False, client=None) -> set[tuple]:
     import openai
     client = client or openai.OpenAI(api_key=os.environ["OPENAI_API_KEY"])
     reasoning = _is_reasoning(model)
@@ -70,7 +86,7 @@ def openai_extract(doc: dict, schema: list[str], *, model: str = "gpt-4o-mini",
         # empty response on ~half of the longer Re-DocRED docs
         max_completion_tokens=16000 if reasoning else 2000,
         response_format={"type": "json_object"},
-        messages=[{"role": "system", "content": _SYSTEM},
+        messages=[{"role": "system", "content": _system_for(exhaustive)},
                   {"role": "user", "content": _prompt(doc, schema)}],
     )
     if not reasoning:
