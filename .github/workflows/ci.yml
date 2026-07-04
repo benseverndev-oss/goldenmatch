@@ -91,6 +91,7 @@ jobs:
       goldenprofile_wasm: ${{ steps.filter.outputs.goldenprofile_wasm }}
       goldengraph_wasm: ${{ steps.filter.outputs.goldengraph_wasm }}
       hnsw_wasm: ${{ steps.filter.outputs.hnsw_wasm }}
+      graph_wasm: ${{ steps.filter.outputs.graph_wasm }}
       wasm_flow: ${{ steps.filter.outputs.wasm_flow }}
       sketch_wasm: ${{ steps.filter.outputs.sketch_wasm }}
       quality_gate: ${{ steps.filter.outputs.quality_gate }}
@@ -198,6 +199,10 @@ jobs:
               # change must re-run the TS lane's sketch drift guard.
               - 'packages/rust/extensions/sketch-core/**'
               - 'packages/rust/extensions/sketch-wasm/**'
+              # Same for the graph (connected-components) wasm core: a kernel or
+              # wrapper change must re-run the TS lane's graph drift guard.
+              - 'packages/rust/extensions/graph-core/**'
+              - 'packages/rust/extensions/graph-wasm/**'
             wasm_score:
               - 'packages/rust/extensions/score-wasm/**'
               - 'packages/rust/extensions/score-core/**'
@@ -306,6 +311,13 @@ jobs:
               - 'packages/rust/extensions/sketch-core/**'
               - 'packages/rust/extensions/sketch-wasm/**'
               - 'packages/typescript/goldenmatch/scripts/build_sketch_wasm.mjs'
+            graph_wasm:
+              # Gates the (rust-toolchain-heavy) graph (connected-components) wasm
+              # rebuild + drift guard inside the typescript lane. Only fires when
+              # the graph kernel, its wasm wrapper, or the embed script changes.
+              - 'packages/rust/extensions/graph-core/**'
+              - 'packages/rust/extensions/graph-wasm/**'
+              - 'packages/typescript/goldenmatch/scripts/build_graph_wasm.mjs'
             web:
               - 'packages/python/goldenmatch/web/**'
               - 'packages/python/goldenmatch/goldenmatch/web/**'
@@ -1509,6 +1521,26 @@ jobs:
             exit 1
           fi
           npx vitest run tests/parity/sketch-wasm.parity.test.ts tests/unit/sketch-wasm-reroute.test.ts
+      # Same drift guard for the graph (connected-components) wasm surface:
+      # rebuild the inlined wasm + bindings + copy the golden fixture, diff ONLY
+      # the deterministic golden JSON (not the version-varying wasm bytes), then
+      # run the parity + reroute tests (the fixture_drift job only diffs
+      # fixtures — it doesn't run these vitest checks). Stale committed wasm is
+      # caught behaviorally by the parity test, like the goldenhnsw guard above.
+      - name: Rebuild + verify embedded graph wasm
+        if: needs.changes.outputs.graph_wasm == 'true' || needs.changes.outputs.force_all == 'true'
+        working-directory: packages/typescript/goldenmatch
+        run: |
+          rustup target add wasm32-unknown-unknown
+          command -v wasm-pack >/dev/null 2>&1 || curl -sSf https://rustwasm.github.io/wasm-pack/installer/init.sh | sh
+          node scripts/build_graph_wasm.mjs
+          if ! git diff --exit-code -- tests/parity/fixtures/graph/; then
+            echo "::error::graph golden fixture is stale. Run \
+              'node scripts/build_graph_wasm.mjs' in packages/typescript/goldenmatch \
+              and commit the result." >&2
+            exit 1
+          fi
+          npx vitest run tests/parity/graph-wasm.parity.test.ts tests/unit/graph-wasm-reroute.test.ts
       - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
         with:
           path: .turbo
@@ -1762,6 +1794,11 @@ jobs:
       # their own unit tests + clippy were dead in CI. Run them explicitly.
       - run: cargo test --manifest-path graph-core/Cargo.toml
       - run: cargo clippy --manifest-path graph-core/Cargo.toml -- -D warnings
+      # graph-wasm: the wasm-bindgen wrapper that lets the TS clustering step run
+      # graph-core (one source of truth). Its own [workspace]; check + clippy it
+      # here (the wasm32 build runs in the typescript lane's graph drift guard).
+      - run: cargo check --manifest-path graph-wasm/Cargo.toml
+      - run: cargo clippy --manifest-path graph-wasm/Cargo.toml --all-targets -- -D warnings
       - run: cargo test --manifest-path score-core/Cargo.toml
       - run: cargo clippy --manifest-path score-core/Cargo.toml -- -D warnings
       # goldenflow-core (owned checksummed-identifier kernels, Wave 0b) is its own
