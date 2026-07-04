@@ -362,6 +362,9 @@ jobs:
               # goldenhnsw is a path dep of the postgres crate (goldenmatch_hnsw_pairs),
               # so a kernel change must rebuild + re-smoke this lane.
               - 'packages/rust/extensions/goldenhnsw/**'
+              # sketch-core is a path dep of the postgres crate (goldenmatch_lsh_pairs),
+              # so a kernel change must rebuild + re-smoke this lane.
+              - 'packages/rust/extensions/sketch-core/**'
               - 'packages/rust/extensions/Cargo.toml'
             rust_cores:
               # ANY Rust extension change re-validates EVERY committed TS wasm
@@ -2670,6 +2673,8 @@ jobs:
           # (installs default_version, now 0.9.0) and `ALTER EXTENSION ... UPDATE`
           # find them. The schema files are the canonical declaration of public
           # function signatures.
+          cp sql/goldenmatch_pg--0.11.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
+          cp sql/goldenmatch_pg--0.10.0--0.11.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
           cp sql/goldenmatch_pg--0.10.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
           cp sql/goldenmatch_pg--0.9.0--0.10.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
           cp sql/goldenmatch_pg--0.9.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
@@ -2759,6 +2764,17 @@ jobs:
                 ARRAY[1,0, 1,0, 0,1]::real[], 2, 5, 0.5::DOUBLE PRECISION);
               IF pd.n <> 1 OR pd.a <> 0 OR pd.b <> 1 OR abs(pd.s - 1.0) > 1e-5 THEN
                 RAISE EXCEPTION 'hnsw_pairs: expected exactly (0,1,1.0), got n=% (%,%,%)', pd.n, pd.a, pd.b, pd.s;
+              END IF;
+
+              -- lsh_pairs: 3 records, rows 0 and 1 near-duplicates (one typo),
+              -- row 2 distinct. MinHash-LSH must surface exactly the (0,1) pair
+              -- (0-based positions). Config validated against the Python blocker.
+              SELECT count(*) AS n, min(a) AS a, min(b) AS b INTO pd
+              FROM goldenmatch.goldenmatch_lsh_pairs(
+                ARRAY['Acme Corporation', 'Acme Corporaton', 'Zzyzx Widgets']::text[],
+                'char', 3, 64, 16, 42);
+              IF pd.n <> 1 OR pd.a <> 0 OR pd.b <> 1 THEN
+                RAISE EXCEPTION 'lsh_pairs: expected exactly (0,1), got n=% (%,%)', pd.n, pd.a, pd.b;
               END IF;
 
               -- record_fingerprint: stable across key order (fields sorted by name).
