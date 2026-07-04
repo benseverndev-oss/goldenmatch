@@ -36,6 +36,7 @@ import {
   abaValidateTs,
   imeiValidateTs,
 } from "../../src/core/transforms/identifiers.js";
+import { nameTransliterateTs, nameScriptTs } from "../../src/core/transforms/names.js";
 import { enableWasm, disableWasm } from "../../src/core/wasm/index.js";
 import { getFlowWasmBackend, type FlowWasmBackend } from "../../src/core/wasm/backend.js";
 
@@ -70,6 +71,8 @@ const PURE_TS_FN: Record<string, (s: string) => boolean | string | undefined> = 
   swift_format: swiftFormatTs,
   aba_validate: abaValidateTs,
   imei_validate: imeiValidateTs,
+  name_transliterate: nameTransliterateTs,
+  name_script: nameScriptTs,
 };
 
 /** Same transform set, dispatched through the wasm backend's method of the
@@ -91,6 +94,8 @@ function wasmFn(backend: FlowWasmBackend, transform: string): (s: string) => boo
     swift_format: (s) => backend.swiftFormat(s),
     aba_validate: (s) => backend.abaValidate(s),
     imei_validate: (s) => backend.imeiValidate(s),
+    name_transliterate: (s) => backend.nameTransliterate(s),
+    name_script: (s) => backend.nameScript(s),
   };
   const fn = map[transform];
   if (!fn) throw new Error(`no wasm dispatch for transform ${transform}`);

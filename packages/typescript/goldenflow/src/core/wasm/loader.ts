@@ -55,6 +55,8 @@ export async function instantiateBackend(bytes: Uint8Array): Promise<FlowWasmBac
     swift_format: (s: string) => string | undefined;
     aba_validate: (s: string) => boolean;
     imei_validate: (s: string) => boolean;
+    name_transliterate: (s: string) => string;
+    name_script: (s: string) => string;
   };
   await glue.default({ module_or_path: bytes });
 
@@ -73,5 +75,7 @@ export async function instantiateBackend(bytes: Uint8Array): Promise<FlowWasmBac
     swiftFormat: (s) => glue.swift_format(s),
     abaValidate: (s) => glue.aba_validate(s),
     imeiValidate: (s) => glue.imei_validate(s),
+    nameTransliterate: (s) => glue.name_transliterate(s),
+    nameScript: (s) => glue.name_script(s),
   };
 }
