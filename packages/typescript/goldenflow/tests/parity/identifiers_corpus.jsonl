@@ -324,6 +324,61 @@
 {"transform": "unit_normalize", "input": "  Building C  ", "expected": "Building C"}
 {"transform": "unit_normalize", "input": "", "expected": ""}
 {"transform": "unit_normalize", "input": null, "expected": null}
+{"transform": "strip", "input": "  hello  ", "expected": "hello"}
+{"transform": "strip", "input": "a    b   c", "expected": "a    b   c"}
+{"transform": "strip", "input": " nbsp ", "expected": "nbsp"}
+{"transform": "strip", "input": "nochange", "expected": "nochange"}
+{"transform": "strip", "input": "", "expected": ""}
+{"transform": "strip", "input": null, "expected": null}
+{"transform": "collapse_whitespace", "input": "a    b   c", "expected": "a b c"}
+{"transform": "collapse_whitespace", "input": "a\tb", "expected": "a\tb"}
+{"transform": "collapse_whitespace", "input": "a\t\tb", "expected": "a b"}
+{"transform": "collapse_whitespace", "input": "  lead", "expected": " lead"}
+{"transform": "collapse_whitespace", "input": "", "expected": ""}
+{"transform": "collapse_whitespace", "input": null, "expected": null}
+{"transform": "normalize_quotes", "input": "“hi”", "expected": "\"hi\""}
+{"transform": "normalize_quotes", "input": "it’s", "expected": "it's"}
+{"transform": "normalize_quotes", "input": "‘a’", "expected": "'a'"}
+{"transform": "normalize_quotes", "input": "5″ x 3′", "expected": "5\" x 3'"}
+{"transform": "normalize_quotes", "input": "plain", "expected": "plain"}
+{"transform": "normalize_quotes", "input": null, "expected": null}
+{"transform": "normalize_line_endings", "input": "a\r\nb", "expected": "a\nb"}
+{"transform": "normalize_line_endings", "input": "a\rb", "expected": "a\nb"}
+{"transform": "normalize_line_endings", "input": "a\nb", "expected": "a\nb"}
+{"transform": "normalize_line_endings", "input": "a\r\r b", "expected": "a\n\n b"}
+{"transform": "normalize_line_endings", "input": "a\r\n\rb", "expected": "a\n\nb"}
+{"transform": "normalize_line_endings", "input": null, "expected": null}
+{"transform": "remove_html_tags", "input": "<b>hi</b>", "expected": "hi"}
+{"transform": "remove_html_tags", "input": "a <a href=\"x\">link</a> b", "expected": "a link b"}
+{"transform": "remove_html_tags", "input": "<>", "expected": "<>"}
+{"transform": "remove_html_tags", "input": "2 < 3", "expected": "2 < 3"}
+{"transform": "remove_html_tags", "input": "<unclosed", "expected": "<unclosed"}
+{"transform": "remove_html_tags", "input": null, "expected": null}
+{"transform": "remove_urls", "input": "see http://x.com/y now", "expected": "see  now"}
+{"transform": "remove_urls", "input": "https://a.com?q=1 end", "expected": " end"}
+{"transform": "remove_urls", "input": "no url here", "expected": "no url here"}
+{"transform": "remove_urls", "input": "http:// x", "expected": "http:// x"}
+{"transform": "remove_urls", "input": null, "expected": null}
+{"transform": "remove_digits", "input": "abc123def", "expected": "abcdef"}
+{"transform": "remove_digits", "input": "no digits", "expected": "no digits"}
+{"transform": "remove_digits", "input": "42", "expected": ""}
+{"transform": "remove_digits", "input": null, "expected": null}
+{"transform": "remove_punctuation", "input": "hello, world!", "expected": "hello world"}
+{"transform": "remove_punctuation", "input": "a-b_c.d", "expected": "abcd"}
+{"transform": "remove_punctuation", "input": "keep 123 ok", "expected": "keep 123 ok"}
+{"transform": "remove_punctuation", "input": "café", "expected": "caf"}
+{"transform": "remove_punctuation", "input": null, "expected": null}
+{"transform": "remove_emojis", "input": "hi 😀 there", "expected": "hi  there"}
+{"transform": "remove_emojis", "input": "🚀😀rocket", "expected": "rocket"}
+{"transform": "remove_emojis", "input": "no emoji", "expected": "no emoji"}
+{"transform": "remove_emojis", "input": "café", "expected": "café"}
+{"transform": "remove_emojis", "input": null, "expected": null}
+{"transform": "extract_numbers", "input": "abc12.5def7", "expected": "12.5 7"}
+{"transform": "extract_numbers", "input": "price $9.99 x2", "expected": "9.99 2"}
+{"transform": "extract_numbers", "input": "no numbers", "expected": ""}
+{"transform": "extract_numbers", "input": "12.", "expected": "12."}
+{"transform": "extract_numbers", "input": "3.14.159", "expected": "3.14 159"}
+{"transform": "extract_numbers", "input": null, "expected": null}
 {"transform": "currency_strip", "input": "$1,234.56", "expected": 1234.56}
 {"transform": "currency_strip", "input": "-$42.00", "expected": -42.0}
 {"transform": "currency_strip", "input": "USD 100", "expected": 100.0}

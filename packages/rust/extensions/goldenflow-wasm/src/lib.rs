@@ -18,6 +18,7 @@ mod wasm {
     use goldenflow_core::identifiers::{aba, ean, iban, imei, isbn, luhn, swift, vat};
     use goldenflow_core::names;
     use goldenflow_core::numeric;
+    use goldenflow_core::text;
     use goldenflow_core::url;
     use wasm_bindgen::prelude::*;
 
@@ -209,6 +210,71 @@ mod wasm {
         let (street, city, state, zip) = address::split_address(s);
         let opt = |v: Option<String>| v.map_or(JsValue::NULL, |x| JsValue::from_str(&x));
         vec![JsValue::from_str(&street), opt(city), opt(state), opt(zip)]
+    }
+
+    #[wasm_bindgen]
+    pub fn strip(s: &str) -> String {
+        text::strip(s).to_string()
+    }
+
+    #[wasm_bindgen]
+    pub fn collapse_whitespace(s: &str) -> String {
+        text::collapse_whitespace(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn normalize_quotes(s: &str) -> String {
+        text::normalize_quotes(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn normalize_line_endings(s: &str) -> String {
+        text::normalize_line_endings(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn remove_html_tags(s: &str) -> String {
+        text::remove_html_tags(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn remove_urls(s: &str) -> String {
+        text::remove_urls(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn remove_digits(s: &str) -> String {
+        text::remove_digits(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn remove_punctuation(s: &str) -> String {
+        text::remove_punctuation(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn remove_emojis(s: &str) -> String {
+        text::remove_emojis(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn extract_numbers(s: &str) -> String {
+        text::extract_numbers(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn truncate(s: &str, n: u32) -> String {
+        text::truncate(s, n as usize)
+    }
+
+    #[wasm_bindgen]
+    pub fn pad_left(s: &str, width: u32, pad: char) -> String {
+        text::pad_left(s, width as usize, pad)
+    }
+
+    #[wasm_bindgen]
+    pub fn pad_right(s: &str, width: u32, pad: char) -> String {
+        text::pad_right(s, width as usize, pad)
     }
 
     #[wasm_bindgen]
