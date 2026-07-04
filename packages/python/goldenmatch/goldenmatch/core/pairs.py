@@ -50,7 +50,7 @@ def dedup_pairs_max_score(pairs: list[Pair]) -> list[Pair]:
 
 def candidate_pair_count(block_sizes: list[int]) -> int:
     """Total candidate comparisons across blocks: ``sum(n*(n-1)//2)``."""
-    if native_enabled("pairs"):
+    if native_enabled("pairs", "candidate_pair_count"):
         return native_module().candidate_pair_count(block_sizes)
     return sum(n * (n - 1) // 2 for n in block_sizes if n >= 2)
 
@@ -62,7 +62,7 @@ def block_histogram(block_sizes: list[int]) -> dict[str, int]:
     ``p95`` / ``p99`` (the percentile definition in ``core/cluster.py``). Empty
     input yields all zeros.
     """
-    if native_enabled("pairs"):
+    if native_enabled("pairs", "block_histogram"):
         count, total, mx, p50, p95, p99 = native_module().block_histogram(block_sizes)
         return {
             "count": count,
@@ -106,7 +106,7 @@ def connected_components(
             seen.add(a)
             seen.add(b)
         all_ids = list(seen)
-    if native_enabled("pairs"):
+    if native_enabled("pairs", "connected_components"):
         return native_module().connected_components(list(pairs), all_ids)
     from goldenmatch.core.cluster import UnionFind
 

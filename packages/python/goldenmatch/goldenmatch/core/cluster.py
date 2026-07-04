@@ -325,7 +325,7 @@ def _severe_bridge_count(members: list[int], pair_scores: dict) -> int:
     """Count edges whose removal splits this cluster into two components each
     with >= 2 nodes -- the 'merged by one weak link' pathology. A bridge between
     a node and a singleton tail is not severe (one side < 2)."""
-    if native_enabled("clustering"):
+    if native_enabled("clustering", "severe_bridge_count"):
         edges = [(k[0], k[1], v) for k, v in pair_scores.items()
                  if isinstance(k, tuple) and len(k) == 2]
         return native_module().severe_bridge_count(members, edges)
@@ -1196,7 +1196,7 @@ def compute_cluster_confidence(
     Returns:
         Dict with: min_edge, avg_edge, connectivity, bottleneck_pair, confidence.
     """
-    if native_enabled("clustering"):
+    if native_enabled("clustering", "cluster_confidence"):
         # pair_scores keys are ALWAYS canonical (min, max) 2-tuples by
         # construction -- every writer in this module builds them that way
         # (_build_clusters_dict_path, add_to_cluster, unmerge, the split/merge
