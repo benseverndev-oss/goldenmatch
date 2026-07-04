@@ -37,10 +37,11 @@ class DocREModel(nn.Module):
             end_tokens = [cfg.sep_token_id]
         return process_long_input(self.model, input_ids, attention_mask, start_tokens, end_tokens)
 
-    def get_hrt(self, sequence_output, attention, entity_pos, hts):
+    def get_hrt(self, sequence_output, attention, entity_pos, hts, collect_ht_att=False):
         offset = 1  # leading special token ([CLS]/<s>)
         _, h, _, c = attention.size()
         hss, tss, rss = [], [], []
+        ht_att_per_doc = []
         for i in range(len(entity_pos)):
             entity_embs, entity_atts = [], []
             for e in entity_pos[i]:
@@ -83,11 +84,50 @@ class DocREModel(nn.Module):
             hss.append(hs)
             tss.append(ts)
             rss.append(rs)
-        return torch.cat(hss, 0), torch.cat(rss, 0), torch.cat(tss, 0)
+            if collect_ht_att:
+                ht_att_per_doc.append(ht_att)
+        out = (torch.cat(hss, 0), torch.cat(rss, 0), torch.cat(tss, 0))
+        return (*out, ht_att_per_doc) if collect_ht_att else out
 
-    def forward(self, input_ids, attention_mask, entity_pos, hts, labels=None):
+    def _evidence_loss(self, ht_att_per_doc, hts, sent_pos, evidence):
+        """DREEAM-style evidence supervision: aggregate each pair's localized-context
+        token attention to a per-sentence distribution, and cross-entropy it against the
+        gold evidence sentences (uniform over the pair's evidence). Only pairs that carry
+        evidence contribute. Averaged over those pairs."""
+        offset = 1  # token attention includes the leading special token
+        total = 0.0
+        n = 0
+        for ht_att, sp, evi in zip(ht_att_per_doc, sent_pos, evidence):
+            if not sp:
+                continue
+            c = ht_att.size(1)
+            # sentence attention: sum token attention within each sentence -> [n_pairs, n_sents]
+            cols = [ht_att[:, min(a + offset, c): min(b + offset, c)].sum(1) for (a, b) in sp]
+            sent_att = torch.stack(cols, dim=1)
+            sent_att = sent_att / (sent_att.sum(1, keepdim=True) + 1e-20)
+            logq = torch.log(sent_att + 1e-20)
+            n_sents = len(sp)
+            for pair_idx, ev in enumerate(evi):
+                ev = [s for s in ev if s < n_sents]
+                if not ev:
+                    continue
+                p = torch.zeros(n_sents, device=ht_att.device)
+                p[ev] = 1.0 / len(ev)
+                total = total + -(p * logq[pair_idx]).sum()
+                n += 1
+        if n == 0:
+            return None
+        return total / n
+
+    def forward(self, input_ids, attention_mask, entity_pos, hts, labels=None,
+                sent_pos=None, evidence=None, evi_lambda=0.1):
+        want_evi = labels is not None and sent_pos is not None
         sequence_output, attention = self.encode(input_ids, attention_mask)
-        hs, rs, ts = self.get_hrt(sequence_output, attention, entity_pos, hts)
+        got = self.get_hrt(sequence_output, attention, entity_pos, hts, collect_ht_att=want_evi)
+        if want_evi:
+            hs, rs, ts, ht_att_per_doc = got
+        else:
+            hs, rs, ts = got
 
         hs = torch.tanh(self.head_extractor(torch.cat([hs, rs], dim=1)))
         ts = torch.tanh(self.tail_extractor(torch.cat([ts, rs], dim=1)))
@@ -99,6 +139,10 @@ class DocREModel(nn.Module):
         preds = self.loss_fnt.get_label(logits, num_labels=self.num_labels)
         if labels is not None:
             loss = self.loss_fnt(logits.float(), labels.float())
+            if want_evi:
+                evi_loss = self._evidence_loss(ht_att_per_doc, hts, sent_pos, evidence)
+                if evi_loss is not None:
+                    loss = loss + evi_lambda * evi_loss
             return loss, preds
         return (preds,)
 
@@ -122,7 +166,10 @@ def make_collate(pad_token_id: int):
         labels = _t.tensor([lab for f in batch for lab in f["labels"]], dtype=_t.float)
         entity_pos = [f["entity_pos"] for f in batch]
         hts = [f["hts"] for f in batch]
-        return input_ids, mask, labels, entity_pos, hts
+        # optional DREEAM evidence supervision fields (None when absent)
+        sent_pos = [f["sent_pos"] for f in batch] if "sent_pos" in batch[0] else None
+        evidence = [f["evidence"] for f in batch] if "evidence" in batch[0] else None
+        return input_ids, mask, labels, entity_pos, hts, sent_pos, evidence
 
     return collate
 

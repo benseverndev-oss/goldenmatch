@@ -76,6 +76,25 @@ def test_read_docred_markers_positions_and_pairs():
             assert core[start] == 1  # the '*' marker
 
 
+def test_read_docred_evidence_fields():
+    r2i = build_rel2id([_DOC])
+    # default: no evidence fields (byte-identical to plain ATLOP path)
+    plain = read_docred([_DOC], StubTokenizer(), r2i)[0]
+    assert "sent_pos" not in plain and "evidence" not in plain
+    # with_evidence: sent_pos spans every sentence; evidence aligns with hts
+    f = read_docred([_DOC], StubTokenizer(), r2i, with_evidence=True)[0]
+    assert len(f["sent_pos"]) == 2  # 2 sentences
+    # each sentence span is (start, end) into the non-special-token stream, contiguous
+    (a0, b0), (a1, b1) = f["sent_pos"]
+    assert a0 == 0 and a1 == b0 and b1 == len(f["input_ids"]) - 2
+    assert len(f["evidence"]) == len(f["hts"])
+    # positives (first 2) carry their gold evidence sentences; P108 -> sent 0, P159 -> sent 1
+    pos_ev = {tuple(ht): ev for ht, ev in zip(f["hts"][:2], f["evidence"][:2])}
+    assert pos_ev[(0, 1)] == [0] and pos_ev[(0, 2)] == [1]
+    # negatives carry no evidence
+    assert all(ev == [] for ev in f["evidence"][2:])
+
+
 def test_scorer_perfect_and_partial_and_ign():
     gold = [_DOC]
     train_facts = facts_in_train([_DOC])  # same doc as "train" -> both facts are in-train

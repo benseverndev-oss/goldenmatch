@@ -79,7 +79,7 @@ def smoke() -> dict:
     model = DocREModel(cfg, enc, num_labels=4).cuda()
 
     collate = make_collate(tok.pad_token_id)
-    input_ids, mask, labels, entity_pos, hts = collate(feats)
+    input_ids, mask, labels, entity_pos, hts, _sp, _ev = collate(feats)
     with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
         loss, preds = model(input_ids.cuda(), mask.cuda(), entity_pos, hts, labels.cuda())
     info = {
@@ -94,6 +94,43 @@ def smoke() -> dict:
     return info
 
 
+@app.function(image=image, gpu="A10G", volumes={DATA: vol}, timeout=600)
+def evi_smoke() -> dict:
+    """Validate the DREEAM evidence path end to end on GPU: with_evidence prepro ->
+    forward with the evidence loss -> backward. Cheap; run before the full evidence train."""
+    import sys
+
+    sys.path.insert(0, "/root/rdlb")
+    import torch
+    from model import DocREModel, make_collate
+    from prepro import build_rel2id, read_docred
+    from transformers import AutoConfig, AutoModel, AutoTokenizer
+
+    train, dev, test = _load_splits()
+    rel2id = build_rel2id(train, dev, test)
+    tok = AutoTokenizer.from_pretrained("microsoft/deberta-v3-large")
+    feats = read_docred(dev[:6], tok, rel2id, 1024, with_evidence=True)
+    cfg = AutoConfig.from_pretrained("microsoft/deberta-v3-large", num_labels=97)
+    cfg.transformer_type = "bert"
+    cfg.cls_token_id = tok.cls_token_id
+    cfg.sep_token_id = tok.sep_token_id
+    enc = AutoModel.from_pretrained("microsoft/deberta-v3-large", config=cfg)
+    model = DocREModel(cfg, enc, num_labels=4).cuda()
+    collate = make_collate(tok.pad_token_id)
+    input_ids, mask, labels, entity_pos, hts, sent_pos, evi = collate(feats)
+    with torch.autocast("cuda", dtype=torch.bfloat16):
+        loss_plain, _ = model(input_ids.cuda(), mask.cuda(), entity_pos, hts, labels.cuda())
+        loss_evi, _ = model(input_ids.cuda(), mask.cuda(), entity_pos, hts, labels.cuda(),
+                            sent_pos=sent_pos, evidence=evi, evi_lambda=0.1)
+    loss_evi.backward()
+    n_evi = sum(1 for doc in evi for pair in doc if pair)
+    info = {"device": torch.cuda.get_device_name(0),
+            "loss_plain": float(loss_plain.item()), "loss_evi": float(loss_evi.item()),
+            "pairs_with_evidence": n_evi, "backward_ok": True}
+    print("EVI_SMOKE:", info)
+    return info
+
+
 def _evaluate(model, features, collate, id2rel, gold_docs, train_facts, batch_size):
     import torch
     from model import decode_preds
@@ -104,7 +141,7 @@ def _evaluate(model, features, collate, id2rel, gold_docs, train_facts, batch_si
     loader = DataLoader(features, batch_size=batch_size, shuffle=False, collate_fn=collate)
     all_preds_matrix = []
     hts_order = []
-    for input_ids, mask, _labels, entity_pos, hts in loader:
+    for input_ids, mask, _labels, entity_pos, hts, _sp, _ev in loader:
         with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
             (preds,) = model(input_ids.cuda(), mask.cuda(), entity_pos, hts)
         all_preds_matrix.append(preds.float().cpu().numpy())
@@ -116,10 +153,12 @@ def _evaluate(model, features, collate, id2rel, gold_docs, train_facts, batch_si
     return official_evaluate(submission, gold_docs, train_facts)
 
 
-@app.function(image=image, gpu=GPU, volumes={DATA: vol}, timeout=60 * 60 * 8)
+@app.function(image=image, gpu=GPU, volumes={DATA: vol}, timeout=60 * 60 * 10)
 def train(base_model: str = "roberta-large", epochs: int = 30, lr: float = 3e-5,
           classifier_lr: float = 1e-4, batch_size: int = 4, seed: int = 66,
-          num_labels: int = 4, max_seq_length: int = 1024) -> dict:
+          num_labels: int = 4, max_seq_length: int = 1024,
+          evidence: bool = False, evi_lambda: float = 0.1, save_ckpt: bool = False,
+          tag: str = "") -> dict:
     import json
     import os
     import sys
@@ -144,6 +183,7 @@ def train(base_model: str = "roberta-large", epochs: int = 30, lr: float = 3e-5,
     id2rel = {v: k for k, v in rel2id.items()}
     train_facts = facts_in_train(train_docs)
 
+    run_tag = (tag or base_model).replace("/", "_")
     transformer_type = "roberta" if "roberta" in base_model else "bert"
     tok = AutoTokenizer.from_pretrained(base_model)
     cfg = AutoConfig.from_pretrained(base_model, num_labels=97)
@@ -152,8 +192,8 @@ def train(base_model: str = "roberta-large", epochs: int = 30, lr: float = 3e-5,
     cfg.sep_token_id = tok.sep_token_id
 
     print(f"prepro: {len(train_docs)} train / {len(dev_docs)} dev / {len(test_docs)} test "
-          f"| {len(rel2id)} relations", flush=True)
-    train_feats = read_docred(train_docs, tok, rel2id, max_seq_length)
+          f"| {len(rel2id)} relations | evidence={evidence}", flush=True)
+    train_feats = read_docred(train_docs, tok, rel2id, max_seq_length, with_evidence=evidence)
     dev_feats = read_docred(dev_docs, tok, rel2id, max_seq_length)
     test_feats = read_docred(test_docs, tok, rel2id, max_seq_length)
 
@@ -182,9 +222,10 @@ def train(base_model: str = "roberta-large", epochs: int = 30, lr: float = 3e-5,
         model.train()
         t0 = time.time()
         running = 0.0
-        for step, (input_ids, mask, labels, entity_pos, hts) in enumerate(loader):
+        for step, (input_ids, mask, labels, entity_pos, hts, sent_pos, evi) in enumerate(loader):
             with torch.autocast("cuda", dtype=torch.bfloat16):
-                loss, _ = model(input_ids.cuda(), mask.cuda(), entity_pos, hts, labels.cuda())
+                loss, _ = model(input_ids.cuda(), mask.cuda(), entity_pos, hts, labels.cuda(),
+                                sent_pos=sent_pos, evidence=evi, evi_lambda=evi_lambda)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
@@ -211,12 +252,17 @@ def train(base_model: str = "roberta-large", epochs: int = 30, lr: float = 3e-5,
             best = {"epoch": epoch, "dev": dev_m, "test": test_m}
             print(f"  * new best dev Ign {best_dev:.4f} -> TEST F1 {test_m['f1']:.4f} "
                   f"Ign {test_m['ign_f1']:.4f}", flush=True)
-            _save({"base_model": base_model, "best": best, "history": history},
-                  _manifest_name(base_model))
+            _save({"base_model": base_model, "evidence": evidence, "best": best,
+                   "history": history}, _manifest_name(run_tag))
+            if save_ckpt:
+                ckpt = f"{DATA}/ckpt/{run_tag}"
+                os.makedirs(ckpt, exist_ok=True)
+                torch.save(model.state_dict(), f"{ckpt}/model.pt")
+                vol.commit()
 
-    manifest = {"base_model": base_model, "epochs": epochs, "lr": lr,
-                "best": best, "history": history}
-    _save(manifest, _manifest_name(base_model))
+    manifest = {"base_model": base_model, "evidence": evidence, "evi_lambda": evi_lambda,
+                "epochs": epochs, "lr": lr, "best": best, "history": history}
+    _save(manifest, _manifest_name(run_tag))
     print("DONE best:", json.dumps(best.get("test", {})), flush=True)
     return manifest
 
@@ -238,8 +284,13 @@ def _save(manifest: dict, name: str = "manifest.json") -> None:
 
 @app.local_entrypoint()
 def main(base_model: str = "roberta-large", epochs: int = 30, spawn: bool = False,
-         smoke_only: bool = False):
-    """Upload the Re-DocRED splits to the Volume, then smoke or train."""
+         smoke_only: bool = False, evidence: bool = False, evi_lambda: float = 0.1,
+         save_ckpt: bool = False, tag: str = "", seed: int = 66):
+    """Upload the Re-DocRED splits to the Volume, then smoke or train.
+
+    `--evidence` turns on DREEAM-style evidence supervision; `--save-ckpt` persists the
+    best checkpoint to the Volume (for later ensembling / self-training); `--tag` names
+    the run's manifest/checkpoint so parallel variants don't collide."""
     data_dir = HERE / "data"
     files = [data_dir / f"{s}_revised.json" for s in ("train", "dev", "test")]
     missing = [f for f in files if not f.exists()]
@@ -253,9 +304,12 @@ def main(base_model: str = "roberta-large", epochs: int = 30, spawn: bool = Fals
     if smoke_only:
         print("smoke:", smoke.remote())
         return
+    kw = dict(base_model=base_model, epochs=epochs, evidence=evidence,
+              evi_lambda=evi_lambda, save_ckpt=save_ckpt, tag=tag, seed=seed)
+    run_tag = (tag or base_model).replace("/", "_")
     if spawn:
-        call = train.spawn(base_model=base_model, epochs=epochs)
+        call = train.spawn(**kw)
         print(f"SPAWNED train call_id={call.object_id} "
-              f"-> /out/{_manifest_name(base_model)} on redocred-lb")
+              f"-> /out/{_manifest_name(run_tag)} on redocred-lb")
         return
-    print("result:", train.remote(base_model=base_model, epochs=epochs))
+    print("result:", train.remote(**kw))
