@@ -1,0 +1,282 @@
+---
+title: "API surface"
+description: "One page for the whole suite's programmatic surface — Python, TypeScript, CLI, MCP, REST, and agent skills across all six packages, with the primary entry points for each."
+keywords: ["api", "reference", "surface", "python", "typescript", "cli", "mcp", "rest", "a2a"]
+---
+
+Every Golden Suite package exposes the same operation through several surfaces: a
+Python library, a TypeScript library, a CLI, an MCP server, and — for the
+service-shaped packages — a REST API and an A2A agent server. This page is the
+single map of all of them. Pick a package, pick a surface, and follow the link to
+its deep reference.
+
+<Note>
+  Versions below are the current published releases. TypeScript packages track the
+  same API but lag the Python versions and expose a subset of the MCP tools — see
+  the [coverage notes](#coverage-notes) at the bottom.
+</Note>
+
+## Capability matrix
+
+What each package ships, at a glance. **MCP** counts are the Python server's tools
+(the TS server exposes a subset). A dash means the package does not ship that
+surface.
+
+| Package | Python (PyPI) | TypeScript (npm) | CLI | MCP tools | REST | A2A | Native / SQL |
+|---------|:-------------:|:----------------:|-----|:---------:|:----:|:---:|--------------|
+| [GoldenMatch](#goldenmatch) | `2.8.0` | `1.1.0` | `goldenmatch` | 69 | ✓ | ✓ | wheel · Postgres · DuckDB |
+| [GoldenCheck](#goldencheck) | `1.4.1` | `0.4.0` | `goldencheck` | 19 | ✓ | ✓ | wheel |
+| [GoldenFlow](#goldenflow)   | `1.9.0` | `0.9.0` | `goldenflow`  | 10 | ✓ | ✓ | wheel |
+| [GoldenPipe](#goldenpipe)   | `1.3.0` | `0.2.0` | `goldenpipe`  | 4  | ✓ | ✓ | core (WASM) |
+| [GoldenAnalysis](#goldenanalysis) | `0.3.0` | `0.1.0` | `goldenanalysis` | 4 | — | — | core (WASM) |
+| [InferMap](#infermap)       | `0.5.1` | `0.5.0` | `infermap`    | 4  | — | — | — |
+
+## Install
+
+<CodeGroup>
+
+```bash pip
+pip install goldenmatch          # + [native] for the compiled kernel, [mcp] for the server
+pip install goldencheck goldenflow goldenpipe goldenanalysis infermap
+```
+
+```bash npm
+npm install goldenmatch          # edge-safe core; enableWasm() opts into the Rust kernel
+npm install goldencheck goldenflow goldenpipe goldenanalysis infermap
+```
+
+</CodeGroup>
+
+Each package's MCP server ships in the same distribution: `pip install <pkg>[mcp]`
+(Python) or the `<pkg>-mcp` npm bin.
+
+---
+
+## GoldenMatch
+
+Zero-config entity resolution: dedupe, match, cluster, survivorship, identity
+graph, privacy-preserving linkage. The flagship — the only package with a native
+wheel, SQL extensions, REST, and A2A.
+
+**Python** — `import goldenmatch`
+
+| Entry point | Does |
+|-------------|------|
+| `dedupe_df(df, ...)` / `dedupe(path)` | Deduplicate a DataFrame or file into clusters + golden records |
+| `match_df(...)` / `match(...)` | Match a target dataset against reference sources |
+| `auto_configure_df(df)` | Zero-config: infer the full `GoldenMatchConfig` from the data |
+| `AgentSession()` | Stateful, agent-facing ER session (`autoconfigure`, `deduplicate`, `review`) |
+| `run_pprl(...)` / `pprl_link(...)` | Privacy-preserving record linkage (Bloom filters, SMC) |
+| `IdentityStore` / `resolve_clusters(...)` | Durable Identity Graph — stable `entity_id`s across runs |
+| `record_fingerprint(record)` | Stable cross-surface record-id hash |
+
+**TypeScript** — `import { dedupe, match, autoConfigureRows, enableWasm } from "goldenmatch"`
+
+**CLI** — `goldenmatch <cmd>`: `autoconfig`, `dedupe`, `match`, `review`, `explain`,
+`identity`, `pprl`, `memory`, `serve`, `serve-ui`, `mcp-serve`, `agent-serve`, … (30+ commands)
+
+**Servers** — REST (`goldenmatch serve`: `/match`, `/autoconfig`, `/clusters`,
+`/reviews`, `/controller/telemetry`, …) · A2A (`goldenmatch agent-serve`) · local
+web UI (`goldenmatch serve-ui`) · **69 MCP tools**.
+
+**Native / SQL** — `goldenmatch-native` wheel, a Postgres extension (pgrx:
+`goldenmatch_dedupe`, `goldenmatch_autoconfig`, `goldenmatch_connected_components`, …),
+and a DuckDB extension.
+
+→ [Python API](/goldenmatch/python-api) · [TypeScript](/goldenmatch/typescript) ·
+[REST](/goldenmatch/rest-api) · [MCP](/goldenmatch/mcp) · [Agent](/goldenmatch/agent) ·
+[API quick reference](/goldenmatch/api-quick-reference)
+
+---
+
+## GoldenCheck
+
+Data-quality scanning: profile a dataset, discover rules automatically, emit
+findings with severities, auto-triage and fix, diff two versions.
+
+**Python** — `import goldencheck`
+
+| Entry point | Does |
+|-------------|------|
+| `scan_file(path)` / `scan_dataframe(df)` | Run a quality scan → `ScanResult` (findings, severities, profile) |
+| `scan_file_with_llm(path)` | Scan with LLM-assisted checks |
+| `validate_file(path)` | Rule-based validation |
+| `auto_triage(result)` → `TriageResult` | Rank/route findings |
+| `apply_fixes(...)` → `FixReport` | Apply suggested fixes |
+| `diff_files(a, b)` → `DiffReport` | Schema / finding / stat drift between versions |
+
+**TypeScript** — `import { scanData, createBaseline, runDriftChecks } from "goldencheck"`
+
+**CLI** — `goldencheck <cmd>`: `scan`, `validate`, `fix`, `diff`, `baseline`,
+`refs`, `scan-db`, `serve`, `mcp-serve`, `agent-serve`, …
+
+**Servers** — REST (`goldencheck serve`: `/scan`, `/checks`, `/domains`) · A2A
+(9 skills) · **19 MCP tools**.
+
+**Native** — `goldencheck-native` wheel.
+
+→ [Overview](/goldencheck/overview) · [CLI](/goldencheck/cli) ·
+[Native](/goldencheck/native) · [Integrations](/goldencheck/integrations)
+
+---
+
+## GoldenFlow
+
+Data transformation: 86 built-in transforms across 11 categories (phone, date,
+address, name, categorical, identifiers, …), a transform registry, schema mapping,
+and owned identifier kernels (card / IBAN / ISBN / EAN / VAT).
+
+**Python** — `import goldenflow`
+
+| Entry point | Does |
+|-------------|------|
+| `transform_df(df, config)` / `transform_file(path)` | Apply a transform pipeline |
+| `TransformEngine(config)` | Configurable engine → `TransformResult` |
+| `canonicalize(value, rules)` | Pure scalar canonicalizers |
+| `select_transforms(profile)` | Auto-pick transforms from a profile |
+| `register_transform(...)` / `list_transforms()` | The transform registry |
+| `SchemaMapper` / `load_domain(name)` | Schema mapping + domain packs |
+
+**TypeScript** — `import { TransformEngine, canonicalize, enableWasm } from "goldenflow"`
+
+**CLI** — `goldenflow <cmd>`: `transform`, `map`, `profile`, `learn`, `diff`,
+`stream`, `serve`, `mcp-serve`, `agent-serve`, …
+
+**Servers** — REST (`goldenflow serve`: `/transforms`, `/transform`, `/map`) · A2A
+(6 skills) · **10 MCP tools**.
+
+**Native** — `goldenflow-native` wheel; the pure canonicalizers are also compiled
+to a `goldenflow-core` Rust kernel (opt-in WASM in TS).
+
+→ [Overview](/goldenflow/overview) · [CLI](/goldenflow/cli) · [Performance](/goldenflow/performance)
+
+---
+
+## GoldenPipe
+
+Pipeline orchestration: chains Check → Flow → Match into one adaptive call, with a
+**dependency-DAG planner** that orders stages from their declared `needs` and
+`consumes`/`produces`, routes on decision gates, and explains every choice.
+
+**Python** — `import goldenpipe as gp`
+
+| Entry point | Does |
+|-------------|------|
+| `gp.run(source)` / `run_df(df)` | Execute the default or a configured pipeline |
+| `run_stages([...])` | Run an explicit list of stages |
+| `Pipeline(config)` / `PipelineConfig` / `StageSpec` | Build a custom pipeline |
+| `stage` (decorator) / `Stage` | Define a programmatic stage |
+| `severity_gate` / `pii_router` / `row_count_gate` | Built-in decision stages |
+
+The planner is a pyo3-free `goldenpipe-core` Rust kernel — the single reference
+that Python and edge-TS compute identically. It activates the `needs` field,
+reorders a consumer ahead of its sole producer instead of erroring, and rejects
+genuinely ambiguous co-production, cycles, and unknown `needs` as typed errors
+(`MissingProducer`, `AmbiguousProducer`, `Cycle`, `UnknownNeed`). Opt into the WASM
+kernel in TypeScript with `enableWasm()`.
+
+**TypeScript** — `import { runDf, Pipeline, StageRegistry, enableWasm } from "goldenpipe"`
+
+**CLI** — `goldenpipe <cmd>`: `run`, `stages`, `validate`, `init`, `serve`,
+`mcp-serve`, `agent-serve`, `interactive`.
+
+**Servers** — REST (`goldenpipe serve`: `/stages`, `/validate`, `/run`) · A2A
+(4 skills) · **4 MCP tools** (`run_pipeline`, `validate_pipeline`, `list_stages`,
+`explain_pipeline`).
+
+→ [Overview](/goldenpipe/overview)
+
+---
+
+## GoldenAnalysis
+
+Read-only cross-cutting reporting: run analyzers over any package's artifacts,
+build trends across runs, and gate regressions.
+
+**Python** — `import goldenanalysis`
+
+| Entry point | Does |
+|-------------|------|
+| `analyze(frame_or_artifacts)` → `AnalysisReport` | Run analyzers → metrics |
+| `analyze_match(...)` / `analyze_pipeline(...)` | Package-specific entry points |
+| `ReportHistory` / `RegressionPolicy` | Trend tracking + regression gating |
+
+**TypeScript** — `import { analyze, buildTrend, detectRegressions } from "goldenanalysis"`
+
+**CLI** — `goldenanalysis <cmd>`: `report`, `trend`, `regressions`, `mcp-serve`.
+
+**Servers** — **4 MCP tools** (`analyze_frame`, `detect_regressions`, `get_trend`,
+`list_analyzers`). No REST or A2A server — it is a reporting library, not a service.
+
+→ [Overview](/goldenanalysis/overview) · [Cross-run](/goldenanalysis/cross-run) ·
+[Native](/goldenanalysis/native)
+
+---
+
+## InferMap
+
+Schema / column mapping: align source columns to a target schema with Hungarian
+assignment over pluggable field scorers, plus domain detection.
+
+**Python** — `import infermap`
+
+| Entry point | Does |
+|-------------|------|
+| `map(source, target)` → `MapResult` | Map a source schema/dataset to a target |
+| `MapEngine.from_config(...)` | Configurable mapping engine |
+| `detect_domain(...)` | Infer the domain pack |
+| `extract_schema(source)` → `SchemaInfo` | Pull a schema from data |
+| `write_aliases_from_mapping(...)` | Persist a mapping as aliases |
+
+**TypeScript** — `import { map, MapEngine, detectDomain } from "infermap"`
+
+**CLI** — `infermap <cmd>`: `map`, `apply`, `inspect`, `validate`, `mcp-serve`.
+
+**Servers** — **4 MCP tools** (`map`, `apply`, `inspect`, `validate`). Pure Python +
+pure TypeScript — no native wheel, no SQL, no REST or A2A.
+
+→ [Overview](/infermap/overview)
+
+---
+
+## Same operation, every surface
+
+The suite's design goal is one computation reachable identically from anywhere.
+GoldenMatch's auto-config is the canonical example — the same config + telemetry
+comes back whether you call it from Python, the CLI, REST, MCP, an agent, or SQL:
+
+```python
+from goldenmatch import AgentSession
+result = AgentSession().autoconfigure("customers.csv")
+# result["config"]     — GoldenMatchConfig as a JSON-safe dict
+# result["telemetry"]  — stop_reason, health, decisions, column priors
+```
+
+| Surface | Call |
+|---------|------|
+| Python  | `AgentSession().autoconfigure(path)` |
+| CLI     | `goldenmatch autoconfig customers.csv` |
+| REST    | `POST /autoconfig` · `GET /controller/telemetry` |
+| MCP     | `auto_configure` tool |
+| A2A     | `autoconfig` skill |
+| SQL     | `goldenmatch_autoconfig(...)` (Postgres / DuckDB) |
+
+## Coverage notes
+
+- **TypeScript lags Python.** Every package has a TS twin, but the npm versions
+  trail the PyPI ones and the TS MCP servers expose a subset of the Python tools
+  (e.g. GoldenMatch: 34 TS tools vs 69 Python). The public function names match.
+- **REST + A2A are for the service-shaped packages only** — GoldenMatch,
+  GoldenCheck, GoldenFlow, and GoldenPipe. GoldenAnalysis and InferMap ship a CLI
+  and an MCP server but no long-running HTTP service.
+- **Native acceleration** is a compiled Rust kernel behind a pure-Python/TS
+  fallback. GoldenMatch, GoldenCheck, GoldenFlow, and GoldenAnalysis ship it;
+  GoldenPipe's `goldenpipe-core` is the planner-only reference (execution stays in
+  the host language); InferMap is pure Python/TS.
+- **SQL extensions** (Postgres + DuckDB) are GoldenMatch-only.
+
+<Note>
+  Authoritative type signatures live in each package's source (`<pkg>/__init__.py`
+  and the config schema modules). This page maps the surface; the linked deep pages
+  carry the full signatures and examples.
+</Note>

@@ -4,18 +4,30 @@ description: "The orchestrator that chains data-quality checking, transformation
 keywords: ["goldenpipe", "orchestration", "pipeline", "check", "flow", "match"]
 ---
 
-GoldenPipe chains GoldenCheck, GoldenFlow, and GoldenMatch into one pipeline. It profiles your data, conditionally routes it through transformation, deduplicates it (or routes sensitive fields to privacy-preserving matching), and emits golden records. Its logic is adaptive: it skips transformation when no issues are found, and it explains the reasoning behind every decision.
+GoldenPipe chains GoldenCheck, GoldenFlow, and GoldenMatch into one pipeline. It profiles your data, conditionally routes it through transformation, deduplicates it (or routes sensitive fields to privacy-preserving matching), and emits golden records. Its logic is adaptive: a dependency-DAG planner orders the stages from their declared dependencies, it skips transformation when no issues are found, and it explains the reasoning behind every decision.
+
+It runs in Python and TypeScript, on the CLI, and behind MCP, REST, and A2A servers.
 
 ## Install
 
-```bash
+<CodeGroup>
+
+```bash pip
 pip install goldenpipe
 pip install goldenpipe[mcp]   # MCP server mode
 ```
 
+```bash npm
+npm install goldenpipe        # edge-safe; enableWasm() opts into the Rust planner
+```
+
+</CodeGroup>
+
 ## Quickstart
 
-```python
+<CodeGroup>
+
+```python Python
 import goldenpipe as gp
 
 result = gp.run("customers.csv")
@@ -27,6 +39,16 @@ print(result.match)      # deduplicated clusters
 print(result.reasoning)  # why each decision was made
 ```
 
+```ts TypeScript
+import { runDf } from "goldenpipe";
+
+const result = await runDf(rows);   // zero-config: scan -> transform -> dedupe
+console.log(result.status);         // "success"
+console.log(result.artifacts.golden);
+```
+
+</CodeGroup>
+
 On the CLI:
 
 ```bash
@@ -35,18 +57,25 @@ goldenpipe run customers.csv --verbose       # show reasoning
 goldenpipe run customers.csv --skip-flow     # check + match only
 goldenpipe run customers.csv --strategy pprl # force privacy mode
 goldenpipe run customers.csv -o golden.csv   # save golden records
+goldenpipe stages                            # list registered stages
+goldenpipe validate -c pipeline.yml          # dry-run wiring validation
+goldenpipe serve | mcp-serve | agent-serve   # REST / MCP / A2A servers
 ```
 
 ## Key features
 
 - **Orchestrates the full pipeline** (Check → Flow → Match) in one call.
+- **Dependency-DAG planner** that activates each stage's `needs`, reorders a consumer ahead of its sole producer instead of erroring, and rejects genuinely ambiguous co-production, cycles, and unknown `needs` as typed errors (`MissingProducer`, `AmbiguousProducer`, `Cycle`, `UnknownNeed`).
 - **Adaptive logic** that skips transformation when there are no quality issues.
 - **Privacy-preserving routing** that detects sensitive fields and routes to PPRL.
 - **Reasoning transparency** that reports why each stage ran or was skipped.
 - **Column-context enrichment** that builds targeted dedupe config from GoldenCheck profiles and column-name heuristics.
-- **Remote and local MCP server** (`goldenpipe mcp-serve`).
+- **Polyglot planner, one source of truth.** The planner (stage ordering, decision routing, auto-config, `skip_if`) is a pyo3-free `goldenpipe-core` Rust kernel; Python and edge-TS compute it identically, locked byte-for-byte by a CI parity gate. TypeScript opts into the WASM kernel with `enableWasm()`; pure-TS is the default. Only the planner is in Rust — stage execution and IO stay a per-language host.
+- **Four server surfaces**: MCP (`goldenpipe mcp-serve`, 4 tools), REST (`goldenpipe serve`), and A2A (`goldenpipe agent-serve`), plus the local CLI.
 
 GoldenPipe scores 88.07 on the DQBench Pipeline category.
+
+See the [API surface](/reference/api-surface#goldenpipe) for every entry point in one place.
 
 ## Selective stages
 
@@ -85,7 +114,11 @@ result.skipped     # list[str]
   A few sharp edges from the package docs: `PipeResult` does not expose the output DataFrame directly. Use `gp.run(path)` (file-based) rather than `gp.run_df(df)`, since GoldenCheck needs a file extension. And cast mixed-type columns (for example a `birth_year` that is sometimes an int and sometimes a string) to a single type before dedup, or GoldenMatch will raise.
 </Warning>
 
-## MCP endpoints
+## Servers
 
-- Remote: `https://goldenpipe-mcp-production.up.railway.app/mcp/`
-- Local: `goldenpipe mcp-serve --transport http --port 8250`
+GoldenPipe ships three server surfaces, each exposing the same four operations —
+`list_stages`, `validate_pipeline`, `run_pipeline`, `explain_pipeline`:
+
+- **MCP** — remote `https://goldenpipe-mcp-production.up.railway.app/mcp/` or local `goldenpipe mcp-serve --transport http --port 8250` (4 tools).
+- **REST** — `goldenpipe serve` (`GET /stages`, `POST /validate`, `POST /run`).
+- **A2A** — `goldenpipe agent-serve` (agent card at `/.well-known/agent.json`, 4 skills).

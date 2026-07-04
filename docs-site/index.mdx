@@ -4,7 +4,7 @@ description: "A polyglot data-quality and entity-resolution toolkit. Zero-config
 keywords: ["entity resolution", "deduplication", "data quality", "record linkage", "golden records"]
 ---
 
-The Golden Suite is a polyglot data-quality and entity-resolution toolkit. Each tool stands alone, but together they form a single pipeline: profile your data, standardize it, deduplicate it, and emit golden records. Every package ships zero-config defaults, a CLI, a Python and (mostly) a TypeScript library, and an AI-native surface (MCP server, REST API, agent skills).
+The Golden Suite is a polyglot data-quality and entity-resolution toolkit. Each tool stands alone, but together they form a single pipeline: profile your data, standardize it, deduplicate it, and emit golden records. Every package ships zero-config defaults, a CLI, a Python and a TypeScript library, and an AI-native surface (MCP server, and — for the service-shaped packages — a REST API and agent skills).
 
 ## Start where you fit
 
@@ -25,13 +25,16 @@ The Golden Suite is a polyglot data-quality and entity-resolution toolkit. Each 
     Deduplicate a CSV in 30 seconds.
   </Card>
   <Card title="Architecture" icon="diagram-project" href="/concepts/architecture">
-    How the five tools compose into one pipeline.
+    How the six tools compose into one pipeline.
   </Card>
   <Card title="GoldenMatch" icon="object-group" href="/goldenmatch/overview">
     The headline package: zero-config entity resolution.
   </Card>
   <Card title="Scale envelope" icon="gauge-high" href="/concepts/scale-envelope">
     Pick the right backend for your row count.
+  </Card>
+  <Card title="API surface" icon="table-list" href="/reference/api-surface">
+    Every entry point in one place — Python, TypeScript, CLI, MCP, REST, and agent skills across all six packages.
   </Card>
 </CardGroup>
 
@@ -68,7 +71,7 @@ flowchart LR
     Data-quality scanning that discovers rules automatically.
   </Card>
   <Card title="GoldenFlow" icon="wand-magic-sparkles" href="/goldenflow/overview">
-    76 transforms across 11 categories for cleaning messy data.
+    86 transforms across 11 categories for cleaning messy data.
   </Card>
   <Card title="GoldenPipe" icon="diagram-project" href="/goldenpipe/overview">
     One call to chain Check, Flow, and Match.
@@ -88,7 +91,7 @@ flowchart LR
 
 - **Zero-config that beats hand-tuned.** GoldenMatch's introspective auto-config controller reaches F1 0.964 on DBLP-ACM out of the box, above the hand-tuned ceiling of 0.918.
 - **Polyglot.** Python is the headline runtime; TypeScript runs the same scorers on edge runtimes (Vercel Edge, Cloudflare Workers, Deno); Rust powers the Postgres and DuckDB extensions.
-- **AI-native.** Every package ships an MCP server (50+ tools across the suite), a REST API, and agent skills.
+- **AI-native.** Every package ships an MCP server (~110 tools across the suite), and the service-shaped packages add a REST API and agent skills.
 - **MIT-licensed.** Every package in the suite.
 
 <Note>

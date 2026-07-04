@@ -141,6 +141,7 @@
           {
             "group": "Reference",
             "pages": [
+              "reference/api-surface",
               "reference/vendor-comparison"
             ]
           },

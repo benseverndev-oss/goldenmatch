@@ -1,10 +1,10 @@
 ---
 title: "GoldenFlow overview"
-description: "Standardize, reshape, and normalize messy data with 92 built-in transforms across 11 categories."
+description: "Standardize, reshape, and normalize messy data with 86 built-in transforms across 11 categories."
 keywords: ["goldenflow", "transforms", "standardization", "normalization", "data cleaning"]
 ---
 
-GoldenFlow standardizes, reshapes, and normalizes messy data before it enters a pipeline. In zero-config mode it auto-detects quality issues and applies safe transforms. It ships 92 built-in transforms across 11 categories (text, phone, name, address, date, categorical, numeric, email, identifiers, and URLs), plus domain packs for healthcare, finance, ecommerce, people/HR, and real estate. The identifiers group includes checksummed/structural validators/formatters for payment cards (Luhn), IBAN (mod-97), ISBN, EAN/UPC, EU VAT, SWIFT/BIC, US ABA routing numbers, and IMEI, running on owned Rust kernels. The name group includes two owned i18n kernels: `name_transliterate` (deterministic Unicode-to-ASCII fold via a curated map) and `name_script` (dominant-script detection). It scores 100/100 on the DQBench transform benchmarks.
+GoldenFlow standardizes, reshapes, and normalizes messy data before it enters a pipeline. In zero-config mode it auto-detects quality issues and applies safe transforms. It ships 86 built-in transforms across 11 categories (text, phone, name, address, date, categorical, numeric, email, identifiers, and URLs), plus domain packs for healthcare, finance, ecommerce, people/HR, and real estate. The identifiers group includes checksummed/structural validators/formatters for payment cards (Luhn), IBAN (mod-97), ISBN, EAN/UPC, EU VAT, SWIFT/BIC, US ABA routing numbers, and IMEI, running on owned Rust kernels. The name group includes two owned i18n kernels: `name_transliterate` (deterministic Unicode-to-ASCII fold via a curated map) and `name_script` (dominant-script detection). It scores 100/100 on the DQBench transform benchmarks.
 
 <CardGroup cols={2}>
   <Card title="CLI reference" icon="terminal" href="/goldenflow/cli">
@@ -65,7 +65,7 @@ console.log(result.rows[0]);
 ## Key features
 
 - **Zero-config mode**: auto-detects column types and applies safe transforms.
-- **92 transforms** across 11 categories, including checksummed/structural identifiers (payment card, IBAN, ISBN, EAN/UPC, EU VAT, SWIFT/BIC, ABA routing, IMEI) and owned i18n name kernels (`name_transliterate`, `name_script`).
+- **86 transforms** across 11 categories, including checksummed/structural identifiers (payment card, IBAN, ISBN, EAN/UPC, EU VAT, SWIFT/BIC, ABA routing, IMEI) and owned i18n name kernels (`name_transliterate`, `name_script`).
 - **5 domain packs**: healthcare, finance, ecommerce, people/HR, real estate.
 - **Audit trail**: a JSON manifest of every transform, which rows changed, and before/after samples.
 - **Schema mapping**: auto-map columns between systems by name similarity and data profiling.
