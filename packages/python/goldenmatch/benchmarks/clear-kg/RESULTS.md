@@ -91,8 +91,8 @@ zero-shot single-pass, `temperature=0` (chat) or default (reasoning):
 | `gpt-4.1-mini` | 0.448 | 0.121 | **0.190** | 69s |
 | `gpt-4o` | 0.481 | 0.122 | **0.195** | 58s |
 | `gpt-4.1` (chat ceiling) | 0.399 | 0.130 | **0.196** | 47s |
-| **`gpt-5-mini`** (reasoning) | 0.473 | **0.182** | **0.262** | 704s |
-| `gpt-5` (reasoning) | — | — | *invalid* | — |
+| `gpt-5-mini` (reasoning) | 0.473 | 0.182 | **0.262** | 704s |
+| **`gpt-5`** (reasoning) | 0.604 | 0.184 | **0.282** | 1439s |
 
 _Reference: Re-DocRED relation-F1 SOTA **~80.7** (fine-tuned BERT/DREEAM) · **~74.6** (strong LLM)._
 
@@ -104,17 +104,19 @@ zero-shot LLM extractor lands on the real standard benchmark:
   chat model buys *precision* (0.34→0.48), not the recall document-level RE needs
   — the models emit ~11–14 triples/doc against ~43 dense gold (Re-DocRED annotates
   inverse and implicit relations a single pass misses).
-- **The reasoning tier breaks that plateau:** `gpt-5-mini` lifts recall 0.13→0.18
-  and F1 to **0.262** (+34% over the best chat model) via multi-step inference —
-  at ~12× the wall-clock (704s vs ~50s).
-- Even the reasoning ceiling here sits well below fine-tuned SOTA (~0.81); the
-  published ~74.6 "LLM" figure uses heavy scaffolding (few-shot + retrieval +
-  multi-pass) this single-pass harness deliberately omits.
-- `gpt-5` (full) is marked *invalid*: at the old 6000-token budget its hidden
-  reasoning exhausted the completion budget and returned an EMPTY response on ~half
-  the longer docs (10/20), so its raw 0.117 measures the harness, not the model.
-  The default is now 16000 for reasoning models; a valid `gpt-5` row needs a
-  re-run (deferred — slow + costs API budget).
+- **The reasoning tier breaks that plateau:** `gpt-5-mini` F1 **0.262**, `gpt-5`
+  F1 **0.282** (+34–44% over the best chat model) via multi-step inference — at
+  14–29× the wall-clock (704s / 1439s vs ~50s).
+- **But recall hits a wall at ~0.18 for BOTH reasoning models** (0.182 / 0.184):
+  going from `gpt-5-mini` to full `gpt-5` buys *precision* (0.47→0.60), not recall.
+  Single-pass zero-shot — even the strongest reasoning model — cannot recover the
+  dense inverse/implicit gold relations; that needs the multi-pass + retrieval
+  scaffolding the published ~74.6 "LLM" SOTA uses. So the whole sweep sits well
+  below fine-tuned SOTA (~0.81), and the gap is structural (recall), not model size.
+- _(`gpt-5` was first mis-measured at the old 6000-token budget, where hidden
+  reasoning exhausted the completion budget → empty output on 10/20 docs; the
+  reasoning-model default is now 16000, and the 0.282 row above is the clean re-run,
+  0 empties.)_
 
 The takeaway is the thesis: extraction is the hard, LLM-bound, reasoning-hungry
 **commodity** axis you buy — the durable win is the ER + faithfulness layer, which

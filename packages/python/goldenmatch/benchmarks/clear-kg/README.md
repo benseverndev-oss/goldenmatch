@@ -204,8 +204,10 @@ python benchmarks/clear-kg/run_track_a.py
 LLM extractor on the real Re-DocRED dev set (real Wikipedia + gold triples,
 95-relation closed schema). Measured sweep (20 docs, zero-shot): chat models
 plateau at micro-F1 **0.151 → 0.196** (recall-bound ~0.12); the reasoning tier
-(`gpt-5-mini`) breaks it to **0.262** at ~12× the wall-clock — still far below
-fine-tuned SOTA ~0.81. Not a goldenmatch number — it confirms extraction is the
+lifts F1 to **0.262 (`gpt-5-mini`) / 0.282 (`gpt-5`)** — but recall walls at ~0.18
+for both (reasoning buys precision, not recall), so even the top of the sweep sits
+far below fine-tuned SOTA ~0.81. The gap is structural (single-pass recall), not
+model size. Not a goldenmatch number — it confirms extraction is the
 LLM-bound, reasoning-hungry commodity axis (the gap is almost all recall). Full
 curve + caveats in [`RESULTS.md`](RESULTS.md); harness offline-tested with a mock.
 
