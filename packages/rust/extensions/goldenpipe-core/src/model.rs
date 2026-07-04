@@ -98,9 +98,15 @@ pub struct PlannedSpec {
     pub name: String,
     #[serde(rename = "use")]
     pub use_: String,
+    // config/skip_if/on_error carry `default` so a PlannedSpec SERIALIZED by resolve
+    // (which omits skip_if via skip_serializing_if, and could omit others) round-trips
+    // when the host feeds the plan's stages straight into apply_decision. Without this
+    // the resolve->apply_decision handoff would fail to deserialize (an SP2/SP3 bug).
+    #[serde(default)]
     pub config: JsonMap,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skip_if: Option<String>,
+    #[serde(default)]
     pub on_error: OnError,
 }
 

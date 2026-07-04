@@ -1,0 +1,20 @@
+[
+  {"input": {"name": "severity_gate", "ctx": {"artifacts": {"findings": [{"severity": "critical"}]}}},
+   "expected": {"skip": [], "abort": true, "insert": [], "reason": "Critical findings detected"}},
+  {"input": {"name": "severity_gate", "ctx": {"artifacts": {"findings": [{"severity": "info"}]}}},
+   "expected": null},
+  {"input": {"name": "severity_gate", "ctx": {"artifacts": {}}},
+   "expected": null},
+  {"input": {"name": "pii_router", "ctx": {"artifacts": {"findings": [{"check": "pii_detection"}]}}},
+   "expected": {"skip": ["goldenmatch.dedupe"], "abort": false, "insert": ["goldenmatch.dedupe_pprl"], "reason": "PII detected, routing to PPRL matching"}},
+  {"input": {"name": "pii_router", "ctx": {"artifacts": {"findings": [{"check": "other"}]}}},
+   "expected": null},
+  {"input": {"name": "row_count_gate", "ctx": {"metadata": {"input_rows": 1}}},
+   "expected": {"skip": ["goldenmatch.dedupe"], "abort": false, "insert": [], "reason": "Only 1 row(s), skipping deduplication"}},
+  {"input": {"name": "row_count_gate", "ctx": {"metadata": {"input_rows": 2}}},
+   "expected": null},
+  {"input": {"name": "row_count_gate", "ctx": {"metadata": {}}},
+   "expected": {"skip": ["goldenmatch.dedupe"], "abort": false, "insert": [], "reason": "Only 0 row(s), skipping deduplication"}},
+  {"input": {"name": "nope", "ctx": {}},
+   "expected": null}
+]
