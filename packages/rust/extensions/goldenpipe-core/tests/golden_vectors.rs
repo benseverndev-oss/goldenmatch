@@ -17,7 +17,10 @@ fn run(name: &str, f: fn(&str) -> String) {
     for (i, case) in load(name).into_iter().enumerate() {
         let input = serde_json::to_string(&case["input"]).unwrap();
         let got: Value = serde_json::from_str(&f(&input)).unwrap();
-        assert_eq!(got, case["expected"], "{name}[{i}] mismatch\n input={input}");
+        assert_eq!(
+            got, case["expected"],
+            "{name}[{i}] mismatch\n input={input}"
+        );
     }
 }
 

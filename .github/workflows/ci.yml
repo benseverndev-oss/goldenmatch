@@ -72,6 +72,7 @@ jobs:
       goldenprofile_native: ${{ steps.filter.outputs.goldenprofile_native }}
       analysis_native: ${{ steps.filter.outputs.analysis_native }}
       native_flow: ${{ steps.filter.outputs.native_flow }}
+      goldenpipe_native: ${{ steps.filter.outputs.goldenpipe_native }}
       goldenembed: ${{ steps.filter.outputs.goldenembed }}
       embed: ${{ steps.filter.outputs.embed }}
       goldenhnsw: ${{ steps.filter.outputs.goldenhnsw }}
@@ -517,6 +518,15 @@ jobs:
               - 'packages/python/goldenflow/tests/transforms/test_native_parity.py'
               - 'packages/python/goldenflow/tests/transforms/test_fastpath_parity.py'
               - 'packages/python/goldenflow/scripts/build_native.py'
+            goldenpipe_native:
+              # GoldenPipe planner kernel: the pyo3-free goldenpipe-core is the
+              # REFERENCE; this lane builds the goldenpipe-native abi3 wheel and
+              # runs the pure-Python==core parity gate (Leg A) + wheel==core (Leg B)
+              # under GOLDENPIPE_NATIVE=1. This is also goldenpipe-core's ONLY CI
+              # coverage (it had no consumer to hang a lane on before SP2).
+              - 'packages/rust/extensions/goldenpipe-core/**'
+              - 'packages/rust/extensions/goldenpipe-native/**'
+              - 'packages/python/goldenpipe/**'
             goldenembed:
               # Standalone Rust embedding runtime (char n-gram featurize + ONNX
               # inference via ort). Own workspace, not in the `rust` job's
@@ -2265,6 +2275,49 @@ jobs:
             packages/python/goldenflow/tests/transforms/test_phone.py \
             packages/python/goldenflow/tests/transforms/test_dates.py \
             -v
+
+  # goldenpipe planner kernel: pyo3-free goldenpipe-core is the REFERENCE. This lane
+  # is goldenpipe-core's ONLY CI coverage (it had no consumer to hang a lane on before
+  # SP2), and it runs the pure-Python==core parity gate (Leg A) + wheel==core (Leg B)
+  # under GOLDENPIPE_NATIVE=1. Parity-gate-only: the pure-Python planner stays the
+  # runtime; the core is the oracle it's proven against.
+  goldenpipe_native:
+    needs: changes
+    if: needs.changes.outputs.goldenpipe_native == 'true' || needs.changes.outputs.force_all == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: |
+            packages/rust/extensions/goldenpipe-core
+            packages/rust/extensions/goldenpipe-native
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      - name: fmt + clippy (goldenpipe-core + goldenpipe-native)
+        run: |
+          cargo fmt --check --manifest-path packages/rust/extensions/goldenpipe-core/Cargo.toml
+          cargo clippy --release --manifest-path packages/rust/extensions/goldenpipe-core/Cargo.toml -- -D warnings
+          cargo fmt --check --manifest-path packages/rust/extensions/goldenpipe-native/Cargo.toml
+          cargo clippy --release --manifest-path packages/rust/extensions/goldenpipe-native/Cargo.toml -- -D warnings
+      - name: goldenpipe-core unit + golden-vector tests (the SP1 kernel's CI home)
+        run: cargo test --manifest-path packages/rust/extensions/goldenpipe-core/Cargo.toml
+      - name: Build the native planner ext into the package (goldenpipe._native)
+        run: uv run python packages/python/goldenpipe/scripts/build_native.py
+      - name: Parity gate (Leg A pure==core + Leg B wheel==core)
+        env:
+          GOLDENPIPE_NATIVE: "1"
+          POLARS_SKIP_CPU_CHECK: "1"
+        run: uv run pytest packages/python/goldenpipe/tests/core/ -v
 
   # goldenflow-native distribution smoke: build the SEPARATE maturin/abi3 wheel
   # and prove the runtime loads through the wheel path. Distinct from

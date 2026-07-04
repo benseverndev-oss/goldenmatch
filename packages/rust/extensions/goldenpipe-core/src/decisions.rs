@@ -97,11 +97,14 @@ mod tests {
 
     #[test]
     fn row_count_gate_reason_bytes_match_python() {
-        let d = evaluate_builtin("row_count_gate", &ctx(r#"{"metadata":{"input_rows":1}}"#)).unwrap();
+        let d =
+            evaluate_builtin("row_count_gate", &ctx(r#"{"metadata":{"input_rows":1}}"#)).unwrap();
         assert_eq!(d.reason, "Only 1 row(s), skipping deduplication"); // byte-match f-string
         assert_eq!(d.skip, vec!["goldenmatch.dedupe"]);
         // >= 2 -> None; missing -> default 0 -> fires
-        assert!(evaluate_builtin("row_count_gate", &ctx(r#"{"metadata":{"input_rows":2}}"#)).is_none());
+        assert!(
+            evaluate_builtin("row_count_gate", &ctx(r#"{"metadata":{"input_rows":2}}"#)).is_none()
+        );
         let missing = evaluate_builtin("row_count_gate", &ctx(r#"{"metadata":{}}"#)).unwrap();
         assert_eq!(missing.reason, "Only 0 row(s), skipping deduplication"); // default 0 -> fires
     }

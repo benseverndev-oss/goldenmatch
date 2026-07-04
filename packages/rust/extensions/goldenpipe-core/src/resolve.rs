@@ -87,7 +87,10 @@ mod tests {
             info("goldenmatch.dedupe", &["clusters"], &["df", "findings"]),
         ];
         let plan = resolve(
-            &cfg(vec![name_entry("goldencheck.scan"), name_entry("goldenmatch.dedupe")]),
+            &cfg(vec![
+                name_entry("goldencheck.scan"),
+                name_entry("goldenmatch.dedupe"),
+            ]),
             &stages,
         )
         .unwrap();
@@ -123,7 +126,12 @@ mod tests {
     #[test]
     fn unknown_use_is_unknown_stage() {
         let err = resolve(&cfg(vec![name_entry("nope")]), &[]).unwrap_err();
-        assert_eq!(err, PlanError::UnknownStage { use_: "nope".into() });
+        assert_eq!(
+            err,
+            PlanError::UnknownStage {
+                use_: "nope".into()
+            }
+        );
     }
 
     #[test]

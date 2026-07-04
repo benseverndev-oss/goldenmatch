@@ -1,0 +1,28 @@
+# goldenpipe-native — optional native binding for the GoldenPipe planner, shipped as a
+# SEPARATE maturin/abi3 package (mirrors goldenflow-native). `goldenpipe` stays pure
+# Python; `pip install goldenpipe[native]` pulls this; goldenpipe.core._native_loader
+# discovers it. Note: this exposes the core as the REFERENCE; it does not accelerate.
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "goldenpipe-native"
+version = "0.1.0"
+description = "Native binding (Rust/PyO3) for the goldenpipe planner kernel"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Ben Severn", email = "ben@bensevern.dev" }]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3 :: Only",
+    "License :: OSI Approved :: MIT License",
+]
+
+[project.urls]
+Homepage = "https://github.com/benseverndev-oss/goldenmatch"
+
+[tool.maturin]
+python-source = "python"
+module-name = "goldenpipe_native._native"

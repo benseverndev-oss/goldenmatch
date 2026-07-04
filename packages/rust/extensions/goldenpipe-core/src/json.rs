@@ -114,7 +114,10 @@ mod tests {
                 "stages":[{"key":"s","name":"s","produces":[],"consumes":["df"]}]}"#,
         );
         let cfg_str = out.split("\"config\":{").nth(1).unwrap();
-        assert!(cfg_str.starts_with("\"z\":1,\"a\":2,\"m\":3"), "got {cfg_str}");
+        assert!(
+            cfg_str.starts_with("\"z\":1,\"a\":2,\"m\":3"),
+            "got {cfg_str}"
+        );
     }
 
     #[test]

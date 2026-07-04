@@ -1,0 +1,28 @@
+# Standalone workspace (empty [workspace]) so pyo3's `extension-module` feature isn't
+# unified with any sibling crate's features. Mirrors native-flow / goldenmatch's native.
+[workspace]
+
+[package]
+name = "goldenpipe-native"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Ben Severn <benzsevern@gmail.com>"]
+description = "Native binding for the GoldenPipe planner kernel (PyO3 extension module over goldenpipe-core)"
+
+[lib]
+# Produces _native.{so,dll,dylib}; the #[pymodule] is `_native` -> init PyInit__native.
+name = "_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+# abi3-py311: one stable-ABI artifact spans CPython 3.11-3.13.
+# extension-module: don't link libpython (imported BY CPython).
+pyo3 = { version = ">=0.28, <0.29", features = ["extension-module", "abi3-py311"] }
+# The core is the single source of truth; this crate is a pure JSON-string marshaling
+# shim. No arrow (the planner is JSON, not columnar).
+goldenpipe-core = { path = "../goldenpipe-core" }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
