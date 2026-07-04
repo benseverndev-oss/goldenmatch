@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.11.0 (2026-07-04)
+
+Wave D (text, part 1): the 13 mechanical/ASCII-bound text transforms are now backed by owned Rust kernels in `goldenflow-core::text` (native + WASM/TS + pure-Python fallback), Rust is the reference implementation. This wave migrated existing transforms to the owned-kernel pattern; it did not add new transforms (count unchanged).
+
+- Migrated: `strip`, `collapse_whitespace`, `normalize_quotes`, `normalize_line_endings`, `remove_html_tags`, `remove_urls`, `remove_digits`, `remove_punctuation`, `remove_emojis`, `extract_numbers` (scalar), plus the parameterized `truncate`, `pad_left`, `pad_right`. (`strip`/`collapse_whitespace` reuse the kernels added in the SQL de-bridge; the rest are new owned kernels.)
+- **Behavior change (reference-mode, resolved in Rust's favor):** the HTML-tag / URL / number-extraction scans and char-class filters are hand-rolled with no regex engine for byte-identical output across Rust/Python/JS. `remove_digits`/`extract_numbers` are bounded to ASCII digits (`0-9`, not the old Unicode-aware `\d`); `remove_emojis` uses the explicit emoji codepoint ranges. `char::is_whitespace` is byte-equal to the old polars `\s`, so `strip`/`collapse_whitespace`/`remove_urls`/`remove_punctuation` whitespace handling is exact. The 10 non-parameterized transforms moved from vectorized Polars to native-first dispatch (the pure-Python fallback runs per-row when the native wheel is absent). Outputs are unchanged for well-formed inputs.
+- The 5 Unicode-heavy text transforms (`lowercase`, `uppercase`, `title_case`, `normalize_unicode`, `fix_mojibake`) are intentionally deferred to a follow-up (text part 2) where the cross-runtime Unicode-casing/normalization parity is handled explicitly.
+
 ## 1.10.0 (2026-07-04)
 
 Wave D (address-simple): the eight US-address transforms are now backed by owned Rust kernels in `goldenflow-core` (native + WASM/TS + pure-Python fallback), Rust is the reference implementation. This wave migrated existing transforms to the owned-kernel pattern; it did not add new transforms (count unchanged).
