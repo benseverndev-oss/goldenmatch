@@ -105,24 +105,31 @@ pub fn goldenflow_canonicalize_address(value: String) -> String {
     apply("address_standardize", value)
 }
 
-/// Strip leading/trailing whitespace.
-/// Wraps the goldenflow `strip` transform.
+/// Strip leading/trailing whitespace. **De-bridged (P9):** runs native-direct
+/// over `goldenflow-core::text::strip` (no embedded CPython per row), which is
+/// byte-identical to the goldenflow polars `strip` transform — proven against a
+/// Unicode corpus in `goldenflow-core/tests/text_golden.rs`. Same signature +
+/// output, so no SQL/version change.
 ///
 /// ```sql
 /// SELECT goldenflow_strip('  hello  ');
 /// ```
 #[pg_extern]
 pub fn goldenflow_strip(value: String) -> String {
-    apply("strip", value)
+    goldenflow_core::text::strip(&value).to_string()
 }
 
-/// Collapse internal runs of whitespace to a single space.
-/// Wraps the goldenflow `collapse_whitespace` transform.
+/// Collapse internal runs of whitespace to a single space. **De-bridged (P9):**
+/// runs native-direct over `goldenflow-core::text::collapse_whitespace` (no
+/// embedded CPython per row), byte-identical to the goldenflow polars
+/// `collapse_whitespace` transform (`\s{2,}` -> a single space over the Unicode
+/// `White_Space` set) — proven in `goldenflow-core/tests/text_golden.rs`. Same
+/// signature + output, so no SQL/version change.
 ///
 /// ```sql
 /// SELECT goldenflow_whitespace_normalize('a    b   c');
 /// ```
 #[pg_extern]
 pub fn goldenflow_whitespace_normalize(value: String) -> String {
-    apply("collapse_whitespace", value)
+    goldenflow_core::text::collapse_whitespace(&value)
 }

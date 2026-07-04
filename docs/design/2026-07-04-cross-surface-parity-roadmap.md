@@ -104,10 +104,33 @@ wasm-hostile deps.
   table sample); awkward as row-wise SQL UDFs. Low priority.
 - [ ] **P8 · goldengraph → SQL.** KG engine; multi-table, heavy, not SQL-UDF
   shaped. Low priority.
-- [ ] **P9 · goldenflow → SQL (native).** goldenflow transforms are already
-  exposed on DuckDB/Postgres **via the bridge** (`goldenflow_*`); a native
-  rewrite over `goldenflow-core` is a parity upgrade, not new capability. Do when
-  touching goldenflow anyway.
+- [ ] **P9 · goldenflow → SQL (native). Re-scoped 2026-07-04; 2/8 done.** The 8
+  SQL-exposed `goldenflow_*` transforms are `email_normalize`, `phone_e164`,
+  `date_iso8601`, `name_proper`, `url_normalize`, `address_standardize`, `strip`,
+  `collapse_whitespace`. The original premise (`goldenflow-core` backs them) was
+  wrong for most, so this is a **per-transform** de-bridge, not a sweep:
+  - ✅ **`strip`** / **`collapse_whitespace`** (Postgres de-bridged native-direct
+    over the new `goldenflow-core::text`). Both are `mode="expr"` **polars** ops
+    (`str.strip_chars()`, `str.replace_all(r"\s{2,}"," ")`), which use the Unicode
+    `White_Space` set == Rust `char::is_whitespace` — so a std-only port is
+    byte-identical, **proven** against a 29-case polars-generated Unicode corpus
+    (`goldenflow-core/tests/text_golden.rs`: NBSP/VT/NEL/line-sep/U+205F/U+3000/
+    U+2009/U+1680 are whitespace, ZWSP U+200B is not). No `regex` dep needed;
+    same signatures, so no SQL/version change (the P1 `goldenmatch_score`
+    pattern). DuckDB already runs the polars transform (the reference) — no change.
+  - **`phone_e164`** has a core kernel (`phone::e164`) but it is **deliberately
+    NANP-only** (`_native.py`: `nanp_only=True`, region `US`; international rows
+    return null and the Python "tier-3" path settles them). De-bridging fully to
+    native would *change results* for non-NANP input — NOT a drop-in; skip.
+  - **`email_normalize` / `date_iso8601` / `name_proper` / `url_normalize` /
+    `address_standardize`** have **no** `goldenflow-core` kernel yet. Porting is
+    real work (`date`/`email` moderate; `url`/`address` are rules engines). Each
+    must land in `goldenflow-core` *with* a polars byte-parity corpus first, then
+    the Postgres extern de-bridges (no version bump).
+  - Note: the embedded-CPython **bridge** anti-pattern is **Postgres-only** — the
+    DuckDB `goldenflow_*` UDFs use in-process polars, not the embedded CPython.
+    Remaining: port + de-bridge `date`/`email`, then `url`/`address`; low marginal
+    value, do when touching goldenflow-core anyway.
 
 ### Tier 4 — deferred / blocked
 

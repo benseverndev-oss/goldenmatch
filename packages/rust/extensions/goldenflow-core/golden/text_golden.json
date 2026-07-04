@@ -1,0 +1,147 @@
+[
+  {
+    "input": "  hello  ",
+    "strip": "hello",
+    "collapse_whitespace": " hello "
+  },
+  {
+    "input": "a    b   c",
+    "strip": "a    b   c",
+    "collapse_whitespace": "a b c"
+  },
+  {
+    "input": "a b",
+    "strip": "a b",
+    "collapse_whitespace": "a b"
+  },
+  {
+    "input": "a\tb",
+    "strip": "a\tb",
+    "collapse_whitespace": "a\tb"
+  },
+  {
+    "input": "a\t\tb",
+    "strip": "a\t\tb",
+    "collapse_whitespace": "a b"
+  },
+  {
+    "input": "  a\t\t b  ",
+    "strip": "a\t\t b",
+    "collapse_whitespace": " a b "
+  },
+  {
+    "input": "no-change",
+    "strip": "no-change",
+    "collapse_whitespace": "no-change"
+  },
+  {
+    "input": "",
+    "strip": "",
+    "collapse_whitespace": ""
+  },
+  {
+    "input": "   ",
+    "strip": "",
+    "collapse_whitespace": " "
+  },
+  {
+    "input": "  nbsp  ",
+    "strip": "nbsp",
+    "collapse_whitespace": " nbsp "
+  },
+  {
+    "input": "ideo　　graph",
+    "strip": "ideo　　graph",
+    "collapse_whitespace": "ideo graph"
+  },
+  {
+    "input": "thin  sp",
+    "strip": "thin  sp",
+    "collapse_whitespace": "thin sp"
+  },
+  {
+    "input": "ab",
+    "strip": "ab",
+    "collapse_whitespace": "ab"
+  },
+  {
+    "input": "a\f\fb",
+    "strip": "a\f\fb",
+    "collapse_whitespace": "a b"
+  },
+  {
+    "input": "line\n\nbreak",
+    "strip": "line\n\nbreak",
+    "collapse_whitespace": "line break"
+  },
+  {
+    "input": "mix\t \n x",
+    "strip": "mix\t \n x",
+    "collapse_whitespace": "mix x"
+  },
+  {
+    "input": "trail\t",
+    "strip": "trail",
+    "collapse_whitespace": "trail\t"
+  },
+  {
+    "input": "\tlead",
+    "strip": "lead",
+    "collapse_whitespace": "\tlead"
+  },
+  {
+    "input": "x     y",
+    "strip": "x     y",
+    "collapse_whitespace": "x y"
+  },
+  {
+    "input": "ünwörd  x",
+    "strip": "ünwörd  x",
+    "collapse_whitespace": "ünwörd x"
+  },
+  {
+    "input": "\u000b\u000bvtab",
+    "strip": "vtab",
+    "collapse_whitespace": " vtab"
+  },
+  {
+    "input": "　　lead3000",
+    "strip": "lead3000",
+    "collapse_whitespace": " lead3000"
+  },
+  {
+    "input": "trail2009  ",
+    "strip": "trail2009",
+    "collapse_whitespace": "trail2009 "
+  },
+  {
+    "input": "nel",
+    "strip": "nel",
+    "collapse_whitespace": "nel"
+  },
+  {
+    "input": " lsep",
+    "strip": "lsep",
+    "collapse_whitespace": " lsep"
+  },
+  {
+    "input": "  mmsp",
+    "strip": "mmsp",
+    "collapse_whitespace": " mmsp"
+  },
+  {
+    "input": "​zwsp​",
+    "strip": "​zwsp​",
+    "collapse_whitespace": "​zwsp​"
+  },
+  {
+    "input": "​​zwrun",
+    "strip": "​​zwrun",
+    "collapse_whitespace": "​​zwrun"
+  },
+  {
+    "input": "  ogham",
+    "strip": "ogham",
+    "collapse_whitespace": " ogham"
+  }
+]

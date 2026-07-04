@@ -21,3 +21,7 @@ name = "goldenflow_core"
 # Same pin native-flow used, so phone output is byte-identical before/after the
 # extraction (parity by construction — one source of truth).
 phonenumber = "0.3"
+
+[dev-dependencies]
+# Parse the polars-generated text-transform golden corpus (tests/text_golden.rs).
+serde_json = "1"
