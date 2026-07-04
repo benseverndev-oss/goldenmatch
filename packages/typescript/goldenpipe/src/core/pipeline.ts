@@ -26,17 +26,20 @@ const DEFAULT_STAGE_ORDER = [
 export interface PipelineOptions {
   config?: PipelineConfig | undefined;
   registry?: StageRegistry | undefined;
+  identityOpts?: Record<string, unknown> | undefined;
 }
 
 export class Pipeline {
   private readonly config: PipelineConfig | undefined;
   private readonly registry: StageRegistry;
+  private readonly identityOpts: Record<string, unknown>;
 
   constructor(options?: PipelineOptions) {
     this.config = options?.config;
     // When the caller supplies a registry, use it as-is; otherwise build the
     // default suite registry (load + scan + transform + dedupe).
     this.registry = options?.registry ?? buildDefaultRegistry();
+    this.identityOpts = options?.identityOpts ?? {};
   }
 
   /** Run the pipeline on an array of rows. */
@@ -46,7 +49,7 @@ export class Pipeline {
       metadata: { source, input_rows: rows.length },
     });
 
-    const config = this.config ?? this.autoConfig();
+    const config = this.config ?? computeAutoConfig(this.registry, this.identityOpts);
 
     let plan;
     try {
@@ -71,14 +74,29 @@ export class Pipeline {
     return Reporter.build(ctx, stages);
   }
 
-  /** Build the default check→flow→dedupe config from the available stages. */
-  private autoConfig(): PipelineConfig {
-    const available = this.registry.listAll();
-    const stages = DEFAULT_STAGE_ORDER.filter((name) => name in available).map((name) =>
-      makeStageSpec(name),
-    );
-    return makePipelineConfig({ pipeline: "auto", stages });
+}
+
+/**
+ * Build the default check→flow→dedupe config from the available stages,
+ * optionally appending the identity stage. Conforms to goldenpipe-core
+ * (config.rs `auto_config`): the identity stage is appended iff `identityOpts`
+ * is non-empty AND the identity stage is registered, carrying the opts as its
+ * config. Extracted as a standalone helper so both `Pipeline.run()` and the
+ * cross-surface shim call the same code path.
+ */
+export function computeAutoConfig(
+  registry: StageRegistry,
+  identityOpts: Record<string, unknown>,
+): PipelineConfig {
+  const available = registry.listAll();
+  const stages = DEFAULT_STAGE_ORDER.filter((name) => name in available).map((name) =>
+    makeStageSpec(name),
+  );
+  const IDENTITY_STAGE = "goldenmatch.identity_resolve";
+  if (Object.keys(identityOpts).length > 0 && IDENTITY_STAGE in available) {
+    stages.push(makeStageSpec({ use: IDENTITY_STAGE, config: identityOpts }));
   }
+  return makePipelineConfig({ pipeline: "auto", stages });
 }
 
 /**
