@@ -110,6 +110,20 @@ parity functions, 8 `goldenflow_*` transforms, 5 read-only identity functions,
 job-management (`gm_*`), and Learning Memory (`correction_add`/`_list` +
 `memory_learn`/`memory_stats`).
 
+**goldenflow de-bridge (P9, per-transform).** The 8 Postgres `goldenflow_*`
+functions (`src/goldenflow.rs`) originally all routed through the embedded-CPython
+bridge (`goldenmatch_bridge::api::goldenflow_transform`). `goldenflow_strip` +
+`goldenflow_whitespace_normalize` are now **native-direct** over
+`goldenflow-core::text` (`strip`/`collapse_whitespace`), byte-identical to the
+polars transforms — proven against a polars-generated Unicode corpus in
+`goldenflow-core/tests/text_golden.rs`. Same signatures ⇒ **no SQL/version
+change** (the P1 `goldenmatch_score` pattern). The other 6 stay bridged: `phone`'s
+core kernel is deliberately NANP-only (not a drop-in), and `email`/`date`/
+`name_proper`/`url`/`address` have no `goldenflow-core` kernel yet — each must be
+ported to the core *with* a byte-parity corpus before its extern can de-bridge
+(tracked in the parity roadmap P9). DuckDB's `goldenflow_*` UDFs run in-process
+polars (the reference), not the embedded-CPython bridge, so they're unchanged.
+
 A sizeable slice of the Python `goldenmatch.__all__` is **intentionally not**
 exposed in SQL. These are deferred by design, not gaps -- the rationale:
 

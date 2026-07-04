@@ -398,6 +398,10 @@ jobs:
               # (goldenmatch_perceptual_phash / _hamming), so a kernel change must
               # rebuild + re-smoke this lane.
               - 'packages/rust/extensions/perceptual-core/**'
+              # goldenflow-core is a path dep of the postgres crate (de-bridged
+              # goldenflow_strip / goldenflow_whitespace_normalize), so a kernel
+              # change must rebuild + re-smoke this lane.
+              - 'packages/rust/extensions/goldenflow-core/**'
               - 'packages/rust/extensions/Cargo.toml'
             rust_cores:
               # ANY Rust extension change re-validates EVERY committed TS wasm
@@ -2955,6 +2959,24 @@ jobs:
           EOSQL
           # goldenflow_* transforms (fail-open: pass input through if goldenflow absent).
           sudo -u postgres psql -p "${PGPORT}" -v ON_ERROR_STOP=1 -c "SELECT goldenmatch.goldenflow_normalize_email('  John@Example.COM '::TEXT), goldenmatch.goldenflow_whitespace_normalize('a   b'::TEXT);"
+          # De-bridged goldenflow (P9): goldenflow_strip / goldenflow_whitespace_normalize
+          # run NATIVE-DIRECT over goldenflow-core (no CPython), so their output is
+          # deterministic regardless of whether goldenflow is installed — assert the
+          # exact native values (byte-identical to the polars transforms, proven in
+          # goldenflow-core/tests/text_golden.rs).
+          sudo -u postgres psql -p "${PGPORT}" -v ON_ERROR_STOP=1 <<'EOSQL'
+            DO $$
+            BEGIN
+              IF goldenmatch.goldenflow_strip('  hello  ') <> 'hello' THEN
+                RAISE EXCEPTION 'goldenflow_strip: expected hello, got %', goldenmatch.goldenflow_strip('  hello  ');
+              END IF;
+              IF goldenmatch.goldenflow_whitespace_normalize('a    b   c') <> 'a b c' THEN
+                RAISE EXCEPTION 'goldenflow_whitespace_normalize: expected "a b c", got %',
+                  goldenmatch.goldenflow_whitespace_normalize('a    b   c');
+              END IF;
+              RAISE NOTICE 'de-bridged goldenflow (strip / collapse_whitespace) native assertions passed';
+            END $$;
+          EOSQL
           sudo -u postgres psql -p "${PGPORT}" -v ON_ERROR_STOP=1 <<'EOSQL'
             CREATE TABLE test_customers (name TEXT, email TEXT);
             INSERT INTO test_customers VALUES

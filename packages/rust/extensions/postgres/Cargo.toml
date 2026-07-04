@@ -42,6 +42,9 @@ goldenmatch-score-core = { path = "../score-core" }
 # Pure-Rust DCT perceptual image hash (no pyo3) — goldenmatch_perceptual_phash /
 # _hamming call this native-direct, NOT through the embedded-CPython bridge.
 goldenmatch-perceptual-core = { path = "../perceptual-core" }
+# Pure-Rust GoldenFlow text transforms (no pyo3) — goldenflow_strip /
+# goldenflow_whitespace_normalize run native-direct instead of the CPython bridge.
+goldenflow-core = { path = "../goldenflow-core" }
 serde_json = "1"
 
 [[bin]]
