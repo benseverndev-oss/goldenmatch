@@ -120,7 +120,7 @@ class DocREModel(nn.Module):
         return total / n
 
     def forward(self, input_ids, attention_mask, entity_pos, hts, labels=None,
-                sent_pos=None, evidence=None, evi_lambda=0.1):
+                sent_pos=None, evidence=None, evi_lambda=0.1, return_logits=False):
         want_evi = labels is not None and sent_pos is not None
         sequence_output, attention = self.encode(input_ids, attention_mask)
         got = self.get_hrt(sequence_output, attention, entity_pos, hts, collect_ht_att=want_evi)
@@ -144,6 +144,8 @@ class DocREModel(nn.Module):
                 if evi_loss is not None:
                     loss = loss + evi_lambda * evi_loss
             return loss, preds
+        if return_logits:
+            return preds, logits
         return (preds,)
 
 

@@ -153,6 +153,94 @@ def _evaluate(model, features, collate, id2rel, gold_docs, train_facts, batch_si
     return official_evaluate(submission, gold_docs, train_facts)
 
 
+def _logits_on_test(base_model, ckpt_tag, test_docs, rel2id, max_seq_length=1024,
+                    batch_size=8):
+    """Load a saved checkpoint and return its raw pre-threshold logits over the test set,
+    in the canonical (doc, h, t) pair order, plus that pair order for decoding."""
+    import sys
+
+    import numpy as np
+    import torch
+    from torch.utils.data import DataLoader
+    from transformers import AutoConfig, AutoModel, AutoTokenizer
+
+    sys.path.insert(0, "/root/rdlb")
+    from model import DocREModel, make_collate
+    from prepro import read_docred
+
+    transformer_type = "roberta" if "roberta" in base_model else "bert"
+    tok = AutoTokenizer.from_pretrained(base_model)
+    cfg = AutoConfig.from_pretrained(base_model, num_labels=97)
+    cfg.transformer_type = transformer_type
+    cfg.cls_token_id = tok.cls_token_id
+    cfg.sep_token_id = tok.sep_token_id
+    enc = AutoModel.from_pretrained(base_model, config=cfg)
+    model = DocREModel(cfg, enc, num_labels=4).cuda()
+    state = torch.load(f"{DATA}/ckpt/{ckpt_tag}/model.pt", map_location="cuda")
+    model.load_state_dict(state)
+    model.eval()
+
+    feats = read_docred(test_docs, tok, rel2id, max_seq_length)
+    collate = make_collate(tok.pad_token_id)
+    loader = DataLoader(feats, batch_size=batch_size, shuffle=False, collate_fn=collate)
+    logits_all, hts_order = [], []
+    for input_ids, mask, _labels, entity_pos, hts, _sp, _ev in loader:
+        with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
+            _preds, logits = model(input_ids.cuda(), mask.cuda(), entity_pos, hts,
+                                   return_logits=True)
+        logits_all.append(logits.float().cpu().numpy())
+        hts_order.extend(hts)
+    return np.concatenate(logits_all, axis=0), hts_order
+
+
+@app.function(image=image, gpu=GPU, volumes={DATA: vol}, timeout=60 * 60 * 3)
+def ensemble_eval(checkpoints: list, num_labels: int = 4) -> dict:
+    """Average the pre-threshold logits of several saved checkpoints, then apply the
+    adaptive threshold + official scorer. `checkpoints` = [{"tag","base_model"}, ...].
+    Also reports each member's solo F1. Averaging raw logits (incl. the TH class) is the
+    standard ATLOP ensemble -- pair order is deterministic across models so rows align."""
+    import sys
+
+    import torch
+
+    sys.path.insert(0, "/root/rdlb")
+    from losses import ATLoss
+    from model import decode_preds
+    from prepro import build_rel2id
+    from scoring import facts_in_train, official_evaluate, to_submission
+
+    train_docs, dev_docs, test_docs = _load_splits()
+    rel2id = build_rel2id(train_docs, dev_docs, test_docs)
+    id2rel = {v: k for k, v in rel2id.items()}
+    train_facts = facts_in_train(train_docs)
+
+    atl = ATLoss()
+    summed = None
+    hts_ref = None
+    members = []
+    for ck in checkpoints:
+        logits, hts_order = _logits_on_test(ck["base_model"], ck["tag"], test_docs, rel2id)
+        if hts_ref is None:
+            hts_ref = hts_order
+        # solo score for reference
+        preds = atl.get_label(torch.from_numpy(logits).cuda(), num_labels=num_labels).cpu().numpy()
+        solo = official_evaluate(to_submission(decode_preds(preds, hts_order, id2rel), test_docs),
+                                 test_docs, train_facts)
+        members.append({"tag": ck["tag"], "f1": solo["f1"], "ign_f1": solo["ign_f1"]})
+        print(f"  member {ck['tag']}: TEST F1 {solo['f1']:.4f} Ign {solo['ign_f1']:.4f}", flush=True)
+        summed = logits if summed is None else summed + logits
+
+    avg = summed / len(checkpoints)
+    ens_preds = atl.get_label(torch.from_numpy(avg).cuda(), num_labels=num_labels).cpu().numpy()
+    ens = official_evaluate(to_submission(decode_preds(ens_preds, hts_ref, id2rel), test_docs),
+                            test_docs, train_facts)
+    out = {"members": members, "ensemble": ens, "n_models": len(checkpoints)}
+    print(f"ENSEMBLE ({len(checkpoints)} models): TEST F1 {ens['f1']:.4f} Ign {ens['ign_f1']:.4f} "
+          f"(P {ens['precision']:.3f} R {ens['recall']:.3f})", flush=True)
+    _save(out, "manifest_ensemble.json")
+    return out
+
+
 @app.function(image=image, gpu=GPU, volumes={DATA: vol}, timeout=60 * 60 * 10)
 def train(base_model: str = "roberta-large", epochs: int = 30, lr: float = 3e-5,
           classifier_lr: float = 1e-4, batch_size: int = 4, seed: int = 66,
@@ -280,6 +368,20 @@ def _save(manifest: dict, name: str = "manifest.json") -> None:
     with open(f"{DATA}/out/{name}", "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2)
     vol.commit()
+
+
+@app.local_entrypoint()
+def run_ensemble(tags: str = "deberta-s13,deberta-s41,deberta-evi,roberta-s7"):
+    """Ensemble the saved checkpoints named by ``--tags`` (comma-separated). Base model is
+    inferred from the tag prefix. Prints per-member + ensemble F1; also writes
+    /out/manifest_ensemble.json on the Volume."""
+    checkpoints = []
+    for t in tags.split(","):
+        t = t.strip()
+        bm = "roberta-large" if t.startswith("roberta") else "microsoft/deberta-v3-large"
+        checkpoints.append({"tag": t, "base_model": bm})
+    print("ensembling:", checkpoints)
+    print("result:", ensemble_eval.remote(checkpoints))
 
 
 @app.local_entrypoint()
