@@ -11,7 +11,9 @@ import json
 from typing import Any
 
 from goldenpipe import decisions as _dec
-from goldenpipe.engine.resolver import PlannedStage, Resolver, WiringError
+from goldenpipe.engine.resolver import (
+    AmbiguousProducerError, CycleError, PlannedStage, Resolver, UnknownNeedError, WiringError,
+)
 from goldenpipe.engine.router import Router
 from goldenpipe.models.config import PipelineConfig, StageSpec
 from goldenpipe.models.context import Decision, PipeContext
@@ -64,12 +66,14 @@ def resolve_json(input_str: str) -> str:
     try:
         plan = Resolver.resolve(config, reg)
     except WiringError as e:
-        return json.dumps(
-            {"err": {"kind": "missing_producer", "stage": e.stage, "artifact": e.missing}}
-        )
+        return json.dumps({"err": {"kind": "missing_producer", "stage": e.stage, "artifact": e.artifact}})
+    except AmbiguousProducerError as e:
+        return json.dumps({"err": {"kind": "ambiguous_producer", "artifact": e.artifact, "producers": e.producers}})
+    except CycleError as e:
+        return json.dumps({"err": {"kind": "cycle", "stages": e.stages}})
+    except UnknownNeedError as e:
+        return json.dumps({"err": {"kind": "unknown_need", "stage": e.stage, "needs": e.needs}})
     except KeyError:
-        # unknown `use`: the first configured stage whose use isn't registered
-        # (Resolver fails on the first such stage, in order).
         for raw in config.stages:
             use = raw if isinstance(raw, str) else raw.use
             if use not in reg._stages:
