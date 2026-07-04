@@ -29,13 +29,13 @@ import type { PipeWasmBackend } from "./backend.js";
 
 /** Reconstruct the pure-TS error surface from goldenpipe-core's `err` payload. */
 function throwFromErr(err: { kind: string; [k: string]: unknown }): never {
-  if (err.kind === "wiring") {
+  if (err.kind === "missing_producer") {
     throw new WiringError(
-      `Stage '${String(err.stage)}' consumes '${String(err.missing)}' but no prior stage produces it.`,
+      `Stage '${String(err.stage)}' consumes '${String(err.artifact)}' but no prior stage produces it.`,
       {
         stage: String(err.stage),
-        missing: String(err.missing),
-        available: (err.available as string[]) ?? [],
+        missing: String(err.artifact),
+        available: [],
       },
     );
   }

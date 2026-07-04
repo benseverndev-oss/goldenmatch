@@ -65,7 +65,7 @@ def resolve_json(input_str: str) -> str:
         plan = Resolver.resolve(config, reg)
     except WiringError as e:
         return json.dumps(
-            {"err": {"kind": "wiring", "stage": e.stage, "missing": e.missing, "available": e.available}}
+            {"err": {"kind": "missing_producer", "stage": e.stage, "artifact": e.missing}}
         )
     except KeyError:
         # unknown `use`: the first configured stage whose use isn't registered

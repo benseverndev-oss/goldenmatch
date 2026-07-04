@@ -77,7 +77,7 @@ export function resolveJsonPure(inputStr: string): string {
   } catch (e) {
     if (e instanceof WiringError) {
       return JSON.stringify({
-        err: { kind: "wiring", stage: e.stage, missing: e.missing, available: e.available },
+        err: { kind: "missing_producer", stage: e.stage, artifact: e.missing },
       });
     }
     for (const raw of config.stages) {
