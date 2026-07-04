@@ -193,18 +193,38 @@ def _logits_on_test(base_model, ckpt_tag, test_docs, rel2id, max_seq_length=1024
     return np.concatenate(logits_all, axis=0), hts_order
 
 
+def _predict_np(logits, delta=0.0, num_labels=4):
+    """Numpy port of ATLoss.get_label with a global threshold offset: predict class c iff
+    logit_c > TH_logit - delta (delta>0 -> more predictions -> higher recall), capped to
+    the top-`num_labels` classes per pair."""
+    import numpy as np
+
+    th = logits[:, 0:1]
+    mask = logits > (th - delta)
+    if num_labels > 0:
+        kth = np.sort(logits, axis=1)[:, -num_labels][:, None]
+        mask = mask & (logits >= kth)
+    out = mask.astype(np.int8)
+    out[:, 0] = 0
+    return out
+
+
 @app.function(image=image, gpu=GPU, volumes={DATA: vol}, timeout=60 * 60 * 3)
 def ensemble_eval(checkpoints: list, num_labels: int = 4) -> dict:
-    """Average the pre-threshold logits of several saved checkpoints, then apply the
-    adaptive threshold + official scorer. `checkpoints` = [{"tag","base_model"}, ...].
-    Also reports each member's solo F1. Averaging raw logits (incl. the TH class) is the
-    standard ATLOP ensemble -- pair order is deterministic across models so rows align."""
+    """Logit-averaging ensemble with dev-selected subset + dev-tuned threshold offset.
+
+    For each checkpoint, compute pre-threshold logits on BOTH dev and test (pair order is
+    deterministic across encoders, so rows align). Then, purely on DEV, search every
+    subset (size>=2) x a threshold-offset sweep for the best dev F1, and report that
+    configuration's TEST F1 -- honest dev-selection, test-reporting. Also reports each
+    member's solo test F1 and the plain full-ensemble (delta=0)."""
     import sys
 
-    import torch
+    import numpy as np
 
     sys.path.insert(0, "/root/rdlb")
-    from losses import ATLoss
+    from itertools import combinations
+
     from model import decode_preds
     from prepro import build_rel2id
     from scoring import facts_in_train, official_evaluate, to_submission
@@ -214,31 +234,58 @@ def ensemble_eval(checkpoints: list, num_labels: int = 4) -> dict:
     id2rel = {v: k for k, v in rel2id.items()}
     train_facts = facts_in_train(train_docs)
 
-    atl = ATLoss()
-    summed = None
-    hts_ref = None
+    tags = [ck["tag"] for ck in checkpoints]
+    dev_logits, test_logits = {}, {}
+    hts_dev = hts_test = None
     members = []
     for ck in checkpoints:
-        logits, hts_order = _logits_on_test(ck["base_model"], ck["tag"], test_docs, rel2id)
-        if hts_ref is None:
-            hts_ref = hts_order
-        # solo score for reference
-        preds = atl.get_label(torch.from_numpy(logits).cuda(), num_labels=num_labels).cpu().numpy()
-        solo = official_evaluate(to_submission(decode_preds(preds, hts_order, id2rel), test_docs),
-                                 test_docs, train_facts)
+        dl, hd = _logits_on_test(ck["base_model"], ck["tag"], dev_docs, rel2id)
+        tl, ht = _logits_on_test(ck["base_model"], ck["tag"], test_docs, rel2id)
+        dev_logits[ck["tag"]], test_logits[ck["tag"]] = dl, tl
+        hts_dev, hts_test = hd, ht
+        solo = _score_logits(tl, 0.0, num_labels, hts_test, id2rel, test_docs, train_facts,
+                             official_evaluate, to_submission, decode_preds)
         members.append({"tag": ck["tag"], "f1": solo["f1"], "ign_f1": solo["ign_f1"]})
         print(f"  member {ck['tag']}: TEST F1 {solo['f1']:.4f} Ign {solo['ign_f1']:.4f}", flush=True)
-        summed = logits if summed is None else summed + logits
 
-    avg = summed / len(checkpoints)
-    ens_preds = atl.get_label(torch.from_numpy(avg).cuda(), num_labels=num_labels).cpu().numpy()
-    ens = official_evaluate(to_submission(decode_preds(ens_preds, hts_ref, id2rel), test_docs),
-                            test_docs, train_facts)
-    out = {"members": members, "ensemble": ens, "n_models": len(checkpoints)}
-    print(f"ENSEMBLE ({len(checkpoints)} models): TEST F1 {ens['f1']:.4f} Ign {ens['ign_f1']:.4f} "
-          f"(P {ens['precision']:.3f} R {ens['recall']:.3f})", flush=True)
+    deltas = [round(d, 3) for d in np.arange(-0.2, 0.81, 0.05)]
+
+    def avg(split_logits, subset):
+        return sum(split_logits[t] for t in subset) / len(subset)
+
+    # plain full ensemble (delta 0) for reference
+    full_raw = _score_logits(avg(test_logits, tags), 0.0, num_labels, hts_test, id2rel,
+                             test_docs, train_facts, official_evaluate, to_submission, decode_preds)
+
+    # dev-select over subsets x deltas
+    best = None
+    for r in range(2, len(tags) + 1):
+        for subset in combinations(tags, r):
+            dev_avg = avg(dev_logits, subset)
+            for d in deltas:
+                dev_m = _score_logits(dev_avg, d, num_labels, hts_dev, id2rel, dev_docs,
+                                      train_facts, official_evaluate, to_submission, decode_preds)
+                if best is None or dev_m["f1"] > best["dev_f1"]:
+                    best = {"subset": list(subset), "delta": d, "dev_f1": dev_m["f1"]}
+
+    test_best = _score_logits(avg(test_logits, best["subset"]), best["delta"], num_labels,
+                              hts_test, id2rel, test_docs, train_facts,
+                              official_evaluate, to_submission, decode_preds)
+    out = {"members": members, "full_raw": full_raw, "best_config": best, "best_test": test_best}
+    print(f"FULL ENSEMBLE (delta=0): TEST F1 {full_raw['f1']:.4f} Ign {full_raw['ign_f1']:.4f}", flush=True)
+    print(f"DEV-SELECTED subset={best['subset']} delta={best['delta']} (dev F1 {best['dev_f1']:.4f})",
+          flush=True)
+    print(f"  -> TEST F1 {test_best['f1']:.4f} Ign {test_best['ign_f1']:.4f} "
+          f"(P {test_best['precision']:.3f} R {test_best['recall']:.3f})", flush=True)
     _save(out, "manifest_ensemble.json")
     return out
+
+
+def _score_logits(logits, delta, num_labels, hts_order, id2rel, gold_docs, train_facts,
+                  official_evaluate, to_submission, decode_preds):
+    preds = _predict_np(logits, delta, num_labels)
+    return official_evaluate(to_submission(decode_preds(preds, hts_order, id2rel), gold_docs),
+                             gold_docs, train_facts)
 
 
 @app.function(image=image, gpu=GPU, volumes={DATA: vol}, timeout=60 * 60 * 10)
