@@ -95,6 +95,7 @@ jobs:
       graph_wasm: ${{ steps.filter.outputs.graph_wasm }}
       fingerprint_wasm: ${{ steps.filter.outputs.fingerprint_wasm }}
       goldenembed_wasm: ${{ steps.filter.outputs.goldenembed_wasm }}
+      warehouse_udf: ${{ steps.filter.outputs.warehouse_udf }}
       wasm_flow: ${{ steps.filter.outputs.wasm_flow }}
       goldenpipe_wasm: ${{ steps.filter.outputs.goldenpipe_wasm }}
       sketch_wasm: ${{ steps.filter.outputs.sketch_wasm }}
@@ -360,6 +361,14 @@ jobs:
               - 'packages/rust/extensions/goldenembed-core/**'
               - 'packages/rust/extensions/goldenembed-wasm/**'
               - 'packages/typescript/goldenmatch/scripts/build_goldenembed_wasm.mjs'
+            warehouse_udf:
+              # Gates the BigQuery JS-wasm UDF regenerate + drift guard inside the
+              # typescript lane. Pure-node (no wasm toolchain) — the generator
+              # embeds the already-committed base64 kernels. Fires when the
+              # generator, the generated DDL, or an embedded *WasmBytes blob changes.
+              - 'packages/typescript/goldenmatch/scripts/generate_warehouse_udfs.mjs'
+              - 'packages/typescript/goldenmatch/warehouse/**'
+              - 'packages/typescript/goldenmatch/src/core/_wasm/fingerprintWasmBytes.ts'
             web:
               - 'packages/python/goldenmatch/web/**'
               - 'packages/python/goldenmatch/goldenmatch/web/**'
@@ -1648,6 +1657,33 @@ jobs:
             exit 1
           fi
           npx vitest run tests/parity/goldenembed-wasm.parity.test.ts
+      # BigQuery JS-wasm UDF surface (#5): regenerate the committed DDL from the
+      # embedded base64 kernels and diff. Pure-node — no wasm toolchain, since the
+      # bytes come from the already-committed *WasmBytes.ts. The Node/V8 parity
+      # test (warehouse-bigquery.parity.test.ts, runs in the main vitest step)
+      # gates cross-surface correctness; this only catches a stale committed .sql.
+      #
+      # NOTE: on force_all the earlier "Rebuild + verify embedded fingerprint
+      # wasm" step REWRITES src/core/_wasm/fingerprintWasm{Bytes.ts,Bindings.js}
+      # with CI's toolchain-built (version-varying) bytes — the same bytes that
+      # step deliberately does NOT diff. The generator reads those files, so we
+      # must restore the committed inputs first; otherwise the regenerated SQL
+      # embeds the CI-rebuilt base64 and this guard false-fails on wasm-toolchain
+      # drift instead of a genuinely stale committed .sql. Behavioral correctness
+      # of the committed bytes is already gated by the fingerprint parity test +
+      # that step's golden-JSON diff.
+      - name: Regenerate + verify warehouse UDFs (no drift)
+        if: needs.changes.outputs.warehouse_udf == 'true' || needs.changes.outputs.force_all == 'true'
+        working-directory: packages/typescript/goldenmatch
+        run: |
+          git checkout -- src/core/_wasm/
+          node scripts/generate_warehouse_udfs.mjs
+          if ! git diff --exit-code -- warehouse/bigquery/; then
+            echo "::error::warehouse UDF DDL is stale. Run \
+              'node scripts/generate_warehouse_udfs.mjs' in packages/typescript/goldenmatch \
+              and commit warehouse/bigquery/." >&2
+            exit 1
+          fi
       - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
         with:
           path: .turbo
