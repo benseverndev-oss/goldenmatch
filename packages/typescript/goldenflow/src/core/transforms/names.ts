@@ -67,25 +67,46 @@ const _NICKNAMES: Record<string, string> = {
 };
 
 // ---------------------------------------------------------------------------
+// names-remainder owned kernels (Wave D)
+//
+// Pure-TS references for goldenflow-core's `names::{strip_titles,strip_suffixes,
+// name_proper,nickname_standardize,has_initial,split_name,split_name_reverse,
+// merge_name}` kernels. MUST reproduce the Rust/Python kernel byte-for-byte:
+//   - the 5 scalar transforms (strip_titles/strip_suffixes/name_proper/
+//     nickname_standardize/has_initial) are asserted over
+//     tests/parity/identifiers.parity.test.ts against the shared oracle corpus.
+//   - the 3 multi-output transforms (split_name/split_name_reverse/merge_name)
+//     are asserted over tests/unit/name-kernels.test.ts with pinned vectors.
+// Ported one-for-one from the Python fallbacks in
+// packages/python/goldenflow/goldenflow/transforms/names.py (kernel = spec).
+// Each registered transform dispatches to the opt-in WASM backend when
+// `enableWasm()` has succeeded; otherwise it runs the pure-TS `*Ts` fn below.
+// Pure-TS is the default.
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
 // split_name (dataframe, name, 50)
 // ---------------------------------------------------------------------------
 
+/** Split "First Last" into [first, last] on the LAST space (after trimming).
+ * No space -> [whole, ""]. Byte-identical to `_split_name_py`
+ * (`val.strip().rsplit(" ", 1)`); the null-row case is handled by the caller. */
+export function splitNameTs(s: string): [string, string] {
+  const trimmed = s.trim();
+  const lastSpace = trimmed.lastIndexOf(" ");
+  if (lastSpace === -1) return [trimmed, ""];
+  return [trimmed.slice(0, lastSpace), trimmed.slice(lastSpace + 1)];
+}
+
 function splitName(rows: readonly Row[], column: string): Row[] {
+  const backend: FlowWasmBackend | null = getFlowWasmBackend();
   return rows.map((row) => {
     const val = row[column];
     if (val === null || val === undefined || typeof val !== "string") {
       return { ...row, first_name: null, last_name: null };
     }
-    const trimmed = val.trim();
-    const lastSpace = trimmed.lastIndexOf(" ");
-    if (lastSpace === -1) {
-      return { ...row, first_name: trimmed, last_name: "" };
-    }
-    return {
-      ...row,
-      first_name: trimmed.slice(0, lastSpace),
-      last_name: trimmed.slice(lastSpace + 1),
-    };
+    const [first, last] = backend ? backend.splitName(val) : splitNameTs(val);
+    return { ...row, first_name: first, last_name: last };
   });
 }
 
@@ -98,21 +119,24 @@ registerTransform(
 // split_name_reverse (dataframe, name, 50)
 // ---------------------------------------------------------------------------
 
+/** Split "Last, First" into [first, last] on the FIRST comma; each part is
+ * trimmed. No comma -> [trimmed-whole, ""]. Byte-identical to
+ * `_split_name_reverse_py` (`val.split(",", 1)`). */
+export function splitNameReverseTs(s: string): [string, string] {
+  const commaIdx = s.indexOf(",");
+  if (commaIdx === -1) return [s.trim(), ""];
+  return [s.slice(commaIdx + 1).trim(), s.slice(0, commaIdx).trim()];
+}
+
 function splitNameReverse(rows: readonly Row[], column: string): Row[] {
+  const backend: FlowWasmBackend | null = getFlowWasmBackend();
   return rows.map((row) => {
     const val = row[column];
     if (val === null || val === undefined || typeof val !== "string") {
       return { ...row, first_name: null, last_name: null };
     }
-    const commaIdx = val.indexOf(",");
-    if (commaIdx === -1) {
-      return { ...row, first_name: val.trim(), last_name: "" };
-    }
-    return {
-      ...row,
-      last_name: val.slice(0, commaIdx).trim(),
-      first_name: val.slice(commaIdx + 1).trim(),
-    };
+    const [first, last] = backend ? backend.splitNameReverse(val) : splitNameReverseTs(val);
+    return { ...row, first_name: first, last_name: last };
   });
 }
 
@@ -125,8 +149,15 @@ registerTransform(
 // strip_titles (series, name, 70, auto_apply)
 // ---------------------------------------------------------------------------
 
+/** Strip a leading personal title (Mr/Mrs/Ms/Miss/Dr/Prof/Rev/Sr/Sra) then
+ * trim. Byte-identical to `_strip_titles_py` (`_TITLES.sub("", val).strip()`). */
+export function stripTitlesTs(s: string): string {
+  return s.replace(_TITLES, "").trim();
+}
+
 function stripTitles(values: readonly ColumnValue[]): ColumnValue[] {
-  return mapStrings(values, (s) => s.replace(_TITLES, "").trim());
+  const backend: FlowWasmBackend | null = getFlowWasmBackend();
+  return mapStrings(values, backend ? (s) => backend.stripTitles(s) : stripTitlesTs);
 }
 
 registerTransform(
@@ -138,8 +169,15 @@ registerTransform(
 // strip_suffixes (series, name, 60)
 // ---------------------------------------------------------------------------
 
+/** Strip a trailing professional suffix (Jr/Sr/II/.../DO) then trim.
+ * Byte-identical to `_strip_suffixes_py` (`_SUFFIXES.sub("", val).strip()`). */
+export function stripSuffixesTs(s: string): string {
+  return s.replace(_SUFFIXES, "").trim();
+}
+
 function stripSuffixes(values: readonly ColumnValue[]): ColumnValue[] {
-  return mapStrings(values, (s) => s.replace(_SUFFIXES, "").trim());
+  const backend: FlowWasmBackend | null = getFlowWasmBackend();
+  return mapStrings(values, backend ? (s) => backend.stripSuffixes(s) : stripSuffixesTs);
 }
 
 registerTransform(
@@ -151,16 +189,43 @@ registerTransform(
 // name_proper (series, name, 45)
 // ---------------------------------------------------------------------------
 
+/** Unicode `Alphabetic` property test -- mirrors Rust `char::is_alphabetic`
+ * (the reference for `ascii_title`). */
+const _ALPHA = /\p{Alphabetic}/u;
+
+/** ASCII-semantics `str.title()`: the first alphabetic char of each word is
+ * upper-cased, the rest lower-cased; non-alphabetic chars pass through and
+ * reset the word boundary. Ported from `goldenflow-core::names::ascii_title`
+ * (JS has no `String.prototype.title()`); matches Python `str.title()` on
+ * ASCII. Iterates by Unicode code point (`for...of`) to mirror Python's
+ * `for c in val` / Rust's `s.chars()`. */
+function asciiTitle(s: string): string {
+  let out = "";
+  let prevAlpha = false;
+  for (const c of s) {
+    if (_ALPHA.test(c)) {
+      out += prevAlpha ? c.toLowerCase() : c.toUpperCase();
+      prevAlpha = true;
+    } else {
+      out += c;
+      prevAlpha = false;
+    }
+  }
+  return out;
+}
+
+/** Proper-case a name: title-case then the Mc*/O'* capitalization fixups.
+ * Byte-identical to `_name_proper_py` (`val.title()` -> Mc sub -> O' sub). */
+export function nameProperTs(s: string): string {
+  let result = asciiTitle(s);
+  result = result.replace(_MC_PATTERN, (_match, letter: string) => `Mc${letter.toUpperCase()}`);
+  result = result.replace(_O_PATTERN, (_match, letter: string) => `O'${letter.toUpperCase()}`);
+  return result;
+}
+
 function nameProper(values: readonly ColumnValue[]): ColumnValue[] {
-  return mapStrings(values, (s) => {
-    // Title case first
-    let result = s.toLowerCase().replace(/\b\w/g, (ch) => ch.toUpperCase());
-    // Mc handling — reset _MC_PATTERN.lastIndex since it has the g flag
-    result = result.replace(_MC_PATTERN, (_match, letter: string) => `Mc${letter.toUpperCase()}`);
-    // O' handling
-    result = result.replace(_O_PATTERN, (_match, letter: string) => `O'${letter.toUpperCase()}`);
-    return result;
-  });
+  const backend: FlowWasmBackend | null = getFlowWasmBackend();
+  return mapStrings(values, backend ? (s) => backend.nameProper(s) : nameProperTs);
 }
 
 registerTransform(
@@ -172,10 +237,19 @@ registerTransform(
 // initial_expand (series, name, 40)
 // ---------------------------------------------------------------------------
 
+/** True if `s` contains a middle-initial pattern `\b[A-Z]\.\s`. Byte-identical
+ * to `_has_initial_py` (`_INITIAL_PATTERN.search(val)`). The flag predicate
+ * behind `initial_expand` (the value output is the input unchanged). */
+export function hasInitialTs(s: string): boolean {
+  return _INITIAL_PATTERN.test(s);
+}
+
 function initialExpand(values: readonly ColumnValue[]): [ColumnValue[], number[]] {
+  const backend: FlowWasmBackend | null = getFlowWasmBackend();
+  const hasInit = backend ? (s: string) => backend.hasInitial(s) : hasInitialTs;
   const flagged: number[] = [];
   const result: ColumnValue[] = values.map((v, i) => {
-    if (v !== null && typeof v === "string" && _INITIAL_PATTERN.test(v)) {
+    if (v !== null && typeof v === "string" && hasInit(v)) {
       flagged.push(i);
     }
     return v === undefined ? null : (v as ColumnValue);
@@ -192,11 +266,17 @@ registerTransform(
 // nickname_standardize (series, name, 42)
 // ---------------------------------------------------------------------------
 
+/** Map a common nickname (trimmed+lowercased key) to its formal first name;
+ * unknown names pass through UNCHANGED (the original, not the trimmed key).
+ * Byte-identical to `_nickname_standardize_py`
+ * (`_NICKNAMES.get(val.strip().lower(), val)`). */
+export function nicknameStandardizeTs(s: string): string {
+  return _NICKNAMES[s.trim().toLowerCase()] ?? s;
+}
+
 function nicknameStandardize(values: readonly ColumnValue[]): ColumnValue[] {
-  return mapStrings(values, (s) => {
-    const lookup = s.trim().toLowerCase();
-    return _NICKNAMES[lookup] ?? s;
-  });
+  const backend: FlowWasmBackend | null = getFlowWasmBackend();
+  return mapStrings(values, backend ? (s) => backend.nicknameStandardize(s) : nicknameStandardizeTs);
 }
 
 registerTransform(
@@ -207,6 +287,18 @@ registerTransform(
 // ---------------------------------------------------------------------------
 // merge_name (dataframe, name, 45, param: last_name_col="last_name")
 // ---------------------------------------------------------------------------
+
+/** Merge (first, last) into a full name: join the parts that are present and
+ * non-blank (after trimming) with a single space, keeping each part's ORIGINAL
+ * (unstripped) text; `undefined` if both are absent/blank. Byte-identical to
+ * `_merge_name_py` (mirrors Rust `Option::None` -> `undefined`). */
+export function mergeNameTs(first: string | null, last: string | null): string | undefined {
+  const parts: string[] = [];
+  for (const p of [first, last]) {
+    if (p !== null && p.trim() !== "") parts.push(p);
+  }
+  return parts.length > 0 ? parts.join(" ") : undefined;
+}
 
 function mergeName(
   rows: readonly Row[],
@@ -220,19 +312,16 @@ function mergeName(
     return rows.map((r) => ({ ...r }));
   }
 
+  const backend: FlowWasmBackend | null = getFlowWasmBackend();
   return rows.map((row) => {
     const first = row[column];
     const last = row[lnCol];
-    const parts: string[] = [];
-    if (first !== null && first !== undefined) {
-      const s = String(first).trim();
-      if (s) parts.push(s);
-    }
-    if (last !== null && last !== undefined) {
-      const s = String(last).trim();
-      if (s) parts.push(s);
-    }
-    return { ...row, full_name: parts.length > 0 ? parts.join(" ") : null };
+    const firstStr = first === null || first === undefined ? null : String(first);
+    const lastStr = last === null || last === undefined ? null : String(last);
+    const full = backend
+      ? backend.mergeName(firstStr, lastStr)
+      : mergeNameTs(firstStr, lastStr);
+    return { ...row, full_name: full ?? null };
   });
 }
 
