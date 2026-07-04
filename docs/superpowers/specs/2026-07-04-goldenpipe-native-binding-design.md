@@ -74,22 +74,58 @@ Mirror goldenflow's: `maturin build`/`develop` the `goldenpipe-native` crate int
 ## The parity gate (the SP2 deliverable — makes the core the reference)
 
 Reuse the SP1 golden vectors (`packages/rust/extensions/goldenpipe-core/tests/vectors/*.json`)
-as the shared truth — their `expected` IS the core's output. Two legs:
+as the shared truth — their `expected` IS the core's output. Two legs, both replaying
+those vectors.
+
+### `goldenpipe/core/_planner_json.py` (new, SHIPPED helper) — the JSON face of the pure-Python planner
+
+Leg A is NOT "just serialize" — mapping the object/exception-based Python planner to
+the core's JSON shape needs real, specified glue. Put it in ONE helper with an explicit
+contract (five `*_json(input_str) -> output_str` fns that CALL the real
+Resolver/Router/decisions internally, so the gate tests the ACTUAL planner, not a
+re-implementation):
+
+- **`resolve_json`** — parse `{config, stages}`. Build a throwaway `StageRegistry` from
+  the vector's `StageInfo` objects, keying **by `StageInfo.key`** — `registry.register()`
+  keys by `info.name`, so for the `key != info.name` vectors the helper writes
+  `registry._stages[info.key] = _stub_stage(info)` directly (a stub Stage whose `.info`
+  carries the metadata). Call `Resolver.resolve(config, registry)`; on success serialize
+  `ExecutionPlan.stages -> [{name, use, config, on_error}]` as `{"ok": {...}}`. On
+  `WiringError` -> `{"err": {"kind":"wiring", stage, missing, available}}`; on the
+  unknown-`use` `KeyError` -> `{"err": {"kind":"unknown_stage", "use": <the first
+  config stage whose use ∉ registry>}}` (deterministic — Resolver fails on the first
+  such stage).
+  - **In-scope additive change to `resolver.py`:** `WiringError` currently carries only
+    a message. Add structured attributes `.stage`, `.missing`, `.available` (the message
+    is unchanged) so the helper reads them directly instead of string-parsing. Additive,
+    behavior-preserving, and it's the faithful way to map the wiring vector.
+- **`apply_decision_json`** — parse `{decision, remaining}`. Reconstruct `PlannedStage`s
+  from `remaining`, a `Decision`, a stub registry providing the `insert` names (Router
+  calls `registry.get(name)` per insert), and a `PipeContext`. Call `Router.apply`,
+  then serialize `{remaining: [{name,use,config,on_error}], router_note}` where
+  `router_note` is `ctx.reasoning.get("_router")` (Router writes it there; absent -> the
+  field is omitted, matching the core's `skip_serializing_if`).
+- **`evaluate_builtin_json`** — parse `{name, ctx}`. Dispatch a name table
+  `{"severity_gate": severity_gate, "pii_router": pii_router, "row_count_gate":
+  row_count_gate}`; **unknown name -> `None`** (the core's `_ => None`). Call the
+  `decisions.py` fn with a `PipeContext` built from `ctx.artifacts`/`ctx.metadata`;
+  serialize the returned `Decision` (or JSON `null`).
+- **`auto_config_json`** — parse `{available, identity_opts}`. `Pipeline._auto_config`
+  is an instance method reading `self._registry.list_all()` + `self._identity_opts`, so
+  construct a `Pipeline` with a stub registry whose `list_all()` returns `available` and
+  set `_identity_opts` (empty `{}` -> not-given, matching both sides), call
+  `_auto_config`, serialize the `PipelineConfig` to the core's shape.
+- **`skip_if_falsy_json`** — parse a bare JSON value; return `str(bool(not <value>))`
+  lowercased... i.e. Python `not artifact` -> the same truthy set the core pins.
+
+Leg A (below) asserts each helper fn == the vector `expected`. Because the helper calls
+the real Resolver/Router/decisions, a future runtime-planner change that diverges from
+the core fails the gate. The registry-construction / dispatch / envelope glue is helper
+concern, not planner logic — ordering, validation, and routing stay in the real modules.
 
 - **Leg A — pure-Python == core (the anti-drift gate; box-safe, no wheel needed).**
-  A test replays each vector `input` through the PURE-PYTHON planner and asserts the
-  output equals the vector `expected`. This proves the Python planner conforms to the
-  core and CANNOT drift from it (a future Python change that diverges fails here). It
-  needs a small JSON-shaped adapter around the pure-Python planner:
-  - resolve: build a throwaway registry/stage-info from the vector's `stages`, run
-    `Resolver.resolve`, serialize the `ExecutionPlan` to the core's JSON shape
-    (`{name, use, config, on_error}` per stage; `{ok|err}` envelope).
-  - apply_decision / evaluate_builtin / auto_config / skip_if: call the pure-Python
-    `Router.apply` / `decisions.*` / `_auto_config` / `not artifact`, serialize to the
-    core's shape.
-  This adapter lives in the TEST (or a tiny `goldenpipe/core/_planner_json.py` helper
-  if cleaner) — it does NOT change the runtime planner. Runs in every CI lane +
-  locally, no wheel.
+  Replay each vector `input` through the matching `_planner_json.*` fn and assert the
+  parsed output equals the vector `expected`. Runs in every CI lane + locally, no wheel.
 - **Leg B — native wheel == core (validates the wheel/marshaling; CI-primary).**
   With the wheel built (`GOLDENPIPE_NATIVE=1`), replay each vector `input` through the
   native `_native.resolve_json(...)` etc. and assert == `expected`. Trivially true if
@@ -143,4 +179,8 @@ with `resolve_json` is present under `auto`; False under `"0"`; raises under `"1
 - SP3 (TS/WASM reroute + the Python↔TS drift-kill) — separate spec.
 - Publishing the wheel to PyPI / release tags — SP2 lands the crate + build + CI gate;
   the publish workflow follows the existing `goldenflow-native` pattern in a later step.
-- Touching Runner/registry/IO (host stays).
+- Touching Runner/registry/IO (host stays). The ONLY runtime file SP2 modifies is
+  `engine/resolver.py`, and only ADDITIVELY: `WiringError` gains `.stage`/`.missing`/
+  `.available` attributes (message unchanged, no behavior change) so the parity helper
+  can read a structured error. The pure-Python planner runtime path is otherwise
+  untouched (parity-gate-only).
