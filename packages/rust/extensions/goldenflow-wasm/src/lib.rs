@@ -90,4 +90,9 @@ mod wasm {
     pub fn name_transliterate(s: &str) -> String {
         names::name_transliterate(s)
     }
+
+    #[wasm_bindgen]
+    pub fn name_script(s: &str) -> String {
+        names::name_script(s)
+    }
 }

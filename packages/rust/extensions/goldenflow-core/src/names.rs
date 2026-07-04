@@ -1,14 +1,14 @@
-//! Owned i18n-name kernels (pyo3-free): ASCII transliteration (Unicode
-//! script detection follows in a later kernel). These are the reference
-//! implementations; the Python/TS fallbacks must reproduce their bytes
-//! exactly (byte-parity harness, `tests/parity/identifiers_corpus.jsonl`).
+//! Owned i18n-name kernels (pyo3-free): ASCII transliteration + Unicode
+//! script detection. These are the reference implementations; the
+//! Python/TS fallbacks must reproduce their bytes exactly (byte-parity
+//! harness, `tests/parity/identifiers_corpus.jsonl`).
 //!
 //! Deliberately NOT implemented via `unicode-normalization` / NFD or
 //! Python's `unicodedata.normalize` -- those depend on the runtime's bundled
 //! Unicode version and could silently drift between Rust/Python/JS. Instead
-//! `name_transliterate` uses an EXPLICIT, hand-curated char map that is
-//! replicated byte-for-byte in the Python fallback
-//! (`goldenflow/transforms/names.py`).
+//! both `name_transliterate` and `name_script` use an EXPLICIT, hand-curated
+//! char map / codepoint-range table that is replicated byte-for-byte in the
+//! Python fallback (`goldenflow/transforms/names.py`).
 
 /// ASCII-fold a single non-ASCII char to its closest ASCII replacement.
 /// `None` means "no mapping" -- the caller drops the character.
@@ -141,6 +141,67 @@ pub fn name_transliterate(s: &str) -> String {
     out
 }
 
+/// Script labels, in tie-break priority order (highest count wins; an exact
+/// count tie resolves to whichever label appears earliest in this list).
+const SCRIPT_PRIORITY: [&str; 10] = [
+    "Latin",
+    "Cyrillic",
+    "Greek",
+    "Han",
+    "Hiragana",
+    "Katakana",
+    "Hangul",
+    "Arabic",
+    "Hebrew",
+    "Devanagari",
+];
+
+/// Classify a single char into one of the tracked scripts via explicit
+/// Unicode codepoint ranges, or `None` if it falls outside all of them
+/// (digits, ASCII punctuation/space, and any script not tracked here all
+/// fall through to `None` -- the caller treats that as "Common").
+fn classify_char(c: char) -> Option<&'static str> {
+    match c {
+        'A'..='Z' | 'a'..='z' | '\u{00C0}'..='\u{024F}' => Some("Latin"),
+        '\u{0400}'..='\u{04FF}' => Some("Cyrillic"),
+        '\u{0370}'..='\u{03FF}' => Some("Greek"),
+        '\u{4E00}'..='\u{9FFF}' => Some("Han"),
+        '\u{3040}'..='\u{309F}' => Some("Hiragana"),
+        '\u{30A0}'..='\u{30FF}' => Some("Katakana"),
+        '\u{AC00}'..='\u{D7A3}' => Some("Hangul"),
+        '\u{0600}'..='\u{06FF}' => Some("Arabic"),
+        '\u{0590}'..='\u{05FF}' => Some("Hebrew"),
+        '\u{0900}'..='\u{097F}' => Some("Devanagari"),
+        _ => None,
+    }
+}
+
+/// Detect the dominant script in `s` by counting chars in each tracked
+/// script's Unicode range. `Unknown` for an empty string; `Common` when no
+/// tracked-script char is present (all ASCII digits/punct/space, or a
+/// script this kernel doesn't track). Ties resolve via `SCRIPT_PRIORITY`.
+pub fn name_script(s: &str) -> String {
+    if s.is_empty() {
+        return "Unknown".to_string();
+    }
+    let mut counts: [usize; 10] = [0; 10];
+    for c in s.chars() {
+        if let Some(label) = classify_char(c) {
+            let idx = SCRIPT_PRIORITY.iter().position(|&l| l == label).unwrap();
+            counts[idx] += 1;
+        }
+    }
+    let (best_idx, &best_count) = counts
+        .iter()
+        .enumerate()
+        .max_by_key(|&(idx, &count)| (count, std::cmp::Reverse(idx)))
+        .unwrap();
+    if best_count == 0 {
+        return "Common".to_string();
+    }
+    SCRIPT_PRIORITY[best_idx].to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -161,5 +222,17 @@ mod tests {
         assert_eq!(name_transliterate(""), "");
         // CJK char + emoji: both unmapped -> dropped.
         assert_eq!(name_transliterate("张\u{1F600}"), "");
+    }
+
+    #[test]
+    fn script_detection() {
+        assert_eq!(name_script("Smith"), "Latin");
+        assert_eq!(name_script("José"), "Latin");
+        assert_eq!(name_script("Иван"), "Cyrillic");
+        assert_eq!(name_script("Ολγα"), "Greek");
+        assert_eq!(name_script("张伟"), "Han");
+        assert_eq!(name_script("محمد"), "Arabic");
+        assert_eq!(name_script("123"), "Common");
+        assert_eq!(name_script(""), "Unknown");
     }
 }

@@ -5,7 +5,7 @@ import re
 import polars as pl
 
 from goldenflow.transforms import register_transform
-from goldenflow.transforms._native import name_transliterate_native
+from goldenflow.transforms._native import name_script_native, name_transliterate_native
 
 _TITLES = re.compile(
     r"^(Mr\.?|Mrs\.?|Ms\.?|Miss\.?|Dr\.?|Prof\.?|Rev\.?|Sr\.?|Sra\.?)\s+", re.IGNORECASE
@@ -299,3 +299,84 @@ def name_transliterate(series: pl.Series) -> pl.Series:
     if native is not None:
         return native(series)
     return series.map_elements(_name_transliterate_py, return_dtype=pl.Utf8)
+
+
+# --- name_script (owned i18n-name kernel) ------------------------------------
+#
+# Pure-Python reference for goldenflow-core's ``names::name_script`` kernel.
+# MUST reproduce the Rust kernel byte-for-byte (asserted by
+# tests/transforms/test_identifiers_parity.py over
+# tests/parity/identifiers_corpus.jsonl) -- same explicit Unicode codepoint
+# ranges, same tie-break order. Deliberately NOT implemented via a
+# general-purpose Unicode script database -- that could drift by runtime
+# Unicode version; this table must stay byte-identical to
+# ``goldenflow-core/src/names.rs::classify_char``.
+#
+# Tie-break: highest per-script count wins; an EXACT count tie resolves to
+# whichever label appears earliest in ``_SCRIPT_PRIORITY``.
+_SCRIPT_PRIORITY: tuple[str, ...] = (
+    "Latin", "Cyrillic", "Greek", "Han", "Hiragana", "Katakana",
+    "Hangul", "Arabic", "Hebrew", "Devanagari",
+)
+_SCRIPT_RANGES: tuple[tuple[str, tuple[tuple[int, int], ...]], ...] = (
+    ("Latin", ((0x41, 0x5A), (0x61, 0x7A), (0x00C0, 0x024F))),
+    ("Cyrillic", ((0x0400, 0x04FF),)),
+    ("Greek", ((0x0370, 0x03FF),)),
+    ("Han", ((0x4E00, 0x9FFF),)),
+    ("Hiragana", ((0x3040, 0x309F),)),
+    ("Katakana", ((0x30A0, 0x30FF),)),
+    ("Hangul", ((0xAC00, 0xD7A3),)),
+    ("Arabic", ((0x0600, 0x06FF),)),
+    ("Hebrew", ((0x0590, 0x05FF),)),
+    ("Devanagari", ((0x0900, 0x097F),)),
+)
+
+
+def _classify_char(c: str) -> str | None:
+    cp = ord(c)
+    for label, ranges in _SCRIPT_RANGES:
+        for lo, hi in ranges:
+            if lo <= cp <= hi:
+                return label
+    return None
+
+
+def _name_script_py(val: str | None) -> str | None:
+    if val is None:
+        return None
+    if val == "":
+        return "Unknown"
+    counts: dict[str, int] = {}
+    for c in val:
+        label = _classify_char(c)
+        if label is not None:
+            counts[label] = counts.get(label, 0) + 1
+    if not counts:
+        return "Common"
+    best_label = _SCRIPT_PRIORITY[0]
+    best_count = -1
+    for label in _SCRIPT_PRIORITY:
+        c = counts.get(label, 0)
+        if c > best_count:
+            best_count = c
+            best_label = label
+    return best_label
+
+
+@register_transform(
+    name="name_script",
+    input_types=["name", "string"],
+    auto_apply=False,
+    priority=50,
+    mode="series",
+)
+def name_script(series: pl.Series) -> pl.Series:
+    """Detect the dominant Unicode script in a name: ``Unknown`` for empty
+    string, ``Common`` when no tracked-script char is present, else the
+    script with the highest char count (ties -> earliest in priority
+    order: Latin, Cyrillic, Greek, Han, Hiragana, Katakana, Hangul, Arabic,
+    Hebrew, Devanagari)."""
+    native = name_script_native()
+    if native is not None:
+        return native(series)
+    return series.map_elements(_name_script_py, return_dtype=pl.Utf8)

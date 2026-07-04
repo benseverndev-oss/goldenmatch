@@ -38,5 +38,6 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(identifiers::aba_validate_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(identifiers::imei_validate_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(names::name_transliterate_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(names::name_script_arrow, m)?)?;
     Ok(())
 }

@@ -370,3 +370,7 @@ def _name_kernel_runner(
 
 def name_transliterate_native() -> Callable[[pl.Series], pl.Series] | None:
     return _name_kernel_runner("name_transliterate", "name_transliterate_arrow")
+
+
+def name_script_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _name_kernel_runner("name_script", "name_script_arrow")

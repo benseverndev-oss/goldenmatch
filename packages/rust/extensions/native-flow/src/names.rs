@@ -15,3 +15,13 @@ pub fn name_transliterate_arrow(
         Some(names::name_transliterate(s))
     })?))
 }
+
+#[pyfunction]
+pub fn name_script_arrow(
+    py: Python,
+    array: PyArrowType<ArrayData>,
+) -> PyResult<PyArrowType<ArrayData>> {
+    Ok(PyArrowType(map_str_to_str(py, array.0, |s| {
+        Some(names::name_script(s))
+    })?))
+}

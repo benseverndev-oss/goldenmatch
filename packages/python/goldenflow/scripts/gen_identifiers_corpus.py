@@ -44,7 +44,10 @@ from goldenflow.transforms.identifiers import (  # noqa: E402
     _vat_format_py,
     _vat_validate_py,
 )
-from goldenflow.transforms.names import _name_transliterate_py  # noqa: E402
+from goldenflow.transforms.names import (  # noqa: E402
+    _name_script_py,
+    _name_transliterate_py,
+)
 
 CORPUS_PATH = Path(__file__).resolve().parent.parent / "tests" / "parity" / "identifiers_corpus.jsonl"
 
@@ -241,6 +244,22 @@ _CASES: list[tuple[str, str | None]] = [
     ("name_transliterate", None),  # null
     ("name_transliterate", "张\U0001f600"),  # CJK + emoji, both unmapped -> dropped
     ("name_transliterate", "Nguyễn"),  # Vietnamese combining diacritic, unmapped -> dropped
+    # --- name_script ---
+    ("name_script", "Smith"),  # Latin
+    ("name_script", "José"),  # Latin (with diacritic)
+    ("name_script", "Иван"),  # Cyrillic
+    ("name_script", "Ολγα"),  # Greek
+    ("name_script", "张伟"),  # Han
+    ("name_script", "田中"),  # Han (Kanji)
+    ("name_script", "ひらがな"),  # Hiragana
+    ("name_script", "カタカナ"),  # Katakana
+    ("name_script", "홍길동"),  # Hangul
+    ("name_script", "محمد"),  # Arabic
+    ("name_script", "דָּוִד"),  # Hebrew
+    ("name_script", "राम"),  # Devanagari
+    ("name_script", "123"),  # digits only -> Common
+    ("name_script", ""),  # empty -> Unknown
+    ("name_script", None),  # null
 ]
 
 _PY_FN = {
@@ -259,6 +278,7 @@ _PY_FN = {
     "aba_validate": _aba_validate_py,
     "imei_validate": _imei_validate_py,
     "name_transliterate": _name_transliterate_py,
+    "name_script": _name_script_py,
 }
 
 _NATIVE_ARROW_FN = {
@@ -277,6 +297,7 @@ _NATIVE_ARROW_FN = {
     "aba_validate": "aba_validate_arrow",
     "imei_validate": "imei_validate_arrow",
     "name_transliterate": "name_transliterate_arrow",
+    "name_script": "name_script_arrow",
 }
 
 
