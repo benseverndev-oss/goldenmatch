@@ -28,6 +28,11 @@ export default defineConfig({
     // separate subpath (`goldenmatch/core/graph-wasm`), out of the default core
     // bundle.
     "core/graphWasm": "src/core/graphWasm.ts",
+    // Opt-in entry: the fingerprint-core canonical record-hash kernel compiled
+    // to wasm, so `recordFingerprint` runs the shared core. ~155 KB inlined
+    // base64 as a separate subpath (`goldenmatch/core/fingerprint-wasm`), out of
+    // the default core bundle.
+    "core/fingerprintWasm": "src/core/fingerprintWasm.ts",
     "node/index": "src/node/index.ts",
     "node/mcp/server": "src/node/mcp/server.ts",
     cli: "src/cli.ts",

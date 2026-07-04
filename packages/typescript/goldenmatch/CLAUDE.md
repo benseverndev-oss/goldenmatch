@@ -116,6 +116,36 @@ no wasm bytes).
   contract as the Python HNSW / FAISS `IndexFlatIP` path. Inner-product only; the
   `metric` option is accepted for interface symmetry (no euclidean).
 
+## Record fingerprint via wasm (`goldenmatch/core/fingerprint-wasm`)
+`recordFingerprint` (`src/core/record-fingerprint.ts`) computes the canonical
+cross-surface stable record-id hash. It was the ONLY surface still hand-rolling
+its own canonicalizer — Postgres is native-direct over `fingerprint-core`, and
+DuckDB's `goldenmatch_record_fingerprint` calls the native-gated Python
+`record_fingerprint` (native-authoritative when the wheel is present). Same
+synchronous inlined-wasm pattern as hnsw-wasm; opt-in subpath
+`goldenmatch/core/fingerprint-wasm` (~155 KB inlined wasm, separate tsup entry —
+verified no leak into `dist/core/index.js`).
+- **The kernel takes a JSON object string** (`fingerprint-core::fingerprint_json`,
+  the same entry the SQL surfaces use). `recordFingerprint` routes a record
+  through it **only when JSON-primitive-safe** (null/boolean/string/finite
+  numbers with safe-int/no-`-0` semantics, ASCII field names); `bigint` /
+  `Uint8Array` / `-0` / non-ASCII-key records — which a JSON round-trip can't
+  reproduce byte-for-byte — stay on the pure-TS canonicalizer, which is the
+  reference the wasm kernel matches for everything else. A `JSON.stringify` throw
+  also falls back. So the hash is UNCHANGED whether or not the backend is enabled.
+- **Enable it:** `import { enableFingerprintWasm } from "goldenmatch/core/fingerprint-wasm"`.
+  Default-off (backend null → pure-TS), mirroring Python's native gate.
+- **Regenerate the embed** (after any `fingerprint-core`/`fingerprint-wasm`
+  change): `node scripts/build_fingerprint_wasm.mjs` (needs wasm-pack + the
+  wasm32 target). Rebuilds the wasm, strips the async init path, base64-embeds it,
+  and copies the golden into `tests/parity/fixtures/fingerprint/`.
+- **Cross-surface parity gate:** `tests/parity/fingerprint-wasm.parity.test.ts`
+  runs the SAME `fingerprint_golden.json` oracle as Rust
+  (`fingerprint-core/tests/golden.rs`) + Python; `tests/unit/fingerprint-wasm-
+  reroute.test.ts` proves wasm == pure-TS. The `typescript` lane's fingerprint
+  drift guard (gated on the `fingerprint_wasm` path filter) rebuilds + diffs the
+  golden JSON; `fixture_drift` auto-covers it too.
+
 ## Wave history
 | npm | Python parity | Headline |
 |-----|---------------|----------|

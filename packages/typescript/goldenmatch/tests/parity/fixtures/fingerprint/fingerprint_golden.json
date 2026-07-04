@@ -1,0 +1,15 @@
+[
+  { "name": "empty", "json": "{}", "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" },
+  { "name": "single_str", "json": "{\"a\": \"x\"}", "hash": "7381d5ba2dac5be0af49232a3209ab8d0dc2e4ed804a60ce533fdfe5254307e3" },
+  { "name": "single_int", "json": "{\"a\": 1}", "hash": "b42e38730ddd9a099426dffa93926c03258ee2cd93f75204daa6f989af628206" },
+  { "name": "single_float", "json": "{\"n\": 1.5}", "hash": "241b8cd11b575fd2b21e90b490f57fac54930f9a12124f23e284caa200c403a9" },
+  { "name": "bool_true", "json": "{\"ok\": true}", "hash": "5f15cbd1f128d925542e814c98d89e1ea7adc61d9535080662e7979e12007ae8" },
+  { "name": "bool_false", "json": "{\"ok\": false}", "hash": "1f4252549a186d198f89829182134abe5b14e83b3eb6c900d2c5e8f648f34b09" },
+  { "name": "null_val", "json": "{\"a\": null}", "hash": "8f846f81c16a1dd66a1e33c91f401abaed2a6e522e391de920267d296e1fe912" },
+  { "name": "multi_sorted", "json": "{\"name\": \"Acme\", \"city\": \"NYC\", \"zip\": \"10001\"}", "hash": "4b0180f8b28bd656d80c6f121d26a422b9124d7c87cee22f1995c860ff152de7" },
+  { "name": "type_tag_int_vs_str", "json": "{\"a\": 1, \"b\": \"1\"}", "hash": "b8f366dd6ed841f434c01bae6e02b09715ee6599898938cfa409692406f718fe" },
+  { "name": "drops_underscore", "json": "{\"a\": 1, \"__row_id__\": 9, \"__source__\": \"df\"}", "hash": "b42e38730ddd9a099426dffa93926c03258ee2cd93f75204daa6f989af628206" },
+  { "name": "neg_int", "json": "{\"x\": -42}", "hash": "b57e1503f5d5db2de593b9f5c875cfc0935131fc30ebab0ac5b71f57d5e84711" },
+  { "name": "float_frac", "json": "{\"p\": 0.1}", "hash": "36822ea246a3a04b786a6ec48ca92e0f0b1a25c7a3d9ab74b587dca2c74efd59" },
+  { "name": "mixed", "json": "{\"id\": 7, \"active\": true, \"score\": 98.6, \"label\": \"gold\", \"note\": null}", "hash": "09a2de909caf5af527a5f788cc24d7b0c5d31e30f83b44f5b6fcdecc8d2715b4" }
+]

@@ -1,0 +1,29 @@
+# Standalone workspace: a thin wasm-bindgen wrapper over `fingerprint-core`, so
+# the JS/TS record-fingerprint runs the SAME canonicalization kernel as the
+# Python native path, the DuckDB / Postgres native surfaces, and the Rust core —
+# one source of truth for the cross-surface stable record-id hash. The kernel is
+# already Arrow-free (sha2 + serde_json only), so the wasm build is clean.
+# Mirrors the sibling `graph-wasm` / `sketch-wasm` / `goldenhnsw-wasm` crates.
+[workspace]
+
+[package]
+name = "fingerprint-wasm"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Ben Severn <benzsevern@gmail.com>"]
+description = "wasm-bindgen wrapper over fingerprint-core (canonical record fingerprint) for the JS/TS port"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wasm-bindgen = "0.2"
+goldenmatch-fingerprint-core = { path = "../fingerprint-core" }
+
+[profile.release]
+opt-level = "s"
+lto = true
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false
