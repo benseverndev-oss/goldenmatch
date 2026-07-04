@@ -10,6 +10,7 @@
     "./core/suggest-wasm": { "types": "./dist/core/suggestWasm.d.ts", "import": "./dist/core/suggestWasm.js", "require": "./dist/core/suggestWasm.cjs" },
     "./core/perceptual-wasm": { "types": "./dist/core/perceptualWasm.d.ts", "import": "./dist/core/perceptualWasm.js", "require": "./dist/core/perceptualWasm.cjs" },
     "./core/hnsw-wasm": { "types": "./dist/core/hnswWasm.d.ts", "import": "./dist/core/hnswWasm.js", "require": "./dist/core/hnswWasm.cjs" },
+    "./core/sketch-wasm": { "types": "./dist/core/sketchWasm.d.ts", "import": "./dist/core/sketchWasm.js", "require": "./dist/core/sketchWasm.cjs" },
     "./node": { "types": "./dist/node/index.d.ts", "import": "./dist/node/index.js", "require": "./dist/node/index.cjs" }
   },
   "bin": { "goldenmatch-js": "./dist/cli.cjs", "goldenmatch-mcp": "./dist/node/mcp/server.cjs" },

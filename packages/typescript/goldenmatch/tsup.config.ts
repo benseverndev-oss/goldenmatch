@@ -18,6 +18,11 @@ export default defineConfig({
     // default bundle stays lean; consumers pay it only when they import
     // `goldenmatch/core/hnsw-wasm`.
     "core/hnswWasm": "src/core/hnswWasm.ts",
+    // Opt-in entry: the sketch (MinHash + LSH) kernel compiled to wasm, so the
+    // MinHash-LSH blocker runs the shared sketch-core. ~65 KB inlined base64 as
+    // a separate subpath (`goldenmatch/core/sketch-wasm`), out of the default
+    // core bundle.
+    "core/sketchWasm": "src/core/sketchWasm.ts",
     "node/index": "src/node/index.ts",
     "node/mcp/server": "src/node/mcp/server.ts",
     cli: "src/cli.ts",
