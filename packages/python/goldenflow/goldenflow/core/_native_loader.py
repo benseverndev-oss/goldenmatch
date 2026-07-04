@@ -95,6 +95,9 @@ _COMPONENT_SYMBOLS: dict[str, tuple[str, ...]] = {
     # name_script: Unicode-range script detection -- floor symbol only,
     # locale-free.
     "name_script": ("name_script_arrow",),
+    # email: lowercase/normalize/extract_domain/validate -- floor symbol only
+    # (email_validate_arrow), locale-free, region-free.
+    "email": ("email_validate_arrow",),
 }
 
 # Components whose only native path is intentionally non-authoritative (the

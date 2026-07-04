@@ -168,3 +168,35 @@
 {"transform": "name_script", "input": "123", "expected": "Common"}
 {"transform": "name_script", "input": "", "expected": "Unknown"}
 {"transform": "name_script", "input": null, "expected": null}
+{"transform": "email_lowercase", "input": " John@X.COM ", "expected": "john@x.com"}
+{"transform": "email_lowercase", "input": "A@B.com", "expected": "a@b.com"}
+{"transform": "email_lowercase", "input": "ADMIN@EXAMPLE.COM", "expected": "admin@example.com"}
+{"transform": "email_lowercase", "input": "", "expected": ""}
+{"transform": "email_lowercase", "input": null, "expected": null}
+{"transform": "email_normalize", "input": "John.Doe+tag@Gmail.com", "expected": "johndoe@gmail.com"}
+{"transform": "email_normalize", "input": "a+b@x.com", "expected": "a@x.com"}
+{"transform": "email_normalize", "input": "notanemail", "expected": "notanemail"}
+{"transform": "email_normalize", "input": "A@B.com", "expected": "a@b.com"}
+{"transform": "email_normalize", "input": "j.o.h.n@googlemail.com", "expected": "john@googlemail.com"}
+{"transform": "email_normalize", "input": "user+spam@example.com", "expected": "user@example.com"}
+{"transform": "email_normalize", "input": "", "expected": ""}
+{"transform": "email_normalize", "input": "   ", "expected": "   "}
+{"transform": "email_normalize", "input": null, "expected": null}
+{"transform": "email_extract_domain", "input": "x@Foo.COM", "expected": "foo.com"}
+{"transform": "email_extract_domain", "input": "noat", "expected": null}
+{"transform": "email_extract_domain", "input": "trailing@", "expected": null}
+{"transform": "email_extract_domain", "input": "admin@sub.domain.org", "expected": "sub.domain.org"}
+{"transform": "email_extract_domain", "input": "a@b@c.com", "expected": "c.com"}
+{"transform": "email_extract_domain", "input": "", "expected": null}
+{"transform": "email_extract_domain", "input": null, "expected": null}
+{"transform": "email_validate", "input": "a@b.co", "expected": true}
+{"transform": "email_validate", "input": "valid@example.com", "expected": true}
+{"transform": "email_validate", "input": "also.valid+tag@sub.example.co.uk", "expected": true}
+{"transform": "email_validate", "input": "a@b", "expected": false}
+{"transform": "email_validate", "input": "a b@c.com", "expected": false}
+{"transform": "email_validate", "input": "a@@b.com", "expected": false}
+{"transform": "email_validate", "input": "@no-local.com", "expected": false}
+{"transform": "email_validate", "input": "no-domain@", "expected": false}
+{"transform": "email_validate", "input": "", "expected": false}
+{"transform": "email_validate", "input": "   ", "expected": false}
+{"transform": "email_validate", "input": null, "expected": null}

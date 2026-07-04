@@ -11,6 +11,7 @@
 
 use pyo3::prelude::*;
 
+mod email;
 mod identifiers;
 mod names;
 mod phone;
@@ -19,6 +20,10 @@ mod util;
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
+    m.add_function(wrap_pyfunction!(email::email_lowercase_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(email::email_normalize_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(email::email_extract_domain_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(email::email_validate_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(phone::phone_e164_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(phone::phone_national_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(phone::phone_country_code_arrow, m)?)?;

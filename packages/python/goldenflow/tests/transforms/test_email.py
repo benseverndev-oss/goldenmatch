@@ -7,18 +7,9 @@ from goldenflow.transforms.email import (
 )
 
 
-def _apply_expr(func, column: str, data: list) -> list:
-    """Helper to apply an expr-mode transform to test data."""
-    df = pl.DataFrame({column: data})
-    expr = func(column)
-    return df.select(expr.alias(column))[column].to_list()
-
-
 def test_email_lowercase():
-    result = _apply_expr(
-        email_lowercase, "e",
-        ["John.DOE@Gmail.Com", "ADMIN@EXAMPLE.COM", None],
-    )
+    s = pl.Series("e", ["John.DOE@Gmail.Com", "ADMIN@EXAMPLE.COM", None])
+    result = email_lowercase(s)
     assert result[0] == "john.doe@gmail.com"
     assert result[1] == "admin@example.com"
     assert result[2] is None
@@ -53,10 +44,10 @@ def test_email_normalize_preserves_none_and_invalid():
 
 
 def test_email_extract_domain():
-    result = _apply_expr(
-        email_extract_domain, "e",
-        ["user@example.com", "admin@sub.domain.org", None, "invalid"],
+    s = pl.Series(
+        "e", ["user@example.com", "admin@sub.domain.org", None, "invalid"]
     )
+    result = email_extract_domain(s)
     assert result[0] == "example.com"
     assert result[1] == "sub.domain.org"
     assert result[2] is None
@@ -64,15 +55,18 @@ def test_email_extract_domain():
 
 
 def test_email_validate():
-    s = pl.Series("e", [
-        "valid@example.com",
-        "also.valid+tag@sub.example.co.uk",
-        "missing-at-sign",
-        "@no-local.com",
-        "no-domain@",
-        None,
-        "",
-    ])
+    s = pl.Series(
+        "e",
+        [
+            "valid@example.com",
+            "also.valid+tag@sub.example.co.uk",
+            "missing-at-sign",
+            "@no-local.com",
+            "no-domain@",
+            None,
+            "",
+        ],
+    )
     result = email_validate(s)
     assert result[0] is True
     assert result[1] is True

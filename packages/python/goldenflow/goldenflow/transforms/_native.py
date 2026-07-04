@@ -374,3 +374,41 @@ def name_transliterate_native() -> Callable[[pl.Series], pl.Series] | None:
 
 def name_script_native() -> Callable[[pl.Series], pl.Series] | None:
     return _name_kernel_runner("name_script", "name_script_arrow")
+
+
+def _email_kernel_runner(attr: str) -> Callable[[pl.Series], pl.Series] | None:
+    """Build a whole-series runner for email kernel function ``attr`` if
+    native ``email`` is enabled and the dependencies are importable; else
+    ``None``. Like the other identifier runners -- no region/gating args,
+    lowercase/normalize/domain-extract/validate are all locale-free."""
+    if not native_enabled("email"):
+        return None
+    nm = native_module()
+    if nm is None or not hasattr(nm, attr):
+        return None
+    try:
+        import pyarrow  # noqa: F401  (zero-copy bridge)
+    except ImportError:
+        return None
+    func = getattr(nm, attr)
+
+    def run(s: pl.Series) -> pl.Series:
+        return pl.from_arrow(func(_as_str_series(s).to_arrow()))
+
+    return run
+
+
+def email_lowercase_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _email_kernel_runner("email_lowercase_arrow")
+
+
+def email_normalize_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _email_kernel_runner("email_normalize_arrow")
+
+
+def email_extract_domain_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _email_kernel_runner("email_extract_domain_arrow")
+
+
+def email_validate_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _email_kernel_runner("email_validate_arrow")
