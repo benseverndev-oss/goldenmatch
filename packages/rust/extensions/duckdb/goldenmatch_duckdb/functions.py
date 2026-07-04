@@ -203,6 +203,12 @@ def register(con: duckdb.DuckDBPyConnection) -> None:
     from goldenmatch_duckdb.hnsw_kernels import register_hnsw_functions
     register_hnsw_functions(con)
 
+    # goldenmatch_lsh_pairs: MinHash-LSH token blocking over an aggregated text
+    # column (the sparse-token counterpart to HNSW). Reuses the native-gated
+    # MinHashLSHBlocker (goldenmatch.core.sketch kernel). See `lsh_kernels.py`.
+    from goldenmatch_duckdb.lsh_kernels import register_lsh_functions
+    register_lsh_functions(con)
+
 
 # ── Implementation ──────────────────────────────────────────────────────
 
