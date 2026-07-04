@@ -16,6 +16,8 @@ import { Resolver } from "./engine/resolver.js";
 import { Runner } from "./engine/runner.js";
 import { Reporter } from "./engine/reporter.js";
 import { buildDefaultRegistry } from "./adapters/index.js";
+import { getPipeWasmBackend } from "./wasm/backend.js";
+import { autoConfigViaWasm } from "./wasm/plannerJson.js";
 
 const DEFAULT_STAGE_ORDER = [
   "goldencheck.scan",
@@ -84,7 +86,7 @@ export class Pipeline {
  * config. Extracted as a standalone helper so both `Pipeline.run()` and the
  * cross-surface shim call the same code path.
  */
-export function computeAutoConfig(
+export function computeAutoConfigPure(
   registry: StageRegistry,
   identityOpts: Record<string, unknown>,
 ): PipelineConfig {
@@ -97,6 +99,19 @@ export function computeAutoConfig(
     stages.push(makeStageSpec({ use: IDENTITY_STAGE, config: identityOpts }));
   }
   return makePipelineConfig({ pipeline: "auto", stages });
+}
+
+/**
+ * Guarded public entry: routes through the registered WASM planner backend when
+ * one is enabled, else runs the pure-TS core. `Pipeline.run()` calls this.
+ */
+export function computeAutoConfig(
+  registry: StageRegistry,
+  identityOpts: Record<string, unknown>,
+): PipelineConfig {
+  const b = getPipeWasmBackend();
+  if (b) return autoConfigViaWasm(registry, identityOpts, b);
+  return computeAutoConfigPure(registry, identityOpts);
 }
 
 /**

@@ -4,10 +4,10 @@
  * isFalsy and serializes to goldenpipe-core's exact JSON shapes. Does NOT run
  * at pipeline runtime. TS analogue of goldenpipe/core/_planner_json.py.
  */
-import { Resolver, WiringError, type PlannedStage } from "../engine/resolver.js";
-import { Router } from "../engine/router.js";
+import { resolvePure, WiringError, type PlannedStage } from "../engine/resolver.js";
+import { applyPure } from "../engine/router.js";
 import { isFalsy } from "../engine/runner.js";
-import { severityGate, piiRouter, rowCountGate } from "../decisions.js";
+import { severityGatePure, piiRouterPure, rowCountGatePure } from "../decisions.js";
 import {
   makePipeContext,
   makePipelineConfig,
@@ -19,7 +19,7 @@ import {
   type StageSpec,
 } from "../models.js";
 import type { StageRegistry } from "../engine/registry.js";
-import { computeAutoConfig } from "../pipeline.js";
+import { computeAutoConfigPure } from "../pipeline.js";
 
 interface StubStage {
   info: StageInfo;
@@ -72,7 +72,7 @@ export function resolveJsonPure(inputStr: string): string {
   for (const s of arg.stages) reg.add(s.key, info(s));
   const config = makePipelineConfig(arg.config as never);
   try {
-    const plan = Resolver.resolve(config, reg.asRegistry());
+    const plan = resolvePure(config, reg.asRegistry());
     return JSON.stringify({ ok: { stages: plan.stages.map(plannedToDict) } });
   } catch (e) {
     if (e instanceof WiringError) {
@@ -119,7 +119,7 @@ export function applyDecisionJsonPure(inputStr: string): string {
   const reg = new StubRegistry();
   for (const name of decision.insert) reg.add(name, { name, produces: [], consumes: [] });
   const ctx: PipeContext = makePipeContext();
-  const next = Router.apply(decision, remaining, ctx, reg.asRegistry());
+  const next = applyPure(decision, remaining, ctx, reg.asRegistry());
   const out: Record<string, unknown> = { remaining: next.map(plannedToDict) };
   const note = ctx.reasoning["_router"];
   if (note !== undefined) out.router_note = note;
@@ -127,9 +127,9 @@ export function applyDecisionJsonPure(inputStr: string): string {
 }
 
 const BUILTINS: Record<string, (ctx: PipeContext) => unknown> = {
-  severity_gate: severityGate,
-  pii_router: piiRouter,
-  row_count_gate: rowCountGate,
+  severity_gate: severityGatePure,
+  pii_router: piiRouterPure,
+  row_count_gate: rowCountGatePure,
 };
 
 export function evaluateBuiltinJsonPure(inputStr: string): string {
@@ -157,7 +157,7 @@ export function autoConfigJsonPure(inputStr: string): string {
   };
   const reg = new StubRegistry();
   for (const name of arg.available) reg.add(name, { name, produces: [], consumes: [] });
-  const cfg = computeAutoConfig(reg.asRegistry(), arg.identity_opts ?? {});
+  const cfg = computeAutoConfigPure(reg.asRegistry(), arg.identity_opts ?? {});
   return JSON.stringify({
     pipeline: cfg.pipeline,
     stages: (cfg.stages as StageSpec[]).map((s) => ({

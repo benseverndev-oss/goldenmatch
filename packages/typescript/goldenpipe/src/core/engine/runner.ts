@@ -13,6 +13,8 @@ import { StageStatus } from "../models.js";
 import type { StageRegistry } from "./registry.js";
 import type { ExecutionPlan } from "./resolver.js";
 import { Router } from "./router.js";
+import { getPipeWasmBackend } from "../wasm/backend.js";
+import { skipIfFalsyViaWasm } from "../wasm/plannerJson.js";
 
 export function isFalsy(value: unknown): boolean {
   if (value === null || value === undefined) return true;
@@ -36,7 +38,9 @@ export class Runner {
 
       if (planned.spec.skipIf) {
         const artifact = ctx.artifacts[planned.spec.skipIf];
-        if (isFalsy(artifact)) {
+        const b = getPipeWasmBackend();
+        const falsy = b ? skipIfFalsyViaWasm(artifact, b) : isFalsy(artifact);
+        if (falsy) {
           results[planned.name] = { status: StageStatus.SKIPPED };
           ctx.reasoning[planned.name] =
             `Skipped: artifact '${planned.spec.skipIf}' is missing/falsy`;

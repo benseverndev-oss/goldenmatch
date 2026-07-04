@@ -9,19 +9,20 @@ import type { Decision, PipeContext } from "../models.js";
 import { makeStageSpec } from "../models.js";
 import type { StageRegistry } from "./registry.js";
 import type { PlannedStage } from "./resolver.js";
+import { getPipeWasmBackend } from "../wasm/backend.js";
+import { applyDecisionViaWasm } from "../wasm/plannerJson.js";
 
-export const Router = {
-  /**
-   * Apply a Decision (skip / abort / insert) to the remaining stages and
-   * return the new remaining list. Records `decision.reason` in
-   * `ctx.reasoning._router`.
-   */
-  apply(
-    decision: Decision,
-    remaining: PlannedStage[],
-    ctx: PipeContext,
-    registry: StageRegistry,
-  ): PlannedStage[] {
+/**
+ * Pure-TS core of {@link Router.apply}. Guard-free so plannerJsonPure can call
+ * it without re-entering the WASM reroute (no recursion).
+ */
+export function applyPure(
+  decision: Decision,
+  remaining: PlannedStage[],
+  ctx: PipeContext,
+  registry: StageRegistry,
+): PlannedStage[] {
+  {
     if (decision.reason) {
       ctx.reasoning["_router"] = decision.reason;
     }
@@ -52,5 +53,26 @@ export const Router = {
     }
 
     return next;
+  }
+}
+
+export const Router = {
+  /**
+   * Apply a Decision (skip / abort / insert) to the remaining stages and
+   * return the new remaining list. Records `decision.reason` in
+   * `ctx.reasoning._router`.
+   *
+   * Routes through the registered WASM planner backend when enabled; otherwise
+   * runs the pure-TS core.
+   */
+  apply(
+    decision: Decision,
+    remaining: PlannedStage[],
+    ctx: PipeContext,
+    registry: StageRegistry,
+  ): PlannedStage[] {
+    const b = getPipeWasmBackend();
+    if (b) return applyDecisionViaWasm(decision, remaining, ctx, registry, b);
+    return applyPure(decision, remaining, ctx, registry);
   },
 };
