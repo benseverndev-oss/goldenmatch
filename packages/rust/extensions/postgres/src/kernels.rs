@@ -340,6 +340,45 @@ pub fn goldenmatch_record_fingerprint(record_json: String) -> String {
     }
 }
 
+/// 64-bit DCT perceptual image hash (pHash) of a decoded luma grid, computed
+/// **in pure Rust** via `goldenmatch-perceptual-core` — NOT through the embedded
+/// CPython bridge. `grid` is the row-major flattened grayscale grid and `ncols`
+/// its row width; the kernel resizes to 32x32 internally, so any rectangular
+/// grid works. The unsigned 64-bit hash is returned bit-reinterpreted as `int8`
+/// (Postgres has no unsigned 64-bit); compare two with
+/// `goldenmatch_perceptual_hamming`. Same value the Python `phash_image`, the
+/// native kernel, and the DuckDB `goldenmatch_perceptual_phash` UDF produce.
+///
+/// ```sql
+/// SELECT goldenmatch.goldenmatch_perceptual_phash(ARRAY[0,1,2,...]::double precision[], 8);
+/// ```
+#[pg_extern]
+pub fn goldenmatch_perceptual_phash(grid: Vec<f64>, ncols: i32) -> i64 {
+    let ncols = ncols.max(0) as usize;
+    if ncols == 0 || grid.is_empty() || grid.len() % ncols != 0 {
+        pgrx::error!(
+            "goldenmatch_perceptual_phash: grid length ({}) must be a positive multiple of ncols ({})",
+            grid.len(),
+            ncols
+        );
+    }
+    let rows: Vec<Vec<f64>> = grid.chunks_exact(ncols).map(<[f64]>::to_vec).collect();
+    goldenmatch_perceptual_core::phash_image(&rows) as i64
+}
+
+/// Hamming distance between two 64-bit pHashes — the near-duplicate blocking
+/// predicate (`WHERE goldenmatch_perceptual_hamming(a.phash, b.phash) <= 10`).
+/// Operates on the raw bit patterns, so it is correct on the `int8`-reinterpreted
+/// hashes `goldenmatch_perceptual_phash` returns. Native-direct.
+///
+/// ```sql
+/// SELECT goldenmatch.goldenmatch_perceptual_hamming(h1, h2);
+/// ```
+#[pg_extern]
+pub fn goldenmatch_perceptual_hamming(a: i64, b: i64) -> i32 {
+    goldenmatch_perceptual_core::hamming(a as u64, b as u64) as i32
+}
+
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
 mod tests {
@@ -353,6 +392,32 @@ mod tests {
         assert_eq!(
             got,
             "7381d5ba2dac5be0af49232a3209ab8d0dc2e4ed804a60ce533fdfe5254307e3"
+        );
+    }
+
+    /// Native-direct pHash of the 8x8 ramp grid [0,1,...,63]; assert it matches
+    /// the value pinned against the Python `phash_image` (shared with the DuckDB
+    /// surface). The `int8` is the u64 hash bit-reinterpreted.
+    #[pg_test]
+    fn perceptual_phash_matches_reference() {
+        let grid: Vec<f64> = (0..64).map(|i| i as f64).collect();
+        let h = crate::kernels::goldenmatch_perceptual_phash(grid, 8);
+        assert_eq!(h, -7026231021782789055i64);
+    }
+
+    /// Hamming over the reference hashes: ramp vs inverted-ramp differ in 48
+    /// bits; a hash against itself is 0. Correct on the int8 bit patterns.
+    #[pg_test]
+    fn perceptual_hamming_counts_bit_differences() {
+        let ramp = -7026231021782789055i64;
+        let inv = 7004135197453085675i64;
+        assert_eq!(
+            crate::kernels::goldenmatch_perceptual_hamming(ramp, inv),
+            48
+        );
+        assert_eq!(
+            crate::kernels::goldenmatch_perceptual_hamming(ramp, ramp),
+            0
         );
     }
 

@@ -393,6 +393,10 @@ jobs:
               # score-core is a path dep of the postgres crate (goldenmatch_score
               # native fast path), so a kernel change must rebuild + re-smoke.
               - 'packages/rust/extensions/score-core/**'
+              # perceptual-core is a path dep of the postgres crate
+              # (goldenmatch_perceptual_phash / _hamming), so a kernel change must
+              # rebuild + re-smoke this lane.
+              - 'packages/rust/extensions/perceptual-core/**'
               - 'packages/rust/extensions/Cargo.toml'
             rust_cores:
               # ANY Rust extension change re-validates EVERY committed TS wasm
@@ -2753,6 +2757,8 @@ jobs:
           # (installs default_version, now 0.9.0) and `ALTER EXTENSION ... UPDATE`
           # find them. The schema files are the canonical declaration of public
           # function signatures.
+          cp sql/goldenmatch_pg--0.12.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
+          cp sql/goldenmatch_pg--0.11.0--0.12.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
           cp sql/goldenmatch_pg--0.11.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
           cp sql/goldenmatch_pg--0.10.0--0.11.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
           cp sql/goldenmatch_pg--0.10.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
@@ -2873,6 +2879,22 @@ jobs:
               IF goldenmatch.goldenmatch_record_fingerprint('{"x":"1","y":"2"}')
                  <> goldenmatch.goldenmatch_record_fingerprint('{"y":"2","x":"1"}') THEN
                 RAISE EXCEPTION 'record_fingerprint not key-order independent';
+              END IF;
+
+              -- perceptual_phash: pHash of the 8x8 ramp grid [0..63] == the value
+              -- pinned against the Python phash_image (u64 reinterpreted as int8);
+              -- perceptual_hamming: ramp vs inverted-ramp differ in 48 bits, and a
+              -- hash against itself is 0. Native-direct over perceptual-core.
+              IF goldenmatch.goldenmatch_perceptual_phash(
+                   (SELECT array_agg(i::double precision ORDER BY i) FROM generate_series(0, 63) AS i),
+                   8) <> -7026231021782789055 THEN
+                RAISE EXCEPTION 'perceptual_phash: ramp grid expected -7026231021782789055, got %',
+                  goldenmatch.goldenmatch_perceptual_phash(
+                    (SELECT array_agg(i::double precision ORDER BY i) FROM generate_series(0, 63) AS i), 8);
+              END IF;
+              IF goldenmatch.goldenmatch_perceptual_hamming(-7026231021782789055, 7004135197453085675) <> 48
+                 OR goldenmatch.goldenmatch_perceptual_hamming(42, 42) <> 0 THEN
+                RAISE EXCEPTION 'perceptual_hamming: expected 48 (ramp vs inv) and 0 (self)';
               END IF;
 
               RAISE NOTICE 'graph + fingerprint SQL surface assertions passed';

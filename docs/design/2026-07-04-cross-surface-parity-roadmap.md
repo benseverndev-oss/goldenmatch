@@ -31,7 +31,7 @@ one of two camps:
 | graph (CC + pair-dedup) | ✅ | ✅ | ❌ | ✅ | ✅ | SQL-only |
 | fingerprint (record) | ✅ | ✅ | 🟡P3 | ✅ | ✅ | **full (pending P3)** |
 | embed (goldenembed) | ✅ | ✅ | ❌ | ✅ | ✅ | SQL-only (edge blocked) |
-| perceptual (pHash) | ✅ | ✅ | ✅ | ❌ | ❌ | edge-only |
+| perceptual (pHash) | ✅ | ✅ | ✅ | 🟡P4 | 🟡P4 | **full (pending P4)** |
 | autoconfig | ✅ | ✅ | ✅ | ❌ | ❌ | edge-only |
 | suggest (healer) | ✅ | ✅ | ✅ | ❌ | ❌ | edge-only |
 | goldencheck | ✅ | ✅ | ✅ | ❌ | ❌ | edge-only |
@@ -82,10 +82,16 @@ wasm-hostile deps.
   json` + a `recordFingerprint` reroute (JSON-primitive-safe records run the
   shared kernel; bigint/`Uint8Array` stay pure-TS) + a shared golden oracle. Done
   in the sketch/graph structural twin — `fixture_drift` auto-covers it. *(Done.)*
-- [ ] **P4 · perceptual → SQL (DuckDB + Postgres).** Image pHash
-  (`perceptual-core`). Easy (pure Rust, small), niche use (image/near-dup).
-  Shape: `goldenmatch_perceptual_hash(bytes) -> int8` + a distance helper.
-  *Effort: S.*
+- [x] **P4 · perceptual → SQL (DuckDB + Postgres).** Image pHash
+  (`perceptual-core`). The kernel takes a decoded luma **grid** (image decode is
+  a thin upstream concern, not in the core), so the SQL shape is
+  `goldenmatch_perceptual_phash(grid double[] flat, ncols int) -> int8` (the u64
+  hash bit-reinterpreted to signed i64 — DuckDB `BIGINT` == Postgres `int8`, so a
+  hash stored from either surface compares equal) + the load-bearing
+  `goldenmatch_perceptual_hamming(a int8, b int8) -> int` near-dup blocking
+  predicate. Postgres native-direct over `perceptual-core` (v0.11→0.12); DuckDB
+  a native-gated UDF over `goldenmatch.core.perceptual`. Same pinned pHash on all
+  four surfaces (Rust golden / pgrx smoke / DuckDB test / Python). *(Done.)*
 
 ### Tier 3 — opportunistic (lower marginal value on the target surface)
 

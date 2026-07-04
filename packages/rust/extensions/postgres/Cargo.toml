@@ -1,6 +1,6 @@
 [package]
 name = "goldenmatch_pg"
-version = "0.11.0"
+version = "0.12.0"
 edition = "2021"
 license = "MIT"
 authors = ["Ben Severn <benzsevern@gmail.com>"]
@@ -39,6 +39,9 @@ goldenmatch-sketch-core = { path = "../sketch-core" }
 # Pure-Rust string scorers (jaro-winkler / levenshtein / token-sort, no pyo3) —
 # goldenmatch_score fast-paths these native-direct instead of the CPython bridge.
 goldenmatch-score-core = { path = "../score-core" }
+# Pure-Rust DCT perceptual image hash (no pyo3) — goldenmatch_perceptual_phash /
+# _hamming call this native-direct, NOT through the embedded-CPython bridge.
+goldenmatch-perceptual-core = { path = "../perceptual-core" }
 serde_json = "1"
 
 [[bin]]
