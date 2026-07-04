@@ -4,6 +4,10 @@
  */
 
 import type { ClusterInfo, PairKey } from "./types.js";
+// Lean registry only (a getter + type-erased import) — zero wasm bytes in the
+// default bundle. Populated via `enableGraphWasm()` from the opt-in
+// `goldenmatch/core/graph-wasm` subpath.
+import { getGraphWasmBackend } from "./graphWasmBackend.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -313,14 +317,27 @@ export function buildClusters(
   const weakClusterThreshold = options?.weakClusterThreshold ?? 0.3;
   const autoSplit = options?.autoSplit ?? true;
 
-  // Build Union-Find from pairs
-  const uf = new UnionFind();
-  uf.addMany(allIds);
-  for (const [idA, idB] of pairs) {
-    uf.union(idA, idB);
+  // Connected components of the candidate-pair graph. Rust-source-of-truth
+  // path: the shared graph-core kernel (same as the Python native path + the
+  // DuckDB/Postgres native UDFs) when the wasm backend is enabled; the pure-TS
+  // union-find below stays the default fallback. The CC partition is unique, so
+  // both produce identical clusters (downstream sorts by min member either way).
+  let clusters: Set<number>[];
+  const graphBackend = getGraphWasmBackend();
+  if (graphBackend) {
+    const comps = graphBackend.connectedComponents(
+      pairs.map((p) => [p[0], p[1]] as [number, number]),
+      allIds,
+    );
+    clusters = comps.map((c) => new Set(c));
+  } else {
+    const uf = new UnionFind();
+    uf.addMany(allIds);
+    for (const [idA, idB] of pairs) {
+      uf.union(idA, idB);
+    }
+    clusters = uf.getClusters();
   }
-
-  const clusters = uf.getClusters();
 
   // Sort clusters by minimum member for deterministic IDs.
   // Use for-loop min — Math.min(...set) crashes on Sets with >65K elements.

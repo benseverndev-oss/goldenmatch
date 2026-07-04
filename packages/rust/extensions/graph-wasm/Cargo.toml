@@ -1,0 +1,31 @@
+# Standalone workspace: a thin wasm-bindgen wrapper over `graph-core`, so the
+# JS/TS clustering step consumes the SAME connected-components kernel as the
+# Python native path, the DuckDB / Postgres native UDFs, and the Rust core — one
+# source of truth for "scored pairs -> entity clusters". `default-features =
+# false` drops graph-core's optional `arrow` feature (unused here — only the
+# arrow-free `connected_components`), keeping the wasm build Arrow-free. Mirrors
+# the sibling `goldenhnsw-wasm` / `sketch-wasm` crates.
+[workspace]
+
+[package]
+name = "graph-wasm"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Ben Severn <benzsevern@gmail.com>"]
+description = "wasm-bindgen wrapper over graph-core (connected components) for the JS/TS port"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wasm-bindgen = "0.2"
+goldenmatch-graph-core = { path = "../graph-core", default-features = false }
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false

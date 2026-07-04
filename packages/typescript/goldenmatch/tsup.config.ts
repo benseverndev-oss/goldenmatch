@@ -23,6 +23,11 @@ export default defineConfig({
     // a separate subpath (`goldenmatch/core/sketch-wasm`), out of the default
     // core bundle.
     "core/sketchWasm": "src/core/sketchWasm.ts",
+    // Opt-in entry: the graph-core connected-components kernel compiled to wasm,
+    // so the clustering step runs the shared core. ~37 KB inlined base64 as a
+    // separate subpath (`goldenmatch/core/graph-wasm`), out of the default core
+    // bundle.
+    "core/graphWasm": "src/core/graphWasm.ts",
     "node/index": "src/node/index.ts",
     "node/mcp/server": "src/node/mcp/server.ts",
     cli: "src/cli.ts",

@@ -31,3 +31,6 @@ arrow = ["dep:arrow"]
 # Arrow columnar helpers for the DuckDB/DataFusion zero-copy path. No pyarrow/pyo3
 # here — callers pass `arrow::array::ArrayData`; the pyo3 bridge lives in `native`.
 arrow = { version = "59", default-features = false, optional = true }
+
+[dev-dependencies]
+serde_json = "1"
