@@ -9,7 +9,23 @@ from goldenpipe.models.config import PipelineConfig, StageSpec
 
 
 class WiringError(Exception):
-    """Raised when a stage's consumes can't be satisfied."""
+    """Raised when a stage's consumes can't be satisfied. Carries OPTIONAL structured
+    attrs (stage/missing/available) for the SP2 parity helper; the message is unchanged
+    and the single-positional-message raise still works (existing consumers read
+    ``str(e)``)."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        stage: str | None = None,
+        missing: str | None = None,
+        available: list[str] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.stage = stage
+        self.missing = missing
+        self.available = available
 
 
 @dataclass
@@ -60,7 +76,10 @@ class Resolver:
                 if dep not in available_artifacts:
                     raise WiringError(
                         f"Stage '{name}' consumes '{dep}' but no prior stage "
-                        f"produces it. Available: {sorted(available_artifacts)}"
+                        f"produces it. Available: {sorted(available_artifacts)}",
+                        stage=name,
+                        missing=dep,
+                        available=sorted(available_artifacts),
                     )
 
             plan.stages.append(PlannedStage(
