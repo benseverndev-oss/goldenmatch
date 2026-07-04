@@ -84,6 +84,24 @@
 {"transform": "ean_validate", "input": "40063813339a1", "expected": false}
 {"transform": "ean_validate", "input": "", "expected": false}
 {"transform": "ean_validate", "input": null, "expected": null}
+{"transform": "swift_validate", "input": "DEUTDEFF", "expected": true}
+{"transform": "swift_validate", "input": "DEUTDEFF500", "expected": true}
+{"transform": "swift_validate", "input": "NEDSZAJJXXX", "expected": true}
+{"transform": "swift_validate", "input": "deutdeff", "expected": true}
+{"transform": "swift_validate", "input": "deu tdeff", "expected": true}
+{"transform": "swift_validate", "input": "DEUTDEFF5", "expected": false}
+{"transform": "swift_validate", "input": "DEUT1EFF", "expected": false}
+{"transform": "swift_validate", "input": "1234DEFF", "expected": false}
+{"transform": "swift_validate", "input": "DEUTDE-FF", "expected": false}
+{"transform": "swift_validate", "input": "", "expected": false}
+{"transform": "swift_validate", "input": null, "expected": null}
+{"transform": "swift_format", "input": "deutdeff", "expected": "DEUTDEFF"}
+{"transform": "swift_format", "input": "DEUTDEFF500", "expected": "DEUTDEFF500"}
+{"transform": "swift_format", "input": "ne dsz ajj xxx", "expected": "NEDSZAJJXXX"}
+{"transform": "swift_format", "input": "DEUTDEFF5", "expected": null}
+{"transform": "swift_format", "input": "1234DEFF", "expected": null}
+{"transform": "swift_format", "input": "", "expected": null}
+{"transform": "swift_format", "input": null, "expected": null}
 {"transform": "vat_validate", "input": "DE136695976", "expected": true}
 {"transform": "vat_validate", "input": "de 136 695 976", "expected": true}
 {"transform": "vat_validate", "input": "IT00743110157", "expected": true}

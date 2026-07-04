@@ -3,7 +3,7 @@
 use crate::util::{map_str_to_bool, map_str_to_str};
 use arrow::array::ArrayData;
 use arrow::pyarrow::PyArrowType;
-use goldenflow_core::identifiers::{ean, iban, isbn, luhn, vat};
+use goldenflow_core::identifiers::{ean, iban, isbn, luhn, swift, vat};
 use pyo3::prelude::*;
 
 #[pyfunction]
@@ -76,6 +76,27 @@ pub fn ean_validate_arrow(
     Ok(PyArrowType(map_str_to_bool(py, array.0, |s| {
         Some(ean::ean_validate(s))
     })?))
+}
+
+#[pyfunction]
+pub fn swift_validate_arrow(
+    py: Python,
+    array: PyArrowType<ArrayData>,
+) -> PyResult<PyArrowType<ArrayData>> {
+    Ok(PyArrowType(map_str_to_bool(py, array.0, |s| {
+        Some(swift::swift_validate(s))
+    })?))
+}
+#[pyfunction]
+pub fn swift_format_arrow(
+    py: Python,
+    array: PyArrowType<ArrayData>,
+) -> PyResult<PyArrowType<ArrayData>> {
+    Ok(PyArrowType(map_str_to_str(
+        py,
+        array.0,
+        swift::swift_format,
+    )?))
 }
 
 #[pyfunction]

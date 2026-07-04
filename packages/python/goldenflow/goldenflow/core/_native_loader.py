@@ -76,6 +76,9 @@ _COMPONENT_SYMBOLS: dict[str, tuple[str, ...]] = {
     "isbn": ("isbn_validate_arrow",),
     # ean: EAN/UPC (GTIN mod-10) identifiers -- floor symbol only, region-free.
     "ean": ("ean_validate_arrow",),
+    # swift: SWIFT/BIC (ISO 9362, structural only -- no checksum) --
+    # floor symbol only, region-free.
+    "swift": ("swift_validate_arrow",),
     # vat: EU VAT identifiers (structural, all prefixes; checksum for DE/IT
     # only -- see the CHECKSUM COVERAGE note in transforms/identifiers.py) --
     # floor symbol only, region-free.

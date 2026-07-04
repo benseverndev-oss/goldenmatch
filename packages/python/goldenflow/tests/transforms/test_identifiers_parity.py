@@ -22,6 +22,8 @@ from goldenflow.transforms.identifiers import (
     iban_validate,
     isbn_normalize,
     isbn_validate,
+    swift_format,
+    swift_validate,
     vat_format,
     vat_validate,
 )
@@ -37,6 +39,8 @@ _TRANSFORMS = {
     "isbn_validate": isbn_validate,
     "isbn_normalize": isbn_normalize,
     "ean_validate": ean_validate,
+    "swift_validate": swift_validate,
+    "swift_format": swift_format,
     "vat_validate": vat_validate,
     "vat_format": vat_format,
 }
@@ -53,6 +57,8 @@ _NATIVE_FLOOR_SYMBOL = {
     "isbn_validate": "isbn_validate_arrow",
     "isbn_normalize": "isbn_validate_arrow",
     "ean_validate": "ean_validate_arrow",
+    "swift_validate": "swift_validate_arrow",
+    "swift_format": "swift_validate_arrow",
     "vat_validate": "vat_validate_arrow",
     "vat_format": "vat_validate_arrow",
 }

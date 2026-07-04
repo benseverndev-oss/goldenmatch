@@ -37,6 +37,8 @@ from goldenflow.transforms.identifiers import (  # noqa: E402
     _iban_validate_py,
     _isbn_normalize_py,
     _isbn_validate_py,
+    _swift_format_py,
+    _swift_validate_py,
     _vat_format_py,
     _vat_validate_py,
 )
@@ -147,6 +149,28 @@ _CASES: list[tuple[str, str | None]] = [
     ("ean_validate", "40063813339a1"),  # non-digit
     ("ean_validate", ""),  # empty
     ("ean_validate", None),  # null
+    # --- swift_validate: valid ---
+    ("swift_validate", "DEUTDEFF"),  # 8-char, valid
+    ("swift_validate", "DEUTDEFF500"),  # 11-char, valid
+    ("swift_validate", "NEDSZAJJXXX"),  # 11-char, valid, all-alpha branch
+    ("swift_validate", "deutdeff"),  # lowercase -> valid, normalized
+    ("swift_validate", "deu tdeff"),  # embedded space stripped -> valid
+    # --- swift_validate: invalid ---
+    ("swift_validate", "DEUTDEFF5"),  # 9 chars, bad length
+    ("swift_validate", "DEUT1EFF"),  # digit in institution code
+    ("swift_validate", "1234DEFF"),  # digits in institution code
+    ("swift_validate", "DEUTDE-FF"),  # hyphen not stripped -> bad length/charset
+    ("swift_validate", ""),  # empty
+    ("swift_validate", None),  # null
+    # --- swift_format: valid ---
+    ("swift_format", "deutdeff"),  # -> DEUTDEFF
+    ("swift_format", "DEUTDEFF500"),
+    ("swift_format", "ne dsz ajj xxx"),  # spaced -> NEDSZAJJXXX
+    # --- swift_format: invalid -> null ---
+    ("swift_format", "DEUTDEFF5"),
+    ("swift_format", "1234DEFF"),
+    ("swift_format", ""),
+    ("swift_format", None),
     # --- vat_validate: valid, checksummed (DE, IT) ---
     ("vat_validate", "DE136695976"),  # DE, checksum ok
     ("vat_validate", "de 136 695 976"),  # DE, lowercase + spaced
@@ -192,6 +216,8 @@ _PY_FN = {
     "isbn_validate": _isbn_validate_py,
     "isbn_normalize": _isbn_normalize_py,
     "ean_validate": _ean_validate_py,
+    "swift_validate": _swift_validate_py,
+    "swift_format": _swift_format_py,
     "vat_validate": _vat_validate_py,
     "vat_format": _vat_format_py,
 }
@@ -205,6 +231,8 @@ _NATIVE_ARROW_FN = {
     "isbn_validate": "isbn_validate_arrow",
     "isbn_normalize": "isbn_normalize_arrow",
     "ean_validate": "ean_validate_arrow",
+    "swift_validate": "swift_validate_arrow",
+    "swift_format": "swift_format_arrow",
     "vat_validate": "vat_validate_arrow",
     "vat_format": "vat_format_arrow",
 }

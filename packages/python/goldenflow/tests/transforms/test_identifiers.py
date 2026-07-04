@@ -13,6 +13,8 @@ from goldenflow.transforms.identifiers import (
     isbn_validate,
     ssn_format,
     ssn_mask,
+    swift_format,
+    swift_validate,
     vat_format,
     vat_validate,
 )
@@ -26,6 +28,8 @@ IDENTIFIER_TRANSFORM_NAMES = [
     "isbn_validate",
     "isbn_normalize",
     "ean_validate",
+    "swift_validate",
+    "swift_format",
     "vat_validate",
     "vat_format",
 ]
@@ -254,6 +258,49 @@ def test_ean_validate_valid_and_invalid():
     assert result[5] is False
     assert result[6] is False
     assert result[7] is None
+
+
+# --- SWIFT/BIC (ISO 9362, structural only) identifiers ----------------------
+
+
+def test_swift_validate_valid_and_invalid():
+    s = pl.Series(
+        "swift",
+        [
+            "DEUTDEFF",  # 8-char, valid
+            "DEUTDEFF500",  # 11-char, valid
+            "deutdeff",  # lowercase -> valid
+            "DEUTDEFF5",  # bad length
+            "DEUT1EFF",  # digit in institution
+            "",  # empty
+            None,  # null
+        ],
+    )
+    result = swift_validate(s)
+    assert result[0] is True
+    assert result[1] is True
+    assert result[2] is True
+    assert result[3] is False
+    assert result[4] is False
+    assert result[5] is False
+    assert result[6] is None
+
+
+def test_swift_format_normalizes_and_nulls_invalid():
+    s = pl.Series(
+        "swift",
+        [
+            "deutdeff",  # -> DEUTDEFF
+            "DEUTDEFF500",
+            "DEUTDEFF5",  # invalid -> null
+            None,
+        ],
+    )
+    result = swift_format(s)
+    assert result[0] == "DEUTDEFF"
+    assert result[1] == "DEUTDEFF500"
+    assert result[2] is None
+    assert result[3] is None
 
 
 # --- EU VAT identifiers (bounded scope: structural for all, checksum DE/IT) --

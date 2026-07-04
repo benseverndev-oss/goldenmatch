@@ -5,6 +5,7 @@ pub mod ean;
 pub mod iban;
 pub mod isbn;
 pub mod luhn;
+pub mod swift;
 pub mod vat;
 
 /// Remove ASCII spaces, '-' and '.' — the separators identifiers tolerate.
