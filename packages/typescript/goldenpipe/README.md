@@ -171,6 +171,30 @@ uv run --project packages/python/goldenpipe python \
   packages/python/goldenpipe/scripts/emit_ts_parity_fixtures.py
 ```
 
+### Planner: one Rust source of truth (opt-in WASM)
+
+The pipeline **planner** — stage ordering + wiring validation, decision routing,
+auto-config, and the `skip_if` predicate — is extracted into the pyo3-free Rust
+`goldenpipe-core` crate, the single reference every surface computes identically.
+Pure-TS is a proven-conforming fallback and the default: a CI parity gate replays
+the same golden vectors through pure-TS **and** the WASM kernel, both asserted
+byte-identical to `goldenpipe-core`, so the TS and Python planners cannot drift.
+
+The WASM path is opt-in — pure-TS needs no build step and stays the edge-safe
+default:
+
+```ts
+import { enableWasm } from "goldenpipe/core";
+
+await enableWasm(); // planner now routes through goldenpipe-core (wasm); pure-TS otherwise
+```
+
+`enableWasm()` is async and idempotent; on failure pure-TS stays active (pass
+`{ require: true }` to throw instead). Only the pure *planner* is served from Rust
+— stage execution, IO, and adapters stay a per-language host (orchestration is
+boundary-bound, so there is no compute win to move it). This does not change the
+runtime-artifact skew noted above; it locks the *planning* decisions.
+
 ## License
 
 MIT
