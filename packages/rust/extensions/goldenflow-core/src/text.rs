@@ -40,6 +40,231 @@ pub fn collapse_whitespace(s: &str) -> String {
     out
 }
 
+// ---------------------------------------------------------------------------
+// Wave D text-1: mechanical / ASCII-bound kernels. Each is the reference
+// implementation; the Python (`goldenflow/transforms/text.py`) and TS
+// (`transforms/text.ts`) fallbacks reproduce these bytes exactly. Ported
+// one-for-one from the polars transforms; NO regex dep (JS/Py/Rust regex
+// engines differ on `\s`/`\d`/greedy). `char::is_whitespace` == polars `\s`
+// (proven in tests/text_golden.rs), so the whitespace-based kernels are exact;
+// `\d` is bounded to ASCII digits (documented boundary, reference-mode).
+// ---------------------------------------------------------------------------
+
+/// Replace smart/curly quotes with straight ASCII quotes. Byte-identical to the
+/// chained `str.replace_all` in `text.py::normalize_quotes` (left/right double
+/// + double-prime -> `"`; left/right single + prime -> `'`).
+pub fn normalize_quotes(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\u{201c}' | '\u{201d}' | '\u{2033}' => out.push('"'),
+            '\u{2018}' | '\u{2019}' | '\u{2032}' => out.push('\''),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Normalize `\r\n` and lone `\r` to `\n`. Byte-identical to
+/// `text.py::normalize_line_endings` (replace `\r\n` first, then any `\r`).
+pub fn normalize_line_endings(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\r' {
+            if chars.peek() == Some(&'\n') {
+                chars.next();
+            }
+            out.push('\n');
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Truncate to the first `n` characters (polars `str.slice(0, n)` is
+/// character-based). Byte-identical to `text.py::truncate`.
+pub fn truncate(s: &str, n: usize) -> String {
+    s.chars().take(n).collect()
+}
+
+/// Left-pad to `width` characters with `pad` (polars `str.pad_start`); a string
+/// already at/over `width` is unchanged. Byte-identical to `text.py::pad_left`.
+pub fn pad_left(s: &str, width: usize, pad: char) -> String {
+    let len = s.chars().count();
+    if len >= width {
+        return s.to_string();
+    }
+    let mut out = String::with_capacity(width);
+    for _ in 0..(width - len) {
+        out.push(pad);
+    }
+    out.push_str(s);
+    out
+}
+
+/// Right-pad to `width` characters with `pad` (polars `str.pad_end`); a string
+/// already at/over `width` is unchanged. Byte-identical to `text.py::pad_right`.
+pub fn pad_right(s: &str, width: usize, pad: char) -> String {
+    let len = s.chars().count();
+    if len >= width {
+        return s.to_string();
+    }
+    let mut out = String::from(s);
+    for _ in 0..(width - len) {
+        out.push(pad);
+    }
+    out
+}
+
+/// Strip HTML tags: remove each `<...>` span with at least one char between the
+/// angle brackets (regex `<[^>]+>`, minimal to the first `>`). `<>` and an
+/// unclosed `<` are left intact. Byte-identical to `text.py::remove_html_tags`.
+pub fn remove_html_tags(s: &str) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    let n = chars.len();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < n {
+        if chars[i] == '<' {
+            let mut j = i + 1;
+            while j < n && chars[j] != '>' {
+                j += 1;
+            }
+            // matched `<[^>]+>`: at least one non-`>` char (j > i+1) then a `>`.
+            if j < n && j > i + 1 {
+                i = j + 1;
+                continue;
+            }
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
+}
+
+/// `"http://"` (7 chars) or `"https://"` (8 chars) at `chars[i..]`; returns the
+/// index just past the `://`. `https` is tried first (regex `s?` is greedy).
+fn match_url_scheme(chars: &[char], i: usize) -> Option<usize> {
+    const HTTP: [char; 7] = ['h', 't', 't', 'p', ':', '/', '/'];
+    const HTTPS: [char; 8] = ['h', 't', 't', 'p', 's', ':', '/', '/'];
+    if chars[i..].starts_with(&HTTPS) {
+        Some(i + HTTPS.len())
+    } else if chars[i..].starts_with(&HTTP) {
+        Some(i + HTTP.len())
+    } else {
+        None
+    }
+}
+
+/// Strip URLs: remove each `https?://` followed by one-or-more non-whitespace
+/// chars (regex `https?://\S+`). `\S` = non-`is_whitespace` (== polars `\s`
+/// complement). Byte-identical to `text.py::remove_urls`.
+pub fn remove_urls(s: &str) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    let n = chars.len();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < n {
+        if let Some(after) = match_url_scheme(&chars, i) {
+            let mut j = after;
+            while j < n && !chars[j].is_whitespace() {
+                j += 1;
+            }
+            if j > after {
+                // scheme + `\S+` (>=1 non-ws char) -> drop the whole URL.
+                i = j;
+                continue;
+            }
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
+}
+
+/// Remove ASCII digit characters. The old polars `\d` was Unicode-aware; this
+/// kernel is bounded to ASCII `0-9` (documented reference-mode boundary --
+/// exotic Unicode digits are out of the bounded set). Byte-identical to
+/// `text.py::remove_digits`.
+pub fn remove_digits(s: &str) -> String {
+    s.chars().filter(|c| !c.is_ascii_digit()).collect()
+}
+
+/// Remove punctuation: keep ASCII alphanumerics and whitespace, drop everything
+/// else (regex `[^a-zA-Z0-9\s]` -> ""). `\s` == `is_whitespace`; non-ASCII
+/// letters are dropped (as in the old polars behavior). Byte-identical to
+/// `text.py::remove_punctuation`.
+pub fn remove_punctuation(s: &str) -> String {
+    s.chars()
+        .filter(|c| c.is_ascii_alphanumeric() || c.is_whitespace())
+        .collect()
+}
+
+/// Extract all number runs (regex `\d+\.?\d*`: one-or-more digits, an optional
+/// dot, zero-or-more digits) joined by single spaces. ASCII digits only
+/// (documented boundary). Byte-identical to `text.py::extract_numbers`.
+pub fn extract_numbers(s: &str) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    let n = chars.len();
+    let mut nums: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < n {
+        if chars[i].is_ascii_digit() {
+            let start = i;
+            while i < n && chars[i].is_ascii_digit() {
+                i += 1; // \d+
+            }
+            if i < n && chars[i] == '.' {
+                i += 1; // greedy \.?
+                while i < n && chars[i].is_ascii_digit() {
+                    i += 1; // \d*
+                }
+            }
+            nums.push(chars[start..i].iter().collect());
+        } else {
+            i += 1;
+        }
+    }
+    nums.join(" ")
+}
+
+/// True if `c` is in the emoji codepoint set (the exact ranges of the Python
+/// `_EMOJI_PATTERN`). Explicit ranges -> portable across surfaces, NO
+/// Unicode-DB dependency (mirrors the `name_script` range approach).
+///
+/// The source pattern's ranges OVERLAP (the wide `0x24C2..=0x1F251` "enclosed
+/// characters" range subsumes the later dingbats / misc-symbols / flags /
+/// variation-selector arms), so several arms are `unreachable` -- harmless
+/// since the union is identical, but a hard error under `-D warnings`. We keep
+/// the arms 1:1 with the Python `_EMOJI_PATTERN` (readable, auditable against
+/// the source) and allow the lint rather than silently pruning them.
+#[allow(unreachable_patterns)]
+fn is_emoji(c: char) -> bool {
+    matches!(c as u32,
+        0x1F600..=0x1F64F   // emoticons
+        | 0x1F300..=0x1F5FF // symbols & pictographs
+        | 0x1F680..=0x1F6FF // transport & map
+        | 0x1F1E0..=0x1F1FF // flags
+        | 0x2702..=0x27B0   // dingbats
+        | 0x24C2..=0x1F251  // enclosed characters (wide range, per the source)
+        | 0x1F900..=0x1F9FF // supplemental symbols
+        | 0x1FA00..=0x1FA6F // chess symbols
+        | 0x1FA70..=0x1FAFF // symbols extended-A
+        | 0x2600..=0x26FF   // misc symbols
+        | 0x200D            // zero-width joiner
+        | 0xFE0F            // variation selector
+    )
+}
+
+/// Remove emoji characters (regex `[<emoji ranges>]+` -> ""). Removing each
+/// matching char is equivalent to removing maximal runs. Byte-identical to
+/// `text.py::remove_emojis`.
+pub fn remove_emojis(s: &str) -> String {
+    s.chars().filter(|c| !is_emoji(*c)).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -65,5 +290,90 @@ mod tests {
             collapse_whitespace("\u{200b}\u{200b}zwrun"),
             "\u{200b}\u{200b}zwrun"
         );
+    }
+
+    #[test]
+    fn normalize_quotes_cases() {
+        assert_eq!(normalize_quotes("\u{201c}hi\u{201d}"), "\"hi\"");
+        assert_eq!(normalize_quotes("it\u{2019}s"), "it's");
+        assert_eq!(normalize_quotes("\u{2018}a\u{2019}"), "'a'");
+        assert_eq!(normalize_quotes("5\u{2033} x 3\u{2032}"), "5\" x 3'");
+        assert_eq!(normalize_quotes("plain"), "plain");
+    }
+
+    #[test]
+    fn normalize_line_endings_cases() {
+        assert_eq!(normalize_line_endings("a\r\nb"), "a\nb");
+        assert_eq!(normalize_line_endings("a\rb"), "a\nb");
+        assert_eq!(normalize_line_endings("a\nb"), "a\nb");
+        assert_eq!(normalize_line_endings("a\r\r b"), "a\n\n b");
+        assert_eq!(normalize_line_endings("a\r\n\rb"), "a\n\nb");
+    }
+
+    #[test]
+    fn truncate_cases() {
+        assert_eq!(truncate("hello world", 5), "hello");
+        assert_eq!(truncate("hi", 5), "hi");
+        assert_eq!(truncate("", 3), "");
+        assert_eq!(truncate("caf\u{e9}s", 4), "caf\u{e9}"); // char-based, not byte
+    }
+
+    #[test]
+    fn pad_cases() {
+        assert_eq!(pad_left("42", 5, '0'), "00042");
+        assert_eq!(pad_left("already", 3, '0'), "already");
+        assert_eq!(pad_right("42", 5, ' '), "42   ");
+        assert_eq!(pad_right("already", 3, ' '), "already");
+    }
+
+    #[test]
+    fn remove_html_tags_cases() {
+        assert_eq!(remove_html_tags("<b>hi</b>"), "hi");
+        assert_eq!(remove_html_tags("a <a href=\"x\">link</a> b"), "a link b");
+        assert_eq!(remove_html_tags("<>"), "<>"); // empty tag not matched
+        assert_eq!(remove_html_tags("2 < 3"), "2 < 3"); // no closing '>'
+        assert_eq!(remove_html_tags("<unclosed"), "<unclosed");
+    }
+
+    #[test]
+    fn remove_urls_cases() {
+        assert_eq!(remove_urls("see http://x.com/y now"), "see  now");
+        assert_eq!(remove_urls("https://a.com?q=1 end"), " end");
+        assert_eq!(remove_urls("no url here"), "no url here");
+        // bare scheme with no following non-ws char is not a match
+        assert_eq!(remove_urls("http:// x"), "http:// x");
+    }
+
+    #[test]
+    fn remove_digits_cases() {
+        assert_eq!(remove_digits("abc123def"), "abcdef");
+        assert_eq!(remove_digits("no digits"), "no digits");
+        assert_eq!(remove_digits("42"), "");
+    }
+
+    #[test]
+    fn remove_punctuation_cases() {
+        assert_eq!(remove_punctuation("hello, world!"), "hello world");
+        assert_eq!(remove_punctuation("a-b_c.d"), "abcd");
+        assert_eq!(remove_punctuation("keep 123 ok"), "keep 123 ok");
+        // non-ASCII letters are dropped (matches the old [^a-zA-Z0-9\s])
+        assert_eq!(remove_punctuation("caf\u{e9}"), "caf");
+    }
+
+    #[test]
+    fn extract_numbers_cases() {
+        assert_eq!(extract_numbers("abc12.5def7"), "12.5 7");
+        assert_eq!(extract_numbers("price $9.99 x2"), "9.99 2");
+        assert_eq!(extract_numbers("no numbers"), "");
+        assert_eq!(extract_numbers("12."), "12."); // greedy dot, empty \d*
+        assert_eq!(extract_numbers("3.14.159"), "3.14 159");
+    }
+
+    #[test]
+    fn remove_emojis_cases() {
+        assert_eq!(remove_emojis("hi \u{1f600} there"), "hi  there");
+        assert_eq!(remove_emojis("\u{1f680}\u{1f600}rocket"), "rocket");
+        assert_eq!(remove_emojis("no emoji"), "no emoji");
+        assert_eq!(remove_emojis("caf\u{e9}"), "caf\u{e9}"); // accented letter kept
     }
 }

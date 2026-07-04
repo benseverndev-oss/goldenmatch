@@ -18,6 +18,7 @@ mod identifiers;
 mod names;
 mod numeric;
 mod phone;
+mod text;
 mod url;
 mod util;
 
@@ -64,6 +65,19 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(address::country_standardize_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(address::unit_normalize_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(address::split_address_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(text::strip_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(text::collapse_whitespace_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(text::normalize_quotes_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(text::normalize_line_endings_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(text::remove_html_tags_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(text::remove_urls_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(text::remove_digits_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(text::remove_punctuation_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(text::remove_emojis_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(text::extract_numbers_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(text::truncate_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(text::pad_left_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(text::pad_right_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(url::url_normalize_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(url::url_extract_domain_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(numeric::currency_strip_arrow, m)?)?;

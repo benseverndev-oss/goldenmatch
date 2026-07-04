@@ -287,6 +287,26 @@ package. Loader discover order in `goldenflow/core/_native_loader.py`:
   hand-rolling is the parity guarantee (email.rs precedent). US-scoped; i18n
   addresses stay Wave C (deferred). The 7 scalar transforms live in the shared
   corpus; `split_address` gets pinned-vector `test_address_kernels.py`.
+- **Text family, part 1 migrated to owned kernels (Wave D text-1).** 13
+  mechanical/ASCII-bound text transforms now dispatch native-first through
+  goldenflow-core (`strip`/`collapse_whitespace` reuse the SQL de-bridge
+  kernels; `normalize_quotes`/`normalize_line_endings`/`remove_html_tags`/
+  `remove_urls`/`remove_digits`/`remove_punctuation`/`remove_emojis`/
+  `extract_numbers` new; `truncate`/`pad_left`/`pad_right` parameterized), all
+  wired via the single `"text"` `_native_loader` component (floor symbol
+  `strip_arrow`). `strip`/`collapse_whitespace` stay `auto_apply=True` (plus
+  `normalize_quotes`); the rest `auto_apply=False`. All `mode="expr"` via
+  `map_batches`. **NO regex dep** in the kernels (html-tag/url/number scans +
+  char-class filters hand-rolled). `char::is_whitespace` == polars `\s` (proven
+  in `text_golden.rs`), so the whitespace kernels are EXACT; `\d` is bounded to
+  ASCII `[0-9]` and `remove_emojis` uses explicit codepoint ranges (documented
+  boundaries). The parameterized `truncate`/`pad_left`/`pad_right` take
+  per-column-constant params through the arrow shim (`#[pyo3(signature)]`
+  defaults, mirroring `round`/`clamp`); their non-default-param behavior lives
+  in pinned-vector `test_text_kernels.py`, the 10 scalar transforms in the
+  shared corpus. **text-2 (deferred):** `lowercase`/`uppercase`/`title_case`/
+  `normalize_unicode`/`fix_mojibake` (Unicode-casing/NFKD parity, explicit-map
+  bounded like `name_transliterate`).
 - **Byte-parity harness (cross-surface oracle = goldenflow-core).**
   `packages/python/goldenflow/tests/parity/identifiers_corpus.jsonl` (mirrored
   byte-identical into `packages/typescript/goldenflow/tests/parity/`) is the

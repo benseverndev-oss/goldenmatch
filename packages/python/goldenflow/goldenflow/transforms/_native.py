@@ -558,6 +558,110 @@ def split_address_native() -> (
     return run
 
 
+def _text_kernel_runner(attr: str) -> Callable[[pl.Series], pl.Series] | None:
+    """Build a whole-series runner for a scalar text kernel function ``attr``
+    (strip/collapse_whitespace/normalize_quotes/normalize_line_endings/
+    remove_html_tags/remove_urls/remove_digits/remove_punctuation/
+    remove_emojis/extract_numbers) if native ``text`` is enabled and
+    importable; else ``None``. Single string array in, one out."""
+    if not native_enabled("text"):
+        return None
+    nm = native_module()
+    if nm is None or not hasattr(nm, attr):
+        return None
+    try:
+        import pyarrow  # noqa: F401  (zero-copy bridge)
+    except ImportError:
+        return None
+    func = getattr(nm, attr)
+
+    def run(s: pl.Series) -> pl.Series:
+        return pl.from_arrow(func(_as_str_series(s).to_arrow()))
+
+    return run
+
+
+def strip_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _text_kernel_runner("strip_arrow")
+
+
+def collapse_whitespace_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _text_kernel_runner("collapse_whitespace_arrow")
+
+
+def normalize_quotes_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _text_kernel_runner("normalize_quotes_arrow")
+
+
+def normalize_line_endings_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _text_kernel_runner("normalize_line_endings_arrow")
+
+
+def remove_html_tags_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _text_kernel_runner("remove_html_tags_arrow")
+
+
+def remove_urls_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _text_kernel_runner("remove_urls_arrow")
+
+
+def remove_digits_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _text_kernel_runner("remove_digits_arrow")
+
+
+def remove_punctuation_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _text_kernel_runner("remove_punctuation_arrow")
+
+
+def remove_emojis_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _text_kernel_runner("remove_emojis_arrow")
+
+
+def extract_numbers_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _text_kernel_runner("extract_numbers_arrow")
+
+
+def _text_param_kernel_runner(
+    attr: str, **kwargs: int | str
+) -> Callable[[pl.Series], pl.Series] | None:
+    """Build a whole-series runner for a PARAMETERIZED text kernel function
+    ``attr`` (truncate/pad_left/pad_right) if native ``text`` is enabled and
+    importable; else ``None``. The per-column-constant params (``n`` for
+    truncate, ``width``/``pad`` for the pads) are forwarded as kwargs to the
+    kernel call, mirroring the numeric ``round``/``clamp`` runners."""
+    if not native_enabled("text"):
+        return None
+    nm = native_module()
+    if nm is None or not hasattr(nm, attr):
+        return None
+    try:
+        import pyarrow  # noqa: F401  (zero-copy bridge)
+    except ImportError:
+        return None
+    func = getattr(nm, attr)
+
+    def run(s: pl.Series) -> pl.Series:
+        return pl.from_arrow(func(_as_str_series(s).to_arrow(), **kwargs))
+
+    return run
+
+
+def truncate_native(n: int = 255) -> Callable[[pl.Series], pl.Series] | None:
+    return _text_param_kernel_runner("truncate_arrow", n=n)
+
+
+def pad_left_native(
+    width: int = 10, pad: str = "0"
+) -> Callable[[pl.Series], pl.Series] | None:
+    return _text_param_kernel_runner("pad_left_arrow", width=width, pad=pad)
+
+
+def pad_right_native(
+    width: int = 10, pad: str = " "
+) -> Callable[[pl.Series], pl.Series] | None:
+    return _text_param_kernel_runner("pad_right_arrow", width=width, pad=pad)
+
+
 def _email_kernel_runner(attr: str) -> Callable[[pl.Series], pl.Series] | None:
     """Build a whole-series runner for email kernel function ``attr`` if
     native ``email`` is enabled and the dependencies are importable; else

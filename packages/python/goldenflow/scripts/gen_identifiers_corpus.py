@@ -81,6 +81,18 @@ from goldenflow.transforms.numeric import (  # noqa: E402
     _scientific_to_decimal_py,
     _to_integer_py,
 )
+from goldenflow.transforms.text import (  # noqa: E402
+    _collapse_whitespace_py,
+    _extract_numbers_py,
+    _normalize_line_endings_py,
+    _normalize_quotes_py,
+    _remove_digits_py,
+    _remove_emojis_py,
+    _remove_html_tags_py,
+    _remove_punctuation_py,
+    _remove_urls_py,
+    _strip_py,
+)
 from goldenflow.transforms.url import (  # noqa: E402
     _url_extract_domain_py,
     _url_normalize_py,
@@ -471,6 +483,71 @@ _CASES: list[tuple[str, str | None]] = [
     ("unit_normalize", "  Building C  "),  # no designator -> trimmed
     ("unit_normalize", ""),  # empty
     ("unit_normalize", None),  # null
+    # --- strip (auto_apply; leading/trailing whitespace) ---
+    ("strip", "  hello  "),
+    ("strip", "a    b   c"),  # internal untouched
+    ("strip", " nbsp "),  # NBSP is whitespace
+    ("strip", "nochange"),
+    ("strip", ""),
+    ("strip", None),
+    # --- collapse_whitespace (auto_apply; runs of 2+ -> single space) ---
+    ("collapse_whitespace", "a    b   c"),
+    ("collapse_whitespace", "a\tb"),  # lone ws unchanged
+    ("collapse_whitespace", "a\t\tb"),  # 2-run -> space
+    ("collapse_whitespace", "  lead"),  # leading run
+    ("collapse_whitespace", ""),
+    ("collapse_whitespace", None),
+    # --- normalize_quotes (auto_apply; smart quotes -> ASCII) ---
+    ("normalize_quotes", "“hi”"),
+    ("normalize_quotes", "it’s"),
+    ("normalize_quotes", "‘a’"),
+    ("normalize_quotes", "5″ x 3′"),
+    ("normalize_quotes", "plain"),
+    ("normalize_quotes", None),
+    # --- normalize_line_endings ---
+    ("normalize_line_endings", "a\r\nb"),
+    ("normalize_line_endings", "a\rb"),
+    ("normalize_line_endings", "a\nb"),
+    ("normalize_line_endings", "a\r\r b"),
+    ("normalize_line_endings", "a\r\n\rb"),
+    ("normalize_line_endings", None),
+    # --- remove_html_tags ---
+    ("remove_html_tags", "<b>hi</b>"),
+    ("remove_html_tags", 'a <a href="x">link</a> b'),
+    ("remove_html_tags", "<>"),  # empty tag not matched
+    ("remove_html_tags", "2 < 3"),  # no closing '>'
+    ("remove_html_tags", "<unclosed"),
+    ("remove_html_tags", None),
+    # --- remove_urls ---
+    ("remove_urls", "see http://x.com/y now"),
+    ("remove_urls", "https://a.com?q=1 end"),
+    ("remove_urls", "no url here"),
+    ("remove_urls", "http:// x"),  # bare scheme, no non-ws -> no match
+    ("remove_urls", None),
+    # --- remove_digits (ASCII-bounded) ---
+    ("remove_digits", "abc123def"),
+    ("remove_digits", "no digits"),
+    ("remove_digits", "42"),
+    ("remove_digits", None),
+    # --- remove_punctuation (keep ASCII-alnum + whitespace) ---
+    ("remove_punctuation", "hello, world!"),
+    ("remove_punctuation", "a-b_c.d"),
+    ("remove_punctuation", "keep 123 ok"),
+    ("remove_punctuation", "café"),  # non-ASCII letter dropped
+    ("remove_punctuation", None),
+    # --- remove_emojis (explicit codepoint ranges) ---
+    ("remove_emojis", "hi \U0001f600 there"),
+    ("remove_emojis", "\U0001f680\U0001f600rocket"),
+    ("remove_emojis", "no emoji"),
+    ("remove_emojis", "café"),  # accented letter kept
+    ("remove_emojis", None),
+    # --- extract_numbers (ASCII-bounded) ---
+    ("extract_numbers", "abc12.5def7"),
+    ("extract_numbers", "price $9.99 x2"),
+    ("extract_numbers", "no numbers"),
+    ("extract_numbers", "12."),  # greedy dot, empty trailing
+    ("extract_numbers", "3.14.159"),
+    ("extract_numbers", None),
     # --- currency_strip (string->float; VALUE parity, not repr) ---
     ("currency_strip", "$1,234.56"),  # strip $ and comma
     ("currency_strip", "-$42.00"),  # negative, dollar sign
@@ -598,6 +675,16 @@ _PY_FN = {
     "zip_normalize": _zip_normalize_py,
     "country_standardize": _country_standardize_py,
     "unit_normalize": _unit_normalize_py,
+    "strip": _strip_py,
+    "collapse_whitespace": _collapse_whitespace_py,
+    "normalize_quotes": _normalize_quotes_py,
+    "normalize_line_endings": _normalize_line_endings_py,
+    "remove_html_tags": _remove_html_tags_py,
+    "remove_urls": _remove_urls_py,
+    "remove_digits": _remove_digits_py,
+    "remove_punctuation": _remove_punctuation_py,
+    "remove_emojis": _remove_emojis_py,
+    "extract_numbers": _extract_numbers_py,
     "currency_strip": _currency_strip_py,
     "percentage_normalize": _percentage_normalize_py,
     "to_integer": _to_integer_py,
@@ -644,6 +731,16 @@ _NATIVE_ARROW_FN = {
     "zip_normalize": "zip_normalize_arrow",
     "country_standardize": "country_standardize_arrow",
     "unit_normalize": "unit_normalize_arrow",
+    "strip": "strip_arrow",
+    "collapse_whitespace": "collapse_whitespace_arrow",
+    "normalize_quotes": "normalize_quotes_arrow",
+    "normalize_line_endings": "normalize_line_endings_arrow",
+    "remove_html_tags": "remove_html_tags_arrow",
+    "remove_urls": "remove_urls_arrow",
+    "remove_digits": "remove_digits_arrow",
+    "remove_punctuation": "remove_punctuation_arrow",
+    "remove_emojis": "remove_emojis_arrow",
+    "extract_numbers": "extract_numbers_arrow",
     "currency_strip": "currency_strip_arrow",
     "percentage_normalize": "percentage_normalize_arrow",
     "to_integer": "to_integer_arrow",

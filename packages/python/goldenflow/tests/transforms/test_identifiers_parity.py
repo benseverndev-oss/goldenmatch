@@ -82,6 +82,36 @@ from goldenflow.transforms.numeric import (
     comma_decimal,
     scientific_to_decimal,
 )
+from goldenflow.transforms.text import (
+    _collapse_whitespace_series as collapse_whitespace,
+)
+from goldenflow.transforms.text import (
+    _extract_numbers_series as extract_numbers,
+)
+from goldenflow.transforms.text import (
+    _normalize_line_endings_series as normalize_line_endings,
+)
+from goldenflow.transforms.text import (
+    _normalize_quotes_series as normalize_quotes,
+)
+from goldenflow.transforms.text import (
+    _remove_digits_series as remove_digits,
+)
+from goldenflow.transforms.text import (
+    _remove_emojis_series as remove_emojis,
+)
+from goldenflow.transforms.text import (
+    _remove_html_tags_series as remove_html_tags,
+)
+from goldenflow.transforms.text import (
+    _remove_punctuation_series as remove_punctuation,
+)
+from goldenflow.transforms.text import (
+    _remove_urls_series as remove_urls,
+)
+from goldenflow.transforms.text import (
+    _strip_series as strip,
+)
 from goldenflow.transforms.url import url_extract_domain, url_normalize
 
 _CORPUS_PATH = Path(__file__).parent.parent / "parity" / "identifiers_corpus.jsonl"
@@ -157,6 +187,16 @@ _TRANSFORMS = {
     "zip_normalize": zip_normalize,
     "country_standardize": country_standardize,
     "unit_normalize": unit_normalize,
+    "strip": strip,
+    "collapse_whitespace": collapse_whitespace,
+    "normalize_quotes": normalize_quotes,
+    "normalize_line_endings": normalize_line_endings,
+    "remove_html_tags": remove_html_tags,
+    "remove_urls": remove_urls,
+    "remove_digits": remove_digits,
+    "remove_punctuation": remove_punctuation,
+    "remove_emojis": remove_emojis,
+    "extract_numbers": extract_numbers,
     "currency_strip": currency_strip,
     "percentage_normalize": percentage_normalize,
     "to_integer": to_integer,
@@ -214,6 +254,18 @@ _NATIVE_FLOOR_SYMBOL = {
     "zip_normalize": "address_standardize_arrow",
     "country_standardize": "address_standardize_arrow",
     "unit_normalize": "address_standardize_arrow",
+    # text: the mechanical text family wired via the single "text" component
+    # (floor symbol strip_arrow), locale-free (ASCII-bounded / explicit ranges).
+    "strip": "strip_arrow",
+    "collapse_whitespace": "strip_arrow",
+    "normalize_quotes": "strip_arrow",
+    "normalize_line_endings": "strip_arrow",
+    "remove_html_tags": "strip_arrow",
+    "remove_urls": "strip_arrow",
+    "remove_digits": "strip_arrow",
+    "remove_punctuation": "strip_arrow",
+    "remove_emojis": "strip_arrow",
+    "extract_numbers": "strip_arrow",
     # numeric: all 5 string-parser transforms are wired via the single
     # "numeric" component (floor symbol currency_strip_arrow), region-free/
     # locale-free.

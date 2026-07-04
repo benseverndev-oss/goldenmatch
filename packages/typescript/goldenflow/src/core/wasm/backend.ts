@@ -10,9 +10,12 @@
  * (boolean_normalize/gender_standardize/null_standardize/
  * category_normalize_key), and the address transforms (address_standardize/
  * address_expand/state_abbreviate/state_expand/zip_normalize/
- * country_standardize/unit_normalize/split_address); everything else stays
- * pure-TS. Mirrors goldenmatch's `setScorerBackend(null)` module-singleton
- * pattern for test isolation.
+ * country_standardize/unit_normalize/split_address), and the text transforms
+ * (strip/collapse_whitespace/normalize_quotes/normalize_line_endings/
+ * remove_html_tags/remove_urls/remove_digits/remove_punctuation/remove_emojis/
+ * extract_numbers/truncate/pad_left/pad_right); everything else stays pure-TS.
+ * Mirrors goldenmatch's `setScorerBackend(null)` module-singleton pattern for
+ * test isolation.
  */
 
 /**
@@ -79,6 +82,19 @@ export interface FlowWasmBackend {
   /** `split_address` -> 4-element `[street, city, state, zip]`; `street` is
    * always a string, the other three are `string | null` (Rust `Option`). */
   splitAddress(s: string): (string | null)[];
+  strip(s: string): string;
+  collapseWhitespace(s: string): string;
+  normalizeQuotes(s: string): string;
+  normalizeLineEndings(s: string): string;
+  removeHtmlTags(s: string): string;
+  removeUrls(s: string): string;
+  removeDigits(s: string): string;
+  removePunctuation(s: string): string;
+  removeEmojis(s: string): string;
+  extractNumbers(s: string): string;
+  truncate(s: string, n: number): string;
+  padLeft(s: string, width: number, pad: string): string;
+  padRight(s: string, width: number, pad: string): string;
 }
 
 import { createBackendRegistry } from "goldenmatch-wasm-runtime";
