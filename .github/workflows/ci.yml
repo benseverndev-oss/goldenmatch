@@ -365,6 +365,9 @@ jobs:
               # sketch-core is a path dep of the postgres crate (goldenmatch_lsh_pairs),
               # so a kernel change must rebuild + re-smoke this lane.
               - 'packages/rust/extensions/sketch-core/**'
+              # score-core is a path dep of the postgres crate (goldenmatch_score
+              # native fast path), so a kernel change must rebuild + re-smoke.
+              - 'packages/rust/extensions/score-core/**'
               - 'packages/rust/extensions/Cargo.toml'
             rust_cores:
               # ANY Rust extension change re-validates EVERY committed TS wasm
@@ -2775,6 +2778,18 @@ jobs:
                 'char', 3, 64, 16, 42);
               IF pd.n <> 1 OR pd.a <> 0 OR pd.b <> 1 THEN
                 RAISE EXCEPTION 'lsh_pairs: expected exactly (0,1), got n=% (%,%)', pd.n, pd.a, pd.b;
+              END IF;
+
+              -- goldenmatch_score native fast path: jaro_winkler over a near-dup
+              -- pair == 0.9125 (validated vs the Python reference); exact over an
+              -- identical pair == 1.0. Proves the score-core path (not the bridge)
+              -- and that it matches the reference.
+              IF abs(goldenmatch.goldenmatch_score('Acme Corporation', 'Acme Corp', 'jaro_winkler') - 0.9125) > 1e-9 THEN
+                RAISE EXCEPTION 'score jaro_winkler: expected 0.9125, got %',
+                  goldenmatch.goldenmatch_score('Acme Corporation', 'Acme Corp', 'jaro_winkler');
+              END IF;
+              IF goldenmatch.goldenmatch_score('abc', 'abc', 'exact') <> 1.0 THEN
+                RAISE EXCEPTION 'score exact: expected 1.0';
               END IF;
 
               -- record_fingerprint: stable across key order (fields sorted by name).

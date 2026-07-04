@@ -144,6 +144,14 @@ pub fn goldenmatch_match_pairs(
 /// Score two strings using a named similarity algorithm.
 ///
 /// Supported scorers: jaro_winkler, levenshtein, exact, token_sort, soundex_match
+///
+/// The four rapidfuzz-family scorers (jaro_winkler / levenshtein / token_sort /
+/// exact) run **native-direct** over the pyo3-free `score-core` kernel — no
+/// embedded-CPython round-trip per row, which matters for `WHERE
+/// goldenmatch_score(...) > t` over a large table. `score-core` IS the reference
+/// the Python path uses, so results are unchanged. Any other scorer
+/// (soundex_match / ensemble / future) falls back to the bridge, so nothing is
+/// lost.
 #[pg_extern]
 pub fn goldenmatch_score(
     value_a: String,
@@ -152,6 +160,20 @@ pub fn goldenmatch_score(
 ) -> f64 {
     let scorer_name = scorer.unwrap_or_else(|| "jaro_winkler".to_string());
 
+    // Native fast path: score-core's scorer ids (0=jw, 1=lev, 2=token_sort,
+    // 3=exact) match the bridge's named scorers byte-for-algorithm.
+    let native_id = match scorer_name.as_str() {
+        "jaro_winkler" => Some(0u8),
+        "levenshtein" => Some(1),
+        "token_sort" => Some(2),
+        "exact" => Some(3),
+        _ => None,
+    };
+    if let Some(id) = native_id {
+        return goldenmatch_score_core::score_one(id, &value_a, &value_b);
+    }
+
+    // Bridge fallback for scorers score-core doesn't implement.
     match goldenmatch_bridge::api::score_strings(&value_a, &value_b, &scorer_name) {
         Ok(score) => score,
         Err(e) => pgrx::error!("goldenmatch: {}", e),

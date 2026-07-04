@@ -36,6 +36,9 @@ goldenhnsw = { path = "../goldenhnsw" }
 # Pure-Rust MinHash + LSH sketch kernel (no pyo3) — goldenmatch_lsh_pairs calls
 # this native-direct, NOT through the embedded-CPython bridge.
 goldenmatch-sketch-core = { path = "../sketch-core" }
+# Pure-Rust string scorers (jaro-winkler / levenshtein / token-sort, no pyo3) —
+# goldenmatch_score fast-paths these native-direct instead of the CPython bridge.
+goldenmatch-score-core = { path = "../score-core" }
 serde_json = "1"
 
 [[bin]]
