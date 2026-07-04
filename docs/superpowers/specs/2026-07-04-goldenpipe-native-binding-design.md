@@ -99,6 +99,10 @@ re-implementation):
     a message. Add structured attributes `.stage`, `.missing`, `.available` (the message
     is unchanged) so the helper reads them directly instead of string-parsing. Additive,
     behavior-preserving, and it's the faithful way to map the wiring vector.
+    IMPLEMENTATION NOTE: keep it additive — set the attrs via OPTIONAL kwargs (do not
+    make them required positional; existing raises pass only the message), and set
+    `.available = sorted(available_artifacts)` (matches `resolver.py:63` + the core's
+    sorted `BTreeSet`).
 - **`apply_decision_json`** — parse `{decision, remaining}`. Reconstruct `PlannedStage`s
   from `remaining`, a `Decision`, a stub registry providing the `insert` names (Router
   calls `registry.get(name)` per insert), and a `PipeContext`. Call `Router.apply`,
