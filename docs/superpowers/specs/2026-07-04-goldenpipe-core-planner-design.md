@@ -166,13 +166,16 @@ contract (SP2/SP3's fallbacks must reproduce these bytes). Fixtures live at
   skip+insert combined; empty decision (no-op); insert-then-skip interplay.
 - **evaluate_builtin:** severity_gate critical/none/empty-findings; pii_router
   hit/miss; row_count_gate <2 / ≥2 / missing input_rows; unknown name → null.
-- **auto_config:** all available; subset available; +identity with opts; identity
-  requested but unavailable.
+- **auto_config:** all available; subset available; +identity with non-empty opts;
+  identity requested but unavailable; `Some({})` empty opts → NO identity stage
+  (the empty-dict = not-given semantics).
 - **skip_if_falsy:** null/false/0/""/[]/{} → true; 0.5/"x"/[0]/{"a":1}/true → false.
 
-Determinism check: every `*_json` is idempotent + stable-ordered (serde_json with
-sorted maps where the Python/TS emit sorted, e.g. the `available` set) so the
-byte-parity gate doesn't flap. No `HashMap` iteration order in outputs.
+Determinism check: every `*_json` is idempotent + stable-ordered — the one
+passthrough map (`config`) round-trips in **insertion order** via `preserve_order`
+(matching Python `json.dumps` / JS `JSON.stringify`), and `available` is emitted as a
+**sorted list** (both impls sort it). No `HashMap` iteration order anywhere in outputs,
+so the byte-parity gate can't flap.
 
 ## Crate + deps
 
