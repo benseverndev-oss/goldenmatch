@@ -237,13 +237,24 @@ def native_available() -> bool:
     return _native is not None
 
 
-def native_enabled(component: str) -> bool:
+def native_enabled(component: str, symbol: str | None = None) -> bool:
     """Whether to use the native kernel for ``component`` on this call.
 
     Records the decision (see :func:`native_dispatch_report`) and, the first
     time it runs under ``auto`` with the kernel importable, logs a one-line hint
     that the gated-only allowlist is in effect (set ``GOLDENMATCH_NATIVE=1`` for
     full native acceleration on large / benchmark runs).
+
+    When ``symbol`` is given, the component is treated as native ONLY if that
+    specific kernel symbol is actually present on the loaded wheel. Use this at a
+    call site that depends on a symbol NEWER than the component's floor
+    (:data:`_COMPONENT_SYMBOLS`): on a published wheel that carries the floor
+    symbol but predates ``symbol``, this returns ``False`` so the caller falls
+    back to pure Python instead of ``AttributeError``-crashing — the wheel/caller
+    symbol-skew class the #688 post-mortem documents. (Even under
+    ``GOLDENMATCH_NATIVE=1`` a missing beyond-floor symbol falls back rather than
+    crashing; the ``=1`` contract is about the module being importable, not about
+    every optional sub-kernel being present.)
     """
     global _AUTO_HINT_LOGGED
     mode = os.environ.get("GOLDENMATCH_NATIVE", "auto").lower()
@@ -255,8 +266,9 @@ def native_enabled(component: str) -> bool:
             raise RuntimeError(
                 "GOLDENMATCH_NATIVE=1 but goldenmatch._native is not built/importable"
             )
-        _record_dispatch(component, True)
-        return True
+        result = symbol is None or hasattr(_native, symbol)
+        _record_dispatch(component, result)
+        return result
     # auto / unset: Rust is the reference -- run native wherever the component's
     # kernel symbol exists on this wheel; pure-Python is the lossy fallback. The
     # only auto exceptions are _FALLBACK_ONLY (known-divergent kernels).
@@ -271,6 +283,7 @@ def native_enabled(component: str) -> bool:
         _native is not None
         and component not in _FALLBACK_ONLY
         and _has_symbol(component)
+        and (symbol is None or hasattr(_native, symbol))
     )
     _record_dispatch(component, result)
     return result
