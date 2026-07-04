@@ -243,12 +243,21 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "blake2",
+ "goldenembed-core",
  "ort",
  "redb",
  "serde",
  "serde_json",
  "sha2",
  "zip",
+]
+
+[[package]]
+name = "goldenembed-core"
+version = "0.1.0"
+dependencies = [
+ "blake2",
+ "serde",
 ]
 
 [[package]]

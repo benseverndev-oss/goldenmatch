@@ -1,0 +1,30 @@
+# Standalone workspace: the pyo3-free / ort-free / fs-free compute core of the
+# in-house embedder — char n-gram featurizer + the linear projection head. Same
+# isolation + "one source of truth" rationale as score-core / graph-core /
+# fingerprint-core / perceptual-core. `goldenembed` (native runtime: load +
+# cache + optional ONNX fallback) and `goldenembed-wasm` (the edge surface) both
+# depend on this; because it pulls no ONNX/C++/filesystem, it compiles cleanly to
+# wasm32 — which is what unblocks edge embedding (parity roadmap P10).
+[workspace]
+
+[package]
+name = "goldenembed-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Ben Severn <benzsevern@gmail.com>"]
+description = "Char n-gram featurizer + linear projection head for the in-house embedder (no pyo3 / no ONNX / no fs)"
+
+[lib]
+name = "goldenembed_core"
+
+[dependencies]
+# BLAKE2b feature hashing (byte-parity with the Python featurizer). wasm-friendly.
+blake2 = "0.10"
+# Deserialize FeaturizerConfig from the model config.json (in the native runtime).
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+# The project parity golden fixture stores raw-f32 arrays as base64 + JSON.
+base64 = "0.22"
+serde_json = "1"
