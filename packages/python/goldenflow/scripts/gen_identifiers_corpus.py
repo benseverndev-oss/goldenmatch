@@ -57,8 +57,13 @@ from goldenflow.transforms.identifiers import (  # noqa: E402
     _vat_validate_py,
 )
 from goldenflow.transforms.names import (  # noqa: E402
+    _has_initial_py,
+    _name_proper_py,
     _name_script_py,
     _name_transliterate_py,
+    _nickname_standardize_py,
+    _strip_suffixes_py,
+    _strip_titles_py,
 )
 from goldenflow.transforms.numeric import (  # noqa: E402
     _comma_decimal_py,
@@ -283,6 +288,54 @@ _CASES: list[tuple[str, str | None]] = [
     ("name_script", "123"),  # digits only -> Common
     ("name_script", ""),  # empty -> Unknown
     ("name_script", None),  # null
+    # --- strip_titles (leading personal titles; auto_apply) ---
+    ("strip_titles", "Dr. Smith"),  # title + dot
+    ("strip_titles", "Mr Smith"),  # title, no dot
+    ("strip_titles", "Mrs. Jane Doe"),  # keeps the rest
+    ("strip_titles", "Prof. Alan Turing"),
+    ("strip_titles", "Sra Garcia"),  # Sra (not Sr)
+    ("strip_titles", "Miss Ellie"),
+    ("strip_titles", "Dr.   Smith"),  # multiple spaces after title
+    ("strip_titles", "Missy"),  # NOT the title "Miss"
+    ("strip_titles", "  John Smith  "),  # no title -> still trimmed
+    ("strip_titles", ""),  # empty
+    ("strip_titles", None),  # null
+    # --- strip_suffixes (trailing professional suffixes) ---
+    ("strip_suffixes", "John Smith Jr"),
+    ("strip_suffixes", "John Smith Jr."),  # optional dot
+    ("strip_suffixes", "Jane Doe MD"),
+    ("strip_suffixes", "Bob III"),  # III beats II via the anchor
+    ("strip_suffixes", "Bob II"),
+    ("strip_suffixes", "Alice Esq."),
+    ("strip_suffixes", "Sam RN"),
+    ("strip_suffixes", "Robert"),  # no suffix
+    ("strip_suffixes", "John DODO"),  # "DO" not a standalone trailing suffix here
+    ("strip_suffixes", None),  # null
+    # --- name_proper (title-case + Mc/O' fixups) ---
+    ("name_proper", "john smith"),
+    ("name_proper", "JOHN SMITH"),
+    ("name_proper", "mcdonald"),  # -> McDonald
+    ("name_proper", "old mcdonald"),  # -> Old McDonald
+    ("name_proper", "o'brien"),  # -> O'Brien
+    ("name_proper", "d'angelo"),  # -> D'Angelo
+    ("name_proper", "macdonald"),  # Mac != Mc, not fixed up
+    ("name_proper", ""),  # empty
+    ("name_proper", None),  # null
+    # --- nickname_standardize (map lookup; unknown passes through unchanged) ---
+    ("nickname_standardize", "Bob"),  # -> Robert
+    ("nickname_standardize", "  bob  "),  # trimmed key, unknown-miss returns original
+    ("nickname_standardize", "JIM"),  # -> James
+    ("nickname_standardize", "patty"),  # -> Patricia
+    ("nickname_standardize", "pat"),  # -> Patrick
+    ("nickname_standardize", "Xavier"),  # unknown -> unchanged
+    ("nickname_standardize", None),  # null
+    # --- has_initial (the initial_expand flag predicate) ---
+    ("has_initial", "John Q. Public"),  # middle initial -> True
+    ("has_initial", "J. Smith"),  # leading initial -> True
+    ("has_initial", "John Smith"),  # no initial -> False
+    ("has_initial", "J.Smith"),  # no whitespace after dot -> False
+    ("has_initial", ""),  # empty -> False
+    ("has_initial", None),  # null
     # --- email_lowercase ---
     ("email_lowercase", " John@X.COM "),  # leading/trailing whitespace
     ("email_lowercase", "A@B.com"),  # already lower domain
@@ -450,6 +503,11 @@ _PY_FN = {
     "imei_validate": _imei_validate_py,
     "name_transliterate": _name_transliterate_py,
     "name_script": _name_script_py,
+    "strip_titles": _strip_titles_py,
+    "strip_suffixes": _strip_suffixes_py,
+    "name_proper": _name_proper_py,
+    "nickname_standardize": _nickname_standardize_py,
+    "has_initial": _has_initial_py,
     "email_lowercase": _email_lowercase_py,
     "email_normalize": _email_normalize_py,
     "email_extract_domain": _email_extract_domain_py,
@@ -484,6 +542,11 @@ _NATIVE_ARROW_FN = {
     "imei_validate": "imei_validate_arrow",
     "name_transliterate": "name_transliterate_arrow",
     "name_script": "name_script_arrow",
+    "strip_titles": "strip_titles_arrow",
+    "strip_suffixes": "strip_suffixes_arrow",
+    "name_proper": "name_proper_arrow",
+    "nickname_standardize": "nickname_standardize_arrow",
+    "has_initial": "has_initial_arrow",
     "email_lowercase": "email_lowercase_arrow",
     "email_normalize": "email_normalize_arrow",
     "email_extract_domain": "email_extract_domain_arrow",

@@ -202,6 +202,25 @@ def initial_expand(series: pl.Series) -> tuple[pl.Series, list[int]]:
     return series, flagged
 
 
+def _has_initial_py(val: str | None) -> bool | None:
+    """Scalar reference for goldenflow-core's ``names::has_initial`` -- the flag
+    predicate behind ``initial_expand``. ``None`` in -> ``None`` out (the null
+    row); else whether the middle-initial pattern is present."""
+    if val is None:
+        return None
+    return bool(_INITIAL_PATTERN.search(val))
+
+
+def _has_initial_series(series: pl.Series) -> pl.Series:
+    """Series-level ``has_initial`` (native-first) -- used by the byte-parity
+    harness to assert the predicate cross-surface. Not a registered transform;
+    ``initial_expand`` is the user-facing transform that consumes it."""
+    native = has_initial_native()
+    if native is not None:
+        return native(series)
+    return series.map_elements(_has_initial_py, return_dtype=pl.Boolean)
+
+
 _NICKNAMES: dict[str, str] = {
     "bob": "Robert", "rob": "Robert", "robby": "Robert", "robbie": "Robert",
     "bobby": "Robert",

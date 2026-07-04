@@ -41,7 +41,21 @@ from goldenflow.transforms.identifiers import (
     vat_format,
     vat_validate,
 )
-from goldenflow.transforms.names import name_script, name_transliterate
+from goldenflow.transforms.names import (
+    _has_initial_series as has_initial,
+)
+from goldenflow.transforms.names import (
+    _strip_suffixes_series as strip_suffixes,
+)
+from goldenflow.transforms.names import (
+    _strip_titles_series as strip_titles,
+)
+from goldenflow.transforms.names import (
+    name_proper,
+    name_script,
+    name_transliterate,
+    nickname_standardize,
+)
 from goldenflow.transforms.numeric import _currency_strip_series as currency_strip
 from goldenflow.transforms.numeric import _percentage_normalize_series as percentage_normalize
 from goldenflow.transforms.numeric import _to_integer_series as to_integer
@@ -106,6 +120,11 @@ _TRANSFORMS = {
     "imei_validate": imei_validate,
     "name_transliterate": name_transliterate,
     "name_script": name_script,
+    "strip_titles": strip_titles,
+    "strip_suffixes": strip_suffixes,
+    "name_proper": name_proper,
+    "nickname_standardize": nickname_standardize,
+    "has_initial": has_initial,
     "email_lowercase": email_lowercase,
     "email_normalize": email_normalize,
     "email_extract_domain": email_extract_domain,
@@ -143,6 +162,13 @@ _NATIVE_FLOOR_SYMBOL = {
     "imei_validate": "imei_validate_arrow",
     "name_transliterate": "name_transliterate_arrow",
     "name_script": "name_script_arrow",
+    # names_ext: strip_titles/strip_suffixes/name_proper/nickname_standardize/
+    # has_initial -- floor symbol strip_titles_arrow.
+    "strip_titles": "strip_titles_arrow",
+    "strip_suffixes": "strip_titles_arrow",
+    "name_proper": "strip_titles_arrow",
+    "nickname_standardize": "strip_titles_arrow",
+    "has_initial": "strip_titles_arrow",
     # email: all 4 transforms are wired via the single "email" component
     # (floor symbol email_validate_arrow), region-free/locale-free.
     "email_lowercase": "email_validate_arrow",

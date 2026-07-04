@@ -121,6 +121,51 @@ mod wasm {
     }
 
     #[wasm_bindgen]
+    pub fn strip_titles(s: &str) -> String {
+        names::strip_titles(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn strip_suffixes(s: &str) -> String {
+        names::strip_suffixes(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn name_proper(s: &str) -> String {
+        names::name_proper(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn nickname_standardize(s: &str) -> String {
+        names::nickname_standardize(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn has_initial(s: &str) -> bool {
+        names::has_initial(s)
+    }
+
+    /// `"First Last"` -> `[first, last]` (a 2-element JS string array).
+    #[wasm_bindgen]
+    pub fn split_name(s: &str) -> Vec<String> {
+        let (first, last) = names::split_name(s);
+        vec![first, last]
+    }
+
+    /// `"Last, First"` -> `[first, last]` (a 2-element JS string array).
+    #[wasm_bindgen]
+    pub fn split_name_reverse(s: &str) -> Vec<String> {
+        let (first, last) = names::split_name_reverse(s);
+        vec![first, last]
+    }
+
+    /// `(first, last)` -> `full_name`; `None` when both parts are absent/blank.
+    #[wasm_bindgen]
+    pub fn merge_name(first: Option<String>, last: Option<String>) -> Option<String> {
+        names::merge_name(first.as_deref(), last.as_deref())
+    }
+
+    #[wasm_bindgen]
     pub fn url_normalize(s: &str) -> Option<String> {
         url::url_normalize(s)
     }

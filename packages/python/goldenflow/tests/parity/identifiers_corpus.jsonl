@@ -168,6 +168,49 @@
 {"transform": "name_script", "input": "123", "expected": "Common"}
 {"transform": "name_script", "input": "", "expected": "Unknown"}
 {"transform": "name_script", "input": null, "expected": null}
+{"transform": "strip_titles", "input": "Dr. Smith", "expected": "Smith"}
+{"transform": "strip_titles", "input": "Mr Smith", "expected": "Smith"}
+{"transform": "strip_titles", "input": "Mrs. Jane Doe", "expected": "Jane Doe"}
+{"transform": "strip_titles", "input": "Prof. Alan Turing", "expected": "Alan Turing"}
+{"transform": "strip_titles", "input": "Sra Garcia", "expected": "Garcia"}
+{"transform": "strip_titles", "input": "Miss Ellie", "expected": "Ellie"}
+{"transform": "strip_titles", "input": "Dr.   Smith", "expected": "Smith"}
+{"transform": "strip_titles", "input": "Missy", "expected": "Missy"}
+{"transform": "strip_titles", "input": "  John Smith  ", "expected": "John Smith"}
+{"transform": "strip_titles", "input": "", "expected": ""}
+{"transform": "strip_titles", "input": null, "expected": null}
+{"transform": "strip_suffixes", "input": "John Smith Jr", "expected": "John Smith"}
+{"transform": "strip_suffixes", "input": "John Smith Jr.", "expected": "John Smith"}
+{"transform": "strip_suffixes", "input": "Jane Doe MD", "expected": "Jane Doe"}
+{"transform": "strip_suffixes", "input": "Bob III", "expected": "Bob"}
+{"transform": "strip_suffixes", "input": "Bob II", "expected": "Bob"}
+{"transform": "strip_suffixes", "input": "Alice Esq.", "expected": "Alice"}
+{"transform": "strip_suffixes", "input": "Sam RN", "expected": "Sam"}
+{"transform": "strip_suffixes", "input": "Robert", "expected": "Robert"}
+{"transform": "strip_suffixes", "input": "John DODO", "expected": "John DODO"}
+{"transform": "strip_suffixes", "input": null, "expected": null}
+{"transform": "name_proper", "input": "john smith", "expected": "John Smith"}
+{"transform": "name_proper", "input": "JOHN SMITH", "expected": "John Smith"}
+{"transform": "name_proper", "input": "mcdonald", "expected": "McDonald"}
+{"transform": "name_proper", "input": "old mcdonald", "expected": "Old McDonald"}
+{"transform": "name_proper", "input": "o'brien", "expected": "O'Brien"}
+{"transform": "name_proper", "input": "d'angelo", "expected": "D'Angelo"}
+{"transform": "name_proper", "input": "macdonald", "expected": "Macdonald"}
+{"transform": "name_proper", "input": "", "expected": ""}
+{"transform": "name_proper", "input": null, "expected": null}
+{"transform": "nickname_standardize", "input": "Bob", "expected": "Robert"}
+{"transform": "nickname_standardize", "input": "  bob  ", "expected": "Robert"}
+{"transform": "nickname_standardize", "input": "JIM", "expected": "James"}
+{"transform": "nickname_standardize", "input": "patty", "expected": "Patricia"}
+{"transform": "nickname_standardize", "input": "pat", "expected": "Patrick"}
+{"transform": "nickname_standardize", "input": "Xavier", "expected": "Xavier"}
+{"transform": "nickname_standardize", "input": null, "expected": null}
+{"transform": "has_initial", "input": "John Q. Public", "expected": true}
+{"transform": "has_initial", "input": "J. Smith", "expected": true}
+{"transform": "has_initial", "input": "John Smith", "expected": false}
+{"transform": "has_initial", "input": "J.Smith", "expected": false}
+{"transform": "has_initial", "input": "", "expected": false}
+{"transform": "has_initial", "input": null, "expected": null}
 {"transform": "email_lowercase", "input": " John@X.COM ", "expected": "john@x.com"}
 {"transform": "email_lowercase", "input": "A@B.com", "expected": "a@b.com"}
 {"transform": "email_lowercase", "input": "ADMIN@EXAMPLE.COM", "expected": "admin@example.com"}
