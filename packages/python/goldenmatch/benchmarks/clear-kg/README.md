@@ -200,13 +200,14 @@ python benchmarks/clear-kg/run_track_a.py
 > are deterministic stand-ins on templated prose — the object of study is the
 > metric's ER-dependence, not a SOTA extraction number.
 
-**Real-prose competitive floor (Re-DocRED).** `run_redocred.py` runs an LLM
-extractor on the real Re-DocRED dev set (real Wikipedia + gold triples, 95-relation
-closed schema). Measured: **`gpt-4o-mini` zero-shot micro-F1 0.137** (20 docs) vs
-Re-DocRED SOTA ~80.7 (fine-tuned) / ~74.6 (strong LLM). Not a goldenmatch number —
-a cheap zero-shot *floor* that confirms extraction is the LLM-bound commodity axis
-(the gap is almost all recall). Details + caveats in [`RESULTS.md`](RESULTS.md);
-harness offline-tested with a mock extractor.
+**Real-prose extraction on Re-DocRED (floor→ceiling).** `run_redocred.py` runs an
+LLM extractor on the real Re-DocRED dev set (real Wikipedia + gold triples,
+95-relation closed schema). Measured sweep (20 docs, zero-shot): chat models
+plateau at micro-F1 **0.151 → 0.196** (recall-bound ~0.12); the reasoning tier
+(`gpt-5-mini`) breaks it to **0.262** at ~12× the wall-clock — still far below
+fine-tuned SOTA ~0.81. Not a goldenmatch number — it confirms extraction is the
+LLM-bound, reasoning-hungry commodity axis (the gap is almost all recall). Full
+curve + caveats in [`RESULTS.md`](RESULTS.md); harness offline-tested with a mock.
 
 ## The homograph split-rate (the money metric)
 

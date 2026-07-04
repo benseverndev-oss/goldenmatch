@@ -82,24 +82,45 @@ prose + gold triples. `run_redocred.py` runs an LLM relation extractor on the
 closed schema — the standard the SPEC benchmarks against) and scores micro
 relation-F1.
 
-| extractor | docs | micro-P | micro-R | **micro-F1** | reference |
-|---|--:|--:|--:|--:|---|
-| `gpt-4o-mini`, zero-shot, single-pass | 20 | 0.312 | 0.088 | **0.137** | Re-DocRED SOTA ~80.7 (fine-tuned BERT/DREEAM) · ~74.6 (strong LLM) |
+Floor→ceiling sweep, same 20 docs / 853 gold triples / 95-relation closed schema,
+zero-shot single-pass, `temperature=0` (chat) or default (reasoning):
 
-**Read this honestly.** This is *not* a goldenmatch capability — goldenmatch does
-ER, not extraction; extraction is the commodity input. It is a deliberately cheap
-**zero-shot** baseline that (1) validates the harness on the real standard
-benchmark and (2) confirms the SPEC §8 point empirically: **extraction is
-genuinely LLM-bound, and a cheap zero-shot extractor lands an order of magnitude
-below fine-tuned SOTA** (0.137 vs ~0.81), almost entirely on *recall* — the model
-emits ~12 triples/doc against ~43 dense gold (Re-DocRED annotates inverse and
-implicit relations a single pass misses). It is a **floor, not a ceiling**:
-stronger models, few-shot, retrieval, and multi-pass close most of the gap (the
-published ~74.6 "LLM" figure uses heavy scaffolding). The takeaway is the thesis:
-extraction is the hard, LLM-bound, *commodity* axis you buy — the durable win is
-the ER + faithfulness layer, which is why CLEAR-KG puts the moats there. The
-harness is offline-tested (`tests/test_redocred.py`, mock extractor) and runs with
-`OPENAI_API_KEY=... python run_redocred.py --docs N`.
+| extractor | micro-P | micro-R | **micro-F1** | wall |
+|---|--:|--:|--:|--:|
+| `gpt-4o-mini` (floor) | 0.339 | 0.097 | **0.151** | 90s |
+| `gpt-4.1-mini` | 0.448 | 0.121 | **0.190** | 69s |
+| `gpt-4o` | 0.481 | 0.122 | **0.195** | 58s |
+| `gpt-4.1` (chat ceiling) | 0.399 | 0.130 | **0.196** | 47s |
+| **`gpt-5-mini`** (reasoning) | 0.473 | **0.182** | **0.262** | 704s |
+| `gpt-5` (reasoning) | — | — | *invalid* | — |
+
+_Reference: Re-DocRED relation-F1 SOTA **~80.7** (fine-tuned BERT/DREEAM) · **~74.6** (strong LLM)._
+
+**Read this honestly.** None of these is a goldenmatch capability — goldenmatch does
+ER, not extraction; extraction is the commodity input. The sweep maps where a
+zero-shot LLM extractor lands on the real standard benchmark:
+
+- **The chat family plateaus at ~0.196**, all recall-bound at ~0.10–0.13. A bigger
+  chat model buys *precision* (0.34→0.48), not the recall document-level RE needs
+  — the models emit ~11–14 triples/doc against ~43 dense gold (Re-DocRED annotates
+  inverse and implicit relations a single pass misses).
+- **The reasoning tier breaks that plateau:** `gpt-5-mini` lifts recall 0.13→0.18
+  and F1 to **0.262** (+34% over the best chat model) via multi-step inference —
+  at ~12× the wall-clock (704s vs ~50s).
+- Even the reasoning ceiling here sits well below fine-tuned SOTA (~0.81); the
+  published ~74.6 "LLM" figure uses heavy scaffolding (few-shot + retrieval +
+  multi-pass) this single-pass harness deliberately omits.
+- `gpt-5` (full) is marked *invalid*: at the old 6000-token budget its hidden
+  reasoning exhausted the completion budget and returned an EMPTY response on ~half
+  the longer docs (10/20), so its raw 0.117 measures the harness, not the model.
+  The default is now 16000 for reasoning models; a valid `gpt-5` row needs a
+  re-run (deferred — slow + costs API budget).
+
+The takeaway is the thesis: extraction is the hard, LLM-bound, reasoning-hungry
+**commodity** axis you buy — the durable win is the ER + faithfulness layer, which
+is why CLEAR-KG puts the moats there. Harness offline-tested
+(`tests/test_redocred.py`, mock); run with
+`OPENAI_API_KEY=... python run_redocred.py --docs N --model <name>`.
 
 ## Track D — the CLEAR composite (headline)
 

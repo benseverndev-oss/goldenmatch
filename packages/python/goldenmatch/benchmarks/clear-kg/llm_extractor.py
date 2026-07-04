@@ -65,8 +65,10 @@ def openai_extract(doc: dict, schema: list[str], *, model: str = "gpt-4o-mini",
     reasoning = _is_reasoning(model)
     kwargs = dict(
         model=model,
-        # reasoning models need headroom for hidden reasoning tokens before output
-        max_completion_tokens=6000 if reasoning else 2000,
+        # reasoning models need generous headroom -- hidden reasoning tokens are
+        # spent BEFORE the JSON output, and at 6000 gpt-5 (full) truncated to an
+        # empty response on ~half of the longer Re-DocRED docs
+        max_completion_tokens=16000 if reasoning else 2000,
         response_format={"type": "json_object"},
         messages=[{"role": "system", "content": _SYSTEM},
                   {"role": "user", "content": _prompt(doc, schema)}],
