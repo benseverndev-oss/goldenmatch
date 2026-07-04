@@ -200,6 +200,14 @@ python benchmarks/clear-kg/run_track_a.py
 > are deterministic stand-ins on templated prose — the object of study is the
 > metric's ER-dependence, not a SOTA extraction number.
 
+**Real-prose competitive floor (Re-DocRED).** `run_redocred.py` runs an LLM
+extractor on the real Re-DocRED dev set (real Wikipedia + gold triples, 95-relation
+closed schema). Measured: **`gpt-4o-mini` zero-shot micro-F1 0.137** (20 docs) vs
+Re-DocRED SOTA ~80.7 (fine-tuned) / ~74.6 (strong LLM). Not a goldenmatch number —
+a cheap zero-shot *floor* that confirms extraction is the LLM-bound commodity axis
+(the gap is almost all recall). Details + caveats in [`RESULTS.md`](RESULTS.md);
+harness offline-tested with a mock extractor.
+
 ## The homograph split-rate (the money metric)
 
 Of gold mention-pairs that **share a surface string but are different entities**,
@@ -246,6 +254,8 @@ extract_data.py    Track A dataset: gold KG + alias/homograph-varied docs
 extractors.py  Track A extractors (pattern, lossy) -- doc -> surface triples
 extract_score.py   Track A metric: canonicalized triple-PRF in exact/relaxed/er_aware modes
 run_track_a.py extract -> score under each canonicalization mode (extraction F1)
+redocred.py / llm_extractor.py / score_redocred.py / run_redocred.py
+               Track A REAL-prose extraction on Re-DocRED (LLM, key-gated; the competitive floor)
 pipeline_data.py   Track D unified corpus (aligned entity/triple/provenance truth)
 score_d.py     Track D CLEAR composite (harmonic mean of the three axes)
 run_track_d.py full-pipeline systems -> extract + resolve + ground -> CLEAR score
@@ -260,12 +270,13 @@ tests/         offline unit + end-to-end for Tracks A, B, C, D, and the real-dat
 - **Packaged incumbents end-to-end** (GraphRAG, Neo4j, iText2KG, KGGen) on all
   tracks, vs. the documented-mechanism reimplementations used today.
 
-- **Competitive numbers on real data:** an LLM extraction pass on the real-data
-  corpus for Track A's "in the pack" number (extend er-kg-bench's
-  `extraction_f1`), an NLI backstop for the ER-aware matcher / relation-aware
-  grounder on paraphrased relations, and the *packaged* incumbents (GraphRAG,
-  Neo4j, iText2KG, KGGen) run end-to-end vs the documented-mechanism baselines.
-- **Package / evangelize:** dataset card, leaderboard, Text2KG @ ISWC paper.
+- **Competitive numbers on real data:** _done for extraction_ — the Re-DocRED
+  LLM floor (above) + the packaged incumbents on real data via the
+  [`../er-kg-bench`](../er-kg-bench) companion. Remaining: an NLI backstop for the
+  ER-aware matcher / relation-aware grounder on paraphrased relations, and a
+  stronger/few-shot extractor to map the extraction ceiling (not just the floor).
+- **Package / evangelize:** `RESULTS.md` + `DATA_CARD.md` shipped; the
+  Text2KG @ ISWC paper (`PAPER.md`) is the remaining piece.
 
 _Done:_ all four tracks spiked — **A** (extraction-F1 harness + the ER-in-the-
 metric finding), **B** (corpus-level ER moat) + **real-data validity track**

@@ -74,6 +74,33 @@ bid to beat the LLM pack (SOTA ~74.6 / 80.7) — the finding is that canonicaliz
 `exact` under-counts (alias penalty); `relaxed` mis-credits homographs; only
 ER-aware canonicalization is correct.
 
+### Real-prose extraction on Re-DocRED (the competitive floor)
+
+The synthetic Track A proves the metric; the *competitive* number needs real
+prose + gold triples. `run_redocred.py` runs an LLM relation extractor on the
+**Re-DocRED** dev set (real Wikipedia, gold document-level triples, 95-relation
+closed schema — the standard the SPEC benchmarks against) and scores micro
+relation-F1.
+
+| extractor | docs | micro-P | micro-R | **micro-F1** | reference |
+|---|--:|--:|--:|--:|---|
+| `gpt-4o-mini`, zero-shot, single-pass | 20 | 0.312 | 0.088 | **0.137** | Re-DocRED SOTA ~80.7 (fine-tuned BERT/DREEAM) · ~74.6 (strong LLM) |
+
+**Read this honestly.** This is *not* a goldenmatch capability — goldenmatch does
+ER, not extraction; extraction is the commodity input. It is a deliberately cheap
+**zero-shot** baseline that (1) validates the harness on the real standard
+benchmark and (2) confirms the SPEC §8 point empirically: **extraction is
+genuinely LLM-bound, and a cheap zero-shot extractor lands an order of magnitude
+below fine-tuned SOTA** (0.137 vs ~0.81), almost entirely on *recall* — the model
+emits ~12 triples/doc against ~43 dense gold (Re-DocRED annotates inverse and
+implicit relations a single pass misses). It is a **floor, not a ceiling**:
+stronger models, few-shot, retrieval, and multi-pass close most of the gap (the
+published ~74.6 "LLM" figure uses heavy scaffolding). The takeaway is the thesis:
+extraction is the hard, LLM-bound, *commodity* axis you buy — the durable win is
+the ER + faithfulness layer, which is why CLEAR-KG puts the moats there. The
+harness is offline-tested (`tests/test_redocred.py`, mock extractor) and runs with
+`OPENAI_API_KEY=... python run_redocred.py --docs N`.
+
 ## Track D — the CLEAR composite (headline)
 
 CLEAR = harmonic mean of {extraction-F1, ER-F1, grounded-&-correct}, so it's
@@ -113,9 +140,11 @@ and a benchmark that carries the structure, matter.
 
 ## Status & next
 
-Phase 0 (mechanisms + metrics + one real-data track) is complete and pinned by
-tests. Blocked-here-but-runnable-with-a-key: an LLM extraction pass for Track A's
-competitive number on real prose, and an NLI backstop for the ER-aware matcher /
-relation-aware grounder (this environment has no LLM key / no torch). Next:
-broaden the Wikidata homograph seed set so the real-framework split-rate has more
-support, and the Text2KG@ISWC write-up (`PAPER.md`, TODO).
+Phase 0 (mechanisms + metrics + real-data tracks) is complete and pinned by tests.
+The **real-prose Track A number is now measured** (Re-DocRED, above) — the
+zero-shot LLM floor that confirms extraction is the commodity axis. Still
+runnable-with-more-setup: an NLI backstop for the ER-aware matcher / relation-aware
+grounder on paraphrased relations (needs torch or an LLM-judge lane). Next:
+broaden the Wikidata homograph seed set so the real-framework split-rate (in the
+er-kg-bench companion) has more support, and the Text2KG@ISWC write-up
+(`PAPER.md`, TODO).
