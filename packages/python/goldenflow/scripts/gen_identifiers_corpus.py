@@ -28,6 +28,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from goldenflow.core._native_loader import native_available, native_module  # noqa: E402
+from goldenflow.transforms.address import (  # noqa: E402
+    _address_expand_py,
+    _address_standardize_py,
+    _country_standardize_py,
+    _state_abbreviate_py,
+    _state_expand_py,
+    _unit_normalize_py,
+    _zip_normalize_py,
+)
 from goldenflow.transforms.categorical import (  # noqa: E402
     _boolean_normalize_py,
     _category_normalize_key_py,
@@ -71,15 +80,6 @@ from goldenflow.transforms.numeric import (  # noqa: E402
     _percentage_normalize_py,
     _scientific_to_decimal_py,
     _to_integer_py,
-)
-from goldenflow.transforms.address import (  # noqa: E402
-    _address_expand_py,
-    _address_standardize_py,
-    _country_standardize_py,
-    _state_abbreviate_py,
-    _state_expand_py,
-    _unit_normalize_py,
-    _zip_normalize_py,
 )
 from goldenflow.transforms.url import (  # noqa: E402
     _url_extract_domain_py,
