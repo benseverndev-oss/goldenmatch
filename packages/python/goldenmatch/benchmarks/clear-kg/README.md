@@ -166,8 +166,8 @@ python benchmarks/clear-kg/run_track_c.py
 
 Track A is **table stakes**: canonicalized triple precision / recall / F1 vs the
 gold KG, in the Text2KGBench / Re-DocRED convention (report **exact** and
-**relaxed**/canonicalized matching). We are *not* trying to beat the LLM-
-extraction pack here (Re-DocRED SOTA ~74.6 F1 LLM / ~80.7 BERT) — Phase 0 ships
+**relaxed**/canonicalized matching). We are *not* trying to beat the extraction
+pack here (fine-tuned Re-DocRED SOTA ~77–80 F1; frozen zero-shot GPT-4 ~15.6) — Phase 0 ships
 the convention-matching **harness**, ready to score an LLM extractor's output on
 the real-data corpus (the competitive number is the next phase, and requires an
 LLM pass; deterministic reference extractors stand in for it offline).
@@ -202,13 +202,14 @@ python benchmarks/clear-kg/run_track_a.py
 
 **Real-prose extraction on Re-DocRED (floor→ceiling).** `run_redocred.py` runs an
 LLM extractor on the real Re-DocRED dev set (real Wikipedia + gold triples,
-95-relation closed schema). Measured sweep (20 docs, zero-shot): chat models
-plateau at micro-F1 **0.151 → 0.196** (recall-bound ~0.12); the reasoning tier
-lifts F1 to **0.262 (`gpt-5-mini`) / 0.282 (`gpt-5`)** — but recall walls at ~0.18
-for both (reasoning buys precision, not recall), so even the top of the sweep sits
-far below fine-tuned SOTA ~0.81. The gap is structural (single-pass recall), not
-model size. Not a goldenmatch number — it confirms extraction is the
-LLM-bound, reasoning-hungry commodity axis (the gap is almost all recall). Full
+95-relation closed schema). Measured sweep (20 docs, zero-shot single-pass): chat
+models plateau at micro-F1 **0.151 → 0.196**; the reasoning tier reaches **0.262
+(`gpt-5-mini`) / 0.282 (`gpt-5`)** — consistent with the literature's frozen-LLM
+regime (zero-shot GPT-4 ~15.6 F1). A controlled prompt experiment shows the recall
+gap is largely a single-shot artifact (an exhaustive+inverse instruction lifts
+`gpt-4.1` recall 0.13→0.20), and the residual gap to fine-tuned SOTA (~77–80) is
+closed by *fine-tuning*, not prompting or scale. Not a goldenmatch number — it
+confirms extraction is the fine-tuning-bound commodity axis. Full
 curve + caveats in [`RESULTS.md`](RESULTS.md); harness offline-tested with a mock.
 
 ## The homograph split-rate (the money metric)

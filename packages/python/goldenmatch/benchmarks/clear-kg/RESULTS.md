@@ -62,8 +62,8 @@ box" axis measured directly.
 ## Track A — extraction (table stakes), and the metric inherits the moat
 
 Convention-matching triple-F1 (Text2KGBench / Re-DocRED: exact + relaxed). Not a
-bid to beat the LLM pack (SOTA ~74.6 / 80.7) — the finding is that canonicalized
-("relaxed") matching is itself an ER problem.
+bid to beat the extraction pack (fine-tuned Re-DocRED SOTA ~77–80) — the finding is
+that canonicalized ("relaxed") matching is itself an ER problem.
 
 | matching mode | F1 | homograph-recall |
 |---|--:|--:|
@@ -94,7 +94,11 @@ zero-shot single-pass, `temperature=0` (chat) or default (reasoning):
 | `gpt-5-mini` (reasoning) | 0.473 | 0.182 | **0.262** | 704s |
 | **`gpt-5`** (reasoning) | 0.604 | 0.184 | **0.282** | 1439s |
 
-_Reference: Re-DocRED relation-F1 SOTA **~80.7** (fine-tuned BERT/DREEAM) · **~74.6** (strong LLM)._
+_Reference (Re-DocRED / DocRED, from the literature — see sources below):_
+_• fine-tuned relation classification **given gold entity pairs**: DREEAM/ATLOP ~**77–80** F1._
+_• fine-tuned LLM **end-to-end triple extraction** (AutoRE, QLoRA): ~**52** F1 test (prior SOTA "TAG" ~49)._
+_• **frozen zero-shot GPT-4**: ~**15.6** F1 — LLMs need fine-tuning to be competitive._
+_Our setting (gold entities given, extract triples, zero-shot single-pass) sits between these; the 0.15–0.28 range is consistent with the frozen-LLM regime._
 
 **Read this honestly.** None of these is a goldenmatch capability — goldenmatch does
 ER, not extraction; extraction is the commodity input. The sweep maps where a
@@ -107,16 +111,38 @@ zero-shot LLM extractor lands on the real standard benchmark:
 - **The reasoning tier breaks that plateau:** `gpt-5-mini` F1 **0.262**, `gpt-5`
   F1 **0.282** (+34–44% over the best chat model) via multi-step inference — at
   14–29× the wall-clock (704s / 1439s vs ~50s).
-- **But recall hits a wall at ~0.18 for BOTH reasoning models** (0.182 / 0.184):
-  going from `gpt-5-mini` to full `gpt-5` buys *precision* (0.47→0.60), not recall.
-  Single-pass zero-shot — even the strongest reasoning model — cannot recover the
-  dense inverse/implicit gold relations; that needs the multi-pass + retrieval
-  scaffolding the published ~74.6 "LLM" SOTA uses. So the whole sweep sits well
-  below fine-tuned SOTA (~0.81), and the gap is structural (recall), not model size.
+- **Recall is the bottleneck, but it is NOT a hard wall — prompting moves it.**
+  In the single-shot "list all triples" prompt, chat recall sits at ~0.12 and both
+  reasoning models at ~0.18 (mini→full `gpt-5` buys precision 0.47→0.60, not
+  recall). But a controlled prompt experiment (same 5 docs, same `gpt-4.1`,
+  temperature 0, only the prompt varies) shows recall is substantially a
+  single-shot *artifact*:
+
+  | prompt | P | R | F1 |
+  |---|--:|--:|--:|
+  | baseline ("list every triple") | 0.362 | 0.129 | 0.190 |
+  | **exhaustive + inverse-relation instruction** | 0.339 | **0.196** | **0.248** |
+  | two-pass union (baseline → "what did you miss") | 0.302 | 0.165 | 0.213 |
+
+  A single stronger instruction lifts `gpt-4.1` recall 0.129→0.196 (F1 +31%) —
+  reaching the reasoning models' single-shot recall *without* a stronger model.
+  (Two-pass added recall but more noise; net worse than the one-shot exhaustive
+  prompt.)
+- **The residual gap to SOTA is closed by fine-tuning, not frozen-LLM prompting.**
+  Zero-shot GPT-4 is ~15.6 F1 in the literature; competitive numbers come from
+  task-specific fine-tuning (DREEAM's evidence-guided RoBERTa; AutoRE's QLoRA-tuned
+  LLM). So the correct reading is not "reasoning can't do it" but "**extraction is
+  fine-tuning-bound**" — the commodity axis you invest in, not the differentiator.
+  Our zero-shot sweep is consistent with that regime.
 - _(`gpt-5` was first mis-measured at the old 6000-token budget, where hidden
   reasoning exhausted the completion budget → empty output on 10/20 docs; the
   reasoning-model default is now 16000, and the 0.282 row above is the clean re-run,
   0 empties.)_
+
+_Sources:_ [AutoRE (Xue et al., 2024)](https://arxiv.org/abs/2403.14888) ·
+[DREEAM (Ma et al., 2023)](https://arxiv.org/abs/2302.08675) ·
+[LLM with Relation Classifier (2024)](https://arxiv.org/abs/2408.13889)
+(zero-shot GPT-4 ~15.6 F1).
 
 The takeaway is the thesis: extraction is the hard, LLM-bound, reasoning-hungry
 **commodity** axis you buy — the durable win is the ER + faithfulness layer, which
