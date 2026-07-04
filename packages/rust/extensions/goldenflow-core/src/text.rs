@@ -230,6 +230,33 @@ pub fn extract_numbers(s: &str) -> String {
     nums.join(" ")
 }
 
+/// True if `c` is in the emoji codepoint set (the exact ranges of the Python
+/// `_EMOJI_PATTERN`). Explicit ranges -> portable across surfaces, NO
+/// Unicode-DB dependency (mirrors the `name_script` range approach).
+fn is_emoji(c: char) -> bool {
+    matches!(c as u32,
+        0x1F600..=0x1F64F   // emoticons
+        | 0x1F300..=0x1F5FF // symbols & pictographs
+        | 0x1F680..=0x1F6FF // transport & map
+        | 0x1F1E0..=0x1F1FF // flags
+        | 0x2702..=0x27B0   // dingbats
+        | 0x24C2..=0x1F251  // enclosed characters (wide range, per the source)
+        | 0x1F900..=0x1F9FF // supplemental symbols
+        | 0x1FA00..=0x1FA6F // chess symbols
+        | 0x1FA70..=0x1FAFF // symbols extended-A
+        | 0x2600..=0x26FF   // misc symbols
+        | 0x200D            // zero-width joiner
+        | 0xFE0F            // variation selector
+    )
+}
+
+/// Remove emoji characters (regex `[<emoji ranges>]+` -> ""). Removing each
+/// matching char is equivalent to removing maximal runs. Byte-identical to
+/// `text.py::remove_emojis`.
+pub fn remove_emojis(s: &str) -> String {
+    s.chars().filter(|c| !is_emoji(*c)).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -332,5 +359,13 @@ mod tests {
         assert_eq!(extract_numbers("no numbers"), "");
         assert_eq!(extract_numbers("12."), "12."); // greedy dot, empty \d*
         assert_eq!(extract_numbers("3.14.159"), "3.14 159");
+    }
+
+    #[test]
+    fn remove_emojis_cases() {
+        assert_eq!(remove_emojis("hi \u{1f600} there"), "hi  there");
+        assert_eq!(remove_emojis("\u{1f680}\u{1f600}rocket"), "rocket");
+        assert_eq!(remove_emojis("no emoji"), "no emoji");
+        assert_eq!(remove_emojis("caf\u{e9}"), "caf\u{e9}"); // accented letter kept
     }
 }

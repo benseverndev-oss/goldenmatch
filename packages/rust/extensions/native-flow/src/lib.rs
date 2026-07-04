@@ -73,6 +73,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(text::remove_urls_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(text::remove_digits_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(text::remove_punctuation_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(text::remove_emojis_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(text::extract_numbers_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(text::truncate_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(text::pad_left_arrow, m)?)?;

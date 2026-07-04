@@ -121,6 +121,12 @@ _COMPONENT_SYMBOLS: dict[str, tuple[str, ...]] = {
     # unit_normalize (scalar) + split_address (1->4 quad) -- floor symbol only
     # (address_standardize_arrow), US-scoped/locale-free.
     "address": ("address_standardize_arrow",),
+    # text: the mechanical text family (strip/collapse_whitespace/
+    # normalize_quotes/normalize_line_endings/truncate/pad_left/pad_right/
+    # remove_html_tags/remove_urls/remove_digits/remove_punctuation/
+    # remove_emojis/extract_numbers) -- floor symbol only (strip_arrow),
+    # locale-free (ASCII-bounded char classes; explicit emoji ranges).
+    "text": ("strip_arrow",),
 }
 
 # Components whose only native path is intentionally non-authoritative (the

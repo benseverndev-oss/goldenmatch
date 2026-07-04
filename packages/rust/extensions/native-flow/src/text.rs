@@ -84,6 +84,16 @@ pub fn remove_punctuation_arrow(
 }
 
 #[pyfunction]
+pub fn remove_emojis_arrow(
+    py: Python,
+    array: PyArrowType<ArrayData>,
+) -> PyResult<PyArrowType<ArrayData>> {
+    Ok(PyArrowType(map_str_to_str(py, array.0, |s| {
+        Some(text::remove_emojis(s))
+    })?))
+}
+
+#[pyfunction]
 pub fn extract_numbers_arrow(
     py: Python,
     array: PyArrowType<ArrayData>,
