@@ -6,7 +6,6 @@ import json
 from pathlib import Path
 
 import pytest
-
 from goldenpipe.core import _planner_json as PJ
 
 # repo-relative: test file is packages/python/goldenpipe/tests/core/test_planner_parity.py
