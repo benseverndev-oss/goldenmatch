@@ -11,6 +11,7 @@
 
 use pyo3::prelude::*;
 
+mod address;
 mod categorical;
 mod email;
 mod identifiers;
@@ -55,6 +56,14 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(names::split_name_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(names::split_name_reverse_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(names::merge_name_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(address::address_standardize_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(address::address_expand_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(address::state_abbreviate_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(address::state_expand_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(address::zip_normalize_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(address::country_standardize_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(address::unit_normalize_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(address::split_address_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(url::url_normalize_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(url::url_extract_domain_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(numeric::currency_strip_arrow, m)?)?;
