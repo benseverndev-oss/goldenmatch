@@ -333,7 +333,7 @@ goldenflow transform listings.csv --domain real_estate
 
 ---
 
-## Transform Library (90 transforms)
+## Transform Library (92 transforms)
 
 ### Text Transforms (18)
 | Transform | What It Does |
@@ -364,7 +364,7 @@ goldenflow transform listings.csv --domain real_estate
 | `phone_validate` | Flag invalid numbers |
 | `phone_country_code` | Extract country calling code |
 
-### Name Transforms (8)
+### Name Transforms (10)
 | Transform | What It Does |
 |-----------|-------------|
 | `split_name` | "John Smith" -> first: "John", last: "Smith" |
@@ -374,6 +374,8 @@ goldenflow transform listings.csv --domain real_estate
 | `initial_expand` | Flag names with initials for review |
 | `nickname_standardize` | "Bob" -> "Robert", "Bill" -> "William" |
 | `merge_name` | Combine first_name + last_name into full_name |
+| `name_transliterate` | "Jose" (with accent) -> "Jose" (Unicode-to-ASCII fold via a curated map, for cross-surface byte parity) |
+| `name_script` | Detect the dominant Unicode script of a name (Latin, Cyrillic, Han, Arabic, ...) |
 
 ### Address Transforms (8)
 | Transform | What It Does |
@@ -867,7 +869,7 @@ dqbench run goldenflow
 | | GoldenFlow | pandas scripts | [Great Expectations](https://greatexpectations.io/) | [dbt](https://www.getdbt.com/) | [Dataprep.Clean](https://docs.dataprep.ai/user_guide/clean/) |
 |---|---|---|---|---|---|
 | Zero-config transforms | Yes (auto-detect) | No | No (validation only) | No (SQL transforms) | Partial |
-| 90 built-in transforms (11 categories) | Yes | Manual | No (validator, not transformer) | Via SQL | ~30 cleaners |
+| 92 built-in transforms (11 categories) | Yes | Manual | No (validator, not transformer) | Via SQL | ~30 cleaners |
 | Domain packs (healthcare, finance...) | 5 built-in | No | No | No | No |
 | Schema mapping | Auto + manual | Manual | No | Via ref/source | No |
 | Audit trail (manifest) | Automatic JSON | Manual | No | Via logs | No |

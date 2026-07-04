@@ -2,6 +2,17 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-07-04 — GoldenFlow Wave B: name_transliterate + name_script i18n name kernels
+- Extension of ADR [../decisions/0031-goldenflow-reference-mode-identifiers-wasm.md](../decisions/0031-goldenflow-reference-mode-identifiers-wasm.md)
+  (no new ADR needed) — two new owned i18n name kernels: `name_transliterate`
+  (deterministic Unicode-to-ASCII fold via an explicit curated map, NOT NFD, for
+  guaranteed cross-surface byte parity) and `name_script` (dominant-script
+  detection via Unicode code point ranges). Same cross-surface pattern as
+  Waves 0/A (native + WASM/TS + pure-Python fallback, byte-parity to the
+  goldenflow-core Rust oracle), both `auto_apply=False`.
+- Registry moves 90 → **92**. Versions: goldenflow 1.6.0 / npm 0.6.0 /
+  goldenflow-native 0.4.0.
+
 ## 2026-07-04 — GoldenFlow Wave A: SWIFT/ABA/IMEI identifier families
 - Extension of ADR [../decisions/0031-goldenflow-reference-mode-identifiers-wasm.md](../decisions/0031-goldenflow-reference-mode-identifiers-wasm.md)
   (no new ADR needed) — three new owned checksummed/structural identifier
