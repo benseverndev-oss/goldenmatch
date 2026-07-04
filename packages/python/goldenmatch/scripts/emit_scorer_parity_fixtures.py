@@ -79,6 +79,42 @@ for _ in range(120):
     for s in ("jaro", "jaro_winkler", "levenshtein"):
         rows.append([s, a, b, round(_score(s, a, b), 6)])
 
+# Real-name near-pairs — the JW prefix-boost / transposition surface on the
+# inputs users actually feed. (A 2005-pair rapidfuzz sweep over this shape +
+# multi-token phrases found max abs error 5.6e-17 vs the pure-TS scorers; these
+# lock a representative slice into the committed gate so it can't regress.)
+NAMES = [
+    "martha", "marhta", "dixon", "dickson", "jellyfish", "smellyfish",
+    "dwayne", "duane", "john", "jon", "smith", "smyth", "robert", "rupert",
+    "saturday", "sunday", "kitten", "sitting", "william", "andrew", "andre",
+    "taylor", "tyler", "moore", "more", "christopher", "kristopher",
+    "elizabeth", "elisabeth", "catherine", "katherine", "stephen", "steven",
+]
+for _ in range(80):
+    a = random.choice(NAMES)
+    b = random.choice(NAMES)
+    for s in ("jaro", "jaro_winkler", "levenshtein"):
+        rows.append([s, a, b, round(_score(s, a, b), 6)])
+
+# Multi-token phrases — token_sort's preprocessing surface (lowercase + strip
+# non-alnum + split / sort / join), including reorderings, one-token swaps,
+# punctuation, and case shifts. token_sort had the thinnest committed coverage.
+_WORDS = ["acme", "corp", "new", "york", "mets", "the", "quick", "brown",
+          "fox", "john", "smith", "st", "main", "co", "ltd", "inc"]
+for _ in range(80):
+    toks_a = [random.choice(_WORDS) for _ in range(random.randint(1, 4))]
+    toks_b = toks_a[:]
+    random.shuffle(toks_b)
+    if random.random() < 0.4 and toks_b:
+        toks_b[random.randrange(len(toks_b))] = random.choice(_WORDS)
+    a = " ".join(toks_a)
+    b = " ".join(toks_b)
+    if random.random() < 0.3:
+        a = a.upper()
+    if random.random() < 0.3:
+        b = b.replace(" ", ", ", 1) + "!"
+    rows.append(["token_sort", a, b, round(_score("token_sort", a, b), 6)])
+
 OUT.parent.mkdir(parents=True, exist_ok=True)
 OUT.write_text(
     json.dumps({"_rapidfuzz_version": "3.14.5", "cases": rows}, ensure_ascii=False, indent=1),
