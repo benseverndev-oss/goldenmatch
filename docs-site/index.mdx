@@ -6,6 +6,26 @@ keywords: ["entity resolution", "deduplication", "data quality", "record linkage
 
 The Golden Suite is a polyglot data-quality and entity-resolution toolkit. Each tool stands alone, but together they form a single pipeline: profile your data, standardize it, deduplicate it, and emit golden records. Every package ships zero-config defaults, a CLI, a Python and a TypeScript library, and an AI-native surface (MCP server, and — for the service-shaped packages — a REST API and agent skills).
 
+## Where do I even begin?
+
+Six tools is a lot. Find the sentence that sounds like your problem and start there — each tool works on its own, so you only pick up the ones you need.
+
+| Your situation | Start with | Go to |
+|----------------|------------|-------|
+| "I have duplicate rows and want one clean record per entity" | **GoldenMatch** — dedupe | [Quickstart](/quickstart) |
+| "I need to match records across two sources (CRM ↔ billing)" | **GoldenMatch** — match | [GoldenMatch](/goldenmatch/overview) |
+| "I don't know what's wrong with my data yet" | **GoldenCheck** — profile + scan | [GoldenCheck](/goldencheck/overview) |
+| "My formats are a mess — phones, dates, addresses, casing" | **GoldenFlow** — transform | [GoldenFlow](/goldenflow/overview) |
+| "My source columns don't line up with my target schema" | **InferMap** — schema mapping | [InferMap](/infermap/overview) |
+| "I want the whole clean → standardize → dedupe flow in one call" | **GoldenPipe** — orchestrate | [GoldenPipe](/goldenpipe/overview) |
+| "I can't share raw PII but need to link across parties" | **GoldenMatch** — PPRL | [Privacy-preserving linkage](/goldenmatch/pprl) |
+| "I want to match inside my database, in SQL" | **SQL extensions** — Postgres / DuckDB | [SQL extensions](/extensions/sql) |
+| "I need to track match quality and catch regressions across runs" | **GoldenAnalysis** — reporting | [GoldenAnalysis](/goldenanalysis/overview) |
+
+<Tip>
+  Still not sure? Two safe defaults: run **[GoldenCheck](/goldencheck/overview)** first — it profiles your data and tells you what needs fixing, then points you at the right tool. Or run **[GoldenPipe](/goldenpipe/overview)**, which chains the whole flow and adaptively skips the steps your data doesn't need.
+</Tip>
+
 ## Start where you fit
 
 <CardGroup cols={3}>
