@@ -233,6 +233,14 @@ pub fn extract_numbers(s: &str) -> String {
 /// True if `c` is in the emoji codepoint set (the exact ranges of the Python
 /// `_EMOJI_PATTERN`). Explicit ranges -> portable across surfaces, NO
 /// Unicode-DB dependency (mirrors the `name_script` range approach).
+///
+/// The source pattern's ranges OVERLAP (the wide `0x24C2..=0x1F251` "enclosed
+/// characters" range subsumes the later dingbats / misc-symbols / flags /
+/// variation-selector arms), so several arms are `unreachable` -- harmless
+/// since the union is identical, but a hard error under `-D warnings`. We keep
+/// the arms 1:1 with the Python `_EMOJI_PATTERN` (readable, auditable against
+/// the source) and allow the lint rather than silently pruning them.
+#[allow(unreachable_patterns)]
 fn is_emoji(c: char) -> bool {
     matches!(c as u32,
         0x1F600..=0x1F64F   // emoticons
