@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.6.0 (2026-07-04)
+
+Wave B of the i18n-name-kernel program: two new owned name kernels for cross-script identity matching, cross-surface (native + WASM/TS + pure-Python), byte-parity to the Rust oracle. No breaking changes; existing transform outputs are unchanged.
+
+### Added
+
+- `name_transliterate`: deterministic Unicode-to-ASCII fold for names via an explicit curated character map (NOT NFD/Unicode decomposition), chosen for guaranteed byte-for-byte parity across the native, WASM/TS, and pure-Python surfaces.
+- `name_script`: dominant-script detection for a name string via Unicode code point ranges (e.g. Latin, Cyrillic, Han, Arabic).
+- Both transforms are `auto_apply=False` (request them explicitly in a config), native-first with pure-Python fallbacks proven byte-identical to the `goldenflow-core` Rust oracle, and available on the TypeScript/WASM surface via `enableWasm()`.
+
 ## 1.5.0 (2026-07-04)
 
 Wave A of the identifier-kernel program: three new owned checksummed/structural identifier families (SWIFT/BIC, ABA routing, IMEI), cross-surface (native + WASM/TS + pure-Python fallback), byte-parity to the Rust oracle. No breaking changes; existing transform outputs are unchanged.

@@ -5,6 +5,7 @@ import re
 import polars as pl
 
 from goldenflow.transforms import register_transform
+from goldenflow.transforms._native import name_script_native, name_transliterate_native
 
 _TITLES = re.compile(
     r"^(Mr\.?|Mrs\.?|Ms\.?|Miss\.?|Dr\.?|Prof\.?|Rev\.?|Sr\.?|Sra\.?)\s+", re.IGNORECASE
@@ -208,3 +209,174 @@ def merge_name(
         parts = [p for p in (first, last) if p is not None and p.strip()]
         full_names.append(" ".join(parts) if parts else None)
     return df.with_columns(pl.Series("full_name", full_names))
+
+
+# --- name_transliterate (owned i18n-name kernel) -----------------------------
+#
+# Pure-Python reference for goldenflow-core's ``names::name_transliterate``
+# kernel. MUST reproduce the Rust kernel byte-for-byte (asserted by
+# tests/transforms/test_identifiers_parity.py over
+# tests/parity/identifiers_corpus.jsonl) -- same explicit char map, same
+# ASCII-passthrough, same "drop unmapped non-ASCII" behavior. Deliberately
+# NOT implemented via ``unicodedata.normalize`` (NFD) -- that depends on the
+# interpreter's bundled Unicode version and could silently drift from the
+# Rust oracle; this dict must stay byte-identical to
+# ``goldenflow-core/src/names.rs::transliterate_char``.
+#
+# Map coverage (common Latin-script diacritics; not exhaustive -- any char
+# not listed here is dropped):
+# - a/e/i/o/u with acute, grave, circumflex, diaeresis -> the base vowel.
+# - a/o with tilde, a with ring -> the base vowel (the common precomposed
+#   vowel-tilde/-ring codepoints).
+# - n-tilde (n~), c-cedilla (c,), y-acute, y-diaeresis -> n, c, y.
+# - s/z/c/r/e with caron, c/z with acute -> s z c r e (one Latin base
+#   letter each).
+# - Ligatures/specials: ss-eszett -> ss, ae/AE, oe/OE ligatures, o-slash,
+#   d-stroke, l-stroke, thorn, eth.
+_TRANSLITERATE_MAP: dict[str, str] = {
+    # acute
+    "á": "a", "Á": "A", "é": "e", "É": "E",
+    "í": "i", "Í": "I", "ó": "o", "Ó": "O",
+    "ú": "u", "Ú": "U",
+    # grave
+    "à": "a", "À": "A", "è": "e", "È": "E",
+    "ì": "i", "Ì": "I", "ò": "o", "Ò": "O",
+    "ù": "u", "Ù": "U",
+    # circumflex
+    "â": "a", "Â": "A", "ê": "e", "Ê": "E",
+    "î": "i", "Î": "I", "ô": "o", "Ô": "O",
+    "û": "u", "Û": "U",
+    # diaeresis
+    "ä": "a", "Ä": "A", "ë": "e", "Ë": "E",
+    "ï": "i", "Ï": "I", "ö": "o", "Ö": "O",
+    "ü": "u", "Ü": "U",
+    # tilde (a, o -- the common precomposed vowel-tilde chars)
+    "ã": "a", "Ã": "A", "õ": "o", "Õ": "O",
+    # ring (a -- the common precomposed vowel-ring char)
+    "å": "a", "Å": "A",
+    # n-tilde / c-cedilla / y-acute / y-diaeresis
+    "ñ": "n", "Ñ": "N", "ç": "c", "Ç": "C",
+    "ý": "y", "Ý": "Y", "ÿ": "y", "Ÿ": "Y",
+    # caron/acute consonants
+    "š": "s", "Š": "S", "ž": "z", "Ž": "Z",
+    "ź": "z", "Ź": "Z", "č": "c", "Č": "C",
+    "ć": "c", "Ć": "C", "ř": "r", "Ř": "R",
+    "ě": "e", "Ě": "E",
+    # ligatures / specials
+    "ß": "ss", "æ": "ae", "Æ": "AE", "œ": "oe",
+    "Œ": "OE", "ø": "o", "Ø": "O", "đ": "d",
+    "Đ": "D", "ł": "l", "Ł": "L", "þ": "th",
+    "Þ": "Th", "ð": "d", "Ð": "D",
+}
+
+
+def _name_transliterate_py(val: str | None) -> str | None:
+    if val is None:
+        return None
+    out: list[str] = []
+    for c in val:
+        if ord(c) < 128:
+            out.append(c)
+        else:
+            rep = _TRANSLITERATE_MAP.get(c)
+            if rep is not None:
+                out.append(rep)
+        # else: unmapped non-ASCII -- drop.
+    return "".join(out)
+
+
+@register_transform(
+    name="name_transliterate",
+    input_types=["name", "string"],
+    auto_apply=False,
+    priority=50,
+    mode="series",
+)
+def name_transliterate(series: pl.Series) -> pl.Series:
+    """ASCII-fold a name via an explicit curated diacritic map. Non-ASCII
+    chars not in the map are dropped."""
+    native = name_transliterate_native()
+    if native is not None:
+        return native(series)
+    return series.map_elements(_name_transliterate_py, return_dtype=pl.Utf8)
+
+
+# --- name_script (owned i18n-name kernel) ------------------------------------
+#
+# Pure-Python reference for goldenflow-core's ``names::name_script`` kernel.
+# MUST reproduce the Rust kernel byte-for-byte (asserted by
+# tests/transforms/test_identifiers_parity.py over
+# tests/parity/identifiers_corpus.jsonl) -- same explicit Unicode codepoint
+# ranges, same tie-break order. Deliberately NOT implemented via a
+# general-purpose Unicode script database -- that could drift by runtime
+# Unicode version; this table must stay byte-identical to
+# ``goldenflow-core/src/names.rs::classify_char``.
+#
+# Tie-break: highest per-script count wins; an EXACT count tie resolves to
+# whichever label appears earliest in ``_SCRIPT_PRIORITY``.
+_SCRIPT_PRIORITY: tuple[str, ...] = (
+    "Latin", "Cyrillic", "Greek", "Han", "Hiragana", "Katakana",
+    "Hangul", "Arabic", "Hebrew", "Devanagari",
+)
+_SCRIPT_RANGES: tuple[tuple[str, tuple[tuple[int, int], ...]], ...] = (
+    ("Latin", ((0x41, 0x5A), (0x61, 0x7A), (0x00C0, 0x024F))),
+    ("Cyrillic", ((0x0400, 0x04FF),)),
+    ("Greek", ((0x0370, 0x03FF),)),
+    ("Han", ((0x4E00, 0x9FFF),)),
+    ("Hiragana", ((0x3040, 0x309F),)),
+    ("Katakana", ((0x30A0, 0x30FF),)),
+    ("Hangul", ((0xAC00, 0xD7A3),)),
+    ("Arabic", ((0x0600, 0x06FF),)),
+    ("Hebrew", ((0x0590, 0x05FF),)),
+    ("Devanagari", ((0x0900, 0x097F),)),
+)
+
+
+def _classify_char(c: str) -> str | None:
+    cp = ord(c)
+    for label, ranges in _SCRIPT_RANGES:
+        for lo, hi in ranges:
+            if lo <= cp <= hi:
+                return label
+    return None
+
+
+def _name_script_py(val: str | None) -> str | None:
+    if val is None:
+        return None
+    if val == "":
+        return "Unknown"
+    counts: dict[str, int] = {}
+    for c in val:
+        label = _classify_char(c)
+        if label is not None:
+            counts[label] = counts.get(label, 0) + 1
+    if not counts:
+        return "Common"
+    best_label = _SCRIPT_PRIORITY[0]
+    best_count = -1
+    for label in _SCRIPT_PRIORITY:
+        c = counts.get(label, 0)
+        if c > best_count:
+            best_count = c
+            best_label = label
+    return best_label
+
+
+@register_transform(
+    name="name_script",
+    input_types=["name", "string"],
+    auto_apply=False,
+    priority=50,
+    mode="series",
+)
+def name_script(series: pl.Series) -> pl.Series:
+    """Detect the dominant Unicode script in a name: ``Unknown`` for empty
+    string, ``Common`` when no tracked-script char is present, else the
+    script with the highest char count (ties -> earliest in priority
+    order: Latin, Cyrillic, Greek, Han, Hiragana, Katakana, Hangul, Arabic,
+    Hebrew, Devanagari)."""
+    native = name_script_native()
+    if native is not None:
+        return native(series)
+    return series.map_elements(_name_script_py, return_dtype=pl.Utf8)

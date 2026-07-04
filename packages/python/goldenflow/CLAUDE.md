@@ -194,6 +194,13 @@ package. Loader discover order in `goldenflow/core/_native_loader.py`:
   (mobile-device IMEI Luhn checksum). Same pattern as Wave 0: pure-Python
   reference + pure-TS fallback, both byte-identical to the goldenflow-core Rust
   oracle via the same committed corpus.
+- **2 owned i18n name kernels (Wave B, both `auto_apply=False`, native-first):**
+  `name_transliterate` (deterministic Unicode-to-ASCII fold via an explicit
+  curated character map -- NOT NFD/Unicode decomposition -- for guaranteed
+  byte-for-byte parity across surfaces) and `name_script` (dominant-script
+  detection via Unicode code point ranges). Same cross-surface pattern as
+  Waves 0/A: native + WASM/TS + pure-Python fallback, all byte-identical to
+  the goldenflow-core Rust oracle.
 - **Byte-parity harness (cross-surface oracle = goldenflow-core).**
   `packages/python/goldenflow/tests/parity/identifiers_corpus.jsonl` (mirrored
   byte-identical into `packages/typescript/goldenflow/tests/parity/`) is the
@@ -453,10 +460,10 @@ result.manifest.records     # list[TransformRecord]
 result.manifest.created_at  # str
 ```
 
-### Available transforms (90)
+### Available transforms (92)
 **Text:** strip, lowercase, uppercase, title_case, normalize_unicode, normalize_quotes, collapse_whitespace, truncate, remove_punctuation, remove_html_tags, remove_urls, remove_digits, remove_emojis, fix_mojibake, normalize_line_endings, extract_numbers, pad_left, pad_right
 **Phone:** phone_e164, phone_national, phone_digits, phone_validate, phone_country_code
-**Name:** split_name, split_name_reverse, strip_titles, strip_suffixes, name_proper, initial_expand, nickname_standardize, merge_name
+**Name:** split_name, split_name_reverse, strip_titles, strip_suffixes, name_proper, initial_expand, nickname_standardize, merge_name, name_transliterate, name_script
 **Address:** address_standardize, address_expand, state_abbreviate, state_expand, zip_normalize, split_address, country_standardize, unit_normalize
 **Date:** date_iso8601, date_us, date_eu, date_parse, age_from_dob, datetime_iso8601, extract_year, extract_month, extract_day, extract_quarter, extract_day_of_week, date_shift, date_validate
 **Categorical:** category_auto_correct, category_standardize, category_from_file, boolean_normalize, gender_standardize, null_standardize
