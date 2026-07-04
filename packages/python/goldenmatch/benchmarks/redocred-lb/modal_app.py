@@ -211,20 +211,27 @@ def train(base_model: str = "roberta-large", epochs: int = 30, lr: float = 3e-5,
             best = {"epoch": epoch, "dev": dev_m, "test": test_m}
             print(f"  * new best dev Ign {best_dev:.4f} -> TEST F1 {test_m['f1']:.4f} "
                   f"Ign {test_m['ign_f1']:.4f}", flush=True)
-            _save({"base_model": base_model, "best": best, "history": history})
+            _save({"base_model": base_model, "best": best, "history": history},
+                  _manifest_name(base_model))
 
     manifest = {"base_model": base_model, "epochs": epochs, "lr": lr,
                 "best": best, "history": history}
-    _save(manifest)
+    _save(manifest, _manifest_name(base_model))
     print("DONE best:", json.dumps(best.get("test", {})), flush=True)
     return manifest
 
 
-def _save(manifest: dict) -> None:
+def _manifest_name(base_model: str) -> str:
+    """Per-run manifest filename so parallel encoder runs on the shared Volume don't
+    clobber each other's metrics."""
+    return "manifest_" + base_model.replace("/", "_") + ".json"
+
+
+def _save(manifest: dict, name: str = "manifest.json") -> None:
     import json
     import os
     os.makedirs(f"{DATA}/out", exist_ok=True)
-    with open(f"{DATA}/out/manifest.json", "w", encoding="utf-8") as f:
+    with open(f"{DATA}/out/{name}", "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2)
     vol.commit()
 
@@ -248,6 +255,7 @@ def main(base_model: str = "roberta-large", epochs: int = 30, spawn: bool = Fals
         return
     if spawn:
         call = train.spawn(base_model=base_model, epochs=epochs)
-        print(f"SPAWNED train call_id={call.object_id} -> /out/manifest.json on redocred-lb")
+        print(f"SPAWNED train call_id={call.object_id} "
+              f"-> /out/{_manifest_name(base_model)} on redocred-lb")
         return
     print("result:", train.remote(base_model=base_model, epochs=epochs))
