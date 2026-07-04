@@ -95,6 +95,7 @@ jobs:
       graph_wasm: ${{ steps.filter.outputs.graph_wasm }}
       fingerprint_wasm: ${{ steps.filter.outputs.fingerprint_wasm }}
       wasm_flow: ${{ steps.filter.outputs.wasm_flow }}
+      goldenpipe_wasm: ${{ steps.filter.outputs.goldenpipe_wasm }}
       sketch_wasm: ${{ steps.filter.outputs.sketch_wasm }}
       quality_gate: ${{ steps.filter.outputs.quality_gate }}
     steps:
@@ -233,6 +234,17 @@ jobs:
               - 'packages/typescript/goldenflow/src/core/wasm/**'
               - 'packages/typescript/goldenflow/src/core/transforms/identifiers.ts'
               - 'packages/typescript/goldenflow/tests/parity/**'
+              - 'packages/typescript/goldenmatch-wasm-runtime/**'
+            goldenpipe_wasm:
+              # Opt-in GoldenPipe WASM lane (SP3): the wasm-bindgen wrapper, the
+              # shared -core planner kernel it wraps, the TS wasm/loader + the
+              # planner seams it reroutes, the Leg A/B parity tests, and the
+              # shared wasm-runtime the loader imports.
+              - 'packages/rust/extensions/goldenpipe-wasm/**'
+              - 'packages/rust/extensions/goldenpipe-core/**'
+              - 'packages/typescript/goldenpipe/src/core/**'
+              - 'packages/typescript/goldenpipe/tests/parity/**'
+              - 'packages/typescript/goldenpipe/tests/unit/wasm-backend.test.ts'
               - 'packages/typescript/goldenmatch-wasm-runtime/**'
             ts_parity:
               # TS parity-fixture staleness gate (#856): a Python behaviour
@@ -1746,6 +1758,78 @@ jobs:
         run: pnpm --filter goldenmatch-wasm-runtime build
       - name: WASM identifier parity (un-skipped — artifact now present) [THE GATE]
         run: pnpm --filter goldenflow exec vitest run tests/parity/identifiers.parity.test.ts
+
+  goldenpipe_wasm:
+    needs: changes
+    if: needs.changes.outputs.goldenpipe_wasm == 'true' || needs.changes.outputs.force_all == 'true'
+    # Opt-in GoldenPipe WASM lane (SP3): builds goldenpipe-wasm into the
+    # goldenpipe TS package's src/core/wasm/artifacts/ (where the loader
+    # resolves it), then runs Leg A (pure-TS == core vectors) + Leg B
+    # (wasm == core vectors, un-skipped once the artifact is present) + the
+    # reroute-agreement + backend-registry tests. This is goldenpipe-wasm's CI
+    # home and the cross-surface planner drift gate; goldenpipe-core is the
+    # single reference (fmt/clippy/test here too).
+    #
+    # goldenpipe-wasm has no build_wasm.sh (like goldenflow-wasm): the build is
+    # inlined mirroring wasm_flow — cargo build wasm32 + wasm-bindgen-cli pinned
+    # to the version in the crate's Cargo.lock (a CLI/crate skew silently
+    # produces broken JS glue). wasm-pack is avoided because the crate declares
+    # wasm-bindgen under a cfg(target_arch="wasm32") table wasm-pack can't see.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/goldenpipe-wasm
+      - uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093  # v6.0.8
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Lint the reference + wasm crates (fmt + clippy, -D warnings)
+        run: |
+          set -euo pipefail
+          for C in goldenpipe-core goldenpipe-wasm; do
+            cargo fmt    --manifest-path "packages/rust/extensions/$C/Cargo.toml" -- --check
+            cargo clippy --manifest-path "packages/rust/extensions/$C/Cargo.toml" -- -D warnings
+            cargo test   --manifest-path "packages/rust/extensions/$C/Cargo.toml"
+          done
+      - name: Build goldenpipe WASM artifact into the loader's artifacts/ dir
+        # Mirrors wasm_flow: cargo build wasm32 + wasm-bindgen-cli pinned from
+        # Cargo.lock, emitting goldenpipe_wasm_bg.wasm + .js where the loader
+        # resolves `./artifacts/goldenpipe_wasm_bg.wasm`.
+        run: |
+          set -euo pipefail
+          CRATE_DIR=packages/rust/extensions/goldenpipe-wasm
+          OUT_DIR=packages/typescript/goldenpipe/src/core/wasm/artifacts
+          cargo build --manifest-path "$CRATE_DIR/Cargo.toml" \
+            --target wasm32-unknown-unknown --release
+          WB_VER="$(grep -A1 '^name = "wasm-bindgen"$' "$CRATE_DIR/Cargo.lock" | grep '^version = ' | head -1 | sed -E 's/version = "([^"]+)"/\1/')"
+          if [ -z "$WB_VER" ]; then echo "could not resolve wasm-bindgen version from Cargo.lock" >&2; exit 1; fi
+          echo "Using wasm-bindgen $WB_VER"
+          if ! wasm-bindgen --version 2>/dev/null | grep -q "$WB_VER"; then
+            cargo install wasm-bindgen-cli --version "=$WB_VER" --locked
+          fi
+          wasm-bindgen \
+            "$CRATE_DIR/target/wasm32-unknown-unknown/release/goldenpipe_wasm.wasm" \
+            --target web --out-dir "$OUT_DIR" --out-name goldenpipe_wasm
+      - name: Build shared wasm-runtime (the loader imports goldenmatch-wasm-runtime)
+        run: pnpm --filter goldenmatch-wasm-runtime build
+      - name: Planner parity + reroute + backend [THE GATE]
+        # Leg A (pure-TS==core), Leg B un-skipped (artifact present), the reroute
+        # wiring agreement, and the backend-registry unit test.
+        run: |
+          pnpm --filter goldenpipe exec vitest run \
+            tests/parity/planner-parity.test.ts \
+            tests/parity/planner-wasm-parity.test.ts \
+            tests/parity/reroute-agreement.test.ts \
+            tests/unit/wasm-backend.test.ts
 
   web_ui_e2e:
     needs: changes
