@@ -231,6 +231,36 @@ def ean_validate_native() -> Callable[[pl.Series], pl.Series] | None:
     return _ean_kernel_runner("ean_validate_arrow")
 
 
+def _swift_kernel_runner(attr: str) -> Callable[[pl.Series], pl.Series] | None:
+    """Build a whole-series runner for SWIFT/BIC kernel function ``attr`` if
+    native ``swift`` is enabled and the dependencies are importable; else
+    ``None``. Like the other identifier runners -- no region/gating args,
+    SWIFT/BIC validation is purely structural (no checksum)."""
+    if not native_enabled("swift"):
+        return None
+    nm = native_module()
+    if nm is None or not hasattr(nm, attr):
+        return None
+    try:
+        import pyarrow  # noqa: F401  (zero-copy bridge)
+    except ImportError:
+        return None
+    func = getattr(nm, attr)
+
+    def run(s: pl.Series) -> pl.Series:
+        return pl.from_arrow(func(_as_str_series(s).to_arrow()))
+
+    return run
+
+
+def swift_validate_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _swift_kernel_runner("swift_validate_arrow")
+
+
+def swift_format_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _swift_kernel_runner("swift_format_arrow")
+
+
 def _vat_kernel_runner(attr: str) -> Callable[[pl.Series], pl.Series] | None:
     """Build a whole-series runner for EU VAT kernel function ``attr`` if
     native ``vat`` is enabled and the dependencies are importable; else
@@ -260,3 +290,55 @@ def vat_validate_native() -> Callable[[pl.Series], pl.Series] | None:
 
 def vat_format_native() -> Callable[[pl.Series], pl.Series] | None:
     return _vat_kernel_runner("vat_format_arrow")
+
+
+def _aba_kernel_runner(attr: str) -> Callable[[pl.Series], pl.Series] | None:
+    """Build a whole-series runner for ABA routing-number kernel function
+    ``attr`` if native ``aba`` is enabled and the dependencies are
+    importable; else ``None``. Like the other identifier runners -- no
+    region/gating args, the checksum is region-free."""
+    if not native_enabled("aba"):
+        return None
+    nm = native_module()
+    if nm is None or not hasattr(nm, attr):
+        return None
+    try:
+        import pyarrow  # noqa: F401  (zero-copy bridge)
+    except ImportError:
+        return None
+    func = getattr(nm, attr)
+
+    def run(s: pl.Series) -> pl.Series:
+        return pl.from_arrow(func(_as_str_series(s).to_arrow()))
+
+    return run
+
+
+def aba_validate_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _aba_kernel_runner("aba_validate_arrow")
+
+
+def _imei_kernel_runner(attr: str) -> Callable[[pl.Series], pl.Series] | None:
+    """Build a whole-series runner for IMEI kernel function ``attr`` if
+    native ``imei`` is enabled and the dependencies are importable; else
+    ``None``. Like the other identifier runners -- no region/gating args,
+    the Luhn checksum is region-free."""
+    if not native_enabled("imei"):
+        return None
+    nm = native_module()
+    if nm is None or not hasattr(nm, attr):
+        return None
+    try:
+        import pyarrow  # noqa: F401  (zero-copy bridge)
+    except ImportError:
+        return None
+    func = getattr(nm, attr)
+
+    def run(s: pl.Series) -> pl.Series:
+        return pl.from_arrow(func(_as_str_series(s).to_arrow()))
+
+    return run
+
+
+def imei_validate_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _imei_kernel_runner("imei_validate_arrow")

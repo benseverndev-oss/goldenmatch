@@ -29,14 +29,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from goldenflow.core._native_loader import native_available, native_module  # noqa: E402
 from goldenflow.transforms.identifiers import (  # noqa: E402
+    _aba_validate_py,
     _cc_format_py,
     _cc_mask_py,
     _cc_validate_py,
     _ean_validate_py,
     _iban_format_py,
     _iban_validate_py,
+    _imei_validate_py,
     _isbn_normalize_py,
     _isbn_validate_py,
+    _swift_format_py,
+    _swift_validate_py,
     _vat_format_py,
     _vat_validate_py,
 )
@@ -147,6 +151,28 @@ _CASES: list[tuple[str, str | None]] = [
     ("ean_validate", "40063813339a1"),  # non-digit
     ("ean_validate", ""),  # empty
     ("ean_validate", None),  # null
+    # --- swift_validate: valid ---
+    ("swift_validate", "DEUTDEFF"),  # 8-char, valid
+    ("swift_validate", "DEUTDEFF500"),  # 11-char, valid
+    ("swift_validate", "NEDSZAJJXXX"),  # 11-char, valid, all-alpha branch
+    ("swift_validate", "deutdeff"),  # lowercase -> valid, normalized
+    ("swift_validate", "deu tdeff"),  # embedded space stripped -> valid
+    # --- swift_validate: invalid ---
+    ("swift_validate", "DEUTDEFF5"),  # 9 chars, bad length
+    ("swift_validate", "DEUT1EFF"),  # digit in institution code
+    ("swift_validate", "1234DEFF"),  # digits in institution code
+    ("swift_validate", "DEUTDE-FF"),  # hyphen not stripped -> bad length/charset
+    ("swift_validate", ""),  # empty
+    ("swift_validate", None),  # null
+    # --- swift_format: valid ---
+    ("swift_format", "deutdeff"),  # -> DEUTDEFF
+    ("swift_format", "DEUTDEFF500"),
+    ("swift_format", "ne dsz ajj xxx"),  # spaced -> NEDSZAJJXXX
+    # --- swift_format: invalid -> null ---
+    ("swift_format", "DEUTDEFF5"),
+    ("swift_format", "1234DEFF"),
+    ("swift_format", ""),
+    ("swift_format", None),
     # --- vat_validate: valid, checksummed (DE, IT) ---
     ("vat_validate", "DE136695976"),  # DE, checksum ok
     ("vat_validate", "de 136 695 976"),  # DE, lowercase + spaced
@@ -172,6 +198,27 @@ _CASES: list[tuple[str, str | None]] = [
     ("vat_format", "ZZ123"),  # unknown prefix
     ("vat_format", ""),
     ("vat_format", None),
+    # --- aba_validate: valid ---
+    ("aba_validate", "011000015"),  # valid checksum
+    ("aba_validate", "021000021"),  # valid checksum
+    ("aba_validate", "122105155"),  # valid checksum
+    ("aba_validate", "011-000-015"),  # dashed, still valid
+    # --- aba_validate: invalid ---
+    ("aba_validate", "011000016"),  # bad checksum
+    ("aba_validate", "12345"),  # wrong length
+    ("aba_validate", "01100001a"),  # non-digit
+    ("aba_validate", ""),  # empty
+    ("aba_validate", None),  # null
+    # --- imei_validate: valid ---
+    ("imei_validate", "490154203237518"),  # valid Luhn
+    ("imei_validate", "356938035643809"),  # valid Luhn
+    ("imei_validate", "49-0154-203237518"),  # dashed, still valid
+    # --- imei_validate: invalid ---
+    ("imei_validate", "490154203237519"),  # bad Luhn
+    ("imei_validate", "12345"),  # wrong length
+    ("imei_validate", "49015420323751a"),  # non-digit
+    ("imei_validate", ""),  # empty
+    ("imei_validate", None),  # null
     # --- astral-plane / non-ASCII char edge cases (UTF-16-vs-codepoint length
     # gate insurance -- Python `len()` counts codepoints, JS `.length` counts
     # UTF-16 code units, so an astral-plane char (surrogate pair) counts as 1
@@ -192,8 +239,12 @@ _PY_FN = {
     "isbn_validate": _isbn_validate_py,
     "isbn_normalize": _isbn_normalize_py,
     "ean_validate": _ean_validate_py,
+    "swift_validate": _swift_validate_py,
+    "swift_format": _swift_format_py,
     "vat_validate": _vat_validate_py,
     "vat_format": _vat_format_py,
+    "aba_validate": _aba_validate_py,
+    "imei_validate": _imei_validate_py,
 }
 
 _NATIVE_ARROW_FN = {
@@ -205,8 +256,12 @@ _NATIVE_ARROW_FN = {
     "isbn_validate": "isbn_validate_arrow",
     "isbn_normalize": "isbn_normalize_arrow",
     "ean_validate": "ean_validate_arrow",
+    "swift_validate": "swift_validate_arrow",
+    "swift_format": "swift_format_arrow",
     "vat_validate": "vat_validate_arrow",
     "vat_format": "vat_format_arrow",
+    "aba_validate": "aba_validate_arrow",
+    "imei_validate": "imei_validate_arrow",
 }
 
 

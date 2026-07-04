@@ -6,14 +6,18 @@ import polars as pl
 
 from goldenflow.transforms import register_transform
 from goldenflow.transforms._native import (
+    aba_validate_native,
     cc_format_native,
     cc_mask_native,
     cc_validate_native,
     ean_validate_native,
     iban_format_native,
     iban_validate_native,
+    imei_validate_native,
     isbn_normalize_native,
     isbn_validate_native,
+    swift_format_native,
+    swift_validate_native,
     vat_format_native,
     vat_validate_native,
 )
@@ -400,6 +404,82 @@ def ean_validate(series: pl.Series) -> pl.Series:
     return series.map_elements(_ean_validate_py, return_dtype=pl.Boolean)
 
 
+# --- SWIFT/BIC (ISO 9362, structural only) identifiers ----------------------
+#
+# Pure-Python reference for goldenflow-core's ``identifiers::swift`` kernel.
+# MUST reproduce the Rust kernel byte-for-byte (asserted by
+# tests/transforms/test_identifiers_parity.py over
+# tests/parity/identifiers_corpus.jsonl) -- same normalize (uppercase + strip
+# ASCII spaces ONLY, NOT '-'/'.'), same structural length/charset checks. No
+# checksum exists for BIC.
+
+
+def _swift_normalize(val: str) -> str:
+    """Uppercase + remove ASCII spaces only -- mirrors Rust ``normalize``.
+    Unlike the other identifiers here, '-'/'.' are NOT stripped: a
+    well-formed BIC never contains them, and silently stripping them could
+    let a malformed value pass structural validation."""
+    return val.replace(" ", "").upper()
+
+
+def _swift_validate_py(val: str | None) -> bool | None:
+    if val is None:
+        return None
+    t = _swift_normalize(val)
+    length = len(t)
+    if length not in (8, 11):
+        return False
+    if not all(c.isascii() and c.isalpha() for c in t[0:4]):
+        return False
+    if not all(c.isascii() and c.isalpha() for c in t[4:6]):
+        return False
+    if not all(c.isascii() and c.isalnum() for c in t[6:8]):
+        return False
+    if length == 11 and not all(c.isascii() and c.isalnum() for c in t[8:11]):
+        return False
+    return True
+
+
+def _swift_format_py(val: str | None) -> str | None:
+    if val is None:
+        return None
+    if not _swift_validate_py(val):
+        return None
+    return _swift_normalize(val)
+
+
+@register_transform(
+    name="swift_validate",
+    input_types=["identifier", "string"],
+    auto_apply=False,
+    priority=50,
+    mode="series",
+)
+def swift_validate(series: pl.Series) -> pl.Series:
+    """Validate a SWIFT/BIC code via structural checks (length 8/11 +
+    per-segment charset). No checksum exists for BIC."""
+    native = swift_validate_native()
+    if native is not None:
+        return native(series)
+    return series.map_elements(_swift_validate_py, return_dtype=pl.Boolean)
+
+
+@register_transform(
+    name="swift_format",
+    input_types=["identifier", "string"],
+    auto_apply=False,
+    priority=50,
+    mode="series",
+)
+def swift_format(series: pl.Series) -> pl.Series:
+    """Normalize a valid SWIFT/BIC code to uppercase (spaces stripped);
+    ``null`` for invalid input."""
+    native = swift_format_native()
+    if native is not None:
+        return native(series)
+    return series.map_elements(_swift_format_py, return_dtype=pl.Utf8)
+
+
 # --- EU VAT identifiers (bounded scope) -------------------------------------
 #
 # Pure-Python reference for goldenflow-core's ``identifiers::vat`` kernel.
@@ -638,3 +718,73 @@ def ein_format(series: pl.Series) -> pl.Series:
         return f"{digits[:2]}-{digits[2:]}"
 
     return series.map_elements(_format, return_dtype=pl.Utf8)
+
+
+# --- ABA routing number (US bank routing transit number) --------------------
+#
+# Pure-Python reference for goldenflow-core's ``identifiers::aba`` kernel.
+# MUST reproduce the Rust kernel byte-for-byte (asserted by
+# tests/transforms/test_identifiers_parity.py over
+# tests/parity/identifiers_corpus.jsonl) -- same separator strip, same
+# 9-digit length gate, same weighted checksum.
+
+
+def _aba_validate_py(val: str | None) -> bool | None:
+    if val is None:
+        return None
+    t = _cc_strip_sep(val)
+    if len(t) != 9 or not t.isascii() or not t.isdigit():
+        return False
+    d = [ord(c) - ord("0") for c in t]
+    total = 3 * (d[0] + d[3] + d[6]) + 7 * (d[1] + d[4] + d[7]) + (d[2] + d[5] + d[8])
+    return total % 10 == 0
+
+
+@register_transform(
+    name="aba_validate",
+    input_types=["identifier", "string"],
+    auto_apply=False,
+    priority=50,
+    mode="series",
+)
+def aba_validate(series: pl.Series) -> pl.Series:
+    """Validate a US ABA bank routing number: exactly 9 digits plus the
+    standard weighted checksum."""
+    native = aba_validate_native()
+    if native is not None:
+        return native(series)
+    return series.map_elements(_aba_validate_py, return_dtype=pl.Boolean)
+
+
+# --- IMEI (International Mobile Equipment Identity) --------------------------
+#
+# Pure-Python reference for goldenflow-core's ``identifiers::imei`` kernel.
+# MUST reproduce the Rust kernel byte-for-byte (asserted by
+# tests/transforms/test_identifiers_parity.py over
+# tests/parity/identifiers_corpus.jsonl) -- same separator strip, same
+# 15-digit length gate, same Luhn checksum (reuses ``_luhn_ok``, the same
+# helper the ``cc`` family uses -- one Luhn implementation for both).
+
+
+def _imei_validate_py(val: str | None) -> bool | None:
+    if val is None:
+        return None
+    t = _cc_strip_sep(val)
+    if len(t) != 15 or not t.isascii() or not t.isdigit():
+        return False
+    return _luhn_ok(t)
+
+
+@register_transform(
+    name="imei_validate",
+    input_types=["identifier", "string"],
+    auto_apply=False,
+    priority=50,
+    mode="series",
+)
+def imei_validate(series: pl.Series) -> pl.Series:
+    """Validate an IMEI: exactly 15 digits plus the Luhn checksum."""
+    native = imei_validate_native()
+    if native is not None:
+        return native(series)
+    return series.map_elements(_imei_validate_py, return_dtype=pl.Boolean)

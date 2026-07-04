@@ -31,6 +31,10 @@ import {
   eanValidateTs,
   vatValidateTs,
   vatFormatTs,
+  swiftValidateTs,
+  swiftFormatTs,
+  abaValidateTs,
+  imeiValidateTs,
 } from "../../src/core/transforms/identifiers.js";
 import { enableWasm, disableWasm } from "../../src/core/wasm/index.js";
 import { getFlowWasmBackend, type FlowWasmBackend } from "../../src/core/wasm/backend.js";
@@ -62,6 +66,10 @@ const PURE_TS_FN: Record<string, (s: string) => boolean | string | undefined> = 
   ean_validate: eanValidateTs,
   vat_validate: vatValidateTs,
   vat_format: vatFormatTs,
+  swift_validate: swiftValidateTs,
+  swift_format: swiftFormatTs,
+  aba_validate: abaValidateTs,
+  imei_validate: imeiValidateTs,
 };
 
 /** Same transform set, dispatched through the wasm backend's method of the
@@ -79,6 +87,10 @@ function wasmFn(backend: FlowWasmBackend, transform: string): (s: string) => boo
     ean_validate: (s) => backend.eanValidate(s),
     vat_validate: (s) => backend.vatValidate(s),
     vat_format: (s) => backend.vatFormat(s),
+    swift_validate: (s) => backend.swiftValidate(s),
+    swift_format: (s) => backend.swiftFormat(s),
+    aba_validate: (s) => backend.abaValidate(s),
+    imei_validate: (s) => backend.imeiValidate(s),
   };
   const fn = map[transform];
   if (!fn) throw new Error(`no wasm dispatch for transform ${transform}`);

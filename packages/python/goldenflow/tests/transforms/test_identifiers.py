@@ -2,6 +2,7 @@ import goldenflow
 import polars as pl
 from goldenflow.transforms import registry
 from goldenflow.transforms.identifiers import (
+    aba_validate,
     cc_format,
     cc_mask,
     cc_validate,
@@ -9,10 +10,13 @@ from goldenflow.transforms.identifiers import (
     ein_format,
     iban_format,
     iban_validate,
+    imei_validate,
     isbn_normalize,
     isbn_validate,
     ssn_format,
     ssn_mask,
+    swift_format,
+    swift_validate,
     vat_format,
     vat_validate,
 )
@@ -26,8 +30,12 @@ IDENTIFIER_TRANSFORM_NAMES = [
     "isbn_validate",
     "isbn_normalize",
     "ean_validate",
+    "swift_validate",
+    "swift_format",
     "vat_validate",
     "vat_format",
+    "aba_validate",
+    "imei_validate",
 ]
 
 
@@ -256,6 +264,49 @@ def test_ean_validate_valid_and_invalid():
     assert result[7] is None
 
 
+# --- SWIFT/BIC (ISO 9362, structural only) identifiers ----------------------
+
+
+def test_swift_validate_valid_and_invalid():
+    s = pl.Series(
+        "swift",
+        [
+            "DEUTDEFF",  # 8-char, valid
+            "DEUTDEFF500",  # 11-char, valid
+            "deutdeff",  # lowercase -> valid
+            "DEUTDEFF5",  # bad length
+            "DEUT1EFF",  # digit in institution
+            "",  # empty
+            None,  # null
+        ],
+    )
+    result = swift_validate(s)
+    assert result[0] is True
+    assert result[1] is True
+    assert result[2] is True
+    assert result[3] is False
+    assert result[4] is False
+    assert result[5] is False
+    assert result[6] is None
+
+
+def test_swift_format_normalizes_and_nulls_invalid():
+    s = pl.Series(
+        "swift",
+        [
+            "deutdeff",  # -> DEUTDEFF
+            "DEUTDEFF500",
+            "DEUTDEFF5",  # invalid -> null
+            None,
+        ],
+    )
+    result = swift_format(s)
+    assert result[0] == "DEUTDEFF"
+    assert result[1] == "DEUTDEFF500"
+    assert result[2] is None
+    assert result[3] is None
+
+
 # --- EU VAT identifiers (bounded scope: structural for all, checksum DE/IT) --
 
 
@@ -307,6 +358,60 @@ def test_vat_format_normalizes_and_nulls_invalid():
     assert result[2] is None
     assert result[3] is None
     assert result[4] is None
+
+
+# --- ABA routing number (US bank routing transit number) --------------------
+
+
+def test_aba_validate_valid_and_invalid():
+    s = pl.Series(
+        "aba",
+        [
+            "011000015",  # valid checksum
+            "021000021",  # valid checksum
+            "122105155",  # valid checksum
+            "011000016",  # bad checksum
+            "12345",  # wrong length
+            "01100001a",  # non-digit
+            "",  # empty
+            None,  # null
+        ],
+    )
+    result = aba_validate(s)
+    assert result[0] is True
+    assert result[1] is True
+    assert result[2] is True
+    assert result[3] is False
+    assert result[4] is False
+    assert result[5] is False
+    assert result[6] is False
+    assert result[7] is None
+
+
+# --- IMEI (International Mobile Equipment Identity) --------------------------
+
+
+def test_imei_validate_valid_and_invalid():
+    s = pl.Series(
+        "imei",
+        [
+            "490154203237518",  # valid Luhn
+            "356938035643809",  # valid Luhn
+            "490154203237519",  # bad Luhn
+            "12345",  # wrong length
+            "49015420323751a",  # non-digit
+            "",  # empty
+            None,  # null
+        ],
+    )
+    result = imei_validate(s)
+    assert result[0] is True
+    assert result[1] is True
+    assert result[2] is False
+    assert result[3] is False
+    assert result[4] is False
+    assert result[5] is False
+    assert result[6] is None
 
 
 # --- Registration + zero-config posture --------------------------------------

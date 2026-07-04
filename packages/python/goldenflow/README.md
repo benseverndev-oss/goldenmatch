@@ -333,7 +333,7 @@ goldenflow transform listings.csv --domain real_estate
 
 ---
 
-## Transform Library (86 transforms)
+## Transform Library (90 transforms)
 
 ### Text Transforms (18)
 | Transform | What It Does |
@@ -431,7 +431,7 @@ goldenflow transform listings.csv --domain real_estate
 | `email_extract_domain` | user@example.com -> example.com |
 | `email_validate` | Flag invalid email format |
 
-### Identifier Transforms (13)
+### Identifier Transforms (17)
 | Transform | What It Does |
 |-----------|-------------|
 | `ssn_format` | Normalize to XXX-XX-XXXX |
@@ -447,10 +447,15 @@ goldenflow transform listings.csv --domain real_estate
 | `ean_validate` | Validate an EAN-8/UPC-A/EAN-13 via its GTIN mod-10 checksum |
 | `vat_validate` | Validate an EU VAT number (structural all 27 prefixes; checksum DE + IT) |
 | `vat_format` | Normalize a valid EU VAT to compact uppercase; null if invalid |
+| `swift_validate` | Validate a SWIFT/BIC bank code (8 or 11 chars; structural bank/country/location/branch checks) |
+| `swift_format` | Normalize a valid SWIFT/BIC to uppercase; null if invalid |
+| `aba_validate` | Validate a US ABA routing number via its weighted checksum |
+| `imei_validate` | Validate a mobile-device IMEI via the Luhn checksum |
 
-The checksummed identifiers (cc/iban/isbn/ean/vat) run on owned Rust kernels
-(native-first with pure-Python fallbacks proven byte-identical), and are
-opt-in (`auto_apply=False`) — request them explicitly in a config.
+The checksummed/structural identifiers (cc/iban/isbn/ean/vat/swift/aba/imei) run
+on owned Rust kernels (native-first with pure-Python fallbacks proven
+byte-identical), and are opt-in (`auto_apply=False`) — request them explicitly
+in a config.
 
 ### URL Transforms (2)
 | Transform | What It Does |
@@ -577,7 +582,7 @@ result.manifest  # renders transform audit trail
 
 ## TypeScript / JavaScript
 
-GoldenFlow has a full TypeScript port with feature parity — same 86 transforms, same engine, same config format. The core is **edge-safe** (runs in browsers, Cloudflare Workers, Vercel Edge) with a Node layer for file I/O and CLI. Pure-TS is the default; an opt-in `enableWasm()` routes the checksummed-identifier transforms through a WASM kernel (see below).
+GoldenFlow has a full TypeScript port with feature parity — same 90 transforms, same engine, same config format. The core is **edge-safe** (runs in browsers, Cloudflare Workers, Vercel Edge) with a Node layer for file I/O and CLI. Pure-TS is the default; an opt-in `enableWasm()` routes the checksummed-identifier transforms through a WASM kernel (see below).
 
 ### Install
 
@@ -862,7 +867,7 @@ dqbench run goldenflow
 | | GoldenFlow | pandas scripts | [Great Expectations](https://greatexpectations.io/) | [dbt](https://www.getdbt.com/) | [Dataprep.Clean](https://docs.dataprep.ai/user_guide/clean/) |
 |---|---|---|---|---|---|
 | Zero-config transforms | Yes (auto-detect) | No | No (validation only) | No (SQL transforms) | Partial |
-| 86 built-in transforms (11 categories) | Yes | Manual | No (validator, not transformer) | Via SQL | ~30 cleaners |
+| 90 built-in transforms (11 categories) | Yes | Manual | No (validator, not transformer) | Via SQL | ~30 cleaners |
 | Domain packs (healthcare, finance...) | 5 built-in | No | No | No | No |
 | Schema mapping | Auto + manual | Manual | No | Via ref/source | No |
 | Audit trail (manifest) | Automatic JSON | Manual | No | Via logs | No |

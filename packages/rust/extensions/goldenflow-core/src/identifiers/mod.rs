@@ -1,10 +1,13 @@
 //! Owned checksummed-identifier kernels (pyo3-free). validate -> bool,
 //! canonicalize -> Option<String>. These are the reference implementations;
 //! the Python/TS fallbacks must reproduce their bytes exactly (byte-parity harness).
+pub mod aba;
 pub mod ean;
 pub mod iban;
+pub mod imei;
 pub mod isbn;
 pub mod luhn;
+pub mod swift;
 pub mod vat;
 
 /// Remove ASCII spaces, '-' and '.' — the separators identifiers tolerate.

@@ -636,6 +636,158 @@ registerTransform(
 );
 
 // ---------------------------------------------------------------------------
+// SWIFT/BIC identifiers
+//
+// Pure-TS reference for goldenflow-core's `identifiers::swift` kernel. MUST
+// reproduce the Rust/Python kernel byte-for-byte -- normalize is uppercase +
+// remove ASCII spaces ONLY (unlike `ccStripSep`, '-'/'.' are NOT stripped: a
+// well-formed BIC never contains them, and silently stripping them could let
+// a malformed value pass structural validation). Structural-only (no
+// checksum exists for BIC): length 8 or 11, [0:4] alpha, [4:6] alpha, [6:8]
+// alnum, [8:11] alnum if present.
+// ---------------------------------------------------------------------------
+
+/** Uppercase + remove ASCII spaces only -- mirrors Rust/Python `_swift_normalize`. */
+function swiftNormalize(val: string): string {
+  return val.replace(/ /g, "").toUpperCase();
+}
+
+function swiftValidateTs(val: string): boolean {
+  const t = swiftNormalize(val);
+  const length = t.length;
+  if (length !== 8 && length !== 11) return false;
+  for (let i = 0; i < 4; i++) {
+    if (!isAsciiAlphaChar(t[i] ?? "")) return false;
+  }
+  for (let i = 4; i < 6; i++) {
+    if (!isAsciiAlphaChar(t[i] ?? "")) return false;
+  }
+  for (let i = 6; i < 8; i++) {
+    if (!isAsciiAlnumChar(t[i] ?? "")) return false;
+  }
+  if (length === 11) {
+    for (let i = 8; i < 11; i++) {
+      if (!isAsciiAlnumChar(t[i] ?? "")) return false;
+    }
+  }
+  return true;
+}
+
+function swiftFormatTs(val: string): string | undefined {
+  if (!swiftValidateTs(val)) return undefined;
+  return swiftNormalize(val);
+}
+
+function swiftValidate(values: readonly ColumnValue[]): ColumnValue[] {
+  const backend: FlowWasmBackend | null = getFlowWasmBackend();
+  return mapToBool(values, backend ? (s) => backend.swiftValidate(s) : swiftValidateTs);
+}
+
+registerTransform(
+  {
+    name: "swift_validate",
+    inputTypes: ["identifier", "string"],
+    autoApply: false,
+    priority: 50,
+    mode: "series",
+  },
+  swiftValidate,
+);
+
+function swiftFormat(values: readonly ColumnValue[]): ColumnValue[] {
+  const backend: FlowWasmBackend | null = getFlowWasmBackend();
+  return mapToStringOrNull(
+    values,
+    backend ? (s) => backend.swiftFormat(s) : swiftFormatTs,
+  );
+}
+
+registerTransform(
+  {
+    name: "swift_format",
+    inputTypes: ["identifier", "string"],
+    autoApply: false,
+    priority: 50,
+    mode: "series",
+  },
+  swiftFormat,
+);
+
+// ---------------------------------------------------------------------------
+// ABA routing number (US bank routing transit number)
+//
+// Pure-TS reference for goldenflow-core's `identifiers::aba` kernel. MUST
+// reproduce the Rust/Python kernel byte-for-byte -- same separator strip
+// (reuses `ccStripSep`), same 9-digit length gate, same weighted checksum.
+// ---------------------------------------------------------------------------
+
+function abaValidateTs(val: string): boolean {
+  const t = ccStripSep(val);
+  if (t.length !== 9) return false;
+  for (const c of t) {
+    if (!isAsciiDigitChar(c)) return false;
+  }
+  const d: number[] = [];
+  for (const c of t) d.push(c.charCodeAt(0) - 48);
+  const total =
+    3 * ((d[0] ?? 0) + (d[3] ?? 0) + (d[6] ?? 0)) +
+    7 * ((d[1] ?? 0) + (d[4] ?? 0) + (d[7] ?? 0)) +
+    1 * ((d[2] ?? 0) + (d[5] ?? 0) + (d[8] ?? 0));
+  return total % 10 === 0;
+}
+
+function abaValidate(values: readonly ColumnValue[]): ColumnValue[] {
+  const backend: FlowWasmBackend | null = getFlowWasmBackend();
+  return mapToBool(values, backend ? (s) => backend.abaValidate(s) : abaValidateTs);
+}
+
+registerTransform(
+  {
+    name: "aba_validate",
+    inputTypes: ["identifier", "string"],
+    autoApply: false,
+    priority: 50,
+    mode: "series",
+  },
+  abaValidate,
+);
+
+// ---------------------------------------------------------------------------
+// IMEI (International Mobile Equipment Identity)
+//
+// Pure-TS reference for goldenflow-core's `identifiers::imei` kernel. MUST
+// reproduce the Rust/Python kernel byte-for-byte -- same separator strip
+// (reuses `ccStripSep`), same 15-digit length gate, same Luhn checksum
+// (reuses `luhnOk`, the same helper the `cc` family uses -- one Luhn
+// implementation for both).
+// ---------------------------------------------------------------------------
+
+function imeiValidateTs(val: string): boolean {
+  const t = ccStripSep(val);
+  if (t.length !== 15) return false;
+  for (const c of t) {
+    if (!isAsciiDigitChar(c)) return false;
+  }
+  return luhnOk(t);
+}
+
+function imeiValidate(values: readonly ColumnValue[]): ColumnValue[] {
+  const backend: FlowWasmBackend | null = getFlowWasmBackend();
+  return mapToBool(values, backend ? (s) => backend.imeiValidate(s) : imeiValidateTs);
+}
+
+registerTransform(
+  {
+    name: "imei_validate",
+    inputTypes: ["identifier", "string"],
+    autoApply: false,
+    priority: 50,
+    mode: "series",
+  },
+  imeiValidate,
+);
+
+// ---------------------------------------------------------------------------
 // ssn_format (series, ssn|string, 50)
 // ---------------------------------------------------------------------------
 
@@ -708,4 +860,8 @@ export {
   eanValidateTs,
   vatValidateTs,
   vatFormatTs,
+  swiftValidateTs,
+  swiftFormatTs,
+  abaValidateTs,
+  imeiValidateTs,
 };

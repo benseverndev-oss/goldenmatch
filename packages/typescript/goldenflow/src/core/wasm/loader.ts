@@ -51,6 +51,10 @@ export async function instantiateBackend(bytes: Uint8Array): Promise<FlowWasmBac
     ean_validate: (s: string) => boolean;
     vat_validate: (s: string) => boolean;
     vat_format: (s: string) => string | undefined;
+    swift_validate: (s: string) => boolean;
+    swift_format: (s: string) => string | undefined;
+    aba_validate: (s: string) => boolean;
+    imei_validate: (s: string) => boolean;
   };
   await glue.default({ module_or_path: bytes });
 
@@ -65,5 +69,9 @@ export async function instantiateBackend(bytes: Uint8Array): Promise<FlowWasmBac
     eanValidate: (s) => glue.ean_validate(s),
     vatValidate: (s) => glue.vat_validate(s),
     vatFormat: (s) => glue.vat_format(s),
+    swiftValidate: (s) => glue.swift_validate(s),
+    swiftFormat: (s) => glue.swift_format(s),
+    abaValidate: (s) => glue.aba_validate(s),
+    imeiValidate: (s) => glue.imei_validate(s),
   };
 }
