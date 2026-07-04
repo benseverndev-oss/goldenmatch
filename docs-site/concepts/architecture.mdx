@@ -1,6 +1,6 @@
 ---
 title: "Architecture"
-description: "How the five Golden Suite tools compose into one pipeline across Python, TypeScript, Rust, dbt, and GitHub Actions."
+description: "How the six Golden Suite tools compose into one pipeline across Python, TypeScript, Rust, dbt, and GitHub Actions."
 keywords: ["architecture", "pipeline", "composition", "polyglot"]
 ---
 
@@ -25,13 +25,16 @@ flowchart LR
     Discovers quality rules from the data itself: encoding, format, nullability, anomalies.
   </Step>
   <Step title="GoldenFlow standardizes">
-    Normalizes phone numbers, dates, addresses, and categorical spelling with 76 built-in transforms.
+    Normalizes phone numbers, dates, addresses, and categorical spelling with 86 built-in transforms.
   </Step>
   <Step title="GoldenMatch deduplicates">
     Blocks, scores, clusters, and synthesizes golden records using fuzzy, exact, probabilistic, and LLM scoring.
   </Step>
   <Step title="GoldenPipe orchestrates">
-    Runs the whole chain with adaptive logic. It skips transformation if no issues are found and explains every decision.
+    Runs the whole chain with adaptive logic on a dependency-DAG planner. It skips transformation if no issues are found and explains every decision.
+  </Step>
+  <Step title="GoldenAnalysis reports">
+    Runs read-only analyzers over any stage's outputs — match rates, cluster distribution, quality rollups — with cross-run trend and regression detection.
   </Step>
 </Steps>
 
@@ -51,7 +54,7 @@ Every surface is exercised in CI: the Python test matrix (3.11 to 3.13), the Typ
 
 ## AI-native surface
 
-Every package ships an MCP server, a REST API, and an agent surface. Across the suite there are 35+ MCP tools. The `AutoConfigController` is visible from every interface: the web `ControllerPanel`, the TUI (`Ctrl+A`), the CLI, REST endpoints, Postgres functions, DuckDB UDFs, and MCP/agent tools.
+Every package ships an MCP server; the service-shaped packages also ship a REST API and an agent surface. Across the suite there are ~110 MCP tools (GoldenMatch alone has 69). The `AutoConfigController` is visible from every interface: the web `ControllerPanel`, the TUI (`Ctrl+A`), the CLI, REST endpoints, Postgres functions, DuckDB UDFs, and MCP/agent tools.
 
 Add the remote MCP server to Claude Desktop or Claude Code:
 
