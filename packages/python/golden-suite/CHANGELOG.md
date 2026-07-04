@@ -4,6 +4,17 @@ All notable changes to golden-suite are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic
 versioning.
 
+## [0.1.2] - 2026-07-04
+
+### Changed
+- Bumped the two stale goldenflow-family floors to the latest PyPI releases:
+  **`goldenflow>=1.4.0`** (was `>=1.3`) and **`goldenflow-native>=0.2.0`** (was
+  `>=0.1.1`), per the lockstep policy (whenever a bundled member releases,
+  golden-suite bumps its floor and re-cuts). Floors track the latest *published*
+  member versions so `pip install golden-suite` stays satisfiable; the workspace
+  carries newer unreleased goldenflow work whose floor can be mandated once it
+  ships to PyPI.
+
 ## [0.1.1] - 2026-07-02
 
 ### Changed
