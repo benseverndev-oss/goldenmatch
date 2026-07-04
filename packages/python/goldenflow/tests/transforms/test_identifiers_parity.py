@@ -13,6 +13,12 @@ from pathlib import Path
 import polars as pl
 import pytest
 from goldenflow.core._native_loader import native_available
+from goldenflow.transforms.email import (
+    email_extract_domain,
+    email_lowercase,
+    email_normalize,
+    email_validate,
+)
 from goldenflow.transforms.identifiers import (
     aba_validate,
     cc_format,
@@ -50,6 +56,10 @@ _TRANSFORMS = {
     "imei_validate": imei_validate,
     "name_transliterate": name_transliterate,
     "name_script": name_script,
+    "email_lowercase": email_lowercase,
+    "email_normalize": email_normalize,
+    "email_extract_domain": email_extract_domain,
+    "email_validate": email_validate,
 }
 
 # Floor native symbol per transform's component -- used to skip a row when the
@@ -72,6 +82,12 @@ _NATIVE_FLOOR_SYMBOL = {
     "imei_validate": "imei_validate_arrow",
     "name_transliterate": "name_transliterate_arrow",
     "name_script": "name_script_arrow",
+    # email: all 4 transforms are wired via the single "email" component
+    # (floor symbol email_validate_arrow), region-free/locale-free.
+    "email_lowercase": "email_validate_arrow",
+    "email_normalize": "email_validate_arrow",
+    "email_extract_domain": "email_validate_arrow",
+    "email_validate": "email_validate_arrow",
 }
 
 

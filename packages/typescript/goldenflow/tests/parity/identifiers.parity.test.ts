@@ -37,6 +37,12 @@ import {
   imeiValidateTs,
 } from "../../src/core/transforms/identifiers.js";
 import { nameTransliterateTs, nameScriptTs } from "../../src/core/transforms/names.js";
+import {
+  emailLowercaseTs,
+  emailNormalizeTs,
+  emailExtractDomainTs,
+  emailValidateTs,
+} from "../../src/core/transforms/email.js";
 import { enableWasm, disableWasm } from "../../src/core/wasm/index.js";
 import { getFlowWasmBackend, type FlowWasmBackend } from "../../src/core/wasm/backend.js";
 
@@ -73,6 +79,10 @@ const PURE_TS_FN: Record<string, (s: string) => boolean | string | undefined> = 
   imei_validate: imeiValidateTs,
   name_transliterate: nameTransliterateTs,
   name_script: nameScriptTs,
+  email_lowercase: emailLowercaseTs,
+  email_normalize: emailNormalizeTs,
+  email_extract_domain: emailExtractDomainTs,
+  email_validate: emailValidateTs,
 };
 
 /** Same transform set, dispatched through the wasm backend's method of the
@@ -96,6 +106,10 @@ function wasmFn(backend: FlowWasmBackend, transform: string): (s: string) => boo
     imei_validate: (s) => backend.imeiValidate(s),
     name_transliterate: (s) => backend.nameTransliterate(s),
     name_script: (s) => backend.nameScript(s),
+    email_lowercase: (s) => backend.emailLowercase(s),
+    email_normalize: (s) => backend.emailNormalize(s),
+    email_extract_domain: (s) => backend.emailExtractDomain(s),
+    email_validate: (s) => backend.emailValidate(s),
   };
   const fn = map[transform];
   if (!fn) throw new Error(`no wasm dispatch for transform ${transform}`);

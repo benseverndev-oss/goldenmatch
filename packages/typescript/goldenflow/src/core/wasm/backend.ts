@@ -3,8 +3,9 @@
  * node:* here.
  *
  * The active backend (if any) is consulted by the identifier transforms
- * (cc/iban/isbn/ean/vat/swift/aba/imei) for the 14 covered functions, plus
- * the i18n-name transforms (name_transliterate/name_script); everything
+ * (cc/iban/isbn/ean/vat/swift/aba/imei) for the 14 covered functions, the
+ * i18n-name transforms (name_transliterate/name_script), and the email
+ * transforms (email_lowercase/normalize/extract_domain/validate); everything
  * else stays pure-TS. Mirrors goldenmatch's `setScorerBackend(null)`
  * module-singleton pattern for test isolation.
  */
@@ -36,6 +37,10 @@ export interface FlowWasmBackend {
   imeiValidate(s: string): boolean;
   nameTransliterate(s: string): string;
   nameScript(s: string): string;
+  emailLowercase(s: string): string;
+  emailNormalize(s: string): string;
+  emailExtractDomain(s: string): string | undefined;
+  emailValidate(s: string): boolean;
 }
 
 import { createBackendRegistry } from "goldenmatch-wasm-runtime";

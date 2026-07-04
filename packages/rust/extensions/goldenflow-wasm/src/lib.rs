@@ -12,9 +12,30 @@
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
+    use goldenflow_core::email;
     use goldenflow_core::identifiers::{aba, ean, iban, imei, isbn, luhn, swift, vat};
     use goldenflow_core::names;
     use wasm_bindgen::prelude::*;
+
+    #[wasm_bindgen]
+    pub fn email_lowercase(s: &str) -> String {
+        email::email_lowercase(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn email_normalize(s: &str) -> String {
+        email::email_normalize(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn email_extract_domain(s: &str) -> Option<String> {
+        email::email_extract_domain(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn email_validate(s: &str) -> Option<bool> {
+        email::email_validate(s)
+    }
 
     #[wasm_bindgen]
     pub fn cc_validate(s: &str) -> bool {

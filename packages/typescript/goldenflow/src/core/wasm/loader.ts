@@ -57,6 +57,10 @@ export async function instantiateBackend(bytes: Uint8Array): Promise<FlowWasmBac
     imei_validate: (s: string) => boolean;
     name_transliterate: (s: string) => string;
     name_script: (s: string) => string;
+    email_lowercase: (s: string) => string;
+    email_normalize: (s: string) => string;
+    email_extract_domain: (s: string) => string | undefined;
+    email_validate: (s: string) => boolean | undefined;
   };
   await glue.default({ module_or_path: bytes });
 
@@ -77,5 +81,9 @@ export async function instantiateBackend(bytes: Uint8Array): Promise<FlowWasmBac
     imeiValidate: (s) => glue.imei_validate(s),
     nameTransliterate: (s) => glue.name_transliterate(s),
     nameScript: (s) => glue.name_script(s),
+    emailLowercase: (s) => glue.email_lowercase(s),
+    emailNormalize: (s) => glue.email_normalize(s),
+    emailExtractDomain: (s) => glue.email_extract_domain(s),
+    emailValidate: (s) => glue.email_validate(s) ?? false,
   };
 }

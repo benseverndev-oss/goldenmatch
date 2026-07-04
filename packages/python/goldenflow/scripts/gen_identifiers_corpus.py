@@ -28,6 +28,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from goldenflow.core._native_loader import native_available, native_module  # noqa: E402
+from goldenflow.transforms.email import (  # noqa: E402
+    _email_extract_domain_py,
+    _email_lowercase_py,
+    _email_normalize_py,
+    _email_validate_py,
+)
 from goldenflow.transforms.identifiers import (  # noqa: E402
     _aba_validate_py,
     _cc_format_py,
@@ -260,6 +266,42 @@ _CASES: list[tuple[str, str | None]] = [
     ("name_script", "123"),  # digits only -> Common
     ("name_script", ""),  # empty -> Unknown
     ("name_script", None),  # null
+    # --- email_lowercase ---
+    ("email_lowercase", " John@X.COM "),  # leading/trailing whitespace
+    ("email_lowercase", "A@B.com"),  # already lower domain
+    ("email_lowercase", "ADMIN@EXAMPLE.COM"),  # all-caps
+    ("email_lowercase", ""),  # empty
+    ("email_lowercase", None),  # null
+    # --- email_normalize ---
+    ("email_normalize", "John.Doe+tag@Gmail.com"),  # gmail dot-strip + tag-strip
+    ("email_normalize", "a+b@x.com"),  # non-gmail: tag stripped, dots kept (none here)
+    ("email_normalize", "notanemail"),  # no '@' -> preserved verbatim
+    ("email_normalize", "A@B.com"),  # simple lowercase
+    ("email_normalize", "j.o.h.n@googlemail.com"),  # googlemail dot-strip
+    ("email_normalize", "user+spam@example.com"),  # non-gmail tag-strip only
+    ("email_normalize", ""),  # empty -> preserved
+    ("email_normalize", "   "),  # whitespace-only -> preserved verbatim
+    ("email_normalize", None),  # null
+    # --- email_extract_domain ---
+    ("email_extract_domain", "x@Foo.COM"),  # mixed-case domain -> lowercased
+    ("email_extract_domain", "noat"),  # no '@' -> None
+    ("email_extract_domain", "trailing@"),  # nothing after '@' -> None
+    ("email_extract_domain", "admin@sub.domain.org"),  # multi-label domain
+    ("email_extract_domain", "a@b@c.com"),  # multiple '@' -> domain after LAST
+    ("email_extract_domain", ""),  # empty -> None
+    ("email_extract_domain", None),  # null
+    # --- email_validate ---
+    ("email_validate", "a@b.co"),  # valid
+    ("email_validate", "valid@example.com"),  # valid
+    ("email_validate", "also.valid+tag@sub.example.co.uk"),  # valid, multi-label
+    ("email_validate", "a@b"),  # no dot in domain -> false
+    ("email_validate", "a b@c.com"),  # whitespace in local -> false
+    ("email_validate", "a@@b.com"),  # two '@' -> false
+    ("email_validate", "@no-local.com"),  # empty local -> false
+    ("email_validate", "no-domain@"),  # empty domain -> false
+    ("email_validate", ""),  # empty -> false
+    ("email_validate", "   "),  # whitespace-only -> false
+    ("email_validate", None),  # null
 ]
 
 _PY_FN = {
@@ -279,6 +321,10 @@ _PY_FN = {
     "imei_validate": _imei_validate_py,
     "name_transliterate": _name_transliterate_py,
     "name_script": _name_script_py,
+    "email_lowercase": _email_lowercase_py,
+    "email_normalize": _email_normalize_py,
+    "email_extract_domain": _email_extract_domain_py,
+    "email_validate": _email_validate_py,
 }
 
 _NATIVE_ARROW_FN = {
@@ -298,6 +344,10 @@ _NATIVE_ARROW_FN = {
     "imei_validate": "imei_validate_arrow",
     "name_transliterate": "name_transliterate_arrow",
     "name_script": "name_script_arrow",
+    "email_lowercase": "email_lowercase_arrow",
+    "email_normalize": "email_normalize_arrow",
+    "email_extract_domain": "email_extract_domain_arrow",
+    "email_validate": "email_validate_arrow",
 }
 
 

@@ -2,6 +2,14 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-07-04 — GoldenFlow Wave D1: email transform family migrated to owned kernels
+- The email transform family (`email_lowercase`, `email_normalize`,
+  `email_extract_domain`, `email_validate`) is now backed by owned Rust
+  kernels in `goldenflow-core`, cross-surface (native + WASM/TS +
+  pure-Python fallback), byte-parity to the Rust oracle. Existing transforms
+  migrated to native-first dispatch, not new additions -- registry stays at
+  92. Versions: goldenflow 1.7.0 / npm 0.7.0 / goldenflow-native 0.5.0.
+
 ## 2026-07-04 — GoldenFlow Wave B: name_transliterate + name_script i18n name kernels
 - Extension of ADR [../decisions/0031-goldenflow-reference-mode-identifiers-wasm.md](../decisions/0031-goldenflow-reference-mode-identifiers-wasm.md)
   (no new ADR needed) — two new owned i18n name kernels: `name_transliterate`
