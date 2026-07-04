@@ -250,6 +250,23 @@ package. Loader discover order in `goldenflow/core/_native_loader.py`:
   kernels wired via the single `"categorical"` `_native_loader` component
   (floor symbol `boolean_normalize_arrow`). `null_standardize` stays
   `auto_apply=True`.
+- **Names-remainder family migrated to owned kernels (Wave D names) -- TWO
+  new kernel SHAPES.** The 8 remaining `name` transforms now dispatch
+  native-first through goldenflow-core (`strip_titles`/`strip_suffixes`/
+  `name_proper`/`nickname_standardize`/`has_initial` scalar; `split_name`/
+  `split_name_reverse` multi-OUTPUT; `merge_name` multi-INPUT), all wired via
+  the single `"names_ext"` `_native_loader` component (floor symbol
+  `strip_titles_arrow`). `strip_titles` stays `auto_apply=True`; the rest
+  `auto_apply=False`. **New arrow marshaling** in `native-flow/src/util.rs`:
+  `map_str_to_str_pair` (1 array -> `first`+`last`, for the split kernels) and
+  `zip_str_to_str` (two arrays -> one, for `merge_name`); the wasm split kernels
+  return a 2-element `[first,last]` JS array. `split_name` is first+last ONLY
+  (`rsplit(" ",1)`), no middle field. `strip_titles`/`strip_suffixes` keep
+  `mode="expr"` via `map_batches` (numeric precedent). `name_proper`
+  title-casing is bounded to ASCII semantics (documented boundary). The 5
+  scalar transforms live in the shared corpus; the 3 multi-output ones (they
+  don't fit a string->scalar row) get pinned-vector `tests/transforms/
+  test_name_kernels.py` (native + fallback), the numeric-array-op precedent.
 - **Byte-parity harness (cross-surface oracle = goldenflow-core).**
   `packages/python/goldenflow/tests/parity/identifiers_corpus.jsonl` (mirrored
   byte-identical into `packages/typescript/goldenflow/tests/parity/`) is the
