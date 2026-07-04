@@ -1,0 +1,6 @@
+# Built by goldenpipe-wasm/build_wasm.sh (CI) — never committed.
+goldenpipe_wasm_bg.wasm
+goldenpipe_wasm.js
+goldenpipe_wasm.d.ts
+goldenpipe_wasm_bg.wasm.d.ts
+goldenpipe_wasm_base64.js

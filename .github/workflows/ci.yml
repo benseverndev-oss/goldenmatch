@@ -1821,6 +1821,13 @@ jobs:
             --target web --out-dir "$OUT_DIR" --out-name goldenpipe_wasm
       - name: Build shared wasm-runtime (the loader imports goldenmatch-wasm-runtime)
         run: pnpm --filter goldenmatch-wasm-runtime build
+      - name: Build goldenpipe's sibling deps (adapters import goldencheck/goldenflow/goldenmatch)
+        # The parity suites transitively load src/core/adapters, which import the
+        # built sibling packages (e.g. `goldencheck/core` -> its dist/). vitest
+        # resolves those from each sibling's dist/, so they must be built first.
+        # The `typescript` lane gets this for free via turbo; this standalone lane
+        # builds goldenpipe's dependencies explicitly.
+        run: pnpm --filter "goldenpipe^..." build
       - name: Planner parity + reroute + backend [THE GATE]
         # Leg A (pure-TS==core), Leg B un-skipped (artifact present), the reroute
         # wiring agreement, and the backend-registry unit test.
