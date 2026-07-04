@@ -12,7 +12,7 @@
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
-    use goldenflow_core::identifiers::{ean, iban, isbn, luhn, swift, vat};
+    use goldenflow_core::identifiers::{aba, ean, iban, isbn, luhn, swift, vat};
     use wasm_bindgen::prelude::*;
 
     #[wasm_bindgen]
@@ -63,6 +63,11 @@ mod wasm {
     #[wasm_bindgen]
     pub fn swift_format(s: &str) -> Option<String> {
         swift::swift_format(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn aba_validate(s: &str) -> bool {
+        aba::aba_validate(s)
     }
 
     #[wasm_bindgen]

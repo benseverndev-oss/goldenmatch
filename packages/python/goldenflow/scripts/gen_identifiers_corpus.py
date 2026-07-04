@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from goldenflow.core._native_loader import native_available, native_module  # noqa: E402
 from goldenflow.transforms.identifiers import (  # noqa: E402
+    _aba_validate_py,
     _cc_format_py,
     _cc_mask_py,
     _cc_validate_py,
@@ -196,6 +197,17 @@ _CASES: list[tuple[str, str | None]] = [
     ("vat_format", "ZZ123"),  # unknown prefix
     ("vat_format", ""),
     ("vat_format", None),
+    # --- aba_validate: valid ---
+    ("aba_validate", "011000015"),  # valid checksum
+    ("aba_validate", "021000021"),  # valid checksum
+    ("aba_validate", "122105155"),  # valid checksum
+    ("aba_validate", "011-000-015"),  # dashed, still valid
+    # --- aba_validate: invalid ---
+    ("aba_validate", "011000016"),  # bad checksum
+    ("aba_validate", "12345"),  # wrong length
+    ("aba_validate", "01100001a"),  # non-digit
+    ("aba_validate", ""),  # empty
+    ("aba_validate", None),  # null
     # --- astral-plane / non-ASCII char edge cases (UTF-16-vs-codepoint length
     # gate insurance -- Python `len()` counts codepoints, JS `.length` counts
     # UTF-16 code units, so an astral-plane char (surrogate pair) counts as 1
@@ -220,6 +232,7 @@ _PY_FN = {
     "swift_format": _swift_format_py,
     "vat_validate": _vat_validate_py,
     "vat_format": _vat_format_py,
+    "aba_validate": _aba_validate_py,
 }
 
 _NATIVE_ARROW_FN = {
@@ -235,6 +248,7 @@ _NATIVE_ARROW_FN = {
     "swift_format": "swift_format_arrow",
     "vat_validate": "vat_validate_arrow",
     "vat_format": "vat_format_arrow",
+    "aba_validate": "aba_validate_arrow",
 }
 
 

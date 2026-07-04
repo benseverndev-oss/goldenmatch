@@ -290,3 +290,29 @@ def vat_validate_native() -> Callable[[pl.Series], pl.Series] | None:
 
 def vat_format_native() -> Callable[[pl.Series], pl.Series] | None:
     return _vat_kernel_runner("vat_format_arrow")
+
+
+def _aba_kernel_runner(attr: str) -> Callable[[pl.Series], pl.Series] | None:
+    """Build a whole-series runner for ABA routing-number kernel function
+    ``attr`` if native ``aba`` is enabled and the dependencies are
+    importable; else ``None``. Like the other identifier runners -- no
+    region/gating args, the checksum is region-free."""
+    if not native_enabled("aba"):
+        return None
+    nm = native_module()
+    if nm is None or not hasattr(nm, attr):
+        return None
+    try:
+        import pyarrow  # noqa: F401  (zero-copy bridge)
+    except ImportError:
+        return None
+    func = getattr(nm, attr)
+
+    def run(s: pl.Series) -> pl.Series:
+        return pl.from_arrow(func(_as_str_series(s).to_arrow()))
+
+    return run
+
+
+def aba_validate_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _aba_kernel_runner("aba_validate_arrow")

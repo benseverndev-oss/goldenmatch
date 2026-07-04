@@ -122,6 +122,15 @@
 {"transform": "vat_format", "input": "ZZ123", "expected": null}
 {"transform": "vat_format", "input": "", "expected": null}
 {"transform": "vat_format", "input": null, "expected": null}
+{"transform": "aba_validate", "input": "011000015", "expected": true}
+{"transform": "aba_validate", "input": "021000021", "expected": true}
+{"transform": "aba_validate", "input": "122105155", "expected": true}
+{"transform": "aba_validate", "input": "011-000-015", "expected": true}
+{"transform": "aba_validate", "input": "011000016", "expected": false}
+{"transform": "aba_validate", "input": "12345", "expected": false}
+{"transform": "aba_validate", "input": "01100001a", "expected": false}
+{"transform": "aba_validate", "input": "", "expected": false}
+{"transform": "aba_validate", "input": null, "expected": null}
 {"transform": "cc_validate", "input": "424242424242😀2", "expected": false}
 {"transform": "iban_validate", "input": "DE89370400440532😀13000", "expected": false}
 {"transform": "vat_validate", "input": "DE13669597😀", "expected": false}

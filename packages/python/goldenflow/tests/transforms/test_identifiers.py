@@ -2,6 +2,7 @@ import goldenflow
 import polars as pl
 from goldenflow.transforms import registry
 from goldenflow.transforms.identifiers import (
+    aba_validate,
     cc_format,
     cc_mask,
     cc_validate,
@@ -32,6 +33,7 @@ IDENTIFIER_TRANSFORM_NAMES = [
     "swift_format",
     "vat_validate",
     "vat_format",
+    "aba_validate",
 ]
 
 
@@ -354,6 +356,34 @@ def test_vat_format_normalizes_and_nulls_invalid():
     assert result[2] is None
     assert result[3] is None
     assert result[4] is None
+
+
+# --- ABA routing number (US bank routing transit number) --------------------
+
+
+def test_aba_validate_valid_and_invalid():
+    s = pl.Series(
+        "aba",
+        [
+            "011000015",  # valid checksum
+            "021000021",  # valid checksum
+            "122105155",  # valid checksum
+            "011000016",  # bad checksum
+            "12345",  # wrong length
+            "01100001a",  # non-digit
+            "",  # empty
+            None,  # null
+        ],
+    )
+    result = aba_validate(s)
+    assert result[0] is True
+    assert result[1] is True
+    assert result[2] is True
+    assert result[3] is False
+    assert result[4] is False
+    assert result[5] is False
+    assert result[6] is False
+    assert result[7] is None
 
 
 # --- Registration + zero-config posture --------------------------------------

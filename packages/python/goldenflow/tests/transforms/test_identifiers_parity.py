@@ -14,6 +14,7 @@ import polars as pl
 import pytest
 from goldenflow.core._native_loader import native_available
 from goldenflow.transforms.identifiers import (
+    aba_validate,
     cc_format,
     cc_mask,
     cc_validate,
@@ -43,6 +44,7 @@ _TRANSFORMS = {
     "swift_format": swift_format,
     "vat_validate": vat_validate,
     "vat_format": vat_format,
+    "aba_validate": aba_validate,
 }
 
 # Floor native symbol per transform's component -- used to skip a row when the
@@ -61,6 +63,7 @@ _NATIVE_FLOOR_SYMBOL = {
     "swift_format": "swift_validate_arrow",
     "vat_validate": "vat_validate_arrow",
     "vat_format": "vat_validate_arrow",
+    "aba_validate": "aba_validate_arrow",
 }
 
 

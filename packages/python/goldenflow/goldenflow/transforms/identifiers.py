@@ -6,6 +6,7 @@ import polars as pl
 
 from goldenflow.transforms import register_transform
 from goldenflow.transforms._native import (
+    aba_validate_native,
     cc_format_native,
     cc_mask_native,
     cc_validate_native,
@@ -716,3 +717,39 @@ def ein_format(series: pl.Series) -> pl.Series:
         return f"{digits[:2]}-{digits[2:]}"
 
     return series.map_elements(_format, return_dtype=pl.Utf8)
+
+
+# --- ABA routing number (US bank routing transit number) --------------------
+#
+# Pure-Python reference for goldenflow-core's ``identifiers::aba`` kernel.
+# MUST reproduce the Rust kernel byte-for-byte (asserted by
+# tests/transforms/test_identifiers_parity.py over
+# tests/parity/identifiers_corpus.jsonl) -- same separator strip, same
+# 9-digit length gate, same weighted checksum.
+
+
+def _aba_validate_py(val: str | None) -> bool | None:
+    if val is None:
+        return None
+    t = _cc_strip_sep(val)
+    if len(t) != 9 or not t.isascii() or not t.isdigit():
+        return False
+    d = [ord(c) - ord("0") for c in t]
+    total = 3 * (d[0] + d[3] + d[6]) + 7 * (d[1] + d[4] + d[7]) + (d[2] + d[5] + d[8])
+    return total % 10 == 0
+
+
+@register_transform(
+    name="aba_validate",
+    input_types=["identifier", "string"],
+    auto_apply=False,
+    priority=50,
+    mode="series",
+)
+def aba_validate(series: pl.Series) -> pl.Series:
+    """Validate a US ABA bank routing number: exactly 9 digits plus the
+    standard weighted checksum."""
+    native = aba_validate_native()
+    if native is not None:
+        return native(series)
+    return series.map_elements(_aba_validate_py, return_dtype=pl.Boolean)

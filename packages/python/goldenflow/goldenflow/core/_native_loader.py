@@ -83,6 +83,9 @@ _COMPONENT_SYMBOLS: dict[str, tuple[str, ...]] = {
     # only -- see the CHECKSUM COVERAGE note in transforms/identifiers.py) --
     # floor symbol only, region-free.
     "vat": ("vat_validate_arrow",),
+    # aba: US ABA routing number (weighted checksum) -- floor symbol only,
+    # region-free.
+    "aba": ("aba_validate_arrow",),
 }
 
 # Components whose only native path is intentionally non-authoritative (the
