@@ -62,13 +62,18 @@ wasm-hostile deps.
   `goldenmatch_score_pairs(a text[], b text[], method text) -> double[]` (+/or a
   scalar `goldenmatch_score(a text, b text, method text) -> double8`). *Effort:
   M.*
-- [ ] **P2 · graph → edge (graph-wasm + TS reroute).** Connected-components /
+- [x] **P2 · graph → edge (graph-wasm + TS reroute).** Connected-components /
   pair-dedup clustering (`graph-core`). With LSH blocking (#1413) on the edge,
   this makes the **whole ER pipeline run edge-native** (block → score → cluster)
-  with no Node/Python. Kernel-ready (pure Rust). **First step: check whether the
-  TS dedupe already hand-rolls a union-find** — if so this is also a
-  divergence-risk fix (sketch/goldencheck class), which bumps the value.
-  Shape: mirror `goldenhnsw-wasm` (typed-array in, pairs/labels out). *Effort: M.*
+  with no Node/Python. `graph-wasm` + the `buildClusters` reroute (cluster.ts)
+  landed earlier; the audit found **two more hand-rolled union-finds**
+  (`ann-blocker.ts` micro-blocking, `graph-er.ts` multi-table clustering) still
+  bypassing the kernel — the exact divergence-risk the first-step note warned of.
+  Closed by extracting **one** shared `connectedComponents` primitive
+  (`graphComponents.ts`: wasm backend when enabled, else a canonical pure-TS
+  union-find) and routing all three sites through it — no hand-rolled union-find
+  left on the edge. Toggle-invariant + output-preserving (equivalence tests
+  `graph-wasm-reroute` + `graph-components-reroute`). *(Done.)*
 
 ### Tier 2 — valuable, straightforward
 
