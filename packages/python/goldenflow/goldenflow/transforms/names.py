@@ -5,7 +5,18 @@ import re
 import polars as pl
 
 from goldenflow.transforms import register_transform
-from goldenflow.transforms._native import name_script_native, name_transliterate_native
+from goldenflow.transforms._native import (
+    has_initial_native,
+    merge_name_native,
+    name_proper_native,
+    name_script_native,
+    name_transliterate_native,
+    nickname_standardize_native,
+    split_name_native,
+    split_name_reverse_native,
+    strip_suffixes_native,
+    strip_titles_native,
+)
 
 _TITLES = re.compile(
     r"^(Mr\.?|Mrs\.?|Ms\.?|Miss\.?|Dr\.?|Prof\.?|Rev\.?|Sr\.?|Sra\.?)\s+", re.IGNORECASE
@@ -19,54 +30,92 @@ _MC_PATTERN = re.compile(r"\bMc(\w)")
 _O_PATTERN = re.compile(r"\bO'(\w)")
 
 
+# Pure-Python references for goldenflow-core's ``names`` kernels. Each MUST
+# reproduce the Rust kernel byte-for-byte (kernel = spec under reference-mode).
+# The scalar ones are asserted over tests/parity/identifiers_corpus.jsonl; the
+# multi-output ones (split_name/split_name_reverse/merge_name) over
+# tests/transforms/test_name_kernels.py.
+
+
+def _split_name_py(val: str | None) -> tuple[str | None, str | None]:
+    if val is None:
+        return None, None
+    parts = val.strip().rsplit(" ", 1)
+    if len(parts) == 2:
+        return parts[0], parts[1]
+    return parts[0], ""
+
+
 @register_transform(
     name="split_name", input_types=["name"], auto_apply=False, priority=50, mode="dataframe"
 )
 def split_name(df: pl.DataFrame, column: str) -> pl.DataFrame:
-    """Split 'First Last' into first_name and last_name columns."""
-    first_names = []
-    last_names = []
+    """Split 'First Last' into first_name and last_name columns.
+
+    Native-first (goldenflow-core's ``names::split_name`` kernel, returning a
+    pair of Arrow arrays); the pure-Python fallback is the byte-exact reference.
+    """
+    native = split_name_native()
+    if native is not None:
+        first, last = native(df[column])
+        return df.with_columns(first.rename("first_name"), last.rename("last_name"))
+    first_names: list[str | None] = []
+    last_names: list[str | None] = []
     for val in df[column].to_list():
-        if val is None:
-            first_names.append(None)
-            last_names.append(None)
-            continue
-        parts = val.strip().rsplit(" ", 1)
-        if len(parts) == 2:
-            first_names.append(parts[0])
-            last_names.append(parts[1])
-        else:
-            first_names.append(parts[0])
-            last_names.append("")
+        f, l = _split_name_py(val)
+        first_names.append(f)
+        last_names.append(l)
     return df.with_columns(
         pl.Series("first_name", first_names),
         pl.Series("last_name", last_names),
     )
+
+
+def _split_name_reverse_py(val: str | None) -> tuple[str | None, str | None]:
+    if val is None:
+        return None, None
+    parts = val.split(",", 1)
+    if len(parts) == 2:
+        return parts[1].strip(), parts[0].strip()
+    return val.strip(), ""
 
 
 @register_transform(
     name="split_name_reverse", input_types=["name"], auto_apply=False, priority=50, mode="dataframe"
 )
 def split_name_reverse(df: pl.DataFrame, column: str) -> pl.DataFrame:
-    """Split 'Last, First' into first_name and last_name columns."""
-    first_names = []
-    last_names = []
+    """Split 'Last, First' into first_name and last_name columns.
+
+    Native-first (goldenflow-core's ``names::split_name_reverse`` kernel); the
+    pure-Python fallback is the byte-exact reference.
+    """
+    native = split_name_reverse_native()
+    if native is not None:
+        first, last = native(df[column])
+        return df.with_columns(first.rename("first_name"), last.rename("last_name"))
+    first_names: list[str | None] = []
+    last_names: list[str | None] = []
     for val in df[column].to_list():
-        if val is None:
-            first_names.append(None)
-            last_names.append(None)
-            continue
-        parts = val.split(",", 1)
-        if len(parts) == 2:
-            last_names.append(parts[0].strip())
-            first_names.append(parts[1].strip())
-        else:
-            first_names.append(val.strip())
-            last_names.append("")
+        f, l = _split_name_reverse_py(val)
+        first_names.append(f)
+        last_names.append(l)
     return df.with_columns(
         pl.Series("first_name", first_names),
         pl.Series("last_name", last_names),
     )
+
+
+def _strip_titles_py(val: str | None) -> str | None:
+    if val is None:
+        return None
+    return _TITLES.sub("", val).strip()
+
+
+def _strip_titles_series(series: pl.Series) -> pl.Series:
+    native = strip_titles_native()
+    if native is not None:
+        return native(series)
+    return series.map_elements(_strip_titles_py, return_dtype=pl.Utf8)
 
 
 @register_transform(
@@ -75,17 +124,24 @@ def split_name_reverse(df: pl.DataFrame, column: str) -> pl.DataFrame:
 def strip_titles(column: str) -> pl.Expr:
     """Strip leading personal titles (Mr/Mrs/Ms/Dr/Prof/etc.) from names.
 
-    Native Polars: case-insensitive regex replace then strip. Spec
-    docs/superpowers/specs/2026-05-15-map-elements-attack-design.md Tier 1.
+    Native-first (goldenflow-core's ``names::strip_titles`` kernel), dispatched
+    via ``map_batches`` so the transform keeps its ``expr``-mode signature; the
+    pure-Python fallback is the byte-exact reference this kernel replicates.
     """
-    return (
-        pl.col(column)
-        .str.replace(
-            r"(?i)^(Mr\.?|Mrs\.?|Ms\.?|Miss\.?|Dr\.?|Prof\.?|Rev\.?|Sr\.?|Sra\.?)\s+",
-            "",
-        )
-        .str.strip_chars()
-    )
+    return pl.col(column).map_batches(_strip_titles_series, return_dtype=pl.Utf8)
+
+
+def _strip_suffixes_py(val: str | None) -> str | None:
+    if val is None:
+        return None
+    return _SUFFIXES.sub("", val).strip()
+
+
+def _strip_suffixes_series(series: pl.Series) -> pl.Series:
+    native = strip_suffixes_native()
+    if native is not None:
+        return native(series)
+    return series.map_elements(_strip_suffixes_py, return_dtype=pl.Utf8)
 
 
 @register_transform(
@@ -94,43 +150,55 @@ def strip_titles(column: str) -> pl.Expr:
 def strip_suffixes(column: str) -> pl.Expr:
     """Strip trailing professional suffixes (Jr/Sr/II/MD/PhD/etc.) from names.
 
-    Native Polars: case-insensitive regex replace then strip. Spec
-    docs/superpowers/specs/2026-05-15-map-elements-attack-design.md Tier 1.
+    Native-first (goldenflow-core's ``names::strip_suffixes`` kernel), dispatched
+    via ``map_batches`` so the transform keeps its ``expr``-mode signature; the
+    pure-Python fallback is the byte-exact reference this kernel replicates.
     """
-    return (
-        pl.col(column)
-        .str.replace(
-            r"(?i)\s+(Jr\.?|Sr\.?|II|III|IV|MD|PhD|PharmD|DDS|DVM|Esq\.?|CPA|RN|DO)$",
-            "",
-        )
-        .str.strip_chars()
-    )
+    return pl.col(column).map_batches(_strip_suffixes_series, return_dtype=pl.Utf8)
+
+
+def _name_proper_py(val: str | None) -> str | None:
+    if val is None:
+        return None
+    result = val.title()
+    result = _MC_PATTERN.sub(lambda m: f"Mc{m.group(1).upper()}", result)
+    result = _O_PATTERN.sub(lambda m: f"O'{m.group(1).upper()}", result)
+    return result
 
 
 @register_transform(
     name="name_proper", input_types=["name"], auto_apply=False, priority=45, mode="series"
 )
 def name_proper(series: pl.Series) -> pl.Series:
-    def _proper(val: str | None) -> str | None:
-        if val is None:
-            return None
-        result = val.title()
-        result = _MC_PATTERN.sub(lambda m: f"Mc{m.group(1).upper()}", result)
-        result = _O_PATTERN.sub(lambda m: f"O'{m.group(1).upper()}", result)
-        return result
+    """Proper-case a name (title-case + Mc/O' fixups).
 
-    return series.map_elements(_proper, return_dtype=pl.Utf8)
+    Native-first (goldenflow-core's ``names::name_proper`` kernel); the
+    pure-Python fallback is the byte-exact reference this kernel replicates.
+    """
+    native = name_proper_native()
+    if native is not None:
+        return native(series)
+    return series.map_elements(_name_proper_py, return_dtype=pl.Utf8)
 
 
 @register_transform(
     name="initial_expand", input_types=["name"], auto_apply=False, priority=40, mode="series"
 )
 def initial_expand(series: pl.Series) -> tuple[pl.Series, list[int]]:
-    """Returns (series, flagged_rows). Values with initials are unchanged but flagged."""
-    flagged: list[int] = []
-    for i, val in enumerate(series.to_list()):
-        if val and _INITIAL_PATTERN.search(val):
-            flagged.append(i)
+    """Returns (series, flagged_rows). Values with initials are unchanged but flagged.
+
+    Native-first for the flag predicate (goldenflow-core's ``names::has_initial``
+    kernel); the pure-Python fallback (``_INITIAL_PATTERN``) is the byte-exact
+    reference. The value output is the input series unchanged either way.
+    """
+    native = has_initial_native()
+    if native is not None:
+        flags = native(series).to_list()
+        flagged = [i for i, f in enumerate(flags) if f]
+    else:
+        flagged = [
+            i for i, val in enumerate(series.to_list()) if val and _INITIAL_PATTERN.search(val)
+        ]
     return series, flagged
 
 
@@ -171,6 +239,12 @@ _NICKNAMES: dict[str, str] = {
 }
 
 
+def _nickname_standardize_py(val: str | None) -> str | None:
+    if val is None:
+        return None
+    return _NICKNAMES.get(val.strip().lower(), val)
+
+
 @register_transform(
     name="nickname_standardize",
     input_types=["name"],
@@ -179,14 +253,21 @@ _NICKNAMES: dict[str, str] = {
     mode="series",
 )
 def nickname_standardize(series: pl.Series) -> pl.Series:
-    """Map common nicknames to formal first names."""
+    """Map common nicknames to formal first names.
 
-    def _standardize(val: str | None) -> str | None:
-        if val is None:
-            return None
-        return _NICKNAMES.get(val.strip().lower(), val)
+    Native-first (goldenflow-core's ``names::nickname_standardize`` kernel, whose
+    ~70-entry map is an in-crate copy of ``_NICKNAMES``); the pure-Python
+    fallback is the byte-exact reference this kernel replicates.
+    """
+    native = nickname_standardize_native()
+    if native is not None:
+        return native(series)
+    return series.map_elements(_nickname_standardize_py, return_dtype=pl.Utf8)
 
-    return series.map_elements(_standardize, return_dtype=pl.Utf8)
+
+def _merge_name_py(first: str | None, last: str | None) -> str | None:
+    parts = [p for p in (first, last) if p is not None and p.strip()]
+    return " ".join(parts) if parts else None
 
 
 @register_transform(
@@ -199,15 +280,22 @@ def nickname_standardize(series: pl.Series) -> pl.Series:
 def merge_name(
     df: pl.DataFrame, column: str, last_name_col: str = "last_name"
 ) -> pl.DataFrame:
-    """Merge first_name and last_name columns into a full_name column."""
+    """Merge first_name and last_name columns into a full_name column.
+
+    Native-first (goldenflow-core's ``names::merge_name`` kernel over the two
+    input columns); the pure-Python fallback is the byte-exact reference.
+    """
     if last_name_col not in df.columns:
         return df
-    full_names = []
+    native = merge_name_native()
+    if native is not None:
+        full = native(df[column], df[last_name_col])
+        return df.with_columns(full.rename("full_name"))
+    full_names: list[str | None] = []
     first_list = df[column].to_list()
     last_list = df[last_name_col].to_list()
     for first, last in zip(first_list, last_list):
-        parts = [p for p in (first, last) if p is not None and p.strip()]
-        full_names.append(" ".join(parts) if parts else None)
+        full_names.append(_merge_name_py(first, last))
     return df.with_columns(pl.Series("full_name", full_names))
 
 

@@ -111,6 +111,11 @@ _COMPONENT_SYMBOLS: dict[str, tuple[str, ...]] = {
     # category_from_file's runtime-data mapping lookup) -- floor symbol only
     # (boolean_normalize_arrow), locale-free, region-free.
     "categorical": ("boolean_normalize_arrow",),
+    # names_ext: the names-remainder family -- strip_titles/strip_suffixes/
+    # name_proper/nickname_standardize/has_initial (scalar) + split_name/
+    # split_name_reverse (pair) + merge_name (two-input) -- floor symbol only
+    # (strip_titles_arrow), locale-free.
+    "names_ext": ("strip_titles_arrow",),
 }
 
 # Components whose only native path is intentionally non-authoritative (the
