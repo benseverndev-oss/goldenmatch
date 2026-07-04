@@ -86,6 +86,9 @@ _COMPONENT_SYMBOLS: dict[str, tuple[str, ...]] = {
     # aba: US ABA routing number (weighted checksum) -- floor symbol only,
     # region-free.
     "aba": ("aba_validate_arrow",),
+    # imei: IMEI (Luhn checksum, reuses the same luhn_ok as cc) -- floor
+    # symbol only, region-free.
+    "imei": ("imei_validate_arrow",),
 }
 
 # Components whose only native path is intentionally non-authoritative (the

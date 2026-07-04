@@ -1,7 +1,7 @@
 use super::strip_sep;
 
 /// Luhn checksum over an all-ASCII-digit string. Caller guarantees digits.
-fn luhn_ok(digits: &str) -> bool {
+pub(crate) fn luhn_ok(digits: &str) -> bool {
     let mut sum = 0u32;
     let mut dbl = false;
     for c in digits.bytes().rev() {

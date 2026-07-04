@@ -21,6 +21,7 @@ from goldenflow.transforms.identifiers import (
     ean_validate,
     iban_format,
     iban_validate,
+    imei_validate,
     isbn_normalize,
     isbn_validate,
     swift_format,
@@ -45,6 +46,7 @@ _TRANSFORMS = {
     "vat_validate": vat_validate,
     "vat_format": vat_format,
     "aba_validate": aba_validate,
+    "imei_validate": imei_validate,
 }
 
 # Floor native symbol per transform's component -- used to skip a row when the
@@ -64,6 +66,7 @@ _NATIVE_FLOOR_SYMBOL = {
     "vat_validate": "vat_validate_arrow",
     "vat_format": "vat_validate_arrow",
     "aba_validate": "aba_validate_arrow",
+    "imei_validate": "imei_validate_arrow",
 }
 
 

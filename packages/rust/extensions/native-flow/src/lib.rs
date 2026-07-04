@@ -35,5 +35,6 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(identifiers::vat_validate_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(identifiers::vat_format_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(identifiers::aba_validate_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(identifiers::imei_validate_arrow, m)?)?;
     Ok(())
 }

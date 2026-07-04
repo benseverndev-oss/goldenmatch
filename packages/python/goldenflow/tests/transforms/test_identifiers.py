@@ -10,6 +10,7 @@ from goldenflow.transforms.identifiers import (
     ein_format,
     iban_format,
     iban_validate,
+    imei_validate,
     isbn_normalize,
     isbn_validate,
     ssn_format,
@@ -34,6 +35,7 @@ IDENTIFIER_TRANSFORM_NAMES = [
     "vat_validate",
     "vat_format",
     "aba_validate",
+    "imei_validate",
 ]
 
 
@@ -384,6 +386,32 @@ def test_aba_validate_valid_and_invalid():
     assert result[5] is False
     assert result[6] is False
     assert result[7] is None
+
+
+# --- IMEI (International Mobile Equipment Identity) --------------------------
+
+
+def test_imei_validate_valid_and_invalid():
+    s = pl.Series(
+        "imei",
+        [
+            "490154203237518",  # valid Luhn
+            "356938035643809",  # valid Luhn
+            "490154203237519",  # bad Luhn
+            "12345",  # wrong length
+            "49015420323751a",  # non-digit
+            "",  # empty
+            None,  # null
+        ],
+    )
+    result = imei_validate(s)
+    assert result[0] is True
+    assert result[1] is True
+    assert result[2] is False
+    assert result[3] is False
+    assert result[4] is False
+    assert result[5] is False
+    assert result[6] is None
 
 
 # --- Registration + zero-config posture --------------------------------------

@@ -3,7 +3,7 @@
 use crate::util::{map_str_to_bool, map_str_to_str};
 use arrow::array::ArrayData;
 use arrow::pyarrow::PyArrowType;
-use goldenflow_core::identifiers::{aba, ean, iban, isbn, luhn, swift, vat};
+use goldenflow_core::identifiers::{aba, ean, iban, imei, isbn, luhn, swift, vat};
 use pyo3::prelude::*;
 
 #[pyfunction]
@@ -106,6 +106,16 @@ pub fn aba_validate_arrow(
 ) -> PyResult<PyArrowType<ArrayData>> {
     Ok(PyArrowType(map_str_to_bool(py, array.0, |s| {
         Some(aba::aba_validate(s))
+    })?))
+}
+
+#[pyfunction]
+pub fn imei_validate_arrow(
+    py: Python,
+    array: PyArrowType<ArrayData>,
+) -> PyResult<PyArrowType<ArrayData>> {
+    Ok(PyArrowType(map_str_to_bool(py, array.0, |s| {
+        Some(imei::imei_validate(s))
     })?))
 }
 

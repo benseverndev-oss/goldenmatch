@@ -4,6 +4,7 @@
 pub mod aba;
 pub mod ean;
 pub mod iban;
+pub mod imei;
 pub mod isbn;
 pub mod luhn;
 pub mod swift;

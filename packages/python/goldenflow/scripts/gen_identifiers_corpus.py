@@ -36,6 +36,7 @@ from goldenflow.transforms.identifiers import (  # noqa: E402
     _ean_validate_py,
     _iban_format_py,
     _iban_validate_py,
+    _imei_validate_py,
     _isbn_normalize_py,
     _isbn_validate_py,
     _swift_format_py,
@@ -208,6 +209,16 @@ _CASES: list[tuple[str, str | None]] = [
     ("aba_validate", "01100001a"),  # non-digit
     ("aba_validate", ""),  # empty
     ("aba_validate", None),  # null
+    # --- imei_validate: valid ---
+    ("imei_validate", "490154203237518"),  # valid Luhn
+    ("imei_validate", "356938035643809"),  # valid Luhn
+    ("imei_validate", "49-0154-203237518"),  # dashed, still valid
+    # --- imei_validate: invalid ---
+    ("imei_validate", "490154203237519"),  # bad Luhn
+    ("imei_validate", "12345"),  # wrong length
+    ("imei_validate", "49015420323751a"),  # non-digit
+    ("imei_validate", ""),  # empty
+    ("imei_validate", None),  # null
     # --- astral-plane / non-ASCII char edge cases (UTF-16-vs-codepoint length
     # gate insurance -- Python `len()` counts codepoints, JS `.length` counts
     # UTF-16 code units, so an astral-plane char (surrogate pair) counts as 1
@@ -233,6 +244,7 @@ _PY_FN = {
     "vat_validate": _vat_validate_py,
     "vat_format": _vat_format_py,
     "aba_validate": _aba_validate_py,
+    "imei_validate": _imei_validate_py,
 }
 
 _NATIVE_ARROW_FN = {
@@ -249,6 +261,7 @@ _NATIVE_ARROW_FN = {
     "vat_validate": "vat_validate_arrow",
     "vat_format": "vat_format_arrow",
     "aba_validate": "aba_validate_arrow",
+    "imei_validate": "imei_validate_arrow",
 }
 
 

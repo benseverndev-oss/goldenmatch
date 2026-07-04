@@ -13,6 +13,7 @@ from goldenflow.transforms._native import (
     ean_validate_native,
     iban_format_native,
     iban_validate_native,
+    imei_validate_native,
     isbn_normalize_native,
     isbn_validate_native,
     swift_format_native,
@@ -753,3 +754,37 @@ def aba_validate(series: pl.Series) -> pl.Series:
     if native is not None:
         return native(series)
     return series.map_elements(_aba_validate_py, return_dtype=pl.Boolean)
+
+
+# --- IMEI (International Mobile Equipment Identity) --------------------------
+#
+# Pure-Python reference for goldenflow-core's ``identifiers::imei`` kernel.
+# MUST reproduce the Rust kernel byte-for-byte (asserted by
+# tests/transforms/test_identifiers_parity.py over
+# tests/parity/identifiers_corpus.jsonl) -- same separator strip, same
+# 15-digit length gate, same Luhn checksum (reuses ``_luhn_ok``, the same
+# helper the ``cc`` family uses -- one Luhn implementation for both).
+
+
+def _imei_validate_py(val: str | None) -> bool | None:
+    if val is None:
+        return None
+    t = _cc_strip_sep(val)
+    if len(t) != 15 or not t.isascii() or not t.isdigit():
+        return False
+    return _luhn_ok(t)
+
+
+@register_transform(
+    name="imei_validate",
+    input_types=["identifier", "string"],
+    auto_apply=False,
+    priority=50,
+    mode="series",
+)
+def imei_validate(series: pl.Series) -> pl.Series:
+    """Validate an IMEI: exactly 15 digits plus the Luhn checksum."""
+    native = imei_validate_native()
+    if native is not None:
+        return native(series)
+    return series.map_elements(_imei_validate_py, return_dtype=pl.Boolean)
