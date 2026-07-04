@@ -67,18 +67,29 @@ mod tests {
         v.iter().map(|s| s.to_string()).collect()
     }
     fn uses(cfg: &crate::model::PipelineConfig) -> Vec<String> {
-        cfg.stages.iter().map(|e| e.clone().into_spec().use_).collect()
+        cfg.stages
+            .iter()
+            .map(|e| e.clone().into_spec().use_)
+            .collect()
     }
 
     #[test]
     fn all_available_default_three() {
         let c = auto_config(
-            &avail(&["goldencheck.scan", "goldenflow.transform", "goldenmatch.dedupe"]),
+            &avail(&[
+                "goldencheck.scan",
+                "goldenflow.transform",
+                "goldenmatch.dedupe",
+            ]),
             None,
         );
         assert_eq!(
             uses(&c),
-            ["goldencheck.scan", "goldenflow.transform", "goldenmatch.dedupe"]
+            [
+                "goldencheck.scan",
+                "goldenflow.transform",
+                "goldenmatch.dedupe"
+            ]
         );
         assert_eq!(c.pipeline, "auto");
     }
@@ -97,7 +108,10 @@ mod tests {
             &avail(&["goldenmatch.dedupe", "goldenmatch.identity_resolve"]),
             Some(&opts),
         );
-        assert_eq!(uses(&c), ["goldenmatch.dedupe", "goldenmatch.identity_resolve"]);
+        assert_eq!(
+            uses(&c),
+            ["goldenmatch.dedupe", "goldenmatch.identity_resolve"]
+        );
     }
 
     #[test]

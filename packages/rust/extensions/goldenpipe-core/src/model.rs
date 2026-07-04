@@ -6,16 +6,12 @@ use serde_json::{Map, Value};
 
 pub type JsonMap = Map<String, Value>;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum OnError {
+    #[default]
     Continue,
     Abort,
-}
-impl Default for OnError {
-    fn default() -> Self {
-        OnError::Continue
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

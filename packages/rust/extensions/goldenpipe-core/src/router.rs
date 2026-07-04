@@ -95,7 +95,10 @@ mod tests {
 
     #[test]
     fn skip_then_insert_combined() {
-        let r = apply_decision(&dec(&["a"], false, &["z"], "r"), &[planned("a"), planned("b")]);
+        let r = apply_decision(
+            &dec(&["a"], false, &["z"], "r"),
+            &[planned("a"), planned("b")],
+        );
         let names: Vec<_> = r.remaining.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(names, ["z", "b"]);
     }
