@@ -20,6 +20,11 @@
 // Constants (all u64 unless noted)
 // ---------------------------------------------------------------------------
 
+// Lean registry only (a getter + type-erased import) — zero wasm bytes in the
+// default bundle. Populated via `enableSketchWasm()` from the opt-in
+// `goldenmatch/core/sketch-wasm` subpath.
+import { getSketchWasmBackend } from "./sketchWasmBackend.js";
+
 /** u64 wrapping mask. */
 const MASK64 = 0xffffffffffffffffn;
 
@@ -310,5 +315,14 @@ export function sketchBandHashes(
   numBands: number,
   seed: bigint,
 ): bigint[] {
+  // Rust-source-of-truth path: the shared sketch-core kernel (same code as the
+  // Python reference) when the wasm backend is enabled; the pure-TS
+  // shingle -> signature -> band compose below stays the default fallback. Both
+  // yield byte-identical u64 band hashes (proven by the shared golden fixture),
+  // so the MinHash-LSH blocker's candidate set is identical either way.
+  const backend = getSketchWasmBackend();
+  if (backend) {
+    return backend.sketchBandHashes(text, mode, k, numPerms, numBands, seed);
+  }
   return bandHashes(signature(shingle(text, mode, k), numPerms, seed), numBands);
 }

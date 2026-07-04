@@ -1,0 +1,34 @@
+# Standalone workspace: a thin wasm-bindgen wrapper over `sketch-core`, so the
+# JS/TS MinHash-LSH / SimHash blocker consumes the SAME native sketch kernel as
+# the Python reference and the Rust core (one source of truth, byte-identical
+# hash family). Mirrors the sibling `goldenhnsw-wasm` / `goldencheck-wasm`
+# crates. sketch-core pulls `rayon`, which compiles to wasm32 fine (the batch
+# fns fall back to sequential without threads) — this wrapper only ever calls
+# the per-record path, so no thread pool is touched.
+[workspace]
+
+[package]
+name = "sketch-wasm"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Ben Severn <benzsevern@gmail.com>"]
+description = "wasm-bindgen wrapper over sketch-core (MinHash + LSH sketching) for the JS/TS port"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wasm-bindgen = "0.2"
+goldenmatch-sketch-core = { path = "../sketch-core" }
+
+[profile.release]
+opt-level = "s"   # optimize for small wasm size
+lto = true
+
+# wasm-opt (binaryen) is an extra size pass wasm-pack runs post-build; it
+# downloads a binaryen release at build time, unavailable in network-restricted
+# CI sandboxes. opt-level="s"+lto already give a small wasm; disable the pass so
+# the build is hermetic. Same rationale as goldenhnsw-wasm / autoconfig-wasm.
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false

@@ -19,6 +19,7 @@
 //! ```
 use goldenhnsw::{HnswIndex, HnswParams};
 use goldenmatch_graph_core as gc;
+use goldenmatch_sketch_core::{sketch_band_hashes, ShingleMode};
 use pgrx::prelude::*;
 
 /// Native-direct (no CPython) HNSW ANN blocking. Given a **row-major flat**
@@ -84,6 +85,73 @@ pub fn goldenmatch_hnsw_pairs(
             .map(|((a, b), s)| (a, b, s))
             .collect::<Vec<_>>(),
     )
+}
+
+/// Native-direct (no CPython) MinHash-LSH token blocking — the sparse-token
+/// counterpart to `goldenmatch_hnsw_pairs`. Given a `text[]` corpus, shingle +
+/// MinHash + band each record via the `sketch-core` kernel, group rows sharing a
+/// `(band, bucket)`, and return the canonical `(min, max)` candidate pairs. Row
+/// ids are 0-based positions in `texts`. Empty / whitespace-only rows (and NULL
+/// elements) block on nothing — they produce the all-MAX-signature sentinel and
+/// are dropped, exactly as `MinHashLSHBlocker` / the DuckDB `goldenmatch_lsh_pairs`
+/// do, so the candidate set is identical across every surface.
+#[pg_extern]
+pub fn goldenmatch_lsh_pairs(
+    texts: Vec<Option<String>>,
+    mode: String,
+    k: i32,
+    num_perms: i32,
+    num_bands: i32,
+    seed: i64,
+) -> TableIterator<'static, (name!(a, i64), name!(b, i64))> {
+    let sm = match ShingleMode::parse(&mode) {
+        Some(m) => m,
+        None => return TableIterator::new(Vec::new()),
+    };
+    let k = k.max(0) as usize;
+    let num_perms = num_perms.max(0) as usize;
+    let num_bands = num_bands.max(0) as usize;
+    let seed = seed as u64;
+    if texts.is_empty()
+        || k == 0
+        || num_perms == 0
+        || num_bands == 0
+        || !num_perms.is_multiple_of(num_bands)
+    {
+        return TableIterator::new(Vec::new());
+    }
+
+    // Empty/whitespace rows produce the all-MAX-signature sentinel; drop them so
+    // they don't all collide into one giant block.
+    let sentinel = sketch_band_hashes("", sm, k, num_perms, num_bands, seed);
+    // (band_idx, bucket) -> row indices sharing that bucket.
+    let mut buckets: std::collections::HashMap<(usize, u64), Vec<usize>> =
+        std::collections::HashMap::new();
+    for (i, t) in texts.iter().enumerate() {
+        let text = t.as_deref().unwrap_or("");
+        let bands = sketch_band_hashes(text, sm, k, num_perms, num_bands, seed);
+        if bands == sentinel {
+            continue;
+        }
+        for (band_idx, &bucket) in bands.iter().enumerate() {
+            buckets.entry((band_idx, bucket)).or_default().push(i);
+        }
+    }
+
+    let mut pairs: std::collections::HashSet<(i64, i64)> = std::collections::HashSet::new();
+    for members in buckets.values() {
+        for x in 0..members.len() {
+            for y in (x + 1)..members.len() {
+                let (a, b) = if members[x] < members[y] {
+                    (members[x], members[y])
+                } else {
+                    (members[y], members[x])
+                };
+                pairs.insert((a as i64, b as i64));
+            }
+        }
+    }
+    TableIterator::new(pairs.into_iter().collect::<Vec<_>>())
 }
 
 /// Native-direct (no CPython): canonical max-score pairs over int64 id arrays.

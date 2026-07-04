@@ -92,6 +92,7 @@ jobs:
       goldengraph_wasm: ${{ steps.filter.outputs.goldengraph_wasm }}
       hnsw_wasm: ${{ steps.filter.outputs.hnsw_wasm }}
       wasm_flow: ${{ steps.filter.outputs.wasm_flow }}
+      sketch_wasm: ${{ steps.filter.outputs.sketch_wasm }}
       quality_gate: ${{ steps.filter.outputs.quality_gate }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
@@ -193,6 +194,10 @@ jobs:
               # re-run the TS lane's HNSW drift guard.
               - 'packages/rust/extensions/goldenhnsw/**'
               - 'packages/rust/extensions/goldenhnsw-wasm/**'
+              # Same for the sketch (MinHash/LSH) wasm core: a kernel or wrapper
+              # change must re-run the TS lane's sketch drift guard.
+              - 'packages/rust/extensions/sketch-core/**'
+              - 'packages/rust/extensions/sketch-wasm/**'
             wasm_score:
               - 'packages/rust/extensions/score-wasm/**'
               - 'packages/rust/extensions/score-core/**'
@@ -294,6 +299,13 @@ jobs:
               - 'packages/rust/extensions/goldenhnsw/**'
               - 'packages/rust/extensions/goldenhnsw-wasm/**'
               - 'packages/typescript/goldenmatch/scripts/build_goldenhnsw_wasm.mjs'
+            sketch_wasm:
+              # Gates the (rust-toolchain-heavy) sketch (MinHash/LSH) wasm rebuild
+              # + drift guard inside the typescript lane. Only fires when the
+              # sketch kernel, its wasm wrapper, or the embed script changes.
+              - 'packages/rust/extensions/sketch-core/**'
+              - 'packages/rust/extensions/sketch-wasm/**'
+              - 'packages/typescript/goldenmatch/scripts/build_sketch_wasm.mjs'
             web:
               - 'packages/python/goldenmatch/web/**'
               - 'packages/python/goldenmatch/goldenmatch/web/**'
@@ -350,6 +362,9 @@ jobs:
               # goldenhnsw is a path dep of the postgres crate (goldenmatch_hnsw_pairs),
               # so a kernel change must rebuild + re-smoke this lane.
               - 'packages/rust/extensions/goldenhnsw/**'
+              # sketch-core is a path dep of the postgres crate (goldenmatch_lsh_pairs),
+              # so a kernel change must rebuild + re-smoke this lane.
+              - 'packages/rust/extensions/sketch-core/**'
               - 'packages/rust/extensions/Cargo.toml'
             rust_cores:
               # ANY Rust extension change re-validates EVERY committed TS wasm
@@ -1474,6 +1489,26 @@ jobs:
             exit 1
           fi
           npx vitest run tests/parity/hnsw.parity.test.ts tests/unit/hnsw-wasm.test.ts
+      # Same drift guard for the sketch (MinHash/LSH) wasm surface: rebuild the
+      # inlined wasm + bindings + copy the golden fixture, diff ONLY the
+      # deterministic golden JSON (not the version-varying wasm bytes), then run
+      # the parity + reroute-equivalence tests (which the fixture_drift job does
+      # NOT run — it only diffs fixtures). Stale committed wasm is caught
+      # behaviorally by the parity test, exactly like the goldenhnsw guard above.
+      - name: Rebuild + verify embedded sketch wasm
+        if: needs.changes.outputs.sketch_wasm == 'true' || needs.changes.outputs.force_all == 'true'
+        working-directory: packages/typescript/goldenmatch
+        run: |
+          rustup target add wasm32-unknown-unknown
+          command -v wasm-pack >/dev/null 2>&1 || curl -sSf https://rustwasm.github.io/wasm-pack/installer/init.sh | sh
+          node scripts/build_sketch_wasm.mjs
+          if ! git diff --exit-code -- tests/parity/fixtures/sketch/; then
+            echo "::error::sketch golden fixture is stale. Run \
+              'node scripts/build_sketch_wasm.mjs' in packages/typescript/goldenmatch \
+              and commit the result." >&2
+            exit 1
+          fi
+          npx vitest run tests/parity/sketch-wasm.parity.test.ts tests/unit/sketch-wasm-reroute.test.ts
       - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
         with:
           path: .turbo
@@ -1742,6 +1777,12 @@ jobs:
       # the golden-vector parity test need an explicit run.
       - run: cargo test --manifest-path sketch-core/Cargo.toml
       - run: cargo clippy --manifest-path sketch-core/Cargo.toml --all-targets -- -D warnings
+      # sketch-wasm: the wasm-bindgen wrapper that lets the TS port run sketch-core
+      # (one source of truth). Its own [workspace]; check + clippy it here so a
+      # kernel or wrapper change is linted (the wasm32 build itself runs in the
+      # typescript lane's sketch drift guard).
+      - run: cargo check --manifest-path sketch-wasm/Cargo.toml
+      - run: cargo clippy --manifest-path sketch-wasm/Cargo.toml --all-targets -- -D warnings
       # perceptual-core (multimodal-ER crawl tier, ADR 0022) is its own
       # [workspace] pyo3-free sibling too; its unit tests + the golden-vector
       # parity test (byte-for-byte vs the Python reference) need an explicit run.
@@ -2632,6 +2673,8 @@ jobs:
           # (installs default_version, now 0.9.0) and `ALTER EXTENSION ... UPDATE`
           # find them. The schema files are the canonical declaration of public
           # function signatures.
+          cp sql/goldenmatch_pg--0.11.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
+          cp sql/goldenmatch_pg--0.10.0--0.11.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
           cp sql/goldenmatch_pg--0.10.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
           cp sql/goldenmatch_pg--0.9.0--0.10.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
           cp sql/goldenmatch_pg--0.9.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
@@ -2721,6 +2764,17 @@ jobs:
                 ARRAY[1,0, 1,0, 0,1]::real[], 2, 5, 0.5::DOUBLE PRECISION);
               IF pd.n <> 1 OR pd.a <> 0 OR pd.b <> 1 OR abs(pd.s - 1.0) > 1e-5 THEN
                 RAISE EXCEPTION 'hnsw_pairs: expected exactly (0,1,1.0), got n=% (%,%,%)', pd.n, pd.a, pd.b, pd.s;
+              END IF;
+
+              -- lsh_pairs: 3 records, rows 0 and 1 near-duplicates (one typo),
+              -- row 2 distinct. MinHash-LSH must surface exactly the (0,1) pair
+              -- (0-based positions). Config validated against the Python blocker.
+              SELECT count(*) AS n, min(a) AS a, min(b) AS b INTO pd
+              FROM goldenmatch.goldenmatch_lsh_pairs(
+                ARRAY['Acme Corporation', 'Acme Corporaton', 'Zzyzx Widgets']::text[],
+                'char', 3, 64, 16, 42);
+              IF pd.n <> 1 OR pd.a <> 0 OR pd.b <> 1 THEN
+                RAISE EXCEPTION 'lsh_pairs: expected exactly (0,1), got n=% (%,%)', pd.n, pd.a, pd.b;
               END IF;
 
               -- record_fingerprint: stable across key order (fields sorted by name).
