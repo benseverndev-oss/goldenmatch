@@ -65,6 +65,15 @@ import {
   genderStandardizeTs,
   nullStandardizeTs,
 } from "../../src/core/transforms/categorical.js";
+import {
+  addressStandardizeTs,
+  addressExpandTs,
+  stateAbbreviateTs,
+  stateExpandTs,
+  zipNormalizeTs,
+  countryStandardizeTs,
+  unitNormalizeTs,
+} from "../../src/core/transforms/address.js";
 import { enableWasm, disableWasm } from "../../src/core/wasm/index.js";
 import { getFlowWasmBackend, type FlowWasmBackend } from "../../src/core/wasm/backend.js";
 
@@ -121,6 +130,13 @@ const PURE_TS_FN: Record<string, (s: string) => boolean | string | number | unde
   to_integer: toIntegerTs,
   comma_decimal: commaDecimalTs,
   scientific_to_decimal: scientificToDecimalTs,
+  address_standardize: addressStandardizeTs,
+  address_expand: addressExpandTs,
+  state_abbreviate: stateAbbreviateTs,
+  state_expand: stateExpandTs,
+  zip_normalize: zipNormalizeTs,
+  country_standardize: countryStandardizeTs,
+  unit_normalize: unitNormalizeTs,
 };
 
 /** Same transform set, dispatched through the wasm backend's method of the
@@ -164,6 +180,13 @@ function wasmFn(backend: FlowWasmBackend, transform: string): (s: string) => boo
     to_integer: (s) => backend.toInteger(s),
     comma_decimal: (s) => backend.commaDecimal(s),
     scientific_to_decimal: (s) => backend.scientificToDecimal(s),
+    address_standardize: (s) => backend.addressStandardize(s),
+    address_expand: (s) => backend.addressExpand(s),
+    state_abbreviate: (s) => backend.stateAbbreviate(s),
+    state_expand: (s) => backend.stateExpand(s),
+    zip_normalize: (s) => backend.zipNormalize(s),
+    country_standardize: (s) => backend.countryStandardize(s),
+    unit_normalize: (s) => backend.unitNormalize(s),
   };
   const fn = map[transform];
   if (!fn) throw new Error(`no wasm dispatch for transform ${transform}`);

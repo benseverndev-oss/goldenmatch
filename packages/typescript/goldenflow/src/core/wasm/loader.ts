@@ -84,6 +84,14 @@ export async function instantiateBackend(bytes: Uint8Array): Promise<FlowWasmBac
     gender_standardize: (s: string) => string;
     null_standardize: (s: string) => string | undefined;
     category_normalize_key: (s: string) => string;
+    address_standardize: (s: string) => string;
+    address_expand: (s: string) => string;
+    state_abbreviate: (s: string) => string;
+    state_expand: (s: string) => string;
+    zip_normalize: (s: string) => string;
+    country_standardize: (s: string) => string;
+    unit_normalize: (s: string) => string;
+    split_address: (s: string) => (string | null)[];
   };
   await glue.default({ module_or_path: bytes });
 
@@ -131,5 +139,13 @@ export async function instantiateBackend(bytes: Uint8Array): Promise<FlowWasmBac
     genderStandardize: (s) => glue.gender_standardize(s),
     nullStandardize: (s) => glue.null_standardize(s),
     categoryNormalizeKey: (s) => glue.category_normalize_key(s),
+    addressStandardize: (s) => glue.address_standardize(s),
+    addressExpand: (s) => glue.address_expand(s),
+    stateAbbreviate: (s) => glue.state_abbreviate(s),
+    stateExpand: (s) => glue.state_expand(s),
+    zipNormalize: (s) => glue.zip_normalize(s),
+    countryStandardize: (s) => glue.country_standardize(s),
+    unitNormalize: (s) => glue.unit_normalize(s),
+    splitAddress: (s) => glue.split_address(s),
   };
 }
