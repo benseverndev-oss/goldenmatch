@@ -13,6 +13,12 @@ from pathlib import Path
 import polars as pl
 import pytest
 from goldenflow.core._native_loader import native_available
+from goldenflow.transforms.categorical import (
+    _category_normalize_key_series,
+    boolean_normalize,
+    gender_standardize,
+    null_standardize,
+)
 from goldenflow.transforms.email import (
     email_extract_domain,
     email_lowercase,
@@ -36,8 +42,52 @@ from goldenflow.transforms.identifiers import (
     vat_validate,
 )
 from goldenflow.transforms.names import name_script, name_transliterate
+from goldenflow.transforms.numeric import _currency_strip_series as currency_strip
+from goldenflow.transforms.numeric import _percentage_normalize_series as percentage_normalize
+from goldenflow.transforms.numeric import _to_integer_series as to_integer
+from goldenflow.transforms.numeric import (
+    comma_decimal,
+    scientific_to_decimal,
+)
+from goldenflow.transforms.url import url_extract_domain, url_normalize
 
 _CORPUS_PATH = Path(__file__).parent.parent / "parity" / "identifiers_corpus.jsonl"
+
+# Transforms in this family output floats/ints -- parity is compared by
+# VALUE (numeric), not string repr / exact object equality, since a
+# byte-identical value could arrive as `2.0` vs `2` after a JSON round-trip.
+_NUMERIC_TRANSFORMS = frozenset(
+    {
+        "currency_strip",
+        "percentage_normalize",
+        "to_integer",
+        "comma_decimal",
+        "scientific_to_decimal",
+    }
+)
+
+
+def _assert_value_parity(transform: str, actual: object, expected: object) -> None:
+    """Numeric-aware equality for the numeric family; exact equality for
+    everything else. Both `None` -> pass. Prefer EXACT float equality (the
+    same IEEE754 parse ops on both sides should produce bit-identical
+    results) over a fuzzy epsilon -- only fall back to a tiny epsilon if
+    exact equality genuinely doesn't hold, which would indicate a real
+    cross-surface drift worth investigating, not paper over it."""
+    if transform not in _NUMERIC_TRANSFORMS:
+        assert actual == expected
+        return
+    if actual is None or expected is None:
+        assert actual == expected
+        return
+    if actual == expected:
+        return
+    # Both are numeric at this point (float or int) -- fall back to a tiny
+    # epsilon ONLY to absorb a genuine last-bit float discrepancy, never to
+    # mask a real logic divergence.
+    assert abs(float(actual) - float(expected)) < 1e-9, (
+        f"{transform}: {actual!r} != {expected!r} (beyond float epsilon)"
+    )
 
 _TRANSFORMS = {
     "cc_validate": cc_validate,
@@ -60,6 +110,17 @@ _TRANSFORMS = {
     "email_normalize": email_normalize,
     "email_extract_domain": email_extract_domain,
     "email_validate": email_validate,
+    "url_normalize": url_normalize,
+    "url_extract_domain": url_extract_domain,
+    "currency_strip": currency_strip,
+    "percentage_normalize": percentage_normalize,
+    "to_integer": to_integer,
+    "comma_decimal": comma_decimal,
+    "scientific_to_decimal": scientific_to_decimal,
+    "boolean_normalize": boolean_normalize,
+    "gender_standardize": gender_standardize,
+    "null_standardize": null_standardize,
+    "category_normalize_key": _category_normalize_key_series,
 }
 
 # Floor native symbol per transform's component -- used to skip a row when the
@@ -88,6 +149,26 @@ _NATIVE_FLOOR_SYMBOL = {
     "email_normalize": "email_validate_arrow",
     "email_extract_domain": "email_validate_arrow",
     "email_validate": "email_validate_arrow",
+    # url: both transforms are wired via the single "url" component (floor
+    # symbol url_normalize_arrow), region-free/locale-free.
+    "url_normalize": "url_normalize_arrow",
+    "url_extract_domain": "url_normalize_arrow",
+    # numeric: all 5 string-parser transforms are wired via the single
+    # "numeric" component (floor symbol currency_strip_arrow), region-free/
+    # locale-free.
+    "currency_strip": "currency_strip_arrow",
+    "percentage_normalize": "currency_strip_arrow",
+    "to_integer": "currency_strip_arrow",
+    "comma_decimal": "currency_strip_arrow",
+    "scientific_to_decimal": "currency_strip_arrow",
+    # categorical: boolean_normalize/gender_standardize/null_standardize +
+    # category_normalize_key are all wired via the single "categorical"
+    # component (floor symbol boolean_normalize_arrow), region-free/
+    # locale-free.
+    "boolean_normalize": "boolean_normalize_arrow",
+    "gender_standardize": "boolean_normalize_arrow",
+    "null_standardize": "boolean_normalize_arrow",
+    "category_normalize_key": "boolean_normalize_arrow",
 }
 
 
@@ -112,7 +193,7 @@ def test_identifiers_fallback_parity(row, monkeypatch):
     monkeypatch.setenv("GOLDENFLOW_NATIVE", "0")
     transform = _TRANSFORMS[row["transform"]]
     result = transform(pl.Series("v", [row["input"]]))
-    assert result.to_list()[0] == row["expected"]
+    _assert_value_parity(row["transform"], result.to_list()[0], row["expected"])
 
 
 @pytest.mark.parametrize("row", _CORPUS, ids=_IDS)
@@ -133,4 +214,4 @@ def test_identifiers_native_parity(row, monkeypatch):
     monkeypatch.setenv("GOLDENFLOW_NATIVE", "auto")
     transform = _TRANSFORMS[row["transform"]]
     result = transform(pl.Series("v", [row["input"]]))
-    assert result.to_list()[0] == row["expected"]
+    _assert_value_parity(row["transform"], result.to_list()[0], row["expected"])

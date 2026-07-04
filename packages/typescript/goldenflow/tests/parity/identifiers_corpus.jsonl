@@ -200,3 +200,102 @@
 {"transform": "email_validate", "input": "", "expected": false}
 {"transform": "email_validate", "input": "   ", "expected": false}
 {"transform": "email_validate", "input": null, "expected": null}
+{"transform": "url_normalize", "input": "Example.COM/Path/", "expected": "https://example.com/Path"}
+{"transform": "url_normalize", "input": "http://X.com/", "expected": "http://x.com"}
+{"transform": "url_normalize", "input": "https://a.com", "expected": "https://a.com"}
+{"transform": "url_normalize", "input": "https://a.com/x/", "expected": "https://a.com/x"}
+{"transform": "url_normalize", "input": "https://a.com/x//", "expected": "https://a.com/x"}
+{"transform": "url_normalize", "input": "HTTPS://Foo.com", "expected": "https://foo.com"}
+{"transform": "url_normalize", "input": "HtTp://Foo.com", "expected": "http://foo.com"}
+{"transform": "url_normalize", "input": "EXAMPLE.com", "expected": "https://example.com"}
+{"transform": "url_normalize", "input": " example.com ", "expected": "https://example.com"}
+{"transform": "url_normalize", "input": "http://sub.Domain.ORG/Path/More", "expected": "http://sub.domain.org/Path/More"}
+{"transform": "url_normalize", "input": "", "expected": null}
+{"transform": "url_normalize", "input": "   ", "expected": null}
+{"transform": "url_normalize", "input": null, "expected": null}
+{"transform": "url_extract_domain", "input": "https://Foo.com/x", "expected": "foo.com"}
+{"transform": "url_extract_domain", "input": "bar.com", "expected": "bar.com"}
+{"transform": "url_extract_domain", "input": "http://sub.domain.org/path/more", "expected": "sub.domain.org"}
+{"transform": "url_extract_domain", "input": "HTTPS://EXAMPLE.COM", "expected": "example.com"}
+{"transform": "url_extract_domain", "input": "", "expected": null}
+{"transform": "url_extract_domain", "input": "   ", "expected": null}
+{"transform": "url_extract_domain", "input": null, "expected": null}
+{"transform": "currency_strip", "input": "$1,234.56", "expected": 1234.56}
+{"transform": "currency_strip", "input": "-$42.00", "expected": -42.0}
+{"transform": "currency_strip", "input": "USD 100", "expected": 100.0}
+{"transform": "currency_strip", "input": "0.50", "expected": 0.5}
+{"transform": "currency_strip", "input": "free", "expected": null}
+{"transform": "currency_strip", "input": "", "expected": null}
+{"transform": "currency_strip", "input": null, "expected": null}
+{"transform": "percentage_normalize", "input": "85%", "expected": 0.85}
+{"transform": "percentage_normalize", "input": "100%", "expected": 1.0}
+{"transform": "percentage_normalize", "input": "0.5%", "expected": 0.005}
+{"transform": "percentage_normalize", "input": " 12.5 % ", "expected": 0.125}
+{"transform": "percentage_normalize", "input": "50", "expected": 0.5}
+{"transform": "percentage_normalize", "input": "abc%", "expected": null}
+{"transform": "percentage_normalize", "input": "", "expected": null}
+{"transform": "percentage_normalize", "input": null, "expected": null}
+{"transform": "to_integer", "input": "42", "expected": 42}
+{"transform": "to_integer", "input": "3.7", "expected": 3}
+{"transform": "to_integer", "input": "-3.7", "expected": -3}
+{"transform": "to_integer", "input": "100", "expected": 100}
+{"transform": "to_integer", "input": "abc", "expected": null}
+{"transform": "to_integer", "input": "", "expected": null}
+{"transform": "to_integer", "input": null, "expected": null}
+{"transform": "comma_decimal", "input": "1.234,56", "expected": 1234.56}
+{"transform": "comma_decimal", "input": "99,99", "expected": 99.99}
+{"transform": "comma_decimal", "input": "1.000,00", "expected": 1000.0}
+{"transform": "comma_decimal", "input": "1.5", "expected": 1.5}
+{"transform": "comma_decimal", "input": "100", "expected": 100.0}
+{"transform": "comma_decimal", "input": "abc", "expected": null}
+{"transform": "comma_decimal", "input": "", "expected": null}
+{"transform": "comma_decimal", "input": null, "expected": null}
+{"transform": "scientific_to_decimal", "input": "1.5e3", "expected": 1500.0}
+{"transform": "scientific_to_decimal", "input": "2.0E-4", "expected": 0.0002}
+{"transform": "scientific_to_decimal", "input": "3.14e0", "expected": 3.14}
+{"transform": "scientific_to_decimal", "input": "100", "expected": 100.0}
+{"transform": "scientific_to_decimal", "input": "abc", "expected": null}
+{"transform": "scientific_to_decimal", "input": "", "expected": null}
+{"transform": "scientific_to_decimal", "input": null, "expected": null}
+{"transform": "boolean_normalize", "input": "Yes", "expected": true}
+{"transform": "boolean_normalize", "input": "Y", "expected": true}
+{"transform": "boolean_normalize", "input": "1", "expected": true}
+{"transform": "boolean_normalize", "input": "True", "expected": true}
+{"transform": "boolean_normalize", "input": " true ", "expected": true}
+{"transform": "boolean_normalize", "input": "T", "expected": true}
+{"transform": "boolean_normalize", "input": "No", "expected": false}
+{"transform": "boolean_normalize", "input": "N", "expected": false}
+{"transform": "boolean_normalize", "input": "0", "expected": false}
+{"transform": "boolean_normalize", "input": "False", "expected": false}
+{"transform": "boolean_normalize", "input": "f", "expected": false}
+{"transform": "boolean_normalize", "input": "maybe", "expected": null}
+{"transform": "boolean_normalize", "input": "", "expected": null}
+{"transform": "boolean_normalize", "input": null, "expected": null}
+{"transform": "gender_standardize", "input": "Male", "expected": "M"}
+{"transform": "gender_standardize", "input": "male", "expected": "M"}
+{"transform": "gender_standardize", "input": "M", "expected": "M"}
+{"transform": "gender_standardize", "input": "m", "expected": "M"}
+{"transform": "gender_standardize", "input": "Female", "expected": "F"}
+{"transform": "gender_standardize", "input": "female", "expected": "F"}
+{"transform": "gender_standardize", "input": "F", "expected": "F"}
+{"transform": "gender_standardize", "input": "f", "expected": "F"}
+{"transform": "gender_standardize", "input": "Nonbinary", "expected": "Nonbinary"}
+{"transform": "gender_standardize", "input": "", "expected": ""}
+{"transform": "gender_standardize", "input": null, "expected": null}
+{"transform": "null_standardize", "input": "N/A", "expected": null}
+{"transform": "null_standardize", "input": "NULL", "expected": null}
+{"transform": "null_standardize", "input": "none", "expected": null}
+{"transform": "null_standardize", "input": "", "expected": null}
+{"transform": "null_standardize", "input": "  ", "expected": null}
+{"transform": "null_standardize", "input": "null", "expected": null}
+{"transform": "null_standardize", "input": "NA", "expected": null}
+{"transform": "null_standardize", "input": "nil", "expected": null}
+{"transform": "null_standardize", "input": "nan", "expected": null}
+{"transform": "null_standardize", "input": "-", "expected": null}
+{"transform": "null_standardize", "input": "actual value", "expected": "actual value"}
+{"transform": "null_standardize", "input": null, "expected": null}
+{"transform": "category_normalize_key", "input": "  Yes  ", "expected": "yes"}
+{"transform": "category_normalize_key", "input": "USA", "expected": "usa"}
+{"transform": "category_normalize_key", "input": "MiXeD Case", "expected": "mixed case"}
+{"transform": "category_normalize_key", "input": "", "expected": ""}
+{"transform": "category_normalize_key", "input": null, "expected": null}

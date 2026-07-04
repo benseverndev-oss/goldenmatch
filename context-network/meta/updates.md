@@ -2,6 +2,27 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-07-04 -- GoldenFlow Wave D sweep (part 1): url, numeric, categorical migrated to owned kernels
+- Three more existing transform families migrated to the owned-kernel
+  pattern (not new additions -- registry stays at 92): `url_normalize` /
+  `url_extract_domain`; the numeric parsers `currency_strip` /
+  `percentage_normalize` / `to_integer` / `comma_decimal` /
+  `scientific_to_decimal` plus the numeric-array ops `round` / `clamp` /
+  `abs_value` / `fill_zero`; and the categorical family `boolean_normalize` /
+  `gender_standardize` / `null_standardize` (fully owned) plus
+  `category_standardize` / `category_from_file` (logic/data split -- the
+  caller-supplied variant->canonical mapping stays in Python/TS, only the
+  shared key-derivation is a Rust kernel). Same cross-surface pattern as
+  prior waves (native + WASM/TS + pure-Python fallback), Rust is the
+  reference implementation.
+- **Behavior change (reference-mode, resolved in Rust's favor):** numeric
+  `round` now uses round-half-away-from-zero (was Python's round-half-to-even
+  banker's rounding); the five numeric string parsers return null on
+  unparseable input on both Python and TS (TS parsers previously passed
+  through unparsed input).
+- Versions: goldenflow 1.7.0 -> 1.8.0 / npm 0.7.0 -> 0.8.0 / goldenflow-native
+  0.5.0 -> 0.6.0.
+
 ## 2026-07-04 — GoldenFlow Wave D1: email transform family migrated to owned kernels
 - The email transform family (`email_lowercase`, `email_normalize`,
   `email_extract_domain`, `email_validate`) is now backed by owned Rust

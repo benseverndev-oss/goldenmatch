@@ -28,6 +28,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from goldenflow.core._native_loader import native_available, native_module  # noqa: E402
+from goldenflow.transforms.categorical import (  # noqa: E402
+    _boolean_normalize_py,
+    _category_normalize_key_py,
+    _gender_standardize_py,
+    _null_standardize_py,
+)
 from goldenflow.transforms.email import (  # noqa: E402
     _email_extract_domain_py,
     _email_lowercase_py,
@@ -53,6 +59,17 @@ from goldenflow.transforms.identifiers import (  # noqa: E402
 from goldenflow.transforms.names import (  # noqa: E402
     _name_script_py,
     _name_transliterate_py,
+)
+from goldenflow.transforms.numeric import (  # noqa: E402
+    _comma_decimal_py,
+    _currency_strip_py,
+    _percentage_normalize_py,
+    _scientific_to_decimal_py,
+    _to_integer_py,
+)
+from goldenflow.transforms.url import (  # noqa: E402
+    _url_extract_domain_py,
+    _url_normalize_py,
 )
 
 CORPUS_PATH = Path(__file__).resolve().parent.parent / "tests" / "parity" / "identifiers_corpus.jsonl"
@@ -302,6 +319,118 @@ _CASES: list[tuple[str, str | None]] = [
     ("email_validate", ""),  # empty -> false
     ("email_validate", "   "),  # whitespace-only -> false
     ("email_validate", None),  # null
+    # --- url_normalize ---
+    ("url_normalize", "Example.COM/Path/"),  # no scheme -> prepend https, lowercase domain
+    ("url_normalize", "http://X.com/"),  # trailing slash, path == "/" -> strip one
+    ("url_normalize", "https://a.com"),  # no trailing slash -> unchanged
+    ("url_normalize", "https://a.com/x/"),  # path beyond root -> strip all trailing slashes
+    ("url_normalize", "https://a.com/x//"),  # multiple trailing slashes -> strip all
+    ("url_normalize", "HTTPS://Foo.com"),  # uppercase scheme -> lowercased
+    ("url_normalize", "HtTp://Foo.com"),  # mixed-case scheme -> lowercased
+    ("url_normalize", "EXAMPLE.com"),  # no scheme, no path -> https prepended
+    ("url_normalize", " example.com "),  # leading/trailing whitespace -> trimmed
+    ("url_normalize", "http://sub.Domain.ORG/Path/More"),  # multi-label domain, mixed-case path
+    ("url_normalize", ""),  # empty -> None
+    ("url_normalize", "   "),  # whitespace-only -> None
+    ("url_normalize", None),  # null
+    # --- url_extract_domain ---
+    ("url_extract_domain", "https://Foo.com/x"),  # mixed-case domain -> lowercased
+    ("url_extract_domain", "bar.com"),  # no scheme -> domain as-is (lowercased)
+    ("url_extract_domain", "http://sub.domain.org/path/more"),  # multi-label domain
+    ("url_extract_domain", "HTTPS://EXAMPLE.COM"),  # all-caps, no path
+    ("url_extract_domain", ""),  # empty -> None
+    ("url_extract_domain", "   "),  # whitespace-only -> None
+    ("url_extract_domain", None),  # null
+    # --- currency_strip (string->float; VALUE parity, not repr) ---
+    ("currency_strip", "$1,234.56"),  # strip $ and comma
+    ("currency_strip", "-$42.00"),  # negative, dollar sign
+    ("currency_strip", "USD 100"),  # strip letters + space
+    ("currency_strip", "0.50"),  # plain decimal
+    ("currency_strip", "free"),  # no numeric chars -> null
+    ("currency_strip", ""),  # empty -> null
+    ("currency_strip", None),  # null
+    # --- percentage_normalize (string->float) ---
+    ("percentage_normalize", "85%"),
+    ("percentage_normalize", "100%"),
+    ("percentage_normalize", "0.5%"),
+    ("percentage_normalize", " 12.5 % "),  # whitespace around number and %
+    ("percentage_normalize", "50"),  # no % sign
+    ("percentage_normalize", "abc%"),  # non-numeric -> null
+    ("percentage_normalize", ""),  # empty -> null
+    ("percentage_normalize", None),  # null
+    # --- to_integer (string->int, truncating) ---
+    ("to_integer", "42"),
+    ("to_integer", "3.7"),  # truncates
+    ("to_integer", "-3.7"),  # truncates toward zero
+    ("to_integer", "100"),
+    ("to_integer", "abc"),  # non-numeric -> null
+    ("to_integer", ""),  # empty -> null
+    ("to_integer", None),  # null
+    # --- comma_decimal (string->float, EU format) ---
+    ("comma_decimal", "1.234,56"),  # EU format
+    ("comma_decimal", "99,99"),  # EU format, no thousands sep
+    ("comma_decimal", "1.000,00"),  # EU format with thousands sep
+    ("comma_decimal", "1.5"),  # US format (no comma) -> parsed as-is
+    ("comma_decimal", "100"),  # plain integer
+    ("comma_decimal", "abc"),  # non-numeric -> null
+    ("comma_decimal", ""),  # empty -> null
+    ("comma_decimal", None),  # null
+    # --- scientific_to_decimal (string->float) ---
+    ("scientific_to_decimal", "1.5e3"),
+    ("scientific_to_decimal", "2.0E-4"),
+    ("scientific_to_decimal", "3.14e0"),
+    ("scientific_to_decimal", "100"),  # plain number, no exponent
+    ("scientific_to_decimal", "abc"),  # non-numeric -> null
+    ("scientific_to_decimal", ""),  # empty -> null
+    ("scientific_to_decimal", None),  # null
+    # --- boolean_normalize (string->bool) ---
+    ("boolean_normalize", "Yes"),
+    ("boolean_normalize", "Y"),
+    ("boolean_normalize", "1"),
+    ("boolean_normalize", "True"),
+    ("boolean_normalize", " true "),  # whitespace around a recognized token
+    ("boolean_normalize", "T"),
+    ("boolean_normalize", "No"),
+    ("boolean_normalize", "N"),
+    ("boolean_normalize", "0"),
+    ("boolean_normalize", "False"),
+    ("boolean_normalize", "f"),
+    ("boolean_normalize", "maybe"),  # unrecognized -> null
+    ("boolean_normalize", ""),  # empty -> null
+    ("boolean_normalize", None),  # null
+    # --- gender_standardize (string->string, passthrough on no match) ---
+    ("gender_standardize", "Male"),
+    ("gender_standardize", "male"),
+    ("gender_standardize", "M"),
+    ("gender_standardize", "m"),
+    ("gender_standardize", "Female"),
+    ("gender_standardize", "female"),
+    ("gender_standardize", "F"),
+    ("gender_standardize", "f"),
+    ("gender_standardize", "Nonbinary"),  # no match -> passthrough UNCHANGED
+    ("gender_standardize", ""),  # empty -> passthrough (empty string)
+    ("gender_standardize", None),  # null
+    # --- null_standardize (string->string|null) ---
+    ("null_standardize", "N/A"),
+    ("null_standardize", "NULL"),
+    ("null_standardize", "none"),
+    ("null_standardize", ""),
+    ("null_standardize", "  "),  # trims to empty -> null
+    ("null_standardize", "null"),
+    ("null_standardize", "NA"),
+    ("null_standardize", "nil"),
+    ("null_standardize", "nan"),
+    ("null_standardize", "-"),
+    ("null_standardize", "actual value"),  # no match -> passthrough UNCHANGED
+    ("null_standardize", None),  # null
+    # --- category_normalize_key (string->string, shared key-derivation for
+    # the mapping-based transforms category_standardize/category_from_file --
+    # always trim+lowercase, never fails) ---
+    ("category_normalize_key", "  Yes  "),
+    ("category_normalize_key", "USA"),
+    ("category_normalize_key", "MiXeD Case"),
+    ("category_normalize_key", ""),
+    ("category_normalize_key", None),  # null
 ]
 
 _PY_FN = {
@@ -325,6 +454,17 @@ _PY_FN = {
     "email_normalize": _email_normalize_py,
     "email_extract_domain": _email_extract_domain_py,
     "email_validate": _email_validate_py,
+    "url_normalize": _url_normalize_py,
+    "url_extract_domain": _url_extract_domain_py,
+    "currency_strip": _currency_strip_py,
+    "percentage_normalize": _percentage_normalize_py,
+    "to_integer": _to_integer_py,
+    "comma_decimal": _comma_decimal_py,
+    "scientific_to_decimal": _scientific_to_decimal_py,
+    "boolean_normalize": _boolean_normalize_py,
+    "gender_standardize": _gender_standardize_py,
+    "null_standardize": _null_standardize_py,
+    "category_normalize_key": lambda v: None if v is None else _category_normalize_key_py(v),
 }
 
 _NATIVE_ARROW_FN = {
@@ -348,6 +488,17 @@ _NATIVE_ARROW_FN = {
     "email_normalize": "email_normalize_arrow",
     "email_extract_domain": "email_extract_domain_arrow",
     "email_validate": "email_validate_arrow",
+    "url_normalize": "url_normalize_arrow",
+    "url_extract_domain": "url_extract_domain_arrow",
+    "currency_strip": "currency_strip_arrow",
+    "percentage_normalize": "percentage_normalize_arrow",
+    "to_integer": "to_integer_arrow",
+    "comma_decimal": "comma_decimal_arrow",
+    "scientific_to_decimal": "scientific_to_decimal_arrow",
+    "boolean_normalize": "boolean_normalize_arrow",
+    "gender_standardize": "gender_standardize_arrow",
+    "null_standardize": "null_standardize_arrow",
+    "category_normalize_key": "category_normalize_key_arrow",
 }
 
 

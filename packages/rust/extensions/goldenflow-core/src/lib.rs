@@ -5,8 +5,11 @@
 //! surface (`goldenflow-wasm`) are thin marshaling shims over these functions.
 //! The pure-Python / pure-TS transform paths are non-authoritative fallbacks
 //! that must reproduce these bytes (asserted by the byte-parity harness).
+pub mod categorical;
 pub mod email;
 pub mod identifiers;
 pub mod names;
+pub mod numeric;
 pub mod phone;
 pub mod text;
+pub mod url;

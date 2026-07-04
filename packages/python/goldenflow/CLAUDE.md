@@ -205,6 +205,51 @@ package. Loader discover order in `goldenflow/core/_native_loader.py`:
   `email_normalize`, `email_extract_domain`, `email_validate` now dispatch
   native-first through goldenflow-core, same cross-surface pattern as
   identifiers/names above (existing transforms migrated, not new additions).
+- **URL family migrated to owned kernels (Wave D2):** `url_normalize`,
+  `url_extract_domain` now dispatch native-first through goldenflow-core
+  (`url_normalize_arrow`/`url_extract_domain_arrow`), same cross-surface
+  pattern as the email family above (existing transforms migrated, not new
+  additions). Both wired via the single `"url"` `_native_loader` component
+  (floor symbol `url_normalize_arrow`).
+- **Numeric family migrated to owned kernels (Wave D4) -- VALUE parity, not
+  string parity.** `currency_strip`/`percentage_normalize`/`to_integer`
+  (mode stays `"expr"`, dispatched via `pl.col(column).map_batches(...)` so
+  the public `func(column) -> Expr` signature is unchanged) and
+  `comma_decimal`/`scientific_to_decimal`/`round`/`clamp`/`abs_value`/
+  `fill_zero` (mode `"series"`) now dispatch native-first through
+  goldenflow-core (`currency_strip_arrow` et al.), all wired via the single
+  `"numeric"` `_native_loader` component (floor symbol
+  `currency_strip_arrow`). This family outputs floats/ints, so the
+  byte-parity harness compares by VALUE: the 5 string->number PARSERS
+  (currency_strip/percentage_normalize/to_integer/comma_decimal/
+  scientific_to_decimal) live in the shared
+  `tests/parity/identifiers_corpus.jsonl` corpus with a numeric-aware
+  `_assert_value_parity` helper in `test_identifiers_parity.py` (exact float
+  equality preferred, 1e-9 epsilon only as a documented last resort); the 4
+  numeric-ARRAY ops (round/clamp/abs_value/fill_zero) take a NUMERIC column
+  as input rather than a string, so they don't fit that string-keyed corpus
+  and instead live in `test_numeric_kernels.py` with pinned-vector native +
+  fallback asserts. **Locked rounding rule:** `round` is round-half-away-
+  from-zero via multiply/round/divide (`(x * 10^n + 0.5).floor() / 10^n` for
+  `x >= 0`, mirrored `ceil` for negative) -- the goldenflow-core
+  `round_f64` kernel is the source of truth; this is deliberately NOT
+  Python's builtin `round()` (round-half-to-even) nor naive `Math.round`
+  (rounds half toward +Infinity, not away from zero) in TS.
+- **Categorical family migrated to owned kernels (Wave D5) -- LOGIC/DATA
+  split for the mapping transforms.** `boolean_normalize`/
+  `gender_standardize`/`null_standardize` are fully owned (fixed in-crate
+  lookup tables) and dispatch native-first through goldenflow-core
+  (`boolean_normalize_arrow` et al.), same cross-surface pattern as the
+  email/url families. `category_standardize`/`category_from_file` apply a
+  CALLER-SUPPLIED variant->canonical mapping (a function param, or loaded
+  from a CSV/YAML file at runtime) -- that mapping is runtime DATA, not
+  logic, so goldenflow-core does NOT own a dict-lookup kernel for it.
+  Instead, goldenflow-core owns `category_normalize_key` (the shared
+  trim+lowercase key-derivation both mapping transforms use before their
+  lookup); the dict-lookup-with-fallback loop stays in Python/TS. All 4
+  kernels wired via the single `"categorical"` `_native_loader` component
+  (floor symbol `boolean_normalize_arrow`). `null_standardize` stays
+  `auto_apply=True`.
 - **Byte-parity harness (cross-surface oracle = goldenflow-core).**
   `packages/python/goldenflow/tests/parity/identifiers_corpus.jsonl` (mirrored
   byte-identical into `packages/typescript/goldenflow/tests/parity/`) is the

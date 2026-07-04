@@ -412,3 +412,169 @@ def email_extract_domain_native() -> Callable[[pl.Series], pl.Series] | None:
 
 def email_validate_native() -> Callable[[pl.Series], pl.Series] | None:
     return _email_kernel_runner("email_validate_arrow")
+
+
+def _url_kernel_runner(attr: str) -> Callable[[pl.Series], pl.Series] | None:
+    """Build a whole-series runner for URL kernel function ``attr`` if
+    native ``url`` is enabled and the dependencies are importable; else
+    ``None``. Like the other identifier runners -- no region/gating args,
+    scheme/domain normalization and domain extraction are locale-free."""
+    if not native_enabled("url"):
+        return None
+    nm = native_module()
+    if nm is None or not hasattr(nm, attr):
+        return None
+    try:
+        import pyarrow  # noqa: F401  (zero-copy bridge)
+    except ImportError:
+        return None
+    func = getattr(nm, attr)
+
+    def run(s: pl.Series) -> pl.Series:
+        return pl.from_arrow(func(_as_str_series(s).to_arrow()))
+
+    return run
+
+
+def url_normalize_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _url_kernel_runner("url_normalize_arrow")
+
+
+def url_extract_domain_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _url_kernel_runner("url_extract_domain_arrow")
+
+
+def _as_f64_series(s: pl.Series) -> pl.Series:
+    """Ensure a Float64 series for the numeric-array-op Arrow bridge (round/
+    clamp/abs/fill_zero). Mirrors ``_as_str_series`` -- an all-null column is
+    Null-dtype, whose ``.to_arrow()`` the kernels reject."""
+    return s if s.dtype == pl.Float64 else s.cast(pl.Float64, strict=False)
+
+
+def _numeric_kernel_runner(attr: str) -> Callable[[pl.Series], pl.Series] | None:
+    """Build a whole-series runner for a numeric STRING-PARSER kernel function
+    ``attr`` (currency/percentage/to_integer/comma_decimal/
+    scientific_to_decimal) if native ``numeric`` is enabled and the
+    dependencies are importable; else ``None``. No region/gating args --
+    these parsers are locale-free (except comma_decimal's EU-format
+    detection, which is baked into the kernel itself)."""
+    if not native_enabled("numeric"):
+        return None
+    nm = native_module()
+    if nm is None or not hasattr(nm, attr):
+        return None
+    try:
+        import pyarrow  # noqa: F401  (zero-copy bridge)
+    except ImportError:
+        return None
+    func = getattr(nm, attr)
+
+    def run(s: pl.Series) -> pl.Series:
+        return pl.from_arrow(func(_as_str_series(s).to_arrow()))
+
+    return run
+
+
+def currency_strip_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _numeric_kernel_runner("currency_strip_arrow")
+
+
+def percentage_normalize_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _numeric_kernel_runner("percentage_normalize_arrow")
+
+
+def to_integer_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _numeric_kernel_runner("to_integer_arrow")
+
+
+def comma_decimal_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _numeric_kernel_runner("comma_decimal_arrow")
+
+
+def scientific_to_decimal_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _numeric_kernel_runner("scientific_to_decimal_arrow")
+
+
+def _numeric_array_kernel_runner(
+    attr: str, **kwargs: float | int
+) -> Callable[[pl.Series], pl.Series] | None:
+    """Build a whole-series runner for a numeric ARRAY-OP kernel function
+    ``attr`` (round/clamp/abs_value/fill_zero) if native ``numeric`` is
+    enabled and the dependencies are importable; else ``None``. Unlike the
+    string-parser runners, these read/write Float64 (not Utf8) Arrow arrays
+    and may carry params (``n`` for round, ``min_val``/``max_val`` for
+    clamp) forwarded as kwargs to the kernel call."""
+    if not native_enabled("numeric"):
+        return None
+    nm = native_module()
+    if nm is None or not hasattr(nm, attr):
+        return None
+    try:
+        import pyarrow  # noqa: F401  (zero-copy bridge)
+    except ImportError:
+        return None
+    func = getattr(nm, attr)
+
+    def run(s: pl.Series) -> pl.Series:
+        return pl.from_arrow(func(_as_f64_series(s).to_arrow(), **kwargs))
+
+    return run
+
+
+def round_native(n: int = 2) -> Callable[[pl.Series], pl.Series] | None:
+    return _numeric_array_kernel_runner("round_arrow", n=n)
+
+
+def clamp_native(
+    min_val: float = 0.0, max_val: float = 1.0
+) -> Callable[[pl.Series], pl.Series] | None:
+    return _numeric_array_kernel_runner(
+        "clamp_arrow", min_val=min_val, max_val=max_val
+    )
+
+
+def abs_value_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _numeric_array_kernel_runner("abs_value_arrow")
+
+
+def fill_zero_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _numeric_array_kernel_runner("fill_zero_arrow")
+
+
+def _categorical_kernel_runner(attr: str) -> Callable[[pl.Series], pl.Series] | None:
+    """Build a whole-series runner for categorical kernel function ``attr``
+    if native ``categorical`` is enabled and the dependencies are
+    importable; else ``None``. Like the other identifier runners -- no
+    region/gating args, the fixed lookup tables (boolean/gender/null) and
+    the key-normalization step are locale-free."""
+    if not native_enabled("categorical"):
+        return None
+    nm = native_module()
+    if nm is None or not hasattr(nm, attr):
+        return None
+    try:
+        import pyarrow  # noqa: F401  (zero-copy bridge)
+    except ImportError:
+        return None
+    func = getattr(nm, attr)
+
+    def run(s: pl.Series) -> pl.Series:
+        return pl.from_arrow(func(_as_str_series(s).to_arrow()))
+
+    return run
+
+
+def boolean_normalize_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _categorical_kernel_runner("boolean_normalize_arrow")
+
+
+def gender_standardize_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _categorical_kernel_runner("gender_standardize_arrow")
+
+
+def null_standardize_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _categorical_kernel_runner("null_standardize_arrow")
+
+
+def category_normalize_key_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _categorical_kernel_runner("category_normalize_key_arrow")

@@ -61,6 +61,21 @@ export async function instantiateBackend(bytes: Uint8Array): Promise<FlowWasmBac
     email_normalize: (s: string) => string;
     email_extract_domain: (s: string) => string | undefined;
     email_validate: (s: string) => boolean | undefined;
+    url_normalize: (s: string) => string | undefined;
+    url_extract_domain: (s: string) => string | undefined;
+    currency_strip: (s: string) => number | undefined;
+    percentage_normalize: (s: string) => number | undefined;
+    to_integer: (s: string) => number | undefined;
+    comma_decimal: (s: string) => number | undefined;
+    scientific_to_decimal: (s: string) => number | undefined;
+    round_value: (x: number, n: number) => number;
+    clamp_value: (x: number, minVal: number, maxVal: number) => number;
+    abs_value: (x: number) => number;
+    fill_zero: (x: number | undefined) => number;
+    boolean_normalize: (s: string) => boolean | undefined;
+    gender_standardize: (s: string) => string;
+    null_standardize: (s: string) => string | undefined;
+    category_normalize_key: (s: string) => string;
   };
   await glue.default({ module_or_path: bytes });
 
@@ -85,5 +100,20 @@ export async function instantiateBackend(bytes: Uint8Array): Promise<FlowWasmBac
     emailNormalize: (s) => glue.email_normalize(s),
     emailExtractDomain: (s) => glue.email_extract_domain(s),
     emailValidate: (s) => glue.email_validate(s) ?? false,
+    urlNormalize: (s) => glue.url_normalize(s),
+    urlExtractDomain: (s) => glue.url_extract_domain(s),
+    currencyStrip: (s) => glue.currency_strip(s),
+    percentageNormalize: (s) => glue.percentage_normalize(s),
+    toInteger: (s) => glue.to_integer(s),
+    commaDecimal: (s) => glue.comma_decimal(s),
+    scientificToDecimal: (s) => glue.scientific_to_decimal(s),
+    roundValue: (x, n) => glue.round_value(x, n),
+    clampValue: (x, minVal, maxVal) => glue.clamp_value(x, minVal, maxVal),
+    absValue: (x) => glue.abs_value(x),
+    fillZero: (x) => glue.fill_zero(x),
+    booleanNormalize: (s) => glue.boolean_normalize(s),
+    genderStandardize: (s) => glue.gender_standardize(s),
+    nullStandardize: (s) => glue.null_standardize(s),
+    categoryNormalizeKey: (s) => glue.category_normalize_key(s),
   };
 }

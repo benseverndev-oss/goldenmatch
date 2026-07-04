@@ -43,13 +43,27 @@ import {
   emailExtractDomainTs,
   emailValidateTs,
 } from "../../src/core/transforms/email.js";
+import { urlNormalizeTs, urlExtractDomainTs } from "../../src/core/transforms/url.js";
+import {
+  currencyStripTs,
+  percentageNormalizeTs,
+  toIntegerTs,
+  commaDecimalTs,
+  scientificToDecimalTs,
+} from "../../src/core/transforms/numeric.js";
+import {
+  categoryNormalizeKeyTs,
+  booleanNormalizeTs,
+  genderStandardizeTs,
+  nullStandardizeTs,
+} from "../../src/core/transforms/categorical.js";
 import { enableWasm, disableWasm } from "../../src/core/wasm/index.js";
 import { getFlowWasmBackend, type FlowWasmBackend } from "../../src/core/wasm/backend.js";
 
 interface CorpusRow {
   transform: string;
   input: string | null;
-  expected: boolean | string | null;
+  expected: boolean | string | number | null;
 }
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -62,7 +76,7 @@ const rows: CorpusRow[] = readFileSync(corpusPath, "utf8")
 /** Pure-TS single-value functions, keyed by the corpus's `transform` name.
  * Each takes the raw `string` input (null rows are short-circuited before
  * calling into these -- the fns below don't accept null). */
-const PURE_TS_FN: Record<string, (s: string) => boolean | string | undefined> = {
+const PURE_TS_FN: Record<string, (s: string) => boolean | string | number | undefined> = {
   cc_validate: ccValidateTs,
   cc_format: ccFormatTs,
   cc_mask: ccMaskTs,
@@ -83,13 +97,24 @@ const PURE_TS_FN: Record<string, (s: string) => boolean | string | undefined> = 
   email_normalize: emailNormalizeTs,
   email_extract_domain: emailExtractDomainTs,
   email_validate: emailValidateTs,
+  url_normalize: urlNormalizeTs,
+  url_extract_domain: urlExtractDomainTs,
+  boolean_normalize: booleanNormalizeTs,
+  gender_standardize: genderStandardizeTs,
+  null_standardize: nullStandardizeTs,
+  category_normalize_key: categoryNormalizeKeyTs,
+  currency_strip: currencyStripTs,
+  percentage_normalize: percentageNormalizeTs,
+  to_integer: toIntegerTs,
+  comma_decimal: commaDecimalTs,
+  scientific_to_decimal: scientificToDecimalTs,
 };
 
 /** Same transform set, dispatched through the wasm backend's method of the
  * same name (the `FlowWasmBackend` interface intentionally mirrors these
  * names -- see `src/core/wasm/backend.ts`). */
-function wasmFn(backend: FlowWasmBackend, transform: string): (s: string) => boolean | string | undefined {
-  const map: Record<string, (s: string) => boolean | string | undefined> = {
+function wasmFn(backend: FlowWasmBackend, transform: string): (s: string) => boolean | string | number | undefined {
+  const map: Record<string, (s: string) => boolean | string | number | undefined> = {
     cc_validate: (s) => backend.ccValidate(s),
     cc_format: (s) => backend.ccFormat(s),
     cc_mask: (s) => backend.ccMask(s),
@@ -110,16 +135,30 @@ function wasmFn(backend: FlowWasmBackend, transform: string): (s: string) => boo
     email_normalize: (s) => backend.emailNormalize(s),
     email_extract_domain: (s) => backend.emailExtractDomain(s),
     email_validate: (s) => backend.emailValidate(s),
+    url_normalize: (s) => backend.urlNormalize(s),
+    url_extract_domain: (s) => backend.urlExtractDomain(s),
+    boolean_normalize: (s) => backend.booleanNormalize(s),
+    gender_standardize: (s) => backend.genderStandardize(s),
+    null_standardize: (s) => backend.nullStandardize(s),
+    category_normalize_key: (s) => backend.categoryNormalizeKey(s),
+    currency_strip: (s) => backend.currencyStrip(s),
+    percentage_normalize: (s) => backend.percentageNormalize(s),
+    to_integer: (s) => backend.toInteger(s),
+    comma_decimal: (s) => backend.commaDecimal(s),
+    scientific_to_decimal: (s) => backend.scientificToDecimal(s),
   };
   const fn = map[transform];
   if (!fn) throw new Error(`no wasm dispatch for transform ${transform}`);
   return fn;
 }
 
-/** Normalize a raw fn result (`boolean | string | undefined`) and a corpus
- * `expected` (`boolean | string | null`) onto the same shape so `undefined`
- * (Rust `Option::None` / no-match) and `null` (Python `None`) compare equal. */
-function normalize(v: boolean | string | undefined | null): boolean | string | null {
+/** Normalize a raw fn result (`boolean | string | number | undefined`) and a
+ * corpus `expected` (`boolean | string | number | null`) onto the same shape so
+ * `undefined` (Rust `Option::None` / no-match) and `null` (Python `None`)
+ * compare equal. Numeric transforms (currency/percentage/…) compare by VALUE:
+ * `toEqual` does structural number equality, so identical IEEE-754 results from
+ * the Rust kernel and the pure-TS parser match without string-repr coupling. */
+function normalize(v: boolean | string | number | undefined | null): boolean | string | number | null {
   return v === undefined ? null : v;
 }
 
