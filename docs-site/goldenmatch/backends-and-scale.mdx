@@ -41,7 +41,7 @@ goldenmatch dedupe big.csv --backend ray
 goldenmatch dedupe big.csv --chunked
 ```
 
-Or let auto-config pick. By default it chooses `duckdb` at 1M+ rows and `chunked` for 5M+. Tune the cutoff with `GOLDENMATCH_AUTOCONFIG_BACKEND_THRESHOLD`.
+Or let auto-config pick. By default it chooses `duckdb` at 1M+ rows and `chunked` for 5M+. To override the choice, set `backend=` in config or pass `--backend` on the CLI.
 
 ## DuckDB spill path
 

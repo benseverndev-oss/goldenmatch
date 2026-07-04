@@ -86,7 +86,7 @@ After 10+ corrections accumulate against a matchkey, `goldenmatch memory learn` 
 
 ```yaml
 memory:
-  enabled: true                 # default: false. Off => no memory work, zero overhead.
+  enabled: true                 # MemoryConfig.enabled defaults to true; memory is off only because the memory: block is absent by default. Adding this block turns it on.
   backend: sqlite               # sqlite | postgres
   path: .goldenmatch/memory.db  # sqlite path or postgres DSN
   reanchor: true                # default: true. Set false to require exact (id_a, id_b) match.
@@ -98,7 +98,7 @@ memory:
 
 | Field | Default | Notes |
 |---|---|---|
-| `enabled` | `false` | Zero-config preserved. Enabling does not change pipeline output until corrections exist. |
+| `enabled` | `true` (field default) | The feature is off by default only because the `memory:` block is absent; add the block to enable it. Enabling does not change pipeline output until corrections exist. |
 | `backend` | `"sqlite"` | `"postgres"` requires `pip install goldenmatch[postgres]`. |
 | `path` | `".goldenmatch/memory.db"` | SQLite file or full DSN for postgres. |
 | `reanchor` | `true` | Re-anchor by `record_hash` when row IDs miss. Disable for strictly positional behavior. |
@@ -122,15 +122,15 @@ The `goldenmatch memory` subgroup exposes the store directly.
 
 ```bash
 # Inspect
-goldenmatch memory stats --config goldenmatch.yml
-goldenmatch memory show --config goldenmatch.yml --limit 50
+goldenmatch memory stats --path .goldenmatch/memory.db
+goldenmatch memory show --path .goldenmatch/memory.db --limit 50
 
 # Train (run the learner over the current store)
-goldenmatch memory learn --config goldenmatch.yml
+goldenmatch memory learn --path .goldenmatch/memory.db
 
 # Move memory between environments
-goldenmatch memory export --config goldenmatch.yml --output corrections.jsonl
-goldenmatch memory import --config goldenmatch.yml --input corrections.jsonl
+goldenmatch memory export --path .goldenmatch/memory.db --output corrections.jsonl
+goldenmatch memory import --path .goldenmatch/memory.db --input corrections.jsonl
 ```
 
 | Command | Purpose |
@@ -173,7 +173,7 @@ for c in store.get_corrections(dataset="customers"):
 |---|---|
 | `goldenmatch.get_memory()` | The active `MemoryStore` (constructed from `config.memory`). |
 | `goldenmatch.add_correction(id_a, id_b, decision, ...)` | Upserts a correction, trust-weighted. |
-| `goldenmatch.learn()` | Runs `MemoryLearner`, returns the dict of threshold adjustments. |
+| `goldenmatch.learn()` | Runs `MemoryLearner`, returns a `list` of `LearnedAdjustment` objects. |
 | `goldenmatch.memory_stats()` | Same dict the CLI prints. |
 
 After a pipeline run, every result also carries a `memory_stats` field:

@@ -1,10 +1,10 @@
 ---
 title: "Python API"
-description: "Complete reference for all 106 symbols exported by GoldenMatch from a single import."
+description: "Complete reference for all 194 symbols exported by GoldenMatch from a single import."
 keywords: ["python api", "goldenmatch", "dedupe", "match", "scoring", "pprl", "auto-config", "configuration", "result classes"]
 ---
 
-GoldenMatch exports 106 symbols from a single import. Every feature is accessible via `import goldenmatch as gm`.
+GoldenMatch exports 194 symbols from a single import. Every feature is accessible via `import goldenmatch as gm`.
 
 ```python
 import goldenmatch as gm
@@ -221,6 +221,7 @@ gm.PPRLConfig(
     hash_functions: int = 30,
     bloom_filter_size: int = 1024,
     protocol: str = "trusted_third_party",
+    scorer: str = "dice",             # "dice" or "jaccard"
     chunk_size: int | None = None,    # stream Party B in blocks of this size (memory-safe); None = dense single-block path
 )
 ```
@@ -260,8 +261,10 @@ metrics = gm.evaluate("data.csv", config="config.yaml", ground_truth="gt.csv")
 ### evaluate_pairs
 
 ```python
-gm.evaluate_pairs(predicted: set[tuple], ground_truth: set[tuple]) -> EvalResult
+gm.evaluate_pairs(predicted: list[tuple[int, int, float]], ground_truth: set[tuple]) -> EvalResult
 ```
+
+`predicted` is a list of `(id_a, id_b, score)` triples (the shape `score_pairs` returns); duplicate pairs are de-duped symmetrically.
 
 Evaluate predicted pairs against ground truth pairs directly.
 
@@ -278,14 +281,22 @@ Evaluate cluster dict (from `build_clusters`) against ground truth.
 ```python
 @dataclass
 class EvalResult:
-    precision: float
-    recall: float
-    f1: float
-    tp: int
-    fp: int
-    fn: int
+    tp: int = 0
+    fp: int = 0
+    fn: int = 0
 
-    def summary(self) -> dict  # Returns dict representation
+    # precision / recall / f1 are read-only @property values computed from
+    # tp / fp / fn -- they are NOT constructor fields. Construct with the
+    # counts (EvalResult(tp=.., fp=.., fn=..)); passing precision/recall/f1
+    # as kwargs raises TypeError.
+    @property
+    def precision(self) -> float: ...
+    @property
+    def recall(self) -> float: ...
+    @property
+    def f1(self) -> float: ...
+
+    def summary(self) -> dict  # {tp, fp, fn, precision, recall, f1, predicted_pairs, ground_truth_pairs}
 ```
 
 ### load_ground_truth_csv
@@ -575,7 +586,7 @@ In-context block clustering as alternative to pairwise scoring. Set `config.mode
 ### BudgetTracker
 
 ```python
-gm.BudgetTracker(max_cost_usd=0.05, max_calls=100)
+gm.BudgetTracker(gm.BudgetConfig(max_cost_usd=0.05, max_calls=100))
 ```
 
 Tracks token usage, cost, and enforces limits. Degrades gracefully: cluster mode falls back to pairwise, then stops.

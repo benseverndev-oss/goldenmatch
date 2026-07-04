@@ -16,8 +16,8 @@ result = gm.dedupe("products.csv", fuzzy={"title": 0.80}, llm_scorer=True)
 ```
 
 ```bash
-# CLI
-goldenmatch dedupe products.csv --config config.yaml --llm-scorer
+# CLI (LLM scoring is enabled via the llm_scorer block in config.yaml)
+goldenmatch dedupe products.csv --config config.yaml
 ```
 
 Requires `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` environment variable.
@@ -49,7 +49,7 @@ How it works:
 ```python
 import goldenmatch as gm
 
-scored = gm.llm_score_pairs(borderline_pairs, df, llm_config)
+scored = gm.llm_score_pairs(borderline_pairs, df, config=llm_config)
 ```
 
 ## Iterative calibration
@@ -119,14 +119,14 @@ llm_scorer:
 ```python
 import goldenmatch as gm
 
-tracker = gm.BudgetTracker(max_cost_usd=0.05, max_calls=100)
-# tracker.record_call(input_tokens, output_tokens, model)
-# tracker.remaining_budget
-# tracker.total_cost
-# tracker.is_exhausted
+tracker = gm.BudgetTracker(gm.BudgetConfig(max_cost_usd=0.05, max_calls=100))
+# tracker.record_usage(input_tokens, output_tokens, model)
+# tracker.budget_remaining_pct
+# tracker.total_cost_usd
+# tracker.budget_exhausted
 ```
 
-The `BudgetTracker` class tracks token usage, cost, and enforces limits. When the budget runs out, scoring stops gracefully -- pairs are kept at their fuzzy scores.
+The `BudgetTracker` class is constructed from a `BudgetConfig`, tracks token usage and cost, and enforces limits. When the budget runs out, scoring stops gracefully -- pairs are kept at their fuzzy scores.
 
 Budget summary is available in `EngineStats.llm_cost` after a pipeline run.
 
@@ -163,7 +163,9 @@ Extract structured fields from unstructured text using the LLM. O(N) preprocessi
 ```python
 import goldenmatch as gm
 
-enhanced_df = gm.llm_extract_features(df, column="description", budget=tracker)
+# row_ids selects which (low-confidence) records to process; returns
+# {row_id: {field: value, ...}}
+features = gm.llm_extract_features(df, row_ids, text_column="description", budget_tracker=tracker)
 ```
 
 ## Provider configuration
@@ -193,8 +195,8 @@ With iterative calibration (v1.2.6+), the LLM scores only ~200 pairs to learn th
 
 | Function | Description |
 |----------|-------------|
-| `gm.llm_score_pairs(pairs, df, config)` | Pairwise LLM scoring |
+| `gm.llm_score_pairs(pairs, df, config=config)` | Pairwise LLM scoring |
 | `gm.llm_cluster_pairs(pairs, df, config)` | In-context block clustering |
-| `gm.BudgetTracker(max_cost_usd, max_calls)` | Track and limit LLM spending |
-| `gm.llm_label_pairs(pairs, df)` | Generate LLM-labeled training pairs |
-| `gm.llm_extract_features(df, column)` | LLM-based feature extraction |
+| `gm.BudgetTracker(BudgetConfig(...))` | Track and limit LLM spending |
+| `gm.llm_label_pairs(pairs, columns, context, provider, api_key, model)` | Generate LLM-labeled training pairs |
+| `gm.llm_extract_features(df, row_ids, text_column)` | LLM-based feature extraction |

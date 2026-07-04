@@ -219,13 +219,13 @@ The single most expensive distributed-tuning mistake is distributing a *stage* t
 | Clustering (WCC) | **Yes** — the scored pair set is small (~1.76 GB / 110M edges at 100M) | **In-memory** driver-side `scipy.csgraph` connected-components (~60s) | the distributed randomized-contraction WCC — its O(log N) `gs://`-checkpoint rounds are a multi-hour tail when forced on a pair set that fits |
 | Golden | depends | distributed groupby, or **skip it** if you only need cluster membership | building golden you then discard |
 
-**Concrete: don't force the distributed WCC on a pair set that fits.** `GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD` (default `50000000`) routes pair counts **below** it to the fast in-memory `scipy.csgraph` path. So at 100M (~110M pairs) the default sends clustering to the *distributed* WCC. If your pairs fit the driver (they do up to a few hundred million edges on a 64–256 GB head), **set the threshold above your pair count** so clustering stays in-memory:
+**Concrete: don't force the distributed WCC on a pair set that fits.** By default `GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD` is **unset and the routing is memory-aware** — clustering stays on the fast in-memory `scipy.csgraph` path whenever the scored pair set fits available driver RAM, and only distributes when it genuinely won't. So at 100M (~110M pairs / ~1.76 GB) the default keeps clustering in-memory on a 64–256 GB head. Set an explicit integer only if you want to force a hard pair-count boundary either way:
 
 ```bash
-export GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD=2000000000  # > your pair count -> in-memory WCC
+export GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD=2000000000  # force in-memory WCC below 2B pairs
 ```
 
-Setting it to `0` does the **opposite** — it forces the slow distributed WCC on everything. (Making this routing memory-aware by default is tracked in [#956](https://github.com/benseverndev-oss/goldenmatch/issues/956).)
+Setting it to `0` does the **opposite** — it forces the slow distributed WCC on everything.
 
 **Recover a result without re-running.** The Phase-5 connected-components clustering is independent of the WCC algorithm, so a completed run's cluster *assignments* (written to gs:// via the `assignments_output_path` hook) **are** the result. If a run finishes but the output is lost, or you want to re-score, download the assignments and score them against your ground truth on a 64 GB box — no cluster, no re-run. The 100M `group_by` for that scoring OOMs a 16 GB box, so run it on a large runner, not your laptop.
 
@@ -283,6 +283,9 @@ These tune the [healer](/goldenmatch/config-suggestions) — the `review_config`
 | `GOLDENMATCH_SUGGEST_COVERAGE_CAP` | `0.50` | Coverage-saturation cap for the cohesion proxy (matched-rate at which coverage saturates to 1.0). | Leave alone; `0.50` is the safe operating point — tighter caps let a real-pair net-negative through. |
 | `GOLDENMATCH_SUGGEST_VERIFY` | on | The self-verify gate. Set `0` to return raw kernel suggestions **unfiltered** (no no-net-negative guarantee). | Diagnostics only — to see what the kernel would propose before the gate. |
 | `GOLDENMATCH_SUGGEST_FULL_DIST` | `0` (off) | Source the kernel's score distribution from a threshold-0 diagnostic run so the dip (`lower_threshold`) rule sees the full pre-threshold tail. | Set `1` when you want the dip rule to fire on configs whose threshold is well above the score valley. |
+| `GOLDENMATCH_SUGGEST_RECALL_MIN_SHED` | `0.02` | Min recall the tighten-key rule must shed before it will even consider vetoing a matchkey. | Leave alone; raising it makes the recall-shed guard more conservative. |
+| `GOLDENMATCH_SUGGEST_RECALL_COH_ABS` | `0.15` | Max cohesion gain that still counts as "small" when weighing a recall shed. | Leave alone; the gym-selected operating point. |
+| `GOLDENMATCH_SUGGEST_RECALL_RATIO` | `2.0` | Min cohesion-gain-per-recall-shed ratio required to justify shedding recall. | Leave alone; higher = demands more cohesion payoff per unit recall lost. |
 
 ---
 
@@ -335,7 +338,7 @@ Read these before a big run. Each is a real trap that produces a slow or wrong r
     The per-row Python address-normalize plugin is a real bottleneck at scale. Set `GOLDENMATCH_NATIVE_ADDRESS_NORMALIZE=1` to use the Polars-native expression instead. It's off by default, so you have to opt in.
   </Accordion>
   <Accordion title="A distributed 100M run took hours instead of minutes">
-    The scored pair set is small (~1.76 GB at 100M) and fits one node, but the default `GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD=50000000` routes 50M+ pairs to the *distributed* WCC, whose `gs://`-checkpoint rounds are a multi-hour tail. Set the threshold **above** your pair count so clustering runs in-memory (`scipy.csgraph`, ~60s) — see [Fast path at scale](#fast-path-at-scale-distribute-only-what-doesnt-fit). Distribute the *scoring* (the rows don't fit), not the *clustering* (the pairs do). And never set the threshold to `0` — that forces the slow path on everything.
+    The scored pair set is small (~1.76 GB at 100M) and fits one node. By default `GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD` is unset and routing is **memory-aware** — clustering stays in-memory (`scipy.csgraph`, ~60s) whenever the pair set fits driver RAM, so a 100M run should already keep clustering on the fast path. The multi-hour tail happens if something forces the *distributed* WCC (whose `gs://`-checkpoint rounds are slow): check you haven't set the threshold to `0` (forces the slow path on everything) or to a value **below** your pair count. See [Fast path at scale](#fast-path-at-scale-distribute-only-what-doesnt-fit). Distribute the *scoring* (the rows don't fit), not the *clustering* (the pairs do).
   </Accordion>
   <Accordion title="Results changed between runs for no reason">
     Cross-run auto-config memory (`GOLDENMATCH_AUTOCONFIG_MEMORY=1`, the default) lets a prior run influence the next. For reproducible benchmarks set `GOLDENMATCH_AUTOCONFIG_MEMORY=0`.
@@ -495,6 +498,7 @@ Every `GOLDENMATCH_*` variable the package reads, grouped by who should care. De
 | `GOLDENMATCH_PLANNER_BUCKET` | `1` | `0`/`1` | Allow the planner to pick `bucket`. |
 | `GOLDENMATCH_ATTRIBUTE_DEMOTION` | `1` (on) | `0`/`1` | Demote an EXACT matchkey on a shared group/list/facility value (shared clinic phone, campaign id, facility NPI) when its large shared-value groups do not co-agree on the person name. `0` restores the pre-2.7.0 behavior. |
 | `GOLDENMATCH_DISCRIMINATIVE_VETO` | `1` (on) | `0`/`1` | The #1351 exact-key discriminative-power veto (demote a shared-locality exact key). `0` disables it. |
+| `GOLDENMATCH_DISCRIMINATIVE_TAU` | `0.5` | float [0,1] | Co-agreement floor for the discriminative veto: an exact key whose large shared-value groups co-agree on the person name below this fraction is vetoed. Out-of-range values fall back to the default. |
 | `GOLDENMATCH_TF_NAME_WEIGHTING` | `1` (on) | `0`/`1` | Data-driven per-dataset name-frequency downweight on `name_freq_weighted_jw` fields. `0` restores the static-census behavior. |
 | `GOLDENMATCH_BASE_STORE` | `auto` | `auto`/`memory`/`lance` | Candidate base store for the ANN `match_one` path. `auto` picks Lance only above ~2M rows when installed. |
 | `GOLDENMATCH_DUCKDB_SCORE_DB` | unset | path | DuckDB pair-store spill path. |
@@ -514,7 +518,7 @@ Every `GOLDENMATCH_*` variable the package reads, grouped by who should care. De
 | `GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH` | unset | Randomized-contraction WCC scratch. **Must be shared (`gs://...`) on multi-node.** |
 | `GOLDENMATCH_DISTRIBUTED_WCC` | `two_phase` | WCC for `build_clusters_distributed`'s own callers (Phase-5-at-scale forces `randomized_contraction`). Avoid `pointer_jump`. |
 | `GOLDENMATCH_DISTRIBUTED_WCC_SEED` | unset | Randomized-contraction hash seed (reproducible cluster IDs). |
-| `GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD` | `50000000` | Pair count → distributed clustering. |
+| `GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD` | unset (memory-aware) | Pair count → distributed clustering. Unset default routes by driver-RAM fit; set an integer to force a hard boundary. |
 | `GOLDENMATCH_DISTRIBUTED_GOLDEN_THRESHOLD` | `5000000` | Row count → distributed golden. |
 | `GOLDENMATCH_DISTRIBUTED_SCORE_NUM_CPUS` | `2` | CPUs per Ray scoring worker. |
 
@@ -588,6 +592,7 @@ Every `GOLDENMATCH_*` variable the package reads, grouped by who should care. De
 | `GOLDENMATCH_LLAMA_GGUF` | unset | Path to a local GGUF embedding model for the `model="llama"` / `"llama:/path.gguf"` backend — offline embeddings, no cloud/torch (`pip install goldenmatch[llama]`). Benchmarks: `scripts/bench_llama_embedder.py`, `scripts/bench_llama_product_matching.py`. |
 | `GOLDENMATCH_LLM_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible base URL for the LLM scorer — point at a local llama.cpp / llamafile server for offline, free LLM judging (also honors `OPENAI_BASE_URL`). |
 | `GOLDENMATCH_WEAKNESS_LLM` | `0` (off) | Opt-in: let the `config_weaknesses` tool phrase its one-paragraph `summary_plain` with an LLM (needs `OPENAI_API_KEY`/`ANTHROPIC_API_KEY`). Only a compact structured digest of the findings (ids/severities/short labels) is sent — never raw rows or data. The structured findings themselves are always deterministic and never depend on the LLM; off = deterministic template summary. |
+| `GOLDENMATCH_WEAKNESS_LLM_MODEL` | `gpt-4o-mini` (OpenAI) / `claude-3-5-haiku-latest` (Anthropic) | Model id for the `GOLDENMATCH_WEAKNESS_LLM` summary, per detected provider. |
 | `GOLDENMATCH_UDF_IMPORTS` | unset | Snowflake UDF import asset directory. |
 | `GOLDENMATCH_SYNC_STREAMING_THRESHOLD` / `_STREAMING_BLOCK_WORKERS` | `500000` / auto | Postgres streaming-store thresholds. |
 | `GOLDENMATCH_ANALYTICS` | `0` (off) | Opt-in anonymous, PII-free usage analytics to PostHog (needs `POSTHOG_API_KEY`). Off = nothing collected. |

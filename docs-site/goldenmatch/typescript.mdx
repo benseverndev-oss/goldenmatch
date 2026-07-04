@@ -193,7 +193,7 @@ npx goldenmatch-js tui data.csv
 npx goldenmatch-js mcp-serve
 ```
 
-Exposes 19 MCP tools over JSON-RPC on stdio.
+Exposes 45 MCP tools over JSON-RPC on stdio.
 
 ### REST API server
 
@@ -209,7 +209,7 @@ Endpoints: `/health`, `/dedupe`, `/match`, `/score`, `/explain`, `/profile`, `/c
 npx goldenmatch-js agent-serve --port 8200
 ```
 
-Agent card at `/.well-known/agent.json` advertises 10 skills.
+Agent card at `/.well-known/agent.json` advertises 36 skills (the union of the base A2A skills plus the agent, memory, and identity registries, de-duped by id).
 
 ### Interactive TUI
 
@@ -229,12 +229,14 @@ All peer deps are optional. Install only what you need:
 | `hnswlib-node` | Sub-linear ANN blocking (vs brute-force) |
 | `@huggingface/transformers` | ONNX cross-encoder reranking (MiniLM) |
 | `piscina` | Worker-thread parallel block scoring |
+| `better-sqlite3` | SQLite-backed Learning Memory / review-queue persistence |
 | `ink`, `react`, `ink-table`, `ink-select-input`, `ink-text-input`, `ink-spinner`, `ink-gradient` | Interactive TUI |
-| `pg` | Postgres connector + sync |
-| `@duckdb/node-api` | DuckDB connector |
-| `snowflake-sdk` | Snowflake connector |
-| `@google-cloud/bigquery` | BigQuery connector |
-| `@databricks/sql` | Databricks connector |
+
+The database connectors below are **not declared peers** — they are loaded via
+runtime dynamic `import()` only when you use the matching Node connector, so
+install whichever you need directly: `pg` (Postgres), `@duckdb/node-api`
+(DuckDB), `snowflake-sdk` (Snowflake), `@google-cloud/bigquery` (BigQuery),
+`@databricks/sql` (Databricks).
 
 ## Advanced Features
 
@@ -269,7 +271,7 @@ See [`packages/goldenmatch-js/examples/`](https://github.com/benseverndev-oss/go
 | ANN blocking | FAISS | hnswlib-node |
 | Parallel scoring | Threads + Ray | piscina worker threads |
 | Interactive UI | Textual TUI | Ink TUI |
-| MCP server | 69 tools | 34 tools |
+| MCP server | 69 tools | 45 tools |
 | REST API | Yes | Yes |
 | A2A server | Yes | Yes |
 | YAML configs | Yes | Yes (round-trippable) |

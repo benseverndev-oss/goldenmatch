@@ -70,13 +70,12 @@ StandardizationConfig(rules={
 
 `StandardizationConfig` has a single `rules: dict[str, list[str]]` field with a model validator. Keyword args will raise a Pydantic validation error.
 
-## `BlockingConfig` requires `keys` field
+## `BlockingConfig` multi_pass requires `keys` or `passes`
 
 ```python
-# keys is required even with multi_pass
+# multi_pass requires `keys` OR `passes` (at least one must be set)
 BlockingConfig(
     strategy="multi_pass",
-    keys=[BlockingKeyConfig(fields=["email"], transforms=["lowercase"])],  # required!
     passes=[
         BlockingKeyConfig(fields=["email"], transforms=["lowercase"]),
         BlockingKeyConfig(fields=["last_name"], transforms=["soundex"]),
@@ -158,5 +157,5 @@ config.llm_scorer = LLMScorerConfig(
 - Using `exact=["email"]` as sole matchkey - creates oversized clusters with common emails
 - Using `auto_configure()` on synthetic data - it may produce poor configs
 - Not setting `name=` on MatchkeyConfig - it's required
-- Not providing `keys=` on BlockingConfig - it's required even with multi_pass
+- Not providing `keys=` or `passes=` on a `multi_pass` BlockingConfig - it needs at least one of them (`keys` OR `passes`)
 - Extracting pairs from dupes DataFrame directly instead of using result.clusters

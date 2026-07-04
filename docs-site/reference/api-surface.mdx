@@ -122,9 +122,9 @@ findings with severities, auto-triage and fix, diff two versions.
 
 ## GoldenFlow
 
-Data transformation: 86 built-in transforms across 11 categories (phone, date,
+Data transformation: 92 built-in transforms across 11 categories (phone, date,
 address, name, categorical, identifiers, …), a transform registry, schema mapping,
-and owned identifier kernels (card / IBAN / ISBN / EAN / VAT).
+and owned identifier kernels (card / IBAN / ISBN / EAN / VAT / SWIFT / ABA / IMEI).
 
 **Python** — `import goldenflow`
 
@@ -155,8 +155,8 @@ to a `goldenflow-core` Rust kernel (opt-in WASM in TS).
 ## GoldenPipe
 
 Pipeline orchestration: chains Check → Flow → Match into one adaptive call, with a
-**dependency-DAG planner** that orders stages from their declared `needs` and
-`consumes`/`produces`, routes on decision gates, and explains every choice.
+planner that validates stage wiring (`consumes`/`produces`), routes on decision
+gates, and explains every choice.
 
 **Python** — `import goldenpipe as gp`
 
@@ -169,11 +169,10 @@ Pipeline orchestration: chains Check → Flow → Match into one adaptive call, 
 | `severity_gate` / `pii_router` / `row_count_gate` | Built-in decision stages |
 
 The planner is a pyo3-free `goldenpipe-core` Rust kernel — the single reference
-that Python and edge-TS compute identically. It activates the `needs` field,
-reorders a consumer ahead of its sole producer instead of erroring, and rejects
-genuinely ambiguous co-production, cycles, and unknown `needs` as typed errors
-(`MissingProducer`, `AmbiguousProducer`, `Cycle`, `UnknownNeed`). Opt into the WASM
-kernel in TypeScript with `enableWasm()`.
+that Python and edge-TS compute identically. It auto-prepends the `load` stage,
+validates each stage's `consumes` against the artifacts produced upstream (in
+declared order), and raises a typed `WiringError` when an input isn't produced.
+Opt into the WASM kernel in TypeScript with `enableWasm()`.
 
 **TypeScript** — `import { runDf, Pipeline, StageRegistry, enableWasm } from "goldenpipe"`
 
@@ -265,7 +264,7 @@ result = AgentSession().autoconfigure("customers.csv")
 
 - **TypeScript lags Python.** Every package has a TS twin, but the npm versions
   trail the PyPI ones and the TS MCP servers expose a subset of the Python tools
-  (e.g. GoldenMatch: 34 TS tools vs 69 Python). The public function names match.
+  (e.g. GoldenMatch: 45 TS tools vs 69 Python). The public function names match.
 - **REST + A2A are for the service-shaped packages only** — GoldenMatch,
   GoldenCheck, GoldenFlow, and GoldenPipe. GoldenAnalysis and InferMap ship a CLI
   and an MCP server but no long-running HTTP service.

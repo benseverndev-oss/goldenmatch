@@ -76,12 +76,14 @@ jobs:
 ```python
 @dataclass
 class EvalResult:
-    precision: float    # TP / (TP + FP)
-    recall: float       # TP / (TP + FN)
-    f1: float           # 2 * P * R / (P + R)
-    tp: int             # True positives (correct matches)
-    fp: int             # False positives (incorrect matches)
-    fn: int             # False negatives (missed matches)
+    tp: int = 0    # True positives (correct matches)
+    fp: int = 0    # False positives (incorrect matches)
+    fn: int = 0    # False negatives (missed matches)
+
+    # Derived, read-only @property (computed from tp/fp/fn):
+    #   precision -> TP / (TP + FP)
+    #   recall    -> TP / (TP + FN)
+    #   f1        -> 2 * P * R / (P + R)
 
     def summary(self) -> dict
 ```
@@ -91,7 +93,8 @@ class EvalResult:
 ```python
 import goldenmatch as gm
 
-predicted = {(1, 42), (1, 108), (5, 200), (7, 300)}
+# predicted is a list of (id_a, id_b, score) triples
+predicted = [(1, 42, 0.98), (1, 108, 0.91), (5, 200, 0.87), (7, 300, 0.80)]
 ground_truth = {(1, 42), (1, 108), (5, 200), (5, 201)}
 
 result = gm.evaluate_pairs(predicted, ground_truth)

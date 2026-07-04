@@ -14,7 +14,7 @@ The pure-Python path stays the **default and the byte-identical reference**. The
 
 ## Gate on the measured wall, not "it's Rust"
 
-A primitive is used only once it is in `_native_loader._GATED_ON`, which it joins after **two** gates clear: a parity test proves byte-identical output, **and** the wall-clock is measured to actually move on the target environment. The pure loops are tight, and the native path pays a list→Arrow conversion cost, so "it's compiled" is never enough — the goldencheck composite-key kernel was once 2.5x *slower* than its baseline, and the gate caught it.
+In reference mode a primitive runs native wherever its kernel symbol is present; `_native_loader._GATED_ON` records which primitives cleared the **two**-gate sign-off: a parity test proves byte-identical output, **and** the wall-clock is measured to actually move on the target environment. The pure loops are tight, and the native path pays a list→Arrow conversion cost, so "it's compiled" is never enough — the goldencheck composite-key kernel was once 2.5x *slower* than its baseline, and the gate caught it.
 
 `histogram` and `quantile` cleared both gates. The A/B harness (`bench-analysis-native.yml`, on Linux x86_64) measured the **realistic dispatch** — a Python list converted to Arrow, then the kernel, exactly what the call sites pay:
 

@@ -4,7 +4,7 @@ description: "The orchestrator that chains data-quality checking, transformation
 keywords: ["goldenpipe", "orchestration", "pipeline", "check", "flow", "match"]
 ---
 
-GoldenPipe chains GoldenCheck, GoldenFlow, and GoldenMatch into one pipeline. It profiles your data, conditionally routes it through transformation, deduplicates it (or routes sensitive fields to privacy-preserving matching), and emits golden records. Its logic is adaptive: a dependency-DAG planner orders the stages from their declared dependencies, it skips transformation when no issues are found, and it explains the reasoning behind every decision.
+GoldenPipe chains GoldenCheck, GoldenFlow, and GoldenMatch into one pipeline. It profiles your data, conditionally routes it through transformation, deduplicates it (or routes sensitive fields to privacy-preserving matching), and emits golden records. Its logic is adaptive: it validates stage wiring (each stage's inputs must be produced upstream), skips transformation when no issues are found, and explains the reasoning behind every decision.
 
 It runs in Python and TypeScript, on the CLI, and behind MCP, REST, and A2A servers.
 
@@ -32,11 +32,11 @@ import goldenpipe as gp
 
 result = gp.run("customers.csv")
 
-print(result.status)     # "success"
-print(result.check)      # quality findings
-print(result.transform)  # what was fixed
-print(result.match)      # deduplicated clusters
+print(result.status)     # PipeStatus.SUCCESS
+print(result.stages)     # dict[str, StageResult] — per-stage status + output
+print(result.artifacts)  # dict, e.g. {"golden": ..., "manifest": ...}
 print(result.reasoning)  # why each decision was made
+print(result.skipped)    # stages that were skipped, and why
 ```
 
 ```ts TypeScript
@@ -54,8 +54,7 @@ On the CLI:
 ```bash
 goldenpipe run customers.csv                 # full pipeline
 goldenpipe run customers.csv --verbose       # show reasoning
-goldenpipe run customers.csv --skip-flow     # check + match only
-goldenpipe run customers.csv --strategy pprl # force privacy mode
+goldenpipe run customers.csv -c pipeline.yml # custom stage config (e.g. skip a stage)
 goldenpipe run customers.csv -o golden.csv   # save golden records
 goldenpipe stages                            # list registered stages
 goldenpipe validate -c pipeline.yml          # dry-run wiring validation
@@ -65,7 +64,7 @@ goldenpipe serve | mcp-serve | agent-serve   # REST / MCP / A2A servers
 ## Key features
 
 - **Orchestrates the full pipeline** (Check → Flow → Match) in one call.
-- **Dependency-DAG planner** that activates each stage's `needs`, reorders a consumer ahead of its sole producer instead of erroring, and rejects genuinely ambiguous co-production, cycles, and unknown `needs` as typed errors (`MissingProducer`, `AmbiguousProducer`, `Cycle`, `UnknownNeed`).
+- **Wiring validation** that auto-prepends the `load` stage, checks each stage's declared `consumes` against the artifacts produced by earlier stages (in declared order), and raises a typed `WiringError` when an input isn't available — or errors on an unknown stage `use`.
 - **Adaptive logic** that skips transformation when there are no quality issues.
 - **Privacy-preserving routing** that detects sensitive fields and routes to PPRL.
 - **Reasoning transparency** that reports why each stage ran or was skipped.
@@ -116,8 +115,9 @@ result.skipped     # list[str]
 
 ## Servers
 
-GoldenPipe ships three server surfaces, each exposing the same four operations —
-`list_stages`, `validate_pipeline`, `run_pipeline`, `explain_pipeline`:
+GoldenPipe ships three server surfaces. MCP and A2A expose all four operations —
+`list_stages`, `validate_pipeline`, `run_pipeline`, `explain_pipeline`; REST
+exposes list / validate / run (no explain):
 
 - **MCP** — remote `https://goldenpipe-mcp-production.up.railway.app/mcp/` or local `goldenpipe mcp-serve --transport http --port 8250` (4 tools).
 - **REST** — `goldenpipe serve` (`GET /stages`, `POST /validate`, `POST /run`).
