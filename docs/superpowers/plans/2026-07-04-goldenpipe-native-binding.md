@@ -388,8 +388,9 @@ import pytest
 
 from goldenpipe.core import _planner_json as PJ
 
-# repo-relative: tests/core/ -> goldenpipe pkg -> python -> packages -> repo root (parents[4])
-_VECTORS = Path(__file__).resolve().parents[4] / "packages/rust/extensions/goldenpipe-core/tests/vectors"
+# repo-relative: test file is packages/python/goldenpipe/tests/core/test_planner_parity.py
+# parents: [0]=core [1]=tests [2]=goldenpipe [3]=python [4]=packages [5]=REPO ROOT.
+_VECTORS = Path(__file__).resolve().parents[5] / "packages/rust/extensions/goldenpipe-core/tests/vectors"
 
 
 def _load(name: str) -> list[dict]:
@@ -502,8 +503,11 @@ def apply_decision_json(input_str: str) -> str:
     remaining = []
     from goldenpipe.engine.resolver import PlannedStage
     for r in arg["remaining"]:
-        remaining.append(PlannedStage(name=r["name"], stage=None,
-                                      spec=StageSpec(use=r["use"]), config=r.get("config", {})))
+        # carry on_error/skip_if through the spec so a remaining stage that has them
+        # round-trips faithfully (the core's PlannedSpec round-trips both).
+        spec = StageSpec(use=r["use"], name=r.get("name"),
+                         on_error=r.get("on_error", "continue"), skip_if=r.get("skip_if"))
+        remaining.append(PlannedStage(name=r["name"], stage=None, spec=spec, config=r.get("config", {})))
     reg = _StubRegistry()
     for name in decision.insert:  # Router.get(name) for each inserted stage
         reg.add(name, StageInfo(name=name, produces=[], consumes=[]))
