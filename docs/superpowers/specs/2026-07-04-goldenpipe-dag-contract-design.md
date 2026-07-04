@@ -45,12 +45,14 @@ AVAIL(i) = SEED ∪ ⋃_{j < i} produces(s_j)
 
 where `SEED = {"df"}` when no `load` stage is present, else `{}` (in which case `load` at index 0 produces `df`).
 
-**Identifier space (M1):** `needs` entries, and the stages referenced by produce/consume reasoning, are matched by **registry key** — i.e. the stage's `use` string, the same identifier SP1 already resolves stages by (`registry.py` keys by `key`, which can differ from `info.name`). `UnknownNeed` matches against this key space.
+**Identifier space (M1):** `needs` entries, and the stages referenced by produce/consume reasoning, are **matched** by **registry key** — i.e. the stage's `use` string, the same identifier SP1 already resolves stages by (`registry.py` keys by `key`, which can differ from `info.name`). `UnknownNeed` matches against this key space.
+
+**Error `stage` display field (MED1).** Distinct from the matching key above: the `stage` field *carried in an error payload* uses the **planned name** (`spec.name or info.name`), matching the current `Wiring` error exactly (resolve.rs emits `stage=name`; the name is also embedded in the message text). Key and name legitimately differ (a vector exercises `spec.name="alias"`). Keeping the error `stage` as the planned name preserves message-compatibility (§5) and means the *only* payload change in the `Wiring`→`MissingProducer` rename is dropping `available` (§7). Denote this `pname(s_i)` below.
 
 **Edge set.** Build the set of must-precede edges `(a → b)` ("a runs before b"):
 
 1. **`needs` edges.** For each `s_i` and each entry `n` in `needs(s_i)`:
-   - no stage has key `n` → `UnknownNeed { stage: key(s_i), needs: [n] }`;
+   - no stage has key `n` → `UnknownNeed { stage: pname(s_i), needs: [n] }`;
    - `n == key(s_i)` (self-need) → contributes a self-edge, caught as `Cycle` in step 4;
    - otherwise add edge `(stage-with-key-n → s_i)`.
    - Duplicate `needs` entries collapse to one edge (idempotent).
@@ -58,11 +60,13 @@ where `SEED = {"df"}` when no `load` stage is present, else `{}` (in which case 
 2. **Sole-producer edges (guarded — the B2 fix).** For each `s_i` and each `X` in `consumes(s_i)`:
    - **If `X ∈ AVAIL(i)`** → already satisfied by config order: **no edge, no error.** This is what keeps an already-valid pipeline byte-identical to today — a consumer whose artifact is provided by the seed or any earlier stage is never reordered.
    - **Else** (`X ∉ AVAIL(i)`) let `L(X) = { s_j : j > i and X ∈ produces(s_j) }` — the *later* producers (stages only; the seed is never in `L`):
-     - `|L(X)| = 0` → `MissingProducer { stage: key(s_i), artifact: X }` (no stage anywhere produces `X`, and the seed does not provide it — the truly-absent case).
+     - `|L(X)| = 0` → `MissingProducer { stage: pname(s_i), artifact: X }` (no stage anywhere produces `X`, and the seed does not provide it — the truly-absent case).
      - `|L(X)| = 1` → add edge `(that producer → s_i)` (the minimal reorder: the sole later producer moves ahead of its consumer).
-     - `|L(X)| ≥ 2` → `AmbiguousProducer { artifact: X, producers: [keys of L(X) in config-index order] }`, **unless** the `needs` edges already fix exactly one member of `L(X)` to precede `s_i` (in which case use that one and add no ambiguity error). This is the precise, algorithmic chain-vs-ambiguity predicate (M3): ambiguity is exactly "an unsatisfied consumer with ≥2 candidate later producers and no `needs` tiebreak."
+     - `|L(X)| ≥ 2` → `AmbiguousProducer { artifact: X, producers: [keys of L(X) in config-index order] }`, **unless** the `needs` edges fix **exactly one** member of `L(X)` to precede `s_i` (then use that one and add no ambiguity error). If `needs` pins **two or more** members of `L(X)` before `s_i`, it stays `AmbiguousProducer` — a deliberate conservative rejection (the config is under-specified even though Kahn would resolve a concrete order; the author should say which one binds). This is the precise, algorithmic chain-vs-ambiguity predicate (M3): ambiguity is exactly "an unsatisfied consumer with ≥2 candidate later producers and not exactly one `needs`-pinned tiebreak."
 
-   **Soundness (monotonicity):** a sole-producer edge only ever pulls a producer *earlier*. Pulling a producer earlier can only *add* artifacts to an earlier position; it can never remove an artifact from a later consumer's availability. So computing violations against config-order `AVAIL` once, then reordering, is sound — no already-satisfied consumer becomes unsatisfied.
+   **Soundness (monotonicity):** a sole-producer edge only ever pulls a producer *earlier*. Pulling a producer earlier can only *add* artifacts to an earlier position; it can never remove an artifact from a later consumer's availability. So computing violations against config-order `AVAIL` once, then reordering, is sound — no already-satisfied consumer's *availability* becomes unsatisfied. (This availability argument is about sole-producer edges only; a `needs` edge is authoritative and may re-order/re-bind an already-satisfied re-production consumer on purpose — see §3.2.)
+
+   **First-violation short-circuit (MIN1).** When several violations coexist, `resolve` returns the **first** one and does not collect: by phase order (`UnknownStage` during list-build → `UnknownNeed` step 1 → `MissingProducer`/`AmbiguousProducer` step 2 → `Cycle` step 4), then within a phase by config index of the erroring stage, then by that stage's `consumes` order. This ordering is part of the byte-parity contract.
 
 3. **(reserved)** — no further edge sources in this slice.
 
@@ -72,7 +76,9 @@ where `SEED = {"df"}` when no `load` stage is present, else `{}` (in which case 
 
 ### 3.2 Re-production disambiguation (unchanged semantics, now explicit)
 
-A consumer of an artifact with multiple producers binds to the **most-recent preceding producer in the resolved order** — the current silent behavior, now a consequence of §3.1: config order is preserved except where a sole-producer/`needs` edge forces a pull-forward, and (by the monotonicity argument) a pull-forward never crosses a consumer that was already satisfied. A re-producer that also consumes X is naturally pinned after the prior producer, because its own `consumes(X)` was already satisfied in config order (`X ∈ AVAIL(i)`) → no edge → it never jumps ahead of its predecessor in the chain.
+A consumer of an artifact with multiple producers binds to the **most-recent preceding producer in the resolved order**. For pipelines that use **no `needs`**, this is byte-for-byte the current silent behavior: the only edges are sole-producer edges, each pull-forward only *adds* availability earlier (the §3.1 monotonicity argument), so it never crosses an already-satisfied consumer, and config order — hence every re-production binding — is preserved. A re-producer that also consumes X is naturally pinned after the prior producer because its own `consumes(X)` was already satisfied in config order (`X ∈ AVAIL(i)`) → no edge → it never jumps ahead of its predecessor in the chain.
+
+**`needs` is the exception (MED2).** A `needs` edge is authoritative and can pull a re-producer **across an already-satisfied consumer**, re-binding it. Example: config `[P1_x, C_x, P2_x]` where P1 and P2 both produce `x` and `C_x` (which consumes `x`, already satisfied by P1) declares `needs=[P2]`; Kahn yields `[P1, P2, C_x]`, so `C_x` now binds P2's `x`, not P1's. This is deliberate ("`needs` is the stronger signal", §3.3) and covered by the §7 migration — so re-production semantics are "unchanged" only for pipelines that do not use `needs`; a config that adds `needs` opts into exactly this re-binding.
 
 ### 3.3 New validation — `PlanError` variants
 
