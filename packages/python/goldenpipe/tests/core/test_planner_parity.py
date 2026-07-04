@@ -31,3 +31,30 @@ def test_pure_python_matches_core_vectors(name, fn):
     for i, case in enumerate(_load(name)):
         got = json.loads(fn(json.dumps(case["input"])))
         assert got == case["expected"], f"{name}[{i}] input={case['input']!r}"
+
+
+# --- Leg B: the native wheel reproduces the core (CI-primary; skip-guarded locally) ---
+from goldenpipe.core import _native_loader as NL  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    "name,fn_name",
+    [
+        ("resolve", "resolve_json"),
+        ("apply_decision", "apply_decision_json"),
+        ("evaluate_builtin", "evaluate_builtin_json"),
+        ("auto_config", "auto_config_json"),
+        ("skip_if", "skip_if_falsy_json"),
+    ],
+)
+def test_native_wheel_matches_core_vectors(name, fn_name):
+    import os
+
+    if not NL.native_available():
+        if os.environ.get("GOLDENPIPE_NATIVE") == "1":
+            pytest.fail("GOLDENPIPE_NATIVE=1 but the native wheel is not importable")
+        pytest.skip("native wheel not built (Leg B is CI-primary)")
+    fn = getattr(NL, fn_name)
+    for i, case in enumerate(_load(name)):
+        got = json.loads(fn(json.dumps(case["input"])))
+        assert got == case["expected"], f"native {name}[{i}] input={case['input']!r}"
