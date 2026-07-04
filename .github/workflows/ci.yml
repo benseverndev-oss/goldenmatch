@@ -1585,7 +1585,7 @@ jobs:
               and commit the result." >&2
             exit 1
           fi
-          npx vitest run tests/parity/sketch-wasm.parity.test.ts tests/unit/sketch-wasm-reroute.test.ts
+          npx vitest run tests/parity/sketch-wasm.parity.test.ts tests/unit/sketch-wasm-reroute.test.ts tests/parity/sketch-simhash-wasm.parity.test.ts
       # Same drift guard for the graph (connected-components) wasm surface:
       # rebuild the inlined wasm + bindings + copy the golden fixture, diff ONLY
       # the deterministic golden JSON (not the version-varying wasm bytes), then

@@ -21,6 +21,7 @@ import {
   signature as wasm_signature,
   band_hashes as wasm_band_hashes,
   sketch_band_hashes,
+  simhash_signature,
 } from "./_wasm/sketchWasmBindings.js";
 import { SKETCH_WASM_BASE64 } from "./_wasm/sketchWasmBytes.js";
 import {
@@ -87,19 +88,39 @@ export function sketchBandHashes(
   );
 }
 
+/**
+ * SimHash signature via the shared kernel: project a dense embedding through the
+ * seeded Rademacher matrix + sign, returning one 0/1 value per hyperplane. The
+ * divergence-prone half of the semantic sketch (`simhash.ts::simhashSignature`);
+ * the banding step stays pure-TS. The `Float64Array`/`Uint8Array` boundary is
+ * hidden behind the `simhash.ts` `readonly number[]` signature.
+ */
+export function simhashSignature(
+  vector: readonly number[],
+  numPlanes: number,
+  seed: bigint,
+): number[] {
+  ensureInit();
+  return Array.from(
+    simhash_signature(Float64Array.from(vector), numPlanes, seed),
+  );
+}
+
 // ── opt-in enable / disable ──────────────────────────────────────────────────
 
 /**
- * Route the MinHash-LSH blocking path (`sketch.ts::sketchBandHashes`, which the
- * `MinHashLSHBlocker` calls per record) off its pure-TS BigInt arithmetic onto
- * the shared wasm core. Idempotent. Call `disableSketchWasm()` to revert (test
- * isolation / opt-out). The `baseHash`/`signature`/`bandHashes` wrappers above
- * are exported for the parity test (per-stage validation) but are not part of
- * the reroute — see `sketchWasmBackend.ts` for why.
+ * Route the sketch blocking paths off their pure-TS BigInt arithmetic onto the
+ * shared wasm core: the MinHash-LSH end-to-end (`sketch.ts::sketchBandHashes`,
+ * which `MinHashLSHBlocker` calls per record) AND the SimHash projection
+ * (`simhash.ts::simhashSignature`, the semantic near-dup sketch). Idempotent.
+ * Call `disableSketchWasm()` to revert (test isolation / opt-out). The
+ * `baseHash`/`signature`/`bandHashes` wrappers above are exported for the parity
+ * test (per-stage validation) but are not part of the reroute — see
+ * `sketchWasmBackend.ts` for why.
  */
 export function enableSketchWasm(): void {
   ensureInit();
-  setSketchWasmBackend({ sketchBandHashes });
+  setSketchWasmBackend({ sketchBandHashes, simhashSignature });
 }
 
 export { disableSketchWasm };

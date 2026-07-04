@@ -20,6 +20,7 @@
  */
 
 import { baseHash, splitmix64 } from "./sketch.js";
+import { getSketchWasmBackend } from "./sketchWasmBackend.js";
 
 /** u64 wrapping mask (only used for the LE band-index write). */
 const MASK64 = 0xffffffffffffffffn;
@@ -80,6 +81,16 @@ export function simhashSignature(
   numPlanes: number,
   seed: bigint,
 ): number[] {
+  // Rust-source-of-truth: the shared sketch-core kernel (same projection
+  // bitstream the Python native path + the SQL surfaces run) when the sketch
+  // wasm backend is enabled; the pure-TS BigInt projection below stays the
+  // faithful fallback. Byte-identical (golden-verified), so the signature is
+  // unchanged whether or not the backend is enabled.
+  const backend = getSketchWasmBackend();
+  if (backend) {
+    return backend.simhashSignature(vector, numPlanes, seed);
+  }
+
   const dim = vector.length;
   const planes = projectionMatrix(numPlanes, dim, seed);
   const sig: number[] = new Array<number>(numPlanes);

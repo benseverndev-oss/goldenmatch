@@ -32,6 +32,18 @@ export interface SketchWasmBackend {
     numBands: number,
     seed: bigint,
   ): bigint[];
+  /**
+   * SimHash signature: 0/1 byte per random hyperplane (project a dense embedding
+   * through the seeded Rademacher matrix + sign). The expensive, divergence-prone
+   * half of the semantic sketch runs in the kernel; the banding step
+   * (`simhashBandHashes`) stays pure-TS (cheap, golden-verified base_hash),
+   * mirroring the MinHash `bandHashes` split.
+   */
+  simhashSignature(
+    vector: readonly number[],
+    numPlanes: number,
+    seed: bigint,
+  ): number[];
 }
 
 let _backend: SketchWasmBackend | null = null;
