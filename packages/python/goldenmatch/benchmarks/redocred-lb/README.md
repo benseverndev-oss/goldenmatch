@@ -43,11 +43,15 @@ modal volume get redocred-lb /out ./_out           # pull manifest.json (dev+tes
 Per-epoch dev/test F1 + Ign F1 are logged and the best-dev-Ign checkpoint's metrics are written to
 `/out/manifest.json` on the `redocred-lb` Volume.
 
-## Targets
+## Results (see `RESULTS.md` for the full table + honest caveats)
 
 | milestone | test F1 | test Ign F1 |
 |---|--:|--:|
-| ATLOP RoBERTa-large (reproduction floor) | ~76–77 | ~76 |
-| DREEAM / evidence-guided (leaderboard top region) | ~79–80 | ~78–79 |
+| ATLOP RoBERTa-large / DeBERTa-v3-large single (reproduction) | 0.776 / 0.780 | 0.770 / 0.773 |
+| DREEAM (prior published leaderboard peak) | ~0.7966 | — |
+| **4-checkpoint ensemble + dev-tuned threshold** | **0.820** | **0.810** |
 
-Offline tests: `python -m pytest tests/ -q`.
+The ensemble/threshold search runs offline (no GPU) from the dumped logits:
+`modal volume get redocred-lb /logits ./logits && python ensemble_sweep.py --logits ./logits`.
+
+Offline tests: `python -m pytest tests/ -q` (9 tests: scorer, prepro, evidence, vectorised kernels).
