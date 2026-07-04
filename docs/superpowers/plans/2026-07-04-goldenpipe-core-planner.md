@@ -368,6 +368,15 @@ mod tests {
         let plan = resolve(&cfg(vec![name_entry("gm.dedupe")]), &[i]).unwrap();
         assert_eq!(plan.stages[0].name, "Dedupe");       // fell back to info.name
     }
+
+    #[test]
+    fn auto_load_name_is_literal_not_info_name() {
+        // a load stage whose info.name differs from its key must STILL plan as "load"
+        let mut load = info("load", &["df"], &[]);
+        load.name = "Loader".into();
+        let plan = resolve(&cfg(vec![]), &[load]).unwrap();
+        assert_eq!(plan.stages[0].name, "load");         // literal, per resolver.py:42
+    }
 }
 ```
 
@@ -388,9 +397,11 @@ pub fn resolve(config: &PipelineConfig, stages: &[StageInfo]) -> Result<Executio
     let mut available: BTreeSet<String> = BTreeSet::new();
 
     // Auto-prepend `load` iff a stage is registered under key "load"; else seed "df".
+    // Python hardcodes the LITERAL name "load" (resolver.py:42), NOT load.info.name —
+    // reproduce that (a load stage whose info.name != "load" must still plan as "load").
     if let Some(load) = by_key("load") {
         plan.stages.push(PlannedSpec {
-            name: load.name.clone(),
+            name: "load".into(),
             use_: "load".into(),
             config: Default::default(),
             skip_if: None,
@@ -428,7 +439,7 @@ pub fn resolve(config: &PipelineConfig, stages: &[StageInfo]) -> Result<Executio
 }
 ```
 
-- [ ] **Step 4: Run** `cargo test resolve` — Expected: 6 PASS. (`BTreeSet` gives the sorted `available` for free.)
+- [ ] **Step 4: Run** `cargo test resolve` — Expected: 7 PASS. (`BTreeSet` gives the sorted `available` for free.)
 
 - [ ] **Step 5: Commit** `feat(goldenpipe-core): resolve() ordering + wiring/unknown validation`
 
@@ -637,8 +648,9 @@ pub fn evaluate_builtin(name: &str, ctx: &CtxSubset) -> Option<Decision> {
             })
         }
         "row_count_gate" => {
-            // Python: ctx.metadata.get("input_rows", 0) -> default 0. Accept int or float,
-            // truncate toward zero like an int compare; non-numeric -> 0.
+            // Python: ctx.metadata.get("input_rows", 0) -> default 0. input_rows is always an
+            // int in practice (int(len(df))); as_i64 matches that. A non-int/absent value -> 0
+            // (fires "Only 0 row(s)"), reproducing Python's default-0.
             let n = ctx.metadata.get("input_rows").and_then(Value::as_i64).unwrap_or(0);
             (n < 2).then(|| Decision {
                 skip: vec!["goldenmatch.dedupe".into()],
@@ -826,15 +838,15 @@ mod tests {
 ```rust
 //! JSON wrappers: the surface the native/wasm shims call and the golden-vector harness
 //! replays. Each parses its input struct, calls the typed fn, serializes the result.
-use serde::{Deserialize, Serialize};
+//! Import list is exactly what's NAMED below (no unused imports -> zero-warning build):
+//! the In structs derive only Deserialize; ExecutionPlan/PlanError/ApplyResult are
+//! RETURNED but never named (serialized via json!/to_string), so they are NOT imported.
+use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::config::{auto_config, skip_if_falsy};
 use crate::decisions::evaluate_builtin;
-use crate::model::{
-    ApplyResult, CtxSubset, Decision, ExecutionPlan, JsonMap, PipelineConfig, PlanError, PlannedSpec,
-    StageInfo,
-};
+use crate::model::{CtxSubset, Decision, JsonMap, PipelineConfig, PlannedSpec, StageInfo};
 use crate::resolve::resolve;
 use crate::router::apply_decision;
 
@@ -882,13 +894,7 @@ pub fn skip_if_falsy_json(input: &str) -> String {
     let v: Value = match serde_json::from_str(input) { Ok(a) => a, Err(e) => return parse_err(e) };
     skip_if_falsy(&v).to_string()
 }
-
-// keep imports used
-#[allow(unused_imports)]
-use crate::model::{ExecutionPlan as _EP};
 ```
-
-(If the `ExecutionPlan`/`Serialize` imports warn as unused, trim them — the `#[allow]`/alias line is only a hint; keep the import list clean so `cargo test` has zero warnings.)
 
 - [ ] **Step 4: Run** `cargo test json` — 4 PASS. (The insertion-order test is the load-bearing `preserve_order` proof.)
 - [ ] **Step 5: Commit** `feat(goldenpipe-core): *_json wrappers (shim + fixture boundary)`
