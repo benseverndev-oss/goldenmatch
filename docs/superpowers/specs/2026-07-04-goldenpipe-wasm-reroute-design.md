@@ -79,10 +79,12 @@ Mirror `goldenflow/src/core/wasm/`.
 The meat. The TS planner functions take rich objects (`StageRegistry` with live `Stage` instances, `PipeContext`, `PlannedStage[]`); the kernel speaks JSON strings. `plannerJson.ts` owns the serialize → `backend.<fn>` → deserialize round-trip for each seam, serializing to **exactly the core's JSON shapes** (verified in SP1):
 
 - `resolveViaWasm(config, registry, backend)`: serialize `{ config, stages: [{ key, name, produces, consumes } ...] }` from `registry` **metadata only** (resolve needs no executable stages). Call `backend.resolveJson`. Parse the `ok`/`err` envelope → return `ExecutionPlan` (`PlannedStage[]`) or throw `WiringError` / unknown-stage error reconstructed from `{kind: wiring|unknown_stage, ...}`.
-- `applyDecisionViaWasm(decision, remaining, backend)`: serialize `{ decision, remaining: [{name, use} ...] }` → `backend.applyDecisionJson` → parse `{ remaining, router_note? }`. The host maps inserted **names** → `Stage` objects (core returns names only, matching `router.rs`).
+- `applyDecisionViaWasm(decision, remaining, backend)`: serialize `{ decision, remaining: [{name, use, config, skip_if?, on_error} ...] }` — the **full `PlannedSpec`**, not just `{name, use}`. The core passes *kept* stages through unchanged (`router.rs:20-24`), so surviving stages must carry their real `config`/`skipIf`/`onError` across the boundary or the wasm path returns them defaulted (a runtime corruption the golden vectors do NOT catch — they only carry `name`/`use`; this mirrors `_planner_json.py:92-98`). Parse `{ remaining, router_note? }`. The host then re-correlates BOTH returned **kept** names → their original live `Stage`/`config`/`skipIf` AND inserted names → `Stage` objects (core returns names only, matching `router.rs`). It must also write `router_note` back into `ctx.reasoning["_router"]` (pure-TS sets this at `router.ts:26,30`) — without it the wasm path silently loses the routing reason.
 - `evaluateBuiltinViaWasm(name, ctx, backend)`: serialize `{ name, ctx: { artifacts, metadata } }` → `backend.evaluateBuiltinJson` → parse `Decision | null` (`"null"` → `null`).
 - `autoConfigViaWasm(available, identityOpts, backend)`: serialize `{ available, identity_opts }` → `backend.autoConfigJson` → parse `PipelineConfig`.
 - `skipIfFalsyViaWasm(value, backend)`: serialize the value → `backend.skipIfFalsyJson` → `JSON.parse` a boolean.
+
+**Error-envelope handling:** the parse side must enumerate every `err.kind` the core can emit (`wiring`, `unknown_stage`, and the defensive `parse` at `json.rs:15-17`) and **throw on any unexpected `kind`** rather than fall through silently. `parse` should not fire (TS generates the JSON) but an unrecognized kind must be a hard error, not a swallowed one.
 
 ### 3.4 Reroute the five seams (pure-TS default)
 
@@ -92,20 +94,23 @@ Each pure-TS planner function grows a guard: `const b = getPipeWasmBackend(); if
 - `engine/router.ts` → `Router.apply`
 - `decisions.ts` → `severityGate` / `piiRouter` / `rowCountGate`
 - `pipeline.ts` → `autoConfig`
-- the `skip_if` falsy check (wherever the resolver evaluates it) → `skipIfFalsyViaWasm`
+- the `skip_if` falsy predicate — this lives in **`engine/runner.ts` (`isFalsy`, `runner.ts:17,37-39`)**, NOT the resolver. The Runner **loop** stays host (out of scope per §2); only the **leaf `isFalsy(artifact)` predicate** is swapped for `skipIfFalsyViaWasm` when a backend is set. The loop, its ordering, and its IO are untouched.
 
 **Pure-TS runs whenever no backend is set** — the default and the permanent edge fallback.
 
 ### 3.5 The `autoConfig` conformance fix — `pipeline.ts`
 
-Today `autoConfig` (`pipeline.ts:75`) filters `DEFAULT_STAGE_ORDER` and has **no identity path**; the core appends `identity_resolve` when identity opts are supplied. Fix pure-TS to append the identity stage under the same condition the core uses (truthy non-empty `identity_opts`) so pure-TS == core. This is a **real TS behavior change** to zero-config output when identity opts are given (divergence resolved in the reference's favor). An empty `{}` must stay falsy (no identity stage), matching the core / Python `if self._identity_opts`.
+Today `autoConfig` (`pipeline.ts:75-81`) filters `DEFAULT_STAGE_ORDER` and has **no identity path**. Two things must change:
+
+1. **The exact condition (from `config.rs:34`):** the core appends the identity stage iff `!identity_opts.is_empty() && registry.has(IDENTITY)` — i.e. **both** non-empty opts AND the identity stage being *available* in the registry. Pure-TS must replicate BOTH clauses; appending without the `has(IDENTITY)` availability guard diverges from the core and from the `identity_unavailable_not_appended` vector. An empty `{}` stays falsy (no identity stage), matching Python's `if self._identity_opts`.
+2. **The plumbing (currently absent):** TS `PipelineOptions` has no `identityOpts` field (`pipeline.ts:26-29`), the constructor never reads one (`:35-40`), and `autoConfig()` takes no args (`:75`). The fix must thread an `identityOpts` option: add it to `PipelineOptions`, store it on the instance in the constructor, and consult it in `autoConfig`. Without this there is no value to gate on. This is a **real TS behavior change** (and a small public-API addition) — zero-config output gains an identity stage when identity opts are supplied and the stage is registered; divergence resolved in the reference's favor.
 
 ### 3.6 Parity gate — `tests/…/planner-parity.test.ts`
 
 Reuse the SP1 golden vectors (`packages/rust/extensions/goldenpipe-core/tests/vectors/{resolve,apply_decision,evaluate_builtin,auto_config,skip_if}.json`) as the shared cross-surface truth (path resolved repo-relative from the test file).
 
-- **Leg A (pure-TS == vectors)** — no wasm; for each `{input, expected}`, call the **pure-TS** planner (through `plannerJson`'s serialize-side, or a thin pure-TS `*_json` shim mirroring `_planner_json.py`) and assert deep-equal to `expected`. This is the drift-lock.
-- **Leg B (wasm == vectors)** — mandatory in CI (skips only if the wasm artifact is absent, i.e. a default checkout): `enableWasm()` from the base64 artifact, run the same vectors through `getPipeWasmBackend()`, assert equal.
+- **Leg A (pure-TS == vectors)** — no wasm. Leg A CANNOT use `plannerJson`'s serialize side (that path calls `backend.<fn>`, and Leg A has no backend). It uses a thin **pure-TS `*_json` shim** (`src/core/wasm/plannerJsonPure.ts`, the TS analogue of `_planner_json.py`): five `<fn>Json(input: string): string` that parse the vector input, drive the **real pure-TS** `Resolver`/`Router`/`decisions`/`autoConfig`/`isFalsy`, and serialize to the core's JSON shapes. For each `{input, expected}`, assert `JSON.parse(shim(JSON.stringify(input)))` deep-equals `expected`. This is the drift-lock and the reused serializer for Leg A. (The reroute's deserialize side in `plannerJson.ts` is exercised by Leg B.)
+- **Leg B (wasm == vectors)** — mandatory in CI (skips only if the wasm artifact is absent, i.e. a default checkout): call `enableWasm({ wasmBase64: <generated goldenpipe_wasm_base64 string> })` explicitly (the base64 universal strategy — `resolveWasmBytes` prefers `wasmBase64`, `goldenmatch-wasm-runtime/src/index.ts:70-74`), run the same vectors through `getPipeWasmBackend()`'s five fns, assert equal.
 
 A backend-registry unit test mirrors goldenflow's (`getPipeWasmBackend()` null by default; `set`/`get`/reset isolation).
 
