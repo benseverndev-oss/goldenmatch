@@ -278,8 +278,11 @@ tests/         offline unit + end-to-end for Tracks A, B, C, D, and the real-dat
   [`../er-kg-bench`](../er-kg-bench) companion. Remaining: an NLI backstop for the
   ER-aware matcher / relation-aware grounder on paraphrased relations, and a
   stronger/few-shot extractor to map the extraction ceiling (not just the floor).
-- **Package / evangelize:** `RESULTS.md` + `DATA_CARD.md` shipped; the
-  Text2KG @ ISWC paper (`PAPER.md`) is the remaining piece.
+- **Package / evangelize:** `RESULTS.md` + `DATA_CARD.md` + a Text2KG@ISWC
+  short-paper **draft** ([`PAPER.md`](PAPER.md)) shipped. Remaining before
+  submission: LLM-generated (non-templated) prose, a ≥200-item human audit, an
+  NLI-verified grounding column, packaged incumbents on Tracks A/C/D end-to-end,
+  and a broader Wikidata homograph seed.
 
 _Done:_ all four tracks spiked — **A** (extraction-F1 harness + the ER-in-the-
 metric finding), **B** (corpus-level ER moat) + **real-data validity track**
