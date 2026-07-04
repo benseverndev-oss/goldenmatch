@@ -38,13 +38,16 @@ Pairwise matches are transitively closed into clusters: if A matches B and B mat
 
 ## Survivorship
 
-A **golden record** is the canonical record synthesized from a cluster. GoldenMatch offers five merge strategies:
+A **golden record** is the canonical record synthesized from a cluster. GoldenMatch offers eight merge strategies:
 
 - `most_complete`
 - `majority_vote`
 - `source_priority`
 - `most_recent`
 - `first_non_null`
+- `longest_value`
+- `unanimous_or_null`
+- `confidence_majority`
 
 Fields can be weighted by source quality (from GoldenCheck), and field-level provenance tracks which source row contributed each value.
 

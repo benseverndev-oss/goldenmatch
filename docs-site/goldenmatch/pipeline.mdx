@@ -25,7 +25,7 @@ df = load_file("data.parquet").collect()  # Collect to DataFrame
 df = load_files([("a.csv", "source_a"), ("b.csv", "source_b")])
 ```
 
-Supported formats: `.csv`, `.tsv`, `.xlsx`, `.xls`, `.parquet`, `.json`. Cloud paths (`s3://`, `gs://`, `az://`) are handled by `cloud_ingest`.
+Supported formats: `.parquet`, `.xlsx`, and delimited-text suffixes (`.csv`, `.tsv`, `.txt`, `.dat`, `.tab`, `.psv`). Cloud paths (`s3://`, `gs://`, `az://`) are handled by `cloud_ingest`.
 
 Each record gets an `__row_id__` (int64) and `__source__` column.
 
@@ -35,7 +35,7 @@ Map columns between different schemas when matching across sources.
 
 ```python
 gm.auto_map_columns(df_a, df_b)
-# {'full_name': 'first_name', 'postal_code': 'zip'}
+# [{'col_a': 'full_name', 'col_b': 'first_name', 'score': 0.85, 'method': 'synonym'}, ...]
 ```
 
 Column maps can be specified in the config or auto-detected. File specs support a third element: `(path, source_name, column_map)`.
@@ -113,7 +113,7 @@ Compare record pairs within each block.
 **Exact matching** uses Polars self-join (not Python loops):
 
 ```python
-pairs = gm.find_exact_matches(df, fields)
+pairs = gm.find_exact_matches(lf, matchkey)  # lf: LazyFrame, matchkey: MatchkeyConfig
 ```
 
 **Fuzzy matching** uses `rapidfuzz.process.cdist` for vectorized NxN scoring:
@@ -152,17 +152,17 @@ gm.unmerge_cluster(cluster_id, clusters)           # Shatter to singletons
 Merge each cluster into one canonical record.
 
 ```python
-golden = gm.build_golden_record(cluster, df, golden_rules)
+golden = gm.build_golden_record(cluster_df, golden_rules)  # cluster_df is one cluster's rows
 ```
 
-Five merge strategies: `most_complete`, `majority_vote`, `source_priority`, `most_recent`, `first_non_null`. Strategies can be set per-field.
+Eight merge strategies: `most_complete`, `majority_vote`, `source_priority`, `most_recent`, `first_non_null`, `longest_value`, `unanimous_or_null`, `confidence_majority`. Strategies can be set per-field.
 
 ### Output
 
 Write results to files or database.
 
 ```python
-gm.write_output(result, config)
+gm.write_output(golden_df, "results/", "run1", "golden", "csv")  # df, directory, run_name, output_type, fmt
 ```
 
 Outputs: golden records, duplicates, unique records, lineage JSON, HTML report, dashboard.

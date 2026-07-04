@@ -42,9 +42,12 @@ works on its own; the native kernel is opt-in and accelerates:
 
 - the **phone** residual the Polars fast path can't reach (alpha numbers like
   `1-800-FLOWERS`, extensions, `+1`-prefixed forms), and
-- the **checksummed identifiers** — payment card (Luhn), IBAN (mod-97), ISBN,
-  EAN/UPC, and EU VAT — via owned Rust kernels with pure-Python fallbacks proven
-  byte-identical over a committed corpus.
+- the **checksummed / structural identifiers** — payment card (Luhn), IBAN
+  (mod-97), ISBN, EAN/UPC, EU VAT, SWIFT/BIC, US ABA routing, and IMEI — via owned
+  Rust kernels with pure-Python fallbacks proven byte-identical over a committed
+  corpus. In `auto` mode the native kernel also backs the email, URL, numeric,
+  categorical, name (incl. `name_transliterate` / `name_script`), and US-address
+  families — anywhere a component kernel exists.
 
 <CodeGroup>
 
@@ -68,7 +71,7 @@ mirroring `GOLDENMATCH_NATIVE`):
 
 | Value | Behavior |
 |---|---|
-| unset / `auto` | Use the native kernel wherever a component's kernel symbol exists (phone + the checksummed identifiers), except known-divergent components. **Default.** |
+| unset / `auto` | Use the native kernel wherever a component's kernel symbol exists (identifiers, email, URL, numeric, categorical, name, and US-address families), except known-divergent components (e.g. `phone_validate` stays pure-Python). **Default.** |
 | `0` | Force the pure-Python path everywhere. |
 | `1` | Require native; raise if the kernel isn't importable. Runs every component with no NANP restriction — a benchmarking/parity lane that **can** differ from Python on international phone numbers. |
 

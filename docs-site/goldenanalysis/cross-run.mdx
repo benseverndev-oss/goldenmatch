@@ -13,7 +13,7 @@ A single report tells you about one run. The cross-run layer answers "how did th
 ```python
 from goldenanalysis import ReportHistory
 
-hist = ReportHistory(path=".golden/analysis.jsonl")   # backend inferred from suffix
+hist = ReportHistory(path=".golden/analysis.jsonl")   # default backend="jsonl"; pass backend="sqlite" for .db
 hist.append(report)                                    # after each run
 
 series = hist.trend("cluster.singleton_ratio", "customers", last_n=30)

@@ -57,7 +57,7 @@ docker run --rm -v $(pwd):/data ghcr.io/benseverndev-oss/goldenmatch:latest \
 
 # Start the REST API
 docker run --rm -p 8080:8080 -v $(pwd):/data ghcr.io/benseverndev-oss/goldenmatch:latest \
-    serve --file /data/customers.csv --port 8080
+    serve /data/customers.csv --port 8080
 ```
 
 ## PostgreSQL Extension
@@ -139,8 +139,8 @@ SELECT * FROM {{ ref('stg_customers') }}
 ## Verify installation
 
 ```bash
-goldenmatch --version
-# goldenmatch 1.1.1
+goldenmatch info
+# Shows version, Python, and installed extras
 
 goldenmatch demo
 # Runs a built-in demo with sample data
@@ -148,7 +148,7 @@ goldenmatch demo
 
 ```python
 import goldenmatch as gm
-print(gm.__version__)   # "1.1.1"
+print(gm.__version__)   # "2.8.0"
 ```
 
 ## Environment variables

@@ -45,8 +45,9 @@ enhanced_df, low_confidence = gm.extract_with_rulebook(df, "title", rulebooks["e
 ### Auto-detect domain
 
 ```python
-domain = gm.match_domain(df, "description")
-# Returns "electronics", "software", etc., or None
+rulebook = gm.match_domain(df.columns)
+# Scores rulebooks by signal words in the column names.
+# Returns the best-matching DomainRulebook, or None
 ```
 
 ## YAML config
@@ -56,7 +57,7 @@ Enable domain extraction in your config file:
 ```yaml
 domain:
   enabled: true
-  pack: electronics
+  mode: product
 ```
 
 Or let GoldenMatch auto-detect:
@@ -152,8 +153,8 @@ normalizers:
 ```python
 import goldenmatch as gm
 
-gm.save_rulebook("my_domain", rulebook)
-loaded = gm.load_rulebook("my_domain")
+gm.save_rulebook(rulebook, ".goldenmatch/domains/my_domain.yaml")
+loaded = gm.load_rulebook(".goldenmatch/domains/my_domain.yaml")
 ```
 
 ### Create via MCP

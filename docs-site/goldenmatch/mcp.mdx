@@ -293,7 +293,7 @@ Undo a previous run by deleting its output files (looked up by run_id). Destruct
 "Roll back run 2026-06-05-abc123"
 ```
 
-In addition, 16 **agent-level tools** are available for autonomous operation (analyze_data, auto_configure, controller_telemetry, agent_deduplicate, agent_match_sources, agent_explain_pair, agent_explain_cluster, agent_review_queue, agent_approve_reject, agent_compare_strategies, suggest_pprl, scan_quality, fix_quality, run_transforms, sensitivity, incremental). See [ER Agent](/goldenmatch/agent) for details.
+In addition, 18 **agent-level tools** are available for autonomous operation (analyze_data, auto_configure, controller_telemetry, agent_deduplicate, agent_match_sources, agent_explain_pair, agent_explain_cluster, agent_review_queue, agent_approve_reject, agent_compare_strategies, suggest_pprl, scan_quality, fix_quality, run_transforms, sensitivity, incremental, certify_recall, retrieve_similar). See [ER Agent](/goldenmatch/agent) for details.
 
 ### AutoConfigController telemetry (v1.7-v1.12)
 
@@ -320,7 +320,7 @@ The standalone `controller_telemetry` tool surfaces a per-session limitation not
 
 ### Learning Memory tools (v1.6.0)
 
-Six tools surface the persistent corrections store. See [Learning Memory](/goldenmatch/learning-memory) for the full feature.
+Seven tools surface the persistent corrections store. See [Learning Memory](/goldenmatch/learning-memory) for the full feature.
 
 | Tool | Behavior |
 |---|---|
@@ -330,6 +330,7 @@ Six tools surface the persistent corrections store. See [Learning Memory](/golde
 | `memory_stats` | Counts plus last-learned timestamps. |
 | `memory_export` | Returns all corrections as a JSON array (use server-side for review portability). |
 | `memory_import` | Upserts corrections from a list of dicts (the shape `memory_export` returns); higher trust wins. |
+| `list_plugins` | List registered Learning Memory plugins/adapters available to the store. |
 
 Natural-language workflow:
 
@@ -341,7 +342,7 @@ The host LLM calls `list_corrections` -> `add_correction` -> `learn_thresholds`.
 
 ### Identity Graph tools (v2.0)
 
-Seven tools expose the durable identity layer above run-local clusters. See [Identity Graph](/goldenmatch/identity-graph) for the full feature.
+Fifteen tools expose the durable identity layer above run-local clusters. See [Identity Graph](/goldenmatch/identity-graph) for the full feature.
 
 | Tool | Behavior |
 |---|---|
@@ -352,6 +353,28 @@ Seven tools expose the durable identity layer above run-local clusters. See [Ide
 | `identity_conflicts` | Evidence edges marked `conflicts_with` for steward review. |
 | `identity_merge` | Manually merge two identities. |
 | `identity_split` | Split records off an identity into a new identity. |
+| `identity_claim` | Claim/assign a record to a specific durable identity. |
+| `identity_resolve_conflict` | Resolve a flagged `conflicts_with` edge. |
+| `identity_profile` | Aggregate profile view across an identity's members. |
+| `identity_stats` | Counts and health metrics for the identity store. |
+| `identity_worklist` | Steward worklist of identities needing review. |
+| `identity_audit` | Audit-log entries for identity mutations. |
+| `identity_audit_seal` | Seal the audit log (tamper-evident checkpoint). |
+| `identity_audit_verify` | Verify the audit log seal chain. |
+
+### Routing tools
+
+Three tools plan and validate distributed execution routing for a run.
+
+| Tool | Behavior |
+|---|---|
+| `plan_routing` | Produce the per-stage distributed execution plan for a dataset/config. |
+| `lint_routing` | Lint a routing plan for misconfiguration or scale hazards. |
+| `explain_routing` | Explain why each stage was routed the way it was. |
+
+### Tool count breakdown
+
+The 69 tools reconcile as: 18 agent-level + 7 Learning Memory + 15 Identity Graph + 3 routing + 26 base data/inspection tools.
 
 ## How it works
 

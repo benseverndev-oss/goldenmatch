@@ -34,13 +34,15 @@ The trusted-third-party protocol scores every Party A record against every Party
 
 ```python
 import goldenmatch as gm
+import polars as pl
 
 cfg = gm.PPRLConfig(
     fields=["first_name", "last_name", "dob", "zip"],
     threshold=0.85,
     chunk_size=5000,        # process Party B in 5k-record blocks
 )
-result = gm.run_pprl("party_a.csv", "party_b.csv", config=cfg)
+# run_pprl takes Polars DataFrames, not file paths
+result = gm.run_pprl(pl.read_csv("party_a.csv"), pl.read_csv("party_b.csv"), config=cfg)
 ```
 
 `chunk_size=None` (the default) runs the original single-block dense path and is byte-for-byte identical to leaving it unset — the threshold test, the cluster output, and the match count are all invariant to `chunk_size`. On a 4000 × 4000 link, dense peak memory of ~305 MB drops to ~34 MB at `chunk_size=200` (~9×) and ~21 MB at `chunk_size=50` (~14×) for identical output. Smaller chunks trade a little extra Python overhead for lower peak memory.

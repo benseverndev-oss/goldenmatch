@@ -52,6 +52,11 @@ The default bind is `127.0.0.1`, which runs token-free for local use.
 | `GET` | `/reviews` | Review queue (borderline pairs) |
 | `GET` | `/reviews/decisions` | List completed review decisions |
 | `POST` | `/reviews/decide` | Approve or reject a pair |
+| `GET` | `/suggest` | Config-suggestion report for the loaded data |
+| `POST` | `/shatter` | Shatter a cluster into singletons |
+| `POST` | `/unmerge` | Unmerge a record from its cluster |
+| `POST` | `/certify-recall` | Certify recall on the loaded data |
+| `POST` | `/retrieve` | Retrieve similar records for a query |
 | `POST` | `/autoconfig` | Run AutoConfigController; return committed config + telemetry |
 | `GET` | `/controller/telemetry` | Last autoconfig's telemetry (stop_reason, health, decisions, NE fields) |
 
@@ -107,10 +112,10 @@ curl -X POST http://localhost:8080/match \
 ```bash
 curl -X POST http://localhost:8080/match/batch \
     -H "Content-Type: application/json" \
-    -d '[
+    -d '{"records": [
         {"name": "John Smith", "zip": "10001"},
         {"name": "Jane Doe", "zip": "90210"}
-    ]'
+    ]}'
 ```
 
 ## Explain a match
@@ -118,7 +123,10 @@ curl -X POST http://localhost:8080/match/batch \
 ```bash
 curl -X POST http://localhost:8080/explain \
     -H "Content-Type: application/json" \
-    -d '{"id_a": 42, "id_b": 108}'
+    -d '{
+        "record_a": {"name": "John Smith", "zip": "10001"},
+        "record_b": {"name": "John Smithe", "zip": "10001"}
+    }'
 ```
 
 ```json
@@ -186,7 +194,7 @@ curl http://localhost:8080/reviews
 
 ```json
 {
-    "reviews": [
+    "queue": [
         {
             "id": "rev_001",
             "id_a": 42,
@@ -195,7 +203,8 @@ curl http://localhost:8080/reviews
             "record_a": {"name": "John Smith", "zip": "10001"},
             "record_b": {"name": "J. Smithson", "zip": "10001"}
         }
-    ]
+    ],
+    "count": 1
 }
 ```
 
@@ -204,7 +213,7 @@ curl http://localhost:8080/reviews
 ```bash
 curl -X POST http://localhost:8080/reviews/decide \
     -H "Content-Type: application/json" \
-    -d '{"id": "rev_001", "decision": "approve"}'
+    -d '{"pair_id": "rev_001", "decision": "approve"}'
 ```
 
 Decision values: `"approve"` or `"reject"`.

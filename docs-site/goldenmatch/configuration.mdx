@@ -159,14 +159,14 @@ validation:
     - column: zip
       rule_type: min_length
       params: {length: 5}
-      action: null
+      action: "null"
     - column: name
       rule_type: not_null
       action: quarantine
 
 domain:
   enabled: true
-  pack: electronics
+  mode: product          # product | person | bibliographic | company | auto
 
 llm_scorer:
   enabled: true
@@ -185,7 +185,7 @@ llm_scorer:
     warn_at_pct: 80
 
 memory:
-  enabled: true                 # default: false. Off => no memory work, zero overhead.
+  enabled: true                 # MemoryConfig.enabled defaults to True; memory is off only when the `memory:` section is absent. Omit the section for zero overhead.
   backend: sqlite               # sqlite | postgres
   path: .goldenmatch/memory.db  # sqlite path or postgres DSN
   reanchor: true                # default: true. Look up corrections by record_hash when row IDs miss.
@@ -287,7 +287,7 @@ Set `auto_select: true` to auto-pick the best blocking key by histogram analysis
 
 ## Golden rules
 
-Five merge strategies for building canonical records:
+Eight merge strategies for building canonical records:
 
 | Strategy | Description |
 |----------|-------------|
@@ -296,6 +296,9 @@ Five merge strategies for building canonical records:
 | `source_priority` | Prefer values from specified sources (requires `source_priority` list) |
 | `most_recent` | Latest value by date (requires `date_column`) |
 | `first_non_null` | First non-null value encountered |
+| `longest_value` | Pick the longest value |
+| `unanimous_or_null` | Keep the value only when all members agree, else null |
+| `confidence_majority` | Confidence-weighted majority vote |
 
 Set a default strategy and override per field:
 
@@ -393,14 +396,14 @@ golden_rules:
 
 **`when:` predicate syntax.** The predicate is a safe boolean mini-language, not Python `eval`. Supported operators: `== != < <= > >= in not in and or not`. Names resolve to already-resolved golden fields. Literals: list/tuple, numeric, string, boolean. Unsupported: function calls, attribute access, indexing, arithmetic. If a predicate references a field that is absent or `None` for a given cluster, the predicate is treated as unsatisfied (that clause is skipped) and evaluation continues to the next clause.
 
-**`validate:`.** An optional candidate filter applied before the merge strategy. Candidates that fail the validator are dropped from consideration before the strategy runs (fail-open: an unknown validator name drops nothing). Friendly aliases:
+**`validate:`.** An optional candidate filter applied before the merge strategy. Candidates that fail the validator are dropped from consideration before the strategy runs (fail-open: an unknown validator name drops nothing). Only `nanp` / `phone` are friendly aliases; every other validator is referenced by its full GoldenFlow transform name:
 
-| Alias | GoldenFlow validator |
+| Name | Resolves to |
 |-------|---------------------|
-| `nanp` or `phone` | `phone_validate` |
-| `email` | `email_validate` |
-| `npi` | `npi_validate` |
-| `date` | `date_validate` |
+| `nanp` or `phone` | `phone_validate` (aliases) |
+| `email_validate` | email format validator |
+| `npi_validate` | NPI checksum validator |
+| `date_validate` | date-parse validator |
 
 **Lineage.** The audit trail records how each field's value was chosen. For a field group the entry reads like `street, city, state, zip promoted together from record 7 via most_complete (group 'mailing_address')`. For a conditional rule it reads like `phone used most_recent because state in ['CA', 'NY']`.
 
@@ -448,11 +451,11 @@ validation:
     - column: zip
       rule_type: min_length
       params: { length: 5 }
-      action: null
+      action: "null"
 ```
 
 Rule types: `regex`, `min_length`, `max_length`, `not_null`, `in_set`, `format`.
-Actions: `flag` (mark but keep), `null` (set to null), `quarantine` (remove from matching).
+Actions: `flag` (mark but keep), `"null"` (set to null — quote it so YAML keeps the string; bare `null` parses as None and fails validation), `quarantine` (remove from matching).
 
 ## Environment variables
 
@@ -565,7 +568,7 @@ The optional `memory:` section enables persistent corrections. Once a steward, a
 
 | Field | Default | Notes |
 |---|---|---|
-| `enabled` | `false` | Zero-config preserved. Enabling does not change pipeline output until corrections exist. |
+| `enabled` | `true` (when the `memory:` section is present) | Memory is off by default because the section is absent; once you add a `memory:` block it defaults on. Enabling does not change pipeline output until corrections exist. |
 | `backend` | `"sqlite"` | `"postgres"` requires `pip install goldenmatch[postgres]`. |
 | `path` | `".goldenmatch/memory.db"` | SQLite file or full DSN for postgres. |
 | `reanchor` | `true` | Re-anchor by `record_hash` when row IDs miss; ambiguous re-anchors report `stale_ambiguous`. |

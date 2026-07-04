@@ -1,6 +1,6 @@
 ---
 title: "ER Agent"
-description: "GoldenMatch as an autonomous entity resolution agent: A2A protocol, 31 skills, confidence-gated review queue, and Python API."
+description: "GoldenMatch as an autonomous entity resolution agent: A2A protocol, 38 skills, confidence-gated review queue, and Python API."
 keywords: ["agent", "A2A", "entity resolution", "autonomous", "review queue", "MCP"]
 ---
 
@@ -59,7 +59,7 @@ Add to `claude_desktop_config.json`:
 }
 ```
 
-## Agent Capabilities (31 Skills)
+## Agent Capabilities (38 Skills)
 
 ### Core & pipeline
 
@@ -90,6 +90,8 @@ Add to `claude_desktop_config.json`:
 | `incremental` | Match a batch of new records against an existing base dataset |
 | `list_runs` | List previous runs from the run log (for rollback) |
 | `rollback` | Undo a previous run by deleting its outputs (destructive) |
+| `review_config` | Run the config-suggestion (healer) loop and return advisory suggestions |
+| `retrieve_similar` | Retrieve records similar to a query value on a given column |
 
 ### Identity Graph (v2.0)
 
@@ -102,6 +104,11 @@ Add to `claude_desktop_config.json`:
 | `identity_conflicts` | Evidence edges marked `conflicts_with` |
 | `identity_merge` | Manually merge two identities |
 | `identity_split` | Split records off an identity into a new one |
+| `identity_claim` | Claim/assign a record to a specific durable identity |
+| `identity_resolve_conflict` | Resolve a flagged `conflicts_with` edge |
+| `identity_audit` | Audit-log entries for identity mutations |
+| `identity_audit_seal` | Seal the audit log (tamper-evident checkpoint) |
+| `identity_audit_verify` | Verify the audit log seal chain |
 
 ### Learning Memory
 
@@ -235,7 +242,7 @@ session.deduplicate("customers.csv")
 print(session.last_telemetry)                    # same shape as autoconfigure's telemetry
 ```
 
-## MCP Tools (16 Agent-Level)
+## MCP Tools (18 Agent-Level)
 
 | Tool | Description |
 |------|-------------|
@@ -255,6 +262,8 @@ print(session.last_telemetry)                    # same shape as autoconfigure's
 | `run_transforms` | Run GoldenFlow transforms (phone E.164, dates ISO, Unicode) |
 | `sensitivity` | Parameter-sweep stability analysis |
 | `incremental` | Match new records against an existing base dataset |
+| `certify_recall` | Certify recall on the loaded dataset |
+| `retrieve_similar` | Retrieve records similar to a query value on a column |
 
 These are additive -- existing MCP tools (`suggest_config`, `list_domains`, etc.) continue to work. The full MCP surface is **69 tools** spanning agent-level ER, data inspection, config suggestions, PPRL, Learning Memory, and Identity Graph -- see [MCP Server](/goldenmatch/mcp).
 
@@ -265,7 +274,7 @@ These are additive -- existing MCP tools (`suggest_config`, `list_domains`, etc.
   "name": "GoldenMatch ER Agent",
   "description": "Autonomous entity resolution agent for deduplication, matching, and data quality.",
   "url": "http://localhost:8200",
-  "version": "1.26.0",
+  "version": "2.8.0",
   "provider": {
     "organization": "GoldenMatch",
     "url": "https://github.com/benseverndev-oss/goldenmatch"
@@ -317,5 +326,5 @@ Poll `GET /tasks/{task_id}` for long-running skills.
 |-------|------|
 | MCP Server (Claude Desktop) | [MCP Server](/goldenmatch/mcp) |
 | Quick start with Python/CLI | [Quick Start](/goldenmatch/quickstart) |
-| Full Python API (101 exports) | [Python API](/goldenmatch/python-api) |
+| Full Python API (194 exports) | [Python API](/goldenmatch/python-api) |
 | Configuration reference | [Configuration](/goldenmatch/configuration) |

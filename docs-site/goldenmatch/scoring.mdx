@@ -76,7 +76,8 @@ matchkeys:
 ```
 
 ```python
-pairs = gm.find_exact_matches(df, fields)
+# The exact matchkey above is applied by the pipeline:
+result = gm.dedupe_df(df, exact=["email"])
 ```
 
 ## Probabilistic scoring (Fellegi-Sunter)

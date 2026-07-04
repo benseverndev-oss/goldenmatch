@@ -65,7 +65,7 @@ for (const m of result.mappings) {
 - **Domain dictionaries** for healthcare, finance, and ecommerce.
 - **Custom scorers** via the `@infermap.scorer` decorator (Python) or `defineScorer()` (TypeScript).
 - **Many input formats**: CSV, JSON, in-memory records, database tables, and schema definition files.
-- **Edge-runtime compatible** and zero-dependency in the TypeScript core.
+- **Edge-runtime compatible** with a minimal-dependency TypeScript core (only `goldencheck-types` for domain packs).
 - Accuracy benchmark: 162 test cases, F1 0.84 (Python); TypeScript parity within 0.0005.
 
 ## CLI
@@ -96,17 +96,20 @@ def prefix_scorer(source: FieldInfo, target: FieldInfo) -> ScorerResult | None:
     return ScorerResult(score=0.85, reasoning=f"Shared prefix '{source.name[:3]}'")
 ```
 
-## Default scorer weights
+## Scorer weights
 
-| Scorer | Weight |
-|--------|--------|
-| ExactScorer | 1.0 |
-| AliasScorer | 0.95 |
-| LLMScorer | 0.8 (pluggable, stubbed by default) |
-| InitialismScorer | 0.75 |
-| PatternTypeScorer | 0.7 |
-| ProfileScorer | 0.5 |
-| FuzzyNameScorer | 0.4 |
+The default pipeline (`default_scorers()`) is the six scorers below. `LLMScorer` is
+**not** in the default set — it is opt-in (and stubbed until you wire a provider).
+
+| Scorer | Weight | Default? |
+|--------|--------|----------|
+| ExactScorer | 1.0 | yes |
+| AliasScorer | 0.95 | yes |
+| InitialismScorer | 0.75 | yes |
+| PatternTypeScorer | 0.7 | yes |
+| ProfileScorer | 0.5 | yes |
+| FuzzyNameScorer | 0.4 | yes |
+| LLMScorer | 0.8 | opt-in |
 
 ## Config
 
@@ -115,7 +118,7 @@ domains:
   - healthcare
   - finance
 scorers:
-  LLMScorer:
+  ProfileScorer:
     enabled: false
   FuzzyNameScorer:
     weight: 0.3

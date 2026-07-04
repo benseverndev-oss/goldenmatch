@@ -35,12 +35,8 @@ processor = gm.StreamProcessor(existing_df, config)
 # Process a single record immediately
 matches = processor.process_record({"name": "John Smith", "zip": "10001"})
 
-# Micro-batch mode: buffer records and process in batches
-for record in incoming_records:
-    processor.add_record(record)
-
-# Flush the buffer
-results = processor.flush()
+# Micro-batch mode: process a list of records at once
+results = processor.process_batch(incoming_records)
 ```
 
 ### Immediate mode
@@ -59,9 +55,7 @@ Buffer records and process them together for better throughput:
 
 ```python
 processor = gm.StreamProcessor(df, config)
-for record in batch:
-    processor.add_record(record)
-batch_results = processor.flush()
+batch_results = processor.process_batch(batch)
 ```
 
 ## Incremental cluster updates
@@ -91,7 +85,7 @@ gm.unmerge_cluster(cluster_id, clusters)
 Match new CSV records against an existing base dataset:
 
 ```bash
-goldenmatch incremental base.csv --new new_records.csv --config config.yaml
+goldenmatch incremental base.csv --new-records new_records.csv --config config.yaml
 ```
 
 The incremental CLI handles exact and fuzzy matchkeys separately:
@@ -103,9 +97,9 @@ The incremental CLI handles exact and fuzzy matchkeys separately:
 For embedding-based matching, the ANN index supports incremental updates:
 
 ```python
-from goldenmatch.core.blocker import ANNBlocker
+from goldenmatch.core.ann_blocker import ANNBlocker
 
-blocker = ANNBlocker(model="all-MiniLM-L6-v2")
+blocker = ANNBlocker(top_k=20)
 blocker.add_to_index(embedding)        # Add a single embedding
 neighbors = blocker.query_one(embedding)  # Find nearest neighbors
 ```
@@ -117,21 +111,10 @@ The ANN index is persistent when using database sync mode. Embeddings are comput
 Continuously monitor a database table for new records and match them incrementally:
 
 ```bash
-goldenmatch watch --table customers --connection-string "$DATABASE_URL" --interval 30
+goldenmatch watch --table customers --connection-string "$DATABASE_URL" --config config.yaml --interval 30
 ```
 
-### Daemon mode
-
-Run watch as a background service with health endpoint and PID file:
-
-```bash
-goldenmatch watch --table customers --connection-string "$DATABASE_URL" --daemon
-```
-
-Daemon mode adds:
-- HTTP health endpoint at `/health`
-- PID file for process management
-- SIGTERM handling for graceful shutdown
+`watch` requires `--config`; it exits with an error if the flag is omitted. It stops gracefully on SIGTERM.
 
 ## Database sync
 
@@ -155,10 +138,17 @@ Features:
 
 Run a streaming pipeline programmatically:
 
+`run_stream` takes a `source_fn` polling callable (not a record list) and returns a `StreamProcessor` that runs a polling loop. `source_fn` is called every `poll_interval` seconds and returns new records as `list[dict]`.
+
 ```python
 import goldenmatch as gm
 
-result = gm.run_stream(existing_df, config, new_records)
+def poll_new_records():
+    # Return the latest batch of records as a list of dicts.
+    return fetch_new_rows()
+
+# Returns a StreamProcessor; call .stop() to halt the loop.
+processor = gm.run_stream(existing_df, config, poll_new_records, poll_interval=30)
 ```
 
 ## Architecture
