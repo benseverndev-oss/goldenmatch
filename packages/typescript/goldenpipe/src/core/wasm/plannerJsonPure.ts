@@ -4,7 +4,10 @@
  * isFalsy and serializes to goldenpipe-core's exact JSON shapes. Does NOT run
  * at pipeline runtime. TS analogue of goldenpipe/core/_planner_json.py.
  */
-import { resolvePure, WiringError, type PlannedStage } from "../engine/resolver.js";
+import {
+  resolvePure, WiringError, AmbiguousProducerError, CycleError, UnknownNeedError,
+  type PlannedStage,
+} from "../engine/resolver.js";
 import { applyPure } from "../engine/router.js";
 import { isFalsy } from "../engine/runner.js";
 import { severityGatePure, piiRouterPure, rowCountGatePure } from "../decisions.js";
@@ -76,10 +79,18 @@ export function resolveJsonPure(inputStr: string): string {
     return JSON.stringify({ ok: { stages: plan.stages.map(plannedToDict) } });
   } catch (e) {
     if (e instanceof WiringError) {
-      return JSON.stringify({
-        err: { kind: "missing_producer", stage: e.stage, artifact: e.missing },
-      });
+      return JSON.stringify({ err: { kind: "missing_producer", stage: e.stage, artifact: e.artifact } });
     }
+    if (e instanceof AmbiguousProducerError) {
+      return JSON.stringify({ err: { kind: "ambiguous_producer", artifact: e.artifact, producers: e.producers } });
+    }
+    if (e instanceof CycleError) {
+      return JSON.stringify({ err: { kind: "cycle", stages: e.stages } });
+    }
+    if (e instanceof UnknownNeedError) {
+      return JSON.stringify({ err: { kind: "unknown_need", stage: e.stage, needs: e.needs } });
+    }
+    // unknown `use`: registry.get threw a plain Error
     for (const raw of config.stages) {
       const use = typeof raw === "string" ? raw : (raw as StageSpec).use;
       if (!reg.has(use)) return JSON.stringify({ err: { kind: "unknown_stage", use } });
