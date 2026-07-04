@@ -17,6 +17,9 @@ name = "goldenembed"
 path = "src/main.rs"
 
 [dependencies]
+# The pure compute core (featurizer + projection head) — shared with the wasm
+# edge surface, so the featurizer + matmul live in exactly one place.
+goldenembed-core = { path = "../goldenembed-core" }
 ort = "2.0.0-rc.10"
 blake2 = "0.10"
 serde = { version = "1", features = ["derive"] }

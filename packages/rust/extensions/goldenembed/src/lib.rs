@@ -12,8 +12,10 @@ use ort::session::Session;
 use ort::value::Tensor;
 use serde::Deserialize;
 
-mod featurizer;
-pub use featurizer::FeaturizerConfig;
+// The featurizer + projection head live in the pure `goldenembed-core` crate
+// (shared with the wasm edge surface). Re-exported so existing consumers keep
+// importing `goldenembed::FeaturizerConfig` / `goldenembed::project`.
+pub use goldenembed_core::{project, FeaturizerConfig};
 pub mod cache;
 pub mod model_id;
 

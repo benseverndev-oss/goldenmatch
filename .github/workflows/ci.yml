@@ -94,6 +94,7 @@ jobs:
       hnsw_wasm: ${{ steps.filter.outputs.hnsw_wasm }}
       graph_wasm: ${{ steps.filter.outputs.graph_wasm }}
       fingerprint_wasm: ${{ steps.filter.outputs.fingerprint_wasm }}
+      goldenembed_wasm: ${{ steps.filter.outputs.goldenembed_wasm }}
       wasm_flow: ${{ steps.filter.outputs.wasm_flow }}
       sketch_wasm: ${{ steps.filter.outputs.sketch_wasm }}
       quality_gate: ${{ steps.filter.outputs.quality_gate }}
@@ -209,6 +210,10 @@ jobs:
               # must re-run the TS lane's record-fingerprint drift guard.
               - 'packages/rust/extensions/fingerprint-core/**'
               - 'packages/rust/extensions/fingerprint-wasm/**'
+              # Same for the goldenembed (in-house embedder) wasm core: a kernel
+              # or wrapper change must re-run the TS lane's embed drift guard.
+              - 'packages/rust/extensions/goldenembed-core/**'
+              - 'packages/rust/extensions/goldenembed-wasm/**'
             wasm_score:
               - 'packages/rust/extensions/score-wasm/**'
               - 'packages/rust/extensions/score-core/**'
@@ -332,6 +337,13 @@ jobs:
               - 'packages/rust/extensions/fingerprint-core/**'
               - 'packages/rust/extensions/fingerprint-wasm/**'
               - 'packages/typescript/goldenmatch/scripts/build_fingerprint_wasm.mjs'
+            goldenembed_wasm:
+              # Gates the (rust-toolchain-heavy) goldenembed wasm rebuild + drift
+              # guard inside the typescript lane. Only fires when the in-house
+              # embedder core, its wasm wrapper, or the embed script changes.
+              - 'packages/rust/extensions/goldenembed-core/**'
+              - 'packages/rust/extensions/goldenembed-wasm/**'
+              - 'packages/typescript/goldenmatch/scripts/build_goldenembed_wasm.mjs'
             web:
               - 'packages/python/goldenmatch/web/**'
               - 'packages/python/goldenmatch/goldenmatch/web/**'
@@ -540,6 +552,10 @@ jobs:
               # inference via ort). Own workspace, not in the `rust` job's
               # `cargo test --workspace`, so it needs its own lane.
               - 'packages/rust/extensions/goldenembed/**'
+              # goldenembed-core: the pyo3/ort/fs-free compute core goldenembed
+              # (and goldenembed-wasm) depend on; its project-parity tests run in
+              # the goldenembed job.
+              - 'packages/rust/extensions/goldenembed-core/**'
             embed:
               # goldenmatch-embed: the maturin/pyo3 wheel that exposes the
               # goldenembed runtime to Python (GoldenEmbed.load(...).embed(...)).
@@ -1594,6 +1610,25 @@ jobs:
             exit 1
           fi
           npx vitest run tests/parity/fingerprint-wasm.parity.test.ts tests/unit/fingerprint-wasm-reroute.test.ts
+      # Same drift guard for the goldenembed (in-house embedder) wasm surface:
+      # rebuild the inlined wasm + bindings + copy the golden fixture, diff ONLY
+      # the deterministic golden JSON (not the version-varying wasm bytes), then
+      # prove the committed wasm reproduces the numpy oracle within cosine
+      # tolerance. Stale committed wasm is caught behaviorally by the parity test.
+      - name: Rebuild + verify embedded goldenembed wasm
+        if: needs.changes.outputs.goldenembed_wasm == 'true' || needs.changes.outputs.force_all == 'true'
+        working-directory: packages/typescript/goldenmatch
+        run: |
+          rustup target add wasm32-unknown-unknown
+          command -v wasm-pack >/dev/null 2>&1 || curl -sSf https://rustwasm.github.io/wasm-pack/installer/init.sh | sh
+          node scripts/build_goldenembed_wasm.mjs
+          if ! git diff --exit-code -- tests/parity/fixtures/goldenembed/; then
+            echo "::error::goldenembed golden fixture is stale. Run \
+              'node scripts/build_goldenembed_wasm.mjs' in packages/typescript/goldenmatch \
+              (after regenerating goldenembed-core/golden/project_golden.json) and commit the result." >&2
+            exit 1
+          fi
+          npx vitest run tests/parity/goldenembed-wasm.parity.test.ts
       - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
         with:
           path: .turbo
@@ -1912,6 +1947,13 @@ jobs:
       # lane's "clippy + test (fingerprint-core crate)" step.
       - run: cargo check --manifest-path fingerprint-wasm/Cargo.toml
       - run: cargo clippy --manifest-path fingerprint-wasm/Cargo.toml --all-targets -- -D warnings
+      # goldenembed-wasm: the wasm-bindgen wrapper over goldenembed-core (the
+      # in-house embedder) that the TS edge-embedding surface consumes. Host
+      # `cargo check` + clippy validate it compiles against the core (the actual
+      # wasm build + embed is exercised in the typescript lane's goldenembed drift
+      # guard). goldenembed-core's own tests run in the `goldenembed` job.
+      - run: cargo check --manifest-path goldenembed-wasm/Cargo.toml
+      - run: cargo clippy --manifest-path goldenembed-wasm/Cargo.toml --all-targets -- -D warnings
 
   # Measured Rust line coverage (cargo-llvm-cov). The structural audit's unit
   # tests (graph-core / score-core / fingerprint-core / native / bridge) are now
@@ -2389,7 +2431,18 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
         with:
-          workspaces: packages/rust/extensions/goldenembed
+          workspaces: |
+            packages/rust/extensions/goldenembed
+            packages/rust/extensions/goldenembed-core
+      # goldenembed-core: the pyo3/ort/fs-free compute core (featurizer +
+      # projection head), shared with the goldenembed-wasm edge surface. Its own
+      # [workspace], so goldenembed's build above never touches it — run its
+      # unit + project-parity tests (cosine vs the numpy oracle) + clippy here.
+      - name: clippy + test (goldenembed-core crate)
+        working-directory: packages/rust/extensions/goldenembed-core
+        run: |
+          cargo clippy --all-targets -- -D warnings
+          cargo test
       - name: clippy
         working-directory: packages/rust/extensions/goldenembed
         run: cargo clippy --release --all-targets -- -D warnings

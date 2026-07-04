@@ -33,6 +33,11 @@ export default defineConfig({
     // base64 as a separate subpath (`goldenmatch/core/fingerprint-wasm`), out of
     // the default core bundle.
     "core/fingerprintWasm": "src/core/fingerprintWasm.ts",
+    // Opt-in entry: the in-house embedder (goldenembed-core) compiled to wasm, so
+    // char-n-gram featurize + the projection head run at the edge (closes P10 —
+    // the `ort`-linked native runtime can't compile to wasm). ~80 KB inlined
+    // base64 as a separate subpath (`goldenmatch/core/goldenembed-wasm`).
+    "core/goldenembedWasm": "src/core/goldenembedWasm.ts",
     "node/index": "src/node/index.ts",
     "node/mcp/server": "src/node/mcp/server.ts",
     cli: "src/cli.ts",

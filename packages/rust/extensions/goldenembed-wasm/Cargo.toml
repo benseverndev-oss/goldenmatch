@@ -1,0 +1,29 @@
+# Standalone workspace: a thin wasm-bindgen wrapper over `goldenembed-core`, so
+# the in-house embedder (char n-gram featurize + linear projection head) runs at
+# the edge — the SAME kernel as the Python native path and the SQL surfaces. This
+# is what closes parity-roadmap P10 (embed -> edge): the core pulls no ONNX/C++,
+# so unlike the `ort`-linked `goldenembed` runtime it compiles to wasm32.
+# Mirrors the sibling `sketch-wasm` / `graph-wasm` / `fingerprint-wasm` crates.
+[workspace]
+
+[package]
+name = "goldenembed-wasm"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Ben Severn <benzsevern@gmail.com>"]
+description = "wasm-bindgen wrapper over goldenembed-core (featurize + project) for edge embedding"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wasm-bindgen = "0.2"
+goldenembed-core = { path = "../goldenembed-core" }
+
+[profile.release]
+opt-level = "s"
+lto = true
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false

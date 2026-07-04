@@ -146,6 +146,31 @@ verified no leak into `dist/core/index.js`).
   drift guard (gated on the `fingerprint_wasm` path filter) rebuilds + diffs the
   golden JSON; `fixture_drift` auto-covers it too.
 
+## In-house embedder via wasm (`goldenmatch/core/goldenembed-wasm`)
+Edge embedding — char n-gram featurize + the learned linear projection head —
+running the SAME `goldenembed-core` kernels as the Python native path and the SQL
+surfaces. This is the P10 unblock: the `goldenembed` native runtime links `ort`
+(ONNX Runtime, no wasm32), but the ONNX graph is just a linear projection
+(`L2norm((feats @ W) + b)`), so the pure-Rust `goldenembed-core` does it with a
+matmul and compiles to wasm. Loader `src/core/goldenembedWasm.ts`; opt-in subpath
+(~80 KB inlined wasm, separate tsup entry — verified no leak into `dist/core/
+index.js`).
+- **`createEmbedder(model)`** builds an `Embedder` from the projection weights (a
+  `(nFeatures*dim)` `Float32Array`, optional `dim` bias) + featurizer params (as
+  saved by `GoldenEmbedModel.save`: `weights.npz` + `config.json`). `embed(texts)`
+  returns a row-major `(n*dim)` `Float32Array`, each row L2-normalized. The model
+  is caller-supplied — the wasm carries only the kernel, not any weights.
+- **Cosine-tolerance parity, NOT byte-identity** — f32 matmul accumulation order
+  differs from numpy/ONNX (which already differ from each other at this scale),
+  and the output feeds thresholded cosine blocking. Worst cosine distance 1.8e-7
+  vs the numpy reference. Same synchronous inlined-wasm pattern as the others.
+- **Regenerate the embed** (after any `goldenembed-core`/`goldenembed-wasm`
+  change): `node scripts/build_goldenembed_wasm.mjs` (wasm-pack + wasm32 target).
+- **Parity gate:** `tests/parity/goldenembed-wasm.parity.test.ts` runs the shared
+  `project_golden.json` oracle (also checked by `goldenembed-core/tests/
+  project_parity.rs`); the `typescript` lane's goldenembed drift guard (gated on
+  `goldenembed_wasm`) rebuilds + diffs it; `fixture_drift` auto-covers it.
+
 ## Wave history
 | npm | Python parity | Headline |
 |-----|---------------|----------|

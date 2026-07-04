@@ -30,7 +30,7 @@ one of two camps:
 | score (jaro/lev/token) | ✅ | ✅ | ✅ | ❌ | ❌ | edge-only |
 | graph (CC + pair-dedup) | ✅ | ✅ | ❌ | ✅ | ✅ | SQL-only |
 | fingerprint (record) | ✅ | ✅ | 🟡P3 | ✅ | ✅ | **full (pending P3)** |
-| embed (goldenembed) | ✅ | ✅ | ❌ | ✅ | ✅ | SQL-only (edge blocked) |
+| embed (goldenembed) | ✅ | ✅ | 🟡P10 | ✅ | ✅ | **full (pending P10)** |
 | perceptual (pHash) | ✅ | ✅ | ✅ | 🟡P4 | 🟡P4 | **full (pending P4)** |
 | autoconfig | ✅ | ✅ | ✅ | ❌ | ❌ | edge-only |
 | suggest (healer) | ✅ | ✅ | ✅ | ❌ | ❌ | edge-only |
@@ -132,13 +132,30 @@ wasm-hostile deps.
     Remaining: port + de-bridge `date`/`email`, then `url`/`address`; low marginal
     value, do when touching goldenflow-core anyway.
 
-### Tier 4 — deferred / blocked
+### Tier 4 — was blocked, now unblocked
 
-- [ ] **P10 · embed → edge.** BLOCKED: `goldenembed` links `ort` (ONNX Runtime),
-  which does not compile to wasm32. Edge embedding would need a separate path
-  (e.g. `@huggingface/transformers`, already a TS peer dep) — a different design,
-  not the "compile the core to wasm" pattern. Defer until there is an
-  edge-embedding requirement; treat as its own project, not a parity item.
+- [x] **P10 · embed → edge. Unblocked 2026-07-04 — the ONNX dep was
+  unnecessary.** The block was `goldenembed` linking `ort` (ONNX Runtime), which
+  doesn't compile to wasm32. But on audit the ONNX graph is just `MatMul ->
+  (optional Add) -> LpNormalization` — i.e. a **linear projection**
+  (`L2norm((feats @ W) + b)`); a fused f64-accumulate matmul kernel already
+  existed in the pyo3 `native` crate, and the weights are already exported to
+  `weights.npz`. So ONNX Runtime was overkill for one matmul. Extracted
+  **`goldenembed-core`** (pyo3/ort/fs-free: char-n-gram featurizer + the
+  `project` head) — the roadmap `*-core` pattern — which `goldenembed`
+  re-exports (consumers untouched) and which compiles cleanly to wasm32. Then
+  **`goldenembed-wasm`** + `goldenmatch/core/goldenembed-wasm` (an `Embedder`
+  taking the projection weights as a `Float32Array`) runs the SAME kernel at the
+  edge. **Cosine-tolerance parity** (not byte-identity — f32 accumulation order
+  differs; the output feeds thresholded cosine blocking, and ONNX itself already
+  differs from numpy at this scale): worst cosine distance **1.8e-7** vs the numpy
+  reference, pinned in Rust (`goldenembed-core/tests/project_parity.rs`) and TS
+  (`goldenembed-wasm.parity.test.ts`) golden harnesses. *(Done.)*
+  - Follow-up (separate, lower priority): make `ort` a non-default cargo feature
+    and route `goldenembed`'s runtime `embed()` through the native `project` when
+    `weights.npz` is present, so the **SQL surfaces stop linking ONNX Runtime**
+    (smaller extensions, faster cold start). The parity + kernel are already in
+    place; this is just the runtime gating + the 4 consumers' feature flags.
 
 ## Definition of done (the repeatable pattern)
 
