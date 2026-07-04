@@ -3,9 +3,9 @@
  * node:* here.
  *
  * The active backend (if any) is consulted by the identifier transforms
- * (cc/iban/isbn/ean/vat) for the 10 covered functions; everything else stays
- * pure-TS. Mirrors goldenmatch's `setScorerBackend(null)` module-singleton
- * pattern for test isolation.
+ * (cc/iban/isbn/ean/vat/swift/aba/imei) for the 14 covered functions;
+ * everything else stays pure-TS. Mirrors goldenmatch's
+ * `setScorerBackend(null)` module-singleton pattern for test isolation.
  */
 
 /**
@@ -29,6 +29,10 @@ export interface FlowWasmBackend {
   eanValidate(s: string): boolean;
   vatValidate(s: string): boolean;
   vatFormat(s: string): string | undefined;
+  swiftValidate(s: string): boolean;
+  swiftFormat(s: string): string | undefined;
+  abaValidate(s: string): boolean;
+  imeiValidate(s: string): boolean;
 }
 
 import { createBackendRegistry } from "goldenmatch-wasm-runtime";

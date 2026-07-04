@@ -84,6 +84,24 @@
 {"transform": "ean_validate", "input": "40063813339a1", "expected": false}
 {"transform": "ean_validate", "input": "", "expected": false}
 {"transform": "ean_validate", "input": null, "expected": null}
+{"transform": "swift_validate", "input": "DEUTDEFF", "expected": true}
+{"transform": "swift_validate", "input": "DEUTDEFF500", "expected": true}
+{"transform": "swift_validate", "input": "NEDSZAJJXXX", "expected": true}
+{"transform": "swift_validate", "input": "deutdeff", "expected": true}
+{"transform": "swift_validate", "input": "deu tdeff", "expected": true}
+{"transform": "swift_validate", "input": "DEUTDEFF5", "expected": false}
+{"transform": "swift_validate", "input": "DEUT1EFF", "expected": false}
+{"transform": "swift_validate", "input": "1234DEFF", "expected": false}
+{"transform": "swift_validate", "input": "DEUTDE-FF", "expected": false}
+{"transform": "swift_validate", "input": "", "expected": false}
+{"transform": "swift_validate", "input": null, "expected": null}
+{"transform": "swift_format", "input": "deutdeff", "expected": "DEUTDEFF"}
+{"transform": "swift_format", "input": "DEUTDEFF500", "expected": "DEUTDEFF500"}
+{"transform": "swift_format", "input": "ne dsz ajj xxx", "expected": "NEDSZAJJXXX"}
+{"transform": "swift_format", "input": "DEUTDEFF5", "expected": null}
+{"transform": "swift_format", "input": "1234DEFF", "expected": null}
+{"transform": "swift_format", "input": "", "expected": null}
+{"transform": "swift_format", "input": null, "expected": null}
 {"transform": "vat_validate", "input": "DE136695976", "expected": true}
 {"transform": "vat_validate", "input": "de 136 695 976", "expected": true}
 {"transform": "vat_validate", "input": "IT00743110157", "expected": true}
@@ -104,6 +122,23 @@
 {"transform": "vat_format", "input": "ZZ123", "expected": null}
 {"transform": "vat_format", "input": "", "expected": null}
 {"transform": "vat_format", "input": null, "expected": null}
+{"transform": "aba_validate", "input": "011000015", "expected": true}
+{"transform": "aba_validate", "input": "021000021", "expected": true}
+{"transform": "aba_validate", "input": "122105155", "expected": true}
+{"transform": "aba_validate", "input": "011-000-015", "expected": true}
+{"transform": "aba_validate", "input": "011000016", "expected": false}
+{"transform": "aba_validate", "input": "12345", "expected": false}
+{"transform": "aba_validate", "input": "01100001a", "expected": false}
+{"transform": "aba_validate", "input": "", "expected": false}
+{"transform": "aba_validate", "input": null, "expected": null}
+{"transform": "imei_validate", "input": "490154203237518", "expected": true}
+{"transform": "imei_validate", "input": "356938035643809", "expected": true}
+{"transform": "imei_validate", "input": "49-0154-203237518", "expected": true}
+{"transform": "imei_validate", "input": "490154203237519", "expected": false}
+{"transform": "imei_validate", "input": "12345", "expected": false}
+{"transform": "imei_validate", "input": "49015420323751a", "expected": false}
+{"transform": "imei_validate", "input": "", "expected": false}
+{"transform": "imei_validate", "input": null, "expected": null}
 {"transform": "cc_validate", "input": "424242424242😀2", "expected": false}
 {"transform": "iban_validate", "input": "DE89370400440532😀13000", "expected": false}
 {"transform": "vat_validate", "input": "DE13669597😀", "expected": false}
