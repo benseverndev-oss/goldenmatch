@@ -336,7 +336,7 @@ export interface PipelineOptions {
 
 - [ ] **Step 3: Extract `computeAutoConfig(registry, identityOpts)` carrying the identity opts as the stage `config`**
 
-Do the identity conformance ONCE, in a standalone exported helper that both `Pipeline.run()` and the Task 4 shim call (DRY — this replaces the private `autoConfig` and subsumes Task 4 Step 5). Use the literal captured in Step 1.
+Do the identity conformance ONCE, in a standalone exported helper that both `Pipeline.run()` and the Task 4 shim call (DRY — this replaces the private `autoConfig`; the shim calls the same helper rather than re-extracting it). Use the literal captured in Step 1.
 
 **CRITICAL (spec-review blocker):** the core appends the identity stage WITH the identity opts as its `config` (`config.rs:35`, `mk(IDENTITY, opts.clone())`), and `auto_config.json` vector #3 expects `config:{"threshold":0.8}` — NOT `{}`. `makeStageSpec(name)` yields `config:{}` and FAILS that vector. Pass the opts as the stage config:
 
