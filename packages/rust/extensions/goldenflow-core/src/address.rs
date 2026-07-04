@@ -250,7 +250,12 @@ pub fn zip_normalize(s: &str) -> String {
 /// `_COUNTRIES` lookup: name/alias (trimmed-lowercased) -> ISO 3166-1 alpha-2.
 fn country_lookup(key: &str) -> Option<&'static str> {
     Some(match key {
-        "united states" | "united states of america" | "usa" | "us" | "u.s.a." | "u.s."
+        "united states"
+        | "united states of america"
+        | "usa"
+        | "us"
+        | "u.s.a."
+        | "u.s."
         | "america" => "US",
         "united kingdom" | "uk" | "great britain" | "england" | "scotland" | "wales"
         | "northern ireland" => "GB",
@@ -350,7 +355,8 @@ pub fn unit_normalize(s: &str) -> String {
 /// `(state, zip)` or `None`.
 fn parse_state_zip_tail(rem: &str) -> Option<(String, String)> {
     let after_ws: Vec<char> = rem.trim_start().chars().collect();
-    if after_ws.len() < 2 || !(after_ws[0].is_ascii_alphabetic() && after_ws[1].is_ascii_alphabetic())
+    if after_ws.len() < 2
+        || !(after_ws[0].is_ascii_alphabetic() && after_ws[1].is_ascii_alphabetic())
     {
         return None;
     }
@@ -398,12 +404,7 @@ fn try_parse_address(t: &str) -> Option<(String, String, String, String)> {
         let group2 = &after1_ws[..c2];
         if !group2.is_empty() {
             if let Some((state, zip)) = parse_state_zip_tail(&after1_ws[c2 + 1..]) {
-                return Some((
-                    group1.to_string(),
-                    group2.to_string(),
-                    state,
-                    zip,
-                ));
+                return Some((group1.to_string(), group2.to_string(), state, zip));
             }
         }
         search = c2 + 1;

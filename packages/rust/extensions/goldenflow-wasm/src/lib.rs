@@ -208,12 +208,7 @@ mod wasm {
     pub fn split_address(s: &str) -> Vec<JsValue> {
         let (street, city, state, zip) = address::split_address(s);
         let opt = |v: Option<String>| v.map_or(JsValue::NULL, |x| JsValue::from_str(&x));
-        vec![
-            JsValue::from_str(&street),
-            opt(city),
-            opt(state),
-            opt(zip),
-        ]
+        vec![JsValue::from_str(&street), opt(city), opt(state), opt(zip)]
     }
 
     #[wasm_bindgen]
