@@ -202,6 +202,277 @@ pub fn name_script(s: &str) -> String {
     SCRIPT_PRIORITY[best_idx].to_string()
 }
 
+// ---------------------------------------------------------------------------
+// names-remainder kernels (Wave D). Each is the reference implementation; the
+// Python (`goldenflow/transforms/names.py`) and TS (`transforms/names.ts`)
+// fallbacks must reproduce these bytes exactly. Ported one-for-one from the
+// existing pure-Python transforms (kernel = spec under reference-mode).
+// ---------------------------------------------------------------------------
+
+/// `\w` in the Python regexes = `[A-Za-z0-9_]` (ASCII; the transforms operate
+/// on Latin-script name data).
+fn is_word_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_'
+}
+
+/// Leading personal titles, in the Python alternation order. Mirrors the
+/// `^(Mr\.?|...)\s+` regex in `names.py::strip_titles`. `Sr` before `Sra`
+/// is fine: the `Sr` branch only matches when an optional dot + required
+/// whitespace follows, so "Sra ..." correctly falls through to `Sra`.
+const TITLES: [&str; 9] = ["Mr", "Mrs", "Ms", "Miss", "Dr", "Prof", "Rev", "Sr", "Sra"];
+
+/// If `s` begins (case-insensitively) with `title` + optional `.` + one-or-more
+/// whitespace, return the remainder after that run; else `None`. Replicates the
+/// leading-title regex match; whitespace uses Unicode `char::is_whitespace`
+/// (Python `\s` under `re.UNICODE` + polars `strip_chars`).
+fn strip_leading_title(s: &str) -> Option<&str> {
+    let lower = s.to_ascii_lowercase();
+    for title in TITLES {
+        let t = title.to_ascii_lowercase();
+        if lower.starts_with(&t) {
+            // ASCII-lowercasing preserves byte offsets, so `title.len()` indexes
+            // the original safely (the prefix is ASCII).
+            let after_title = &s[title.len()..];
+            let after_dot = after_title.strip_prefix('.').unwrap_or(after_title);
+            let after_ws = after_dot.trim_start();
+            if after_ws.len() < after_dot.len() {
+                // at least one whitespace consumed -> the `\s+` matched.
+                return Some(after_ws);
+            }
+        }
+    }
+    None
+}
+
+/// Strip a leading personal title (Mr/Mrs/Ms/Miss/Dr/Prof/Rev/Sr/Sra) then
+/// trim. Byte-identical to `names.py::strip_titles` (regex replace +
+/// `strip_chars`): a no-title input is still trimmed.
+pub fn strip_titles(s: &str) -> String {
+    strip_leading_title(s).unwrap_or(s).trim().to_string()
+}
+
+/// Trailing professional suffixes as (suffix, allows-optional-trailing-dot),
+/// in the Python alternation order. Mirrors the
+/// `\s+(Jr\.?|Sr\.?|II|III|IV|MD|PhD|PharmD|DDS|DVM|Esq\.?|CPA|RN|DO)$` regex.
+const SUFFIXES: [(&str, bool); 14] = [
+    ("Jr", true),
+    ("Sr", true),
+    ("II", false),
+    ("III", false),
+    ("IV", false),
+    ("MD", false),
+    ("PhD", false),
+    ("PharmD", false),
+    ("DDS", false),
+    ("DVM", false),
+    ("Esq", true),
+    ("CPA", false),
+    ("RN", false),
+    ("DO", false),
+];
+
+/// If `s` ends (case-insensitively) with `\s+ suffix (\.)? $`, return everything
+/// before the trailing whitespace run; else `None`.
+fn strip_trailing_suffix(s: &str) -> Option<&str> {
+    let lower = s.to_ascii_lowercase();
+    for (suf, allow_dot) in SUFFIXES {
+        let suf_l = suf.to_ascii_lowercase();
+        // `\.?$` greedily takes the trailing dot when present.
+        let core = if allow_dot {
+            lower.strip_suffix('.').unwrap_or(&lower)
+        } else {
+            &lower
+        };
+        if let Some(before) = core.strip_suffix(&suf_l) {
+            // the `\s+` requires whitespace immediately before the suffix.
+            if before.ends_with(char::is_whitespace) {
+                // ASCII-lowercasing preserves byte offsets; `before.len()`
+                // indexes the original (`before` is all-ASCII up to here only
+                // where it matters -- it's a prefix, so the offset is valid).
+                return Some(&s[..before.len()]);
+            }
+        }
+    }
+    None
+}
+
+/// Strip a trailing professional suffix (Jr/Sr/II/.../DO) then trim.
+/// Byte-identical to `names.py::strip_suffixes`.
+pub fn strip_suffixes(s: &str) -> String {
+    strip_trailing_suffix(s).unwrap_or(s).trim().to_string()
+}
+
+/// ASCII-semantics `str.title()`: the first alphabetic char of each word is
+/// upper-cased, the rest lower-cased; non-alphabetic chars pass through and
+/// reset the word boundary. Matches Python `str.title()` on ASCII input; the
+/// non-ASCII behavior is bounded by the Unicode `to_uppercase`/`to_lowercase`
+/// case maps (documented boundary -- reference-mode resolves in Rust's favor).
+fn ascii_title(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut prev_alpha = false;
+    for c in s.chars() {
+        if c.is_alphabetic() {
+            if prev_alpha {
+                out.extend(c.to_lowercase());
+            } else {
+                out.extend(c.to_uppercase());
+            }
+            prev_alpha = true;
+        } else {
+            out.push(c);
+            prev_alpha = false;
+        }
+    }
+    out
+}
+
+/// Uppercase the word-char immediately after a word-boundary `p0 p1` prefix
+/// (`\bMc(\w)` / `\bO'(\w)` in `names.py`). Left-to-right, non-overlapping.
+fn fixup_prefix(s: &str, p0: char, p1: char) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    let n = chars.len();
+    let mut out: Vec<char> = Vec::with_capacity(n);
+    let mut i = 0;
+    while i < n {
+        let at_boundary = out.last().is_none_or(|&p| !is_word_char(p));
+        if at_boundary
+            && i + 2 < n
+            && chars[i] == p0
+            && chars[i + 1] == p1
+            && is_word_char(chars[i + 2])
+        {
+            out.push(p0);
+            out.push(p1);
+            out.extend(chars[i + 2].to_uppercase());
+            i += 3;
+        } else {
+            out.push(chars[i]);
+            i += 1;
+        }
+    }
+    out.into_iter().collect()
+}
+
+/// Proper-case a name: `str.title()` then the `Mc*`/`O'*` capitalization
+/// fixups. Byte-identical to `names.py::name_proper` (title -> Mc sub -> O' sub)
+/// on ASCII input.
+pub fn name_proper(s: &str) -> String {
+    let titled = ascii_title(s);
+    let mc = fixup_prefix(&titled, 'M', 'c');
+    fixup_prefix(&mc, 'O', '\'')
+}
+
+/// Map a common nickname (looked up by trimmed-lowercased key) to its formal
+/// first name, or `None` if not a known nickname. Mirrors the `_NICKNAMES`
+/// dict in `names.py` byte-for-byte; the dict is in-crate DATA (like the
+/// transliterate map) so every surface replicates the same table.
+fn nickname_lookup(key: &str) -> Option<&'static str> {
+    Some(match key {
+        "bob" | "rob" | "robby" | "robbie" | "bobby" => "Robert",
+        "bill" | "billy" | "will" | "willy" => "William",
+        "jim" | "jimmy" | "jamie" => "James",
+        "mike" | "mikey" | "mick" => "Michael",
+        "dick" | "rick" | "rich" | "ricky" => "Richard",
+        "tom" | "tommy" => "Thomas",
+        "joe" | "joey" => "Joseph",
+        "jack" | "johnny" => "John",
+        "jon" => "Jonathan",
+        "dave" | "davy" => "David",
+        "steve" | "stevie" => "Steven",
+        "dan" | "danny" => "Daniel",
+        "pat" => "Patrick",
+        "patty" | "patsy" => "Patricia",
+        "chris" | "kit" => "Christopher",
+        "tony" => "Anthony",
+        "ed" | "eddie" | "ted" | "teddy" => "Edward",
+        "al" | "bert" => "Albert",
+        "charlie" | "chuck" => "Charles",
+        "sam" | "sammy" => "Samuel",
+        "ben" | "benny" => "Benjamin",
+        "matt" => "Matthew",
+        "andy" | "drew" => "Andrew",
+        "nick" => "Nicholas",
+        "alex" => "Alexander",
+        "liz" | "beth" | "betty" => "Elizabeth",
+        "kate" | "kathy" | "katie" => "Katherine",
+        "sue" | "susie" => "Susan",
+        "meg" | "maggie" | "peggy" => "Margaret",
+        "jenny" | "jen" => "Jennifer",
+        "debbie" | "deb" => "Deborah",
+        "barb" => "Barbara",
+        "cindy" => "Cynthia",
+        "sandy" => "Sandra",
+        _ => return None,
+    })
+}
+
+/// Standardize a nickname to its formal first name; unknown names pass through
+/// UNCHANGED (the original, not the trimmed lookup key). Byte-identical to
+/// `names.py::nickname_standardize` (`_NICKNAMES.get(val.strip().lower(), val)`).
+pub fn nickname_standardize(s: &str) -> String {
+    match nickname_lookup(&s.trim().to_ascii_lowercase()) {
+        Some(canon) => canon.to_string(),
+        None => s.to_string(),
+    }
+}
+
+/// True if `s` contains a middle-initial pattern `\b[A-Z]\.\s` (a word-boundary
+/// uppercase letter, a dot, then whitespace). The owned kernel behind
+/// `names.py::initial_expand`'s flag detection (the value output is the input
+/// unchanged; only the flag is computed here).
+pub fn has_initial(s: &str) -> bool {
+    let chars: Vec<char> = s.chars().collect();
+    let n = chars.len();
+    for i in 0..n {
+        if chars[i].is_ascii_uppercase() {
+            let at_boundary = i == 0 || !is_word_char(chars[i - 1]);
+            if at_boundary && i + 2 < n && chars[i + 1] == '.' && chars[i + 2].is_whitespace() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Split `"First Last"` into `(first, last)` on the LAST space (after trimming).
+/// No space -> `(whole, "")`. Byte-identical to `names.py::split_name`
+/// (`val.strip().rsplit(" ", 1)`). The null-row case (`-> (None, None)`) is
+/// handled by the caller/marshaling layer, not this kernel.
+pub fn split_name(s: &str) -> (String, String) {
+    let t = s.trim();
+    match t.rsplit_once(' ') {
+        Some((first, last)) => (first.to_string(), last.to_string()),
+        None => (t.to_string(), String::new()),
+    }
+}
+
+/// Split `"Last, First"` into `(first, last)` on the FIRST comma; each part is
+/// trimmed. No comma -> `(trimmed-whole, "")`. Byte-identical to
+/// `names.py::split_name_reverse` (`val.split(",", 1)`).
+pub fn split_name_reverse(s: &str) -> (String, String) {
+    match s.split_once(',') {
+        Some((last, first)) => (first.trim().to_string(), last.trim().to_string()),
+        None => (s.trim().to_string(), String::new()),
+    }
+}
+
+/// Merge `(first, last)` into a full name: join the parts that are present and
+/// non-blank (after trimming) with a single space, keeping each part's ORIGINAL
+/// (unstripped) text; `None` if both are absent/blank. Byte-identical to
+/// `names.py::merge_name`.
+pub fn merge_name(first: Option<&str>, last: Option<&str>) -> Option<String> {
+    let parts: Vec<&str> = [first, last]
+        .into_iter()
+        .flatten()
+        .filter(|p| !p.trim().is_empty())
+        .collect();
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(" "))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -234,5 +505,113 @@ mod tests {
         assert_eq!(name_script("محمد"), "Arabic");
         assert_eq!(name_script("123"), "Common");
         assert_eq!(name_script(""), "Unknown");
+    }
+
+    #[test]
+    fn strip_titles_cases() {
+        assert_eq!(strip_titles("Dr. Smith"), "Smith");
+        assert_eq!(strip_titles("Mr Smith"), "Smith");
+        assert_eq!(strip_titles("Mrs. Jane Doe"), "Jane Doe");
+        assert_eq!(strip_titles("Prof. Alan Turing"), "Alan Turing");
+        assert_eq!(strip_titles("Sra Garcia"), "Garcia");
+        assert_eq!(strip_titles("Miss Ellie"), "Ellie");
+        // no title -> still trimmed
+        assert_eq!(strip_titles("  John Smith  "), "John Smith");
+        // "Missy" is not the title "Miss" (no dot/space boundary after)
+        assert_eq!(strip_titles("Missy"), "Missy");
+        // multiple spaces after the title are all consumed
+        assert_eq!(strip_titles("Dr.   Smith"), "Smith");
+    }
+
+    #[test]
+    fn strip_suffixes_cases() {
+        assert_eq!(strip_suffixes("John Smith Jr"), "John Smith");
+        assert_eq!(strip_suffixes("John Smith Jr."), "John Smith");
+        assert_eq!(strip_suffixes("Jane Doe MD"), "Jane Doe");
+        assert_eq!(strip_suffixes("Bob III"), "Bob");
+        assert_eq!(strip_suffixes("Bob II"), "Bob");
+        assert_eq!(strip_suffixes("Alice Esq."), "Alice");
+        assert_eq!(strip_suffixes("Sam RN"), "Sam");
+        // no suffix -> unchanged (but trimmed)
+        assert_eq!(strip_suffixes("Robert"), "Robert");
+        // "DODO" does not end in the standalone suffix "DO" (no ws before)
+        assert_eq!(strip_suffixes("John DODO"), "John DODO");
+    }
+
+    #[test]
+    fn name_proper_cases() {
+        assert_eq!(name_proper("john smith"), "John Smith");
+        assert_eq!(name_proper("JOHN SMITH"), "John Smith");
+        assert_eq!(name_proper("mcdonald"), "McDonald");
+        assert_eq!(name_proper("old mcdonald"), "Old McDonald");
+        assert_eq!(name_proper("o'brien"), "O'Brien");
+        assert_eq!(name_proper("d'angelo"), "D'Angelo");
+        // "Mac" is distinct from "Mc" -- not fixed up
+        assert_eq!(name_proper("macdonald"), "Macdonald");
+    }
+
+    #[test]
+    fn nickname_standardize_cases() {
+        assert_eq!(nickname_standardize("Bob"), "Robert");
+        assert_eq!(nickname_standardize("bob"), "Robert");
+        assert_eq!(nickname_standardize("  bob  "), "Robert");
+        assert_eq!(nickname_standardize("JIM"), "James");
+        assert_eq!(nickname_standardize("patty"), "Patricia");
+        assert_eq!(nickname_standardize("pat"), "Patrick");
+        // unknown -> original, unchanged (NOT the trimmed key)
+        assert_eq!(nickname_standardize("Xavier"), "Xavier");
+        assert_eq!(nickname_standardize("  Zed  "), "  Zed  ");
+    }
+
+    #[test]
+    fn has_initial_cases() {
+        assert!(has_initial("John Q. Public"));
+        assert!(has_initial("J. Smith"));
+        assert!(!has_initial("John Smith"));
+        assert!(!has_initial("J.Smith")); // no whitespace after the dot
+        assert!(!has_initial(""));
+    }
+
+    #[test]
+    fn split_name_cases() {
+        assert_eq!(split_name("John Smith"), ("John".into(), "Smith".into()));
+        assert_eq!(
+            split_name("John Michael Smith"),
+            ("John Michael".into(), "Smith".into())
+        );
+        assert_eq!(split_name("Madonna"), ("Madonna".into(), "".into()));
+        // rsplit on the LAST single space; interior double-space is kept
+        assert_eq!(split_name("  Jane  Doe  "), ("Jane ".into(), "Doe".into()));
+    }
+
+    #[test]
+    fn split_name_reverse_cases() {
+        assert_eq!(
+            split_name_reverse("Smith, John"),
+            ("John".into(), "Smith".into())
+        );
+        assert_eq!(
+            split_name_reverse("Smith,John"),
+            ("John".into(), "Smith".into())
+        );
+        assert_eq!(
+            split_name_reverse("Smith, John, Jr"),
+            ("John, Jr".into(), "Smith".into())
+        );
+        assert_eq!(split_name_reverse("Madonna"), ("Madonna".into(), "".into()));
+    }
+
+    #[test]
+    fn merge_name_cases() {
+        assert_eq!(merge_name(Some("John"), Some("Smith")).as_deref(), Some("John Smith"));
+        assert_eq!(merge_name(Some("John"), None).as_deref(), Some("John"));
+        assert_eq!(merge_name(Some("John"), Some("")).as_deref(), Some("John"));
+        assert_eq!(merge_name(Some(""), Some("")), None);
+        assert_eq!(merge_name(None, None), None);
+        // parts keep their ORIGINAL (unstripped) text when joined
+        assert_eq!(
+            merge_name(Some("  John  "), Some("Smith")).as_deref(),
+            Some("  John   Smith")
+        );
     }
 }
