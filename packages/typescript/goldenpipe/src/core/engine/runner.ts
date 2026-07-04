@@ -14,7 +14,7 @@ import type { StageRegistry } from "./registry.js";
 import type { ExecutionPlan } from "./resolver.js";
 import { Router } from "./router.js";
 
-function isFalsy(value: unknown): boolean {
+export function isFalsy(value: unknown): boolean {
   if (value === null || value === undefined) return true;
   if (value === false || value === 0 || value === "") return true;
   if (Array.isArray(value)) return value.length === 0;

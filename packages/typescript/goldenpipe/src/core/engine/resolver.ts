@@ -11,9 +11,17 @@ import type { StageRegistry } from "./registry.js";
 
 /** Raised when a stage's `consumes` can't be satisfied by prior `produces`. */
 export class WiringError extends Error {
-  constructor(message: string) {
+  stage?: string;
+  missing?: string;
+  available?: string[];
+  constructor(message: string, extra?: { stage: string; missing: string; available: string[] }) {
     super(message);
     this.name = "WiringError";
+    if (extra) {
+      this.stage = extra.stage;
+      this.missing = extra.missing;
+      this.available = extra.available;
+    }
   }
 }
 
@@ -62,6 +70,7 @@ export const Resolver = {
           throw new WiringError(
             `Stage '${name}' consumes '${dep}' but no prior stage produces it. ` +
               `Available: ${[...availableArtifacts].sort().join(", ")}`,
+            { stage: name, missing: dep, available: [...availableArtifacts].sort() },
           );
         }
       }
