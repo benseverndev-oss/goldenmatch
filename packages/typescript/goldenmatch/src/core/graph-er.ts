@@ -10,6 +10,7 @@
 
 import type { ClusterInfo, PairKey, Row, ScoredPair } from "./types.js";
 import { pairKey } from "./cluster.js";
+import { connectedComponents } from "./graphComponents.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -64,46 +65,6 @@ export interface RunGraphEROptions {
 }
 
 // ---------------------------------------------------------------------------
-// Minimal Union-Find
-// ---------------------------------------------------------------------------
-
-class UnionFind {
-  private parent: number[] = [];
-  private size: number[] = [];
-
-  add(id: number): void {
-    while (this.parent.length <= id) {
-      this.parent.push(this.parent.length);
-      this.size.push(1);
-    }
-  }
-
-  find(id: number): number {
-    this.add(id);
-    let cur = id;
-    while (this.parent[cur] !== cur) {
-      const parent = this.parent[cur]!;
-      this.parent[cur] = this.parent[parent]!; // path compression
-      cur = this.parent[cur]!;
-    }
-    return cur;
-  }
-
-  union(a: number, b: number): void {
-    const rootA = this.find(a);
-    const rootB = this.find(b);
-    if (rootA === rootB) return;
-    if (this.size[rootA]! < this.size[rootB]!) {
-      this.parent[rootA] = rootB;
-      this.size[rootB]! += this.size[rootA]!;
-    } else {
-      this.parent[rootB] = rootA;
-      this.size[rootA]! += this.size[rootB]!;
-    }
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -121,27 +82,23 @@ function clustersFromPairs(
   pairs: readonly ScoredPair[],
   threshold: number,
 ): Map<number, ClusterInfo> {
-  const uf = new UnionFind();
-  for (let i = 0; i < rowCount; i++) uf.add(i);
-
+  // Connected components of the above-threshold pair graph. Routes through the
+  // shared graph-core kernel when the wasm backend is enabled (Rust source of
+  // truth), else the pure-TS union-find fallback — one clustering implementation
+  // (see graphComponents.ts), no hand-rolled union-find here.
+  const edges: [number, number][] = [];
   const scoreMap = new Map<PairKey, number>();
   for (const p of pairs) {
     if (p.score < threshold) continue;
-    uf.union(p.idA, p.idB);
+    edges.push([p.idA, p.idB]);
     scoreMap.set(pairKey(p.idA, p.idB), p.score);
   }
-
-  const rootMembers = new Map<number, number[]>();
-  for (let i = 0; i < rowCount; i++) {
-    const root = uf.find(i);
-    const list = rootMembers.get(root);
-    if (list) list.push(i);
-    else rootMembers.set(root, [i]);
-  }
+  const allIdx = Array.from({ length: rowCount }, (_, i) => i);
+  const components = connectedComponents(edges, allIdx);
 
   const clusters = new Map<number, ClusterInfo>();
   let clusterId = 0;
-  for (const members of rootMembers.values()) {
+  for (const members of components) {
     const pairScores = new Map<PairKey, number>();
     let minEdge = 1;
     let edgeSum = 0;

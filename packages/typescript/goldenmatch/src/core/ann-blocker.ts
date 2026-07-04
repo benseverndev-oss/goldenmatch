@@ -11,6 +11,7 @@
 import type { BlockResult, Row, ScoredPair } from "./types.js";
 import { makeScoredPair } from "./types.js";
 import { getEmbedder, type EmbedderOptions } from "./embedder.js";
+import { connectedComponents } from "./graphComponents.js";
 
 // ---------------------------------------------------------------------------
 // Public option types
@@ -447,32 +448,6 @@ function getText(row: Row, col: string): string | null {
   return s === "" ? null : s;
 }
 
-/** Trivial Union-Find. */
-class UnionFind {
-  private parent: number[];
-  constructor(n: number) {
-    this.parent = new Array(n);
-    for (let i = 0; i < n; i++) this.parent[i] = i;
-  }
-  find(x: number): number {
-    let r = x;
-    while (this.parent[r]! !== r) r = this.parent[r]!;
-    // Path compression.
-    let cur = x;
-    while (this.parent[cur]! !== r) {
-      const next = this.parent[cur]!;
-      this.parent[cur] = r;
-      cur = next;
-    }
-    return r;
-  }
-  union(a: number, b: number): void {
-    const ra = this.find(a);
-    const rb = this.find(b);
-    if (ra !== rb) this.parent[ra] = rb;
-  }
-}
-
 /**
  * Embed one column, query top-K neighbours, and group connected pairs
  * into micro-blocks via Union-Find.
@@ -506,27 +481,16 @@ export async function buildANNBlocks(
   const pairs = blocker.query(embeddings);
   if (pairs.length === 0) return [];
 
-  // Union-Find on the connected pairs.
-  const uf = new UnionFind(rows.length);
-  for (const [a, b] of pairs) uf.union(a, b);
-
-  // Group by root.
-  const groups = new Map<number, number[]>();
-  for (let i = 0; i < rows.length; i++) {
-    // Only include rows that participated in at least one pair (avoid singletons).
-    // To detect that, we just include any row whose root has more than itself.
-    const root = uf.find(i);
-    let arr = groups.get(root);
-    if (!arr) {
-      arr = [];
-      groups.set(root, arr);
-    }
-    arr.push(i);
-  }
+  // Group the connected pairs into micro-blocks via connected components. Routes
+  // through the shared graph-core kernel when the wasm backend is enabled (Rust
+  // source of truth), else the pure-TS union-find fallback — one clustering
+  // implementation, no hand-rolled union-find here (see graphComponents.ts).
+  const allIdx = Array.from({ length: rows.length }, (_, i) => i);
+  const components = connectedComponents(pairs, allIdx);
 
   const results: BlockResult[] = [];
   let blockNum = 0;
-  for (const [, members] of groups) {
+  for (const members of components) {
     if (members.length < 2) continue;
     if (members.length > maxBlockSize) continue; // skip oversized
     results.push({
