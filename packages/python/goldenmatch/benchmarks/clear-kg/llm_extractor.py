@@ -53,16 +53,27 @@ def _coerce(raw: str, doc: dict, schema: set[str]) -> set[tuple]:
     return out
 
 
+def _is_reasoning(model: str) -> bool:
+    # gpt-5* / o-series spend hidden reasoning tokens and reject temperature != 1
+    return model.startswith(("gpt-5", "o1", "o3", "o4"))
+
+
 def openai_extract(doc: dict, schema: list[str], *, model: str = "gpt-4o-mini",
                    client=None) -> set[tuple]:
     import openai
     client = client or openai.OpenAI(api_key=os.environ["OPENAI_API_KEY"])
-    resp = client.chat.completions.create(
-        model=model, temperature=0, max_completion_tokens=2000,
+    reasoning = _is_reasoning(model)
+    kwargs = dict(
+        model=model,
+        # reasoning models need headroom for hidden reasoning tokens before output
+        max_completion_tokens=6000 if reasoning else 2000,
         response_format={"type": "json_object"},
         messages=[{"role": "system", "content": _SYSTEM},
                   {"role": "user", "content": _prompt(doc, schema)}],
     )
+    if not reasoning:
+        kwargs["temperature"] = 0  # deterministic where supported
+    resp = client.chat.completions.create(**kwargs)
     return _coerce(resp.choices[0].message.content or "", doc, set(schema))
 
 
