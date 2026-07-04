@@ -92,6 +92,19 @@ export async function instantiateBackend(bytes: Uint8Array): Promise<FlowWasmBac
     country_standardize: (s: string) => string;
     unit_normalize: (s: string) => string;
     split_address: (s: string) => (string | null)[];
+    strip: (s: string) => string;
+    collapse_whitespace: (s: string) => string;
+    normalize_quotes: (s: string) => string;
+    normalize_line_endings: (s: string) => string;
+    remove_html_tags: (s: string) => string;
+    remove_urls: (s: string) => string;
+    remove_digits: (s: string) => string;
+    remove_punctuation: (s: string) => string;
+    remove_emojis: (s: string) => string;
+    extract_numbers: (s: string) => string;
+    truncate: (s: string, n: number) => string;
+    pad_left: (s: string, width: number, pad: string) => string;
+    pad_right: (s: string, width: number, pad: string) => string;
   };
   await glue.default({ module_or_path: bytes });
 
@@ -147,5 +160,18 @@ export async function instantiateBackend(bytes: Uint8Array): Promise<FlowWasmBac
     countryStandardize: (s) => glue.country_standardize(s),
     unitNormalize: (s) => glue.unit_normalize(s),
     splitAddress: (s) => glue.split_address(s),
+    strip: (s) => glue.strip(s),
+    collapseWhitespace: (s) => glue.collapse_whitespace(s),
+    normalizeQuotes: (s) => glue.normalize_quotes(s),
+    normalizeLineEndings: (s) => glue.normalize_line_endings(s),
+    removeHtmlTags: (s) => glue.remove_html_tags(s),
+    removeUrls: (s) => glue.remove_urls(s),
+    removeDigits: (s) => glue.remove_digits(s),
+    removePunctuation: (s) => glue.remove_punctuation(s),
+    removeEmojis: (s) => glue.remove_emojis(s),
+    extractNumbers: (s) => glue.extract_numbers(s),
+    truncate: (s, n) => glue.truncate(s, n),
+    padLeft: (s, width, pad) => glue.pad_left(s, width, pad),
+    padRight: (s, width, pad) => glue.pad_right(s, width, pad),
   };
 }

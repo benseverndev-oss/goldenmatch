@@ -74,6 +74,18 @@ import {
   countryStandardizeTs,
   unitNormalizeTs,
 } from "../../src/core/transforms/address.js";
+import {
+  stripTs,
+  collapseWhitespaceTs,
+  normalizeQuotesTs,
+  normalizeLineEndingsTs,
+  removeHtmlTagsTs,
+  removeUrlsTs,
+  removeDigitsTs,
+  removePunctuationTs,
+  removeEmojisTs,
+  extractNumbersTs,
+} from "../../src/core/transforms/text.js";
 import { enableWasm, disableWasm } from "../../src/core/wasm/index.js";
 import { getFlowWasmBackend, type FlowWasmBackend } from "../../src/core/wasm/backend.js";
 
@@ -137,6 +149,16 @@ const PURE_TS_FN: Record<string, (s: string) => boolean | string | number | unde
   zip_normalize: zipNormalizeTs,
   country_standardize: countryStandardizeTs,
   unit_normalize: unitNormalizeTs,
+  strip: stripTs,
+  collapse_whitespace: collapseWhitespaceTs,
+  normalize_quotes: normalizeQuotesTs,
+  normalize_line_endings: normalizeLineEndingsTs,
+  remove_html_tags: removeHtmlTagsTs,
+  remove_urls: removeUrlsTs,
+  remove_digits: removeDigitsTs,
+  remove_punctuation: removePunctuationTs,
+  remove_emojis: removeEmojisTs,
+  extract_numbers: extractNumbersTs,
 };
 
 /** Same transform set, dispatched through the wasm backend's method of the
@@ -187,6 +209,16 @@ function wasmFn(backend: FlowWasmBackend, transform: string): (s: string) => boo
     zip_normalize: (s) => backend.zipNormalize(s),
     country_standardize: (s) => backend.countryStandardize(s),
     unit_normalize: (s) => backend.unitNormalize(s),
+    strip: (s) => backend.strip(s),
+    collapse_whitespace: (s) => backend.collapseWhitespace(s),
+    normalize_quotes: (s) => backend.normalizeQuotes(s),
+    normalize_line_endings: (s) => backend.normalizeLineEndings(s),
+    remove_html_tags: (s) => backend.removeHtmlTags(s),
+    remove_urls: (s) => backend.removeUrls(s),
+    remove_digits: (s) => backend.removeDigits(s),
+    remove_punctuation: (s) => backend.removePunctuation(s),
+    remove_emojis: (s) => backend.removeEmojis(s),
+    extract_numbers: (s) => backend.extractNumbers(s),
   };
   const fn = map[transform];
   if (!fn) throw new Error(`no wasm dispatch for transform ${transform}`);

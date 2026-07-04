@@ -1,10 +1,32 @@
 /**
  * Text transforms — ported from goldenflow/transforms/text.py
  * Side-effect module: registers 18 text transforms on import.
+ *
+ * Owned-kernel family (Wave D text-1): 13 mechanical / ASCII-bound transforms
+ * (`strip`/`collapse_whitespace`/`normalize_quotes`/`normalize_line_endings`/
+ * `remove_html_tags`/`remove_urls`/`remove_digits`/`remove_punctuation`/
+ * `remove_emojis`/`extract_numbers` scalar + parameterized `truncate`/
+ * `pad_left`/`pad_right`) are byte-for-byte ports of the goldenflow-core Rust
+ * kernels (`goldenflow-core::text`), proven byte-identical to the Python
+ * reference. Each dispatches to the opt-in WASM backend (`FlowWasmBackend`)
+ * when `enableWasm()` has succeeded; otherwise it runs the pure-TS
+ * implementation below. Pure-TS is the default.
+ *
+ * NO regex is used where the JS engine would diverge from the Rust kernel: the
+ * html-tag / url / number scans and char-class filters mirror the hand-rolled
+ * Rust logic (or, for the simple literal cases, use a regex proven
+ * byte-identical over the shared corpus). `\d` is spelled `[0-9]` (ASCII
+ * bounded, matching the kernel); `remove_emojis` uses the kernel's explicit
+ * codepoint ranges; `truncate`/`pad_*` are codepoint-based (`[...s]`) to match
+ * Rust `chars()`.
+ *
+ * text-2 (deferred): lowercase / uppercase / title_case / normalize_unicode /
+ * fix_mojibake stay pure-TS (Unicode-casing / NFKD parity, a later wave).
  */
 
 import type { ColumnValue } from "../types.js";
 import { registerTransform } from "./registry.js";
+import { getFlowWasmBackend } from "../wasm/backend.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -21,11 +43,107 @@ function mapStrings(
 }
 
 // ---------------------------------------------------------------------------
+// Pure-TS kernel references (byte-identical to goldenflow-core::text). These
+// are the fallbacks + the parity-harness entry points; the transform wrappers
+// below dispatch native-first through the WASM backend when it is active.
+// ---------------------------------------------------------------------------
+
+/** `strip`: remove leading/trailing whitespace (Rust `str::trim`). */
+function stripTs(s: string): string {
+  return s.trim();
+}
+
+/** `collapse_whitespace`: replace each run of 2+ whitespace with a single
+ * space; a lone whitespace char is unchanged (Rust `\s{2,}` -> " "). */
+function collapseWhitespaceTs(s: string): string {
+  return s.replace(/\s{2,}/g, " ");
+}
+
+/** `normalize_quotes`: smart double/prime -> `"`, smart single/prime -> `'`
+ * (the exact 6 codepoints of the Rust kernel). */
+function normalizeQuotesTs(s: string): string {
+  return s
+    .replace(/[“”″]/g, '"')
+    .replace(/[‘’′]/g, "'");
+}
+
+/** `normalize_line_endings`: `\r\n` and lone `\r` -> `\n` (replace `\r\n`
+ * first, then any remaining `\r`). */
+function normalizeLineEndingsTs(s: string): string {
+  return s.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+}
+
+/** `remove_html_tags`: strip each `<...>` span with >=1 char between the
+ * angle brackets (Rust regex `<[^>]+>`, SINGLE pass — `<>` / unclosed `<`
+ * are left intact). */
+function removeHtmlTagsTs(s: string): string {
+  return s.replace(/<[^>]+>/g, "");
+}
+
+/** `remove_urls`: drop each `https?://` followed by >=1 non-whitespace char
+ * (Rust regex `https?://\S+`). NO trailing trim — the kernel leaves
+ * surrounding whitespace intact. */
+function removeUrlsTs(s: string): string {
+  return s.replace(/https?:\/\/\S+/g, "");
+}
+
+/** `remove_digits`: remove ASCII digit characters (kernel is bounded to
+ * `[0-9]`, not Unicode `\d`). */
+function removeDigitsTs(s: string): string {
+  return s.replace(/[0-9]/g, "");
+}
+
+/** `remove_punctuation`: keep ASCII alphanumerics + whitespace, drop the rest
+ * (Rust regex `[^a-zA-Z0-9\s]` -> ""; non-ASCII letters and `_` are dropped). */
+function removePunctuationTs(s: string): string {
+  return s.replace(/[^a-zA-Z0-9\s]/g, "");
+}
+
+/** `remove_emojis`: drop chars in the kernel's explicit emoji codepoint set.
+ * `u` flag so astral ranges match per-codepoint (mirrors Rust `is_emoji`). */
+function removeEmojisTs(s: string): string {
+  return s.replace(
+    /[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2702}-\u{27B0}\u{24C2}-\u{1F251}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}\u{2600}-\u{26FF}\u{200D}\u{FE0F}]/gu,
+    "",
+  );
+}
+
+/** `extract_numbers`: all `[0-9]+\.?[0-9]*` runs joined by single spaces
+ * (ASCII digits only; no-match -> ""). */
+function extractNumbersTs(s: string): string {
+  const nums = [...s.matchAll(/[0-9]+\.?[0-9]*/g)].map((m) => m[0]);
+  return nums.join(" ");
+}
+
+/** `truncate`: first `n` characters (codepoint-based, Rust `chars().take(n)`). */
+function truncateTs(s: string, n: number): string {
+  return [...s].slice(0, n).join("");
+}
+
+/** `pad_left`: left-pad to `width` codepoints with `pad`; unchanged when the
+ * string is already at/over `width` (Rust `pad_start`). */
+function padLeftTs(s: string, width: number, pad: string): string {
+  const len = [...s].length;
+  if (len >= width) return s;
+  return pad.repeat(width - len) + s;
+}
+
+/** `pad_right`: right-pad to `width` codepoints with `pad`; unchanged when the
+ * string is already at/over `width` (Rust `pad_end`). */
+function padRightTs(s: string, width: number, pad: string): string {
+  const len = [...s].length;
+  if (len >= width) return s;
+  return s + pad.repeat(width - len);
+}
+
+// ---------------------------------------------------------------------------
 // strip (priority 90, auto_apply, string)
 // ---------------------------------------------------------------------------
 
 function strip(values: readonly ColumnValue[]): ColumnValue[] {
-  return mapStrings(values, (s) => s.trim());
+  const backend = getFlowWasmBackend();
+  const fn = backend ? (s: string) => backend.strip(s) : stripTs;
+  return mapStrings(values, fn);
 }
 
 registerTransform(
@@ -34,7 +152,7 @@ registerTransform(
 );
 
 // ---------------------------------------------------------------------------
-// lowercase (50, string)
+// lowercase (50, string) -- text-2, pure-TS
 // ---------------------------------------------------------------------------
 
 function lowercase(values: readonly ColumnValue[]): ColumnValue[] {
@@ -47,7 +165,7 @@ registerTransform(
 );
 
 // ---------------------------------------------------------------------------
-// uppercase (50, string)
+// uppercase (50, string) -- text-2, pure-TS
 // ---------------------------------------------------------------------------
 
 function uppercase(values: readonly ColumnValue[]): ColumnValue[] {
@@ -60,7 +178,7 @@ registerTransform(
 );
 
 // ---------------------------------------------------------------------------
-// title_case (50, string)
+// title_case (50, string) -- text-2, pure-TS
 // ---------------------------------------------------------------------------
 
 function titleCase(values: readonly ColumnValue[]): ColumnValue[] {
@@ -75,7 +193,7 @@ registerTransform(
 );
 
 // ---------------------------------------------------------------------------
-// normalize_unicode (85, auto_apply, string)
+// normalize_unicode (85, auto_apply, string) -- text-2, pure-TS
 // ---------------------------------------------------------------------------
 
 function normalizeUnicode(values: readonly ColumnValue[]): ColumnValue[] {
@@ -94,7 +212,9 @@ registerTransform(
 // ---------------------------------------------------------------------------
 
 function removePunctuation(values: readonly ColumnValue[]): ColumnValue[] {
-  return mapStrings(values, (s) => s.replace(/[^\w\s]/g, ""));
+  const backend = getFlowWasmBackend();
+  const fn = backend ? (s: string) => backend.removePunctuation(s) : removePunctuationTs;
+  return mapStrings(values, fn);
 }
 
 registerTransform(
@@ -107,7 +227,9 @@ registerTransform(
 // ---------------------------------------------------------------------------
 
 function collapseWhitespace(values: readonly ColumnValue[]): ColumnValue[] {
-  return mapStrings(values, (s) => s.replace(/\s+/g, " ").trim());
+  const backend = getFlowWasmBackend();
+  const fn = backend ? (s: string) => backend.collapseWhitespace(s) : collapseWhitespaceTs;
+  return mapStrings(values, fn);
 }
 
 registerTransform(
@@ -121,7 +243,11 @@ registerTransform(
 
 function truncate(values: readonly ColumnValue[], n: unknown = 255): ColumnValue[] {
   const maxLen = typeof n === "number" ? n : Number(n) || 255;
-  return mapStrings(values, (s) => s.slice(0, maxLen));
+  const backend = getFlowWasmBackend();
+  const fn = backend
+    ? (s: string) => backend.truncate(s, maxLen)
+    : (s: string) => truncateTs(s, maxLen);
+  return mapStrings(values, fn);
 }
 
 registerTransform(
@@ -134,11 +260,9 @@ registerTransform(
 // ---------------------------------------------------------------------------
 
 function normalizeQuotes(values: readonly ColumnValue[]): ColumnValue[] {
-  return mapStrings(values, (s) =>
-    s
-      .replace(/[\u2018\u2019\u201A\u201B]/g, "'")
-      .replace(/[\u201C\u201D\u201E\u201F]/g, '"'),
-  );
+  const backend = getFlowWasmBackend();
+  const fn = backend ? (s: string) => backend.normalizeQuotes(s) : normalizeQuotesTs;
+  return mapStrings(values, fn);
 }
 
 registerTransform(
@@ -151,20 +275,9 @@ registerTransform(
 // ---------------------------------------------------------------------------
 
 function removeHtmlTags(values: readonly ColumnValue[]): ColumnValue[] {
-  return mapStrings(values, (s) => {
-    // Single-pass `<[^>]*>` removal lets nested-tag payloads like
-    // `<<script>script>` collapse to `<script>` after one rewrite.
-    // Loop until the output stabilises so the transform is idempotent
-    // against adversarial input. Bounded by string length -- each pass
-    // strictly shrinks the input (or matches zero, ending the loop).
-    let prev: string;
-    let out = s;
-    do {
-      prev = out;
-      out = out.replace(/<[^>]*>/g, "");
-    } while (out !== prev);
-    return out;
-  });
+  const backend = getFlowWasmBackend();
+  const fn = backend ? (s: string) => backend.removeHtmlTags(s) : removeHtmlTagsTs;
+  return mapStrings(values, fn);
 }
 
 registerTransform(
@@ -177,9 +290,9 @@ registerTransform(
 // ---------------------------------------------------------------------------
 
 function removeUrls(values: readonly ColumnValue[]): ColumnValue[] {
-  return mapStrings(values, (s) =>
-    s.replace(/https?:\/\/[^\s]+/g, "").trim(),
-  );
+  const backend = getFlowWasmBackend();
+  const fn = backend ? (s: string) => backend.removeUrls(s) : removeUrlsTs;
+  return mapStrings(values, fn);
 }
 
 registerTransform(
@@ -192,7 +305,9 @@ registerTransform(
 // ---------------------------------------------------------------------------
 
 function removeDigits(values: readonly ColumnValue[]): ColumnValue[] {
-  return mapStrings(values, (s) => s.replace(/\d/g, ""));
+  const backend = getFlowWasmBackend();
+  const fn = backend ? (s: string) => backend.removeDigits(s) : removeDigitsTs;
+  return mapStrings(values, fn);
 }
 
 registerTransform(
@@ -211,7 +326,11 @@ function padLeft(
 ): ColumnValue[] {
   const w = typeof width === "number" ? width : Number(width) || 10;
   const c = typeof char === "string" ? char : "0";
-  return mapStrings(values, (s) => s.padStart(w, c));
+  const backend = getFlowWasmBackend();
+  const fn = backend
+    ? (s: string) => backend.padLeft(s, w, c)
+    : (s: string) => padLeftTs(s, w, c);
+  return mapStrings(values, fn);
 }
 
 registerTransform(
@@ -230,7 +349,11 @@ function padRight(
 ): ColumnValue[] {
   const w = typeof width === "number" ? width : Number(width) || 10;
   const c = typeof char === "string" ? char : " ";
-  return mapStrings(values, (s) => s.padEnd(w, c));
+  const backend = getFlowWasmBackend();
+  const fn = backend
+    ? (s: string) => backend.padRight(s, w, c)
+    : (s: string) => padRightTs(s, w, c);
+  return mapStrings(values, fn);
 }
 
 registerTransform(
@@ -243,11 +366,9 @@ registerTransform(
 // ---------------------------------------------------------------------------
 
 function removeEmojis(values: readonly ColumnValue[]): ColumnValue[] {
-  // Covers common emoji Unicode ranges including emoticons, symbols, dingbats,
-  // supplemental symbols, flags, and extended pictographic.
-  const emojiPattern =
-    /[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{FE00}-\u{FE0F}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}\u{200D}\u{20E3}\u{E0020}-\u{E007F}]/gu;
-  return mapStrings(values, (s) => s.replace(emojiPattern, ""));
+  const backend = getFlowWasmBackend();
+  const fn = backend ? (s: string) => backend.removeEmojis(s) : removeEmojisTs;
+  return mapStrings(values, fn);
 }
 
 registerTransform(
@@ -256,7 +377,7 @@ registerTransform(
 );
 
 // ---------------------------------------------------------------------------
-// fix_mojibake (86, string)
+// fix_mojibake (86, string) -- text-2, pure-TS
 // ---------------------------------------------------------------------------
 
 function fixMojibake(values: readonly ColumnValue[]): ColumnValue[] {
@@ -264,7 +385,6 @@ function fixMojibake(values: readonly ColumnValue[]): ColumnValue[] {
     try {
       // Attempt latin1 -> utf8 re-encoding: encode string bytes as latin1,
       // then decode as UTF-8. If the result is valid and different, use it.
-      const encoder = new TextEncoder();
       const bytes = new Uint8Array(s.length);
       for (let i = 0; i < s.length; i++) {
         const code = s.charCodeAt(i);
@@ -290,7 +410,9 @@ registerTransform(
 // ---------------------------------------------------------------------------
 
 function normalizeLineEndings(values: readonly ColumnValue[]): ColumnValue[] {
-  return mapStrings(values, (s) => s.replace(/\r\n/g, "\n").replace(/\r/g, "\n"));
+  const backend = getFlowWasmBackend();
+  const fn = backend ? (s: string) => backend.normalizeLineEndings(s) : normalizeLineEndingsTs;
+  return mapStrings(values, fn);
 }
 
 registerTransform(
@@ -303,13 +425,35 @@ registerTransform(
 // ---------------------------------------------------------------------------
 
 function extractNumbers(values: readonly ColumnValue[]): ColumnValue[] {
-  return mapStrings(values, (s) => {
-    const nums = s.match(/-?\d+(?:\.\d+)?/g);
-    return nums ? nums.join(" ") : "";
-  });
+  const backend = getFlowWasmBackend();
+  const fn = backend ? (s: string) => backend.extractNumbers(s) : extractNumbersTs;
+  return mapStrings(values, fn);
 }
 
 registerTransform(
   { name: "extract_numbers", inputTypes: ["string"], priority: 30, mode: "series" },
   extractNumbers,
 );
+
+// ---------------------------------------------------------------------------
+// Pure-TS single-value exports (cross-surface byte-parity harness)
+//
+// Bypass the wasm-dispatch wrappers above so a parity test can assert the
+// pure-TS path independently of whatever backend is currently registered.
+// ---------------------------------------------------------------------------
+
+export {
+  stripTs,
+  collapseWhitespaceTs,
+  normalizeQuotesTs,
+  normalizeLineEndingsTs,
+  removeHtmlTagsTs,
+  removeUrlsTs,
+  removeDigitsTs,
+  removePunctuationTs,
+  removeEmojisTs,
+  extractNumbersTs,
+  truncateTs,
+  padLeftTs,
+  padRightTs,
+};
