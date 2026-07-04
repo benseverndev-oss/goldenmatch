@@ -1,0 +1,23 @@
+# Standalone `[workspace]` (empty) so this pyo3-free core can be a path dependency
+# of BOTH the future goldenpipe native ext AND goldenpipe-wasm without either
+# workspace claiming it — same isolation rationale as score-core / goldenflow-core.
+# No rust-toolchain.toml: inherits each parent crate's toolchain when built as a path dep.
+[workspace]
+
+[package]
+name = "goldenpipe-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Ben Severn <benzsevern@gmail.com>"]
+description = "Owned reference planner kernel for GoldenPipe (resolve/router/decisions/auto_config), pyo3-free, shared across the native ext + WASM. One source of truth."
+
+[lib]
+name = "goldenpipe_core"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+# preserve_order => serde_json::Map is an insertion-ordered IndexMap, so passthrough
+# `config` maps echo in the SAME order Python json.dumps / JS JSON.stringify emit
+# (the cross-surface byte-parity requirement).
+serde_json = { version = "1", features = ["preserve_order"] }
