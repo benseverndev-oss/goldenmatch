@@ -8,12 +8,22 @@
 import type { PipelineConfig, Stage, StageSpec } from "../models.js";
 import { makeStageSpec } from "../models.js";
 import type { StageRegistry } from "./registry.js";
+import { getPipeWasmBackend } from "../wasm/backend.js";
+import { resolveViaWasm } from "../wasm/plannerJson.js";
 
 /** Raised when a stage's `consumes` can't be satisfied by prior `produces`. */
 export class WiringError extends Error {
-  constructor(message: string) {
+  stage?: string;
+  missing?: string;
+  available?: string[];
+  constructor(message: string, extra?: { stage: string; missing: string; available: string[] }) {
     super(message);
     this.name = "WiringError";
+    if (extra) {
+      this.stage = extra.stage;
+      this.missing = extra.missing;
+      this.available = extra.available;
+    }
   }
 }
 
@@ -28,13 +38,13 @@ export interface ExecutionPlan {
   stages: PlannedStage[];
 }
 
-export const Resolver = {
-  /**
-   * Resolve a config + registry into an ordered ExecutionPlan. Auto-prepends
-   * the built-in `load` stage when available and validates that every stage's
-   * `consumes` is produced by an earlier stage.
-   */
-  resolve(config: PipelineConfig, registry: StageRegistry): ExecutionPlan {
+/**
+ * Pure-TS core of {@link Resolver.resolve}. Holds the original resolution body,
+ * guard-free, so the JSON parity shim (plannerJsonPure) can call it without ever
+ * re-entering the WASM reroute guard (no recursion).
+ */
+export function resolvePure(config: PipelineConfig, registry: StageRegistry): ExecutionPlan {
+  {
     const plan: ExecutionPlan = { stages: [] };
     const availableArtifacts = new Set<string>();
 
@@ -62,6 +72,7 @@ export const Resolver = {
           throw new WiringError(
             `Stage '${name}' consumes '${dep}' but no prior stage produces it. ` +
               `Available: ${[...availableArtifacts].sort().join(", ")}`,
+            { stage: name, missing: dep, available: [...availableArtifacts].sort() },
           );
         }
       }
@@ -71,5 +82,21 @@ export const Resolver = {
     }
 
     return plan;
+  }
+}
+
+export const Resolver = {
+  /**
+   * Resolve a config + registry into an ordered ExecutionPlan. Auto-prepends
+   * the built-in `load` stage when available and validates that every stage's
+   * `consumes` is produced by an earlier stage.
+   *
+   * Routes through the registered WASM planner backend when one is enabled;
+   * otherwise runs the pure-TS core.
+   */
+  resolve(config: PipelineConfig, registry: StageRegistry): ExecutionPlan {
+    const b = getPipeWasmBackend();
+    if (b) return resolveViaWasm(config, registry, b);
+    return resolvePure(config, registry);
   },
 };

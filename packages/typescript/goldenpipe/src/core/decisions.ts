@@ -15,6 +15,8 @@
 
 import type { Decision, PipeContext } from "./models.js";
 import { makeDecision } from "./models.js";
+import { getPipeWasmBackend } from "./wasm/backend.js";
+import { evaluateBuiltinViaWasm } from "./wasm/plannerJson.js";
 
 interface NormalizedFinding {
   severity?: unknown;
@@ -27,8 +29,16 @@ function findingsOf(ctx: PipeContext): NormalizedFinding[] | null {
   return findings as NormalizedFinding[];
 }
 
+// ---------------------------------------------------------------------------
+// Guarded-public / pure-core split. The exported gate names (severityGate /
+// piiRouter / rowCountGate) stay stable for external consumers and route
+// through the WASM planner backend when one is registered; the `*Pure` cores
+// hold the original bodies and are called guard-free by plannerJsonPure (no
+// recursion).
+// ---------------------------------------------------------------------------
+
 /** Abort the pipeline if any finding has `critical` severity. */
-export function severityGate(ctx: PipeContext): Decision | null {
+export function severityGatePure(ctx: PipeContext): Decision | null {
   const findings = findingsOf(ctx);
   if (!findings) return null;
 
@@ -39,8 +49,14 @@ export function severityGate(ctx: PipeContext): Decision | null {
   return null;
 }
 
+export function severityGate(ctx: PipeContext): Decision | null {
+  const b = getPipeWasmBackend();
+  if (b) return evaluateBuiltinViaWasm("severity_gate", ctx, b);
+  return severityGatePure(ctx);
+}
+
 /** Route to PPRL matching if PII is detected. */
-export function piiRouter(ctx: PipeContext): Decision | null {
+export function piiRouterPure(ctx: PipeContext): Decision | null {
   const findings = findingsOf(ctx);
   if (!findings) return null;
 
@@ -55,8 +71,14 @@ export function piiRouter(ctx: PipeContext): Decision | null {
   return null;
 }
 
+export function piiRouter(ctx: PipeContext): Decision | null {
+  const b = getPipeWasmBackend();
+  if (b) return evaluateBuiltinViaWasm("pii_router", ctx, b);
+  return piiRouterPure(ctx);
+}
+
 /** Skip matching if fewer than 2 rows. */
-export function rowCountGate(ctx: PipeContext): Decision | null {
+export function rowCountGatePure(ctx: PipeContext): Decision | null {
   const rowCount =
     typeof ctx.metadata["input_rows"] === "number" ? (ctx.metadata["input_rows"] as number) : 0;
   if (rowCount < 2) {
@@ -66,4 +88,10 @@ export function rowCountGate(ctx: PipeContext): Decision | null {
     });
   }
   return null;
+}
+
+export function rowCountGate(ctx: PipeContext): Decision | null {
+  const b = getPipeWasmBackend();
+  if (b) return evaluateBuiltinViaWasm("row_count_gate", ctx, b);
+  return rowCountGatePure(ctx);
 }

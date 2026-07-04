@@ -74,3 +74,8 @@ export {
 // Pipeline
 export { Pipeline, runDf, runStages } from "./pipeline.js";
 export type { PipelineOptions } from "./pipeline.js";
+
+// Opt-in WASM planner backend (goldenpipe-core compiled to wasm). Pure-TS is the
+// default + permanent fallback. Mirrors goldenflow's public enableWasm surface.
+export { enableWasm, disableWasm, isWasmEnabled } from "./wasm/index.js";
+export type { PipeWasmBackend, EnableWasmOptions } from "./wasm/index.js";
