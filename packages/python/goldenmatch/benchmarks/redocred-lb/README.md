@@ -48,8 +48,10 @@ Per-epoch dev/test F1 + Ign F1 are logged and the best-dev-Ign checkpoint's metr
 | milestone | test F1 | test Ign F1 |
 |---|--:|--:|
 | ATLOP RoBERTa-large / DeBERTa-v3-large single (reproduction) | 0.776 / 0.780 | 0.770 / 0.773 |
-| DREEAM (prior published leaderboard peak) | ~0.7966 | — |
+| KnowRA (IJCAI 2025, current published single-model SOTA) | ~0.804 | — |
 | **4-checkpoint ensemble + dev-tuned threshold** | **0.820** | **0.810** |
+
+Honest read: as a **single model** we're at ATLOP level (~0.78, *below* KnowRA's ~0.804); the 0.820 is a **tuned ensemble** beating the published number on the measured metric, not a better single-model method. See `RESULTS.md`.
 
 The ensemble/threshold search runs offline (no GPU) from the dumped logits:
 `modal volume get redocred-lb /logits ./logits && python ensemble_sweep.py --logits ./logits`.

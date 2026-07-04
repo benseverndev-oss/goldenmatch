@@ -34,12 +34,16 @@ reporting on **test**. The honest tuning spectrum:
 | **4-model ensemble + dev-tuned threshold (δ=3.1)** | **0.8198** | **0.8101** | 0.851 | 0.791 |
 | + dev-selected subset / top-k | 0.8210 | 0.8109 | 0.844 | 0.799 |
 
-**0.820 F1 / 0.810 Ign F1 — above DREEAM's ~0.7966, the published Re-DocRED single-model peak.**
+**0.820 F1 / 0.810 Ign F1 — above the current published single-model SOTA (KnowRA ~80.4 F1).**
 
-_Reference points (Re-DocRED test, from the literature):_
-_• ATLOP (the architecture here), published: ~76.9–77.5 F1 — the single models above reproduce it._
-_• DREEAM (ATLOP + evidence + self-training): ~**79.66** F1 — the prior leaderboard peak._
+_Reference points (Re-DocRED **test**, from the literature, verified July 2026):_
+_• ATLOP (the architecture here), published: **77.48** F1 / 76.85 Ign — the single models above reproduce it (0.776–0.780)._
+_• DREEAM (ATLOP + evidence + self-training): ~79 F1._
+_• JMRL-DREEAM: ~**80.13** F1._
+_• **KnowRA (IJCAI 2025, current #1): ~80.42 F1**._
 _• Frozen zero-shot GPT-4 / GPT-5: ~15.6 / ~28 F1 (see the `../clear-kg` extraction track)._
+
+**Honest standing vs. the leaderboard.** As a **single model** we are at ATLOP level (~0.78) — i.e. **~2.4 F1 BELOW** KnowRA's 80.42, not a win. Our 0.820 exceeds the published SOTA only as a **4-checkpoint ensemble + a dev-tuned global threshold** — both legitimate and standard, but knobs the published single-model entries don't turn (apply the same to KnowRA and it would likely stay ahead). So: **above SOTA on the measured test number, via ensembling + calibration; not a better single-model method.**
 
 ### Why the number is trustworthy (and what it is / isn't)
 
