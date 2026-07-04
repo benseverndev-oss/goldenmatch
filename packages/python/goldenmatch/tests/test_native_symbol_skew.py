@@ -15,7 +15,6 @@ assert every guarded call site falls back (correct result, no crash).
 import types
 
 import pytest
-
 from goldenmatch.core import _native_loader
 from goldenmatch.core import cluster as cluster_mod
 from goldenmatch.core import pairs as pairs_mod
