@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.9.0 (2026-07-04)
+
+Wave D (names-remainder): the eight remaining `name` transforms are now backed by owned Rust kernels in `goldenflow-core` (native + WASM/TS + pure-Python fallback), Rust is the reference implementation. This wave migrated existing transforms to the owned-kernel pattern; it did not add new transforms (count unchanged).
+
+- Migrated: `strip_titles`, `strip_suffixes`, `name_proper`, `nickname_standardize`, `initial_expand` (its middle-initial flag predicate `has_initial`), `split_name`, `split_name_reverse`, `merge_name`.
+- New kernel shapes: `split_name`/`split_name_reverse` are multi-output (one column in, `first_name`+`last_name` out — a pair of Arrow arrays natively); `merge_name` is multi-input (`first_name`+`last_name` in, `full_name` out). These don't fit the string->scalar parity corpus and are covered by pinned-vector tests instead.
+- **Behavior change (reference-mode, resolved in Rust's favor):** `name_proper`'s title-casing is bounded to ASCII semantics; `strip_titles`/`strip_suffixes` moved from a vectorized Polars regex to native-first dispatch (the pure-Python fallback runs per-row when the native wheel is absent). Outputs are unchanged for well-formed ASCII inputs.
+
 ## 1.8.0 (2026-07-04)
 
 Wave D (sweep, part 1): the url, numeric, and categorical transform families are now backed by owned Rust kernels in `goldenflow-core` (native + WASM/TS + pure-Python fallback), Rust is the reference implementation.

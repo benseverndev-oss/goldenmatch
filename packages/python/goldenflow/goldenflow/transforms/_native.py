@@ -376,6 +376,105 @@ def name_script_native() -> Callable[[pl.Series], pl.Series] | None:
     return _name_kernel_runner("name_script", "name_script_arrow")
 
 
+def _names_ext_kernel_runner(attr: str) -> Callable[[pl.Series], pl.Series] | None:
+    """Build a whole-series runner for a names-remainder kernel function
+    ``attr`` (strip_titles/strip_suffixes/name_proper/nickname_standardize/
+    has_initial) if native ``names_ext`` is enabled and importable; else
+    ``None``. Single string array in, one array out (str or bool)."""
+    if not native_enabled("names_ext"):
+        return None
+    nm = native_module()
+    if nm is None or not hasattr(nm, attr):
+        return None
+    try:
+        import pyarrow  # noqa: F401  (zero-copy bridge)
+    except ImportError:
+        return None
+    func = getattr(nm, attr)
+
+    def run(s: pl.Series) -> pl.Series:
+        return pl.from_arrow(func(_as_str_series(s).to_arrow()))
+
+    return run
+
+
+def strip_titles_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _names_ext_kernel_runner("strip_titles_arrow")
+
+
+def strip_suffixes_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _names_ext_kernel_runner("strip_suffixes_arrow")
+
+
+def name_proper_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _names_ext_kernel_runner("name_proper_arrow")
+
+
+def nickname_standardize_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _names_ext_kernel_runner("nickname_standardize_arrow")
+
+
+def has_initial_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _names_ext_kernel_runner("has_initial_arrow")
+
+
+def _split_name_runner(
+    attr: str,
+) -> Callable[[pl.Series], tuple[pl.Series, pl.Series]] | None:
+    """Build a runner for the multi-output split kernels (split_name /
+    split_name_reverse): one string array in, a PAIR of arrays (first, last)
+    out. ``None`` when native ``names_ext`` is off or unbuilt."""
+    if not native_enabled("names_ext"):
+        return None
+    nm = native_module()
+    if nm is None or not hasattr(nm, attr):
+        return None
+    try:
+        import pyarrow  # noqa: F401  (zero-copy bridge)
+    except ImportError:
+        return None
+    func = getattr(nm, attr)
+
+    def run(s: pl.Series) -> tuple[pl.Series, pl.Series]:
+        first_arr, last_arr = func(_as_str_series(s).to_arrow())
+        return pl.from_arrow(first_arr), pl.from_arrow(last_arr)
+
+    return run
+
+
+def split_name_native() -> Callable[[pl.Series], tuple[pl.Series, pl.Series]] | None:
+    return _split_name_runner("split_name_arrow")
+
+
+def split_name_reverse_native() -> (
+    Callable[[pl.Series], tuple[pl.Series, pl.Series]] | None
+):
+    return _split_name_runner("split_name_reverse_arrow")
+
+
+def merge_name_native() -> Callable[[pl.Series, pl.Series], pl.Series] | None:
+    """Build a runner for merge_name: TWO string arrays (first, last) in, one
+    ``full_name`` array out. ``None`` when native ``names_ext`` is off/unbuilt."""
+    if not native_enabled("names_ext"):
+        return None
+    nm = native_module()
+    attr = "merge_name_arrow"
+    if nm is None or not hasattr(nm, attr):
+        return None
+    try:
+        import pyarrow  # noqa: F401  (zero-copy bridge)
+    except ImportError:
+        return None
+    func = getattr(nm, attr)
+
+    def run(first: pl.Series, last: pl.Series) -> pl.Series:
+        return pl.from_arrow(
+            func(_as_str_series(first).to_arrow(), _as_str_series(last).to_arrow())
+        )
+
+    return run
+
+
 def _email_kernel_runner(attr: str) -> Callable[[pl.Series], pl.Series] | None:
     """Build a whole-series runner for email kernel function ``attr`` if
     native ``email`` is enabled and the dependencies are importable; else

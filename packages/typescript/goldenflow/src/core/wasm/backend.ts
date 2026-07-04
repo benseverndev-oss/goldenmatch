@@ -40,6 +40,14 @@ export interface FlowWasmBackend {
   imeiValidate(s: string): boolean;
   nameTransliterate(s: string): string;
   nameScript(s: string): string;
+  stripTitles(s: string): string;
+  stripSuffixes(s: string): string;
+  nameProper(s: string): string;
+  nicknameStandardize(s: string): string;
+  hasInitial(s: string): boolean;
+  splitName(s: string): string[];
+  splitNameReverse(s: string): string[];
+  mergeName(first: string | null, last: string | null): string | undefined;
   emailLowercase(s: string): string;
   emailNormalize(s: string): string;
   emailExtractDomain(s: string): string | undefined;

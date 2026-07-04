@@ -50,6 +50,62 @@ where
     Ok(builder.finish().into_data())
 }
 
+/// Apply `f` over each non-null string element, producing a PAIR of outputs
+/// (e.g. `split_name` -> first + last). A null input emits a null in BOTH output
+/// arrays; a non-null input emits both halves of `f`'s `(String, String)`
+/// (either half may be empty, but never null on a present row -- matching the
+/// Python transforms, which only null a row when the input is null).
+pub fn map_str_to_str_pair<F>(py: Python, data: ArrayData, f: F) -> PyResult<(ArrayData, ArrayData)>
+where
+    F: Fn(&str) -> (String, String) + Sync,
+{
+    let len = make_array(data.clone()).len();
+    let mut a = StringBuilder::with_capacity(len, len * 8);
+    let mut b = StringBuilder::with_capacity(len, len * 8);
+    py.detach(|| -> PyResult<()> {
+        for_each_str(&data, |_, v| match v {
+            Some(s) => {
+                let (x, y) = f(s);
+                a.append_value(x);
+                b.append_value(y);
+            }
+            None => {
+                a.append_null();
+                b.append_null();
+            }
+        })
+    })?;
+    Ok((a.finish().into_data(), b.finish().into_data()))
+}
+
+/// Apply `f` over two string arrays element-wise, producing one output (e.g.
+/// `merge_name(first, last) -> full`). `f` sees each side's null-ness (it may
+/// combine one present + one null side), and returns `None` to emit a null.
+/// Values are collected first (arrays may be StringArray or LargeStringArray),
+/// then combined with the GIL released.
+pub fn zip_str_to_str<F>(py: Python, first: ArrayData, last: ArrayData, f: F) -> PyResult<ArrayData>
+where
+    F: Fn(Option<&str>, Option<&str>) -> Option<String> + Sync,
+{
+    let mut av: Vec<Option<String>> = Vec::new();
+    for_each_str(&first, |_, v| av.push(v.map(|s| s.to_string())))?;
+    let mut bv: Vec<Option<String>> = Vec::new();
+    for_each_str(&last, |_, v| bv.push(v.map(|s| s.to_string())))?;
+    let len = av.len();
+    let mut builder = StringBuilder::with_capacity(len, len * 12);
+    py.detach(|| {
+        for (i, a_opt) in av.iter().enumerate() {
+            let a = a_opt.as_deref();
+            let b = bv.get(i).and_then(|o| o.as_deref());
+            match f(a, b) {
+                Some(out) => builder.append_value(out),
+                None => builder.append_null(),
+            }
+        }
+    });
+    Ok(builder.finish().into_data())
+}
+
 pub fn map_str_to_i64<F>(py: Python, data: ArrayData, f: F) -> PyResult<ArrayData>
 where
     F: Fn(&str) -> Option<i64> + Sync,

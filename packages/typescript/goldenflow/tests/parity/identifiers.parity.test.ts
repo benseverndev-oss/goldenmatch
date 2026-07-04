@@ -36,7 +36,15 @@ import {
   abaValidateTs,
   imeiValidateTs,
 } from "../../src/core/transforms/identifiers.js";
-import { nameTransliterateTs, nameScriptTs } from "../../src/core/transforms/names.js";
+import {
+  nameTransliterateTs,
+  nameScriptTs,
+  stripTitlesTs,
+  stripSuffixesTs,
+  nameProperTs,
+  nicknameStandardizeTs,
+  hasInitialTs,
+} from "../../src/core/transforms/names.js";
 import {
   emailLowercaseTs,
   emailNormalizeTs,
@@ -93,6 +101,11 @@ const PURE_TS_FN: Record<string, (s: string) => boolean | string | number | unde
   imei_validate: imeiValidateTs,
   name_transliterate: nameTransliterateTs,
   name_script: nameScriptTs,
+  strip_titles: stripTitlesTs,
+  strip_suffixes: stripSuffixesTs,
+  name_proper: nameProperTs,
+  nickname_standardize: nicknameStandardizeTs,
+  has_initial: hasInitialTs,
   email_lowercase: emailLowercaseTs,
   email_normalize: emailNormalizeTs,
   email_extract_domain: emailExtractDomainTs,
@@ -131,6 +144,11 @@ function wasmFn(backend: FlowWasmBackend, transform: string): (s: string) => boo
     imei_validate: (s) => backend.imeiValidate(s),
     name_transliterate: (s) => backend.nameTransliterate(s),
     name_script: (s) => backend.nameScript(s),
+    strip_titles: (s) => backend.stripTitles(s),
+    strip_suffixes: (s) => backend.stripSuffixes(s),
+    name_proper: (s) => backend.nameProper(s),
+    nickname_standardize: (s) => backend.nicknameStandardize(s),
+    has_initial: (s) => backend.hasInitial(s),
     email_lowercase: (s) => backend.emailLowercase(s),
     email_normalize: (s) => backend.emailNormalize(s),
     email_extract_domain: (s) => backend.emailExtractDomain(s),
