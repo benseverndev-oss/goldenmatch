@@ -94,6 +94,7 @@ export function sketch_band_hashes(text: string, mode: string, k: number, num_pe
 export function sketch_band_hashes_batch(texts: string[], mode: string, k: number, num_perms: number, num_bands: number, seed: bigint): BigUint64Array;
 export function estimate_jaccard(sig_a: BigUint64Array, sig_b: BigUint64Array): number;
 export function optimal_bands(num_perms: number, threshold: number): Uint32Array;
+export function simhash_signature(vector: Float64Array, num_planes: number, seed: bigint): Uint8Array;
 export type SyncInitInput = BufferSource | WebAssembly.Module;
 export function initSync(
   module: { module: SyncInitInput } | SyncInitInput,

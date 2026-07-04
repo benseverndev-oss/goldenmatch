@@ -18,7 +18,7 @@
 use goldenmatch_sketch_core::{
     band_hashes as core_band_hashes, base_hash as core_base_hash, estimate_jaccard as core_jaccard,
     optimal_bands as core_optimal_bands, shingle as core_shingle, signature as core_signature,
-    ShingleMode,
+    simhash_signature as core_simhash_signature, ShingleMode,
 };
 use wasm_bindgen::prelude::*;
 
@@ -122,4 +122,18 @@ pub fn estimate_jaccard(sig_a: &[u64], sig_b: &[u64]) -> f64 {
 pub fn optimal_bands(num_perms: usize, threshold: f64) -> Vec<u32> {
     let (bands, rows) = core_optimal_bands(num_perms, threshold);
     vec![bands as u32, rows as u32]
+}
+
+/// SimHash signature: one 0/1 byte per random hyperplane (project a dense
+/// embedding through the seeded Rademacher matrix, take the sign of each dot).
+/// This is the expensive, divergence-prone half of the semantic sketch — the
+/// projection bitstream + dot products — run in the shared kernel so it is
+/// byte-identical to the Python reference and the Rust core. The banding step
+/// (`simhash_band_hashes`) stays pure-TS: it is a cheap `base_hash` over tiny
+/// per-band buffers and is already golden-verified (mirrors the MinHash split,
+/// where `band_hashes` also stays pure-TS). `vector` crosses as a `Float64Array`
+/// and the 0/1 signature returns as a `Uint8Array`.
+#[wasm_bindgen]
+pub fn simhash_signature(vector: &[f64], num_planes: usize, seed: u64) -> Vec<u8> {
+    core_simhash_signature(vector, num_planes, seed)
 }

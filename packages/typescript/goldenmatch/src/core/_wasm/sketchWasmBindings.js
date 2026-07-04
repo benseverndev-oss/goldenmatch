@@ -103,6 +103,30 @@ export function signature(shingles, num_perms, seed) {
 }
 
 /**
+ * SimHash signature: one 0/1 byte per random hyperplane (project a dense
+ * embedding through the seeded Rademacher matrix, take the sign of each dot).
+ * This is the expensive, divergence-prone half of the semantic sketch — the
+ * projection bitstream + dot products — run in the shared kernel so it is
+ * byte-identical to the Python reference and the Rust core. The banding step
+ * (`simhash_band_hashes`) stays pure-TS: it is a cheap `base_hash` over tiny
+ * per-band buffers and is already golden-verified (mirrors the MinHash split,
+ * where `band_hashes` also stays pure-TS). `vector` crosses as a `Float64Array`
+ * and the 0/1 signature returns as a `Uint8Array`.
+ * @param {Float64Array} vector
+ * @param {number} num_planes
+ * @param {bigint} seed
+ * @returns {Uint8Array}
+ */
+export function simhash_signature(vector, num_planes, seed) {
+    const ptr0 = passArrayF64ToWasm0(vector, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.simhash_signature(ptr0, len0, num_planes, seed);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
  * End-to-end for one record: shingle -> MinHash signature -> band hashes.
  * Returns one bucket hash per band (`num_bands` values).
  * @param {string} text
@@ -203,6 +227,11 @@ function getArrayU64FromWasm0(ptr, len) {
     return getBigUint64ArrayMemory0().subarray(ptr / 8, ptr / 8 + len);
 }
 
+function getArrayU8FromWasm0(ptr, len) {
+    ptr = ptr >>> 0;
+    return getUint8ArrayMemory0().subarray(ptr / 1, ptr / 1 + len);
+}
+
 let cachedBigUint64ArrayMemory0 = null;
 function getBigUint64ArrayMemory0() {
     if (cachedBigUint64ArrayMemory0 === null || cachedBigUint64ArrayMemory0.byteLength === 0) {
@@ -217,6 +246,14 @@ function getDataViewMemory0() {
         cachedDataViewMemory0 = new DataView(wasm.memory.buffer);
     }
     return cachedDataViewMemory0;
+}
+
+let cachedFloat64ArrayMemory0 = null;
+function getFloat64ArrayMemory0() {
+    if (cachedFloat64ArrayMemory0 === null || cachedFloat64ArrayMemory0.byteLength === 0) {
+        cachedFloat64ArrayMemory0 = new Float64Array(wasm.memory.buffer);
+    }
+    return cachedFloat64ArrayMemory0;
 }
 
 function getStringFromWasm0(ptr, len) {
@@ -253,6 +290,13 @@ function passArray64ToWasm0(arg, malloc) {
 function passArray8ToWasm0(arg, malloc) {
     const ptr = malloc(arg.length * 1, 1) >>> 0;
     getUint8ArrayMemory0().set(arg, ptr / 1);
+    WASM_VECTOR_LEN = arg.length;
+    return ptr;
+}
+
+function passArrayF64ToWasm0(arg, malloc) {
+    const ptr = malloc(arg.length * 8, 8) >>> 0;
+    getFloat64ArrayMemory0().set(arg, ptr / 8);
     WASM_VECTOR_LEN = arg.length;
     return ptr;
 }
@@ -346,6 +390,7 @@ function __wbg_finalize_init(instance, module) {
     wasmModule = module;
     cachedBigUint64ArrayMemory0 = null;
     cachedDataViewMemory0 = null;
+    cachedFloat64ArrayMemory0 = null;
     cachedUint32ArrayMemory0 = null;
     cachedUint8ArrayMemory0 = null;
     wasm.__wbindgen_start();
