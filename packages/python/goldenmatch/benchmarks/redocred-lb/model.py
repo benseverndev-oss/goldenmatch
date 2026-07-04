@@ -9,10 +9,9 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
-from opt_einsum import contract
-
 from long_input import process_long_input
 from losses import ATLoss
+from opt_einsum import contract
 
 
 class DocREModel(nn.Module):

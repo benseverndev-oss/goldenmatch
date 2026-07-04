@@ -62,10 +62,9 @@ def smoke() -> dict:
 
     sys.path.insert(0, "/root/rdlb")
     import torch
-    from transformers import AutoConfig, AutoModel, AutoTokenizer
-
     from model import DocREModel, make_collate
     from prepro import build_rel2id, read_docred
+    from transformers import AutoConfig, AutoModel, AutoTokenizer
 
     train, dev, test = _load_splits()
     rel2id = build_rel2id(train, dev, test)
@@ -97,10 +96,9 @@ def smoke() -> dict:
 
 def _evaluate(model, features, collate, id2rel, gold_docs, train_facts, batch_size):
     import torch
-    from torch.utils.data import DataLoader
-
     from model import decode_preds
     from scoring import official_evaluate, to_submission
+    from torch.utils.data import DataLoader
 
     model.eval()
     loader = DataLoader(features, batch_size=batch_size, shuffle=False, collate_fn=collate)
@@ -132,13 +130,11 @@ def train(base_model: str = "roberta-large", epochs: int = 30, lr: float = 3e-5,
 
     import numpy as np
     import torch
-    from torch.utils.data import DataLoader
-    from transformers import AutoConfig, AutoModel, AutoTokenizer
-    from transformers import get_linear_schedule_with_warmup
-
     from model import DocREModel, make_collate
     from prepro import build_rel2id, read_docred
     from scoring import facts_in_train
+    from torch.utils.data import DataLoader
+    from transformers import AutoConfig, AutoModel, AutoTokenizer, get_linear_schedule_with_warmup
 
     torch.manual_seed(seed)
     np.random.seed(seed)

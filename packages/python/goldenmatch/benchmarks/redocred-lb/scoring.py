@@ -15,7 +15,7 @@ of the two entities, exactly as the reference scorer computes it.
 """
 from __future__ import annotations
 
-from typing import Iterable
+from collections.abc import Iterable
 
 
 def facts_in_train(train_docs: list[dict]) -> set[tuple[str, str, str]]:
