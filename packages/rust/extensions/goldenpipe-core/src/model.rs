@@ -111,15 +111,32 @@ pub struct ExecutionPlan {
     pub stages: Vec<PlannedSpec>,
 }
 
-/// Tagged union preserving goldenpipe's TWO error classes: `Wiring` (a consume not
-/// produced by an earlier stage) and `UnknownStage` (a `use` with no registered stage).
+/// Tagged union of the planner's failure classes.
+/// - `MissingProducer`: a consumed artifact no stage (nor the `df` seed) produces.
+/// - `AmbiguousProducer`: an unsatisfied consumer with >=2 later producers, no `needs` tiebreak.
+/// - `Cycle`: the declared edges (`needs` + sole-producer) contain a cycle.
+/// - `UnknownNeed`: a `needs` entry naming a stage/key not in the pipeline.
+/// - `UnknownStage`: a `use` with no registered stage.
+///
+/// The error `stage` field carries the PLANNED NAME (`spec.name or info.name`), matching
+/// the pre-DAG `Wiring` error; only `available` was dropped.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PlanError {
-    Wiring {
+    MissingProducer {
         stage: String,
-        missing: String,
-        available: Vec<String>,
+        artifact: String,
+    },
+    AmbiguousProducer {
+        artifact: String,
+        producers: Vec<String>,
+    },
+    Cycle {
+        stages: Vec<String>,
+    },
+    UnknownNeed {
+        stage: String,
+        needs: Vec<String>,
     },
     UnknownStage {
         #[serde(rename = "use")]
@@ -167,5 +184,40 @@ mod tests {
         assert_eq!(OnError::default(), OnError::Continue);
         let v = serde_json::to_string(&OnError::Abort).unwrap();
         assert_eq!(v, "\"abort\"");
+    }
+
+    #[test]
+    fn plan_error_new_variants_serialize_with_kind_tag() {
+        let ambig = PlanError::AmbiguousProducer {
+            artifact: "df".into(),
+            producers: vec!["a".into(), "b".into()],
+        };
+        assert_eq!(
+            serde_json::to_value(&ambig).unwrap(),
+            serde_json::json!({"kind": "ambiguous_producer", "artifact": "df", "producers": ["a", "b"]})
+        );
+        let cyc = PlanError::Cycle {
+            stages: vec!["a".into(), "b".into()],
+        };
+        assert_eq!(
+            serde_json::to_value(&cyc).unwrap(),
+            serde_json::json!({"kind": "cycle", "stages": ["a", "b"]})
+        );
+        let un = PlanError::UnknownNeed {
+            stage: "s".into(),
+            needs: vec!["ghost".into()],
+        };
+        assert_eq!(
+            serde_json::to_value(&un).unwrap(),
+            serde_json::json!({"kind": "unknown_need", "stage": "s", "needs": ["ghost"]})
+        );
+        let mp = PlanError::MissingProducer {
+            stage: "s".into(),
+            artifact: "x".into(),
+        };
+        assert_eq!(
+            serde_json::to_value(&mp).unwrap(),
+            serde_json::json!({"kind": "missing_producer", "stage": "s", "artifact": "x"})
+        );
     }
 }

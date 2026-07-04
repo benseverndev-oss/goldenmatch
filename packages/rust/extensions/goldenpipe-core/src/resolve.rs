@@ -34,10 +34,9 @@ pub fn resolve(config: &PipelineConfig, stages: &[StageInfo]) -> Result<Executio
 
         for dep in &info.consumes {
             if !available.contains(dep) {
-                return Err(PlanError::Wiring {
+                return Err(PlanError::MissingProducer {
                     stage: name,
-                    missing: dep.clone(),
-                    available: available.iter().cloned().collect(), // BTreeSet -> sorted Vec
+                    artifact: dep.clone(),
                 });
             }
         }
@@ -106,21 +105,16 @@ mod tests {
     }
 
     #[test]
-    fn wiring_error_lists_sorted_available() {
+    fn missing_producer_when_no_stage_produces_dep() {
         let stages = vec![info("s", &["out"], &["missing"])];
         let err = resolve(&cfg(vec![name_entry("s")]), &stages).unwrap_err();
-        match err {
-            PlanError::Wiring {
-                stage,
-                missing,
-                available,
-            } => {
-                assert_eq!(stage, "s");
-                assert_eq!(missing, "missing");
-                assert_eq!(available, vec!["df".to_string()]); // sorted
+        assert_eq!(
+            err,
+            PlanError::MissingProducer {
+                stage: "s".into(),
+                artifact: "missing".into(),
             }
-            _ => panic!("expected Wiring"),
-        }
+        );
     }
 
     #[test]
