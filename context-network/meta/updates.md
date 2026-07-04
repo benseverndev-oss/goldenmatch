@@ -2,6 +2,16 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-07-04 — GoldenFlow Wave A: SWIFT/ABA/IMEI identifier families
+- Extension of ADR [../decisions/0031-goldenflow-reference-mode-identifiers-wasm.md](../decisions/0031-goldenflow-reference-mode-identifiers-wasm.md)
+  (no new ADR needed) — three new owned checksummed/structural identifier
+  families: `swift_validate`/`swift_format` (SWIFT/BIC), `aba_validate` (US ABA
+  routing), `imei_validate` (IMEI Luhn). Same cross-surface pattern as Wave 0
+  (native + WASM/TS + pure-Python fallback, byte-parity to the goldenflow-core
+  Rust oracle), all `auto_apply=False`.
+- Registry moves 86 → **90**. Versions: goldenflow 1.5.0 / npm 0.5.0 /
+  goldenflow-native 0.3.0.
+
 ## 2026-07-03 — GoldenFlow Wave 0: core split + reference-mode + checksummed identifiers + cross-surface WASM
 - New ADR [../decisions/0031-goldenflow-reference-mode-identifiers-wasm.md](../decisions/0031-goldenflow-reference-mode-identifiers-wasm.md):
   GoldenFlow adopts the suite-standard `-core`/`-native`/`-wasm` layout — new

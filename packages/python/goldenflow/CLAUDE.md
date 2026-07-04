@@ -187,6 +187,13 @@ package. Loader discover order in `goldenflow/core/_native_loader.py`:
   checksum bounded to DE + IT this wave). Each has a pure-Python reference in
   `transforms/identifiers.py` and a pure-TS fallback, both proven byte-identical
   to the goldenflow-core Rust oracle via a committed corpus.
+- **4 more checksummed/structural identifier kernels (Wave A, all
+  `auto_apply=False`, native-first):** `swift_validate`/`swift_format` (SWIFT/BIC
+  bank codes, 8 or 11 chars, structural bank/country/location/branch checks),
+  `aba_validate` (US ABA routing number weighted checksum), `imei_validate`
+  (mobile-device IMEI Luhn checksum). Same pattern as Wave 0: pure-Python
+  reference + pure-TS fallback, both byte-identical to the goldenflow-core Rust
+  oracle via the same committed corpus.
 - **Byte-parity harness (cross-surface oracle = goldenflow-core).**
   `packages/python/goldenflow/tests/parity/identifiers_corpus.jsonl` (mirrored
   byte-identical into `packages/typescript/goldenflow/tests/parity/`) is the
@@ -446,7 +453,7 @@ result.manifest.records     # list[TransformRecord]
 result.manifest.created_at  # str
 ```
 
-### Available transforms (86)
+### Available transforms (90)
 **Text:** strip, lowercase, uppercase, title_case, normalize_unicode, normalize_quotes, collapse_whitespace, truncate, remove_punctuation, remove_html_tags, remove_urls, remove_digits, remove_emojis, fix_mojibake, normalize_line_endings, extract_numbers, pad_left, pad_right
 **Phone:** phone_e164, phone_national, phone_digits, phone_validate, phone_country_code
 **Name:** split_name, split_name_reverse, strip_titles, strip_suffixes, name_proper, initial_expand, nickname_standardize, merge_name
@@ -455,7 +462,7 @@ result.manifest.created_at  # str
 **Categorical:** category_auto_correct, category_standardize, category_from_file, boolean_normalize, gender_standardize, null_standardize
 **Numeric:** currency_strip, percentage_normalize, round, clamp, to_integer, abs_value, fill_zero, comma_decimal, scientific_to_decimal
 **Email:** email_lowercase, email_normalize, email_extract_domain, email_validate
-**Identifiers:** ssn_format, ssn_mask, ein_format, cc_validate, cc_format, cc_mask, iban_validate, iban_format, isbn_validate, isbn_normalize, ean_validate, vat_validate, vat_format
+**Identifiers:** ssn_format, ssn_mask, ein_format, cc_validate, cc_format, cc_mask, iban_validate, iban_format, isbn_validate, isbn_normalize, ean_validate, vat_validate, vat_format, swift_validate, swift_format, aba_validate, imei_validate
 **URL:** url_normalize, url_extract_domain
 
 ### Zero-config vs Configured — when to use which

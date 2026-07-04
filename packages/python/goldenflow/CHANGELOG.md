@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.5.0 (2026-07-04)
+
+Wave A of the identifier-kernel program: three new owned checksummed/structural identifier families (SWIFT/BIC, ABA routing, IMEI), cross-surface (native + WASM/TS + pure-Python fallback), byte-parity to the Rust oracle. No breaking changes; existing transform outputs are unchanged.
+
+### Added
+
+- `swift_validate` / `swift_format`: validate and format SWIFT/BIC bank identifier codes (8 or 11 characters, structural bank/country/location/branch code checks).
+- `aba_validate`: validate US ABA routing numbers via the standard weighted checksum.
+- `imei_validate`: validate mobile-device IMEI numbers via the Luhn checksum.
+- All four transforms are `auto_apply=False` (request them explicitly in a config), native-first with pure-Python fallbacks proven byte-identical to the `goldenflow-core` Rust oracle, and available on the TypeScript/WASM surface via `enableWasm()`.
+
 ## 1.4.0 (2026-07-03)
 
 Wave 0 of the identifier-kernel + WASM cross-surface program: owned Rust kernels for GoldenFlow's transform engine, a reference-mode native loader, 10 new checksummed-identifier transforms, a byte-parity harness, and an opt-in WASM/TS acceleration surface. No breaking changes; existing transform outputs are unchanged.
