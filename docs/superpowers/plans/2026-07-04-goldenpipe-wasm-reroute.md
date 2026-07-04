@@ -334,27 +334,36 @@ export interface PipelineOptions {
   this.identityOpts = options?.identityOpts ?? {};
 ```
 
-- [ ] **Step 3: Append the identity stage in `autoConfig` under the exact core condition**
+- [ ] **Step 3: Extract `computeAutoConfig(registry, identityOpts)` carrying the identity opts as the stage `config`**
 
-Modify `autoConfig` (pipeline.ts:75-81). Use the identity stage name captured in Step 1 (shown here as `IDENTITY_STAGE` — replace with the literal from config.rs):
+Do the identity conformance ONCE, in a standalone exported helper that both `Pipeline.run()` and the Task 4 shim call (DRY — this replaces the private `autoConfig` and subsumes Task 4 Step 5). Use the literal captured in Step 1.
+
+**CRITICAL (spec-review blocker):** the core appends the identity stage WITH the identity opts as its `config` (`config.rs:35`, `mk(IDENTITY, opts.clone())`), and `auto_config.json` vector #3 expects `config:{"threshold":0.8}` — NOT `{}`. `makeStageSpec(name)` yields `config:{}` and FAILS that vector. Pass the opts as the stage config:
+
 ```ts
-  private autoConfig(): PipelineConfig {
-    const available = this.registry.listAll();
-    const names = DEFAULT_STAGE_ORDER.filter((name) => name in available);
-    // Conform to goldenpipe-core (config.rs:34): append identity iff identity
-    // opts are non-empty AND the identity stage is registered.
-    const IDENTITY_STAGE = "goldenmatch.identity_resolve"; // <- MATCH config.rs literal
-    if (Object.keys(this.identityOpts).length > 0 && IDENTITY_STAGE in available) {
-      names.push(IDENTITY_STAGE);
-    }
-    const stages = names.map((name) => makeStageSpec(name));
-    return makePipelineConfig({ pipeline: "auto", stages });
+// pipeline.ts — new exported helper (replaces the private autoConfig)
+export function computeAutoConfig(
+  registry: StageRegistry,
+  identityOpts: Record<string, unknown>,
+): PipelineConfig {
+  const available = registry.listAll();
+  const stages = DEFAULT_STAGE_ORDER
+    .filter((name) => name in available)
+    .map((name) => makeStageSpec(name));
+  // Conform to goldenpipe-core (config.rs:34-35): append identity iff opts are
+  // non-empty AND the identity stage is registered, carrying opts as its config.
+  const IDENTITY_STAGE = "goldenmatch.identity_resolve"; // <- MATCH config.rs literal (config.rs:11)
+  if (Object.keys(identityOpts).length > 0 && IDENTITY_STAGE in available) {
+    stages.push(makeStageSpec({ use: IDENTITY_STAGE, config: identityOpts }));
   }
+  return makePipelineConfig({ pipeline: "auto", stages });
+}
 ```
+In `Pipeline.run()` replace `this.autoConfig()` with `computeAutoConfig(this.registry, this.identityOpts)` and DELETE the private `autoConfig` method.
 
 - [ ] **Step 4: (CI-verified via Task 4's Leg A `auto_config` vectors) — no separate test here**
 
-The conformance is proven by the Leg A parity gate in Task 4 running the `auto_config` vectors through the pure-TS shim (which drives this `autoConfig`). Do not write a duplicate assertion.
+The conformance (including the identity-config payload) is proven by the Leg A parity gate in Task 4 running the `auto_config` vectors through the pure-TS shim (which calls `computeAutoConfig`). Do not write a duplicate assertion.
 
 - [ ] **Step 5: Commit**
 
@@ -461,7 +470,7 @@ import {
   type StageSpec,
 } from "../models.js";
 import type { StageRegistry } from "../engine/registry.js";
-import { Pipeline } from "../pipeline.js";
+import { computeAutoConfig } from "../pipeline.js";
 
 interface StubStage { info: StageInfo; }
 
@@ -587,10 +596,9 @@ export function autoConfigJsonPure(inputStr: string): string {
   const arg = JSON.parse(inputStr) as { available: string[]; identity_opts?: Record<string, unknown> };
   const reg = new StubRegistry();
   for (const name of arg.available) reg.add(name, { name, produces: [], consumes: [] });
-  const p = new Pipeline({ registry: reg.asRegistry(), identityOpts: arg.identity_opts ?? {} });
-  // autoConfig is private; expose it via a tiny internal accessor OR call the
-  // public path. Simplest: add a package-internal method. See Step 5 note.
-  const cfg = (p as unknown as { autoConfig(): { pipeline: string; stages: StageSpec[]; decisions: string[] } }).autoConfig();
+  // Call the SAME helper Pipeline.run() uses (extracted in Task 3) — no Pipeline
+  // instance, no private-method cast. This is what makes Leg A prove the runtime path.
+  const cfg = computeAutoConfig(reg.asRegistry(), arg.identity_opts ?? {});
   return JSON.stringify({
     pipeline: cfg.pipeline,
     stages: cfg.stages.map((s) => ({ use: s.use, needs: s.needs, on_error: s.onError, config: s.config })),
@@ -603,11 +611,7 @@ export function skipIfFalsyJsonPure(inputStr: string): string {
 }
 ```
 
-- [ ] **Step 5: Make `autoConfig` reachable from the shim**
-
-`autoConfig` is `private`. Rather than the `as unknown` cast shown above (brittle), prefer a clean seam: rename `private autoConfig()` to a package-internal method the shim can call, OR export a standalone `computeAutoConfig(registry, identityOpts)` helper from `pipeline.ts` and have BOTH the `Pipeline` instance and the shim call it (DRY). Recommended: extract `export function computeAutoConfig(registry: StageRegistry, identityOpts: Record<string, unknown>): PipelineConfig` in pipeline.ts, call it from `run()` and from the shim. Update Task 3's edit to live in that function. Adjust the shim's `autoConfigJsonPure` to call `computeAutoConfig(reg.asRegistry(), arg.identity_opts ?? {})` directly (no Pipeline instance needed).
-
-- [ ] **Step 6: Add the additive `WiringError` fields at the throw site**
+- [ ] **Step 5: Add the additive `WiringError` fields at the throw site**
 
 In `resolver.ts`, extend `WiringError` (additive, message unchanged):
 ```ts
@@ -624,7 +628,7 @@ export class WiringError extends Error {
 ```
 At the throw site (resolver.ts:~44): pass `{ stage: name, missing: dep, available: [...availableArtifacts].sort() }` as the second arg. Existing consumers read only `.message` — unaffected.
 
-- [ ] **Step 7: Commit** (CI runs Leg A on push — expect all 5 families green)
+- [ ] **Step 6: Commit** (CI runs Leg A on push — expect all 5 families green)
 
 ```bash
 git add packages/typescript/goldenpipe/src/core/wasm/plannerJsonPure.ts \
