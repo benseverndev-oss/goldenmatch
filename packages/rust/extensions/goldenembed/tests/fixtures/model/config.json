@@ -1,0 +1,12 @@
+{
+  "dim": 8,
+  "use_bias": true,
+  "featurizer": {
+    "n_features": 64,
+    "ngram_min": 2,
+    "ngram_max": 4,
+    "lowercase": true,
+    "boundary": "\u0002",
+    "seed": 0
+  }
+}

@@ -1,16 +1,23 @@
 //! `goldenembed` — a standalone, local embedding runtime for GoldenMatch.
 //!
 //! Loads a model saved by `goldenmatch.embeddings.inhouse.GoldenEmbedModel.save`
-//! (a directory with `config.json` + `model.onnx`), featurizes text with the
-//! char-n-gram kernel, and runs the learned projection head through onnxruntime
-//! — no Python, no torch. This is the runtime behind the roadmap's
-//! `provider="inhouse"` embed path at the edge / in SQL UDFs.
+//! (a directory with `config.json` + `weights.npz`), featurizes text with the
+//! char-n-gram kernel, and runs the learned linear projection head — no Python,
+//! no torch, and **no ONNX Runtime by default**: the projection is `L2norm((feats
+//! @ W) + b)`, a matmul, run natively via `goldenembed-core::project`. This is
+//! the runtime behind the roadmap's `provider="inhouse"` embed path in the SQL
+//! UDFs. The legacy ONNX backend (`model.onnx` via `ort`) is retained behind the
+//! non-default `onnx` cargo feature for onnx-only deployments that ship no
+//! `weights.npz`.
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use ort::session::Session;
-use ort::value::Tensor;
 use serde::Deserialize;
+
+#[cfg(feature = "onnx")]
+use ort::session::Session;
+#[cfg(feature = "onnx")]
+use ort::value::Tensor;
 
 // The featurizer + projection head live in the pure `goldenembed-core` crate
 // (shared with the wasm edge surface). Re-exported so existing consumers keep
@@ -18,6 +25,7 @@ use serde::Deserialize;
 pub use goldenembed_core::{project, FeaturizerConfig};
 pub mod cache;
 pub mod model_id;
+mod weights;
 
 #[derive(Debug, Deserialize)]
 struct ModelConfig {
@@ -27,41 +35,86 @@ struct ModelConfig {
     featurizer: FeaturizerConfig,
 }
 
+/// The projection-head backend. `Native` runs the matmul over the `weights.npz`
+/// projection (no ONNX); `Onnx` (opt-in feature) runs the `model.onnx` graph.
+enum Backend {
+    Native {
+        weights: Vec<f32>,
+        bias: Option<Vec<f32>>,
+    },
+    #[cfg(feature = "onnx")]
+    Onnx { session: Session },
+}
+
+/// blake2b-8 hex digest of `data` — the cache-namespace fallback ingredient.
+fn digest8(data: &[u8]) -> String {
+    use blake2::digest::{Update, VariableOutput};
+    let mut h = blake2::Blake2bVar::new(8).expect("blake2b-8 is valid");
+    h.update(data);
+    let mut out = [0u8; 8];
+    h.finalize_variable(&mut out).expect("8-byte output fits");
+    crate::model_id::hex(&out)
+}
+
 pub struct GoldenEmbed {
     featurizer: FeaturizerConfig,
     dim: usize,
     model_id: Option<String>,
-    onnx_digest: String,
-    session: Session,
+    digest: String,
+    backend: Backend,
 }
 
 impl GoldenEmbed {
-    /// Load a saved model directory (`config.json` + `model.onnx`).
+    /// Load a saved model directory. Prefers the native `weights.npz` projection
+    /// (no ONNX Runtime); with the `onnx` feature, falls back to `model.onnx`
+    /// when no `weights.npz` is present.
     pub fn load(dir: impl AsRef<Path>) -> Result<Self> {
         let dir = dir.as_ref();
         let cfg_text = std::fs::read_to_string(dir.join("config.json"))
             .with_context(|| format!("reading {}/config.json", dir.display()))?;
         let cfg: ModelConfig = serde_json::from_str(&cfg_text)?;
         let model_id = crate::model_id::compute_model_id(dir, cfg.dim).ok();
-        let onnx_bytes = std::fs::read(dir.join("model.onnx"))
-            .with_context(|| format!("reading {}/model.onnx", dir.display()))?;
-        let onnx_digest = {
-            use blake2::digest::{Update, VariableOutput};
-            let mut h = blake2::Blake2bVar::new(8).expect("blake2b-8 is valid");
-            h.update(&onnx_bytes);
-            let mut out = [0u8; 8];
-            h.finalize_variable(&mut out).expect("8-byte output fits");
-            crate::model_id::hex(&out)
+
+        let npz = dir.join("weights.npz");
+        let (backend, digest) = if npz.exists() {
+            let (w, bias) = weights::load_npz(&npz, cfg.dim)?;
+            // Digest the raw weights (+bias) bytes for the cache-namespace fallback.
+            let mut bytes = Vec::with_capacity((w.len() + bias.as_ref().map_or(0, Vec::len)) * 4);
+            for v in &w {
+                bytes.extend_from_slice(&v.to_le_bytes());
+            }
+            if let Some(b) = &bias {
+                for v in b {
+                    bytes.extend_from_slice(&v.to_le_bytes());
+                }
+            }
+            (Backend::Native { weights: w, bias }, digest8(&bytes))
+        } else {
+            #[cfg(feature = "onnx")]
+            {
+                let onnx_bytes = std::fs::read(dir.join("model.onnx"))
+                    .with_context(|| format!("reading {}/model.onnx", dir.display()))?;
+                let session = Session::builder()?
+                    .commit_from_file(dir.join("model.onnx"))
+                    .with_context(|| format!("loading {}/model.onnx", dir.display()))?;
+                (Backend::Onnx { session }, digest8(&onnx_bytes))
+            }
+            #[cfg(not(feature = "onnx"))]
+            {
+                anyhow::bail!(
+                    "no weights.npz in {}; an ONNX-only model (model.onnx) requires \
+                     goldenembed built with the `onnx` feature",
+                    dir.display()
+                );
+            }
         };
-        let session = Session::builder()?
-            .commit_from_file(dir.join("model.onnx"))
-            .with_context(|| format!("loading {}/model.onnx", dir.display()))?;
+
         Ok(Self {
             featurizer: cfg.featurizer,
             dim: cfg.dim,
             model_id,
-            onnx_digest,
-            session,
+            digest,
+            backend,
         })
     }
 
@@ -82,16 +135,25 @@ impl GoldenEmbed {
             return Ok(Vec::new());
         }
         let f = self.featurizer.n_features;
+        let dim = self.dim;
         let feats = self.featurizer.featurize(texts); // flat (n * f), row-major
-        let input = Tensor::from_array(([n, f], feats))?;
-        let outputs = self.session.run(ort::inputs!["features" => input])?;
-        let (shape, data) = outputs["embedding"].try_extract_tensor::<f32>()?;
-        let dim = *shape.last().unwrap_or(&(self.dim as i64)) as usize;
-        let mut rows = Vec::with_capacity(n);
-        for i in 0..n {
-            rows.push(data[i * dim..(i + 1) * dim].to_vec());
-        }
-        Ok(rows)
+        let flat: Vec<f32> = match &mut self.backend {
+            Backend::Native { weights, bias } => {
+                project(&feats, n, f, weights, dim, bias.as_deref())
+            }
+            #[cfg(feature = "onnx")]
+            Backend::Onnx { session } => {
+                let input = Tensor::from_array(([n, f], feats))?;
+                let outputs = session.run(ort::inputs!["features" => input])?;
+                let (shape, data) = outputs["embedding"].try_extract_tensor::<f32>()?;
+                let d = *shape.last().unwrap_or(&(dim as i64)) as usize;
+                debug_assert_eq!(d, dim, "onnx head dim != config dim");
+                data[..n * d].to_vec()
+            }
+        };
+        Ok((0..n)
+            .map(|i| flat[i * dim..(i + 1) * dim].to_vec())
+            .collect())
     }
 
     /// Embed `texts` with cache lookups keyed by `(model_id, sha256(normalize_text))`.
@@ -141,11 +203,12 @@ impl GoldenEmbed {
         Ok(hashes.iter().map(|h| resolved[h].clone()).collect())
     }
 
-    /// Deterministic cache namespace when `weights.npz` is absent: blake2b-8 over
-    /// the raw `model.onnx` bytes. Will NOT match Python's `inhouse:…` id (parity
-    /// needs the weights) — fine, since Python doesn't share this redb file.
+    /// Deterministic cache namespace fallback when `compute_model_id` returned
+    /// `None` (an ONNX-only deployment with no `weights.npz`): blake2b-8 over the
+    /// backend digest. Will NOT match Python's `inhouse:…` id (parity needs the
+    /// weights) — fine, since Python doesn't share this redb file.
     fn onnx_fallback_namespace(&self) -> String {
-        format!("onnx:d{}:{}", self.dim, self.onnx_digest)
+        format!("onnx:d{}:{}", self.dim, self.digest)
     }
 }
 
