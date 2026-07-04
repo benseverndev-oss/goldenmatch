@@ -209,6 +209,12 @@ def register(con: duckdb.DuckDBPyConnection) -> None:
     from goldenmatch_duckdb.lsh_kernels import register_lsh_functions
     register_lsh_functions(con)
 
+    # goldenmatch_perceptual_phash / _hamming: image DCT pHash + the near-dup
+    # blocking distance, over the native-gated goldenmatch.core.perceptual kernel.
+    # See `perceptual_kernels.py`.
+    from goldenmatch_duckdb.perceptual_kernels import register_perceptual_functions
+    register_perceptual_functions(con)
+
 
 # ── Implementation ──────────────────────────────────────────────────────
 
