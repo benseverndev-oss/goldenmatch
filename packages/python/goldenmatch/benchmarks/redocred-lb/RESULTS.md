@@ -61,6 +61,32 @@ _• Frozen zero-shot GPT-4 / GPT-5: ~15.6 / ~28 F1 (see the `../clear-kg` extra
 Reproduce the ensemble/threshold search offline (no GPU) from the dumped logits:
 `modal volume get redocred-lb /logits ./logits && python ensemble_sweep.py --logits ./logits`.
 
+## The single-model chase (can we beat KnowRA 0.8042 *as a single model*?)
+
+Ensembling wins the measured metric but isn't a single-model method. We pushed hard for a
+legitimate single-model >0.8042, with a **dev-tuned global threshold** (the same calibration
+DREEAM/KnowRA use — selected on dev, reported on test). Every lever, honestly:
+
+| single-model lever | test F1 (δ-tuned) | note |
+|---|--:|--|
+| best plain DeBERTa-v3-large (of 8 seeds) | 0.7990 | seed search saturated here |
+| + relation-only distant self-training | 0.7975 | washed out — self-training & δ both recover recall (same axis) |
+| **+ full DREEAM (evidence self-training on distant)** | **0.8004** | first to break 0.80 — evidence regularises attention *shape*, orthogonal to δ |
+
+- **0.8004 is a statistical tie with KnowRA (0.8042), not a clean win** — −0.0038, inside the
+  run-to-run / winner's-curse band (~0.3 F1). A best-of-N would land ~0.802–0.805 raw →
+  ~0.802 after the selection discount: still a tie, not a defensible clean beat.
+- **The pipeline** (all in `modal_app.py`): `fetch_distant` (DocRED distant set) →
+  `gen_silver_evidence` (teacher labels distant docs with top-k evidence sentences) →
+  two-stage `train` (`train_file=` distant pretrain → `init_ckpt=` human fine-tune, both
+  `--evidence`) → dev-δ. Relation-only self-training helps the raw model (+0.76 F1 at δ=0)
+  but not after calibration; the evidence variant is the only lever that *stacked*.
+- **Honest standing:** a **single model** reaches **~0.800 F1 — on par with the published SOTA
+  tier** (KnowRA 0.8042, JMRL-DREEAM 0.8013) within noise, reproducing ATLOP and adding a
+  streamlined DREEAM. It does **not cleanly exceed** it. The ensemble (0.820) exceeds the
+  published metric via ensembling + calibration. Both numbers are measured with the official
+  scorer and stated for exactly what they are.
+
 ## What these numbers say
 
 - **The reproduction is clean.** RoBERTa-large ATLOP lands 0.7758 F1, squarely on the published
