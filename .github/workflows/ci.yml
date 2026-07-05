@@ -413,9 +413,12 @@ jobs:
             # when either port, the parity manifest, or the emitter/checker tooling
             # changes.
             api_parity:
-              - 'packages/python/goldenmatch/**'
-              - 'packages/typescript/goldenmatch/**'
-              - 'parity/goldenmatch.yaml'
+              - 'packages/python/*/*/mcp/**'
+              - 'packages/python/*/*/cli/**'
+              - 'packages/python/*/*/cli.py'
+              - 'packages/typescript/*/src/node/mcp/**'
+              - 'packages/typescript/*/src/cli.ts'
+              - 'parity/**'
               - 'scripts/emit_python_surface.py'
               - 'scripts/emit_ts_surface.mjs'
               - 'scripts/check_api_parity.py'
@@ -1441,6 +1444,10 @@ jobs:
     if: needs.changes.outputs.api_parity == 'true' || needs.changes.outputs.force_all == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [goldenmatch, goldencheck, goldenflow, goldenpipe, goldenanalysis, infermap]
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
@@ -1455,29 +1462,37 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-      - name: Sync workspace + install the goldenmatch[mcp] extra
+      - name: Sync workspace + install the MCP SDK
+        # Every package's [mcp] extra is just the shared `mcp` SDK, so one install provisions
+        # the Python MCP surface for all six packages.
         run: |
           uv sync --all-packages
-          uv pip install -e "packages/python/goldenmatch[mcp]"
-      - name: Gate unit tests (pure data)
+          uv pip install "mcp>=1.0"
+      - name: Gate unit tests (pure data + all-six emitter smoke)
+        # Package-agnostic; run once (on the goldenmatch shard) to avoid 6x redundancy.
+        if: matrix.package == 'goldenmatch'
         run: uv run pytest scripts/test_api_parity.py -q
         env:
           POLARS_SKIP_CPU_CHECK: "1"
           GOLDENMATCH_NATIVE: "0"
-          PYTHONPATH: packages/python/goldenmatch
-      - name: Build goldenmatch-js (TS emitter imports dist/)
-        # goldenmatch-js has a workspace:^ dep on goldenmatch-wasm-runtime; build it first
-        # so tsup can resolve it (the main `typescript` lane gets this via turbo's dep graph).
+          GOLDENFLOW_NATIVE: "0"
+          GOLDENCHECK_NATIVE: "0"
+          GOLDENANALYSIS_NATIVE: "0"
+      - name: Build ${{ matrix.package }}-js + its workspace deps (TS emitter imports dist/)
+        # turbo build has dependsOn ^build, so this builds the package's wasm-runtime /
+        # sibling deps first (the main `typescript` lane relies on the same graph).
         run: |
           pnpm install --frozen-lockfile
-          pnpm --filter goldenmatch-wasm-runtime build
-          pnpm --filter goldenmatch build
-      - name: Parity gate (both emitters + manifest)
-        run: uv run python scripts/check_api_parity.py goldenmatch
+          pnpm turbo run build --filter=${{ matrix.package }}
+      - name: Parity gate for ${{ matrix.package }} (both emitters + manifest)
+        run: uv run python scripts/check_api_parity.py ${{ matrix.package }}
         env:
           POLARS_SKIP_CPU_CHECK: "1"
           GOLDENMATCH_NATIVE: "0"
-          PYTHONPATH: packages/python/goldenmatch
+          GOLDENFLOW_NATIVE: "0"
+          GOLDENCHECK_NATIVE: "0"
+          GOLDENANALYSIS_NATIVE: "0"
+          PYTHONPATH: packages/python/${{ matrix.package }}
 
   typescript:
     needs: changes

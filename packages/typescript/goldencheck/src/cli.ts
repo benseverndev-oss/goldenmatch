@@ -4,6 +4,7 @@
  * Port of goldencheck/cli/main.py using Commander.js.
  */
 
+import { pathToFileURL } from "node:url";
 import { Command } from "commander";
 import { readFile } from "./node/reader.js";
 import { scanData } from "./core/engine/scanner.js";
@@ -13,7 +14,7 @@ import { reportJson } from "./core/reporters/json.js";
 import { ciCheck } from "./core/reporters/ci.js";
 import { listAvailableDomains } from "./core/semantic/domains/index.js";
 
-const program = new Command();
+export const program = new Command();
 
 program
   .name("goldencheck-js")
@@ -259,4 +260,6 @@ function printFindings(findings: readonly Finding[], rows: number, cols: number)
   }
 }
 
-program.parse();
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  program.parse();
+}

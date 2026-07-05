@@ -8,6 +8,7 @@
 
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { Command } from "commander";
 import {
   Resolver,
@@ -53,7 +54,7 @@ function printResult(result: PipeResult, verbose: boolean): void {
   }
 }
 
-const program = new Command()
+export const program = new Command()
   .name("goldenpipe-js")
   .description("GoldenPipe: Golden Suite orchestrator (TypeScript)")
   .version(VERSION);
@@ -150,8 +151,10 @@ program
     runApiServer(Number(opts.port), opts.host);
   });
 
-program.parseAsync(process.argv).catch((e: unknown) => {
-  const message = e instanceof Error ? e.message : String(e);
-  process.stderr.write(`${message}\n`);
-  process.exitCode = 1;
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  program.parseAsync(process.argv).catch((e: unknown) => {
+    const message = e instanceof Error ? e.message : String(e);
+    process.stderr.write(`${message}\n`);
+    process.exitCode = 1;
+  });
+}
