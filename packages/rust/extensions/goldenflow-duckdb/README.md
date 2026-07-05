@@ -47,36 +47,45 @@ against the current v1.5.4 CLI). Five platforms are built and each proven by a
 real `LOAD` smoke in CI: `linux_amd64`, `linux_arm64`, `osx_arm64`, `osx_amd64`
 (cross-built, smoked under Rosetta), `windows_amd64`.
 
-## Status: Slice 2b (full single-arg catalogue)
+## Status: full transform catalogue
 
-Every single-argument transform in `goldenflow-core` is now a SQL function --
-**58 UDFs** across four output shapes, table-driven (one `"name" => kernel` line
-each):
+Essentially every `goldenflow-core` transform is now a SQL function -- **74 UDFs**:
 
-| Output | Shape | Examples |
-| ------ | ----- | -------- |
-| `VARCHAR` | `fn(&str) -> String` | `email_normalize`, `name_proper`, `address_standardize`, all of text |
-| `VARCHAR` (nullable) | `fn(&str) -> Option<String>` | `url_normalize`, `cc_format`, `iban_format`, `null_standardize` |
+| Group | Shape | Examples |
+| ----- | ----- | -------- |
+| single-arg `VARCHAR` | `fn(&str) -> String` | `email_normalize`, `name_proper`, `address_standardize`, all of text |
+| single-arg nullable `VARCHAR` | `fn(&str) -> Option<String>` | `url_normalize`, `cc_format`, `iban_format` |
 | `BOOLEAN` | `fn(&str) -> bool` / `Option<bool>` | `cc_validate`, `iban_validate`, `boolean_normalize`, `email_validate` |
 | `DOUBLE` / `BIGINT` | `fn(&str) -> Option<f64/i64>` | `currency_strip`, `percentage_normalize`, `to_integer` |
+| multi-output (component UDFs) | tuple -> one per part | `split_name_{first,last}`, `split_name_reverse_{first,last}`, `split_address_{street,city,state,zip}` |
+| multi-arg | 2-3 args | `phone_{e164,national,country_code,valid}(phone, region)`, `truncate(s, n)`, `pad_{left,right}(s, width, pad)`, `merge_name(first, last)` |
 
-`None` (and null input) map to SQL `NULL`.
+`None` / null input / (for phone) non-NANP numbers map to SQL `NULL`. Multi-arg
+UDFs follow SQL null-propagation (any NULL argument yields NULL without invoking
+the kernel -- DuckDB scalar semantics, no override in duckdb-rs), so
+`merge_name(NULL, 'Smith')` is NULL rather than the kernel's coalesced `'Smith'`;
+non-NULL inputs stay byte-identical.
+
+Phone is NANP-gated (`nanp_only`): the Rust port is byte-identical to Python
+`phonenumbers` on country-code-1 numbers and returns `NULL` rather than a
+possibly-wrong value elsewhere -- the same parity-safe posture as the native
+kernel.
 
 **Cross-surface proof:** the test suite threads the *entire* shared
-`identifiers_corpus.jsonl` (489 rows, every transform) -- the exact oracle the
-Python and TypeScript parity gates assert against -- through a real in-process
-DuckDB, so the SQL surface is byte-identical to Python / TS / wasm by the same
-corpus, not just by construction.
+`identifiers_corpus.jsonl` (489 rows, every single-arg transform) -- the exact
+oracle the Python and TypeScript parity gates assert against -- through a real
+in-process DuckDB; the multi-arg/output UDFs are checked against the reference
+kernel directly. So the SQL surface is byte-identical to Python / TS / wasm by
+the corpus, not just by construction.
 
-Distribution (Slice 3) builds + footers + LOAD-smokes the `.duckdb_extension`
-for three platforms and publishes them on a `goldenflow-duckdb-v*` tag
+Distribution builds + footers + LOAD-smokes the `.duckdb_extension` for five
+platforms and publishes them on a `goldenflow-duckdb-v*` tag
 (`.github/workflows/goldenflow-duckdb-dist.yml`).
 
-Deferred to later slices:
-
-| Slice | Scope |
-| ----- | ----- |
-| **later** | Multi-DuckDB-version builds; multi-argument / multi-output kernels: phone (region arg), `split_*`, `truncate`, `pad_*`, `merge_name`, `auto_correct`. |
+**Not exposed:** `category_auto_correct` -- it builds a canonical map over an
+entire column, so it is a DuckDB aggregate/table function, not a stateless
+scalar; a separate surface. `date_*` transforms are excluded suite-wide (the
+`dateutil` reference is fuzzy + non-deterministic, so not byte-portable).
 
 ## Build & test
 
