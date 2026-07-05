@@ -23,29 +23,37 @@ UDF names are `goldenflow_<kernel>` -- a predictable 1:1 with the underlying
 
 ## Install
 
-Download the `.duckdb_extension` for your platform from the
-[`goldenflow-duckdb-v*` release assets](https://github.com/benseverndev-oss/goldenmatch/releases)
-and `LOAD` it. Extensions built outside the DuckDB signing chain need the
-unsigned flag:
+Download `goldenflow_duckdb-<platform>.zip` from the
+[`goldenflow-duckdb-v*` release assets](https://github.com/benseverndev-oss/goldenmatch/releases),
+extract it, and `LOAD` the file. Extensions built outside the DuckDB signing
+chain need the unsigned flag:
 
 ```sh
-# CLI
+unzip goldenflow_duckdb-linux_amd64.zip   # -> goldenflow_duckdb.duckdb_extension
 duckdb -unsigned
 ```
 ```sql
 -- or, from any client
 SET allow_unsigned_extensions = true;
-LOAD '/path/to/goldenflow_duckdb-linux_amd64.duckdb_extension';
+LOAD '/path/to/goldenflow_duckdb.duckdb_extension';
 
 SELECT goldenflow_email_normalize('  A.B@Example.COM ');  -- a.b@example.com
 ```
 
+> The file **must** keep the name `goldenflow_duckdb.duckdb_extension` -- DuckDB
+> derives the extension's init symbol from the filename, so a renamed file fails
+> to load. (That's why the assets are per-platform zips of the correctly-named
+> file rather than platform-suffixed bare extensions.)
+
 **Portable across DuckDB versions:** the extension targets the *stable* C API
 (`v1.2.0`), which is versioned separately from -- and well below -- the DuckDB
-release number, so one build loads on **any DuckDB >= 1.2.0** (smoke-tested
-against the current v1.5.4 CLI). Five platforms are built and each proven by a
-real `LOAD` smoke in CI: `linux_amd64`, `linux_arm64`, `osx_arm64`, `osx_amd64`
-(cross-built, smoked under Rosetta), `windows_amd64`.
+release number, so one build loads on **any DuckDB >= 1.3.0** (a CI sweep LOADs
+the single build on v1.3.0 / v1.3.2 / v1.4.0 / v1.5.4). The floor is 1.3.0, not
+1.2.x, because DuckDB 1.2.x expects the older `linux_amd64_gcc4` platform string
+while 1.3.0 unified it to `linux_amd64` -- a packaging detail, not the C API.
+Five platforms are built, each proven by a real `LOAD` smoke in CI:
+`linux_amd64`, `linux_arm64`, `osx_arm64`, `osx_amd64` (cross-built, smoked
+under Rosetta), `windows_amd64`.
 
 ## Status: full transform catalogue
 

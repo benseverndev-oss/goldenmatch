@@ -129,6 +129,8 @@ Get dataset statistics: record count, cluster count, match rate, cluster sizes.
 
 Search for duplicate records matching a query.
 
+_Also answers to `dedupe` (the TypeScript server's name for this operation)._
+
 ```text
 "Find duplicates of John Smith"
 ```
@@ -145,6 +147,8 @@ Get details of a specific cluster including all member records and pair scores.
 
 Match a new record against the loaded dataset.
 
+_Also answers to `match` (the TypeScript server's name for this operation)._
+
 ```text
 "Does this record match anything: name=Jane Doe, email=jane@example.com?"
 ```
@@ -152,6 +156,8 @@ Match a new record against the loaded dataset.
 ### explain_match
 
 Explain why two specific records were matched or not matched.
+
+_Also answers to `explain_pair` (the TypeScript server's name for this operation)._
 
 ```text
 "Why were records 42 and 108 matched?"
@@ -374,7 +380,9 @@ Three tools plan and validate distributed execution routing for a run.
 
 ### Tool count breakdown
 
-The 69 tools reconcile as: 18 agent-level + 7 Learning Memory + 15 Identity Graph + 3 routing + 26 base data/inspection tools.
+The 69 distinct tools reconcile as: 18 agent-level + 7 Learning Memory + 15 Identity Graph + 3 routing + 26 base data/inspection tools.
+
+The server additionally advertises 5 cross-language naming aliases — `dedupe`, `match`, `explain_pair`, `profile`, and `explain_cluster` — alternate names that match the TypeScript server's tool names, so an agent trained against either server can call the other. They forward to the canonical handlers above (`find_duplicates`, `match_record`, `explain_match`, `profile_data`, `agent_explain_cluster`), bringing the advertised total to 74. The TypeScript server mirrors this: it also answers to the Python names (`find_duplicates`, `match_record`, `explain_match`, `profile_data`).
 
 ## How it works
 
