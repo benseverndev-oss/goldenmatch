@@ -114,6 +114,92 @@ macro_rules! register_opt_str {
     }};
 }
 
+/// Register a batch of `VARCHAR -> <primitive>` UDFs whose kernel is
+/// `fn(&str) -> Option<$rust_ty>` (`None` -> SQL `NULL`). `$logical` is the
+/// output [`LogicalTypeId`] variant; `$rust_ty` is the matching Rust cell type
+/// written through `as_mut_slice`.
+macro_rules! register_prim_opt {
+    ($con:expr, $rust_ty:ty, $logical:ident, $($name:literal => $kernel:path),+ $(,)?) => {{
+        $({
+            struct S;
+            impl VScalar for S {
+                type State = ();
+                fn invoke(
+                    _state: &Self::State,
+                    input: &mut DataChunkHandle,
+                    output: &mut dyn WritableVector,
+                ) -> std::result::Result<(), Box<dyn Error>> {
+                    let in_vec = input.flat_vector(0);
+                    let rows =
+                        unsafe { in_vec.as_slice_with_len::<duckdb_string_t>(input.len()) };
+                    let mut out = output.flat_vector();
+                    for (i, row) in rows.iter().enumerate() {
+                        if in_vec.row_is_null(i as u64) {
+                            out.set_null(i);
+                            continue;
+                        }
+                        let mut row = *row;
+                        let s = DuckString::new(&mut row).as_str();
+                        match $kernel(s.as_ref()) {
+                            Some(v) => unsafe { out.as_mut_slice::<$rust_ty>()[i] = v },
+                            None => out.set_null(i),
+                        }
+                    }
+                    Ok(())
+                }
+                fn signatures() -> Vec<ScalarFunctionSignature> {
+                    vec![ScalarFunctionSignature::exact(
+                        vec![LogicalTypeId::Varchar.into()],
+                        LogicalTypeId::$logical.into(),
+                    )]
+                }
+            }
+            $con.register_scalar_function::<S>($name)?;
+        })+
+    }};
+}
+
+/// Like [`register_prim_opt`] but for total kernels `fn(&str) -> $rust_ty`
+/// (never null on a non-null input).
+macro_rules! register_prim_total {
+    ($con:expr, $rust_ty:ty, $logical:ident, $($name:literal => $kernel:path),+ $(,)?) => {{
+        $({
+            struct S;
+            impl VScalar for S {
+                type State = ();
+                fn invoke(
+                    _state: &Self::State,
+                    input: &mut DataChunkHandle,
+                    output: &mut dyn WritableVector,
+                ) -> std::result::Result<(), Box<dyn Error>> {
+                    let in_vec = input.flat_vector(0);
+                    let rows =
+                        unsafe { in_vec.as_slice_with_len::<duckdb_string_t>(input.len()) };
+                    let mut out = output.flat_vector();
+                    for (i, row) in rows.iter().enumerate() {
+                        if in_vec.row_is_null(i as u64) {
+                            out.set_null(i);
+                            continue;
+                        }
+                        let mut row = *row;
+                        let s = DuckString::new(&mut row).as_str();
+                        let v = $kernel(s.as_ref());
+                        unsafe { out.as_mut_slice::<$rust_ty>()[i] = v };
+                    }
+                    Ok(())
+                }
+                fn signatures() -> Vec<ScalarFunctionSignature> {
+                    vec![ScalarFunctionSignature::exact(
+                        vec![LogicalTypeId::Varchar.into()],
+                        LogicalTypeId::$logical.into(),
+                    )]
+                }
+            }
+            $con.register_scalar_function::<S>($name)?;
+        })+
+    }};
+}
+
 /// Register every GoldenFlow scalar UDF on a connection. Single source of truth
 /// for both the loadable entrypoint and the in-process test harness, so the two
 /// can never drift on names. UDF names are `goldenflow_<kernel>` -- predictable
@@ -166,6 +252,44 @@ fn register_all(con: &Connection) -> Result<(), Box<dyn Error>> {
         "goldenflow_email_extract_domain" => goldenflow_core::email::email_extract_domain,
         "goldenflow_url_normalize"        => goldenflow_core::url::url_normalize,
         "goldenflow_url_extract_domain"   => goldenflow_core::url::url_extract_domain,
+        // identifier formatters/normalizers
+        "goldenflow_cc_format"            => goldenflow_core::identifiers::luhn::cc_format,
+        "goldenflow_cc_mask"              => goldenflow_core::identifiers::luhn::cc_mask,
+        "goldenflow_iban_format"          => goldenflow_core::identifiers::iban::iban_format,
+        "goldenflow_isbn_normalize"       => goldenflow_core::identifiers::isbn::isbn_normalize,
+        "goldenflow_swift_format"         => goldenflow_core::identifiers::swift::swift_format,
+        "goldenflow_vat_format"           => goldenflow_core::identifiers::vat::vat_format,
+    );
+
+    // VARCHAR -> BOOLEAN.
+    register_prim_total!(con, bool, Boolean,
+        "goldenflow_has_initial"   => goldenflow_core::names::has_initial,
+        // identifier validators
+        "goldenflow_cc_validate"   => goldenflow_core::identifiers::luhn::cc_validate,
+        "goldenflow_iban_validate" => goldenflow_core::identifiers::iban::iban_validate,
+        "goldenflow_isbn_validate" => goldenflow_core::identifiers::isbn::isbn_validate,
+        "goldenflow_ean_validate"  => goldenflow_core::identifiers::ean::ean_validate,
+        "goldenflow_swift_validate" => goldenflow_core::identifiers::swift::swift_validate,
+        "goldenflow_vat_validate"  => goldenflow_core::identifiers::vat::vat_validate,
+        "goldenflow_aba_validate"  => goldenflow_core::identifiers::aba::aba_validate,
+        "goldenflow_imei_validate" => goldenflow_core::identifiers::imei::imei_validate,
+    );
+    register_prim_opt!(con, bool, Boolean,
+        "goldenflow_boolean_normalize" => goldenflow_core::categorical::boolean_normalize,
+        "goldenflow_email_validate"    => goldenflow_core::email::email_validate,
+    );
+
+    // VARCHAR -> DOUBLE (nullable numeric parsers).
+    register_prim_opt!(con, f64, Double,
+        "goldenflow_currency_strip"        => goldenflow_core::numeric::currency_strip,
+        "goldenflow_percentage_normalize"  => goldenflow_core::numeric::percentage_normalize,
+        "goldenflow_comma_decimal"         => goldenflow_core::numeric::comma_decimal,
+        "goldenflow_scientific_to_decimal" => goldenflow_core::numeric::scientific_to_decimal,
+    );
+
+    // VARCHAR -> BIGINT.
+    register_prim_opt!(con, i64, Bigint,
+        "goldenflow_to_integer" => goldenflow_core::numeric::to_integer,
     );
 
     Ok(())
@@ -277,5 +401,108 @@ mod tests {
             .query_row("SELECT goldenflow_url_normalize(NULL)", [], |r| r.get(0))
             .expect("query null nullable");
         assert_eq!(nullable, None);
+    }
+
+    /// Typed outputs (Slice 2b): BOOLEAN / DOUBLE / BIGINT marshaling through the
+    /// primitive output-vector, each against the reference kernel.
+    #[test]
+    fn typed_outputs_marshal() {
+        use goldenflow_core as gf;
+        let con = conn();
+
+        let valid: Option<bool> = con
+            .query_row("SELECT goldenflow_cc_validate(?)", ["4242424242424242"], |r| r.get(0))
+            .expect("bool udf");
+        assert_eq!(valid, Some(gf::identifiers::luhn::cc_validate("4242424242424242")));
+        assert_eq!(valid, Some(true));
+
+        let dbl: Option<f64> = con
+            .query_row("SELECT goldenflow_currency_strip(?)", ["$1,234.56"], |r| r.get(0))
+            .expect("double udf");
+        assert_eq!(dbl, gf::numeric::currency_strip("$1,234.56"));
+
+        let int: Option<i64> = con
+            .query_row("SELECT goldenflow_to_integer(?)", ["42"], |r| r.get(0))
+            .expect("bigint udf");
+        assert_eq!(int, gf::numeric::to_integer("42"));
+
+        // Unparseable numeric -> SQL NULL.
+        let is_null: bool = con
+            .query_row("SELECT goldenflow_currency_strip('not money') IS NULL", [], |r| r.get(0))
+            .expect("null double");
+        assert!(is_null);
+    }
+
+    /// Thread the shared `identifiers_corpus.jsonl` -- the exact cross-surface
+    /// oracle the Python + TS parity gates assert against -- through the compiled
+    /// SQL surface. Every registered transform, every row: SQL output must equal
+    /// the recorded expected value. End-to-end proof that the DuckDB surface is
+    /// byte-identical to Python / TS / wasm.
+    #[test]
+    fn full_corpus_matches_through_sql() {
+        use std::io::BufRead;
+        let con = conn();
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../python/goldenflow/tests/parity/identifiers_corpus.jsonl");
+        let file = std::fs::File::open(&path)
+            .unwrap_or_else(|e| panic!("open corpus {}: {e}", path.display()));
+
+        let mut n = 0usize;
+        for line in std::io::BufReader::new(file).lines() {
+            let line = line.expect("read line");
+            if line.trim().is_empty() {
+                continue;
+            }
+            let row: serde_json::Value = serde_json::from_str(&line).expect("json");
+            let transform = row["transform"].as_str().expect("transform");
+            let udf = format!("goldenflow_{transform}");
+            let expected = &row["expected"];
+            let input = &row["input"];
+
+            // Null input -> every UDF yields SQL NULL.
+            if input.is_null() {
+                let is_null: bool = con
+                    .query_row(&format!("SELECT {udf}(NULL) IS NULL"), [], |r| r.get(0))
+                    .unwrap_or_else(|e| panic!("{udf}(NULL): {e}"));
+                assert!(is_null, "{transform} on NULL should be NULL");
+                n += 1;
+                continue;
+            }
+            let input = input.as_str().expect("string input");
+
+            if expected.is_null() {
+                let is_null: bool = con
+                    .query_row(&format!("SELECT {udf}(?) IS NULL"), [input], |r| r.get(0))
+                    .unwrap_or_else(|e| panic!("{udf}({input:?}): {e}"));
+                assert!(is_null, "{transform} on {input:?} should be NULL");
+            } else if let Some(b) = expected.as_bool() {
+                let got: Option<bool> = con
+                    .query_row(&format!("SELECT {udf}(?)"), [input], |r| r.get(0))
+                    .unwrap_or_else(|e| panic!("{udf}({input:?}): {e}"));
+                assert_eq!(got, Some(b), "{transform} on {input:?}");
+            } else if transform == "to_integer" {
+                let got: Option<i64> = con
+                    .query_row(&format!("SELECT {udf}(?)"), [input], |r| r.get(0))
+                    .unwrap_or_else(|e| panic!("{udf}({input:?}): {e}"));
+                assert_eq!(got, expected.as_i64(), "{transform} on {input:?}");
+            } else if let Some(f) = expected.as_f64() {
+                let got: Option<f64> = con
+                    .query_row(&format!("SELECT {udf}(?)"), [input], |r| r.get(0))
+                    .unwrap_or_else(|e| panic!("{udf}({input:?}): {e}"));
+                let got = got.expect("non-null double");
+                assert!(
+                    (got - f).abs() <= 1e-9 * (1.0 + f.abs()),
+                    "{transform} on {input:?}: {got} vs {f}",
+                );
+            } else {
+                let s = expected.as_str().expect("string expected");
+                let got: Option<String> = con
+                    .query_row(&format!("SELECT {udf}(?)"), [input], |r| r.get(0))
+                    .unwrap_or_else(|e| panic!("{udf}({input:?}): {e}"));
+                assert_eq!(got.as_deref(), Some(s), "{transform} on {input:?}");
+            }
+            n += 1;
+        }
+        assert!(n > 400, "expected the full corpus, only saw {n} rows");
     }
 }

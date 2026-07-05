@@ -30,6 +30,11 @@ goldenflow-core = { path = "../goldenflow-core" }
 # the two DuckDB link modes are mutually exclusive.
 duckdb = { version = "1.10504.0", default-features = false, features = ["vscalar"] }
 
+[dev-dependencies]
+# Parse the shared identifiers_corpus.jsonl to thread the cross-surface oracle
+# through the SQL surface (test-bundled only).
+serde_json = "1"
+
 [features]
 default = ["loadable"]
 # The shippable artifact: links against libduckdb provided at LOAD time.
