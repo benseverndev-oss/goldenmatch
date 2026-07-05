@@ -145,6 +145,39 @@ jobs:
           path: packages/rust/extensions/goldenflow-duckdb/goldenflow_duckdb-${{ matrix.platform }}.duckdb_extension
           if-no-files-found: error
 
+  # Prove the portability claim: ONE stable-C-API build loads across a sweep of
+  # DuckDB versions. Reuses the linux_amd64 artifact (build once, load many). If
+  # an older DuckDB rejects it, this reveals the true floor instead of asserting
+  # ">= 1.2.0" -- measure, don't claim.
+  portability:
+    name: portability (DuckDB ${{ matrix.duckdb }})
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        duckdb: [v1.2.0, v1.3.2, v1.4.0, v1.5.4]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: goldenflow_duckdb-linux_amd64
+          path: ext
+      - name: LOAD on DuckDB ${{ matrix.duckdb }}
+        working-directory: ${{ github.workspace }}
+        run: |
+          curl -sL -o duckdb.zip \
+            "https://github.com/duckdb/duckdb/releases/download/${{ matrix.duckdb }}/duckdb_cli-linux-amd64.zip"
+          unzip -o -q duckdb.zip
+          EXT=$(ls ext/*.duckdb_extension | head -1)
+          ./duckdb -unsigned -noheader -list -c "
+            LOAD '$EXT';
+            SELECT goldenflow_email_normalize('  A.B@Example.COM ');
+            SELECT goldenflow_cc_validate('4242424242424242');
+          " | tee out.txt
+          grep -q "a.b@example.com" out.txt
+          grep -qi "true" out.txt
+          echo "the v1.2.0-C-API build LOADs on DuckDB ${{ matrix.duckdb }}"
+
   publish:
     name: publish release assets
     needs: build
