@@ -43,9 +43,9 @@ SELECT goldenflow_email_normalize('  A.B@Example.COM ');  -- a.b@example.com
 **Portable across DuckDB versions:** the extension targets the *stable* C API
 (`v1.2.0`), which is versioned separately from -- and well below -- the DuckDB
 release number, so one build loads on **any DuckDB >= 1.2.0** (smoke-tested
-against the current v1.5.4 CLI). Platforms built today: `linux_amd64`,
-`osx_arm64`, `windows_amd64` (each proven by a real `LOAD` smoke in CI).
-`linux_arm64` + `osx_amd64` are a follow-up.
+against the current v1.5.4 CLI). Five platforms are built and each proven by a
+real `LOAD` smoke in CI: `linux_amd64`, `linux_arm64`, `osx_arm64`, `osx_amd64`
+(cross-built, smoked under Rosetta), `windows_amd64`.
 
 ## Status: Slice 2b (full single-arg catalogue)
 
@@ -76,8 +76,7 @@ Deferred to later slices:
 
 | Slice | Scope |
 | ----- | ----- |
-| **3b** | Remaining platforms (`linux_arm64`, `osx_amd64`) + multi-DuckDB-version builds. |
-| **later** | Multi-argument / multi-output kernels: phone (region arg), `split_*`, `truncate`, `pad_*`, `merge_name`, `auto_correct`. |
+| **later** | Multi-DuckDB-version builds; multi-argument / multi-output kernels: phone (region arg), `split_*`, `truncate`, `pad_*`, `merge_name`, `auto_correct`. |
 
 ## Build & test
 

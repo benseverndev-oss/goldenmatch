@@ -49,11 +49,22 @@ jobs:
             target: x86_64-unknown-linux-gnu
             lib: libgoldenflow_duckdb.so
             cli_asset: duckdb_cli-linux-amd64.zip
+          - os: ubuntu-24.04-arm # native arm64 runner -> native build + smoke
+            platform: linux_arm64
+            target: aarch64-unknown-linux-gnu
+            lib: libgoldenflow_duckdb.so
+            cli_asset: duckdb_cli-linux-arm64.zip
           - os: macos-14
             platform: osx_arm64
             target: aarch64-apple-darwin
             lib: libgoldenflow_duckdb.dylib
             cli_asset: duckdb_cli-osx-arm64.zip
+          - os: macos-14 # Apple-Silicon runner cross-builds x86_64; smoke via Rosetta
+            platform: osx_amd64
+            target: x86_64-apple-darwin
+            lib: libgoldenflow_duckdb.dylib
+            cli_asset: duckdb_cli-osx-amd64.zip
+            needs_rosetta: true
           - os: windows-latest
             platform: windows_amd64
             target: x86_64-pc-windows-msvc
@@ -80,9 +91,9 @@ jobs:
             echo "EXT_VERSION=0.1.0" >> "$GITHUB_ENV"
           fi
 
-      # The macro reads these: the init symbol name and the min (== target,
-      # unstable C API) DuckDB version baked into the binary. They MUST match the
-      # footer's -dv or DuckDB refuses the load.
+      # The macro reads these: the init symbol name and the min DuckDB (stable
+      # C API) version baked into the binary. It MUST match the footer's -dv or
+      # DuckDB refuses the load.
       - name: Build loadable cdylib
         env:
           DUCKDB_EXTENSION_NAME: goldenflow_duckdb
@@ -99,6 +110,12 @@ jobs:
             -ev "$EXT_VERSION" \
             --abi-type C_STRUCT \
             -o "goldenflow_duckdb.duckdb_extension"
+
+      # osx_amd64 is cross-built on an Apple-Silicon runner; run the x86 CLI +
+      # extension under Rosetta so this leg is LOAD-smoked too, not just built.
+      - name: Install Rosetta
+        if: matrix.needs_rosetta
+        run: sudo softwareupdate --install-rosetta --agree-to-license
 
       # The real proof: a stock DuckDB CLI LOADs the extension and runs the UDFs.
       - name: LOAD smoke test
