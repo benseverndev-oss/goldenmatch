@@ -7,12 +7,12 @@
 //! is byte-identical to the Python / TS / wasm surfaces by construction -- and
 //! there is no CPython interpreter anywhere in the process.
 //!
-//! Slice 2 exposes the full single-argument `VARCHAR -> VARCHAR` catalogue
-//! (address, email, names, text, categorical), both the total (`-> String`) and
-//! nullable (`-> Option<String>`) shapes. Typed outputs (BOOLEAN / DOUBLE /
-//! BIGINT: validators + numeric parsers) and the identifier family are Slice 2b;
-//! multi-argument / multi-output kernels (phone, `split_*`, `truncate`, `pad_*`,
-//! `merge_name`, `auto_correct`) are later slices.
+//! Coverage: the full single-argument catalogue (Slice 2/2b) across VARCHAR /
+//! nullable VARCHAR / BOOLEAN / DOUBLE / BIGINT, the identifier family, plus the
+//! multi-argument (phone-with-region, `truncate`, `pad_*`, `merge_name`) and
+//! multi-output (`split_name`, `split_name_reverse`, `split_address`) kernels.
+//! Still out: `category_auto_correct` -- a column-wide/aggregate transform, not
+//! a stateless scalar, so it needs a DuckDB aggregate/table-function surface.
 
 use duckdb::{
     core::{DataChunkHandle, Inserter, LogicalTypeId},
@@ -200,6 +200,265 @@ macro_rules! register_prim_total {
     }};
 }
 
+// ---------------------------------------------------------------------------
+// Multi-OUTPUT kernels: expose each tuple component as its own single-arg UDF,
+// so they reuse the proven VARCHAR register_str! / register_opt_str! path.
+// ---------------------------------------------------------------------------
+mod split {
+    use goldenflow_core as gf;
+    pub fn name_first(s: &str) -> String { gf::names::split_name(s).0 }
+    pub fn name_last(s: &str) -> String { gf::names::split_name(s).1 }
+    pub fn rev_first(s: &str) -> String { gf::names::split_name_reverse(s).0 }
+    pub fn rev_last(s: &str) -> String { gf::names::split_name_reverse(s).1 }
+    pub fn addr_street(s: &str) -> String { gf::address::split_address(s).0 }
+    pub fn addr_city(s: &str) -> Option<String> { gf::address::split_address(s).1 }
+    pub fn addr_state(s: &str) -> Option<String> { gf::address::split_address(s).2 }
+    pub fn addr_zip(s: &str) -> Option<String> { gf::address::split_address(s).3 }
+}
+
+// ---------------------------------------------------------------------------
+// Multi-ARG kernels. Read each argument column into an owned Vec first (one
+// flat_vector borrow at a time), then compute -- avoids holding two chunk
+// vectors borrowed at once.
+// ---------------------------------------------------------------------------
+fn collect_str(input: &mut DataChunkHandle, col: usize) -> Vec<Option<String>> {
+    let n = input.len();
+    let v = input.flat_vector(col);
+    let rows = unsafe { v.as_slice_with_len::<duckdb_string_t>(n) };
+    (0..n)
+        .map(|i| {
+            if v.row_is_null(i as u64) {
+                None
+            } else {
+                let mut r = rows[i];
+                Some(DuckString::new(&mut r).as_str().as_ref().to_string())
+            }
+        })
+        .collect()
+}
+
+fn collect_i64(input: &mut DataChunkHandle, col: usize) -> Vec<Option<i64>> {
+    let n = input.len();
+    let v = input.flat_vector(col);
+    let rows = unsafe { v.as_slice_with_len::<i64>(n) };
+    (0..n)
+        .map(|i| if v.row_is_null(i as u64) { None } else { Some(rows[i]) })
+        .collect()
+}
+
+/// A `(VARCHAR phone, VARCHAR region) -> VARCHAR` phone UDF. `nanp_only=true`
+/// is the parity-safe mode (the Rust port is byte-identical to Python
+/// `phonenumbers` on country-code-1; it mis-strips some `+CC` numbers with a
+/// mismatched default region, so non-NANP rows return NULL rather than a wrong
+/// value -- exactly how native-flow gates it).
+macro_rules! phone_str_udf {
+    ($ty:ident, $kernel:path) => {
+        struct $ty;
+        impl VScalar for $ty {
+            type State = ();
+            fn invoke(
+                _s: &Self::State,
+                input: &mut DataChunkHandle,
+                output: &mut dyn WritableVector,
+            ) -> std::result::Result<(), Box<dyn Error>> {
+                let phones = collect_str(input, 0);
+                let regions = collect_str(input, 1);
+                let mut out = output.flat_vector();
+                for i in 0..input.len() {
+                    match &phones[i] {
+                        None => out.set_null(i),
+                        Some(p) => {
+                            let region = regions[i]
+                                .as_deref()
+                                .and_then(goldenflow_core::phone::region_of);
+                            match $kernel(region, p, true) {
+                                Some(v) => out.insert(i, v.as_str()),
+                                None => out.set_null(i),
+                            }
+                        }
+                    }
+                }
+                Ok(())
+            }
+            fn signatures() -> Vec<ScalarFunctionSignature> {
+                vec![ScalarFunctionSignature::exact(
+                    vec![LogicalTypeId::Varchar.into(), LogicalTypeId::Varchar.into()],
+                    LogicalTypeId::Varchar.into(),
+                )]
+            }
+        }
+    };
+}
+phone_str_udf!(PhoneE164, goldenflow_core::phone::e164);
+phone_str_udf!(PhoneNational, goldenflow_core::phone::national);
+
+/// `(VARCHAR phone, VARCHAR region) -> BIGINT` (country calling code).
+struct PhoneCountryCode;
+impl VScalar for PhoneCountryCode {
+    type State = ();
+    fn invoke(
+        _s: &Self::State,
+        input: &mut DataChunkHandle,
+        output: &mut dyn WritableVector,
+    ) -> std::result::Result<(), Box<dyn Error>> {
+        let phones = collect_str(input, 0);
+        let regions = collect_str(input, 1);
+        let mut out = output.flat_vector();
+        for i in 0..input.len() {
+            let cc = phones[i].as_deref().and_then(|p| {
+                let region = regions[i].as_deref().and_then(goldenflow_core::phone::region_of);
+                goldenflow_core::phone::country_code(region, p, true)
+            });
+            match cc {
+                Some(v) => unsafe { out.as_mut_slice::<i64>()[i] = v },
+                None => out.set_null(i),
+            }
+        }
+        Ok(())
+    }
+    fn signatures() -> Vec<ScalarFunctionSignature> {
+        vec![ScalarFunctionSignature::exact(
+            vec![LogicalTypeId::Varchar.into(), LogicalTypeId::Varchar.into()],
+            LogicalTypeId::Bigint.into(),
+        )]
+    }
+}
+
+/// `(VARCHAR phone, VARCHAR region) -> BOOLEAN` (is_valid; parity-safe NANP gate).
+struct PhoneValid;
+impl VScalar for PhoneValid {
+    type State = ();
+    fn invoke(
+        _s: &Self::State,
+        input: &mut DataChunkHandle,
+        output: &mut dyn WritableVector,
+    ) -> std::result::Result<(), Box<dyn Error>> {
+        let phones = collect_str(input, 0);
+        let regions = collect_str(input, 1);
+        let mut out = output.flat_vector();
+        for i in 0..input.len() {
+            let v = phones[i].as_deref().and_then(|p| {
+                let region = regions[i].as_deref().and_then(goldenflow_core::phone::region_of);
+                goldenflow_core::phone::valid(region, p, true)
+            });
+            match v {
+                Some(b) => unsafe { out.as_mut_slice::<bool>()[i] = b },
+                None => out.set_null(i),
+            }
+        }
+        Ok(())
+    }
+    fn signatures() -> Vec<ScalarFunctionSignature> {
+        vec![ScalarFunctionSignature::exact(
+            vec![LogicalTypeId::Varchar.into(), LogicalTypeId::Varchar.into()],
+            LogicalTypeId::Boolean.into(),
+        )]
+    }
+}
+
+/// `(VARCHAR s, BIGINT n) -> VARCHAR` first-n-chars truncate. A NULL/negative n
+/// yields NULL (there is no sensible truncation length).
+struct Truncate;
+impl VScalar for Truncate {
+    type State = ();
+    fn invoke(
+        _s: &Self::State,
+        input: &mut DataChunkHandle,
+        output: &mut dyn WritableVector,
+    ) -> std::result::Result<(), Box<dyn Error>> {
+        let strs = collect_str(input, 0);
+        let ns = collect_i64(input, 1);
+        let mut out = output.flat_vector();
+        for i in 0..input.len() {
+            match (&strs[i], ns[i]) {
+                (Some(s), Some(n)) if n >= 0 => {
+                    out.insert(i, goldenflow_core::text::truncate(s, n as usize).as_str())
+                }
+                _ => out.set_null(i),
+            }
+        }
+        Ok(())
+    }
+    fn signatures() -> Vec<ScalarFunctionSignature> {
+        vec![ScalarFunctionSignature::exact(
+            vec![LogicalTypeId::Varchar.into(), LogicalTypeId::Bigint.into()],
+            LogicalTypeId::Varchar.into(),
+        )]
+    }
+}
+
+/// `(VARCHAR s, BIGINT width, VARCHAR pad) -> VARCHAR`. `pad` uses its first
+/// char (space if empty), matching the polars `pad` semantics.
+macro_rules! pad_udf {
+    ($ty:ident, $kernel:path) => {
+        struct $ty;
+        impl VScalar for $ty {
+            type State = ();
+            fn invoke(
+                _s: &Self::State,
+                input: &mut DataChunkHandle,
+                output: &mut dyn WritableVector,
+            ) -> std::result::Result<(), Box<dyn Error>> {
+                let strs = collect_str(input, 0);
+                let widths = collect_i64(input, 1);
+                let pads = collect_str(input, 2);
+                let mut out = output.flat_vector();
+                for i in 0..input.len() {
+                    match (&strs[i], widths[i], &pads[i]) {
+                        (Some(s), Some(w), Some(pad)) if w >= 0 => {
+                            let ch = pad.chars().next().unwrap_or(' ');
+                            out.insert(i, $kernel(s, w as usize, ch).as_str())
+                        }
+                        _ => out.set_null(i),
+                    }
+                }
+                Ok(())
+            }
+            fn signatures() -> Vec<ScalarFunctionSignature> {
+                vec![ScalarFunctionSignature::exact(
+                    vec![
+                        LogicalTypeId::Varchar.into(),
+                        LogicalTypeId::Bigint.into(),
+                        LogicalTypeId::Varchar.into(),
+                    ],
+                    LogicalTypeId::Varchar.into(),
+                )]
+            }
+        }
+    };
+}
+pad_udf!(PadLeft, goldenflow_core::text::pad_left);
+pad_udf!(PadRight, goldenflow_core::text::pad_right);
+
+/// `(VARCHAR first, VARCHAR last) -> VARCHAR`. Both args nullable; joins the
+/// present non-blank parts, NULL when both are absent/blank.
+struct MergeName;
+impl VScalar for MergeName {
+    type State = ();
+    fn invoke(
+        _s: &Self::State,
+        input: &mut DataChunkHandle,
+        output: &mut dyn WritableVector,
+    ) -> std::result::Result<(), Box<dyn Error>> {
+        let firsts = collect_str(input, 0);
+        let lasts = collect_str(input, 1);
+        let mut out = output.flat_vector();
+        for i in 0..input.len() {
+            match goldenflow_core::names::merge_name(firsts[i].as_deref(), lasts[i].as_deref()) {
+                Some(v) => out.insert(i, v.as_str()),
+                None => out.set_null(i),
+            }
+        }
+        Ok(())
+    }
+    fn signatures() -> Vec<ScalarFunctionSignature> {
+        vec![ScalarFunctionSignature::exact(
+            vec![LogicalTypeId::Varchar.into(), LogicalTypeId::Varchar.into()],
+            LogicalTypeId::Varchar.into(),
+        )]
+    }
+}
+
 /// Register every GoldenFlow scalar UDF on a connection. Single source of truth
 /// for both the loadable entrypoint and the in-process test harness, so the two
 /// can never drift on names. UDF names are `goldenflow_<kernel>` -- predictable
@@ -291,6 +550,30 @@ fn register_all(con: &Connection) -> Result<(), Box<dyn Error>> {
     register_prim_opt!(con, i64, Bigint,
         "goldenflow_to_integer" => goldenflow_core::numeric::to_integer,
     );
+
+    // Multi-output splits, exposed component-by-component (single-arg).
+    register_str!(con,
+        "goldenflow_split_name_first"         => split::name_first,
+        "goldenflow_split_name_last"          => split::name_last,
+        "goldenflow_split_name_reverse_first" => split::rev_first,
+        "goldenflow_split_name_reverse_last"  => split::rev_last,
+        "goldenflow_split_address_street"     => split::addr_street,
+    );
+    register_opt_str!(con,
+        "goldenflow_split_address_city"  => split::addr_city,
+        "goldenflow_split_address_state" => split::addr_state,
+        "goldenflow_split_address_zip"   => split::addr_zip,
+    );
+
+    // Multi-argument kernels.
+    con.register_scalar_function::<PhoneE164>("goldenflow_phone_e164")?;
+    con.register_scalar_function::<PhoneNational>("goldenflow_phone_national")?;
+    con.register_scalar_function::<PhoneCountryCode>("goldenflow_phone_country_code")?;
+    con.register_scalar_function::<PhoneValid>("goldenflow_phone_valid")?;
+    con.register_scalar_function::<Truncate>("goldenflow_truncate")?;
+    con.register_scalar_function::<PadLeft>("goldenflow_pad_left")?;
+    con.register_scalar_function::<PadRight>("goldenflow_pad_right")?;
+    con.register_scalar_function::<MergeName>("goldenflow_merge_name")?;
 
     Ok(())
 }
@@ -504,5 +787,88 @@ mod tests {
             n += 1;
         }
         assert!(n > 400, "expected the full corpus, only saw {n} rows");
+    }
+
+    /// Multi-output splits (component UDFs) match the reference tuple.
+    #[test]
+    fn split_components_match_reference() {
+        use goldenflow_core as gf;
+        let con = conn();
+
+        let name = "Jane Smith";
+        let (f, l) = gf::names::split_name(name);
+        assert_eq!(sql_str(&con, "goldenflow_split_name_first", name).as_deref(), Some(f.as_str()));
+        assert_eq!(sql_str(&con, "goldenflow_split_name_last", name).as_deref(), Some(l.as_str()));
+
+        let rev = "Smith, Jane";
+        let (rf, rl) = gf::names::split_name_reverse(rev);
+        assert_eq!(sql_str(&con, "goldenflow_split_name_reverse_first", rev).as_deref(), Some(rf.as_str()));
+        assert_eq!(sql_str(&con, "goldenflow_split_name_reverse_last", rev).as_deref(), Some(rl.as_str()));
+
+        let addr = "123 Main St, Springfield, IL 62704";
+        let (street, city, state, zip) = gf::address::split_address(addr);
+        assert_eq!(sql_str(&con, "goldenflow_split_address_street", addr).as_deref(), Some(street.as_str()));
+        assert_eq!(sql_str(&con, "goldenflow_split_address_city", addr), city);
+        assert_eq!(sql_str(&con, "goldenflow_split_address_state", addr), state);
+        assert_eq!(sql_str(&con, "goldenflow_split_address_zip", addr), zip);
+        // unparseable address -> street=original, the rest NULL
+        assert_eq!(
+            sql_str(&con, "goldenflow_split_address_city", "not an address"),
+            gf::address::split_address("not an address").1,
+        );
+    }
+
+    /// Multi-argument kernels: value + NULL behaviour, all vs the reference.
+    #[test]
+    fn multi_arg_kernels_match_reference() {
+        use goldenflow_core as gf;
+        let con = conn();
+
+        // truncate(s, n)
+        let got: Option<String> = con
+            .query_row("SELECT goldenflow_truncate(?, ?)", duckdb::params!["hello world", 5i64], |r| r.get(0))
+            .unwrap();
+        assert_eq!(got.as_deref(), Some(gf::text::truncate("hello world", 5).as_str()));
+        // NULL length -> NULL
+        let n: bool = con
+            .query_row("SELECT goldenflow_truncate('x', NULL) IS NULL", [], |r| r.get(0))
+            .unwrap();
+        assert!(n);
+
+        // pad_left(s, width, pad)
+        let got: Option<String> = con
+            .query_row("SELECT goldenflow_pad_left(?, ?, ?)", duckdb::params!["7", 3i64, "0"], |r| r.get(0))
+            .unwrap();
+        assert_eq!(got.as_deref(), Some(gf::text::pad_left("7", 3, '0').as_str()));
+        let got: Option<String> = con
+            .query_row("SELECT goldenflow_pad_right(?, ?, ?)", duckdb::params!["7", 3i64, "."], |r| r.get(0))
+            .unwrap();
+        assert_eq!(got.as_deref(), Some(gf::text::pad_right("7", 3, '.').as_str()));
+
+        // merge_name(first, last) -- both nullable
+        let got: Option<String> = con
+            .query_row("SELECT goldenflow_merge_name(?, ?)", duckdb::params!["Jane", "Smith"], |r| r.get(0))
+            .unwrap();
+        assert_eq!(got, gf::names::merge_name(Some("Jane"), Some("Smith")));
+        let nn: bool = con
+            .query_row("SELECT goldenflow_merge_name(NULL, NULL) IS NULL", [], |r| r.get(0))
+            .unwrap();
+        assert!(nn);
+        // one side present
+        let got: Option<String> = con
+            .query_row("SELECT goldenflow_merge_name(NULL, ?)", ["Smith"], |r| r.get(0))
+            .unwrap();
+        assert_eq!(got, gf::names::merge_name(None, Some("Smith")));
+
+        // phone (NANP, nanp_only=true parity-safe): value on code-1, NULL off it
+        let reg = gf::phone::region_of("US");
+        let got: Option<String> = con
+            .query_row("SELECT goldenflow_phone_e164(?, ?)", duckdb::params!["1-800-356-9377", "US"], |r| r.get(0))
+            .unwrap();
+        assert_eq!(got, gf::phone::e164(reg, "1-800-356-9377", true));
+        let cc: Option<i64> = con
+            .query_row("SELECT goldenflow_phone_country_code(?, ?)", duckdb::params!["212-555-0100", "US"], |r| r.get(0))
+            .unwrap();
+        assert_eq!(cc, gf::phone::country_code(gf::phone::region_of("US"), "212-555-0100", true));
     }
 }
