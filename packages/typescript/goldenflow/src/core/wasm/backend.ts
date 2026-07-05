@@ -14,8 +14,9 @@
  * (strip/collapse_whitespace/normalize_quotes/normalize_line_endings/
  * remove_html_tags/remove_urls/remove_digits/remove_punctuation/remove_emojis/
  * extract_numbers/truncate/pad_left/pad_right + the text-2 Unicode-heavy five
- * lowercase/uppercase/title_case/normalize_unicode/fix_mojibake); everything
- * else stays pure-TS.
+ * lowercase/uppercase/title_case/normalize_unicode/fix_mojibake), and the
+ * category_auto_correct fuzzy kernel (fuzz_ratio + build_canonical_map);
+ * everything else stays pure-TS.
  * Mirrors goldenmatch's `setScorerBackend(null)` module-singleton pattern for
  * test isolation.
  */
@@ -102,6 +103,17 @@ export interface FlowWasmBackend {
   titleCase(s: string): string;
   normalizeUnicode(s: string): string;
   fixMojibake(s: string): string;
+  /** rapidfuzz `fuzz.ratio` (Indel/LCS similarity, 0-100). */
+  fuzzRatio(a: string, b: string): number;
+  /** category-autocorrect correction map from parallel `values`/`counts`
+   * arrays (in value_counts DESC order). Returns a FLAT `[from0, to0, from1,
+   * to1, ...]` array of correction pairs; the caller unflattens. */
+  buildCanonicalMap(
+    values: string[],
+    counts: number[],
+    freqThreshold: number,
+    matchThreshold: number,
+  ): string[];
 }
 
 import { createBackendRegistry } from "goldenmatch-wasm-runtime";
