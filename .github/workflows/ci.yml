@@ -72,6 +72,7 @@ jobs:
       goldenprofile_native: ${{ steps.filter.outputs.goldenprofile_native }}
       analysis_native: ${{ steps.filter.outputs.analysis_native }}
       native_flow: ${{ steps.filter.outputs.native_flow }}
+      goldenflow_duckdb: ${{ steps.filter.outputs.goldenflow_duckdb }}
       goldenpipe_native: ${{ steps.filter.outputs.goldenpipe_native }}
       goldenembed: ${{ steps.filter.outputs.goldenembed }}
       embed: ${{ steps.filter.outputs.embed }}
@@ -593,6 +594,13 @@ jobs:
               - 'packages/python/goldenflow/tests/transforms/test_native_parity.py'
               - 'packages/python/goldenflow/tests/transforms/test_fastpath_parity.py'
               - 'packages/python/goldenflow/scripts/build_native.py'
+            goldenflow_duckdb:
+              # goldenflow-duckdb: the compiled zero-Python DuckDB extension over
+              # goldenflow-core. A core change must re-gate its bundled parity
+              # (SQL == reference kernel over the full corpus) + loadable build.
+              - 'packages/rust/extensions/goldenflow-duckdb/**'
+              - 'packages/rust/extensions/goldenflow-core/**'
+              - 'packages/rust/extensions/Cargo.toml'
             goldenpipe_native:
               # GoldenPipe planner kernel: the pyo3-free goldenpipe-core is the
               # REFERENCE; this lane builds the goldenpipe-native abi3 wheel and
@@ -3627,10 +3635,36 @@ jobs:
           fi
           echo "all committed wasm parity fixtures are in sync with their live cores"
 
+  goldenflow_duckdb:
+    needs: changes
+    if: needs.changes.outputs.goldenflow_duckdb == 'true' || needs.changes.outputs.force_all == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: packages/rust/extensions/goldenflow-duckdb
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/goldenflow-duckdb
+      # Hermetic parity: compiles DuckDB in-process (test-bundled) and asserts SQL
+      # output == the goldenflow-core reference over the full identifiers_corpus +
+      # the multi-arg kernels. This is the cross-surface gate for the DuckDB
+      # surface -- a goldenflow-core change can't merge with it red.
+      - name: Parity test (bundled)
+        run: cargo test --no-default-features --features test-bundled
+      # The shippable cdylib compiles against the DuckDB C Extension API.
+      - name: Build loadable cdylib
+        run: cargo build --release
+
   ci-required:
     needs:
       - changes
       - workflow_lint
+      - goldenflow_duckdb
+      - native_flow
       - throughput-gate
       - python
       - python_goldenmatch

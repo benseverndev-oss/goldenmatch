@@ -106,5 +106,8 @@ cargo test --no-default-features --features test-bundled
 cargo build --release
 ```
 
-Both run in CI (`.github/workflows/goldenflow-duckdb.yml`); the `bundled` build
-is heavy, so CI is the authoritative build environment.
+Both run in CI as the required `goldenflow_duckdb` lane in
+`.github/workflows/ci.yml` (a `goldenflow-core` change re-gates it, and it's part
+of `ci-required` so a red blocks the merge); the `bundled` build is heavy, so CI
+is the authoritative build environment. `goldenflow-duckdb-dist.yml` handles the
+per-platform release build + LOAD smoke + version-portability sweep.
