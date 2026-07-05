@@ -4,6 +4,17 @@ All notable changes to golden-suite are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic
 versioning.
 
+## [0.1.3] - 2026-07-05
+
+### Changed
+- Bumped the goldenflow-family floors after the Wave D owned-kernel release:
+  **`goldenflow>=1.13.0`** (was `>=1.4.0`) and **`goldenflow-native>=0.11.0`**
+  (was `>=0.2.0`), per the lockstep policy. goldenflow 1.13.0 completes the
+  owned-kernel + cross-surface migration of every byte-parity-achievable
+  transform family (identifiers, names, email, url, numeric, categorical,
+  address, the full text family, and fuzzy category_auto_correct); the
+  goldenflow-native 0.11.0 wheel ships the matching compiled kernels.
+
 ## [0.1.2] - 2026-07-04
 
 ### Changed

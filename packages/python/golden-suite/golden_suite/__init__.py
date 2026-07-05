@@ -20,7 +20,7 @@ import importlib
 import os
 from importlib import metadata
 
-__version__ = "0.1.2"
+__version__ = "0.1.3"
 
 # PyPI distribution name -> import module name. Keep in lockstep with pyproject deps.
 _COMPONENTS: dict[str, str] = {
