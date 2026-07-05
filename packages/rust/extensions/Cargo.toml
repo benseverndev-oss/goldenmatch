@@ -15,6 +15,10 @@ exclude = [
     # goldenflow-core is native-flow's pyo3-free path dependency (standalone
     # workspace, like score-core/goldencheck-core). Not a bridge member.
     "goldenflow-core",
+    # goldenflow-duckdb is a cdylib DuckDB loadable extension over goldenflow-core
+    # (zero-Python SQL surface). Its own [workspace] + special DuckDB linking keep
+    # it out of the bridge build, like native-flow.
+    "goldenflow-duckdb",
     # analysis-native is a standalone abi3 ext-module workspace (like the above);
     # analysis-core is its pyo3-free path dependency. GoldenAnalysis's optional
     # accelerator (goldenanalysis[native]); neither belongs in `bridge`.
