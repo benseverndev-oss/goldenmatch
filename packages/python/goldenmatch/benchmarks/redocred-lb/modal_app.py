@@ -132,6 +132,49 @@ def evi_smoke() -> dict:
     return info
 
 
+@app.function(image=image, volumes={DATA: vol}, timeout=3600)
+def fetch_distant(n: int = 40000, seed: int = 0) -> dict:
+    """Fetch a subset of the DocRED distant-supervised train split (101,873 weakly-labeled
+    docs), reshape to the thunlp raw format `read_docred` consumes (columnar `labels` dict
+    -> row form, filtered to the 96 in-schema relations), and save to the Volume for b2
+    self-training. Only docs with >=1 in-schema distant relation are kept."""
+    import json
+    import sys
+
+    import numpy as np
+    from datasets import load_dataset
+
+    sys.path.insert(0, "/root/rdlb")
+    from prepro import build_rel2id
+    train, dev, test = _load_splits()
+    valid = set(build_rel2id(train, dev, test))  # the 96 Pxxx we score on
+
+    ds = load_dataset("docred", split="train_distant", trust_remote_code=True)
+    idx = np.random.RandomState(seed).permutation(len(ds))[: n * 2]  # oversample; some dropped
+    out = []
+    for i in idx.tolist():
+        rec = ds[i]
+        lab = rec["labels"]
+        rows = []
+        for h, t, r in zip(lab["head"], lab["tail"], lab["relation_id"]):
+            if r in valid and h != t:
+                rows.append({"h": int(h), "t": int(t), "r": r, "evidence": []})
+        if not rows or len(rec["vertexSet"]) < 2:
+            continue
+        out.append({"title": rec["title"], "sents": rec["sents"],
+                    "vertexSet": rec["vertexSet"], "labels": rows})
+        if len(out) >= n:
+            break
+    path = f"{DATA}/distant_{len(out)}.json"
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(out, f)
+    vol.commit()
+    info = {"kept": len(out), "requested": n, "path": path,
+            "avg_labels": round(sum(len(d["labels"]) for d in out) / max(len(out), 1), 1)}
+    print("FETCH_DISTANT:", info)
+    return info
+
+
 @app.function(image=image, volumes={DATA: vol}, timeout=1800)
 def distant_smoke() -> dict:
     """Probe the DocRED distant split's schema so the shaper can be written correctly.
@@ -307,7 +350,7 @@ def train(base_model: str = "roberta-large", epochs: int = 30, lr: float = 3e-5,
           classifier_lr: float = 1e-4, batch_size: int = 4, seed: int = 66,
           num_labels: int = 4, max_seq_length: int = 1024,
           evidence: bool = False, evi_lambda: float = 0.1, save_ckpt: bool = False,
-          tag: str = "") -> dict:
+          tag: str = "", train_file: str = "", init_ckpt: str = "") -> dict:
     import json
     import os
     import sys
@@ -327,10 +370,16 @@ def train(base_model: str = "roberta-large", epochs: int = 30, lr: float = 3e-5,
     torch.manual_seed(seed)
     np.random.seed(seed)
 
-    train_docs, dev_docs, test_docs = _load_splits()
-    rel2id = build_rel2id(train_docs, dev_docs, test_docs)
+    human_train, dev_docs, test_docs = _load_splits()
+    rel2id = build_rel2id(human_train, dev_docs, test_docs)  # the 96, from human data
     id2rel = {v: k for k, v in rel2id.items()}
-    train_facts = facts_in_train(train_docs)
+    train_facts = facts_in_train(human_train)  # Ign-F1 always uses human train facts
+    # train on a different corpus (e.g. the distant set) when train_file is given
+    if train_file:
+        with open(f"{DATA}/{train_file}", encoding="utf-8") as f:
+            train_docs = json.load(f)
+    else:
+        train_docs = human_train
 
     run_tag = (tag or base_model).replace("/", "_")
     transformer_type = "roberta" if "roberta" in base_model else "bert"
@@ -348,6 +397,10 @@ def train(base_model: str = "roberta-large", epochs: int = 30, lr: float = 3e-5,
 
     enc = AutoModel.from_pretrained(base_model, config=cfg)
     model = DocREModel(cfg, enc, num_labels=num_labels).cuda()
+    if init_ckpt:  # continue from a pretrained checkpoint (stage-2 fine-tune)
+        state = torch.load(f"{DATA}/ckpt/{init_ckpt}/model.pt", map_location="cuda")
+        model.load_state_dict(state)
+        print(f"loaded init checkpoint: {init_ckpt}", flush=True)
     collate = make_collate(tok.pad_token_id)
 
     new_layer = ["extractor", "bilinear"]
@@ -448,7 +501,8 @@ def run_ensemble(tags: str = "deberta-s13,deberta-s41,deberta-evi,roberta-s7"):
 @app.local_entrypoint()
 def main(base_model: str = "roberta-large", epochs: int = 30, spawn: bool = False,
          smoke_only: bool = False, evidence: bool = False, evi_lambda: float = 0.1,
-         save_ckpt: bool = False, tag: str = "", seed: int = 66):
+         save_ckpt: bool = False, tag: str = "", seed: int = 66,
+         train_file: str = "", init_ckpt: str = "", lr: float = 3e-5):
     """Upload the Re-DocRED splits to the Volume, then smoke or train.
 
     `--evidence` turns on DREEAM-style evidence supervision; `--save-ckpt` persists the
@@ -468,7 +522,8 @@ def main(base_model: str = "roberta-large", epochs: int = 30, spawn: bool = Fals
         print("smoke:", smoke.remote())
         return
     kw = dict(base_model=base_model, epochs=epochs, evidence=evidence,
-              evi_lambda=evi_lambda, save_ckpt=save_ckpt, tag=tag, seed=seed)
+              evi_lambda=evi_lambda, save_ckpt=save_ckpt, tag=tag, seed=seed,
+              train_file=train_file, init_ckpt=init_ckpt, lr=lr)
     run_tag = (tag or base_model).replace("/", "_")
     if spawn:
         call = train.spawn(**kw)
