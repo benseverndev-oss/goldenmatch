@@ -98,3 +98,25 @@ def test_run_checks_reports_across_surfaces():
     ts = {"package": "gm", "mcp_tools": [], "cli_commands": ["b"]}
     fails = gate.run_checks(m, py, ts)
     assert {f.kind for f in fails} == {"undeclared_py_only", "undeclared_ts_only"}
+
+
+import os, subprocess, sys, json, pathlib
+
+def test_python_emitter_goldenmatch_smoke():
+    """Runs the real emitter against goldenmatch. Box-safe (needs goldenmatch[mcp] in the venv)."""
+    root = pathlib.Path(__file__).resolve().parent.parent
+    env = {**os.environ, "POLARS_SKIP_CPU_CHECK": "1", "GOLDENMATCH_NATIVE": "0",
+           "PYTHONPATH": str(root / "packages" / "python" / "goldenmatch")}
+    proc = subprocess.run([sys.executable, str(root / "scripts" / "emit_python_surface.py"), "goldenmatch"],
+                          capture_output=True, text=True, env=env)
+    assert proc.returncode == 0, proc.stderr
+    desc = json.loads(proc.stdout)
+    assert desc["package"] == "goldenmatch"
+    assert desc["mcp_tools"] == sorted(desc["mcp_tools"]) and desc["mcp_tools"]
+    assert desc["cli_commands"] == sorted(desc["cli_commands"]) and desc["cli_commands"]
+    # MCP count equals the MEASURED len(TOOLS) — never a hardcoded number
+    from goldenmatch.mcp.server import TOOLS
+    assert len(desc["mcp_tools"]) == len(TOOLS)
+    # known real names present
+    assert "find_duplicates" in desc["mcp_tools"]
+    assert "mcp-serve" in desc["cli_commands"] and "identity" in desc["cli_commands"]
