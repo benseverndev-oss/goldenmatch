@@ -155,7 +155,42 @@ dispatched by the `switch (name)` in `handleTool` (~server.ts:509). Two edits:
    ```
    No body is duplicated — the alias label falls through to the canonical block.
 
-### 3.4 Manifest (`parity/goldenmatch.yaml`)
+### 3.4 Suite aggregator (`packages/python/goldensuite-mcp/goldensuite_mcp/server.py`)
+
+The aggregator composes every package's `gm.TOOLS` under first-wins precedence,
+goldenmatch first (`_SUITE_ORDER`, server.py:126-133; collision logic :159-167).
+goldencheck already ships a distinct MCP tool named **`profile`** (an A–F *file*
+health score — goldencheck server.py:83). Today goldenmatch has no `profile`, so
+the suite's `profile` resolves to goldencheck. Once goldenmatch's `profile` alias
+lands in `gm.TOOLS`, it would register first and **silently shadow** goldencheck's
+`profile` (a `tool collision` warning + the suite's `profile` flips meaning).
+
+The aliases are a goldenmatch-*internal* Python↔TS naming concern; the aggregated
+suite has one surface per operation, so exposing both `dedupe` and
+`find_duplicates` (both → goldenmatch) is noise, and the `profile` flip is a
+regression. **Fix: exclude goldenmatch's alias names from the aggregated
+surface.** In `_adapt_goldenmatch` (server.py:48), filter the tool list:
+
+```python
+def _adapt_goldenmatch():
+    from goldenmatch.mcp import server as gm
+    aliases = set(gm._MCP_TOOL_ALIASES)
+    tools = [t for t in gm.TOOLS if t.name not in aliases]
+    return _normalize_tools(tools), gm.dispatch
+```
+
+`gm.dispatch` still resolves aliases (harmless — the suite just never advertises
+them). This keeps §3.2 intact (the single `_BASE_TOOLS` append still feeds the
+gate + standalone server); only the aggregated surface is trimmed. The suite's
+`profile` stays goldencheck's file-profiler; goldenmatch's canonical names
+(`find_duplicates`/`match_record`/`explain_match`/`profile_data`/
+`agent_explain_cluster`) remain the suite's goldenmatch surface, unchanged.
+
+(Only `profile` actually collides across packages — a grep of `**/mcp/**` shows
+the other eight alias names are unique — but filtering the whole alias set is
+simpler and correct than special-casing `profile`.)
+
+### 3.5 Manifest (`parity/goldenmatch.yaml`)
 
 Move the nine names into `mcp_tools.shared` (keeping every partition sorted and
 disjoint — the gate's structural check enforces both). Remove them from
@@ -203,6 +238,10 @@ as deliberate decisions rather than unexamined drift:
     now share `_resolve_alias`).
   - The existing parity smoke test (`scripts/test_api_parity.py`) still passes
     with the emitter count matching the grown `len(TOOLS)`.
+  - **Aggregator (§3.4):** after aggregation, the suite's `profile` tool still
+    dispatches to goldencheck (not goldenmatch), and none of goldenmatch's nine
+    alias names appear in the aggregated tool list. This locks in the exclusion
+    so the collision can't regress silently.
 - **TypeScript (CI-only — the box OOMs TS builds):**
   - `TOOLS` contains the four alias names; a unit test asserts calling
     `find_duplicates` and `dedupe` through `handleTool` yields identical results
