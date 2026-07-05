@@ -73,7 +73,9 @@ After this change:
 - **`buildCardSkills`** (:167): the de-dup `seen` set switches from `skill.name`
   to **`skill.id`** (:171-172). (Ids are unique across the four registries; a
   base skill still shadows a same-id registry entry — same first-wins behavior,
-  keyed on id.)
+  keyed on id. Switching the key is behavior-preserving because today
+  `name === id` for every registry entry.) Update the function's doc comment
+  (:162-166, "De-duped by skill id (`name`)") to say "by `id`".
 - **Dispatch is unchanged.** `dispatchAnySkill`/`dispatchSkill` (:481/:259) route
   on the request's `skill` string, which equals the `id`. No handler edits from
   Component 1.
@@ -136,6 +138,17 @@ Record that so a future reader doesn't mistake them for bugs:
 - `dispatchAnySkill("deduplicate", input)` and `dispatchAnySkill("dedupe", input)`
   return the same result on a small fixture; same for `explain`/`explain_pair`.
 - `humanize` produces the expected labels for a couple of derived ids.
+
+**Update the existing `tests/unit/a2a-card.test.ts`** — it currently keys its
+assertions off `s.name` as the *machine id*, the exact semantic Component 1
+inverts. Four assertions break (`names.has("dedupe")` :8, `"analyze_data"` :12,
+`"list_corrections"` :16, `"identity_resolve"` :19 — `name` is now the human
+label). Re-key those checks to `s.id`, and change the `:8` case from `dedupe` to
+`deduplicate` (Component 2 renames the advertised id). The de-dup count assertion
+(:31-33) still passes but should also key off `id` to test the right field. (The
+sibling `a2a-server.test.ts` is unaffected: its card-shape checks only assert
+`name` is a non-empty string, and its `POST /tasks {skill:"dedupe"}` test keeps
+working via the dispatch alias.)
 
 **Python (box-safe):** a regression test asserting `_SKILLS` entries all carry
 `id` + `name`, and that the canonical ids `deduplicate` and `explain` are present
