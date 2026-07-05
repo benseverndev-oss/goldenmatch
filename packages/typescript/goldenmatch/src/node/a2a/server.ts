@@ -161,7 +161,7 @@ const BASE_SKILLS: readonly AgentSkill[] = [
 
 /** Title-case a machine id into a human label: `agent_deduplicate` -> "Agent Deduplicate". */
 function humanize(id: string): string {
-  return id.split("_").map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w)).join(" ");
+  return id.split("_").map((w) => (w ? w.charAt(0).toUpperCase() + w.slice(1) : w)).join(" ");
 }
 
 /** Map a registry entry ({id, description}) to the spec-shaped `AgentSkill`. */
