@@ -23,22 +23,27 @@ UDF names are `goldenflow_<kernel>` -- a predictable 1:1 with the underlying
 
 ## Install
 
-Download the `.duckdb_extension` for your platform from the
-[`goldenflow-duckdb-v*` release assets](https://github.com/benseverndev-oss/goldenmatch/releases)
-and `LOAD` it. Extensions built outside the DuckDB signing chain need the
-unsigned flag:
+Download `goldenflow_duckdb-<platform>.zip` from the
+[`goldenflow-duckdb-v*` release assets](https://github.com/benseverndev-oss/goldenmatch/releases),
+extract it, and `LOAD` the file. Extensions built outside the DuckDB signing
+chain need the unsigned flag:
 
 ```sh
-# CLI
+unzip goldenflow_duckdb-linux_amd64.zip   # -> goldenflow_duckdb.duckdb_extension
 duckdb -unsigned
 ```
 ```sql
 -- or, from any client
 SET allow_unsigned_extensions = true;
-LOAD '/path/to/goldenflow_duckdb-linux_amd64.duckdb_extension';
+LOAD '/path/to/goldenflow_duckdb.duckdb_extension';
 
 SELECT goldenflow_email_normalize('  A.B@Example.COM ');  -- a.b@example.com
 ```
+
+> The file **must** keep the name `goldenflow_duckdb.duckdb_extension` -- DuckDB
+> derives the extension's init symbol from the filename, so a renamed file fails
+> to load. (That's why the assets are per-platform zips of the correctly-named
+> file rather than platform-suffixed bare extensions.)
 
 **Portable across DuckDB versions:** the extension targets the *stable* C API
 (`v1.2.0`), which is versioned separately from -- and well below -- the DuckDB

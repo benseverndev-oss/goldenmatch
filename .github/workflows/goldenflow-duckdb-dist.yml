@@ -136,13 +136,15 @@ jobs:
           grep -q "^42$" smoke.out
           echo "LOAD smoke passed on ${{ matrix.platform }}"
 
-      - name: Stage named artifact
-        run: cp goldenflow_duckdb.duckdb_extension "goldenflow_duckdb-${{ matrix.platform }}.duckdb_extension"
-
+      # Upload the file under its REQUIRED basename (goldenflow_duckdb.duckdb_extension).
+      # DuckDB derives the init symbol from the filename, so it must stay
+      # `goldenflow_duckdb` -- a `-<platform>` suffix breaks LOAD ("undefined
+      # symbol goldenflow_duckdb-<platform>_init_c_api"). Platform lives in the
+      # ARTIFACT NAME instead; the release job zips per platform below.
       - uses: actions/upload-artifact@v4
         with:
           name: goldenflow_duckdb-${{ matrix.platform }}
-          path: packages/rust/extensions/goldenflow-duckdb/goldenflow_duckdb-${{ matrix.platform }}.duckdb_extension
+          path: packages/rust/extensions/goldenflow-duckdb/goldenflow_duckdb.duckdb_extension
           if-no-files-found: error
 
   # Prove the portability claim: ONE stable-C-API build loads across a sweep of
@@ -180,21 +182,28 @@ jobs:
 
   publish:
     name: publish release assets
-    needs: build
+    needs: [build, portability]
     if: startsWith(github.ref, 'refs/tags/goldenflow-duckdb-v')
     runs-on: ubuntu-latest
     steps:
+      # No merge: every artifact holds the SAME filename
+      # (goldenflow_duckdb.duckdb_extension), so keep them in per-artifact dirs
+      # and zip each. Each zip extracts to the correctly-named, LOAD-able file.
       - uses: actions/download-artifact@v4
         with:
           path: dist
-          merge-multiple: true
-      - name: Upload to release
+      - name: Package + upload to release
         working-directory: ${{ github.workspace }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          mkdir -p out
+          for d in dist/goldenflow_duckdb-*; do
+            plat="$(basename "$d")" # goldenflow_duckdb-<platform>
+            (cd "$d" && zip -q "$GITHUB_WORKSPACE/out/${plat}.zip" goldenflow_duckdb.duckdb_extension)
+          done
           gh release create "$GITHUB_REF_NAME" \
             --repo "$GITHUB_REPOSITORY" \
             --title "goldenflow-duckdb $GITHUB_REF_NAME" \
-            --notes "Loadable DuckDB extension (stable C API ${DUCKDB_C_API_VERSION}, loads on DuckDB >= 1.2.0). LOAD with \`duckdb -unsigned\` (or \`SET allow_unsigned_extensions=true\`)." \
-            dist/*.duckdb_extension
+            --notes "Loadable DuckDB extension (stable C API ${DUCKDB_C_API_VERSION}, loads on DuckDB >= 1.2.0). Download your platform's zip, extract \`goldenflow_duckdb.duckdb_extension\`, and LOAD it with \`duckdb -unsigned\` (or \`SET allow_unsigned_extensions=true\`). The filename must stay \`goldenflow_duckdb.duckdb_extension\`." \
+            out/*.zip
