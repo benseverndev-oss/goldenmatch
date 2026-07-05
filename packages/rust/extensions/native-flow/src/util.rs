@@ -32,6 +32,14 @@ fn for_each_str<F: FnMut(usize, Option<&str>)>(data: &ArrayData, mut f: F) -> Py
     }
 }
 
+/// Read a Utf8/LargeUtf8 array into an owned `Vec<Option<String>>` (used by
+/// multi-array kernels like `build_canonical_map` that need the full column).
+pub fn read_opt_strings(data: &ArrayData) -> PyResult<Vec<Option<String>>> {
+    let mut out = Vec::new();
+    for_each_str(data, |_, v| out.push(v.map(|s| s.to_string())))?;
+    Ok(out)
+}
+
 pub fn map_str_to_str<F>(py: Python, data: ArrayData, f: F) -> PyResult<ArrayData>
 where
     F: Fn(&str) -> Option<String> + Sync,
