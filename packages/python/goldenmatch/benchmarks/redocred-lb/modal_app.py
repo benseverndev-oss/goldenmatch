@@ -132,6 +132,102 @@ def evi_smoke() -> dict:
     return info
 
 
+@app.function(image=image, gpu=GPU, volumes={DATA: vol}, timeout=60 * 60 * 4)
+def gen_silver_evidence(teacher_tag: str = "deberta-evi",
+                        teacher_model: str = "microsoft/deberta-v3-large",
+                        distant_file: str = "distant_40000.json", topk: int = 3,
+                        batch_size: int = 8, limit: int = 0) -> dict:
+    """DREEAM self-training teacher step: an evidence-supervised teacher labels each distant
+    doc's relation pairs with SILVER evidence (its top-k supporting sentences, from the
+    localized-context attention). Writes `distant_evi_<n>.json` -- the same raw format but
+    with `evidence` filled in -- so the student can pretrain with evidence supervision
+    (reusing the existing `read_docred(with_evidence=True)` + evidence loss)."""
+    import json
+    import os
+    import sys
+
+    sys.path.insert(0, "/root/rdlb")
+    os.environ.setdefault("HF_HOME", f"{DATA}/hf_cache")
+
+    import torch
+    from model import DocREModel, make_collate
+    from prepro import build_rel2id, read_docred
+    from torch.utils.data import DataLoader
+    from transformers import AutoConfig, AutoModel, AutoTokenizer
+
+    human_train, dev, test = _load_splits()
+    rel2id = build_rel2id(human_train, dev, test)
+    with open(f"{DATA}/{distant_file}", encoding="utf-8") as f:
+        distant = json.load(f)
+    if limit:
+        distant = distant[:limit]
+
+    transformer_type = "roberta" if "roberta" in teacher_model else "bert"
+    tok = AutoTokenizer.from_pretrained(teacher_model)
+    cfg = AutoConfig.from_pretrained(teacher_model, num_labels=97)
+    cfg.transformer_type = transformer_type
+    cfg.cls_token_id = tok.cls_token_id
+    cfg.sep_token_id = tok.sep_token_id
+    enc = AutoModel.from_pretrained(teacher_model, config=cfg)
+    teacher = DocREModel(cfg, enc, num_labels=4).cuda()
+    teacher.load_state_dict(torch.load(f"{DATA}/ckpt/{teacher_tag}/model.pt", map_location="cuda"))
+    teacher.eval()
+
+    feats = read_docred(distant, tok, rel2id, 1024, with_evidence=True)
+    # feats drops docs with no hts; align silver back onto those docs only
+    kept_titles = {f["title"]: f for f in feats}
+    collate = make_collate(tok.pad_token_id)
+    loader = DataLoader(feats, batch_size=batch_size, shuffle=False, collate_fn=collate)
+
+    def sent_topk(ht_att, sent_pos, hts, offset=1):
+        c = ht_att.size(1)
+        cols = [ht_att[:, min(a + offset, c): min(b + offset, c)].sum(1) for (a, b) in sent_pos]
+        sent_att = torch.stack(cols, dim=1)  # [n_pairs, n_sents]
+        k = min(topk, sent_att.size(1))
+        top = sent_att.topk(k, dim=1).indices
+        return {(int(h), int(t)): top[j].tolist() for j, (h, t) in enumerate(hts)}
+
+    # map title -> {(h,t): [sent_ids]}
+    evi_map: dict[str, dict] = {}
+    titles_order = [f["title"] for f in feats]
+    ti = 0
+    for input_ids, mask, _labels, entity_pos, hts, sent_pos, _ev in loader:
+        with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
+            seq, att = teacher.encode(input_ids.cuda(), mask.cuda())
+            *_ignore, ht_att_per_doc = teacher.get_hrt(seq, att, entity_pos, hts,
+                                                       collect_ht_att=True)
+        for d in range(len(hts)):
+            evi_map[titles_order[ti]] = sent_topk(ht_att_per_doc[d], sent_pos[d], hts[d])
+            ti += 1
+
+    # rebuild silver docs (only those that survived read_docred), attaching teacher evidence
+    silver = []
+    n_sents_by_title = {t: len(kept_titles[t]["sent_pos"]) for t in kept_titles}
+    for doc in distant:
+        title = doc["title"]
+        if title not in evi_map:
+            continue
+        emap = evi_map[title]
+        n_s = n_sents_by_title[title]
+        rows = []
+        for lab in doc["labels"]:
+            ev = [s for s in emap.get((lab["h"], lab["t"]), []) if s < n_s]
+            rows.append({"h": lab["h"], "t": lab["t"], "r": lab["r"], "evidence": ev})
+        silver.append({"title": title, "sents": doc["sents"],
+                       "vertexSet": doc["vertexSet"], "labels": rows})
+
+    out_file = distant_file.replace(".json", "_evi.json")
+    with open(f"{DATA}/{out_file}", "w", encoding="utf-8") as f:
+        json.dump(silver, f)
+    vol.commit()
+    avg_ev = round(sum(len(r["evidence"]) for d in silver for r in d["labels"])
+                   / max(sum(len(d["labels"]) for d in silver), 1), 2)
+    info = {"teacher": teacher_tag, "silver_docs": len(silver), "out": out_file,
+            "avg_evidence_per_label": avg_ev, "topk": topk}
+    print("GEN_SILVER:", info)
+    return info
+
+
 @app.function(image=image, volumes={DATA: vol}, timeout=3600)
 def fetch_distant(n: int = 40000, seed: int = 0) -> dict:
     """Fetch a subset of the DocRED distant-supervised train split (101,873 weakly-labeled
