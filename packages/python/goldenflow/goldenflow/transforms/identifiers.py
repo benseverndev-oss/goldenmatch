@@ -11,11 +11,14 @@ from goldenflow.transforms._native import (
     cc_mask_native,
     cc_validate_native,
     ean_validate_native,
+    ein_format_native,
     iban_format_native,
     iban_validate_native,
     imei_validate_native,
     isbn_normalize_native,
     isbn_validate_native,
+    ssn_format_native,
+    ssn_mask_native,
     swift_format_native,
     swift_validate_native,
     vat_format_native,
@@ -657,6 +660,15 @@ def vat_format(series: pl.Series) -> pl.Series:
     return series.map_elements(_vat_format_py, return_dtype=pl.Utf8)
 
 
+def _ssn_format_py(val: str | None) -> str | None:
+    if val is None:
+        return None
+    digits = _extract_digits(val)
+    if len(digits) != 9:
+        return val  # preserve invalid
+    return f"{digits[:3]}-{digits[3:5]}-{digits[5:]}"
+
+
 @register_transform(
     name="ssn_format",
     input_types=["ssn", "string"],
@@ -665,17 +677,20 @@ def vat_format(series: pl.Series) -> pl.Series:
     mode="series",
 )
 def ssn_format(series: pl.Series) -> pl.Series:
-    """Normalize SSN to XXX-XX-XXXX format."""
+    """Normalize SSN to XXX-XX-XXXX format. Native-first over goldenflow-core."""
+    native = ssn_format_native()
+    if native is not None:
+        return native(series)
+    return series.map_elements(_ssn_format_py, return_dtype=pl.Utf8)
 
-    def _format(val: str | None) -> str | None:
-        if val is None:
-            return None
-        digits = _extract_digits(val)
-        if len(digits) != 9:
-            return val  # preserve invalid
-        return f"{digits[:3]}-{digits[3:5]}-{digits[5:]}"
 
-    return series.map_elements(_format, return_dtype=pl.Utf8)
+def _ssn_mask_py(val: str | None) -> str | None:
+    if val is None:
+        return None
+    digits = _extract_digits(val)
+    if len(digits) != 9:
+        return val  # preserve invalid
+    return f"***-**-{digits[5:]}"
 
 
 @register_transform(
@@ -686,17 +701,20 @@ def ssn_format(series: pl.Series) -> pl.Series:
     mode="series",
 )
 def ssn_mask(series: pl.Series) -> pl.Series:
-    """Mask SSN to ***-**-XXXX (last 4 visible)."""
+    """Mask SSN to ***-**-XXXX (last 4 visible). Native-first."""
+    native = ssn_mask_native()
+    if native is not None:
+        return native(series)
+    return series.map_elements(_ssn_mask_py, return_dtype=pl.Utf8)
 
-    def _mask(val: str | None) -> str | None:
-        if val is None:
-            return None
-        digits = _extract_digits(val)
-        if len(digits) != 9:
-            return val  # preserve invalid
-        return f"***-**-{digits[5:]}"
 
-    return series.map_elements(_mask, return_dtype=pl.Utf8)
+def _ein_format_py(val: str | None) -> str | None:
+    if val is None:
+        return None
+    digits = _extract_digits(val)
+    if len(digits) != 9:
+        return val  # preserve invalid
+    return f"{digits[:2]}-{digits[2:]}"
 
 
 @register_transform(
@@ -707,17 +725,11 @@ def ssn_mask(series: pl.Series) -> pl.Series:
     mode="series",
 )
 def ein_format(series: pl.Series) -> pl.Series:
-    """Normalize EIN to XX-XXXXXXX format."""
-
-    def _format(val: str | None) -> str | None:
-        if val is None:
-            return None
-        digits = _extract_digits(val)
-        if len(digits) != 9:
-            return val  # preserve invalid
-        return f"{digits[:2]}-{digits[2:]}"
-
-    return series.map_elements(_format, return_dtype=pl.Utf8)
+    """Normalize EIN to XX-XXXXXXX format. Native-first."""
+    native = ein_format_native()
+    if native is not None:
+        return native(series)
+    return series.map_elements(_ein_format_py, return_dtype=pl.Utf8)
 
 
 # --- ABA routing number (US bank routing transit number) --------------------

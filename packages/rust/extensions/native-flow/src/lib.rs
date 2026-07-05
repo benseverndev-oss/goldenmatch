@@ -34,6 +34,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(phone::phone_national_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(phone::phone_country_code_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(phone::phone_valid_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(phone::phone_digits_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(identifiers::cc_validate_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(identifiers::cc_format_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(identifiers::cc_mask_arrow, m)?)?;
@@ -48,6 +49,9 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(identifiers::vat_format_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(identifiers::aba_validate_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(identifiers::imei_validate_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(identifiers::ssn_format_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(identifiers::ssn_mask_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(identifiers::ein_format_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(names::name_transliterate_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(names::name_script_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(names::strip_titles_arrow, m)?)?;

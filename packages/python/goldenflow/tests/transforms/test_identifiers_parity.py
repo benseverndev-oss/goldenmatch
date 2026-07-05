@@ -50,11 +50,14 @@ from goldenflow.transforms.identifiers import (
     cc_mask,
     cc_validate,
     ean_validate,
+    ein_format,
     iban_format,
     iban_validate,
     imei_validate,
     isbn_normalize,
     isbn_validate,
+    ssn_format,
+    ssn_mask,
     swift_format,
     swift_validate,
     vat_format,
@@ -82,6 +85,7 @@ from goldenflow.transforms.numeric import (
     comma_decimal,
     scientific_to_decimal,
 )
+from goldenflow.transforms.phone import phone_digits
 from goldenflow.transforms.text import (
     _collapse_whitespace_series as collapse_whitespace,
 )
@@ -180,6 +184,10 @@ _TRANSFORMS = {
     "vat_format": vat_format,
     "aba_validate": aba_validate,
     "imei_validate": imei_validate,
+    "ssn_format": ssn_format,
+    "ssn_mask": ssn_mask,
+    "ein_format": ein_format,
+    "phone_digits": phone_digits,
     "name_transliterate": name_transliterate,
     "name_script": name_script,
     "strip_titles": strip_titles,
@@ -244,6 +252,10 @@ _NATIVE_FLOOR_SYMBOL = {
     "vat_format": "vat_validate_arrow",
     "aba_validate": "aba_validate_arrow",
     "imei_validate": "imei_validate_arrow",
+    "ssn_format": "ssn_format_arrow",
+    "ssn_mask": "ssn_mask_arrow",
+    "ein_format": "ein_format_arrow",
+    "phone_digits": "phone_digits_arrow",
     "name_transliterate": "name_transliterate_arrow",
     "name_script": "name_script_arrow",
     # names_ext: strip_titles/strip_suffixes/name_proper/nickname_standardize/
