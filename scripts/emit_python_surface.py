@@ -27,6 +27,20 @@ def _mcp(package: str):
     return fn
 
 
+def _a2a(package: str):
+    def fn() -> list[str]:
+        import importlib
+        mod = importlib.import_module(f"{package}.a2a.server")
+        skills = getattr(mod, "_SKILLS", None)
+        if skills is None:
+            skills = mod.AGENT_CARD["skills"]
+        return [s["id"] for s in skills]
+    return fn
+
+
+_A2A_PACKAGES = ("goldenmatch", "goldencheck", "goldenflow", "goldenpipe")
+
+
 def _cli(cli_module: str):
     def fn() -> list[str]:
         from typer.main import get_command
@@ -50,7 +64,8 @@ _CLI_MODULE = {
 
 # Each surface -> (callable returning list[str], extra-name for the env-gap message).
 REGISTRY = {
-    pkg: {"mcp_tools": (_mcp(pkg), "mcp"), "cli_commands": (_cli(mod), None)}
+    pkg: {"mcp_tools": (_mcp(pkg), "mcp"), "cli_commands": (_cli(mod), None),
+          **({"a2a_skills": (_a2a(pkg), "a2a")} if pkg in _A2A_PACKAGES else {})}
     for pkg, mod in _CLI_MODULE.items()
 }
 
