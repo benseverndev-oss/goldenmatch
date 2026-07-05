@@ -11,22 +11,31 @@ construction.
 LOAD 'goldenflow_duckdb.duckdb_extension';
 
 SELECT
-  goldenflow_normalize_email(email)         AS email,
-  goldenflow_normalize_name_proper(name)    AS name
+  goldenflow_email_normalize(email)      AS email,
+  goldenflow_name_proper(name)           AS name,
+  goldenflow_address_standardize(addr)   AS addr,
+  goldenflow_url_normalize(website)      AS website  -- NULL when unparseable
 FROM read_parquet('s3://bucket/raw/*.parquet');
 ```
 
-## Status: Slice 1 (spike)
+UDF names are `goldenflow_<kernel>` -- a predictable 1:1 with the underlying
+`goldenflow-core` function.
 
-Two transforms are wired end-to-end to validate the mechanism:
+## Status: Slice 2 (VARCHAR catalogue)
 
-| SQL function                       | Kernel                          |
-| ---------------------------------- | ------------------------------- |
-| `goldenflow_normalize_email`       | `goldenflow_core::email::email_normalize` |
-| `goldenflow_normalize_name_proper` | `goldenflow_core::names::name_proper`     |
+The full single-argument `VARCHAR -> VARCHAR` catalogue is wired -- 36 UDFs
+across address, email, names, text, and categorical families, in both the total
+(`fn(&str) -> String`) and nullable (`fn(&str) -> Option<String>`, `None` ->
+SQL `NULL`) shapes. Registration is table-driven, so adding a transform is one
+`"name" => kernel` line.
 
-Next slices: table-drive the full byte-parity catalogue (`Slice 2`) and the
-per-platform `.duckdb_extension` build + distribution (`Slice 3`).
+Deferred to later slices:
+
+| Slice | Scope |
+| ----- | ----- |
+| **2b** | Typed outputs: validators (`-> BOOLEAN`) + numeric parsers (`-> DOUBLE`/`BIGINT`), and the identifier family. Needs the primitive output-vector write API. |
+| **3**  | Per-platform `.duckdb_extension` build (metadata footer + 5-target matrix) and distribution. |
+| **later** | Multi-argument / multi-output kernels: phone (region arg), `split_*`, `truncate`, `pad_*`, `merge_name`, `auto_correct`. |
 
 ## Build & test
 
