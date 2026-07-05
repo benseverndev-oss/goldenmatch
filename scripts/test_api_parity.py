@@ -79,3 +79,22 @@ def test_structure_flags_unknown_surface():
 def test_structure_clean():
     m = {"mcp_tools": {"shared": ["a", "b"], "python_only": [], "ts_only": []}}
     assert gate.check_structure(m) == []
+
+
+def test_init_manifest_partitions():
+    py = {"package": "gm", "mcp_tools": ["a", "p"], "cli_commands": ["x"]}
+    ts = {"package": "gm", "mcp_tools": ["a", "t"], "cli_commands": ["x"]}
+    m = gate.init_manifest(py, ts)
+    assert m["mcp_tools"] == {"shared": ["a"], "python_only": ["p"], "ts_only": ["t"]}
+    assert m["cli_commands"] == {"shared": ["x"], "python_only": [], "ts_only": []}
+    assert gate.run_checks(m, py, ts) == []
+
+
+def test_run_checks_reports_across_surfaces():
+    m = {"package": "gm",
+         "mcp_tools": {"shared": [], "python_only": [], "ts_only": []},
+         "cli_commands": {"shared": [], "python_only": [], "ts_only": []}}
+    py = {"package": "gm", "mcp_tools": ["a"], "cli_commands": []}
+    ts = {"package": "gm", "mcp_tools": [], "cli_commands": ["b"]}
+    fails = gate.run_checks(m, py, ts)
+    assert {f.kind for f in fails} == {"undeclared_py_only", "undeclared_ts_only"}
