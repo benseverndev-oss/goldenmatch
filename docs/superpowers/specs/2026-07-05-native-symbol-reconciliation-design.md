@@ -161,11 +161,13 @@ Measured ahead of the build (spec review, alias-resolving idiom):
   gate goes green immediately once the scanner is correct. (This is the whole
   reason to get §3.2's alias resolution right: a naive scanner would show a green
   gate too, but for the wrong reason — by not seeing the references at all.)
-- **`unwired` (REPORT) set: 2** — `build_clusters_native` and
-  `connected_components_arrow`, both genuinely dead (superseded by the
-  `build_clusters_arrow` / `_arrow` paths per `cluster.py` comments). Note them in
-  the PR's unwired triage so they aren't re-investigated each run; leave them in
-  REPORT (non-fatal) rather than allowlisting.
+- **`unwired` (REPORT) set: 3** — `build_clusters_native` and
+  `connected_components_arrow` (superseded by the `build_clusters_arrow` / `_arrow`
+  paths per `cluster.py` comments) plus `score_block_pairs` (a Rust-internal-only
+  helper, called from `score_block_pairs_arrow`/`score_field_matrix` inside the
+  crate, never a Python entry point). All three are genuinely dead *from the host's
+  view*. Note them in the PR's unwired triage so they aren't re-investigated each
+  run; leave them in REPORT (non-fatal) rather than allowlisting.
 
 If a future `missing` row appears, triage: typo/rename → fix the call-site or
 kernel; `getattr` fallback to a genuinely-unbuilt symbol → build it or allowlist
