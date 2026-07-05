@@ -148,9 +148,12 @@ jobs:
           if-no-files-found: error
 
   # Prove the portability claim: ONE stable-C-API build loads across a sweep of
-  # DuckDB versions. Reuses the linux_amd64 artifact (build once, load many). If
-  # an older DuckDB rejects it, this reveals the true floor instead of asserting
-  # ">= 1.2.0" -- measure, don't claim.
+  # DuckDB versions. Reuses the linux_amd64 artifact (build once, load many).
+  # The sweep MEASURED the true floor: DuckDB 1.2.x wants the old
+  # `linux_amd64_gcc4` platform string, while 1.3.0 unified it to `linux_amd64`
+  # (what we stamp). So the C API (v1.2.0) is fine but the platform naming caps
+  # the floor at DuckDB 1.3.0 -- supporting 1.2.x would need a separate
+  # gcc4-stamped artifact, not shipped.
   portability:
     name: portability (DuckDB ${{ matrix.duckdb }})
     needs: build
@@ -158,7 +161,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        duckdb: [v1.2.0, v1.3.2, v1.4.0, v1.5.4]
+        duckdb: [v1.3.0, v1.3.2, v1.4.0, v1.5.4]
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -205,5 +208,5 @@ jobs:
           gh release create "$GITHUB_REF_NAME" \
             --repo "$GITHUB_REPOSITORY" \
             --title "goldenflow-duckdb $GITHUB_REF_NAME" \
-            --notes "Loadable DuckDB extension (stable C API ${DUCKDB_C_API_VERSION}, loads on DuckDB >= 1.2.0). Download your platform's zip, extract \`goldenflow_duckdb.duckdb_extension\`, and LOAD it with \`duckdb -unsigned\` (or \`SET allow_unsigned_extensions=true\`). The filename must stay \`goldenflow_duckdb.duckdb_extension\`." \
+            --notes "Loadable DuckDB extension (stable C API ${DUCKDB_C_API_VERSION}; loads on DuckDB >= 1.3.0 -- 1.2.x used a different platform string). Download your platform's zip, extract \`goldenflow_duckdb.duckdb_extension\`, and LOAD it with \`duckdb -unsigned\` (or \`SET allow_unsigned_extensions=true\`). The filename must stay \`goldenflow_duckdb.duckdb_extension\`." \
             out/*.zip
