@@ -677,3 +677,14 @@ def test_mcp_fix_quality_write_failure_preserves_results(tmp_path):
     assert parsed["fixes_applied"] == 1
     assert "write_error" in parsed
     assert parsed["output_path"] is None
+
+
+def test_a2a_skills_are_spec_shaped_and_expose_canonical_ids():
+    """Guards the A2A reference shape the TS server aligns to: every skill has
+    id + name, and the canonical ids the TS card adopts are present."""
+    from goldenmatch.a2a.server import _SKILLS
+    for skill in _SKILLS:
+        assert skill["id"] and isinstance(skill["id"], str)
+        assert skill["name"] and isinstance(skill["name"], str)
+    ids = {s["id"] for s in _SKILLS}
+    assert {"deduplicate", "explain", "match"} <= ids
