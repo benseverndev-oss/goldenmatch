@@ -3631,6 +3631,7 @@ jobs:
       - changes
       - workflow_lint
       - goldenflow_duckdb
+      - native_flow
       - throughput-gate
       - python
       - python_goldenmatch
