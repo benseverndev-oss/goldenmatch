@@ -581,6 +581,42 @@ _BASE_TOOLS = [
     ),
 ]
 
+# --- Cross-language naming aliases (Python<->TS MCP parity) -----------------
+# Each alias forwards to an EXISTING handler; no operation logic is duplicated.
+# See docs/superpowers/specs/2026-07-05-mcp-naming-aliases-parity-design.md.
+_MCP_TOOL_ALIASES = {
+    "dedupe": "find_duplicates",
+    "match": "match_record",
+    "explain_pair": "explain_match",
+    "profile": "profile_data",
+    "explain_cluster": "agent_explain_cluster",
+}
+
+
+def _resolve_alias(name: str) -> str:
+    """Map an alias tool name to its canonical name (identity for non-aliases)."""
+    return _MCP_TOOL_ALIASES.get(name, name)
+
+
+def _build_alias_tools() -> list[Tool]:
+    """Derive alias Tool objects from their canonical tools so schemas can't drift.
+    Canonicals live in AGENT_TOOLS (agent_explain_cluster) + _BASE_TOOLS (the rest)."""
+    canon = {t.name: t for t in AGENT_TOOLS + _BASE_TOOLS}
+    tools = []
+    for alias, target in _MCP_TOOL_ALIASES.items():
+        c = canon[target]
+        tools.append(Tool(
+            name=alias,
+            description=f"Alias for `{target}`. {c.description}",
+            inputSchema=c.inputSchema,
+        ))
+    return tools
+
+
+# Append aliases to the shared _BASE_TOOLS component so BOTH advertise paths
+# (the TOOLS var below AND the inline list_tools rebuild) pick them up.
+_BASE_TOOLS += _build_alias_tools()
+
 # TOOLS is the union of agent tools + memory tools + base tools, in the same order list_tools returns.
 TOOLS = AGENT_TOOLS + MEMORY_TOOLS + IDENTITY_TOOLS + ROUTING_TOOLS + _BASE_TOOLS
 
