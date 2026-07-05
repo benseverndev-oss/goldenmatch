@@ -453,6 +453,10 @@ def _goldenmatch_mcp() -> list[str]:
     return [t.name for t in TOOLS]
 
 def _goldenmatch_cli() -> list[str]:
+    # NOTE: deliberately uses typer.main.get_command(app).commands.keys() rather than the spec's
+    # §3.1 app.registered_commands/registered_groups. get_command resolves the real CLI names
+    # (hyphenation like `mcp-serve`, and commands whose .name is None derive from the function
+    # name) and includes groups — the authoritative surface a user actually types. Verified.
     from typer.main import get_command
     from goldenmatch.cli.main import app
     names = list(get_command(app).commands.keys())  # resolved leaves + groups (mcp-serve, pprl, ...)
@@ -586,7 +590,9 @@ git commit -m "feat(parity): typescript surface emitter (CI-only)"
 
 - [ ] **Step 1: Read the existing patterns.** Read the `changes` job's `dorny/paths-filter` block and one representative TS-building job (e.g. `goldenpipe_wasm` or `typescript`) to copy the Python(uv)+Node(pnpm) setup + action SHAs.
 
-- [ ] **Step 2: Add the filter output.** In the `changes` job's `dorny/paths-filter` `with.filters`, add:
+- [ ] **Step 2: Add the filter AND wire it to a `changes` job output.** Two edits in the `changes` job — BOTH are required, or `needs.changes.outputs.api_parity` is empty and the job is silently skipped at PR time (which would break Task 8).
+
+  (a) In the `dorny/paths-filter` step's `with.filters`, add:
 ```yaml
             api_parity:
               - 'packages/python/goldenmatch/**'
@@ -596,6 +602,11 @@ git commit -m "feat(parity): typescript surface emitter (CI-only)"
               - 'scripts/emit_ts_surface.mjs'
               - 'scripts/check_api_parity.py'
 ```
+  (b) In the `changes` job's `outputs:` map (near `ci.yml:102`, alongside the other `<area>: ${{ steps.filter.outputs.<area> }}` lines), add:
+```yaml
+      api_parity: ${{ steps.filter.outputs.api_parity }}
+```
+(Read the existing `outputs:` block first and match its exact key style; the filter `id` may be `filter` or `changes` — use whatever the sibling lines use.)
 
 - [ ] **Step 3: Add the job** (mirror the setup of an existing python+node job; pin the same action SHAs already used in the file):
 ```yaml
@@ -610,18 +621,23 @@ git commit -m "feat(parity): typescript surface emitter (CI-only)"
       - uses: pnpm/action-setup@<sha-from-file>
       - uses: actions/setup-node@<sha-from-file>
         with: { node-version: 22, cache: pnpm }
-      - name: Install goldenmatch[mcp] + pyyaml (Python emitter surface deps)
-        run: uv pip install --system -e "packages/python/goldenmatch[mcp]" pyyaml pytest
+      - name: Sync workspace + install the goldenmatch[mcp] extra
+        # Match the repo's uv convention (uv sync into .venv, then uv run). `uv sync` does NOT
+        # install optional extras, so add [mcp] explicitly. pyyaml is already a core goldenmatch
+        # dep, so it comes in via the sync — no need to add it.
+        run: |
+          uv sync --all-packages
+          uv pip install -e "packages/python/goldenmatch[mcp]"
       - name: Gate unit tests (pure data)
-        run: python -m pytest scripts/test_api_parity.py -q
+        run: uv run pytest scripts/test_api_parity.py -q
         env: { POLARS_SKIP_CPU_CHECK: "1", GOLDENMATCH_NATIVE: "0", PYTHONPATH: "packages/python/goldenmatch" }
       - name: Build goldenmatch-js (TS emitter imports dist)
         run: pnpm install --frozen-lockfile && pnpm --filter goldenmatch build
       - name: Parity gate (both emitters + manifest)
-        run: python scripts/check_api_parity.py goldenmatch
+        run: uv run python scripts/check_api_parity.py goldenmatch
         env: { POLARS_SKIP_CPU_CHECK: "1", GOLDENMATCH_NATIVE: "0", PYTHONPATH: "packages/python/goldenmatch" }
 ```
-(Match `uv`/`pnpm`/`node` invocation to how the repo's other jobs do it — e.g. if it uses `uv sync` + `.venv` rather than `uv pip install --system`, follow that. The essential requirements: `goldenmatch[mcp]` + `pyyaml` importable, `goldenmatch-js` built, both emitters + the gate run.)
+(Read a sibling Python job first — e.g. `ci.yml:~858` — and match its exact `uv sync` / `uv run` / node-setup invocation and action SHAs. Essential requirements: `goldenmatch[mcp]` importable in the uv env, `goldenmatch-js` built to `dist/`, both emitters + the gate run. The gate shells out to `node scripts/emit_ts_surface.mjs` itself, so `node` must be on PATH from the `setup-node` step.)
 
 - [ ] **Step 4: Validate YAML.** Run: `python -c "import yaml; yaml.safe_load(open('.github/workflows/ci.yml')); print('OK')"`.
 
@@ -646,7 +662,7 @@ The manifest needs both descriptors; the Python one is box-local but the TS one 
 
 - [ ] **Step 3: Human-review the gaps.** For each `python_only` and `ts_only` entry, decide: intentional (edge-safe scoping — keep, add a `# reason` comment) or an accidental drift/bug (note it for a follow-up ticket, but it still goes in `*_only` now so the gate can go green — the manifest records reality, and the review is what makes the gap *known*). Write the reviewed result to `parity/goldenmatch.yaml` with comments.
 
-- [ ] **Step 4: Prove the gate has teeth (FAIL case).** Temporarily delete one real name from the manifest's `shared` (e.g. remove `find_duplicates` from `mcp_tools.shared`) and confirm CI's `api_parity` goes RED with `phantom`/`unshared_common` on that name. Then restore it.
+- [ ] **Step 4: Prove the gate has teeth (FAIL case).** Temporarily delete one real name from the manifest's `shared` (e.g. remove `find_duplicates` from `mcp_tools.shared`) and confirm CI's `api_parity` goes RED with **`unshared_common`** on that name (it's still in both PY and TS, just no longer declared shared — row 1). Then restore it.
 
 - [ ] **Step 5: Confirm PASS.** With the reviewed manifest committed, CI `api_parity` is green: "parity OK: goldenmatch manifest exactly partitions the real MCP + CLI surface".
 
