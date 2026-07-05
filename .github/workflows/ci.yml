@@ -100,6 +100,7 @@ jobs:
       goldenpipe_wasm: ${{ steps.filter.outputs.goldenpipe_wasm }}
       sketch_wasm: ${{ steps.filter.outputs.sketch_wasm }}
       quality_gate: ${{ steps.filter.outputs.quality_gate }}
+      api_parity: ${{ steps.filter.outputs.api_parity }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d  # v4.0.1
@@ -407,6 +408,17 @@ jobs:
               - 'packages/python/goldenmatch/goldenmatch/core/blocking_candidates.py'
               - 'packages/python/goldenmatch/goldenmatch/core/matchkey.py'
               - '.github/workflows/ci.yml'
+            # Cross-language API-parity gate: the goldenmatch MCP+CLI surface must
+            # not drift between the Python and TypeScript ports. Re-run the gate
+            # when either port, the parity manifest, or the emitter/checker tooling
+            # changes.
+            api_parity:
+              - 'packages/python/goldenmatch/**'
+              - 'packages/typescript/goldenmatch/**'
+              - 'parity/goldenmatch.yaml'
+              - 'scripts/emit_python_surface.py'
+              - 'scripts/emit_ts_surface.mjs'
+              - 'scripts/check_api_parity.py'
             rust:
               - 'packages/rust/**'
             rust_pgrx:
@@ -1416,6 +1428,53 @@ jobs:
             uv run python -m scripts.autoconfig_quality report 2>/dev/null || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # Cross-language API-parity gate (goldenmatch MCP+CLI drift): emits both the
+  # Python and TypeScript surfaces, then diffs them against the committed parity
+  # manifest. The gate (scripts/check_api_parity.py) shells out to
+  # `sys.executable scripts/emit_python_surface.py` (the uv venv python, which
+  # carries goldenmatch[mcp]) and `node scripts/emit_ts_surface.mjs` (node from
+  # setup-node), so the venv install + the TS build + node-on-PATH all have to be
+  # in place before the gate runs.
+  api_parity:
+    needs: changes
+    if: needs.changes.outputs.api_parity == 'true' || needs.changes.outputs.force_all == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093  # v6.0.8
+        # Reads version from root package.json `packageManager` field.
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Sync workspace + install the goldenmatch[mcp] extra
+        run: |
+          uv sync --all-packages
+          uv pip install -e "packages/python/goldenmatch[mcp]"
+      - name: Gate unit tests (pure data)
+        run: uv run pytest scripts/test_api_parity.py -q
+        env:
+          POLARS_SKIP_CPU_CHECK: "1"
+          GOLDENMATCH_NATIVE: "0"
+          PYTHONPATH: packages/python/goldenmatch
+      - name: Build goldenmatch-js (TS emitter imports dist/)
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter goldenmatch build
+      - name: Parity gate (both emitters + manifest)
+        run: uv run python scripts/check_api_parity.py goldenmatch
+        env:
+          POLARS_SKIP_CPU_CHECK: "1"
+          GOLDENMATCH_NATIVE: "0"
+          PYTHONPATH: packages/python/goldenmatch
 
   typescript:
     needs: changes
