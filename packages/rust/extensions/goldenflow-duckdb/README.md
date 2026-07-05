@@ -60,7 +60,11 @@ Essentially every `goldenflow-core` transform is now a SQL function -- **74 UDFs
 | multi-output (component UDFs) | tuple -> one per part | `split_name_{first,last}`, `split_name_reverse_{first,last}`, `split_address_{street,city,state,zip}` |
 | multi-arg | 2-3 args | `phone_{e164,national,country_code,valid}(phone, region)`, `truncate(s, n)`, `pad_{left,right}(s, width, pad)`, `merge_name(first, last)` |
 
-`None` / null input / (for phone) non-NANP numbers map to SQL `NULL`.
+`None` / null input / (for phone) non-NANP numbers map to SQL `NULL`. Multi-arg
+UDFs follow SQL null-propagation (any NULL argument yields NULL without invoking
+the kernel -- DuckDB scalar semantics, no override in duckdb-rs), so
+`merge_name(NULL, 'Smith')` is NULL rather than the kernel's coalesced `'Smith'`;
+non-NULL inputs stay byte-identical.
 
 Phone is NANP-gated (`nanp_only`): the Rust port is byte-identical to Python
 `phonenumbers` on country-code-1 numbers and returns `NULL` rather than a

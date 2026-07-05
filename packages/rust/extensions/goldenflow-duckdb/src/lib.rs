@@ -430,8 +430,12 @@ macro_rules! pad_udf {
 pad_udf!(PadLeft, goldenflow_core::text::pad_left);
 pad_udf!(PadRight, goldenflow_core::text::pad_right);
 
-/// `(VARCHAR first, VARCHAR last) -> VARCHAR`. Both args nullable; joins the
-/// present non-blank parts, NULL when both are absent/blank.
+/// `(VARCHAR first, VARCHAR last) -> VARCHAR`. Joins the present non-blank
+/// parts. NOTE: DuckDB scalar UDFs propagate NULL (any NULL arg -> NULL, the
+/// function is never invoked), so `merge_name(NULL, 'Smith')` is SQL NULL rather
+/// than the kernel's coalesced `'Smith'`. With non-NULL inputs it is byte-
+/// identical; the `None` branch below is only reachable if a future DuckDB
+/// grants special null handling.
 struct MergeName;
 impl VScalar for MergeName {
     type State = ();
@@ -854,11 +858,15 @@ mod tests {
             .query_row("SELECT goldenflow_merge_name(NULL, NULL) IS NULL", [], |r| r.get(0))
             .unwrap();
         assert!(nn);
-        // one side present
-        let got: Option<String> = con
-            .query_row("SELECT goldenflow_merge_name(NULL, ?)", ["Smith"], |r| r.get(0))
+        // A NULL arg short-circuits to SQL NULL (DuckDB scalar UDFs propagate
+        // NULL; duckdb-rs exposes no special-null-handling knob). This is the
+        // one place the SQL surface differs from the pure kernel, which would
+        // coalesce None -> Some("Smith"); with any non-NULL-only input it's
+        // byte-identical.
+        let one_null: bool = con
+            .query_row("SELECT goldenflow_merge_name(NULL, ?) IS NULL", ["Smith"], |r| r.get(0))
             .unwrap();
-        assert_eq!(got, gf::names::merge_name(None, Some("Smith")));
+        assert!(one_null);
 
         // phone (NANP, nanp_only=true parity-safe): value on code-1, NULL off it
         let reg = gf::phone::region_of("US");
