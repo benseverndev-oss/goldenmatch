@@ -77,12 +77,28 @@ client sees an identical calling contract under either name.
 
 ### 3.2 Python (`packages/python/goldenmatch/goldenmatch/mcp/server.py`)
 
-The server's `call_tool(name, arguments)` (server.py:862) dispatches by `name`:
-agent tools via `if name in _AGENT_TOOL_NAMES`, then base tools inline. Two edits:
+**Critical:** goldenmatch's Python MCP has *two* advertise paths and *two*
+dispatch paths, not one. The fix must funnel aliases through the shared
+**component** structures both paths reference, not the top-level composed objects.
 
-1. **Normalize at the top of `call_tool`.** Add a module-level map and resolve
-   the alias to its canonical name *before* any dispatch branch, so
-   `explain_cluster` correctly routes into the agent-tool path:
+- **Advertise path A** — the `@server.list_tools` handler (server.py:618-620)
+  does **not** return the composed `TOOLS` var; it *rebuilds the sum inline*:
+  `return AGENT_TOOLS + MEMORY_TOOLS + IDENTITY_TOOLS + ROUTING_TOOLS + _BASE_TOOLS`.
+- **Advertise path B** — the exported `TOOLS` var (server.py:585, same sum) is
+  what the parity emitter (`emit_python_surface.py`) and smoke test import.
+- **Dispatch path A** — the `@server.call_tool` handler (server.py:862), used by
+  the standalone server; agent tools via `if name in _AGENT_TOOL_NAMES` (:871),
+  then base tools.
+- **Dispatch path B** — the module-level `dispatch(name, args)` (server.py:588),
+  used by the `goldensuite-mcp` aggregator (`goldensuite_mcp/server.py:50` does
+  `return _normalize_tools(list(gm.TOOLS)), gm.dispatch`). Same name-routing,
+  separate function.
+
+Appending aliases only to the `TOOLS` var (path B) or normalizing only in
+`call_tool` (dispatch A) would advertise aliases the live/aggregated servers
+can't serve. Three edits:
+
+1. **One alias map + one resolver helper (shared by both dispatch paths).**
 
    ```python
    _MCP_TOOL_ALIASES = {
@@ -92,16 +108,27 @@ agent tools via `if name in _AGENT_TOOL_NAMES`, then base tools inline. Two edit
        "profile": "profile_data",
        "explain_cluster": "agent_explain_cluster",
    }
-   ```
-   First line of `call_tool`: `name = _MCP_TOOL_ALIASES.get(name, name)`.
 
-2. **Advertise the aliases.** Build 5 alias `Tool` objects (each a copy of its
-   canonical tool's `inputSchema` with the alias `name` and the "Alias for …"
-   description) and append them to the exported `TOOLS` list so `list_tools`
-   and the parity emitter both see them. A small helper derives the alias tools
-   from `_MCP_TOOL_ALIASES` + the canonical `Tool` objects rather than
-   hand-writing five schemas (DRY; a schema change to a canonical tool
-   automatically flows to its alias).
+   def _resolve_alias(name: str) -> str:
+       return _MCP_TOOL_ALIASES.get(name, name)
+   ```
+
+2. **Normalize at the top of BOTH dispatch functions.** First line of
+   `dispatch` (server.py:588) *and* of the `call_tool` handler (server.py:862):
+   `name = _resolve_alias(name)`. Placing it before the `_AGENT_TOOL_NAMES`
+   check in each means `explain_cluster` routes into the agent path correctly.
+
+3. **Advertise via a component list, not the composed var.** Build an
+   `ALIAS_TOOLS` list of 5 `Tool` objects (each derived from its canonical
+   tool's `inputSchema` with the alias `name` + "Alias for `<canonical>`. …"
+   description — a helper reads `_MCP_TOOL_ALIASES` + the canonical `Tool`
+   objects so schemas never diverge) and **append it to `_BASE_TOOLS`**.
+   Because both advertise paths sum `_BASE_TOOLS`, this single append flows into
+   the live `list_tools` (path A), the exported `TOOLS` var (path B), and the
+   aggregator (which reads `gm.TOOLS`). `_BASE_TOOLS` is chosen because it is
+   summed by every path; the alias for `explain_cluster` still *dispatches* to
+   the agent handler via the resolver — the advertising list is orthogonal to
+   the routing.
 
 `len(TOOLS)` grows by exactly 5; the parity smoke test (which asserts the emitter
 count equals the measured `len(TOOLS)`) keeps that honest.
@@ -163,11 +190,17 @@ as deliberate decisions rather than unexamined drift:
 ## 5. Testing
 
 - **Python (box-safe, runs locally with `goldenmatch[mcp]`):**
-  - `list_tools` now contains all five alias names, and each alias's
-    `inputSchema` equals its canonical tool's schema.
-  - `await call_tool("dedupe", args)` returns byte-identical output to
-    `call_tool("find_duplicates", args)` on a small fixture; same for the other
-    four pairs (`explain_cluster` vs `agent_explain_cluster`).
+  - The live `list_tools` handler (not just the `TOOLS` var) returns all five
+    alias names, and each alias's `inputSchema` equals its canonical tool's
+    schema. Assert against the handler from `create_server`, so a regression to
+    advertise-path-A is caught.
+  - **Dispatch path A:** `dispatch("dedupe", args)` returns byte-identical output
+    to `dispatch("find_duplicates", args)` on a small fixture; same for the other
+    four pairs, including `dispatch("explain_cluster", …)` ==
+    `dispatch("agent_explain_cluster", …)` (the agent-route case). This is the
+    aggregator path — the one Issue 2 flagged as previously unrouted.
+  - The `call_tool` handler resolves the same aliases (a lighter test, since both
+    now share `_resolve_alias`).
   - The existing parity smoke test (`scripts/test_api_parity.py`) still passes
     with the emitter count matching the grown `len(TOOLS)`.
 - **TypeScript (CI-only — the box OOMs TS builds):**
@@ -199,3 +232,10 @@ as deliberate decisions rather than unexamined drift:
 - **`explain_cluster` routing:** the Python alias must be normalized *before* the
   `_AGENT_TOOL_NAMES` check so it reaches the agent handler; the test in §5
   covers this exact path.
+- **Two-path drift (the main implementation trap):** Python advertises via two
+  paths (composed `TOOLS` var + inline `list_tools` rebuild) and dispatches via
+  two (`call_tool` + module-level `dispatch` for the suite aggregator). Aliases
+  that touch only one path advertise-but-can't-serve or serve-but-aren't-listed.
+  §3.2 funnels through the shared `_BASE_TOOLS` component + a shared
+  `_resolve_alias` called by both dispatchers so they cannot drift; §5 tests the
+  aggregator `dispatch` path explicitly.
