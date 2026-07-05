@@ -116,3 +116,26 @@ for result in processor.stream_file("large_data.csv", chunk_size=10_000):
     write_to_output(result.df)
 print(f"Processed {processor.batches_processed} batches")
 ```
+
+## SQL (DuckDB)
+
+GoldenFlow's transforms also ship as a **zero-Python DuckDB extension**
+(`goldenflow-duckdb`) — a compiled Rust extension that links the same reference
+kernels straight into DuckDB, so the transforms run natively in the query engine,
+byte-identical to the Python / TypeScript / WASM surfaces. 74 transforms are
+exposed as `goldenflow_<kernel>` SQL functions:
+
+```sql
+-- CLI: duckdb -unsigned   (or: SET allow_unsigned_extensions = true;)
+LOAD 'goldenflow_duckdb.duckdb_extension';
+
+SELECT
+  goldenflow_email_normalize(email)     AS email,
+  goldenflow_name_proper(name)          AS name,
+  goldenflow_address_standardize(addr)  AS address
+FROM read_parquet('s3://bucket/raw/*.parquet');
+```
+
+Download the per-platform zip from the `goldenflow-duckdb-v*`
+[release assets](https://github.com/benseverndev-oss/goldenmatch/releases)
+(linux / macOS / Windows; loads on DuckDB &gt;= 1.3.0).

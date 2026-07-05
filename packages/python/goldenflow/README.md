@@ -719,6 +719,35 @@ runServer(8000); // Starts HTTP server with /health, /transforms, /transform
 
 ---
 
+## SQL (DuckDB)
+
+GoldenFlow's transforms also ship as a **zero-Python DuckDB extension** —
+`goldenflow-duckdb`. It's a compiled Rust extension that links the same
+`goldenflow-core` reference kernels straight into DuckDB, so the transforms run
+natively inside the query engine with **no Python interpreter in the process**,
+byte-identical to the Python / TypeScript / WASM surfaces.
+
+74 transforms are exposed as SQL functions named `goldenflow_<kernel>`:
+
+```sql
+-- CLI: duckdb -unsigned   (or: SET allow_unsigned_extensions = true;)
+LOAD 'goldenflow_duckdb.duckdb_extension';
+
+SELECT
+  goldenflow_email_normalize(email)     AS email,
+  goldenflow_name_proper(name)          AS name,
+  goldenflow_address_standardize(addr)  AS address,
+  goldenflow_cc_validate(card)          AS card_ok      -- BOOLEAN
+FROM read_parquet('s3://bucket/raw/*.parquet');
+```
+
+Grab the per-platform zip from the `goldenflow-duckdb-v*`
+[release assets](https://github.com/benseverndev-oss/goldenmatch/releases)
+(linux/macOS/Windows; loads on DuckDB >= 1.3.0). Details + the full function
+catalogue: [`packages/rust/extensions/goldenflow-duckdb/README.md`](../../rust/extensions/goldenflow-duckdb/README.md).
+
+---
+
 ## Public API (34 exports)
 
 ```python

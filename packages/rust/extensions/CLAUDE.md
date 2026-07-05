@@ -58,6 +58,37 @@ Native SQL extensions for [GoldenMatch](https://github.com/benseverndev-oss/gold
 - `functions.py` also registers Learning Memory UDFs: `goldenmatch_correction_add`/`_list` (CRUD) + `goldenmatch_memory_learn` (MemoryLearner pass) + `goldenmatch_memory_stats` (status). Both backends expose all four. Tests: `tests/test_memory_learn_stats.py`.
 - Requires `pyarrow` for DuckDB `.pl()` Polars conversion
 
+### goldenflow-duckdb/ (goldenflow_duckdb — compiled, zero-Python)
+
+A DISTINCT surface from `duckdb/` above: a compiled Rust **loadable extension**
+(cdylib) that links `goldenflow-core` directly — NO CPython in the DuckDB
+process (the `duckdb/goldenmatch_duckdb/goldenflow.py` UDFs dispatch the *Python*
+transform registry per value; this doesn't). 74 UDFs `goldenflow_<kernel>` =
+essentially the whole single-record transform surface. Released
+`goldenflow-duckdb-v0.1.1`. Built with the `duckdb` crate (`vscalar`) +
+`#[duckdb_entrypoint_c_api]`. Gotchas (hard-won — see the memory file
+`project_goldenflow_duckdb_extension` for the full list):
+- **Package name MUST be underscore** (`goldenflow_duckdb`) — the entrypoint
+  macro derives the C init symbol from it; a hyphen panics.
+- **The loadable file MUST be named `goldenflow_duckdb.duckdb_extension`** —
+  DuckDB derives the init symbol from the FILE BASENAME, so a `-<platform>`
+  suffix → "undefined symbol …" at LOAD. Release assets are per-platform ZIPs
+  that extract to the correctly-named file (the platform lives in the artifact
+  name, not the filename). Shipped a broken v0.1.0 before catching this via the
+  version-sweep.
+- **Footer encodes the stable C API version (`v1.2.0`), NOT the DuckDB version.**
+  Real load floor = **DuckDB >= 1.3.0** (1.2.x uses platform string
+  `linux_amd64_gcc4`; 1.3.0 unified to `linux_amd64`).
+- **DuckDB scalar UDFs propagate NULL** (any NULL arg → NULL, invoke not called;
+  no override in duckdb-rs) → `goldenflow_merge_name(NULL,'x')` is SQL NULL, the
+  one place it differs from the pure kernel.
+- Two build modes: `cargo test --no-default-features --features test-bundled`
+  (hermetic parity, threads the full `identifiers_corpus.jsonl`) vs default
+  `loadable`. CI: the **required** `goldenflow_duckdb` lane in root `ci.yml`
+  (parity + loadable build; path-filtered on `goldenflow-core/**` so a core
+  change re-gates it) + `goldenflow-duckdb-dist.yml` (5-platform release build +
+  LOAD smoke + a DuckDB-version portability sweep).
+
 ## Testing
 - Rust bash preamble (copy-paste before any cargo command): `export PATH="/c/Users/bsevern/.cargo/bin:$PATH" && export RUSTUP_HOME="C:/Users/bsevern/.rustup" && export CARGO_HOME="C:/Users/bsevern/.cargo"`
 - `cargo build -p goldenmatch-bridge` -- builds bridge locally (works on Windows)

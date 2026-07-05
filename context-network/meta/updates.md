@@ -2,6 +2,24 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-07-05 -- GoldenFlow: compiled zero-Python DuckDB extension + all surfaces gated (ADR 0032)
+- New surface `goldenflow-duckdb`: a compiled Rust DuckDB **loadable extension**
+  linking `goldenflow-core` directly (no CPython in the process). 74 UDFs
+  `goldenflow_<kernel>` = essentially the whole single-record transform surface;
+  parity proven by threading the same shared `identifiers_corpus.jsonl` through
+  real in-process DuckDB. Portable to **DuckDB >= 1.3.0** (stable C API v1.2.0,
+  proven by a version-sweep), released `goldenflow-duckdb-v0.1.1` as 5 per-platform
+  zips. Distinct from the pre-owned-kernel `duckdb/goldenmatch_duckdb/goldenflow.py`
+  (which dispatches the Python registry per value).
+- **Lockstep seam closed:** every `goldenflow-core` consumer is now a required
+  `ci-required` lane — `rust`, `python_goldenflow_fallback`, `wasm_flow`,
+  `rust_pgrx`, `goldenflow_duckdb`, `native_flow`. A core change can't merge with
+  any surface's parity red; the committed corpus reds the gates on un-propagated
+  drift.
+- Decision: ADR [0032](../decisions/0032-goldenflow-duckdb-compiled-extension.md).
+  Gotchas (filename→init-symbol coupling that shipped a broken v0.1.0, C-API vs
+  DuckDB version, scalar NULL-propagation) in `packages/rust/extensions/CLAUDE.md`.
+
 ## 2026-07-04 -- GoldenFlow Wave D sweep (part 1): url, numeric, categorical migrated to owned kernels
 - Three more existing transform families migrated to the owned-kernel
   pattern (not new additions -- registry stays at 92): `url_normalize` /
