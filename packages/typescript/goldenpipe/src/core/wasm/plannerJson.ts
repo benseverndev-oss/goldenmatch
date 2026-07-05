@@ -20,7 +20,7 @@
  * Edge-safe: no `node:` imports.
  */
 
-import { WiringError } from "../engine/resolver.js";
+import { WiringError, AmbiguousProducerError, CycleError, UnknownNeedError } from "../engine/resolver.js";
 import type { PlannedStage, ExecutionPlan } from "../engine/resolver.js";
 import { makeStageSpec, makeDecision, makePipelineConfig } from "../models.js";
 import type { Decision, PipeContext, PipelineConfig, StageSpec } from "../models.js";
@@ -29,15 +29,20 @@ import type { PipeWasmBackend } from "./backend.js";
 
 /** Reconstruct the pure-TS error surface from goldenpipe-core's `err` payload. */
 function throwFromErr(err: { kind: string; [k: string]: unknown }): never {
-  if (err.kind === "wiring") {
+  if (err.kind === "missing_producer") {
     throw new WiringError(
-      `Stage '${String(err.stage)}' consumes '${String(err.missing)}' but no prior stage produces it.`,
-      {
-        stage: String(err.stage),
-        missing: String(err.missing),
-        available: (err.available as string[]) ?? [],
-      },
+      `Stage '${String(err.stage)}' consumes '${String(err.artifact)}' but no prior stage produces it.`,
+      { stage: String(err.stage), artifact: String(err.artifact) },
     );
+  }
+  if (err.kind === "ambiguous_producer") {
+    throw new AmbiguousProducerError(String(err.artifact), (err.producers as string[]) ?? []);
+  }
+  if (err.kind === "cycle") {
+    throw new CycleError((err.stages as string[]) ?? []);
+  }
+  if (err.kind === "unknown_need") {
+    throw new UnknownNeedError(String(err.stage), (err.needs as string[]) ?? []);
   }
   if (err.kind === "unknown_stage") {
     throw new Error(`Stage '${String(err.use)}' not found in registry`);

@@ -134,7 +134,7 @@ flowchart LR
 The engine layer mirrors the Python design:
 
 - **registry** — a STATIC registry (`buildDefaultRegistry()`) replacing Python's entry-point discovery.
-- **resolver** — builds an `ExecutionPlan`, auto-prepends `load`, validates `consumes`/`produces` wiring.
+- **resolver** — builds an `ExecutionPlan` via a dependency-DAG planner: auto-prepends `load`, activates each stage's `needs`, and reorders minimally (a consumer listed before its sole producer resolves instead of erroring) while keeping config order everywhere else. It rejects the failure classes the old linear check hid — `MissingProducer`, `AmbiguousProducer` (two producers a consumer can't disambiguate), `Cycle`, `UnknownNeed`.
 - **router** — applies a stage's `Decision` (skip / insert / abort) to the remaining plan.
 - **runner** — async stage execution with per-stage error handling + `skipIf` gating.
 - **reporter** — assembles the `PipeResult` (status, stages, artifacts, errors, reasoning, timing).
@@ -173,12 +173,16 @@ uv run --project packages/python/goldenpipe python \
 
 ### Planner: one Rust source of truth (opt-in WASM)
 
-The pipeline **planner** — stage ordering + wiring validation, decision routing,
-auto-config, and the `skip_if` predicate — is extracted into the pyo3-free Rust
-`goldenpipe-core` crate, the single reference every surface computes identically.
-Pure-TS is a proven-conforming fallback and the default: a CI parity gate replays
-the same golden vectors through pure-TS **and** the WASM kernel, both asserted
-byte-identical to `goldenpipe-core`, so the TS and Python planners cannot drift.
+The pipeline **planner** — dependency-DAG stage ordering (`needs` + minimal
+reorder) and wiring validation, decision routing, auto-config, and the `skip_if`
+predicate — is extracted into the pyo3-free Rust `goldenpipe-core` crate, the
+single reference every surface computes identically. The resolver activates each
+stage's `needs`, reorders a consumer ahead of its sole producer instead of
+erroring, and rejects genuinely ambiguous co-production / cycles / unknown `needs`
+as typed errors. Pure-TS is a proven-conforming fallback and the default: a CI
+parity gate replays the same golden vectors through pure-TS **and** the WASM
+kernel, both asserted byte-identical to `goldenpipe-core`, so the TS and Python
+planners cannot drift.
 
 The WASM path is opt-in — pure-TS needs no build step and stays the edge-safe
 default:

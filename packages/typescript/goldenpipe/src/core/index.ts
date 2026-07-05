@@ -52,7 +52,7 @@ export type {
 
 // Engine
 export { StageRegistry, defaultRegistry } from "./engine/registry.js";
-export { Resolver, WiringError } from "./engine/resolver.js";
+export { Resolver, WiringError, AmbiguousProducerError, CycleError, UnknownNeedError } from "./engine/resolver.js";
 export type { ExecutionPlan, PlannedStage } from "./engine/resolver.js";
 export { Router } from "./engine/router.js";
 export { Runner } from "./engine/runner.js";
