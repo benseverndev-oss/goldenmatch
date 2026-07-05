@@ -11,7 +11,7 @@
 **Spec:** `docs/superpowers/specs/2026-07-05-native-symbol-reconciliation-design.md`
 
 **Acceptance oracle (computed in spec review — the build must reproduce this):**
-`check_native_symbols.py goldenmatch` → **missing (FAIL) = ∅** (exit 0), **unwired (REPORT) = {`build_clusters_native`, `connected_components_arrow`}**. If the real-repo run doesn't match this, the scanner idiom is wrong — debug before shipping.
+`check_native_symbols.py goldenmatch` → **missing (FAIL) = ∅** (exit 0), **unwired (REPORT) = {`build_clusters_native`, `connected_components_arrow`, `score_block_pairs`}** (three genuinely-dead / Rust-internal-only exports). If the real-repo run shows any MISSING, the scanner idiom is wrong — debug before shipping.
 
 **Environment / SOP:**
 - Branch `feat/native-symbol-check` (worktree `D:\show_case\gg-local-llm`), off `origin/main`.
@@ -49,7 +49,9 @@ no goldenmatch import. Run: python -m pytest scripts/test_native_symbols.py -q""
 import importlib.util, pathlib
 _spec = importlib.util.spec_from_file_location(
     "check_native_symbols", pathlib.Path(__file__).parent / "check_native_symbols.py")
-mod = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(mod)
+mod = importlib.util.module_from_spec(_spec)
+import sys as _sys; _sys.modules[_spec.name] = mod   # Py3.13: @dataclass needs the module in sys.modules
+_spec.loader.exec_module(mod)
 
 
 def test_parse_registrations_extracts_final_segment():
@@ -139,7 +141,11 @@ REGISTRY = {
 
 # wrap_pyfunction!( <optional module:: paths> <symbol> , m )   -- \s spans newlines
 _WRAP = re.compile(r"wrap_pyfunction!\(\s*(?:\w+::)+(\w+)")
-_BIND = re.compile(r"(\w+)\s*=\s*(?:native_module\(\)|_ensure_native\(\))")
+# The (?!\s*\.) lookahead is REQUIRED: without it, a method-call chain like
+# `pairs = native_module().score_block_pairs_arrow(...)` binds `pairs` as a false
+# alias, and list/dict methods on the return value (.add/.append/...) become
+# false-MISSING symbols. Only a BARE module-alias binding counts.
+_BIND = re.compile(r"(\w+)\s*=\s*(?:native_module\(\)|_ensure_native\(\))(?!\s*\.)")
 
 
 def parse_registrations_text(text: str) -> set[str]:
@@ -247,7 +253,7 @@ Expected: all pass.
 - [ ] **Step 6: Run the real gate against goldenmatch — MUST match the oracle**
 
 Run: `POLARS_SKIP_CPU_CHECK=1 D:/show_case/goldenmatch/.venv/Scripts/python.exe scripts/check_native_symbols.py goldenmatch; echo "exit=$?"`
-Expected: `exit=0`; `unwired` lists exactly `build_clusters_native` and `connected_components_arrow` (the two dead exports) and nothing else; no MISSING. **If missing is non-empty or unwired ≠ those two, the scanner idiom is wrong — debug (likely an alias binding or regex edge) before proceeding.**
+Expected: `exit=0`; `unwired` lists exactly `build_clusters_native`, `connected_components_arrow`, and `score_block_pairs` (three dead / Rust-internal-only exports) and nothing else; no MISSING. **If missing is non-empty, the scanner idiom is wrong — debug (likely an alias binding or regex edge) before proceeding.**
 
 - [ ] **Step 7: Commit**
 
