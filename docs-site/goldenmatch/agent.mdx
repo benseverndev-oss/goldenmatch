@@ -61,6 +61,16 @@ Add to `claude_desktop_config.json`:
 
 ## Agent Capabilities (38 Skills)
 
+<Note>
+**Cross-language skill ids.** The TypeScript and Python A2A servers share
+canonical skill ids for the core operations (`deduplicate`, `match`, `explain`,
+`evaluate`, `analyze_data`, the `identity_*` set, ...), and every skill on both
+cards is A2A-spec-shaped (`id` + a human-readable `name`). For back-compat the
+TypeScript server also dispatches the legacy ids `dedupe` and `explain_pair`. The
+two catalogs otherwise differ by design -- each server exposes skills the other
+does not -- so A2A is documented for parity, not CI-gated (MCP tools + CLI are).
+</Note>
+
 ### Core & pipeline
 
 | Skill | What It Does |
