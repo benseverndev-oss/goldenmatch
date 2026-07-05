@@ -628,6 +628,7 @@ def dispatch(name: str, args: dict) -> dict:
     memory tools via memory_tools._dispatch, and base tool calls to
     _handle_tool. Returns a JSON-serializable dict for all.
     """
+    name = _resolve_alias(name)
     if name in _AGENT_TOOL_NAMES:
         from goldenmatch.core.agent import AgentSession
         from goldenmatch.mcp.agent_tools import _dispatch as _agent_dispatch
@@ -896,6 +897,7 @@ def create_server(file_paths: list[str] | None = None, config_path: str | None =
 
     @server.call_tool()
     async def call_tool(name: str, arguments: dict) -> list[TextContent]:
+        name = _resolve_alias(name)
         # Anonymous, opt-in usage event: the TOOL NAME only -- never `arguments`
         # (which can carry user data). No-op unless GOLDENMATCH_ANALYTICS=1.
         try:
