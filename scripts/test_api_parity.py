@@ -120,3 +120,25 @@ def test_python_emitter_goldenmatch_smoke():
     # known real names present
     assert "find_duplicates" in desc["mcp_tools"]
     assert "mcp-serve" in desc["cli_commands"] and "identity" in desc["cli_commands"]
+
+
+import pytest
+
+
+@pytest.mark.parametrize(
+    "pkg", ["goldenmatch", "goldencheck", "goldenflow", "goldenpipe", "goldenanalysis", "infermap"]
+)
+def test_python_emitter_all_packages_smoke(pkg):
+    """Every package's Python emitter produces a non-empty, sorted mcp+cli surface. Box-safe
+    (needs each <pkg>[mcp] in the venv)."""
+    root = pathlib.Path(__file__).resolve().parent.parent
+    env = {**os.environ, "POLARS_SKIP_CPU_CHECK": "1", "GOLDENMATCH_NATIVE": "0",
+           "GOLDENFLOW_NATIVE": "0", "GOLDENCHECK_NATIVE": "0",
+           "PYTHONPATH": str(root / "packages" / "python" / pkg)}
+    proc = subprocess.run([sys.executable, str(root / "scripts" / "emit_python_surface.py"), pkg],
+                          capture_output=True, text=True, env=env)
+    assert proc.returncode == 0, proc.stderr
+    desc = json.loads(proc.stdout)
+    assert desc["package"] == pkg
+    for surface in ("mcp_tools", "cli_commands"):
+        assert desc[surface] == sorted(desc[surface]) and desc[surface], f"{pkg}.{surface} empty/unsorted"
