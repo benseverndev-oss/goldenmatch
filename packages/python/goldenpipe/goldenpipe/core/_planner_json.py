@@ -12,7 +12,12 @@ from typing import Any
 
 from goldenpipe import decisions as _dec
 from goldenpipe.engine.resolver import (
-    AmbiguousProducerError, CycleError, PlannedStage, Resolver, UnknownNeedError, WiringError,
+    AmbiguousProducerError,
+    CycleError,
+    PlannedStage,
+    Resolver,
+    UnknownNeedError,
+    WiringError,
 )
 from goldenpipe.engine.router import Router
 from goldenpipe.models.config import PipelineConfig, StageSpec
