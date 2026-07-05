@@ -1466,8 +1466,11 @@ jobs:
           GOLDENMATCH_NATIVE: "0"
           PYTHONPATH: packages/python/goldenmatch
       - name: Build goldenmatch-js (TS emitter imports dist/)
+        # goldenmatch-js has a workspace:^ dep on goldenmatch-wasm-runtime; build it first
+        # so tsup can resolve it (the main `typescript` lane gets this via turbo's dep graph).
         run: |
           pnpm install --frozen-lockfile
+          pnpm --filter goldenmatch-wasm-runtime build
           pnpm --filter goldenmatch build
       - name: Parity gate (both emitters + manifest)
         run: uv run python scripts/check_api_parity.py goldenmatch
