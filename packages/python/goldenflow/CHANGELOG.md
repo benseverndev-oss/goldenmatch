@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.13.0 (2026-07-05)
+
+Wave D (category_auto_correct): the fuzzy, data-dependent categorical-autocorrect transform is now backed by an owned Rust kernel in `goldenflow-core::autocorrect` (native + WASM/TS + pure-Python fallback), Rust is the reference implementation. Migration, not addition (count unchanged).
+
+- `goldenflow-core::autocorrect` owns the WHOLE correction-map algorithm: `fuzz_ratio` (the rapidfuzz `fuzz.ratio` Indel/LCS similarity) + `build_canonical_map` (frequency analysis → canonical determination → fuzzy matching → correction map, order-deterministic). The host computes `value_counts` and applies the returned map.
+- **Cross-surface fix:** the TypeScript surface previously used a *different* fuzzy ratio (Levenshtein-based) than Python (rapidfuzz Indel), and did not strip whitespace on apply — so TS and Python produced different corrections. Both now conform to the single Rust kernel, so the corrected column is byte-identical across native, WASM/TS, and pure-Python. The Python fallback (rapidfuzz `_build_canonical_map`) remains the byte-exact reference the kernel replicates. `rapidfuzz` stays a Python dependency for that fallback.
+
 ## 1.12.0 (2026-07-04)
 
 Wave D (text, part 2): the 5 Unicode-heavy text transforms are now backed by owned Rust kernels in `goldenflow-core::text` (native + WASM/TS + pure-Python fallback), Rust is the reference implementation. This completes the text family migration (count unchanged).
