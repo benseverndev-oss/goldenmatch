@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.12.0 (2026-07-04)
+
+Wave D (text, part 2): the 5 Unicode-heavy text transforms are now backed by owned Rust kernels in `goldenflow-core::text` (native + WASM/TS + pure-Python fallback), Rust is the reference implementation. This completes the text family migration (count unchanged).
+
+- Migrated: `lowercase`, `uppercase` (Rust std casing), `title_case` (ASCII title-case), `normalize_unicode` (NFKD-decompose + strip-combining), `fix_mojibake` (Latin-1↔UTF-8 round-trip).
+- **Behavior change (reference-mode, resolved in Rust's favor):** `normalize_unicode` now uses an EXPLICIT generated decompose table (`scripts/gen_normalize_unicode_map.py`, over U+00C0–U+017F + U+1E00–U+1EFF) replicated byte-identically to all three surfaces, instead of each runtime's `unicodedata`/`String.normalize` — so the surfaces agree regardless of their bundled Unicode DB. Precomposed chars outside those ranges (e.g. Greek Extended) now pass through unchanged (previously decomposed); the ASCII fast-path is retained. `title_case` is bounded to ASCII title-casing (was polars Unicode `to_titlecase`); `lowercase`/`uppercase` casing agrees with the old behavior on Latin/ASCII (exotic Greek final-sigma / Turkish dotted-I casing is the documented boundary). Outputs are unchanged for well-formed Latin/ASCII inputs.
+
 ## 1.11.0 (2026-07-04)
 
 Wave D (text, part 1): the 13 mechanical/ASCII-bound text transforms are now backed by owned Rust kernels in `goldenflow-core::text` (native + WASM/TS + pure-Python fallback), Rust is the reference implementation. This wave migrated existing transforms to the owned-kernel pattern; it did not add new transforms (count unchanged).
