@@ -307,7 +307,7 @@ pub fn strip_suffixes(s: &str) -> String {
 /// reset the word boundary. Matches Python `str.title()` on ASCII input; the
 /// non-ASCII behavior is bounded by the Unicode `to_uppercase`/`to_lowercase`
 /// case maps (documented boundary -- reference-mode resolves in Rust's favor).
-fn ascii_title(s: &str) -> String {
+pub(crate) fn ascii_title(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut prev_alpha = false;
     for c in s.chars() {

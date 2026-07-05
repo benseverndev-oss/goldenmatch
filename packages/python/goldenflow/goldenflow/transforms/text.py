@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-import unicodedata
 
 import polars as pl
 
@@ -9,8 +8,11 @@ from goldenflow.transforms import register_transform
 from goldenflow.transforms._native import (
     collapse_whitespace_native,
     extract_numbers_native,
+    fix_mojibake_native,
+    lowercase_native,
     normalize_line_endings_native,
     normalize_quotes_native,
+    normalize_unicode_native,
     pad_left_native,
     pad_right_native,
     remove_digits_native,
@@ -19,8 +21,11 @@ from goldenflow.transforms._native import (
     remove_punctuation_native,
     remove_urls_native,
     strip_native,
+    title_case_native,
     truncate_native,
+    uppercase_native,
 )
+from goldenflow.transforms._normalize_unicode_map import NORMALIZE_MAP
 
 # --- Wave D text-1: mechanical / ASCII-bound transforms migrated to owned
 # goldenflow-core::text kernels (native-first + byte-matched pure-Python
@@ -347,48 +352,112 @@ def pad_right(column: str, width: int | str = 10, char: str = " ") -> pl.Expr:
     return pl.col(column).map_batches(_series, return_dtype=pl.Utf8)
 
 
-# --- text-2 (Unicode-heavy) transforms: NOT yet migrated to owned kernels.
-# lowercase / uppercase / title_case / normalize_unicode / fix_mojibake stay
-# pure-Polars/Python until Wave D text-2 (explicit-map/bounded Unicode work).
+# --- Wave D text-2: Unicode-heavy transforms migrated to owned goldenflow-core
+# kernels (native-first + byte-matched pure-Python fallback). Casing uses Rust
+# std / Python str (agree on Latin/ASCII; exotic casing is the documented
+# boundary); title_case is ASCII-title; normalize_unicode uses the SAME explicit
+# generated NORMALIZE_MAP as the kernel (NOT unicodedata); fix_mojibake is a
+# portable latin-1<->utf-8 round-trip.
+
+
+def _lowercase_py(val: str | None) -> str | None:
+    if val is None:
+        return None
+    return val.lower()
+
+
+def _lowercase_series(series: pl.Series) -> pl.Series:
+    native = lowercase_native()
+    if native is not None:
+        return native(series)
+    return series.map_elements(_lowercase_py, return_dtype=pl.Utf8)
 
 
 @register_transform(
     name="lowercase", input_types=["string"], auto_apply=False, priority=50, mode="expr"
 )
 def lowercase(column: str) -> pl.Expr:
-    return pl.col(column).str.to_lowercase()
+    return pl.col(column).map_batches(_lowercase_series, return_dtype=pl.Utf8)
+
+
+def _uppercase_py(val: str | None) -> str | None:
+    if val is None:
+        return None
+    return val.upper()
+
+
+def _uppercase_series(series: pl.Series) -> pl.Series:
+    native = uppercase_native()
+    if native is not None:
+        return native(series)
+    return series.map_elements(_uppercase_py, return_dtype=pl.Utf8)
 
 
 @register_transform(
     name="uppercase", input_types=["string"], auto_apply=False, priority=50, mode="expr"
 )
 def uppercase(column: str) -> pl.Expr:
-    return pl.col(column).str.to_uppercase()
+    return pl.col(column).map_batches(_uppercase_series, return_dtype=pl.Utf8)
+
+
+def _title_case_py(val: str | None) -> str | None:
+    """ASCII title-case, byte-identical to goldenflow-core ``names::ascii_title``
+    (reused by the ``title_case`` kernel): first alphabetic char of each word
+    upper, rest lower; non-alpha resets the word."""
+    if val is None:
+        return None
+    out: list[str] = []
+    prev_alpha = False
+    for c in val:
+        if c.isalpha():
+            out.append(c.lower() if prev_alpha else c.upper())
+            prev_alpha = True
+        else:
+            out.append(c)
+            prev_alpha = False
+    return "".join(out)
+
+
+def _title_case_series(series: pl.Series) -> pl.Series:
+    native = title_case_native()
+    if native is not None:
+        return native(series)
+    return series.map_elements(_title_case_py, return_dtype=pl.Utf8)
 
 
 @register_transform(
     name="title_case", input_types=["string"], auto_apply=False, priority=50, mode="expr"
 )
 def title_case(column: str) -> pl.Expr:
-    return pl.col(column).str.to_titlecase()
+    return pl.col(column).map_batches(_title_case_series, return_dtype=pl.Utf8)
 
 
 _NON_ASCII_RE = r"[^\x00-\x7F]"
+
+
+def _normalize_unicode_py(val: str | None) -> str | None:
+    """NFKD-decompose + strip-combining via the explicit ``NORMALIZE_MAP`` (NOT
+    ``unicodedata`` -- the map is byte-identical to the Rust kernel across
+    surfaces). ASCII passes through; a mapped char emits its replacement; an
+    unmapped non-ASCII char passes through unchanged (documented boundary)."""
+    if val is None:
+        return None
+    out: list[str] = []
+    for c in val:
+        if ord(c) < 128:
+            out.append(c)
+        else:
+            out.append(NORMALIZE_MAP.get(c, c))
+    return "".join(out)
 
 
 @register_transform(
     name="normalize_unicode", input_types=["string"], auto_apply=True, priority=85, mode="series"
 )
 def normalize_unicode(series: pl.Series) -> pl.Series:
-    # Fast path: pure-ASCII columns are a no-op for NFKD + combining-char
-    # strip. Detect via vectorized regex on the non-null subset and bail
-    # before paying for per-row unicodedata.normalize calls. At 10M rows
-    # across 6 string columns this transform was the second-largest slice
-    # of pipeline_prep_transform wall after date_iso8601 (per the QIS
-    # bench gf:<col>:normalize_unicode markers, ~25-30s each). Any
-    # column that round-trips through CSV with only ASCII bytes (the
-    # common shape for hash-derived synthetic data + ASCII-only real
-    # datasets) hits this branch.
+    # Column-level ASCII fast-path: a pure-ASCII column is a no-op (kept from the
+    # original for perf -- this transform was a top wall slice at 10M rows). The
+    # native kernel handles ASCII per-char too; this bails before any per-row work.
     if series.dtype != pl.Utf8:
         return series
     non_null = series.drop_nulls()
@@ -396,14 +465,19 @@ def normalize_unicode(series: pl.Series) -> pl.Series:
         return series
     if not bool(non_null.str.contains(_NON_ASCII_RE).any()):
         return series
+    native = normalize_unicode_native()
+    if native is not None:
+        return native(series)
+    return series.map_elements(_normalize_unicode_py, return_dtype=pl.Utf8)
 
-    def _normalize(val: str | None) -> str | None:
-        if val is None:
-            return None
-        nfkd = unicodedata.normalize("NFKD", val)
-        return "".join(c for c in nfkd if not unicodedata.combining(c))
 
-    return series.map_elements(_normalize, return_dtype=pl.Utf8)
+def _fix_mojibake_py(val: str | None) -> str | None:
+    if val is None:
+        return None
+    try:
+        return val.encode("latin-1").decode("utf-8")
+    except (UnicodeDecodeError, UnicodeEncodeError):
+        return val
 
 
 @register_transform(
@@ -414,14 +488,12 @@ def normalize_unicode(series: pl.Series) -> pl.Series:
     mode="series",
 )
 def fix_mojibake(series: pl.Series) -> pl.Series:
-    """Fix common UTF-8/Latin-1 mojibake by re-encoding."""
+    """Fix common UTF-8/Latin-1 mojibake by re-encoding.
 
-    def _fix(val: str | None) -> str | None:
-        if val is None:
-            return None
-        try:
-            return val.encode("latin-1").decode("utf-8")
-        except (UnicodeDecodeError, UnicodeEncodeError):
-            return val
-
-    return series.map_elements(_fix, return_dtype=pl.Utf8)
+    Native-first (goldenflow-core's ``text::fix_mojibake``); the pure-Python
+    fallback is the byte-exact reference.
+    """
+    native = fix_mojibake_native()
+    if native is not None:
+        return native(series)
+    return series.map_elements(_fix_mojibake_py, return_dtype=pl.Utf8)

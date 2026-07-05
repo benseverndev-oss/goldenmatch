@@ -85,6 +85,11 @@ import {
   removePunctuationTs,
   removeEmojisTs,
   extractNumbersTs,
+  lowercaseTs,
+  uppercaseTs,
+  titleCaseTs,
+  normalizeUnicodeTs,
+  fixMojibakeTs,
 } from "../../src/core/transforms/text.js";
 import { enableWasm, disableWasm } from "../../src/core/wasm/index.js";
 import { getFlowWasmBackend, type FlowWasmBackend } from "../../src/core/wasm/backend.js";
@@ -159,6 +164,11 @@ const PURE_TS_FN: Record<string, (s: string) => boolean | string | number | unde
   remove_punctuation: removePunctuationTs,
   remove_emojis: removeEmojisTs,
   extract_numbers: extractNumbersTs,
+  lowercase: lowercaseTs,
+  uppercase: uppercaseTs,
+  title_case: titleCaseTs,
+  normalize_unicode: normalizeUnicodeTs,
+  fix_mojibake: fixMojibakeTs,
 };
 
 /** Same transform set, dispatched through the wasm backend's method of the
@@ -219,6 +229,11 @@ function wasmFn(backend: FlowWasmBackend, transform: string): (s: string) => boo
     remove_punctuation: (s) => backend.removePunctuation(s),
     remove_emojis: (s) => backend.removeEmojis(s),
     extract_numbers: (s) => backend.extractNumbers(s),
+    lowercase: (s) => backend.lowercase(s),
+    uppercase: (s) => backend.uppercase(s),
+    title_case: (s) => backend.titleCase(s),
+    normalize_unicode: (s) => backend.normalizeUnicode(s),
+    fix_mojibake: (s) => backend.fixMojibake(s),
   };
   const fn = map[transform];
   if (!fn) throw new Error(`no wasm dispatch for transform ${transform}`);

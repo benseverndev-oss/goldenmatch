@@ -662,6 +662,26 @@ def pad_right_native(
     return _text_param_kernel_runner("pad_right_arrow", width=width, pad=pad)
 
 
+def lowercase_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _text_kernel_runner("lowercase_arrow")
+
+
+def uppercase_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _text_kernel_runner("uppercase_arrow")
+
+
+def title_case_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _text_kernel_runner("title_case_arrow")
+
+
+def normalize_unicode_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _text_kernel_runner("normalize_unicode_arrow")
+
+
+def fix_mojibake_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _text_kernel_runner("fix_mojibake_arrow")
+
+
 def _email_kernel_runner(attr: str) -> Callable[[pl.Series], pl.Series] | None:
     """Build a whole-series runner for email kernel function ``attr`` if
     native ``email`` is enabled and the dependencies are importable; else

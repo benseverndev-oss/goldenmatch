@@ -278,6 +278,31 @@ mod wasm {
     }
 
     #[wasm_bindgen]
+    pub fn lowercase(s: &str) -> String {
+        text::lowercase(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn uppercase(s: &str) -> String {
+        text::uppercase(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn title_case(s: &str) -> String {
+        text::title_case(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn normalize_unicode(s: &str) -> String {
+        text::normalize_unicode(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn fix_mojibake(s: &str) -> String {
+        text::fix_mojibake(s)
+    }
+
+    #[wasm_bindgen]
     pub fn url_normalize(s: &str) -> Option<String> {
         url::url_normalize(s)
     }
