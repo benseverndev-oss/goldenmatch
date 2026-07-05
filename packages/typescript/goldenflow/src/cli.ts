@@ -3,6 +3,7 @@
  * GoldenFlow JS CLI — Commander.js port of the Typer CLI.
  */
 
+import { pathToFileURL } from "node:url";
 import { Command } from "commander";
 import { readFile, writeFile } from "./node/connectors/file.js";
 import { TransformEngine } from "./core/engine/transformer.js";
@@ -21,7 +22,7 @@ import "./core/transforms/index.js";
 
 const VERSION = "0.1.0";
 
-const program = new Command()
+export const program = new Command()
   .name("goldenflow-js")
   .description("GoldenFlow: data transformation toolkit (TypeScript)")
   .version(VERSION);
@@ -247,4 +248,6 @@ transforms:
     console.log(`  Config: ${join(dir, "demo_config.yaml")}`);
   });
 
-program.parse();
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  program.parse();
+}

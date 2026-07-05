@@ -11,6 +11,7 @@
 import { parseArgs } from "node:util";
 import { readFile, writeFile } from "node:fs/promises";
 import { extname } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { MapEngine } from "./core/engine.js";
 import { fromConfig, mapResultToConfigJson, ConfigError } from "./core/config.js";
@@ -270,6 +271,9 @@ async function cmdValidate(argv: string[]): Promise<number> {
 
 // ---------- entrypoint ----------
 
+// Canonical CLI command set (mirrors the main() dispatch); read by the API-parity emitter.
+export const COMMANDS = ["apply", "inspect", "map", "validate"];
+
 async function main(): Promise<number> {
   const [, , cmd, ...rest] = process.argv;
 
@@ -301,4 +305,6 @@ async function main(): Promise<number> {
   }
 }
 
-main().then((code) => process.exit(code));
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().then((code) => process.exit(code));
+}
