@@ -18,12 +18,17 @@ kernel both updated, Project 1 would be green), but the published wheel `0.1.0`
 predated it — so every `pip install goldenmatch[native]` user silently ran the
 slow fallback for that symbol until the wheel was republished.
 
-A build-from-source check (publish-time gate, or maturin-build-then-`dir()`) does
-**not** catch this: a wheel built from source S always contains source S's
-registered symbols, and the host refs are read from that same S — they are
-consistent by construction. The skew #688 is about is strictly between
-**current-source host refs** and an **older published wheel**. Only comparing
-those two catches it.
+A build-from-source check (publish-time gate, or maturin-build-then-`dir()`) is
+**largely redundant** for the republish-lag axis: a wheel built from source S
+contains source S's registered symbols, and the host refs are read from that same
+S — consistent by construction. The skew #688 is about is strictly between
+**current-source host refs** and an **older published wheel**; only comparing those
+two catches it. (A build+`dir()` check does have *one* marginal edge over Project 1
+on a different axis — it sees registrations Project 1's `wrap_pyfunction!`-only
+regex misses, e.g. `m.add_class::<ExcludeSet>` at `lib.rs:47` or a cfg-gated/
+macro-generated registration. This advisory absorbs that benefit for free: it reads
+the wheel via `dir()`, so it is strictly more robust than a text-parse on the
+export-completeness axis, on top of being the only thing that catches the lag.)
 
 ## 2. Goal
 
@@ -65,10 +70,20 @@ introspected set reflects what real users get.
 ### 3.3 The check
 
 ```
-referenced = scan_references(goldenmatch host source)   # reused, Project 1
-shipped    = wheel_exports("goldenmatch_native._native") # dir() of the installed wheel
+referenced = scan_references(REGISTRY[pkg]["py_root"], REGISTRY[pkg]["loader_tokens"])  # reused, Project 1
+if not referenced:                                        # falsely-green guard (see below)
+    fail_loud("scanned zero host references — the reference idiom is wrong"); exit 2
+shipped    = wheel_exports("goldenmatch_native._native")  # dir() of the installed wheel
 lagging    = referenced - shipped - allow
 ```
+**The zero-referenced guard is load-bearing** (mirrors Project 1's
+`check_native_symbols.py:88-91`): if `scan_references` returns `∅` (a broken host
+scanner), then `lagging = ∅ − shipped − allow = ∅` → the job prints "up to date" and
+goes green while checking nothing. That is the exact "falsely reassuring" failure
+§7 warns about, arriving via the host side. Fail loud (distinct non-zero exit) when
+`referenced` is empty, same posture as the "couldn't introspect the wheel" guard.
+`scan_references` takes **two** args (`py_root`, `loader_tokens`) — both from
+`REGISTRY[pkg]`; pass both.
 - `lagging` non-empty → print an actionable warning listing each symbol and
   "the published goldenmatch-native (vX.Y.Z) lacks these; republish it". Exit 0
   (advisory) — or exit non-zero only under an explicit `--strict` used by a future
@@ -93,9 +108,12 @@ Reference implementation on `goldenmatch` / `goldenmatch-native`, structured (th
 **Box-safe unit tests** (`scripts/test_native_wheel.py`): the reconcile logic and
 `wheel_exports` are tested against a **stub module object** (a synthetic object with
 attributes standing in for a compiled `_native`), so no real wheel/build is needed:
-- `wheel_exports` filters to public callables (ignores `_private`, non-callables).
+- `wheel_exports` filters to public callables (ignores `_private`, non-callables;
+  keeps a class like `ExcludeSet` since it's a public callable export).
 - the lag computation (`referenced - shipped - allow`) reports the right set.
 - an empty lag prints "up to date" and exits 0.
+- **the zero-referenced guard** fires (distinct non-zero exit) when the host scan
+  yields `∅` — the load-bearing anti-falsely-green test.
 - allow subtraction works.
 
 The real published-wheel introspection is CI-only (needs the installed wheel).
