@@ -12,6 +12,7 @@
 use pyo3::prelude::*;
 
 mod address;
+mod autocorrect;
 mod categorical;
 mod email;
 mod identifiers;
@@ -65,6 +66,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(address::country_standardize_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(address::unit_normalize_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(address::split_address_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(autocorrect::build_canonical_map_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(text::strip_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(text::collapse_whitespace_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(text::normalize_quotes_arrow, m)?)?;

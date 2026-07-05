@@ -121,6 +121,9 @@ _COMPONENT_SYMBOLS: dict[str, tuple[str, ...]] = {
     # unit_normalize (scalar) + split_address (1->4 quad) -- floor symbol only
     # (address_standardize_arrow), US-scoped/locale-free.
     "address": ("address_standardize_arrow",),
+    # autocorrect: the data-dependent fuzzy category-autocorrect algorithm
+    # (fuzz_ratio + build_canonical_map) -- floor symbol build_canonical_map_arrow.
+    "autocorrect": ("build_canonical_map_arrow",),
     # text: the mechanical text family (strip/collapse_whitespace/
     # normalize_quotes/normalize_line_endings/truncate/pad_left/pad_right/
     # remove_html_tags/remove_urls/remove_digits/remove_punctuation/

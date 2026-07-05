@@ -110,6 +110,15 @@ export async function instantiateBackend(bytes: Uint8Array): Promise<FlowWasmBac
     title_case: (s: string) => string;
     normalize_unicode: (s: string) => string;
     fix_mojibake: (s: string) => string;
+    fuzz_ratio: (a: string, b: string) => number;
+    // wasm-bindgen `Vec<i32>` maps to `Int32Array`; `Vec<String>` in/out map to
+    // `string[]`.
+    build_canonical_map: (
+      values: string[],
+      counts: Int32Array,
+      freqThreshold: number,
+      matchThreshold: number,
+    ) => string[];
   };
   await glue.default({ module_or_path: bytes });
 
@@ -183,5 +192,8 @@ export async function instantiateBackend(bytes: Uint8Array): Promise<FlowWasmBac
     titleCase: (s) => glue.title_case(s),
     normalizeUnicode: (s) => glue.normalize_unicode(s),
     fixMojibake: (s) => glue.fix_mojibake(s),
+    fuzzRatio: (a, b) => glue.fuzz_ratio(a, b),
+    buildCanonicalMap: (values, counts, freqThreshold, matchThreshold) =>
+      glue.build_canonical_map(values, Int32Array.from(counts), freqThreshold, matchThreshold),
   };
 }

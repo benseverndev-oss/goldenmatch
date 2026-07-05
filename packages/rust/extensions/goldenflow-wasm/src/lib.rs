@@ -13,6 +13,7 @@
 #[cfg(target_arch = "wasm32")]
 mod wasm {
     use goldenflow_core::address;
+    use goldenflow_core::autocorrect;
     use goldenflow_core::categorical;
     use goldenflow_core::email;
     use goldenflow_core::identifiers::{aba, ean, iban, imei, isbn, luhn, swift, vat};
@@ -310,6 +311,35 @@ mod wasm {
     #[wasm_bindgen]
     pub fn url_extract_domain(s: &str) -> Option<String> {
         url::url_extract_domain(s)
+    }
+
+    /// rapidfuzz `fuzz.ratio` (Indel/LCS similarity, 0-100).
+    #[wasm_bindgen]
+    pub fn fuzz_ratio(a: &str, b: &str) -> f64 {
+        autocorrect::fuzz_ratio(a, b)
+    }
+
+    /// Category-autocorrect correction map from parallel `values` (non-null) +
+    /// `counts` arrays. Returns a FLAT `[from0, to0, from1, to1, ...]` array of
+    /// correction pairs (the caller unflattens). The caller must pass the pairs
+    /// in value_counts order (count DESC) so the kernel's tie-breaking matches.
+    #[wasm_bindgen]
+    pub fn build_canonical_map(
+        values: Vec<String>,
+        counts: Vec<i32>,
+        freq_threshold: f64,
+        match_threshold: f64,
+    ) -> Vec<String> {
+        let refs: Vec<Option<&str>> = values.iter().map(|s| Some(s.as_str())).collect();
+        let counts64: Vec<i64> = counts.iter().map(|&c| c as i64).collect();
+        let pairs =
+            autocorrect::build_canonical_map(&refs, &counts64, freq_threshold, match_threshold);
+        let mut out = Vec::with_capacity(pairs.len() * 2);
+        for (from, to) in pairs {
+            out.push(from);
+            out.push(to);
+        }
+        out
     }
 
     #[wasm_bindgen]

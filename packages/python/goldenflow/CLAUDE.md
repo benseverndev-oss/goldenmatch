@@ -321,6 +321,23 @@ package. Loader discover order in `goldenflow/core/_native_loader.py`:
   row so any divergence fails the build). **gotcha 5:** text-2 edits the
   existing text.rs, so goldenflow-core was bumped 0.2.0->0.3.0 to bust the stale
   maturin rust-cache.
+- **category_auto_correct migrated to an owned FUZZY kernel (Wave D) -- the
+  data-dependent one.** goldenflow-core `autocorrect.rs` owns `fuzz_ratio` (the
+  rapidfuzz `fuzz.ratio` Indel/LCS similarity, `100*(1-indel/(la+lb))`,
+  `("","")->100`) + `build_canonical_map` (the WHOLE frequency->canonical->fuzzy
+  correction-map algorithm, ORDER-DETERMINISTIC via insertion-ordered structures
+  + first-max-on-ties to match Python Counter/dict). Data-dependent (whole-
+  column): the host computes `value_counts(sort=True)` + applies the returned map
+  (`corrections.get(v.strip(), v.strip())` -- STRIPS every value); the kernel owns
+  the algorithm. Wired via the `autocorrect` `_native_loader` component (floor
+  `build_canonical_map_arrow`); marshaling shape (Utf8[]+Int64[] -> Utf8[]+Utf8[]).
+  wasm `build_canonical_map(values, counts, freq, match)` returns a FLAT
+  `[from0,to0,...]` array. **This UNIFIED a pre-existing Py/TS divergence** (Python
+  used rapidfuzz Indel ratio; TS used a Levenshtein ratio + no strip-on-apply --
+  both fixed to the Rust reference). rapidfuzz stays the Python fallback (byte-
+  exact reference). Data-dependent -> pinned-vector `test_autocorrect_kernels.py`
+  (NOT the shared corpus). `auto_apply=True` but suppressed for high-cardinality
+  columns (>10% unique) by selector.py.
 - **Byte-parity harness (cross-surface oracle = goldenflow-core).**
   `packages/python/goldenflow/tests/parity/identifiers_corpus.jsonl` (mirrored
   byte-identical into `packages/typescript/goldenflow/tests/parity/`) is the
