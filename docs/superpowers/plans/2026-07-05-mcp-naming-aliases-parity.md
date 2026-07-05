@@ -178,12 +178,17 @@ def _tiny_csv(tmp_path: Path) -> str:
 
 def test_dispatch_routes_alias_to_canonical_handler(tmp_path, monkeypatch):
     # The aggregator entrypoint (module-level dispatch) must resolve aliases —
-    # this is the path goldensuite-mcp uses. profile/profile_data is the cheapest pair.
+    # this is the path goldensuite-mcp uses.
+    # NOTE: profile_data takes NO path arg (empty inputSchema) — it reads the
+    # loaded engine (global _engine, None until _initialize). So preload the
+    # engine, then call both with {}. dispatch() has no try/except, so an
+    # unresolved alias raises out of the first call (which is the pre-fix failure).
     monkeypatch.setenv("GOLDENMATCH_NATIVE", "0")
     path = _tiny_csv(tmp_path)
     from goldenmatch.mcp import server as gm
-    via_alias = gm.dispatch("profile", {"path": path})
-    via_canonical = gm.dispatch("profile_data", {"path": path})
+    gm._initialize([path])
+    via_alias = gm.dispatch("profile", {})
+    via_canonical = gm.dispatch("profile_data", {})
     assert via_alias == via_canonical
 
 
@@ -198,7 +203,7 @@ def test_dispatch_explain_cluster_resolves_into_agent_path():
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `cd packages/python/goldenmatch && POLARS_SKIP_CPU_CHECK=1 GOLDENMATCH_NATIVE=0 ../../../.venv/Scripts/python -m pytest tests/test_mcp_aliases.py::test_dispatch_routes_alias_to_canonical_handler -v`
-Expected: FAIL — `dispatch("profile", ...)` falls through to `_handle_tool("profile", ...)` with no matching branch (KeyError / unknown-tool error), so it won't equal the `profile_data` result.
+Expected: FAIL — `dispatch("profile", {})` falls through to `_handle_tool("profile", {})` with no matching branch (unknown-tool error raised out of the un-try/excepted `dispatch`), so it errors before the `==`.
 
 - [ ] **Step 3: Implement — add `_resolve_alias` at the top of both dispatchers**
 
@@ -251,12 +256,16 @@ def test_suite_profile_stays_goldencheck_not_goldenmatch_alias():
     """goldenmatch's new `profile` alias must NOT shadow goldencheck's `profile`
     file-profiler in the aggregated surface."""
     from goldensuite_mcp.server import _aggregate
+    from goldenmatch.mcp import server as gm
     tools, name_to_dispatch = _aggregate()
     names = {t.name for t in tools}
     assert "profile" in names
-    # profile must dispatch to goldencheck, not goldenmatch
-    from goldencheck.mcp import server as gc
-    assert name_to_dispatch["profile"] is gc.dispatch
+    # profile must NOT dispatch to goldenmatch. gm.dispatch is the one stable
+    # module-level identity to compare against — goldencheck's adapter returns a
+    # fresh local closure (no `goldencheck.mcp.server.dispatch` symbol exists),
+    # so an `is gc.dispatch` check is impossible. `is not gm.dispatch` + the
+    # alias-absence test below together prove profile stays goldencheck's.
+    assert name_to_dispatch["profile"] is not gm.dispatch
 
 
 def test_goldenmatch_aliases_absent_from_aggregated_surface():
@@ -268,12 +277,10 @@ def test_goldenmatch_aliases_absent_from_aggregated_surface():
         "goldenmatch aliases must be filtered from the suite surface"
 ```
 
-(If goldencheck's dispatcher isn't `gc.dispatch`, adjust the identity check to the callable `_adapt_goldencheck()` returns — verify against `goldensuite_mcp/server.py`'s goldencheck adapter.)
-
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `cd packages/python/goldensuite-mcp && POLARS_SKIP_CPU_CHECK=1 GOLDENMATCH_NATIVE=0 ../../../.venv/Scripts/python -m pytest tests/test_aggregator_smoke.py -k "profile or aliases" -v`
-Expected: FAIL — goldenmatch is first-wins, so `profile` maps to `gm.dispatch` and the alias names appear in the surface.
+Expected: FAIL — goldenmatch is first-wins, so `profile` maps to `gm.dispatch` (`is not gm.dispatch` fails) and the alias names appear in the surface.
 
 - [ ] **Step 3: Implement — filter aliases in `_adapt_goldenmatch`**
 
