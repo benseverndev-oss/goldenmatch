@@ -210,9 +210,9 @@ def check_partition(surface: str, manifest_surface: dict, py: set[str], ts: set[
         add(n, "undeclared_py_only", f"'{n}' is Python-only and undeclared -> add to {surface}.python_only or port it to TS")
     for n in sorted(only_ts - ts_only - shared):          # row 3
         add(n, "undeclared_ts_only", f"'{n}' is TS-only and undeclared -> add to {surface}.ts_only or add it to Python")
-    for n in sorted(shared - py):                         # row 4a
+    for n in sorted((shared & (py | ts)) - py):           # row 4a (shared, present in TS, gone from Python; absent-from-both is a phantom, row 7)
         add(n, "shared_missing_py", f"'{n}' is declared shared but missing from Python")
-    for n in sorted(shared - ts):                         # row 4b
+    for n in sorted((shared & (py | ts)) - ts):           # row 4b (shared, present in Python, gone from TS)
         add(n, "shared_missing_ts", f"'{n}' is declared shared but missing from TS")
     for n in sorted(py_only & ts):                        # row 5
         add(n, "py_only_in_ts", f"'{n}' is marked python_only but now exists in TS -> move to {surface}.shared")
