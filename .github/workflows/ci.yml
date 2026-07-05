@@ -101,6 +101,7 @@ jobs:
       sketch_wasm: ${{ steps.filter.outputs.sketch_wasm }}
       quality_gate: ${{ steps.filter.outputs.quality_gate }}
       api_parity: ${{ steps.filter.outputs.api_parity }}
+      native_symbols: ${{ steps.filter.outputs.native_symbols }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d  # v4.0.1
@@ -422,6 +423,17 @@ jobs:
               - 'scripts/emit_python_surface.py'
               - 'scripts/emit_ts_surface.mjs'
               - 'scripts/check_api_parity.py'
+            # Native-symbol reconciliation gate: the goldenmatch host's
+            # native-kernel references must not drift from the kernel's exports.
+            # Re-run the gate when the kernel crate, the host package, the
+            # checker/test tooling, or its parity corpus changes.
+            native_symbols:
+              - 'packages/rust/extensions/native/**'
+              - 'packages/python/goldenmatch/goldenmatch/**'
+              - 'scripts/check_native_symbols.py'
+              - 'scripts/test_native_symbols.py'
+              - 'parity/native_symbols/**'
+              - '.github/workflows/ci.yml'
             rust:
               - 'packages/rust/**'
             rust_pgrx:
@@ -1493,6 +1505,27 @@ jobs:
           GOLDENCHECK_NATIVE: "0"
           GOLDENANALYSIS_NATIVE: "0"
           PYTHONPATH: packages/python/${{ matrix.package }}
+
+  # Native-symbol reconciliation gate: reconcile the goldenmatch host's
+  # native-kernel references against the kernel's exports. Box-safe and
+  # stdlib-only -- no uv sync / no cargo build (the checker + tests are pure
+  # stdlib static analysis), so a bare system Python + pytest is all it needs.
+  native_symbols:
+    needs: changes
+    if: needs.changes.outputs.native_symbols == 'true' || needs.changes.outputs.force_all == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.13"
+      - name: Install pytest
+        run: pip install pytest
+      - name: Reconcile native symbols (goldenmatch)
+        run: python scripts/check_native_symbols.py goldenmatch
+      - name: Gate unit tests
+        run: python -m pytest scripts/test_native_symbols.py -q
 
   typescript:
     needs: changes
