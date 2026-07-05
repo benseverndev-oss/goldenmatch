@@ -682,6 +682,37 @@ def fix_mojibake_native() -> Callable[[pl.Series], pl.Series] | None:
     return _text_kernel_runner("fix_mojibake_arrow")
 
 
+def build_canonical_map_native(
+    freq_threshold: float = 0.05, match_threshold: float = 85.0
+) -> Callable[[pl.Series, pl.Series], tuple[pl.Series, pl.Series]] | None:
+    """Build a runner for the data-dependent category-autocorrect kernel: a
+    ``values`` (Utf8) + ``counts`` (Int64) pair in, a ``(from, to)`` pair of
+    Utf8 Series out (the corrections map). ``None`` when native ``autocorrect``
+    is off/unbuilt. The thresholds are bound at construction (per-call params)."""
+    if not native_enabled("autocorrect"):
+        return None
+    nm = native_module()
+    attr = "build_canonical_map_arrow"
+    if nm is None or not hasattr(nm, attr):
+        return None
+    try:
+        import pyarrow  # noqa: F401  (zero-copy bridge)
+    except ImportError:
+        return None
+    func = getattr(nm, attr)
+
+    def run(values: pl.Series, counts: pl.Series) -> tuple[pl.Series, pl.Series]:
+        from_arr, to_arr = func(
+            _as_str_series(values).to_arrow(),
+            counts.cast(pl.Int64).to_arrow(),
+            freq_threshold=freq_threshold,
+            match_threshold=match_threshold,
+        )
+        return pl.from_arrow(from_arr), pl.from_arrow(to_arr)
+
+    return run
+
+
 def _email_kernel_runner(attr: str) -> Callable[[pl.Series], pl.Series] | None:
     """Build a whole-series runner for email kernel function ``attr`` if
     native ``email`` is enabled and the dependencies are importable; else

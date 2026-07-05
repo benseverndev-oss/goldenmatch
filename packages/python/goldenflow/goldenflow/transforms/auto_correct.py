@@ -7,6 +7,7 @@ import polars as pl
 from rapidfuzz import fuzz
 
 from goldenflow.transforms import register_transform
+from goldenflow.transforms._native import build_canonical_map_native
 
 
 def _build_canonical_map(
@@ -110,10 +111,21 @@ def category_auto_correct(
     """
     vc = series.value_counts(sort=True)
     # value_counts returns a 2-column DataFrame: [<series.name>, "count"].
-    # iter_rows() yields plain Python tuples; only n_unique tuples are
-    # ever produced (no per-row materialization of the source Series).
-    pairs: list[tuple[str | None, int]] = list(vc.iter_rows())
-    corrections = _build_canonical_map(pairs, frequency_threshold, match_threshold)
+    # Native-first (goldenflow-core's ``autocorrect::build_canonical_map`` owns
+    # the whole frequency->canonical->fuzzy algorithm); the pure-Python
+    # ``_build_canonical_map`` (rapidfuzz) is the byte-exact reference the kernel
+    # replicates. Feed the kernel the value_counts in order so its insertion-
+    # ordered tie-breaking matches Python's Counter/dict.
+    native = build_canonical_map_native(frequency_threshold, match_threshold)
+    if native is not None:
+        value_col, count_col = vc.columns[0], vc.columns[1]
+        from_s, to_s = native(vc[value_col], vc[count_col])
+        corrections = dict(zip(from_s.to_list(), to_s.to_list(), strict=True))
+    else:
+        # iter_rows() yields plain Python tuples; only n_unique tuples are
+        # ever produced (no per-row materialization of the source Series).
+        pairs: list[tuple[str | None, int]] = list(vc.iter_rows())
+        corrections = _build_canonical_map(pairs, frequency_threshold, match_threshold)
 
     if not corrections:
         return series
