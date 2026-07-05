@@ -21,6 +21,32 @@ FROM read_parquet('s3://bucket/raw/*.parquet');
 UDF names are `goldenflow_<kernel>` -- a predictable 1:1 with the underlying
 `goldenflow-core` function.
 
+## Install
+
+Download the `.duckdb_extension` for your platform from the
+[`goldenflow-duckdb-v*` release assets](https://github.com/benseverndev-oss/goldenmatch/releases)
+and `LOAD` it. Extensions built outside the DuckDB signing chain need the
+unsigned flag:
+
+```sh
+# CLI
+duckdb -unsigned
+```
+```sql
+-- or, from any client
+SET allow_unsigned_extensions = true;
+LOAD '/path/to/goldenflow_duckdb-linux_amd64.duckdb_extension';
+
+SELECT goldenflow_email_normalize('  A.B@Example.COM ');  -- a.b@example.com
+```
+
+**Portable across DuckDB versions:** the extension targets the *stable* C API
+(`v1.2.0`), which is versioned separately from -- and well below -- the DuckDB
+release number, so one build loads on **any DuckDB >= 1.2.0** (smoke-tested
+against the current v1.5.4 CLI). Platforms built today: `linux_amd64`,
+`osx_arm64`, `windows_amd64` (each proven by a real `LOAD` smoke in CI).
+`linux_arm64` + `osx_amd64` are a follow-up.
+
 ## Status: Slice 2b (full single-arg catalogue)
 
 Every single-argument transform in `goldenflow-core` is now a SQL function --
@@ -42,11 +68,15 @@ Python and TypeScript parity gates assert against -- through a real in-process
 DuckDB, so the SQL surface is byte-identical to Python / TS / wasm by the same
 corpus, not just by construction.
 
+Distribution (Slice 3) builds + footers + LOAD-smokes the `.duckdb_extension`
+for three platforms and publishes them on a `goldenflow-duckdb-v*` tag
+(`.github/workflows/goldenflow-duckdb-dist.yml`).
+
 Deferred to later slices:
 
 | Slice | Scope |
 | ----- | ----- |
-| **3**  | Per-platform `.duckdb_extension` build (metadata footer + 5-target matrix) and distribution. |
+| **3b** | Remaining platforms (`linux_arm64`, `osx_amd64`) + multi-DuckDB-version builds. |
 | **later** | Multi-argument / multi-output kernels: phone (region arg), `split_*`, `truncate`, `pad_*`, `merge_name`, `auto_correct`. |
 
 ## Build & test
