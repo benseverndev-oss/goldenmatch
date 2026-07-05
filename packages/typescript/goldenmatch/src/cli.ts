@@ -8,6 +8,7 @@
 
 import { Command } from "commander";
 import { extname, basename } from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   readFile,
   writeCsv,
@@ -119,7 +120,7 @@ function writeOutputRows(
 // CLI definition
 // ---------------------------------------------------------------------------
 
-const program = new Command();
+export const program = new Command();
 
 program
   .name("goldenmatch-js")
@@ -989,8 +990,10 @@ program
 // Entry point
 // ---------------------------------------------------------------------------
 
-program.parseAsync(process.argv).catch((err: unknown) => {
-  const message = err instanceof Error ? err.message : String(err);
-  process.stderr.write(`Error: ${message}\n`);
-  process.exit(1);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  program.parseAsync(process.argv).catch((err: unknown) => {
+    const message = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`Error: ${message}\n`);
+    process.exit(1);
+  });
+}
