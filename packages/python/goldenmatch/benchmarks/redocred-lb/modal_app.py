@@ -34,6 +34,7 @@ image = (
         "tqdm==4.67.1",
         "sentencepiece==0.2.0",  # deberta / xlm tokenizers
         "protobuf<5",
+        "datasets==3.1.0",  # DocRED distant set for b2 self-training
     )
     .add_local_dir(
         str(HERE), remote_path="/root/rdlb",
@@ -129,6 +130,35 @@ def evi_smoke() -> dict:
             "pairs_with_evidence": n_evi, "backward_ok": True}
     print("EVI_SMOKE:", info)
     return info
+
+
+@app.function(image=image, volumes={DATA: vol}, timeout=1800)
+def distant_smoke() -> dict:
+    """Probe the DocRED distant split's schema so the shaper can be written correctly.
+    Tries a few known HF sources; prints the first record's field structure."""
+    import json
+
+    from datasets import load_dataset
+
+    errors = {}
+    for name, kw in [("docred", {"trust_remote_code": True}),
+                     ("thunlp/docred", {"trust_remote_code": True})]:
+        try:
+            ds = load_dataset(name, **kw)
+            splits = list(ds.keys())
+            split = next((s for s in splits if "distant" in s), splits[0])
+            rec = ds[split][0]
+            shape = {k: (type(v).__name__, (v[:1] if isinstance(v, list) else v))
+                     for k, v in rec.items()}
+            out = {"source": name, "splits": splits, "chosen": split,
+                   "n": len(ds[split]), "keys": list(rec.keys()),
+                   "sample_shape": str(shape)[:1500]}
+            print("DISTANT_SCHEMA:", json.dumps(out)[:1900])
+            return out
+        except Exception as e:  # noqa: BLE001
+            errors[name] = repr(e)[:300]
+    print("DISTANT_SMOKE_FAILED:", errors)
+    return {"errors": errors}
 
 
 def _evaluate(model, features, collate, id2rel, gold_docs, train_facts, batch_size):
