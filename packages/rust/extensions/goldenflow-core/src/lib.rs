@@ -6,6 +6,7 @@
 //! The pure-Python / pure-TS transform paths are non-authoritative fallbacks
 //! that must reproduce these bytes (asserted by the byte-parity harness).
 pub mod address;
+pub mod autocorrect;
 pub mod categorical;
 pub mod email;
 pub mod identifiers;
