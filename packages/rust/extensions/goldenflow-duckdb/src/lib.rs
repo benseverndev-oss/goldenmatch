@@ -30,17 +30,6 @@ fn strip_owned(s: &str) -> String {
     goldenflow_core::text::strip(s).to_string()
 }
 
-/// Read the sole VARCHAR argument of a chunk as `(FlatVector, &[duckdb_string_t])`.
-/// The macros below share this; nulls are checked per-row via `in_vec.row_is_null`.
-macro_rules! read_str_input {
-    ($input:expr) => {{
-        let in_vec = $input.flat_vector(0);
-        let rows =
-            unsafe { in_vec.as_slice_with_len::<duckdb_string_t>($input.len()) };
-        (in_vec, rows)
-    }};
-}
-
 /// Register a batch of `VARCHAR -> VARCHAR` UDFs whose kernel is `fn(&str) -> String`.
 /// Each entry generates a block-local zero-sized [`VScalar`] and registers it, so
 /// adding a transform is a single `"name" => kernel` line.
@@ -55,7 +44,9 @@ macro_rules! register_str {
                     input: &mut DataChunkHandle,
                     output: &mut dyn WritableVector,
                 ) -> std::result::Result<(), Box<dyn Error>> {
-                    let (in_vec, rows) = read_str_input!(input);
+                    let in_vec = input.flat_vector(0);
+                    let rows =
+                        unsafe { in_vec.as_slice_with_len::<duckdb_string_t>(input.len()) };
                     let mut out = output.flat_vector();
                     for (i, row) in rows.iter().enumerate() {
                         if in_vec.row_is_null(i as u64) {
@@ -93,7 +84,9 @@ macro_rules! register_opt_str {
                     input: &mut DataChunkHandle,
                     output: &mut dyn WritableVector,
                 ) -> std::result::Result<(), Box<dyn Error>> {
-                    let (in_vec, rows) = read_str_input!(input);
+                    let in_vec = input.flat_vector(0);
+                    let rows =
+                        unsafe { in_vec.as_slice_with_len::<duckdb_string_t>(input.len()) };
                     let mut out = output.flat_vector();
                     for (i, row) in rows.iter().enumerate() {
                         if in_vec.row_is_null(i as u64) {
