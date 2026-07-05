@@ -379,6 +379,35 @@
 {"transform": "extract_numbers", "input": "12.", "expected": "12."}
 {"transform": "extract_numbers", "input": "3.14.159", "expected": "3.14 159"}
 {"transform": "extract_numbers", "input": null, "expected": null}
+{"transform": "lowercase", "input": "Hello WORLD", "expected": "hello world"}
+{"transform": "lowercase", "input": "MiXeD", "expected": "mixed"}
+{"transform": "lowercase", "input": "", "expected": ""}
+{"transform": "lowercase", "input": null, "expected": null}
+{"transform": "uppercase", "input": "Hello world", "expected": "HELLO WORLD"}
+{"transform": "uppercase", "input": "straße", "expected": "STRASSE"}
+{"transform": "uppercase", "input": null, "expected": null}
+{"transform": "title_case", "input": "hello world", "expected": "Hello World"}
+{"transform": "title_case", "input": "JOHN SMITH", "expected": "John Smith"}
+{"transform": "title_case", "input": "a-b_c d", "expected": "A-B_C D"}
+{"transform": "title_case", "input": "o'brien mcleod", "expected": "O'Brien Mcleod"}
+{"transform": "title_case", "input": null, "expected": null}
+{"transform": "normalize_unicode", "input": "José", "expected": "Jose"}
+{"transform": "normalize_unicode", "input": "Müller", "expected": "Muller"}
+{"transform": "normalize_unicode", "input": "Renée", "expected": "Renee"}
+{"transform": "normalize_unicode", "input": "Łódź", "expected": "Łodz"}
+{"transform": "normalize_unicode", "input": "straße", "expected": "straße"}
+{"transform": "normalize_unicode", "input": "æøå", "expected": "æøa"}
+{"transform": "normalize_unicode", "input": "Ĳ", "expected": "IJ"}
+{"transform": "normalize_unicode", "input": "Smith", "expected": "Smith"}
+{"transform": "normalize_unicode", "input": "中文", "expected": "中文"}
+{"transform": "normalize_unicode", "input": "", "expected": ""}
+{"transform": "normalize_unicode", "input": null, "expected": null}
+{"transform": "fix_mojibake", "input": "cafÃ©", "expected": "café"}
+{"transform": "fix_mojibake", "input": "MÃ¼ller", "expected": "Müller"}
+{"transform": "fix_mojibake", "input": "hello", "expected": "hello"}
+{"transform": "fix_mojibake", "input": "中x", "expected": "中x"}
+{"transform": "fix_mojibake", "input": "", "expected": ""}
+{"transform": "fix_mojibake", "input": null, "expected": null}
 {"transform": "currency_strip", "input": "$1,234.56", "expected": 1234.56}
 {"transform": "currency_strip", "input": "-$42.00", "expected": -42.0}
 {"transform": "currency_strip", "input": "USD 100", "expected": 100.0}

@@ -84,14 +84,19 @@ from goldenflow.transforms.numeric import (  # noqa: E402
 from goldenflow.transforms.text import (  # noqa: E402
     _collapse_whitespace_py,
     _extract_numbers_py,
+    _fix_mojibake_py,
+    _lowercase_py,
     _normalize_line_endings_py,
     _normalize_quotes_py,
+    _normalize_unicode_py,
     _remove_digits_py,
     _remove_emojis_py,
     _remove_html_tags_py,
     _remove_punctuation_py,
     _remove_urls_py,
     _strip_py,
+    _title_case_py,
+    _uppercase_py,
 )
 from goldenflow.transforms.url import (  # noqa: E402
     _url_extract_domain_py,
@@ -548,6 +553,39 @@ _CASES: list[tuple[str, str | None]] = [
     ("extract_numbers", "12."),  # greedy dot, empty trailing
     ("extract_numbers", "3.14.159"),
     ("extract_numbers", None),
+    # --- lowercase / uppercase (Latin/ASCII, cross-surface-stable) ---
+    ("lowercase", "Hello WORLD"),
+    ("lowercase", "MiXeD"),
+    ("lowercase", ""),
+    ("lowercase", None),
+    ("uppercase", "Hello world"),
+    ("uppercase", "straße"),  # eszett -> SS (agrees across Rust/Py/JS)
+    ("uppercase", None),
+    # --- title_case (ASCII-title) ---
+    ("title_case", "hello world"),
+    ("title_case", "JOHN SMITH"),
+    ("title_case", "a-b_c d"),
+    ("title_case", "o'brien mcleod"),
+    ("title_case", None),
+    # --- normalize_unicode (auto_apply; explicit generated map) ---
+    ("normalize_unicode", "José"),  # acute -> base
+    ("normalize_unicode", "Müller"),  # diaeresis
+    ("normalize_unicode", "Renée"),
+    ("normalize_unicode", "Łódź"),  # l-stroke stays, o-acute/z-acute strip
+    ("normalize_unicode", "straße"),  # eszett stays (no NFKD decomp)
+    ("normalize_unicode", "æøå"),  # ae/o-slash stay; a-ring -> a
+    ("normalize_unicode", "Ĳ"),  # ligature -> "IJ" (multi-char)
+    ("normalize_unicode", "Smith"),  # ASCII passthrough
+    ("normalize_unicode", "中文"),  # CJK passthrough (unmapped)
+    ("normalize_unicode", ""),
+    ("normalize_unicode", None),
+    # --- fix_mojibake (latin-1 <-> utf-8 round-trip) ---
+    ("fix_mojibake", "cafÃ©"),  # UTF-8 "é" misdecoded as Latin-1 -> fixed
+    ("fix_mojibake", "MÃ¼ller"),  # -> Müller
+    ("fix_mojibake", "hello"),  # ASCII unchanged
+    ("fix_mojibake", "中x"),  # char > U+00FF -> original
+    ("fix_mojibake", ""),
+    ("fix_mojibake", None),
     # --- currency_strip (string->float; VALUE parity, not repr) ---
     ("currency_strip", "$1,234.56"),  # strip $ and comma
     ("currency_strip", "-$42.00"),  # negative, dollar sign
@@ -685,6 +723,11 @@ _PY_FN = {
     "remove_punctuation": _remove_punctuation_py,
     "remove_emojis": _remove_emojis_py,
     "extract_numbers": _extract_numbers_py,
+    "lowercase": _lowercase_py,
+    "uppercase": _uppercase_py,
+    "title_case": _title_case_py,
+    "normalize_unicode": _normalize_unicode_py,
+    "fix_mojibake": _fix_mojibake_py,
     "currency_strip": _currency_strip_py,
     "percentage_normalize": _percentage_normalize_py,
     "to_integer": _to_integer_py,
@@ -741,6 +784,11 @@ _NATIVE_ARROW_FN = {
     "remove_punctuation": "remove_punctuation_arrow",
     "remove_emojis": "remove_emojis_arrow",
     "extract_numbers": "extract_numbers_arrow",
+    "lowercase": "lowercase_arrow",
+    "uppercase": "uppercase_arrow",
+    "title_case": "title_case_arrow",
+    "normalize_unicode": "normalize_unicode_arrow",
+    "fix_mojibake": "fix_mojibake_arrow",
     "currency_strip": "currency_strip_arrow",
     "percentage_normalize": "percentage_normalize_arrow",
     "to_integer": "to_integer_arrow",

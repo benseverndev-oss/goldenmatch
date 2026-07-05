@@ -89,6 +89,9 @@ from goldenflow.transforms.text import (
     _extract_numbers_series as extract_numbers,
 )
 from goldenflow.transforms.text import (
+    _lowercase_series as lowercase,
+)
+from goldenflow.transforms.text import (
     _normalize_line_endings_series as normalize_line_endings,
 )
 from goldenflow.transforms.text import (
@@ -111,6 +114,16 @@ from goldenflow.transforms.text import (
 )
 from goldenflow.transforms.text import (
     _strip_series as strip,
+)
+from goldenflow.transforms.text import (
+    _title_case_series as title_case,
+)
+from goldenflow.transforms.text import (
+    _uppercase_series as uppercase,
+)
+from goldenflow.transforms.text import (
+    fix_mojibake,
+    normalize_unicode,
 )
 from goldenflow.transforms.url import url_extract_domain, url_normalize
 
@@ -197,6 +210,11 @@ _TRANSFORMS = {
     "remove_punctuation": remove_punctuation,
     "remove_emojis": remove_emojis,
     "extract_numbers": extract_numbers,
+    "lowercase": lowercase,
+    "uppercase": uppercase,
+    "title_case": title_case,
+    "normalize_unicode": normalize_unicode,
+    "fix_mojibake": fix_mojibake,
     "currency_strip": currency_strip,
     "percentage_normalize": percentage_normalize,
     "to_integer": to_integer,
@@ -266,6 +284,11 @@ _NATIVE_FLOOR_SYMBOL = {
     "remove_punctuation": "strip_arrow",
     "remove_emojis": "strip_arrow",
     "extract_numbers": "strip_arrow",
+    "lowercase": "strip_arrow",
+    "uppercase": "strip_arrow",
+    "title_case": "strip_arrow",
+    "normalize_unicode": "strip_arrow",
+    "fix_mojibake": "strip_arrow",
     # numeric: all 5 string-parser transforms are wired via the single
     # "numeric" component (floor symbol currency_strip_arrow), region-free/
     # locale-free.
