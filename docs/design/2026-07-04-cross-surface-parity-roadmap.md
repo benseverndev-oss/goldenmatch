@@ -38,11 +38,14 @@ one of two camps:
 | goldenprofile | ✅ | ✅ | ✅ | ❌ | ❌ | edge-only |
 | goldengraph | ✅ | ✅ | ✅ | ❌ | ❌ | edge-only |
 | goldenanalysis | ✅ | ✅ | ✅ | ❌ | ❌ | edge-only |
-| goldenflow | ✅ | ✅ | ✅#1412 | ❌ | ❌ | edge-only |
+| goldenflow | ✅ | ✅ | ✅#1412 | ✅v0.1.1 | ❌ | edge + DuckDB (PG left) |
 
 - **Camp A — edge-native, no SQL:** score, perceptual, autoconfig, suggest,
-  goldencheck, goldenprofile, goldengraph, goldenanalysis, goldenflow.
+  goldencheck, goldenprofile, goldengraph, goldenanalysis.
   → close by adding a native DuckDB kernel + a pgrx `#[pg_extern]`.
+  (**goldenflow** left this camp: the compiled `goldenflow-duckdb` extension
+  shipped as `v0.1.1` (74 transforms native in DuckDB, ADR 0032) — only the
+  pgrx `#[pg_extern]` side remains.)
 - **Camp B — SQL-native, no edge:** graph, fingerprint, embed.
   → close by adding a `*-wasm` crate + a TS reroute.
 

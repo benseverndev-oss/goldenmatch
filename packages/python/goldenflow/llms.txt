@@ -9,6 +9,7 @@
 - CLI: `goldenflow transform`, `goldenflow map`, + 12 more commands
 - Python API: `from goldenflow import transform_file, transform_df`
 - REST API: `goldenflow serve` on port 8000
+- SQL (DuckDB): `goldenflow-duckdb` — compiled zero-Python DuckDB extension, 74 transforms as `goldenflow_<kernel>` SQL functions (release tag `goldenflow-duckdb-v*`, loads on DuckDB >= 1.3.0)
 
 ## Install
 - `pip install goldenflow` — core transforms
