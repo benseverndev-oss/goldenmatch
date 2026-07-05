@@ -26,6 +26,7 @@
 | `packages/typescript/goldenmatch/src/node/a2a/server.ts` | TS A2A server: `AgentSkill`/card + dispatch | Add `id`; humanize; de-dup by id; align 2 ids + dispatch aliases; doc note |
 | `packages/typescript/goldenmatch/tests/unit/a2a-skill-parity.test.ts` | New parity tests | **Create** (CI-only) |
 | `packages/typescript/goldenmatch/tests/unit/a2a-card.test.ts` | Existing card test | Re-key assertions `name`→`id`; `dedupe`→`deduplicate` |
+| `packages/typescript/goldenmatch/tests/unit/a2a-review-config.test.ts` | Existing test | Re-key its `s.name`-as-id assertions (`review_config`) to `s.id` |
 | `packages/python/goldenmatch/tests/test_a2a.py` | Python A2A tests | Add reference-shape regression guard |
 | `docs-site/goldenmatch/agent.mdx` | A2A docs page | Note shared canonical ids + legacy aliases |
 
@@ -194,7 +195,14 @@ describe("A2A skill parity", () => {
     expect(await dispatchAnySkill("deduplicate", { rows })).toEqual(
       await dispatchAnySkill("dedupe", { rows }),
     );
-    const pair = { row_a: { name: "Jon" }, row_b: { name: "John" } };
+    // NOTE: the base explain_pair body requires a `fields` array (server.ts:375-376)
+    // and reads row_a/row_b — distinct from AGENT_SKILLS' agent_explain_pair
+    // (record_a/record_b/fuzzy/exact). Supply valid `fields` or both calls throw.
+    const pair = {
+      row_a: { name: "Jon" },
+      row_b: { name: "John" },
+      fields: [{ field: "name", scorer: "jaro_winkler", weight: 1 }],
+    };
     expect(await dispatchAnySkill("explain", pair)).toEqual(
       await dispatchAnySkill("explain_pair", pair),
     );
@@ -232,6 +240,11 @@ describe("A2A skill parity", () => {
   });
 ```
 Leave the auth/streaming and "AgentSkill shape" assertions as-is (the shape test may add `expect(typeof skill.id).toBe("string")`).
+
+- [ ] **Step 7b: Update `tests/unit/a2a-review-config.test.ts`** — it also keys off `s.name` as the machine id. Re-key the two id assertions to `s.id`:
+  - `~:38-39`: `const names = new Set(...map((s) => s.name)); names.has("review_config")` → `const ids = new Set(...map((s) => s.id)); ids.has("review_config")` (`review_config` is an AGENT_SKILLS id, unchanged).
+  - `~:42-44`: `filter((s) => s.name === "review_config").length ... toBe(1)` → `filter((s) => s.id === "review_config")`.
+  - The dispatch tests in the same file (route on the id string) are unaffected — leave them.
 
 - [ ] **Step 8: Verify by reading (do not run):** `id` on the interface; all 10 BASE_SKILLS have `{id, name}`; `deduplicate`/`explain` are the two aligned ids; `toAgentSkill`/`humanize` correct; `buildCardSkills` de-dups by `id` and both callers pass `{id, description}`; the two switch cases stack legacy-above-canonical with unchanged bodies; brace balance intact; both test files consistent.
 
