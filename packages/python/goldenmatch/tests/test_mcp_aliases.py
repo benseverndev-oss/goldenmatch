@@ -1,6 +1,5 @@
 """Alias parity for the goldenmatch MCP server. Box-safe: needs goldenmatch[mcp].
 Run: POLARS_SKIP_CPU_CHECK=1 GOLDENMATCH_NATIVE=0 python -m pytest tests/test_mcp_aliases.py -v"""
-import pytest
 from goldenmatch.mcp import server as gm
 
 EXPECTED_ALIASES = {

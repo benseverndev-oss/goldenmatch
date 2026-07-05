@@ -139,8 +139,8 @@ def test_dispatch_routes_goldenmatch_tools(name):
 
 def test_suite_profile_stays_goldencheck_not_goldenmatch_alias():
     """goldenmatch's new `profile` alias must NOT shadow goldencheck's `profile`."""
-    from goldensuite_mcp.server import _aggregate
     from goldenmatch.mcp import server as gm
+    from goldensuite_mcp.server import _aggregate
     tools, name_to_dispatch = _aggregate()
     names = {t.name for t in tools}
     assert "profile" in names
@@ -154,8 +154,8 @@ def test_no_goldenmatch_alias_is_served_by_goldenmatch_in_the_suite():
     # goldenmatch alias key AND a legitimate goldencheck tool, so it may still
     # appear in the surface (served by goldencheck). What must never happen is a
     # goldenmatch alias being SERVED BY goldenmatch through the suite.
-    from goldensuite_mcp.server import _aggregate
     from goldenmatch.mcp import server as gm
+    from goldensuite_mcp.server import _aggregate
     tools, name_to_dispatch = _aggregate()
     names = {t.name for t in tools}
     served_by_gm = [n for n in gm._MCP_TOOL_ALIASES
