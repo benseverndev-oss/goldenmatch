@@ -40,11 +40,12 @@ LOAD '/path/to/goldenflow_duckdb-linux_amd64.duckdb_extension';
 SELECT goldenflow_email_normalize('  A.B@Example.COM ');  -- a.b@example.com
 ```
 
-**Version lock:** the extension uses DuckDB's *unstable* C API (what
-`duckdb-rs` currently targets), so a build is tied to one DuckDB version. The
-published assets target **DuckDB v1.5.4**; use a matching DuckDB. Platforms
-built today: `linux_amd64`, `osx_arm64`, `windows_amd64` (each proven by a real
-`LOAD` smoke in CI). `linux_arm64` + `osx_amd64` are a follow-up.
+**Portable across DuckDB versions:** the extension targets the *stable* C API
+(`v1.2.0`), which is versioned separately from -- and well below -- the DuckDB
+release number, so one build loads on **any DuckDB >= 1.2.0** (smoke-tested
+against the current v1.5.4 CLI). Platforms built today: `linux_amd64`,
+`osx_arm64`, `windows_amd64` (each proven by a real `LOAD` smoke in CI).
+`linux_arm64` + `osx_amd64` are a follow-up.
 
 ## Status: Slice 2b (full single-arg catalogue)
 

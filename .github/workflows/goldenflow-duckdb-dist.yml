@@ -5,10 +5,12 @@ name: goldenflow-duckdb-dist
 # proof the bundled test can't give), and publish the artifacts on a
 # `goldenflow-duckdb-v*` tag.
 #
-# Version-locked: duckdb-rs 1.10504.0 targets the UNSTABLE C API, which pins the
-# extension to a single DuckDB version. Everything below is aligned to v1.5.4
-# (the DuckDB release that duckdb-rs 1.10504.0 wraps). Bumping DuckDB = bump
-# DUCKDB_VERSION + the duckdb dep and rebuild.
+# Portable via the STABLE C API: the footer encodes the C API version (v1.2.0),
+# which is versioned separately from DuckDB and much lower -- so one artifact
+# loads on ANY DuckDB whose C API is >= it (DuckDB >= 1.2.0). The CLI we smoke
+# with (v1.5.4, the current release) loads a C-API-v1.2.0 extension fine.
+# (Encoding the DuckDB version here instead is the "built for C API v1.5.4 but
+# can only load v1.2.0 and lower" load error.)
 
 on:
   push:
@@ -24,7 +26,10 @@ permissions:
   contents: write # release upload on tag
 
 env:
-  DUCKDB_VERSION: v1.5.4
+  # The stable C API version baked into the extension (min DuckDB it loads on).
+  DUCKDB_C_API_VERSION: v1.2.0
+  # The DuckDB CLI release we download to run the LOAD smoke.
+  DUCKDB_CLI_VERSION: v1.5.4
 
 defaults:
   run:
@@ -81,7 +86,7 @@ jobs:
       - name: Build loadable cdylib
         env:
           DUCKDB_EXTENSION_NAME: goldenflow_duckdb
-          DUCKDB_EXTENSION_MIN_DUCKDB_VERSION: ${{ env.DUCKDB_VERSION }}
+          DUCKDB_EXTENSION_MIN_DUCKDB_VERSION: ${{ env.DUCKDB_C_API_VERSION }}
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Append DuckDB metadata footer
@@ -89,7 +94,7 @@ jobs:
           python scripts/append_extension_metadata.py \
             -l "target/${{ matrix.target }}/release/${{ matrix.lib }}" \
             -n goldenflow_duckdb \
-            -dv "$DUCKDB_VERSION" \
+            -dv "$DUCKDB_C_API_VERSION" \
             -p "${{ matrix.platform }}" \
             -ev "$EXT_VERSION" \
             --abi-type C_STRUCT \
@@ -99,7 +104,7 @@ jobs:
       - name: LOAD smoke test
         run: |
           curl -sL -o duckdb.zip \
-            "https://github.com/duckdb/duckdb/releases/download/${DUCKDB_VERSION}/${{ matrix.cli_asset }}"
+            "https://github.com/duckdb/duckdb/releases/download/${DUCKDB_CLI_VERSION}/${{ matrix.cli_asset }}"
           unzip -o -q duckdb.zip
           DUCKDB=./duckdb
           [ -f ./duckdb.exe ] && DUCKDB=./duckdb.exe
@@ -141,5 +146,5 @@ jobs:
           gh release create "$GITHUB_REF_NAME" \
             --repo "$GITHUB_REPOSITORY" \
             --title "goldenflow-duckdb $GITHUB_REF_NAME" \
-            --notes "Loadable DuckDB extension for DuckDB ${DUCKDB_VERSION}. LOAD with \`duckdb -unsigned\` (or \`SET allow_unsigned_extensions=true\`)." \
+            --notes "Loadable DuckDB extension (stable C API ${DUCKDB_C_API_VERSION}, loads on DuckDB >= 1.2.0). LOAD with \`duckdb -unsigned\` (or \`SET allow_unsigned_extensions=true\`)." \
             dist/*.duckdb_extension
