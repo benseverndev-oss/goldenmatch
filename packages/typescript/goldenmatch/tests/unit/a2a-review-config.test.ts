@@ -35,12 +35,12 @@ afterEach(() => disableSuggestWasm());
 
 describe("A2A review_config skill", () => {
   it("is advertised on the agent card", () => {
-    const names = new Set(AGENT_CARD.skills.map((s) => s.name));
-    expect(names.has("review_config")).toBe(true);
+    const ids = new Set(AGENT_CARD.skills.map((s) => s.id));
+    expect(ids.has("review_config")).toBe(true);
   });
 
-  it("appears exactly once (de-duped by name)", () => {
-    const count = AGENT_CARD.skills.filter((s) => s.name === "review_config").length;
+  it("appears exactly once (de-duped by id)", () => {
+    const count = AGENT_CARD.skills.filter((s) => s.id === "review_config").length;
     expect(count).toBe(1);
   });
 
