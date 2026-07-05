@@ -47,9 +47,12 @@ producer already handles for `TOOLS`):
 
 A single producer handles both: import `<pkg>.a2a.server`; use `_SKILLS` if the
 module defines it, else `AGENT_CARD["skills"]`; return `sorted(s["id"] ...)`. This
-is **box-safe** (pure import of the a2a module — the server only binds at
-`run_a2a_server(...)`, never at import). Packages without an `a2a` module get no
-`a2a_skills` key. A per-package REGISTRY flag marks which packages have A2A.
+is **box-safe** — verified: importing all four a2a modules runs clean with no
+server bind (the `.listen`/serve call lives inside each package's `run_*server`
+entry, not at import). Computed Python skill counts: goldenmatch 38 (`_SKILLS`),
+goldencheck 9, goldenflow 6, goldenpipe 4 (`AGENT_CARD["skills"]`). Packages without
+an `a2a` module get no `a2a_skills` key. A per-package REGISTRY flag marks which
+packages have A2A.
 
 ### 3.3 TypeScript emitter — `a2a_skills` producer
 
@@ -68,8 +71,11 @@ skill entries all carry `id` (verified).
 For each of the 4 A2A packages, `--init` produces the `a2a_skills` partition
 (`shared = PY∩TS`, `python_only = PY−TS`, `ts_only = TS−PY`), which is human-
 reviewed and committed into the existing `parity/<pkg>.yaml`. Expect large
-python_only sets (e.g. goldenmatch's 44 Python skills vs its TS card union) —
-intentional coverage differences, exactly as the MCP manifests carry. The bootstrap
+python_only sets (e.g. goldenmatch's 38 Python skills vs its TS card union) —
+intentional coverage differences, exactly as the MCP manifests carry. Note the
+un-reconciled packages already show likely divergences to triage — goldenflow/
+goldenpipe use hyphenated Python ids (`run-pipeline`, `transform-data`,
+`map-schemas`, `diff-results`) whose TS counterparts may differ. The bootstrap
 **may surface genuine naming divergences** in goldencheck/goldenflow/goldenpipe A2A
 (only goldenmatch's was reconciled in #1457): each is triaged — a real
 same-op-different-id pair is either fixed (a follow-up) or recorded in the manifest
@@ -86,10 +92,16 @@ the `api_parity` filter (ci.yml ~:415) so A2A edits trigger the gate.
 
 ## 4. Testing
 
-- **Gate unit tests** (`scripts/test_api_parity.py`, box-safe): extend the
-  structure/partition tests to include an `a2a_skills` surface (it flows through
-  the same `SURFACES` loop — a smoke assertion that a 3-surface manifest partitions
-  correctly and that a package lacking `a2a_skills` is skipped, not failed).
+- **Gate unit tests** (`scripts/test_api_parity.py`, box-safe):
+  - **BLOCKER fix (must be in this PR):** `test_structure_flags_unknown_surface`
+    (~:73-76) currently uses `"a2a_skills"` as its *unknown-surface* negative
+    fixture. The moment `"a2a_skills"` joins `SURFACES` it becomes *known*,
+    `check_structure` stops flagging it, and that assertion fails. Repoint the
+    fixture to a genuinely-unregistered name (e.g. `"grpc_methods"`). One line.
+  - Extend the structure/partition tests to include an `a2a_skills` surface (it
+    flows through the same `SURFACES` loop — a smoke assertion that a 3-surface
+    manifest partitions correctly and that a package lacking `a2a_skills` is
+    skipped, not failed).
 - **Python emitter smoke** (box-safe): the existing per-package emitter smoke test
   gains an assertion that the 4 A2A packages emit a non-empty sorted `a2a_skills`
   and the 2 non-A2A packages emit none. Assert goldenmatch's `a2a_skills` equals
