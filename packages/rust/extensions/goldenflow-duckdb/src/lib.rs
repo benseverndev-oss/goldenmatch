@@ -507,6 +507,8 @@ fn register_all(con: &Connection) -> Result<(), Box<dyn Error>> {
         "goldenflow_title_case"           => goldenflow_core::text::title_case,
         "goldenflow_fix_mojibake"         => goldenflow_core::text::fix_mojibake,
         "goldenflow_normalize_unicode"    => goldenflow_core::text::normalize_unicode,
+        // phonetic keys (blocking/match-key encoders)
+        "goldenflow_soundex"              => goldenflow_core::phonetic::soundex,
     );
 
     // VARCHAR -> VARCHAR (nullable; None -> SQL NULL).
@@ -641,6 +643,8 @@ mod tests {
             ("goldenflow_title_case", "the quick fox", gf::text::title_case("the quick fox")),
             ("goldenflow_normalize_quotes", "\u{201c}hi\u{201d}", gf::text::normalize_quotes("\u{201c}hi\u{201d}")),
             ("goldenflow_strip", "  padded  ", gf::text::strip("  padded  ").to_string()),
+            ("goldenflow_soundex", "Ashcraft", gf::phonetic::soundex("Ashcraft")),
+            ("goldenflow_soundex", "Robert", gf::phonetic::soundex("Robert")),
         ];
         for (udf, input, expected) in cases {
             assert_eq!(
