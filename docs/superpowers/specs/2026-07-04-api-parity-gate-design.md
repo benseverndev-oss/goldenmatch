@@ -26,13 +26,15 @@ This extends the suite's existing byte-parity-gate discipline (goldenpipe-core, 
 
 A load-bearing property, **verified true for these two surfaces**: MCP tool names and CLI command strings are the same token in Python and TS — no `snake_case`↔`camelCase` conversion (e.g. MCP `find_duplicates`, `suggest_config`; CLI `dedupe`, `match`, `mcp-serve` are spelled identically on both sides). So the comparison is a plain set diff with **no name normalization**.
 
-**A2A skills are deferred (see §9), not in this slice.** The no-normalization property does *not* hold for A2A: Python A2A skills carry an `id` (`analyze_data`, `deduplicate`, `configure`, …; `a2a/server.py:18`), while the TS agent card's skills carry only a `name` with a *divergent token set* and **no `id`** (`dedupe`, `match`, `score`, `explain_pair`, …; `node/a2a/server.ts:85`). The same operation is `deduplicate` (PY) vs `dedupe` (TS). A plain set diff would manufacture phantom drift and hide the real correspondence. Gating A2A first requires reconciling the TS agent card to carry A2A-conformant `id`s matching Python — itself a real parity fix this effort surfaces (§9).
+**A2A skills are deferred (see §9), not in this slice.** The no-normalization property does *not* hold for A2A: Python A2A skills carry an `id` (`analyze_data`, `deduplicate`, `configure`, …; `a2a/server.py:18`), while the TS agent card's skills carry only a `name` with a *divergent token set* and **no `id`** (`dedupe`, `match`, `score`, `explain_pair`, …; `src/node/a2a/server.ts:85`). The same operation is `deduplicate` (PY) vs `dedupe` (TS). A plain set diff would manufacture phantom drift and hide the real correspondence. Gating A2A first requires reconciling the TS agent card to carry A2A-conformant `id`s matching Python — itself a real parity fix this effort surfaces (§9).
 
 **Out of scope (explicit non-goals):**
 - **A2A skills** (deferred, §9).
 - Library API **function/class names** and **signatures** (fuzzier; `snake_case`↔`camelCase`; different type systems). Possibly a later slice, names-only.
 - **REST endpoints** (different frameworks — raw `http.server` vs FastAPI — so extraction is per-package custom).
 - **CLI subcommands within sub-app groups** (e.g. `identity split`, `pprl link`). The gate compares the group token (`identity`) as a single name; drift *inside* a group is not caught in this slice. Composite `group.subcommand` tokens are a documented extension (§9). This is called out because "`identity` is shared" reads stronger than it is.
+
+The `cli_commands` set mixes top-level leaf commands and sub-app group names in one flat namespace; they are **assumed disjoint** (true for goldenmatch — the groups `pprl`/`memory`/`identity`/`config` collide with no leaf command). A future package where a leaf and a group share a name would silently coalesce them; the manifest self-check (§6) flags that case.
 - **Closing** the gaps (porting missing TS tools). This slice governs and surfaces gaps; closing any specific one is separate work the manifest makes visible.
 - Packages other than goldenmatch (§9).
 
@@ -50,13 +52,13 @@ Each package emits a **surface descriptor** — a JSON document of the actual, c
 
 Descriptors are **generated fresh at gate time**, never committed (they are derived, like the `.wasm` artifacts). Each list is sorted for stable output.
 
-Both languages already expose a **single combined tools list**, so no assembly or new `describeSurface()` export is needed:
+Both languages already expose a **single combined MCP tools list** (import-clean), so no assembly is needed there. The one enablement gap is the **TS CLI**: its commander `program` is neither exported nor guarded against boot-on-import, so the TS emitter needs a one-line change to that package (§3.2) — the same "small module-level export" escape hatch the design grants any package whose registry isn't importable.
 
 ### 3.1 Python emitter — `scripts/emit_python_surface.py <pkg>`
 
 For goldenmatch (verified symbols):
 - **MCP tools:** `from goldenmatch.mcp.server import TOOLS` → `[t.name for t in TOOLS]`. `TOOLS` is the module-level combined list `AGENT_TOOLS + MEMORY_TOOLS + IDENTITY_TOOLS + ROUTING_TOOLS + _BASE_TOOLS` (`mcp/server.py:585`); each element is an mcp-SDK `Tool` with a `.name` attribute.
-- **CLI commands:** import the Typer app `goldenmatch.cli.main.app` and read `app.registered_commands` (leaf `TyperCommand`s — take each command's resolved name) and `app.registered_groups` (`TyperGroup`s from `add_typer(...)` — the sub-app names `pprl`, `memory`, `identity`, `config`; `cli/main.py:103,125-127,216`). The union of both name sets is the CLI surface. (These are the real Typer introspection attributes.)
+- **CLI commands:** import the Typer app `goldenmatch.cli.main.app` and read `app.registered_commands` (leaf `TyperCommand`s — take each command's resolved name) and `app.registered_groups` (`TyperGroup`s from `add_typer(...)` — the sub-app names `pprl`, `memory`, `identity`, `config`; `cli/main.py:103,125-127,224`). The union of both name sets is the CLI surface. (These are the real Typer introspection attributes; the Typer `app` is import-clean — `cli/main.py` has no top-level `app()` call.)
 
 **Import dependency:** importing `goldenmatch.mcp.server` pulls the mcp SDK (`from mcp.server import Server`, `mcp/server.py:23`), which ships only with the `[mcp]` extra; the `Tool` type the `*_TOOLS` lists are built from comes from the same SDK. So the Python emitter runs in an env with **`goldenmatch[mcp]`** installed. goldenmatch also imports polars, so run under `POLARS_SKIP_CPU_CHECK=1 GOLDENMATCH_NATIVE=0`. (The Typer `app` import alone is dependency-clean; only the MCP surface needs the extra.)
 
@@ -65,10 +67,10 @@ The emitter carries a small **per-package registry map** (which module/symbol ho
 ### 3.2 TypeScript emitter — `scripts/emit_ts_surface.mjs <pkg>`
 
 For goldenmatch (verified symbols):
-- **MCP tools:** `import { TOOLS } from ".../node/mcp/server.js"` → `TOOLS.map(t => t.name)`. `TOOLS` is a module-level `export const TOOLS: readonly Tool[] = [...EXISTING_TOOLS, ...MEMORY_TOOLS, ...IDENTITY_TOOLS, ...AGENT_MCP_TOOLS]` (`node/mcp/server.ts:369`) — a clean combined export.
-- **CLI commands:** import the commander `program` from `src/cli.ts` → `program.commands.map(c => c.name())` (top-level commands + sub-command groups like `memory`, `identity`; `src/cli.ts:122`).
+- **MCP tools:** `import { TOOLS } from ".../src/node/mcp/server.js"` → `TOOLS.map(t => t.name)`. `TOOLS` is a module-level `export const TOOLS: readonly Tool[] = [...EXISTING_TOOLS, ...MEMORY_TOOLS, ...IDENTITY_TOOLS, ...AGENT_MCP_TOOLS]` (`src/node/mcp/server.ts:369`) — a clean, import-safe combined export.
+- **CLI commands:** the commander `program` in `src/cli.ts:122` is currently `const program = new Command()` (**not exported**), and `program.parseAsync(process.argv)` runs at **module top level, unguarded** (`src/cli.ts:992`) — so importing the module today would boot the CLI against the emitter's own `argv` and `process.exit`. **Prerequisite enablement change to `src/cli.ts`:** (a) `export const program`, and (b) guard the top-level `parseAsync` behind a main-module check (`if (import.meta.url === pathToFileURL(process.argv[1]).href)`), so the `goldenmatch-js` bin still runs it but importers don't. Then the emitter does `import { program } from ".../src/cli.js"` → `program.commands.map(c => c.name())` (top-level leaf commands + sub-command groups like `memory`, `identity`). This one-line-export + main-guard is a task in the plan, not an assumption.
 
-**Import-without-boot is confirmed for goldenmatch (the design's headline risk):** `TOOLS` is a module-level export and the MCP `server.connect(...)` / commander `program.parse(...)` calls live inside functions, so importing the module has no server-boot side effect. Where a future package traps its list inside a construction closure, the fix is a tiny module-level `export const TOOLS`/`describeSurface()` in that package.
+**Import-without-boot status for goldenmatch:** retired for 3 of the 4 symbols with no code change — Python `mcp.server.TOOLS` and the Typer `app`, and TS `src/node/mcp/server.ts`'s `export const TOOLS` are all module-level and import-clean. The **TS CLI `program` is the one exception** and needs the small export + main-guard above. Where a future package traps a registry inside a construction closure, the same fix (a tiny module-level export + guard) applies.
 
 **CI-only:** the box OOM-kills TS builds, so the TS emitter runs only in CI (where the `typescript` lane already builds goldenmatch-js via turbo; the emitter imports the built `dist`, or loads `src` via `tsx`).
 
@@ -140,7 +142,7 @@ Local: the Python emitter (in the `[mcp]` venv) + a manifest self-consistency ch
 
 ## 9. Rollout & follow-ups
 
-1. **This slice:** the emitters (with goldenmatch's registry map), the manifest format, the gate + tests, the CI job, and `parity/goldenmatch.yaml` reviewed + green — over **MCP tools + CLI commands**.
+1. **This slice:** the emitters (with goldenmatch's registry map), a one-line `export const program` + main-module guard on goldenmatch-js `src/cli.ts` (so the CLI is import-safe for the emitter), the manifest format, the gate + tests, the CI job, and `parity/goldenmatch.yaml` reviewed + green — over **MCP tools + CLI commands**.
 2. **A2A skills (follow-up, has a prerequisite):** the TS agent card must first be reconciled to carry A2A-conformant `id`s matching Python's skill ids (today it uses `name` with divergent tokens — a real parity bug this effort surfaced). Once reconciled, add an `a2a_skills` surface to the emitters + manifest.
 3. **CLI subcommands (optional extension):** emit composite `group.subcommand` tokens so drift *inside* sub-apps (`identity split`, `pprl link`) is caught, not just the group name.
 4. **Other five packages (mechanical):** add each package's entries to the emitter registry map, `--init` + review each manifest, extend the CI filter/matrix. Each package's review is itself a small audit that may spin off "port this tool" / "delete this stale command" tickets.
@@ -149,7 +151,7 @@ Local: the Python emitter (in the `[mcp]` venv) + a manifest self-consistency ch
 
 ## 10. Risks
 
-- **Registry importability (the main risk) — retired for goldenmatch.** Confirmed: Python `mcp.server.TOOLS` and the Typer `app`, and TS `node/mcp/server.ts`'s `export const TOOLS` and the commander `program`, are all reachable by import with no server-boot side effect. Going goldenmatch-first proves the pattern; a future package that traps its list in a construction closure gets a small module-level export.
+- **Registry importability (the main risk) — mostly retired for goldenmatch.** Confirmed import-clean with no code change: Python `mcp.server.TOOLS`, the Python Typer `app`, and TS `src/node/mcp/server.ts`'s `export const TOOLS`. The **one exception** is the TS commander `program`, which is unexported and boots on import (`src/cli.ts:122,992`); it needs a one-line `export const program` + a main-module guard (§3.2) — a small, contained enablement change, not a redesign. Going goldenmatch-first proves the pattern; a future package that traps a list in a construction closure gets the same fix.
 - **Optional-extra imports.** The MCP surface can only be read in an env with `goldenmatch[mcp]` installed (§3.1, §6, §7). Not a design flaw, but the CI job and the local recipe must provision it, and the gate must not confuse a missing extra with real drift.
 - **Truthfulness vs the advertised surface.** The emitter must enumerate the *same* set the running server advertises (MCP `tools/list` = the `TOOLS` list). The combined `TOOLS` export on both sides is exactly what each server serves, so this holds; the smoke test pins the count against the measured value to catch a divergent assembly.
 - **Subcommand blindness (§2 non-goal).** Declaring a sub-app group `shared` does not verify its subcommands match. Documented, with the composite-token extension as the fix (§9).
