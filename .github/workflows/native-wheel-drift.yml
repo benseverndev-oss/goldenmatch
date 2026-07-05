@@ -1,0 +1,27 @@
+name: Native wheel drift advisory
+# Advisory only (NOT a per-PR gate): warns when the PUBLISHED goldenmatch-native
+# wheel lags current-source host references (the #688 republish-lag). Remediation:
+# republish goldenmatch-native. A source PR is never blocked by this — the check
+# reconciles current source against the ALREADY-published wheel, which by design
+# lags between releases; a hard gate would be a republish chicken-and-egg.
+on:
+  schedule:
+    - cron: "0 9 * * 1" # Mondays 09:00 UTC
+  workflow_dispatch:
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.13"
+      - name: Install the PUBLISHED goldenmatch-native wheel
+        run: pip install goldenmatch-native
+      - name: Check published-wheel drift (goldenmatch)
+        # stdlib-only script; reads goldenmatch *source* (checked out) + the installed
+        # wheel. Exits 2 (fails loud) if the wheel can't be introspected or the host
+        # scan is empty; warns + exits 0 on lag; exits 0 clean when up to date.
+        run: python scripts/check_native_wheel.py goldenmatch
