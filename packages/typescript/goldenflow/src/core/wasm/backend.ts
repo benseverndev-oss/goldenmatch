@@ -13,7 +13,9 @@
  * country_standardize/unit_normalize/split_address), and the text transforms
  * (strip/collapse_whitespace/normalize_quotes/normalize_line_endings/
  * remove_html_tags/remove_urls/remove_digits/remove_punctuation/remove_emojis/
- * extract_numbers/truncate/pad_left/pad_right); everything else stays pure-TS.
+ * extract_numbers/truncate/pad_left/pad_right + the text-2 Unicode-heavy five
+ * lowercase/uppercase/title_case/normalize_unicode/fix_mojibake); everything
+ * else stays pure-TS.
  * Mirrors goldenmatch's `setScorerBackend(null)` module-singleton pattern for
  * test isolation.
  */
@@ -95,6 +97,11 @@ export interface FlowWasmBackend {
   truncate(s: string, n: number): string;
   padLeft(s: string, width: number, pad: string): string;
   padRight(s: string, width: number, pad: string): string;
+  lowercase(s: string): string;
+  uppercase(s: string): string;
+  titleCase(s: string): string;
+  normalizeUnicode(s: string): string;
+  fixMojibake(s: string): string;
 }
 
 import { createBackendRegistry } from "goldenmatch-wasm-runtime";

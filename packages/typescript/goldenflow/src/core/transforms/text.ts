@@ -2,15 +2,16 @@
  * Text transforms — ported from goldenflow/transforms/text.py
  * Side-effect module: registers 18 text transforms on import.
  *
- * Owned-kernel family (Wave D text-1): 13 mechanical / ASCII-bound transforms
+ * Owned-kernel family (Wave D text-1 + text-2): 18 text transforms
  * (`strip`/`collapse_whitespace`/`normalize_quotes`/`normalize_line_endings`/
  * `remove_html_tags`/`remove_urls`/`remove_digits`/`remove_punctuation`/
  * `remove_emojis`/`extract_numbers` scalar + parameterized `truncate`/
- * `pad_left`/`pad_right`) are byte-for-byte ports of the goldenflow-core Rust
- * kernels (`goldenflow-core::text`), proven byte-identical to the Python
- * reference. Each dispatches to the opt-in WASM backend (`FlowWasmBackend`)
- * when `enableWasm()` has succeeded; otherwise it runs the pure-TS
- * implementation below. Pure-TS is the default.
+ * `pad_left`/`pad_right`, plus the Unicode-heavy text-2 five `lowercase`/
+ * `uppercase`/`title_case`/`normalize_unicode`/`fix_mojibake`) are byte-for-byte
+ * ports of the goldenflow-core Rust kernels (`goldenflow-core::text`), proven
+ * byte-identical to the Python reference. Each dispatches to the opt-in WASM
+ * backend (`FlowWasmBackend`) when `enableWasm()` has succeeded; otherwise it
+ * runs the pure-TS implementation below. Pure-TS is the default.
  *
  * NO regex is used where the JS engine would diverge from the Rust kernel: the
  * html-tag / url / number scans and char-class filters mirror the hand-rolled
@@ -20,13 +21,21 @@
  * codepoint ranges; `truncate`/`pad_*` are codepoint-based (`[...s]`) to match
  * Rust `chars()`.
  *
- * text-2 (deferred): lowercase / uppercase / title_case / normalize_unicode /
- * fix_mojibake stay pure-TS (Unicode-casing / NFKD parity, a later wave).
+ * text-2 casing: `lowercase`/`uppercase` are `String.prototype.to{Lower,Upper}
+ * Case()` (agree with Rust `to_{lower,upper}case` / Python `str` on the bounded
+ * corpus, incl. ß->"SS"); `title_case` is a hand-rolled ASCII-title port of
+ * `_title_case_py` (first alpha of each word upper, rest lower, non-alpha resets
+ * -- iterated by code point); `normalize_unicode` uses the SAME explicit
+ * generated `NORMALIZE_MAP` as the kernel (NOT `String.prototype.normalize`,
+ * whose runtime Unicode DB would diverge); `fix_mojibake` is a portable
+ * latin-1<->utf-8 round-trip (return original when the string isn't
+ * latin-1-encodable or the bytes aren't valid UTF-8).
  */
 
 import type { ColumnValue } from "../types.js";
 import { registerTransform } from "./registry.js";
 import { getFlowWasmBackend } from "../wasm/backend.js";
+import { NORMALIZE_MAP } from "./_normalize_unicode_map.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -136,6 +145,75 @@ function padRightTs(s: string, width: number, pad: string): string {
   return s + pad.repeat(width - len);
 }
 
+// --- text-2 (Unicode-heavy) ------------------------------------------------
+
+/** `lowercase`: Rust `to_lowercase` / Python `str.lower` (bounded corpus). */
+function lowercaseTs(s: string): string {
+  return s.toLowerCase();
+}
+
+/** `uppercase`: Rust `to_uppercase` / Python `str.upper` (ß -> "SS" agrees). */
+function uppercaseTs(s: string): string {
+  return s.toUpperCase();
+}
+
+/** `title_case`: ASCII title-case, byte-identical to goldenflow-core
+ * `names::ascii_title` / Python `_title_case_py`. First alphabetic char of each
+ * word upper, rest lower; a non-alpha char emits as-is and resets the word.
+ * Iterated by CODE POINT (`[...s]`); a Unicode-letter test mirrors Python
+ * `str.isalpha` / Rust `char::is_alphabetic` (the corpus is ASCII). */
+function titleCaseTs(s: string): string {
+  let out = "";
+  let prevAlpha = false;
+  for (const ch of s) {
+    if (/\p{L}/u.test(ch)) {
+      out += prevAlpha ? ch.toLowerCase() : ch.toUpperCase();
+      prevAlpha = true;
+    } else {
+      out += ch;
+      prevAlpha = false;
+    }
+  }
+  return out;
+}
+
+/** `normalize_unicode`: decompose + strip-combining via the explicit generated
+ * `NORMALIZE_MAP` (codepoint -> replacement), byte-identical to
+ * `_normalize_unicode_py` and the Rust kernel. Iterated by CODE POINT: ASCII
+ * (`< 128`) passes through, a mapped char emits its replacement, an unmapped
+ * non-ASCII char passes through unchanged (documented boundary). NOT
+ * `String.prototype.normalize` -- its runtime Unicode DB would diverge. */
+function normalizeUnicodeTs(s: string): string {
+  let out = "";
+  for (const ch of s) {
+    const cp = ch.codePointAt(0)!;
+    if (cp < 128) {
+      out += ch;
+    } else {
+      out += NORMALIZE_MAP.get(cp) ?? ch;
+    }
+  }
+  return out;
+}
+
+/** `fix_mojibake`: re-encode latin-1 bytes then decode as UTF-8; return the
+ * original when the string isn't latin-1-encodable (any codepoint > 0xFF) or
+ * the resulting bytes aren't valid UTF-8. Byte-identical to `_fix_mojibake_py`
+ * (`val.encode("latin-1").decode("utf-8")`, original on either failure). */
+function fixMojibakeTs(s: string): string {
+  const bytes = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) {
+    const code = s.charCodeAt(i);
+    if (code > 0xff) return s; // not latin-1-encodable (mirrors encode("latin-1") failure)
+    bytes[i] = code;
+  }
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return s; // invalid UTF-8 (mirrors decode("utf-8") failure)
+  }
+}
+
 // ---------------------------------------------------------------------------
 // strip (priority 90, auto_apply, string)
 // ---------------------------------------------------------------------------
@@ -152,11 +230,13 @@ registerTransform(
 );
 
 // ---------------------------------------------------------------------------
-// lowercase (50, string) -- text-2, pure-TS
+// lowercase (50, string) -- text-2, native-first
 // ---------------------------------------------------------------------------
 
 function lowercase(values: readonly ColumnValue[]): ColumnValue[] {
-  return mapStrings(values, (s) => s.toLowerCase());
+  const backend = getFlowWasmBackend();
+  const fn = backend ? (s: string) => backend.lowercase(s) : lowercaseTs;
+  return mapStrings(values, fn);
 }
 
 registerTransform(
@@ -165,11 +245,13 @@ registerTransform(
 );
 
 // ---------------------------------------------------------------------------
-// uppercase (50, string) -- text-2, pure-TS
+// uppercase (50, string) -- text-2, native-first
 // ---------------------------------------------------------------------------
 
 function uppercase(values: readonly ColumnValue[]): ColumnValue[] {
-  return mapStrings(values, (s) => s.toUpperCase());
+  const backend = getFlowWasmBackend();
+  const fn = backend ? (s: string) => backend.uppercase(s) : uppercaseTs;
+  return mapStrings(values, fn);
 }
 
 registerTransform(
@@ -178,13 +260,13 @@ registerTransform(
 );
 
 // ---------------------------------------------------------------------------
-// title_case (50, string) -- text-2, pure-TS
+// title_case (50, string) -- text-2, native-first
 // ---------------------------------------------------------------------------
 
 function titleCase(values: readonly ColumnValue[]): ColumnValue[] {
-  return mapStrings(values, (s) =>
-    s.toLowerCase().replace(/\b\w/g, (ch) => ch.toUpperCase()),
-  );
+  const backend = getFlowWasmBackend();
+  const fn = backend ? (s: string) => backend.titleCase(s) : titleCaseTs;
+  return mapStrings(values, fn);
 }
 
 registerTransform(
@@ -193,13 +275,13 @@ registerTransform(
 );
 
 // ---------------------------------------------------------------------------
-// normalize_unicode (85, auto_apply, string) -- text-2, pure-TS
+// normalize_unicode (85, auto_apply, string) -- text-2, native-first
 // ---------------------------------------------------------------------------
 
 function normalizeUnicode(values: readonly ColumnValue[]): ColumnValue[] {
-  return mapStrings(values, (s) =>
-    s.normalize("NFKD").replace(/\p{M}/gu, ""),
-  );
+  const backend = getFlowWasmBackend();
+  const fn = backend ? (s: string) => backend.normalizeUnicode(s) : normalizeUnicodeTs;
+  return mapStrings(values, fn);
 }
 
 registerTransform(
@@ -377,27 +459,13 @@ registerTransform(
 );
 
 // ---------------------------------------------------------------------------
-// fix_mojibake (86, string) -- text-2, pure-TS
+// fix_mojibake (86, string) -- text-2, native-first
 // ---------------------------------------------------------------------------
 
 function fixMojibake(values: readonly ColumnValue[]): ColumnValue[] {
-  return mapStrings(values, (s) => {
-    try {
-      // Attempt latin1 -> utf8 re-encoding: encode string bytes as latin1,
-      // then decode as UTF-8. If the result is valid and different, use it.
-      const bytes = new Uint8Array(s.length);
-      for (let i = 0; i < s.length; i++) {
-        const code = s.charCodeAt(i);
-        if (code > 255) return s; // Not latin1-encodable; skip
-        bytes[i] = code;
-      }
-      const decoded = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-      return decoded;
-    } catch {
-      // If decoding fails the string is not mojibake; return as-is
-      return s;
-    }
-  });
+  const backend = getFlowWasmBackend();
+  const fn = backend ? (s: string) => backend.fixMojibake(s) : fixMojibakeTs;
+  return mapStrings(values, fn);
 }
 
 registerTransform(
@@ -456,4 +524,9 @@ export {
   truncateTs,
   padLeftTs,
   padRightTs,
+  lowercaseTs,
+  uppercaseTs,
+  titleCaseTs,
+  normalizeUnicodeTs,
+  fixMojibakeTs,
 };

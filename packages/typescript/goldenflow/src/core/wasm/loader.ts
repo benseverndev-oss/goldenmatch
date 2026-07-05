@@ -105,6 +105,11 @@ export async function instantiateBackend(bytes: Uint8Array): Promise<FlowWasmBac
     truncate: (s: string, n: number) => string;
     pad_left: (s: string, width: number, pad: string) => string;
     pad_right: (s: string, width: number, pad: string) => string;
+    lowercase: (s: string) => string;
+    uppercase: (s: string) => string;
+    title_case: (s: string) => string;
+    normalize_unicode: (s: string) => string;
+    fix_mojibake: (s: string) => string;
   };
   await glue.default({ module_or_path: bytes });
 
@@ -173,5 +178,10 @@ export async function instantiateBackend(bytes: Uint8Array): Promise<FlowWasmBac
     truncate: (s, n) => glue.truncate(s, n),
     padLeft: (s, width, pad) => glue.pad_left(s, width, pad),
     padRight: (s, width, pad) => glue.pad_right(s, width, pad),
+    lowercase: (s) => glue.lowercase(s),
+    uppercase: (s) => glue.uppercase(s),
+    titleCase: (s) => glue.title_case(s),
+    normalizeUnicode: (s) => glue.normalize_unicode(s),
+    fixMojibake: (s) => glue.fix_mojibake(s),
   };
 }
