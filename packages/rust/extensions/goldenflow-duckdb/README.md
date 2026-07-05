@@ -21,19 +21,31 @@ FROM read_parquet('s3://bucket/raw/*.parquet');
 UDF names are `goldenflow_<kernel>` -- a predictable 1:1 with the underlying
 `goldenflow-core` function.
 
-## Status: Slice 2 (VARCHAR catalogue)
+## Status: Slice 2b (full single-arg catalogue)
 
-The full single-argument `VARCHAR -> VARCHAR` catalogue is wired -- 36 UDFs
-across address, email, names, text, and categorical families, in both the total
-(`fn(&str) -> String`) and nullable (`fn(&str) -> Option<String>`, `None` ->
-SQL `NULL`) shapes. Registration is table-driven, so adding a transform is one
-`"name" => kernel` line.
+Every single-argument transform in `goldenflow-core` is now a SQL function --
+**58 UDFs** across four output shapes, table-driven (one `"name" => kernel` line
+each):
+
+| Output | Shape | Examples |
+| ------ | ----- | -------- |
+| `VARCHAR` | `fn(&str) -> String` | `email_normalize`, `name_proper`, `address_standardize`, all of text |
+| `VARCHAR` (nullable) | `fn(&str) -> Option<String>` | `url_normalize`, `cc_format`, `iban_format`, `null_standardize` |
+| `BOOLEAN` | `fn(&str) -> bool` / `Option<bool>` | `cc_validate`, `iban_validate`, `boolean_normalize`, `email_validate` |
+| `DOUBLE` / `BIGINT` | `fn(&str) -> Option<f64/i64>` | `currency_strip`, `percentage_normalize`, `to_integer` |
+
+`None` (and null input) map to SQL `NULL`.
+
+**Cross-surface proof:** the test suite threads the *entire* shared
+`identifiers_corpus.jsonl` (489 rows, every transform) -- the exact oracle the
+Python and TypeScript parity gates assert against -- through a real in-process
+DuckDB, so the SQL surface is byte-identical to Python / TS / wasm by the same
+corpus, not just by construction.
 
 Deferred to later slices:
 
 | Slice | Scope |
 | ----- | ----- |
-| **2b** | Typed outputs: validators (`-> BOOLEAN`) + numeric parsers (`-> DOUBLE`/`BIGINT`), and the identifier family. Needs the primitive output-vector write API. |
 | **3**  | Per-platform `.duckdb_extension` build (metadata footer + 5-target matrix) and distribution. |
 | **later** | Multi-argument / multi-output kernels: phone (region arg), `split_*`, `truncate`, `pad_*`, `merge_name`, `auto_correct`. |
 
