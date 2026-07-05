@@ -6,6 +6,9 @@
 # Review: MCP tools at FULL parity (all shared). CLI: Python ships the richer surface
 #   (serve/agent-serve/mcp-serve + init/interactive/schedule/watch); TS is a lean subset.
 #   No naming divergence.
+# a2a_skills: FULL A2A parity — Python and TS expose the same 6 AgentCard skill ids
+#   (configure, diff-results, discover, handoff, map-schemas, transform-data). The hyphenated
+#   ids match on both sides (no PY-hyphen / TS-underscore divergence). No divergence.
 package: goldenflow
 mcp_tools:
   shared:
@@ -40,4 +43,14 @@ cli_commands:
   - schedule
   - serve
   - watch
+  ts_only: []
+a2a_skills:
+  shared:
+  - configure
+  - diff-results
+  - discover
+  - handoff
+  - map-schemas
+  - transform-data
+  python_only: []
   ts_only: []

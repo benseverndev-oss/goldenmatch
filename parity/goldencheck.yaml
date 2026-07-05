@@ -8,6 +8,9 @@
 #   DOMAIN_REGISTRY, src/core/index.ts) with no install path, so there is no TS operation
 #   to reconcile). CLI: Python ships the richer surface (servers + ops); TS adds
 #   health-score/list-domains/profile convenience commands. No naming divergence.
+# a2a_skills: FULL A2A parity — Python and TS expose the same 9 AgentCard skill ids
+#   (analyze_data, compare_domains, configure, explain, fix, handoff, review, scan, validate).
+#   No divergence.
 package: goldencheck
 mcp_tools:
   shared:
@@ -57,3 +60,16 @@ cli_commands:
   - health-score
   - list-domains
   - profile
+a2a_skills:
+  shared:
+  - analyze_data
+  - compare_domains
+  - configure
+  - explain
+  - fix
+  - handoff
+  - review
+  - scan
+  - validate
+  python_only: []
+  ts_only: []

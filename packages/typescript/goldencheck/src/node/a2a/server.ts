@@ -27,7 +27,7 @@ import { ReviewQueue, type ReviewItem } from "../../core/agent/review-queue.js";
 
 // --- Agent Card ---
 
-const AGENT_CARD = {
+export const AGENT_CARD = {
   name: "goldencheck-agent",
   version: "1.0.0",
   description: "Data validation agent that discovers rules from your data.",

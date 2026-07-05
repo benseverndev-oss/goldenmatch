@@ -4,6 +4,9 @@
 # api_parity gate fails if the real Python/TS surface stops matching this partition; every
 # tool/command add/remove/rename must be reflected here in the same PR.
 # Review: MCP tools at FULL parity. CLI: only `interactive` is Python-only. No naming divergence.
+# a2a_skills: FULL A2A parity — Python and TS expose the same 4 AgentCard skill ids
+#   (explain-pipeline, list-stages, run-pipeline, validate-pipeline). Note the a2a ids are
+#   hyphenated on both sides, unlike the underscore MCP tool ids (run_pipeline, ...). No divergence.
 package: goldenpipe
 mcp_tools:
   shared:
@@ -24,4 +27,12 @@ cli_commands:
   - validate
   python_only:
   - interactive
+  ts_only: []
+a2a_skills:
+  shared:
+  - explain-pipeline
+  - list-stages
+  - run-pipeline
+  - validate-pipeline
+  python_only: []
   ts_only: []

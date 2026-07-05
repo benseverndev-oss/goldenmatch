@@ -71,9 +71,22 @@ def test_structure_flags_unsorted():
 
 
 def test_structure_flags_unknown_surface():
-    m = {"a2a_skills": {"shared": [], "python_only": [], "ts_only": []}}
+    m = {"grpc_methods": {"shared": [], "python_only": [], "ts_only": []}}
     fails = gate.check_structure(m)
     assert any(f.kind == "unknown_surface" for f in fails)
+
+
+def test_a2a_skills_surface_partitions_and_absent_is_skipped():
+    py = {"package": "gm", "mcp_tools": ["a"], "cli_commands": ["c"], "a2a_skills": ["s1", "s2"]}
+    ts = {"package": "gm", "mcp_tools": ["a"], "cli_commands": ["c"], "a2a_skills": ["s1"]}
+    m = gate.init_manifest(py, ts)
+    assert m["a2a_skills"] == {"shared": ["s1"], "python_only": ["s2"], "ts_only": []}
+    assert gate.run_checks(m, py, ts) == []
+    py2 = {"package": "im", "mcp_tools": ["a"], "cli_commands": ["c"]}
+    ts2 = {"package": "im", "mcp_tools": ["a"], "cli_commands": ["c"]}
+    m2 = gate.init_manifest(py2, ts2)
+    assert "a2a_skills" not in m2
+    assert gate.run_checks(m2, py2, ts2) == []
 
 
 def test_structure_clean():
@@ -120,6 +133,9 @@ def test_python_emitter_goldenmatch_smoke():
     # known real names present
     assert "find_duplicates" in desc["mcp_tools"]
     assert "mcp-serve" in desc["cli_commands"] and "identity" in desc["cli_commands"]
+    # a2a_skills present + sorted; count/content MEASURED off the real _SKILLS, never hardcoded
+    from goldenmatch.a2a.server import _SKILLS
+    assert desc["a2a_skills"] == sorted(s["id"] for s in _SKILLS)
 
 
 import pytest
@@ -142,3 +158,9 @@ def test_python_emitter_all_packages_smoke(pkg):
     assert desc["package"] == pkg
     for surface in ("mcp_tools", "cli_commands"):
         assert desc[surface] == sorted(desc[surface]) and desc[surface], f"{pkg}.{surface} empty/unsorted"
+    # a2a_skills: present + non-empty + sorted for the 4 A2A packages, absent for the rest
+    if pkg in ("goldenmatch", "goldencheck", "goldenflow", "goldenpipe"):
+        assert desc["a2a_skills"] == sorted(desc["a2a_skills"]) and desc["a2a_skills"], \
+            f"{pkg}.a2a_skills empty/unsorted"
+    else:
+        assert "a2a_skills" not in desc, f"{pkg} should not emit a2a_skills"
