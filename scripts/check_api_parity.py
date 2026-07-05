@@ -46,3 +46,24 @@ def check_partition(surface: str, manifest_surface: dict, py: set[str], ts: set[
     for n in sorted(declared - (py | ts)):                # row 7
         add(n, "phantom", f"'{n}' is in the manifest but no longer exists -> remove it")
     return f
+
+
+def check_structure(manifest: dict) -> list[ParityFailure]:
+    f: list[ParityFailure] = []
+    for surface, body in manifest.items():
+        if surface == "package":
+            continue
+        if surface not in SURFACES:
+            f.append(ParityFailure(surface, "", "unknown_surface", f"unknown surface '{surface}' (allowed: {', '.join(SURFACES)})"))
+            continue
+        lists = {k: list(body.get(k, [])) for k in ("shared", "python_only", "ts_only")}
+        for k, v in lists.items():
+            if v != sorted(v):
+                f.append(ParityFailure(surface, "", "unsorted", f"{surface}.{k} is not sorted"))
+        seen: dict[str, str] = {}
+        for k, v in lists.items():
+            for n in v:
+                if n in seen:
+                    f.append(ParityFailure(surface, n, "not_disjoint", f"'{n}' appears in both {surface}.{seen[n]} and {surface}.{k}"))
+                seen[n] = k
+    return f
