@@ -1489,7 +1489,11 @@ jobs:
         # the Python MCP surface for all six packages.
         run: |
           uv sync --all-packages
-          uv pip install "mcp>=1.0"
+          # mcp: the MCP-tool surface; aiohttp: the a2a servers (the a2a_skills
+          # emitter imports <pkg>.a2a.server, which needs the [a2a] extra). Without
+          # aiohttp the a2a emitter exits 3 (env-gap) and the a2a surface is silently
+          # skipped — the gate must PROVISION it so a2a parity is actually checked.
+          uv pip install "mcp>=1.0" aiohttp
       - name: Gate unit tests (pure data + all-six emitter smoke)
         # Package-agnostic; run once (on the goldenmatch shard) to avoid 6x redundancy.
         if: matrix.package == 'goldenmatch'
