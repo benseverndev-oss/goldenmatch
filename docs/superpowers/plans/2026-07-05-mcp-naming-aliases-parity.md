@@ -268,19 +268,27 @@ def test_suite_profile_stays_goldencheck_not_goldenmatch_alias():
     assert name_to_dispatch["profile"] is not gm.dispatch
 
 
-def test_goldenmatch_aliases_absent_from_aggregated_surface():
+def test_no_goldenmatch_alias_is_served_by_goldenmatch_in_the_suite():
+    # The real invariant is OWNERSHIP, not name-absence: `profile` is BOTH a
+    # goldenmatch alias key AND a legitimate goldencheck tool, so it may still
+    # appear in the surface (served by goldencheck). What must never happen is a
+    # goldenmatch alias being SERVED BY goldenmatch through the suite.
     from goldensuite_mcp.server import _aggregate
     from goldenmatch.mcp import server as gm
-    tools, _ = _aggregate()
+    tools, name_to_dispatch = _aggregate()
     names = {t.name for t in tools}
-    assert not (set(gm._MCP_TOOL_ALIASES) & names), \
-        "goldenmatch aliases must be filtered from the suite surface"
+    served_by_gm = [n for n in gm._MCP_TOOL_ALIASES
+                    if name_to_dispatch.get(n) is gm.dispatch]
+    assert served_by_gm == []
+    # The 4 non-colliding aliases don't leak into the surface at all (only
+    # `profile` collides with another package's real tool).
+    assert not ((set(gm._MCP_TOOL_ALIASES) - {"profile"}) & names)
 ```
 
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `cd packages/python/goldensuite-mcp && POLARS_SKIP_CPU_CHECK=1 GOLDENMATCH_NATIVE=0 ../../../.venv/Scripts/python -m pytest tests/test_aggregator_smoke.py -k "profile or aliases" -v`
-Expected: FAIL — goldenmatch is first-wins, so `profile` maps to `gm.dispatch` (`is not gm.dispatch` fails) and the alias names appear in the surface.
+Expected: FAIL — goldenmatch is first-wins, so `profile` maps to `gm.dispatch` (`is not gm.dispatch` fails) and the non-colliding alias names leak into the surface.
 
 - [ ] **Step 3: Implement — filter aliases in `_adapt_goldenmatch`**
 
