@@ -16,14 +16,23 @@ rolling to the other four native packages is a mechanical follow-on (§7).
 ## 1. Problem
 
 goldenmatch's host reaches its Rust kernel (`goldenmatch._native`) through three
-call-site forms:
-- **direct** — `native_module().<symbol>(...)` (30 sites)
-- **guarded / silent-fallback** — `getattr(native, "<symbol>", None)` then
-  fall back to pure Python if `None` (5 sites) — *the #688 shape*
-- **capability probe** — `hasattr(native_module(), "<symbol>")` (14 sites)
+call-site forms — but crucially, through **many module-binding aliases**, not a
+single `native` name. Production code does `_nm = native_module()` /
+`nm = native_module()` / `mod = native_module()` / `native_mod = _ensure_native()`
+and then calls `_nm.<symbol>(...)` / `hasattr(_nm, "<symbol>")` etc. The three
+forms:
+- **direct** — `<binding>.<symbol>(...)` (~23 sites)
+- **guarded / silent-fallback** — `getattr(<binding>, "<symbol>", None)` then fall
+  back to pure Python if `None` (~5 sites) — *the #688 shape*
+- **capability probe** — `hasattr(<binding>, "<symbol>")` (~12 sites across aliases)
+
+where `<binding>` is `native_module()`, `_ensure_native()`, or any local provably
+bound to one of them (`native`, `_nm`, `nm`, `mod`, `native_mod`, ...).
 
 The kernel's exported symbols are the `wrap_pyfunction!(module::<symbol>, m)`
-registrations in `packages/rust/extensions/native/src/*.rs` (41 today).
+registrations in `packages/rust/extensions/native/src/lib.rs` (**40** today;
+`score.rs` only *defines* the `#[pyfunction]` shims that `lib.rs` registers — its
+lone `wrap_pyfunction!` token is inside a comment, not a registration).
 
 Nothing checks that every symbol the host *references* is one the kernel actually
 *exports*. A typo, a rename on one side, or a `getattr` fallback for a symbol that
@@ -50,28 +59,47 @@ API-parity gate's naming divergences were.
 
 ### 3.1 Registered set (kernel exports)
 
-Parse every `wrap_pyfunction!(<path>::<symbol>, ...)` occurrence across the
-package's native crate source (`packages/rust/extensions/native/src/**/*.rs` —
-`lib.rs` plus submodules like `score.rs`), extracting the final `::`-segment as the
-exported symbol name. Text/regex parse — no cargo build. This is the *source*
-truth; the shipped-wheel truth is Project 3.
+Parse every `wrap_pyfunction!(<path>::<symbol>, m)` occurrence in the package's
+native crate registration source (`packages/rust/extensions/native/src/lib.rs` —
+one registration is multi-line, so match across newlines), extracting the final
+`::`-segment as the exported symbol name. A `wrap_pyfunction!` token that is not a
+call with a `::` path (e.g. inside a comment) is ignored. Text/regex parse — no
+cargo build. This is the *source* truth; the shipped-wheel truth is Project 3.
 
-### 3.2 Referenced set (host call-sites)
+### 3.2 Referenced set (host call-sites) — alias-resolving (LOAD-BEARING)
 
-Scan the package's Python source (`packages/python/goldenmatch/goldenmatch/**/*.py`,
-excluding tests) for all three forms, unioned + deduped:
-- `native_module()\.(<symbol>)`
-- `getattr\(\s*(?:native|native_module\(\))\s*,\s*["'](<symbol>)["']`
-- `hasattr\(\s*(?:native|native_module\(\))\s*,\s*["'](<symbol>)["']`
+The scanner MUST resolve module-binding aliases, or it silently under-counts the
+referenced set and the gate goes falsely green — missing exactly the #688-shape
+`hasattr(_nm, "sym")` / `_nm.sym(...)` sites it exists to protect (verified: a
+`native`-only scanner misses ~11 real references, including
+`autoconfig_planner.py`'s `_nm.autoconfig_decide_plan`).
 
-The `native` local is the conventional binding of `native_module()`
-(`native = native_module()` / `from ..._native_loader import native_module`).
-To bound false positives, only files that import `native_module` from
-`goldenmatch.core._native_loader` are scanned for the `native`-var forms; the
-`native_module().X` form is unambiguous everywhere.
+Per Python file under `packages/python/goldenmatch/goldenmatch/**/*.py` (tests
+excluded), that imports `native_module`/`_ensure_native` from
+`goldenmatch.core._native_loader`:
+1. **Collect the alias set** for that file: `{"native_module()", "_ensure_native()"}`
+   plus every local bound by `(\w+)\s*=\s*(?:native_module\(\)|_ensure_native\(\))`
+   (e.g. `_nm`, `nm`, `mod`, `native_mod`, `native`).
+2. **Extract referenced symbols** over that alias set, all three forms:
+   - `(?:<alias>)\.(<symbol>)` — direct attribute call
+   - `getattr\(\s*(?:<alias>)\s*,\s*["'](<symbol>)["']` — guarded/silent-fallback
+   - `hasattr\(\s*(?:<alias>)\s*,\s*["'](<symbol>)["']` — capability probe
 
-**Tests are excluded** from the referenced set (a test may `hasattr`-probe a
-symbol precisely to skip when absent — that is not a production dependency).
+Union + dedupe across all files. Restricting to loader-importing files bounds
+false positives from an unrelated local also named `mod`/`nm`.
+
+**Tests are excluded** (structurally already — tests live at
+`packages/python/goldenmatch/tests/`, outside the `goldenmatch/goldenmatch/**`
+root — but exclude explicitly as belt-and-suspenders; a test `hasattr`-probe is not
+a production dependency).
+
+**Two reference idioms the static scanner cannot resolve** (documented so the
+`unwired` triage doesn't mis-flag them as dead): `_native_loader.py`'s
+`_COMPONENT_SYMBOLS` holds kernel symbol names as **bare string literals in a dict**
+(telemetry probing), and `connectors/base.py` uses `getattr(mod, <computed_name>)`.
+Both are invisible to any regex. Today every symbol they touch is also referenced
+via a resolvable form, so no coverage is lost — but a symbol referenced *only* via
+these would show as `unwired` (false-dead), not as `missing` (never false-red).
 
 ### 3.3 The check
 
@@ -103,10 +131,14 @@ idiom, discovered during rollout, NOT assumed here).
 
 **Box-safe (pure stdlib, no build, no import):**
 - `scripts/test_native_symbols.py` — synthetic fixtures exercising the pure core:
-  `parse_registrations` on a snippet of `wrap_pyfunction!` lines; `scan_references`
-  on snippets of all three call-site forms (incl. a `getattr(native, "x", None)`
-  and a `hasattr`); the check reporting `missing` (fail) vs `unwired` (report);
-  allowlist subtraction; and that test-file references are excluded.
+  `parse_registrations` on a `wrap_pyfunction!` snippet (incl. a multi-line
+  registration and a commented-out token that must be ignored); `scan_references`
+  on snippets of all three call-site forms **through an alias** — critically a
+  `_nm = native_module()` then `_nm.x(...)` / `hasattr(_nm, "y")` and a
+  `native_mod = _ensure_native()` then `native_mod.z` (the alias-resolution is the
+  load-bearing behavior, so it gets a dedicated fixture); the check reporting
+  `missing` (fail) vs `unwired` (report); allowlist subtraction; and that
+  test-file references are excluded.
 - A **goldenmatch smoke test** that runs the real check against the real repo and
   asserts it exits cleanly *after* any bootstrap findings are resolved/allowlisted
   (so the committed state is green and the gate has teeth — same red/green proof as
@@ -124,13 +156,21 @@ workflow re-runs it. Must demonstrate FAIL on an injected bogus
 
 ## 6. Bootstrap
 
-Run the check locally against goldenmatch; triage each `missing` row:
-- a real typo/rename → fix the call-site or the kernel;
-- a `getattr` fallback for a genuinely-unbuilt symbol → decide (build it, or
-  allowlist with a tracked reason);
-- a cross-kernel/legitimate-dynamic reference → allowlist with reason.
-Commit until the check is green. Record the `unwired` count in the PR description
-(visibility, not a gate).
+Measured ahead of the build (spec review, alias-resolving idiom):
+- **`missing` (FAIL) set: EMPTY.** No hard failures — the bootstrap is clean, the
+  gate goes green immediately once the scanner is correct. (This is the whole
+  reason to get §3.2's alias resolution right: a naive scanner would show a green
+  gate too, but for the wrong reason — by not seeing the references at all.)
+- **`unwired` (REPORT) set: 2** — `build_clusters_native` and
+  `connected_components_arrow`, both genuinely dead (superseded by the
+  `build_clusters_arrow` / `_arrow` paths per `cluster.py` comments). Note them in
+  the PR's unwired triage so they aren't re-investigated each run; leave them in
+  REPORT (non-fatal) rather than allowlisting.
+
+If a future `missing` row appears, triage: typo/rename → fix the call-site or
+kernel; `getattr` fallback to a genuinely-unbuilt symbol → build it or allowlist
+with a tracked reason; cross-kernel/dynamic reference → allowlist with reason.
+Record the `unwired` count in the PR description (visibility, not a gate).
 
 ## 7. Rollout (follow-on, not this PR)
 
