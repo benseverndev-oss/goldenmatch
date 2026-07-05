@@ -5,8 +5,11 @@
 # should never enter a `cargo build --workspace` at the extensions root.
 [workspace]
 
+# Underscore name: `#[duckdb_entrypoint_c_api]` derives the C init symbol
+# (`<pkg>_init_c_api`) from the package name, so a hyphen makes an invalid
+# identifier and the macro panics. This also becomes the LOAD name.
 [package]
-name = "goldenflow-duckdb"
+name = "goldenflow_duckdb"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
