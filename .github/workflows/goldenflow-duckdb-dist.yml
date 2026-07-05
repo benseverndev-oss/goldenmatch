@@ -1,0 +1,145 @@
+name: goldenflow-duckdb-dist
+
+# Slice 3: build the loadable .duckdb_extension per platform, append the DuckDB
+# metadata footer, prove it actually LOADs in a real DuckDB CLI (the footer/ABI
+# proof the bundled test can't give), and publish the artifacts on a
+# `goldenflow-duckdb-v*` tag.
+#
+# Version-locked: duckdb-rs 1.10504.0 targets the UNSTABLE C API, which pins the
+# extension to a single DuckDB version. Everything below is aligned to v1.5.4
+# (the DuckDB release that duckdb-rs 1.10504.0 wraps). Bumping DuckDB = bump
+# DUCKDB_VERSION + the duckdb dep and rebuild.
+
+on:
+  push:
+    tags:
+      - "goldenflow-duckdb-v*"
+  pull_request:
+    paths:
+      - "packages/rust/extensions/goldenflow-duckdb/**"
+      - ".github/workflows/goldenflow-duckdb-dist.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write # release upload on tag
+
+env:
+  DUCKDB_VERSION: v1.5.4
+
+defaults:
+  run:
+    shell: bash
+    working-directory: packages/rust/extensions/goldenflow-duckdb
+
+jobs:
+  build:
+    name: build (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux_amd64
+            target: x86_64-unknown-linux-gnu
+            lib: libgoldenflow_duckdb.so
+            cli_asset: duckdb_cli-linux-amd64.zip
+          - os: macos-14
+            platform: osx_arm64
+            target: aarch64-apple-darwin
+            lib: libgoldenflow_duckdb.dylib
+            cli_asset: duckdb_cli-osx-arm64.zip
+          - os: windows-latest
+            platform: windows_amd64
+            target: x86_64-pc-windows-msvc
+            lib: goldenflow_duckdb.dll
+            cli_asset: duckdb_cli-windows-amd64.zip
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/rust/extensions/goldenflow-duckdb
+          key: ${{ matrix.target }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Resolve extension version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/goldenflow-duckdb-v* ]]; then
+            echo "EXT_VERSION=${GITHUB_REF_NAME#goldenflow-duckdb-v}" >> "$GITHUB_ENV"
+          else
+            echo "EXT_VERSION=0.1.0" >> "$GITHUB_ENV"
+          fi
+
+      # The macro reads these: the init symbol name and the min (== target,
+      # unstable C API) DuckDB version baked into the binary. They MUST match the
+      # footer's -dv or DuckDB refuses the load.
+      - name: Build loadable cdylib
+        env:
+          DUCKDB_EXTENSION_NAME: goldenflow_duckdb
+          DUCKDB_EXTENSION_MIN_DUCKDB_VERSION: ${{ env.DUCKDB_VERSION }}
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Append DuckDB metadata footer
+        run: |
+          python scripts/append_extension_metadata.py \
+            -l "target/${{ matrix.target }}/release/${{ matrix.lib }}" \
+            -n goldenflow_duckdb \
+            -dv "$DUCKDB_VERSION" \
+            -p "${{ matrix.platform }}" \
+            -ev "$EXT_VERSION" \
+            --abi-type C_STRUCT \
+            -o "goldenflow_duckdb.duckdb_extension"
+
+      # The real proof: a stock DuckDB CLI LOADs the extension and runs the UDFs.
+      - name: LOAD smoke test
+        run: |
+          curl -sL -o duckdb.zip \
+            "https://github.com/duckdb/duckdb/releases/download/${DUCKDB_VERSION}/${{ matrix.cli_asset }}"
+          unzip -o -q duckdb.zip
+          DUCKDB=./duckdb
+          [ -f ./duckdb.exe ] && DUCKDB=./duckdb.exe
+          "$DUCKDB" -unsigned -noheader -list -c "
+            LOAD './goldenflow_duckdb.duckdb_extension';
+            SELECT goldenflow_email_normalize('  A.B@Example.COM ');
+            SELECT goldenflow_cc_validate('4242424242424242');
+            SELECT goldenflow_to_integer('42');
+          " | tee smoke.out
+          grep -q "a.b@example.com" smoke.out
+          grep -qi "true" smoke.out
+          grep -q "^42$" smoke.out
+          echo "LOAD smoke passed on ${{ matrix.platform }}"
+
+      - name: Stage named artifact
+        run: cp goldenflow_duckdb.duckdb_extension "goldenflow_duckdb-${{ matrix.platform }}.duckdb_extension"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: goldenflow_duckdb-${{ matrix.platform }}
+          path: packages/rust/extensions/goldenflow-duckdb/goldenflow_duckdb-${{ matrix.platform }}.duckdb_extension
+          if-no-files-found: error
+
+  publish:
+    name: publish release assets
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/goldenflow-duckdb-v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Upload to release
+        working-directory: ${{ github.workspace }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "goldenflow-duckdb $GITHUB_REF_NAME" \
+            --notes "Loadable DuckDB extension for DuckDB ${DUCKDB_VERSION}. LOAD with \`duckdb -unsigned\` (or \`SET allow_unsigned_extensions=true\`)." \
+            dist/*.duckdb_extension
