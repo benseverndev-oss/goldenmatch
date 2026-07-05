@@ -147,3 +147,53 @@ pub fn pad_right_arrow(
         Some(text::pad_right(s, w, pad))
     })?))
 }
+
+#[pyfunction]
+pub fn lowercase_arrow(
+    py: Python,
+    array: PyArrowType<ArrayData>,
+) -> PyResult<PyArrowType<ArrayData>> {
+    Ok(PyArrowType(map_str_to_str(py, array.0, |s| {
+        Some(text::lowercase(s))
+    })?))
+}
+
+#[pyfunction]
+pub fn uppercase_arrow(
+    py: Python,
+    array: PyArrowType<ArrayData>,
+) -> PyResult<PyArrowType<ArrayData>> {
+    Ok(PyArrowType(map_str_to_str(py, array.0, |s| {
+        Some(text::uppercase(s))
+    })?))
+}
+
+#[pyfunction]
+pub fn title_case_arrow(
+    py: Python,
+    array: PyArrowType<ArrayData>,
+) -> PyResult<PyArrowType<ArrayData>> {
+    Ok(PyArrowType(map_str_to_str(py, array.0, |s| {
+        Some(text::title_case(s))
+    })?))
+}
+
+#[pyfunction]
+pub fn normalize_unicode_arrow(
+    py: Python,
+    array: PyArrowType<ArrayData>,
+) -> PyResult<PyArrowType<ArrayData>> {
+    Ok(PyArrowType(map_str_to_str(py, array.0, |s| {
+        Some(text::normalize_unicode(s))
+    })?))
+}
+
+#[pyfunction]
+pub fn fix_mojibake_arrow(
+    py: Python,
+    array: PyArrowType<ArrayData>,
+) -> PyResult<PyArrowType<ArrayData>> {
+    Ok(PyArrowType(map_str_to_str(py, array.0, |s| {
+        Some(text::fix_mojibake(s))
+    })?))
+}

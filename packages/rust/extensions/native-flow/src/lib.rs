@@ -78,6 +78,11 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(text::truncate_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(text::pad_left_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(text::pad_right_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(text::lowercase_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(text::uppercase_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(text::title_case_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(text::normalize_unicode_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(text::fix_mojibake_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(url::url_normalize_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(url::url_extract_domain_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(numeric::currency_strip_arrow, m)?)?;
