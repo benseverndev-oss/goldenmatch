@@ -57,6 +57,7 @@ import {
 // ---------------------------------------------------------------------------
 
 export interface AgentSkill {
+  readonly id: string;
   readonly name: string;
   readonly description: string;
   readonly inputModes: readonly string[];
@@ -80,78 +81,94 @@ export interface AgentCard {
 
 /**
  * The 10 native A2A skills. These dispatch through the local `dispatchSkill`
- * switch below (not the MCP registries). Their `name` doubles as the skill id.
+ * switch below (not the MCP registries). `id` is the machine id; `name` is a
+ * curated human label. Two ids (`deduplicate`, `explain`) are aligned to the
+ * Python A2A server's canonical ids; the legacy `dedupe`/`explain_pair` ids
+ * still dispatch (see dispatchSkill).
  */
 const BASE_SKILLS: readonly AgentSkill[] = [
   {
-    name: "dedupe",
+    id: "deduplicate",
+    name: "Deduplicate",
     description: "Deduplicate a list of records and return golden records plus clusters.",
     inputModes: ["data/json"],
     outputModes: ["data/json"],
   },
   {
-    name: "match",
+    id: "match",
+    name: "Match",
     description: "Match target records against reference records.",
     inputModes: ["data/json"],
     outputModes: ["data/json"],
   },
   {
-    name: "score",
+    id: "score",
+    name: "Score",
     description: "Score similarity between two strings.",
     inputModes: ["text"],
     outputModes: ["text"],
   },
   {
-    name: "profile",
+    id: "profile",
+    name: "Profile",
     description: "Profile a dataset (types, null rates, cardinality).",
     inputModes: ["data/json"],
     outputModes: ["data/json"],
   },
   {
-    name: "suggest_config",
+    id: "suggest_config",
+    name: "Suggest Config",
     description: "Auto-generate a shorthand dedupe config from a dataset profile.",
     inputModes: ["data/json"],
     outputModes: ["data/json"],
   },
   {
-    name: "explain_pair",
+    id: "explain",
+    name: "Explain",
     description: "Explain why two records match using weighted field scorers.",
     inputModes: ["data/json"],
     outputModes: ["data/json"],
   },
   {
-    name: "evaluate",
+    id: "evaluate",
+    name: "Evaluate",
     description: "Evaluate predicted pairs vs ground truth (precision/recall/F1).",
     inputModes: ["data/json"],
     outputModes: ["data/json"],
   },
   {
-    name: "list_scorers",
+    id: "list_scorers",
+    name: "List Scorers",
     description: "List all available similarity scorers.",
     inputModes: ["text"],
     outputModes: ["data/json"],
   },
   {
-    name: "list_transforms",
+    id: "list_transforms",
+    name: "List Transforms",
     description: "List all available field transforms.",
     inputModes: ["text"],
     outputModes: ["data/json"],
   },
   {
-    name: "list_strategies",
+    id: "list_strategies",
+    name: "List Strategies",
     description: "List all golden-record survivorship strategies.",
     inputModes: ["text"],
     outputModes: ["data/json"],
   },
 ];
 
-/** Map any registry entry (id/name + description) to the `AgentSkill` shape. */
-function toAgentSkill(entry: {
-  readonly name: string;
-  readonly description: string;
-}): AgentSkill {
+/** Title-case a machine id into a human label: `agent_deduplicate` -> "Agent Deduplicate". */
+function humanize(id: string): string {
+  return id.split("_").map((w) => (w ? w.charAt(0).toUpperCase() + w.slice(1) : w)).join(" ");
+}
+
+/** Map a registry entry ({id, description}) to the spec-shaped `AgentSkill`. */
+function toAgentSkill(entry: { readonly id: string; readonly description: string }): AgentSkill {
   return {
-    name: entry.name,
+    id: entry.id,
+    name: humanize(entry.id),
     description: entry.description,
     inputModes: ["application/json"],
     outputModes: ["application/json"],
@@ -161,23 +178,29 @@ function toAgentSkill(entry: {
 /**
  * Build the card's skill list from the union of every registry: the 10 base
  * A2A skills + the 15 `AGENT_SKILLS` + the memory tools + the identity tools.
- * De-duped by skill id (`name`); first occurrence wins, so a base skill
- * shadows a same-named registry entry.
+ * De-duped by skill `id`; first occurrence wins, so a base skill shadows a
+ * same-id registry entry.
+ *
+ * A2A parity note: the card is A2A-spec-shaped ({id, name}). The core skills
+ * share canonical ids with the Python server (deduplicate, match, explain,
+ * evaluate, ...); the legacy ids `dedupe`/`explain_pair` still dispatch (see
+ * dispatchSkill). The remaining catalog differences (agent_* skills, Python's
+ * finer granularity, TS-only score/profile, Python-only identity_audit/etc.,
+ * and genuinely different ops like pprl vs suggest_pprl) are INTENTIONAL, not
+ * drift — A2A is not gated for parity (MCP tools + CLI are).
  */
 function buildCardSkills(): readonly AgentSkill[] {
   const out: AgentSkill[] = [];
   const seen = new Set<string>();
   const push = (skill: AgentSkill): void => {
-    if (seen.has(skill.name)) return;
-    seen.add(skill.name);
+    if (seen.has(skill.id)) return;
+    seen.add(skill.id);
     out.push(skill);
   };
   for (const skill of BASE_SKILLS) push(skill);
-  for (const def of AGENT_SKILLS) {
-    push(toAgentSkill({ name: def.id, description: def.description }));
-  }
-  for (const tool of MEMORY_TOOLS) push(toAgentSkill(tool));
-  for (const tool of IDENTITY_TOOLS) push(toAgentSkill(tool));
+  for (const def of AGENT_SKILLS) push(toAgentSkill({ id: def.id, description: def.description }));
+  for (const tool of MEMORY_TOOLS) push(toAgentSkill({ id: tool.name, description: tool.description }));
+  for (const tool of IDENTITY_TOOLS) push(toAgentSkill({ id: tool.name, description: tool.description }));
   return out;
 }
 
@@ -261,6 +284,7 @@ async function dispatchSkill(
   input: Record<string, unknown>,
 ): Promise<unknown> {
   switch (skill) {
+    case "deduplicate":   // A2A canonical id
     case "dedupe": {
       if (!Array.isArray(input["rows"])) throw new Error("rows must be an array");
       const rows = input["rows"] as Row[];
@@ -368,6 +392,7 @@ async function dispatchSkill(
       return { suggested: { exact, fuzzy, blocking, threshold: 0.85 } };
     }
 
+    case "explain":        // A2A canonical id
     case "explain_pair": {
       const rowA = input["row_a"] as Row | undefined;
       const rowB = input["row_b"] as Row | undefined;

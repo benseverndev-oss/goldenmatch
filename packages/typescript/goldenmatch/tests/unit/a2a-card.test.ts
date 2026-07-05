@@ -2,22 +2,22 @@ import { describe, it, expect } from "vitest";
 import { AGENT_CARD } from "../../src/node/a2a/server.js";
 
 describe("A2A agent card — union of registries", () => {
-  const names = new Set(AGENT_CARD.skills.map((s) => s.name));
+  const ids = new Set(AGENT_CARD.skills.map((s) => s.id));
 
   it("includes a base A2A skill", () => {
-    expect(names.has("dedupe")).toBe(true);
+    expect(ids.has("deduplicate")).toBe(true);
   });
 
   it("includes an agent skill (analyze_data)", () => {
-    expect(names.has("analyze_data")).toBe(true);
+    expect(ids.has("analyze_data")).toBe(true);
   });
 
   it("includes a memory tool id", () => {
-    expect(names.has("list_corrections")).toBe(true);
+    expect(ids.has("list_corrections")).toBe(true);
   });
 
   it("includes an identity tool id", () => {
-    expect(names.has("identity_resolve")).toBe(true);
+    expect(ids.has("identity_resolve")).toBe(true);
   });
 
   it("advertises bearer authentication", () => {
@@ -28,12 +28,14 @@ describe("A2A agent card — union of registries", () => {
     expect(AGENT_CARD.capabilities["streaming"]).toBe(false);
   });
 
-  it("de-dups skills by name (no duplicate ids)", () => {
-    expect(names.size).toBe(AGENT_CARD.skills.length);
+  it("de-dups skills by id (no duplicate ids)", () => {
+    expect(ids.size).toBe(AGENT_CARD.skills.length);
   });
 
   it("every skill keeps the AgentSkill shape", () => {
     for (const skill of AGENT_CARD.skills) {
+      expect(typeof skill.id).toBe("string");
+      expect(skill.id.length).toBeGreaterThan(0);
       expect(typeof skill.name).toBe("string");
       expect(skill.name.length).toBeGreaterThan(0);
       expect(typeof skill.description).toBe("string");
