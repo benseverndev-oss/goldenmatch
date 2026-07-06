@@ -123,11 +123,11 @@ def discover_functional_dependencies(
             pass
     import polars as pl
 
-    from goldencheck.relations.functional_dependency import _discover_polars
+    from goldencheck.relations.functional_dependency import _discover_python
 
     names = [f"c{i}" for i in range(len(cols))]
     df = pl.DataFrame({n: c for n, c in zip(names, cols)})
-    return _discover_polars(df, names, df.height)
+    return _discover_python(df, names, df.height)
 
 
 # ── approximate functional dependencies ──────────────────────────────────────

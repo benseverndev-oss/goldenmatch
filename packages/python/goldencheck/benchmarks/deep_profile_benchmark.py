@@ -129,10 +129,10 @@ def bench_functional_dependency(rows: int) -> None:
     cols = fd._select_candidates(df, df.height)
 
     def py() -> None:
-        fd._discover_polars(df, cols, df.height)
+        fd._discover_python(df, cols, df.height)
 
     py_wall = _median_wall(py, runs=3)
-    print(f"  pure-Python (Polars) : {py_wall * 1000:9.2f} ms")
+    print(f"  pure-Python          : {py_wall * 1000:9.2f} ms")
 
     if native_available():
         arrays = [df[c].to_arrow() for c in cols]

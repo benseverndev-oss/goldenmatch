@@ -161,8 +161,7 @@ is already Polars/Arrow-vectorized and is NOT a native target.
 `composite_key_search`) — plain `list[...]` in, index/count structures out,
 independent of DataFrames / `Finding` objects. They run the native-gated kernel
 (`GOLDENCHECK_NATIVE`) when built, else reuse the profilers' OWN pure-Python
-fallbacks (`_python_clusters`, `_discover_polars`, `_discover_python`,
-`_python_search`) — one source of truth, so native == fallback byte-for-byte
+fallbacks (`_python_clusters`, `_discover_python`, `_python_search`) — one source of truth, so native == fallback byte-for-byte
 (`tests/core/test_kernels.py`). This is what the DuckDB `goldencheck_*` UDFs
 (`packages/rust/extensions/duckdb/.../goldencheck_kernels.py`) call, and what the
 Postgres `goldencheck_*` functions (native-direct over `goldencheck-core`,
