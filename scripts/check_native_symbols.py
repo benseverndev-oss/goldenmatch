@@ -6,14 +6,23 @@ FAIL (exit 1) if a host reference has no matching kernel export (the #688
 silent-fallback class); REPORT (non-fatal) exports no host references.
 Run from the repo root: python scripts/check_native_symbols.py goldenmatch"""
 from __future__ import annotations
-import re, sys, pathlib
+
+import pathlib
+import re
+import sys
 from dataclasses import dataclass
 
+# goldenpipe is intentionally NOT gated: its `goldenpipe-native` binding is a
+# REFERENCE-MODE parity oracle (see goldenpipe/core/_native_loader.py) — the
+# pure-Python planner (_planner_json.py) is the runtime, and the kernel exists only
+# so the planner parity gate (#1424) can compare byte-identity. There are no
+# host-accelerated references to reconcile; drift is caught by that parity gate.
 REGISTRY = {
     "goldenmatch": {
         "crate_reg": ["packages/rust/extensions/native/src/lib.rs"],
         "py_root": "packages/python/goldenmatch/goldenmatch",
         "loader_tokens": ("native_module", "_ensure_native"),
+        "idiom": "runtime",
         "allow": "parity/native_symbols/goldenmatch.allow",
     },
     "infermap": {
@@ -24,10 +33,32 @@ REGISTRY = {
         "loader_tokens": ("native_module",),
         "allow": "parity/native_symbols/infermap.allow",
     },
+    "goldencheck": {
+        "crate_reg": ["packages/rust/extensions/goldencheck-native/src/lib.rs"],
+        "py_root": "packages/python/goldencheck/goldencheck",
+        "loader_tokens": ("native_module", "_ensure_native"),
+        "idiom": "runtime",
+        "allow": "parity/native_symbols/goldencheck.allow",
+    },
+    "goldenanalysis": {
+        "crate_reg": ["packages/rust/extensions/analysis-native/src/lib.rs"],
+        "py_root": "packages/python/goldenanalysis/goldenanalysis",
+        "loader_tokens": ("native_module", "_ensure_native"),
+        "idiom": "runtime",
+        "allow": "parity/native_symbols/goldenanalysis.allow",
+    },
+    "goldenflow": {
+        "crate_reg": ["packages/rust/extensions/native-flow/src/lib.rs"],
+        "py_root": "packages/python/goldenflow/goldenflow",
+        "loader_tokens": ("native_module",),
+        "idiom": "literal",
+        "literal_pattern": r'"(\w+_arrow)"',
+        "allow": "parity/native_symbols/goldenflow.allow",
+    },
 }
 
 # wrap_pyfunction!( <optional module:: paths> <symbol> , m )   -- \s spans newlines
-_WRAP = re.compile(r"wrap_pyfunction!\(\s*(?:\w+::)+(\w+)")
+_WRAP = re.compile(r"wrap_pyfunction!\(\s*(?:\w+::)*(\w+)")
 _BIND = re.compile(r"(\w+)\s*=\s*(?:native_module\(\)|_ensure_native\(\))(?!\s*\.)")
 
 
@@ -53,13 +84,22 @@ def scan_file_refs(text: str) -> set[str]:
     return syms
 
 
-def scan_references(py_root: str, loader_tokens) -> set[str]:
+def scan_references_text(text: str, idiom: str = "runtime",
+                         literal_pattern: str | None = None) -> set[str]:
+    """One file's referenced-symbol set, by idiom. Pure (testable)."""
+    if idiom == "literal":
+        return set(re.findall(literal_pattern, text)) if literal_pattern else set()
+    return scan_file_refs(text)
+
+
+def scan_references(py_root: str, loader_tokens, idiom: str = "runtime",
+                    literal_pattern: str | None = None) -> set[str]:
     out: set[str] = set()
     for py in pathlib.Path(py_root).rglob("*.py"):
         text = py.read_text(encoding="utf-8")
         if not any(tok in text for tok in loader_tokens):
             continue
-        out |= scan_file_refs(text)
+        out |= scan_references_text(text, idiom, literal_pattern)
     return out
 
 
@@ -92,7 +132,9 @@ def run(package: str) -> int:
         sys.stderr.write(f"no native-symbol registry entry for '{package}'\n")
         return 2
     registered = parse_registrations(spec["crate_reg"])
-    referenced = scan_references(spec["py_root"], spec["loader_tokens"])
+    referenced = scan_references(spec["py_root"], spec["loader_tokens"],
+                                 spec.get("idiom", "runtime"),
+                                 spec.get("literal_pattern"))
     if not referenced:
         sys.stderr.write(f"FAIL: scanned zero kernel references for {package} — "
                          f"the reference idiom is wrong (falsely-green guard)\n")

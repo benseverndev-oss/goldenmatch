@@ -1,0 +1,4 @@
+# Native-symbol allowlist for goldencheck. One symbol per line; `# reason` inline.
+# A host reference whose symbol the static scanner can't attribute to a build
+# (cross-kernel, or a deliberately-aspirational fallback with a tracked issue).
+# EMPTY at bootstrap — the computed FAIL set is empty.
