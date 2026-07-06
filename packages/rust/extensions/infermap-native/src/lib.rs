@@ -7,6 +7,9 @@ use pyo3::prelude::*;
 /// Domain auto-detection. `columns`: df column names. `domains`: list of
 /// (name, deduped hints) in host order. Returns
 /// (domain, score, runner_up, runner_up_score, reason).
+// The 5-tuple return is the DetectionResult wire shape the Python host maps; clippy's
+// type_complexity would rather we alias it, but a pyfunction signature is clearest inline.
+#[allow(clippy::type_complexity)]
 #[pyfunction]
 fn detect_domain(
     columns: Vec<String>,
