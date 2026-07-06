@@ -176,12 +176,16 @@ fn profile_score(
     src_uniq: f64, tgt_uniq: f64,
     src_val_count: f64, tgt_val_count: f64,
     src_avg_len: f64, tgt_avg_len: f64,
-) -> f64 {
-    infermap_core::profile_score(
+) -> PyResult<f64> {
+    Ok(infermap_core::profile_score(
         src_dtype, tgt_dtype, src_null, tgt_null, src_uniq, tgt_uniq,
-        src_val_count, tgt_val_count, src_avg_len, tgt_avg_len)
+        src_val_count, tgt_val_count, src_avg_len, tgt_avg_len))
 }
 ```
+
+> Returns `PyResult<f64>` with `Ok(...)` to match every existing shim in
+> `infermap-native/src/lib.rs` (pyo3 accepts a bare `f64` too, but mirror the
+> house pattern).
 
 Register with `wrap_pyfunction!(self::profile_score, m)?;` (the `self::`
 qualifier is required for `check_native_symbols._WRAP` to scan the export).
@@ -190,8 +194,10 @@ Return type is a plain `f64`, so there is **no `clippy::type_complexity`** issue
 
 ## 6. Loader wiring (`_native_loader.py`)
 
-Add `profile_score` to the gated component-symbol set (`_GATED_ON` /
-`_COMPONENT_SYMBOLS`) so `native_enabled("profile_score")` is `True` under
+Add `profile_score` to the gated component-symbol set. `_COMPONENT_SYMBOLS` is
+the functional wiring (what `native_enabled` actually consults); `_GATED_ON` is
+the sign-off/documentation list — add to both, following the Wave 2 symbols
+which appear in each. So `native_enabled("profile_score")` is `True` under
 `INFERMAP_NATIVE=auto` once the symbol is present, and cleanly falls back to
 pure when the wheel lacks it (the #688 silent-fallback class is exactly what the
 `check_native_symbols` gate guards against).
