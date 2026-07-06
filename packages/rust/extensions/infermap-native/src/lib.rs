@@ -56,6 +56,12 @@ fn profile_score(
         src_val_count, tgt_val_count, src_avg_len, tgt_avg_len))
 }
 
+/// Wave 4 pattern-type scorer: host pre-strips; kernel returns per-sample type bitmask.
+#[pyfunction]
+fn pattern_match_types(samples: Vec<String>) -> PyResult<Vec<u32>> {
+    Ok(infermap_core::pattern_match_types(&samples))
+}
+
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
@@ -67,5 +73,6 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(self::fuzzy_name_score, m)?)?;
     m.add_function(wrap_pyfunction!(self::initialism_score, m)?)?;
     m.add_function(wrap_pyfunction!(self::profile_score, m)?)?;
+    m.add_function(wrap_pyfunction!(self::pattern_match_types, m)?)?;
     Ok(())
 }
