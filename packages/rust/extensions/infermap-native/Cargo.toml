@@ -1,0 +1,32 @@
+# Standalone workspace (empty [workspace]) so pyo3's `extension-module` feature
+# here is NOT unified with the `bridge` crate's `auto-initialize` feature -- the
+# two are mutually incompatible (ext-module must NOT link libpython; embedding
+# must). Mirrors goldencheck-native / analysis-native / goldenmatch's `native` crate.
+[workspace]
+
+[package]
+name = "infermap-native"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Ben Severn <ben@bensevern.dev>"]
+description = "Native acceleration kernels for InferMap (PyO3 extension module)"
+
+[lib]
+# Produces lib_native.so; renamed to infermap/_native.abi3.so at install
+# (scripts/build_infermap_native.py), or shipped as infermap_native/_native
+# by maturin. The #[pymodule] is `_native`, so the init symbol is PyInit__native.
+name = "_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+# abi3-py311: one stable-ABI artifact spans CPython 3.11-3.13.
+# extension-module: don't link libpython (this .so is imported BY CPython).
+pyo3 = { version = ">=0.28, <0.29", features = ["extension-module", "abi3-py311"] }
+# Pyo3-free detect kernel; the #[pyfunction] shim below is a thin string-taking
+# wrapper over this crate. No Arrow -- detect takes plain Python lists.
+infermap-core = { path = "../infermap-core" }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
