@@ -1,0 +1,44 @@
+{
+  "float_nan_null": {
+    "distinct": {
+      "f": 4
+    },
+    "dup_ratio": 0.8571428571428571,
+    "null_ratio": {
+      "f": 0.14285714285714285
+    }
+  },
+  "mixed": {
+    "distinct": {
+      "f": 4,
+      "i": 3,
+      "s": 4
+    },
+    "dup_ratio": 0.2857142857142857,
+    "null_ratio": {
+      "f": 0.14285714285714285,
+      "i": 0.14285714285714285,
+      "s": 0.2857142857142857
+    }
+  },
+  "string_empty_null": {
+    "distinct": {
+      "s": 4
+    },
+    "dup_ratio": 0.7142857142857143,
+    "null_ratio": {
+      "s": 0.2857142857142857
+    }
+  },
+  "typed_numeric": {
+    "distinct": {
+      "g": 3,
+      "i": 3
+    },
+    "dup_ratio": 0.6,
+    "null_ratio": {
+      "g": 0.2,
+      "i": 0.2
+    }
+  }
+}
