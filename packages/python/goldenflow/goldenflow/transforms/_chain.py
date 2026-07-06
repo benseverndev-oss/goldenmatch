@@ -54,8 +54,13 @@ FUSABLE_KERNELS: frozenset[str] = frozenset(
 
 
 def fused_enabled() -> bool:
-    """The fused chain path is active iff explicitly opted in AND native is on."""
-    if os.environ.get("GOLDENFLOW_FUSED_APPLY", "").lower() not in ("1", "true", "on"):
+    """The fused chain path is active by DEFAULT whenever the native fused kernel is
+    available (measured byte-identical to the per-transform path, faster wall + ~20%
+    lower peak RSS at scale). Opt-OUT via ``GOLDENFLOW_FUSED_APPLY=0`` (mirrors
+    ``GOLDENFLOW_NATIVE``'s auto/0 semantics); it also stays off when native is
+    forced off or the fused symbol isn't in the installed wheel (graceful fallback
+    to per-transform, so a pre-0.12.0 goldenflow-native is unaffected)."""
+    if os.environ.get("GOLDENFLOW_FUSED_APPLY", "").lower() in ("0", "false", "off"):
         return False
     if os.environ.get("GOLDENFLOW_NATIVE", "auto").lower() == "0":
         return False

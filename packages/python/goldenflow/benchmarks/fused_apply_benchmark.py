@@ -123,10 +123,9 @@ def run_variant(variant: str, rows: int, runs: int, seed: int) -> dict:
     """Run one leg (per_transform | fused): warmup + `runs` timed passes, returning
     the median wall, throughput, peak RSS, output digest, and whether the fused
     native path actually engaged."""
-    if variant == "fused":
-        os.environ["GOLDENFLOW_FUSED_APPLY"] = "1"
-    else:
-        os.environ.pop("GOLDENFLOW_FUSED_APPLY", None)
+    # Explicit both ways: fused is default-on now, so the per-transform baseline
+    # must FORCE off (=0) rather than rely on an unset var.
+    os.environ["GOLDENFLOW_FUSED_APPLY"] = "1" if variant == "fused" else "0"
 
     from goldenflow.transforms._chain import fused_enabled
 

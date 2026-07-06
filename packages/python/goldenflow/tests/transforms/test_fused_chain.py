@@ -96,7 +96,7 @@ def test_fused_equals_per_transform(monkeypatch, ops) -> None:
     )
     cfg = _cfg("name", ops)
 
-    monkeypatch.delenv("GOLDENFLOW_FUSED_APPLY", raising=False)
+    monkeypatch.setenv("GOLDENFLOW_FUSED_APPLY", "0")  # opt-OUT -> per-transform
     per_op = transform_df(df, config=cfg)
 
     monkeypatch.setenv("GOLDENFLOW_FUSED_APPLY", "1")
@@ -106,14 +106,30 @@ def test_fused_equals_per_transform(monkeypatch, ops) -> None:
     assert _manifest_rows(fused) == _manifest_rows(per_op), "fused manifest diverged"
 
 
-def test_flag_off_is_the_per_transform_path(monkeypatch) -> None:
-    """Default-off: the engine refactor must not change behavior when the flag is
-    unset (runs locally with no native — the fused path can't engage anyway)."""
+def test_opt_out_is_the_per_transform_path(monkeypatch) -> None:
+    """Opt-out: GOLDENFLOW_FUSED_APPLY=0 forces the per-transform path (and it's the
+    only path anyway with no native). Output + audit records unchanged."""
     from goldenflow import transform_df
 
-    monkeypatch.delenv("GOLDENFLOW_FUSED_APPLY", raising=False)
+    monkeypatch.setenv("GOLDENFLOW_FUSED_APPLY", "0")
     df = pl.DataFrame({"name": ["  John  ", "MARY  ", None]})
     out = transform_df(df, config=_cfg("name", ["strip", "lowercase"]))
     assert out.df["name"].to_list() == ["john", "mary", None]
     # two ops -> two audit records, in order.
     assert [r.transform for r in out.manifest.records] == ["strip", "lowercase"]
+
+
+def test_default_is_fused_when_native_available(monkeypatch) -> None:
+    """The default (flag unset) now fuses whenever the native kernel is present —
+    opt-OUT semantics. With native absent, fused_enabled() is False (graceful)."""
+    from goldenflow.core._native_loader import native_module
+    from goldenflow.transforms._chain import fused_enabled
+
+    monkeypatch.delenv("GOLDENFLOW_FUSED_APPLY", raising=False)
+    monkeypatch.delenv("GOLDENFLOW_NATIVE", raising=False)
+    nm = native_module()
+    expected = nm is not None and hasattr(nm, "apply_chain_arrow")
+    assert fused_enabled() is expected
+    # explicit off always wins
+    monkeypatch.setenv("GOLDENFLOW_FUSED_APPLY", "0")
+    assert fused_enabled() is False
