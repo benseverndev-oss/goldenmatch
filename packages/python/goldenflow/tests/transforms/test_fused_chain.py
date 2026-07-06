@@ -66,6 +66,11 @@ def _manifest_rows(result) -> list[tuple]:
         ["strip", "lowercase", "collapse_whitespace", "remove_punctuation"],
         ["remove_html_tags", "remove_urls", "strip", "collapse_whitespace"],
         ["normalize_unicode", "lowercase", "remove_digits"],
+        # widened families (email / name normalizers / extract_numbers)
+        ["strip", "lowercase", "email_normalize", "email_canonical"],
+        ["name_transliterate", "name_proper", "strip_titles", "strip_suffixes"],
+        ["strip", "name_proper", "strip_middle", "name_initials"],
+        ["strip", "extract_numbers"],
     ],
 )
 def test_fused_equals_per_transform(monkeypatch, ops) -> None:
