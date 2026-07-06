@@ -1,0 +1,26 @@
+# Standalone workspace so this wasm-bindgen wrapper can path-depend on the
+# pyo3-free `infermap-core` WITHOUT either crate's workspace claiming it. This
+# crate is the TS analogue of `infermap-native` (pyo3): it wraps the SAME
+# `infermap-core`, so detect is byte-identical by construction. serde lives HERE
+# (the JSON boundary), never in infermap-core.
+[workspace]
+
+[package]
+name = "infermap-wasm"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Ben Severn <benzsevern@gmail.com>"]
+description = "wasm-bindgen wrapper over infermap-core for the infermap TS opt-in WASM backend"
+
+[lib]
+name = "infermap_wasm"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+infermap-core = { path = "../infermap-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
