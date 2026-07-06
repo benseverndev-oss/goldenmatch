@@ -41,3 +41,11 @@ serde_json = "1"
 name = "columnar_pilot"
 harness = false
 required-features = ["arrow"]
+
+# Fused columnar apply bench (Pillar-1): a realistic multi-op cleanup chain run
+# per-transform (N boundary crossings) vs fused in one pass. Same std::time
+# 5-run-median convention as columnar_pilot.
+[[bench]]
+name = "chain_apply"
+harness = false
+required-features = ["arrow"]

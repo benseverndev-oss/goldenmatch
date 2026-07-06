@@ -140,6 +140,7 @@ class TransformEngine:
                 if spec.column not in df.columns:
                     progress.advance(task)
                     continue
+                ops: list[tuple[TransformInfo, list[str]]] = []
                 for op_raw in spec.ops:
                     name, params = parse_transform_name(op_raw)
                     info = get_transform(name)
@@ -149,7 +150,8 @@ class TransformEngine:
                             error=f"Transform '{name}' not found in registry",
                         )
                         continue
-                    df = self._apply_single_transform(df, spec.column, info, params, manifest)
+                    ops.append((info, params))
+                df = self._apply_column_ops(df, spec.column, ops, manifest)
                 progress.advance(task)
         return df
 
@@ -172,10 +174,8 @@ class TransformEngine:
             for col_profile in profile.columns:
                 progress.update(task, description=f"Auto-transforming {col_profile.name}...")
                 selected = select_transforms(col_profile)
-                for info in selected:
-                    df = self._apply_single_transform(
-                        df, col_profile.name, info, [], manifest
-                    )
+                ops = [(info, []) for info in selected]
+                df = self._apply_column_ops(df, col_profile.name, ops, manifest)
                 progress.advance(task)
 
         if os.environ.get("GOLDENFLOW_LLM") == "1":
@@ -190,6 +190,82 @@ class TransformEngine:
                 pass
 
         return df
+
+    def _apply_column_ops(
+        self,
+        df: pl.DataFrame,
+        column: str,
+        ops: list[tuple[TransformInfo, list[str]]],
+        manifest: Manifest,
+    ) -> pl.DataFrame:
+        """Apply an ordered list of ``(info, params)`` to ``column``. When
+        ``GOLDENFLOW_FUSED_APPLY`` is on (and native is available and the column is
+        string), maximal runs of owned string->string no-arg kernels are fused into
+        ONE native Arrow round-trip (Pillar-1 of the Rust cutover); everything else
+        takes the per-transform path unchanged. Default-off, so behavior is
+        byte-identical to the per-transform path until opted in."""
+        from goldenflow.transforms._chain import FUSABLE_KERNELS, fused_enabled
+
+        fuse = fused_enabled() and df.schema.get(column) in (pl.String, pl.Utf8)
+        n = len(ops)
+        i = 0
+        while i < n:
+            info, params = ops[i]
+            if fuse and not params and info.name in FUSABLE_KERNELS:
+                # Extend the maximal fusable run starting at i.
+                j = i
+                while j < n and not ops[j][1] and ops[j][0].name in FUSABLE_KERNELS:
+                    j += 1
+                if j - i >= 2:
+                    applied = self._apply_fused_run(df, column, ops[i:j], manifest)
+                    if applied is not None:
+                        df = applied
+                        i = j
+                        continue
+                    # native declined (e.g. no pyarrow) -> fall through per-op.
+            df = self._apply_single_transform(df, column, info, params, manifest)
+            i += 1
+        return df
+
+    def _apply_fused_run(
+        self,
+        df: pl.DataFrame,
+        column: str,
+        run: list[tuple[TransformInfo, list[str]]],
+        manifest: Manifest,
+    ) -> pl.DataFrame | None:
+        """Apply a run of fusable ops via one native chain pass. Emits one audit
+        record per op with the EXACT affected-row count from the kernel and
+        per-step before/after samples from a cheap head(3) replay through the SAME
+        owned kernels (byte-identical to the fused output). Fusable kernels are
+        ``mode='expr'`` or ``'series'`` (never ``'dataframe'``), so the replay
+        dispatches on mode. Returns the new frame, or ``None`` if the native path
+        declined (caller falls back to the per-op path)."""
+        from goldenflow.transforms._chain import apply_chain_native
+
+        names = [info.name for info, _ in run]
+        res = apply_chain_native(df[column], names)
+        if res is None:
+            return None
+        new_series, changed = res
+        total_rows = df.shape[0]
+        sample = df.head(3).select(pl.col(column))
+        for (info, _params), n_changed in zip(run, changed):
+            before = sample[column].head(3).cast(pl.Utf8).to_list()
+            if info.mode == "series":
+                sample = sample.with_columns(info.func(sample[column]).alias(column))
+            else:  # expr
+                sample = sample.with_columns(info.func(column).alias(column))
+            after = sample[column].head(3).cast(pl.Utf8).to_list()
+            manifest.add_record(TransformRecord(
+                column=column,
+                transform=info.name,
+                affected_rows=int(n_changed),
+                total_rows=total_rows,
+                sample_before=before,
+                sample_after=after,
+            ))
+        return df.with_columns(new_series.alias(column))
 
     def _apply_single_transform(
         self,
