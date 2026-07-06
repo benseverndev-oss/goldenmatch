@@ -36,6 +36,19 @@ FUSABLE_KERNELS: frozenset[str] = frozenset(
         "remove_digits",
         "remove_punctuation",
         "remove_emojis",
+        "extract_numbers",
+        # email family (total string->string)
+        "email_lowercase",
+        "email_normalize",
+        "email_canonical",
+        # name-normalizer family (total string->string)
+        "name_transliterate",
+        "strip_titles",
+        "strip_suffixes",
+        "name_proper",
+        "nickname_standardize",
+        "name_initials",
+        "strip_middle",
     }
 )
 

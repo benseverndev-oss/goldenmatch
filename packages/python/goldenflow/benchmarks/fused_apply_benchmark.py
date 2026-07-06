@@ -66,29 +66,32 @@ BIO_POOL = [
     "see https://a.co?q=1&utm_source=z end",
     "<p>hello</p>  world",
 ]
-CITY_POOL = [
-    "SÃO PAULO",
-    "münchen",
-    "new york",
-    "MONTRÉAL",
-    "  zürich  ",
-    "São Paulo ",
+EMAIL_POOL = [
+    "  John.SMITH@Googlemail.com ",
+    "o'brien+tag@Example.CO ",
+    " MARY_JANE@work.org",
+    "DE.LA.CRUZ@Company.com  ",
+    " d'angelo@Foo.Bar ",
 ]
 
-# A per-column chain of ONLY fusable (owned, string->string, no-arg) ops — the
-# case the fused path targets. 11 ops across 3 columns: per-transform crosses the
-# boundary 11 times; fused, 3 (one run per column).
+# Per-column chains of ONLY fusable (owned, string->string, no-arg) ops — the case
+# the fused path targets, and now spanning the WIDENED set: text + NAME normalizers
+# + EMAIL family (these last two previously fell to the per-transform path). 13 ops
+# across 3 columns: per-transform crosses the boundary 13 times; fused, 3.
 CONFIG = GoldenFlowConfig(
     transforms=[
         TransformSpec(
             column="full_name",
-            ops=["strip", "lowercase", "collapse_whitespace", "remove_punctuation"],
+            ops=["strip", "name_transliterate", "name_proper", "strip_titles", "strip_suffixes"],
+        ),
+        TransformSpec(
+            column="email",
+            ops=["strip", "lowercase", "email_normalize", "email_canonical"],
         ),
         TransformSpec(
             column="bio",
             ops=["remove_html_tags", "remove_urls", "strip", "collapse_whitespace"],
         ),
-        TransformSpec(column="city", ops=["normalize_unicode", "strip", "title_case"]),
     ]
 )
 
@@ -98,8 +101,8 @@ def build_df(rows: int, seed: int = SEED) -> pl.DataFrame:
     return pl.DataFrame(
         {
             "full_name": [f"{rng.choice(NAME_POOL)}{i % 97}" for i in range(rows)],
+            "email": [rng.choice(EMAIL_POOL) for _ in range(rows)],
             "bio": [f"{rng.choice(BIO_POOL)} #{i % 89}" for i in range(rows)],
-            "city": [f"{rng.choice(CITY_POOL)}{i % 61}" for i in range(rows)],
         }
     )
 
@@ -196,8 +199,10 @@ def main() -> None:
     speedup = base["wall_ms"] / fused["wall_ms"] if fused["wall_ms"] else float("nan")
     rss_delta = fused["rss_mb"] - base["rss_mb"]
 
+    n_ops = sum(len(t.ops) for t in CONFIG.transforms)
+    n_cols = len(CONFIG.transforms)
     print(f"GoldenFlow fused-apply A/B -- {args.rows:,} rows, {args.runs}-run median wall")
-    print(f"config: 11 fusable ops across 3 columns ({base['records']} audit records)\n")
+    print(f"config: {n_ops} fusable ops across {n_cols} columns ({base['records']} audit records)\n")
     print(f"  {'variant':<16}{'wall (ms)':>12}{'M rows/s':>12}{'peak RSS MB':>14}")
     for r in (base, fused):
         print(

@@ -25,7 +25,7 @@
 use arrow_array::{Array, GenericStringArray, OffsetSizeTrait};
 use arrow_buffer::{Buffer, OffsetBuffer, ScalarBuffer};
 
-use crate::text;
+use crate::{email, names, text};
 
 /// One owned, no-arg, total string→string kernel eligible for the fused chain.
 /// The name mapping (`from_name`) is the single source of truth the host's
@@ -46,6 +46,19 @@ pub enum Kernel {
     RemoveDigits,
     RemovePunctuation,
     RemoveEmojis,
+    ExtractNumbers,
+    // email family (total string->string)
+    EmailLowercase,
+    EmailNormalize,
+    EmailCanonical,
+    // name family (total string->string normalizers)
+    NameTransliterate,
+    StripTitles,
+    StripSuffixes,
+    NameProper,
+    NicknameStandardize,
+    NameInitials,
+    StripMiddle,
 }
 
 impl Kernel {
@@ -69,6 +82,17 @@ impl Kernel {
             "remove_digits" => Kernel::RemoveDigits,
             "remove_punctuation" => Kernel::RemovePunctuation,
             "remove_emojis" => Kernel::RemoveEmojis,
+            "extract_numbers" => Kernel::ExtractNumbers,
+            "email_lowercase" => Kernel::EmailLowercase,
+            "email_normalize" => Kernel::EmailNormalize,
+            "email_canonical" => Kernel::EmailCanonical,
+            "name_transliterate" => Kernel::NameTransliterate,
+            "strip_titles" => Kernel::StripTitles,
+            "strip_suffixes" => Kernel::StripSuffixes,
+            "name_proper" => Kernel::NameProper,
+            "nickname_standardize" => Kernel::NicknameStandardize,
+            "name_initials" => Kernel::NameInitials,
+            "strip_middle" => Kernel::StripMiddle,
             _ => return None,
         })
     }
@@ -89,6 +113,17 @@ impl Kernel {
         "remove_digits",
         "remove_punctuation",
         "remove_emojis",
+        "extract_numbers",
+        "email_lowercase",
+        "email_normalize",
+        "email_canonical",
+        "name_transliterate",
+        "strip_titles",
+        "strip_suffixes",
+        "name_proper",
+        "nickname_standardize",
+        "name_initials",
+        "strip_middle",
     ];
 
     /// Append `s` transformed by this kernel into `out` (which the caller has
@@ -112,6 +147,17 @@ impl Kernel {
             Kernel::RemoveDigits => text::remove_digits_into(s, out),
             Kernel::RemovePunctuation => text::remove_punctuation_into(s, out),
             Kernel::RemoveEmojis => text::remove_emojis_into(s, out),
+            Kernel::ExtractNumbers => out.push_str(&text::extract_numbers(s)),
+            Kernel::EmailLowercase => out.push_str(&email::email_lowercase(s)),
+            Kernel::EmailNormalize => out.push_str(&email::email_normalize(s)),
+            Kernel::EmailCanonical => out.push_str(&email::email_canonical(s)),
+            Kernel::NameTransliterate => out.push_str(&names::name_transliterate(s)),
+            Kernel::StripTitles => out.push_str(&names::strip_titles(s)),
+            Kernel::StripSuffixes => out.push_str(&names::strip_suffixes(s)),
+            Kernel::NameProper => out.push_str(&names::name_proper(s)),
+            Kernel::NicknameStandardize => out.push_str(&names::nickname_standardize(s)),
+            Kernel::NameInitials => out.push_str(&names::name_initials(s)),
+            Kernel::StripMiddle => out.push_str(&names::strip_middle(s)),
         }
     }
 }
@@ -233,6 +279,22 @@ mod tests {
                 Kernel::NormalizeQuotes,
                 Kernel::Uppercase,
             ],
+            // widened families: email + name normalizers + extract_numbers.
+            &[
+                Kernel::Strip,
+                Kernel::Lowercase,
+                Kernel::EmailNormalize,
+                Kernel::EmailCanonical,
+            ],
+            &[
+                Kernel::NameTransliterate,
+                Kernel::NameProper,
+                Kernel::StripTitles,
+                Kernel::StripSuffixes,
+                Kernel::StripMiddle,
+            ],
+            &[Kernel::NicknameStandardize, Kernel::NameInitials],
+            &[Kernel::ExtractNumbers],
         ];
         let arr = sample();
         for chain in chains {
