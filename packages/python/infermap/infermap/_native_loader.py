@@ -34,11 +34,18 @@ except Exception:  # noqa: BLE001 - any import/load failure falls back below
 # ``INFERMAP_NATIVE=auto``. ``detect_domain`` joined after ``test_native_parity.py``
 # proved byte-identical output. (detect is small-compute -- this is anti-drift /
 # scaffold, not a perf claim; a new primitive joins only after the parity gate clears.)
-_GATED_ON: frozenset[str] = frozenset({"detect_domain"})
+_GATED_ON: frozenset[str] = frozenset(
+    {"detect_domain", "exact_score", "fuzzy_name_score", "initialism_score"}
+)
 
 # Component -> the native symbol that backs it (component name == symbol here). A
 # component is only usable when its symbol is present on the loaded module.
-_COMPONENT_SYMBOLS: dict[str, str] = {"detect_domain": "detect_domain"}
+_COMPONENT_SYMBOLS: dict[str, str] = {
+    "detect_domain": "detect_domain",
+    "exact_score": "exact_score",
+    "fuzzy_name_score": "fuzzy_name_score",
+    "initialism_score": "initialism_score",
+}
 
 
 def _has_symbol(component: str) -> bool:

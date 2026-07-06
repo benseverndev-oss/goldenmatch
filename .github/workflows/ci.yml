@@ -585,6 +585,14 @@ jobs:
               # this lane the detect_domain kernel is UNTESTED in CI.
               - 'packages/rust/extensions/infermap-native/**'
               - 'packages/rust/extensions/infermap-core/**'
+              # Wave 2: infermap-core reuses score-core's jaro-winkler -> a change there
+              # must re-run InferMap's fuzzy parity gate (native_flow/goldenflow-core
+              # convention). The scorer files hold the _*_pure references the parity
+              # test imports.
+              - 'packages/rust/extensions/score-core/**'
+              - 'packages/python/infermap/infermap/scorers/exact.py'
+              - 'packages/python/infermap/infermap/scorers/fuzzy_name.py'
+              - 'packages/python/infermap/infermap/scorers/initialism.py'
               - 'packages/python/infermap/infermap/_native_loader.py'
               - 'packages/python/infermap/infermap/detect.py'
               - 'packages/python/infermap/tests/test_native_parity.py'

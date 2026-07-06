@@ -103,9 +103,190 @@ pub fn detect_domain(
     }
 }
 
+// ===========================================================================
+// Wave 2: pure name-scorer kernels. Mirror infermap/scorers/{exact,fuzzy_name,
+// initialism}.py value-for-value. Each returns the SCORE; the Python scorer class
+// keeps its reasoning string (dodges float-format parity).
+// ===========================================================================
+
+use goldenmatch_score_core::jaro_winkler_similarity;
+
+/// ExactScorer: 1.0 iff trimmed-lowercased names are equal, else 0.0.
+pub fn exact_score(a: &str, b: &str) -> f64 {
+    if a.trim().to_lowercase() == b.trim().to_lowercase() {
+        1.0
+    } else {
+        0.0
+    }
+}
+
+/// normalize = strip + lower + remove `_`, `-`, ` ` (mirrors `fuzzy_name._normalize`).
+fn normalize(s: &str) -> String {
+    s.trim()
+        .to_lowercase()
+        .chars()
+        .filter(|&c| c != '_' && c != '-' && c != ' ')
+        .collect()
+}
+
+/// FuzzyNameScorer: Jaro-Winkler on normalized names (reuses score-core).
+pub fn fuzzy_name_score(a: &str, b: &str) -> f64 {
+    jaro_winkler_similarity(&normalize(a), &normalize(b))
+}
+
+/// Tokenizer -- a hand-written char-scanner reproducing the INLINE regex at
+/// `initialism.py:40` (`[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z]+|[A-Z]+|\d+`) with its
+/// backtracking, since Rust's `regex` crate has no lookahead. Splits on `_ - .`
+/// whitespace; per chunk, an uppercase run of len>=2 immediately followed by a
+/// lowercase peels its last char onto the following word (`providerIDs`->
+/// `[provider,i,ds]`); else the whole run / word / digit-run is a token; all lowercased.
+fn tokenize(name: &str) -> Vec<String> {
+    let mut tokens: Vec<String> = Vec::new();
+    for chunk in name.split(|c: char| c == '_' || c == '-' || c == '.' || c.is_whitespace()) {
+        if chunk.is_empty() {
+            continue;
+        }
+        let ch: Vec<char> = chunk.chars().collect();
+        let n = ch.len();
+        let mut i = 0;
+        while i < n {
+            let c = ch[i];
+            if c.is_ascii_uppercase() {
+                let mut e = i;
+                while e < n && ch[e].is_ascii_uppercase() {
+                    e += 1;
+                }
+                let run_len = e - i;
+                if run_len >= 2 && e < n && ch[e].is_ascii_lowercase() {
+                    // alt1: acronym = run minus its last char; last char starts next word.
+                    tokens.push(ch[i..e - 1].iter().collect::<String>().to_lowercase());
+                    i = e - 1;
+                } else if run_len == 1 && e < n && ch[e].is_ascii_lowercase() {
+                    // alt2: [A-Z]?[a-z]+ word.
+                    let mut w = e;
+                    while w < n && ch[w].is_ascii_lowercase() {
+                        w += 1;
+                    }
+                    tokens.push(ch[i..w].iter().collect::<String>().to_lowercase());
+                    i = w;
+                } else {
+                    // alt3: [A-Z]+ acronym (end-of-chunk or followed by non-lowercase).
+                    tokens.push(ch[i..e].iter().collect::<String>().to_lowercase());
+                    i = e;
+                }
+            } else if c.is_ascii_lowercase() {
+                // alt2 with empty [A-Z]?: a lowercase run.
+                let mut w = i;
+                while w < n && ch[w].is_ascii_lowercase() {
+                    w += 1;
+                }
+                tokens.push(ch[i..w].iter().collect::<String>().to_lowercase());
+                i = w;
+            } else if c.is_ascii_digit() {
+                // alt4: \d+.
+                let mut d = i;
+                while d < n && ch[d].is_ascii_digit() {
+                    d += 1;
+                }
+                tokens.push(ch[i..d].iter().collect::<String>());
+                i = d;
+            } else {
+                i += 1; // non-matching char (findall skips it)
+            }
+        }
+    }
+    tokens
+}
+
+/// DP: can `target` be formed by concatenating >=1-char prefixes of `source_tokens`
+/// in order, using each exactly once? Mirrors `initialism._is_prefix_concat` (char-wise).
+fn is_prefix_concat(target: &str, source_tokens: &[String]) -> bool {
+    let t: Vec<char> = target.to_lowercase().chars().collect();
+    let toks: Vec<Vec<char>> = source_tokens.iter().map(|s| s.chars().collect()).collect();
+    let (n_src, n_tgt) = (toks.len(), t.len());
+    if n_src == 0 || n_tgt == 0 {
+        return false;
+    }
+    let mut dp = vec![vec![false; n_tgt + 1]; n_src + 1];
+    dp[0][0] = true;
+    for i in 1..=n_src {
+        let tok = &toks[i - 1];
+        for j in 1..=n_tgt {
+            let kmax = tok.len().min(j);
+            for k in 1..=kmax {
+                if t[j - k..j] == tok[..k] && dp[i - 1][j - k] {
+                    dp[i][j] = true;
+                    break;
+                }
+            }
+        }
+    }
+    dp[n_src][n_tgt]
+}
+
+/// InitialismScorer: `0.6 + 0.35*(len_short/len_long)` when one side is a prefix-concat
+/// abbreviation of the other; `None` (abstain) otherwise. Mirrors `_score_pair`.
+pub fn initialism_score(a: &str, b: &str) -> Option<f64> {
+    let tok_a = tokenize(a);
+    let tok_b = tokenize(b);
+    let joined_a: String = tok_a.concat();
+    let joined_b: String = tok_b.concat();
+    if joined_a.is_empty() || joined_b.is_empty() {
+        return None;
+    }
+    if joined_a == joined_b {
+        return None;
+    }
+    let (long, short) = if is_prefix_concat(&joined_b, &tok_a) {
+        (&joined_a, &joined_b)
+    } else if is_prefix_concat(&joined_a, &tok_b) {
+        (&joined_b, &joined_a)
+    } else {
+        return None;
+    };
+    // CHAR count (Python `len()`), not byte `.len()`; exact op order for byte-parity.
+    let ratio = short.chars().count() as f64 / long.chars().count() as f64;
+    Some(0.6 + 0.35 * ratio)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exact_match_and_mismatch() {
+        assert_eq!(exact_score("City", " city "), 1.0);
+        assert_eq!(exact_score("a", "b"), 0.0);
+    }
+
+    #[test]
+    fn fuzzy_identical_and_disjoint() {
+        assert_eq!(fuzzy_name_score("city", "city"), 1.0);
+        assert_eq!(fuzzy_name_score("abc", "xyz"), 0.0);
+    }
+
+    #[test]
+    fn tokenize_camelcase_examples() {
+        assert_eq!(tokenize("HTTPSConnection"), vec!["https", "connection"]);
+        assert_eq!(tokenize("providerID"), vec!["provider", "id"]);
+        assert_eq!(tokenize("order_id"), vec!["order", "id"]);
+        assert_eq!(tokenize("ABC"), vec!["abc"]);
+        assert_eq!(tokenize("v2Name"), vec!["v", "2", "name"]);
+        // Load-bearing boundary: N-upper run + single trailing lowercase.
+        assert_eq!(tokenize("providerIDs"), vec!["provider", "i", "ds"]);
+        assert_eq!(tokenize("URLs"), vec!["ur", "ls"]);
+        assert_eq!(tokenize("iOS"), vec!["i", "os"]);
+        assert_eq!(tokenize("macOS"), vec!["mac", "os"]);
+        assert_eq!(tokenize("Name"), vec!["name"]);
+    }
+
+    #[test]
+    fn initialism_abbrev_and_abstain() {
+        let s = initialism_score("assay_id", "ASSI").unwrap();
+        assert!((s - (0.6 + 0.35 * (4.0 / 7.0))).abs() < 1e-12);
+        assert_eq!(initialism_score("city", "town"), None);
+        assert_eq!(initialism_score("city", "city"), None);
+    }
 
     fn d(name: &str, hints: &[&str]) -> (String, Vec<String>) {
         (name.to_string(), hints.iter().map(|s| s.to_string()).collect())

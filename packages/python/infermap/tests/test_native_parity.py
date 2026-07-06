@@ -45,3 +45,52 @@ def test_detect_parity(columns, domains, min_score):
 def test_pure_stands_alone_without_wheel():
     """Box-runnable: the pure reference works regardless of the native ext."""
     assert _detect_core_pure(["a", "b"], [("x", ["a"])], 0.3) == ("x", 0.5, None, 0.0, "confident")
+
+
+# ---------------------------------------------------------------------------
+# Wave 2: name-scorer parity (exact / fuzzy_name / initialism)
+# ---------------------------------------------------------------------------
+
+from infermap.scorers.exact import _exact_score_pure  # noqa: E402
+from infermap.scorers.fuzzy_name import _fuzzy_name_score_pure  # noqa: E402
+from infermap.scorers.initialism import _score_pair  # noqa: E402
+
+# ASCII name pairs (the Unicode-lower/\\s edge is the documented parity edge, spec §6.3).
+_NAME_PAIRS = [
+    ("City", "city"),
+    ("provider_npi", "ProviderNPI"),
+    ("first_name", "firstName"),
+    ("assay_id", "ASSI"),
+    ("confidence_score", "CONSC"),
+    ("variant_id", "VARI"),
+    ("order_id", "orderid"),
+    ("abc", "xyz"),
+    ("HTTPSConnection", "https_connection"),
+    ("a", "a"),
+    ("dob", "date_of_birth"),
+    # tokenizer-boundary pairs (the providerIDs/URLs class a naive impl gets wrong)
+    ("providerIDs", "provider_i_ds"),
+    ("URLs", "ur_ls"),
+    ("macOS", "mac_os"),
+    ("iOS", "i_os"),
+]
+
+
+@native_only
+@pytest.mark.parametrize("a,b", _NAME_PAIRS)
+def test_exact_parity(a, b):
+    assert native_module().exact_score(a, b) == _exact_score_pure(a, b)
+
+
+@native_only
+@pytest.mark.parametrize("a,b", _NAME_PAIRS)
+def test_fuzzy_parity(a, b):
+    # rapidfuzz-rs (score-core) vs Python rapidfuzz byte-equality re-validation (spec §6.1).
+    assert native_module().fuzzy_name_score(a, b) == _fuzzy_name_score_pure(a, b)
+
+
+@native_only
+@pytest.mark.parametrize("a,b", _NAME_PAIRS)
+def test_initialism_parity(a, b):
+    # both None (abstain) or both the same graded float.
+    assert native_module().initialism_score(a, b) == _score_pair(a, b)
