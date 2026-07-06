@@ -101,6 +101,9 @@ _COMPONENT_SYMBOLS: dict[str, tuple[str, ...]] = {
     # url: normalize/extract_domain -- floor symbol only (url_normalize_arrow),
     # locale-free, region-free.
     "url": ("url_normalize_arrow",),
+    # company: normalize/strip_legal/extract_legal -- floor symbol only
+    # (company_normalize_arrow), locale-free (curated legal-suffix table).
+    "company": ("company_normalize_arrow",),
     # numeric: string->number parsers (currency/percentage/to_integer/
     # comma_decimal/scientific_to_decimal) + numeric-array ops (round/clamp/
     # abs_value/fill_zero) -- floor symbol only (currency_strip_arrow),

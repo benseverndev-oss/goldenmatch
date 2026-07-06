@@ -15,6 +15,7 @@ mod wasm {
     use goldenflow_core::address;
     use goldenflow_core::autocorrect;
     use goldenflow_core::categorical;
+    use goldenflow_core::company;
     use goldenflow_core::email;
     use goldenflow_core::identifiers::{aba, ean, iban, imei, isbn, luhn, swift, vat};
     use goldenflow_core::names;
@@ -42,6 +43,21 @@ mod wasm {
     #[wasm_bindgen]
     pub fn email_validate(s: &str) -> Option<bool> {
         email::email_validate(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn company_normalize(s: &str) -> Option<String> {
+        company::company_normalize(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn company_strip_legal(s: &str) -> Option<String> {
+        company::company_strip_legal(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn company_extract_legal(s: &str) -> Option<String> {
+        company::company_extract_legal(s)
     }
 
     #[wasm_bindgen]

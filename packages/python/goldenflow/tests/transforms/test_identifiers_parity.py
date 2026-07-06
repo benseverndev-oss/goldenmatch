@@ -84,6 +84,11 @@ from goldenflow.transforms.numeric import (
     comma_decimal,
     scientific_to_decimal,
 )
+from goldenflow.transforms.company import (
+    company_extract_legal,
+    company_normalize,
+    company_strip_legal,
+)
 from goldenflow.transforms.phonetic import (
     double_metaphone_alt,
     double_metaphone_primary,
@@ -193,6 +198,9 @@ _TRANSFORMS = {
     "vat_format": vat_format,
     "aba_validate": aba_validate,
     "imei_validate": imei_validate,
+    "company_normalize": company_normalize,
+    "company_strip_legal": company_strip_legal,
+    "company_extract_legal": company_extract_legal,
     "soundex": soundex,
     "double_metaphone_primary": double_metaphone_primary,
     "double_metaphone_alt": double_metaphone_alt,
@@ -265,6 +273,11 @@ _NATIVE_FLOOR_SYMBOL = {
     "vat_format": "vat_validate_arrow",
     "aba_validate": "aba_validate_arrow",
     "imei_validate": "imei_validate_arrow",
+    # company: normalize/strip_legal/extract_legal wired via the single
+    # "company" component (floor symbol company_normalize_arrow), locale-free.
+    "company_normalize": "company_normalize_arrow",
+    "company_strip_legal": "company_normalize_arrow",
+    "company_extract_legal": "company_normalize_arrow",
     "soundex": "soundex_arrow",
     # phonetic: double_metaphone_primary/alt share the pair kernel; floor symbol
     # double_metaphone_arrow (skip the native leg on a wheel that predates it).

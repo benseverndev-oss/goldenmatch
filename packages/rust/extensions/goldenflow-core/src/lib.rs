@@ -8,6 +8,7 @@
 pub mod address;
 pub mod autocorrect;
 pub mod categorical;
+pub mod company;
 pub mod email;
 pub mod identifiers;
 pub mod names;

@@ -65,6 +65,9 @@ export async function instantiateBackend(bytes: Uint8Array): Promise<FlowWasmBac
     split_name: (s: string) => string[];
     split_name_reverse: (s: string) => string[];
     merge_name: (first: string | undefined, last: string | undefined) => string | undefined;
+    company_normalize: (s: string) => string | undefined;
+    company_strip_legal: (s: string) => string | undefined;
+    company_extract_legal: (s: string) => string | undefined;
     email_lowercase: (s: string) => string;
     email_normalize: (s: string) => string;
     email_canonical: (s: string) => string;
@@ -155,6 +158,9 @@ export async function instantiateBackend(bytes: Uint8Array): Promise<FlowWasmBac
     splitName: (s) => glue.split_name(s),
     splitNameReverse: (s) => glue.split_name_reverse(s),
     mergeName: (first, last) => glue.merge_name(first ?? undefined, last ?? undefined),
+    companyNormalize: (s) => glue.company_normalize(s),
+    companyStripLegal: (s) => glue.company_strip_legal(s),
+    companyExtractLegal: (s) => glue.company_extract_legal(s),
     emailLowercase: (s) => glue.email_lowercase(s),
     emailNormalize: (s) => glue.email_normalize(s),
     emailCanonical: (s) => glue.email_canonical(s),

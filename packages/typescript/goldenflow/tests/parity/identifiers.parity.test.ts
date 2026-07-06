@@ -38,6 +38,11 @@ import {
 } from "../../src/core/transforms/identifiers.js";
 import { doubleMetaphoneTs, soundexTs } from "../../src/core/transforms/phonetic.js";
 import {
+  companyNormalizeTs,
+  companyStripLegalTs,
+  companyExtractLegalTs,
+} from "../../src/core/transforms/company.js";
+import {
   nameTransliterateTs,
   nameScriptTs,
   stripTitlesTs,
@@ -134,6 +139,9 @@ const PURE_TS_FN: Record<string, (s: string) => boolean | string | number | unde
   swift_format: swiftFormatTs,
   aba_validate: abaValidateTs,
   imei_validate: imeiValidateTs,
+  company_normalize: companyNormalizeTs,
+  company_strip_legal: companyStripLegalTs,
+  company_extract_legal: companyExtractLegalTs,
   soundex: soundexTs,
   double_metaphone_primary: (s) => doubleMetaphoneTs(s)[0],
   double_metaphone_alt: (s) => doubleMetaphoneTs(s)[1],
@@ -220,6 +228,9 @@ function wasmFn(backend: FlowWasmBackend, transform: string): (s: string) => boo
     email_mask: (s) => backend.emailMask(s),
     email_extract_domain: (s) => backend.emailExtractDomain(s),
     email_validate: (s) => backend.emailValidate(s),
+    company_normalize: (s) => backend.companyNormalize(s),
+    company_strip_legal: (s) => backend.companyStripLegal(s),
+    company_extract_legal: (s) => backend.companyExtractLegal(s),
     soundex: (s) => backend.soundex(s),
     double_metaphone_primary: (s) => backend.doubleMetaphonePrimary(s),
     double_metaphone_alt: (s) => backend.doubleMetaphoneAlt(s),

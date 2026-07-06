@@ -56,6 +56,9 @@ export interface FlowWasmBackend {
   splitName(s: string): string[];
   splitNameReverse(s: string): string[];
   mergeName(first: string | null, last: string | null): string | undefined;
+  companyNormalize(s: string): string | undefined;
+  companyStripLegal(s: string): string | undefined;
+  companyExtractLegal(s: string): string | undefined;
   emailLowercase(s: string): string;
   emailNormalize(s: string): string;
   emailCanonical(s: string): string;

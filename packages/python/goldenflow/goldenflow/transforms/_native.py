@@ -762,6 +762,40 @@ def build_canonical_map_native(
     return run
 
 
+def _company_kernel_runner(attr: str) -> Callable[[pl.Series], pl.Series] | None:
+    """Build a whole-series runner for a company kernel function ``attr``
+    (company_normalize/company_strip_legal/company_extract_legal) if native
+    ``company`` is enabled and importable; else ``None``. Single string array
+    in, one out; the legal-suffix table is locale-free."""
+    if not native_enabled("company"):
+        return None
+    nm = native_module()
+    if nm is None or not hasattr(nm, attr):
+        return None
+    try:
+        import pyarrow  # noqa: F401  (zero-copy bridge)
+    except ImportError:
+        return None
+    func = getattr(nm, attr)
+
+    def run(s: pl.Series) -> pl.Series:
+        return pl.from_arrow(func(_as_str_series(s).to_arrow()))
+
+    return run
+
+
+def company_normalize_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _company_kernel_runner("company_normalize_arrow")
+
+
+def company_strip_legal_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _company_kernel_runner("company_strip_legal_arrow")
+
+
+def company_extract_legal_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _company_kernel_runner("company_extract_legal_arrow")
+
+
 def _email_kernel_runner(attr: str) -> Callable[[pl.Series], pl.Series] | None:
     """Build a whole-series runner for email kernel function ``attr`` if
     native ``email`` is enabled and the dependencies are importable; else

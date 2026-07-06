@@ -517,6 +517,10 @@ fn register_all(con: &Connection) -> Result<(), Box<dyn Error>> {
     // VARCHAR -> VARCHAR (nullable; None -> SQL NULL).
     register_opt_str!(con,
         "goldenflow_null_standardize"     => goldenflow_core::categorical::null_standardize,
+        // company/organization dedup-normalization
+        "goldenflow_company_normalize"     => goldenflow_core::company::company_normalize,
+        "goldenflow_company_strip_legal"   => goldenflow_core::company::company_strip_legal,
+        "goldenflow_company_extract_legal" => goldenflow_core::company::company_extract_legal,
         "goldenflow_email_extract_domain" => goldenflow_core::email::email_extract_domain,
         "goldenflow_email_mask"           => goldenflow_core::email::email_mask,
         "goldenflow_url_normalize"        => goldenflow_core::url::url_normalize,

@@ -43,6 +43,11 @@ from goldenflow.transforms.categorical import (  # noqa: E402
     _gender_standardize_py,
     _null_standardize_py,
 )
+from goldenflow.transforms.company import (  # noqa: E402
+    _company_extract_legal_py,
+    _company_normalize_py,
+    _company_strip_legal_py,
+)
 from goldenflow.transforms.email import (  # noqa: E402
     _email_canonical_py,
     _email_extract_domain_py,
@@ -521,6 +526,35 @@ _CASES: list[tuple[str, str | None]] = [
     ("url_canonical", ""),  # empty -> None
     ("url_canonical", "   "),  # whitespace-only -> None
     ("url_canonical", None),  # null
+    # --- company_normalize (composite dedup key) ---
+    ("company_normalize", "Apple Inc."),  # -> apple
+    ("company_normalize", "The Coca-Cola Company"),  # the-strip + hyphen split
+    ("company_normalize", "Microsoft Corporation"),
+    ("company_normalize", "Google L.L.C."),  # punctuated acronym -> llc stripped
+    ("company_normalize", "Procter & Gamble Co"),  # '&' retained, Co stripped
+    ("company_normalize", "AT&T Inc"),  # '&' inside token
+    ("company_normalize", "Theranos"),  # 'the' only as standalone token
+    ("company_normalize", "Berkshire Hathaway"),  # no legal suffix
+    ("company_normalize", "LLC"),  # all-legal -> ""
+    ("company_normalize", ""),  # empty -> None
+    ("company_normalize", None),  # null
+    # --- company_strip_legal (case-preserving suffix strip) ---
+    ("company_strip_legal", "Apple Inc."),  # -> Apple
+    ("company_strip_legal", "Microsoft, Corporation"),  # comma + suffix
+    ("company_strip_legal", "MICROSOFT CORP"),  # case preserved
+    ("company_strip_legal", "Acme Co Ltd"),  # multi-word legal
+    ("company_strip_legal", "  Berkshire Hathaway  "),  # no suffix -> trimmed
+    ("company_strip_legal", "Ltd"),  # all-legal -> ""
+    ("company_strip_legal", ""),  # empty -> None
+    ("company_strip_legal", None),  # null
+    # --- company_extract_legal (canonical legal-form token or null) ---
+    ("company_extract_legal", "Apple Inc."),  # -> inc
+    ("company_extract_legal", "Google L.L.C."),  # -> llc
+    ("company_extract_legal", "Microsoft Corporation"),  # -> corporation
+    ("company_extract_legal", "Berkshire Hathaway"),  # no legal form -> None
+    ("company_extract_legal", "Standalone"),  # single word, not legal -> None
+    ("company_extract_legal", ""),  # empty -> None
+    ("company_extract_legal", None),  # null
     # --- address_standardize (full street suffix -> abbreviation) ---
     ("address_standardize", "123 Main Street"),  # Street -> St
     ("address_standardize", "1 Park Avenue"),  # Avenue -> Ave
@@ -794,6 +828,9 @@ _PY_FN = {
     "vat_format": _vat_format_py,
     "aba_validate": _aba_validate_py,
     "imei_validate": _imei_validate_py,
+    "company_normalize": _company_normalize_py,
+    "company_strip_legal": _company_strip_legal_py,
+    "company_extract_legal": _company_extract_legal_py,
     "soundex": _soundex_py,
     "double_metaphone_primary": _double_metaphone_primary_py,
     "double_metaphone_alt": _double_metaphone_alt_py,
@@ -863,6 +900,9 @@ _NATIVE_ARROW_FN = {
     "vat_format": "vat_format_arrow",
     "aba_validate": "aba_validate_arrow",
     "imei_validate": "imei_validate_arrow",
+    "company_normalize": "company_normalize_arrow",
+    "company_strip_legal": "company_strip_legal_arrow",
+    "company_extract_legal": "company_extract_legal_arrow",
     "soundex": "soundex_arrow",
     "name_transliterate": "name_transliterate_arrow",
     # double_metaphone_primary/alt map to the SAME pair-returning kernel; see

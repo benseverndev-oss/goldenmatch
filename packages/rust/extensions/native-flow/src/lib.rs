@@ -14,6 +14,7 @@ use pyo3::prelude::*;
 mod address;
 mod autocorrect;
 mod categorical;
+mod company;
 mod email;
 mod identifiers;
 mod names;
@@ -27,6 +28,9 @@ mod util;
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
+    m.add_function(wrap_pyfunction!(company::company_normalize_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(company::company_strip_legal_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(company::company_extract_legal_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(email::email_lowercase_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(email::email_normalize_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(email::email_canonical_arrow, m)?)?;

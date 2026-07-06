@@ -346,6 +346,32 @@
 {"transform": "url_canonical", "input": "", "expected": null}
 {"transform": "url_canonical", "input": "   ", "expected": null}
 {"transform": "url_canonical", "input": null, "expected": null}
+{"transform": "company_normalize", "input": "Apple Inc.", "expected": "apple"}
+{"transform": "company_normalize", "input": "The Coca-Cola Company", "expected": "coca cola"}
+{"transform": "company_normalize", "input": "Microsoft Corporation", "expected": "microsoft"}
+{"transform": "company_normalize", "input": "Google L.L.C.", "expected": "google"}
+{"transform": "company_normalize", "input": "Procter & Gamble Co", "expected": "procter & gamble"}
+{"transform": "company_normalize", "input": "AT&T Inc", "expected": "at&t"}
+{"transform": "company_normalize", "input": "Theranos", "expected": "theranos"}
+{"transform": "company_normalize", "input": "Berkshire Hathaway", "expected": "berkshire hathaway"}
+{"transform": "company_normalize", "input": "LLC", "expected": ""}
+{"transform": "company_normalize", "input": "", "expected": null}
+{"transform": "company_normalize", "input": null, "expected": null}
+{"transform": "company_strip_legal", "input": "Apple Inc.", "expected": "Apple"}
+{"transform": "company_strip_legal", "input": "Microsoft, Corporation", "expected": "Microsoft"}
+{"transform": "company_strip_legal", "input": "MICROSOFT CORP", "expected": "MICROSOFT"}
+{"transform": "company_strip_legal", "input": "Acme Co Ltd", "expected": "Acme"}
+{"transform": "company_strip_legal", "input": "  Berkshire Hathaway  ", "expected": "Berkshire Hathaway"}
+{"transform": "company_strip_legal", "input": "Ltd", "expected": ""}
+{"transform": "company_strip_legal", "input": "", "expected": null}
+{"transform": "company_strip_legal", "input": null, "expected": null}
+{"transform": "company_extract_legal", "input": "Apple Inc.", "expected": "inc"}
+{"transform": "company_extract_legal", "input": "Google L.L.C.", "expected": "llc"}
+{"transform": "company_extract_legal", "input": "Microsoft Corporation", "expected": "corporation"}
+{"transform": "company_extract_legal", "input": "Berkshire Hathaway", "expected": null}
+{"transform": "company_extract_legal", "input": "Standalone", "expected": null}
+{"transform": "company_extract_legal", "input": "", "expected": null}
+{"transform": "company_extract_legal", "input": null, "expected": null}
 {"transform": "address_standardize", "input": "123 Main Street", "expected": "123 Main St"}
 {"transform": "address_standardize", "input": "1 Park Avenue", "expected": "1 Park Ave"}
 {"transform": "address_standardize", "input": "5 Sunset Boulevard", "expected": "5 Sunset Blvd"}
