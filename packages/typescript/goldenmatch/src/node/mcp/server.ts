@@ -4,7 +4,7 @@
  *
  * Node-only: uses node:fs, node:path, node:readline. NOT edge-safe.
  *
- * Exposes 45 tools covering dedupe, match, scoring, explanation,
+ * Exposes 49 tools covering dedupe, match, scoring, explanation,
  * profiling, auto-config (shorthand), evaluation, listings, Learning
  * Memory (5 memory tools via MEMORY_TOOLS), the Identity Graph
  * (6 identity tools via IDENTITY_TOOLS), and the AgentSession skills
@@ -366,8 +366,25 @@ const EXISTING_TOOLS: readonly Tool[] = [
   },
 ];
 
+// Cross-language naming aliases (Python<->TS MCP parity). Each forwards to an
+// existing handler via a fall-through switch case below; schemas are derived
+// from the canonical tool so they can't drift.
+const _TS_TOOL_ALIASES: Record<string, string> = {
+  find_duplicates: "dedupe",
+  match_record: "match",
+  explain_match: "explain_pair",
+  profile_data: "profile",
+};
+
+const ALIAS_TOOLS: Tool[] = Object.entries(_TS_TOOL_ALIASES).map(([alias, canonical]) => {
+  const c = EXISTING_TOOLS.find((t) => t.name === canonical);
+  if (!c) throw new Error(`alias canonical not found: ${canonical}`);
+  return { ...c, name: alias, description: `Alias for \`${canonical}\`. ${c.description}` };
+});
+
 export const TOOLS: readonly Tool[] = [
   ...EXISTING_TOOLS,
+  ...ALIAS_TOOLS,
   ...MEMORY_TOOLS,
   ...IDENTITY_TOOLS,
   ...AGENT_MCP_TOOLS,
@@ -507,6 +524,7 @@ export async function handleTool(
       return await handleAgentTool(name, args);
     }
     switch (name) {
+      case "find_duplicates":   // alias
       case "dedupe": {
         const path = sanitizePath(String(args["path"]));
         const rows = readFile(path);
@@ -540,6 +558,7 @@ export async function handleTool(
         };
       }
 
+      case "match_record":      // alias
       case "match": {
         const targetPath = sanitizePath(String(args["target"]));
         const referencePath = sanitizePath(String(args["reference"]));
@@ -590,6 +609,7 @@ export async function handleTool(
         return { score, field_count: fields.length };
       }
 
+      case "explain_match":     // alias
       case "explain_pair": {
         const rowA = args["row_a"] as Row;
         const rowB = args["row_b"] as Row;
@@ -664,6 +684,7 @@ export async function handleTool(
         };
       }
 
+      case "profile_data":      // alias
       case "profile": {
         const path = sanitizePath(String(args["path"]));
         const rows = readFile(path);

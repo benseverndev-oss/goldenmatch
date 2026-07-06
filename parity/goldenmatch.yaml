@@ -6,16 +6,24 @@
 # remove/rename of a tool or command must be reflected here in the same PR.
 #
 # Review of the current gaps (three categories):
-#   1. NAMING DIVERGENCE (same operation, different name per server — a real parity bug,
-#      FOLLOW-UP to reconcile the aliases): dedupe(TS)/find_duplicates(PY),
-#      match(TS)/match_record(PY), explain_pair(TS)/explain_match(PY),
-#      profile(TS)/profile_data(PY); CLI info/score/tui(TS) vs interactive(PY).
-#      (Core agent_deduplicate / agent_match_sources ARE shared — only the aliases drift.)
-#   2. PYTHON-RICHER COVERAGE (intentional — Python is the fuller server): identity-audit
-#      trio, routing tools, pprl_link, domain management, learning-memory plugins, and the
-#      Python-only CLI commands (autoconfig, anomalies, lineage, sensitivity, serve-ui, ...).
+#   1. NAMING ALIASES (resolved 2026-07-05 via non-breaking aliases — both
+#      servers now answer to both names, so these are shared: dedupe/find_duplicates,
+#      match/match_record, explain_pair/explain_match, profile/profile_data, and
+#      explain_cluster (alias of the shared agent_explain_cluster)). CLI info/score/
+#      tui(TS) vs interactive(PY) are NOT aliases (distinct ops) — left as coverage gaps.
+#   2. PYTHON-RICHER COVERAGE (intentional — Python is the fuller, STATEFUL server):
+#      get_stats / get_cluster / list_clusters are Python-only BECAUSE the TS MCP is
+#      stateless — its dedupe() returns stats + clusters inline (DedupeResult), so there
+#      is no server-held dataset to query. Domains (create_domain/list_domains/test_domain)
+#      and PPRL (pprl_link/pprl_auto_config) are Python-only subsystems. Plus identity-audit
+#      trio, routing tools, learning-memory plugins, and the Python-only CLI commands
+#      (autoconfig, anomalies, lineage, sensitivity, serve-ui, ...).
 #   3. TS-SPECIFIC PRIMITIVES (intentional — edge helpers): score_strings, score_pair,
 #      find_exact_matches, find_fuzzy_matches, read_file, write_csv, server_info.
+#
+# NOTE: goldencheck's sole py-only MCP tool `install_domain` is likewise intentional
+# (TS core exposes a read-only domain registry, no install path). That annotation
+# lands in parity/goldencheck.yaml once PR #1449 (the 6-package rollout) merges.
 #
 # a2a_skills surface (A2A AgentCard skills). The core ops share canonical ids and ARE shared
 # (deduplicate, match, explain, evaluate, identity_* , learn_thresholds, memory_stats, ...).
@@ -42,7 +50,12 @@ mcp_tools:
   - analyze_data
   - auto_configure
   - controller_telemetry
+  - dedupe
   - evaluate
+  - explain_cluster
+  - explain_match
+  - explain_pair
+  - find_duplicates
   - fix_quality
   - identity_conflicts
   - identity_history
@@ -52,8 +65,12 @@ mcp_tools:
   - identity_split
   - learn_thresholds
   - list_corrections
+  - match
+  - match_record
   - memory_export
   - memory_stats
+  - profile
+  - profile_data
   - review_config
   - run_transforms
   - scan_quality
@@ -65,10 +82,8 @@ mcp_tools:
   - compare_clusters
   - config_weaknesses
   - create_domain
-  - explain_match
   - explain_routing
   - export_results
-  - find_duplicates
   - get_cluster
   - get_golden_record
   - get_stats
@@ -88,12 +103,10 @@ mcp_tools:
   - list_domains
   - list_plugins
   - list_runs
-  - match_record
   - memory_import
   - plan_routing
   - pprl_auto_config
   - pprl_link
-  - profile_data
   - retrieve_similar
   - rollback
   - schema_match
@@ -103,17 +116,12 @@ mcp_tools:
   - unmerge_record
   ts_only:
   - build_clusters
-  - dedupe
-  - explain_cluster
-  - explain_pair
   - find_exact_matches
   - find_fuzzy_matches
   - list_blocking_strategies
   - list_scorers
   - list_strategies
   - list_transforms
-  - match
-  - profile
   - read_file
   - score_pair
   - score_strings
