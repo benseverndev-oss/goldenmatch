@@ -38,6 +38,11 @@ from goldenflow.transforms.categorical import (
     gender_standardize,
     null_standardize,
 )
+from goldenflow.transforms.company import (
+    company_extract_legal,
+    company_normalize,
+    company_strip_legal,
+)
 from goldenflow.transforms.email import (
     email_canonical,
     email_extract_domain,
@@ -74,20 +79,18 @@ from goldenflow.transforms.names import (
     _has_initial_series as has_initial,
 )
 from goldenflow.transforms.names import (
-    name_initials,
-    strip_middle,
-)
-from goldenflow.transforms.names import (
     _strip_suffixes_series as strip_suffixes,
 )
 from goldenflow.transforms.names import (
     _strip_titles_series as strip_titles,
 )
 from goldenflow.transforms.names import (
+    name_initials,
     name_proper,
     name_script,
     name_transliterate,
     nickname_standardize,
+    strip_middle,
 )
 from goldenflow.transforms.numeric import _currency_strip_series as currency_strip
 from goldenflow.transforms.numeric import _fraction_to_decimal_series as fraction_to_decimal
@@ -98,11 +101,6 @@ from goldenflow.transforms.numeric import _to_integer_series as to_integer
 from goldenflow.transforms.numeric import (
     comma_decimal,
     scientific_to_decimal,
-)
-from goldenflow.transforms.company import (
-    company_extract_legal,
-    company_normalize,
-    company_strip_legal,
 )
 from goldenflow.transforms.phone import phone_digits
 from goldenflow.transforms.phonetic import (
