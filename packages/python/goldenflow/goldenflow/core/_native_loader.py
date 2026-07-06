@@ -130,6 +130,8 @@ _COMPONENT_SYMBOLS: dict[str, tuple[str, ...]] = {
     # remove_emojis/extract_numbers) -- floor symbol only (strip_arrow),
     # locale-free (ASCII-bounded char classes; explicit emoji ranges).
     "text": ("strip_arrow",),
+    # phonetic: blocking/match-key encoders (soundex) -- floor symbol only.
+    "phonetic": ("soundex_arrow",),
 }
 
 # Components whose only native path is intentionally non-authoritative (the

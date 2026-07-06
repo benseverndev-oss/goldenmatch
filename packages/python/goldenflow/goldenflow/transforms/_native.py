@@ -132,6 +132,30 @@ def _cc_kernel_runner(attr: str) -> Callable[[pl.Series], pl.Series] | None:
     return run
 
 
+def _str_kernel_runner(component: str, attr: str) -> Callable[[pl.Series], pl.Series] | None:
+    """Generic whole-series runner for a region-free ``str -> str`` kernel
+    ``attr`` gated on ``component`` (same shape as ``_cc_kernel_runner``)."""
+    if not native_enabled(component):
+        return None
+    nm = native_module()
+    if nm is None or not hasattr(nm, attr):
+        return None
+    try:
+        import pyarrow  # noqa: F401  (zero-copy bridge)
+    except ImportError:
+        return None
+    func = getattr(nm, attr)
+
+    def run(s: pl.Series) -> pl.Series:
+        return pl.from_arrow(func(_as_str_series(s).to_arrow()))
+
+    return run
+
+
+def soundex_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _str_kernel_runner("phonetic", "soundex_arrow")
+
+
 def cc_validate_native() -> Callable[[pl.Series], pl.Series] | None:
     return _cc_kernel_runner("cc_validate_arrow")
 

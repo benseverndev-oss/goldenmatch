@@ -10,6 +10,7 @@ import goldenflow.transforms.identifiers  # noqa: F401
 import goldenflow.transforms.names  # noqa: F401
 import goldenflow.transforms.numeric  # noqa: F401
 import goldenflow.transforms.phone  # noqa: F401
+import goldenflow.transforms.phonetic  # noqa: F401
 
 # Import transform modules so they register with the registry
 import goldenflow.transforms.text  # noqa: F401

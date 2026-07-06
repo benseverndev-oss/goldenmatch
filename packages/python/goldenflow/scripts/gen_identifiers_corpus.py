@@ -81,6 +81,7 @@ from goldenflow.transforms.numeric import (  # noqa: E402
     _scientific_to_decimal_py,
     _to_integer_py,
 )
+from goldenflow.transforms.phonetic import _soundex_py  # noqa: E402
 from goldenflow.transforms.text import (  # noqa: E402
     _collapse_whitespace_py,
     _extract_numbers_py,
@@ -277,6 +278,24 @@ _CASES: list[tuple[str, str | None]] = [
     ("imei_validate", "49015420323751a"),  # non-digit
     ("imei_validate", ""),  # empty
     ("imei_validate", None),  # null
+    # --- soundex (phonetic key; NARA canonical set + edge cases) ---
+    ("soundex", "Robert"),  # R163
+    ("soundex", "Rupert"),  # R163 (same key)
+    ("soundex", "Rubin"),  # R150
+    ("soundex", "Ashcraft"),  # A261 (h transparent)
+    ("soundex", "Ashcroft"),  # A261
+    ("soundex", "Tymczak"),  # T522
+    ("soundex", "Pfister"),  # P236 (Pf -> P)
+    ("soundex", "Honeyman"),  # H555
+    ("soundex", "Gauss"),  # G200 (vowels between the s's)
+    ("soundex", "Jackson"),  # J250
+    ("soundex", "Washington"),  # W252
+    ("soundex", "robert"),  # case-insensitive
+    ("soundex", "O'Brien"),  # apostrophe ignored -> O165
+    ("soundex", "H"),  # single letter -> H000
+    ("soundex", "12345"),  # no letters -> ""
+    ("soundex", ""),  # empty -> ""
+    ("soundex", None),  # null
     # --- astral-plane / non-ASCII char edge cases (UTF-16-vs-codepoint length
     # gate insurance -- Python `len()` counts codepoints, JS `.length` counts
     # UTF-16 code units, so an astral-plane char (surrogate pair) counts as 1
@@ -693,6 +712,7 @@ _PY_FN = {
     "vat_format": _vat_format_py,
     "aba_validate": _aba_validate_py,
     "imei_validate": _imei_validate_py,
+    "soundex": _soundex_py,
     "name_transliterate": _name_transliterate_py,
     "name_script": _name_script_py,
     "strip_titles": _strip_titles_py,
@@ -754,6 +774,7 @@ _NATIVE_ARROW_FN = {
     "vat_format": "vat_format_arrow",
     "aba_validate": "aba_validate_arrow",
     "imei_validate": "imei_validate_arrow",
+    "soundex": "soundex_arrow",
     "name_transliterate": "name_transliterate_arrow",
     "name_script": "name_script_arrow",
     "strip_titles": "strip_titles_arrow",

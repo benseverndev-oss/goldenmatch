@@ -36,6 +36,7 @@ import {
   abaValidateTs,
   imeiValidateTs,
 } from "../../src/core/transforms/identifiers.js";
+import { soundexTs } from "../../src/core/transforms/phonetic.js";
 import {
   nameTransliterateTs,
   nameScriptTs,
@@ -125,6 +126,7 @@ const PURE_TS_FN: Record<string, (s: string) => boolean | string | number | unde
   swift_format: swiftFormatTs,
   aba_validate: abaValidateTs,
   imei_validate: imeiValidateTs,
+  soundex: soundexTs,
   name_transliterate: nameTransliterateTs,
   name_script: nameScriptTs,
   strip_titles: stripTitlesTs,

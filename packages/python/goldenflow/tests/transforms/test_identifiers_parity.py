@@ -82,6 +82,7 @@ from goldenflow.transforms.numeric import (
     comma_decimal,
     scientific_to_decimal,
 )
+from goldenflow.transforms.phonetic import soundex
 from goldenflow.transforms.text import (
     _collapse_whitespace_series as collapse_whitespace,
 )
@@ -180,6 +181,7 @@ _TRANSFORMS = {
     "vat_format": vat_format,
     "aba_validate": aba_validate,
     "imei_validate": imei_validate,
+    "soundex": soundex,
     "name_transliterate": name_transliterate,
     "name_script": name_script,
     "strip_titles": strip_titles,
@@ -244,6 +246,7 @@ _NATIVE_FLOOR_SYMBOL = {
     "vat_format": "vat_validate_arrow",
     "aba_validate": "aba_validate_arrow",
     "imei_validate": "imei_validate_arrow",
+    "soundex": "soundex_arrow",
     "name_transliterate": "name_transliterate_arrow",
     "name_script": "name_script_arrow",
     # names_ext: strip_titles/strip_suffixes/name_proper/nickname_standardize/
