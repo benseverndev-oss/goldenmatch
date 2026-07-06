@@ -249,6 +249,55 @@ pub fn initialism_score(a: &str, b: &str) -> Option<f64> {
     Some(0.6 + 0.35 * ratio)
 }
 
+/// max(0, 1 - |a-b|) -- matches Python `max(0.0, 1.0 - abs(a - b))` arg order.
+fn similarity(a: f64, b: f64) -> f64 {
+    (1.0 - (a - b).abs()).max(0.0)
+}
+
+/// Byte-parity reference: infermap.scorers.profile._profile_score_pure.
+/// Returns the raw (pre-clamp) profile score. The caller owns the abstain check
+/// (value_count == 0), average-length reduction, and reasoning string.
+///
+/// Fixed five-add order (no loop / no iter().sum() SIMD-reduction) -> byte-identical
+/// to the Python source under IEEE-754.
+#[allow(clippy::too_many_arguments)]
+pub fn profile_score(
+    src_dtype: &str,
+    tgt_dtype: &str,
+    src_null: f64,
+    tgt_null: f64,
+    src_uniq: f64,
+    tgt_uniq: f64,
+    src_val_count: f64,
+    tgt_val_count: f64,
+    src_avg_len: f64,
+    tgt_avg_len: f64,
+) -> f64 {
+    let mut total = 0.0_f64;
+
+    // dtype match (0.4)
+    let dtype_match = if src_dtype == tgt_dtype { 1.0 } else { 0.0 };
+    total += 0.4 * dtype_match;
+
+    // null-rate similarity (0.2)
+    total += 0.2 * similarity(src_null, tgt_null);
+
+    // uniqueness similarity (0.2)
+    total += 0.2 * similarity(src_uniq, tgt_uniq);
+
+    // value-length similarity (0.1)
+    let max_len = src_avg_len.max(tgt_avg_len).max(1.0);
+    total += 0.1 * (1.0 - (src_avg_len - tgt_avg_len).abs() / max_len);
+
+    // cardinality-ratio similarity (0.1)
+    let src_card = src_uniq * src_val_count;
+    let tgt_card = tgt_uniq * tgt_val_count;
+    let max_card = src_card.max(tgt_card).max(1.0);
+    total += 0.1 * (1.0 - (src_card - tgt_card).abs() / max_card);
+
+    total
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -257,6 +306,22 @@ mod tests {
     fn exact_match_and_mismatch() {
         assert_eq!(exact_score("City", " city "), 1.0);
         assert_eq!(exact_score("a", "b"), 0.0);
+    }
+
+    #[test]
+    fn profile_identical_and_dtype_mismatch() {
+        // identical profiles -> all 5 terms = 1.0
+        let s = profile_score("string", "string", 0.1, 0.1, 0.5, 0.5,
+                              100.0, 100.0, 8.0, 8.0);
+        assert_eq!(s, 1.0);
+        // dtype mismatch only -> 1.0 - 0.4 = 0.6
+        let s2 = profile_score("string", "int", 0.1, 0.1, 0.5, 0.5,
+                               100.0, 100.0, 8.0, 8.0);
+        assert_eq!(s2, 0.6);
+        // avg_len 0/0 floors denom to 1.0 -> len term stays 1.0 (no div-by-zero)
+        let s3 = profile_score("string", "string", 0.0, 0.0, 0.0, 0.0,
+                               1.0, 1.0, 0.0, 0.0);
+        assert_eq!(s3, 1.0);
     }
 
     #[test]
