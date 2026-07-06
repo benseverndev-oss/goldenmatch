@@ -1,0 +1,39 @@
+{"s": "user@example.com", "tier": "must", "note": "email canonical"}
+{"s": "a@b.co", "tier": "must", "note": "email 2-char TLD floor"}
+{"s": "user.name+tag@ex-ample.com", "tier": "must", "note": "email dots/plus/hyphen"}
+{"s": "no-at-sign.com", "tier": "must", "note": "email negative (no @)"}
+{"s": "user@nodot", "tier": "must", "note": "email negative (no TLD dot)"}
+{"s": "550e8400-e29b-41d4-a716-446655440000", "tier": "must", "note": "uuid canonical"}
+{"s": "550E8400-E29B-41D4-A716-446655440000", "tier": "must", "note": "uuid uppercase"}
+{"s": "550e8400-e29b-41d4-a716-44665544000", "tier": "must", "note": "uuid negative (11 in last group)"}
+{"s": "550e8400e29b41d4a716446655440000", "tier": "must", "note": "uuid negative (no hyphens)"}
+{"s": "2026-07-06", "tier": "must", "note": "date_iso canonical (also matches phone)"}
+{"s": "2026-13-99", "tier": "must", "note": "date_iso structural match (invalid date)"}
+{"s": "2026-7-6", "tier": "must", "note": "date_iso negative (single digits)"}
+{"s": "26-07-06", "tier": "must", "note": "date_iso negative (2-digit year)"}
+{"s": "192.168.0.1", "tier": "must", "note": "ip_v4 canonical"}
+{"s": "999.999.999.999", "tier": "must", "note": "ip_v4 structural match"}
+{"s": "1.2.3", "tier": "must", "note": "ip_v4 negative (3 octets)"}
+{"s": "1.2.3.4.5", "tier": "must", "note": "ip_v4 negative (5 octets)"}
+{"s": "http://example.com", "tier": "must", "note": "url http"}
+{"s": "https://example.com/path?q=1", "tier": "must", "note": "url https with query"}
+{"s": "ftp://example.com", "tier": "must", "note": "url negative (scheme)"}
+{"s": "http://has space.com", "tier": "must", "note": "url negative (interior space)"}
+{"s": "+12345678", "tier": "must", "note": "phone 7-rep floor with lead +"}
+{"s": "123-456-7890", "tier": "must", "note": "phone with separators"}
+{"s": "12345", "tier": "must", "note": "phone negative (too few) / zip_us positive"}
+{"s": "1234567890123456", "tier": "must", "note": "phone ceiling region"}
+{"s": "12345-6789", "tier": "must", "note": "zip_us +4"}
+{"s": "1234", "tier": "must", "note": "zip_us negative (4 digits)"}
+{"s": "123456", "tier": "must", "note": "zip_us negative (6 digits)"}
+{"s": "$5", "tier": "must", "note": "currency dollar minimal"}
+{"s": "$1,000.00", "tier": "must", "note": "currency dollar grouped+cents"}
+{"s": "£12.50", "tier": "must", "note": "currency pound literal (U+00A3)"}
+{"s": "€1,000.00", "tier": "must", "note": "currency euro literal (U+20AC)"}
+{"s": "5.00", "tier": "must", "note": "currency negative (no symbol)"}
+{"s": "hello world", "tier": "must", "note": "matches nothing (mask 0)"}
+{"s": "٥", "tier": "informational", "note": "Arabic-Indic digit: \\d Unicode edge"}
+{"s": "５", "tier": "informational", "note": "fullwidth digit: \\d Unicode edge"}
+{"s": "२०२६-०७-०६", "tier": "informational", "note": "Devanagari date: \\d Unicode edge"}
+{"s": "http://a\u00a0b", "tier": "informational", "note": "NBSP in url: \\s edge"}
+{"s": "1234\u001c567890", "tier": "informational", "note": "interior x1c in phone: sharpest \\s edge"}
