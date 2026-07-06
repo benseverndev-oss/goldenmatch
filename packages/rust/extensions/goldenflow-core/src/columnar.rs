@@ -11,19 +11,24 @@
 //!     reused): ~9-10x for the common all-ASCII case; per-element Unicode
 //!     fallback preserves exact parity when any non-ASCII byte is present.
 //!
-//! Only `StringArray` (Utf8, i32 offsets) is handled here; the caller keeps the
-//! scalar path for `LargeUtf8`.
+//! Generic over the offset width (`GenericStringArray<O>`: Utf8 `i32` /
+//! LargeUtf8 `i64`) — **critical**, because **Polars exports strings as
+//! LargeUtf8**. An i32-only path would silently take the scalar fallback on real
+//! Polars data, so the measured speedup would never fire in production.
 
-use arrow_array::builder::StringBuilder;
-use arrow_array::{Array, StringArray};
+use arrow_array::builder::GenericStringBuilder;
+use arrow_array::{Array, GenericStringArray, OffsetSizeTrait};
 use arrow_buffer::{Buffer, OffsetBuffer, ScalarBuffer};
 
 /// The CURRENT scalar apply shape (mirrors native-flow `util::map_str_to_str`):
 /// a closure returning `Option<String>`, per-element `append`. Kept as the
 /// reference + the non-ASCII fallback for [`ascii_case`].
-pub fn scalar_map<F: Fn(&str) -> Option<String>>(arr: &StringArray, f: F) -> StringArray {
+pub fn scalar_map<O: OffsetSizeTrait, F: Fn(&str) -> Option<String>>(
+    arr: &GenericStringArray<O>,
+    f: F,
+) -> GenericStringArray<O> {
     let len = arr.len();
-    let mut b = StringBuilder::with_capacity(len, len * 12);
+    let mut b = GenericStringBuilder::<O>::with_capacity(len, len * 12);
     for v in arr.iter() {
         match v {
             Some(s) => match f(s) {
@@ -41,10 +46,13 @@ pub fn scalar_map<F: Fn(&str) -> Option<String>>(arr: &StringArray, f: F) -> Str
 /// builder double-copy); offsets are accumulated as we go. Nulls pass through
 /// (offset unchanged, null bitmap cloned). Byte-identical output to
 /// `scalar_map(arr, |s| Some(kernel_producing_the_same_bytes(s)))`.
-pub fn map_str_columnar<F: Fn(&str, &mut String)>(arr: &StringArray, f: F) -> StringArray {
+pub fn map_str_columnar<O: OffsetSizeTrait, F: Fn(&str, &mut String)>(
+    arr: &GenericStringArray<O>,
+    f: F,
+) -> GenericStringArray<O> {
     let len = arr.len();
-    let mut offsets: Vec<i32> = Vec::with_capacity(len + 1);
-    offsets.push(0);
+    let mut offsets: Vec<O> = Vec::with_capacity(len + 1);
+    offsets.push(O::from_usize(0).expect("0 fits any offset"));
     // Hint: most trivial ops shrink or preserve length, so the input value byte
     // count is a good upper-ish bound for the output buffer.
     let mut values = String::with_capacity(arr.values().len());
@@ -52,9 +60,9 @@ pub fn map_str_columnar<F: Fn(&str, &mut String)>(arr: &StringArray, f: F) -> St
         if let Some(s) = v {
             f(s, &mut values);
         }
-        offsets.push(values.len() as i32);
+        offsets.push(O::from_usize(values.len()).expect("string column exceeds offset width"));
     }
-    StringArray::new(
+    GenericStringArray::<O>::new(
         OffsetBuffer::new(ScalarBuffer::from(offsets)),
         Buffer::from_vec(values.into_bytes()),
         arr.nulls().cloned(),
@@ -67,7 +75,11 @@ pub fn map_str_columnar<F: Fn(&str, &mut String)>(arr: &StringArray, f: F) -> St
 /// per-element allocation. If any non-ASCII byte is present, fall back to the
 /// `scalar` Unicode kernel per element, so the output is byte-identical to the
 /// scalar path in every case (`make_ascii_*` != Unicode casing outside ASCII).
-pub fn ascii_case<F: Fn(&str) -> String>(arr: &StringArray, upper: bool, scalar: F) -> StringArray {
+pub fn ascii_case<O: OffsetSizeTrait, F: Fn(&str) -> String>(
+    arr: &GenericStringArray<O>,
+    upper: bool,
+    scalar: F,
+) -> GenericStringArray<O> {
     let bytes: &[u8] = arr.values().as_slice();
     if !bytes.is_ascii() {
         return scalar_map(arr, |s| Some(scalar(s)));
@@ -78,17 +90,14 @@ pub fn ascii_case<F: Fn(&str) -> String>(arr: &StringArray, upper: bool, scalar:
     } else {
         v.make_ascii_lowercase();
     }
-    StringArray::new(
-        arr.offsets().clone(),
-        Buffer::from_vec(v),
-        arr.nulls().cloned(),
-    )
+    GenericStringArray::<O>::new(arr.offsets().clone(), Buffer::from_vec(v), arr.nulls().cloned())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::text;
+    use arrow_array::{LargeStringArray, StringArray};
 
     // A dataset spanning every parity-relevant shape: ASCII mixed-case, leading/
     // trailing/internal whitespace, empty string, null, and a non-ASCII row
@@ -212,5 +221,29 @@ mod tests {
         assert!(!out.is_null(1) && out.value(1).is_empty());
         assert_eq!(out.value(2), "x");
         assert!(out.is_null(3));
+    }
+
+    #[test]
+    fn fires_on_large_utf8_the_polars_shape() {
+        // Polars exports strings as LargeUtf8 (i64 offsets). The generic path must
+        // produce the same bytes on LargeUtf8 as on Utf8 -- otherwise the columnar
+        // fast path silently never fires on real Polars data (it did before this
+        // was made generic). Covers both map_str_columnar and the ascii_case
+        // fast-path + non-ASCII fallback (the sample has "café"/"Renée").
+        let rows = vec![Some("John SMITH"), Some("  Mary  "), None, Some("café"), Some("")];
+        let large = LargeStringArray::from(rows.clone());
+        let small = StringArray::from(rows);
+        let l_map = map_str_columnar(&large, |s, buf| buf.push_str(text::strip(s)));
+        let s_map = map_str_columnar(&small, |s, buf| buf.push_str(text::strip(s)));
+        let l_case = ascii_case(&large, false, text::lowercase);
+        let s_case = ascii_case(&small, false, text::lowercase);
+        for i in 0..small.len() {
+            assert_eq!(l_map.is_null(i), s_map.is_null(i));
+            assert_eq!(l_case.is_null(i), s_case.is_null(i));
+            if !small.is_null(i) {
+                assert_eq!(l_map.value(i), s_map.value(i), "map @ {i}");
+                assert_eq!(l_case.value(i), s_case.value(i), "case @ {i}");
+            }
+        }
     }
 }
