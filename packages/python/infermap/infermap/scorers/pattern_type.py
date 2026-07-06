@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 
+from infermap._native_loader import native_enabled, native_module
 from infermap.types import FieldInfo, ScorerResult
 
 # Ordered dict — earlier entries take precedence when multiple patterns match
@@ -22,20 +23,45 @@ _COMPILED: dict[str, re.Pattern] = {
 }
 
 
+def _match_types_pure(s: str) -> int:
+    """Bitmask oracle for ``infermap-core::pattern_match_types``.
+
+    Bit ``i`` (LSB=0) is set iff ``s`` matches the i-th ``SEMANTIC_TYPES``
+    pattern, in insertion order. ``s`` is expected pre-stripped by the caller.
+    """
+    mask = 0
+    for i, pattern in enumerate(_COMPILED.values()):
+        if pattern.match(s):
+            mask |= 1 << i
+    return mask
+
+
+def _match_types_batch(stripped: list[str]) -> list[int]:
+    """Per-sample bitmasks; native kernel when available, pure oracle otherwise."""
+    if native_enabled("pattern_match_types"):
+        return list(native_module().pattern_match_types(stripped))
+    return [_match_types_pure(s) for s in stripped]
+
+
 def _classify_with_pct(
     field: FieldInfo,
     threshold: float = 0.6,
 ) -> tuple[str | None, float]:
     """Return (best_type, match_pct) or (None, 0.0) if below threshold or no samples."""
-    samples = [s for s in field.sample_values if s is not None and str(s).strip() != ""]
+    samples = [
+        str(s).strip()
+        for s in field.sample_values
+        if s is not None and str(s).strip() != ""
+    ]
     if not samples:
         return None, 0.0
 
+    masks = _match_types_batch(samples)
+
     best_type: str | None = None
     best_pct: float = 0.0
-
-    for type_name, pattern in _COMPILED.items():
-        matches = sum(1 for s in samples if pattern.match(str(s).strip()))
+    for i, type_name in enumerate(SEMANTIC_TYPES):  # insertion order == bit order
+        matches = sum(1 for m in masks if m & (1 << i))
         pct = matches / len(samples)
         if pct > best_pct:
             best_pct = pct

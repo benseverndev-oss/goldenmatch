@@ -131,3 +131,52 @@ _PROFILE_CASES = [
 def test_profile_parity(args):
     # exact byte-equality (not approx) -- the whole point of the gate.
     assert native_module().profile_score(*args) == _profile_score_pure(*args)
+# ---------------------------------------------------------------------------
+# Wave 4: pattern_type scorer parity (regex fixture-drift gate)
+# ---------------------------------------------------------------------------
+
+import json  # noqa: E402
+import pathlib  # noqa: E402
+
+from infermap.scorers.pattern_type import _match_types_pure  # noqa: E402
+
+_CORPUS_PATH = pathlib.Path(__file__).parent / "pattern_type_corpus.jsonl"
+
+
+def _load_corpus() -> list[dict]:
+    rows: list[dict] = []
+    for line in _CORPUS_PATH.read_text(encoding="utf-8").split("\n"):
+        line = line.strip()
+        if line:
+            rows.append(json.loads(line))
+    return rows
+
+
+def _corpus_must() -> list[str]:
+    return [r["s"] for r in _load_corpus() if r.get("tier", "must") == "must"]
+
+
+def _corpus_informational() -> list[str]:
+    return [r["s"] for r in _load_corpus() if r.get("tier") == "informational"]
+
+
+@native_only
+@pytest.mark.parametrize("s", _corpus_must())
+def test_pattern_type_parity(s):
+    # exact bitmask byte-equality across the ASCII must-pass contract.
+    assert native_module().pattern_match_types([s]) == [_match_types_pure(s)]
+
+
+@native_only
+def test_pattern_type_unicode_edge_recorded():
+    """Documented parity edge (\\d/\\s Unicode tables): RECORD divergence, do not gate.
+
+    Prints an AGREE/DIVERGE line per informational fixture so CI logs pin where the
+    boundary actually falls. Intentionally asserts nothing about agreement.
+    """
+    for s in _corpus_informational():
+        native = native_module().pattern_match_types([s])[0]
+        pure = _match_types_pure(s)
+        verdict = "AGREE" if native == pure else "DIVERGE"
+        print(f"[pattern_type edge] {verdict} native={native:#010b} "
+              f"pure={pure:#010b} {s!r}")

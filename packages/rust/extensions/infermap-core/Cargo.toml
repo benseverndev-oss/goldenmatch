@@ -13,6 +13,7 @@ name = "infermap_core"
 # Wave 2: fuzzy_name reuses goldenmatch's Jaro-Winkler (cross-package). score-core is
 # pyo3-free (its own [workspace], rapidfuzz only) so the pyo3-free invariant holds.
 goldenmatch-score-core = { path = "../score-core" }
+regex = "1"
 
 [profile.release]
 opt-level = 3
