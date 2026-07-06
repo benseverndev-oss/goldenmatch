@@ -34,6 +34,32 @@ laying now). **Phase A is inert groundwork — no behavior/perf change:**
 - Guardrails: no forced Arrow round-trip in-process; Stage 0 numbers verified
   unchanged (`benchmarks/stage0_handoff_profile.py`). Tests: `tests/test_relocatable_stage.py`.
 
+#### Phase C — in-engine (remote) stages
+Baseline (`docs/design/2026-07-06-goldenpipe-phasec-baseline-findings.md`): the
+DuckDB↔Python crossing was **~89% of the pull path** at 5M rows, so keeping a stage
+in-engine pays (unlike Stage 0 / Phase B). Phase C v1 turns `location="remote"` from
+"raises" into "runs in the engine":
+- `models/frame.py` — **`DuckDBFrame`**: a `Frame` backed by a **lazy** DuckDB
+  relation. `.polars()` = materialize (the egress crossing, paid ONCE); `.project()`
+  = in-engine SQL transform → a new lazy `DuckDBFrame`; `.arrow_batches()` streams.
+- `PipeContext.frame` now holds an **engine-resident** frame in `_frame` **without
+  materializing** (the setter keeps a `DuckDBFrame` as-is; a `LocalFrame`/None still
+  goes to `df`). So a chain of remote stages stays in the engine.
+- Runner: routes `remote_capable` stages (a real `RemoteStage`) instead of raising;
+  a plain `location="remote"` stage without the marker still raises (Phase A guard).
+  On the **remote→local transition**, the Runner materializes `_frame` → `df` once
+  (the boundary crossing, exactly when a local stage needs the data).
+- `adapters/engine.py` — **`RemoteStage`** marker + **`EngineNormalizeStage`** (a
+  `lower(trim(col))` transform run in DuckDB), byte-identical to the local Polars
+  path, reusing one engine connection via `ctx.metadata["duckdb_con"]`. Tests:
+  `tests/test_engine_stage.py`.
+- **v2 follow-ons (not in v1):** wire the real `goldenflow_*` / `goldencheck_*`
+  DuckDB UDFs (already shipped) behind `RemoteStage`, and a DuckDB-table **source**
+  for `Pipeline.run` so the data originates in-engine (killing the ingress crossing
+  too). The dominant `goldenmatch.dedupe` scoring stage has no in-engine surface, so
+  a full ER pipeline still crosses for it — Phase C wins the other stages + keeps
+  data in-engine between them.
+
 ## Pipeline Flow
 ```
 load_file -> GoldenCheck.scan_file(path) -> decide_flow(findings)
