@@ -6,10 +6,14 @@
 //! value, never a lossy hash). Supports the dtypes the deep-profiler hands us:
 //! Utf8/LargeUtf8, the signed/unsigned ints, Float64/Float32, and Boolean.
 use arrow::array::{
-    Array, ArrayData, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
-    Int8Array, LargeStringArray, StringArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+    Array, ArrayData, BooleanArray, DictionaryArray, Float32Array, Float64Array, Int16Array,
+    Int32Array, Int64Array, Int8Array, LargeStringArray, StringArray, UInt16Array, UInt32Array,
+    UInt64Array, UInt8Array,
 };
-use arrow::datatypes::DataType;
+use arrow::datatypes::{
+    ArrowNativeType, DataType, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type, UInt32Type,
+    UInt64Type, UInt8Type,
+};
 use arrow::pyarrow::PyArrowType;
 use pyo3::prelude::*;
 use rustc_hash::FxHashMap;
@@ -126,6 +130,45 @@ fn intern_column(data: ArrayData) -> PyResult<Vec<u64>> {
                 }
             }
             Ok(ids)
+        }
+        // Dictionary-encoded (e.g. a Polars Categorical/Enum column). The
+        // dictionary *is* the interning: intern the (small) values array ONCE,
+        // then map each row's key through it — O(dict) hashing + O(rows) index
+        // lookups, instead of O(rows) hashing on the raw path. A null row keeps
+        // id 0. This is the zero-extra-work path when a categorical column flows
+        // straight through as an Arrow dictionary.
+        DataType::Dictionary(key_type, _) => {
+            macro_rules! intern_dict {
+                ($kt:ty) => {{
+                    let dict = DictionaryArray::<$kt>::from(data);
+                    // Dense id per dictionary entry (recurses on the small values
+                    // array; null entries -> 0, values -> 1,2,… first-seen).
+                    let value_ids = intern_column(dict.values().to_data())?;
+                    let keys = dict.keys();
+                    let mut ids = Vec::with_capacity(keys.len());
+                    for i in 0..keys.len() {
+                        if keys.is_null(i) {
+                            ids.push(0);
+                        } else {
+                            ids.push(value_ids[keys.value(i).as_usize()]);
+                        }
+                    }
+                    Ok(ids)
+                }};
+            }
+            match key_type.as_ref() {
+                DataType::Int8 => intern_dict!(Int8Type),
+                DataType::Int16 => intern_dict!(Int16Type),
+                DataType::Int32 => intern_dict!(Int32Type),
+                DataType::Int64 => intern_dict!(Int64Type),
+                DataType::UInt8 => intern_dict!(UInt8Type),
+                DataType::UInt16 => intern_dict!(UInt16Type),
+                DataType::UInt32 => intern_dict!(UInt32Type),
+                DataType::UInt64 => intern_dict!(UInt64Type),
+                other => Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                    "key/FD kernels: unsupported dictionary key type {other:?}"
+                ))),
+            }
         }
         other => Err(pyo3::exceptions::PyTypeError::new_err(format!(
             "key/FD kernels do not support Arrow dtype {other:?}; \
