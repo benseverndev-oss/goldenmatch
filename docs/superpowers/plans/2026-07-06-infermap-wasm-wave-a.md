@@ -193,10 +193,13 @@ Claude-Session: https://claude.ai/code/session_01F2g8Snk1Akef5z3yZdtt44"
 
 **Report:** `DONE`/`BLOCKED`, SHA, and confirm infermap-core untouched.
 
-> **Cargo.lock note:** the crate needs a committed `Cargo.lock` so `build_wasm.sh`
-> can read the pinned `wasm-bindgen` version. The box can't run `cargo generate-lockfile`.
-> Task 2 handles this: the lockfile is generated in CI on first run and committed,
-> OR (fallback) hand-authored minimally. Flag it for the controller; do NOT block Task 1.
+> **Cargo.lock note:** `build_wasm.sh` reads the pinned `wasm-bindgen` version from
+> `Cargo.lock`. The box can't run `cargo generate-lockfile`, and it is NOT needed to
+> commit one: the lane's `cargo build --release` regenerates `Cargo.lock` in-place in
+> the SAME run *before* the `grep '^name = "wasm-bindgen"'` reads it (no CLI/crate skew
+> within one run). Do NOT hand-author a lockfile. OPTIONAL polish (controller, after the
+> first green CI run): commit the generated `Cargo.lock` for reproducible pinning across
+> runs, matching score/analysis/goldenflow-wasm. Not a blocker.
 
 ---
 
@@ -716,6 +719,13 @@ Claude-Session: https://claude.ai/code/session_01F2g8Snk1Akef5z3yZdtt44"
         run: bash packages/rust/extensions/infermap-wasm/build_wasm.sh
       - name: Build shared wasm-runtime (the parity test imports goldenmatch-wasm-runtime)
         run: pnpm --filter goldenmatch-wasm-runtime build
+      - name: Build infermap's sibling deps (detect.ts imports goldencheck-types)
+        # vitest resolves goldencheck-types from its dist/ (not checked in), and
+        # the parity test imports src/core/detect.ts which imports it. Build the
+        # upstream sibling graph first (the goldenpipe_wasm lane uses the same
+        # `^...` pattern). Also unblocks the final `pnpm --filter infermap build`
+        # whose dts:{resolve} needs goldencheck-types' dist .d.ts.
+        run: pnpm --filter "infermap^..." build
       - name: WASM detect parity (un-skipped — artifact now present) [THE GATE]
         run: pnpm --filter infermap exec vitest run tests/parity/infermap-wasm.parity.test.ts
       - name: dist-path validation (enableInfermapWasm() must resolve the bundled artifact)
