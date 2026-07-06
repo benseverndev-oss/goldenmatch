@@ -28,8 +28,10 @@ laying now). **Phase A is inert groundwork — no behavior/perf change:**
 - `PipeContext.frame` — a derived property over `df` (the canonical store stays
   `df`, so existing `ctx.df` stages + `PipeContext(df=...)` are untouched). The
   pipeline path never calls it today; it's the accessor a remote adapter will use.
-- `StageInfo.location` (default `"local"`) + a Runner guard that raises
-  `NotImplementedError` for any non-local stage (remote = Phase C, not built). The
+- `StageInfo.location` (default `"local"`) + a Runner guard. In Phase A this raised
+  `NotImplementedError` for ANY non-local stage; **Phase C (below) made `location="remote"`
+  run in-engine**, so the guard now raises only for a plain remote stage *without* a
+  `RemoteStage` marker (the "declared-but-not-implemented placement" case). The
   `ExecutionPlan`/planner is unchanged — placement is orthogonal to ordering.
 - Guardrails: no forced Arrow round-trip in-process; Stage 0 numbers verified
   unchanged (`benchmarks/stage0_handoff_profile.py`). Tests: `tests/test_relocatable_stage.py`.
@@ -73,9 +75,29 @@ Phase C **v2** closes the two documented gaps (`tests/test_engine_stage_v2.py`):
   runs on the relation's own con, which must be where the UDFs were registered).
   Caveat: with the default auto-config (local `load` first), the source materializes
   at `load` — the WIN needs the first stage to be remote.
-- The dominant `goldenmatch.dedupe` scoring stage still has no in-engine surface, so
-  a full ER pipeline crosses for it — Phase C wins every *other* stage + keeps data
-  in-engine between them.
+- The dominant `goldenmatch.dedupe` scoring stage has no in-engine surface, so a full
+  ER pipeline crosses for it — Phase C wins every *other* stage + keeps data in-engine
+  between them. **Building an in-engine dedupe was scoped + measured — verdict: DON'T**
+  (`docs/design/2026-07-06-goldenpipe-in-engine-dedupe-scope.md`, probe
+  `benchmarks/stage0_inengine_dedupe_probe.py`): a warehouse-resident dedupe's crossing
+  is **0.4–0.6% of wall and shrinking** with rows (rapidfuzz scoring is superlinear and
+  dominates; the crossing is linear). And the in-engine kernels would be the SAME
+  `score-core` / `graph-core` the host path already calls, so there's **no compute win
+  on top** — only the sub-1% crossing to save. So the caveat is correct by construction,
+  not a gap: "smart pipe, dumb kernels" — dedupe stays a host stage calling native
+  kernels. (Surface map: Postgres is ~80% native-direct already; DuckDB has no compiled
+  goldenmatch cdylib at all — a disproportionate lift for <1%.)
+
+**Contract status (2026-07-06): COMPLETE through Phase C.** Four measure-first "don'ts"
+(Stage 0 handoff 0.2%, Phase B frame 250–310× smaller than peak RSS, in-engine dedupe
+crossing 0.4%) vs Phase C's one "do" — the discipline earning its keep. **Not built, by
+decision (each with a baseline that said don't):** the streaming executor (Stage 0),
+the out-of-core `Frame` (Phase B), the in-engine dedupe (above). **Stretch ambition,
+deliberately deferred:** a true **cross-process / cross-language** `RemoteStage` over a
+transport. Phase C placed stages *in-engine* (DuckDB, same-process); the relocatable
+contract (`Frame` / `StageInfo.location` / Runner routing) was laid precisely so a
+transport-backed placement is a **build-forward, not a rewrite**. Gate it on a measured
+distributed/polyglot workload before building — none exists today.
 
 ## Pipeline Flow
 ```
