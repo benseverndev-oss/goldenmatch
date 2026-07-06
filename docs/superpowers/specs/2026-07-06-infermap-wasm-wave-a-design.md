@@ -139,6 +139,12 @@ signature (`&[String]`, `&[(String, Vec<String>)]`, `f64`) already matches the D
 
 ## 4. TS wiring — `packages/typescript/infermap/src/core/wasm/`
 
+> **Dependency:** `packages/typescript/infermap/package.json` currently depends
+> only on `goldencheck-types`. Wave A must add
+> `"goldenmatch-wasm-runtime": "workspace:^"` (the source of
+> `createBackendRegistry` / `enableWasmBackend` / `EnableOptions`). Every existing
+> `*_wasm` TS package carries this dep.
+
 ### `backend.ts`
 ```ts
 import { createBackendRegistry } from "goldenmatch-wasm-runtime";
@@ -171,41 +177,99 @@ whose `detectDomain` JSON-stringifies `{columns, domains, min_score}`, calls
 instantiateBackend, setInfermapBackend, new URL("./artifacts/infermap_wasm_bg.wasm",
 import.meta.url))`; `disable` calls `setInfermapBackend(null)`.
 
-## 5. Wire `detect.ts`
+## 5. Wire `detect.ts` (requires a hint-resolution hoist, not a drop-in)
 
-The **dictionary resolution stays host** (JS `listDomains()`/`loadDomain()`) —
-identical to Python's `detect.py` split, where only the resolved-input scoring
-core is the kernel. In `detectDomainDetailed`, after `columns` and the resolved
-`domains: Array<[string, string[]]>` are built and the early `no_data` guards
-pass, consult the backend:
+**Reality of the current code:** `detectDomainDetailed` does NOT materialize a
+`[name, hints[]][]` structure. At the scoring point `domains` is a `string[]` of
+*names only* (`candidates ?? listDomains().filter(d => d !== "generic")`), and
+hint expansion is **fused into the scoring loop** — for each name it calls
+`loadDomain(d)`, builds an `allHints` Set inline, `continue`s if empty, and
+scores in the same pass. So Wave A must **hoist** hint-resolution into a pre-pass
+before the backend call, then let the backend (or the pure loop) score over that
+hoisted structure. This is a real refactor of `detectDomainDetailed`, not an
+insert.
+
+The two input-shape `no_data` early returns (no columns / no records) stay host,
+unchanged, before resolution. Then:
 ```ts
+const domainNames = candidates ?? listDomains().filter((d) => d !== "generic");
+
+// Hoist: resolve each candidate's hint-set into a flat [name, hints[]] list so
+// the SAME resolved input feeds the kernel or the pure loop. Empty-hint domains
+// are INCLUDED here (the kernel skips them via `hints.is_empty()`, and the pure
+// loop skips them via `hints.length === 0`), so both paths score identically.
+const resolved: Array<[string, string[]]> = domainNames.map((d) => {
+  const pack = loadDomain(d);
+  const allHints = new Set<string>();
+  for (const spec of Object.values(pack.types)) {
+    for (const h of spec.name_hints) allHints.add(h);
+  }
+  return [d, Array.from(allHints)];
+});
+
 const backend = getInfermapBackend();
 if (backend) {
-  return backend.detectDomain(columns, resolvedDomains, minScore);
+  // Kernel owns ALL scoring below, INCLUDING the scored-empty `no_data`
+  // (Rust detect_domain returns reason "no_data" when nothing scores).
+  return backend.detectDomain(columns, resolved, minScore);
 }
-// ...existing pure-TS scoring below unchanged (the lossy fallback)...
+
+// Pure-TS fallback — byte-identical to today, re-expressed over `resolved`:
+const scored: Array<[string, number]> = [];
+for (const [d, hints] of resolved) {
+  if (hints.length === 0) continue;               // == Rust hints.is_empty() skip
+  let hits = 0;
+  for (const c of columns) {
+    for (const h of hints) { if (hintMatches(h, c)) { hits++; break; } }
+  }
+  scored.push([d, hits / Math.max(columns.length, 1)]);
+}
+if (scored.length === 0) {
+  return { domain: null, score: 0, runner_up: null, runner_up_score: 0, reason: "no_data" };
+}
+// ...existing sort / below-min / tie / confident tail unchanged...
 ```
 Public API (`detectDomain`, `detectDomainDetailed`, `DEFAULT_MIN_SCORE`) is
-**unchanged**; only an internal fast-path is inserted. The exact insertion point
-is after the `columns`/candidate resolution and the two `no_data` early returns,
-so the backend sees the same resolved inputs the pure path would score.
+**unchanged**. The pure path's output is byte-identical to the pre-refactor code
+(same iteration order, same empty-hint skip, same `hits/max(cols,1)`, same
+sort/tie/threshold tail). The backend path delegates the entire scored region —
+including the scored-empty `no_data` — to the kernel.
 
-> The `domains` value passed to the backend must be the SAME resolved
-> `[name, hints[]]` list the pure path scores over (post `listDomains()` filter +
-> `loadDomain()` hint expansion) — the kernel does no dictionary work.
+> Byte-equivalence of "include empty-hint domains in `resolved`": a domain with
+> an empty hint-set contributes nothing in the pure loop (`continue`) and is
+> skipped by the kernel (`hints.is_empty()`), so passing all candidates to the
+> kernel is equivalent to the pre-filter the pure loop did inline.
 
 ## 6. Build + artifact
 
-- `scripts/build_infermap_wasm.mjs` — mirrors `build_goldencheck_wasm.mjs` /
-  analysis: `wasm-pack build packages/rust/extensions/infermap-wasm --target web`,
-  then place `infermap_wasm_bg.wasm` + `infermap_wasm.js` glue into
-  `src/core/wasm/artifacts/`. Requires `wasm-pack` + `wasm32-unknown-unknown`
-  (CI-only; box lacks the toolchain).
-- `scripts/copy_wasm_artifact.mjs` — mirrors analysis: fan the two artifact files
-  out to every plausible `dist/**/artifacts/` parent (tsup bundling ambiguity);
-  no-op with a warning when the artifact is absent.
-- Artifacts are **git-ignored / not committed** (CI-built model). A default
-  checkout has no artifact → pure-TS default, parity test skips.
+**Build model = `cargo build` + pinned `wasm-bindgen-cli`, NOT `wasm-pack`.** The
+§3 crate declares `wasm-bindgen` under a `[target.'cfg(target_arch="wasm32")']`
+table (the score-wasm layout); `wasm-pack`'s dependency detection does not see
+that table, so `wasm-pack build` fails. The established build for this crate
+layout (score-wasm / analysis-wasm / goldenflow-wasm) is a cargo build + the
+`wasm-bindgen` CLI:
+
+- `packages/rust/extensions/infermap-wasm/build_wasm.sh` — a line-for-line mirror
+  of `score-wasm/build_wasm.sh`:
+  1. `rustup target add wasm32-unknown-unknown`
+  2. `cargo build --manifest-path <crate>/Cargo.toml --target wasm32-unknown-unknown --release`
+  3. resolve the pinned `wasm-bindgen` version from the crate's **committed
+     `Cargo.lock`** (`grep -A1 '^name = "wasm-bindgen"$' ... version`), and
+     `cargo install wasm-bindgen-cli --version "=$WB_VER" --locked` if the on-PATH
+     CLI doesn't already match. **A CLI/crate version skew produces broken glue
+     that fails at runtime, not build time** — this pin is load-bearing, which is
+     why `Cargo.lock` is committed for this crate.
+  4. `wasm-bindgen <crate>/target/wasm32-unknown-unknown/release/infermap_wasm.wasm
+     --target web --out-dir packages/typescript/infermap/src/core/wasm/artifacts
+     --out-name infermap_wasm` → emits `infermap_wasm_bg.wasm` + `infermap_wasm.js`.
+- `packages/typescript/infermap/scripts/copy_wasm_artifact.mjs` — mirrors
+  goldenanalysis: fan the two artifact files out to every plausible
+  `dist/**/artifacts/` parent (tsup bundling ambiguity); no-op with a warning when
+  the artifact is absent.
+- **Commit the crate's `Cargo.lock`** (so the pinned `wasm-bindgen` version
+  resolves in CI). The `src/core/wasm/artifacts/*` outputs are **git-ignored /
+  not committed** (CI-built model). A default checkout has no artifact → pure-TS
+  default, parity test skips.
 
 ## 7. Parity gate — `tests/parity/infermap-wasm.parity.test.ts`
 
@@ -236,18 +300,27 @@ tie/edge cases (so the corpus controls the exact `domains` structure).
 
 ## 8. CI — `infermap_wasm` lane
 
-New job in `.github/workflows/ci.yml`, mirroring the `analysis_wasm` lane:
+New job in `.github/workflows/ci.yml`, mirroring the real `analysis_wasm` lane:
 1. `dorny/paths-filter` entry `infermap_wasm` covering
    `packages/rust/extensions/infermap-wasm/**`,
    `packages/rust/extensions/infermap-core/**`,
+   `packages/typescript/goldenmatch-wasm-runtime/**` (every `*_wasm` filter
+   includes it — the parity test imports it),
    `packages/typescript/infermap/src/core/wasm/**`,
    `packages/typescript/infermap/src/core/detect.ts`,
    `packages/typescript/infermap/tests/parity/infermap-wasm.parity.test.ts`,
-   `scripts/build_infermap_wasm.mjs`.
-2. Job (gated on that filter): install `wasm-pack` + `wasm32-unknown-unknown`,
-   run `node scripts/build_infermap_wasm.mjs`, then run the vitest parity test
-   (un-skipped, artifact now present). Advisory lane (not in the required set),
-   matching the other `*_wasm` lanes.
+   `packages/typescript/infermap/build_wasm.sh` (via the crate path) and
+   `packages/typescript/infermap/scripts/copy_wasm_artifact.mjs`.
+2. Job (gated on that filter), mirroring `analysis_wasm` step-for-step:
+   - `rustup target add wasm32-unknown-unknown`;
+   - run `packages/rust/extensions/infermap-wasm/build_wasm.sh` (cargo build +
+     pinned `wasm-bindgen-cli`, emits the artifact into the TS package);
+   - `pnpm --filter goldenmatch-wasm-runtime build` (the parity test imports this
+     package — the real `analysis_wasm` lane builds it first);
+   - run the vitest parity test un-skipped (artifact now present);
+   - (mirroring analysis) optionally `tsup` build + run `copy_wasm_artifact.mjs`
+     to catch bundled-`dist` path breakage.
+   Advisory lane (not in the required set), matching the other `*_wasm` lanes.
 
 ## 9. Out of scope
 
@@ -275,6 +348,14 @@ New job in `.github/workflows/ci.yml`, mirroring the `analysis_wasm` lane:
 - **Boundary encoding.** JSON is lossless for this shape (§3); the only
   theoretical risk (float formatting) is eliminated by round-trippable f64
   serialization on both sides. Verified by the parity gate.
+- **`detect.ts` hoist refactor must stay byte-identical.** §5 restructures the
+  fused resolve+score loop into a resolve pre-pass + score loop. The pure-path
+  output must be unchanged (same iteration order, empty-hint skip, `hits/max`,
+  sort/tie/threshold tail). This is covered by the existing TS `detect` unit
+  tests (which must stay green after the refactor, box-permitting via CI) AND the
+  new parity corpus. The refactor is mechanical but is the one place a
+  non-WASM regression could slip in, so the pure path is validated independently
+  of the backend.
 
 ## 11. Build environment constraints
 
