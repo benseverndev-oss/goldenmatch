@@ -16,6 +16,14 @@ REGISTRY = {
         "loader_tokens": ("native_module", "_ensure_native"),
         "allow": "parity/native_symbols/goldenmatch.allow",
     },
+    "infermap": {
+        # infermap-native registers `wrap_pyfunction!(self::detect_domain, m)` -- the
+        # `self::` qualifier is REQUIRED for _WRAP's `(?:\w+::)+` to scan the export.
+        "crate_reg": ["packages/rust/extensions/infermap-native/src/lib.rs"],
+        "py_root": "packages/python/infermap/infermap",
+        "loader_tokens": ("native_module",),
+        "allow": "parity/native_symbols/infermap.allow",
+    },
 }
 
 # wrap_pyfunction!( <optional module:: paths> <symbol> , m )   -- \s spans newlines

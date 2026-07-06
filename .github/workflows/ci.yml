@@ -71,6 +71,7 @@ jobs:
       goldencheck_native: ${{ steps.filter.outputs.goldencheck_native }}
       goldenprofile_native: ${{ steps.filter.outputs.goldenprofile_native }}
       analysis_native: ${{ steps.filter.outputs.analysis_native }}
+      infermap_native: ${{ steps.filter.outputs.infermap_native }}
       native_flow: ${{ steps.filter.outputs.native_flow }}
       goldenflow_duckdb: ${{ steps.filter.outputs.goldenflow_duckdb }}
       goldenpipe_native: ${{ steps.filter.outputs.goldenpipe_native }}
@@ -577,6 +578,17 @@ jobs:
               - 'packages/python/goldenanalysis/goldenanalysis/core/aggregate.py'
               - 'packages/python/goldenanalysis/tests/core/test_native_parity.py'
               - 'scripts/build_analysis_native.py'
+            infermap_native:
+              # InferMap's optional native accelerator (infermap-core/native, PyO3,
+              # standalone workspace, Wave 1 = the detect kernel). Builds the .so and
+              # runs the parity suite (which SKIPS when the ext is absent), so without
+              # this lane the detect_domain kernel is UNTESTED in CI.
+              - 'packages/rust/extensions/infermap-native/**'
+              - 'packages/rust/extensions/infermap-core/**'
+              - 'packages/python/infermap/infermap/_native_loader.py'
+              - 'packages/python/infermap/infermap/detect.py'
+              - 'packages/python/infermap/tests/test_native_parity.py'
+              - 'scripts/build_infermap_native.py'
             native_flow:
               # GoldenFlow's optional native phone kernel — a standalone maturin
               # workspace, so the `rust` job's cargo test --workspace never
@@ -1538,6 +1550,8 @@ jobs:
         run: pip install pytest
       - name: Reconcile native symbols (goldenmatch)
         run: python scripts/check_native_symbols.py goldenmatch
+      - name: Reconcile native symbols (infermap)
+        run: python scripts/check_native_symbols.py infermap
       - name: Gate unit tests
         run: python -m pytest scripts/test_native_symbols.py -q
 
@@ -2487,6 +2501,47 @@ jobs:
         env:
           GOLDENANALYSIS_NATIVE: "1"
         run: uv run pytest packages/python/goldenanalysis/tests/core -q
+
+  infermap_native:
+    needs: changes
+    if: needs.changes.outputs.infermap_native == 'true' || needs.changes.outputs.force_all == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/infermap-native
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      - name: clippy + test (infermap-core, pyo3-free kernels)
+        working-directory: packages/rust/extensions/infermap-core
+        run: |
+          cargo clippy -- -D warnings
+          cargo test
+      - name: clippy (infermap-native ext crate)
+        working-directory: packages/rust/extensions/infermap-native
+        run: cargo clippy --release -- -D warnings
+      - name: Build native extension into the package
+        # No --offline: CI has network + a cold cache on first run.
+        run: uv run python scripts/build_infermap_native.py
+      - name: Parity suite (ext present -> native path runs, not skips)
+        run: |
+          uv run pytest \
+            packages/python/infermap/tests/test_native_parity.py \
+            -v
+      - name: Required-native mode (INFERMAP_NATIVE=1 must import the wheel)
+        env:
+          INFERMAP_NATIVE: "1"
+        run: uv run pytest packages/python/infermap/tests/test_native_parity.py -q
 
   # goldenmatch-native distribution smoke: build the SEPARATE maturin/abi3
   # wheel (the polars / polars-runtime split) and prove the runtime loads

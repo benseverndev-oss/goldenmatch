@@ -492,7 +492,7 @@ _PEPY_RE = re.compile(r"pepy\.tech/projects\?q=(?P<q>[A-Za-z0-9+._-]+)")
 # release yet (pypistats 404s until then); move it into PYPI_PACKAGES + the
 # README pepy.tech ?q= list once published, same as the goldengraph note in
 # suite_download_badges.py.
-_PYPI_PUBLISH_BADGE_EXCEPTIONS = {"goldenmatch-pg", "goldenmatch-hnsw"}
+_PYPI_PUBLISH_BADGE_EXCEPTIONS = {"goldenmatch-pg", "goldenmatch-hnsw", "infermap-native"}
 
 
 def check_aggregate_badges(res: Result) -> None:
