@@ -65,3 +65,56 @@ class LocalFrame:
         import pyarrow as pa
 
         return cls(pl.from_arrow(pa.Table.from_batches(list(batches))))
+
+
+class DuckDBFrame:
+    """Engine-resident ``Frame`` backed by a **lazy** DuckDB relation (Phase C).
+
+    The data lives in DuckDB, not in Python. A DuckDB relation is lazy -- chaining
+    ``.project(...)`` / ``.filter(...)`` builds an unexecuted query; nothing
+    materializes until ``.polars()`` / ``.arrow_batches()`` is called. That is the
+    whole point of Phase C: a chain of in-engine stages stays in the engine, and
+    the Python round-trip (the "crossing" that Phase C's baseline measured at ~89%
+    of the pull path) is paid **once**, at the pipeline's egress -- or never, if
+    the result lands back in the warehouse.
+
+    Satisfies the ``Frame`` protocol, so it flows through the same
+    ``PipeContext.frame`` seam as ``LocalFrame`` -- a stage that only reads
+    ``.polars()`` still works (it just triggers the materialization); a
+    remote-aware stage transforms the relation in-engine via ``.project`` and
+    hands back a new ``DuckDBFrame``.
+    """
+
+    __slots__ = ("_rel",)
+
+    def __init__(self, relation: Any) -> None:
+        # `relation` is a duckdb.DuckDBPyRelation (from `con.sql(...)` /
+        # `con.table(...)` / another relation's `.project(...)`).
+        self._rel = relation
+
+    def relation(self) -> Any:
+        """The underlying lazy DuckDB relation (for in-engine chaining)."""
+        return self._rel
+
+    def polars(self) -> pl.DataFrame:
+        # Materialize -- the egress crossing (DuckDB -> Arrow -> Polars). This is
+        # the ONE round-trip Phase C confines to the boundary; in-engine stages
+        # avoid it by staying on ``.project`` / ``.relation``.
+        return self._rel.pl()
+
+    def arrow_batches(self) -> Iterator[Any]:
+        # Stream the result out of the engine as pyarrow RecordBatches, without a
+        # full Polars materialization -- the wire form for a cross-process egress.
+        # ``rel.arrow()`` yields a RecordBatchReader (DuckDB >=1.3) or a Table
+        # (older); iterate the reader, else batch the table.
+        obj = self._rel.arrow()
+        if hasattr(obj, "to_batches"):
+            yield from obj.to_batches()
+        else:
+            yield from obj
+
+    def project(self, select_expr: str) -> DuckDBFrame:
+        """Apply an in-engine SQL projection, returning a new (still lazy)
+        ``DuckDBFrame``. The data never leaves DuckDB. Example:
+        ``frame.project("id, lower(trim(email)) AS email")``."""
+        return DuckDBFrame(self._rel.project(select_expr))
