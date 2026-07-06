@@ -7,6 +7,7 @@ from goldenflow.transforms import register_transform
 from goldenflow.transforms._fastpath import _V, apply_with_residual
 from goldenflow.transforms._native import (
     phone_country_code_native,
+    phone_digits_native,
     phone_e164_native,
     phone_national_native,
 )
@@ -100,11 +101,24 @@ def phone_national(series: pl.Series) -> pl.Series:
     name="phone_digits", input_types=["phone"], auto_apply=False, priority=50, mode="series"
 )
 def phone_digits(series: pl.Series) -> pl.Series:
-    # Pure-Polars regex: strip every non-digit. Equivalent to the per-row
-    # "".join(c for c in val if c.isdigit()) but stays in Rust (~5x). Note:
-    # str.isdigit() also accepts some Unicode digit code points; the column
-    # transform targets ASCII phone data, and the parity test pins ASCII rows.
-    return series.str.replace_all(r"\D", "")
+    # Native-first over goldenflow-core (ASCII digit-strip); else the pure-Polars
+    # regex fallback (strips every non-digit, stays in Rust ~5x). On ASCII phone
+    # data -- the pinned parity contract -- both equal _phone_digits_py.
+    native = phone_digits_native()
+    if native is not None:
+        return native(series)
+    # cast(Utf8) is a no-op on a real string column but turns an all-null
+    # (Null-dtype) series into Utf8 so `.str` is valid; nulls pass through.
+    return series.cast(pl.Utf8).str.replace_all(r"\D", "")
+
+
+def _phone_digits_py(val: str | None) -> str | None:
+    """Byte-exact reference for the corpus oracle: keep only ASCII digits
+    (matches the goldenflow-core `phone_digits` kernel; a Unicode digit is
+    dropped here, unlike Python `str.isdigit`)."""
+    if val is None:
+        return None
+    return "".join(c for c in val if c in "0123456789")
 
 
 @register_transform(

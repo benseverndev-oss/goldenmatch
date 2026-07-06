@@ -135,3 +135,32 @@ def test_dispatch_routes_goldenmatch_tools(name):
         # Structured errors from the handler are fine; bare crashes are not.
         msg = str(e).lower()
         assert "unknown tool" not in msg, f"{name} not routed: {e}"
+
+
+def test_suite_profile_stays_goldencheck_not_goldenmatch_alias():
+    """goldenmatch's new `profile` alias must NOT shadow goldencheck's `profile`."""
+    from goldenmatch.mcp import server as gm
+    from goldensuite_mcp.server import _aggregate
+    tools, name_to_dispatch = _aggregate()
+    names = {t.name for t in tools}
+    assert "profile" in names
+    # gm.dispatch is the one stable identity; goldencheck's adapter returns a
+    # fresh closure with no module-level symbol to compare against.
+    assert name_to_dispatch["profile"] is not gm.dispatch
+
+
+def test_no_goldenmatch_alias_is_served_by_goldenmatch_in_the_suite():
+    # The real invariant is OWNERSHIP, not name-absence: `profile` is BOTH a
+    # goldenmatch alias key AND a legitimate goldencheck tool, so it may still
+    # appear in the surface (served by goldencheck). What must never happen is a
+    # goldenmatch alias being SERVED BY goldenmatch through the suite.
+    from goldenmatch.mcp import server as gm
+    from goldensuite_mcp.server import _aggregate
+    tools, name_to_dispatch = _aggregate()
+    names = {t.name for t in tools}
+    served_by_gm = [n for n in gm._MCP_TOOL_ALIASES
+                    if name_to_dispatch.get(n) is gm.dispatch]
+    assert served_by_gm == []
+    # The 4 non-colliding aliases don't leak into the surface at all (only
+    # `profile` collides with another package's real tool).
+    assert not ((set(gm._MCP_TOOL_ALIASES) - {"profile"}) & names)

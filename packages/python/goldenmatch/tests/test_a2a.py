@@ -688,3 +688,12 @@ def test_a2a_skills_are_spec_shaped_and_expose_canonical_ids():
         assert skill["name"] and isinstance(skill["name"], str)
     ids = {s["id"] for s in _SKILLS}
     assert {"deduplicate", "explain", "match"} <= ids
+
+
+def test_a2a_exposes_reconciled_canonical_ids():
+    """The 3 A2A skills the TS card aligns to must stay under their canonical ids
+    (autoconfig/compare_strategies/transform) — the Python reference the TS
+    reconciliation (2026-07-05) targets. Python is otherwise unchanged."""
+    from goldenmatch.a2a.server import _SKILLS
+    ids = {s["id"] for s in _SKILLS}
+    assert {"autoconfig", "compare_strategies", "transform"} <= ids

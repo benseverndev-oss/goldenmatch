@@ -3,8 +3,38 @@
 use crate::util::{map_str_to_bool, map_str_to_str};
 use arrow::array::ArrayData;
 use arrow::pyarrow::PyArrowType;
-use goldenflow_core::identifiers::{aba, ean, iban, imei, isbn, luhn, swift, vat};
+use goldenflow_core::identifiers::{aba, ean, ein, iban, imei, isbn, luhn, ssn, swift, vat};
 use pyo3::prelude::*;
+
+#[pyfunction]
+pub fn ssn_format_arrow(
+    py: Python,
+    array: PyArrowType<ArrayData>,
+) -> PyResult<PyArrowType<ArrayData>> {
+    Ok(PyArrowType(map_str_to_str(py, array.0, |s| {
+        Some(ssn::ssn_format(s))
+    })?))
+}
+
+#[pyfunction]
+pub fn ssn_mask_arrow(
+    py: Python,
+    array: PyArrowType<ArrayData>,
+) -> PyResult<PyArrowType<ArrayData>> {
+    Ok(PyArrowType(map_str_to_str(py, array.0, |s| {
+        Some(ssn::ssn_mask(s))
+    })?))
+}
+
+#[pyfunction]
+pub fn ein_format_arrow(
+    py: Python,
+    array: PyArrowType<ArrayData>,
+) -> PyResult<PyArrowType<ArrayData>> {
+    Ok(PyArrowType(map_str_to_str(py, array.0, |s| {
+        Some(ein::ein_format(s))
+    })?))
+}
 
 #[pyfunction]
 pub fn cc_validate_arrow(

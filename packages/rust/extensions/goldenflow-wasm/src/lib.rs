@@ -17,9 +17,10 @@ mod wasm {
     use goldenflow_core::categorical;
     use goldenflow_core::company;
     use goldenflow_core::email;
-    use goldenflow_core::identifiers::{aba, ean, iban, imei, isbn, luhn, swift, vat};
+    use goldenflow_core::identifiers::{aba, ean, ein, iban, imei, isbn, luhn, ssn, swift, vat};
     use goldenflow_core::names;
     use goldenflow_core::numeric;
+    use goldenflow_core::phone;
     use goldenflow_core::phonetic;
     use goldenflow_core::text;
     use goldenflow_core::url;
@@ -43,6 +44,26 @@ mod wasm {
     #[wasm_bindgen]
     pub fn email_validate(s: &str) -> Option<bool> {
         email::email_validate(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn ssn_format(s: &str) -> String {
+        ssn::ssn_format(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn ssn_mask(s: &str) -> String {
+        ssn::ssn_mask(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn ein_format(s: &str) -> String {
+        ein::ein_format(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn phone_digits(s: &str) -> String {
+        phone::phone_digits(s)
     }
 
     #[wasm_bindgen]

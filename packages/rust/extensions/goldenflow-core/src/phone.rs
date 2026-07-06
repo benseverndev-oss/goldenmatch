@@ -38,6 +38,14 @@ pub fn country_code(region: Option<country::Id>, s: &str, nanp_only: bool) -> Op
     parse_gated(region, s, nanp_only).map(|n| i64::from(n.country().code()))
 }
 
+/// Keep only ASCII digits — the `phone_digits` column transform. Byte-identical
+/// to the pure-Polars `str.replace_all(r"\D", "")` on ASCII phone data (the
+/// pinned parity contract; a Unicode digit would be kept by Python's `\d` but is
+/// dropped here).
+pub fn phone_digits(s: &str) -> String {
+    s.chars().filter(|c| c.is_ascii_digit()).collect()
+}
+
 pub fn valid(region: Option<country::Id>, s: &str, nanp_only: bool) -> Option<bool> {
     // Same semantics as the current `phone_valid_arrow`: parsed-and-invalid ->
     // Some(false), parse failure -> None (Python decides). NOTE this is the

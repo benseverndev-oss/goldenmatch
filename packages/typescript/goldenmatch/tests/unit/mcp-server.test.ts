@@ -183,8 +183,8 @@ describe("MCP server — handleTool dispatcher", () => {
 });
 
 describe("MCP server — agent tools wiring", () => {
-  it("TOOLS exposes 45 tools (agent wave-2 + healer review_config)", () => {
-    expect(TOOLS.length).toBe(45);
+  it("TOOLS exposes 49 tools (45 + 4 cross-language naming aliases, #1451)", () => {
+    expect(TOOLS.length).toBe(49);
   });
 
   it("TOOLS includes the agent skill names", () => {

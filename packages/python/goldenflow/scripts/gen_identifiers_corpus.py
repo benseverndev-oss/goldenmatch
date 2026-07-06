@@ -62,11 +62,14 @@ from goldenflow.transforms.identifiers import (  # noqa: E402
     _cc_mask_py,
     _cc_validate_py,
     _ean_validate_py,
+    _ein_format_py,
     _iban_format_py,
     _iban_validate_py,
     _imei_validate_py,
     _isbn_normalize_py,
     _isbn_validate_py,
+    _ssn_format_py,
+    _ssn_mask_py,
     _swift_format_py,
     _swift_validate_py,
     _vat_format_py,
@@ -88,6 +91,7 @@ from goldenflow.transforms.numeric import (  # noqa: E402
     _scientific_to_decimal_py,
     _to_integer_py,
 )
+from goldenflow.transforms.phone import _phone_digits_py  # noqa: E402
 from goldenflow.transforms.phonetic import (  # noqa: E402
     _double_metaphone_alt_py,
     _double_metaphone_primary_py,
@@ -292,6 +296,33 @@ _CASES: list[tuple[str, str | None]] = [
     ("imei_validate", "49015420323751a"),  # non-digit
     ("imei_validate", ""),  # empty
     ("imei_validate", None),  # null
+    # --- ssn_format / ssn_mask (9 ASCII digits -> XXX-XX-XXXX / ***-**-XXXX) ---
+    ("ssn_format", "123456789"),  # bare 9 digits
+    ("ssn_format", "123-45-6789"),  # already formatted
+    ("ssn_format", " 123 45 6789 "),  # spaced
+    ("ssn_format", "12345"),  # too short -> preserve
+    ("ssn_format", "not an ssn"),  # non-digit -> preserve
+    ("ssn_format", ""),  # empty
+    ("ssn_format", None),  # null
+    ("ssn_mask", "123456789"),
+    ("ssn_mask", "123-45-6789"),
+    ("ssn_mask", "12345"),  # too short -> preserve
+    ("ssn_mask", ""),
+    ("ssn_mask", None),
+    # --- ein_format (9 ASCII digits -> XX-XXXXXXX) ---
+    ("ein_format", "123456789"),
+    ("ein_format", "12-3456789"),  # already formatted
+    ("ein_format", " 12 3456789 "),  # spaced
+    ("ein_format", "12345"),  # too short -> preserve
+    ("ein_format", ""),
+    ("ein_format", None),
+    # --- phone_digits (ASCII digit-strip) ---
+    ("phone_digits", "(212) 555-0100"),
+    ("phone_digits", "+1 212-555-0100"),
+    ("phone_digits", "no digits here"),
+    ("phone_digits", "abc123def456"),
+    ("phone_digits", ""),
+    ("phone_digits", None),
     # --- soundex (phonetic key; NARA canonical set + edge cases) ---
     ("soundex", "Robert"),  # R163
     ("soundex", "Rupert"),  # R163 (same key)
@@ -828,6 +859,10 @@ _PY_FN = {
     "vat_format": _vat_format_py,
     "aba_validate": _aba_validate_py,
     "imei_validate": _imei_validate_py,
+    "ssn_format": _ssn_format_py,
+    "ssn_mask": _ssn_mask_py,
+    "ein_format": _ein_format_py,
+    "phone_digits": _phone_digits_py,
     "company_normalize": _company_normalize_py,
     "company_strip_legal": _company_strip_legal_py,
     "company_extract_legal": _company_extract_legal_py,
@@ -900,6 +935,10 @@ _NATIVE_ARROW_FN = {
     "vat_format": "vat_format_arrow",
     "aba_validate": "aba_validate_arrow",
     "imei_validate": "imei_validate_arrow",
+    "ssn_format": "ssn_format_arrow",
+    "ssn_mask": "ssn_mask_arrow",
+    "ein_format": "ein_format_arrow",
+    "phone_digits": "phone_digits_arrow",
     "company_normalize": "company_normalize_arrow",
     "company_strip_legal": "company_strip_legal_arrow",
     "company_extract_legal": "company_extract_legal_arrow",

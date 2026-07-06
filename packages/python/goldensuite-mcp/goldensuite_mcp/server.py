@@ -47,7 +47,13 @@ def _normalize_tools(raw_tools: list) -> list[Tool]:
 def _adapt_goldenmatch() -> tuple[list[Tool], Callable[[str, dict], dict]]:
     from goldenmatch.mcp import server as gm
 
-    return _normalize_tools(list(gm.TOOLS)), gm.dispatch
+    # Exclude goldenmatch's internal Python<->TS naming aliases from the
+    # aggregated surface: the suite has one surface per operation, and the
+    # `profile` alias would otherwise shadow goldencheck's `profile` tool.
+    # gm.dispatch still resolves aliases (harmless — they're just never listed here).
+    aliases = set(gm._MCP_TOOL_ALIASES)
+    tools = [t for t in gm.TOOLS if t.name not in aliases]
+    return _normalize_tools(tools), gm.dispatch
 
 
 def _adapt_goldencheck() -> tuple[list[Tool], Callable[[str, dict], dict]]:

@@ -35,7 +35,11 @@ import {
   swiftFormatTs,
   abaValidateTs,
   imeiValidateTs,
+  ssnFormatTs,
+  ssnMaskTs,
+  einFormatTs,
 } from "../../src/core/transforms/identifiers.js";
+import { phoneDigitsTs } from "../../src/core/transforms/phone.js";
 import { doubleMetaphoneTs, soundexTs } from "../../src/core/transforms/phonetic.js";
 import {
   companyNormalizeTs,
@@ -139,6 +143,10 @@ const PURE_TS_FN: Record<string, (s: string) => boolean | string | number | unde
   swift_format: swiftFormatTs,
   aba_validate: abaValidateTs,
   imei_validate: imeiValidateTs,
+  ssn_format: ssnFormatTs,
+  ssn_mask: ssnMaskTs,
+  ein_format: einFormatTs,
+  phone_digits: phoneDigitsTs,
   company_normalize: companyNormalizeTs,
   company_strip_legal: companyStripLegalTs,
   company_extract_legal: companyExtractLegalTs,
@@ -228,6 +236,10 @@ function wasmFn(backend: FlowWasmBackend, transform: string): (s: string) => boo
     email_mask: (s) => backend.emailMask(s),
     email_extract_domain: (s) => backend.emailExtractDomain(s),
     email_validate: (s) => backend.emailValidate(s),
+    ssn_format: (s) => backend.ssnFormat(s),
+    ssn_mask: (s) => backend.ssnMask(s),
+    ein_format: (s) => backend.einFormat(s),
+    phone_digits: (s) => backend.phoneDigits(s),
     company_normalize: (s) => backend.companyNormalize(s),
     company_strip_legal: (s) => backend.companyStripLegal(s),
     company_extract_legal: (s) => backend.companyExtractLegal(s),

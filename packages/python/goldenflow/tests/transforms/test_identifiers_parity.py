@@ -52,11 +52,14 @@ from goldenflow.transforms.identifiers import (
     cc_mask,
     cc_validate,
     ean_validate,
+    ein_format,
     iban_format,
     iban_validate,
     imei_validate,
     isbn_normalize,
     isbn_validate,
+    ssn_format,
+    ssn_mask,
     swift_format,
     swift_validate,
     vat_format,
@@ -89,6 +92,7 @@ from goldenflow.transforms.company import (
     company_normalize,
     company_strip_legal,
 )
+from goldenflow.transforms.phone import phone_digits
 from goldenflow.transforms.phonetic import (
     double_metaphone_alt,
     double_metaphone_primary,
@@ -198,6 +202,10 @@ _TRANSFORMS = {
     "vat_format": vat_format,
     "aba_validate": aba_validate,
     "imei_validate": imei_validate,
+    "ssn_format": ssn_format,
+    "ssn_mask": ssn_mask,
+    "ein_format": ein_format,
+    "phone_digits": phone_digits,
     "company_normalize": company_normalize,
     "company_strip_legal": company_strip_legal,
     "company_extract_legal": company_extract_legal,
@@ -273,6 +281,10 @@ _NATIVE_FLOOR_SYMBOL = {
     "vat_format": "vat_validate_arrow",
     "aba_validate": "aba_validate_arrow",
     "imei_validate": "imei_validate_arrow",
+    "ssn_format": "ssn_format_arrow",
+    "ssn_mask": "ssn_mask_arrow",
+    "ein_format": "ein_format_arrow",
+    "phone_digits": "phone_digits_arrow",
     # company: normalize/strip_legal/extract_legal wired via the single
     # "company" component (floor symbol company_normalize_arrow), locale-free.
     "company_normalize": "company_normalize_arrow",

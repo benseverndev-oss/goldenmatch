@@ -8,6 +8,16 @@ use goldenflow_core::phone;
 use pyo3::prelude::*;
 
 #[pyfunction]
+pub fn phone_digits_arrow(
+    py: Python,
+    array: PyArrowType<ArrayData>,
+) -> PyResult<PyArrowType<ArrayData>> {
+    Ok(PyArrowType(map_str_to_str(py, array.0, |s| {
+        Some(phone::phone_digits(s))
+    })?))
+}
+
+#[pyfunction]
 #[pyo3(signature = (array, region, nanp_only=false))]
 pub fn phone_e164_arrow(
     py: Python,

@@ -68,6 +68,10 @@ _COMPONENT_SYMBOLS: dict[str, tuple[str, ...]] = {
     # NOTE: no "phone_validate" entry. Its only native symbol, phone_valid_arrow,
     # implements `is_valid`, NOT the product-chosen `is_possible` spec, so it is
     # deliberately unwired AND listed in _FALLBACK_ONLY below.
+    # phone_digits: ASCII digit-strip -- always-safe, region-free (floor symbol).
+    "phone_digits": ("phone_digits_arrow",),
+    # us_id: US SSN/EIN digit-format kernels (ssn_format/ssn_mask/ein_format).
+    "us_id": ("ssn_format_arrow", "ssn_mask_arrow", "ein_format_arrow"),
     # cc: payment-card (Luhn) identifiers -- floor symbol only, region-free.
     "cc": ("cc_validate_arrow",),
     # iban: IBAN (ISO 7064 mod-97) identifiers -- floor symbol only, region-free.

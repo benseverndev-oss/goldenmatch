@@ -65,6 +65,10 @@ export async function instantiateBackend(bytes: Uint8Array): Promise<FlowWasmBac
     split_name: (s: string) => string[];
     split_name_reverse: (s: string) => string[];
     merge_name: (first: string | undefined, last: string | undefined) => string | undefined;
+    ssn_format: (s: string) => string;
+    ssn_mask: (s: string) => string;
+    ein_format: (s: string) => string;
+    phone_digits: (s: string) => string;
     company_normalize: (s: string) => string | undefined;
     company_strip_legal: (s: string) => string | undefined;
     company_extract_legal: (s: string) => string | undefined;
@@ -158,6 +162,10 @@ export async function instantiateBackend(bytes: Uint8Array): Promise<FlowWasmBac
     splitName: (s) => glue.split_name(s),
     splitNameReverse: (s) => glue.split_name_reverse(s),
     mergeName: (first, last) => glue.merge_name(first ?? undefined, last ?? undefined),
+    ssnFormat: (s) => glue.ssn_format(s),
+    ssnMask: (s) => glue.ssn_mask(s),
+    einFormat: (s) => glue.ein_format(s),
+    phoneDigits: (s) => glue.phone_digits(s),
     companyNormalize: (s) => glue.company_normalize(s),
     companyStripLegal: (s) => glue.company_strip_legal(s),
     companyExtractLegal: (s) => glue.company_extract_legal(s),

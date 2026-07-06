@@ -152,6 +152,22 @@ def _str_kernel_runner(component: str, attr: str) -> Callable[[pl.Series], pl.Se
     return run
 
 
+def ssn_format_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _str_kernel_runner("us_id", "ssn_format_arrow")
+
+
+def ssn_mask_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _str_kernel_runner("us_id", "ssn_mask_arrow")
+
+
+def ein_format_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _str_kernel_runner("us_id", "ein_format_arrow")
+
+
+def phone_digits_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _str_kernel_runner("phone_digits", "phone_digits_arrow")
+
+
 def soundex_native() -> Callable[[pl.Series], pl.Series] | None:
     return _str_kernel_runner("phonetic", "soundex_arrow")
 

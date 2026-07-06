@@ -6,6 +6,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Added
+- **MCP naming aliases for cross-language parity.** The Python and TypeScript MCP servers previously exposed the same operations under different names (`find_duplicates`/`dedupe`, `match_record`/`match`, `explain_match`/`explain_pair`, `profile_data`/`profile`, plus TS's `explain_cluster`). Both servers now answer to both names via non-breaking aliases, so an agent trained against either server can call the other. The Python server gains `dedupe`/`match`/`explain_pair`/`profile`/`explain_cluster`; the TypeScript server gains `find_duplicates`/`match_record`/`explain_match`/`profile_data`. The API-parity gate enforces the nine names stay `shared` in `parity/goldenmatch.yaml`. Aliases are excluded from the `goldensuite-mcp` aggregated surface so the suite's `profile` still resolves to goldencheck's file-profiler.
+
 ## [2.8.0] - 2026-07-02
 
 ### Added

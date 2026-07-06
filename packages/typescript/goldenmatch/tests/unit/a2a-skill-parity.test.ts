@@ -44,6 +44,19 @@ describe("A2A skill parity", () => {
     );
   });
 
+  it("advertises the reconciled canonical agent ids, not the legacy ones", () => {
+    const ids = new Set(AGENT_CARD.skills.map((s) => s.id));
+    for (const canon of ["autoconfig", "compare_strategies", "transform"]) expect(ids.has(canon)).toBe(true);
+    for (const legacy of ["auto_configure", "agent_compare_strategies", "run_transforms"]) expect(ids.has(legacy)).toBe(false);
+  });
+
+  it("dispatches the canonical agent id identically to the legacy tool id", async () => {
+    for (const [canon, legacy] of [["autoconfig", "auto_configure"], ["compare_strategies", "agent_compare_strategies"], ["transform", "run_transforms"]] as const) {
+      const input = { rows: [{ id: "1", name: "A" }, { id: "2", name: "A" }] };
+      expect(await dispatchAnySkill(canon, input)).toEqual(await dispatchAnySkill(legacy, input));
+    }
+  });
+
   it("humanizes derived ids into labels", () => {
     expect(byId.get("agent_deduplicate")?.name).toBe("Agent Deduplicate");
     expect(byId.get("identity_resolve")?.name).toBe("Identity Resolve");

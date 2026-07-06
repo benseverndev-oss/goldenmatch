@@ -164,4 +164,4 @@ def test_server_card_description_count():
     text = server_path.read_text(encoding="utf-8")
     match = re.search(r"(\d+) MCP tools", text)
     assert match is not None
-    assert int(match.group(1)) == 69
+    assert int(match.group(1)) == 74   # 69 + 5 cross-language naming aliases (#1451)

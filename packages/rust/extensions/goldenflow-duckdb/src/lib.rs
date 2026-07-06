@@ -592,6 +592,14 @@ fn register_all(con: &Connection) -> Result<(), Box<dyn Error>> {
     con.register_scalar_function::<PadRight>("goldenflow_pad_right")?;
     con.register_scalar_function::<MergeName>("goldenflow_merge_name")?;
 
+    // W1 coverage completion: US SSN/EIN formatting + phone digit-strip.
+    register_str!(con,
+        "goldenflow_ssn_format"   => goldenflow_core::identifiers::ssn::ssn_format,
+        "goldenflow_ssn_mask"     => goldenflow_core::identifiers::ssn::ssn_mask,
+        "goldenflow_ein_format"   => goldenflow_core::identifiers::ein::ein_format,
+        "goldenflow_phone_digits" => goldenflow_core::phone::phone_digits,
+    );
+
     Ok(())
 }
 
@@ -893,5 +901,27 @@ mod tests {
             .query_row("SELECT goldenflow_phone_country_code(?, ?)", duckdb::params!["212-555-0100", "US"], |r| r.get(0))
             .unwrap();
         assert_eq!(cc, gf::phone::country_code(gf::phone::region_of("US"), "212-555-0100", true));
+    }
+
+    /// W1 coverage-completion kernels (ssn/ein/phone_digits) match the reference.
+    #[test]
+    fn w1_coverage_kernels_match_reference() {
+        use goldenflow_core as gf;
+        let con = conn();
+        let cases: &[(&str, &str, String)] = &[
+            ("goldenflow_ssn_format", "123-45-6789", gf::identifiers::ssn::ssn_format("123-45-6789")),
+            ("goldenflow_ssn_format", "123456789", gf::identifiers::ssn::ssn_format("123456789")),
+            ("goldenflow_ssn_mask", "123456789", gf::identifiers::ssn::ssn_mask("123456789")),
+            ("goldenflow_ein_format", "123456789", gf::identifiers::ein::ein_format("123456789")),
+            ("goldenflow_ein_format", "not-an-ein", gf::identifiers::ein::ein_format("not-an-ein")),
+            ("goldenflow_phone_digits", "(212) 555-0100", gf::phone::phone_digits("(212) 555-0100")),
+        ];
+        for (udf, input, expected) in cases {
+            assert_eq!(
+                sql_str(&con, udf, input).as_deref(),
+                Some(expected.as_str()),
+                "UDF {udf} on {input:?}",
+            );
+        }
     }
 }

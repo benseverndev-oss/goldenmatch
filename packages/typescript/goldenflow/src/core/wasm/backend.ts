@@ -56,6 +56,10 @@ export interface FlowWasmBackend {
   splitName(s: string): string[];
   splitNameReverse(s: string): string[];
   mergeName(first: string | null, last: string | null): string | undefined;
+  ssnFormat(s: string): string;
+  ssnMask(s: string): string;
+  einFormat(s: string): string;
+  phoneDigits(s: string): string;
   companyNormalize(s: string): string | undefined;
   companyStripLegal(s: string): string | undefined;
   companyExtractLegal(s: string): string | undefined;

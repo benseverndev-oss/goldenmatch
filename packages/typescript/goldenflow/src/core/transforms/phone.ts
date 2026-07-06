@@ -69,11 +69,12 @@ registerTransform(
 // phone_digits (50, phone)
 // ---------------------------------------------------------------------------
 
+export function phoneDigitsTs(val: string): string {
+  return extractDigits(val);
+}
+
 function phoneDigits(values: readonly ColumnValue[]): ColumnValue[] {
-  return values.map((v) => {
-    if (v === null || typeof v !== "string") return v;
-    return extractDigits(v);
-  });
+  return values.map((v) => (v === null || typeof v !== "string" ? v : phoneDigitsTs(v)));
 }
 
 registerTransform(
