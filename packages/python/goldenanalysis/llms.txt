@@ -6,12 +6,12 @@
 - Python API: `import goldenanalysis as ga` — `analyze()`, `analyze_match()`, `analyze_pipeline()`, `AnalysisReport`, `Metric`, `ReportHistory`, `RegressionPolicy`
 - CLI: `goldenanalysis report <file>`, `goldenanalysis trend`, `goldenanalysis regressions` (CI gate via `--fail-on-regression`), `goldenanalysis mcp-serve`
 - MCP Server: `goldenanalysis mcp-serve` (4 read-only tools: `list_analyzers`, `analyze_frame`, `get_trend`, `detect_regressions`). Also aggregated through `goldensuite-mcp`.
-- TypeScript / Edge: `npm install goldenanalysis` — edge-safe core; optional WASM via `await enableAnalysisWasm()` swaps in the Rust `analysis-core` histogram/quantile kernels
+- TypeScript / Edge: `npm install goldenanalysis` — edge-safe core; optional WASM via `await enableAnalysisWasm()` swaps in the Rust `analysis-core` kernels (histogram/quantile + mean/min/max + cluster_size_histogram)
 
 ## Install
 - `pip install goldenanalysis` — generic frame path, zero suite dependencies (works on any polars DataFrame)
 - `pip install goldenanalysis[match,check,flow,pipe]` — suite adapters (report over GoldenMatch / GoldenCheck / GoldenFlow / GoldenPipe outputs)
-- `pip install goldenanalysis[native]` — optional Rust accelerator (histogram / quantile, 5.8-9.9x on Linux)
+- `pip install goldenanalysis[native]` — optional Rust kernels; histogram/quantile are the measured wins (5.8-9.9x on Linux), the frame-stat/mean/min/max/cluster kernels are single-sourced (parity-gated, not perf)
 - TypeScript: `npm install goldenanalysis`
 
 ## Quick Examples
@@ -70,7 +70,7 @@ Each metric carries a `direction` (higher_better / lower_better); regression thr
 GoldenCheck profiles a single input dataset at ingest (a producer of findings). GoldenAnalysis is read-only and cross-cutting: it consumes any stage's outputs (including GoldenCheck's), trends across runs, and NEVER writes data. The hard line: GoldenAnalysis depends on other packages' types; never the reverse.
 
 ## Native accelerator (optional)
-`pip install goldenanalysis[native]` pulls the separate `goldenanalysis-native` wheel (`analysis-core` pyo3-free + `analysis-native` abi3). `histogram` and `quantile` dispatch to the Rust kernel — byte-identical to the pure-Python reference and 5.8-9.9x faster on Linux x86_64 at 1M-10M rows (including the list→Arrow conversion). Pure Python stays the default + reference; `GOLDENANALYSIS_NATIVE=0` forces pure. The same `analysis-core` kernels back the optional TypeScript WASM path.
+`pip install goldenanalysis[native]` pulls the separate `goldenanalysis-native` wheel (`analysis-core` pyo3-free + `analysis-native` abi3). `histogram` and `quantile` are the measured wins — byte-identical to the pure-Python reference and 5.8-9.9x faster on Linux x86_64 at 1M-10M rows (including the list→Arrow conversion). The frame-stat kernels (`null_ratio_per_column`/`duplicate_row_ratio`/`distinct_count`), the numeric reductions (`mean`/`min`/`max`), and `cluster_size_histogram` are also native-backed, cut over for one source of truth across Python/native/WASM (parity-gated, not perf). Pure Python stays the default + reference; `GOLDENANALYSIS_NATIVE=0` forces pure. The same `analysis-core` kernels back the optional TypeScript WASM path (numeric + cluster only; the frame-stat kernels stay pure-TS — a browser dedup surface is deferred).
 
 ## Docs
 - [PyPI](https://pypi.org/project/goldenanalysis/)

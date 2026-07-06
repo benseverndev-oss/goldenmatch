@@ -6,6 +6,8 @@ keywords: ["goldenanalysis", "native", "rust", "pyo3", "histogram", "quantile", 
 
 The heavy aggregation primitives — `histogram` and `quantile`, run over the score and cluster-size arrays of large results — have an optional Rust kernel, gated exactly like `goldenmatch[native]` / `goldencheck[native]`.
 
+Those two are the **measured performance wins**. The rest of the aggregation surface is now backed by the same `analysis-core` crate too — the frame-stat kernels (`null_ratio_per_column` / `duplicate_row_ratio` / `distinct_count`), the numeric reductions (`mean` / `min` / `max`), and the discrete `cluster_size_histogram` — but those were cut over for **one source of truth across Python / native / WASM**, not for speed (they're already cheap). Each is parity-gated byte-identical to the pure reference; none is claimed as a perf win.
+
 ```bash
 pip install goldenanalysis[native]   # pulls the separate goldenanalysis-native wheel
 ```
@@ -28,7 +30,7 @@ The Arrow conversion turns out to be far cheaper than the pure-Python loops, so 
 ## How it stays honest
 
 - **Two crates, mirrored.** `analysis-core` (pyo3-free) holds the kernel logic so it can later back a SQL surface; `analysis-native` is the thin abi3 PyO3 + Arrow shim over it.
-- **Parity is a CI gate.** A dedicated lane builds the wheel and runs the parity suite under `GOLDENANALYSIS_NATIVE=1`, including an end-to-end test that the public `aggregate.histogram` / `quantile` dispatch is byte-identical to the pure path.
+- **Parity is a CI gate.** A dedicated lane builds the wheel and runs the parity suite under `GOLDENANALYSIS_NATIVE=1`, including end-to-end tests that the public dispatch for **every** covered primitive (histogram, quantile, the frame-stat kernels, mean/min/max, and cluster_size_histogram) is byte-identical to the pure path. Analyzers that stay pure on both surfaces are locked by shared cross-surface fixtures instead — the frame-kernel equality semantics (`-0.0`/`NaN`/null), `cluster.distribution`, `quality.rollup`, and the regression decision logic each have a byte-identical Python↔TS fixture.
 - **No behavior change without the wheel.** With no native extension installed, `auto` resolves to the pure path; results are identical whether or not native is present.
 
 In-tree dev build (no maturin needed):
@@ -50,6 +52,6 @@ const q = aggregate.quantile(values, 0.9);   // the sort runs in Rust
 disableAnalysisWasm();                        // back to pure-TS
 ```
 
-- **Covered ops:** `histogram` / `quantile` — the numeric reductions where the win lives (a `Float64Array` crosses the boundary zero-copy and the quantile sort runs in Rust). Everything else in `aggregate` stays pure-TS.
+- **Covered ops:** `histogram`, `quantile`, `mean`, `min`, `max`, and `cluster_size_histogram` — the numeric + cluster kernels, each crossing as a `Float64Array` zero-copy (the quantile sort runs in Rust). The frame-stat kernels (`duplicate_row_ratio` / `distinct_count` / `null_ratio`) stay **pure-TS**: they need value-interning that has no clean WASM boundary, so a browser dedup surface is consciously deferred. Everything else in `aggregate` stays pure-TS too.
 - **Opt-in, edge-safe, parity-gated** exactly like the scorer WASM backend in `goldenmatch`: pure-TS is the default + fallback, the `.wasm` is built in CI (never committed), and a CI lane asserts WASM ≈ pure-TS to 4 decimals. The plumbing is shared with `goldenmatch` via the `goldenmatch-wasm-runtime` package.
 - **Build locally:** `bash packages/rust/extensions/analysis-wasm/build_wasm.sh` (needs the rustup `wasm32-unknown-unknown` target + `wasm-bindgen-cli`).
