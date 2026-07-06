@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.14.0 (2026-07-06)
+
+**Fused columnar apply (Pillar-1, default-on).** A column's run of owned no-arg total string→string transforms (25 kernels: text/email/name) now fuses into ONE native pass over the Arrow buffer instead of crossing the Python/Polars/Arrow boundary once per transform. Output and the audit trail are byte-identical to the per-transform path; the win is lower memory — measured **~22% lower peak RSS at 5M rows** (fusion avoids materializing one intermediate column per transform), plus a modest wall speedup. On by default when the native kernel is available (needs `goldenflow-native >= 0.12.0`); opt out with `GOLDENFLOW_FUSED_APPLY=0`; pre-0.12.0 wheels and pure-Python installs fall back gracefully. See ADR 0034.
+
 Owned-kernel depth (Waves 2-6): 21 NEW transforms, each an owned Rust kernel in `goldenflow-core` fanned out byte-for-byte to all six surfaces (native wheel, WASM/TS, pure-Python fallback, DuckDB extension, Postgres). Registry count 92 → 113; goldenflow-duckdb UDFs 74 → 98.
 
 - **Phonetic (W2):** `soundex`, `double_metaphone_primary`, `double_metaphone_alt` — blocking/match keys for entity resolution.
