@@ -108,6 +108,25 @@ is already Polars/Arrow-vectorized and is NOT a native target.
   (`MIN_AVG_GROUP`) — a near-unique determinant has singleton groups that each
   look "consistent" and would otherwise inflate confidence to ~1.0.
 
+## SQL surface — `goldencheck.core.kernels` (cross-surface parity P5)
+
+`goldencheck/core/kernels.py` exposes the five deep-profiling kernels as
+**list-shaped** functions (`benford_histogram`, `near_duplicate_clusters`,
+`discover_functional_dependencies`, `discover_approximate_fds`,
+`composite_key_search`) — plain `list[...]` in, index/count structures out,
+independent of DataFrames / `Finding` objects. They run the native-gated kernel
+(`GOLDENCHECK_NATIVE`) when built, else reuse the profilers' OWN pure-Python
+fallbacks (`_python_clusters`, `_discover_polars`, `_discover_python`,
+`_python_search`) — one source of truth, so native == fallback byte-for-byte
+(`tests/core/test_kernels.py`). This is what the DuckDB `goldencheck_*` UDFs
+(`packages/rust/extensions/duckdb/.../goldencheck_kernels.py`) call, and what the
+Postgres `goldencheck_*` functions (native-direct over `goldencheck-core`,
+`goldenmatch_pg` 0.13.0) match value-for-value — the first *aggregate-shaped* SQL
+surface in the suite (all prior ports were scalar). Composite-key search
+pre-drops constant + individually-unique columns (the shared candidate contract
+the native kernel + `_python_search` both assume) and maps result indices back to
+the caller's original columns.
+
 ## cell_quality (GoldenMatch survivorship bridge)
 
 `goldencheck.cell_quality(df) -> dict[(row_index, column), float]` — a SPARSE map
