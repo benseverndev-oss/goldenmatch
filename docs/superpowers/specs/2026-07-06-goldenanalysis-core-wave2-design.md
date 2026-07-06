@@ -65,12 +65,26 @@ with the crate's existing wasm-test convention.
 ### 3.4 `aggregate.py` — dispatch (mirror histogram/quantile)
 
 `mean`/`min`/`max` public dispatchers: `if native_enabled("X"): _X_native(values) else:
-_X_pure(values)`. `_X_native` converts to Arrow (`... .to_arrow()` on a Series, or a
-`pl.Series(values).to_arrow()` for a raw list — match how `_histogram_native` handles
-its `values` input) and calls `native_module().X`. `_*_pure`:
-- `_mean_pure(v) = sum(v)/len(v) if v else 0.0`
-- `_min_pure(v) = min(v) if v else 0.0`; `_max_pure(v) = max(v) if v else 0.0`
-(No dtype fallback needed — these take numeric sequences, like histogram/quantile.)
+_X_pure(values)`, with **NO try/except** — mirror the `histogram`/`quantile` dispatchers
+exactly (they have none; only the intern-based Wave-1 kernels wrap in try/except because
+`intern_column` can reject dtypes — the pure-slice kernels can't).
+
+`_X_native` MUST use the EXACT existing histogram/quantile Arrow idiom (verified in
+`aggregate.py`) — **NOT** `pl.Series(values).to_arrow()`:
+```python
+arr = pa.array([float(v) for v in values if v is not None], type=pa.float64())
+return native_module().X(arr)
+```
+Forcing `type=pa.float64()` + pre-`float()`-ing is load-bearing: `pl.Series([1,0,1]).to_arrow()`
+would infer `Int64`, and `analysis-native`'s `read_f64` raises `TypeError` on non-Float64 —
+which, with no try/except, would propagate uncaught instead of falling back.
+
+`_*_pure` — filter `None` IDENTICALLY to the native path (which drops nulls via the
+list-comp + `read_f64`), matching `_histogram_pure`/`_quantile_pure` which both filter
+`if v is not None`:
+- `_mean_pure(v)`: `xs = [float(x) for x in v if x is not None]; return sum(xs)/len(xs) if xs else 0.0`
+- `_min_pure(v)`: `xs = [...]; return min(xs) if xs else 0.0`; `_max_pure` symmetric.
+(No dtype-fallback try/except needed — these take numeric sequences, like histogram/quantile.)
 
 ### 3.5 Wire `match_rates` + gating
 
@@ -107,13 +121,18 @@ through the pure path.
 ## 6. Risks
 
 - **Summation order (mean) — the one real parity risk.** Resolved by naive
-  `iter().sum()` + the summation-order fixture (§4). If CI shows a divergence, polars
-  might round-trip `scores` differently — but `match_rates` builds `scores` as a plain
-  Python list and `_mean_pure` uses Python `sum`, and the native path sums the same
-  f64 values naively, so they match. (histogram/quantile already prove naive-f64
-  parity holds native↔pure in this crate.)
-- **min/max NaN** — out of scope (finite-only); documented. If a future caller passes
-  NaN, define the Python-min-matching behavior then.
+  `iter().sum()` (folds left-to-right from `0.0`, matching Python `sum()`) + the
+  summation-order fixture (§4, `[1e16, 1.0, …, -1e16]`) — that fixture IS the proof,
+  since `read_f64` returns values in Arrow (= list) order and the native list-comp
+  builds the array in list order, so no reorder is possible. (histogram/quantile prove
+  same-op-order float *arithmetic* parity in this crate but do no summation, so they
+  don't cover this specific risk — the §4 fixture does.)
+- **min/max NaN — fails SILENT, not loud.** Out of scope (finite-only; match_rates
+  scores are finite). Direction for a future caller: `read_f64` drops Arrow nulls but
+  NaN is a valid f64 (passes through), and Rust `fold(INFINITY, f64::min)` is
+  NaN-*ignoring* while Python builtin `min` is order-dependent/NaN-propagating — so a
+  future NaN-bearing column would silently diverge, not error. A future wiring needs an
+  explicit NaN guard, not just a fixture.
 - **std deferred** — a clean follow-on; noted so a future numeric-stats analyzer knows
   the pattern is ready.
 - **Stacked-PR churn** — if Wave 1 squash-merges, rebase (the documented stacked-PR
