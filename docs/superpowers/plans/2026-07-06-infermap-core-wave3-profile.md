@@ -273,7 +273,7 @@ Expected: FAIL (`AssertionError` — key missing).
 
 - [ ] **Step 3: Add `profile_score` to both sets in `_native_loader.py`**
 
-In `_GATED_ON`:
+In `_GATED_ON` (replace the whole `frozenset({...})` literal — it's currently a two-line layout):
 ```python
 _GATED_ON: frozenset[str] = frozenset(
     {"detect_domain", "exact_score", "fuzzy_name_score", "initialism_score",
@@ -548,6 +548,10 @@ Locate the `infermap_native:` filter block (the `- 'packages/python/infermap/inf
 ```yaml
               - 'packages/python/infermap/infermap/scorers/profile.py'
 ```
+
+> Only `profile.py` goes in this filter. Do NOT add `test_scorers_dispatch.py` —
+> those tests run in the normal Python matrix, not the native lane. (The native
+> lane's trigger set is kernel/loader/parity-test files, not general dispatch tests.)
 
 - [ ] **Step 3: Validate the YAML edit didn't break `ci.yml`**
 
