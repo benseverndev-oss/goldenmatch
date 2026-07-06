@@ -537,7 +537,7 @@ def test_pattern_type_unicode_edge_recorded():
 ```bash
 "$INTERP" -m pytest packages/python/infermap/tests/test_native_parity.py -q -k "pattern_type"
 ```
-Expected: the parametrized `test_pattern_type_parity` cases (one per must-tier line, ~35) + `test_pattern_type_unicode_edge_recorded` — **all SKIPPED** (`native_only`, no wheel). NO collection/import/JSON errors. If a JSON line fails to parse, fix the corpus (watch the `\\s`/`\\x` escaping — inside a JSON string a literal backslash is `\\`, and ` `/`` are the unicode escapes).
+Expected: the parametrized `test_pattern_type_parity` cases (one per must-tier line, ~35) + `test_pattern_type_unicode_edge_recorded` — **all SKIPPED** (`native_only`, no wheel). NO collection/import/JSON errors. If a JSON line fails to parse, fix the corpus (watch the `\\s`/`\\x` escaping — inside a JSON string a literal backslash is `\\`, and `\u00a0`/`\u001c` are the unicode escapes).
 
 - [ ] **Step 4: Sanity-check the corpus parses + oracle runs (box-runnable, pure)**
 
