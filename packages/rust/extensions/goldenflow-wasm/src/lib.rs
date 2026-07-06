@@ -17,7 +17,9 @@ mod wasm {
     use goldenflow_core::categorical;
     use goldenflow_core::company;
     use goldenflow_core::email;
-    use goldenflow_core::identifiers::{aba, ean, ein, iban, imei, isbn, luhn, ssn, swift, vat};
+    use goldenflow_core::identifiers::{
+        aba, cusip, ean, ein, iban, imei, isbn, isin, luhn, npi, ssn, swift, vat,
+    };
     use goldenflow_core::names;
     use goldenflow_core::numeric;
     use goldenflow_core::phone;
@@ -44,6 +46,59 @@ mod wasm {
     #[wasm_bindgen]
     pub fn email_validate(s: &str) -> Option<bool> {
         email::email_validate(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn isin_validate(s: &str) -> bool {
+        isin::isin_validate(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn cusip_validate(s: &str) -> bool {
+        cusip::cusip_validate(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn npi_validate(s: &str) -> bool {
+        npi::npi_validate(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn luhn_validate(s: &str) -> bool {
+        luhn::luhn_validate(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn cc_brand(s: &str) -> Option<String> {
+        luhn::cc_brand(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn name_initials(s: &str) -> String {
+        names::name_initials(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn strip_middle(s: &str) -> String {
+        names::strip_middle(s)
+    }
+
+    // Cast i64 -> f64 so JS receives a plain `number` (not a BigInt); the value
+    // is exact for the 1..=3999 / small-ordinal ranges these parsers produce,
+    // and the byte-parity harness compares numerics by VALUE.
+    #[wasm_bindgen]
+    pub fn roman_to_int(s: &str) -> Option<f64> {
+        numeric::roman_to_int(s).map(|v| v as f64)
+    }
+
+    #[wasm_bindgen]
+    pub fn ordinal_to_int(s: &str) -> Option<f64> {
+        numeric::ordinal_to_int(s).map(|v| v as f64)
+    }
+
+    #[wasm_bindgen]
+    pub fn fraction_to_decimal(s: &str) -> Option<f64> {
+        numeric::fraction_to_decimal(s)
     }
 
     #[wasm_bindgen]

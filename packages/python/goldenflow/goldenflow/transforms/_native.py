@@ -172,6 +172,49 @@ def soundex_native() -> Callable[[pl.Series], pl.Series] | None:
     return _str_kernel_runner("phonetic", "soundex_arrow")
 
 
+# --- W5 breadth kernels (str in, bool/str/int/float out via _str_kernel_runner) ---
+
+
+def isin_validate_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _str_kernel_runner("isin", "isin_validate_arrow")
+
+
+def cusip_validate_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _str_kernel_runner("cusip", "cusip_validate_arrow")
+
+
+def npi_validate_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _str_kernel_runner("npi", "npi_validate_arrow")
+
+
+def luhn_validate_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _str_kernel_runner("luhn", "luhn_validate_arrow")
+
+
+def cc_brand_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _str_kernel_runner("cc", "cc_brand_arrow")
+
+
+def name_initials_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _str_kernel_runner("names_ext", "name_initials_arrow")
+
+
+def strip_middle_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _str_kernel_runner("names_ext", "strip_middle_arrow")
+
+
+def roman_to_int_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _str_kernel_runner("numeric", "roman_to_int_arrow")
+
+
+def ordinal_to_int_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _str_kernel_runner("numeric", "ordinal_to_int_arrow")
+
+
+def fraction_to_decimal_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _str_kernel_runner("numeric", "fraction_to_decimal_arrow")
+
+
 def double_metaphone_native() -> (
     Callable[[pl.Series], tuple[pl.Series, pl.Series]] | None
 ):

@@ -58,10 +58,17 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(identifiers::vat_format_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(identifiers::aba_validate_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(identifiers::imei_validate_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(identifiers::isin_validate_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(identifiers::cusip_validate_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(identifiers::npi_validate_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(identifiers::luhn_validate_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(identifiers::cc_brand_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(identifiers::ssn_format_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(identifiers::ssn_mask_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(identifiers::ein_format_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(names::name_transliterate_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(names::name_initials_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(names::strip_middle_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(names::name_script_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(names::strip_titles_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(names::strip_suffixes_arrow, m)?)?;
@@ -106,6 +113,9 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(numeric::currency_strip_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(numeric::percentage_normalize_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(numeric::to_integer_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(numeric::roman_to_int_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(numeric::ordinal_to_int_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(numeric::fraction_to_decimal_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(numeric::comma_decimal_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(numeric::scientific_to_decimal_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(numeric::round_arrow, m)?)?;

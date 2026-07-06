@@ -139,6 +139,91 @@
 {"transform": "imei_validate", "input": "49015420323751a", "expected": false}
 {"transform": "imei_validate", "input": "", "expected": false}
 {"transform": "imei_validate", "input": null, "expected": null}
+{"transform": "isin_validate", "input": "US0378331005", "expected": true}
+{"transform": "isin_validate", "input": "us0378331005", "expected": true}
+{"transform": "isin_validate", "input": "US-0378331005", "expected": true}
+{"transform": "isin_validate", "input": "AU0000XVGZA3", "expected": true}
+{"transform": "isin_validate", "input": "US0378331006", "expected": false}
+{"transform": "isin_validate", "input": "0378331005", "expected": false}
+{"transform": "isin_validate", "input": "1S0378331005", "expected": false}
+{"transform": "isin_validate", "input": "US03783310_5", "expected": false}
+{"transform": "isin_validate", "input": "", "expected": false}
+{"transform": "isin_validate", "input": null, "expected": null}
+{"transform": "cusip_validate", "input": "037833100", "expected": true}
+{"transform": "cusip_validate", "input": "38259P508", "expected": true}
+{"transform": "cusip_validate", "input": "037833 100", "expected": true}
+{"transform": "cusip_validate", "input": "037833101", "expected": false}
+{"transform": "cusip_validate", "input": "03783310", "expected": false}
+{"transform": "cusip_validate", "input": "38259P50X", "expected": false}
+{"transform": "cusip_validate", "input": "", "expected": false}
+{"transform": "cusip_validate", "input": null, "expected": null}
+{"transform": "npi_validate", "input": "1234567893", "expected": true}
+{"transform": "npi_validate", "input": "123-456-7893", "expected": true}
+{"transform": "npi_validate", "input": "1234567890", "expected": false}
+{"transform": "npi_validate", "input": "123456789", "expected": false}
+{"transform": "npi_validate", "input": "123456789a", "expected": false}
+{"transform": "npi_validate", "input": "", "expected": false}
+{"transform": "npi_validate", "input": null, "expected": null}
+{"transform": "luhn_validate", "input": "4242424242424242", "expected": true}
+{"transform": "luhn_validate", "input": "79927398713", "expected": true}
+{"transform": "luhn_validate", "input": "1234", "expected": false}
+{"transform": "luhn_validate", "input": "18", "expected": true}
+{"transform": "luhn_validate", "input": "abc", "expected": false}
+{"transform": "luhn_validate", "input": "", "expected": false}
+{"transform": "luhn_validate", "input": null, "expected": null}
+{"transform": "cc_brand", "input": "4242424242424242", "expected": "visa"}
+{"transform": "cc_brand", "input": "4111111111111", "expected": "visa"}
+{"transform": "cc_brand", "input": "5555555555554444", "expected": "mastercard"}
+{"transform": "cc_brand", "input": "2223003122003222", "expected": "mastercard"}
+{"transform": "cc_brand", "input": "378282246310005", "expected": "amex"}
+{"transform": "cc_brand", "input": "6011111111111117", "expected": "discover"}
+{"transform": "cc_brand", "input": "3530111333300000", "expected": "jcb"}
+{"transform": "cc_brand", "input": "30569309025904", "expected": "diners"}
+{"transform": "cc_brand", "input": "1234567890123456", "expected": null}
+{"transform": "cc_brand", "input": "", "expected": null}
+{"transform": "cc_brand", "input": null, "expected": null}
+{"transform": "name_initials", "input": "John Q Public", "expected": "JQP"}
+{"transform": "name_initials", "input": "john quincy adams", "expected": "JQA"}
+{"transform": "name_initials", "input": "O'Brien", "expected": "O"}
+{"transform": "name_initials", "input": "John Q. 3rd Public", "expected": "JQP"}
+{"transform": "name_initials", "input": "  spaced   out  ", "expected": "SO"}
+{"transform": "name_initials", "input": "", "expected": ""}
+{"transform": "name_initials", "input": null, "expected": null}
+{"transform": "strip_middle", "input": "John Quincy Adams", "expected": "John Adams"}
+{"transform": "strip_middle", "input": "John Q. Public", "expected": "John Public"}
+{"transform": "strip_middle", "input": "Cher", "expected": "Cher"}
+{"transform": "strip_middle", "input": "Bob Smith", "expected": "Bob Smith"}
+{"transform": "strip_middle", "input": "  a  b  c  d  ", "expected": "a d"}
+{"transform": "strip_middle", "input": "", "expected": ""}
+{"transform": "strip_middle", "input": null, "expected": null}
+{"transform": "roman_to_int", "input": "XIV", "expected": 14}
+{"transform": "roman_to_int", "input": "iv", "expected": 4}
+{"transform": "roman_to_int", "input": "MCMXCIV", "expected": 1994}
+{"transform": "roman_to_int", "input": "MMMCMXCIX", "expected": 3999}
+{"transform": "roman_to_int", "input": "IIII", "expected": null}
+{"transform": "roman_to_int", "input": "VX", "expected": null}
+{"transform": "roman_to_int", "input": "ABC", "expected": null}
+{"transform": "roman_to_int", "input": "", "expected": null}
+{"transform": "roman_to_int", "input": null, "expected": null}
+{"transform": "ordinal_to_int", "input": "1st", "expected": 1}
+{"transform": "ordinal_to_int", "input": "22nd", "expected": 22}
+{"transform": "ordinal_to_int", "input": "3RD", "expected": 3}
+{"transform": "ordinal_to_int", "input": "11th", "expected": 11}
+{"transform": "ordinal_to_int", "input": "1th", "expected": null}
+{"transform": "ordinal_to_int", "input": "5", "expected": null}
+{"transform": "ordinal_to_int", "input": "abc", "expected": null}
+{"transform": "ordinal_to_int", "input": "", "expected": null}
+{"transform": "ordinal_to_int", "input": null, "expected": null}
+{"transform": "fraction_to_decimal", "input": "1/2", "expected": 0.5}
+{"transform": "fraction_to_decimal", "input": "3/4", "expected": 0.75}
+{"transform": "fraction_to_decimal", "input": "3 3/4", "expected": 3.75}
+{"transform": "fraction_to_decimal", "input": "-1/2", "expected": -0.5}
+{"transform": "fraction_to_decimal", "input": "5", "expected": 5.0}
+{"transform": "fraction_to_decimal", "input": "2.5", "expected": 2.5}
+{"transform": "fraction_to_decimal", "input": "1/0", "expected": null}
+{"transform": "fraction_to_decimal", "input": "abc", "expected": null}
+{"transform": "fraction_to_decimal", "input": "", "expected": null}
+{"transform": "fraction_to_decimal", "input": null, "expected": null}
 {"transform": "ssn_format", "input": "123456789", "expected": "123-45-6789"}
 {"transform": "ssn_format", "input": "123-45-6789", "expected": "123-45-6789"}
 {"transform": "ssn_format", "input": " 123 45 6789 ", "expected": "123-45-6789"}

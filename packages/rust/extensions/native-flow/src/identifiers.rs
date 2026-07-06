@@ -3,8 +3,58 @@
 use crate::util::{map_str_to_bool, map_str_to_str};
 use arrow::array::ArrayData;
 use arrow::pyarrow::PyArrowType;
-use goldenflow_core::identifiers::{aba, ean, ein, iban, imei, isbn, luhn, ssn, swift, vat};
+use goldenflow_core::identifiers::{
+    aba, cusip, ean, ein, iban, imei, isbn, isin, luhn, npi, ssn, swift, vat,
+};
 use pyo3::prelude::*;
+
+#[pyfunction]
+pub fn isin_validate_arrow(
+    py: Python,
+    array: PyArrowType<ArrayData>,
+) -> PyResult<PyArrowType<ArrayData>> {
+    Ok(PyArrowType(map_str_to_bool(py, array.0, isin::isin_validate)?))
+}
+
+#[pyfunction]
+pub fn cusip_validate_arrow(
+    py: Python,
+    array: PyArrowType<ArrayData>,
+) -> PyResult<PyArrowType<ArrayData>> {
+    Ok(PyArrowType(map_str_to_bool(
+        py,
+        array.0,
+        cusip::cusip_validate,
+    )?))
+}
+
+#[pyfunction]
+pub fn npi_validate_arrow(
+    py: Python,
+    array: PyArrowType<ArrayData>,
+) -> PyResult<PyArrowType<ArrayData>> {
+    Ok(PyArrowType(map_str_to_bool(py, array.0, npi::npi_validate)?))
+}
+
+#[pyfunction]
+pub fn luhn_validate_arrow(
+    py: Python,
+    array: PyArrowType<ArrayData>,
+) -> PyResult<PyArrowType<ArrayData>> {
+    Ok(PyArrowType(map_str_to_bool(
+        py,
+        array.0,
+        luhn::luhn_validate,
+    )?))
+}
+
+#[pyfunction]
+pub fn cc_brand_arrow(
+    py: Python,
+    array: PyArrowType<ArrayData>,
+) -> PyResult<PyArrowType<ArrayData>> {
+    Ok(PyArrowType(map_str_to_str(py, array.0, luhn::cc_brand)?))
+}
 
 #[pyfunction]
 pub fn ssn_format_arrow(

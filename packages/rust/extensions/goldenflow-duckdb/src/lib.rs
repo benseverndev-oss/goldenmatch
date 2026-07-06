@@ -492,6 +492,8 @@ fn register_all(con: &Connection) -> Result<(), Box<dyn Error>> {
         "goldenflow_strip_suffixes"       => goldenflow_core::names::strip_suffixes,
         "goldenflow_name_proper"          => goldenflow_core::names::name_proper,
         "goldenflow_nickname_standardize" => goldenflow_core::names::nickname_standardize,
+        "goldenflow_name_initials"        => goldenflow_core::names::name_initials,
+        "goldenflow_strip_middle"         => goldenflow_core::names::strip_middle,
         // text
         "goldenflow_strip"                => strip_owned,
         "goldenflow_collapse_whitespace"  => goldenflow_core::text::collapse_whitespace,
@@ -535,6 +537,7 @@ fn register_all(con: &Connection) -> Result<(), Box<dyn Error>> {
         "goldenflow_isbn_normalize"       => goldenflow_core::identifiers::isbn::isbn_normalize,
         "goldenflow_swift_format"         => goldenflow_core::identifiers::swift::swift_format,
         "goldenflow_vat_format"           => goldenflow_core::identifiers::vat::vat_format,
+        "goldenflow_cc_brand"             => goldenflow_core::identifiers::luhn::cc_brand,
     );
 
     // VARCHAR -> BOOLEAN.
@@ -549,6 +552,10 @@ fn register_all(con: &Connection) -> Result<(), Box<dyn Error>> {
         "goldenflow_vat_validate"  => goldenflow_core::identifiers::vat::vat_validate,
         "goldenflow_aba_validate"  => goldenflow_core::identifiers::aba::aba_validate,
         "goldenflow_imei_validate" => goldenflow_core::identifiers::imei::imei_validate,
+        "goldenflow_isin_validate"  => goldenflow_core::identifiers::isin::isin_validate,
+        "goldenflow_cusip_validate" => goldenflow_core::identifiers::cusip::cusip_validate,
+        "goldenflow_npi_validate"   => goldenflow_core::identifiers::npi::npi_validate,
+        "goldenflow_luhn_validate"  => goldenflow_core::identifiers::luhn::luhn_validate,
     );
     register_prim_opt!(con, bool, Boolean,
         "goldenflow_boolean_normalize" => goldenflow_core::categorical::boolean_normalize,
@@ -561,11 +568,14 @@ fn register_all(con: &Connection) -> Result<(), Box<dyn Error>> {
         "goldenflow_percentage_normalize"  => goldenflow_core::numeric::percentage_normalize,
         "goldenflow_comma_decimal"         => goldenflow_core::numeric::comma_decimal,
         "goldenflow_scientific_to_decimal" => goldenflow_core::numeric::scientific_to_decimal,
+        "goldenflow_fraction_to_decimal"   => goldenflow_core::numeric::fraction_to_decimal,
     );
 
     // VARCHAR -> BIGINT.
     register_prim_opt!(con, i64, Bigint,
-        "goldenflow_to_integer" => goldenflow_core::numeric::to_integer,
+        "goldenflow_to_integer"     => goldenflow_core::numeric::to_integer,
+        "goldenflow_roman_to_int"   => goldenflow_core::numeric::roman_to_int,
+        "goldenflow_ordinal_to_int" => goldenflow_core::numeric::ordinal_to_int,
     );
 
     // Multi-output splits, exposed component-by-component (single-arg).
@@ -790,7 +800,8 @@ mod tests {
                     .query_row(&format!("SELECT {udf}(?)"), [input], |r| r.get(0))
                     .unwrap_or_else(|e| panic!("{udf}({input:?}): {e}"));
                 assert_eq!(got, Some(b), "{transform} on {input:?}");
-            } else if transform == "to_integer" {
+            } else if matches!(transform, "to_integer" | "roman_to_int" | "ordinal_to_int") {
+                // BIGINT-returning parsers: compare as i64 (a JSON int expected).
                 let got: Option<i64> = con
                     .query_row(&format!("SELECT {udf}(?)"), [input], |r| r.get(0))
                     .unwrap_or_else(|e| panic!("{udf}({input:?}): {e}"));

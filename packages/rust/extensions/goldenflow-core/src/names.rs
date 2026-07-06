@@ -473,6 +473,30 @@ pub fn merge_name(first: Option<&str>, last: Option<&str>) -> Option<String> {
     }
 }
 
+/// Initials: the first ASCII-alphabetic char of each whitespace token,
+/// uppercased and concatenated. Tokens whose first char is not a letter are
+/// skipped (e.g. `John Q. 3rd Public` -> `JQP`). Always returns a `String`
+/// (`""` when there are no letter-leading tokens).
+pub fn name_initials(s: &str) -> String {
+    s.split_whitespace()
+        .filter_map(|tok| tok.chars().next())
+        .filter(char::is_ascii_alphabetic)
+        .flat_map(char::to_uppercase)
+        .collect()
+}
+
+/// Drop middle tokens, keeping the first and last whitespace tokens verbatim
+/// (`John Quincy Adams` -> `John Adams`). 0 tokens -> `""`; 1 token -> itself;
+/// >=2 -> `"first last"`. Collapses internal whitespace.
+pub fn strip_middle(s: &str) -> String {
+    let tokens: Vec<&str> = s.split_whitespace().collect();
+    match tokens.as_slice() {
+        [] => String::new(),
+        [only] => (*only).to_string(),
+        [first, .., last] => format!("{first} {last}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -33,6 +33,49 @@ pub fn cc_validate(s: &str) -> bool {
     }
 }
 
+/// Generic Luhn (mod-10) validation over any separator-tolerant digit string
+/// (not credit-card-length-bound). Empty / non-digit input -> false.
+pub fn luhn_validate(s: &str) -> bool {
+    match normalized_digits(s) {
+        Some(d) => luhn_ok(&d),
+        None => false,
+    }
+}
+
+/// Detect the card brand from a (separator-tolerant) card number by
+/// prefix + length: `visa` / `mastercard` / `amex` / `discover` / `diners` /
+/// `jcb`, else `None`. A brand HINT (prefix/length only) -- does NOT check the
+/// Luhn digit (use `cc_validate` for that).
+pub fn cc_brand(s: &str) -> Option<String> {
+    let d = normalized_digits(s)?;
+    let len = d.len();
+    // First `k` digits as a number (0 when the string is shorter than k).
+    let first = |k: usize| -> u32 {
+        if len >= k {
+            d[..k].parse().unwrap_or(0)
+        } else {
+            0
+        }
+    };
+    let (f2, f3, f4) = (first(2), first(3), first(4));
+    let brand = if len == 15 && (f2 == 34 || f2 == 37) {
+        "amex"
+    } else if len == 14 && (f2 == 36 || f2 == 38 || f2 == 39 || (300..=305).contains(&f3)) {
+        "diners"
+    } else if len == 16 && (3528..=3589).contains(&f4) {
+        "jcb"
+    } else if len == 16 && (d.starts_with("6011") || f2 == 65 || (644..=649).contains(&f3)) {
+        "discover"
+    } else if len == 16 && ((51..=55).contains(&f2) || (2221..=2720).contains(&f4)) {
+        "mastercard"
+    } else if d.starts_with('4') && matches!(len, 13 | 16 | 19) {
+        "visa"
+    } else {
+        return None;
+    };
+    Some(brand.to_string())
+}
+
 /// Group digits by brand: Amex (starts 34/37, len 15) -> 4-6-5; else 4-4-4-4...
 pub fn cc_format(s: &str) -> Option<String> {
     let d = normalized_digits(s)?;

@@ -502,10 +502,52 @@ registerTransform(
 );
 
 // ---------------------------------------------------------------------------
+// W5 breadth: name_initials + strip_middle
+// ---------------------------------------------------------------------------
+
+function nameInitialsTs(val: string): string {
+  let out = "";
+  for (const tok of val.split(/\s+/)) {
+    if (tok.length === 0) continue;
+    const first = tok[0]!;
+    if ((first >= "A" && first <= "Z") || (first >= "a" && first <= "z")) {
+      out += first.toUpperCase();
+    }
+  }
+  return out;
+}
+
+function stripMiddleTs(val: string): string {
+  const tokens = val.split(/\s+/).filter((t) => t.length > 0);
+  if (tokens.length === 0) return "";
+  if (tokens.length === 1) return tokens[0]!;
+  return `${tokens[0]} ${tokens[tokens.length - 1]}`;
+}
+
+function nameInitials(values: readonly ColumnValue[]): ColumnValue[] {
+  const backend: FlowWasmBackend | null = getFlowWasmBackend();
+  return mapStrings(values, backend ? (s) => backend.nameInitials(s) : nameInitialsTs);
+}
+
+function stripMiddle(values: readonly ColumnValue[]): ColumnValue[] {
+  const backend: FlowWasmBackend | null = getFlowWasmBackend();
+  return mapStrings(values, backend ? (s) => backend.stripMiddle(s) : stripMiddleTs);
+}
+
+registerTransform(
+  { name: "name_initials", inputTypes: ["name", "string"], autoApply: false, priority: 40, mode: "series" },
+  nameInitials,
+);
+registerTransform(
+  { name: "strip_middle", inputTypes: ["name", "string"], autoApply: false, priority: 40, mode: "series" },
+  stripMiddle,
+);
+
+// ---------------------------------------------------------------------------
 // Pure-TS single-value exports (cross-surface byte-parity harness)
 //
 // Bypass the wasm-dispatch wrappers above so a parity test can assert the
 // pure-TS path independently of whatever backend is currently registered.
 // ---------------------------------------------------------------------------
 
-export { nameTransliterateTs, nameScriptTs };
+export { nameTransliterateTs, nameScriptTs, nameInitialsTs, stripMiddleTs };

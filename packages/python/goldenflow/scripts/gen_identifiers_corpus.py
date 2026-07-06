@@ -58,10 +58,15 @@ from goldenflow.transforms.email import (  # noqa: E402
 )
 from goldenflow.transforms.identifiers import (  # noqa: E402
     _aba_validate_py,
+    _cc_brand_py,
     _cc_format_py,
     _cc_mask_py,
     _cc_validate_py,
+    _cusip_validate_py,
     _ean_validate_py,
+    _isin_validate_py,
+    _luhn_validate_py,
+    _npi_validate_py,
     _ein_format_py,
     _iban_format_py,
     _iban_validate_py,
@@ -77,7 +82,9 @@ from goldenflow.transforms.identifiers import (  # noqa: E402
 )
 from goldenflow.transforms.names import (  # noqa: E402
     _has_initial_py,
+    _name_initials_py,
     _name_proper_py,
+    _strip_middle_py,
     _name_script_py,
     _name_transliterate_py,
     _nickname_standardize_py,
@@ -87,7 +94,10 @@ from goldenflow.transforms.names import (  # noqa: E402
 from goldenflow.transforms.numeric import (  # noqa: E402
     _comma_decimal_py,
     _currency_strip_py,
+    _fraction_to_decimal_py,
+    _ordinal_to_int_py,
     _percentage_normalize_py,
+    _roman_to_int_py,
     _scientific_to_decimal_py,
     _to_integer_py,
 )
@@ -296,6 +306,101 @@ _CASES: list[tuple[str, str | None]] = [
     ("imei_validate", "49015420323751a"),  # non-digit
     ("imei_validate", ""),  # empty
     ("imei_validate", None),  # null
+    # --- isin_validate (ISO 6166, Luhn over letter-expanded) ---
+    ("isin_validate", "US0378331005"),  # Apple, valid
+    ("isin_validate", "us0378331005"),  # lowercase
+    ("isin_validate", "US-0378331005"),  # dashed
+    ("isin_validate", "AU0000XVGZA3"),  # letters in NSIN
+    ("isin_validate", "US0378331006"),  # bad check digit
+    ("isin_validate", "0378331005"),  # too short / no country code
+    ("isin_validate", "1S0378331005"),  # non-letter country code
+    ("isin_validate", "US03783310_5"),  # non-alphanumeric
+    ("isin_validate", ""),  # empty
+    ("isin_validate", None),  # null
+    # --- cusip_validate (weighted mod-10) ---
+    ("cusip_validate", "037833100"),  # Apple, valid
+    ("cusip_validate", "38259P508"),  # Google (letter in body)
+    ("cusip_validate", "037833 100"),  # spaced
+    ("cusip_validate", "037833101"),  # bad check digit
+    ("cusip_validate", "03783310"),  # 8 chars
+    ("cusip_validate", "38259P50X"),  # non-digit check
+    ("cusip_validate", ""),  # empty
+    ("cusip_validate", None),  # null
+    # --- npi_validate (Luhn over "80840" prefix) ---
+    ("npi_validate", "1234567893"),  # valid
+    ("npi_validate", "123-456-7893"),  # dashed
+    ("npi_validate", "1234567890"),  # bad check digit
+    ("npi_validate", "123456789"),  # 9 digits
+    ("npi_validate", "123456789a"),  # non-digit
+    ("npi_validate", ""),  # empty
+    ("npi_validate", None),  # null
+    # --- luhn_validate (generic Luhn, not cc-length-bound) ---
+    ("luhn_validate", "4242424242424242"),  # valid card
+    ("luhn_validate", "79927398713"),  # canonical Luhn example
+    ("luhn_validate", "1234"),  # short but Luhn-invalid
+    ("luhn_validate", "18"),  # valid 2-digit Luhn
+    ("luhn_validate", "abc"),  # non-digit
+    ("luhn_validate", ""),  # empty
+    ("luhn_validate", None),  # null
+    # --- cc_brand (prefix/length detect; null on no match) ---
+    ("cc_brand", "4242424242424242"),  # visa (16)
+    ("cc_brand", "4111111111111"),  # visa (13)
+    ("cc_brand", "5555555555554444"),  # mastercard (55)
+    ("cc_brand", "2223003122003222"),  # mastercard (2-series)
+    ("cc_brand", "378282246310005"),  # amex (37)
+    ("cc_brand", "6011111111111117"),  # discover (6011)
+    ("cc_brand", "3530111333300000"),  # jcb
+    ("cc_brand", "30569309025904"),  # diners (30)
+    ("cc_brand", "1234567890123456"),  # unknown prefix -> null
+    ("cc_brand", ""),  # empty -> null
+    ("cc_brand", None),  # null
+    # --- name_initials (letter-leading tokens) ---
+    ("name_initials", "John Q Public"),  # -> JQP
+    ("name_initials", "john quincy adams"),  # -> JQA
+    ("name_initials", "O'Brien"),  # -> O
+    ("name_initials", "John Q. 3rd Public"),  # digit token skipped -> JQP
+    ("name_initials", "  spaced   out  "),  # -> SO
+    ("name_initials", ""),  # -> ""
+    ("name_initials", None),  # null
+    # --- strip_middle (keep first + last) ---
+    ("strip_middle", "John Quincy Adams"),  # -> John Adams
+    ("strip_middle", "John Q. Public"),  # -> John Public
+    ("strip_middle", "Cher"),  # single token unchanged
+    ("strip_middle", "Bob Smith"),  # two tokens unchanged
+    ("strip_middle", "  a  b  c  d  "),  # -> a d
+    ("strip_middle", ""),  # -> ""
+    ("strip_middle", None),  # null
+    # --- roman_to_int (canonical forms only) ---
+    ("roman_to_int", "XIV"),  # -> 14
+    ("roman_to_int", "iv"),  # lowercase -> 4
+    ("roman_to_int", "MCMXCIV"),  # -> 1994
+    ("roman_to_int", "MMMCMXCIX"),  # -> 3999 (max)
+    ("roman_to_int", "IIII"),  # non-canonical -> null
+    ("roman_to_int", "VX"),  # malformed -> null
+    ("roman_to_int", "ABC"),  # non-Roman -> null
+    ("roman_to_int", ""),  # empty -> null
+    ("roman_to_int", None),  # null
+    # --- ordinal_to_int (correct suffix required) ---
+    ("ordinal_to_int", "1st"),  # -> 1
+    ("ordinal_to_int", "22nd"),  # -> 22
+    ("ordinal_to_int", "3RD"),  # case-insensitive -> 3
+    ("ordinal_to_int", "11th"),  # -> 11
+    ("ordinal_to_int", "1th"),  # wrong suffix -> null
+    ("ordinal_to_int", "5"),  # no suffix -> null
+    ("ordinal_to_int", "abc"),  # no digits -> null
+    ("ordinal_to_int", ""),  # empty -> null
+    ("ordinal_to_int", None),  # null
+    # --- fraction_to_decimal (fraction/mixed/plain) ---
+    ("fraction_to_decimal", "1/2"),  # -> 0.5
+    ("fraction_to_decimal", "3/4"),  # -> 0.75
+    ("fraction_to_decimal", "3 3/4"),  # mixed -> 3.75
+    ("fraction_to_decimal", "-1/2"),  # -> -0.5
+    ("fraction_to_decimal", "5"),  # plain -> 5.0
+    ("fraction_to_decimal", "2.5"),  # plain decimal -> 2.5
+    ("fraction_to_decimal", "1/0"),  # div by zero -> null
+    ("fraction_to_decimal", "abc"),  # non-numeric -> null
+    ("fraction_to_decimal", ""),  # empty -> null
+    ("fraction_to_decimal", None),  # null
     # --- ssn_format / ssn_mask (9 ASCII digits -> XXX-XX-XXXX / ***-**-XXXX) ---
     ("ssn_format", "123456789"),  # bare 9 digits
     ("ssn_format", "123-45-6789"),  # already formatted
@@ -859,6 +964,16 @@ _PY_FN = {
     "vat_format": _vat_format_py,
     "aba_validate": _aba_validate_py,
     "imei_validate": _imei_validate_py,
+    "isin_validate": _isin_validate_py,
+    "cusip_validate": _cusip_validate_py,
+    "npi_validate": _npi_validate_py,
+    "luhn_validate": _luhn_validate_py,
+    "cc_brand": _cc_brand_py,
+    "name_initials": _name_initials_py,
+    "strip_middle": _strip_middle_py,
+    "roman_to_int": _roman_to_int_py,
+    "ordinal_to_int": _ordinal_to_int_py,
+    "fraction_to_decimal": _fraction_to_decimal_py,
     "ssn_format": _ssn_format_py,
     "ssn_mask": _ssn_mask_py,
     "ein_format": _ein_format_py,
@@ -935,6 +1050,16 @@ _NATIVE_ARROW_FN = {
     "vat_format": "vat_format_arrow",
     "aba_validate": "aba_validate_arrow",
     "imei_validate": "imei_validate_arrow",
+    "isin_validate": "isin_validate_arrow",
+    "cusip_validate": "cusip_validate_arrow",
+    "npi_validate": "npi_validate_arrow",
+    "luhn_validate": "luhn_validate_arrow",
+    "cc_brand": "cc_brand_arrow",
+    "name_initials": "name_initials_arrow",
+    "strip_middle": "strip_middle_arrow",
+    "roman_to_int": "roman_to_int_arrow",
+    "ordinal_to_int": "ordinal_to_int_arrow",
+    "fraction_to_decimal": "fraction_to_decimal_arrow",
     "ssn_format": "ssn_format_arrow",
     "ssn_mask": "ssn_mask_arrow",
     "ein_format": "ein_format_arrow",

@@ -48,9 +48,11 @@ from goldenflow.transforms.email import (
 )
 from goldenflow.transforms.identifiers import (
     aba_validate,
+    cc_brand,
     cc_format,
     cc_mask,
     cc_validate,
+    cusip_validate,
     ean_validate,
     ein_format,
     iban_format,
@@ -58,6 +60,9 @@ from goldenflow.transforms.identifiers import (
     imei_validate,
     isbn_normalize,
     isbn_validate,
+    isin_validate,
+    luhn_validate,
+    npi_validate,
     ssn_format,
     ssn_mask,
     swift_format,
@@ -67,6 +72,10 @@ from goldenflow.transforms.identifiers import (
 )
 from goldenflow.transforms.names import (
     _has_initial_series as has_initial,
+)
+from goldenflow.transforms.names import (
+    name_initials,
+    strip_middle,
 )
 from goldenflow.transforms.names import (
     _strip_suffixes_series as strip_suffixes,
@@ -81,7 +90,10 @@ from goldenflow.transforms.names import (
     nickname_standardize,
 )
 from goldenflow.transforms.numeric import _currency_strip_series as currency_strip
+from goldenflow.transforms.numeric import _fraction_to_decimal_series as fraction_to_decimal
+from goldenflow.transforms.numeric import _ordinal_to_int_series as ordinal_to_int
 from goldenflow.transforms.numeric import _percentage_normalize_series as percentage_normalize
+from goldenflow.transforms.numeric import _roman_to_int_series as roman_to_int
 from goldenflow.transforms.numeric import _to_integer_series as to_integer
 from goldenflow.transforms.numeric import (
     comma_decimal,
@@ -161,6 +173,9 @@ _NUMERIC_TRANSFORMS = frozenset(
         "to_integer",
         "comma_decimal",
         "scientific_to_decimal",
+        "roman_to_int",
+        "ordinal_to_int",
+        "fraction_to_decimal",
     }
 )
 
@@ -202,6 +217,16 @@ _TRANSFORMS = {
     "vat_format": vat_format,
     "aba_validate": aba_validate,
     "imei_validate": imei_validate,
+    "isin_validate": isin_validate,
+    "cusip_validate": cusip_validate,
+    "npi_validate": npi_validate,
+    "luhn_validate": luhn_validate,
+    "cc_brand": cc_brand,
+    "name_initials": name_initials,
+    "strip_middle": strip_middle,
+    "roman_to_int": roman_to_int,
+    "ordinal_to_int": ordinal_to_int,
+    "fraction_to_decimal": fraction_to_decimal,
     "ssn_format": ssn_format,
     "ssn_mask": ssn_mask,
     "ein_format": ein_format,
@@ -281,6 +306,19 @@ _NATIVE_FLOOR_SYMBOL = {
     "vat_format": "vat_validate_arrow",
     "aba_validate": "aba_validate_arrow",
     "imei_validate": "imei_validate_arrow",
+    # W5 breadth: each new identifier gets its own component floor symbol.
+    "isin_validate": "isin_validate_arrow",
+    "cusip_validate": "cusip_validate_arrow",
+    "npi_validate": "npi_validate_arrow",
+    "luhn_validate": "luhn_validate_arrow",
+    "cc_brand": "cc_validate_arrow",  # cc_brand rides the "cc" component
+    # name_initials/strip_middle ride the names_ext component (strip_titles floor)
+    "name_initials": "strip_titles_arrow",
+    "strip_middle": "strip_titles_arrow",
+    # roman/ordinal/fraction ride the numeric component (currency_strip floor)
+    "roman_to_int": "currency_strip_arrow",
+    "ordinal_to_int": "currency_strip_arrow",
+    "fraction_to_decimal": "currency_strip_arrow",
     "ssn_format": "ssn_format_arrow",
     "ssn_mask": "ssn_mask_arrow",
     "ein_format": "ein_format_arrow",

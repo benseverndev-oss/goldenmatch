@@ -46,8 +46,15 @@ export interface FlowWasmBackend {
   swiftFormat(s: string): string | undefined;
   abaValidate(s: string): boolean;
   imeiValidate(s: string): boolean;
+  isinValidate(s: string): boolean;
+  cusipValidate(s: string): boolean;
+  npiValidate(s: string): boolean;
+  luhnValidate(s: string): boolean;
+  ccBrand(s: string): string | undefined;
   nameTransliterate(s: string): string;
   nameScript(s: string): string;
+  nameInitials(s: string): string;
+  stripMiddle(s: string): string;
   stripTitles(s: string): string;
   stripSuffixes(s: string): string;
   nameProper(s: string): string;
@@ -82,6 +89,9 @@ export interface FlowWasmBackend {
   toInteger(s: string): number | undefined;
   commaDecimal(s: string): number | undefined;
   scientificToDecimal(s: string): number | undefined;
+  fractionToDecimal(s: string): number | undefined;
+  romanToInt(s: string): number | undefined;
+  ordinalToInt(s: string): number | undefined;
   roundValue(x: number, n: number): number;
   clampValue(x: number, minVal: number, maxVal: number): number;
   absValue(x: number): number;

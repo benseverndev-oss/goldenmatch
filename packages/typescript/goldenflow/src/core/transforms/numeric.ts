@@ -195,6 +195,124 @@ registerTransform(
 );
 
 // ---------------------------------------------------------------------------
+// W5 numeric breadth: roman_to_int / ordinal_to_int / fraction_to_decimal
+// ---------------------------------------------------------------------------
+
+const ROMAN_VAL: Record<string, number> = { I: 1, V: 5, X: 10, L: 50, C: 100, D: 500, M: 1000 };
+const ROMAN_TABLE: [number, string][] = [
+  [1000, "M"], [900, "CM"], [500, "D"], [400, "CD"], [100, "C"],
+  [90, "XC"], [50, "L"], [40, "XL"], [10, "X"], [9, "IX"],
+  [5, "V"], [4, "IV"], [1, "I"],
+];
+
+function intToRoman(n: number): string {
+  let out = "";
+  for (const [v, sym] of ROMAN_TABLE) while (n >= v) { out += sym; n -= v; }
+  return out;
+}
+
+function romanToIntTs(s: string): number | undefined {
+  const t = s.trim().toUpperCase();
+  if (t === "") return undefined;
+  const chars = [...t];
+  let total = 0;
+  for (let i = 0; i < chars.length; i++) {
+    const cur = ROMAN_VAL[chars[i]!];
+    if (cur === undefined) return undefined;
+    const nxt = i + 1 < chars.length ? (ROMAN_VAL[chars[i + 1]!] ?? 0) : 0;
+    total += cur < nxt ? -cur : cur;
+  }
+  if (total < 1 || total > 3999) return undefined;
+  return intToRoman(total) === t ? total : undefined;
+}
+
+function ordinalSuffix(n: number): string {
+  const m = n % 100;
+  if (m >= 11 && m <= 13) return "th";
+  switch (n % 10) {
+    case 1: return "st";
+    case 2: return "nd";
+    case 3: return "rd";
+    default: return "th";
+  }
+}
+
+function ordinalToIntTs(s: string): number | undefined {
+  const t = s.trim().toLowerCase();
+  let digits = "";
+  for (const c of t) {
+    if (c >= "0" && c <= "9") digits += c;
+    else break;
+  }
+  if (digits === "") return undefined;
+  const n = parseInt(digits, 10);
+  return t.slice(digits.length) === ordinalSuffix(n) ? n : undefined;
+}
+
+/** Strict f64 parse (rejects empty / non-numeric), mirroring Rust `parse::<f64>`. */
+function parseF64(s: string): number | undefined {
+  const t = s.trim();
+  if (t === "") return undefined;
+  const n = Number(t);
+  return Number.isNaN(n) ? undefined : n;
+}
+
+function parseFraction(s: string): number | undefined {
+  const idx = s.indexOf("/");
+  if (idx === -1) return undefined;
+  const num = parseF64(s.slice(0, idx));
+  const den = parseF64(s.slice(idx + 1));
+  if (num === undefined || den === undefined || den === 0) return undefined;
+  return num / den;
+}
+
+function fractionToDecimalTs(s: string): number | undefined {
+  const t = s.trim();
+  if (t === "") return undefined;
+  const wsIdx = t.search(/\s/);
+  if (wsIdx !== -1) {
+    const fracS = t.slice(wsIdx).trim();
+    if (fracS.includes("/")) {
+      const wholeS = t.slice(0, wsIdx).trim();
+      if (!/^-?\d+$/.test(wholeS)) return undefined; // strict i64, matches Rust
+      const whole = parseInt(wholeS, 10);
+      const frac = parseFraction(fracS);
+      if (frac === undefined) return undefined;
+      return whole < 0 ? whole - frac : whole + frac;
+    }
+    return undefined;
+  }
+  if (t.includes("/")) return parseFraction(t);
+  return parseF64(t);
+}
+
+function romanToInt(values: readonly ColumnValue[]): ColumnValue[] {
+  const b: FlowWasmBackend | null = getFlowWasmBackend();
+  return mapParser(values, b ? (s) => b.romanToInt(s) : romanToIntTs);
+}
+function ordinalToInt(values: readonly ColumnValue[]): ColumnValue[] {
+  const b: FlowWasmBackend | null = getFlowWasmBackend();
+  return mapParser(values, b ? (s) => b.ordinalToInt(s) : ordinalToIntTs);
+}
+function fractionToDecimal(values: readonly ColumnValue[]): ColumnValue[] {
+  const b: FlowWasmBackend | null = getFlowWasmBackend();
+  return mapParser(values, b ? (s) => b.fractionToDecimal(s) : fractionToDecimalTs);
+}
+
+registerTransform(
+  { name: "roman_to_int", inputTypes: ["string"], priority: 40, mode: "series" },
+  romanToInt,
+);
+registerTransform(
+  { name: "ordinal_to_int", inputTypes: ["string"], priority: 40, mode: "series" },
+  ordinalToInt,
+);
+registerTransform(
+  { name: "fraction_to_decimal", inputTypes: ["string", "numeric"], priority: 40, mode: "series" },
+  fractionToDecimal,
+);
+
+// ---------------------------------------------------------------------------
 // abs_value (series, numeric, 40)
 // ---------------------------------------------------------------------------
 
@@ -298,4 +416,7 @@ export {
   scientificToDecimalTs,
   roundValueTs,
   clampValueTs,
+  romanToIntTs,
+  ordinalToIntTs,
+  fractionToDecimalTs,
 };
