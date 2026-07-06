@@ -1550,6 +1550,8 @@ jobs:
         run: pip install pytest
       - name: Reconcile native symbols (goldenmatch)
         run: python scripts/check_native_symbols.py goldenmatch
+      - name: Reconcile native symbols (infermap)
+        run: python scripts/check_native_symbols.py infermap
       - name: Gate unit tests
         run: python -m pytest scripts/test_native_symbols.py -q
 
