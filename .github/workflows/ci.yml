@@ -2158,7 +2158,7 @@ jobs:
       # The optional `arrow` feature (src/columnar.rs Arrow-columnar apply paths +
       # the columnar_pilot bench) is cfg'd out of the default build above, so its
       # parity tests + clippy need an explicit run. native-flow enables it.
-      - run: cargo test --manifest-path goldenflow-core/Cargo.toml --features arrow columnar::
+      - run: cargo test --manifest-path goldenflow-core/Cargo.toml --features arrow
       - run: cargo clippy --manifest-path goldenflow-core/Cargo.toml --features arrow --all-targets -- -D warnings
       # sketch-core (MinHash/LSH, #1081) is its own [workspace] pyo3-free sibling
       # too; the native binding exercises it indirectly, but its own unit tests +
