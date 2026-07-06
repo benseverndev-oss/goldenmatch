@@ -35,6 +35,11 @@ excel = ["openpyxl>=3.1"]
 llm = ["openai>=1.30", "anthropic>=0.30"]
 all = ["infermap[postgres,mysql,duckdb,excel,llm]"]
 mcp = ["mcp>=1.0"]
+# Optional Rust accelerator (infermap-core/infermap-native crates, Wave 1). The
+# matching `[tool.uv.sources] infermap-native = { path = ... }` at the repo root wires
+# the local build for uv sync. Kept OUT of `all` (compiled native stays out of
+# aggregates, like goldenmatch[native]).
+native = ["infermap-native>=0.1.0"]
 dev = ["pytest>=8.0", "pytest-cov>=5.0", "ruff>=0.6"]
 
 [project.scripts]

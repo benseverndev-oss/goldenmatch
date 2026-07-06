@@ -24,6 +24,11 @@ exclude = [
     # accelerator (goldenanalysis[native]); neither belongs in `bridge`.
     "analysis-native",
     "analysis-core",
+    # infermap-native is a standalone abi3 ext-module workspace (like analysis-native);
+    # infermap-core is its pyo3-free path dependency. InferMap's optional accelerator
+    # (infermap[native], Wave 1 = the detect kernel); neither belongs in `bridge`.
+    "infermap-native",
+    "infermap-core",
     # goldengraph-native is a standalone abi3 ext-module workspace (like the
     # above); goldengraph-core is its pyo3-free path dependency (and carries its
     # own empty [workspace], so it self-isolates). Neither belongs in `bridge`.
