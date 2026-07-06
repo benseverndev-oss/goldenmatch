@@ -139,11 +139,29 @@ signature (`&[String]`, `&[(String, Vec<String>)]`, `f64`) already matches the D
 
 ## 4. TS wiring — `packages/typescript/infermap/src/core/wasm/`
 
-> **Dependency:** `packages/typescript/infermap/package.json` currently depends
-> only on `goldencheck-types`. Wave A must add
-> `"goldenmatch-wasm-runtime": "workspace:^"` (the source of
-> `createBackendRegistry` / `enableWasmBackend` / `EnableOptions`). Every existing
-> `*_wasm` TS package carries this dep.
+> **Dependency (devDependency, NOT a runtime dep):**
+> `packages/typescript/infermap/package.json` must add
+> `"goldenmatch-wasm-runtime": "workspace:^"` under **`devDependencies`** — the
+> source of `createBackendRegistry` / `enableWasmBackend` / `EnableOptions`. Every
+> real `*_wasm` package (goldenanalysis/goldenflow/goldenmatch/goldenpipe) carries
+> it as a devDependency because tsup **inlines** the plumbing (`noExternal`) so it
+> is never a published runtime dep (it is not on npm).
+>
+> **`tsup.config.ts` must gain the artifact-shipping keys** (mirror
+> `goldenanalysis/tsup.config.ts`), or the loader's
+> `new URL('./artifacts/infermap_wasm_bg.wasm', import.meta.url)` won't resolve in
+> `dist` (parity in §7 runs vitest over `src/` so it would pass regardless — this
+> is the consumer-facing shipping model):
+> ```ts
+> dts: { resolve: ["goldenmatch-wasm-runtime"] },   // roll bundled types into .d.ts
+> loader: { ".wasm": "copy" },
+> publicDir: false,
+> onSuccess: "node scripts/copy_wasm_artifact.mjs",
+> noExternal: ["goldenmatch-wasm-runtime"],          // inline plumbing, not a pub dep
+> external: [/infermap_wasm\.js$/],                  // runtime-only glue; don't resolve at build
+> ```
+> (The existing infermap `tsup.config.ts` has `dts: true` and none of these; Wave A
+> replaces `dts: true` with the `dts: { resolve: [...] }` form and adds the rest.)
 
 ### `backend.ts`
 ```ts
@@ -249,8 +267,9 @@ that table, so `wasm-pack build` fails. The established build for this crate
 layout (score-wasm / analysis-wasm / goldenflow-wasm) is a cargo build + the
 `wasm-bindgen` CLI:
 
-- `packages/rust/extensions/infermap-wasm/build_wasm.sh` — a line-for-line mirror
-  of `score-wasm/build_wasm.sh`:
+- `packages/rust/extensions/infermap-wasm/build_wasm.sh` — mirrors
+  `score-wasm/build_wasm.sh` (minus its base64 universal-loader step, which §2
+  rejects for Wave A):
   1. `rustup target add wasm32-unknown-unknown`
   2. `cargo build --manifest-path <crate>/Cargo.toml --target wasm32-unknown-unknown --release`
   3. resolve the pinned `wasm-bindgen` version from the crate's **committed
@@ -309,8 +328,9 @@ New job in `.github/workflows/ci.yml`, mirroring the real `analysis_wasm` lane:
    `packages/typescript/infermap/src/core/wasm/**`,
    `packages/typescript/infermap/src/core/detect.ts`,
    `packages/typescript/infermap/tests/parity/infermap-wasm.parity.test.ts`,
-   `packages/typescript/infermap/build_wasm.sh` (via the crate path) and
-   `packages/typescript/infermap/scripts/copy_wasm_artifact.mjs`.
+   `packages/typescript/infermap/scripts/copy_wasm_artifact.mjs`,
+   `packages/typescript/infermap/tsup.config.ts`.
+   (`build_wasm.sh` is already covered by the `infermap-wasm/**` entry above.)
 2. Job (gated on that filter), mirroring `analysis_wasm` step-for-step:
    - `rustup target add wasm32-unknown-unknown`;
    - run `packages/rust/extensions/infermap-wasm/build_wasm.sh` (cargo build +
