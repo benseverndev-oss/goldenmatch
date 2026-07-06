@@ -28,5 +28,18 @@ def test_require_native_raises_when_absent(monkeypatch: pytest.MonkeyPatch) -> N
 
 def test_gated_on_holds_the_measured_primitives() -> None:
     # histogram + quantile joined _GATED_ON after the P4 measured flip (5.8-9.9x on
-    # Linux, byte-identical parity). A new primitive joins only after the same gates.
-    assert nl._GATED_ON == frozenset({"histogram", "quantile"})
+    # Linux, byte-identical parity). The Wave-1 frame kernels (null_ratio/
+    # duplicate_row/distinct_count) and the Wave-2 numeric reductions (mean/min/max)
+    # joined after the same parity gate. A new primitive joins only after that gate.
+    assert nl._GATED_ON == frozenset(
+        {
+            "histogram",
+            "quantile",
+            "null_ratio_per_column",
+            "duplicate_row_ratio",
+            "distinct_count",
+            "mean",
+            "min",
+            "max",
+        }
+    )

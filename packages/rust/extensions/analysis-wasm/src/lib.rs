@@ -7,7 +7,7 @@
 //! `[edge0, count0, edge1, count1, ...]` (wasm-bindgen marshals `Vec<f64>` ↔
 //! `Float64Array`; counts are exact integers well within 2^53).
 
-use analysis_core::{histogram, quantile};
+use analysis_core::{histogram, max, mean, min, quantile};
 
 /// Flatten analysis-core's `Vec<(f64, i64)>` histogram to `[edge, count, ...]`.
 /// `bins` is `i32` (a JS `number` may be 0/negative; keep it SIGNED so
@@ -27,9 +27,35 @@ pub fn quantile_impl(values: &[f64], q: f64) -> f64 {
     quantile(values, q)
 }
 
+pub fn mean_impl(values: &[f64]) -> f64 {
+    mean(values)
+}
+
+pub fn min_impl(values: &[f64]) -> f64 {
+    min(values)
+}
+
+pub fn max_impl(values: &[f64]) -> f64 {
+    max(values)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mean_matches_core() {
+        assert_eq!(mean_impl(&[1.0, 2.0, 3.0]), 2.0);
+        assert_eq!(mean_impl(&[]), 0.0);
+    }
+
+    #[test]
+    fn min_max_impl_basic() {
+        assert_eq!(min_impl(&[3.0, 1.0, 2.0]), 1.0);
+        assert_eq!(max_impl(&[3.0, 1.0, 2.0]), 3.0);
+        assert_eq!(min_impl(&[]), 0.0);
+        assert_eq!(max_impl(&[]), 0.0);
+    }
 
     #[test]
     fn histogram_flat_matches_pairs() {
@@ -67,7 +93,7 @@ mod tests {
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
-    use super::{histogram_flat_impl, quantile_impl};
+    use super::{histogram_flat_impl, max_impl, mean_impl, min_impl, quantile_impl};
     use wasm_bindgen::prelude::*;
 
     /// JS entry: equal-width histogram of `values` into `bins`, returned flat as
@@ -81,5 +107,23 @@ mod wasm {
     #[wasm_bindgen]
     pub fn quantile(values: &[f64], q: f64) -> f64 {
         quantile_impl(values, q)
+    }
+
+    /// JS entry: arithmetic mean of `values` (empty => 0.0).
+    #[wasm_bindgen]
+    pub fn mean(values: &[f64]) -> f64 {
+        mean_impl(values)
+    }
+
+    /// JS entry: minimum of `values` (empty => 0.0).
+    #[wasm_bindgen]
+    pub fn min(values: &[f64]) -> f64 {
+        min_impl(values)
+    }
+
+    /// JS entry: maximum of `values` (empty => 0.0).
+    #[wasm_bindgen]
+    pub fn max(values: &[f64]) -> f64 {
+        max_impl(values)
     }
 }

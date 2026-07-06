@@ -14,6 +14,7 @@ native output is byte-identical to ``_*_pure`` (``tests/core/test_native_parity.
 
 from __future__ import annotations
 
+import builtins
 from collections.abc import Sequence
 
 import polars as pl
@@ -22,7 +23,21 @@ from goldenanalysis.core._native_loader import native_enabled, native_module
 
 
 def null_ratio_per_column(df: pl.DataFrame) -> dict[str, float]:
-    """Per-column null fraction. Empty frame => 0.0 for every column."""
+    """Per-column null fraction. Empty frame => 0.0 for every column.
+
+    Dispatches to the native kernel when gated (byte-identical to the pure path);
+    an unsupported dtype falls back to ``_null_ratio_per_column_pure``.
+    """
+    if native_enabled("null_ratio_per_column"):
+        try:
+            ratios = native_module().null_ratio_per_column([df[c].to_arrow() for c in df.columns])
+            return dict(zip(df.columns, ratios))
+        except (TypeError, ValueError):
+            pass
+    return _null_ratio_per_column_pure(df)
+
+
+def _null_ratio_per_column_pure(df: pl.DataFrame) -> dict[str, float]:
     n = df.height
     if n == 0:
         return {c: 0.0 for c in df.columns}
@@ -34,11 +49,41 @@ def duplicate_row_ratio(df: pl.DataFrame) -> float:
 
     Every member of a duplicate group counts, not just the redundant copies: one
     identical pair among five rows => 2/5 == 0.4.
+
+    Dispatches to the native kernel when gated (byte-identical to the pure path);
+    an unsupported dtype falls back to ``_duplicate_row_ratio_pure``.
     """
+    if native_enabled("duplicate_row_ratio"):
+        try:
+            return native_module().duplicate_row_ratio([df[c].to_arrow() for c in df.columns])
+        except (TypeError, ValueError):
+            pass
+    return _duplicate_row_ratio_pure(df)
+
+
+def _duplicate_row_ratio_pure(df: pl.DataFrame) -> float:
     n = df.height
     if n == 0:
         return 0.0
     return int(df.is_duplicated().sum()) / n
+
+
+def distinct_count(series: pl.Series) -> int:
+    """Number of distinct values in a column (matches ``Series.n_unique``).
+
+    Dispatches to the native kernel when gated (byte-identical to the pure path);
+    an unsupported dtype falls back to ``_distinct_count_pure``.
+    """
+    if native_enabled("distinct_count"):
+        try:
+            return native_module().distinct_count(series.to_arrow())
+        except (TypeError, ValueError):
+            pass
+    return _distinct_count_pure(series)
+
+
+def _distinct_count_pure(series: pl.Series) -> int:
+    return series.n_unique()
 
 
 def histogram(values: Sequence[float], bins: int) -> list[tuple[float, int]]:
@@ -59,7 +104,7 @@ def _histogram_pure(values: Sequence[float], bins: int) -> list[tuple[float, int
     vals = [float(v) for v in values if v is not None]
     if not vals or bins < 1:
         return []
-    lo, hi = min(vals), max(vals)
+    lo, hi = builtins.min(vals), builtins.max(vals)
     if hi == lo:
         return [(lo, len(vals))]
     width = (hi - lo) / bins
@@ -111,3 +156,72 @@ def _quantile_native(values: Sequence[float], q: float) -> float:
     vals = [float(v) for v in values if v is not None]
     arr = pa.array(vals, type=pa.float64())
     return native_module().quantile(arr, q)
+
+
+def mean(values: Sequence[float]) -> float:
+    """Arithmetic mean. Empty input => 0.0.
+
+    Dispatches to the native kernel when gated (byte-identical to ``_mean_pure``).
+    """
+    if native_enabled("mean"):
+        return _mean_native(values)
+    return _mean_pure(values)
+
+
+def _mean_pure(values: Sequence[float]) -> float:
+    vals = [float(v) for v in values if v is not None]
+    return sum(vals) / len(vals) if vals else 0.0
+
+
+def _mean_native(values: Sequence[float]) -> float:
+    import pyarrow as pa
+
+    vals = [float(v) for v in values if v is not None]
+    arr = pa.array(vals, type=pa.float64())
+    return native_module().mean(arr)
+
+
+def min(values: Sequence[float]) -> float:
+    """Minimum over finite values. Empty input => 0.0.
+
+    Dispatches to the native kernel when gated (byte-identical to ``_min_pure``).
+    """
+    if native_enabled("min"):
+        return _min_native(values)
+    return _min_pure(values)
+
+
+def _min_pure(values: Sequence[float]) -> float:
+    vals = [float(v) for v in values if v is not None]
+    return builtins.min(vals) if vals else 0.0
+
+
+def _min_native(values: Sequence[float]) -> float:
+    import pyarrow as pa
+
+    vals = [float(v) for v in values if v is not None]
+    arr = pa.array(vals, type=pa.float64())
+    return native_module().min(arr)
+
+
+def max(values: Sequence[float]) -> float:
+    """Maximum over finite values. Empty input => 0.0.
+
+    Dispatches to the native kernel when gated (byte-identical to ``_max_pure``).
+    """
+    if native_enabled("max"):
+        return _max_native(values)
+    return _max_pure(values)
+
+
+def _max_pure(values: Sequence[float]) -> float:
+    vals = [float(v) for v in values if v is not None]
+    return builtins.max(vals) if vals else 0.0
+
+
+def _max_native(values: Sequence[float]) -> float:
+    import pyarrow as pa
+
+    vals = [float(v) for v in values if v is not None]
+    arr = pa.array(vals, type=pa.float64())
+    return native_module().max(arr)

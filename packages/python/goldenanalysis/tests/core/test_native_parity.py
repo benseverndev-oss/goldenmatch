@@ -45,6 +45,19 @@ def _assert_quantile_parity(values: list, q: float) -> None:
     assert native == aggregate._quantile_pure(values, q)
 
 
+def _assert_mean_parity(values: list) -> None:
+    from goldenanalysis.core import aggregate
+
+    assert native_module().mean(_f64(values)) == aggregate._mean_pure(values)
+
+
+def _assert_min_max_parity(values: list) -> None:
+    from goldenanalysis.core import aggregate
+
+    assert native_module().min(_f64(values)) == aggregate._min_pure(values)
+    assert native_module().max(_f64(values)) == aggregate._max_pure(values)
+
+
 # ---------------------------------------------------------------------------
 # Parity (native present) -- native kernel vs the pure reference helpers
 # ---------------------------------------------------------------------------
@@ -121,6 +134,135 @@ def test_public_dispatch_matches_pure(monkeypatch: pytest.MonkeyPatch, seed: int
     monkeypatch.setenv("GOLDENANALYSIS_NATIVE", "0")  # force pure
     assert native_hist == aggregate.histogram(values, 10)
     assert native_q == aggregate.quantile(values, 0.95)
+
+
+# ---------------------------------------------------------------------------
+# Numeric-reduction parity (mean / min / max) -- Wave 2, pure-slice kernels
+# ---------------------------------------------------------------------------
+
+_NUMERIC_FIXTURES = [
+    [1.0, 2.0, 3.0],
+    [5.0],
+    [-3.5, -1.0, 2.25, 100.0],
+    [1e16] + [1.0] * 100 + [-1e16],  # summation-order: naive native == naive pure
+    [0.0, 0.0, 0.0],
+]
+
+
+@native_only
+@pytest.mark.parametrize("xs", _NUMERIC_FIXTURES)
+def test_mean_parity(xs: list) -> None:
+    _assert_mean_parity(xs)
+
+
+@native_only
+@pytest.mark.parametrize("xs", _NUMERIC_FIXTURES)
+def test_min_max_parity(xs: list) -> None:
+    _assert_min_max_parity(xs)
+
+
+@native_only
+@pytest.mark.parametrize("seed", range(4))
+def test_mean_parity_random(seed: int) -> None:
+    rng = random.Random(seed)
+    _assert_mean_parity([rng.uniform(-100.0, 1000.0) for _ in range(5000)])
+    _assert_min_max_parity([rng.uniform(-100.0, 1000.0) for _ in range(5000)])
+
+
+@native_only
+def test_numeric_reductions_drop_nulls() -> None:
+    # Null slots dropped, matching the pure path which only sees non-null values.
+    from goldenanalysis.core import aggregate
+
+    arr = _f64([1.5, None, 200.0, None, 9.9])
+    non_null = [1.5, 200.0, 9.9]
+    assert native_module().mean(arr) == aggregate._mean_pure(non_null)
+    assert native_module().min(arr) == aggregate._min_pure(non_null)
+    assert native_module().max(arr) == aggregate._max_pure(non_null)
+
+
+# ---------------------------------------------------------------------------
+# Frame-kernel parity (null_ratio / duplicate_row / distinct_count)
+# ---------------------------------------------------------------------------
+
+
+def _frames() -> dict:
+    import polars as pl
+
+    return {
+        "empty": pl.DataFrame({"a": []}),
+        "all_null": pl.DataFrame({"a": [None, None, None]}),
+        "null_bearing": pl.DataFrame({"a": [1, None, 3], "b": ["x", None, "x"]}),
+        "mixed_dup": pl.DataFrame(  # rows 0,1,2 identical => dup group of 3
+            {
+                "s": ["a", "a", "a", "b"],
+                "i": [1, 1, 1, 2],
+                "f": [1.5, 1.5, 1.5, 2.5],
+                "b": [True, True, True, False],
+            }
+        ),
+        "float_edge": pl.DataFrame(  # -0.0/+0.0 fold, NaN folds (polars-verified)
+            {
+                "f": [-0.0, 0.0, float("nan"), float("nan"), 1.0],
+                "k": [1, 1, 2, 2, 3],
+            }
+        ),
+    }
+
+
+@native_only
+@pytest.mark.parametrize("name", sorted(_frames()))
+def test_duplicate_row_ratio_parity(name: str) -> None:
+    from goldenanalysis.core import aggregate
+
+    df = _frames()[name]
+    native = native_module().duplicate_row_ratio([df[c].to_arrow() for c in df.columns])
+    assert native == aggregate._duplicate_row_ratio_pure(df)
+
+
+@native_only
+@pytest.mark.parametrize("name", sorted(_frames()))
+def test_null_ratio_per_column_parity(name: str) -> None:
+    from goldenanalysis.core import aggregate
+
+    df = _frames()[name]
+    ratios = native_module().null_ratio_per_column([df[c].to_arrow() for c in df.columns])
+    native = dict(zip(df.columns, ratios))
+    assert native == aggregate._null_ratio_per_column_pure(df)
+
+
+@native_only
+@pytest.mark.parametrize("name", sorted(_frames()))
+def test_distinct_count_parity(name: str) -> None:
+    from goldenanalysis.core import aggregate
+
+    df = _frames()[name]
+    for col in df.columns:
+        native = native_module().distinct_count(df[col].to_arrow())
+        assert native == aggregate._distinct_count_pure(df[col])
+
+
+def test_native_dtype_fallback_returns_pure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Box-runnable: an unsupported dtype (List) makes the native call raise, and the
+    public dispatchers must swallow it and return the pure result (no build needed --
+    we monkeypatch a native module whose methods raise)."""
+    import polars as pl
+    from goldenanalysis.core import aggregate as agg
+
+    df = pl.DataFrame({"a": [[1, 2], [3, 4], [1, 2]]})  # List dtype -> intern rejects
+
+    monkeypatch.setattr(agg, "native_enabled", lambda name: True)
+
+    class _Boom:
+        def null_ratio_per_column(self, cols):
+            raise TypeError("unsupported dtype")
+
+        def duplicate_row_ratio(self, cols):
+            raise TypeError("unsupported dtype")
+
+    monkeypatch.setattr(agg, "native_module", lambda: _Boom())
+    assert agg.null_ratio_per_column(df) == agg._null_ratio_per_column_pure(df)
+    assert agg.duplicate_row_ratio(df) == agg._duplicate_row_ratio_pure(df)
 
 
 # ---------------------------------------------------------------------------

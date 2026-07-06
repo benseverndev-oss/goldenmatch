@@ -38,13 +38,30 @@ except Exception:  # noqa: BLE001 - any import/load failure falls back below
 # at 1M-10M rows, INCLUDING the list->Arrow conversion the dispatch pays (the
 # ``bench-analysis-native.yml`` A/B harness). A new primitive joins only after the
 # same two gates clear (heed the goldenmatch-native footguns in the root CLAUDE.md).
-_GATED_ON: frozenset[str] = frozenset({"histogram", "quantile"})
+_GATED_ON: frozenset[str] = frozenset(
+    {
+        "histogram",
+        "quantile",
+        "null_ratio_per_column",
+        "duplicate_row_ratio",
+        "distinct_count",
+        "mean",
+        "min",
+        "max",
+    }
+)
 
 # Component -> the native symbol that backs it (component name == symbol here). A
 # component is only usable when its symbol is present on the loaded module.
 _COMPONENT_SYMBOLS: dict[str, str] = {
     "histogram": "histogram",
     "quantile": "quantile",
+    "null_ratio_per_column": "null_ratio_per_column",
+    "duplicate_row_ratio": "duplicate_row_ratio",
+    "distinct_count": "distinct_count",
+    "mean": "mean",
+    "min": "min",
+    "max": "max",
 }
 
 
