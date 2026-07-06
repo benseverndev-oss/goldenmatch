@@ -64,7 +64,7 @@ class FrameSummaryAnalyzer:
             name="per_column",
             columns=["column", "dtype", "null_ratio", "n_unique"],
             rows=[
-                [col, str(df[col].dtype), null_ratios[col], df[col].n_unique()]
+                [col, str(df[col].dtype), null_ratios[col], agg.distinct_count(df[col])]
                 for col in df.columns
             ],
         )

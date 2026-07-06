@@ -22,7 +22,21 @@ from goldenanalysis.core._native_loader import native_enabled, native_module
 
 
 def null_ratio_per_column(df: pl.DataFrame) -> dict[str, float]:
-    """Per-column null fraction. Empty frame => 0.0 for every column."""
+    """Per-column null fraction. Empty frame => 0.0 for every column.
+
+    Dispatches to the native kernel when gated (byte-identical to the pure path);
+    an unsupported dtype falls back to ``_null_ratio_per_column_pure``.
+    """
+    if native_enabled("null_ratio_per_column"):
+        try:
+            ratios = native_module().null_ratio_per_column([df[c].to_arrow() for c in df.columns])
+            return dict(zip(df.columns, ratios))
+        except (TypeError, ValueError):
+            pass
+    return _null_ratio_per_column_pure(df)
+
+
+def _null_ratio_per_column_pure(df: pl.DataFrame) -> dict[str, float]:
     n = df.height
     if n == 0:
         return {c: 0.0 for c in df.columns}
@@ -34,11 +48,41 @@ def duplicate_row_ratio(df: pl.DataFrame) -> float:
 
     Every member of a duplicate group counts, not just the redundant copies: one
     identical pair among five rows => 2/5 == 0.4.
+
+    Dispatches to the native kernel when gated (byte-identical to the pure path);
+    an unsupported dtype falls back to ``_duplicate_row_ratio_pure``.
     """
+    if native_enabled("duplicate_row_ratio"):
+        try:
+            return native_module().duplicate_row_ratio([df[c].to_arrow() for c in df.columns])
+        except (TypeError, ValueError):
+            pass
+    return _duplicate_row_ratio_pure(df)
+
+
+def _duplicate_row_ratio_pure(df: pl.DataFrame) -> float:
     n = df.height
     if n == 0:
         return 0.0
     return int(df.is_duplicated().sum()) / n
+
+
+def distinct_count(series: pl.Series) -> int:
+    """Number of distinct values in a column (matches ``Series.n_unique``).
+
+    Dispatches to the native kernel when gated (byte-identical to the pure path);
+    an unsupported dtype falls back to ``_distinct_count_pure``.
+    """
+    if native_enabled("distinct_count"):
+        try:
+            return native_module().distinct_count(series.to_arrow())
+        except (TypeError, ValueError):
+            pass
+    return _distinct_count_pure(series)
+
+
+def _distinct_count_pure(series: pl.Series) -> int:
+    return series.n_unique()
 
 
 def histogram(values: Sequence[float], bins: int) -> list[tuple[float, int]]:
