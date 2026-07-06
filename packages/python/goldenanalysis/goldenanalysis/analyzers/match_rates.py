@@ -76,7 +76,7 @@ class MatchRatesAnalyzer:
         tables: list[AnalysisTable] = []
         if scored_pairs:
             scores = [float(s) for *_, s in scored_pairs]
-            mean_score = sum(scores) / len(scores)
+            mean_score = agg.mean(scores)
             metrics.append(
                 Metric(key="match.mean_pair_score", value=mean_score, unit="score", direction="neutral")
             )

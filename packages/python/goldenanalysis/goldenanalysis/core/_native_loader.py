@@ -45,6 +45,9 @@ _GATED_ON: frozenset[str] = frozenset(
         "null_ratio_per_column",
         "duplicate_row_ratio",
         "distinct_count",
+        "mean",
+        "min",
+        "max",
     }
 )
 
@@ -56,6 +59,9 @@ _COMPONENT_SYMBOLS: dict[str, str] = {
     "null_ratio_per_column": "null_ratio_per_column",
     "duplicate_row_ratio": "duplicate_row_ratio",
     "distinct_count": "distinct_count",
+    "mean": "mean",
+    "min": "min",
+    "max": "max",
 }
 
 

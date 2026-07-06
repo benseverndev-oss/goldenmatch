@@ -14,6 +14,7 @@ native output is byte-identical to ``_*_pure`` (``tests/core/test_native_parity.
 
 from __future__ import annotations
 
+import builtins
 from collections.abc import Sequence
 
 import polars as pl
@@ -103,7 +104,7 @@ def _histogram_pure(values: Sequence[float], bins: int) -> list[tuple[float, int
     vals = [float(v) for v in values if v is not None]
     if not vals or bins < 1:
         return []
-    lo, hi = min(vals), max(vals)
+    lo, hi = builtins.min(vals), builtins.max(vals)
     if hi == lo:
         return [(lo, len(vals))]
     width = (hi - lo) / bins
@@ -155,3 +156,72 @@ def _quantile_native(values: Sequence[float], q: float) -> float:
     vals = [float(v) for v in values if v is not None]
     arr = pa.array(vals, type=pa.float64())
     return native_module().quantile(arr, q)
+
+
+def mean(values: Sequence[float]) -> float:
+    """Arithmetic mean. Empty input => 0.0.
+
+    Dispatches to the native kernel when gated (byte-identical to ``_mean_pure``).
+    """
+    if native_enabled("mean"):
+        return _mean_native(values)
+    return _mean_pure(values)
+
+
+def _mean_pure(values: Sequence[float]) -> float:
+    vals = [float(v) for v in values if v is not None]
+    return sum(vals) / len(vals) if vals else 0.0
+
+
+def _mean_native(values: Sequence[float]) -> float:
+    import pyarrow as pa
+
+    vals = [float(v) for v in values if v is not None]
+    arr = pa.array(vals, type=pa.float64())
+    return native_module().mean(arr)
+
+
+def min(values: Sequence[float]) -> float:
+    """Minimum over finite values. Empty input => 0.0.
+
+    Dispatches to the native kernel when gated (byte-identical to ``_min_pure``).
+    """
+    if native_enabled("min"):
+        return _min_native(values)
+    return _min_pure(values)
+
+
+def _min_pure(values: Sequence[float]) -> float:
+    vals = [float(v) for v in values if v is not None]
+    return builtins.min(vals) if vals else 0.0
+
+
+def _min_native(values: Sequence[float]) -> float:
+    import pyarrow as pa
+
+    vals = [float(v) for v in values if v is not None]
+    arr = pa.array(vals, type=pa.float64())
+    return native_module().min(arr)
+
+
+def max(values: Sequence[float]) -> float:
+    """Maximum over finite values. Empty input => 0.0.
+
+    Dispatches to the native kernel when gated (byte-identical to ``_max_pure``).
+    """
+    if native_enabled("max"):
+        return _max_native(values)
+    return _max_pure(values)
+
+
+def _max_pure(values: Sequence[float]) -> float:
+    vals = [float(v) for v in values if v is not None]
+    return builtins.max(vals) if vals else 0.0
+
+
+def _max_native(values: Sequence[float]) -> float:
+    import pyarrow as pa
+
+    vals = [float(v) for v in values if v is not None]
+    arr = pa.array(vals, type=pa.float64())
+    return native_module().max(arr)
