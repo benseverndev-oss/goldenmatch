@@ -3,7 +3,8 @@
 **Goal.** Let GoldenMatch run on a pile of documents (PDFs + images), not just structured
 CSV/DataFrame input. Turn a mixed pile — some files one record each (forms, cards, IDs),
 some many records each (tables, directory pages) — into a single Polars DataFrame that drops
-straight into the existing ER pipeline (`find_duplicates` / dedupe / match).
+straight into the existing ER pipeline: `dedupe_df(df, ...)` for an in-memory frame
+(`goldenmatch/_api.py:400`), or `dedupe(*files, ...)` for file paths.
 
 **Non-goal.** No changes to blocking/scoring/clustering. This is purely a new front-end
 extraction stage that produces the DataFrame the pipeline already consumes.
@@ -86,12 +87,19 @@ ingest_documents(paths, schema, backend="vlm", model="gpt-4o", drop_empty=True)
     pages   = loader.load_pages(path)           # rasterize/normalize
     result  = extractor.extract(pages, schema)  # 1 or N rows, or error
   df, report = assemble(results, schema)
-  return df   # (report available via ingest_documents(..., return_report=True))
+  return df                       # default
+  # return_report=True  -> returns the tuple (df, report: IngestReport)
 ```
 
 Output DataFrame columns = `schema.fields` names + `_source_file`, `_source_page`,
-`_extract_confidence` (row-level min over fields). It feeds the existing pipeline unchanged;
-`smart_ingest` is bypassed because we already emit a clean typed frame.
+`_extract_confidence`. `assemble` is the single place that collapses `ExtractedRow.confidence`
+(per-field) into the row-level `_extract_confidence` (min over fields) — nobody else computes
+it. `smart_ingest` is bypassed because we already emit a clean typed frame.
+
+**Handoff contract (must be explicit in the example + E2E test).** Callers pass the frame to
+`dedupe_df(df, exclude_columns=["_source_file", "_source_page", "_extract_confidence"])` so the
+provenance/confidence sidecars are never treated as match/blocking fields by auto-config
+(`_api.py:414`). The extracted schema columns are the only ER-visible fields.
 
 ## Error handling (batch-safe)
 
@@ -106,8 +114,9 @@ Output DataFrame columns = `schema.fields` names + `_source_file`, `_source_page
 - `loader`, `assemble`, JSON-validation in `vlm_backend` — pure unit tests on tiny fixtures
   (a 2-page fixture PDF, a fixture image, recorded VLM JSON responses). No network in CI.
 - `FakeExtractor` (returns canned `ExtractResult`s) drives an end-to-end test:
-  fixtures → `ingest_documents` → DataFrame → real `find_duplicates` on a small synthetic
-  set, proving the seam and the downstream hand-off.
+  fixtures → `ingest_documents` → DataFrame → real
+  `dedupe_df(df, exclude_columns=["_source_file","_source_page","_extract_confidence"])` on a
+  small synthetic set, proving the seam and the downstream hand-off.
 - VLM backend HTTP is injected (a fake transport returns recorded responses) so parsing,
   retry, and error paths are all covered offline.
 - One optional live smoke behind a key marker (`OPENAI_API_KEY_PERSONAL`), excluded from CI.
@@ -119,7 +128,7 @@ Output DataFrame columns = `schema.fields` names + `_source_file`, `_source_page
 2. `ingest_documents(paths, schema, backend="vlm", model="gpt-4o", drop_empty=True,
    return_report=False) -> pl.DataFrame`.
 3. Full offline test suite + one gated live smoke.
-4. A short README/example: pile of docs → schema → `find_duplicates`.
+4. A short README/example: pile of docs → schema → `ingest_documents` → `dedupe_df`.
 
 Deferred: MCP tool + CLI (Phase 2); local OCR backend + confidence-driven review-queue
 integration (Phase 3).
