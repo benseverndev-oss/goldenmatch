@@ -157,7 +157,10 @@ the loader's second discovery path (`infermap_native._native`) has nothing to im
   - `scripts/build_infermap_native.py` (mirror `build_analysis_native.py`).
   - `.github/workflows/publish-infermap-native.yml` (tag `infermap-native-v*`; mirror
     `publish-goldenanalysis-native.yml`).
-  - Commit `Cargo.lock` (globally gitignored → force-add).
+  - `infermap-native/Cargo.lock` is a normally-tracked file (NOT gitignored — the five
+    existing native lockfiles are tracked via plain `git add`). Generate + commit it from
+    a cargo-capable machine if available; otherwise omit — the `*_native` CI lanes build
+    without `--locked`, so a missing lock regenerates and does not red CI.
 
 ## 6. Parity gate + the load-bearing Unicode risk
 

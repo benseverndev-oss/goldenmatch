@@ -40,8 +40,12 @@ description = "Pyo3-free kernels for InferMap (schema mapping); the single sourc
 name = "infermap_core"
 
 [dependencies]
+
+[profile.release]
+opt-level = 3
+lto = "thin"
 ```
-(Read `analysis-core/Cargo.toml` and match its structure — esp. whether it declares `[workspace]`. No external deps: tokenization is a manual char scan, no `regex` crate.)
+(Match `analysis-core/Cargo.toml`: it declares NO `[workspace]` line — isolation comes from the `exclude` in `extensions/Cargo.toml`, Task 3 — and it DOES carry the `[profile.release]` block above. No external deps: tokenization is a manual char scan, no `regex` crate.)
 
 - [ ] **Step 2: Write the kernel + tests** (`src/lib.rs`)
 
@@ -227,7 +231,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
 - [ ] **Step 1: workspace exclude** — in `packages/rust/extensions/Cargo.toml`, add `"infermap-native"` AND `"infermap-core"` to `exclude` (both halves — see spec §5), mirroring the existing goldencheck/analysis comment blocks. `members` stays `["bridge"]`.
 - [ ] **Step 2: uv source** — root `pyproject.toml` `[tool.uv.sources]`: add `infermap-native = { path = "packages/rust/extensions/infermap-native" }`.
 - [ ] **Step 3: `native` extra** — `packages/python/infermap/pyproject.toml` `[project.optional-dependencies]`: add `native = ["infermap-native>=0.1.0"]`. Do NOT add it to the `all` extra (mirror goldenmatch — compiled native stays out of aggregates).
-- [ ] **Step 4: Cargo.lock** — after the crates exist, generate + force-add `infermap-native/Cargo.lock` (`git add -f`). (Cannot `cargo generate-lockfile` on the box; the CI build produces it, OR hand-author is not needed — if the box truly can't, note that the lockfile is committed by the first CI build / a maintainer. Check whether analysis-native's Cargo.lock is committed and mirror that decision.)
+- [ ] **Step 4: Cargo.lock** — `infermap-native/Cargo.lock` is a **normally-tracked** file (NOT gitignored — all five existing native crates' lockfiles are tracked via plain `git add`, maintained by a human). The box can't `cargo generate-lockfile`. This is **NOT a blocker**: the `*_native` CI lanes build WITHOUT `--locked`/`--frozen`, so cargo regenerates a missing lock and CI stays green. So: if a cargo-capable machine is available, generate + `git add packages/rust/extensions/infermap-native/Cargo.lock`; otherwise **omit it** and let CI/a maintainer add it later. Do NOT use `git add -f` / claim it's gitignored.
 - [ ] **Step 5: verify `uv sync` still resolves** — `D:/show_case/goldenmatch/.venv` is the shared env; run `uv sync --all-packages 2>&1 | tail` (or the repo's documented sync) to confirm the new path source + extra don't break resolution. Expected: clean sync (a small lock diff for the new path source).
 - [ ] **Step 6: Commit** — `"build(infermap): wire infermap-native (uv source, native extra, workspace exclude)"`
 
@@ -373,7 +377,10 @@ Include a 3-way score-tie fixture (pins the stable-sort tie order, spec §8) and
 
 - [ ] **Step 3: publish workflow** — `.github/workflows/publish-infermap-native.yml`, mirror `publish-goldenanalysis-native.yml`: trigger on `infermap-native-v*` tag; build both macOS arches on `macos-14`; `workflow_dispatch` publish toggle.
 
-- [ ] **Step 4: CI parity lane** — add an `infermap_native` job to `ci.yml` mirroring `goldenanalysis_native`: build the wheel (`scripts/build_infermap_native.py` or maturin), run `pytest packages/python/infermap/tests/test_native_parity.py` under `INFERMAP_NATIVE=1`, gated on the infermap path filter, in the `ci-required` needs list. READ the existing `goldenanalysis_native` lane and mirror it exactly (runner, steps, path filter wiring in the `changes` job).
+- [ ] **Step 4: CI parity lane** — add an `infermap_native` job to `ci.yml` mirroring `goldenanalysis_native` (build the wheel, run `pytest packages/python/infermap/tests/test_native_parity.py` under `INFERMAP_NATIVE=1`). **ADVISORY, not blocking** — `goldenanalysis_native` is NOT in the `ci-required` needs list (`ci.yml:~3668`), so do NOT add `infermap_native` there either (mirror = advisory). The `changes`-job wiring needs **THREE** edits (not just a filter) — mirror `analysis_native` exactly:
+  1. an **output line** in the `changes` job `outputs:` (`ci.yml:~73`): `infermap_native: ${{ steps.filter.outputs.infermap_native }}` — without this `needs.changes.outputs.infermap_native` is always empty and the lane never runs;
+  2. a **filter block** (`ci.yml:~569`) watching the host + crate paths: `packages/python/infermap/infermap/detect.py`, `.../infermap/_native_loader.py`, `packages/rust/extensions/infermap-core/**`, `packages/rust/extensions/infermap-native/**`, `packages/python/infermap/tests/test_native_parity.py`, `scripts/build_infermap_native.py`;
+  3. the job `if:` gate (`ci.yml:~2447` region) `if: needs.changes.outputs.infermap_native == 'true'`.
 
 - [ ] **Step 5: Verify parity test collects + skips cleanly on the box** (no wheel → skip, not error):
 ```
@@ -404,13 +411,13 @@ Expected: all SKIPPED, 0 errors, ruff clean.
         "allow": "parity/native_symbols/infermap.allow",
     },
 ```
-- [ ] **Step 2: allow file** — read `load_allow`; if it errors on a missing path, `touch parity/native_symbols/infermap.allow` (empty). If it tolerates absence, skip.
+- [ ] **Step 2: allow file** — `load_allow` tolerates a missing file (returns `set()`), so `parity/native_symbols/infermap.allow` is **OPTIONAL — skip it** (the gate reconciles fully with zero allow-list entries). Only create an empty one if a future symbol needs suppression.
 - [ ] **Step 3: run the gate locally** (box-safe — it's pure Python, static scan):
 ```
 D:/show_case/goldenmatch/.venv/Scripts/python.exe scripts/check_native_symbols.py infermap 2>&1 | tail
 ```
 Expected: PASS — `detect_domain` referenced (via `native_module().detect_domain`) reconciles with the `self::detect_domain` registration. If it FAILs "scanned zero references" the loader_tokens are wrong; if "missing" the `self::` registration regex didn't match — fix per spec §7.
-- [ ] **Step 4: CI wiring** — if the native_symbols CI job is a hardcoded package matrix (not auto-derived from REGISTRY keys), add `infermap` to it. Read the job in `ci.yml` to determine.
+- [ ] **Step 4: CI wiring** — the `native_symbols` CI job is a single hardcoded run step `run: python scripts/check_native_symbols.py goldenmatch` (`ci.yml:~1540`), NOT a matrix. Add a **second run step** in the same job: `run: python scripts/check_native_symbols.py infermap`. (It triggers correctly — the new `infermap.allow` + the `check_native_symbols.py` edit both fall under the existing `native_symbols` path filter.)
 - [ ] **Step 5: Commit** — `"chore(infermap): native_symbols gate entry (Wave 1)"`
 
 ---
