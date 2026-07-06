@@ -605,6 +605,7 @@ jobs:
               - 'packages/python/infermap/infermap/scorers/exact.py'
               - 'packages/python/infermap/infermap/scorers/fuzzy_name.py'
               - 'packages/python/infermap/infermap/scorers/initialism.py'
+              - 'packages/python/infermap/infermap/scorers/profile.py'
               - 'packages/python/infermap/infermap/_native_loader.py'
               - 'packages/python/infermap/infermap/detect.py'
               - 'packages/python/infermap/tests/test_native_parity.py'
