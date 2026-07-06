@@ -133,8 +133,8 @@ def _cc_kernel_runner(attr: str) -> Callable[[pl.Series], pl.Series] | None:
 
 
 def _str_kernel_runner(component: str, attr: str) -> Callable[[pl.Series], pl.Series] | None:
-    """Whole-series runner for a region-free ``str -> str`` kernel ``attr``
-    gated on ``component`` (same shape as ``_cc_kernel_runner`` but generic)."""
+    """Generic whole-series runner for a region-free ``str -> str`` kernel
+    ``attr`` gated on ``component`` (same shape as ``_cc_kernel_runner``)."""
     if not native_enabled(component):
         return None
     nm = native_module()
@@ -166,6 +166,78 @@ def ein_format_native() -> Callable[[pl.Series], pl.Series] | None:
 
 def phone_digits_native() -> Callable[[pl.Series], pl.Series] | None:
     return _str_kernel_runner("phone_digits", "phone_digits_arrow")
+
+
+def soundex_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _str_kernel_runner("phonetic", "soundex_arrow")
+
+
+# --- W5 breadth kernels (str in, bool/str/int/float out via _str_kernel_runner) ---
+
+
+def isin_validate_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _str_kernel_runner("isin", "isin_validate_arrow")
+
+
+def cusip_validate_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _str_kernel_runner("cusip", "cusip_validate_arrow")
+
+
+def npi_validate_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _str_kernel_runner("npi", "npi_validate_arrow")
+
+
+def luhn_validate_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _str_kernel_runner("luhn", "luhn_validate_arrow")
+
+
+def cc_brand_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _str_kernel_runner("cc", "cc_brand_arrow")
+
+
+def name_initials_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _str_kernel_runner("names_ext", "name_initials_arrow")
+
+
+def strip_middle_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _str_kernel_runner("names_ext", "strip_middle_arrow")
+
+
+def roman_to_int_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _str_kernel_runner("numeric", "roman_to_int_arrow")
+
+
+def ordinal_to_int_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _str_kernel_runner("numeric", "ordinal_to_int_arrow")
+
+
+def fraction_to_decimal_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _str_kernel_runner("numeric", "fraction_to_decimal_arrow")
+
+
+def double_metaphone_native() -> (
+    Callable[[pl.Series], tuple[pl.Series, pl.Series]] | None
+):
+    """Build a runner for the multi-output double_metaphone kernel: one string
+    array in, a PAIR of arrays (primary, alternate) out. ``None`` when native
+    ``phonetic`` is off or unbuilt. Mirrors ``split_name_native``."""
+    if not native_enabled("phonetic"):
+        return None
+    nm = native_module()
+    attr = "double_metaphone_arrow"
+    if nm is None or not hasattr(nm, attr):
+        return None
+    try:
+        import pyarrow  # noqa: F401  (zero-copy bridge)
+    except ImportError:
+        return None
+    func = getattr(nm, attr)
+
+    def run(s: pl.Series) -> tuple[pl.Series, pl.Series]:
+        primary_arr, alt_arr = func(_as_str_series(s).to_arrow())
+        return pl.from_arrow(primary_arr), pl.from_arrow(alt_arr)
+
+    return run
 
 
 def cc_validate_native() -> Callable[[pl.Series], pl.Series] | None:
@@ -749,6 +821,40 @@ def build_canonical_map_native(
     return run
 
 
+def _company_kernel_runner(attr: str) -> Callable[[pl.Series], pl.Series] | None:
+    """Build a whole-series runner for a company kernel function ``attr``
+    (company_normalize/company_strip_legal/company_extract_legal) if native
+    ``company`` is enabled and importable; else ``None``. Single string array
+    in, one out; the legal-suffix table is locale-free."""
+    if not native_enabled("company"):
+        return None
+    nm = native_module()
+    if nm is None or not hasattr(nm, attr):
+        return None
+    try:
+        import pyarrow  # noqa: F401  (zero-copy bridge)
+    except ImportError:
+        return None
+    func = getattr(nm, attr)
+
+    def run(s: pl.Series) -> pl.Series:
+        return pl.from_arrow(func(_as_str_series(s).to_arrow()))
+
+    return run
+
+
+def company_normalize_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _company_kernel_runner("company_normalize_arrow")
+
+
+def company_strip_legal_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _company_kernel_runner("company_strip_legal_arrow")
+
+
+def company_extract_legal_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _company_kernel_runner("company_extract_legal_arrow")
+
+
 def _email_kernel_runner(attr: str) -> Callable[[pl.Series], pl.Series] | None:
     """Build a whole-series runner for email kernel function ``attr`` if
     native ``email`` is enabled and the dependencies are importable; else
@@ -777,6 +883,14 @@ def email_lowercase_native() -> Callable[[pl.Series], pl.Series] | None:
 
 def email_normalize_native() -> Callable[[pl.Series], pl.Series] | None:
     return _email_kernel_runner("email_normalize_arrow")
+
+
+def email_canonical_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _email_kernel_runner("email_canonical_arrow")
+
+
+def email_mask_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _email_kernel_runner("email_mask_arrow")
 
 
 def email_extract_domain_native() -> Callable[[pl.Series], pl.Series] | None:
@@ -815,6 +929,18 @@ def url_normalize_native() -> Callable[[pl.Series], pl.Series] | None:
 
 def url_extract_domain_native() -> Callable[[pl.Series], pl.Series] | None:
     return _url_kernel_runner("url_extract_domain_arrow")
+
+
+def url_strip_tracking_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _url_kernel_runner("url_strip_tracking_arrow")
+
+
+def url_strip_www_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _url_kernel_runner("url_strip_www_arrow")
+
+
+def url_canonical_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _url_kernel_runner("url_canonical_arrow")
 
 
 def _as_f64_series(s: pl.Series) -> pl.Series:

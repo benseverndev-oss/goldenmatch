@@ -56,7 +56,52 @@ is already Polars/Arrow-vectorized and is NOT a native target.
 
 - **Crates:** `packages/rust/extensions/goldencheck-core/` (pyo3-free kernels, the
   `score-core` analogue) + `goldencheck-native/` (abi3 PyO3 shim, standalone
-  workspace, reads Arrow zero-copy via `PyArrowType<ArrayData>`, pinned `arrow=55`).
+  workspace, reads Arrow zero-copy via `PyArrowType<ArrayData>`, pinned `arrow=59`).
+- **Zero-copy FFI (the shim never copies a whole column).** Data crosses via the
+  Arrow C Data Interface (`PyArrowType<ArrayData>`) — the buffer is shared, not
+  copied. Two boundaries were tightened so the *Rust side* also avoids a full
+  materialization:
+  - **benford** (`profile.rs`): on the no-null path the Arrow values buffer *is*
+    `&[f64]` (deref of the shared `ScalarBuffer`), handed straight to the kernel —
+    no owned `Vec`. Avoids an 8 MB memcpy per call on a 1M-row column: **25.3 → 22.0 ms**
+    (~13%). The null path still compacts only the non-null subset (a raw buffer with
+    null slots has undefined backing f64s).
+  - **key/FD interning** (`keys.rs`): reads the primitive values buffer as a slice
+    (`arr.values()`) with a **no-null fast path** (drops the per-row validity branch),
+    instead of per-element `value(i)`. The interned `Vec<u64>` is unavoidable (the
+    kernels run on dense ids), but the reads are now buffer-slice: FD discovery
+    **11.5 → 10.3 ms** (~11%, it's interning-bound); composite ~flat (search-bound).
+  - **Dictionary-array fast path** (`keys.rs`): when a key/FD column arrives as an
+    Arrow `DictionaryArray` (a Polars `Categorical`/`Enum` column), the dictionary
+    *is* the interning — intern the small values array ONCE, then map each row's key
+    through it (O(dict) hash + O(rows) index lookup) instead of O(rows) string hashing.
+    **~2× faster** kernel interning on a 200k string column (15.7 → 6.5 ms). It's a
+    zero-extra-cost fast path: exploited when the layout is already dictionary-encoded,
+    NOT manufactured — **measured**: forcing `cast(pl.Categorical)` in the profiler
+    *regressed* end-to-end (cast costs more than the interning it saves), so no cast is
+    added. Pays off automatically when a caller (or goldenpipe streaming Arrow) hands a
+    categorical column across. Parity locked in `test_native_parity.py`.
+  - **Measured and NOT taken** (the `measure, the naive kernel LOST` law): a single
+    **RecordBatch** import in place of N per-column arrays *regressed* Python-side prep
+    30–40% (`df.select().to_arrow().to_batches()` 1078 µs vs `[df[c].to_arrow() …]`
+    818 µs for 6 cols — the per-column exports are already single-chunk zero-copy);
+    and Arrow-izing **fuzzy near-dup** (`fuzzy.rs`) saves <0.3% (the `list[str]` copy of
+    ≤2000 *distinct* values is µs; the trigram-block + Levenshtein is the ~38 ms wall).
+    Both left as-is by design.
+- **Polars-free kernel fallbacks (pillar-1 partial eviction).** The native kernel is
+  the fast reference; the *fallbacks* for FD (`_discover_python`) and composite-key
+  (`_python_search`) now do their distinct-counting in **pure Python** (`set` over
+  column values / value-tuples) instead of Polars `n_unique` — so the Polars *engine*
+  is out of the kernel-compute path. Values are still pulled from the Polars frame via
+  `to_list` and candidate selection still inspects the frame (the scanner hands these
+  profilers a Polars `DataFrame` — the substrate stays Polars; this is not a
+  whole-package eviction). The pure-Python fallback is ~4× slower than the old Polars
+  one, acceptable as a no-native safety net. **Deferred (a decision, not an oversight):**
+  the full *native-required* cutover (delete the fallback, make `goldencheck-native` a
+  hard dependency) is NOT done here — it would (a) crash a plain `pip install goldencheck`
+  `--deep` scan that hits FD/composite, and (b) break `uv sync --all-packages` on the
+  shared `python` CI lane (no Rust on most legs → the base-dep maturin build fails). It
+  needs its own packaging PR (Rust in the base lane / wheel-resolution rework).
 - **Loader:** `goldencheck/core/_native_loader.py` — discover order
   `goldencheck._native` (in-tree build) → `goldencheck_native._native` (wheel) →
   pure Python. `GOLDENCHECK_NATIVE=auto|0|1`. A component runs native only if it's

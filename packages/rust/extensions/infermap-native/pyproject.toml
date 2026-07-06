@@ -1,0 +1,37 @@
+# infermap-native -- the optional native acceleration runtime for InferMap, shipped
+# as a SEPARATE maturin/abi3 package (mirrors goldencheck's native / goldenanalysis's
+# analysis-native split). `infermap` stays a pure-Python wheel; `pip install
+# infermap[native]` pulls this, and infermap._native_loader discovers it.
+#
+# The crate also builds via scripts/build_infermap_native.py for in-tree local dev
+# (drops infermap/_native.abi3.so); both paths share the same `_native` pymodule, so
+# the loader can import either.
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "infermap-native"
+version = "0.1.0"
+description = "Optional native (Rust/PyO3) acceleration kernels for infermap"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Ben Severn", email = "ben@bensevern.dev" }]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3 :: Only",
+    "License :: OSI Approved :: MIT License",
+    "Intended Audience :: Developers",
+    "Topic :: Scientific/Engineering",
+]
+
+[project.urls]
+Homepage = "https://github.com/benseverndev-oss/goldenmatch"
+
+[tool.maturin]
+# Mixed layout: the thin Python wrapper lives in python/infermap_native/; the
+# compiled abi3 ext lands at infermap_native/_native (pymodule `_native`, so the
+# last path component matches and no Rust rename is needed).
+python-source = "python"
+module-name = "infermap_native._native"

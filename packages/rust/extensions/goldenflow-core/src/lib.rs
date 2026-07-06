@@ -8,10 +8,20 @@
 pub mod address;
 pub mod autocorrect;
 pub mod categorical;
+pub mod company;
+/// Fused columnar apply (a whole owned-kernel chain in one pass) — only when
+/// built with `--features arrow`. Pillar-1 of the Rust cutover.
+#[cfg(feature = "arrow")]
+pub mod chain;
+/// Arrow-columnar apply paths — only when built with `--features arrow`
+/// (native-flow enables it; wasm/pure surfaces stay arrow-free).
+#[cfg(feature = "arrow")]
+pub mod columnar;
 pub mod email;
 pub mod identifiers;
 pub mod names;
 pub mod numeric;
 pub mod phone;
+pub mod phonetic;
 pub mod text;
 pub mod url;

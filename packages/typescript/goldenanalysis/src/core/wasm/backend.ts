@@ -16,6 +16,8 @@ export interface AnalysisBackend {
   histogram(values: Float64Array, bins: number): Array<[number, number]>;
   /** Linear-interpolation quantile (caller has filtered nulls). */
   quantile(values: Float64Array, q: number): number;
+  /** Discrete cluster-size histogram: counts of sizes ==1/==2/==3/>=4 (4 buckets). */
+  clusterSizeHistogram(sizes: Float64Array): number[];
 }
 
 const _registry = createBackendRegistry<AnalysisBackend>();

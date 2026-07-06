@@ -35,6 +35,27 @@ class Runner:
                     )
                     continue
 
+            # Relocatable-stage seam (contract Phases A/C).
+            location = getattr(getattr(planned.stage, "info", None), "location", "local")
+            if location == "local":
+                # Transition back to Python: if the previous (remote) stage left an
+                # engine-resident frame, materialize it here -- the boundary
+                # crossing, paid once, exactly when a local stage needs the data.
+                engine = getattr(ctx, "_frame", None)
+                if engine is not None:
+                    ctx.df = engine.polars()
+                    ctx._frame = None
+            elif not getattr(planned.stage, "remote_capable", False):
+                # A stage declares a remote location but provides no remote
+                # implementation -- a not-yet-built placement. Fail loudly (before
+                # the try/except) rather than silently running it in-process. A
+                # real RemoteStage sets ``remote_capable = True`` and runs below.
+                raise NotImplementedError(
+                    f"Stage '{planned.name}' declares location={location!r} but is not a "
+                    "RemoteStage (remote_capable). Remote execution for it is not "
+                    "implemented (relocatable-stage contract Phase C)."
+                )
+
             start = time.perf_counter()
             try:
                 # Make stage-level config available to the adapter via context

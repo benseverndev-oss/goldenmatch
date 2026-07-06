@@ -69,11 +69,16 @@ def _has_single_column_key(df: pl.DataFrame, n_rows: int) -> bool:
 def _python_search(
     df: pl.DataFrame, candidates: list[str], n_rows: int, max_size: int
 ) -> list[list[int]]:
-    """Pure-Python mirror of goldencheck_core::composite_key_search.
+    """Polars-free mirror of goldencheck_core::composite_key_search.
 
     Identical BFS: candidates are all non-unique here (we only run when no
     single-column key exists), subsets stay sorted via the ``c <= last`` guard,
-    and supersets of a found key are pruned."""
+    and supersets of a found key are pruned. The distinct-tuple test runs in
+    pure Python (``len(set(zip(...)))``) rather than Polars ``n_unique`` — the
+    Rust kernel is the fast reference; this is the correctness fallback when the
+    native wheel isn't installed. Columns are pulled out of the Polars frame once
+    with ``to_list``; the Polars *engine* no longer runs the distinct counts."""
+    col_values = [df[c].to_list() for c in candidates]
     idxs = list(range(len(candidates)))
     found: list[list[int]] = []
     cap = min(max_size, len(idxs))
@@ -88,8 +93,7 @@ def _python_search(
                 subset = base + [c]
                 if any(all(x in subset for x in k) for k in found):
                     continue
-                cols = [candidates[j] for j in subset]
-                if df.select(cols).n_unique() == n_rows:
+                if len(set(zip(*(col_values[j] for j in subset)))) == n_rows:
                     found.append(subset)
                 else:
                     nxt.append(subset)

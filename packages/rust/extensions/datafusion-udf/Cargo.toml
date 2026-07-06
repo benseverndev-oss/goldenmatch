@@ -60,8 +60,8 @@ pyo3 = { version = "0.29", features = ["extension-module", "abi3", "abi3-py311"]
 # to their 2.x-using releases so alloc-no-stdlib unifies at 2.0.4. Cargo.lock is
 # gitignored for this crate (CI resolves fresh), so these explicit pins ARE the
 # fix. Neither is used directly. Remove once brotli/parquet upstream is consistent.
-alloc-stdlib = "=0.2.2"
-brotli-decompressor = "=5.0.1"
+alloc-stdlib = "=0.2.4"
+brotli-decompressor = "=5.0.3"
 
 [build-dependencies]
 pyo3-build-config = "0.29"

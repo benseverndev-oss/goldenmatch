@@ -788,6 +788,130 @@ registerTransform(
 );
 
 // ---------------------------------------------------------------------------
+// W5 breadth: isin/cusip/npi/luhn validators + cc_brand
+// ---------------------------------------------------------------------------
+
+function isAsciiLetter(c: string): boolean {
+  return (c >= "A" && c <= "Z") || (c >= "a" && c <= "z");
+}
+
+function isinValidateTs(val: string): boolean {
+  let t = "";
+  for (const c of val) {
+    if (!/\s/.test(c) && c !== "-") t += c.toUpperCase();
+  }
+  if (t.length !== 12) return false;
+  for (const c of t) {
+    if (!(isAsciiDigitChar(c) || (c >= "A" && c <= "Z"))) return false;
+  }
+  if (!isAsciiLetter(t[0]!) || !isAsciiLetter(t[1]!)) return false;
+  let expanded = "";
+  for (const c of t) {
+    if (isAsciiDigitChar(c)) expanded += c;
+    else expanded += String(c.charCodeAt(0) - 65 + 10);
+  }
+  return luhnOk(expanded);
+}
+
+function cusipValue(c: string): number | undefined {
+  if (isAsciiDigitChar(c)) return c.charCodeAt(0) - 48;
+  if (c >= "A" && c <= "Z") return c.charCodeAt(0) - 65 + 10;
+  if (c === "*") return 36;
+  if (c === "@") return 37;
+  if (c === "#") return 38;
+  return undefined;
+}
+
+function cusipValidateTs(val: string): boolean {
+  let t = "";
+  for (const c of val) if (!/\s/.test(c)) t += c.toUpperCase();
+  if (t.length !== 9) return false;
+  if (!isAsciiDigitChar(t[8]!)) return false;
+  let total = 0;
+  for (let i = 0; i < 8; i++) {
+    let v = cusipValue(t[i]!);
+    if (v === undefined) return false;
+    if (i % 2 === 1) v *= 2;
+    total += Math.floor(v / 10) + (v % 10);
+  }
+  const check = (10 - (total % 10)) % 10;
+  return check === t[8]!.charCodeAt(0) - 48;
+}
+
+function npiValidateTs(val: string): boolean {
+  let d = "";
+  for (const c of val) if (!/\s/.test(c) && c !== "-") d += c;
+  if (d.length !== 10) return false;
+  for (const c of d) if (!isAsciiDigitChar(c)) return false;
+  return luhnOk("80840" + d);
+}
+
+function luhnValidateTs(val: string): boolean {
+  const d = ccNormalizedDigits(val);
+  if (d === undefined) return false;
+  return luhnOk(d);
+}
+
+function ccBrandTs(val: string): string | undefined {
+  const d = ccNormalizedDigits(val);
+  if (d === undefined) return undefined;
+  const len = d.length;
+  const first = (k: number): number => (len >= k ? parseInt(d.slice(0, k), 10) : 0);
+  const f2 = first(2);
+  const f3 = first(3);
+  const f4 = first(4);
+  if (len === 15 && (f2 === 34 || f2 === 37)) return "amex";
+  if (len === 14 && (f2 === 36 || f2 === 38 || f2 === 39 || (f3 >= 300 && f3 <= 305))) return "diners";
+  if (len === 16 && f4 >= 3528 && f4 <= 3589) return "jcb";
+  if (len === 16 && (d.startsWith("6011") || f2 === 65 || (f3 >= 644 && f3 <= 649))) return "discover";
+  if (len === 16 && ((f2 >= 51 && f2 <= 55) || (f4 >= 2221 && f4 <= 2720))) return "mastercard";
+  if (d.startsWith("4") && (len === 13 || len === 16 || len === 19)) return "visa";
+  return undefined;
+}
+
+function isinValidate(values: readonly ColumnValue[]): ColumnValue[] {
+  const b: FlowWasmBackend | null = getFlowWasmBackend();
+  return mapToBool(values, b ? (s) => b.isinValidate(s) : isinValidateTs);
+}
+function cusipValidate(values: readonly ColumnValue[]): ColumnValue[] {
+  const b: FlowWasmBackend | null = getFlowWasmBackend();
+  return mapToBool(values, b ? (s) => b.cusipValidate(s) : cusipValidateTs);
+}
+function npiValidate(values: readonly ColumnValue[]): ColumnValue[] {
+  const b: FlowWasmBackend | null = getFlowWasmBackend();
+  return mapToBool(values, b ? (s) => b.npiValidate(s) : npiValidateTs);
+}
+function luhnValidate(values: readonly ColumnValue[]): ColumnValue[] {
+  const b: FlowWasmBackend | null = getFlowWasmBackend();
+  return mapToBool(values, b ? (s) => b.luhnValidate(s) : luhnValidateTs);
+}
+function ccBrand(values: readonly ColumnValue[]): ColumnValue[] {
+  const b: FlowWasmBackend | null = getFlowWasmBackend();
+  return mapToStringOrNull(values, b ? (s) => b.ccBrand(s) : ccBrandTs);
+}
+
+registerTransform(
+  { name: "isin_validate", inputTypes: ["identifier", "string"], autoApply: false, priority: 50, mode: "series" },
+  isinValidate,
+);
+registerTransform(
+  { name: "cusip_validate", inputTypes: ["identifier", "string"], autoApply: false, priority: 50, mode: "series" },
+  cusipValidate,
+);
+registerTransform(
+  { name: "npi_validate", inputTypes: ["identifier", "string"], autoApply: false, priority: 50, mode: "series" },
+  npiValidate,
+);
+registerTransform(
+  { name: "luhn_validate", inputTypes: ["identifier", "string"], autoApply: false, priority: 50, mode: "series" },
+  luhnValidate,
+);
+registerTransform(
+  { name: "cc_brand", inputTypes: ["identifier", "string"], autoApply: false, priority: 40, mode: "series" },
+  ccBrand,
+);
+
+// ---------------------------------------------------------------------------
 // ssn_format (series, ssn|string, 50)
 // ---------------------------------------------------------------------------
 
@@ -870,4 +994,9 @@ export {
   swiftFormatTs,
   abaValidateTs,
   imeiValidateTs,
+  isinValidateTs,
+  cusipValidateTs,
+  npiValidateTs,
+  luhnValidateTs,
+  ccBrandTs,
 };

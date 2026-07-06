@@ -8,12 +8,14 @@ from goldenflow.transforms import register_transform
 from goldenflow.transforms._native import (
     has_initial_native,
     merge_name_native,
+    name_initials_native,
     name_proper_native,
     name_script_native,
     name_transliterate_native,
     nickname_standardize_native,
     split_name_native,
     split_name_reverse_native,
+    strip_middle_native,
     strip_suffixes_native,
     strip_titles_native,
 )
@@ -487,3 +489,57 @@ def name_script(series: pl.Series) -> pl.Series:
     if native is not None:
         return native(series)
     return series.map_elements(_name_script_py, return_dtype=pl.Utf8)
+
+
+def _name_initials_py(val: str | None) -> str | None:
+    if val is None:
+        return None
+    out = []
+    for tok in val.split():
+        first = tok[0]
+        if first.isascii() and first.isalpha():
+            out.append(first.upper())
+    return "".join(out)
+
+
+def _strip_middle_py(val: str | None) -> str | None:
+    if val is None:
+        return None
+    tokens = val.split()
+    if not tokens:
+        return ""
+    if len(tokens) == 1:
+        return tokens[0]
+    return f"{tokens[0]} {tokens[-1]}"
+
+
+@register_transform(
+    name="name_initials",
+    input_types=["name", "string"],
+    auto_apply=False,
+    priority=40,
+    mode="series",
+)
+def name_initials(series: pl.Series) -> pl.Series:
+    """Initials of each whitespace token (letter-leading tokens only).
+    Native-first over goldenflow-core."""
+    native = name_initials_native()
+    if native is not None:
+        return native(series)
+    return series.map_elements(_name_initials_py, return_dtype=pl.Utf8)
+
+
+@register_transform(
+    name="strip_middle",
+    input_types=["name", "string"],
+    auto_apply=False,
+    priority=40,
+    mode="series",
+)
+def strip_middle(series: pl.Series) -> pl.Series:
+    """Keep only the first and last whitespace tokens (drop the middle).
+    Native-first over goldenflow-core."""
+    native = strip_middle_native()
+    if native is not None:
+        return native(series)
+    return series.map_elements(_strip_middle_py, return_dtype=pl.Utf8)

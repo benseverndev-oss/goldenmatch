@@ -21,9 +21,8 @@ from __future__ import annotations
 
 import re
 
+from infermap._native_loader import native_enabled, native_module
 from infermap.types import FieldInfo, ScorerResult
-
-_TOKEN_RE = re.compile(r"[A-Za-z][a-z]*|[A-Z]+(?=[A-Z][a-z]|\b)|\d+")
 
 
 def _tokenize(name: str) -> list[str]:
@@ -101,6 +100,12 @@ def _score_pair(name_a: str, name_b: str) -> float | None:
     return 0.6 + 0.35 * ratio
 
 
+def _initialism_score(a: str, b: str) -> float | None:
+    if native_enabled("initialism_score"):
+        return native_module().initialism_score(a, b)
+    return _score_pair(a, b)
+
+
 class InitialismScorer:
     """Scores source/target pairs where one side is a prefix-concat
     abbreviation of the other's tokens.
@@ -115,7 +120,7 @@ class InitialismScorer:
     def score(self, source: FieldInfo, target: FieldInfo) -> ScorerResult | None:
         src_name = source.canonical_name or source.name
         tgt_name = target.canonical_name or target.name
-        score = _score_pair(src_name, tgt_name)
+        score = _initialism_score(src_name, tgt_name)
         if score is None:
             return None
         return ScorerResult(

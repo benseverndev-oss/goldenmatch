@@ -64,7 +64,7 @@ Native SQL extensions for [GoldenMatch](https://github.com/benseverndev-oss/gold
 A DISTINCT surface from `duckdb/` above: a compiled Rust **loadable extension**
 (cdylib) that links `goldenflow-core` directly — NO CPython in the DuckDB
 process (the `duckdb/goldenmatch_duckdb/goldenflow.py` UDFs dispatch the *Python*
-transform registry per value; this doesn't). 74 UDFs `goldenflow_<kernel>` =
+transform registry per value; this doesn't). 98 UDFs `goldenflow_<kernel>` =
 essentially the whole single-record transform surface. Released
 `goldenflow-duckdb-v0.1.1`. Built with the `duckdb` crate (`vscalar`) +
 `#[duckdb_entrypoint_c_api]`. Gotchas (hard-won — see the memory file

@@ -7,6 +7,8 @@ from typing import Any
 
 import polars as pl
 
+from goldenpipe.models.frame import Frame, LocalFrame
+
 
 class StageStatus(str, Enum):  # noqa: UP042  # explicit str+Enum preserves __str__ semantics; StrEnum behaves differently
     SUCCESS = "success"
@@ -46,6 +48,35 @@ class PipeContext:
     timing: dict[str, float] = field(default_factory=dict)
     reasoning: dict[str, str] = field(default_factory=dict)
     stage_config: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def frame(self) -> Frame | None:
+        """The relocatable-stage seam. Returns the engine-resident frame if one is
+        set (Phase C -- a ``DuckDBFrame`` left by a remote stage, kept lazy/not
+        materialized), else a **zero-copy** ``LocalFrame`` view over ``df``
+        (Phase A). ``.polars()`` on either yields the data; on a ``LocalFrame`` it
+        is the backing ``df`` by reference (Stage 0 preserved), on an engine frame
+        it triggers the boundary materialization. See the relocatable-stage-contract."""
+        engine = getattr(self, "_frame", None)
+        if engine is not None:
+            return engine
+        return LocalFrame(self.df) if self.df is not None else None
+
+    @frame.setter
+    def frame(self, value: Frame | None) -> None:
+        # A ``LocalFrame`` (or None) is canonical in-Python data -> store in ``df``,
+        # clear any engine frame. An **engine-resident** frame (``DuckDBFrame``) is
+        # kept AS-IS -- NOT materialized -- so a chain of remote stages stays in the
+        # engine (Phase C); it materializes to ``df`` only when a local stage needs
+        # it (the Runner does that transition) or at egress.
+        if value is None:
+            self._frame = None
+            self.df = None
+        elif isinstance(value, LocalFrame):
+            self._frame = None
+            self.df = value.polars()
+        else:
+            self._frame = value  # engine-resident: do not materialize here
 
 
 @dataclass

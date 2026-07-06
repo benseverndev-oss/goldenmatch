@@ -12,8 +12,9 @@ Strict FD `det -> dep` holds iff ``n_distinct(det, dep) == n_distinct(det)``.
 When ``goldencheck[native]`` is installed, discovery runs in the Rust kernel
 (``discover_functional_dependencies`` -- interns each column once, reuses it
 across every pair, and early-exits on the first violation, which beats Polars
-recomputing a full two-column distinct per pair). Pure-Polars fallback uses the
-``n_unique`` identity above. Both are integer-exact -> identical results.
+recomputing a full two-column distinct per pair). The fallback (no native wheel)
+is pure Python — ``set``-based distinct counts, no Polars engine. Both are
+integer-exact -> identical results.
 
 Guards against noise: needs >= _MIN_ROWS rows of support, skips constant
 dependents and unique determinants (trivial), caps candidate columns, and
@@ -54,10 +55,18 @@ def _select_candidates(df: pl.DataFrame, n_rows: int) -> list[str]:
     return [c for _nu, c in scored[:_MAX_CANDIDATES]]
 
 
-def _discover_polars(df: pl.DataFrame, cols: list[str], n_rows: int) -> list[tuple[int, int]]:
-    """Pure-Polars mirror of the kernel: det->dep holds iff
-    n_distinct(det, dep) == n_distinct(det). Skips trivial pairs identically."""
-    distinct = {c: df[c].n_unique() for c in cols}
+def _discover_python(df: pl.DataFrame, cols: list[str], n_rows: int) -> list[tuple[int, int]]:
+    """Polars-free mirror of the kernel: det->dep holds iff
+    n_distinct(det, dep) == n_distinct(det). Skips trivial pairs identically.
+
+    The distinct-counting compute runs in pure Python (``set`` over the column
+    values / value-tuples) rather than Polars ``n_unique`` — the Rust kernel is
+    the fast reference; this is the correctness fallback when the native wheel
+    isn't installed (roughly ~4x slower than the old Polars path, acceptable for
+    a safety net). Values are pulled out of the Polars frame once with
+    ``to_list``; the Polars *engine* no longer runs the distinct counts."""
+    lists = {c: df[c].to_list() for c in cols}
+    distinct = {c: len(set(lists[c])) for c in cols}
     out: list[tuple[int, int]] = []
     for i, det in enumerate(cols):
         if distinct[det] == n_rows:  # unique determinant -> trivial
@@ -65,7 +74,7 @@ def _discover_polars(df: pl.DataFrame, cols: list[str], n_rows: int) -> list[tup
         for j, dep in enumerate(cols):
             if i == j or distinct[dep] <= 1:
                 continue
-            if df.select([det, dep]).n_unique() == distinct[det]:
+            if len(set(zip(lists[det], lists[dep]))) == distinct[det]:
                 out.append((i, j))
     return out
 
@@ -87,10 +96,10 @@ class FunctionalDependencyProfiler:
             try:
                 arrays = [df[c].to_arrow() for c in cols]
                 pairs = native_module().discover_functional_dependencies(arrays)
-            except Exception:  # noqa: BLE001 - any native failure -> Polars path
-                pairs = _discover_polars(df, cols, n_rows)
+            except Exception:  # noqa: BLE001 - any native failure -> pure-Python path
+                pairs = _discover_python(df, cols, n_rows)
         else:
-            pairs = _discover_polars(df, cols, n_rows)
+            pairs = _discover_python(df, cols, n_rows)
 
         if not pairs:
             return []

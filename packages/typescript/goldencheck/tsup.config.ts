@@ -11,6 +11,7 @@ export default defineConfig({
     "core/goldencheckWasm": "src/core/goldencheckWasm.ts",
     "node/index": "src/node/index.ts",
     "node/mcp/server": "src/node/mcp/server.ts",
+    "node/a2a/server": "src/node/a2a/server.ts",
     cli: "src/cli.ts",
   },
   format: ["esm", "cjs"],

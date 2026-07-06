@@ -71,6 +71,7 @@ jobs:
       goldencheck_native: ${{ steps.filter.outputs.goldencheck_native }}
       goldenprofile_native: ${{ steps.filter.outputs.goldenprofile_native }}
       analysis_native: ${{ steps.filter.outputs.analysis_native }}
+      infermap_native: ${{ steps.filter.outputs.infermap_native }}
       native_flow: ${{ steps.filter.outputs.native_flow }}
       goldenflow_duckdb: ${{ steps.filter.outputs.goldenflow_duckdb }}
       goldenpipe_native: ${{ steps.filter.outputs.goldenpipe_native }}
@@ -432,7 +433,15 @@ jobs:
             # checker/test tooling, or its parity corpus changes.
             native_symbols:
               - 'packages/rust/extensions/native/**'
+              - 'packages/rust/extensions/goldencheck-native/**'
+              - 'packages/rust/extensions/analysis-native/**'
+              - 'packages/rust/extensions/native-flow/**'
+              - 'packages/rust/extensions/infermap-native/**'
               - 'packages/python/goldenmatch/goldenmatch/**'
+              - 'packages/python/goldencheck/goldencheck/**'
+              - 'packages/python/goldenanalysis/goldenanalysis/**'
+              - 'packages/python/goldenflow/goldenflow/**'
+              - 'packages/python/infermap/infermap/**'
               - 'scripts/check_native_symbols.py'
               - 'scripts/test_native_symbols.py'
               - 'parity/native_symbols/**'
@@ -581,6 +590,25 @@ jobs:
               - 'packages/python/goldenanalysis/goldenanalysis/core/aggregate.py'
               - 'packages/python/goldenanalysis/tests/core/test_native_parity.py'
               - 'scripts/build_analysis_native.py'
+            infermap_native:
+              # InferMap's optional native accelerator (infermap-core/native, PyO3,
+              # standalone workspace, Wave 1 = the detect kernel). Builds the .so and
+              # runs the parity suite (which SKIPS when the ext is absent), so without
+              # this lane the detect_domain kernel is UNTESTED in CI.
+              - 'packages/rust/extensions/infermap-native/**'
+              - 'packages/rust/extensions/infermap-core/**'
+              # Wave 2: infermap-core reuses score-core's jaro-winkler -> a change there
+              # must re-run InferMap's fuzzy parity gate (native_flow/goldenflow-core
+              # convention). The scorer files hold the _*_pure references the parity
+              # test imports.
+              - 'packages/rust/extensions/score-core/**'
+              - 'packages/python/infermap/infermap/scorers/exact.py'
+              - 'packages/python/infermap/infermap/scorers/fuzzy_name.py'
+              - 'packages/python/infermap/infermap/scorers/initialism.py'
+              - 'packages/python/infermap/infermap/_native_loader.py'
+              - 'packages/python/infermap/infermap/detect.py'
+              - 'packages/python/infermap/tests/test_native_parity.py'
+              - 'scripts/build_infermap_native.py'
             native_flow:
               # GoldenFlow's optional native phone kernel — a standalone maturin
               # workspace, so the `rust` job's cargo test --workspace never
@@ -1482,7 +1510,7 @@ jobs:
           cache-dependency-glob: |
             uv.lock
             **/pyproject.toml
-      - uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093  # v6.0.8
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271  # v6.0.9
         # Reads version from root package.json `packageManager` field.
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0
         with:
@@ -1533,16 +1561,22 @@ jobs:
     if: needs.changes.outputs.native_symbols == 'true' || needs.changes.outputs.force_all == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [goldenmatch, goldencheck, goldenanalysis, goldenflow, infermap]
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
         with:
           python-version: "3.13"
+      - name: Reconcile native symbols (${{ matrix.package }})
+        run: python scripts/check_native_symbols.py ${{ matrix.package }}
       - name: Install pytest
+        if: matrix.package == 'goldenmatch'
         run: pip install pytest
-      - name: Reconcile native symbols (goldenmatch)
-        run: python scripts/check_native_symbols.py goldenmatch
       - name: Gate unit tests
+        if: matrix.package == 'goldenmatch'
         run: python -m pytest scripts/test_native_symbols.py -q
 
   typescript:
@@ -1552,7 +1586,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
-      - uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093  # v6.0.8
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271  # v6.0.9
         # Reads version from root package.json `packageManager` field.
         # That field MUST be exact semver (pnpm@9.15.0) — ranges error.
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0
@@ -1844,7 +1878,7 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
         with:
           workspaces: packages/rust/extensions/score-wasm
-      - uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093  # v6.0.8
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271  # v6.0.9
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0
         with:
           node-version: 22
@@ -1883,7 +1917,7 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
         with:
           workspaces: packages/rust/extensions/analysis-wasm
-      - uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093  # v6.0.8
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271  # v6.0.9
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0
         with:
           node-version: 22
@@ -1931,7 +1965,7 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
         with:
           workspaces: packages/rust/extensions/goldenflow-wasm
-      - uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093  # v6.0.8
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271  # v6.0.9
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0
         with:
           node-version: 22
@@ -1996,7 +2030,7 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
         with:
           workspaces: packages/rust/extensions/goldenpipe-wasm
-      - uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093  # v6.0.8
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271  # v6.0.9
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0
         with:
           node-version: 22
@@ -2061,7 +2095,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
-      - uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093  # v6.0.8
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271  # v6.0.9
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0
         with:
           node-version: 22
@@ -2159,6 +2193,11 @@ jobs:
       # too (a clippy violation in the ISBN kernel had shipped green before this).
       - run: cargo test --manifest-path goldenflow-core/Cargo.toml
       - run: cargo clippy --manifest-path goldenflow-core/Cargo.toml --all-targets -- -D warnings
+      # The optional `arrow` feature (src/columnar.rs Arrow-columnar apply paths +
+      # the columnar_pilot bench) is cfg'd out of the default build above, so its
+      # parity tests + clippy need an explicit run. native-flow enables it.
+      - run: cargo test --manifest-path goldenflow-core/Cargo.toml --features arrow
+      - run: cargo clippy --manifest-path goldenflow-core/Cargo.toml --features arrow --all-targets -- -D warnings
       # sketch-core (MinHash/LSH, #1081) is its own [workspace] pyo3-free sibling
       # too; the native binding exercises it indirectly, but its own unit tests +
       # the golden-vector parity test need an explicit run.
@@ -2486,6 +2525,47 @@ jobs:
         env:
           GOLDENANALYSIS_NATIVE: "1"
         run: uv run pytest packages/python/goldenanalysis/tests/core -q
+
+  infermap_native:
+    needs: changes
+    if: needs.changes.outputs.infermap_native == 'true' || needs.changes.outputs.force_all == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/infermap-native
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      - name: clippy + test (infermap-core, pyo3-free kernels)
+        working-directory: packages/rust/extensions/infermap-core
+        run: |
+          cargo clippy -- -D warnings
+          cargo test
+      - name: clippy (infermap-native ext crate)
+        working-directory: packages/rust/extensions/infermap-native
+        run: cargo clippy --release -- -D warnings
+      - name: Build native extension into the package
+        # No --offline: CI has network + a cold cache on first run.
+        run: uv run python scripts/build_infermap_native.py
+      - name: Parity suite (ext present -> native path runs, not skips)
+        run: |
+          uv run pytest \
+            packages/python/infermap/tests/test_native_parity.py \
+            -v
+      - name: Required-native mode (INFERMAP_NATIVE=1 must import the wheel)
+        env:
+          INFERMAP_NATIVE: "1"
+        run: uv run pytest packages/python/infermap/tests/test_native_parity.py -q
 
   # goldenmatch-native distribution smoke: build the SEPARATE maturin/abi3
   # wheel (the polars / polars-runtime split) and prove the runtime loads

@@ -44,9 +44,9 @@ def _strict_pairs(df: pl.DataFrame, n: int) -> list[tuple[str, str]]:
         try:
             pairs = native_module().discover_functional_dependencies([df[c].to_arrow() for c in cols])
         except Exception:  # noqa: BLE001 - native failure -> Python fallback
-            pairs = _fd._discover_polars(df, cols, n)
+            pairs = _fd._discover_python(df, cols, n)
     else:
-        pairs = _fd._discover_polars(df, cols, n)
+        pairs = _fd._discover_python(df, cols, n)
     return [(cols[i], cols[j]) for i, j in pairs]
 
 

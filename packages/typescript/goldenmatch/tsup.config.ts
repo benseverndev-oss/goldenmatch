@@ -40,6 +40,7 @@ export default defineConfig({
     "core/goldenembedWasm": "src/core/goldenembedWasm.ts",
     "node/index": "src/node/index.ts",
     "node/mcp/server": "src/node/mcp/server.ts",
+    "node/a2a/server": "src/node/a2a/server.ts",
     cli: "src/cli.ts",
     // Separate entry so piscina can load it at runtime from disk.
     "node/backends/score-worker": "src/node/backends/score-worker.ts",

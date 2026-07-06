@@ -175,6 +175,19 @@ function toAgentSkill(entry: { readonly id: string; readonly description: string
   };
 }
 
+// A2A naming reconciliation: 3 agent skills advertise Python's canonical id on
+// the A2A card (a2a_skills parity). The underlying agent-tool id (also the MCP
+// tool id) is UNCHANGED -- the A2A card is a separate surface. tool-id -> canonical.
+const A2A_AGENT_ID_ALIASES: Record<string, string> = {
+  auto_configure: "autoconfig",
+  agent_compare_strategies: "compare_strategies",
+  run_transforms: "transform",
+};
+// canonical -> tool-id, for dispatch resolution.
+const A2A_CANONICAL_TO_TOOL: Record<string, string> = Object.fromEntries(
+  Object.entries(A2A_AGENT_ID_ALIASES).map(([tool, canon]) => [canon, tool]),
+);
+
 /**
  * Build the card's skill list from the union of every registry: the 10 base
  * A2A skills + the 15 `AGENT_SKILLS` + the memory tools + the identity tools.
@@ -184,7 +197,11 @@ function toAgentSkill(entry: { readonly id: string; readonly description: string
  * A2A parity note: the card is A2A-spec-shaped ({id, name}). The core skills
  * share canonical ids with the Python server (deduplicate, match, explain,
  * evaluate, ...); the legacy ids `dedupe`/`explain_pair` still dispatch (see
- * dispatchSkill). The remaining catalog differences (agent_* skills, Python's
+ * dispatchSkill). Three agent skills advertise Python's canonical id
+ * (autoconfig/compare_strategies/transform for the
+ * auto_configure/agent_compare_strategies/run_transforms handlers) via
+ * A2A_AGENT_ID_ALIASES; the legacy ids still dispatch. The remaining catalog
+ * differences (agent_* skills, Python's
  * finer granularity, TS-only score/profile, Python-only identity_audit/etc.,
  * and genuinely different ops like pprl vs suggest_pprl) are INTENTIONAL, not
  * drift — A2A is not gated for parity (MCP tools + CLI are).
@@ -198,7 +215,8 @@ function buildCardSkills(): readonly AgentSkill[] {
     out.push(skill);
   };
   for (const skill of BASE_SKILLS) push(skill);
-  for (const def of AGENT_SKILLS) push(toAgentSkill({ id: def.id, description: def.description }));
+  for (const def of AGENT_SKILLS)
+    push(toAgentSkill({ id: A2A_AGENT_ID_ALIASES[def.id] ?? def.id, description: def.description }));
   for (const tool of MEMORY_TOOLS) push(toAgentSkill({ id: tool.name, description: tool.description }));
   for (const tool of IDENTITY_TOOLS) push(toAgentSkill({ id: tool.name, description: tool.description }));
   return out;
@@ -506,16 +524,17 @@ export async function dispatchAnySkill(
   skill: string,
   input: Record<string, unknown>,
 ): Promise<unknown> {
-  if (AGENT_TOOL_NAMES.has(skill)) {
-    return handleAgentTool(skill, input);
+  const resolved = A2A_CANONICAL_TO_TOOL[skill] ?? skill;
+  if (AGENT_TOOL_NAMES.has(resolved)) {
+    return handleAgentTool(resolved, input);
   }
-  if (MEMORY_TOOL_NAMES.has(skill)) {
-    return unwrapTextContent(await handleMemoryTool(skill, input));
+  if (MEMORY_TOOL_NAMES.has(resolved)) {
+    return unwrapTextContent(await handleMemoryTool(resolved, input));
   }
-  if (IDENTITY_TOOL_NAMES.has(skill)) {
-    return unwrapTextContent(await handleIdentityTool(skill, input));
+  if (IDENTITY_TOOL_NAMES.has(resolved)) {
+    return unwrapTextContent(await handleIdentityTool(resolved, input));
   }
-  return dispatchSkill(skill, input);
+  return dispatchSkill(resolved, input);
 }
 
 // ---------------------------------------------------------------------------

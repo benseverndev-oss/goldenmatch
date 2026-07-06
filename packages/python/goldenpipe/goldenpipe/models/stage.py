@@ -15,6 +15,12 @@ class StageInfo:
     produces: list[str]
     consumes: list[str]
     config_schema: type | None = None
+    # Relocatable-stage seam (contract Phase A): where the stage runs. Only
+    # "local" (in-process Python) executes today; a non-local location is a
+    # not-yet-implemented remote / cross-engine placement (Phases B/C). Orthogonal
+    # to planning -- the ExecutionPlan is unchanged. See the design doc:
+    # docs/design/2026-07-06-goldenpipe-relocatable-stage-contract.md.
+    location: str = "local"
 
 
 @runtime_checkable
@@ -52,6 +58,7 @@ def stage(
     produces: list[str],
     consumes: list[str],
     config_schema: type | None = None,
+    location: str = "local",
 ) -> Callable[[Callable[[PipeContext], StageResult]], _FunctionStage]:
     """Decorator to create a stage from a plain function."""
     def decorator(fn: Callable[[PipeContext], StageResult]) -> _FunctionStage:
@@ -60,6 +67,7 @@ def stage(
             produces=produces,
             consumes=consumes,
             config_schema=config_schema,
+            location=location,
         )
         return _FunctionStage(fn, info)
     return decorator

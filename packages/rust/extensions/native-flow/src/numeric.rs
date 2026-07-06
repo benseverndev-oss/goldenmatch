@@ -43,6 +43,42 @@ pub fn to_integer_arrow(
 }
 
 #[pyfunction]
+pub fn roman_to_int_arrow(
+    py: Python,
+    array: PyArrowType<ArrayData>,
+) -> PyResult<PyArrowType<ArrayData>> {
+    Ok(PyArrowType(map_str_to_i64(
+        py,
+        array.0,
+        numeric::roman_to_int,
+    )?))
+}
+
+#[pyfunction]
+pub fn ordinal_to_int_arrow(
+    py: Python,
+    array: PyArrowType<ArrayData>,
+) -> PyResult<PyArrowType<ArrayData>> {
+    Ok(PyArrowType(map_str_to_i64(
+        py,
+        array.0,
+        numeric::ordinal_to_int,
+    )?))
+}
+
+#[pyfunction]
+pub fn fraction_to_decimal_arrow(
+    py: Python,
+    array: PyArrowType<ArrayData>,
+) -> PyResult<PyArrowType<ArrayData>> {
+    Ok(PyArrowType(map_str_to_f64(
+        py,
+        array.0,
+        numeric::fraction_to_decimal,
+    )?))
+}
+
+#[pyfunction]
 pub fn comma_decimal_arrow(
     py: Python,
     array: PyArrowType<ArrayData>,

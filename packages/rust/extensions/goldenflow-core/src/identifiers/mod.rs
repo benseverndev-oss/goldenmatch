@@ -2,12 +2,15 @@
 //! canonicalize -> Option<String>. These are the reference implementations;
 //! the Python/TS fallbacks must reproduce their bytes exactly (byte-parity harness).
 pub mod aba;
+pub mod cusip;
 pub mod ean;
 pub mod ein;
 pub mod iban;
 pub mod imei;
 pub mod isbn;
+pub mod isin;
 pub mod luhn;
+pub mod npi;
 pub mod ssn;
 pub mod swift;
 pub mod vat;

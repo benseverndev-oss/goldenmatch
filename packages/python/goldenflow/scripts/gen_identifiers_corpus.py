@@ -43,17 +43,26 @@ from goldenflow.transforms.categorical import (  # noqa: E402
     _gender_standardize_py,
     _null_standardize_py,
 )
+from goldenflow.transforms.company import (  # noqa: E402
+    _company_extract_legal_py,
+    _company_normalize_py,
+    _company_strip_legal_py,
+)
 from goldenflow.transforms.email import (  # noqa: E402
+    _email_canonical_py,
     _email_extract_domain_py,
     _email_lowercase_py,
+    _email_mask_py,
     _email_normalize_py,
     _email_validate_py,
 )
 from goldenflow.transforms.identifiers import (  # noqa: E402
     _aba_validate_py,
+    _cc_brand_py,
     _cc_format_py,
     _cc_mask_py,
     _cc_validate_py,
+    _cusip_validate_py,
     _ean_validate_py,
     _ein_format_py,
     _iban_format_py,
@@ -61,6 +70,9 @@ from goldenflow.transforms.identifiers import (  # noqa: E402
     _imei_validate_py,
     _isbn_normalize_py,
     _isbn_validate_py,
+    _isin_validate_py,
+    _luhn_validate_py,
+    _npi_validate_py,
     _ssn_format_py,
     _ssn_mask_py,
     _swift_format_py,
@@ -70,21 +82,31 @@ from goldenflow.transforms.identifiers import (  # noqa: E402
 )
 from goldenflow.transforms.names import (  # noqa: E402
     _has_initial_py,
+    _name_initials_py,
     _name_proper_py,
     _name_script_py,
     _name_transliterate_py,
     _nickname_standardize_py,
+    _strip_middle_py,
     _strip_suffixes_py,
     _strip_titles_py,
 )
 from goldenflow.transforms.numeric import (  # noqa: E402
     _comma_decimal_py,
     _currency_strip_py,
+    _fraction_to_decimal_py,
+    _ordinal_to_int_py,
     _percentage_normalize_py,
+    _roman_to_int_py,
     _scientific_to_decimal_py,
     _to_integer_py,
 )
 from goldenflow.transforms.phone import _phone_digits_py  # noqa: E402
+from goldenflow.transforms.phonetic import (  # noqa: E402
+    _double_metaphone_alt_py,
+    _double_metaphone_primary_py,
+    _soundex_py,
+)
 from goldenflow.transforms.text import (  # noqa: E402
     _collapse_whitespace_py,
     _extract_numbers_py,
@@ -103,8 +125,11 @@ from goldenflow.transforms.text import (  # noqa: E402
     _uppercase_py,
 )
 from goldenflow.transforms.url import (  # noqa: E402
+    _url_canonical_py,
     _url_extract_domain_py,
     _url_normalize_py,
+    _url_strip_tracking_py,
+    _url_strip_www_py,
 )
 
 CORPUS_PATH = Path(__file__).resolve().parent.parent / "tests" / "parity" / "identifiers_corpus.jsonl"
@@ -281,6 +306,101 @@ _CASES: list[tuple[str, str | None]] = [
     ("imei_validate", "49015420323751a"),  # non-digit
     ("imei_validate", ""),  # empty
     ("imei_validate", None),  # null
+    # --- isin_validate (ISO 6166, Luhn over letter-expanded) ---
+    ("isin_validate", "US0378331005"),  # Apple, valid
+    ("isin_validate", "us0378331005"),  # lowercase
+    ("isin_validate", "US-0378331005"),  # dashed
+    ("isin_validate", "AU0000XVGZA3"),  # letters in NSIN
+    ("isin_validate", "US0378331006"),  # bad check digit
+    ("isin_validate", "0378331005"),  # too short / no country code
+    ("isin_validate", "1S0378331005"),  # non-letter country code
+    ("isin_validate", "US03783310_5"),  # non-alphanumeric
+    ("isin_validate", ""),  # empty
+    ("isin_validate", None),  # null
+    # --- cusip_validate (weighted mod-10) ---
+    ("cusip_validate", "037833100"),  # Apple, valid
+    ("cusip_validate", "38259P508"),  # Google (letter in body)
+    ("cusip_validate", "037833 100"),  # spaced
+    ("cusip_validate", "037833101"),  # bad check digit
+    ("cusip_validate", "03783310"),  # 8 chars
+    ("cusip_validate", "38259P50X"),  # non-digit check
+    ("cusip_validate", ""),  # empty
+    ("cusip_validate", None),  # null
+    # --- npi_validate (Luhn over "80840" prefix) ---
+    ("npi_validate", "1234567893"),  # valid
+    ("npi_validate", "123-456-7893"),  # dashed
+    ("npi_validate", "1234567890"),  # bad check digit
+    ("npi_validate", "123456789"),  # 9 digits
+    ("npi_validate", "123456789a"),  # non-digit
+    ("npi_validate", ""),  # empty
+    ("npi_validate", None),  # null
+    # --- luhn_validate (generic Luhn, not cc-length-bound) ---
+    ("luhn_validate", "4242424242424242"),  # valid card
+    ("luhn_validate", "79927398713"),  # canonical Luhn example
+    ("luhn_validate", "1234"),  # short but Luhn-invalid
+    ("luhn_validate", "18"),  # valid 2-digit Luhn
+    ("luhn_validate", "abc"),  # non-digit
+    ("luhn_validate", ""),  # empty
+    ("luhn_validate", None),  # null
+    # --- cc_brand (prefix/length detect; null on no match) ---
+    ("cc_brand", "4242424242424242"),  # visa (16)
+    ("cc_brand", "4111111111111"),  # visa (13)
+    ("cc_brand", "5555555555554444"),  # mastercard (55)
+    ("cc_brand", "2223003122003222"),  # mastercard (2-series)
+    ("cc_brand", "378282246310005"),  # amex (37)
+    ("cc_brand", "6011111111111117"),  # discover (6011)
+    ("cc_brand", "3530111333300000"),  # jcb
+    ("cc_brand", "30569309025904"),  # diners (30)
+    ("cc_brand", "1234567890123456"),  # unknown prefix -> null
+    ("cc_brand", ""),  # empty -> null
+    ("cc_brand", None),  # null
+    # --- name_initials (letter-leading tokens) ---
+    ("name_initials", "John Q Public"),  # -> JQP
+    ("name_initials", "john quincy adams"),  # -> JQA
+    ("name_initials", "O'Brien"),  # -> O
+    ("name_initials", "John Q. 3rd Public"),  # digit token skipped -> JQP
+    ("name_initials", "  spaced   out  "),  # -> SO
+    ("name_initials", ""),  # -> ""
+    ("name_initials", None),  # null
+    # --- strip_middle (keep first + last) ---
+    ("strip_middle", "John Quincy Adams"),  # -> John Adams
+    ("strip_middle", "John Q. Public"),  # -> John Public
+    ("strip_middle", "Cher"),  # single token unchanged
+    ("strip_middle", "Bob Smith"),  # two tokens unchanged
+    ("strip_middle", "  a  b  c  d  "),  # -> a d
+    ("strip_middle", ""),  # -> ""
+    ("strip_middle", None),  # null
+    # --- roman_to_int (canonical forms only) ---
+    ("roman_to_int", "XIV"),  # -> 14
+    ("roman_to_int", "iv"),  # lowercase -> 4
+    ("roman_to_int", "MCMXCIV"),  # -> 1994
+    ("roman_to_int", "MMMCMXCIX"),  # -> 3999 (max)
+    ("roman_to_int", "IIII"),  # non-canonical -> null
+    ("roman_to_int", "VX"),  # malformed -> null
+    ("roman_to_int", "ABC"),  # non-Roman -> null
+    ("roman_to_int", ""),  # empty -> null
+    ("roman_to_int", None),  # null
+    # --- ordinal_to_int (correct suffix required) ---
+    ("ordinal_to_int", "1st"),  # -> 1
+    ("ordinal_to_int", "22nd"),  # -> 22
+    ("ordinal_to_int", "3RD"),  # case-insensitive -> 3
+    ("ordinal_to_int", "11th"),  # -> 11
+    ("ordinal_to_int", "1th"),  # wrong suffix -> null
+    ("ordinal_to_int", "5"),  # no suffix -> null
+    ("ordinal_to_int", "abc"),  # no digits -> null
+    ("ordinal_to_int", ""),  # empty -> null
+    ("ordinal_to_int", None),  # null
+    # --- fraction_to_decimal (fraction/mixed/plain) ---
+    ("fraction_to_decimal", "1/2"),  # -> 0.5
+    ("fraction_to_decimal", "3/4"),  # -> 0.75
+    ("fraction_to_decimal", "3 3/4"),  # mixed -> 3.75
+    ("fraction_to_decimal", "-1/2"),  # -> -0.5
+    ("fraction_to_decimal", "5"),  # plain -> 5.0
+    ("fraction_to_decimal", "2.5"),  # plain decimal -> 2.5
+    ("fraction_to_decimal", "1/0"),  # div by zero -> null
+    ("fraction_to_decimal", "abc"),  # non-numeric -> null
+    ("fraction_to_decimal", ""),  # empty -> null
+    ("fraction_to_decimal", None),  # null
     # --- ssn_format / ssn_mask (9 ASCII digits -> XXX-XX-XXXX / ***-**-XXXX) ---
     ("ssn_format", "123456789"),  # bare 9 digits
     ("ssn_format", "123-45-6789"),  # already formatted
@@ -308,6 +428,53 @@ _CASES: list[tuple[str, str | None]] = [
     ("phone_digits", "abc123def456"),
     ("phone_digits", ""),
     ("phone_digits", None),
+    # --- soundex (phonetic key; NARA canonical set + edge cases) ---
+    ("soundex", "Robert"),  # R163
+    ("soundex", "Rupert"),  # R163 (same key)
+    ("soundex", "Rubin"),  # R150
+    ("soundex", "Ashcraft"),  # A261 (h transparent)
+    ("soundex", "Ashcroft"),  # A261
+    ("soundex", "Tymczak"),  # T522
+    ("soundex", "Pfister"),  # P236 (Pf -> P)
+    ("soundex", "Honeyman"),  # H555
+    ("soundex", "Gauss"),  # G200 (vowels between the s's)
+    ("soundex", "Jackson"),  # J250
+    ("soundex", "Washington"),  # W252
+    ("soundex", "robert"),  # case-insensitive
+    ("soundex", "O'Brien"),  # apostrophe ignored -> O165
+    ("soundex", "H"),  # single letter -> H000
+    ("soundex", "12345"),  # no letters -> ""
+    ("soundex", ""),  # empty -> ""
+    ("soundex", None),  # null
+    # --- double_metaphone_primary (Lawrence Philips; primary blocking key) ---
+    ("double_metaphone_primary", "Smith"),
+    ("double_metaphone_primary", "Schmidt"),
+    ("double_metaphone_primary", "Jackson"),
+    ("double_metaphone_primary", "Catherine"),  # collides with Katherine
+    ("double_metaphone_primary", "Katherine"),
+    ("double_metaphone_primary", "Thompson"),
+    ("double_metaphone_primary", "Xavier"),  # initial X -> S
+    ("double_metaphone_primary", "Knight"),  # initial KN skip
+    ("double_metaphone_primary", "Wright"),  # initial WR skip
+    ("double_metaphone_primary", "Villa"),  # primary FL
+    ("double_metaphone_primary", "McDonald"),  # Mc/CH germanic path
+    ("double_metaphone_primary", "Ghislaine"),  # initial GH -> J
+    ("double_metaphone_primary", "robert"),  # case-insensitive
+    ("double_metaphone_primary", "12345"),  # no letters -> ""
+    ("double_metaphone_primary", ""),  # empty -> ""
+    ("double_metaphone_primary", None),  # null
+    # --- double_metaphone_alt (secondary code; diverges from primary on some) ---
+    ("double_metaphone_alt", "Smith"),
+    ("double_metaphone_alt", "Schmidt"),
+    ("double_metaphone_alt", "Catherine"),
+    ("double_metaphone_alt", "Villa"),  # alt F (vs primary FL)
+    ("double_metaphone_alt", "Cabrillo"),  # alt KPR (vs primary KPRL)
+    ("double_metaphone_alt", "Thompson"),
+    ("double_metaphone_alt", "Xavier"),
+    ("double_metaphone_alt", "Ghislaine"),
+    ("double_metaphone_alt", "12345"),  # no letters -> ""
+    ("double_metaphone_alt", ""),  # empty -> ""
+    ("double_metaphone_alt", None),  # null
     # --- astral-plane / non-ASCII char edge cases (UTF-16-vs-codepoint length
     # gate insurance -- Python `len()` counts codepoints, JS `.length` counts
     # UTF-16 code units, so an astral-plane char (surrogate pair) counts as 1
@@ -429,6 +596,24 @@ _CASES: list[tuple[str, str | None]] = [
     ("email_validate", ""),  # empty -> false
     ("email_validate", "   "),  # whitespace-only -> false
     ("email_validate", None),  # null
+    # --- email_canonical (dedup key: normalize + googlemail.com -> gmail.com) ---
+    ("email_canonical", "j.o.h.n@googlemail.com"),  # dots stripped + domain aliased
+    ("email_canonical", "John.Doe+tag@Gmail.com"),  # gmail collapses fully
+    ("email_canonical", "ab@gmail.com"),  # already canonical
+    ("email_canonical", "a+b@x.com"),  # non-gmail: normalize only
+    ("email_canonical", "notanemail"),  # no '@' -> preserved verbatim
+    ("email_canonical", ""),  # empty -> preserved
+    ("email_canonical", None),  # null
+    # --- email_mask (PII: first local char + stars + @domain) ---
+    ("email_mask", "John@Example.com"),  # j***@example.com
+    ("email_mask", "a@b.co"),  # 1-char local -> "a@b.co"
+    ("email_mask", "j.doe@x.com"),  # dot inside local masked too
+    ("email_mask", "a@b@c.com"),  # split on LAST '@'
+    ("email_mask", "notanemail"),  # no '@' -> null
+    ("email_mask", "@no-local.com"),  # empty local -> null
+    ("email_mask", "no-domain@"),  # empty domain -> null
+    ("email_mask", ""),  # empty -> null
+    ("email_mask", None),  # null
     # --- url_normalize ---
     ("url_normalize", "Example.COM/Path/"),  # no scheme -> prepend https, lowercase domain
     ("url_normalize", "http://X.com/"),  # trailing slash, path == "/" -> strip one
@@ -451,6 +636,61 @@ _CASES: list[tuple[str, str | None]] = [
     ("url_extract_domain", ""),  # empty -> None
     ("url_extract_domain", "   "),  # whitespace-only -> None
     ("url_extract_domain", None),  # null
+    # --- url_strip_tracking (remove utm_*/gclid/... query params) ---
+    ("url_strip_tracking", "https://a.com/p?utm_source=x&id=7&utm_medium=y&q=1"),
+    ("url_strip_tracking", "https://a.com/p?utm_source=x&fbclid=abc"),  # all tracking -> drop '?'
+    ("url_strip_tracking", "https://a.com/p?gclid=1&k=2#frag"),  # fragment preserved
+    ("url_strip_tracking", "https://a.com/p"),  # no query -> unchanged
+    ("url_strip_tracking", "https://a.com?UTM_Source=x&keep=1"),  # case-insensitive key
+    ("url_strip_tracking", "https://a.com?ref=twitter&spm=1&real=2"),  # ref/spm tracking
+    ("url_strip_tracking", ""),  # empty -> None
+    ("url_strip_tracking", None),  # null
+    # --- url_strip_www (strip leading www. host label) ---
+    ("url_strip_www", "https://www.Example.com/Path"),  # host case preserved
+    ("url_strip_www", "http://WWW.a.com"),  # case-insensitive
+    ("url_strip_www", "www.a.com/x"),  # no scheme
+    ("url_strip_www", "https://a.com"),  # no www -> unchanged
+    ("url_strip_www", "https://sub.www.a.com"),  # www not leading -> untouched
+    ("url_strip_www", ""),  # empty -> None
+    ("url_strip_www", None),  # null
+    # --- url_canonical (composite dedup key) ---
+    ("url_canonical", "HTTPS://WWW.Example.com/Path/?utm_source=x&id=7#frag"),
+    ("url_canonical", "WWW.A.com/"),  # add scheme, strip www + trailing slash
+    ("url_canonical", "http://a.com/?fbclid=1"),  # all-tracking query + root slash dropped
+    ("url_canonical", "https://a.com/x/"),  # trailing slash stripped
+    ("url_canonical", "Example.com"),  # bare host -> https, no path
+    ("url_canonical", ""),  # empty -> None
+    ("url_canonical", "   "),  # whitespace-only -> None
+    ("url_canonical", None),  # null
+    # --- company_normalize (composite dedup key) ---
+    ("company_normalize", "Apple Inc."),  # -> apple
+    ("company_normalize", "The Coca-Cola Company"),  # the-strip + hyphen split
+    ("company_normalize", "Microsoft Corporation"),
+    ("company_normalize", "Google L.L.C."),  # punctuated acronym -> llc stripped
+    ("company_normalize", "Procter & Gamble Co"),  # '&' retained, Co stripped
+    ("company_normalize", "AT&T Inc"),  # '&' inside token
+    ("company_normalize", "Theranos"),  # 'the' only as standalone token
+    ("company_normalize", "Berkshire Hathaway"),  # no legal suffix
+    ("company_normalize", "LLC"),  # all-legal -> ""
+    ("company_normalize", ""),  # empty -> None
+    ("company_normalize", None),  # null
+    # --- company_strip_legal (case-preserving suffix strip) ---
+    ("company_strip_legal", "Apple Inc."),  # -> Apple
+    ("company_strip_legal", "Microsoft, Corporation"),  # comma + suffix
+    ("company_strip_legal", "MICROSOFT CORP"),  # case preserved
+    ("company_strip_legal", "Acme Co Ltd"),  # multi-word legal
+    ("company_strip_legal", "  Berkshire Hathaway  "),  # no suffix -> trimmed
+    ("company_strip_legal", "Ltd"),  # all-legal -> ""
+    ("company_strip_legal", ""),  # empty -> None
+    ("company_strip_legal", None),  # null
+    # --- company_extract_legal (canonical legal-form token or null) ---
+    ("company_extract_legal", "Apple Inc."),  # -> inc
+    ("company_extract_legal", "Google L.L.C."),  # -> llc
+    ("company_extract_legal", "Microsoft Corporation"),  # -> corporation
+    ("company_extract_legal", "Berkshire Hathaway"),  # no legal form -> None
+    ("company_extract_legal", "Standalone"),  # single word, not legal -> None
+    ("company_extract_legal", ""),  # empty -> None
+    ("company_extract_legal", None),  # null
     # --- address_standardize (full street suffix -> abbreviation) ---
     ("address_standardize", "123 Main Street"),  # Street -> St
     ("address_standardize", "1 Park Avenue"),  # Avenue -> Ave
@@ -724,10 +964,26 @@ _PY_FN = {
     "vat_format": _vat_format_py,
     "aba_validate": _aba_validate_py,
     "imei_validate": _imei_validate_py,
+    "isin_validate": _isin_validate_py,
+    "cusip_validate": _cusip_validate_py,
+    "npi_validate": _npi_validate_py,
+    "luhn_validate": _luhn_validate_py,
+    "cc_brand": _cc_brand_py,
+    "name_initials": _name_initials_py,
+    "strip_middle": _strip_middle_py,
+    "roman_to_int": _roman_to_int_py,
+    "ordinal_to_int": _ordinal_to_int_py,
+    "fraction_to_decimal": _fraction_to_decimal_py,
     "ssn_format": _ssn_format_py,
     "ssn_mask": _ssn_mask_py,
     "ein_format": _ein_format_py,
     "phone_digits": _phone_digits_py,
+    "company_normalize": _company_normalize_py,
+    "company_strip_legal": _company_strip_legal_py,
+    "company_extract_legal": _company_extract_legal_py,
+    "soundex": _soundex_py,
+    "double_metaphone_primary": _double_metaphone_primary_py,
+    "double_metaphone_alt": _double_metaphone_alt_py,
     "name_transliterate": _name_transliterate_py,
     "name_script": _name_script_py,
     "strip_titles": _strip_titles_py,
@@ -737,10 +993,15 @@ _PY_FN = {
     "has_initial": _has_initial_py,
     "email_lowercase": _email_lowercase_py,
     "email_normalize": _email_normalize_py,
+    "email_canonical": _email_canonical_py,
+    "email_mask": _email_mask_py,
     "email_extract_domain": _email_extract_domain_py,
     "email_validate": _email_validate_py,
     "url_normalize": _url_normalize_py,
     "url_extract_domain": _url_extract_domain_py,
+    "url_strip_tracking": _url_strip_tracking_py,
+    "url_strip_www": _url_strip_www_py,
+    "url_canonical": _url_canonical_py,
     "address_standardize": _address_standardize_py,
     "address_expand": _address_expand_py,
     "state_abbreviate": _state_abbreviate_py,
@@ -789,11 +1050,27 @@ _NATIVE_ARROW_FN = {
     "vat_format": "vat_format_arrow",
     "aba_validate": "aba_validate_arrow",
     "imei_validate": "imei_validate_arrow",
+    "isin_validate": "isin_validate_arrow",
+    "cusip_validate": "cusip_validate_arrow",
+    "npi_validate": "npi_validate_arrow",
+    "luhn_validate": "luhn_validate_arrow",
+    "cc_brand": "cc_brand_arrow",
+    "name_initials": "name_initials_arrow",
+    "strip_middle": "strip_middle_arrow",
+    "roman_to_int": "roman_to_int_arrow",
+    "ordinal_to_int": "ordinal_to_int_arrow",
+    "fraction_to_decimal": "fraction_to_decimal_arrow",
     "ssn_format": "ssn_format_arrow",
     "ssn_mask": "ssn_mask_arrow",
     "ein_format": "ein_format_arrow",
     "phone_digits": "phone_digits_arrow",
+    "company_normalize": "company_normalize_arrow",
+    "company_strip_legal": "company_strip_legal_arrow",
+    "company_extract_legal": "company_extract_legal_arrow",
+    "soundex": "soundex_arrow",
     "name_transliterate": "name_transliterate_arrow",
+    # double_metaphone_primary/alt map to the SAME pair-returning kernel; see
+    # _NATIVE_MULTI_IDX for which output index each corpus transform takes.
     "name_script": "name_script_arrow",
     "strip_titles": "strip_titles_arrow",
     "strip_suffixes": "strip_suffixes_arrow",
@@ -802,10 +1079,15 @@ _NATIVE_ARROW_FN = {
     "has_initial": "has_initial_arrow",
     "email_lowercase": "email_lowercase_arrow",
     "email_normalize": "email_normalize_arrow",
+    "email_canonical": "email_canonical_arrow",
+    "email_mask": "email_mask_arrow",
     "email_extract_domain": "email_extract_domain_arrow",
     "email_validate": "email_validate_arrow",
     "url_normalize": "url_normalize_arrow",
     "url_extract_domain": "url_extract_domain_arrow",
+    "url_strip_tracking": "url_strip_tracking_arrow",
+    "url_strip_www": "url_strip_www_arrow",
+    "url_canonical": "url_canonical_arrow",
     "address_standardize": "address_standardize_arrow",
     "address_expand": "address_expand_arrow",
     "state_abbreviate": "state_abbreviate_arrow",
@@ -840,6 +1122,15 @@ _NATIVE_ARROW_FN = {
 }
 
 
+# Multi-output pair kernels: the corpus transform -> (arrow symbol, output idx).
+# Both double_metaphone_primary/alt call the one pair-returning kernel and take
+# their half; mirrors the split_name multi-output shape.
+_NATIVE_MULTI_IDX: dict[str, tuple[str, int]] = {
+    "double_metaphone_primary": ("double_metaphone_arrow", 0),
+    "double_metaphone_alt": ("double_metaphone_arrow", 1),
+}
+
+
 def _native_one(transform: str, value: str | None) -> object:
     """Call the native kernel on a single value via a length-1 Arrow array.
     Returns ``_NO_NATIVE_SYMBOL`` if the installed/built module predates the
@@ -848,6 +1139,12 @@ def _native_one(transform: str, value: str | None) -> object:
     import pyarrow as pa
 
     nm = native_module()
+    if transform in _NATIVE_MULTI_IDX:
+        attr, idx = _NATIVE_MULTI_IDX[transform]
+        if not hasattr(nm, attr):
+            return _NO_NATIVE_SYMBOL
+        out = getattr(nm, attr)(pa.array([value], type=pa.string()))
+        return out[idx].to_pylist()[0]
     attr = _NATIVE_ARROW_FN[transform]
     if not hasattr(nm, attr):
         return _NO_NATIVE_SYMBOL

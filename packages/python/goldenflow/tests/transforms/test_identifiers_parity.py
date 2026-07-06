@@ -38,17 +38,26 @@ from goldenflow.transforms.categorical import (
     gender_standardize,
     null_standardize,
 )
+from goldenflow.transforms.company import (
+    company_extract_legal,
+    company_normalize,
+    company_strip_legal,
+)
 from goldenflow.transforms.email import (
+    email_canonical,
     email_extract_domain,
     email_lowercase,
+    email_mask,
     email_normalize,
     email_validate,
 )
 from goldenflow.transforms.identifiers import (
     aba_validate,
+    cc_brand,
     cc_format,
     cc_mask,
     cc_validate,
+    cusip_validate,
     ean_validate,
     ein_format,
     iban_format,
@@ -56,6 +65,9 @@ from goldenflow.transforms.identifiers import (
     imei_validate,
     isbn_normalize,
     isbn_validate,
+    isin_validate,
+    luhn_validate,
+    npi_validate,
     ssn_format,
     ssn_mask,
     swift_format,
@@ -73,19 +85,29 @@ from goldenflow.transforms.names import (
     _strip_titles_series as strip_titles,
 )
 from goldenflow.transforms.names import (
+    name_initials,
     name_proper,
     name_script,
     name_transliterate,
     nickname_standardize,
+    strip_middle,
 )
 from goldenflow.transforms.numeric import _currency_strip_series as currency_strip
+from goldenflow.transforms.numeric import _fraction_to_decimal_series as fraction_to_decimal
+from goldenflow.transforms.numeric import _ordinal_to_int_series as ordinal_to_int
 from goldenflow.transforms.numeric import _percentage_normalize_series as percentage_normalize
+from goldenflow.transforms.numeric import _roman_to_int_series as roman_to_int
 from goldenflow.transforms.numeric import _to_integer_series as to_integer
 from goldenflow.transforms.numeric import (
     comma_decimal,
     scientific_to_decimal,
 )
 from goldenflow.transforms.phone import phone_digits
+from goldenflow.transforms.phonetic import (
+    double_metaphone_alt,
+    double_metaphone_primary,
+    soundex,
+)
 from goldenflow.transforms.text import (
     _collapse_whitespace_series as collapse_whitespace,
 )
@@ -129,7 +151,13 @@ from goldenflow.transforms.text import (
     fix_mojibake,
     normalize_unicode,
 )
-from goldenflow.transforms.url import url_extract_domain, url_normalize
+from goldenflow.transforms.url import (
+    url_canonical,
+    url_extract_domain,
+    url_normalize,
+    url_strip_tracking,
+    url_strip_www,
+)
 
 _CORPUS_PATH = Path(__file__).parent.parent / "parity" / "identifiers_corpus.jsonl"
 
@@ -143,6 +171,9 @@ _NUMERIC_TRANSFORMS = frozenset(
         "to_integer",
         "comma_decimal",
         "scientific_to_decimal",
+        "roman_to_int",
+        "ordinal_to_int",
+        "fraction_to_decimal",
     }
 )
 
@@ -184,10 +215,26 @@ _TRANSFORMS = {
     "vat_format": vat_format,
     "aba_validate": aba_validate,
     "imei_validate": imei_validate,
+    "isin_validate": isin_validate,
+    "cusip_validate": cusip_validate,
+    "npi_validate": npi_validate,
+    "luhn_validate": luhn_validate,
+    "cc_brand": cc_brand,
+    "name_initials": name_initials,
+    "strip_middle": strip_middle,
+    "roman_to_int": roman_to_int,
+    "ordinal_to_int": ordinal_to_int,
+    "fraction_to_decimal": fraction_to_decimal,
     "ssn_format": ssn_format,
     "ssn_mask": ssn_mask,
     "ein_format": ein_format,
     "phone_digits": phone_digits,
+    "company_normalize": company_normalize,
+    "company_strip_legal": company_strip_legal,
+    "company_extract_legal": company_extract_legal,
+    "soundex": soundex,
+    "double_metaphone_primary": double_metaphone_primary,
+    "double_metaphone_alt": double_metaphone_alt,
     "name_transliterate": name_transliterate,
     "name_script": name_script,
     "strip_titles": strip_titles,
@@ -197,10 +244,15 @@ _TRANSFORMS = {
     "has_initial": has_initial,
     "email_lowercase": email_lowercase,
     "email_normalize": email_normalize,
+    "email_canonical": email_canonical,
+    "email_mask": email_mask,
     "email_extract_domain": email_extract_domain,
     "email_validate": email_validate,
     "url_normalize": url_normalize,
     "url_extract_domain": url_extract_domain,
+    "url_strip_tracking": url_strip_tracking,
+    "url_strip_www": url_strip_www,
+    "url_canonical": url_canonical,
     "address_standardize": address_standardize,
     "address_expand": address_expand,
     "state_abbreviate": state_abbreviate,
@@ -252,10 +304,33 @@ _NATIVE_FLOOR_SYMBOL = {
     "vat_format": "vat_validate_arrow",
     "aba_validate": "aba_validate_arrow",
     "imei_validate": "imei_validate_arrow",
+    # W5 breadth: each new identifier gets its own component floor symbol.
+    "isin_validate": "isin_validate_arrow",
+    "cusip_validate": "cusip_validate_arrow",
+    "npi_validate": "npi_validate_arrow",
+    "luhn_validate": "luhn_validate_arrow",
+    "cc_brand": "cc_validate_arrow",  # cc_brand rides the "cc" component
+    # name_initials/strip_middle ride the names_ext component (strip_titles floor)
+    "name_initials": "strip_titles_arrow",
+    "strip_middle": "strip_titles_arrow",
+    # roman/ordinal/fraction ride the numeric component (currency_strip floor)
+    "roman_to_int": "currency_strip_arrow",
+    "ordinal_to_int": "currency_strip_arrow",
+    "fraction_to_decimal": "currency_strip_arrow",
     "ssn_format": "ssn_format_arrow",
     "ssn_mask": "ssn_mask_arrow",
     "ein_format": "ein_format_arrow",
     "phone_digits": "phone_digits_arrow",
+    # company: normalize/strip_legal/extract_legal wired via the single
+    # "company" component (floor symbol company_normalize_arrow), locale-free.
+    "company_normalize": "company_normalize_arrow",
+    "company_strip_legal": "company_normalize_arrow",
+    "company_extract_legal": "company_normalize_arrow",
+    "soundex": "soundex_arrow",
+    # phonetic: double_metaphone_primary/alt share the pair kernel; floor symbol
+    # double_metaphone_arrow (skip the native leg on a wheel that predates it).
+    "double_metaphone_primary": "double_metaphone_arrow",
+    "double_metaphone_alt": "double_metaphone_arrow",
     "name_transliterate": "name_transliterate_arrow",
     "name_script": "name_script_arrow",
     # names_ext: strip_titles/strip_suffixes/name_proper/nickname_standardize/
@@ -269,12 +344,17 @@ _NATIVE_FLOOR_SYMBOL = {
     # (floor symbol email_validate_arrow), region-free/locale-free.
     "email_lowercase": "email_validate_arrow",
     "email_normalize": "email_validate_arrow",
+    "email_canonical": "email_validate_arrow",
+    "email_mask": "email_validate_arrow",
     "email_extract_domain": "email_validate_arrow",
     "email_validate": "email_validate_arrow",
-    # url: both transforms are wired via the single "url" component (floor
+    # url: all transforms are wired via the single "url" component (floor
     # symbol url_normalize_arrow), region-free/locale-free.
     "url_normalize": "url_normalize_arrow",
     "url_extract_domain": "url_normalize_arrow",
+    "url_strip_tracking": "url_normalize_arrow",
+    "url_strip_www": "url_normalize_arrow",
+    "url_canonical": "url_normalize_arrow",
     # address: all 7 scalar transforms wired via the single "address" component
     # (floor symbol address_standardize_arrow), US-scoped/locale-free.
     "address_standardize": "address_standardize_arrow",

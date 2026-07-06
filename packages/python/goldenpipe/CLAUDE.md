@@ -14,6 +14,69 @@ Sibling packages live in this monorepo at `packages/python/{goldencheck,goldenfl
 - Tools imported with try/except ImportError guards (HAS_CHECK, HAS_FLOW, HAS_MATCH)
 - Data flows as Polars DataFrames in memory between stages
 
+### Relocatable-stage seam (contract Phase A)
+Design: `docs/design/2026-07-06-goldenpipe-relocatable-stage-contract.md` (motivated
+by the Stage 0 finding: the single-process handoff is 0.2% of the wall, so the
+streaming executor is premature — but the *contract* that makes future
+out-of-core / cross-process / cross-language expansion a build-forward is worth
+laying now). **Phase A is inert groundwork — no behavior/perf change:**
+- `goldenpipe/models/frame.py` — `Frame` protocol + `LocalFrame`. **Arrow-capable,
+  not Arrow-mandatory:** `LocalFrame.polars()` returns the backing DataFrame BY
+  REFERENCE (zero copy); `arrow_batches()`/`from_arrow()` materialize Arrow ONLY
+  for a boundary-crossing (remote) stage. Streaming/remote frames (Phases B/C)
+  plug in behind this contract without touching the in-process path.
+- `PipeContext.frame` — a derived property over `df` (the canonical store stays
+  `df`, so existing `ctx.df` stages + `PipeContext(df=...)` are untouched). The
+  pipeline path never calls it today; it's the accessor a remote adapter will use.
+- `StageInfo.location` (default `"local"`) + a Runner guard that raises
+  `NotImplementedError` for any non-local stage (remote = Phase C, not built). The
+  `ExecutionPlan`/planner is unchanged — placement is orthogonal to ordering.
+- Guardrails: no forced Arrow round-trip in-process; Stage 0 numbers verified
+  unchanged (`benchmarks/stage0_handoff_profile.py`). Tests: `tests/test_relocatable_stage.py`.
+
+#### Phase C — in-engine (remote) stages
+Baseline (`docs/design/2026-07-06-goldenpipe-phasec-baseline-findings.md`): the
+DuckDB↔Python crossing was **~89% of the pull path** at 5M rows, so keeping a stage
+in-engine pays (unlike Stage 0 / Phase B). Phase C v1 turns `location="remote"` from
+"raises" into "runs in the engine":
+- `models/frame.py` — **`DuckDBFrame`**: a `Frame` backed by a **lazy** DuckDB
+  relation. `.polars()` = materialize (the egress crossing, paid ONCE); `.project()`
+  = in-engine SQL transform → a new lazy `DuckDBFrame`; `.arrow_batches()` streams.
+- `PipeContext.frame` now holds an **engine-resident** frame in `_frame` **without
+  materializing** (the setter keeps a `DuckDBFrame` as-is; a `LocalFrame`/None still
+  goes to `df`). So a chain of remote stages stays in the engine.
+- Runner: routes `remote_capable` stages (a real `RemoteStage`) instead of raising;
+  a plain `location="remote"` stage without the marker still raises (Phase A guard).
+  On the **remote→local transition**, the Runner materializes `_frame` → `df` once
+  (the boundary crossing, exactly when a local stage needs the data).
+- `adapters/engine.py` — **`RemoteStage`** marker + **`EngineNormalizeStage`** (a
+  `lower(trim(col))` transform run in DuckDB), byte-identical to the local Polars
+  path, reusing one engine connection via `ctx.metadata["duckdb_con"]`. Tests:
+  `tests/test_engine_stage.py`.
+Phase C **v2** closes the two documented gaps (`tests/test_engine_stage_v2.py`):
+- `adapters/engine.py` — **`EngineFlowTransformStage`**: runs a **real shipped**
+  `goldenflow_*` DuckDB UDF (from `goldenmatch_duckdb` — the same kernel on the
+  DuckDB/Postgres/dbt surfaces) as an in-engine projection, byte-identical to the
+  goldenflow Python transform. `transform` is a friendly alias (`email`/`strip`/…);
+  the UDFs register ONCE per engine con (`_goldenflow_udfs_registered` guard).
+  **Honest caveat:** the DuckDB `goldenflow_*` UDFs are per-value **Python**
+  callbacks (in-process polars), NOT the compiled zero-Python `goldenflow-duckdb`
+  cdylib — so v2 removes the DataFrame **materialization** boundary *between* stages
+  (the 89% pull), not Python from the per-value path. `validate()` raises if
+  `goldenmatch-duckdb`/`goldenflow` are absent.
+- `pipeline.py` — **DuckDB-table source**: `Pipeline.run(duckdb_con=, duckdb_table=)`
+  seeds `ctx.frame` as an engine-resident `DuckDBFrame` (table name regex-validated;
+  row count via a scalar `COUNT`, not a full pull). A remote stage right after pays
+  **no** ingress crossing (proven by a `.polars()` spy staying at 0). Invariant: **a
+  `DuckDBFrame` on `ctx` is always paired with its con in `ctx.metadata["duckdb_con"]`**
+  (both the source and the engine stages maintain this — the in-engine `.project`
+  runs on the relation's own con, which must be where the UDFs were registered).
+  Caveat: with the default auto-config (local `load` first), the source materializes
+  at `load` — the WIN needs the first stage to be remote.
+- The dominant `goldenmatch.dedupe` scoring stage still has no in-engine surface, so
+  a full ER pipeline crosses for it — Phase C wins every *other* stage + keeps data
+  in-engine between them.
+
 ## Pipeline Flow
 ```
 load_file -> GoldenCheck.scan_file(path) -> decide_flow(findings)

@@ -38,6 +38,41 @@ pub fn email_normalize(s: &str) -> String {
     format!("{local}@{domain}")
 }
 
+/// Full dedup key: `email_normalize`, then alias `googlemail.com` ->
+/// `gmail.com` so Gmail variants collapse completely (normalize already
+/// dot-strips both, but leaves the `googlemail.com` domain intact, so
+/// `a.b@googlemail.com` and `ab@gmail.com` would NOT otherwise dedupe).
+/// Preserves invalid input verbatim, exactly like `email_normalize`.
+pub fn email_canonical(s: &str) -> String {
+    let normalized = email_normalize(s);
+    if let Some(idx) = normalized.rfind('@') {
+        let local = &normalized[..idx];
+        let domain = &normalized[idx + 1..];
+        if domain == "googlemail.com" {
+            return format!("{local}@gmail.com");
+        }
+    }
+    normalized
+}
+
+/// PII mask: trim + lowercase, then keep the FIRST char of the local part and
+/// replace the remaining local chars with `*`, keeping `@domain` intact
+/// (e.g. `John@Example.com` -> `j***@example.com`). `None` when the input has
+/// no `@`, an empty local part, or an empty domain (nothing meaningful to
+/// mask) -- matching the `ssn_mask`/`cc_mask` "None on unmaskable input" shape.
+pub fn email_mask(s: &str) -> Option<String> {
+    let v = s.trim().to_lowercase();
+    let idx = v.rfind('@')?;
+    let local = &v[..idx];
+    let domain = &v[idx + 1..];
+    if local.is_empty() || domain.is_empty() {
+        return None;
+    }
+    let first = local.chars().next().expect("local non-empty");
+    let stars = "*".repeat(local.chars().count() - 1);
+    Some(format!("{first}{stars}@{domain}"))
+}
+
 /// Extract the lowercased domain after the LAST `@`. `None` if there is no
 /// `@`, or nothing follows it (mirrors the regex `@([^@]+)$`).
 pub fn email_extract_domain(s: &str) -> Option<String> {
@@ -118,6 +153,35 @@ mod tests {
         assert_eq!(email_extract_domain("noat"), None);
         assert_eq!(email_extract_domain("trailing@"), None);
         assert_eq!(email_extract_domain("a@b@c.com"), Some("c.com".to_string()));
+    }
+
+    #[test]
+    fn canonical() {
+        // googlemail.com aliases to gmail.com (dots already stripped by normalize).
+        assert_eq!(email_canonical("j.o.h.n@googlemail.com"), "john@gmail.com");
+        assert_eq!(
+            email_canonical("John.Doe+tag@Gmail.com"),
+            "johndoe@gmail.com"
+        );
+        // non-gmail domains pass through normalize only.
+        assert_eq!(email_canonical("a+b@x.com"), "a@x.com");
+        assert_eq!(email_canonical("notanemail"), "notanemail");
+        assert_eq!(email_canonical(""), "");
+    }
+
+    #[test]
+    fn mask() {
+        assert_eq!(
+            email_mask("John@Example.com"),
+            Some("j***@example.com".to_string())
+        );
+        assert_eq!(email_mask("a@b.co"), Some("a@b.co".to_string())); // 1-char local
+        assert_eq!(email_mask("j.doe@x.com"), Some("j****@x.com".to_string()));
+        assert_eq!(email_mask("a@b@c.com"), Some("a**@c.com".to_string())); // last '@'
+        assert_eq!(email_mask("notanemail"), None);
+        assert_eq!(email_mask("@no-local.com"), None);
+        assert_eq!(email_mask("no-domain@"), None);
+        assert_eq!(email_mask(""), None);
     }
 
     #[test]

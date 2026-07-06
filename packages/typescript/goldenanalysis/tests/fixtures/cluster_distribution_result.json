@@ -1,0 +1,73 @@
+{
+  "metrics": [
+    {
+      "direction": "neutral",
+      "key": "cluster.count",
+      "unit": "clusters",
+      "value": 6
+    },
+    {
+      "direction": "neutral",
+      "key": "cluster.record_count",
+      "unit": "rows",
+      "value": 17
+    },
+    {
+      "direction": "neutral",
+      "key": "cluster.singleton_ratio",
+      "unit": "ratio",
+      "value": 0.3333333333333333
+    },
+    {
+      "direction": "neutral",
+      "key": "cluster.size_p50",
+      "unit": "rows",
+      "value": 2.5
+    },
+    {
+      "direction": "neutral",
+      "key": "cluster.size_p95",
+      "unit": "rows",
+      "value": 5.5
+    },
+    {
+      "direction": "neutral",
+      "key": "cluster.size_max",
+      "unit": "rows",
+      "value": 6
+    },
+    {
+      "direction": "neutral",
+      "key": "cluster.reduction_ratio",
+      "unit": "ratio",
+      "value": 0.6470588235294117
+    }
+  ],
+  "tables": [
+    {
+      "columns": [
+        "size",
+        "count"
+      ],
+      "name": "cluster_size_histogram",
+      "rows": [
+        [
+          1,
+          2
+        ],
+        [
+          2,
+          1
+        ],
+        [
+          3,
+          1
+        ],
+        [
+          "4+",
+          2
+        ]
+      ]
+    }
+  ]
+}

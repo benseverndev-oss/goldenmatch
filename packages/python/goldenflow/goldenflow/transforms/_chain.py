@@ -1,0 +1,69 @@
+"""Fused columnar apply bridge — run a whole run of owned, string->string, no-arg
+transforms over one column in a single native Arrow round-trip, instead of the
+engine crossing the boundary once per transform.
+
+``FUSABLE_KERNELS`` is the single Python-side source of truth for which transforms
+the fused chain supports; it MUST mirror ``goldenflow_core::chain::Kernel`` (the
+coverage guard in ``tests/transforms/test_fused_chain.py`` asserts they agree).
+Opt-in via ``GOLDENFLOW_FUSED_APPLY``; native must also be enabled
+(``GOLDENFLOW_NATIVE`` != ``0`` and the ``apply_chain_arrow`` symbol present).
+"""
+from __future__ import annotations
+
+import os
+
+import polars as pl
+
+from goldenflow.core._native_loader import native_module
+
+# Owned, no-arg, TOTAL (never-null) string->string kernels eligible for fusion.
+# Mirror of goldenflow_core::chain::Kernel::ALL_NAMES. Option-returning
+# (email_extract_domain, *_validate, *_mask), parameterized (truncate/pad), and
+# multi-arity (split_*/merge_name) transforms are intentionally excluded.
+FUSABLE_KERNELS: frozenset[str] = frozenset(
+    {
+        "strip",
+        "lowercase",
+        "uppercase",
+        "title_case",
+        "fix_mojibake",
+        "collapse_whitespace",
+        "normalize_quotes",
+        "normalize_line_endings",
+        "normalize_unicode",
+        "remove_html_tags",
+        "remove_urls",
+        "remove_digits",
+        "remove_punctuation",
+        "remove_emojis",
+    }
+)
+
+
+def fused_enabled() -> bool:
+    """The fused chain path is active iff explicitly opted in AND native is on."""
+    if os.environ.get("GOLDENFLOW_FUSED_APPLY", "").lower() not in ("1", "true", "on"):
+        return False
+    if os.environ.get("GOLDENFLOW_NATIVE", "auto").lower() == "0":
+        return False
+    nm = native_module()
+    return nm is not None and hasattr(nm, "apply_chain_arrow")
+
+
+def apply_chain_native(
+    series: pl.Series, kernel_names: list[str]
+) -> tuple[pl.Series, list[int]] | None:
+    """Apply ``kernel_names`` (all in ``FUSABLE_KERNELS``) in order over ``series``
+    in one native pass. Returns ``(transformed_series, per_kernel_changed_counts)``,
+    or ``None`` when the native path is unavailable (caller falls back to the
+    per-transform path). The Arrow round-trip is zero-copy; Polars exports strings
+    as LargeUtf8, which the kernel handles natively (i64 offsets)."""
+    nm = native_module()
+    if nm is None or not hasattr(nm, "apply_chain_arrow"):
+        return None
+    try:
+        import pyarrow  # noqa: F401  (zero-copy bridge)
+    except ImportError:
+        return None
+    out_arrow, changed = nm.apply_chain_arrow(series.to_arrow(), list(kernel_names))
+    return pl.from_arrow(out_arrow), [int(c) for c in changed]

@@ -7,6 +7,8 @@
 // Order matters: auto_correct depends on categorical being registered first.
 import "./text.js";
 import "./phone.js";
+import "./phonetic.js";
+import "./company.js";
 import "./names.js";
 import "./address.js";
 import "./dates.js";
