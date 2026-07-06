@@ -433,7 +433,15 @@ jobs:
             # checker/test tooling, or its parity corpus changes.
             native_symbols:
               - 'packages/rust/extensions/native/**'
+              - 'packages/rust/extensions/goldencheck-native/**'
+              - 'packages/rust/extensions/analysis-native/**'
+              - 'packages/rust/extensions/native-flow/**'
+              - 'packages/rust/extensions/infermap-native/**'
               - 'packages/python/goldenmatch/goldenmatch/**'
+              - 'packages/python/goldencheck/goldencheck/**'
+              - 'packages/python/goldenanalysis/goldenanalysis/**'
+              - 'packages/python/goldenflow/goldenflow/**'
+              - 'packages/python/infermap/infermap/**'
               - 'scripts/check_native_symbols.py'
               - 'scripts/test_native_symbols.py'
               - 'parity/native_symbols/**'
@@ -1541,18 +1549,22 @@ jobs:
     if: needs.changes.outputs.native_symbols == 'true' || needs.changes.outputs.force_all == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [goldenmatch, goldencheck, goldenanalysis, goldenflow, infermap]
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
         with:
           python-version: "3.13"
+      - name: Reconcile native symbols (${{ matrix.package }})
+        run: python scripts/check_native_symbols.py ${{ matrix.package }}
       - name: Install pytest
+        if: matrix.package == 'goldenmatch'
         run: pip install pytest
-      - name: Reconcile native symbols (goldenmatch)
-        run: python scripts/check_native_symbols.py goldenmatch
-      - name: Reconcile native symbols (infermap)
-        run: python scripts/check_native_symbols.py infermap
       - name: Gate unit tests
+        if: matrix.package == 'goldenmatch'
         run: python -m pytest scripts/test_native_symbols.py -q
 
   typescript:
