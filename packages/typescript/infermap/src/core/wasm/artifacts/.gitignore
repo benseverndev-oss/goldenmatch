@@ -1,0 +1,5 @@
+# Built by infermap-wasm/build_wasm.sh (CI) — never committed.
+infermap_wasm_bg.wasm
+infermap_wasm.js
+infermap_wasm.d.ts
+infermap_wasm_bg.wasm.d.ts
