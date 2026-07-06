@@ -1,12 +1,16 @@
-"""Fused columnar apply bridge — run a whole run of owned, string->string, no-arg
-transforms over one column in a single native Arrow round-trip, instead of the
-engine crossing the boundary once per transform.
+"""Fused columnar apply bridge — run a whole run of owned string->string transforms
+over one column in a single native Arrow round-trip, instead of the engine crossing
+the boundary once per transform.
 
-``FUSABLE_KERNELS`` is the single Python-side source of truth for which transforms
-the fused chain supports; it MUST mirror ``goldenflow_core::chain::Kernel`` (the
-coverage guard in ``tests/transforms/test_fused_chain.py`` asserts they agree).
-Opt-in via ``GOLDENFLOW_FUSED_APPLY``; native must also be enabled
-(``GOLDENFLOW_NATIVE`` != ``0`` and the ``apply_chain_arrow`` symbol present).
+``FUSABLE_KERNELS`` (no-arg) + ``FUSABLE_PARAM_KERNELS`` (parameterized) are the
+Python-side source of truth for which transforms the fused chain supports; together
+they MUST mirror ``goldenflow_core::chain`` (``ALL_NAMES`` + ``PARAM_NAMES``) — the
+coverage guard in ``tests/transforms/test_fused_chain.py`` asserts they agree.
+
+Two native symbols back this: ``apply_chain_arrow`` (no-arg, since goldenflow-native
+0.12.0) and ``apply_chain_ops_arrow`` (superset, adds the parameterized ops, since
+0.13.0). The parameterized ops only fuse when the ops symbol is present, so a 0.12.0
+wheel still fuses the no-arg families and only the param ops break a run.
 """
 from __future__ import annotations
 
@@ -18,8 +22,8 @@ from goldenflow.core._native_loader import native_module
 
 # Owned, no-arg, TOTAL (never-null) string->string kernels eligible for fusion.
 # Mirror of goldenflow_core::chain::Kernel::ALL_NAMES. Option-returning
-# (email_extract_domain, *_validate, *_mask), parameterized (truncate/pad), and
-# multi-arity (split_*/merge_name) transforms are intentionally excluded.
+# (email_extract_domain, *_validate, *_mask) and multi-arity (split_*/merge_name)
+# transforms are intentionally excluded.
 FUSABLE_KERNELS: frozenset[str] = frozenset(
     {
         "strip",
@@ -52,36 +56,78 @@ FUSABLE_KERNELS: frozenset[str] = frozenset(
     }
 )
 
+# Parameterized (total string->string) kernels — need the ``apply_chain_ops_arrow``
+# symbol (goldenflow-native >= 0.13.0). Mirror of Kernel::PARAM_NAMES.
+FUSABLE_PARAM_KERNELS: frozenset[str] = frozenset({"truncate", "pad_left", "pad_right"})
+
+
+def _native_if_on():
+    """The native module if fusion is not opted out and native is not forced off,
+    else ``None``."""
+    if os.environ.get("GOLDENFLOW_FUSED_APPLY", "").lower() in ("0", "false", "off"):
+        return None
+    if os.environ.get("GOLDENFLOW_NATIVE", "auto").lower() == "0":
+        return None
+    return native_module()
+
 
 def fused_enabled() -> bool:
     """The fused chain path is active by DEFAULT whenever the native fused kernel is
     available (measured byte-identical to the per-transform path, faster wall + ~20%
     lower peak RSS at scale). Opt-OUT via ``GOLDENFLOW_FUSED_APPLY=0`` (mirrors
-    ``GOLDENFLOW_NATIVE``'s auto/0 semantics); it also stays off when native is
-    forced off or the fused symbol isn't in the installed wheel (graceful fallback
-    to per-transform, so a pre-0.12.0 goldenflow-native is unaffected)."""
-    if os.environ.get("GOLDENFLOW_FUSED_APPLY", "").lower() in ("0", "false", "off"):
-        return False
-    if os.environ.get("GOLDENFLOW_NATIVE", "auto").lower() == "0":
-        return False
-    nm = native_module()
+    ``GOLDENFLOW_NATIVE``); off when native is forced off or the fused symbol isn't
+    in the installed wheel (graceful fallback, so a pre-0.12.0 wheel is unaffected)."""
+    nm = _native_if_on()
     return nm is not None and hasattr(nm, "apply_chain_arrow")
 
 
+def fusable_names() -> frozenset[str]:
+    """The transform names the engine may fuse, given the AVAILABLE native symbol:
+    the parameterized ops only join a run when ``apply_chain_ops_arrow`` is present
+    (0.13.0+); a 0.12.0 wheel fuses the no-arg families only."""
+    nm = _native_if_on()
+    if nm is None:
+        return frozenset()
+    if hasattr(nm, "apply_chain_ops_arrow"):
+        return FUSABLE_KERNELS | FUSABLE_PARAM_KERNELS
+    if hasattr(nm, "apply_chain_arrow"):
+        return FUSABLE_KERNELS
+    return frozenset()
+
+
+def is_fusable(name: str, params: list[str], available: frozenset[str]) -> bool:
+    """An op fuses iff its name is in the symbol-available set AND either it's a
+    parameterized kernel (params are its args) or a no-arg kernel with no params."""
+    if name not in available:
+        return False
+    if name in FUSABLE_PARAM_KERNELS:
+        return True
+    return not params
+
+
 def apply_chain_native(
-    series: pl.Series, kernel_names: list[str]
+    series: pl.Series, ops: list[tuple[str, list[str]]]
 ) -> tuple[pl.Series, list[int]] | None:
-    """Apply ``kernel_names`` (all in ``FUSABLE_KERNELS``) in order over ``series``
-    in one native pass. Returns ``(transformed_series, per_kernel_changed_counts)``,
-    or ``None`` when the native path is unavailable (caller falls back to the
-    per-transform path). The Arrow round-trip is zero-copy; Polars exports strings
-    as LargeUtf8, which the kernel handles natively (i64 offsets)."""
+    """Apply ``ops`` (each ``(name, params)``, all fusable for the available symbol)
+    in order over ``series`` in one native pass. Prefers ``apply_chain_ops_arrow``
+    (parameterized); falls back to ``apply_chain_arrow`` when every op is no-arg.
+    Returns ``(transformed_series, per_kernel_changed_counts)`` or ``None`` if the
+    native path is unavailable. Zero-copy; Polars exports LargeUtf8, handled natively."""
     nm = native_module()
-    if nm is None or not hasattr(nm, "apply_chain_arrow"):
+    if nm is None:
         return None
     try:
         import pyarrow  # noqa: F401  (zero-copy bridge)
     except ImportError:
         return None
-    out_arrow, changed = nm.apply_chain_arrow(series.to_arrow(), list(kernel_names))
+    if hasattr(nm, "apply_chain_ops_arrow"):
+        out_arrow, changed = nm.apply_chain_ops_arrow(
+            series.to_arrow(), [(name, list(params)) for name, params in ops]
+        )
+    elif hasattr(nm, "apply_chain_arrow") and all(not params for _, params in ops):
+        out_arrow, changed = nm.apply_chain_arrow(
+            series.to_arrow(), [name for name, _ in ops]
+        )
+    else:
+        return None
     return pl.from_arrow(out_arrow), [int(c) for c in changed]

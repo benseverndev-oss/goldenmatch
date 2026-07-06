@@ -198,23 +198,27 @@ class TransformEngine:
         ops: list[tuple[TransformInfo, list[str]]],
         manifest: Manifest,
     ) -> pl.DataFrame:
-        """Apply an ordered list of ``(info, params)`` to ``column``. When
-        ``GOLDENFLOW_FUSED_APPLY`` is on (and native is available and the column is
-        string), maximal runs of owned string->string no-arg kernels are fused into
-        ONE native Arrow round-trip (Pillar-1 of the Rust cutover); everything else
-        takes the per-transform path unchanged. Default-off, so behavior is
-        byte-identical to the per-transform path until opted in."""
-        from goldenflow.transforms._chain import FUSABLE_KERNELS, fused_enabled
+        """Apply an ordered list of ``(info, params)`` to ``column``. When fusion is
+        on (default; native available; string column), maximal runs of owned
+        string->string kernels are fused into ONE native Arrow round-trip (Pillar-1
+        of the Rust cutover); everything else takes the per-transform path unchanged.
+        The fusable set is symbol-aware — parameterized ops (truncate/pad) only join
+        a run when the native ``apply_chain_ops_arrow`` symbol is present."""
+        from goldenflow.transforms._chain import fusable_names, fused_enabled, is_fusable
 
-        fuse = fused_enabled() and df.schema.get(column) in (pl.String, pl.Utf8)
+        available = (
+            fusable_names()
+            if fused_enabled() and df.schema.get(column) in (pl.String, pl.Utf8)
+            else frozenset()
+        )
         n = len(ops)
         i = 0
         while i < n:
             info, params = ops[i]
-            if fuse and not params and info.name in FUSABLE_KERNELS:
+            if is_fusable(info.name, params, available):
                 # Extend the maximal fusable run starting at i.
                 j = i
-                while j < n and not ops[j][1] and ops[j][0].name in FUSABLE_KERNELS:
+                while j < n and is_fusable(ops[j][0].name, ops[j][1], available):
                     j += 1
                 if j - i >= 2:
                     applied = self._apply_fused_run(df, column, ops[i:j], manifest)
@@ -243,19 +247,20 @@ class TransformEngine:
         declined (caller falls back to the per-op path)."""
         from goldenflow.transforms._chain import apply_chain_native
 
-        names = [info.name for info, _ in run]
-        res = apply_chain_native(df[column], names)
+        ops_spec = [(info.name, [str(p) for p in params]) for info, params in run]
+        res = apply_chain_native(df[column], ops_spec)
         if res is None:
             return None
         new_series, changed = res
         total_rows = df.shape[0]
         sample = df.head(3).select(pl.col(column))
-        for (info, _params), n_changed in zip(run, changed):
+        for (info, params), n_changed in zip(run, changed):
             before = sample[column].head(3).cast(pl.Utf8).to_list()
+            typed = self._cast_params(params) if params else []
             if info.mode == "series":
-                sample = sample.with_columns(info.func(sample[column]).alias(column))
+                sample = sample.with_columns(info.func(sample[column], *typed).alias(column))
             else:  # expr
-                sample = sample.with_columns(info.func(column).alias(column))
+                sample = sample.with_columns(info.func(column, *typed).alias(column))
             after = sample[column].head(3).cast(pl.Utf8).to_list()
             manifest.add_record(TransformRecord(
                 column=column,
