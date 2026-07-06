@@ -139,6 +139,30 @@
 {"transform": "imei_validate", "input": "49015420323751a", "expected": false}
 {"transform": "imei_validate", "input": "", "expected": false}
 {"transform": "imei_validate", "input": null, "expected": null}
+{"transform": "ssn_format", "input": "123456789", "expected": "123-45-6789"}
+{"transform": "ssn_format", "input": "123-45-6789", "expected": "123-45-6789"}
+{"transform": "ssn_format", "input": " 123 45 6789 ", "expected": "123-45-6789"}
+{"transform": "ssn_format", "input": "12345", "expected": "12345"}
+{"transform": "ssn_format", "input": "not an ssn", "expected": "not an ssn"}
+{"transform": "ssn_format", "input": "", "expected": ""}
+{"transform": "ssn_format", "input": null, "expected": null}
+{"transform": "ssn_mask", "input": "123456789", "expected": "***-**-6789"}
+{"transform": "ssn_mask", "input": "123-45-6789", "expected": "***-**-6789"}
+{"transform": "ssn_mask", "input": "12345", "expected": "12345"}
+{"transform": "ssn_mask", "input": "", "expected": ""}
+{"transform": "ssn_mask", "input": null, "expected": null}
+{"transform": "ein_format", "input": "123456789", "expected": "12-3456789"}
+{"transform": "ein_format", "input": "12-3456789", "expected": "12-3456789"}
+{"transform": "ein_format", "input": " 12 3456789 ", "expected": "12-3456789"}
+{"transform": "ein_format", "input": "12345", "expected": "12345"}
+{"transform": "ein_format", "input": "", "expected": ""}
+{"transform": "ein_format", "input": null, "expected": null}
+{"transform": "phone_digits", "input": "(212) 555-0100", "expected": "2125550100"}
+{"transform": "phone_digits", "input": "+1 212-555-0100", "expected": "12125550100"}
+{"transform": "phone_digits", "input": "no digits here", "expected": ""}
+{"transform": "phone_digits", "input": "abc123def456", "expected": "123456"}
+{"transform": "phone_digits", "input": "", "expected": ""}
+{"transform": "phone_digits", "input": null, "expected": null}
 {"transform": "cc_validate", "input": "424242424242😀2", "expected": false}
 {"transform": "iban_validate", "input": "DE89370400440532😀13000", "expected": false}
 {"transform": "vat_validate", "input": "DE13669597😀", "expected": false}

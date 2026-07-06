@@ -57,7 +57,8 @@ under Rosetta), `windows_amd64`.
 
 ## Status: full transform catalogue
 
-Essentially every `goldenflow-core` transform is now a SQL function -- **74 UDFs**:
+Essentially every `goldenflow-core` transform is now a SQL function -- **78 UDFs**
+(incl. `ssn_format` / `ssn_mask` / `ein_format` / `phone_digits`):
 
 | Group | Shape | Examples |
 | ----- | ----- | -------- |
