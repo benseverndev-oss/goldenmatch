@@ -45,6 +45,19 @@ def _assert_quantile_parity(values: list, q: float) -> None:
     assert native == aggregate._quantile_pure(values, q)
 
 
+def _assert_mean_parity(values: list) -> None:
+    from goldenanalysis.core import aggregate
+
+    assert native_module().mean(_f64(values)) == aggregate._mean_pure(values)
+
+
+def _assert_min_max_parity(values: list) -> None:
+    from goldenanalysis.core import aggregate
+
+    assert native_module().min(_f64(values)) == aggregate._min_pure(values)
+    assert native_module().max(_f64(values)) == aggregate._max_pure(values)
+
+
 # ---------------------------------------------------------------------------
 # Parity (native present) -- native kernel vs the pure reference helpers
 # ---------------------------------------------------------------------------
@@ -121,6 +134,51 @@ def test_public_dispatch_matches_pure(monkeypatch: pytest.MonkeyPatch, seed: int
     monkeypatch.setenv("GOLDENANALYSIS_NATIVE", "0")  # force pure
     assert native_hist == aggregate.histogram(values, 10)
     assert native_q == aggregate.quantile(values, 0.95)
+
+
+# ---------------------------------------------------------------------------
+# Numeric-reduction parity (mean / min / max) -- Wave 2, pure-slice kernels
+# ---------------------------------------------------------------------------
+
+_NUMERIC_FIXTURES = [
+    [1.0, 2.0, 3.0],
+    [5.0],
+    [-3.5, -1.0, 2.25, 100.0],
+    [1e16] + [1.0] * 100 + [-1e16],  # summation-order: naive native == naive pure
+    [0.0, 0.0, 0.0],
+]
+
+
+@native_only
+@pytest.mark.parametrize("xs", _NUMERIC_FIXTURES)
+def test_mean_parity(xs: list) -> None:
+    _assert_mean_parity(xs)
+
+
+@native_only
+@pytest.mark.parametrize("xs", _NUMERIC_FIXTURES)
+def test_min_max_parity(xs: list) -> None:
+    _assert_min_max_parity(xs)
+
+
+@native_only
+@pytest.mark.parametrize("seed", range(4))
+def test_mean_parity_random(seed: int) -> None:
+    rng = random.Random(seed)
+    _assert_mean_parity([rng.uniform(-100.0, 1000.0) for _ in range(5000)])
+    _assert_min_max_parity([rng.uniform(-100.0, 1000.0) for _ in range(5000)])
+
+
+@native_only
+def test_numeric_reductions_drop_nulls() -> None:
+    # Null slots dropped, matching the pure path which only sees non-null values.
+    from goldenanalysis.core import aggregate
+
+    arr = _f64([1.5, None, 200.0, None, 9.9])
+    non_null = [1.5, 200.0, 9.9]
+    assert native_module().mean(arr) == aggregate._mean_pure(non_null)
+    assert native_module().min(arr) == aggregate._min_pure(non_null)
+    assert native_module().max(arr) == aggregate._max_pure(non_null)
 
 
 # ---------------------------------------------------------------------------
