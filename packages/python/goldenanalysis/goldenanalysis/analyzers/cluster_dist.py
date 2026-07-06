@@ -41,7 +41,10 @@ class ClusterDistributionAnalyzer:
         # Prefer the engine's own record total; fall back to summed cluster sizes.
         stats = inp.artifacts.get("match_stats", {}) or {}
         record_count = int(stats.get("total_records", sum(sizes)))
-        singletons = sum(1 for s in sizes if s == 1)
+        # Single-sourced discrete size histogram (== the Rust/TS kernel); singletons is
+        # bucket[0]. Buckets 1 / 2 / 3 / "4+".
+        n1, n2, n3, n4 = agg.cluster_size_histogram(sizes)
+        singletons = n1
 
         metrics = [
             Metric(key="cluster.count", value=count, unit="clusters", direction="neutral"),
@@ -63,11 +66,6 @@ class ClusterDistributionAnalyzer:
             ),
         ]
 
-        # Discrete size histogram, buckets 1 / 2 / 3 / "4+".
-        n1 = sum(1 for s in sizes if s == 1)
-        n2 = sum(1 for s in sizes if s == 2)
-        n3 = sum(1 for s in sizes if s == 3)
-        n4 = sum(1 for s in sizes if s >= 4)
         table = AnalysisTable(
             name="cluster_size_histogram",
             columns=["size", "count"],

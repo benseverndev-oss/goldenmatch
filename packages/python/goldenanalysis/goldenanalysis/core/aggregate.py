@@ -225,3 +225,25 @@ def _max_native(values: Sequence[float]) -> float:
     vals = [float(v) for v in values if v is not None]
     arr = pa.array(vals, type=pa.float64())
     return native_module().max(arr)
+
+
+def cluster_size_histogram(sizes: Sequence[float]) -> list[int]:
+    """Counts of cluster sizes == 1, == 2, == 3, and >= 4 (4 buckets).
+
+    Dispatches to the native kernel when gated (byte-identical to the pure path).
+    """
+    if native_enabled("cluster_size_histogram"):
+        import pyarrow as pa
+
+        arr = pa.array([float(s) for s in sizes], type=pa.float64())
+        return list(native_module().cluster_size_histogram(arr))
+    return _cluster_size_histogram_pure(sizes)
+
+
+def _cluster_size_histogram_pure(sizes: Sequence[float]) -> list[int]:
+    return [
+        sum(1 for s in sizes if s == 1),
+        sum(1 for s in sizes if s == 2),
+        sum(1 for s in sizes if s == 3),
+        sum(1 for s in sizes if s >= 4),
+    ]

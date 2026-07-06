@@ -41,5 +41,6 @@ def test_gated_on_holds_the_measured_primitives() -> None:
             "mean",
             "min",
             "max",
+            "cluster_size_histogram",
         }
     )
