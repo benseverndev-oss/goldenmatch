@@ -25,3 +25,15 @@ phonenumber = "0.3"
 [dev-dependencies]
 # Parse the polars-generated text-transform golden corpus (tests/text_golden.rs).
 serde_json = "1"
+# Arrow-columnar-kernel pilot bench (benches/columnar_pilot.rs) ONLY — the core
+# stays arrow-free for the shipping surfaces; these are dev-only. Same v59 pin as
+# native-flow so the measured StringArray shape matches the real surface.
+arrow-array = { version = "59", default-features = false }
+arrow-buffer = { version = "59", default-features = false }
+
+# Pilot: scalar-per-element vs Arrow-columnar kernel (W6 pillar-1/3 decision).
+# harness=false -> plain fn main() with std::time 5-run-median (matches the repo
+# "5-run median wall" convention; no criterion/nightly dep).
+[[bench]]
+name = "columnar_pilot"
+harness = false
