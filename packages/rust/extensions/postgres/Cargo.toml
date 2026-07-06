@@ -1,6 +1,6 @@
 [package]
 name = "goldenmatch_pg"
-version = "0.12.0"
+version = "0.13.0"
 edition = "2021"
 license = "MIT"
 authors = ["Ben Severn <benzsevern@gmail.com>"]
@@ -45,6 +45,10 @@ goldenmatch-perceptual-core = { path = "../perceptual-core" }
 # Pure-Rust GoldenFlow text transforms (no pyo3) — goldenflow_strip /
 # goldenflow_whitespace_normalize run native-direct instead of the CPython bridge.
 goldenflow-core = { path = "../goldenflow-core" }
+# Pure-Rust GoldenCheck deep-profiling kernels (no pyo3) — the goldencheck_*
+# functions call these native-direct, the same reference kernel the wheel + the
+# DuckDB goldencheck_* UDFs run (cross-surface parity roadmap P5).
+goldencheck-core = { path = "../goldencheck-core" }
 serde_json = "1"
 
 [[bin]]

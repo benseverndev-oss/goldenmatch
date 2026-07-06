@@ -481,6 +481,10 @@ jobs:
               # goldenflow_strip / goldenflow_whitespace_normalize), so a kernel
               # change must rebuild + re-smoke this lane.
               - 'packages/rust/extensions/goldenflow-core/**'
+              # goldencheck-core is a path dep of the postgres crate (the
+              # goldencheck_* deep-profiling functions), so a kernel change must
+              # rebuild + re-smoke this lane.
+              - 'packages/rust/extensions/goldencheck-core/**'
               - 'packages/rust/extensions/Cargo.toml'
             rust_cores:
               # ANY Rust extension change re-validates EVERY committed TS wasm
@@ -3209,9 +3213,11 @@ jobs:
           cargo pgrx install "--pg-config=/usr/lib/postgresql/${PG_VERSION}/bin/pg_config" --release --features "pg${PG_VERSION}" --no-default-features
           # pgrx 0.12.9 doesn't auto-emit the SQL extension file — copy the
           # handwritten ones into PG's extension dir so `CREATE EXTENSION`
-          # (installs default_version, now 0.9.0) and `ALTER EXTENSION ... UPDATE`
+          # (installs default_version, now 0.13.0) and `ALTER EXTENSION ... UPDATE`
           # find them. The schema files are the canonical declaration of public
           # function signatures.
+          cp sql/goldenmatch_pg--0.13.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
+          cp sql/goldenmatch_pg--0.12.0--0.13.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
           cp sql/goldenmatch_pg--0.12.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
           cp sql/goldenmatch_pg--0.11.0--0.12.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
           cp sql/goldenmatch_pg--0.11.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
@@ -3375,6 +3381,47 @@ jobs:
               RAISE NOTICE 'de-bridged goldenflow (strip / collapse_whitespace) native assertions passed';
             END $$;
           EOSQL
+          # goldencheck_* deep-profiling surface (P5): native-direct (no CPython)
+          # over goldencheck-core, the SAME kernel the goldencheck[native] wheel +
+          # the DuckDB goldencheck_* UDFs run. Assert the pinned values shared with
+          # those surfaces (byte-identical by construction — same reference kernel).
+          sudo -u postgres psql -p "${PGPORT}" -v ON_ERROR_STOP=1 <<'EOSQL'
+            DO $$
+            DECLARE
+              bh bigint[];
+              nfd int;
+              nkey int;
+              ndup int;
+            BEGIN
+              -- benford leading-digit histogram (shared pinned vector).
+              bh := goldenmatch.goldencheck_benford(ARRAY[1,1,2,11,19,3,100,7,9,9]::double precision[]);
+              IF bh <> ARRAY[5,1,1,0,0,0,1,0,2]::bigint[] THEN
+                RAISE EXCEPTION 'goldencheck_benford: expected {5,1,1,0,0,0,1,0,2}, got %', bh;
+              END IF;
+              -- strict FDs over 2 columns of 4 rows (zip<->city both hold).
+              SELECT count(*) INTO nfd FROM goldenmatch.goldencheck_discover_fds(
+                ARRAY['1','1','2','2','A','A','B','B'], 2)
+                WHERE (det, dep) IN ((0,1),(1,0));
+              IF nfd <> 2 THEN
+                RAISE EXCEPTION 'goldencheck_discover_fds: expected (0,1)+(1,0), got % matching rows', nfd;
+              END IF;
+              -- composite key {0,1} over (order,line,day); neither col unique alone.
+              SELECT count(*) INTO nkey FROM goldenmatch.goldencheck_composite_keys(
+                ARRAY['o1','o1','o2','o2','o3','1','2','1','2','1','mon','mon','tue','tue','wed'], 3, 3)
+                WHERE key_id = 0 AND col_index IN (0,1);
+              IF nkey <> 2 THEN
+                RAISE EXCEPTION 'goldencheck_composite_keys: expected key 0 = cols {0,1}, got % cols', nkey;
+              END IF;
+              -- near-duplicate value cluster {0,1,2}.
+              SELECT count(*) INTO ndup FROM goldenmatch.goldencheck_near_duplicates(
+                ARRAY['California','Californa','CALIFORNIA','Texas','texas'], 0.7)
+                WHERE cluster = 0 AND member IN (0,1,2);
+              IF ndup <> 3 THEN
+                RAISE EXCEPTION 'goldencheck_near_duplicates: expected cluster 0 = {0,1,2}, got % members', ndup;
+              END IF;
+              RAISE NOTICE 'goldencheck deep-profiling (benford/fds/composite/near-dup) native assertions passed';
+            END $$;
+          EOSQL
           sudo -u postgres psql -p "${PGPORT}" -v ON_ERROR_STOP=1 <<'EOSQL'
             CREATE TABLE test_customers (name TEXT, email TEXT);
             INSERT INTO test_customers VALUES
@@ -3478,6 +3525,12 @@ jobs:
           # fires on extensions/duckdb/** changes, so for cross-package
           # regressions, rely on the regular `python` lane to catch them.
           pip install -e "../../../python/goldenmatch[web]"
+          # goldencheck supplies the deep-profiling kernels the goldencheck_* UDFs
+          # delegate to (goldencheck.core.kernels). Editable, pure-Python path —
+          # the native goldencheck-core wheel isn't built here, so the UDF tests
+          # exercise the pure-Python fallback (the reference the native path must
+          # match; that parity is proven in goldencheck's own native lane).
+          pip install -e "../../../python/goldencheck"
           pip install -e ".[dev]" 2>/dev/null || pip install -e .
           # pytest-timeout converts a hung worker (e.g. wedged auto-config)
           # into an actionable failure with a traceback at the 120s mark

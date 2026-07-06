@@ -34,14 +34,15 @@ one of two camps:
 | perceptual (pHash) | ✅ | ✅ | ✅ | 🟡P4 | 🟡P4 | **full (pending P4)** |
 | autoconfig | ✅ | ✅ | ✅ | ❌ | ❌ | edge-only |
 | suggest (healer) | ✅ | ✅ | ✅ | ❌ | ❌ | edge-only |
-| goldencheck | ✅ | ✅ | ✅ | ❌ | ❌ | edge-only |
+| goldencheck | ✅ | ✅ | ✅ | ✅P5 | ✅P5 | **full** |
 | goldenprofile | ✅ | ✅ | ✅ | ❌ | ❌ | edge-only |
 | goldengraph | ✅ | ✅ | ✅ | ❌ | ❌ | edge-only |
 | goldenanalysis | ✅ | ✅ | ✅ | ❌ | ❌ | edge-only |
 | goldenflow | ✅ | ✅ | ✅#1412 | ✅v0.1.1 | ❌ | edge + DuckDB (PG left) |
 
 - **Camp A — edge-native, no SQL:** score, perceptual, autoconfig, suggest,
-  goldencheck, goldenprofile, goldengraph, goldenanalysis.
+  goldenprofile, goldengraph, goldenanalysis.
+  (**goldencheck** left this camp — see P5 below.)
   → close by adding a native DuckDB kernel + a pgrx `#[pg_extern]`.
   (**goldenflow** left this camp: the compiled `goldenflow-duckdb` extension
   shipped as `v0.1.1` (74 transforms native in DuckDB, ADR 0032) — only the
@@ -103,9 +104,25 @@ wasm-hostile deps.
 
 ### Tier 3 — opportunistic (lower marginal value on the target surface)
 
-- [ ] **P5 · goldencheck → SQL.** The 7 profiling kernels could be SQL UDFs, but
-  they are table/column-shaped and SQL users can already call the Python; the
-  marginal value of native SQL is lower. Do if a concrete SQL-profiling ask lands.
+- [x] **P5 · goldencheck → SQL. Done.** The deep-profiling kernels are
+  table/column-shaped, so — unlike every prior *scalar* port — the surface is
+  **aggregate-shaped**: callers pass whole column(s) as a `LIST` / flat array and
+  get index/count structures back. A shared list-shaped kernel API
+  (`goldencheck.core.kernels`: `benford_histogram`, `near_duplicate_clusters`,
+  `discover_functional_dependencies`, `discover_approximate_fds`,
+  `composite_key_search`) wraps the same native-gated kernels the profilers use.
+  **DuckDB** (`duckdb/goldenmatch_duckdb/goldencheck_kernels.py`, 5
+  `goldencheck_*` UDFs) calls that native-gated API (Rust kernel when
+  `goldencheck[native]` is present, else the identical pure-Python fallback).
+  **Postgres** (`postgres/src/goldencheck_kernels.rs`, `goldenmatch_pg` 0.13.0)
+  runs `goldencheck-core` native-direct (no CPython), with the `NULL -> 0`
+  first-seen interning done in Rust. The 3 internal primitives
+  (`tuple_distinct_count`, `functional_dependency_holds`, `fd_violation_rows`)
+  stay unexposed — they are building blocks *of* the five, not user-facing
+  profiling ops. Pinned values shared across all three surfaces (DuckDB
+  `test_goldencheck_kernels.py`, the `rust_pgrx` psql smoke, and the
+  `goldencheck.core.kernels` parity test) make them byte-identical by
+  construction. *Effort: M.*
 - [ ] **P6 · goldenprofile / goldenanalysis → SQL.** Same reasoning — profiling
   over whole columns; native SQL is nice-to-have, not load-bearing.
 - [ ] **P7 · autoconfig / suggest → SQL.** Config-shaped (produce a config from a

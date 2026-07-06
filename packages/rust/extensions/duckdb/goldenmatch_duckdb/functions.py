@@ -215,6 +215,14 @@ def register(con: duckdb.DuckDBPyConnection) -> None:
     from goldenmatch_duckdb.perceptual_kernels import register_perceptual_functions
     register_perceptual_functions(con)
 
+    # goldencheck_* deep-profiling kernels: benford histogram, near-duplicate
+    # value clusters, strict + approximate functional dependencies, composite
+    # keys -- over the native-gated goldencheck.core.kernels (Rust kernel when
+    # goldencheck[native] is present, else the identical pure-Python fallback).
+    # Fail-open if goldencheck isn't installed. See `goldencheck_kernels.py`.
+    from goldenmatch_duckdb.goldencheck_kernels import register_goldencheck_functions
+    register_goldencheck_functions(con)
+
 
 # ── Implementation ──────────────────────────────────────────────────────
 

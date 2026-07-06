@@ -2,6 +2,19 @@
 
 All notable changes to GoldenCheck will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- **`goldencheck.core.kernels`** -- list-shaped programmatic entry points to the
+  five deep-profiling kernels (benford histogram, near-duplicate value clusters,
+  strict + approximate functional dependencies, composite keys). Plain lists in,
+  index/count structures out; runs the native-gated kernel when built, else the
+  profilers' own pure-Python fallbacks (native == fallback byte-for-byte). This
+  is the shared source of truth behind the new native SQL surfaces: the DuckDB
+  `goldencheck_*` UDFs (goldenmatch-duckdb) and the Postgres `goldencheck_*`
+  functions (goldenmatch_pg 0.13.0), completing GoldenCheck's cross-surface
+  parity (roadmap P5).
+
 ## [1.4.1] - 2026-07-02
 
 ### Changed
