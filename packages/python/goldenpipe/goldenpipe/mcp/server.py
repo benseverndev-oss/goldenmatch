@@ -40,17 +40,120 @@ def validate_pipeline_tool(pipeline: str, stages: list[str]) -> dict[str, Any]:
         return {"valid": False, "error": str(e)}
 
 
-def run_pipeline_tool(source: str, config_path: str | None = None) -> dict[str, Any]:
-    """Run a pipeline and return results."""
-    from goldenpipe._api import run
-    result = run(source, config=config_path)
-    return {
+def run_pipeline_tool(
+    source: str | None = None,
+    config_path: str | None = None,
+    *,
+    records: list[dict] | None = None,
+    csv_text: str | None = None,
+    stages: list[str] | None = None,
+    identity_opts: dict | None = None,
+    preview_rows: int = 10,
+) -> dict[str, Any]:
+    """Run a pipeline and return the FULL result an LLM needs to orchestrate.
+
+    Input (one of, in precedence order): ``records`` (list of row dicts),
+    ``csv_text`` (raw CSV), or ``source`` (a file path on the server). Config:
+    ``stages`` (an inline stage-name list, e.g. ``["goldencheck.scan",
+    "goldenmatch.dedupe"]``) or ``config_path`` (a YAML on disk); omit both for
+    zero-config auto. ``identity_opts`` forwards the Identity Graph knobs.
+
+    Returns per-stage ``status``/``reasoning``/``timing``, ``skipped``,
+    ``errors``, AND — the reason this exists — an ``output`` block with the
+    deduped result: golden-record count + a ``preview`` (first ``preview_rows``
+    rows), unique/duplicate counts, cluster count, and match stats. This closes
+    the fire-and-forget gap: the caller can see what the pipeline produced and
+    branch on it, not just that it ran.
+    """
+    import polars as pl
+
+    from goldenpipe.pipeline import Pipeline
+
+    # Config: inline stages > YAML path > zero-config auto. An explicit (even
+    # empty) ``stages`` list wins over auto; ``None`` means zero-config.
+    cfg = None
+    if stages is not None:
+        cfg = PipelineConfig(pipeline="inline", stages=[StageSpec(use=s) for s in stages])
+    elif config_path:
+        from goldenpipe.config.loader import load_config
+        cfg = load_config(config_path)
+
+    try:
+        pipe = Pipeline(config=cfg, identity_opts=identity_opts)
+        if records is not None:
+            result = pipe.run(df=pl.DataFrame(records))
+        elif csv_text is not None:
+            import io
+            result = pipe.run(df=pl.read_csv(io.StringIO(csv_text), ignore_errors=True))
+        elif source:
+            result = pipe.run(source=source)
+        else:
+            return {"error": (
+                "provide one input: 'source' (file path), 'records' (list of "
+                "row dicts), or 'csv_text' (raw CSV)."
+            )}
+    except Exception as exc:  # surface config/build errors as data, not a crash
+        return {"error": str(exc)}
+
+    return _result_to_dict(result, preview_rows)
+
+
+def _is_frame(obj: Any) -> bool:
+    """A Polars-DataFrame-shaped artifact (duck-typed to avoid a hard import)."""
+    return obj is not None and hasattr(obj, "height") and hasattr(obj, "to_dicts")
+
+
+def _summarize_output(artifacts: dict, preview_rows: int) -> dict[str, Any]:
+    """Pull the deduped output out of the pipeline artifacts, JSON-safe.
+
+    The dedupe stage casts every column to string before matching, so
+    ``to_dicts()`` on golden/unique frames is JSON-serializable.
+    """
+    out: dict[str, Any] = {}
+    golden = artifacts.get("golden")
+    if _is_frame(golden):
+        out["golden_records"] = golden.height
+        if preview_rows:
+            out["golden_preview"] = golden.head(preview_rows).to_dicts()
+    unique = artifacts.get("unique")
+    if _is_frame(unique):
+        out["unique_records"] = unique.height
+    dupes = artifacts.get("dupes")
+    if _is_frame(dupes):
+        out["duplicate_records"] = dupes.height
+    stats = artifacts.get("match_stats")
+    if isinstance(stats, dict):
+        out["match_stats"] = stats
+    clusters = artifacts.get("clusters")
+    if clusters is not None:
+        try:
+            out["cluster_count"] = len(clusters)
+        except TypeError:
+            pass
+    return out
+
+
+def _result_to_dict(result: Any, preview_rows: int = 10) -> dict[str, Any]:
+    """Serialize a ``PipeResult`` into the full JSON payload for MCP/A2A."""
+    preview_rows = max(0, min(int(preview_rows), 100))  # bound the payload
+    out: dict[str, Any] = {
         "status": result.status.value,
         "source": result.source,
         "input_rows": result.input_rows,
-        "errors": result.errors,
-        "skipped": result.skipped,
+        "stages": {
+            name: ({"status": r.status.value, "error": r.error}
+                   if r.error else {"status": r.status.value})
+            for name, r in result.stages.items()
+        },
+        "reasoning": dict(result.reasoning),
+        "timing": {k: round(float(v), 4) for k, v in result.timing.items()},
+        "skipped": list(result.skipped),
+        "errors": list(result.errors),
     }
+    output = _summarize_output(result.artifacts, preview_rows)
+    if output:
+        out["output"] = output
+    return out
 
 
 def explain_pipeline_tool(config_path: str) -> dict[str, Any]:
@@ -82,11 +185,25 @@ def _build_tools() -> list:
                  "pipeline": {"type": "string"},
                  "stages": {"type": "array", "items": {"type": "string"}},
              }, "required": ["pipeline", "stages"]}),
-        Tool(name="run_pipeline", description="Run a pipeline on a file",
+        Tool(name="run_pipeline",
+             description=(
+                 "Run a pipeline on a file OR inline data (records / csv_text) and "
+                 "return per-stage status, reasoning and timing PLUS the deduped "
+                 "output (golden-record count + preview, unique/duplicate counts, "
+                 "cluster count, match stats). Give a `stages` list or `config_path` "
+                 "to control the chain, or omit both for zero-config auto."
+             ),
              inputSchema={"type": "object", "properties": {
-                 "source": {"type": "string"},
-                 "config_path": {"type": "string"},
-             }, "required": ["source"]}),
+                 "source": {"type": "string", "description": "Input file path on the server."},
+                 "records": {"type": "array", "items": {"type": "object"},
+                             "description": "Inline data as a list of row dicts."},
+                 "csv_text": {"type": "string", "description": "Inline data as raw CSV text."},
+                 "stages": {"type": "array", "items": {"type": "string"},
+                            "description": "Inline stage chain, e.g. ['goldencheck.scan','goldenmatch.dedupe']."},
+                 "config_path": {"type": "string", "description": "YAML pipeline config path on the server."},
+                 "identity_opts": {"type": "object", "description": "Identity Graph options (zero-config mode only)."},
+                 "preview_rows": {"type": "integer", "description": "Rows of golden output to preview (default 10, max 100)."},
+             }}),
         Tool(name="explain_pipeline", description="Explain what a pipeline config does",
              inputSchema={"type": "object", "properties": {
                  "config_path": {"type": "string"},
@@ -179,7 +296,7 @@ def run_server_http(host: str = "0.0.0.0", port: int = 8250) -> None:
     async def server_card(request):
         return JSONResponse({
             "name": "GoldenPipe",
-            "description": "Orchestrator for the Golden Suite — chains data validation, transformation, and entity resolution into one adaptive pipeline. 4 MCP tools for listing stages, validating wiring, running pipelines, and explaining configs. Skips unnecessary stages automatically.",
+            "description": "Orchestrator for the Golden Suite — chains data validation, transformation, and entity resolution into one adaptive pipeline. 4 MCP tools for listing stages, validating wiring, explaining configs, and running pipelines (file or inline data, returning per-stage results + the deduped output). Skips unnecessary stages automatically.",
             "homepage": "https://github.com/benseverndev-oss/goldenpipe",
             "iconUrl": "https://avatars.githubusercontent.com/u/192581748"
         })
