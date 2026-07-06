@@ -35,7 +35,8 @@ except Exception:  # noqa: BLE001 - any import/load failure falls back below
 # proved byte-identical output. (detect is small-compute -- this is anti-drift /
 # scaffold, not a perf claim; a new primitive joins only after the parity gate clears.)
 _GATED_ON: frozenset[str] = frozenset(
-    {"detect_domain", "exact_score", "fuzzy_name_score", "initialism_score"}
+    {"detect_domain", "exact_score", "fuzzy_name_score", "initialism_score",
+     "profile_score"}
 )
 
 # Component -> the native symbol that backs it (component name == symbol here). A
@@ -45,6 +46,7 @@ _COMPONENT_SYMBOLS: dict[str, str] = {
     "exact_score": "exact_score",
     "fuzzy_name_score": "fuzzy_name_score",
     "initialism_score": "initialism_score",
+    "profile_score": "profile_score",
 }
 
 

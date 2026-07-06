@@ -36,6 +36,26 @@ fn initialism_score(a: &str, b: &str) -> PyResult<Option<f64>> {
     Ok(infermap_core::initialism_score(a, b))
 }
 
+/// Wave 3 profile scorer: scalars-only (host computes avg-lengths + abstain).
+#[allow(clippy::too_many_arguments)]
+#[pyfunction]
+fn profile_score(
+    src_dtype: &str,
+    tgt_dtype: &str,
+    src_null: f64,
+    tgt_null: f64,
+    src_uniq: f64,
+    tgt_uniq: f64,
+    src_val_count: f64,
+    tgt_val_count: f64,
+    src_avg_len: f64,
+    tgt_avg_len: f64,
+) -> PyResult<f64> {
+    Ok(infermap_core::profile_score(
+        src_dtype, tgt_dtype, src_null, tgt_null, src_uniq, tgt_uniq,
+        src_val_count, tgt_val_count, src_avg_len, tgt_avg_len))
+}
+
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
@@ -46,5 +66,6 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(self::exact_score, m)?)?;
     m.add_function(wrap_pyfunction!(self::fuzzy_name_score, m)?)?;
     m.add_function(wrap_pyfunction!(self::initialism_score, m)?)?;
+    m.add_function(wrap_pyfunction!(self::profile_score, m)?)?;
     Ok(())
 }
