@@ -22,10 +22,11 @@
 //! fusable here and stay on the per-transform path — see the boundary note in the
 //! design doc.
 
-use arrow_array::{Array, GenericStringArray, OffsetSizeTrait};
+use arrow_array::builder::Float64Builder;
+use arrow_array::{Array, Float64Array, GenericStringArray, OffsetSizeTrait};
 use arrow_buffer::{Buffer, OffsetBuffer, ScalarBuffer};
 
-use crate::{email, names, text};
+use crate::{email, names, numeric, text};
 
 /// One owned, no-arg, total string→string kernel eligible for the fused chain.
 /// The name mapping (`from_name`) is the single source of truth the host's
@@ -115,7 +116,10 @@ impl Kernel {
                 .unwrap_or(default)
         };
         let char_arg = |i: usize, default: char| {
-            params.get(i).and_then(|p| p.chars().next()).unwrap_or(default)
+            params
+                .get(i)
+                .and_then(|p| p.chars().next())
+                .unwrap_or(default)
         };
         match name {
             "truncate" => Some(Kernel::Truncate(usize_arg(0, 255))),
@@ -252,6 +256,118 @@ pub fn apply_chain<O: OffsetSizeTrait>(
     ChainResult { array, changed }
 }
 
+// ---------------------------------------------------------------------------
+// Numeric (f64) fused chain — the second dtype. Same idea as the string chain
+// above, but the run is a maximal sequence of owned f64->f64 kernels applied to
+// a `Float64Array` in one Arrow pass instead of N per-transform round-trips.
+// ---------------------------------------------------------------------------
+
+/// One owned numeric kernel eligible for the fused f64 chain. Each dispatches to
+/// the SAME `numeric::*` core fn the per-transform path calls, so a fused run is
+/// byte-identical to applying the transforms sequentially. `round`/`clamp` carry
+/// their params; `abs_value`/`fill_zero` are no-arg. `f64` has no `Eq`, so this
+/// derives only `PartialEq`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum NumericKernel {
+    Round(i32),
+    Clamp(f64, f64),
+    AbsValue,
+    FillZero,
+}
+
+impl NumericKernel {
+    /// Resolve a transform name + its (string) params to a numeric chain kernel,
+    /// or `None` if not a fusable f64 op. Defaults mirror the per-transform arrow
+    /// shims / Python signatures EXACTLY (`round` n=2; `clamp` min=0.0 max=1.0);
+    /// a non-parseable param falls back to the default for that slot.
+    pub fn from_op(name: &str, params: &[&str]) -> Option<NumericKernel> {
+        let i32_arg = |i: usize, default: i32| {
+            params
+                .get(i)
+                .and_then(|p| p.parse::<i32>().ok())
+                .unwrap_or(default)
+        };
+        let f64_arg = |i: usize, default: f64| {
+            params
+                .get(i)
+                .and_then(|p| p.parse::<f64>().ok())
+                .unwrap_or(default)
+        };
+        match name {
+            "round" => Some(NumericKernel::Round(i32_arg(0, 2))),
+            "clamp" => Some(NumericKernel::Clamp(f64_arg(0, 0.0), f64_arg(1, 1.0))),
+            "abs_value" => Some(NumericKernel::AbsValue),
+            "fill_zero" => Some(NumericKernel::FillZero),
+            _ => None,
+        }
+    }
+
+    /// Names carrying params (need to be recognized as fusable even with args) —
+    /// the host mirrors this so `round:2` / `clamp:0:100` join a run.
+    pub const PARAM_NAMES: &'static [&'static str] = &["round", "clamp"];
+
+    /// Every fusable numeric kernel name, for the coverage guard.
+    pub const ALL_NAMES: &'static [&'static str] = &["round", "clamp", "abs_value", "fill_zero"];
+
+    /// Apply this kernel to one optional value. Operates on `Option<f64>` because
+    /// `fill_zero` is fundamentally a null-handling op (null -> 0.0); the value
+    /// kernels pass a null straight through (`None -> None`).
+    #[inline]
+    fn apply(self, v: Option<f64>) -> Option<f64> {
+        match self {
+            NumericKernel::Round(n) => v.map(|x| numeric::round_f64(x, n)),
+            NumericKernel::Clamp(lo, hi) => v.map(|x| numeric::clamp_f64(x, lo, hi)),
+            NumericKernel::AbsValue => v.map(numeric::abs_f64),
+            NumericKernel::FillZero => Some(numeric::fill_zero(v)),
+        }
+    }
+}
+
+/// Fused f64 output: the transformed column + per-kernel affected-row counts.
+pub struct F64ChainResult {
+    pub array: Float64Array,
+    pub changed: Vec<u64>,
+}
+
+/// Apply `kernels` in order to every row of `arr`, in one pass. Value kernels
+/// leave nulls null; `fill_zero` turns a null into `0.0`.
+///
+/// `changed[i]` counts the rows the i-th kernel altered, matching the host's
+/// per-transform `(before.cast(Utf8) != after.cast(Utf8)).sum()` — which in
+/// Polars EXCLUDES a row whose *before* is null (a null `!=` yields null, and
+/// `.sum()` skips it). So a `fill_zero` that turns null->0.0 is NOT counted,
+/// exactly as the per-transform path reports it; hence the `cur.is_some()` guard.
+/// (Edge: `-0.0`/`NaN` values compare by IEEE-754 here, not by their Utf8 text,
+/// so a `-0.0`->`0.0` or `NaN` row's count could differ from the Utf8 path; the
+/// output array is byte-identical regardless. Documented, not chased.)
+pub fn apply_chain_f64(arr: &Float64Array, kernels: &[NumericKernel]) -> F64ChainResult {
+    let len = arr.len();
+    let mut changed = vec![0u64; kernels.len()];
+    let mut builder = Float64Builder::with_capacity(len);
+    for i in 0..len {
+        let mut cur: Option<f64> = if arr.is_null(i) {
+            None
+        } else {
+            Some(arr.value(i))
+        };
+        for (ki, k) in kernels.iter().enumerate() {
+            let next = k.apply(cur);
+            if cur.is_some() && next != cur {
+                changed[ki] += 1;
+            }
+            cur = next;
+        }
+        match cur {
+            Some(x) => builder.append_value(x),
+            None => builder.append_null(),
+        }
+    }
+    F64ChainResult {
+        array: builder.finish(),
+        changed,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -347,7 +463,10 @@ mod tests {
     #[test]
     fn from_op_parses_params_and_defaults() {
         // explicit params
-        assert_eq!(Kernel::from_op("truncate", &["50"]), Some(Kernel::Truncate(50)));
+        assert_eq!(
+            Kernel::from_op("truncate", &["50"]),
+            Some(Kernel::Truncate(50))
+        );
         assert_eq!(
             Kernel::from_op("pad_left", &["10", "0"]),
             Some(Kernel::PadLeft(10, '0'))
@@ -357,11 +476,23 @@ mod tests {
             Some(Kernel::PadRight(6, ' '))
         );
         // defaults mirror the arrow shims when a param is missing
-        assert_eq!(Kernel::from_op("truncate", &[]), Some(Kernel::Truncate(255)));
-        assert_eq!(Kernel::from_op("pad_left", &[]), Some(Kernel::PadLeft(10, '0')));
-        assert_eq!(Kernel::from_op("pad_right", &[]), Some(Kernel::PadRight(10, ' ')));
+        assert_eq!(
+            Kernel::from_op("truncate", &[]),
+            Some(Kernel::Truncate(255))
+        );
+        assert_eq!(
+            Kernel::from_op("pad_left", &[]),
+            Some(Kernel::PadLeft(10, '0'))
+        );
+        assert_eq!(
+            Kernel::from_op("pad_right", &[]),
+            Some(Kernel::PadRight(10, ' '))
+        );
         // negative width clamps to 0 (matches the shim)
-        assert_eq!(Kernel::from_op("truncate", &["-5"]), Some(Kernel::Truncate(0)));
+        assert_eq!(
+            Kernel::from_op("truncate", &["-5"]),
+            Some(Kernel::Truncate(0))
+        );
         // no-arg names delegate to from_name; unknown -> None
         assert_eq!(Kernel::from_op("strip", &[]), Some(Kernel::Strip));
         assert_eq!(Kernel::from_op("split_name", &[]), None);
@@ -434,5 +565,119 @@ mod tests {
         }
         assert_eq!(Kernel::from_name("truncate"), None);
         assert_eq!(Kernel::from_name("split_name"), None);
+    }
+
+    // --- numeric (f64) chain ---
+
+    fn f64_sample() -> Float64Array {
+        Float64Array::from(vec![
+            Some(1.234_5),
+            Some(-9.876),
+            None,
+            Some(0.0),
+            Some(1000.0),
+            Some(-0.4),
+        ])
+    }
+
+    /// Apply numeric kernels sequentially (fresh array per step) as the oracle.
+    fn seq_f64(arr: &Float64Array, kernels: &[NumericKernel]) -> Float64Array {
+        let mut cur = arr.clone();
+        for k in kernels {
+            let out: Float64Array = (0..cur.len())
+                .map(|i| {
+                    let v = if cur.is_null(i) {
+                        None
+                    } else {
+                        Some(cur.value(i))
+                    };
+                    k.apply(v)
+                })
+                .collect();
+            cur = out;
+        }
+        cur
+    }
+
+    #[test]
+    fn f64_chain_matches_sequential() {
+        let chains: &[&[NumericKernel]] = &[
+            &[NumericKernel::Round(2), NumericKernel::Clamp(0.0, 100.0)],
+            &[NumericKernel::AbsValue, NumericKernel::Round(1)],
+            &[NumericKernel::Round(0), NumericKernel::FillZero],
+            &[
+                NumericKernel::FillZero,
+                NumericKernel::Clamp(-5.0, 5.0),
+                NumericKernel::AbsValue,
+            ],
+        ];
+        let arr = f64_sample();
+        for chain in chains {
+            let fused = apply_chain_f64(&arr, chain);
+            let seq = seq_f64(&arr, chain);
+            assert_eq!(fused.array, seq, "f64 chain {chain:?} != sequential");
+        }
+    }
+
+    #[test]
+    fn f64_from_op_parses_params_and_defaults() {
+        assert_eq!(
+            NumericKernel::from_op("round", &["3"]),
+            Some(NumericKernel::Round(3))
+        );
+        assert_eq!(
+            NumericKernel::from_op("clamp", &["0", "100"]),
+            Some(NumericKernel::Clamp(0.0, 100.0))
+        );
+        // defaults mirror the arrow shims / Python signatures
+        assert_eq!(
+            NumericKernel::from_op("round", &[]),
+            Some(NumericKernel::Round(2))
+        );
+        assert_eq!(
+            NumericKernel::from_op("clamp", &[]),
+            Some(NumericKernel::Clamp(0.0, 1.0))
+        );
+        assert_eq!(
+            NumericKernel::from_op("abs_value", &[]),
+            Some(NumericKernel::AbsValue)
+        );
+        assert_eq!(
+            NumericKernel::from_op("fill_zero", &[]),
+            Some(NumericKernel::FillZero)
+        );
+        // not a numeric op
+        assert_eq!(NumericKernel::from_op("strip", &[]), None);
+    }
+
+    #[test]
+    fn f64_fill_zero_null_not_counted_but_filled() {
+        // Polars `(before != after).sum()` skips null-before rows, so fill_zero's
+        // null->0.0 is filled in the output but NOT counted as affected.
+        let arr = Float64Array::from(vec![None, Some(5.0), None, Some(2.0)]);
+        let out = apply_chain_f64(&arr, &[NumericKernel::FillZero]);
+        assert_eq!(out.array.value(0), 0.0);
+        assert!(!out.array.is_null(0));
+        assert_eq!(out.array.value(2), 0.0);
+        // only non-null-before rows that CHANGE count; fill_zero changes none of them.
+        assert_eq!(out.changed, vec![0]);
+    }
+
+    #[test]
+    fn f64_changed_counts_only_altered_nonnull_rows() {
+        let arr = Float64Array::from(vec![Some(1.4), Some(9.9), None, Some(2.0)]);
+        // round(0): 1.4->1.0 (changed), 9.9->10.0 (changed), null skipped, 2.0->2.0 (same)
+        let out = apply_chain_f64(&arr, &[NumericKernel::Round(0)]);
+        assert_eq!(out.changed, vec![2]);
+    }
+
+    #[test]
+    fn f64_all_names_round_trip() {
+        for name in NumericKernel::ALL_NAMES {
+            assert!(
+                NumericKernel::from_op(name, &[]).is_some(),
+                "{name} unmapped"
+            );
+        }
     }
 }

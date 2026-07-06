@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.15.0 (2026-07-06)
+
+Pillar-1 (evict Polars from the transform execution path): the fused columnar apply now covers a **second dtype and the parameterized string ops**, so more real chains collapse into one native Arrow pass (byte-identical output, lower peak RSS). Needs `goldenflow-native>=0.13.0` (republished with the new kernel symbols).
+
+- **Numeric (f64) fused chains.** A maximal run of owned `round` / `clamp` / `abs_value` / `fill_zero` transforms on a `Float64` column now fuses into ONE native pass (`goldenflow_core::chain::apply_chain_f64` → native `apply_chain_f64_arrow`), instead of N per-transform Arrow round-trips + N column rebuilds. Each kernel dispatches to the SAME `numeric::*` core fn the per-transform path uses, so a fused run is byte-identical — output frame AND audit manifest (the per-kernel affected count matches Polars' `(before != after).sum()`, which excludes null-`before` rows, so `fill_zero`'s null→0.0 fills but isn't counted).
+- **Parameterized string ops fuse.** `truncate` / `pad_left` / `pad_right` (and, on the numeric side, `round` / `clamp`) now join a fusable run via the superset native symbol `apply_chain_ops_arrow` / `apply_chain_f64_arrow` (`(name, params)` tuples). Symbol-aware: an older 0.12.0 wheel keeps fusing the no-arg families and only these break a run — no regression.
+- **Mixed-dtype chains.** The engine recomputes the fusable set as a run advances, so a parser that changes the column dtype mid-chain (e.g. `currency_strip`: str→f64) lets the string head and the numeric tail each fuse in their own dtype.
+- Fixed a sample-replay bug for parameterized `expr`-mode ops (the audit's before/after replay int-cast `pad_left`'s pad char; now passes `expr` params raw, exactly like the per-transform path).
+
 ## Unreleased
 
 ## 1.14.0 (2026-07-06)

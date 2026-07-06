@@ -10,9 +10,9 @@
 //! ops via `(name, params)` tuples). The host prefers the ops form when present and
 //! falls back to the no-arg form on an older wheel.
 
-use arrow::array::{make_array, Array, ArrayData, LargeStringArray, StringArray};
+use arrow::array::{make_array, Array, ArrayData, Float64Array, LargeStringArray, StringArray};
 use arrow::pyarrow::PyArrowType;
-use goldenflow_core::chain::{apply_chain, Kernel};
+use goldenflow_core::chain::{apply_chain, apply_chain_f64, Kernel, NumericKernel};
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 
@@ -94,4 +94,44 @@ pub fn apply_chain_ops_arrow(
         );
     }
     run_kernels(py, array.0, &kernels)
+}
+
+/// The fusable NUMERIC (f64) kernel names, for the host's f64 coverage guard
+/// (asserts Python `FUSABLE_F64_KERNELS ∪ FUSABLE_F64_PARAM_KERNELS` == this set).
+#[pyfunction]
+pub fn fusable_f64_kernel_names() -> Vec<String> {
+    NumericKernel::ALL_NAMES
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
+}
+
+/// Apply a run of owned f64->f64 kernels (`round`/`clamp`/`abs_value`/`fill_zero`,
+/// each a `(name, params)` tuple) over a `Float64Array` in one pass. Returns
+/// `(transformed_array, changed)` where `changed[i]` is the number of rows the
+/// i-th kernel altered (matching the host's per-transform affected count). The
+/// input must be a Float64 array (Polars f64 columns export as Float64).
+#[pyfunction]
+pub fn apply_chain_f64_arrow(
+    py: Python,
+    array: PyArrowType<ArrayData>,
+    ops: Vec<(String, Vec<String>)>,
+) -> PyResult<(PyArrowType<ArrayData>, Vec<u64>)> {
+    let mut kernels = Vec::with_capacity(ops.len());
+    for (name, params) in &ops {
+        let refs: Vec<&str> = params.iter().map(String::as_str).collect();
+        kernels.push(NumericKernel::from_op(name, &refs).ok_or_else(|| {
+            PyValueError::new_err(format!("not a fusable f64 chain kernel: {name}"))
+        })?);
+    }
+    let arr = make_array(array.0);
+    let f = arr
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .ok_or_else(|| PyTypeError::new_err("fused f64 apply requires a Float64 array"))?;
+    let (out, changed) = py.detach(|| {
+        let r = apply_chain_f64(f, &kernels);
+        (r.array.into_data(), r.changed)
+    });
+    Ok((PyArrowType(out), changed))
 }
