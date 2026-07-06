@@ -60,8 +60,9 @@ export class ClusterDistributionAnalyzer implements Analyzer {
     // Prefer the engine's own record total; fall back to summed cluster sizes.
     const recordCount = typeof stats["total_records"] === "number" ? stats["total_records"] : sumSizes;
     // Single-sourced discrete size histogram (== the Rust/Python kernel); singletons is
-    // bucket[0]. Buckets 1 / 2 / 3 / "4+".
-    const [n1, n2, n3, n4] = clusterSizeHistogram(sizes);
+    // bucket[0]. Buckets 1 / 2 / 3 / "4+". Defaults narrow `number | undefined` ->
+    // `number` under noUncheckedIndexedAccess (the kernel always returns 4 buckets).
+    const [n1 = 0, n2 = 0, n3 = 0, n4 = 0] = clusterSizeHistogram(sizes);
     const singletons = n1;
 
     const metrics: Metric[] = [
