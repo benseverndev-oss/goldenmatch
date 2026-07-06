@@ -117,3 +117,9 @@ def test_pattern_type_scorer_abstain_mismatch_match():
     # different types -> 0.0 mismatch
     r2 = PatternTypeScorer().score(emails_a, dates)
     assert r2 is not None and r2.score == 0.0 and "mismatch" in r2.reasoning
+
+
+def test_pattern_match_types_registered_in_loader():
+    from infermap._native_loader import _COMPONENT_SYMBOLS, _GATED_ON
+    assert _COMPONENT_SYMBOLS.get("pattern_match_types") == "pattern_match_types"
+    assert "pattern_match_types" in _GATED_ON
