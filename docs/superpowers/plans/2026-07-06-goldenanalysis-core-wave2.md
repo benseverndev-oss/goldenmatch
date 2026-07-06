@@ -111,27 +111,33 @@ git commit -m "feat(analysis-core): mean/min/max pure-slice kernels (Wave 2)"
 **Files:**
 - Modify: `packages/rust/extensions/analysis-native/src/lib.rs` (add 3 `#[pyfunction]`s + register in the `#[pymodule]`)
 
-- [ ] **Step 1: Read the existing `quantile` pyfunction + `read_f64` helper + the pymodule registration block.** Mirror them exactly. `read_f64` takes `PyArrowType<ArrayData>` and returns `Vec<f64>` (order-preserving, nulls dropped).
+- [ ] **Step 1: Read the existing `quantile` pyfunction + `read_f64` helper + the pymodule registration block.** VERIFIED forms (mirror EXACTLY): `fn read_f64(values: PyArrowType<ArrayData>, fn_name: &str) -> PyResult<Vec<f64>>` — **two args** (the second is the fn name used in the TypeError message); order-preserving, nulls dropped. Registration is `m.add_function(wrap_pyfunction!(histogram, m)?)?;` (bare `m`, module is `m: &Bound<'_, PyModule>`); pyfunctions take NO `py: Python`.
 
-- [ ] **Step 2: Add the pyfunctions** (next to the existing `histogram`/`quantile` pyfunctions)
+- [ ] **Step 2: Add the pyfunctions** (next to the existing `histogram`/`quantile` pyfunctions — note the `read_f64(values, "<name>")?` two-arg call)
 
 ```rust
+/// Arithmetic mean of a Float64 Arrow column -- native mirror of
+/// `goldenanalysis.core.aggregate.mean`.
 #[pyfunction]
 fn mean(values: PyArrowType<ArrayData>) -> PyResult<f64> {
-    Ok(analysis_core::mean(&read_f64(values)?))
+    let vals = read_f64(values, "mean")?;
+    Ok(analysis_core::mean(&vals))
 }
 
+/// Minimum of a Float64 Arrow column -- native mirror of `...aggregate.min`.
 #[pyfunction]
 fn min(values: PyArrowType<ArrayData>) -> PyResult<f64> {
-    Ok(analysis_core::min(&read_f64(values)?))
+    let vals = read_f64(values, "min")?;
+    Ok(analysis_core::min(&vals))
 }
 
+/// Maximum of a Float64 Arrow column -- native mirror of `...aggregate.max`.
 #[pyfunction]
 fn max(values: PyArrowType<ArrayData>) -> PyResult<f64> {
-    Ok(analysis_core::max(&read_f64(values)?))
+    let vals = read_f64(values, "max")?;
+    Ok(analysis_core::max(&vals))
 }
 ```
-(Match the EXACT signature/error-propagation of the existing `quantile` pyfunction — if it takes `py: Python` or returns differently, mirror that. `read_f64`'s `?` handles the non-Float64 TypeError.)
 
 - [ ] **Step 3: Register in the `#[pymodule]`** — add alongside the existing `m.add_function(wrap_pyfunction!(histogram, m)?)?;` lines:
 
@@ -158,9 +164,9 @@ git commit -m "feat(analysis-native): mean/min/max pyfunctions over Float64 (Wav
 **Files:**
 - Modify: `packages/rust/extensions/analysis-wasm/src/lib.rs` (add 3 `*_impl` fns + their wasm-test coverage in the existing `#[cfg(test)]`)
 
-- [ ] **Step 1: Read `quantile_impl` + its test.** Mirror the export style exactly (whether it's a bare `pub fn ..._impl(&[f64]) -> f64` delegating to `analysis_core`, with a separate `#[wasm_bindgen]` wrapper, or a direct wasm export — match what `quantile_impl` does).
+- [ ] **Step 1: Read the VERIFIED structure.** Two layers: (a) bare `pub fn quantile_impl(&[f64], f64) -> f64` (the pure delegate to `analysis_core`), and (b) the JS export — a `#[wasm_bindgen] pub fn quantile(...)` inside `#[cfg(target_arch = "wasm32")] mod wasm { use super::{histogram_flat_impl, quantile_impl}; ... }` that delegates to the `_impl`. **Both are required** — the `_impl` alone is internal Rust and does NOT reach JS. The `mod tests` uses `use super::*;`.
 
-- [ ] **Step 2: Add the impls**
+- [ ] **Step 2: Add the bare `_impl` delegates** (alongside `quantile_impl`)
 
 ```rust
 pub fn mean_impl(values: &[f64]) -> f64 {
@@ -173,9 +179,31 @@ pub fn max_impl(values: &[f64]) -> f64 {
     analysis_core::max(values)
 }
 ```
-(If `quantile_impl` also has a `#[wasm_bindgen]` public wrapper taking a JS-friendly type, add the same wrappers for mean/min/max. Follow the file — do not invent a new pattern.)
 
-- [ ] **Step 3: Add tests** (mirror the `quantile_impl` test in the same `mod tests`)
+- [ ] **Step 3: Add the `#[wasm_bindgen]` JS wrappers** — INSIDE `#[cfg(target_arch = "wasm32")] mod wasm`, and extend its `use super::{...}` to import the 3 new impls:
+
+```rust
+    // extend the existing import:
+    use super::{histogram_flat_impl, quantile_impl, mean_impl, min_impl, max_impl};
+
+    /// JS entry: arithmetic mean of `values`.
+    #[wasm_bindgen]
+    pub fn mean(values: &[f64]) -> f64 {
+        mean_impl(values)
+    }
+    /// JS entry: minimum of `values` (empty => 0.0).
+    #[wasm_bindgen]
+    pub fn min(values: &[f64]) -> f64 {
+        min_impl(values)
+    }
+    /// JS entry: maximum of `values` (empty => 0.0).
+    #[wasm_bindgen]
+    pub fn max(values: &[f64]) -> f64 {
+        max_impl(values)
+    }
+```
+
+- [ ] **Step 4: Add tests** (in the existing `mod tests`, which already has `use super::*;` — no import change needed there)
 
 ```rust
     #[test]
@@ -191,15 +219,14 @@ pub fn max_impl(values: &[f64]) -> f64 {
         assert_eq!(max_impl(&[]), 0.0);
     }
 ```
-(Update the `use super::{...}` import line in the test module to include the 3 new names.)
 
-- [ ] **Step 4: Verify (read-only)** — no local wasm build.
+- [ ] **Step 5: Verify (read-only)** — the 3 `_impl` delegates, the 3 `#[wasm_bindgen]` wrappers in `mod wasm`, the extended `use super::{...}`, and the tests all present. No local wasm build.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add packages/rust/extensions/analysis-wasm/src/lib.rs
-git commit -m "feat(analysis-wasm): mean/min/max pure-slice impls (Wave 2)"
+git commit -m "feat(analysis-wasm): mean/min/max impls + wasm_bindgen JS exports (Wave 2)"
 ```
 
 ---
@@ -300,7 +327,7 @@ def min(values: Sequence[float]) -> float:
 
 def _min_pure(values: Sequence[float]) -> float:
     vals = [float(v) for v in values if v is not None]
-    return __builtins__["min"](vals) if vals else 0.0  # see note below
+    return builtins.min(vals) if vals else 0.0  # builtins.min -- see shadow note
 
 
 def _min_native(values: Sequence[float]) -> float:
@@ -323,7 +350,7 @@ def max(values: Sequence[float]) -> float:
 
 def _max_pure(values: Sequence[float]) -> float:
     vals = [float(v) for v in values if v is not None]
-    return __builtins__["max"](vals) if vals else 0.0
+    return builtins.max(vals) if vals else 0.0
 
 
 def _max_native(values: Sequence[float]) -> float:
@@ -336,22 +363,24 @@ def _max_native(values: Sequence[float]) -> float:
 
 **IMPORTANT — the `min`/`max` name-shadowing trap:** defining module-level `min`/`max`
 shadows the Python builtins *within this module*, so `_min_pure`/`_max_pure` and
-`_histogram_pure` (which calls `min(vals), max(vals)` at lines ~113) would recurse or
-break. Resolve cleanly: at the TOP of `aggregate.py` add `import builtins` and use
-`builtins.min`/`builtins.max` everywhere inside the module that needs the reduction
-(i.e. `_min_pure`/`_max_pure` return `builtins.min(vals)`/`builtins.max(vals)`, and
-FIX `_histogram_pure`'s `lo, hi = min(vals), max(vals)` → `builtins.min(vals),
-builtins.max(vals)`). Drop the `__builtins__["min"]` placeholder above — use
-`builtins.min`. Verify via grep that no other bare `min(`/`max(` call inside
-`aggregate.py` is left pointing at the shadowed names.
+`_histogram_pure` (which calls `lo, hi = min(vals), max(vals)` at **line 106** — VERIFIED
+the ONLY bare `min`/`max` in the module; there is NO bare `sum(`) would recurse or break.
+Resolve cleanly: at the TOP of `aggregate.py` add `import builtins` and use
+`builtins.min`/`builtins.max` inside the module wherever the reduction is meant:
+`_min_pure`/`_max_pure` return `builtins.min(vals)`/`builtins.max(vals)` (as shown above),
+and FIX `_histogram_pure` line 106 `lo, hi = min(vals), max(vals)` →
+`lo, hi = builtins.min(vals), builtins.max(vals)`. After editing, grep the module to
+confirm zero bare `min(`/`max(` remain — only `def min`/`def max`/`builtins.min`/
+`builtins.max` lines should show.
 
-- [ ] **Step 4: Run the Wave 2 tests + the FULL existing aggregate/analyzer test modules** (the shadow fix must not regress histogram/quantile/match_rates)
+- [ ] **Step 4: Run the Wave 2 tests + the FULL existing aggregate/match_rates/loader modules** (the shadow fix must not regress histogram/quantile/match_rates). NOTE the real paths — tests are FLAT under `tests/` (there is no `tests/analyzers/`); `test_aggregate.py` is the one that exercises `histogram` end-to-end and thus catches a broken shadow fix.
 
 ```
 PYTHONPATH=packages/python/goldenanalysis POLARS_SKIP_CPU_CHECK=1 GOLDENANALYSIS_NATIVE=0 \
   D:/show_case/goldenmatch/.venv/Scripts/python.exe -m pytest \
-  packages/python/goldenanalysis/tests/core/ \
-  packages/python/goldenanalysis/tests/analyzers/test_match_rates.py -q
+  packages/python/goldenanalysis/tests/core/test_aggregate_wave2.py \
+  packages/python/goldenanalysis/tests/test_aggregate.py \
+  packages/python/goldenanalysis/tests/test_match_rates.py -q
 ```
 Expected: PASS (new + all existing).
 
@@ -367,23 +396,42 @@ Expected: PASS (new + all existing).
 # in _GATED_ON frozenset({...}): add "mean", "min", "max"
 # in _COMPONENT_SYMBOLS dict: "mean": "mean", "min": "min", "max": "max",
 ```
-Check whether `tests/core/test_native_loader.py` asserts the exact contents of
-`_GATED_ON`/`_COMPONENT_SYMBOLS` (Wave 1 / the P4 gate-flip updated such an assertion) —
-if so, update it to include the 3 new names.
 
-- [ ] **Step 7: Re-run the core + loader tests + `ruff check` the 3 touched Python files**
+  **Also fix the exact-contents assertion (Wave-1 debt + Wave-2 addition).** The real
+  test is `packages/python/goldenanalysis/tests/test_native_loader.py:32`:
+  `assert nl._GATED_ON == frozenset({"histogram", "quantile"})`. This is ALREADY RED on
+  the Wave-1 tree (Wave 1 added `null_ratio_per_column`/`duplicate_row_ratio`/
+  `distinct_count` to `_GATED_ON` but never updated this test — it's masked in CI by
+  pytest `continue-on-error`). Update the assertion to the FULL post-Wave-2 set:
+
+```python
+    assert nl._GATED_ON == frozenset(
+        {
+            "histogram", "quantile",
+            "null_ratio_per_column", "duplicate_row_ratio", "distinct_count",
+            "mean", "min", "max",
+        }
+    )
+```
+  (`tests/test_native_loader_reference.py` only mentions `_GATED_ON` in a docstring — no
+  code change there. There is no `tests/core/test_native_loader.py`.)
+
+- [ ] **Step 7: Re-run the core + aggregate + match_rates + loader tests + `ruff check` the touched Python files** (the loader test must now be GREEN, resolving the Wave-1 debt)
 
 ```
 PYTHONPATH=packages/python/goldenanalysis POLARS_SKIP_CPU_CHECK=1 GOLDENANALYSIS_NATIVE=0 \
   D:/show_case/goldenmatch/.venv/Scripts/python.exe -m pytest \
-  packages/python/goldenanalysis/tests/core/ \
-  packages/python/goldenanalysis/tests/analyzers/test_match_rates.py -q
+  packages/python/goldenanalysis/tests/core/test_aggregate_wave2.py \
+  packages/python/goldenanalysis/tests/test_aggregate.py \
+  packages/python/goldenanalysis/tests/test_match_rates.py \
+  packages/python/goldenanalysis/tests/test_native_loader.py -q
 ruff check packages/python/goldenanalysis/goldenanalysis/core/aggregate.py \
   packages/python/goldenanalysis/goldenanalysis/analyzers/match_rates.py \
   packages/python/goldenanalysis/goldenanalysis/core/_native_loader.py \
-  packages/python/goldenanalysis/tests/core/test_aggregate_wave2.py
+  packages/python/goldenanalysis/tests/core/test_aggregate_wave2.py \
+  packages/python/goldenanalysis/tests/test_native_loader.py
 ```
-Expected: tests PASS, ruff clean.
+Expected: tests PASS (incl. the now-fixed loader assertion), ruff clean.
 
 - [ ] **Step 8: Commit**
 
@@ -391,7 +439,8 @@ Expected: tests PASS, ruff clean.
 git add packages/python/goldenanalysis/goldenanalysis/core/aggregate.py \
   packages/python/goldenanalysis/goldenanalysis/analyzers/match_rates.py \
   packages/python/goldenanalysis/goldenanalysis/core/_native_loader.py \
-  packages/python/goldenanalysis/tests/core/test_aggregate_wave2.py
+  packages/python/goldenanalysis/tests/core/test_aggregate_wave2.py \
+  packages/python/goldenanalysis/tests/test_native_loader.py
 git commit -m "feat(goldenanalysis): dispatch mean/min/max to native + wire match_rates (Wave 2)"
 ```
 
