@@ -119,29 +119,26 @@ _DEFERRED_DATES = frozenset(
 #     construction (activated by --llm / GOLDENFLOW_LLM).
 _REFERENCE_ONLY = frozenset({"phone_validate", "category_llm_correct"})
 
-# Domain-pack transforms: registered by the domain packs under
-# ``goldenflow/domains/*`` (people_hr, healthcare, finance, ecommerce,
-# real_estate, carceral). They are ``auto_apply=False`` (only run when a
-# ``--domain <name>`` pack is loaded) and are Python-only reference transforms
-# that have NOT been ported to goldenflow-core owned kernels -- so they are out
-# of scope for the byte-parity corpus. This is a deliberate boundary, not a gap:
-# the owned-kernel program covers the core transform surface first; a domain
-# transform graduates into the corpus if/when it is promoted to an owned kernel.
-# Add a newly registered ``domains/*`` transform here (until it's promoted).
-_DOMAIN_PACK = frozenset(
-    {
-        "ssn_validate",  # people_hr
-        "icd10_format",  # healthcare
-        "account_mask",  # finance
-        "cusip_format",  # finance
-        "sku_normalize",  # ecommerce
-        "mls_normalize",  # real_estate
-        "carceral_abbreviate",  # carceral
-        "carceral_name_normalize",  # carceral
-        "carceral_org_strip",  # carceral
-        "latlng_pack",  # carceral
-    }
-)
+# Domain-pack transforms, classified BY PROVENANCE (not an enumerated list): any
+# registered transform whose implementation lives in a ``goldenflow.domains.*``
+# module is a domain-pack transform -- ``auto_apply=False`` (only runs when a
+# ``--domain <name>`` pack is loaded), Python-only, NOT ported to a
+# goldenflow-core owned kernel, so out of scope for the byte-parity corpus. This
+# is a self-maintaining RULE, deliberately not a hardcoded name list: the
+# domain-pack workstream can add transforms without editing this guard, and the
+# owned-kernel program still owns the core transform surface. The rule is
+# "provenance minus corpus", so if a domain transform is later promoted to an
+# owned kernel (added to the corpus), the corpus classification wins and it drops
+# out of this bucket automatically -- no double-classification, no manual edit.
+def _domain_pack_transforms() -> set[str]:
+    return {
+        name
+        for name, info in registry().items()
+        if getattr(info.func, "__module__", "").startswith("goldenflow.domains.")
+    } - _corpus_transforms()
+
+
+_DOMAIN_PACK = frozenset(_domain_pack_transforms())
 
 _NON_CORPUS_BUCKETS = (
     _OWNED_PINNED
