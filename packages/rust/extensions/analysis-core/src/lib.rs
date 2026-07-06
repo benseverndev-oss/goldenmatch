@@ -96,9 +96,74 @@ pub fn distinct_count(column: &[u64]) -> i64 {
     column.iter().copied().collect::<HashSet<u64>>().len() as i64
 }
 
+/// Arithmetic mean. Empty => 0.0 (matches `quantile`'s empty convention).
+///
+/// NAIVE left-to-right summation (`iter().sum()` folds from 0.0) to byte-match the
+/// Python reference `sum(values)/len(values)`. Do NOT swap to a pairwise/SIMD sum:
+/// it would reorder the additions and break byte-parity with `_mean_pure`.
+pub fn mean(values: &[f64]) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    values.iter().sum::<f64>() / values.len() as f64
+}
+
+/// Minimum over finite values. Empty => 0.0. (NaN-ignoring via `f64::min`; the wired
+/// callers pass finite values -- see the spec's min/max-NaN note.)
+pub fn min(values: &[f64]) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    values.iter().copied().fold(f64::INFINITY, f64::min)
+}
+
+/// Maximum over finite values. Empty => 0.0.
+pub fn max(values: &[f64]) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    values.iter().copied().fold(f64::NEG_INFINITY, f64::max)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mean_basic() {
+        assert_eq!(mean(&[1.0, 2.0, 3.0]), 2.0);
+        assert_eq!(mean(&[5.0]), 5.0);
+    }
+
+    #[test]
+    fn mean_empty_is_zero() {
+        assert_eq!(mean(&[]), 0.0);
+    }
+
+    #[test]
+    fn mean_naive_left_to_right_sum() {
+        // 1e16 + 1.0 == 1e16 in f64, so a naive left-to-right sum absorbs the small
+        // values and the mean is 0.0/n. A pairwise/SIMD sum would recover them -- this
+        // pins the naive summation order against the Python `sum()` reference.
+        let mut v = vec![1e16];
+        v.extend(std::iter::repeat(1.0).take(100));
+        v.push(-1e16);
+        let expected = v.iter().sum::<f64>() / v.len() as f64;
+        assert_eq!(mean(&v), expected);
+    }
+
+    #[test]
+    fn min_max_basic() {
+        assert_eq!(min(&[3.0, 1.0, 2.0]), 1.0);
+        assert_eq!(max(&[3.0, 1.0, 2.0]), 3.0);
+        assert_eq!(min(&[-1.5]), -1.5);
+    }
+
+    #[test]
+    fn min_max_empty_is_zero() {
+        assert_eq!(min(&[]), 0.0);
+        assert_eq!(max(&[]), 0.0);
+    }
 
     #[test]
     fn histogram_empty_or_no_bins() {
