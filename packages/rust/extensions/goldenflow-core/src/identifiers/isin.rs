@@ -22,7 +22,10 @@ pub fn isin_validate(s: &str) -> bool {
         return false;
     }
     // Every char must be an ASCII digit or uppercase letter.
-    if !bytes.iter().all(|b| b.is_ascii_digit() || b.is_ascii_uppercase()) {
+    if !bytes
+        .iter()
+        .all(|b| b.is_ascii_digit() || b.is_ascii_uppercase())
+    {
         return false;
     }
     // Expand: digit -> itself; letter -> (c - 'A' + 10) as two digits.

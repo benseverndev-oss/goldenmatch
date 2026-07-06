@@ -216,7 +216,10 @@ mod tests {
     #[test]
     fn extract_legal_returns_canonical_token() {
         assert_eq!(company_extract_legal("Apple Inc."), Some("inc".to_string()));
-        assert_eq!(company_extract_legal("Google L.L.C."), Some("llc".to_string()));
+        assert_eq!(
+            company_extract_legal("Google L.L.C."),
+            Some("llc".to_string())
+        );
         assert_eq!(
             company_extract_legal("Microsoft Corporation"),
             Some("corporation".to_string())

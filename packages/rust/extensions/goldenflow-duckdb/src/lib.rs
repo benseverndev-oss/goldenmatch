@@ -206,14 +206,30 @@ macro_rules! register_prim_total {
 // ---------------------------------------------------------------------------
 mod split {
     use goldenflow_core as gf;
-    pub fn name_first(s: &str) -> String { gf::names::split_name(s).0 }
-    pub fn name_last(s: &str) -> String { gf::names::split_name(s).1 }
-    pub fn rev_first(s: &str) -> String { gf::names::split_name_reverse(s).0 }
-    pub fn rev_last(s: &str) -> String { gf::names::split_name_reverse(s).1 }
-    pub fn addr_street(s: &str) -> String { gf::address::split_address(s).0 }
-    pub fn addr_city(s: &str) -> Option<String> { gf::address::split_address(s).1 }
-    pub fn addr_state(s: &str) -> Option<String> { gf::address::split_address(s).2 }
-    pub fn addr_zip(s: &str) -> Option<String> { gf::address::split_address(s).3 }
+    pub fn name_first(s: &str) -> String {
+        gf::names::split_name(s).0
+    }
+    pub fn name_last(s: &str) -> String {
+        gf::names::split_name(s).1
+    }
+    pub fn rev_first(s: &str) -> String {
+        gf::names::split_name_reverse(s).0
+    }
+    pub fn rev_last(s: &str) -> String {
+        gf::names::split_name_reverse(s).1
+    }
+    pub fn addr_street(s: &str) -> String {
+        gf::address::split_address(s).0
+    }
+    pub fn addr_city(s: &str) -> Option<String> {
+        gf::address::split_address(s).1
+    }
+    pub fn addr_state(s: &str) -> Option<String> {
+        gf::address::split_address(s).2
+    }
+    pub fn addr_zip(s: &str) -> Option<String> {
+        gf::address::split_address(s).3
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -242,7 +258,13 @@ fn collect_i64(input: &mut DataChunkHandle, col: usize) -> Vec<Option<i64>> {
     let v = input.flat_vector(col);
     let rows = unsafe { v.as_slice_with_len::<i64>(n) };
     (0..n)
-        .map(|i| if v.row_is_null(i as u64) { None } else { Some(rows[i]) })
+        .map(|i| {
+            if v.row_is_null(i as u64) {
+                None
+            } else {
+                Some(rows[i])
+            }
+        })
         .collect()
 }
 
@@ -306,7 +328,9 @@ impl VScalar for PhoneCountryCode {
         let mut out = output.flat_vector();
         for i in 0..input.len() {
             let cc = phones[i].as_deref().and_then(|p| {
-                let region = regions[i].as_deref().and_then(goldenflow_core::phone::region_of);
+                let region = regions[i]
+                    .as_deref()
+                    .and_then(goldenflow_core::phone::region_of);
                 goldenflow_core::phone::country_code(region, p, true)
             });
             match cc {
@@ -338,7 +362,9 @@ impl VScalar for PhoneValid {
         let mut out = output.flat_vector();
         for i in 0..input.len() {
             let v = phones[i].as_deref().and_then(|p| {
-                let region = regions[i].as_deref().and_then(goldenflow_core::phone::region_of);
+                let region = regions[i]
+                    .as_deref()
+                    .and_then(goldenflow_core::phone::region_of);
                 goldenflow_core::phone::valid(region, p, true)
             });
             match v {
@@ -656,24 +682,96 @@ mod tests {
         let con = conn();
         // (udf, input, expected-from-kernel)
         let cases: &[(&str, &str, String)] = &[
-            ("goldenflow_email_normalize", "  Foo.Bar@Example.COM ", gf::email::email_normalize("  Foo.Bar@Example.COM ")),
-            ("goldenflow_email_lowercase", "USER@Domain.COM", gf::email::email_lowercase("USER@Domain.COM")),
-            ("goldenflow_name_proper", "mcdonald o'brien", gf::names::name_proper("mcdonald o'brien")),
-            ("goldenflow_strip_titles", "Dr. Jane Smith", gf::names::strip_titles("Dr. Jane Smith")),
-            ("goldenflow_nickname_standardize", "Bob", gf::names::nickname_standardize("Bob")),
-            ("goldenflow_gender_standardize", "F", gf::categorical::gender_standardize("F")),
-            ("goldenflow_state_abbreviate", "California", gf::address::state_abbreviate("California")),
-            ("goldenflow_zip_normalize", "12345-6789", gf::address::zip_normalize("12345-6789")),
-            ("goldenflow_address_standardize", "123 Main Street", gf::address::address_standardize("123 Main Street")),
-            ("goldenflow_collapse_whitespace", "a   b\t c", gf::text::collapse_whitespace("a   b\t c")),
-            ("goldenflow_remove_html_tags", "<b>hi</b>", gf::text::remove_html_tags("<b>hi</b>")),
-            ("goldenflow_lowercase", "HeLLo", gf::text::lowercase("HeLLo")),
-            ("goldenflow_uppercase", "HeLLo", gf::text::uppercase("HeLLo")),
-            ("goldenflow_title_case", "the quick fox", gf::text::title_case("the quick fox")),
-            ("goldenflow_normalize_quotes", "\u{201c}hi\u{201d}", gf::text::normalize_quotes("\u{201c}hi\u{201d}")),
-            ("goldenflow_strip", "  padded  ", gf::text::strip("  padded  ").to_string()),
-            ("goldenflow_soundex", "Ashcraft", gf::phonetic::soundex("Ashcraft")),
-            ("goldenflow_soundex", "Robert", gf::phonetic::soundex("Robert")),
+            (
+                "goldenflow_email_normalize",
+                "  Foo.Bar@Example.COM ",
+                gf::email::email_normalize("  Foo.Bar@Example.COM "),
+            ),
+            (
+                "goldenflow_email_lowercase",
+                "USER@Domain.COM",
+                gf::email::email_lowercase("USER@Domain.COM"),
+            ),
+            (
+                "goldenflow_name_proper",
+                "mcdonald o'brien",
+                gf::names::name_proper("mcdonald o'brien"),
+            ),
+            (
+                "goldenflow_strip_titles",
+                "Dr. Jane Smith",
+                gf::names::strip_titles("Dr. Jane Smith"),
+            ),
+            (
+                "goldenflow_nickname_standardize",
+                "Bob",
+                gf::names::nickname_standardize("Bob"),
+            ),
+            (
+                "goldenflow_gender_standardize",
+                "F",
+                gf::categorical::gender_standardize("F"),
+            ),
+            (
+                "goldenflow_state_abbreviate",
+                "California",
+                gf::address::state_abbreviate("California"),
+            ),
+            (
+                "goldenflow_zip_normalize",
+                "12345-6789",
+                gf::address::zip_normalize("12345-6789"),
+            ),
+            (
+                "goldenflow_address_standardize",
+                "123 Main Street",
+                gf::address::address_standardize("123 Main Street"),
+            ),
+            (
+                "goldenflow_collapse_whitespace",
+                "a   b\t c",
+                gf::text::collapse_whitespace("a   b\t c"),
+            ),
+            (
+                "goldenflow_remove_html_tags",
+                "<b>hi</b>",
+                gf::text::remove_html_tags("<b>hi</b>"),
+            ),
+            (
+                "goldenflow_lowercase",
+                "HeLLo",
+                gf::text::lowercase("HeLLo"),
+            ),
+            (
+                "goldenflow_uppercase",
+                "HeLLo",
+                gf::text::uppercase("HeLLo"),
+            ),
+            (
+                "goldenflow_title_case",
+                "the quick fox",
+                gf::text::title_case("the quick fox"),
+            ),
+            (
+                "goldenflow_normalize_quotes",
+                "\u{201c}hi\u{201d}",
+                gf::text::normalize_quotes("\u{201c}hi\u{201d}"),
+            ),
+            (
+                "goldenflow_strip",
+                "  padded  ",
+                gf::text::strip("  padded  ").to_string(),
+            ),
+            (
+                "goldenflow_soundex",
+                "Ashcraft",
+                gf::phonetic::soundex("Ashcraft"),
+            ),
+            (
+                "goldenflow_soundex",
+                "Robert",
+                gf::phonetic::soundex("Robert"),
+            ),
         ];
         for (udf, input, expected) in cases {
             assert_eq!(
@@ -696,7 +794,10 @@ mod tests {
             sql_str(&con, "goldenflow_url_normalize", good).as_deref(),
             gf::url::url_normalize(good).as_deref(),
         );
-        assert_eq!(sql_str(&con, "goldenflow_url_normalize", "").as_deref(), None);
+        assert_eq!(
+            sql_str(&con, "goldenflow_url_normalize", "").as_deref(),
+            None
+        );
 
         // email_extract_domain: domain on a real address, NULL otherwise.
         assert_eq!(
@@ -731,13 +832,22 @@ mod tests {
         let con = conn();
 
         let valid: Option<bool> = con
-            .query_row("SELECT goldenflow_cc_validate(?)", ["4242424242424242"], |r| r.get(0))
+            .query_row(
+                "SELECT goldenflow_cc_validate(?)",
+                ["4242424242424242"],
+                |r| r.get(0),
+            )
             .expect("bool udf");
-        assert_eq!(valid, Some(gf::identifiers::luhn::cc_validate("4242424242424242")));
+        assert_eq!(
+            valid,
+            Some(gf::identifiers::luhn::cc_validate("4242424242424242"))
+        );
         assert_eq!(valid, Some(true));
 
         let dbl: Option<f64> = con
-            .query_row("SELECT goldenflow_currency_strip(?)", ["$1,234.56"], |r| r.get(0))
+            .query_row("SELECT goldenflow_currency_strip(?)", ["$1,234.56"], |r| {
+                r.get(0)
+            })
             .expect("double udf");
         assert_eq!(dbl, gf::numeric::currency_strip("$1,234.56"));
 
@@ -748,7 +858,11 @@ mod tests {
 
         // Unparseable numeric -> SQL NULL.
         let is_null: bool = con
-            .query_row("SELECT goldenflow_currency_strip('not money') IS NULL", [], |r| r.get(0))
+            .query_row(
+                "SELECT goldenflow_currency_strip('not money') IS NULL",
+                [],
+                |r| r.get(0),
+            )
             .expect("null double");
         assert!(is_null);
     }
@@ -835,17 +949,32 @@ mod tests {
 
         let name = "Jane Smith";
         let (f, l) = gf::names::split_name(name);
-        assert_eq!(sql_str(&con, "goldenflow_split_name_first", name).as_deref(), Some(f.as_str()));
-        assert_eq!(sql_str(&con, "goldenflow_split_name_last", name).as_deref(), Some(l.as_str()));
+        assert_eq!(
+            sql_str(&con, "goldenflow_split_name_first", name).as_deref(),
+            Some(f.as_str())
+        );
+        assert_eq!(
+            sql_str(&con, "goldenflow_split_name_last", name).as_deref(),
+            Some(l.as_str())
+        );
 
         let rev = "Smith, Jane";
         let (rf, rl) = gf::names::split_name_reverse(rev);
-        assert_eq!(sql_str(&con, "goldenflow_split_name_reverse_first", rev).as_deref(), Some(rf.as_str()));
-        assert_eq!(sql_str(&con, "goldenflow_split_name_reverse_last", rev).as_deref(), Some(rl.as_str()));
+        assert_eq!(
+            sql_str(&con, "goldenflow_split_name_reverse_first", rev).as_deref(),
+            Some(rf.as_str())
+        );
+        assert_eq!(
+            sql_str(&con, "goldenflow_split_name_reverse_last", rev).as_deref(),
+            Some(rl.as_str())
+        );
 
         let addr = "123 Main St, Springfield, IL 62704";
         let (street, city, state, zip) = gf::address::split_address(addr);
-        assert_eq!(sql_str(&con, "goldenflow_split_address_street", addr).as_deref(), Some(street.as_str()));
+        assert_eq!(
+            sql_str(&con, "goldenflow_split_address_street", addr).as_deref(),
+            Some(street.as_str())
+        );
         assert_eq!(sql_str(&con, "goldenflow_split_address_city", addr), city);
         assert_eq!(sql_str(&con, "goldenflow_split_address_state", addr), state);
         assert_eq!(sql_str(&con, "goldenflow_split_address_zip", addr), zip);
@@ -864,32 +993,63 @@ mod tests {
 
         // truncate(s, n)
         let got: Option<String> = con
-            .query_row("SELECT goldenflow_truncate(?, ?)", duckdb::params!["hello world", 5i64], |r| r.get(0))
+            .query_row(
+                "SELECT goldenflow_truncate(?, ?)",
+                duckdb::params!["hello world", 5i64],
+                |r| r.get(0),
+            )
             .unwrap();
-        assert_eq!(got.as_deref(), Some(gf::text::truncate("hello world", 5).as_str()));
+        assert_eq!(
+            got.as_deref(),
+            Some(gf::text::truncate("hello world", 5).as_str())
+        );
         // NULL length -> NULL
         let n: bool = con
-            .query_row("SELECT goldenflow_truncate('x', NULL) IS NULL", [], |r| r.get(0))
+            .query_row("SELECT goldenflow_truncate('x', NULL) IS NULL", [], |r| {
+                r.get(0)
+            })
             .unwrap();
         assert!(n);
 
         // pad_left(s, width, pad)
         let got: Option<String> = con
-            .query_row("SELECT goldenflow_pad_left(?, ?, ?)", duckdb::params!["7", 3i64, "0"], |r| r.get(0))
+            .query_row(
+                "SELECT goldenflow_pad_left(?, ?, ?)",
+                duckdb::params!["7", 3i64, "0"],
+                |r| r.get(0),
+            )
             .unwrap();
-        assert_eq!(got.as_deref(), Some(gf::text::pad_left("7", 3, '0').as_str()));
+        assert_eq!(
+            got.as_deref(),
+            Some(gf::text::pad_left("7", 3, '0').as_str())
+        );
         let got: Option<String> = con
-            .query_row("SELECT goldenflow_pad_right(?, ?, ?)", duckdb::params!["7", 3i64, "."], |r| r.get(0))
+            .query_row(
+                "SELECT goldenflow_pad_right(?, ?, ?)",
+                duckdb::params!["7", 3i64, "."],
+                |r| r.get(0),
+            )
             .unwrap();
-        assert_eq!(got.as_deref(), Some(gf::text::pad_right("7", 3, '.').as_str()));
+        assert_eq!(
+            got.as_deref(),
+            Some(gf::text::pad_right("7", 3, '.').as_str())
+        );
 
         // merge_name(first, last) -- both nullable
         let got: Option<String> = con
-            .query_row("SELECT goldenflow_merge_name(?, ?)", duckdb::params!["Jane", "Smith"], |r| r.get(0))
+            .query_row(
+                "SELECT goldenflow_merge_name(?, ?)",
+                duckdb::params!["Jane", "Smith"],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(got, gf::names::merge_name(Some("Jane"), Some("Smith")));
         let nn: bool = con
-            .query_row("SELECT goldenflow_merge_name(NULL, NULL) IS NULL", [], |r| r.get(0))
+            .query_row(
+                "SELECT goldenflow_merge_name(NULL, NULL) IS NULL",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert!(nn);
         // A NULL arg short-circuits to SQL NULL (DuckDB scalar UDFs propagate
@@ -898,20 +1058,35 @@ mod tests {
         // coalesce None -> Some("Smith"); with any non-NULL-only input it's
         // byte-identical.
         let one_null: bool = con
-            .query_row("SELECT goldenflow_merge_name(NULL, ?) IS NULL", ["Smith"], |r| r.get(0))
+            .query_row(
+                "SELECT goldenflow_merge_name(NULL, ?) IS NULL",
+                ["Smith"],
+                |r| r.get(0),
+            )
             .unwrap();
         assert!(one_null);
 
         // phone (NANP, nanp_only=true parity-safe): value on code-1, NULL off it
         let reg = gf::phone::region_of("US");
         let got: Option<String> = con
-            .query_row("SELECT goldenflow_phone_e164(?, ?)", duckdb::params!["1-800-356-9377", "US"], |r| r.get(0))
+            .query_row(
+                "SELECT goldenflow_phone_e164(?, ?)",
+                duckdb::params!["1-800-356-9377", "US"],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(got, gf::phone::e164(reg, "1-800-356-9377", true));
         let cc: Option<i64> = con
-            .query_row("SELECT goldenflow_phone_country_code(?, ?)", duckdb::params!["212-555-0100", "US"], |r| r.get(0))
+            .query_row(
+                "SELECT goldenflow_phone_country_code(?, ?)",
+                duckdb::params!["212-555-0100", "US"],
+                |r| r.get(0),
+            )
             .unwrap();
-        assert_eq!(cc, gf::phone::country_code(gf::phone::region_of("US"), "212-555-0100", true));
+        assert_eq!(
+            cc,
+            gf::phone::country_code(gf::phone::region_of("US"), "212-555-0100", true)
+        );
     }
 
     /// W1 coverage-completion kernels (ssn/ein/phone_digits) match the reference.
@@ -920,12 +1095,36 @@ mod tests {
         use goldenflow_core as gf;
         let con = conn();
         let cases: &[(&str, &str, String)] = &[
-            ("goldenflow_ssn_format", "123-45-6789", gf::identifiers::ssn::ssn_format("123-45-6789")),
-            ("goldenflow_ssn_format", "123456789", gf::identifiers::ssn::ssn_format("123456789")),
-            ("goldenflow_ssn_mask", "123456789", gf::identifiers::ssn::ssn_mask("123456789")),
-            ("goldenflow_ein_format", "123456789", gf::identifiers::ein::ein_format("123456789")),
-            ("goldenflow_ein_format", "not-an-ein", gf::identifiers::ein::ein_format("not-an-ein")),
-            ("goldenflow_phone_digits", "(212) 555-0100", gf::phone::phone_digits("(212) 555-0100")),
+            (
+                "goldenflow_ssn_format",
+                "123-45-6789",
+                gf::identifiers::ssn::ssn_format("123-45-6789"),
+            ),
+            (
+                "goldenflow_ssn_format",
+                "123456789",
+                gf::identifiers::ssn::ssn_format("123456789"),
+            ),
+            (
+                "goldenflow_ssn_mask",
+                "123456789",
+                gf::identifiers::ssn::ssn_mask("123456789"),
+            ),
+            (
+                "goldenflow_ein_format",
+                "123456789",
+                gf::identifiers::ein::ein_format("123456789"),
+            ),
+            (
+                "goldenflow_ein_format",
+                "not-an-ein",
+                gf::identifiers::ein::ein_format("not-an-ein"),
+            ),
+            (
+                "goldenflow_phone_digits",
+                "(212) 555-0100",
+                gf::phone::phone_digits("(212) 555-0100"),
+            ),
         ];
         for (udf, input, expected) in cases {
             assert_eq!(

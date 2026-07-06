@@ -154,8 +154,7 @@ pub fn url_strip_www(s: &str) -> Option<String> {
         None => (rest, ""),
     };
     // Byte compare avoids a char-boundary panic on a non-ASCII host.
-    let host = if host.len() >= 4 && host.as_bytes()[..4].eq_ignore_ascii_case(b"www.")
-    {
+    let host = if host.len() >= 4 && host.as_bytes()[..4].eq_ignore_ascii_case(b"www.") {
         &host[4..]
     } else {
         host

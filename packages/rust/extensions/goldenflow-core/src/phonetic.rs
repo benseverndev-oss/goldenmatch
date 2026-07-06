@@ -324,7 +324,9 @@ pub fn double_metaphone(value: &str) -> (String, String) {
                     {
                         index += 2;
                     } else {
-                        if index > 2 && previous == 'U' && matches!(at(index - 3), 'C' | 'G' | 'L' | 'R' | 'T')
+                        if index > 2
+                            && previous == 'U'
+                            && matches!(at(index - 3), 'C' | 'G' | 'L' | 'R' | 'T')
                         {
                             primary.push('F');
                             secondary.push('F');
@@ -449,12 +451,10 @@ pub fn double_metaphone(value: &str) -> (String, String) {
                             || (previous == 'I' && (nextnext == 'O' || nextnext == 'A'))))
                         || (previous == 'A'
                             && nextnext == 'E'
-                            && (at(last) == 'A'
-                                || at(last) == 'O'
-                                || {
-                                    let s = slice(last - 1, length);
-                                    s.contains("AS") || s.contains("OS")
-                                }))
+                            && (at(last) == 'A' || at(last) == 'O' || {
+                                let s = slice(last - 1, length);
+                                s.contains("AS") || s.contains("OS")
+                            }))
                     {
                         primary.push('L');
                         index += 2;
@@ -545,7 +545,10 @@ pub fn double_metaphone(value: &str) -> (String, String) {
                     index += 1;
                 } else if next == 'H' {
                     let s = slice(index + 1, index + 5);
-                    if s.contains("EIM") || s.contains("OEK") || s.contains("OLM") || s.contains("OLZ")
+                    if s.contains("EIM")
+                        || s.contains("OEK")
+                        || s.contains("OLM")
+                        || s.contains("OLZ")
                     {
                         primary.push('S');
                         secondary.push('S');
@@ -576,7 +579,10 @@ pub fn double_metaphone(value: &str) -> (String, String) {
                     if nextnext == 'H' {
                         let sv = slice(index + 3, index + 5);
                         if (sv.starts_with('E')
-                            && matches!(sv.chars().nth(1), Some('D') | Some('M') | Some('N') | Some('R')))
+                            && matches!(
+                                sv.chars().nth(1),
+                                Some('D') | Some('M') | Some('N') | Some('R')
+                            ))
                             || sv == "UY"
                             || sv == "OO"
                         {
@@ -630,8 +636,7 @@ pub fn double_metaphone(value: &str) -> (String, String) {
                     secondary.push('X');
                     index += 3;
                 } else if next == 'H' || (next == 'T' && nextnext == 'H') {
-                    if is_germanic
-                        || ((nextnext == 'O' || nextnext == 'A') && at(index + 3) == 'M')
+                    if is_germanic || ((nextnext == 'O' || nextnext == 'A') && at(index + 3) == 'M')
                     {
                         primary.push('T');
                         secondary.push('T');
@@ -836,7 +841,11 @@ mod tests {
             ("zzo", "S", "TS"),
         ];
         for (input, p, s) in cases {
-            assert_eq!(dm(input), (p.to_string(), s.to_string()), "double_metaphone({input:?})");
+            assert_eq!(
+                dm(input),
+                (p.to_string(), s.to_string()),
+                "double_metaphone({input:?})"
+            );
         }
     }
 

@@ -13,7 +13,9 @@ pub fn isin_validate_arrow(
     py: Python,
     array: PyArrowType<ArrayData>,
 ) -> PyResult<PyArrowType<ArrayData>> {
-    Ok(PyArrowType(map_str_to_bool(py, array.0, isin::isin_validate)?))
+    Ok(PyArrowType(map_str_to_bool(py, array.0, |s| {
+        Some(isin::isin_validate(s))
+    })?))
 }
 
 #[pyfunction]
@@ -21,11 +23,9 @@ pub fn cusip_validate_arrow(
     py: Python,
     array: PyArrowType<ArrayData>,
 ) -> PyResult<PyArrowType<ArrayData>> {
-    Ok(PyArrowType(map_str_to_bool(
-        py,
-        array.0,
-        cusip::cusip_validate,
-    )?))
+    Ok(PyArrowType(map_str_to_bool(py, array.0, |s| {
+        Some(cusip::cusip_validate(s))
+    })?))
 }
 
 #[pyfunction]
@@ -33,7 +33,9 @@ pub fn npi_validate_arrow(
     py: Python,
     array: PyArrowType<ArrayData>,
 ) -> PyResult<PyArrowType<ArrayData>> {
-    Ok(PyArrowType(map_str_to_bool(py, array.0, npi::npi_validate)?))
+    Ok(PyArrowType(map_str_to_bool(py, array.0, |s| {
+        Some(npi::npi_validate(s))
+    })?))
 }
 
 #[pyfunction]
@@ -41,11 +43,9 @@ pub fn luhn_validate_arrow(
     py: Python,
     array: PyArrowType<ArrayData>,
 ) -> PyResult<PyArrowType<ArrayData>> {
-    Ok(PyArrowType(map_str_to_bool(
-        py,
-        array.0,
-        luhn::luhn_validate,
-    )?))
+    Ok(PyArrowType(map_str_to_bool(py, array.0, |s| {
+        Some(luhn::luhn_validate(s))
+    })?))
 }
 
 #[pyfunction]

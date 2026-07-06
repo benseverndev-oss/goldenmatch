@@ -627,7 +627,10 @@ mod tests {
 
     #[test]
     fn merge_name_cases() {
-        assert_eq!(merge_name(Some("John"), Some("Smith")).as_deref(), Some("John Smith"));
+        assert_eq!(
+            merge_name(Some("John"), Some("Smith")).as_deref(),
+            Some("John Smith")
+        );
         assert_eq!(merge_name(Some("John"), None).as_deref(), Some("John"));
         assert_eq!(merge_name(Some("John"), Some("")).as_deref(), Some("John"));
         assert_eq!(merge_name(Some(""), Some("")), None);

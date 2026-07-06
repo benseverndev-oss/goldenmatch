@@ -158,11 +158,11 @@ mod tests {
     #[test]
     fn canonical() {
         // googlemail.com aliases to gmail.com (dots already stripped by normalize).
+        assert_eq!(email_canonical("j.o.h.n@googlemail.com"), "john@gmail.com");
         assert_eq!(
-            email_canonical("j.o.h.n@googlemail.com"),
-            "john@gmail.com"
+            email_canonical("John.Doe+tag@Gmail.com"),
+            "johndoe@gmail.com"
         );
-        assert_eq!(email_canonical("John.Doe+tag@Gmail.com"), "johndoe@gmail.com");
         // non-gmail domains pass through normalize only.
         assert_eq!(email_canonical("a+b@x.com"), "a@x.com");
         assert_eq!(email_canonical("notanemail"), "notanemail");
@@ -171,7 +171,10 @@ mod tests {
 
     #[test]
     fn mask() {
-        assert_eq!(email_mask("John@Example.com"), Some("j***@example.com".to_string()));
+        assert_eq!(
+            email_mask("John@Example.com"),
+            Some("j***@example.com".to_string())
+        );
         assert_eq!(email_mask("a@b.co"), Some("a@b.co".to_string())); // 1-char local
         assert_eq!(email_mask("j.doe@x.com"), Some("j****@x.com".to_string()));
         assert_eq!(email_mask("a@b@c.com"), Some("a**@c.com".to_string())); // last '@'

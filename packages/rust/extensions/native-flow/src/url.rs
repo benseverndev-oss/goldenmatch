@@ -47,7 +47,11 @@ pub fn url_strip_www_arrow(
     py: Python,
     array: PyArrowType<ArrayData>,
 ) -> PyResult<PyArrowType<ArrayData>> {
-    Ok(PyArrowType(map_str_to_str(py, array.0, url::url_strip_www)?))
+    Ok(PyArrowType(map_str_to_str(
+        py,
+        array.0,
+        url::url_strip_www,
+    )?))
 }
 
 #[pyfunction]
@@ -55,5 +59,9 @@ pub fn url_canonical_arrow(
     py: Python,
     array: PyArrowType<ArrayData>,
 ) -> PyResult<PyArrowType<ArrayData>> {
-    Ok(PyArrowType(map_str_to_str(py, array.0, url::url_canonical)?))
+    Ok(PyArrowType(map_str_to_str(
+        py,
+        array.0,
+        url::url_canonical,
+    )?))
 }
