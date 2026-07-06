@@ -20,6 +20,22 @@ fn detect_domain(
     Ok((d.domain, d.score, d.runner_up, d.runner_up_score, d.reason))
 }
 
+/// Wave 2 name-scorer shims (return the score; the Python class keeps its reasoning).
+#[pyfunction]
+fn exact_score(a: &str, b: &str) -> PyResult<f64> {
+    Ok(infermap_core::exact_score(a, b))
+}
+
+#[pyfunction]
+fn fuzzy_name_score(a: &str, b: &str) -> PyResult<f64> {
+    Ok(infermap_core::fuzzy_name_score(a, b))
+}
+
+#[pyfunction]
+fn initialism_score(a: &str, b: &str) -> PyResult<Option<f64>> {
+    Ok(infermap_core::initialism_score(a, b))
+}
+
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
@@ -27,5 +43,8 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // `wrap_pyfunction!\(\s*(?:\w+::)+(\w+)` -- the bare `wrap_pyfunction!(detect_domain, m)`
     // form (used by analysis-native) would NOT be scanned, red-ing the gate.
     m.add_function(wrap_pyfunction!(self::detect_domain, m)?)?;
+    m.add_function(wrap_pyfunction!(self::exact_score, m)?)?;
+    m.add_function(wrap_pyfunction!(self::fuzzy_name_score, m)?)?;
+    m.add_function(wrap_pyfunction!(self::initialism_score, m)?)?;
     Ok(())
 }
