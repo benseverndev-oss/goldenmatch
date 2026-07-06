@@ -59,7 +59,9 @@ The 8 patterns (`re`, `str` mode, no flags):
 `.strip()`s them (byte-identical to Python, trivially), passes the pre-stripped
 list, and the kernel runs only the 8 regexes, returning a **per-sample bitmask**
 (`u32`, bit `i` set iff the sample matches pattern `i`, in the table order above).
-The host does count / pct / best-by-order / threshold / score / reasoning.
+The host does the per-type count (for each bit `i`, `sum(1 for m in masks if m &
+(1 << i))` — one bit counted across all samples) / pct / best-by-order /
+threshold / score / reasoning.
 
 Rationale:
 - **Minimal risk surface.** Regex matching is the *only* thing the gate must
@@ -139,13 +141,14 @@ codepoint match with no character-class table involved.
 
 The heart of this wave. A per-string corpus at
 `packages/python/infermap/tests/pattern_type_corpus.jsonl` (one JSON object per
-line: `{"s": "<sample>", "note": "<why>"}`), driving an exact bitmask comparison.
+line: `{"s": "<sample>", "tier": "must" | "informational", "note": "<why>"}` —
+`tier` defaults to `"must"` when absent), driving an exact bitmask comparison.
 
 ### 6.1 Assertion
 
 ```python
 @native_only
-@pytest.mark.parametrize("s", _corpus_ascii())  # must-pass strings
+@pytest.mark.parametrize("s", _corpus_must())  # tier=="must" strings only
 def test_pattern_type_parity(s):
     assert native_module().pattern_match_types([s]) == [_match_types_pure(s)]
 ```
@@ -174,7 +177,10 @@ offsets, `url` `ftp://x`, `phone` below the `{7,14}` floor and above the ceiling
 
 Recorded in the corpus with `"tier": "informational"` and asserted **only** under
 a separate, non-gating test that XFAILs/records rather than blocks:
-Arabic-Indic `٥`, fullwidth `５`, Devanagari digits, NBSP inside a `url` sample.
+Arabic-Indic `٥`, fullwidth `５`, Devanagari digits, NBSP inside a `url` sample,
+and an interior `\x1c` inside a `phone` sample (the sharpest `\s`-skew case:
+Python-whitespace but NOT Unicode `White_Space`, and it survives `strip()` when
+interior — the canonical edge already named in Wave 1's `detect.rs`).
 This pins *where* the `\d`/`\s` Unicode boundary actually falls without making the
 gate hostage to Unicode-table version skew. If CI shows these actually agree, we
 note it; if they diverge, that is the expected, documented edge.
