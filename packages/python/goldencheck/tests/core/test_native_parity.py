@@ -181,10 +181,48 @@ def test_discover_fd_parity(seed: int) -> None:
     cols = fd._select_candidates(df, df.height)
     if len(cols) < 2:
         pytest.skip("not enough candidates")
-    py = set(fd._discover_polars(df, cols, df.height))
+    py = set(fd._discover_python(df, cols, df.height))
     arrays = [df[c].to_arrow() for c in cols]
     nat = set(native_module().discover_functional_dependencies(arrays))
     assert nat == py
+
+
+@native_only
+@pytest.mark.parametrize("seed", range(4))
+def test_dictionary_encoded_input_matches_string(seed: int) -> None:
+    """A dictionary-encoded (Polars Categorical) column must intern to the same
+    ids as its plain string form — so the key/FD kernels return identical
+    results whether a column arrives as Utf8 or as an Arrow dictionary. Covers
+    the zero-copy dict fast path in intern_column."""
+    rng = random.Random(seed)
+    n = 500
+    a = [f"z{rng.randint(0, 12)}" for _ in range(n)]
+    a2c: dict[str, str] = {}
+    b = [a2c.setdefault(z, f"c{rng.randint(0, 20)}") for z in a]  # a -> b strict
+    noise = [f"n{rng.randint(0, 40)}" for _ in range(n)]
+    df = pl.DataFrame({"a": a, "b": b, "noise": noise})
+
+    str_arrays = [df[c].to_arrow() for c in df.columns]
+    cat_arrays = [df[c].cast(pl.Categorical).to_arrow() for c in df.columns]
+
+    # Strict FD discovery: same (det, dep) set either encoding.
+    assert set(native_module().discover_functional_dependencies(cat_arrays)) == set(
+        native_module().discover_functional_dependencies(str_arrays)
+    )
+    # Composite-key search: same key sets either encoding.
+    su = [False] * len(df.columns)
+    assert native_module().composite_key_search(cat_arrays, 3, su) == (
+        native_module().composite_key_search(str_arrays, 3, su)
+    )
+    # A dictionary column with a null category interns null -> shared id 0.
+    with_null = pl.Series("x", ["p", None, "p", "q", None]).cast(pl.Categorical)
+    plain = pl.Series("x", ["p", None, "p", "q", None])
+    other = pl.Series("y", ["1", "1", "2", "2", "3"])
+    assert native_module().discover_functional_dependencies(
+        [with_null.to_arrow(), other.to_arrow()]
+    ) == native_module().discover_functional_dependencies(
+        [plain.to_arrow(), other.to_arrow()]
+    )
 
 
 from goldencheck.profilers import fuzzy_values as fv  # noqa: E402

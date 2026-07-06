@@ -25,13 +25,18 @@ pub fn benford_leading_digits(values: PyArrowType<ArrayData>) -> PyResult<[u64; 
     }
     let arr = Float64Array::from(data);
     // Honour the null mask: a null slot's backing f64 is undefined.
-    let vals: Vec<f64> = if arr.null_count() == 0 {
-        arr.values().to_vec()
+    if arr.null_count() == 0 {
+        // True zero-copy: the Arrow values buffer *is* `&[f64]` (deref of the
+        // shared `ScalarBuffer`) — hand it straight to the kernel, no owned Vec.
+        // On a 1M-row column this avoids an 8 MB memcpy per call.
+        Ok(goldencheck_core::benford_leading_digits(arr.values()))
     } else {
-        (0..arr.len())
+        // Null slots have an undefined backing f64, so we can't pass the raw
+        // buffer; compact the valid values (only the non-null subset) instead.
+        let vals: Vec<f64> = (0..arr.len())
             .filter(|&i| !arr.is_null(i))
             .map(|i| arr.value(i))
-            .collect()
-    };
-    Ok(goldencheck_core::benford_leading_digits(&vals))
+            .collect();
+        Ok(goldencheck_core::benford_leading_digits(&vals))
+    }
 }
