@@ -202,7 +202,13 @@ for (const [a, b] of NAME_PAIRS) {
 ```
 Exact `.toBe` (not `toBeCloseTo`) — the whole point is byte-identity, and the
 kernel returns the score verbatim (the reasoning `.toFixed(3)` formatting is
-host-side and out of the compared value).
+host-side and out of the compared value). A ULP-level JW divergence is *meant* to
+red here — that's the audit.
+
+> Known non-ASCII edge (out of the must-pass corpus): the `initialism` ratio uses
+> `chars().count()` in Rust vs `.length` (UTF-16 code units) in TS — equal on the
+> ASCII corpus, but a surrogate-pair name would diverge. Same documented-Unicode-edge
+> class as `toLowerCase`; ASCII-only fixtures per the Wave 1/2 precedent.
 
 > **This is the drift-audit surface.** `fuzzyNameScore` compares two independent
 > Jaro-Winkler implementations (Rust `score-core` vs TS `string-distance.ts`);
@@ -231,7 +237,11 @@ filter globs.) No new lane, no new output, no new job.
 - `profile` / `pattern_type` scorers (Wave C); `alias` / `llm`.
 - The batch-matrix boundary optimization (deferred; §2).
 - Any change to scorer weights, reasoning strings, abstain semantics, or the
-  engine loop. Pure cutover — same output, kernel-backed when enabled.
+  engine loop. Pure cutover: for `exact`, same output unconditionally (kernel
+  returns literal 1.0/0.0). For `fuzzy`/`initialism`, the kernel is an
+  *independent* implementation of the pure path, so "same output" holds **iff the
+  parity gate is green** — where they diverge, WASM (== Rust == Python) is the
+  reference and the pure TS is the documented lossy fallback (§6, §9).
 
 ## 9. Risk assessment
 
