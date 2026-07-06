@@ -17,24 +17,44 @@ use rustc_hash::FxHashMap;
 /// Intern one Arrow column to dense `u64` value-ids. Null slots all share a
 /// single reserved id distinct from every real value's id.
 fn intern_column(data: ArrayData) -> PyResult<Vec<u64>> {
+    // Intern a primitive column by reading its Arrow **values buffer as a
+    // slice** (`arr.values()`, zero-copy) rather than per-element `value(i)`,
+    // and split a no-null fast path (skips the per-row validity branch) from the
+    // masked path. `keymap` turns a raw native value into the map key (identity
+    // for ints, bit-pattern for floats).
     macro_rules! intern_primitive {
-        ($arr:expr, $keyty:ty, $keyexpr:expr) => {{
+        ($arr:expr, $keyty:ty, $keymap:expr) => {{
             let arr = $arr;
+            let values = arr.values(); // &[native], the shared Arrow buffer
+            let keymap = $keymap;
             let mut map: FxHashMap<$keyty, u64> = FxHashMap::default();
             let mut ids = Vec::with_capacity(arr.len());
             let mut next: u64 = 1; // 0 is reserved for null
-            for i in 0..arr.len() {
-                if arr.is_null(i) {
-                    ids.push(0);
-                    continue;
+            match arr.nulls() {
+                None => {
+                    for &raw in values.iter() {
+                        let id = *map.entry(keymap(raw)).or_insert_with(|| {
+                            let v = next;
+                            next += 1;
+                            v
+                        });
+                        ids.push(id);
+                    }
                 }
-                let key: $keyty = $keyexpr(&arr, i);
-                let id = *map.entry(key).or_insert_with(|| {
-                    let v = next;
-                    next += 1;
-                    v
-                });
-                ids.push(id);
+                Some(nulls) => {
+                    for (i, &raw) in values.iter().enumerate() {
+                        if nulls.is_null(i) {
+                            ids.push(0);
+                            continue;
+                        }
+                        let id = *map.entry(keymap(raw)).or_insert_with(|| {
+                            let v = next;
+                            next += 1;
+                            v
+                        });
+                        ids.push(id);
+                    }
+                }
             }
             Ok(ids)
         }};
@@ -79,44 +99,21 @@ fn intern_column(data: ArrayData) -> PyResult<Vec<u64>> {
             }
             Ok(ids)
         }
-        DataType::Int8 => {
-            intern_primitive!(Int8Array::from(data), i8, |a: &Int8Array, i| a.value(i))
-        }
-        DataType::Int16 => {
-            intern_primitive!(Int16Array::from(data), i16, |a: &Int16Array, i| a.value(i))
-        }
-        DataType::Int32 => {
-            intern_primitive!(Int32Array::from(data), i32, |a: &Int32Array, i| a.value(i))
-        }
-        DataType::Int64 => {
-            intern_primitive!(Int64Array::from(data), i64, |a: &Int64Array, i| a.value(i))
-        }
-        DataType::UInt8 => {
-            intern_primitive!(UInt8Array::from(data), u8, |a: &UInt8Array, i| a.value(i))
-        }
-        DataType::UInt16 => {
-            intern_primitive!(UInt16Array::from(data), u16, |a: &UInt16Array, i| a
-                .value(i))
-        }
-        DataType::UInt32 => {
-            intern_primitive!(UInt32Array::from(data), u32, |a: &UInt32Array, i| a
-                .value(i))
-        }
-        DataType::UInt64 => {
-            intern_primitive!(UInt64Array::from(data), u64, |a: &UInt64Array, i| a
-                .value(i))
-        }
+        DataType::Int8 => intern_primitive!(Int8Array::from(data), i8, |v: i8| v),
+        DataType::Int16 => intern_primitive!(Int16Array::from(data), i16, |v: i16| v),
+        DataType::Int32 => intern_primitive!(Int32Array::from(data), i32, |v: i32| v),
+        DataType::Int64 => intern_primitive!(Int64Array::from(data), i64, |v: i64| v),
+        DataType::UInt8 => intern_primitive!(UInt8Array::from(data), u8, |v: u8| v),
+        DataType::UInt16 => intern_primitive!(UInt16Array::from(data), u16, |v: u16| v),
+        DataType::UInt32 => intern_primitive!(UInt32Array::from(data), u32, |v: u32| v),
+        DataType::UInt64 => intern_primitive!(UInt64Array::from(data), u64, |v: u64| v),
         // Floats keyed by bit pattern (exact value identity; matches Polars
         // equality semantics for finite values, which is all a key column has).
         DataType::Float32 => {
-            intern_primitive!(Float32Array::from(data), u32, |a: &Float32Array, i| a
-                .value(i)
-                .to_bits())
+            intern_primitive!(Float32Array::from(data), u32, |v: f32| v.to_bits())
         }
         DataType::Float64 => {
-            intern_primitive!(Float64Array::from(data), u64, |a: &Float64Array, i| a
-                .value(i)
-                .to_bits())
+            intern_primitive!(Float64Array::from(data), u64, |v: f64| v.to_bits())
         }
         DataType::Boolean => {
             let arr = BooleanArray::from(data);
