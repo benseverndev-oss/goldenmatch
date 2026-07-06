@@ -65,7 +65,7 @@ console.log(result.rows[0]);
 ## Key features
 
 - **Zero-config mode**: auto-detects column types and applies safe transforms.
-- **92 transforms** across 11 categories, including checksummed/structural identifiers (payment card, IBAN, ISBN, EAN/UPC, EU VAT, SWIFT/BIC, ABA routing, IMEI) and owned i18n name kernels (`name_transliterate`, `name_script`).
+- **113 transforms** across 13 categories, including phonetic blocking keys (`soundex`, `double_metaphone`), company/org dedup, email/URL dedup keys, checksummed/structural identifiers (payment card, IBAN, ISBN, EAN/UPC, EU VAT, SWIFT/BIC, ABA routing, IMEI, ISIN, CUSIP, NPI, Luhn) and owned i18n name kernels (`name_transliterate`, `name_script`).
 - **6 domain packs**: healthcare, finance, ecommerce, people/HR, real estate, and carceral.
 - **Audit trail**: a JSON manifest of every transform, which rows changed, and before/after samples.
 - **Schema mapping**: auto-map columns between systems by name similarity and data profiling.
@@ -122,7 +122,7 @@ print(f"Processed {processor.batches_processed} batches")
 GoldenFlow's transforms also ship as a **zero-Python DuckDB extension**
 (`goldenflow-duckdb`) — a compiled Rust extension that links the same reference
 kernels straight into DuckDB, so the transforms run natively in the query engine,
-byte-identical to the Python / TypeScript / WASM surfaces. 74 transforms are
+byte-identical to the Python / TypeScript / WASM surfaces. 98 transforms are
 exposed as `goldenflow_<kernel>` SQL functions:
 
 ```sql

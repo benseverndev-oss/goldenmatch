@@ -52,7 +52,7 @@ npm run build                    # tsup: ESM + CJS + .d.ts
 npx goldenflow-js transform data.csv  # CLI
 ```
 
-- 54 source files, ~5,200 LOC, 93 transforms (86 core + 7 domain)
+- ~5,200 LOC, 114 transforms (107 core + 7 domain) — mirrors the Python core surface (W2-W6 owned-kernel additions)
 - Strict TS: `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`
 - Tests: `tests/smoke.test.ts`, `tests/parity/`, `tests/unit/`
 - npm package name: `goldenflow`

@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+Owned-kernel depth (Waves 2-6): 21 NEW transforms, each an owned Rust kernel in `goldenflow-core` fanned out byte-for-byte to all six surfaces (native wheel, WASM/TS, pure-Python fallback, DuckDB extension, Postgres). Registry count 92 → 113; goldenflow-duckdb UDFs 74 → 98.
+
+- **Phonetic (W2):** `soundex`, `double_metaphone_primary`, `double_metaphone_alt` — blocking/match keys for entity resolution.
+- **Email/URL dedup depth (W3):** `email_canonical` (googlemail→gmail alias), `email_mask` (PII), `url_strip_tracking` (utm_*/gclid/fbclid), `url_strip_www`, `url_canonical` (composite dedup key).
+- **Company (W4):** `company_normalize`, `company_strip_legal`, `company_extract_legal` — legal-suffix-aware org dedup.
+- **Within-category breadth (W5):** `isin_validate`, `cusip_validate`, `npi_validate`, `luhn_validate`, `cc_brand` (identifiers); `name_initials`, `strip_middle` (name); `roman_to_int`, `ordinal_to_int`, `fraction_to_decimal` (numeric).
+- **Boundary (W6):** `docs/design/2026-07-06-goldenflow-owned-kernel-boundary.md` + `tests/transforms/test_owned_kernel_boundary.py` — every registered transform is classified as owned (corpus/pinned) or a documented structural hole (dates non-portable, data-dependent categorical, `phone_validate` spec-fallback); a new transform can't merge unclassified.
+
 ## 1.13.0 (2026-07-05)
 
 Wave D (category_auto_correct): the fuzzy, data-dependent categorical-autocorrect transform is now backed by an owned Rust kernel in `goldenflow-core::autocorrect` (native + WASM/TS + pure-Python fallback), Rust is the reference implementation. Migration, not addition (count unchanged).
