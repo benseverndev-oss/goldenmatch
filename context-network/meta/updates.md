@@ -2,6 +2,24 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-07-06 -- GoldenAnalysis: cutover waves + the cut-vs-fixture rule + Wave 1b deferral (ADR 0033)
+- Extended the `analysis-core` cutover across GoldenAnalysis and wrote down **when a
+  cutover is the right tool vs a cross-surface parity fixture**: cut only for MUSCLE with
+  a clean `Float64Array`-shaped boundary. Cutovers: numeric reductions `mean`/`min`/`max`
+  (#1472) and `cluster_size_histogram` (#1478, anti-drift not speed) — all three surfaces
+  (Python native + WASM); `_GATED_ON` now 9 primitives.
+- Everything else got a **data-driven parity fixture** (byte-identical copy in both
+  packages, Python + TS lock tests): frame-kernel equality semantics (`-0.0`/`NaN`/null,
+  #1481), `quality.rollup`, and `regressions` (#1482) — trivial-compute and/or object-shaped
+  inputs with no clean Rust boundary. The frame-kernel adversarial fixture **caught and
+  fixed a real bug**: TS `duplicateRowRatio` conflated `NaN` and null.
+- **Wave 1b (WASM for the frame kernels) consciously deferred** — no clean WASM boundary
+  (Arrow-specific interning vs JSON-string keys), speculative browser payoff. Revisit only
+  on a measured real workload.
+- Discipline: Python ground truth + a `node` mirror of the TS impl on adversarial inputs
+  *before* writing each fixture. Decision: ADR
+  [0033](../decisions/0033-goldenanalysis-cutover-waves-and-parity-fixtures.md).
+
 ## 2026-07-05 -- GoldenFlow: compiled zero-Python DuckDB extension + all surfaces gated (ADR 0032)
 - New surface `goldenflow-duckdb`: a compiled Rust DuckDB **loadable extension**
   linking `goldenflow-core` directly (no CPython in the process). 74 UDFs
