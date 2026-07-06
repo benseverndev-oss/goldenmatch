@@ -55,17 +55,30 @@ pub fn fuzzy_name_score(a: &str, b: &str) -> f64 {
 /// [https, connection]; providerID -> [provider, id]; order_id -> [order, id];
 /// ABC -> [abc]; v2Name -> [v, 2, name].
 fn tokenize(name: &str) -> Vec<String> {
-    // 1) split on _ - . and ASCII/Unicode whitespace, drop empties -> chunks
-    // 2) per chunk, scan char-by-char applying the alternation, first-match-wins:
-    //    - a run of uppercase letters: if it is immediately followed by [A-Z][a-z]
-    //      (an acronym-before-word), emit all-but-the-last uppercase as one token and
-    //      leave the last upper for the next word; else emit the whole upper run.
-    //    - [A-Z]?[a-z]+ : an optional leading upper + lowercase run -> one word token.
-    //    - a bare [A-Z]+ run (end of chunk) -> acronym token.
-    //    - \d+ : a digit run -> its own token.
-    //    lowercase every emitted token.
-    // IMPLEMENT to reproduce the verified examples above exactly; fixture-pin them.
-    todo!()
+    // 1) split on _ - . and whitespace, drop empties -> chunks.
+    // 2) per chunk, scan left-to-right; at each position take the FIRST regex
+    //    alternative that matches (this is what re.findall does). PRECISE rules that
+    //    reproduce `[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z]+|[A-Z]+|\d+` with its backtracking:
+    //    - Let U = the maximal uppercase run starting here (length L).
+    //        * If L >= 2 AND the char right after U is a LOWERCASE letter: emit U[..L-1]
+    //          as an acronym token; the LAST uppercase char (U[L-1]) starts the FOLLOWING
+    //          word -> continue at U[L-1] as an `[A-Z]?[a-z]+` word.
+    //          (This is the lookahead peeling ONE upper at a time until [A-Z][a-z] follows.)
+    //          e.g. HTTPSConnection: U=HTTPSC(L=6), next 'o' lower -> [HTTPS], then Connection.
+    //               providerIDs -> provider, then U=ID(L=2) next 's' lower -> [I], then Ds.
+    //        * Else if L == 1 and it is followed by a lowercase run: it's a WORD
+    //          (`[A-Z]?[a-z]+`) -> e.g. Name -> name.
+    //        * Else (L==0, i.e. lowercase word; OR U followed by a non-lowercase like a
+    //          digit or end-of-chunk): emit the whole U as an acronym token (`[A-Z]+`),
+    //          or the lowercase run as a word (`[A-Z]?[a-z]+`), or a `\d+` digit run.
+    //    - lowercase every emitted token.
+    // VERIFIED targets (live Python -- fixture-pin ALL, incl. the boundary cases):
+    //   HTTPSConnection->[https,connection]  providerID->[provider,id]  order_id->[order,id]
+    //   ABC->[abc]  v2Name->[v,2,name]  providerIDs->[provider,i,ds]  URLs->[ur,ls]
+    //   iOS->[i,os]  macOS->[mac,os]  Name->[name]
+    // IMPLEMENT to reproduce these EXACTLY (the providerIDs/URLs cases are the
+    // load-bearing boundary a naive "split last upper" impl gets wrong -- spec §6.2).
+    todo!() // must be implemented; verify against the fixtures below
 }
 
 /// DP: can `target` be formed by concatenating >=1-char prefixes of `source_tokens`
@@ -132,6 +145,13 @@ pub fn initialism_score(a: &str, b: &str) -> Option<f64> {
         assert_eq!(tokenize("order_id"), vec!["order", "id"]);
         assert_eq!(tokenize("ABC"), vec!["abc"]);
         assert_eq!(tokenize("v2Name"), vec!["v", "2", "name"]);
+        // Load-bearing boundary: N-upper run + single trailing lowercase (a naive
+        // "split last upper only when [A-Z][a-z] follows" impl gets these wrong).
+        assert_eq!(tokenize("providerIDs"), vec!["provider", "i", "ds"]);
+        assert_eq!(tokenize("URLs"), vec!["ur", "ls"]);
+        assert_eq!(tokenize("iOS"), vec!["i", "os"]);
+        assert_eq!(tokenize("macOS"), vec!["mac", "os"]);
+        assert_eq!(tokenize("Name"), vec!["name"]);
     }
     #[test] fn initialism_abbrev_and_abstain() {
         // assay_id <-> ASSI : tok_a=[assay,id] joined "assayid"; ASSI joined "assi";
@@ -143,8 +163,17 @@ pub fn initialism_score(a: &str, b: &str) -> Option<f64> {
     }
 ```
 
-- [ ] **Step 4: Verify (read-only)** — the `tokenize` `todo!()` is IMPLEMENTED (not left as todo); kernels match spec §3; tests reference them. No local build.
-- [ ] **Step 5: Commit** — `git add packages/rust/extensions/infermap-core && git commit -m "feat(infermap-core): exact/fuzzy_name/initialism scorer kernels (Wave 2)"`
+- [ ] **Step 4: CI path-filter — infermap_native must re-run on score-core changes.** infermap-core now depends on `score-core`, so a change to `score-core::jaro_winkler_similarity` must re-trigger InferMap's fuzzy parity gate (the repo convention: `native_flow` lists `goldenflow-core/**` for exactly this). In `.github/workflows/ci.yml`, the `infermap_native` filter block (added in Wave 1, ~line 581) — add:
+```yaml
+              - 'packages/rust/extensions/score-core/**'
+              - 'packages/python/infermap/infermap/scorers/exact.py'
+              - 'packages/python/infermap/infermap/scorers/fuzzy_name.py'
+              - 'packages/python/infermap/infermap/scorers/initialism.py'
+```
+(the scorer files now hold the `_*_pure` references `test_native_parity.py` imports). Validate `yaml.safe_load(ci.yml)`.
+
+- [ ] **Step 5: Verify (read-only)** — the `tokenize` `todo!()` is IMPLEMENTED (not left as todo); kernels match spec §3; tests reference them incl. the boundary cases. Note: the DP `for i in 1..=n_src { for j in 1..=n_tgt {...} }` cross-indexes `dp[i-1][j-k]`, which clippy accepts, but the lane runs `cargo clippy -- -D warnings` — if `clippy::needless_range_loop` fires, add `#[allow(clippy::needless_range_loop)]` on the fn. No local build.
+- [ ] **Step 6: Commit** — `git add packages/rust/extensions/infermap-core .github/workflows/ci.yml && git commit -m "feat(infermap-core): exact/fuzzy_name/initialism scorer kernels + CI filter (Wave 2)"`
 
 ---
 
@@ -313,6 +342,9 @@ _NAME_PAIRS = [
     ("assay_id", "ASSI"), ("confidence_score", "CONSC"), ("variant_id", "VARI"),
     ("order_id", "orderid"), ("abc", "xyz"), ("HTTPSConnection", "https_connection"),
     ("a", "a"), ("dob", "date_of_birth"),
+    # tokenizer-boundary pairs (the providerIDs/URLs class the naive impl gets wrong)
+    ("providerIDs", "provider_i_ds"), ("URLs", "ur_ls"), ("macOS", "mac_os"),
+    ("iOS", "i_os"),
 ]
 
 @native_only
