@@ -4,6 +4,16 @@ All notable changes to golden-suite are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic
 versioning.
 
+## [0.1.4] - 2026-07-06
+
+### Changed
+- Bumped the goldenflow-family floors after the fused-columnar-apply release
+  (lockstep policy): **`goldenflow>=1.14.0`** (was `>=1.13.0`) and
+  **`goldenflow-native>=0.12.0`** (was `>=0.11.0`). goldenflow 1.14.0 flips
+  fused columnar apply on by default (a run of owned string transforms fuses
+  into one native Arrow pass — byte-identical output, ~22% lower peak RSS at
+  scale); goldenflow-native 0.12.0 ships the `apply_chain_arrow` kernel it needs.
+
 ## [0.1.3] - 2026-07-05
 
 ### Changed
