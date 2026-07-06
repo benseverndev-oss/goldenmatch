@@ -4,7 +4,7 @@
  *
  * Node-only: uses node:fs, node:path, node:readline. NOT edge-safe.
  *
- * Exposes 45 tools covering dedupe, match, scoring, explanation,
+ * Exposes 49 tools covering dedupe, match, scoring, explanation,
  * profiling, auto-config (shorthand), evaluation, listings, Learning
  * Memory (5 memory tools via MEMORY_TOOLS), the Identity Graph
  * (6 identity tools via IDENTITY_TOOLS), and the AgentSession skills

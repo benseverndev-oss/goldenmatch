@@ -1743,7 +1743,7 @@ async def run_server_http(
     async def server_card(request):
         return JSONResponse({
             "name": "GoldenMatch",
-            "description": "Entity resolution toolkit — deduplicate records, match across datasets, and create golden records using fuzzy, probabilistic, and LLM-powered scoring. Zero-config mode auto-detects your data. 69 MCP tools for matching, semantic retrieval, explaining, reviewing, evaluating, blocking analysis, config critique, config healing, lineage, data quality, transforms, identity graph, distributed-routing config, and privacy-preserving linkage. Built on Polars. 97.2% F1 on DBLP-ACM.",
+            "description": "Entity resolution toolkit — deduplicate records, match across datasets, and create golden records using fuzzy, probabilistic, and LLM-powered scoring. Zero-config mode auto-detects your data. 74 MCP tools for matching, semantic retrieval, explaining, reviewing, evaluating, blocking analysis, config critique, config healing, lineage, data quality, transforms, identity graph, distributed-routing config, and privacy-preserving linkage. Built on Polars. 97.2% F1 on DBLP-ACM.",
             "homepage": "https://github.com/benseverndev-oss/goldenmatch",
             "iconUrl": "https://avatars.githubusercontent.com/u/192581748"
         })
