@@ -791,12 +791,14 @@ registerTransform(
 // ssn_format (series, ssn|string, 50)
 // ---------------------------------------------------------------------------
 
+export function ssnFormatTs(val: string): string {
+  const digits = extractDigits(val);
+  if (digits.length !== 9) return val; // preserve invalid
+  return `${digits.slice(0, 3)}-${digits.slice(3, 5)}-${digits.slice(5)}`;
+}
+
 function ssnFormat(values: readonly ColumnValue[]): ColumnValue[] {
-  return mapStrings(values, (s) => {
-    const digits = extractDigits(s);
-    if (digits.length !== 9) return s; // preserve invalid
-    return `${digits.slice(0, 3)}-${digits.slice(3, 5)}-${digits.slice(5)}`;
-  });
+  return mapStrings(values, ssnFormatTs);
 }
 
 registerTransform(
@@ -808,12 +810,14 @@ registerTransform(
 // ssn_mask (series, ssn|string, 50)
 // ---------------------------------------------------------------------------
 
+export function ssnMaskTs(val: string): string {
+  const digits = extractDigits(val);
+  if (digits.length !== 9) return val; // preserve invalid
+  return `***-**-${digits.slice(5)}`;
+}
+
 function ssnMask(values: readonly ColumnValue[]): ColumnValue[] {
-  return mapStrings(values, (s) => {
-    const digits = extractDigits(s);
-    if (digits.length !== 9) return s; // preserve invalid
-    return `***-**-${digits.slice(5)}`;
-  });
+  return mapStrings(values, ssnMaskTs);
 }
 
 registerTransform(
@@ -825,12 +829,14 @@ registerTransform(
 // ein_format (series, ein|string, 50)
 // ---------------------------------------------------------------------------
 
+export function einFormatTs(val: string): string {
+  const digits = extractDigits(val);
+  if (digits.length !== 9) return val; // preserve invalid
+  return `${digits.slice(0, 2)}-${digits.slice(2)}`;
+}
+
 function einFormat(values: readonly ColumnValue[]): ColumnValue[] {
-  return mapStrings(values, (s) => {
-    const digits = extractDigits(s);
-    if (digits.length !== 9) return s; // preserve invalid
-    return `${digits.slice(0, 2)}-${digits.slice(2)}`;
-  });
+  return mapStrings(values, einFormatTs);
 }
 
 registerTransform(

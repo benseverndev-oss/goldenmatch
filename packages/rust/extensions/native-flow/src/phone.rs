@@ -12,7 +12,9 @@ pub fn phone_digits_arrow(
     py: Python,
     array: PyArrowType<ArrayData>,
 ) -> PyResult<PyArrowType<ArrayData>> {
-    Ok(PyArrowType(map_str_to_str(py, array.0, phone::phone_digits)?))
+    Ok(PyArrowType(map_str_to_str(py, array.0, |s| {
+        Some(phone::phone_digits(s))
+    })?))
 }
 
 #[pyfunction]

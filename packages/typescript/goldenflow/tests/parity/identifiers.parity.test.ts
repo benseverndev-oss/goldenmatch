@@ -35,7 +35,11 @@ import {
   swiftFormatTs,
   abaValidateTs,
   imeiValidateTs,
+  ssnFormatTs,
+  ssnMaskTs,
+  einFormatTs,
 } from "../../src/core/transforms/identifiers.js";
+import { phoneDigitsTs } from "../../src/core/transforms/phone.js";
 import {
   nameTransliterateTs,
   nameScriptTs,
@@ -125,6 +129,10 @@ const PURE_TS_FN: Record<string, (s: string) => boolean | string | number | unde
   swift_format: swiftFormatTs,
   aba_validate: abaValidateTs,
   imei_validate: imeiValidateTs,
+  ssn_format: ssnFormatTs,
+  ssn_mask: ssnMaskTs,
+  ein_format: einFormatTs,
+  phone_digits: phoneDigitsTs,
   name_transliterate: nameTransliterateTs,
   name_script: nameScriptTs,
   strip_titles: stripTitlesTs,

@@ -11,7 +11,9 @@ pub fn ssn_format_arrow(
     py: Python,
     array: PyArrowType<ArrayData>,
 ) -> PyResult<PyArrowType<ArrayData>> {
-    Ok(PyArrowType(map_str_to_str(py, array.0, ssn::ssn_format)?))
+    Ok(PyArrowType(map_str_to_str(py, array.0, |s| {
+        Some(ssn::ssn_format(s))
+    })?))
 }
 
 #[pyfunction]
@@ -19,7 +21,9 @@ pub fn ssn_mask_arrow(
     py: Python,
     array: PyArrowType<ArrayData>,
 ) -> PyResult<PyArrowType<ArrayData>> {
-    Ok(PyArrowType(map_str_to_str(py, array.0, ssn::ssn_mask)?))
+    Ok(PyArrowType(map_str_to_str(py, array.0, |s| {
+        Some(ssn::ssn_mask(s))
+    })?))
 }
 
 #[pyfunction]
@@ -27,7 +31,9 @@ pub fn ein_format_arrow(
     py: Python,
     array: PyArrowType<ArrayData>,
 ) -> PyResult<PyArrowType<ArrayData>> {
-    Ok(PyArrowType(map_str_to_str(py, array.0, ein::ein_format)?))
+    Ok(PyArrowType(map_str_to_str(py, array.0, |s| {
+        Some(ein::ein_format(s))
+    })?))
 }
 
 #[pyfunction]
