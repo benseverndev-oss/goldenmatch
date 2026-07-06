@@ -66,7 +66,14 @@ pub fn initialism_score(a: &str, b: &str) -> Option<f64> { ... }
 ### 3.1 `initialism` — the tokenizer is the load-bearing risk (§6)
 
 `initialism._tokenize` splits camelCase/PascalCase/snake/kebab via a regex with a
-**lookahead** (`re.findall(r"[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z]+|[A-Z]+|\d+", chunk)`).
+**lookahead** — the **inline** regex at `initialism.py:40`
+(`re.findall(r"[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z]+|[A-Z]+|\d+", chunk)`).
+**WARNING:** `initialism.py:26` defines a module-level `_TOKEN_RE` that is a DIFFERENT,
+DEAD regex (never used — different alternation + a `\b` in the lookahead). Mirror the
+INLINE line-40 regex, NOT `_TOKEN_RE`. **Delete `_TOKEN_RE` as part of this wave** to
+remove the trap. VERIFIED token outputs (live Python) to fixture against:
+`HTTPSConnection`→`[https, connection]`, `providerID`→`[provider, id]`,
+`order_id`→`[order, id]`, `ABC`→`[abc]`, `v2Name`→`[v, 2, name]`.
 **Rust's `regex` crate does NOT support lookahead**, so the Rust tokenizer is a
 **hand-written char-scanner** replicating the exact boundaries:
 - pre-split on `_ - . <space>` (collapse runs) → chunks;
@@ -76,7 +83,12 @@ pub fn initialism_score(a: &str, b: &str) -> Option<f64> { ... }
   `[A-Z]+` acronym; a `\d+` run — each lowercased.
 Then `_is_prefix_concat` (a DP: can `target` be formed by concatenating ≥1-char prefixes
 of the source tokens in order, using each exactly once) and the ratio score. The DP is
-the muscle; the tokenizer is the parity-risky port. **Contingency:** if the char-scanner
+the muscle; the tokenizer is the parity-risky port.
+**Integer-division trap:** the score is `0.6 + 0.35 * (len_short / len_long)`. In Rust,
+`usize / usize` is INTEGER division (always `0` here, since `short < long`), collapsing
+every graded score to `0.6`. Cast to f64 FIRST and preserve Python's op order:
+`0.6 + 0.35 * (short as f64 / long as f64)` — byte-parity needs the exact order (e.g.
+`assay_id`/`ASSI` → `0.7999999999999999`, not `0.8`). **Contingency:** if the char-scanner
 can't be made byte-identical, fall back to a DP-only cut — host tokenizes (Python regex),
 kernel takes `Vec<Vec<String>>` token lists — single-sourcing the DP muscle but not the
 tokenizer. (Decide during implementation from the parity fixture.)
@@ -99,6 +111,20 @@ to Python `float | None` (abstain). `infermap-native/Cargo.toml` gains
 (no direct dep needed — it depends on `infermap-core`).
 
 ## 5. Python dispatch + gate
+
+**Per-scorer kernel input — NOT uniform (load-bearing).** The three scorers feed the
+kernel DIFFERENT strings; passing the wrong one silently changes behavior, and because
+the `_*_pure` reference must ALSO preserve the original input, a wrong choice can pass
+the `native == _pure` gate while diverging from the real scorer:
+
+| scorer | strings passed to the kernel | reasoning uses |
+|--------|------------------------------|----------------|
+| `exact` | **raw** `source.name`, `target.name` | raw `source.name` |
+| `fuzzy_name` | `source.canonical_name or source.name`, `target.canonical_name or target.name` | the normalized names |
+| `initialism` | `source.canonical_name or source.name`, `target.canonical_name or target.name` | (host-formatted) |
+
+The `_*_pure` references are the CURRENT scorer logic extracted verbatim (same input
+selection), so the gate compares native against a faithful reference — not a co-drifted one.
 
 Each scorer class calls the kernel for the score, keeps its reasoning. E.g.:
 ```python
@@ -132,9 +158,11 @@ extracted verbatim (`exact` equality; `fuzzy` `_normalize`+rapidfuzz; `initialis
 2. **`initialism` — the lookahead tokenizer** (§3.1). Rust `regex` has no lookahead → a
    hand-written char-scanner, pinned by a camelCase/PascalCase/acronym/digit fixture. The
    riskiest port; DP-only fallback documented.
-3. **`exact` — `trim`/`to_lowercase` Unicode edge** — Python `.strip()`/`.lower()` vs Rust
-   `.trim()`/`.to_lowercase()` diverge on non-ASCII (the Wave 1 edge). ASCII names in
-   practice; documented, ASCII-fixtured.
+3. **`trim`/`to_lowercase` Unicode edge — ALL THREE, not just `exact`** — Python
+   `.strip()`/`.lower()` vs Rust `.trim()`/`.to_lowercase()` diverge on non-ASCII (the
+   Wave 1 edge). It lives in `exact` (equality), `fuzzy_name`'s `normalize()`, AND the
+   `initialism` tokenizer's per-token `.lower()`. ASCII names in practice; documented,
+   ASCII-fixtured across all three.
 
 ## 7. Parity gate + rollout
 
