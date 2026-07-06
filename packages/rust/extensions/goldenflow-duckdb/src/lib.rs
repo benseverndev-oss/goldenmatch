@@ -508,7 +508,9 @@ fn register_all(con: &Connection) -> Result<(), Box<dyn Error>> {
         "goldenflow_fix_mojibake"         => goldenflow_core::text::fix_mojibake,
         "goldenflow_normalize_unicode"    => goldenflow_core::text::normalize_unicode,
         // phonetic keys (blocking/match-key encoders)
-        "goldenflow_soundex"              => goldenflow_core::phonetic::soundex,
+        "goldenflow_soundex"                  => goldenflow_core::phonetic::soundex,
+        "goldenflow_double_metaphone_primary" => goldenflow_core::phonetic::double_metaphone_primary,
+        "goldenflow_double_metaphone_alt"     => goldenflow_core::phonetic::double_metaphone_alt,
     );
 
     // VARCHAR -> VARCHAR (nullable; None -> SQL NULL).

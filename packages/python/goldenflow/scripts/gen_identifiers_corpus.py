@@ -81,7 +81,11 @@ from goldenflow.transforms.numeric import (  # noqa: E402
     _scientific_to_decimal_py,
     _to_integer_py,
 )
-from goldenflow.transforms.phonetic import _soundex_py  # noqa: E402
+from goldenflow.transforms.phonetic import (  # noqa: E402
+    _double_metaphone_alt_py,
+    _double_metaphone_primary_py,
+    _soundex_py,
+)
 from goldenflow.transforms.text import (  # noqa: E402
     _collapse_whitespace_py,
     _extract_numbers_py,
@@ -296,6 +300,35 @@ _CASES: list[tuple[str, str | None]] = [
     ("soundex", "12345"),  # no letters -> ""
     ("soundex", ""),  # empty -> ""
     ("soundex", None),  # null
+    # --- double_metaphone_primary (Lawrence Philips; primary blocking key) ---
+    ("double_metaphone_primary", "Smith"),
+    ("double_metaphone_primary", "Schmidt"),
+    ("double_metaphone_primary", "Jackson"),
+    ("double_metaphone_primary", "Catherine"),  # collides with Katherine
+    ("double_metaphone_primary", "Katherine"),
+    ("double_metaphone_primary", "Thompson"),
+    ("double_metaphone_primary", "Xavier"),  # initial X -> S
+    ("double_metaphone_primary", "Knight"),  # initial KN skip
+    ("double_metaphone_primary", "Wright"),  # initial WR skip
+    ("double_metaphone_primary", "Villa"),  # primary FL
+    ("double_metaphone_primary", "McDonald"),  # Mc/CH germanic path
+    ("double_metaphone_primary", "Ghislaine"),  # initial GH -> J
+    ("double_metaphone_primary", "robert"),  # case-insensitive
+    ("double_metaphone_primary", "12345"),  # no letters -> ""
+    ("double_metaphone_primary", ""),  # empty -> ""
+    ("double_metaphone_primary", None),  # null
+    # --- double_metaphone_alt (secondary code; diverges from primary on some) ---
+    ("double_metaphone_alt", "Smith"),
+    ("double_metaphone_alt", "Schmidt"),
+    ("double_metaphone_alt", "Catherine"),
+    ("double_metaphone_alt", "Villa"),  # alt F (vs primary FL)
+    ("double_metaphone_alt", "Cabrillo"),  # alt KPR (vs primary KPRL)
+    ("double_metaphone_alt", "Thompson"),
+    ("double_metaphone_alt", "Xavier"),
+    ("double_metaphone_alt", "Ghislaine"),
+    ("double_metaphone_alt", "12345"),  # no letters -> ""
+    ("double_metaphone_alt", ""),  # empty -> ""
+    ("double_metaphone_alt", None),  # null
     # --- astral-plane / non-ASCII char edge cases (UTF-16-vs-codepoint length
     # gate insurance -- Python `len()` counts codepoints, JS `.length` counts
     # UTF-16 code units, so an astral-plane char (surrogate pair) counts as 1
@@ -713,6 +746,8 @@ _PY_FN = {
     "aba_validate": _aba_validate_py,
     "imei_validate": _imei_validate_py,
     "soundex": _soundex_py,
+    "double_metaphone_primary": _double_metaphone_primary_py,
+    "double_metaphone_alt": _double_metaphone_alt_py,
     "name_transliterate": _name_transliterate_py,
     "name_script": _name_script_py,
     "strip_titles": _strip_titles_py,
@@ -776,6 +811,8 @@ _NATIVE_ARROW_FN = {
     "imei_validate": "imei_validate_arrow",
     "soundex": "soundex_arrow",
     "name_transliterate": "name_transliterate_arrow",
+    # double_metaphone_primary/alt map to the SAME pair-returning kernel; see
+    # _NATIVE_MULTI_IDX for which output index each corpus transform takes.
     "name_script": "name_script_arrow",
     "strip_titles": "strip_titles_arrow",
     "strip_suffixes": "strip_suffixes_arrow",
@@ -822,6 +859,15 @@ _NATIVE_ARROW_FN = {
 }
 
 
+# Multi-output pair kernels: the corpus transform -> (arrow symbol, output idx).
+# Both double_metaphone_primary/alt call the one pair-returning kernel and take
+# their half; mirrors the split_name multi-output shape.
+_NATIVE_MULTI_IDX: dict[str, tuple[str, int]] = {
+    "double_metaphone_primary": ("double_metaphone_arrow", 0),
+    "double_metaphone_alt": ("double_metaphone_arrow", 1),
+}
+
+
 def _native_one(transform: str, value: str | None) -> object:
     """Call the native kernel on a single value via a length-1 Arrow array.
     Returns ``_NO_NATIVE_SYMBOL`` if the installed/built module predates the
@@ -830,6 +876,12 @@ def _native_one(transform: str, value: str | None) -> object:
     import pyarrow as pa
 
     nm = native_module()
+    if transform in _NATIVE_MULTI_IDX:
+        attr, idx = _NATIVE_MULTI_IDX[transform]
+        if not hasattr(nm, attr):
+            return _NO_NATIVE_SYMBOL
+        out = getattr(nm, attr)(pa.array([value], type=pa.string()))
+        return out[idx].to_pylist()[0]
     attr = _NATIVE_ARROW_FN[transform]
     if not hasattr(nm, attr):
         return _NO_NATIVE_SYMBOL

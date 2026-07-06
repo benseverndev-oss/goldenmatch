@@ -36,7 +36,7 @@ import {
   abaValidateTs,
   imeiValidateTs,
 } from "../../src/core/transforms/identifiers.js";
-import { soundexTs } from "../../src/core/transforms/phonetic.js";
+import { doubleMetaphoneTs, soundexTs } from "../../src/core/transforms/phonetic.js";
 import {
   nameTransliterateTs,
   nameScriptTs,
@@ -127,6 +127,8 @@ const PURE_TS_FN: Record<string, (s: string) => boolean | string | number | unde
   aba_validate: abaValidateTs,
   imei_validate: imeiValidateTs,
   soundex: soundexTs,
+  double_metaphone_primary: (s) => doubleMetaphoneTs(s)[0],
+  double_metaphone_alt: (s) => doubleMetaphoneTs(s)[1],
   name_transliterate: nameTransliterateTs,
   name_script: nameScriptTs,
   strip_titles: stripTitlesTs,

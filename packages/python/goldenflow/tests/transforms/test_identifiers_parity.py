@@ -82,7 +82,11 @@ from goldenflow.transforms.numeric import (
     comma_decimal,
     scientific_to_decimal,
 )
-from goldenflow.transforms.phonetic import soundex
+from goldenflow.transforms.phonetic import (
+    double_metaphone_alt,
+    double_metaphone_primary,
+    soundex,
+)
 from goldenflow.transforms.text import (
     _collapse_whitespace_series as collapse_whitespace,
 )
@@ -182,6 +186,8 @@ _TRANSFORMS = {
     "aba_validate": aba_validate,
     "imei_validate": imei_validate,
     "soundex": soundex,
+    "double_metaphone_primary": double_metaphone_primary,
+    "double_metaphone_alt": double_metaphone_alt,
     "name_transliterate": name_transliterate,
     "name_script": name_script,
     "strip_titles": strip_titles,
@@ -247,6 +253,10 @@ _NATIVE_FLOOR_SYMBOL = {
     "aba_validate": "aba_validate_arrow",
     "imei_validate": "imei_validate_arrow",
     "soundex": "soundex_arrow",
+    # phonetic: double_metaphone_primary/alt share the pair kernel; floor symbol
+    # double_metaphone_arrow (skip the native leg on a wheel that predates it).
+    "double_metaphone_primary": "double_metaphone_arrow",
+    "double_metaphone_alt": "double_metaphone_arrow",
     "name_transliterate": "name_transliterate_arrow",
     "name_script": "name_script_arrow",
     # names_ext: strip_titles/strip_suffixes/name_proper/nickname_standardize/

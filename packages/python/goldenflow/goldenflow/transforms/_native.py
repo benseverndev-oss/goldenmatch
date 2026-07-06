@@ -156,6 +156,31 @@ def soundex_native() -> Callable[[pl.Series], pl.Series] | None:
     return _str_kernel_runner("phonetic", "soundex_arrow")
 
 
+def double_metaphone_native() -> (
+    Callable[[pl.Series], tuple[pl.Series, pl.Series]] | None
+):
+    """Build a runner for the multi-output double_metaphone kernel: one string
+    array in, a PAIR of arrays (primary, alternate) out. ``None`` when native
+    ``phonetic`` is off or unbuilt. Mirrors ``split_name_native``."""
+    if not native_enabled("phonetic"):
+        return None
+    nm = native_module()
+    attr = "double_metaphone_arrow"
+    if nm is None or not hasattr(nm, attr):
+        return None
+    try:
+        import pyarrow  # noqa: F401  (zero-copy bridge)
+    except ImportError:
+        return None
+    func = getattr(nm, attr)
+
+    def run(s: pl.Series) -> tuple[pl.Series, pl.Series]:
+        primary_arr, alt_arr = func(_as_str_series(s).to_arrow())
+        return pl.from_arrow(primary_arr), pl.from_arrow(alt_arr)
+
+    return run
+
+
 def cc_validate_native() -> Callable[[pl.Series], pl.Series] | None:
     return _cc_kernel_runner("cc_validate_arrow")
 
