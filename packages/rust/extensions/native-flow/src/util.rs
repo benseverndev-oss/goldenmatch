@@ -40,6 +40,47 @@ pub fn read_opt_strings(data: &ArrayData) -> PyResult<Vec<Option<String>>> {
     Ok(out)
 }
 
+/// Columnar generic map (feature-parity with `map_str_to_str` for a
+/// String-producing kernel, but ~4-5x faster): for a Utf8 `StringArray` the
+/// per-element `f` writes transformed bytes into ONE shared buffer via
+/// `goldenflow_core::columnar::map_str_columnar` (no per-row `String` alloc);
+/// for `LargeUtf8` (or any non-Utf8) it falls back to the scalar `map_str_to_str`
+/// with the equivalent `scalar` kernel. Byte-identical output either way.
+pub fn map_str_columnar<F, G>(py: Python, data: ArrayData, f: F, scalar: G) -> PyResult<ArrayData>
+where
+    F: Fn(&str, &mut String) + Sync,
+    G: Fn(&str) -> String + Sync,
+{
+    let arr = make_array(data.clone());
+    if let Some(s) = arr.as_any().downcast_ref::<StringArray>() {
+        Ok(py.detach(|| goldenflow_core::columnar::map_str_columnar(s, &f).into_data()))
+    } else {
+        map_str_to_str(py, data, |x| Some(scalar(x)))
+    }
+}
+
+/// Columnar ASCII case-fold (~9-10x for the all-ASCII common case): a Utf8
+/// `StringArray` whose values buffer is entirely ASCII is folded in one
+/// `make_ascii_{lower,upper}case` pass reusing offsets+nulls; non-ASCII (or
+/// `LargeUtf8`) falls back to the scalar Unicode `scalar` kernel per element.
+/// Byte-identical output to the scalar path in every case.
+pub fn ascii_case_columnar<G>(
+    py: Python,
+    data: ArrayData,
+    upper: bool,
+    scalar: G,
+) -> PyResult<ArrayData>
+where
+    G: Fn(&str) -> String + Sync,
+{
+    let arr = make_array(data.clone());
+    if let Some(s) = arr.as_any().downcast_ref::<StringArray>() {
+        Ok(py.detach(|| goldenflow_core::columnar::ascii_case(s, upper, &scalar).into_data()))
+    } else {
+        map_str_to_str(py, data, |x| Some(scalar(x)))
+    }
+}
+
 pub fn map_str_to_str<F>(py: Python, data: ArrayData, f: F) -> PyResult<ArrayData>
 where
     F: Fn(&str) -> Option<String> + Sync,

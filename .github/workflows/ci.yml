@@ -2155,6 +2155,11 @@ jobs:
       # too (a clippy violation in the ISBN kernel had shipped green before this).
       - run: cargo test --manifest-path goldenflow-core/Cargo.toml
       - run: cargo clippy --manifest-path goldenflow-core/Cargo.toml --all-targets -- -D warnings
+      # The optional `arrow` feature (src/columnar.rs Arrow-columnar apply paths +
+      # the columnar_pilot bench) is cfg'd out of the default build above, so its
+      # parity tests + clippy need an explicit run. native-flow enables it.
+      - run: cargo test --manifest-path goldenflow-core/Cargo.toml --features arrow
+      - run: cargo clippy --manifest-path goldenflow-core/Cargo.toml --features arrow --all-targets -- -D warnings
       # sketch-core (MinHash/LSH, #1081) is its own [workspace] pyo3-free sibling
       # too; the native binding exercises it indirectly, but its own unit tests +
       # the golden-vector parity test need an explicit run.

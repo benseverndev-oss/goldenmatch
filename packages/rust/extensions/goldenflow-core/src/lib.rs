@@ -9,6 +9,10 @@ pub mod address;
 pub mod autocorrect;
 pub mod categorical;
 pub mod company;
+/// Arrow-columnar apply paths — only when built with `--features arrow`
+/// (native-flow enables it; wasm/pure surfaces stay arrow-free).
+#[cfg(feature = "arrow")]
+pub mod columnar;
 pub mod email;
 pub mod identifiers;
 pub mod names;

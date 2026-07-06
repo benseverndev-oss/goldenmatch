@@ -20,6 +20,15 @@ pub fn strip(s: &str) -> &str {
 /// the same Unicode `White_Space` set, replaced by a literal space.
 pub fn collapse_whitespace(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
+    collapse_whitespace_into(s, &mut out);
+    out
+}
+
+/// Streaming variant of [`collapse_whitespace`]: append the transformed bytes to
+/// `out` (does NOT clear it). Byte-identical to `collapse_whitespace`; used by the
+/// Arrow-columnar apply path (`columnar::map_str_columnar`) to avoid a per-element
+/// `String` allocation.
+pub fn collapse_whitespace_into(s: &str, out: &mut String) {
     let mut chars = s.chars().peekable();
     while let Some(c) = chars.next() {
         if !c.is_whitespace() {
@@ -37,7 +46,6 @@ pub fn collapse_whitespace(s: &str) -> String {
         }
         out.push(if run >= 2 { ' ' } else { c });
     }
-    out
 }
 
 // ---------------------------------------------------------------------------
@@ -55,6 +63,12 @@ pub fn collapse_whitespace(s: &str) -> String {
 /// + double-prime -> `"`; left/right single + prime -> `'`).
 pub fn normalize_quotes(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
+    normalize_quotes_into(s, &mut out);
+    out
+}
+
+/// Streaming [`normalize_quotes`] (appends to `out`) for the columnar apply path.
+pub fn normalize_quotes_into(s: &str, out: &mut String) {
     for c in s.chars() {
         match c {
             '\u{201c}' | '\u{201d}' | '\u{2033}' => out.push('"'),
@@ -62,13 +76,18 @@ pub fn normalize_quotes(s: &str) -> String {
             _ => out.push(c),
         }
     }
-    out
 }
 
 /// Normalize `\r\n` and lone `\r` to `\n`. Byte-identical to
 /// `text.py::normalize_line_endings` (replace `\r\n` first, then any `\r`).
 pub fn normalize_line_endings(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
+    normalize_line_endings_into(s, &mut out);
+    out
+}
+
+/// Streaming [`normalize_line_endings`] (appends to `out`) for the columnar path.
+pub fn normalize_line_endings_into(s: &str, out: &mut String) {
     let mut chars = s.chars().peekable();
     while let Some(c) = chars.next() {
         if c == '\r' {
@@ -80,7 +99,6 @@ pub fn normalize_line_endings(s: &str) -> String {
             out.push(c);
         }
     }
-    out
 }
 
 /// Truncate to the first `n` characters (polars `str.slice(0, n)` is
@@ -92,39 +110,54 @@ pub fn truncate(s: &str, n: usize) -> String {
 /// Left-pad to `width` characters with `pad` (polars `str.pad_start`); a string
 /// already at/over `width` is unchanged. Byte-identical to `text.py::pad_left`.
 pub fn pad_left(s: &str, width: usize, pad: char) -> String {
+    let mut out = String::with_capacity(width.max(s.len()));
+    pad_left_into(s, width, pad, &mut out);
+    out
+}
+
+/// Streaming [`pad_left`] (appends to `out`) for the columnar path.
+pub fn pad_left_into(s: &str, width: usize, pad: char, out: &mut String) {
     let len = s.chars().count();
-    if len >= width {
-        return s.to_string();
-    }
-    let mut out = String::with_capacity(width);
-    for _ in 0..(width - len) {
-        out.push(pad);
+    if len < width {
+        for _ in 0..(width - len) {
+            out.push(pad);
+        }
     }
     out.push_str(s);
-    out
 }
 
 /// Right-pad to `width` characters with `pad` (polars `str.pad_end`); a string
 /// already at/over `width` is unchanged. Byte-identical to `text.py::pad_right`.
 pub fn pad_right(s: &str, width: usize, pad: char) -> String {
-    let len = s.chars().count();
-    if len >= width {
-        return s.to_string();
-    }
-    let mut out = String::from(s);
-    for _ in 0..(width - len) {
-        out.push(pad);
-    }
+    let mut out = String::with_capacity(width.max(s.len()));
+    pad_right_into(s, width, pad, &mut out);
     out
+}
+
+/// Streaming [`pad_right`] (appends to `out`) for the columnar path.
+pub fn pad_right_into(s: &str, width: usize, pad: char, out: &mut String) {
+    let len = s.chars().count();
+    out.push_str(s);
+    if len < width {
+        for _ in 0..(width - len) {
+            out.push(pad);
+        }
+    }
 }
 
 /// Strip HTML tags: remove each `<...>` span with at least one char between the
 /// angle brackets (regex `<[^>]+>`, minimal to the first `>`). `<>` and an
 /// unclosed `<` are left intact. Byte-identical to `text.py::remove_html_tags`.
 pub fn remove_html_tags(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    remove_html_tags_into(s, &mut out);
+    out
+}
+
+/// Streaming [`remove_html_tags`] (appends to `out`) for the columnar path.
+pub fn remove_html_tags_into(s: &str, out: &mut String) {
     let chars: Vec<char> = s.chars().collect();
     let n = chars.len();
-    let mut out = String::with_capacity(s.len());
     let mut i = 0;
     while i < n {
         if chars[i] == '<' {
@@ -141,7 +174,6 @@ pub fn remove_html_tags(s: &str) -> String {
         out.push(chars[i]);
         i += 1;
     }
-    out
 }
 
 /// `"http://"` (7 chars) or `"https://"` (8 chars) at `chars[i..]`; returns the
@@ -162,9 +194,15 @@ fn match_url_scheme(chars: &[char], i: usize) -> Option<usize> {
 /// chars (regex `https?://\S+`). `\S` = non-`is_whitespace` (== polars `\s`
 /// complement). Byte-identical to `text.py::remove_urls`.
 pub fn remove_urls(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    remove_urls_into(s, &mut out);
+    out
+}
+
+/// Streaming [`remove_urls`] (appends to `out`) for the columnar path.
+pub fn remove_urls_into(s: &str, out: &mut String) {
     let chars: Vec<char> = s.chars().collect();
     let n = chars.len();
-    let mut out = String::with_capacity(s.len());
     let mut i = 0;
     while i < n {
         if let Some(after) = match_url_scheme(&chars, i) {
@@ -181,7 +219,6 @@ pub fn remove_urls(s: &str) -> String {
         out.push(chars[i]);
         i += 1;
     }
-    out
 }
 
 /// Remove ASCII digit characters. The old polars `\d` was Unicode-aware; this
@@ -189,7 +226,14 @@ pub fn remove_urls(s: &str) -> String {
 /// exotic Unicode digits are out of the bounded set). Byte-identical to
 /// `text.py::remove_digits`.
 pub fn remove_digits(s: &str) -> String {
-    s.chars().filter(|c| !c.is_ascii_digit()).collect()
+    let mut out = String::with_capacity(s.len());
+    remove_digits_into(s, &mut out);
+    out
+}
+
+/// Streaming [`remove_digits`] (appends to `out`) for the columnar path.
+pub fn remove_digits_into(s: &str, out: &mut String) {
+    out.extend(s.chars().filter(|c| !c.is_ascii_digit()));
 }
 
 /// Remove punctuation: keep ASCII alphanumerics and whitespace, drop everything
@@ -197,9 +241,17 @@ pub fn remove_digits(s: &str) -> String {
 /// letters are dropped (as in the old polars behavior). Byte-identical to
 /// `text.py::remove_punctuation`.
 pub fn remove_punctuation(s: &str) -> String {
-    s.chars()
-        .filter(|c| c.is_ascii_alphanumeric() || c.is_whitespace())
-        .collect()
+    let mut out = String::with_capacity(s.len());
+    remove_punctuation_into(s, &mut out);
+    out
+}
+
+/// Streaming [`remove_punctuation`] (appends to `out`) for the columnar path.
+pub fn remove_punctuation_into(s: &str, out: &mut String) {
+    out.extend(
+        s.chars()
+            .filter(|c| c.is_ascii_alphanumeric() || c.is_whitespace()),
+    );
 }
 
 /// Extract all number runs (regex `\d+\.?\d*`: one-or-more digits, an optional
@@ -262,7 +314,14 @@ fn is_emoji(c: char) -> bool {
 /// matching char is equivalent to removing maximal runs. Byte-identical to
 /// `text.py::remove_emojis`.
 pub fn remove_emojis(s: &str) -> String {
-    s.chars().filter(|c| !is_emoji(*c)).collect()
+    let mut out = String::with_capacity(s.len());
+    remove_emojis_into(s, &mut out);
+    out
+}
+
+/// Streaming [`remove_emojis`] (appends to `out`) for the columnar path.
+pub fn remove_emojis_into(s: &str, out: &mut String) {
+    out.extend(s.chars().filter(|c| !is_emoji(*c)));
 }
 
 // ---------------------------------------------------------------------------
@@ -747,6 +806,12 @@ fn normalize_char(c: char) -> Option<&'static str> {
 /// `text.py::_normalize_unicode_py`.
 pub fn normalize_unicode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
+    normalize_unicode_into(s, &mut out);
+    out
+}
+
+/// Streaming [`normalize_unicode`] (appends to `out`) for the columnar path.
+pub fn normalize_unicode_into(s: &str, out: &mut String) {
     for c in s.chars() {
         if c.is_ascii() {
             out.push(c);
@@ -756,7 +821,6 @@ pub fn normalize_unicode(s: &str) -> String {
             out.push(c);
         }
     }
-    out
 }
 
 #[cfg(test)]
