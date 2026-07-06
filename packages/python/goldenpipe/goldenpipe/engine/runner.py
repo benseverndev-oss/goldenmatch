@@ -35,6 +35,19 @@ class Runner:
                     )
                     continue
 
+            # Relocatable-stage seam (contract Phase A): only local stages run
+            # today. A stage declaring a non-local location is a not-yet-built
+            # remote/cross-engine placement (Phases B/C) -- fail loudly rather
+            # than silently running it in-process. Raised before the try/except
+            # so it surfaces as a configuration error, not a soft stage failure.
+            location = getattr(getattr(planned.stage, "info", None), "location", "local")
+            if location != "local":
+                raise NotImplementedError(
+                    f"Stage '{planned.name}' declares location={location!r}; remote "
+                    "stage execution is not implemented (relocatable-stage contract "
+                    "Phase C). Only 'local' stages run today."
+                )
+
             start = time.perf_counter()
             try:
                 # Make stage-level config available to the adapter via context

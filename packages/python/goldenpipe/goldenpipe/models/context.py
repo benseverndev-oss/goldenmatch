@@ -7,6 +7,8 @@ from typing import Any
 
 import polars as pl
 
+from goldenpipe.models.frame import Frame, LocalFrame
+
 
 class StageStatus(str, Enum):  # noqa: UP042  # explicit str+Enum preserves __str__ semantics; StrEnum behaves differently
     SUCCESS = "success"
@@ -46,6 +48,20 @@ class PipeContext:
     timing: dict[str, float] = field(default_factory=dict)
     reasoning: dict[str, str] = field(default_factory=dict)
     stage_config: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def frame(self) -> Frame | None:
+        """Arrow-capable handle over ``df`` -- the relocatable-stage seam. In
+        process this is a **zero-copy** ``LocalFrame`` view (``.polars()`` returns
+        ``df`` by reference); a remote-stage adapter (Phase C) would call
+        ``.arrow_batches()`` and assign a returned frame back via this setter. The
+        canonical store stays ``df`` so in-process stages are untouched and Stage 0
+        is not regressed. See the relocatable-stage-contract design doc."""
+        return LocalFrame(self.df) if self.df is not None else None
+
+    @frame.setter
+    def frame(self, value: Frame | None) -> None:
+        self.df = value.polars() if value is not None else None
 
 
 @dataclass
