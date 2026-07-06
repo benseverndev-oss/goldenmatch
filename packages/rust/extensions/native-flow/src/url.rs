@@ -29,3 +29,39 @@ pub fn url_extract_domain_arrow(
         url::url_extract_domain,
     )?))
 }
+
+#[pyfunction]
+pub fn url_strip_tracking_arrow(
+    py: Python,
+    array: PyArrowType<ArrayData>,
+) -> PyResult<PyArrowType<ArrayData>> {
+    Ok(PyArrowType(map_str_to_str(
+        py,
+        array.0,
+        url::url_strip_tracking,
+    )?))
+}
+
+#[pyfunction]
+pub fn url_strip_www_arrow(
+    py: Python,
+    array: PyArrowType<ArrayData>,
+) -> PyResult<PyArrowType<ArrayData>> {
+    Ok(PyArrowType(map_str_to_str(
+        py,
+        array.0,
+        url::url_strip_www,
+    )?))
+}
+
+#[pyfunction]
+pub fn url_canonical_arrow(
+    py: Python,
+    array: PyArrowType<ArrayData>,
+) -> PyResult<PyArrowType<ArrayData>> {
+    Ok(PyArrowType(map_str_to_str(
+        py,
+        array.0,
+        url::url_canonical,
+    )?))
+}

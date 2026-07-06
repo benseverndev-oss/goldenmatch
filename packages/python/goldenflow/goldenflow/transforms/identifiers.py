@@ -7,9 +7,11 @@ import polars as pl
 from goldenflow.transforms import register_transform
 from goldenflow.transforms._native import (
     aba_validate_native,
+    cc_brand_native,
     cc_format_native,
     cc_mask_native,
     cc_validate_native,
+    cusip_validate_native,
     ean_validate_native,
     ein_format_native,
     iban_format_native,
@@ -17,6 +19,9 @@ from goldenflow.transforms._native import (
     imei_validate_native,
     isbn_normalize_native,
     isbn_validate_native,
+    isin_validate_native,
+    luhn_validate_native,
+    npi_validate_native,
     ssn_format_native,
     ssn_mask_native,
     swift_format_native,
@@ -800,3 +805,159 @@ def imei_validate(series: pl.Series) -> pl.Series:
     if native is not None:
         return native(series)
     return series.map_elements(_imei_validate_py, return_dtype=pl.Boolean)
+
+
+# --- W5 breadth: securities/health IDs + generic Luhn + card brand -----------
+
+
+def _isin_validate_py(val: str | None) -> bool | None:
+    if val is None:
+        return None
+    t = "".join(c.upper() for c in val if not c.isspace() and c != "-")
+    if len(t) != 12:
+        return False
+    if not all(ch.isascii() and (ch.isdigit() or ch.isalpha()) for ch in t):
+        return False
+    if not (t[0].isalpha() and t[1].isalpha()):
+        return False
+    expanded = []
+    for ch in t:
+        if ch.isdigit():
+            expanded.append(ch)
+        else:
+            expanded.append(str(ord(ch) - 65 + 10))
+    return _luhn_ok("".join(expanded))
+
+
+def _cusip_value(ch: str) -> int | None:
+    if ch.isascii() and ch.isdigit():
+        return ord(ch) - 48
+    if "A" <= ch <= "Z":
+        return ord(ch) - 65 + 10
+    if ch == "*":
+        return 36
+    if ch == "@":
+        return 37
+    if ch == "#":
+        return 38
+    return None
+
+
+def _cusip_validate_py(val: str | None) -> bool | None:
+    if val is None:
+        return None
+    t = "".join(c.upper() for c in val if not c.isspace())
+    if len(t) != 9:
+        return False
+    if not (t[8].isascii() and t[8].isdigit()):
+        return False
+    total = 0
+    for i, ch in enumerate(t[:8]):
+        v = _cusip_value(ch)
+        if v is None:
+            return False
+        if i % 2 == 1:
+            v *= 2
+        total += v // 10 + v % 10
+    check = (10 - (total % 10)) % 10
+    return check == ord(t[8]) - 48
+
+
+def _npi_validate_py(val: str | None) -> bool | None:
+    if val is None:
+        return None
+    d = "".join(c for c in val if not c.isspace() and c != "-")
+    if len(d) != 10 or not d.isascii() or not d.isdigit():
+        return False
+    return _luhn_ok("80840" + d)
+
+
+def _luhn_validate_py(val: str | None) -> bool | None:
+    if val is None:
+        return None
+    d = _cc_normalized_digits(val)
+    if d is None:
+        return False
+    return _luhn_ok(d)
+
+
+def _cc_brand_py(val: str | None) -> str | None:
+    if val is None:
+        return None
+    d = _cc_normalized_digits(val)
+    if d is None:
+        return None
+    length = len(d)
+
+    def first(k: int) -> int:
+        return int(d[:k]) if length >= k else 0
+
+    f2, f3, f4 = first(2), first(3), first(4)
+    if length == 15 and f2 in (34, 37):
+        return "amex"
+    if length == 14 and (f2 in (36, 38, 39) or 300 <= f3 <= 305):
+        return "diners"
+    if length == 16 and 3528 <= f4 <= 3589:
+        return "jcb"
+    if length == 16 and (d.startswith("6011") or f2 == 65 or 644 <= f3 <= 649):
+        return "discover"
+    if length == 16 and (51 <= f2 <= 55 or 2221 <= f4 <= 2720):
+        return "mastercard"
+    if d.startswith("4") and length in (13, 16, 19):
+        return "visa"
+    return None
+
+
+@register_transform(
+    name="isin_validate", input_types=["identifier", "string"], auto_apply=False, priority=50, mode="series"
+)
+def isin_validate(series: pl.Series) -> pl.Series:
+    """Validate an ISIN (ISO 6166). Native-first over goldenflow-core."""
+    native = isin_validate_native()
+    if native is not None:
+        return native(series)
+    return series.map_elements(_isin_validate_py, return_dtype=pl.Boolean)
+
+
+@register_transform(
+    name="cusip_validate", input_types=["identifier", "string"], auto_apply=False, priority=50, mode="series"
+)
+def cusip_validate(series: pl.Series) -> pl.Series:
+    """Validate a CUSIP. Native-first over goldenflow-core."""
+    native = cusip_validate_native()
+    if native is not None:
+        return native(series)
+    return series.map_elements(_cusip_validate_py, return_dtype=pl.Boolean)
+
+
+@register_transform(
+    name="npi_validate", input_types=["identifier", "string"], auto_apply=False, priority=50, mode="series"
+)
+def npi_validate(series: pl.Series) -> pl.Series:
+    """Validate a US NPI. Native-first over goldenflow-core."""
+    native = npi_validate_native()
+    if native is not None:
+        return native(series)
+    return series.map_elements(_npi_validate_py, return_dtype=pl.Boolean)
+
+
+@register_transform(
+    name="luhn_validate", input_types=["identifier", "string"], auto_apply=False, priority=50, mode="series"
+)
+def luhn_validate(series: pl.Series) -> pl.Series:
+    """Generic Luhn check-digit validation. Native-first over goldenflow-core."""
+    native = luhn_validate_native()
+    if native is not None:
+        return native(series)
+    return series.map_elements(_luhn_validate_py, return_dtype=pl.Boolean)
+
+
+@register_transform(
+    name="cc_brand", input_types=["identifier", "string"], auto_apply=False, priority=40, mode="series"
+)
+def cc_brand(series: pl.Series) -> pl.Series:
+    """Detect the card brand (visa/mastercard/amex/...) or null. Native-first."""
+    native = cc_brand_native()
+    if native is not None:
+        return native(series)
+    return series.map_elements(_cc_brand_py, return_dtype=pl.Utf8)

@@ -17,6 +17,26 @@ pub fn name_transliterate_arrow(
 }
 
 #[pyfunction]
+pub fn name_initials_arrow(
+    py: Python,
+    array: PyArrowType<ArrayData>,
+) -> PyResult<PyArrowType<ArrayData>> {
+    Ok(PyArrowType(map_str_to_str(py, array.0, |s| {
+        Some(names::name_initials(s))
+    })?))
+}
+
+#[pyfunction]
+pub fn strip_middle_arrow(
+    py: Python,
+    array: PyArrowType<ArrayData>,
+) -> PyResult<PyArrowType<ArrayData>> {
+    Ok(PyArrowType(map_str_to_str(py, array.0, |s| {
+        Some(names::strip_middle(s))
+    })?))
+}
+
+#[pyfunction]
 pub fn name_script_arrow(
     py: Python,
     array: PyArrowType<ArrayData>,

@@ -4,12 +4,14 @@ import goldenflow.notebook  # noqa: F401 — register Jupyter _repr_html_ method
 import goldenflow.transforms.address  # noqa: F401
 import goldenflow.transforms.auto_correct  # noqa: F401
 import goldenflow.transforms.categorical  # noqa: F401
+import goldenflow.transforms.company  # noqa: F401
 import goldenflow.transforms.dates  # noqa: F401
 import goldenflow.transforms.email  # noqa: F401
 import goldenflow.transforms.identifiers  # noqa: F401
 import goldenflow.transforms.names  # noqa: F401
 import goldenflow.transforms.numeric  # noqa: F401
 import goldenflow.transforms.phone  # noqa: F401
+import goldenflow.transforms.phonetic  # noqa: F401
 
 # Import transform modules so they register with the registry
 import goldenflow.transforms.text  # noqa: F401

@@ -15,10 +15,15 @@ mod wasm {
     use goldenflow_core::address;
     use goldenflow_core::autocorrect;
     use goldenflow_core::categorical;
+    use goldenflow_core::company;
     use goldenflow_core::email;
-    use goldenflow_core::identifiers::{aba, ean, iban, imei, isbn, luhn, swift, vat};
+    use goldenflow_core::identifiers::{
+        aba, cusip, ean, ein, iban, imei, isbn, isin, luhn, npi, ssn, swift, vat,
+    };
     use goldenflow_core::names;
     use goldenflow_core::numeric;
+    use goldenflow_core::phone;
+    use goldenflow_core::phonetic;
     use goldenflow_core::text;
     use goldenflow_core::url;
     use wasm_bindgen::prelude::*;
@@ -41,6 +46,119 @@ mod wasm {
     #[wasm_bindgen]
     pub fn email_validate(s: &str) -> Option<bool> {
         email::email_validate(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn isin_validate(s: &str) -> bool {
+        isin::isin_validate(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn cusip_validate(s: &str) -> bool {
+        cusip::cusip_validate(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn npi_validate(s: &str) -> bool {
+        npi::npi_validate(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn luhn_validate(s: &str) -> bool {
+        luhn::luhn_validate(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn cc_brand(s: &str) -> Option<String> {
+        luhn::cc_brand(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn name_initials(s: &str) -> String {
+        names::name_initials(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn strip_middle(s: &str) -> String {
+        names::strip_middle(s)
+    }
+
+    // Cast i64 -> f64 so JS receives a plain `number` (not a BigInt); the value
+    // is exact for the 1..=3999 / small-ordinal ranges these parsers produce,
+    // and the byte-parity harness compares numerics by VALUE.
+    #[wasm_bindgen]
+    pub fn roman_to_int(s: &str) -> Option<f64> {
+        numeric::roman_to_int(s).map(|v| v as f64)
+    }
+
+    #[wasm_bindgen]
+    pub fn ordinal_to_int(s: &str) -> Option<f64> {
+        numeric::ordinal_to_int(s).map(|v| v as f64)
+    }
+
+    #[wasm_bindgen]
+    pub fn fraction_to_decimal(s: &str) -> Option<f64> {
+        numeric::fraction_to_decimal(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn ssn_format(s: &str) -> String {
+        ssn::ssn_format(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn ssn_mask(s: &str) -> String {
+        ssn::ssn_mask(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn ein_format(s: &str) -> String {
+        ein::ein_format(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn phone_digits(s: &str) -> String {
+        phone::phone_digits(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn company_normalize(s: &str) -> Option<String> {
+        company::company_normalize(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn company_strip_legal(s: &str) -> Option<String> {
+        company::company_strip_legal(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn company_extract_legal(s: &str) -> Option<String> {
+        company::company_extract_legal(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn email_canonical(s: &str) -> String {
+        email::email_canonical(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn email_mask(s: &str) -> Option<String> {
+        email::email_mask(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn soundex(s: &str) -> String {
+        phonetic::soundex(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn double_metaphone_primary(s: &str) -> String {
+        phonetic::double_metaphone_primary(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn double_metaphone_alt(s: &str) -> String {
+        phonetic::double_metaphone_alt(s)
     }
 
     #[wasm_bindgen]
@@ -311,6 +429,21 @@ mod wasm {
     #[wasm_bindgen]
     pub fn url_extract_domain(s: &str) -> Option<String> {
         url::url_extract_domain(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn url_strip_tracking(s: &str) -> Option<String> {
+        url::url_strip_tracking(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn url_strip_www(s: &str) -> Option<String> {
+        url::url_strip_www(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn url_canonical(s: &str) -> Option<String> {
+        url::url_canonical(s)
     }
 
     /// rapidfuzz `fuzz.ratio` (Indel/LCS similarity, 0-100).

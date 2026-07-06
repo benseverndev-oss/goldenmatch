@@ -11,7 +11,10 @@ from goldenflow.transforms._native import (
     comma_decimal_native,
     currency_strip_native,
     fill_zero_native,
+    fraction_to_decimal_native,
+    ordinal_to_int_native,
     percentage_normalize_native,
+    roman_to_int_native,
     round_native,
     scientific_to_decimal_native,
     to_integer_native,
@@ -129,6 +132,134 @@ def _to_integer_series(series: pl.Series) -> pl.Series:
     )
 
 
+# --- W5 numeric breadth: roman / fraction / ordinal parsers -------------------
+
+_ROMAN_VAL = {"I": 1, "V": 5, "X": 10, "L": 50, "C": 100, "D": 500, "M": 1000}
+_ROMAN_TABLE = [
+    (1000, "M"), (900, "CM"), (500, "D"), (400, "CD"), (100, "C"),
+    (90, "XC"), (50, "L"), (40, "XL"), (10, "X"), (9, "IX"),
+    (5, "V"), (4, "IV"), (1, "I"),
+]
+
+
+def _int_to_roman(n: int) -> str:
+    out = []
+    for v, sym in _ROMAN_TABLE:
+        while n >= v:
+            out.append(sym)
+            n -= v
+    return "".join(out)
+
+
+def _roman_to_int_py(val: str | None) -> int | None:
+    if val is None:
+        return None
+    t = str(val).strip().upper()
+    if not t:
+        return None
+    chars = list(t)
+    total = 0
+    for i, c in enumerate(chars):
+        cur = _ROMAN_VAL.get(c)
+        if cur is None:
+            return None
+        nxt = _ROMAN_VAL.get(chars[i + 1], 0) if i + 1 < len(chars) else 0
+        total += -cur if cur < nxt else cur
+    if not 1 <= total <= 3999:
+        return None
+    return total if _int_to_roman(total) == t else None
+
+
+def _ordinal_suffix(n: int) -> str:
+    if 11 <= n % 100 <= 13:
+        return "th"
+    return {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+
+
+def _ordinal_to_int_py(val: str | None) -> int | None:
+    if val is None:
+        return None
+    t = str(val).strip().lower()
+    digits = ""
+    for c in t:
+        if c.isascii() and c.isdigit():
+            digits += c
+        else:
+            break
+    if not digits:
+        return None
+    n = int(digits)
+    return n if t[len(digits):] == _ordinal_suffix(n) else None
+
+
+def _parse_fraction(s: str) -> float | None:
+    if "/" not in s:
+        return None
+    num_s, den_s = s.split("/", 1)
+    try:
+        num = float(num_s.strip())
+        den = float(den_s.strip())
+    except ValueError:
+        return None
+    if den == 0.0:
+        return None
+    return num / den
+
+
+def _fraction_to_decimal_py(val: str | None) -> float | None:
+    if val is None:
+        return None
+    t = str(val).strip()
+    if not t:
+        return None
+    parts = t.split(None, 1)
+    if len(parts) == 2:
+        frac_s = parts[1].strip()
+        if "/" in frac_s:
+            try:
+                whole = int(parts[0].strip())
+            except ValueError:
+                return None
+            frac = _parse_fraction(frac_s)
+            if frac is None:
+                return None
+            return (whole - frac) if whole < 0 else (whole + frac)
+        return None
+    if "/" in t:
+        return _parse_fraction(t)
+    try:
+        return float(t)
+    except ValueError:
+        return None
+
+
+def _roman_to_int_series(series: pl.Series) -> pl.Series:
+    native = roman_to_int_native()
+    if native is not None:
+        return native(series)
+    return series.cast(pl.Utf8, strict=False).map_elements(
+        _roman_to_int_py, return_dtype=pl.Int64
+    )
+
+
+def _ordinal_to_int_series(series: pl.Series) -> pl.Series:
+    native = ordinal_to_int_native()
+    if native is not None:
+        return native(series)
+    return series.cast(pl.Utf8, strict=False).map_elements(
+        _ordinal_to_int_py, return_dtype=pl.Int64
+    )
+
+
+def _fraction_to_decimal_series(series: pl.Series) -> pl.Series:
+    native = fraction_to_decimal_native()
+    if native is not None:
+        return native(series)
+    return series.cast(pl.Utf8, strict=False).map_elements(
+        _fraction_to_decimal_py, return_dtype=pl.Float64
+    )
+
+
 @register_transform(
     name="currency_strip", input_types=["string", "numeric"], auto_apply=False, priority=50, mode="expr"
 )
@@ -196,6 +327,31 @@ def clamp(series: pl.Series, min_val: float = 0.0, max_val: float = 1.0) -> pl.S
         lambda x: None if x is None else _clamp_f64_py(x, min_val, max_val),
         return_dtype=pl.Float64,
     )
+
+
+@register_transform(
+    name="roman_to_int", input_types=["string"], auto_apply=False, priority=40, mode="expr"
+)
+def roman_to_int(column: str) -> pl.Expr:
+    """Parse a Roman numeral to its integer (canonical forms only, 1..=3999).
+    Native-first over goldenflow-core."""
+    return pl.col(column).map_batches(_roman_to_int_series, return_dtype=pl.Int64)
+
+
+@register_transform(
+    name="ordinal_to_int", input_types=["string"], auto_apply=False, priority=40, mode="expr"
+)
+def ordinal_to_int(column: str) -> pl.Expr:
+    """Parse an English ordinal (1st/2nd/3rd) to its integer. Native-first."""
+    return pl.col(column).map_batches(_ordinal_to_int_series, return_dtype=pl.Int64)
+
+
+@register_transform(
+    name="fraction_to_decimal", input_types=["string", "numeric"], auto_apply=False, priority=40, mode="expr"
+)
+def fraction_to_decimal(column: str) -> pl.Expr:
+    """Parse a fraction or mixed number (1/2, 3 3/4) to a float. Native-first."""
+    return pl.col(column).map_batches(_fraction_to_decimal_series, return_dtype=pl.Float64)
 
 
 @register_transform(

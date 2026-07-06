@@ -910,7 +910,7 @@ mod tests {
         assert_eq!(normalize_unicode("stra\u{df}e"), "stra\u{df}e"); // eszett stays
         assert_eq!(normalize_unicode("\u{e6}"), "\u{e6}"); // ae ligature stays
         assert_eq!(normalize_unicode("\u{f8}"), "\u{f8}"); // o-slash stays
-        // multi-char decomposition (IJ ligature)
+                                                           // multi-char decomposition (IJ ligature)
         assert_eq!(normalize_unicode("\u{132}"), "IJ");
         // unmapped non-ASCII (CJK) passes through
         assert_eq!(normalize_unicode("\u{4e2d}"), "\u{4e2d}");

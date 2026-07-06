@@ -333,7 +333,7 @@ goldenflow transform listings.csv --domain real_estate
 
 ---
 
-## Transform Library (92 transforms)
+## Transform Library (113 transforms)
 
 ### Text Transforms (18)
 | Transform | What It Does |
@@ -584,7 +584,7 @@ result.manifest  # renders transform audit trail
 
 ## TypeScript / JavaScript
 
-GoldenFlow has a full TypeScript port with feature parity — same 90 transforms, same engine, same config format. The core is **edge-safe** (runs in browsers, Cloudflare Workers, Vercel Edge) with a Node layer for file I/O and CLI. Pure-TS is the default; an opt-in `enableWasm()` routes the checksummed-identifier transforms through a WASM kernel (see below).
+GoldenFlow has a full TypeScript port with feature parity — same 113 transforms, same engine, same config format. The core is **edge-safe** (runs in browsers, Cloudflare Workers, Vercel Edge) with a Node layer for file I/O and CLI. Pure-TS is the default; an opt-in `enableWasm()` routes the checksummed-identifier transforms through a WASM kernel (see below).
 
 ### Install
 
@@ -727,7 +727,7 @@ GoldenFlow's transforms also ship as a **zero-Python DuckDB extension** —
 natively inside the query engine with **no Python interpreter in the process**,
 byte-identical to the Python / TypeScript / WASM surfaces.
 
-74 transforms are exposed as SQL functions named `goldenflow_<kernel>`:
+98 transforms are exposed as SQL functions named `goldenflow_<kernel>`:
 
 ```sql
 -- CLI: duckdb -unsigned   (or: SET allow_unsigned_extensions = true;)

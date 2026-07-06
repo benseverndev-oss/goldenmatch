@@ -139,6 +139,91 @@
 {"transform": "imei_validate", "input": "49015420323751a", "expected": false}
 {"transform": "imei_validate", "input": "", "expected": false}
 {"transform": "imei_validate", "input": null, "expected": null}
+{"transform": "isin_validate", "input": "US0378331005", "expected": true}
+{"transform": "isin_validate", "input": "us0378331005", "expected": true}
+{"transform": "isin_validate", "input": "US-0378331005", "expected": true}
+{"transform": "isin_validate", "input": "AU0000XVGZA3", "expected": true}
+{"transform": "isin_validate", "input": "US0378331006", "expected": false}
+{"transform": "isin_validate", "input": "0378331005", "expected": false}
+{"transform": "isin_validate", "input": "1S0378331005", "expected": false}
+{"transform": "isin_validate", "input": "US03783310_5", "expected": false}
+{"transform": "isin_validate", "input": "", "expected": false}
+{"transform": "isin_validate", "input": null, "expected": null}
+{"transform": "cusip_validate", "input": "037833100", "expected": true}
+{"transform": "cusip_validate", "input": "38259P508", "expected": true}
+{"transform": "cusip_validate", "input": "037833 100", "expected": true}
+{"transform": "cusip_validate", "input": "037833101", "expected": false}
+{"transform": "cusip_validate", "input": "03783310", "expected": false}
+{"transform": "cusip_validate", "input": "38259P50X", "expected": false}
+{"transform": "cusip_validate", "input": "", "expected": false}
+{"transform": "cusip_validate", "input": null, "expected": null}
+{"transform": "npi_validate", "input": "1234567893", "expected": true}
+{"transform": "npi_validate", "input": "123-456-7893", "expected": true}
+{"transform": "npi_validate", "input": "1234567890", "expected": false}
+{"transform": "npi_validate", "input": "123456789", "expected": false}
+{"transform": "npi_validate", "input": "123456789a", "expected": false}
+{"transform": "npi_validate", "input": "", "expected": false}
+{"transform": "npi_validate", "input": null, "expected": null}
+{"transform": "luhn_validate", "input": "4242424242424242", "expected": true}
+{"transform": "luhn_validate", "input": "79927398713", "expected": true}
+{"transform": "luhn_validate", "input": "1234", "expected": false}
+{"transform": "luhn_validate", "input": "18", "expected": true}
+{"transform": "luhn_validate", "input": "abc", "expected": false}
+{"transform": "luhn_validate", "input": "", "expected": false}
+{"transform": "luhn_validate", "input": null, "expected": null}
+{"transform": "cc_brand", "input": "4242424242424242", "expected": "visa"}
+{"transform": "cc_brand", "input": "4111111111111", "expected": "visa"}
+{"transform": "cc_brand", "input": "5555555555554444", "expected": "mastercard"}
+{"transform": "cc_brand", "input": "2223003122003222", "expected": "mastercard"}
+{"transform": "cc_brand", "input": "378282246310005", "expected": "amex"}
+{"transform": "cc_brand", "input": "6011111111111117", "expected": "discover"}
+{"transform": "cc_brand", "input": "3530111333300000", "expected": "jcb"}
+{"transform": "cc_brand", "input": "30569309025904", "expected": "diners"}
+{"transform": "cc_brand", "input": "1234567890123456", "expected": null}
+{"transform": "cc_brand", "input": "", "expected": null}
+{"transform": "cc_brand", "input": null, "expected": null}
+{"transform": "name_initials", "input": "John Q Public", "expected": "JQP"}
+{"transform": "name_initials", "input": "john quincy adams", "expected": "JQA"}
+{"transform": "name_initials", "input": "O'Brien", "expected": "O"}
+{"transform": "name_initials", "input": "John Q. 3rd Public", "expected": "JQP"}
+{"transform": "name_initials", "input": "  spaced   out  ", "expected": "SO"}
+{"transform": "name_initials", "input": "", "expected": ""}
+{"transform": "name_initials", "input": null, "expected": null}
+{"transform": "strip_middle", "input": "John Quincy Adams", "expected": "John Adams"}
+{"transform": "strip_middle", "input": "John Q. Public", "expected": "John Public"}
+{"transform": "strip_middle", "input": "Cher", "expected": "Cher"}
+{"transform": "strip_middle", "input": "Bob Smith", "expected": "Bob Smith"}
+{"transform": "strip_middle", "input": "  a  b  c  d  ", "expected": "a d"}
+{"transform": "strip_middle", "input": "", "expected": ""}
+{"transform": "strip_middle", "input": null, "expected": null}
+{"transform": "roman_to_int", "input": "XIV", "expected": 14}
+{"transform": "roman_to_int", "input": "iv", "expected": 4}
+{"transform": "roman_to_int", "input": "MCMXCIV", "expected": 1994}
+{"transform": "roman_to_int", "input": "MMMCMXCIX", "expected": 3999}
+{"transform": "roman_to_int", "input": "IIII", "expected": null}
+{"transform": "roman_to_int", "input": "VX", "expected": null}
+{"transform": "roman_to_int", "input": "ABC", "expected": null}
+{"transform": "roman_to_int", "input": "", "expected": null}
+{"transform": "roman_to_int", "input": null, "expected": null}
+{"transform": "ordinal_to_int", "input": "1st", "expected": 1}
+{"transform": "ordinal_to_int", "input": "22nd", "expected": 22}
+{"transform": "ordinal_to_int", "input": "3RD", "expected": 3}
+{"transform": "ordinal_to_int", "input": "11th", "expected": 11}
+{"transform": "ordinal_to_int", "input": "1th", "expected": null}
+{"transform": "ordinal_to_int", "input": "5", "expected": null}
+{"transform": "ordinal_to_int", "input": "abc", "expected": null}
+{"transform": "ordinal_to_int", "input": "", "expected": null}
+{"transform": "ordinal_to_int", "input": null, "expected": null}
+{"transform": "fraction_to_decimal", "input": "1/2", "expected": 0.5}
+{"transform": "fraction_to_decimal", "input": "3/4", "expected": 0.75}
+{"transform": "fraction_to_decimal", "input": "3 3/4", "expected": 3.75}
+{"transform": "fraction_to_decimal", "input": "-1/2", "expected": -0.5}
+{"transform": "fraction_to_decimal", "input": "5", "expected": 5.0}
+{"transform": "fraction_to_decimal", "input": "2.5", "expected": 2.5}
+{"transform": "fraction_to_decimal", "input": "1/0", "expected": null}
+{"transform": "fraction_to_decimal", "input": "abc", "expected": null}
+{"transform": "fraction_to_decimal", "input": "", "expected": null}
+{"transform": "fraction_to_decimal", "input": null, "expected": null}
 {"transform": "ssn_format", "input": "123456789", "expected": "123-45-6789"}
 {"transform": "ssn_format", "input": "123-45-6789", "expected": "123-45-6789"}
 {"transform": "ssn_format", "input": " 123 45 6789 ", "expected": "123-45-6789"}
@@ -163,6 +248,50 @@
 {"transform": "phone_digits", "input": "abc123def456", "expected": "123456"}
 {"transform": "phone_digits", "input": "", "expected": ""}
 {"transform": "phone_digits", "input": null, "expected": null}
+{"transform": "soundex", "input": "Robert", "expected": "R163"}
+{"transform": "soundex", "input": "Rupert", "expected": "R163"}
+{"transform": "soundex", "input": "Rubin", "expected": "R150"}
+{"transform": "soundex", "input": "Ashcraft", "expected": "A261"}
+{"transform": "soundex", "input": "Ashcroft", "expected": "A261"}
+{"transform": "soundex", "input": "Tymczak", "expected": "T522"}
+{"transform": "soundex", "input": "Pfister", "expected": "P236"}
+{"transform": "soundex", "input": "Honeyman", "expected": "H555"}
+{"transform": "soundex", "input": "Gauss", "expected": "G200"}
+{"transform": "soundex", "input": "Jackson", "expected": "J250"}
+{"transform": "soundex", "input": "Washington", "expected": "W252"}
+{"transform": "soundex", "input": "robert", "expected": "R163"}
+{"transform": "soundex", "input": "O'Brien", "expected": "O165"}
+{"transform": "soundex", "input": "H", "expected": "H000"}
+{"transform": "soundex", "input": "12345", "expected": ""}
+{"transform": "soundex", "input": "", "expected": ""}
+{"transform": "soundex", "input": null, "expected": null}
+{"transform": "double_metaphone_primary", "input": "Smith", "expected": "SM0"}
+{"transform": "double_metaphone_primary", "input": "Schmidt", "expected": "XMT"}
+{"transform": "double_metaphone_primary", "input": "Jackson", "expected": "JKSN"}
+{"transform": "double_metaphone_primary", "input": "Catherine", "expected": "K0RN"}
+{"transform": "double_metaphone_primary", "input": "Katherine", "expected": "K0RN"}
+{"transform": "double_metaphone_primary", "input": "Thompson", "expected": "TMPSN"}
+{"transform": "double_metaphone_primary", "input": "Xavier", "expected": "SF"}
+{"transform": "double_metaphone_primary", "input": "Knight", "expected": "NT"}
+{"transform": "double_metaphone_primary", "input": "Wright", "expected": "RT"}
+{"transform": "double_metaphone_primary", "input": "Villa", "expected": "FL"}
+{"transform": "double_metaphone_primary", "input": "McDonald", "expected": "MKTNLT"}
+{"transform": "double_metaphone_primary", "input": "Ghislaine", "expected": "JLN"}
+{"transform": "double_metaphone_primary", "input": "robert", "expected": "RPRT"}
+{"transform": "double_metaphone_primary", "input": "12345", "expected": ""}
+{"transform": "double_metaphone_primary", "input": "", "expected": ""}
+{"transform": "double_metaphone_primary", "input": null, "expected": null}
+{"transform": "double_metaphone_alt", "input": "Smith", "expected": "XMT"}
+{"transform": "double_metaphone_alt", "input": "Schmidt", "expected": "SMT"}
+{"transform": "double_metaphone_alt", "input": "Catherine", "expected": "KTRN"}
+{"transform": "double_metaphone_alt", "input": "Villa", "expected": "F"}
+{"transform": "double_metaphone_alt", "input": "Cabrillo", "expected": "KPR"}
+{"transform": "double_metaphone_alt", "input": "Thompson", "expected": "TMPSN"}
+{"transform": "double_metaphone_alt", "input": "Xavier", "expected": "SFR"}
+{"transform": "double_metaphone_alt", "input": "Ghislaine", "expected": "JLN"}
+{"transform": "double_metaphone_alt", "input": "12345", "expected": ""}
+{"transform": "double_metaphone_alt", "input": "", "expected": ""}
+{"transform": "double_metaphone_alt", "input": null, "expected": null}
 {"transform": "cc_validate", "input": "424242424242😀2", "expected": false}
 {"transform": "iban_validate", "input": "DE89370400440532😀13000", "expected": false}
 {"transform": "vat_validate", "input": "DE13669597😀", "expected": false}
@@ -267,6 +396,22 @@
 {"transform": "email_validate", "input": "", "expected": false}
 {"transform": "email_validate", "input": "   ", "expected": false}
 {"transform": "email_validate", "input": null, "expected": null}
+{"transform": "email_canonical", "input": "j.o.h.n@googlemail.com", "expected": "john@gmail.com"}
+{"transform": "email_canonical", "input": "John.Doe+tag@Gmail.com", "expected": "johndoe@gmail.com"}
+{"transform": "email_canonical", "input": "ab@gmail.com", "expected": "ab@gmail.com"}
+{"transform": "email_canonical", "input": "a+b@x.com", "expected": "a@x.com"}
+{"transform": "email_canonical", "input": "notanemail", "expected": "notanemail"}
+{"transform": "email_canonical", "input": "", "expected": ""}
+{"transform": "email_canonical", "input": null, "expected": null}
+{"transform": "email_mask", "input": "John@Example.com", "expected": "j***@example.com"}
+{"transform": "email_mask", "input": "a@b.co", "expected": "a@b.co"}
+{"transform": "email_mask", "input": "j.doe@x.com", "expected": "j****@x.com"}
+{"transform": "email_mask", "input": "a@b@c.com", "expected": "a**@c.com"}
+{"transform": "email_mask", "input": "notanemail", "expected": null}
+{"transform": "email_mask", "input": "@no-local.com", "expected": null}
+{"transform": "email_mask", "input": "no-domain@", "expected": null}
+{"transform": "email_mask", "input": "", "expected": null}
+{"transform": "email_mask", "input": null, "expected": null}
 {"transform": "url_normalize", "input": "Example.COM/Path/", "expected": "https://example.com/Path"}
 {"transform": "url_normalize", "input": "http://X.com/", "expected": "http://x.com"}
 {"transform": "url_normalize", "input": "https://a.com", "expected": "https://a.com"}
@@ -287,6 +432,55 @@
 {"transform": "url_extract_domain", "input": "", "expected": null}
 {"transform": "url_extract_domain", "input": "   ", "expected": null}
 {"transform": "url_extract_domain", "input": null, "expected": null}
+{"transform": "url_strip_tracking", "input": "https://a.com/p?utm_source=x&id=7&utm_medium=y&q=1", "expected": "https://a.com/p?id=7&q=1"}
+{"transform": "url_strip_tracking", "input": "https://a.com/p?utm_source=x&fbclid=abc", "expected": "https://a.com/p"}
+{"transform": "url_strip_tracking", "input": "https://a.com/p?gclid=1&k=2#frag", "expected": "https://a.com/p?k=2#frag"}
+{"transform": "url_strip_tracking", "input": "https://a.com/p", "expected": "https://a.com/p"}
+{"transform": "url_strip_tracking", "input": "https://a.com?UTM_Source=x&keep=1", "expected": "https://a.com?keep=1"}
+{"transform": "url_strip_tracking", "input": "https://a.com?ref=twitter&spm=1&real=2", "expected": "https://a.com?real=2"}
+{"transform": "url_strip_tracking", "input": "", "expected": null}
+{"transform": "url_strip_tracking", "input": null, "expected": null}
+{"transform": "url_strip_www", "input": "https://www.Example.com/Path", "expected": "https://Example.com/Path"}
+{"transform": "url_strip_www", "input": "http://WWW.a.com", "expected": "http://a.com"}
+{"transform": "url_strip_www", "input": "www.a.com/x", "expected": "a.com/x"}
+{"transform": "url_strip_www", "input": "https://a.com", "expected": "https://a.com"}
+{"transform": "url_strip_www", "input": "https://sub.www.a.com", "expected": "https://sub.www.a.com"}
+{"transform": "url_strip_www", "input": "", "expected": null}
+{"transform": "url_strip_www", "input": null, "expected": null}
+{"transform": "url_canonical", "input": "HTTPS://WWW.Example.com/Path/?utm_source=x&id=7#frag", "expected": "https://example.com/Path?id=7"}
+{"transform": "url_canonical", "input": "WWW.A.com/", "expected": "https://a.com"}
+{"transform": "url_canonical", "input": "http://a.com/?fbclid=1", "expected": "http://a.com"}
+{"transform": "url_canonical", "input": "https://a.com/x/", "expected": "https://a.com/x"}
+{"transform": "url_canonical", "input": "Example.com", "expected": "https://example.com"}
+{"transform": "url_canonical", "input": "", "expected": null}
+{"transform": "url_canonical", "input": "   ", "expected": null}
+{"transform": "url_canonical", "input": null, "expected": null}
+{"transform": "company_normalize", "input": "Apple Inc.", "expected": "apple"}
+{"transform": "company_normalize", "input": "The Coca-Cola Company", "expected": "coca cola"}
+{"transform": "company_normalize", "input": "Microsoft Corporation", "expected": "microsoft"}
+{"transform": "company_normalize", "input": "Google L.L.C.", "expected": "google"}
+{"transform": "company_normalize", "input": "Procter & Gamble Co", "expected": "procter & gamble"}
+{"transform": "company_normalize", "input": "AT&T Inc", "expected": "at&t"}
+{"transform": "company_normalize", "input": "Theranos", "expected": "theranos"}
+{"transform": "company_normalize", "input": "Berkshire Hathaway", "expected": "berkshire hathaway"}
+{"transform": "company_normalize", "input": "LLC", "expected": ""}
+{"transform": "company_normalize", "input": "", "expected": null}
+{"transform": "company_normalize", "input": null, "expected": null}
+{"transform": "company_strip_legal", "input": "Apple Inc.", "expected": "Apple"}
+{"transform": "company_strip_legal", "input": "Microsoft, Corporation", "expected": "Microsoft"}
+{"transform": "company_strip_legal", "input": "MICROSOFT CORP", "expected": "MICROSOFT"}
+{"transform": "company_strip_legal", "input": "Acme Co Ltd", "expected": "Acme"}
+{"transform": "company_strip_legal", "input": "  Berkshire Hathaway  ", "expected": "Berkshire Hathaway"}
+{"transform": "company_strip_legal", "input": "Ltd", "expected": ""}
+{"transform": "company_strip_legal", "input": "", "expected": null}
+{"transform": "company_strip_legal", "input": null, "expected": null}
+{"transform": "company_extract_legal", "input": "Apple Inc.", "expected": "inc"}
+{"transform": "company_extract_legal", "input": "Google L.L.C.", "expected": "llc"}
+{"transform": "company_extract_legal", "input": "Microsoft Corporation", "expected": "corporation"}
+{"transform": "company_extract_legal", "input": "Berkshire Hathaway", "expected": null}
+{"transform": "company_extract_legal", "input": "Standalone", "expected": null}
+{"transform": "company_extract_legal", "input": "", "expected": null}
+{"transform": "company_extract_legal", "input": null, "expected": null}
 {"transform": "address_standardize", "input": "123 Main Street", "expected": "123 Main St"}
 {"transform": "address_standardize", "input": "1 Park Avenue", "expected": "1 Park Ave"}
 {"transform": "address_standardize", "input": "5 Sunset Boulevard", "expected": "5 Sunset Blvd"}

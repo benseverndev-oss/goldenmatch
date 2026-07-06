@@ -93,6 +93,14 @@ _COMPONENT_SYMBOLS: dict[str, tuple[str, ...]] = {
     # imei: IMEI (Luhn checksum, reuses the same luhn_ok as cc) -- floor
     # symbol only, region-free.
     "imei": ("imei_validate_arrow",),
+    # isin: ISIN (ISO 6166, Luhn over letter-expanded) -- floor symbol only.
+    "isin": ("isin_validate_arrow",),
+    # cusip: CUSIP (weighted mod-10) -- floor symbol only.
+    "cusip": ("cusip_validate_arrow",),
+    # npi: US NPI (Luhn over 80840 prefix) -- floor symbol only.
+    "npi": ("npi_validate_arrow",),
+    # luhn: generic Luhn check-digit (not cc-length-bound) -- floor symbol only.
+    "luhn": ("luhn_validate_arrow",),
     # name_transliterate: explicit ASCII-fold map for common Latin-script
     # diacritics -- floor symbol only, locale-free.
     "name_transliterate": ("name_transliterate_arrow",),
@@ -105,6 +113,9 @@ _COMPONENT_SYMBOLS: dict[str, tuple[str, ...]] = {
     # url: normalize/extract_domain -- floor symbol only (url_normalize_arrow),
     # locale-free, region-free.
     "url": ("url_normalize_arrow",),
+    # company: normalize/strip_legal/extract_legal -- floor symbol only
+    # (company_normalize_arrow), locale-free (curated legal-suffix table).
+    "company": ("company_normalize_arrow",),
     # numeric: string->number parsers (currency/percentage/to_integer/
     # comma_decimal/scientific_to_decimal) + numeric-array ops (round/clamp/
     # abs_value/fill_zero) -- floor symbol only (currency_strip_arrow),
@@ -134,6 +145,8 @@ _COMPONENT_SYMBOLS: dict[str, tuple[str, ...]] = {
     # remove_emojis/extract_numbers) -- floor symbol only (strip_arrow),
     # locale-free (ASCII-bounded char classes; explicit emoji ranges).
     "text": ("strip_arrow",),
+    # phonetic: blocking/match-key encoders (soundex) -- floor symbol only.
+    "phonetic": ("soundex_arrow",),
 }
 
 # Components whose only native path is intentionally non-authoritative (the
