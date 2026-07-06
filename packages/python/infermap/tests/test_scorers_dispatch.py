@@ -30,3 +30,39 @@ def test_scorer_classes_still_work():
     a, b = FieldInfo(name="city"), FieldInfo(name="city")
     assert ExactScorer().score(a, b).score == 1.0
     assert FuzzyNameScorer().score(a, b).score == 1.0
+
+
+# --- Wave 3: profile scorer ---
+from infermap.scorers.profile import ProfileScorer, _profile_score_pure  # noqa: E402
+
+
+def test_profile_pure_identical_profiles_is_one():
+    # same dtype, equal null/uniq, equal lens, equal cards -> all 5 terms = 1.0
+    s = _profile_score_pure("string", "string", 0.1, 0.1, 0.5, 0.5,
+                            100.0, 100.0, 8.0, 8.0)
+    assert s == 1.0
+
+
+def test_profile_pure_dtype_mismatch_drops_point_four():
+    # identical except dtype -> 1.0 - 0.4 = 0.6
+    s = _profile_score_pure("string", "int", 0.1, 0.1, 0.5, 0.5,
+                            100.0, 100.0, 8.0, 8.0)
+    assert s == 0.6
+
+
+def test_profile_scorer_abstains_on_zero_rows():
+    src = FieldInfo(name="a", value_count=0)
+    tgt = FieldInfo(name="b", value_count=10)
+    assert ProfileScorer().score(src, tgt) is None
+
+
+def test_profile_scorer_reasoning_unchanged():
+    src = FieldInfo(name="a", dtype="string", null_rate=0.1, unique_rate=0.5,
+                    value_count=100, sample_values=["abcd", "efgh"])
+    tgt = FieldInfo(name="b", dtype="string", null_rate=0.1, unique_rate=0.5,
+                    value_count=100, sample_values=["abcd", "efgh"])
+    r = ProfileScorer().score(src, tgt)
+    assert r is not None
+    for part in ("dtype=match", "null_sim=", "uniq_sim=", "len_sim=", "card_sim="):
+        assert part in r.reasoning
+    assert r.reasoning.startswith("Profile comparison: ")
