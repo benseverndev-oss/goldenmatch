@@ -1,6 +1,11 @@
 //! Arrow shims over goldenflow_core::text. Bytes in, kernel per element, bytes
 //! out; GIL released. All logic lives in the core.
-use crate::util::map_str_to_str;
+//!
+//! `strip`/`lowercase`/`uppercase` take the Arrow-COLUMNAR apply path (write
+//! into one shared buffer / whole-buffer ASCII case-fold) -- measured 4-10x
+//! over the per-element path, byte-identical (goldenflow-core `columnar` +
+//! `benches/columnar_pilot.rs`). The rest stay on the scalar `map_str_to_str`.
+use crate::util::{ascii_case_columnar, map_str_columnar, map_str_to_str};
 use arrow::array::ArrayData;
 use arrow::pyarrow::PyArrowType;
 use goldenflow_core::text;
@@ -8,9 +13,12 @@ use pyo3::prelude::*;
 
 #[pyfunction]
 pub fn strip_arrow(py: Python, array: PyArrowType<ArrayData>) -> PyResult<PyArrowType<ArrayData>> {
-    Ok(PyArrowType(map_str_to_str(py, array.0, |s| {
-        Some(text::strip(s).to_string())
-    })?))
+    Ok(PyArrowType(map_str_columnar(
+        py,
+        array.0,
+        |s, buf| buf.push_str(text::strip(s)),
+        |s| text::strip(s).to_string(),
+    )?))
 }
 
 #[pyfunction]
@@ -153,9 +161,12 @@ pub fn lowercase_arrow(
     py: Python,
     array: PyArrowType<ArrayData>,
 ) -> PyResult<PyArrowType<ArrayData>> {
-    Ok(PyArrowType(map_str_to_str(py, array.0, |s| {
-        Some(text::lowercase(s))
-    })?))
+    Ok(PyArrowType(ascii_case_columnar(
+        py,
+        array.0,
+        false,
+        text::lowercase,
+    )?))
 }
 
 #[pyfunction]
@@ -163,9 +174,12 @@ pub fn uppercase_arrow(
     py: Python,
     array: PyArrowType<ArrayData>,
 ) -> PyResult<PyArrowType<ArrayData>> {
-    Ok(PyArrowType(map_str_to_str(py, array.0, |s| {
-        Some(text::uppercase(s))
-    })?))
+    Ok(PyArrowType(ascii_case_columnar(
+        py,
+        array.0,
+        true,
+        text::uppercase,
+    )?))
 }
 
 #[pyfunction]

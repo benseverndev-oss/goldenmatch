@@ -32,7 +32,7 @@ arrow = { version = "59", default-features = false, features = ["pyarrow"] }
 #
 # Owned reference kernels (pure phone logic). native-flow is now a marshaling
 # shim: Arrow in/out + GIL release here, the actual computation in the core.
-goldenflow-core = { path = "../goldenflow-core" }
+goldenflow-core = { path = "../goldenflow-core", features = ["arrow"] }
 
 [profile.release]
 opt-level = 3
