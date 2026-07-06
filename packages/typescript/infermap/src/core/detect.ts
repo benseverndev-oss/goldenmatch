@@ -1,6 +1,7 @@
 // Lightweight domain-pack auto-detection from column names.
 import { listDomains, loadDomain } from "goldencheck-types";
 import type { DetectionResult } from "goldencheck-types";
+import { getInfermapBackend } from "./wasm/backend.js";
 
 export const DEFAULT_MIN_SCORE = 0.3;
 
@@ -37,6 +38,47 @@ function hintMatches(hint: string, col: string): boolean {
   return false;
 }
 
+/** Pure scoring over resolved [name, hints[]] domains — the WASM parity oracle.
+ *  Byte-identical to infermap-core::detect_domain for NON-EMPTY columns. The
+ *  empty-columns `no_data` guard lives in detectDomainDetailed (the kernel guards
+ *  it too), so scoreDomains is never called with empty columns in production. */
+export function scoreDomains(
+  columns: string[],
+  resolved: Array<[string, string[]]>,
+  minScore: number,
+): DetectionResult {
+  const scored: Array<[string, number]> = [];
+  for (const [name, hints] of resolved) {
+    if (hints.length === 0) continue; // == Rust `hints.is_empty()` skip
+    let hits = 0;
+    for (const c of columns) {
+      for (const h of hints) {
+        if (hintMatches(h, c)) {
+          hits++;
+          break;
+        }
+      }
+    }
+    scored.push([name, hits / Math.max(columns.length, 1)]);
+  }
+  if (scored.length === 0) {
+    return { domain: null, score: 0, runner_up: null, runner_up_score: 0, reason: "no_data" };
+  }
+  scored.sort((a, b) => b[1] - a[1]);
+  const [bestName, bestScore] = scored[0]!;
+  const runner = scored[1];
+  const runnerName = runner ? runner[0] : null;
+  const runnerScore = runner ? runner[1] : 0;
+  if (bestScore < minScore) {
+    return { domain: null, score: bestScore, runner_up: runnerName, runner_up_score: runnerScore, reason: "below_min_score" };
+  }
+  const topCount = scored.filter(([, s]) => s === bestScore).length;
+  if (topCount > 1) {
+    return { domain: null, score: bestScore, runner_up: runnerName, runner_up_score: runnerScore, reason: "tie" };
+  }
+  return { domain: bestName, score: bestScore, runner_up: runnerName, runner_up_score: runnerScore, reason: "confident" };
+}
+
 export function detectDomain(
   input: DetectInput | { records?: ReadonlyArray<Record<string, unknown>> },
   candidates?: string[],
@@ -66,44 +108,23 @@ export function detectDomainDetailed(
     return { domain: null, score: 0, runner_up: null, runner_up_score: 0, reason: "no_data" };
   }
 
-  const domains = candidates ?? listDomains().filter((d) => d !== "generic");
-  const scored: Array<[string, number]> = [];
-  for (const d of domains) {
+  const domainNames = candidates ?? listDomains().filter((d) => d !== "generic");
+  // Hoist hint resolution into a pre-pass so the SAME resolved input feeds the
+  // kernel or the pure path. Empty-hint domains are INCLUDED (both paths skip
+  // them: kernel via hints.is_empty(), pure via hints.length===0), so scoring is
+  // identical to the pre-refactor inline loop.
+  const resolved: Array<[string, string[]]> = domainNames.map((d) => {
     const pack = loadDomain(d);
     const allHints = new Set<string>();
     for (const spec of Object.values(pack.types)) {
       for (const h of spec.name_hints) allHints.add(h);
     }
-    if (allHints.size === 0) continue;
+    return [d, Array.from(allHints)];
+  });
 
-    let hits = 0;
-    for (const c of columns) {
-      for (const h of allHints) {
-        if (hintMatches(h, c)) {
-          hits++;
-          break;
-        }
-      }
-    }
-    scored.push([d, hits / Math.max(columns.length, 1)]);
+  const backend = getInfermapBackend();
+  if (backend) {
+    return backend.detectDomain(columns, resolved, minScore);
   }
-
-  if (scored.length === 0) {
-    return { domain: null, score: 0, runner_up: null, runner_up_score: 0, reason: "no_data" };
-  }
-
-  scored.sort((a, b) => b[1] - a[1]);
-  const [bestName, bestScore] = scored[0]!;
-  const runner = scored[1];
-  const runnerName = runner ? runner[0] : null;
-  const runnerScore = runner ? runner[1] : 0;
-
-  if (bestScore < minScore) {
-    return { domain: null, score: bestScore, runner_up: runnerName, runner_up_score: runnerScore, reason: "below_min_score" };
-  }
-  const topCount = scored.filter(([, s]) => s === bestScore).length;
-  if (topCount > 1) {
-    return { domain: null, score: bestScore, runner_up: runnerName, runner_up_score: runnerScore, reason: "tie" };
-  }
-  return { domain: bestName, score: bestScore, runner_up: runnerName, runner_up_score: runnerScore, reason: "confident" };
+  return scoreDomains(columns, resolved, minScore);
 }
