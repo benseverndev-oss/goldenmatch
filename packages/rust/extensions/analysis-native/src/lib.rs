@@ -245,6 +245,14 @@ fn max(values: PyArrowType<ArrayData>) -> PyResult<f64> {
     Ok(analysis_core::max(&vals))
 }
 
+/// Discrete cluster-size histogram of a Float64 Arrow column -- native mirror of
+/// `goldenanalysis.core.aggregate.cluster_size_histogram`.
+#[pyfunction]
+fn cluster_size_histogram(values: PyArrowType<ArrayData>) -> PyResult<Vec<i64>> {
+    let vals = read_f64(values, "cluster_size_histogram")?;
+    Ok(analysis_core::cluster_size_histogram(&vals))
+}
+
 /// Per-column null ratio (`null_count / len`, 0.0 for empty columns) for each
 /// Arrow column. Reads Arrow null buffers directly -- no interning needed.
 #[pyfunction]
@@ -274,5 +282,6 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(mean, m)?)?;
     m.add_function(wrap_pyfunction!(min, m)?)?;
     m.add_function(wrap_pyfunction!(max, m)?)?;
+    m.add_function(wrap_pyfunction!(cluster_size_histogram, m)?)?;
     Ok(())
 }

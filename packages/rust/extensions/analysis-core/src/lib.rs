@@ -125,9 +125,48 @@ pub fn max(values: &[f64]) -> f64 {
     values.iter().copied().fold(f64::NEG_INFINITY, f64::max)
 }
 
+/// Discrete cluster-size histogram: counts of sizes equal to 1, 2, 3, and >= 4.
+/// Returns exactly 4 buckets `[n1, n2, n3, n4plus]`. Empty => `[0, 0, 0, 0]`.
+///
+/// Input is exact-integer cluster sizes as f64 (reuses the numeric Float64 bridge).
+/// Sizes are always integers >= 1 in practice; a fractional/<=0 value that matches no
+/// bucket is simply not counted -- it cannot occur for real cluster sizes.
+pub fn cluster_size_histogram(sizes: &[f64]) -> Vec<i64> {
+    let mut buckets = [0i64; 4];
+    for &s in sizes {
+        if s == 1.0 {
+            buckets[0] += 1;
+        } else if s == 2.0 {
+            buckets[1] += 1;
+        } else if s == 3.0 {
+            buckets[2] += 1;
+        } else if s >= 4.0 {
+            buckets[3] += 1;
+        }
+    }
+    buckets.to_vec()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cluster_size_histogram_basic() {
+        // sizes 1,1,2,3,4,5,1 -> n1=3, n2=1, n3=1, n4plus=2
+        assert_eq!(cluster_size_histogram(&[1.0, 1.0, 2.0, 3.0, 4.0, 5.0, 1.0]), vec![3, 1, 1, 2]);
+    }
+
+    #[test]
+    fn cluster_size_histogram_empty() {
+        assert_eq!(cluster_size_histogram(&[]), vec![0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn cluster_size_histogram_boundary() {
+        assert_eq!(cluster_size_histogram(&[3.0, 4.0]), vec![0, 0, 1, 1]);
+        assert_eq!(cluster_size_histogram(&[1.0, 1.0, 1.0]), vec![3, 0, 0, 0]);
+    }
 
     #[test]
     fn mean_basic() {

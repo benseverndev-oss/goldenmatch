@@ -48,6 +48,7 @@ _GATED_ON: frozenset[str] = frozenset(
         "mean",
         "min",
         "max",
+        "cluster_size_histogram",
     }
 )
 
@@ -62,6 +63,7 @@ _COMPONENT_SYMBOLS: dict[str, str] = {
     "mean": "mean",
     "min": "min",
     "max": "max",
+    "cluster_size_histogram": "cluster_size_histogram",
 }
 
 

@@ -58,6 +58,13 @@ def _assert_min_max_parity(values: list) -> None:
     assert native_module().max(_f64(values)) == aggregate._max_pure(values)
 
 
+def _assert_cluster_hist_parity(sizes: list) -> None:
+    from goldenanalysis.core import aggregate
+
+    native = native_module().cluster_size_histogram(_f64(sizes))
+    assert list(native) == aggregate._cluster_size_histogram_pure(sizes)
+
+
 # ---------------------------------------------------------------------------
 # Parity (native present) -- native kernel vs the pure reference helpers
 # ---------------------------------------------------------------------------
@@ -167,6 +174,21 @@ def test_mean_parity_random(seed: int) -> None:
     rng = random.Random(seed)
     _assert_mean_parity([rng.uniform(-100.0, 1000.0) for _ in range(5000)])
     _assert_min_max_parity([rng.uniform(-100.0, 1000.0) for _ in range(5000)])
+
+
+_CLUSTER_FIXTURES = [
+    [1.0, 1.0, 2.0, 3.0, 4.0, 5.0, 1.0],
+    [],
+    [3.0, 4.0],
+    [1.0] * 50,
+    [float(i % 7 + 1) for i in range(500)],  # spread across all buckets
+]
+
+
+@native_only
+@pytest.mark.parametrize("sizes", _CLUSTER_FIXTURES)
+def test_cluster_size_histogram_parity(sizes: list) -> None:
+    _assert_cluster_hist_parity(sizes)
 
 
 @native_only

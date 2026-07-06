@@ -10,7 +10,7 @@
 import { describe, it, expect, afterAll } from "vitest";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { histogram, quantile } from "../../src/core/aggregate.js";
+import { histogram, quantile, clusterSizeHistogram } from "../../src/core/aggregate.js";
 import {
   enableAnalysisWasm,
   disableAnalysisWasm,
@@ -85,6 +85,26 @@ d("WASM aggregate parity", () => {
         expect(wasm).toBeCloseTo(pure, 4);
       });
     }
+  }
+
+  // Cluster-size histogram: integer size arrays, counts are exact => toEqual.
+  const CLUSTER_SIZES: number[][] = [
+    [1, 1, 2, 3, 4, 5, 1],
+    [],
+    [3, 4],
+    Array.from({ length: 50 }, () => 1),
+    Array.from({ length: 500 }, (_, i) => (i % 7) + 1),
+  ];
+  for (const sizes of CLUSTER_SIZES) {
+    it(`clusterSizeHistogram(n=${sizes.length}) WASM == pure-TS`, async () => {
+      disableAnalysisWasm();
+      const pure = clusterSizeHistogram(sizes);
+      const ok = await enableAnalysisWasm();
+      expect(ok).toBe(true);
+      const wasm = clusterSizeHistogram(sizes);
+      disableAnalysisWasm();
+      expect(wasm).toEqual(pure);
+    });
   }
 
   // Hand-verified absolute anchors (cross-language sanity).
