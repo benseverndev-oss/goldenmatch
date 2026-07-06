@@ -66,3 +66,9 @@ def test_profile_scorer_reasoning_unchanged():
     for part in ("dtype=match", "null_sim=", "uniq_sim=", "len_sim=", "card_sim="):
         assert part in r.reasoning
     assert r.reasoning.startswith("Profile comparison: ")
+
+
+def test_profile_score_registered_in_loader():
+    from infermap._native_loader import _COMPONENT_SYMBOLS, _GATED_ON
+    assert _COMPONENT_SYMBOLS.get("profile_score") == "profile_score"
+    assert "profile_score" in _GATED_ON
