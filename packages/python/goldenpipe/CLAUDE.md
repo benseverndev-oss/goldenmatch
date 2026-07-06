@@ -14,6 +14,26 @@ Sibling packages live in this monorepo at `packages/python/{goldencheck,goldenfl
 - Tools imported with try/except ImportError guards (HAS_CHECK, HAS_FLOW, HAS_MATCH)
 - Data flows as Polars DataFrames in memory between stages
 
+### Relocatable-stage seam (contract Phase A)
+Design: `docs/design/2026-07-06-goldenpipe-relocatable-stage-contract.md` (motivated
+by the Stage 0 finding: the single-process handoff is 0.2% of the wall, so the
+streaming executor is premature — but the *contract* that makes future
+out-of-core / cross-process / cross-language expansion a build-forward is worth
+laying now). **Phase A is inert groundwork — no behavior/perf change:**
+- `goldenpipe/models/frame.py` — `Frame` protocol + `LocalFrame`. **Arrow-capable,
+  not Arrow-mandatory:** `LocalFrame.polars()` returns the backing DataFrame BY
+  REFERENCE (zero copy); `arrow_batches()`/`from_arrow()` materialize Arrow ONLY
+  for a boundary-crossing (remote) stage. Streaming/remote frames (Phases B/C)
+  plug in behind this contract without touching the in-process path.
+- `PipeContext.frame` — a derived property over `df` (the canonical store stays
+  `df`, so existing `ctx.df` stages + `PipeContext(df=...)` are untouched). The
+  pipeline path never calls it today; it's the accessor a remote adapter will use.
+- `StageInfo.location` (default `"local"`) + a Runner guard that raises
+  `NotImplementedError` for any non-local stage (remote = Phase C, not built). The
+  `ExecutionPlan`/planner is unchanged — placement is orthogonal to ordering.
+- Guardrails: no forced Arrow round-trip in-process; Stage 0 numbers verified
+  unchanged (`benchmarks/stage0_handoff_profile.py`). Tests: `tests/test_relocatable_stage.py`.
+
 ## Pipeline Flow
 ```
 load_file -> GoldenCheck.scan_file(path) -> decide_flow(findings)
