@@ -68,7 +68,11 @@ pub fn detect_domain(columns: &[String], domains: &[(String, Vec<String>)], min_
 
 // tokenize on [_\-.\s]+, lowercase, drop empties (see §6 Unicode note)
 fn tokens(s: &str) -> Vec<String> { ... }
-// true iff hint's tokens appear as a contiguous run in col's tokens
+// true iff hint's tokens appear as a contiguous run in col's tokens.
+// GUARD: usize underflow -- `n > c_tokens.len()` must early-return false BEFORE any
+// `c.len() - n` subtraction (Python's `range(len - n + 1)` yields empty; Rust `usize`
+// subtraction would underflow/panic). Prefer `c_tokens.windows(n).any(|w| w == h_tokens)`
+// (windows() yields nothing when n > len -- no manual arithmetic).
 fn hint_matches(hint: &str, col: &str) -> bool { ... }
 ```
 
@@ -95,9 +99,24 @@ fn detect_domain(
     let d = infermap_core::detect_domain(&columns, &domains, min_score);
     Ok((d.domain, d.score, d.runner_up, d.runner_up_score, d.reason))
 }
+
+#[pymodule]
+fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    // NOTE: register with a `self::`-qualified path (NOT the bare
+    // `wrap_pyfunction!(detect_domain, m)` that analysis-native uses) so the
+    // `check_native_symbols._WRAP` regex `(?:\w+::)+` matches this export -- see §7.
+    m.add_function(wrap_pyfunction!(self::detect_domain, m)?)?;
+    Ok(())
+}
 ```
 Returns a tuple (pyo3-native, no custom class needed); the Python host maps it to the
-5 `DetectionResult` fields. `#[pymodule] fn _native(...)` registers it.
+5 `DetectionResult` fields.
+
+**Maturin mixed-layout wrapper (required for the wheel import path).** Mirror
+`analysis-native`: ship `packages/rust/extensions/infermap-native/python/infermap_native/__init__.py`
+(re-exports `_native`) with `[tool.maturin] python-source = "python"` +
+`module-name = "infermap_native._native"` in the crate's `pyproject.toml`. Without this
+the loader's second discovery path (`infermap_native._native`) has nothing to import.
 
 ## 5. Python dispatch + gate + scaffold
 
@@ -129,9 +148,12 @@ Returns a tuple (pyo3-native, no custom class needed); the Python host maps it t
     to `[project.optional-dependencies]`.
   - root `pyproject.toml [tool.uv.sources]`: `infermap-native = { path =
     "packages/rust/extensions/infermap-native" }`.
-  - `packages/rust/extensions/Cargo.toml` workspace `exclude += "infermap-native"`
-    (standalone abi3 ext-module, like `analysis-native`); `infermap-core` joins
-    `members` (a normal lib crate).
+  - `packages/rust/extensions/Cargo.toml` workspace `exclude += ["infermap-native",
+    "infermap-core"]` — BOTH halves, mirroring the goldencheck/analysis comment-blocks.
+    Every `-core` is a path-dependency of its standalone `[workspace]`-owning `-native`
+    crate and is kept OUT of the `bridge` workspace (which stays `members = ["bridge"]`)
+    to avoid double-ownership / two Cargo.locks resolving the same crate. Do NOT add
+    `infermap-core` to `members`.
   - `scripts/build_infermap_native.py` (mirror `build_analysis_native.py`).
   - `.github/workflows/publish-infermap-native.yml` (tag `infermap-native-v*`; mirror
     `publish-goldenanalysis-native.yml`).
@@ -157,17 +179,34 @@ Returns a tuple (pyo3-native, no custom class needed); the Python host maps it t
   future need arises, the fix is to restrict tokenization to ASCII-lowercase in BOTH
   surfaces. (This is `detect`'s analogue of the `mean` naive-summation nuance /
   `dates` non-portability lesson.) The regex `[_\-.\s]+` split is implemented as a
-  manual char scan in Rust (split on `_`, `-`, `.`, and Unicode whitespace) to avoid
-  regex-crate `\s` semantics drift; a fixture pins the separator set.
+  manual char scan in Rust (split on `_`, `-`, `.`, and whitespace); a fixture pins the
+  EXACT separator set the kernel uses.
+  - **The `\s` divergence is not only a Unicode-edge issue — it splits even inside
+    ASCII.** Python regex `\s` (Unicode) treats `\x1c`–`\x1f` (FS/GS/RS/US) + `\x85` (NEL)
+    as whitespace; Rust `char::is_whitespace()` does NOT include `\x1c`–`\x1f`; JS `\s`
+    (in `detect.ts`) includes `﻿`/` ` and excludes `\x1c`–`\x1f`/`\x85`. So
+    `detect.py` and `detect.ts` **already disagree** on exotic-whitespace column names
+    today, and "Rust as the reference" cannot be byte-identical to BOTH surfaces at those
+    edges. ASCII-scoping (real column names) sidesteps this for the common case; the
+    prose must NOT claim pure-ASCII columns can *never* diverge — the fixture pins the
+    kernel's separator set explicitly and the `\x1c`–`\x1f`/`\x85` chars are the
+    documented edge.
 
 ## 7. Rollout / docs
 
 - Branch `feat/infermap-core-wave1-detect`, off fresh `origin/main`. Rust is CI-built
   (box can't `cargo build`); Python pure path box-verified; run `ruff` on touched Python.
-- `native_symbols` gate: `check_native_symbols.py` REGISTRY gains `infermap` (host ref
-  `native_module().detect_domain` ↔ the one `wrap_pyfunction!` export) — added together,
-  self-reconciles. (Confirm the gate's per-package idiom fits `infermap`'s
-  `native_module()` loader.)
+- `native_symbols` gate: `check_native_symbols.py` REGISTRY gains an `infermap` entry
+  (`idiom="runtime"`, `loader_tokens=("native_module",)` — `_detect_core` calls
+  `native_module().detect_domain(...)` directly, which the base-alias `scan_file_refs`
+  picks up). **Load-bearing:** the gate's `_WRAP` regex is
+  `wrap_pyfunction!\(\s*(?:\w+::)+(\w+)` — it requires a `::`-qualified registration and
+  MISSES the bare `wrap_pyfunction!(detect_domain, m)` that `analysis-native` uses
+  (goldenanalysis escapes this only because it is NOT in the REGISTRY). So
+  `infermap-native` MUST register as `wrap_pyfunction!(self::detect_domain, m)` (§4) for
+  the export to be scanned; otherwise `registered` is empty → the referenced symbol reads
+  as missing → the gate reds. Register with `self::` AND add the REGISTRY entry in the
+  same change so they self-reconcile.
 - CLAUDE.md: an InferMap-cutover note (scaffold established; detect kernel; Unicode-
   lowercase edge; scorers/assignment/calibration = later waves; LLM scorer stays host).
 - api-surface.mdx: goldenanalysis-style — the InferMap "Native / SQL" column flips from
@@ -177,9 +216,12 @@ Returns a tuple (pyo3-native, no custom class needed); the Python host maps it t
 
 - **Unicode lowercasing** (§6) — the one real parity risk; resolved by ASCII-scoping +
   documenting the edge.
-- **Stable-sort tie handling** — Rust `sort_by` is stable; the reverse comparator must
-  NOT reorder equal-score ties (use `b.score.partial_cmp(&a.score)` on a stable sort, or
-  sort ascending then reverse-index carefully). A fixture with a 3-way score tie pins it.
+- **Stable-sort tie handling** — Python `list.sort(reverse=True)` is stable and keeps
+  equal-key elements in ORIGINAL order. Rust `Vec::sort_by(|a, b| b.score.partial_cmp(
+  &a.score).unwrap())` is also a stable sort and leaves `Equal` pairs in place → matches.
+  Scores are `hits/len` (always finite, non-NaN) so `.unwrap()` is safe. Do NOT "sort
+  ascending then reverse" — reversing a stable ascending sort FLIPS tie order and would
+  diverge from Python on any score tie. A fixture with a 3-way score tie pins it.
 - **Cold-start scaffold surface area** — large but mechanical; every piece mirrors the
   proven GoldenAnalysis P4 native scaffold. The risk is an omitted lockstep step (uv
   source / Cargo exclude / Cargo.lock force-add) breaking `uv sync` — the plan enumerates
