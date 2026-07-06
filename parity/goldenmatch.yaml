@@ -18,11 +18,16 @@
 #      find_exact_matches, find_fuzzy_matches, read_file, write_csv, server_info.
 #
 # a2a_skills surface (A2A AgentCard skills). The core ops share canonical ids and ARE shared
-# (deduplicate, match, explain, evaluate, identity_* , learn_thresholds, memory_stats, ...).
-# Known NAMING DIVERGENCES (same operation, different id per server — FOLLOW-UP to reconcile,
-# NOT reconciled here): PY autoconfig / TS auto_configure; PY compare_strategies / TS
-# agent_compare_strategies; PY quality / TS scan_quality + fix_quality; PY transform / TS
-# run_transforms; PY pprl / TS suggest_pprl. TS also exposes the agent_* skill variants
+# (deduplicate, match, explain, evaluate, autoconfig, compare_strategies, transform, identity_*,
+# learn_thresholds, memory_stats, ...). RECONCILED 2026-07-05: autoconfig/auto_configure,
+# compare_strategies/agent_compare_strategies, transform/run_transforms were verified same-op
+# and aliased to Python's canonical id (TS card advertises the canonical, legacy tool id still
+# dispatches) — now shared.
+# Remaining a2a_skills divergences are VERIFIED-DIFFERENT ops, NOT drift: PY `quality` is one
+# scan+fix skill vs TS's `scan_quality` + `fix_quality` (1:2 granularity); PY `pprl` RUNS
+# linkage (`pprl_link`, two files) while TS `suggest_pprl` SUGGESTS params (`profileForAgent`,
+# "recommend") — TS suggest_pprl is the A2A analogue of Python's own suggest_pprl, not pprl.
+# TS also exposes the agent_* skill variants
 # (agent_deduplicate/agent_match_sources/agent_explain_pair/agent_explain_cluster/
 # agent_review_queue/agent_approve_reject) and edge primitives (score, profile, suggest_config,
 # list_scorers/list_strategies/list_transforms, memory_export); Python ships the richer
@@ -162,6 +167,8 @@ a2a_skills:
   shared:
   - add_correction
   - analyze_data
+  - autoconfig
+  - compare_strategies
   - controller_telemetry
   - deduplicate
   - evaluate
@@ -177,11 +184,10 @@ a2a_skills:
   - match
   - memory_stats
   - review_config
+  - transform
   python_only:
   - analyze_blocking
-  - autoconfig
   - compare_clusters
-  - compare_strategies
   - configure
   - identity_audit
   - identity_audit_seal
@@ -198,23 +204,19 @@ a2a_skills:
   - rollback
   - schema_match
   - sensitivity
-  - transform
   ts_only:
   - agent_approve_reject
-  - agent_compare_strategies
   - agent_deduplicate
   - agent_explain_cluster
   - agent_explain_pair
   - agent_match_sources
   - agent_review_queue
-  - auto_configure
   - fix_quality
   - list_scorers
   - list_strategies
   - list_transforms
   - memory_export
   - profile
-  - run_transforms
   - scan_quality
   - score
   - suggest_config
