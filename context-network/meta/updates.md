@@ -2,6 +2,18 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-07-06 -- GoldenFlow: fused columnar apply, Pillar-1 execution fusion, default-on (ADR 0034)
+- First real step of the "Great Polars Eviction": fuse a column's run of owned no-arg
+  total string→string kernels (25: text/email/name) into ONE native Arrow pass instead
+  of crossing the Python/Polars/Arrow boundary once per transform. Parity by construction
+  (byte-identical output + audit trail); generic over offset width because Polars exports
+  LargeUtf8. Shipped `goldenflow-native 0.12.0` (fused kernel on PyPI) + `goldenflow 1.14.0`;
+  `GOLDENFLOW_FUSED_APPLY` default-ON (opt-out `=0`).
+- HONEST VERDICT (measured, `bench-goldenflow-fused`): wall 1.07–1.27× (config-dependent,
+  *diluted* by compute-heavy kernels) but **peak RSS −22% at scale** — the durable win.
+  Positioned as a memory play, not a speed play. See ADR 0034 for the two "measure beats
+  intuition" lessons + the two CI footguns (YAML startup failure; stale rust-cache).
+
 ## 2026-07-06 -- GoldenAnalysis: cutover waves + the cut-vs-fixture rule + Wave 1b deferral (ADR 0033)
 - Extended the `analysis-core` cutover across GoldenAnalysis and wrote down **when a
   cutover is the right tool vs a cross-surface parity fixture**: cut only for MUSCLE with
