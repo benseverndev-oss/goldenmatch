@@ -53,12 +53,29 @@ in-engine pays (unlike Stage 0 / Phase B). Phase C v1 turns `location="remote"` 
   `lower(trim(col))` transform run in DuckDB), byte-identical to the local Polars
   path, reusing one engine connection via `ctx.metadata["duckdb_con"]`. Tests:
   `tests/test_engine_stage.py`.
-- **v2 follow-ons (not in v1):** wire the real `goldenflow_*` / `goldencheck_*`
-  DuckDB UDFs (already shipped) behind `RemoteStage`, and a DuckDB-table **source**
-  for `Pipeline.run` so the data originates in-engine (killing the ingress crossing
-  too). The dominant `goldenmatch.dedupe` scoring stage has no in-engine surface, so
-  a full ER pipeline still crosses for it — Phase C wins the other stages + keeps
-  data in-engine between them.
+Phase C **v2** closes the two documented gaps (`tests/test_engine_stage_v2.py`):
+- `adapters/engine.py` — **`EngineFlowTransformStage`**: runs a **real shipped**
+  `goldenflow_*` DuckDB UDF (from `goldenmatch_duckdb` — the same kernel on the
+  DuckDB/Postgres/dbt surfaces) as an in-engine projection, byte-identical to the
+  goldenflow Python transform. `transform` is a friendly alias (`email`/`strip`/…);
+  the UDFs register ONCE per engine con (`_goldenflow_udfs_registered` guard).
+  **Honest caveat:** the DuckDB `goldenflow_*` UDFs are per-value **Python**
+  callbacks (in-process polars), NOT the compiled zero-Python `goldenflow-duckdb`
+  cdylib — so v2 removes the DataFrame **materialization** boundary *between* stages
+  (the 89% pull), not Python from the per-value path. `validate()` raises if
+  `goldenmatch-duckdb`/`goldenflow` are absent.
+- `pipeline.py` — **DuckDB-table source**: `Pipeline.run(duckdb_con=, duckdb_table=)`
+  seeds `ctx.frame` as an engine-resident `DuckDBFrame` (table name regex-validated;
+  row count via a scalar `COUNT`, not a full pull). A remote stage right after pays
+  **no** ingress crossing (proven by a `.polars()` spy staying at 0). Invariant: **a
+  `DuckDBFrame` on `ctx` is always paired with its con in `ctx.metadata["duckdb_con"]`**
+  (both the source and the engine stages maintain this — the in-engine `.project`
+  runs on the relation's own con, which must be where the UDFs were registered).
+  Caveat: with the default auto-config (local `load` first), the source materializes
+  at `load` — the WIN needs the first stage to be remote.
+- The dominant `goldenmatch.dedupe` scoring stage still has no in-engine surface, so
+  a full ER pipeline crosses for it — Phase C wins every *other* stage + keeps data
+  in-engine between them.
 
 ## Pipeline Flow
 ```
