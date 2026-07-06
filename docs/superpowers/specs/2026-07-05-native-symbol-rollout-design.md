@@ -46,28 +46,34 @@ _WRAP = re.compile(r"wrap_pyfunction!\(\s*(?:\w+::)*(\w+)")
 Strictly more permissive; the 3 `mod::` crates are unaffected (the final `::`-segment
 is still captured). Add a fixture to guard both forms.
 
-### 3.2 Scanner change 2 — per-package reference idiom
+### 3.2 Scanner change 2 — per-package reference idiom (`runtime` | `literal`)
 
 `scan_references` currently only does the "runtime" idiom (`native_module()`/
-`_ensure_native()`/bound-alias `.X`, `getattr`, `hasattr`). goldenflow uses a
-**static-import** idiom instead. Add a per-package `idiom` key to REGISTRY:
-`"runtime"` (default; goldenmatch/goldencheck/goldenanalysis) or `"static_import"`
-(goldenflow).
+`_ensure_native()`/bound-alias `.X`, `getattr`, `hasattr` with a **string-literal**
+arg). goldencheck + goldenanalysis use exactly this idiom. goldenflow does NOT —
+verified: its kernel references are **string literals**, not attribute access.
 
+**goldenflow's real idiom (investigated).** `transforms/_native.py` is a pure-Python
+**shim** (74 wrapper functions `phone_e164_native`, …); the per-transform files
+import those *wrappers*, not kernel symbols. The actual kernel-symbol references live
+inside `_native.py` as **quoted `*_arrow` literals** passed to runner helpers /
+assigned to a variable then `getattr`'d: `_kernel_runner("phone_e164_arrow")`,
+`attr = "split_address_arrow"; getattr(nm, attr)`. Because `attr` is a *variable*, the
+runtime getattr-literal capture cannot see it — the reference is only visible as the
+string literal. And the crate's 74 symbols are uniformly `*_arrow`-suffixed.
+
+Add a per-package `idiom` key to REGISTRY: `"runtime"` (default; goldenmatch/
+goldencheck/goldenanalysis) or `"literal"` (goldenflow):
 - **runtime idiom**: unchanged (the existing `scan_file_refs`).
-- **static_import idiom**: scan for `from <anything>_native import <names>`,
-  extracting the imported symbol names. Must handle **single-line** (`from
-  goldenflow.transforms._native import build_canonical_map_native`) AND
-  **multi-line parenthesised** (`from x._native import (\n  a,\n  b as c,\n)`)
-  forms, and `import ... as alias` (capture the original name, left of `as`).
-  A regex over the parenthesised/one-line import body, split on commas, take the
-  token left of any `as`. Restrict to files whose text contains `_native import`
-  (bounds false positives). Test files excluded (structurally — `py_root` is the
-  package inner dir, tests live outside).
+- **literal idiom**: in files containing the loader token, capture string literals
+  matching a package-configured `literal_pattern` (goldenflow: `r'"(\w+_arrow)"'`) —
+  the quoted kernel-symbol names. These reconcile 1:1 against the registered
+  `*_arrow` exports. (The `static_import` idea from the prior draft is DROPPED — it
+  matched the wrapper namespace, not the kernel, and produced 100% missing.)
 
-The `run(package)` flow (parse registrations → scan references → reconcile →
-FAIL on missing / REPORT unwired, with the zero-referenced fail-loud guard) is
-unchanged; it just consults `spec["idiom"]` to pick the reference scanner.
+The `run(package)` flow (parse registrations → scan references → reconcile → FAIL on
+missing / REPORT unwired, with the zero-referenced fail-loud guard) is unchanged; it
+consults `spec["idiom"]` to pick the reference scanner.
 
 ### 3.3 REGISTRY entries
 
@@ -89,8 +95,9 @@ unchanged; it just consults `spec["idiom"]` to pick the reference scanner.
 "goldenflow": {
     "crate_reg": ["packages/rust/extensions/native-flow/src/lib.rs"],
     "py_root": "packages/python/goldenflow/goldenflow",
-    "loader_tokens": ("_native import",),      # static-import trigger for the file filter
-    "idiom": "static_import",
+    "loader_tokens": ("native_module",),   # _native.py imports native_module from the loader
+    "idiom": "literal",
+    "literal_pattern": r'"(\w+_arrow)"',   # goldenflow kernel symbols are *_arrow, quoted in _native.py
     "allow": "parity/native_symbols/goldenflow.allow",
 },
 ```
@@ -106,25 +113,32 @@ lane. (Also note in the PR / a one-line CLAUDE.md mention.)
 
 ## 4. Bootstrap
 
-Run each of the 3 gates locally (box-safe source parse). Each must be `missing`=∅.
-Triage each `missing` row if any (typo / getattr-fallback to unbuilt symbol /
-static-import of an unexported name). `unwired` (exported, no host ref) is
-REPORT-only — record the counts in the PR (likely surfaces dead exports, as
-goldenmatch's 3 did). Empty `.allow` files at bootstrap unless a real cross-kernel
-case appears. For **goldenflow** the static-import extraction is the risk — verify
-the extracted reference set is non-trivial and matches the visible imports before
-trusting a green result (the fail-loud zero-references guard catches a fully-broken
-extractor, but a partially-broken one under-scans silently — spot-check the set).
+Run each of the 3 gates locally (box-safe source parse). **Computed ahead (spec
+review):**
+- **goldencheck** — `missing`=∅ (clean); `unwired` = `{functional_dependency_holds}`
+  (1 dead export — `functional_dependency.py` calls `discover_functional_dependencies`).
+- **goldenanalysis** — `missing`=∅, `unwired`=∅ (registered {histogram, quantile} ==
+  referenced).
+- **goldenflow** — with the `literal` idiom, referenced ≈ the 74 `*_arrow` literals in
+  `_native.py`, reconciling 1:1 against the 74 registered → `missing`=∅. Verify the
+  referenced count is ~74 (not a handful) — a small count means the `literal_pattern`
+  or file-filter is wrong (the under-scan hazard).
+
+`unwired` is REPORT-only; record counts in the PR. Empty `.allow` files at bootstrap.
+Any non-empty `missing` is a real finding to triage (typo / renamed literal /
+getattr-fallback to unbuilt symbol).
 
 ## 5. Testing
 
 Extend `scripts/test_native_symbols.py` (box-safe, pure data):
 - `parse_registrations_text` fixture with a **bare** `wrap_pyfunction!(foo, m)` and a
   `mod::bar` — both captured.
-- a `static_import` fixture: single-line + multi-line parenthesised `from
-  x._native import (a, b as c)` → `{a, b}`; a `_native import`-free file → ∅.
-- the idiom dispatch: a runtime-idiom package uses the alias scanner; a
-  static_import package uses the import scanner.
+- a `literal` fixture: a file with `_kernel_runner("phone_e164_arrow")` +
+  `attr = "split_address_arrow"` → `{phone_e164_arrow, split_address_arrow}`; a file
+  without the loader token → ∅; a non-matching literal (`"not_a_kernel"`) → not
+  captured by the `_arrow` pattern.
+- the idiom dispatch: a `runtime` package uses the alias scanner; a `literal`
+  package uses the literal-pattern scanner over loader-token files.
 - Per-package real-gate smoke: `run("goldencheck")`/`("goldenanalysis")`/
   `("goldenflow")` exit 0 (missing=∅) after bootstrap.
 
@@ -151,12 +165,17 @@ matches the existing job:
 
 ## 8. Risks
 
-- **Static-import under-scan (goldenflow)** — the highest risk: a partially-broken
-  extractor under-scans → falsely green (misses drift), not falsely red. Mitigation:
-  §4 spot-check the extracted set vs the visible imports; §5 multi-line fixture; the
-  zero-references guard catches a total failure. If goldenflow's imports use a form
-  the extractor misses, its referenced set shrinks — visible as a suspiciously small
-  count for a 74-symbol crate.
+- **goldenflow `literal` under-scan** — the highest risk: if the `literal_pattern`
+  or file-filter is wrong the referenced set shrinks → falsely green (misses drift),
+  not red. Mitigation: §4 asserts referenced ≈ 74 (a handful means it's wrong); §5
+  fixture; the zero-references guard catches total failure. The `_arrow` suffix is
+  goldenflow-specific (all 74 symbols carry it today) — if a future goldenflow kernel
+  symbol lacks `_arrow`, the pattern misses it; the `unwired` report (that symbol
+  showing as exported-but-unreferenced) surfaces the gap.
+- **`literal` over-capture** — a stray `"\w+_arrow"` string in a loader-token file
+  that isn't a kernel symbol would false-RED (referenced-not-registered). Verified
+  none today (the `*_arrow` literals in `_native.py` are all kernel names); if one
+  appears, the `.allow` file is the escape hatch.
 - **Regex over-permissiveness** — `(?:\w+::)*` could in theory match a
   `wrap_pyfunction!(` inside a comment with a bare word; the existing behavior
   already tolerated this for `mod::` (a commented token without `(` and a name won't
