@@ -1,0 +1,216 @@
+{
+  "both": {
+    "expected": {
+      "metrics": [
+        {
+          "direction": "lower_better",
+          "key": "quality.findings_total",
+          "unit": "findings",
+          "value": 1
+        },
+        {
+          "direction": "lower_better",
+          "key": "quality.columns_with_findings",
+          "unit": "columns",
+          "value": 1
+        },
+        {
+          "direction": "neutral",
+          "key": "flow.rows_changed",
+          "unit": "rows",
+          "value": 2
+        },
+        {
+          "direction": "neutral",
+          "key": "flow.rules_fired",
+          "unit": "count",
+          "value": 1
+        }
+      ],
+      "tables": [
+        {
+          "columns": [
+            "class",
+            "count"
+          ],
+          "name": "findings_by_class",
+          "rows": [
+            [
+              "a",
+              1
+            ]
+          ]
+        }
+      ]
+    },
+    "input": {
+      "findings": [
+        {
+          "check": "a",
+          "column": "x"
+        }
+      ],
+      "manifest": {
+        "records": [
+          {
+            "affected_rows": 2
+          }
+        ]
+      }
+    }
+  },
+  "counts_and_ties": {
+    "expected": {
+      "metrics": [
+        {
+          "direction": "lower_better",
+          "key": "quality.findings_total",
+          "unit": "findings",
+          "value": 5
+        },
+        {
+          "direction": "lower_better",
+          "key": "quality.columns_with_findings",
+          "unit": "columns",
+          "value": 3
+        }
+      ],
+      "tables": [
+        {
+          "columns": [
+            "class",
+            "count"
+          ],
+          "name": "findings_by_class",
+          "rows": [
+            [
+              "b",
+              2
+            ],
+            [
+              "a",
+              2
+            ],
+            [
+              "c",
+              1
+            ]
+          ]
+        }
+      ]
+    },
+    "input": {
+      "findings": [
+        {
+          "check": "b",
+          "column": "x"
+        },
+        {
+          "check": "a",
+          "column": "y"
+        },
+        {
+          "check": "b",
+          "column": null
+        },
+        {
+          "check": "a",
+          "column": "x"
+        },
+        {
+          "check": "c",
+          "column": "z"
+        }
+      ]
+    }
+  },
+  "empty": {
+    "expected": {
+      "metrics": [],
+      "tables": []
+    },
+    "input": {}
+  },
+  "manifest_only": {
+    "expected": {
+      "metrics": [
+        {
+          "direction": "neutral",
+          "key": "flow.rows_changed",
+          "unit": "rows",
+          "value": 8
+        },
+        {
+          "direction": "neutral",
+          "key": "flow.rules_fired",
+          "unit": "count",
+          "value": 3
+        }
+      ],
+      "tables": []
+    },
+    "input": {
+      "manifest": {
+        "records": [
+          {
+            "affected_rows": 3
+          },
+          {
+            "affected_rows": 0
+          },
+          {
+            "affected_rows": 5
+          }
+        ]
+      }
+    }
+  },
+  "unknown_check": {
+    "expected": {
+      "metrics": [
+        {
+          "direction": "lower_better",
+          "key": "quality.findings_total",
+          "unit": "findings",
+          "value": 2
+        },
+        {
+          "direction": "lower_better",
+          "key": "quality.columns_with_findings",
+          "unit": "columns",
+          "value": 1
+        }
+      ],
+      "tables": [
+        {
+          "columns": [
+            "class",
+            "count"
+          ],
+          "name": "findings_by_class",
+          "rows": [
+            [
+              "unknown",
+              1
+            ],
+            [
+              "n",
+              1
+            ]
+          ]
+        }
+      ]
+    },
+    "input": {
+      "findings": [
+        {
+          "column": "x"
+        },
+        {
+          "check": "n",
+          "column": null
+        }
+      ]
+    }
+  }
+}
