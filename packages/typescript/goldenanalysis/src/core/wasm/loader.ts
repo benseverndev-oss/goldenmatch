@@ -11,6 +11,7 @@ export async function instantiateBackend(bytes: Uint8Array): Promise<AnalysisBac
     default: (input: { module_or_path: Uint8Array }) => Promise<unknown>;
     histogram: (values: Float64Array, bins: number) => Float64Array;
     quantile: (values: Float64Array, q: number) => number;
+    cluster_size_histogram: (sizes: Float64Array) => Float64Array;
   };
   await glue.default({ module_or_path: bytes });
   return {
@@ -25,6 +26,10 @@ export async function instantiateBackend(bytes: Uint8Array): Promise<AnalysisBac
     },
     quantile(values, q) {
       return glue.quantile(values, q);
+    },
+    clusterSizeHistogram(sizes) {
+      // analysis-wasm returns the 4 counts as a Float64Array [n1,n2,n3,n4plus].
+      return Array.from(glue.cluster_size_histogram(sizes));
     },
   };
 }

@@ -6,7 +6,7 @@
  * `packages/python/goldenanalysis/goldenanalysis/analyzers/cluster_dist.py`.
  */
 
-import { quantile } from "../aggregate.js";
+import { quantile, clusterSizeHistogram } from "../aggregate.js";
 import type {
   AnalysisTable,
   Analyzer,
@@ -59,7 +59,10 @@ export class ClusterDistributionAnalyzer implements Analyzer {
     const sumSizes = sizes.reduce((a, b) => a + b, 0);
     // Prefer the engine's own record total; fall back to summed cluster sizes.
     const recordCount = typeof stats["total_records"] === "number" ? stats["total_records"] : sumSizes;
-    const singletons = sizes.filter((s) => s === 1).length;
+    // Single-sourced discrete size histogram (== the Rust/Python kernel); singletons is
+    // bucket[0]. Buckets 1 / 2 / 3 / "4+".
+    const [n1, n2, n3, n4] = clusterSizeHistogram(sizes);
+    const singletons = n1;
 
     const metrics: Metric[] = [
       { key: "cluster.count", value: count, unit: "clusters", direction: "neutral" },
@@ -76,11 +79,6 @@ export class ClusterDistributionAnalyzer implements Analyzer {
       },
     ];
 
-    // Discrete size histogram, buckets 1 / 2 / 3 / "4+".
-    const n1 = sizes.filter((s) => s === 1).length;
-    const n2 = sizes.filter((s) => s === 2).length;
-    const n3 = sizes.filter((s) => s === 3).length;
-    const n4 = sizes.filter((s) => s >= 4).length;
     const table: AnalysisTable = {
       name: "cluster_size_histogram",
       columns: ["size", "count"],
