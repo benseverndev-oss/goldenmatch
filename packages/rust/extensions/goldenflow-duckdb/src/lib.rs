@@ -484,6 +484,7 @@ fn register_all(con: &Connection) -> Result<(), Box<dyn Error>> {
         // email
         "goldenflow_email_lowercase"      => goldenflow_core::email::email_lowercase,
         "goldenflow_email_normalize"      => goldenflow_core::email::email_normalize,
+        "goldenflow_email_canonical"      => goldenflow_core::email::email_canonical,
         // names
         "goldenflow_name_transliterate"   => goldenflow_core::names::name_transliterate,
         "goldenflow_name_script"          => goldenflow_core::names::name_script,
@@ -517,8 +518,12 @@ fn register_all(con: &Connection) -> Result<(), Box<dyn Error>> {
     register_opt_str!(con,
         "goldenflow_null_standardize"     => goldenflow_core::categorical::null_standardize,
         "goldenflow_email_extract_domain" => goldenflow_core::email::email_extract_domain,
+        "goldenflow_email_mask"           => goldenflow_core::email::email_mask,
         "goldenflow_url_normalize"        => goldenflow_core::url::url_normalize,
         "goldenflow_url_extract_domain"   => goldenflow_core::url::url_extract_domain,
+        "goldenflow_url_strip_tracking"   => goldenflow_core::url::url_strip_tracking,
+        "goldenflow_url_strip_www"        => goldenflow_core::url::url_strip_www,
+        "goldenflow_url_canonical"        => goldenflow_core::url::url_canonical,
         // identifier formatters/normalizers
         "goldenflow_cc_format"            => goldenflow_core::identifiers::luhn::cc_format,
         "goldenflow_cc_mask"              => goldenflow_core::identifiers::luhn::cc_mask,

@@ -126,6 +126,66 @@ registerTransform(
 );
 
 // ---------------------------------------------------------------------------
+// email_canonical (series, email, 50)
+//
+// Pure-TS reference for goldenflow-core's `email::email_canonical` kernel:
+// email_normalize + alias googlemail.com -> gmail.com so Gmail variants
+// collapse completely. Preserves invalid input verbatim (like normalize).
+// ---------------------------------------------------------------------------
+
+function emailCanonicalTs(val: string): string {
+  const normalized = emailNormalizeTs(val);
+  const idx = normalized.lastIndexOf("@");
+  if (idx !== -1) {
+    const local = normalized.slice(0, idx);
+    const domain = normalized.slice(idx + 1);
+    if (domain === "googlemail.com") return `${local}@gmail.com`;
+  }
+  return normalized;
+}
+
+function emailCanonical(values: readonly ColumnValue[]): ColumnValue[] {
+  const backend: FlowWasmBackend | null = getFlowWasmBackend();
+  return mapStrings(values, backend ? (s) => backend.emailCanonical(s) : emailCanonicalTs);
+}
+
+registerTransform(
+  { name: "email_canonical", inputTypes: ["email"], autoApply: false, priority: 50, mode: "series" },
+  emailCanonical,
+);
+
+// ---------------------------------------------------------------------------
+// email_mask (series, email, 30)
+//
+// Pure-TS reference for goldenflow-core's `email::email_mask` kernel: trim +
+// lowercase, keep the first local char, star the rest, keep @domain
+// (`John@Example.com` -> `j***@example.com`). `undefined` (-> null) when the
+// input has no `@`, an empty local part, or an empty domain.
+// ---------------------------------------------------------------------------
+
+function emailMaskTs(val: string): string | undefined {
+  const v = val.trim().toLowerCase();
+  const idx = v.lastIndexOf("@");
+  if (idx === -1) return undefined;
+  const local = v.slice(0, idx);
+  const domain = v.slice(idx + 1);
+  if (local === "" || domain === "") return undefined;
+  // Codepoint-count the local part to match Rust `chars().count()` / Python len().
+  const localLen = Array.from(local).length;
+  return Array.from(local)[0]! + "*".repeat(localLen - 1) + "@" + domain;
+}
+
+function emailMask(values: readonly ColumnValue[]): ColumnValue[] {
+  const backend: FlowWasmBackend | null = getFlowWasmBackend();
+  return mapToStringOrNull(values, backend ? (s) => backend.emailMask(s) : emailMaskTs);
+}
+
+registerTransform(
+  { name: "email_mask", inputTypes: ["email"], autoApply: false, priority: 30, mode: "series" },
+  emailMask,
+);
+
+// ---------------------------------------------------------------------------
 // email_extract_domain (series, email, 40)
 //
 // Pure-TS reference for goldenflow-core's `email::email_extract_domain`
@@ -220,4 +280,11 @@ registerTransform(
 // pure-TS path independently of whatever backend is currently registered.
 // ---------------------------------------------------------------------------
 
-export { emailLowercaseTs, emailNormalizeTs, emailExtractDomainTs, emailValidateTs };
+export {
+  emailLowercaseTs,
+  emailNormalizeTs,
+  emailCanonicalTs,
+  emailMaskTs,
+  emailExtractDomainTs,
+  emailValidateTs,
+};

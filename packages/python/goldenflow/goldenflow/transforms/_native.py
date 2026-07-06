@@ -792,6 +792,14 @@ def email_normalize_native() -> Callable[[pl.Series], pl.Series] | None:
     return _email_kernel_runner("email_normalize_arrow")
 
 
+def email_canonical_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _email_kernel_runner("email_canonical_arrow")
+
+
+def email_mask_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _email_kernel_runner("email_mask_arrow")
+
+
 def email_extract_domain_native() -> Callable[[pl.Series], pl.Series] | None:
     return _email_kernel_runner("email_extract_domain_arrow")
 
@@ -828,6 +836,18 @@ def url_normalize_native() -> Callable[[pl.Series], pl.Series] | None:
 
 def url_extract_domain_native() -> Callable[[pl.Series], pl.Series] | None:
     return _url_kernel_runner("url_extract_domain_arrow")
+
+
+def url_strip_tracking_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _url_kernel_runner("url_strip_tracking_arrow")
+
+
+def url_strip_www_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _url_kernel_runner("url_strip_www_arrow")
+
+
+def url_canonical_native() -> Callable[[pl.Series], pl.Series] | None:
+    return _url_kernel_runner("url_canonical_arrow")
 
 
 def _as_f64_series(s: pl.Series) -> pl.Series:

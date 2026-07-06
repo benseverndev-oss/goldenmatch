@@ -44,8 +44,10 @@ from goldenflow.transforms.categorical import (  # noqa: E402
     _null_standardize_py,
 )
 from goldenflow.transforms.email import (  # noqa: E402
+    _email_canonical_py,
     _email_extract_domain_py,
     _email_lowercase_py,
+    _email_mask_py,
     _email_normalize_py,
     _email_validate_py,
 )
@@ -104,8 +106,11 @@ from goldenflow.transforms.text import (  # noqa: E402
     _uppercase_py,
 )
 from goldenflow.transforms.url import (  # noqa: E402
+    _url_canonical_py,
     _url_extract_domain_py,
     _url_normalize_py,
+    _url_strip_tracking_py,
+    _url_strip_www_py,
 )
 
 CORPUS_PATH = Path(__file__).resolve().parent.parent / "tests" / "parity" / "identifiers_corpus.jsonl"
@@ -450,6 +455,24 @@ _CASES: list[tuple[str, str | None]] = [
     ("email_validate", ""),  # empty -> false
     ("email_validate", "   "),  # whitespace-only -> false
     ("email_validate", None),  # null
+    # --- email_canonical (dedup key: normalize + googlemail.com -> gmail.com) ---
+    ("email_canonical", "j.o.h.n@googlemail.com"),  # dots stripped + domain aliased
+    ("email_canonical", "John.Doe+tag@Gmail.com"),  # gmail collapses fully
+    ("email_canonical", "ab@gmail.com"),  # already canonical
+    ("email_canonical", "a+b@x.com"),  # non-gmail: normalize only
+    ("email_canonical", "notanemail"),  # no '@' -> preserved verbatim
+    ("email_canonical", ""),  # empty -> preserved
+    ("email_canonical", None),  # null
+    # --- email_mask (PII: first local char + stars + @domain) ---
+    ("email_mask", "John@Example.com"),  # j***@example.com
+    ("email_mask", "a@b.co"),  # 1-char local -> "a@b.co"
+    ("email_mask", "j.doe@x.com"),  # dot inside local masked too
+    ("email_mask", "a@b@c.com"),  # split on LAST '@'
+    ("email_mask", "notanemail"),  # no '@' -> null
+    ("email_mask", "@no-local.com"),  # empty local -> null
+    ("email_mask", "no-domain@"),  # empty domain -> null
+    ("email_mask", ""),  # empty -> null
+    ("email_mask", None),  # null
     # --- url_normalize ---
     ("url_normalize", "Example.COM/Path/"),  # no scheme -> prepend https, lowercase domain
     ("url_normalize", "http://X.com/"),  # trailing slash, path == "/" -> strip one
@@ -472,6 +495,32 @@ _CASES: list[tuple[str, str | None]] = [
     ("url_extract_domain", ""),  # empty -> None
     ("url_extract_domain", "   "),  # whitespace-only -> None
     ("url_extract_domain", None),  # null
+    # --- url_strip_tracking (remove utm_*/gclid/... query params) ---
+    ("url_strip_tracking", "https://a.com/p?utm_source=x&id=7&utm_medium=y&q=1"),
+    ("url_strip_tracking", "https://a.com/p?utm_source=x&fbclid=abc"),  # all tracking -> drop '?'
+    ("url_strip_tracking", "https://a.com/p?gclid=1&k=2#frag"),  # fragment preserved
+    ("url_strip_tracking", "https://a.com/p"),  # no query -> unchanged
+    ("url_strip_tracking", "https://a.com?UTM_Source=x&keep=1"),  # case-insensitive key
+    ("url_strip_tracking", "https://a.com?ref=twitter&spm=1&real=2"),  # ref/spm tracking
+    ("url_strip_tracking", ""),  # empty -> None
+    ("url_strip_tracking", None),  # null
+    # --- url_strip_www (strip leading www. host label) ---
+    ("url_strip_www", "https://www.Example.com/Path"),  # host case preserved
+    ("url_strip_www", "http://WWW.a.com"),  # case-insensitive
+    ("url_strip_www", "www.a.com/x"),  # no scheme
+    ("url_strip_www", "https://a.com"),  # no www -> unchanged
+    ("url_strip_www", "https://sub.www.a.com"),  # www not leading -> untouched
+    ("url_strip_www", ""),  # empty -> None
+    ("url_strip_www", None),  # null
+    # --- url_canonical (composite dedup key) ---
+    ("url_canonical", "HTTPS://WWW.Example.com/Path/?utm_source=x&id=7#frag"),
+    ("url_canonical", "WWW.A.com/"),  # add scheme, strip www + trailing slash
+    ("url_canonical", "http://a.com/?fbclid=1"),  # all-tracking query + root slash dropped
+    ("url_canonical", "https://a.com/x/"),  # trailing slash stripped
+    ("url_canonical", "Example.com"),  # bare host -> https, no path
+    ("url_canonical", ""),  # empty -> None
+    ("url_canonical", "   "),  # whitespace-only -> None
+    ("url_canonical", None),  # null
     # --- address_standardize (full street suffix -> abbreviation) ---
     ("address_standardize", "123 Main Street"),  # Street -> St
     ("address_standardize", "1 Park Avenue"),  # Avenue -> Ave
@@ -757,10 +806,15 @@ _PY_FN = {
     "has_initial": _has_initial_py,
     "email_lowercase": _email_lowercase_py,
     "email_normalize": _email_normalize_py,
+    "email_canonical": _email_canonical_py,
+    "email_mask": _email_mask_py,
     "email_extract_domain": _email_extract_domain_py,
     "email_validate": _email_validate_py,
     "url_normalize": _url_normalize_py,
     "url_extract_domain": _url_extract_domain_py,
+    "url_strip_tracking": _url_strip_tracking_py,
+    "url_strip_www": _url_strip_www_py,
+    "url_canonical": _url_canonical_py,
     "address_standardize": _address_standardize_py,
     "address_expand": _address_expand_py,
     "state_abbreviate": _state_abbreviate_py,
@@ -821,10 +875,15 @@ _NATIVE_ARROW_FN = {
     "has_initial": "has_initial_arrow",
     "email_lowercase": "email_lowercase_arrow",
     "email_normalize": "email_normalize_arrow",
+    "email_canonical": "email_canonical_arrow",
+    "email_mask": "email_mask_arrow",
     "email_extract_domain": "email_extract_domain_arrow",
     "email_validate": "email_validate_arrow",
     "url_normalize": "url_normalize_arrow",
     "url_extract_domain": "url_extract_domain_arrow",
+    "url_strip_tracking": "url_strip_tracking_arrow",
+    "url_strip_www": "url_strip_www_arrow",
+    "url_canonical": "url_canonical_arrow",
     "address_standardize": "address_standardize_arrow",
     "address_expand": "address_expand_arrow",
     "state_abbreviate": "state_abbreviate_arrow",

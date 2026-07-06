@@ -29,6 +29,8 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add_function(wrap_pyfunction!(email::email_lowercase_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(email::email_normalize_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(email::email_canonical_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(email::email_mask_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(email::email_extract_domain_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(email::email_validate_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(phone::phone_e164_arrow, m)?)?;
@@ -90,6 +92,9 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(text::fix_mojibake_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(url::url_normalize_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(url::url_extract_domain_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(url::url_strip_tracking_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(url::url_strip_www_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(url::url_canonical_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(numeric::currency_strip_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(numeric::percentage_normalize_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(numeric::to_integer_arrow, m)?)?;

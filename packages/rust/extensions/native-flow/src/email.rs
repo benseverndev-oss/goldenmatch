@@ -27,6 +27,24 @@ pub fn email_normalize_arrow(
 }
 
 #[pyfunction]
+pub fn email_canonical_arrow(
+    py: Python,
+    array: PyArrowType<ArrayData>,
+) -> PyResult<PyArrowType<ArrayData>> {
+    Ok(PyArrowType(map_str_to_str(py, array.0, |s| {
+        Some(email::email_canonical(s))
+    })?))
+}
+
+#[pyfunction]
+pub fn email_mask_arrow(
+    py: Python,
+    array: PyArrowType<ArrayData>,
+) -> PyResult<PyArrowType<ArrayData>> {
+    Ok(PyArrowType(map_str_to_str(py, array.0, email::email_mask)?))
+}
+
+#[pyfunction]
 pub fn email_extract_domain_arrow(
     py: Python,
     array: PyArrowType<ArrayData>,

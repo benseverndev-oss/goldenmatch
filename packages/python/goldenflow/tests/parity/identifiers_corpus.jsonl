@@ -287,6 +287,22 @@
 {"transform": "email_validate", "input": "", "expected": false}
 {"transform": "email_validate", "input": "   ", "expected": false}
 {"transform": "email_validate", "input": null, "expected": null}
+{"transform": "email_canonical", "input": "j.o.h.n@googlemail.com", "expected": "john@gmail.com"}
+{"transform": "email_canonical", "input": "John.Doe+tag@Gmail.com", "expected": "johndoe@gmail.com"}
+{"transform": "email_canonical", "input": "ab@gmail.com", "expected": "ab@gmail.com"}
+{"transform": "email_canonical", "input": "a+b@x.com", "expected": "a@x.com"}
+{"transform": "email_canonical", "input": "notanemail", "expected": "notanemail"}
+{"transform": "email_canonical", "input": "", "expected": ""}
+{"transform": "email_canonical", "input": null, "expected": null}
+{"transform": "email_mask", "input": "John@Example.com", "expected": "j***@example.com"}
+{"transform": "email_mask", "input": "a@b.co", "expected": "a@b.co"}
+{"transform": "email_mask", "input": "j.doe@x.com", "expected": "j****@x.com"}
+{"transform": "email_mask", "input": "a@b@c.com", "expected": "a**@c.com"}
+{"transform": "email_mask", "input": "notanemail", "expected": null}
+{"transform": "email_mask", "input": "@no-local.com", "expected": null}
+{"transform": "email_mask", "input": "no-domain@", "expected": null}
+{"transform": "email_mask", "input": "", "expected": null}
+{"transform": "email_mask", "input": null, "expected": null}
 {"transform": "url_normalize", "input": "Example.COM/Path/", "expected": "https://example.com/Path"}
 {"transform": "url_normalize", "input": "http://X.com/", "expected": "http://x.com"}
 {"transform": "url_normalize", "input": "https://a.com", "expected": "https://a.com"}
@@ -307,6 +323,29 @@
 {"transform": "url_extract_domain", "input": "", "expected": null}
 {"transform": "url_extract_domain", "input": "   ", "expected": null}
 {"transform": "url_extract_domain", "input": null, "expected": null}
+{"transform": "url_strip_tracking", "input": "https://a.com/p?utm_source=x&id=7&utm_medium=y&q=1", "expected": "https://a.com/p?id=7&q=1"}
+{"transform": "url_strip_tracking", "input": "https://a.com/p?utm_source=x&fbclid=abc", "expected": "https://a.com/p"}
+{"transform": "url_strip_tracking", "input": "https://a.com/p?gclid=1&k=2#frag", "expected": "https://a.com/p?k=2#frag"}
+{"transform": "url_strip_tracking", "input": "https://a.com/p", "expected": "https://a.com/p"}
+{"transform": "url_strip_tracking", "input": "https://a.com?UTM_Source=x&keep=1", "expected": "https://a.com?keep=1"}
+{"transform": "url_strip_tracking", "input": "https://a.com?ref=twitter&spm=1&real=2", "expected": "https://a.com?real=2"}
+{"transform": "url_strip_tracking", "input": "", "expected": null}
+{"transform": "url_strip_tracking", "input": null, "expected": null}
+{"transform": "url_strip_www", "input": "https://www.Example.com/Path", "expected": "https://Example.com/Path"}
+{"transform": "url_strip_www", "input": "http://WWW.a.com", "expected": "http://a.com"}
+{"transform": "url_strip_www", "input": "www.a.com/x", "expected": "a.com/x"}
+{"transform": "url_strip_www", "input": "https://a.com", "expected": "https://a.com"}
+{"transform": "url_strip_www", "input": "https://sub.www.a.com", "expected": "https://sub.www.a.com"}
+{"transform": "url_strip_www", "input": "", "expected": null}
+{"transform": "url_strip_www", "input": null, "expected": null}
+{"transform": "url_canonical", "input": "HTTPS://WWW.Example.com/Path/?utm_source=x&id=7#frag", "expected": "https://example.com/Path?id=7"}
+{"transform": "url_canonical", "input": "WWW.A.com/", "expected": "https://a.com"}
+{"transform": "url_canonical", "input": "http://a.com/?fbclid=1", "expected": "http://a.com"}
+{"transform": "url_canonical", "input": "https://a.com/x/", "expected": "https://a.com/x"}
+{"transform": "url_canonical", "input": "Example.com", "expected": "https://example.com"}
+{"transform": "url_canonical", "input": "", "expected": null}
+{"transform": "url_canonical", "input": "   ", "expected": null}
+{"transform": "url_canonical", "input": null, "expected": null}
 {"transform": "address_standardize", "input": "123 Main Street", "expected": "123 Main St"}
 {"transform": "address_standardize", "input": "1 Park Avenue", "expected": "1 Park Ave"}
 {"transform": "address_standardize", "input": "5 Sunset Boulevard", "expected": "5 Sunset Blvd"}

@@ -39,8 +39,10 @@ from goldenflow.transforms.categorical import (
     null_standardize,
 )
 from goldenflow.transforms.email import (
+    email_canonical,
     email_extract_domain,
     email_lowercase,
+    email_mask,
     email_normalize,
     email_validate,
 )
@@ -130,7 +132,13 @@ from goldenflow.transforms.text import (
     fix_mojibake,
     normalize_unicode,
 )
-from goldenflow.transforms.url import url_extract_domain, url_normalize
+from goldenflow.transforms.url import (
+    url_canonical,
+    url_extract_domain,
+    url_normalize,
+    url_strip_tracking,
+    url_strip_www,
+)
 
 _CORPUS_PATH = Path(__file__).parent.parent / "parity" / "identifiers_corpus.jsonl"
 
@@ -197,10 +205,15 @@ _TRANSFORMS = {
     "has_initial": has_initial,
     "email_lowercase": email_lowercase,
     "email_normalize": email_normalize,
+    "email_canonical": email_canonical,
+    "email_mask": email_mask,
     "email_extract_domain": email_extract_domain,
     "email_validate": email_validate,
     "url_normalize": url_normalize,
     "url_extract_domain": url_extract_domain,
+    "url_strip_tracking": url_strip_tracking,
+    "url_strip_www": url_strip_www,
+    "url_canonical": url_canonical,
     "address_standardize": address_standardize,
     "address_expand": address_expand,
     "state_abbreviate": state_abbreviate,
@@ -270,12 +283,17 @@ _NATIVE_FLOOR_SYMBOL = {
     # (floor symbol email_validate_arrow), region-free/locale-free.
     "email_lowercase": "email_validate_arrow",
     "email_normalize": "email_validate_arrow",
+    "email_canonical": "email_validate_arrow",
+    "email_mask": "email_validate_arrow",
     "email_extract_domain": "email_validate_arrow",
     "email_validate": "email_validate_arrow",
-    # url: both transforms are wired via the single "url" component (floor
+    # url: all transforms are wired via the single "url" component (floor
     # symbol url_normalize_arrow), region-free/locale-free.
     "url_normalize": "url_normalize_arrow",
     "url_extract_domain": "url_normalize_arrow",
+    "url_strip_tracking": "url_normalize_arrow",
+    "url_strip_www": "url_normalize_arrow",
+    "url_canonical": "url_normalize_arrow",
     # address: all 7 scalar transforms wired via the single "address" component
     # (floor symbol address_standardize_arrow), US-scoped/locale-free.
     "address_standardize": "address_standardize_arrow",

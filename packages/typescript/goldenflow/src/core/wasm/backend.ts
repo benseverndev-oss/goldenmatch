@@ -58,10 +58,18 @@ export interface FlowWasmBackend {
   mergeName(first: string | null, last: string | null): string | undefined;
   emailLowercase(s: string): string;
   emailNormalize(s: string): string;
+  emailCanonical(s: string): string;
+  emailMask(s: string): string | undefined;
   emailExtractDomain(s: string): string | undefined;
   emailValidate(s: string): boolean;
+  soundex(s: string): string;
+  doubleMetaphonePrimary(s: string): string;
+  doubleMetaphoneAlt(s: string): string;
   urlNormalize(s: string): string | undefined;
   urlExtractDomain(s: string): string | undefined;
+  urlStripTracking(s: string): string | undefined;
+  urlStripWww(s: string): string | undefined;
+  urlCanonical(s: string): string | undefined;
   currencyStrip(s: string): number | undefined;
   percentageNormalize(s: string): number | undefined;
   toInteger(s: string): number | undefined;

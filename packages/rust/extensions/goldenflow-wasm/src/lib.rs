@@ -19,6 +19,7 @@ mod wasm {
     use goldenflow_core::identifiers::{aba, ean, iban, imei, isbn, luhn, swift, vat};
     use goldenflow_core::names;
     use goldenflow_core::numeric;
+    use goldenflow_core::phonetic;
     use goldenflow_core::text;
     use goldenflow_core::url;
     use wasm_bindgen::prelude::*;
@@ -41,6 +42,31 @@ mod wasm {
     #[wasm_bindgen]
     pub fn email_validate(s: &str) -> Option<bool> {
         email::email_validate(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn email_canonical(s: &str) -> String {
+        email::email_canonical(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn email_mask(s: &str) -> Option<String> {
+        email::email_mask(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn soundex(s: &str) -> String {
+        phonetic::soundex(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn double_metaphone_primary(s: &str) -> String {
+        phonetic::double_metaphone_primary(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn double_metaphone_alt(s: &str) -> String {
+        phonetic::double_metaphone_alt(s)
     }
 
     #[wasm_bindgen]
@@ -311,6 +337,21 @@ mod wasm {
     #[wasm_bindgen]
     pub fn url_extract_domain(s: &str) -> Option<String> {
         url::url_extract_domain(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn url_strip_tracking(s: &str) -> Option<String> {
+        url::url_strip_tracking(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn url_strip_www(s: &str) -> Option<String> {
+        url::url_strip_www(s)
+    }
+
+    #[wasm_bindgen]
+    pub fn url_canonical(s: &str) -> Option<String> {
+        url::url_canonical(s)
     }
 
     /// rapidfuzz `fuzz.ratio` (Indel/LCS similarity, 0-100).

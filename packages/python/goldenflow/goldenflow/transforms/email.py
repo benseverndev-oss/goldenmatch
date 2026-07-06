@@ -6,8 +6,10 @@ import polars as pl
 
 from goldenflow.transforms import register_transform
 from goldenflow.transforms._native import (
+    email_canonical_native,
     email_extract_domain_native,
     email_lowercase_native,
+    email_mask_native,
     email_normalize_native,
     email_validate_native,
 )
@@ -41,6 +43,35 @@ def _email_normalize_py(val: str | None) -> str | None:
     if domain in ("gmail.com", "googlemail.com"):
         local = local.replace(".", "")
     return f"{local}@{domain}"
+
+
+def _email_canonical_py(val: str | None) -> str | None:
+    if val is None:
+        return None
+    normalized = _email_normalize_py(val)
+    if normalized is None:
+        return None
+    idx = normalized.rfind("@")
+    if idx != -1:
+        local = normalized[:idx]
+        domain = normalized[idx + 1 :]
+        if domain == "googlemail.com":
+            return f"{local}@gmail.com"
+    return normalized
+
+
+def _email_mask_py(val: str | None) -> str | None:
+    if val is None:
+        return None
+    v = val.strip().lower()
+    idx = v.rfind("@")
+    if idx == -1:
+        return None
+    local = v[:idx]
+    domain = v[idx + 1 :]
+    if not local or not domain:
+        return None
+    return local[0] + "*" * (len(local) - 1) + "@" + domain
 
 
 def _email_extract_domain_py(val: str | None) -> str | None:
@@ -103,6 +134,48 @@ def email_normalize(series: pl.Series) -> pl.Series:
     if native is not None:
         return native(series)
     return series.map_elements(_email_normalize_py, return_dtype=pl.Utf8)
+
+
+@register_transform(
+    name="email_canonical",
+    input_types=["email"],
+    auto_apply=False,
+    priority=50,
+    mode="series",
+)
+def email_canonical(series: pl.Series) -> pl.Series:
+    """Full dedup key: email_normalize + alias googlemail.com -> gmail.com so
+    Gmail variants collapse completely.
+
+    Native-first (goldenflow-core's ``email::email_canonical`` kernel); the
+    pure-Python fallback below is the byte-exact reference this kernel
+    replicates.
+    """
+    native = email_canonical_native()
+    if native is not None:
+        return native(series)
+    return series.map_elements(_email_canonical_py, return_dtype=pl.Utf8)
+
+
+@register_transform(
+    name="email_mask",
+    input_types=["email"],
+    auto_apply=False,
+    priority=30,
+    mode="series",
+)
+def email_mask(series: pl.Series) -> pl.Series:
+    """PII mask: keep the first local char, star the rest, keep @domain
+    (``John@Example.com`` -> ``j***@example.com``). None on unmaskable input.
+
+    Native-first (goldenflow-core's ``email::email_mask`` kernel); the
+    pure-Python fallback below is the byte-exact reference this kernel
+    replicates.
+    """
+    native = email_mask_native()
+    if native is not None:
+        return native(series)
+    return series.map_elements(_email_mask_py, return_dtype=pl.Utf8)
 
 
 @register_transform(
