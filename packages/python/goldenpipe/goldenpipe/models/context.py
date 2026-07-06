@@ -51,17 +51,32 @@ class PipeContext:
 
     @property
     def frame(self) -> Frame | None:
-        """Arrow-capable handle over ``df`` -- the relocatable-stage seam. In
-        process this is a **zero-copy** ``LocalFrame`` view (``.polars()`` returns
-        ``df`` by reference); a remote-stage adapter (Phase C) would call
-        ``.arrow_batches()`` and assign a returned frame back via this setter. The
-        canonical store stays ``df`` so in-process stages are untouched and Stage 0
-        is not regressed. See the relocatable-stage-contract design doc."""
+        """The relocatable-stage seam. Returns the engine-resident frame if one is
+        set (Phase C -- a ``DuckDBFrame`` left by a remote stage, kept lazy/not
+        materialized), else a **zero-copy** ``LocalFrame`` view over ``df``
+        (Phase A). ``.polars()`` on either yields the data; on a ``LocalFrame`` it
+        is the backing ``df`` by reference (Stage 0 preserved), on an engine frame
+        it triggers the boundary materialization. See the relocatable-stage-contract."""
+        engine = getattr(self, "_frame", None)
+        if engine is not None:
+            return engine
         return LocalFrame(self.df) if self.df is not None else None
 
     @frame.setter
     def frame(self, value: Frame | None) -> None:
-        self.df = value.polars() if value is not None else None
+        # A ``LocalFrame`` (or None) is canonical in-Python data -> store in ``df``,
+        # clear any engine frame. An **engine-resident** frame (``DuckDBFrame``) is
+        # kept AS-IS -- NOT materialized -- so a chain of remote stages stays in the
+        # engine (Phase C); it materializes to ``df`` only when a local stage needs
+        # it (the Runner does that transition) or at egress.
+        if value is None:
+            self._frame = None
+            self.df = None
+        elif isinstance(value, LocalFrame):
+            self._frame = None
+            self.df = value.polars()
+        else:
+            self._frame = value  # engine-resident: do not materialize here
 
 
 @dataclass

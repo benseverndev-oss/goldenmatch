@@ -1,6 +1,8 @@
 """Pipeline -- thin wrapper over the engine layer."""
 from __future__ import annotations
 
+import re
+
 import polars as pl
 
 from goldenpipe.engine.registry import StageRegistry
@@ -9,6 +11,8 @@ from goldenpipe.engine.resolver import Resolver
 from goldenpipe.engine.runner import Runner
 from goldenpipe.models.config import PipelineConfig, StageSpec
 from goldenpipe.models.context import PipeContext, PipeResult, PipeStatus
+
+_TABLE_NAME_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_.]*$")
 
 
 class Pipeline:
@@ -29,10 +33,49 @@ class Pipeline:
         # YAML is authoritative and identity_opts is ignored.
         self._identity_opts = identity_opts
 
-    def run(self, source: str | None = None, df: pl.DataFrame | None = None) -> PipeResult:
+    def run(
+        self,
+        source: str | None = None,
+        df: pl.DataFrame | None = None,
+        *,
+        duckdb_con=None,
+        duckdb_table: str | None = None,
+    ) -> PipeResult:
         ctx = PipeContext()
 
-        if df is not None:
+        if duckdb_con is not None and duckdb_table is not None:
+            # Engine-resident source (relocatable-stage contract, Phase C v2):
+            # the data ORIGINATES in DuckDB, so ``ctx.frame`` starts as a lazy
+            # ``DuckDBFrame`` and a remote stage right after pays NO ingress
+            # crossing. It materializes to ``df`` only at the first LOCAL stage
+            # (the Runner does that once), or never for an all-remote pipeline.
+            from goldenpipe.models.frame import DuckDBFrame
+
+            if not _TABLE_NAME_RE.match(duckdb_table):
+                return PipeResult(
+                    status=PipeStatus.FAILED,
+                    source=f"duckdb:{duckdb_table}",
+                    input_rows=0,
+                    errors=[f"Invalid DuckDB table name: {duckdb_table!r}"],
+                )
+            try:
+                rel = duckdb_con.sql(f"SELECT * FROM {duckdb_table}")  # noqa: S608 - name validated above
+                ctx.frame = DuckDBFrame(rel)  # engine-resident, NOT materialized
+                ctx.metadata["duckdb_con"] = duckdb_con
+                ctx.metadata["source"] = f"duckdb:{duckdb_table}"
+                # Row count via a scalar COUNT -- a cheap engine aggregate, NOT
+                # the full DataFrame pull Phase C confines to egress.
+                ctx.metadata["input_rows"] = duckdb_con.sql(
+                    f"SELECT count(*) FROM {duckdb_table}"  # noqa: S608 - name validated above
+                ).fetchone()[0]
+            except Exception as e:
+                return PipeResult(
+                    status=PipeStatus.FAILED,
+                    source=f"duckdb:{duckdb_table}",
+                    input_rows=0,
+                    errors=[f"Failed to load DuckDB table: {e}"],
+                )
+        elif df is not None:
             ctx.df = df
             ctx.metadata["source"] = "<DataFrame>"
             ctx.metadata["input_rows"] = len(df)
