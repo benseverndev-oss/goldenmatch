@@ -148,6 +148,61 @@ mod tests {
         assert_eq!(columnar, scalar);
     }
 
+    // The `_into` streaming kernels (Wave: trivial text family) must be
+    // byte-identical to their `String`-returning wrappers when threaded through
+    // `map_str_columnar` -- this is the contract native-flow's shims rely on.
+    #[test]
+    fn into_kernels_match_string_wrappers() {
+        // Rows that actually trigger each removal/normalize branch (plus null,
+        // empty, and a multi-byte tail) so the parity is over real transforms,
+        // not identity.
+        let arr = StringArray::from(vec![
+            Some("a  b\tc"),                            // collapse
+            Some("<b>hi</b> http://x.com/y z"),         // html + url
+            Some("abc123 caf\u{e9}!"),                  // digits + punctuation + multibyte
+            Some("hi \u{1f600} \u{201c}q\u{201d}\r\n"), // emoji + quotes + CRLF
+            Some(""),
+            None,
+            Some("Jos\u{e9}"), // normalize_unicode
+        ]);
+        macro_rules! check {
+            ($into:path, $whole:path) => {
+                assert_eq!(
+                    map_str_columnar(&arr, |s, buf| $into(s, buf)),
+                    scalar_map(&arr, |s| Some($whole(s))),
+                    concat!(stringify!($into), " != ", stringify!($whole))
+                );
+            };
+        }
+        check!(text::collapse_whitespace_into, text::collapse_whitespace);
+        check!(text::normalize_quotes_into, text::normalize_quotes);
+        check!(
+            text::normalize_line_endings_into,
+            text::normalize_line_endings
+        );
+        check!(text::normalize_unicode_into, text::normalize_unicode);
+        check!(text::remove_html_tags_into, text::remove_html_tags);
+        check!(text::remove_urls_into, text::remove_urls);
+        check!(text::remove_digits_into, text::remove_digits);
+        check!(text::remove_punctuation_into, text::remove_punctuation);
+        check!(text::remove_emojis_into, text::remove_emojis);
+    }
+
+    #[test]
+    fn pad_into_kernels_match_string_wrappers() {
+        // pad_* carry width/pad args -> the closure captures them (the shape
+        // native-flow's parametrized shims use).
+        let arr = sample();
+        assert_eq!(
+            map_str_columnar(&arr, |s, buf| text::pad_left_into(s, 8, '0', buf)),
+            scalar_map(&arr, |s| Some(text::pad_left(s, 8, '0'))),
+        );
+        assert_eq!(
+            map_str_columnar(&arr, |s, buf| text::pad_right_into(s, 8, ' ', buf)),
+            scalar_map(&arr, |s| Some(text::pad_right(s, 8, ' '))),
+        );
+    }
+
     #[test]
     fn preserves_nulls_and_empty() {
         let arr = StringArray::from(vec![None, Some(""), Some("x"), None]);
