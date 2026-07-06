@@ -124,6 +124,90 @@ def test_public_dispatch_matches_pure(monkeypatch: pytest.MonkeyPatch, seed: int
 
 
 # ---------------------------------------------------------------------------
+# Frame-kernel parity (null_ratio / duplicate_row / distinct_count)
+# ---------------------------------------------------------------------------
+
+
+def _frames() -> dict:
+    import polars as pl
+
+    return {
+        "empty": pl.DataFrame({"a": []}),
+        "all_null": pl.DataFrame({"a": [None, None, None]}),
+        "null_bearing": pl.DataFrame({"a": [1, None, 3], "b": ["x", None, "x"]}),
+        "mixed_dup": pl.DataFrame(  # rows 0,1,2 identical => dup group of 3
+            {
+                "s": ["a", "a", "a", "b"],
+                "i": [1, 1, 1, 2],
+                "f": [1.5, 1.5, 1.5, 2.5],
+                "b": [True, True, True, False],
+            }
+        ),
+        "float_edge": pl.DataFrame(  # -0.0/+0.0 fold, NaN folds (polars-verified)
+            {
+                "f": [-0.0, 0.0, float("nan"), float("nan"), 1.0],
+                "k": [1, 1, 2, 2, 3],
+            }
+        ),
+    }
+
+
+@native_only
+@pytest.mark.parametrize("name", sorted(_frames()))
+def test_duplicate_row_ratio_parity(name: str) -> None:
+    from goldenanalysis.core import aggregate
+
+    df = _frames()[name]
+    native = native_module().duplicate_row_ratio([df[c].to_arrow() for c in df.columns])
+    assert native == aggregate._duplicate_row_ratio_pure(df)
+
+
+@native_only
+@pytest.mark.parametrize("name", sorted(_frames()))
+def test_null_ratio_per_column_parity(name: str) -> None:
+    from goldenanalysis.core import aggregate
+
+    df = _frames()[name]
+    ratios = native_module().null_ratio_per_column([df[c].to_arrow() for c in df.columns])
+    native = dict(zip(df.columns, ratios))
+    assert native == aggregate._null_ratio_per_column_pure(df)
+
+
+@native_only
+@pytest.mark.parametrize("name", sorted(_frames()))
+def test_distinct_count_parity(name: str) -> None:
+    from goldenanalysis.core import aggregate
+
+    df = _frames()[name]
+    for col in df.columns:
+        native = native_module().distinct_count(df[col].to_arrow())
+        assert native == aggregate._distinct_count_pure(df[col])
+
+
+def test_native_dtype_fallback_returns_pure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Box-runnable: an unsupported dtype (List) makes the native call raise, and the
+    public dispatchers must swallow it and return the pure result (no build needed --
+    we monkeypatch a native module whose methods raise)."""
+    import polars as pl
+    from goldenanalysis.core import aggregate as agg
+
+    df = pl.DataFrame({"a": [[1, 2], [3, 4], [1, 2]]})  # List dtype -> intern rejects
+
+    monkeypatch.setattr(agg, "native_enabled", lambda name: True)
+
+    class _Boom:
+        def null_ratio_per_column(self, cols):
+            raise TypeError("unsupported dtype")
+
+        def duplicate_row_ratio(self, cols):
+            raise TypeError("unsupported dtype")
+
+    monkeypatch.setattr(agg, "native_module", lambda: _Boom())
+    assert agg.null_ratio_per_column(df) == agg._null_ratio_per_column_pure(df)
+    assert agg.duplicate_row_ratio(df) == agg._duplicate_row_ratio_pure(df)
+
+
+# ---------------------------------------------------------------------------
 # Loader gate (no wheel needed -- these never import polars/aggregate)
 # ---------------------------------------------------------------------------
 
