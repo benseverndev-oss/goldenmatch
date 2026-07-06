@@ -221,6 +221,30 @@ fn distinct_count(col: PyArrowType<ArrayData>) -> PyResult<i64> {
     Ok(analysis_core::distinct_count(&interned))
 }
 
+/// Arithmetic mean of a Float64 Arrow column -- native mirror of
+/// `goldenanalysis.core.aggregate.mean`.
+#[pyfunction]
+fn mean(values: PyArrowType<ArrayData>) -> PyResult<f64> {
+    let vals = read_f64(values, "mean")?;
+    Ok(analysis_core::mean(&vals))
+}
+
+/// Minimum of a Float64 Arrow column -- native mirror of
+/// `goldenanalysis.core.aggregate.min`.
+#[pyfunction]
+fn min(values: PyArrowType<ArrayData>) -> PyResult<f64> {
+    let vals = read_f64(values, "min")?;
+    Ok(analysis_core::min(&vals))
+}
+
+/// Maximum of a Float64 Arrow column -- native mirror of
+/// `goldenanalysis.core.aggregate.max`.
+#[pyfunction]
+fn max(values: PyArrowType<ArrayData>) -> PyResult<f64> {
+    let vals = read_f64(values, "max")?;
+    Ok(analysis_core::max(&vals))
+}
+
 /// Per-column null ratio (`null_count / len`, 0.0 for empty columns) for each
 /// Arrow column. Reads Arrow null buffers directly -- no interning needed.
 #[pyfunction]
@@ -247,5 +271,8 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(duplicate_row_ratio, m)?)?;
     m.add_function(wrap_pyfunction!(distinct_count, m)?)?;
     m.add_function(wrap_pyfunction!(null_ratio_per_column, m)?)?;
+    m.add_function(wrap_pyfunction!(mean, m)?)?;
+    m.add_function(wrap_pyfunction!(min, m)?)?;
+    m.add_function(wrap_pyfunction!(max, m)?)?;
     Ok(())
 }
