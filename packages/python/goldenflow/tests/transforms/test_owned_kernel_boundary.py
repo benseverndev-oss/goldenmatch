@@ -18,7 +18,22 @@ import json
 from pathlib import Path
 
 import goldenflow  # noqa: F401 -- import-time transform registration
-from goldenflow.transforms import registry
+
+# Force-register the ON-DEMAND transform surface so this guard enumerates the
+# FULL registry deterministically, independent of test ordering. The domain
+# packs (goldenflow/domains/*, normally loaded via --domain) and the LLM
+# corrector (normally imported via --llm) both self-register at MODULE import,
+# but goldenflow/__init__ does NOT import them -- so without these imports,
+# registry() would contain them only if some earlier test happened to load a
+# domain/LLM path first (an order-dependent false pass/fail).
+import goldenflow.domains.carceral  # noqa: E402,F401
+import goldenflow.domains.ecommerce  # noqa: E402,F401
+import goldenflow.domains.finance  # noqa: E402,F401
+import goldenflow.domains.healthcare  # noqa: E402,F401
+import goldenflow.domains.people_hr  # noqa: E402,F401
+import goldenflow.domains.real_estate  # noqa: E402,F401
+import goldenflow.llm.corrector  # noqa: E402,F401
+from goldenflow.transforms import registry  # noqa: E402
 
 _CORPUS_PATH = Path(__file__).parent.parent / "parity" / "identifiers_corpus.jsonl"
 
@@ -93,14 +108,47 @@ _DEFERRED_DATES = frozenset(
     }
 )
 
-# Deliberately pure-Python reference (no byte-parity native): phone_validate's
-# only native symbol (phone_valid_arrow) implements `is_valid`, NOT the
-# product-chosen `is_possible` spec, so it is intentionally unwired
-# (_FALLBACK_ONLY in _native_loader).
-_REFERENCE_ONLY = frozenset({"phone_validate"})
+# Deliberately pure-Python reference (no byte-parity native), for two distinct
+# reasons:
+#   - phone_validate: its only native symbol (phone_valid_arrow) implements
+#     `is_valid`, NOT the product-chosen `is_possible` spec, so it is
+#     intentionally unwired (_FALLBACK_ONLY in _native_loader).
+#   - category_llm_correct: it calls an LLM (goldenflow.llm.corrector) for
+#     categorical correction, so its output is inherently non-deterministic and
+#     can NEVER be reproduced byte-for-byte in an owned kernel. Host-only by
+#     construction (activated by --llm / GOLDENFLOW_LLM).
+_REFERENCE_ONLY = frozenset({"phone_validate", "category_llm_correct"})
+
+# Domain-pack transforms: registered by the domain packs under
+# ``goldenflow/domains/*`` (people_hr, healthcare, finance, ecommerce,
+# real_estate, carceral). They are ``auto_apply=False`` (only run when a
+# ``--domain <name>`` pack is loaded) and are Python-only reference transforms
+# that have NOT been ported to goldenflow-core owned kernels -- so they are out
+# of scope for the byte-parity corpus. This is a deliberate boundary, not a gap:
+# the owned-kernel program covers the core transform surface first; a domain
+# transform graduates into the corpus if/when it is promoted to an owned kernel.
+# Add a newly registered ``domains/*`` transform here (until it's promoted).
+_DOMAIN_PACK = frozenset(
+    {
+        "ssn_validate",  # people_hr
+        "icd10_format",  # healthcare
+        "account_mask",  # finance
+        "cusip_format",  # finance
+        "sku_normalize",  # ecommerce
+        "mls_normalize",  # real_estate
+        "carceral_abbreviate",  # carceral
+        "carceral_name_normalize",  # carceral
+        "carceral_org_strip",  # carceral
+        "latlng_pack",  # carceral
+    }
+)
 
 _NON_CORPUS_BUCKETS = (
-    _OWNED_PINNED | _DATA_DEPENDENT | _DEFERRED_DATES | _REFERENCE_ONLY
+    _OWNED_PINNED
+    | _DATA_DEPENDENT
+    | _DEFERRED_DATES
+    | _REFERENCE_ONLY
+    | _DOMAIN_PACK
 )
 
 
@@ -142,6 +190,7 @@ def test_buckets_are_mutually_disjoint() -> None:
         "data_dependent": _DATA_DEPENDENT,
         "deferred_dates": _DEFERRED_DATES,
         "reference_only": _REFERENCE_ONLY,
+        "domain_pack": _DOMAIN_PACK,
     }
     seen: dict[str, str] = {}
     for label, names in buckets.items():
