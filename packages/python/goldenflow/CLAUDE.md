@@ -597,17 +597,24 @@ result.manifest.records     # list[TransformRecord]
 result.manifest.created_at  # str
 ```
 
-### Available transforms (92)
+### Available transforms (113)
+Source of truth: `python -c "from goldenflow.transforms import registry; print(len(registry()))"`.
+Owned-kernel boundary (which of these are byte-parity-owned vs documented
+structural holes) is `docs/design/2026-07-06-goldenflow-owned-kernel-boundary.md`,
+enforced by `tests/transforms/test_owned_kernel_boundary.py`.
+
 **Text:** strip, lowercase, uppercase, title_case, normalize_unicode, normalize_quotes, collapse_whitespace, truncate, remove_punctuation, remove_html_tags, remove_urls, remove_digits, remove_emojis, fix_mojibake, normalize_line_endings, extract_numbers, pad_left, pad_right
 **Phone:** phone_e164, phone_national, phone_digits, phone_validate, phone_country_code
-**Name:** split_name, split_name_reverse, strip_titles, strip_suffixes, name_proper, initial_expand, nickname_standardize, merge_name, name_transliterate, name_script
+**Phonetic:** soundex, double_metaphone_primary, double_metaphone_alt
+**Name:** split_name, split_name_reverse, strip_titles, strip_suffixes, name_proper, initial_expand, nickname_standardize, merge_name, name_transliterate, name_script, name_initials, strip_middle
 **Address:** address_standardize, address_expand, state_abbreviate, state_expand, zip_normalize, split_address, country_standardize, unit_normalize
 **Date:** date_iso8601, date_us, date_eu, date_parse, age_from_dob, datetime_iso8601, extract_year, extract_month, extract_day, extract_quarter, extract_day_of_week, date_shift, date_validate
 **Categorical:** category_auto_correct, category_standardize, category_from_file, boolean_normalize, gender_standardize, null_standardize
-**Numeric:** currency_strip, percentage_normalize, round, clamp, to_integer, abs_value, fill_zero, comma_decimal, scientific_to_decimal
-**Email:** email_lowercase, email_normalize, email_extract_domain, email_validate
-**Identifiers:** ssn_format, ssn_mask, ein_format, cc_validate, cc_format, cc_mask, iban_validate, iban_format, isbn_validate, isbn_normalize, ean_validate, vat_validate, vat_format, swift_validate, swift_format, aba_validate, imei_validate
-**URL:** url_normalize, url_extract_domain
+**Numeric:** currency_strip, percentage_normalize, round, clamp, to_integer, abs_value, fill_zero, comma_decimal, scientific_to_decimal, roman_to_int, ordinal_to_int, fraction_to_decimal
+**Company:** company_normalize, company_strip_legal, company_extract_legal
+**Email:** email_lowercase, email_normalize, email_canonical, email_mask, email_extract_domain, email_validate
+**Identifiers:** ssn_format, ssn_mask, ein_format, cc_validate, cc_format, cc_mask, cc_brand, iban_validate, iban_format, isbn_validate, isbn_normalize, ean_validate, vat_validate, vat_format, swift_validate, swift_format, aba_validate, imei_validate, isin_validate, cusip_validate, npi_validate, luhn_validate
+**URL:** url_normalize, url_extract_domain, url_strip_tracking, url_strip_www, url_canonical
 
 ### Zero-config vs Configured — when to use which
 - **Zero-config:** great for interactive exploration, finding what's wrong
