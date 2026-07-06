@@ -71,9 +71,12 @@ from infermap.scorers.pattern_type import (  # noqa: E402
 
 
 def test_match_types_pure_bitmask():
-    # bit0=email, bit2=date_iso, bit7=currency; "hello" matches nothing.
+    # bit0=email, bit7=currency; "hello" matches nothing.
     assert _match_types_pure("user@example.com") == 1 << 0
-    assert _match_types_pure("2026-07-06") == 1 << 2
+    # date_iso (bit2) AND phone (bit5) co-match by construction: an 8-digit
+    # 2-hyphen string satisfies phone's ^[\+\d]?(\d[\s\-\.]?){7,14}\d$ (the
+    # hyphens are absorbed as optional separators). This is expected, not a bug.
+    assert _match_types_pure("2026-07-06") == (1 << 2) | (1 << 5)
     assert _match_types_pure("$5") == 1 << 7
     assert _match_types_pure("hello world") == 0
 
@@ -236,14 +239,19 @@ Expected: FAIL (AssertionError).
 
 - [ ] **Step 3: Edit `_native_loader.py`**
 
-Add `"pattern_match_types"` to the `_GATED_ON` frozenset literal (replace the whole literal, appending the new entry after `"profile_score"` if Wave 3 already merged, else after `"initialism_score"`):
+Add `"pattern_match_types"` to the `_GATED_ON` frozenset literal. This branch's base
+has the 4-element set (Wave 3's `profile_score` is NOT here yet — the Task 7 rebase
+merges it). Replace the whole literal with:
 ```python
 _GATED_ON: frozenset[str] = frozenset(
     {"detect_domain", "exact_score", "fuzzy_name_score", "initialism_score",
-     "profile_score", "pattern_match_types"}
+     "pattern_match_types"}
 )
 ```
-> If this branch's base does NOT yet contain `"profile_score"` (Wave 3 not merged when branched), just append `"pattern_match_types"` to whatever set is present — do NOT add `profile_score` here (that's Wave 3's line; the rebase will merge it). Match the actual current literal.
+> Do NOT add `profile_score` here — that's Wave 3's line; the rebase will merge it in.
+> If the base literal you actually see differs (e.g. Wave 3 landed into this base after
+> all), append `"pattern_match_types"` to whatever set is present rather than
+> overwriting other entries.
 
 Add to `_COMPONENT_SYMBOLS` (after the last entry):
 ```python
@@ -348,12 +356,15 @@ pub fn pattern_match_types(samples: &[String]) -> Vec<u32> {
     fn pattern_match_types_bits() {
         let mk = |x: &str| x.to_string();
         let out = pattern_match_types(&[
-            mk("user@example.com"), // email  -> bit 0
-            mk("2026-07-06"),       // date   -> bit 2
-            mk("hello world"),      // none   -> 0
-            mk("$5"),               // curr   -> bit 7
+            mk("user@example.com"), // email          -> bit 0
+            mk("2026-07-06"),       // date_iso + phone -> bits 2|5 (co-match by construction)
+            mk("hello world"),      // none            -> 0
+            mk("$5"),               // currency        -> bit 7
         ]);
-        assert_eq!(out, vec![1u32 << 0, 1u32 << 2, 0u32, 1u32 << 7]);
+        assert_eq!(
+            out,
+            vec![1u32 << 0, (1u32 << 2) | (1u32 << 5), 0u32, 1u32 << 7]
+        );
     }
 ```
 
@@ -463,8 +474,8 @@ Claude-Session: https://claude.ai/code/session_01F2g8Snk1Akef5z3yZdtt44"
 {"s": "٥", "tier": "informational", "note": "Arabic-Indic digit: \\d Unicode edge"}
 {"s": "５", "tier": "informational", "note": "fullwidth digit: \\d Unicode edge"}
 {"s": "२०२६-०७-०६", "tier": "informational", "note": "Devanagari date: \\d Unicode edge"}
-{"s": "http://a b", "tier": "informational", "note": "NBSP in url: \\s edge"}
-{"s": "1234567890", "tier": "informational", "note": "interior \\x1c in phone: sharpest \\s edge"}
+{"s": "http://a\u00a0b", "tier": "informational", "note": "NBSP in url: \\s edge"}
+{"s": "1234567\u001c890", "tier": "informational", "note": "interior \\x1c in phone: sharpest \\s edge"}
 ```
 
 - [ ] **Step 2: Append the loader + tests to `test_native_parity.py`** (at end of file):
@@ -484,7 +495,7 @@ _CORPUS_PATH = pathlib.Path(__file__).parent / "pattern_type_corpus.jsonl"
 
 def _load_corpus() -> list[dict]:
     rows: list[dict] = []
-    for line in _CORPUS_PATH.read_text(encoding="utf-8").splitlines():
+    for line in _CORPUS_PATH.read_text(encoding="utf-8").split("\n"):
         line = line.strip()
         if line:
             rows.append(json.loads(line))
