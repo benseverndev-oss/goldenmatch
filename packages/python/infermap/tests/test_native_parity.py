@@ -94,3 +94,40 @@ def test_fuzzy_parity(a, b):
 def test_initialism_parity(a, b):
     # both None (abstain) or both the same graded float.
     assert native_module().initialism_score(a, b) == _score_pair(a, b)
+
+
+# ---------------------------------------------------------------------------
+# Wave 3: profile scorer parity (scalars-only kernel)
+# ---------------------------------------------------------------------------
+
+from infermap.scorers.profile import _profile_score_pure  # noqa: E402
+
+# 10-tuple: (src_dtype, tgt_dtype, src_null, tgt_null, src_uniq, tgt_uniq,
+#            src_val_count, tgt_val_count, src_avg_len, tgt_avg_len)
+_PROFILE_CASES = [
+    # identical profiles -> 1.0
+    ("string", "string", 0.1, 0.1, 0.5, 0.5, 100.0, 100.0, 8.0, 8.0),
+    # dtype mismatch -> drops 0.4
+    ("string", "int", 0.1, 0.1, 0.5, 0.5, 100.0, 100.0, 8.0, 8.0),
+    # avg_len floor: both 0.0 -> denom floors to 1.0
+    ("string", "string", 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0),
+    # one empty-sample side -> len_sim = 1 - 8/8 = 0.0
+    ("string", "string", 0.0, 0.0, 0.5, 0.5, 100.0, 100.0, 0.0, 8.0),
+    # cardinality floor: tiny cards (uniq*count < 1.0)
+    ("string", "string", 0.0, 0.0, 0.01, 0.02, 10.0, 10.0, 4.0, 4.0),
+    # lopsided null -> similarity clamps to 0.0
+    ("string", "string", 0.0, 1.0, 0.5, 0.5, 100.0, 100.0, 8.0, 8.0),
+    # lopsided uniqueness
+    ("string", "string", 0.1, 0.1, 1.0, 0.0, 100.0, 100.0, 8.0, 8.0),
+    # asymmetric lengths
+    ("string", "string", 0.1, 0.1, 0.5, 0.5, 100.0, 100.0, 3.0, 30.0),
+    # realistic mixed (non-round rates -> catches float-path rounding divergence)
+    ("string", "int", 0.13, 0.87, 0.42, 0.58, 250.0, 90.0, 12.5, 7.25),
+]
+
+
+@native_only
+@pytest.mark.parametrize("args", _PROFILE_CASES)
+def test_profile_parity(args):
+    # exact byte-equality (not approx) -- the whole point of the gate.
+    assert native_module().profile_score(*args) == _profile_score_pure(*args)
