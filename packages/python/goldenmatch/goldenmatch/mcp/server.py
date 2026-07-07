@@ -33,6 +33,11 @@ from mcp.types import (
 
 from goldenmatch.core._paths import PathOutsideAllowedRootError, safe_path
 from goldenmatch.mcp.agent_tools import AGENT_TOOLS, handle_agent_tool
+from goldenmatch.mcp.document_tools import (
+    DOCUMENT_TOOL_NAMES,
+    DOCUMENT_TOOLS,
+    handle_document_tool,
+)
 from goldenmatch.mcp.identity_tools import (
     IDENTITY_TOOL_NAMES,
     IDENTITY_TOOLS,
@@ -618,7 +623,7 @@ def _build_alias_tools() -> list[Tool]:
 _BASE_TOOLS += _build_alias_tools()
 
 # TOOLS is the union of agent tools + memory tools + base tools, in the same order list_tools returns.
-TOOLS = AGENT_TOOLS + MEMORY_TOOLS + IDENTITY_TOOLS + ROUTING_TOOLS + _BASE_TOOLS
+TOOLS = AGENT_TOOLS + MEMORY_TOOLS + IDENTITY_TOOLS + ROUTING_TOOLS + _BASE_TOOLS + DOCUMENT_TOOLS
 
 
 def dispatch(name: str, args: dict) -> dict:
@@ -641,6 +646,8 @@ def dispatch(name: str, args: dict) -> dict:
         return _identity_dispatch(name, args)
     if name in ROUTING_TOOL_NAMES:
         return handle_routing_tool(name, args)
+    if name in DOCUMENT_TOOL_NAMES:
+        return handle_document_tool(name, args)
     return _handle_tool(name, args)
 
 
@@ -654,7 +661,7 @@ def create_server(file_paths: list[str] | None = None, config_path: str | None =
 
     @server.list_tools()
     async def list_tools() -> list[Tool]:
-        return AGENT_TOOLS + MEMORY_TOOLS + IDENTITY_TOOLS + ROUTING_TOOLS + _BASE_TOOLS
+        return AGENT_TOOLS + MEMORY_TOOLS + IDENTITY_TOOLS + ROUTING_TOOLS + _BASE_TOOLS + DOCUMENT_TOOLS
 
     @server.list_resources()
     async def list_resources() -> list[Resource]:
@@ -913,7 +920,9 @@ def create_server(file_paths: list[str] | None = None, config_path: str | None =
         if name in IDENTITY_TOOL_NAMES:
             return await handle_identity_tool(name, arguments)
         try:
-            if name in ROUTING_TOOL_NAMES:
+            if name in DOCUMENT_TOOL_NAMES:
+                result = handle_document_tool(name, arguments)
+            elif name in ROUTING_TOOL_NAMES:
                 result = handle_routing_tool(name, arguments)
             else:
                 result = _handle_tool(name, arguments)
