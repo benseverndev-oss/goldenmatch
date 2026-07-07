@@ -62,7 +62,7 @@
 RUSTFMT="D:/.rustup/toolchains/1.94.0-x86_64-pc-windows-msvc/bin/rustfmt.exe"
 "$RUSTFMT" --edition 2021 packages/rust/extensions/goldenpipe-wasm/src/lib.rs
 "$RUSTFMT" --edition 2021 --check packages/rust/extensions/goldenpipe-wasm/src/lib.rs   # expect no output
-grep -c "wasm_bindgen" packages/rust/extensions/goldenpipe-wasm/src/lib.rs   # expect 8 (5 + 3)
+grep -cE "#\[wasm_bindgen\]" packages/rust/extensions/goldenpipe-wasm/src/lib.rs   # expect 8 (5 + 3 export attrs)
 ```
 
 - [ ] **Step 3: Commit**
