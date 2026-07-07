@@ -8,6 +8,7 @@
     "./core": { "types": "./dist/core/index.d.ts", "import": "./dist/core/index.js", "require": "./dist/core/index.cjs" },
     "./core/autoconfig-wasm": { "types": "./dist/core/autoconfigWasm.d.ts", "import": "./dist/core/autoconfigWasm.js", "require": "./dist/core/autoconfigWasm.cjs" },
     "./core/suggest-wasm": { "types": "./dist/core/suggestWasm.d.ts", "import": "./dist/core/suggestWasm.js", "require": "./dist/core/suggestWasm.cjs" },
+    "./core/documents-wasm": { "types": "./dist/core/documentsWasm.d.ts", "import": "./dist/core/documentsWasm.js", "require": "./dist/core/documentsWasm.cjs" },
     "./core/perceptual-wasm": { "types": "./dist/core/perceptualWasm.d.ts", "import": "./dist/core/perceptualWasm.js", "require": "./dist/core/perceptualWasm.cjs" },
     "./core/hnsw-wasm": { "types": "./dist/core/hnswWasm.d.ts", "import": "./dist/core/hnswWasm.js", "require": "./dist/core/hnswWasm.cjs" },
     "./core/sketch-wasm": { "types": "./dist/core/sketchWasm.d.ts", "import": "./dist/core/sketchWasm.js", "require": "./dist/core/sketchWasm.cjs" },
