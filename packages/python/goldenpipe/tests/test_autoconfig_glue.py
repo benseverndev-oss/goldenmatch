@@ -1,4 +1,5 @@
 import polars as pl
+import pytest
 from goldenpipe.autoconfig_glue import plan_to_config, profile_context
 from goldenpipe.autoconfig_planner import PipePlan, PlannedStage
 from goldenpipe.models.config import PipelineConfig
@@ -140,4 +141,112 @@ def test_plan_config_runs_end_to_end_and_preserves_order():
         "goldencheck.scan",
         "goldenflow.transform",
         "goldenmatch.dedupe",
+    ]
+
+
+# --- Slice 2: complexity profiling + refuse ----------------------------------
+
+import dataclasses  # noqa: E402
+
+from goldenpipe.autoconfig_glue import (  # noqa: E402
+    build_planner_input,
+    enforce_confidence,
+    profile_complexity,
+)
+from goldenpipe.autoconfig_planner import PlannerInput  # noqa: E402
+from goldenpipe.errors import PipeNotConfidentError  # noqa: E402
+
+
+def _replace_n_rows(profile, n):
+    return dataclasses.replace(profile, n_rows=n)
+
+
+def test_profile_complexity_null_heavy_column():
+    df = pl.DataFrame({"a": [1, None, None, None], "b": [1, 2, 3, 4]})
+    comp = profile_complexity(PipeContext(df=df))
+    assert comp.max_null_density == 0.75      # column a: 3/4
+    assert comp.mean_null_density == 0.375     # (0.75 + 0.0) / 2
+
+
+def test_profile_complexity_no_nulls_is_zero():
+    df = pl.DataFrame({"a": [1, 2], "b": [3, 4]})
+    comp = profile_complexity(PipeContext(df=df))
+    assert comp.max_null_density == 0.0
+    assert comp.mean_null_density == 0.0
+
+
+def test_profile_complexity_engine_resident_is_zero():
+    comp = profile_complexity(PipeContext(df=None))
+    assert comp.max_null_density == 0.0
+    assert comp.mean_null_density == 0.0
+
+
+def test_profile_complexity_empty_df_is_zero():
+    df = pl.DataFrame({"a": []})
+    comp = profile_complexity(PipeContext(df=df))
+    assert comp.max_null_density == 0.0
+    assert comp.mean_null_density == 0.0
+
+
+def test_build_planner_input_bundles_runtime_and_complexity():
+    df = pl.DataFrame({"account_number": ["A1", "A2"], "currency": ["USD", "EUR"]})
+    inp = build_planner_input(PipeContext(df=df))
+    assert isinstance(inp, PlannerInput)
+    assert inp.runtime.n_rows == 2
+    assert inp.runtime.inferred_domain == "finance"
+    assert inp.complexity.max_null_density == 0.0
+
+
+def _red_plan():
+    return PipePlan(stages=(), rule_name="low_confidence", confidence=0.3, evidence={})
+
+
+def _green_plan():
+    return PipePlan(stages=(), rule_name="default", confidence=0.7, evidence={})
+
+
+def test_enforce_confidence_red_at_scale_raises():
+    runtime = profile_context(PipeContext(df=pl.DataFrame({"x": [1, 2]})))
+    runtime = _replace_n_rows(runtime, 100_000)
+    with pytest.raises(PipeNotConfidentError):
+        enforce_confidence(_red_plan(), runtime)
+
+
+def test_enforce_confidence_red_small_proceeds():
+    runtime = profile_context(PipeContext(df=pl.DataFrame({"x": [1, 2]})))
+    runtime = _replace_n_rows(runtime, 99_999)
+    assert enforce_confidence(_red_plan(), runtime) is None
+
+
+def test_enforce_confidence_green_proceeds():
+    runtime = profile_context(PipeContext(df=pl.DataFrame({"x": [1, 2]})))
+    runtime = _replace_n_rows(runtime, 100_000)
+    assert enforce_confidence(_green_plan(), runtime) is None
+
+
+def _garbage_df(n_rows: int) -> pl.DataFrame:
+    # Generic column names (no domain) + a mostly-null column (max_null_density > 0.6).
+    return pl.DataFrame({
+        "col_a": [None] * n_rows,             # 100% null -> max_null_density 1.0
+        "col_b": list(range(n_rows)),
+    })
+
+
+def test_plan_config_refuses_red_at_scale():
+    reg = _registry_with("goldencheck.scan", "goldenflow.transform", "goldenmatch.dedupe")
+    eng = Pipeline(registry=reg)
+    ctx = PipeContext(df=_garbage_df(100_000))
+    with pytest.raises(PipeNotConfidentError):
+        eng._plan_config(ctx)
+    assert eng._last_plan.rule_name == "low_confidence"
+
+
+def test_plan_config_red_below_threshold_proceeds():
+    reg = _registry_with("goldencheck.scan", "goldenflow.transform", "goldenmatch.dedupe")
+    eng = Pipeline(registry=reg)
+    ctx = PipeContext(df=_garbage_df(1_000))
+    cfg = eng._plan_config(ctx)                      # no raise
+    assert eng._last_plan.rule_name == "low_confidence"
+    assert [s.use for s in cfg.stages] == [
+        "goldencheck.scan", "goldenflow.transform", "goldenmatch.dedupe",
     ]
