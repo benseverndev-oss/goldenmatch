@@ -33,6 +33,7 @@ def test_document_routes_registered(tmp_path):
 
 
 def test_suggest_schema_returns_schema(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY_PERSONAL", "sk-test")  # endpoint resolves config up front
     monkeypatch.setattr(docrouter, "suggest_schema_from_file",
                         lambda path, **k: TargetSchema([Field("full_name"), Field("email", kind="email")]))
     client = _client(tmp_path)
@@ -85,3 +86,20 @@ def test_auth_required_401_when_token_set(tmp_path, monkeypatch):
                        files=[("files", ("a.png", _png_bytes(), "image/png"))],
                        data={"schema": '{"fields":[{"name":"x"}]}'})
     assert resp.status_code == 401
+
+
+def test_ingest_internal_error_is_500_not_400(tmp_path, monkeypatch):
+    # config resolves fine, but ingest blows up internally -> must be 500, not a mislabeled 400
+    monkeypatch.setattr(docrouter, "resolve_extractor", lambda b, m: FakeExtractor([]))
+
+    def _boom(*a, **k):
+        raise ValueError("internal boom")
+
+    monkeypatch.setattr(docrouter, "ingest_documents", _boom)
+    state = AppState(project_root=tmp_path, config_path=None,
+                     labels_path=tmp_path / "labels.jsonl")
+    client = TestClient(create_app(state), raise_server_exceptions=False)
+    resp = client.post("/api/v1/documents/ingest",
+                       files=[("files", ("a.png", _png_bytes(), "image/png"))],
+                       data={"schema": json.dumps({"fields": [{"name": "x"}]})})
+    assert resp.status_code == 500

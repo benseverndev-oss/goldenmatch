@@ -15,7 +15,7 @@ from pathlib import Path
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 from goldenmatch.documents import ingest_documents
-from goldenmatch.documents.config import resolve_extractor
+from goldenmatch.documents.config import resolve_api_key, resolve_extractor
 from goldenmatch.documents.schema_io import schema_from_dict, schema_to_dict
 from goldenmatch.documents.suggest import suggest_schema_from_file
 
@@ -39,15 +39,21 @@ async def suggest_schema_endpoint(
     backend: str = Form("vlm"),
     model: str = Form("gpt-4o"),
 ):
+    # Resolve config (backend + API key) up front so bad-request errors are 400; the executor
+    # body then only does I/O + the VLM call, whose failures surface as 500 (not mislabeled 400).
+    try:
+        if backend != "vlm":
+            raise ValueError(f"unsupported backend: {backend!r} (only 'vlm' is supported)")
+        resolve_api_key()
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
     def work():
         with tempfile.TemporaryDirectory() as td:
             (path,) = _save_uploads(td, [file])
             schema = suggest_schema_from_file(path, backend=backend, model=model)
             return {"schema": schema_to_dict(schema)}
-    try:
-        return await asyncio.get_running_loop().run_in_executor(_executor, work)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+    return await asyncio.get_running_loop().run_in_executor(_executor, work)
 
 
 @router.post("/documents/ingest")
@@ -60,15 +66,20 @@ async def ingest_endpoint(
 ):
     if not files:
         raise HTTPException(status_code=400, detail="no files uploaded")
+    # Bad-request config (schema + backend/key) resolves up front -> 400. The executor body then
+    # runs only ingest I/O, whose internal failures surface as 500 rather than a mislabeled 400.
     try:
         target = schema_from_dict(json.loads(schema))
     except (ValueError, json.JSONDecodeError) as e:
         raise HTTPException(status_code=400, detail=f"invalid schema: {e}") from e
+    try:
+        extractor = resolve_extractor(backend, model)  # bad backend / missing key
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
     def work():
         with tempfile.TemporaryDirectory() as td:
             paths = _save_uploads(td, files)
-            extractor = resolve_extractor(backend, model)  # ValueError on bad backend/key
             df, report = ingest_documents(paths, target, extractor=extractor,
                                           drop_empty=drop_empty, return_report=True)
             return {
@@ -78,7 +89,4 @@ async def ingest_endpoint(
                     "errors": [{"file": f, "error": e} for (f, e) in report.errors],
                 },
             }
-    try:
-        return await asyncio.get_running_loop().run_in_executor(_executor, work)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+    return await asyncio.get_running_loop().run_in_executor(_executor, work)
