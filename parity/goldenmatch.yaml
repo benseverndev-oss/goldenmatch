@@ -87,6 +87,8 @@ mcp_tools:
   - compare_clusters
   - config_weaknesses
   - create_domain
+  - documents_ingest
+  - documents_suggest_schema
   - explain_routing
   - export_results
   - get_cluster
@@ -152,6 +154,7 @@ cli_commands:
   - config
   - explain
   - incremental
+  - ingest-docs
   - init
   - interactive
   - label
