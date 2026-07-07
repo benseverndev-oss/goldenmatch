@@ -56,3 +56,17 @@ def test_unknown_backend_fails_fast(tmp_path):
     a = tmp_path / "a.png"; _img(a)
     with pytest.raises(ValueError, match="unknown backend"):
         ingest_documents([a], SCHEMA, backend="nope")
+
+
+def test_bad_file_recorded_and_good_file_survives(tmp_path):
+    bad = tmp_path / "bad.txt"
+    bad.write_text("not an image")
+    good = tmp_path / "good.png"; _img(good)
+    # load_pages() raises for bad.txt before the extractor is ever called, so only
+    # good.png reaches the extractor -> exactly one scripted ExtractResult.
+    fake = FakeExtractor([ExtractResult(rows=_rows(SCHEMA,
+                          [({"full_name": "Ada", "email": "a@x.io"}, {})], "good"))])
+    df, report = ingest_documents([bad, good], SCHEMA, extractor=fake, return_report=True)
+    assert df.height == 1
+    assert df["full_name"].to_list() == ["Ada"]
+    assert any(str(bad) == fname for fname, _ in report.errors)
