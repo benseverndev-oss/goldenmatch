@@ -256,11 +256,14 @@ class TransformEngine:
         sample = df.head(3).select(pl.col(column))
         for (info, params), n_changed in zip(run, changed):
             before = sample[column].head(3).cast(pl.Utf8).to_list()
-            typed = self._cast_params(params) if params else []
+            # Match the per-transform param handling EXACTLY: series-mode casts
+            # params, expr-mode passes them raw (pad_left's pad char "0" must stay
+            # a str, not be int-cast). Mixing these breaks the parameterized replay.
             if info.mode == "series":
+                typed = self._cast_params(params) if params else []
                 sample = sample.with_columns(info.func(sample[column], *typed).alias(column))
-            else:  # expr
-                sample = sample.with_columns(info.func(column, *typed).alias(column))
+            else:  # expr — raw string params, exactly like _apply_single_transform_body
+                sample = sample.with_columns(info.func(column, *params).alias(column))
             after = sample[column].head(3).cast(pl.Utf8).to_list()
             manifest.add_record(TransformRecord(
                 column=column,
