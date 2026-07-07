@@ -232,6 +232,15 @@ describe("MCP server — resources", () => {
     }
   });
 
+  it("Scorer Pipeline resource reports the active backend (wasm | pure-ts)", () => {
+    // Makes the WASM-vs-pure state legible to humans + agents. No artifact is
+    // bundled in the test env, so the backend is "pure-ts" here; the field +
+    // note are always present regardless.
+    const data = JSON.parse(readResource("infermap://scorer-info"));
+    expect(["wasm", "pure-ts"]).toContain(data.backend);
+    expect(typeof data.note).toBe("string");
+  });
+
   it("Last Mapping Report errors gracefully before any map", () => {
     const data = JSON.parse(readResource("infermap://last-mapping/report"));
     expect(data.error).toMatch(/no mapping/i);
