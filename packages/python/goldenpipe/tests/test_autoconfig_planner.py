@@ -5,7 +5,7 @@ from goldenpipe.autoconfig_planner import (
     PipeProfile,
     PlannedStage,
     PlannerInput,
-    band_of,  # noqa: F401 (imported for later slice; not yet exercised here)
+    band_of,
     plan_pipeline,
 )
 
@@ -97,3 +97,44 @@ def test_rule_weak_domain_is_default():
 def test_default_rules_is_the_module_table():
     assert plan_pipeline(_planner_input(n_rows=1)).rule_name == "pathological"
     assert len(DEFAULT_RULES) >= 2
+
+
+def test_band_of_boundaries():
+    assert band_of(0.7) == "green"
+    assert band_of(0.71) == "green"
+    assert band_of(0.69) == "amber"
+    assert band_of(0.4) == "amber"
+    assert band_of(0.39) == "red"
+    assert band_of(0.0) == "red"
+
+
+def test_rule_low_confidence_is_red_and_safe_default():
+    plan = plan_pipeline(_planner_input(inferred_domain=None, max_null_density=0.7))
+    assert plan.rule_name == "low_confidence"
+    assert plan.confidence == 0.3
+    assert band_of(plan.confidence) == "red"
+    assert tuple(s.name for s in plan.stages) == (
+        "goldencheck.scan", "goldenflow.transform", "goldenmatch.dedupe",
+    )
+
+
+def test_low_confidence_not_shadowed_by_confident_schema():
+    # domain present -> confident_schema wins; domain absent + high null -> low_confidence.
+    with_domain = plan_pipeline(_planner_input(inferred_domain="finance",
+                                               domain_confidence=0.8, max_null_density=0.9))
+    assert with_domain.rule_name == "confident_schema"
+    no_domain = plan_pipeline(_planner_input(inferred_domain=None, max_null_density=0.7))
+    assert no_domain.rule_name == "low_confidence"
+
+
+def test_low_confidence_only_above_null_threshold():
+    # domain absent but low null density -> falls through to default (not RED).
+    plan = plan_pipeline(_planner_input(inferred_domain=None, max_null_density=0.5))
+    assert plan.rule_name == "default"
+
+
+def test_default_evidence_records_null_density():
+    plan = plan_pipeline(_planner_input(inferred_domain=None, max_null_density=0.5,
+                                        mean_null_density=0.25))
+    assert plan.evidence["max_null_density"] == 0.5
+    assert plan.evidence["mean_null_density"] == 0.25
