@@ -191,8 +191,10 @@ Refactor only — no behavior change. Move the transport factory and image-encod
                       "image_url": {"url": f"data:image/png;base64,{b64}"}})
       return out
   ```
-  Then edit `vlm_backend.py`: delete its inline `_urllib_transport` and the base64 loop in
-  `_payload`; import `from goldenmatch.documents._openai import Transport, image_blocks, urllib_transport`;
+  Then edit `vlm_backend.py`: delete its inline `_urllib_transport`, the base64 loop in
+  `_payload`, AND the now-orphaned `import base64` + the module-level `_ENDPOINT` constant (both
+  become unused once moved to `_openai.py` — ruff will fail the commit otherwise); import
+  `from goldenmatch.documents._openai import Transport, image_blocks, urllib_transport`;
   use `urllib_transport(api_key)` where `_urllib_transport(api_key)` was, and build `content` as
   `[{"type": "text", "text": _instruction(schema)}] + image_blocks(pages)`.
   Then edit `config.py`: add
@@ -326,7 +328,11 @@ Handler returns a plain `dict` (mirrors `handle_routing_tool`), so it serves bot
   from goldenmatch.documents.extractor import FakeExtractor
   from goldenmatch.documents.types import ExtractedRow, ExtractResult, Field, TargetSchema
 
-  SCHEMA_JSON = {"fields": [{"name": "full_name"}, {"name": "email", "kind": "email"}]}
+  # canonical full form: schema_to_dict always emits name/kind/hint, and schema_from_dict
+  # accepts this form as input too, so it works as both expected-output and ingest-input.
+  SCHEMA_JSON = {"fields": [
+      {"name": "full_name", "kind": "text", "hint": None},
+      {"name": "email", "kind": "email", "hint": None}]}
 
 
   def test_tool_names_and_list():
