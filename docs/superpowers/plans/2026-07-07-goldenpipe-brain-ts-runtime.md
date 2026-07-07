@@ -288,7 +288,8 @@ Leave `computeAutoConfig`/`computeAutoConfigPure` defined (orphaned wrapper is f
 - [ ] **Step 3: Rework the Python emitter** `scripts/emit_ts_parity_fixtures.py`. Re-aim from the static config to `goldenpipe.run()`:
   - In `emit_case`: drop the `static_config` param; change the run line to `result = goldenpipe.run(str(csv_path))`.
   - In `main`: drop `static_config = Pipeline()._auto_config()` and pass-through; call `emit_case(case_id, csv_text, tmp_dir)`.
-  - Update the module docstring + the `emit_case` comment: it now emits the BRAIN path (`goldenpipe.run`), so single_row → pathological (drops dedupe); the fixture is the cross-surface brain contract (Python run() == TS run()).
+  - **DELETE the now-unused import** `from goldenpipe.pipeline import Pipeline` (line ~39) — after the rework `Pipeline` has zero uses, and root `pyproject.toml` ruff config selects `F` (→ `F401`), so a dangling import FAILS the `ruff check` gate in Step 4 / Task 3. Keep `import goldenpipe` (still used: `goldenpipe.run`, `goldenpipe.__version__`).
+  - Update the module docstring + the `emit_case` comment (they describe the STATIC path): it now emits the BRAIN path (`goldenpipe.run`), so single_row → pathological (drops dedupe); the fixture is the cross-surface brain contract (Python run() == TS run()).
 
 - [ ] **Step 4: Regenerate the fixture (BOX-runnable — verify here)**
 ```bash
@@ -327,6 +328,8 @@ describe("planConfig (brain wiring)", () => {
 ```
 
 - [ ] **Step 6: Eyeball-verify** run() builds config before the resolve try (throw propagates); `planConfig` imports resolve; the fixture single_row change is consistent with the pathological unit test. (CI gates the TS.)
+
+- [ ] **Step 6b: Audit other run()-driven tests stay green.** Switching `run()` to the brain changes behavior for any zero-config test whose input the brain routes differently. Verified safe during review: `tests/e2e/pipeline-e2e.test.ts` drives `runDf(rows)` zero-config and asserts the exact chain `[load, goldencheck.scan, goldenflow.transform, goldenmatch.dedupe]` — its samples are person columns (`first_name,last_name,email,city,state`, 5 & 3 rows) → domain None + >1 row + no nulls → brain picks `default` = the same chain. Grep for any OTHER `runDf(`/`run(` zero-config test asserting a stage list on a single-row or domain-detecting input; if one exists and would now diverge, update it in THIS commit (or flag). Expected: only `pipe_parity.json`'s single_row changes.
 
 - [ ] **Step 7: Commit (atomic)**
 ```bash
