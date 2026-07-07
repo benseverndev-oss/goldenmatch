@@ -69,10 +69,11 @@ schema); the A2A server's existing dispatch wraps a raising skill into a failed-
 - `test_dispatch_documents_suggest_schema`: monkeypatch `suggest_schema_from_file` -> a canned
   `TargetSchema`; assert `{"schema": {...}}`.
 - `test_agent_card_lists_document_skills`: `build_agent_card()` includes both ids.
-- Update the existing `test_agent_card_has_38_skills` (rename/rebump to 40) — and **grep the whole
-  suite + `server.py` for any other hard-coded `38` skill-count literal** (the #1515 count-enumeration
-  lesson: a count change must be chased across every assertion + docstring, not just the feature's
-  own test).
+- Update the existing `test_agent_card_has_38_skills` (rename/rebump to 40) — and **grep the WHOLE
+  REPO for any other hard-coded `38` skill-count literal** (the #1515 count-enumeration lesson). This
+  is NOT just the test suite: confirmed doc surfaces also carry "38 skills" and go stale silently
+  (they won't red CI): `packages/python/goldenmatch/README.md` (~line 182), `packages/python/
+  goldenmatch/llms.txt` (~line 11), `docs/llms.txt` (~line 8). Bump all of them to 40 in the same PR.
 - No live calls in CI.
 
 ## Parity manifest (`parity/goldenmatch.yaml`)
