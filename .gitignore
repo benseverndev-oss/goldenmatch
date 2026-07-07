@@ -89,6 +89,9 @@ packages/python/goldenflow/goldenflow/_native*.so
 # Same, for goldenanalysis (built from packages/rust/extensions/analysis-native
 # via scripts/build_analysis_native.py).
 packages/python/goldenanalysis/goldenanalysis/_native*.so
+# Same, for goldengraph (built from packages/rust/extensions/goldengraph-native
+# via scripts/build_goldengraph_native.py).
+packages/python/goldengraph/goldengraph/_native*.so
 
 # codebase-memory-mcp local index/snapshot (rebuilt by the SessionStart hook)
 .codebase-memory/

@@ -72,6 +72,7 @@ jobs:
       goldenprofile_native: ${{ steps.filter.outputs.goldenprofile_native }}
       analysis_native: ${{ steps.filter.outputs.analysis_native }}
       infermap_native: ${{ steps.filter.outputs.infermap_native }}
+      goldengraph_native: ${{ steps.filter.outputs.goldengraph_native }}
       native_flow: ${{ steps.filter.outputs.native_flow }}
       goldenflow_duckdb: ${{ steps.filter.outputs.goldenflow_duckdb }}
       goldenpipe_native: ${{ steps.filter.outputs.goldenpipe_native }}
@@ -610,6 +611,21 @@ jobs:
               - 'packages/python/infermap/infermap/detect.py'
               - 'packages/python/infermap/tests/test_native_parity.py'
               - 'scripts/build_infermap_native.py'
+            goldengraph_native:
+              # GoldenGraph's knowledge-graph engine (goldengraph-core/native, PyO3,
+              # standalone workspace). It is native-AUTHORITATIVE (the store /
+              # resolution engine is Rust-only, no pure-Python fallback), so this
+              # lane builds the .so and runs the cross-surface parity suite that
+              # asserts the Python native JSON boundary == the shared queries.json
+              # oracle (the SAME fixture the TS goldengraph-wasm parity test uses).
+              # The fixture is generated from the host boundary + drift-guarded by
+              # fixture_drift, so a core change re-gates all surfaces.
+              - 'packages/rust/extensions/goldengraph-native/**'
+              - 'packages/rust/extensions/goldengraph-core/**'
+              - 'packages/python/goldengraph/goldengraph/core/_native_loader.py'
+              - 'packages/python/goldengraph/tests/test_native_parity.py'
+              - 'packages/typescript/goldengraph/tests/parity/fixtures/goldengraph/queries.json'
+              - 'scripts/build_goldengraph_native.py'
             native_flow:
               # GoldenFlow's optional native phone kernel — a standalone maturin
               # workspace, so the `rust` job's cargo test --workspace never
@@ -2568,6 +2584,49 @@ jobs:
           INFERMAP_NATIVE: "1"
         run: uv run pytest packages/python/infermap/tests/test_native_parity.py -q
 
+  # GoldenGraph knowledge-graph engine native lane. GoldenGraph is
+  # native-authoritative (the bi-temporal store + resolution engine live in
+  # goldengraph-core, Rust-only, no pure-Python fallback), so the native path is
+  # the ONLY path -- this lane builds the .so and asserts the Python JSON
+  # boundary is byte-identical to the shared cross-surface `queries.json` oracle
+  # (the same fixture the TS goldengraph-wasm parity test uses; generated from
+  # the host boundary + drift-guarded by fixture_drift). In ci-required.
+  goldengraph_native:
+    needs: changes
+    if: needs.changes.outputs.goldengraph_native == 'true' || needs.changes.outputs.force_all == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/goldengraph-native
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      - name: clippy + test (goldengraph-core, pyo3-free kernels)
+        working-directory: packages/rust/extensions/goldengraph-core
+        run: |
+          cargo clippy -- -D warnings
+          cargo test
+      - name: clippy (goldengraph-native ext crate)
+        working-directory: packages/rust/extensions/goldengraph-native
+        run: cargo clippy --release -- -D warnings
+      - name: Build native extension into the package
+        # No --offline: CI has network + a cold cache on first run.
+        run: uv run python scripts/build_goldengraph_native.py
+      - name: Cross-surface parity (native JSON boundary == queries.json oracle)
+        env:
+          GOLDENGRAPH_NATIVE: "1"
+        run: uv run pytest packages/python/goldengraph/tests/test_native_parity.py -v
+
   # goldenmatch-native distribution smoke: build the SEPARATE maturin/abi3
   # wheel (the polars / polars-runtime split) and prove the runtime loads
   # through the wheel path. Distinct from `native`, which builds the in-tree
@@ -3829,6 +3888,7 @@ jobs:
       - native
       - goldencheck_native
       - goldenprofile_native
+      - goldengraph_native
       - native_wheel
       - goldenembed
       - embed_wheel
