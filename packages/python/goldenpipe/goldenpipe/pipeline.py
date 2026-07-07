@@ -45,6 +45,13 @@ class Pipeline:
         duckdb_con=None,
         duckdb_table: str | None = None,
     ) -> PipeResult:
+        """Run the pipeline against a source file, DataFrame, or DuckDB table.
+
+        Raises:
+            PipeNotConfidentError: when auto-config (no explicit config) is not
+                confident on a large input (>= 100k rows). Pass an explicit
+                config to bypass the brain.
+        """
         ctx = PipeContext()
 
         if duckdb_con is not None and duckdb_table is not None:
@@ -121,28 +128,28 @@ class Pipeline:
 
     def _plan_config(self, ctx: PipeContext) -> PipelineConfig:
         """Plan-first auto-config: profile the loaded context, run the rule
-        table, and materialize the chosen plan into a PipelineConfig.
+        table, refuse if not confident at scale, and materialize the chosen
+        plan into a PipelineConfig.
 
         This is the "brain" (parity with GoldenMatch's controller): the shape
-        of the pipeline is DECIDED from the data + InferMap-inferred schema
-        rather than being the fixed scan/transform/dedupe list. The portable
+        of the pipeline is DECIDED from the data + InferMap-inferred schema, and
+        a red-confidence plan on a large input raises ``PipeNotConfidentError``
+        rather than running an expensive, likely-wrong pipeline. The portable
         decision core (``autoconfig_planner``) is kept free of Polars/Pydantic
         for the later ``goldenpipe-core`` Rust port; this method is the host
         glue bracket.
         """
-        from goldenpipe.autoconfig_glue import plan_to_config, profile_context
-        from goldenpipe.autoconfig_planner import (
-            ComplexityProfile,
-            PlannerInput,
-            plan_pipeline,
+        from goldenpipe.autoconfig_glue import (
+            build_planner_input,
+            enforce_confidence,
+            plan_to_config,
         )
+        from goldenpipe.autoconfig_planner import plan_pipeline
 
-        inp = PlannerInput(
-            runtime=profile_context(ctx),
-            complexity=ComplexityProfile(max_null_density=0.0, mean_null_density=0.0),
-        )
+        inp = build_planner_input(ctx)
         plan = plan_pipeline(inp)
         self._last_plan = plan
+        enforce_confidence(plan, inp.runtime)  # may raise PipeNotConfidentError
         return plan_to_config(
             plan,
             self._registry.list_all(),
