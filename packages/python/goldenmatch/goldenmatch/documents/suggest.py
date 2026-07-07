@@ -26,11 +26,21 @@ _PROMPT = (
 )
 
 
+def _prompt() -> str:
+    from goldenmatch.core._native_loader import native_enabled, native_module
+
+    if native_enabled("documents") and (nm := native_module()) is not None and hasattr(
+        nm, "documents_suggest_prompt"
+    ):
+        return nm.documents_suggest_prompt()
+    return _PROMPT
+
+
 def suggest_schema(pages: list[PageImage], *, transport: Transport,
                    model: str = "gpt-4o", max_attempts: int = 3) -> TargetSchema:
     payload = {"model": model, "temperature": 0, "max_tokens": 1500,
                "messages": [{"role": "user",
-                             "content": [{"type": "text", "text": _PROMPT}] + image_blocks(pages)}]}
+                             "content": [{"type": "text", "text": _prompt()}] + image_blocks(pages)}]}
     last = "no response"
     resp = None
     for _ in range(max(1, max_attempts)):

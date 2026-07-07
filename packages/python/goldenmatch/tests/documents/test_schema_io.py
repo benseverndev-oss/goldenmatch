@@ -37,3 +37,8 @@ def test_load_rejects_malformed(tmp_path):
 def test_load_rejects_non_dict_field():
     with pytest.raises(ValueError):
         schema_from_dict({"fields": ["full_name"]})
+
+
+def test_load_rejects_non_string_name():
+    with pytest.raises(ValueError):
+        schema_from_dict({"fields": [{"name": 123}]})

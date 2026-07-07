@@ -14,6 +14,14 @@ def schema_to_dict(schema: TargetSchema) -> dict:
 
 
 def schema_from_dict(d: dict) -> TargetSchema:
+    from goldenmatch.core._native_loader import native_enabled, native_module
+
+    if native_enabled("documents") and (nm := native_module()) is not None and hasattr(
+        nm, "documents_schema_validate"
+    ):
+        out = json.loads(nm.documents_schema_validate(json.dumps(d)))
+        fields = [Field(name=f["name"], kind=f["kind"], hint=f["hint"]) for f in out["fields"]]
+        return TargetSchema(fields)
     if not isinstance(d, dict) or "fields" not in d or not isinstance(d["fields"], list):
         raise ValueError("schema must be an object with a 'fields' list")
     fields = []
@@ -22,6 +30,8 @@ def schema_from_dict(d: dict) -> TargetSchema:
             raise ValueError(f"schema field must be an object, got {item!r}")
         if "name" not in item:
             raise ValueError(f"schema field missing 'name': {item!r}")
+        if not isinstance(item["name"], str):
+            raise ValueError(f"schema field 'name' must be a string, got {item['name']!r}")
         fields.append(Field(name=item["name"], kind=item.get("kind", "text"),
                             hint=item.get("hint")))
     if not fields:

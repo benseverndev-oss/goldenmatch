@@ -12,6 +12,7 @@ from goldenmatch.documents._openai import (
     parse_message_text,
     urllib_transport,
 )
+from goldenmatch.documents.schema_io import schema_to_dict
 from goldenmatch.documents.types import (
     ExtractedRow,
     ExtractResult,
@@ -21,6 +22,12 @@ from goldenmatch.documents.types import (
 
 
 def _instruction(schema: TargetSchema) -> str:
+    from goldenmatch.core._native_loader import native_enabled, native_module
+
+    if native_enabled("documents") and (nm := native_module()) is not None and hasattr(
+        nm, "documents_extract_instruction"
+    ):
+        return nm.documents_extract_instruction(json.dumps(schema_to_dict(schema)))
     lines = [f'- "{f.name}" ({f.kind})' + (f": {f.hint}" if f.hint else "")
              for f in schema.fields]
     cols = ", ".join(schema.column_names())

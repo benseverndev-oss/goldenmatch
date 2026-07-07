@@ -10,6 +10,7 @@ use pyo3::prelude::*;
 mod autoconfig;
 mod bloom;
 mod cluster;
+mod documents;
 mod featurize;
 mod hash;
 mod pairs;
@@ -65,5 +66,10 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(autoconfig::autoconfig_sparse_match_floor, m)?)?;
     m.add_function(wrap_pyfunction!(autoconfig::autoconfig_exact_matchkey_floor, m)?)?;
     m.add_function(wrap_pyfunction!(suggest::suggest_config, m)?)?;
+    m.add_function(wrap_pyfunction!(documents::documents_schema_validate, m)?)?;
+    m.add_function(wrap_pyfunction!(documents::documents_parse_message_text, m)?)?;
+    m.add_function(wrap_pyfunction!(documents::documents_extract_instruction, m)?)?;
+    m.add_function(wrap_pyfunction!(documents::documents_suggest_prompt, m)?)?;
+    m.add_function(wrap_pyfunction!(documents::documents_normalize_record, m)?)?;
     Ok(())
 }

@@ -72,3 +72,11 @@ def test_truncated_response_reported_as_error():
     out = VLMExtractor(api_key="k", model="gpt-4o", transport=fake).extract(PAGES, SCHEMA)
     assert out.rows == []
     assert out.error is not None and "truncated" in out.error
+
+
+def test_non_dict_choice_reported_as_error():
+    def fake(payload):
+        return {"choices": [123]}
+    out = VLMExtractor(api_key="k", model="gpt-4o", transport=fake).extract(PAGES, SCHEMA)
+    assert out.rows == []
+    assert out.error is not None

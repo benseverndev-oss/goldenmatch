@@ -1,6 +1,7 @@
 """Value types for document/image ingest. Stdlib only, offline-testable."""
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 
 
@@ -38,6 +39,24 @@ class ExtractedRow:
     def from_partial(cls, values, confidence, schema: TargetSchema,
                      *, source_file: str, source_page: int | None) -> ExtractedRow:
         cols = schema.column_names()
+        from goldenmatch.core._native_loader import native_enabled, native_module
+
+        if native_enabled("documents") and (nm := native_module()) is not None and hasattr(
+            nm, "documents_normalize_record"
+        ):
+            schema_json = json.dumps(
+                {"fields": [{"name": f.name, "kind": f.kind, "hint": f.hint} for f in schema.fields]}
+            )
+            out = json.loads(
+                nm.documents_normalize_record(json.dumps(values), json.dumps(confidence), schema_json)
+            )
+            # re-impose schema-column order (the Rust map's own order is not
+            # authoritative -- see documents-core normalize.rs COLUMN ORDER note).
+            pv, pc = out["values"], out["confidence"]
+            v = {c: pv.get(c) for c in cols}
+            conf = {c: float(pc.get(c, 0.0)) for c in cols}
+            return cls(values=v, confidence=conf,
+                       source_file=source_file, source_page=source_page)
         # coerce non-null values to str: a VLM may return a bare number (phone/zip),
         # and mixed int/str across rows would make pl.DataFrame(records) raise before
         # the downstream cast in assemble. Keep None as None.
