@@ -106,6 +106,43 @@ def test_native_csv_path_is_pyarrow_free(tmp_path) -> None:
         assert "pyarrow" not in sys.modules, "native CSV path pulled in pyarrow"
 
 
+def test_parallel_matches_sequential_and_polars(tmp_path, monkeypatch) -> None:
+    """The parallel reader/writer (forced via MIN_BYTES=0) must be byte-identical to
+    the sequential path AND to the Polars engine — including a quoted field with
+    embedded newlines that must NOT be split across chunks."""
+    rows = []
+    for i in range(400):
+        if i == 200:
+            rows.append(f'"multi\nline\nval",x{i}')  # embedded newlines in quotes
+        else:
+            rows.append(f"  Row{i}  ,x{i}")
+    csv = ("name,other\n" + "\n".join(rows) + "\n").encode("utf-8")
+    inp = tmp_path / "in.csv"
+    inp.write_bytes(csv)
+    cfg = _cfg([("name", ["strip", "lowercase"])])
+
+    monkeypatch.setenv("GOLDENFLOW_NATIVE_CSV_PARALLEL_MIN_BYTES", "0")  # force parallel
+    out_par = tmp_path / "par.csv"
+    man_par = columnar.transform_file(inp, out_par, cfg)
+
+    monkeypatch.setenv("GOLDENFLOW_NATIVE_CSV_PARALLEL_MIN_BYTES", "999999999")  # force seq
+    out_seq = tmp_path / "seq.csv"
+    man_seq = columnar.transform_file(inp, out_seq, cfg)
+
+    par = pl.read_csv(out_par, infer_schema_length=0)
+    seq = pl.read_csv(out_seq, infer_schema_length=0)
+    assert par.equals(seq), "parallel output diverged from sequential"
+    assert _manifest_rows(man_par) == _manifest_rows(man_seq)
+    assert par.height == 400  # embedded-newline row not double-counted
+    assert par["name"][200] == "multi\nline\nval"  # quoted newline preserved + stripped
+
+    # and both equal the Polars engine reading inference-off
+    monkeypatch.delenv("GOLDENFLOW_NATIVE_CSV_PARALLEL_MIN_BYTES", raising=False)
+    monkeypatch.delenv("GOLDENFLOW_ENGINE", raising=False)
+    ref = transform_df(pl.read_csv(inp, infer_schema_length=0), config=cfg)
+    assert par["name"].to_list() == ref.df["name"].cast(pl.Utf8).to_list()
+
+
 def test_passthrough_and_nulls_roundtrip(tmp_path) -> None:
     """Untransformed columns pass through unchanged; empty fields round-trip as
     empty (null) on both read and write."""
