@@ -3,15 +3,20 @@
 import type { FieldInfo, ScorerResult } from "../types.js";
 import { makeScorerResult } from "../types.js";
 import type { Scorer } from "./base.js";
+import { getInfermapBackend } from "../wasm/backend.js";
 
 export class ExactScorer implements Scorer {
   readonly name = "ExactScorer";
   readonly weight = 1.0;
 
   score(source: FieldInfo, target: FieldInfo): ScorerResult {
-    const src = source.name.trim().toLowerCase();
-    const tgt = target.name.trim().toLowerCase();
-    if (src === tgt) {
+    const backend = getInfermapBackend();
+    const sim = backend
+      ? backend.exactScore(source.name, target.name)
+      : source.name.trim().toLowerCase() === target.name.trim().toLowerCase()
+        ? 1.0
+        : 0.0;
+    if (sim === 1.0) {
       return makeScorerResult(1.0, `Exact name match: '${source.name}'`);
     }
     return makeScorerResult(
