@@ -44,7 +44,7 @@ Claude-Session: https://claude.ai/code/session_01F2g8Snk1Akef5z3yZdtt44
 | `packages/python/goldenpipe/goldenpipe/autoconfig_planner_rules.py` | the 3 rules + `DEFAULT_RULES` (portable) | Create |
 | `packages/python/goldenpipe/goldenpipe/autoconfig_glue.py` | host glue: `profile_context(ctx)`, `plan_to_config(plan, available, identity_opts)` | Create |
 | `packages/python/goldenpipe/pyproject.toml` | register `infer_schema` entry-point | Modify |
-| `packages/python/goldenpipe/goldenpipe/pipeline.py` | `_auto_config(self, ctx)` + call site + `_last_plan` | Modify |
+| `packages/python/goldenpipe/goldenpipe/pipeline.py` | new `_plan_config(self, ctx)` brain + `run()` call site + `_last_plan` init (`_auto_config` untouched) | Modify |
 | `packages/python/goldenpipe/tests/test_autoconfig_planner.py` | core + rules unit tests | Create |
 | `packages/python/goldenpipe/tests/test_autoconfig_glue.py` | glue + wiring/integration tests | Create |
 
@@ -118,7 +118,7 @@ first-match plan) so the later `goldenpipe-core` Rust port is mechanical.
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
@@ -194,7 +194,7 @@ def plan_pipeline(
             return rule.action(profile)
     return _default_plan(profile)
 ```
-(The `field` import is unused — drop it; ruff will flag. Keep imports minimal.)
+(Import only `dataclass` from dataclasses — no `field`; ruff F401 would flag an unused import.)
 
 - [ ] **Step 4: Run to verify PASS** + ruff
 ```bash
@@ -554,18 +554,34 @@ Claude-Session: https://claude.ai/code/session_01F2g8Snk1Akef5z3yZdtt44"
 
 ---
 
-## Task 5: Wire the planner into `_auto_config`
+## Task 5: Wire the planner into `run()` (as a NEW method — do NOT touch `_auto_config`)
 
 **Files:** Modify `packages/python/goldenpipe/goldenpipe/pipeline.py`. Box: eye + the integration test (Task 6) verifies.
 
+> **Why a new method, not a signature change to `_auto_config`:** `_auto_config()`
+> has other no-arg callers that must keep the OLD static behavior — production
+> `core/_planner_json.py` (the cross-surface parity bridge `auto_config_json`,
+> which has no data context and mirrors `goldenpipe-core/src/json.rs`) and
+> `tests/test_pipeline.py::test_auto_config`. Changing its arity breaks both, and
+> feeding the JSON bridge an empty ctx would silently regress its output
+> (n_rows=0 → `pathological` → dedupe dropped). So `_auto_config` stays untouched
+> (the data-less static default), and the brain is a **new** `_plan_config(ctx)`
+> that only `run()` calls (it has the loaded ctx). The JSON bridge keeps mirroring
+> the static planner until the brain itself is ported to `goldenpipe-core` (a later
+> slice), at which point the bridge moves too.
+
 - [ ] **Step 1: Add `_last_plan` init.** In `Pipeline.__init__`, after `self._identity_opts = identity_opts`, add:
 ```python
-        self._last_plan = None  # the PipePlan from the most recent auto-config
+        self._last_plan = None  # the PipePlan from the most recent brain run
 ```
 
-- [ ] **Step 2: Change the `_auto_config` signature + body.** Replace the whole `_auto_config` method with:
+- [ ] **Step 2: Add the brain method** `_plan_config` (leave `_auto_config` exactly as-is). Add it right after the existing `_auto_config` method:
 ```python
-    def _auto_config(self, ctx: PipeContext) -> PipelineConfig:
+    def _plan_config(self, ctx: PipeContext) -> PipelineConfig:
+        """Plan-first auto-config brain: profile the loaded ctx -> rule table ->
+        materialized PipelineConfig. Only called from run() (needs the loaded ctx).
+        `_auto_config` remains the data-less static default for the JSON parity bridge.
+        """
         from goldenpipe.autoconfig_planner import plan_pipeline
         from goldenpipe.autoconfig_glue import profile_context, plan_to_config
 
@@ -574,23 +590,29 @@ Claude-Session: https://claude.ai/code/session_01F2g8Snk1Akef5z3yZdtt44"
         self._last_plan = plan
         return plan_to_config(plan, self._registry.list_all(), self._identity_opts)
 ```
-(Lazy imports keep the planner modules out of the import path for callers who
-always supply an explicit config.)
+(Lazy imports keep the planner modules off the import path for callers who supply
+an explicit config or use the static `_auto_config`.)
 
-- [ ] **Step 3: Update the call site.** Change the line in `run()`:
+- [ ] **Step 3: Update the `run()` call site.** Change the line in `run()`:
 ```python
         config = self._config or self._auto_config()
 ```
 to:
 ```python
-        config = self._config or self._auto_config(ctx)
+        config = self._config or self._plan_config(ctx)
 ```
+(This is the ONLY line that switches to the brain. `_auto_config()`'s other
+callers — `_planner_json.py`, `test_pipeline.py` — keep calling the untouched
+static method.)
 
-- [ ] **Step 4: Verify no other caller uses `_auto_config()` (arity change).**
+- [ ] **Step 4: Confirm the blast radius is exactly as expected.**
 ```bash
-grep -rn "_auto_config" packages/python/goldenpipe/goldenpipe packages/python/goldenpipe/tests | grep -v "def _auto_config"
+grep -rn "_auto_config\|_plan_config" packages/python/goldenpipe/goldenpipe packages/python/goldenpipe/tests | grep -v "def _auto_config\|def _plan_config"
 ```
-Expect: only the one call site in `run()` (now passing `ctx`). If a test calls `_auto_config()` with no args, it'll be updated in Task 6 / must be fixed.
+Expect: `_plan_config` appears ONLY at the new `run()` call site; `_auto_config()`
+still appears at `core/_planner_json.py:~148` and `tests/test_pipeline.py:~45`
+(both INTENTIONALLY unchanged — they use the static default). Do NOT edit those.
+If `_auto_config` appears at any NEW site you introduced, revert it.
 
 - [ ] **Step 5: Run the existing goldenpipe pipeline tests** (regression — the wiring must not break the default path):
 ```bash
@@ -651,7 +673,7 @@ def test_autoconfig_confident_df_includes_infer_schema():
                          "goldenflow.transform", "goldenmatch.dedupe")
     eng = Pipeline(registry=reg)
     ctx = PipeContext(df=_finance_df())
-    cfg = eng._auto_config(ctx)
+    cfg = eng._plan_config(ctx)
     assert eng._last_plan.rule_name == "confident_schema"
     assert [s.use for s in cfg.stages][0] == "infer_schema"
     assert cfg.stages[0].config == {"domain": "finance"}
@@ -662,7 +684,7 @@ def test_autoconfig_one_row_df_skips_dedupe():
     reg = _registry_with("goldencheck.scan", "goldenflow.transform", "goldenmatch.dedupe")
     eng = Pipeline(registry=reg)
     ctx = PipeContext(df=pl.DataFrame({"a": [1]}))
-    cfg = eng._auto_config(ctx)
+    cfg = eng._plan_config(ctx)
     assert eng._last_plan.rule_name == "pathological"
     assert "goldenmatch.dedupe" not in [s.use for s in cfg.stages]
 
@@ -671,7 +693,7 @@ def test_autoconfig_missing_infer_schema_degrades():
     # confident df but infer_schema NOT in registry -> it's dropped, no crash.
     reg = _registry_with("goldencheck.scan", "goldenflow.transform", "goldenmatch.dedupe")
     eng = Pipeline(registry=reg)
-    cfg = eng._auto_config(PipeContext(df=_finance_df()))
+    cfg = eng._plan_config(PipeContext(df=_finance_df()))
     assert eng._last_plan.rule_name == "confident_schema"  # plan still says confident
     assert "infer_schema" not in [s.use for s in cfg.stages]  # but it's filtered out
 ```
