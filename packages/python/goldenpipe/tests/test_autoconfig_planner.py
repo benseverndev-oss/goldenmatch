@@ -45,3 +45,36 @@ def test_structs_are_frozen():
     p = _profile()
     with pytest.raises(dataclasses.FrozenInstanceError):
         p.n_rows = 5  # type: ignore[misc]
+
+
+from goldenpipe.autoconfig_planner_rules import DEFAULT_RULES  # noqa: E402
+
+
+def test_rule_pathological_skips_dedupe():
+    plan = plan_pipeline(_profile(n_rows=1))
+    assert plan.rule_name == "pathological"
+    assert tuple(s.name for s in plan.stages) == (
+        "goldencheck.scan", "goldenflow.transform",
+    )
+    assert plan.confidence == 1.0
+
+
+def test_rule_confident_schema_prepends_infer_schema():
+    plan = plan_pipeline(_profile(inferred_domain="finance", domain_confidence=0.8))
+    assert plan.rule_name == "confident_schema"
+    assert tuple(s.name for s in plan.stages) == (
+        "infer_schema", "goldencheck.scan", "goldenflow.transform", "goldenmatch.dedupe",
+    )
+    assert plan.stages[0].config == {"domain": "finance"}
+    assert plan.confidence == 0.8
+
+
+def test_rule_weak_domain_is_default():
+    plan = plan_pipeline(_profile(inferred_domain="finance", domain_confidence=0.4))
+    assert plan.rule_name == "default"
+    assert all(s.name != "infer_schema" for s in plan.stages)
+
+
+def test_default_rules_is_the_module_table():
+    assert plan_pipeline(_profile(n_rows=1)).rule_name == "pathological"
+    assert len(DEFAULT_RULES) >= 2
