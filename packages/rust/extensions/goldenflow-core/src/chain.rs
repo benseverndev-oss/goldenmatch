@@ -59,6 +59,10 @@ pub enum Kernel {
     NicknameStandardize,
     NameInitials,
     StripMiddle,
+    // parameterized string->string (carry their args; total, never null)
+    Truncate(usize),
+    PadLeft(usize, char),
+    PadRight(usize, char),
 }
 
 impl Kernel {
@@ -96,6 +100,35 @@ impl Kernel {
             _ => return None,
         })
     }
+
+    /// Resolve a transform name + its (string) params to a chain kernel — the
+    /// superset of [`from_name`](Self::from_name) that also handles the
+    /// parameterized string ops. Defaults + negative-clamping mirror the
+    /// native-flow arrow shims exactly (`truncate` n=255; `pad_left` width=10
+    /// pad='0'; `pad_right` width=10 pad=' '; a negative width/n clamps to 0).
+    pub fn from_op(name: &str, params: &[&str]) -> Option<Kernel> {
+        let usize_arg = |i: usize, default: usize| {
+            params
+                .get(i)
+                .and_then(|p| p.parse::<i64>().ok())
+                .map(|n| if n < 0 { 0 } else { n as usize })
+                .unwrap_or(default)
+        };
+        let char_arg = |i: usize, default: char| {
+            params.get(i).and_then(|p| p.chars().next()).unwrap_or(default)
+        };
+        match name {
+            "truncate" => Some(Kernel::Truncate(usize_arg(0, 255))),
+            "pad_left" => Some(Kernel::PadLeft(usize_arg(0, 10), char_arg(1, '0'))),
+            "pad_right" => Some(Kernel::PadRight(usize_arg(0, 10), char_arg(1, ' '))),
+            _ => Kernel::from_name(name),
+        }
+    }
+
+    /// Parameterized fusable names — need `apply_chain_ops_arrow` (not the older
+    /// no-arg `apply_chain_arrow`). Kept separate so a pre-0.13.0 wheel still fuses
+    /// the no-arg families and only these break a run.
+    pub const PARAM_NAMES: &'static [&'static str] = &["truncate", "pad_left", "pad_right"];
 
     /// Every fusable kernel name, for the coverage guard.
     pub const ALL_NAMES: &'static [&'static str] = &[
@@ -158,6 +191,9 @@ impl Kernel {
             Kernel::NicknameStandardize => out.push_str(&names::nickname_standardize(s)),
             Kernel::NameInitials => out.push_str(&names::name_initials(s)),
             Kernel::StripMiddle => out.push_str(&names::strip_middle(s)),
+            Kernel::Truncate(n) => out.push_str(&text::truncate(s, n)),
+            Kernel::PadLeft(w, p) => text::pad_left_into(s, w, p, out),
+            Kernel::PadRight(w, p) => text::pad_right_into(s, w, p, out),
         }
     }
 }
@@ -295,6 +331,10 @@ mod tests {
             ],
             &[Kernel::NicknameStandardize, Kernel::NameInitials],
             &[Kernel::ExtractNumbers],
+            // parameterized string ops mixed into a run.
+            &[Kernel::Strip, Kernel::Lowercase, Kernel::Truncate(5)],
+            &[Kernel::Strip, Kernel::PadLeft(8, '0')],
+            &[Kernel::Truncate(3), Kernel::PadRight(6, '_')],
         ];
         let arr = sample();
         for chain in chains {
@@ -302,6 +342,29 @@ mod tests {
             let seq = sequential(&arr, chain);
             assert_eq!(fused.array, seq, "chain {chain:?} != sequential");
         }
+    }
+
+    #[test]
+    fn from_op_parses_params_and_defaults() {
+        // explicit params
+        assert_eq!(Kernel::from_op("truncate", &["50"]), Some(Kernel::Truncate(50)));
+        assert_eq!(
+            Kernel::from_op("pad_left", &["10", "0"]),
+            Some(Kernel::PadLeft(10, '0'))
+        );
+        assert_eq!(
+            Kernel::from_op("pad_right", &["6", " "]),
+            Some(Kernel::PadRight(6, ' '))
+        );
+        // defaults mirror the arrow shims when a param is missing
+        assert_eq!(Kernel::from_op("truncate", &[]), Some(Kernel::Truncate(255)));
+        assert_eq!(Kernel::from_op("pad_left", &[]), Some(Kernel::PadLeft(10, '0')));
+        assert_eq!(Kernel::from_op("pad_right", &[]), Some(Kernel::PadRight(10, ' ')));
+        // negative width clamps to 0 (matches the shim)
+        assert_eq!(Kernel::from_op("truncate", &["-5"]), Some(Kernel::Truncate(0)));
+        // no-arg names delegate to from_name; unknown -> None
+        assert_eq!(Kernel::from_op("strip", &[]), Some(Kernel::Strip));
+        assert_eq!(Kernel::from_op("split_name", &[]), None);
     }
 
     #[test]

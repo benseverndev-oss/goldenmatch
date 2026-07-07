@@ -416,7 +416,7 @@ dependencies = [
 
 [[package]]
 name = "goldenflow-core"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "arrow-array",
  "arrow-buffer",

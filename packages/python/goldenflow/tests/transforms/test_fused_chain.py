@@ -12,7 +12,7 @@ import polars as pl
 import pytest
 from goldenflow.core._native_loader import native_module
 from goldenflow.transforms import get_transform, registry
-from goldenflow.transforms._chain import FUSABLE_KERNELS
+from goldenflow.transforms._chain import FUSABLE_KERNELS, FUSABLE_PARAM_KERNELS
 
 
 def test_fusable_kernels_registered_and_single_col_mode() -> None:
@@ -21,8 +21,8 @@ def test_fusable_kernels_registered_and_single_col_mode() -> None:
     mode; a dataframe-mode (multi-column) kernel would break it — this guard blocks
     that and any unregistered name."""
     reg = set(registry())
-    for name in sorted(FUSABLE_KERNELS):
-        assert name in reg, f"{name} in FUSABLE_KERNELS but not registered"
+    for name in sorted(FUSABLE_KERNELS | FUSABLE_PARAM_KERNELS):
+        assert name in reg, f"{name} in the fusable set but not registered"
         info = get_transform(name)
         assert info is not None and info.mode in ("expr", "series"), (
             f"{name} must be mode 'expr'/'series' for the fused sample replay, got "
@@ -31,13 +31,13 @@ def test_fusable_kernels_registered_and_single_col_mode() -> None:
 
 
 def test_fusable_matches_native_kernel_table() -> None:
-    """Python FUSABLE_KERNELS must mirror goldenflow_core::chain::Kernel (native
-    ``fusable_kernel_names``): the host must never send a name the kernel can't
-    fuse, nor silently under-fuse a kernel the kernel supports."""
+    """The Python fusable set (no-arg + parameterized) must mirror
+    goldenflow_core::chain (native ``fusable_kernel_names`` = ALL_NAMES + PARAM_NAMES):
+    the host must never send a name the kernel can't fuse, nor under-fuse one it can."""
     nm = native_module()
     if nm is None or not hasattr(nm, "fusable_kernel_names"):
         pytest.skip("native chain kernel not built")
-    assert set(nm.fusable_kernel_names()) == set(FUSABLE_KERNELS)
+    assert set(nm.fusable_kernel_names()) == set(FUSABLE_KERNELS | FUSABLE_PARAM_KERNELS)
 
 
 def _cfg(column: str, ops: list[str]):
@@ -70,6 +70,10 @@ def _manifest_rows(result) -> list[tuple]:
         ["strip", "lowercase", "email_normalize", "email_canonical"],
         ["name_transliterate", "name_proper", "strip_titles", "strip_suffixes"],
         ["strip", "name_proper", "strip_middle", "name_initials"],
+        # parameterized ops mixed into a fusable run (need apply_chain_ops_arrow)
+        ["strip", "lowercase", "truncate:5"],
+        ["strip", "pad_left:8:0"],
+        ["strip", "collapse_whitespace", "truncate:20", "pad_right:25"],
         ["strip", "extract_numbers"],
     ],
 )
