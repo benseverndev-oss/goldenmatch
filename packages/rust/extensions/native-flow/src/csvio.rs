@@ -12,10 +12,16 @@
 //! owned transforms want, and it avoids Polars' lossy float reformatting.
 
 use arrow::array::{Array, LargeStringArray, LargeStringBuilder};
+use arrow::compute::concat;
 use pyo3::exceptions::{PyIOError, PyValueError};
 use pyo3::prelude::*;
 
 use goldenflow_core::chain::{apply_chain, Kernel};
+
+/// Below this data-region size the CSV is parsed sequentially (parallel setup +
+/// concat isn't worth it). Override with `GOLDENFLOW_NATIVE_CSV_PARALLEL_MIN_BYTES`
+/// (`0` = always parallel, huge = always sequential).
+const DEFAULT_PARALLEL_MIN_BYTES: usize = 512 * 1024;
 
 /// One per-op audit record: `(op, affected_rows, total_rows, sample_before,
 /// sample_after)`. Samples are the null-preserving first 3 values, mirroring the
@@ -40,65 +46,231 @@ fn sample3(arr: &LargeStringArray) -> Vec<Option<String>> {
         .collect()
 }
 
-/// Read a CSV file into `(column_names, columns)` — every field a string, empty
-/// -> null. Column order follows the header.
-fn read_csv(path: &str) -> Result<(Vec<String>, Vec<LargeStringArray>), String> {
+/// Parse one **headerless** byte region (must start at a record boundary and end
+/// right after one) into `ncols` Arrow string columns — empty field -> null.
+fn parse_region(region: &[u8], ncols: usize) -> Result<Vec<LargeStringArray>, String> {
     let mut reader = csv::ReaderBuilder::new()
-        .has_headers(true)
-        .from_path(path)
-        .map_err(|e| format!("open {path}: {e}"))?;
-    let names: Vec<String> = reader
+        .has_headers(false)
+        .from_reader(region);
+    let mut builders: Vec<LargeStringBuilder> =
+        (0..ncols).map(|_| LargeStringBuilder::new()).collect();
+    let mut rec = csv::ByteRecord::new();
+    while reader
+        .read_byte_record(&mut rec)
+        .map_err(|e| format!("read row: {e}"))?
+    {
+        for (i, builder) in builders.iter_mut().enumerate() {
+            let field = rec.get(i).unwrap_or(b"");
+            if field.is_empty() {
+                builder.append_null(); // empty field -> null (matches Polars)
+            } else {
+                // Regions are cut only at record boundaries, so fields are whole;
+                // CSV is UTF-8 by contract here (utf8-lossy is a Polars read detail).
+                let s = std::str::from_utf8(field)
+                    .map_err(|e| format!("invalid utf-8 in field: {e}"))?;
+                builder.append_value(s);
+            }
+        }
+    }
+    Ok(builders.iter_mut().map(|b| b.finish()).collect())
+}
+
+/// Find the byte offset just past the first record-boundary newline (even
+/// quote-count) — i.e. the end of the header line and the start of the data.
+/// Returns `data.len()` if there is no newline (header-only file).
+fn first_data_offset(data: &[u8]) -> usize {
+    let mut in_quote = false;
+    for (i, &b) in data.iter().enumerate() {
+        match b {
+            b'"' => in_quote = !in_quote,
+            b'\n' if !in_quote => return i + 1,
+            _ => {}
+        }
+    }
+    data.len()
+}
+
+/// Split the data region into up to `k` contiguous `[start, end)` ranges, cutting
+/// ONLY at record-boundary newlines (a `\n` seen with an even running quote count —
+/// the RFC4180 invariant that a newline outside a quoted field ends a record).
+/// So every range holds whole records and parses identically to the sequential
+/// path. Returns `(ranges, boundary_rows)` where `boundary_rows` counts record
+/// boundaries seen (a cheap safety check against a mis-split).
+fn record_ranges(data: &[u8], k: usize) -> (Vec<(usize, usize)>, usize) {
+    let n = data.len();
+    let target = (n / k).max(1);
+    let mut starts = vec![0usize];
+    let mut next_target = target;
+    let mut in_quote = false;
+    let mut boundary_rows = 0usize;
+    for (i, &b) in data.iter().enumerate() {
+        match b {
+            b'"' => in_quote = !in_quote,
+            b'\n' if !in_quote => {
+                boundary_rows += 1;
+                if i + 1 < n && i + 1 >= next_target && starts.len() < k {
+                    starts.push(i + 1);
+                    next_target += target;
+                }
+            }
+            _ => {}
+        }
+    }
+    // A trailing record without a final newline still counts as a row.
+    if n > 0 && data[n - 1] != b'\n' {
+        boundary_rows += 1;
+    }
+    let ranges = starts
+        .iter()
+        .enumerate()
+        .map(|(j, &s)| (s, *starts.get(j + 1).unwrap_or(&n)))
+        .collect();
+    (ranges, boundary_rows)
+}
+
+fn parallel_min_bytes() -> usize {
+    std::env::var("GOLDENFLOW_NATIVE_CSV_PARALLEL_MIN_BYTES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(DEFAULT_PARALLEL_MIN_BYTES)
+}
+
+/// Read a CSV file into `(column_names, columns)` — every field a string, empty
+/// -> null. Column order follows the header. Large files are parsed in parallel
+/// across record-boundary-aligned chunks (`std::thread::scope`, no rayon global
+/// pool — sidesteps the #688 `LockLatch` class); small files stay sequential.
+/// Any chunk error or a row-count mismatch falls back to a sequential re-parse,
+/// so the parallel split can never silently corrupt output.
+fn read_csv(path: &str) -> Result<(Vec<String>, Vec<LargeStringArray>), String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("open {path}: {e}"))?;
+    let data_start = first_data_offset(&bytes);
+    let header = &bytes[..data_start];
+    let names: Vec<String> = csv::ReaderBuilder::new()
+        .has_headers(false)
+        .from_reader(header)
         .headers()
         .map_err(|e| format!("read header: {e}"))?
         .iter()
         .map(str::to_string)
         .collect();
     let ncols = names.len();
-    // Build each column's Arrow buffer directly — no per-field String, no
-    // intermediate Vec, and a single reused StringRecord (avoids a per-row alloc).
-    let mut builders: Vec<LargeStringBuilder> =
-        (0..ncols).map(|_| LargeStringBuilder::new()).collect();
-    let mut rec = csv::StringRecord::new();
-    while reader
-        .read_record(&mut rec)
-        .map_err(|e| format!("read row: {e}"))?
-    {
-        for (i, builder) in builders.iter_mut().enumerate() {
-            let field = rec.get(i).unwrap_or("");
-            if field.is_empty() {
-                builder.append_null(); // empty field -> null (matches Polars)
-            } else {
-                builder.append_value(field);
-            }
-        }
+    let data = &bytes[data_start..];
+
+    let nthreads = std::thread::available_parallelism().map_or(1, |n| n.get());
+    if ncols == 0 || nthreads <= 1 || data.len() < parallel_min_bytes() {
+        return Ok((names, parse_region(data, ncols)?));
     }
-    let arrays = builders.iter_mut().map(|b| b.finish()).collect();
-    Ok((names, arrays))
+
+    let (ranges, expected_rows) = record_ranges(data, nthreads);
+    let parallel = std::thread::scope(|scope| -> Result<Vec<Vec<LargeStringArray>>, String> {
+        let handles: Vec<_> = ranges
+            .iter()
+            .map(|&(s, e)| scope.spawn(move || parse_region(&data[s..e], ncols)))
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| {
+                h.join()
+                    .map_err(|_| "csv parse thread panicked".to_string())?
+            })
+            .collect()
+    });
+
+    // Fall back to sequential on any chunk error or a row-count mismatch (a
+    // mis-split would change the total row count) — never corrupt silently.
+    let partials = match parallel {
+        Ok(p) if p.iter().map(|c| c[0].len()).sum::<usize>() == expected_rows => p,
+        _ => return Ok((names, parse_region(data, ncols)?)),
+    };
+
+    let columns = (0..ncols)
+        .map(|i| {
+            let refs: Vec<&dyn Array> = partials.iter().map(|c| &c[i] as &dyn Array).collect();
+            let merged = concat(&refs).map_err(|e| format!("concat column {i}: {e}"))?;
+            merged
+                .as_any()
+                .downcast_ref::<LargeStringArray>()
+                .cloned()
+                .ok_or_else(|| "concat produced a non-LargeUtf8 column".to_string())
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok((names, columns))
+}
+
+/// Serialize rows `[start, end)` of `columns` to an in-memory CSV byte buffer
+/// (no header) via the `csv` crate — null -> empty field, RFC4180 quoting.
+fn write_region(columns: &[LargeStringArray], start: usize, end: usize) -> Result<Vec<u8>, String> {
+    let mut w = csv::WriterBuilder::new()
+        .has_headers(false)
+        .from_writer(Vec::<u8>::new());
+    for row in start..end {
+        for c in columns {
+            let field = if c.is_null(row) { "" } else { c.value(row) };
+            w.write_field(field)
+                .map_err(|e| format!("write row {row}: {e}"))?;
+        }
+        w.write_record(std::iter::empty::<&[u8]>())
+            .map_err(|e| format!("end row {row}: {e}"))?;
+    }
+    w.into_inner()
+        .map_err(|e| format!("finish write buffer: {e}"))
 }
 
 /// Write `(column_names, columns)` back to a CSV file — null -> empty field,
-/// RFC4180 quoting via the `csv` crate.
+/// RFC4180 quoting. Large outputs format their row ranges in parallel
+/// (`std::thread::scope`, no rayon global pool) into per-chunk byte buffers, then
+/// concatenate them in order — write order is deterministic. Small outputs write
+/// sequentially.
 fn write_csv(path: &str, names: &[String], columns: &[LargeStringArray]) -> Result<(), String> {
-    let mut writer = csv::WriterBuilder::new()
-        .from_path(path)
-        .map_err(|e| format!("create {path}: {e}"))?;
-    writer
+    use std::io::Write;
+    let nrows = columns.first().map_or(0, |c| c.len());
+    let value_bytes: usize = columns.iter().map(|c| c.values().len()).sum();
+
+    // Header (one buffer; picks up the same quoting rules as the data).
+    let mut header = csv::WriterBuilder::new()
+        .has_headers(false)
+        .from_writer(Vec::<u8>::new());
+    header
         .write_record(names)
         .map_err(|e| format!("write header: {e}"))?;
-    let nrows = columns.first().map_or(0, |c| c.len());
-    for row in 0..nrows {
-        // Field-by-field (no per-row Vec alloc); empty terminator ends the record.
-        for c in columns {
-            let field = if c.is_null(row) { "" } else { c.value(row) };
-            writer
-                .write_field(field)
-                .map_err(|e| format!("write row {row}: {e}"))?;
-        }
-        writer
-            .write_record(std::iter::empty::<&[u8]>())
-            .map_err(|e| format!("end row {row}: {e}"))?;
+    let header = header
+        .into_inner()
+        .map_err(|e| format!("finish header buffer: {e}"))?;
+
+    let nthreads = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let bufs: Vec<Vec<u8>> = if nthreads <= 1 || value_bytes < parallel_min_bytes() {
+        vec![write_region(columns, 0, nrows)?]
+    } else {
+        let per = nrows.div_ceil(nthreads);
+        let ranges: Vec<(usize, usize)> = (0..nrows)
+            .step_by(per.max(1))
+            .map(|s| (s, (s + per).min(nrows)))
+            .collect();
+        std::thread::scope(|scope| -> Result<Vec<Vec<u8>>, String> {
+            let handles: Vec<_> = ranges
+                .iter()
+                .map(|&(s, e)| scope.spawn(move || write_region(columns, s, e)))
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| {
+                    h.join()
+                        .map_err(|_| "csv write thread panicked".to_string())?
+                })
+                .collect()
+        })?
+    };
+
+    let mut file = std::io::BufWriter::new(
+        std::fs::File::create(path).map_err(|e| format!("create {path}: {e}"))?,
+    );
+    file.write_all(&header)
+        .map_err(|e| format!("write header: {e}"))?;
+    for buf in &bufs {
+        file.write_all(buf)
+            .map_err(|e| format!("write {path}: {e}"))?;
     }
-    writer.flush().map_err(|e| format!("flush {path}: {e}"))?;
+    file.flush().map_err(|e| format!("flush {path}: {e}"))?;
     Ok(())
 }
 
@@ -124,20 +296,29 @@ pub fn transform_csv(
                 continue; // column not in file — mirrors the Python `if col in df.columns`
             };
             let total = columns[idx].len() as u64;
-            let mut cur = columns[idx].clone();
-            let mut records: Vec<OpRecord> = Vec::with_capacity(ops.len());
+            let mut kernels = Vec::with_capacity(ops.len());
             for (op, params) in ops {
                 let refs: Vec<&str> = params.iter().map(String::as_str).collect();
-                let kernel = Kernel::from_op(op, &refs).ok_or_else(|| {
+                kernels.push(Kernel::from_op(op, &refs).ok_or_else(|| {
                     PyValueError::new_err(format!("not a fusable chain kernel: {op}"))
-                })?;
-                let before = sample3(&cur);
-                let res = apply_chain(&cur, &[kernel]);
-                let after = sample3(&res.array);
-                records.push((op.clone(), res.changed[0], total, before, after));
-                cur = res.array;
+                })?);
             }
-            columns[idx] = cur;
+            // ONE fused pass over the whole column: the final array + per-op changed
+            // counts (apply_chain already returns changed[i] per kernel). The per-op
+            // before/after samples come from a cheap replay on just the first 3 rows —
+            // byte-identical to running each op over the full column, at a fraction of
+            // the cost (N ops => 1 full pass, not N).
+            let fused = apply_chain(&columns[idx], &kernels);
+            let mut head = LargeStringArray::from_iter(sample3(&columns[idx]));
+            let mut records: Vec<OpRecord> = Vec::with_capacity(ops.len());
+            for (i, (op, _)) in ops.iter().enumerate() {
+                let before = sample3(&head);
+                let replay = apply_chain(&head, std::slice::from_ref(&kernels[i]));
+                let after = sample3(&replay.array);
+                records.push((op.clone(), fused.changed[i], total, before, after));
+                head = replay.array;
+            }
+            columns[idx] = fused.array;
             manifest.push((col_name.clone(), records));
         }
 

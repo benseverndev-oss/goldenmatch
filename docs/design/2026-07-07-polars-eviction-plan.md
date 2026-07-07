@@ -201,10 +201,44 @@ directly, no per-field `String`, reused record) already **halved** native I/O
 row-chunk boundaries, with the #688 sequential-below-threshold guard) — the named
 follow-on to reach lighter-AND-faster.
 
-**Verdict for this increment: ship it as the WEIGHT win, honestly.** It decisively
-advances the primary goal — the CSV pipeline (read→transform→write) now runs with
-**zero Polars, zero pyarrow**, byte-identical (data + manifest, parity-gated), and
-the transform itself is faster. The CSV-I/O speed regression is the kind the user
-pre-authorized ("evicting a heavy dependency… the regress we can handle by
-iterating"); parallel parsing is Phase 2b. Do **not** claim "faster" — the number
-is a measured tie-to-regression on I/O-bound CSV, a win on transform.
+**Verdict for the 2 increment: shipped as the WEIGHT win** — the CSV pipeline runs
+zero-Polars/zero-pyarrow, byte-identical, transform faster; CSV-I/O was ~1.6×
+slower (single-threaded parse/write). Parallel parsing was Phase 2b.
+
+## Phase 2b — parallelize + fuse (closed most of the CSV-I/O gap)
+
+Three byte-identical levers took the native file path from **~0.40× (2.5× slower)
+to roughly parity** with Polars at 1M rows:
+
+1. **Fused single-pass transform (the biggest win).** The 2 manifest loop applied
+   **one kernel per `apply_chain` call** to get per-op counts → a 4-op column did
+   4 full passes over the data. But `apply_chain` already returns **per-kernel
+   `changed` counts from one fused pass**. Now: one fused pass for the data +
+   counts, and the per-op before/after samples via a cheap **3-row replay** (the
+   samples only ever show 3 rows). Byte-identical; N passes → 1. This alone moved
+   the full path ~0.54× → ~0.84× at 1M.
+2. **Parallel read.** `std::thread::scope` (NOT rayon — no global pool, so the #688
+   `LockLatch` futex-park class is structurally absent) parses record-boundary-
+   aligned chunks. Splits cut **only at `\n` with an even running quote count** —
+   the RFC4180 invariant that a newline outside a quoted field ends a record — so
+   chunks hold whole records (a quoted embedded newline is never split; gated in
+   the test). **Safety net:** any chunk error or a row-count mismatch falls back to
+   a sequential re-parse, so a mis-split can never silently corrupt output.
+3. **Parallel write.** Row ranges format into per-chunk byte buffers in parallel
+   (`thread::scope`), concatenated in deterministic order. Took sequential I/O
+   463 ms → 193 ms (**2.4×**) at 1M.
+
+Gated by `GOLDENFLOW_NATIVE_CSV_PARALLEL_MIN_BYTES` (default 512 KB; `0` = always,
+huge = never) so small files stay sequential.
+
+**Measured, 1M rows (very noisy dev box — polars itself swings ±100 ms/run):**
+native ~400–450 ms vs polars ~376–474 ms = **~0.8–0.93×, i.e. parity within
+noise** (up from 0.40×). The transform is faster natively; CSV I/O is now
+parallel on both ends. The last few percent are noise-dominated locally — **CI is
+the arbiter** (per the 1b lesson). Honest framing: 2b reaches *lighter-AND-≈-as-fast*;
+whether it crosses into a clear win is a CI/quiet-box question, and Polars stays the
+designed opt-in fast-CSV backend regardless.
+
+**Not pursued (diminishing returns):** the parallel read still pays a `concat`
+full-copy per column; eliminating it needs chunk-through-transform-and-write (a
+bigger refactor) for a small remaining gain. Parked.
