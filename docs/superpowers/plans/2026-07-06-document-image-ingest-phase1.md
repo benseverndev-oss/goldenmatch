@@ -121,6 +121,13 @@
   def test_extract_result_error_has_no_rows():
       r = ExtractResult(rows=[], error="boom")
       assert r.rows == [] and r.error == "boom"
+
+
+  def test_from_partial_coerces_non_null_values_to_str():
+      s = TargetSchema([Field("zip"), Field("phone")])
+      row = ExtractedRow.from_partial(
+          {"zip": 90210, "phone": None}, {}, s, source_file="a.pdf", source_page=0)
+      assert row.values == {"zip": "90210", "phone": None}
   ```
 
 - [ ] **Step 2: Run to verify it fails.**
@@ -169,7 +176,10 @@
       def from_partial(cls, values, confidence, schema: TargetSchema,
                        *, source_file: str, source_page: int | None) -> "ExtractedRow":
           cols = schema.column_names()
-          v = {c: values.get(c) for c in cols}
+          # coerce non-null values to str: a VLM may return a bare number (phone/zip),
+          # and mixed int/str across rows would make pl.DataFrame(records) raise before
+          # the downstream cast in assemble. Keep None as None.
+          v = {c: (str(values[c]) if values.get(c) is not None else None) for c in cols}
           conf = {c: float(confidence.get(c, 0.0)) for c in cols}
           return cls(values=v, confidence=conf,
                      source_file=source_file, source_page=source_page)
@@ -917,16 +927,17 @@ Proves the whole point: fixtures → `ingest_documents` (FakeExtractor) → Data
           confidence_required=False,
           allow_red_config=True,
       )
-      # the two Ada rows collapse to one cluster; Grace stays separate
-      # (exact-on-email guarantees the match regardless of auto-config)
-      assert result is not None
+      # 3 rows, 2 share ada@x.io -> the two Ada rows collapse to one cluster, Grace stays
+      # separate => 2 clusters total. `dedupe_df -> DedupeResult`, which exposes
+      # `total_clusters` (goldenmatch/_api.py ~line 217). exact-on-email makes this
+      # independent of fuzzy auto-config.
+      assert result.total_clusters == 2
   ```
 
-  NOTE for the implementer: inspect the real `dedupe_df` return type (`packages/python/
-  goldenmatch/goldenmatch/_api.py:400`) and assert on its actual cluster/summary shape — e.g.
-  that the two `ada@x.io` rows share a cluster id. Replace the placeholder `assert result is
-  not None` with a concrete cluster-count assertion once you see the return object. Keep
-  `exact=["email"]` so the assertion does not depend on fuzzy auto-config.
+  NOTE for the implementer: confirm the attribute name on the real `DedupeResult`
+  (`goldenmatch/_api.py:400` return type; `total_clusters` property near line 217). If the
+  cluster count is exposed differently, assert on that instead — but assert the concrete
+  outcome (two Ada rows in one cluster, Grace separate), NOT `is not None`.
 
 - [ ] **Step 2: Run to verify it fails.**
   Run: `"$PY" -m pytest tests/documents/test_e2e.py -q`  Expected: FAIL (assertion or import).
