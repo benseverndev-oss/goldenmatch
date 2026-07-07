@@ -10,6 +10,7 @@ Parity contract (see docs/design/2026-07-07-polars-eviction-plan.md):
 """
 from __future__ import annotations
 
+import csv
 import sys
 
 import goldenflow  # noqa: F401 -- import-time transform registration
@@ -40,6 +41,18 @@ CSV_TEXT = (
 
 def _cfg(specs):
     return GoldenFlowConfig(transforms=[TransformSpec(column=c, ops=o) for c, o in specs])
+
+
+def _write_2col(path, col, rows):
+    """Write a 2-column CSV (`<col>`, `keep`) via csv.writer (QUOTE_MINIMAL), so an
+    empty value is an UNQUOTED empty field — which both Polars and the native reader
+    read as null. (A *quoted* empty ``""`` is the documented quoting boundary Phase 2
+    does not claim parity on.) A comma-bearing value is quoted automatically."""
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow([col, "keep"])
+        for i, v in enumerate(rows):
+            w.writerow(["" if v is None else v, f"k{i}"])
 
 
 def _manifest_rows(manifest):
@@ -122,10 +135,41 @@ def test_native_csv_numeric_equals_polars(tmp_path, monkeypatch, ops) -> None:
     # 2-column CSV so empty fields are unambiguous (a lone empty single-column line
     # is null-vs-blank ambiguous between readers).
     rows = ["  $1,234.50 ", "$0.5", "10", "", "bad", "-$3.00", "0", "1000000", "12.5%", "1.5e3"]
-    lines = ["price,keep"] + [f'"{v}",k{i}' for i, v in enumerate(rows)]
     inp = tmp_path / "in.csv"
-    inp.write_bytes(("\n".join(lines) + "\n").encode("utf-8"))
+    _write_2col(inp, "price", rows)
     cfg = _cfg([("price", ops)])
+
+    out = tmp_path / "out.csv"
+    manifest = columnar.transform_file(inp, out, cfg, source=str(inp))
+
+    monkeypatch.delenv("GOLDENFLOW_ENGINE", raising=False)
+    ref = transform_df(pl.read_csv(inp, infer_schema_length=0), config=cfg)
+
+    got = pl.read_csv(out, infer_schema_length=0)
+    for col in got.columns:
+        assert got[col].to_list() == ref.df[col].cast(pl.Utf8).to_list(), f"{col} diverged"
+    assert _manifest_rows(manifest) == _manifest_rows(ref.manifest)
+
+
+@pytest.mark.parametrize(
+    "ops,rows",
+    [
+        (["to_integer"], ["  42 ", "1,000", "-5", "", "bad", "3.9", "0"]),
+        (["strip", "to_integer"], ["  42 ", " -5 ", "", "bad", "0"]),
+        (["to_integer", "abs_value"], ["42", "-5", "", "bad", "0"]),  # i64 -> f64 promote
+        (["to_integer", "clamp:0:100"], ["42", "-5", "200", "", "bad"]),
+        (["roman_to_int"], ["IV", "XII", "", "bad", "MMXX"]),
+        (["ordinal_to_int"], ["1st", "22nd", "", "bad"]),
+    ],
+)
+def test_native_csv_i64_equals_polars(tmp_path, monkeypatch, ops, rows) -> None:
+    """Phase 3 wave 3c: the i64 parsers (to_integer/roman_to_int/ordinal_to_int) yield
+    an Int64 column; an f64 array op promotes it to Float64 exactly as Polars does."""
+    if not columnar.columnar_file_ready(_cfg([("x", ops)])):
+        pytest.skip("native numeric columnar not built (pre-0.22 wheel)")
+    inp = tmp_path / "in.csv"
+    _write_2col(inp, "x", rows)
+    cfg = _cfg([("x", ops)])
 
     out = tmp_path / "out.csv"
     manifest = columnar.transform_file(inp, out, cfg, source=str(inp))

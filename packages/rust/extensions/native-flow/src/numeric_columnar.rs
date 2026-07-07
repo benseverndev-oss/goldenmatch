@@ -1,8 +1,8 @@
-//! Numeric columnar execution — Phase 3 wave 3b. Runs a numeric config on a string
-//! column entirely natively: `[string ops] -> [one f64 parser] -> [f64 ops]`,
-//! formatting the f64 result back to string via the Polars-matching
-//! `float_to_polars_string` (wave 3a) so the CSV output + manifest are
-//! byte-identical to the Polars engine.
+//! Numeric columnar execution — Phase 3 waves 3b/3c. Runs a numeric config on a
+//! string column entirely natively: `[string ops] -> [one parser] -> [f64 ops]`,
+//! formatting the numeric result back to string (f64 via the Polars-matching
+//! `float_to_polars_string` from wave 3a, i64 as a plain integer) so the CSV output
+//! + manifest are byte-identical to the Polars engine.
 //!
 //! Parity model (from `engine/transformer.py`): every op's `affected` is
 //! `(before.cast(Utf8) != after.cast(Utf8)).sum()` with null comparisons excluded,
@@ -12,13 +12,15 @@
 //! `-0.0 -> 0.0` change count (the formats differ) exactly as Polars does, even
 //! though raw `==` would call them equal.
 //!
-//! Scope: the f64 parsers (`currency_strip`/`percentage_normalize`/`comma_decimal`/
-//! `scientific_to_decimal`/`fraction_to_decimal`) + the f64 array ops
-//! (`round`/`clamp`/`abs_value`/`fill_zero`). The i64 parsers (`to_integer`/
-//! `roman_to_int`/`ordinal_to_int`, which yield an Int64 column with different
-//! formatting) are a later increment.
+//! Parsers: f64 (`currency_strip`/`percentage_normalize`/`comma_decimal`/
+//! `scientific_to_decimal`/`fraction_to_decimal`) and i64 (`to_integer`/
+//! `roman_to_int`/`ordinal_to_int`). Array ops (`round`/`clamp`/`abs_value`/
+//! `fill_zero`) are f64; the first one applied to an Int64 column promotes it to
+//! Float64, exactly as Polars does (`[to_integer, round]` -> Float64 output).
 
-use arrow::array::{Array, Float64Array, Float64Builder, LargeStringArray};
+use arrow::array::{
+    Array, Float64Array, Float64Builder, Int64Array, Int64Builder, LargeStringArray,
+};
 use pyo3::prelude::*;
 
 use goldenflow_core::chain::{
@@ -29,14 +31,21 @@ use goldenflow_core::numeric;
 
 use crate::csvio::OpRecord;
 
-/// A string -> f64 parser (the dtype transition). f64-valued only.
+/// A string -> number parser (the dtype transition). f64-valued parsers yield a
+/// Float64 column; i64-valued parsers yield an Int64 column (which a later f64
+/// array op promotes to Float64, exactly as Polars does).
 #[derive(Clone, Copy)]
 enum NumericParser {
+    // f64-valued
     CurrencyStrip,
     PercentageNormalize,
     CommaDecimal,
     ScientificToDecimal,
     FractionToDecimal,
+    // i64-valued
+    ToInteger,
+    RomanToInt,
+    OrdinalToInt,
 }
 
 impl NumericParser {
@@ -47,19 +56,85 @@ impl NumericParser {
             "comma_decimal" => NumericParser::CommaDecimal,
             "scientific_to_decimal" => NumericParser::ScientificToDecimal,
             "fraction_to_decimal" => NumericParser::FractionToDecimal,
+            "to_integer" => NumericParser::ToInteger,
+            "roman_to_int" => NumericParser::RomanToInt,
+            "ordinal_to_int" => NumericParser::OrdinalToInt,
             _ => return None,
         })
     }
 
-    fn parse(self, s: &str) -> Option<f64> {
+    /// Parse every non-null cell of `col` into the parser's numeric dtype
+    /// (unparseable / null -> null).
+    fn parse_column(self, col: &LargeStringArray) -> NumCol {
+        let cells = (0..col.len()).map(|i| (!col.is_null(i)).then(|| col.value(i)));
         match self {
-            NumericParser::CurrencyStrip => numeric::currency_strip(s),
-            NumericParser::PercentageNormalize => numeric::percentage_normalize(s),
-            NumericParser::CommaDecimal => numeric::comma_decimal(s),
-            NumericParser::ScientificToDecimal => numeric::scientific_to_decimal(s),
-            NumericParser::FractionToDecimal => numeric::fraction_to_decimal(s),
+            NumericParser::ToInteger => {
+                NumCol::I64(build_i64(cells.map(|c| c.and_then(numeric::to_integer))))
+            }
+            NumericParser::RomanToInt => {
+                NumCol::I64(build_i64(cells.map(|c| c.and_then(numeric::roman_to_int))))
+            }
+            NumericParser::OrdinalToInt => NumCol::I64(build_i64(
+                cells.map(|c| c.and_then(numeric::ordinal_to_int)),
+            )),
+            _ => {
+                let f = move |s: &str| match self {
+                    NumericParser::CurrencyStrip => numeric::currency_strip(s),
+                    NumericParser::PercentageNormalize => numeric::percentage_normalize(s),
+                    NumericParser::CommaDecimal => numeric::comma_decimal(s),
+                    NumericParser::ScientificToDecimal => numeric::scientific_to_decimal(s),
+                    NumericParser::FractionToDecimal => numeric::fraction_to_decimal(s),
+                    _ => unreachable!("i64 parsers handled above"),
+                };
+                NumCol::F64(build_f64(cells.map(|c| c.and_then(f))))
+            }
         }
     }
+}
+
+/// A parsed numeric column: Int64 (from an integer parser, until an f64 op
+/// promotes it) or Float64. `cast(Utf8)` — for `affected`/samples — is a plain
+/// integer for I64, the Polars-matching float format for F64.
+enum NumCol {
+    I64(Int64Array),
+    F64(Float64Array),
+}
+
+impl NumCol {
+    fn fmt(&self) -> Vec<Option<String>> {
+        match self {
+            NumCol::I64(a) => (0..a.len())
+                .map(|i| (!a.is_null(i)).then(|| a.value(i).to_string()))
+                .collect(),
+            NumCol::F64(a) => fmt_f64(a),
+        }
+    }
+
+    /// The values as f64 (an f64 array op promotes an Int64 column to Float64).
+    fn to_f64(&self) -> Float64Array {
+        match self {
+            NumCol::F64(a) => a.clone(),
+            NumCol::I64(a) => {
+                build_f64((0..a.len()).map(|i| (!a.is_null(i)).then(|| a.value(i) as f64)))
+            }
+        }
+    }
+}
+
+fn build_i64(it: impl Iterator<Item = Option<i64>>) -> Int64Array {
+    let mut b = Int64Builder::new();
+    for v in it {
+        b.append_option(v);
+    }
+    b.finish()
+}
+
+fn build_f64(it: impl Iterator<Item = Option<f64>>) -> Float64Array {
+    let mut b = Float64Builder::new();
+    for v in it {
+        b.append_option(v);
+    }
+    b.finish()
 }
 
 /// A resolved numeric column plan: optional leading string ops, exactly one f64
@@ -156,20 +231,10 @@ pub fn run_numeric_column(
         fused.array
     };
 
-    // --- parser: string -> f64 (null in / unparseable -> null) ---
-    let mut builder = Float64Builder::with_capacity(str_col.len());
-    for i in 0..str_col.len() {
-        match (!str_col.is_null(i))
-            .then(|| str_col.value(i))
-            .and_then(|s| plan.parser.1.parse(s))
-        {
-            Some(f) => builder.append_value(f),
-            None => builder.append_null(),
-        }
-    }
-    let mut cur_arr = builder.finish();
+    // --- parser: string -> Int64/Float64 (null in / unparseable -> null) ---
+    let mut cur = plan.parser.1.parse_column(&str_col);
     let before_fmt = str_opts(&str_col);
-    let mut cur_fmt = fmt_f64(&cur_arr);
+    let mut cur_fmt = cur.fmt();
     records.push((
         plan.parser.0.clone(),
         affected(&before_fmt, &cur_fmt),
@@ -178,9 +243,10 @@ pub fn run_numeric_column(
         head3(&cur_fmt),
     ));
 
-    // --- f64 array ops (op-by-op so `affected` uses the formatted comparison) ---
+    // --- f64 array ops (op-by-op so `affected` uses the formatted comparison; the
+    // first op promotes an Int64 column to Float64, exactly as Polars does) ---
     for (name, kernel) in &plan.f64_ops {
-        let next_arr = apply_chain_f64(&cur_arr, std::slice::from_ref(kernel)).array;
+        let next_arr = apply_chain_f64(&cur.to_f64(), std::slice::from_ref(kernel)).array;
         let next_fmt = fmt_f64(&next_arr);
         records.push((
             name.clone(),
@@ -189,7 +255,7 @@ pub fn run_numeric_column(
             head3(&cur_fmt),
             head3(&next_fmt),
         ));
-        cur_arr = next_arr;
+        cur = NumCol::F64(next_arr);
         cur_fmt = next_fmt;
     }
 
