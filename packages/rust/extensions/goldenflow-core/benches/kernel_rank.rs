@@ -5,6 +5,9 @@
 //! before designing — the repo's standing perf lesson). Plain `fn main()` +
 //! 5-run-median wall, arrow-free (times the raw `text/email/names` fns per value
 //! over a realistic messy corpus). Run: `cargo bench --bench kernel_rank`.
+// The kernel table trades a couple of clippy nits for a uniform, readable shape.
+#![allow(clippy::type_complexity)] // `&[(&str, Box<dyn Fn>)]` is fine for a bench
+#![allow(clippy::redundant_closure)] // uniform `|s| f(s)` reads better than mixed fn paths
 
 use std::hint::black_box;
 use std::time::Instant;
