@@ -4,19 +4,7 @@ import { api } from "../lib/api";
 import type { IngestResult, TargetSchema } from "../lib/api";
 import { SchemaEditor } from "../components/SchemaEditor";
 import { DocumentResults } from "../components/DocumentResults";
-
-function humanizeError(message: string): string {
-  const match = message.match(/^\d+\s+(\{.*\})$/s);
-  if (match) {
-    try {
-      const body = JSON.parse(match[1]!);
-      if (typeof body.detail === "string") return body.detail;
-    } catch {
-      // ignore
-    }
-  }
-  return message;
-}
+import { humanizeError } from "../lib/errors";
 
 export function Documents() {
   const [files, setFiles] = useState<File[]>([]);
@@ -48,6 +36,7 @@ export function Documents() {
           <input
             type="file"
             multiple
+            accept=".pdf,.png,.jpg,.jpeg,.tif,.tiff,.webp"
             aria-label="upload files"
             onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
             className="w-full"
@@ -77,12 +66,20 @@ export function Documents() {
 
       {schema && (
         <section className="mb-8">
-          <SchemaEditor schema={schema} onChange={setSchema} />
+          <SchemaEditor
+            schema={schema}
+            onChange={(next) => {
+              setSchema(next);
+              ingestMut.reset();
+            }}
+          />
           <div className="mt-4 flex items-center gap-3">
             <button
               type="button"
               className="btn btn-primary"
-              disabled={ingestMut.isPending}
+              disabled={
+                files.length === 0 || schema.fields.length === 0 || ingestMut.isPending
+              }
               onClick={() => ingestMut.mutate()}
             >
               {ingestMut.isPending ? "Extracting…" : "Extract"}

@@ -2,6 +2,23 @@ import type { FieldKind, SchemaField, TargetSchema } from "../lib/api";
 
 const FIELD_KINDS: FieldKind[] = ["text", "email", "phone", "address", "date", "number"];
 
+// Stable row keys without adding an `id` to the wire-shape TargetSchema:
+// each field object gets a monotonically-increasing id the first time it's
+// seen. Fields keep the same object reference across add/remove (only the
+// edited field is replaced), so this keeps keys stable through those ops;
+// editing a field re-keys that one row, which is an acceptable minimal
+// improvement over pure index keys.
+let nextFieldRowId = 0;
+const fieldRowIds = new WeakMap<SchemaField, number>();
+function fieldRowId(f: SchemaField): number {
+  let id = fieldRowIds.get(f);
+  if (id === undefined) {
+    id = nextFieldRowId++;
+    fieldRowIds.set(f, id);
+  }
+  return id;
+}
+
 type SchemaEditorProps = {
   schema: TargetSchema;
   onChange: (schema: TargetSchema) => void;
@@ -45,7 +62,7 @@ export function SchemaEditor({ schema, onChange }: SchemaEditorProps) {
         )}
 
         {schema.fields.map((f, idx) => (
-          <article key={idx} className="card px-4 py-4">
+          <article key={fieldRowId(f)} className="card px-4 py-4">
             <div className="grid grid-cols-12 gap-x-4 gap-y-3 items-end">
               <div className="col-span-4">
                 <p className="eyebrow mb-1">name</p>
