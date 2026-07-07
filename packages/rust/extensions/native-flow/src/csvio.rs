@@ -13,10 +13,12 @@
 
 use arrow::array::{Array, LargeStringArray, LargeStringBuilder};
 use arrow::compute::concat;
-use pyo3::exceptions::{PyIOError, PyValueError};
+use pyo3::exceptions::PyIOError;
 use pyo3::prelude::*;
 
-use goldenflow_core::chain::{apply_chain, Kernel};
+use goldenflow_core::chain::{apply_chain, apply_chain_nullable, ChainResult};
+
+use crate::chain::{resolve_chain, ChainOps};
 
 /// Below this data-region size the CSV is parsed sequentially (parallel setup +
 /// concat isn't worth it). Override with `GOLDENFLOW_NATIVE_CSV_PARALLEL_MIN_BYTES`
@@ -274,10 +276,40 @@ fn write_csv(path: &str, names: &[String], columns: &[LargeStringArray]) -> Resu
     Ok(())
 }
 
-/// Read `in_path`, apply each spec's owned string chain (op-by-op, so the manifest
-/// carries per-op affected counts + before/after samples exactly like the Python
-/// columnar engine), write to `out_path`, and return the per-column manifest.
-/// Polars-free, pyarrow-free, one FFI crossing.
+/// Run a resolved chain over `col` and build the per-op manifest: ONE fused pass
+/// (`run_all` → the final array + per-op `changed` counts) plus a cheap 3-row
+/// replay (`run_one` applies just kernel `i`) for the before/after samples —
+/// byte-identical to running each op over the full column, at a fraction of the
+/// cost (N ops ⇒ 1 full pass, not N). Generic over the chain kind (total /
+/// nullable), which both return the same `ChainResult<i64>`.
+fn build_manifest<FAll, FOne>(
+    col: &LargeStringArray,
+    ops: &[(String, Vec<String>)],
+    total: u64,
+    run_all: FAll,
+    run_one: FOne,
+) -> (LargeStringArray, Vec<OpRecord>)
+where
+    FAll: FnOnce(&LargeStringArray) -> ChainResult<i64>,
+    FOne: Fn(&LargeStringArray, usize) -> ChainResult<i64>,
+{
+    let fused = run_all(col);
+    let mut head = LargeStringArray::from_iter(sample3(col));
+    let mut records: Vec<OpRecord> = Vec::with_capacity(ops.len());
+    for (i, (op, _)) in ops.iter().enumerate() {
+        let before = sample3(&head);
+        let replay = run_one(&head, i);
+        let after = sample3(&replay.array);
+        records.push((op.clone(), fused.changed[i], total, before, after));
+        head = replay.array;
+    }
+    (fused.array, records)
+}
+
+/// Read `in_path`, apply each spec's owned string chain (auto-routed total /
+/// nullable, so the manifest carries per-op affected counts + before/after samples
+/// exactly like the Python columnar engine), write to `out_path`, and return the
+/// per-column manifest. Polars-free, pyarrow-free, one FFI crossing.
 #[pyfunction]
 pub fn transform_csv(
     py: Python,
@@ -296,29 +328,26 @@ pub fn transform_csv(
                 continue; // column not in file — mirrors the Python `if col in df.columns`
             };
             let total = columns[idx].len() as u64;
-            let mut kernels = Vec::with_capacity(ops.len());
-            for (op, params) in ops {
-                let refs: Vec<&str> = params.iter().map(String::as_str).collect();
-                kernels.push(Kernel::from_op(op, &refs).ok_or_else(|| {
-                    PyValueError::new_err(format!("not a fusable chain kernel: {op}"))
-                })?);
-            }
-            // ONE fused pass over the whole column: the final array + per-op changed
-            // counts (apply_chain already returns changed[i] per kernel). The per-op
-            // before/after samples come from a cheap replay on just the first 3 rows —
-            // byte-identical to running each op over the full column, at a fraction of
-            // the cost (N ops => 1 full pass, not N).
-            let fused = apply_chain(&columns[idx], &kernels);
-            let mut head = LargeStringArray::from_iter(sample3(&columns[idx]));
-            let mut records: Vec<OpRecord> = Vec::with_capacity(ops.len());
-            for (i, (op, _)) in ops.iter().enumerate() {
-                let before = sample3(&head);
-                let replay = apply_chain(&head, std::slice::from_ref(&kernels[i]));
-                let after = sample3(&replay.array);
-                records.push((op.clone(), fused.changed[i], total, before, after));
-                head = replay.array;
-            }
-            columns[idx] = fused.array;
+            // Auto-route the run: all-total takes the zero-alloc fast chain; any
+            // Option-returning kernel takes the nullable chain. Both return the same
+            // ChainResult, so the fused-pass + 3-row-replay manifest logic is shared.
+            let (new_array, records) = match resolve_chain(ops)? {
+                ChainOps::Total(ks) => build_manifest(
+                    &columns[idx],
+                    ops,
+                    total,
+                    |c| apply_chain(c, &ks),
+                    |c, i| apply_chain(c, std::slice::from_ref(&ks[i])),
+                ),
+                ChainOps::Nullable(ks) => build_manifest(
+                    &columns[idx],
+                    ops,
+                    total,
+                    |c| apply_chain_nullable(c, &ks),
+                    |c, i| apply_chain_nullable(c, std::slice::from_ref(&ks[i])),
+                ),
+            };
+            columns[idx] = new_array;
             manifest.push((col_name.clone(), records));
         }
 

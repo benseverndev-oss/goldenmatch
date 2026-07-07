@@ -32,7 +32,11 @@ import os
 from goldenflow.core._native_loader import native_module
 from goldenflow.engine.manifest import Manifest, TransformRecord
 from goldenflow.transforms import get_transform, parse_transform_name
-from goldenflow.transforms._chain import FUSABLE_KERNELS, FUSABLE_PARAM_KERNELS
+from goldenflow.transforms._chain import (
+    FUSABLE_KERNELS,
+    FUSABLE_NULLABLE_KERNELS,
+    FUSABLE_PARAM_KERNELS,
+)
 
 Column = list  # a column is a plain Python list (str | None)
 
@@ -44,13 +48,19 @@ def columnar_engine_selected() -> bool:
 
 # The owned string kernels the columnar path can run natively (no-arg + param).
 _OWNED_STRING = FUSABLE_KERNELS | FUSABLE_PARAM_KERNELS
+# Owned Option-returning kernels (URL/company/email) — the nullable chain (Phase 3
+# wave 2). Accepted only when the native build auto-routes them (``chain_supports_
+# nullable``, native-flow 0.20+); a run may mix these with the total kernels.
+_OWNED_NULLABLE = FUSABLE_NULLABLE_KERNELS
 
 
 def config_is_columnar_ready(config) -> bool:
     """A config runs on the columnar engine iff EVERY op is an owned string kernel
-    (fusable) and there are no frame-level ops (splits/renames/drops/filters/dedup)
-    that Phase 1 doesn't handle yet. Otherwise the caller uses the Polars engine —
-    correctness first; coverage grows over the later phases."""
+    (total fusable, or — when the native build supports it — a nullable
+    URL/company/email kernel) and there are no frame-level ops
+    (splits/renames/drops/filters/dedup) that the columnar path doesn't handle yet.
+    Otherwise the caller uses the Polars engine — correctness first; coverage grows
+    over the phases."""
     if config.splits or config.renames or config.drop or config.filters or config.dedup:
         return False
     if not config.transforms:
@@ -58,10 +68,12 @@ def config_is_columnar_ready(config) -> bool:
     nm = native_module()
     if nm is None or not hasattr(nm, "apply_chain_str_list"):
         return False
+    nullable_ok = hasattr(nm, "chain_supports_nullable")
+    accepted = _OWNED_STRING | _OWNED_NULLABLE if nullable_ok else _OWNED_STRING
     for spec in config.transforms:
         for op_raw in spec.ops:
             name, _params = parse_transform_name(op_raw)
-            if name not in _OWNED_STRING:
+            if name not in accepted:
                 return False
             info = get_transform(name)
             if info is None:

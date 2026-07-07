@@ -20,7 +20,9 @@ use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyCapsule, PyList};
 
-use goldenflow_core::chain::{apply_chain, Kernel};
+use goldenflow_core::chain::{apply_chain, apply_chain_nullable};
+
+use crate::chain::{resolve_chain, ChainOps};
 
 const STREAM_NAME: &[u8] = b"arrow_array_stream";
 
@@ -145,24 +147,35 @@ impl Column {
         py: Python,
         ops: Vec<(String, Vec<String>)>,
     ) -> PyResult<(Column, Vec<u64>)> {
-        let mut kernels = Vec::with_capacity(ops.len());
-        for (name, params) in &ops {
-            let refs: Vec<&str> = params.iter().map(String::as_str).collect();
-            kernels.push(Kernel::from_op(name, &refs).ok_or_else(|| {
-                PyValueError::new_err(format!("not a fusable chain kernel: {name}"))
-            })?);
-        }
+        // Auto-route: an all-total run takes the zero-alloc fast chain; a run with
+        // any Option-returning (URL/company/email) kernel takes the nullable chain
+        // (total kernels fold in as Total). Byte-identical either way.
+        let chain = resolve_chain(&ops)?;
+        let err = || PyTypeError::new_err("Column.apply_chain requires a Utf8/LargeUtf8 column");
         let (array, changed) = py.detach(|| -> PyResult<(ArrayRef, Vec<u64>)> {
-            if let Some(s) = self.array.as_any().downcast_ref::<StringArray>() {
-                let r = apply_chain(s, &kernels);
-                Ok((Arc::new(r.array) as ArrayRef, r.changed))
-            } else if let Some(s) = self.array.as_any().downcast_ref::<LargeStringArray>() {
-                let r = apply_chain(s, &kernels);
-                Ok((Arc::new(r.array) as ArrayRef, r.changed))
-            } else {
-                Err(PyTypeError::new_err(
-                    "Column.apply_chain requires a Utf8/LargeUtf8 column",
-                ))
+            match &chain {
+                ChainOps::Total(ks) => {
+                    if let Some(s) = self.array.as_any().downcast_ref::<StringArray>() {
+                        let r = apply_chain(s, ks);
+                        Ok((Arc::new(r.array) as ArrayRef, r.changed))
+                    } else if let Some(s) = self.array.as_any().downcast_ref::<LargeStringArray>() {
+                        let r = apply_chain(s, ks);
+                        Ok((Arc::new(r.array) as ArrayRef, r.changed))
+                    } else {
+                        Err(err())
+                    }
+                }
+                ChainOps::Nullable(ks) => {
+                    if let Some(s) = self.array.as_any().downcast_ref::<StringArray>() {
+                        let r = apply_chain_nullable(s, ks);
+                        Ok((Arc::new(r.array) as ArrayRef, r.changed))
+                    } else if let Some(s) = self.array.as_any().downcast_ref::<LargeStringArray>() {
+                        let r = apply_chain_nullable(s, ks);
+                        Ok((Arc::new(r.array) as ArrayRef, r.changed))
+                    } else {
+                        Err(err())
+                    }
+                }
             }
         })?;
         Ok((Column::new(array), changed))

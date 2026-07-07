@@ -437,7 +437,7 @@ dependencies = [
 
 [[package]]
 name = "goldenflow-core"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -446,7 +446,7 @@ dependencies = [
 
 [[package]]
 name = "goldenflow-native"
-version = "0.19.0"
+version = "0.20.0"
 dependencies = [
  "arrow",
  "csv",

@@ -35,6 +35,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(chain::apply_chain_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(chain::apply_chain_ops_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(chain::apply_chain_str_list, m)?)?;
+    m.add_function(wrap_pyfunction!(chain::chain_supports_nullable, m)?)?;
     m.add_function(wrap_pyfunction!(csvio::transform_csv, m)?)?;
     m.add_function(wrap_pyfunction!(chain::apply_chain_f64_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(chain::apply_chain_nullable_arrow, m)?)?;
