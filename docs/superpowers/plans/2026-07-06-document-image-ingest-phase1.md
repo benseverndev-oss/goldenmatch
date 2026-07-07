@@ -21,7 +21,10 @@
   ```bash
   cd packages/python/goldenmatch
   PY="D:/show_case/goldenmatch/.venv/Scripts/python.exe"
-  export PYTHONPATH="D:/show_case/gm-docingest/packages/python/goldenmatch"
+  # Put the worktree's OWN clean goldenflow on the path too, to shadow the editable
+  # goldenflow the shared venv installs from the MAIN worktree (which can carry unresolved
+  # merge-conflict markers -> SyntaxError on `import goldenflow`, which crashes dedupe_df).
+  export PYTHONPATH="D:/show_case/gm-docingest/packages/python/goldenmatch;D:/show_case/gm-docingest/packages/python/goldenflow"
   export GOLDENMATCH_NATIVE=0 POLARS_SKIP_CPU_CHECK=1 PYTHONIOENCODING=utf-8
   ```
   Then e.g. `"$PY" -m pytest tests/documents/test_assemble.py -q`.
@@ -927,17 +930,13 @@ Proves the whole point: fixtures → `ingest_documents` (FakeExtractor) → Data
           confidence_required=False,
           allow_red_config=True,
       )
-      # 3 rows, 2 share ada@x.io -> the two Ada rows collapse to one cluster, Grace stays
-      # separate => 2 clusters total. `dedupe_df -> DedupeResult`, which exposes
-      # `total_clusters` (goldenmatch/_api.py ~line 217). exact-on-email makes this
-      # independent of fuzzy auto-config.
-      assert result.total_clusters == 2
+      # 3 rows, 2 share ada@x.io. `dedupe_df -> DedupeResult`; `total_clusters`
+      # (goldenmatch/_api.py:216) counts DUPE GROUPS (clusters of size>1), so the two Ada
+      # rows = 1 cluster; Grace is unique. `unique` (_api.py:141) is the DataFrame of
+      # non-duplicate records. exact-on-email makes this independent of fuzzy auto-config.
+      assert result.total_clusters == 1
+      assert result.unique.height == 1  # Grace
   ```
-
-  NOTE for the implementer: confirm the attribute name on the real `DedupeResult`
-  (`goldenmatch/_api.py:400` return type; `total_clusters` property near line 217). If the
-  cluster count is exposed differently, assert on that instead — but assert the concrete
-  outcome (two Ada rows in one cluster, Grace separate), NOT `is not None`.
 
 - [ ] **Step 2: Run to verify it fails.**
   Run: `"$PY" -m pytest tests/documents/test_e2e.py -q`  Expected: FAIL (assertion or import).
