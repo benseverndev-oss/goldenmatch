@@ -21,6 +21,7 @@ from goldenmatch.cli.evaluate import evaluate_cmd
 from goldenmatch.cli.explain import explain_cmd
 from goldenmatch.cli.identity import identity_app
 from goldenmatch.cli.incremental import incremental_cmd
+from goldenmatch.cli.ingest_docs import ingest_docs_app
 from goldenmatch.cli.label import label_cmd
 from goldenmatch.cli.lineage import lineage_cmd
 from goldenmatch.cli.match import match_cmd
@@ -125,6 +126,7 @@ app.command("evaluate", help="Evaluate matching quality against ground truth pai
 app.add_typer(pprl_app, name="pprl")
 app.add_typer(memory_app, name="memory")
 app.add_typer(identity_app, name="identity")
+app.add_typer(ingest_docs_app, name="ingest-docs")
 app.command("label", help="Build ground truth by labeling record pairs interactively.")(label_cmd)
 app.command("review", help="Review borderline pairs interactively; decisions feed Learning Memory.")(review_cmd)
 app.command("explain", help="Explain why a pair matched or summarize a cluster (plain language).")(explain_cmd)

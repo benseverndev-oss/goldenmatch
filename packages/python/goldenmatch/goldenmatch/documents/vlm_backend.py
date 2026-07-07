@@ -4,34 +4,20 @@ Network I/O is a `transport(payload: dict) -> dict` callable so the class tests 
 """
 from __future__ import annotations
 
-import base64
 import json
-from collections.abc import Callable
 
+from goldenmatch.documents._openai import (
+    Transport,
+    image_blocks,
+    parse_message_text,
+    urllib_transport,
+)
 from goldenmatch.documents.types import (
     ExtractedRow,
     ExtractResult,
     PageImage,
     TargetSchema,
 )
-
-_ENDPOINT = "https://api.openai.com/v1/chat/completions"
-Transport = Callable[[dict], dict]
-
-
-def _urllib_transport(api_key: str) -> Transport:
-    import urllib.request
-
-    def send(payload: dict) -> dict:
-        body = json.dumps(payload).encode()
-        req = urllib.request.Request(
-            _ENDPOINT, data=body,
-            headers={"Authorization": f"Bearer {api_key}",
-                     "Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=120) as r:
-            return json.loads(r.read())
-
-    return send
 
 
 def _instruction(schema: TargetSchema) -> str:
@@ -56,14 +42,10 @@ class VLMExtractor:
             raise ValueError(f"max_attempts must be >= 1, got {max_attempts}")
         self._model = model
         self._max_attempts = max_attempts
-        self._send = transport or _urllib_transport(api_key)
+        self._send = transport or urllib_transport(api_key)
 
     def _payload(self, pages: list[PageImage], schema: TargetSchema) -> dict:
-        content: list[dict] = [{"type": "text", "text": _instruction(schema)}]
-        for pg in pages:
-            b64 = base64.b64encode(pg.png_bytes).decode()
-            content.append({"type": "image_url",
-                            "image_url": {"url": f"data:image/png;base64,{b64}"}})
+        content = [{"type": "text", "text": _instruction(schema)}] + image_blocks(pages)
         return {"model": self._model, "temperature": 0, "max_tokens": 8000,
                 "messages": [{"role": "user", "content": content}]}
 
@@ -85,13 +67,8 @@ class VLMExtractor:
         # Response received: parsing is deterministic (temperature=0), so a parse
         # failure is not retried -- it would just reproduce the same bad response.
         try:
-            choice = resp["choices"][0]
-            if choice.get("finish_reason") == "length":
-                return ExtractResult(
-                    rows=[],
-                    error="response truncated (finish_reason=length); increase max_tokens")
-            text = choice["message"]["content"]
-            data = json.loads(_strip_fence(text))
+            text = parse_message_text(resp)
+            data = json.loads(text)
             rows = [
                 ExtractedRow.from_partial(
                     rec.get("values", {}), rec.get("confidence", {}), schema,
@@ -101,12 +78,3 @@ class VLMExtractor:
             return ExtractResult(rows=rows)
         except (KeyError, ValueError, TypeError, IndexError) as e:
             return ExtractResult(rows=[], error=f"parse: {type(e).__name__}: {e}")
-
-
-def _strip_fence(text: str) -> str:
-    t = text.strip()
-    if t.startswith("```"):
-        t = t.split("\n", 1)[1] if "\n" in t else t
-        if t.endswith("```"):
-            t = t[: -3]
-    return t.strip()

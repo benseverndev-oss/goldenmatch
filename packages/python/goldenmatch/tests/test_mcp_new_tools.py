@@ -28,7 +28,7 @@ def test_total_tool_count_is_69():
     assert len(IDENTITY_TOOLS) == 15  # +3 MDM ops (#1114) +5 agent-memory ops (#1075/#1078)
     assert len(_BASE_TOOLS) == 31   # 26 + 5 cross-language naming aliases (#1451)
     assert len(ROUTING_TOOLS) == 3  # plan_routing / explain_routing / lint_routing
-    assert len(TOOLS) == 74   # 69 + 5 cross-language naming aliases (#1451)
+    assert len(TOOLS) == 76   # 71 (69 + documents_ingest/documents_suggest_schema) + 5 aliases
     # No duplicate tool names across the whole surface.
     names = [t.name for t in TOOLS]
     assert len(names) == len(set(names))

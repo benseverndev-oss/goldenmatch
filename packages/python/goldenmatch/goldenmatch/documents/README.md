@@ -20,5 +20,18 @@ clusters = dedupe_df(
 ```
 
 Install the extra: `pip install "goldenmatch[documents]"`. The VLM backend reads
-`OPENAI_API_KEY_PERSONAL` (or `OPENAI_API_KEY`). A local OCR backend and MCP/CLI wrappers
-are planned (Phases 2-3).
+`OPENAI_API_KEY_PERSONAL` (or `OPENAI_API_KEY`). A local OCR backend is planned (Phase 3).
+
+## CLI
+
+```bash
+# 1. propose a schema from a sample doc (review/edit the file after)
+goldenmatch ingest-docs suggest-schema samples/form.pdf --out schema.json
+# 2. ingest the pile against it
+goldenmatch ingest-docs run inbox/*.pdf --schema schema.json --out records.csv
+```
+
+## MCP
+
+- `documents_suggest_schema(sample_path)` → proposed schema JSON
+- `documents_ingest(paths, schema, out_path?)` → `{records, report}` (records ready for dedupe)

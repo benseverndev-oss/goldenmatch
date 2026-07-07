@@ -4,8 +4,6 @@ from __future__ import annotations
 import io
 from pathlib import Path
 
-from PIL import Image
-
 from goldenmatch.documents.types import PageImage
 
 _PDF = {".pdf"}
@@ -13,7 +11,28 @@ _IMG = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"}
 _PDF_DPI = 200  # rasterization DPI; enough for text, bounded for cost
 
 
-def _png(img: Image.Image) -> PageImage:
+def _import_pil():
+    try:
+        from PIL import Image
+    except ModuleNotFoundError as e:
+        raise ModuleNotFoundError(
+            "document ingest needs the extra: pip install 'goldenmatch[documents]'"
+        ) from e
+    return Image
+
+
+def _import_fitz():
+    try:
+        import fitz
+    except ModuleNotFoundError as e:
+        raise ModuleNotFoundError(
+            "document ingest needs the extra: pip install 'goldenmatch[documents]'"
+        ) from e
+    return fitz
+
+
+def _png(img) -> PageImage:
+    Image = _import_pil()
     if img.mode not in ("RGB", "L"):
         if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
             # img.convert("RGB") on its own composites alpha onto black, burying dark
@@ -33,11 +52,13 @@ def load_pages(path: str | Path) -> list[PageImage]:
     path = Path(path)
     ext = path.suffix.lower()
     if ext in _IMG:
+        Image = _import_pil()
         with Image.open(path) as img:
             img.load()
             return [_png(img)]
     if ext in _PDF:
-        import fitz  # imported lazily so the extra is only needed for PDFs
+        fitz = _import_fitz()  # imported lazily so the extra is only needed for PDFs
+        Image = _import_pil()
         out: list[PageImage] = []
         with fitz.open(str(path)) as doc:
             zoom = _PDF_DPI / 72.0
