@@ -23,6 +23,8 @@ use pyo3::types::{PyCapsule, PyList};
 use goldenflow_core::chain::{apply_chain, apply_chain_nullable};
 
 use crate::chain::{resolve_chain, ChainOps};
+use crate::csvio::OpRecord;
+use crate::numeric_columnar::{resolve_numeric, run_numeric_column};
 
 const STREAM_NAME: &[u8] = b"arrow_array_stream";
 
@@ -179,5 +181,31 @@ impl Column {
             }
         })?;
         Ok((Column::new(array), changed))
+    }
+
+    /// In-memory numeric path (Phase 3 wave 3d): run a numeric config
+    /// (`string* parser f64*`) over this string column and return a `Column` holding
+    /// the RAW numeric result (Int64 / Float64) — egressed via `__arrow_c_stream__`
+    /// as an Arrow column of that dtype, so the in-memory frame gets a real numeric
+    /// column compared BY VALUE — plus the per-op manifest records (which still carry
+    /// the formatted before/after samples). The caller casts the input to Utf8 first
+    /// (Polars' numeric transforms cast to Utf8 internally, so this matches even for
+    /// an already-numeric input column).
+    fn apply_numeric(
+        &self,
+        py: Python,
+        ops: Vec<(String, Vec<String>)>,
+    ) -> PyResult<(Column, Vec<OpRecord>)> {
+        let plan = resolve_numeric(&ops)
+            .ok_or_else(|| PyValueError::new_err("not a numeric columnar config"))?;
+        let arr = self
+            .array
+            .as_any()
+            .downcast_ref::<LargeStringArray>()
+            .ok_or_else(|| {
+                PyTypeError::new_err("Column.apply_numeric requires a Utf8/LargeUtf8 column")
+            })?;
+        let (numcol, records) = py.detach(|| run_numeric_column(arr, &plan));
+        Ok((Column::new(numcol.into_array()), records))
     }
 }

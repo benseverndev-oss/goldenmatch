@@ -87,6 +87,43 @@ def test_columnar_equals_polars(monkeypatch, specs) -> None:
     assert columnar_out.df["keep_int"].to_list() == [1, 2, 3, 4, 5, 6]
 
 
+@pytest.mark.parametrize(
+    "ops,data",
+    [
+        (["currency_strip"], ["  $1,234.50 ", "$0.5", "10", "", None, "bad"]),
+        (["strip", "currency_strip"], ["  $1,234.50 ", "$0.5", "", None, "bad"]),
+        (["currency_strip", "round:1"], ["$1,234.56", "$0.5", "", None]),
+        (["percentage_normalize"], ["50%", "12.5%", "", None, "3"]),
+        (["to_integer"], ["  42 ", "1,000", "-5", "", None, "3.9"]),
+        (["to_integer", "abs_value"], ["42", "-5", "", None]),  # Int64 -> Float64
+        (["roman_to_int"], ["IV", "XII", "", None, "bad"]),
+        (["currency_strip"], [1.5, 2.0, None, 3.25]),  # already-numeric input
+    ],
+)
+def test_columnar_numeric_equals_polars(monkeypatch, ops, data) -> None:
+    """Phase 3 wave 3d: numeric configs run on the IN-MEMORY Column path too — the
+    result egresses as a real Int64/Float64 column (compared by value + dtype),
+    byte-identical to the Polars engine incl. the manifest."""
+    nm = native_module()
+    if nm is None or not hasattr(nm, "columnar_numeric_ready") or not hasattr(
+        getattr(nm, "Column", object), "apply_numeric"
+    ):
+        pytest.skip("native in-memory numeric not built (pre-0.23 wheel)")
+    df = pl.DataFrame({"x": data, "keep": list(range(len(data)))})
+    cfg = _cfg([("x", ops)])
+    assert columnar.config_is_columnar_ready(cfg)
+
+    monkeypatch.delenv("GOLDENFLOW_ENGINE", raising=False)
+    polars_out = transform_df(df, config=cfg)
+
+    monkeypatch.setenv("GOLDENFLOW_ENGINE", "columnar")
+    columnar_out = transform_df(df, config=cfg)
+
+    assert columnar_out.df.equals(polars_out.df), "numeric in-memory frame diverged"
+    assert columnar_out.df["x"].dtype == polars_out.df["x"].dtype
+    assert _manifest_rows(columnar_out) == _manifest_rows(polars_out)
+
+
 def test_columnar_declines_unsupported_config(monkeypatch) -> None:
     """A config with a non-owned-string op (phone) or a frame-level op is NOT
     columnar-ready; it falls through to the Polars engine (still correct)."""

@@ -95,18 +95,28 @@ impl NumericParser {
 /// A parsed numeric column: Int64 (from an integer parser, until an f64 op
 /// promotes it) or Float64. `cast(Utf8)` — for `affected`/samples — is a plain
 /// integer for I64, the Polars-matching float format for F64.
-enum NumCol {
+pub enum NumCol {
     I64(Int64Array),
     F64(Float64Array),
 }
 
 impl NumCol {
-    fn fmt(&self) -> Vec<Option<String>> {
+    /// `cast(Utf8)` per cell — the CSV output + the manifest before/after strings.
+    pub fn fmt(&self) -> Vec<Option<String>> {
         match self {
             NumCol::I64(a) => (0..a.len())
                 .map(|i| (!a.is_null(i)).then(|| a.value(i).to_string()))
                 .collect(),
             NumCol::F64(a) => fmt_f64(a),
+        }
+    }
+
+    /// The RAW numeric array (Int64 / Float64) for the in-memory path, which egresses
+    /// it as an Arrow column of the matching dtype (compared by value, not formatted).
+    pub fn into_array(self) -> arrow::array::ArrayRef {
+        match self {
+            NumCol::I64(a) => std::sync::Arc::new(a),
+            NumCol::F64(a) => std::sync::Arc::new(a),
         }
     }
 
@@ -202,13 +212,11 @@ fn head3(v: &[Option<String>]) -> Vec<Option<String>> {
     v.iter().take(3).cloned().collect()
 }
 
-/// Execute a [`NumericPlan`] over one string column, returning the formatted output
-/// column (f64 rendered exactly as Polars' write_csv would) and the per-op manifest
-/// records — all byte-identical to the Polars engine.
-pub fn run_numeric_column(
-    input: &LargeStringArray,
-    plan: &NumericPlan,
-) -> (LargeStringArray, Vec<OpRecord>) {
+/// Execute a [`NumericPlan`] over one string column, returning the raw numeric
+/// result column ([`NumCol`], Int64/Float64) and the per-op manifest records — all
+/// byte-identical to the Polars engine. The CSV path formats the `NumCol` to string
+/// (`.fmt()`); the in-memory path egresses its raw array (`.into_array()`).
+pub fn run_numeric_column(input: &LargeStringArray, plan: &NumericPlan) -> (NumCol, Vec<OpRecord>) {
     let total = input.len() as u64;
     let mut records: Vec<OpRecord> =
         Vec::with_capacity(plan.string_ops.len() + 1 + plan.f64_ops.len());
@@ -258,8 +266,9 @@ pub fn run_numeric_column(
         cur = NumCol::F64(next_arr);
         cur_fmt = next_fmt;
     }
+    let _ = cur_fmt; // the final formatting is the caller's concern (CSV) — keep raw
 
-    (LargeStringArray::from_iter(cur_fmt), records)
+    (cur, records)
 }
 
 /// Host gate: is this a config the native numeric columnar path can run? (A valid
