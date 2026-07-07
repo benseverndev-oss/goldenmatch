@@ -71,6 +71,20 @@ class TransformEngine:
         """Transform a DataFrame. The public API takes/returns ``pl.DataFrame``; the
         engine operates on a backend-agnostic :class:`Frame` internally (the seam for
         making Polars optional — see the Polars-eviction design doc)."""
+        # Phase 1: the columnar (Polars-free) engine. When opted in via
+        # GOLDENFLOW_ENGINE=columnar AND the config is fully owned-string, the
+        # transform EXECUTION runs on the native arrow-free chain with no Polars
+        # (only the boundary column extract/assemble touches it — Phase 2 removes
+        # that). Byte-identical to the Polars engine; anything it can't handle yet
+        # declines here and falls through to the Polars path.
+        from goldenflow.engine import columnar as _columnar
+        if _columnar.columnar_engine_selected() and _columnar.config_is_columnar_ready(self.config):
+            names = [s.column for s in self.config.transforms if s.column in df.columns]
+            cols = {c: df[c].to_list() for c in names}
+            new_cols, manifest = _columnar.transform_columns(cols, self.config, source=source)
+            out = df.with_columns([pl.Series(n, v) for n, v in new_cols.items()])
+            return TransformResult(df=out, manifest=manifest)
+
         manifest = Manifest(source=source)
         frame: Frame = to_frame(df)
 
