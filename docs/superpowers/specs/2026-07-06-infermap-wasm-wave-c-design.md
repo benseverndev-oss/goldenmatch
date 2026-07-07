@@ -159,9 +159,12 @@ interface + the pure `_matchTypesPure` return type.) `index.ts` unchanged.
 ## 6. Wire the two scorer classes
 
 - `scorers/profile.ts`: add `import { getInfermapBackend } from "../wasm/backend.js";`;
-  keep `avgValueLength`/`similarity` host helpers; route `total` through
-  `backend.profileScore(...)` when set (else the current inline math); rebuild the
-  `parts` reasoning host-side exactly as today. Abstain stays host.
+  keep `avgValueLength`/`similarity` host helpers; **extract the five-add math into
+  an exported `_profileScorePure(srcDtype, tgtDtype, srcNull, tgtNull, srcUniq,
+  tgtUniq, srcValCount, tgtValCount, srcAvgLen, tgtAvgLen): number`** (the parity
+  oracle + the pure fallback, single source); route `total` through
+  `backend.profileScore(...)` when set, else `_profileScorePure(...)`; rebuild the
+  `parts` reasoning host-side exactly as today. Abstain stays host. Byte-identical.
 - `scorers/pattern-type.ts`: add the import + the `classifyWithPct` bitmask refactor
   (§3.1) + `_matchTypesPure` export (parity oracle). `SEMANTIC_TYPES`,
   `classifyField`, `PatternTypeScorer.score` unchanged.
@@ -174,17 +177,23 @@ Extend `tests/parity/infermap-wasm.parity.test.ts` with two `d(...)` blocks:
 Synthetic 10-tuples (the Wave 3 fixtures): identical profiles → 1.0; dtype
 mismatch → drops 0.4; `max(...,1.0)` floors; lopsided null/uniqueness; asymmetric
 lengths; realistic non-round rates. Assert `backend.profileScore(...args) ===
-pureProfileScore(...args)` (`.toBe`), where `pureProfileScore` is a small
-test-local reimpl of the five-add math (or, cleaner, export a
-`_profileScorePure(...)` from `profile.ts` as the oracle — preferred, mirrors the
-Python `_profile_score_pure`).
+_profileScorePure(...args)` (`.toBe`). **`_profileScorePure` is exported from
+`profile.ts`** (mirrors the Python `_profile_score_pure`) and is the SINGLE source
+of the five-add math — the scorer's pure fallback calls it too, so the test can't
+drift from a separate reimpl. `ProfileScorer.score` becomes: abstain host →
+compute `srcLen`/`tgtLen` → `sim = backend ? backend.profileScore(...) :
+_profileScorePure(...)` → rebuild reasoning host-side.
 
 ### 7.2 pattern_type (JS RegExp vs Rust regex — the real audit)
-An ASCII corpus of sample strings (the Wave 4 fixtures): per type a canonical
-positive + structural near-misses (`date_iso` `2026-13-99`, `ip_v4`
+An **ASCII-digit corpus** of sample strings (the Wave 4 fixtures): per type a
+canonical positive + structural near-misses (`date_iso` `2026-13-99`, `ip_v4`
 `999.999.999.999`) + genuine negatives + the `2026-07-06` date+phone co-match +
-`currency` `£12.50`/`€1,000.00`/`$5`. Assert `backend.patternMatchTypes([s]) ...
-=== _matchTypesPure(s)` (compare the single-element bitmask) per string.
+`currency` `£12.50`/`€1,000.00`/`$5` + a `$ 5` sample (exercises the `\s?`
+whitespace on an actual ASCII space, so the `\s` ASCII-parity claim is gated, not
+just asserted). The only non-ASCII codepoints in the corpus are the £/€ currency
+symbols — matched exclusively as literal char-class members, never through
+`\d`/`\s`, so they carry no Unicode-class divergence. Assert
+`backend.patternMatchTypes([s])[0] === _matchTypesPure(s)` per string.
 
 > **This is where JS `RegExp` meets Rust `regex`.** They genuinely differ: JS
 > `\d` is ASCII-only (`[0-9]`) while Rust `\d` = Unicode `\p{Nd}`; JS `\s` IS
