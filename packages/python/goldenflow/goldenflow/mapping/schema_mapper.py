@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import polars as pl
-
+from goldenflow._polars_lazy import pl
 from goldenflow.config.schema import GoldenFlowConfig, MappingSpec
 from goldenflow.engine.profiler_bridge import profile_dataframe
 from goldenflow.mapping.name_similarity import name_similarity

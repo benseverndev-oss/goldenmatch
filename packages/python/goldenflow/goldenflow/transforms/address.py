@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-import polars as pl
-
+from goldenflow._polars_lazy import pl
 from goldenflow.transforms import register_transform
 from goldenflow.transforms._native import (
     address_expand_native,

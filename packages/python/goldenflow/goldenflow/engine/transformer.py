@@ -4,8 +4,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-import polars as pl
-
+from goldenflow._polars_lazy import pl
 from goldenflow.config.schema import GoldenFlowConfig
 from goldenflow.connectors.file import read_file, write_file
 from goldenflow.engine.frame import Frame, to_frame

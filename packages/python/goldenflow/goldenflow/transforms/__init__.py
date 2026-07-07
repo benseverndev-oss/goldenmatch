@@ -4,7 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
-import polars as pl
+from goldenflow._polars_lazy import pl
 
 # Global transform registry
 _REGISTRY: dict[str, TransformInfo] = {}

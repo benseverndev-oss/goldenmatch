@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-import polars as pl
+from goldenflow._polars_lazy import pl
 
 _V = "__gf_v__"
 _I = "__gf_i__"

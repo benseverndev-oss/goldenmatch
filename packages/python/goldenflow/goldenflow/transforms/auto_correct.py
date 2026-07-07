@@ -3,9 +3,9 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Iterable
 
-import polars as pl
 from rapidfuzz import fuzz
 
+from goldenflow._polars_lazy import pl
 from goldenflow.transforms import register_transform
 from goldenflow.transforms._native import build_canonical_map_native
 
