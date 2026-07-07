@@ -63,6 +63,33 @@ def aggregate_sweep(per_ambiguity: dict) -> AnswerAblationSweep:
     )
 
 
+def run_answer_ablation_sweep(
+    *, seed: int, n_questions: int, ambiguities, max_hops: int, llm
+) -> AnswerAblationSweep:
+    """Run the existing per-ambiguity primitive over an ambiguity grid and aggregate.
+
+    One SHARED ``llm`` is threaded through every ambiguity so a single cost cap spans the
+    whole sweep — the ``llm.exhausted`` short-circuit already lives inside
+    ``answer_match_ablation``'s per-question loop, so an exhausted budget cleanly zeros the
+    remaining synthesis calls rather than overspending. Needs the ``goldengraph_native``
+    wheel (imports are function-local so this MODULE stays wheel-free for the pure layer).
+    """
+    from .ablation import _typ_of
+    from .engineered import generate_engineered
+    from .gold import GoldGraph
+    from .scorecard_llm import answer_match_ablation
+
+    per_ambiguity: dict[float, dict] = {}
+    for a in ambiguities:
+        corpus = generate_engineered(
+            seed=seed, n_questions=n_questions, ambiguity=a, max_hops=max_hops
+        )
+        g = GoldGraph.from_corpus(corpus)
+        typ_of = _typ_of(g)
+        per_ambiguity[a] = answer_match_ablation(corpus, g, typ_of, llm)
+    return aggregate_sweep(per_ambiguity)
+
+
 def _monotonic_in_er(sweep: AnswerAblationSweep, a: float) -> bool:
     """At ambiguity ``a``, answer-match descends oracle >= goldengraph >= name_only >= none."""
     vals = [sweep.answer_match[d][a] for d in _DIAL_ORDER]
