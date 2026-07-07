@@ -32,6 +32,7 @@ Task 1 (Python bridge + vectors + Leg A) is done FIRST and fully verified on the
 
 **Files:**
 - Modify: `packages/python/goldenpipe/goldenpipe/core/_planner_json.py`
+- Modify: `packages/python/goldenpipe/goldenpipe/core/_native_loader.py` (Leg B pass-throughs)
 - Create: `packages/rust/extensions/goldenpipe-core/tests/vectors/plan_pipeline.json`, `apply_scale_hints.json`, `band_of.json`
 - Modify: `packages/python/goldenpipe/tests/core/test_planner_parity.py`
 
@@ -119,7 +120,22 @@ print(plan_pipeline_json(json.dumps({'runtime':{'n_rows':1,'n_cols':3,'column_na
 
 `band_of.json` cases: `0.7→"green"`, `0.71→"green"`, `0.69→"amber"`, `0.4→"amber"`, `0.39→"red"`, `0.0→"red"`. (input is a bare float; expected is the string.)
 
-- [ ] **Step 3: Wire Leg A + Leg B cases** in `test_planner_parity.py` — add to the Leg-A `_CASES` list:
+- [ ] **Step 3: Add Leg B native pass-throughs to `_native_loader.py`** — REQUIRED, or CI's `goldenpipe_native` lane (which builds the wheel + runs Leg B with `GOLDENPIPE_NATIVE=1`, bypassing the skip) hits `getattr(NL, "plan_pipeline_json")` → `AttributeError` → gate fails. The box never catches this (Leg A only). Mirror the existing five pass-throughs (`_native_loader.py:69-87`), appending:
+```python
+def plan_pipeline_json(input: str) -> str:
+    return _native.plan_pipeline_json(input)
+
+
+def apply_scale_hints_json(input: str) -> str:
+    return _native.apply_scale_hints_json(input)
+
+
+def band_of_json(input: str) -> str:
+    return _native.band_of_json(input)
+```
+(The wheel symbols these call are added in Task 3 Step 4; `_COMPONENT_SYMBOLS` needs no change — Leg B keys off `native_available`, not `native_enabled`.)
+
+- [ ] **Step 4: Wire Leg A + Leg B cases** in `test_planner_parity.py` — add to the Leg-A `_CASES` list:
 ```python
 ("plan_pipeline", PJ.plan_pipeline_json),
 ("apply_scale_hints", PJ.apply_scale_hints_json),
@@ -127,17 +143,17 @@ print(plan_pipeline_json(json.dumps({'runtime':{'n_rows':1,'n_cols':3,'column_na
 ```
 and the same three `(name, fn_name)` pairs to the Leg-B native `parametrize` list (`("plan_pipeline","plan_pipeline_json")`, etc.).
 
-- [ ] **Step 4: Run Leg A — verify PASS (box)**
+- [ ] **Step 5: Run Leg A — verify PASS (box)**
 ```bash
 "$INTERP" -m pytest packages/python/goldenpipe/tests/core/test_planner_parity.py -q -k "pure_python"
 ```
-Expected: the three new `test_pure_python_matches_core_vectors[...]` cases PASS (Leg B skips — no wheel). If a case FAILS, Python is telling you your hand-authored `expected` is wrong — fix the vector (NOT the bridge) until green. This is the self-correcting contract validation.
+Expected: the three new `test_pure_python_matches_core_vectors[...]` cases PASS (Leg B skips — no wheel on the box). If a case FAILS, Python is telling you your hand-authored `expected` is wrong — fix the vector (NOT the bridge) until green. This is the self-correcting contract validation.
 
-- [ ] **Step 5: Ruff + commit**
+- [ ] **Step 6: Ruff + commit**
 ```bash
-"$INTERP" -m ruff check packages/python/goldenpipe/goldenpipe/core/_planner_json.py packages/python/goldenpipe/tests/core/test_planner_parity.py
-git add packages/python/goldenpipe/goldenpipe/core/_planner_json.py packages/python/goldenpipe/tests/core/test_planner_parity.py packages/rust/extensions/goldenpipe-core/tests/vectors/plan_pipeline.json packages/rust/extensions/goldenpipe-core/tests/vectors/apply_scale_hints.json packages/rust/extensions/goldenpipe-core/tests/vectors/band_of.json
-git commit -m "feat(goldenpipe-core): Python bridge + hand-authored brain vectors (Leg A)
+"$INTERP" -m ruff check packages/python/goldenpipe/goldenpipe/core/_planner_json.py packages/python/goldenpipe/goldenpipe/core/_native_loader.py packages/python/goldenpipe/tests/core/test_planner_parity.py
+git add packages/python/goldenpipe/goldenpipe/core/_planner_json.py packages/python/goldenpipe/goldenpipe/core/_native_loader.py packages/python/goldenpipe/tests/core/test_planner_parity.py packages/rust/extensions/goldenpipe-core/tests/vectors/plan_pipeline.json packages/rust/extensions/goldenpipe-core/tests/vectors/apply_scale_hints.json packages/rust/extensions/goldenpipe-core/tests/vectors/band_of.json
+git commit -m "feat(goldenpipe-core): Python bridge + loader pass-throughs + hand-authored brain vectors (Leg A)
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01F2g8Snk1Akef5z3yZdtt44"
