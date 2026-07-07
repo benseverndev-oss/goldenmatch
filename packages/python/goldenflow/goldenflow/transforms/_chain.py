@@ -53,6 +53,10 @@ FUSABLE_KERNELS: frozenset[str] = frozenset(
         "nickname_standardize",
         "name_initials",
         "strip_middle",
+        # phonetic family (total string->string keys)
+        "soundex",
+        "double_metaphone_primary",
+        "double_metaphone_alt",
     }
 )
 

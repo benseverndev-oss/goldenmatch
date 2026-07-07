@@ -42,6 +42,9 @@ export const FUSABLE_KERNELS: ReadonlySet<string> = new Set([
   "nickname_standardize",
   "name_initials",
   "strip_middle",
+  "soundex",
+  "double_metaphone_primary",
+  "double_metaphone_alt",
 ]);
 
 /** The fused chain is active only when a WASM backend that exposes `applyChain`
