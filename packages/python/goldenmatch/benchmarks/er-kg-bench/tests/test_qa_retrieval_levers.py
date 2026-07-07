@@ -3,7 +3,6 @@ wheel-gated + LLM-FREE (recall guard only), so no network."""
 from __future__ import annotations
 
 import pytest
-
 from erkgbench.qa_e2e.retrieval_levers import _DIALS, _apply, measure_lever
 
 
