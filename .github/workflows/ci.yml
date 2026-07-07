@@ -90,6 +90,7 @@ jobs:
       throughput: ${{ steps.filter.outputs.throughput }}
       autoconfig_wasm: ${{ steps.filter.outputs.autoconfig_wasm }}
       suggest_wasm: ${{ steps.filter.outputs.suggest_wasm }}
+      documents_wasm: ${{ steps.filter.outputs.documents_wasm }}
       goldencheck_wasm: ${{ steps.filter.outputs.goldencheck_wasm }}
       perceptual_wasm: ${{ steps.filter.outputs.perceptual_wasm }}
       goldenprofile_wasm: ${{ steps.filter.outputs.goldenprofile_wasm }}
@@ -302,6 +303,17 @@ jobs:
               - 'packages/typescript/goldenmatch/scripts/build_suggest_wasm.mjs'
               - 'packages/typescript/goldenmatch/src/core/suggest*.ts'
               - 'packages/typescript/goldenmatch/src/core/_wasm/suggestWasm*'
+            documents_wasm:
+              # Gates the (rust-toolchain-heavy) documents wasm rebuild + drift
+              # guard inside the typescript lane. Fires on the shared documents
+              # core, the wasm wrapper, the embed script, the TS surface, or the
+              # Python-authored corpus the build script copies.
+              - 'packages/rust/extensions/documents-core/**'
+              - 'packages/rust/extensions/documents-wasm/**'
+              - 'packages/typescript/goldenmatch/scripts/build_documents_wasm.mjs'
+              - 'packages/typescript/goldenmatch/src/core/documentsWasm.ts'
+              - 'packages/typescript/goldenmatch/src/core/_wasm/documentsWasm*'
+              - 'packages/python/goldenmatch/tests/parity/documents_corpus.jsonl'
             goldencheck_wasm:
               # Gates the (rust-toolchain-heavy) goldencheck wasm rebuild + drift
               # guard inside the typescript lane. Only fires when the shared
@@ -1671,6 +1683,25 @@ jobs:
             exit 1
           fi
           npx vitest run tests/parity/suggest-wasm.parity.test.ts
+      # Same drift-guard pattern for the documents-core kernels. Rebuild the
+      # inlined wasm + bindings, copy the Python-authored corpus, diff ONLY the
+      # corpus JSONL (deterministic; NOT the toolchain-variant wasm bytes), then
+      # prove the committed wasm reproduces it.
+      - name: Rebuild + verify embedded documents wasm
+        if: needs.changes.outputs.documents_wasm == 'true' || needs.changes.outputs.force_all == 'true'
+        working-directory: packages/typescript/goldenmatch
+        run: |
+          rustup target add wasm32-unknown-unknown
+          command -v wasm-pack >/dev/null 2>&1 || curl -sSf https://rustwasm.github.io/wasm-pack/installer/init.sh | sh
+          node scripts/build_documents_wasm.mjs
+          if ! git diff --exit-code -- tests/parity/fixtures/documents/documents_corpus.jsonl; then
+            echo "::error::documents corpus fixture is stale. Regenerate it \
+              ('python packages/python/goldenmatch/scripts/gen_documents_corpus.py'), \
+              run 'node scripts/build_documents_wasm.mjs' in \
+              packages/typescript/goldenmatch, and commit the result." >&2
+            exit 1
+          fi
+          npx vitest run tests/parity/documents-core.parity.test.ts
       # Same drift-guard pattern for the goldencheck deep-profiling wasm core.
       # Rebuild the inlined wasm + bindings + copy the golden fixture from the
       # live goldencheck-core, diff ONLY the deterministic golden JSON (not the
