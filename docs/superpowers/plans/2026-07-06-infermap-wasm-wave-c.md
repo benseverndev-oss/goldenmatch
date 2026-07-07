@@ -503,9 +503,11 @@ Claude-Session: https://claude.ai/code/session_01F2g8Snk1Akef5z3yZdtt44"
 ```bash
 unset GH_TOKEN; gh auth switch --user benzsevern; export GH_TOKEN=$(gh auth token --user benzsevern)
 git fetch origin main -q
-git rebase --onto origin/main <wave-B-branch-tip-SHA> feat/infermap-wasm-wave-c
+# Wave B tip = 10651ced (the commit feat/infermap-wasm-wave-c was branched from).
+# --onto replays ONLY the Wave-C commits (everything after 10651ced) onto main.
+git rebase --onto origin/main 10651ced feat/infermap-wasm-wave-c
 ```
-where `<wave-B-branch-tip-SHA>` = the tip of `feat/infermap-wasm-wave-b` this branch was cut from (i.e. the last Wave B commit; find via `git merge-base feat/infermap-wasm-wave-c origin/main` may NOT work if Wave B squash-merged — use the Wave B branch tip SHA or `git log` to identify the last Wave-C-only commit boundary). If Wave B is NOT yet merged, wait and retry — do NOT rebase onto a main that lacks Wave B (the parity test + backend would lose the Wave B methods). Resolve any `ci.yml`/backend/loader/parity-test conflicts by KEEPING BOTH waves' additions. Re-validate YAML after.
+`10651ced` is the tip of `feat/infermap-wasm-wave-b` this branch was cut from — everything after it is Wave-C-only. First confirm Wave B is on main (`git log origin/main --oneline | grep -i "wave b\|name scorer"`); if Wave B is NOT yet merged, wait and retry — do NOT rebase onto a main that lacks Wave B (the parity test + backend would lose the Wave B methods). Resolve any `ci.yml`/backend/loader/parity-test conflicts by KEEPING BOTH waves' additions. Re-validate YAML after.
 
 > Simpler alternative if the `--onto` boundary is fuzzy: once Wave B is on main,
 > `git rebase origin/main` and let git drop the already-merged (squashed) Wave B
