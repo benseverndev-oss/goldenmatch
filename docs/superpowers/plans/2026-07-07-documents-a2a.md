@@ -71,8 +71,9 @@
           "outputModes": ["application/json"],
       },
   ```
-  Then bump the doc surfaces (grep to confirm the exact wording first — `grep -rn "38 skills" ..`):
-  `packages/python/goldenmatch/README.md`, `packages/python/goldenmatch/llms.txt`, `docs/llms.txt` — change "38 skills" -> "40 skills".
+  Then bump the doc surfaces (grep the WHOLE repo first: `grep -rn "38 skills" packages/ docs/ docs-site/`):
+  `packages/python/goldenmatch/README.md`, `packages/python/goldenmatch/llms.txt`, `docs/llms.txt`,
+  AND `docs-site/goldenmatch/agent.mdx` (frontmatter description) — change "38 skills" -> "40 skills".
 - [ ] **Step 4: Run -> pass** (both tests green).
 - [ ] **Step 5: Commit** `feat(a2a): advertise documents_suggest_schema + documents_ingest skills (38->40)`.
 
@@ -153,7 +154,7 @@
 
 - [ ] **Step 1:** `"$PY" -m pytest tests/test_a2a.py -q` — all green (count is 40, both dispatch tests pass, no regressions).
 - [ ] **Step 2:** `"$PY" -m ruff check goldenmatch/a2a tests/test_a2a.py` — clean.
-- [ ] **Step 3:** `grep -rn "38 skills" packages/ docs/ 2>/dev/null` returns NOTHING (all bumped).
+- [ ] **Step 3:** `grep -rn "38 skills" packages/ docs/ docs-site/ 2>/dev/null` returns NOTHING (all four bumped).
 - [ ] **Step 4:** any lint fixups -> commit `chore(a2a): lint`.
 
 ---
