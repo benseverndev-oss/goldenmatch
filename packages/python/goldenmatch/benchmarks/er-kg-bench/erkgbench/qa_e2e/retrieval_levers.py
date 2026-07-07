@@ -27,13 +27,20 @@ class LeverResult:
     n: int = 0
 
 
-def _apply(lever: str, subgraph: dict, seeds, *, halo: int):
+def _apply(lever: str, subgraph: dict, seeds, *, halo: int,
+           question=None, embedder=None, k_hops: int = 4, top_c: int = 3):
     if lever == "none":
         return subgraph
     if lever == "filter_path":
         from goldengraph.subgraph_filter import filter_subgraph_to_paths
 
         return filter_subgraph_to_paths(subgraph, list(seeds), halo=halo)
+    if lever == "candidate":
+        from goldengraph.retrieve_paths import prune_to_candidate_paths
+
+        return prune_to_candidate_paths(
+            subgraph, list(seeds), question, embedder, k_hops=k_hops, top_c=top_c, halo=halo
+        )
     raise ValueError(f"unknown lever {lever!r}")
 
 
@@ -48,9 +55,14 @@ def measure_lever(
     hops: int | None = None,
     node_budget: int | None = None,
     halo: int = 1,
+    embedder=None,
+    top_c: int = 3,
+    k_hops: int = 4,
 ) -> LeverResult:
     """`seeds_fn(slice_graph, question) -> list[int]` produces the (multi-)seed set. `llm=None`
-    runs the recall GUARD only (no synthesis, ~$0 beyond seeding). Wheel-gated (builds a store)."""
+    runs the recall GUARD only (no synthesis, ~$0 beyond seeding). Wheel-gated (builds a store).
+    `lever="candidate"` (Lever C) needs `embedder` (scores candidate end nodes vs the question);
+    `top_c`/`k_hops` tune the prune."""
     from goldengraph.answer import _retrieve_local
     from goldengraph.synthesize import synthesize_local
 
@@ -72,7 +84,8 @@ def measure_lever(
         for qa in corpus.questions:
             seeds = seeds_fn(slice_graph, qa.question)
             ball = _retrieve_local(slice_graph, seeds, max_hops=hops, node_budget=node_budget)
-            sub = _apply(lever, ball, seeds, halo=halo)
+            sub = _apply(lever, ball, seeds, halo=halo, question=qa.question,
+                         embedder=embedder, k_hops=k_hops, top_c=top_c)
             recalls.append(bridge_recall(chains[qa.id], sub, coverage)["whole_chain"])
             if llm is not None:
                 id2name = {e["entity_id"]: e["canonical_name"] for e in sub.get("entities", ())}

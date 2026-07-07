@@ -31,6 +31,21 @@ def test_apply_unknown_raises():
         _apply("nope", _sub(), [0], halo=1)
 
 
+def test_apply_candidate_matches_primitive():
+    import numpy as np
+    from goldengraph.retrieve_paths import prune_to_candidate_paths
+
+    class _Emb:
+        def embed(self, texts):
+            return np.asarray([[1.0] if t in ("q", "n2") else [0.0] for t in texts], dtype=float)
+
+    sub = _sub()
+    emb = _Emb()
+    got = _apply("candidate", sub, [0], halo=0, question="q", embedder=emb, k_hops=4, top_c=1)
+    assert got == prune_to_candidate_paths(sub, [0], "q", emb, k_hops=4, top_c=1, halo=0)
+    assert sorted(e["entity_id"] for e in got["entities"]) == [0, 1, 2]  # chain kept, leaf 3 dropped
+
+
 def test_measure_lever_recall_guard_smoke():
     """End-to-end, LLM-free: recall computed on the POST-lever subgraph, per dial. With ALL
     entities seeded the filter prunes nothing, so filter_path recall == none recall (proves the
