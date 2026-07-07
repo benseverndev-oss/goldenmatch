@@ -198,8 +198,12 @@ function validateFlags(cfg: Record<string, unknown>): void {
 
 export const InferSchemaStage: Stage = {
   info: {
+    // Matches Python's declared produces=["inferred_schema"]. The stage ALSO sets
+    // `infer_schema_evidence` at runtime (via setdefault) but, like Python, does
+    // not declare it — replicated faithfully so the stage contract is identical
+    // cross-surface.
     name: "infer_schema",
-    produces: ["inferred_schema", "infer_schema_evidence"],
+    produces: ["inferred_schema"],
     consumes: [],
   },
 
@@ -230,7 +234,10 @@ export const InferSchemaStage: Stage = {
     let detectScore: number;
     let detectEvidence: Record<string, unknown>;
 
-    if (explicit != null) {
+    // Truthy check mirrors Python `if explicit_domain:` — a degenerate empty-string
+    // domain falls through to auto-detect (validateFlags counted it via `!= null`,
+    // mirroring Python's `is not None`, so it still can't co-exist with schema/no_infer).
+    if (explicit) {
       domain = explicit;
       detectScore = 1.0;
       detectEvidence = { detect_reason: "explicit" };
@@ -279,7 +286,7 @@ export const InferSchemaStage: Stage = {
 ```
 
 - [ ] **Step 3: Eye-verify against the spec + Python.**
-  - Imports resolve: `UNMAPPED_TYPE`/`loadDomain`/`FieldMapping`/`InferredSchema` from `goldencheck-types`; `detectDomainDetailed`/`map`/`DomainPackTarget`/`MapResult` from `infermap` (Task 1 surfaced `detectDomainDetailed`). Confirm `MapResult` is exported from the infermap barrel (`grep -n "MapResult" packages/typescript/infermap/src/core/index.ts`); if it's `export type`, keep the `type MapResult` import.
+  - Imports resolve: `UNMAPPED_TYPE`/`loadDomain`/`FieldMapping`/`InferredSchema` from `goldencheck-types`; `detectDomainDetailed`/`map`/`DomainPackTarget`/`MapResult` from `infermap` (Task 1 surfaced `detectDomainDetailed`). NOTE: `MapResult` is exported via `export * from "./types.js"` in `core/index.ts` (a direct `grep MapResult core/index.ts` shows only `MapResultConfig` — do NOT conclude it's missing; it IS reachable, confirm with `grep -n "export interface MapResult\b" packages/typescript/infermap/src/core/types.ts`). The `type MapResult` import from `"infermap"` resolves.
   - Confirm `StageStatus` + `Stage`/`PipeContext`/`StageResult` are the real exports of `../models.js` (`grep -n "export.*StageStatus\|export interface Stage\b\|export interface PipeContext" packages/typescript/goldenpipe/src/core/models.ts`). If `StageResult` needs more than `{status}` (e.g. a required field), match the real interface — read it.
   - `resultToInferredSchema` matches `_result_to_inferred_schema` line-for-line (snake_case fields; `unmappedSource` camelCase; `type: fm.target ? fm.target : UNMAPPED_TYPE`; unmapped-source loop; `min` confidence with 0.0 default).
   - The 4 branches + precedence + the 3 `detectEvidence` shapes + `setdefault` match Python.
