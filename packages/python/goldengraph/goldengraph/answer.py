@@ -177,6 +177,45 @@ def _hybrid_filter_mode() -> str:
     return os.environ.get("GOLDENGRAPH_HYBRID_FILTER", "").strip().lower()
 
 
+def _local_filter_mode() -> str:
+    """`GOLDENGRAPH_LOCAL_FILTER` selector, read at call time. "" / "none" / unset = off
+    (pass the full ball -- byte-identical to the pre-2026-07-07 local path). "path" =
+    path-preserving prune (`subgraph_filter.filter_subgraph_to_paths`). Mirrors
+    `_hybrid_filter_mode` for the LOCAL synthesis path: the ER-answer ablation
+    (docs/superpowers/specs/2026-07-07-goldengraph-er-answer-ablation-design.md) localized the
+    multi-hop miss to PATH-SELECTION in the local ball -- the answer is present but buried among
+    distractor edges. Predicate-blind + chain-safe (dodges the 2026-06-22 predicate-focus revert)."""
+    import os
+
+    return os.environ.get("GOLDENGRAPH_LOCAL_FILTER", "").strip().lower()
+
+
+def _local_filter_halo() -> int:
+    """`GOLDENGRAPH_LOCAL_FILTER_HALO` (default 1). Non-int -> 1."""
+    import os
+
+    try:
+        return int(os.environ.get("GOLDENGRAPH_LOCAL_FILTER_HALO", "1"))
+    except ValueError:
+        return 1
+
+
+def _apply_local_filter(subgraph: dict, seeds) -> dict:
+    """Gated path-preserving prune of the local retrieval ball.
+
+    Off (default) -> `subgraph` unchanged (byte-identical local path). On
+    (`GOLDENGRAPH_LOCAL_FILTER=path`) -> keep seeds + anchor-to-anchor shortest paths + a
+    `halo`-hop neighbourhood (the same predicate-blind, chain-safe filter hybrid uses). It is
+    recall-safe ONLY where the answer sits on an anchor-to-anchor path or within halo of a seed
+    -- so its worth is decided by the bench bridge-recall guard on the MULTI-seed regime, not
+    asserted here (a single seed makes the anchor-to-anchor bridge inert -- see the plan)."""
+    if _local_filter_mode() != "path":
+        return subgraph
+    from .subgraph_filter import filter_subgraph_to_paths
+
+    return filter_subgraph_to_paths(subgraph, list(seeds), halo=_local_filter_halo())
+
+
 def _bridge_enabled() -> bool:
     """`GOLDENGRAPH_RETRIEVAL_BRIDGE` gate (default off). On -> the local/hybrid retrieval ball is
     built with `_retrieve_local_bridged` (same-name under-merge bridging) instead of `_retrieve_local`."""
@@ -342,7 +381,14 @@ def ask(
         return synthesize_hybrid(
             query, subgraph, passage_texts, llm, seed_names=seed_names
         )
-    _add_refs(provenance_out, subgraph.get("edges", ()))  # provenance of the retrieval ball
+    # Gated path-preserving prune of the ball (default off = byte-identical). The
+    # ER-answer ablation localized the multi-hop miss to path-selection in this ball.
+    subgraph = _apply_local_filter(subgraph, seeds)
+    id_to_name = {
+        e["entity_id"]: e["canonical_name"] for e in subgraph.get("entities", ())
+    }
+    seed_names = [id_to_name[s] for s in seeds if s in id_to_name]
+    _add_refs(provenance_out, subgraph.get("edges", ()))  # provenance of the (filtered) ball
     return synthesize_local(query, subgraph, llm, seed_names=seed_names)
 
 
