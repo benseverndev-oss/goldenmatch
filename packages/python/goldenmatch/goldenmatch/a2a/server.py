@@ -322,6 +322,20 @@ _SKILLS = [
         "inputModes": ["application/json"],
         "outputModes": ["application/json"],
     },
+    {
+        "id": "documents_suggest_schema",
+        "name": "Suggest Document Schema",
+        "description": "Propose an extraction schema from a sample document (PDF/image).",
+        "inputModes": ["application/json"],
+        "outputModes": ["application/json"],
+    },
+    {
+        "id": "documents_ingest",
+        "name": "Ingest Documents",
+        "description": "Extract records from documents against a schema; records ready for dedupe.",
+        "inputModes": ["application/json"],
+        "outputModes": ["application/json"],
+    },
 ]
 
 

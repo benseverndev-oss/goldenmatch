@@ -35,18 +35,19 @@ def test_agent_card_has_required_fields():
     assert card["authentication"]["schemes"] == ["bearer"]
 
 
-def test_agent_card_has_38_skills():
+def test_agent_card_has_40_skills():
     """v1.7-v1.12 added autoconfig+controller_telemetry (10->12); v2.0 added
     six identity_* skills (12->18); v1.19.x Phase 3 added add_correction
     (18->19); the MCP tool-coverage parity pass added 12 (19->31); #1089 added
     retrieve_similar (31->32); Agent Memory #1075/#1078 added identity_claim /
     identity_resolve_conflict / identity_audit (32->35); #1078 tamper-evidence
     added identity_audit_seal / identity_audit_verify (35->37); the healer added
-    review_config (37->38)."""
+    review_config (37->38); document ingest added documents_suggest_schema /
+    documents_ingest (38->40)."""
     from goldenmatch.a2a.server import build_agent_card
 
     card = build_agent_card("http://localhost:8080")
-    assert len(card["skills"]) == 38
+    assert len(card["skills"]) == 40
     ids = {s["id"] for s in card["skills"]}
     assert "autoconfig" in ids
     assert "retrieve_similar" in ids
@@ -65,6 +66,12 @@ def test_agent_card_has_38_skills():
         "sensitivity", "incremental", "identity_show", "list_runs", "rollback",
         "list_corrections", "learn_thresholds", "memory_stats",
     } <= ids
+
+
+def test_agent_card_lists_document_skills():
+    from goldenmatch.a2a.server import build_agent_card
+    ids = {s["id"] for s in build_agent_card("http://localhost:8080")["skills"]}
+    assert {"documents_suggest_schema", "documents_ingest"} <= ids
 
 
 def test_agent_card_skills_have_modes():
