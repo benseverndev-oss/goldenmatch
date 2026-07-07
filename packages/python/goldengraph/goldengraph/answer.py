@@ -180,11 +180,11 @@ def _hybrid_filter_mode() -> str:
 def _local_filter_mode() -> str:
     """`GOLDENGRAPH_LOCAL_FILTER` selector, read at call time. "" / "none" / unset = off
     (pass the full ball -- byte-identical to the pre-2026-07-07 local path). "path" =
-    path-preserving prune (`subgraph_filter.filter_subgraph_to_paths`). Mirrors
-    `_hybrid_filter_mode` for the LOCAL synthesis path: the ER-answer ablation
-    (docs/superpowers/specs/2026-07-07-goldengraph-er-answer-ablation-design.md) localized the
+    anchor-to-anchor path prune (`subgraph_filter.filter_subgraph_to_paths`, Lever A -- REFUTED,
+    see results/RESULTS_PATH_AWARE_RETRIEVAL.md). "candidate" = answer-candidate-scored prune
+    (`retrieve_paths.prune_to_candidate_paths`, Lever C). Both localize the ER-answer ablation's
     multi-hop miss to PATH-SELECTION in the local ball -- the answer is present but buried among
-    distractor edges. Predicate-blind + chain-safe (dodges the 2026-06-22 predicate-focus revert)."""
+    distractor edges. Both are predicate-blind (dodge the 2026-06-22 predicate-focus revert)."""
     import os
 
     return os.environ.get("GOLDENGRAPH_LOCAL_FILTER", "").strip().lower()
@@ -200,20 +200,57 @@ def _local_filter_halo() -> int:
         return 1
 
 
-def _apply_local_filter(subgraph: dict, seeds) -> dict:
-    """Gated path-preserving prune of the local retrieval ball.
+def _local_filter_topc() -> int:
+    """`GOLDENGRAPH_LOCAL_FILTER_TOPC` (default 3) -- Lever C's #candidate paths. Non-int -> 3."""
+    import os
 
-    Off (default) -> `subgraph` unchanged (byte-identical local path). On
-    (`GOLDENGRAPH_LOCAL_FILTER=path`) -> keep seeds + anchor-to-anchor shortest paths + a
-    `halo`-hop neighbourhood (the same predicate-blind, chain-safe filter hybrid uses). It is
-    recall-safe ONLY where the answer sits on an anchor-to-anchor path or within halo of a seed
-    -- so its worth is decided by the bench bridge-recall guard on the MULTI-seed regime, not
-    asserted here (a single seed makes the anchor-to-anchor bridge inert -- see the plan)."""
-    if _local_filter_mode() != "path":
-        return subgraph
-    from .subgraph_filter import filter_subgraph_to_paths
+    try:
+        return int(os.environ.get("GOLDENGRAPH_LOCAL_FILTER_TOPC", "3"))
+    except ValueError:
+        return 3
 
-    return filter_subgraph_to_paths(subgraph, list(seeds), halo=_local_filter_halo())
+
+def _local_filter_khops() -> int:
+    """`GOLDENGRAPH_LOCAL_FILTER_KHOPS` (default 4) -- Lever C's candidate reach. Non-int -> 4."""
+    import os
+
+    try:
+        return int(os.environ.get("GOLDENGRAPH_LOCAL_FILTER_KHOPS", "4"))
+    except ValueError:
+        return 4
+
+
+def _apply_local_filter(subgraph: dict, seeds, *, question=None, embedder=None) -> dict:
+    """Gated path-selection prune of the local retrieval ball.
+
+    Off (default) -> `subgraph` unchanged (byte-identical local path). `GOLDENGRAPH_LOCAL_FILTER`:
+    - `path` -> Lever A: seeds + anchor-to-anchor shortest paths + `halo` (REFUTED -- recall-safe
+      only where the answer sits on an anchor-to-anchor path or within halo of a seed; a single
+      seed makes the bridge inert; measured to strand the chain on the multi-seed regime).
+    - `candidate` -> Lever C: seeds + halo + seed->top-`c` query-relevant candidate paths
+      (`prune_to_candidate_paths`). Needs `question` + `embedder`; if either is None it no-ops
+      safely (a caller without an embedder degrades to the full ball, never crashes).
+    Worth is decided by the bench bridge-recall guard on the MULTI-seed regime, not asserted here."""
+    mode = _local_filter_mode()
+    if mode == "path":
+        from .subgraph_filter import filter_subgraph_to_paths
+
+        return filter_subgraph_to_paths(subgraph, list(seeds), halo=_local_filter_halo())
+    if mode == "candidate":
+        if question is None or embedder is None:
+            return subgraph
+        from .retrieve_paths import prune_to_candidate_paths
+
+        return prune_to_candidate_paths(
+            subgraph,
+            list(seeds),
+            question,
+            embedder,
+            k_hops=_local_filter_khops(),
+            top_c=_local_filter_topc(),
+            halo=_local_filter_halo(),
+        )
+    return subgraph
 
 
 def _bridge_enabled() -> bool:
@@ -383,7 +420,7 @@ def ask(
         )
     # Gated path-preserving prune of the ball (default off = byte-identical). The
     # ER-answer ablation localized the multi-hop miss to path-selection in this ball.
-    subgraph = _apply_local_filter(subgraph, seeds)
+    subgraph = _apply_local_filter(subgraph, seeds, question=query, embedder=embedder)
     id_to_name = {
         e["entity_id"]: e["canonical_name"] for e in subgraph.get("entities", ())
     }
