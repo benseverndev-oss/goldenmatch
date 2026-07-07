@@ -43,12 +43,32 @@ def test_unknown_keys_dropped_missing_fields_nulled():
     assert out.rows[0].values == {"full_name": "Ada", "email": None}
 
 
-def test_malformed_json_retries_then_errors():
+def test_malformed_json_is_not_retried():
     calls = {"n": 0}
     def fake(payload):
         calls["n"] += 1
         return {"choices": [{"message": {"content": "not json at all"}}]}
     out = VLMExtractor(api_key="k", model="gpt-4o", transport=fake,
-                       max_retries=2).extract(PAGES, SCHEMA)
+                       max_attempts=2).extract(PAGES, SCHEMA)
     assert out.rows == [] and out.error is not None
-    assert calls["n"] == 2  # retried the configured number of times
+    assert calls["n"] == 1  # deterministic (temperature=0) parse failure: no retry
+
+
+def test_transport_error_is_retried_then_recorded():
+    calls = {"n": 0}
+    def fake(payload):
+        calls["n"] += 1
+        raise OSError("connection reset")
+    out = VLMExtractor(api_key="k", model="gpt-4o", transport=fake,
+                       max_attempts=3).extract(PAGES, SCHEMA)
+    assert calls["n"] == 3  # retried the full attempt budget
+    assert out.rows == [] and out.error is not None
+
+
+def test_truncated_response_reported_as_error():
+    def fake(payload):
+        return {"choices": [{"message": {"content": "{}"},
+                              "finish_reason": "length"}]}
+    out = VLMExtractor(api_key="k", model="gpt-4o", transport=fake).extract(PAGES, SCHEMA)
+    assert out.rows == []
+    assert out.error is not None and "truncated" in out.error

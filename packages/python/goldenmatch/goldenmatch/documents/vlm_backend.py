@@ -51,9 +51,11 @@ def _instruction(schema: TargetSchema) -> str:
 
 class VLMExtractor:
     def __init__(self, *, api_key: str, model: str = "gpt-4o",
-                 transport: Transport | None = None, max_retries: int = 2):
+                 transport: Transport | None = None, max_attempts: int = 3):
+        if max_attempts < 1:
+            raise ValueError(f"max_attempts must be >= 1, got {max_attempts}")
         self._model = model
-        self._max_retries = max_retries
+        self._max_attempts = max_attempts
         self._send = transport or _urllib_transport(api_key)
 
     def _payload(self, pages: list[PageImage], schema: TargetSchema) -> dict:
@@ -62,7 +64,7 @@ class VLMExtractor:
             b64 = base64.b64encode(pg.png_bytes).decode()
             content.append({"type": "image_url",
                             "image_url": {"url": f"data:image/png;base64,{b64}"}})
-        return {"model": self._model, "temperature": 0, "max_tokens": 2000,
+        return {"model": self._model, "temperature": 0, "max_tokens": 8000,
                 "messages": [{"role": "user", "content": content}]}
 
     def extract(self, pages: list[PageImage], schema: TargetSchema) -> ExtractResult:
@@ -70,21 +72,35 @@ class VLMExtractor:
         src = pages[0].index if pages else None
         fname = ""  # assemble tags the real filename; backend only knows the page
         last_err = "no response"
-        for _ in range(self._max_retries):
+        resp = None
+        for _ in range(self._max_attempts):
             try:
                 resp = self._send(payload)
-                text = resp["choices"][0]["message"]["content"]
-                data = json.loads(_strip_fence(text))
-                rows = [
-                    ExtractedRow.from_partial(
-                        rec.get("values", {}), rec.get("confidence", {}), schema,
-                        source_file=fname, source_page=src)
-                    for rec in data.get("records", [])
-                ]
-                return ExtractResult(rows=rows)
-            except (KeyError, ValueError, TypeError) as e:
+                break
+            except Exception as e:  # transport/network error: retry (non-deterministic)
                 last_err = f"{type(e).__name__}: {e}"
-        return ExtractResult(rows=[], error=last_err)
+        else:
+            return ExtractResult(rows=[], error=last_err)
+
+        # Response received: parsing is deterministic (temperature=0), so a parse
+        # failure is not retried -- it would just reproduce the same bad response.
+        try:
+            choice = resp["choices"][0]
+            if choice.get("finish_reason") == "length":
+                return ExtractResult(
+                    rows=[],
+                    error="response truncated (finish_reason=length); increase max_tokens")
+            text = choice["message"]["content"]
+            data = json.loads(_strip_fence(text))
+            rows = [
+                ExtractedRow.from_partial(
+                    rec.get("values", {}), rec.get("confidence", {}), schema,
+                    source_file=fname, source_page=src)
+                for rec in data.get("records", [])
+            ]
+            return ExtractResult(rows=rows)
+        except (KeyError, ValueError, TypeError, IndexError) as e:
+            return ExtractResult(rows=[], error=f"parse: {type(e).__name__}: {e}")
 
 
 def _strip_fence(text: str) -> str:
