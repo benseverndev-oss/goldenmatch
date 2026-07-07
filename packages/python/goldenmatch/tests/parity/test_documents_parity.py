@@ -25,8 +25,7 @@ import os
 from pathlib import Path
 
 import pytest
-
-from goldenmatch.core._native_loader import native_module, native_enabled
+from goldenmatch.core._native_loader import native_module
 from goldenmatch.documents._openai import parse_message_text
 from goldenmatch.documents.schema_io import schema_from_dict, schema_to_dict
 from goldenmatch.documents.suggest import _PROMPT
