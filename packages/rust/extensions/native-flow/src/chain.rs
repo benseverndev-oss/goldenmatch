@@ -13,7 +13,8 @@
 use arrow::array::{make_array, Array, ArrayData, Float64Array, LargeStringArray, StringArray};
 use arrow::pyarrow::PyArrowType;
 use goldenflow_core::chain::{
-    apply_chain, apply_chain_f64, apply_chain_nullable, Kernel, NullableKernel, NumericKernel,
+    apply_chain, apply_chain_f64, apply_chain_nullable, apply_chain_str, Kernel, NullableKernel,
+    NumericKernel,
 };
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
@@ -187,4 +188,39 @@ pub fn apply_chain_nullable_arrow(
             "fused nullable apply requires a Utf8 or LargeUtf8 array",
         ))
     }
+}
+
+/// Arrow-FREE fused string chain over a Python list — the columnar-engine path
+/// that needs no pyarrow, no Polars, no Arrow. Each op is a `(name, params)` tuple
+/// (owned no-arg + parameterized string kernels; `Kernel::from_op`). Nulls (`None`)
+/// pass through unchanged and are NOT counted; non-null values are threaded through
+/// the chain (`goldenflow_core::chain::apply_chain_str`). Returns
+/// `(values, per-kernel changed counts)` — the list analogue of `apply_chain_ops_arrow`.
+#[pyfunction]
+pub fn apply_chain_str_list(
+    values: Vec<Option<String>>,
+    ops: Vec<(String, Vec<String>)>,
+) -> PyResult<(Vec<Option<String>>, Vec<u64>)> {
+    let mut kernels = Vec::with_capacity(ops.len());
+    for (name, params) in &ops {
+        let refs: Vec<&str> = params.iter().map(String::as_str).collect();
+        kernels.push(
+            Kernel::from_op(name, &refs).ok_or_else(|| {
+                PyValueError::new_err(format!("not a fusable chain kernel: {name}"))
+            })?,
+        );
+    }
+    // Thread only the non-null values (total kernels never null); nulls pass through.
+    let non_null: Vec<&str> = values.iter().filter_map(|v| v.as_deref()).collect();
+    let (transformed, changed) = apply_chain_str(&non_null, &kernels);
+    // Scatter the transformed values back into their (non-null) positions.
+    let mut it = transformed.into_iter();
+    let out: Vec<Option<String>> = values
+        .iter()
+        .map(|v| {
+            v.as_ref()
+                .map(|_| it.next().expect("aligned with non-null count"))
+        })
+        .collect();
+    Ok((out, changed))
 }
