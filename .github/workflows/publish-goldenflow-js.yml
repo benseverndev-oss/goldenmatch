@@ -30,6 +30,9 @@ jobs:
       # entrypoint unless it's built first, so this MUST stay true or the publish
       # fails with TS2307 on backend.ts (every publish since 0.4.0 silently did).
       build_deps: true
+      # Build the opt-in WASM artifact so it ships in dist/ (enableWasm() +
+      # the fused chain reach published npm users; otherwise pure-TS only).
+      build_wasm: true
       ref: ${{ inputs.ref || '' }}
       dry_run: ${{ inputs.dry_run || 'false' }}
     secrets: inherit
