@@ -10,11 +10,13 @@ import { LoadStage } from "./load.js";
 import { ScanStage } from "./check.js";
 import { TransformStage } from "./flow.js";
 import { DedupeStage } from "./match.js";
+import { InferSchemaStage } from "./infer.js";
 
 export { LoadStage } from "./load.js";
 export { ScanStage } from "./check.js";
 export { TransformStage } from "./flow.js";
 export { DedupeStage, buildConfigFromContexts } from "./match.js";
+export { InferSchemaStage } from "./infer.js";
 
 /**
  * Build a registry with all built-in suite stages registered:
@@ -31,5 +33,6 @@ export function buildDefaultRegistry(): StageRegistry {
   registry.register(ScanStage);
   registry.register(TransformStage);
   registry.register(DedupeStage);
+  registry.register(InferSchemaStage);
   return registry;
 }
