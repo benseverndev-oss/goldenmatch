@@ -222,3 +222,31 @@ def test_enforce_confidence_green_proceeds():
     runtime = profile_context(PipeContext(df=pl.DataFrame({"x": [1, 2]})))
     runtime = _replace_n_rows(runtime, 100_000)
     assert enforce_confidence(_green_plan(), runtime) is None
+
+
+def _garbage_df(n_rows: int) -> pl.DataFrame:
+    # Generic column names (no domain) + a mostly-null column (max_null_density > 0.6).
+    return pl.DataFrame({
+        "col_a": [None] * n_rows,             # 100% null -> max_null_density 1.0
+        "col_b": list(range(n_rows)),
+    })
+
+
+def test_plan_config_refuses_red_at_scale():
+    reg = _registry_with("goldencheck.scan", "goldenflow.transform", "goldenmatch.dedupe")
+    eng = Pipeline(registry=reg)
+    ctx = PipeContext(df=_garbage_df(100_000))
+    with pytest.raises(PipeNotConfidentError):
+        eng._plan_config(ctx)
+    assert eng._last_plan.rule_name == "low_confidence"
+
+
+def test_plan_config_red_below_threshold_proceeds():
+    reg = _registry_with("goldencheck.scan", "goldenflow.transform", "goldenmatch.dedupe")
+    eng = Pipeline(registry=reg)
+    ctx = PipeContext(df=_garbage_df(1_000))
+    cfg = eng._plan_config(ctx)                      # no raise
+    assert eng._last_plan.rule_name == "low_confidence"
+    assert [s.use for s in cfg.stages] == [
+        "goldencheck.scan", "goldenflow.transform", "goldenmatch.dedupe",
+    ]
