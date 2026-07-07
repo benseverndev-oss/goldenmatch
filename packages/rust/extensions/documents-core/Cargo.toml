@@ -1,0 +1,19 @@
+# Standalone workspace so this pyo3-free core can be a path dependency of BOTH the
+# `native` crate and `documents-wasm` without either workspace claiming it. Same
+# isolation rationale as score-core/suggest-core. No rust-toolchain.toml on purpose.
+[workspace]
+
+[package]
+name = "goldenmatch-documents-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Ben Severn <benzsevern@gmail.com>"]
+description = "Deterministic document-ingest kernels (schema/parse/prompt/normalize, no pyo3) shared across the native ext and the TS/WASM surface"
+
+[lib]
+name = "goldenmatch_documents_core"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
