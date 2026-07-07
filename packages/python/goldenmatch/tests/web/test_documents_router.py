@@ -60,3 +60,28 @@ def test_ingest_returns_records_and_report(tmp_path, monkeypatch):
     assert rec["full_name"] == "Ada" and rec["email"] == "ada@x.io"
     # sidecar columns present for the dedupe_df exclude_columns handoff
     assert "_source_file" in rec and "_source_page" in rec and "_extract_confidence" in rec
+
+
+def test_ingest_malformed_schema_400(tmp_path):
+    client = _client(tmp_path)
+    resp = client.post("/api/v1/documents/ingest",
+                       files=[("files", ("a.png", _png_bytes(), "image/png"))],
+                       data={"schema": "not json"})
+    assert resp.status_code == 400
+    assert "schema" in resp.json()["detail"].lower()
+
+
+def test_ingest_no_files_400(tmp_path):
+    client = _client(tmp_path)
+    resp = client.post("/api/v1/documents/ingest",
+                       data={"schema": '{"fields":[{"name":"x"}]}'})
+    assert resp.status_code == 400  # optional files param -> handler's 400, not FastAPI 422
+
+
+def test_auth_required_401_when_token_set(tmp_path, monkeypatch):
+    monkeypatch.setenv("GOLDENMATCH_WEB_TOKEN", "secret")  # middleware only enforces when set
+    client = _client(tmp_path)
+    resp = client.post("/api/v1/documents/ingest",
+                       files=[("files", ("a.png", _png_bytes(), "image/png"))],
+                       data={"schema": '{"fields":[{"name":"x"}]}'})
+    assert resp.status_code == 401
