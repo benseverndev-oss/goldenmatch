@@ -78,20 +78,39 @@ def _spec_string_ready(spec, accepted: frozenset[str]) -> bool:
     return True
 
 
+def _numeric_inmem_ok(nm) -> bool:
+    """The in-memory Column path can run a numeric spec when the kernel exposes the
+    shape probe AND the Column egresses a raw numeric array (``apply_numeric``,
+    native-flow 0.23+). Skew-safe: an older wheel lacks it -> numeric declines to
+    Polars in-memory, no hard error."""
+    col_cls = getattr(nm, "Column", None)
+    return hasattr(nm, "columnar_numeric_ready") and col_cls is not None and hasattr(
+        col_cls, "apply_numeric"
+    )
+
+
 def config_is_columnar_ready(config) -> bool:
-    """A config runs on the IN-MEMORY columnar engine iff EVERY op is an owned string
-    kernel (total fusable, or — when the native build supports it — a nullable
-    URL/company/email kernel) and there are no frame-level ops. Numeric configs are
-    NOT accepted here (the in-memory Column path is string-only); the CSV path takes
-    them (see :func:`columnar_file_ready`). Otherwise the caller uses the Polars
-    engine — correctness first; coverage grows over the phases."""
+    """A config runs on the IN-MEMORY columnar engine iff EVERY spec is an owned
+    string run (total fusable, or — when supported — a nullable URL/company/email
+    kernel) OR — Phase 3 wave 3d — a valid NUMERIC shape (``string* parser f64*``,
+    via the native ``columnar_numeric_ready`` probe + ``Column.apply_numeric``), and
+    there are no frame-level ops. Otherwise the caller uses the Polars engine —
+    correctness first; coverage grows over the phases."""
     if _frame_level_blocked(config) or not config.transforms:
         return False
     nm = native_module()
     if nm is None or not hasattr(nm, "apply_chain_str_list"):
         return False
     accepted = _accepted_string(nm)
-    return all(_spec_string_ready(spec, accepted) for spec in config.transforms)
+    numeric_ok = _numeric_inmem_ok(nm)
+    for spec in config.transforms:
+        if _spec_string_ready(spec, accepted):
+            continue
+        ops_spec = [(n, list(p)) for n, p in (parse_transform_name(o) for o in spec.ops)]
+        if numeric_ok and nm.columnar_numeric_ready(ops_spec):
+            continue
+        return False
+    return True
 
 
 def columnar_file_ready(config) -> bool:
@@ -177,12 +196,33 @@ def _transform_via_columns(df, config, source, nm, pl):
     C-Data interface, run the owned chain on the Rust-held Arrow buffer, egress back.
     No list marshaling, no pyarrow."""
     manifest = Manifest(source=source)
+    numeric_ok = _numeric_inmem_ok(nm)
     out_series = []
     for spec in config.transforms:
         if spec.column not in df.columns:
             continue
         ops = [parse_transform_name(op) for op in spec.ops]
         ops_spec = [(n, list(p)) for n, p in ops]
+        # Numeric spec (string* parser f64*): cast the column to Utf8 (Polars' numeric
+        # transforms cast to Utf8 internally, so this matches even a non-string input)
+        # and run the numeric plan, egressing the RAW numeric array (Int64/Float64) as
+        # a real numeric column. The manifest records come straight from the kernel.
+        if numeric_ok and nm.columnar_numeric_ready(ops_spec):
+            col = nm.Column.from_arrow(df.select([pl.col(spec.column).cast(pl.Utf8)]))
+            num_col, records = col.apply_numeric(ops_spec)
+            for name, affected, total, before, after in records:
+                manifest.add_record(TransformRecord(
+                    column=spec.column,
+                    transform=name,
+                    affected_rows=int(affected),
+                    total_rows=int(total),
+                    sample_before=list(before),
+                    sample_after=list(after),
+                ))
+            imported = pl.from_arrow(num_col)
+            series = imported.to_series(0) if isinstance(imported, pl.DataFrame) else imported
+            out_series.append(series.alias(spec.column))
+            continue
         # Zero-copy, pyarrow-free ingest (a 1-column DataFrame -> a struct stream).
         col = nm.Column.from_arrow(df.select([spec.column]))
         total_rows = len(col)

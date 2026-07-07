@@ -332,9 +332,11 @@ pub fn transform_csv(
             // path (formatting via the Polars-matching float formatter); otherwise
             // auto-route the string run total vs nullable.
             if let Some(plan) = crate::numeric_columnar::resolve_numeric(ops) {
-                let (new_array, records) =
+                let (numcol, records) =
                     crate::numeric_columnar::run_numeric_column(&columns[idx], &plan);
-                columns[idx] = new_array;
+                // CSV output is text: format the numeric result (f64 via the
+                // Polars-matching formatter, i64 as a plain integer).
+                columns[idx] = LargeStringArray::from_iter(numcol.fmt());
                 manifest.push((col_name.clone(), records));
                 continue;
             }
