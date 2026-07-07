@@ -11,6 +11,7 @@
  * the three are mutually exclusive (conflict throws in run()).
  */
 import {
+  SCHEMA_VERSION,
   UNMAPPED_TYPE,
   loadDomain,
   type FieldMapping,
@@ -53,7 +54,9 @@ function resultToInferredSchema(result: MapResult, domain: string): InferredSche
   const confidence = result.mappings.length
     ? Math.min(...result.mappings.map((m) => m.confidence))
     : 0.0;
-  return { domain, fields, confidence };
+  // Stamp schema_version like the Python InferredSchema dataclass (default
+  // SCHEMA_VERSION) so the artifact is field-identical cross-surface.
+  return { domain, fields, confidence, schema_version: SCHEMA_VERSION };
 }
 
 /** Mirror of Python `_validate_flags`: at most one of schema/no_infer/domain. */
