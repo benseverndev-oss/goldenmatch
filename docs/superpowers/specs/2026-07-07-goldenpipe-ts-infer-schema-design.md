@@ -25,9 +25,15 @@ additive port.
   (detect_score = 1.0 when the domain is explicitly pinned; else the detection
   score; 0.0 on the generic fallback).
 - `result = infermap.map(df, DomainPackTarget(load_domain(domain)), soft=True)`.
-- `_result_to_inferred_schema(result, domain)` → `InferredSchema`, then
+- `_result_to_inferred_schema(result, domain)` -> `InferredSchema`, then
   `confidence` is replaced with `detect_score` (reflects detection quality, not
   the min-of-mapping-confidences the converter computes).
+- Sets **two** artifacts on the auto-detect path: `ctx.artifacts["inferred_schema"]
+  = inferred` and `ctx.artifacts.setdefault("infer_schema_evidence",
+  detect_evidence)` -- where `detect_evidence` is `{detect_reason: "explicit"}`
+  (pinned domain), or `{detect_reason, detect_score, runner_up, runner_up_score}`
+  (detected), or that plus `fallback: True` (generic fallback). The
+  schema/no_infer/no-df early returns set only `inferred_schema` (no evidence).
 
 `_result_to_inferred_schema`:
 ```python
@@ -73,34 +79,58 @@ return InferredSchema(domain=domain, fields=fields, confidence=confidence)
 New file `packages/typescript/goldenpipe/src/core/adapters/infer.ts`:
 ```ts
 export const InferSchemaStage: Stage = {
-  info: { name: "infer_schema", produces: ["inferred_schema"], consumes: [] },
-  validate(ctx) { /* mutual-exclusivity of schema/no_infer/domain -> throw */ },
-  async run(ctx) { /* the 4 branches + convert */ },
+  info: { name: "infer_schema", produces: ["inferred_schema", "infer_schema_evidence"], consumes: [] },
+  validate(_ctx) { /* no precondition — consumes []; df===null is a valid SUCCESS branch */ },
+  async run(ctx) { /* flag-conflict check FIRST (throws), then the 4 branches + convert */ },
 };
 ```
 - **Name `infer_schema`** (no dotted prefix) matches the Python stage name, so a
   shared pipeline config referencing `infer_schema` resolves on both surfaces.
 - `stageConfig` keys mirror Python: `schema?: InferredSchema`, `no_infer?: boolean`,
   `domain?: string`.
-- `validate`: throw if more than one of `{schema, no_infer, domain}` is set (same
-  message intent as Python's `_validate_flags`).
-- `run`:
-  - `schema` present → `ctx.artifacts.inferred_schema = schema`; SUCCESS.
-  - `no_infer` → `inferred_schema = null`; SUCCESS.
-  - `ctx.df === null` → `inferred_schema = null`; SUCCESS.
-  - else: `const explicit = cfg.domain`; `domain = explicit ?? (detectDomainDetailed({
-    records: ctx.df }).domain ?? "generic")`; `detectScore = explicit ? 1.0 :
-    (detection.domain ? detection.score : 0.0)`.
-  - `const result = map({ records: ctx.df }, new DomainPackTarget(loadDomain(domain)),
-    { soft: true })`.
-  - `const inferred = resultToInferredSchema(result, domain)` then set
-    `inferred.confidence = detectScore` (build a fresh object since `InferredSchema`
-    is readonly).
-  - `ctx.artifacts.inferred_schema = inferred`; SUCCESS.
+- **Flag-conflict check lives in `run()`, not `validate()`** — mirroring Python,
+  where `_validate_flags(cfg)` is the first line of `run()` and *raises* on
+  conflict. The TS `run()` calls a `validateFlags(cfg)` helper first; it throws
+  when more than one of `{schema, no_infer, domain}` is set. (The Python tests call
+  `.run()` and expect the raise; the TS tests mirror that — §7. `validate()` stays
+  a no-op: `consumes: []` and `df === null` is a legitimate SUCCESS branch, so
+  `validate` must NOT throw on a null df.)
+- `run` (after `validateFlags`):
+  - `schema` present → `ctx.artifacts.inferred_schema = schema`; SUCCESS. (No
+    evidence artifact — matches Python's early return.)
+  - `no_infer` → `inferred_schema = null`; SUCCESS. (No evidence.)
+  - `ctx.df === null` → `inferred_schema = null`; SUCCESS. (No evidence.)
+  - else (auto-detect / explicit-domain path):
+    - `const explicit = cfg.domain;`
+    - explicit set → `domain = explicit; detectScore = 1.0; detectEvidence =
+      { detect_reason: "explicit" };`
+    - else → `const detection = detectDomainDetailed({ records: ctx.df });` (bind
+      ONCE). If `detection.domain !== null`: `domain = detection.domain; detectScore
+      = detection.score; detectEvidence = { detect_reason: detection.reason,
+      detect_score: detection.score, runner_up: detection.runner_up,
+      runner_up_score: detection.runner_up_score };` else (generic fallback):
+      `domain = "generic"; detectScore = 0.0; detectEvidence = { detect_reason:
+      detection.reason, detect_score: detection.score, runner_up:
+      detection.runner_up, runner_up_score: detection.runner_up_score, fallback:
+      true };`
+    - `const result = map({ records: ctx.df }, new DomainPackTarget(loadDomain(domain)),
+      { soft: true });`
+    - `const inferred = { ...resultToInferredSchema(result, domain), confidence:
+      detectScore };` (fresh object — `InferredSchema` is readonly; overwrite
+      `confidence` with `detectScore`, matching Python's `replace(inferred,
+      confidence=detect_score)`).
+    - `ctx.artifacts.inferred_schema = inferred;`
+    - **setdefault semantics:** `if (!("infer_schema_evidence" in ctx.artifacts))
+      ctx.artifacts.infer_schema_evidence = detectEvidence;` (Python uses
+      `setdefault` — only set when a prior stage hasn't already).
+    - SUCCESS.
 
 `resultToInferredSchema` is the direct mirror of `_result_to_inferred_schema`
 (§2), using the snake_case `FieldMapping` fields, `UNMAPPED_TYPE`, and
-`result.unmappedSource` (camelCase).
+`result.unmappedSource` (camelCase). Confirmed: TS `soft` sets `target: null` and
+keeps the mapping in `mappings` (not moved to `unmappedSource`), so
+`canonical: fm.target` (→ null) and `type: fm.target ? fm.target : UNMAPPED_TYPE`
+reproduce Python's `None` handling exactly.
 
 > **Fidelity detail to verify in the plan:** the Python `soft=True` sets a
 > below-threshold `fm.target` to `None` (→ `canonical=None`, `type=UNMAPPED_TYPE`).
@@ -122,24 +152,32 @@ opt-in there too. Matching that (available, not default) is the true parity and
 keeps the default TS pipeline unchanged. Consumers opt in by naming `infer_schema`
 in their pipeline config (as they do in Python).
 
-## 6. Dependency
+## 6. Dependencies
 
-Add `"infermap": "workspace:^"` to `packages/typescript/goldenpipe/package.json`
-`dependencies` (it has none today). `goldencheck-types` is already a goldenpipe
-dependency (used elsewhere), so `InferredSchema`/`FieldMapping`/`UNMAPPED_TYPE`/
-`loadDomain` are already resolvable — confirm in the plan; add if absent.
+Add **both** to `packages/typescript/goldenpipe/package.json` `dependencies`
+(goldenpipe currently depends only on `commander, goldencheck, goldenflow,
+goldenmatch` — it references neither package today):
+- `"infermap": "workspace:^"` — the `map`/`detectDomainDetailed`/`DomainPackTarget` API.
+- `"goldencheck-types": "workspace:^"` — the `InferredSchema`/`FieldMapping`/
+  `UNMAPPED_TYPE`/`loadDomain` types + loader. It is NOT currently a goldenpipe dep
+  and has zero imports in goldenpipe `src`; do not rely on transitive/hoisted
+  resolution — add the direct dep.
 
 ## 7. Testing — mirror the Python suite
 
-Port `packages/python/goldenpipe/tests/test_infer_schema_stage.py`'s six cases to
-a TS unit test (`tests/unit/infer-schema-stage.test.ts` or the goldenpipe test
-convention):
+Port all **seven** `packages/python/goldenpipe/tests/test_infer_schema_stage.py`
+cases to a TS unit test (`tests/unit/infer-schema-stage.test.ts` or the goldenpipe
+test convention). The Python tests call `stage.run(ctx)` and, for conflicts,
+expect it to throw (`pytest.raises(ValueError, match="conflict")`) — the TS tests
+mirror that (`await expect(InferSchemaStage.run(ctx)).rejects.toThrow(/conflict/)`,
+since the conflict check is in `run()`):
 1. auto-detect finance columns → `inferred.domain === "finance"`.
 2. explicit `domain: "finance"` config → `inferred.domain === "finance"`.
 3. `no_infer: true` → `inferred_schema === null`.
 4. user `schema` passthrough → `ctx.artifacts.inferred_schema` **is** the input.
-5. conflict `schema` + `domain` → `validate` throws.
-6. conflict `no_infer` + `domain` → `validate` throws.
+5. conflict `schema` + `domain` → `run` throws (`/conflict/`).
+6. conflict `no_infer` + `domain` → `run` throws.
+7. conflict `no_infer` + `schema` → `run` throws.
 
 The `InferredSchema` shape is shared via `goldencheck-types`, so structural
 cross-surface parity is by construction; these behavior tests lock the branch
