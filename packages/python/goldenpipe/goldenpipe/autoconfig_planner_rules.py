@@ -64,6 +64,15 @@ rule_confident_schema = PipePlannerRule(
 def _is_low_confidence(inp: PlannerInput) -> bool:
     # The sole RED source: no usable signal AND the data is mostly empty, so
     # running the full dedupe pipeline is likely to produce garbage clusters.
+    #
+    # Trip signal is the WORST column's null fraction (max, not mean): a single
+    # near-empty column is enough to make the row unreliable to match on. This
+    # is the more aggressive of the two metrics, so it is deliberately
+    # double-gated on `inferred_domain is None` -- a table with a detected
+    # domain is never refused on null density alone, which keeps the
+    # false-refuse blast radius narrow (a domain-less table with one optional
+    # mostly-null column is the only thing that trips it). Revisit toward `mean`
+    # if legitimate wide tables start getting refused.
     return (
         inp.runtime.inferred_domain is None
         and inp.complexity.max_null_density > RED_NULL_DENSITY
