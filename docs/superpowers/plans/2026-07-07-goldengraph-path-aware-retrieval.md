@@ -98,16 +98,64 @@ routes any other phrasing to `hybrid`. **Consequence — Lever B is TEMPLATE-BOU
     decomposition** (build), tracked into Phase 3/4 alongside Lever C — not "flip `auto` on".
     Else → Phase 3.
 
-## Phase 3 — Lever C: recall-safe answer-candidate prune (BUILD only if A+B insufficient)
+## Phase 3 — Lever C: answer-candidate-scored prune (BUILD — chosen 2026-07-07 after A refuted, B skipped)
 
-Detailed tasks intentionally deferred until Phase 1/2 measurements land (don't build before the
-measurement says A/B fail). Sketch, to be expanded into TDD tasks then:
-- New `goldengraph/retrieve_paths.py::prune_to_candidate_paths(subgraph, seeds, question,
-  embedder, *, k_hops, top_c)`: enumerate seed-rooted paths ≤ `k_hops`; score END nodes by
-  EMBEDDING relevance to the question (reuse `seed_by_query`'s embedder — **NOT edge predicates**,
-  per the 2026-06-22 lesson); keep the union of seed→top-`c`-candidate paths + halo. Recall-safe
-  by construction. Gate `GOLDENGRAPH_LOCAL_FILTER=candidate`. Same measurement + recall guard as
-  Phase 1.
+**Why now:** Lever A refuted (`results/RESULTS_PATH_AWARE_RETRIEVAL.md`) — anchor-to-anchor
+topology has no operating point that keeps the single-anchor chain AND shrinks the ball
+(recall-safe ⟺ ~no pruning). The user chose to skip Lever B's engineered-only confirmation and
+build C directly. C's distinction from A: the prune target is chosen by the QUERY signal A
+ignored (embedding similarity of candidate END nodes to the question), so pruning power comes
+from `top_c ≪ |ball|`, not from a halo radius that must shrink to prune (A's trap). It scores
+NODES, never edge predicates — dodging the 2026-06-22 revert.
+
+**Honest recall claim:** "recall-safe by construction" means every KEPT candidate is on a real
+seed-rooted path (no topology artifacts / stranded fragments), NOT that the true answer is
+guaranteed kept — the answer survives only if its end-node lands in the top-`c` embedding
+candidates (or within `halo` of a seed). Whether that holds at a pruning-meaningful `top_c` is
+exactly what the recall guard measures. If it doesn't hold, C is refuted and the real deliverable
+is chain-decomposition (Lever B generalized), not a cheap prune.
+
+- **Task 3.1 (product primitive, TDD).** New `goldengraph/retrieve_paths.py::prune_to_candidate_paths(
+  subgraph, seeds, question, embedder, *, k_hops=4, top_c=3, halo=1)`. Pure over the
+  `{entities, edges}` dict + `Embedder`. Algorithm: (1) no seeds / no entities → return unchanged
+  (mirror `filter_subgraph_to_paths`); (2) build UNDIRECTED adjacency; (3) candidates = non-seed
+  entities reachable from any seed within `k_hops` with a non-empty `canonical_name` (mirror
+  `seed_by_query`'s empty-name drop that avoids the provider 400; literals with a real string name
+  stay eligible — some answers are literal values); (4) score each candidate by cosine(question,
+  candidate_name) using `embedder.embed([question] + names)` — the EXACT `seed_by_query` math;
+  (5) keep = seeds ∪ (for each of the top-`c` candidates, the shortest path from its NEAREST seed)
+  ∪ `halo`-hop neighbourhood of the seeds; (6) filter entities/edges to `keep`. Deterministic
+  tie-break: ascending `entity_id` (as `seed_by_query`).
+  - **Test:** `tests/test_retrieve_paths.py` (offline, stub embedder). (a) no-seeds / empty →
+    identity; (b) seeds always kept; (c) a ball with a gold chain seed→A→ANSWER + an off-topic
+    branch seed→X→Y, stub embedder scoring ANSWER top → the chain to ANSWER is kept and {X,Y}
+    pruned; (d) `top_c` larger than #candidates keeps everything reachable (no crash); (e) every
+    kept non-seed node lies on a seed-rooted path (the by-construction invariant).
+  - **Commit:** `feat(goldengraph): answer-candidate-scored path prune (Lever C primitive)`.
+- **Task 3.2 (product wiring, TDD).** Extend the local gate to `candidate`: `_local_filter_mode`
+  already returns the raw string; add `_local_filter_topc` (`GOLDENGRAPH_LOCAL_FILTER_TOPC`,
+  default 3) + `_local_filter_khops` (`GOLDENGRAPH_LOCAL_FILTER_KHOPS`, default 4) env readers;
+  extend `_apply_local_filter(subgraph, seeds, *, question=None, embedder=None)` so `mode ==
+  "candidate"` routes through `prune_to_candidate_paths` (needs question+embedder; if either is
+  None it no-ops safely). Thread `query`/`embedder` from `ask`'s local branch into the call.
+  `path` + off modes stay byte-identical.
+  - **Test (goldengraph suite):** extend `tests/test_answer_local_filter.py` — (a) `candidate`
+    gate routes the ball through `prune_to_candidate_paths` with the query + embedder (spy);
+    (b) off / `path` unchanged (regression); (c) `candidate` with no embedder in scope no-ops.
+  - **Commit:** `feat(goldengraph): wire candidate prune into the gated local path`.
+- **Task 3.3 (bench harness).** `retrieval_levers.py`: add `lever="candidate"` to `_apply`
+  (threads `question`+`embedder`), and give `measure_lever` an optional `embedder=` so the
+  candidate lever can score. Keep `filter_path`/`none` untouched.
+  - **Test:** `tests/test_qa_retrieval_levers.py` — pure `_apply("candidate", …)` on a fixture
+    with a stub embedder returns the same as a direct `prune_to_candidate_paths` call.
+  - **Commit:** `test+feat(erkgbench): candidate lever in the measurement harness`.
+- **Task 3.4 (measure — recall guard first, sweep `top_c`).** LLM-free guard at amb ∈ {0,0.5,1.0},
+  n=40, multi-seed k=5, `top_c ∈ {2,3,5}`: report post-lever bridge-recall AND node retention vs
+  `none` and vs Lever A's recall-safe halo=3 (~95% retained). **Decision gate:** candidate recall
+  ≥ ~none AND retention meaningfully below halo=3's 95% (i.e. it actually prunes) ⇒ run the PAID
+  answer-match (baseline = freshly-run `none`, hard `--max-cost-usd`), Δ into
+  `RESULTS_PATH_AWARE_RETRIEVAL.md` → Phase 4. Else → C refuted; record it; the path-focus family
+  is exhausted on cheap signals and the deliverable becomes chain-decomposition (build).
 
 ## Phase 4 — land the winning lever
 
