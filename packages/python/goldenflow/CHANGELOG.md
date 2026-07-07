@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.17.0 (2026-07-07)
+
+Polars-eviction Phases 2-3: a config's owned transforms now run entirely on the native/Arrow substrate (no Polars, no pyarrow) on both the whole-file CSV path and the in-memory path, byte-identical (data + manifest) to the Polars engine. Needs `goldenflow-native>=0.24.0`. Opt in with `GOLDENFLOW_ENGINE=columnar`; anything the columnar path does not cover declines to the Polars engine, so behavior is never wrong.
+
+- **Native CSV pipeline.** `goldenflow transform data.csv` (and `transform_file`) runs read -> transform -> write in ONE Rust call for an owned-transform config: the CSV is parsed into Rust-owned Arrow string columns, the owned chain runs, and the CSV is written back, with parallel read/write across record-boundary chunks. No `pl.DataFrame` is constructed.
+- **Native Arrow `Column` (pyarrow-free).** The in-memory columnar path holds columns as Rust-owned Arrow buffers ingested from Polars over the C-Data / PyCapsule interface (`__arrow_c_stream__`) -- pyarrow-free -- and runs the owned chain zero-copy.
+- **Auto-routed string chains.** A run auto-routes between the total (never-null) and nullable (`Option`-returning URL/company/email) fused chains.
+- **Numeric columnar execution.** A `string* parser f64*` config (the f64 parsers `currency_strip`/`percentage_normalize`/`comma_decimal`/`scientific_to_decimal`/`fraction_to_decimal` and the i64 parsers `to_integer`/`roman_to_int`/`ordinal_to_int`, plus the array ops `round`/`clamp`/`abs_value`/`fill_zero`) runs natively, with a Polars-matching f64 formatter so the output + manifest match Polars byte-for-byte. An f64 op promotes an Int64 column to Float64, exactly as Polars does.
+- **Multi-output splits.** `split_name`/`split_name_reverse` (-> `first_name`+`last_name`) and `split_address` (-> `street`+`city`+`state`+`zip`) append the fixed-name output columns, exactly as Polars' dataframe-mode `with_columns`.
+- **CSV empty-string fix.** The native CSV writer now quotes an empty-string value as `""` (distinct from a null empty field), matching Polars' `write_csv`, so any empty-string transform output round-trips correctly.
+- `goldenflow[native]` floor bumped to `goldenflow-native>=0.24.0` (the wheel carrying the columnar symbols).
+
 ## 1.16.0 (2026-07-06)
 
 Pillar-1 (evict Polars from the transform execution path): the fused columnar apply now covers a **third kernel shape** — the `Option`-returning URL / company / email families — so those chains fuse too. Needs `goldenflow-native>=0.14.0`.
