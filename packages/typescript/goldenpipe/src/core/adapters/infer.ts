@@ -51,8 +51,10 @@ function resultToInferredSchema(result: MapResult, domain: string): InferredSche
       };
     }
   }
+  // Loop-based min — never spread an array into Math.min/max (it throws
+  // RangeError past ~65K elements; banned by ast-grep ts-no-spread-math-min-max).
   const confidence = result.mappings.length
-    ? Math.min(...result.mappings.map((m) => m.confidence))
+    ? result.mappings.reduce((m, fm) => (fm.confidence < m ? fm.confidence : m), Infinity)
     : 0.0;
   // Stamp schema_version like the Python InferredSchema dataclass (default
   // SCHEMA_VERSION) so the artifact is field-identical cross-surface.
