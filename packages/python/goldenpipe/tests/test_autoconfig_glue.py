@@ -250,3 +250,24 @@ def test_plan_config_red_below_threshold_proceeds():
     assert [s.use for s in cfg.stages] == [
         "goldencheck.scan", "goldenflow.transform", "goldenmatch.dedupe",
     ]
+
+
+def test_plan_config_hints_dedupe_at_scale():
+    reg = _registry_with("goldencheck.scan", "goldenflow.transform", "goldenmatch.dedupe")
+    eng = Pipeline(registry=reg)
+    # Fully-populated (low-null), generic column names -> GREEN default plan at 1M.
+    n = 1_000_000
+    df = pl.DataFrame({"col_a": range(n), "col_b": range(n)})
+    cfg = eng._plan_config(PipeContext(df=df))
+    dedupe = next(s for s in cfg.stages if s.use == "goldenmatch.dedupe")
+    assert dedupe.config == {"_dedupe_hints": {"throughput": {"recall_target": 0.95}}}
+    assert eng._last_plan.evidence["scale_hinted"] is True
+
+
+def test_plan_config_no_hint_below_scale():
+    reg = _registry_with("goldencheck.scan", "goldenflow.transform", "goldenmatch.dedupe")
+    eng = Pipeline(registry=reg)
+    df = pl.DataFrame({"col_a": range(10), "col_b": range(10)})
+    cfg = eng._plan_config(PipeContext(df=df))
+    dedupe = next(s for s in cfg.stages if s.use == "goldenmatch.dedupe")
+    assert "_dedupe_hints" not in dedupe.config
