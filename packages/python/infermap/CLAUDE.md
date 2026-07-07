@@ -32,6 +32,13 @@
 - `infermap/types.py` — FieldInfo, SchemaInfo, ScorerResult, FieldMapping, MapResult
 - `tests/conftest.py` — FIXTURES_DIR (not FIXTURES), make_field(), make_schema()
 
+## Native / WASM kernels (cross-surface Rust core)
+- Scorers + `detect_domain` share a pyo3-free Rust core `infermap-core` (`packages/rust/extensions/infermap-core`). Two thin wrappers: `infermap-native` (pyo3/abi3 wheel → `infermap[native]`) and `infermap-wasm` (wasm-bindgen → TS opt-in backend). The core is the single source of truth; pure Python/TS are byte-identical lossy fallbacks.
+- Python dispatch: `infermap/_native_loader.py`. `INFERMAP_NATIVE=auto` (default) uses native per-component when the wheel symbol exists; `=1` requires it (raises); `=0` forces pure. A new kernel joins `_GATED_ON`/`_COMPONENT_SYMBOLS` only after `tests/test_native_parity.py` proves byte-identity. `check_native_symbols.py` reconciles host references vs kernel exports (silent-fallback guard).
+- TS/WASM is **opt-in** — `enableInfermapWasm()` must be called or the WASM path stays dormant (the MCP servers now call it at startup; a plain consumer must too). The `infermap://scorer-info` MCP resource reports the live backend on both surfaces.
+- pattern_type is the sharpest parity surface: three regex engines (Python `re`, Rust `regex`, JS `RegExp`) — the contract is ASCII-domain byte-identity; the `\d`/`\s` Unicode divergence is the documented edge. currency `\£\€` are dropped to `[$£€]` in the Rust pattern (the crate rejects those escapes).
+- When adding a TS re-export the barrel doesn't surface (e.g. `detectDomainDetailed` lived in `detect.ts` but not `core/index.ts`), surface it — cross-package consumers import from the barrel. Cross-surface `InferredSchema` must stamp `schema_version` (the Python dataclass defaults it; TS must set it explicitly).
+
 ## Gotchas
 - `print(polars_df)` crashes on Windows cp1252 terminal — use `.to_pandas().to_string()` instead
 - PyPI `publish.yml` needs `skip-existing: true` to handle manual+workflow publish conflicts
