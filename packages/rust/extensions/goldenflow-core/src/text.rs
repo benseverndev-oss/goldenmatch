@@ -156,35 +156,41 @@ pub fn remove_html_tags(s: &str) -> String {
 
 /// Streaming [`remove_html_tags`] (appends to `out`) for the columnar path.
 pub fn remove_html_tags_into(s: &str, out: &mut String) {
-    let chars: Vec<char> = s.chars().collect();
-    let n = chars.len();
+    // Byte scan: `<` (0x3C) and `>` (0x3E) are ASCII, so they never appear as
+    // UTF-8 continuation bytes -- scanning bytes is safe for any string, and we
+    // copy the KEPT runs verbatim via `push_str` (bulk memcpy, valid UTF-8), no
+    // `Vec<char>` and no per-char push. Byte-identical to the char version.
+    let b = s.as_bytes();
+    let n = b.len();
     let mut i = 0;
+    let mut keep_start = 0;
     while i < n {
-        if chars[i] == '<' {
+        if b[i] == b'<' {
             let mut j = i + 1;
-            while j < n && chars[j] != '>' {
+            while j < n && b[j] != b'>' {
                 j += 1;
             }
-            // matched `<[^>]+>`: at least one non-`>` char (j > i+1) then a `>`.
+            // matched `<[^>]+>`: >=1 non-`>` byte (j > i+1) then a `>`.
             if j < n && j > i + 1 {
+                out.push_str(&s[keep_start..i]);
                 i = j + 1;
+                keep_start = i;
                 continue;
             }
         }
-        out.push(chars[i]);
         i += 1;
     }
+    out.push_str(&s[keep_start..]);
 }
 
-/// `"http://"` (7 chars) or `"https://"` (8 chars) at `chars[i..]`; returns the
-/// index just past the `://`. `https` is tried first (regex `s?` is greedy).
-fn match_url_scheme(chars: &[char], i: usize) -> Option<usize> {
-    const HTTP: [char; 7] = ['h', 't', 't', 'p', ':', '/', '/'];
-    const HTTPS: [char; 8] = ['h', 't', 't', 'p', 's', ':', '/', '/'];
-    if chars[i..].starts_with(&HTTPS) {
-        Some(i + HTTPS.len())
-    } else if chars[i..].starts_with(&HTTP) {
-        Some(i + HTTP.len())
+/// `"http://"` (7 bytes) or `"https://"` (8 bytes) at `b[i..]`; returns the byte
+/// index just past the `://`. `https` is tried first (regex `s?` is greedy). The
+/// scheme is ASCII, so a byte compare is byte-identical to matching chars.
+fn match_url_scheme(b: &[u8], i: usize) -> Option<usize> {
+    if b[i..].starts_with(b"https://") {
+        Some(i + 8)
+    } else if b[i..].starts_with(b"http://") {
+        Some(i + 7)
     } else {
         None
     }
@@ -201,24 +207,36 @@ pub fn remove_urls(s: &str) -> String {
 
 /// Streaming [`remove_urls`] (appends to `out`) for the columnar path.
 pub fn remove_urls_into(s: &str, out: &mut String) {
-    let chars: Vec<char> = s.chars().collect();
-    let n = chars.len();
+    // Byte scan for the ASCII scheme; the `\S+` tail is Unicode-whitespace-aware
+    // so we advance it char-by-char (whitespace can be multi-byte). Kept runs are
+    // copied verbatim via `push_str` -- no `Vec<char>`. Byte-identical.
+    let b = s.as_bytes();
+    let n = b.len();
     let mut i = 0;
+    let mut keep_start = 0;
     while i < n {
-        if let Some(after) = match_url_scheme(&chars, i) {
+        if let Some(after) = match_url_scheme(b, i) {
+            // `\S+`: advance over non-whitespace chars from `after`.
             let mut j = after;
-            while j < n && !chars[j].is_whitespace() {
-                j += 1;
+            while j < n {
+                let c = s[j..].chars().next().unwrap();
+                if c.is_whitespace() {
+                    break;
+                }
+                j += c.len_utf8();
             }
             if j > after {
                 // scheme + `\S+` (>=1 non-ws char) -> drop the whole URL.
+                out.push_str(&s[keep_start..i]);
                 i = j;
+                keep_start = i;
                 continue;
             }
         }
-        out.push(chars[i]);
-        i += 1;
+        // not a URL start: advance one char (i is at a char boundary).
+        i += s[i..].chars().next().unwrap().len_utf8();
     }
+    out.push_str(&s[keep_start..]);
 }
 
 /// Remove ASCII digit characters. The old polars `\d` was Unicode-aware; this
@@ -258,28 +276,35 @@ pub fn remove_punctuation_into(s: &str, out: &mut String) {
 /// dot, zero-or-more digits) joined by single spaces. ASCII digits only
 /// (documented boundary). Byte-identical to `text.py::extract_numbers`.
 pub fn extract_numbers(s: &str) -> String {
-    let chars: Vec<char> = s.chars().collect();
-    let n = chars.len();
-    let mut nums: Vec<String> = Vec::new();
+    // Byte scan: digits and `.` are ASCII single bytes (never UTF-8 continuation
+    // bytes), so non-ASCII chars are skipped byte-wise and each number run is an
+    // ASCII `&str` slice appended directly (no `Vec<char>`, no `Vec<String>`).
+    // Byte-identical to the char version.
+    let b = s.as_bytes();
+    let n = b.len();
+    let mut out = String::new();
     let mut i = 0;
     while i < n {
-        if chars[i].is_ascii_digit() {
+        if b[i].is_ascii_digit() {
             let start = i;
-            while i < n && chars[i].is_ascii_digit() {
+            while i < n && b[i].is_ascii_digit() {
                 i += 1; // \d+
             }
-            if i < n && chars[i] == '.' {
+            if i < n && b[i] == b'.' {
                 i += 1; // greedy \.?
-                while i < n && chars[i].is_ascii_digit() {
+                while i < n && b[i].is_ascii_digit() {
                     i += 1; // \d*
                 }
             }
-            nums.push(chars[start..i].iter().collect());
+            if !out.is_empty() {
+                out.push(' ');
+            }
+            out.push_str(&s[start..i]);
         } else {
             i += 1;
         }
     }
-    nums.join(" ")
+    out
 }
 
 /// True if `c` is in the emoji codepoint set (the exact ranges of the Python

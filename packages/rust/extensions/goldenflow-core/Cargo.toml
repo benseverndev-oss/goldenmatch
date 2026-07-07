@@ -8,7 +8,7 @@
 
 [package]
 name = "goldenflow-core"
-version = "0.9.0"
+version = "0.10.0"
 edition = "2021"
 license = "MIT"
 authors = ["Ben Severn <benzsevern@gmail.com>"]
@@ -49,3 +49,7 @@ required-features = ["arrow"]
 name = "chain_apply"
 harness = false
 required-features = ["arrow"]
+
+[[bench]]
+name = "kernel_rank"
+harness = false
