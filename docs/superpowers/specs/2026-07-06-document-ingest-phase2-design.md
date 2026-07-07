@@ -31,12 +31,21 @@ This spec's branch is stacked on `feat/document-image-ingest`.
 | `goldenmatch/documents/suggest.py` | `suggest_schema(pages, *, extractor_or_transport, model) -> TargetSchema`: VLM proposes fields from a sample doc | reuses the injectable-transport pattern from `vlm_backend.py`; offline-testable |
 | `goldenmatch/mcp/document_tools.py` | `DOCUMENT_TOOLS = [Tool(documents_suggest_schema…), Tool(documents_ingest…)]` + `handle_document_tool(name, args)` | mirrors `agent_tools.py` (`AGENT_TOOLS` + `handle_agent_tool`) |
 | `goldenmatch/cli/ingest_docs.py` | `ingest_docs_app` (typer sub-app) with `suggest-schema` + `run` commands | mirrors `identity_app`/`memory_app` sub-app style |
-| wire-in: `goldenmatch/mcp/server.py` | import `DOCUMENT_TOOLS` + dispatch to `handle_document_tool` alongside the other `*_TOOLS` | follow the existing `_BASE_TOOLS`/`AGENT_TOOLS` wiring |
+| wire-in: `goldenmatch/mcp/server.py` | register `DOCUMENT_TOOLS` + `handle_document_tool` in **all four** touch points (see below) | mirrors each existing `*_TOOL_NAMES` frozenset |
 | wire-in: `goldenmatch/cli/main.py` | `app.add_typer(ingest_docs_app, name="ingest-docs")` | mirrors `identity_app` registration |
 
-`suggest.py` reuses `loader.load_pages` for the sample and the same base64-data-URI + injectable
-`transport` mechanism as `vlm_backend.py` (do not duplicate the transport; factor the shared
-`_urllib_transport` / payload-image helper if that keeps each file focused).
+**MCP wiring is four places, not one** (each existing `*_TOOLS` pair is registered in all of them;
+missing one — e.g. the aggregator `dispatch()` — silently breaks that access path): (1) the
+module-level `TOOLS` union list, (2) `create_server()`'s inline `list_tools()` return, (3)
+`call_tool()`'s dispatch chain, (4) the standalone `dispatch()` used by the goldensuite-mcp
+aggregator. The plan must enumerate all four.
+
+`suggest.py` reuses only the **mechanical** halves of `vlm_backend.py`: `loader.load_pages` for the
+sample, and the base64-data-URI image encoding + injectable `transport` (factor the shared
+`_urllib_transport` / image-payload helper out of `vlm_backend.py` so both files import it rather
+than duplicating). The **prompt is written fresh** — `vlm_backend._instruction()` walks a known
+`TargetSchema` to extract; suggestion has no schema yet and needs a different prompt asking the VLM
+to *propose* fields (name/kind/hint). Do NOT try to reuse `_instruction()`.
 
 ## Data flow
 
@@ -67,8 +76,12 @@ This spec's branch is stacked on `feat/document-image-ingest`.
 - MCP `document_tools`: call `handle_document_tool` with a `FakeExtractor`/fake transport injected;
   assert the returned JSON shape for both tools. No network.
 - CLI `ingest-docs`: use typer's `CliRunner`; inject the fake backend by monkeypatching
-  `resolve_extractor` (or a small documented test seam). Assert `suggest-schema` writes a valid file
-  and `run` writes the records file + non-zero rows.
+  `resolve_extractor` **at the reference the CLI module imported** (`goldenmatch.cli.ingest_docs
+  .resolve_extractor`, not `documents.config.resolve_extractor`) — patching the wrong reference is a
+  known foot-gun here. Assert `suggest-schema` writes a valid file and `run` writes the records file
+  + non-zero rows.
+- The two MCP tools' `inputSchema` arg names (`paths`, `schema_path`/`schema`, `out_path`,
+  `backend`, `model`) are spelled out in the plan, not here.
 - One optional gated live smoke (`OPENAI_API_KEY_PERSONAL`), excluded from CI.
 
 ## Scope (YAGNI)
