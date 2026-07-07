@@ -108,7 +108,23 @@ jobs:
 
       - name: Pack (dry-run validation)
         if: inputs.dry_run == 'true'
-        run: pnpm pack
+        run: |
+          pnpm pack
+          # When build_wasm is on, PROVE the artifact actually made it into the
+          # packed tarball (the whole point — a gitignored artifact silently
+          # dropped means enableWasm() is inert for published users).
+          if [ "${{ inputs.build_wasm }}" = "true" ]; then
+            TGZ="$(ls -1 *.tgz | head -1)"
+            echo "Tarball: $TGZ"
+            if tar tzf "$TGZ" | grep -qE '\.wasm$'; then
+              echo "OK: .wasm present in the tarball:"
+              tar tzf "$TGZ" | grep -E '\.wasm(\.js)?$' || true
+            else
+              echo "ERROR: build_wasm=true but NO .wasm in the packed tarball" >&2
+              tar tzf "$TGZ" | grep -i wasm || echo "(no wasm-related files at all)"
+              exit 1
+            fi
+          fi
 
       - name: Publish to npm
         if: inputs.dry_run != 'true'
