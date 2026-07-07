@@ -357,6 +357,40 @@ def test_dispatch_memory_loop(tmp_path):
     assert stats["total_corrections"] == 1
 
 
+def test_dispatch_documents_ingest(tmp_path, monkeypatch):
+    import goldenmatch.mcp.document_tools as dt
+    from goldenmatch.a2a.skills import dispatch_skill
+    from goldenmatch.documents.extractor import FakeExtractor
+    from goldenmatch.documents.types import ExtractedRow, ExtractResult, Field, TargetSchema
+    from PIL import Image
+
+    p = tmp_path / "a.png"
+    Image.new("RGB", (20, 20), "white").save(p)
+    schema = TargetSchema([Field("full_name"), Field("email")])
+    row = ExtractedRow.from_partial({"full_name": "Ada", "email": "a@x.io"}, {},
+                                    schema, source_file="", source_page=0)
+    monkeypatch.setattr(dt, "resolve_extractor", lambda b, m: FakeExtractor([ExtractResult(rows=[row])]))
+    out = dispatch_skill("documents_ingest", {
+        "paths": [str(p)],
+        "schema": {"fields": [{"name": "full_name"}, {"name": "email"}]},
+    })
+    assert out["report"]["n_rows"] == 1
+    assert out["records"][0]["full_name"] == "Ada"
+
+
+def test_dispatch_documents_suggest_schema(tmp_path, monkeypatch):
+    import goldenmatch.mcp.document_tools as dt
+    from goldenmatch.a2a.skills import dispatch_skill
+    from goldenmatch.documents.types import Field, TargetSchema
+    from PIL import Image
+
+    p = tmp_path / "s.png"; Image.new("RGB", (10, 10), "white").save(p)
+    monkeypatch.setattr(dt, "suggest_schema_from_file",
+                        lambda path, **k: TargetSchema([Field("full_name"), Field("email", kind="email")]))
+    out = dispatch_skill("documents_suggest_schema", {"sample_path": str(p)})
+    assert out["schema"]["fields"][0]["name"] == "full_name"
+
+
 def test_agent_card_has_quality_and_transform_skills():
     from goldenmatch.a2a.server import build_agent_card
 

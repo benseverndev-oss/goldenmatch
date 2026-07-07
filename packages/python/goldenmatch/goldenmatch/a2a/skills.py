@@ -463,6 +463,10 @@ def dispatch_skill(skill_id: str, params: dict, allow_pprl: bool = False) -> dic
 
         return {"suggestions": serialize_suggestions(suggestions, verified=True)}
 
+    if skill_id in ("documents_ingest", "documents_suggest_schema"):
+        from goldenmatch.mcp.document_tools import handle_document_tool
+        return handle_document_tool(skill_id, params)
+
     raise ValueError(f"Unknown skill: {skill_id}")
 
 
