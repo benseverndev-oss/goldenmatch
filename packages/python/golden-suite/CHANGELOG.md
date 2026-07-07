@@ -4,6 +4,17 @@ All notable changes to golden-suite are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic
 versioning.
 
+## [0.1.6] - 2026-07-06
+
+### Changed
+- Bumped the goldenflow-family floors after the nullable fused-apply release
+  (lockstep policy): **`goldenflow>=1.16.0`** (was `>=1.15.0`) and
+  **`goldenflow-native>=0.14.0`** (was `>=0.13.0`). goldenflow 1.16.0 extends the
+  fused columnar apply to the `Option`-returning URL / company / email families
+  (`url_normalize`, `company_normalize`, `email_mask`, …) — a run of those fuses
+  into one native Arrow pass, byte-identical output (nulls included); goldenflow-native
+  0.14.0 ships the `apply_chain_nullable_arrow` kernel symbol they need.
+
 ## [0.1.5] - 2026-07-06
 
 ### Changed

@@ -32,8 +32,10 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(chain::apply_chain_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(chain::apply_chain_ops_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(chain::apply_chain_f64_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(chain::apply_chain_nullable_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(chain::fusable_kernel_names, m)?)?;
     m.add_function(wrap_pyfunction!(chain::fusable_f64_kernel_names, m)?)?;
+    m.add_function(wrap_pyfunction!(chain::fusable_nullable_kernel_names, m)?)?;
     m.add_function(wrap_pyfunction!(company::company_normalize_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(company::company_strip_legal_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(company::company_extract_legal_arrow, m)?)?;

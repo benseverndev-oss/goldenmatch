@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.16.0 (2026-07-06)
+
+Pillar-1 (evict Polars from the transform execution path): the fused columnar apply now covers a **third kernel shape** — the `Option`-returning URL / company / email families — so those chains fuse too. Needs `goldenflow-native>=0.14.0`.
+
+- **Nullable (`Option<String>`) fused chains.** A run of owned URL (`url_normalize`/`url_strip_tracking`/`url_strip_www`/`url_canonical`/`url_extract_domain`), company (`company_normalize`/`company_strip_legal`/`company_extract_legal`), and email (`email_mask`/`email_extract_domain`) transforms now fuses into ONE native pass (`goldenflow_core::chain::apply_chain_nullable` → native `apply_chain_nullable_arrow`). A value a kernel can't parse becomes a null cell that passes through the rest of the run — exactly as the per-transform path does (each transform's `map_str_to_str` skips null input, nulls on `None`). Byte-identical output frame (nulls included) AND audit manifest; the per-kernel affected count matches Polars' `(before != after).sum()`, which counts a row only when both sides are non-null and differ (a non-null→null row isn't counted).
+- **Mixed runs.** A nullable run may include the total/parameterized string kernels (`strip`/`lowercase`/`truncate`/…) alongside the `Option`-returning ones — e.g. `strip → lowercase → url_normalize → url_strip_www` fuses as a single pass. Symbol-aware: a pre-0.14.0 wheel keeps fusing the total + numeric families and only the nullable ops break a run (no regression).
+
 ## 1.15.0 (2026-07-06)
 
 Pillar-1 (evict Polars from the transform execution path): the fused columnar apply now covers a **second dtype and the parameterized string ops**, so more real chains collapse into one native Arrow pass (byte-identical output, lower peak RSS). Needs `goldenflow-native>=0.13.0` (republished with the new kernel symbols).
