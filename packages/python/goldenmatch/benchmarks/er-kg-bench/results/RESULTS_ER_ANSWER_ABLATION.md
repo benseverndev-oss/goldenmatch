@@ -90,3 +90,14 @@ fix it (shrinking drops recall first). **The lever is path-aware retrieval** -- 
 the query-relevant path out of the neighborhood before synthesis -- NOT synthesizer tuning and
 NOT ball size. (ER's retrieval advantage still stands; this is about converting a
 correct-but-noisy neighborhood into the answer.)
+
+## Path-aware retrieval — Lever A refuted (2026-07-07)
+
+The "path-selection is the lever" conclusion above spawned three candidate levers
+(`docs/superpowers/specs/2026-07-07-goldengraph-path-aware-retrieval-design.md`). **Lever A**
+(wire the existing `filter_subgraph_to_paths` topology prune into the local ball) is **refuted
+for ~$0** by the recall guard alone — the anchor-to-anchor prune has no operating point that
+both keeps the single-anchor answer chain and shrinks the neighborhood (recall-safe ⟺ ~no
+pruning). Full tables + reasoning: `results/RESULTS_PATH_AWARE_RETRIEVAL.md`. Route → Lever B
+(engineered-only mechanism check) / Lever C (answer-candidate-scored prune, recall-safe by
+construction).
