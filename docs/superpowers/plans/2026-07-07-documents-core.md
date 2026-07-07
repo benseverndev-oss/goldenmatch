@@ -147,7 +147,7 @@ Mirror `schema_io.schema_from_dict`/`schema_to_dict` + `types.Field` defaults EX
   }
   fn default_kind() -> String { "text".to_string() }
 
-  #[derive(Clone, Debug, PartialEq)]
+  #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
   pub struct TargetSchema { pub fields: Vec<Field> }
 
   impl TargetSchema {
@@ -176,19 +176,20 @@ Mirror `schema_io.schema_from_dict`/`schema_to_dict` + `types.Field` defaults EX
   }
 
   /// Canonical JSON (always name/kind/hint), byte-matching schema_io.schema_to_dict + json.dumps.
+  /// Serialize the STRUCT (serde emits struct fields in DECLARATION order: name, kind, hint) —
+  /// do NOT use `serde_json::json!({...})`, whose backing map is a BTreeMap and would emit keys
+  /// ALPHABETICALLY (hint, kind, name), failing the Step-1 assertion and diverging from Python's
+  /// `{"name","kind","hint"}` dict order.
   pub fn schema_to_json(schema: &TargetSchema) -> String {
-      let items: Vec<serde_json::Value> = schema.fields.iter().map(|f| serde_json::json!({
-          "name": f.name, "kind": f.kind, "hint": f.hint,
-      })).collect();
-      serde_json::json!({"fields": items}).to_string()
+      serde_json::to_string(schema).expect("schema serializes")
   }
   ```
-  NOTE: `serde_json::Value::to_string()` emits compact JSON with keys in insertion order for
-  `json!` objects — verify the corpus (Task 7) compares against Python `json.dumps(...,)` with the
-  SAME separators. If Python uses `indent`/spaces anywhere, normalize both sides in the corpus
-  comparison (parse-then-compare) rather than raw-string compare. (schema_to_dict returns a dict;
-  the Python side dumps it — Task 7 compares the parsed dict, not the raw string, to avoid
-  whitespace-formatting false diffs.)
+  NOTE (whitespace): Python `json.dumps` defaults to `", "` / `": "` separators (a space after
+  each `,` and `:`), while Rust `to_string()` is compact (no spaces). So the RAW strings differ by
+  whitespace. Two consequences: (a) the Task-2 Step-1 unit test must assert the **compact** Rust
+  form (what `to_string` produces); (b) Task 7's corpus compares the **parsed** dict for
+  schema/normalize, never raw strings, so separator differences never cause a false parity diff.
+  Key ORDER (name,kind,hint) IS preserved by struct serialization and matches Python.
 - [ ] **Step 4:** `cargo test -p goldenmatch-documents-core schema` → passes.
 - [ ] **Step 5: Commit** `feat(documents-core): schema validate + round-trip kernel`.
 
@@ -239,16 +240,19 @@ unstripped — do NOT "fix" this).
       if t.starts_with("```") {
           if let Some(nl) = t.find('\n') {
               t = t[nl + 1..].to_string();
-              if let Some(stripped) = t.strip_suffix("```") { t = stripped.to_string(); }
+              // Python `rsplit("```", 1)[0]`: drop from the LAST ``` (anywhere), NOT just a
+              // trailing one. `strip_suffix` is WRONG here (diverges when content follows the
+              // closing fence). Use rfind to mirror rsplit.
+              if let Some(idx) = t.rfind("```") { t = t[..idx].to_string(); }
           } // no newline -> leave as-is (Python edge case)
       }
       Ok(t.trim().to_string())
   }
   ```
-  Verify the Python `_strip_fence`/`parse_message_text` split semantics: Python does
-  `text.split("\n",1)[1].rsplit("```",1)[0]` — i.e. drop everything up to & incl. the first
-  newline, then drop from the LAST ```` ``` ````. The Rust above matches (find first `\n`,
-  strip_suffix). Confirm against the real source before finalizing.
+  This mirrors Python `text.split("\n",1)[1].rsplit("```",1)[0] if "\n" in text else text` (inside
+  the `startswith("```")` guard). **Read the real `_openai.parse_message_text` in this worktree and
+  match it exactly** — the corpus (Task 7, generated from that impl) is the final arbiter; add a
+  corpus row with trailing content after the closing fence to lock the `rsplit` semantics.
 - [ ] **Step 4:** `cargo test ... parse` → passes.
 - [ ] **Step 5: Commit** `feat(documents-core): response-parse kernel (byte-parity, fence edge case)`.
 
@@ -291,7 +295,9 @@ unstripped — do NOT "fix" this).
   pub fn extract_instruction(schema: &TargetSchema) -> String {
       let lines: Vec<String> = schema.fields.iter().map(|f| {
           let base = format!("- \"{}\" ({})", f.name, f.kind);
-          match &f.hint { Some(h) => format!("{base}: {h}"), None => base }
+          // Python: `(f": {f.hint}" if f.hint else "")` -- an EMPTY-STRING hint is falsy, so no
+          // `: ` is appended. `Some("")` must behave like None here.
+          match &f.hint { Some(h) if !h.is_empty() => format!("{base}: {h}"), _ => base }
       }).collect();
       let cols = schema.column_names().join(", ");
       format!(
@@ -402,6 +408,15 @@ string; **float → Python `str(float)`** (shortest round-trip repr — the hard
   ```
   Implement `row_confidence` plainly: if `confidence` empty → 0.0, else min of values (do NOT use
   the pseudo `.pipe_or_zero_if_empty`; that's a placeholder — write the explicit empty check).
+
+  **COLUMN ORDER (parity-critical):** Python `from_partial` builds `values`/`confidence` in
+  **schema-column order** (`{c: ... for c in cols}`), and `assemble.py` infers the DataFrame column
+  order from that dict's key order. A `BTreeMap` sorts alphabetically, and the JSON round-trip
+  through the shim re-sorts anyway — so **do not rely on the Rust map's order**. Instead, the
+  Python native call site (Task 6 Step 5) MUST re-impose column order after parsing the native
+  JSON: `values = {c: parsed_values.get(c) for c in cols}` (and likewise confidence). That makes
+  native == pure-Python regardless of the Rust map type. The Task 7 corpus asserts ordered
+  `[col, val]` pairs so a reordering can't slip through.
 - [ ] **Step 4:** `cargo test ... normalize` → passes.
 - [ ] **Step 5: FLOAT PARITY note for the executor:** the corpus (Task 7) MUST include float values.
   If Rust `serde_json` float `to_string()` diverges from Python `str(float)` on any corpus row and
@@ -473,8 +488,15 @@ string; **float → Python `str(float)`** (shortest round-trip repr — the hard
       <existing pure-Python body>
   ```
   Each site keeps its current tests green. `parse_message_text` native returns text or raises
-  ValueError (map the PyValueError message back). `from_partial` calls `documents_normalize_record`
-  and rebuilds the `ExtractedRow`. `_instruction`/suggest prompt call the prompt kernels.
+  ValueError (the message wording may differ from pure-Python — that's fine, error parity is by
+  outcome per Task 7). `from_partial` calls `documents_normalize_record`, parses its
+  `{"values","confidence"}` JSON, then **rebuilds both dicts in schema-column order**
+  (`{c: pv.get(c) for c in cols}` / `{c: pc.get(c, 0.0) for c in cols}`) before constructing the
+  `ExtractedRow` — this is the column-order fix from Task 5. `_instruction`/suggest prompt call the
+  prompt kernels (the suggest prompt is a bare `documents_suggest_prompt()` string).
+  Note: the normalize `values` coercion only ever sees JSON scalars (the VLM returns string/number/
+  bool/null per the prompt); non-scalar values (list/dict) are out of contract and need not match
+  Python `str()`.
 - [ ] **Step 6:** Run the full documents suite BOTH ways and confirm identical green:
   - native present: `"$PY" -m pytest tests/documents -q`
   - forced fallback: `GOLDENMATCH_NATIVE=0 "$PY" -m pytest tests/documents -q`
@@ -498,6 +520,17 @@ string; **float → Python `str(float)`** (shortest round-trip repr — the hard
   - If `native_enabled("documents")` and the symbol exists, ALSO run the native kernel → assert ==
     `expected`. Skip the native leg (with a reason) when native isn't importable, so the test is
     green on a pure-Python machine and strict in CI's `GOLDENMATCH_NATIVE=1` lane.
+  - **Error-case parity is by OUTCOME, not message text.** Rust and Python phrase the
+    envelope/malformed errors differently (Python surfaces the raw `KeyError`; Rust emits its own
+    string). For error rows the corpus records `expected: {"error": true}` and both legs assert
+    "raises / returns error" — do NOT assert the exact envelope message. The one shared exact
+    message is the truncation one (`finish_reason=length`), which both emit identically; that row
+    may assert the substring `"truncated"`. This keeps Task 6 Step 6's "identical green both ways"
+    true even though the envelope wording differs.
+  - **Normalize column ORDER:** the corpus's normalize `expected` records the values/confidence as
+    an ORDERED list of `[col, val]` pairs in schema-column order (or asserts key order explicitly),
+    since a plain dict compare wouldn't catch a reordering. See Task 5/6 — the Python `from_partial`
+    re-imposes schema-column order on the native result, so both legs match.
 - [ ] **Step 3:** Run: `"$PY" -m pytest tests/parity/test_documents_parity.py -q` (pure leg green;
   native leg green if built).
 - [ ] **Step 4: Commit** `test(documents): Rust==Python parity corpus`.
