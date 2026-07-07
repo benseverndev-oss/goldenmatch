@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "golden-suite"
-version = "0.1.7"
+version = "0.1.8"
 description = "One-line, perf-optimized install for the entire Golden Suite — goldenmatch, goldencheck, goldenflow, goldenpipe, GoldenSchema (infermap), goldenanalysis, native acceleration on by default"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
@@ -39,14 +39,14 @@ dependencies = [
     "goldenpipe[golden-suite]>=1.3",    # orchestrator + check/flow/match/analysis
     "goldenmatch>=2.8",                 # entity resolution: dedupe, match, golden records (>=2.8 mandates the B1 silent-corruption + healer fixes)
     "goldencheck>=1.4.1",               # data validation (rules discovered from your data; >=1.4.1 = rapidfuzz cell_quality)
-    "goldenflow>=1.16.0",                # transform / standardize / normalize (>=1.16.0 = nullable URL/company/email fused apply)
+    "goldenflow>=1.17.0",                # transform / standardize / normalize (>=1.17.0 = Polars-eviction columnar engine: CSV + in-memory, numeric + splits)
     "infermap>=0.5.1",                  # GoldenSchema: inference-driven schema mapping
     "goldenanalysis>=0.3",              # read-only cross-cutting metrics + reporting
     "goldencheck-types>=0.1",           # shared canonical field-type contracts
     # --- native acceleration (on by default; see note above) ---
     "goldenmatch-native>=0.1.12",       # >=0.1.12 carries perceptual + the current kernel surface
     "goldencheck-native>=0.1",
-    "goldenflow-native>=0.15.0",
+    "goldenflow-native>=0.24.0",        # >=0.24.0 carries the Polars-eviction columnar symbols (transform_csv, numeric/split columnar)
     "goldenanalysis-native>=0.1",
     # --- CLI (doctor / optimize) ---
     "typer>=0.12",
