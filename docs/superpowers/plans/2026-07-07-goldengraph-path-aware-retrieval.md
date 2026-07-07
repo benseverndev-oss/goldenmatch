@@ -156,6 +156,11 @@ is chain-decomposition (Lever B generalized), not a cheap prune.
   answer-match (baseline = freshly-run `none`, hard `--max-cost-usd`), Δ into
   `RESULTS_PATH_AWARE_RETRIEVAL.md` → Phase 4. Else → C refuted; record it; the path-focus family
   is exhausted on cheap signals and the deliverable becomes chain-decomposition (build).
+  - **OUTCOME (2026-07-07): C REFUTED.** Candidate recall pinned to Lever A's halo=1 floor
+    (0.667/0.600/0.538 on oracle), `top_c` sweep flat — the query-name embedding doesn't rank the
+    multi-hop answer end-node (it isn't named in the question). Both cheap signals (topology +
+    node embedding) fail; no prune of a recall-1.0 ball recovers the ~0.275. Deliverable → chain
+    decomposition. `results/RESULTS_PATH_AWARE_RETRIEVAL.md`.
 
 ## Phase 4 — land the winning lever
 

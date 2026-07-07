@@ -101,3 +101,12 @@ both keeps the single-anchor answer chain and shrinks the neighborhood (recall-s
 pruning). Full tables + reasoning: `results/RESULTS_PATH_AWARE_RETRIEVAL.md`. Route → Lever B
 (engineered-only mechanism check) / Lever C (answer-candidate-scored prune, recall-safe by
 construction).
+
+**Update — Lever C also refuted (2026-07-07).** The query-name-embedding candidate prune strands
+the same 33–46% of chains as blind topology (pinned to Lever A's halo=1 recall floor; raising
+`top_c` doesn't help). The multi-hop answer isn't named in the question, so its name embeds no
+closer than the distractors. **Both cheap path-selection signals — topology AND node embedding —
+fail to localize the single-anchor multi-hop answer; no prune of a recall-1.0 ball recovers the
+~0.275.** The isolated lever is chain decomposition (know the relation sequence to walk —
+`trace_chain` generalized to NL questions), a genuine build, not a cheap prune. See
+`results/RESULTS_PATH_AWARE_RETRIEVAL.md`.

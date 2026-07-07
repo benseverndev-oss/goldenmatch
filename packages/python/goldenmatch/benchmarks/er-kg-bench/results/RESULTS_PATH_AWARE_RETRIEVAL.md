@@ -68,3 +68,45 @@ lacks).
 construction), seed 7, n=40, `text-embedding-3-small` seeding. The recall guard is
 corpus-topology-driven and LLM-free, so it is robust to LLM noise, but a product default
 still needs the real-corpus (2WikiMultiHopQA) gate.
+
+## Lever C — answer-candidate-scored prune — REFUTED (recall guard, ~$0)
+
+Product gate `GOLDENGRAPH_LOCAL_FILTER=candidate` (`goldengraph/retrieve_paths.py::
+prune_to_candidate_paths`, default OFF). Unlike Lever A (blind anchor-to-anchor topology), C
+uses the query signal: it scores each reachable candidate END node by cosine of its canonical
+NAME against the question (reusing `seed_by_query`'s exact math — scores NODES, never edge
+predicates, dodging the 2026-06-22 trap), keeps only the seed→top-`c`-candidate shortest paths
++ `halo`=1. Same recall guard, n=40, multi-seed k=5, sweeping `top_c ∈ {2,3,5}`. **No
+answer-match LLM spend** — the guard is decisive.
+
+Bridge-recall of the pruned subgraph, `oracle` dial (perfect ER):
+
+| amb | none | top_c=2 | top_c=3 | top_c=5 | retention (top_c=3) |
+|-----|------|---------|---------|---------|---------------------|
+| 0.0 | 1.000 | 0.667 | 0.667 | 0.667 | ~0.60 |
+| 0.5 | 1.000 | 0.600 | 0.600 | 0.600 | ~0.59 |
+| 1.0 | 1.000 | 0.538 | 0.538 | 0.564 | ~0.59 |
+
+**Two decisive observations.** (1) Lever C's recall is pinned to the **same 0.667/0.600/0.538
+floor as Lever A at halo=1** — the extra candidate paths it keeps beyond the halo are *not* the
+answer nodes. (2) Raising `top_c` 2→5 barely moves recall while retention creeps up — even the
+top-5 embedding candidates miss the true answer end-node.
+
+**Why (the crux, mechanism verified).** The candidate mechanism is correct — a unit check
+confirms that when the embedder scores the answer node top, the chain to it *is* kept, and when
+it scores a distractor top, the answer is stranded (`scratch sanity.py`). The failure is the
+*signal*: for a multi-hop question the answer is **not named in the question**, so its NAME
+embeds no closer to the question than ~40 sibling distractors. Query-name similarity ranks
+near-seed distractors above the 3–4-hop answer, so the lever re-selects distractor paths and
+strands the chain — the same failure as blind topology, for a different reason.
+
+**Verdict:** Lever C refuted for ~$0. Combined with Lever A, **both cheap path-selection signals
+— graph topology AND query-name node embedding — fail to localize the single-anchor multi-hop
+answer at any pruning level.** The full ball already contains the chain (recall 1.0) yet answers
+~0.275; no structural/semantic *prune* of that ball recovers it. The lever is therefore NOT
+retrieval pruning — it is **knowing the relation sequence to walk** (chain decomposition: the
+`trace_chain` mechanism, generalized from the engineered template to natural-language questions).
+That is a genuine build (question → ordered relation chain), of the same order as the original
+Lever C proposal — and it is the real deliverable this measurement isolates. The two gates
+(`GOLDENGRAPH_LOCAL_FILTER=path|candidate`) ship as measured-off capabilities + the reusable
+harness; neither is a default candidate on this corpus.
