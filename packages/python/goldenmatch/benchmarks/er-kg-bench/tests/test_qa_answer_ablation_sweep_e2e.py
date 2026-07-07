@@ -8,7 +8,6 @@
 from __future__ import annotations
 
 import pytest
-
 from erkgbench.qa_e2e import answer_ablation_sweep as mod
 
 
