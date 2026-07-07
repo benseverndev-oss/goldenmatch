@@ -200,6 +200,8 @@ a2a_skills:
   - analyze_blocking
   - compare_clusters
   - configure
+  - documents_ingest
+  - documents_suggest_schema
   - identity_audit
   - identity_audit_seal
   - identity_audit_verify
