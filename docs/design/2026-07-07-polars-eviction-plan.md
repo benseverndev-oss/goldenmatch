@@ -83,3 +83,42 @@ until it passes both.
   but don't block on it.
 - Keep Polars as a first-class OPTIONAL backend (don't delete the fast path).
 - No output change ever — byte-identical to today, gated by the parity tests.
+
+## Progress + Phase 1b unblock (2026-07-07)
+
+**Shipped:** P0 (Frame seam, #1525) + P1 (`engine/columnar.py`, owned string
+transforms Polars-free via the native arrow-free `apply_chain_str_list`, #1527) —
+both byte-identical, parity-gated.
+
+**Measured, honest:** the P1 *list* substrate is ~3.3× SLOWER than Polars at 2M
+rows — the cost is Python-list marshaling (`Polars→list→Rust→list→Polars`), NOT the
+kernels. It is the correctness floor + a zero-dep fallback, not the perf substrate.
+
+**The "lighter AND faster" bar is reachable — key facts:**
+- **Weight math.** `[native]` today pulls polars(~35 MB) + pyarrow(~40 MB) +
+  native(~5 MB) ≈ **80 MB**. Evicting Polars but keeping pyarrow barely moves it,
+  and the fused path's speed uses `to_arrow`/`from_arrow`, which **require
+  pyarrow**. The real target is a native `Column` that holds Arrow buffers and
+  ingests them **without pyarrow** — then the stack is native ~5 MB alone.
+- **Unblock (verified).** Polars 1.40 `Series`/`DataFrame` expose
+  **`__arrow_c_stream__`** (the Arrow PyCapsule / C-Data interface) returning a
+  `PyCapsule` with **no pyarrow**; arrow-rs has the matching `ffi`/`ffi_stream`
+  import side. So the native layer can ingest Polars' Arrow **zero-copy and
+  pyarrow-free** — the linchpin for lighter-*and*-faster.
+
+**Phase 1b (the perf substrate) — precise plan.** A native `Column` in
+`goldenflow-native`:
+1. **Ingest:** read the `arrow_array_stream` PyCapsule → arrow-rs
+   `ArrowArrayStreamReader` → `ArrayData` (`arrow::ffi_stream`, `unsafe`).
+2. **Process:** `apply_chain` on the `ArrayData`, Column→Column, zero-copy — no
+   `from_arrow` back to Polars between transforms.
+3. **Egress:** wrap the result `ArrayData` in an `FFI_ArrowArrayStream` PyCapsule
+   (native implements `__arrow_c_stream__`); Polars / consumers import it.
+
+**Build discipline for 1b.** This is deep `unsafe` Arrow-FFI (raw C-Data pointers,
+PyCapsule lifetime) — a bug is a segfault, not a failed assert. Verify correctness
+by **parity** (safe); defer the **speed** number to **CI** (the dev box is too
+noisy — 263–362 ms for the same call). Do it as a focused unit, not rushed.
+`native-flow`'s arrow crate is `features = ["pyarrow"]`; 1b uses `arrow::ffi`
+(no new dep) or `pyo3-arrow`. Also: `goldenflow-native 0.16.0` (`apply_chain_str_list`)
+is not republished yet — batch that republish with 1b so the columnar path ships whole.
