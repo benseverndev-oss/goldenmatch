@@ -5,7 +5,12 @@ from __future__ import annotations
 
 import json
 
-from goldenmatch.documents._openai import Transport, image_blocks, urllib_transport
+from goldenmatch.documents._openai import (
+    Transport,
+    image_blocks,
+    parse_message_text,
+    urllib_transport,
+)
 from goldenmatch.documents.config import resolve_api_key
 from goldenmatch.documents.loader import load_pages
 from goldenmatch.documents.schema_io import schema_from_dict
@@ -36,17 +41,12 @@ def suggest_schema(pages: list[PageImage], *, transport: Transport,
             last = f"{type(e).__name__}: {e}"
     else:
         raise ValueError(f"schema suggestion failed: {last}")
-    choice = resp["choices"][0]
-    if choice.get("finish_reason") == "length":
-        raise ValueError("schema suggestion truncated (finish_reason=length); raise max_tokens")
-    text = choice["message"]["content"].strip()
-    if text.startswith("```"):
-        text = text.split("\n", 1)[1].rsplit("```", 1)[0] if "\n" in text else text
+    text = parse_message_text(resp)
     return schema_from_dict(json.loads(text))  # raises ValueError on empty/malformed
 
 
 def suggest_schema_from_file(path, *, backend: str = "vlm", model: str = "gpt-4o") -> TargetSchema:
     if backend != "vlm":
-        raise ValueError(f"unknown backend: {backend!r} (Phase 2 supports 'vlm')")
+        raise ValueError(f"unsupported backend: {backend!r} (only 'vlm' is supported)")
     return suggest_schema(load_pages(path), transport=urllib_transport(resolve_api_key()),
                           model=model)

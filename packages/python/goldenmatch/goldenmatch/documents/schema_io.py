@@ -18,6 +18,8 @@ def schema_from_dict(d: dict) -> TargetSchema:
         raise ValueError("schema must be an object with a 'fields' list")
     fields = []
     for item in d["fields"]:
+        if not isinstance(item, dict):
+            raise ValueError(f"schema field must be an object, got {item!r}")
         if "name" not in item:
             raise ValueError(f"schema field missing 'name': {item!r}")
         fields.append(Field(name=item["name"], kind=item.get("kind", "text"),

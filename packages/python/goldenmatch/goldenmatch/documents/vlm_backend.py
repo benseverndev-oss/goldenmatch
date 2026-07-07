@@ -6,7 +6,12 @@ from __future__ import annotations
 
 import json
 
-from goldenmatch.documents._openai import Transport, image_blocks, urllib_transport
+from goldenmatch.documents._openai import (
+    Transport,
+    image_blocks,
+    parse_message_text,
+    urllib_transport,
+)
 from goldenmatch.documents.types import (
     ExtractedRow,
     ExtractResult,
@@ -62,13 +67,8 @@ class VLMExtractor:
         # Response received: parsing is deterministic (temperature=0), so a parse
         # failure is not retried -- it would just reproduce the same bad response.
         try:
-            choice = resp["choices"][0]
-            if choice.get("finish_reason") == "length":
-                return ExtractResult(
-                    rows=[],
-                    error="response truncated (finish_reason=length); increase max_tokens")
-            text = choice["message"]["content"]
-            data = json.loads(_strip_fence(text))
+            text = parse_message_text(resp)
+            data = json.loads(text)
             rows = [
                 ExtractedRow.from_partial(
                     rec.get("values", {}), rec.get("confidence", {}), schema,
@@ -78,12 +78,3 @@ class VLMExtractor:
             return ExtractResult(rows=rows)
         except (KeyError, ValueError, TypeError, IndexError) as e:
             return ExtractResult(rows=[], error=f"parse: {type(e).__name__}: {e}")
-
-
-def _strip_fence(text: str) -> str:
-    t = text.strip()
-    if t.startswith("```"):
-        t = t.split("\n", 1)[1] if "\n" in t else t
-        if t.endswith("```"):
-            t = t[: -3]
-    return t.strip()

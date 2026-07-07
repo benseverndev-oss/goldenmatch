@@ -54,7 +54,7 @@ def test_missing_key_for_vlm_backend_fails_fast(tmp_path, monkeypatch):
 
 def test_unknown_backend_fails_fast(tmp_path):
     a = tmp_path / "a.png"; _img(a)
-    with pytest.raises(ValueError, match="unknown backend"):
+    with pytest.raises(ValueError, match="unsupported backend"):
         ingest_documents([a], SCHEMA, backend="nope")
 
 

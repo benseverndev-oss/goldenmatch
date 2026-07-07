@@ -20,5 +20,5 @@ def resolve_api_key() -> str:
 
 def resolve_extractor(backend: str, model: str) -> Extractor:
     if backend != "vlm":
-        raise ValueError(f"unknown backend: {backend!r} (Phase 1 supports 'vlm')")
+        raise ValueError(f"unsupported backend: {backend!r} (only 'vlm' is supported)")
     return VLMExtractor(api_key=resolve_api_key(), model=model)

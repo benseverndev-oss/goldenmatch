@@ -27,6 +27,24 @@ def urllib_transport(api_key: str) -> Transport:
     return send
 
 
+def parse_message_text(resp: dict) -> str:
+    """Assistant message text from a chat-completions response. Raises ValueError on a
+    truncated (finish_reason=length) or malformed envelope; strips a ```json ... ``` fence."""
+    try:
+        choice = resp["choices"][0]
+    except (KeyError, IndexError, TypeError) as e:
+        raise ValueError(f"unexpected response envelope: {e}") from e
+    if choice.get("finish_reason") == "length":
+        raise ValueError("response truncated (finish_reason=length); increase max_tokens")
+    text = (choice.get("message") or {}).get("content")
+    if not isinstance(text, str):
+        raise ValueError("response has no message content")
+    text = text.strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[1].rsplit("```", 1)[0] if "\n" in text else text
+    return text.strip()
+
+
 def image_blocks(pages: list[PageImage]) -> list[dict]:
     out = []
     for pg in pages:

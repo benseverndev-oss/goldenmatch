@@ -32,3 +32,8 @@ def test_load_rejects_malformed(tmp_path):
     p.write_text('{"nope": 1}')
     with pytest.raises(ValueError, match="fields"):
         load_schema(p)
+
+
+def test_load_rejects_non_dict_field():
+    with pytest.raises(ValueError):
+        schema_from_dict({"fields": ["full_name"]})
