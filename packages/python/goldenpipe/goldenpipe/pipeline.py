@@ -32,6 +32,10 @@ class Pipeline:
         # When the caller supplied an explicit PipelineConfig (YAML), the
         # YAML is authoritative and identity_opts is ignored.
         self._identity_opts = identity_opts
+        # Set by _plan_config on each run; exposes the last plan-first
+        # auto-config decision (rule_name, confidence, evidence) for
+        # introspection. None until the brain has planned at least once.
+        self._last_plan = None
 
     def run(
         self,
@@ -99,7 +103,7 @@ class Pipeline:
                 errors=["No source file or DataFrame provided"],
             )
 
-        config = self._config or self._auto_config()
+        config = self._config or self._plan_config(ctx)
 
         try:
             plan = Resolver.resolve(config, self._registry)
@@ -114,6 +118,29 @@ class Pipeline:
         runner = Runner(registry=self._registry)
         stages = runner.run(plan, ctx)
         return Reporter.build(ctx, stages)
+
+    def _plan_config(self, ctx: PipeContext) -> PipelineConfig:
+        """Plan-first auto-config: profile the loaded context, run the rule
+        table, and materialize the chosen plan into a PipelineConfig.
+
+        This is the "brain" (parity with GoldenMatch's controller): the shape
+        of the pipeline is DECIDED from the data + InferMap-inferred schema
+        rather than being the fixed scan/transform/dedupe list. The portable
+        decision core (``autoconfig_planner``) is kept free of Polars/Pydantic
+        for the later ``goldenpipe-core`` Rust port; this method is the host
+        glue bracket.
+        """
+        from goldenpipe.autoconfig_glue import plan_to_config, profile_context
+        from goldenpipe.autoconfig_planner import plan_pipeline
+
+        profile = profile_context(ctx)
+        plan = plan_pipeline(profile)
+        self._last_plan = plan
+        return plan_to_config(
+            plan,
+            self._registry.list_all(),
+            self._identity_opts,
+        )
 
     def _auto_config(self) -> PipelineConfig:
         available = self._registry.list_all()

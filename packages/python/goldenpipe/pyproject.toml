@@ -54,6 +54,7 @@ Changelog = "https://github.com/benseverndev-oss/goldenmatch/blob/main/packages/
 Author = "https://bensevern.dev"
 
 [project.entry-points."goldenpipe.stages"]
+"infer_schema" = "goldenpipe.stages.infer_schema:infer_schema_stage"
 "goldencheck.scan" = "goldenpipe.adapters.check:ScanStage"
 "goldenflow.transform" = "goldenpipe.adapters.flow:TransformStage"
 "goldenmatch.dedupe" = "goldenpipe.adapters.match:DedupeStage"
