@@ -1,3 +1,5 @@
+import io
+
 import fitz  # pymupdf
 from goldenmatch.documents.loader import load_pages
 from PIL import Image
@@ -37,3 +39,22 @@ def test_load_unsupported_extension_raises(tmp_path):
     import pytest
     with pytest.raises(ValueError, match="unsupported"):
         load_pages(p)
+
+
+def test_rgba_image_composited_on_white(tmp_path):
+    # fully transparent RGBA canvas with one small opaque black square in the middle
+    img = Image.new("RGBA", (40, 40), (0, 0, 0, 0))
+    for x in range(15, 20):
+        for y in range(15, 20):
+            img.putpixel((x, y), (0, 0, 0, 255))
+    p = tmp_path / "card.png"
+    img.save(p)
+
+    pages = load_pages(p)
+    assert len(pages) == 1
+    assert pages[0].png_bytes[:8] == b"\x89PNG\r\n\x1a\n"
+
+    with Image.open(io.BytesIO(pages[0].png_bytes)) as out:
+        assert out.mode == "RGB"
+        corner = out.getpixel((0, 0))
+        assert all(c > 240 for c in corner)  # transparent area composited onto white
