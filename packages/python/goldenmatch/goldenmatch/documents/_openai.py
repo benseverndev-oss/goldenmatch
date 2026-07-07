@@ -30,6 +30,12 @@ def urllib_transport(api_key: str) -> Transport:
 def parse_message_text(resp: dict) -> str:
     """Assistant message text from a chat-completions response. Raises ValueError on a
     truncated (finish_reason=length) or malformed envelope; strips a ```json ... ``` fence."""
+    from goldenmatch.core._native_loader import native_enabled, native_module
+
+    if native_enabled("documents") and (nm := native_module()) is not None and hasattr(
+        nm, "documents_parse_message_text"
+    ):
+        return nm.documents_parse_message_text(json.dumps(resp))
     try:
         choice = resp["choices"][0]
     except (KeyError, IndexError, TypeError) as e:

@@ -170,6 +170,8 @@ _COMPONENT_SYMBOLS: dict[str, tuple[str, ...]] = {
     "simhash": ("sketch_simhash_band_hashes_batch",),  # same byte-exact kernel as sketch
     "pprl_bloom": ("bloom_clk_batch",),
     "perceptual": ("perceptual_phash_image",),
+    "documents": ("documents_parse_message_text", "documents_schema_validate",
+                  "documents_extract_instruction", "documents_normalize_record"),
     # "sail_scoring" is intentionally absent -> _FALLBACK_ONLY below.
 }
 
