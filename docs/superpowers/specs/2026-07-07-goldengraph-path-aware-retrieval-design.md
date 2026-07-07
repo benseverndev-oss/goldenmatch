@@ -111,9 +111,10 @@ measured gap survives.** Heed the negative result: **no verbatim predicate-word 
   (proven the wrong knob); any predicate-verbatim focus (proven worse).
 
 ## 6. Open questions (resolve before the plan)
-1. Does the head-to-head (`RESULTS_QA_E2E`) run `local` or `auto` today? If `local`, B1 may be a
-   one-line config win; if `auto`, `trace_chain` is already in play and the gap is its
-   plan-extraction accuracy (→ Lever C).
+1. ~~Does the head-to-head run `local` or `auto` today?~~ **RESOLVED: `local`** (`engines/
+   goldengraph.py::_QA_MODE` default; `bench-graphrag-qa.yml` does not override). So
+   `trace_chain` is NOT in play — Lever B (route local→auto) is a real candidate. See the plan's
+   Phase 0.
 2. `halo` for Lever A: 1 (tight, single-anchor blind spot) vs 2 (more recall, more distractors)?
 3. Lever C embedding-scored candidates: reuse `seed_by_query`'s embedder + top-k, or a cheaper
    lexical fallback for the offline lane?
