@@ -48,7 +48,7 @@ const CHAINS: string[][] = [
   ["name_transliterate", "name_proper", "strip_titles", "strip_suffixes"],
 ];
 
-function run(ops: string[]): { rows: Row[]; records: unknown[] } {
+function run(ops: string[]): { rows: readonly Row[]; records: unknown[] } {
   const engine = new TransformEngine({ transforms: [{ column: "v", ops }] });
   const result = engine.transformDf(SAMPLE.map((r) => ({ ...r })));
   const records = result.manifest.records.map((r) => ({
