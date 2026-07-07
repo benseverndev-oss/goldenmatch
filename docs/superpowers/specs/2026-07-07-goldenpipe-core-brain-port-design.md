@@ -36,8 +36,20 @@ Because the vectors are **hand-authored** (a human-specified contract, matching
 the existing `auto_config.json`/`skip_if.json` style — not a Python dump), Leg A
 is a genuine gate, not a tautology: Python must independently match the
 contract. Convenient box property: hand-author the expecteds, run Leg A against
-the real Python brain, and Python surfaces any hand-authoring error immediately
-— before Rust compiles.
+the real Python brain, and Python surfaces **most** hand-authoring errors (wrong
+stages, wrong `rule_name`, wrong numeric values) immediately.
+
+**Two byte-shape properties Leg A does NOT catch — the Rust `cargo test` is the
+strict gate for both:**
+- **Numeric type.** Python `==` treats `1 == 1.0` as true; serde_json `Value`
+  equality treats integer `1` and float `1.0` as **unequal**. So a vector with
+  `"confidence": 1` passes Leg A but fails `golden_vectors.rs`. **Author every
+  confidence/density field as a float literal** (`1.0`, `0.7`, `0.3`, `0.95`,
+  `0.0` — never `1` or `0`).
+- **Key order.** Both legs compare maps/dicts order-insensitively (serde_json's
+  `preserve_order` `IndexMap` PartialEq and Python `dict` `==` both ignore key
+  order), so the vectors do NOT pin evidence key order. A dedicated order test
+  enforces it (§10, required).
 
 ### Why a new `planner.rs` module
 
@@ -182,10 +194,18 @@ Hand-authored `[{comment, input, expected}]` arrays, same style as
   `_dedupe_hints`, evidence gains `scale_hinted:true`), no-dedupe plan
   (pathological shape at scale → unchanged). Input is `{plan, runtime}`.
 
+Every `input` `runtime`/`PlannerInput` object MUST include ALL `PipeProfile`
+fields — `n_rows, n_cols, column_names, dtypes, inferred_domain,
+domain_confidence` — even though `column_names`/`dtypes` never reach the output
+(the Rust `PipeProfile` has no `#[serde(default)]`, so an omitted field fails to
+deserialize; Python `PipeProfile(**runtime)` likewise raises). All
+confidence/density values are **float literals** (`1.0`, `0.95`, `0.0` — see §2).
+
 Authoring workflow (box): write the expecteds, run Leg A
 (`test_planner_parity.py`) against the real Python brain, fix any mismatch
-Python reports, commit. This validates the hand-authored contract against Python
-before Rust exists.
+Python reports, commit. This validates most of the contract against Python before
+Rust exists — but NOT numeric type or key order (§2), which only the Rust
+`cargo test` (and the §10 order test) enforce.
 
 ## 7. Python bridge — `goldenpipe/core/_planner_json.py`
 
@@ -206,6 +226,14 @@ Small serialize/deserialize helpers (`_plan_to_dict`, `_plan_from_dict`,
 `_profile_from_dict`) local to the bridge, mirroring the existing
 `_planned_to_dict` helper. `PipePlan.evidence` is already a dict — emit as-is
 (insertion order preserved by Python dict).
+
+**Import-collision caveat:** `_planner_json.py` already imports `PlannedStage`
+from `goldenpipe.engine.resolver` (the engine's planned-stage). The brain's
+`PlannedStage` is a DIFFERENT class from `goldenpipe.autoconfig_planner` — import
+it under an alias to avoid shadowing, e.g.
+`from goldenpipe.autoconfig_planner import PlannedStage as PlanStage, PipePlan,
+PipeProfile, ComplexityProfile, PlannerInput, plan_pipeline, apply_scale_hints,
+band_of`.
 
 ## 8. Parity wiring
 
@@ -235,10 +263,13 @@ Small serialize/deserialize helpers (`_plan_to_dict`, `_plan_from_dict`,
   `plan_pipeline`/`apply_scale_hints`/`band_of` asserts) + the vector replay in
   `golden_vectors.rs` (CI).
 - Python Leg A (box): all three new cases green against the real brain.
-- `json.rs` insertion-order test extended if needed (evidence key order) — the
-  existing `resolve_json_config_echoes_insertion_order` pattern covers configs;
-  add an analogous check that `plan_pipeline_json` evidence keys stay in the
-  six-key order (optional, low-risk given `preserve_order`).
+- **REQUIRED evidence key-order test** in `json.rs` `#[cfg(test)]` — mirror the
+  existing `resolve_json_config_echoes_insertion_order` (json.rs): assert that
+  `plan_pipeline_json`'s serialized `evidence` object emits its keys in exactly
+  `n_rows, n_cols, inferred_domain, domain_confidence, max_null_density,
+  mean_null_density` order (substring/`starts_with` check on the raw JSON, since
+  `Value` equality is order-insensitive). Without this, the six-key order — the
+  byte-shape contract this port exists to pin — is unguarded by the vectors.
 
 ## 11. Non-goals
 
