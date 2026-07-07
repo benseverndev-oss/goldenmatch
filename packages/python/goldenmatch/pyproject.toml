@@ -74,6 +74,12 @@ embeddings = [
 vision = [
     "Pillow>=10.0",
 ]
+# Document/image ingest (goldenmatch.documents): rasterize PDFs to page images
+# for the VLM/OCR extractors. Pillow (also in `vision`) normalizes raster images.
+documents = [
+    "pymupdf>=1.24",
+    "Pillow>=10.0",
+]
 audio = [
     "soundfile>=0.12",
 ]
