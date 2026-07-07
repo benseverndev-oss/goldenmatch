@@ -945,6 +945,10 @@ jobs:
       # optional `datafusion` extra; install it so the parity tests RUN rather
       # than importorskip-SKIP (a false green). Cheap (wheel download).
       - run: uv pip install 'datafusion>=53,<54'
+      # Document/image ingest (goldenmatch.documents) tests need Pillow + PyMuPDF from the
+      # optional `documents` extra; install it so tests/documents RUN rather than error at
+      # collection (missing PIL/fitz). Same rationale as the datafusion extra above.
+      - run: uv pip install -e 'packages/python/goldenmatch[documents]'
       # Suite-wide lints run once (shard 1), not per shard.
       - if: matrix.shard == 1
         run: uv run ruff check packages/python/goldenmatch
