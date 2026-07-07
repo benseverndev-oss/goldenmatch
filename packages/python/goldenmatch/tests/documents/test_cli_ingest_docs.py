@@ -28,6 +28,18 @@ def test_run_writes_records_csv(tmp_path, monkeypatch):
     assert out.exists() and "Ada" in out.read_text()
 
 
+def test_run_missing_schema_file_exits_cleanly(tmp_path):
+    from PIL import Image
+    img = tmp_path / "a.png"; Image.new("RGB", (10, 10), "white").save(img)
+    missing_schema = tmp_path / "does-not-exist.json"
+    out = tmp_path / "recs.csv"
+    r = runner.invoke(ci.ingest_docs_app, ["run", str(img), "--schema", str(missing_schema),
+                                           "--out", str(out)])
+    assert r.exit_code == 1
+    assert "Traceback" not in r.output
+    assert "ingest failed" in r.output
+
+
 def test_suggest_schema_writes_file(tmp_path, monkeypatch):
     from PIL import Image
     img = tmp_path / "s.png"; Image.new("RGB", (10, 10), "white").save(img)

@@ -35,8 +35,12 @@ def run_cmd(
     backend: str = typer.Option("vlm", help="Extraction backend."),
     model: str = typer.Option("gpt-4o", help="Vision model."),
 ):
-    target = load_schema(schema)
-    extractor = resolve_extractor(backend, model)
+    try:
+        target = load_schema(schema)
+        extractor = resolve_extractor(backend, model)
+    except Exception as e:
+        typer.echo(f"ingest failed: {e}", err=True)
+        raise typer.Exit(code=1) from e
     df, report = ingest_documents(docs, target, extractor=extractor, return_report=True)
     if str(out).endswith(".parquet"):
         df.write_parquet(out)
