@@ -225,7 +225,7 @@ node scripts/build_documents_wasm.mjs
 
 Expected: `Done. wasm <N> B -> <M> B base64; bindings + bytes + corpus written.` and the four files above now exist. If `assertReplace` throws (glue format changed), STOP and report — do not hand-edit the glue.
 
-- [ ] **Step 2b (toolchain ABSENT / exFAT build fails): honest fallback.** Do NOT fabricate the `_wasm` files. Skip to Task 3, author `documentsWasm.ts`, the parity test (Task 4), the exports/tsup wiring (Task 5), and the CI job (Task 6). The parity test cannot run locally without the bindings — that is expected; **CI's `documents_wasm` job is the authoritative regen + parity gate**. Note in the Task 4 commit body that local parity was deferred to CI. Report status `DONE_WITH_CONCERNS` naming the exact blocker (e.g. `wasm-pack not on PATH` / the exFAT `cargo.exe` PATH mangling from prior memory).
+- [ ] **Step 2b (toolchain ABSENT / exFAT build fails): honest fallback — but the branch is NOT mergeable in this state.** Do NOT fabricate the `_wasm` files. Author `documentsWasm.ts`, the parity test (Task 4), the exports/tsup wiring (Task 5), and the CI job (Task 6) so the surface is complete on paper. **Critically: CI's `documents_wasm` step regenerates the bindings + corpus fixture transiently in-tree and does NOT commit them back.** So a merged 2b-state branch leaves `main` with `documentsWasm.ts` + the tsup entry + the `package.json` export all referencing `_wasm/documentsWasm*` files that DO NOT EXIST in git — and the next TS PR that doesn't fire the `documents_wasm` filter will fail the ungated `turbo run build test typecheck` (tsup can't resolve the entry's imports; `tsc` throws TS2307). The suggest precedent is safe ONLY because its bindings are committed. Therefore: the four generated files (`documentsWasmBindings.js`, `.d.ts`, `documentsWasmBytes.ts`, `fixtures/documents/documents_corpus.jsonl`) **MUST be committed before merge** — regenerate them on a wasm-pack-capable machine (do NOT rely on CI to persist them). If you cannot regenerate here, report status `BLOCKED` naming the exact blocker (e.g. `wasm-pack not on PATH` / the exFAT `cargo.exe` PATH mangling from prior memory) and flag that the branch needs a wasm-pack-capable machine to produce the committable bindings before it can merge. Do NOT report `DONE` on a branch missing the committed bindings.
 
 - [ ] **Step 3: Commit the generated outputs** (only if Step 2a ran):
 
@@ -398,7 +398,7 @@ git -c commit.gpgsign=false commit -m "feat(ts): documents-core wasm kernel wrap
 
 **Files:** Create `$TS/tests/parity/documents-core.parity.test.ts`
 
-Read `$TS/tests/parity/fingerprint-wasm.parity.test.ts` for the `readFileSync` corpus pattern and `$TS/tests/parity/suggest-wasm.parity.test.ts` for the static-skip pattern. The corpus is JSONL (one row per line), not a per-case JSON directory — parse it line by line. Mirror the Python `_run_native` dispatch + the normalize reshape.
+Read `$TS/tests/parity/fingerprint-wasm.parity.test.ts` for the `readFileSync` corpus pattern (it fails loud, no skip-gate — mirror that here). The corpus is JSONL (one row per line), not a per-case JSON directory — parse it line by line. Mirror the Python `_run_native` dispatch + the normalize reshape.
 
 - [ ] **Step 1: Write the failing test** exactly:
 
@@ -430,7 +430,6 @@ import {
   extractInstruction,
   suggestPrompt,
   normalizeRecord,
-  documentsWasmAvailable,
   type TargetSchema,
 } from "../../src/core/documentsWasm.js";
 
@@ -480,16 +479,18 @@ function runOk(row: Row): unknown {
   }
 }
 
-const available = documentsWasmAvailable();
-const maybe = available ? it : it.skip;
-
+// NO static skip-gate: the committed bindings + CI's fresh rebuild are BOTH
+// expected to init under vitest (autoconfig/suggest parity prove wasm loads
+// here). A kernel that won't load must be RED, not silently skipped — this is
+// the byte-parity proof, so it fails loud (the fingerprint-wasm precedent, not
+// the graceful-skip suggest-wasm one).
 describe("documents-core wasm parity (TS == shared corpus)", () => {
   it("loaded a non-trivial corpus", () => {
     expect(rows.length).toBeGreaterThanOrEqual(20);
   });
 
   rows.forEach((row, i) => {
-    maybe(`${row.kernel}[${i}]: ${row.expected.error ? "throws" : "matches expected.ok"}`, () => {
+    it(`${row.kernel}[${i}]: ${row.expected.error ? "throws" : "matches expected.ok"}`, () => {
       if (row.expected.error) {
         expect(() => runOk(row)).toThrow();
         if (row.expected.substring) {
@@ -643,6 +644,7 @@ git -c commit.gpgsign=false commit -m "ci: rebuild + parity-verify the documents
 - `documentsWasm.ts` exposes `validateSchema` / `parseMessageText` / `extractInstruction` / `suggestPrompt` / `normalizeRecord` (+ `documentsWasmAvailable`) over the wasm kernels.
 - `documents-core.parity.test.ts` replays the shared corpus and asserts TS == `expected` for all 30 rows (success + error + the normalize ordered-pairs reshape), green in CI.
 - `build_documents_wasm.mjs` regenerates the committed bindings/bytes + copies the corpus; the CI `documents_wasm` job runs it, diff-guards the corpus, and parity-tests.
+- **The four generated files are COMMITTED to the branch** (`documentsWasmBindings.js`, `.d.ts`, `documentsWasmBytes.ts`, `fixtures/documents/documents_corpus.jsonl`) — NOT merely regenerated by CI (CI does not commit them back). A branch missing them is not mergeable: the ungated `turbo run build test typecheck` on a later unrelated PR would fail to resolve the `core/documentsWasm` entry's imports.
 - `goldenmatch/core/documents-wasm` is an exported subpath with a tsup entry.
 - No api_parity manifest / count change (library kernel module, no new agent-facing surface).
 - Deferred (explicitly out): rasterization, the VLM call, end-to-end TS `ingestDocuments`/`suggestSchema`.
