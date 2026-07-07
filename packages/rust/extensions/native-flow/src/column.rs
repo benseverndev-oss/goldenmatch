@@ -25,8 +25,12 @@ use goldenflow_core::chain::{apply_chain, apply_chain_nullable};
 use crate::chain::{resolve_chain, ChainOps};
 use crate::csvio::OpRecord;
 use crate::numeric_columnar::{resolve_numeric, run_numeric_column};
+use crate::split_columnar::{resolve_split, run_split_column};
 
 const STREAM_NAME: &[u8] = b"arrow_array_stream";
+
+/// `apply_split` result: `(source_column, [(output_name, output_column)], records)`.
+type SplitCols = (Column, Vec<(String, Column)>, Vec<OpRecord>);
 
 /// A Rust-owned Arrow column (one logical column, always a single contiguous
 /// array after ingest). Utf8 or LargeUtf8 for the owned string transform path.
@@ -207,5 +211,28 @@ impl Column {
             })?;
         let (numcol, records) = py.detach(|| run_numeric_column(arr, &plan));
         Ok((Column::new(numcol.into_array()), records))
+    }
+
+    /// In-memory multi-output path (Phase 3 wave 3e): run a split config
+    /// (`string* splitter`) over this string column, returning the source `Column`
+    /// (unchanged by the split, only its string ops applied), the fixed-name output
+    /// `Column`s to add to the frame, and the per-op manifest records. Each Column
+    /// egresses via `__arrow_c_stream__`.
+    fn apply_split(&self, py: Python, ops: Vec<(String, Vec<String>)>) -> PyResult<SplitCols> {
+        let plan = resolve_split(&ops)
+            .ok_or_else(|| PyValueError::new_err("not a split columnar config"))?;
+        let arr = self
+            .array
+            .as_any()
+            .downcast_ref::<LargeStringArray>()
+            .ok_or_else(|| {
+                PyTypeError::new_err("Column.apply_split requires a Utf8/LargeUtf8 column")
+            })?;
+        let (src, new_cols, records) = py.detach(|| run_split_column(arr, &plan));
+        let new = new_cols
+            .into_iter()
+            .map(|(n, a)| (n, Column::new(Arc::new(a))))
+            .collect();
+        Ok((Column::new(Arc::new(src)), new, records))
     }
 }

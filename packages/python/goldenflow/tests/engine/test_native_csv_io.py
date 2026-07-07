@@ -183,6 +183,52 @@ def test_native_csv_i64_equals_polars(tmp_path, monkeypatch, ops, rows) -> None:
     assert _manifest_rows(manifest) == _manifest_rows(ref.manifest)
 
 
+@pytest.mark.parametrize(
+    "ops,col,data",
+    [
+        (["split_name"], "name", ["John Smith", "Cher", "", None, "o'Brien"]),
+        (["strip", "split_name"], "name", ["  John Smith  ", "Mary Doe", None]),
+        (["split_name_reverse"], "name", ["Smith, John", "Doe, Mary", None, ""]),
+        (["split_address"], "addr", ["123 Main St, Reno, NV 89501", "5 Oak Ave", None, ""]),
+    ],
+)
+def test_native_csv_split_equals_polars(tmp_path, monkeypatch, ops, col, data) -> None:
+    """Phase 3 wave 3e: splits on the CSV path add the fixed-name output columns; the
+    output CSV (parsed back) + manifest are byte-identical to the Polars engine. This
+    also exercises the empty-string quoting fix (split_name's last='' for a single-word
+    name must survive the CSV round-trip as '', not null)."""
+    if not columnar.columnar_file_ready(_cfg([(col, ops)])):
+        pytest.skip("native split not built (pre-0.24 wheel)")
+    inp = tmp_path / "in.csv"
+    _write_2col(inp, col, data)
+    cfg = _cfg([(col, ops)])
+
+    out = tmp_path / "out.csv"
+    manifest = columnar.transform_file(inp, out, cfg, source=str(inp))
+
+    monkeypatch.delenv("GOLDENFLOW_ENGINE", raising=False)
+    ref = transform_df(pl.read_csv(inp, infer_schema_length=0), config=cfg)
+
+    got = pl.read_csv(out, infer_schema_length=0)
+    assert got.columns == ref.df.columns
+    for c in got.columns:
+        assert got[c].to_list() == ref.df[c].cast(pl.Utf8).to_list(), f"{c} diverged"
+    assert _manifest_rows(manifest) == _manifest_rows(ref.manifest)
+
+
+def test_native_csv_quotes_empty_string_like_polars(tmp_path) -> None:
+    """The native writer quotes an empty-string VALUE as `\"\"` (distinct from a null
+    empty field), matching Polars — so `strip('   ') -> ''` round-trips as '' not null."""
+    inp = tmp_path / "in.csv"
+    _write_2col(inp, "x", ["   ", "keep", None])  # row0 -> strip -> '' (empty string)
+    out = tmp_path / "out.csv"
+    columnar.transform_file(inp, out, _cfg([("x", ["strip"])]))
+    raw = out.read_text(encoding="utf-8").splitlines()
+    assert raw[1].startswith('""'), f'empty string not quoted: {raw[1]!r}'
+    back = pl.read_csv(out, infer_schema_length=0)
+    assert back["x"].to_list() == ["", "keep", None]  # '' preserved, null stays null
+
+
 def test_native_csv_path_is_pyarrow_free(tmp_path) -> None:
     """The transform_csv call must not pull in pyarrow — the whole weight thesis."""
     inp = tmp_path / "in.csv"

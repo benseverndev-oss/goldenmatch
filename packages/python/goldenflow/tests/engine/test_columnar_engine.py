@@ -124,6 +124,40 @@ def test_columnar_numeric_equals_polars(monkeypatch, ops, data) -> None:
     assert _manifest_rows(columnar_out) == _manifest_rows(polars_out)
 
 
+@pytest.mark.parametrize(
+    "ops,col,data",
+    [
+        (["split_name"], "name", ["John Smith", "Mary Jane Doe", "Cher", None, "", "o'Brien"]),
+        (["strip", "split_name"], "name", ["  John Smith  ", "Mary Doe", None, ""]),
+        (["split_name_reverse"], "name", ["Smith, John", "Doe, Mary", None, ""]),
+        (["split_address"], "addr", ["123 Main St, Springfield, IL 62704", "5 Oak Ave", None, ""]),
+        (["strip", "lowercase", "split_address"], "addr", ["  123 Main St, Reno, NV 89501 ", None]),
+    ],
+)
+def test_columnar_split_equals_polars(monkeypatch, ops, col, data) -> None:
+    """Phase 3 wave 3e: multi-output splits (split_name/_reverse/split_address) run on
+    the in-memory Column path — the source column keeps its value and the fixed-name
+    output columns are appended, byte-identical to the Polars engine (frame + manifest)."""
+    nm = native_module()
+    if nm is None or not hasattr(nm, "columnar_split_ready") or not hasattr(
+        getattr(nm, "Column", object), "apply_split"
+    ):
+        pytest.skip("native split not built (pre-0.24 wheel)")
+    df = pl.DataFrame({col: data, "keep": list(range(len(data)))})
+    cfg = _cfg([(col, ops)])
+    assert columnar.config_is_columnar_ready(cfg)
+
+    monkeypatch.delenv("GOLDENFLOW_ENGINE", raising=False)
+    polars_out = transform_df(df, config=cfg)
+
+    monkeypatch.setenv("GOLDENFLOW_ENGINE", "columnar")
+    columnar_out = transform_df(df, config=cfg)
+
+    assert columnar_out.df.columns == polars_out.df.columns, "split output schema diverged"
+    assert columnar_out.df.equals(polars_out.df), "split output frame diverged"
+    assert _manifest_rows(columnar_out) == _manifest_rows(polars_out)
+
+
 def test_columnar_declines_unsupported_config(monkeypatch) -> None:
     """A config with a non-owned-string op (phone) or a frame-level op is NOT
     columnar-ready; it falls through to the Polars engine (still correct)."""

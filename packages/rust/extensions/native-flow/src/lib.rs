@@ -25,6 +25,7 @@ mod numeric;
 mod numeric_columnar;
 mod phone;
 mod phonetic;
+mod split_columnar;
 mod text;
 mod url;
 mod util;
@@ -41,6 +42,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
         numeric_columnar::columnar_numeric_ready,
         m
     )?)?;
+    m.add_function(wrap_pyfunction!(split_columnar::columnar_split_ready, m)?)?;
     m.add_function(wrap_pyfunction!(csvio::transform_csv, m)?)?;
     m.add_function(wrap_pyfunction!(chain::apply_chain_f64_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(chain::apply_chain_nullable_arrow, m)?)?;
