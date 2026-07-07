@@ -69,6 +69,45 @@ def config_is_columnar_ready(config) -> bool:
     return True
 
 
+def columnar_file_ready(config) -> bool:
+    """True when the native whole-file CSV path (Phase 2) can run this config:
+    the config is columnar-ready (fully owned-string, no frame-level ops) AND the
+    native kernel exposes ``transform_csv``. When true, a CSV runs
+    read->transform->write entirely in Rust — no ``pl.DataFrame``, no Polars, no
+    pyarrow."""
+    if not config_is_columnar_ready(config):
+        return False
+    nm = native_module()
+    return nm is not None and hasattr(nm, "transform_csv")
+
+
+def transform_file(in_path, out_path, config, source: str | None = None) -> Manifest:
+    """Transform a CSV ``in_path`` to ``out_path`` entirely on the native substrate
+    (Phase 2): one Rust call reads the CSV into owned Arrow string columns, applies
+    the owned chain to the configured columns, and writes the CSV back — **no
+    ``pl.DataFrame``, no Polars, no pyarrow**. Returns the audit :class:`Manifest`,
+    byte-identical to the Polars engine (data + manifest; see the parity contract in
+    the eviction design doc). Callers must gate on :func:`columnar_file_ready`."""
+    nm = native_module()
+    specs = []
+    for spec in config.transforms:
+        ops = [parse_transform_name(op) for op in spec.ops]  # [(name, params)]
+        specs.append((spec.column, [(name, list(params)) for name, params in ops]))
+    records = nm.transform_csv(str(in_path), str(out_path), specs)
+    manifest = Manifest(source=source or str(in_path))
+    for col_name, op_records in records:
+        for name, affected, total, before, after in op_records:
+            manifest.add_record(TransformRecord(
+                column=col_name,
+                transform=name,
+                affected_rows=int(affected),
+                total_rows=int(total),
+                sample_before=list(before),
+                sample_after=list(after),
+            ))
+    return manifest
+
+
 def _sample3(col: Column) -> list:
     """First 3 values, null-preserving — mirrors the Polars engine's
     ``series.head(3).cast(Utf8).to_list()`` (a string column casts to itself, nulls

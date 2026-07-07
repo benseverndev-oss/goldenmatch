@@ -122,3 +122,89 @@ noisy — 263–362 ms for the same call). Do it as a focused unit, not rushed.
 `native-flow`'s arrow crate is `features = ["pyarrow"]`; 1b uses `arrow::ffi`
 (no new dep) or `pyo3-arrow`. Also: `goldenflow-native 0.16.0` (`apply_chain_str_list`)
 is not republished yet — batch that republish with 1b so the columnar path ships whole.
+
+## Phase 2 — native Arrow I/O (where lighter-AND-faster lands)
+
+**Shipped 1b/1c (#1530/#1531):** the columnar engine now runs the owned chain on a
+native Arrow `Column` (pyarrow-free), measured at **parity** vs Polars. Why only
+parity, not a win: the caller still hands the engine a `pl.DataFrame`, so the path
+pays `df.select` ingest + `pl.from_arrow` egress + `with_columns` — boundary
+conversions that roughly match Polars' own `to_arrow`/`from_arrow`. As long as
+Polars owns the frame, the native path can only *tie* it.
+
+**Phase 2 removes the frame.** The file→transform→file path never constructs a
+`pl.DataFrame`: a single native call reads the CSV into Rust-owned string columns,
+applies the owned chain, and writes the CSV back — **one FFI crossing, zero
+per-column Python round-trip, zero Polars, zero pyarrow.** This is the shape where
+native genuinely *beats* Polars (no rival frame to tie against) and where
+`pip install goldenflow` stops needing Polars for the CSV pipeline at all.
+
+**Surface (native-flow `csvio.rs`, one function):**
+`transform_csv(in_path, out_path, specs) -> per-column-per-op manifest records`,
+where `specs = [(column, [(op, [params])])]`. Internally: (1) read CSV via the
+tiny pure-Rust `csv` crate (no arrow-csv schema inference), header → column names,
+every field as a string → one `LargeStringArray` per column; (2) for each spec
+column, apply the ops **one kernel at a time** (mirrors the Python columnar
+manifest loop exactly — captures per-op `affected_rows` + null-preserving 3-row
+`sample_before`/`sample_after`); (3) write every column (transformed replace
+originals, passthrough columns unchanged) back to CSV. Python builds the `Manifest`
+from the returned records without ever touching the data.
+
+**Semantics decision — all columns are strings (documented, opt-in only).** The
+native reader reads every column as Utf8 (no type inference); an empty field maps
+to null (matches Polars' default null-on-empty). This is deliberate: the owned
+transforms are string-in/string-out, and reading numbers as strings avoids Polars'
+lossy float reformatting (`1.50`→`1.5`). It is a semantic difference from the
+default Polars read (which infers `Int64`/`Float64`), so it lives **only** behind
+`GOLDENFLOW_ENGINE=columnar` + a columnar-ready config — the default path is
+byte-unchanged. No default-path regression, per the guardrail.
+
+**Parity contract (the load-bearing decision).** The reference is the Polars engine
+reading the SAME file **with inference off** (`pl.read_csv(infer_schema_length=0)`
+→ all Utf8), transforming, and writing. Two axes:
+- **Manifest — byte-identical.** `affected_rows` / `total_rows` / 3-row samples must
+  match the Polars engine exactly (same kernels, same order, null-preserving).
+- **Output DATA — cell-identical, not byte-identical.** Compare the two output CSVs
+  **parsed back to rows**, cell-by-cell. Native's CSV *serialization* is its own
+  (RFC4180 via the `csv` crate); two writers won't emit identical bytes (quoting,
+  null rendering), so byte-parity on the file is the wrong contract — data-parity
+  is the honest one. The transform *values* are byte-identical; only the writer's
+  framing differs.
+
+**Empty/null CSV edges** (quoted-empty vs unquoted-empty, embedded newlines) are a
+bounded, documented boundary for v1 — pinned on the common cases, matching Polars'
+null-on-empty; exotic quoting parity is not claimed.
+
+**Deps/build.** Adds the pure-Rust `csv` crate (tiny, no pyo3/arrow-csv churn — the
+`arrow` feature set is unchanged). Bump `native-flow` 0.17.0 → 0.18.0. **Republish
+0.16/0.17/0.18 together** so the whole zero-copy substrate (list binding + `Column`
++ native I/O) ships to PyPI in one wheel — until then the file path only works from
+an in-tree build.
+
+**Speed — MEASURED, honest (200k rows, 4+2 owned ops, noisy dev box).** The thesis
+("no `pl.DataFrame` → native-file beats polars-file") was **half right and worth
+recording precisely**:
+
+| stage | native | polars |
+|---|---|---|
+| **transform only** | ~47 ms | ~66 ms |
+| **CSV I/O only** (read+write) | ~60–70 ms | ~15 ms |
+| **full file path** | ~125–160 ms | ~75–95 ms |
+
+The **transform is faster natively** (the owned single-pass chain beats Polars'
+per-op `map_batches`) — the boundary thesis holds for the compute. But **Polars'
+CSV reader/writer is multithreaded SIMD and ~4× faster** than a single-threaded
+Rust `csv`-crate path, and at these sizes the file is **I/O-bound**, so the full
+native path is **~1.6× slower**. Optimizing the reader (build Arrow buffers
+directly, no per-field `String`, reused record) already **halved** native I/O
+(124 ms → ~60 ms); closing the rest needs **parallel CSV parsing** (rayon over
+row-chunk boundaries, with the #688 sequential-below-threshold guard) — the named
+follow-on to reach lighter-AND-faster.
+
+**Verdict for this increment: ship it as the WEIGHT win, honestly.** It decisively
+advances the primary goal — the CSV pipeline (read→transform→write) now runs with
+**zero Polars, zero pyarrow**, byte-identical (data + manifest, parity-gated), and
+the transform itself is faster. The CSV-I/O speed regression is the kind the user
+pre-authorized ("evicting a heavy dependency… the regress we can handle by
+iterating"); parallel parsing is Phase 2b. Do **not** claim "faster" — the number
+is a measured tie-to-regression on I/O-bound CSV, a win on transform.

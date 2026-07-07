@@ -101,10 +101,31 @@ def transform(
                 print_manifest(result.manifest)
                 return
 
-        engine = TransformEngine(config=cfg)
-
         if output_dir is None:
             output_dir = path.parent
+
+        # Phase 2: native whole-file CSV path (Polars-free) when opted in via
+        # GOLDENFLOW_ENGINE=columnar and the config is fully owned-string. Reads,
+        # transforms, and writes the CSV in one Rust call — no pl.DataFrame.
+        from goldenflow.engine import columnar as _columnar
+        if (
+            _columnar.columnar_engine_selected()
+            and path.suffix.lower() == ".csv"
+            and _columnar.columnar_file_ready(cfg)
+        ):
+            output_dir.mkdir(parents=True, exist_ok=True)
+            out_path = output_dir / f"{path.stem}_transformed{path.suffix}"
+            manifest = _columnar.transform_file(path, out_path, cfg, source=str(path))
+            manifest.save(output_dir / f"{path.stem}_manifest.json")
+            print_manifest(manifest)
+            typer.echo(f"\nOutput: {out_path}")
+            if strict and manifest.errors:
+                from goldenflow.reporters.rich_console import console
+                console.print(f"[red]Strict mode: {len(manifest.errors)} transform errors[/red]")
+                raise typer.Exit(1)
+            return
+
+        engine = TransformEngine(config=cfg)
 
         result = engine.transform_file(path, output_dir=output_dir)
         print_manifest(result.manifest)
