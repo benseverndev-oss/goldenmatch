@@ -7,6 +7,9 @@ import {
   evaluateBuiltinJsonPure,
   autoConfigJsonPure,
   skipIfFalsyJsonPure,
+  planPipelineJsonPure,
+  applyScaleHintsJsonPure,
+  bandOfJsonPure,
 } from "../../src/core/wasm/plannerJsonPure.js";
 
 const VEC = (name: string) =>
@@ -25,6 +28,9 @@ const FAMILIES: Array<[string, (s: string) => string]> = [
   ["evaluate_builtin", evaluateBuiltinJsonPure],
   ["auto_config", autoConfigJsonPure],
   ["skip_if", skipIfFalsyJsonPure],
+  ["plan_pipeline", planPipelineJsonPure],
+  ["apply_scale_hints", applyScaleHintsJsonPure],
+  ["band_of", bandOfJsonPure],
 ];
 
 describe("Leg A — pure-TS planner == goldenpipe-core golden vectors", () => {
