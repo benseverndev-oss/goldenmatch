@@ -199,23 +199,41 @@ fn read_csv(path: &str) -> Result<(Vec<String>, Vec<LargeStringArray>), String> 
     Ok((names, columns))
 }
 
-/// Serialize rows `[start, end)` of `columns` to an in-memory CSV byte buffer
-/// (no header) via the `csv` crate — null -> empty field, RFC4180 quoting.
-fn write_region(columns: &[LargeStringArray], start: usize, end: usize) -> Result<Vec<u8>, String> {
-    let mut w = csv::WriterBuilder::new()
-        .has_headers(false)
-        .from_writer(Vec::<u8>::new());
-    for row in start..end {
-        for c in columns {
-            let field = if c.is_null(row) { "" } else { c.value(row) };
-            w.write_field(field)
-                .map_err(|e| format!("write row {row}: {e}"))?;
+/// Append one CSV field to `out`, matching Polars' `write_csv` quoting EXACTLY:
+/// a null cell is an empty field (no quotes); a NON-null cell is quoted iff it is
+/// the empty string (so `""` round-trips as `""`, distinct from a null empty field)
+/// OR it contains a delimiter / quote / newline, with `"` escaped as `""`.
+fn write_csv_field(out: &mut Vec<u8>, field: Option<&str>) {
+    let Some(s) = field else { return }; // null -> empty field
+    let needs_quote = s.is_empty() || s.bytes().any(|b| matches!(b, b',' | b'"' | b'\n' | b'\r'));
+    if needs_quote {
+        out.push(b'"');
+        for b in s.bytes() {
+            if b == b'"' {
+                out.push(b'"');
+            }
+            out.push(b);
         }
-        w.write_record(std::iter::empty::<&[u8]>())
-            .map_err(|e| format!("end row {row}: {e}"))?;
+        out.push(b'"');
+    } else {
+        out.extend_from_slice(s.as_bytes());
     }
-    w.into_inner()
-        .map_err(|e| format!("finish write buffer: {e}"))
+}
+
+/// Serialize rows `[start, end)` of `columns` to an in-memory CSV byte buffer (no
+/// header) — Polars-matching quoting, `\n` terminator.
+fn write_region(columns: &[LargeStringArray], start: usize, end: usize) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
+    for row in start..end {
+        for (i, c) in columns.iter().enumerate() {
+            if i > 0 {
+                out.push(b',');
+            }
+            write_csv_field(&mut out, (!c.is_null(row)).then(|| c.value(row)));
+        }
+        out.push(b'\n');
+    }
+    Ok(out)
 }
 
 /// Write `(column_names, columns)` back to a CSV file — null -> empty field,
@@ -228,16 +246,15 @@ fn write_csv(path: &str, names: &[String], columns: &[LargeStringArray]) -> Resu
     let nrows = columns.first().map_or(0, |c| c.len());
     let value_bytes: usize = columns.iter().map(|c| c.values().len()).sum();
 
-    // Header (one buffer; picks up the same quoting rules as the data).
-    let mut header = csv::WriterBuilder::new()
-        .has_headers(false)
-        .from_writer(Vec::<u8>::new());
-    header
-        .write_record(names)
-        .map_err(|e| format!("write header: {e}"))?;
-    let header = header
-        .into_inner()
-        .map_err(|e| format!("finish header buffer: {e}"))?;
+    // Header (same quoting rules as the data).
+    let mut header = Vec::new();
+    for (i, n) in names.iter().enumerate() {
+        if i > 0 {
+            header.push(b',');
+        }
+        write_csv_field(&mut header, Some(n));
+    }
+    header.push(b'\n');
 
     let nthreads = std::thread::available_parallelism().map_or(1, |n| n.get());
     let bufs: Vec<Vec<u8>> = if nthreads <= 1 || value_bytes < parallel_min_bytes() {
@@ -318,16 +335,28 @@ pub fn transform_csv(
     specs: Vec<ColumnSpec>,
 ) -> PyResult<Vec<ColumnManifest>> {
     py.detach(|| -> PyResult<Vec<ColumnManifest>> {
-        let (names, mut columns) =
+        let (mut names, mut columns) =
             read_csv(in_path).map_err(|e| PyIOError::new_err(format!("read CSV: {e}")))?;
-        let idx_of = |name: &str| names.iter().position(|n| n == name);
 
         let mut manifest: Vec<ColumnManifest> = Vec::with_capacity(specs.len());
+        // Split outputs (fixed-name columns to add) accumulate here and are appended
+        // AFTER all specs, so they land after the original columns (as Polars does).
+        let mut extra: Vec<(String, LargeStringArray)> = Vec::new();
         for (col_name, ops) in &specs {
-            let Some(idx) = idx_of(col_name) else {
+            let Some(idx) = names.iter().position(|n| n == col_name) else {
                 continue; // column not in file — mirrors the Python `if col in df.columns`
             };
             let total = columns[idx].len() as u64;
+            // Split shape (`string* splitter`) transforms the source in place and ADDS
+            // the fixed-name output columns (source itself unchanged by the split).
+            if let Some(plan) = crate::split_columnar::resolve_split(ops) {
+                let (src, new_cols, records) =
+                    crate::split_columnar::run_split_column(&columns[idx], &plan);
+                columns[idx] = src;
+                extra.extend(new_cols);
+                manifest.push((col_name.clone(), records));
+                continue;
+            }
             // Numeric shape (`string* parser f64*`) runs the string->f64->string
             // path (formatting via the Polars-matching float formatter); otherwise
             // auto-route the string run total vs nullable.
@@ -361,6 +390,17 @@ pub fn transform_csv(
             };
             columns[idx] = new_array;
             manifest.push((col_name.clone(), records));
+        }
+
+        // Append the split output columns (or replace an existing same-name column,
+        // matching Polars' `with_columns` semantics).
+        for (name, arr) in extra {
+            if let Some(pos) = names.iter().position(|n| *n == name) {
+                columns[pos] = arr;
+            } else {
+                names.push(name);
+                columns.push(arr);
+            }
         }
 
         write_csv(out_path, &names, &columns)

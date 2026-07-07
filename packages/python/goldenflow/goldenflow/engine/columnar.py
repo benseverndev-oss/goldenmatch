@@ -89,13 +89,37 @@ def _numeric_inmem_ok(nm) -> bool:
     )
 
 
+def _split_inmem_ok(nm) -> bool:
+    """The in-memory Column path can run a split spec when the kernel exposes the
+    shape probe AND the Column returns the source + output columns (``apply_split``,
+    native-flow 0.24+). Skew-safe: an older wheel lacks it -> split declines to
+    Polars in-memory."""
+    col_cls = getattr(nm, "Column", None)
+    return hasattr(nm, "columnar_split_ready") and col_cls is not None and hasattr(
+        col_cls, "apply_split"
+    )
+
+
+def _spec_ready(nm, spec, accepted: frozenset[str], numeric_ok: bool, split_ok: bool) -> bool:
+    """A spec is columnar-ready if it's an owned-string run, or — with native support
+    — a valid NUMERIC (``string* parser f64*``) or SPLIT (``string* splitter``) shape
+    (validated by the native probes, the single source of truth)."""
+    if _spec_string_ready(spec, accepted):
+        return True
+    ops_spec = [(n, list(p)) for n, p in (parse_transform_name(o) for o in spec.ops)]
+    if numeric_ok and nm.columnar_numeric_ready(ops_spec):
+        return True
+    if split_ok and nm.columnar_split_ready(ops_spec):
+        return True
+    return False
+
+
 def config_is_columnar_ready(config) -> bool:
     """A config runs on the IN-MEMORY columnar engine iff EVERY spec is an owned
-    string run (total fusable, or — when supported — a nullable URL/company/email
-    kernel) OR — Phase 3 wave 3d — a valid NUMERIC shape (``string* parser f64*``,
-    via the native ``columnar_numeric_ready`` probe + ``Column.apply_numeric``), and
-    there are no frame-level ops. Otherwise the caller uses the Polars engine —
-    correctness first; coverage grows over the phases."""
+    string run, a NUMERIC shape (wave 3d, via ``Column.apply_numeric``), or a SPLIT
+    shape (wave 3e, via ``Column.apply_split``), with no frame-level ops. Otherwise
+    the caller uses the Polars engine — correctness first; coverage grows over the
+    phases."""
     if _frame_level_blocked(config) or not config.transforms:
         return False
     nm = native_module()
@@ -103,23 +127,16 @@ def config_is_columnar_ready(config) -> bool:
         return False
     accepted = _accepted_string(nm)
     numeric_ok = _numeric_inmem_ok(nm)
-    for spec in config.transforms:
-        if _spec_string_ready(spec, accepted):
-            continue
-        ops_spec = [(n, list(p)) for n, p in (parse_transform_name(o) for o in spec.ops)]
-        if numeric_ok and nm.columnar_numeric_ready(ops_spec):
-            continue
-        return False
-    return True
+    split_ok = _split_inmem_ok(nm)
+    return all(_spec_ready(nm, spec, accepted, numeric_ok, split_ok) for spec in config.transforms)
 
 
 def columnar_file_ready(config) -> bool:
     """True when the native whole-file CSV path can run this config: no frame-level
-    ops, and every spec is either an owned-string run OR — Phase 3 wave 3b — a valid
-    NUMERIC shape (``string* parser f64*``, validated by the native
-    ``columnar_numeric_ready`` probe, the single source of truth so host and kernel
-    never disagree). When true, a CSV runs read->transform->write entirely in Rust —
-    no ``pl.DataFrame``, no Polars, no pyarrow."""
+    ops, and every spec is an owned-string run OR a valid NUMERIC (``string* parser
+    f64*``) or SPLIT (``string* splitter``) shape, validated by the native probes
+    (the single source of truth). When true, a CSV runs read->transform->write
+    entirely in Rust — no ``pl.DataFrame``, no Polars, no pyarrow."""
     if _frame_level_blocked(config) or not config.transforms:
         return False
     nm = native_module()
@@ -127,14 +144,8 @@ def columnar_file_ready(config) -> bool:
         return False
     accepted = _accepted_string(nm)
     numeric_ok = hasattr(nm, "columnar_numeric_ready")
-    for spec in config.transforms:
-        if _spec_string_ready(spec, accepted):
-            continue
-        ops_spec = [(n, list(p)) for n, p in (parse_transform_name(o) for o in spec.ops)]
-        if numeric_ok and nm.columnar_numeric_ready(ops_spec):
-            continue
-        return False
-    return True
+    split_ok = hasattr(nm, "columnar_split_ready")
+    return all(_spec_ready(nm, spec, accepted, numeric_ok, split_ok) for spec in config.transforms)
 
 
 def transform_file(in_path, out_path, config, source: str | None = None) -> Manifest:
@@ -197,12 +208,39 @@ def _transform_via_columns(df, config, source, nm, pl):
     No list marshaling, no pyarrow."""
     manifest = Manifest(source=source)
     numeric_ok = _numeric_inmem_ok(nm)
+    split_ok = _split_inmem_ok(nm)
     out_series = []
+
+    def _add_records(column, records):
+        for name, affected, total, before, after in records:
+            manifest.add_record(TransformRecord(
+                column=column,
+                transform=name,
+                affected_rows=int(affected),
+                total_rows=int(total),
+                sample_before=list(before),
+                sample_after=list(after),
+            ))
+
+    def _egress(col):
+        imported = pl.from_arrow(col)
+        return imported.to_series(0) if isinstance(imported, pl.DataFrame) else imported
+
     for spec in config.transforms:
         if spec.column not in df.columns:
             continue
         ops = [parse_transform_name(op) for op in spec.ops]
         ops_spec = [(n, list(p)) for n, p in ops]
+        # Split spec (string* splitter): the source column keeps its (string-ops)
+        # value and the fixed-name output columns are appended -- exactly Polars'
+        # dataframe-mode with_columns. Cast to Utf8 first (the split reads strings).
+        if split_ok and nm.columnar_split_ready(ops_spec):
+            col = nm.Column.from_arrow(df.select([pl.col(spec.column).cast(pl.Utf8)]))
+            src_col, new_cols, records = col.apply_split(ops_spec)
+            _add_records(spec.column, records)
+            out_series.append(_egress(src_col).alias(spec.column))
+            out_series.extend(_egress(c).alias(name) for name, c in new_cols)
+            continue
         # Numeric spec (string* parser f64*): cast the column to Utf8 (Polars' numeric
         # transforms cast to Utf8 internally, so this matches even a non-string input)
         # and run the numeric plan, egressing the RAW numeric array (Int64/Float64) as
