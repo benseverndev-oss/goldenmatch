@@ -196,6 +196,7 @@ web = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
     "httpx>=0.27",  # used by TestClient and tests
+    "python-multipart>=0.0.9",
 ]
 # Head-to-head accuracy panel (probabilistic vs Splink). Loads datasets via
 # splink_datasets (ships with splink) with a vendored-parquet fallback.
