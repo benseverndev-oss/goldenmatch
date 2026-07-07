@@ -47,7 +47,12 @@ type IngestResult = { records: Record<string, unknown>[]; report: IngestReport }
 - `suggestSchema(file: File): Promise<{ schema: TargetSchema }>` -> POST `/api/v1/documents/suggest-schema`
   with `file`.
 - `ingestDocuments(files: File[], schema: TargetSchema): Promise<IngestResult>` -> POST
-  `/api/v1/documents/ingest` with `files[]` + `schema` (JSON string form field).
+  `/api/v1/documents/ingest`. **CRITICAL:** append each file under the repeated key `files` with NO
+  brackets — `for (const f of files) form.append("files", f)`. FastAPI binds the repeated multipart
+  field by the exact key `files` (`documents.py`: `files: list[UploadFile] | None = File(None)`); a
+  `files[]` key (the common JS convention) makes the server see zero files and return `400 "no files
+  uploaded"` on every request. The schema goes as a single JSON-string field:
+  `form.append("schema", JSON.stringify(schema))`.
 
 ## Flow (single page)
 
@@ -56,9 +61,12 @@ type IngestResult = { records: Record<string, unknown>[]; report: IngestReport }
    loads its fields into the editor. (User may also start editing an empty schema manually.)
 3. **Edit** — `SchemaEditor` on the suggested fields: add/remove rows, rename, pick kind, edit hint.
 4. **Extract** — an "Extract" action runs `ingestDocuments(files, schema)` (react-query mutation).
-5. **Results** — `DocumentResults`: the records table (schema columns + `_extract_confidence`), the
-   report summary (`n_rows` from `n_files`, plus a list of per-file `errors`), and **Download CSV**
-   (client-side CSV of the schema columns + sidecars).
+5. **Results** — `DocumentResults`: the records **table** shows the schema columns + `_extract_confidence`
+   (the review-useful sidecar); it does NOT show `_source_file`/`_source_page` as columns (kept for
+   provenance, off the review grid). The report summary (`n_rows` from `n_files`, plus per-file
+   `errors`), and **Download CSV** exporting the schema columns + ALL three sidecars
+   (`_source_file`, `_source_page`, `_extract_confidence`) so downstream `dedupe_df(exclude_columns=...)`
+   has the full provenance.
 
 ## Data fetching + state
 
