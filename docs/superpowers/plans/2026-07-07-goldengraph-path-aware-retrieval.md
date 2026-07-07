@@ -18,6 +18,14 @@
 - **Recall guard is free.** `bridge_recall(chain, ball, coverage)` is LLM-free — every lever is
   first checked for "does the pruned/walked subgraph still contain the chain?" before spending
   on the answer-match LLM run.
+- **Seed-SHAPE dilemma (review finding #2 — load-bearing).** `answer_match_ablation` seeds with
+  exactly ONE node (`_retrieve_local(slice_graph, [seed_node], …)`), whereas the product `ask`
+  local path seeds `k=5` via `seed_by_query`. `filter_subgraph_to_paths`'s main mechanism is
+  anchor-to-anchor shortest paths — which **never executes with a single seed** (it degenerates
+  to halo-only, dropping every k≥2 answer by construction). So the single-seed ablation CANNOT
+  validly measure Lever A, and the only multi-seed path is the embedder path Phase 0 otherwise
+  avoids. **Resolution:** Lever A must be measured in a MULTI-SEED regime (see Task 1.2), not on
+  the stock single-seed ablation.
 
 ## Phase 1 — Lever A: wire the EXISTING topology filter into `local` (gated), measure
 
@@ -36,46 +44,59 @@ anchor multi-hop blind spot) — the recall guard quantifies that.
     No network (stub LLM + a hand-built store slice).
   - **Run:** `cd packages/python/goldengraph && python -m pytest tests/test_answer_local_filter.py -q`.
   - **Commit:** `feat(goldengraph): gated path-preserving filter on the local retrieval ball`.
-- **Task 1.2 (bench measurement + recall guard).** `erkgbench/qa_e2e/`: add
-  `retrieval_levers.py::measure_lever(corpus, g, typ_of, llm, *, lever)` that reruns the
-  `oracle`/`goldengraph` dials' local path with the lever applied between `_retrieve_local` and
+- **Task 1.2 (bench measurement + recall guard — MULTI-SEED).** `erkgbench/qa_e2e/`: add
+  `retrieval_levers.py::measure_lever(corpus, g, typ_of, llm, *, lever, seeds_fn)` that reruns the
+  `oracle`/`goldengraph` dials' local path with the lever applied between retrieval and
   `synthesize_local`, returning per-dial answer-match AND per-dial bridge-recall of the
-  post-lever subgraph. `lever="filter_path"` calls `filter_subgraph_to_paths`.
-  - **Test:** `tests/test_qa_retrieval_levers.py` — offline stub LLM; assert (a) the recall
-    guard is computed on the POST-lever subgraph, (b) `lever="none"` reproduces
-    `answer_match_ablation`'s numbers on a tiny fixture. Pure, no wheel needed if the store bits
-    are stubbed; else `importorskip("goldengraph_native")`.
-  - **Commit:** `test+feat(erkgbench): lever measurement harness + bridge-recall guard`.
+  post-lever subgraph. **`seeds_fn` must produce a MULTI-seed set** (finding #2): the ablation's
+  single seed makes `filter_subgraph_to_paths` inert. Use the SAME `k=5` seed shape the product
+  `ask` path uses — reuse `goldengraph.embed.seed_by_query(slice_graph, question, embedder, k=5)`
+  so the bench regime matches production. (This accepts the embedder for Lever A specifically —
+  the multi-anchor regime IS the lever's point; keep it a cheap embedding model, budget-capped.)
+  `lever="filter_path"` calls `filter_subgraph_to_paths(subgraph, seeds, halo=…)`.
+  - **Test:** `tests/test_qa_retrieval_levers.py` — offline stub LLM + stub `seeds_fn` returning a
+    fixed multi-seed set; assert (a) the recall guard is computed on the POST-lever subgraph, (b)
+    `lever="none"` reproduces the baseline on a tiny fixture, (c) with ≥2 seeds the anchor-to-
+    anchor bridge actually fires (a chain between two seeds survives the filter). `importorskip("goldengraph_native")`.
+  - **Commit:** `test+feat(erkgbench): multi-seed lever harness + bridge-recall guard`.
 - **Task 1.3 (measure — PAID, opt-in).** Run `measure_lever(lever="filter_path")` at
-  amb ∈ {0, 0.5, 1.0}, n=40, `gpt-4o-mini`. **Gate on the recall guard first** (LLM-free): if the
-  filtered subgraph's bridge-recall drops vs the ball, STOP — the lever strands answers (that's
-  the single-anchor blind spot); do not spend on answer-match. Record the answer-match delta vs
-  the 0.275/0.372 baseline in `results/RESULTS_PATH_AWARE_RETRIEVAL.md`.
+  amb ∈ {0, 0.5, 1.0}, n=40, `gpt-4o-mini`, multi-seed. **Gate on the recall guard first**
+  (LLM-free): if the filtered subgraph's bridge-recall drops vs the ball, STOP — the lever
+  strands answers; do not spend on answer-match. **Baseline = the freshly-run `lever="none"`
+  numbers from the SAME multi-seed harness** (finding #3 — do NOT anchor to the old single-seed
+  0.275/0.372; those are a different-n, different-seed-shape regime and omit goldengraph=0.077).
+  Record the delta in `results/RESULTS_PATH_AWARE_RETRIEVAL.md`.
   - **Decision gate:** answer-match up AND recall not down ⇒ Lever A is a win → Phase 4. Else →
     Phase 2.
 
 ## Phase 2 — Lever B: route `local` multi-hop through the existing `trace_chain` (measure)
 
 `trace_chain` already solves path-finding LLM-free, but needs a query PLAN
-(`anchor_surface` + `relation_chain`) from `resolve_profile`/`plan_query` — which `local`
-doesn't build. First a config test, then (only if needed) real work.
+(`anchor_surface` + `relation_chain`). **Task 2.1 is already resolved from `route.py`
+(review findings #1/#4):** a `chain` plan's `relation_chain` is populated ONLY by
+`_extract_chain_slots` / `_CHAIN_RE` — a regex **hard-matched to the engineered question
+template** ("Starting from X, follow the relation R1, then R2. What entity…"). It is LLM-free,
+but `LLMQueryClassifier.classify` **never sets `relation_chain`**, and the general heuristic
+routes any other phrasing to `hybrid`. **Consequence — Lever B is TEMPLATE-BOUND:**
 
-- **Task 2.1 (scout, no code).** Read `route.py::resolve_profile`/`plan_query`: does producing a
-  `chain` plan require an LLM query-classifier, or is it heuristic/regex? Record the answer in
-  the plan-of-record. (If heuristic → B is nearly free; if it needs a classifier → that IS the
-  work, and it competes with Lever C.)
-- **Task 2.2 (config measurement — PAID, opt-in).** Run the head-to-head QA-e2e (or the ablation
-  routed through `ask(mode="auto")` on the dial store) with `GOLDENGRAPH_QA_MODE=auto`,
-  amb ∈ {0, 0.5, 1.0}, small n. `auto` reaches `trace_chain` (with fall-through to local on a
-  missing/mislabeled edge). Compare answer-match vs the local baseline.
-  - **Confound to control:** `ask(mode="auto")` seeds via `seed_by_query` (needs an embedder) and
-    the store's `seeds_by_name` for `trace_chain`. For the CLEAN ER-isolated test, drive
-    `trace_chain` directly on the dial store with the gold *anchor surface* but a *planner-
-    produced* relation_chain (NOT the gold chain — using gold relations would be oracle-cheating);
-    if the planner is LLM-based, budget-cap it.
-  - **Decision gate:** if `auto`/`trace_chain` closes most of the gap ⇒ the fix is largely
-    "make `auto` the default (or route multi-hop through it) on the local head-to-head path" +
-    harden `resolve_profile`'s chain extraction → Phase 4. Else → Phase 3.
+- On the **engineered corpus** it fires for free (regex matches the template) → cheap to measure.
+- On a **real corpus (2WikiMultiHopQA)** it CANNOT fire — there is no chain decomposition for
+  natural-language multi-hop questions. So Lever B **cannot pass the Phase-4 real-corpus gate as
+  designed**; generalizing it means BUILDING chain decomposition the classifier lacks today — new
+  work that competes with Lever C, NOT a config win. The spec's "B1 = one-line config win" is
+  scoped to the engineered corpus only.
+
+- **Task 2.2 (engineered-only measurement — PAID, opt-in).** Drive `trace_chain` **directly on
+  the dial store** (the ER-isolated path — NOT the full head-to-head, which would add extraction/
+  resolver/embedder confounds), using the regex-`_extract_chain_slots` planner-produced
+  `relation_chain` (LLM-free here; NOT the gold chain — the question text legitimately states the
+  relations, so this is not an oracle leak, per the review). amb ∈ {0, 0.5, 1.0}, small n.
+  Compare answer-match vs the Task-1.3 `none` baseline.
+  - **Decision gate:** even if `trace_chain` closes the engineered gap, it only proves the
+    *mechanism* (a relation-guided walk beats ball-dump); it does NOT license a product default,
+    because it can't fire on real questions. So a Lever-B win ⇒ the real deliverable is **chain
+    decomposition** (build), tracked into Phase 3/4 alongside Lever C — not "flip `auto` on".
+    Else → Phase 3.
 
 ## Phase 3 — Lever C: recall-safe answer-candidate prune (BUILD only if A+B insufficient)
 

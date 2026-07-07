@@ -69,11 +69,17 @@ LLM-free. The blocker is that `local` mode doesn't build a query PLAN (`anchor_s
 - (B1) Run the `auto` planner (`resolve_profile`/`plan_query`) opportunistically inside
   `local`: if it yields a `chain` plan, try `trace_chain` first; on `None` (missing/mislabeled
   edge) fall through to today's ball+`synthesize_local`. This is **exactly what `mode="auto"`
-  already does** — so B1 largely reduces to "does the head-to-head / ablation benefit from
-  `mode=auto` instead of `mode=local`?" — a **config test, not new code**.
-- (B2) If `resolve_profile` needs a signal `local` lacks (an LLM query-classifier or a
-  heuristic decomposition), that's the only real new work — and it should be gated + measured
-  against B1.
+  already does** — so on the **engineered corpus** B1 largely reduces to "does `mode=auto` beat
+  `mode=local`?", a config test.
+- **CAVEAT — B is TEMPLATE-BOUND (verified in `route.py`, review finding #1).** A `chain` plan's
+  `relation_chain` is set ONLY by `_extract_chain_slots`/`_CHAIN_RE`, a regex matched to the
+  engineered question template; `LLMQueryClassifier.classify` never emits a `relation_chain`, and
+  other phrasings route to `hybrid`. So `trace_chain` **cannot fire on a natural-language real
+  corpus (2WikiMultiHopQA)**. B1 is therefore an engineered-only *mechanism* check, NOT a
+  shippable default — it cannot clear the real-corpus gate.
+- (B2) Generalizing B to real questions means **building chain decomposition** the classifier
+  does not have today (question → ordered relation chain). That is genuinely new work of the same
+  order as Lever C, and should be planned as such — not framed as a config flip.
 
 ### Lever C — a recall-safe structural prune keyed on *answer candidates*, not predicates
 If A and B underperform, design a new prune that (a) enumerates seed-rooted paths up to `k`
