@@ -69,8 +69,10 @@
   "dependencies": {
     "commander": "^15.0.0",
     "goldencheck": "workspace:^",
+    "goldencheck-types": "workspace:^",
     "goldenflow": "workspace:^",
-    "goldenmatch": "workspace:^"
+    "goldenmatch": "workspace:^",
+    "infermap": "workspace:^"
   },
   "peerDependencies": {
     "yaml": "*"

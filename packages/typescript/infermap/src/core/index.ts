@@ -2,7 +2,7 @@
 export * from "./types.js";
 export * from "./assignment/hungarian.js";
 export { DomainPackTarget, isDomainPackTarget } from "./domainPack.js";
-export { detectDomain, DEFAULT_MIN_SCORE } from "./detect.js";
+export { detectDomain, detectDomainDetailed, DEFAULT_MIN_SCORE } from "./detect.js";
 export type { Scorer } from "./scorers/base.js";
 export { ExactScorer } from "./scorers/exact.js";
 export { AliasScorer, DEFAULT_ALIASES } from "./scorers/alias.js";
