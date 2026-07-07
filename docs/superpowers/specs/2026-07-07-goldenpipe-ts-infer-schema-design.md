@@ -201,7 +201,7 @@ force-enable WASM — consumer's choice, consistent with every other WASM surfac
 
 Low — every building block exists (shared `InferredSchema` type, the `infermap`
 API, the goldenpipe stage/registry pattern). It's a faithful translation of a
-~90-line Python stage with a mirrored 6-case test. The single care point is §4's
+~90-line Python stage with a mirrored 7-case test. The single care point is §4's
 soft-mode `target` fidelity in `resultToInferredSchema`; the plan resolves it by
 reading the TS `map` soft path and matching the None-handling.
 
