@@ -9,7 +9,9 @@ use serde_json::{json, Value};
 use crate::config::{auto_config, skip_if_falsy};
 use crate::decisions::evaluate_builtin;
 use crate::model::{CtxSubset, Decision, JsonMap, PipelineConfig, PlannedSpec, StageInfo};
-use crate::planner::{apply_scale_hints, band_of, plan_pipeline, PipePlan, PipeProfile, PlannerInput};
+use crate::planner::{
+    apply_scale_hints, band_of, plan_pipeline, PipePlan, PipeProfile, PlannerInput,
+};
 use crate::resolve::resolve;
 use crate::router::apply_decision;
 
