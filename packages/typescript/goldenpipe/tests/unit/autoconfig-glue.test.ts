@@ -87,13 +87,15 @@ describe("planConfig (brain wiring)", () => {
       { account_number: "A2", currency: "EUR" },
     ];
     const cfg = planConfig(rows, buildDefaultRegistry(), {});
-    expect(cfg.stages.map((s) => s.use)).toEqual([
+    expect(cfg.stages.map((s) => (typeof s === "string" ? s : s.use))).toEqual([
       "infer_schema", "goldencheck.scan", "goldenflow.transform", "goldenmatch.dedupe",
     ]);
   });
   it("single row is pathological (drops dedupe)", () => {
     const rows = [{ first_name: "Solo", last_name: "Person", email: "s@x.co" }];
     const cfg = planConfig(rows, buildDefaultRegistry(), {});
-    expect(cfg.stages.map((s) => s.use)).toEqual(["goldencheck.scan", "goldenflow.transform"]);
+    expect(cfg.stages.map((s) => (typeof s === "string" ? s : s.use))).toEqual([
+      "goldencheck.scan", "goldenflow.transform",
+    ]);
   });
 });
