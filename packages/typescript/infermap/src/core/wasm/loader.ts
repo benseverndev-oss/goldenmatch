@@ -9,6 +9,9 @@ export async function instantiateBackend(bytes: Uint8Array): Promise<InfermapBac
   const glue = (await import("./artifacts/infermap_wasm.js" as string)) as {
     default: (input: { module_or_path: Uint8Array }) => Promise<unknown>;
     detect_domain_json: (input_json: string) => string;
+    exact_score: (a: string, b: string) => number;
+    fuzzy_name_score: (a: string, b: string) => number;
+    initialism_score: (a: string, b: string) => number | undefined;
   };
   await glue.default({ module_or_path: bytes });
   return {
@@ -17,5 +20,8 @@ export async function instantiateBackend(bytes: Uint8Array): Promise<InfermapBac
       const input = JSON.stringify({ columns, domains, min_score: minScore });
       return JSON.parse(glue.detect_domain_json(input)) as DetectionResult;
     },
+    exactScore: (a, b) => glue.exact_score(a, b),
+    fuzzyNameScore: (a, b) => glue.fuzzy_name_score(a, b),
+    initialismScore: (a, b) => glue.initialism_score(a, b) ?? null,
   };
 }
