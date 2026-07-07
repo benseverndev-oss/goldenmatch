@@ -114,3 +114,39 @@ def plan_pipeline(
         if rule.predicate(inp):
             return rule.action(inp)
     return _default_plan(inp)
+
+
+SCALE_ROUTE_MIN_ROWS = 1_000_000
+_THROUGHPUT_RECALL_TARGET = 0.95
+
+
+def apply_scale_hints(plan: PipePlan, runtime: PipeProfile) -> PipePlan:
+    """Composable post-transform: at/above SCALE_ROUTE_MIN_ROWS, attach a
+    throughput hint to the dedupe stage so GoldenMatch routes to its
+    sketch-then-verify tier. No-op below the threshold or when the plan has no
+    dedupe stage. Pure — returns a new PipePlan, never mutates the input.
+
+    The hint travels as a reserved ``_dedupe_hints`` key in the dedupe stage's
+    config; the match.py adapter recognizes it and forwards it to
+    ``dedupe_df(throughput=...)`` (auto-config + hint) rather than treating it as
+    a full-config override.
+    """
+    if runtime.n_rows < SCALE_ROUTE_MIN_ROWS:
+        return plan
+    if not any(s.name == "goldenmatch.dedupe" for s in plan.stages):
+        return plan
+    new_stages = tuple(
+        PlannedStage(
+            s.name,
+            {**s.config, "_dedupe_hints": {"throughput": {"recall_target": _THROUGHPUT_RECALL_TARGET}}},
+        )
+        if s.name == "goldenmatch.dedupe"
+        else s
+        for s in plan.stages
+    )
+    return PipePlan(
+        stages=new_stages,
+        rule_name=plan.rule_name,
+        confidence=plan.confidence,
+        evidence={**plan.evidence, "scale_hinted": True},
+    )
