@@ -1,0 +1,8 @@
+[
+  {"comment": "at GREEN_THRESHOLD (0.7) -> green", "input": 0.7, "expected": "green"},
+  {"comment": "above GREEN_THRESHOLD -> green", "input": 0.71, "expected": "green"},
+  {"comment": "just below GREEN_THRESHOLD -> amber", "input": 0.69, "expected": "amber"},
+  {"comment": "at AMBER_THRESHOLD (0.4) -> amber", "input": 0.4, "expected": "amber"},
+  {"comment": "just below AMBER_THRESHOLD -> red", "input": 0.39, "expected": "red"},
+  {"comment": "floor -> red", "input": 0.0, "expected": "red"}
+]

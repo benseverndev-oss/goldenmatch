@@ -23,6 +23,9 @@ _CASES = [
     ("evaluate_builtin", PJ.evaluate_builtin_json),
     ("auto_config", PJ.auto_config_json),
     ("skip_if", PJ.skip_if_falsy_json),
+    ("plan_pipeline", PJ.plan_pipeline_json),
+    ("apply_scale_hints", PJ.apply_scale_hints_json),
+    ("band_of", PJ.band_of_json),
 ]
 
 
@@ -45,6 +48,9 @@ from goldenpipe.core import _native_loader as NL  # noqa: E402
         ("evaluate_builtin", "evaluate_builtin_json"),
         ("auto_config", "auto_config_json"),
         ("skip_if", "skip_if_falsy_json"),
+        ("plan_pipeline", "plan_pipeline_json"),
+        ("apply_scale_hints", "apply_scale_hints_json"),
+        ("band_of", "band_of_json"),
     ],
 )
 def test_native_wheel_matches_core_vectors(name, fn_name):

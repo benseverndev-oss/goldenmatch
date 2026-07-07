@@ -85,3 +85,15 @@ def auto_config_json(input: str) -> str:
 
 def skip_if_falsy_json(input: str) -> str:
     return _native.skip_if_falsy_json(input)
+
+
+def plan_pipeline_json(input: str) -> str:
+    return _native.plan_pipeline_json(input)
+
+
+def apply_scale_hints_json(input: str) -> str:
+    return _native.apply_scale_hints_json(input)
+
+
+def band_of_json(input: str) -> str:
+    return _native.band_of_json(input)
