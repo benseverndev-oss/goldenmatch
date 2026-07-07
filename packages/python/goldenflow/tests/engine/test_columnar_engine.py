@@ -55,6 +55,9 @@ def test_native_list_binding_present() -> None:
         [("name", ["strip", "title_case", "name_proper"])],
         [("email", ["strip", "lowercase", "email_normalize"])],
         [("name", ["strip", "truncate:6"])],
+        # Phase 3 wave 1: phonetic joins the fused chain -> columnar-ready
+        [("name", ["strip", "lowercase", "soundex"])],
+        [("name", ["strip", "double_metaphone_primary"])],
     ],
 )
 def test_columnar_equals_polars(monkeypatch, specs) -> None:

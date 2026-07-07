@@ -64,6 +64,7 @@ def _manifest_rows(manifest):
         [("name", ["strip", "title_case"]), ("email", ["strip", "lowercase"])],
         [("email", ["strip", "lowercase", "email_normalize"])],
         [("name", ["strip", "truncate:6"])],
+        [("name", ["strip", "lowercase", "soundex"])],  # Phase 3 wave 1: phonetic
     ],
 )
 def test_native_csv_equals_polars_engine(tmp_path, monkeypatch, specs) -> None:

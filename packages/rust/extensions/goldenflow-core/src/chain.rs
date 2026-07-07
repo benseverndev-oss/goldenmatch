@@ -46,7 +46,7 @@ use arrow_buffer::{Buffer, OffsetBuffer, ScalarBuffer};
 // NumericKernel/NullableKernel executors.
 #[cfg(feature = "arrow")]
 use crate::{company, numeric, url};
-use crate::{email, names, text};
+use crate::{email, names, phonetic, text};
 
 /// One owned, no-arg, total string→string kernel eligible for the fused chain.
 /// The name mapping (`from_name`) is the single source of truth the host's
@@ -80,6 +80,10 @@ pub enum Kernel {
     NicknameStandardize,
     NameInitials,
     StripMiddle,
+    // phonetic family (total string->string keys)
+    Soundex,
+    DoubleMetaphonePrimary,
+    DoubleMetaphoneAlt,
     // parameterized string->string (carry their args; total, never null)
     Truncate(usize),
     PadLeft(usize, char),
@@ -118,6 +122,9 @@ impl Kernel {
             "nickname_standardize" => Kernel::NicknameStandardize,
             "name_initials" => Kernel::NameInitials,
             "strip_middle" => Kernel::StripMiddle,
+            "soundex" => Kernel::Soundex,
+            "double_metaphone_primary" => Kernel::DoubleMetaphonePrimary,
+            "double_metaphone_alt" => Kernel::DoubleMetaphoneAlt,
             _ => return None,
         })
     }
@@ -181,6 +188,9 @@ impl Kernel {
         "nickname_standardize",
         "name_initials",
         "strip_middle",
+        "soundex",
+        "double_metaphone_primary",
+        "double_metaphone_alt",
     ];
 
     /// Append `s` transformed by this kernel into `out` (which the caller has
@@ -215,6 +225,9 @@ impl Kernel {
             Kernel::NicknameStandardize => out.push_str(&names::nickname_standardize(s)),
             Kernel::NameInitials => out.push_str(&names::name_initials(s)),
             Kernel::StripMiddle => out.push_str(&names::strip_middle(s)),
+            Kernel::Soundex => out.push_str(&phonetic::soundex(s)),
+            Kernel::DoubleMetaphonePrimary => out.push_str(&phonetic::double_metaphone_primary(s)),
+            Kernel::DoubleMetaphoneAlt => out.push_str(&phonetic::double_metaphone_alt(s)),
             Kernel::Truncate(n) => out.push_str(&text::truncate(s, n)),
             Kernel::PadLeft(w, p) => text::pad_left_into(s, w, p, out),
             Kernel::PadRight(w, p) => text::pad_right_into(s, w, p, out),
