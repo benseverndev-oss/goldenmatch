@@ -437,11 +437,12 @@ dependencies = [
 
 [[package]]
 name = "goldenflow-core"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
  "phonenumber",
+ "ryu",
 ]
 
 [[package]]

@@ -8,7 +8,7 @@
 
 [package]
 name = "goldenflow-core"
-version = "0.12.0"
+version = "0.13.0"
 edition = "2021"
 license = "MIT"
 authors = ["Ben Severn <benzsevern@gmail.com>"]
@@ -21,6 +21,9 @@ name = "goldenflow_core"
 # Same pin native-flow used, so phone output is byte-identical before/after the
 # extraction (parity by construction — one source of truth).
 phonenumber = "0.3"
+# Shortest round-trip f64 formatting — the SAME crate Polars uses, so the numeric
+# columnar path's float->string output matches Polars byte-for-byte (float_fmt.rs).
+ryu = "1"
 # OPTIONAL (feature `arrow`, off by default): the Arrow-columnar apply paths in
 # src/columnar.rs. The wasm / pure-logic surfaces never enable this, so the core
 # stays arrow-free for them; native-flow (which already ships arrow) enables it.
