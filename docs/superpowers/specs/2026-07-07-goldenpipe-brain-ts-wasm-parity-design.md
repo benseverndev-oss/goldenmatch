@@ -64,6 +64,12 @@ export function bandOfJsonPure(inputStr: string): string { return JSON.stringify
 
 `planPipelineJsonPure`: `const { runtime, complexity } = JSON.parse(inputStr)` (snake_case) → build `PlannerInput` → `planPipeline` → `planToJson`. `applyScaleHintsJsonPure`: parse `{plan, runtime}`, reconstruct typed `PipePlan` + `PipeProfile` from snake_case → `applyScaleHints` → `planToJson`.
 
+**Name-collision caveat:** `plannerJsonPure.ts` already imports `PlannedStage` from
+`../engine/resolver.js` (the ENGINE type: `{name, spec, config}`), which differs from the brain's
+`PlannedStage` (`{name, config}`). Do NOT import the brain's `PlannedStage` into this module under
+the same name — type the bridges on `PipePlan` only (they never need to name the brain's
+`PlannedStage`), or import it under an alias.
+
 ## 5. WASM Rust faces — `goldenpipe-wasm/src/lib.rs`
 
 Add three `#[wasm_bindgen]` faces inside the `cfg(target_arch = "wasm32")` module, delegating to the core (mirroring the existing 5):
@@ -91,15 +97,24 @@ Run `rustfmt` on this file locally before pushing.
   applyScaleHintsJson: (s) => glue.apply_scale_hints_json(s),
   bandOfJson: (s) => glue.band_of_json(s),
   ```
+  **Also extend the inline `glue` cast type** in `loader.ts` (it enumerates the current 5 exports)
+  with the 3 new snake_case members — otherwise `glue.plan_pipeline_json` is a `tsc` error:
+  ```ts
+  plan_pipeline_json: (s: string) => string;
+  apply_scale_hints_json: (s: string) => string;
+  band_of_json: (s: string) => string;
+  ```
 
 ## 7. Parity tests
 
-- **`tests/parity/planner-parity.test.ts`** (Leg A) — add to the `CASES` list:
-  `["plan_pipeline", planPipelineJsonPure]`, `["apply_scale_hints", applyScaleHintsJsonPure]`,
-  `["band_of", bandOfJsonPure]` (import the three from `plannerJsonPure.js`).
+- **`tests/parity/planner-parity.test.ts`** (Leg A) — add to the `FAMILIES` list (the actual
+  identifier; a `[name, pureFn]` tuple array): `["plan_pipeline", planPipelineJsonPure]`,
+  `["apply_scale_hints", applyScaleHintsJsonPure]`, `["band_of", bandOfJsonPure]` (import the three
+  from `plannerJsonPure.js`).
 - **`tests/parity/planner-wasm-parity.test.ts`** (Leg B) — add `plan_pipeline: b.planPipelineJson`,
-  `apply_scale_hints: b.applyScaleHintsJson`, `band_of: b.bandOfJson` to the backend-fn map, and
-  the three family names to the replay loop (`["resolve", ..., "plan_pipeline", "apply_scale_hints", "band_of"]`).
+  `apply_scale_hints: b.applyScaleHintsJson`, `band_of: b.bandOfJson` to the `dispatch`
+  (family→fn) map, and the three family names to the replay loop
+  (`["resolve", ..., "plan_pipeline", "apply_scale_hints", "band_of"]`).
 
 Both load vectors from `../../../../rust/extensions/goldenpipe-core/tests/vectors/${name}.json` (the same committed files) and assert `toEqual`.
 
