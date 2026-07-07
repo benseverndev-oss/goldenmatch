@@ -15,6 +15,7 @@ mod address;
 mod autocorrect;
 mod categorical;
 mod chain;
+mod column;
 mod company;
 mod email;
 mod identifiers;
@@ -29,6 +30,7 @@ mod util;
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
+    m.add_class::<column::Column>()?;
     m.add_function(wrap_pyfunction!(chain::apply_chain_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(chain::apply_chain_ops_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(chain::apply_chain_str_list, m)?)?;
