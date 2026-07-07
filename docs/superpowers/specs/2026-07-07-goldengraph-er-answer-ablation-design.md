@@ -1,6 +1,11 @@
 # GoldenGraph ER→answer ablation across the ambiguity sweep — design
 
-**Status:** design draft 2026-07-07. Awaiting approval → plan.
+**Status:** design draft 2026-07-07. Plan written (`docs/superpowers/plans/2026-07-07-goldengraph-er-answer-ablation.md`).
+> **Reuse delta (found while planning):** the per-ambiguity answer-match ablation
+> already exists — `qa_e2e/scorecard_llm.py::answer_match_ablation` + `tracking_verdict`
+> + the budget-capped `run_scorecard`. §3/§6 below describe a "new module"; the plan
+> correctly retargets this as a thin **ambiguity-sweep + delta-vs-ambiguity verdict**
+> layer on top of that primitive, not a new ablation engine.
 **Owner:** ER platform.
 **Related:** evidence-program slice #2 ("ER→answer delta"), `2026-06-26-goldengraph-er-ablation-scorecard-design.md`, the head-to-head result `benchmarks/er-kg-bench/results/RESULTS_QA_E2E.md`, `2026-06-20-goldengraph-program-roadmap.md` (SP6).
 
