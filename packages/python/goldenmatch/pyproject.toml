@@ -87,7 +87,7 @@ audio = [
 # forward pass works without these; they're needed only for .onnx export and the
 # onnxruntime-backed inference path.
 inhouse-embeddings = [
-    "onnx>=1.15",
+    "onnx>=1.22.0",
     "onnxruntime>=1.17",
 ]
 llm = [
