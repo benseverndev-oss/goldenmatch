@@ -80,8 +80,10 @@ def apply_scale_hints(plan: PipePlan, runtime: PipeProfile) -> PipePlan:
   low-cost posture that wins on big data; below ~1M rows per-field FS scoring is
   cheap enough that the sketch tier isn't worth its recall trade-off. Named
   constant, tunable. It sits **above** the 100k refuse threshold, so a large
-  *garbage* table refuses (Slice-2 `low_confidence`) before it would ever be
-  hinted — only large *clean* tables get throughput.
+  *garbage* table is refused (Slice-2 `low_confidence`) before the hint ever
+  reaches the adapter — `apply_scale_hints` runs first and *does* annotate the
+  plan, but `enforce_confidence` raises before any stage executes, so the hint
+  is inert. Only large *clean* tables actually route to throughput.
 
 ## 4. Pipeline wiring — `goldenpipe/pipeline.py` `_plan_config`
 
@@ -142,6 +144,12 @@ def _throughput_from_hint(spec: dict | None):
 
 - A **full** YAML config (no `_dedupe_hints` key) still hits Priority 1 and
   overrides — unchanged, backward-compatible.
+- The hint branch calls `_dedupe(df, throughput=…)` and drops any *other* keys
+  on the dedupe stage config. Safe today: every shipped plan gives the dedupe
+  stage `config={}`, so `apply_scale_hints` produces `{"_dedupe_hints": …}` and
+  nothing else. If a future rule ever puts real config on the dedupe stage
+  alongside a hint, this branch must *merge* those keys (as `dedupe_df` kwargs)
+  rather than ignore them — noted so it isn't a silent surprise.
 - **Verify at implementation** (do not assume): that `dedupe_df(df,
   throughput=ThroughputConfig(enabled=True, recall_target=0.95))` is accepted and
   runs. If `dedupe_df`'s `throughput=` wants a different type, adapt
@@ -187,9 +195,13 @@ Interpreter `D:/show_case/goldenmatch/.venv/Scripts/python.exe`, `PYTHONPATH`
   asserting only that no `TypeError` on the `throughput=` arg (routing-level).
 
 **Integration (`tests/test_autoconfig_glue.py`):**
-- `_plan_config` on a ≥1M-row frame (a trivial 2-column frame is cheap to build)
-  → the returned `PipelineConfig`'s `goldenmatch.dedupe` stage config contains
-  `_dedupe_hints`; `_last_plan.evidence["scale_hinted"] is True`.
+- `_plan_config` on a ≥1M-row frame → the returned `PipelineConfig`'s
+  `goldenmatch.dedupe` stage config contains `_dedupe_hints`;
+  `_last_plan.evidence["scale_hinted"] is True`. **The frame must be low-null (or
+  domain-detectable)** so it lands on the GREEN `default`/`confident_schema` plan
+  — a domain-less *high-null* frame at 1M rows would trip `low_confidence` and
+  refuse before the hint can be asserted. Build a fully-populated 2-column frame
+  (cheap: `_plan_config` only profiles + returns a config, it never runs dedupe).
 - A small frame → no `_dedupe_hints` on the dedupe stage.
 
 ## 7. Non-goals / limitations
