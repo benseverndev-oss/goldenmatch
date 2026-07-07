@@ -21,6 +21,11 @@ on:
         required: false
         type: boolean
         default: false
+      build_wasm:
+        description: "Build the package's opt-in WASM artifact (packages/typescript/<pkg>/scripts/build_wasm.sh) before typecheck/build so it ships in dist/"
+        required: false
+        type: boolean
+        default: false
       ref:
         description: "Tag or commit to build (default: the triggering ref)"
         required: false
@@ -68,6 +73,18 @@ jobs:
         if: inputs.build_deps
         working-directory: ${{ github.workspace }}
         run: pnpm turbo run build --filter=${{ inputs.package }}^...
+
+      # Build the opt-in WASM artifact into src/core/wasm/artifacts/ so tsup's
+      # copy step ships it in dist/. Without this the artifact is gitignored /
+      # CI-only and enableWasm() falls back to pure-TS for published users.
+      # ubuntu-latest ships rustup/cargo; the script pins wasm-bindgen from the
+      # crate's Cargo.lock. Runs before Typecheck/Test so those also see it.
+      - name: Build WASM artifact
+        if: inputs.build_wasm
+        working-directory: ${{ github.workspace }}
+        run: |
+          rustup target add wasm32-unknown-unknown
+          bash "packages/typescript/${{ inputs.package }}/scripts/build_wasm.sh"
 
       - name: Typecheck
         run: pnpm exec tsc --noEmit
