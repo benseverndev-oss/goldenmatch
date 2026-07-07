@@ -18,6 +18,8 @@ import { Reporter } from "./engine/reporter.js";
 import { buildDefaultRegistry } from "./adapters/index.js";
 import { getPipeWasmBackend } from "./wasm/backend.js";
 import { autoConfigViaWasm } from "./wasm/plannerJson.js";
+import { buildPlannerInput, enforceConfidence, planToConfig } from "./autoconfigGlue.js";
+import { planPipeline, applyScaleHints } from "./autoconfigPlanner.js";
 
 const DEFAULT_STAGE_ORDER = [
   "goldencheck.scan",
@@ -51,7 +53,7 @@ export class Pipeline {
       metadata: { source, input_rows: rows.length },
     });
 
-    const config = this.config ?? computeAutoConfig(this.registry, this.identityOpts);
+    const config = this.config ?? planConfig([...rows], this.registry, this.identityOpts);
 
     let plan;
     try {
@@ -99,6 +101,23 @@ export function computeAutoConfigPure(
     stages.push(makeStageSpec({ use: IDENTITY_STAGE, config: identityOpts }));
   }
   return makePipelineConfig({ pipeline: "auto", stages });
+}
+
+/**
+ * planConfig — the brain path (pure-TS; mirrors Python _plan_config). Profiles
+ * the rows, runs the rule table + scale hints, refuses if not confident at
+ * scale, and materializes the chosen plan into a PipelineConfig.
+ */
+export function planConfig(
+  rows: readonly Row[],
+  registry: StageRegistry,
+  identityOpts: Record<string, unknown>,
+): PipelineConfig {
+  const inp = buildPlannerInput(rows);
+  let plan = planPipeline(inp);
+  plan = applyScaleHints(plan, inp.runtime);
+  enforceConfidence(plan, inp.runtime); // may throw PipeNotConfidentError
+  return planToConfig(plan, registry.listAll(), identityOpts);
 }
 
 /**

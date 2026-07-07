@@ -6,8 +6,6 @@
  */
 import type { Row } from "./index.js";
 import {
-  planPipeline,
-  applyScaleHints,
   bandOf,
   type PipeProfile,
   type ComplexityProfile,
@@ -17,7 +15,6 @@ import {
 import { detectDomainDetailed } from "infermap";
 import { PipeNotConfidentError } from "./errors.js";
 import { makePipelineConfig, makeStageSpec, type PipelineConfig } from "./models.js";
-import type { StageRegistry } from "./engine/registry.js";
 
 export const REFUSE_ROW_THRESHOLD = 100_000;
 

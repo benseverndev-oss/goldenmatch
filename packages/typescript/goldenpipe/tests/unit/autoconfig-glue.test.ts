@@ -6,6 +6,8 @@ import {
 } from "../../src/core/autoconfigGlue.js";
 import { PipeNotConfidentError } from "../../src/core/errors.js";
 import type { PipePlan, PipeProfile } from "../../src/core/autoconfigPlanner.js";
+import { planConfig } from "../../src/core/pipeline.js";
+import { buildDefaultRegistry } from "../../src/core/adapters/index.js";
 
 const financeRows = [
   { account_number: "A1", currency: "USD" },
@@ -75,5 +77,23 @@ describe("enforceConfidence", () => {
   });
   it("green proceeds", () => {
     expect(() => enforceConfidence(greenPlan(), profile(100_000))).not.toThrow();
+  });
+});
+
+describe("planConfig (brain wiring)", () => {
+  it("confident_schema prepends infer_schema", () => {
+    const rows = [
+      { account_number: "A1", currency: "USD" },
+      { account_number: "A2", currency: "EUR" },
+    ];
+    const cfg = planConfig(rows, buildDefaultRegistry(), {});
+    expect(cfg.stages.map((s) => s.use)).toEqual([
+      "infer_schema", "goldencheck.scan", "goldenflow.transform", "goldenmatch.dedupe",
+    ]);
+  });
+  it("single row is pathological (drops dedupe)", () => {
+    const rows = [{ first_name: "Solo", last_name: "Person", email: "s@x.co" }];
+    const cfg = planConfig(rows, buildDefaultRegistry(), {});
+    expect(cfg.stages.map((s) => s.use)).toEqual(["goldencheck.scan", "goldenflow.transform"]);
   });
 });
