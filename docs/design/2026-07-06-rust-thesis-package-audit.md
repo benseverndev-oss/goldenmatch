@@ -33,15 +33,27 @@ gate-enforced**, and (c) that core reaches multiple surfaces.
 | **goldencheck** | ✅ | ✅ | ✅ | ✅ (P5) | ✅ (P5) | ✅ (`goldencheck_native`) | 5 |
 | **goldenflow** | ✅ | ✅ (`native-flow`) | ✅ | ✅ (v0.1.1) | 🟡 partial | ✅ (`native_flow`, `goldenflow_duckdb`) | 4 |
 | **goldenanalysis** | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ advisory | 3 |
-| **goldengraph** | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | 3 |
+| **goldengraph** | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ (`goldengraph_native`) ¹ | 3 |
 | **goldenpipe** | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ (Rust is a *parity oracle only*, by design) | ~2 |
 | **infermap** | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ advisory | **1** |
 | goldenmatch-kg | — | — | — | — | — | — | 0 (integration shim) |
 
-`ci-required` membership verified in `.github/workflows/ci.yml:3802` — the
-`needs:` list includes `native`, `goldencheck_native`, `native_flow`,
-`goldenflow_duckdb`, `rust_pgrx`, `pgrx_sql_sync`, `fixture_drift`; it does **not**
-include `infermap_native` or `analysis_native`.
+`ci-required` membership verified in `.github/workflows/ci.yml` — the `needs:`
+list includes `native`, `goldencheck_native`, `native_flow`, `goldenflow_duckdb`,
+`goldengraph_native` ¹, `rust_pgrx`, `pgrx_sql_sync`, `fixture_drift`; it does
+**not** include `infermap_native` or `analysis_native`.
+
+> ¹ **Update (this PR):** at audit time GoldenGraph was Rust-*dependent* but not
+> Rust-*disciplined* — no `_native_loader` gate, the native crate exposed only
+> `build_graph`, and there was no blocking native CI lane. This PR closed that:
+> `goldengraph-native` now exposes the 7 JSON-boundary symbols that mirror
+> `goldengraph-wasm` exactly, a `GOLDENGRAPH_NATIVE` loader gate was added, and the
+> `goldengraph_native` lane (cross-surface parity vs the shared `queries.json`
+> oracle) is now in `ci-required`. GoldenGraph is native-authoritative (no
+> pure-Python fallback for the store/resolution engine), so this is its *only*
+> correctness signal — hence blocking, not advisory. See
+> `packages/python/goldengraph/CLAUDE.md`. The weakest-package conclusion is
+> unchanged: **infermap** (single surface, advisory gate) remains furthest back.
 
 ## Weakest package: **infermap**
 

@@ -19,8 +19,24 @@ view = g.query(seeds, 1)                     # -> {"entities": [...], "edges": [
 `build_graph(mentions, edges, resolution)` accepts either a `dict[int, int]`
 (`mention -> entity-id`, the Provided path) or a `("native", scorer_id,
 threshold)` tuple (the native resolver, reusing the score-core + graph-core
-kernels). The compute is shared with future TS/WASM/C bindings via the core
-crate; this wheel is a thin marshaling layer.
+kernels). The compute is shared with the TS/WASM ([`goldengraph-wasm`](../goldengraph-wasm))
+and C ([`goldengraph-cabi`](../goldengraph-cabi)) bindings via the core crate;
+this wheel is a thin marshaling layer.
+
+## Cross-surface JSON boundary
+
+Alongside the ergonomic `PyGraph`/`PyStore` pyclasses above, the module exposes
+7 **JSON-boundary** functions that mirror the `goldengraph-wasm` `*_impl`
+EXACTLY (`(json, args...) -> json`, same `serde_json` over the same core):
+`build_graph_json`, `neighborhood_json`, `seeds_by_name_json`,
+`communities_json`, `store_append_json`, `store_as_of_json`,
+`store_history_json`. Because every surface marshals the SAME core over the SAME
+boundary, Python native output is **byte-identical** to the wasm / C-ABI output
+by construction. These are the gate-able symbols the Python
+`goldengraph.core._native_loader` probes, and the `goldengraph_native`
+cross-surface parity lane (in `ci-required`) asserts them against the shared
+`queries.json` oracle — the same fixture the TS
+`goldengraph-wasm.parity.test.ts` uses.
 
 Part of the [GoldenMatch](https://github.com/benseverndev-oss/goldenmatch)
 extensions. No LLM, no embeddings, no persistence (those are later phases).
