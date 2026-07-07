@@ -4,6 +4,15 @@ All notable changes to golden-suite are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic
 versioning.
 
+## [0.1.7] - 2026-07-07
+
+### Changed
+- Bumped the goldenflow-native floor to **`goldenflow-native>=0.15.0`** (was
+  `>=0.14.0`), per the lockstep policy. goldenflow-native 0.15.0 ships 3-8×
+  faster hot transform kernels (name/URL/number families) — measured, byte-identical
+  (native == pure-Python == the pinned parity corpus), so it's a pure speed
+  improvement with no output change.
+
 ## [0.1.6] - 2026-07-06
 
 ### Changed
