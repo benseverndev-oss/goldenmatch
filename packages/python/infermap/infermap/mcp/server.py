@@ -300,13 +300,35 @@ def create_server() -> Server:
             domains = list_domains()
             return json.dumps({"domains": domains}, indent=2)
         elif uri == "infermap://scorer-info":
+            from infermap._native_loader import native_available
             from infermap.scorers import default_scorers
             scorers = default_scorers()
             info = [
                 {"name": s.name, "weight": s.weight}
                 for s in scorers
             ]
-            return json.dumps({"scorers": info}, indent=2)
+            # Report which backend the scorers actually run on, so humans and
+            # agents can see whether the compiled Rust kernels are active. In the
+            # default INFERMAP_NATIVE=auto mode the scorers dispatch to the Rust
+            # infermap-core kernels when the native wheel is importable, else the
+            # pure-Python reference. Both are byte-identical (parity-gated).
+            native = native_available()
+            return json.dumps(
+                {
+                    "scorers": info,
+                    "backend": "native" if native else "pure-python",
+                    "note": (
+                        "Scorers run the compiled Rust infermap-core kernels "
+                        "(installed via `pip install infermap[native]`); "
+                        "byte-identical to the pure-Python reference."
+                        if native
+                        else "Scorers run the pure-Python reference. "
+                        "`pip install infermap[native]` adds the compiled Rust "
+                        "kernels (identical results, faster) with no code change."
+                    ),
+                },
+                indent=2,
+            )
         elif uri == "infermap://last-mapping/report":
             if _last_mapping_result is None:
                 return json.dumps({"error": "No mapping has been run yet"})
