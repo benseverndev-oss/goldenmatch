@@ -541,6 +541,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "goldenmatch-documents-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "goldenmatch-fingerprint-core"
 version = "0.1.0"
 dependencies = [
@@ -562,6 +570,7 @@ dependencies = [
  "arrow",
  "blake2",
  "goldenmatch-autoconfig-core",
+ "goldenmatch-documents-core",
  "goldenmatch-fingerprint-core",
  "goldenmatch-graph-core",
  "goldenmatch-perceptual-core",
