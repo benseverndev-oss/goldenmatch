@@ -46,7 +46,29 @@ path — hence it is a **blocking** gate, unlike the advisory `infermap_native` 
   canonicalize both sides (entities by id, edges by subj/pred/obj, members/
   surface_names/source_refs sorted). Store snapshots ARE deterministic (compared raw).
 
-### Follow-up (not done here)
+## Agent surfaces (MCP / A2A / CLI) — deferred by design
+GoldenGraph ships **no MCP server, no A2A AgentCard, and no CLI** today, and is
+therefore **not in the `api_parity` gate** (no `parity/goldengraph.yaml`; absent
+from `scripts/emit_ts_surface.mjs`). This is a *sequenced* deferral, not an
+oversight — verified 2026-07-07:
+- No `goldengraph/mcp/` module, no `server.json`, no MCP/FastMCP dep, no
+  `[project.scripts]` entry point, no `Dockerfile.mcp` / `railway*.json` deploy
+  scaffold. Not in `publish-mcp.yml`, the MCP Registry, or Smithery.
+- Not one of the 4 A2A packages (goldenmatch/goldencheck/goldenflow/goldenpipe);
+  the TS package is edge/WASM-only (no `src/node/` agent surface).
+- **Rollout condition:** `docs/superpowers/specs/2026-06-20-goldengraph-sp4b-pipeline-design.md`
+  lists "Publishing `goldengraph` to PyPI / MCP roster" as a later rollout "once
+  the pipeline is real". GoldenGraph is pre-1.0 (`v0.1.0`), not yet on PyPI, and
+  still building out the extract→resolve→store→answer pipeline (SP4b/SP4c).
+
+When that bar is hit, stand up the agent surfaces together: a `goldengraph/mcp/`
+FastMCP server (`build`/`ask`/`neighborhood`/`communities`) + `server.json` with
+the first-line `mcp-name:` marker (mirror the infermap MCP layout), then add
+`parity/goldengraph.yaml` + the `emit_ts_surface.mjs` roster entry so MCP/CLI/A2A
+stay Python↔TS in lockstep. (Do NOT wire `api_parity` before a real surface
+exists — the gate has nothing to compare.)
+
+## Follow-up (not done here)
 Runtime call sites still hard-import the engine ad-hoc rather than through the new
 loader: `graph.py::_new_store` (`from goldengraph_native import _native`) and
 `profile.py` resolution (`goldenprofile_native.resolve_json`). Migrate them to
