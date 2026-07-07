@@ -18,6 +18,14 @@ except ImportError:
     _dedupe = None
 
 
+def _throughput_from_hint(spec: dict | None):
+    """Build GoldenMatch's throughput arg from a brain hint (auto-config + hint,
+    not an override). GoldenMatchConfig.throughput is a ThroughputConfig, which
+    dedupe_df(throughput=) accepts directly."""
+    from goldenmatch.config.schemas import ThroughputConfig
+    return ThroughputConfig(enabled=True, **(spec or {}))
+
+
 class DedupeStage:
     info = StageInfo(name="goldenmatch.dedupe", produces=["clusters", "golden"], consumes=["df"])
     rollback = None
@@ -31,9 +39,16 @@ class DedupeStage:
         # when mixed-type columns (e.g. birth_year as i64 vs str) reach GoldenMatch
         ctx.df = ctx.df.cast({col: pl.Utf8 for col in ctx.df.columns})
 
-        # Priority 1: explicit stage config from YAML/PipelineConfig
+        # Priority 0: brain scale-hint -> auto-config + hint (do NOT override
+        # GoldenMatch's controller; it merges kwargs with its auto-config).
         stage_cfg = ctx.stage_config
-        if stage_cfg:
+        hints = stage_cfg.get("_dedupe_hints") if stage_cfg else None
+        if hints:
+            throughput = _throughput_from_hint(hints.get("throughput"))
+            logger.info("Applying auto-config scale hint (throughput) from the brain")
+            result = _dedupe(ctx.df, throughput=throughput)
+        elif stage_cfg:
+            # Priority 1: explicit stage config from YAML/PipelineConfig
             from goldenmatch.config.schemas import GoldenMatchConfig
             config = GoldenMatchConfig(**stage_cfg)
             logger.info("Using explicit GoldenMatch config from stage spec")
