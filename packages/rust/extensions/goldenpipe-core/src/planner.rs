@@ -60,7 +60,10 @@ pub fn band_of(confidence: f64) -> &'static str {
 }
 
 fn stage(name: &str, config: JsonMap) -> PlannedStage {
-    PlannedStage { name: name.to_string(), config }
+    PlannedStage {
+        name: name.to_string(),
+        config,
+    }
 }
 
 fn default_evidence(inp: &PlannerInput) -> JsonMap {
@@ -70,9 +73,18 @@ fn default_evidence(inp: &PlannerInput) -> JsonMap {
     m.insert("n_rows".into(), json!(inp.runtime.n_rows));
     m.insert("n_cols".into(), json!(inp.runtime.n_cols));
     m.insert("inferred_domain".into(), json!(inp.runtime.inferred_domain));
-    m.insert("domain_confidence".into(), json!(inp.runtime.domain_confidence));
-    m.insert("max_null_density".into(), json!(inp.complexity.max_null_density));
-    m.insert("mean_null_density".into(), json!(inp.complexity.mean_null_density));
+    m.insert(
+        "domain_confidence".into(),
+        json!(inp.runtime.domain_confidence),
+    );
+    m.insert(
+        "max_null_density".into(),
+        json!(inp.complexity.max_null_density),
+    );
+    m.insert(
+        "mean_null_density".into(),
+        json!(inp.complexity.mean_null_density),
+    );
     m
 }
 
@@ -148,7 +160,10 @@ pub fn apply_scale_hints(plan: &PipePlan, runtime: &PipeProfile) -> PipePlan {
                     "_dedupe_hints".into(),
                     json!({"throughput": {"recall_target": THROUGHPUT_RECALL_TARGET}}),
                 );
-                PlannedStage { name: s.name.clone(), config: cfg }
+                PlannedStage {
+                    name: s.name.clone(),
+                    config: cfg,
+                }
             } else {
                 s.clone()
             }
@@ -178,7 +193,10 @@ mod tests {
                 inferred_domain: domain.map(|s| s.to_string()),
                 domain_confidence: dc,
             },
-            complexity: ComplexityProfile { max_null_density: max_null, mean_null_density: 0.0 },
+            complexity: ComplexityProfile {
+                max_null_density: max_null,
+                mean_null_density: 0.0,
+            },
         }
     }
 
@@ -191,18 +209,36 @@ mod tests {
 
     #[test]
     fn rules_fire_in_order() {
-        assert_eq!(plan_pipeline(&inp(1, None, 0.0, 0.0)).rule_name, "pathological");
-        assert_eq!(plan_pipeline(&inp(100, Some("finance"), 0.8, 0.0)).rule_name, "confident_schema");
-        assert_eq!(plan_pipeline(&inp(200000, None, 0.0, 0.7)).rule_name, "low_confidence");
-        assert_eq!(plan_pipeline(&inp(100, None, 0.0, 0.0)).rule_name, "default");
-        assert_eq!(plan_pipeline(&inp(100, Some("finance"), 0.4, 0.0)).rule_name, "default");
+        assert_eq!(
+            plan_pipeline(&inp(1, None, 0.0, 0.0)).rule_name,
+            "pathological"
+        );
+        assert_eq!(
+            plan_pipeline(&inp(100, Some("finance"), 0.8, 0.0)).rule_name,
+            "confident_schema"
+        );
+        assert_eq!(
+            plan_pipeline(&inp(200000, None, 0.0, 0.7)).rule_name,
+            "low_confidence"
+        );
+        assert_eq!(
+            plan_pipeline(&inp(100, None, 0.0, 0.0)).rule_name,
+            "default"
+        );
+        assert_eq!(
+            plan_pipeline(&inp(100, Some("finance"), 0.4, 0.0)).rule_name,
+            "default"
+        );
     }
 
     #[test]
     fn scale_hint_applies_and_noops() {
         let plan = plan_pipeline(&inp(100, None, 0.0, 0.0));
         let hinted = apply_scale_hints(&plan, &inp(1_000_000, None, 0.0, 0.0).runtime);
-        assert_eq!(hinted.evidence.get("scale_hinted"), Some(&Value::Bool(true)));
+        assert_eq!(
+            hinted.evidence.get("scale_hinted"),
+            Some(&Value::Bool(true))
+        );
         let below = apply_scale_hints(&plan, &inp(999_999, None, 0.0, 0.0).runtime);
         assert!(below.evidence.get("scale_hinted").is_none());
     }
