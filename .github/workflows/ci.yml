@@ -248,6 +248,8 @@ jobs:
               - 'packages/typescript/infermap/src/core/scorers/exact.ts'
               - 'packages/typescript/infermap/src/core/scorers/fuzzy-name.ts'
               - 'packages/typescript/infermap/src/core/scorers/initialism.ts'
+              - 'packages/typescript/infermap/src/core/scorers/profile.ts'
+              - 'packages/typescript/infermap/src/core/scorers/pattern-type.ts'
               - 'packages/typescript/infermap/tests/parity/infermap-wasm.parity.test.ts'
               - 'packages/typescript/infermap/scripts/copy_wasm_artifact.mjs'
               - 'packages/typescript/infermap/tsup.config.ts'
