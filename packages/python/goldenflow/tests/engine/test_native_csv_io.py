@@ -99,6 +99,46 @@ def test_native_csv_equals_polars_engine(tmp_path, monkeypatch, specs) -> None:
     assert _manifest_rows(manifest) == _manifest_rows(ref.manifest)
 
 
+@pytest.mark.parametrize(
+    "ops",
+    [
+        ["currency_strip"],
+        ["strip", "currency_strip"],
+        ["currency_strip", "round:1"],
+        ["currency_strip", "abs_value"],
+        ["currency_strip", "round:0", "clamp:0:100"],
+        ["currency_strip", "fill_zero"],
+        ["percentage_normalize"],
+        ["comma_decimal"],
+        ["scientific_to_decimal"],
+    ],
+)
+def test_native_csv_numeric_equals_polars(tmp_path, monkeypatch, ops) -> None:
+    """Phase 3 wave 3b: numeric configs (string* parser f64*) run string->f64->string
+    on the native CSV path, byte-identical (data + manifest) to the Polars engine.
+    The f64 output is formatted via the Polars-matching formatter (wave 3a)."""
+    if not columnar.columnar_file_ready(_cfg([("price", ops)])):
+        pytest.skip("native numeric columnar not built (pre-0.21 wheel)")
+    # 2-column CSV so empty fields are unambiguous (a lone empty single-column line
+    # is null-vs-blank ambiguous between readers).
+    rows = ["  $1,234.50 ", "$0.5", "10", "", "bad", "-$3.00", "0", "1000000", "12.5%", "1.5e3"]
+    lines = ["price,keep"] + [f'"{v}",k{i}' for i, v in enumerate(rows)]
+    inp = tmp_path / "in.csv"
+    inp.write_bytes(("\n".join(lines) + "\n").encode("utf-8"))
+    cfg = _cfg([("price", ops)])
+
+    out = tmp_path / "out.csv"
+    manifest = columnar.transform_file(inp, out, cfg, source=str(inp))
+
+    monkeypatch.delenv("GOLDENFLOW_ENGINE", raising=False)
+    ref = transform_df(pl.read_csv(inp, infer_schema_length=0), config=cfg)
+
+    got = pl.read_csv(out, infer_schema_length=0)
+    for col in got.columns:
+        assert got[col].to_list() == ref.df[col].cast(pl.Utf8).to_list(), f"{col} diverged"
+    assert _manifest_rows(manifest) == _manifest_rows(ref.manifest)
+
+
 def test_native_csv_path_is_pyarrow_free(tmp_path) -> None:
     """The transform_csv call must not pull in pyarrow — the whole weight thesis."""
     inp = tmp_path / "in.csv"

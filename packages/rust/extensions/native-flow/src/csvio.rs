@@ -28,7 +28,7 @@ const DEFAULT_PARALLEL_MIN_BYTES: usize = 512 * 1024;
 /// One per-op audit record: `(op, affected_rows, total_rows, sample_before,
 /// sample_after)`. Samples are the null-preserving first 3 values, mirroring the
 /// Python columnar engine's `series.head(3).cast(Utf8).to_list()`.
-type OpRecord = (String, u64, u64, Vec<Option<String>>, Vec<Option<String>>);
+pub type OpRecord = (String, u64, u64, Vec<Option<String>>, Vec<Option<String>>);
 /// Manifest for one transformed column: `(column, [OpRecord])`.
 type ColumnManifest = (String, Vec<OpRecord>);
 
@@ -328,6 +328,16 @@ pub fn transform_csv(
                 continue; // column not in file — mirrors the Python `if col in df.columns`
             };
             let total = columns[idx].len() as u64;
+            // Numeric shape (`string* parser f64*`) runs the string->f64->string
+            // path (formatting via the Polars-matching float formatter); otherwise
+            // auto-route the string run total vs nullable.
+            if let Some(plan) = crate::numeric_columnar::resolve_numeric(ops) {
+                let (new_array, records) =
+                    crate::numeric_columnar::run_numeric_column(&columns[idx], &plan);
+                columns[idx] = new_array;
+                manifest.push((col_name.clone(), records));
+                continue;
+            }
             // Auto-route the run: all-total takes the zero-alloc fast chain; any
             // Option-returning kernel takes the nullable chain. Both return the same
             // ChainResult, so the fused-pass + 3-row-replay manifest logic is shared.
