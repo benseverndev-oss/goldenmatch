@@ -5,7 +5,7 @@
 
 [package]
 name = "goldenflow-native"
-version = "0.16.0"
+version = "0.17.0"
 edition = "2021"
 license = "MIT"
 authors = ["Ben Severn <benzsevern@gmail.com>"]
@@ -24,7 +24,7 @@ pyo3 = { version = ">=0.28, <0.29", features = ["extension-module", "abi3-py311"
 # Arrow C Data Interface for zero-copy kernel input/output (Utf8 / LargeUtf8
 # string buffers in, string/int/bool buffers out). default features off — we
 # only read/build array buffers, no csv/ipc/json/compute.
-arrow = { version = "59", default-features = false, features = ["pyarrow"] }
+arrow = { version = "59", default-features = false, features = ["pyarrow", "ffi"] }
 # Dates are intentionally NOT a native kernel: GoldenFlow's Polars fast path
 # (str.to_date coalesce) already resolves the 4-digit-year formats in vectorized
 # Rust, and a per-row chrono parser would be slower while reintroducing the
