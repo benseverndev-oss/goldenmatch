@@ -79,14 +79,14 @@ checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
 
 [[package]]
 name = "goldenflow-core"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "phonenumber",
 ]
 
 [[package]]
 name = "goldenflow-wasm"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "goldenflow-core",
  "wasm-bindgen",

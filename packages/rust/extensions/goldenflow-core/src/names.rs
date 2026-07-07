@@ -226,19 +226,21 @@ const TITLES: [&str; 9] = ["Mr", "Mrs", "Ms", "Miss", "Dr", "Prof", "Rev", "Sr",
 /// leading-title regex match; whitespace uses Unicode `char::is_whitespace`
 /// (Python `\s` under `re.UNICODE` + polars `strip_chars`).
 fn strip_leading_title(s: &str) -> Option<&str> {
-    let lower = s.to_ascii_lowercase();
+    // Zero-alloc: case-insensitive prefix compare on the leading bytes instead of
+    // lowercasing the whole string + each title. Byte-identical (titles are ASCII).
+    let bytes = s.as_bytes();
     for title in TITLES {
-        let t = title.to_ascii_lowercase();
-        if lower.starts_with(&t) {
-            // ASCII-lowercasing preserves byte offsets, so `title.len()` indexes
-            // the original safely (the prefix is ASCII).
-            let after_title = &s[title.len()..];
-            let after_dot = after_title.strip_prefix('.').unwrap_or(after_title);
-            let after_ws = after_dot.trim_start();
-            if after_ws.len() < after_dot.len() {
-                // at least one whitespace consumed -> the `\s+` matched.
-                return Some(after_ws);
-            }
+        let tl = title.len();
+        if bytes.len() < tl || !bytes[..tl].eq_ignore_ascii_case(title.as_bytes()) {
+            continue;
+        }
+        // `tl` ends an ASCII prefix run, so it's a char boundary.
+        let after_title = &s[tl..];
+        let after_dot = after_title.strip_prefix('.').unwrap_or(after_title);
+        let after_ws = after_dot.trim_start();
+        if after_ws.len() < after_dot.len() {
+            // at least one whitespace consumed -> the `\s+` matched.
+            return Some(after_ws);
         }
     }
     None
@@ -273,24 +275,32 @@ const SUFFIXES: [(&str, bool); 14] = [
 
 /// If `s` ends (case-insensitively) with `\s+ suffix (\.)? $`, return everything
 /// before the trailing whitespace run; else `None`.
+///
+/// Zero-alloc: the match only concerns the string's tail and the suffix table is
+/// constant, so we compare the trailing bytes with `eq_ignore_ascii_case` instead
+/// of lowercasing the whole string + each suffix every call. Byte-identical to the
+/// old `to_ascii_lowercase()` form (suffixes are ASCII; ASCII-folding matches).
 fn strip_trailing_suffix(s: &str) -> Option<&str> {
-    let lower = s.to_ascii_lowercase();
+    let bytes = s.as_bytes();
     for (suf, allow_dot) in SUFFIXES {
-        let suf_l = suf.to_ascii_lowercase();
-        // `\.?$` greedily takes the trailing dot when present.
-        let core = if allow_dot {
-            lower.strip_suffix('.').unwrap_or(&lower)
+        // `\.?$` greedily takes a single trailing dot when the suffix allows it.
+        let end = if allow_dot && bytes.last() == Some(&b'.') {
+            bytes.len() - 1
         } else {
-            &lower
+            bytes.len()
         };
-        if let Some(before) = core.strip_suffix(&suf_l) {
-            // the `\s+` requires whitespace immediately before the suffix.
-            if before.ends_with(char::is_whitespace) {
-                // ASCII-lowercasing preserves byte offsets; `before.len()`
-                // indexes the original (`before` is all-ASCII up to here only
-                // where it matters -- it's a prefix, so the offset is valid).
-                return Some(&s[..before.len()]);
-            }
+        let sl = suf.len();
+        if end < sl {
+            continue;
+        }
+        if !bytes[end - sl..end].eq_ignore_ascii_case(suf.as_bytes()) {
+            continue;
+        }
+        // `end - sl` starts an ASCII suffix run, so it's a char boundary.
+        let before = &s[..end - sl];
+        // the `\s+` requires whitespace immediately before the suffix.
+        if before.ends_with(char::is_whitespace) {
+            return Some(before);
         }
     }
     None
@@ -308,6 +318,29 @@ pub fn strip_suffixes(s: &str) -> String {
 /// non-ASCII behavior is bounded by the Unicode `to_uppercase`/`to_lowercase`
 /// case maps (documented boundary -- reference-mode resolves in Rust's favor).
 pub(crate) fn ascii_title(s: &str) -> String {
+    // ASCII fast path (the common case for names): work byte-by-byte, no UTF-8
+    // decode and no `char::to_uppercase()` iterator per char. Byte-identical to
+    // the Unicode path below for ASCII input (ASCII a-z case ops == Unicode's).
+    if s.is_ascii() {
+        let mut out = String::with_capacity(s.len());
+        let mut prev_alpha = false;
+        for &b in s.as_bytes() {
+            let ch = if b.is_ascii_alphabetic() {
+                let m = if prev_alpha {
+                    b.to_ascii_lowercase()
+                } else {
+                    b.to_ascii_uppercase()
+                };
+                prev_alpha = true;
+                m
+            } else {
+                prev_alpha = false;
+                b
+            };
+            out.push(ch as char);
+        }
+        return out;
+    }
     let mut out = String::with_capacity(s.len());
     let mut prev_alpha = false;
     for c in s.chars() {
@@ -357,9 +390,22 @@ fn fixup_prefix(s: &str, p0: char, p1: char) -> String {
 /// fixups. Byte-identical to `names.py::name_proper` (title -> Mc sub -> O' sub)
 /// on ASCII input.
 pub fn name_proper(s: &str) -> String {
-    let titled = ascii_title(s);
-    let mc = fixup_prefix(&titled, 'M', 'c');
-    fixup_prefix(&mc, 'O', '\'')
+    let mut out = ascii_title(s);
+    fixup_prefix_inplace(&mut out, 'M', 'c');
+    fixup_prefix_inplace(&mut out, 'O', '\'');
+    out
+}
+
+/// Apply the `fixup_prefix` rule to `s` in place. The rule can only change the
+/// string where the `(p0,p1)` byte pair occurs, so when that pair is absent it is
+/// a guaranteed no-op and we skip the char-based rebuild entirely (no `Vec<char>`
+/// materialization, no realloc). Byte-identical — most names carry no `Mc`/`O'`.
+fn fixup_prefix_inplace(s: &mut String, p0: char, p1: char) {
+    let (b0, b1) = (p0 as u8, p1 as u8); // p0/p1 are ASCII
+    if !s.as_bytes().windows(2).any(|w| w[0] == b0 && w[1] == b1) {
+        return;
+    }
+    *s = fixup_prefix(s, p0, p1);
 }
 
 /// Map a common nickname (looked up by trimmed-lowercased key) to its formal
@@ -489,11 +535,14 @@ pub fn name_initials(s: &str) -> String {
 /// (`John Quincy Adams` -> `John Adams`). 0 tokens -> `""`; 1 token -> itself;
 /// >=2 -> `"first last"`. Collapses internal whitespace.
 pub fn strip_middle(s: &str) -> String {
-    let tokens: Vec<&str> = s.split_whitespace().collect();
-    match tokens.as_slice() {
-        [] => String::new(),
-        [only] => (*only).to_string(),
-        [first, .., last] => format!("{first} {last}"),
+    // First + last whitespace token, without collecting every token into a Vec.
+    let mut it = s.split_whitespace();
+    let Some(first) = it.next() else {
+        return String::new();
+    };
+    match it.last() {
+        None => first.to_string(),
+        Some(last) => format!("{first} {last}"),
     }
 }
 
