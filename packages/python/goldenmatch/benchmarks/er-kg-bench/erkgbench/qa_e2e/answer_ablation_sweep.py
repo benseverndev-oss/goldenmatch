@@ -109,20 +109,29 @@ def _delta_holds(sweep: AnswerAblationSweep) -> bool:
 def sweep_verdict(sweep: AnswerAblationSweep) -> list[tuple[str, bool, bool]]:
     """[(label, passed, is_hard)] mirroring ablation.evaluate_assertions.
 
-    - HARD: answer-match is monotonic in ER quality at EVERY ambiguity (the sanity check —
-      if this fails the harness or corpus is broken, not the thesis).
-    - SOFT: the ER->answer delta HOLDS under ambiguity (>= DELTA_HOLD_FRAC of its
-      clean-data value at max ambiguity). This is the World-A(PASS)/World-B(WARN) FINDING.
+    - HARD — the RETRIEVAL invariant: perfect ER (`oracle`) never retrieves WORSE than no ER
+      (`none`) at any ambiguity. This is the true sanity check — a violation means the store
+      / harness is broken, not the thesis. We deliberately do NOT gate the full
+      oracle>=goldengraph>=name_only>=none chain: a fuzzy resolver can over-merge on clean
+      data and dip below exact-surface merge (a real ER property), and — the whole point of
+      this experiment — the ANSWER layer legitimately breaks monotonicity when synthesis
+      fails to convert a retrieval advantage. Those are findings, not gate failures.
+    - SOFT — the ER->answer delta HOLDS under ambiguity (World A) vs collapses (World B).
+    - SOFT (observation) — answer-match monotonic in ER: where it does NOT hold, synthesis
+      is failing to convert ER's retrieval advantage into an answer (the mechanism).
     """
     ambs = sweep.ambiguities
-    monotonic = all(_monotonic_in_er(sweep, a) for a in ambs)
+    oracle_ge_none = all(
+        sweep.bridge_recall["oracle"][a] + 1e-9 >= sweep.bridge_recall["none"][a] for a in ambs
+    )
+    answer_monotonic = all(_monotonic_in_er(sweep, a) for a in ambs)
     lo = f"{ambs[0]:g}" if ambs else "-"
     hi = f"{ambs[-1]:g}" if ambs else "-"
     return [
         (
-            "answer-match monotonic in ER quality at every ambiguity "
-            "(oracle>=goldengraph>=name_only>=none)",
-            monotonic,
+            "retrieval invariant: perfect-ER bridge-recall >= no-ER at every ambiguity "
+            "(oracle >= none)",
+            oracle_ge_none,
             True,
         ),
         (
@@ -130,6 +139,12 @@ def sweep_verdict(sweep: AnswerAblationSweep) -> list[tuple[str, bool, bool]]:
             f"(delta_oracle@{hi} >= {DELTA_HOLD_FRAC:g}*delta_oracle@{lo}) "
             f"— PASS=World A (moat survives), WARN=World B (reposition)",
             _delta_holds(sweep),
+            False,
+        ),
+        (
+            "answer-match monotonic in ER at every ambiguity "
+            "(WARN = synthesis not fully converting ER->answer)",
+            answer_monotonic,
             False,
         ),
     ]

@@ -65,30 +65,47 @@ def test_aggregate_sweep_shapes():
     assert sw.delta["none"][0.0] == 0.0
 
 
-def _verdict(res):
-    return {label: (passed, is_hard) for label, passed, is_hard in res}
+def _find(res, needle):
+    for label, passed, is_hard in res:
+        if needle in label:
+            return passed, is_hard
+    raise AssertionError(f"no verdict matching {needle!r} in {[l for l, *_ in res]}")
 
 
-def test_verdict_world_a_delta_holds():
-    res = sweep_verdict(aggregate_sweep(_WORLD_A))
-    hard = [(p) for _l, p, is_hard in res if is_hard]
-    soft = [(p) for _l, p, is_hard in res if not is_hard]
-    assert all(hard)  # monotonic holds
-    assert any(soft)  # the delta-holds (World A) verdict passes
+# A sweep whose ONLY defect is the retrieval invariant: oracle retrieves WORSE than none.
+_BROKEN_RETRIEVAL = {
+    0.0: _ab({"oracle": 0.90, "goldengraph": 0.70, "name_only": 0.50, "none": 0.50},
+             {"oracle": 0.30, "goldengraph": 0.60, "name_only": 0.25, "none": 0.90}),
+}
 
 
-def test_verdict_world_b_delta_collapses():
-    res = sweep_verdict(aggregate_sweep(_WORLD_B))
-    hard = [p for _l, p, is_hard in res if is_hard]
-    soft = [p for _l, p, is_hard in res if not is_hard]
-    assert all(hard)  # still monotonic at every ambiguity
-    assert not any(soft)  # delta collapses -> World B (reposition)
+def test_hard_invariant_passes_when_oracle_ge_none():
+    passed, is_hard = _find(sweep_verdict(aggregate_sweep(_WORLD_A)), "retrieval invariant")
+    assert is_hard and passed
 
 
-def test_verdict_monotonic_hard_fails_when_none_wins():
+def test_hard_invariant_fails_when_oracle_retrieves_worse():
+    passed, is_hard = _find(sweep_verdict(aggregate_sweep(_BROKEN_RETRIEVAL)), "retrieval invariant")
+    assert is_hard and not passed
+
+
+def test_world_a_delta_holds_is_soft_pass():
+    passed, is_hard = _find(sweep_verdict(aggregate_sweep(_WORLD_A)), "delta holds")
+    assert (not is_hard) and passed
+
+
+def test_world_b_delta_collapses_is_soft_warn():
+    passed, is_hard = _find(sweep_verdict(aggregate_sweep(_WORLD_B)), "delta holds")
+    assert (not is_hard) and (not passed)
+
+
+def test_answer_monotonic_is_soft_observation_not_a_gate():
     res = sweep_verdict(aggregate_sweep(_NON_MONOTONIC))
-    hard = [p for _l, p, is_hard in res if is_hard]
-    assert not all(hard)  # the HARD monotonic assertion fails
+    passed, is_hard = _find(res, "answer-match monotonic")
+    assert (not is_hard) and (not passed)  # non-monotonic -> WARN, not FAIL
+    # ...and it does NOT flip the HARD retrieval invariant (oracle still >= none there)
+    hard = [p for _l, p, ih in res if ih]
+    assert all(hard)
 
 
 def test_delta_hold_frac_is_the_knob():
