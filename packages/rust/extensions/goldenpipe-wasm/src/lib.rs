@@ -39,4 +39,19 @@ mod wasm {
     pub fn skip_if_falsy_json(input: &str) -> String {
         json::skip_if_falsy_json(input)
     }
+
+    #[wasm_bindgen]
+    pub fn plan_pipeline_json(input: &str) -> String {
+        json::plan_pipeline_json(input)
+    }
+
+    #[wasm_bindgen]
+    pub fn apply_scale_hints_json(input: &str) -> String {
+        json::apply_scale_hints_json(input)
+    }
+
+    #[wasm_bindgen]
+    pub fn band_of_json(input: &str) -> String {
+        json::band_of_json(input)
+    }
 }
