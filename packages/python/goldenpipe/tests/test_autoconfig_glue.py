@@ -57,3 +57,87 @@ def test_plan_to_config_appends_identity_when_opts_and_available():
     cfg = plan_to_config(plan, available, identity_opts={"kinds": ["email"]})
     assert [s.use for s in cfg.stages] == ["goldencheck.scan", "goldenmatch.identity_resolve"]
     assert cfg.stages[-1].config == {"kinds": ["email"]}
+
+
+# --- Integration: _plan_config end-to-end through the brain -------------------
+
+from goldenpipe.engine.registry import StageRegistry  # noqa: E402
+from goldenpipe.models.context import PipeStatus, StageResult, StageStatus  # noqa: E402
+from goldenpipe.models.stage import stage  # noqa: E402
+from goldenpipe.pipeline import Pipeline  # noqa: E402
+
+
+def _stub_stage(name: str):
+    """A minimal always-succeeds Stage registered under a chosen name."""
+
+    @stage(name=name, produces=[], consumes=[])
+    def _run(ctx: PipeContext) -> StageResult:
+        return StageResult(status=StageStatus.SUCCESS)
+
+    return _run
+
+
+def _registry_with(*names: str) -> StageRegistry:
+    reg = StageRegistry()
+    for n in names:
+        reg.register(_stub_stage(n))
+    return reg
+
+
+def test_plan_config_confident_df_includes_infer_schema():
+    reg = _registry_with(
+        "infer_schema",
+        "goldencheck.scan",
+        "goldenflow.transform",
+        "goldenmatch.dedupe",
+    )
+    eng = Pipeline(registry=reg)
+    df = pl.DataFrame({"account_number": ["A1", "A2"], "currency": ["USD", "EUR"]})
+    ctx = PipeContext(df=df)
+    cfg = eng._plan_config(ctx)
+    uses = [s.use for s in cfg.stages]
+    assert uses == [
+        "infer_schema",
+        "goldencheck.scan",
+        "goldenflow.transform",
+        "goldenmatch.dedupe",
+    ]
+    assert eng._last_plan.rule_name == "confident_schema"
+    assert cfg.stages[0].config == {"domain": "finance"}
+
+
+def test_plan_config_one_row_is_pathological_and_skips_dedupe():
+    reg = _registry_with(
+        "infer_schema",
+        "goldencheck.scan",
+        "goldenflow.transform",
+        "goldenmatch.dedupe",
+    )
+    eng = Pipeline(registry=reg)
+    ctx = PipeContext(df=pl.DataFrame({"x": [1]}))
+    cfg = eng._plan_config(ctx)
+    uses = [s.use for s in cfg.stages]
+    assert uses == ["goldencheck.scan", "goldenflow.transform"]
+    assert "goldenmatch.dedupe" not in uses
+    assert eng._last_plan.rule_name == "pathological"
+
+
+def test_plan_config_runs_end_to_end_and_preserves_order():
+    reg = _registry_with(
+        "infer_schema",
+        "goldencheck.scan",
+        "goldenflow.transform",
+        "goldenmatch.dedupe",
+    )
+    eng = Pipeline(registry=reg)
+    df = pl.DataFrame({"account_number": ["A1", "A2"], "currency": ["USD", "EUR"]})
+    result = eng.run(df=df)
+    assert result.status == PipeStatus.SUCCESS
+    assert eng._last_plan.rule_name == "confident_schema"
+    ran = list(result.stages)
+    assert ran == [
+        "infer_schema",
+        "goldencheck.scan",
+        "goldenflow.transform",
+        "goldenmatch.dedupe",
+    ]
