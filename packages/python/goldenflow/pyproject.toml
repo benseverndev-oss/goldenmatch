@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "goldenflow"
-version = "1.14.0"
+version = "1.15.0"
 description = "Data transformation toolkit — standardize, reshape, and normalize messy data before it hits your pipeline."
 readme = "README.md"
 license = "MIT"
@@ -48,7 +48,7 @@ agent = ["aiohttp>=3.14.0"]
 # Optional Rust/PyO3 acceleration runtime (mirrors goldenmatch[native]). Pulls
 # pyarrow for the zero-copy Series<->kernel bridge. Off by default at runtime --
 # see goldenflow.core._native_loader (GOLDENFLOW_NATIVE / _GATED_ON).
-native = ["goldenflow-native>=0.12.0", "pyarrow>=10"]
+native = ["goldenflow-native>=0.13.0", "pyarrow>=10"]
 all = ["goldenflow[check,excel,db,mcp,agent,s3,gcs]"]
 
 [project.scripts]

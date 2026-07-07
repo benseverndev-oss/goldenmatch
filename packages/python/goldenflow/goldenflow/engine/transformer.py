@@ -199,21 +199,36 @@ class TransformEngine:
         manifest: Manifest,
     ) -> pl.DataFrame:
         """Apply an ordered list of ``(info, params)`` to ``column``. When fusion is
-        on (default; native available; string column), maximal runs of owned
-        string->string kernels are fused into ONE native Arrow round-trip (Pillar-1
-        of the Rust cutover); everything else takes the per-transform path unchanged.
-        The fusable set is symbol-aware — parameterized ops (truncate/pad) only join
-        a run when the native ``apply_chain_ops_arrow`` symbol is present."""
-        from goldenflow.transforms._chain import fusable_names, fused_enabled, is_fusable
-
-        available = (
-            fusable_names()
-            if fused_enabled() and df.schema.get(column) in (pl.String, pl.Utf8)
-            else frozenset()
+        on (default; native available), maximal runs of owned kernels of a single
+        dtype are fused into ONE native Arrow round-trip (Pillar-1 of the Rust
+        cutover): string->string kernels on a Utf8 column, or f64->f64 numeric
+        kernels (round/clamp/abs_value/fill_zero) on a Float64 column. Everything
+        else takes the per-transform path unchanged. The fusable set is
+        dtype-aware AND symbol-aware, and is recomputed as the run advances so a
+        parser that changes the column dtype mid-chain (e.g. currency_strip:
+        str->f64) lets the following numeric ops fuse too."""
+        from goldenflow.transforms._chain import (
+            fusable_f64_names,
+            fusable_names,
+            fused_enabled,
+            is_fusable,
         )
+
+        fused_on = fused_enabled()
+
+        def _available_for(dtype) -> frozenset[str]:
+            if not fused_on:
+                return frozenset()
+            if dtype in (pl.String, pl.Utf8):
+                return fusable_names()
+            if dtype == pl.Float64:
+                return fusable_f64_names()
+            return frozenset()
+
         n = len(ops)
         i = 0
         while i < n:
+            available = _available_for(df.schema.get(column))
             info, params = ops[i]
             if is_fusable(info.name, params, available):
                 # Extend the maximal fusable run starting at i.
@@ -257,8 +272,9 @@ class TransformEngine:
         for (info, params), n_changed in zip(run, changed):
             before = sample[column].head(3).cast(pl.Utf8).to_list()
             # Match the per-transform param handling EXACTLY: series-mode casts
-            # params, expr-mode passes them raw (pad_left's pad char "0" must stay
-            # a str, not be int-cast). Mixing these breaks the parameterized replay.
+            # params (round n=int, clamp bounds=float), expr-mode passes them raw
+            # (pad_left's pad char "0" must stay a str, not be int-cast). Mixing
+            # these up breaks the sample replay for parameterized expr ops.
             if info.mode == "series":
                 typed = self._cast_params(params) if params else []
                 sample = sample.with_columns(info.func(sample[column], *typed).alias(column))

@@ -4,6 +4,17 @@ All notable changes to golden-suite are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic
 versioning.
 
+## [0.1.5] - 2026-07-06
+
+### Changed
+- Bumped the goldenflow-family floors after the numeric + parameterized fused-apply
+  release (lockstep policy): **`goldenflow>=1.15.0`** (was `>=1.14.0`) and
+  **`goldenflow-native>=0.13.0`** (was `>=0.12.0`). goldenflow 1.15.0 extends the
+  fused columnar apply to f64 numeric chains (`round`/`clamp`/`abs_value`/`fill_zero`)
+  and the parameterized string ops (`truncate`/`pad`), byte-identical output with
+  lower peak RSS at scale; goldenflow-native 0.13.0 republishes with the
+  `apply_chain_ops_arrow` + `apply_chain_f64_arrow` kernel symbols they need.
+
 ## [0.1.4] - 2026-07-06
 
 ### Changed

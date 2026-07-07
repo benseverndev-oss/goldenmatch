@@ -85,18 +85,21 @@ mirroring `GOLDENMATCH_NATIVE`):
 
 ### Fused columnar apply
 
-When a column has a run of two or more consecutive owned string transforms
-(e.g. `strip → lowercase → collapse_whitespace → remove_punctuation`, or
-`name_transliterate → name_proper → strip_titles`), the native path **fuses**
-them into a single pass over the Arrow buffer instead of crossing the
-Python/Polars/Arrow boundary once per transform. The output and the audit trail
-are **byte-identical** to applying the transforms one at a time; the win is
-lower memory (fusion avoids materializing one intermediate column per transform)
-plus a smaller wall-time drop.
+When a column has a run of two or more consecutive owned transforms of one
+dtype (e.g. `strip → lowercase → collapse_whitespace → remove_punctuation`,
+`name_transliterate → name_proper → strip_titles`, or the numeric
+`round → clamp → abs_value`), the native path **fuses** them into a single pass
+over the Arrow buffer instead of crossing the Python/Polars/Arrow boundary once
+per transform. The output and the audit trail are **byte-identical** to applying
+the transforms one at a time; the win is lower memory (fusion avoids
+materializing one intermediate column per transform) plus a smaller wall-time
+drop.
 
 Measured at 5M rows: **~20% lower peak RSS** and a modest wall speedup, growing
 with row count. It is **on by default** when the native kernel is available
-(needs `goldenflow-native >= 0.12.0`); older wheels fall back gracefully.
+(needs `goldenflow-native >= 0.13.0` for the numeric + parameterized ops;
+`>= 0.12.0` fuses the no-arg string families only); older wheels fall back
+gracefully.
 
 | `GOLDENFLOW_FUSED_APPLY` | Behavior |
 |---|---|
@@ -104,11 +107,15 @@ with row count. It is **on by default** when the native kernel is available
 | `0` | Force the per-transform path (each transform applied individually). |
 
 <Note>
-  The fused set is the owned, single-value, total (never-null) string transforms
-  (text + email + name-normalizer families). Parameterized (`truncate`/`pad`),
-  numeric, `Option`-returning (URL / company), and residual-tier (`phone`/date)
-  transforms are not fused and take the per-transform path — automatically, no
-  configuration needed.
+  The fused set covers two dtypes: the owned, single-value, total (never-null)
+  **string** transforms (text + email + name-normalizer families, plus the
+  parameterized `truncate`/`pad`), and the owned **numeric** f64 transforms
+  (`round`/`clamp`/`abs_value`/`fill_zero`) on a `Float64` column. The engine
+  recomputes the fusable set as a run advances, so a parser that changes a
+  column's dtype mid-chain (e.g. `currency_strip`: str→f64) lets the string head
+  and the numeric tail each fuse. `Option`-returning (URL / company) and
+  residual-tier (`phone`/date) transforms are not fused and take the
+  per-transform path — automatically, no configuration needed.
 </Note>
 
 ## Cross-surface (WASM / TypeScript)

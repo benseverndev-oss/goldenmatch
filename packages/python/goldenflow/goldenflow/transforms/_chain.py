@@ -60,6 +60,20 @@ FUSABLE_KERNELS: frozenset[str] = frozenset(
 # symbol (goldenflow-native >= 0.13.0). Mirror of Kernel::PARAM_NAMES.
 FUSABLE_PARAM_KERNELS: frozenset[str] = frozenset({"truncate", "pad_left", "pad_right"})
 
+# Owned f64->f64 numeric kernels eligible for the SEPARATE numeric fused chain
+# (a Float64 column, not a string one). Mirror of
+# goldenflow_core::chain::NumericKernel::ALL_NAMES; ``round``/``clamp`` carry params
+# (FUSABLE_F64_PARAM_KERNELS, mirror of NumericKernel::PARAM_NAMES). Need the
+# ``apply_chain_f64_arrow`` symbol (goldenflow-native >= 0.13.0).
+FUSABLE_F64_KERNELS: frozenset[str] = frozenset(
+    {"round", "clamp", "abs_value", "fill_zero"}
+)
+FUSABLE_F64_PARAM_KERNELS: frozenset[str] = frozenset({"round", "clamp"})
+
+# Every parameterized fusable name (string + numeric), so ``is_fusable`` treats an
+# op-with-params as fusable when the op is one that legitimately carries args.
+_PARAM_KERNELS: frozenset[str] = FUSABLE_PARAM_KERNELS | FUSABLE_F64_PARAM_KERNELS
+
 
 def _native_if_on():
     """The native module if fusion is not opted out and native is not forced off,
@@ -95,12 +109,23 @@ def fusable_names() -> frozenset[str]:
     return frozenset()
 
 
+def fusable_f64_names() -> frozenset[str]:
+    """The numeric (f64) transform names the engine may fuse, given the available
+    native symbol: ``FUSABLE_F64_KERNELS`` when ``apply_chain_f64_arrow`` is present
+    (goldenflow-native 0.13.0+), else empty (a 0.12.0 wheel has no f64 chain)."""
+    nm = _native_if_on()
+    if nm is None or not hasattr(nm, "apply_chain_f64_arrow"):
+        return frozenset()
+    return FUSABLE_F64_KERNELS
+
+
 def is_fusable(name: str, params: list[str], available: frozenset[str]) -> bool:
     """An op fuses iff its name is in the symbol-available set AND either it's a
-    parameterized kernel (params are its args) or a no-arg kernel with no params."""
+    parameterized kernel (params are its args) or a no-arg kernel with no params.
+    ``available`` is the dtype-appropriate set (string vs f64) the caller passes."""
     if name not in available:
         return False
-    if name in FUSABLE_PARAM_KERNELS:
+    if name in _PARAM_KERNELS:
         return True
     return not params
 
@@ -109,10 +134,12 @@ def apply_chain_native(
     series: pl.Series, ops: list[tuple[str, list[str]]]
 ) -> tuple[pl.Series, list[int]] | None:
     """Apply ``ops`` (each ``(name, params)``, all fusable for the available symbol)
-    in order over ``series`` in one native pass. Prefers ``apply_chain_ops_arrow``
-    (parameterized); falls back to ``apply_chain_arrow`` when every op is no-arg.
-    Returns ``(transformed_series, per_kernel_changed_counts)`` or ``None`` if the
-    native path is unavailable. Zero-copy; Polars exports LargeUtf8, handled natively."""
+    in order over ``series`` in one native pass, dispatching on the series dtype: a
+    Float64 column routes to the numeric ``apply_chain_f64_arrow`` chain; a string
+    column prefers ``apply_chain_ops_arrow`` (parameterized) and falls back to
+    ``apply_chain_arrow`` when every op is no-arg. Returns
+    ``(transformed_series, per_kernel_changed_counts)`` or ``None`` if the native
+    path is unavailable. Zero-copy; Polars exports LargeUtf8 / Float64 natively."""
     nm = native_module()
     if nm is None:
         return None
@@ -120,7 +147,13 @@ def apply_chain_native(
         import pyarrow  # noqa: F401  (zero-copy bridge)
     except ImportError:
         return None
-    if hasattr(nm, "apply_chain_ops_arrow"):
+    if series.dtype == pl.Float64:
+        if not hasattr(nm, "apply_chain_f64_arrow"):
+            return None
+        out_arrow, changed = nm.apply_chain_f64_arrow(
+            series.to_arrow(), [(name, list(params)) for name, params in ops]
+        )
+    elif hasattr(nm, "apply_chain_ops_arrow"):
         out_arrow, changed = nm.apply_chain_ops_arrow(
             series.to_arrow(), [(name, list(params)) for name, params in ops]
         )
