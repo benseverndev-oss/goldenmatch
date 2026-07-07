@@ -58,6 +58,12 @@ def test_native_list_binding_present() -> None:
         # Phase 3 wave 1: phonetic joins the fused chain -> columnar-ready
         [("name", ["strip", "lowercase", "soundex"])],
         [("name", ["strip", "double_metaphone_primary"])],
+        # Phase 3 wave 2: nullable chain (URL/company/email Option-returning),
+        # incl. runs that MIX total + nullable kernels
+        [("email", ["strip", "lowercase", "email_extract_domain"])],
+        [("email", ["strip", "email_mask"])],
+        [("name", ["strip", "company_normalize"])],
+        [("name", ["strip", "url_normalize", "url_strip_www"])],
     ],
 )
 def test_columnar_equals_polars(monkeypatch, specs) -> None:
