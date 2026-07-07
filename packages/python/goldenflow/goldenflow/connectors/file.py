@@ -1,14 +1,16 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 from pathlib import Path
 
-import polars as pl
+from goldenflow._polars_lazy import pl
 
-_READERS: dict[str, Callable] = {
-    ".csv": pl.read_csv,
-    ".parquet": pl.read_parquet,
-    ".json": pl.read_json,
+# Polars reader by suffix, resolved LAZILY at call time (a module-level
+# ``pl.read_csv`` reference would import Polars at module load, defeating the lazy
+# proxy — Phase 4a). Values are attribute names on the Polars module.
+_READER_NAMES: dict[str, str] = {
+    ".csv": "read_csv",
+    ".parquet": "read_parquet",
+    ".json": "read_json",
 }
 
 _WRITERS: dict[str, str] = {
@@ -30,10 +32,10 @@ def read_file(path: Path, **kwargs) -> pl.DataFrame:
             raise ImportError(
                 "openpyxl is required for Excel files: pip install goldenflow[excel]"
             )
-    reader = _READERS.get(suffix)
-    if reader is None:
+    reader_name = _READER_NAMES.get(suffix)
+    if reader_name is None:
         raise ValueError(f"Unsupported file format: {suffix}")
-    return reader(path, **kwargs)
+    return getattr(pl, reader_name)(path, **kwargs)
 
 
 def write_file(df: pl.DataFrame, path: Path, **kwargs) -> None:

@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import re
 
-import polars as pl
-
+from goldenflow._polars_lazy import pl
 from goldenflow.transforms import register_transform
 from goldenflow.transforms._native import (
     email_canonical_native,

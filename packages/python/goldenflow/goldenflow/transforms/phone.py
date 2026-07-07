@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import phonenumbers
-import polars as pl
 
+from goldenflow._polars_lazy import pl
 from goldenflow.transforms import register_transform
 from goldenflow.transforms._fastpath import _V, apply_with_residual
 from goldenflow.transforms._native import (
