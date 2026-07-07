@@ -18,6 +18,7 @@ pub mod chain;
 #[cfg(feature = "arrow")]
 pub mod columnar;
 pub mod email;
+pub mod float_fmt;
 pub mod identifiers;
 pub mod names;
 pub mod numeric;
