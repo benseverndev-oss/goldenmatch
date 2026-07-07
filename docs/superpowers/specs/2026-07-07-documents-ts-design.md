@@ -1,7 +1,8 @@
 # Document Ingest TS surface (WASM kernels + parity) — design
 
-**Goal.** Expose the four `documents-core` kernels (schema validate/round-trip, response parse,
-prompt build, record normalize) in the TypeScript `goldenmatch` package via `documents-wasm`, with a
+**Goal.** Expose the `documents-core` kernels (5 wasm-exported fns: schema validate/round-trip,
+response parse, extract-instruction, suggest-prompt, record normalize) in the TypeScript
+`goldenmatch` package via `documents-wasm`, with a
 TS==Rust==Python parity test over the shared corpus. This is the payoff of building documents-core:
 the deterministic document-ingest logic is ONE Rust source of truth across Python, Rust, and TS — no
 reimplementation, no drift.
@@ -39,7 +40,7 @@ is the documents-core thesis.
 | `src/core/documentsWasm.ts` | sync loader + camelCase wrappers over the 5 kernels |
 | `tests/parity/fixtures/documents/documents_corpus.jsonl` | the shared corpus, copied from the Python oracle by the build script |
 | `tests/parity/documents-core.parity.test.ts` | TS-WASM == corpus `expected` (the parity gate) |
-| `package.json` (modify) | subpath export `./core/documents-wasm` (mirror `./core/autoconfig-wasm`) + a `build:documents-wasm` script |
+| `package.json` (modify) | subpath export `./core/documents-wasm` (mirror `./core/autoconfig-wasm`). NOTE: the other `-wasm` crates do NOT add a `package.json` build script — CI invokes `node scripts/build_documents_wasm.mjs` directly. Don't add a script entry unless you have a reason. |
 | `.github/workflows/ci.yml` (modify) | a `documents_wasm` path-filter + job (mirror `suggest_wasm`) so CI regenerates + parity-tests |
 
 ## The kernels exposed (`documentsWasm.ts`)
@@ -64,9 +65,23 @@ The parity corpus is `packages/python/goldenmatch/tests/parity/documents_corpus.
 documents-core's `gen_documents_corpus.py` from the pure-Python impls, and already asserted ==native
 in CI's Python parity lane). `build_documents_wasm.mjs` COPIES it into
 `tests/parity/fixtures/documents/` (same as `build_suggest_wasm` copies its golden vectors), so the TS
-parity test runs against the identical vectors Python + Rust do. Rows are `{kernel, input, expected}`;
-the test dispatches each to the matching TS kernel and compares (parsed JSON for schema/normalize;
-error-by-outcome for the error rows, matching the Python test's convention).
+parity test runs against the identical vectors Python + Rust do. Rows are `{kernel, input, expected}`.
+
+**Row `kernel` label -> TS wrapper (the dispatch map — do NOT assume it's the Rust fn name):**
+`schema` -> `validateSchema`, `parse` -> `parseMessageText`, `prompt_extract` -> `extractInstruction`,
+`prompt_suggest` -> `suggestPrompt`, `normalize` -> `normalizeRecord`. (Canonical map:
+`_KERNEL_SYMBOL` in the Python `test_documents_parity.py`.)
+
+**Comparison convention (MUST mirror the Python oracle `_run_native` in `test_documents_parity.py`):**
+- `schema`, `prompt_*`, `parse` success: compare parsed JSON / the string against `expected.ok`.
+- **`normalize`: the corpus stores `expected.ok` as ORDERED `[col, val]` pair arrays keyed to the
+  schema's field order (NOT the kernel's raw `{values, confidence}` object).** The TS test must
+  reshape the wasm kernel's object output into `[[c, values[c]] for c in schema.fields]` (and likewise
+  for confidence) BEFORE comparing — exactly as `_run_native` does with
+  `cols = [f["name"] for f in input.schema.fields]`. A direct `JSON.parse(...) === expected` will fail
+  every normalize row. This is the plan's #1 correctness trap.
+- error rows (`expected.error == true`): assert the TS kernel THROWS (error-by-outcome), not an exact
+  message.
 
 ## Parity assertion
 
