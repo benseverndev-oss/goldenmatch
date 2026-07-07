@@ -48,7 +48,10 @@ export POLARS_SKIP_CPU_CHECK=1 PYTHONIOENCODING=utf-8
 **Files:**
 - Modify: `packages/python/goldenpipe/goldenpipe/autoconfig_planner.py`
 - Modify (migrate signatures only, NO new rule yet): `packages/python/goldenpipe/goldenpipe/autoconfig_planner_rules.py`
+- Modify (migrate the ONE production reader of `plan_pipeline` in the same commit): `packages/python/goldenpipe/goldenpipe/pipeline.py:136-137`
 - Modify (migrate): `packages/python/goldenpipe/tests/test_autoconfig_planner.py`
+
+**Why pipeline.py is in Task 1:** `pipeline.py:137` (`plan_pipeline(profile)`) is the only non-test caller of `plan_pipeline`. Changing the signature to `PlannerInput` breaks it (the rules would dereference `profile.runtime.n_rows` on a bare `PipeProfile` → `AttributeError`), which errors `_plan_config` and the slice-1 integration tests in `test_autoconfig_glue.py`. So `_plan_config` is migrated here too — minimally, wrapping the profile in a `PlannerInput` with a zero `ComplexityProfile`. Task 5 later upgrades that to `build_planner_input` + `enforce_confidence` (which don't exist until Task 4).
 
 - [ ] **Step 1: Migrate the existing planner test to the new `PlannerInput` signature (RED)**
 
@@ -335,23 +338,51 @@ DEFAULT_RULES: tuple[PipePlannerRule, ...] = (
 )
 ```
 
-- [ ] **Step 5: Run — verify the WHOLE planner test file PASSES**
+- [ ] **Step 5: Migrate the ONE production caller — `pipeline.py` `_plan_config` (lines 133-137)**
 
-```bash
-"$INTERP" -m pytest packages/python/goldenpipe/tests/test_autoconfig_planner.py -q
+Replace the profiling lines in `_plan_config` so it builds a `PlannerInput` (with a zero `ComplexityProfile` for now — Task 5 upgrades to `build_planner_input` + `enforce_confidence`). Change the imports + the two lines:
+
+```python
+        from goldenpipe.autoconfig_glue import plan_to_config, profile_context
+        from goldenpipe.autoconfig_planner import (
+            ComplexityProfile,
+            PlannerInput,
+            plan_pipeline,
+        )
+
+        inp = PlannerInput(
+            runtime=profile_context(ctx),
+            complexity=ComplexityProfile(max_null_density=0.0, mean_null_density=0.0),
+        )
+        plan = plan_pipeline(inp)
+        self._last_plan = plan
+        return plan_to_config(
+            plan,
+            self._registry.list_all(),
+            self._identity_opts,
+        )
 ```
-Expected: all pass (signatures consistent across core + rules + tests; no `low_confidence` yet, so no new-rule test yet — those come in Task 6).
 
-- [ ] **Step 6: Ruff + commit (green)**
+(Leave the docstring as-is for now; Task 5 rewrites it to mention the raise. Do NOT touch `_auto_config`.)
+
+- [ ] **Step 6: Run — verify BOTH planner tests AND the glue/integration tests pass**
 
 ```bash
-"$INTERP" -m ruff check packages/python/goldenpipe/goldenpipe/autoconfig_planner.py packages/python/goldenpipe/goldenpipe/autoconfig_planner_rules.py packages/python/goldenpipe/tests/test_autoconfig_planner.py
-git add packages/python/goldenpipe/goldenpipe/autoconfig_planner.py packages/python/goldenpipe/goldenpipe/autoconfig_planner_rules.py packages/python/goldenpipe/tests/test_autoconfig_planner.py
-git commit -m "feat(goldenpipe): ComplexityProfile + PlannerInput + band_of (core+rules)
+"$INTERP" -m pytest packages/python/goldenpipe/tests/test_autoconfig_planner.py packages/python/goldenpipe/tests/test_autoconfig_glue.py -q
+```
+Expected: all pass. The glue file's slice-1 integration tests (`test_plan_config_*`) exercise `_plan_config` → they only pass because Step 5 migrated it. No `low_confidence` yet (Task 3); complexity is zeroed here (Task 5 wires real complexity).
 
-Migrate the decision core and rule table to a PlannerInput bundle (runtime +
-complexity) and add the traffic-light band_of. Atomic signature migration; the
-low_confidence rule is added additively next.
+- [ ] **Step 7: Ruff + commit (green)**
+
+```bash
+"$INTERP" -m ruff check packages/python/goldenpipe/goldenpipe/autoconfig_planner.py packages/python/goldenpipe/goldenpipe/autoconfig_planner_rules.py packages/python/goldenpipe/goldenpipe/pipeline.py packages/python/goldenpipe/tests/test_autoconfig_planner.py
+git add packages/python/goldenpipe/goldenpipe/autoconfig_planner.py packages/python/goldenpipe/goldenpipe/autoconfig_planner_rules.py packages/python/goldenpipe/goldenpipe/pipeline.py packages/python/goldenpipe/tests/test_autoconfig_planner.py
+git commit -m "feat(goldenpipe): ComplexityProfile + PlannerInput + band_of (core+rules+wire)
+
+Migrate the decision core, rule table, and the one _plan_config caller to a
+PlannerInput bundle (runtime + complexity) and add the traffic-light band_of.
+Atomic signature migration (green); complexity is zeroed in _plan_config until
+Task 5 wires build_planner_input + enforce_confidence. low_confidence next.
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01F2g8Snk1Akef5z3yZdtt44"
@@ -689,11 +720,9 @@ Claude-Session: https://claude.ai/code/session_01F2g8Snk1Akef5z3yZdtt44"
 ### Task 5: Wire the brain into `Pipeline._plan_config`
 
 **Files:**
-- Modify: `packages/python/goldenpipe/goldenpipe/pipeline.py:122-143` (`_plan_config`) + `run()` docstring
+- Modify: `packages/python/goldenpipe/goldenpipe/pipeline.py` (`_plan_config` + `run()` docstring)
 
-- [ ] **Step 1: Rewrite `_plan_config` (lines 122-143)**
-
-Replace the body (keep the method name/signature) with:
+- [ ] **Step 1: Rewrite `_plan_config`** — REPLACES the Task-1 inline `PlannerInput`/zero-`ComplexityProfile` version with the real `build_planner_input` (which now computes complexity) + `enforce_confidence` (which now exists, from Task 4). Keep the method name/signature; replace the body with:
 
 ```python
     def _plan_config(self, ctx: PipeContext) -> PipelineConfig:
@@ -841,7 +870,6 @@ These use the slice-1 stub-registry pattern (`_registry_with`, `Pipeline(registr
 ```python
 def _garbage_df(n_rows: int) -> pl.DataFrame:
     # Generic column names (no domain) + a mostly-null column (max_null_density > 0.6).
-    import polars as pl
     return pl.DataFrame({
         "col_a": [None] * n_rows,             # 100% null -> max_null_density 1.0
         "col_b": list(range(n_rows)),
@@ -961,4 +989,4 @@ Then STOP. Do not poll CI (merge queue lands it on green).
 - **`_auto_config` is untouched** — load-bearing for the `_planner_json` Rust parity bridge.
 - **Exact dotted stage names** in every `PlannedStage` (`plan_to_config` silently drops unknown names).
 - **DRY/YAGNI:** `mean_null_density` is carried + recorded in evidence but consumed by no rule this slice — deliberate seam for future signals, made non-dead via `default_evidence`.
-- Frequent commits (one per task). The suite is green at every commit EXCEPT the documented transient between Task 1 and Task 3 (atomic signature migration across core+rules).
+- Frequent commits (one per task). **The suite is green at every commit** — Task 1 migrates every reader of `plan_pipeline`'s new signature (core, rules, `_plan_config`, planner tests) in one commit; Task 3+ are additive.
