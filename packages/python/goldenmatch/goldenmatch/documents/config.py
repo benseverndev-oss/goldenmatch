@@ -10,12 +10,15 @@ from goldenmatch.documents.vlm_backend import VLMExtractor
 _KEY_ENV_ORDER = ("OPENAI_API_KEY_PERSONAL", "OPENAI_API_KEY")
 
 
+def resolve_api_key() -> str:
+    key = next((os.environ[e] for e in _KEY_ENV_ORDER if os.environ.get(e)), None)
+    if not key:
+        raise ValueError("no OpenAI API key found; set OPENAI_API_KEY_PERSONAL "
+                         "(or OPENAI_API_KEY)")
+    return key
+
+
 def resolve_extractor(backend: str, model: str) -> Extractor:
     if backend != "vlm":
         raise ValueError(f"unknown backend: {backend!r} (Phase 1 supports 'vlm')")
-    key = next((os.environ[e] for e in _KEY_ENV_ORDER if os.environ.get(e)), None)
-    if not key:
-        raise ValueError(
-            "no OpenAI API key found; set OPENAI_API_KEY_PERSONAL "
-            "(or OPENAI_API_KEY) for the 'vlm' backend")
-    return VLMExtractor(api_key=key, model=model)
+    return VLMExtractor(api_key=resolve_api_key(), model=model)
