@@ -58,8 +58,14 @@ under the hood), so REST inherits the fallback thesis for free.
   `suggest_schema_from_file` already raise `ValueError` at config time; map to 400).
 - A corrupt/unreadable individual file -> recorded in `report.errors`, response still **200**
   (batch-safe, already handled by `ingest_documents`).
-- No files / empty upload -> **400**.
+- No files / empty upload -> **400**. NOTE: declare `files` as OPTIONAL (`File(None)` / default `[]`)
+  and check length in the handler — a required `UploadFile` field makes FastAPI return its own
+  **422** before the handler runs, which wouldn't match this 400 contract.
 - Follow the existing routers' convention: raise `HTTPException(status_code=..., detail=...)`.
+- **`report.errors` serialization:** `IngestReport.errors` is `list[tuple[str, str]]` — map it
+  explicitly to `[{"file": f, "error": e} for (f, e) in report.errors]` (copy the exact mapping from
+  `mcp/document_tools.py::handle_document_tool`); a naive `dataclasses.asdict` would emit 2-element
+  arrays instead of the documented `{file, error}` objects.
 
 ## Testing (offline-first, matches repo)
 
@@ -68,7 +74,10 @@ under the hood), so REST inherits the fallback thesis for free.
   `TargetSchema`, so NO live VLM call runs in CI.
 - Cases: `suggest-schema` returns a schema dict; `ingest` returns records + report with the sidecar
   columns; a malformed `schema` field -> 400; no `file`/`files` -> 400; **auth required** -> 401
-  without the bearer token (proves the middleware wraps the new routes).
+  without the bearer token. NOTE: the bearer middleware only enforces when `GOLDENMATCH_WEB_TOKEN` is
+  set, so the 401 test must `monkeypatch.setenv("GOLDENMATCH_WEB_TOKEN", "secret")` (see the
+  precedent in `tests/test_wave1_http_hardening.py::TestWebAuthMiddleware`) — otherwise it silently
+  passes for the wrong reason.
 - One gated live smoke (`OPENAI_API_KEY_PERSONAL`), excluded from CI.
 - Tests need the `[web]` extra (fastapi + `python-multipart`) + `[documents]` (Pillow/pymupdf); CI
   already installs `[documents]` (from #1508) — the `[web]` install for this job must include
