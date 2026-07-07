@@ -12,6 +12,12 @@ export async function instantiateBackend(bytes: Uint8Array): Promise<InfermapBac
     exact_score: (a: string, b: string) => number;
     fuzzy_name_score: (a: string, b: string) => number;
     initialism_score: (a: string, b: string) => number | undefined;
+    profile_score: (
+      srcDtype: string, tgtDtype: string,
+      srcNull: number, tgtNull: number, srcUniq: number, tgtUniq: number,
+      srcValCount: number, tgtValCount: number, srcAvgLen: number, tgtAvgLen: number,
+    ) => number;
+    pattern_match_types: (samples: string[]) => Uint32Array;
   };
   await glue.default({ module_or_path: bytes });
   return {
@@ -23,5 +29,8 @@ export async function instantiateBackend(bytes: Uint8Array): Promise<InfermapBac
     exactScore: (a, b) => glue.exact_score(a, b),
     fuzzyNameScore: (a, b) => glue.fuzzy_name_score(a, b),
     initialismScore: (a, b) => glue.initialism_score(a, b) ?? null,
+    profileScore: (sd, td, sn, tn, su, tu, sv, tv, sl, tl) =>
+      glue.profile_score(sd, td, sn, tn, su, tu, sv, tv, sl, tl),
+    patternMatchTypes: (samples) => Array.from(glue.pattern_match_types(samples)),
   };
 }
