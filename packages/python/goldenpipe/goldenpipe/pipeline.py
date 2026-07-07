@@ -131,10 +131,17 @@ class Pipeline:
         glue bracket.
         """
         from goldenpipe.autoconfig_glue import plan_to_config, profile_context
-        from goldenpipe.autoconfig_planner import plan_pipeline
+        from goldenpipe.autoconfig_planner import (
+            ComplexityProfile,
+            PlannerInput,
+            plan_pipeline,
+        )
 
-        profile = profile_context(ctx)
-        plan = plan_pipeline(profile)
+        inp = PlannerInput(
+            runtime=profile_context(ctx),
+            complexity=ComplexityProfile(max_null_density=0.0, mean_null_density=0.0),
+        )
+        plan = plan_pipeline(inp)
         self._last_plan = plan
         return plan_to_config(
             plan,

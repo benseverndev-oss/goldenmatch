@@ -1,26 +1,27 @@
-"""Concrete planner rules for the goldenpipe auto-config brain (slice 1).
+"""Concrete planner rules for the goldenpipe auto-config brain.
 
-Ordered; first match wins (see plan_pipeline). All predicates read only cheap
-PipeProfile signals. Portable — no Polars/Pydantic.
+Ordered; first match wins (see plan_pipeline). Predicates read PlannerInput
+(runtime + complexity). Portable — no Polars/Pydantic. Stage names are the EXACT
+dotted registry names (plan_to_config drops any name not in the registry).
 """
 from __future__ import annotations
 
 from goldenpipe.autoconfig_planner import (
     PipePlan,
     PipePlannerRule,
-    PipeProfile,
     PlannedStage,
+    PlannerInput,
     default_evidence,
 )
 
 _CONFIDENT_DOMAIN_THRESHOLD = 0.5
 
 
-def _is_pathological(p: PipeProfile) -> bool:
-    return p.n_rows <= 1
+def _is_pathological(inp: PlannerInput) -> bool:
+    return inp.runtime.n_rows <= 1
 
 
-def _pathological_plan(p: PipeProfile) -> PipePlan:
+def _pathological_plan(inp: PlannerInput) -> PipePlan:
     return PipePlan(
         stages=(
             PlannedStage("goldencheck.scan", {}),
@@ -28,28 +29,29 @@ def _pathological_plan(p: PipeProfile) -> PipePlan:
         ),
         rule_name="pathological",
         confidence=1.0,
-        evidence=default_evidence(p),
+        evidence=default_evidence(inp),
     )
 
 
 rule_pathological = PipePlannerRule("pathological", _is_pathological, _pathological_plan)
 
 
-def _is_confident_schema(p: PipeProfile) -> bool:
-    return p.inferred_domain is not None and p.domain_confidence >= _CONFIDENT_DOMAIN_THRESHOLD
+def _is_confident_schema(inp: PlannerInput) -> bool:
+    r = inp.runtime
+    return r.inferred_domain is not None and r.domain_confidence >= _CONFIDENT_DOMAIN_THRESHOLD
 
 
-def _confident_schema_plan(p: PipeProfile) -> PipePlan:
+def _confident_schema_plan(inp: PlannerInput) -> PipePlan:
     return PipePlan(
         stages=(
-            PlannedStage("infer_schema", {"domain": p.inferred_domain}),
+            PlannedStage("infer_schema", {"domain": inp.runtime.inferred_domain}),
             PlannedStage("goldencheck.scan", {}),
             PlannedStage("goldenflow.transform", {}),
             PlannedStage("goldenmatch.dedupe", {}),
         ),
         rule_name="confident_schema",
-        confidence=p.domain_confidence,
-        evidence=default_evidence(p),
+        confidence=inp.runtime.domain_confidence,
+        evidence=default_evidence(inp),
     )
 
 

@@ -1,9 +1,10 @@
 """Plan-first auto-config decision core (portable — NO Polars/Pydantic).
 
-The pyo3-free-portable kernel: PipeProfile (in) -> PipePlan (out) via a pure
-rule table. Host glue (Polars profiling, Pydantic config) lives in
-`autoconfig_glue.py`. Mirrors goldenmatch's autoconfig_planner (PlannerRule +
-first-match plan) so the later `goldenpipe-core` Rust port is mechanical.
+The pyo3-free-portable kernel: PlannerInput (in) -> PipePlan (out) via a pure
+rule table. Host glue (Polars profiling, Pydantic config, refuse-raise) lives in
+`autoconfig_glue.py`. Mirrors goldenmatch's controller (PlannerRule + first-match
+plan, RuntimeProfile + ComplexityProfile, traffic-light confidence) so the later
+`goldenpipe-core` Rust port is mechanical.
 """
 from __future__ import annotations
 
@@ -23,6 +24,21 @@ class PipeProfile:
 
 
 @dataclass(frozen=True)
+class ComplexityProfile:
+    """Data-derived signals from one columnar pass. Zeros = unknown
+    (engine-resident frame not profiled this slice)."""
+    max_null_density: float    # 0..1, worst column's null fraction
+    mean_null_density: float   # 0..1, mean across columns
+
+
+@dataclass(frozen=True)
+class PlannerInput:
+    """Everything a rule sees: cheap runtime signals + deeper complexity."""
+    runtime: PipeProfile
+    complexity: ComplexityProfile
+
+
+@dataclass(frozen=True)
 class PlannedStage:
     name: str            # EXACT registry name (e.g. "goldencheck.scan", "infer_schema")
     config: dict         # per-stage config
@@ -36,8 +52,8 @@ class PipePlan:
     evidence: dict
 
 
-Predicate = Callable[[PipeProfile], bool]
-Action = Callable[[PipeProfile], "PipePlan"]
+Predicate = Callable[["PlannerInput"], bool]
+Action = Callable[["PlannerInput"], "PipePlan"]
 
 
 @dataclass(frozen=True)
@@ -47,17 +63,32 @@ class PipePlannerRule:
     action: Action
 
 
-def default_evidence(p: PipeProfile) -> dict:
+GREEN_THRESHOLD = 0.7
+AMBER_THRESHOLD = 0.4
+
+
+def band_of(confidence: float) -> str:
+    """Map a confidence float to a traffic-light band (Rust-portable strings)."""
+    if confidence >= GREEN_THRESHOLD:
+        return "green"
+    if confidence >= AMBER_THRESHOLD:
+        return "amber"
+    return "red"
+
+
+def default_evidence(inp: PlannerInput) -> dict:
     """Signal snapshot attached to every plan (evidence for humans/telemetry)."""
     return {
-        "n_rows": p.n_rows,
-        "n_cols": p.n_cols,
-        "inferred_domain": p.inferred_domain,
-        "domain_confidence": p.domain_confidence,
+        "n_rows": inp.runtime.n_rows,
+        "n_cols": inp.runtime.n_cols,
+        "inferred_domain": inp.runtime.inferred_domain,
+        "domain_confidence": inp.runtime.domain_confidence,
+        "max_null_density": inp.complexity.max_null_density,
+        "mean_null_density": inp.complexity.mean_null_density,
     }
 
 
-def _default_plan(p: PipeProfile) -> PipePlan:
+def _default_plan(inp: PlannerInput) -> PipePlan:
     """The current static shape: scan -> flow -> dedupe (no infer_schema)."""
     return PipePlan(
         stages=(
@@ -67,12 +98,12 @@ def _default_plan(p: PipeProfile) -> PipePlan:
         ),
         rule_name="default",
         confidence=0.7,
-        evidence=default_evidence(p),
+        evidence=default_evidence(inp),
     )
 
 
 def plan_pipeline(
-    profile: PipeProfile,
+    inp: PlannerInput,
     rules: Sequence[PipePlannerRule] | None = None,
 ) -> PipePlan:
     """First matching rule's action builds the plan; else the default shape."""
@@ -80,6 +111,6 @@ def plan_pipeline(
         from goldenpipe.autoconfig_planner_rules import DEFAULT_RULES
         rules = DEFAULT_RULES
     for rule in rules:
-        if rule.predicate(profile):
-            return rule.action(profile)
-    return _default_plan(profile)
+        if rule.predicate(inp):
+            return rule.action(inp)
+    return _default_plan(inp)
