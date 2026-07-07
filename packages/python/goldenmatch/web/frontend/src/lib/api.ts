@@ -435,6 +435,19 @@ const post = <T>(path: string, body: unknown): Promise<T> =>
     body: JSON.stringify(body),
   }).then((r) => json<T>(r));
 
+// ── Document ingest ─────────────────────────────────────────────────────
+
+export type FieldKind = "text" | "email" | "phone" | "address" | "date" | "number";
+export type SchemaField = { name: string; kind: FieldKind; hint: string | null };
+export type TargetSchema = { fields: SchemaField[] };
+export type IngestReport = {
+  n_files: number; n_rows: number; errors: { file: string; error: string }[];
+};
+export type IngestResult = { records: Record<string, unknown>[]; report: IngestReport };
+
+const postForm = <T>(path: string, form: FormData): Promise<T> =>
+  fetch(path, { method: "POST", body: form }).then((r) => json<T>(r));
+
 export const api = {
   project: (): Promise<Project> =>
     fetch("/api/v1/project")
@@ -613,4 +626,17 @@ export const api = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     }).then((r) => json<SettingsResponse>(r)),
+
+  // ── Document ingest ────────────────────────────────────────────────────
+  suggestSchema: (file: File): Promise<{ schema: TargetSchema }> => {
+    const form = new FormData();
+    form.append("file", file);
+    return postForm("/api/v1/documents/suggest-schema", form);
+  },
+  ingestDocuments: (files: File[], schema: TargetSchema): Promise<IngestResult> => {
+    const form = new FormData();
+    for (const f of files) form.append("files", f); // repeated key, NO brackets
+    form.append("schema", JSON.stringify(schema));
+    return postForm("/api/v1/documents/ingest", form);
+  },
 };
