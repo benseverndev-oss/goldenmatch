@@ -76,8 +76,14 @@ export function profileComplexity(rows: readonly Row[]): ComplexityProfile {
     }
     return nulls / nRows;
   });
+  // Loop-max (NOT Math.max(...spread)) — the repo's `ts-no-spread-math-min-max`
+  // ast-grep rule is error-severity and runs on every PR (see infer.ts for the
+  // same pattern). fractions is column-count-sized so the spread would be
+  // runtime-safe, but the lint fires regardless.
+  let maxNullDensity = 0;
+  for (const f of fractions) if (f > maxNullDensity) maxNullDensity = f;
   return {
-    maxNullDensity: Math.max(...fractions),
+    maxNullDensity,
     meanNullDensity: fractions.reduce((a, b) => a + b, 0) / fractions.length,
   };
 }
@@ -91,7 +97,8 @@ export function enforceConfidence(plan: PipePlan, runtime: PipeProfile): void {
   if (runtime.nRows >= REFUSE_ROW_THRESHOLD) {
     throw new PipeNotConfidentError(
       `auto-config not confident (rule=${plan.ruleName}, confidence=${plan.confidence}) ` +
-      `on ${runtime.nRows} rows; supply an explicit pipeline config or reduce the input size.`,
+      `on ${runtime.nRows} rows; supply an explicit pipeline config or reduce the input size. ` +
+      `evidence=${JSON.stringify(plan.evidence)}`,
     );
   }
   // Low confidence below the threshold: proceed on the safe default plan.
@@ -114,7 +121,7 @@ export function planToConfig(
 }
 ```
 Notes:
-- `Math.max(...fractions)` is safe here (column counts are tiny — never the 65K-element spread the ast-grep rule guards). If the repo's `ts-no-spread-math-min-max` rule flags it, use a loop-max instead.
+- Null density uses a **loop-max**, not `Math.max(...fractions)` — the `ts-no-spread-math-min-max` ast-grep rule is error-severity and runs on every PR (see `infer.ts` for the same loop pattern).
 - `dtypes: []` — no rule reads dtypes and they never appear in any emitted output (plan/evidence/pipe_parity), so an empty array is faithful. (Python fills real Polars dtypes but they are equally unused downstream.)
 
 ### 3.3 `pipeline.ts` — `planConfig` + `run()` switch
@@ -136,7 +143,8 @@ In `run()`, change the config line from `computeAutoConfig(...)` to `planConfig(
 ```ts
 const config = this.config ?? planConfig([...rows], this.registry, this.identityOpts);
 ```
-- **`computeAutoConfig` / `computeAutoConfigPure` stay untouched** — they remain the static engine config used by the `auto_config` Leg A/B parity (`autoConfigJsonPure` / `autoConfigViaWasm`). This mirrors Python keeping `_auto_config` alongside the new `_plan_config`. `DEFAULT_STAGE_ORDER` (the static scan/flow/dedupe list) is unchanged.
+- **`computeAutoConfigPure` stays live** — the `auto_config` Leg A/B parity calls it **directly** via `autoConfigJsonPure` (`plannerJsonPure.ts`), independent of `run()`. `DEFAULT_STAGE_ORDER` (the static scan/flow/dedupe list) is unchanged. This mirrors Python keeping `_auto_config` alongside the new `_plan_config`.
+- **`computeAutoConfig` (the WASM-guarded wrapper) + `autoConfigViaWasm`**: after `run()` switches to `planConfig`, `computeAutoConfig`'s only caller is gone, so it (and transitively `autoConfigViaWasm`) become orphaned exported functions. **Leave them exported** (public API surface; unused exports are not a lint failure) — do NOT delete them in this slice. Just don't claim they back the parity.
 - **Pure-TS runtime** — `planConfig` calls `planPipeline` + `detectDomainDetailed` directly (both byte-identical to core), NOT the WASM backend. WASM-routed runtime is deferred (§8); it would add async + backend plumbing for zero behavioral difference.
 
 ### 3.4 `runDf` parity
@@ -155,10 +163,10 @@ The CI `ts_parity_freshness` gate re-runs the emitter and compares — so the co
 ## 5. TS unit tests (`tests/unit/autoconfig-glue.test.ts`, new)
 
 The brain paths pipe_parity can't observe:
-- **`profileContext`** — person-column rows → `inferredDomain: null`; finance-column rows (`account_number`, `currency`) → `inferredDomain: "finance"`, `domainConfidence > 0`. (Proves the columns-only detect wiring + `.score`.)
+- **`profileContext`** — person-column rows → `inferredDomain: null`; finance-column rows with **exactly `["account_number", "currency"]`** (verified on the box: `detectDomainDetailed({columns}).score === 1.0`, well above the 0.5 confident threshold) → `inferredDomain: "finance"`, `domainConfidence === 1.0`. Use these exact columns so this test and the `planConfig` confident_schema test below cannot disagree (a weaker finance column set could score between 0 and 0.5 and land on `default`).
 - **`profileComplexity`** — a `Row[]` with explicit `null`/`undefined` values → hand-computed `maxNullDensity` / `meanNullDensity`. (Covers the null-density definition directly, since pipe_parity can't.)
 - **`enforceConfidence`** — a RED plan (`confidence: 0.3`) at `nRows >= 100_000` throws `PipeNotConfidentError`; below the threshold returns; green/amber returns.
-- **`planConfig` confident_schema** — finance-column rows through `planConfig(rows, buildDefaultRegistry(), {})` → stages `[infer_schema, goldencheck.scan, goldenflow.transform, goldenmatch.dedupe]` (`buildDefaultRegistry` registers `InferSchemaStage`, so it survives `planToConfig`'s availability filter).
+- **`planConfig` confident_schema** — rows with columns `["account_number", "currency"]` (score 1.0) through `planConfig(rows, buildDefaultRegistry(), {})` → stages `[infer_schema, goldencheck.scan, goldenflow.transform, goldenmatch.dedupe]` (`buildDefaultRegistry` registers `InferSchemaStage`, so it survives `planToConfig`'s availability filter). Use ≥2 rows so `pathological` doesn't fire first.
 - **`planConfig` pathological** — a single-row `Row[]` → stages `[goldencheck.scan, goldenflow.transform]` (dedupe dropped).
 
 ## 6. Testing summary
