@@ -79,10 +79,7 @@ class TransformEngine:
         # declines here and falls through to the Polars path.
         from goldenflow.engine import columnar as _columnar
         if _columnar.columnar_engine_selected() and _columnar.config_is_columnar_ready(self.config):
-            names = [s.column for s in self.config.transforms if s.column in df.columns]
-            cols = {c: df[c].to_list() for c in names}
-            new_cols, manifest = _columnar.transform_columns(cols, self.config, source=source)
-            out = df.with_columns([pl.Series(n, v) for n, v in new_cols.items()])
+            out, manifest = _columnar.transform(df, self.config, source=source)
             return TransformResult(df=out, manifest=manifest)
 
         manifest = Manifest(source=source)
