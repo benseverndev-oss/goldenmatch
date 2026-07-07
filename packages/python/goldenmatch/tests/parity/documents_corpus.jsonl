@@ -6,6 +6,7 @@
 {"expected": {"error": true}, "input": {"fields": []}, "kernel": "schema"}
 {"expected": {"error": true}, "input": {"fields": ["full_name"]}, "kernel": "schema"}
 {"expected": {"error": true}, "input": {"fields": [{"kind": "text"}]}, "kernel": "schema"}
+{"expected": {"error": true}, "input": {"fields": [{"name": 123}]}, "kernel": "schema"}
 {"expected": {"error": true}, "input": "not a dict", "kernel": "schema"}
 {"expected": {"ok": "hello"}, "input": {"choices": [{"message": {"content": "hello"}}]}, "kernel": "parse"}
 {"expected": {"ok": "{\"a\":1}"}, "input": {"choices": [{"message": {"content": "```json\n{\"a\":1}\n```"}}]}, "kernel": "parse"}
@@ -15,6 +16,7 @@
 {"expected": {"error": true}, "input": {"choices": []}, "kernel": "parse"}
 {"expected": {"error": true}, "input": {}, "kernel": "parse"}
 {"expected": {"error": true}, "input": {"choices": [{"message": {"content": 123}}]}, "kernel": "parse"}
+{"expected": {"error": true}, "input": {"choices": [123]}, "kernel": "parse"}
 {"expected": {"error": true, "substring": "truncated"}, "input": {"choices": [{"finish_reason": "length", "message": {"content": "x"}}]}, "kernel": "parse"}
 {"expected": {"ok": "Extract every record present in the attached document image(s).\nA form/card/ID is ONE record; a table/list is MANY records (one per row).\nTarget fields:\n- \"full_name\" (text)\n- \"email\" (email): work\n\nReturn ONLY a JSON object of the form:\n{\"records\": [{\"values\": {<field>: <string or null>, ...}, \"confidence\": {<field>: <0..1>, ...}}, ...]}\nUse exactly these field keys: full_name, email. Omit a field if absent. No prose."}, "input": {"fields": [{"name": "full_name"}, {"hint": "work", "kind": "email", "name": "email"}]}, "kernel": "prompt_extract"}
 {"expected": {"ok": "Extract every record present in the attached document image(s).\nA form/card/ID is ONE record; a table/list is MANY records (one per row).\nTarget fields:\n- \"a\" (text)\n\nReturn ONLY a JSON object of the form:\n{\"records\": [{\"values\": {<field>: <string or null>, ...}, \"confidence\": {<field>: <0..1>, ...}}, ...]}\nUse exactly these field keys: a. Omit a field if absent. No prose."}, "input": {"fields": [{"hint": "", "name": "a"}]}, "kernel": "prompt_extract"}

@@ -58,6 +58,7 @@ schema_error_cases = [
     {"fields": []},
     {"fields": ["full_name"]},
     {"fields": [{"kind": "text"}]},
+    {"fields": [{"name": 123}]},  # non-string name: rejected by native + pure
     "not a dict",
 ]
 for c in schema_error_cases:
@@ -82,6 +83,7 @@ parse_error_cases = [
     {"choices": []},
     {},
     {"choices": [{"message": {"content": 123}}]},
+    {"choices": [123]},  # non-dict choice: rejected by native + pure
 ]
 for c in parse_error_cases:
     add("parse", c, {"error": True})

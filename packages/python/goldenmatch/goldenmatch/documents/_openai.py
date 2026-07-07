@@ -40,6 +40,8 @@ def parse_message_text(resp: dict) -> str:
         choice = resp["choices"][0]
     except (KeyError, IndexError, TypeError) as e:
         raise ValueError(f"unexpected response envelope: {e}") from e
+    if not isinstance(choice, dict):
+        raise ValueError("unexpected response envelope: choice is not an object")
     if choice.get("finish_reason") == "length":
         raise ValueError("response truncated (finish_reason=length); increase max_tokens")
     text = (choice.get("message") or {}).get("content")
