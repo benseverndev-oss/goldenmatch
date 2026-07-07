@@ -41,7 +41,7 @@ collapse (World B)? See docs/superpowers/specs/2026-07-07-goldengraph-er-answer-
 - [PASS] ER->answer delta holds under ambiguity (delta_oracle@1 >= 0.5*delta_oracle@0) — PASS=World A (moat survives), WARN=World B (reposition) (soft — the finding)
 - [WARN] answer-match monotonic in ER at every ambiguity (WARN = synthesis not fully converting ER->answer) (soft — the finding)
 
-## Interpretation -- World A: the moat is real at retrieval; synthesis is the bottleneck
+## Interpretation -- World A: the moat is real at retrieval (synthesis reading SUPERSEDED, see Follow-up diagnosis below)
 
 1. **Retrieval.** Perfect ER (`oracle`) retrieves the answer chain at **1.000 at every
    ambiguity**; `none`/`name_only` collapse to ~0.46 by amb=1; the real resolver
@@ -63,3 +63,30 @@ Action: keep the ER positioning; the lever is **synthesis (distill it)** + closi
 **Caveats.** Engineered/synthetic corpus (absolute numbers low by construction), single seed
 (7), n=80, `gpt-4o-mini`. A diagnosis, not the citable headline -- that needs a real
 multi-hop corpus (2WikiMultiHopQA).
+
+## Follow-up diagnosis (2026-07-07) -- CORRECTS "synthesis is the bottleneck"
+
+Two targeted probes at amb=0.5, n=40, `gpt-4o-mini` (`scratch diag_synth.py` / `diag_ball.py`)
+overturn the "distill synthesis" reading above:
+
+1. **Synthesis-given-gold = 1.000 across every hop.** Handed the ISOLATED gold-chain
+   subgraph (perfect facts, no distractors), the synthesizer answers *every* question
+   correctly (40/40, hops 1-4). Synthesis REASONING is not the bottleneck.
+2. **Ball size is the wrong knob.** The `oracle` dial retrieves a ball that CONTAINS the
+   chain (bridge-recall 1.0) yet answers only ~0.275. Tightening the ball makes it WORSE,
+   not better -- it drops the answer before the distractors:
+
+   | node_budget / hops | median ball | answer-match |
+   |---|---|---|
+   | 256 / 6 | 45 | 0.275 |
+   | 64 / 4  | 45 | 0.275 |
+   | 24 / 3  | 30 | 0.125 |
+   | 12 / 2  | 26 | 0.100 |
+
+**Corrected finding.** The gap between 1.000 (isolated chain) and ~0.275 (realistic ~45-entity
+neighborhood that CONTAINS the chain) is a **path-selection** problem: the model can WALK the
+answer chain perfectly but cannot FIND it among real sibling edges. `node_budget`/`hops` don't
+fix it (shrinking drops recall first). **The lever is path-aware retrieval** -- extract / re-rank
+the query-relevant path out of the neighborhood before synthesis -- NOT synthesizer tuning and
+NOT ball size. (ER's retrieval advantage still stands; this is about converting a
+correct-but-noisy neighborhood into the answer.)
