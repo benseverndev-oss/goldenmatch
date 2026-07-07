@@ -23,6 +23,14 @@ import {
 } from "../models.js";
 import type { StageRegistry } from "../engine/registry.js";
 import { computeAutoConfigPure } from "../pipeline.js";
+import {
+  planPipeline,
+  applyScaleHints,
+  bandOf,
+  type PipePlan,
+  type PipeProfile,
+  type PlannerInput,
+} from "../autoconfigPlanner.js";
 
 interface StubStage {
   info: StageInfo;
@@ -183,4 +191,74 @@ export function autoConfigJsonPure(inputStr: string): string {
 
 export function skipIfFalsyJsonPure(inputStr: string): string {
   return JSON.stringify(isFalsy(JSON.parse(inputStr)));
+}
+
+interface ProfileJson {
+  n_rows: number;
+  n_cols: number;
+  column_names: string[];
+  dtypes: string[];
+  inferred_domain: string | null;
+  domain_confidence: number;
+}
+interface PlanJson {
+  stages: Array<{ name: string; config: Record<string, unknown> }>;
+  rule_name: string;
+  confidence: number;
+  evidence: Record<string, unknown>;
+}
+
+function profileFromJson(d: ProfileJson): PipeProfile {
+  return {
+    nRows: d.n_rows,
+    nCols: d.n_cols,
+    columnNames: d.column_names,
+    dtypes: d.dtypes,
+    inferredDomain: d.inferred_domain,
+    domainConfidence: d.domain_confidence,
+  };
+}
+
+function planFromJson(d: PlanJson): PipePlan {
+  return {
+    stages: d.stages.map((s) => ({ name: s.name, config: s.config })),
+    ruleName: d.rule_name,
+    confidence: d.confidence,
+    evidence: d.evidence,
+  };
+}
+
+function planToJson(plan: PipePlan): PlanJson {
+  return {
+    stages: plan.stages.map((s) => ({ name: s.name, config: s.config })),
+    rule_name: plan.ruleName,
+    confidence: plan.confidence,
+    evidence: plan.evidence,
+  };
+}
+
+export function planPipelineJsonPure(inputStr: string): string {
+  const arg = JSON.parse(inputStr) as {
+    runtime: ProfileJson;
+    complexity: { max_null_density: number; mean_null_density: number };
+  };
+  const inp: PlannerInput = {
+    runtime: profileFromJson(arg.runtime),
+    complexity: {
+      maxNullDensity: arg.complexity.max_null_density,
+      meanNullDensity: arg.complexity.mean_null_density,
+    },
+  };
+  return JSON.stringify(planToJson(planPipeline(inp)));
+}
+
+export function applyScaleHintsJsonPure(inputStr: string): string {
+  const arg = JSON.parse(inputStr) as { plan: PlanJson; runtime: ProfileJson };
+  return JSON.stringify(
+    planToJson(applyScaleHints(planFromJson(arg.plan), profileFromJson(arg.runtime))),
+  );
+}
+
+export function bandOfJsonPure(inputStr: string): string {
+  return JSON.stringify(bandOf(JSON.parse(inputStr) as number));
 }

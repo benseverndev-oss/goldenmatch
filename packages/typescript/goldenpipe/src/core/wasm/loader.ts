@@ -28,6 +28,9 @@ export async function instantiateBackend(bytes: Uint8Array): Promise<PipeWasmBac
     evaluate_builtin_json: (s: string) => string;
     auto_config_json: (s: string) => string;
     skip_if_falsy_json: (s: string) => string;
+    plan_pipeline_json: (s: string) => string;
+    apply_scale_hints_json: (s: string) => string;
+    band_of_json: (s: string) => string;
   };
   await glue.default({ module_or_path: bytes });
 
@@ -37,5 +40,8 @@ export async function instantiateBackend(bytes: Uint8Array): Promise<PipeWasmBac
     evaluateBuiltinJson: (s) => glue.evaluate_builtin_json(s),
     autoConfigJson: (s) => glue.auto_config_json(s),
     skipIfFalsyJson: (s) => glue.skip_if_falsy_json(s),
+    planPipelineJson: (s) => glue.plan_pipeline_json(s),
+    applyScaleHintsJson: (s) => glue.apply_scale_hints_json(s),
+    bandOfJson: (s) => glue.band_of_json(s),
   };
 }
