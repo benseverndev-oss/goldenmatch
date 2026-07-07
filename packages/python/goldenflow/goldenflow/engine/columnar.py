@@ -54,43 +54,68 @@ _OWNED_STRING = FUSABLE_KERNELS | FUSABLE_PARAM_KERNELS
 _OWNED_NULLABLE = FUSABLE_NULLABLE_KERNELS
 
 
+def _frame_level_blocked(config) -> bool:
+    """Frame-level ops (splits/renames/drops/filters/dedup) the columnar path
+    doesn't handle yet — any of them forces the Polars engine."""
+    return bool(
+        config.splits or config.renames or config.drop or config.filters or config.dedup
+    )
+
+
+def _accepted_string(nm) -> frozenset[str]:
+    """The owned string kernels this native build accepts: total + parameterized,
+    plus the nullable URL/company/email family when it auto-routes them (0.20+)."""
+    if hasattr(nm, "chain_supports_nullable"):
+        return _OWNED_STRING | _OWNED_NULLABLE
+    return _OWNED_STRING
+
+
+def _spec_string_ready(spec, accepted: frozenset[str]) -> bool:
+    for op_raw in spec.ops:
+        name, _params = parse_transform_name(op_raw)
+        if name not in accepted or get_transform(name) is None:
+            return False
+    return True
+
+
 def config_is_columnar_ready(config) -> bool:
-    """A config runs on the columnar engine iff EVERY op is an owned string kernel
-    (total fusable, or — when the native build supports it — a nullable
-    URL/company/email kernel) and there are no frame-level ops
-    (splits/renames/drops/filters/dedup) that the columnar path doesn't handle yet.
-    Otherwise the caller uses the Polars engine — correctness first; coverage grows
-    over the phases."""
-    if config.splits or config.renames or config.drop or config.filters or config.dedup:
-        return False
-    if not config.transforms:
+    """A config runs on the IN-MEMORY columnar engine iff EVERY op is an owned string
+    kernel (total fusable, or — when the native build supports it — a nullable
+    URL/company/email kernel) and there are no frame-level ops. Numeric configs are
+    NOT accepted here (the in-memory Column path is string-only); the CSV path takes
+    them (see :func:`columnar_file_ready`). Otherwise the caller uses the Polars
+    engine — correctness first; coverage grows over the phases."""
+    if _frame_level_blocked(config) or not config.transforms:
         return False
     nm = native_module()
     if nm is None or not hasattr(nm, "apply_chain_str_list"):
         return False
-    nullable_ok = hasattr(nm, "chain_supports_nullable")
-    accepted = _OWNED_STRING | _OWNED_NULLABLE if nullable_ok else _OWNED_STRING
-    for spec in config.transforms:
-        for op_raw in spec.ops:
-            name, _params = parse_transform_name(op_raw)
-            if name not in accepted:
-                return False
-            info = get_transform(name)
-            if info is None:
-                return False
-    return True
+    accepted = _accepted_string(nm)
+    return all(_spec_string_ready(spec, accepted) for spec in config.transforms)
 
 
 def columnar_file_ready(config) -> bool:
-    """True when the native whole-file CSV path (Phase 2) can run this config:
-    the config is columnar-ready (fully owned-string, no frame-level ops) AND the
-    native kernel exposes ``transform_csv``. When true, a CSV runs
-    read->transform->write entirely in Rust — no ``pl.DataFrame``, no Polars, no
-    pyarrow."""
-    if not config_is_columnar_ready(config):
+    """True when the native whole-file CSV path can run this config: no frame-level
+    ops, and every spec is either an owned-string run OR — Phase 3 wave 3b — a valid
+    NUMERIC shape (``string* parser f64*``, validated by the native
+    ``columnar_numeric_ready`` probe, the single source of truth so host and kernel
+    never disagree). When true, a CSV runs read->transform->write entirely in Rust —
+    no ``pl.DataFrame``, no Polars, no pyarrow."""
+    if _frame_level_blocked(config) or not config.transforms:
         return False
     nm = native_module()
-    return nm is not None and hasattr(nm, "transform_csv")
+    if nm is None or not hasattr(nm, "transform_csv") or not hasattr(nm, "apply_chain_str_list"):
+        return False
+    accepted = _accepted_string(nm)
+    numeric_ok = hasattr(nm, "columnar_numeric_ready")
+    for spec in config.transforms:
+        if _spec_string_ready(spec, accepted):
+            continue
+        ops_spec = [(n, list(p)) for n, p in (parse_transform_name(o) for o in spec.ops)]
+        if numeric_ok and nm.columnar_numeric_ready(ops_spec):
+            continue
+        return False
+    return True
 
 
 def transform_file(in_path, out_path, config, source: str | None = None) -> Manifest:
