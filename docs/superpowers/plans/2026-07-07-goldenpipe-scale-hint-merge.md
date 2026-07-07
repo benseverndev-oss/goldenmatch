@@ -19,9 +19,22 @@ Native Windows Python. **PYTHONPATH uses `;` NOT `:`.**
 ```bash
 cd "D:/show_case/gg-local-llm"
 INTERP="D:/show_case/goldenmatch/.venv/Scripts/python.exe"
-export PYTHONPATH="packages/python/goldenpipe;packages/python/infermap;packages/python/goldencheck-types"
+export PYTHONPATH="packages/python/goldenmatch;packages/python/goldenpipe;packages/python/infermap;packages/python/goldencheck-types"
 export POLARS_SKIP_CPU_CHECK=1 PYTHONIOENCODING=utf-8
 ```
+
+**Why `packages/python/goldenmatch` is FIRST on the path (load-bearing):** the
+borrowed venv's editable `goldenmatch` is the OLDER `D:\show_case\goldenmatch`
+checkout, which has **no `#1083` throughput tier** (`dedupe_df` has no
+`throughput` param; `ThroughputConfig` doesn't exist). The throughput API this
+feature depends on lives only in the **gg-local-llm** worktree copy. Prepending
+`packages/python/goldenmatch` shadows the install so `import goldenmatch`
+resolves to the worktree copy WITH throughput. Verified:
+`from goldenmatch.config.schemas import ThroughputConfig` and
+`dedupe_df(throughput=…)` both resolve only with this prepend. **Task 2 is the
+one commit gated on this** (Tasks 1 and 3 don't import goldenmatch); if you see
+`ImportError: cannot import name 'ThroughputConfig'`, the prepend is missing —
+it is not a logic bug.
 - Test: `"$INTERP" -m pytest <path> -q`; ruff: `"$INTERP" -m ruff check <files>` (`--fix` if import-order flagged).
 - Branch `feat/goldenpipe-scale-hint-merge` (off fresh origin/main, spec committed). Every commit green.
 
