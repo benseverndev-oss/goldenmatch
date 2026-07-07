@@ -51,6 +51,22 @@ mod wasm {
     pub fn detect_domain_json(input_json: &str) -> String {
         super::detect_domain_json_impl(input_json)
     }
+
+    #[wasm_bindgen]
+    pub fn exact_score(a: &str, b: &str) -> f64 {
+        infermap_core::exact_score(a, b)
+    }
+
+    #[wasm_bindgen]
+    pub fn fuzzy_name_score(a: &str, b: &str) -> f64 {
+        infermap_core::fuzzy_name_score(a, b)
+    }
+
+    // Option<f64> marshals to `number | undefined` in the glue (abstain).
+    #[wasm_bindgen]
+    pub fn initialism_score(a: &str, b: &str) -> Option<f64> {
+        infermap_core::initialism_score(a, b)
+    }
 }
 
 #[cfg(test)]

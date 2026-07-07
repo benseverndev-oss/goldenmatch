@@ -18,6 +18,8 @@ import {
   disableInfermapWasm,
 } from "../../src/core/wasm/index.js";
 import { getInfermapBackend } from "../../src/core/wasm/backend.js";
+import { jaroWinklerSimilarity } from "../../src/core/util/string-distance.js";
+import { scorePair } from "../../src/core/scorers/initialism.js";
 
 const artifact = fileURLToPath(
   new URL("../../src/core/wasm/artifacts/infermap_wasm_bg.wasm", import.meta.url),
@@ -58,6 +60,62 @@ d("infermap detect WASM-vs-pure parity", () => {
       const wasm = backend.detectDomain(columns, domains, minScore);
       disableInfermapWasm();
       expect(wasm).toEqual(pure); // deep-equal DetectionResult; drift => fail
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Wave B: name-scorer parity (drift audit — 2 JW impls, 2 tokenizers)
+// ---------------------------------------------------------------------------
+
+const normalize = (s: string): string =>
+  s.trim().toLowerCase().replace(/[_\- ]/g, "");
+const pureExact = (a: string, b: string): number =>
+  a.trim().toLowerCase() === b.trim().toLowerCase() ? 1.0 : 0.0;
+
+// ASCII pairs — mirrors the Python Wave 2 _NAME_PAIRS. The toLowerCase / chars()
+// Unicode edges stay out of the must-pass corpus (Wave 1/2 documented boundary).
+const NAME_PAIRS: Array<[string, string]> = [
+  ["City", "city"],
+  ["provider_npi", "ProviderNPI"],
+  ["first_name", "firstName"],
+  ["assay_id", "ASSI"],
+  ["confidence_score", "CONSC"],
+  ["variant_id", "VARI"],
+  ["order_id", "orderid"],
+  ["abc", "xyz"],
+  ["HTTPSConnection", "https_connection"],
+  ["a", "a"],
+  ["dob", "date_of_birth"],
+  ["providerIDs", "provider_i_ds"],
+  ["URLs", "ur_ls"],
+  ["macOS", "mac_os"],
+  ["iOS", "i_os"],
+];
+
+d("infermap name-scorer WASM-vs-pure parity", () => {
+  afterAll(() => disableInfermapWasm());
+
+  for (const [a, b] of NAME_PAIRS) {
+    it(`exact '${a}'/'${b}' kernel == pure`, async () => {
+      await enableInfermapWasm({ require: true });
+      const be = getInfermapBackend()!;
+      expect(be.exactScore(a, b)).toBe(pureExact(a, b));
+      disableInfermapWasm();
+    });
+    it(`fuzzy '${a}'/'${b}' kernel == pure`, async () => {
+      await enableInfermapWasm({ require: true });
+      const be = getInfermapBackend()!;
+      expect(be.fuzzyNameScore(a, b)).toBe(
+        jaroWinklerSimilarity(normalize(a), normalize(b)),
+      );
+      disableInfermapWasm();
+    });
+    it(`initialism '${a}'/'${b}' kernel == pure`, async () => {
+      await enableInfermapWasm({ require: true });
+      const be = getInfermapBackend()!;
+      expect(be.initialismScore(a, b)).toBe(scorePair(a, b));
+      disableInfermapWasm();
     });
   }
 });

@@ -13,6 +13,9 @@ export interface InfermapBackend {
     domains: Array<[string, string[]]>,
     minScore: number,
   ): DetectionResult;
+  exactScore(a: string, b: string): number;
+  fuzzyNameScore(a: string, b: string): number;
+  initialismScore(a: string, b: string): number | null;
 }
 
 const _registry = createBackendRegistry<InfermapBackend>();

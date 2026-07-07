@@ -12,6 +12,7 @@
 import type { FieldInfo, ScorerResult } from "../types.js";
 import { makeScorerResult } from "../types.js";
 import type { Scorer } from "./base.js";
+import { getInfermapBackend } from "../wasm/backend.js";
 
 /**
  * Split a field name into lowercase tokens. Handles snake_case, kebab-case,
@@ -100,7 +101,10 @@ export class InitialismScorer implements Scorer {
   score(source: FieldInfo, target: FieldInfo): ScorerResult | null {
     const srcName = source.canonicalName ?? source.name;
     const tgtName = target.canonicalName ?? target.name;
-    const s = scorePair(srcName, tgtName);
+    const backend = getInfermapBackend();
+    const s = backend
+      ? backend.initialismScore(srcName, tgtName)
+      : scorePair(srcName, tgtName);
     if (s === null) return null;
     return makeScorerResult(
       s,
