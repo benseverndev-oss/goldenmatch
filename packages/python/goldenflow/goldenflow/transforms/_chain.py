@@ -70,6 +70,27 @@ FUSABLE_F64_KERNELS: frozenset[str] = frozenset(
 )
 FUSABLE_F64_PARAM_KERNELS: frozenset[str] = frozenset({"round", "clamp"})
 
+# Owned string->Option<string> kernels (URL / company / email families) eligible
+# for the NULLABLE fused chain — a value the kernel can't parse becomes a null cell
+# that passes through the rest of the run. Mirror of
+# goldenflow_core::chain::NullableKernel::NULLABLE_NAMES. All no-arg. Need the
+# ``apply_chain_nullable_arrow`` symbol (goldenflow-native >= 0.14.0). A nullable
+# run may MIX these with the total/param string kernels (wrapped as Total in Rust).
+FUSABLE_NULLABLE_KERNELS: frozenset[str] = frozenset(
+    {
+        "url_normalize",
+        "url_strip_tracking",
+        "url_strip_www",
+        "url_canonical",
+        "url_extract_domain",
+        "company_normalize",
+        "company_strip_legal",
+        "company_extract_legal",
+        "email_mask",
+        "email_extract_domain",
+    }
+)
+
 # Every parameterized fusable name (string + numeric), so ``is_fusable`` treats an
 # op-with-params as fusable when the op is one that legitimately carries args.
 _PARAM_KERNELS: frozenset[str] = FUSABLE_PARAM_KERNELS | FUSABLE_F64_PARAM_KERNELS
@@ -96,17 +117,22 @@ def fused_enabled() -> bool:
 
 
 def fusable_names() -> frozenset[str]:
-    """The transform names the engine may fuse, given the AVAILABLE native symbol:
-    the parameterized ops only join a run when ``apply_chain_ops_arrow`` is present
-    (0.13.0+); a 0.12.0 wheel fuses the no-arg families only."""
+    """The string transform names the engine may fuse, given the AVAILABLE native
+    symbols (symbol-aware, so older wheels don't regress): a 0.12.0 wheel fuses the
+    no-arg families only; ``apply_chain_ops_arrow`` (0.13.0+) adds the parameterized
+    string ops; ``apply_chain_nullable_arrow`` (0.14.0+) adds the URL/company/email
+    ``Option``-returning families (which may share a run with the others)."""
     nm = _native_if_on()
     if nm is None:
         return frozenset()
-    if hasattr(nm, "apply_chain_ops_arrow"):
-        return FUSABLE_KERNELS | FUSABLE_PARAM_KERNELS
+    names: set[str] = set()
     if hasattr(nm, "apply_chain_arrow"):
-        return FUSABLE_KERNELS
-    return frozenset()
+        names |= FUSABLE_KERNELS
+    if hasattr(nm, "apply_chain_ops_arrow"):
+        names |= FUSABLE_KERNELS | FUSABLE_PARAM_KERNELS
+    if hasattr(nm, "apply_chain_nullable_arrow"):
+        names |= FUSABLE_NULLABLE_KERNELS
+    return frozenset(names)
 
 
 def fusable_f64_names() -> frozenset[str]:
@@ -151,6 +177,14 @@ def apply_chain_native(
         if not hasattr(nm, "apply_chain_f64_arrow"):
             return None
         out_arrow, changed = nm.apply_chain_f64_arrow(
+            series.to_arrow(), [(name, list(params)) for name, params in ops]
+        )
+    elif any(name in FUSABLE_NULLABLE_KERNELS for name, _ in ops):
+        # The run contains an Option-returning kernel -> the nullable executor
+        # (which also handles the total/param kernels in the run, wrapped as Total).
+        if not hasattr(nm, "apply_chain_nullable_arrow"):
+            return None
+        out_arrow, changed = nm.apply_chain_nullable_arrow(
             series.to_arrow(), [(name, list(params)) for name, params in ops]
         )
     elif hasattr(nm, "apply_chain_ops_arrow"):

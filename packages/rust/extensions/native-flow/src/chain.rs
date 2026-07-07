@@ -12,7 +12,9 @@
 
 use arrow::array::{make_array, Array, ArrayData, Float64Array, LargeStringArray, StringArray};
 use arrow::pyarrow::PyArrowType;
-use goldenflow_core::chain::{apply_chain, apply_chain_f64, Kernel, NumericKernel};
+use goldenflow_core::chain::{
+    apply_chain, apply_chain_f64, apply_chain_nullable, Kernel, NullableKernel, NumericKernel,
+};
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 
@@ -134,4 +136,55 @@ pub fn apply_chain_f64_arrow(
         (r.array.into_data(), r.changed)
     });
     Ok((PyArrowType(out), changed))
+}
+
+/// The fusable NULLABLE (`Option<String>`) kernel names — the URL / company /
+/// email `Option`-returning families — for the host's nullable coverage guard.
+#[pyfunction]
+pub fn fusable_nullable_kernel_names() -> Vec<String> {
+    NullableKernel::NULLABLE_NAMES
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
+}
+
+/// Apply a run of nullable string kernels (`(name, params)` tuples) over a
+/// Utf8 / LargeUtf8 array in one pass. A run may MIX total kernels (strip,
+/// lowercase, …) with the `Option`-returning URL/company/email ones; a value a
+/// kernel can't parse becomes a NULL cell that passes through the rest of the
+/// run. Returns `(transformed_array, changed)` with the per-kernel affected
+/// counts (a non-null→null row is not counted, matching the per-transform path).
+#[pyfunction]
+pub fn apply_chain_nullable_arrow(
+    py: Python,
+    array: PyArrowType<ArrayData>,
+    ops: Vec<(String, Vec<String>)>,
+) -> PyResult<(PyArrowType<ArrayData>, Vec<u64>)> {
+    let mut kernels = Vec::with_capacity(ops.len());
+    for (name, params) in &ops {
+        let refs: Vec<&str> = params.iter().map(String::as_str).collect();
+        kernels.push(
+            NullableKernel::from_op(name, &refs).ok_or_else(|| {
+                PyValueError::new_err(format!("not a fusable chain kernel: {name}"))
+            })?,
+        );
+    }
+    let arr = make_array(array.0);
+    if let Some(s) = arr.as_any().downcast_ref::<StringArray>() {
+        let (out, changed) = py.detach(|| {
+            let r = apply_chain_nullable(s, &kernels);
+            (r.array.into_data(), r.changed)
+        });
+        Ok((PyArrowType(out), changed))
+    } else if let Some(s) = arr.as_any().downcast_ref::<LargeStringArray>() {
+        let (out, changed) = py.detach(|| {
+            let r = apply_chain_nullable(s, &kernels);
+            (r.array.into_data(), r.changed)
+        });
+        Ok((PyArrowType(out), changed))
+    } else {
+        Err(PyTypeError::new_err(
+            "fused nullable apply requires a Utf8 or LargeUtf8 array",
+        ))
+    }
 }

@@ -15,6 +15,7 @@ from goldenflow.transforms import get_transform, registry
 from goldenflow.transforms._chain import (
     FUSABLE_F64_KERNELS,
     FUSABLE_KERNELS,
+    FUSABLE_NULLABLE_KERNELS,
     FUSABLE_PARAM_KERNELS,
 )
 
@@ -100,6 +101,77 @@ def test_fused_f64_equals_per_transform(monkeypatch, ops) -> None:
 
     assert fused.df.equals(per_op.df), "fused f64 output frame diverged"
     assert _manifest_rows(fused) == _manifest_rows(per_op), "fused f64 manifest diverged"
+
+
+def test_fusable_nullable_registered_and_single_col_mode() -> None:
+    """Every nullable (URL/company/email) fusable kernel is a registered single-column
+    transform (mode 'expr'/'series') so the fused sample replay dispatches on mode."""
+    reg = set(registry())
+    for name in sorted(FUSABLE_NULLABLE_KERNELS):
+        assert name in reg, f"{name} in FUSABLE_NULLABLE_KERNELS but not registered"
+        info = get_transform(name)
+        assert info is not None and info.mode in ("expr", "series"), (
+            f"{name} must be mode 'expr'/'series', got "
+            f"{None if info is None else info.mode}"
+        )
+
+
+def test_fusable_nullable_matches_native_kernel_table() -> None:
+    """Python FUSABLE_NULLABLE_KERNELS must mirror the native nullable kernel table
+    (``fusable_nullable_kernel_names`` = NullableKernel::NULLABLE_NAMES)."""
+    nm = native_module()
+    if nm is None or not hasattr(nm, "fusable_nullable_kernel_names"):
+        pytest.skip("native nullable chain kernel not built (pre-0.14.0 wheel)")
+    assert set(nm.fusable_nullable_kernel_names()) == set(FUSABLE_NULLABLE_KERNELS)
+
+
+@pytest.mark.parametrize(
+    "ops",
+    [
+        ["url_normalize", "url_strip_tracking"],
+        ["url_normalize", "url_strip_www"],
+        ["url_canonical"],
+        ["url_normalize", "url_extract_domain"],
+        ["company_normalize", "company_strip_legal"],
+        ["email_mask"],
+        # MIXED: total string ops + nullable ones fuse as one run.
+        ["strip", "lowercase", "url_normalize", "url_strip_www"],
+        ["strip", "company_normalize"],
+        ["strip", "email_extract_domain", "uppercase"],
+    ],
+)
+def test_fused_nullable_equals_per_transform(monkeypatch, ops) -> None:
+    """The nullable (Option-returning) fused chain is byte-identical to the
+    per-transform path — same output frame (incl. nulls the kernels produce) AND
+    same manifest — including runs that MIX total and nullable kernels."""
+    nm = native_module()
+    if nm is None or not hasattr(nm, "apply_chain_nullable_arrow"):
+        pytest.skip("native nullable chain kernel not built (pre-0.14.0 wheel)")
+
+    from goldenflow import transform_df
+
+    df = pl.DataFrame(
+        {
+            "v": [
+                "  HTTP://WWW.Example.com/P/?utm_source=x&a=1  ",
+                "Acme, Inc.",
+                "not parseable at all",
+                None,
+                "john.doe@Gmail.com",
+                "",
+            ]
+        }
+    )
+    cfg = _cfg("v", ops)
+
+    monkeypatch.setenv("GOLDENFLOW_FUSED_APPLY", "0")  # opt-OUT -> per-transform
+    per_op = transform_df(df, config=cfg)
+
+    monkeypatch.setenv("GOLDENFLOW_FUSED_APPLY", "1")
+    fused = transform_df(df, config=cfg)
+
+    assert fused.df.equals(per_op.df), "fused nullable output frame diverged"
+    assert _manifest_rows(fused) == _manifest_rows(per_op), "fused nullable manifest diverged"
 
 
 def test_fused_run_spans_dtype_change(monkeypatch) -> None:

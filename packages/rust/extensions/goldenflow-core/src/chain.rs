@@ -16,17 +16,24 @@
 //! to `k2(k1(x))` applied sequentially. Proven in the tests below + the host-side
 //! parity test.
 //!
-//! Scope (Phase 1): the no-arg, TOTAL (never-null) string→string text family. Ops
-//! that return `Option` (email_extract_domain, url_extract_domain, *_validate,
-//! *_mask), carry params (truncate/pad), or change arity (split/merge) are NOT
-//! fusable here and stay on the per-transform path — see the boundary note in the
-//! design doc.
+//! Three fusable shapes now live here, each with its own executor + arrow symbol:
+//!   1. [`apply_chain`] — TOTAL string→string kernels (`Kernel`), incl. the
+//!      parameterized `truncate`/`pad`. The fast path (two reused scratch buffers).
+//!   2. [`apply_chain_f64`] — f64→f64 numeric kernels (`NumericKernel`:
+//!      round/clamp/abs_value/fill_zero) on a `Float64Array`.
+//!   3. [`apply_chain_nullable`] — `Option`-returning string kernels
+//!      (`NullableKernel`: the URL/company/email families), which may MIX with the
+//!      total kernels in one run; a value a kernel can't parse becomes a null cell
+//!      that passes through the rest of the run.
+//! Still on the per-transform path: `*_validate` (bool), multi-arity split/merge,
+//! and the residual-tier phone/date families — see the boundary note in the design
+//! doc / ADR 0034.
 
 use arrow_array::builder::Float64Builder;
 use arrow_array::{Array, Float64Array, GenericStringArray, OffsetSizeTrait};
 use arrow_buffer::{Buffer, OffsetBuffer, ScalarBuffer};
 
-use crate::{email, names, numeric, text};
+use crate::{company, email, names, numeric, text, url};
 
 /// One owned, no-arg, total string→string kernel eligible for the fused chain.
 /// The name mapping (`from_name`) is the single source of truth the host's
@@ -368,6 +375,141 @@ pub fn apply_chain_f64(arr: &Float64Array, kernels: &[NumericKernel]) -> F64Chai
     }
 }
 
+// ---------------------------------------------------------------------------
+// Nullable string chain — the third fusable shape. The URL / company / email
+// families return `Option<String>` (None when the input can't be parsed → a
+// NULL output cell). They can't ride the total `apply_chain` (which never
+// nulls), so this executor threads `Option<String>`: once a cell goes null it
+// passes through the rest of the run untouched, exactly as the per-transform
+// path does (each transform's `map_str_to_str` skips null input, nulls on None).
+// A run may MIX total kernels (wrapped as `Total`) with nullable ones.
+// ---------------------------------------------------------------------------
+
+/// One kernel eligible for the nullable fused chain: either an existing total
+/// kernel (always `Some`) or an `Option`-returning URL/company/email kernel.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum NullableKernel {
+    Total(Kernel),
+    UrlNormalize,
+    UrlStripTracking,
+    UrlStripWww,
+    UrlCanonical,
+    UrlExtractDomain,
+    CompanyNormalize,
+    CompanyStripLegal,
+    CompanyExtractLegal,
+    EmailMask,
+    EmailExtractDomain,
+}
+
+impl NullableKernel {
+    /// Resolve a name + params to a nullable chain kernel. Nullable names map to
+    /// their own variant; everything else falls back to a `Total(Kernel)` (so a
+    /// run mixing `strip`/`lowercase` with `url_normalize` fuses as one). `None`
+    /// only if the name isn't fusable at all.
+    pub fn from_op(name: &str, params: &[&str]) -> Option<NullableKernel> {
+        Some(match name {
+            "url_normalize" => NullableKernel::UrlNormalize,
+            "url_strip_tracking" => NullableKernel::UrlStripTracking,
+            "url_strip_www" => NullableKernel::UrlStripWww,
+            "url_canonical" => NullableKernel::UrlCanonical,
+            "url_extract_domain" => NullableKernel::UrlExtractDomain,
+            "company_normalize" => NullableKernel::CompanyNormalize,
+            "company_strip_legal" => NullableKernel::CompanyStripLegal,
+            "company_extract_legal" => NullableKernel::CompanyExtractLegal,
+            "email_mask" => NullableKernel::EmailMask,
+            "email_extract_domain" => NullableKernel::EmailExtractDomain,
+            _ => return Kernel::from_op(name, params).map(NullableKernel::Total),
+        })
+    }
+
+    /// The `Option`-returning kernel names (need `apply_chain_nullable_arrow`).
+    pub const NULLABLE_NAMES: &'static [&'static str] = &[
+        "url_normalize",
+        "url_strip_tracking",
+        "url_strip_www",
+        "url_canonical",
+        "url_extract_domain",
+        "company_normalize",
+        "company_strip_legal",
+        "company_extract_legal",
+        "email_mask",
+        "email_extract_domain",
+    ];
+
+    /// Apply to one present value, returning `None` when the kernel can't parse
+    /// it (→ a null output cell). Total kernels always return `Some`.
+    #[inline]
+    fn apply(self, s: &str) -> Option<String> {
+        match self {
+            NullableKernel::Total(k) => {
+                let mut buf = String::new();
+                k.apply_into(s, &mut buf);
+                Some(buf)
+            }
+            NullableKernel::UrlNormalize => url::url_normalize(s),
+            NullableKernel::UrlStripTracking => url::url_strip_tracking(s),
+            NullableKernel::UrlStripWww => url::url_strip_www(s),
+            NullableKernel::UrlCanonical => url::url_canonical(s),
+            NullableKernel::UrlExtractDomain => url::url_extract_domain(s),
+            NullableKernel::CompanyNormalize => company::company_normalize(s),
+            NullableKernel::CompanyStripLegal => company::company_strip_legal(s),
+            NullableKernel::CompanyExtractLegal => company::company_extract_legal(s),
+            NullableKernel::EmailMask => email::email_mask(s),
+            NullableKernel::EmailExtractDomain => email::email_extract_domain(s),
+        }
+    }
+}
+
+/// Apply `kernels` over `arr`, threading `Option<String>`: a null (input or
+/// produced by a kernel returning `None`) passes through the rest of the run.
+///
+/// `changed[i]` matches the host's per-transform `(before != after).sum()`,
+/// which in Polars counts a row only when BOTH before and after are non-null and
+/// differ (a null on either side yields a null comparison, skipped by `.sum()`).
+/// So a row a kernel turns non-null→null is NOT counted (nor is a null-before
+/// row). Generic over offset width for the LargeUtf8 Polars shape.
+pub fn apply_chain_nullable<O: OffsetSizeTrait>(
+    arr: &GenericStringArray<O>,
+    kernels: &[NullableKernel],
+) -> ChainResult<O> {
+    let len = arr.len();
+    let mut changed = vec![0u64; kernels.len()];
+    let mut offsets: Vec<O> = Vec::with_capacity(len + 1);
+    offsets.push(O::from_usize(0).expect("0 fits any offset"));
+    let mut values = String::with_capacity(arr.values().len());
+    let mut nulls = arrow_buffer::NullBufferBuilder::new(len);
+    for v in arr.iter() {
+        let mut cur: Option<String> = v.map(str::to_string);
+        for (i, k) in kernels.iter().enumerate() {
+            let next = match &cur {
+                Some(s) => k.apply(s),
+                None => None,
+            };
+            if let (Some(b), Some(a)) = (&cur, &next) {
+                if b != a {
+                    changed[i] += 1;
+                }
+            }
+            cur = next;
+        }
+        match cur {
+            Some(s) => {
+                values.push_str(&s);
+                nulls.append_non_null();
+            }
+            None => nulls.append_null(),
+        }
+        offsets.push(O::from_usize(values.len()).expect("string column exceeds offset width"));
+    }
+    let array = GenericStringArray::<O>::new(
+        OffsetBuffer::new(ScalarBuffer::from(offsets)),
+        Buffer::from_vec(values.into_bytes()),
+        nulls.finish(),
+    );
+    ChainResult { array, changed }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -678,6 +820,156 @@ mod tests {
                 NumericKernel::from_op(name, &[]).is_some(),
                 "{name} unmapped"
             );
+        }
+    }
+
+    // --- nullable (Option<String>) chain ---
+
+    /// Apply nullable kernels sequentially (fresh array per step, null-skipping
+    /// like `map_str_to_str`) as the parity oracle.
+    fn seq_nullable(arr: &StringArray, kernels: &[NullableKernel]) -> StringArray {
+        let mut cur = arr.clone();
+        for k in kernels {
+            let out: StringArray = cur.iter().map(|v| v.and_then(|s| k.apply(s))).collect();
+            cur = out;
+        }
+        cur
+    }
+
+    fn url_sample() -> StringArray {
+        StringArray::from(vec![
+            Some("HTTP://WWW.Example.com/Path/?utm_source=x&a=1"),
+            Some("not a url at all"),
+            None,
+            Some("https://foo.com/"),
+            Some(""),
+        ])
+    }
+
+    #[test]
+    fn nullable_chain_matches_sequential() {
+        let chains: &[&[NullableKernel]] = &[
+            &[
+                NullableKernel::UrlNormalize,
+                NullableKernel::UrlStripTracking,
+            ],
+            &[NullableKernel::UrlNormalize, NullableKernel::UrlStripWww],
+            &[NullableKernel::UrlCanonical],
+            &[
+                NullableKernel::UrlNormalize,
+                NullableKernel::UrlExtractDomain,
+            ],
+            // MIXED: total (strip/lowercase) + nullable (url_normalize).
+            &[
+                NullableKernel::Total(Kernel::Strip),
+                NullableKernel::Total(Kernel::Lowercase),
+                NullableKernel::UrlNormalize,
+                NullableKernel::UrlStripWww,
+            ],
+        ];
+        let arr = url_sample();
+        for chain in chains {
+            let fused = apply_chain_nullable(&arr, chain);
+            let seq = seq_nullable(&arr, chain);
+            assert_eq!(fused.array, seq, "nullable chain {chain:?} != sequential");
+        }
+    }
+
+    #[test]
+    fn nullable_company_and_email() {
+        let arr = StringArray::from(vec![
+            Some("  Acme, Inc.  "),
+            Some("John Doe <j@x.com>"),
+            None,
+            Some("Widgets LLC"),
+        ]);
+        // total strip -> nullable company_normalize; and email_mask alone.
+        let c1 = [
+            NullableKernel::Total(Kernel::Strip),
+            NullableKernel::CompanyNormalize,
+        ];
+        assert_eq!(
+            apply_chain_nullable(&arr, &c1).array,
+            seq_nullable(&arr, &c1)
+        );
+        let c2 = [NullableKernel::EmailMask];
+        assert_eq!(
+            apply_chain_nullable(&arr, &c2).array,
+            seq_nullable(&arr, &c2)
+        );
+    }
+
+    #[test]
+    fn nullable_null_propagates_and_not_counted() {
+        // email_extract_domain nulls a non-email (no `@`); the produced null then
+        // passes through the next kernel. The changed count must match the Polars
+        // rule: count a row only when BOTH before and after are non-null + differ.
+        let arr = StringArray::from(vec![Some("  a@B.com  "), Some("not-an-email"), None]);
+        let chain = [
+            NullableKernel::Total(Kernel::Strip),
+            NullableKernel::EmailExtractDomain,
+            NullableKernel::Total(Kernel::Uppercase),
+        ];
+        let out = apply_chain_nullable(&arr, &chain);
+        assert!(!out.array.is_null(0), "a@B.com has a domain");
+        assert!(
+            out.array.is_null(1),
+            "non-email -> null, then passes through"
+        );
+        assert!(out.array.is_null(2), "null input stays null");
+        // Independently recompute per-step changed via the sequential path with
+        // the same both-non-null-and-differ rule (the null-not-counted claim).
+        let mut cur = arr.clone();
+        let mut expected = vec![0u64; chain.len()];
+        for (i, k) in chain.iter().enumerate() {
+            let nxt = seq_nullable(&cur, &[*k]);
+            for r in 0..cur.len() {
+                if !cur.is_null(r) && !nxt.is_null(r) && cur.value(r) != nxt.value(r) {
+                    expected[i] += 1;
+                }
+            }
+            cur = nxt;
+        }
+        assert_eq!(out.changed, expected, "null-aware changed counts diverged");
+    }
+
+    #[test]
+    fn nullable_from_op_falls_back_to_total() {
+        assert_eq!(
+            NullableKernel::from_op("url_normalize", &[]),
+            Some(NullableKernel::UrlNormalize)
+        );
+        assert_eq!(
+            NullableKernel::from_op("strip", &[]),
+            Some(NullableKernel::Total(Kernel::Strip))
+        );
+        assert_eq!(
+            NullableKernel::from_op("truncate", &["5"]),
+            Some(NullableKernel::Total(Kernel::Truncate(5)))
+        );
+        assert_eq!(NullableKernel::from_op("split_name", &[]), None);
+        for name in NullableKernel::NULLABLE_NAMES {
+            assert!(
+                NullableKernel::from_op(name, &[]).is_some(),
+                "{name} unmapped"
+            );
+        }
+    }
+
+    #[test]
+    fn nullable_works_on_large_utf8() {
+        use arrow_array::LargeStringArray;
+        let large = LargeStringArray::from(vec![Some("HTTP://WWW.A.com/"), None, Some("bad url")]);
+        let small = StringArray::from(vec![Some("HTTP://WWW.A.com/"), None, Some("bad url")]);
+        let chain = [NullableKernel::UrlNormalize, NullableKernel::UrlStripWww];
+        let lo = apply_chain_nullable(&large, &chain);
+        let so = apply_chain_nullable(&small, &chain);
+        assert_eq!(lo.changed, so.changed);
+        for i in 0..lo.array.len() {
+            assert_eq!(lo.array.is_null(i), so.array.is_null(i));
+            if !lo.array.is_null(i) {
+                assert_eq!(lo.array.value(i), so.array.value(i));
+            }
         }
     }
 }

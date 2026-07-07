@@ -97,9 +97,9 @@ drop.
 
 Measured at 5M rows: **~20% lower peak RSS** and a modest wall speedup, growing
 with row count. It is **on by default** when the native kernel is available
-(needs `goldenflow-native >= 0.13.0` for the numeric + parameterized ops;
-`>= 0.12.0` fuses the no-arg string families only); older wheels fall back
-gracefully.
+(needs `goldenflow-native >= 0.14.0` for the nullable URL/company/email ops,
+`>= 0.13.0` for numeric + parameterized, `>= 0.12.0` for the no-arg string
+families); older wheels fall back gracefully.
 
 | `GOLDENFLOW_FUSED_APPLY` | Behavior |
 |---|---|
@@ -107,15 +107,19 @@ gracefully.
 | `0` | Force the per-transform path (each transform applied individually). |
 
 <Note>
-  The fused set covers two dtypes: the owned, single-value, total (never-null)
+  The fused set covers three kernel shapes: the owned, total (never-null)
   **string** transforms (text + email + name-normalizer families, plus the
-  parameterized `truncate`/`pad`), and the owned **numeric** f64 transforms
-  (`round`/`clamp`/`abs_value`/`fill_zero`) on a `Float64` column. The engine
+  parameterized `truncate`/`pad`); the owned **numeric** f64 transforms
+  (`round`/`clamp`/`abs_value`/`fill_zero`) on a `Float64` column; and the
+  `Option`-returning **URL / company / email** transforms (`url_normalize`,
+  `company_normalize`, `email_mask`, …), where a value a kernel can't parse
+  becomes a null cell that passes through the rest of the run. The engine
   recomputes the fusable set as a run advances, so a parser that changes a
   column's dtype mid-chain (e.g. `currency_strip`: str→f64) lets the string head
-  and the numeric tail each fuse. `Option`-returning (URL / company) and
-  residual-tier (`phone`/date) transforms are not fused and take the
-  per-transform path — automatically, no configuration needed.
+  and the numeric tail each fuse; a nullable run may also mix in the total string
+  ops. Only `*_validate` (boolean), multi-column split/merge, and residual-tier
+  (`phone`/date) transforms stay on the per-transform path — automatically, no
+  configuration needed.
 </Note>
 
 ## Cross-surface (WASM / TypeScript)
