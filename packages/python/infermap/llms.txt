@@ -11,6 +11,7 @@
 ## Install
 - `pip install infermap`
 - DB extras: `pip install infermap[postgres]` / `[mysql]` / `[duckdb]` / `[all]`
+- Compiled Rust kernels (optional; faster, identical results): `pip install infermap[native]`
 - TypeScript: `npm install infermap`
 
 ## Quick Examples
@@ -58,6 +59,7 @@ Plus common-prefix canonicalization (strips schema-wide prefixes like `prospect_
 - Providers: CSV / Parquet / XLSX files, in-memory (Polars / Pandas / `list[dict]`), DB (SQLite / Postgres / DuckDB)
 - Saved mapping config: YAML (Python) / JSON (TypeScript), interoperable shape
 - Python <-> TypeScript parity verified by a shared golden-test suite (within 0.0005)
+- Shared pyo3-free Rust core (`infermap-core`): scorers auto-dispatch to the compiled kernels when `infermap[native]` is installed (Python) or the WASM artifact is bundled (TS MCP), else the pure reference — byte-identical (CI parity-gated). The MCP `infermap://scorer-info` resource reports the active `backend`.
 
 ## Accuracy
 - 162-case benchmark F1 0.84; ChEMBL F1 0.819 with the InitialismScorer
