@@ -116,7 +116,7 @@
                 schema = suggest_schema_from_file(path, backend=backend, model=model)
                 return {"schema": schema_to_dict(schema)}
         try:
-            return await asyncio.get_event_loop().run_in_executor(_executor, work)
+            return await asyncio.get_running_loop().run_in_executor(_executor, work)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
 
@@ -150,7 +150,7 @@
                     },
                 }
         try:
-            return await asyncio.get_event_loop().run_in_executor(_executor, work)
+            return await asyncio.get_running_loop().run_in_executor(_executor, work)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
     ```
