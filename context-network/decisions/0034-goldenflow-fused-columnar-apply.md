@@ -1,6 +1,6 @@
 # 0034 — GoldenFlow: fused columnar apply (Pillar-1 execution fusion), default-on
 
-**Status:** Accepted • **Shipped:** `goldenflow-native 0.12.0` (fused kernel on PyPI), `goldenflow 1.14.0`; `GOLDENFLOW_FUSED_APPLY` default-ON (opt-out)
+**Status:** Accepted • **Shipped:** `goldenflow-native 0.12.0` (no-arg string fusion), then `0.13.0` (parameterized string + f64 numeric fusion) on PyPI; `goldenflow 1.14.0` → `1.15.0`; `GOLDENFLOW_FUSED_APPLY` default-ON (opt-out)
 
 ## Context
 
@@ -38,14 +38,25 @@ Load-bearing design points:
   offsets), so `apply_chain` (and the single-kernel columnar helpers) are
   `GenericStringArray<O>` — an i32-only path would silently never fire on real
   Polars data.
-- **Scope.** 25 fusable kernels (text + email + name-normalizer families).
-  Excluded on purpose: `Option`-returning kernels (URL/company — need a
-  null-aware executor), parameterized (`truncate`/`pad`), numeric f64, and
-  residual-tier (`phone`/date). They take the per-transform path automatically.
-- **Default-ON, opt-out.** `GOLDENFLOW_FUSED_APPLY=0` forces per-transform;
-  otherwise fuse whenever the native fused kernel is present. Requires
-  `goldenflow-native >= 0.12.0` (the version that ships `apply_chain_arrow`);
-  older wheels / native-absent installs fall back gracefully.
+- **Scope, extended to two dtypes (0.13.0).** The initial 25 no-arg string
+  kernels (text + email + name-normalizer families) were joined by the
+  **parameterized string ops** (`truncate`/`pad_left`/`pad_right`, via the
+  superset `apply_chain_ops_arrow` symbol taking `(name, params)` tuples) and a
+  **second dtype**: owned **f64 numeric** kernels (`round`/`clamp`/`abs_value`/
+  `fill_zero`) on a `Float64` column, via `apply_chain_f64` → `apply_chain_f64_arrow`.
+  The engine recomputes the fusable set as a run advances, so a parser that
+  changes a column's dtype mid-chain (`currency_strip`: str→f64) lets the string
+  head and the numeric tail each fuse. Still excluded: `Option`-returning kernels
+  (URL/company — need a null-aware executor) and residual-tier (`phone`/date).
+  Numeric parity has one subtlety: the per-kernel affected count matches Polars'
+  `(before != after).sum()`, which excludes null-`before` rows — so `fill_zero`'s
+  null→0.0 *fills* but is not *counted* (the kernel guards the count with
+  `cur.is_some()`).
+- **Default-ON, opt-out, symbol-aware.** `GOLDENFLOW_FUSED_APPLY=0` forces
+  per-transform; otherwise fuse whenever the native fused kernel is present. The
+  fusable set is chosen by *available symbol* — a `0.12.0` wheel fuses the no-arg
+  string families only; `>= 0.13.0` adds the parameterized + numeric ops. Older
+  wheels / native-absent installs fall back gracefully (no regression).
 
 ## Consequence
 
@@ -68,6 +79,8 @@ a slow queue), and the stale maturin/rust-cache (editing `goldenflow-core/src`
 without bumping its version → native links the old core; fix = bump the core
 version to change the lock hash).
 
-Follow-ups (none are default-flip levers): a null-aware executor for
-URL/company, parameterized + numeric chains, wasm/duckdb fused surfaces. The
-frame container stays Polars — evicting it is the next, larger Pillar-1 step.
+Parameterized string + f64 numeric chains shipped in `0.13.0`/`goldenflow 1.15.0`
+(see the extended scope above). Remaining follow-ups (none are default-flip
+levers): a null-aware executor for URL/company `Option`-returning kernels, and
+wasm/duckdb fused surfaces. The frame container stays Polars — evicting it is the
+next, larger Pillar-1 step.
