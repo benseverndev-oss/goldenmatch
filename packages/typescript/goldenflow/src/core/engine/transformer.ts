@@ -13,8 +13,10 @@ import type {
 import { makeConfig, makeTransformRecord, MutableManifest } from "../types.js";
 import { toColumnValue } from "../data.js";
 import { getTransform, parseTransformName } from "../transforms/index.js";
+import { fusedEnabled, isFusable } from "./_chain.js";
 import { profileDataframe } from "./profiler-bridge.js";
 import { selectTransforms } from "./selector.js";
+import { getFlowWasmBackend } from "../wasm/backend.js";
 
 export class TransformEngine {
   readonly config: GoldenFlowConfig;
@@ -125,6 +127,7 @@ export class TransformEngine {
   ): Row[] {
     for (const spec of this.config.transforms) {
       if (rows.length === 0 || !(spec.column in rows[0]!)) continue;
+      const ops: Array<[TransformInfo, string[]]> = [];
       for (const opRaw of spec.ops) {
         const [name, params] = parseTransformName(opRaw);
         const info = getTransform(name);
@@ -137,8 +140,9 @@ export class TransformEngine {
           );
           continue;
         }
-        rows = this._applySingleTransform(rows, spec.column, info, params, manifest);
+        ops.push([info, params]);
       }
+      rows = this._applyColumnOps(rows, spec.column, ops, manifest);
     }
     return rows;
   }
@@ -153,17 +157,136 @@ export class TransformEngine {
 
     for (const colProfile of profile.columns) {
       const selected = selectTransforms(colProfile);
-      for (const info of selected) {
-        rows = this._applySingleTransform(
-          rows,
-          colProfile.name,
-          info,
-          [],
-          manifest,
-        );
-      }
+      const ops: Array<[TransformInfo, string[]]> = selected.map((info) => [
+        info,
+        [],
+      ]);
+      rows = this._applyColumnOps(rows, colProfile.name, ops, manifest);
     }
     return rows;
+  }
+
+  /**
+   * Apply an ordered list of `[info, params]` to `column`. When the WASM backend
+   * is active, a maximal run of owned no-arg string kernels is fused into ONE
+   * `applyChain` crossing (Pillar-1 on the edge); everything else takes the
+   * per-transform path unchanged. Pure-TS (no backend) always takes per-transform.
+   */
+  private _applyColumnOps(
+    rows: Row[],
+    column: string,
+    ops: Array<[TransformInfo, string[]]>,
+    manifest: MutableManifest,
+  ): Row[] {
+    const fuseOn = fusedEnabled();
+    let i = 0;
+    while (i < ops.length) {
+      const [info, params] = ops[i]!;
+      if (fuseOn && isFusable(info.name, params)) {
+        let j = i;
+        while (j < ops.length && isFusable(ops[j]![0].name, ops[j]![1])) j++;
+        if (j - i >= 2) {
+          const applied = this._applyFusedRun(
+            rows,
+            column,
+            ops.slice(i, j),
+            manifest,
+          );
+          if (applied !== null) {
+            rows = applied;
+            i = j;
+            continue;
+          }
+          // backend declined -> fall through to the per-op path.
+        }
+      }
+      rows = this._applySingleTransform(rows, column, info, params, manifest);
+      i++;
+    }
+    return rows;
+  }
+
+  /**
+   * Apply a run of fusable ops via one `backend.applyChain` crossing. Emits one
+   * audit record per op with the exact affected count from the kernel and per-step
+   * before/after samples from a cheap head(3) replay through the SAME transforms
+   * (byte-identical to the fused output). Returns the new rows, or `null` if the
+   * backend declined (caller falls back to per-op).
+   */
+  private _applyFusedRun(
+    rows: Row[],
+    column: string,
+    run: Array<[TransformInfo, string[]]>,
+    manifest: MutableManifest,
+  ): Row[] | null {
+    const backend = getFlowWasmBackend();
+    if (backend == null || typeof backend.applyChain !== "function") return null;
+
+    // Non-null values (coerced to string) + their row indices. Total kernels never
+    // null, so nulls stay put and only the non-null cells go across the boundary.
+    const idx: number[] = [];
+    const vals: string[] = [];
+    for (let r = 0; r < rows.length; r++) {
+      const v = rows[r]![column];
+      if (v === null || v === undefined) continue;
+      idx.push(r);
+      vals.push(typeof v === "string" ? v : String(v));
+    }
+    const names = run.map(([info]) => info.name);
+    let outVals: string[];
+    let changed: number[];
+    try {
+      const out = backend.applyChain(vals, names);
+      outVals = out.values;
+      changed = out.changed;
+    } catch {
+      return null; // fall back to per-op
+    }
+    if (outVals.length !== vals.length || changed.length !== run.length) {
+      return null;
+    }
+
+    // Manifest: one record per op. Affected count is exact from the kernel; the
+    // before/after samples come from replaying each op on the first-3 rows through
+    // the SAME transform funcs (which dispatch to the same backend kernels).
+    const totalRows = rows.length;
+    let sample: ColumnValue[] = rows.slice(0, 3).map((r) => {
+      const v = r[column];
+      if (v === null || v === undefined) return null;
+      return typeof v === "string" || typeof v === "number" || typeof v === "boolean"
+        ? v
+        : String(v);
+    });
+    for (let k = 0; k < run.length; k++) {
+      const [info, params] = run[k]!;
+      const before = sample.map((v) => String(v ?? ""));
+      const typedParams = castParams(params);
+      const res =
+        typedParams.length > 0 ? info.func(sample, ...typedParams) : info.func(sample);
+      sample = res as ColumnValue[];
+      const after = sample.map((v) => String(v ?? ""));
+      manifest.addRecord(
+        makeTransformRecord({
+          column,
+          transform: info.name,
+          affectedRows: changed[k] ?? 0,
+          totalRows,
+          sampleBefore: before,
+          sampleAfter: after,
+        }),
+      );
+    }
+
+    // Scatter the transformed values back into their (non-null) positions.
+    const newRows = rows.slice();
+    for (let m = 0; m < idx.length; m++) {
+      const r = idx[m]!;
+      const nv = outVals[m]!;
+      if (String(newRows[r]![column] ?? "") !== nv) {
+        newRows[r] = { ...newRows[r]!, [column]: nv };
+      }
+    }
+    return newRows;
   }
 
   private _applySingleTransform(

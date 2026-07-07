@@ -144,6 +144,13 @@ export async function instantiateBackend(bytes: Uint8Array): Promise<FlowWasmBac
       freqThreshold: number,
       matchThreshold: number,
     ) => string[];
+    // Fused chain: `Vec<String>` in, a `ChainOut` class out (wasm-bindgen getters
+    // `values` -> `string[]`, `changed` -> `Uint32Array`).
+    apply_chain: (
+      values: string[],
+      names: string[],
+    ) => { values: string[]; changed: Uint32Array };
+    fusable_kernel_names: () => string[];
   };
   await glue.default({ module_or_path: bytes });
 
@@ -245,5 +252,10 @@ export async function instantiateBackend(bytes: Uint8Array): Promise<FlowWasmBac
     fuzzRatio: (a, b) => glue.fuzz_ratio(a, b),
     buildCanonicalMap: (values, counts, freqThreshold, matchThreshold) =>
       glue.build_canonical_map(values, Int32Array.from(counts), freqThreshold, matchThreshold),
+    applyChain: (values, names) => {
+      const out = glue.apply_chain(values, names);
+      return { values: out.values, changed: Array.from(out.changed) };
+    },
+    fusableKernelNames: () => glue.fusable_kernel_names(),
   };
 }

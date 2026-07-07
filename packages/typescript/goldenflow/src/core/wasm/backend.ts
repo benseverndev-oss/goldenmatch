@@ -139,6 +139,14 @@ export interface FlowWasmBackend {
     freqThreshold: number,
     matchThreshold: number,
   ): string[];
+  /** Fused columnar apply — run a chain of no-arg string kernels over the NON-null
+   * values in ONE JS<->WASM crossing (vs one per value per transform). Returns the
+   * transformed values + per-kernel affected counts (for the audit manifest).
+   * Byte-identical to applying the kernels one at a time. */
+  applyChain(values: string[], names: string[]): { values: string[]; changed: number[] };
+  /** The fusable no-arg kernel names the WASM chain supports (mirror of the TS
+   * `FUSABLE_KERNELS` set + the native `fusableKernelNames`). */
+  fusableKernelNames(): string[];
 }
 
 import { createBackendRegistry } from "goldenmatch-wasm-runtime";

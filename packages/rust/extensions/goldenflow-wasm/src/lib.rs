@@ -539,4 +539,62 @@ mod wasm {
     pub fn category_normalize_key(s: &str) -> String {
         categorical::category_normalize_key(s)
     }
+
+    // -- Fused columnar apply (Pillar-1 on the edge) -----------------------------
+
+    /// Output of [`apply_chain`]: the transformed values plus the per-kernel affected
+    /// count (rows the i-th kernel altered), so the TS engine can emit a per-op audit
+    /// record without N boundary crossings — mirrors the native chain's `changed`.
+    #[wasm_bindgen]
+    pub struct ChainOut {
+        values: Vec<String>,
+        changed: Vec<u32>,
+    }
+
+    #[wasm_bindgen]
+    impl ChainOut {
+        #[wasm_bindgen(getter)]
+        pub fn values(&self) -> Vec<String> {
+            self.values.clone()
+        }
+        #[wasm_bindgen(getter)]
+        pub fn changed(&self) -> Vec<u32> {
+            self.changed.clone()
+        }
+    }
+
+    /// Run a whole chain of owned no-arg string kernels over a column of NON-NULL
+    /// values in ONE JS<->WASM crossing, instead of one crossing per value per
+    /// transform (the TS WASM backend otherwise dispatches per value). Byte-identical
+    /// to applying the kernels one at a time — same `goldenflow_core::chain` dispatch.
+    /// Total kernels never null, so the TS caller passes only the non-null values and
+    /// scatters the results back into their positions, leaving null cells untouched.
+    #[wasm_bindgen]
+    pub fn apply_chain(values: Vec<String>, names: Vec<String>) -> Result<ChainOut, JsError> {
+        use goldenflow_core::chain::Kernel;
+        let mut kernels = Vec::with_capacity(names.len());
+        for n in &names {
+            kernels.push(
+                Kernel::from_name(n)
+                    .ok_or_else(|| JsError::new(&format!("not a fusable chain kernel: {n}")))?,
+            );
+        }
+        let refs: Vec<&str> = values.iter().map(String::as_str).collect();
+        let (out, changed) = goldenflow_core::chain::apply_chain_str(&refs, &kernels);
+        Ok(ChainOut {
+            values: out,
+            changed: changed.into_iter().map(|c| c as u32).collect(),
+        })
+    }
+
+    /// The fusable no-arg kernel names the WASM chain supports — mirror of the TS
+    /// `FUSABLE_KERNELS` set (coverage-guarded in the TS parity test) and of the
+    /// native `fusable_kernel_names` no-arg subset.
+    #[wasm_bindgen]
+    pub fn fusable_kernel_names() -> Vec<String> {
+        goldenflow_core::chain::Kernel::ALL_NAMES
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
+    }
 }
