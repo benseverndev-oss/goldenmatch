@@ -2049,8 +2049,8 @@ jobs:
             --target web --out-dir "$OUT_DIR" --out-name goldenflow_wasm
       - name: Build shared wasm-runtime (the loader imports goldenmatch-wasm-runtime)
         run: pnpm --filter goldenmatch-wasm-runtime build
-      - name: WASM identifier parity (un-skipped — artifact now present) [THE GATE]
-        run: pnpm --filter goldenflow exec vitest run tests/parity/identifiers.parity.test.ts
+      - name: WASM identifier + fused-chain parity (un-skipped — artifact now present) [THE GATE]
+        run: pnpm --filter goldenflow exec vitest run tests/parity/identifiers.parity.test.ts tests/parity/fused_chain.parity.test.ts
 
   goldenpipe_wasm:
     needs: changes

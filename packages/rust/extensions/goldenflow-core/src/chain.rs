@@ -1,6 +1,8 @@
-//! Fused columnar apply (feature `arrow`, off by default) — Pillar-1 of the Rust
-//! cutover: run a WHOLE chain of owned string kernels over a `StringArray` in one
-//! pass, instead of crossing the Python/Polars/Arrow boundary once per transform.
+//! Fused apply — Pillar-1 of the Rust cutover: run a WHOLE chain of owned kernels
+//! over a column in one pass, instead of crossing the boundary once per transform.
+//! The `Kernel` enums + the arrow-free [`apply_chain_str`] are always compiled (the
+//! WASM / pure-TS surfaces fuse without arrow); the Arrow-columnar executors below
+//! are `#[cfg(feature = "arrow")]` (native-flow enables it).
 //!
 //! The host (`engine/transformer.py`) currently applies N transforms to a column
 //! as N × (Series→Arrow export + kernel + Arrow→Series import + `with_columns` +
@@ -29,11 +31,22 @@
 //! and the residual-tier phone/date families — see the boundary note in the design
 //! doc / ADR 0034.
 
+// Arrow imports back the columnar executors (native-flow, `--features arrow`).
+// The `Kernel`/`NumericKernel`/`NullableKernel` enums + `apply_chain_str` below are
+// arrow-FREE, so the WASM / pure surfaces get the fusable chain without pulling arrow.
+#[cfg(feature = "arrow")]
 use arrow_array::builder::Float64Builder;
+#[cfg(feature = "arrow")]
 use arrow_array::{Array, Float64Array, GenericStringArray, OffsetSizeTrait};
+#[cfg(feature = "arrow")]
 use arrow_buffer::{Buffer, OffsetBuffer, ScalarBuffer};
 
-use crate::{company, email, names, numeric, text, url};
+// `email`/`names`/`text` back the arrow-free `Kernel` (via `apply_into`); the
+// `numeric`/`company`/`url` families are only reached by the arrow-gated
+// NumericKernel/NullableKernel executors.
+#[cfg(feature = "arrow")]
+use crate::{company, numeric, url};
+use crate::{email, names, text};
 
 /// One owned, no-arg, total string→string kernel eligible for the fused chain.
 /// The name mapping (`from_name`) is the single source of truth the host's
@@ -214,6 +227,36 @@ impl Kernel {
 /// i-th kernel altered, comparing the value before vs after that kernel — exactly
 /// what the host's `(before != after).sum()` computes per transform). Generic over
 /// the offset width so the output matches the input (Utf8 `i32` / LargeUtf8 `i64`).
+/// Arrow-FREE total string chain, for non-arrow surfaces (WASM / TS): thread each
+/// value through `kernels` and return `(transformed values, per-kernel changed
+/// counts)`. Same composition + change-counting as the columnar [`apply_chain`]
+/// (identical `apply_into` dispatch, two reused scratch buffers, `changed[i]` =
+/// rows the i-th kernel altered), minus the offset-buffer machinery. Total kernels
+/// never null, so callers pass only the NON-NULL values and scatter the results
+/// back into their positions, leaving null cells untouched — hence `changed[i]`
+/// already matches the host's per-op `(before != after)` count over non-null rows.
+pub fn apply_chain_str(values: &[&str], kernels: &[Kernel]) -> (Vec<String>, Vec<u64>) {
+    let mut out = Vec::with_capacity(values.len());
+    let mut changed = vec![0u64; kernels.len()];
+    let mut cur = String::new();
+    let mut next = String::new();
+    for &s0 in values {
+        cur.clear();
+        cur.push_str(s0);
+        for (i, k) in kernels.iter().enumerate() {
+            next.clear();
+            k.apply_into(&cur, &mut next);
+            if next != cur {
+                changed[i] += 1;
+            }
+            std::mem::swap(&mut cur, &mut next);
+        }
+        out.push(cur.clone());
+    }
+    (out, changed)
+}
+
+#[cfg(feature = "arrow")]
 pub struct ChainResult<O: OffsetSizeTrait> {
     pub array: GenericStringArray<O>,
     pub changed: Vec<u64>,
@@ -226,6 +269,7 @@ pub struct ChainResult<O: OffsetSizeTrait> {
 /// Generic over `O` (i32 for `StringArray`/Utf8, i64 for `LargeStringArray`/
 /// LargeUtf8) because **Polars exports strings as LargeUtf8** — a non-generic i32
 /// path would silently never fire on real Polars data.
+#[cfg(feature = "arrow")]
 pub fn apply_chain<O: OffsetSizeTrait>(
     arr: &GenericStringArray<O>,
     kernels: &[Kernel],
@@ -319,6 +363,7 @@ impl NumericKernel {
     /// Apply this kernel to one optional value. Operates on `Option<f64>` because
     /// `fill_zero` is fundamentally a null-handling op (null -> 0.0); the value
     /// kernels pass a null straight through (`None -> None`).
+    #[cfg(feature = "arrow")]
     #[inline]
     fn apply(self, v: Option<f64>) -> Option<f64> {
         match self {
@@ -331,6 +376,7 @@ impl NumericKernel {
 }
 
 /// Fused f64 output: the transformed column + per-kernel affected-row counts.
+#[cfg(feature = "arrow")]
 pub struct F64ChainResult {
     pub array: Float64Array,
     pub changed: Vec<u64>,
@@ -347,6 +393,7 @@ pub struct F64ChainResult {
 /// (Edge: `-0.0`/`NaN` values compare by IEEE-754 here, not by their Utf8 text,
 /// so a `-0.0`->`0.0` or `NaN` row's count could differ from the Utf8 path; the
 /// output array is byte-identical regardless. Documented, not chased.)
+#[cfg(feature = "arrow")]
 pub fn apply_chain_f64(arr: &Float64Array, kernels: &[NumericKernel]) -> F64ChainResult {
     let len = arr.len();
     let mut changed = vec![0u64; kernels.len()];
@@ -439,6 +486,7 @@ impl NullableKernel {
 
     /// Apply to one present value, returning `None` when the kernel can't parse
     /// it (→ a null output cell). Total kernels always return `Some`.
+    #[cfg(feature = "arrow")]
     #[inline]
     fn apply(self, s: &str) -> Option<String> {
         match self {
@@ -469,6 +517,7 @@ impl NullableKernel {
 /// differ (a null on either side yields a null comparison, skipped by `.sum()`).
 /// So a row a kernel turns non-null→null is NOT counted (nor is a null-before
 /// row). Generic over offset width for the LargeUtf8 Polars shape.
+#[cfg(feature = "arrow")]
 pub fn apply_chain_nullable<O: OffsetSizeTrait>(
     arr: &GenericStringArray<O>,
     kernels: &[NullableKernel],
@@ -510,7 +559,72 @@ pub fn apply_chain_nullable<O: OffsetSizeTrait>(
     ChainResult { array, changed }
 }
 
+// Arrow-free tests — run on a plain `cargo test` (no `--features arrow`), so the
+// WASM/pure chain path stays covered even when arrow isn't compiled in.
 #[cfg(test)]
+mod vec_tests {
+    use super::*;
+
+    #[test]
+    fn apply_chain_str_threads_kernels_and_counts() {
+        let vals = ["  John  SMITH  ", "<b>a</b>  B", "café  #7"];
+        let kernels = [
+            Kernel::Strip,
+            Kernel::Lowercase,
+            Kernel::CollapseWhitespace,
+            Kernel::RemoveHtmlTags,
+        ];
+        let (out, changed) = apply_chain_str(&vals, &kernels);
+        // Values: compare against a manual sequential fold through the same apply_into.
+        let expect: Vec<String> = vals
+            .iter()
+            .map(|s| {
+                let mut cur = s.to_string();
+                for k in &kernels {
+                    let mut b = String::new();
+                    k.apply_into(&cur, &mut b);
+                    cur = b;
+                }
+                cur
+            })
+            .collect();
+        assert_eq!(out, expect);
+        // Counts: independently recompute per-step (before != after) over the values.
+        let mut cur: Vec<String> = vals.iter().map(|s| s.to_string()).collect();
+        let mut exp_changed = vec![0u64; kernels.len()];
+        for (i, k) in kernels.iter().enumerate() {
+            let nxt: Vec<String> = cur
+                .iter()
+                .map(|s| {
+                    let mut b = String::new();
+                    k.apply_into(s, &mut b);
+                    b
+                })
+                .collect();
+            for r in 0..cur.len() {
+                if cur[r] != nxt[r] {
+                    exp_changed[i] += 1;
+                }
+            }
+            cur = nxt;
+        }
+        assert_eq!(changed, exp_changed);
+    }
+
+    #[test]
+    fn apply_chain_str_empty_and_single() {
+        assert_eq!(
+            apply_chain_str(&[], &[Kernel::Strip]),
+            (Vec::<String>::new(), vec![0u64])
+        );
+        assert_eq!(
+            apply_chain_str(&["  x  "], &[Kernel::Strip]),
+            (vec!["x".to_string()], vec![1u64])
+        );
+    }
+}
+
+#[cfg(all(test, feature = "arrow"))]
 mod tests {
     use super::*;
     use arrow_array::StringArray;
