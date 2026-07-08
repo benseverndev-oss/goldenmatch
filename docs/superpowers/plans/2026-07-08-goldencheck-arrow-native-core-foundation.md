@@ -427,6 +427,8 @@ pub fn composite_key_search(field_arrays: Vec<PyArrowType<ArrayData>>, max_size:
 ```
 Keep the exact `#[pyo3(signature = ...)]` attributes so Python call sites are unchanged. Remove `rustc-hash` from `goldencheck-native/Cargo.toml` if now unused (grep the crate first).
 
+Note: today native raises `PyValueError` for lhs/rhs length mismatch (`keys.rs:181,240`); routing all `ArrowError` through `map_err` → `PyTypeError` changes that class. It's invisible (no test asserts it; all Python callers use bare `except Exception`), but if you want to preserve it, special-case the length-mismatch `ArrowError` to `PyValueError` in the two-array fns. Acceptable either way — note it in the commit body.
+
 - [ ] **Step 6: Build native, run the keys/FD parity suite.**
 ```bash
 cd packages/python/goldencheck && python scripts/build_goldencheck_native.py 2>&1 | grep -E "^error|error\[" ; echo "rc=$?"
@@ -452,13 +454,14 @@ git commit -m "feat(goldencheck-core): key/FD kernels take Arrow arrays in core;
 - Modify: `packages/rust/extensions/goldencheck-core/src/fuzzy.rs:123-190`
 - Modify: `packages/rust/extensions/goldencheck-native/src/fuzzy.rs`
 - Modify: `packages/python/goldencheck/goldencheck/profilers/fuzzy_values.py:133-137`
+- Modify: `packages/python/goldencheck/goldencheck/cell_quality.py:50` — **this is a SECOND direct caller of the native symbol** (`near_duplicate_value_clusters(values, ...)` with `values: list[str]`). It MUST be converted too, or the bridge silently dead-falls-back to Python — the exact #688 footgun this program kills.
+- Modify: `packages/python/goldencheck/benchmarks/deep_profile_benchmark.py:175` — a third `list[str]` caller (not CI-gated, but breaks at runtime under this task).
 - Modify: `packages/python/goldencheck/tests/core/test_native_parity.py:213`
-- Check: any other caller of `near_duplicate_value_clusters`
 
-- [ ] **Step 1: Grep for all call sites of the native fuzzy symbol.**
+- [ ] **Step 1: Grep for ALL call sites of the native fuzzy symbol — there are THREE.**
 
-Run: `grep -rn "near_duplicate_value_clusters" packages/python/goldencheck/goldencheck`
-Expected: `fuzzy_values.py`. Also grep `cell_quality.py` for how it reaches the fuzzy kernel (it consumes the profiler, not the native symbol directly — confirm). Record every hit; each must be updated to pass a pyarrow array.
+Run: `grep -rn "near_duplicate_value_clusters" packages/python/goldencheck`
+Expected hits: `profilers/fuzzy_values.py`, `cell_quality.py`, `benchmarks/deep_profile_benchmark.py`, and the parity test. Every one passes a `list[str]` today and MUST be converted to pass a pyarrow string array. Do NOT assume any caller "uses the profiler" — `cell_quality.py:50` calls the native symbol directly. Record every hit; each gets an edit in Step 6 and appears in the Step 8 commit.
 
 - [ ] **Step 2: Add failing Arrow unit test in fuzzy.rs.**
 ```rust
@@ -547,6 +550,15 @@ if native_enabled("fuzzy_values"):
 ```
 (`values` list is still needed for `variants = [values[i] for i in cluster]` — keep it; `distinct.to_arrow()` is the native input. Both index-align because `distinct` is the shared source.)
 
+`cell_quality.py:50` — the second direct caller. It has `values: list[str]` in scope; convert to a pyarrow string array (import polars is already present, or use pyarrow):
+```python
+import pyarrow as pa
+clusters = native_module().near_duplicate_value_clusters(pa.array(values, type=pa.string()), _MIN_SIMILARITY)
+```
+Keep the surrounding `try/except -> _python fallback` intact, and keep `values` for the index-based reverse mapping.
+
+`benchmarks/deep_profile_benchmark.py:175` — third caller; same `pa.array(values, type=pa.string())` conversion.
+
 `test_native_parity.py:213` — pass an Arrow array:
 ```python
 import pyarrow as pa
@@ -563,9 +575,10 @@ Expected: core fuzzy tests ok; native build clean; fuzzy parity + profiler tests
 
 - [ ] **Step 8: Commit.**
 ```bash
-git add packages/rust/extensions/goldencheck-core/src/fuzzy.rs packages/rust/extensions/goldencheck-core/src/lib.rs packages/rust/extensions/goldencheck-native/src/fuzzy.rs packages/python/goldencheck/goldencheck/profilers/fuzzy_values.py packages/python/goldencheck/tests/core/test_native_parity.py
+git add packages/rust/extensions/goldencheck-core/src/fuzzy.rs packages/rust/extensions/goldencheck-core/src/lib.rs packages/rust/extensions/goldencheck-native/src/fuzzy.rs packages/python/goldencheck/goldencheck/profilers/fuzzy_values.py packages/python/goldencheck/goldencheck/cell_quality.py packages/python/goldencheck/benchmarks/deep_profile_benchmark.py packages/python/goldencheck/tests/core/test_native_parity.py
 git commit -m "feat(goldencheck-core): fuzzy value clustering takes Arrow array (uniformity; null-free contract)"
 ```
+Verify all three callers were updated: `grep -rn "near_duplicate_value_clusters" packages/python/goldencheck | grep -v "to_arrow\|pa.array"` should return only the native-symbol definition/import lines, never a `list[str]` call site.
 
 ---
 
@@ -753,6 +766,7 @@ def _has_symbol(component: str) -> bool:
     return all(hasattr(_native, s) for s in symbols)
 ```
 - Update the module docstring: `auto` now means "use native wherever a kernel symbol exists; pure-Python is a lossy fallback only when the wheel is absent" (per the roadmap). Keep `mode==0`/`mode==1` text.
+- Also fix the stale `_GATED_ON` reference in `tests/core/test_native_parity.py:3` (docstring) — reword to "the gate that lets a component run under `GOLDENCHECK_NATIVE=auto`" without naming the deleted allow-list.
 
 - [ ] **Step 4: Run loader tests + the full core suite.**
 ```bash
@@ -780,21 +794,29 @@ Read the `goldencheck_native` job (~lines 903-950), the paths-filter block (~161
 
 - [ ] **Step 2: Make the main matrix native-default for goldencheck; add a fallback lane.**
 
-Edit the main Python matrix so the goldencheck leg builds the native ext (call `python packages/python/goldencheck/scripts/build_goldencheck_native.py` after install) and runs with native present (default/auto). Add a **separate** step or matrix entry that runs the same suite with `GOLDENCHECK_NATIVE=0` (fallback lane), so both are exercised. Keep the existing dedicated `goldencheck_native` required-mode job as-is. Because `ci.yml` self-triggers on its own change (root CLAUDE.md), the filter re-runs everything — no extra filter wiring needed unless a new job id is added.
+Edit the main Python matrix so the goldencheck leg builds the native ext and runs with native present (default/auto), plus a `GOLDENCHECK_NATIVE=0` fallback lane. Keep the existing dedicated `goldencheck_native` required-mode job as-is. Because `ci.yml` self-triggers on its own change (root CLAUDE.md), the filter re-runs everything — no extra filter wiring needed unless a new job id is added.
 
-Concretely (adapt to the actual matrix YAML you read):
+**TWO REPO-SPECIFIC CONSTRAINTS you MUST honor (verify against the YAML you read in Step 1):**
+1. **The `python` job runs under `uv`, not bare python** — it uses `uv sync --all-packages` (~ci.yml:308) and `uv run pytest` (~ci.yml:429/441). Bare `python`/`python -m pytest` will NOT hit the synced `.venv`. Use `uv run ...`.
+2. **The `python` job is a matrix over ~8 packages sharing one pytest step (~ci.yml:272/382).** Any step you add MUST be guarded `if: matrix.pkg == 'goldencheck'` (match the actual matrix var name — it may be `matrix.package`), or every package leg builds the goldencheck ext and reddens 7 unrelated legs.
+
+Concretely (adapt names to the actual matrix YAML):
 ```yaml
-# in the goldencheck test leg, after `uv sync`/install:
+# added to the python matrix job, guarded to the goldencheck leg only:
 - name: Build goldencheck native ext (Rust-as-oracle default lane)
-  run: python packages/python/goldencheck/scripts/build_goldencheck_native.py
-- name: Test (native default)
+  if: matrix.pkg == 'goldencheck'
+  run: uv run python packages/python/goldencheck/scripts/build_goldencheck_native.py
+- name: goldencheck tests (native default)
+  if: matrix.pkg == 'goldencheck'
   working-directory: packages/python/goldencheck
-  run: python -m pytest --timeout=120 --timeout-method=thread -q
-- name: Test (pure-Python fallback lane)
+  run: uv run pytest --timeout=120 --timeout-method=thread -q
+- name: goldencheck tests (pure-Python fallback lane)
+  if: matrix.pkg == 'goldencheck'
   working-directory: packages/python/goldencheck
   env: { GOLDENCHECK_NATIVE: "0" }
-  run: python -m pytest tests/core tests/relations tests/profilers --timeout=120 --timeout-method=thread -q
+  run: uv run pytest tests/core tests/relations tests/profilers --timeout=120 --timeout-method=thread -q
 ```
+If the shared pytest step already runs goldencheck pure-Python, either gate it off for `goldencheck` (so it isn't double-run) or treat it as the fallback lane and add only the native build + native lane. Decide based on the real YAML.
 
 - [ ] **Step 3: Validate the workflow YAML.**
 
