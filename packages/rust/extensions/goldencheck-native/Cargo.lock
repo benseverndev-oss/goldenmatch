@@ -357,7 +357,7 @@ dependencies = [
 
 [[package]]
 name = "goldencheck-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "arrow",
  "rustc-hash",
@@ -365,7 +365,7 @@ dependencies = [
 
 [[package]]
 name = "goldencheck-native"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "arrow",
  "goldencheck-core",
