@@ -1,0 +1,26 @@
+description: "Automotive — vehicles, VIN/plate/registration, odometer, make/model"
+
+types:
+  identifier:
+    name_hints: ["vin", "license_plate", "registration_number"]
+    value_signals:
+      min_unique_pct: 0.90
+    suppress: ["cardinality", "pattern_consistency", "drift_detection"]
+
+  odometer:
+    name_hints: ["odometer", "mileage"]
+    value_signals:
+      numeric: true
+    suppress: ["pattern_consistency"]
+
+  engine:
+    name_hints: ["engine_number", "chassis_number"]
+    value_signals:
+      min_unique_pct: 0.80
+    suppress: ["cardinality", "pattern_consistency"]
+
+  vehicle:
+    name_hints: ["make", "model", "trim", "fuel_type"]
+    value_signals:
+      max_unique: 100
+    suppress: ["uniqueness"]

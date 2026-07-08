@@ -1,0 +1,28 @@
+description: "Logistics / supply chain — shipments, tracking, carriers, freight, warehouses"
+
+types:
+  tracking:
+    name_hints: ["tracking_number", "tracking_id", "shipment_id", "shipment_number"]
+    value_signals:
+      min_unique_pct: 0.90
+    suppress: ["cardinality", "pattern_consistency", "drift_detection"]
+
+  document:
+    name_hints: ["waybill", "awb", "bill_of_lading"]
+    suppress: ["pattern_consistency"]
+
+  container:
+    name_hints: ["container_number", "consignment", "consignee"]
+    suppress: ["pattern_consistency"]
+
+  freight:
+    name_hints: ["carrier", "freight", "warehouse_id"]
+    value_signals:
+      max_unique: 50
+    suppress: ["uniqueness", "range_distribution"]
+
+  status:
+    name_hints: ["delivery_status", "dispatch_date"]
+    value_signals:
+      max_unique: 20
+    suppress: ["uniqueness", "range_distribution"]
