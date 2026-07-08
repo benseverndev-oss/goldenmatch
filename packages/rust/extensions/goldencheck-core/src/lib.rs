@@ -11,12 +11,18 @@
 //! `#[pyfunction]` shims and the zero-copy Arrow reads, and delegates the
 //! actual work here. This mirrors `score-core` / `graph-core` on the
 //! goldenmatch side.
+//!
+//! Most kernels compare interned ids by equality only. The denial-constraint
+//! kernel (`dc`) is the exception: its columns arrive order-preservingly
+//! rank-encoded, so it does ordered `<`/`<=`/`>`/`>=` comparisons over those ids.
 
 mod benford;
+mod dc;
 mod fuzzy;
 mod keys;
 
 pub use benford::benford_leading_digits;
+pub use dc::{dc_pair_evidence, dc_row_evidence, Pred};
 pub use fuzzy::near_duplicate_clusters;
 pub use keys::{
     composite_key_search, discover_approximate_fds, discover_functional_dependencies,
