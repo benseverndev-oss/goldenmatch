@@ -251,6 +251,7 @@ def scan_dataframe(
     baseline: BaselineProfile | Path | None = None,
     schema: object | None = None,
     deep: bool = False,
+    denial: bool = False,
 ) -> tuple[list[Finding], DatasetProfile] | tuple[list[Finding], DatasetProfile, pl.DataFrame]:
     """Scan an already-loaded Polars DataFrame.
 
@@ -274,6 +275,7 @@ def scan_dataframe(
         baseline=baseline,
         schema=schema,
         deep=deep,
+        denial=denial,
     )
 
 
@@ -285,6 +287,7 @@ def scan_file(
     baseline: BaselineProfile | Path | None = None,
     schema: object | None = None,  # goldencheck_types.InferredSchema; loose typing avoids hard import dep
     deep: bool = False,
+    denial: bool = False,
 ) -> tuple[list[Finding], DatasetProfile] | tuple[list[Finding], DatasetProfile, pl.DataFrame]:
     df = read_file(path)
     return _scan_dataframe_impl(
@@ -296,6 +299,7 @@ def scan_file(
         baseline=baseline,
         schema=schema,
         deep=deep,
+        denial=denial,
     )
 
 
@@ -309,6 +313,7 @@ def _scan_dataframe_impl(
     baseline: BaselineProfile | Path | None,
     schema: object | None,
     deep: bool = False,
+    denial: bool = False,
 ) -> tuple[list[Finding], DatasetProfile] | tuple[list[Finding], DatasetProfile, pl.DataFrame]:
     row_count = len(df)
     # Deep mode profiles the FULL population (no 100K sample cap) -- removes
@@ -363,6 +368,17 @@ def _scan_dataframe_impl(
             all_findings.extend(findings)
         except Exception as e:
             logger.warning("Relation profiler %s failed: %s", type(profiler).__name__, e)
+
+    # Denial-constraint discovery is opt-in (NOT part of RELATION_PROFILERS) --
+    # it is a heavier cross-column miner. Under --deep it sees the full
+    # population; otherwise the same sample every other profiler ran on.
+    if denial:
+        from goldencheck.denial.mine import DenialConstraintProfiler
+        target = df if deep else sample
+        try:
+            all_findings.extend(DenialConstraintProfiler().profile(target))
+        except Exception as e:
+            logger.warning("DenialConstraintProfiler failed: %s", e)
 
     from goldencheck.semantic.classifier import classify_columns, load_type_defs
     from goldencheck.semantic.suppression import apply_suppression as apply_type_suppression

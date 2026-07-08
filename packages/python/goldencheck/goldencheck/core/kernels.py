@@ -32,6 +32,7 @@ __all__ = [
     "discover_functional_dependencies",
     "discover_approximate_fds",
     "composite_key_search",
+    "denial_constraint_evidence",
 ]
 
 
@@ -219,6 +220,29 @@ def composite_key_search(
 
     # Map candidate-local indices back to original column positions.
     return [sorted(cand_orig[i] for i in key) for key in keys_local]
+
+
+# ── denial-constraint evidence ───────────────────────────────────────────────
+
+
+def denial_constraint_evidence(cols, nulls, pred_spec, which_pass, n, sample_idx):
+    """Evidence map ``{u64_mask: count}`` for denial-constraint discovery. RICHER
+    than the column-only kernels here: also takes the predicate spec.
+
+    See ``denial/evidence.py`` for the bit layout, the ``(kind, col_a, op,
+    col_b, literal)`` predicate encoding, and the pass semantics (``which_pass``
+    1 = row / Pass 1 over ``n`` rows, 2 = pair / Pass 2 over ``sample_idx``).
+    """
+    if native_enabled("denial_constraint"):
+        try:
+            masks, counts = native_module().denial_constraint_evidence(
+                cols, nulls, pred_spec, which_pass, n, sample_idx)
+            return dict(zip(masks, counts))
+        except Exception:  # noqa: BLE001 - any native failure -> pure-Python path
+            pass
+    from goldencheck.denial.evidence import _evidence_python
+
+    return _evidence_python(cols, nulls, pred_spec, which_pass, n, sample_idx)
 
 
 def _composite_fallback(
