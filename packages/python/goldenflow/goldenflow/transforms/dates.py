@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from dateutil import parser as dateutil_parser
 
@@ -8,14 +8,71 @@ from goldenflow._polars_lazy import pl
 from goldenflow.transforms import register_transform
 from goldenflow.transforms._fastpath import _V, apply_with_residual
 
+# DETERMINISTIC fill for date fields absent from the input (Phase 4d / "own the
+# source of truth"). dateutil's default fills missing fields from `datetime.now()`,
+# so `parse("March 1995")` returned a DIFFERENT day on every run -- a latent
+# non-determinism bug, and inconsistent with GoldenFlow's own year-string fast path
+# (which already fills month/day with 1: "1995" -> "1995-01-01"). We pin the fill to
+# **month/day = 1, time = 00:00:00** so partial dates are deterministic AND agree
+# with the fast path. Only partial-date inputs (which were non-deterministic anyway)
+# change; fully-specified dates are unaffected. This is what makes the date family
+# byte-reproducible and therefore portable to the native/columnar path.
+_DEFAULT_DATE = datetime(2000, 1, 1, 0, 0, 0)
+
 
 def _parse_date(val: str | None) -> date | None:
     if not val:
         return None
     try:
-        return dateutil_parser.parse(val).date()
+        return dateutil_parser.parse(val, default=_DEFAULT_DATE).date()
     except (ValueError, OverflowError):
         return None
+
+
+# --------------------------------------------------------------------------- #
+# Module-level per-element references (Phase 4d). Deterministic (see _parse_date /
+# _DEFAULT_DATE), so they are the SAME fn the Polars `series` path applies AND the
+# owned reference the native/columnar path runs -- byte-identical, Polars-free.
+# Registered via `scalar=` so the in-memory columnar engine can run the date family
+# over a list. The str-returning date transforms are wired this wave; the
+# int/bool-returning ones (extract_year/…/date_validate) await dtype-aware egress.
+# --------------------------------------------------------------------------- #
+def _date_iso8601_py(val: str | None) -> str | None:
+    if val is None:
+        return None
+    d = _parse_date(val)
+    return d.isoformat() if d else val
+
+
+def _date_us_py(val: str | None) -> str | None:
+    if val is None:
+        return None
+    d = _parse_date(val)
+    return d.strftime("%m/%d/%Y") if d else val
+
+
+def _date_eu_py(val: str | None) -> str | None:
+    if val is None:
+        return None
+    d = _parse_date(val)
+    return d.strftime("%d/%m/%Y") if d else val
+
+
+def _datetime_iso8601_py(val: str | None) -> str | None:
+    if val is None:
+        return None
+    try:
+        dt = dateutil_parser.parse(val, default=_DEFAULT_DATE)
+        return dt.strftime("%Y-%m-%dT%H:%M:%S")
+    except (ValueError, OverflowError):
+        return val
+
+
+def _extract_day_of_week_py(val: str | None) -> str | None:
+    if val is None:
+        return None
+    d = _parse_date(val)
+    return _DAY_NAMES[d.weekday()] if d is not None else None
 
 
 _YEAR_ONLY_RE = r"^\s*\d{4}\s*$"
@@ -58,7 +115,8 @@ def _parsed_date_expr() -> pl.Expr:
 
 
 @register_transform(
-    name="date_iso8601", input_types=["date"], auto_apply=True, priority=50, mode="series"
+    name="date_iso8601", input_types=["date"], auto_apply=True, priority=50, mode="series",
+    scalar=_date_iso8601_py,
 )
 def date_iso8601(series: pl.Series) -> pl.Series:
     # Fast path A: numeric column (the inferred "date" type matched a column
@@ -84,48 +142,34 @@ def date_iso8601(series: pl.Series) -> pl.Series:
         if non_null.len() > 0 and bool(non_null.str.contains(_YEAR_ONLY_RE).all()):
             return series.str.strip_chars() + "-01-01"
 
-    def _fmt(val: str | None) -> str | None:
-        if val is None:
-            return None
-        d = _parse_date(val)
-        return d.isoformat() if d else val
-
     # Vectorized fast path: parse the well-formed common formats in Rust and
-    # strftime to ISO; only rows the fast path can't resolve hit dateutil.
+    # strftime to ISO; only rows the fast path can't resolve hit the deterministic
+    # per-row reference (_date_iso8601_py).
     fast_iso = _parsed_date_expr().dt.strftime("%Y-%m-%d")
-    return apply_with_residual(series, fast_iso, _fmt, pl.Utf8)
+    return apply_with_residual(series, fast_iso, _date_iso8601_py, pl.Utf8)
 
 
 @register_transform(
-    name="date_us", input_types=["date"], auto_apply=False, priority=50, mode="series"
+    name="date_us", input_types=["date"], auto_apply=False, priority=50, mode="series",
+    scalar=_date_us_py,
 )
 def date_us(series: pl.Series) -> pl.Series:
-    def _fmt(val: str | None) -> str | None:
-        if val is None:
-            return None
-        d = _parse_date(val)
-        return d.strftime("%m/%d/%Y") if d else val
-
     fast = _parsed_date_expr().dt.strftime("%m/%d/%Y")
-    return apply_with_residual(series, fast, _fmt, pl.Utf8)
+    return apply_with_residual(series, fast, _date_us_py, pl.Utf8)
 
 
 @register_transform(
-    name="date_eu", input_types=["date"], auto_apply=False, priority=50, mode="series"
+    name="date_eu", input_types=["date"], auto_apply=False, priority=50, mode="series",
+    scalar=_date_eu_py,
 )
 def date_eu(series: pl.Series) -> pl.Series:
-    def _fmt(val: str | None) -> str | None:
-        if val is None:
-            return None
-        d = _parse_date(val)
-        return d.strftime("%d/%m/%Y") if d else val
-
     fast = _parsed_date_expr().dt.strftime("%d/%m/%Y")
-    return apply_with_residual(series, fast, _fmt, pl.Utf8)
+    return apply_with_residual(series, fast, _date_eu_py, pl.Utf8)
 
 
 @register_transform(
-    name="date_parse", input_types=["date"], auto_apply=False, priority=55, mode="series"
+    name="date_parse", input_types=["date"], auto_apply=False, priority=55, mode="series",
+    scalar=_date_iso8601_py,
 )
 def date_parse(series: pl.Series) -> pl.Series:
     """Auto-detect format and normalize to ISO 8601."""
@@ -137,7 +181,7 @@ def date_parse(series: pl.Series) -> pl.Series:
 )
 def age_from_dob(series: pl.Series, reference_date: str | None = None) -> pl.Series:
     ref = (
-        dateutil_parser.parse(reference_date).date()
+        dateutil_parser.parse(reference_date, default=_DEFAULT_DATE).date()
         if reference_date
         else date.today()
     )
@@ -160,20 +204,11 @@ def age_from_dob(series: pl.Series, reference_date: str | None = None) -> pl.Ser
     auto_apply=False,
     priority=50,
     mode="series",
+    scalar=_datetime_iso8601_py,
 )
 def datetime_iso8601(series: pl.Series) -> pl.Series:
     """Parse to ISO 8601 datetime (with time component)."""
-
-    def _fmt(val: str | None) -> str | None:
-        if val is None:
-            return None
-        try:
-            dt = dateutil_parser.parse(val)
-            return dt.strftime("%Y-%m-%dT%H:%M:%S")
-        except (ValueError, OverflowError):
-            return val
-
-    return series.map_elements(_fmt, return_dtype=pl.Utf8)
+    return series.map_elements(_datetime_iso8601_py, return_dtype=pl.Utf8)
 
 
 @register_transform(
@@ -285,19 +320,11 @@ def extract_quarter(series: pl.Series) -> pl.Series:
     auto_apply=False,
     priority=35,
     mode="series",
+    scalar=_extract_day_of_week_py,
 )
 def extract_day_of_week(series: pl.Series) -> pl.Series:
     """Extract the day of week name (Monday, Tuesday, etc.)."""
-
-    def _dow(val: str | None) -> str | None:
-        if val is None:
-            return None
-        d = _parse_date(val)
-        if d is None:
-            return None
-        return _DAY_NAMES[d.weekday()]
-
-    return series.map_elements(_dow, return_dtype=pl.Utf8)
+    return series.map_elements(_extract_day_of_week_py, return_dtype=pl.Utf8)
 
 
 @register_transform(
