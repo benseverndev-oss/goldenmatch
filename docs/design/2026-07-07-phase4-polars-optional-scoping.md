@@ -214,15 +214,36 @@ recovered by `[native]`.
   `age_from_dob`) await dtype-aware scalar egress (a later wave). Remaining clean
   families (categorical, identifiers formatters, names remainder) are thin
   `scalar=`-wiring PRs.
-- **4e — I/O extras.** Native CSV is default; parquet/excel/scan/database move behind
-  `[polars]`/`[parquet]` with graceful `ImportError`. Gate: fallback-path tests
-  (mirror the existing cloud-connector pattern).
-- **4f — Flip the default + move `polars` to `[polars]`.** Drop `polars>=1.0` from
-  `[project.dependencies]`; add the `[polars]` extra. Update the suite floors, docs,
-  `[all]`, and the golden-suite bundle. Gate: a **no-polars CI lane** (`pip install
-  goldenflow` in a clean env, run the covered surface, assert it works with
-  `'polars' not in sys.modules`). This is the only genuinely-breaking step and
-  is a **major version** (goldenflow 2.0) with a migration note.
+- **4e — I/O extras. SHIPPED (read side, PR #1567).** `transform()` now accepts a
+  `.csv` **path** via a stdlib-`csv` reader (`columnar.read_csv_columns`), cell-identical
+  to `pl.read_csv(infer_schema_length=0)` (every field a string, empty -> `None`,
+  quoting/embedded-newline handled). So the full **read CSV -> transform -> result**
+  flow works Polars-free for a covered config; a non-`.csv` path raises a clear
+  `ValueError`. (parquet/excel/scan/database stay behind `[polars]` with graceful
+  `ImportError` — the existing cloud-connector pattern; no change needed there yet.)
+- **4f — Flip the default + move `polars` to `[polars]`. PROTOTYPED (staged, not
+  flipped).** The breaking bits are staged and de-risked so the shape is visible before
+  the 2.0 commit:
+  - **Measured weight delta (clean-room, §7a below): ~185 MB installed / ~35 MB wheel**,
+    and polars pulls **no numpy, no pyarrow** — those are `[native]`/other-package
+    costs, not base. That number justifies the 2.0.
+  - **Validated the end state for real:** with polars **genuinely uninstalled**,
+    `import goldenflow` succeeds (polars never enters `sys.modules`), the native
+    in-memory core is ready, covered `transform()` (dict + CSV path) produces correct
+    output, and touching the lazy proxy raises a clean `ModuleNotFoundError`.
+  - **`[polars]` extra added now** (additive, non-breaking — base still has `polars`,
+    so `goldenflow[polars]` resolves today as a forward-compatible no-op).
+  - **`goldenflow_nopolars` CI lane added** (advisory, not `ci-required`): builds the
+    native core, `uv pip uninstall polars`, runs `tests/nopolars/test_polars_absent.py`
+    (imports polars nowhere; asserts covered outputs vs hardcoded literals the parity
+    corpus already proves equal the Polars engine). It `skipif`s OUT of the normal
+    suite (5 skipped where polars is present; 5 pass where absent), so it's inert
+    except in its own lane — and it's already green, so the flip is pre-proven.
+  - **Remaining to actually flip (the 2.0 PR):** delete `polars>=1.0` from
+    `[project.dependencies]` (it stays in `[polars]`), add `polars` to `[all]`, bump to
+    `2.0.0`, migration note, suite floors + golden-suite lockstep. Only genuinely-breaking
+    step; hold until the covered surface is judged wide enough (dates bulk path + the
+    remaining `*_validate`/name families still need `[polars]` or their scalar wiring).
 
 ---
 
@@ -245,6 +266,29 @@ recovered by `[native]`.
 - **Non-goal: deleting Polars.** It stays a first-class optional accelerator.
 
 ---
+
+## 7a. Measured weight delta (4f prototype, 2026-07-07)
+
+Clean-room, fresh venv on Windows/py3.12:
+
+| Step | site-packages size |
+|---|---|
+| empty venv | 12 MB |
+| `pip install polars` | 197 MB |
+| **delta (polars + polars-runtime-32)** | **~185 MB installed** |
+
+- `pip install polars` pulled **only** `polars` + `polars-runtime-32` — **no numpy, no
+  pyarrow** (both are polars *extras*: `polars[numpy]`, `polars[pyarrow]`). goldenflow's
+  base code imports neither directly (only the `[native]` path touches pyarrow). So the
+  numpy (41 MB) + pyarrow (85 MB) seen in a full dev venv are NOT base-goldenflow costs.
+- Wheel download is ~35 MB; installed (uncompressed) is ~185 MB. The 2.0 flip removes
+  that from the default `pip install goldenflow`.
+
+**Polars-absent validation (the shape is real, not theoretical):** a base-minus-polars
+venv + the in-tree native core runs `import goldenflow` and covered `transform()`
+(dict + CSV path) correctly with `'polars' not in sys.modules`; the lazy proxy raises a
+clean `ModuleNotFoundError` on the uncovered tail. Locked by the `goldenflow_nopolars`
+CI lane (`tests/nopolars/`).
 
 ## 7. Effort shape
 
