@@ -32,6 +32,11 @@ class TransformInfo:
     # renders "true"/"false", an int str(int)). Only ``str`` fit the pre-egress
     # mechanism; ``int``/``bool``/``float`` need this tag.
     scalar_dtype: Literal["str", "int", "bool", "float"] = "str"
+    # Phase 4d parameterized shape: a factory `params -> fn(val)` for transforms whose
+    # per-element reference depends on the op's params (e.g. `date_shift:7`,
+    # `age_from_dob:2024-01-01`). The columnar engine builds the scalar from the spec's
+    # params; ``scalar`` (no params) and ``scalar_factory`` are mutually exclusive.
+    scalar_factory: Callable[[list[str]], Callable[[str | None], object]] | None = None
 
 
 def register_transform(
@@ -43,6 +48,7 @@ def register_transform(
     mode: Literal["expr", "series", "dataframe"] = "series",
     scalar: Callable[[str | None], object] | None = None,
     scalar_dtype: Literal["str", "int", "bool", "float"] = "str",
+    scalar_factory: Callable[[list[str]], Callable[[str | None], object]] | None = None,
 ) -> Callable:
     """Decorator to register a transform function."""
 
@@ -56,6 +62,7 @@ def register_transform(
             mode=mode,
             scalar=scalar,
             scalar_dtype=scalar_dtype,
+            scalar_factory=scalar_factory,
         )
         return func
 

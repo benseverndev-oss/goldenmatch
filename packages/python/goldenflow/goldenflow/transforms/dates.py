@@ -106,6 +106,40 @@ def _date_validate_py(val: str | None) -> bool | None:
     return _parse_date(val) is not None
 
 
+# Parameterized references (Phase 4d): a per-element fn bound to the op's params. The
+# same logic the Polars `series` path runs, single-sourced so engine == columnar.
+def _date_shift_scalar(val: str | None, days: int) -> str | None:
+    if val is None:
+        return None
+    d = _parse_date(val)
+    if d is None:
+        return val
+    return (d + timedelta(days=days)).isoformat()
+
+
+def _date_shift_factory(params: list[str]):
+    days = int(params[0]) if params else 0
+    return lambda v: _date_shift_scalar(v, days)
+
+
+def _age_scalar(val: str | None, ref: date) -> int | None:
+    if val is None:
+        return None
+    d = _parse_date(val)
+    if d is None:
+        return None
+    return ref.year - d.year - ((ref.month, ref.day) < (d.month, d.day))
+
+
+def _age_from_dob_factory(params: list[str]):
+    ref = (
+        dateutil_parser.parse(params[0], default=_DEFAULT_DATE).date()
+        if params and params[0]
+        else date.today()
+    )
+    return lambda v: _age_scalar(v, ref)
+
+
 _YEAR_ONLY_RE = r"^\s*\d{4}\s*$"
 
 # Formats the vectorized fast path resolves entirely in Polars/Rust. Each is
@@ -208,7 +242,8 @@ def date_parse(series: pl.Series) -> pl.Series:
 
 
 @register_transform(
-    name="age_from_dob", input_types=["date"], auto_apply=False, priority=40, mode="series"
+    name="age_from_dob", input_types=["date"], auto_apply=False, priority=40, mode="series",
+    scalar_factory=_age_from_dob_factory, scalar_dtype="int",
 )
 def age_from_dob(series: pl.Series, reference_date: str | None = None) -> pl.Series:
     ref = (
@@ -216,17 +251,7 @@ def age_from_dob(series: pl.Series, reference_date: str | None = None) -> pl.Ser
         if reference_date
         else date.today()
     )
-
-    def _age(val: str | None) -> int | None:
-        if val is None:
-            return None
-        d = _parse_date(val)
-        if d is None:
-            return None
-        age = ref.year - d.year - ((ref.month, ref.day) < (d.month, d.day))
-        return age
-
-    return series.map_elements(_age, return_dtype=pl.Int64)
+    return series.map_elements(lambda v: _age_scalar(v, ref), return_dtype=pl.Int64)
 
 
 @register_transform(
@@ -276,20 +301,12 @@ def extract_month(series: pl.Series) -> pl.Series:
     auto_apply=False,
     priority=30,
     mode="series",
+    scalar_factory=_date_shift_factory,
+    scalar_dtype="str",
 )
 def date_shift(series: pl.Series, days: int = 0) -> pl.Series:
     """Shift dates by a number of days (positive = forward, negative = backward)."""
-
-    def _shift(val: str | None) -> str | None:
-        if val is None:
-            return None
-        d = _parse_date(val)
-        if d is None:
-            return val
-        shifted = d + timedelta(days=days)
-        return shifted.isoformat()
-
-    return series.map_elements(_shift, return_dtype=pl.Utf8)
+    return series.map_elements(lambda v: _date_shift_scalar(v, days), return_dtype=pl.Utf8)
 
 
 _DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
