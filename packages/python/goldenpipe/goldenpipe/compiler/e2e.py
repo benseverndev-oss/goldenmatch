@@ -32,6 +32,23 @@ def end_to_end_lineage(compiled: dict, golden_provenance: list | None) -> dict:
     return {"entries": entries, "notes": []}
 
 
+def surface_golden_provenance(result, clusters):
+    """Reuse goldenmatch's golden_provenance_for_run to rebuild ClusterProvenance from a
+    finished DedupeResult. Returns list|None — None when survivorship inactive, no dupes/
+    clusters/rules, or any error (fail-open). data_df=result.dupes (carries __row_id__);
+    rules=result.config.golden_rules."""
+    try:
+        from goldenmatch.core.lineage import golden_provenance_for_run
+        cfg = getattr(result, "config", None)
+        rules = getattr(cfg, "golden_rules", None) if cfg is not None else None
+        dupes = getattr(result, "dupes", None)
+        if dupes is None or not clusters or rules is None:
+            return None
+        return golden_provenance_for_run(dupes, clusters, rules)
+    except Exception:
+        return None
+
+
 def format_end_to_end(result: dict) -> str:
     lines = []
     for e in result.get("entries", []):

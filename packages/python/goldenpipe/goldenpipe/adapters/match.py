@@ -91,6 +91,10 @@ class DedupeStage:
         )
         if mks:
             ctx.artifacts["matchkey_used"] = mks[0].name
+        # SP3: surface goldenmatch's golden-record provenance (survivorship audit) as an
+        # advisory pipeline artifact. None (byte-identical) unless survivorship is active.
+        from goldenpipe.compiler.e2e import surface_golden_provenance
+        ctx.artifacts["golden_provenance"] = surface_golden_provenance(result, ctx.artifacts.get("clusters"))
         return StageResult(status=StageStatus.SUCCESS)
 
 
