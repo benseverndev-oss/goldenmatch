@@ -474,9 +474,12 @@ def test_attach_repair_plan_sets_artifact_and_reasoning():
     attach_repair_plan(ctx, findings, [Ctx("signup_date", "date")], df)
     plan = ctx.artifacts["repair_plan"]
     assert plan["repairs"][0]["suggested_transforms"] == ["date_validate"]
+    # reasoning is a dict[str,str] (Router writes ctx.reasoning["_router"]); we
+    # accumulate repair lines under one key, newline-joined.
+    assert "date_validate" in ctx.reasoning["repair_plan"]
 ```
 
-(Adjust `PipeContext` construction to its real signature — inspect `goldenpipe/models/context.py` first.)
+(Adjust `PipeContext` construction to its real signature — `goldenpipe/models/context.py`. NOTE: `ctx.reasoning` is `dict[str, str]` (context.py:49), NOT a list — the Router writes a single keyed string `ctx.reasoning["_router"]`. Do not call `.append` on it.)
 
 - [ ] **Step 2: Run to verify failure**
 
@@ -510,6 +513,14 @@ def sample_column(series, limit: int = _SAMPLE_LIMIT) -> list[str]:
     return out
 
 
+def _coarse_str(t) -> str:
+    # ColumnType is `str, Enum` with lowercase values, BUT str(ColumnType.EMAIL) ==
+    # "ColumnType.EMAIL" (NOT "email") — only .value gives "email". The context
+    # builder can also leave inferred_type a raw str (column_context.py backward-compat
+    # coercion), which has no .value. getattr handles both.
+    return getattr(t, "value", t)
+
+
 def build_column_inputs(contexts, df) -> list[dict]:
     cols = []
     names = set(df.columns)
@@ -518,7 +529,7 @@ def build_column_inputs(contexts, df) -> list[dict]:
             continue
         cols.append({
             "name": ctx.name,
-            "coarse_type": str(ctx.inferred_type),   # ColumnType is a str-enum -> "email" etc.
+            "coarse_type": _coarse_str(ctx.inferred_type),   # -> "email"/"date"/... not "ColumnType.EMAIL"
             "samples": sample_column(df[ctx.name]),
         })
     return cols
@@ -528,21 +539,19 @@ def attach_repair_plan(ctx, findings, contexts, df) -> dict:
     columns = build_column_inputs(contexts, df)
     plan = build_repair_plan(findings, columns)
     ctx.artifacts["repair_plan"] = plan
-    for item in plan["repairs"]:
-        line = (f"repair: {item['column']} ({item['check']}) -> "
-                f"{','.join(item['suggested_transforms'])} [{item['reason']}]")
-        _record_reasoning(ctx, line)
+    lines = [
+        f"repair: {item['column']} ({item['check']}) -> "
+        f"{','.join(item['suggested_transforms'])} [{item['reason']}]"
+        for item in plan["repairs"]
+    ]
+    if lines:
+        # ctx.reasoning is dict[str,str] (Router uses key "_router"); accumulate all
+        # repair lines under one key, newline-joined. Never .append (it's a dict).
+        ctx.reasoning["repair_plan"] = "\n".join(lines)
     return plan
-
-
-def _record_reasoning(ctx, line: str) -> None:
-    # Use whatever reasoning channel the ctx already exposes (inspect models/context.py:
-    # e.g. ctx.reasoning.append(line) or ctx.add_reasoning(line)). Kept in one helper
-    # so the exact call is easy to correct during implementation.
-    getattr(ctx, "reasoning", []).append(line)
 ```
 
-**Implementation note:** inspect `goldenpipe/models/context.py` for the real reasoning API and `ColumnContext.inferred_type`'s str value (Task 5 confirms), and correct `_record_reasoning` + the `str(ctx.inferred_type)` cast accordingly. `str(ColumnType.EMAIL)` must yield `"email"` — verify (the enum is `str, Enum` with lowercase values, so `.value` is `"email"`; use `ctx.inferred_type.value` if `str()` yields `ColumnType.EMAIL`).
+**Implementation note:** `ctx.reasoning` is `dict[str, str]` (`context.py:49`) — write the joined lines to `ctx.reasoning["repair_plan"]`, never `.append`. The `_coarse_str` helper is guarded because `str()`/f-string on a `ColumnType` yields `"ColumnType.EMAIL"`, not `"email"`. The box host test below uses a **string** stand-in for `inferred_type`, so it will NOT catch a bad enum cast — the real-`ColumnType` guard is the engine test in Task 5.
 
 - [ ] **Step 4: Run host tests to verify pass**
 
@@ -668,11 +677,11 @@ git commit -m "feat(goldenpipe-core): build_repair_plan kernel + golden-vector t
 - Modify: the engine module that builds ColumnContexts post-Check (find it in Step 1).
 - Test: extend `packages/python/goldenpipe/tests/test_repair_host.py` or add an engine-level test.
 
-- [ ] **Step 1: Locate the call site.** Grep for where `build_contexts_from_check` is called and where `findings` + the working DataFrame are both in scope:
+- [ ] **Step 1: Confirm the call site.** The site is `packages/python/goldenpipe/goldenpipe/adapters/check.py` (~lines 64-73), right after context build, where all three inputs are in scope: normalized `findings`, `ctx.artifacts["column_contexts"]` (the ColumnContext list), and `ctx.df` (the working DataFrame). Confirm exact names:
 
-Run: `grep -rn "build_contexts_from_check\|artifacts\[.findings.\]\|enrich_contexts_from_flow" packages/python/goldenpipe/goldenpipe --include=*.py`
+Run: `grep -n "findings\|column_contexts\|ctx.df\|build_contexts_from_check" packages/python/goldenpipe/goldenpipe/adapters/check.py`
 
-Confirm the reasoning API on `PipeContext` (`grep -n "reasoning\|def add_reason" packages/python/goldenpipe/goldenpipe/models/context.py`) and fix `repair_host._record_reasoning` to match.
+Confirm `ctx.reasoning` is `dict[str,str]` (`grep -n "reasoning" packages/python/goldenpipe/goldenpipe/models/context.py` → expect `reasoning: dict[str, str]`). The host glue already writes `ctx.reasoning["repair_plan"]` — no change needed there.
 
 - [ ] **Step 2: Write a failing engine-level assertion** that after a Check stage produces findings on a date column, `ctx.artifacts["repair_plan"]` exists with the expected item. (Use the smallest existing engine-test harness as a template — find one via `grep -rln "PipeContext()" packages/python/goldenpipe/tests`.)
 
@@ -680,11 +689,21 @@ Confirm the reasoning API on `PipeContext` (`grep -n "reasoning\|def add_reason"
 
 ```python
 from goldenpipe.repair_host import attach_repair_plan
-# ... where `findings`, `contexts`, and the working df are in scope:
-attach_repair_plan(ctx, findings, contexts, df)
+# In check.py after ctx.artifacts["findings"] and ctx.artifacts["column_contexts"]
+# are both set (just before `return StageResult(...)`):
+_findings = ctx.artifacts.get("findings", [])
+_contexts = ctx.artifacts.get("column_contexts", [])
+if ctx.df is not None and _findings and _contexts:
+    try:
+        attach_repair_plan(ctx, _findings, _contexts, ctx.df)
+    except Exception:
+        logger.exception("repair-plan attach failed; advisory artifact skipped")
 ```
 
-Guard it so a missing df or empty findings is a no-op (the pure fn already returns `{"repairs": []}`; ensure no exception if `df is None`).
+Wrapping in try/except mirrors the existing best-effort column-context build in
+check.py — repair-planning is advisory, so a failure must never break the stage.
+
+Guard it so a missing df / empty findings / empty contexts is a no-op (the pure fn already returns `{"repairs": []}`; the guard also avoids sampling when there's nothing to plan).
 
 - [ ] **Step 4: Run the engine test + the full repair test set (box)**
 
@@ -705,26 +724,30 @@ git commit -m "feat(goldenpipe): attach advisory repair_plan artifact in the eng
 
 **Files:**
 - Create: `packages/typescript/goldenpipe/src/core/repair.ts`
-- Modify: the TS json-face + `packages/typescript/goldenpipe/tests/parity/planner-parity.test.ts` (replay `build_repair_plan.json`).
+- Modify: `packages/typescript/goldenpipe/src/core/wasm/plannerJsonPure.ts` (the Leg-A pure json-face that `planner-parity.test.ts` imports) — add `buildRepairPlanJson`.
+- Modify: `packages/typescript/goldenpipe/tests/parity/planner-parity.test.ts` (replay `build_repair_plan.json`, Leg A pure).
+- Modify: `packages/typescript/goldenpipe/src/core/wasm/plannerJson.ts` (the wasm-backed json-face) + `packages/typescript/goldenpipe/tests/parity/planner-wasm-parity.test.ts` — register `build_repair_plan` so the new wasm binding is exercised, not just compiled.
 - Modify: `packages/rust/extensions/goldenpipe-wasm/src/lib.rs` and `packages/rust/extensions/goldenpipe-native/src/lib.rs` (export `build_repair_plan_json` following the existing per-fn pattern).
 
 Box cannot run tsc/vitest or build wasm — mirror behavior, verify in CI.
 
 - [ ] **Step 1: Write `repair.ts`** mirroring `repair.py`: same ASCII predicates (use `c >= "0" && c <= "9"` etc., never `\d`), same detector order, same table, same `buildRepairPlan(findings, columns)` returning `{repairs: [...]}` with fields in the same order. Match the JS reason truncation to code points: `[...String(message)].slice(0, 80).join("")` (spread iterates by code point, matching Python `[:80]` on a str and Rust `.chars().take(80)`).
 
-- [ ] **Step 2: Add the TS json-face fn** `buildRepairPlanJson(s)` and register `build_repair_plan` in the parity test's vector list (mirror how `apply_decision`/`evaluate_builtin` are registered in `planner-parity.test.ts`).
+- [ ] **Step 2: Add the pure json-face fn** `buildRepairPlanJson(s)` to `src/core/wasm/plannerJsonPure.ts` and register `build_repair_plan` in the `planner-parity.test.ts` vector-family list (mirror how `apply_decision`/`evaluate_builtin` are registered there).
 
-- [ ] **Step 3: Export the shim fns.** In `goldenpipe-wasm/src/lib.rs` and `goldenpipe-native/src/lib.rs`, add a `build_repair_plan_json` binding following the exact pattern used for `apply_decision_json` (grep those files for `apply_decision_json` and copy the shape). rustfmt both.
+- [ ] **Step 3: Wire the wasm-backed face.** Add `buildRepairPlanJson` to `src/core/wasm/plannerJson.ts` (delegating to the wasm `build_repair_plan_json` export) and register `build_repair_plan` in `planner-wasm-parity.test.ts`, so the wasm binding is parity-tested against the same vectors (closes the "exported but untested" gap).
 
-- [ ] **Step 4: rustfmt the shims (box) + grep-verify**
+- [ ] **Step 4: Export the shim fns.** In `goldenpipe-wasm/src/lib.rs` and `goldenpipe-native/src/lib.rs`, add a `build_repair_plan_json` binding following the exact pattern used for `apply_decision_json` (grep those files for `apply_decision_json` and copy the shape). rustfmt both.
+
+- [ ] **Step 5: rustfmt the shims (box) + grep-verify**
 
 Run: `rustfmt --edition 2021 packages/rust/extensions/goldenpipe-wasm/src/lib.rs packages/rust/extensions/goldenpipe-native/src/lib.rs`
-Grep-verify each surface names `build_repair_plan_json`.
+Grep-verify each surface names `build_repair_plan_json`, and that both `plannerJsonPure.ts` and `wasm/plannerJson.ts` export `buildRepairPlanJson`.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add packages/typescript/goldenpipe/src/core/repair.ts <ts json-face> packages/typescript/goldenpipe/tests/parity/planner-parity.test.ts packages/rust/extensions/goldenpipe-wasm/src/lib.rs packages/rust/extensions/goldenpipe-native/src/lib.rs
+git add packages/typescript/goldenpipe/src/core/repair.ts packages/typescript/goldenpipe/src/core/wasm/plannerJsonPure.ts packages/typescript/goldenpipe/src/core/wasm/plannerJson.ts packages/typescript/goldenpipe/tests/parity/planner-parity.test.ts packages/typescript/goldenpipe/tests/parity/planner-wasm-parity.test.ts packages/rust/extensions/goldenpipe-wasm/src/lib.rs packages/rust/extensions/goldenpipe-native/src/lib.rs
 git commit -m "feat(goldenpipe): TS repair mirror + wasm/native json shims"
 ```
 
