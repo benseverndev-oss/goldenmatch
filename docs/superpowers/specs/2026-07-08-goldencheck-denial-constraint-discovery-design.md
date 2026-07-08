@@ -253,3 +253,16 @@ TDD throughout.
 
 Cross-table DCs; numeric-threshold literals; config/baseline pinning; incremental/DC-drift;
 SQL/WASM/MCP surfaces; full-table exact cross-tuple validation. All deferred to later stages.
+
+**Reporting gates fixed during implementation (Stage-1 defaults, all configurable):**
+- **`arity_bound` default 2** (`MAX_REPORT_ARITY`): DCs are capped at 2 predicates by default —
+  arity 3-4 conjunctions of independent comparisons coincidentally fall under ε on random data
+  (spurious DCs) and blow up the discover search. Raise via the `arity_bound` kwarg to opt into
+  wider DCs.
+- **`require_order_comparison` default True:** only DCs containing ≥1 order (`<,≤,>,≥`) predicate
+  are reported. Pure all-equality DCs (`¬(A=x ∧ B=y)`, `¬(A=B)`) are the accepted-values / FD /
+  uniqueness family, better served by goldencheck's existing profilers and noisy to mine
+  per-literal; set `require_order_comparison=False` to include them.
+- **Self-column cross predicates dropped** (`tα.A op tβ.A`, incl. uniqueness `¬(tα.A=tβ.A)`) —
+  already covered by the `uniqueness`/`composite_key` profilers; full cross-tuple uniqueness is
+  Stage 2+.
