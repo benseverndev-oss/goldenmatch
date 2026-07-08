@@ -11,10 +11,11 @@
  */
 
 import { TransformEngine } from "goldenflow/core";
-import type { GoldenFlowConfig } from "goldenflow/core";
+import type { GoldenFlowConfig, TransformSpec } from "goldenflow/core";
 import type { PipeContext, Stage, StageResult, Row } from "../models.js";
 import { StageStatus } from "../models.js";
 import { enrichContextsFromFlow, type ColumnContext, type ManifestRecordLike } from "../columnContext.js";
+import { repairTransformSpecs, mergeTransforms } from "../repairHost.js";
 
 export const TransformStage: Stage = {
   info: { name: "goldenflow.transform", produces: ["df", "manifest"], consumes: ["df"] },
@@ -27,11 +28,26 @@ export const TransformStage: Stage = {
 
   async run(ctx: PipeContext): Promise<StageResult> {
     const rows = (ctx.df ?? []) as Row[];
-    const stageCfg = ctx.stageConfig;
-    const config =
-      stageCfg && Object.keys(stageCfg).length > 0
-        ? (stageCfg as Partial<GoldenFlowConfig>)
-        : undefined;
+    const rawCfg: Record<string, unknown> = { ...(ctx.stageConfig ?? {}) };
+    const apply = rawCfg["apply_repairs"] === true;
+    delete rawCfg["apply_repairs"];
+
+    let config: Partial<GoldenFlowConfig> | undefined;
+    if (apply) {
+      const plan = ctx.artifacts["repair_plan"] as Parameters<typeof repairTransformSpecs>[0];
+      const { specs, skipped } = repairTransformSpecs(plan);
+      const userTransforms = (rawCfg["transforms"] as TransformSpec[] | undefined) ?? [];
+      if (skipped.length > 0) {
+        ctx.reasoning["repair_skipped"] = skipped.map((s) => `${s.column}:${s.op}`).join("; ");
+      }
+      if (specs.length > 0 || userTransforms.length > 0) {
+        config = { ...rawCfg, transforms: mergeTransforms(userTransforms, specs) } as Partial<GoldenFlowConfig>;
+      } else {
+        config = Object.keys(rawCfg).length > 0 ? (rawCfg as Partial<GoldenFlowConfig>) : undefined;
+      }
+    } else {
+      config = Object.keys(rawCfg).length > 0 ? (rawCfg as Partial<GoldenFlowConfig>) : undefined;
+    }
 
     const engine = new TransformEngine(config);
     const result = engine.transformDf(rows);
