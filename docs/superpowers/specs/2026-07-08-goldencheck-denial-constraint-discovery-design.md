@@ -48,8 +48,10 @@ and if-then checks. This program adds DC discovery as a new discovered-rule fami
 
 ### In scope (Stage 1)
 Discovery AND violation-surfacing (mirrors `approx_fd`: find near-FDs + return violating rows).
-Single-table. Approximate DCs (g1 threshold). Bounded predicate space (below). Opt-in entry
-points. Native evidence kernel + Python fallback.
+Single-table. Approximate DCs (g1 threshold). Bounded predicate space (below), partitioned into
+single-tuple and cross-tuple predicates driving **two evidence passes** (row-level + pairwise).
+Opt-in entry points. Native evidence kernels + Python fallback. A distinct order-preserving column
+encoding for the ordered (`<`/`>`) predicates.
 
 ### Explicitly NOT in scope (later stages)
 Cross-table DCs; numeric-threshold literals (only equality literals in Stage 1); config/baseline
@@ -82,54 +84,92 @@ Native: `goldencheck-core/src/dc.rs` (evidence-set bitmask build, slice-based) +
 
 ## The bounded predicate space (`predicates.py`)
 
-For columns typed categorical / numeric / temporal, enumerate:
-- **Variable predicates** over a tuple pair (t_α, t_β): for each *type-compatible* column pair
-  (A, B), operators gated by type — `{=, ≠}` for categorical, `{=, ≠, <, ≤, >, ≥}` for
-  numeric/temporal. Both **same-tuple cross-column** (`t_α.A op t_α.B`) and **cross-tuple**
-  (`t_α.A op t_β.B`).
-- **Constant predicates (bounded):** `t.A = c` only for `c` ∈ frequent values of
-  **low-cardinality** columns (cardinality ≤ `MAX_LITERAL_CARD`, value support ≥ `MIN_SUPPORT`).
+Predicates **partition by arity** — this partition is load-bearing (it drives the two evidence
+passes below):
+- **Single-tuple predicates** (reference exactly one tuple): constant predicates `t.A = c`, and
+  same-tuple cross-column comparisons `t.A op t.B`. Truth depends only on one row.
+- **Cross-tuple predicates** (reference both tuples): `t_α.A op t_β.B`.
 
-Columns are interned with the existing `intern_column` pattern (categorical → dense ids;
-numeric/temporal kept as orderable values). **Hard bound: |P| ≤ 64**, so a per-pair
-satisfaction mask fits one `u64` — the evidence kernel depends on it. If the raw predicate
-space exceeds 64, keep the most-supported predicates first (support prefilter) and **report the
-cap in the output** (never silent truncation).
+Operators are type-gated — `{=, ≠}` for categorical, `{=, ≠, <, ≤, >, ≥}` for numeric/temporal.
+Constant predicates are **bounded**: `t.A = c` only for `c` ∈ frequent values of
+**low-cardinality** columns (cardinality ≤ `MAX_LITERAL_CARD`, value support ≥ `MIN_SUPPORT`) —
+the literal-explosion control.
 
-## The evidence-set kernel (`evidence.py` + `dc.rs`)
+**Column encoding (NOT plain `intern_column`).** The existing `intern_column`
+(`goldencheck-native/src/keys.rs`) assigns *first-seen* dense ids — deliberately **not
+order-preserving** — which is fine for the equality-only FD/key kernels but breaks the DC
+`{<, ≤, >, ≥}` predicates. So Stage 1 owns a distinct encoding:
+- **Categorical columns** → first-seen dense ids (equality only) — same as `intern_column`.
+- **Numeric/temporal columns** → an **order-preserving rank encoding** (dense rank of the sorted
+  distinct values) so `<`/`>` on the `u64` ids matches value order.
+- **Null-comparison semantics** are defined explicitly: a predicate involving a null operand is
+  **not satisfied** (three-valued → treated as false for evidence), so nulls never spuriously
+  satisfy an order predicate. (The FD kernels' null-id-0 convention is equality-only and does not
+  transfer to ordering.)
 
-Sample S ≈ 1–2K rows (configurable, seeded). For each of the S² ordered pairs (t_α, t_β),
-compute a `u64` **bitmask** where bit *i* is set iff predicate *i* holds for that pair. Collect
-the **distinct masks with pair-counts** → `FxHashMap<u64, u64>`. That map *is* the evidence set.
+**Hard bound: |P| ≤ 64 per evidence pass**, so each pass's satisfaction mask fits one `u64`. If a
+pass's raw predicate space exceeds 64, keep the most-supported predicates first (support
+prefilter) and **report the cap in the output** (never silent truncation).
 
-- Cost: S=2K → S² = 4M pairs × ≤64 bit-tests — sub-second in Rust.
-- This is a natural `goldencheck-core` kernel: interned columns in, evidence map out, **no Polars
-  equivalent** (all-pairs bitmasking doesn't vectorize) — unlike the checks that lost to Polars.
-- Pure-Python fallback mirrors it (smaller S cap), parity-tested.
+## The evidence-set kernels (`evidence.py` + `dc.rs`) — two passes
+
+Single-tuple and cross-tuple DCs live in different evidence spaces; conflating them into one
+S²-pair loop would replicate each single-tuple predicate S-fold and muddle the g1 accounting.
+Stage 1 therefore runs **two evidence passes** (each a slice-based kernel, each ≤64 predicates →
+one `u64` mask):
+
+**Pass 1 — row-level evidence (single-tuple DCs, the headline case).** Over the **n rows** (the
+scan sample or full table), each row → a `u64` mask over the *single-tuple* predicates. Collect
+distinct masks with **row-counts**. O(n·|P_s|). Discovers pure if-then / check-constraint DCs
+(`¬(status=shipped ∧ ship_date<order_date)`); g1 here = violating **rows** / n.
+
+**Pass 2 — pairwise evidence (cross-tuple + mixed DCs).** Sample S ≈ 1–2K rows (seeded); over the
+S² ordered pairs (t_α, t_β), each pair → a `u64` mask over the pairwise predicate set (single-tuple
+predicates evaluated on each of t_α and t_β, plus the cross-tuple predicates — this is how FastDC
+discovers *mixed* DCs). Collect distinct masks with **pair-counts**. O(S²·|P|). g1 here =
+violating **pairs** / S².
+
+- Cost: Pass 1 is linear; Pass 2 at S=2K → 4M pairs × ≤64 bit-tests, sub-second in Rust.
+- Both are natural `goldencheck-core` kernels: interned columns + predicate specs in, evidence map
+  (`FxHashMap<u64, u64>`) out.
+- **Polars baseline for measure-first:** an all-pairs mask *is* expressible in Polars (a self
+  `join(how="cross")` → predicate expressions → bit-pack → `group_by(mask).count()`), but it
+  materializes S² rows. The kernel must be **benchmarked against that cross-join baseline** before
+  shipping default-on (per the repo's measure-first rule) — the kernel's edge is avoiding the S²
+  materialization, not a missing Polars capability.
+- Pure-Python fallback mirrors both passes (smaller S cap), parity-tested.
 
 ## Minimal-DC derivation (`discover.py`)
 
-A denial constraint = a **minimal set of predicates never *fully* satisfied by any tuple pair**
-(no evidence mask has all those bits set) — equivalently a minimal **hitting set** of the
-complemented evidence masks. Run FastDC's minimal-cover search over the evidence map.
+A denial constraint = a **minimal set of predicates never *fully* satisfied by any evidence
+element** (no evidence mask has all those bits set) — equivalently a minimal **hitting set** of
+the complemented evidence masks. Run FastDC's minimal-cover search over each pass's evidence map
+(row-level masks for single-tuple DCs, pairwise masks for cross/mixed DCs).
 
-- **Approximate DCs:** a predicate set whose total satisfied-pair count across the evidence set
-  is ≤ ε·S² (approximately never satisfied). Strict DCs (count 0) are usually trivial; near-DCs
-  with small ε are where real data errors live.
+- **Complement masks are bounded to |P| bits:** `complement = (!mask) & ((1u64 << p) - 1)` — the
+  naive `!mask` sets the phantom high `64−|P|` bits, which would let every DC spuriously "hit" via
+  a nonexistent predicate and corrupt the cover search. Explicit low-bit AND is required.
+- **Approximate DCs:** a predicate set whose total satisfied-element count is ≤ ε·N (N = n for the
+  row-level pass, S² for the pairwise pass) — approximately never satisfied. "Satisfied" = the
+  element has *all* the DC's predicate bits set = the element **violates** the DC. So
+  g1 = violating-element-count / N. Strict DCs (count 0) are usually trivial; near-DCs with small
+  ε are where real data errors live.
 - Keep only **minimal, non-redundant** DCs; rank by interestingness (support × succinctness);
   cap to top-N.
 
 ## g1 validation + violating rows (`validate.py`)
 
-Sample-derived DCs are *candidates*; validate on the real data and ship only survivors:
-- **Single-tuple DCs** (predicates reference only t_α, e.g. `¬(status=shipped ∧
-  ship_date<order_date)`): validated **exactly on the full table**, O(n) vectorized Polars.
-  Exact violating rows → the `Finding`.
-- **Cross-tuple DCs** (reference t_α *and* t_β): full-table validation is itself O(n²), so
-  validate on a **bounded validation sample** (min(n, 10–20K)) via the same bitmask kernel,
-  reporting an **estimated g1 with a confidence note**; surface representative violating *pairs*,
-  not an exhaustive row set. A candidate whose validation-sample g1 exceeds the threshold is
-  dropped (precision protection).
+Sample-derived DCs are *candidates*; validate on the real data and ship only survivors. The two
+passes validate differently:
+- **Single-tuple DCs** (from Pass 1, e.g. `¬(status=shipped ∧ ship_date<order_date)`): the Pass-1
+  evidence is already over the full n rows (or the scan sample), so these are validated **exactly**,
+  O(n) vectorized Polars, with **exact violating rows** → the `Finding`. (When Pass 1 ran on the
+  scan sample rather than the full file, `--deep` widens it to the full table.)
+- **Cross-tuple / mixed DCs** (from Pass 2): full-table pairwise validation is O(n²), so validate
+  on a **bounded validation sample** (min(n, 10–20K)) via the same pairwise kernel, reporting an
+  **estimated g1 with a confidence note**; surface representative violating *pairs*, not an
+  exhaustive row set. A candidate whose validation-sample g1 exceeds the threshold is dropped
+  (precision protection).
 
 The exact-vs-estimated distinction is explicit in `DenialConstraint.exact` and the Finding
 metadata — single-tuple rules are exact with precise violating rows (the high-value, demo case);
@@ -144,6 +184,10 @@ Findings:
   from exact violating rows (single-tuple) or representative pairs (cross-tuple).
 - **Strict DC** (g1 = 0) → `Severity.INFO` (a discovered invariant, not an error).
 
+`Finding.column` is required but a DC spans multiple columns; set it to the **joined
+predicate-column string** (e.g. `"status,ship_date,order_date"`), mirroring how the FD findings
+put the determinant there. The structured per-predicate columns live in `metadata`.
+
 Ranked, capped to top-N (configurable). Entry points:
 - `discover_denial_constraints(df, *, min_confidence=…, sample_size=…, max_constraints=…) ->
   list[DenialConstraint]` (public API, added to `__all__`).
@@ -152,14 +196,22 @@ Ranked, capped to top-N (configurable). Entry points:
 
 ## Native kernel, measure-first, fallback
 
-`goldencheck-core::dc.rs` owns the evidence-set build (+ the cover search if it profiles hot);
-`goldencheck-native` decodes Arrow → interned slices; `core/kernels.py` gets a list-shaped
-`denial_constraint_evidence(...)` so the kernel is reachable from the SQL surfaces in Stage 5.
+`goldencheck-core::dc.rs` owns both evidence-set builds (+ the cover search if it profiles hot);
+`goldencheck-native` decodes Arrow → the DC encoding (categorical first-seen ids + numeric/temporal
+rank ids); `core/kernels.py` gets list-shaped entries so the kernel is reachable from the SQL
+surfaces in Stage 5. Note the `core/kernels.py` entry is **richer than the existing column-only
+entries** (`discover_functional_dependencies` etc. take only columns): `denial_constraint_evidence`
+must also receive the **predicate specification** (the encoded column pairs, operators, and literal
+ids that define bits 0..|P|−1) and returns the **evidence map** (distinct `u64` mask → count) for a
+pass. The plan must define this signature concretely — it is not a drop-in like the column-only
+entries, and the mask-map return diverges from the "plain parallel lists" contract the DuckDB/pgrx
+surfaces consume (reconciled in Stage 5).
+
 Pure-Python fallback is byte/set-identical (parity-tested via the `tests/core/test_kernels.py`
-pattern), gated by `GOLDENCHECK_NATIVE`. Per the measure-first rule (and the Wave-0 stale-base
-lesson): the kernel ships only after a benchmark shows the evidence build moves the wall vs the
-Python baseline on realistic S — but a kernel is the *natural* home here since all-pairs
-bitmasking has no Polars vectorization.
+pattern), gated by `GOLDENCHECK_NATIVE` (new `_COMPONENT_SYMBOLS` entry
+`"denial_constraint": ("denial_constraint_evidence",)`). Per the measure-first rule (and the Wave-0
+stale-base lesson): the kernel ships only after a benchmark shows the evidence build beats the
+Polars cross-join baseline (see the evidence-kernels section) on realistic S.
 
 ## Testing
 
@@ -182,7 +234,11 @@ TDD throughout.
   on full data.
 - **DC glut / triviality** — minimality + interestingness ranking + top-N cap; strict-DC INFO vs
   near-DC WARNING split keeps signal high.
-- **Measure-first on the kernel** — benchmark before default-on; gate like every native component.
+- **Measure-first on the kernel** — benchmark the evidence build against the Polars cross-join
+  baseline before default-on; gate like every native component.
+- **Order-encoding + null semantics are new** (not `intern_column` reuse) — the numeric/temporal
+  rank encoding and the "null operand ⇒ predicate not satisfied" rule are load-bearing for `<`/`>`
+  correctness; parity-test them against the Python fallback on null-heavy + tie-heavy data.
 
 ## Non-goals (YAGNI)
 
