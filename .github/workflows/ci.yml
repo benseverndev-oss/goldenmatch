@@ -73,6 +73,7 @@ jobs:
       analysis_native: ${{ steps.filter.outputs.analysis_native }}
       infermap_native: ${{ steps.filter.outputs.infermap_native }}
       native_flow: ${{ steps.filter.outputs.native_flow }}
+      goldenflow_nopolars: ${{ steps.filter.outputs.goldenflow_nopolars }}
       goldenflow_duckdb: ${{ steps.filter.outputs.goldenflow_duckdb }}
       goldenpipe_native: ${{ steps.filter.outputs.goldenpipe_native }}
       goldenembed: ${{ steps.filter.outputs.goldenembed }}
@@ -655,6 +656,19 @@ jobs:
               - 'packages/python/goldenflow/goldenflow/transforms/_fastpath.py'
               - 'packages/python/goldenflow/tests/transforms/test_native_parity.py'
               - 'packages/python/goldenflow/tests/transforms/test_fastpath_parity.py'
+              - 'packages/python/goldenflow/scripts/build_native.py'
+            goldenflow_nopolars:
+              # Phase 4f (Polars eviction) proof lane: builds the native in-memory
+              # core, then installs goldenflow with polars UNINSTALLED and runs the
+              # polars-absent covered-path tests (tests/nopolars). Proves `import
+              # goldenflow` + covered transform() work with polars gone, so the 2.0
+              # base-deps flip is already de-risked. Advisory (not ci-required).
+              - 'packages/rust/extensions/native-flow/**'
+              - 'packages/rust/extensions/goldenflow-core/**'
+              - 'packages/rust/extensions/Cargo.toml'
+              - 'packages/python/goldenflow/goldenflow/**'
+              - 'packages/python/goldenflow/tests/nopolars/**'
+              - 'packages/python/goldenflow/pyproject.toml'
               - 'packages/python/goldenflow/scripts/build_native.py'
             goldenflow_duckdb:
               # goldenflow-duckdb: the compiled zero-Python DuckDB extension over
@@ -2751,6 +2765,47 @@ jobs:
             packages/python/goldenflow/tests/transforms/test_phone.py \
             packages/python/goldenflow/tests/transforms/test_dates.py \
             -v
+
+  # Phase 4f (Polars eviction) proof lane. Builds the native in-memory core, then
+  # UNINSTALLS polars and runs the polars-absent covered-path tests. This is the
+  # living proof that `import goldenflow` + a covered config's transform() work with
+  # polars gone — so the 2.0 major that moves `polars` out of the base deps is already
+  # de-risked. Advisory (NOT in ci-required); a red here means the polars-free surface
+  # regressed (a module grew a top-level `import polars`, or a covered transform now
+  # needs the Polars engine), not that main is broken.
+  goldenflow_nopolars:
+    needs: changes
+    if: needs.changes.outputs.goldenflow_nopolars == 'true' || needs.changes.outputs.force_all == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/native-flow
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      - name: Build native in-memory core into the package
+        run: uv run python packages/python/goldenflow/scripts/build_native.py
+      - name: Uninstall polars (simulate the 2.0 base-deps flip)
+        # The covered config path runs on the native in-memory core alone; polars is
+        # the OPTIONAL Polars engine for the uncovered tail. Remove it (and its split
+        # runtime) so the tests below prove the polars-absent surface for real. NO
+        # pyarrow either — the covered in-memory path is pyarrow-free.
+        run: uv pip uninstall polars polars-runtime-32 polars-runtime-64 || true
+      - name: Confirm polars is gone
+        run: uv run --no-sync python -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('polars') is None else 'polars still present')"
+      - name: Polars-absent covered-path proof (tests/nopolars)
+        # --no-sync so uv doesn't reinstall polars before the run; --noconftest so the
+        # polars-importing parent tests/conftest.py isn't collected (the nopolars tests
+        # are self-contained, only the builtin tmp_path fixture).
+        run: uv run --no-sync python -m pytest packages/python/goldenflow/tests/nopolars --noconftest -v
 
   # goldenpipe planner kernel: pyo3-free goldenpipe-core is the REFERENCE. This lane
   # is goldenpipe-core's ONLY CI coverage (it had no consumer to hang a lane on before
