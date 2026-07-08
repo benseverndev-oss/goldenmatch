@@ -286,3 +286,66 @@ def test_match_fused_fs_matches_pipeline_fs_block_scorer():
         comps[find(i)].append(i)
     want = {frozenset(v) for v in comps.values() if len(v) >= 2}
     assert got == want
+
+
+# ---- multi-pass blocking fused path ------------------------------------
+
+def _multipass_config():
+    return GoldenMatchConfig(
+        blocking=BlockingConfig(
+            strategy="multi_pass",
+            keys=[BlockingKeyConfig(fields=["blk1"])],
+            passes=[BlockingKeyConfig(fields=["blk1"]), BlockingKeyConfig(fields=["blk2"])],
+        ),
+        matchkeys=[
+            MatchkeyConfig(
+                name="mk",
+                type="weighted",
+                threshold=0.85,
+                fields=[MatchkeyField(field="name", scorer="jaro_winkler", weight=1.0)],
+            )
+        ],
+    )
+
+
+def test_multipass_ready_true_false():
+    assert fused_match.match_fused_multipass_ready(_multipass_config()) is True
+    assert fused_match.match_fused_multipass_ready(_covered_config()) is False  # static
+
+
+@pytest.mark.skipif(not _HAS_FUSED, reason="goldenmatch-native match_fused not built")
+def test_multipass_merges_across_passes():
+    # pass1 blocks on blk1: {0,1}(a), {4,5}(z); pass2 on blk2: {0,2}(p), {3,4}(r).
+    # All names identical -> every intra-block pair merges; the union chains
+    # 0-1-2 (0-1 via pass1, 0-2 via pass2) and 3-4-5 (3-4 pass2, 4-5 pass1).
+    blk1 = ["a", "a", "x", "y", "z", "z"]
+    blk2 = ["p", "q", "p", "r", "r", "s"]
+    name = ["john"] * 6
+    config = _multipass_config()
+    columns = {"blk1": pa.array(blk1), "blk2": pa.array(blk2), "name": pa.array(name)}
+    tbl = fused_match.run_match_fused_multipass_arrow(columns, config)
+    assert tbl is not None
+    got = _table_to_clusters(tbl)
+    assert got == {frozenset({0, 1, 2}), frozenset({3, 4, 5})}
+
+
+@pytest.mark.skipif(not _HAS_FUSED, reason="goldenmatch-native match_fused not built")
+def test_multipass_equals_single_pass_when_one_pass():
+    # A one-pass multi_pass config must equal the single-key fused result.
+    blk = ["a", "a", "a", "b", "b", "c"]
+    name = ["jonathan", "jonathon", "michael", "sarah", "sarah", "lone"]
+    columns = {"blk": pa.array(blk), "name": pa.array(name)}
+
+    single = _covered_config(threshold=0.85)
+    single.blocking.keys = [BlockingKeyConfig(fields=["blk"])]
+    mp = GoldenMatchConfig(
+        blocking=BlockingConfig(
+            strategy="multi_pass",
+            keys=[BlockingKeyConfig(fields=["blk"])],
+            passes=[BlockingKeyConfig(fields=["blk"])],
+        ),
+        matchkeys=single.matchkeys,
+    )
+    got_single = _table_to_clusters(fused_match.run_match_fused_arrow(columns, single))
+    got_mp = _table_to_clusters(fused_match.run_match_fused_multipass_arrow(columns, mp))
+    assert got_mp == got_single

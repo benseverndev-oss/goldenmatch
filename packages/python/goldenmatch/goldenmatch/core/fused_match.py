@@ -60,24 +60,43 @@ def match_fused_ready(config: Any) -> bool:
         return False
     if getattr(b, "ann_column", None):
         return False
+    return _covered_weighted_matchkey(config) is not None
 
+
+def _covered_weighted_matchkey(config: Any) -> Any | None:
+    """The single covered `weighted` matchkey, or None. Covered = one weighted
+    matchkey, a threshold, every field named + on a covered scorer, no NE."""
     get_mks = getattr(config, "get_matchkeys", None)
     mks = get_mks() if callable(get_mks) else []
     if len(mks) != 1:
-        return False
+        return None
     mk = mks[0]
     if getattr(mk, "type", None) != "weighted":
-        return False
+        return None
     if getattr(mk, "negative_evidence", None):
-        return False
+        return None
     if mk.threshold is None or not mk.fields:
-        return False
+        return None
     for f in mk.fields:
-        if not f.field:
-            return False
-        if f.scorer not in _FUSED_SCORER_IDS:
-            return False
-    return True
+        if not f.field or f.scorer not in _FUSED_SCORER_IDS:
+            return None
+    return mk
+
+
+def match_fused_multipass_ready(config: Any) -> bool:
+    """Covered boundary for the fused MULTI-PASS blocking path: `multi_pass`
+    blocking with >=1 pass (each a real blocking key) + one covered weighted
+    matchkey. Each pass is run as a single-key fused match; their per-pass
+    clusters are union-find-merged (CC of the pass-pair union)."""
+    b = getattr(config, "blocking", None)
+    if b is None or getattr(b, "strategy", None) != "multi_pass":
+        return False
+    if getattr(b, "ann_column", None):
+        return False
+    passes = getattr(b, "passes", None) or []
+    if not passes or any(not getattr(p, "fields", None) for p in passes):
+        return False
+    return _covered_weighted_matchkey(config) is not None
 
 
 def _match_fused_symbol() -> Any | None:
@@ -161,6 +180,61 @@ def _clusters_to_table(clusters: Any) -> Any:
             "__cluster_id__": pa.array(cid, type=pa.int64()),
         }
     )
+
+
+def run_match_fused_multipass_arrow(
+    columns: Mapping[str, Any],
+    config: Any,
+    n_rows: int | None = None,
+) -> Any | None:
+    """Fused multi-pass blocking: run each pass as a single-key fused match, then
+    union-find-merge the per-pass clusters. Byte-parity with the pipeline's
+    multi-pass path: the final partition is the connected components of the union
+    of all passes' candidate pairs, which equals merging each pass's per-pass
+    clusters (every member of a pass-cluster is transitively connected). Returns a
+    `(__row_id__, __cluster_id__)` Table, or None if uncovered / native absent.
+    """
+    from goldenmatch.config.schemas import BlockingConfig, GoldenMatchConfig
+
+    if _match_fused_symbol() is None or not match_fused_multipass_ready(config):
+        return None
+
+    n = n_rows if n_rows is not None else len(next(iter(columns.values())))
+    parent = list(range(n))
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a: int, b: int) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    mks = config.get_matchkeys()
+    for pass_cfg in config.blocking.passes:
+        single = GoldenMatchConfig(
+            blocking=BlockingConfig(strategy="static", keys=[pass_cfg]),
+            matchkeys=mks,
+        )
+        tbl = run_match_fused_arrow(columns, single, n_rows=n)
+        if tbl is None:
+            continue
+        groups: dict[int, list[int]] = {}
+        for r, c in zip(
+            tbl.column("__row_id__").to_pylist(), tbl.column("__cluster_id__").to_pylist()
+        ):
+            groups.setdefault(c, []).append(r)
+        for members in groups.values():
+            for m in members[1:]:
+                union(members[0], m)
+
+    comps: dict[int, list[int]] = {}
+    for i in range(n):
+        comps.setdefault(find(i), []).append(i)
+    return _clusters_to_table(list(comps.values()))
 
 
 def match_fused_fs_ready(config: Any) -> bool:
