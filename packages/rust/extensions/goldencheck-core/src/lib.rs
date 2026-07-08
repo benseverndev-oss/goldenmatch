@@ -22,5 +22,5 @@ pub use benford::benford_leading_digits;
 pub use fuzzy::near_duplicate_clusters;
 pub use keys::{
     composite_key_search, discover_approximate_fds, discover_functional_dependencies,
-    fd_violation_rows, functional_dependency_holds, tuple_distinct_count,
+    fd_violation_rows, functional_dependency_holds,
 };

@@ -26,8 +26,6 @@ pyo3 = { version = ">=0.23.3, <0.25", features = ["extension-module", "abi3-py31
 # Pyo3-free deep-profiling kernels (Benford, composite-key & FD mining). The
 # #[pyfunction] shims below are thin Arrow-reading wrappers over this crate.
 goldencheck-core = { path = "../goldencheck-core" }
-# Dense per-column value interning for the key/FD kernels.
-rustc-hash = "2"
 # Arrow C Data Interface for zero-copy kernel input (mirrors goldenmatch's
 # native crate). `pyarrow` brings the PyArrowType FFI bridge; default features
 # (csv/ipc/json/compute) are off -- we only read array buffers.

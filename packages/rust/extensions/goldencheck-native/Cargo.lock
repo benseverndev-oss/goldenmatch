@@ -359,6 +359,7 @@ dependencies = [
 name = "goldencheck-core"
 version = "0.1.0"
 dependencies = [
+ "arrow",
  "rustc-hash",
 ]
 
@@ -369,7 +370,6 @@ dependencies = [
  "arrow",
  "goldencheck-core",
  "pyo3",
- "rustc-hash",
 ]
 
 [[package]]
