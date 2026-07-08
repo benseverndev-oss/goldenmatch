@@ -12,5 +12,6 @@ pub mod decisions;
 pub mod json;
 pub mod model;
 pub mod planner;
+pub mod repair;
 pub mod resolve;
 pub mod router;
