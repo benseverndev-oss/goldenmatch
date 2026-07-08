@@ -84,6 +84,7 @@ for (const f of findings) {
 
 - **Profiling**: type inference, nullability, uniqueness, format detection, range and distribution, cardinality, pattern consistency, encoding and sequence detection, near-duplicate value detection (inconsistent categorical encodings such as `California`/`Californa`/`CALIFORNIA`), and freshness (future-dated values and name-gated staleness).
 - **Cross-column checks**: temporal ordering, null correlation, numeric constraints, age-versus-DOB, composite-key discovery, exact and near-duplicate rows, strict functional dependencies, and approximate-FD violations (rows that break a near-strict `zip → city`).
+- **Denial-constraint discovery** (opt-in): mines if-then / cross-tuple invariants of the form `¬(p1 ∧ … ∧ pm)` — e.g. `¬(status=shipped ∧ ship_date<order_date)` ("if shipped, `ship_date` must be ≥ `order_date`") — from a single table and surfaces the violating rows. Off by default; enable with `goldencheck denial-constraints data.csv` or `--denial` on a scan.
 - **Baseline and drift detection**: 12 check types including distribution drift, entropy drift, Benford drift, functional-dependency violation, and type drift.
 - **Domain packs**: healthcare, finance, and ecommerce.
 - **Auto-fix**: safe repairs such as trim, normalize case, fix encoding, and coerce types.
