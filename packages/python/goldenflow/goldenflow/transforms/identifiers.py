@@ -142,6 +142,7 @@ def cc_validate(series: pl.Series) -> pl.Series:
     auto_apply=False,
     priority=50,
     mode="series",
+    scalar=_cc_format_py,
 )
 def cc_format(series: pl.Series) -> pl.Series:
     """Group a valid payment-card number (Amex 4-6-5, else 4-4-4-4...);
@@ -158,6 +159,7 @@ def cc_format(series: pl.Series) -> pl.Series:
     auto_apply=False,
     priority=50,
     mode="series",
+    scalar=_cc_mask_py,
 )
 def cc_mask(series: pl.Series) -> pl.Series:
     """Mask a payment-card number to stars + last 4 digits."""
@@ -244,6 +246,7 @@ def iban_validate(series: pl.Series) -> pl.Series:
     auto_apply=False,
     priority=50,
     mode="series",
+    scalar=_iban_format_py,
 )
 def iban_format(series: pl.Series) -> pl.Series:
     """Group a valid IBAN into 4-char blocks; ``null`` for invalid input."""
@@ -354,6 +357,7 @@ def isbn_validate(series: pl.Series) -> pl.Series:
     auto_apply=False,
     priority=50,
     mode="series",
+    scalar=_isbn_normalize_py,
 )
 def isbn_normalize(series: pl.Series) -> pl.Series:
     """Canonicalize a valid ISBN-10/13 to its 13-digit form; ``null`` for
@@ -477,6 +481,7 @@ def swift_validate(series: pl.Series) -> pl.Series:
     auto_apply=False,
     priority=50,
     mode="series",
+    scalar=_swift_format_py,
 )
 def swift_format(series: pl.Series) -> pl.Series:
     """Normalize a valid SWIFT/BIC code to uppercase (spaces stripped);
@@ -654,6 +659,7 @@ def vat_validate(series: pl.Series) -> pl.Series:
     auto_apply=False,
     priority=50,
     mode="series",
+    scalar=_vat_format_py,
 )
 def vat_format(series: pl.Series) -> pl.Series:
     """Normalize a valid EU VAT number to its compact uppercase form (prefix
@@ -679,6 +685,7 @@ def _ssn_format_py(val: str | None) -> str | None:
     auto_apply=False,
     priority=50,
     mode="series",
+    scalar=_ssn_format_py,
 )
 def ssn_format(series: pl.Series) -> pl.Series:
     """Normalize SSN to XXX-XX-XXXX format. Native-first over goldenflow-core."""
@@ -703,6 +710,7 @@ def _ssn_mask_py(val: str | None) -> str | None:
     auto_apply=False,
     priority=50,
     mode="series",
+    scalar=_ssn_mask_py,
 )
 def ssn_mask(series: pl.Series) -> pl.Series:
     """Mask SSN to ***-**-XXXX (last 4 visible). Native-first."""
@@ -727,6 +735,7 @@ def _ein_format_py(val: str | None) -> str | None:
     auto_apply=False,
     priority=50,
     mode="series",
+    scalar=_ein_format_py,
 )
 def ein_format(series: pl.Series) -> pl.Series:
     """Normalize EIN to XX-XXXXXXX format. Native-first."""
@@ -952,7 +961,7 @@ def luhn_validate(series: pl.Series) -> pl.Series:
 
 
 @register_transform(
-    name="cc_brand", input_types=["identifier", "string"], auto_apply=False, priority=40, mode="series"
+    name="cc_brand", input_types=["identifier", "string"], auto_apply=False, priority=40, mode="series", scalar=_cc_brand_py
 )
 def cc_brand(series: pl.Series) -> pl.Series:
     """Detect the card brand (visa/mastercard/amex/...) or null. Native-first."""
