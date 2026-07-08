@@ -65,9 +65,38 @@ zero-config auto-detect.
 ## The gate
 
 `apply_repairs: true` as a key in the `goldenflow.transform` stage's config. The
-adapter **pops** it before building the `transform_df` call, so it never leaks
+adapter removes it before building the `transform_df` call, so it never leaks
 into `GoldenFlowConfig`. Declarative, per-pipeline, local to the acting stage.
 Absent/false → the existing code path runs untouched.
+
+**Copy before mutate (important):** `ctx.stage_config` is the SAME object as the
+`StageSpec.config` Pydantic field (`resolver.py` → `PlannedStage(config=spec.config)`;
+`runner.py` → `ctx.stage_config = planned.config`). Popping in place would corrupt
+a re-run of the same `PipelineConfig`. The adapter must copy first —
+`cfg = dict(ctx.stage_config or {})` then `apply = cfg.pop("apply_repairs", False)`
+— matching the sibling `adapters/identity.py` pattern.
+
+## Host config shapes (Python vs TS asymmetry)
+
+The two hosts pass stage config to GoldenFlow differently; Phase 2 must respect
+each:
+- **Python** — `flow.py` today does `_transform(ctx.df, **stage_cfg)`, and
+  `transform_df(df, config=None)` accepts only `config`. So the base
+  `GoldenFlowConfig` lives at `stage_config["config"]` (a dict). User transforms,
+  when present, are at `stage_config["config"]["transforms"]`. In practice the
+  brain planner passes `{}` (empty → auto-detect); a populated flow config is a
+  valid-but-currently-unexercised path.
+- **TS** — `flow.ts` does `new TransformEngine(stageConfig as GoldenFlowConfig)`.
+  The base config IS `stageConfig` itself; user transforms are at
+  `stageConfig.transforms`.
+
+**Applying path builds config explicitly (avoids the `**splat` fragility).** When
+`apply_repairs` is on, the adapter does NOT splat — it extracts the per-surface
+base config, merges the repair specs, and calls `transform_df(df, config=merged)`
+(Python) / `new TransformEngine(merged)` (TS) directly. The gate-off path is left
+exactly as today (byte-identical). The primary and fully-tested path is
+gate-on + empty base config (inject repair fixers); the user-transforms-present
+merge is a documented defensive case.
 
 ## Merge / auto-detect semantics — surgical (replace)
 
@@ -75,27 +104,37 @@ Absent/false → the existing code path runs untouched.
 empty → **auto-detect** mode (there is no clean "auto-detect plan + merge" API).
 
 When `apply_repairs` is on:
+- Extract the per-surface base config (`stage_config["config"]` in Python,
+  `stageConfig` in TS, with the gate key removed) and its existing
+  `transforms` (`[]` if none).
 - Build repair specs from the artifact (fixers only, grouped by column, dedup
   preserving order).
-- **If there are ≥1 fixer specs or the stage already had user-declared
+- **If there are ≥1 fixer specs or the base already had user-declared
   transforms:** run explicit mode.
-  - No user transforms → `config.transforms = [repair fixer specs]` (auto-detect
+  - No user transforms → `merged.transforms = [repair fixer specs]` (auto-detect
     is bypassed for that run — the documented consequence).
   - User transforms present → per column: `user ops ++ repair ops`, deduping
     exact duplicates (user-first). Columns only in repairs get their own spec.
+  - Call `transform_df(df, config=merged)` (Python) / `new TransformEngine(merged)`
+    (TS) directly — not via `**splat`.
 - **If there are zero fixer specs** (all-assertion plan) **and no user
-  transforms:** inject nothing — the stage runs auto-detect exactly as before (do
-  NOT flip to explicit-empty).
+  transforms:** inject nothing — fall through to the existing gate-off path so the
+  stage runs auto-detect exactly as before (do NOT flip to explicit-empty).
 
 ## Data flow
 
 1. Check stage produces `findings` + `column_contexts` and (Phase-1 producer)
    attaches `repair_plan` to `ctx.artifacts` (Python already; TS added here).
-2. Flow adapter `run()`: `apply = stage_config.pop("apply_repairs", False)`.
+2. Flow adapter `run()`: `cfg = dict(ctx.stage_config or {})` (COPY),
+   `apply = cfg.pop("apply_repairs", False)`.
 3. If `apply` and `repair_plan` present: `specs, skipped = repair_transform_specs(repair_plan)`.
-4. Build the merged `GoldenFlowConfig` per the surgical rules; log `skipped`
-   (assertion ops) into the manifest/reasoning.
-5. `transform_df(df, config=merged)` (or the existing path when not applying).
+   If `specs` is empty and the base has no user transforms → fall through to the
+   existing gate-off path (auto-detect unchanged).
+4. Otherwise build the merged `GoldenFlowConfig` per the surgical rules from the
+   per-surface base config; log `skipped` (assertion ops) into the
+   manifest/reasoning.
+5. `transform_df(df, config=merged)` / `new TransformEngine(merged)` directly (or
+   the existing splat/engine path unchanged when not applying).
 
 ## Components
 
@@ -113,7 +152,8 @@ When `apply_repairs` is on:
 - `src/core/repairHost.ts` — **new**: mirror `repair_host.py`'s producer glue
   (`sampleColumn`, `buildColumnInputs`, `attachRepairPlan`) so the TS pipeline
   produces the artifact (Phase-1 gap), plus the identical `FIXERS` +
-  `repairTransformSpecs`.
+  `repairTransformSpecs`. It imports the EXISTING `src/core/repair.ts` kernel
+  (`buildRepairPlan`) — do NOT reimplement the kernel.
 - `src/core/adapters/check.ts` — wire `attachRepairPlan` (mirror `check.py`).
 - `src/core/adapters/flow.ts` — the consumer (gate + merge + apply), mirror of
   `flow.py`.
