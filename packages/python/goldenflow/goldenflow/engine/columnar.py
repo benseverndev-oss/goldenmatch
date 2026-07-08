@@ -511,21 +511,45 @@ def read_csv_columns(path) -> dict[str, list]:
     return cols
 
 
+def _autoconfig_columns(data: dict):
+    """Zero-config Polars-free: profile the columns + select auto-apply transforms
+    per column (the SAME built-in profiler + selector the Polars engine uses for a
+    no-file-path input), returning the built :class:`GoldenFlowConfig`."""
+    from goldenflow.config.schema import GoldenFlowConfig, TransformSpec
+    from goldenflow.engine.profiler_bridge import profile_columns
+    from goldenflow.engine.selector import select_transforms
+
+    profile = profile_columns(data)
+    specs = []
+    for cp in profile.columns:
+        selected = select_transforms(cp)
+        if selected:
+            specs.append(TransformSpec(column=cp.name, ops=[t.name for t in selected]))
+    return GoldenFlowConfig(transforms=specs)
+
+
 def transform_columns_public(data, config):
     """Phase 4c/4e public core: transform a ``dict[str, list]`` frame OR a CSV path
     (str/``Path`` ending ``.csv``), returning a :class:`ColumnarResult` (Polars-free).
     A CSV path is read via the stdlib reader (:func:`read_csv_columns`). A covered
     config runs on the native in-memory core with **Polars never imported**; anything
     else declines to the Polars engine (which needs ``goldenflow[polars]`` — a clear
-    ImportError if it's absent). ``config=None`` (zero-config auto-detect) uses the
-    Polars profiler, so it also needs the extra.
+    ImportError if it's absent).
+
+    ``config=None`` (zero-config auto-detect) is ALSO Polars-free for a **dict** input:
+    the columns are profiled + auto-selected via the Polars-free profiler
+    (:func:`profile_columns`) and run on the native path — byte-identical to
+    ``transform_df(pl.DataFrame(data))``. A CSV path + ``config=None`` still needs the
+    extra (Polars' CSV dtype inference decides numeric vs string, which the string-only
+    stdlib reader can't reproduce).
 
     This is the Polars-free public entry point the Rust-is-the-reference thesis wants:
     a covered config (from a dict or a CSV) is a first-class no-Polars API; the
     uncovered tail is where Polars remains, loudly and optionally."""
     from pathlib import Path
 
-    if isinstance(data, (str, Path)):
+    from_csv = isinstance(data, (str, Path))
+    if from_csv:
         p = Path(data)
         if p.suffix.lower() != ".csv":
             raise ValueError(
@@ -541,6 +565,17 @@ def transform_columns_public(data, config):
 
     nm = native_module()
     native_ok = nm is not None and native_columns_ready(nm)
+
+    # Zero-config (config=None) for a dict: profile + auto-select Polars-free, then run
+    # the built config on the native path if covered. (CSV declines — see docstring.)
+    if config is None and native_ok and not from_csv:
+        built = _autoconfig_columns(data)
+        if not built.transforms:
+            return ColumnarResult(columns=dict(data), manifest=Manifest(source="<dataframe>"))
+        if config_is_columnar_ready(built):
+            cols, manifest = transform_columns_native(data, built)
+            return ColumnarResult(columns=cols, manifest=manifest)
+
     if config is not None and native_ok and config_is_columnar_ready(config):
         cols, manifest = transform_columns_native(data, config)
         return ColumnarResult(columns=cols, manifest=manifest)
@@ -667,7 +702,10 @@ def transform_columns_native(columns, config, source: str = "<dataframe>"):
         # only when the RENDERED strings differ, matching the engine exactly.
         accepted = _accepted_string(nm)
         if _spec_scalar_ready(spec, accepted):
-            cur = col_list
+            # Owned string / scalar ops operate on strings; a non-string input column
+            # (e.g. zero-config picking string ops for a numeric column named "phone")
+            # coerces to Polars `cast(Utf8)` first, exactly as the engine does.
+            cur = _stringify_for_column(col_list, nm)
             for name, params in ops:
                 cb = [_cast_utf8(v) for v in cur]
                 if name in accepted:
