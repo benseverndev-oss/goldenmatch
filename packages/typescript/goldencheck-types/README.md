@@ -2,15 +2,29 @@
 
 Community-contributed semantic type definitions for [GoldenCheck](https://github.com/benseverndev-oss/goldencheck).
 
-Domain packs teach GoldenCheck about industry-specific column types, improving detection accuracy and reducing false positives.
+Domain packs teach GoldenCheck about industry-specific column types, improving detection accuracy and reducing false positives. The same packs also drive InferMap's `detect_domain` (which industry a dataset belongs to) and, through it, GoldenPipe's auto-config — a dataset that scores a domain confidently gets a schema-inference stage prepended.
 
 ## Available Domains
 
+15 industry packs (plus a `generic` fallback used when no domain matches):
+
 | Domain | Types | Description |
 |--------|-------|-------------|
-| [healthcare](domains/healthcare.yaml) | 10 | NPI, ICD codes, insurance IDs, patient demographics, CPT, DRG |
+| [automotive](domains/automotive.yaml) | 4 | Vehicles: VIN, license plate, registration, odometer, make/model |
+| [ecommerce](domains/ecommerce.yaml) | 9 | SKUs, order IDs, tracking numbers, product categories, shipping |
+| [education](domains/education.yaml) | 5 | Students, enrollment, courses, grades/GPA, terms, programs |
+| [energy](domains/energy.yaml) | 4 | Meters, consumption (kWh), tariffs, utility accounts |
 | [finance](domains/finance.yaml) | 8 | Account numbers, routing numbers, CUSIP/ISIN, currency, transactions |
-| [ecommerce](domains/ecommerce.yaml) | 9 | SKUs, order IDs, tracking numbers, categories, shipping |
+| [healthcare](domains/healthcare.yaml) | 10 | NPI, ICD codes, insurance IDs, patient demographics, CPT, DRG |
+| [hospitality](domains/hospitality.yaml) | 4 | Reservations, bookings, stays, rooms, guests |
+| [hr](domains/hr.yaml) | 11 | Employee IDs, job titles, departments, compensation, hire dates, status, org hierarchy, performance |
+| [insurance](domains/insurance.yaml) | 9 | Policies, claims, premiums, coverage, underwriting, beneficiaries |
+| [legal](domains/legal.yaml) | 4 | Cases, dockets, matters, parties, courts, jurisdictions |
+| [logistics](domains/logistics.yaml) | 5 | Shipments, tracking, carriers, freight, warehouses |
+| [manufacturing](domains/manufacturing.yaml) | 4 | Parts, work orders, batches/lots, BOM, quality |
+| [marketing](domains/marketing.yaml) | 5 | Leads, campaigns, pipeline, funnel metrics, attribution |
+| [real_estate](domains/real_estate.yaml) | 4 | Listings, properties, features (beds/baths/sqft), sale prices |
+| [telecom](domains/telecom.yaml) | 5 | Subscribers, device IDs (IMEI/IMSI/ICCID), usage, plans, network |
 
 ## Usage
 
