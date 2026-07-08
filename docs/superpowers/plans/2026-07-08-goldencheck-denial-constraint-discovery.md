@@ -223,10 +223,31 @@ def test_pass2_budget_counts_singletuple_twice():
 - [ ] **Step 2: Run → FAIL.**
 
 - [ ] **Step 3: Implement `discover(evidence, n_predicates, total, eps) -> list[frozenset[int]]`.**
-  A DC = a predicate set X such that the count of evidence elements whose mask ⊇ X is ≤ eps·total (approximately never fully satisfied). Equivalently minimal covers of the complemented evidence masks. Algorithm (FastDC minimal-cover):
-  - For each evidence mask `m` with count `c`, its complement `comp = (~m) & ((1<<n_predicates)-1)`. Aggregate `{comp: total_count}`.
-  - Search for minimal predicate sets X (as bitmasks) that "hit" (intersect) all comps carrying > eps·total cumulative satisfied weight — i.e. X's satisfied-count ≤ eps·total. Use the standard evidence-inversion + minimal-cover enumeration (depth-bounded, prune supersets). Bound DC arity (e.g. ≤4 predicates) for tractability; note the bound in output.
-  - Return minimal, non-redundant DC predicate-bitmasks with their satisfied-count (→ g1 later).
+  A DC = a predicate set X (bitmask) such that the count of evidence elements whose mask ⊇ X is ≤ eps·total ("approximately never fully satisfied"). **Concrete reference algorithm** (correct + directly codable — do NOT try to reconstruct FastDC's hitting-set recursion):
+  ```
+  ARITY_BOUND = 4
+  def satisfied_count(X, evidence):        # elements where ALL of X's bits are set
+      return sum(cnt for mask, cnt in evidence.items() if (mask & X) == X)
+  # Generate candidate predicate sets by INCREASING size (1, 2, … up to ARITY_BOUND).
+  # A single-predicate X0 is already a DC if satisfied_count(X0) <= eps*total
+  #   (that predicate is ~never true -> a trivial always-false predicate; usually filtered).
+  # Combine surviving smaller candidates into larger ones (only over predicate bits actually
+  #   present, i.e. bits appearing set in some evidence mask -> the "active" predicate set).
+  found = []                               # list of DC bitmasks, minimal
+  for size in 1..=ARITY_BOUND:
+      for X in combinations(active_predicate_bits, size):
+          Xmask = OR of the chosen bits
+          if any(f for f in found if (f & Xmask) == f):   # superset of an existing DC -> not minimal
+              continue
+          if satisfied_count(Xmask, evidence) <= eps*total:
+              found.append(Xmask)         # minimal by construction (smaller sizes checked first)
+  ```
+  The `complement = (~m) & ((1<<n_predicates)-1)` low-bit guard (dedicated test) is used when you
+  precompute per-element "predicates NOT satisfied" for pruning the `active_predicate_bits` / the
+  combination space — the phantom-high-bit mask must be applied there too. `ARITY_BOUND` keeps the
+  `combinations` space tractable; note the bound in the output. Return minimal DC bitmasks +
+  their satisfied-count (→ g1 later). This brute-force-by-increasing-size reference is what the
+  Task-4 tests assert; a smarter FastDC DFS is a Stage-2 optimization, not required here.
   Provide `rank(dcs, ...)` by interestingness (support × succinctness), cap `MAX_CONSTRAINTS`.
 
 - [ ] **Step 4: Run → PASS.**
@@ -265,7 +286,9 @@ def test_pass2_budget_counts_singletuple_twice():
 
 - [ ] **Step 4: Run → PASS.**
 
-- [ ] **Step 5: Commit.** `feat(goldencheck): denial-constraint discovery orchestrator + public discover_denial_constraints`
+- [ ] **Step 5: Build + test `DenialConstraintProfiler` (Finding mapping).** Add a `DenialConstraintProfiler` class in `mine.py` with `profile(df) -> list[Finding]` mirroring `ApproximateFDProfiler` (Task's read of `relations/approx_fd.py`). Write a unit test asserting the Finding mapping directly (not just via the CLI later): a near-DC → `Severity.WARNING`, `check="denial_constraint"`, `column` = the joined predicate-column string (spec lines 187-189), plain-English message ("if status='shipped' then ship_date≥order_date — holds 99.4%, N rows violate"), `metadata` carrying the structured DC + `exact` bool + g1 + support (spec lines 180-198); a strict DC (g1=0) → `Severity.INFO`. Run → PASS.
+
+- [ ] **Step 6: Commit.** `feat(goldencheck): denial-constraint orchestrator + public API + Finding-emitting profiler`
 
 ---
 
@@ -344,19 +367,35 @@ def test_pass2_budget_counts_singletuple_twice():
 
 ---
 
-### Task 12: CLI command + `--deep` scan wiring
+### Task 12: CLI command + scan opt-in (`--denial`, NOT `--deep`)
 
-**Files:** Modify `goldencheck/cli/main.py`; Test `tests/cli/test_denial_cli.py`
+**IMPORTANT — `--deep` is a scan-SCOPE flag, not a profiler hook.** Verified: `cli/main.py`
+help = "Profile the full dataset (skip the 100K sample cap)"; `engine/scanner.py`
+`sample = df if deep else maybe_sample(df, ...)` — its ONLY effect is input size, and every
+`RELATION_PROFILERS` entry runs unconditionally. So DC discovery must NOT be added to
+`RELATION_PROFILERS` (that runs on the default scan, breaking the opt-in promise), and must NOT be
+silently gated on `--deep` (that would make anyone wanting full-population profiling of the
+*existing* checks also pay DC cost with no opt-out). Instead:
+- **Standalone `denial-constraints` CLI + the public `discover_denial_constraints()` API are the
+  primary Stage-1 surfaces** (clean, dedicated opt-in).
+- **Scan-path integration is behind a NEW dedicated `--denial` flag** (its own opt-in). `--deep`
+  then only controls whether the DC engine (when `--denial` is on) runs Pass-1 over the full
+  population vs the sample — matching the spec's "`--deep` widens Pass-1 to the full table."
 
-- [ ] **Step 1: Failing test** (introspect the Typer command, per `feedback_no_scrape_rich_help_in_tests` — do NOT assert on Rich `--help` text; check the registered command + params via the click object): a `denial-constraints` command exists taking a file path + `--min-confidence`/`--sample-size`/`--max-constraints`; running it on a fixture with a planted DC prints the discovered rule. Also: `scan --deep` includes denial-constraint findings when invoked (opt-in), and a plain `scan` does NOT (no added default cost).
+This refines the spec's looser "--deep scan path" wording; the substance (opt-in, no default cost)
+is unchanged.
+
+**Files:** Modify `goldencheck/cli/main.py`, `goldencheck/engine/scanner.py`; Test `tests/cli/test_denial_cli.py`
+
+- [ ] **Step 1: Failing test** (use `typer.testing.CliRunner().invoke(app, [...])` like `tests/cli/test_cli.py`; introspect click params rather than scraping Rich `--help`, per `feedback_no_scrape_rich_help_in_tests`): (a) a `denial-constraints` command exists taking a file path + `--min-confidence`/`--sample-size`/`--max-constraints`, and on a fixture with a planted DC prints the discovered rule; (b) `scan --denial` includes denial-constraint findings; (c) plain `scan` and `scan --deep` (without `--denial`) do NOT — no added default cost.
 
 - [ ] **Step 2: Run → FAIL.**
 
-- [ ] **Step 3: Implement.** Add the `denial-constraints` Typer command (reads file via `read_file`, calls `discover_denial_constraints`, renders via the existing reporter/console). Wire the `DenialConstraintProfiler` (from `mine.py`, Task 6 — a `profile(df)->list[Finding]` class mirroring `ApproximateFDProfiler`) into the scan path **only under `--deep`** (find where `--deep` is threaded in `engine/scanner.py`/`cli/main.py` and add the profiler behind that flag). Keep the default scan untouched.
+- [ ] **Step 3: Implement.** Add the `denial-constraints` Typer command (reads file via `read_file`, calls `discover_denial_constraints`, renders via the existing reporter/console). Add a `--denial` flag to the `scan` command, thread it into `scan_file`/`_scan_dataframe_impl` (the `deep` bool is already threaded there — add `denial` alongside it), and invoke `DenialConstraintProfiler.profile(df)` (from `mine.py`, Task 6) in a new `if denial:` branch (NOT in `RELATION_PROFILERS`). When `denial` is on, `deep` selects full-population vs sampled Pass-1. Keep the default scan and plain `--deep` untouched.
 
-- [ ] **Step 4: Run → PASS.** Full denial suite green both lanes; a plain `scan` on a fixture shows zero denial findings + no measurable slowdown.
+- [ ] **Step 4: Run → PASS.** Full denial suite green both lanes; plain `scan` AND `scan --deep` on a fixture show zero denial findings + no measurable slowdown; `scan --denial` shows them.
 
-- [ ] **Step 5: Commit.** `feat(goldencheck): denial-constraints CLI + --deep scan wiring`
+- [ ] **Step 5: Commit.** `feat(goldencheck): denial-constraints CLI + --denial scan opt-in`
 
 ---
 
