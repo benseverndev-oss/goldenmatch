@@ -1,0 +1,21 @@
+[
+  {"_comment": "Python+TS glue-parity ONLY. profile_complexity is impure host glue (Polars in Python, Row[] in TS), NOT in the portable goldenpipe-core decision core, so golden_vectors.rs does NOT replay this file. Every case uses UNIFORM keys (Python derives columns from the frame-schema union; TS from Object.keys(rows[0]) -- they agree only when every row has the same keys, which is the CSV-real case). Replayed by test_profile_complexity_parity.py (Python) and profile-complexity-parity.test.ts (TS)."},
+  {"comment": "no nulls -> zeros",
+   "input": {"rows": [{"a": 1, "b": 2}, {"a": 3, "b": 4}]},
+   "expected": {"max_null_density": 0.0, "mean_null_density": 0.0}},
+  {"comment": "one null-heavy column: a 1/4, b 3/4",
+   "input": {"rows": [{"a": 1, "b": null}, {"a": null, "b": null}, {"a": 3, "b": 4}, {"a": 4, "b": null}]},
+   "expected": {"max_null_density": 0.75, "mean_null_density": 0.5}},
+  {"comment": "all-null column: a 1.0, b 0.0",
+   "input": {"rows": [{"a": null, "b": 1}, {"a": null, "b": 2}]},
+   "expected": {"max_null_density": 1.0, "mean_null_density": 0.5}},
+  {"comment": "single row, no null",
+   "input": {"rows": [{"a": 1, "b": 2}]},
+   "expected": {"max_null_density": 0.0, "mean_null_density": 0.0}},
+  {"comment": "single row, all null",
+   "input": {"rows": [{"a": null, "b": null}]},
+   "expected": {"max_null_density": 1.0, "mean_null_density": 1.0}},
+  {"comment": "empty rows -> zeros",
+   "input": {"rows": []},
+   "expected": {"max_null_density": 0.0, "mean_null_density": 0.0}}
+]
