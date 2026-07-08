@@ -21,6 +21,7 @@ export interface PipeWasmBackend {
   planPipelineJson(input: string): string;
   applyScaleHintsJson(input: string): string;
   bandOfJson(input: string): string;
+  buildRepairPlanJson(input: string): string;
 }
 
 import { createBackendRegistry } from "goldenmatch-wasm-runtime";

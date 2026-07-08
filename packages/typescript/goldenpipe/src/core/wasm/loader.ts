@@ -31,6 +31,7 @@ export async function instantiateBackend(bytes: Uint8Array): Promise<PipeWasmBac
     plan_pipeline_json: (s: string) => string;
     apply_scale_hints_json: (s: string) => string;
     band_of_json: (s: string) => string;
+    build_repair_plan_json: (s: string) => string;
   };
   await glue.default({ module_or_path: bytes });
 
@@ -43,5 +44,6 @@ export async function instantiateBackend(bytes: Uint8Array): Promise<PipeWasmBac
     planPipelineJson: (s) => glue.plan_pipeline_json(s),
     applyScaleHintsJson: (s) => glue.apply_scale_hints_json(s),
     bandOfJson: (s) => glue.band_of_json(s),
+    buildRepairPlanJson: (s) => glue.build_repair_plan_json(s),
   };
 }

@@ -54,4 +54,9 @@ mod wasm {
     pub fn band_of_json(input: &str) -> String {
         json::band_of_json(input)
     }
+
+    #[wasm_bindgen]
+    pub fn build_repair_plan_json(input: &str) -> String {
+        json::build_repair_plan_json(input)
+    }
 }

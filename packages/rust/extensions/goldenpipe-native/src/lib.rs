@@ -36,6 +36,10 @@ fn apply_scale_hints_json(input: &str) -> String {
 fn band_of_json(input: &str) -> String {
     goldenpipe_core::json::band_of_json(input)
 }
+#[pyfunction]
+fn build_repair_plan_json(input: &str) -> String {
+    goldenpipe_core::json::build_repair_plan_json(input)
+}
 
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -48,5 +52,6 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(plan_pipeline_json, m)?)?;
     m.add_function(wrap_pyfunction!(apply_scale_hints_json, m)?)?;
     m.add_function(wrap_pyfunction!(band_of_json, m)?)?;
+    m.add_function(wrap_pyfunction!(build_repair_plan_json, m)?)?;
     Ok(())
 }
