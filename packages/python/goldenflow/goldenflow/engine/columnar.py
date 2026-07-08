@@ -392,21 +392,53 @@ def _transform_via_columns(df, config, source, nm, pl):
     return out, manifest
 
 
+def read_csv_columns(path) -> dict[str, list]:
+    """Read a CSV into a ``dict[str, list]`` — **Polars-free, pyarrow-free** (stdlib
+    ``csv``). Every field is a string; an empty field maps to ``None`` — cell-identical
+    to ``pl.read_csv(path, infer_schema_length=0)`` (Phase 4e: a covered CSV pipeline
+    with Polars uninstalled). Quoting/embedded newlines are handled by the csv module."""
+    import csv
+
+    with open(path, newline="", encoding="utf-8") as f:
+        reader = csv.reader(f)
+        try:
+            header = next(reader)
+        except StopIteration:
+            return {}
+        cols: dict[str, list] = {h: [] for h in header}
+        for row in reader:
+            for i, h in enumerate(header):
+                v = row[i] if i < len(row) else ""
+                cols[h].append(v if v != "" else None)
+    return cols
+
+
 def transform_columns_public(data, config):
-    """Phase 4c public core: transform a ``dict[str, list]`` frame, returning a
-    :class:`ColumnarResult` (Polars-free). A covered config runs on the native
-    in-memory core with **Polars never imported**; anything else declines to the
-    Polars engine (which needs ``goldenflow[polars]`` — a clear ImportError if it's
-    absent). ``config=None`` (zero-config auto-detect) uses the Polars profiler, so it
-    also needs the extra.
+    """Phase 4c/4e public core: transform a ``dict[str, list]`` frame OR a CSV path
+    (str/``Path`` ending ``.csv``), returning a :class:`ColumnarResult` (Polars-free).
+    A CSV path is read via the stdlib reader (:func:`read_csv_columns`). A covered
+    config runs on the native in-memory core with **Polars never imported**; anything
+    else declines to the Polars engine (which needs ``goldenflow[polars]`` — a clear
+    ImportError if it's absent). ``config=None`` (zero-config auto-detect) uses the
+    Polars profiler, so it also needs the extra.
 
     This is the Polars-free public entry point the Rust-is-the-reference thesis wants:
-    a covered config is a first-class no-Polars API; the uncovered tail is where
-    Polars remains, loudly and optionally."""
-    if not isinstance(data, dict):
+    a covered config (from a dict or a CSV) is a first-class no-Polars API; the
+    uncovered tail is where Polars remains, loudly and optionally."""
+    from pathlib import Path
+
+    if isinstance(data, (str, Path)):
+        p = Path(data)
+        if p.suffix.lower() != ".csv":
+            raise ValueError(
+                f"transform() reads .csv paths Polars-free; {p.suffix or 'this'} needs "
+                "transform_df() / read_file() with goldenflow[polars]."
+            )
+        data = read_csv_columns(p)
+    elif not isinstance(data, dict):
         raise TypeError(
-            "transform() takes a dict[str, list] of columns; pass a pl.DataFrame to "
-            "transform_df() instead."
+            "transform() takes a dict[str, list] of columns or a .csv path; pass a "
+            "pl.DataFrame to transform_df() instead."
         )
 
     nm = native_module()
