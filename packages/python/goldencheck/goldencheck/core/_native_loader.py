@@ -108,6 +108,7 @@ _COMPONENT_SYMBOLS: dict[str, tuple[str, ...]] = {
     "functional_dependencies": ("discover_functional_dependencies",),
     "fuzzy_values": ("near_duplicate_value_clusters",),
     "approximate_fd": ("discover_approximate_fds", "fd_violation_rows"),
+    "denial_constraint": ("denial_constraint_evidence",),
 }
 
 

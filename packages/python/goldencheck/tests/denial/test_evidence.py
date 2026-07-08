@@ -2,8 +2,13 @@
 from __future__ import annotations
 
 import polars as pl
-from goldencheck.denial.evidence import pair_evidence, row_evidence
-from goldencheck.denial.predicates import build_predicate_space, predicate_holds
+from goldencheck.denial.evidence import (
+    _pair_evidence_oracle,
+    _row_evidence_oracle,
+    pair_evidence,
+    row_evidence,
+)
+from goldencheck.denial.predicates import build_predicate_space
 
 
 def test_row_evidence_counts_match_manual():
@@ -30,8 +35,7 @@ def test_row_evidence_counts_match_manual():
 
 
 def test_row_evidence_masks_equal_oracle():
-    # Independently recompute each row's mask via predicate_holds and compare
-    # the mask->count histogram against row_evidence.
+    # The gated row_evidence must match the independent predicate_holds oracle.
     df = pl.DataFrame(
         {
             "status": ["shipped", "shipped", "pending", "shipped"],
@@ -40,15 +44,7 @@ def test_row_evidence_masks_equal_oracle():
         }
     )
     space = build_predicate_space(df)
-    singles = [p for p in space.predicates if p.kind in ("const", "single")]
-    expected: dict[int, int] = {}
-    for row in range(df.height):
-        mask = 0
-        for i, p in enumerate(singles):
-            if predicate_holds(p, space.enc, row, None):
-                mask |= 1 << i
-        expected[mask] = expected.get(mask, 0) + 1
-    assert row_evidence(space, df.height) == expected
+    assert row_evidence(space, df.height) == _row_evidence_oracle(space, df.height)
 
 
 def test_pair_evidence_ordered_pairs_total():
@@ -59,30 +55,12 @@ def test_pair_evidence_ordered_pairs_total():
 
 
 def test_pair_evidence_masks_equal_oracle():
-    # Full mask-histogram oracle: [0..s) singles-on-α, [s..2s) singles-on-β,
-    # [2s..2s+c) crosses on (α,β). Recompute independently and compare.
+    # The gated pair_evidence must match the independent predicate_holds oracle
+    # (bit layout: [0..s) singles-on-α, [s..2s) singles-on-β, [2s..2s+c) crosses).
     df = pl.DataFrame({"a": [1, 5, 3], "b": [3, 2, 9]})
     space = build_predicate_space(df)
-    singles = [p for p in space.predicates if p.kind in ("const", "single")]
-    crosses = [p for p in space.predicates if p.kind == "cross"]
-    s = len(singles)
     sample = [0, 1, 2]
-    expected: dict[int, int] = {}
-    for a in sample:
-        for b in sample:
-            if a == b:
-                continue
-            mask = 0
-            for i, p in enumerate(singles):
-                if predicate_holds(p, space.enc, a, None):
-                    mask |= 1 << i
-                if predicate_holds(p, space.enc, b, None):
-                    mask |= 1 << (s + i)
-            for j, p in enumerate(crosses):
-                if predicate_holds(p, space.enc, a, b):
-                    mask |= 1 << (2 * s + j)
-            expected[mask] = expected.get(mask, 0) + 1
-    assert pair_evidence(space, sample) == expected
+    assert pair_evidence(space, sample) == _pair_evidence_oracle(space, sample)
 
 
 def test_pair_evidence_bit_layout_alpha_beta():
