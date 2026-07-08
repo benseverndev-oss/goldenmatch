@@ -308,6 +308,22 @@ def _cast_utf8(v):
     return str(v)
 
 
+def _stringify_for_column(col_list, nm) -> list:
+    """Format a column list to the strings the native ``Column`` ingests. Strings/ints
+    pass through ``_cast_utf8`` (identity for strings, ``str`` for ints — both match
+    Polars ``cast(Utf8)``); floats go through the native ``format_f64`` (exact Polars
+    float format) so a numeric-INPUT column round-trips and its manifest matches. Falls
+    back to ``_cast_utf8`` when the kernel predates ``format_f64``."""
+    float_idx = [i for i, v in enumerate(col_list) if type(v) is float]
+    if not float_idx or not hasattr(nm, "format_f64"):
+        return [_cast_utf8(v) for v in col_list]
+    fmt = nm.format_f64([col_list[i] for i in float_idx])
+    out = [_cast_utf8(v) for v in col_list]
+    for i, s in zip(float_idx, fmt):
+        out[i] = s
+    return out
+
+
 def transform(df, config, source: str = "<dataframe>"):
     """Apply an owned-string ``config`` to ``df`` (a ``pl.DataFrame``), preferring
     the native Arrow ``Column`` path (zero-copy, pyarrow-free) and falling back to
@@ -610,7 +626,13 @@ def transform_columns_native(columns, config, source: str = "<dataframe>"):
             ))
             continue
 
-        col = nm.Column.from_pylist(col_list)
+        # Build the native Column from strings. Numeric-INPUT columns (a dict of
+        # floats/ints + a numeric-only chain like ``["round"]``) are formatted to their
+        # Polars-``cast(Utf8)`` strings first, so the synthetic ``AsFloat`` coerce parses
+        # them back losslessly AND the manifest before-samples match the engine. Floats
+        # use the native ``format_f64`` (exact Polars float format — ``str(float)`` is
+        # not byte-identical); ints/strings use ``_cast_utf8`` (identity for strings).
+        col = nm.Column.from_pylist(_stringify_for_column(col_list, nm))
 
         # Split (string* splitter): source kept, fixed-name outputs appended.
         if hasattr(nm, "columnar_split_ready") and nm.columnar_split_ready(ops_spec):

@@ -46,6 +46,12 @@ enum NumericParser {
     ToInteger,
     RomanToInt,
     OrdinalToInt,
+    // SYNTHETIC (zero-gap): the implicit string->f64 coerce prepended to a numeric-only
+    // chain (`round`/`clamp`/`abs_value`/`fill_zero` with no explicit parser). Matches
+    // Polars `cast(Float64, strict=False)`: standard float parse, NO whitespace trim,
+    // accepts inf/nan/E/leading-dot, rejects `_`/`,`/`0x`. Emits NO manifest record (the
+    // engine applies the numeric op as one step, not a separate coerce).
+    AsFloat,
 }
 
 impl NumericParser {
@@ -84,6 +90,9 @@ impl NumericParser {
                     NumericParser::CommaDecimal => numeric::comma_decimal(s),
                     NumericParser::ScientificToDecimal => numeric::scientific_to_decimal(s),
                     NumericParser::FractionToDecimal => numeric::fraction_to_decimal(s),
+                    // Polars `cast(Float64, strict=False)` == Rust std f64 parse (no
+                    // trim). ` 1.5`/`1_000`/`1,234`/`abc` -> null; inf/nan/E accepted.
+                    NumericParser::AsFloat => s.parse::<f64>().ok(),
                     _ => unreachable!("i64 parsers handled above"),
                 };
                 NumCol::F64(build_f64(cells.map(|c| c.and_then(f))))
@@ -153,21 +162,39 @@ pub struct NumericPlan {
     string_ops: Vec<(String, NullableKernel)>,
     parser: (String, NumericParser),
     f64_ops: Vec<(String, NumericKernel)>,
+    /// The parser is the SYNTHETIC `AsFloat` coerce (a numeric-only chain, no explicit
+    /// parser) — emit no manifest record for it.
+    synthetic: bool,
 }
 
 /// Resolve `ops` to a [`NumericPlan`] iff they form a valid numeric shape:
-/// `string* parser f64*`. Returns `None` if there is no f64 parser (not a numeric
-/// config → the string chains handle it) or the shape is invalid (a string op after
-/// the transition, a second parser, an f64 op before the parser, etc.).
+/// `string* parser f64*`. A numeric ARRAY op (`round`/`clamp`/`abs_value`/`fill_zero`)
+/// reached with no explicit parser synthesizes an `AsFloat` coerce (zero-gap: a
+/// numeric-only chain runs on the same machinery). Returns `None` if the ops carry no
+/// numeric work at all (string-only → the string chains handle it) or the shape is
+/// invalid (a string op after the transition, a second parser, etc.).
 pub fn resolve_numeric(ops: &[(String, Vec<String>)]) -> Option<NumericPlan> {
     let mut string_ops = Vec::new();
     let mut parser: Option<(String, NumericParser)> = None;
     let mut f64_ops = Vec::new();
+    let mut synthetic = false;
     for (name, params) in ops {
         let refs: Vec<&str> = params.iter().map(String::as_str).collect();
         if parser.is_none() {
             if let Some(p) = NumericParser::from_name(name) {
                 parser = Some((name.clone(), p));
+            } else if let Some(k) = NumericKernel::from_op(name, &refs) {
+                // A numeric array op reached with no parser AND no leading string ops ->
+                // synthesize the AsFloat coerce (a PURE numeric-only chain). A numeric op
+                // AFTER a string op (`["strip","round"]`) is NOT synthesized — string
+                // ops on a numeric column are ambiguous, so that config declines to the
+                // Polars engine, unchanged.
+                if !string_ops.is_empty() {
+                    return None;
+                }
+                parser = Some((String::new(), NumericParser::AsFloat));
+                synthetic = true;
+                f64_ops.push((name.clone(), k));
             } else if let Some(k) = NullableKernel::from_op(name, &refs) {
                 string_ops.push((name.clone(), k));
             } else {
@@ -183,6 +210,7 @@ pub fn resolve_numeric(ops: &[(String, Vec<String>)]) -> Option<NumericPlan> {
         string_ops,
         parser: parser?,
         f64_ops,
+        synthetic,
     })
 }
 
@@ -242,14 +270,24 @@ pub fn run_numeric_column(input: &LargeStringArray, plan: &NumericPlan) -> (NumC
     // --- parser: string -> Int64/Float64 (null in / unparseable -> null) ---
     let mut cur = plan.parser.1.parse_column(&str_col);
     let before_fmt = str_opts(&str_col);
-    let mut cur_fmt = cur.fmt();
-    records.push((
-        plan.parser.0.clone(),
-        affected(&before_fmt, &cur_fmt),
-        total,
-        head3(&before_fmt),
-        head3(&cur_fmt),
-    ));
+    // A SYNTHETIC AsFloat coerce emits no record AND is FUSED into the first numeric op:
+    // the engine applies `round(cast(f64))` as ONE transform, so that op's before-sample
+    // + affected compare against the ORIGINAL string (`'1e2'`), not the coerced float. So
+    // seed `cur_fmt` with the pre-parse strings; a real parser seeds it with its output.
+    let mut cur_fmt = if plan.synthetic {
+        before_fmt.clone()
+    } else {
+        cur.fmt()
+    };
+    if !plan.synthetic {
+        records.push((
+            plan.parser.0.clone(),
+            affected(&before_fmt, &cur_fmt),
+            total,
+            head3(&before_fmt),
+            head3(&cur_fmt),
+        ));
+    }
 
     // --- f64 array ops (op-by-op so `affected` uses the formatted comparison; the
     // first op promotes an Int64 column to Float64, exactly as Polars does) ---
@@ -269,6 +307,18 @@ pub fn run_numeric_column(input: &LargeStringArray, plan: &NumericPlan) -> (NumC
     let _ = cur_fmt; // the final formatting is the caller's concern (CSV) — keep raw
 
     (cur, records)
+}
+
+/// Format f64 cells exactly like Polars `cast(Utf8)` (`float_to_polars_string`). The
+/// host uses this to stringify a numeric-INPUT dict column (`{"c": [1.55]}` + `["round"]`)
+/// so (a) the synthetic `AsFloat` coerce round-trips losslessly and (b) the manifest
+/// before-samples + affected counts match the engine — Python `str(float)` is NOT
+/// byte-identical to Polars' float format on some values.
+#[pyfunction]
+pub fn format_f64(vals: Vec<Option<f64>>) -> Vec<Option<String>> {
+    vals.into_iter()
+        .map(|v| v.map(float_to_polars_string))
+        .collect()
 }
 
 /// Host gate: is this a config the native numeric columnar path can run? (A valid
