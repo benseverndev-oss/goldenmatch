@@ -24,6 +24,7 @@ from goldenpipe.autoconfig_planner import (
 from goldenpipe.autoconfig_planner import (
     PlannedStage as PlanStage,
 )
+from goldenpipe.compiler import ir as _ir
 from goldenpipe.engine.resolver import (
     AmbiguousProducerError,
     CycleError,
@@ -217,3 +218,11 @@ def build_repair_plan_json(s: str) -> str:
     arg = json.loads(s)
     out = _repair.build_repair_plan(arg.get("findings", []), arg.get("columns", []))
     return json.dumps(out)
+
+
+def lower_json(s: str) -> str:
+    a = json.loads(s)
+    nodes, nid = _ir.lower(
+        a["origin_stage"], a["kind_hint"], a.get("concrete", {}), a.get("next_id", 0), a.get("resolved", False)
+    )
+    return json.dumps({"nodes": nodes, "next_id": nid})
