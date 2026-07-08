@@ -18,9 +18,11 @@ import type { PipeContext, Stage, StageResult } from "../models.js";
 import { StageStatus } from "../models.js";
 import {
   buildContextsFromCheck,
+  type ColumnContext,
   type ColumnProfileLike,
   type FindingLike,
 } from "../columnContext.js";
+import { attachRepairPlan } from "../repairHost.js";
 
 interface NormalizedFinding {
   severity: string;
@@ -83,6 +85,17 @@ export const ScanStage: Stage = {
       ctx.artifacts["column_contexts"] = buildContextsFromCheck(findingLikes, profileLikes);
     } catch {
       ctx.artifacts["column_contexts"] = [];
+    }
+
+    // Advisory repair-plan (Phase 1 producer, TS side). Never throws.
+    try {
+      const rp_findings = (ctx.artifacts["findings"] as NormalizedFinding[]) ?? [];
+      const rp_contexts = (ctx.artifacts["column_contexts"] as ColumnContext[]) ?? [];
+      if (ctx.df && rp_findings.length > 0 && rp_contexts.length > 0) {
+        attachRepairPlan(ctx, rp_findings, rp_contexts, ctx.df);
+      }
+    } catch {
+      /* advisory: never break the scan stage */
     }
 
     return { status: StageStatus.SUCCESS };

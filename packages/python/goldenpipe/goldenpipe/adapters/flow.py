@@ -25,18 +25,20 @@ class TransformStage:
             raise RuntimeError("GoldenFlow not installed. Run: pip install goldenpipe[flow]")
 
     def run(self, ctx: PipeContext) -> StageResult:
-        stage_cfg = ctx.stage_config
-        if stage_cfg:
-            logger.info("Passing stage config to GoldenFlow transform")
-            result = _transform(ctx.df, **stage_cfg)
+        cfg = dict(ctx.stage_config or {})           # COPY: ctx.stage_config IS StageSpec.config
+        apply = cfg.pop("apply_repairs", False)       # pop even when False (never leak to transform_df)
+
+        if apply:
+            result = self._run_with_repairs(ctx, cfg)
+        elif cfg:
+            result = _transform(ctx.df, **cfg)
         else:
             result = _transform(ctx.df)
+
         if hasattr(result, "df"):
             ctx.df = result.df
         if hasattr(result, "manifest"):
             ctx.artifacts["manifest"] = result.manifest
-
-            # Enrich column contexts with transform information (best-effort)
             if "column_contexts" in ctx.artifacts:
                 try:
                     from goldenpipe.models.column_context import enrich_contexts_from_flow
@@ -45,3 +47,26 @@ class TransformStage:
                     logger.exception("Failed to enrich column contexts from flow manifest")
 
         return StageResult(status=StageStatus.SUCCESS)
+
+    def _run_with_repairs(self, ctx: PipeContext, cfg: dict):
+        """apply_repairs is on: merge the repair plan's fixer transforms into the
+        base GoldenFlowConfig and run explicit mode. Falls through to the normal
+        path when there is nothing to apply (keeps auto-detect / byte-identity)."""
+        from goldenpipe.repair_host import merge_transforms, repair_transform_specs
+
+        plan = ctx.artifacts.get("repair_plan")
+        specs, skipped = repair_transform_specs(plan) if plan else ([], [])
+        base = dict(cfg.get("config") or {})
+        user_transforms = list(base.get("transforms") or [])
+
+        if not specs and not user_transforms:
+            if skipped:
+                ctx.reasoning["repair_skipped"] = "; ".join(f"{s['column']}:{s['op']}" for s in skipped)
+            # nothing to inject -> behave exactly like the gate-off path
+            return _transform(ctx.df, **cfg) if cfg else _transform(ctx.df)
+
+        base["transforms"] = merge_transforms(user_transforms, specs)
+        if skipped:
+            ctx.reasoning["repair_skipped"] = "; ".join(f"{s['column']}:{s['op']}" for s in skipped)
+        logger.info("Applying %d repair transform spec(s); skipped %d assertion(s)", len(specs), len(skipped))
+        return _transform(ctx.df, config=base)
