@@ -319,6 +319,11 @@ def clamp(series: pl.Series, min_val: float = 0.0, max_val: float = 1.0) -> pl.S
     pure-Python fallback below is the value-exact reference this kernel
     replicates.
     """
+    # Coerce bounds to float: `clamp:0:100` parses to INT bounds, and the pure-Python
+    # path returns min_val/max_val for out-of-range cells -> an int into a Float64
+    # `map_elements` raises SchemaError (Int64 into Float64) -> clamp silently no-ops.
+    # The native path already takes f64 bounds, so this only fixes the fallback.
+    min_val, max_val = float(min_val), float(max_val)
     native = clamp_native(min_val, max_val)
     if native is not None:
         return native(series)
