@@ -3035,7 +3035,10 @@ def _run_match_pipeline(
             if config.blocking is None:
                 continue
             from goldenmatch.core.blocker import collect_blocking_fields
-            from goldenmatch.core.probabilistic import load_or_train_em, probabilistic_block_scorer
+            from goldenmatch.core.probabilistic import (
+                load_or_train_em,
+                score_probabilistic_blocks_batched,
+            )
             blocks = build_blocks(combined_lf, config.blocking)
             # Collect from keys AND passes (multi_pass puts keys in `.passes`).
             blocking_fields = collect_blocking_fields(config.blocking) if config.blocking else []
@@ -3045,15 +3048,14 @@ def _run_match_pipeline(
                 blocks=blocks,
                 blocking_fields=blocking_fields,
             )
-            # Vectorized NxN-matrix scorer (falls back to the scalar per-pair
-            # path for model-backed scorers or GOLDENMATCH_FS_VECTORIZED=0).
-            block_scorer = probabilistic_block_scorer(mk, em_result)
-            for block in blocks:
-                block_df = block.df.collect() if isinstance(block.df, pl.LazyFrame) else block.df
-                pairs = block_scorer(block_df, matched_pairs)
-                all_pairs.extend(pairs)
-                for a, b, _s in pairs:
-                    matched_pairs.add((min(a, b), max(a, b)))
+            # Blocks scored in parallel across cores (GIL-releasing FS kernels).
+            # Does not mutate matched_pairs; fold the returned pairs in below.
+            pairs = score_probabilistic_blocks_batched(
+                blocks, mk, em_result, matched_pairs,
+            )
+            all_pairs.extend(pairs)
+            for a, b, _s in pairs:
+                matched_pairs.add((min(a, b), max(a, b)))
 
     # ── Step 4.5: CROSS-ENCODER RERANKING (optional) ──
     for mk in matchkeys:

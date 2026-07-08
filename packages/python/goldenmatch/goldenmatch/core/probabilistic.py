@@ -1681,6 +1681,7 @@ def score_probabilistic_blocks_batched(
     pairs into ``matched_pairs`` as before.
     """
     import polars as pl
+    from concurrent.futures import ThreadPoolExecutor
 
     if exclude_pairs is None:
         exclude_pairs = set()
@@ -1692,44 +1693,91 @@ def score_probabilistic_blocks_batched(
         and _fs_vectorized_enabled()
         and all(vectorized_scorer_supported(f.scorer) for f in mk.fields)
     )
-    excl = set(exclude_pairs)
-    results: list[tuple[int, int, float]] = []
+    base_excl = set(exclude_pairs)
 
+    def _bdf(block):
+        return block.df.collect() if isinstance(block.df, pl.LazyFrame) else block.df
+
+    # Split the work into independent scoring units + a per-unit scorer. Native/
+    # scalar path: one unit per block. Vectorized path: row-capped batches of
+    # blocks (the SxS batch scorer amortizes rapidfuzz.cdist across a batch).
     if not use_vec:
         scorer = probabilistic_block_scorer(mk, em_result)
+        units: list[list] = [[_bdf(block)] for block in blocks]
+
+        def _score_unit(unit, excl):
+            return scorer(unit[0], excl)
+    else:
+        units = []
+        batch: list = []
+        rows = 0
         for block in blocks:
-            bdf = block.df.collect() if isinstance(block.df, pl.LazyFrame) else block.df
-            pairs = scorer(bdf, excl)
+            bdf = _bdf(block)
+            h = bdf.height
+            if batch and rows + h > cap:
+                units.append(batch)
+                batch, rows = [], 0
+            batch.append(bdf)
+            rows += h
+            if rows >= cap:
+                units.append(batch)
+                batch, rows = [], 0
+        if batch:
+            units.append(batch)
+
+        def _score_unit(unit, excl):
+            return score_probabilistic_vectorized_batch(unit, mk, em_result, excl)
+
+    workers = _fs_scoring_workers()
+    results: list[tuple[int, int, float]] = []
+
+    # Sequential path (also the deterministic reference): thread the running
+    # exclude set across units, byte-identical to the historical loop.
+    if workers <= 1 or len(units) <= 1:
+        excl = set(base_excl)
+        for unit in units:
+            pairs = _score_unit(unit, excl)
             for a, b, _s in pairs:
                 excl.add((min(a, b), max(a, b)))
             results.extend(pairs)
         return results
 
-    batch: list = []
-    rows = 0
-
-    def _flush():
-        nonlocal batch, rows
-        if not batch:
-            return
-        pairs = score_probabilistic_vectorized_batch(batch, mk, em_result, excl)
-        for a, b, _s in pairs:
-            excl.add((min(a, b), max(a, b)))
-        results.extend(pairs)
-        batch = []
-        rows = 0
-
-    for block in blocks:
-        bdf = block.df.collect() if isinstance(block.df, pl.LazyFrame) else block.df
-        h = bdf.height
-        if batch and rows + h > cap:
-            _flush()
-        batch.append(bdf)
-        rows += h
-        if rows >= cap:
-            _flush()
-    _flush()
+    # Parallel path: units are independent and the FS kernels (native Rust /
+    # rapidfuzz.cdist) release the GIL, so a thread pool gives real parallelism —
+    # the property the weighted scorer already exploits in score_blocks_parallel.
+    # Each unit is scored against a frozen snapshot of the exclude set; a pair
+    # surfaced by more than one unit scores identically in each, so a
+    # canonical-key dedup in unit order reproduces the sequential running-exclude
+    # output exactly (verified by tests/test_probabilistic_parallel.py).
+    frozen = frozenset(base_excl)
+    seen: set[tuple[int, int]] = set(frozen)
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        for pairs in executor.map(lambda u: _score_unit(u, frozen), units):
+            for a, b, s in pairs:
+                key = (a, b) if a < b else (b, a)
+                if key in seen:
+                    continue
+                seen.add(key)
+                results.append((a, b, s))
     return results
+
+
+def _fs_scoring_workers() -> int:
+    """Thread-pool size for parallel probabilistic block scoring.
+
+    ``GOLDENMATCH_FS_WORKERS`` overrides; default is ``min(cpu_count(), 16)``
+    (mirrors the weighted path's ``_DEFAULT_MAX_WORKERS``). ``1`` forces the
+    sequential unit loop — the byte-identical, deterministic reference path.
+    Both FS kernels (native Rust, vectorized ``rapidfuzz.cdist``) release the
+    GIL, so threads give real parallelism.
+    """
+    val = os.environ.get("GOLDENMATCH_FS_WORKERS")
+    if val is not None:
+        try:
+            return max(1, int(val))
+        except ValueError:
+            return 1
+    return min(16, (os.cpu_count() or 1))
 
 
 def _fs_vectorized_enabled() -> bool:
