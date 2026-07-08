@@ -8,6 +8,7 @@
 use pyo3::prelude::*;
 
 mod autoconfig;
+mod block;
 mod bloom;
 mod cluster;
 mod documents;
@@ -34,6 +35,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(pairs::dedup_pairs_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(pairs::candidate_pair_count, m)?)?;
     m.add_function(wrap_pyfunction!(pairs::block_histogram, m)?)?;
+    m.add_function(wrap_pyfunction!(block::build_block_index_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(featurize::char_ngram_features, m)?)?;
     m.add_function(wrap_pyfunction!(featurize::char_ngram_project, m)?)?;
     m.add_function(wrap_pyfunction!(score::jaro_winkler_similarity, m)?)?;
