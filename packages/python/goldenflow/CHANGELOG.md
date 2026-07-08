@@ -1,12 +1,33 @@
 # Changelog
 
-## [Unreleased]
+## 2.0.0 (2026-07-08)
 
-Polars-eviction Phase 4: the columnar path is now the **default** for the public
-`transform()` entry point (no `GOLDENFLOW_ENGINE=columnar` opt-in needed), and it runs
-**Polars-free** end to end. `import goldenflow` no longer imports Polars; every one of the
-113 transforms runs on the native/Arrow substrate, byte-identical to the Polars engine.
-The remaining work is the 2.0 major that moves `polars` out of the base dependencies.
+**BREAKING — Polars is no longer a base dependency.** `pip install goldenflow` no longer
+pulls Polars (dropping ~185 MB installed); it now runs **Polars-free by default** on
+`goldenflow-native` (the ~5 MB abi3 kernel, now a base dependency). Every one of the 113
+transforms, all file/DB readers, and zero-config run without Polars, byte-identical to the
+Polars engine. Polars becomes an **optional bulk-vectorized backend** — `pip install
+goldenflow[polars]`.
+
+### Migration
+
+- **If you use `transform_df(pl.DataFrame)`, `read_file`, `write_file`, or otherwise pass
+  Polars objects:** `pip install goldenflow[polars]`. You already have Polars installed to
+  construct a `pl.DataFrame`, so in practice this is only a dependency-declaration change.
+- **New code should prefer `goldenflow.transform(data, config=...)`** — the Polars-free
+  primary. It takes a `dict[str, list]` or a `.csv` / `.parquet` / `.xlsx` path and returns
+  a `ColumnarResult` (`.columns` + `.manifest`, with an opt-in `.to_polars()` bridge).
+- **`goldenflow-native` is now installed by default** (was the `[native]` extra). A bare
+  install works out of the box, Polars-free. The `[native]` extra now only adds `pyarrow`
+  (the zero-copy Series bridge for the Polars fused-numeric fast path); it still resolves
+  for back-compat.
+- **Parquet read** needs `goldenflow[parquet]` (pyarrow); **Excel** needs
+  `goldenflow[excel]` (openpyxl); **CSV/DB** read Polars-free out of the box.
+- **CSV zero-config** (`transform("<x>.csv", config=None)`) now profiles columns *as text*
+  (so `"01234"` stays a zip, not `1234`) — an intentional, data-cleaning-correct divergence
+  from `pl.read_csv`'s numeric coercion. Cleaned text values are unchanged.
+
+### Details
 
 - **Polars-free public `transform()`.** `goldenflow.transform(data, config=...)` accepts a
   `dict[str, list]` OR a file path and returns a `ColumnarResult` (`.columns` + `.manifest`,
