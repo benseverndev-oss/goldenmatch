@@ -200,9 +200,9 @@ git add packages/rust/extensions/goldenpipe-core/tests/vectors/lower.json packag
 
 - [ ] **Step 2: Run to verify FAIL.**
 
-- [ ] **Step 3: Implement `capture.py`.** Read `adapters/match.py:_build_config_from_contexts` (import it) for the Match branch; normalize its returned `GoldenMatchConfig` to `{keys, scorer, method}` via its accessors (inspect the config object — `get_matchkeys()`/blocking/scorer/cluster fields; if a field isn't cleanly extractable, store the raw config dict under the node's payload and note it — SP1 only needs a faithful RECORD, exact sub-fields can be opaque JSON). For Flow, group `manifest.records` by `.column` into ordered `ops` lists.
+- [ ] **Step 3: Implement `capture.py`.** For Flow, group `ctx.artifacts["manifest"].records` by `.column` into ordered `ops` lists (`.transform` per record) → `{"transforms":[{column, ops}]}`. For Match, import `_build_config_from_contexts` from `adapters/match.py`; it returns a **pydantic `GoldenMatchConfig` object (or None)**, NOT a dict — **you MUST dict-ify it** (`.model_dump()` / `.dict()`) before it goes to `lower`, or `lower`'s `.get(...)` calls will `AttributeError` on the object. Its real fields are `matchkeys`/`blocking`, not `keys/scorer/method`, so the lowered `Partition/PairScore/Connected` node is a **placeholder record** for SP1 (empty/None sub-fields) — that is fine: Task 5 asserts *flow* fidelity, not match fidelity, and the match branch degrades gracefully on missing keys. For Check, build `{"columns":[{column, ops}]}` from the profile columns + the check names in `ctx.artifacts["findings"]` per column. `load` → `("source", {}, False)`. Unknown → `("barrier", planned.config or {}, False)`. `resolved = not planned.config` for flow/check/match.
 
-**Implementer note:** keep the Match/Check concrete payloads as **faithful JSON of what ran** — if precise `keys/scorer/method` extraction from the match config is awkward, capture the whole resolved config dict as the payload (still lowered via the `match` branch, which reads `.get("keys"/"scorer"/"method")` → missing keys become empty/None). The equivalence gate validates fidelity, not a specific sub-schema.
+**Implementer note:** the Match/Check node payloads are a **faithful JSON RECORD of what ran**, not a re-runnable explicit config — SP1 only needs the record. If precise sub-field extraction is awkward, store the `.model_dump()` dict as-is; `lower`'s match branch reads `.get("keys"/"scorer"/"method")` so absent keys become empty/None (no crash). The equivalence gate validates *execution* fidelity (byte-identical artifacts) + *flow* IR fidelity, not a match sub-schema.
 
 - [ ] **Step 4: Run to verify PASS.**
 - [ ] **Step 5: ruff + commit** (`feat(goldenpipe): compiler stage-capture (SP1)`).
@@ -217,7 +217,12 @@ git add packages/rust/extensions/goldenpipe-core/tests/vectors/lower.json packag
 
 - [ ] **Step 2: Run to verify FAIL.**
 
-- [ ] **Step 3a: Add the hook to `Runner.run`.** Change the signature to `def run(self, plan, ctx, hook=None)`. After each stage's `results[planned.name] = result` (both the success path and, if desired, leave the except path alone), call `if hook is not None: hook(planned, ctx, result)`. **Byte-identical when `hook is None`** — existing callers unaffected. Place the hook call at the end of the success branch (after the router `remaining = Router.apply(...)` line) so it sees the completed stage.
+- [ ] **Step 3a: Add the hook to `Runner.run`.** Change the signature to `def run(self, plan, ctx, hook=None)`. Place the hook call at the **bottom of the while-loop body, AFTER the whole `try/except`**, guarded on success:
+```python
+            if hook is not None and result.status == StageStatus.SUCCESS:
+                hook(planned, ctx, result)
+```
+Rationale (from review): putting it *inside* the `try` would let a `capture_stage`/`lower` bug be swallowed by the stage's broad `except Exception` and misattributed as a *stage* failure. Outside the try, a compiler-hook bug propagates as itself. `result` is in scope after the try/except (assigned in both branches); the SKIPPED path `continue`s before the try so the hook never fires for skipped stages. **Byte-identical when `hook is None`** — existing callers unaffected.
 
 - [ ] **Step 3b: Implement `compiled_runner.py`:**
 ```python
@@ -264,9 +269,13 @@ def compile_and_run(plan, ctx, registry):
 
 **Files:** Test `tests/compiler/test_equivalence.py`; a small fixtures helper.
 
-- [ ] **Step 1: Write the fixtures + normalizer.** A `_tiny_people_df()` returning a polars DataFrame of ~30 rows with `first_name`, `last_name` (surnames spread across distinct soundex codes — e.g. Smith/Jones/Brown/Garcia/Lee/Nguyen/Patel/Khan/Diaz/Okafor…), `email`, plus a couple of dupes. A `_normalize(artifacts)` that: replaces `manifest.created_at` with a constant (and any nested timing), drops match-stats timing keys, and converts polars frames to a canonical form (e.g. `.to_dicts()` or `.write_csv()` string) for comparison.
+- [ ] **Step 1: Write the fixtures + normalizer.** A `_tiny_people_df()` returning a polars DataFrame of ~30 rows with `first_name`, `last_name` (surnames spread across distinct soundex codes — e.g. Smith/Jones/Brown/Garcia/Lee/Nguyen/Patel/Khan/Diaz/Okafor…), `email`, plus a couple of dupes. **Include deliberately dirty values** (leading/trailing whitespace, mixed-case emails, inconsistent casing) so Flow auto-detect actually emits transforms — else `manifest.records` is empty → zero `Map` nodes → the structural assertion fails through no fault of the code.
 
-- [ ] **Step 2: Write the equivalence tests** — for each of 3 pipelines, build the `ExecutionPlan` via the existing `Resolver` + registry (study `engine/resolver.py` + how a `Pipeline`/`PipelineConfig` is turned into a plan; reuse that), then:
+  **CRITICAL — `goldencheck.scan` reads a FILE, not `ctx.df`.** `ScanStage.run` calls `goldencheck.scan_file(ctx.metadata["source"])` which `read_file(path)` from disk — it does NOT read `ctx.df`. So for pipelines #2/#3, the fixture MUST write the tiny df to a temp CSV (`tmp_path` fixture) and set `ctx.metadata["source"] = str(csv_path)` (mirror `Pipeline.run(source=...)` which does `pl.read_csv`). Without this, check lands on the `except` path → the hook never fires (no `Scan` node), check never produces `column_contexts`, and match falls through to the bare-auto nondeterministic path the design engineered around. Pipeline #1 (flow-only, no check) can use `PipeContext(df=df)` directly.
+
+  A `_normalize(artifacts)` that: replaces `manifest.created_at` with a constant (the only wall-clock field in the manifest — confirmed), drops match-stats timing keys, and converts polars frames to a canonical form (`.to_dicts()` or `.write_csv()` string) for comparison.
+
+- [ ] **Step 2: Write the equivalence tests** — for each of 3 pipelines, build the `ExecutionPlan` via `Resolver.resolve(PipelineConfig(stages=[StageSpec(use=...)]), StageRegistry())` (the real entry — see `_api.py:79` / `core/pipeline.py`). **Keep the auto-prepended `load` stage** (do NOT strip it the way `run_stages` in `_api.py` does) — Pipeline #1 asserts a `Source` node, which only exists if `load` runs; `LoadStage` is a no-op that marks the df available, so keeping it with a pre-populated `ctx.df` is correct. Then:
 ```python
 def _run_classic(plan, df, registry):
     ctx = PipeContext(df=df)
