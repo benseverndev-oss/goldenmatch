@@ -50,11 +50,13 @@ def test_real_pipeline_lineage(tmp_path):
     # email's transforms match the manifest records for email (real fidelity vs what ran)
     manifest = ctx.artifacts["manifest"]
     email_transforms = [r.transform for r in manifest.records if r.column == "email"]
+    assert email_transforms, "fixture should dirty email so goldenflow emits transforms"
     assert by_col.get("email", {}).get("transforms", []) == email_transforms
 
     # blocking_key columns == the compiled Partition node's keys (honest; no assume-nonempty)
     partition = next((n for n in compiled["nodes"] if n["kind"] == "Partition"), None)
     assert partition is not None
     blocked = {c for c, f in by_col.items() if f["blocking_key"]}
+    assert blocked, "fixture should yield a non-empty blocking key"
     assert blocked == set(partition["keys"])
     print("LINEAGE:\n" + format_lineage(lin))  # sanity artifact (-s to see)
