@@ -119,11 +119,37 @@ def _split_inmem_ok(nm) -> bool:
     )
 
 
-def _spec_ready(nm, spec, accepted: frozenset[str], numeric_ok: bool, split_ok: bool) -> bool:
+def _spec_scalar_ready(spec, accepted: frozenset[str]) -> bool:
+    """Phase 4d: a spec is *scalar-chain* runnable (in-memory only) iff every op is an
+    owned string kernel OR a transform with a registered pure-Python ``scalar``, AND at
+    least one op is scalar-only (else it's a pure owned-string run, handled by the
+    faster fused path). Applied op-by-op over a list -> Polars-free."""
+    has_scalar_op = False
+    for op_raw in spec.ops:
+        name, _params = parse_transform_name(op_raw)
+        info = get_transform(name)
+        if info is None:
+            return False
+        if name in accepted:
+            continue
+        if info.scalar is not None:
+            has_scalar_op = True
+            continue
+        return False
+    return has_scalar_op
+
+
+def _spec_ready(
+    nm, spec, accepted: frozenset[str], numeric_ok: bool, split_ok: bool, scalar_ok: bool = False
+) -> bool:
     """A spec is columnar-ready if it's an owned-string run, or — with native support
     — a valid NUMERIC (``string* parser f64*``) or SPLIT (``string* splitter``) shape
-    (validated by the native probes, the single source of truth)."""
+    (validated by the native probes, the single source of truth). ``scalar_ok`` (the
+    in-memory path only — the Rust CSV path can't call a Python scalar) also accepts a
+    scalar-chain spec (Phase 4d)."""
     if _spec_string_ready(spec, accepted):
+        return True
+    if scalar_ok and _spec_scalar_ready(spec, accepted):
         return True
     ops_spec = [(n, list(p)) for n, p in (parse_transform_name(o) for o in spec.ops)]
     if numeric_ok and nm.columnar_numeric_ready(ops_spec):
@@ -147,7 +173,11 @@ def config_is_columnar_ready(config) -> bool:
     accepted = _accepted_string(nm)
     numeric_ok = _numeric_inmem_ok(nm)
     split_ok = _split_inmem_ok(nm)
-    return all(_spec_ready(nm, spec, accepted, numeric_ok, split_ok) for spec in config.transforms)
+    scalar_ok = native_columns_ready(nm)  # scalar-chain needs from_pylist (4b)
+    return all(
+        _spec_ready(nm, spec, accepted, numeric_ok, split_ok, scalar_ok)
+        for spec in config.transforms
+    )
 
 
 def columnar_file_ready(config) -> bool:
@@ -280,6 +310,36 @@ def _transform_via_columns(df, config, source, nm, pl):
             series = imported.to_series(0) if isinstance(imported, pl.DataFrame) else imported
             out_series.append(series.alias(spec.column))
             continue
+        # Scalar chain (Phase 4d): a spec with a scalar-only op. Apply op-by-op over a
+        # Python list (owned string ops native, scalar ops via the pure reference) and
+        # egress a pl.Series -- consistent with transform_columns_native (the dict path).
+        accepted = _accepted_string(nm)
+        if _spec_scalar_ready(spec, accepted):
+            cur = df[spec.column].cast(pl.Utf8).to_list()
+            total_rows = len(cur)
+            for name, params in ops:
+                before = _sample3(cur[:3])
+                if name in accepted:
+                    new = list(nm.apply_chain_str_list(cur, [(name, list(params))])[0])
+                    n_changed = sum(
+                        1 for b, a in zip(cur, new)
+                        if b is not None and a is not None and b != a
+                    )
+                else:
+                    fn = get_transform(name).scalar
+                    new = [fn(v) for v in cur]
+                    n_changed = sum(
+                        1 for b, a in zip(cur, new)
+                        if b is not None and a is not None and b != a
+                    )
+                after = _sample3(new[:3])
+                manifest.add_record(TransformRecord(
+                    column=spec.column, transform=name, affected_rows=n_changed,
+                    total_rows=total_rows, sample_before=before, sample_after=after,
+                ))
+                cur = new
+            out_series.append(pl.Series(spec.column, cur, dtype=pl.Utf8))
+            continue
         # Zero-copy, pyarrow-free ingest (a 1-column DataFrame -> a struct stream).
         col = nm.Column.from_arrow(df.select([spec.column]))
         total_rows = len(col)
@@ -405,6 +465,35 @@ def transform_columns_native(columns, config, source: str = "<dataframe>"):
                     total_rows=int(total), sample_before=list(before), sample_after=list(after),
                 ))
             out[spec.column] = num_col.to_pylist()
+            continue
+
+        # Scalar chain (Phase 4d): a spec with a scalar-only op runs op-by-op over the
+        # plain list -- owned string ops via the native list chain, scalar ops via the
+        # registered pure-Python reference (byte-identical to the native kernel the
+        # Polars engine uses, by the owned-kernel parity guarantee). Polars-free.
+        accepted = _accepted_string(nm)
+        if _spec_scalar_ready(spec, accepted):
+            cur = col_list
+            for name, params in ops:
+                before = _sample3(cur[:3])
+                if name in accepted:
+                    new, changed = nm.apply_chain_str_list(cur, [(name, list(params))])
+                    new = list(new)
+                    n_changed = int(changed[0])
+                else:
+                    fn = get_transform(name).scalar
+                    new = [fn(v) for v in cur]
+                    n_changed = sum(
+                        1 for b, a in zip(cur, new)
+                        if b is not None and a is not None and b != a
+                    )
+                after = _sample3(new[:3])
+                manifest.add_record(TransformRecord(
+                    column=spec.column, transform=name, affected_rows=n_changed,
+                    total_rows=total_rows, sample_before=before, sample_after=after,
+                ))
+                cur = new
+            out[spec.column] = cur
             continue
 
         # Owned string chain (auto-routed total/nullable): counts + 3-row replay.

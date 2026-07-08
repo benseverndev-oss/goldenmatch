@@ -178,9 +178,23 @@ recovered by `[native]`.
   uncovered parity; pl.DataFrame-input TypeError; `to_polars()` bridge; subprocess
   polars-free check). `import goldenflow` stays Polars-free (columnar now loads at
   import for `ColumnarResult`, verified clean).
-- **4d — Transform signature port.** Rewrite the owned-family wrappers (one family at
-  a time) + the non-owned residual to dispatch on a `Column` instead of `pl.Series`/
-  `pl.Expr`. Gate: the existing per-family parity corpus, unchanged.
+- **4d — Transform signature port. IN PROGRESS (family by family).** Mechanism: a
+  transform registers an optional pure-Python `scalar` (`str|None -> value`, the SAME
+  per-element fn the Polars `series` path calls via `map_elements`), and the in-memory
+  columnar engine applies it op-by-op over a list — composing with owned Rust-kernel
+  ops in one chain — **Polars-free**. Byte-identical because, for owned families, the
+  native kernel (Polars engine) and the pure-Python scalar (columnar) are parity-gated
+  equal. The CSV path stays Rust-only (can't call a Python scalar): a scalar spec is
+  in-memory-ready but not file-ready. **Wave 1 (address):** `register_transform(scalar=)`
+  + `TransformInfo.scalar` + a scalar-chain tier in both in-memory paths
+  (`transform_columns_native` dict + `_transform_via_columns` frame); wired the 7
+  address transforms (`address_standardize`/`address_expand`/`state_abbreviate`/
+  `state_expand`/`zip_normalize`/`country_standardize`/`unit_normalize`). Gated by
+  `tests/engine/test_columnar_scalar_chain.py` (transform(dict) == transform_df ==
+  columnar-engine transform_df, data + manifest; in-memory-ready-not-file-ready;
+  subprocess Polars-free). Follow-on families (dates — the big non-owned one — needs
+  its closures un-nested to module-level scalars + int/str return handling;
+  identifiers/categorical/names remainder) are thin PRs on this mechanism.
 - **4e — I/O extras.** Native CSV is default; parquet/excel/scan/database move behind
   `[polars]`/`[parquet]` with graceful `ImportError`. Gate: fallback-path tests
   (mirror the existing cloud-connector pattern).
