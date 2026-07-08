@@ -26,6 +26,7 @@ _CASES = [
     ("plan_pipeline", PJ.plan_pipeline_json),
     ("apply_scale_hints", PJ.apply_scale_hints_json),
     ("band_of", PJ.band_of_json),
+    ("build_repair_plan", PJ.build_repair_plan_json),
 ]
 
 
@@ -51,6 +52,7 @@ from goldenpipe.core import _native_loader as NL  # noqa: E402
         ("plan_pipeline", "plan_pipeline_json"),
         ("apply_scale_hints", "apply_scale_hints_json"),
         ("band_of", "band_of_json"),
+        ("build_repair_plan", "build_repair_plan_json"),
     ],
 )
 def test_native_wheel_matches_core_vectors(name, fn_name):

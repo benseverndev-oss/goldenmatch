@@ -11,6 +11,7 @@ import json
 from typing import Any
 
 from goldenpipe import decisions as _dec
+from goldenpipe import repair as _repair
 from goldenpipe.autoconfig_planner import (
     ComplexityProfile,
     PipePlan,
@@ -210,3 +211,9 @@ def apply_scale_hints_json(input_str: str) -> str:
 
 def band_of_json(input_str: str) -> str:
     return json.dumps(band_of(json.loads(input_str)))
+
+
+def build_repair_plan_json(s: str) -> str:
+    arg = json.loads(s)
+    out = _repair.build_repair_plan(arg.get("findings", []), arg.get("columns", []))
+    return json.dumps(out)

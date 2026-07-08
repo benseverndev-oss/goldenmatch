@@ -97,3 +97,7 @@ def apply_scale_hints_json(input: str) -> str:
 
 def band_of_json(input: str) -> str:
     return _native.band_of_json(input)
+
+
+def build_repair_plan_json(input: str) -> str:
+    return _native.build_repair_plan_json(input)

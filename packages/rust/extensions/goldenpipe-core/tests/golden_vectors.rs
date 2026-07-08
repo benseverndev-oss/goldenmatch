@@ -56,3 +56,7 @@ fn vec_apply_scale_hints() {
 fn vec_band_of() {
     run("band_of", band_of_json);
 }
+#[test]
+fn vec_build_repair_plan() {
+    run("build_repair_plan", build_repair_plan_json);
+}

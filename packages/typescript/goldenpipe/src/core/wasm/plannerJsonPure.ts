@@ -31,6 +31,7 @@ import {
   type PipeProfile,
   type PlannerInput,
 } from "../autoconfigPlanner.js";
+import { buildRepairPlan, type Finding, type ColumnInput } from "../repair.js";
 
 interface StubStage {
   info: StageInfo;
@@ -261,4 +262,9 @@ export function applyScaleHintsJsonPure(inputStr: string): string {
 
 export function bandOfJsonPure(inputStr: string): string {
   return JSON.stringify(bandOf(JSON.parse(inputStr) as number));
+}
+
+export function buildRepairPlanJsonPure(inputStr: string): string {
+  const arg = JSON.parse(inputStr) as { findings?: Finding[]; columns?: ColumnInput[] };
+  return JSON.stringify(buildRepairPlan(arg.findings ?? [], arg.columns ?? []));
 }

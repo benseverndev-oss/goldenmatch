@@ -118,6 +118,26 @@ pub fn band_of_json(input: &str) -> String {
     serde_json::to_string(band_of(x)).unwrap()
 }
 
+#[derive(Deserialize)]
+struct RepairIn {
+    #[serde(default)]
+    findings: Vec<crate::repair::Finding>,
+    #[serde(default)]
+    columns: Vec<crate::repair::ColumnInput>,
+}
+
+pub fn build_repair_plan_json(input: &str) -> String {
+    let arg: RepairIn = match serde_json::from_str(input) {
+        Ok(a) => a,
+        Err(e) => return parse_err(e),
+    };
+    serde_json::to_string(&crate::repair::build_repair_plan(
+        &arg.findings,
+        &arg.columns,
+    ))
+    .unwrap()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

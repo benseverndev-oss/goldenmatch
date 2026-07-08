@@ -72,4 +72,14 @@ class ScanStage:
             logger.exception("Failed to build column contexts; downstream stages will auto-configure")
             ctx.artifacts["column_contexts"] = []
 
+        # Advisory repair-plan (never mutates the stage list; failures are non-fatal)
+        try:
+            from goldenpipe.repair_host import attach_repair_plan
+            _findings = ctx.artifacts.get("findings", [])
+            _contexts = ctx.artifacts.get("column_contexts", [])
+            if ctx.df is not None and _findings and _contexts:
+                attach_repair_plan(ctx, _findings, _contexts, ctx.df)
+        except Exception:
+            logger.exception("repair-plan attach failed; advisory artifact skipped")
+
         return StageResult(status=StageStatus.SUCCESS)
