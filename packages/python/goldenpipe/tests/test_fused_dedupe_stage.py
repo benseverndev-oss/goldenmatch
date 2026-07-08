@@ -108,3 +108,36 @@ def test_run_emits_clusters_matching_brute_oracle():
 
     got = {frozenset(m) for m in ctx.artifacts["clusters"].values()}
     assert got == _brute(df, 0.85)
+
+
+@pytest.mark.skipif(not _HAS_FUSED, reason="goldenmatch-native match_fused not built")
+def test_run_with_transforms_normalizes_then_clusters():
+    # Case/whitespace noise on both key and name; lowercase+strip collapses all
+    # three rows into one block + one identical name -> one cluster {0,1,2}.
+    df = pl.DataFrame({"blk": ["A", "a", " A "], "name": ["bob", "BOB ", " bob"]})
+    cfg = {
+        "blocking": {
+            "strategy": "static",
+            "keys": [{"fields": ["blk"], "transforms": ["lowercase", "strip"]}],
+        },
+        "matchkeys": [
+            {
+                "name": "mk",
+                "type": "weighted",
+                "threshold": 0.85,
+                "fields": [
+                    {
+                        "field": "name",
+                        "scorer": "jaro_winkler",
+                        "weight": 1.0,
+                        "transforms": ["lowercase", "strip"],
+                    }
+                ],
+            }
+        ],
+    }
+    ctx = PipeContext(df=df, stage_config=cfg)
+    stage = FusedDedupeStage()
+    stage.validate(ctx)  # transforms are covered -> no raise
+    stage.run(ctx)
+    assert {frozenset(m) for m in ctx.artifacts["clusters"].values()} == {frozenset({0, 1, 2})}

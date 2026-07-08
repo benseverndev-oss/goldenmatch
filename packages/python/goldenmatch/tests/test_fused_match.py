@@ -46,16 +46,17 @@ def test_ready_true_on_covered_config():
     assert fused_match.match_fused_ready(_covered_config()) is True
 
 
-def test_ready_false_on_key_transform():
+def test_ready_true_with_key_transform():
+    # Transforms are covered — derived host-side via the pipeline reference.
     c = _covered_config()
-    c.blocking.keys[0].transforms = ["lowercase"]
-    assert fused_match.match_fused_ready(c) is False
+    c.blocking.keys[0].transforms = ["lowercase", "soundex"]
+    assert fused_match.match_fused_ready(c) is True
 
 
-def test_ready_false_on_field_transform():
+def test_ready_true_with_field_transform():
     c = _covered_config()
-    c.matchkeys[0].fields[0].transforms = ["strip"]
-    assert fused_match.match_fused_ready(c) is False
+    c.matchkeys[0].fields[0].transforms = ["lowercase", "strip"]
+    assert fused_match.match_fused_ready(c) is True
 
 
 def test_ready_false_on_uncovered_scorer():
@@ -84,8 +85,20 @@ def test_ready_false_on_missing_threshold():
 
 # ---- parity vs an independent brute oracle -----------------------------
 
-def _brute_clusters(keys, names, threshold):
+def _brute_clusters(keys, names, threshold, key_transforms=(), score_transforms=()):
+    """Independent oracle. Applies the SAME transforms via `apply_transforms`
+    (the per-value reference `_build_block_key_expr`/`_get_transformed_values`
+    fall back to), then blocks + scores + union-finds."""
+    from goldenmatch.utils.transforms import apply_transforms
+
     jw = native_module().jaro_winkler_similarity
+
+    def _xf(v, chain):
+        return apply_transforms(v, list(chain)) if chain else v
+
+    keys = [_xf(k, key_transforms) for k in keys]
+    names = [_xf(nm, score_transforms) for nm in names]
+
     blocks: dict[str, list[int]] = defaultdict(list)
     for i, k in enumerate(keys):
         if k is None:
@@ -106,6 +119,8 @@ def _brute_clusters(keys, names, threshold):
         for ai in range(len(members)):
             for bi in range(ai + 1, len(members)):
                 a, b = members[ai], members[bi]
+                if names[a] is None or names[b] is None:
+                    continue
                 if jw(names[a], names[b]) >= threshold:
                     ra, rb = find(a), find(b)
                     if ra != rb:
@@ -142,6 +157,44 @@ def test_run_match_fused_arrow_matches_brute_oracle():
     assert tbl is not None
     got = _table_to_clusters(tbl)
     want = _brute_clusters(keys, names, 0.85)
+    assert got == want
+
+
+@pytest.mark.skipif(not _HAS_FUSED, reason="goldenmatch-native match_fused not built")
+def test_run_match_fused_arrow_matches_brute_oracle_with_transforms():
+    # Block key normalized by lowercase+strip (case/whitespace noise collapses into
+    # one block); score field normalized the same. Proves the host-side transform
+    # derivation is byte-faithful to the pipeline reference.
+    keys = [" Smith ", "smith", "SMITH", "jones", "Jones ", "lee"]
+    names = ["Jonathan", "jonathon ", " JONATHAN", "sarah", "SARAH", "solo"]
+    config = _covered_config(threshold=0.85)
+    config.blocking.keys[0].transforms = ["lowercase", "strip"]
+    config.matchkeys[0].fields[0].transforms = ["lowercase", "strip"]
+    columns = {"blk": pa.array(keys), "name": pa.array(names)}
+
+    tbl = fused_match.run_match_fused_arrow(columns, config)
+    assert tbl is not None
+    got = _table_to_clusters(tbl)
+    want = _brute_clusters(
+        keys, names, 0.85, key_transforms=["lowercase", "strip"], score_transforms=["lowercase", "strip"]
+    )
+    assert got == want
+
+
+@pytest.mark.skipif(not _HAS_FUSED, reason="goldenmatch-native match_fused not built")
+def test_run_match_fused_arrow_soundex_block_key():
+    # soundex block key exercises the map_elements(apply_transforms) fallback path
+    # end to end (the common auto-config blocking transform).
+    keys = ["Smith", "Smyth", "Smithe", "Jones", "Jonez", "Zzzz"]
+    names = ["robert", "robbert", "roberto", "alice", "alicia", "solo"]
+    config = _covered_config(threshold=0.80)
+    config.blocking.keys[0].transforms = ["lowercase", "soundex"]
+    columns = {"blk": pa.array(keys), "name": pa.array(names)}
+
+    tbl = fused_match.run_match_fused_arrow(columns, config)
+    assert tbl is not None
+    got = _table_to_clusters(tbl)
+    want = _brute_clusters(keys, names, 0.80, key_transforms=["lowercase", "soundex"])
     assert got == want
 
 

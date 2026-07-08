@@ -107,11 +107,13 @@ class FusedDedupeStage:
     CLUSTERS ONLY: it produces `clusters` + `cluster_assignments` (Arrow), NOT
     golden/unique/dupes (the fused kernel's declined scope -- golden records need
     the row payload, which stays the classic DedupeStage's job). Requires an
-    EXPLICIT covered config (`match_fused_ready`): static single-key blocking with
-    no key transforms + one weighted matchkey over covered scorers with no field
-    transforms. `validate()` raises a clear pointer to `goldenmatch.dedupe`
-    otherwise -- it never silently falls back, so a caller who asked for the
-    fused stage always gets the fused path or an explicit error.
+    EXPLICIT covered config (`match_fused_ready`): static single-key blocking +
+    one weighted matchkey over covered scorers with a threshold. Transforms
+    (lowercase/strip/substring/soundex/...) ARE covered -- derived host-side via
+    the pipeline's own transform reference before the kernel runs. `validate()`
+    raises a clear pointer to `goldenmatch.dedupe` for an uncovered config -- it
+    never silently falls back, so a caller who asked for the fused stage always
+    gets the fused path or an explicit error.
     """
 
     info = StageInfo(
@@ -149,9 +151,9 @@ class FusedDedupeStage:
         if not match_fused_ready(config):
             raise RuntimeError(
                 "config is not covered by the fused match kernel (needs static "
-                "single-key blocking with no key transforms + one weighted matchkey "
-                "over jaro_winkler/levenshtein/token_sort/exact with no field "
-                "transforms). Use the goldenmatch.dedupe stage for this config."
+                "single-key blocking + one weighted matchkey over "
+                "jaro_winkler/levenshtein/token_sort/exact with a threshold; "
+                "transforms are fine). Use the goldenmatch.dedupe stage for this config."
             )
 
     def run(self, ctx: PipeContext) -> StageResult:
