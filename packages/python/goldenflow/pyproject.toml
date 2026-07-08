@@ -52,6 +52,8 @@ check = ["goldencheck>=1.0"]
 # becomes load-bearing when 2.0 drops polars from the base `dependencies`.
 polars = ["polars>=1.0"]
 excel = ["openpyxl>=3.1"]
+# Polars-free Parquet read (pyarrow only, no polars) for transform("<path>.parquet").
+parquet = ["pyarrow>=10"]
 db = ["connectorx>=0.3"]
 mcp = ["mcp>=1.0"]
 llm = ["anthropic>=0.30", "openai>=1.30"]
