@@ -132,7 +132,9 @@ class FuzzyValuesProfiler(BaseProfiler):
         clusters: list[list[int]]
         if native_enabled("fuzzy_values"):
             try:
-                clusters = native_module().near_duplicate_value_clusters(values, _MIN_SIMILARITY)
+                clusters = native_module().near_duplicate_value_clusters(
+                    distinct.to_arrow(), _MIN_SIMILARITY
+                )
             except Exception:  # noqa: BLE001 - any native failure -> Python path
                 clusters = _python_clusters(values, _MIN_SIMILARITY)
         else:

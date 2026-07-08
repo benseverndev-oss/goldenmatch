@@ -26,6 +26,7 @@ from __future__ import annotations
 import datetime as _dt
 
 import polars as pl
+import pyarrow as pa
 
 from goldencheck.core._native_loader import native_enabled, native_module
 from goldencheck.profilers.fuzzy_values import _MAX_DISTINCT as _FUZZY_MAX_DISTINCT
@@ -47,7 +48,9 @@ _PENALTY_FUTURE_DATED = 0.3
 def _clusters(values: list[str]) -> list[list[int]]:
     if native_enabled("fuzzy_values"):
         try:
-            return native_module().near_duplicate_value_clusters(values, _MIN_SIMILARITY)
+            return native_module().near_duplicate_value_clusters(
+                pa.array(values, type=pa.string()), _MIN_SIMILARITY
+            )
         except Exception:  # noqa: BLE001 - native failure -> Python fallback
             return _python_clusters(values, _MIN_SIMILARITY)
     return _python_clusters(values, _MIN_SIMILARITY)

@@ -148,6 +148,8 @@ def bench_functional_dependency(rows: int) -> None:
 
 
 def bench_fuzzy_values(n_distinct: int) -> None:
+    import pyarrow as pa
+
     from goldencheck.profilers import fuzzy_values as fv
 
     print(f"\n## Fuzzy value clustering  (distinct values={n_distinct:,})")
@@ -172,7 +174,9 @@ def bench_fuzzy_values(n_distinct: int) -> None:
 
     if native_available():
         def nat() -> None:
-            native_module().near_duplicate_value_clusters(values, fv._MIN_SIMILARITY)
+            native_module().near_duplicate_value_clusters(
+                pa.array(values, type=pa.string()), fv._MIN_SIMILARITY
+            )
 
         nat_wall = _median_wall(nat, runs=3)
         speedup = py_wall / nat_wall if nat_wall > 0 else float("inf")

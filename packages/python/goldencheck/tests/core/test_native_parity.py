@@ -209,8 +209,12 @@ def test_fuzzy_value_clusters_parity(seed: int) -> None:
     # de-dup to mimic the profiler's distinct-value input
     values = list(dict.fromkeys(values))
 
+    import pyarrow as pa
+
     py = fv._python_clusters(values, fv._MIN_SIMILARITY)
-    nat = native_module().near_duplicate_value_clusters(values, fv._MIN_SIMILARITY)
+    nat = native_module().near_duplicate_value_clusters(
+        pa.array(values, type=pa.string()), fv._MIN_SIMILARITY
+    )
     # Compare as sets of frozensets (cluster identity, order-independent).
     assert {frozenset(c) for c in py} == {frozenset(c) for c in nat}
 
