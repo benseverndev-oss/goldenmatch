@@ -1,3 +1,5 @@
+from datetime import date, datetime
+
 import polars as pl
 from goldencheck.denial.models import Op, Predicate
 from goldencheck.denial.predicates import build_predicate_space, encode_columns, predicate_holds
@@ -41,3 +43,28 @@ def test_pass2_budget_doubles_single_tuple():
     assert space.pass2_effective == 2 * space.n_single + space.n_cross
     if space.pass2_effective > 64 or space.n_single > 64:
         assert space.capped is True
+
+
+def test_date_and_datetime_are_separate_dtype_domains():
+    # Date and Datetime are different concrete dtypes: encoding must not crash by
+    # pooling date + datetime into one sorted() domain, and they must NOT pair.
+    df = pl.DataFrame(
+        {
+            "d": [date(2020, 1, 1), date(2020, 1, 3), date(2020, 1, 2)],
+            "ts": [
+                datetime(2020, 1, 1, 9),
+                datetime(2020, 1, 1, 8),
+                datetime(2020, 1, 1, 10),
+            ],
+        }
+    )
+    enc = encode_columns(df)  # must not raise
+    assert enc["d"].dtype != enc["ts"].dtype
+    # each column stays order-preserving within its own dtype domain
+    assert enc["d"].ids[0] < enc["d"].ids[2] < enc["d"].ids[1]     # 1 < 2 < 3
+    assert enc["ts"].ids[1] < enc["ts"].ids[0] < enc["ts"].ids[2]  # 8 < 9 < 10
+
+    space = build_predicate_space(df)
+    for p in space.predicates:
+        if p.kind in ("single", "cross"):
+            assert {p.col_a, p.col_b} != {"d", "ts"}  # different dtypes never pair

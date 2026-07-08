@@ -44,14 +44,18 @@ class EncodedColumn:
     """One column encoded to dense integer ids (null -> 0).
 
     ``kind`` is one of ``"categorical"`` / ``"numeric"`` / ``"temporal"``.
-    ``ids`` are per-row ids; for numeric/temporal they are order-preserving ranks
-    shared across all same-kind columns, for categorical they are shared
-    first-seen ids. ``card`` is this column's distinct non-null count.
-    ``id_of_value`` maps each of this column's values to its id (for literals).
+    ``dtype`` is the concrete Polars dtype key (e.g. ``"Date"`` vs ``"Datetime"``):
+    ids and pairing are shared only within one exact dtype, never merely within a
+    ``kind`` bucket. ``ids`` are per-row ids; for numeric/temporal they are
+    order-preserving ranks shared across all columns of the SAME dtype, for
+    categorical they are shared first-seen ids (per dtype). ``card`` is this
+    column's distinct non-null count. ``id_of_value`` maps each of this column's
+    values to its id (for literals).
     """
 
     name: str
     kind: str
+    dtype: str
     ids: list[int]
     nulls: list[bool]
     card: int
@@ -83,25 +87,33 @@ def _classify(dtype: pl.DataType) -> str | None:
 def encode_columns(df: pl.DataFrame) -> dict[str, EncodedColumn]:
     """Encode every supported column to dense ids; unsupported dtypes are omitted."""
     kinds: dict[str, str] = {}
+    dtypes: dict[str, str] = {}
     values: dict[str, list] = {}
     for name in df.columns:
-        kind = _classify(df[name].dtype)
+        dtype = df[name].dtype
+        kind = _classify(dtype)
         if kind is None:
             continue
         kinds[name] = kind
+        dtypes[name] = str(dtype)
         values[name] = df[name].to_list()
 
-    # Shared, order-preserving rank domains per numeric/temporal kind so that
-    # cross-column comparisons are meaningful. Categorical shares one first-seen
-    # id map so equal values across columns collapse to the same id.
-    num_rank = _order_rank(values, kinds, "numeric")
-    tmp_rank = _order_rank(values, kinds, "temporal")
-    cat_map = _first_seen(values, kinds)
-    id_maps = {"numeric": num_rank, "temporal": tmp_rank, "categorical": cat_map}
+    # One shared id domain PER CONCRETE DTYPE (not per coarse kind): ordered ranks
+    # for numeric/temporal so same-dtype cross-column comparisons are meaningful,
+    # first-seen ids for categorical so equal values collapse. Keying on the exact
+    # dtype keeps Date/Datetime (and Utf8/Boolean) in separate, incomparable
+    # domains -- pooling them would crash sorted() or compare meaningless ranks.
+    id_maps: dict[str, dict] = {}
+    for name, kind in kinds.items():
+        key = dtypes[name]
+        if key in id_maps:
+            continue
+        members = [n for n, dk in dtypes.items() if dk == key]
+        id_maps[key] = _build_domain(members, values, ordered=(kind != "categorical"))
 
     out: dict[str, EncodedColumn] = {}
     for name, kind in kinds.items():
-        idmap = id_maps[kind]
+        idmap = id_maps[dtypes[name]]
         vals = values[name]
         ids = [0 if v is None else idmap[v] for v in vals]
         nulls = [v is None for v in vals]
@@ -109,6 +121,7 @@ def encode_columns(df: pl.DataFrame) -> dict[str, EncodedColumn]:
         out[name] = EncodedColumn(
             name=name,
             kind=kind,
+            dtype=dtypes[name],
             ids=ids,
             nulls=nulls,
             card=len(distinct),
@@ -117,20 +130,20 @@ def encode_columns(df: pl.DataFrame) -> dict[str, EncodedColumn]:
     return out
 
 
-def _order_rank(values: dict[str, list], kinds: dict[str, str], kind: str) -> dict:
-    pool: set = set()
-    for name, k in kinds.items():
-        if k == kind:
+def _build_domain(members: list[str], values: dict[str, list], ordered: bool) -> dict:
+    """Shared value->id map for one concrete dtype's columns.
+
+    ``ordered`` -> order-preserving dense rank over the sorted distinct values;
+    otherwise first-seen ids in (column, row) order. null is never a member.
+    """
+    if ordered:
+        pool: set = set()
+        for name in members:
             pool.update(v for v in values[name] if v is not None)
-    return {v: i + 1 for i, v in enumerate(sorted(pool))}
-
-
-def _first_seen(values: dict[str, list], kinds: dict[str, str]) -> dict:
+        return {v: i + 1 for i, v in enumerate(sorted(pool))}
     mapping: dict = {}
     nxt = 1
-    for name, k in kinds.items():
-        if k != "categorical":
-            continue
+    for name in members:
         for v in values[name]:
             if v is None:
                 continue
@@ -248,8 +261,8 @@ def build_predicate_space(df: pl.DataFrame) -> PredicateSpace:
                 Predicate(kind="cross", col_a=a, op=op, col_b=a, literal=None)
             )
         for b in names[i + 1:]:
-            if enc[a].kind != enc[b].kind:
-                continue  # type-incompatible (numeric vs temporal, etc.)
+            if enc[a].dtype != enc[b].dtype:
+                continue  # type-incompatible: only EXACT same dtype may pair
             for op in _ops_for(enc[a].kind):
                 single.append(
                     Predicate(kind="single", col_a=a, op=op, col_b=b, literal=None)
