@@ -18,7 +18,7 @@ goldencheck_types/
 ├── __init__.py     # public API: SchemaVersion, FieldType, InferredSchema, etc.
 ├── types.py        # Pydantic models. snake_case enforced via Field(alias=...) where needed.
 ├── loader.py       # YAML → FieldType. Single load_field_types(path) entrypoint.
-└── _domains/       # Bundled domain packs (healthcare.yml, finance.yml, ecommerce.yml)
+└── _domains/       # Bundled domain packs (16: generic + 15 industry verticals — synced byte-for-byte from the TS `domains/` canonical via scripts/sync_domain_packs.py)
 ```
 
 ## Schema versioning
