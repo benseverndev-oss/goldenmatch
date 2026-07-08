@@ -6,12 +6,13 @@
 //! `GOLDENCHECK_NATIVE` opts in (see `goldencheck/core/_native_loader.py`); the
 //! pure-Python implementation stays the default and the fallback.
 //!
-//! The kernels here take plain slices (`&[f64]`, `&[u64]`) so they carry no
-//! Python or Arrow types -- the `goldencheck-native` crate owns the
-//! `#[pyfunction]` shims and the zero-copy Arrow reads, and delegates the
-//! actual work here. This mirrors `score-core` / `graph-core` on the
+//! The crate exposes an Arrow-native public API (`&dyn Array` / `&[ArrayRef]`);
+//! the internal slice algorithms stay pyo3-free and are wrapped by thin
+//! Arrow-decoding entry points. The `goldencheck-native` crate now only
+//! marshals pyarrow<->Arrow. This mirrors `score-core` / `graph-core` on the
 //! goldenmatch side.
 
+mod arrow_support;
 mod benford;
 mod fuzzy;
 mod keys;
