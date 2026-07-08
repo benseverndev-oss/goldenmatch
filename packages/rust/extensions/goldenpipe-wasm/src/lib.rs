@@ -59,4 +59,9 @@ mod wasm {
     pub fn build_repair_plan_json(input: &str) -> String {
         json::build_repair_plan_json(input)
     }
+
+    #[wasm_bindgen]
+    pub fn lower_json(input: &str) -> String {
+        json::lower_json(input)
+    }
 }

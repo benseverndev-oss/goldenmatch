@@ -18,7 +18,7 @@ class Runner:
     def __init__(self, registry: StageRegistry) -> None:
         self._registry = registry
 
-    def run(self, plan: ExecutionPlan, ctx: PipeContext) -> dict[str, StageResult]:
+    def run(self, plan: ExecutionPlan, ctx: PipeContext, hook=None) -> dict[str, StageResult]:
         results: dict[str, StageResult] = {}
         remaining = list(plan.stages)
 
@@ -84,5 +84,8 @@ class Runner:
 
                 if planned.spec.on_error == "abort":
                     break
+
+            if hook is not None and result.status == StageStatus.SUCCESS:
+                hook(planned, ctx, result)
 
         return results

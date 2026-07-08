@@ -9,6 +9,7 @@
 //! host and is deliberately NOT here.
 pub mod config;
 pub mod decisions;
+pub mod ir;
 pub mod json;
 pub mod model;
 pub mod planner;
