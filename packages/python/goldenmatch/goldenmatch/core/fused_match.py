@@ -11,8 +11,13 @@ the boundary, which raises the row-count ceiling on a given box ~2x. It is NOT a
 speed win and must not be sold as one.
 
 Covered configs run native; everything else returns None so the caller keeps the
-existing pipeline (the columnar-decline pattern). Coverage grows over increments;
-this one ships the no-transform boundary the kernel can honor byte-for-byte.
+existing pipeline (the columnar-decline pattern). Transforms ARE covered: the
+block-key + score columns are derived host-side via the pipeline's own transform
+reference (`_build_block_key_expr` / `_get_transformed_values`) before the kernel
+groups/scores, so any configured transform (lowercase/strip/substring/soundex/…)
+is applied byte-identically. The derivation is an O(n) column pass — it does not
+reintroduce the O(k^2) block/pairs/dedup materialization the fusion removes, so
+the ~2x peak-RSS win (2x single-box capacity) holds.
 """
 
 from __future__ import annotations
@@ -35,20 +40,23 @@ _FUSED_SCORER_IDS: dict[str, int] = {
 
 
 def match_fused_ready(config: Any) -> bool:
-    """Conservative covered boundary for the fused kernel (grows over increments).
+    """Covered boundary for the fused kernel.
 
-    Covered: `static` single-key blocking with NO key transforms + exactly one
-    `weighted` matchkey whose fields all use a covered scorer with NO field
-    transforms + a threshold. The kernel groups/scores RAW column values (it
-    applies no transforms of its own), so "no transforms" is the byte-parity-safe
-    boundary this increment ships. Declines probabilistic / ANN / negative-
-    evidence / multi-pass / domain / LLM / PPRL to the existing pipeline.
+    Covered: `static` single-key blocking + exactly one `weighted` matchkey whose
+    fields all use a covered scorer + a threshold. **Transforms are covered** —
+    `run_match_fused_arrow` derives the block-key column via the same
+    `_build_block_key_expr` the pipeline's blocking uses (transform chain + "||"
+    concat) and the score columns via the scorer's own `_get_transformed_values`,
+    so any transform the pipeline applies is applied identically here (byte-parity
+    by construction; the kernel then groups/scores those derived values). Declines
+    probabilistic / ANN / negative-evidence / multi-pass / domain / LLM / PPRL to
+    the existing pipeline.
     """
     b = getattr(config, "blocking", None)
     if b is None or getattr(b, "strategy", "static") != "static":
         return False
     keys = getattr(b, "keys", None) or []
-    if len(keys) != 1 or keys[0].transforms:
+    if len(keys) != 1:
         return False
     if getattr(b, "ann_column", None):
         return False
@@ -65,7 +73,7 @@ def match_fused_ready(config: Any) -> bool:
     if mk.threshold is None or not mk.fields:
         return False
     for f in mk.fields:
-        if not f.field or f.transforms:
+        if not f.field:
             return False
         if f.scorer not in _FUSED_SCORER_IDS:
             return False
@@ -80,12 +88,6 @@ def _match_fused_symbol() -> Any | None:
     return getattr(mod, "match_fused", None)
 
 
-def _as_utf8(arr: Any) -> Any:
-    if arr.type in (pa.string(), pa.large_string()):
-        return arr
-    return arr.cast(pa.string())
-
-
 def run_match_fused_arrow(
     columns: Mapping[str, Any],
     config: Any,
@@ -98,21 +100,43 @@ def run_match_fused_arrow(
     ``None`` when the config is not covered OR the native kernel is absent, so
     the caller falls back to the existing pipeline.
 
-    ``columns`` maps field name -> pyarrow Array (any type; key + score fields
-    are cast to utf8). Row ids are 0..n in input order.
+    ``columns`` maps SOURCE field name -> pyarrow Array (the untransformed input
+    columns for every blocking + matchkey field). The block-key and score columns
+    are DERIVED here via the pipeline's own transform reference
+    (`_build_block_key_expr` for the key, `_get_transformed_values` for each score
+    field), so any configured transform is applied byte-identically before the
+    kernel groups/scores. Row ids are 0..n in input order.
     """
+    import polars as pl
+
+    from goldenmatch.core.blocker import _build_block_key_expr
+    from goldenmatch.core.scorer import _get_transformed_values
+
     fn = _match_fused_symbol()
     if fn is None or not match_fused_ready(config):
         return None
 
-    key_fields = list(config.blocking.keys[0].fields)
+    key_cfg = config.blocking.keys[0]
     mk = config.get_matchkeys()[0]
+    src_cols = list(dict.fromkeys([*key_cfg.fields, *[f.field for f in mk.fields]]))
 
-    n = n_rows if n_rows is not None else len(columns[key_fields[0]])
+    n = n_rows if n_rows is not None else len(columns[src_cols[0]])
+    # One O(n) pass to derive the transformed key + score columns, exactly as the
+    # pipeline would (blocking pre-casts every column to Utf8; mirror that). This
+    # does NOT reintroduce the block/pairs/dedup materialization the fusion
+    # eliminates -- it's a few string columns, not the O(k^2) match state.
+    frame = pl.DataFrame({c: columns[c] for c in src_cols}).cast(pl.Utf8)
+
+    block_key = (
+        frame.lazy().select(_build_block_key_expr(key_cfg)).collect().get_column("__block_key__")
+    )
+    key_arrs = [block_key.to_arrow()]  # already transformed + "||"-concatenated
+    score_arrs = [
+        pl.Series(f.field, _get_transformed_values(frame, f), dtype=pl.Utf8).to_arrow()
+        for f in mk.fields
+    ]
+
     row_ids = pa.array(range(n), type=pa.int64())
-
-    key_arrs = [_as_utf8(columns[f]) for f in key_fields]
-    score_arrs = [_as_utf8(columns[f.field]) for f in mk.fields]
     scorer_ids = [_FUSED_SCORER_IDS[f.scorer] for f in mk.fields]
     weights = [float(f.weight if f.weight is not None else 1.0) for f in mk.fields]
     total_weight = sum(weights)
