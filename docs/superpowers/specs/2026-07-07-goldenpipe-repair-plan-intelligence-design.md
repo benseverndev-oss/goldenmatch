@@ -114,6 +114,12 @@ A detector fires only if the majority of non-null samples match its value
 pattern (guards against a single coincidental match). Detectors are tried in a
 fixed order; first firing tag wins.
 
+**Cross-engine byte-identity:** every detector regex uses explicit ASCII
+character classes — `[0-9]`, never `\d`; `[0-9Xx]`, never `[\dX]`. `\d` is
+Unicode-digit by default in Python `re` and Rust `regex` but ASCII in JS, so a
+sample containing a non-ASCII digit would classify differently per surface and
+break the parity gate. Explicit classes are identical across all three engines.
+
 ### Fine vocabulary (v1)
 
 Value-distinctive (name-hint optional):
@@ -123,18 +129,18 @@ Value-distinctive (name-hint optional):
 | `iban` | `^[A-Z]{2}[0-9]{2}[A-Z0-9]{11,30}$`, length 15-34 |
 | `isin` | `^[A-Z]{2}[0-9A-Z]{9}[0-9]$` (12 chars) |
 | `swift` | `^[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?$` (8 or 11) |
-| `credit_card` | `^\d{13,19}$` (strip spaces/dashes) **and** Luhn passes |
+| `credit_card` | `^[0-9]{13,19}$` (strip spaces/dashes) **and** Luhn passes |
 
 Name-hint required (value shape alone is ambiguous):
 
 | tag | name-hint (any of) | value structure |
 |---|---|---|
 | `cusip` | cusip | `^[0-9A-Z]{9}$` |
-| `npi` | npi | `^\d{10}$` |
-| `imei` | imei, imsi | `^\d{15}$` |
-| `ean` | ean, gtin, barcode | `^\d{8}$` or `^\d{13}$` |
-| `isbn` | isbn | `^\d{9}[\dX]$` or `^\d{13}$` |
-| `aba_routing` | routing, aba | `^\d{9}$` |
+| `npi` | npi | `^[0-9]{10}$` |
+| `imei` | imei, imsi | `^[0-9]{15}$` |
+| `ean` | ean, gtin, barcode | `^[0-9]{8}$` or `^[0-9]{13}$` |
+| `isbn` | isbn | `^[0-9]{9}[0-9Xx]$` or `^[0-9]{13}$` |
+| `aba_routing` | routing, aba | `^[0-9]{9}$` |
 
 `vat` is dropped from v1 — country-specific formats are too fuzzy for a lean
 detector.
