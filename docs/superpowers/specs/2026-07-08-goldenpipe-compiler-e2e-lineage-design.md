@@ -55,20 +55,33 @@ public, fail-open entry:
 ```
 golden_provenance_for_run(data_df, clusters, rules) -> list[ClusterProvenance] | None
 ```
-- `data_df` = the source frame carrying `__row_id__` (the frame dedupe scored — the same
-  one whose row ids the clusters' `members` reference).
-- `clusters` = the `clusters` artifact (dict `{cluster_id: {members, size, ...}}`).
-- `rules` = the survivorship rules from the match `GoldenMatchConfig` the adapter used
-  (the field-rules / survivorship config; the adapter already holds the config).
+Inputs (VERIFIED against the real code — do NOT use the naive `ctx.df`/`config` sources):
+- `data_df` = **`result.dupes`** — the frame carrying `__row_id__` (Int64) + value columns
+  for the multi-member members that `clusters[*].members` reference. `ctx.df` does NOT
+  carry `__row_id__` (goldenmatch adds it internally via `_add_row_ids` *after* the
+  adapter hands off the frame), so passing `ctx.df` makes the internal
+  `multi_df.join(data_df, on="__row_id__")` fail → fail-open → the artifact would be
+  **perpetually `None`**. `result.dupes` is dtype-correct and already surfaced as
+  `ctx.artifacts["dupes"]`.
+- `clusters` = the `clusters` artifact (dict `{cluster_id: {members, size, ...}}`) from
+  the classic `DedupeStage`. (The `FusedDedupeStage` sets `clusters = {cid: [row_ids]}` —
+  a list, incompatible with `golden_provenance_for_run`'s `cinfo.get("size"/"members")`;
+  SP3 is a silent no-op there, which is fine — the fused stage produces no golden.)
+- `rules` = **`result.config.golden_rules`** (a `GoldenRulesConfig`, or `None`).
+  `DedupeResult.config` is the *resolved* config present on ALL adapter paths (including
+  Priority-0 throughput and Priority-3 auto-config, where the adapter holds no local
+  `config`). Do NOT use the `GoldenMatchConfig` the adapter built — it's unavailable on
+  those branches, and the survivorship rules live at `.golden_rules`, not top-level.
 
 Attach `ctx.artifacts["golden_provenance"]` = the returned list (or `None`).
 
 **Additive + byte-identical:** `golden_provenance_for_run` is fail-open (returns `None`
-on any error), returns `None` for non-survivorship configs (`_survivorship_active` is
-false) and when there are no multi-member clusters. So a default pipeline is unchanged;
-the artifact simply appears when survivorship is active. Wrap the call in try/except so a
-lineage failure never breaks the match stage (mirror the adapter's existing best-effort
-enrichment pattern).
+on any error), builds only new frames (no mutation of `data_df`/`clusters`), returns
+`None` for non-survivorship configs and single-member-only clusters, and
+`golden_provenance` is a NEW artifact key (the adapter + downstream `IdentityResolveStage`
+read only `clusters`/`scored_pairs`/`matchkey_used`, never `golden_provenance`). So a
+default pipeline is unchanged. Wrap the call in try/except so a lineage failure never
+breaks the match stage (mirror the adapter's existing best-effort enrichment pattern).
 
 ### Part B — the stitch (compiler host)
 
@@ -93,10 +106,20 @@ each `(column, fp)` in `cp.fields`, emit an entry merging `fp`'s survivorship wi
 SP2 lookup for that column (defaults `[]`/`False` when the column has no SP2 lineage —
 e.g. an untransformed column). Entry order: cluster order, then `cp.fields` order.
 
+**Join-key limitation (documented, honest):** the join matches goldenmatch's golden
+column names (post-Flow) to SP2's IR column names. If Flow **renamed** or **split** a
+column (`name` → `first_name`/`last_name`), the golden column won't match an SP2 IR
+column, so the entry carries empty `checks`/`transforms` (`blocking_key=False`) — the
+pre-match half is honestly absent for exactly the columns Flow reshaped most. SP1's IR op
+set has no column-creating op today, so in practice this is limited to explicit split/
+rename configs; note it as a known gap rather than silently implying full coverage.
+
 - `golden_provenance is None` → `{"entries": [], "notes": ["survivorship inactive — use
   field_lineage(compiled) for the plan-only view"]}`.
-- `format_end_to_end(result) -> str` — host presentation, one line per entry, e.g.
-  `cluster 1 email = 'j@x.com' (row 24 via most_complete); pre-match transforms[email_normalize], scorer-input`.
+- `format_end_to_end(result) -> str` — host presentation, one line per entry. The
+  `strategy` is whatever survivorship strategy actually won (a survivorship-active one,
+  e.g. a conditional/group rule — NOT `most_complete`, which is inactive), e.g.
+  `cluster 1 email = 'j@x.com' (row 24 via conditional:corporate_domain); pre-match transforms[email_normalize], scorer-input`.
 
 `ClusterProvenance`/`FieldProvenance` are dataclasses; the stitch reads them directly
 (in-process). No serialization needed; goldenmatch's `_serialize_provenance` is available
@@ -120,13 +143,20 @@ if a caller wants JSON.
   exactly one entry combining both halves (`source_row_id=24` AND `transforms=[...]`).
   And `golden_provenance=None` → `entries:[]` + the note.
 - **`format_end_to_end`** unit (structured → expected string).
-- **Real-pipeline proof** (box): a pipeline **with survivorship rules** so
-  `golden_provenance` populates — `compile_and_run` the full `load→check→flow→match`,
-  run Part-A surfacing (call `golden_provenance_for_run` with the run's frame/clusters/
-  rules), stitch, and assert a golden field's entry carries **both** `source_row_id`
-  (goldenmatch) **and** the `email` `transforms` (SP2). If standing up a survivorship
-  config on a tiny fixture proves heavy, the unit test carries the join proof and the
-  real-pipeline test asserts Part-A produces a non-`None` provenance + a non-empty stitch.
+- **Real-pipeline proof** (box): a pipeline with an explicit **survivorship-ACTIVE**
+  golden-rules config so `golden_provenance` populates. The config MUST trip
+  `_survivorship_active` — i.e. `golden_rules` with `field_groups`, OR a list-form
+  (conditional) `field_rules`, OR a rule carrying `when`/`validate_with`. A plain
+  `most_complete` / dict `field_rules` will NOT (→ `None`). Pass it as the explicit match
+  stage config (`StageSpec(use="goldenmatch.dedupe", config=<GoldenMatchConfig with
+  golden_rules>)`). Then `compile_and_run`, run Part-A surfacing (via `result.dupes` +
+  `clusters` + `result.config.golden_rules`), stitch, and assert a golden field's entry
+  carries **both** `source_row_id` (goldenmatch) **and** the `email` `transforms` (SP2).
+  **The unit stitch test is the PRIMARY join proof** (deterministic, synthetic
+  provenance); the real-pipeline test's job is to prove Part-A surfacing yields non-`None`
+  provenance + a non-empty stitch on a genuinely-active config — if the tiny-fixture
+  survivorship setup is fiddly, keep the real-pipeline assertion to "non-None + stitched",
+  not a specific survivor value.
 
 ## Rollout
 
