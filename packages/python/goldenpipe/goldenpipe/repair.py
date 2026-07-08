@@ -22,6 +22,12 @@ def _is_alnum_upper(c: str) -> bool:
 def _all(s: str, pred) -> bool:
     return len(s) > 0 and all(pred(c) for c in s)
 
+def _ascii_lower(s: str) -> str:
+    return "".join(chr(ord(c) + 32) if "A" <= c <= "Z" else c for c in s)
+
+def _is_ascii_ws(c: str) -> bool:
+    return c in " \t\n\r\f\v"
+
 # value predicates (detection shape, not full validation)
 def _v_cusip(s: str) -> bool:
     return len(s) == 9 and _all(s, _is_alnum_upper)
@@ -89,8 +95,8 @@ _DETECTORS = [
 
 
 def fine_type(name: str, samples: list[str]) -> str | None:
-    lname = name.lower()
-    nonempty = [s for s in samples if s and s.strip()]
+    lname = _ascii_lower(name)
+    nonempty = [s for s in samples if any(not _is_ascii_ws(c) for c in s)]
     if not nonempty:
         return None
     for tag, hints, pred in _DETECTORS:
