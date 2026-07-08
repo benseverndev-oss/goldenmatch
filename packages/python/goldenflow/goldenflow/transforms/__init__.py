@@ -26,6 +26,12 @@ class TransformInfo:
     # scalar-applied column is byte-identical to the Polars engine. `None` = no
     # Polars-free path yet (the transform stays on the Polars engine).
     scalar: Callable[[str | None], object] | None = None
+    # Phase 4d dtype-egress: the value dtype the ``scalar`` returns, so the columnar
+    # engine can (a) egress a correctly-typed column (str/int/bool/float) and (b)
+    # format manifest samples + affected counts like Polars' ``cast(Utf8)`` (a bool
+    # renders "true"/"false", an int str(int)). Only ``str`` fit the pre-egress
+    # mechanism; ``int``/``bool``/``float`` need this tag.
+    scalar_dtype: Literal["str", "int", "bool", "float"] = "str"
 
 
 def register_transform(
@@ -36,6 +42,7 @@ def register_transform(
     priority: int = 50,
     mode: Literal["expr", "series", "dataframe"] = "series",
     scalar: Callable[[str | None], object] | None = None,
+    scalar_dtype: Literal["str", "int", "bool", "float"] = "str",
 ) -> Callable:
     """Decorator to register a transform function."""
 
@@ -48,6 +55,7 @@ def register_transform(
             priority=priority,
             mode=mode,
             scalar=scalar,
+            scalar_dtype=scalar_dtype,
         )
         return func
 

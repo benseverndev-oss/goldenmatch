@@ -73,7 +73,8 @@ def _category_normalize_key_series(series: pl.Series) -> pl.Series:
 
 
 @register_transform(
-    name="boolean_normalize", input_types=["boolean", "string"], auto_apply=False, priority=50, mode="series"
+    name="boolean_normalize", input_types=["boolean", "string"], auto_apply=False, priority=50,
+    mode="series", scalar=_boolean_normalize_py, scalar_dtype="bool",
 )
 def boolean_normalize(series: pl.Series) -> pl.Series:
     """Parse loose boolean-ish strings (yes/no/y/n/1/0/true/false/t/f).
