@@ -1,0 +1,126 @@
+---
+title: "Document ingest"
+description: "Run GoldenMatch on unstructured input — extract matchable records from PDFs and images, then dedupe them."
+keywords: ["document ingest", "pdf", "image", "unstructured", "extraction", "vlm", "ocr", "records"]
+---
+
+GoldenMatch does not require structured data. Point it at a pile of PDFs or images
+(business cards, intake forms, invoices, receipts, scanned directories) and it extracts
+structured records against a schema you control, then hands them straight to the ER
+pipeline. One vision call per page classifies and extracts: a form or card becomes one
+row, a table becomes N rows.
+
+## Install
+
+Document ingest is an optional extra (adds `pymupdf` + `Pillow` for PDF rasterization and
+image loading):
+
+```bash
+pip install "goldenmatch[documents]"
+```
+
+The default backend calls an OpenAI vision model (`gpt-4o`). Set an API key — the personal
+key is preferred so a work-scoped key is never used by accident:
+
+```bash
+export OPENAI_API_KEY_PERSONAL=sk-...   # or OPENAI_API_KEY
+```
+
+`import goldenmatch.documents` and the MCP server both degrade gracefully when the extra or
+the key is absent — nothing else in GoldenMatch requires them.
+
+## The two-step workflow
+
+You own the target schema. The recommended flow is: let a vision model **propose** a schema
+from one representative document, **review** it, then **ingest** the whole batch against it.
+
+### Python
+
+```python
+from goldenmatch.documents import ingest_documents
+from goldenmatch.documents.suggest import suggest_schema_from_file
+from goldenmatch import dedupe_df
+
+# 1. Propose a schema from a sample document (review before trusting it).
+schema = suggest_schema_from_file("samples/card.png")
+
+# 2. Extract every document into one Polars DataFrame.
+df = ingest_documents(["cards/*.png", "forms/intake.pdf"], schema)
+
+# 3. Hand the records to the ER pipeline. Exclude the provenance sidecars so they
+#    are never treated as match fields.
+result = dedupe_df(
+    df,
+    exclude_columns=["_source_file", "_source_page", "_extract_confidence"],
+)
+```
+
+Every extracted row carries three sidecar columns: `_source_file`, `_source_page`, and
+`_extract_confidence`. Pass `return_report=True` to `ingest_documents` to also get an
+`IngestReport` (`n_files`, `n_rows`, and per-file `errors` — a bad file is recorded and the
+batch continues rather than aborting).
+
+You can define a schema by hand instead of suggesting one:
+
+```python
+from goldenmatch.documents import TargetSchema, Field
+
+schema = TargetSchema([
+    Field("full_name"),
+    Field("email", kind="email"),
+    Field("phone", kind="phone"),
+    Field("company"),
+])
+```
+
+`kind` (`text` | `email` | `phone` | `address` | `date` | `number`) and an optional `hint`
+guide the extractor. Fields absent from a given document come back null.
+
+### CLI
+
+```bash
+# Propose a schema, write it for review
+goldenmatch ingest-docs suggest-schema samples/card.png --out schema.json
+
+# Ingest documents against the reviewed schema
+goldenmatch ingest-docs run cards/*.png --schema schema.json --out records.csv
+```
+
+`run` writes `.csv` or `.parquet`. Both commands take `--backend` (default `vlm`) and
+`--model` (default `gpt-4o`).
+
+## Other surfaces
+
+The same capability is exposed everywhere GoldenMatch runs:
+
+| Surface | Entry points |
+| --- | --- |
+| **MCP** (Claude Desktop / Code) | tools `documents_suggest_schema`, `documents_ingest` |
+| **A2A** (agent-to-agent) | skills `documents_suggest_schema`, `documents_ingest` |
+| **REST** | `POST /api/v1/documents/suggest-schema`, `POST /api/v1/documents/ingest` |
+| **Web UI** | the `/documents` "Ingest" page — upload, AI-suggest a schema, edit it, extract, review + export |
+| **TypeScript** | the deterministic `documents-core` kernels (schema/parse/prompt/normalize) via `goldenmatch/core/documents-wasm`, byte-parity with Python |
+
+MCP, A2A, and REST are **path-based** (the caller passes server-accessible file paths or, for
+REST/Web, uploads); the Web UI handles browser uploads.
+
+## How it works
+
+- **VLM-first, one call per page.** A single vision call classifies the document and extracts
+  fields in one shot. The backend is a pluggable `Extractor` seam behind an injectable
+  transport, so the stack is fully offline-testable (swap in a `FakeExtractor`).
+- **Rust kernel = single source of truth.** Schema validation, response parsing, prompt
+  building, and record normalization live in the `documents-core` Rust crate, bound to Python
+  (native) and TypeScript (WASM). Pure-Python is a byte-identical fallback.
+- **Tables fan out.** A document containing several records (a roster, a directory) yields one
+  row per record; a single-entity document (a card, a form) yields one row.
+
+## Notes and limits
+
+- Extraction quality tracks the vision model. On clean documents it is near-perfect and never
+  fabricates a value for a field that is absent; on genuinely hard inputs (unusual proper
+  nouns, heavy scan degradation) it can misread — those errors are the model's ceiling, not the
+  pipeline's.
+- `kind: date` / `kind: number` are advisory hints to the extractor, not post-hoc coercion.
+- Each page is one vision API call; cost and latency scale with page count. Ingest is
+  parallel-safe across files.

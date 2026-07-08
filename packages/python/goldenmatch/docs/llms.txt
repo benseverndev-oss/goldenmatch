@@ -16,9 +16,13 @@
 
 Every interface above returns the same JSON shape from `goldenmatch.web.controller_telemetry.serialize_telemetry`: `{stop_reason, health, scoring, blocking, cluster, column_priors, decisions, committed_matchkeys, negative_evidence}`. Write one parser, reuse across web / TUI / CLI / SQL / MCP / A2A / REST.
 
+## Document ingest (run on unstructured input)
+GoldenMatch doesn't require structured data. Extract matchable records from PDFs/images against a schema you control, then dedupe them: `suggest_schema_from_file(sample)` proposes a schema (review it), `ingest_documents(paths, schema)` returns a DataFrame -> `dedupe_df(df, exclude_columns=["_source_file","_source_page","_extract_confidence"])`. Python `from goldenmatch.documents import ingest_documents`; CLI `goldenmatch ingest-docs {suggest-schema, run}`; MCP tools + A2A skills `documents_suggest_schema` / `documents_ingest`; REST `POST /api/v1/documents/{suggest-schema, ingest}`; Web UI `/documents`. Needs `goldenmatch[documents]` + an OpenAI vision key (`OPENAI_API_KEY_PERSONAL`, default `gpt-4o`). Docs: https://docs.bensevern.dev/goldenmatch/documents
+
 ## Install
 - `pip install goldenmatch` (native acceleration ships by default on common platforms)
 - TypeScript: `npm install goldenmatch`
+- Document ingest (PDF/image -> records): `pip install goldenmatch[documents]`
 - Quality scanning: `pip install goldenmatch[quality]`
 - Data transforms: `pip install goldenmatch[transform]`
 - Embeddings: `pip install goldenmatch[embeddings]`

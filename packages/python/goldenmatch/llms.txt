@@ -15,8 +15,12 @@ Zero-config gets good results and returns the config it chose; the healer (`revi
 - REST API: `goldenmatch serve` on port 8000
 - SQL: Postgres (pgrx extension) + DuckDB UDFs — dedupe / match / score / auto-config + telemetry / identity graph
 
+## Document ingest (run on unstructured input)
+GoldenMatch doesn't require structured data. Extract matchable records from PDFs/images (cards, forms, invoices, scanned directories) against a schema you control, then dedupe them. Two-step: `suggest_schema_from_file(sample)` proposes a schema (review it), `ingest_documents(paths, schema)` returns a DataFrame -> `dedupe_df(df, exclude_columns=["_source_file","_source_page","_extract_confidence"])`. Python: `from goldenmatch.documents import ingest_documents`. CLI: `goldenmatch ingest-docs {suggest-schema, run}`. MCP tools + A2A skills: `documents_suggest_schema`, `documents_ingest`. REST: `POST /api/v1/documents/{suggest-schema, ingest}`. Web UI: `/documents`. Needs `goldenmatch[documents]` + an OpenAI vision key (`OPENAI_API_KEY_PERSONAL`; default `gpt-4o`). Docs: https://docs.bensevern.dev/goldenmatch/documents
+
 ## Install
 - `pip install goldenmatch` (native acceleration ships by default on common platforms)
+- Document ingest (PDF/image -> records): `pip install goldenmatch[documents]`
 - TypeScript: `npm install goldenmatch`
 - Quality scanning: `pip install goldenmatch[quality]`
 - Data transforms: `pip install goldenmatch[transform]`

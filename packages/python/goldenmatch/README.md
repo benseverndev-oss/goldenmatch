@@ -84,12 +84,34 @@ Zero-config gets you most of the way in one pass; the healing loop closes the ga
 
 ## Why GoldenMatch?
 
+- **Runs on unstructured input** — extract matchable records from PDFs and images (cards, forms, invoices, scanned directories) against a schema you control, then dedupe them. `pip install goldenmatch[documents]`; see [Document ingest](https://docs.bensevern.dev/goldenmatch/documents).
 - **Zero-config that beats hand-tuned** — the introspective controller auto-detects columns, picks scorers, iterates on complexity signals, and converges on a defensible config. No training data, no rules to write. (v1.8.0)
 - **96.4% F1 zero-config** on DBLP-ACM (hand-tuned ceiling: 91.8%). [DQBench ER score: 91.04 no-LLM](https://github.com/benseverndev-oss/dqbench)
 - **Learning Memory** — corrections from stewards, unmerges, and LLM votes persist to disk and apply automatically on the next run; survives row reorders via record-hash re-anchoring (v1.6.0)
 - **Privacy-preserving** — match across organizations without sharing raw data (PPRL, 92.4% F1)
 - **68 MCP tools** — use from Claude Desktop, Claude Code, or any AI assistant ([Smithery](https://smithery.ai/servers/benzsevern/goldenmatch))
 - **Production-ready** — Postgres sync, daemon mode, lineage tracking, review queues
+
+### Run on unstructured input (document ingest)
+
+GoldenMatch doesn't require structured data. Extract records from PDFs/images against a
+schema you control, then dedupe them (`pip install "goldenmatch[documents]"`, set
+`OPENAI_API_KEY_PERSONAL`):
+
+```python
+from goldenmatch.documents import ingest_documents
+from goldenmatch.documents.suggest import suggest_schema_from_file
+from goldenmatch import dedupe_df
+
+schema = suggest_schema_from_file("samples/card.png")   # propose, then review
+df = ingest_documents(["cards/*.png", "forms/intake.pdf"], schema)
+result = dedupe_df(df, exclude_columns=["_source_file", "_source_page", "_extract_confidence"])
+```
+
+Also available as `goldenmatch ingest-docs {suggest-schema, run}` (CLI), the
+`documents_suggest_schema` / `documents_ingest` MCP tools and A2A skills,
+`POST /api/v1/documents/{suggest-schema, ingest}` (REST), and the `/documents` Web UI page.
+Full guide: [Document ingest](https://docs.bensevern.dev/goldenmatch/documents).
 
 ### Auto-config & scale safeguards
 
