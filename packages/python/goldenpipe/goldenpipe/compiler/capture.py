@@ -46,10 +46,39 @@ def capture_stage(planned, ctx, result):
         return "scan", {"columns": [{"column": c, "ops": by_col[c]} for c in order]}, resolved
 
     if name == "goldenmatch.dedupe":
-        concrete = dict(cfg) if cfg else _match_config_from_ctx(ctx)
-        return "match", concrete, resolved
+        raw = dict(cfg) if cfg else _match_config_from_ctx(ctx)
+        return "match", _normalize_match_config(raw), resolved
 
     return "barrier", dict(cfg), False
+
+
+def _normalize_match_config(cfg: dict) -> dict:
+    """Flatten a GoldenMatchConfig-shaped dict into {keys, scorer:{columns}} — the
+    column names the IR's Partition/PairScore need. Blocking column names come from
+    blocking.keys/passes/sub_block_keys[].fields (union); scorer column names from
+    matchkeys[].fields[].field (+ .columns for record_embedding)."""
+    blocking = cfg.get("blocking") or {}
+    key_cols: set[str] = set()
+    for group in ("keys", "passes", "sub_block_keys"):
+        for bk in (blocking.get(group) or []):
+            for f in (bk.get("fields") or []):
+                if isinstance(f, str):
+                    key_cols.add(f)
+    scorer_cols: list[str] = []
+    seen: set[str] = set()
+    for mk in (cfg.get("matchkeys") or []):
+        for f in (mk.get("fields") or []):
+            refs = []
+            if f.get("field"):
+                refs.append(f["field"])
+            refs.extend(f.get("columns") or [])
+            for c in refs:
+                # skip the record_embedding sentinel (field="__record__", not a real column)
+                if c == "__record__" or c in seen:
+                    continue
+                seen.add(c)
+                scorer_cols.append(c)
+    return {"keys": sorted(key_cols), "scorer": {"columns": scorer_cols}}
 
 
 def _profile_columns(profile) -> list[str]:

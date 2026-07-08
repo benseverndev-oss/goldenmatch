@@ -226,3 +226,8 @@ def lower_json(s: str) -> str:
         a["origin_stage"], a["kind_hint"], a.get("concrete", {}), a.get("next_id", 0), a.get("resolved", False)
     )
     return json.dumps({"nodes": nodes, "next_id": nid})
+
+
+def provenance_json(s: str) -> str:
+    from goldenpipe.compiler.provenance import provenance
+    return json.dumps(provenance(json.loads(s)))

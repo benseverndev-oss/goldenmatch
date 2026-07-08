@@ -170,6 +170,14 @@ pub fn lower_json(input: &str) -> String {
     serde_json::json!({ "nodes": nodes, "next_id": next_id }).to_string()
 }
 
+pub fn provenance_json(input: &str) -> String {
+    let compiled: Value = match serde_json::from_str(input) {
+        Ok(v) => v,
+        Err(e) => return parse_err(e),
+    };
+    crate::provenance::provenance(&compiled).to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

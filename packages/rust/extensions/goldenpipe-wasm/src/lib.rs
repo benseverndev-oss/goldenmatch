@@ -64,4 +64,9 @@ mod wasm {
     pub fn lower_json(input: &str) -> String {
         json::lower_json(input)
     }
+
+    #[wasm_bindgen]
+    pub fn provenance_json(input: &str) -> String {
+        json::provenance_json(input)
+    }
 }

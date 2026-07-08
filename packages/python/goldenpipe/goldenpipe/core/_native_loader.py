@@ -105,3 +105,7 @@ def build_repair_plan_json(input: str) -> str:
 
 def lower_json(input: str) -> str:
     return _native.lower_json(input)
+
+
+def provenance_json(input: str) -> str:
+    return _native.provenance_json(input)
