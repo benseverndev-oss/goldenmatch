@@ -60,24 +60,43 @@ def match_fused_ready(config: Any) -> bool:
         return False
     if getattr(b, "ann_column", None):
         return False
+    return _covered_weighted_matchkey(config) is not None
 
+
+def _covered_weighted_matchkey(config: Any) -> Any | None:
+    """The single covered `weighted` matchkey, or None. Covered = one weighted
+    matchkey, a threshold, every field named + on a covered scorer, no NE."""
     get_mks = getattr(config, "get_matchkeys", None)
     mks = get_mks() if callable(get_mks) else []
     if len(mks) != 1:
-        return False
+        return None
     mk = mks[0]
     if getattr(mk, "type", None) != "weighted":
-        return False
+        return None
     if getattr(mk, "negative_evidence", None):
-        return False
+        return None
     if mk.threshold is None or not mk.fields:
-        return False
+        return None
     for f in mk.fields:
-        if not f.field:
-            return False
-        if f.scorer not in _FUSED_SCORER_IDS:
-            return False
-    return True
+        if not f.field or f.scorer not in _FUSED_SCORER_IDS:
+            return None
+    return mk
+
+
+def match_fused_multipass_ready(config: Any) -> bool:
+    """Covered boundary for the fused MULTI-PASS blocking path: `multi_pass`
+    blocking with >=1 pass (each a real blocking key) + one covered weighted
+    matchkey. Each pass is run as a single-key fused match; their per-pass
+    clusters are union-find-merged (CC of the pass-pair union)."""
+    b = getattr(config, "blocking", None)
+    if b is None or getattr(b, "strategy", None) != "multi_pass":
+        return False
+    if getattr(b, "ann_column", None):
+        return False
+    passes = getattr(b, "passes", None) or []
+    if not passes or any(not getattr(p, "fields", None) for p in passes):
+        return False
+    return _covered_weighted_matchkey(config) is not None
 
 
 def _match_fused_symbol() -> Any | None:
@@ -143,8 +162,12 @@ def run_match_fused_arrow(
     threshold = float(mk.threshold)
 
     clusters = fn(row_ids, key_arrs, score_arrs, scorer_ids, weights, total_weight, threshold)
+    return _clusters_to_table(clusters)
 
-    # clusters: list[list[int]] connected components (incl singletons).
+
+def _clusters_to_table(clusters: Any) -> Any:
+    """list[list[int]] connected components (incl singletons) -> pyarrow Table
+    (__row_id__, __cluster_id__), one row per record, stable id per component."""
     rid: list[int] = []
     cid: list[int] = []
     for c_id, comp in enumerate(clusters):
@@ -157,3 +180,157 @@ def run_match_fused_arrow(
             "__cluster_id__": pa.array(cid, type=pa.int64()),
         }
     )
+
+
+def run_match_fused_multipass_arrow(
+    columns: Mapping[str, Any],
+    config: Any,
+    n_rows: int | None = None,
+) -> Any | None:
+    """Fused multi-pass blocking: run each pass as a single-key fused match, then
+    union-find-merge the per-pass clusters. Byte-parity with the pipeline's
+    multi-pass path: the final partition is the connected components of the union
+    of all passes' candidate pairs, which equals merging each pass's per-pass
+    clusters (every member of a pass-cluster is transitively connected). Returns a
+    `(__row_id__, __cluster_id__)` Table, or None if uncovered / native absent.
+    """
+    from goldenmatch.config.schemas import BlockingConfig, GoldenMatchConfig
+
+    if _match_fused_symbol() is None or not match_fused_multipass_ready(config):
+        return None
+
+    n = n_rows if n_rows is not None else len(next(iter(columns.values())))
+    parent = list(range(n))
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a: int, b: int) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    mks = config.get_matchkeys()
+    for pass_cfg in config.blocking.passes:
+        single = GoldenMatchConfig(
+            blocking=BlockingConfig(strategy="static", keys=[pass_cfg]),
+            matchkeys=mks,
+        )
+        tbl = run_match_fused_arrow(columns, single, n_rows=n)
+        if tbl is None:
+            continue
+        groups: dict[int, list[int]] = {}
+        for r, c in zip(
+            tbl.column("__row_id__").to_pylist(), tbl.column("__cluster_id__").to_pylist()
+        ):
+            groups.setdefault(c, []).append(r)
+        for members in groups.values():
+            for m in members[1:]:
+                union(members[0], m)
+
+    comps: dict[int, list[int]] = {}
+    for i in range(n):
+        comps.setdefault(find(i), []).append(i)
+    return _clusters_to_table(list(comps.values()))
+
+
+def match_fused_fs_ready(config: Any) -> bool:
+    """Covered boundary for the fused Fellegi-Sunter (probabilistic) path.
+
+    Covered: `static` single-key blocking + exactly one `probabilistic` matchkey
+    whose fields all use an FS-native scorer (`_NATIVE_FS_SCORER_IDS`). Transforms
+    covered (derived host-side). `run_match_fused_fs_arrow` takes a PRE-TRAINED
+    `EMResult` — training is the caller's O(n) model fit, unchanged.
+    """
+    b = getattr(config, "blocking", None)
+    if b is None or getattr(b, "strategy", "static") != "static":
+        return False
+    keys = getattr(b, "keys", None) or []
+    if len(keys) != 1 or getattr(b, "ann_column", None):
+        return False
+    get_mks = getattr(config, "get_matchkeys", None)
+    mks = get_mks() if callable(get_mks) else []
+    if len(mks) != 1 or getattr(mks[0], "type", None) != "probabilistic" or not mks[0].fields:
+        return False
+    from goldenmatch.core.probabilistic import _NATIVE_FS_SCORER_IDS
+
+    return all(f.field and f.scorer in _NATIVE_FS_SCORER_IDS for f in mks[0].fields)
+
+
+def _match_fused_fs_symbol() -> Any | None:
+    try:
+        return getattr(native_module(), "match_fused_fs", None)
+    except Exception:
+        return None
+
+
+def run_match_fused_fs_arrow(
+    columns: Mapping[str, Any],
+    config: Any,
+    em_result: Any,
+    n_rows: int | None = None,
+) -> Any | None:
+    """Fused Fellegi-Sunter match over Arrow columns, given a trained `EMResult`.
+
+    Byte-parity by construction: the block key is derived via
+    `_build_block_key_expr`, the score columns via `_field_values_for_block`, and
+    the FS kernel args (levels/partial_thresholds/match_weights/calibration/
+    thresholds) are assembled EXACTLY as `score_probabilistic_native` does — so
+    the fused kernel scores identically to the pipeline's native FS block scorer.
+    Returns a `(__row_id__, __cluster_id__)` Table, or None if uncovered / native
+    absent.
+    """
+    import polars as pl
+
+    from goldenmatch.core.blocker import _build_block_key_expr
+    from goldenmatch.core.probabilistic import (
+        _NATIVE_FS_SCORER_IDS,
+        _field_values_for_block,
+        _fs_calibration_mode,
+        compute_thresholds,
+        prior_weight,
+    )
+
+    fn = _match_fused_fs_symbol()
+    if fn is None or not match_fused_fs_ready(config):
+        return None
+
+    key_cfg = config.blocking.keys[0]
+    mk = config.get_matchkeys()[0]
+    src_cols = list(dict.fromkeys([*key_cfg.fields, *[f.field for f in mk.fields]]))
+    n = n_rows if n_rows is not None else len(columns[src_cols[0]])
+    frame = pl.DataFrame({c: columns[c] for c in src_cols}).cast(pl.Utf8)
+
+    block_key = (
+        frame.lazy().select(_build_block_key_expr(key_cfg)).collect().get_column("__block_key__")
+    )
+    key_arrs = [block_key.to_arrow()]
+
+    # FS kernel args — mirrors score_probabilistic_native exactly.
+    calibrated = _fs_calibration_mode() == "posterior"
+    prior_w = prior_weight(em_result.proportion_matched) if calibrated else 0.0
+    max_w = sum(max(em_result.match_weights[f.field]) for f in mk.fields)
+    min_w = sum(min(em_result.match_weights[f.field]) for f in mk.fields)
+    weight_range = max_w - min_w
+    if mk.link_threshold is not None:
+        link_threshold = float(mk.link_threshold)
+    else:
+        link_threshold, _ = compute_thresholds(em_result, calibrated=calibrated)
+    scorer_ids = [_NATIVE_FS_SCORER_IDS[f.scorer] for f in mk.fields]
+    levels = [int(f.levels) for f in mk.fields]
+    partials = [float(f.partial_threshold) for f in mk.fields]
+    weights = [[float(w) for w in em_result.match_weights[f.field]] for f in mk.fields]
+    score_arrs = [
+        pl.Series(f.field, _field_values_for_block(frame, f, n), dtype=pl.Utf8).to_arrow()
+        for f in mk.fields
+    ]
+
+    row_ids = pa.array(range(n), type=pa.int64())
+    clusters = fn(
+        row_ids, key_arrs, score_arrs, scorer_ids, levels, partials, weights,
+        calibrated, prior_w, min_w, weight_range, link_threshold,
+    )
+    return _clusters_to_table(clusters)
