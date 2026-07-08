@@ -4,6 +4,18 @@ All notable changes to golden-suite are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic
 versioning.
 
+## [0.1.9] - 2026-07-08
+
+### Changed
+- Bumped the goldenflow floor to **`goldenflow>=2.0.0`** (was `>=1.17.0`) and the
+  goldenflow-native floor to **`goldenflow-native>=0.26.0`** (was `>=0.24.0`), per the
+  lockstep policy. goldenflow 2.0.0 completes the Polars eviction: **Polars is no longer a
+  base dependency** — `pip install goldenflow` runs Polars-free by default on
+  goldenflow-native (now a base dep of goldenflow), and Polars moved to the optional
+  `goldenflow[polars]` backend. All 113 transforms + CSV/Parquet/Excel/DB read + zero-config
+  run without Polars. goldenflow-native 0.26.0 carries the full columnar surface
+  (`format_f64` + the numeric-input `AsFloat` parser).
+
 ## [0.1.8] - 2026-07-07
 
 ### Changed
