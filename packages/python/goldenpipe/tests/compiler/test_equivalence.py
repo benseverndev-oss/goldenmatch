@@ -121,9 +121,25 @@ def _norm_value(key: str, value):
         return _strip_timing(dict(value))
     if key == "findings":
         return _norm_findings(value)
-    # clusters (dict) and profile (DatasetProfile with a real __eq__) are already
-    # deterministic and directly comparable.
+    if key == "clusters":
+        return _norm_clusters(value)
+    # profile (DatasetProfile with a real __eq__) is directly comparable.
     return value
+
+
+def _norm_clusters(clusters: dict) -> dict:
+    """Sort each cluster's set-like `members` list. Membership (the partition) is
+    deterministic, but intra-cluster member ORDER is not stable across two independent
+    goldenmatch runs on Linux (hash/set iteration) — Windows happened to be stable.
+    Sorting makes the comparison test the partition, not incidental order."""
+    out = {}
+    for cid, c in clusters.items():
+        cc = dict(c)
+        m = cc.get("members")
+        if isinstance(m, list):
+            cc["members"] = sorted(m)
+        out[cid] = cc
+    return out
 
 
 def _snapshot(ctx, keys) -> dict:
