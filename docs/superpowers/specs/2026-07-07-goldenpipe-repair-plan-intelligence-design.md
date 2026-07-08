@@ -2,7 +2,8 @@
 
 **Date:** 2026-07-07
 **Status:** Approved (brainstorming), pending implementation plan
-**Scope:** Phase 1 (advisory). Phase 2 (active config-injection) is designed-for but out of scope here.
+**Scope:** Phase 1 (advisory, with a value-level fine-typer). Phase 2 (active
+config-injection) is designed-for but out of scope here.
 
 ## Goal
 
@@ -23,31 +24,56 @@ a `future_dated` finding on a date column suggests `date_validate`; a
   changes **zero executed stages**. A pipeline's output is byte-identical
   whether or not repair-planning runs.
 
-## Approach (chosen: A)
+## Approach (chosen: A, with an in-kernel fine-typer)
 
 A static `(check, type_tag) -> [transforms]` table compiled into the kernel
-(exactly how decision rules already live there). A new pure kernel function does
-the lookups; the host resolves per-column types from machinery it already runs
-and passes them in as plain data. The kernel never sees a DataFrame or a
-classifier.
+(exactly how decision rules already live there). A new pure kernel function
+resolves each column's `type_tag` and does the lookups.
+
+Resolving `type_tag` needs a value-level signal: the domain packs and the coarse
+`ColumnContext` classifier cannot tell an IBAN from a routing number from a
+SWIFT code (the goldencheck-types finance pack groups all of these under coarse
+type keys like `routing_number`, and `iban` is not even a hint). Distinguishing
+them requires looking at the column's values. Because column values are just
+strings, the fine-typer runs **inside the kernel** (regex + structural checks
+are byte-identical across languages); the host's only new job is to **sample**
+values from the DataFrame it already holds and pass them in as JSON strings.
 
 Rejected alternatives:
 - **B — Python-only rule in `decisions.py`.** Fastest, but Python-only; TS/WASM
   would never get it. Violates the cross-surface constraint.
 - **C — repairs co-located in domain-pack YAML.** Elegant co-location and the
   packs already sync cross-surface, but only covers columns that matched a
-  domain type (coarse `date`/`email` on unmatched columns get nothing) and
-  bloats the pack schema. Worth revisiting for fine types later.
+  domain type, the pack type keys are too coarse to pick a specific validator
+  (`routing_number` covers routing/aba/swift/bic), and it bloats the pack
+  schema.
+- **Host-side fine-typer.** Would duplicate the regex/check-digit logic per
+  language and require its own parity gate. Keeping the fine-typer in the kernel
+  gives one implementation and one parity gate.
 
 ## Architecture
 
 ### New kernel function
 
 ```
-build_repair_plan(findings: [Finding], column_types: {col: TypeTag}) -> RepairPlan
+build_repair_plan(
+    findings: [Finding],
+    columns:  [ColumnInput],
+) -> RepairPlan
 ```
 
 Pure, deterministic, no I/O. Same functional shape as `apply_decision`.
+
+```
+ColumnInput { name: str, coarse_type: str, samples: [str] }   // samples: <=20 non-null, deterministic first-N
+Finding     { column, check, message, severity }              // existing shape from artifacts["findings"]
+```
+
+Per column the kernel: runs the fine-typer over `samples` -> a fine `type_tag`
+if a detector fires, else falls back to `coarse_type`, else omits the column (no
+tag -> only `*` wildcard checks can match). Then it does the `(check, type_tag)`
+lookups against the static table. All classification and mapping live in the
+kernel — one call, one parity gate.
 
 ### Data model (new serde structs in `goldenpipe-core/src/model.rs`, mirrored Python/TS)
 
@@ -58,9 +84,6 @@ RepairItem  { column, check, type_tag,
               reason }                        // human string, from the finding message
 ```
 
-`Finding` reuses the existing shape already in `artifacts["findings"]`:
-`{column, check, message, severity}`.
-
 `RepairPlan` is an **artifact**, never a `Decision`. It is attached to
 `ctx.artifacts["repair_plan"]`; it does not skip, insert, or abort any stage.
 The empty inserted-stage `config` seam in `router.rs` (an inserted `PlannedSpec`
@@ -70,10 +93,51 @@ suggested transforms — Phase 1 leaves it untouched.
 ### Data flow
 
 1. GoldenCheck scan -> `findings` (already in `artifacts["findings"]`).
-2. Host resolves `column_types` (see Type resolution).
-3. Host calls `build_repair_plan(findings, column_types)`.
-4. Kernel does `(check, type_tag)` lookups; emits `RepairPlan`.
+2. Host builds `ColumnInput`s: `name` and `coarse_type` from the existing
+   `ColumnContext`, `samples` = up to 20 deterministic first-N non-null values
+   from the DataFrame (cast to string).
+3. Host calls `build_repair_plan(findings, columns)`.
+4. Kernel fine-types each column, then does `(check, type_tag)` lookups; emits
+   `RepairPlan`.
 5. Host stores the artifact and appends one reasoning line per item.
+
+## The fine-typer (in-kernel)
+
+Per fine tag, a detector of the form `(name-hint, value-regex, optional
+check-digit)`. Value structure is the disambiguator; the name-hint gates the
+tags whose value shape is ambiguous with other fixed-length numeric ids.
+Detection stays structural (lean regex) — full check-digit validation is the
+GoldenFlow *validate* transform's job — **except** `credit_card`, where a Luhn
+pass is the disambiguator against arbitrary 13-19 digit numbers.
+
+A detector fires only if the majority of non-null samples match its value
+pattern (guards against a single coincidental match). Detectors are tried in a
+fixed order; first firing tag wins.
+
+### Fine vocabulary (v1)
+
+Value-distinctive (name-hint optional):
+
+| tag | value structure (detection, not full validation) |
+|---|---|
+| `iban` | `^[A-Z]{2}[0-9]{2}[A-Z0-9]{11,30}$`, length 15-34 |
+| `isin` | `^[A-Z]{2}[0-9A-Z]{9}[0-9]$` (12 chars) |
+| `swift` | `^[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?$` (8 or 11) |
+| `credit_card` | `^\d{13,19}$` (strip spaces/dashes) **and** Luhn passes |
+
+Name-hint required (value shape alone is ambiguous):
+
+| tag | name-hint (any of) | value structure |
+|---|---|---|
+| `cusip` | cusip | `^[0-9A-Z]{9}$` |
+| `npi` | npi | `^\d{10}$` |
+| `imei` | imei, imsi | `^\d{15}$` |
+| `ean` | ean, gtin, barcode | `^\d{8}$` or `^\d{13}$` |
+| `isbn` | isbn | `^\d{9}[\dX]$` or `^\d{13}$` |
+| `aba_routing` | routing, aba | `^\d{9}$` |
+
+`vat` is dropped from v1 — country-specific formats are too fuzzy for a lean
+detector.
 
 ## The mapping table
 
@@ -81,7 +145,9 @@ Static kernel data: a list of `(check, type_tag) -> [transforms]`. Lookup tries
 the exact `(check, type)` first, then `(check, "*")` wildcard. Ordered,
 deterministic, first-match wins.
 
-### Starter coverage (v1)
+### Coverage (v1)
+
+Coarse rows (tag from `ColumnContext.coarse_type`):
 
 | check | type_tag | suggested transforms |
 |---|---|---|
@@ -96,30 +162,24 @@ deterministic, first-match wins.
 | `format_detection` | `phone` | `phone_validate` |
 | `pattern_consistency` | `phone` | `phone_national` |
 | `format_detection` | `zip` | `zip_normalize` |
-| `format_detection` | `iban` | `iban_validate` |
-| `pattern_consistency` | `iban` | `iban_validate` |
-| `format_detection` | `cusip` | `cusip_validate` |
-| `pattern_consistency` | `cusip` | `cusip_validate` |
-| `format_detection` | `isin` | `isin_validate` |
-| `pattern_consistency` | `isin` | `isin_validate` |
-| `format_detection` | `npi` | `npi_validate` |
-| `pattern_consistency` | `npi` | `npi_validate` |
-| `format_detection` | `imei` | `imei_validate` |
-| `pattern_consistency` | `imei` | `imei_validate` |
-| `format_detection` | `ean` | `ean_validate` |
-| `pattern_consistency` | `ean` | `ean_validate` |
-| `format_detection` | `isbn` | `isbn_validate` |
-| `pattern_consistency` | `isbn` | `isbn_validate` |
-| `format_detection` | `credit_card` | `luhn_validate` |
-| `pattern_consistency` | `credit_card` | `luhn_validate` |
-| `format_detection` | `aba_routing` | `aba_validate` |
-| `pattern_consistency` | `aba_routing` | `aba_validate` |
-| `format_detection` | `swift` | `swift_validate` |
-| `pattern_consistency` | `swift` | `swift_validate` |
-| `format_detection` | `vat` | `vat_validate` |
-| `pattern_consistency` | `vat` | `vat_validate` |
 
-Every transform above is verified to exist in the GoldenFlow registry.
+Fine rows (tag from the in-kernel fine-typer); both `format_detection` and
+`pattern_consistency` map to the type's validator:
+
+| type_tag | suggested transform |
+|---|---|
+| `iban` | `iban_validate` |
+| `isin` | `isin_validate` |
+| `swift` | `swift_validate` |
+| `cusip` | `cusip_validate` |
+| `npi` | `npi_validate` |
+| `imei` | `imei_validate` |
+| `ean` | `ean_validate` |
+| `isbn` | `isbn_validate` |
+| `credit_card` | `luhn_validate` |
+| `aba_routing` | `aba_validate` |
+
+Every transform named above is verified to exist in the GoldenFlow registry.
 
 ### No-map policy (explicit, not an error)
 
@@ -137,29 +197,27 @@ produce **no** `RepairItem`: `unique`, `key_uniqueness_loss`, `duplicate_rows`,
 call, not a mechanical repair. The table is pure data, so promoting any no-map
 check later is a one-line addition plus a golden vector.
 
-## Type resolution (host side)
-
-A small per-language helper `resolve_type_tags(contexts, detect_result) ->
-{col: TypeTag}`. This is the only piece outside the kernel, because it reuses
-per-language machinery. Priority:
-
-1. **Domain-pack fine type** when InferMap detect ran and the column matched a
-   pack type (`iban`, `npi`, `vin`, ...).
-2. else **coarse `ColumnContext.inferred_type`** (`email`, `name`, `date`,
-   `phone`, `zip`, ...).
-3. else **omit** the column — no tag means it can only match `*` wildcard checks
-   such as `encoding_detection`.
-
-The kernel receives only the resolved `{col: tag}` dict, so parity is preserved.
-
 ## Error handling
 
-- No findings, unknown checks/types, or all-no-map -> `RepairPlan{repairs: []}`.
+- No findings, unknown checks/types, all-no-map, or empty samples ->
+  `RepairPlan{repairs: []}`.
 - Never raises, never blocks the pipeline.
-- Unknown `check` or `type_tag` is a silent no-match (forward-compatible with new
-  checks and new domain packs), not an error.
+- Unknown `check` or `coarse_type` is a silent no-match (forward-compatible with
+  new checks and new domain packs), not an error.
+- A column whose samples fire no fine detector falls back to its coarse tag; a
+  column with no coarse tag and no fine match is omitted.
 - `reason` is built from the finding's own `message`, truncated to the existing
   80-char finding-message convention.
+
+## Privacy / cost of value sampling
+
+Sampled values (possibly PII, e.g. card numbers) cross the planner boundary.
+Mitigations:
+- It is an **in-process** call — the data is already in host memory; nothing is
+  serialized to disk or network.
+- Samples are bounded (<=20 non-null values per column, deterministic first-N).
+- The fine-typer never logs raw values — reasoning lines carry only the derived
+  `type_tag` and the finding's own message.
 
 ## Surfacing (Phase 1, minimal)
 
@@ -171,14 +229,18 @@ The kernel receives only the resolved `{col: tag}` dict, so parity is preserved.
 ## Testing
 
 - **Rust golden vectors** (`goldenpipe-core/tests/golden_vectors.rs`): canonical
-  `(findings, column_types)` inputs -> exact `RepairPlan` JSON. Cross-surface
-  source of truth.
+  `(findings, columns)` inputs -> exact `RepairPlan` JSON. Cross-surface source
+  of truth.
+- **Fine-typer matrix** (positive + negative per fine tag): an IBAN sample
+  classifies as `iban`; a 9-digit routing number does **not** classify as
+  `iban`; a bare unnamed 9-digit column stays coarse (no fine tag); a 16-digit
+  number that fails Luhn is **not** `credit_card`. Parity-gated.
 - **Python + TS parity**: the same fixtures through each surface, asserted
   byte-identical against the golden JSON, wired into the existing goldenpipe-core
   parity gate.
-- **Box-runnable Python** unit tests for `resolve_type_tags` (coarse fallback,
-  fine-type priority, omit-on-unknown) and `build_repair_plan` via the pure
-  Python path — no Rust build needed on the box.
+- **Box-runnable Python** unit tests for the sampling helper (bounded, first-N,
+  null-skipping) and `build_repair_plan` via the pure Python path — no Rust
+  build needed on the box.
 - **Empty-plan-when-unused** test proves the byte-identical-when-inactive
   guarantee (a pipeline with no findings, or only no-map findings, emits an empty
   plan and unchanged executed stages).
