@@ -78,20 +78,42 @@ kinds contribute a `PipelineNote` rather than erroring.
 
 ## Prerequisite — enrich the Match capture (fix SP1's placeholder)
 
-SP1 captured Match nodes as placeholders (`GoldenMatchConfig.model_dump()` did not map
-to `keys`/`scorer`, so `Partition.keys` was empty). For `blocking_key`/`scorer_input`
-to be real, `capture.py`'s Match branch must normalize the real `GoldenMatchConfig`
-into `{keys, scorer}`:
-- `keys` = the blocking key column names, from the config's `matchkeys` / `blocking`
-  fields.
-- `scorer` = the scorer spec with its referenced column names (best-effort from the
-  config; a coarse record is acceptable — provenance only needs the column refs).
+SP1 captured Match nodes as placeholders (`GoldenMatchConfig.model_dump()` has top-level
+`matchkeys`/`blocking`, NOT `keys`/`scorer`, so `lower`'s match branch produced an empty
+`Partition.keys`). For `blocking_key`/`scorer_input` to be real, `capture.py`'s Match
+branch normalizes the real `GoldenMatchConfig` into `{keys, scorer}` via **two distinct
+nested walks** (the column names are nested, not top-level):
+- **`keys` (→ Partition.keys) = the BLOCKING column names**, from `blocking.*`. Union
+  the `fields` lists across `blocking.keys[].fields` AND `blocking.passes[].fields`
+  (and `sub_block_keys[].fields` if present) — `multi_pass` (the default from
+  `_build_config_from_contexts`) puts recall columns in `passes`, so reading only
+  `blocking.keys` would miss later-pass columns. `BlockingKeyConfig.fields: list[str]`.
+- **`scorer` (→ PairScore.scorer refs) = the MATCHKEY column names**, from
+  `matchkeys[].fields[].field` (note the `.column` alias; `.columns` for
+  `record_embedding`). A coarse record naming the referenced columns is enough —
+  provenance only needs the column refs.
+- `method` (Connected) is deliberately left unset — `Connected` becomes a
+  `PipelineNote`, not a column-bearing lineage entry, so a null `method` is harmless.
 
 **Contained:** this changes only the *recorded IR node configs*, not execution. The
 SP1 equivalence gate compares *execution* artifacts (df/findings/profile/manifest/
-clusters/golden) — untouched. `lower`'s match branch already handles populated
-`keys`/`scorer` (the existing `lower.json` vectors cover it). So the enrichment cannot
-break the equivalence gate.
+clusters/golden) and asserts only Match node *kinds* present (never `Partition.keys`
+contents) — so `[] → real columns` cannot break it. `lower`'s match branch already
+handles populated `keys`/`scorer` (the existing `lower.json` vectors cover it), so no
+`lower` change and no vector change.
+
+**Fidelity honesty — provenance reflects the CONTEXTS path.** `capture.py` re-runs
+`_build_config_from_contexts(column_contexts, df)` to obtain the config. This equals
+what GoldenMatch actually executed ONLY on the **Priority-2 path** (the match adapter
+used the same contexts-derived config — `adapters/match.py`). If a run used Priority-1
+(explicit stage config) or Priority-3 (bare `_dedupe(df)` auto-configure), GoldenMatch
+chose blocking/matchkeys at *runtime* and they are absent from `column_contexts` →
+capture records `{}` → provenance honestly reports `blocking_key: false` (honest, not
+wrong — the recorded plan genuinely lacks that info). SP2's real-pipeline test uses the
+contexts path (its `check→match` fixture populates `column_contexts`), where the
+matching-role IS faithful. Also: `_build_config_from_contexts` can itself emit
+`BlockingConfig(keys=[], auto_suggest=True)` for some shapes — a legitimately hollow
+`keys` case that provenance reports honestly.
 
 ## Host wiring
 
@@ -140,10 +162,12 @@ Also out of scope: no execution change, no new fusion/emit, no TS host (the kern
   check); empty pipeline → empty.
 - **Match-capture enrichment** (box): construct a `GoldenMatchConfig`, run the Match
   capture branch, assert real `{keys, scorer}` extracted (not the empty placeholder).
-- **Real-pipeline lineage** (box): reuse the equivalence-gate fixture, `compile_and_run`
-  the full `load→check→flow→match`, call `field_lineage(compiled)`, assert `email`'s
-  `transforms` match what `manifest.records` actually applied and `blocking_key` columns
-  match the resolved match config — proving lineage reflects the *actual* plan.
+- **Real-pipeline lineage** (box): reuse the equivalence-gate fixture (its `check→match`
+  pipeline populates `column_contexts` → the Priority-2 path), `compile_and_run` the full
+  `load→check→flow→match`, call `field_lineage(compiled)`, assert `email`'s `transforms`
+  match what `manifest.records` actually applied AND that the `blocking_key` columns match
+  the columns in the contexts-derived config's `blocking.keys`/`blocking.passes`. On the
+  contexts path the matching-role is faithful; the test asserts it there.
 - **`format_lineage`** host test.
 
 ## Rollout
