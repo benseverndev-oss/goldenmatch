@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import polars as pl
+from goldenflow._polars_lazy import pl
 
 
 def read_table(connection_string: str, table: str, **kwargs) -> pl.DataFrame:

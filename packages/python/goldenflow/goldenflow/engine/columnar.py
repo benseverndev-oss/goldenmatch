@@ -287,6 +287,80 @@ def _transform_via_columns(df, config, source, nm, pl):
     return out, manifest
 
 
+def native_columns_ready(nm) -> bool:
+    """The Polars-free in-memory execution core (Phase 4b) is available when the
+    native `Column` can ingest a Python list (`from_pylist`) — plus the string /
+    numeric / split methods already gated by their own probes. A pre-0.25 wheel lacks
+    `from_pylist`, so the caller stays on the Polars-frame path."""
+    col_cls = getattr(nm, "Column", None)
+    return col_cls is not None and hasattr(col_cls, "from_pylist")
+
+
+def transform_columns_native(columns, config, source: str = "<dataframe>"):
+    """Apply ``config`` to ``columns`` (a ``dict[str, list]``) entirely on the native
+    substrate — **Polars-free AND pyarrow-free** (Phase 4b). Each column is ingested
+    via ``Column.from_pylist`` (no ``pl.DataFrame`` boundary), routed through the same
+    string / numeric / split kernels as the Polars-frame path, and egressed via
+    ``Column.to_pylist``. Returns ``(out_columns: dict[str, list], manifest)`` —
+    byte-identical to the Polars engine. Callers gate on
+    :func:`config_is_columnar_ready` (the shape probes) + :func:`native_columns_ready`.
+
+    This is the first execution surface that runs a covered config with Polars never
+    imported (the CSV path :func:`transform_file` is the other) — the Layer-3 seam of
+    the Rust-is-the-reference thesis for the in-memory path."""
+    nm = native_module()
+    manifest = Manifest(source=source)
+    out = dict(columns)  # source columns kept; transformed replace, split appends
+
+    for spec in config.transforms:
+        if spec.column not in out:
+            continue
+        ops = [parse_transform_name(op) for op in spec.ops]
+        ops_spec = [(n, list(p)) for n, p in ops]
+        col_list = out[spec.column]
+        total_rows = len(col_list)
+        col = nm.Column.from_pylist(col_list)
+
+        # Split (string* splitter): source kept, fixed-name outputs appended.
+        if hasattr(nm, "columnar_split_ready") and nm.columnar_split_ready(ops_spec):
+            src_col, new_cols, records = col.apply_split(ops_spec)
+            for name, affected, total, before, after in records:
+                manifest.add_record(TransformRecord(
+                    column=spec.column, transform=name, affected_rows=int(affected),
+                    total_rows=int(total), sample_before=list(before), sample_after=list(after),
+                ))
+            out[spec.column] = src_col.to_pylist()
+            for name, c in new_cols:
+                out[name] = c.to_pylist()
+            continue
+
+        # Numeric (string* parser f64*): egress the raw Int64/Float64 as int/float.
+        if hasattr(nm, "columnar_numeric_ready") and nm.columnar_numeric_ready(ops_spec):
+            num_col, records = col.apply_numeric(ops_spec)
+            for name, affected, total, before, after in records:
+                manifest.add_record(TransformRecord(
+                    column=spec.column, transform=name, affected_rows=int(affected),
+                    total_rows=int(total), sample_before=list(before), sample_after=list(after),
+                ))
+            out[spec.column] = num_col.to_pylist()
+            continue
+
+        # Owned string chain (auto-routed total/nullable): counts + 3-row replay.
+        new_col, changed = col.apply_chain(ops_spec)
+        sample = col_list[:3]
+        for (name, params), n_changed in zip(ops, changed):
+            before = _sample3(sample)
+            sample = list(nm.apply_chain_str_list(sample, [(name, list(params))])[0])
+            after = _sample3(sample)
+            manifest.add_record(TransformRecord(
+                column=spec.column, transform=name, affected_rows=int(n_changed),
+                total_rows=total_rows, sample_before=before, sample_after=after,
+            ))
+        out[spec.column] = new_col.to_pylist()
+
+    return out, manifest
+
+
 def transform_columns(
     columns: dict[str, Column],
     config,

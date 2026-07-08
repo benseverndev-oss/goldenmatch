@@ -11,7 +11,9 @@
 use std::ffi::CString;
 use std::sync::Arc;
 
-use arrow::array::{make_array, Array, ArrayRef, LargeStringArray, StringArray};
+use arrow::array::{
+    make_array, Array, ArrayRef, Float64Array, Int64Array, LargeStringArray, StringArray,
+};
 use arrow::compute::{cast, concat};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
@@ -103,6 +105,15 @@ impl Column {
         self.array.len()
     }
 
+    /// Build a `Column` from a Python `list[str | None]` — **Polars-free and
+    /// pyarrow-free** ingest (no `__arrow_c_stream__` producer needed). The seam for
+    /// the Polars-free in-memory execution path (Phase 4b): a `dict[str, list]` frame
+    /// runs the owned chain / numeric / split kernels with Polars never imported.
+    #[staticmethod]
+    fn from_pylist(values: Vec<Option<String>>) -> Column {
+        Column::new(Arc::new(LargeStringArray::from(values)))
+    }
+
     /// Egress via the Arrow C-stream interface — the native Column IS an Arrow
     /// producer, so `pl.from_arrow(column)` / any Arrow consumer imports it
     /// zero-copy, pyarrow-free.
@@ -127,6 +138,9 @@ impl Column {
     /// Materialize as a Python `list[str | None]` (Utf8/LargeUtf8 only). Egress
     /// helper for tests / the pure path; the zero-copy egress is
     /// `__arrow_c_stream__`.
+    /// Materialize as a Python `list` — strings for a Utf8/LargeUtf8 column, and (so
+    /// the Polars-free in-memory path can egress a numeric result) `int`/`float`/`None`
+    /// for an Int64/Float64 column, matching what `pl.Series.to_list()` returns.
     fn to_pylist<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
         let list = PyList::empty(py);
         if let Some(a) = self.array.as_any().downcast_ref::<StringArray>() {
@@ -137,9 +151,17 @@ impl Column {
             for v in a.iter() {
                 list.append(v)?;
             }
+        } else if let Some(a) = self.array.as_any().downcast_ref::<Int64Array>() {
+            for v in a.iter() {
+                list.append(v)?;
+            }
+        } else if let Some(a) = self.array.as_any().downcast_ref::<Float64Array>() {
+            for v in a.iter() {
+                list.append(v)?;
+            }
         } else {
             return Err(PyTypeError::new_err(
-                "to_pylist requires a Utf8/LargeUtf8 column",
+                "to_pylist requires a Utf8/LargeUtf8/Int64/Float64 column",
             ));
         }
         Ok(list)
