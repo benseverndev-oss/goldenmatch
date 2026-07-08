@@ -46,11 +46,11 @@ pub struct RepairPlan {
 // ---- ASCII char-class primitives (no regex) -----------------------------------------
 
 fn is_digit(c: char) -> bool {
-    ('0'..='9').contains(&c)
+    c.is_ascii_digit()
 }
 
 fn is_upper(c: char) -> bool {
-    ('A'..='Z').contains(&c)
+    c.is_ascii_uppercase()
 }
 
 fn is_alnum_upper(c: char) -> bool {
@@ -66,7 +66,7 @@ fn all_pred(cs: &[char], pred: fn(char) -> bool) -> bool {
 fn ascii_lower(s: &str) -> String {
     s.chars()
         .map(|c| {
-            if ('A'..='Z').contains(&c) {
+            if c.is_ascii_uppercase() {
                 ((c as u32) + 32) as u8 as char
             } else {
                 c

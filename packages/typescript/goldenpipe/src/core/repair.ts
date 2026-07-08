@@ -14,13 +14,16 @@
 const COARSE = new Set(["date", "email", "name", "phone", "zip"]);
 
 // ASCII char-class primitives (no regex; \d would diverge across engines)
-function isDigit(c: string): boolean {
-  return c >= "0" && c <= "9";
+// Accept `string | undefined` because the repo's `noUncheckedIndexedAccess`
+// types `cs[i]` as possibly-undefined; length checks guarantee a real char at
+// runtime, and undefined -> false preserves byte-parity with Python/Rust.
+function isDigit(c: string | undefined): boolean {
+  return c !== undefined && c >= "0" && c <= "9";
 }
-function isUpper(c: string): boolean {
-  return c >= "A" && c <= "Z";
+function isUpper(c: string | undefined): boolean {
+  return c !== undefined && c >= "A" && c <= "Z";
 }
-function isAlnumUpper(c: string): boolean {
+function isAlnumUpper(c: string | undefined): boolean {
   return isDigit(c) || isUpper(c);
 }
 // `chars` is already a code-point array; nonempty + every char passes.
@@ -58,7 +61,8 @@ function vEan(s: string): boolean {
 function vIsbn(s: string): boolean {
   const cs = [...s];
   if (cs.length === 13 && allChars(cs, isDigit)) return true;
-  return cs.length === 10 && allChars(cs.slice(0, 9), isDigit) && "0123456789Xx".includes(cs[9]);
+  const c9 = cs[9];
+  return cs.length === 10 && allChars(cs.slice(0, 9), isDigit) && c9 !== undefined && "0123456789Xx".includes(c9);
 }
 function vAba(s: string): boolean {
   const cs = [...s];
@@ -95,11 +99,12 @@ function vSwift(s: string): boolean {
   );
 }
 function luhnOk(s: string): boolean {
-  const cs = [...s];
   let total = 0;
   let alt = false;
-  for (let i = cs.length - 1; i >= 0; i--) {
-    let x = cs[i].charCodeAt(0) - 48; // digit value; callers guarantee all-digit
+  // iterate right-to-left over code points (reverse() avoids indexed access,
+  // which noUncheckedIndexedAccess would type as possibly-undefined)
+  for (const c of [...s].reverse()) {
+    let x = c.charCodeAt(0) - 48; // digit value; callers guarantee all-digit
     if (alt) {
       x *= 2;
       if (x > 9) x -= 9;

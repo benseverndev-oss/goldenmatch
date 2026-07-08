@@ -14,6 +14,7 @@ const fake: PipeWasmBackend = {
   planPipelineJson: () => "{}",
   applyScaleHintsJson: () => "{}",
   bandOfJson: () => '"red"',
+  buildRepairPlanJson: () => '{"repairs":[]}',
 };
 
 describe("PipeWasmBackend registry", () => {
