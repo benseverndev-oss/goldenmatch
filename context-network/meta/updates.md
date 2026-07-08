@@ -2,6 +2,24 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-07-08 -- GoldenCheck: denial-constraint discovery, Stage 1 (ADR 0035)
+- New opt-in discovered-rule family: mines denial constraints `¬(p1 ∧ … ∧ pm)` — if-then /
+  cross-tuple invariants like `¬(status=shipped ∧ ship_date<order_date)` — from a single
+  table and surfaces the violating rows. NOT in the default scan. Public API
+  `discover_denial_constraints(df, ...)` + exported `DenialConstraint`; new
+  `goldencheck denial-constraints` CLI + `--denial` flag on `scan` (`--deep` widens Pass-1
+  to the full population). Findings surface as `check="denial_constraint"` (WARNING violated
+  / INFO strict).
+- LOAD-BEARING: sample-then-validate; two evidence passes (row-level exact O(n) + pairwise
+  sampled over S²); order-preserving RANK encoding (deliberately NOT `intern_column`, whose
+  hash-order breaks `<`/`≤` predicates); null operand ⇒ predicate false; FastDC minimal-cover;
+  native pyo3-free `goldencheck-core::dc.rs` evidence kernel gated on `GOLDENCHECK_NATIVE`,
+  set/byte-parity with pure Python, measure-first (~1.5–1.8× over a Polars cross-join,
+  ~60–96× over pure Python at m=1500 → native default-on). Stage-1 gates: `arity_bound=2`,
+  `require_order_comparison=True` (pure all-equality DCs suppressed), self-column cross dropped.
+- Stage 1 of a 5-stage program; deferred: cross-table DCs, numeric-threshold literals,
+  config/baseline pinning + DC drift, DuckDB/Postgres/WASM/MCP surfaces.
+
 ## 2026-07-08 -- GoldenFlow: Polars eviction FUNCTIONALLY COMPLETE (Phase 4, extends ADR 0034)
 - The "Great Polars Eviction" (ADR 0034) is done on the transform + I/O surface. `import
   goldenflow` imports no Polars; the public `transform(data, config)` runs the native/Arrow

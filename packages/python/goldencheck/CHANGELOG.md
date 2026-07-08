@@ -5,6 +5,22 @@ All notable changes to GoldenCheck will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Denial-constraint discovery** -- a new opt-in discovered-rule family that
+  mines denial constraints `¬(p1 ∧ … ∧ pm)` (if-then / cross-tuple invariants
+  like `¬(status=shipped ∧ ship_date<order_date)`) from a single table and
+  surfaces the violating rows. Public API `discover_denial_constraints(df, ...)`
+  + the exported `DenialConstraint` type; new `goldencheck denial-constraints`
+  CLI command and a `--denial` opt-in flag on `goldencheck scan` (`--deep`
+  widens the row-level pass to the full population). Sample-then-validate engine
+  (`goldencheck/denial/`) with two evidence passes -- row-level exact (single-
+  tuple) and pairwise sampled (cross/mixed) -- order-preserving RANK encoding,
+  and a native `goldencheck-core::dc.rs` evidence kernel (gated on
+  `GOLDENCHECK_NATIVE`, set/byte-parity with the pure-Python fallback,
+  measure-first: ~1.5-1.8x over a Polars cross-join, ~60-96x over pure Python).
+  Findings surface as `check="denial_constraint"` (WARNING violated / INFO
+  strict). Not in the default scan. Stage 1 of a 5-stage program (cross-table
+  DCs, numeric-threshold literals, baseline pinning + DC drift, and
+  DuckDB/Postgres/WASM/MCP surfaces are deferred to later stages).
 - **`goldencheck.core.kernels`** -- list-shaped programmatic entry points to the
   five deep-profiling kernels (benford histogram, near-duplicate value clusters,
   strict + approximate functional dependencies, composite keys). Plain lists in,

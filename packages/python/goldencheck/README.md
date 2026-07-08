@@ -274,6 +274,34 @@ goldencheck fix data.csv --mode aggressive --force # + coerce types
 goldencheck fix data.csv --dry-run                # preview changes
 ```
 
+## Denial Constraints
+
+Mine denial constraints — if-then / cross-tuple invariants of the form
+`¬(p1 ∧ … ∧ pm)` — from a single table and surface the rows that violate them.
+For example `¬(status=shipped ∧ ship_date < order_date)` reads "if a row is
+shipped, its `ship_date` must be on or after its `order_date`." Opt-in; not part
+of the default scan.
+
+```bash
+goldencheck denial-constraints orders.csv                       # discover + list DCs
+goldencheck denial-constraints orders.csv --min-confidence 0.98 # only near-perfect DCs
+goldencheck scan orders.csv --denial                            # fold DC findings into a scan
+```
+
+```python
+from goldencheck import discover_denial_constraints
+import polars as pl
+
+df = pl.read_csv("orders.csv")
+for dc in discover_denial_constraints(df, min_confidence=0.98):
+    print(dc.render(), f"(holds {1 - dc.g1:.1%})")
+```
+
+Each `DenialConstraint` exposes `.render()` and `.columns()` plus `predicates`,
+`g1` (violation fraction), `support`, `tuple_scope`, and `exact`. In a `--denial`
+scan the findings surface as `check="denial_constraint"` (WARNING when violated,
+INFO for a strict invariant).
+
 ## Watch Mode
 
 Continuously monitor a directory for data quality:
@@ -390,6 +418,7 @@ Only pinned rules appear in this file — not every finding. The `ignore` list p
 | `goldencheck watch <dir>` | Poll directory, re-scan on change |
 | `goldencheck fix <file>` | Auto-fix data quality issues |
 | `goldencheck baseline <file>` | Deep-profile data and save statistical baseline to YAML |
+| `goldencheck denial-constraints <file>` | Mine denial constraints (if-then / cross-tuple invariants) and list violating rows |
 | `goldencheck learn <file>` | Generate LLM validation rules |
 | `goldencheck history` | Show scan history and trends |
 | `goldencheck serve` | Start REST API server |
@@ -409,6 +438,7 @@ Only pinned rules appear in this file — not every finding. The `ignore` list p
 | `--llm-provider <name>` | LLM provider: `anthropic` (default) or `openai` |
 | `--mode <level>` | Fix mode: `safe`, `moderate`, `aggressive` |
 | `--smart` | Auto-triage: pin high-confidence, dismiss low |
+| `--denial` | Also mine denial constraints during `scan` (opt-in, slower) |
 | `--guided` | Walk through findings one-by-one |
 | `--webhook <url>` | POST findings to Slack/PagerDuty/any URL |
 | `--notify-on <trigger>` | Webhook trigger: `grade-drop`, `any-error`, `any-warning` |

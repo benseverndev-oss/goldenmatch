@@ -107,6 +107,11 @@ ignore:
 - Numeric cross-column (value > max)
 - Age vs DOB validation
 
+### Denial Constraints (opt-in, not in default scan)
+- Mines if-then / cross-tuple invariants `¬(p1 ∧ … ∧ pm)`, e.g. `¬(status=shipped ∧ ship_date<order_date)`, and surfaces violating rows
+- API `discover_denial_constraints(df, ...) -> list[DenialConstraint]`; CLI `goldencheck denial-constraints data.csv` or `goldencheck scan data.csv --denial`
+- Findings surface as `check="denial_constraint"` (WARNING violated / INFO strict)
+
 ### Baseline Drift (13 checks)
 - distribution_drift, entropy_drift, bound_violation, benford_drift
 - fd_violation, key_uniqueness_loss, temporal_order_drift, type_drift
@@ -130,6 +135,7 @@ goldencheck scan data.csv --no-tui      # CLI output
 goldencheck validate data.csv           # check rules
 goldencheck baseline data.csv           # create baseline
 goldencheck scan data.csv --baseline goldencheck_baseline.yaml  # drift
+goldencheck denial-constraints data.csv # mine denial constraints (opt-in)
 goldencheck diff old.csv new.csv        # schema diff
 goldencheck fix data.csv                # auto-fix
 goldencheck watch data/                 # monitor directory
