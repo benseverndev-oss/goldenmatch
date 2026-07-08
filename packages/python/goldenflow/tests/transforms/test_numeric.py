@@ -50,6 +50,24 @@ def test_clamp():
     assert result.to_list() == [0.0, 0.0, 50.0, 100.0]
 
 
+def test_clamp_integer_bounds():
+    """INT bounds (e.g. from ``clamp:0:100`` param parsing) must not break the
+    pure-Python fallback -- it returned an int for out-of-range cells, tripping a
+    Float64 map_elements SchemaError -> clamp silently no-op'd (masked by native)."""
+    import os
+
+    prev = os.environ.get("GOLDENFLOW_NATIVE")
+    os.environ["GOLDENFLOW_NATIVE"] = "0"  # force the pure-Python path
+    try:
+        s = pl.Series("v", [-5.0, 0.0, 50.0, 150.0, None])
+        assert clamp(s, min_val=0, max_val=100).to_list() == [0.0, 0.0, 50.0, 100.0, None]
+    finally:
+        if prev is None:
+            os.environ.pop("GOLDENFLOW_NATIVE", None)
+        else:
+            os.environ["GOLDENFLOW_NATIVE"] = prev
+
+
 def test_to_integer():
     result = _apply_expr(
         to_integer, "v", ["42", "3.7", "100", "abc", None],
