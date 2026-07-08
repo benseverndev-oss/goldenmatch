@@ -89,7 +89,8 @@ def boolean_normalize(series: pl.Series) -> pl.Series:
 
 
 @register_transform(
-    name="gender_standardize", input_types=["string"], auto_apply=False, priority=50, mode="series"
+    name="gender_standardize", input_types=["string"], auto_apply=False, priority=50, mode="series",
+    scalar=_gender_standardize_py,
 )
 def gender_standardize(series: pl.Series) -> pl.Series:
     """Standardize gender strings to ``M``/``F``; anything else passes
@@ -106,7 +107,8 @@ def gender_standardize(series: pl.Series) -> pl.Series:
 
 
 @register_transform(
-    name="null_standardize", input_types=["string"], auto_apply=True, priority=80, mode="series"
+    name="null_standardize", input_types=["string"], auto_apply=True, priority=80, mode="series",
+    scalar=_null_standardize_py,
 )
 def null_standardize(series: pl.Series) -> pl.Series:
     """Map null-sentinel strings (n/a, null, none, na, nil, nan, -, empty) to
