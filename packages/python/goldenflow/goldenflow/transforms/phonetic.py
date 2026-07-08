@@ -5,8 +5,7 @@ byte-exact pure-Python reference (byte-parity harness).
 """
 from __future__ import annotations
 
-import polars as pl
-
+from goldenflow._polars_lazy import pl
 from goldenflow.transforms import register_transform
 from goldenflow.transforms._native import double_metaphone_native, soundex_native
 

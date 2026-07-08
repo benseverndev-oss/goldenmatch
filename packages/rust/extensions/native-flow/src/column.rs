@@ -11,7 +11,9 @@
 use std::ffi::CString;
 use std::sync::Arc;
 
-use arrow::array::{make_array, Array, ArrayRef, LargeStringArray, StringArray};
+use arrow::array::{
+    make_array, Array, ArrayRef, Float64Array, Int64Array, LargeStringArray, StringArray,
+};
 use arrow::compute::{cast, concat};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
@@ -20,9 +22,17 @@ use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyCapsule, PyList};
 
-use goldenflow_core::chain::{apply_chain, Kernel};
+use goldenflow_core::chain::{apply_chain, apply_chain_nullable};
+
+use crate::chain::{resolve_chain, ChainOps};
+use crate::csvio::OpRecord;
+use crate::numeric_columnar::{resolve_numeric, run_numeric_column};
+use crate::split_columnar::{resolve_split, run_split_column};
 
 const STREAM_NAME: &[u8] = b"arrow_array_stream";
+
+/// `apply_split` result: `(source_column, [(output_name, output_column)], records)`.
+type SplitCols = (Column, Vec<(String, Column)>, Vec<OpRecord>);
 
 /// A Rust-owned Arrow column (one logical column, always a single contiguous
 /// array after ingest). Utf8 or LargeUtf8 for the owned string transform path.
@@ -95,6 +105,15 @@ impl Column {
         self.array.len()
     }
 
+    /// Build a `Column` from a Python `list[str | None]` — **Polars-free and
+    /// pyarrow-free** ingest (no `__arrow_c_stream__` producer needed). The seam for
+    /// the Polars-free in-memory execution path (Phase 4b): a `dict[str, list]` frame
+    /// runs the owned chain / numeric / split kernels with Polars never imported.
+    #[staticmethod]
+    fn from_pylist(values: Vec<Option<String>>) -> Column {
+        Column::new(Arc::new(LargeStringArray::from(values)))
+    }
+
     /// Egress via the Arrow C-stream interface — the native Column IS an Arrow
     /// producer, so `pl.from_arrow(column)` / any Arrow consumer imports it
     /// zero-copy, pyarrow-free.
@@ -119,6 +138,9 @@ impl Column {
     /// Materialize as a Python `list[str | None]` (Utf8/LargeUtf8 only). Egress
     /// helper for tests / the pure path; the zero-copy egress is
     /// `__arrow_c_stream__`.
+    /// Materialize as a Python `list` — strings for a Utf8/LargeUtf8 column, and (so
+    /// the Polars-free in-memory path can egress a numeric result) `int`/`float`/`None`
+    /// for an Int64/Float64 column, matching what `pl.Series.to_list()` returns.
     fn to_pylist<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
         let list = PyList::empty(py);
         if let Some(a) = self.array.as_any().downcast_ref::<StringArray>() {
@@ -129,9 +151,17 @@ impl Column {
             for v in a.iter() {
                 list.append(v)?;
             }
+        } else if let Some(a) = self.array.as_any().downcast_ref::<Int64Array>() {
+            for v in a.iter() {
+                list.append(v)?;
+            }
+        } else if let Some(a) = self.array.as_any().downcast_ref::<Float64Array>() {
+            for v in a.iter() {
+                list.append(v)?;
+            }
         } else {
             return Err(PyTypeError::new_err(
-                "to_pylist requires a Utf8/LargeUtf8 column",
+                "to_pylist requires a Utf8/LargeUtf8/Int64/Float64 column",
             ));
         }
         Ok(list)
@@ -145,26 +175,86 @@ impl Column {
         py: Python,
         ops: Vec<(String, Vec<String>)>,
     ) -> PyResult<(Column, Vec<u64>)> {
-        let mut kernels = Vec::with_capacity(ops.len());
-        for (name, params) in &ops {
-            let refs: Vec<&str> = params.iter().map(String::as_str).collect();
-            kernels.push(Kernel::from_op(name, &refs).ok_or_else(|| {
-                PyValueError::new_err(format!("not a fusable chain kernel: {name}"))
-            })?);
-        }
+        // Auto-route: an all-total run takes the zero-alloc fast chain; a run with
+        // any Option-returning (URL/company/email) kernel takes the nullable chain
+        // (total kernels fold in as Total). Byte-identical either way.
+        let chain = resolve_chain(&ops)?;
+        let err = || PyTypeError::new_err("Column.apply_chain requires a Utf8/LargeUtf8 column");
         let (array, changed) = py.detach(|| -> PyResult<(ArrayRef, Vec<u64>)> {
-            if let Some(s) = self.array.as_any().downcast_ref::<StringArray>() {
-                let r = apply_chain(s, &kernels);
-                Ok((Arc::new(r.array) as ArrayRef, r.changed))
-            } else if let Some(s) = self.array.as_any().downcast_ref::<LargeStringArray>() {
-                let r = apply_chain(s, &kernels);
-                Ok((Arc::new(r.array) as ArrayRef, r.changed))
-            } else {
-                Err(PyTypeError::new_err(
-                    "Column.apply_chain requires a Utf8/LargeUtf8 column",
-                ))
+            match &chain {
+                ChainOps::Total(ks) => {
+                    if let Some(s) = self.array.as_any().downcast_ref::<StringArray>() {
+                        let r = apply_chain(s, ks);
+                        Ok((Arc::new(r.array) as ArrayRef, r.changed))
+                    } else if let Some(s) = self.array.as_any().downcast_ref::<LargeStringArray>() {
+                        let r = apply_chain(s, ks);
+                        Ok((Arc::new(r.array) as ArrayRef, r.changed))
+                    } else {
+                        Err(err())
+                    }
+                }
+                ChainOps::Nullable(ks) => {
+                    if let Some(s) = self.array.as_any().downcast_ref::<StringArray>() {
+                        let r = apply_chain_nullable(s, ks);
+                        Ok((Arc::new(r.array) as ArrayRef, r.changed))
+                    } else if let Some(s) = self.array.as_any().downcast_ref::<LargeStringArray>() {
+                        let r = apply_chain_nullable(s, ks);
+                        Ok((Arc::new(r.array) as ArrayRef, r.changed))
+                    } else {
+                        Err(err())
+                    }
+                }
             }
         })?;
         Ok((Column::new(array), changed))
+    }
+
+    /// In-memory numeric path (Phase 3 wave 3d): run a numeric config
+    /// (`string* parser f64*`) over this string column and return a `Column` holding
+    /// the RAW numeric result (Int64 / Float64) — egressed via `__arrow_c_stream__`
+    /// as an Arrow column of that dtype, so the in-memory frame gets a real numeric
+    /// column compared BY VALUE — plus the per-op manifest records (which still carry
+    /// the formatted before/after samples). The caller casts the input to Utf8 first
+    /// (Polars' numeric transforms cast to Utf8 internally, so this matches even for
+    /// an already-numeric input column).
+    fn apply_numeric(
+        &self,
+        py: Python,
+        ops: Vec<(String, Vec<String>)>,
+    ) -> PyResult<(Column, Vec<OpRecord>)> {
+        let plan = resolve_numeric(&ops)
+            .ok_or_else(|| PyValueError::new_err("not a numeric columnar config"))?;
+        let arr = self
+            .array
+            .as_any()
+            .downcast_ref::<LargeStringArray>()
+            .ok_or_else(|| {
+                PyTypeError::new_err("Column.apply_numeric requires a Utf8/LargeUtf8 column")
+            })?;
+        let (numcol, records) = py.detach(|| run_numeric_column(arr, &plan));
+        Ok((Column::new(numcol.into_array()), records))
+    }
+
+    /// In-memory multi-output path (Phase 3 wave 3e): run a split config
+    /// (`string* splitter`) over this string column, returning the source `Column`
+    /// (unchanged by the split, only its string ops applied), the fixed-name output
+    /// `Column`s to add to the frame, and the per-op manifest records. Each Column
+    /// egresses via `__arrow_c_stream__`.
+    fn apply_split(&self, py: Python, ops: Vec<(String, Vec<String>)>) -> PyResult<SplitCols> {
+        let plan = resolve_split(&ops)
+            .ok_or_else(|| PyValueError::new_err("not a split columnar config"))?;
+        let arr = self
+            .array
+            .as_any()
+            .downcast_ref::<LargeStringArray>()
+            .ok_or_else(|| {
+                PyTypeError::new_err("Column.apply_split requires a Utf8/LargeUtf8 column")
+            })?;
+        let (src, new_cols, records) = py.detach(|| run_split_column(arr, &plan));
+        let new = new_cols
+            .into_iter()
+            .map(|(n, a)| (n, Column::new(Arc::new(a))))
+            .collect();
+        Ok((Column::new(Arc::new(src)), new, records))
     }
 }

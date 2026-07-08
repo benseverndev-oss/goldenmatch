@@ -1,21 +1,143 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
-import polars as pl
 from dateutil import parser as dateutil_parser
 
+from goldenflow._polars_lazy import pl
 from goldenflow.transforms import register_transform
 from goldenflow.transforms._fastpath import _V, apply_with_residual
+
+# DETERMINISTIC fill for date fields absent from the input (Phase 4d / "own the
+# source of truth"). dateutil's default fills missing fields from `datetime.now()`,
+# so `parse("March 1995")` returned a DIFFERENT day on every run -- a latent
+# non-determinism bug, and inconsistent with GoldenFlow's own year-string fast path
+# (which already fills month/day with 1: "1995" -> "1995-01-01"). We pin the fill to
+# **month/day = 1, time = 00:00:00** so partial dates are deterministic AND agree
+# with the fast path. Only partial-date inputs (which were non-deterministic anyway)
+# change; fully-specified dates are unaffected. This is what makes the date family
+# byte-reproducible and therefore portable to the native/columnar path.
+_DEFAULT_DATE = datetime(2000, 1, 1, 0, 0, 0)
 
 
 def _parse_date(val: str | None) -> date | None:
     if not val:
         return None
     try:
-        return dateutil_parser.parse(val).date()
+        return dateutil_parser.parse(val, default=_DEFAULT_DATE).date()
     except (ValueError, OverflowError):
         return None
+
+
+# --------------------------------------------------------------------------- #
+# Module-level per-element references (Phase 4d). Deterministic (see _parse_date /
+# _DEFAULT_DATE), so they are the SAME fn the Polars `series` path applies AND the
+# owned reference the native/columnar path runs -- byte-identical, Polars-free.
+# Registered via `scalar=` so the in-memory columnar engine can run the date family
+# over a list. The str-returning date transforms are wired this wave; the
+# int/bool-returning ones (extract_year/…/date_validate) await dtype-aware egress.
+# --------------------------------------------------------------------------- #
+def _date_iso8601_py(val: str | None) -> str | None:
+    if val is None:
+        return None
+    d = _parse_date(val)
+    return d.isoformat() if d else val
+
+
+def _date_us_py(val: str | None) -> str | None:
+    if val is None:
+        return None
+    d = _parse_date(val)
+    return d.strftime("%m/%d/%Y") if d else val
+
+
+def _date_eu_py(val: str | None) -> str | None:
+    if val is None:
+        return None
+    d = _parse_date(val)
+    return d.strftime("%d/%m/%Y") if d else val
+
+
+def _datetime_iso8601_py(val: str | None) -> str | None:
+    if val is None:
+        return None
+    try:
+        dt = dateutil_parser.parse(val, default=_DEFAULT_DATE)
+        return dt.strftime("%Y-%m-%dT%H:%M:%S")
+    except (ValueError, OverflowError):
+        return val
+
+
+def _extract_day_of_week_py(val: str | None) -> str | None:
+    if val is None:
+        return None
+    d = _parse_date(val)
+    return _DAY_NAMES[d.weekday()] if d is not None else None
+
+
+# int/bool-returning date references (Phase 4d dtype-egress). Deterministic via
+# _parse_date; the SAME per-element fn the Polars `series` path applies -> the
+# columnar engine egresses a real Int64/Boolean column, byte-identical.
+def _extract_year_py(val: str | None) -> int | None:
+    d = _parse_date(val)
+    return d.year if d else None
+
+
+def _extract_month_py(val: str | None) -> int | None:
+    d = _parse_date(val)
+    return d.month if d else None
+
+
+def _extract_day_py(val: str | None) -> int | None:
+    d = _parse_date(val)
+    return d.day if d else None
+
+
+def _extract_quarter_py(val: str | None) -> int | None:
+    d = _parse_date(val)
+    return (d.month - 1) // 3 + 1 if d else None
+
+
+def _date_validate_py(val: str | None) -> bool | None:
+    if val is None:
+        return None
+    if not val.strip():
+        return False
+    return _parse_date(val) is not None
+
+
+# Parameterized references (Phase 4d): a per-element fn bound to the op's params. The
+# same logic the Polars `series` path runs, single-sourced so engine == columnar.
+def _date_shift_scalar(val: str | None, days: int) -> str | None:
+    if val is None:
+        return None
+    d = _parse_date(val)
+    if d is None:
+        return val
+    return (d + timedelta(days=days)).isoformat()
+
+
+def _date_shift_factory(params: list[str]):
+    days = int(params[0]) if params else 0
+    return lambda v: _date_shift_scalar(v, days)
+
+
+def _age_scalar(val: str | None, ref: date) -> int | None:
+    if val is None:
+        return None
+    d = _parse_date(val)
+    if d is None:
+        return None
+    return ref.year - d.year - ((ref.month, ref.day) < (d.month, d.day))
+
+
+def _age_from_dob_factory(params: list[str]):
+    ref = (
+        dateutil_parser.parse(params[0], default=_DEFAULT_DATE).date()
+        if params and params[0]
+        else date.today()
+    )
+    return lambda v: _age_scalar(v, ref)
 
 
 _YEAR_ONLY_RE = r"^\s*\d{4}\s*$"
@@ -58,7 +180,8 @@ def _parsed_date_expr() -> pl.Expr:
 
 
 @register_transform(
-    name="date_iso8601", input_types=["date"], auto_apply=True, priority=50, mode="series"
+    name="date_iso8601", input_types=["date"], auto_apply=True, priority=50, mode="series",
+    scalar=_date_iso8601_py,
 )
 def date_iso8601(series: pl.Series) -> pl.Series:
     # Fast path A: numeric column (the inferred "date" type matched a column
@@ -84,48 +207,34 @@ def date_iso8601(series: pl.Series) -> pl.Series:
         if non_null.len() > 0 and bool(non_null.str.contains(_YEAR_ONLY_RE).all()):
             return series.str.strip_chars() + "-01-01"
 
-    def _fmt(val: str | None) -> str | None:
-        if val is None:
-            return None
-        d = _parse_date(val)
-        return d.isoformat() if d else val
-
     # Vectorized fast path: parse the well-formed common formats in Rust and
-    # strftime to ISO; only rows the fast path can't resolve hit dateutil.
+    # strftime to ISO; only rows the fast path can't resolve hit the deterministic
+    # per-row reference (_date_iso8601_py).
     fast_iso = _parsed_date_expr().dt.strftime("%Y-%m-%d")
-    return apply_with_residual(series, fast_iso, _fmt, pl.Utf8)
+    return apply_with_residual(series, fast_iso, _date_iso8601_py, pl.Utf8)
 
 
 @register_transform(
-    name="date_us", input_types=["date"], auto_apply=False, priority=50, mode="series"
+    name="date_us", input_types=["date"], auto_apply=False, priority=50, mode="series",
+    scalar=_date_us_py,
 )
 def date_us(series: pl.Series) -> pl.Series:
-    def _fmt(val: str | None) -> str | None:
-        if val is None:
-            return None
-        d = _parse_date(val)
-        return d.strftime("%m/%d/%Y") if d else val
-
     fast = _parsed_date_expr().dt.strftime("%m/%d/%Y")
-    return apply_with_residual(series, fast, _fmt, pl.Utf8)
+    return apply_with_residual(series, fast, _date_us_py, pl.Utf8)
 
 
 @register_transform(
-    name="date_eu", input_types=["date"], auto_apply=False, priority=50, mode="series"
+    name="date_eu", input_types=["date"], auto_apply=False, priority=50, mode="series",
+    scalar=_date_eu_py,
 )
 def date_eu(series: pl.Series) -> pl.Series:
-    def _fmt(val: str | None) -> str | None:
-        if val is None:
-            return None
-        d = _parse_date(val)
-        return d.strftime("%d/%m/%Y") if d else val
-
     fast = _parsed_date_expr().dt.strftime("%d/%m/%Y")
-    return apply_with_residual(series, fast, _fmt, pl.Utf8)
+    return apply_with_residual(series, fast, _date_eu_py, pl.Utf8)
 
 
 @register_transform(
-    name="date_parse", input_types=["date"], auto_apply=False, priority=55, mode="series"
+    name="date_parse", input_types=["date"], auto_apply=False, priority=55, mode="series",
+    scalar=_date_iso8601_py,
 )
 def date_parse(series: pl.Series) -> pl.Series:
     """Auto-detect format and normalize to ISO 8601."""
@@ -133,25 +242,16 @@ def date_parse(series: pl.Series) -> pl.Series:
 
 
 @register_transform(
-    name="age_from_dob", input_types=["date"], auto_apply=False, priority=40, mode="series"
+    name="age_from_dob", input_types=["date"], auto_apply=False, priority=40, mode="series",
+    scalar_factory=_age_from_dob_factory, scalar_dtype="int",
 )
 def age_from_dob(series: pl.Series, reference_date: str | None = None) -> pl.Series:
     ref = (
-        dateutil_parser.parse(reference_date).date()
+        dateutil_parser.parse(reference_date, default=_DEFAULT_DATE).date()
         if reference_date
         else date.today()
     )
-
-    def _age(val: str | None) -> int | None:
-        if val is None:
-            return None
-        d = _parse_date(val)
-        if d is None:
-            return None
-        age = ref.year - d.year - ((ref.month, ref.day) < (d.month, d.day))
-        return age
-
-    return series.map_elements(_age, return_dtype=pl.Int64)
+    return series.map_elements(lambda v: _age_scalar(v, ref), return_dtype=pl.Int64)
 
 
 @register_transform(
@@ -160,20 +260,11 @@ def age_from_dob(series: pl.Series, reference_date: str | None = None) -> pl.Ser
     auto_apply=False,
     priority=50,
     mode="series",
+    scalar=_datetime_iso8601_py,
 )
 def datetime_iso8601(series: pl.Series) -> pl.Series:
     """Parse to ISO 8601 datetime (with time component)."""
-
-    def _fmt(val: str | None) -> str | None:
-        if val is None:
-            return None
-        try:
-            dt = dateutil_parser.parse(val)
-            return dt.strftime("%Y-%m-%dT%H:%M:%S")
-        except (ValueError, OverflowError):
-            return val
-
-    return series.map_elements(_fmt, return_dtype=pl.Utf8)
+    return series.map_elements(_datetime_iso8601_py, return_dtype=pl.Utf8)
 
 
 @register_transform(
@@ -182,17 +273,12 @@ def datetime_iso8601(series: pl.Series) -> pl.Series:
     auto_apply=False,
     priority=35,
     mode="series",
+    scalar=_extract_year_py,
+    scalar_dtype="int",
 )
 def extract_year(series: pl.Series) -> pl.Series:
     """Extract the year as an integer."""
-
-    def _year(val: str | None) -> int | None:
-        if val is None:
-            return None
-        d = _parse_date(val)
-        return d.year if d else None
-
-    return series.map_elements(_year, return_dtype=pl.Int64)
+    return series.map_elements(_extract_year_py, return_dtype=pl.Int64)
 
 
 @register_transform(
@@ -201,17 +287,12 @@ def extract_year(series: pl.Series) -> pl.Series:
     auto_apply=False,
     priority=35,
     mode="series",
+    scalar=_extract_month_py,
+    scalar_dtype="int",
 )
 def extract_month(series: pl.Series) -> pl.Series:
     """Extract the month as an integer (1-12)."""
-
-    def _month(val: str | None) -> int | None:
-        if val is None:
-            return None
-        d = _parse_date(val)
-        return d.month if d else None
-
-    return series.map_elements(_month, return_dtype=pl.Int64)
+    return series.map_elements(_extract_month_py, return_dtype=pl.Int64)
 
 
 @register_transform(
@@ -220,20 +301,12 @@ def extract_month(series: pl.Series) -> pl.Series:
     auto_apply=False,
     priority=30,
     mode="series",
+    scalar_factory=_date_shift_factory,
+    scalar_dtype="str",
 )
 def date_shift(series: pl.Series, days: int = 0) -> pl.Series:
     """Shift dates by a number of days (positive = forward, negative = backward)."""
-
-    def _shift(val: str | None) -> str | None:
-        if val is None:
-            return None
-        d = _parse_date(val)
-        if d is None:
-            return val
-        shifted = d + timedelta(days=days)
-        return shifted.isoformat()
-
-    return series.map_elements(_shift, return_dtype=pl.Utf8)
+    return series.map_elements(lambda v: _date_shift_scalar(v, days), return_dtype=pl.Utf8)
 
 
 _DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
@@ -245,17 +318,12 @@ _DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"
     auto_apply=False,
     priority=35,
     mode="series",
+    scalar=_extract_day_py,
+    scalar_dtype="int",
 )
 def extract_day(series: pl.Series) -> pl.Series:
     """Extract the day of month as an integer (1-31)."""
-
-    def _day(val: str | None) -> int | None:
-        if val is None:
-            return None
-        d = _parse_date(val)
-        return d.day if d else None
-
-    return series.map_elements(_day, return_dtype=pl.Int64)
+    return series.map_elements(_extract_day_py, return_dtype=pl.Int64)
 
 
 @register_transform(
@@ -264,19 +332,12 @@ def extract_day(series: pl.Series) -> pl.Series:
     auto_apply=False,
     priority=35,
     mode="series",
+    scalar=_extract_quarter_py,
+    scalar_dtype="int",
 )
 def extract_quarter(series: pl.Series) -> pl.Series:
     """Extract the quarter (1-4) from a date."""
-
-    def _quarter(val: str | None) -> int | None:
-        if val is None:
-            return None
-        d = _parse_date(val)
-        if d is None:
-            return None
-        return (d.month - 1) // 3 + 1
-
-    return series.map_elements(_quarter, return_dtype=pl.Int64)
+    return series.map_elements(_extract_quarter_py, return_dtype=pl.Int64)
 
 
 @register_transform(
@@ -285,19 +346,11 @@ def extract_quarter(series: pl.Series) -> pl.Series:
     auto_apply=False,
     priority=35,
     mode="series",
+    scalar=_extract_day_of_week_py,
 )
 def extract_day_of_week(series: pl.Series) -> pl.Series:
     """Extract the day of week name (Monday, Tuesday, etc.)."""
-
-    def _dow(val: str | None) -> str | None:
-        if val is None:
-            return None
-        d = _parse_date(val)
-        if d is None:
-            return None
-        return _DAY_NAMES[d.weekday()]
-
-    return series.map_elements(_dow, return_dtype=pl.Utf8)
+    return series.map_elements(_extract_day_of_week_py, return_dtype=pl.Utf8)
 
 
 @register_transform(
@@ -306,15 +359,9 @@ def extract_day_of_week(series: pl.Series) -> pl.Series:
     auto_apply=False,
     priority=60,
     mode="series",
+    scalar=_date_validate_py,
+    scalar_dtype="bool",
 )
 def date_validate(series: pl.Series) -> pl.Series:
     """Validate if value is a parseable date. Returns True/False/None."""
-
-    def _validate(val: str | None) -> bool | None:
-        if val is None:
-            return None
-        if not val.strip():
-            return False
-        return _parse_date(val) is not None
-
-    return series.map_elements(_validate, return_dtype=pl.Boolean)
+    return series.map_elements(_date_validate_py, return_dtype=pl.Boolean)

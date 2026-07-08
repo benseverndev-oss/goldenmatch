@@ -4,6 +4,18 @@ All notable changes to golden-suite are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic
 versioning.
 
+## [0.1.8] - 2026-07-07
+
+### Changed
+- Bumped the goldenflow floor to **`goldenflow>=1.17.0`** (was `>=1.16.0`) and the
+  goldenflow-native floor to **`goldenflow-native>=0.24.0`** (was `>=0.15.0`), per the
+  lockstep policy. goldenflow 1.17.0 + goldenflow-native 0.24.0 ship the Polars-eviction
+  columnar engine (Phases 2-3): owned transforms run on the native/Arrow substrate (no
+  Polars, no pyarrow) on both the whole-file CSV path and the in-memory path, covering
+  string, phonetic, nullable URL/company/email, numeric (f64 + i64 parsers + array ops
+  with a Polars-matching float formatter), and multi-output splits — byte-identical (data
+  + manifest) to the Polars engine, opt-in via `GOLDENFLOW_ENGINE=columnar`.
+
 ## [0.1.7] - 2026-07-07
 
 ### Changed

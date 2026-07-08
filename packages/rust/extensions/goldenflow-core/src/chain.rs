@@ -41,12 +41,13 @@ use arrow_array::{Array, Float64Array, GenericStringArray, OffsetSizeTrait};
 #[cfg(feature = "arrow")]
 use arrow_buffer::{Buffer, OffsetBuffer, ScalarBuffer};
 
-// `email`/`names`/`text` back the arrow-free `Kernel` (via `apply_into`); the
-// `numeric`/`company`/`url` families are only reached by the arrow-gated
-// NumericKernel/NullableKernel executors.
+// `email`/`names`/`text`/`phonetic` back the arrow-free `Kernel` (via `apply_into`),
+// and `company`/`url` back the arrow-free `NullableKernel` (via `apply`) — all
+// available on every surface (WASM included). Only `numeric` (the f64 executor) is
+// arrow-only.
 #[cfg(feature = "arrow")]
-use crate::{company, numeric, url};
-use crate::{email, names, phonetic, text};
+use crate::numeric;
+use crate::{company, email, names, phonetic, text, url};
 
 /// One owned, no-arg, total string→string kernel eligible for the fused chain.
 /// The name mapping (`from_name`) is the single source of truth the host's
@@ -265,6 +266,39 @@ pub fn apply_chain_str(values: &[&str], kernels: &[Kernel]) -> (Vec<String>, Vec
             std::mem::swap(&mut cur, &mut next);
         }
         out.push(cur.clone());
+    }
+    (out, changed)
+}
+
+/// Arrow-FREE nullable string chain (the `Option`-returning URL/company/email
+/// families, mixable with total kernels wrapped as `Total`). Threads
+/// `Option<String>` per value: once a cell goes null it passes through the rest of
+/// the run. `changed[i]` matches the host's per-transform `(before != after).sum()`
+/// — a row is counted only when both before and after are non-null and differ
+/// (identical to the arrow [`apply_chain_nullable`], minus the offset buffers). For
+/// the non-arrow surfaces (WASM / the list bindings) that can't build a
+/// `GenericStringArray`.
+pub fn apply_chain_str_nullable(
+    values: &[Option<&str>],
+    kernels: &[NullableKernel],
+) -> (Vec<Option<String>>, Vec<u64>) {
+    let mut out = Vec::with_capacity(values.len());
+    let mut changed = vec![0u64; kernels.len()];
+    for &v in values {
+        let mut cur: Option<String> = v.map(str::to_string);
+        for (i, k) in kernels.iter().enumerate() {
+            let next = match &cur {
+                Some(s) => k.apply(s),
+                None => None,
+            };
+            if let (Some(b), Some(a)) = (&cur, &next) {
+                if b != a {
+                    changed[i] += 1;
+                }
+            }
+            cur = next;
+        }
+        out.push(cur);
     }
     (out, changed)
 }
@@ -499,7 +533,6 @@ impl NullableKernel {
 
     /// Apply to one present value, returning `None` when the kernel can't parse
     /// it (→ a null output cell). Total kernels always return `Some`.
-    #[cfg(feature = "arrow")]
     #[inline]
     fn apply(self, s: &str) -> Option<String> {
         match self {

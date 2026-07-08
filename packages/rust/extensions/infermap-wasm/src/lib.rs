@@ -67,6 +67,31 @@ mod wasm {
     pub fn initialism_score(a: &str, b: &str) -> Option<f64> {
         infermap_core::initialism_score(a, b)
     }
+
+    #[allow(clippy::too_many_arguments)]
+    #[wasm_bindgen]
+    pub fn profile_score(
+        src_dtype: &str,
+        tgt_dtype: &str,
+        src_null: f64,
+        tgt_null: f64,
+        src_uniq: f64,
+        tgt_uniq: f64,
+        src_val_count: f64,
+        tgt_val_count: f64,
+        src_avg_len: f64,
+        tgt_avg_len: f64,
+    ) -> f64 {
+        infermap_core::profile_score(
+            src_dtype, tgt_dtype, src_null, tgt_null, src_uniq, tgt_uniq,
+            src_val_count, tgt_val_count, src_avg_len, tgt_avg_len,
+        )
+    }
+
+    #[wasm_bindgen]
+    pub fn pattern_match_types(samples: Vec<String>) -> Vec<u32> {
+        infermap_core::pattern_match_types(&samples)
+    }
 }
 
 #[cfg(test)]

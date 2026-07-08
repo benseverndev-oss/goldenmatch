@@ -1,0 +1,32 @@
+description: "Telecom — subscribers, device identifiers (IMEI/IMSI/ICCID), usage, plans, network"
+
+types:
+  subscriber:
+    name_hints: ["subscriber_id", "subscriber_number", "msisdn"]
+    value_signals:
+      min_unique_pct: 0.90
+    suppress: ["cardinality", "pattern_consistency", "drift_detection"]
+
+  device:
+    name_hints: ["imei", "imsi", "iccid", "sim_id"]
+    value_signals:
+      min_unique_pct: 0.90
+    suppress: ["cardinality", "pattern_consistency", "drift_detection"]
+
+  usage:
+    name_hints: ["data_usage", "call_duration", "sms_count", "minutes_used"]
+    value_signals:
+      numeric: true
+    suppress: ["pattern_consistency"]
+
+  plan:
+    name_hints: ["plan_id", "plan_name", "rate_plan"]
+    value_signals:
+      max_unique: 30
+    suppress: ["uniqueness", "range_distribution"]
+
+  network:
+    name_hints: ["network_type"]
+    value_signals:
+      max_unique: 15
+    suppress: ["uniqueness", "range_distribution"]

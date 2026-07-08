@@ -2,28 +2,19 @@ from __future__ import annotations
 
 import re
 
-import polars as pl
-
+from goldenflow._polars_lazy import pl
 from goldenflow.config.schema import GoldenFlowConfig, TransformSpec
 from goldenflow.domains.base import DomainPack
 from goldenflow.transforms import register_transform
 
 _SSN_PATTERN = re.compile(r"^(\d{3})-?(\d{2})-?(\d{4})$")
 
-
-@register_transform(
-    name="ssn_mask", input_types=["ssn", "string"], auto_apply=False, priority=50, mode="series"
-)
-def ssn_mask(series: pl.Series) -> pl.Series:
-    def _mask(val: str | None) -> str | None:
-        if val is None:
-            return None
-        m = _SSN_PATTERN.match(val.strip())
-        if m:
-            return f"***-**-{m.group(3)}"
-        return val
-
-    return series.map_elements(_mask, return_dtype=pl.Utf8)
+# NOTE: ``ssn_mask`` is owned by goldenflow.transforms.identifiers (native-first +
+# a registered pure-Python ``scalar`` for the Polars-free columnar path + byte-parity
+# corpus). people_hr used to register its OWN ``ssn_mask`` here, which clobbered the
+# core one whenever this domain loaded — dropping ssn_mask off the columnar path and
+# masking the fact that two registrations existed. The domain now REFERENCES the core
+# ``ssn_mask`` by name (see PACK.transforms) instead of redefining it.
 
 
 @register_transform(

@@ -1,0 +1,32 @@
+description: "Education — students, enrollment, courses, grades/GPA, terms, programs"
+
+types:
+  student:
+    name_hints: ["student_id", "student_number", "enrollment_id", "enrollment"]
+    value_signals:
+      min_unique_pct: 0.80
+    suppress: ["cardinality", "pattern_consistency", "drift_detection"]
+
+  course:
+    name_hints: ["course_id", "course_code", "course_name"]
+    value_signals:
+      max_unique: 200
+    suppress: ["uniqueness"]
+
+  grades:
+    name_hints: ["gpa", "grade_level", "grade_point", "credits", "credit_hours"]
+    value_signals:
+      numeric: true
+    suppress: ["pattern_consistency"]
+
+  term:
+    name_hints: ["semester", "term", "academic_year"]
+    value_signals:
+      max_unique: 30
+    suppress: ["uniqueness", "range_distribution"]
+
+  program:
+    name_hints: ["major", "transcript", "degree"]
+    value_signals:
+      max_unique: 100
+    suppress: ["uniqueness"]

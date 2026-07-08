@@ -1,0 +1,24 @@
+description: "Energy / utilities — meters, consumption (kWh), tariffs, utility accounts"
+
+types:
+  meter:
+    name_hints: ["meter_id", "meter_number", "meter_reading"]
+    value_signals:
+      min_unique_pct: 0.80
+    suppress: ["cardinality", "pattern_consistency", "drift_detection"]
+
+  consumption:
+    name_hints: ["kwh", "kwh_consumed", "consumption_kwh", "usage_kwh"]
+    value_signals:
+      numeric: true
+    suppress: ["pattern_consistency"]
+
+  tariff:
+    name_hints: ["tariff", "tariff_rate"]
+    value_signals:
+      max_unique: 20
+    suppress: ["uniqueness", "range_distribution"]
+
+  account:
+    name_hints: ["utility_account", "billing_period", "peak_demand", "service_point"]
+    suppress: ["pattern_consistency"]

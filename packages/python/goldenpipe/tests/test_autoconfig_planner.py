@@ -1,10 +1,12 @@
 from goldenpipe.autoconfig_planner import (
+    SCALE_ROUTE_MIN_ROWS,
     ComplexityProfile,
     PipePlan,
     PipePlannerRule,
     PipeProfile,
     PlannedStage,
     PlannerInput,
+    apply_scale_hints,
     band_of,
     plan_pipeline,
 )
@@ -138,3 +140,52 @@ def test_default_evidence_records_null_density():
                                         mean_null_density=0.25))
     assert plan.evidence["max_null_density"] == 0.5
     assert plan.evidence["mean_null_density"] == 0.25
+
+
+def _plan_with_dedupe():
+    return PipePlan(
+        stages=(
+            PlannedStage("goldencheck.scan", {}),
+            PlannedStage("goldenflow.transform", {}),
+            PlannedStage("goldenmatch.dedupe", {}),
+        ),
+        rule_name="default", confidence=0.7, evidence={"n_rows": 2_000_000},
+    )
+
+
+def test_apply_scale_hints_annotates_dedupe_at_scale():
+    plan = _plan_with_dedupe()
+    out = apply_scale_hints(plan, _profile(n_rows=SCALE_ROUTE_MIN_ROWS))
+    dedupe = next(s for s in out.stages if s.name == "goldenmatch.dedupe")
+    assert dedupe.config == {"_dedupe_hints": {"throughput": {"recall_target": 0.95}}}
+    assert out.evidence["scale_hinted"] is True
+    assert [s.name for s in out.stages] == [
+        "goldencheck.scan", "goldenflow.transform", "goldenmatch.dedupe",
+    ]
+
+
+def test_apply_scale_hints_noop_below_threshold():
+    plan = _plan_with_dedupe()
+    out = apply_scale_hints(plan, _profile(n_rows=SCALE_ROUTE_MIN_ROWS - 1))
+    assert out is plan
+
+
+def test_apply_scale_hints_noop_without_dedupe():
+    plan = PipePlan(
+        stages=(PlannedStage("goldencheck.scan", {}), PlannedStage("goldenflow.transform", {})),
+        rule_name="pathological", confidence=1.0, evidence={},
+    )
+    out = apply_scale_hints(plan, _profile(n_rows=5_000_000))
+    assert out is plan
+
+
+def test_apply_scale_hints_is_pure():
+    plan = _plan_with_dedupe()
+    apply_scale_hints(plan, _profile(n_rows=SCALE_ROUTE_MIN_ROWS))
+    orig_dedupe = next(s for s in plan.stages if s.name == "goldenmatch.dedupe")
+    assert orig_dedupe.config == {}
+    assert "scale_hinted" not in plan.evidence
+
+
+def test_scale_route_min_rows_constant():
+    assert SCALE_ROUTE_MIN_ROWS == 1_000_000

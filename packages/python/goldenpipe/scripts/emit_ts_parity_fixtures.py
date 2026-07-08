@@ -4,19 +4,14 @@ Runs the Python goldenpipe on small CSV fixtures and dumps the stable,
 cross-language-robust invariants of the resulting ``PipeResult`` to JSON under
 the TS package's fixtures dir.
 
-This fixture pins the **shared execution engine** -- the fixed
-check→flow→dedupe stage chain that BOTH the Python and TS surfaces implement
-identically. It deliberately does NOT go through ``goldenpipe.run`` (the public
-default), because ``run`` now flows through the Python-only auto-config *brain*
-(``Pipeline._plan_config``), which DECIDES the stage set from the data (e.g.
-drops dedupe for a single-row input). That decision layer is Python-only until
-it is ported to TS, so exercising it here would diverge the two surfaces by
-design and is not what this cross-surface fixture is for. The brain's decisions
-are covered directly by ``tests/test_autoconfig_glue.py``. When TS gains the
-brain, extend this fixture to cover the decision layer too.
-
-Concretely: we run the STATIC config from ``Pipeline._auto_config`` (the
-untouched pre-brain default chain), which is what the TS parity test also runs.
+This fixture pins the **brain path** -- ``goldenpipe.run()``, which flows
+through the auto-config brain (``Pipeline._plan_config``) that DECIDES the
+stage set from the data (e.g. drops dedupe for a single-row input). Both the
+Python and TS surfaces now implement the same rule table + scale hints
+(TS: ``planConfig`` in ``pipeline.ts``), so running the real public entry
+point on both sides is exactly what this cross-surface fixture is for: the
+fixture pins Python ``run()`` output; the TS parity test asserts TS
+``run()`` reaches the same stage set on the same inputs.
 
 The TS siblings are version-skewed from the Python ones, so we deliberately
 emit only the invariants that survive the skew:
@@ -36,7 +31,6 @@ import json
 from pathlib import Path
 
 import goldenpipe
-from goldenpipe.pipeline import Pipeline
 
 # Output dir: packages/typescript/goldenpipe/tests/fixtures/
 _HERE = Path(__file__).resolve()
@@ -93,14 +87,12 @@ def emit_case(
     case_id: str,
     csv_text: str,
     tmp_dir: Path,
-    static_config: goldenpipe.PipelineConfig,
 ) -> dict:
     csv_path = tmp_dir / f"{case_id}.csv"
     csv_path.write_text(csv_text)
 
-    # Run the SHARED static chain (not goldenpipe.run, which uses the
-    # Python-only auto-config brain) -- see the module docstring.
-    result = Pipeline(config=static_config).run(source=str(csv_path))
+    # Run the BRAIN path (the public default) -- see the module docstring.
+    result = goldenpipe.run(str(csv_path))
 
     golden = result.artifacts.get("golden")
     unique = result.artifacts.get("unique")
@@ -125,16 +117,11 @@ def main() -> None:
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    # The shared, cross-surface static chain: Pipeline._auto_config is the
-    # untouched pre-brain default (check→flow→dedupe [+identity]) that the TS
-    # parity test also runs. Build it once from a discovered registry.
-    static_config = Pipeline()._auto_config()
-
     cases: list[dict] = []
     with tempfile.TemporaryDirectory() as td:
         tmp_dir = Path(td)
         for case_id, csv_text in CASES:
-            cases.append(emit_case(case_id, csv_text, tmp_dir, static_config))
+            cases.append(emit_case(case_id, csv_text, tmp_dir))
 
     out_path = OUT_DIR / "pipe_parity.json"
     payload = {

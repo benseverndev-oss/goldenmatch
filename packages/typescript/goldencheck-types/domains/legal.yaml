@@ -1,0 +1,26 @@
+description: "Legal — cases, dockets, matters, parties, courts, jurisdictions"
+
+types:
+  case:
+    name_hints: ["case_number", "case_id", "docket", "docket_number"]
+    value_signals:
+      min_unique_pct: 0.80
+    suppress: ["cardinality", "pattern_consistency", "drift_detection"]
+
+  matter:
+    name_hints: ["matter_id", "matter_number"]
+    value_signals:
+      min_unique_pct: 0.80
+    suppress: ["cardinality", "pattern_consistency"]
+
+  parties:
+    name_hints: ["plaintiff", "defendant", "attorney", "counsel"]
+    value_signals:
+      mixed_case: true
+    suppress: ["pattern_consistency"]
+
+  court:
+    name_hints: ["jurisdiction", "court", "filing_date", "cause_of_action"]
+    value_signals:
+      max_unique: 100
+    suppress: ["uniqueness"]

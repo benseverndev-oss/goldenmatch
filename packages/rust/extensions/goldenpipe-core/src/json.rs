@@ -9,6 +9,9 @@ use serde_json::{json, Value};
 use crate::config::{auto_config, skip_if_falsy};
 use crate::decisions::evaluate_builtin;
 use crate::model::{CtxSubset, Decision, JsonMap, PipelineConfig, PlannedSpec, StageInfo};
+use crate::planner::{
+    apply_scale_hints, band_of, plan_pipeline, PipePlan, PipeProfile, PlannerInput,
+};
 use crate::resolve::resolve;
 use crate::router::apply_decision;
 
@@ -85,6 +88,36 @@ pub fn skip_if_falsy_json(input: &str) -> String {
     skip_if_falsy(&v).to_string()
 }
 
+pub fn plan_pipeline_json(input: &str) -> String {
+    let inp: PlannerInput = match serde_json::from_str(input) {
+        Ok(a) => a,
+        Err(e) => return parse_err(e),
+    };
+    serde_json::to_string(&plan_pipeline(&inp)).unwrap()
+}
+
+#[derive(Deserialize)]
+struct ScaleHintsIn {
+    plan: PipePlan,
+    runtime: PipeProfile,
+}
+
+pub fn apply_scale_hints_json(input: &str) -> String {
+    let arg: ScaleHintsIn = match serde_json::from_str(input) {
+        Ok(a) => a,
+        Err(e) => return parse_err(e),
+    };
+    serde_json::to_string(&apply_scale_hints(&arg.plan, &arg.runtime)).unwrap()
+}
+
+pub fn band_of_json(input: &str) -> String {
+    let x: f64 = match serde_json::from_str(input) {
+        Ok(a) => a,
+        Err(e) => return parse_err(e),
+    };
+    serde_json::to_string(band_of(x)).unwrap()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -130,5 +163,19 @@ mod tests {
     fn skip_if_falsy_json_roundtrips() {
         assert_eq!(skip_if_falsy_json("{}"), "true");
         assert_eq!(skip_if_falsy_json("{\"a\":1}"), "false");
+    }
+
+    #[test]
+    fn plan_pipeline_json_evidence_key_order() {
+        let out = plan_pipeline_json(
+            r#"{"runtime":{"n_rows":100,"n_cols":2,"column_names":["a","b"],
+                "dtypes":["String","String"],"inferred_domain":null,"domain_confidence":0.0},
+                "complexity":{"max_null_density":0.0,"mean_null_density":0.0}}"#,
+        );
+        let ev = out.split("\"evidence\":{").nth(1).unwrap();
+        assert!(
+            ev.starts_with("\"n_rows\":100,\"n_cols\":2,\"inferred_domain\":null,\"domain_confidence\":0.0,\"max_null_density\":0.0,\"mean_null_density\":0.0"),
+            "got {ev}"
+        );
     }
 }

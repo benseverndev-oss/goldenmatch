@@ -4,10 +4,10 @@ import io
 import tempfile
 from pathlib import Path
 
-import polars as pl
 from fastapi import FastAPI, File, UploadFile
 
 import goldenflow
+from goldenflow._polars_lazy import pl
 from goldenflow.engine.transformer import TransformEngine
 from goldenflow.transforms import list_transforms
 

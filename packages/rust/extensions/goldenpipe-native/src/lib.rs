@@ -24,6 +24,18 @@ fn auto_config_json(input: &str) -> String {
 fn skip_if_falsy_json(input: &str) -> String {
     goldenpipe_core::json::skip_if_falsy_json(input)
 }
+#[pyfunction]
+fn plan_pipeline_json(input: &str) -> String {
+    goldenpipe_core::json::plan_pipeline_json(input)
+}
+#[pyfunction]
+fn apply_scale_hints_json(input: &str) -> String {
+    goldenpipe_core::json::apply_scale_hints_json(input)
+}
+#[pyfunction]
+fn band_of_json(input: &str) -> String {
+    goldenpipe_core::json::band_of_json(input)
+}
 
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -33,5 +45,8 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(evaluate_builtin_json, m)?)?;
     m.add_function(wrap_pyfunction!(auto_config_json, m)?)?;
     m.add_function(wrap_pyfunction!(skip_if_falsy_json, m)?)?;
+    m.add_function(wrap_pyfunction!(plan_pipeline_json, m)?)?;
+    m.add_function(wrap_pyfunction!(apply_scale_hints_json, m)?)?;
+    m.add_function(wrap_pyfunction!(band_of_json, m)?)?;
     Ok(())
 }

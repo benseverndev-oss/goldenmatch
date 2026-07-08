@@ -1,4 +1,4 @@
-__version__ = "1.16.0"
+__version__ = "1.17.0"
 
 import goldenflow.notebook  # noqa: F401 — register Jupyter _repr_html_ methods
 import goldenflow.transforms.address  # noqa: F401
@@ -38,6 +38,7 @@ from goldenflow.domains import load_domain
 
 # Domains
 from goldenflow.domains.base import DomainPack
+from goldenflow.engine.columnar import ColumnarResult
 from goldenflow.engine.differ import DiffResult, diff_dataframes
 
 # Engine
@@ -72,10 +73,24 @@ def transform_df(df, config=None):
     return engine.transform_df(df)
 
 
+def transform(data, config=None):
+    """Polars-free public entry point (Phase 4c): transform a ``dict[str, list]`` of
+    columns, returning a :class:`ColumnarResult` (``.columns`` dict + ``.manifest``,
+    with an opt-in ``.to_polars()``). A config the native columnar engine covers runs
+    with **Polars never imported**; an uncovered config (or ``config=None``
+    zero-config auto-detect) declines to the Polars engine, which needs
+    ``goldenflow[polars]`` (a clear ImportError if it's absent). The Polars-typed
+    ``transform_df`` remains for existing ``pl.DataFrame`` callers."""
+    from goldenflow.engine.columnar import transform_columns_public
+
+    return transform_columns_public(data, config)
+
+
 __all__ = [
     # Core engine
     "TransformEngine",
     "TransformResult",
+    "ColumnarResult",
     # Config schema
     "GoldenFlowConfig",
     "TransformSpec",
@@ -86,6 +101,7 @@ __all__ = [
     # Convenience functions
     "transform_file",
     "transform_df",
+    "transform",
     # Pure scalar canonicalizers
     "canonicalize",
     # Engine — manifest

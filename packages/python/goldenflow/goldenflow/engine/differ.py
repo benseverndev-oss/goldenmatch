@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-import polars as pl
+from goldenflow._polars_lazy import pl
 
 
 @dataclass

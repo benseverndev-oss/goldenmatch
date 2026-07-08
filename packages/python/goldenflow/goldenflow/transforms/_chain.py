@@ -16,8 +16,7 @@ from __future__ import annotations
 
 import os
 
-import polars as pl
-
+from goldenflow._polars_lazy import pl
 from goldenflow.core._native_loader import native_module
 
 # Owned, no-arg, TOTAL (never-null) string->string kernels eligible for fusion.

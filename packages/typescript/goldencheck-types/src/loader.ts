@@ -25,7 +25,16 @@ function domainsDir(): string {
   }
   // Resolve relative to this file. In dev (src/) we go up one to find domains/;
   // in dist/ we also go up one (dist/loader.js -> ../domains).
-  const here = path.dirname(url.fileURLToPath(import.meta.url));
+  //
+  // Bundle-safe across ESM and CJS: the CJS build (dist/index.cjs, which the
+  // goldenpipe CLI bundle `require`s) has NO valid `import.meta.url` — it
+  // resolves to undefined and `fileURLToPath(undefined)` throws. `__dirname` is
+  // defined in CJS; in ESM it is undeclared so `typeof __dirname` is "undefined"
+  // (no throw) and we fall back to `import.meta.url`, which is valid there.
+  const here =
+    typeof __dirname !== "undefined"
+      ? __dirname
+      : path.dirname(url.fileURLToPath(import.meta.url));
   return path.resolve(here, "..", "domains");
 }
 

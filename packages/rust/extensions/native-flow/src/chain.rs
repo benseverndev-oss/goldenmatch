@@ -13,11 +13,62 @@
 use arrow::array::{make_array, Array, ArrayData, Float64Array, LargeStringArray, StringArray};
 use arrow::pyarrow::PyArrowType;
 use goldenflow_core::chain::{
-    apply_chain, apply_chain_f64, apply_chain_nullable, apply_chain_str, Kernel, NullableKernel,
-    NumericKernel,
+    apply_chain, apply_chain_f64, apply_chain_nullable, apply_chain_str, apply_chain_str_nullable,
+    Kernel, NullableKernel, NumericKernel,
 };
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
+
+/// A resolved run of chain ops: either ALL total string kernels (the zero-alloc
+/// fast path) or a run that contains at least one `Option`-returning
+/// URL/company/email kernel (the nullable path, into which total kernels fold as
+/// `Total`). The shared resolver so the list binding, the `Column`, and the CSV
+/// path all route the same way.
+pub enum ChainOps {
+    Total(Vec<Kernel>),
+    Nullable(Vec<NullableKernel>),
+}
+
+/// Resolve `ops` to a [`ChainOps`]: prefer the all-total fast path; fall back to
+/// the nullable chain if any op is `Option`-returning. Errors only if a name is
+/// not fusable at all.
+pub fn resolve_chain(ops: &[(String, Vec<String>)]) -> PyResult<ChainOps> {
+    let mut totals = Vec::with_capacity(ops.len());
+    let mut all_total = true;
+    for (name, params) in ops {
+        let refs: Vec<&str> = params.iter().map(String::as_str).collect();
+        match Kernel::from_op(name, &refs) {
+            Some(k) => totals.push(k),
+            None => {
+                all_total = false;
+                break;
+            }
+        }
+    }
+    if all_total {
+        return Ok(ChainOps::Total(totals));
+    }
+    let mut nks = Vec::with_capacity(ops.len());
+    for (name, params) in ops {
+        let refs: Vec<&str> = params.iter().map(String::as_str).collect();
+        nks.push(
+            NullableKernel::from_op(name, &refs).ok_or_else(|| {
+                PyValueError::new_err(format!("not a fusable chain kernel: {name}"))
+            })?,
+        );
+    }
+    Ok(ChainOps::Nullable(nks))
+}
+
+/// Capability probe: this build's `apply_chain_str_list` / `Column.apply_chain` /
+/// `transform_csv` AUTO-ROUTE `Option`-returning (URL/company/email) kernels
+/// (native-flow 0.20+). The host gates accepting nullable columnar configs on this
+/// symbol's presence — a pre-0.20 wheel lacks it, so those configs stay on the
+/// Polars engine (no hard error on a skewed wheel).
+#[pyfunction]
+pub fn chain_supports_nullable() -> bool {
+    true
+}
 
 /// The fusable kernel names the compiled chain supports (no-arg + parameterized),
 /// for the host's coverage guard (asserts Python `FUSABLE_KERNELS ∪
@@ -201,26 +252,27 @@ pub fn apply_chain_str_list(
     values: Vec<Option<String>>,
     ops: Vec<(String, Vec<String>)>,
 ) -> PyResult<(Vec<Option<String>>, Vec<u64>)> {
-    let mut kernels = Vec::with_capacity(ops.len());
-    for (name, params) in &ops {
-        let refs: Vec<&str> = params.iter().map(String::as_str).collect();
-        kernels.push(
-            Kernel::from_op(name, &refs).ok_or_else(|| {
-                PyValueError::new_err(format!("not a fusable chain kernel: {name}"))
-            })?,
-        );
+    match resolve_chain(&ops)? {
+        ChainOps::Total(kernels) => {
+            // Thread only the non-null values (total kernels never null); nulls pass.
+            let non_null: Vec<&str> = values.iter().filter_map(|v| v.as_deref()).collect();
+            let (transformed, changed) = apply_chain_str(&non_null, &kernels);
+            // Scatter the transformed values back into their (non-null) positions.
+            let mut it = transformed.into_iter();
+            let out: Vec<Option<String>> = values
+                .iter()
+                .map(|v| {
+                    v.as_ref()
+                        .map(|_| it.next().expect("aligned with non-null count"))
+                })
+                .collect();
+            Ok((out, changed))
+        }
+        ChainOps::Nullable(kernels) => {
+            // A kernel may turn non-null -> null mid-run, so thread Options directly.
+            let opt_refs: Vec<Option<&str>> = values.iter().map(|v| v.as_deref()).collect();
+            let (out, changed) = apply_chain_str_nullable(&opt_refs, &kernels);
+            Ok((out, changed))
+        }
     }
-    // Thread only the non-null values (total kernels never null); nulls pass through.
-    let non_null: Vec<&str> = values.iter().filter_map(|v| v.as_deref()).collect();
-    let (transformed, changed) = apply_chain_str(&non_null, &kernels);
-    // Scatter the transformed values back into their (non-null) positions.
-    let mut it = transformed.into_iter();
-    let out: Vec<Option<String>> = values
-        .iter()
-        .map(|v| {
-            v.as_ref()
-                .map(|_| it.next().expect("aligned with non-null count"))
-        })
-        .collect();
-    Ok((out, changed))
 }

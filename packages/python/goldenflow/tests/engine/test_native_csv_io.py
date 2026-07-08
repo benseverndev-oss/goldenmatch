@@ -10,6 +10,7 @@ Parity contract (see docs/design/2026-07-07-polars-eviction-plan.md):
 """
 from __future__ import annotations
 
+import csv
 import sys
 
 import goldenflow  # noqa: F401 -- import-time transform registration
@@ -42,6 +43,18 @@ def _cfg(specs):
     return GoldenFlowConfig(transforms=[TransformSpec(column=c, ops=o) for c, o in specs])
 
 
+def _write_2col(path, col, rows):
+    """Write a 2-column CSV (`<col>`, `keep`) via csv.writer (QUOTE_MINIMAL), so an
+    empty value is an UNQUOTED empty field — which both Polars and the native reader
+    read as null. (A *quoted* empty ``""`` is the documented quoting boundary Phase 2
+    does not claim parity on.) A comma-bearing value is quoted automatically."""
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow([col, "keep"])
+        for i, v in enumerate(rows):
+            w.writerow(["" if v is None else v, f"k{i}"])
+
+
 def _manifest_rows(manifest):
     return [
         (
@@ -65,6 +78,9 @@ def _manifest_rows(manifest):
         [("email", ["strip", "lowercase", "email_normalize"])],
         [("name", ["strip", "truncate:6"])],
         [("name", ["strip", "lowercase", "soundex"])],  # Phase 3 wave 1: phonetic
+        # Phase 3 wave 2: nullable chain (mixes total + Option-returning kernels)
+        [("email", ["strip", "lowercase", "email_extract_domain"])],
+        [("name", ["strip", "url_normalize"]), ("email", ["strip", "email_mask"])],
     ],
 )
 def test_native_csv_equals_polars_engine(tmp_path, monkeypatch, specs) -> None:
@@ -94,6 +110,123 @@ def test_native_csv_equals_polars_engine(tmp_path, monkeypatch, specs) -> None:
 
     # MANIFEST parity: same records (only transformed columns appear in both).
     assert _manifest_rows(manifest) == _manifest_rows(ref.manifest)
+
+
+@pytest.mark.parametrize(
+    "ops",
+    [
+        ["currency_strip"],
+        ["strip", "currency_strip"],
+        ["currency_strip", "round:1"],
+        ["currency_strip", "abs_value"],
+        ["currency_strip", "round:0", "clamp:0:100"],
+        ["currency_strip", "fill_zero"],
+        ["percentage_normalize"],
+        ["comma_decimal"],
+        ["scientific_to_decimal"],
+    ],
+)
+def test_native_csv_numeric_equals_polars(tmp_path, monkeypatch, ops) -> None:
+    """Phase 3 wave 3b: numeric configs (string* parser f64*) run string->f64->string
+    on the native CSV path, byte-identical (data + manifest) to the Polars engine.
+    The f64 output is formatted via the Polars-matching formatter (wave 3a)."""
+    if not columnar.columnar_file_ready(_cfg([("price", ops)])):
+        pytest.skip("native numeric columnar not built (pre-0.21 wheel)")
+    # 2-column CSV so empty fields are unambiguous (a lone empty single-column line
+    # is null-vs-blank ambiguous between readers).
+    rows = ["  $1,234.50 ", "$0.5", "10", "", "bad", "-$3.00", "0", "1000000", "12.5%", "1.5e3"]
+    inp = tmp_path / "in.csv"
+    _write_2col(inp, "price", rows)
+    cfg = _cfg([("price", ops)])
+
+    out = tmp_path / "out.csv"
+    manifest = columnar.transform_file(inp, out, cfg, source=str(inp))
+
+    monkeypatch.delenv("GOLDENFLOW_ENGINE", raising=False)
+    ref = transform_df(pl.read_csv(inp, infer_schema_length=0), config=cfg)
+
+    got = pl.read_csv(out, infer_schema_length=0)
+    for col in got.columns:
+        assert got[col].to_list() == ref.df[col].cast(pl.Utf8).to_list(), f"{col} diverged"
+    assert _manifest_rows(manifest) == _manifest_rows(ref.manifest)
+
+
+@pytest.mark.parametrize(
+    "ops,rows",
+    [
+        (["to_integer"], ["  42 ", "1,000", "-5", "", "bad", "3.9", "0"]),
+        (["strip", "to_integer"], ["  42 ", " -5 ", "", "bad", "0"]),
+        (["to_integer", "abs_value"], ["42", "-5", "", "bad", "0"]),  # i64 -> f64 promote
+        (["to_integer", "clamp:0:100"], ["42", "-5", "200", "", "bad"]),
+        (["roman_to_int"], ["IV", "XII", "", "bad", "MMXX"]),
+        (["ordinal_to_int"], ["1st", "22nd", "", "bad"]),
+    ],
+)
+def test_native_csv_i64_equals_polars(tmp_path, monkeypatch, ops, rows) -> None:
+    """Phase 3 wave 3c: the i64 parsers (to_integer/roman_to_int/ordinal_to_int) yield
+    an Int64 column; an f64 array op promotes it to Float64 exactly as Polars does."""
+    if not columnar.columnar_file_ready(_cfg([("x", ops)])):
+        pytest.skip("native numeric columnar not built (pre-0.22 wheel)")
+    inp = tmp_path / "in.csv"
+    _write_2col(inp, "x", rows)
+    cfg = _cfg([("x", ops)])
+
+    out = tmp_path / "out.csv"
+    manifest = columnar.transform_file(inp, out, cfg, source=str(inp))
+
+    monkeypatch.delenv("GOLDENFLOW_ENGINE", raising=False)
+    ref = transform_df(pl.read_csv(inp, infer_schema_length=0), config=cfg)
+
+    got = pl.read_csv(out, infer_schema_length=0)
+    for col in got.columns:
+        assert got[col].to_list() == ref.df[col].cast(pl.Utf8).to_list(), f"{col} diverged"
+    assert _manifest_rows(manifest) == _manifest_rows(ref.manifest)
+
+
+@pytest.mark.parametrize(
+    "ops,col,data",
+    [
+        (["split_name"], "name", ["John Smith", "Cher", "", None, "o'Brien"]),
+        (["strip", "split_name"], "name", ["  John Smith  ", "Mary Doe", None]),
+        (["split_name_reverse"], "name", ["Smith, John", "Doe, Mary", None, ""]),
+        (["split_address"], "addr", ["123 Main St, Reno, NV 89501", "5 Oak Ave", None, ""]),
+    ],
+)
+def test_native_csv_split_equals_polars(tmp_path, monkeypatch, ops, col, data) -> None:
+    """Phase 3 wave 3e: splits on the CSV path add the fixed-name output columns; the
+    output CSV (parsed back) + manifest are byte-identical to the Polars engine. This
+    also exercises the empty-string quoting fix (split_name's last='' for a single-word
+    name must survive the CSV round-trip as '', not null)."""
+    if not columnar.columnar_file_ready(_cfg([(col, ops)])):
+        pytest.skip("native split not built (pre-0.24 wheel)")
+    inp = tmp_path / "in.csv"
+    _write_2col(inp, col, data)
+    cfg = _cfg([(col, ops)])
+
+    out = tmp_path / "out.csv"
+    manifest = columnar.transform_file(inp, out, cfg, source=str(inp))
+
+    monkeypatch.delenv("GOLDENFLOW_ENGINE", raising=False)
+    ref = transform_df(pl.read_csv(inp, infer_schema_length=0), config=cfg)
+
+    got = pl.read_csv(out, infer_schema_length=0)
+    assert got.columns == ref.df.columns
+    for c in got.columns:
+        assert got[c].to_list() == ref.df[c].cast(pl.Utf8).to_list(), f"{c} diverged"
+    assert _manifest_rows(manifest) == _manifest_rows(ref.manifest)
+
+
+def test_native_csv_quotes_empty_string_like_polars(tmp_path) -> None:
+    """The native writer quotes an empty-string VALUE as `\"\"` (distinct from a null
+    empty field), matching Polars — so `strip('   ') -> ''` round-trips as '' not null."""
+    inp = tmp_path / "in.csv"
+    _write_2col(inp, "x", ["   ", "keep", None])  # row0 -> strip -> '' (empty string)
+    out = tmp_path / "out.csv"
+    columnar.transform_file(inp, out, _cfg([("x", ["strip"])]))
+    raw = out.read_text(encoding="utf-8").splitlines()
+    assert raw[1].startswith('""'), f'empty string not quoted: {raw[1]!r}'
+    back = pl.read_csv(out, infer_schema_length=0)
+    assert back["x"].to_list() == ["", "keep", None]  # '' preserved, null stays null
 
 
 def test_native_csv_path_is_pyarrow_free(tmp_path) -> None:

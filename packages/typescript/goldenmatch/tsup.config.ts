@@ -12,6 +12,11 @@ export default defineConfig({
     // (~220 KB base64), so it's a separate subpath — consumers pay that cost
     // only when they import `goldenmatch/core/suggest-wasm`.
     "core/suggestWasm": "src/core/suggestWasm.ts",
+    // Opt-in entry: the documents-core kernels (schema/parse/prompt/normalize)
+    // compiled to wasm, so JS/TS shares ONE document-ingest kernel with Python.
+    // Carries the inlined wasm base64; a separate subpath
+    // (`goldenmatch/core/documents-wasm`), out of the default core graph.
+    "core/documentsWasm": "src/core/documentsWasm.ts",
     "core/perceptualWasm": "src/core/perceptualWasm.ts",
     // Opt-in entry: the native HNSW ANN kernel (goldenhnsw) compiled to wasm.
     // Carries the inlined wasm (~62 KB base64) as a separate subpath, so the

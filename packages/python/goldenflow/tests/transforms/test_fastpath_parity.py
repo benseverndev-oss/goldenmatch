@@ -13,39 +13,42 @@ import random
 import phonenumbers
 import polars as pl
 from dateutil import parser as dateutil_parser
-from goldenflow.transforms.dates import date_eu, date_iso8601, date_us
+from goldenflow.transforms.dates import (
+    _DEFAULT_DATE,
+    _date_eu_py,
+    _date_iso8601_py,
+    _date_us_py,
+    date_eu,
+    date_iso8601,
+    date_us,
+)
 from goldenflow.transforms.phone import phone_digits, phone_e164
 
-# --- references: the original per-row implementations ------------------------
+# --- references: the OWNED deterministic per-row implementations --------------
+# The date family is now the deterministic source of truth (missing fields fill to
+# Jan 1 via _DEFAULT_DATE, not dateutil's non-deterministic today-fill). The parity
+# references ARE those owned scalars, so the vectorized fast path is checked against
+# the same deterministic reference the columnar/native path runs.
 
 def _ref_parse_date(val):
     if not val:
         return None
     try:
-        return dateutil_parser.parse(val).date()
+        return dateutil_parser.parse(val, default=_DEFAULT_DATE).date()
     except (ValueError, OverflowError):
         return None
 
 
 def _ref_iso(val):
-    if val is None:
-        return None
-    d = _ref_parse_date(val)
-    return d.isoformat() if d else val
+    return _date_iso8601_py(val)
 
 
 def _ref_us(val):
-    if val is None:
-        return None
-    d = _ref_parse_date(val)
-    return d.strftime("%m/%d/%Y") if d else val
+    return _date_us_py(val)
 
 
 def _ref_eu(val):
-    if val is None:
-        return None
-    d = _ref_parse_date(val)
-    return d.strftime("%d/%m/%Y") if d else val
+    return _date_eu_py(val)
 
 
 def _ref_e164(val):

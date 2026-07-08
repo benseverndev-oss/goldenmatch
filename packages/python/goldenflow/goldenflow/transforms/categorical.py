@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-import polars as pl
-
+from goldenflow._polars_lazy import pl
 from goldenflow.transforms import register_transform
 from goldenflow.transforms._native import (
     boolean_normalize_native,
@@ -74,7 +73,8 @@ def _category_normalize_key_series(series: pl.Series) -> pl.Series:
 
 
 @register_transform(
-    name="boolean_normalize", input_types=["boolean", "string"], auto_apply=False, priority=50, mode="series"
+    name="boolean_normalize", input_types=["boolean", "string"], auto_apply=False, priority=50,
+    mode="series", scalar=_boolean_normalize_py, scalar_dtype="bool",
 )
 def boolean_normalize(series: pl.Series) -> pl.Series:
     """Parse loose boolean-ish strings (yes/no/y/n/1/0/true/false/t/f).
@@ -90,7 +90,8 @@ def boolean_normalize(series: pl.Series) -> pl.Series:
 
 
 @register_transform(
-    name="gender_standardize", input_types=["string"], auto_apply=False, priority=50, mode="series"
+    name="gender_standardize", input_types=["string"], auto_apply=False, priority=50, mode="series",
+    scalar=_gender_standardize_py,
 )
 def gender_standardize(series: pl.Series) -> pl.Series:
     """Standardize gender strings to ``M``/``F``; anything else passes
@@ -107,7 +108,8 @@ def gender_standardize(series: pl.Series) -> pl.Series:
 
 
 @register_transform(
-    name="null_standardize", input_types=["string"], auto_apply=True, priority=80, mode="series"
+    name="null_standardize", input_types=["string"], auto_apply=True, priority=80, mode="series",
+    scalar=_null_standardize_py,
 )
 def null_standardize(series: pl.Series) -> pl.Series:
     """Map null-sentinel strings (n/a, null, none, na, nil, nan, -, empty) to

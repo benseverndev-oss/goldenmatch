@@ -22,8 +22,10 @@ mod email;
 mod identifiers;
 mod names;
 mod numeric;
+mod numeric_columnar;
 mod phone;
 mod phonetic;
+mod split_columnar;
 mod text;
 mod url;
 mod util;
@@ -35,6 +37,12 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(chain::apply_chain_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(chain::apply_chain_ops_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(chain::apply_chain_str_list, m)?)?;
+    m.add_function(wrap_pyfunction!(chain::chain_supports_nullable, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        numeric_columnar::columnar_numeric_ready,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(split_columnar::columnar_split_ready, m)?)?;
     m.add_function(wrap_pyfunction!(csvio::transform_csv, m)?)?;
     m.add_function(wrap_pyfunction!(chain::apply_chain_f64_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(chain::apply_chain_nullable_arrow, m)?)?;

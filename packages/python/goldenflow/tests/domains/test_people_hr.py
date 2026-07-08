@@ -1,5 +1,9 @@
 import polars as pl
-from goldenflow.domains.people_hr import PACK, ssn_mask, ssn_validate
+from goldenflow.domains.people_hr import PACK, ssn_validate
+
+# ssn_mask is owned by transforms.identifiers now (people_hr references it by name,
+# no longer redefines it — see the note in people_hr.py).
+from goldenflow.transforms.identifiers import ssn_mask
 
 
 def test_pack_metadata():

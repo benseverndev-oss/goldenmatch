@@ -13,10 +13,12 @@
 
 use arrow::array::{Array, LargeStringArray, LargeStringBuilder};
 use arrow::compute::concat;
-use pyo3::exceptions::{PyIOError, PyValueError};
+use pyo3::exceptions::PyIOError;
 use pyo3::prelude::*;
 
-use goldenflow_core::chain::{apply_chain, Kernel};
+use goldenflow_core::chain::{apply_chain, apply_chain_nullable, ChainResult};
+
+use crate::chain::{resolve_chain, ChainOps};
 
 /// Below this data-region size the CSV is parsed sequentially (parallel setup +
 /// concat isn't worth it). Override with `GOLDENFLOW_NATIVE_CSV_PARALLEL_MIN_BYTES`
@@ -26,7 +28,7 @@ const DEFAULT_PARALLEL_MIN_BYTES: usize = 512 * 1024;
 /// One per-op audit record: `(op, affected_rows, total_rows, sample_before,
 /// sample_after)`. Samples are the null-preserving first 3 values, mirroring the
 /// Python columnar engine's `series.head(3).cast(Utf8).to_list()`.
-type OpRecord = (String, u64, u64, Vec<Option<String>>, Vec<Option<String>>);
+pub type OpRecord = (String, u64, u64, Vec<Option<String>>, Vec<Option<String>>);
 /// Manifest for one transformed column: `(column, [OpRecord])`.
 type ColumnManifest = (String, Vec<OpRecord>);
 
@@ -197,23 +199,41 @@ fn read_csv(path: &str) -> Result<(Vec<String>, Vec<LargeStringArray>), String> 
     Ok((names, columns))
 }
 
-/// Serialize rows `[start, end)` of `columns` to an in-memory CSV byte buffer
-/// (no header) via the `csv` crate — null -> empty field, RFC4180 quoting.
-fn write_region(columns: &[LargeStringArray], start: usize, end: usize) -> Result<Vec<u8>, String> {
-    let mut w = csv::WriterBuilder::new()
-        .has_headers(false)
-        .from_writer(Vec::<u8>::new());
-    for row in start..end {
-        for c in columns {
-            let field = if c.is_null(row) { "" } else { c.value(row) };
-            w.write_field(field)
-                .map_err(|e| format!("write row {row}: {e}"))?;
+/// Append one CSV field to `out`, matching Polars' `write_csv` quoting EXACTLY:
+/// a null cell is an empty field (no quotes); a NON-null cell is quoted iff it is
+/// the empty string (so `""` round-trips as `""`, distinct from a null empty field)
+/// OR it contains a delimiter / quote / newline, with `"` escaped as `""`.
+fn write_csv_field(out: &mut Vec<u8>, field: Option<&str>) {
+    let Some(s) = field else { return }; // null -> empty field
+    let needs_quote = s.is_empty() || s.bytes().any(|b| matches!(b, b',' | b'"' | b'\n' | b'\r'));
+    if needs_quote {
+        out.push(b'"');
+        for b in s.bytes() {
+            if b == b'"' {
+                out.push(b'"');
+            }
+            out.push(b);
         }
-        w.write_record(std::iter::empty::<&[u8]>())
-            .map_err(|e| format!("end row {row}: {e}"))?;
+        out.push(b'"');
+    } else {
+        out.extend_from_slice(s.as_bytes());
     }
-    w.into_inner()
-        .map_err(|e| format!("finish write buffer: {e}"))
+}
+
+/// Serialize rows `[start, end)` of `columns` to an in-memory CSV byte buffer (no
+/// header) — Polars-matching quoting, `\n` terminator.
+fn write_region(columns: &[LargeStringArray], start: usize, end: usize) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
+    for row in start..end {
+        for (i, c) in columns.iter().enumerate() {
+            if i > 0 {
+                out.push(b',');
+            }
+            write_csv_field(&mut out, (!c.is_null(row)).then(|| c.value(row)));
+        }
+        out.push(b'\n');
+    }
+    Ok(out)
 }
 
 /// Write `(column_names, columns)` back to a CSV file — null -> empty field,
@@ -226,16 +246,15 @@ fn write_csv(path: &str, names: &[String], columns: &[LargeStringArray]) -> Resu
     let nrows = columns.first().map_or(0, |c| c.len());
     let value_bytes: usize = columns.iter().map(|c| c.values().len()).sum();
 
-    // Header (one buffer; picks up the same quoting rules as the data).
-    let mut header = csv::WriterBuilder::new()
-        .has_headers(false)
-        .from_writer(Vec::<u8>::new());
-    header
-        .write_record(names)
-        .map_err(|e| format!("write header: {e}"))?;
-    let header = header
-        .into_inner()
-        .map_err(|e| format!("finish header buffer: {e}"))?;
+    // Header (same quoting rules as the data).
+    let mut header = Vec::new();
+    for (i, n) in names.iter().enumerate() {
+        if i > 0 {
+            header.push(b',');
+        }
+        write_csv_field(&mut header, Some(n));
+    }
+    header.push(b'\n');
 
     let nthreads = std::thread::available_parallelism().map_or(1, |n| n.get());
     let bufs: Vec<Vec<u8>> = if nthreads <= 1 || value_bytes < parallel_min_bytes() {
@@ -274,10 +293,40 @@ fn write_csv(path: &str, names: &[String], columns: &[LargeStringArray]) -> Resu
     Ok(())
 }
 
-/// Read `in_path`, apply each spec's owned string chain (op-by-op, so the manifest
-/// carries per-op affected counts + before/after samples exactly like the Python
-/// columnar engine), write to `out_path`, and return the per-column manifest.
-/// Polars-free, pyarrow-free, one FFI crossing.
+/// Run a resolved chain over `col` and build the per-op manifest: ONE fused pass
+/// (`run_all` → the final array + per-op `changed` counts) plus a cheap 3-row
+/// replay (`run_one` applies just kernel `i`) for the before/after samples —
+/// byte-identical to running each op over the full column, at a fraction of the
+/// cost (N ops ⇒ 1 full pass, not N). Generic over the chain kind (total /
+/// nullable), which both return the same `ChainResult<i64>`.
+fn build_manifest<FAll, FOne>(
+    col: &LargeStringArray,
+    ops: &[(String, Vec<String>)],
+    total: u64,
+    run_all: FAll,
+    run_one: FOne,
+) -> (LargeStringArray, Vec<OpRecord>)
+where
+    FAll: FnOnce(&LargeStringArray) -> ChainResult<i64>,
+    FOne: Fn(&LargeStringArray, usize) -> ChainResult<i64>,
+{
+    let fused = run_all(col);
+    let mut head = LargeStringArray::from_iter(sample3(col));
+    let mut records: Vec<OpRecord> = Vec::with_capacity(ops.len());
+    for (i, (op, _)) in ops.iter().enumerate() {
+        let before = sample3(&head);
+        let replay = run_one(&head, i);
+        let after = sample3(&replay.array);
+        records.push((op.clone(), fused.changed[i], total, before, after));
+        head = replay.array;
+    }
+    (fused.array, records)
+}
+
+/// Read `in_path`, apply each spec's owned string chain (auto-routed total /
+/// nullable, so the manifest carries per-op affected counts + before/after samples
+/// exactly like the Python columnar engine), write to `out_path`, and return the
+/// per-column manifest. Polars-free, pyarrow-free, one FFI crossing.
 #[pyfunction]
 pub fn transform_csv(
     py: Python,
@@ -286,40 +335,72 @@ pub fn transform_csv(
     specs: Vec<ColumnSpec>,
 ) -> PyResult<Vec<ColumnManifest>> {
     py.detach(|| -> PyResult<Vec<ColumnManifest>> {
-        let (names, mut columns) =
+        let (mut names, mut columns) =
             read_csv(in_path).map_err(|e| PyIOError::new_err(format!("read CSV: {e}")))?;
-        let idx_of = |name: &str| names.iter().position(|n| n == name);
 
         let mut manifest: Vec<ColumnManifest> = Vec::with_capacity(specs.len());
+        // Split outputs (fixed-name columns to add) accumulate here and are appended
+        // AFTER all specs, so they land after the original columns (as Polars does).
+        let mut extra: Vec<(String, LargeStringArray)> = Vec::new();
         for (col_name, ops) in &specs {
-            let Some(idx) = idx_of(col_name) else {
+            let Some(idx) = names.iter().position(|n| n == col_name) else {
                 continue; // column not in file — mirrors the Python `if col in df.columns`
             };
             let total = columns[idx].len() as u64;
-            let mut kernels = Vec::with_capacity(ops.len());
-            for (op, params) in ops {
-                let refs: Vec<&str> = params.iter().map(String::as_str).collect();
-                kernels.push(Kernel::from_op(op, &refs).ok_or_else(|| {
-                    PyValueError::new_err(format!("not a fusable chain kernel: {op}"))
-                })?);
+            // Split shape (`string* splitter`) transforms the source in place and ADDS
+            // the fixed-name output columns (source itself unchanged by the split).
+            if let Some(plan) = crate::split_columnar::resolve_split(ops) {
+                let (src, new_cols, records) =
+                    crate::split_columnar::run_split_column(&columns[idx], &plan);
+                columns[idx] = src;
+                extra.extend(new_cols);
+                manifest.push((col_name.clone(), records));
+                continue;
             }
-            // ONE fused pass over the whole column: the final array + per-op changed
-            // counts (apply_chain already returns changed[i] per kernel). The per-op
-            // before/after samples come from a cheap replay on just the first 3 rows —
-            // byte-identical to running each op over the full column, at a fraction of
-            // the cost (N ops => 1 full pass, not N).
-            let fused = apply_chain(&columns[idx], &kernels);
-            let mut head = LargeStringArray::from_iter(sample3(&columns[idx]));
-            let mut records: Vec<OpRecord> = Vec::with_capacity(ops.len());
-            for (i, (op, _)) in ops.iter().enumerate() {
-                let before = sample3(&head);
-                let replay = apply_chain(&head, std::slice::from_ref(&kernels[i]));
-                let after = sample3(&replay.array);
-                records.push((op.clone(), fused.changed[i], total, before, after));
-                head = replay.array;
+            // Numeric shape (`string* parser f64*`) runs the string->f64->string
+            // path (formatting via the Polars-matching float formatter); otherwise
+            // auto-route the string run total vs nullable.
+            if let Some(plan) = crate::numeric_columnar::resolve_numeric(ops) {
+                let (numcol, records) =
+                    crate::numeric_columnar::run_numeric_column(&columns[idx], &plan);
+                // CSV output is text: format the numeric result (f64 via the
+                // Polars-matching formatter, i64 as a plain integer).
+                columns[idx] = LargeStringArray::from_iter(numcol.fmt());
+                manifest.push((col_name.clone(), records));
+                continue;
             }
-            columns[idx] = fused.array;
+            // Auto-route the run: all-total takes the zero-alloc fast chain; any
+            // Option-returning kernel takes the nullable chain. Both return the same
+            // ChainResult, so the fused-pass + 3-row-replay manifest logic is shared.
+            let (new_array, records) = match resolve_chain(ops)? {
+                ChainOps::Total(ks) => build_manifest(
+                    &columns[idx],
+                    ops,
+                    total,
+                    |c| apply_chain(c, &ks),
+                    |c, i| apply_chain(c, std::slice::from_ref(&ks[i])),
+                ),
+                ChainOps::Nullable(ks) => build_manifest(
+                    &columns[idx],
+                    ops,
+                    total,
+                    |c| apply_chain_nullable(c, &ks),
+                    |c, i| apply_chain_nullable(c, std::slice::from_ref(&ks[i])),
+                ),
+            };
+            columns[idx] = new_array;
             manifest.push((col_name.clone(), records));
+        }
+
+        // Append the split output columns (or replace an existing same-name column,
+        // matching Polars' `with_columns` semantics).
+        for (name, arr) in extra {
+            if let Some(pos) = names.iter().position(|n| *n == name) {
+                columns[pos] = arr;
+            } else {
+                names.push(name);
+                columns.push(arr);
+            }
         }
 
         write_csv(out_path, &names, &columns)

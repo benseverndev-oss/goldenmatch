@@ -144,10 +144,11 @@ class Pipeline:
             enforce_confidence,
             plan_to_config,
         )
-        from goldenpipe.autoconfig_planner import plan_pipeline
+        from goldenpipe.autoconfig_planner import apply_scale_hints, plan_pipeline
 
         inp = build_planner_input(ctx)
         plan = plan_pipeline(inp)
+        plan = apply_scale_hints(plan, inp.runtime)
         self._last_plan = plan
         enforce_confidence(plan, inp.runtime)  # may raise PipeNotConfidentError
         return plan_to_config(
