@@ -166,10 +166,18 @@ recovered by `[native]`.
   transforms data (covered configs) with Polars uninstalled — the Layer-3 milestone.
   `transform_columns_native` is a standalone core (not yet wired into the default
   `transform_df`); **4c** wires it behind the public entry point.
-- **4c — Polars-free public entry point.** Add `transform(data)` (D1a) accepting
-  path / dict / Arrow, returning a backend-agnostic result. `transform_df` becomes a
-  thin Polars-backend adapter. Gate: `transform(dict)` == `transform_df(pl.DataFrame)`
-  for the covered configs.
+- **4c — Polars-free public entry point. SHIPPED.** Added `goldenflow.transform(data,
+  config=None)` accepting a `dict[str, list]`, returning a `ColumnarResult`
+  (`.columns` dict + `.manifest`, opt-in `.to_polars()`). A covered config runs on the
+  4b native core with **Polars never imported**; an uncovered config (or `config=None`
+  zero-config) declines to the Polars engine via the existing `transform_df` (so it's
+  byte-identical), raising a clear `install goldenflow[polars]` if Polars is absent.
+  `transform_df(pl.DataFrame)` is unchanged for existing callers (D1a chosen —
+  non-breaking). Gate: `tests/engine/test_public_transform_polars_free.py`
+  (`transform(dict)` == `transform_df(pl.DataFrame)` for covered configs incl. splits;
+  uncovered parity; pl.DataFrame-input TypeError; `to_polars()` bridge; subprocess
+  polars-free check). `import goldenflow` stays Polars-free (columnar now loads at
+  import for `ColumnarResult`, verified clean).
 - **4d — Transform signature port.** Rewrite the owned-family wrappers (one family at
   a time) + the non-owned residual to dispatch on a `Column` instead of `pl.Series`/
   `pl.Expr`. Gate: the existing per-family parity corpus, unchanged.
