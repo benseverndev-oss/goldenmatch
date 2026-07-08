@@ -77,6 +77,13 @@ def test_embedding_columns_and_missing_fields_graceful():
     assert out["scorer"] == {"columns": ["name_a", "name_b"]}
 
 
+def test_record_embedding_sentinel_is_skipped():
+    # record_embedding sets field="__record__" (not a real column) + real columns
+    cfg = {"matchkeys": [{"fields": [{"field": "__record__", "columns": ["full_name"]}]}]}
+    out = _normalize_match_config(cfg)
+    assert out["scorer"] == {"columns": ["full_name"]}  # __record__ filtered out
+
+
 def test_empty_config_is_empty():
     assert _normalize_match_config({}) == {"keys": [], "scorer": {"columns": []}}
 ```
@@ -107,9 +114,12 @@ def _normalize_match_config(cfg: dict) -> dict:
                 refs.append(f["field"])
             refs.extend(f.get("columns") or [])
             for c in refs:
-                if c not in seen:
-                    seen.add(c)
-                    scorer_cols.append(c)
+                # skip the record_embedding sentinel (MatchkeyField sets field="__record__"
+                # for a whole-record scorer) — it is not a real column.
+                if c == "__record__" or c in seen:
+                    continue
+                seen.add(c)
+                scorer_cols.append(c)
     return {"keys": sorted(key_cols), "scorer": {"columns": scorer_cols}}
 ```
 
@@ -234,8 +244,11 @@ def provenance(compiled: dict) -> dict:
         else:  # Source / Connected / Barrier
             unmapped.append({"node_id": n["id"], "kind": kind, "note": _note(kind)})
 
-    # apply blocking/scorer roles (create a field entry if a key/scorer col has no Scan/Map)
-    for col in list(blocking) + list(scorer):
+    # apply blocking/scorer roles. A key/scorer-only column (no Scan/Map) gets a field
+    # entry; append those in SORTED order — Python set iteration is nondeterministic and
+    # would flake the golden-vector / Rust-parity comparison. (Do NOT use list(blocking)
+    # + list(scorer) here.)
+    for col in sorted(blocking | scorer):
         field(col)
     for col, f in fields.items():
         f["blocking_key"] = col in blocking
@@ -248,7 +261,9 @@ def _note(kind: str) -> str:
     return {"Source": "data loaded", "Connected": "clustering", "Barrier": "opaque stage"}.get(kind, kind)
 ```
 
-Note ordering: `blocking`/`scorer` roles are applied after the node scan, and a blocking/scorer-only column (no Scan/Map) is appended in `list(blocking)+list(scorer)` iteration order — since Python `set` order is nondeterministic, sort those for determinism: change to `for col in sorted(blocking | scorer): field(col)`. (Update the implementation to `sorted(blocking | scorer)`.)
+`node_ids` deliberately lists only the **column-bearing** Scan/Map nodes (blocking/scorer
+participation is the `blocking_key`/`scorer_input` boolean flags, not node ids) — keep it
+that way so the Python and Rust mirrors stay simple and identical.
 
 - [ ] **Step 4: Run to verify PASS (4 tests).** Confirm the field order is deterministic (first-seen for Scan/Map columns, then sorted for role-only columns).
 
@@ -283,7 +298,9 @@ def provenance_json(s: str) -> str:
 
 - [ ] **Step 1: Write failing tests** `tests/compiler/test_lineage.py`:
 - A `format_lineage` unit test (structured lineage → the expected human string).
-- A **real-pipeline** test: reuse the equivalence-gate fixture helpers (`_tiny_people_df`, `_write_csv`, `_read_source`, `_registry`, `_plan` from `tests/compiler/test_equivalence.py` — import them), `compile_and_run` the full `load→check→flow→match` (contexts path), call `field_lineage(compiled)`, and assert: `email`'s `transforms` are non-empty and match the `manifest.records` transforms for `email`; and the `blocking_key` columns equal the columns in the resolved config's `blocking.keys`/`passes` (recompute via `_build_config_from_contexts` on the same contexts, or read them off the compiled `Partition` node). Keep assertions to what the contexts path deterministically produces.
+- A **real-pipeline** test: reuse the equivalence-gate fixture helpers (`_tiny_people_df`, `_write_csv`, `_read_source`, `_registry`, `_plan` from `tests/compiler/test_equivalence.py` — import them), `compile_and_run` the full `load→check→flow→match` (contexts path), call `field_lineage(compiled)`, and assert:
+  - `email`'s `transforms` match the `manifest.records` transforms for `email` (from `compiled_ctx.artifacts["manifest"]`) — a real fidelity check.
+  - **`blocking_key` columns == the compiled `Partition` node's `keys`** (read the `Partition` node out of `compiled["nodes"]` and compare the set of `blocking_key=True` columns to `set(partition["keys"])`). This asserts lineage matches the recorded plan WITHOUT assuming blocking is non-empty — if the fixture's classification yields `auto_suggest`/empty keys (`adapters/match.py`), both sides are empty and the assertion still holds honestly. Inspect the actual `column_contexts`/`Partition` node rather than assuming a particular column blocks.
 
 - [ ] **Step 2: Run to verify FAIL.**
 
