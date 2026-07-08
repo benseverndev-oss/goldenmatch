@@ -1,5 +1,37 @@
 # Changelog
 
+## [Unreleased]
+
+Polars-eviction Phase 4: the columnar path is now the **default** for the public
+`transform()` entry point (no `GOLDENFLOW_ENGINE=columnar` opt-in needed), and it runs
+**Polars-free** end to end. `import goldenflow` no longer imports Polars; every one of the
+113 transforms runs on the native/Arrow substrate, byte-identical to the Polars engine.
+The remaining work is the 2.0 major that moves `polars` out of the base dependencies.
+
+- **Polars-free public `transform()`.** `goldenflow.transform(data, config=...)` accepts a
+  `dict[str, list]` OR a file path and returns a `ColumnarResult` (`.columns` + `.manifest`,
+  with an opt-in `.to_polars()` bridge) — with **Polars never imported** for a covered
+  config. `transform_df(pl.DataFrame)` stays as the Polars-backend adapter (it needs a
+  `pl.DataFrame`, which needs Polars).
+- **Every transform on the columnar path (9/9 gaps closed).** A `scalar=` / `scalar_dtype`
+  / `scalar_factory` registry mechanism plus new columnar op-shapes (multi-input
+  `merge_name`, flag-only `initial_expand`, whole-column `category_auto_correct`, and a
+  synthetic-coerce numeric-INPUT path for `round`/`clamp`/`abs_value`/`fill_zero`) bring the
+  full transform surface onto the Polars-free path. Owned by `goldenflow-native>=0.26.0`
+  (adds `format_f64` + the numeric-input `AsFloat` parser).
+- **Polars-free file readers.** `transform("<x>.csv")` (stdlib csv), `"<x>.parquet"`
+  (pyarrow `to_pydict`, byte-identical to `pl.read_parquet`), and `"<x>.xlsx"` (openpyxl)
+  all read without Polars. `connectors.database.read_database_columns(conn, query)` reads
+  any PEP-249 (DBAPI) connection into a dict, no connectorx/polars.
+- **Polars-free zero-config.** `transform(data, config=None)` profiles + auto-selects over
+  plain lists (`profiler_bridge.profile_columns`), Polars-free. For a **dict / Parquet /
+  Excel** input it is byte-identical to `transform_df(..., config=None)`; for **CSV** it
+  profiles columns *as text* (so `"01234"` stays a zip, not `1234`) — an intentional
+  data-cleaning-correct divergence from `pl.read_csv`'s numeric coercion.
+- **New extras.** `goldenflow[polars]` (the optional Polars bulk-vectorized backend +
+  `transform_df` + `pl.read_*` I/O) and `goldenflow[parquet]` (pyarrow, for Polars-free
+  Parquet read). `goldenflow[native]` floor bumped to `goldenflow-native>=0.26.0`.
+
 ## 1.17.0 (2026-07-07)
 
 Polars-eviction Phases 2-3: a config's owned transforms now run entirely on the native/Arrow substrate (no Polars, no pyarrow) on both the whole-file CSV path and the in-memory path, byte-identical (data + manifest) to the Polars engine. Needs `goldenflow-native>=0.24.0`. Opt in with `GOLDENFLOW_ENGINE=columnar`; anything the columnar path does not cover declines to the Polars engine, so behavior is never wrong.

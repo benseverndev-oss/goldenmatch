@@ -2,6 +2,26 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-07-08 -- GoldenFlow: Polars eviction FUNCTIONALLY COMPLETE (Phase 4, extends ADR 0034)
+- The "Great Polars Eviction" (ADR 0034) is done on the transform + I/O surface. `import
+  goldenflow` imports no Polars; the public `transform(data, config)` runs the native/Arrow
+  substrate by DEFAULT (no `GOLDENFLOW_ENGINE=columnar` opt-in), and ALL 113 transforms are
+  columnar (9/9 gaps closed) via a `scalar=`/`scalar_dtype`/`scalar_factory` registry
+  mechanism + 3 new columnar op-shapes (multi-input `merge_name`, flag-only
+  `initial_expand`, whole-column `category_auto_correct`) + a synthetic-`AsFloat`
+  numeric-INPUT path. `transform()` reads `.csv`/`.parquet`/`.xlsx` + any DBAPI connection
+  Polars-free; zero-config (`config=None`) is Polars-free too.
+- LOAD-BEARING DECISIONS (design doc `docs/design/2026-07-07-phase4-polars-optional-scoping.md`
+  §5a): (1) `transform()` is the Polars-free primary, `transform_df(pl.DataFrame)` the
+  optional Polars-backend adapter (tautological — needs Polars to hold a pl.DataFrame);
+  (2) CSV zero-config OWNS its inference (profiles columns as text, `"01234"` stays a zip)
+  — an intentional `pl.read_csv` divergence, dates-style. New extras `[polars]`/`[parquet]`;
+  `goldenflow-native` republished 0.26.0 (adds `format_f64` + AsFloat). Weight win measured
+  ~185 MB installed / ~35 MB wheel.
+- REMAINING: only the 2.0 major that drops `polars` from base deps -> `[polars]` (fully
+  de-risked: `[polars]` extra + `goldenflow_nopolars` CI lane staged, polars-absent
+  validated).
+
 ## 2026-07-06 -- GoldenFlow: fused columnar apply, Pillar-1 execution fusion, default-on (ADR 0034)
 - First real step of the "Great Polars Eviction": fuse a column's run of owned no-arg
   total string→string kernels (25: text/email/name) into ONE native Arrow pass instead

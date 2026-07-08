@@ -92,6 +92,23 @@ config = GoldenFlowConfig(transforms=[
 result = goldenflow.transform_df(df, config=config)
 ```
 
+## Polars-free `transform()`
+
+`goldenflow.transform()` runs the same transforms on the native/Arrow substrate with
+**Polars never imported**. It takes a `dict[str, list]` or a file path
+(`.csv` / `.parquet` / `.xlsx`), and returns a `ColumnarResult` (`.columns` +
+`.manifest`, with an opt-in `.to_polars()`):
+
+```python
+result = goldenflow.transform({"phone": ["212-555-0100"]}, config=config)
+result = goldenflow.transform("customers.parquet", config=config)  # pyarrow, no Polars
+result = goldenflow.transform("customers.csv", config=None)        # zero-config, Polars-free
+```
+
+`transform_df(pl.DataFrame)` stays as the Polars-backend adapter. Install optional
+backends with `pip install goldenflow[polars]` (bulk-vectorized backend + `pl.read_*`)
+or `goldenflow[parquet]` (pyarrow, for Polars-free Parquet read).
+
 ## Schema mapping
 
 ```python
