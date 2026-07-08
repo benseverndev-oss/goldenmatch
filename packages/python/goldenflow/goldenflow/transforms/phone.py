@@ -55,35 +55,73 @@ def _parse_phone(val: str | None) -> phonenumbers.PhoneNumber | None:
         return None
 
 
+# Module-level per-row references (Phase 4d scalar path). The fast path
+# (`apply_with_residual`) is parity-safe by construction -- every tier agrees with
+# these references on the rows it resolves -- so the engine's output equals applying
+# these row-by-row. Registering them as `scalar=` makes the phone family run on the
+# Polars-free columnar path byte-identically to the Polars engine (slower per-row
+# phonenumbers, recovered by [native]; only the columnar/Polars-free path uses this,
+# never the default fast path).
+def _phone_e164_py(val: str | None) -> str | None:
+    if val is None:
+        return None
+    parsed = _parse_phone(val)
+    if parsed is None:
+        return val  # preserve original on failure
+    return phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
+
+
+def _phone_national_py(val: str | None) -> str | None:
+    if val is None:
+        return None
+    parsed = _parse_phone(val)
+    if parsed is None:
+        return val
+    return phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.NATIONAL)
+
+
+def _phone_validate_py(val: str | None) -> bool | None:
+    if val is None:
+        return None
+    parsed = _parse_phone(val)
+    if parsed is None:
+        return False
+    return phonenumbers.is_possible_number(parsed)
+
+
+def _phone_country_code_py(val: str | None) -> int | None:
+    if val is None:
+        return None
+    parsed = _parse_phone(val)
+    if parsed is None:
+        return None
+    return parsed.country_code
+
+
+def _phone_digits_py(val: str | None) -> str | None:
+    """Byte-exact reference for the corpus oracle: keep only ASCII digits
+    (matches the goldenflow-core `phone_digits` kernel; a Unicode digit is
+    dropped here, unlike Python `str.isdigit`)."""
+    if val is None:
+        return None
+    return "".join(c for c in val if c in "0123456789")
+
+
 @register_transform(
-    name="phone_e164", input_types=["phone"], auto_apply=True, priority=50, mode="series"
+    name="phone_e164", input_types=["phone"], auto_apply=True, priority=50, mode="series",
+    scalar=_phone_e164_py,
 )
 def phone_e164(series: pl.Series) -> pl.Series:
-    def _format(val: str | None) -> str | None:
-        if val is None:
-            return None
-        parsed = _parse_phone(val)
-        if parsed is None:
-            return val  # preserve original on failure
-        return phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
-
     return apply_with_residual(
-        series, _e164_fast_expr(), _format, pl.Utf8, native_fn=phone_e164_native()
+        series, _e164_fast_expr(), _phone_e164_py, pl.Utf8, native_fn=phone_e164_native()
     )
 
 
 @register_transform(
-    name="phone_national", input_types=["phone"], auto_apply=False, priority=50, mode="series"
+    name="phone_national", input_types=["phone"], auto_apply=False, priority=50, mode="series",
+    scalar=_phone_national_py,
 )
 def phone_national(series: pl.Series) -> pl.Series:
-    def _format(val: str | None) -> str | None:
-        if val is None:
-            return None
-        parsed = _parse_phone(val)
-        if parsed is None:
-            return val
-        return phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.NATIONAL)
-
     # Native NANP national format, gated to the canonical "(NXX) NXX-XXXX" shape
     # (phone_national_native nulls the ambiguous leading-1 outputs so tier-3
     # Python settles them). No Polars fast expr -- a no-op lit + the Python
@@ -91,14 +129,15 @@ def phone_national(series: pl.Series) -> pl.Series:
     return apply_with_residual(
         series,
         pl.lit(None, dtype=pl.Utf8),
-        _format,
+        _phone_national_py,
         pl.Utf8,
         native_fn=phone_national_native(),
     )
 
 
 @register_transform(
-    name="phone_digits", input_types=["phone"], auto_apply=False, priority=50, mode="series"
+    name="phone_digits", input_types=["phone"], auto_apply=False, priority=50, mode="series",
+    scalar=_phone_digits_py,
 )
 def phone_digits(series: pl.Series) -> pl.Series:
     # Native-first over goldenflow-core (ASCII digit-strip); else the pure-Polars
@@ -112,28 +151,12 @@ def phone_digits(series: pl.Series) -> pl.Series:
     return series.cast(pl.Utf8).str.replace_all(r"\D", "")
 
 
-def _phone_digits_py(val: str | None) -> str | None:
-    """Byte-exact reference for the corpus oracle: keep only ASCII digits
-    (matches the goldenflow-core `phone_digits` kernel; a Unicode digit is
-    dropped here, unlike Python `str.isdigit`)."""
-    if val is None:
-        return None
-    return "".join(c for c in val if c in "0123456789")
-
-
 @register_transform(
-    name="phone_validate", input_types=["phone"], auto_apply=False, priority=60, mode="series"
+    name="phone_validate", input_types=["phone"], auto_apply=False, priority=60, mode="series",
+    scalar=_phone_validate_py, scalar_dtype="bool",
 )
 def phone_validate(series: pl.Series) -> pl.Series:
-    def _validate(val: str | None) -> bool | None:
-        if val is None:
-            return None
-        parsed = _parse_phone(val)
-        if parsed is None:
-            return False
-        return phonenumbers.is_possible_number(parsed)
-
-    return series.map_elements(_validate, return_dtype=pl.Boolean)
+    return series.map_elements(_phone_validate_py, return_dtype=pl.Boolean)
 
 
 @register_transform(
@@ -142,21 +165,14 @@ def phone_validate(series: pl.Series) -> pl.Series:
     auto_apply=False,
     priority=45,
     mode="series",
+    scalar=_phone_country_code_py,
+    scalar_dtype="int",
 )
 def phone_country_code(series: pl.Series) -> pl.Series:
     """Extract the country calling code as an integer."""
-
-    def _code(val: str | None) -> int | None:
-        if val is None:
-            return None
-        parsed = _parse_phone(val)
-        if parsed is None:
-            return None
-        return parsed.country_code
-
     native = phone_country_code_native()
     if native is None:
-        return series.map_elements(_code, return_dtype=pl.Int64)
+        return series.map_elements(_phone_country_code_py, return_dtype=pl.Int64)
     return apply_with_residual(
-        series, pl.lit(None, dtype=pl.Int64), _code, pl.Int64, native_fn=native
+        series, pl.lit(None, dtype=pl.Int64), _phone_country_code_py, pl.Int64, native_fn=native
     )
