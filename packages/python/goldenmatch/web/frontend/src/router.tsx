@@ -6,6 +6,7 @@ import {
   Outlet,
 } from "@tanstack/react-router";
 import { Compare } from "./routes/Compare";
+import { Documents } from "./routes/Documents";
 import { Home } from "./routes/Home";
 import { Inspector } from "./routes/Inspector";
 import { Match } from "./routes/Match";
@@ -35,6 +36,7 @@ const rootRoute = createRootRoute({
           <NavLink to="/">Project</NavLink>
           <NavLink to="/workbench">Workbench</NavLink>
           <NavLink to="/match">Match</NavLink>
+          <NavLink to="/documents">Ingest</NavLink>
           <NavLink to="/compare">Compare</NavLink>
           <NavLink to="/sensitivity">Sensitivity</NavLink>
           <NavLink to="/identities">Identities</NavLink>
@@ -112,6 +114,12 @@ const memoryRoute = createRoute({
   component: Memory,
 });
 
+const documentsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/documents",
+  component: Documents,
+});
+
 const identitiesRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/identities",
@@ -127,6 +135,7 @@ const routeTree = rootRoute.addChildren([
   matchRoute,
   memoryRoute,
   identitiesRoute,
+  documentsRoute,
   settingsRoute,
 ]);
 
