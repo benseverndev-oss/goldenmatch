@@ -1,0 +1,54 @@
+description: "Insurance — policies, claims, premiums, coverage, underwriting, beneficiaries"
+
+types:
+  policy:
+    name_hints: ["policy_number", "policy_id", "policy_no"]
+    value_signals:
+      min_unique_pct: 0.90
+    suppress: ["cardinality", "pattern_consistency", "drift_detection"]
+
+  claim:
+    name_hints: ["claim_number", "claim_id", "claim_no", "claim_status"]
+    suppress: ["pattern_consistency"]
+
+  premium:
+    name_hints: ["premium", "premium_amount", "annual_premium"]
+    value_signals:
+      numeric: true
+    suppress: ["pattern_consistency"]
+
+  deductible:
+    name_hints: ["deductible"]
+    value_signals:
+      numeric: true
+    suppress: ["pattern_consistency"]
+
+  coverage:
+    name_hints: ["coverage", "coverage_amount", "coverage_type", "sum_insured"]
+    value_signals:
+      max_unique: 30
+    suppress: ["uniqueness", "range_distribution"]
+
+  policyholder:
+    name_hints: ["policyholder", "insured"]
+    value_signals:
+      mixed_case: true
+    suppress: ["pattern_consistency"]
+
+  underwriter:
+    name_hints: ["underwriter"]
+    value_signals:
+      mixed_case: true
+    suppress: ["pattern_consistency"]
+
+  beneficiary:
+    name_hints: ["beneficiary"]
+    value_signals:
+      mixed_case: true
+    suppress: ["pattern_consistency"]
+
+  insurance_type:
+    name_hints: ["insurance_type", "policy_type"]
+    value_signals:
+      max_unique: 20
+    suppress: ["uniqueness", "range_distribution"]
