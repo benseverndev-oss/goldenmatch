@@ -421,18 +421,16 @@ export function attachRepairPlan(
   rows: Row[],
 ): { repairs: RepairItem[] } {
   const columns = buildColumnInputs(contexts, rows);
-  const plan = JSON.parse(buildRepairPlanJsonLocal(findings, columns)) as { repairs: RepairItem[] };
+  // buildRepairPlan returns a typed RepairPlan structurally identical to
+  // {repairs: RepairItem[]}; call it directly (no JSON round-trip). If repair.ts
+  // exports Finding/ColumnInput, use those instead of the casts.
+  const plan = buildRepairPlan(findings as never, columns as never) as unknown as { repairs: RepairItem[] };
   ctx.artifacts["repair_plan"] = plan;
   const lines = plan.repairs.map(
     (item) => `repair: ${item.column} (${item.check}) -> ${item.suggested_transforms.join(",")} [${item.reason}]`,
   );
   if (lines.length > 0) ctx.reasoning["repair_plan"] = lines.join("\n");
   return plan;
-}
-
-// buildRepairPlan takes (findings, columns) and returns the object directly.
-function buildRepairPlanJsonLocal(findings: unknown[], columns: unknown[]): string {
-  return JSON.stringify(buildRepairPlan(findings as never, columns as never));
 }
 
 // ── FIXERS allowlist + conversion (identical to repair_host.py) ──────────
@@ -500,7 +498,14 @@ cd "D:/show_case/gg-local-llm" && git add packages/typescript/goldenpipe/src/cor
 
 - [ ] **Step 1: Read `check.ts`** around the `ctx.artifacts["column_contexts"] = ...` assignment (near line 83) and the final `return { status: StageStatus.SUCCESS }` (near 88).
 
-- [ ] **Step 2: Insert the attach call** immediately before the final `return`, mirroring `check.py` (advisory, non-fatal):
+- [ ] **Step 2: Add the `ColumnContext` type import** at the top of `check.ts` (the reviewer confirmed it is NOT currently imported — omitting this is a `TS2304` in CI):
+
+```ts
+import type { ColumnContext } from "../columnContext.js";
+```
+(Merge into an existing `columnContext.js` import line if one exists.)
+
+- [ ] **Step 3: Insert the attach call** immediately before the final `return`, mirroring `check.py` (advisory, non-fatal):
 
 ```ts
     // Advisory repair-plan (Phase 1 producer, TS side). Never throws.
@@ -516,9 +521,9 @@ cd "D:/show_case/gg-local-llm" && git add packages/typescript/goldenpipe/src/cor
     }
 ```
 
-Confirm `ColumnContext` is already imported in `check.ts` (it uses `buildContextsFromCheck`); if not, add the type import. Prefer a top-of-file `import { attachRepairPlan } from "../repairHost.js";` if the file's style uses static imports (check whether `check.ts` uses dynamic `await import` elsewhere; match the file — a static import is simpler if the module graph allows it. repairHost imports repair.ts + goldenflow/core types only, no cycle with check.ts, so a static import is safe).
+Prefer a top-of-file `import { attachRepairPlan } from "../repairHost.js";` if the file's style uses static imports (check whether `check.ts` uses dynamic `await import` elsewhere; match the file — a static import is simpler if the module graph allows it. repairHost imports repair.ts + goldenflow/core types only, no cycle with check.ts, so a static import is safe).
 
-- [ ] **Step 3: Grep-verify + commit**
+- [ ] **Step 4: Grep-verify + commit**
 
 Verify the insertion is inside `run` after `column_contexts` is set, before `return`. Confirm no `noUncheckedIndexedAccess` issue (the `?? []` guards cover it).
 
