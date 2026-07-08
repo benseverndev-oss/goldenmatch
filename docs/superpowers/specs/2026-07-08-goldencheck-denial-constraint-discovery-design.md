@@ -107,9 +107,18 @@ order-preserving** — which is fine for the equality-only FD/key kernels but br
   satisfy an order predicate. (The FD kernels' null-id-0 convention is equality-only and does not
   transfer to ordering.)
 
-**Hard bound: |P| ≤ 64 per evidence pass**, so each pass's satisfaction mask fits one `u64`. If a
-pass's raw predicate space exceeds 64, keep the most-supported predicates first (support
-prefilter) and **report the cap in the output** (never silent truncation).
+**Hard bound: |P| ≤ 64 per evidence pass**, so each pass's satisfaction mask fits one `u64`. The
+budgets differ by pass:
+- **Pass 1 (row-level):** one bit per single-tuple predicate → `|P_pass1| = s ≤ 64` (s = number of
+  single-tuple predicates).
+- **Pass 2 (pairwise):** each single-tuple predicate needs **two** bits — `t_α.A=c` and `t_β.A=c`
+  are independent truth values both required to discover a *mixed* DC — plus one bit per cross-tuple
+  predicate. So `|P_pass2| = 2·s + c ≤ 64` (c = number of cross-tuple predicates). The plan's mask
+  layout must reserve the two per-tuple slots explicitly.
+
+If a pass's raw predicate space exceeds its budget, keep the most-supported predicates first
+(support prefilter, applied to that pass's *effective* predicate count including the Pass-2
+doubling) and **report the cap in the output** (never silent truncation).
 
 ## The evidence-set kernels (`evidence.py` + `dc.rs`) — two passes
 
