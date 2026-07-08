@@ -115,7 +115,7 @@ def _norm_value(key: str, value):
         d = value.to_dict()
         d["created_at"] = _FROZEN_TS  # freeze the only wall-clock field
         return d
-    if key in ("df", "golden"):  # polars frames -> list of row dicts
+    if key == "golden":  # polars frame -> list of row dicts
         return value.to_dicts()
     if key == "match_stats":
         return _strip_timing(dict(value))
@@ -126,9 +126,15 @@ def _norm_value(key: str, value):
     return value
 
 
-def _normalize(artifacts: dict, keys) -> dict:
-    """Comparable snapshot of the named artifacts (missing -> None)."""
-    return {k: _norm_value(k, artifacts.get(k)) for k in keys}
+def _snapshot(ctx, keys) -> dict:
+    """Comparable snapshot of the named artifacts (missing -> None). The transformed
+    frame lives in ``ctx.df`` (a polars DataFrame), NOT in ``ctx.artifacts`` -- so
+    "df" is sourced from ``ctx.df`` directly. polars transforms preserve row order,
+    so ``.to_dicts()`` is directly comparable."""
+    snap = {k: _norm_value(k, ctx.artifacts.get(k)) for k in keys if k != "df"}
+    if "df" in keys:
+        snap["df"] = ctx.df.to_dicts() if ctx.df is not None else None
+    return snap
 
 
 # --------------------------------------------------------------------------- #
@@ -180,9 +186,7 @@ def test_equivalence_load_flow_explicit():
     classic = _run_classic(plan, PipeContext(df=_tiny_people_df()), registry)
     compiled_ctx, compiled = _run_compiled(plan, PipeContext(df=_tiny_people_df()), registry)
 
-    assert _normalize(classic.artifacts, compare_keys) == _normalize(
-        compiled_ctx.artifacts, compare_keys
-    )
+    assert _snapshot(classic, compare_keys) == _snapshot(compiled_ctx, compare_keys)
 
     # IR shape: Source (from load) then a Map for the one explicit op.
     assert _kinds(compiled)[:2] == ["Source", "Map"]
@@ -209,9 +213,7 @@ def test_equivalence_scan_flow_auto(tmp_path):
     classic = _run_classic(plan, build_ctx(), registry)
     compiled_ctx, compiled = _run_compiled(plan, build_ctx(), registry)
 
-    assert _normalize(classic.artifacts, compare_keys) == _normalize(
-        compiled_ctx.artifacts, compare_keys
-    )
+    assert _snapshot(classic, compare_keys) == _snapshot(compiled_ctx, compare_keys)
 
     kinds = _kinds(compiled)
     assert "Scan" in kinds
@@ -246,9 +248,7 @@ def test_equivalence_full_pipeline(tmp_path):
     classic = _run_classic(plan, build_ctx(), registry)
     compiled_ctx, compiled = _run_compiled(plan, build_ctx(), registry)
 
-    assert _normalize(classic.artifacts, compare_keys) == _normalize(
-        compiled_ctx.artifacts, compare_keys
-    )
+    assert _snapshot(classic, compare_keys) == _snapshot(compiled_ctx, compare_keys)
 
     kinds = _kinds(compiled)
     assert "Partition" in kinds
