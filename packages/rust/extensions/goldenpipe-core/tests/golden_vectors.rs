@@ -64,3 +64,7 @@ fn vec_build_repair_plan() {
 fn vec_lower() {
     run("lower", lower_json);
 }
+#[test]
+fn vec_provenance() {
+    run("provenance", provenance_json);
+}

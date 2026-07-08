@@ -44,6 +44,10 @@ fn build_repair_plan_json(input: &str) -> String {
 fn lower_json(input: &str) -> String {
     goldenpipe_core::json::lower_json(input)
 }
+#[pyfunction]
+fn provenance_json(input: &str) -> String {
+    goldenpipe_core::json::provenance_json(input)
+}
 
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -58,5 +62,6 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(band_of_json, m)?)?;
     m.add_function(wrap_pyfunction!(build_repair_plan_json, m)?)?;
     m.add_function(wrap_pyfunction!(lower_json, m)?)?;
+    m.add_function(wrap_pyfunction!(provenance_json, m)?)?;
     Ok(())
 }
