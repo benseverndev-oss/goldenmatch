@@ -1,34 +1,20 @@
 from __future__ import annotations
 
-import re
-
 from goldenflow._polars_lazy import pl
 from goldenflow.config.schema import GoldenFlowConfig, TransformSpec
 from goldenflow.domains.base import DomainPack
 from goldenflow.transforms import register_transform
 
+# NOTE: ``npi_validate`` is owned by goldenflow.transforms.identifiers (native-first +
+# a registered pure-Python ``scalar`` for the Polars-free columnar path + byte-parity
+# corpus). healthcare used to register its OWN ``npi_validate`` here, which clobbered
+# the core one whenever this domain loaded — dropping npi_validate off the columnar
+# path (the same class of bug as people_hr's ssn_mask). The domain now REFERENCES the
+# core ``npi_validate`` by name (see PACK.transforms). Behavior note: the core rejects
+# an NPI with embedded letters (e.g. ``"npi:1234567893"``) where the old domain copy
+# stripped all non-digits and accepted it — the core (canonical kernel) is stricter and
+# consistent with the rest of the identifier family.
 
-@register_transform(name="npi_validate", input_types=["string"], auto_apply=False, priority=50, mode="series")
-def npi_validate(series: pl.Series) -> pl.Series:
-    """Validate NPI numbers (10-digit, Luhn check)."""
-    def _validate(val):
-        if val is None:
-            return None
-        digits = re.sub(r"\D", "", str(val))
-        if len(digits) != 10:
-            return False
-        # Luhn check with prefix 80840
-        full = "80840" + digits
-        total = 0
-        for i, d in enumerate(reversed(full)):
-            n = int(d)
-            if i % 2 == 1:
-                n *= 2
-                if n > 9:
-                    n -= 9
-            total += n
-        return total % 10 == 0
-    return series.map_elements(_validate, return_dtype=pl.Boolean)
 
 @register_transform(name="icd10_format", input_types=["string"], auto_apply=False, priority=50, mode="series")
 def icd10_format(series: pl.Series) -> pl.Series:
