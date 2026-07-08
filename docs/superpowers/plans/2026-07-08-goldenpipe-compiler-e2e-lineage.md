@@ -244,11 +244,26 @@ Expected: surface tests pass; `test_adapters` unchanged (the new artifact is add
 
 **Files:** Test `tests/compiler/test_e2e_integration.py`.
 
-- [ ] **Step 1: Write the integration test.** Build a tiny fixture + a **survivorship-ACTIVE** explicit match config (so `golden_provenance` populates). Study `goldenmatch/config/schemas.py` for `GoldenRulesConfig` + `FieldGroupConfig` (or list-form `field_rules`) — the config MUST trip `_survivorship_active` (`field_groups`, OR list-form conditional `field_rules`, OR a rule with `when`/`validate_with`). Run the full `load→check→flow→match` with that config, then:
-  - Assert `ctx.artifacts["golden_provenance"]` is not None (Part A surfaced it).
-  - `compile_and_run` the same plan to get `compiled`; `end_to_end_lineage(compiled, ctx.artifacts["golden_provenance"])` → assert at least one entry carries **both** `source_row_id` (from goldenmatch) **and** a non-empty `transforms` for a Flow-transformed column (from SP2).
+- [ ] **Step 1: Write the integration test.** Build a tiny fixture + a **survivorship-ACTIVE** explicit match config so `golden_provenance` populates.
 
-  **Fallback (if standing up an active config on a tiny fixture proves fiddly):** keep the assertion to "golden_provenance is not None AND end_to_end_lineage yields ≥1 entry with a source_row_id" — the Task-1 unit test already carries the join fidelity; this test's job is proving Part-A surfacing produces real provenance end-to-end. Do NOT weaken to a monkeypatched provenance here (Task 2 covers wiring; this must exercise the REAL goldenmatch lineage path). If you genuinely cannot get `_survivorship_active` true on a tiny fixture after a real effort, report BLOCKED with what you tried (the exact config + why golden_provenance stayed None) rather than faking it.
+  **CRITICAL (from review): the stitch reads only `ClusterProvenance.fields` (the SCALAR survivorship branch), NOT `.groups`.** Group-member columns land in `cp.groups`, which SP3 does not read. So the Flow-transformed column you assert on (`email`) MUST be a **scalar** column (not a group member) — then `build_resolution_order` adds it as a scalar unit and it appears in `cp.fields` with a `source_row_id`. Trip `_survivorship_active` via `field_groups` on *other* columns.
+
+  **Concrete minimal config** (verified to trip `_survivorship_active` via the `field_groups` branch, no `when:`-predicate risk):
+  ```python
+  from goldenmatch.config.schemas import GoldenRulesConfig, GoldenGroupRule  # confirm exact names
+  golden_rules = GoldenRulesConfig(
+      default_strategy="most_complete",
+      field_groups=[GoldenGroupRule(name="loc", columns=["city", "state"], strategy="most_complete")],
+  )
+  # pass on the match StageSpec: config=GoldenMatchConfig(matchkeys=..., blocking=..., golden_rules=golden_rules)
+  ```
+  **Fixture columns:** `email` (dirty → Flow-transformed, SCALAR — the column you assert), `city`+`state` (the ≥2-column group), a name column for blocking (soundex-spread surnames), and real duplicates (so there's a multi-member cluster). Confirm `GoldenGroupRule`/`GoldenRulesConfig` exact names + required fields against `goldenmatch/config/schemas.py`.
+
+  Run the full `load→check→flow→match` with that config, then:
+  - Assert `ctx.artifacts["golden_provenance"]` is not None (Part A surfaced it).
+  - `compile_and_run` the same plan to get `compiled`; `end_to_end_lineage(compiled, ctx.artifacts["golden_provenance"])` → assert at least one entry for the **scalar `email` column** carries **both** `source_row_id` (from goldenmatch `cp.fields`) **and** non-empty `transforms` (from SP2).
+
+  **Fallback (if the active config is still fiddly):** keep the assertion to "golden_provenance is not None AND end_to_end_lineage yields ≥1 entry with a source_row_id" — the Task-1 unit test carries the join fidelity; this test's job is proving Part-A surfacing produces REAL provenance end-to-end. Do NOT weaken to a monkeypatched provenance here (Task 2 covers wiring; this must exercise the REAL goldenmatch lineage path). If you genuinely cannot get `_survivorship_active` true after a real effort, report BLOCKED with the exact config + why `golden_provenance` stayed None — do not fake it.
 
   Env: `GOLDENMATCH_NATIVE=0 POLARS_SKIP_CPU_CHECK=1 GOLDENMATCH_AUTOCONFIG_MEMORY=0`; tiny fixture, soundex-spread surnames.
 
