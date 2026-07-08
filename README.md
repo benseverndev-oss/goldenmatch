@@ -5,7 +5,7 @@
 
 **Zero-config entity resolution that scales — dedupe & match messy records from a laptop CSV to 100M+ rows. No training data, no tuning.**
 
-*The headline package, **GoldenMatch**, does the matching — fuzzy + exact + probabilistic (Fellegi-Sunter) + LLM — and **beats hand-tuned Splink out of the box** (96.4% F1 on DBLP-ACM), identical in Python, edge-safe TypeScript, and SQL. Around it sits a full data-quality suite: GoldenCheck profiles, GoldenFlow standardizes, GoldenAnalysis reports, GoldenPipe orchestrates, and InferMap maps schemas — with a Rust extension layer for Postgres / DuckDB and optional WebAssembly acceleration behind the TS ports.*
+*The headline package, **GoldenMatch**, does the matching — fuzzy + exact + probabilistic (Fellegi-Sunter) + LLM — and **beats hand-tuned Splink out of the box** (96.4% F1 on DBLP-ACM), identical in Python, edge-safe TypeScript, and SQL. It even runs on **unstructured input** — extract matchable records from PDFs and images, then dedupe. Around it sits a full data-quality suite: GoldenCheck profiles, GoldenFlow standardizes, GoldenAnalysis reports, GoldenPipe orchestrates, and InferMap maps schemas — with a Rust extension layer for Postgres / DuckDB and optional WebAssembly acceleration behind the TS ports.*
 
 **Made for GraphRAG, too** — entity resolution is the stage knowledge-graph pipelines do *worst* (the same entity scatters across documents as duplicate surface forms). GoldenMatch drops into **neo4j-graphrag / LlamaIndex / Graphiti** as the resolution stage ([`goldenmatch-kg`](packages/python/goldenmatch-kg/README.md)), or builds a knowledge graph straight from text with that resolution at its core ([`goldengraph`](packages/python/goldengraph/README.md)). Both in early access. [→ Knowledge graphs](#knowledge-graphs)
 
@@ -166,6 +166,7 @@ Entity resolution is the stage most GraphRAG pipelines do badly — duplicate su
 | I want to... | Go here |
 |---|---|
 | Deduplicate a CSV right now | [`packages/python/goldenmatch`](packages/python/goldenmatch/README.md#quick-start) |
+| Match records from PDFs / images (unstructured input) | [`goldenmatch` — document ingest](https://docs.bensevern.dev/goldenmatch/documents) |
 | Use from Claude Desktop / Code | [`packages/python/goldenmatch` — MCP](packages/python/goldenmatch/README.md#remote-mcp-server) |
 | Edit rules in a browser, label pairs, compare runs | [`packages/python/goldenmatch` — Web UI](packages/python/goldenmatch/README.md#web-ui) |
 | Build AI agents that deduplicate | [ER Agent / A2A wiki page](https://github.com/benseverndev-oss/goldenmatch/wiki/ER-Agent) |
