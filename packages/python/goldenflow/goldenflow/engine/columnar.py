@@ -132,11 +132,19 @@ def _spec_scalar_ready(spec, accepted: frozenset[str]) -> bool:
             return False
         if name in accepted:
             continue
-        if info.scalar is not None:
+        if info.scalar is not None or info.scalar_factory is not None:
             has_scalar_op = True
             continue
         return False
     return has_scalar_op
+
+
+def _scalar_fn(info, params):
+    """The per-element scalar for a transform: a parameterized ``scalar_factory``
+    bound to ``params`` (Phase 4d), else the plain ``scalar``."""
+    if info.scalar_factory is not None:
+        return info.scalar_factory(list(params))
+    return info.scalar
 
 
 def _spec_ready(
@@ -344,7 +352,8 @@ def _transform_via_columns(df, config, source, nm, pl):
                     last_dtype = "str"
                 else:
                     info = get_transform(name)
-                    new = [info.scalar(v) for v in cur]
+                    fn = _scalar_fn(info, params)
+                    new = [fn(v) for v in cur]
                     last_dtype = info.scalar_dtype
                 cn = [_cast_utf8(v) for v in new]
                 n_changed = sum(
@@ -499,7 +508,7 @@ def transform_columns_native(columns, config, source: str = "<dataframe>"):
                 if name in accepted:
                     new = list(nm.apply_chain_str_list(cur, [(name, list(params))])[0])
                 else:
-                    fn = get_transform(name).scalar
+                    fn = _scalar_fn(get_transform(name), params)
                     new = [fn(v) for v in cur]
                 cn = [_cast_utf8(v) for v in new]
                 n_changed = sum(
