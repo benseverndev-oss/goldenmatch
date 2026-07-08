@@ -15,7 +15,7 @@ Detect scores `hits / n_columns`; a hint matches iff its tokens are a contiguous
 | Dataset | Detects | Notes |
 |---|---|---|
 | Insurance | `insurance` **0.9** | healthcare 0.2 (shared `claim_status`), non-deciding |
-| Telecom | `telecom` **0.9** | ~0 interference (msisdn/imei/imsi globally unique) |
+| Telecom | `telecom` **0.9** | low interference (healthcare's `insurance_id` type also lists `subscriber_id` → healthcare ~0.1, non-deciding) |
 | Real estate | `real_estate` **0.9** | ~0 |
 | Education | `education` **0.9** | ~0 |
 | Generic person (`first_name,last_name,email,phone,city,state,address`) | **None** | no false positive |
@@ -61,6 +61,8 @@ Each `hr.yaml`-shaped: `description` + `types` (each with `name_hints` + minimal
 - **grades**: `gpa, grade_level, grade_point, credits, credit_hours` — numeric/low-card.
 - **term**: `semester, term, academic_year`
 - **program**: `major, transcript, degree`
+
+Note: `term`, `major`, `degree` are broader English single-tokens than the other packs' compounds — kept because real education exports use exactly those bare column names, and the §2 matrix verified they add only non-deciding noise (a coincidental `term`/`major` column in a non-education dataset gives education +1/n, far below the winner). The §3 final-YAML matrix gate re-confirms no outcome shifts.
 
 At implementation, the FINAL YAMLs are validated by the real load path (write all 4, run the full cross-verification matrix from §2 → assert each vertical detects itself ≥0.5, person→not-vertical, and the existing 5 detect unchanged); adjust hints if the type-organized token set shifts an outcome. (Loader shape-validates only that `name_hints` is a list / `value_signals` a dict / `suppress` a list — no key allowlist — so any reasonable signals load.)
 
