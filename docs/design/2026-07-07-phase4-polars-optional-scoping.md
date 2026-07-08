@@ -192,9 +192,28 @@ recovered by `[native]`.
   `state_expand`/`zip_normalize`/`country_standardize`/`unit_normalize`). Gated by
   `tests/engine/test_columnar_scalar_chain.py` (transform(dict) == transform_df ==
   columnar-engine transform_df, data + manifest; in-memory-ready-not-file-ready;
-  subprocess Polars-free). Follow-on families (dates — the big non-owned one — needs
-  its closures un-nested to module-level scalars + int/str return handling;
-  identifiers/categorical/names remainder) are thin PRs on this mechanism.
+  subprocess Polars-free).
+  **Wave 2 (dates) — "own the source of truth."** Dates first looked *unportable*:
+  `date_iso8601("1995")` = `"1995-01-01"` (its year-string fast path) but the pure
+  `dateutil` scalar = `"1995-07-07"` — dateutil fills a missing month/day with
+  **today**, a latent non-determinism bug AND inconsistent with the fast path. Rather
+  than treat the (buggy, non-deterministic) Polars-engine output as the oracle, we
+  OWNED the semantics: pin the fill to **Jan 1** (`dates._DEFAULT_DATE`,
+  `dateutil.parse(val, default=…)`). That (1) fixes the non-determinism, (2) makes the
+  residual agree with the fast path, and (3) makes the date scalars byte-reproducible →
+  the str-returning date transforms (`date_iso8601`/`date_parse`/`date_us`/`date_eu`/
+  `datetime_iso8601`/`extract_day_of_week`) run on the columnar path via the wave-1
+  `scalar=` mechanism (no engine change — just registering the scalars). **Intentional
+  (bug-fixing) output change** for partial-date inputs (non-deterministic before);
+  `test_fastpath_parity.py` references updated to the deterministic spec (now assert
+  engine == owned scalar). Gated by `tests/transforms/test_dates_deterministic.py`.
+  Known separate edge (out of scope): an ambiguous "Month Year" partial (`"March 1995"`)
+  hits a pre-existing Polars `to_date(strict=False)` looseness in the fast path
+  (`"0095-03-19"`) where the columnar scalar is *more* correct. The int/bool-returning
+  date transforms (`extract_year`/…/`date_validate`) + parameterized (`date_shift`/
+  `age_from_dob`) await dtype-aware scalar egress (a later wave). Remaining clean
+  families (categorical, identifiers formatters, names remainder) are thin
+  `scalar=`-wiring PRs.
 - **4e — I/O extras.** Native CSV is default; parquet/excel/scan/database move behind
   `[polars]`/`[parquet]` with graceful `ImportError`. Gate: fallback-path tests
   (mirror the existing cloud-connector pattern).
