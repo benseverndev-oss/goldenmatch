@@ -306,27 +306,35 @@ pub fn score_block_pairs_fs(
 /// `LargeUtf8` (i64 offsets) by default; plain pyarrow string arrays are `Utf8`
 /// (i32). Both are owned (Arc-backed -> `Send + Sync`) so the rayon closure can
 /// borrow them across `detach`.
-enum StrCol {
+pub(crate) enum StrCol {
     Utf8(StringArray),
     Large(LargeStringArray),
 }
 
 impl StrCol {
-    fn from_data(data: ArrayData) -> PyResult<Self> {
+    pub(crate) fn from_data(data: ArrayData) -> PyResult<Self> {
         match data.data_type() {
             DataType::Utf8 => Ok(StrCol::Utf8(StringArray::from(data))),
             DataType::LargeUtf8 => Ok(StrCol::Large(LargeStringArray::from(data))),
             other => Err(PyValueError::new_err(format!(
-                "score_block_pairs_arrow: field column must be utf8/large_utf8, got {other:?}"
+                "field column must be utf8/large_utf8, got {other:?}"
             ))),
         }
     }
 
     #[inline]
-    fn get(&self, i: usize) -> Option<&str> {
+    pub(crate) fn get(&self, i: usize) -> Option<&str> {
         match self {
             StrCol::Utf8(a) => (!a.is_null(i)).then(|| a.value(i)),
             StrCol::Large(a) => (!a.is_null(i)).then(|| a.value(i)),
+        }
+    }
+
+    #[inline]
+    pub(crate) fn len(&self) -> usize {
+        match self {
+            StrCol::Utf8(a) => a.len(),
+            StrCol::Large(a) => a.len(),
         }
     }
 }

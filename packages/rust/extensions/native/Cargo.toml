@@ -63,6 +63,7 @@ goldenmatch-autoconfig-core = { path = "../autoconfig-core" }
 # (default-off) so the wasm consumer stays arrow-free; the native wheel must
 # opt in or the maturin build fails (suggest() not compiled).
 goldenmatch-suggest-core = { path = "../suggest-core", features = ["arrow"] }
+rustc-hash = "2"
 # Document-ingest kernels (schema/parse/prompt/normalize) -- thin PyO3 shim in
 # documents.rs delegates here so the native ext and documents-wasm share one
 # canonical implementation.
