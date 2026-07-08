@@ -28,6 +28,7 @@ the configs it accepts (gated by ``tests/engine/test_columnar_engine.py``).
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 
 from goldenflow.core._native_loader import native_module
 from goldenflow.engine.manifest import Manifest, TransformRecord
@@ -39,6 +40,24 @@ from goldenflow.transforms._chain import (
 )
 
 Column = list  # a column is a plain Python list (str | None)
+
+
+@dataclass
+class ColumnarResult:
+    """A **Polars-free** transform result (Phase 4c): the transformed data as a
+    ``dict[str, list]`` plus the audit :class:`Manifest`. The public
+    :func:`goldenflow.transform` returns this so a caller can run a covered config
+    with Polars uninstalled. ``to_polars()`` is an opt-in bridge for callers that
+    still want a ``pl.DataFrame`` (imports Polars on use)."""
+
+    columns: dict[str, list]
+    manifest: Manifest
+
+    def to_polars(self):
+        """Bridge to a ``pl.DataFrame`` (imports Polars — opt-in)."""
+        from goldenflow._polars_lazy import pl
+
+        return pl.DataFrame(self.columns)
 
 
 def columnar_engine_selected() -> bool:
@@ -285,6 +304,49 @@ def _transform_via_columns(df, config, source, nm, pl):
         out_series.append(series.alias(spec.column))
     out = df.with_columns(out_series) if out_series else df
     return out, manifest
+
+
+def transform_columns_public(data, config):
+    """Phase 4c public core: transform a ``dict[str, list]`` frame, returning a
+    :class:`ColumnarResult` (Polars-free). A covered config runs on the native
+    in-memory core with **Polars never imported**; anything else declines to the
+    Polars engine (which needs ``goldenflow[polars]`` — a clear ImportError if it's
+    absent). ``config=None`` (zero-config auto-detect) uses the Polars profiler, so it
+    also needs the extra.
+
+    This is the Polars-free public entry point the Rust-is-the-reference thesis wants:
+    a covered config is a first-class no-Polars API; the uncovered tail is where
+    Polars remains, loudly and optionally."""
+    if not isinstance(data, dict):
+        raise TypeError(
+            "transform() takes a dict[str, list] of columns; pass a pl.DataFrame to "
+            "transform_df() instead."
+        )
+
+    nm = native_module()
+    native_ok = nm is not None and native_columns_ready(nm)
+    if config is not None and native_ok and config_is_columnar_ready(config):
+        cols, manifest = transform_columns_native(data, config)
+        return ColumnarResult(columns=cols, manifest=manifest)
+
+    # Uncovered config (or zero-config auto-detect) -> the Polars engine, via the
+    # existing public transform_df so behavior is byte-identical (no reimplementation).
+    # Needs the optional [polars] backend; surface a clear, actionable error if absent.
+    try:
+        import goldenflow
+        from goldenflow._polars_lazy import pl
+
+        df = pl.DataFrame(data)
+        result = goldenflow.transform_df(df, config=config)
+    except ImportError as e:  # pragma: no cover - exercised only without polars
+        raise ImportError(
+            "This transform needs the Polars backend for the config given "
+            "(uncovered by the native columnar engine, or zero-config auto-detect). "
+            "Install it with: pip install goldenflow[polars]"
+        ) from e
+    return ColumnarResult(
+        columns=result.df.to_dict(as_series=False), manifest=result.manifest
+    )
 
 
 def native_columns_ready(nm) -> bool:
