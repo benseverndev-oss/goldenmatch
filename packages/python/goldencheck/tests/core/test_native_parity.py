@@ -1,6 +1,6 @@
 """Parity: the native kernels must produce byte-identical output to the
-pure-Python reference. This is the gate that lets a component sit in
-``_native_loader._GATED_ON`` (run under ``GOLDENCHECK_NATIVE=auto``).
+pure-Python reference. This is the parity gate for running a component under
+``GOLDENCHECK_NATIVE=auto``.
 
 Skips cleanly when the native extension isn't built (pure-Python-only env)."""
 from __future__ import annotations

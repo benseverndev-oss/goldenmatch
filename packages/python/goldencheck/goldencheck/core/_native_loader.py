@@ -9,8 +9,9 @@ centralised here so every call site reads one gate. Mirrors goldenmatch's
 ``GOLDENCHECK_NATIVE`` env:
 - ``"0"``    -> force the Python path (never use native).
 - ``"1"``    -> require native; raise if it isn't importable (CI parity lane).
-- ``"auto"`` / unset -> use native iff it's importable AND the component has
-  cleared parity (is in ``_GATED_ON``).
+- ``"auto"`` / unset -> use native iff it's importable AND the component's kernel
+  symbol(s) exist -- pure-Python is a lossy fallback only when the wheel is absent
+  (per the Rust-is-the-reference authority model).
 
 The kernel is reachable two ways, tried in order:
   1. ``goldencheck._native`` -- the in-tree build dropped by
@@ -31,34 +32,6 @@ except Exception:  # noqa: BLE001 - any import/load failure falls back below
         from goldencheck_native import _native  # pyright: ignore[reportMissingImports]
     except Exception:  # noqa: BLE001 - neither path available -> pure Python
         _native = None
-
-
-# Components whose native path has cleared parity and may run under
-# ``GOLDENCHECK_NATIVE=auto``. Add a name here only after a parity test proves
-# the native output is identical to the pure-Python reference.
-#
-# Signed off:
-#   - benford: leading-digit histogram for the Benford conformance check
-#     (baseline/statistical.py, drift/detector.py). The Rust kernel mirrors
-#     `_extract_leading_digits` value-for-value; tests/core/test_native_parity.py
-#     asserts the histogram (and therefore the chi-squared p-value) is identical
-#     on random + adversarial data.
-#   - composite_keys: minimal composite-key discovery
-#     (relations/composite_key.py). Integer-exact (distinct-tuple counting), so
-#     native and the pure-Python BFS return identical minimal-key sets; parity
-#     asserted in tests/core/test_native_parity.py.
-#   - functional_dependencies: A->B determinism primitive. Integer-exact; parity
-#     asserted in the same test module.
-#   - fuzzy_values: near-duplicate value clustering (trigram+prefix blocking +
-#     Levenshtein-ratio). The pure-Python fallback uses the identical metric +
-#     blocking, so cluster sets match; parity asserted in the same test module.
-#   - approximate_fd: near-FD violation detection (find the per-determinant-group
-#     mode dependent, flag deviating rows). The pure-Python fallback uses the
-#     identical first-seen interning + mode tie-break + avg-group guard, so the
-#     violation sets match; parity asserted in the same test module.
-_GATED_ON: frozenset[str] = frozenset(
-    {"benford", "composite_keys", "functional_dependencies", "fuzzy_values", "approximate_fd"}
-)
 
 
 def native_module() -> Any:
@@ -88,24 +61,25 @@ def native_enabled(component: str) -> bool:
                 "GOLDENCHECK_NATIVE=1 but goldencheck._native is not built/importable"
             )
         return _has_symbol(component)
-    return _native is not None and component in _GATED_ON and _has_symbol(component)
+    return _native is not None and _has_symbol(component)
 
 
-# Component name -> the native symbol that backs it. A component is only usable
-# when its symbol is actually present on the loaded module.
-_COMPONENT_SYMBOLS: dict[str, str] = {
-    "benford": "benford_leading_digits",
-    "composite_keys": "composite_key_search",
-    "functional_dependencies": "discover_functional_dependencies",
-    "fuzzy_values": "near_duplicate_value_clusters",
-    "approximate_fd": "discover_approximate_fds",
+# Component name -> the native symbol(s) that back it. A component is usable only
+# when ALL its symbols are present on the loaded module (explicit capability probe,
+# not a silent AttributeError mid-call -- the goldenmatch #688 footgun).
+_COMPONENT_SYMBOLS: dict[str, tuple[str, ...]] = {
+    "benford": ("benford_leading_digits",),
+    "composite_keys": ("composite_key_search",),
+    "functional_dependencies": ("discover_functional_dependencies",),
+    "fuzzy_values": ("near_duplicate_value_clusters",),
+    "approximate_fd": ("discover_approximate_fds", "fd_violation_rows"),
 }
 
 
 def _has_symbol(component: str) -> bool:
     if _native is None:
         return False
-    symbol = _COMPONENT_SYMBOLS.get(component)
-    if symbol is None:
+    symbols = _COMPONENT_SYMBOLS.get(component)
+    if not symbols:
         return False
-    return hasattr(_native, symbol)
+    return all(hasattr(_native, s) for s in symbols)
