@@ -17,6 +17,7 @@ mod benford;
 mod fuzzy;
 mod keys;
 
+pub use arrow_support::intern_column;
 pub use benford::benford_leading_digits;
 pub use fuzzy::near_duplicate_clusters;
 pub use keys::{
