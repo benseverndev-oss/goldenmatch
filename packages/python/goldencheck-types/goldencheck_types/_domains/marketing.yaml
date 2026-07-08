@@ -1,0 +1,30 @@
+description: "Marketing / CRM — leads, campaigns, pipeline, funnel metrics, attribution"
+
+types:
+  lead:
+    name_hints: ["lead_id", "lead_source"]
+    value_signals:
+      max_unique: 50
+    suppress: ["uniqueness", "range_distribution"]
+
+  campaign:
+    name_hints: ["campaign_id", "campaign_name"]
+    value_signals:
+      max_unique: 100
+    suppress: ["uniqueness"]
+
+  pipeline:
+    name_hints: ["opportunity_id", "mql", "sql_lead"]
+    suppress: ["pattern_consistency"]
+
+  metrics:
+    name_hints: ["conversion_rate", "funnel_stage", "click_through_rate", "impressions"]
+    value_signals:
+      numeric: true
+    suppress: ["pattern_consistency"]
+
+  attribution:
+    name_hints: ["utm_source", "utm_campaign", "cost_per_lead"]
+    value_signals:
+      max_unique: 100
+    suppress: ["uniqueness"]
