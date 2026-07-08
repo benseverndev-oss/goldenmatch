@@ -147,6 +147,50 @@ def _scalar_fn(info, params):
     return info.scalar
 
 
+# Zero-gap: transforms that are neither per-element scalars, numeric parsers, nor
+# splits — a multi-INPUT merge (``merge_name``: two columns -> one) and a flag-only op
+# (``initial_expand``: value identity + flagged rows into the manifest errors). They run
+# Polars-free over plain lists, byte-identical to the Polars engine. In-memory only
+# (like the scalar chain) — the Rust CSV path never sees them.
+_SPECIAL_OPS = frozenset({"merge_name", "initial_expand"})
+
+
+def _spec_special_ready(spec) -> str | None:
+    """A single-op spec whose op is a special in-memory columnar transform. Returns the
+    op name, else ``None``. Single-op only — these don't compose into a chain."""
+    if len(spec.ops) != 1:
+        return None
+    name, _ = parse_transform_name(spec.ops[0])
+    return name if name in _SPECIAL_OPS else None
+
+
+def _apply_special(name: str, cols: dict, column: str):
+    """Pure-Python (Polars-free) application of a special transform over ``cols`` (a
+    ``dict[str, list]`` of the current columns). Returns ``(new_columns, affected,
+    flagged_rows)``: ``new_columns`` are columns to set/append; the SOURCE column is
+    left unchanged (both ops are identity on it), so ``affected`` is always 0 —
+    matching the engine's ``(before != after).sum()`` on the source column."""
+    src = cols[column]
+    if name == "merge_name":
+        from goldenflow.transforms.names import _merge_name_py
+
+        # merge_name reads first (``column``) + ``last_name`` -> appends ``full_name``;
+        # if there is no last_name column the engine returns the frame unchanged.
+        last = cols.get("last_name")
+        new = (
+            {"full_name": [_merge_name_py(f, l) for f, l in zip(src, last)]}
+            if last is not None
+            else {}
+        )
+        return new, 0, []
+    if name == "initial_expand":
+        from goldenflow.transforms.names import _has_initial_py
+
+        flagged = [i for i, v in enumerate(src) if _has_initial_py(v)]
+        return {}, 0, flagged
+    raise ValueError(f"not a special columnar op: {name}")
+
+
 def _spec_ready(
     nm, spec, accepted: frozenset[str], numeric_ok: bool, split_ok: bool, scalar_ok: bool = False
 ) -> bool:
@@ -158,6 +202,8 @@ def _spec_ready(
     if _spec_string_ready(spec, accepted):
         return True
     if scalar_ok and _spec_scalar_ready(spec, accepted):
+        return True
+    if scalar_ok and _spec_special_ready(spec):
         return True
     ops_spec = [(n, list(p)) for n, p in (parse_transform_name(o) for o in spec.ops)]
     if numeric_ok and nm.columnar_numeric_ready(ops_spec):
@@ -303,6 +349,25 @@ def _transform_via_columns(df, config, source, nm, pl):
             continue
         ops = [parse_transform_name(op) for op in spec.ops]
         ops_spec = [(n, list(p)) for n, p in ops]
+        # Special (multi-input merge / flag-only): apply Polars-free over column lists;
+        # source column stays as-is (identity), appended outputs go into out_series.
+        special = _spec_special_ready(spec)
+        if special:
+            cols = {c: df[c].to_list() for c in df.columns}
+            new_cols, affected, flagged = _apply_special(special, cols, spec.column)
+            for row_idx in flagged:
+                manifest.add_error(
+                    column=spec.column, transform=special, row=row_idx,
+                    error="Flagged for review",
+                )
+            before = df[spec.column].head(3).cast(pl.Utf8).to_list()
+            manifest.add_record(TransformRecord(
+                column=spec.column, transform=special, affected_rows=affected,
+                total_rows=df.height, sample_before=before, sample_after=before,
+            ))
+            for k, v in new_cols.items():
+                out_series.append(pl.Series(k, v))
+            continue
         # Split spec (string* splitter): the source column keeps its (string-ops)
         # value and the fixed-name output columns are appended -- exactly Polars'
         # dataframe-mode with_columns. Cast to Utf8 first (the split reads strings).
@@ -499,6 +564,26 @@ def transform_columns_native(columns, config, source: str = "<dataframe>"):
         ops_spec = [(n, list(p)) for n, p in ops]
         col_list = out[spec.column]
         total_rows = len(col_list)
+
+        # Special (multi-input merge / flag-only): Polars-free over plain lists, source
+        # column identity so the manifest samples are before==after and affected==0.
+        special = _spec_special_ready(spec)
+        if special:
+            new_cols, affected, flagged = _apply_special(special, out, spec.column)
+            for k, v in new_cols.items():
+                out[k] = v
+            for row_idx in flagged:
+                manifest.add_error(
+                    column=spec.column, transform=special, row=row_idx,
+                    error="Flagged for review",
+                )
+            cb = [_cast_utf8(v) for v in out[spec.column][:3]]
+            manifest.add_record(TransformRecord(
+                column=spec.column, transform=special, affected_rows=affected,
+                total_rows=total_rows, sample_before=cb, sample_after=cb,
+            ))
+            continue
+
         col = nm.Column.from_pylist(col_list)
 
         # Split (string* splitter): source kept, fixed-name outputs appended.
