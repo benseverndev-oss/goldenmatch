@@ -221,6 +221,51 @@ legitimately-old historical data doesn't trip it. Pure-Polars (no kernel).
   `Cargo.toml` and `pyproject.toml` `[project].version` in lockstep (maturin reads
   pyproject; `skip-existing: true` silently no-ops a stale version).
 
+## Denial-constraint discovery (Stage 1, opt-in)
+
+Discovers **denial constraints** `¬(p1 ∧ … ∧ pm)` — if-then / cross-tuple
+invariants (`¬(status = 'shipped' ∧ ship_date < order_date)`), a new
+discovered-rule family beyond FDs/keys. **Opt-in, NOT in the default scan.**
+
+- **Surfaces:** public API `goldencheck.discover_denial_constraints(df, ...)`
+  (in `__init__`); CLI `goldencheck denial-constraints data.csv`; and a
+  `--denial` flag on `scan`. `--denial` is what turns DC mining ON — `--deep`
+  does NOT (it only widens the DC engine's Pass-1 to the full population when
+  `--denial` is already on; without `--deep` Pass-1 runs on the sample).
+- **Engine (`goldencheck/denial/`), sample-then-validate:**
+  - **Bounded predicate space** (`predicates.py`): order-preserving **RANK**
+    encoding for numeric/temporal columns (NOT the equality-only `intern_column`
+    — RANK preserves `<`/`≤`/`>`/`≥`) + first-seen interning for categorical.
+    Null operand ⇒ predicate false. Equality literals gated to low-card /
+    high-support columns.
+  - **Two evidence passes** (`evidence.py`): **Pass-1** row-level over n rows
+    (single-tuple DCs, exact O(n), precise violating rows) + **Pass-2** pairwise
+    over S² sampled ordered pairs (cross/mixed DCs, sampled/estimated g1). `u64`
+    bitmask evidence; Pass-2 budget `2s + c ≤ 64` (single-tuple preds each need a
+    tα AND a tβ slot). The α/β bit layout is projected/canonicalized before Pass-2
+    discovery (β-slots dropped, crosses packed down) — see the `mine.py` docstring.
+  - **FastDC minimal-cover derivation** (`discover.py`): brute-force by increasing
+    arity, complement `(~m) & ((1 << p) - 1)`. **g1 validation** in `validate.py`.
+- **Native:** `goldencheck-core::dc.rs` evidence kernel (slice-based), byte/set-
+  parity with the pure-Python fallback `_evidence_python` (asserted in
+  `tests/denial/test_evidence_parity.py`), gated via `GOLDENCHECK_NATIVE`
+  (`_COMPONENT_SYMBOLS["denial_constraint"]` → symbol `denial_constraint_evidence`,
+  routed through `core/kernels.py`). **Measure-first outcome (Task 10):** native
+  beats a Polars cross-join baseline ~1.5–1.8x and pure-Python ~60–96x at m=1500
+  pairwise (`benchmarks/denial_evidence_benchmark.py`) → **default-on**.
+- **Stage-1 reporting gates (all configurable kwargs on `discover_denial_constraints`):**
+  `arity_bound=2` default (`MAX_REPORT_ARITY`); `require_order_comparison=True`
+  default — pure all-equality DCs suppressed (they're the accepted-values /
+  uniqueness / FD family; set `False` to include, expect noisier output);
+  self-column cross predicates (uniqueness `¬(tα.A = tβ.A)`) dropped (covered by
+  `uniqueness` / `composite_key`); tautological antecedents dropped.
+- **Known Stage-1 limitations:** the LLM scan path (`scan_file_with_llm`) does
+  NOT thread `--denial` (so `--llm-boost --denial` skips DC mining) — follow-up.
+  Cross-tuple DC findings report representative sample-index `(α, β)` pairs +
+  estimated g1, not exact df rows.
+- **Not yet (later stages):** cross-table DCs, numeric-threshold literals,
+  config/baseline pinning, DC drift, DuckDB / Postgres / WASM / MCP surfaces.
+
 ## Pipeline Flow
 
 ```
