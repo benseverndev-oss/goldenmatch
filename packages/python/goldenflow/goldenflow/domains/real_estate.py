@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-import polars as pl
-
+from goldenflow._polars_lazy import pl
 from goldenflow.config.schema import GoldenFlowConfig, TransformSpec
 from goldenflow.domains.base import DomainPack
 from goldenflow.transforms import register_transform

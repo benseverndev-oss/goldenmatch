@@ -149,10 +149,23 @@ recovered by `[native]`.
   `'polars' not in sys.modules` after `import goldenflow`, + a transparency check that
   a real transform still works). Landed under the current hard `polars` dep (pure
   refactor). This is the enabler for 4b-4f.
-- **4b — `NativeFrame` backend.** Add the native Arrow `Column` frame as a `Frame`
-  backend; route the columnar engine's in-memory path through it end-to-end (no
-  `pl.DataFrame` construction at the boundary — the residual from Phase 3d). Gate:
-  the columnar in-memory path builds no `pl.DataFrame`; byte-identical.
+- **4b — Polars-free execution core. SHIPPED.** The CSV file path (`transform_file`)
+  was already Polars-free (Phases 2-3). 4b closed the in-memory path's last coupling:
+  `Column.from_pylist` (Polars-free, pyarrow-free ingest from a Python list) +
+  numeric egress in `Column.to_pylist` (Int64/Float64 → int/float) + a new
+  `columnar.transform_columns_native(dict[str, list], config) -> (dict[str, list],
+  Manifest)` that runs a covered config (string / numeric / split) through
+  `from_pylist → owned kernels → to_pylist` with **Polars never imported**. Also
+  finished the 4a lazy-import sweep — 13 more modules (connectors/domains/api/
+  streaming/llm/`_chain`) that weren't loaded at `import goldenflow` time (so 4a's
+  runtime scan missed them) now use the lazy proxy; `_chain` was the load-bearing one
+  (on the columnar import chain). native-flow 0.24 → 0.25. Gated by
+  `tests/engine/test_native_inmemory_polars_free.py` (subprocess: a
+  string+numeric+split config runs in-memory AND via CSV with `'polars' not in
+  sys.modules`, byte-identical). This is the first end-to-end proof that goldenflow
+  transforms data (covered configs) with Polars uninstalled — the Layer-3 milestone.
+  `transform_columns_native` is a standalone core (not yet wired into the default
+  `transform_df`); **4c** wires it behind the public entry point.
 - **4c — Polars-free public entry point.** Add `transform(data)` (D1a) accepting
   path / dict / Arrow, returning a backend-agnostic result. `transform_df` becomes a
   thin Polars-backend adapter. Gate: `transform(dict)` == `transform_df(pl.DataFrame)`
