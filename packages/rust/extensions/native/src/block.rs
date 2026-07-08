@@ -29,36 +29,47 @@ use crate::score::StrCol;
 /// ASCII sentinel, and the ASCII case-fold matches Polars' Unicode lowercase here).
 const SENTINELS: [&str; 3] = ["nan", "null", "none"];
 
-#[pyfunction]
-pub fn build_block_index_arrow(
+/// Validate + read the key columns to `StrCol`, checking equal lengths.
+pub(crate) fn read_key_cols(
     key_fields: Vec<PyArrowType<ArrayData>>,
-) -> PyResult<(PyArrowType<ArrayData>, Vec<usize>)> {
+    who: &str,
+) -> PyResult<(Vec<StrCol>, usize)> {
     if key_fields.is_empty() {
-        return Err(PyValueError::new_err(
-            "build_block_index_arrow: at least one key field required",
-        ));
+        return Err(PyValueError::new_err(format!(
+            "{who}: at least one key field required"
+        )));
     }
     let cols: Vec<StrCol> = key_fields
         .into_iter()
         .map(|p| StrCol::from_data(p.0))
         .collect::<PyResult<_>>()?;
-
     let n_rows = cols[0].len();
     for (i, c) in cols.iter().enumerate() {
         if c.len() != n_rows {
             return Err(PyValueError::new_err(format!(
-                "build_block_index_arrow: field {i} length {} != row count {n_rows}",
+                "{who}: field {i} length {} != row count {n_rows}",
                 c.len()
             )));
         }
     }
+    Ok((cols, n_rows))
+}
 
-    // Group rows by derived block key, preserving first-appearance order so the
-    // output is deterministic (order within a block doesn't affect the pair set).
-    // FxHash (not SipHash) since these keys are trusted, not adversarial, and the
-    // single-field path borrows `&str` straight from the Arrow buffer (no per-row
-    // String alloc) — both matter at 5M rows where std::HashMap<String> lost ~9x
-    // to Polars' SIMD group_by.
+/// Group row positions by derived block key, returning one position list per
+/// block that has `>= 2` members (singletons produce no candidate pairs), in
+/// first-appearance order (deterministic; within/among-block order doesn't
+/// affect the candidate-pair set). This is the shared core of
+/// `build_block_index_arrow` and the fused `match_fused` orchestration.
+///
+/// Byte-parity with `core/blocker.py::build_blocks`: key = concat(fields, "||");
+/// any-null field -> row dropped (Polars `concat_str` null semantics); a
+/// stripped+lowercased key in {nan,null,none} -> dropped.
+///
+/// FxHash (not SipHash) since these keys are trusted, not adversarial, and the
+/// single-field path borrows `&str` straight from the Arrow buffer (no per-row
+/// String alloc) — both matter at 5M rows where std::HashMap<String> lost ~9x
+/// to Polars' SIMD group_by.
+pub(crate) fn group_block_positions(cols: &[StrCol], n_rows: usize) -> Vec<Vec<i64>> {
     let mut groups: Vec<Vec<i64>> = Vec::new();
 
     if cols.len() == 1 {
@@ -70,7 +81,6 @@ pub fn build_block_index_arrow(
                 Some(s) => s,
                 None => continue, // null single-field key -> dropped
             };
-            // Sentinel drop: strip+lowercase(key) in {nan,null,none}.
             let stripped = key.trim();
             if SENTINELS.iter().any(|s| stripped.eq_ignore_ascii_case(s)) {
                 continue;
@@ -89,8 +99,6 @@ pub fn build_block_index_arrow(
         index.reserve(n_rows / 4);
         let mut key = String::new();
         'row: for r in 0..n_rows {
-            // concat_str yields null if ANY field is null (ignore_nulls=False
-            // default) -> is_not_null drops it, so a null field drops the row.
             key.clear();
             for (fi, col) in cols.iter().enumerate() {
                 match col.get(r) {
@@ -117,15 +125,24 @@ pub fn build_block_index_arrow(
         }
     }
 
+    groups.retain(|g| g.len() >= 2);
+    groups
+}
+
+#[pyfunction]
+pub fn build_block_index_arrow(
+    key_fields: Vec<PyArrowType<ArrayData>>,
+) -> PyResult<(PyArrowType<ArrayData>, Vec<usize>)> {
+    let (cols, n_rows) = read_key_cols(key_fields, "build_block_index_arrow")?;
+    let groups = group_block_positions(&cols, n_rows);
+
     let mut order = Int64Builder::with_capacity(n_rows);
-    let mut block_sizes: Vec<usize> = Vec::new();
+    let mut block_sizes: Vec<usize> = Vec::with_capacity(groups.len());
     for rows in &groups {
-        if rows.len() >= 2 {
-            for &r in rows {
-                order.append_value(r);
-            }
-            block_sizes.push(rows.len());
+        for &r in rows {
+            order.append_value(r);
         }
+        block_sizes.push(rows.len());
     }
 
     Ok((PyArrowType(order.finish().into_data()), block_sizes))
