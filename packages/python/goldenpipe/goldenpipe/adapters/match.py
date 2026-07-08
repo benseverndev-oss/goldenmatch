@@ -94,6 +94,94 @@ class DedupeStage:
         return StageResult(status=StageStatus.SUCCESS)
 
 
+class FusedDedupeStage:
+    """Opt-in Arrow-native fused match stage (memory/scale + composability).
+
+    Runs goldenmatch's `match_fused` kernel (block+score+dedup+cluster in ONE
+    FFI call) over the frame's columns as Arrow, with no intermediate
+    `pl.DataFrame`/pairs-list materialization. MEASURED (1M-10M): wall-neutral
+    vs the classic DedupeStage but ~2x lower peak RSS, byte-identical clusters --
+    so this is the stage a GoldenPipe chain places when it wants cluster
+    assignments at scale on a memory-constrained box, threaded as Arrow.
+
+    CLUSTERS ONLY: it produces `clusters` + `cluster_assignments` (Arrow), NOT
+    golden/unique/dupes (the fused kernel's declined scope -- golden records need
+    the row payload, which stays the classic DedupeStage's job). Requires an
+    EXPLICIT covered config (`match_fused_ready`): static single-key blocking with
+    no key transforms + one weighted matchkey over covered scorers with no field
+    transforms. `validate()` raises a clear pointer to `goldenmatch.dedupe`
+    otherwise -- it never silently falls back, so a caller who asked for the
+    fused stage always gets the fused path or an explicit error.
+    """
+
+    info = StageInfo(
+        name="goldenmatch.dedupe_fused",
+        produces=["clusters", "cluster_assignments"],
+        consumes=["df"],
+    )
+    rollback = None
+
+    def _config(self, ctx: PipeContext):
+        stage_cfg = ctx.stage_config
+        if not stage_cfg:
+            return None
+        from goldenmatch.config.schemas import GoldenMatchConfig
+
+        return GoldenMatchConfig(**stage_cfg)
+
+    def validate(self, ctx: PipeContext) -> None:
+        if not HAS_MATCH:
+            raise RuntimeError("GoldenMatch not installed. Run: pip install goldenpipe[match]")
+        from goldenmatch.core.fused_match import _match_fused_symbol, match_fused_ready
+
+        if _match_fused_symbol() is None:
+            raise RuntimeError(
+                "goldenmatch-native match_fused kernel unavailable. "
+                "Install goldenmatch[native] or use the goldenmatch.dedupe stage."
+            )
+        config = self._config(ctx)
+        if config is None:
+            raise RuntimeError(
+                "goldenmatch.dedupe_fused requires an explicit covered config in the "
+                "stage spec (auto-built configs carry transforms the fused kernel does "
+                "not cover). Supply one, or use the goldenmatch.dedupe stage."
+            )
+        if not match_fused_ready(config):
+            raise RuntimeError(
+                "config is not covered by the fused match kernel (needs static "
+                "single-key blocking with no key transforms + one weighted matchkey "
+                "over jaro_winkler/levenshtein/token_sort/exact with no field "
+                "transforms). Use the goldenmatch.dedupe stage for this config."
+            )
+
+    def run(self, ctx: PipeContext) -> StageResult:
+        from goldenmatch.core.fused_match import run_match_fused_arrow
+
+        config = self._config(ctx)
+        # Only the key + score columns cross as Arrow (one zero-copy view each);
+        # no whole-frame or intermediate re-materialization.
+        key_fields = list(config.blocking.keys[0].fields)
+        score_fields = [f.field for f in config.get_matchkeys()[0].fields]
+        needed = list(dict.fromkeys([*key_fields, *score_fields]))
+        columns = {c: ctx.df[c].to_arrow() for c in needed}
+
+        table = run_match_fused_arrow(columns, config, n_rows=ctx.df.height)
+        if table is None:  # defensive: validate() already gated coverage
+            raise RuntimeError("fused match declined a config validate() accepted")
+
+        ctx.artifacts["cluster_assignments"] = table
+        # Multi-member clusters as {cluster_id: [row_id, ...]} for downstream
+        # consumers (e.g. IdentityResolveStage reads `clusters`).
+        clusters: dict[int, list[int]] = {}
+        for rid, cid in zip(
+            table.column("__row_id__").to_pylist(),
+            table.column("__cluster_id__").to_pylist(),
+        ):
+            clusters.setdefault(cid, []).append(rid)
+        ctx.artifacts["clusters"] = {c: m for c, m in clusters.items() if len(m) >= 2}
+        return StageResult(status=StageStatus.SUCCESS)
+
+
 def _build_config_from_contexts(contexts: list, df) -> object | None:
     """Build a GoldenMatchConfig from pipeline column contexts.
 
