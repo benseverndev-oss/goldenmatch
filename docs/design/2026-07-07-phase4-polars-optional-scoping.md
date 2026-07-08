@@ -247,6 +247,22 @@ recovered by `[native]`.
 
 ---
 
+## 5a. The remaining `[polars]`-only surface — triaged (2026-07-08)
+
+After the transform coverage hit 9/9 columnar (every transform runs Polars-free), the
+four commonly-cited "still needs `[polars]`" surfaces resolve as follows:
+
+| Surface | Verdict | Detail |
+|---|---|---|
+| **`transform_df(pl.DataFrame)`** | **NOT a gap** | You cannot *construct* a `pl.DataFrame` without Polars installed, so a Polars-free user never calls it. It is the Polars-backend adapter by design (D1a) — tautological, not a gap. |
+| **dates "bulk fast path"** | **NOT a coverage gap** | The `dates` family already runs **correct** Polars-free via the columnar scalar path (all `date_*` are columnar-ready). The bulk fast path is only the optional Polars vectorized *speedup*, recovered by `[polars]`/`[native]`. |
+| **zero-config (`config=None`)** | **CLOSED (Polars-free) for a dict** | `profiler_bridge.profile_columns` profiles + auto-selects over plain lists — byte-identical *selection* to the Polars built-in profiler (which is what a dict / no-file-path input uses; GoldenCheck is file-path-only). `transform(dict, config=None)` runs on the native path, byte-identical to `transform_df(pl.DataFrame(data), config=None)` (validated over a 400-case stress). A **CSV path** + `config=None` still needs `[polars]` — Polars' CSV dtype inference decides numeric-vs-string, which the string-only stdlib reader can't reproduce. |
+| **Excel / Parquet / DB I/O** | **deliberate optional-backend** | Excel (openpyxl→dict) and DB (DBAPI→dict) *could* be made Polars-free readers, but are niche for a Polars-free user; Parquet honestly stays pyarrow (`[native]`/`[parquet]`) — a pure-Python parquet reader isn't worth it. These stay behind `[polars]`/`[excel]`/`[parquet]` with a graceful `ImportError`, exactly as the cloud connectors already do. CSV read is already Polars-free (Phase 4e). |
+
+Net: the only things a default-no-polars user genuinely can't do are **read Excel/Parquet/DB** and **CSV zero-config** — all legitimately optional-backend, all declining loudly with an actionable install hint.
+
+---
+
 ## 6. Risks + non-goals
 
 - **Risk: coverage gaps become loud failures for Polars-free users.** Mitigated by D5
