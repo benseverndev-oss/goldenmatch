@@ -121,9 +121,40 @@ Python passes, per decision column, only what the column's resolved strategy nee
   and first-occurrence order makes the tie-breaks (winner = first occurrence) match. This removes
   the mixed-type-column trap (int `1` vs float `1.0`, which are `==` in Python but differ as
   strings) that a naive Utf8 pass would hit.
-- `date: i64` — only for `most_recent` columns; parsed in Python via the reference's own date path.
+- `date: i64` + a separate **date null mask** — only for `most_recent` columns; parsed in Python
+  via the reference's own date path. Null dates use an explicit mask, NOT an i64 sentinel, because
+  epoch values can be any i64 (incl. negative); `_most_recent` drops rows where value OR date is
+  null, then stable-sorts descending — the kernel replicates exactly that.
 - `source_code: i64` — only when `source_priority` is in play; factorized `__source__`.
 - `qweight: f64` per (row, col) — only when `quality_weighting` is active.
+
+### 4.3 Within-cluster member ordering (parity-critical)
+
+Every order-dependent tie-break — `majority_vote` / `unanimous_or_null` count/first-occurrence,
+`most_complete` / `longest_value` length ties, `first_non_null`, and the representative index —
+resolves to "first occurrence," so the kernel and the reference MUST agree on what "first" means
+within a cluster.
+
+The reference orders differently by internal path: the plain columnar/polars-native path orders by
+`__cluster_id__` only (within-cluster = stable input order), while the survivorship path
+(`build_golden_records_batch` survivorship branch, `resolve.py`) sorts
+`["__cluster_id__", "__row_id__"]` (within-cluster = `__row_id__`-ascending). Because the covered
+surface here always includes at least one survivorship-activating feature OR is a simple default
+strategy, we pin ONE ordering and make the oracle match it:
+
+- **Kernel contract:** members are iterated **`__row_id__`-ascending within each cluster**. Python
+  sorts the cluster map by `(cluster_id, row_id)` before the FFI, so the kernel can assume this.
+- **Parity contract:** the parity matrix invokes `build_golden_records_batch` on inputs whose
+  within-cluster order is `__row_id__`-ascending (the survivorship path already sorts this way; for
+  configs the reference would route to the plain path, the fixtures are constructed
+  `__row_id__`-sorted so both orderings coincide). The plan pins, per covered config, which
+  reference path is the oracle and confirms its within-cluster order matches the kernel's before
+  any kernel code is written.
+
+One exception to "first occurrence": `confidence_majority` sets its representative index on the
+first **edge** (in `pair_scores` iteration order) whose endpoints both hold the winning value —
+not the first row. So its provenance `source_index` depends on edge-iteration order, and Python
+must pass pair-score edges in the reference's iteration order (6.4).
 
 ## 5. Data flow
 
@@ -223,7 +254,9 @@ From `winner_idx[c][col]` + `field_conf`:
 - one `Series.gather(idx)` per column on the original typed Series with `-1` -> null (native dtype
   preserved);
 - `__cluster_id__` column;
-- `__golden_confidence__` = mean of `field_conf` (matching the reference aggregation);
+- `__golden_confidence__` = mean of `field_conf` over resolution units — the denominator is
+  `n_scalar_fields + n_groups` (each `field_group` contributes exactly one entry, per
+  `resolve.py`), NOT `n_user_cols`, when groups are active;
 - provenance mode adds a per-(cluster, col) `source_row_id` frame = `__row_id__[winner_idx]`.
 
 ## 9. Testing (byte-parity is the whole game)
@@ -262,8 +295,12 @@ New except `lib.rs` (register) and a docs sweep:
   `group_winner` case-for-case; the parity matrix (incl. mixed-type fixtures) is the gate.
 - **Predicate IR completeness.** Mitigation: cover the lowerable subset, decline the rest loudly;
   parse/validate stays in the vetted `conditions.py`.
-- **Confirming the exact `__golden_confidence__` aggregation** and majority/confidence
-  `source_index` semantics against source before coding — pinned in the implementation plan.
+- **Within-cluster ordering (4.3)** governs every order-dependent tie-break and the representative
+  index — the plan pins the per-path oracle ordering and confirms the kernel matches it before any
+  kernel code is written. This is the highest-risk parity item.
+- **Confirming the exact `__golden_confidence__` aggregation** (denominator = units, not columns)
+  and the `confidence_majority` edge-iteration-order representative index against source before
+  coding — pinned in the implementation plan.
 - **Native kernel republish discipline** (adding new symbols): the published wheel must carry
   `golden_fused` or every `pip install goldenmatch[native]` env silently hits the classic path;
   bump `pyproject.toml` + `Cargo.toml` in lockstep and verify the symbol is in the published wheel
