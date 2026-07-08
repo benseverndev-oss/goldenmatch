@@ -75,6 +75,37 @@ def _extract_day_of_week_py(val: str | None) -> str | None:
     return _DAY_NAMES[d.weekday()] if d is not None else None
 
 
+# int/bool-returning date references (Phase 4d dtype-egress). Deterministic via
+# _parse_date; the SAME per-element fn the Polars `series` path applies -> the
+# columnar engine egresses a real Int64/Boolean column, byte-identical.
+def _extract_year_py(val: str | None) -> int | None:
+    d = _parse_date(val)
+    return d.year if d else None
+
+
+def _extract_month_py(val: str | None) -> int | None:
+    d = _parse_date(val)
+    return d.month if d else None
+
+
+def _extract_day_py(val: str | None) -> int | None:
+    d = _parse_date(val)
+    return d.day if d else None
+
+
+def _extract_quarter_py(val: str | None) -> int | None:
+    d = _parse_date(val)
+    return (d.month - 1) // 3 + 1 if d else None
+
+
+def _date_validate_py(val: str | None) -> bool | None:
+    if val is None:
+        return None
+    if not val.strip():
+        return False
+    return _parse_date(val) is not None
+
+
 _YEAR_ONLY_RE = r"^\s*\d{4}\s*$"
 
 # Formats the vectorized fast path resolves entirely in Polars/Rust. Each is
@@ -217,17 +248,12 @@ def datetime_iso8601(series: pl.Series) -> pl.Series:
     auto_apply=False,
     priority=35,
     mode="series",
+    scalar=_extract_year_py,
+    scalar_dtype="int",
 )
 def extract_year(series: pl.Series) -> pl.Series:
     """Extract the year as an integer."""
-
-    def _year(val: str | None) -> int | None:
-        if val is None:
-            return None
-        d = _parse_date(val)
-        return d.year if d else None
-
-    return series.map_elements(_year, return_dtype=pl.Int64)
+    return series.map_elements(_extract_year_py, return_dtype=pl.Int64)
 
 
 @register_transform(
@@ -236,17 +262,12 @@ def extract_year(series: pl.Series) -> pl.Series:
     auto_apply=False,
     priority=35,
     mode="series",
+    scalar=_extract_month_py,
+    scalar_dtype="int",
 )
 def extract_month(series: pl.Series) -> pl.Series:
     """Extract the month as an integer (1-12)."""
-
-    def _month(val: str | None) -> int | None:
-        if val is None:
-            return None
-        d = _parse_date(val)
-        return d.month if d else None
-
-    return series.map_elements(_month, return_dtype=pl.Int64)
+    return series.map_elements(_extract_month_py, return_dtype=pl.Int64)
 
 
 @register_transform(
@@ -280,17 +301,12 @@ _DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"
     auto_apply=False,
     priority=35,
     mode="series",
+    scalar=_extract_day_py,
+    scalar_dtype="int",
 )
 def extract_day(series: pl.Series) -> pl.Series:
     """Extract the day of month as an integer (1-31)."""
-
-    def _day(val: str | None) -> int | None:
-        if val is None:
-            return None
-        d = _parse_date(val)
-        return d.day if d else None
-
-    return series.map_elements(_day, return_dtype=pl.Int64)
+    return series.map_elements(_extract_day_py, return_dtype=pl.Int64)
 
 
 @register_transform(
@@ -299,19 +315,12 @@ def extract_day(series: pl.Series) -> pl.Series:
     auto_apply=False,
     priority=35,
     mode="series",
+    scalar=_extract_quarter_py,
+    scalar_dtype="int",
 )
 def extract_quarter(series: pl.Series) -> pl.Series:
     """Extract the quarter (1-4) from a date."""
-
-    def _quarter(val: str | None) -> int | None:
-        if val is None:
-            return None
-        d = _parse_date(val)
-        if d is None:
-            return None
-        return (d.month - 1) // 3 + 1
-
-    return series.map_elements(_quarter, return_dtype=pl.Int64)
+    return series.map_elements(_extract_quarter_py, return_dtype=pl.Int64)
 
 
 @register_transform(
@@ -333,15 +342,9 @@ def extract_day_of_week(series: pl.Series) -> pl.Series:
     auto_apply=False,
     priority=60,
     mode="series",
+    scalar=_date_validate_py,
+    scalar_dtype="bool",
 )
 def date_validate(series: pl.Series) -> pl.Series:
     """Validate if value is a parseable date. Returns True/False/None."""
-
-    def _validate(val: str | None) -> bool | None:
-        if val is None:
-            return None
-        if not val.strip():
-            return False
-        return _parse_date(val) is not None
-
-    return series.map_elements(_validate, return_dtype=pl.Boolean)
+    return series.map_elements(_date_validate_py, return_dtype=pl.Boolean)

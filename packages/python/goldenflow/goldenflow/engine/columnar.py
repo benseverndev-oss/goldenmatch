@@ -231,6 +231,21 @@ def _sample3(col: Column) -> list:
     return list(col[:3])
 
 
+def _cast_utf8(v):
+    """Format a scalar value the way Polars' ``cast(Utf8)`` does — the reference for
+    the columnar scalar path's manifest samples + affected counts (Phase 4d
+    dtype-egress). ``None`` stays null; a ``bool`` renders ``"true"``/``"false"``; an
+    ``int`` renders ``str(int)``; a ``str`` is itself. (No scalar returns a float —
+    numerics run the dedicated parser path, not the scalar chain.)"""
+    if v is None:
+        return None
+    if v is True:
+        return "true"
+    if v is False:
+        return "false"
+    return str(v)
+
+
 def transform(df, config, source: str = "<dataframe>"):
     """Apply an owned-string ``config`` to ``df`` (a ``pl.DataFrame``), preferring
     the native Arrow ``Column`` path (zero-copy, pyarrow-free) and falling back to
@@ -312,33 +327,35 @@ def _transform_via_columns(df, config, source, nm, pl):
             continue
         # Scalar chain (Phase 4d): a spec with a scalar-only op. Apply op-by-op over a
         # Python list (owned string ops native, scalar ops via the pure reference) and
-        # egress a pl.Series -- consistent with transform_columns_native (the dict path).
+        # egress a correctly-TYPED pl.Series -- consistent with the dict path, but the
+        # frame needs the real dtype (str/int/bool) so a numeric/bool result column
+        # matches the Polars engine (incl. the all-null edge, where value inference
+        # can't tell Boolean-null from Int64-null). Samples/counts use _cast_utf8.
         accepted = _accepted_string(nm)
+        dtype_map = {"str": pl.Utf8, "int": pl.Int64, "bool": pl.Boolean, "float": pl.Float64}
         if _spec_scalar_ready(spec, accepted):
             cur = df[spec.column].cast(pl.Utf8).to_list()
             total_rows = len(cur)
+            last_dtype = "str"
             for name, params in ops:
-                before = _sample3(cur[:3])
+                cb = [_cast_utf8(v) for v in cur]
                 if name in accepted:
                     new = list(nm.apply_chain_str_list(cur, [(name, list(params))])[0])
-                    n_changed = sum(
-                        1 for b, a in zip(cur, new)
-                        if b is not None and a is not None and b != a
-                    )
+                    last_dtype = "str"
                 else:
-                    fn = get_transform(name).scalar
-                    new = [fn(v) for v in cur]
-                    n_changed = sum(
-                        1 for b, a in zip(cur, new)
-                        if b is not None and a is not None and b != a
-                    )
-                after = _sample3(new[:3])
+                    info = get_transform(name)
+                    new = [info.scalar(v) for v in cur]
+                    last_dtype = info.scalar_dtype
+                cn = [_cast_utf8(v) for v in new]
+                n_changed = sum(
+                    1 for b, a in zip(cb, cn) if b is not None and a is not None and b != a
+                )
                 manifest.add_record(TransformRecord(
                     column=spec.column, transform=name, affected_rows=n_changed,
-                    total_rows=total_rows, sample_before=before, sample_after=after,
+                    total_rows=total_rows, sample_before=cb[:3], sample_after=cn[:3],
                 ))
                 cur = new
-            out_series.append(pl.Series(spec.column, cur, dtype=pl.Utf8))
+            out_series.append(pl.Series(spec.column, cur, dtype=dtype_map[last_dtype]))
             continue
         # Zero-copy, pyarrow-free ingest (a 1-column DataFrame -> a struct stream).
         col = nm.Column.from_arrow(df.select([spec.column]))
@@ -470,30 +487,30 @@ def transform_columns_native(columns, config, source: str = "<dataframe>"):
         # Scalar chain (Phase 4d): a spec with a scalar-only op runs op-by-op over the
         # plain list -- owned string ops via the native list chain, scalar ops via the
         # registered pure-Python reference (byte-identical to the native kernel the
-        # Polars engine uses, by the owned-kernel parity guarantee). Polars-free.
+        # Polars engine uses, by the owned-kernel parity guarantee). Polars-free. The
+        # manifest samples + affected counts compare Polars' cast(Utf8) forms
+        # (_cast_utf8), so a dtype-changing op (e.g. "true" -> bool True) counts a row
+        # only when the RENDERED strings differ, matching the engine exactly.
         accepted = _accepted_string(nm)
         if _spec_scalar_ready(spec, accepted):
             cur = col_list
             for name, params in ops:
-                before = _sample3(cur[:3])
+                cb = [_cast_utf8(v) for v in cur]
                 if name in accepted:
-                    new, changed = nm.apply_chain_str_list(cur, [(name, list(params))])
-                    new = list(new)
-                    n_changed = int(changed[0])
+                    new = list(nm.apply_chain_str_list(cur, [(name, list(params))])[0])
                 else:
                     fn = get_transform(name).scalar
                     new = [fn(v) for v in cur]
-                    n_changed = sum(
-                        1 for b, a in zip(cur, new)
-                        if b is not None and a is not None and b != a
-                    )
-                after = _sample3(new[:3])
+                cn = [_cast_utf8(v) for v in new]
+                n_changed = sum(
+                    1 for b, a in zip(cb, cn) if b is not None and a is not None and b != a
+                )
                 manifest.add_record(TransformRecord(
                     column=spec.column, transform=name, affected_rows=n_changed,
-                    total_rows=total_rows, sample_before=before, sample_after=after,
+                    total_rows=total_rows, sample_before=cb[:3], sample_after=cn[:3],
                 ))
                 cur = new
-            out[spec.column] = cur
+            out[spec.column] = cur  # raw Python values (int/bool/str) -> dict result
             continue
 
         # Owned string chain (auto-routed total/nullable): counts + 3-row replay.
