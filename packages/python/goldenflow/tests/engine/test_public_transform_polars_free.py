@@ -60,9 +60,11 @@ def test_transform_dict_equals_transform_df(specs, data) -> None:
 
 
 def test_transform_uncovered_config_matches_polars() -> None:
-    """An uncovered config (phone_e164) declines to the Polars engine, byte-identical."""
-    cfg = _cfg([("p", ["strip", "phone_e164"])])
-    data = {"p": ["  212-555-0100 ", "bad"], "k": [1, 2]}
+    """An uncovered config (category_auto_correct is data-dependent, not on the
+    columnar path) declines to the Polars engine, byte-identical."""
+    cfg = _cfg([("p", ["strip", "category_auto_correct"])])
+    data = {"p": ["  Apple ", "apple", "APPLE", "bad"], "k": [1, 2, 3, 4]}
+    assert not columnar.config_is_columnar_ready(cfg)
     res = goldenflow.transform(data, config=cfg)
     ref = goldenflow.transform_df(pl.DataFrame(data), config=cfg)
     for c in ref.df.columns:
