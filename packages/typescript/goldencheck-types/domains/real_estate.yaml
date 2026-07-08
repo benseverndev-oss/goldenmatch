@@ -1,0 +1,24 @@
+description: "Real estate — listings, properties, features (beds/baths/sqft), sale prices"
+
+types:
+  listing:
+    name_hints: ["listing_id", "listing_price", "mls", "mls_number"]
+    value_signals:
+      min_unique_pct: 0.80
+    suppress: ["cardinality", "pattern_consistency"]
+
+  property:
+    name_hints: ["property_id", "property_type", "property_address"]
+    suppress: ["pattern_consistency"]
+
+  features:
+    name_hints: ["bedrooms", "bathrooms", "square_feet", "sqft", "lot_size", "year_built", "garage"]
+    value_signals:
+      numeric: true
+    suppress: ["pattern_consistency"]
+
+  price:
+    name_hints: ["asking_price", "list_price", "sale_price", "sold_price"]
+    value_signals:
+      numeric: true
+    suppress: ["pattern_consistency"]
