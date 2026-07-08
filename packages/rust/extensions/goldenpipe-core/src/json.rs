@@ -138,6 +138,38 @@ pub fn build_repair_plan_json(input: &str) -> String {
     .unwrap()
 }
 
+#[derive(Deserialize)]
+struct LowerIn {
+    origin_stage: String,
+    kind_hint: String,
+    #[serde(default)]
+    concrete: Value,
+    #[serde(default)]
+    next_id: u64,
+    #[serde(default)]
+    resolved: bool,
+}
+
+pub fn lower_json(input: &str) -> String {
+    let arg: LowerIn = match serde_json::from_str(input) {
+        Ok(a) => a,
+        Err(e) => return parse_err(e),
+    };
+    let concrete = if arg.concrete.is_null() {
+        serde_json::json!({})
+    } else {
+        arg.concrete
+    };
+    let (nodes, next_id) = crate::ir::lower(
+        &arg.origin_stage,
+        &arg.kind_hint,
+        &concrete,
+        arg.next_id,
+        arg.resolved,
+    );
+    serde_json::json!({ "nodes": nodes, "next_id": next_id }).to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

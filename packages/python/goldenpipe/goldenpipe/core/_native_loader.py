@@ -101,3 +101,7 @@ def band_of_json(input: str) -> str:
 
 def build_repair_plan_json(input: str) -> str:
     return _native.build_repair_plan_json(input)
+
+
+def lower_json(input: str) -> str:
+    return _native.lower_json(input)

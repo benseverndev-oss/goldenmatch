@@ -60,3 +60,7 @@ fn vec_band_of() {
 fn vec_build_repair_plan() {
     run("build_repair_plan", build_repair_plan_json);
 }
+#[test]
+fn vec_lower() {
+    run("lower", lower_json);
+}
