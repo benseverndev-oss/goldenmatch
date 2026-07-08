@@ -21,14 +21,11 @@ import hashlib
 import json
 import os
 import random
-import sys
 import time
 
-os.environ.setdefault("POLARS_SKIP_CPU_CHECK", "1")
-
+import goldenmatch._native as native
 import polars as pl
 import pyarrow as pa
-import goldenmatch._native as native
 
 SCORER_IDS = [0]  # jaro_winkler
 WEIGHTS = [1.0]
