@@ -30,6 +30,27 @@ loss: a DC that would need a predicate on tβ is captured as its α-mirror under
 the swapped pair ordering, and ``pair_evidence`` already iterates BOTH orderings
 ``(α, β)`` and ``(β, α)``. Full β-slot DCs (and cross-table DCs) are a Stage 2+
 concern.
+
+**Stage-1 reportability gates (all configurable via keyword args).**
+
+* **Order comparison (default on).** With ``require_order_comparison=True``
+  (the default) only DCs containing >= 1 order predicate (``<``, ``≤``, ``>``,
+  ``≥``) are reported. Pure all-equality DCs (``¬(A = x ∧ B = y)``, ``¬(A = B)``)
+  are suppressed by default -- they are the accepted-values / uniqueness / FD
+  family, better served by goldencheck's existing profilers, and mining them
+  per-literal is noisy. Set ``require_order_comparison=False`` to include them
+  (expect more, noisier output).
+* **Arity (default 2).** ``arity_bound`` (default
+  :data:`~goldencheck.denial.constants.MAX_REPORT_ARITY` = 2) caps predicates per
+  DC. Binary DCs carry the signal; wider ones over-fit on independent data and
+  are costly to enumerate. A power user can opt into 3+.
+* **Self-column cross predicates dropped.** Cross predicates of the form
+  ``tα.A op tβ.A`` (same column on both tuples, incl. uniqueness ``¬(tα.A = tβ.A)``)
+  are dropped in Stage 1 -- already covered by the ``uniqueness`` /
+  ``composite_key`` profilers; full cross-tuple uniqueness is Stage 2+. Genuine
+  relational cross DCs relate DISTINCT columns.
+* **Tautologies dropped.** Antecedents that can never hold (contradictory sign
+  sets on one column pair, or ``A = x ∧ A = y``) are not surfaced as invariants.
 """
 from __future__ import annotations
 
@@ -42,6 +63,7 @@ from goldencheck.denial.constants import (
     DEFAULT_EPS,
     DEFAULT_SAMPLE,
     MAX_CONSTRAINTS,
+    MAX_REPORT_ARITY,
     MIN_ROWS,
     VALIDATION_SAMPLE,
 )
@@ -60,14 +82,6 @@ __all__ = ["discover_denial_constraints", "DenialConstraintProfiler"]
 # high-value invariants ("order is never after ship") always carry an order
 # comparison. We require at least one ordered predicate to report a DC.
 _ORDER_OPS = {"<", "≤", ">", "≥"}
-
-# Discover is O(|distinct masks| * C(active, arity)); at arity 3-4 on high-entropy
-# evidence it both blows up (tens of seconds) AND over-fits -- conjunctions of 3-4
-# independent comparison predicates coincidentally fall below eps on random data,
-# manufacturing spurious "constraints". The high-value DCs are binary (¬(A ∧ B),
-# e.g. ¬(status='shipped' ∧ ship<order)); we cap BOTH passes at arity 2. Wider
-# DCs are a Stage-2+ concern with a statistical-significance gate.
-_MAX_ARITY = 2
 
 # The sign of ``a - b`` each operator admits (-1: a<b, 0: a=b, +1: a>b). Used to
 # reject tautological antecedents: two predicates on the same column pair whose
@@ -140,14 +154,45 @@ def _is_tautological(preds: list[Predicate]) -> bool:
     return any(len(lits) > 1 for lits in const_lits.values())
 
 
-def _is_reportable(preds: list[Predicate]) -> bool:
+def _is_reportable(preds: list[Predicate], *, require_order_comparison: bool) -> bool:
     """Stage-1 interestingness gate shared by both passes: at least two distinct
-    columns, at least one order comparison, and a satisfiable antecedent."""
-    return (
-        _n_distinct_columns(preds) >= 2
-        and _has_order_pred(preds)
-        and not _is_tautological(preds)
-    )
+    columns, a satisfiable antecedent, and (when ``require_order_comparison``) at
+    least one order comparison."""
+    if _n_distinct_columns(preds) < 2 or _is_tautological(preds):
+        return False
+    return _has_order_pred(preds) if require_order_comparison else True
+
+
+# Negated operator, for rendering the "then" clause of an if-then message: a DC
+# ¬(A ∧ B) reads "if A then ¬B", so the consequent predicate is shown negated.
+_NEG_OP = {"=": "≠", "≠": "=", "<": "≥", "≤": ">", ">": "≤", "≥": "<"}
+
+
+def _render_negated(p: Predicate) -> str:
+    """Render ``p`` with its operator negated (the ``then`` clause of ¬(A ∧ p))."""
+    op = _NEG_OP[p.op.value]
+    if p.kind == "const":
+        lit = f"'{p.literal}'" if isinstance(p.literal, str) else repr(p.literal)
+        return f"{p.col_a} {op} {lit}"
+    return f"{p.col_a} {op} {p.col_b}"
+
+
+def _friendly_if_then(dc: DenialConstraint) -> str | None:
+    """Return an "if A then not-B" rendering for the clean 2-predicate single-tuple
+    shape (exactly one equality antecedent + one consequent), else ``None``.
+
+    ``¬(status = 'shipped' ∧ order ≥ ship)`` -> "If status = 'shipped' then
+    order < ship". Message-only sugar; ``DenialConstraint.render()`` stays
+    canonical ``¬(…)``.
+    """
+    if dc.tuple_scope != "single" or len(dc.predicates) != 2:
+        return None
+    eqs = [p for p in dc.predicates if p.op.value == "="]
+    if len(eqs) != 1:
+        return None
+    ante = eqs[0]
+    cons = dc.predicates[1] if dc.predicates[0] is ante else dc.predicates[0]
+    return f"If {ante.render()} then {_render_negated(cons)}"
 
 
 def _rank_key(rec: _Record):
@@ -164,6 +209,8 @@ def _discover_records(
     sample_size: int,
     max_constraints: int,
     seed: int,
+    arity_bound: int,
+    require_order_comparison: bool,
 ) -> list[_Record]:
     """Run both passes and return ranked ``_Record`` s (DC + violating evidence)."""
     if df.height < MIN_ROWS:
@@ -181,9 +228,11 @@ def _discover_records(
 
     # -- Pass 1: single-tuple DCs ------------------------------------------------
     ev1 = row_evidence(space, n)
-    for mask in discover(ev1, s, n, eps, arity_bound=_MAX_ARITY):
+    for mask in discover(ev1, s, n, eps, arity_bound=arity_bound):
         preds = _preds_from_mask(mask, singles)
-        if not preds or not _is_reportable(preds):
+        if not preds or not _is_reportable(
+            preds, require_order_comparison=require_order_comparison
+        ):
             continue
         g1, rows = validate_single_tuple(preds, df)
         if g1 > eps:
@@ -217,7 +266,7 @@ def _discover_records(
             reduced_ev[reduced] = reduced_ev.get(reduced, 0) + cnt
 
         total_pairs = m * (m - 1)
-        for mask in discover(reduced_ev, s + c, total_pairs, eps, arity_bound=_MAX_ARITY):
+        for mask in discover(reduced_ev, s + c, total_pairs, eps, arity_bound=arity_bound):
             preds: list[Predicate] = []
             for bit in range(s + c):
                 if not (mask >> bit) & 1:
@@ -232,7 +281,9 @@ def _discover_records(
             # (¬(tα.A = tβ.A)) is a Stage-2+ concern.
             if any(p.col_a == p.col_b for p in cross_preds):
                 continue
-            if not _is_reportable(preds):
+            if not _is_reportable(
+                preds, require_order_comparison=require_order_comparison
+            ):
                 continue
             key = tuple(sorted(p.render() for p in preds))
             if key in seen:
@@ -271,20 +322,31 @@ def discover_denial_constraints(
     sample_size: int | None = None,
     max_constraints: int | None = None,
     seed: int = 0,
+    arity_bound: int = MAX_REPORT_ARITY,
+    require_order_comparison: bool = True,
 ) -> list[DenialConstraint]:
     """Discover denial constraints ``¬(p1 ∧ … ∧ pm)`` holding on ``df``.
 
     ``min_confidence`` is the fraction of elements a DC must hold for; the g1
     threshold is ``eps = 1 - min_confidence`` (default ``DEFAULT_EPS``).
     ``sample_size`` bounds the pairwise (cross-tuple) pass; ``max_constraints``
-    caps the ranked output. Returns the DCs only -- use the profiler for the
-    per-DC violating rows/pairs.
+    caps the ranked output. ``arity_bound`` caps predicates per DC (default
+    :data:`~goldencheck.denial.constants.MAX_REPORT_ARITY` = 2; raise to opt into
+    wider DCs). ``require_order_comparison`` (default True) suppresses pure
+    all-equality DCs -- see the module docstring. Returns the DCs only -- use the
+    profiler for the per-DC violating rows/pairs.
     """
     eps = DEFAULT_EPS if min_confidence is None else 1.0 - min_confidence
     sample = DEFAULT_SAMPLE if sample_size is None else sample_size
     cap = MAX_CONSTRAINTS if max_constraints is None else max_constraints
     records = _discover_records(
-        df, eps=eps, sample_size=sample, max_constraints=cap, seed=seed
+        df,
+        eps=eps,
+        sample_size=sample,
+        max_constraints=cap,
+        seed=seed,
+        arity_bound=arity_bound,
+        require_order_comparison=require_order_comparison,
     )
     return [r.dc for r in records]
 
@@ -299,6 +361,8 @@ class DenialConstraintProfiler:
             sample_size=DEFAULT_SAMPLE,
             max_constraints=MAX_CONSTRAINTS,
             seed=0,
+            arity_bound=MAX_REPORT_ARITY,
+            require_order_comparison=True,
         )
         findings: list[Finding] = []
         for rec in records:
@@ -320,12 +384,18 @@ class DenialConstraintProfiler:
             "support": dc.support,
         }
 
+        friendly = _friendly_if_then(dc)
+
         if dc.g1 == 0:
+            if friendly is not None:
+                message = f"{friendly} always holds (a discovered invariant)."
+            else:
+                message = f"{dc.render()} always holds (a discovered invariant)."
             return Finding(
                 severity=Severity.INFO,
                 column=columns,
                 check="denial_constraint",
-                message=f"{dc.render()} always holds (a discovered invariant).",
+                message=message,
                 affected_rows=0,
                 sample_values=_render_examples(rec, df, single),
                 confidence=0.7,
@@ -333,14 +403,21 @@ class DenialConstraintProfiler:
             )
 
         n_viol = rec.n_violations
+        if friendly is not None:
+            message = (
+                f"{friendly} holds {(1 - dc.g1):.1%} of the time; "
+                f"{n_viol} {unit}(s) violate it."
+            )
+        else:
+            message = (
+                f"{dc.render()} holds {(1 - dc.g1):.1%} of the time; "
+                f"{n_viol} {unit}(s) break it."
+            )
         return Finding(
             severity=Severity.WARNING,
             column=columns,
             check="denial_constraint",
-            message=(
-                f"{dc.render()} holds {(1 - dc.g1):.1%} of the time; "
-                f"{n_viol} {unit}(s) break it."
-            ),
+            message=message,
             affected_rows=n_viol,
             sample_values=_render_examples(rec, df, single),
             suggestion=(

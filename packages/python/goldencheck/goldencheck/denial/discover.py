@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from itertools import combinations
 
-from goldencheck.denial.constants import ARITY_BOUND, MAX_CONSTRAINTS
+from goldencheck.denial.constants import MAX_CONSTRAINTS, MAX_REPORT_ARITY
 
 __all__ = ["discover", "rank", "_complement"]
 
@@ -42,7 +42,7 @@ def discover(
     n_predicates: int,
     total: int,
     eps: float,
-    arity_bound: int = ARITY_BOUND,
+    arity_bound: int = MAX_REPORT_ARITY,
 ) -> list[int]:
     """Return minimal DC bitmasks.
 
