@@ -143,8 +143,12 @@ def run_match_fused_arrow(
     threshold = float(mk.threshold)
 
     clusters = fn(row_ids, key_arrs, score_arrs, scorer_ids, weights, total_weight, threshold)
+    return _clusters_to_table(clusters)
 
-    # clusters: list[list[int]] connected components (incl singletons).
+
+def _clusters_to_table(clusters: Any) -> Any:
+    """list[list[int]] connected components (incl singletons) -> pyarrow Table
+    (__row_id__, __cluster_id__), one row per record, stable id per component."""
     rid: list[int] = []
     cid: list[int] = []
     for c_id, comp in enumerate(clusters):
@@ -157,3 +161,102 @@ def run_match_fused_arrow(
             "__cluster_id__": pa.array(cid, type=pa.int64()),
         }
     )
+
+
+def match_fused_fs_ready(config: Any) -> bool:
+    """Covered boundary for the fused Fellegi-Sunter (probabilistic) path.
+
+    Covered: `static` single-key blocking + exactly one `probabilistic` matchkey
+    whose fields all use an FS-native scorer (`_NATIVE_FS_SCORER_IDS`). Transforms
+    covered (derived host-side). `run_match_fused_fs_arrow` takes a PRE-TRAINED
+    `EMResult` — training is the caller's O(n) model fit, unchanged.
+    """
+    b = getattr(config, "blocking", None)
+    if b is None or getattr(b, "strategy", "static") != "static":
+        return False
+    keys = getattr(b, "keys", None) or []
+    if len(keys) != 1 or getattr(b, "ann_column", None):
+        return False
+    get_mks = getattr(config, "get_matchkeys", None)
+    mks = get_mks() if callable(get_mks) else []
+    if len(mks) != 1 or getattr(mks[0], "type", None) != "probabilistic" or not mks[0].fields:
+        return False
+    from goldenmatch.core.probabilistic import _NATIVE_FS_SCORER_IDS
+
+    return all(f.field and f.scorer in _NATIVE_FS_SCORER_IDS for f in mks[0].fields)
+
+
+def _match_fused_fs_symbol() -> Any | None:
+    try:
+        return getattr(native_module(), "match_fused_fs", None)
+    except Exception:
+        return None
+
+
+def run_match_fused_fs_arrow(
+    columns: Mapping[str, Any],
+    config: Any,
+    em_result: Any,
+    n_rows: int | None = None,
+) -> Any | None:
+    """Fused Fellegi-Sunter match over Arrow columns, given a trained `EMResult`.
+
+    Byte-parity by construction: the block key is derived via
+    `_build_block_key_expr`, the score columns via `_field_values_for_block`, and
+    the FS kernel args (levels/partial_thresholds/match_weights/calibration/
+    thresholds) are assembled EXACTLY as `score_probabilistic_native` does — so
+    the fused kernel scores identically to the pipeline's native FS block scorer.
+    Returns a `(__row_id__, __cluster_id__)` Table, or None if uncovered / native
+    absent.
+    """
+    import polars as pl
+
+    from goldenmatch.core.blocker import _build_block_key_expr
+    from goldenmatch.core.probabilistic import (
+        _NATIVE_FS_SCORER_IDS,
+        _field_values_for_block,
+        _fs_calibration_mode,
+        compute_thresholds,
+        prior_weight,
+    )
+
+    fn = _match_fused_fs_symbol()
+    if fn is None or not match_fused_fs_ready(config):
+        return None
+
+    key_cfg = config.blocking.keys[0]
+    mk = config.get_matchkeys()[0]
+    src_cols = list(dict.fromkeys([*key_cfg.fields, *[f.field for f in mk.fields]]))
+    n = n_rows if n_rows is not None else len(columns[src_cols[0]])
+    frame = pl.DataFrame({c: columns[c] for c in src_cols}).cast(pl.Utf8)
+
+    block_key = (
+        frame.lazy().select(_build_block_key_expr(key_cfg)).collect().get_column("__block_key__")
+    )
+    key_arrs = [block_key.to_arrow()]
+
+    # FS kernel args — mirrors score_probabilistic_native exactly.
+    calibrated = _fs_calibration_mode() == "posterior"
+    prior_w = prior_weight(em_result.proportion_matched) if calibrated else 0.0
+    max_w = sum(max(em_result.match_weights[f.field]) for f in mk.fields)
+    min_w = sum(min(em_result.match_weights[f.field]) for f in mk.fields)
+    weight_range = max_w - min_w
+    if mk.link_threshold is not None:
+        link_threshold = float(mk.link_threshold)
+    else:
+        link_threshold, _ = compute_thresholds(em_result, calibrated=calibrated)
+    scorer_ids = [_NATIVE_FS_SCORER_IDS[f.scorer] for f in mk.fields]
+    levels = [int(f.levels) for f in mk.fields]
+    partials = [float(f.partial_threshold) for f in mk.fields]
+    weights = [[float(w) for w in em_result.match_weights[f.field]] for f in mk.fields]
+    score_arrs = [
+        pl.Series(f.field, _field_values_for_block(frame, f, n), dtype=pl.Utf8).to_arrow()
+        for f in mk.fields
+    ]
+
+    row_ids = pa.array(range(n), type=pa.int64())
+    clusters = fn(
+        row_ids, key_arrs, score_arrs, scorer_ids, levels, partials, weights,
+        calibrated, prior_w, min_w, weight_range, link_threshold,
+    )
+    return _clusters_to_table(clusters)

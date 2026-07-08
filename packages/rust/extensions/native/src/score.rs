@@ -180,8 +180,29 @@ pub fn score_block_pairs(
 ///   2 levels: 1 if sim >= partial_threshold else 0
 ///   3 levels: 2 if sim >= 0.95, elif sim >= partial_threshold -> 1, else 0
 ///   N levels: count of k in 1..N with sim >= k/N (even spacing)
+/// Normalize a summed Fellegi-Sunter match weight to a [0,1] score. Shared by
+/// `score_block_pairs_fs` and the fused `match_fused_fs` so the two cannot drift.
+/// `calibrated` = posterior probability `1/(1+2^-(prior_w+w))`; else linear
+/// min-max over the observed weight range (0.5 when the range is degenerate).
+pub(crate) fn fs_normalize(
+    total_weight: f64,
+    calibrated: bool,
+    prior_w: f64,
+    min_weight: f64,
+    weight_range: f64,
+) -> f64 {
+    if calibrated {
+        let logodds = (prior_w + total_weight).clamp(-60.0, 60.0);
+        1.0 / (1.0 + 2.0_f64.powf(-logodds))
+    } else if weight_range > 0.0 {
+        ((total_weight - min_weight) / weight_range).clamp(0.0, 1.0)
+    } else {
+        0.5
+    }
+}
+
 #[inline]
-fn fs_level_from_sim(sim: f64, n_levels: u8, partial_threshold: f64) -> usize {
+pub(crate) fn fs_level_from_sim(sim: f64, n_levels: u8, partial_threshold: f64) -> usize {
     match n_levels {
         2 => usize::from(sim >= partial_threshold),
         3 => {
@@ -251,17 +272,6 @@ pub fn score_block_pairs_fs(
         offset += size;
     }
 
-    let normalize = |total_weight: f64| -> f64 {
-        if calibrated {
-            let logodds = (prior_w + total_weight).clamp(-60.0, 60.0);
-            1.0 / (1.0 + 2.0_f64.powf(-logodds))
-        } else if weight_range > 0.0 {
-            ((total_weight - min_weight) / weight_range).clamp(0.0, 1.0)
-        } else {
-            0.5
-        }
-    };
-
     py.detach(|| {
         spans
             .par_iter()
@@ -289,7 +299,13 @@ pub fn score_block_pairs_fs(
                                 };
                                 total_weight += match_weights[f][level];
                             }
-                            let normalized = normalize(total_weight);
+                            let normalized = fs_normalize(
+                                total_weight,
+                                calibrated,
+                                prior_w,
+                                min_weight,
+                                weight_range,
+                            );
                             if normalized >= threshold {
                                 local.push((pair_key.0, pair_key.1, normalized));
                             }

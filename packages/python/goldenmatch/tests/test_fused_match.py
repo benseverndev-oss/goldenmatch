@@ -202,3 +202,87 @@ def test_run_match_fused_arrow_declines_uncovered():
     c = _covered_config()
     c.matchkeys[0].fields[0].scorer = "soundex_match"
     assert fused_match.run_match_fused_arrow({"blk": pa.array(["a"]), "name": pa.array(["x"])}, c) is None
+
+
+# ---- Fellegi-Sunter (probabilistic) fused path -------------------------
+
+def _probabilistic_config():
+    return GoldenMatchConfig(
+        blocking=BlockingConfig(strategy="static", keys=[BlockingKeyConfig(fields=["blk"])]),
+        matchkeys=[
+            MatchkeyConfig(
+                name="mk",
+                type="probabilistic",
+                link_threshold=0.5,
+                fields=[
+                    MatchkeyField(field="name", scorer="jaro_winkler", levels=3, partial_threshold=0.8)
+                ],
+            )
+        ],
+    )
+
+
+def _em():
+    from goldenmatch.core.probabilistic import EMResult
+
+    # match_weights per level 0/1/2 (log2(m/u)); the only field that matters here.
+    return EMResult(
+        m_probs={"name": [0.1, 0.3, 0.6]},
+        u_probs={"name": [0.7, 0.2, 0.1]},
+        match_weights={"name": [-2.0, 0.585, 2.585]},
+        converged=True,
+        iterations=1,
+        proportion_matched=0.1,
+    )
+
+
+def test_fs_ready_true_on_probabilistic_false_on_weighted():
+    assert fused_match.match_fused_fs_ready(_probabilistic_config()) is True
+    assert fused_match.match_fused_fs_ready(_covered_config()) is False  # weighted
+
+
+@pytest.mark.skipif(not _HAS_FUSED, reason="goldenmatch-native match_fused_fs not built")
+def test_match_fused_fs_matches_pipeline_fs_block_scorer():
+    import polars as pl
+    from goldenmatch.core.blocker import build_blocks
+    from goldenmatch.core.probabilistic import probabilistic_block_scorer
+
+    config = _probabilistic_config()
+    em = _em()
+    keys = ["a", "a", "a", "b", "b", "c"]
+    names = ["jonathan", "jonathon", "michael", "sarah", "sara", "solo"]
+    df = (
+        pl.DataFrame({"blk": keys, "name": names})
+        .with_row_index("__row_id__")
+        .with_columns(pl.col("__row_id__").cast(pl.Int64))
+    )
+
+    # fused FS
+    columns = {"blk": pa.array(keys), "name": pa.array(names)}
+    tbl = fused_match.run_match_fused_fs_arrow(columns, config, em)
+    assert tbl is not None
+    got = _table_to_clusters(tbl)
+
+    # reference: the pipeline FS block path (same em -> same kernel FS math)
+    scorer = probabilistic_block_scorer(config.get_matchkeys()[0], em)
+    pairs = []
+    for br in build_blocks(df.lazy(), config.blocking):
+        g = br.df.collect() if hasattr(br.df, "collect") else br.df
+        pairs += scorer(g)
+    parent = list(range(df.height))
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for a, b, _s in pairs:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+    comps = defaultdict(list)
+    for i in range(df.height):
+        comps[find(i)].append(i)
+    want = {frozenset(v) for v in comps.values() if len(v) >= 2}
+    assert got == want
