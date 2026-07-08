@@ -80,7 +80,9 @@ Each `hr.yaml`-shaped (`description` + `types` with `name_hints` + minimal `valu
 - **metrics**: `conversion_rate, funnel_stage, click_through_rate, impressions`
 - **attribution**: `utm_source, utm_campaign, cost_per_lead`
 
-At implementation, the FINAL YAMLs are validated by the real load path (write all 7, run the full 16-pack matrix from §2 → each vertical ≥0.5, person/sales-contact→None, existing 9 unchanged, plus the two overlap assertions); adjust hints if a type-organized token set shifts an outcome. (Loader shape-validates only list/dict/list — no key allowlist.)
+**Every type MUST carry a `suppress` key** (from the allowlist above) — the manual `tests/validate_yaml.py` requires it per-type and allowlists the values (even though it is not CI-wired; `hr.yaml` follows it). Do NOT ship a `name_hints`-only type. The §3 shorthand lists only `name_hints`; the actual YAMLs include `value_signals` + `suppress` per type, exactly like `hr.yaml`/`insurance.yaml`.
+
+At implementation, the FINAL YAMLs are validated by the real load path (write all 7, run the full 16-pack matrix from §2 → each vertical ≥0.5, person/sales-contact→None, existing 9 unchanged, plus the two overlap assertions); adjust hints if a type-organized token set shifts an outcome. (The runtime loader shape-validates only list/dict/list with no key allowlist; the manual validator additionally requires `suppress` — see above.)
 
 ## 4. Sync (TS canonical → Python)
 
