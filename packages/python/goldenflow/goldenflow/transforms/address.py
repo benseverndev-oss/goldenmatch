@@ -147,7 +147,7 @@ def _address_standardize_series(series: pl.Series) -> pl.Series:
 
 
 @register_transform(
-    name="address_standardize", input_types=["address"], auto_apply=False, priority=50, mode="expr"
+    name="address_standardize", input_types=["address"], auto_apply=False, priority=50, mode="expr", scalar=_address_standardize_py
 )
 def address_standardize(column: str) -> pl.Expr:
     """Replace full street suffixes (Street, Avenue...) with abbreviations.
@@ -176,7 +176,7 @@ def _address_expand_series(series: pl.Series) -> pl.Series:
 
 
 @register_transform(
-    name="address_expand", input_types=["address"], auto_apply=False, priority=50, mode="expr"
+    name="address_expand", input_types=["address"], auto_apply=False, priority=50, mode="expr", scalar=_address_expand_py
 )
 def address_expand(column: str) -> pl.Expr:
     """Replace street abbreviations (St, Ave...) with full forms.
@@ -212,7 +212,7 @@ def _state_abbreviate_series(series: pl.Series) -> pl.Series:
 
 @register_transform(
     name="state_abbreviate", input_types=["state", "string"], auto_apply=False, priority=50,
-    mode="expr",
+    mode="expr", scalar=_state_abbreviate_py,
 )
 def state_abbreviate(column: str) -> pl.Expr:
     """Normalize state name to a 2-letter abbreviation (unmatched -> original).
@@ -239,7 +239,7 @@ def _state_expand_series(series: pl.Series) -> pl.Series:
 
 @register_transform(
     name="state_expand", input_types=["state", "string"], auto_apply=False, priority=50,
-    mode="expr",
+    mode="expr", scalar=_state_expand_py,
 )
 def state_expand(column: str) -> pl.Expr:
     """Expand a 2-letter state abbreviation to its full name (unmatched -> original).
@@ -270,7 +270,7 @@ def _zip_normalize_series(series: pl.Series) -> pl.Series:
 
 
 @register_transform(
-    name="zip_normalize", input_types=["zip"], auto_apply=True, priority=55, mode="expr"
+    name="zip_normalize", input_types=["zip"], auto_apply=True, priority=55, mode="expr", scalar=_zip_normalize_py
 )
 def zip_normalize(column: str) -> pl.Expr:
     """Normalize a US ZIP to 5-digit form (strip +4, zero-pad all-digit, preserve
@@ -297,6 +297,7 @@ def _country_standardize_py(val: str | None) -> str | None:
     auto_apply=False,
     priority=50,
     mode="series",
+    scalar=_country_standardize_py,
 )
 def country_standardize(series: pl.Series) -> pl.Series:
     """Normalize country names to ISO 3166-1 alpha-2 codes.
@@ -353,6 +354,7 @@ def _unit_normalize_py(val: str | None) -> str | None:
     auto_apply=False,
     priority=45,
     mode="series",
+    scalar=_unit_normalize_py,
 )
 def unit_normalize(series: pl.Series) -> pl.Series:
     """Normalize unit/apartment/suite designations.
