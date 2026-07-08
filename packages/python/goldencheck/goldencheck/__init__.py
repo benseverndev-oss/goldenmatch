@@ -16,6 +16,8 @@ from goldencheck.config.schema import (
     Settings,
 )
 from goldencheck.config.writer import save_config
+from goldencheck.denial.mine import discover_denial_constraints
+from goldencheck.denial.models import DenialConstraint
 from goldencheck.engine.confidence import (
     apply_confidence_downgrade,
     apply_corroboration_boost,
@@ -69,6 +71,8 @@ __all__ = [
     "cell_quality",
     "functional_dependencies",
     "FunctionalDependency",
+    "discover_denial_constraints",
+    "DenialConstraint",
     "Finding",
     "Severity",
     "DatasetProfile",
