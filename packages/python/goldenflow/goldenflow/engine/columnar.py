@@ -528,6 +528,49 @@ def _autoconfig_columns(data: dict):
     return GoldenFlowConfig(transforms=specs)
 
 
+def read_parquet_columns(path) -> dict[str, list]:
+    """Read a Parquet file into a ``dict[str, list]`` of **typed** Python values —
+    **Polars-free** (pyarrow only). ``pyarrow.parquet.read_table(path).to_pydict()`` is
+    value-identical to ``pl.read_parquet(path)`` (int/float/bool/str/None preserved).
+    Needs ``goldenflow[parquet]`` (pyarrow); raises a clear ImportError otherwise."""
+    try:
+        import pyarrow.parquet as pq
+    except ImportError as e:  # pragma: no cover
+        raise ImportError(
+            "pyarrow is required to read Parquet Polars-free: pip install goldenflow[parquet]"
+        ) from e
+    return pq.read_table(str(path)).to_pydict()
+
+
+def read_excel_columns(path) -> dict[str, list]:
+    """Read the first sheet of an ``.xlsx`` into a ``dict[str, list]`` of **typed**
+    Python values — **Polars-free** (openpyxl only). The first row is the header; cell
+    values keep their Excel type (int/float/str/bool/datetime/None). Needs
+    ``goldenflow[excel]`` (openpyxl); raises a clear ImportError otherwise."""
+    try:
+        from openpyxl import load_workbook
+    except ImportError as e:  # pragma: no cover
+        raise ImportError(
+            "openpyxl is required to read Excel Polars-free: pip install goldenflow[excel]"
+        ) from e
+    ws = load_workbook(str(path), read_only=True, data_only=True).active
+    rows = ws.iter_rows(values_only=True)
+    try:
+        header = [str(h) for h in next(rows)]
+    except StopIteration:
+        return {}
+    cols: dict[str, list] = {h: [] for h in header}
+    for row in rows:
+        for i, h in enumerate(header):
+            cols[h].append(row[i] if i < len(row) else None)
+    return cols
+
+
+# Polars-free typed readers by suffix (all produce a ``dict[str, list]``; CSV stays
+# string-typed since it has no embedded dtype).
+_TYPED_READERS = {".parquet": read_parquet_columns, ".xlsx": read_excel_columns}
+
+
 def transform_columns_public(data, config):
     """Phase 4c/4e public core: transform a ``dict[str, list]`` frame OR a CSV path
     (str/``Path`` ending ``.csv``), returning a :class:`ColumnarResult` (Polars-free).
@@ -548,15 +591,23 @@ def transform_columns_public(data, config):
     uncovered tail is where Polars remains, loudly and optionally."""
     from pathlib import Path
 
-    from_csv = isinstance(data, (str, Path))
-    if from_csv:
+    is_path = isinstance(data, (str, Path))
+    from_csv = False
+    if is_path:
         p = Path(data)
-        if p.suffix.lower() != ".csv":
+        suffix = p.suffix.lower()
+        if suffix == ".csv":
+            from_csv = True
+            data = read_csv_columns(p)
+        elif suffix in _TYPED_READERS:
+            # Parquet/Excel carry real dtypes (pyarrow/openpyxl), so both configured AND
+            # zero-config run Polars-free with the typed dict — no string-inference gap.
+            data = _TYPED_READERS[suffix](p)
+        else:
             raise ValueError(
-                f"transform() reads .csv paths Polars-free; {p.suffix or 'this'} needs "
-                "transform_df() / read_file() with goldenflow[polars]."
+                f"transform() reads .csv/.parquet/.xlsx paths Polars-free; "
+                f"{suffix or 'this'} needs transform_df() / read_file() with goldenflow[polars]."
             )
-        data = read_csv_columns(p)
     elif not isinstance(data, dict):
         raise TypeError(
             "transform() takes a dict[str, list] of columns or a .csv path; pass a "
