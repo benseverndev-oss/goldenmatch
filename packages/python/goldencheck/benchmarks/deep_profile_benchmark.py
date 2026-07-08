@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Wall-clock benchmark for GoldenCheck's native deep-profiling kernels.
 
-This is both the gate and the verification for the native path: a kernel only
-earns a place in ``_native_loader._GATED_ON`` once a parity test proves it is
-byte-identical AND this harness shows the wall actually moved on a realistic
+This is the wall-clock verification for the native path: under the
+Rust-is-the-reference model the native kernel is the default oracle wherever its
+symbol exists, and this harness confirms the wall actually moved on a realistic
 workload (the repo's ``feedback_verify_perf_not_just_ship`` lesson -- don't
 trust "it shipped", measure the wall on the workload of interest).
 

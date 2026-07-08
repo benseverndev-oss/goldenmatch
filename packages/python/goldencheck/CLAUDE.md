@@ -54,22 +54,31 @@ that accelerates the CPU-bound **deep-profiling** work (Benford conformance,
 composite-key discovery, functional-dependency primitive). The sampled scan path
 is already Polars/Arrow-vectorized and is NOT a native target.
 
-- **Crates:** `packages/rust/extensions/goldencheck-core/` (pyo3-free kernels, the
-  `score-core` analogue) + `goldencheck-native/` (abi3 PyO3 shim, standalone
-  workspace, reads Arrow zero-copy via `PyArrowType<ArrayData>`, pinned `arrow=55`).
-- **Loader:** `goldencheck/core/_native_loader.py` — discover order
-  `goldencheck._native` (in-tree build) → `goldencheck_native._native` (wheel) →
-  pure Python. `GOLDENCHECK_NATIVE=auto|0|1`. A component runs native only if it's
-  in `_GATED_ON` AND its symbol is present (explicit capability probe, not a silent
-  `AttributeError` fallback — the goldenmatch #688 footgun).
-- **In-tree dev build:** `python scripts/build_goldencheck_native.py` (drops
-  `goldencheck/_native.abi3.so`; gitignored). Needs `pyarrow` installed (the Arrow
-  bridge). No maturin needed for in-tree.
-- **Parity is the gate:** a kernel joins `_GATED_ON` only after
-  `tests/core/test_native_parity.py` proves byte-identical output AND
-  `benchmarks/deep_profile_benchmark.py` shows the wall moved. Benford: byte-identical
-  (incl. exact powers-of-ten — the divisor is a correctly-rounded `1e{exp}` table,
-  NOT `powi`, matching Python's bignum `10**exp`), ~16x faster on 1M rows.
+- **Crates (Arrow-native core):** `packages/rust/extensions/goldencheck-core/`
+  (pyo3-free kernels, the `score-core` analogue) now takes **Arrow arrays** as its
+  public kernel input (`&dyn Array` / `&[ArrayRef]`); `intern_column` + the
+  Float64/null decode live in core (`arrow_support`). `goldencheck-native/` is a thin
+  marshalling shim (abi3 PyO3, standalone workspace) — pyarrow↔`ArrayRef` via
+  `make_array`, then straight into the core kernels; pinned `arrow=55`.
+- **Loader (Rust = reference, Python = lossy fallback):**
+  `goldencheck/core/_native_loader.py` — discover order `goldencheck._native`
+  (in-tree build) → `goldencheck_native._native` (wheel) → pure Python.
+  `GOLDENCHECK_NATIVE=auto|0|1`. The `_GATED_ON` allow-list was **removed**: `auto`
+  now runs native **wherever a kernel symbol exists** (`_has_symbol` capability probe
+  over `_COMPONENT_SYMBOLS`), and pure-Python is a lossy fallback used only when the
+  wheel is absent (per the Rust-is-the-reference authority model). `approximate_fd`
+  probes **both** its symbols (`discover_approximate_fds` + `fd_violation_rows`); a
+  component runs native only when ALL its symbols are present (not a silent
+  `AttributeError` fallback mid-call — the goldenmatch #688 footgun).
+- **Parity oracle:** `tests/core/parity_harness.py` is the reusable native-vs-Python
+  parity harness (empty accepted-divergence registry — every kernel is byte/set-exact
+  today). Benford stays byte-identical (incl. exact powers-of-ten — the divisor is a
+  correctly-rounded `1e{exp}` table, NOT `powi`, matching Python's bignum `10**exp`),
+  ~16x faster on 1M rows.
+- **In-tree dev build:** `scripts/build_goldencheck_native.py` (repo-root; drops
+  `goldencheck/_native.abi3.so`, gitignored). Needs `pyarrow` installed (the Arrow
+  bridge). On Windows the `.abi3.so` naming is Linux-centric — build the crate with
+  maturin instead (`maturin develop --release` in the native crate).
 - **Composite keys** (`relations/composite_key.py`): discovers minimal multi-column
   keys when no single-column key exists. Runs only after the cheap early-out (a
   single-column unique key short-circuits it), candidate cols capped at 12,
