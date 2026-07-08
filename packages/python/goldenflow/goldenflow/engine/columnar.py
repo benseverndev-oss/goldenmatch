@@ -579,12 +579,14 @@ def transform_columns_public(data, config):
     else declines to the Polars engine (which needs ``goldenflow[polars]`` — a clear
     ImportError if it's absent).
 
-    ``config=None`` (zero-config auto-detect) is ALSO Polars-free for a **dict** input:
-    the columns are profiled + auto-selected via the Polars-free profiler
-    (:func:`profile_columns`) and run on the native path — byte-identical to
-    ``transform_df(pl.DataFrame(data))``. A CSV path + ``config=None`` still needs the
-    extra (Polars' CSV dtype inference decides numeric vs string, which the string-only
-    stdlib reader can't reproduce).
+    ``config=None`` (zero-config auto-detect) is ALSO Polars-free (dict / CSV / Parquet /
+    Excel): the columns are profiled + auto-selected via the Polars-free profiler
+    (:func:`profile_columns`) and run on the native path. For a **dict / Parquet / Excel**
+    (typed) input this is byte-identical to ``transform_df(...)``. For a **CSV** it
+    profiles columns AS TEXT (their on-disk form) rather than coercing numeric-looking
+    IDs/zips to ints — the data-cleaning-correct owned behavior (``"01234"`` stays a zip);
+    the cleaned text values match ``transform_df(pl.read_csv(...))`` but numeric columns
+    keep their string dtype (see the branch comment below).
 
     This is the Polars-free public entry point the Rust-is-the-reference thesis wants:
     a covered config (from a dict or a CSV) is a first-class no-Polars API; the
@@ -592,12 +594,10 @@ def transform_columns_public(data, config):
     from pathlib import Path
 
     is_path = isinstance(data, (str, Path))
-    from_csv = False
     if is_path:
         p = Path(data)
         suffix = p.suffix.lower()
         if suffix == ".csv":
-            from_csv = True
             data = read_csv_columns(p)
         elif suffix in _TYPED_READERS:
             # Parquet/Excel carry real dtypes (pyarrow/openpyxl), so both configured AND
@@ -617,9 +617,15 @@ def transform_columns_public(data, config):
     nm = native_module()
     native_ok = nm is not None and native_columns_ready(nm)
 
-    # Zero-config (config=None) for a dict: profile + auto-select Polars-free, then run
-    # the built config on the native path if covered. (CSV declines — see docstring.)
-    if config is None and native_ok and not from_csv:
+    # Zero-config (config=None): profile + auto-select Polars-free, then run the built
+    # config on the native path. A CSV column is profiled AS TEXT (its on-disk form) via
+    # the pattern-based profiler — deliberately NOT coercing numeric-looking IDs/zips to
+    # ints (a data-cleaning tool must keep "01234" a zip, not 1234 — the choice the TS
+    # port made too). OWNED behavior: it differs from transform_df(pl.read_csv(...),
+    # config=None) — Polars' dtype inference coerces numerics (and drops leading zeros /
+    # errors on bigint); the CLEANED TEXT values are identical, the dtype + manifest of
+    # untransformed numeric columns are not.
+    if config is None and native_ok:
         built = _autoconfig_columns(data)
         if not built.transforms:
             return ColumnarResult(columns=dict(data), manifest=Manifest(source="<dataframe>"))
