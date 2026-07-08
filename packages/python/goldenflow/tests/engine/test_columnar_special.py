@@ -42,6 +42,19 @@ def _native_ready() -> bool:
 MERGE = {"first_name": ["John", "Jane", None, "Al"], "last_name": ["Smith", None, "Doe", "Roe"],
          "k": [0, 1, 2, 3]}
 INIT = {"name": ["John A. Smith", "Jane Doe", "R. J. Brown", None], "k": [0, 1, 2, 3]}
+AC = {"c": ["Apple", "apple", "APPLE", "aple", "Banana", "banana", "bananna", "Cherry",
+            "cherry", "cherri", "Apple", "Apple", None], "k": list(range(13))}
+
+
+def test_category_auto_correct_dict_equals_polars() -> None:
+    if not _native_ready():
+        pytest.skip("native in-memory core not built")
+    cfg = _cfg([("c", ["category_auto_correct"])])
+    assert columnar.config_is_columnar_ready(cfg)
+    res = goldenflow.transform(dict(AC), config=cfg)
+    ref = goldenflow.transform_df(pl.DataFrame(AC), config=cfg)
+    assert res.columns["c"] == ref.df["c"].to_list()
+    assert _mrows(res.manifest) == _mrows(ref.manifest)
 
 
 def test_merge_name_dict_equals_polars() -> None:
@@ -80,7 +93,11 @@ def test_initial_expand_dict_equals_polars() -> None:
     assert _errs(res.manifest) == _errs(ref.manifest)  # flagged rows match
 
 
-@pytest.mark.parametrize("data,col,op", [(MERGE, "first_name", "merge_name"), (INIT, "name", "initial_expand")])
+@pytest.mark.parametrize("data,col,op", [
+    (MERGE, "first_name", "merge_name"),
+    (INIT, "name", "initial_expand"),
+    (AC, "c", "category_auto_correct"),
+])
 def test_special_columnar_engine_equals_polars(monkeypatch, data, col, op) -> None:
     if not _native_ready():
         pytest.skip("native in-memory core not built")

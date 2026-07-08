@@ -148,11 +148,12 @@ def _scalar_fn(info, params):
 
 
 # Zero-gap: transforms that are neither per-element scalars, numeric parsers, nor
-# splits — a multi-INPUT merge (``merge_name``: two columns -> one) and a flag-only op
-# (``initial_expand``: value identity + flagged rows into the manifest errors). They run
-# Polars-free over plain lists, byte-identical to the Polars engine. In-memory only
-# (like the scalar chain) — the Rust CSV path never sees them.
-_SPECIAL_OPS = frozenset({"merge_name", "initial_expand"})
+# splits — a multi-INPUT merge (``merge_name``: two columns -> one), a flag-only op
+# (``initial_expand``: value identity + flagged rows into the manifest errors), and a
+# whole-column data-dependent op (``category_auto_correct``: frequency + fuzzy map over
+# the whole column). They run Polars-free over plain lists, byte-identical to the Polars
+# engine. In-memory only (like the scalar chain) — the Rust CSV path never sees them.
+_SPECIAL_OPS = frozenset({"merge_name", "initial_expand", "category_auto_correct"})
 
 
 def _spec_special_ready(spec) -> str | None:
@@ -164,12 +165,13 @@ def _spec_special_ready(spec) -> str | None:
     return name if name in _SPECIAL_OPS else None
 
 
-def _apply_special(name: str, cols: dict, column: str):
+def _apply_special(name: str, params, cols: dict, column: str):
     """Pure-Python (Polars-free) application of a special transform over ``cols`` (a
-    ``dict[str, list]`` of the current columns). Returns ``(new_columns, affected,
-    flagged_rows)``: ``new_columns`` are columns to set/append; the SOURCE column is
-    left unchanged (both ops are identity on it), so ``affected`` is always 0 —
-    matching the engine's ``(before != after).sum()`` on the source column."""
+    ``dict[str, list]`` of the current columns). Returns ``(new_source, extra_columns,
+    flagged_rows)``: ``new_source`` replaces the SOURCE column (``None`` = unchanged),
+    ``extra_columns`` are appended, ``flagged_rows`` become manifest errors. The caller
+    derives affected-count + samples from source before/after (``None`` -> before==after,
+    affected 0), matching the engine."""
     src = cols[column]
     if name == "merge_name":
         from goldenflow.transforms.names import _merge_name_py
@@ -177,17 +179,23 @@ def _apply_special(name: str, cols: dict, column: str):
         # merge_name reads first (``column``) + ``last_name`` -> appends ``full_name``;
         # if there is no last_name column the engine returns the frame unchanged.
         last = cols.get("last_name")
-        new = (
+        extra = (
             {"full_name": [_merge_name_py(f, l) for f, l in zip(src, last)]}
             if last is not None
             else {}
         )
-        return new, 0, []
+        return None, extra, []
     if name == "initial_expand":
         from goldenflow.transforms.names import _has_initial_py
 
         flagged = [i for i, v in enumerate(src) if _has_initial_py(v)]
-        return {}, 0, flagged
+        return None, {}, flagged
+    if name == "category_auto_correct":
+        from goldenflow.transforms.auto_correct import category_auto_correct_columnar
+
+        ft = float(params[0]) if params else 0.05
+        mt = float(params[1]) if len(params) > 1 else 85.0
+        return category_auto_correct_columnar(src, ft, mt), {}, []
     raise ValueError(f"not a special columnar op: {name}")
 
 
@@ -349,23 +357,32 @@ def _transform_via_columns(df, config, source, nm, pl):
             continue
         ops = [parse_transform_name(op) for op in spec.ops]
         ops_spec = [(n, list(p)) for n, p in ops]
-        # Special (multi-input merge / flag-only): apply Polars-free over column lists;
-        # source column stays as-is (identity), appended outputs go into out_series.
+        # Special (multi-input merge / flag-only / whole-column): apply Polars-free over
+        # column lists; a changed source replaces the column, appended outputs + a
+        # replaced source go into out_series.
         special = _spec_special_ready(spec)
         if special:
             cols = {c: df[c].to_list() for c in df.columns}
-            new_cols, affected, flagged = _apply_special(special, cols, spec.column)
+            new_source, extra, flagged = _apply_special(special, ops[0][1], cols, spec.column)
             for row_idx in flagged:
                 manifest.add_error(
                     column=spec.column, transform=special, row=row_idx,
                     error="Flagged for review",
                 )
             before = df[spec.column].head(3).cast(pl.Utf8).to_list()
+            if new_source is not None:
+                new_series = pl.Series(spec.column, new_source)
+                after = new_series.head(3).cast(pl.Utf8).to_list()
+                affected = int((df[spec.column].cast(pl.Utf8) != new_series.cast(pl.Utf8)).sum())
+                out_series.append(new_series.alias(spec.column))
+            else:
+                after = before
+                affected = 0
             manifest.add_record(TransformRecord(
                 column=spec.column, transform=special, affected_rows=affected,
-                total_rows=df.height, sample_before=before, sample_after=before,
+                total_rows=df.height, sample_before=before, sample_after=after,
             ))
-            for k, v in new_cols.items():
+            for k, v in extra.items():
                 out_series.append(pl.Series(k, v))
             continue
         # Split spec (string* splitter): the source column keeps its (string-ops)
@@ -569,18 +586,27 @@ def transform_columns_native(columns, config, source: str = "<dataframe>"):
         # column identity so the manifest samples are before==after and affected==0.
         special = _spec_special_ready(spec)
         if special:
-            new_cols, affected, flagged = _apply_special(special, out, spec.column)
-            for k, v in new_cols.items():
+            new_source, extra, flagged = _apply_special(special, ops[0][1], out, spec.column)
+            before = col_list
+            if new_source is not None:
+                out[spec.column] = new_source
+            after = out[spec.column]
+            for k, v in extra.items():
                 out[k] = v
             for row_idx in flagged:
                 manifest.add_error(
                     column=spec.column, transform=special, row=row_idx,
                     error="Flagged for review",
                 )
-            cb = [_cast_utf8(v) for v in out[spec.column][:3]]
+            cb = [_cast_utf8(v) for v in before[:3]]
+            ca = [_cast_utf8(v) for v in after[:3]]
+            affected = sum(
+                1 for b, a in zip((_cast_utf8(v) for v in before), (_cast_utf8(v) for v in after))
+                if b is not None and a is not None and b != a
+            )
             manifest.add_record(TransformRecord(
                 column=spec.column, transform=special, affected_rows=affected,
-                total_rows=total_rows, sample_before=cb, sample_after=cb,
+                total_rows=total_rows, sample_before=cb, sample_after=ca,
             ))
             continue
 
