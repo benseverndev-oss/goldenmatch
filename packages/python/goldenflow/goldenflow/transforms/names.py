@@ -477,6 +477,7 @@ def _name_script_py(val: str | None) -> str | None:
     auto_apply=False,
     priority=50,
     mode="series",
+    scalar=_name_script_py,
 )
 def name_script(series: pl.Series) -> pl.Series:
     """Detect the dominant Unicode script in a name: ``Unknown`` for empty

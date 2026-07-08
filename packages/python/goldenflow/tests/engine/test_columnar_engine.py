@@ -159,14 +159,15 @@ def test_columnar_split_equals_polars(monkeypatch, ops, col, data) -> None:
 
 
 def test_columnar_declines_unsupported_config(monkeypatch) -> None:
-    """A config with a non-owned-string op (phone) or a frame-level op is NOT
-    columnar-ready; it falls through to the Polars engine (still correct)."""
+    """A config with a data-dependent op (category_auto_correct) or a frame-level op
+    is NOT columnar-ready; it falls through to the Polars engine (still correct)."""
     monkeypatch.setenv("GOLDENFLOW_ENGINE", "columnar")
-    # phone_e164 is not an owned string kernel -> declines
-    assert not columnar.config_is_columnar_ready(_cfg([("name", ["strip", "phone_e164"])]))
+    # category_auto_correct is data-dependent (whole-column frequency map), not a
+    # scalar or fused kernel -> declines (deliberately excluded from the columnar path)
+    assert not columnar.config_is_columnar_ready(_cfg([("name", ["strip", "category_auto_correct"])]))
     # a rename is a frame-level op -> declines
     cfg = GoldenFlowConfig(transforms=[TransformSpec(column="name", ops=["strip"])], renames={"name": "n"})
     assert not columnar.config_is_columnar_ready(cfg)
     # but it still produces correct output via the Polars fallback
-    out = transform_df(SAMPLE, config=_cfg([("name", ["strip", "phone_e164"])]))
-    assert out.df["name"].to_list()[0] == "<b>John</b>  SMITH!"  # strip applied
+    out = transform_df(SAMPLE, config=cfg)
+    assert out.df["n"].to_list()[0] == "<b>John</b>  SMITH!"  # strip applied, renamed
