@@ -20,6 +20,8 @@ import {
 import { getInfermapBackend } from "../../src/core/wasm/backend.js";
 import { jaroWinklerSimilarity } from "../../src/core/util/string-distance.js";
 import { scorePair } from "../../src/core/scorers/initialism.js";
+import { _profileScorePure } from "../../src/core/scorers/profile.js";
+import { _matchTypesPure } from "../../src/core/scorers/pattern-type.js";
 
 const artifact = fileURLToPath(
   new URL("../../src/core/wasm/artifacts/infermap_wasm_bg.wasm", import.meta.url),
@@ -115,6 +117,69 @@ d("infermap name-scorer WASM-vs-pure parity", () => {
       await enableInfermapWasm({ require: true });
       const be = getInfermapBackend()!;
       expect(be.initialismScore(a, b)).toBe(scorePair(a, b));
+      disableInfermapWasm();
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Wave C: profile scorer parity (float math)
+// ---------------------------------------------------------------------------
+
+// 10-tuple: (srcDtype, tgtDtype, srcNull, tgtNull, srcUniq, tgtUniq,
+//            srcValCount, tgtValCount, srcAvgLen, tgtAvgLen). All nonzero
+// valueCount (the scorer guards abstain before the kernel; the oracle doesn't).
+type ProfileCase = [string, string, number, number, number, number, number, number, number, number];
+const PROFILE_CASES: ProfileCase[] = [
+  ["string", "string", 0.1, 0.1, 0.5, 0.5, 100, 100, 8, 8],
+  ["string", "int", 0.1, 0.1, 0.5, 0.5, 100, 100, 8, 8],
+  ["string", "string", 0.0, 0.0, 0.0, 0.0, 1, 1, 0, 0],
+  ["string", "string", 0.0, 0.0, 0.5, 0.5, 100, 100, 0, 8],
+  ["string", "string", 0.0, 0.0, 0.01, 0.02, 10, 10, 4, 4],
+  ["string", "string", 0.0, 1.0, 0.5, 0.5, 100, 100, 8, 8],
+  ["string", "string", 0.1, 0.1, 1.0, 0.0, 100, 100, 8, 8],
+  ["string", "string", 0.1, 0.1, 0.5, 0.5, 100, 100, 3, 30],
+  ["string", "int", 0.13, 0.87, 0.42, 0.58, 250, 90, 12.5, 7.25],
+];
+
+d("infermap profile-scorer WASM-vs-pure parity", () => {
+  afterAll(() => disableInfermapWasm());
+  for (let i = 0; i < PROFILE_CASES.length; i++) {
+    const args = PROFILE_CASES[i]!;
+    it(`profile case ${i}: kernel == pure`, async () => {
+      await enableInfermapWasm({ require: true });
+      const be = getInfermapBackend()!;
+      expect(be.profileScore(...args)).toBe(_profileScorePure(...args));
+      disableInfermapWasm();
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Wave C: pattern_type scorer parity (JS RegExp vs Rust regex — the drift audit)
+// ---------------------------------------------------------------------------
+
+// ASCII-digit corpus (mirrors the Python Wave 4 corpus). The only non-ASCII
+// codepoints are the £/€ currency symbols, matched as literal char-class members.
+const PATTERN_SAMPLES: string[] = [
+  "user@example.com", "a@b.co", "no-at-sign.com", "user@nodot",
+  "550e8400-e29b-41d4-a716-446655440000", "550e8400-e29b-41d4-a716-44665544000",
+  "2026-07-06", "2026-13-99", "2026-7-6",
+  "192.168.0.1", "999.999.999.999", "1.2.3", "1.2.3.4.5",
+  "http://example.com", "https://example.com/path?q=1", "ftp://example.com",
+  "+12345678", "123-456-7890", "12345", "1234567890123456",
+  "12345-6789", "1234", "123456",
+  "$5", "$ 5", "$1,000.00", "£12.50", "€1,000.00", "5.00",
+  "hello world",
+];
+
+d("infermap pattern-type-scorer WASM-vs-pure parity", () => {
+  afterAll(() => disableInfermapWasm());
+  for (const s of PATTERN_SAMPLES) {
+    it(`pattern_type ${JSON.stringify(s)}: kernel == pure`, async () => {
+      await enableInfermapWasm({ require: true });
+      const be = getInfermapBackend()!;
+      expect(be.patternMatchTypes([s])[0]).toBe(_matchTypesPure(s));
       disableInfermapWasm();
     });
   }

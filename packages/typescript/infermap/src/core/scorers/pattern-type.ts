@@ -6,6 +6,7 @@
 import type { FieldInfo, ScorerResult } from "../types.js";
 import { makeScorerResult } from "../types.js";
 import type { Scorer } from "./base.js";
+import { getInfermapBackend } from "../wasm/backend.js";
 
 /**
  * Ordered registry — iteration order matches insertion order, so earlier
@@ -25,28 +26,45 @@ export const SEMANTIC_TYPES: Record<string, RegExp> = {
 const cleanSamples = (samples: readonly string[]): string[] =>
   samples.filter((s) => s != null && String(s).trim() !== "");
 
+/** Bitmask oracle: bit i set iff s matches SEMANTIC_TYPES[i] (insertion order).
+ *  s is expected pre-stripped by the caller. Mirrors the Rust pattern_match_types. */
+export function _matchTypesPure(s: string): number {
+  let mask = 0;
+  let i = 0;
+  for (const pattern of Object.values(SEMANTIC_TYPES)) {
+    if (pattern.test(s)) mask |= 1 << i;
+    i++;
+  }
+  return mask;
+}
+
+function _matchTypesBatch(stripped: string[]): number[] {
+  const backend = getInfermapBackend();
+  return backend
+    ? backend.patternMatchTypes(stripped)
+    : stripped.map(_matchTypesPure);
+}
+
 function classifyWithPct(
   field: FieldInfo,
   threshold = 0.6
 ): { type: string | null; pct: number } {
-  const samples = cleanSamples(field.sampleValues);
+  const samples = cleanSamples(field.sampleValues).map((s) => String(s).trim());
   if (samples.length === 0) return { type: null, pct: 0 };
 
+  const masks = _matchTypesBatch(samples);
+  const names = Object.keys(SEMANTIC_TYPES);
   let bestType: string | null = null;
   let bestPct = 0;
-
-  for (const [typeName, pattern] of Object.entries(SEMANTIC_TYPES)) {
+  for (let i = 0; i < names.length; i++) {
     let matches = 0;
-    for (const s of samples) {
-      if (pattern.test(String(s).trim())) matches++;
-    }
+    for (const m of masks) if (m & (1 << i)) matches++;
     const pct = matches / samples.length;
     if (pct > bestPct) {
       bestPct = pct;
-      bestType = typeName;
+      bestType = names[i]!;
     }
   }
-
   if (bestType !== null && bestPct >= threshold) {
     return { type: bestType, pct: bestPct };
   }

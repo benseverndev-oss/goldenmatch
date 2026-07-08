@@ -16,6 +16,19 @@ export interface InfermapBackend {
   exactScore(a: string, b: string): number;
   fuzzyNameScore(a: string, b: string): number;
   initialismScore(a: string, b: string): number | null;
+  profileScore(
+    srcDtype: string,
+    tgtDtype: string,
+    srcNull: number,
+    tgtNull: number,
+    srcUniq: number,
+    tgtUniq: number,
+    srcValCount: number,
+    tgtValCount: number,
+    srcAvgLen: number,
+    tgtAvgLen: number,
+  ): number;
+  patternMatchTypes(samples: string[]): number[];
 }
 
 const _registry = createBackendRegistry<InfermapBackend>();
