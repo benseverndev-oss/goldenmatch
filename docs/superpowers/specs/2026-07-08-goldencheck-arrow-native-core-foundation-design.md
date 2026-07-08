@@ -80,6 +80,14 @@ No *new* check kernel. Zero of the ~22 Polars-only checks are ported here. Wave 
 foundation + de-risking on parity-locked code. No DuckDB/DataFusion/WASM surface. No
 numpy/scipy work. Pure-Python kernels are **not** deleted.
 
+The two public GoldenMatch bridges — `goldencheck.cell_quality` (reuses `fuzzy_values`) and
+`goldencheck.functional_dependencies` (reuses the strict + approx-FD kernels) — are consumers
+of the same 5 components, not separate kernels. Wave 0 keeps their Python-facing pyarrow
+signatures intact, so they are covered **transitively** by the 5-kernel parity: if the
+kernels stay byte/set-exact, the bridges do too. No bridge-specific work, but the harness
+should include at least one fixture exercising each bridge's public entry point to prove the
+transitive coverage rather than assume it.
+
 ### Success criteria
 
 - All 5 kernels run Arrow-in-core; native output is byte/set-identical to before (they were
@@ -93,10 +101,15 @@ numpy/scipy work. Pure-Python kernels are **not** deleted.
 
 ### a) Core dependency + signatures
 
-`goldencheck-core/Cargo.toml` gains `arrow` — the minimal `arrow-array` / `arrow-buffer` /
-`arrow-schema` subset, `default-features = false` to stay lean — pinned to the **identical**
-version `goldencheck-native` uses (`arrow=55`). Kernel signatures move from typed slices to
-Arrow arrays with internal downcast and null-bitmap handling:
+`goldencheck-core/Cargo.toml` gains `arrow`, pinned to the **identical version and crate
+form** `goldencheck-native` uses (the umbrella `arrow = { version = "55", default-features =
+false }`). Note: `goldencheck-native` path-deps core in a single cargo build, and `ArrayData`
+/ `ArrayRef` cross the boundary as concrete types — so core must resolve to the **same**
+`arrow-array` tree native does. Using the umbrella `arrow` crate in both (rather than core
+depending on the split `arrow-array`/`arrow-buffer`/`arrow-schema` sub-crates directly)
+guarantees a single resolution and avoids the type/linker error the top risk warns about.
+Kernel signatures move from typed slices to Arrow arrays with internal downcast and
+null-bitmap handling:
 
 ```rust
 // before: pub fn benford_leading_digits(values: &[f64]) -> [u64; 9]
@@ -170,15 +183,27 @@ every one present:
 "approximate_fd": ("discover_approximate_fds", "fd_violation_rows"),
 ```
 
-A stale wheel missing `fd_violation_rows` cleanly declines instead of half-running (the
-goldenmatch #688 footgun, applied honestly).
+A stale wheel missing `fd_violation_rows` today still passes the single-symbol probe, runs
+`discover_approximate_fds` (wasted), then `AttributeError`s on `fd_violation_rows` and falls
+fully back to Python — a **silent redundant native pass**, not a crash or a wrong-output
+half-run (the call site at `relations/approx_fd.py` wraps both native calls in one
+`try/except -> _python(...)`). The tuple-probe fix removes the wasted pass and makes the
+capability honest (the goldenmatch #688 footgun, applied honestly).
 
 ### d) CI inversion
 
-`test.yml` builds the native artifact as a **required** step; native becomes the **default**
-test lane, with a **separate** fallback lane (`GOLDENCHECK_NATIVE=0`). Today native tests are
-`@native_only` and skip without the wheel, so the default run silently validates Python —
-that inverts.
+The real CI is the **root** `.github/workflows/ci.yml` — the pre-fold
+`packages/python/goldencheck/.github/workflows/test.yml` is an orphan and is silently ignored
+(root `CLAUDE.md`: only root `.github/workflows/` runs). So all edits target `ci.yml`.
+
+The current state is **not** "native untested": `ci.yml` already has a dedicated
+`goldencheck_native` job that builds the ext via `scripts/build_goldencheck_native.py`, runs
+the parity + relations/profilers suites with the ext present, and runs a required
+`GOLDENCHECK_NATIVE=1` lane (paths-filter-gated on the core/native/loader/relations files).
+The gap the flip closes is the **main test matrix**: it runs the full 550+ suite pure-Python.
+Wave 0 makes that matrix **native-default** (build the ext, run with native present) and adds
+a **separate** `GOLDENCHECK_NATIVE=0` fallback lane, so the default center of gravity becomes
+Rust-as-oracle rather than Python. The existing `goldencheck_native` required-mode lane stays.
 
 ## Versioning + docs
 
@@ -191,10 +216,12 @@ that inverts.
 
 ## Risks
 
-- **Arrow version lockstep (top risk).** Core must pin the identical arrow version as
-  `-native` (`arrow=55`); `ArrayRef`/`ArrayData` are concrete types crossing the crate
-  boundary, so a mismatch is a type/linker error, not a graceful fallback. Any future arrow
-  bump is a lockstep change to both crates.
+- **Arrow version + crate-form lockstep (top risk).** Core must pin the identical arrow
+  version **and crate form** as `-native` (both use the umbrella `arrow=55`); `ArrayRef`/
+  `ArrayData` are concrete types crossing the crate boundary, so a version *or* resolution
+  mismatch (e.g. core on split `arrow-array` vs native's umbrella re-export resolving to a
+  different patch) is a type/linker error, not a graceful fallback. Any future arrow bump is a
+  lockstep change to both crates.
 - **Core build weight.** arrow-rs is heavier than `rustc-hash`; mitigate with
   `default-features = false` + the minimal subset. arrow-rs is pure Rust (no libclang) so
   Wave 0 still builds locally on Windows — no CI-only toolchain needed.
