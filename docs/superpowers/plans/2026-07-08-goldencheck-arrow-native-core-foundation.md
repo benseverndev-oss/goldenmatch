@@ -25,17 +25,18 @@ export PATH="/c/Users/bsevern/.cargo/bin:$PATH" && export RUSTUP_HOME="C:/Users/
 cargo test --manifest-path packages/rust/extensions/goldencheck-core/Cargo.toml
 ```
 
-**Build the in-tree native ext (drops `goldencheck/_native.abi3.so`):**
+**Build the in-tree native ext — CORRECTED (discovered during execution 2026-07-08):**
+`scripts/build_goldencheck_native.py` **does not exist in this checkout** (it's referenced by `ci.yml:932` + CLAUDE.md but was never committed — the `goldencheck_native` CI job is currently broken; Task 9 CREATES the script, modeled on `packages/python/goldenflow/scripts/build_native.py`). For LOCAL builds in Tasks 4-8, build the ext with maturin into the **repo-root** `.venv` (there is NO per-package venv; tooling — python 3.13, pyarrow, pytest, maturin — lives in `D:\show_case\goldenmatch\.venv`):
 ```bash
-cd packages/python/goldencheck && python scripts/build_goldencheck_native.py
+cd packages/rust/extensions/goldencheck-native && /d/show_case/goldenmatch/.venv/Scripts/maturin.exe develop --release
 ```
-Needs `pyarrow` installed. Per `feedback_verify_rust_builds_explicitly`: after any cargo build, grep the output for `^error` and never trust a piped tail — fmt is not clippy, and a tail can hide a mid-build failure.
+This installs the `goldencheck_native` package, satisfying the loader's 2nd discovery path (`goldencheck_native._native`) so `native_available()` is True. Per `feedback_verify_rust_builds_explicitly`: grep build output for `^error`; never trust a piped tail.
 
-**Run Python parity (native present):**
+**Run Python parity (native present) — CORRECTED:**
 ```bash
-cd packages/python/goldencheck && GOLDENCHECK_NATIVE=1 .venv/Scripts/python.exe -m pytest tests/core/test_native_parity.py -v
+cd /d/show_case/goldenmatch && GOLDENCHECK_NATIVE=1 .venv/Scripts/python.exe -m pytest packages/python/goldencheck/tests/core/test_native_parity.py -v
 ```
-(Use the package `.venv` python directly on Windows per `packages/python/CLAUDE.md`; `uv run` misses workspace members. If running from repo root, anchor fixture paths to `__file__` — CWD differs local vs CI.)
+(Repo-root `.venv/Scripts/python.exe`; `uv run` misses workspace members. Fixture paths anchor to `__file__` so CWD doesn't matter.)
 
 **Commit discipline:** conventional commits, one commit per task's final step. Branch is already `feat/goldencheck-arrow-native-core` (do NOT create a new branch; the spec is already committed there). GitHub auth for any push: `gh auth switch --user benzsevern` first (see `feedback_github_auth_switch`) — but this plan does not push; it only commits locally.
 
@@ -787,12 +788,18 @@ git commit -m "feat(goldencheck): reference-mode flip — auto uses native where
 **Files:**
 - Modify: `.github/workflows/ci.yml` (root — the `packages/python/goldencheck/.github/workflows/test.yml` is an orphan; do NOT touch it)
 
+- [ ] **Step 0 (NEW — discovered during execution): CREATE the missing `scripts/build_goldencheck_native.py`.**
+
+`ci.yml:932` runs `uv run python scripts/build_goldencheck_native.py` and `ci.yml:176` gates on it, but the script was never committed — the `goldencheck_native` CI job is currently broken. Create `packages/python/goldencheck/scripts/build_goldencheck_native.py`, modeled on `packages/python/goldenflow/scripts/build_native.py`: it should build the `goldencheck-native` crate (maturin/cargo) and drop `goldencheck/_native.abi3.so` (or `maturin develop` into the active env), matching what CLAUDE.md documents. Verify it runs green locally before wiring CI. This unbreaks the existing job that Step 2 builds on.
+
 - [ ] **Step 1: Read the current goldencheck CI shape.**
 
 Run: `grep -nE "goldencheck|GOLDENCHECK_NATIVE|build_goldencheck_native" .github/workflows/ci.yml`
 Read the `goldencheck_native` job (~lines 903-950), the paths-filter block (~161-176), and the main Python test matrix (~272). Confirm: the `goldencheck_native` job already builds the ext + runs a `GOLDENCHECK_NATIVE=1` lane; the main matrix runs pure-Python.
 
-- [ ] **Step 2: Make the main matrix native-default for goldencheck; add a fallback lane.**
+**SCOPE REFINEMENT (discovered during execution):** the dedicated `goldencheck_native` job (ci.yml:903-950) ALREADY builds the ext + runs the parity suite + a required `GOLDENCHECK_NATIVE=1` lane — it IS the native-default lane once the build script exists. The shared 8-package `python` matrix (ci.yml:298) does NOT have a Rust toolchain, so making it build native would need a toolchain added to all 8 legs (high blast radius). So the low-risk correct approach is: (a) Step 0 creates the build script [the critical fix that unbreaks the job]; (b) add an explicit `GOLDENCHECK_NATIVE=0` fallback-lane step to the existing `goldencheck_native` job so BOTH lanes are provably exercised in one place; (c) widen the paths-filter to also trigger on the new/changed files (`cell_quality.py`, `tests/core/parity_harness.py`, `tests/core/test_parity_harness.py`, `tests/core/test_loader_reference_mode.py`). Do NOT touch the shared `python` matrix. Steps 2-original below are superseded by this.
+
+- [ ] **Step 2 (SUPERSEDED — see refinement above): originally 'make the main matrix native-default'.**
 
 Edit the main Python matrix so the goldencheck leg builds the native ext and runs with native present (default/auto), plus a `GOLDENCHECK_NATIVE=0` fallback lane. Keep the existing dedicated `goldencheck_native` required-mode job as-is. Because `ci.yml` self-triggers on its own change (root CLAUDE.md), the filter re-runs everything — no extra filter wiring needed unless a new job id is added.
 
