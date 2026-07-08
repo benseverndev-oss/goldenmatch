@@ -174,6 +174,10 @@ jobs:
               - 'packages/python/goldencheck/goldencheck/profilers/fuzzy_values.py'
               - 'packages/python/goldencheck/tests/core/test_native_parity.py'
               - 'scripts/build_goldencheck_native.py'
+              - 'packages/python/goldencheck/goldencheck/cell_quality.py'
+              - 'packages/python/goldencheck/tests/core/parity_harness.py'
+              - 'packages/python/goldencheck/tests/core/test_parity_harness.py'
+              - 'packages/python/goldencheck/tests/core/test_loader_reference_mode.py'
             analysis_native:
               # GoldenAnalysis's optional native accelerator (analysis-core/native,
               # PyO3, standalone workspace). Builds the .so and runs the parity
@@ -948,6 +952,10 @@ jobs:
         env:
           GOLDENCHECK_NATIVE: "1"
         run: uv run pytest packages/python/goldencheck/tests/core -q
+      - name: Fallback lane (GOLDENCHECK_NATIVE=0 must use pure-Python)
+        env:
+          GOLDENCHECK_NATIVE: "0"
+        run: uv run pytest packages/python/goldencheck/tests/core packages/python/goldencheck/tests/relations packages/python/goldencheck/tests/profilers -q
 
   # GoldenAnalysis native parity: the analysis-native ext (PyO3, standalone
   # workspace) isn't built by the `rust` job. This lane clippy's the crates,

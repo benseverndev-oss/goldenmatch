@@ -53,21 +53,26 @@ def main() -> int:
         print("ERROR: cargo build failed.", file=sys.stderr)
         return proc.returncode
 
-    built = CRATE / "target" / "release" / "lib_native.so"
-    if not built.exists():
-        # macOS produces .dylib; normalize to the .so name CPython loads.
-        dylib = CRATE / "target" / "release" / "lib_native.dylib"
-        if dylib.exists():
-            built = dylib
-        else:
-            print(f"ERROR: build artifact not found at {built}", file=sys.stderr)
-            return 1
+    # Platform artifact name: Linux `lib_native.so`, macOS `lib_native.dylib`,
+    # Windows `_native.dll`. Normalize to the .so name CPython loads (CI/Linux is
+    # the real consumer; the Windows name lets this run locally for verification).
+    release = CRATE / "target" / "release"
+    candidates = [
+        release / "lib_native.so",
+        release / "lib_native.dylib",
+        release / "_native.dll",
+    ]
+    built = next((p for p in candidates if p.exists()), None)
+    if built is None:
+        tried = ", ".join(str(p) for p in candidates)
+        print(f"ERROR: build artifact not found (looked for: {tried})", file=sys.stderr)
+        return 1
 
     tmp = DEST.with_suffix(".so.tmp")
     shutil.copy2(built, tmp)
     os.replace(tmp, DEST)  # atomic; never a half-written .so
     suffix = sysconfig.get_config_var("EXT_SUFFIX")
-    print(f"installed: {DEST}  (interpreter EXT_SUFFIX={suffix})")
+    print(f"installed: {DEST}  (from {built.name}, interpreter EXT_SUFFIX={suffix})")
     return 0
 
 
