@@ -42,6 +42,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
         numeric_columnar::columnar_numeric_ready,
         m
     )?)?;
+    m.add_function(wrap_pyfunction!(numeric_columnar::format_f64, m)?)?;
     m.add_function(wrap_pyfunction!(split_columnar::columnar_split_ready, m)?)?;
     m.add_function(wrap_pyfunction!(csvio::transform_csv, m)?)?;
     m.add_function(wrap_pyfunction!(chain::apply_chain_f64_arrow, m)?)?;
