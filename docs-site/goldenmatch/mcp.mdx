@@ -1,10 +1,10 @@
 ---
 title: "MCP Server"
-description: "Connect GoldenMatch to Claude Desktop, Claude Code, and other MCP clients — 69 tools for autonomous entity resolution, data inspection, Learning Memory, and Identity Graph."
+description: "Connect GoldenMatch to Claude Desktop, Claude Code, and other MCP clients — 75 tools for autonomous entity resolution, data inspection, Learning Memory, and Identity Graph."
 keywords: ["mcp", "claude desktop", "model context protocol", "entity resolution", "learning memory"]
 ---
 
-GoldenMatch provides an MCP (Model Context Protocol) server for integration with Claude Desktop, Claude Code, and other MCP-compatible AI assistants. 69 tools total, spanning agent-level tools for autonomous ER, data tools for inspection and management, config-suggestion and PPRL tools, Learning Memory tools for persisting steward decisions, and Identity Graph tools.
+GoldenMatch provides an MCP (Model Context Protocol) server for integration with Claude Desktop, Claude Code, and other MCP-compatible AI assistants. 75 tools total, spanning agent-level tools for autonomous ER, data tools for inspection and management, config-suggestion and PPRL tools, Learning Memory tools for persisting steward decisions, and Identity Graph tools.
 
 <Tip>
   Looking for AI-to-AI autonomy? See the [ER Agent (A2A)](/goldenmatch/agent) page for agent framework integration (LangChain, CrewAI, AutoGen).
@@ -36,6 +36,30 @@ Add to your `claude_desktop_config.json`:
 ```
 
 Or browse on Smithery: [https://smithery.ai/servers/benzsevern/goldenmatch](https://smithery.ai/servers/benzsevern/goldenmatch)
+
+### Using local files with the remote server
+
+The hosted server resolves `file_path` on the **server's** filesystem, so your local paths (`C:\Users\...`, `/home/...`) aren't visible to it. Feed it a local file two ways, neither of which hosts your data anywhere:
+
+- **Inline `file_content`** — every file-taking tool (`analyze_data`, `auto_configure`, `agent_deduplicate`, `scan_quality`, `schema_match`, `pprl_link`, ...) accepts `file_content` as an alternative to `file_path`. Send it base64-encoded (default), or set `encoding: "text"` for raw text (e.g. CSV/JSON). The server writes it to a temp file and runs the tool on it.
+
+  ```json
+  {
+    "name": "analyze_data",
+    "arguments": { "file_content": "<base64 of your CSV>", "filename": "customers.csv" }
+  }
+  ```
+
+- **`upload_dataset`** — upload the bytes once and reuse the returned server path across many calls:
+
+  ```json
+  { "name": "upload_dataset", "arguments": { "file_content": "<base64>", "filename": "customers.csv" } }
+  // -> { "path": "/data/goldenmatch-uploads/<id>-customers.csv", "bytes": 8369635, "filename": "customers.csv" }
+  ```
+
+  Pass that `path` as `file_path` to `analyze_data`, `agent_deduplicate`, etc.
+
+Uploads are ephemeral scratch: capped at 64 MB (`GOLDENMATCH_MCP_MAX_UPLOAD_BYTES`), reaped after 24 h (`GOLDENMATCH_MCP_UPLOAD_TTL`), and written under the server's `GOLDENMATCH_ALLOWED_ROOT` so the [path sandbox](#path-sandbox) still applies. For datasets larger than the cap, pass a public `http(s)://` URL as `file_path` — the server reads those directly.
 
 ## Local Server
 
