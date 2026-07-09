@@ -44,7 +44,7 @@ def test_column_dtype_neutral_mapping():
     assert f.column("i").dtype == "int"
     assert f.column("u").dtype == "uint"      # DISTINCT from int (byte-identity for type_inference)
     assert f.column("f").dtype == "float"
-    assert f.column("b").dtype == "other"
+    assert f.column("b").dtype == "bool"
 
 
 def test_column_cast_uncastable_to_null():
@@ -181,3 +181,23 @@ def test_column_eq_and_filter_by():
     assert val.filter_by(pat.eq("A")).to_list() == ["keep1", "keep2"]
     # equivalence to the raw cross-column filter
     assert val.filter_by(pat.eq("A")).to_list() == val._s.filter(pat._s == "A").to_list()
+
+
+def test_column_dtype_bool_and_repr():
+    import polars as pl
+    from goldencheck.core.frame import to_frame
+    frame = to_frame(pl.DataFrame({
+        "b": [True, False, True],
+        "f": [1.0, 2.0, 3.0],
+        "i": [1, 2, 3],
+        "s": ["a", "b", "c"],
+    }))
+    # neutral dtype: Boolean now maps to "bool" (was "other"); float unchanged
+    assert frame.column("b").dtype == "bool"
+    assert frame.column("f").dtype == "float"
+    # dtype_repr renders the raw Polars dtype string, byte-identical to str(dtype)
+    assert frame.column("f").dtype_repr() == str(pl.Series([1.0]).dtype)   # "Float64"
+    assert frame.column("f").dtype_repr() == "Float64"
+    assert frame.column("b").dtype_repr() == "Boolean"
+    assert frame.column("i").dtype_repr() == "Int64"
+    assert frame.column("s").dtype_repr() == "String"
