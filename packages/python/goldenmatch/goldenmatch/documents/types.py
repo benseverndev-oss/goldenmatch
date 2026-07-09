@@ -169,7 +169,7 @@ class IngestReport:
     n_files: int = 0
     n_rows: int = 0
     errors: list[tuple[str, str]] = field(default_factory=list)  # (file, message)
-    line_items: "pl.DataFrame | None" = None                     # child frame, None if none
+    line_items: pl.DataFrame | None = None                       # child frame, None if none
     doctypes: dict[str, str] = field(default_factory=dict)       # doc_id -> doctype
     classify_confidence: dict[str, float] = field(default_factory=dict)  # doc_id -> conf
     vlm_calls: int = 0                                           # total transport calls

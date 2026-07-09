@@ -4,7 +4,6 @@ transport or a Fake, never a live network call."""
 import json
 
 import pytest
-
 from goldenmatch.documents.config import resolve_structured
 from goldenmatch.documents.extractor import (
     Classifier,

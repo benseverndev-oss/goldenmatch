@@ -52,7 +52,7 @@ def test_non_finite_confidence_raises(token):
     # Python json.loads accepts bare NaN/Infinity tokens; Rust serde_json rejects
     # them (strict JSON). Match Rust -- both legs must error, not silently clamp.
     with pytest.raises(ValueError):
-        parse_classify('{"doctype":"po","confidence":%s}' % token)
+        parse_classify(f'{{"doctype":"po","confidence":{token}}}')
 
 
 def test_confidence_coercion_boundaries():
@@ -62,4 +62,4 @@ def test_confidence_coercion_boundaries():
     # present-but-null, string, and bool confidence all error (parity with as_f64)
     for bad in ("null", '"0.9"', "true"):
         with pytest.raises(ValueError):
-            parse_classify('{"doctype":"po","confidence":%s}' % bad)
+            parse_classify(f'{{"doctype":"po","confidence":{bad}}}')
