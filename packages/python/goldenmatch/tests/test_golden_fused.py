@@ -699,6 +699,144 @@ def test_first_non_null_weighted_matches_reference():
     assert abs(got[1]["__golden_confidence__"] - 0.6) < 1e-12
 
 
+# ─── confidence_majority (Task 4.1) ──────────────────────────────────────────
+
+
+def _assert_value_conf_parity_cps(df, rules, cols, cluster_pair_scores):
+    """Like ``_assert_value_conf_parity`` but threads ``cluster_pair_scores`` into
+    BOTH paths (row-id-keyed edges). A confidence_majority field_rule forces the
+    reference off the fast columnar path onto the exact merge_field oracle, so the
+    fused path runs (does not decline) and both resolve identically."""
+    ref = build_golden_records_batch(df, rules, cluster_pair_scores=cluster_pair_scores)
+    got = run_golden_fused_arrow(df, rules, cluster_pair_scores=cluster_pair_scores)
+    assert got is not None
+    ref_map = {r["__cluster_id__"]: r for r in ref}
+    got_map = {row["__cluster_id__"]: row for row in got.iter_rows(named=True)}
+    assert set(got_map) == set(ref_map)
+    for cid, row in got_map.items():
+        r = ref_map[cid]
+        for c in cols:
+            assert row[c] == r[c]["value"], f"cluster {cid} col {c}"
+        assert abs(row["__golden_confidence__"] - r["__golden_confidence__"]) < 1e-12
+    return got_map, ref_map
+
+
+def test_confidence_majority_strong_minority_beats_weak_majority():
+    # 5-member cluster: 3 rows hold "Apple" (weak edges 0.1 each -> sum 0.3), 2
+    # rows hold "Banana" (one STRONG edge 0.91). Count-majority = Apple (3 vs 2),
+    # but confidence_majority sums edge weights: Banana 0.91 > Apple 0.3, so the
+    # 2-member strong-edge MINORITY wins. conf = 0.91 / (0.3 + 0.91).
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 2, 3, 4],
+            "__cluster_id__": [1, 1, 1, 1, 1],
+            "v": ["Apple", "Apple", "Apple", "Banana", "Banana"],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="confidence_majority",
+        field_rules={"v": GoldenFieldRule(strategy="confidence_majority")},
+    )
+    cps = {1: {(0, 1): 0.1, (1, 2): 0.1, (0, 2): 0.1, (3, 4): 0.91}}
+    got, _ = _assert_value_conf_parity_cps(df, rules, ["v"], cps)
+    assert got[1]["v"] == "Banana"  # strong-edge minority beats weak-edge majority
+    assert abs(got[1]["__golden_confidence__"] - 0.91 / (0.3 + 0.91)) < 1e-12
+
+
+def test_confidence_majority_no_agreeing_edges_falls_back_to_majority():
+    # Every edge connects members with DIFFERENT values (A-B, B-A), so no value
+    # accrues edge weight -> fall back to unweighted count-majority. "A" appears
+    # twice (rows 0,2), "B" once -> A wins 2/3.
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 2],
+            "__cluster_id__": [1, 1, 1],
+            "v": ["A", "B", "A"],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="confidence_majority",
+        field_rules={"v": GoldenFieldRule(strategy="confidence_majority")},
+    )
+    cps = {1: {(0, 1): 0.9, (1, 2): 0.8}}  # both edges span disagreeing values
+    got, _ = _assert_value_conf_parity_cps(df, rules, ["v"], cps)
+    assert got[1]["v"] == "A"  # count-majority fallback
+    assert abs(got[1]["__golden_confidence__"] - 2.0 / 3.0) < 1e-12
+
+
+def test_confidence_majority_no_pair_scores_falls_back_to_majority():
+    # cluster_pair_scores absent for this cluster (empty dict) -> the reference
+    # leaves pair_scores unset and _confidence_majority falls back to count
+    # majority. Fused path must match: empty edge channel -> majority_vote branch.
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 2],
+            "__cluster_id__": [1, 1, 1],
+            "v": ["A", "B", "A"],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="confidence_majority",
+        field_rules={"v": GoldenFieldRule(strategy="confidence_majority")},
+    )
+    # Both an empty top-level dict and None must fall back identically.
+    for cps in ({}, None):
+        got, _ = _assert_value_conf_parity_cps(df, rules, ["v"], cps)
+        assert got[1]["v"] == "A"
+        assert abs(got[1]["__golden_confidence__"] - 2.0 / 3.0) < 1e-12
+
+
+def test_confidence_majority_representative_index_is_first_agreeing_edge():
+    # The representative index (which row's value survives) is set on the FIRST
+    # agreeing edge for the winning code, in pair_scores.items() ORDER -- and it is
+    # the FIRST endpoint `a` of that edge, NOT the min/canonical. Here the winning
+    # value "X" is held by rows 0, 1, 2. The first agreeing edge in items() order
+    # is (2, 1): endpoint a=2. So the surviving row is index 2. All three hold the
+    # same value, so the emitted value is identical either way -- this test pins
+    # the confidence (edge-sum) parity and that the ordering choice matches the
+    # reference (provenance parity is Stage 8, but the logic is exercised now).
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 2, 10, 11],
+            "__cluster_id__": [1, 1, 1, 1, 1],
+            "v": ["X", "X", "X", "Y", "Y"],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="confidence_majority",
+        field_rules={"v": GoldenFieldRule(strategy="confidence_majority")},
+    )
+    # X edges summed 0.9; Y edge 0.2. X wins. Order the X edges so (2->1) is first.
+    cps = {1: {(2, 1): 0.5, (0, 2): 0.4, (10, 11): 0.2}}
+    got, _ = _assert_value_conf_parity_cps(df, rules, ["v"], cps)
+    assert got[1]["v"] == "X"
+    assert abs(got[1]["__golden_confidence__"] - 0.9 / (0.9 + 0.2)) < 1e-12
+
+
+def test_confidence_majority_multi_cluster_isolated_edges():
+    # Two clusters, each with its own edge set -- confirms edges are bucketed by
+    # cluster (an edge in cluster 1 never leaks into cluster 2's resolution) and
+    # that positions are remapped LOCAL to each cluster's sorted span.
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 2, 10, 11, 12],
+            "__cluster_id__": [1, 1, 1, 2, 2, 2],
+            "v": ["A", "A", "B", "C", "D", "D"],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="confidence_majority",
+        field_rules={"v": GoldenFieldRule(strategy="confidence_majority")},
+    )
+    cps = {
+        1: {(0, 1): 0.8},  # A-A strong -> A wins cluster 1
+        2: {(11, 12): 0.7},  # D-D strong -> D wins cluster 2
+    }
+    got, _ = _assert_value_conf_parity_cps(df, rules, ["v"], cps)
+    assert got[1]["v"] == "A"
+    assert got[2]["v"] == "D"
+
+
 def test_quality_scores_none_unweighted_path_unchanged():
     # Regression: quality_scores=None must be byte-identical to omitting it AND to
     # the unweighted reference -- the empty qweight channel takes the unweighted

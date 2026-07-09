@@ -32,6 +32,7 @@ const STRAT_MOST_RECENT: u8 = 3;
 const STRAT_FIRST_NON_NULL: u8 = 4;
 const STRAT_LONGEST_VALUE: u8 = 5;
 const STRAT_UNANIMOUS_OR_NULL: u8 = 6;
+const STRAT_CONFIDENCE_MAJORITY: u8 = 7;
 
 /// The non-null members of one cluster span as `(local_idx, code)`, in span
 /// order. `code == -1` (the Python-side factorization null sentinel) is a null.
@@ -357,6 +358,68 @@ fn most_recent(
     (winner_local, conf)
 }
 
+/// `_confidence_majority` (`golden.py:252`), sans the universal short-circuit
+/// (handled before dispatch). For each edge `(a, b, score)` whose BOTH endpoints
+/// hold a non-null code AND those codes AGREE, add `score` to that code's
+/// weight-sum; the max weight-sum code wins; `conf = winner_sum / total_sum`
+/// (`0.5` when total is 0 — unreachable with agreeing edges, kept for parity).
+///
+/// Representative index = the FIRST endpoint `a` of the FIRST agreeing edge for
+/// the winning code — NOT the min/canonical endpoint, and the edge ITERATION
+/// ORDER is load-bearing (Python passes edges in `pair_scores.items()` order; a
+/// different order picks a different representative). The insertion-ordered `order`
+/// Vec mirrors the reference's `value_weights` / `value_idx` dicts, so both the
+/// winner tie-break (first-max over insertion order) and the representative index
+/// match.
+///
+/// Empty `edges` (no pair scores for this cluster) OR no agreeing edge -> fall
+/// back to the (quality-weighted) `majority_vote`, exactly as the reference does
+/// on `if not pair_scores` / `if not value_weights`.
+fn confidence_majority(
+    value_code: &[i64],
+    non_null: &[(usize, i64)],
+    edges: &[(usize, usize, f64)],
+    off: usize,
+    weights: Option<&[f64]>,
+) -> (i64, f64) {
+    if edges.is_empty() {
+        return majority_vote(non_null, off, weights);
+    }
+    // (code, first_representative_local_idx, weight_sum), in first-agreeing-edge
+    // order (== the reference's insertion-ordered value_weights dict).
+    let mut order: Vec<(i64, usize, f64)> = Vec::new();
+    for &(a, b, s) in edges {
+        // `a in idx_to_value and b in idx_to_value`: both endpoints non-null.
+        let va = value_code[off + a];
+        let vb = value_code[off + b];
+        if va == -1 || vb == -1 {
+            continue;
+        }
+        if va == vb {
+            if let Some(e) = order.iter_mut().find(|e| e.0 == va) {
+                e.2 += s;
+            } else {
+                // Representative = first endpoint `a` of this first agreeing edge
+                // (`value_idx[va] = a`), NOT min(a, b).
+                order.push((va, a, s));
+            }
+        }
+    }
+    if order.is_empty() {
+        return majority_vote(non_null, off, weights);
+    }
+    // First-max over insertion order keeps the EARLIEST code on a weight-sum tie,
+    // matching `max(value_weights, key=...)` on an insertion-ordered dict.
+    let best = first_max_idx(order.len(), |i| order[i].2);
+    let total: f64 = order.iter().map(|e| e.2).sum();
+    let conf = if total > 0.0 {
+        order[best].2 / total
+    } else {
+        0.5
+    };
+    (order[best].1 as i64, conf)
+}
+
 /// Kernel result: `(winner_idx, field_conf, cluster_ids_out)`, each outer Vec
 /// indexed by output column (except `cluster_ids_out`, the per-cluster id list).
 /// `winner_idx[col][k]` is the GLOBAL pre-sorted-frame row index whose value
@@ -389,8 +452,18 @@ type GoldenFusedResult = (Vec<Vec<i64>>, Vec<Vec<f64>>, Vec<i64>);
 ///   `quality_weights`: only most_complete/majority_vote/first_non_null/
 ///   longest_value consult it; source_priority/most_recent/unanimous ignore it.
 ///
-/// Future stages append fields here (pair scores, group specs, predicate IR,
-/// cluster-override codes) — same one-field-per-stage rule.
+/// Stage 4 field:
+/// - `pair_edges`: confidence_majority pair-score edges, flattened GLOBALLY to
+///   `(cluster_id, a_local, b_local, score)` tuples. Positions are LOCAL to the
+///   cluster's sorted span; the kernel buckets them by `cluster_id` (so Python
+///   never predicts span order) and preserves per-cluster INSERTION ORDER, which
+///   is the incoming `pair_scores.items()` order — load-bearing for the
+///   representative index (spec 6.4). Empty when no confidence_majority column is
+///   present. Edges are shared across all confidence_majority columns of a cluster
+///   (pair scores are per-cluster, not per-column).
+///
+/// Future stages append fields here (group specs, predicate IR, cluster-override
+/// codes) — same one-field-per-stage rule.
 #[derive(FromPyObject)]
 pub struct GoldenFusedSideChannels {
     source_code: PyArrowType<ArrayData>,
@@ -398,6 +471,7 @@ pub struct GoldenFusedSideChannels {
     date_cols: Vec<PyArrowType<ArrayData>>,
     date_null_masks: Vec<PyArrowType<ArrayData>>,
     qweights: Vec<PyArrowType<ArrayData>>,
+    pair_edges: Vec<(i64, i64, i64, f64)>,
 }
 
 #[pyfunction]
@@ -424,6 +498,7 @@ pub fn golden_fused(
         date_cols,
         date_null_masks,
         qweights,
+        pair_edges,
     } = side;
     // `row_ids` is validated (int64, right length) to enforce the caller's
     // (cluster_id, row_id) pre-sort contract, but Stage 0 does NOT read its
@@ -618,7 +693,20 @@ pub fn golden_fused(
             .collect();
         let cluster_out: Vec<i64> = spans.iter().map(|&(_, _, c)| c).collect();
 
-        for &(off, size, _) in &spans {
+        // Bucket confidence_majority edges by cluster id, preserving per-cluster
+        // insertion order (== pair_scores.items() order). Positions stay LOCAL.
+        // Empty when no confidence_majority column exists.
+        let mut edges_by_cluster: std::collections::HashMap<i64, Vec<(usize, usize, f64)>> =
+            std::collections::HashMap::new();
+        for (cid, a, b, s) in pair_edges {
+            edges_by_cluster
+                .entry(cid)
+                .or_default()
+                .push((a as usize, b as usize, s));
+        }
+        let no_edges: Vec<(usize, usize, f64)> = Vec::new();
+
+        for &(off, size, cid) in &spans {
             for col in 0..n_output_cols {
                 let non_null = span_non_null(&code_vals[col], off, size);
                 // Per-column quality weights: an empty channel (quality_scores
@@ -652,8 +740,15 @@ pub fn golden_fused(
                         STRAT_FIRST_NON_NULL => first_non_null(&non_null, off, wcol),
                         STRAT_LONGEST_VALUE => longest_value(&text[col], &non_null, off, wcol),
                         STRAT_UNANIMOUS_OR_NULL => unanimous_or_null(&non_null),
-                        // confidence_majority (Stage 4) still declines in Python
-                        // before reaching here; null sentinel defensively.
+                        STRAT_CONFIDENCE_MAJORITY => {
+                            // Per-cluster edges (shared across this cluster's
+                            // confidence_majority columns); absent -> majority
+                            // fallback inside confidence_majority.
+                            let edges = edges_by_cluster.get(&cid).unwrap_or(&no_edges);
+                            confidence_majority(&code_vals[col], &non_null, edges, off, wcol)
+                        }
+                        // Unknown strategy id: Python declines before reaching
+                        // here; null sentinel defensively.
                         _ => (-1i64, 0.0),
                     }
                 };
@@ -990,5 +1085,73 @@ mod tests {
         let date = [-10i64, -3, -20];
         let mask = [0i64, 0, 0];
         assert_eq!(most_recent(&val, &date, &mask, 0, 3), (1, 1.0));
+    }
+
+    // ── confidence_majority ──────────────────────────────────────────────────
+
+    #[test]
+    fn confidence_majority_strong_minority_beats_weak_majority() {
+        // codes: X=0 (locals 0,1,2), Y=1 (locals 3,4). X edges sum 0.3, Y edge
+        // 0.91 -> Y (the 2-member minority) wins. rep = first agreeing Y edge's
+        // first endpoint (local 3). conf = 0.91 / (0.3 + 0.91).
+        let code = [0i64, 0, 0, 1, 1];
+        let edges = [(0, 1, 0.1), (1, 2, 0.1), (0, 2, 0.1), (3, 4, 0.91)];
+        let (idx, conf) = confidence_majority(&code, &nn(&code, 0, 5), &edges, 0, None);
+        assert_eq!(idx, 3);
+        assert!((conf - 0.91 / 1.21).abs() < 1e-12);
+    }
+
+    #[test]
+    fn confidence_majority_empty_edges_falls_back_to_majority() {
+        // No edges -> count-majority. codes [A,B,A] -> A wins 2/3 at local 0.
+        let code = [0i64, 1, 0];
+        let (idx, conf) = confidence_majority(&code, &nn(&code, 0, 3), &[], 0, None);
+        assert_eq!(idx, 0);
+        assert!((conf - 2.0 / 3.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn confidence_majority_no_agreeing_edges_falls_back_to_majority() {
+        // Both edges span DISAGREEING codes (A-B, B-A) -> no value accrues weight
+        // -> count-majority fallback: A wins 2/3 at local 0.
+        let code = [0i64, 1, 0];
+        let edges = [(0, 1, 0.9), (1, 2, 0.8)];
+        let (idx, conf) = confidence_majority(&code, &nn(&code, 0, 3), &edges, 0, None);
+        assert_eq!(idx, 0);
+        assert!((conf - 2.0 / 3.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn confidence_majority_representative_is_first_endpoint_of_first_agreeing_edge() {
+        // Winning code X=0 (locals 0,1,2). First agreeing X edge in order is
+        // (2,1) -> rep = first endpoint local 2 (NOT min(2,1)=1). Y=1 edge weaker.
+        let code = [0i64, 0, 0, 1, 1];
+        let edges = [(2, 1, 0.5), (0, 2, 0.4), (3, 4, 0.2)];
+        let (idx, conf) = confidence_majority(&code, &nn(&code, 0, 5), &edges, 0, None);
+        assert_eq!(idx, 2);
+        assert!((conf - 0.9 / 1.1).abs() < 1e-12);
+    }
+
+    #[test]
+    fn confidence_majority_skips_null_endpoint_edges() {
+        // Edge (0,1) touches a null endpoint (local 1 code -1) -> skipped. Edge
+        // (0,2) agrees on code 0 -> winner local 0, sole weight 0.7 -> conf 1.0.
+        let code = [0i64, -1, 0];
+        let edges = [(0, 1, 0.9), (0, 2, 0.7)];
+        let (idx, conf) = confidence_majority(&code, &nn(&code, 0, 3), &edges, 0, None);
+        assert_eq!(idx, 0);
+        assert!((conf - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn confidence_majority_respects_span_offset() {
+        // Span [2,7): codes X=0 (locals 0,1,2), Y=1 (locals 3,4) at global off 2.
+        // Y edge (3,4) strong -> rep local 3. Positions/edges are LOCAL; off maps
+        // code lookups to the right global rows.
+        let code = [9i64, 9, 0, 0, 0, 1, 1];
+        let edges = [(0, 1, 0.1), (3, 4, 0.9)];
+        let (idx, conf) = confidence_majority(&code, &nn(&code, 2, 5), &edges, 2, None);
+        assert_eq!(idx, 3);
+        assert!((conf - 0.9 / 1.0).abs() < 1e-12);
     }
 }

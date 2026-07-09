@@ -37,11 +37,17 @@ _KERNEL_SCALAR_STRATEGIES = frozenset(
 
 # Stage 2 strategies: they need extra gathered columns (source_priority needs the
 # factorized __source__ + the priority list; most_recent needs a date i64 + null
-# mask). Stage 4 adds confidence_majority.
+# mask).
 _KERNEL_STAGE2_STRATEGIES = frozenset({"source_priority", "most_recent"})
 
+# Stage 4: confidence_majority needs per-cluster pair-score edges (a side channel,
+# not an extra gathered column).
+_KERNEL_STAGE4_STRATEGIES = frozenset({"confidence_majority"})
+
 # Every strategy the kernel can dispatch today.
-_KERNEL_COVERED_STRATEGIES = _KERNEL_SCALAR_STRATEGIES | _KERNEL_STAGE2_STRATEGIES
+_KERNEL_COVERED_STRATEGIES = (
+    _KERNEL_SCALAR_STRATEGIES | _KERNEL_STAGE2_STRATEGIES | _KERNEL_STAGE4_STRATEGIES
+)
 
 # polars dtypes whose physical i64 repr is order-preserving vs the Python object
 # comparison the reference `_most_recent` does (`sort(key=date, reverse=True)`).
@@ -126,6 +132,14 @@ class _GoldenFusedSideChannels:
     # the sorted frame -- populated (every column) ONLY when quality_scores is not
     # None; an empty array per column signals the kernel's unweighted branch.
     qweights: list[Any] = field(default_factory=list)
+    # Stage 4: confidence_majority per-cluster pair-score edges, flattened GLOBALLY
+    # to `(cluster_id, a_local, b_local, score)` tuples. Positions are LOCAL to the
+    # cluster's sorted span (0-based); the kernel buckets by `cluster_id` (so no
+    # Python-side span-order prediction) and preserves per-cluster INSERTION ORDER,
+    # which is the incoming `pair_scores.items()` order -- load-bearing for the
+    # representative index (set on the FIRST agreeing edge; spec 6.4). Empty when
+    # no confidence_majority column is present or no pair scores were supplied.
+    pair_edges: list[tuple[int, int, int, float]] = field(default_factory=list)
 
 
 def _rule_covered(rule: GoldenFieldRule) -> bool:
@@ -371,12 +385,46 @@ def run_golden_fused_arrow(
             w = [float(quality_scores.get((rid, c), 1.0)) for rid in row_ids_list]
             qweights[ci] = pa.array(w, type=pa.float64())
 
+    # ── Stage 4: confidence_majority per-cluster pair-score edges ─────────────
+    # Mirror build_golden_records_batch (golden.py:969-980): per cluster, remap
+    # the row-id-keyed edges to LOCAL positions within that cluster's sorted span
+    # via a rid->pos map, dropping edges whose endpoints aren't both in the span.
+    # Preserve each cluster's `items()` iteration order (spec 6.4 -- the kernel's
+    # representative index is set on the first agreeing edge in that order). An
+    # absent cluster / falsy edge dict leaves the cluster with no edges, so the
+    # kernel falls back to majority_vote -- matching the reference's None
+    # positional_pair_scores.
+    pair_edges: list[tuple[int, int, int, float]] = []
+    if (
+        cluster_pair_scores
+        and "__row_id__" in sdf.columns
+        and any(r.strategy == "confidence_majority" for r in effective_rules)
+    ):
+        cid_list = sdf.get_column("__cluster_id__").to_list()
+        rid_list = sdf.get_column("__row_id__").to_list()
+        pos = 0
+        n_local = len(cid_list)
+        while pos < n_local:
+            cid = cid_list[pos]
+            start = pos
+            while pos < n_local and cid_list[pos] == cid:
+                pos += 1
+            cluster_scores = cluster_pair_scores.get(int(cid))
+            if cluster_scores:
+                rid_to_pos = {rid: p for p, rid in enumerate(rid_list[start:pos])}
+                for (rid_a, rid_b), score in cluster_scores.items():
+                    pa = rid_to_pos.get(rid_a)
+                    pb = rid_to_pos.get(rid_b)
+                    if pa is not None and pb is not None:
+                        pair_edges.append((int(cid), pa, pb, float(score)))
+
     side = _GoldenFusedSideChannels(
         source_code=source_code_arr,
         priority_codes=priority_codes,
         date_cols=date_cols,
         date_null_masks=date_null_masks,
         qweights=qweights,
+        pair_edges=pair_edges,
     )
     winner_idx, field_conf, cluster_ids_out = fn(
         row_ids_arr,
