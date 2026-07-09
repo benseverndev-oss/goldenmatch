@@ -95,3 +95,74 @@ def test_most_complete_matches_reference():
         cid = row["__cluster_id__"]
         assert row["name"] == ref_map[cid]["name"]["value"]
         assert abs(row["__golden_confidence__"] - ref_map[cid]["__golden_confidence__"]) < 1e-12
+
+
+def test_run_drops_singleton_clusters():
+    # cluster 2 is a singleton; the fused path filters it itself (size > 1), but
+    # the oracle build_golden_records_batch does NOT self-filter. Per the plan's
+    # "harness asymmetry" note, feed the reference the PRE-FILTERED frame and the
+    # fused path the RAW frame, then assert equal output on the surviving clusters.
+    raw = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 5, 10, 11],
+            "__cluster_id__": [1, 1, 2, 3, 3],
+            "name": ["Bob", "Robert", "Solo", "Sue", "Suzanne"],
+        }
+    )
+    pre_filtered = raw.filter(pl.col("__cluster_id__") != 2)  # drop the singleton
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={"name": GoldenFieldRule(strategy="most_complete")},
+    )
+    ref = build_golden_records_batch(pre_filtered, rules)
+    got = run_golden_fused_arrow(raw, rules)
+    assert got is not None
+
+    got_cids = set(got.get_column("__cluster_id__").to_list())
+    assert got_cids == {1, 3}  # singleton cluster 2 dropped
+    ref_map = {r["__cluster_id__"]: r for r in ref}
+    assert set(ref_map) == {1, 3}
+    for row in got.iter_rows(named=True):
+        cid = row["__cluster_id__"]
+        assert row["name"] == ref_map[cid]["name"]["value"]
+        assert abs(row["__golden_confidence__"] - ref_map[cid]["__golden_confidence__"]) < 1e-12
+
+
+def test_most_complete_tie_null_and_multicolumn():
+    # Exercises, through the Python round-trip: (a) a most_complete length TIE
+    # (-> conf 0.7), (b) an all-null column so the kernel's -1 sentinel round-trips
+    # through _gather_with_nulls to a real null, and (c) TWO user columns so the
+    # mean-confidence path (n_cols > 1) runs.
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 2, 10, 11],
+            "__cluster_id__": [1, 1, 1, 2, 2],
+            # cluster 1: length tie (all len 2) -> first-in-order "aa", conf 0.7
+            # cluster 2: "Suzanne" unique longest -> conf 1.0
+            "name": ["aa", "bb", "aa", "Sue", "Suzanne"],
+            # cluster 1: entirely null -> value None, conf 0.0 (sentinel path)
+            # cluster 2: "zz" unique longest -> conf 1.0
+            "extra": [None, None, None, "z", "zz"],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={
+            "name": GoldenFieldRule(strategy="most_complete"),
+            "extra": GoldenFieldRule(strategy="most_complete"),
+        },
+    )
+    ref = build_golden_records_batch(df, rules)
+    got = run_golden_fused_arrow(df, rules)
+    assert got is not None
+
+    ref_map = {r["__cluster_id__"]: r for r in ref}
+    got_map = {row["__cluster_id__"]: row for row in got.iter_rows(named=True)}
+    # sanity: the fixture actually hit the branches we intend to cover.
+    assert got_map[1]["name"] == "aa" and got_map[1]["extra"] is None
+    assert abs(got_map[1]["__golden_confidence__"] - 0.35) < 1e-12  # (0.7 + 0.0)/2
+    for cid, row in got_map.items():
+        r = ref_map[cid]
+        assert row["name"] == r["name"]["value"]
+        assert row["extra"] == r["extra"]["value"]
+        assert abs(row["__golden_confidence__"] - r["__golden_confidence__"]) < 1e-12

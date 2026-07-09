@@ -78,11 +78,15 @@ def _is_internal(col: str) -> bool:
 
 
 def _native_golden_symbol() -> Any | None:
+    # Narrow catch (cf. fused_match._match_fused_symbol): a missing/unbuilt
+    # extension is an ImportError; a not-yet-published symbol is an
+    # AttributeError. Anything else is a real loader bug and should surface, not
+    # degrade to a silent decline.
     try:
         from goldenmatch.core._native_loader import native_module
 
         return getattr(native_module(), "golden_fused", None)
-    except Exception:
+    except (ImportError, AttributeError):
         return None
 
 
@@ -204,8 +208,9 @@ def run_golden_fused_arrow(
     # __golden_confidence__ = mean of per-field confidences over columns.
     n_clusters = len(cluster_ids_out)
     n_cols = len(user_cols)
+    # n_cols >= 1 here (the empty-user_cols case returned early above).
     gconf = [
-        (sum(field_conf[ci][k] for ci in range(n_cols)) / n_cols if n_cols else 0.0)
+        sum(field_conf[ci][k] for ci in range(n_cols)) / n_cols
         for k in range(n_clusters)
     ]
     result = result.with_columns(pl.Series("__golden_confidence__", gconf, dtype=pl.Float64))

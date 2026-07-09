@@ -81,6 +81,11 @@ pub fn golden_fused(
     text_cols: Vec<PyArrowType<ArrayData>>,
     code_cols: Vec<PyArrowType<ArrayData>>,
 ) -> PyResult<(Vec<Vec<i64>>, Vec<Vec<f64>>, Vec<i64>)> {
+    // `row_ids` is validated (int64, right length) to enforce the caller's
+    // (cluster_id, row_id) pre-sort contract, but Stage 0 does NOT read its
+    // values: spans are formed from `cluster_ids` alone, and winner indices are
+    // GLOBAL positions in the pre-sorted frame. Stage 8 (provenance) reads it to
+    // map winner index -> source __row_id__.
     let row_data = row_ids.0;
     if row_data.data_type() != &DataType::Int64 {
         return Err(PyValueError::new_err(format!(
