@@ -1,10 +1,18 @@
 from goldenmatch import dedupe_df
 from goldenmatch.documents import DOC_SIDECARS, ingest_documents
-from goldenmatch.documents.extractor import FakeExtractor
+from goldenmatch.documents.extractor import (
+    FakeClassifier,
+    FakeExtractor,
+    FakeFallbackExtractor,
+    FakeTemplateExtractor,
+)
+from goldenmatch.documents.templates import get_template
 from goldenmatch.documents.types import (
+    ClassifyResult,
     ExtractedRow,
     ExtractResult,
     Field,
+    StructuredResult,
     TargetSchema,
 )
 from PIL import Image
@@ -53,3 +61,55 @@ def test_extracted_frame_feeds_dedupe_df_and_finds_the_dupe(tmp_path):
     # Grace (no duplicate) surfaces in the unique table, not in a multi-member cluster.
     assert result.unique is not None and result.unique.height == 1
     assert result.unique["full_name"].to_list() == ["Grace Hopper"]
+
+
+INV = get_template("invoice")
+RCPT = get_template("receipt")
+
+
+def _erow(schema, vals):
+    return ExtractedRow.from_partial(vals, {}, schema, source_file="", source_page=0)
+
+
+def test_auto_classify_e2e_two_frames_feed_dedupe(tmp_path):
+    """Full auto-classify batch: an invoice (with line items) + a receipt (flat
+    doctype) both classify confidently, extract against their templates, and the
+    header frame feeds dedupe_df cleanly with DOC_SIDECARS excluded."""
+    inv, rcpt = tmp_path / "inv.png", tmp_path / "rcpt.png"
+    _img(inv); _img(rcpt)
+
+    inv_header = _erow(INV.header, {"invoice_number": "INV-1", "vendor_name": "Acme"})
+    inv_items = [_erow(INV.line_items, {"description": "Widget", "quantity": "2"}),
+                 _erow(INV.line_items, {"description": "Gadget", "quantity": "1"})]
+    rcpt_header = _erow(RCPT.header, {"merchant_name": "Cafe", "total_amount": "9.50"})
+
+    cls = FakeClassifier([ClassifyResult("invoice", 0.92), ClassifyResult("receipt", 0.88)])
+    te = FakeTemplateExtractor([
+        StructuredResult(header=inv_header, line_items=inv_items, error=None),
+        StructuredResult(header=rcpt_header, line_items=[], error=None),
+    ])
+    fb = FakeFallbackExtractor([])  # both classify as known doctypes -> unused
+
+    df, report = ingest_documents([inv, rcpt], classifier=cls, template_extractor=te,
+                                  fallback_extractor=fb, return_report=True)
+
+    assert df.height == 2
+    assert set(DOC_SIDECARS) <= set(df.columns)
+    # match cols present alongside the sidecars
+    assert "invoice_number" in df.columns and "merchant_name" in df.columns
+
+    # header frame feeds the ER pipeline with the provenance sidecars excluded
+    result = dedupe_df(df, exclude_columns=DOC_SIDECARS, confidence_required=False,
+                       allow_red_config=True)
+    assert result is not None
+
+    # report is fully populated by the auto flow
+    assert report.vlm_calls == 4  # 2 docs * (classify + structured extract)
+    assert set(report.doctypes.values()) == {"invoice", "receipt"}
+    assert set(report.classify_confidence) == set(report.doctypes)  # key-set alignment
+    assert sorted(report.classify_confidence.values()) == [0.88, 0.92]
+
+    # only the invoice contributes line items
+    assert report.line_items is not None and report.line_items.height == 2
+    inv_doc_id = next(d for d, t in report.doctypes.items() if t == "invoice")
+    assert report.line_items["_doc_id"].to_list() == [inv_doc_id, inv_doc_id]
