@@ -422,6 +422,11 @@ _BASE_TOOLS = [
                     "type": "string",
                     "description": "Path to party B's CSV file",
                 },
+                "file_a_content": {"type": "string", "description": "Alternative to file_a: base64/text bytes"},
+                "file_a_name": {"type": "string"},
+                "file_b_content": {"type": "string", "description": "Alternative to file_b: base64/text bytes"},
+                "file_b_name": {"type": "string"},
+                "encoding": {"type": "string", "enum": ["base64", "text"], "description": "Encoding of *_content (default base64)"},
                 "fields": {
                     "type": "array",
                     "items": {"type": "string"},
@@ -437,7 +442,7 @@ _BASE_TOOLS = [
                     "default": "high",
                 },
             },
-            "required": ["file_a", "file_b", "fields"],
+            "required": ["fields"],
         },
     ),
     Tool(
@@ -491,8 +496,13 @@ _BASE_TOOLS = [
             "properties": {
                 "clusters_a_path": {"type": "string", "description": "Baseline clusters JSON"},
                 "clusters_b_path": {"type": "string", "description": "Comparison clusters JSON"},
+                "clusters_a_content": {"type": "string", "description": "Alternative to clusters_a_path: base64/text bytes (JSON, use encoding='text')"},
+                "clusters_a_name": {"type": "string"},
+                "clusters_b_content": {"type": "string", "description": "Alternative to clusters_b_path: base64/text bytes (JSON, use encoding='text')"},
+                "clusters_b_name": {"type": "string"},
+                "encoding": {"type": "string", "enum": ["base64", "text"], "description": "Encoding of *_content (default base64)"},
             },
-            "required": ["clusters_a_path", "clusters_b_path"],
+            "required": [],
         },
     ),
     Tool(
@@ -508,9 +518,14 @@ _BASE_TOOLS = [
             "properties": {
                 "file_a": {"type": "string"},
                 "file_b": {"type": "string"},
+                "file_a_content": {"type": "string", "description": "Alternative to file_a: base64/text bytes"},
+                "file_a_name": {"type": "string"},
+                "file_b_content": {"type": "string", "description": "Alternative to file_b: base64/text bytes"},
+                "file_b_name": {"type": "string"},
+                "encoding": {"type": "string", "enum": ["base64", "text"], "description": "Encoding of *_content (default base64)"},
                 "min_score": {"type": "number", "default": 0.5},
             },
-            "required": ["file_a", "file_b"],
+            "required": [],
         },
     ),
     Tool(
@@ -935,6 +950,10 @@ def create_server(file_paths: list[str] | None = None, config_path: str | None =
 
 def _handle_tool(name: str, args: dict) -> dict:
     """Dispatch tool calls."""
+    from goldenmatch.mcp import _ingest
+    _ingest_err = _ingest.resolve_ingest_args(name, args)
+    if _ingest_err is not None:
+        return _ingest_err
     if name == "get_stats":
         return _tool_get_stats()
     elif name == "find_duplicates":
@@ -1752,7 +1771,7 @@ async def run_server_http(
     async def server_card(request):
         return JSONResponse({
             "name": "GoldenMatch",
-            "description": "Entity resolution toolkit — deduplicate records, match across datasets, and create golden records using fuzzy, probabilistic, and LLM-powered scoring. Zero-config mode auto-detects your data. 74 MCP tools for matching, semantic retrieval, explaining, reviewing, evaluating, blocking analysis, config critique, config healing, lineage, data quality, transforms, identity graph, distributed-routing config, and privacy-preserving linkage. Built on Polars. 97.2% F1 on DBLP-ACM.",
+            "description": "Entity resolution toolkit — deduplicate records, match across datasets, and create golden records using fuzzy, probabilistic, and LLM-powered scoring. Zero-config mode auto-detects your data. 75 MCP tools for matching, semantic retrieval, explaining, reviewing, evaluating, blocking analysis, config critique, config healing, lineage, data quality, transforms, identity graph, distributed-routing config, privacy-preserving linkage, and inline file upload. Built on Polars. 97.2% F1 on DBLP-ACM.",
             "homepage": "https://github.com/benseverndev-oss/goldenmatch",
             "iconUrl": "https://avatars.githubusercontent.com/u/192581748"
         })

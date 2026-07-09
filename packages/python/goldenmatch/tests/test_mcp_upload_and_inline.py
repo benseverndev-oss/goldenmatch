@@ -57,3 +57,31 @@ def test_agent_schemas_expose_content_params():
         # path param must not be in required anymore
         for path_param, _c, _n in sides:
             assert path_param not in t.inputSchema.get("required", [])
+
+
+from goldenmatch.mcp.server import _handle_tool, TOOLS
+
+
+def _call_server(name, args):
+    return _handle_tool(name, args)
+
+
+def test_schema_match_inline_both_sides(tmp_path, monkeypatch):
+    monkeypatch.setenv("GOLDENMATCH_ALLOWED_ROOT", str(tmp_path))
+    a = b"first_name,last_name,zip\nJOHN,SMITH,10001\n"
+    b = b"fname,lname,postal\nJOHN,SMITH,10001\n"
+    res = _call_server("schema_match", {
+        "file_a_content": _b64(a), "file_b_content": _b64(b),
+    })
+    assert "error" not in res
+    assert "matches" in res or "mapping" in res or isinstance(res, dict)
+
+
+def test_server_schemas_expose_content_params():
+    by_name = {t.name: t for t in TOOLS}
+    server_side = {"pprl_link", "schema_match", "compare_clusters"}
+    for tool in server_side:
+        props = by_name[tool].inputSchema["properties"]
+        for path_param, content_param, _n in INGEST_PARAMS[tool]:
+            assert content_param in props
+            assert path_param not in by_name[tool].inputSchema.get("required", [])
