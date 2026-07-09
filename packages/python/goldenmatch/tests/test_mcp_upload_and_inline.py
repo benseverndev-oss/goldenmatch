@@ -74,7 +74,7 @@ def test_schema_match_inline_both_sides(tmp_path, monkeypatch):
         "file_a_content": _b64(a), "file_b_content": _b64(b),
     })
     assert "error" not in res
-    assert "matches" in res or "mapping" in res or isinstance(res, dict)
+    assert "mappings" in res
 
 
 def test_server_schemas_expose_content_params():
